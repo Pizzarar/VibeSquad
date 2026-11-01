@@ -3271,3 +3271,15 @@ html, body, #root { overflow-x: hidden; }
   .app.focus > .agent-panes { width: 100%; max-width: none; }
   .app.focus > .agent-panes .tl, .app.focus > .agent-panes .composer { max-width: min(1400px, 100%); }
 }
+
+/* ── New Idea dialog redesign ──────────────────────────────────────────────── */
+.pin-idea-seg { display: flex; width: 100%; }
+.pin-idea-seg button { flex: 1; }
+.pin-idea-field { display: flex; flex-direction: column; gap: 4px; margin: 8px 0 2px; }
+.pin-idea-field label { flex: none; }
+.pin-idea-field input, .pin-idea-field select { min-width: 0; }
+.pin-profile-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* ── Sidebar + New squad button ────────────────────────────────────────────── */
+.sidebar-new-squad-btn { margin: 2px 8px 6px; width: calc(100% - 16px); justify-content: flex-start; }
+.sidebar.collapsed .sidebar-new-squad-btn { width: 40px; margin: 2px auto 6px; justify-content: center; overflow: hidden; font-size: 18px; padding: 4px; }
