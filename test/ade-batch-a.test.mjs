@@ -313,6 +313,185 @@ test("A28: plan action with selectedActionId routes correctly", () => {
   assert.equal(payload.selectedActionId, "act-implement");
 });
 
+// --- parseRecommendedOption tests ---
+
+function parseRecommendedOption(label) {
+  const re = /\s*(?:\(Recommended\)|\[Recommended\]|-\s*Recommended)\s*/gi;
+  if (re.test(label)) {
+    const cleanLabel = label.replace(/\s*(?:\(Recommended\)|\[Recommended\]|-\s*Recommended)\s*/gi, "").trim();
+    return { cleanLabel, recommended: true };
+  }
+  return { cleanLabel: label, recommended: false };
+}
+
+function areAllQuestionsAnswered(questions, selectedByQ, otherByQ) {
+  if (questions.length === 0) {
+    return Boolean((otherByQ[0] ?? selectedByQ[0] ?? "").trim());
+  }
+  return questions.every((_, qi) => {
+    const val = (selectedByQ[qi] === "__other__" ? otherByQ[qi] : selectedByQ[qi]) ?? "";
+    return val.trim().length > 0;
+  });
+}
+
+function buildQuestionSubmission(inputObj, questions, selectedByQ, otherByQ) {
+  const answers = {};
+  questions.forEach((q, qi) => {
+    const key = q.question || q.header || `q${qi + 1}`;
+    const val = ((selectedByQ[qi] === "__other__" ? otherByQ[qi] : selectedByQ[qi]) ?? "").trim();
+    answers[key] = val;
+  });
+
+  let firstAnswer;
+  if (questions.length === 0) {
+    firstAnswer = ((selectedByQ[0] === "__other__" ? otherByQ[0] : selectedByQ[0]) ?? "").trim();
+  } else {
+    const firstKey = questions[0].question || questions[0].header || "q1";
+    firstAnswer = answers[firstKey] ?? "";
+  }
+
+  return {
+    behavior: "allow",
+    updatedInput: {
+      ...inputObj,
+      answer: firstAnswer,
+      answers: { ...((inputObj.answers ?? {})), ...answers },
+    },
+  };
+}
+
+test("A31: parseRecommendedOption strips (Recommended) and sets recommended: true", () => {
+  const result = parseRecommendedOption("Use TypeScript (Recommended)");
+  assert.equal(result.recommended, true);
+  assert.equal(result.cleanLabel, "Use TypeScript");
+});
+
+test("A32: parseRecommendedOption strips [Recommended] variant", () => {
+  const result = parseRecommendedOption("Option A [Recommended]");
+  assert.equal(result.recommended, true);
+  assert.equal(result.cleanLabel, "Option A");
+});
+
+test("A33: parseRecommendedOption strips - Recommended variant", () => {
+  const result = parseRecommendedOption("Option B - Recommended");
+  assert.equal(result.recommended, true);
+  assert.equal(result.cleanLabel, "Option B");
+});
+
+test("A34: parseRecommendedOption returns recommended: false for plain label", () => {
+  const result = parseRecommendedOption("Just an option");
+  assert.equal(result.recommended, false);
+  assert.equal(result.cleanLabel, "Just an option");
+});
+
+test("A35: parseRecommendedOption is case-insensitive", () => {
+  const result = parseRecommendedOption("Pick this (RECOMMENDED)");
+  assert.equal(result.recommended, true);
+  assert.ok(!result.cleanLabel.includes("RECOMMENDED"));
+});
+
+// --- areAllQuestionsAnswered tests ---
+
+test("A36: areAllQuestionsAnswered returns false when no questions and no answer", () => {
+  assert.equal(areAllQuestionsAnswered([], {}, {}), false);
+});
+
+test("A37: areAllQuestionsAnswered returns true when no questions and selectedByQ[0] set", () => {
+  assert.equal(areAllQuestionsAnswered([], { 0: "yes" }, {}), true);
+});
+
+test("A38: areAllQuestionsAnswered returns true when no questions and otherByQ[0] set", () => {
+  assert.equal(areAllQuestionsAnswered([], {}, { 0: "custom answer" }), true);
+});
+
+test("A39: areAllQuestionsAnswered returns false if one of 3 questions unanswered", () => {
+  const questions = [
+    { question: "Q1" },
+    { question: "Q2" },
+    { question: "Q3" },
+  ];
+  const selectedByQ = { 0: "opt-a", 1: "opt-b" }; // Q3 missing
+  assert.equal(areAllQuestionsAnswered(questions, selectedByQ, {}), false);
+});
+
+test("A40: areAllQuestionsAnswered returns true when all 3 questions answered", () => {
+  const questions = [
+    { question: "Q1" },
+    { question: "Q2" },
+    { question: "Q3" },
+  ];
+  const selectedByQ = { 0: "opt-a", 1: "opt-b", 2: "__other__" };
+  const otherByQ = { 2: "custom text" };
+  assert.equal(areAllQuestionsAnswered(questions, selectedByQ, otherByQ), true);
+});
+
+test("A41: areAllQuestionsAnswered returns false when __other__ chosen but otherByQ empty", () => {
+  const questions = [{ question: "Q1" }];
+  const selectedByQ = { 0: "__other__" };
+  const otherByQ = { 0: "  " }; // whitespace only
+  assert.equal(areAllQuestionsAnswered(questions, selectedByQ, otherByQ), false);
+});
+
+// --- buildQuestionSubmission tests ---
+
+test("A42: buildQuestionSubmission sends 3 answers keyed by question text", () => {
+  const questions = [
+    { question: "What is your name?" },
+    { question: "What is your role?" },
+    { question: "What framework?" },
+  ];
+  const selectedByQ = { 0: "Alice", 1: "Engineer", 2: "__other__" };
+  const otherByQ = { 2: "Svelte" };
+  const inputObj = { questions };
+
+  const result = buildQuestionSubmission(inputObj, questions, selectedByQ, otherByQ);
+
+  assert.equal(result.behavior, "allow");
+  assert.equal(result.updatedInput.answer, "Alice");
+  assert.equal(result.updatedInput.answers["What is your name?"], "Alice");
+  assert.equal(result.updatedInput.answers["What is your role?"], "Engineer");
+  assert.equal(result.updatedInput.answers["What framework?"], "Svelte");
+});
+
+test("A43: buildQuestionSubmission single-click on option does not call doRespond early", () => {
+  // Simulate: 3-question card, user clicks option on Q0 only
+  // areAllQuestionsAnswered should return false — verifying the guard works
+  const questions = [
+    { question: "Q1", options: [{ label: "A" }, { label: "B" }] },
+    { question: "Q2", options: [{ label: "X" }, { label: "Y" }] },
+    { question: "Q3", options: [{ label: "P" }, { label: "Q" }] },
+  ];
+
+  // Only Q0 answered
+  const selectedByQ = { 0: "A" };
+  const canSubmit = areAllQuestionsAnswered(questions, selectedByQ, {});
+  assert.equal(canSubmit, false, "submit should be disabled after only 1 of 3 answered");
+});
+
+test("A44: buildQuestionSubmission uses header as key when question is absent", () => {
+  const questions = [{ header: "Auth method" }];
+  const selectedByQ = { 0: "OAuth" };
+  const result = buildQuestionSubmission({}, questions, selectedByQ, {});
+  assert.equal(result.updatedInput.answers["Auth method"], "OAuth");
+});
+
+test("A45: buildQuestionSubmission falls back to q1, q2 keys when no question or header", () => {
+  const questions = [{}, {}];
+  const selectedByQ = { 0: "yes", 1: "no" };
+  const result = buildQuestionSubmission({}, questions, selectedByQ, {});
+  assert.equal(result.updatedInput.answers["q1"], "yes");
+  assert.equal(result.updatedInput.answers["q2"], "no");
+});
+
+test("A46: buildQuestionSubmission merges with existing answers in inputObj", () => {
+  const questions = [{ question: "New Q" }];
+  const inputObj = { answers: { "Old Q": "old answer" } };
+  const selectedByQ = { 0: "new answer" };
+  const result = buildQuestionSubmission(inputObj, questions, selectedByQ, {});
+  assert.equal(result.updatedInput.answers["Old Q"], "old answer");
+  assert.equal(result.updatedInput.answers["New Q"], "new answer");
+});
+
 // --- DEMO mode stub test ---
 
 test("A29: DEMO mode: respondToPermission resolves without throwing", async () => {

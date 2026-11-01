@@ -5,6 +5,7 @@ import { isImeComposing } from "./IdeaInbox";
 type PermissionCardProps = {
   p: any;
   agentId: string;
+  agentName?: string;
   permInputs: Record<string, string>;
   setPermInputs: React.Dispatch<React.SetStateAction<Record<string, string>>>;
 };
@@ -73,10 +74,71 @@ function extractGenericPreview(input: Record<string, unknown>): string | null {
   return pairs.join("\n");
 }
 
-export function PermissionCard({ p, agentId, permInputs, setPermInputs }: PermissionCardProps) {
+// ─── Pure helpers (exported for tests) ────────────────────────────────────────
+
+export function parseRecommendedOption(label: string): { cleanLabel: string; recommended: boolean } {
+  const re = /\s*(?:\(Recommended\)|\[Recommended\]|-\s*Recommended)\s*/gi;
+  if (re.test(label)) {
+    const cleanLabel = label.replace(/\s*(?:\(Recommended\)|\[Recommended\]|-\s*Recommended)\s*/gi, "").trim();
+    return { cleanLabel, recommended: true };
+  }
+  return { cleanLabel: label, recommended: false };
+}
+
+export function areAllQuestionsAnswered(
+  questions: Array<{ question?: string; header?: string }>,
+  selectedByQ: Record<number, string>,
+  otherByQ: Record<number, string>,
+): boolean {
+  if (questions.length === 0) {
+    return Boolean((otherByQ[0] ?? selectedByQ[0] ?? "").trim());
+  }
+  return questions.every((_, qi) => {
+    const val = (selectedByQ[qi] === "__other__" ? otherByQ[qi] : selectedByQ[qi]) ?? "";
+    return val.trim().length > 0;
+  });
+}
+
+export function buildQuestionSubmission(
+  inputObj: Record<string, unknown>,
+  questions: Array<{ question?: string; header?: string }>,
+  selectedByQ: Record<number, string>,
+  otherByQ: Record<number, string>,
+): { behavior: "allow"; updatedInput: Record<string, unknown> } {
+  const answers: Record<string, string> = {};
+  questions.forEach((q, qi) => {
+    const key = q.question || q.header || `q${qi + 1}`;
+    const val = ((selectedByQ[qi] === "__other__" ? otherByQ[qi] : selectedByQ[qi]) ?? "").trim();
+    answers[key] = val;
+  });
+
+  let firstAnswer: string;
+  if (questions.length === 0) {
+    firstAnswer = ((selectedByQ[0] === "__other__" ? otherByQ[0] : selectedByQ[0]) ?? "").trim();
+  } else {
+    const firstKey = questions[0].question || questions[0].header || "q1";
+    firstAnswer = answers[firstKey] ?? "";
+  }
+
+  return {
+    behavior: "allow",
+    updatedInput: {
+      ...inputObj,
+      answer: firstAnswer,
+      answers: { ...((inputObj.answers as Record<string, string>) ?? {}), ...answers },
+    },
+  };
+}
+
+// ─── Component ────────────────────────────────────────────────────────────────
+
+export function PermissionCard({ p, agentId, agentName, permInputs, setPermInputs }: PermissionCardProps) {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [denyMsg, setDenyMsg] = useState("");
+  const [selectedByQ, setSelectedByQ] = useState<Record<number, string>>({});
+  const [otherByQ, setOtherByQ] = useState<Record<number, string>>({});
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
 
   const doRespond = async (requestId: string, response: Record<string, unknown>) => {
     setSubmitting(true);
@@ -112,15 +174,7 @@ export function PermissionCard({ p, agentId, permInputs, setPermInputs }: Permis
 
   const suggestions: any[] = Array.isArray(p.suggestions) ? p.suggestions : [];
 
-  const submitQuestionAnswer = (ans: string, qText?: string) => {
-    const firstQ = qText ?? questions[0]?.question;
-    const updatedInput: Record<string, unknown> = {
-      ...inputObj,
-      answer: ans,
-      ...(firstQ ? { answers: { ...((inputObj.answers as Record<string, string>) ?? {}), [firstQ]: ans } } : {}),
-    };
-    void doRespond(p.id, { behavior: "allow", updatedInput });
-  };
+  const allAnswered = areAllQuestionsAnswered(questions, selectedByQ, otherByQ);
 
   const handleDeny = () => {
     const msg = denyMsg.trim();
@@ -142,8 +196,50 @@ export function PermissionCard({ p, agentId, permInputs, setPermInputs }: Permis
   return (
     <div className="perm NeedsYouHighlight" style={{ flexDirection: "column", alignItems: "stretch" }}>
       <div>
-        <b>{p.title ?? p.name}</b>
-        {p.description && <div className="muted small">{p.description}</div>}
+        {isQuestion ? (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <b data-testid="perm-question-agent-title">{agentName || p.agentName || "Agent"}</b>
+            <div style={{ position: "relative" }}>
+              <button
+                type="button"
+                className="btn ghost small"
+                data-testid="perm-question-more-btn"
+                onClick={() => setMoreMenuOpen((v) => !v)}
+              >
+                ⋯
+              </button>
+              {moreMenuOpen && (
+                <div
+                  style={{
+                    position: "absolute",
+                    right: 0,
+                    top: "100%",
+                    background: "var(--bg, #1e1e1e)",
+                    border: "1px solid var(--line)",
+                    padding: 4,
+                    zIndex: 100,
+                    minWidth: 120,
+                  }}
+                >
+                  <button
+                    type="button"
+                    className="btn bad small"
+                    data-testid="perm-question-deny-menu-item"
+                    disabled={submitting}
+                    onClick={() => { setMoreMenuOpen(false); handleDeny(); }}
+                  >
+                    Deny question
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <>
+            <b>{p.title ?? p.name}</b>
+            {p.description && <div className="muted small">{p.description}</div>}
+          </>
+        )}
 
         {isPlan && planText && (
           <pre
@@ -163,22 +259,99 @@ export function PermissionCard({ p, agentId, permInputs, setPermInputs }: Permis
           </pre>
         )}
 
+        {isQuestion && questions.length === 0 && (
+          <input
+            className="perm-text-input"
+            type="text"
+            placeholder="Your answer…"
+            value={(selectedByQ[0] as string) ?? ""}
+            onChange={(e) => setSelectedByQ((prev) => ({ ...prev, [0]: e.target.value }))}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !isImeComposing(e) && allAnswered) {
+                e.preventDefault();
+                void doRespond(p.id, buildQuestionSubmission(inputObj, questions, selectedByQ, otherByQ));
+              }
+            }}
+          />
+        )}
+
         {isQuestion &&
           questions.map((q, qi) => (
-            <div key={qi} className="perm-question-item" style={{ marginTop: 6 }}>
-              {q.question && <div className="small" style={{ marginBottom: 4 }}>{q.question}</div>}
+            <div key={qi} className="perm-question-item" data-testid={`perm-question-item-${qi}`} style={{ marginTop: 6 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 4 }}>
+                {q.header && (
+                  <span className="chip perm-q-header-chip" data-testid={`perm-q-header-${qi}`}>
+                    {q.header}
+                  </span>
+                )}
+                {q.question && <span className="perm-q-text">{q.question}</span>}
+              </div>
               {Array.isArray(q.options) && q.options.length > 0 && (
-                <div className="perm-question-options" style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 4 }}>
-                  {q.options.map((opt) => (
-                    <button
-                      key={opt.label}
-                      className="btn ok small"
-                      title={opt.description}
-                      onClick={() => submitQuestionAnswer(opt.label, q.question)}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
+                <div
+                  role="radiogroup"
+                  className="perm-question-options"
+                  style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 4 }}
+                >
+                  {q.options.map((opt, oi) => {
+                    const { cleanLabel, recommended } = parseRecommendedOption(opt.label);
+                    const isSelected = selectedByQ[qi] === opt.label;
+                    return (
+                      <button
+                        key={opt.label}
+                        type="button"
+                        data-testid={`perm-q-${qi}-opt-${oi}`}
+                        aria-pressed={isSelected}
+                        className={`btn small ${isSelected ? "ok on" : "ghost"}`}
+                        onClick={() => setSelectedByQ((prev) => ({ ...prev, [qi]: opt.label }))}
+                      >
+                        {cleanLabel}
+                        {recommended && (
+                          <span
+                            className="badge ok perm-rec-badge"
+                            data-testid="perm-recommended-badge"
+                            style={{ marginLeft: 6, fontSize: 9, textTransform: "none" }}
+                          >
+                            Recommended
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                  <button
+                    type="button"
+                    data-testid={`perm-q-${qi}-other-btn`}
+                    aria-pressed={selectedByQ[qi] === "__other__"}
+                    className={`btn small ${selectedByQ[qi] === "__other__" ? "ok on" : "ghost"}`}
+                    onClick={() => setSelectedByQ((prev) => ({ ...prev, [qi]: "__other__" }))}
+                  >
+                    Other…
+                  </button>
+                </div>
+              )}
+              {selectedByQ[qi] === "__other__" && (
+                <input
+                  type="text"
+                  data-testid={`perm-q-${qi}-other-input`}
+                  placeholder="Other…"
+                  value={otherByQ[qi] ?? ""}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setOtherByQ((prev) => ({ ...prev, [qi]: val }));
+                    setSelectedByQ((prev) => ({ ...prev, [qi]: "__other__" }));
+                  }}
+                />
+              )}
+              {Array.isArray(q.options) && q.options.some((o) => o.description) && (
+                <div className="perm-question-descriptions muted small">
+                  {q.options.map((opt) => {
+                    if (!opt.description) return null;
+                    const { cleanLabel } = parseRecommendedOption(opt.label);
+                    return (
+                      <div key={opt.label}>
+                        {cleanLabel}: {opt.description}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -281,49 +454,15 @@ export function PermissionCard({ p, agentId, permInputs, setPermInputs }: Permis
 
       {isQuestion ? (
         <div className="perm-actions perm-question" style={{ flexWrap: "wrap" }}>
-          {p.actions?.map((a: any) => (
-            <button
-              key={a.id}
-              className={`btn ${a.variant === "danger" ? "bad" : a.behavior === "deny" ? "bad" : "ok"}`}
-              disabled={submitting}
-              onClick={() => void doRespond(p.id, { behavior: a.behavior === "allow" ? "allow" : "deny", selectedActionId: a.id })}
-            >
-              {a.label}
-            </button>
-          ))}
-          <input
-            className="perm-text-input"
-            type="text"
-            placeholder="Your answer…"
-            value={permInputs[p.id] ?? ""}
-            onChange={(e) => setPermInputs((prev) => ({ ...prev, [p.id]: e.target.value }))}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !isImeComposing(e)) {
-                e.preventDefault();
-                submitQuestionAnswer(permInputs[p.id] ?? "");
-              }
-            }}
-          />
-          <button className="btn ok" disabled={submitting} onClick={() => submitQuestionAnswer(permInputs[p.id] ?? "")}>
+          <button
+            type="button"
+            data-testid="perm-question-submit-btn"
+            className="btn ok"
+            disabled={submitting || !allAnswered}
+            onClick={() => void doRespond(p.id, buildQuestionSubmission(inputObj, questions, selectedByQ, otherByQ))}
+          >
             Submit
           </button>
-          <button className="btn bad" data-testid="perm-deny-btn" disabled={submitting} onClick={handleDeny}>
-            Deny
-          </button>
-          <input
-            className="perm-deny-msg"
-            data-testid="perm-deny-msg-input"
-            type="text"
-            placeholder="Tell the agent what to do instead (optional)…"
-            value={denyMsg}
-            onChange={(e) => setDenyMsg(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !isImeComposing(e)) {
-                e.preventDefault();
-                handleDeny();
-              }
-            }}
-          />
         </div>
       ) : isPlan ? (
         <div className="perm-actions perm-plan" style={{ flexWrap: "wrap" }}>
