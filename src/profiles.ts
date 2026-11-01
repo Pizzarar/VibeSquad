@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { DEMO } from "./paseo";
+import { setProviderOverrides } from "./pixel";
 
 export type Role = "lead" | "brainstorm" | "worker";
 
@@ -490,6 +491,7 @@ export async function fetchProfiles(): Promise<ProfilesState> {
     const res = await fetch("/__vibesquad/profiles");
     if (!res.ok) throw new Error(`profiles fetch failed (${res.status})`);
     const body = await res.json();
+    setProviderOverrides(body.providerOverrides);
     const profiles = Array.isArray(body.profiles) && body.profiles.length
       ? body.profiles.map(hydrateProfile)
       : DEFAULT_PROFILES;

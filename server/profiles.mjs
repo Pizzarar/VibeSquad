@@ -457,6 +457,48 @@ export function toPaseoProfileShape(profile) {
   return out;
 }
 
+const PROVIDER_OVERRIDE_FIELDS = ["color", "dim", "symbol", "name"];
+
+/** Clean { [providerKeyLower]: { color?, dim?, symbol?, name? } } from a profiles.json body. */
+export function normalizeProviderOverrides(raw) {
+  const src = raw?.providers ?? raw?.providerIcons;
+  const out = {};
+  if (!src || typeof src !== "object" || Array.isArray(src)) return out;
+  for (const [k, v] of Object.entries(src)) {
+    const key = String(k).trim().toLowerCase();
+    if (!key || !v || typeof v !== "object") continue;
+    const o = {};
+    for (const f of PROVIDER_OVERRIDE_FIELDS) {
+      if (typeof v[f] !== "string" || !v[f].trim()) continue;
+      if ((f === "color" || f === "dim") && !/^#[0-9a-f]{6}$/i.test(v[f].trim())) continue;
+      o[f] = v[f].trim();
+    }
+    if (Object.keys(o).length) out[key] = o;
+  }
+  return out;
+}
+
+/** The raw providers/providerIcons block already on disk, so saves never drop it. */
+function readProviderBlock(targetPath) {
+  try {
+    if (!existsSync(targetPath)) return {};
+    const parsed = JSON.parse(readFileSync(targetPath, "utf8"));
+    if (!parsed || Array.isArray(parsed)) return {};
+    const block = {};
+    if (parsed.providers !== undefined) block.providers = parsed.providers;
+    if (parsed.providerIcons !== undefined) block.providerIcons = parsed.providerIcons;
+    return block;
+  } catch {
+    return {};
+  }
+}
+
+function writeProfilesFile(targetPath, profiles) {
+  const block = readProviderBlock(targetPath);
+  mkdirSync(dirname(targetPath), { recursive: true });
+  writeFileSync(targetPath, JSON.stringify({ version: 1, ...block, profiles }, null, 2) + "\n", "utf8");
+}
+
 export function importPaseoProfiles(rawInput, options = {}) {
   const list = Array.isArray(rawInput)
     ? rawInput
@@ -480,8 +522,7 @@ export function importPaseoProfiles(rawInput, options = {}) {
   }
   if (options.profilesPath || options.write) {
     const targetPath = getProfilesPath(options.profilesPath);
-    mkdirSync(dirname(targetPath), { recursive: true });
-    writeFileSync(targetPath, JSON.stringify({ version: 1, profiles }, null, 2) + "\n", "utf8");
+    writeProfilesFile(targetPath, profiles);
   }
   return {
     profiles,
@@ -493,8 +534,7 @@ export function importPaseoProfiles(rawInput, options = {}) {
 export function seedDefaultPack(profilesPath) {
   const targetPath = getProfilesPath(profilesPath);
   const profiles = DEFAULT_PACK_PROFILES.map((p) => normalizeProfile(p));
-  mkdirSync(dirname(targetPath), { recursive: true });
-  writeFileSync(targetPath, JSON.stringify({ version: 1, profiles }, null, 2) + "\n", "utf8");
+  writeProfilesFile(targetPath, profiles);
   return {
     ok: true,
     path: targetPath,
@@ -555,13 +595,16 @@ export function loadProfiles(profilesPath, options = {}) {
         }
       : readPaseoConfig(options.paseoConfigPath);
 
+  let providerOverrides = {};
   if (existsSync(targetPath)) {
     try {
       const parsed = JSON.parse(readFileSync(targetPath, "utf8"));
       const rawList = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.profiles) ? parsed.profiles : [];
       const profiles = rawList.map(normalizeProfile).filter(Boolean);
+      providerOverrides = normalizeProviderOverrides(parsed);
       if (profiles.length > 0) {
         return {
+          providerOverrides,
           exists: true,
           needsSetup: false,
           seeded: false,
@@ -585,7 +628,8 @@ export function loadProfiles(profilesPath, options = {}) {
       exists: false,
       needsSetup: true,
       seeded: false,
-      source: "paseo-unimported",
+      providerOverrides,
+    source: "paseo-unimported",
       path: targetPath,
       profiles: imported.profiles,
       warningsByProfile: imported.warningsByProfile,
@@ -600,7 +644,8 @@ export function loadProfiles(profilesPath, options = {}) {
       exists: true,
       needsSetup: false,
       seeded: true,
-      source: "default-pack",
+      providerOverrides,
+    source: "default-pack",
       path: targetPath,
       profiles: seeded.profiles,
       warningsByProfile: {},
@@ -613,6 +658,7 @@ export function loadProfiles(profilesPath, options = {}) {
     exists: false,
     needsSetup: true,
     seeded: false,
+    providerOverrides,
     source: "default-pack",
     path: targetPath,
     profiles: DEFAULT_PACK_PROFILES.map(normalizeProfile),
@@ -645,8 +691,7 @@ export function saveProfiles(input, profilesPath) {
   } else {
     throw new Error("Expected { profiles: [...] } or { profile: {...} }");
   }
-  mkdirSync(dirname(targetPath), { recursive: true });
-  writeFileSync(targetPath, JSON.stringify({ version: 1, profiles: nextProfiles }, null, 2) + "\n", "utf8");
+  writeProfilesFile(targetPath, nextProfiles);
   return {
     ok: true,
     path: targetPath,

@@ -12,8 +12,14 @@ const MODELS: Record<string, [string, string]> = {
   claude: ["claude", "claude-opus-5-5"],
   sonnet: ["claude", "claude-sonnet-5-5"],
   gemini: ["antigravity-cli", "gemini-4-argon"],
+  opencode: ["opencode", "deepseek/deepseek-v4-pro"],
   deepseek: ["opencode", "deepseek/deepseek-flash"],
   codex: ["codex", "gpt-codex"],
+  cursor: ["cursor", "cursor-fast"],
+  copilot: ["copilot", "gpt-5"],
+  codewhale: ["codewhale", "deepseek-v4"],
+  pi: ["pi", "pi-coder"],
+  aider: ["aider", "sonnet"],
 };
 
 type Spec = {
@@ -74,6 +80,13 @@ const CAST: Spec[] = [
   { id: "demo-spec", who: "claude", title: "Spec - step 6 server plugin", labels: vs({ role: "worker" }), used: 55_000, ago: 25 },
   { id: "demo-unk", who: "deepseek", title: "helper", labels: vs(), used: 9_000, ago: 40 },
   { id: "demo-rev-2", who: "gemini", title: "Review - Gemini · art", status: "closed", labels: vs({ role: "worker", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 92_000, ago: 200 },
+  // One worker per provider row so ?demo=1 shows all 8 dedicated icons plus the generic fallback.
+  { id: "demo-prov-cursor", who: "cursor", title: "Implement - Cursor · settings", status: "running", labels: vs({ role: "worker", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 30_000, ago: 3 },
+  { id: "demo-prov-copilot", who: "copilot", title: "Review - Copilot · diff", labels: vs({ role: "worker", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 26_000, ago: 5 },
+  { id: "demo-prov-codewhale", who: "codewhale", title: "Audit - CodeWhale · logs", status: "running", labels: vs({ role: "worker", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 44_000, ago: 4 },
+  { id: "demo-prov-pi", who: "pi", title: "Mechanical - Pi · rename", labels: vs({ role: "worker", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 12_000, ago: 6 },
+  { id: "demo-prov-opencode", who: "opencode", title: "Implement - OpenCode · hooks", status: "running", labels: vs({ role: "worker", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 52_000, ago: 2 },
+  { id: "demo-prov-aider", who: "aider", title: "Implement - Aider · generic", labels: vs({ role: "worker", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 18_000, ago: 7 },
   // Other teams, so the sidebar has several bosses.
   { id: "demo-lead-efi", who: "claude", title: "★ MAIN GAME ord75", status: "running", labels: { team: "efi", lane: "main-game", role: "lead", ord: "75", "needs-you": "merge", "needs-you-reason": "approve the save-format merge" }, used: 97_000, cwd: EFI },
   { id: "demo-lead-efi-dup", who: "sonnet", title: "★ MAIN GAME ord74", labels: { team: "efi", lane: "main-game", role: "lead", ord: "74" }, used: 90_000, cwd: EFI, ago: 30 },
@@ -187,7 +200,7 @@ export function demoLog(): FeedEntry[] {
 // ---- cast sheet ---------------------------------------------------------------
 
 const TYPES = Object.keys(AGENT_TYPE_NAME) as AgentType[];
-const SHEET_PROVIDERS = ["claude", "antigravity-cli", "opencode", "codex"];
+const SHEET_PROVIDERS = ["claude", "codex", "antigravity-cli", "opencode", "cursor", "copilot", "codewhale", "pi", "aider"];
 
 export function SpriteSheet() {
   return (
@@ -230,17 +243,21 @@ function Row({ t }: { t: AgentType }) {
   );
 }
 
-// ---- ?five-leads=1: the five project leads at exact sidebar size ------------------------
+// ---- ?five-leads=1: the project leads, one per provider at exact sidebar size ------------------------
 
 const FIVE_LEADS: { id: string; provider: string; lane: string }[] = [
-  { id: "demo-lead-efi", provider: "claude", lane: "Main Game" },
-  { id: "demo-lead-ui", provider: "opencode", lane: "UI Lab" },
-  { id: DEMO_LEAD_ID, provider: "antigravity-cli", lane: "VibeSquad" },
-  { id: "demo-lead-pl", provider: "codex", lane: "Plugins" },
-  { id: "demo-lead-site", provider: "claude", lane: "Site Polish" },
+  { id: "demo-lead-efi", provider: "claude", lane: "Claude" },
+  { id: "demo-lead-pl", provider: "codex", lane: "Codex" },
+  { id: DEMO_LEAD_ID, provider: "antigravity-cli", lane: "Gemini" },
+  { id: "demo-lead-ui", provider: "opencode", lane: "OpenCode" },
+  { id: "demo-lead-cursor", provider: "cursor", lane: "Cursor" },
+  { id: "demo-lead-copilot", provider: "copilot", lane: "Copilot" },
+  { id: "demo-lead-codewhale", provider: "codewhale", lane: "CodeWhale" },
+  { id: "demo-lead-pi", provider: "pi", lane: "Pi" },
+  { id: "demo-lead-aider", provider: "aider", lane: "Aider" },
 ];
 
-/** Top row: no labels, 28x28 like the sidebar. Second row: the same five with lane names. */
+/** Top row: no labels, 28x28 like the sidebar. Second row: the same leads with lane names. */
 export function FiveLeads() {
   return (
     <main className="sheet five-leads">

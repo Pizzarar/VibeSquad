@@ -41,22 +41,60 @@ export type ProviderSpec = {
 };
 
 const PROVIDERS: [RegExp, ProviderSpec][] = [
-  [/claude|anthropic/i, { key: "claude", name: "Claude", color: "#ff6e59", dim: "#7a2620", symbol: "✶" }],
+  [/claude|anthropic/i, { key: "claude", name: "Claude Code", color: "#ff6e59", dim: "#7a2620", symbol: "✶" }],
+  [/codex|openai/i, { key: "codex", name: "Codex", color: "#e2e8f0", dim: "#475569", symbol: "●" }],
   [/antigravity|gemini|agy/i, { key: "gemini", name: "Gemini", color: "#00f0ff", dim: "#005f73", symbol: "◆" }],
-  [/opencode|deepseek/i, { key: "deepseek", name: "DeepSeek", color: "#b86bff", dim: "#4c1d95", symbol: "▲" }],
-  [/codex|openai/i, { key: "codex", name: "Codex", color: "#d4dce8", dim: "#475569", symbol: "●" }],
+  [/opencode/i, { key: "opencode", name: "OpenCode", color: "#b86bff", dim: "#4c1d95", symbol: "▲" }],
+  [/cursor/i, { key: "cursor", name: "Cursor", color: "#39ff88", dim: "#14532d", symbol: "▸" }],
+  [/copilot/i, { key: "copilot", name: "Copilot", color: "#ffd166", dim: "#78350f", symbol: "❖" }],
+  [/codewhale|deepseek-harness/i, { key: "codewhale", name: "CodeWhale", color: "#38bdf8", dim: "#1e3a8a", symbol: "≈" }],
+  [/^(pi|omp)$/i, { key: "pi", name: "Pi", color: "#ff2a85", dim: "#831843", symbol: "π" }],
 ];
 
-const DEFAULT_PROVIDER: ProviderSpec = {
-  key: "other",
-  name: "Synth",
-  color: "#38bdf8",
-  dim: "#1e3a8a",
-  symbol: "◈",
-};
+// Providers without a dedicated row get a stable hue from this list (none collide with the rows above).
+export const GENERIC_HUES = ["#a3e635", "#2dd4bf", "#fb923c", "#e879f9", "#60a5fa", "#f43f5e", "#facc15", "#c084fc"];
 
-export function providerSpec(provider: string): ProviderSpec {
-  return PROVIDERS.find(([re]) => re.test(provider))?.[1] ?? DEFAULT_PROVIDER;
+export type ProviderOverride = { color?: string; symbol?: string; name?: string; dim?: string };
+let overrides: Record<string, ProviderOverride> = {};
+
+export function setProviderOverrides(next: Record<string, ProviderOverride> | null | undefined) {
+  overrides = next && typeof next === "object" ? next : {};
+  cache.clear();
+}
+
+export function getProviderOverrides(): Record<string, ProviderOverride> {
+  return overrides;
+}
+
+/** Keyed by source/tool, not model: "opencode/deepseek/x" is OpenCode. */
+export function providerSpec(provider: string, label?: string): ProviderSpec {
+  const raw = String(provider ?? "").trim();
+  const source = (raw.split("/")[0] || raw).trim();
+  const key = source.toLowerCase();
+  let spec = PROVIDERS.find(([re]) => re.test(source))?.[1];
+  if (!spec) {
+    const color = GENERIC_HUES[hash(key || "other") % GENERIC_HUES.length];
+    const initial = (label?.trim() || source).match(/[A-Za-z0-9]/)?.[0]?.toUpperCase() || "◈";
+    spec = {
+      key: key || "other",
+      name: label?.trim() || (source ? source.charAt(0).toUpperCase() + source.slice(1) : "Synth"),
+      color,
+      dim: shade(color, 0.38),
+      symbol: initial,
+    };
+  }
+  const o = overrides[key];
+  if (o) {
+    const color = o.color ?? spec.color;
+    spec = {
+      ...spec,
+      color,
+      dim: o.dim ?? (o.color ? shade(o.color, 0.38) : spec.dim),
+      symbol: o.symbol ?? spec.symbol,
+      name: o.name ?? spec.name,
+    };
+  }
+  return spec;
 }
 
 export function providerColor(provider: string): string {
@@ -886,18 +924,20 @@ export function spriteUrl(id: string, agentType: AgentType, neon: string, varian
 export function Avatar({
   id,
   provider,
+  providerLabel,
   agentType = "unknown",
   size = 32,
   variant,
 }: {
   id: string;
   provider: string;
+  providerLabel?: string;
   agentType?: AgentType;
   size?: number;
   /** Lead look bucket (the lane ordinal); leads with none fall back to the id hash. */
   variant?: number;
 }) {
-  const p = providerSpec(provider);
+  const p = providerSpec(provider, providerLabel);
   const tag = String((hash(id) % 90) + 10);
   const retired = agentType === "retired-lead";
   const img = size >= S ? Math.floor(size / S) * S : size;

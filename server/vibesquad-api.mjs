@@ -751,6 +751,7 @@ async function handleProfiles(req, res) {
         path: state.path,
         profiles: state.profiles,
         paseoProfiles: state.paseoProfiles,
+        providerOverrides: state.providerOverrides ?? {},
         diff,
         warningsByProfile,
         installedProviders: state.installedProviders,
