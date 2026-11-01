@@ -85,7 +85,19 @@ code {
 .app {
   display: grid;
   grid-template-columns: 265px 1fr;
+  grid-template-rows: minmax(0, 1fr);
   height: 100vh;
+  overflow: hidden;
+}
+
+.app:has(> [role="alert"]) {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.app:has(> [role="alert"] + [role="alert"]) {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+.app:has(> [role="alert"] + [role="alert"] + [role="alert"]) {
+  grid-template-rows: auto auto auto minmax(0, 1fr);
 }
 
 /* Unit L: chat column of mounted agent tabs; focus folds sidebar + team page into one rail. */
@@ -97,6 +109,20 @@ code {
 }
 .app.focus {
   grid-template-columns: 264px minmax(0, 1fr);
+}
+
+/* Ensure all direct grid children of .app stay within their row height so the
+   composer and Send button remain visible when top banners are present. */
+.app > .sidebar,
+.app > .team-page {
+  min-height: 0;
+  height: 100%;
+}
+.app > .focus-rail,
+.app > .agent-panes {
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
 }
 
 /* Sidebar */
@@ -881,6 +907,10 @@ code {
   background: #070813;
 }
 
+.timeline > * {
+  flex-shrink: 0;
+}
+
 .tl {
   white-space: pre-wrap;
   word-break: break-word;
@@ -904,6 +934,7 @@ code {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex-shrink: 0;
 }
 
 .tl-tool.running .tool-name {
@@ -1317,7 +1348,7 @@ code {
   grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
-  height: 100vh;
+  height: 100%;
   background: var(--navy);
   border-left: 1px solid var(--cyan);
   box-shadow: -6px 0 24px rgba(0, 0, 0, 0.75);
@@ -1366,7 +1397,7 @@ code {
 
 /* ---- Focus rail ------------------------------------------------------------------- */
 .focus-rail {
-  display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100vh; overflow: hidden;
+  display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; overflow: hidden;
   background: linear-gradient(180deg, #0b0c1a 0%, #100e24 100%); border-right: 1px solid var(--line);
 }
 .rhead { display: flex; align-items: center; gap: 8px; padding: 10px; border-bottom: 1px solid var(--line); }
@@ -2727,8 +2758,8 @@ html {
 
 .agent-panes,
 .focus-rail {
-  height: calc(100vh / var(--vs-ui-scale, 1));
-  height: calc(100dvh / var(--vs-ui-scale, 1));
+  height: 100%;
+  min-height: 0;
 }
 
 .sidebar,

@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import { buildAgentDeepLink } from "@getpaseo/protocol/agent-deep-link";
+import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
 import {
   attachFiles,
   clearNeedsYou,
@@ -39,6 +40,7 @@ import {
   leadVariant,
   teamForAgent,
   topicOfBrainstorm,
+  usedTokens,
   useTeams,
 } from "./teams";
 import { AgentActions, StatusDot, ago, shortPath, useTick } from "./ui";
@@ -392,7 +394,7 @@ function HardeningBar({ agent, entries }: { agent: PaseoAgent; entries: Entry[] 
           action="Cancel & Resume"
           onAction={async () => {
             await stopAgent(agent.id);
-            await sendMessage(agent.id, CANCEL_AND_RESUME_PROMPT(a.a3HungTool!.name));
+            await sendMessage(agent.id, CANCEL_AND_RESUME_PROMPT(a.a3HungTool!.name), undefined, { activeTurnBehavior: "interrupt" });
           }}
         />
       )}
@@ -590,6 +592,8 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   const feedbackKey = `vs.restart-feedback.${agent.id}`;
   const [feedbackDismissed, setFeedbackDismissed] = useState(() => localStorage.getItem(feedbackKey) === "1");
   const autoRestartFired = useRef<string | null>(null);
+  const [lastSteered, setLastSteered] = useState<string | null>(null);
+  const [permInputs, setPermInputs] = useState<Record<string, string>>({});
 
   const imgs = useImageDraft(`${agent.id}:images`);
   const [dragOver, setDragOver] = useState(false);
@@ -607,7 +611,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   const { team, laneId: resolvedLaneId } = teamForAgent(agent);
   const { warnTokens, restartTokens } = getBrainstormThresholds(team);
   const bsUsedTokens = isBs ? brainstormUsedTokens(agent) : 0;
-  const used = isBs ? bsUsedTokens : agent.lastUsage?.contextWindowUsedTokens;
+  const used = usedTokens(agent);
   const budget = budgetFor(agent);
   const agentType = classifyAgent(agent);
   const prov = providerSpec(agent.provider);
@@ -634,6 +638,10 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   useEffect(() => {
     setFeedbackDismissed(localStorage.getItem(feedbackKey) === "1");
   }, [feedbackKey]);
+
+  useEffect(() => {
+    if (agent.status !== "running") setLastSteered(null);
+  }, [agent.status]);
 
   useEffect(() => {
     const el = timeline.current;
@@ -711,7 +719,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
     }
   }, [isBs, agent.id, agent.archivedAt, agent.status, bsUsedTokens, restartTokens, draft, doRestart]);
 
-  const send = async () => {
+  const sendWithBehavior = async (behavior: ActiveTurnBehavior) => {
     if (!draft.trim() && !imgs.images.length) return;
     const text = draft.trim() ? draft : "(image)";
 
@@ -725,12 +733,13 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
     setBusy(true);
     try {
       if (imgs.images.length) {
-        await sendMessage(agent.id, text, await blobsToPaseoImages(imgs.images));
+        await sendMessage(agent.id, text, await blobsToPaseoImages(imgs.images), { activeTurnBehavior: behavior });
         rememberSent(agent.id, text, imgs.images);
         imgs.clear();
       } else {
-        await client.agents.ref(agent.id).send(draft);
+        await sendMessage(agent.id, draft, undefined, { activeTurnBehavior: behavior });
       }
+      if (agent.status === "running" && behavior === "steer") setLastSteered(text);
       clearDraft();
     } catch (e) {
       alert(`Send failed: ${e}`);
@@ -738,6 +747,9 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
       setBusy(false);
     }
   };
+
+  const send = () => sendWithBehavior("steer");
+  const sendInterrupt = () => sendWithBehavior("interrupt");
 
   const onFeedback = async (verdict: "good" | "lost") => {
     localStorage.setItem(feedbackKey, "1");
@@ -831,10 +843,14 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
     }
   };
 
-  const respond = (requestId: string, allow: boolean) =>
+  const respond = (
+    requestId: string,
+    allow: boolean,
+    extra?: { selectedActionId?: string; updatedInput?: Record<string, unknown> },
+  ) =>
     client.agents
       .ref(agent.id)
-      .respondToPermission({ requestId, response: allow ? { behavior: "allow" } : { behavior: "deny" } })
+      .respondToPermission({ requestId, response: allow ? { behavior: "allow", ...extra } : { behavior: "deny" } })
       .catch((e) => alert(`Permission reply failed: ${e}`));
 
   const usedK = Math.round(bsUsedTokens / 1000);
@@ -1073,22 +1089,125 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
       {active && <HardeningBar agent={agent} entries={entries} />}
       <AttachFiles agent={agent} entries={entries} />
 
-      {agent.pendingPermissions?.map((p) => (
-        <div key={p.id} className="perm NeedsYouHighlight">
-          <div>
-            <b>{p.title ?? p.name}</b>
-            {p.description && <div className="muted small">{p.description}</div>}
+      {agent.pendingPermissions?.map((p) => {
+        const inputObj = (p.input ?? {}) as Record<string, unknown>;
+        const questions = Array.isArray(inputObj.questions)
+          ? (inputObj.questions as Array<{
+              question?: string;
+              header?: string;
+              options?: Array<{ label: string; description?: string }>;
+            }>)
+          : [];
+        const planText = typeof inputObj.plan === "string" ? inputObj.plan : undefined;
+        const submitQuestionAnswer = (ans: string, qText?: string) => {
+          const firstQ = qText ?? questions[0]?.question;
+          const updatedInput: Record<string, unknown> = {
+            ...inputObj,
+            answer: ans,
+            ...(firstQ ? { answers: { ...((inputObj.answers as Record<string, string>) ?? {}), [firstQ]: ans } } : {}),
+          };
+          void respond(p.id, true, { updatedInput });
+        };
+
+        return (
+          <div key={p.id} className="perm NeedsYouHighlight" style={{ flexDirection: "column", alignItems: "stretch" }}>
+            <div>
+              <b>{p.title ?? p.name}</b>
+              {p.description && <div className="muted small">{p.description}</div>}
+              {p.kind === "plan" && planText && (
+                <pre className="perm-plan-body" style={{ maxHeight: 180, overflowY: "auto", margin: "6px 0", padding: 8, background: "#090a16", border: "1px solid var(--line)", whiteSpace: "pre-wrap", fontSize: 11 }}>
+                  {planText}
+                </pre>
+              )}
+              {p.kind === "question" &&
+                questions.map((q, qi) => (
+                  <div key={qi} className="perm-question-item" style={{ marginTop: 6 }}>
+                    {q.question && <div className="small" style={{ marginBottom: 4 }}>{q.question}</div>}
+                    {Array.isArray(q.options) && q.options.length > 0 && (
+                      <div className="perm-question-options" style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 4 }}>
+                        {q.options.map((opt) => (
+                          <button
+                            key={opt.label}
+                            className="btn ok small"
+                            title={opt.description}
+                            onClick={() => submitQuestionAnswer(opt.label, q.question)}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+            </div>
+            {p.kind === "question" ? (
+              <div className="perm-actions perm-question" style={{ flexWrap: "wrap" }}>
+                {p.actions?.map((a) => (
+                  <button
+                    key={a.id}
+                    className={`btn ${a.variant === "danger" ? "bad" : a.behavior === "deny" ? "bad" : "ok"}`}
+                    onClick={() => respond(p.id, a.behavior === "allow", { selectedActionId: a.id })}
+                  >
+                    {a.label}
+                  </button>
+                ))}
+                <input
+                  className="perm-text-input"
+                  type="text"
+                  placeholder="Your answer…"
+                  value={permInputs[p.id] ?? ""}
+                  onChange={(e) => setPermInputs((prev) => ({ ...prev, [p.id]: e.target.value }))}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !isImeComposing(e)) {
+                      e.preventDefault();
+                      submitQuestionAnswer(permInputs[p.id] ?? "");
+                    }
+                  }}
+                />
+                <button className="btn ok" onClick={() => submitQuestionAnswer(permInputs[p.id] ?? "")}>
+                  Submit
+                </button>
+                <button className="btn bad" onClick={() => void respond(p.id, false)}>Deny</button>
+              </div>
+            ) : p.kind === "plan" ? (
+              <div className="perm-actions perm-plan" style={{ flexWrap: "wrap" }}>
+                {p.actions?.length ? (
+                  p.actions.map((a) => (
+                    <button
+                      key={a.id}
+                      className={`btn ${a.variant === "danger" ? "bad" : a.intent === "implement" || a.intent === "implement_resume" ? "ok" : "ghost"}`}
+                      onClick={() => void respond(p.id, a.behavior === "allow", { selectedActionId: a.id })}
+                    >
+                      {a.label}
+                    </button>
+                  ))
+                ) : (
+                  <button className="btn ok" onClick={() => void respond(p.id, true)}>Approve</button>
+                )}
+                <button className="btn bad" onClick={() => void respond(p.id, false)}>Deny</button>
+              </div>
+            ) : (
+              <div className="perm-actions" style={{ flexWrap: "wrap" }}>
+                {p.actions?.map((a) => (
+                  <button
+                    key={a.id}
+                    className={`btn ${a.variant === "danger" ? "bad" : a.behavior === "deny" ? "bad" : "ok"}`}
+                    onClick={() => void respond(p.id, a.behavior === "allow", { selectedActionId: a.id })}
+                  >
+                    {a.label}
+                  </button>
+                ))}
+                {!p.actions?.length && (
+                  <>
+                    <button className="btn ok" onClick={() => void respond(p.id, true)}>Allow</button>
+                    <button className="btn bad" onClick={() => void respond(p.id, false)}>Deny</button>
+                  </>
+                )}
+              </div>
+            )}
           </div>
-          <div className="perm-actions">
-            <button className="btn ok" onClick={() => respond(p.id, true)}>
-              Allow
-            </button>
-            <button className="btn bad" onClick={() => respond(p.id, false)}>
-              Deny
-            </button>
-          </div>
-        </div>
-      ))}
+        );
+      })}
 
       <div className="labels">
         {Object.entries(labels)
@@ -1149,13 +1268,21 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
             ))}
           </div>
         )}
+        {lastSteered && (
+          <div className="chip steered-chip" data-testid="steered-chip">steered</div>
+        )}
         <div className="composer-row">
           <textarea
             value={draft}
-            placeholder={`Message ${agent.title ?? "agent"}… (Enter to send, Shift+Enter for newline)`}
+            placeholder={`Message ${agent.title ?? "agent"}… (Enter to send, Ctrl+Enter to interrupt)`}
             onChange={(e) => setDraft(e.target.value)}
             onPaste={onPaste}
             onKeyDown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && !isImeComposing(e)) {
+                e.preventDefault();
+                void sendInterrupt();
+                return;
+              }
               if (shouldComposerSubmit(e)) {
                 e.preventDefault();
                 void send();
@@ -1190,6 +1317,17 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
           <button className="btn" disabled={busy || (!draft.trim() && !imgs.images.length)} onClick={send}>
             Send
           </button>
+          {agent.status === "running" && (
+            <button
+              className="btn warn composer-interrupt-btn"
+              disabled={busy || (!draft.trim() && !imgs.images.length)}
+              title="Interrupt current turn and send (Ctrl+Enter)"
+              data-testid="composer-interrupt-btn"
+              onClick={() => void sendInterrupt()}
+            >
+              ⚡ Interrupt &amp; send
+            </button>
+          )}
         </div>
       </footer>
     </aside>

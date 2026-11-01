@@ -89,7 +89,7 @@ export function FirstRunModal({ initial, onClose }: { initial?: FirstRunStatus |
   return (
     <Modal
       title="Setup Checklist"
-      onClose={onClose}
+      onClose={() => { localStorage.setItem(FIRST_RUN_DONE_KEY, "1"); onClose(); }}
       footer={
         <>
           <button className="btn ghost" data-testid="first-run-check-again-btn" onClick={() => void refresh()}>

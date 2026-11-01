@@ -690,7 +690,7 @@ const Card = memo(function Card({ label, m, onPick, onSuccessor }: CardProps) {
           <BrainstormCtxPill agent={a} team={m.team} />
         ) : (
           <TokenMeter
-            used={a.lastUsage?.contextWindowUsedTokens}
+            used={usedTokens(m)}
             budget={budgetFor(m)}
             ladder={isLead ? leadLadderFor(m.team) : undefined}
           />
