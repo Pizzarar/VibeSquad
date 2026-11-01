@@ -121,8 +121,9 @@ export async function focusPin(pin: Pin): Promise<string> {
     if (f?.seq === mine && f.agentId !== id) {
       set({ focus: { ...f, agentId: id, gone: false, held: null } });
       show(id);
-      focusComposerSoon(id);
     }
+    // The pin may already have followed the new Brainstorm through reconcile; focus it either way.
+    if (state.focus?.seq === mine) focusComposerSoon(id);
     return id;
   } catch (e) {
     // Keep the pin focused; a failed fresh start goes back to offering "Start fresh Brainstorm".
