@@ -575,6 +575,8 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
         ...(oldAgent?.workspaceId ? { workspaceId: oldAgent.workspaceId } : {}),
         initialPrompt,
         labels: newLabels,
+        // Labels never reach the plugin's before(agent.create); env does, so the profile is forced at spawn.
+        ...(newLabels.profile ? { env: { VS_PROFILE: newLabels.profile } } : {}),
       });
     }
 

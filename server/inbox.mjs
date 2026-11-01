@@ -832,6 +832,8 @@ export async function openTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
           },
           initialPrompt,
           labels: newLabels,
+          // Labels never reach the plugin's before(agent.create); env does, so the profile is forced at spawn.
+          ...(newLabels.profile ? { env: { VS_PROFILE: newLabels.profile } } : {}),
         });
       }
     } catch {

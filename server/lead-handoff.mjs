@@ -545,6 +545,8 @@ export function createLeadHandoffCoordinator(deps = {}) {
         prompt,
         initialPrompt: prompt,
         labels: newLabels,
+        // Labels never reach the plugin's before(agent.create); env does, so the profile is forced at spawn.
+        ...(profileName ? { env: { VS_PROFILE: profileName } } : {}),
       });
     }
 
@@ -908,6 +910,7 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
             config: payload.config,
             initialPrompt: payload.initialPrompt || payload.prompt,
             labels: payload.labels,
+            ...(payload.env ? { env: payload.env } : {}),
           });
         }
         return null;
