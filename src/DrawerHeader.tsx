@@ -26,6 +26,7 @@ import { LEGACY_NEEDS_LABEL, LEGACY_NEEDS_REASON, LEGACY_NEEDS_UNTIL, needsYouBa
 import { AGENT_TYPE_LABEL, expectedTitleFor, kindOf, leadLadderFor, leadVariant } from "./teams";
 import type { AgentType } from "./teams";
 import type { Entry } from "./Timeline";
+import { openBriefEditor } from "./pinActions";
 
 const REQUEST_REPORT_PROMPT =
   "Your last turn produced no report. Reply now with your final report as a normal message (what you did, files changed, done-check result). Do not use SendMessage or ListAgents.";
@@ -324,7 +325,7 @@ export type DrawerHeaderProps = {
   restartK: number;
   restarting: boolean;
   planHandedOff: boolean;
-  doRestart: (reason: string, pendingPrompt?: string) => Promise<void>;
+  doRestart: (reason: string, pendingPrompt?: string) => Promise<unknown>;
   summaryOpen: boolean;
   toggleSummary: () => void;
   summaryText: string;
@@ -501,7 +502,7 @@ export function DrawerHeader({
                 onClick={() =>
                   void doRestart(planHandedOff ? "handoff" : bsUsedTokens >= warnTokens ? "warn-80k" : "manual")
                 }
-                title="Spawn a fresh brainstorm seeded from docs/brainstorm/<lane>.md and archive this one"
+                title="Spawn a fresh brainstorm seeded from docs/brainstorm/<team>.md and archive this one"
               >
                 {restarting ? "↻ Restarting…" : "↻ Restart from summary"}
               </button>
@@ -548,7 +549,7 @@ export function DrawerHeader({
                 rows={3}
                 value={inboxDumpText}
                 onChange={(e) => setInboxDumpText(e.target.value)}
-                placeholder="One idea per line (Enter to park · Shift+Enter for newline · Cheap Sorter tags lane + scope and checks 'goes with card X')…"
+                placeholder="One idea per line (Enter to park · Shift+Enter for newline · Cheap Sorter tags team + scope and checks 'goes with card X')…"
                 onKeyDown={(e) => {
                   if (shouldComposerSubmit(e) && inboxDumpText.trim()) {
                     e.preventDefault();
@@ -631,7 +632,16 @@ export function DrawerHeader({
         </div>
       )}
 
-      {restartedFrom && !feedbackDismissed && (
+      {agent.labels?.["vs.fresh-session"] === "brief" && (
+        <div className="brainstorm-fresh-divider" role="separator">
+          ── Fresh session · from brief
+          <button className="btn ghost small" aria-label="Edit brief" onClick={() => openBriefEditor({ laneId })}>
+            ⋯
+          </button>
+          ──
+        </div>
+      )}
+      {restartedFrom && !feedbackDismissed && agent.labels?.["vs.fresh-session"] !== "brief" && (
         <div className="brainstorm-feedback-bar" role="status">
           <span>
             Fresh start from <code>docs/brainstorm/{laneId}.md</code> · Did the restart lose something?

@@ -1,7 +1,9 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
-import { DEMO, sendMessage, upsertLocalAgent } from "./paseo";
+import { DEMO, removeLocalAgent, sendMessage, upsertLocalAgent } from "./paseo";
+import { openPin } from "./pinActions";
+import type { Pin, PinLane } from "./pins";
 import { useDraft } from "./drafts";
 import { blobsToPaseoImages, rememberSent, useImageDraft } from "./imageDrafts";
 import {
@@ -58,7 +60,7 @@ export async function triggerBrainstormRestart(opts: {
   usedTokens: number;
   pendingPrompt?: string;
   summaryUpdate?: string;
-}): Promise<{ newAgentId: string; title?: string }> {
+}): Promise<{ newAgentId: string | null; title?: string; retired?: boolean; pendingPrompt?: string }> {
   const { agent, teamId, laneId, reason, usedTokens: ut, pendingPrompt, summaryUpdate } = opts;
   const pane = paneOfAgent(agent.id);
   const res = await fetch("/__vibesquad/brainstorm-restart", {
@@ -77,6 +79,10 @@ export async function triggerBrainstormRestart(opts: {
   const body = await res.json().catch(() => ({}));
   if (!res.ok && !DEMO) {
     throw new Error(body.error ?? `brainstorm-restart failed (${res.status})`);
+  }
+  if (body.retired) {
+    removeLocalAgent(agent.id);
+    return { newAgentId: null, retired: true, pendingPrompt: body.pendingPrompt ?? pendingPrompt };
   }
   const newAgentId: string = body.newAgentId || `demo-bs-${Date.now().toString(36)}`;
   const title: string = body.title || `BRAINSTORM · ${laneId.toUpperCase()}`;
@@ -232,10 +238,10 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
 
   const doRestart = useCallback(
     async (reason: string, pendingPrompt?: string) => {
-      if (restarting) return;
+      if (restarting) return undefined;
       setRestarting(true);
       try {
-        await triggerBrainstormRestart({
+        const r = await triggerBrainstormRestart({
           agent,
           teamId,
           laneId,
@@ -243,9 +249,11 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
           usedTokens: bsUsedTokens,
           pendingPrompt,
         });
-        if (pendingPrompt !== undefined) clearDraft();
+        if (pendingPrompt !== undefined && !r.retired) clearDraft();
+        return r;
       } catch (err) {
         alert(`Brainstorm restart failed: ${err}`);
+        return undefined;
       } finally {
         setRestarting(false);
       }
@@ -258,9 +266,9 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
     if (!isBs || agent.archivedAt || agent.status === "running") return;
     if (bsUsedTokens >= restartTokens && autoRestartFired.current !== agent.id) {
       autoRestartFired.current = agent.id;
-      void doRestart("auto-150k", draft.trim() ? draft : undefined);
+      void doRestart("auto-150k");
     }
-  }, [isBs, agent.id, agent.archivedAt, agent.status, bsUsedTokens, restartTokens, draft, doRestart]);
+  }, [isBs, agent.id, agent.archivedAt, agent.status, bsUsedTokens, restartTokens, doRestart]);
 
   const sendWithBehavior = async (behavior: ActiveTurnBehavior) => {
     if (!draft.trim() && !imgs.images.length) return;
@@ -269,7 +277,34 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
     // BF-P1: Auto-restart without asking at >= restartTokens (150k) or when next turn would push it past 150k.
     if (isBs && (bsUsedTokens >= restartTokens || bsUsedTokens + Math.ceil(draft.length / 3) >= restartTokens)) {
       autoRestartFired.current = agent.id;
-      await doRestart("auto-150k", text);
+      const r = await doRestart("auto-150k", text);
+      if (r?.retired) {
+        const laneDef = (team.lanes?.find((l) => l.id === laneId) ?? { id: laneId, name: laneId }) as PinLane;
+        const pin: Pin = {
+          squad: team,
+          lane: laneDef,
+          state: "pinned",
+          order: 0,
+          brainstorm: null,
+          lead: null,
+          workers: [],
+          needsYou: 0,
+          running: 0,
+          contextUsed: 0,
+        };
+        const pane = paneOfAgent(agent.id);
+        const newId = await openPin(pin);
+        openAgentInTab(newId, pane, agent.id);
+        const promptToSend = r.pendingPrompt ?? text;
+        if (imgs.images.length) {
+          await sendMessage(newId, promptToSend, await blobsToPaseoImages(imgs.images), { activeTurnBehavior: behavior });
+          rememberSent(newId, promptToSend, imgs.images);
+          imgs.clear();
+        } else {
+          await sendMessage(newId, promptToSend, undefined, { activeTurnBehavior: behavior });
+        }
+        clearDraft();
+      }
       return;
     }
 
