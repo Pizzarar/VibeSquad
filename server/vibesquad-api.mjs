@@ -1,4 +1,4 @@
-import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
@@ -388,6 +388,8 @@ export function validateTeamsBody(teams) {
 
 // The teams registry the CLI and plugin read (see teams-file.mjs). Writes keep the other top-level keys.
 // GET adds `revision`; a write that sends one must still match the file, or it gets 409 with the current registry.
+let teamsTmpSeq = 0;
+
 function handleTeams(req, res, rootDir) {
   if (req.method === "GET") {
     const file = resolveTeamsFilePath(rootDir);
@@ -447,9 +449,15 @@ function handleTeams(req, res, rootDir) {
       };
       const file = resolveTeamsWritePath(rootDir);
       mkdirSync(dirname(file), { recursive: true });
-      const tmp = `${file}.tmp-${process.pid}`;
-      writeFileSync(tmp, JSON.stringify(next, null, 2) + "\n", "utf8");
-      renameSync(tmp, file);
+      // Unique per write, so two PUTs in this process never share a temp file.
+      const tmp = `${file}.tmp-${process.pid}-${Date.now()}-${++teamsTmpSeq}`;
+      try {
+        writeFileSync(tmp, JSON.stringify(next, null, 2) + "\n", "utf8");
+        renameSync(tmp, file);
+      } catch (e) {
+        rmSync(tmp, { force: true });
+        throw e;
+      }
       clearConfigWarning(file);
       sendJson(res, 200, {
         ok: true,

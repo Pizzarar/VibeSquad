@@ -9,9 +9,9 @@ import {
   LEAD_FLAG_DEFAULT,
   LEAD_HARD_CAP_DEFAULT,
   getDiskTeams,
-  getTeams,
   resetTeamsToDisk,
   saveTeams,
+  snapshotTeams,
   type AgentType,
   type TeamDef,
 } from "./teams";
@@ -215,7 +215,10 @@ export function ProfileImportModal({ onClose }: { onClose: () => void }) {
 }
 
 export function TeamSettingsModal({ onClose }: { onClose: () => void }) {
-  const [teams, setTeams] = useState<TeamDef[]>(() => JSON.parse(JSON.stringify(getTeams())));
+  // The registry this editor started from (and its file revision). Saving merges against it, so a lane the
+  // CLI added while the modal was open isn't mistaken for one the user deleted.
+  const [base, setBase] = useState(snapshotTeams);
+  const [teams, setTeams] = useState<TeamDef[]>(() => JSON.parse(JSON.stringify(base.teams)));
   const [msg, setMsg] = useDraft("settings:msg");
   const { profiles, installedProviders, diff } = useProfiles();
   const [selectedProfileName, setSelectedProfileName] = useState<string>(() => profiles[0]?.name ?? "Lead - Claude");
@@ -277,7 +280,11 @@ export function TeamSettingsModal({ onClose }: { onClose: () => void }) {
       leadAutoHandoffTokens: Number(t.leadAutoHandoffTokens) || LEAD_AUTO_HANDOFF_DEFAULT,
       leadHardCapTokens: Number(t.leadHardCapTokens) || LEAD_HARD_CAP_DEFAULT,
     }));
-    const r = await saveTeams(clean);
+    const r = await saveTeams(clean, { base });
+    // Keep editing from what was saved (including anything merged in), not the old snapshot.
+    const saved = snapshotTeams();
+    setBase(saved);
+    setTeams(JSON.parse(JSON.stringify(saved.teams)));
     setMsg(r.disk ? "Saved to browser and teams.json" : "Saved to browser only (no dev server to write teams.json)");
   };
 
@@ -293,6 +300,7 @@ export function TeamSettingsModal({ onClose }: { onClose: () => void }) {
             className="btn ghost"
             onClick={() => {
               resetTeamsToDisk();
+              setBase(snapshotTeams());
               setTeams(getDiskTeams());
               setMsg("Reset to teams.json");
             }}

@@ -250,8 +250,9 @@ function shellQuote(value) {
 }
 
 const AGENT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
-// cmd.exe still expands %VAR% and breaks out of quotes on `"`, so refuse those outright, plus its other metacharacters.
-const UNSAFE_SHELL_ARG = /[\r\n\0"%^&|<>!]/;
+// shellQuote wraps every arg in double quotes and cmd.exe runs without delayed expansion (/V:OFF), so
+// ^ & | < > ! are literal there. Only `"` (ends the quote), %VAR% expansion and line breaks / NUL can escape.
+const UNSAFE_SHELL_ARG = /[\r\n\0"%]/;
 
 function run(command, args, timeoutMs) {
   try {

@@ -7,7 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { laneWorkingDir } from "../server/brainstorm.mjs";
 import { createVibesquadMiddleware, validateTeamsBody } from "../server/vibesquad-api.mjs";
-import { refreshTeams, saveTeams, getTeams } from "../src/teams.ts";
+import { refreshTeams, saveTeams, getTeams, snapshotTeams } from "../src/teams.ts";
 import { mergeTeams } from "../src/teamsMerge.ts";
 import { patchLane } from "../src/pins.ts";
 
@@ -112,6 +112,78 @@ test(
   }),
 );
 
+// The settings modal edits a copy taken when it opened; the 10s poll may refresh TEAMS before it saves.
+async function modalSaveAcrossPoll({ repo, vsHome }, editCopy) {
+  const file = join(vsHome, "teams.json");
+  writeJson(file, seed);
+  let lanes;
+  await withServer(repo, async (base) => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (url, init) => realFetch(`${base}${url}`, init);
+    try {
+      await refreshTeams();
+      const opened = snapshotTeams();
+      const copy = editCopy(JSON.parse(JSON.stringify(opened.teams)));
+
+      const env = { ...process.env, VIBESQUAD_HOME: vsHome, VIBESQUAD_ROOT: repo, PASEO_AGENT_ID: "" };
+      const cli = spawnSync(process.execPath, ["cli/vs.mjs", "pin", "new", "Crafting tree", "--brief", "tiers", "--team", "efi"], { env, encoding: "utf8" });
+      assert.equal(cli.status, 0, cli.stderr);
+      assert.equal(await refreshTeams(), true, "poll picked up the CLI lane");
+
+      assert.equal((await saveTeams(copy, { base: opened })).disk, true);
+      lanes = readJson(file).teams[0].lanes;
+      assert.deepEqual(getTeams()[0].lanes, lanes, "UI shows what was written");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+  return lanes;
+}
+
+test(
+  "modal save after a poll keeps a lane the CLI added while it was open",
+  withEnv(async (ctx) => {
+    const lanes = await modalSaveAcrossPoll(ctx, (teams) => patchLane(teams, "efi", "scav-ui", { name: "Scav UI" }));
+    assert.deepEqual(lanes.map((l) => [l.id, l.name]), [["scav-ui", "Scav UI"], ["crafting-tree", "Crafting tree"]]);
+  }),
+);
+
+test(
+  "modal save after a poll keeps a lane the user deleted deleted",
+  withEnv(async (ctx) => {
+    const lanes = await modalSaveAcrossPoll(ctx, (teams) => teams.map((t) => ({ ...t, lanes: t.lanes.filter((l) => l.id !== "scav-ui") })));
+    assert.deepEqual(lanes.map((l) => l.id), ["crafting-tree"]);
+  }),
+);
+
+test(
+  "updater saves re-run on the fresh registry after a 409 and keep the concurrent lane",
+  withEnv(async ({ repo, vsHome }) => {
+    const file = join(vsHome, "teams.json");
+    writeJson(file, seed);
+    await withServer(repo, async (base) => {
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = (url, init) => realFetch(`${base}${url}`, init);
+      try {
+        await refreshTeams();
+        // Someone else writes between our GET and our PUT.
+        writeJson(file, { teams: [{ ...seed.teams[0], lanes: [...seed.teams[0].lanes, { id: "audio", name: "Audio" }] }] });
+        const seen = [];
+        const res = await saveTeams((cur) => {
+          seen.push(cur[0].lanes.map((l) => l.id));
+          return patchLane(cur, "efi", "scav-ui", { lastProfile: "Brainstorm - Gemini" });
+        });
+        assert.equal(res.disk, true);
+        assert.deepEqual(seen, [["scav-ui"], ["scav-ui", "audio"]], "updater ran once locally, then once on the fresh file");
+        const lanes = readJson(file).teams[0].lanes;
+        assert.deepEqual(lanes.map((l) => [l.id, l.lastProfile ?? null]), [["scav-ui", "Brainstorm - Gemini"], ["audio", null]]);
+      } finally {
+        globalThis.fetch = realFetch;
+      }
+    });
+  }),
+);
+
 test("mergeTeams keeps our edits, lanes added elsewhere, and our deletions", () => {
   const base = [{ id: "a", name: "A", lanes: [{ id: "x", name: "X" }, { id: "y", name: "Y" }] }];
   const mine = [{ id: "a", name: "A2", lanes: [{ id: "x", name: "X2" }, { id: "new", name: "New" }] }]; // renamed, dropped y, added new
@@ -196,11 +268,11 @@ test(
   }),
 );
 
-test("vs refuses cmd.exe metacharacters in shelled args", () => {
+test("vs refuses only the chars that escape a double-quoted cmd.exe arg", () => {
   const src = readFileSync("cli/vs.mjs", "utf8");
   const m = src.match(/const UNSAFE_SHELL_ARG = (\/.*\/);/);
   assert.ok(m);
   const re = eval(m[1]);
-  for (const c of ['"', "%", "^", "&", "|", "<", ">", "!", "\n"]) assert.ok(re.test(`a${c}b`), c);
-  assert.ok(!re.test("plain-arg_1 with spaces"));
+  for (const c of ['"', "%", "\r", "\n", "\0"]) assert.ok(re.test(`a${c}b`), JSON.stringify(c));
+  for (const ok of ["A & B", "done!", "a ^ b | c < d > e", "plain-arg_1 with spaces"]) assert.ok(!re.test(ok), ok);
 });

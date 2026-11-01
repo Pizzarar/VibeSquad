@@ -119,23 +119,32 @@ const applyLocal = (next: TeamDef[]) => {
   notifyTeams();
 };
 
+/** The registry as this UI last saw it, plus the file revision it came from (base for a later saveTeams). */
+export type TeamsSnapshot = { teams: TeamDef[]; revision: string };
+export const snapshotTeams = (): TeamsSnapshot => ({ teams: TEAMS, revision: teamsRevision });
+
+export type TeamsUpdater = (cur: TeamDef[]) => TeamDef[];
+
 /**
  * Save locally and to the shared teams registry (the same file the CLI and plugin read). Pass an updater to
- * have it re-run on the fresh file if someone else wrote it first; a plain array is merged onto the fresh
- * file (only the teams and lanes this edit touched win).
+ * have it re-run on the fresh file if someone else wrote it first. A plain array is merged onto the fresh
+ * file (only the teams and lanes this edit touched win); its base is the live TEAMS unless the caller edited
+ * an older copy, e.g. a modal open across polls, which must pass that copy as `base`.
  */
-export async function saveTeams(next: TeamDef[] | ((cur: TeamDef[]) => TeamDef[])): Promise<{ disk: boolean }> {
+export async function saveTeams(next: TeamDef[] | TeamsUpdater, opts: { base?: TeamsSnapshot } = {}): Promise<{ disk: boolean }> {
   saveSeq++;
-  const base = TEAMS;
+  const base = opts.base?.teams ?? TEAMS;
   const edit = typeof next === "function" ? next : (fresh: TeamDef[]) => mergeTeams(base, next, fresh);
-  let teams = typeof next === "function" ? next(base) : next;
+  let teams = typeof next === "function" ? next(TEAMS) : next;
+  // The revision our edit was made against: an older one makes the server answer 409 so we merge.
+  let revision = opts.base?.revision ?? teamsRevision;
   applyLocal(teams);
   const headers = { "content-type": "application/json" };
   for (const [url, method] of [["/api/teams", "PUT"], ["/__vibesquad/teams", "POST"]] as const) {
     try {
       let conflicts = 0;
       for (;;) {
-        const r = await fetch(url, { method, headers, body: JSON.stringify({ teams, revision: teamsRevision }) });
+        const r = await fetch(url, { method, headers, body: JSON.stringify({ teams, revision }) });
         if (r.ok) {
           const data = await r.json().catch(() => null);
           if (typeof data?.revision === "string") teamsRevision = data.revision;
@@ -153,7 +162,7 @@ export async function saveTeams(next: TeamDef[] | ((cur: TeamDef[]) => TeamDef[]
         if (!Array.isArray(data?.teams)) break;
         const { error: _error, ...file } = data;
         registryFile = file;
-        teamsRevision = typeof data.revision === "string" ? data.revision : "unknown";
+        teamsRevision = revision = typeof data.revision === "string" ? data.revision : "unknown";
         teams = edit(data.teams);
         saveSeq++;
         applyLocal(teams);
