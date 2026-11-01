@@ -21,7 +21,7 @@ export function isFailedTool(it: any, d: any): boolean {
 }
 
 export function isSubAgentTool(it: any, d: any): boolean {
-  return d.type === "sub_agent" || it.name === "Task" || !!(d.subAgentId || d.agentId || it.callId);
+  return d.type === "sub_agent" || it.name === "Task" || !!(d.subAgentId || d.agentId || it.subagentId);
 }
 
 export function isCompaction(it: any): boolean {

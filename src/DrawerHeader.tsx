@@ -492,10 +492,10 @@ export function DrawerHeader({
 
   return (
     <>
-      <header className="drawer-head">
-        <Avatar id={agent.id} provider={agent.provider} agentType={agentType} variant={leadVariant(agent)} size={56} />
-        <div className="drawer-id">
-          <div className="drawer-role-line">
+      <header className="drawer-head" style={{ flexWrap: "wrap", padding: "8px 12px", gap: 8, alignItems: "center" }}>
+        <Avatar id={agent.id} provider={agent.provider} agentType={agentType} variant={leadVariant(agent)} size={40} />
+        <div className="drawer-id" style={{ flex: "1 1 240px", minWidth: 0 }}>
+          <div className="drawer-role-line" style={{ flexWrap: "wrap", gap: 4 }}>
             <span className="role-tag">{AGENT_TYPE_LABEL[agentType]}</span>
             <span className="prov-pill" style={{ color: prov.color, borderColor: prov.color }}>
               {prov.symbol} {prov.name}
@@ -506,6 +506,7 @@ export function DrawerHeader({
                 <select
                   data-testid="drawer-mode-select"
                   className="drawer-mode-select"
+                  style={{ background: "var(--panel-alt)", color: "var(--fg)", border: "1px solid var(--line)", fontSize: 10, padding: "1px 4px", height: 20 }}
                   value={agent.currentModeId ?? ""}
                   disabled={modeBusy}
                   onChange={(e) => {
@@ -521,15 +522,42 @@ export function DrawerHeader({
                 </select>
               );
             })()}
+            <select
+              data-testid="drawer-thinking-select"
+              className="drawer-thinking-select"
+              style={{ background: "var(--panel-alt)", color: "var(--fg)", border: "1px solid var(--line)", fontSize: 10, padding: "1px 4px", height: 20 }}
+              value={agent.thinkingOptionId ?? ""}
+              disabled={thinkingBusy}
+              onChange={(e) => {
+                setThinkingBusy(true);
+                setThinkingHelper(agent, e.target.value || null).finally(() => setThinkingBusy(false));
+              }}
+            >
+              {(["low", "medium", "high"] as const).map((opt) => (
+                <option key={opt} value={opt}>{opt}</option>
+              ))}
+              {!["low", "medium", "high"].includes(agent.thinkingOptionId ?? "") && agent.thinkingOptionId && (
+                <option value={agent.thinkingOptionId}>{agent.thinkingOptionId}</option>
+              )}
+            </select>
+            {(() => {
+              const cost = (agent.lastUsage as any)?.totalCostUsd ?? (agent as any)?.usage?.totalCostUsd;
+              return typeof cost === "number" && cost >= 0 ? (
+                <span data-testid="drawer-cost-readout" className="chip" style={{ fontSize: 10, padding: "0 5px" }}>
+                  {formatCostUsd(cost)}
+                </span>
+              ) : null;
+            })()}
           </div>
-          <div className="drawer-title">
+          <div className="drawer-title" style={{ fontSize: 15 }}>
             <StatusDot agent={agent} /> {agent.title ?? agent.id.slice(0, 8)}
           </div>
-          <div className="muted small drawer-meta-line">
-            {agent.provider}/
+          <div className="muted small drawer-meta-line" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4 }}>
+            <span>{agent.provider}/</span>
             <input
               data-testid="drawer-model-control"
               className="drawer-model-input"
+              style={{ background: "var(--panel-alt)", color: "var(--fg)", border: "1px solid var(--line)", fontSize: 10, padding: "1px 4px", width: 120, height: 18 }}
               list="drawer-model-list"
               value={modelValue}
               onChange={(e) => setModelValue(e.target.value)}
@@ -549,12 +577,11 @@ export function DrawerHeader({
                 <option key={m} value={m} />
               ))}
             </datalist>
-            {" · "}
-            {shortPath(agent.cwd)}
-            {" · "}
+            <span>· {shortPath(agent.cwd)}</span>
             <button
               data-testid="drawer-copy-cwd-btn"
               className="btn ghost small drawer-copy-btn"
+              style={{ padding: "0 4px", fontSize: 10 }}
               title="Copy full working directory path"
               onClick={() => {
                 navigator.clipboard.writeText(agent.cwd).catch(() => {});
@@ -564,13 +591,12 @@ export function DrawerHeader({
             >
               {copyCwdFlash ? "✓ Path" : "⎘"}
             </button>
-            {" · updated "}
-            {ago(agent.updatedAt)}
-            {runningSubs ? ` · ${runningSubs} sub-agent(s) running` : ""}
-            {" · "}
+            <span>· {ago(agent.updatedAt)}</span>
+            {runningSubs ? <span>· {runningSubs} sub(s)</span> : null}
             <button
               data-testid="drawer-copy-id-btn"
               className="btn ghost small drawer-copy-btn"
+              style={{ padding: "0 4px", fontSize: 10 }}
               title="Copy agent ID"
               onClick={() => {
                 navigator.clipboard.writeText(agent.id).catch(() => {});
@@ -581,36 +607,9 @@ export function DrawerHeader({
               {copyIdFlash ? "✓ ID" : agent.id.slice(0, 8)}
             </button>
           </div>
-          <div className="drawer-extra-row">
-            <select
-              data-testid="drawer-thinking-select"
-              className="drawer-thinking-select"
-              value={agent.thinkingOptionId ?? ""}
-              disabled={thinkingBusy}
-              onChange={(e) => {
-                setThinkingBusy(true);
-                setThinkingHelper(agent, e.target.value || null).finally(() => setThinkingBusy(false));
-              }}
-            >
-              {(["low", "medium", "high"] as const).map((opt) => (
-                <option key={opt} value={opt}>{opt}</option>
-              ))}
-              {!["low", "medium", "high"].includes(agent.thinkingOptionId ?? "") && agent.thinkingOptionId && (
-                <option value={agent.thinkingOptionId}>{agent.thinkingOptionId}</option>
-              )}
-            </select>
-            {(() => {
-              const cost = (agent.lastUsage as any)?.totalCostUsd ?? (agent as any)?.usage?.totalCostUsd;
-              return typeof cost === "number" && cost >= 0 ? (
-                <span data-testid="drawer-cost-readout" className="drawer-cost-pill">
-                  {formatCostUsd(cost)}
-                </span>
-              ) : null;
-            })()}
-          </div>
-          <TokenMeter used={used} budget={budget ?? 0} ladder={kindOf(agent) === "lead" ? leadLadderFor(team) : undefined} />
+          {!isBs && <TokenMeter used={used} budget={budget ?? 0} ladder={kindOf(agent) === "lead" ? leadLadderFor(team) : undefined} />}
         </div>
-        <div className="drawer-actions">
+        <div className="drawer-actions" style={{ flexWrap: "wrap", gap: 4, alignItems: "center" }}>
           <button
             data-testid="drawer-reload-agent-btn"
             className="btn ghost small"
@@ -652,7 +651,7 @@ export function DrawerHeader({
       </header>
 
       {isBs && (
-        <div className={`brainstorm-ctx-bar tone-${bsTone}`} data-testid="brainstorm-ctx-bar">
+        <div className={`brainstorm-ctx-bar tone-${bsTone}`} data-testid="brainstorm-ctx-bar" style={{ padding: "4px 8px", margin: "4px 8px 0" }}>
           {isTopicBs && (
             <div className="brainstorm-topic-row">
               <span className="brainstorm-topic-badge" data-testid="brainstorm-topic-badge">
@@ -682,7 +681,7 @@ export function DrawerHeader({
             </div>
           )}
           <TopicCapBanner minCount={isTopicBs ? TOPIC_SOFT_CAP : TOPIC_SOFT_CAP + 1} />
-          <div className="brainstorm-ctx-main">
+          <div className="brainstorm-ctx-main" style={{ flexWrap: "nowrap", gap: 6 }}>
             <span className="brainstorm-ctx-readout">
               {usedK}k / {restartK}k tok
             </span>
@@ -694,19 +693,21 @@ export function DrawerHeader({
                 title={`Warn threshold: ${warnK}k tok`}
               />
             </div>
-            <div className="brainstorm-ctx-actions">
+            <div className="brainstorm-ctx-actions" style={{ flexWrap: "nowrap", gap: 4 }}>
               <button
                 className="btn small btn-brainstorm-restart"
+                style={{ padding: "2px 6px", fontSize: 10 }}
                 disabled={restarting}
                 onClick={() =>
                   void doRestart(planHandedOff ? "handoff" : bsUsedTokens >= warnTokens ? "warn-80k" : "manual")
                 }
                 title="Spawn a fresh brainstorm seeded from docs/brainstorm/<team>.md and archive this one"
               >
-                {restarting ? "↻ Restarting…" : "↻ Restart from summary"}
+                {restarting ? "↻…" : "↻ Restart"}
               </button>
               <button
                 className="btn ghost small btn-brainstorm-summary"
+                style={{ padding: "2px 6px", fontSize: 10 }}
                 onClick={toggleSummary}
                 title={`Preview docs/brainstorm/${laneId}.md`}
               >
@@ -714,18 +715,20 @@ export function DrawerHeader({
               </button>
               <button
                 className={`btn ghost small btn-brainstorm-handoff ${handoffMarked ? "on" : ""}`}
+                style={{ padding: "2px 6px", fontSize: 10 }}
                 onClick={() => setHandoffMarked(true)}
                 title="Mark plan handed off to lead"
               >
-                ✓ Plan handed off
+                ✓ Handed off
               </button>
               <button
                 className={`btn ghost small btn-brainstorm-inbox ${inboxPopoverOpen ? "on" : ""}`}
+                style={{ padding: "2px 6px", fontSize: 10 }}
                 onClick={() => setInboxPopoverOpen((v) => !v)}
                 title="Dump 1 or multiple newline-separated ideas straight into the Idea Inbox (0 tokens)"
                 data-testid="brainstorm-park-inbox-btn"
               >
-                📥 Park in Inbox
+                📥 Inbox
               </button>
             </div>
           </div>
@@ -803,7 +806,7 @@ export function DrawerHeader({
             </div>
           )}
 
-          {bsUsedTokens >= warnTokens && (
+          {moreOpen && bsUsedTokens >= warnTokens && (
             <div className="brainstorm-warn-banner" role="status">
               <span>Getting heavy (≥{warnK}k) — restart from summary?</span>
               <button
@@ -816,7 +819,7 @@ export function DrawerHeader({
             </div>
           )}
 
-          {planHandedOff && (
+          {moreOpen && planHandedOff && (
             <div className="brainstorm-handoff-banner" role="status">
               <span>Plan handed to lead — restart from summary?</span>
               <button
@@ -840,7 +843,7 @@ export function DrawerHeader({
           ──
         </div>
       )}
-      {restartedFrom && !feedbackDismissed && agent.labels?.["vs.fresh-session"] !== "brief" && (
+      {moreOpen && restartedFrom && !feedbackDismissed && agent.labels?.["vs.fresh-session"] !== "brief" && (
         <div className="brainstorm-feedback-bar" role="status">
           <span>
             Fresh start from <code>docs/brainstorm/{laneId}.md</code> · Did the restart lose something?
@@ -856,7 +859,7 @@ export function DrawerHeader({
         </div>
       )}
 
-      {att && att.tone !== "needs-you" && <div className={`banner ${att.tone}`}>{att.reason}</div>}
+      {att && att.tone !== "needs-you" && att.tone !== "finished" && <div className={`banner ${att.tone}`}>{att.reason}</div>}
       {(needsYouFlagged || moreOpen) ? <NeedsYouControls agent={agent} /> : null}
       <TitleLint agent={agent} />
       {kindOf(agent) === "lead" && onSuccessor && !agent.archivedAt && (
@@ -869,12 +872,26 @@ export function DrawerHeader({
       )}
       {active && <HardeningBar agent={agent} entries={entries} />}
       {!needsYouFlagged && (
-        <button
-          className="btn ghost small drawer-more-toggle"
-          onClick={() => setMoreOpen((v) => !v)}
-        >
-          {moreOpen ? "▾ Less" : "⋯ More"}
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 10px" }}>
+          <button
+            className="btn ghost small drawer-more-toggle"
+            style={{ padding: "1px 6px", fontSize: 10 }}
+            onClick={() => setMoreOpen((v) => !v)}
+          >
+            {moreOpen ? "▾ Less" : "⋯ More"}
+          </button>
+          {moreOpen && (
+            <div className="labels" style={{ padding: 0, border: "none" }}>
+              {Object.entries(agentLabels)
+                .filter(([k]) => !k.startsWith("paseo.open-agent-tab"))
+                .map(([k, v]) => (
+                  <span key={k} className="chip">
+                    {k}={v}
+                  </span>
+                ))}
+            </div>
+          )}
+        </div>
       )}
       {(attachBlocked || moreOpen) ? <AttachFiles agent={agent} entries={entries} /> : null}
     </>

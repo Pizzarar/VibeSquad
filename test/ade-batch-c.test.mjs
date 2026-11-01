@@ -14,7 +14,7 @@ function isFailedTool(it, d) {
 
 // isSubAgentTool
 function isSubAgentTool(it, d) {
-  return d.type === "sub_agent" || it.name === "Task" || !!(d.subAgentId || d.agentId || it.callId);
+  return d.type === "sub_agent" || it.name === "Task" || !!(d.subAgentId || d.agentId || it.subagentId);
 }
 
 // isCompaction
@@ -185,12 +185,12 @@ test("C1m: isSubAgentTool — d.agentId present", () => {
   assert.equal(isSubAgentTool({}, { agentId: "abc" }), true);
 });
 
-test("C1n: isSubAgentTool — it.callId present", () => {
-  assert.equal(isSubAgentTool({ callId: "x" }, {}), true);
+test("C1n: isSubAgentTool — it.subagentId present", () => {
+  assert.equal(isSubAgentTool({ subagentId: "x" }, {}), true);
 });
 
-test("C1o: isSubAgentTool — none of the markers → false", () => {
-  assert.equal(isSubAgentTool({ name: "Bash" }, { type: "shell" }), false);
+test("C1o: isSubAgentTool — none of the markers (even with callId) → false", () => {
+  assert.equal(isSubAgentTool({ name: "Bash", callId: "toolu_123" }, { type: "shell" }), false);
 });
 
 // ─── Markdown tokenizer tests ─────────────────────────────────────────────────
