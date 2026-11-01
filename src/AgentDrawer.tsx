@@ -592,6 +592,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   const [feedbackDismissed, setFeedbackDismissed] = useState(() => localStorage.getItem(feedbackKey) === "1");
   const autoRestartFired = useRef<string | null>(null);
   const [lastSteered, setLastSteered] = useState<string | null>(null);
+  const [permInputs, setPermInputs] = useState<Record<string, string>>({});
 
   const imgs = useImageDraft(`${agent.id}:images`);
   const [dragOver, setDragOver] = useState(false);
@@ -841,10 +842,14 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
     }
   };
 
-  const respond = (requestId: string, allow: boolean) =>
+  const respond = (
+    requestId: string,
+    allow: boolean,
+    extra?: { selectedActionId?: string; updatedInput?: Record<string, unknown> },
+  ) =>
     client.agents
       .ref(agent.id)
-      .respondToPermission({ requestId, response: allow ? { behavior: "allow" } : { behavior: "deny" } })
+      .respondToPermission({ requestId, response: allow ? { behavior: "allow", ...extra } : { behavior: "deny" } })
       .catch((e) => alert(`Permission reply failed: ${e}`));
 
   const usedK = Math.round(bsUsedTokens / 1000);
@@ -1089,14 +1094,71 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
             <b>{p.title ?? p.name}</b>
             {p.description && <div className="muted small">{p.description}</div>}
           </div>
-          <div className="perm-actions">
-            <button className="btn ok" onClick={() => respond(p.id, true)}>
-              Allow
-            </button>
-            <button className="btn bad" onClick={() => respond(p.id, false)}>
-              Deny
-            </button>
-          </div>
+          {p.kind === "question" ? (
+            <div className="perm-actions perm-question">
+              {p.actions?.map((a) => (
+                <button
+                  key={a.id}
+                  className={`btn ${a.variant === "danger" ? "bad" : a.behavior === "deny" ? "bad" : "ok"}`}
+                  onClick={() => respond(p.id, a.behavior === "allow", { selectedActionId: a.id })}
+                >
+                  {a.label}
+                </button>
+              ))}
+              <input
+                className="perm-text-input"
+                type="text"
+                placeholder="Your answer…"
+                value={permInputs[p.id] ?? ""}
+                onChange={(e) => setPermInputs((prev) => ({ ...prev, [p.id]: e.target.value }))}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !isImeComposing(e)) {
+                    e.preventDefault();
+                    void respond(p.id, true, { updatedInput: { answer: permInputs[p.id] ?? "" } });
+                  }
+                }}
+              />
+              <button className="btn ok" onClick={() => void respond(p.id, true, { updatedInput: { answer: permInputs[p.id] ?? "" } })}>
+                Submit
+              </button>
+              <button className="btn bad" onClick={() => void respond(p.id, false)}>Deny</button>
+            </div>
+          ) : p.kind === "plan" ? (
+            <div className="perm-actions perm-plan">
+              {p.actions?.length ? (
+                p.actions.map((a) => (
+                  <button
+                    key={a.id}
+                    className={`btn ${a.variant === "danger" ? "bad" : a.intent === "implement" || a.intent === "implement_resume" ? "ok" : "ghost"}`}
+                    onClick={() => void respond(p.id, a.behavior === "allow", { selectedActionId: a.id })}
+                  >
+                    {a.label}
+                  </button>
+                ))
+              ) : (
+                <button className="btn ok" onClick={() => void respond(p.id, true)}>Approve</button>
+              )}
+              <button className="btn bad" onClick={() => void respond(p.id, false)}>Deny</button>
+            </div>
+          ) : (
+            <div className="perm-actions">
+              {p.actions?.map((a) => (
+                <button
+                  key={a.id}
+                  className={`btn ${a.variant === "danger" ? "bad" : a.behavior === "deny" ? "bad" : "ok"}`}
+                  onClick={() => void respond(p.id, a.behavior === "allow", { selectedActionId: a.id })}
+                >
+                  {a.label}
+                </button>
+              ))}
+              {!p.actions?.length && (
+                <>
+                  <button className="btn ok" onClick={() => void respond(p.id, true)}>Allow</button>
+                  <button className="btn bad" onClick={() => void respond(p.id, false)}>Deny</button>
+                </>
+              )}
+            </div>
+          )}
         </div>
       ))}
 
