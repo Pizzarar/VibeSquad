@@ -28,6 +28,8 @@ import {
   isDigestAgent as isDigestIdentity,
   isRetiredAgent,
   isRetiredRole,
+  isThrowawayLane,
+  laneLeadMismatch,
   matchPathInRegistry,
   normalizeRoleLabel,
   resolveAgentIdentity,
@@ -309,6 +311,17 @@ export function extractLeadShortName(target: { id: string; title?: string | null
   return (target.title ?? "").trim() || target.id.slice(0, 8);
 }
 
+/**
+ * Lane label to write after resolution: a throwaway lane (`walk-*`, `*-tmp`, ...) keeps
+ * its own slug instead of being folded into the cwd lane, so it never collides with
+ * that lane's real lead/Buddy.
+ */
+export function keptLaneOf(resolved: { laneId: string; callerLane: string; autofixedFromCwd: boolean }): string {
+  const caller = (resolved.callerLane ?? "").trim().toLowerCase();
+  if (resolved.autofixedFromCwd && caller && isThrowawayLane(caller)) return caller;
+  return resolved.laneId;
+}
+
 /** Topic key for a brainstorm: non-empty for topic brainstorms, "" for main lane brainstorms. */
 export function brainstormTopicOf(labels: Labels, _title?: string | null): string {
   return topicOf(labels).toLowerCase();
@@ -397,6 +410,82 @@ export function rolePack(role: string, cwd: string): string {
   return "";
 }
 
+// ---------------------------------------------------------------------------
+// Lane briefs (docs/brainstorm/<lane>.md)
+// ---------------------------------------------------------------------------
+
+const MAX_BRIEF_CHARS = 20_000;
+const MAX_SNAPSHOT_CHARS = 600;
+
+export function briefPathFor(root: string, lane: string): string {
+  const slug = String(lane ?? "").trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-|-$/g, "");
+  return path.join(root, "docs", "brainstorm", `${slug || "vibesquad"}.md`);
+}
+
+export function briefBeginMarker(lane: string): string {
+  return `--- BEGIN docs/brainstorm/${lane}.md ---`;
+}
+
+/** The lane brief as a prompt block, or "" when the lane has no brief on disk. */
+export function laneBriefBlock(root: string, lane: string): string {
+  if (!lane) return "";
+  let text = "";
+  try {
+    text = fs.readFileSync(briefPathFor(root, lane), "utf8").trim();
+  } catch {
+    return "";
+  }
+  if (!text) return "";
+  return [
+    `Lane brief for \`${lane}\`: read it before anything else; it is the Buddy handoff.`,
+    briefBeginMarker(lane),
+    text.slice(0, MAX_BRIEF_CHARS),
+    `--- END docs/brainstorm/${lane}.md ---`,
+  ].join("\n");
+}
+
+/**
+ * Append a retiring Buddy's last turn under `## In flight` when the brief has not
+ * been touched since that turn. Returns what happened, for the retire metric.
+ */
+export function snapshotIntoBrief(
+  root: string,
+  lane: string,
+  old: { id: string; updatedAt?: string },
+  lastTurn: string,
+): "snapshotted" | "current" | "missing" | "no-turn" | "too-large" {
+  const file = briefPathFor(root, lane);
+  let before = "";
+  let mtimeMs = 0;
+  try {
+    before = fs.readFileSync(file, "utf8");
+    mtimeMs = fs.statSync(file).mtimeMs;
+  } catch {
+    return "missing";
+  }
+  const turn = String(lastTurn ?? "").replace(/\s+/g, " ").trim();
+  if (!turn) return "no-turn";
+  const lastActive = Date.parse(old.updatedAt ?? "");
+  if (Number.isFinite(lastActive) && mtimeMs >= lastActive) return "current";
+  const clipped = turn.length > MAX_SNAPSHOT_CHARS ? `${turn.slice(0, MAX_SNAPSHOT_CHARS)}…` : turn;
+  const line = `- Last turn of retired Buddy ${old.id.slice(0, 8)} (${new Date().toISOString().slice(0, 10)}): ${clipped}`;
+  if (before.includes(line)) return "current";
+  const lines = before.split(/\r?\n/);
+  const head = lines.findIndex((l) => /^##\s+in[ -]flight\b/i.test(l.trim()));
+  if (head < 0) {
+    lines.push("", "## In flight", line);
+  } else {
+    let end = head + 1;
+    while (end < lines.length && !/^##\s/.test(lines[end])) end++;
+    while (end > head + 1 && !lines[end - 1].trim()) end--;
+    lines.splice(end, 0, line);
+  }
+  const after = lines.join("\n");
+  if (after.length > MAX_BRIEF_CHARS) return "too-large";
+  fs.writeFileSync(file, after, "utf8");
+  return "snapshotted";
+}
+
 /** Layers 1 and 3 joined in the fixed order; layer 2 (AGENTS.md) is loaded by the provider. */
 export function injectedPrefix(role: string, cwd: string): string {
   return [EVERYONE_LAYER, rolePack(role, cwd)].filter(Boolean).join("\n\n");
@@ -467,6 +556,10 @@ export interface Deps {
   retryBaseMs: number;
   watchIntervalMs: number;
   startWatcher: boolean;
+  /** Root holding docs/brainstorm/<lane>.md briefs (defaults to the VibeSquad repo). */
+  briefRoot?: string;
+  /** Grace before a retired Buddy is archived, so an in-flight turn is not killed mid-stream. */
+  brainstormArchiveGraceMs?: number;
 }
 
 /** cmd.exe splits on whitespace and treats `&|<>^` as syntax; quote such args for the shell. */
@@ -522,6 +615,7 @@ const DEFAULT_DEPS: Deps = {
   retryBaseMs: 5000,
   watchIntervalMs: 1500,
   startWatcher: true,
+  brainstormArchiveGraceMs: 120_000,
 };
 
 // ---------------------------------------------------------------------------
@@ -696,8 +790,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             recomputeOrphan: true,
           });
           if (!resolved.isOrphan) {
-            if (reqLabels.lane !== resolved.laneId) {
-              reqLabels.lane = resolved.laneId;
+            const wantLane = keptLaneOf(resolved);
+            if (reqLabels.lane !== wantLane) {
+              reqLabels.lane = wantLane;
               changed = true;
             }
             if (reqLabels.team !== resolved.teamId) {
@@ -856,6 +951,38 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             }
           }
         }
+
+        // Every Buddy starts from its lane brief, even when spawned by Roster or the
+        // legacy board (whose boot prompt never loads docs/brainstorm/<lane>.md).
+        if (role === "brainstorm") {
+          const briefLane = (reqLabels.orphan === "1" ? "" : reqLabels.lane) || resolveByCwd(cwd, currentTeams())?.lane || "";
+          const marker = briefBeginMarker(briefLane);
+          const reqPrompt = String((request as any).prompt ?? (request as any).initialPrompt ?? "");
+          const currentSys = String(next.systemPrompt ?? sanitizedSysPrompt ?? "");
+          // VS's own restart path (server/brainstorm.mjs) already puts the brief in the first prompt.
+          const fromVsRestart = Boolean(reqLabels["vs.restarted-from"]);
+          if (briefLane && !fromVsRestart && !currentSys.includes(marker) && !reqPrompt.includes(marker)) {
+            const block = laneBriefBlock(deps.briefRoot ?? REPO_ROOT, briefLane);
+            if (block) {
+              next.systemPrompt = [currentSys.trim(), block].filter(Boolean).join("\n\n");
+              changed = true;
+              const where = teamOf(reqLabels, cwd);
+              if (where) {
+                try {
+                  appendLog(where.team, {
+                    agent: "plugin",
+                    lane: briefLane,
+                    type: "metric",
+                    text: `brief-injected: lane=${briefLane} chars=${block.length}${/You are the Brainstorm chat for/.test(reqPrompt) ? " source=legacy-board" : ""}`,
+                  });
+                } catch (err) {
+                  log(`brief metric write failed: ${err}`);
+                }
+              }
+            }
+          }
+        }
+
         return changed
           ? {
               ...request,
@@ -898,9 +1025,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           let team = "";
 
           if (!resolved.isOrphan) {
-            lane = resolved.laneId;
+            lane = keptLaneOf(resolved);
             team = resolved.teamId;
-            if (labels.lane !== resolved.laneId) want.lane = resolved.laneId;
+            if (labels.lane !== lane) want.lane = lane;
             if (labels.team !== resolved.teamId) want.team = resolved.teamId;
             if (!labels.role) want.role = resolved.role;
             if (labels.orphan) want.orphan = "";
@@ -1219,6 +1346,20 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     async function retirePredecessors(paseo: Paseo, newId: string, role: string, team: string, lane: string, topic = "") {
       const newSnap = await snap(paseo, newId);
       const handoffFrom = newSnap?.labels?.["vs.handoff-from"] ?? "";
+      const skipMetric = (reason: string, refs: string[]) => {
+        log(`skipped retire in ${team}/${lane}: ${reason}`);
+        try {
+          appendLog(team, { agent: "plugin", lane, type: "metric", text: `skipped-retire-mismatch: ${reason}`, refs });
+        } catch (err) {
+          log(`skipped-retire metric write failed: ${err}`);
+        }
+      };
+      // The new agent's own lane is a guess (lane label disagrees with legacy lead label): retire nobody.
+      const newMismatch = newSnap ? laneLeadMismatch(newSnap, currentTeams()) : "";
+      if (newMismatch) {
+        skipMetric(`new=${newId} ${newMismatch} role=${role}`, [newId]);
+        return;
+      }
       const res = await paseo.agents.list({ includeBackground: true, filter: { includeBackground: true }, page: { limit: 200 } });
       const others = (res.entries as any[])
         .map((e) => ({ ...e.agent, labels: e.agent.labels ?? {} }) as AgentSnap)
@@ -1228,6 +1369,18 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       for (const old of others) {
         if (role === "lead" && (old.id === handoffFrom || handoffCoordinator.hasPendingTakeover(newId))) {
           // Delayed retirement: wait until successor confirms takeover in turn_ended / confirmTakeover.
+          continue;
+        }
+        // Never retire a candidate whose lane is itself a guess: either its lane label
+        // disagrees with its legacy lead label, or its lane label is unregistered and cwd filled in.
+        const oldMismatch = laneLeadMismatch(old, currentTeams());
+        if (oldMismatch) {
+          skipMetric(`old=${old.id} new=${newId} ${oldMismatch} role=${role}`, [old.id, newId]);
+          continue;
+        }
+        const oldResolved = resolveAgentIdentity(old, { cwd: old.cwd, teams: currentTeams() });
+        if (oldResolved.autofixedFromCwd && oldResolved.callerLane && oldResolved.callerLane.toLowerCase() !== oldResolved.laneId.toLowerCase()) {
+          skipMetric(`old=${old.id} new=${newId} lane=${oldResolved.callerLane} cwd-lane=${oldResolved.laneId} role=${role}`, [old.id, newId]);
           continue;
         }
         const former = role === "lead" ? "former-lead" : "former-brainstorm";
@@ -1240,19 +1393,50 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               ? `(old) ${laneName.toUpperCase()} ord${ord}`
               : `(old) ${oldTitle}`
             : `(old) ${oldTitle || "BRAINSTORM"}`;
+        if (role === "brainstorm") {
+          // The brief is the Buddy handoff: make sure it holds the predecessor's last turn
+          // and the log names both Buddies before anything is relabelled or archived.
+          let brief = "missing";
+          try {
+            brief = snapshotIntoBrief(deps.briefRoot ?? REPO_ROOT, lane, old, await lastAssistantText(paseo, old.id));
+          } catch (err) {
+            log(`brief snapshot failed for ${old.id}: ${err}`);
+          }
+          try {
+            appendLog(team, {
+              agent: "plugin",
+              lane,
+              type: "metric",
+              text: `brainstorm-retired: old=${old.id} new=${newId} lane=${lane}${topic ? ` topic=${topic}` : ""} brief=${brief}`,
+              refs: [old.id, newId],
+            });
+          } catch (err) {
+            log(`brainstorm-retired metric write failed: ${err}`);
+          }
+        }
         let renamed = true;
         await deps.setLabels(old.id, { role: former, ...(role === "lead" && ord ? { ord } : {}) }, name).catch((e) => {
           renamed = false;
           log(`retire failed: ${e}`);
         });
         log(`retired ${old.id} (${role} -> ${former}) in ${team}/${lane}`);
-        if (role === "brainstorm" && renamed) {
-          await Promise.resolve()
-            .then(() => paseo.agents.ref(old.id).archive())
-            .catch(() => deps.archiveAgent(old.id))
-            .catch((e: unknown) => log(`archive failed for ${old.id}: ${e}`));
-        }
+        if (role === "brainstorm" && renamed) scheduleBuddyArchive(paseo, old.id);
       }
+    }
+
+    /** Archive a retired Buddy after a grace period, never mid-turn and never if it was restored. */
+    function scheduleBuddyArchive(paseo: Paseo, id: string, attempt = 0) {
+      const grace = Math.max(0, deps.brainstormArchiveGraceMs ?? 120_000);
+      later(async () => {
+        const cur = await snap(paseo, id);
+        if (!cur || cur.archivedAt || cur.status === "closed") return;
+        if (cur.labels.role !== "former-brainstorm") return;
+        if (cur.status === "running" && attempt < 15) return scheduleBuddyArchive(paseo, id, attempt + 1);
+        await Promise.resolve()
+          .then(() => paseo.agents.ref(id).archive())
+          .catch(() => deps.archiveAgent(id))
+          .catch((e: unknown) => log(`archive failed for ${id}: ${e}`));
+      }, grace);
     }
 
     async function findLead(paseo: Paseo, team: string, lane: string): Promise<AgentSnap | null> {

@@ -86,6 +86,34 @@ export function isRetiredRole(roleValue) {
 }
 
 /**
+ * Throwaway/temporary lane slugs (`*-tmp`, `*-scratch`, `tmp-*`, `scratch-*`, `walk-*`).
+ * These keep their own lane label instead of being folded into the cwd lane.
+ */
+export function isThrowawayLane(laneValue) {
+  const l = String(laneValue ?? "").trim().toLowerCase();
+  if (!l) return false;
+  return /(^|[-_])(tmp|temp|scratch)$/.test(l) || /^(tmp|temp|scratch|walk)[-_]/.test(l);
+}
+
+/**
+ * Explicit `lane` and legacy `lead` labels that disagree (e.g. lane=vibesquad, lead=walk-tmp):
+ * the lane was rewritten from a guess, so the agent's real lane is unknown. Returns "" when consistent.
+ */
+export function laneLeadMismatch(agentOrLabels, teams) {
+  const labels = extractLabels(agentOrLabels);
+  const lane = String(labels.lane ?? "").trim().toLowerCase();
+  const lead = String(labels.lead ?? "").trim().toLowerCase();
+  if (!lane || !lead || lane === lead) return "";
+  if (teams) {
+    // Aliases/names of the same registered lane are not a mismatch.
+    const a = findLaneInRegistry(lane, teams);
+    const b = findLaneInRegistry(lead, teams);
+    if (a && b && a.lane.id === b.lane.id) return "";
+  }
+  return `lane=${lane} lead=${lead}`;
+}
+
+/**
  * Strictly label/status-based retired check (never inspects title/name).
  */
 export function isRetiredAgent(agentOrLabels) {
