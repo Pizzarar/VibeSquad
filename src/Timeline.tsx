@@ -102,7 +102,7 @@ export function findPinnedTodo(entries: Entry[]): Entry | null {
 }
 
 export function shouldShowLoadOlder(entries: Entry[], hasMore?: boolean): boolean {
-  return !!hasMore || entries.length >= 60;
+  return hasMore === true;
 }
 
 // ─── Markdown tokenizer ───────────────────────────────────────────────────────
@@ -794,9 +794,14 @@ export function useTimeline(agentId: string, status: string, active = true) {
           setError(null);
           const newEntries = t.entries as Entry[];
           setEntries(newEntries);
-          setHasMore(newEntries.length >= 60);
-          if (newEntries.length > 0) {
-            earliestCursor.current = (newEntries[0] as any).seqStart ?? null;
+          const tAny = t as any;
+          setHasMore(tAny.hasOlder ?? newEntries.length >= 60);
+          const startCur = tAny.startCursor;
+          if (startCur && typeof startCur.epoch === "string" && typeof startCur.seq === "number") {
+            earliestCursor.current = startCur;
+          } else if (newEntries.length > 0) {
+            const first = newEntries[0] as any;
+            earliestCursor.current = { epoch: first.timestamp ?? "", seq: first.seqStart ?? 0 };
           }
         }
       } catch (e) {
@@ -842,9 +847,14 @@ export function useTimeline(agentId: string, status: string, active = true) {
         if (!t.error) {
           const newEntries = t.entries as Entry[];
           setEntries(newEntries);
-          setHasMore(newEntries.length >= 60);
-          if (newEntries.length > 0) {
-            earliestCursor.current = (newEntries[0] as any).seqStart ?? null;
+          const tAny = t as any;
+          setHasMore(tAny.hasOlder ?? newEntries.length >= 60);
+          const startCur = tAny.startCursor;
+          if (startCur && typeof startCur.epoch === "string" && typeof startCur.seq === "number") {
+            earliestCursor.current = startCur;
+          } else if (newEntries.length > 0) {
+            const first = newEntries[0] as any;
+            earliestCursor.current = { epoch: first.timestamp ?? "", seq: first.seqStart ?? 0 };
           }
         }
       })
@@ -872,16 +882,23 @@ export function useTimeline(agentId: string, status: string, active = true) {
         limit: 60,
         projection: "projected" as any,
       });
-      const older = (t.entries ?? []) as Entry[];
+      const tAny = t as any;
+      const older = (tAny.entries ?? tAny.payload?.entries ?? []) as Entry[];
       if (older.length > 0) {
         setEntries((prev) => [...older, ...prev]);
-        earliestCursor.current = (older[0] as any).seqStart ?? cursor;
-        setHasMore(older.length >= 60);
+        const startCur = tAny.startCursor ?? tAny.payload?.startCursor;
+        if (startCur && typeof startCur.epoch === "string" && typeof startCur.seq === "number") {
+          earliestCursor.current = startCur;
+        } else {
+          const first = older[0] as any;
+          earliestCursor.current = { epoch: first.timestamp ?? "", seq: first.seqStart ?? 0 };
+        }
+        setHasMore(tAny.hasOlder ?? tAny.payload?.hasOlder ?? (older.length >= 60));
       } else {
         setHasMore(false);
       }
-    } catch {
-      // ignore
+    } catch (e) {
+      setError(`Failed to load older messages: ${e}`);
     } finally {
       setLoadingMore(false);
     }

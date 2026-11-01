@@ -23,6 +23,8 @@
     "@getpaseo/client": "0.13.2",
     "@getpaseo/protocol": "0.13.2",
     "@vibesquad/server": "file:server",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
     "qrcode": "1.5.4",
     "react": "19.3.1",
     "react-dom": "19.3.1"

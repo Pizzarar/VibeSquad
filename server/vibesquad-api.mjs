@@ -1167,6 +1167,40 @@ export function handleLocalImage(req, res) {
   createReadStream(file).on("error", () => res.destroy()).pipe(res);
 }
 
+// GET ?cwd=<path>: reads package.json scripts from the given workspace directory.
+// Only allows directories that are trusted agent/team cwd paths.
+async function handleWorkspacePackageScripts(req, res, rootDir, opts = {}) {
+  if (req.method !== "GET") {
+    res.statusCode = 405;
+    return res.end();
+  }
+  try {
+    const cwd = new URL(req.url, "http://x").searchParams.get("cwd") ?? "";
+    if (!cwd || !existsSync(cwd) || !statSync(cwd).isDirectory()) {
+      return sendJson(res, 400, { ok: false, scripts: {} });
+    }
+    const realCwd = realpathSync(resolve(cwd));
+    const allowed = allowedAttachRoots(rootDir, opts);
+    if (!allowed.some((root) => insideDir(realCwd, root))) {
+      return sendJson(res, 403, { ok: false, error: "cwd not in allowed roots" });
+    }
+    const pkgPath = join(realCwd, "package.json");
+    if (!existsSync(pkgPath)) return sendJson(res, 200, { ok: true, scripts: {} });
+    let pkgScripts = {};
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+      if (pkg && typeof pkg.scripts === "object" && pkg.scripts !== null) {
+        pkgScripts = pkg.scripts;
+      }
+    } catch {
+      // invalid package.json – return empty
+    }
+    return sendJson(res, 200, { ok: true, scripts: pkgScripts });
+  } catch (e) {
+    return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
+  }
+}
+
 // Connect-style middleware: handles /__vibesquad/* and /api/*, calls next() for everything else.
 // Everything except health, /ca.crt and /pair needs a paired device or a same-origin loopback caller.
 export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
@@ -1249,6 +1283,8 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return handleProfilesImport(req, res);
       case "/__vibesquad/profiles/diff":
         return handleProfilesDiff(req, res);
+      case "/__vibesquad/workspace-package-scripts":
+        return handleWorkspacePackageScripts(req, res, rootDir, opts);
       case "/__vibesquad/paseo/status":
         if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
         return getPaseoDaemonStatus(opts.paseo).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));

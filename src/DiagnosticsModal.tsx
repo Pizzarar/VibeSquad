@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Modal } from "./TeamActions";
 import { daemonClient, usePaseo } from "./paseo";
 import "./ResponsiveSmallWindow.css";
@@ -19,7 +19,14 @@ export type DiagnosticsBundle = {
 
 async function tryCall(name: string): Promise<unknown> {
   try {
-    return (await dc[name]?.()) ?? null;
+    const fn = dc[name];
+    if (typeof fn !== "function") return null;
+    const result = fn();
+    if (!result || typeof (result as any).then !== "function") return result ?? null;
+    const timeout = new Promise<{ error: string }>((resolve) =>
+      setTimeout(() => resolve({ error: "timeout" }), 1500),
+    );
+    return await Promise.race([result, timeout]);
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) };
   }
@@ -67,16 +74,36 @@ export function DaemonStatusBanner() {
 
 export function DiagnosticsModal({ onClose }: { onClose: () => void }) {
   const { conn, agents } = usePaseo();
+  const connRef = useRef(conn);
+  const agentsRef = useRef(agents);
+  connRef.current = conn;
+  agentsRef.current = agents;
+
   const [bundle, setBundle] = useState<DiagnosticsBundle | null>(null);
+  const [collecting, setCollecting] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  const collect = useCallback(async () => {
+    setCollecting(true);
+    setBundle(null);
+    try {
+      const b = await buildBundle(
+        connRef.current,
+        agentsRef.current.values() as Iterable<{ id: string; status?: string; provider?: string }>,
+      );
+      setBundle(b);
+    } finally {
+      setCollecting(false);
+    }
+  }, []);
+
   useEffect(() => {
-    let alive = true;
-    void buildBundle(conn, agents.values() as Iterable<{ id: string; status?: string; provider?: string }>).then((b) => alive && setBundle(b));
-    return () => {
-      alive = false;
-    };
-  }, [conn, agents]);
-  const text = bundle ? JSON.stringify(bundle, null, 2) : "Collecting…";
+    void collect();
+    // Intentionally empty deps: collect once on modal open, Refresh button re-triggers.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const text = collecting ? "Collecting…" : bundle ? JSON.stringify(bundle, null, 2) : "Collecting…";
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(text);
@@ -99,6 +126,7 @@ export function DiagnosticsModal({ onClose }: { onClose: () => void }) {
         <div className="diag-actions">
           <button className="btn small" data-testid="diagnostics-copy-btn" onClick={() => void copy()}>{copied ? "✓ Copied" : "📋 Copy Diagnostics Bundle"}</button>
           <button className="btn small" data-testid="diagnostics-download-btn" onClick={download}>⬇ Download .json</button>
+          <button className="btn small" data-testid="diagnostics-refresh-btn" disabled={collecting} onClick={() => void collect()}>↻ Refresh</button>
         </div>
         <pre className="diag-log" data-testid="diagnostics-log-viewer">{text}</pre>
       </div>

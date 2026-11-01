@@ -1,60 +1,91 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { TerminalStreamEvent } from "@getpaseo/client/internal/daemon-client";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import "@xterm/xterm/css/xterm.css";
 import { daemonClient, DEMO } from "./paseo";
 
-type TerminalTab = {
-  id: string;
-  name: string;
-  output: string;
-};
-
-type DemoTab = TerminalTab & { demo: true };
+type TerminalTab = { id: string; name: string };
+type TerminalInstance = { term: Terminal; fit: FitAddon };
 
 let demoCounter = 0;
-
-function makeDemoTab(): DemoTab {
-  demoCounter++;
-  return { id: `demo-term-${demoCounter}`, name: `Terminal ${demoCounter}`, output: "$ ", demo: true };
-}
-
-function stripAnsi(data: Uint8Array | string): string {
-  const str = typeof data === "string" ? data : new TextDecoder().decode(data);
-  return str.replace(/\x1b\[[0-9;]*[mGKHFJABCDHfSTchlnsu]/g, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-}
 
 export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
   const cwd = agent.cwd ?? "";
   const [tabs, setTabs] = useState<TerminalTab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [input, setInput] = useState("");
-  const outputRef = useRef<HTMLDivElement>(null);
   const unsubsRef = useRef<Map<string, () => void>>(new Map());
-  const demoTabsRef = useRef<Map<string, DemoTab>>(new Map());
+  const termInstancesRef = useRef<Map<string, TerminalInstance>>(new Map());
+  const containerRefsMap = useRef<Map<string, HTMLDivElement>>(new Map());
+  const pendingOutputRef = useRef<Map<string, (Uint8Array | string)[]>>(new Map());
 
-  const appendOutput = useCallback((id: string, text: string) => {
-    setTabs((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, output: t.output + text } : t)),
-    );
+  const writeToTerm = useCallback((id: string, data: Uint8Array | string) => {
+    const inst = termInstancesRef.current.get(id);
+    if (inst) {
+      inst.term.write(data);
+    } else {
+      const buf = pendingOutputRef.current.get(id) ?? [];
+      buf.push(data);
+      pendingOutputRef.current.set(id, buf);
+    }
+  }, []);
+
+  const mountXterm = useCallback((terminalId: string, el: HTMLDivElement) => {
+    if (termInstancesRef.current.has(terminalId)) return;
+    const term = new Terminal({ convertEol: true, scrollback: 5000, cursorBlink: true });
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    term.open(el);
+    try { fit.fit(); } catch {}
+
+    term.onData((data: string) => {
+      if (DEMO) {
+        term.write(data === "\r" ? "\r\n$ " : data);
+        return;
+      }
+      daemonClient.sendTerminalInput(terminalId, { type: "input", data });
+    });
+
+    termInstancesRef.current.set(terminalId, { term, fit });
+
+    const buf = pendingOutputRef.current.get(terminalId);
+    if (buf?.length) {
+      for (const chunk of buf) term.write(chunk);
+      pendingOutputRef.current.delete(terminalId);
+    }
   }, []);
 
   // Load existing terminals on mount
   useEffect(() => {
     let cancelled = false;
+
+    function subscribeToTerminal(terminalId: string) {
+      const sub = daemonClient.observeTerminal(
+        terminalId,
+        (event: TerminalStreamEvent) => {
+          if (event.type === "output" || event.type === "restore") {
+            writeToTerm(terminalId, event.data);
+          }
+        },
+        { restore: { mode: "full-snapshot" } },
+      );
+      unsubsRef.current.set(terminalId, () => { sub.release().catch(() => {}); });
+    }
+
     async function loadTerminals() {
       if (DEMO) {
-        const tab = makeDemoTab();
-        demoTabsRef.current.set(tab.id, tab);
-        setTabs([tab]);
-        setActiveId(tab.id);
+        demoCounter++;
+        const id = `demo-term-${demoCounter}`;
+        setTabs([{ id, name: `Terminal ${demoCounter}` }]);
+        setActiveId(id);
         return;
       }
       try {
         const result = await daemonClient.listTerminals(cwd);
         const loaded = result.terminals.map((t) => ({
           id: t.id,
-          name: t.title ?? t.name ?? t.id.slice(-6),
-          output: "",
+          name: (t as { title?: string; name?: string }).title ?? (t as { name?: string }).name ?? t.id.slice(-6),
         }));
         if (cancelled) return;
         if (loaded.length > 0) {
@@ -67,116 +98,93 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
       }
     }
     loadTerminals();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cwd]);
 
-  // Auto-scroll output
+  // ResizeObserver + FitAddon when active tab changes
   useEffect(() => {
-    if (outputRef.current) {
-      outputRef.current.scrollTop = outputRef.current.scrollHeight;
-    }
-  });
+    if (!activeId) return;
+    const el = containerRefsMap.current.get(activeId);
+    if (!el) return;
+    const inst = termInstancesRef.current.get(activeId);
+    if (!inst) return;
 
-  // Cleanup subscriptions on unmount
+    requestAnimationFrame(() => {
+      try { inst.fit.fit(); } catch {}
+    });
+
+    const ro = new ResizeObserver(() => {
+      try { inst.fit.fit(); } catch {}
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [activeId]);
+
+  // Cleanup on unmount
   useEffect(
     () => () => {
       for (const unsub of unsubsRef.current.values()) unsub();
+      for (const { term } of termInstancesRef.current.values()) {
+        try { term.dispose(); } catch {}
+      }
     },
     [],
   );
 
-  function subscribeToTerminal(terminalId: string) {
-    const sub = daemonClient.observeTerminal(
-      terminalId,
-      (event: TerminalStreamEvent) => {
-        if (event.type === "output" || event.type === "restore") {
-          appendOutput(terminalId, stripAnsi(event.data));
-        }
-      },
-      { restore: { mode: "full-snapshot" } },
-    );
-    unsubsRef.current.set(terminalId, () => { sub.release().catch(() => {}); });
-  }
-
   const createTerminal = async () => {
     if (DEMO) {
-      const tab = makeDemoTab();
-      demoTabsRef.current.set(tab.id, tab);
-      setTabs((prev) => [...prev, tab]);
-      setActiveId(tab.id);
+      demoCounter++;
+      const id = `demo-term-${demoCounter}`;
+      const name = `Terminal ${demoCounter}`;
+      setTabs((prev) => [...prev, { id, name }]);
+      setActiveId(id);
       return;
     }
     try {
       const result = await daemonClient.createTerminal(cwd, `Terminal ${tabs.length + 1}`);
-      const termId = result.terminal?.id;
+      const termId = (result as { terminal?: { id?: string } }).terminal?.id;
       if (!termId) return;
-      const newTab: TerminalTab = {
-        id: termId,
-        name: `Terminal ${tabs.length + 1}`,
-        output: "",
-      };
+      const newTab: TerminalTab = { id: termId, name: `Terminal ${tabs.length + 1}` };
       setTabs((prev) => [...prev, newTab]);
       setActiveId(termId);
-      subscribeToTerminal(termId);
+
+      const sub = daemonClient.observeTerminal(
+        termId,
+        (event: TerminalStreamEvent) => {
+          if (event.type === "output" || event.type === "restore") {
+            writeToTerm(termId, event.data);
+          }
+        },
+        { restore: { mode: "full-snapshot" } },
+      );
+      unsubsRef.current.set(termId, () => { sub.release().catch(() => {}); });
     } catch (e) {
       console.error("createTerminal failed", e);
     }
   };
 
   const killTab = async (terminalId: string) => {
-    if (DEMO) {
-      setTabs((prev) => prev.filter((t) => t.id !== terminalId));
-      setActiveId((prev) => (prev === terminalId ? null : prev));
-      demoTabsRef.current.delete(terminalId);
-      return;
-    }
-    try {
-      await daemonClient.killTerminal(terminalId);
-    } catch {
-      // best-effort
+    if (!DEMO) {
+      try { await daemonClient.killTerminal(terminalId); } catch {}
     }
     const unsub = unsubsRef.current.get(terminalId);
     if (unsub) {
       unsub();
       unsubsRef.current.delete(terminalId);
     }
+    const inst = termInstancesRef.current.get(terminalId);
+    if (inst) {
+      try { inst.term.dispose(); } catch {}
+      termInstancesRef.current.delete(terminalId);
+    }
+    containerRefsMap.current.delete(terminalId);
     setTabs((prev) => {
       const next = prev.filter((t) => t.id !== terminalId);
-      if (activeId === terminalId) setActiveId(next[0]?.id ?? null);
+      setActiveId((a) => (a === terminalId ? (next[0]?.id ?? null) : a));
       return next;
     });
   };
-
-  const sendInput = (terminalId: string, text: string) => {
-    if (DEMO) {
-      const demoTab = demoTabsRef.current.get(terminalId);
-      if (demoTab) {
-        appendOutput(terminalId, text + "\n$ ");
-      }
-      return;
-    }
-    daemonClient.sendTerminalInput(terminalId, { type: "input", data: text + "\r" });
-  };
-
-  const sendCtrlC = (terminalId: string) => {
-    if (DEMO) {
-      appendOutput(terminalId, "^C\n$ ");
-      return;
-    }
-    daemonClient.sendTerminalInput(terminalId, { type: "input", data: "\x03" });
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter" && activeId) {
-      sendInput(activeId, input);
-      setInput("");
-    }
-  };
-
-  const activeTab = tabs.find((t) => t.id === activeId);
 
   return (
     <div className="terminal-panel" data-testid="terminal-panel">
@@ -210,38 +218,30 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
           + New Terminal
         </button>
       </div>
-      {activeTab ? (
-        <>
-          <div
-            ref={outputRef}
-            className="terminal-output"
-            data-testid="terminal-output"
-          >
-            <pre className="terminal-text">{activeTab.output}</pre>
-          </div>
-          <div className="terminal-input-bar">
-            <input
-              className="terminal-input"
-              data-testid="terminal-input"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Command…"
-              spellCheck={false}
-            />
-            <button
-              className="btn ghost small"
-              title="Ctrl+C"
-              onClick={() => activeId && sendCtrlC(activeId)}
-            >
-              ^C
-            </button>
-          </div>
-        </>
-      ) : (
+      {tabs.length === 0 ? (
         <div className="muted" style={{ padding: 16 }}>
           No terminals open — click <b>+ New Terminal</b> to start one.
         </div>
+      ) : (
+        tabs.map((t) => {
+          const isActive = t.id === activeId;
+          return (
+            <div
+              key={t.id}
+              className="terminal-output"
+              data-testid={isActive ? "terminal-output" : undefined}
+              style={{ display: isActive ? "flex" : "none", flex: 1 }}
+              ref={(el) => {
+                if (el) {
+                  containerRefsMap.current.set(t.id, el);
+                  mountXterm(t.id, el);
+                } else {
+                  containerRefsMap.current.delete(t.id);
+                }
+              }}
+            />
+          );
+        })
       )}
     </div>
   );

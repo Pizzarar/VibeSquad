@@ -4,8 +4,10 @@
 // FULL brings back the old plumbing view (agent cards, workers, handoff, folders, retired agents).
 import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { client, DEMO, sendMessage } from "./paseo";
+import { openContextMenu } from "./CommandPalette";
 import { demoTimeline } from "./demo";
 import { hasLooksDone, LOOKS_DONE_MARKER, pinsForSquad, SEND_TO_MARKER, topicOfBrainstorm, type Pin } from "./pins";
+import { openBriefEditor } from "./pinActions";
 import { IdeaPlusTile, noteSendTo, SendToCard, useSendTo } from "./PinIdeas";
 import { PinMenu } from "./PinMenu";
 import { DoneRow, DoneShelf, LooksDoneCard, useDoneShelfOpen } from "./PinDone";
@@ -315,6 +317,12 @@ const PinTile = memo(function PinTile({ pin, onPin, onOpenAgent }: { pin: Pin; o
       setStarting(false);
     }
   };
+  const buildPinCtxItems = () => {
+    const items: Array<{ label: string; run: () => void }> = [];
+    if (bs) items.push({ label: `Open ${pin.lane.name} Brainstorm`, run: () => onOpenAgent(bs.agent.id) });
+    items.push({ label: "Edit brief", run: () => openBriefEditor({ squadId: pin.squad.id, laneId: pin.lane.id, laneName: pin.lane.name }) });
+    return items;
+  };
   return (
     <div
       className={`pin-tile ${paneCls} ${bs ? "" : "no-session"} ${pin.needsYou ? "needs-you" : ""}`}
@@ -322,6 +330,7 @@ const PinTile = memo(function PinTile({ pin, onPin, onOpenAgent }: { pin: Pin; o
       tabIndex={0}
       data-testid={`pin-tile-${pin.lane.id}`}
       onClick={() => void open()}
+      onContextMenu={(e) => openContextMenu(e, buildPinCtxItems())}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
