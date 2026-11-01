@@ -34,6 +34,7 @@ import {
 } from "../server/inbox.mjs";
 import { createDaemonClient, readBrainstormSummary, writeBrainstormSummary } from "../server/brainstorm.mjs";
 import { bestOverlap, newPinBrief, slugLaneId, takenLaneIds, uniqueLaneId } from "../server/pin-ideas.mjs";
+import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "../server/teams-file.mjs";
 import {
   UNASSIGNED_TEAM_ID,
   effectiveAgentRole as resolveEffectiveAgentRole,
@@ -87,18 +88,7 @@ const PASEO_HOME = process.env.PASEO_HOME || path.join(os.homedir(), ".paseo");
 // ---------------------------------------------------------------------------
 
 function resolveTeamsFilePath() {
-  const repoRoot = path.resolve(import.meta.dirname, "..");
-  if (process.env.VIBESQUAD_TEAMS_FILE) {
-    const p = path.resolve(process.env.VIBESQUAD_TEAMS_FILE);
-    if (fs.existsSync(p)) return p;
-  }
-  if (!process.env.VIBESQUAD_IGNORE_HOME_TEAMS) {
-    const homeTeams = path.join(BASE_DIR, "teams.json");
-    if (fs.existsSync(homeTeams)) return homeTeams;
-  }
-  const localTeams = path.join(repoRoot, "teams.json");
-  if (fs.existsSync(localTeams)) return localTeams;
-  return path.join(repoRoot, "teams.example.json");
+  return resolveSharedTeamsFilePath(path.resolve(import.meta.dirname, ".."));
 }
 
 function loadTeamsFile() {
@@ -1610,6 +1600,7 @@ export function installVsShim({ binDirs, targetScript, baseHome } = {}) {
     "cli/vs.mjs",
     "teams.json",
     "teams.example.json",
+    "server/teams-file.mjs",
     "server/user-settings.mjs",
     "server/identity.mjs",
     "server/inbox.mjs",

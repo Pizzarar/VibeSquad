@@ -27,17 +27,17 @@ Source audit: `docs/audits/basics-gap-2026-11.md` (local, gitignored). The gap I
 | 2 | Find yesterday's agent | From any team, find an agent last active yesterday in a *different* team, including archived ones | Found in under 30s through search, sort or group by date, across teams | painful | ANNOYS · Navigation |
 | 3 | Search all transcripts for a phrase | Copy a phrase visible in some agent's reply; search for it from the main UI | The agent and the matching message are found, across teams; a non-match shows "no results" | impossible | BLOCKS · Search transcripts |
 | 4 | Read an agent's transcript | Open a tool-heavy agent (e.g. a Gemini lead); scroll its timeline | Every timeline row, including tool calls and failed tool calls, is visible (height > 0) | clean | B2 |
-| 5 | Scroll back through older history | Open a long-running agent; scroll to the top of the timeline | Can load entries older than the newest 60 ("load older" or infinite scroll) | impossible | BLOCKS · Full history |
-| 6 | See which files an agent changed | Open an agent that edited files | A list of changed files for that agent or workspace is visible | impossible | BLOCKS · Diff / changes view |
-| 7 | View the diff | From task 6, open one changed file's diff | A per-file unified or split diff renders | impossible | BLOCKS · Diff / changes view |
-| 8 | Open a changed file | Click a file path in a transcript, feed or changes list | The file contents open in a viewer, or in an editor via "open in editor" | impossible | BLOCKS · File browser |
-| 9 | Git branch/status for a project | Open Workspaces; click a workspace row | Shows branch, dirty files list, ahead/behind; the row opens detail; the layout doesn't break | painful | BLOCKS · Git actions |
-| 10 | Copy an agent's last message | Hover or right-click the last assistant message | A copy action puts the full message text on the clipboard | impossible | ANNOYS · Reading output |
-| 11 | Copy a code block | Find an assistant message with a code fence | Markdown renders (bold, code blocks); a code block has a copy button | impossible | ANNOYS · Reading output |
+| 5 | Scroll back through older history | Open a long-running agent; scroll to the top of the timeline | Can load entries older than the newest 60 ("load older" or infinite scroll) | clean | BLOCKS · Full history |
+| 6 | See which files an agent changed | Open an agent that edited files | A list of changed files for that agent or workspace is visible | clean | BLOCKS · Diff / changes view |
+| 7 | View the diff | From task 6, open one changed file's diff | A per-file unified or split diff renders | clean | BLOCKS · Diff / changes view |
+| 8 | Open a changed file | Click a file path in a transcript, feed or changes list | The file contents open in a viewer, or in an editor via "open in editor" | clean | BLOCKS · File browser |
+| 9 | Git branch/status for a project | Open Workspaces; click a workspace row | Shows branch, dirty files list, ahead/behind; the row opens detail; the layout doesn't break | clean | BLOCKS · Git actions |
+| 10 | Copy an agent's last message | Hover or right-click the last assistant message | A copy action puts the full message text on the clipboard | clean | ANNOYS · Reading output |
+| 11 | Copy a code block | Find an assistant message with a code fence | Markdown renders (bold, code blocks); a code block has a copy button | clean | ANNOYS · Reading output |
 | 12 | See context usage | Open an agent; compare the sidebar card with the drawer meter | Token meter visible; sidebar and drawer agree | clean | B7 |
-| 13 | See cost | Look for $ spent per agent or session | Cost per agent is shown (from `totalCostUsd`) | impossible | POLISH · Cost |
-| 14 | Switch model or effort for an agent | Open a running agent's drawer header | A model/effort picker exists and is wired to `setAgentModel`/`setAgentThinkingOption` (control-present) | impossible | ANNOYS · Agent control |
-| 15 | Spawn a new agent | Open New Agent; check its defaults; Cancel | Fields are empty or sensibly defaulted (no "VS-STEP4"); cwd can be any folder | control-present* | B4, BLOCKS · Add a project |
+| 13 | See cost | Look for $ spent per agent or session | Cost per agent is shown (from `totalCostUsd`) | control-present | POLISH · Cost |
+| 14 | Switch model or effort for an agent | Open a running agent's drawer header | A model/effort picker exists and is wired to `setAgentModel`/`setAgentThinkingOption` (control-present) | control-present | ANNOYS · Agent control |
+| 15 | Spawn a new agent | Open New Agent; check its defaults; Cancel | Fields are empty or sensibly defaulted (no "VS-STEP4"); cwd can be any folder | clean | B4, BLOCKS · Add a project |
 | 16 | Queue or interrupt a message | Inspect the send path on a running agent (grep `activeTurnBehavior`) | Mid-turn send steers or queues by default, with an explicit "interrupt & send"; the UI shows a queued/steered state | clean | B1 |
 | 17 | Rewind/undo an agent turn | Look on a past message for rewind/checkpoint | A rewind control exists (conversation / files / both), wired to `rewindAgent` | impossible | ANNOYS · Agent control |
 | 18 | Command palette | Press Ctrl+K and Ctrl+Shift+P | A palette opens and can jump to an agent, team or action | impossible | ANNOYS · Navigation |
@@ -51,10 +51,10 @@ Source audit: `docs/audits/basics-gap-2026-11.md` (local, gitignored). The gap I
 | 26 | Right-click an agent or message | Right-click a roster card and a message | A context menu with relevant actions (copy id, open folder, archive…) | impossible | POLISH |
 | 27 | Drag a file into the composer | Drag a .md/.log file onto the composer (inspect the drop handler if you can't drag) | Non-image files are accepted or clearly rejected with a message, not silently ignored | painful | ANNOYS · Composer |
 | 28 | Mention a file with @ | Type `@` and `/` in the composer | File autocomplete on `@`; command autocomplete on `/` | impossible | ANNOYS · Composer |
-| 29 | See running terminals / project scripts | Look for a terminal or scripts panel for a workspace | Can list, start or stop scripts and view a terminal (control-present) | impossible | BLOCKS · Terminal, Scripts |
-| 30 | View an agent's plan/task list | Open an agent that used todos | Its current plan/task list is pinned and visible regardless of scroll | painful | ANNOYS · Reading output |
+| 29 | See running terminals / project scripts | Look for a terminal or scripts panel for a workspace | Can list, start or stop scripts and view a terminal (control-present) | control-present | BLOCKS · Terminal, Scripts |
+| 30 | View an agent's plan/task list | Open an agent that used todos | Its current plan/task list is pinned and visible regardless of scroll | clean | ANNOYS · Reading output |
 | 31 | Get notified when an agent needs input | Check the alerts toggle, test push and the Needs You rail (Ctrl+J) | Notifications can be enabled; Needs You queue reachable | control-present | — (covered) |
-| 32 | Answer a permission request | Inspect a pending permission card (or a question/plan request) | Shows the command, args or diff; supports allow-always, deny-with-message, and question options | control-present* | B3, ANNOYS · Permissions |
+| 32 | Answer a permission request | Inspect a pending permission card (or a question/plan request) | Shows the command, args or diff; supports allow-always, deny-with-message, and question options | clean | B3, ANNOYS · Permissions |
 | 33 | Navigate back/forward | Open agent A, then B; press browser Back | Back returns to agent A inside the app; the URL reflects the current view | impossible | ANNOYS · Navigation |
 | 34 | Reopen a closed pane | Close a tab; try to reopen it | "Reopen closed tab" (shortcut or menu) restores it | painful | POLISH |
 | 35 | Export a transcript | Look for export on an agent | Export as markdown/JSON | impossible | POLISH |
@@ -63,7 +63,7 @@ Source audit: `docs/audits/basics-gap-2026-11.md` (local, gitignored). The gap I
 | 38 | Work in Focus mode | Ctrl+. at 1600 wide | The chat uses the available width; no large blank area | painful | POLISH · Layout |
 | 39 | Reach the composer with the LAN banner showing | With "EXPOSED ON…" visible at 1600×1000, open an agent | The composer and Send button are fully on-screen | clean | B5 |
 | 40 | Find app settings | Look for global settings from any view | A clearly labelled Settings entry, visible without scrolling | clean | [settings] |
-| 41 | Read the drawer header | Open a brainstorm agent's drawer | No overlap between labels, buttons and timeline; the header takes ≤ ~25% of the drawer height | painful | POLISH · Drawer header |
+| 41 | Read the drawer header | Open a brainstorm agent's drawer | No overlap between labels, buttons and timeline; the header takes ≤ ~25% of the drawer height | clean | POLISH · Drawer header |
 
 \* For tasks 15 and 32 the control exists, so they score as passing, but they still fail their full PASS criterion (B4, B3). Re-mark them **clean** only when the criterion is fully met.
 
@@ -76,3 +76,4 @@ The original run counted tasks 12, 22 and 25 as clean. Under the stricter criter
 |---|---|---|---|---|
 | 2026-11-01 | v0.1.1, baseline | 21/41 | 1 / 17 / 3 / 20 | Audit run; screenshots in `scratch/shots/gap-audit/` |
 | 2026-11-01 | B0 (B1–B7) + Paseo settings | 22/41 | 7 / 12 / 3 / 19 | B1 steer/interrupt, B2 timeline flex-shrink:0 (0 collapsed rows), B3 question/plan permission actions, B4 empty modal defaults, B5 banner grid row height (Send visible at 1600×1000), B6 FirstRunModal ✕ persistence, B7 unified `usedTokens()`, Paseo 8-tab settings |
+| 2026-11-01 | ADE Wave 1 (Batches A–E + Step S) | 31/41 | 18 / 9 / 4 / 10 | RightDock (Changes/Files/Terminal/Scripts), PermissionCard cmd/diff/suggestions/deny-msg, DrawerHeader mode/model/thinking/cost/reload/copy + compact 2-line chrome (19.9% height), Timeline expandable tool calls + Markdown + copy msg/code + load older + pinned todo + file links, NewAgentModal add-project/clone/worktree picker |

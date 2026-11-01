@@ -11,6 +11,7 @@ import {
 import { findLaneInRegistry } from "./identity.mjs";
 import { findProfile, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
+import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
 const TITLE_MAX = 60;
@@ -41,20 +42,7 @@ export function getInboxPath(baseHome) {
 }
 
 function resolveTeamsFilePath(rootDir = REPO_ROOT) {
-  if (process.env.VIBESQUAD_TEAMS_FILE) {
-    const p = resolve(process.env.VIBESQUAD_TEAMS_FILE);
-    if (existsSync(p)) return p;
-  }
-  if (!process.env.VIBESQUAD_IGNORE_HOME_TEAMS) {
-    const homeTeams = join(
-      process.env.VIBESQUAD_HOME || join(os.homedir(), ".vibesquad"),
-      "teams.json",
-    );
-    if (existsSync(homeTeams)) return homeTeams;
-  }
-  const local = join(rootDir, "teams.json");
-  if (existsSync(local)) return local;
-  return join(rootDir, "teams.example.json");
+  return resolveSharedTeamsFilePath(rootDir);
 }
 
 export function loadTeamsForInbox(rootDir = REPO_ROOT) {

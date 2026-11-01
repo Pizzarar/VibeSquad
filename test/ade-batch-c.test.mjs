@@ -408,3 +408,42 @@ test("C7d: copy message — copies it.text", () => {
   const textToCopy = it.text;
   assert.equal(textToCopy, "Hello world");
 });
+
+function formatToolError(err) {
+  if (err == null) return "";
+  if (typeof err === "string") return err;
+  if (typeof err.content === "string") return err.content;
+  if (Array.isArray(err.content)) {
+    return err.content
+      .map((c) => (typeof c === "string" ? c : c?.text ?? JSON.stringify(c)))
+      .join("\n");
+  }
+  if (typeof err.message === "string") return err.message;
+  if (typeof err.text === "string") return err.text;
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
+}
+
+test("C8a: formatToolError handles raw tool_result object {type,content,is_error,tool_use_id}", () => {
+  const raw = {
+    type: "tool_result",
+    content: "Permission rejected by user",
+    is_error: true,
+    tool_use_id: "toolu_01abc",
+  };
+  assert.equal(formatToolError(raw), "Permission rejected by user");
+});
+
+test("C8b: formatToolError handles content array of text blocks", () => {
+  const raw = {
+    type: "tool_result",
+    content: [{ type: "text", text: "Command canceled" }],
+    is_error: true,
+    tool_use_id: "toolu_01def",
+  };
+  assert.equal(formatToolError(raw), "Command canceled");
+});
+

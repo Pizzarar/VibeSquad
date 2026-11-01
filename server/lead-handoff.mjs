@@ -10,6 +10,7 @@ import {
 import { effectiveAgentRole, isDigestAgent, isRetiredAgent, ordOf } from "./identity.mjs";
 import { LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE, readJsonFileWithBom } from "./user-settings.mjs";
 import { findProfile, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
+import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
 
 // import.meta.dirname is undefined when bundled into the Paseo plugin; fall back like plugin/index.server.ts.
 const REPO_ROOT = resolve(process.env.VIBESQUAD_ROOT || (typeof import.meta.dirname === "string" ? join(import.meta.dirname, "..") : join(homedir(), "projects", "VibeSquad")));
@@ -40,17 +41,7 @@ function getBaseHome(overrideHome) {
 }
 
 function resolveTeamsFilePath(rootDir = REPO_ROOT) {
-  if (process.env.VIBESQUAD_TEAMS_FILE) {
-    const p = resolve(process.env.VIBESQUAD_TEAMS_FILE);
-    if (existsSync(p)) return p;
-  }
-  if (!process.env.VIBESQUAD_IGNORE_HOME_TEAMS) {
-    const homeTeams = join(getBaseHome(), "teams.json");
-    if (existsSync(homeTeams)) return homeTeams;
-  }
-  const local = join(rootDir, "teams.json");
-  if (existsSync(local)) return local;
-  return join(rootDir, "teams.example.json");
+  return resolveSharedTeamsFilePath(rootDir);
 }
 
 export function loadTeamsConfig(rootDir = REPO_ROOT) {
