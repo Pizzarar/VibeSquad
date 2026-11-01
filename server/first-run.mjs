@@ -196,7 +196,7 @@ export async function inspectFirstRunStatus(opts = {}) {
   };
   const gemini = {
     installed: Boolean(geminiBin),
-    loggedIn: ["oauth_creds.json", "google_accounts.json", "credentials.json"].some((f) => existsSync(join(home(), ".gemini", f))),
+    loggedIn: ["oauth_creds.json", "google_accounts.json", "credentials.json"].some((f) => existsSync(join(home(), ".gemini", f))) || existsSync(join(home(), ".gemini", "antigravity-cli", "jetski_state.pbtxt")) || existsSync(join(home(), ".gemini", "antigravity-cli", "installation_id")),
     version: geminiV,
     installUrl: "https://github.com/google-gemini/gemini-cli",
   };
