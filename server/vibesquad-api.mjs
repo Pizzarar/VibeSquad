@@ -234,9 +234,13 @@ function sendJson(res, code, data) {
   res.end(JSON.stringify(data));
 }
 
-let exposure = { lanEnabled: false, exposedIps: [] };
-export function setExposure(lanEnabled, exposedIps) {
-  exposure = { lanEnabled: Boolean(lanEnabled), exposedIps: lanEnabled ? [...(exposedIps ?? [])] : [] };
+let exposure = { lanEnabled: false, exposedIps: [], toggleHandler: null };
+export function setExposure(lanEnabled, exposedIps, toggleHandler = exposure.toggleHandler) {
+  exposure = {
+    lanEnabled: Boolean(lanEnabled),
+    exposedIps: lanEnabled ? [...(exposedIps ?? [])] : [],
+    toggleHandler: typeof toggleHandler === "function" ? toggleHandler : exposure.toggleHandler,
+  };
 }
 
 const isTrusted = (req) => isLocalBrowserSafe(req) || Boolean(authenticate(req));
@@ -334,10 +338,35 @@ function handleTeams(req, res, rootDir) {
 
 // GET ?team=<id>: recent log.jsonl entries. POST {team,type,text,refs?}: append (240-char limit).
 async function handleSettings(req, res) {
-  if (req.method === "GET") return sendJson(res, 200, { ok: true, ...loadUserSettings() });
+  if (req.method === "GET") {
+    return sendJson(res, 200, {
+      ok: true,
+      ...loadUserSettings(),
+      activeLanEnabled: exposure.lanEnabled,
+      exposedIps: exposure.exposedIps,
+    });
+  }
   if (req.method === "POST" || req.method === "PUT") {
     const body = await readBody(req);
-    return sendJson(res, 200, { ok: true, ...saveUserSettings({ userName: body?.userName }) });
+    const patch = {};
+    if (body && "userName" in body) patch.userName = body.userName;
+    if (body && "lanEnabled" in body) patch.lanEnabled = Boolean(body.lanEnabled);
+    const saved = saveUserSettings(patch);
+    if ("lanEnabled" in patch && typeof exposure.toggleHandler === "function") {
+      try {
+        const resToggle = await exposure.toggleHandler(saved.lanEnabled);
+        if (resToggle && typeof resToggle === "object") {
+          if ("lanEnabled" in resToggle) exposure.lanEnabled = Boolean(resToggle.lanEnabled);
+          if (Array.isArray(resToggle.exposedIps)) exposure.exposedIps = resToggle.exposedIps.filter(Boolean);
+        }
+      } catch {}
+    }
+    return sendJson(res, 200, {
+      ok: true,
+      ...saved,
+      activeLanEnabled: exposure.lanEnabled,
+      exposedIps: exposure.exposedIps,
+    });
   }
   return sendJson(res, 405, { error: "method not allowed" });
 }

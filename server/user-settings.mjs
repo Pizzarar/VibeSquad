@@ -23,15 +23,21 @@ export function normalizeUserName(value) {
 export function loadUserSettings(baseHome) {
   try {
     const raw = JSON.parse(readFileSync(settingsFile(baseHome), "utf8"));
-    return { userName: normalizeUserName(raw?.userName) };
+    return {
+      userName: normalizeUserName(raw?.userName),
+      lanEnabled: Boolean(raw?.lanEnabled),
+    };
   } catch {
-    return { userName: DEFAULT_USER_NAME };
+    return { userName: DEFAULT_USER_NAME, lanEnabled: false };
   }
 }
 
 export function saveUserSettings(patch, baseHome) {
   const current = loadUserSettings(baseHome);
-  const next = { userName: normalizeUserName(patch && "userName" in patch ? patch.userName : current.userName) };
+  const next = {
+    userName: normalizeUserName(patch && "userName" in patch ? patch.userName : current.userName),
+    lanEnabled: patch && "lanEnabled" in patch ? Boolean(patch.lanEnabled) : current.lanEnabled,
+  };
   mkdirSync(baseHome || vibesquadHome(), { recursive: true });
   writeFileSync(settingsFile(baseHome), JSON.stringify(next, null, 2) + "\n");
   return next;

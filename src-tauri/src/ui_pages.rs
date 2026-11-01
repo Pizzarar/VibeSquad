@@ -1,5 +1,218 @@
 use crate::DesktopConfig;
 
+pub fn render_mode_choice_page(_cfg: &DesktopConfig, error_msg: Option<&str>) -> String {
+    let err_banner = if let Some(msg) = error_msg {
+        if !msg.is_empty() {
+            format!(
+                r#"<div class="alert-box" role="alert">
+                    <span class="alert-dot">●</span>
+                    <span>{}</span>
+                </div>"#,
+                html_escape(msg)
+            )
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+
+    format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VibeSquad — Choose Setup Mode</title>
+<style>
+  :root {{
+    --bg: #0c0b14;
+    --panel: #121120;
+    --panel-hi: #18172b;
+    --line: #282644;
+    --cyan: #00f0ff;
+    --pink: #ff2a85;
+    --ok: #00e676;
+    --text: #eef2ff;
+    --muted: #8a93b2;
+  }}
+  * {{ box-sizing: border-box; user-select: none; }}
+  body {{
+    margin: 0;
+    min-height: 100vh;
+    background: radial-gradient(circle at 50% 0%, #1a1636 0%, var(--bg) 65%);
+    color: var(--text);
+    font-family: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }}
+  .shell {{
+    width: 100%;
+    max-width: 560px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.65), 0 0 28px rgba(0, 240, 255, 0.08);
+    padding: 28px;
+    position: relative;
+  }}
+  .shell::before {{
+    content: "";
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, var(--cyan), var(--pink));
+  }}
+  .brand {{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 14px;
+  }}
+  .brand-title {{
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: 2px;
+    color: var(--cyan);
+    text-transform: uppercase;
+  }}
+  .brand-badge {{
+    font-size: 10px;
+    padding: 3px 7px;
+    background: rgba(0, 240, 255, 0.1);
+    border: 1px solid var(--cyan);
+    color: var(--cyan);
+    letter-spacing: 1px;
+  }}
+  .subtitle {{
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--muted);
+    margin-bottom: 18px;
+  }}
+  .alert-box {{
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    margin-bottom: 16px;
+    background: rgba(255, 42, 133, 0.12);
+    border: 1px solid var(--pink);
+    color: #ffd6e7;
+    font-size: 12px;
+    line-height: 1.45;
+  }}
+  .alert-dot {{ color: var(--pink); font-weight: 700; }}
+  .choice-grid {{
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }}
+  .choice-card {{
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
+    padding: 16px 18px;
+    background: var(--panel-hi);
+    border: 1px solid var(--line);
+    color: var(--text);
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: all 0.15s;
+  }}
+  .choice-card:hover {{
+    border-color: var(--cyan);
+    background: rgba(0, 240, 255, 0.08);
+    box-shadow: 0 0 16px rgba(0, 240, 255, 0.15);
+  }}
+  .choice-card:disabled {{
+    opacity: 0.55;
+    cursor: wait;
+  }}
+  .choice-title {{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 14px;
+    font-weight: 800;
+    letter-spacing: 0.8px;
+    color: var(--cyan);
+  }}
+  .choice-desc {{
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--muted);
+  }}
+</style>
+</head>
+<body>
+  <div class="shell" data-testid="desktop-mode-choice">
+    <div class="brand">
+      <div class="brand-title">⚡ VIBESQUAD</div>
+      <span class="brand-badge">FIRST LAUNCH</span>
+    </div>
+    <div class="subtitle">
+      How will you use VibeSquad on this PC? Nothing starts in the background until you choose.
+    </div>
+
+    {err_banner}
+
+    <div class="choice-grid">
+      <button type="button" class="choice-card" id="choose-local-btn" data-testid="choose-mode-local">
+        <div class="choice-title">
+          <span>💻 Run agents on this PC</span>
+          <span>→</span>
+        </div>
+        <div class="choice-desc">
+          Starts the local VibeSquad server (127.0.0.1:4180) and Paseo daemon on this machine.
+        </div>
+      </button>
+
+      <button type="button" class="choice-card" id="choose-remote-btn" data-testid="choose-mode-remote">
+        <div class="choice-title">
+          <span>🔗 Connect to another PC</span>
+          <span>→</span>
+        </div>
+        <div class="choice-desc">
+          Pair with a VibeSquad server over Home LAN or Meshnet using a 6-digit code. Spawns zero local server or daemon processes on this PC.
+        </div>
+      </button>
+    </div>
+  </div>
+
+  <script>
+    const localBtn = document.getElementById('choose-local-btn');
+    const remoteBtn = document.getElementById('choose-remote-btn');
+
+    async function pickMode(mode) {{
+      localBtn.disabled = true;
+      remoteBtn.disabled = true;
+      try {{
+        const res = await fetch('/__desktop/choose-mode', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ mode }})
+        }});
+        const data = await res.json().catch(() => ({{}}));
+        window.location.replace(data.redirect || (mode === 'remote' ? '/__desktop/setup' : '/'));
+      }} catch (_) {{
+        localBtn.disabled = false;
+        remoteBtn.disabled = false;
+      }}
+    }}
+
+    localBtn.addEventListener('click', () => pickMode('local'));
+    remoteBtn.addEventListener('click', () => pickMode('remote'));
+  </script>
+</body>
+</html>"#,
+        err_banner = err_banner,
+    )
+}
+
 pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String {
     let err_banner = if let Some(msg) = error_msg {
         if !msg.is_empty() {
@@ -15,6 +228,44 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
         }
     } else {
         String::new()
+    };
+
+    let saved_lan = cfg.last_lan_host.trim();
+    let saved_mesh = if !cfg.last_meshnet_host.trim().is_empty() {
+        cfg.last_meshnet_host.trim()
+    } else {
+        cfg.fallback_host.trim()
+    };
+    let lan_disabled_attr = if saved_lan.is_empty() {
+        r#"disabled class="preset-btn disabled""#
+    } else {
+        r#"class="preset-btn""#
+    };
+    let mesh_disabled_attr = if saved_mesh.is_empty() {
+        r#"disabled class="preset-btn disabled""#
+    } else {
+        r#"class="preset-btn""#
+    };
+    let lan_initial_tag = if saved_lan.is_empty() {
+        "Server not detected".to_string()
+    } else {
+        "Recommended on Wi-Fi/LAN".to_string()
+    };
+    let mesh_initial_tag = if saved_mesh.is_empty() {
+        "Server not detected".to_string()
+    } else {
+        "Remote / VPN".to_string()
+    };
+    let server_host_display = if cfg.server_mode == "remote" && crate::is_local_host(&cfg.server_host) {
+        if !saved_lan.is_empty() {
+            saved_lan.to_string()
+        } else if !saved_mesh.is_empty() {
+            saved_mesh.to_string()
+        } else {
+            String::new()
+        }
+    } else {
+        cfg.server_host.clone()
     };
 
     format!(
@@ -169,6 +420,13 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
   .preset-btn.reachable {{
     border-color: var(--ok);
   }}
+  .preset-btn:disabled, .preset-btn.disabled {{
+    opacity: 0.45;
+    cursor: not-allowed;
+    pointer-events: none;
+    border-color: var(--line);
+    background: rgba(18, 17, 32, 0.5);
+  }}
   .preset-tag {{
     font-size: 10px;
     padding: 2px 6px;
@@ -274,16 +532,16 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
           <span class="probe-badge" id="probe-badge">Probing LAN &amp; Meshnet…</span>
         </div>
         <div class="preset-grid">
-          <button type="button" class="preset-btn" id="preset-lan" data-host="">
+          <button type="button" id="preset-lan" data-host="{saved_lan_host}" {lan_disabled_attr}>
             <span>🏠 Home LAN</span>
-            <span class="preset-tag" id="tag-lan">Recommended on Wi-Fi/LAN</span>
+            <span class="preset-tag" id="tag-lan">{lan_initial_tag}</span>
           </button>
-          <button type="button" class="preset-btn" id="preset-meshnet" data-host="">
+          <button type="button" id="preset-meshnet" data-host="{saved_meshnet_host}" {mesh_disabled_attr}>
             <span>🌐 Meshnet</span>
-            <span class="preset-tag" id="tag-meshnet">Remote / VPN</span>
+            <span class="preset-tag" id="tag-meshnet">{mesh_initial_tag}</span>
           </button>
-          <button type="button" class="preset-btn" id="use-localhost-btn" data-host="127.0.0.1:4180" title="Connect directly to local server on this PC without a pairing code">
-            <span>💻 This Server PC · <b>127.0.0.1:4180</b></span>
+          <button type="button" class="preset-btn" id="use-localhost-btn" data-host="127.0.0.1:4180" title="Start or connect to local server on this PC without a pairing code">
+            <span>💻 Run agents on this PC · <b>127.0.0.1:4180</b></span>
             <span class="preset-tag" id="tag-local">No code needed</span>
           </button>
         </div>
@@ -295,14 +553,14 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
           type="text"
           id="serverHost"
           name="serverHost"
-          value="{server_host}"
-          placeholder="host:4180"
+          value="{server_host_display}"
+          placeholder="server-ip:4180 or meshnet-host:4180"
           autocomplete="off"
           spellcheck="false"
           required
         />
         <div class="hint">
-          Auto-discovery tries Home LAN first, then falls back to <code>{fallback_host}</code>.
+          Enter the Home LAN or Meshnet address shown on your server PC's <b>Pair a device</b> screen.
         </div>
       </div>
 
@@ -370,7 +628,33 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
       return clean.startsWith('localhost') || clean.startsWith('127.0.0.1') || clean.startsWith('[::1]');
     }}
 
+    function syncPresetButtons() {{
+      const lanHost = (presetLan.dataset.host || '').trim();
+      const meshHost = (presetMesh.dataset.host || '').trim();
+      if (!lanHost) {{
+        presetLan.disabled = true;
+        presetLan.classList.add('disabled');
+        tagLan.textContent = 'Server not detected';
+        tagLan.classList.remove('ok');
+      }} else {{
+        presetLan.disabled = false;
+        presetLan.classList.remove('disabled');
+        if (tagLan.textContent === 'Server not detected') tagLan.textContent = 'Recommended on Wi-Fi/LAN';
+      }}
+      if (!meshHost) {{
+        presetMesh.disabled = true;
+        presetMesh.classList.add('disabled');
+        tagMesh.textContent = 'Server not detected';
+        tagMesh.classList.remove('ok');
+      }} else {{
+        presetMesh.disabled = false;
+        presetMesh.classList.remove('disabled');
+        if (tagMesh.textContent === 'Server not detected') tagMesh.textContent = 'Remote / VPN';
+      }}
+    }}
+
     function syncLocalState() {{
+      syncPresetButtons();
       const val = (hostInput.value || '').trim();
       const lanHost = presetLan.dataset.host;
       const meshHost = presetMesh.dataset.host;
@@ -391,13 +675,15 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
     syncLocalState();
 
     presetLan.addEventListener('click', () => {{
-      if (presetLan.dataset.host) hostInput.value = presetLan.dataset.host;
+      if (presetLan.disabled || !presetLan.dataset.host) return;
+      hostInput.value = presetLan.dataset.host;
       syncLocalState();
       codeInput.focus();
     }});
 
     presetMesh.addEventListener('click', () => {{
-      if (presetMesh.dataset.host) hostInput.value = presetMesh.dataset.host;
+      if (presetMesh.disabled || !presetMesh.dataset.host) return;
+      hostInput.value = presetMesh.dataset.host;
       syncLocalState();
       codeInput.focus();
     }});
@@ -414,15 +700,26 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
         const res = await fetch('/__desktop/ping?probe=all', {{ cache: 'no-store' }});
         const data = await res.json().catch(() => ({{}}));
         const p = data.probes || {{}};
-        if (p.lan) {{
-          presetLan.classList.add('reachable');
-          tagLan.textContent = '● Online (Home LAN)';
-          tagLan.classList.add('ok');
+        if (data.lanHost) {{
+          presetLan.dataset.host = data.lanHost;
         }}
-        if (p.meshnet) {{
+        if (data.meshnetHost) {{
+          presetMesh.dataset.host = data.meshnetHost;
+        }}
+        syncPresetButtons();
+        if (p.lan && presetLan.dataset.host) {{
+          presetLan.classList.add('reachable');
+          tagLan.textContent = '● Online (' + presetLan.dataset.host + ')';
+          tagLan.classList.add('ok');
+        }} else if (presetLan.dataset.host) {{
+          tagLan.textContent = presetLan.dataset.host;
+        }}
+        if (p.meshnet && presetMesh.dataset.host) {{
           presetMesh.classList.add('reachable');
-          tagMesh.textContent = '● Online (Meshnet)';
+          tagMesh.textContent = '● Online (' + presetMesh.dataset.host + ')';
           tagMesh.classList.add('ok');
+        }} else if (presetMesh.dataset.host) {{
+          tagMesh.textContent = presetMesh.dataset.host;
         }}
         if (p.local) {{
           localhostBtn.classList.add('reachable');
@@ -483,8 +780,13 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
 </body>
 </html>"#,
         err_banner = err_banner,
-        server_host = html_escape(&cfg.server_host),
-        fallback_host = html_escape(&cfg.fallback_host),
+        saved_lan_host = html_escape(saved_lan),
+        saved_meshnet_host = html_escape(saved_mesh),
+        lan_disabled_attr = lan_disabled_attr,
+        mesh_disabled_attr = mesh_disabled_attr,
+        lan_initial_tag = lan_initial_tag,
+        mesh_initial_tag = mesh_initial_tag,
+        server_host_display = html_escape(&server_host_display),
     )
 }
 

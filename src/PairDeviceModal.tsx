@@ -147,7 +147,7 @@ export function PairDeviceModal({ onClose }: { onClose: () => void }) {
     } catch {}
   };
 
-  const host = pair?.meshnetHost || meta?.meshnetHost || "";
+  const host = pair?.meshnetHost || meta?.meshnetHost || pair?.meshnetIp || meta?.meshnetIp || "";
   const ip = pair?.meshnetIp || meta?.meshnetIp || "";
   const lanIp = pair?.lanIp || meta?.lanIp || "";
   const port = meta?.port || 4180;
@@ -366,16 +366,29 @@ export function PairDeviceModal({ onClose }: { onClose: () => void }) {
 
         <div className="preview" style={{ marginBottom: 0 }}>
           <div className="field-label">ACTIVE SERVER ADDRESSES (HOME LAN + MESHNET)</div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", marginTop: 4 }}>
-            <code>https://{lanIp}:{port}</code>
-            <span className="muted">(Home LAN) ·</span>
-            <code>https://{host}:{port}</code>
-            <span className="muted">or</span>
-            <code>https://{ip}:{port}</code>
-            <span className="muted">(Meshnet)</span>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", marginTop: 4 }} data-testid="pair-server-addresses">
+            {lanIp && (
+              <>
+                <code>{lanIp}:{port}</code>
+                <span className="muted">(Home LAN)</span>
+              </>
+            )}
+            {(host || ip) && (
+              <>
+                {lanIp && <span className="muted">·</span>}
+                <code>{host}:{port}</code>
+                {ip && ip !== host && (
+                  <>
+                    <span className="muted">or</span>
+                    <code>{ip}:{port}</code>
+                  </>
+                )}
+                <span className="muted">(Meshnet)</span>
+              </>
+            )}
           </div>
           <div className="muted small" style={{ marginTop: 4 }}>
-            Name-constrained Root CA (RFC-1918 + CGNAT ranges) + HttpOnly device token cookie.
+            Type either address into the Desktop App&apos;s Server Address field along with the 6-digit code above.
           </div>
         </div>
 

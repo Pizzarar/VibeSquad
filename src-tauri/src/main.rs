@@ -59,29 +59,45 @@ fn default_fallback_host() -> String {
     DEFAULT_MESHNET_HOST.to_string()
 }
 
+fn default_update_channel() -> String {
+    "stable".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopConfig {
+    #[serde(default)]
+    pub server_mode: String,
     #[serde(default = "default_server_host")]
     pub server_host: String,
     #[serde(default = "default_fallback_host")]
     pub fallback_host: String,
+    #[serde(default)]
+    pub last_lan_host: String,
+    #[serde(default)]
+    pub last_meshnet_host: String,
     #[serde(default)]
     pub device_token: String,
     #[serde(default)]
     pub start_at_login: bool,
     #[serde(default)]
     pub last_hash: String,
+    #[serde(default = "default_update_channel")]
+    pub update_channel: String,
 }
 
 impl Default for DesktopConfig {
     fn default() -> Self {
         Self {
+            server_mode: String::new(),
             server_host: default_server_host(),
             fallback_host: default_fallback_host(),
+            last_lan_host: String::new(),
+            last_meshnet_host: String::new(),
             device_token: String::new(),
             start_at_login: false,
             last_hash: String::new(),
+            update_channel: default_update_channel(),
         }
     }
 }
@@ -129,11 +145,19 @@ pub fn load_config() -> DesktopConfig {
     let path = config_file_path();
     if let Ok(raw) = fs::read_to_string(&path) {
         if let Ok(mut cfg) = serde_json::from_str::<DesktopConfig>(&raw) {
-            if cfg.server_host.trim().is_empty() {
+            if cfg.server_host.trim().is_empty() && cfg.server_mode != "remote" {
                 cfg.server_host = default_server_host();
             }
             if cfg.fallback_host.trim().is_empty() {
                 cfg.fallback_host = default_fallback_host();
+            }
+            if cfg.update_channel != "beta" && cfg.update_channel != "stable" {
+                cfg.update_channel = default_update_channel();
+            }
+            if cfg.server_mode.trim().is_empty() {
+                if !cfg.device_token.trim().is_empty() || !is_local_host(&cfg.server_host) {
+                    cfg.server_mode = "remote".to_string();
+                }
             }
             return cfg;
         }
@@ -141,6 +165,31 @@ pub fn load_config() -> DesktopConfig {
     let cfg = DesktopConfig::default();
     let _ = save_config(&cfg);
     cfg
+}
+
+pub fn is_lan_host(host: &str) -> bool {
+    let ip_part = normalize_host(host)
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let parts: Vec<u16> = ip_part
+        .split('.')
+        .filter_map(|p| p.parse::<u16>().ok())
+        .collect();
+    if parts.len() == 4 {
+        if parts[0] == 192 && parts[1] == 168 {
+            return true;
+        }
+        if parts[0] == 10 {
+            return true;
+        }
+        if parts[0] == 172 && (16..=31).contains(&parts[1]) {
+            return true;
+        }
+    }
+    false
 }
 
 pub fn save_config(cfg: &DesktopConfig) -> Result<(), String> {
@@ -272,8 +321,8 @@ pub struct SharedAppState {
     pub quitting: AtomicBool,
     pub needs_count: AtomicUsize,
     pub local_port: AtomicUsize,
-    pub http_client: reqwest::Client,
-    pub ws_tls_connector: Connector,
+    pub http_client: RwLock<reqwest::Client>,
+    pub ws_tls_connector: RwLock<Connector>,
     pub app_handle: RwLock<Option<AppHandle>>,
     pub tray_needs_item: RwLock<Option<MenuItem<tauri::Wry>>>,
     pub tracker: Mutex<AgentAlertTracker>,
@@ -282,19 +331,41 @@ pub struct SharedAppState {
 }
 
 impl SharedAppState {
+    pub fn client(&self) -> reqwest::Client {
+        self.http_client.read().unwrap().clone()
+    }
+
+    pub fn ws_connector(&self) -> Connector {
+        self.ws_tls_connector.read().unwrap().clone()
+    }
+
+    pub fn reload_tls(&self) {
+        if let Ok((http, ws)) = build_http_and_ws_clients() {
+            *self.http_client.write().unwrap() = http;
+            *self.ws_tls_connector.write().unwrap() = ws;
+        }
+    }
+
     /// Builds the ordered candidate list for remote servers:
     /// `active_upstream` (if valid), configured `server_host`, Home LAN, Meshnet host, and Meshnet IP, deduplicated.
     pub fn candidate_hosts(&self) -> Vec<String> {
         let cfg = self.config.read().unwrap().clone();
+        if cfg.server_mode.trim().is_empty() {
+            return Vec::new();
+        }
         let primary = normalize_host(&cfg.server_host);
-        if is_local_host(&primary) {
+        if cfg.server_mode == "local" || (cfg.server_mode != "remote" && is_local_host(&primary)) {
             return vec![primary];
         }
-        let fallback = normalize_host(&cfg.fallback_host);
+        let fallback = if cfg.fallback_host.trim().is_empty() {
+            String::new()
+        } else {
+            normalize_host(&cfg.fallback_host)
+        };
         let mut list = Vec::new();
         let push_unique = |vec: &mut Vec<String>, h: String| {
             let trimmed = h.trim().to_string();
-            if !trimmed.is_empty() && !vec.contains(&trimmed) {
+            if !trimmed.is_empty() && !is_local_host(&trimmed) && !vec.contains(&trimmed) {
                 vec.push(trimmed);
             }
         };
@@ -305,8 +376,10 @@ impl SharedAppState {
             }
         }
         push_unique(&mut list, primary);
+        push_unique(&mut list, cfg.last_lan_host.clone());
         push_unique(&mut list, DEFAULT_LAN_HOST.to_string());
         push_unique(&mut list, fallback);
+        push_unique(&mut list, cfg.last_meshnet_host.clone());
         push_unique(&mut list, DEFAULT_MESHNET_HOST.to_string());
         push_unique(&mut list, DEFAULT_MESHNET_IP_HOST.to_string());
         list
@@ -392,12 +465,30 @@ pub fn render_tray_icon(needs_count: usize) -> Result<Image<'static>, String> {
     Ok(Image::new_owned(raw, width, height))
 }
 
-/// Root CAs to trust besides the public roots: the embedded one (if the build had it) and the
-/// locally generated `~/.vibesquad/tls/ca.crt`.
+/// Root CAs to trust besides the public roots: the embedded one (if the build had it),
+/// any remote CAs pinned during pairing in `config_dir()/trusted-cas/`, and the locally
+/// generated `~/.vibesquad/tls/ca.crt`.
+fn trusted_cas_dir() -> PathBuf {
+    config_dir().join("trusted-cas")
+}
+
 fn load_ca_pems() -> Vec<Vec<u8>> {
     let mut pems: Vec<Vec<u8>> = Vec::new();
     if !PINNED_CA_PEM.is_empty() {
         pems.push(PINNED_CA_PEM.to_vec());
+    }
+    let cas_dir = trusted_cas_dir();
+    if let Ok(entries) = fs::read_dir(&cas_dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.extension().and_then(|e| e.to_str()) == Some("crt") {
+                if let Ok(bytes) = fs::read(&p) {
+                    if !bytes.is_empty() && !pems.contains(&bytes) {
+                        pems.push(bytes);
+                    }
+                }
+            }
+        }
     }
     let home = std::env::var("VIBESQUAD_HOME")
         .map(PathBuf::from)
@@ -416,6 +507,53 @@ fn load_ca_pems() -> Vec<Vec<u8>> {
         }
     }
     pems
+}
+
+/// Fetches `http://{host}/ca.crt` from the server's HTTP/HTTPS mux during pairing, validates it as a
+/// PEM certificate, saves it under `config_dir()/trusted-cas/`, and reloads the shared TLS clients.
+async fn fetch_and_pin_remote_ca(state: &Arc<SharedAppState>, host: &str) -> bool {
+    if is_local_host(host) {
+        return false;
+    }
+    let url = format!("http://{}/ca.crt", host);
+    let resp = match state
+        .client()
+        .get(&url)
+        .timeout(Duration::from_millis(2000))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => r,
+        _ => return false,
+    };
+    let bytes = match resp.bytes().await {
+        Ok(b) if !b.is_empty() && b.len() <= 64 * 1024 => b.to_vec(),
+        _ => return false,
+    };
+    let mut reader = BufReader::new(bytes.as_slice());
+    let mut valid_cert = false;
+    for cert in rustls_pemfile::certs(&mut reader) {
+        if cert.is_ok() {
+            valid_cert = true;
+            break;
+        }
+    }
+    if !valid_cert {
+        return false;
+    }
+    let safe_name: String = host
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' })
+        .collect();
+    let dir = trusted_cas_dir();
+    if fs::create_dir_all(&dir).is_ok() {
+        let file = dir.join(format!("{}.crt", safe_name));
+        if fs::write(&file, &bytes).is_ok() {
+            state.reload_tls();
+            return true;
+        }
+    }
+    false
 }
 
 fn build_http_and_ws_clients() -> Result<(reqwest::Client, Connector), String> {
@@ -484,9 +622,11 @@ fn extract_cookie_token(headers: &reqwest::header::HeaderMap, cookie_name: &str)
 async fn handle_desktop_status(State(state): State<Arc<SharedAppState>>) -> impl IntoResponse {
     let cfg = state.config.read().unwrap().clone();
     let active = state.active_upstream.read().unwrap().clone();
-    let is_local = is_local_host(&cfg.server_host);
-    let paired = if is_local {
-        check_local_server_healthy(&state.http_client, &cfg.server_host)
+    let is_local = cfg.server_mode == "local" || (cfg.server_mode != "remote" && is_local_host(&cfg.server_host));
+    let paired = if cfg.server_mode.trim().is_empty() {
+        false
+    } else if is_local {
+        check_local_server_healthy(&state.client(), &cfg.server_host)
             .await
             .is_ok()
     } else {
@@ -494,16 +634,81 @@ async fn handle_desktop_status(State(state): State<Arc<SharedAppState>>) -> impl
     };
     Json(json!({
         "ok": true,
+        "serverMode": cfg.server_mode,
         "serverHost": cfg.server_host,
         "fallbackHost": cfg.fallback_host,
+        "lastLanHost": cfg.last_lan_host,
+        "lastMeshnetHost": cfg.last_meshnet_host,
         "activeHost": active,
         "paired": paired,
         "setupMode": state.setup_mode.load(Ordering::SeqCst),
         "needsCount": state.needs_count.load(Ordering::SeqCst),
         "startAtLogin": cfg.start_at_login,
+        "updateChannel": cfg.update_channel,
         "localPort": state.local_port.load(Ordering::SeqCst),
         "configDir": config_dir().to_string_lossy(),
     }))
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct ChooseModePayload {
+    #[serde(default)]
+    mode: String,
+}
+
+async fn handle_desktop_choose_mode(
+    State(state): State<Arc<SharedAppState>>,
+    Json(payload): Json<ChooseModePayload>,
+) -> Response {
+    let mode = payload.mode.trim().to_lowercase();
+    if mode == "local" {
+        {
+            let mut cfg = state.config.write().unwrap();
+            cfg.server_mode = "local".to_string();
+            cfg.server_host = default_server_host();
+            let _ = save_config(&cfg);
+        }
+        state.setup_mode.store(false, Ordering::SeqCst);
+        ensure_local_server_running(&state).await;
+        *state.active_upstream.write().unwrap() = Some(default_server_host());
+        return Json(json!({
+            "ok": true,
+            "serverMode": "local",
+            "redirect": "/"
+        }))
+        .into_response();
+    }
+    if mode == "remote" {
+        stop_managed_server(&state);
+        {
+            let mut cfg = state.config.write().unwrap();
+            cfg.server_mode = "remote".to_string();
+            if is_local_host(&cfg.server_host) {
+                cfg.server_host = if !cfg.last_lan_host.trim().is_empty() {
+                    cfg.last_lan_host.trim().to_string()
+                } else if !cfg.last_meshnet_host.trim().is_empty() {
+                    cfg.last_meshnet_host.trim().to_string()
+                } else {
+                    String::new()
+                };
+            }
+            let _ = save_config(&cfg);
+        }
+        *state.active_upstream.write().unwrap() = None;
+        state.setup_mode.store(true, Ordering::SeqCst);
+        return Json(json!({
+            "ok": true,
+            "serverMode": "remote",
+            "redirect": "/__desktop/setup"
+        }))
+        .into_response();
+    }
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "ok": false, "error": "mode must be 'local' or 'remote'" })),
+    )
+        .into_response()
 }
 
 async fn handle_desktop_ping(
@@ -516,37 +721,64 @@ async fn handle_desktop_ping(
         .map(|q| q.contains("probe=all"))
         .unwrap_or(false);
 
+    let cfg = state.config.read().unwrap().clone();
+    let lan_target = if !cfg.last_lan_host.trim().is_empty() {
+        cfg.last_lan_host.trim().to_string()
+    } else {
+        DEFAULT_LAN_HOST.to_string()
+    };
+    let mesh_target = if !cfg.last_meshnet_host.trim().is_empty() {
+        cfg.last_meshnet_host.trim().to_string()
+    } else if !cfg.fallback_host.trim().is_empty() {
+        cfg.fallback_host.trim().to_string()
+    } else {
+        DEFAULT_MESHNET_HOST.to_string()
+    };
+
     let mut lan_ok = false;
     let mut mesh_ok = false;
     let mut local_ok = false;
 
     if want_all {
-        let c1 = state.http_client.clone();
-        let c2 = state.http_client.clone();
-        let c3 = state.http_client.clone();
+        let c1 = state.client();
+        let c2 = state.client();
+        let c3 = state.client();
+        let lan_t = lan_target.clone();
+        let mesh_t = mesh_target.clone();
         let (r_lan, r_mesh, r_loc) = tokio::join!(
             async move {
-                c1.get(format!("https://{}/ca.crt", DEFAULT_LAN_HOST))
+                if lan_t.is_empty() {
+                    return false;
+                }
+                c1.get(format!("http://{}/ca.crt", lan_t))
                     .timeout(Duration::from_millis(1200))
                     .send()
                     .await
-                    .is_ok()
+                    .map(|r| r.status().is_success())
+                    .unwrap_or(false)
             },
             async move {
+                if mesh_t.is_empty() {
+                    return false;
+                }
                 if c2
-                    .get(format!("https://{}/ca.crt", DEFAULT_MESHNET_HOST))
+                    .get(format!("http://{}/ca.crt", mesh_t))
                     .timeout(Duration::from_millis(1200))
                     .send()
                     .await
-                    .is_ok()
+                    .map(|r| r.status().is_success())
+                    .unwrap_or(false)
                 {
                     true
-                } else {
-                    c2.get(format!("https://{}/ca.crt", DEFAULT_MESHNET_IP_HOST))
+                } else if !DEFAULT_MESHNET_IP_HOST.is_empty() {
+                    c2.get(format!("http://{}/ca.crt", DEFAULT_MESHNET_IP_HOST))
                         .timeout(Duration::from_millis(1200))
                         .send()
                         .await
-                        .is_ok()
+                        .map(|r| r.status().is_success())
+                        .unwrap_or(false)
+                } else {
+                    false
                 }
             },
             async move { check_local_server_healthy(&c3, "127.0.0.1:4180").await.is_ok() }
@@ -559,7 +791,7 @@ async fn handle_desktop_ping(
     let candidates = state.candidate_hosts();
     for host in candidates {
         if is_local_host(&host) {
-            if check_local_server_healthy(&state.http_client, &host)
+            if check_local_server_healthy(&state.client(), &host)
                 .await
                 .is_ok()
             {
@@ -569,6 +801,8 @@ async fn handle_desktop_ping(
                     "reachable": true,
                     "status": 200,
                     "activeHost": host,
+                    "lanHost": lan_target,
+                    "meshnetHost": mesh_target,
                     "probes": {
                         "lan": lan_ok,
                         "meshnet": mesh_ok,
@@ -580,7 +814,7 @@ async fn handle_desktop_ping(
         }
         let url = format!("https://{}/ca.crt", host);
         if let Ok(resp) = state
-            .http_client
+            .client()
             .get(&url)
             .timeout(Duration::from_millis(1500))
             .send()
@@ -592,9 +826,11 @@ async fn handle_desktop_ping(
                 "reachable": true,
                 "status": resp.status().as_u16(),
                 "activeHost": host,
+                "lanHost": lan_target,
+                "meshnetHost": mesh_target,
                 "probes": {
-                    "lan": lan_ok || host == DEFAULT_LAN_HOST,
-                    "meshnet": mesh_ok || host == DEFAULT_MESHNET_HOST || host == DEFAULT_MESHNET_IP_HOST,
+                    "lan": lan_ok || host == lan_target,
+                    "meshnet": mesh_ok || host == mesh_target || host == DEFAULT_MESHNET_IP_HOST,
                     "local": local_ok,
                 }
             }));
@@ -603,6 +839,8 @@ async fn handle_desktop_ping(
     Json(json!({
         "ok": true,
         "reachable": false,
+        "lanHost": lan_target,
+        "meshnetHost": mesh_target,
         "probes": {
             "lan": lan_ok,
             "meshnet": mesh_ok,
@@ -686,9 +924,27 @@ async fn handle_desktop_pair(
         normalize_host(&raw_host)
     };
 
-    // Localhost mode: verify health & dist/index.html BEFORE saving or treating as paired!
+    if server_host.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "ok": false,
+                "error": "Please enter your server PC's address (shown in its Pair a device dialog)."
+            })),
+        )
+            .into_response();
+    }
+
+    // Localhost mode: start or verify health & dist/index.html BEFORE saving or treating as paired!
     if is_local_host(&server_host) {
-        if let Err(_reason) = check_local_server_healthy(&state.http_client, &server_host).await {
+        {
+            let mut cfg = state.config.write().unwrap();
+            cfg.server_mode = "local".to_string();
+            cfg.server_host = server_host.clone();
+            let _ = save_config(&cfg);
+        }
+        ensure_local_server_running(&state).await;
+        if let Err(_reason) = check_local_server_healthy(&state.client(), &server_host).await {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({
@@ -697,11 +953,6 @@ async fn handle_desktop_pair(
                 })),
             )
                 .into_response();
-        }
-        {
-            let mut cfg = state.config.write().unwrap();
-            cfg.server_host = server_host.clone();
-            let _ = save_config(&cfg);
         }
         *state.active_upstream.write().unwrap() = Some(server_host.clone());
         state.setup_mode.store(false, Ordering::SeqCst);
@@ -717,7 +968,8 @@ async fn handle_desktop_pair(
             .into_response();
     }
 
-    // Remote server mode: clean 6-digit code (strip spaces or hyphens if 6 digits)
+    // Remote server mode: stop any local managed server and clean 6-digit code
+    stop_managed_server(&state);
     let clean_code = {
         let compact: String = raw_code
             .chars()
@@ -741,23 +993,37 @@ async fn handle_desktop_pair(
             .into_response();
     }
 
-    // Build ordered candidate list: configured server_host, then Home LAN, then Meshnet host & IP
-    let fallback_host = state.config.read().unwrap().fallback_host.clone();
+    // Build ordered candidate list: configured server_host, then saved/default Home LAN and Meshnet hosts
+    let (fallback_host, last_lan, last_mesh) = {
+        let cfg = state.config.read().unwrap();
+        (
+            cfg.fallback_host.clone(),
+            cfg.last_lan_host.clone(),
+            cfg.last_meshnet_host.clone(),
+        )
+    };
     let mut try_hosts = Vec::new();
     let push_unique = |vec: &mut Vec<String>, h: String| {
         let trimmed = h.trim().to_string();
-        if !trimmed.is_empty() && !vec.contains(&trimmed) {
+        if !trimmed.is_empty() && !is_local_host(&trimmed) && !vec.contains(&trimmed) {
             vec.push(trimmed);
         }
     };
     push_unique(&mut try_hosts, server_host.clone());
+    push_unique(&mut try_hosts, last_lan);
     push_unique(&mut try_hosts, DEFAULT_LAN_HOST.to_string());
-    push_unique(&mut try_hosts, normalize_host(&fallback_host));
+    if !fallback_host.trim().is_empty() {
+        push_unique(&mut try_hosts, normalize_host(&fallback_host));
+    }
+    push_unique(&mut try_hosts, last_mesh);
     push_unique(&mut try_hosts, DEFAULT_MESHNET_HOST.to_string());
     push_unique(&mut try_hosts, DEFAULT_MESHNET_IP_HOST.to_string());
 
     let mut last_conn_err = String::new();
     for host in &try_hosts {
+        // Auto-fetch and pin the server's Root CA (`http://{host}/ca.crt`) before the HTTPS pair request.
+        let _ = fetch_and_pin_remote_ca(&state, host).await;
+
         let mut pair_url = match url::Url::parse(&format!("https://{}/pair", host)) {
             Ok(u) => u,
             Err(e) => {
@@ -771,9 +1037,9 @@ async fn handle_desktop_pair(
             .append_pair("name", "Windows · VibeSquad App");
 
         match state
-            .http_client
+            .client()
             .get(pair_url.as_str())
-            .header("User-Agent", "VibeSquad-Desktop/0.1.0 (Windows)")
+            .header("User-Agent", "VibeSquad-Desktop/0.1.1 (Windows)")
             .timeout(Duration::from_millis(2500))
             .send()
             .await
@@ -783,7 +1049,13 @@ async fn handle_desktop_pair(
                 if let Some(token) = extract_cookie_token(resp.headers(), "vs_device") {
                     {
                         let mut cfg = state.config.write().unwrap();
-                        cfg.server_host = server_host.clone();
+                        cfg.server_mode = "remote".to_string();
+                        cfg.server_host = host.clone();
+                        if is_lan_host(host) {
+                            cfg.last_lan_host = host.clone();
+                        } else {
+                            cfg.last_meshnet_host = host.clone();
+                        }
                         cfg.device_token = token;
                         let _ = save_config(&cfg);
                     }
@@ -794,7 +1066,7 @@ async fn handle_desktop_pair(
                         Json(json!({
                             "ok": true,
                             "redirect": "/",
-                            "serverHost": server_host,
+                            "serverHost": host,
                             "activeHost": host,
                             "deviceTokenSaved": true
                         })),
@@ -1133,7 +1405,7 @@ async fn proxy_websocket(
                     ws_req,
                     None,
                     false,
-                    Some(state.ws_tls_connector.clone()),
+                    Some(state.ws_connector()),
                 ),
             )
             .await
@@ -1236,11 +1508,14 @@ fn server_pid_path() -> PathBuf {
 
 /// Starts the bundled VibeSquad server when the configured local host is not healthy. Reuses a healthy one.
 async fn ensure_local_server_running(state: &Arc<SharedAppState>) {
-    let host = state.config.read().unwrap().server_host.clone();
-    if !is_local_host(&host) {
+    let (mode, host) = {
+        let cfg = state.config.read().unwrap();
+        (cfg.server_mode.clone(), cfg.server_host.clone())
+    };
+    if mode != "local" || !is_local_host(&host) {
         return;
     }
-    if check_local_server_healthy(&state.http_client, &host).await.is_ok() {
+    if check_local_server_healthy(&state.client(), &host).await.is_ok() {
         return;
     }
     // Already spawned by us and still alive: just wait for it below.
@@ -1280,7 +1555,7 @@ async fn ensure_local_server_running(state: &Arc<SharedAppState>) {
         }
     }
     for _ in 0..25 {
-        if check_local_server_healthy(&state.http_client, &host).await.is_ok() {
+        if check_local_server_healthy(&state.client(), &host).await.is_ok() {
             return;
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -1310,9 +1585,14 @@ async fn proxy_http_handler(
         .unwrap_or_else(|| "/".to_string());
 
     let cfg = state.config.read().unwrap().clone();
-    let is_local = is_local_host(&cfg.server_host);
+    let is_local = cfg.server_mode == "local" || (cfg.server_mode != "remote" && is_local_host(&cfg.server_host));
     let is_root_nav = method == Method::GET && (path == "/" || path == "/index.html");
     let query_setup = uri.query().map(|q| q.contains("setup=1")).unwrap_or(false);
+
+    // First launch: if no mode choice has been saved yet and setup=1 wasn't explicitly requested, show the mode choice screen before spawning anything!
+    if is_root_nav && cfg.server_mode.trim().is_empty() && !query_setup && !state.setup_mode.load(Ordering::SeqCst) {
+        return html_no_store_response(StatusCode::OK, ui_pages::render_mode_choice_page(&cfg, None));
+    }
 
     // If setup mode is requested or remote server has no deviceToken yet, show Connect & Pair screen on GET /
     if is_root_nav && (query_setup || state.setup_mode.load(Ordering::SeqCst) || (!is_local && cfg.device_token.trim().is_empty())) {
@@ -1322,7 +1602,7 @@ async fn proxy_http_handler(
     // If configured for localhost, verify localhost is actually healthy before proxying root navigation
     if is_root_nav && is_local {
         ensure_local_server_running(&state).await;
-        if check_local_server_healthy(&state.http_client, &cfg.server_host)
+        if check_local_server_healthy(&state.client(), &cfg.server_host)
             .await
             .is_err()
         {
@@ -1361,7 +1641,7 @@ async fn proxy_http_handler(
             Err(_) => reqwest::Method::GET,
         };
 
-        let mut builder = state.http_client.request(req_method, &target_url);
+        let mut builder = state.client().request(req_method, &target_url);
 
         for (k, v) in req_headers.iter() {
             let name_lower = k.as_str().to_lowercase();
@@ -1616,6 +1896,7 @@ async fn guard_local_request(
 fn build_router(state: Arc<SharedAppState>) -> Router {
     Router::new()
         .route("/__desktop/status", get(handle_desktop_status))
+        .route("/__desktop/choose-mode", post(handle_desktop_choose_mode))
         .route("/__desktop/ping", get(handle_desktop_ping))
         .route("/__desktop/setup", get(handle_desktop_setup))
         .route("/__desktop/unpair", post(handle_desktop_unpair))
@@ -1645,8 +1926,8 @@ fn main() {
         quitting: AtomicBool::new(false),
         needs_count: AtomicUsize::new(0),
         local_port: AtomicUsize::new(4189),
-        http_client,
-        ws_tls_connector,
+        http_client: RwLock::new(http_client),
+        ws_tls_connector: RwLock::new(ws_tls_connector),
         app_handle: RwLock::new(None),
         tray_needs_item: RwLock::new(None),
         tracker: Mutex::new(AgentAlertTracker::default()),

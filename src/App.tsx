@@ -2,7 +2,7 @@ import { FIRST_RUN_DONE_KEY, FirstRunModal, fetchFirstRunStatus, type FirstRunSt
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { ProviderQuotaView } from "./antigravity";
-import { LEGACY_NEEDS_LABEL } from "./userName";
+import { LEGACY_NEEDS_LABEL, setLanExposureState, useExposedIpsStore } from "./userName";
 import { DEMO, archiveAgent, detachAgent, getPaseoState, loadArchived, retireAgent, setNeedsYou, updateAgent, upsertLocalAgent, usePaseo } from "./paseo";
 import {
   AGENT_TYPE_LABEL,
@@ -1220,22 +1220,24 @@ function onShortcut(e: KeyboardEvent) {
 const LICENSES_FALLBACK =
   "Paseo (@getpaseo/client, @getpaseo/protocol) — Apache-2.0, Copyright (c) 2025-present Mohamed Boudra. Full third-party license list unavailable offline.";
 
-/** Reports which non-loopback addresses the server listens on (empty unless --lan / VIBESQUAD_LAN=1). */
+/** Reports which non-loopback addresses the server listens on (empty unless --lan / VIBESQUAD_LAN=1 / Settings). */
 function useExposedIps(): string[] {
-  const [ips, setIps] = useState<string[]>([]);
+  const storeIps = useExposedIpsStore();
   useEffect(() => {
     let alive = true;
     fetch("/__vibesquad/health")
       .then((r) => r.json())
       .then((h) => {
-        if (alive && Array.isArray(h?.exposedIps)) setIps(h.exposedIps.map(String));
+        if (alive && Array.isArray(h?.exposedIps)) {
+          setLanExposureState(Boolean(h.lanEnabled), h.exposedIps.map(String));
+        }
       })
       .catch(() => {});
     return () => {
       alive = false;
     };
   }, []);
-  return ips;
+  return storeIps;
 }
 
 function AboutLicensesModal({ onClose, onChecklist }: { onClose: () => void; onChecklist: () => void }) {

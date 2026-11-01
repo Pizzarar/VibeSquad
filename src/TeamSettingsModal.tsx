@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getUserName, saveUserName } from "./userName";
+import { getUserName, saveLanEnabled, saveUserName, useExposedIpsStore, useLanEnabled } from "./userName";
 import {
   AGENT_TYPE_NAME,
   BRAINSTORM_RESTART_DEFAULT,
@@ -250,6 +250,8 @@ export function TeamSettingsModal({ onClose }: { onClose: () => void }) {
   };
 
   const [nameDraft, setNameDraft] = useState(() => (getUserName() === "you" ? "" : getUserName()));
+  const lanEnabled = useLanEnabled();
+  const exposedIps = useExposedIpsStore();
   const uiScale = useUiScale();
   const uiScalePct = Math.round(uiScale * 100);
   const patch = (i: number, p: Partial<TeamDef>) => setTeams((ts) => ts.map((t, j) => (j === i ? { ...t, ...p } : t)));
@@ -313,6 +315,28 @@ export function TeamSettingsModal({ onClose }: { onClose: () => void }) {
             saveUserName(e.target.value);
           }}
         />
+      </section>
+      <section className="ts-team" data-testid="lan-access-section">
+        <div className="ts-scale-head">
+          <div>
+            <div className="field-label">ALLOW OTHER DEVICES (HOME LAN / MESHNET)</div>
+            <div className="muted small">
+              Saved in <code>~/.vibesquad/settings.json</code> so restarts keep your choice. Pairing with a 6-digit code is still required.
+              {lanEnabled && exposedIps.length > 0 ? ` Active on: ${exposedIps.join(", ")}.` : ""}
+            </div>
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontWeight: 700 }}>
+            <input
+              type="checkbox"
+              data-testid="settings-lan-enabled-toggle"
+              checked={lanEnabled}
+              onChange={(e) => {
+                void saveLanEnabled(e.target.checked);
+              }}
+            />
+            <span>{lanEnabled ? "Enabled" : "Off (loopback only)"}</span>
+          </label>
+        </div>
       </section>
       <section className="ts-team ts-scale-section" data-testid="ui-scale-section">
         <div className="ts-scale-head">

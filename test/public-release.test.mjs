@@ -365,11 +365,11 @@ describe("needs-you rename", () => {
       });
 
     test("defaults to 'you', then persists a new name to settings.json", async () => {
-      assert.deepEqual((await call("GET")).body, { ok: true, userName: "you" });
+      assert.deepEqual((await call("GET")).body, { ok: true, userName: "you", lanEnabled: false, activeLanEnabled: false, exposedIps: [] });
       const saved = await call("POST", { userName: "Alex" });
-      assert.deepEqual(saved.body, { ok: true, userName: "Alex" });
+      assert.deepEqual(saved.body, { ok: true, userName: "Alex", lanEnabled: false, activeLanEnabled: false, exposedIps: [] });
       assert.equal(JSON.parse(readFileSync(join(home, "settings.json"), "utf8")).userName, "Alex");
-      assert.deepEqual((await call("GET")).body, { ok: true, userName: "Alex" });
+      assert.deepEqual((await call("GET")).body, { ok: true, userName: "Alex", lanEnabled: false, activeLanEnabled: false, exposedIps: [] });
     });
   });
 });

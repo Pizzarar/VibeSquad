@@ -30,6 +30,7 @@ import "./inbox.mjs";
 import { installVsShim } from "../cli/vs.mjs";
 import { startPushWatcher } from "./push.mjs";
 import { ensurePaseoDaemon } from "./first-run.mjs";
+import { loadUserSettings } from "./user-settings.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
 const distDir = join(rootDir, "dist");
@@ -37,8 +38,17 @@ const fallbackDistDir = rootDir.includes(".worktrees") ? resolve(rootDir, "../..
 const port = Number(process.env.VIBESQUAD_PORT || 4180);
 const url = `http://localhost:${port}`;
 const wantOpen = process.argv.includes("--open");
-// Public default is loopback only; LAN/meshnet listeners are opt-in.
-const lanEnabled = process.argv.includes("--lan") || ["1", "true"].includes(String(process.env.VIBESQUAD_LAN ?? "").toLowerCase());
+
+// Public default is loopback only; LAN/meshnet listeners are opt-in via CLI/env or ~/.vibesquad/settings.json.
+export function resolveLanEnabled({ argv = process.argv, env = process.env, settings = loadUserSettings() } = {}) {
+  if (argv.includes("--no-lan")) return false;
+  if (argv.includes("--lan")) return true;
+  const envVal = String(env.VIBESQUAD_LAN ?? "").trim().toLowerCase();
+  if (envVal === "1" || envVal === "true") return true;
+  if (envVal === "0" || envVal === "false") return false;
+  return Boolean(settings?.lanEnabled);
+}
+const lanEnabled = resolveLanEnabled();
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -455,27 +465,41 @@ if (isMain) {
   void ensurePaseoDaemon({ listen: readPaseo(rootDir).listen });
   server.listen(port, "127.0.0.1", () => {
     console.log(`VibeSquad serving ${distDir} on ${url}`);
-    const { meshnetIp, meshnetHost, lanIp } = netConfig();
-    const bindIps = lanEnabled ? [...new Set([lanIp, meshnetIp].filter((ip) => ip && ip !== "127.0.0.1"))] : [];
-    setExposure(lanEnabled, bindIps);
-    if (!lanEnabled) console.log("Loopback only. Pass --lan (or VIBESQUAD_LAN=1) to listen on LAN/meshnet.");
-    if (bindIps.length > 0) {
-      try {
-        const tls = getTls();
-        for (const ip of bindIps) {
-          const { mux } = createMeshnetMux({ port, meshnetHost, tls });
-          mux.on("error", (err) => {
-            console.warn(`TLS/HTTP mux listener on ${ip}:${port} failed:`, err.message);
-          });
-          mux.listen(port, ip, () => {
-            const label = ip === lanIp ? `Home LAN https://${ip}:${port}` : `Meshnet https://${meshnetHost}:${port} (${ip}:${port})`;
-            console.log(`VibeSquad HTTPS/HTTP mux serving on ${label}`);
-          });
-        }
-      } catch (err) {
-        console.warn("TLS setup skipped:", err);
+    let activeMuxes = [];
+    const applyLanListeners = (wantLan) => {
+      for (const m of activeMuxes) {
+        try {
+          m.close();
+        } catch {}
       }
-    }
+      activeMuxes = [];
+      const { meshnetIp, meshnetHost, lanIp } = netConfig();
+      const bindIps = wantLan ? [...new Set([lanIp, meshnetIp].filter((ip) => ip && ip !== "127.0.0.1"))] : [];
+      setExposure(wantLan, bindIps, applyLanListeners);
+      if (!wantLan) {
+        console.log("Loopback only. Pass --lan (or VIBESQUAD_LAN=1) or enable in Settings to listen on LAN/meshnet.");
+        return;
+      }
+      if (bindIps.length > 0) {
+        try {
+          const tls = getTls();
+          for (const ip of bindIps) {
+            const { mux } = createMeshnetMux({ port, meshnetHost, tls });
+            mux.on("error", (err) => {
+              console.warn(`TLS/HTTP mux listener on ${ip}:${port} failed:`, err.message);
+            });
+            mux.listen(port, ip, () => {
+              const label = ip === lanIp ? `Home LAN https://${ip}:${port}` : `Meshnet https://${meshnetHost}:${port} (${ip}:${port})`;
+              console.log(`VibeSquad HTTPS/HTTP mux serving on ${label}`);
+            });
+            activeMuxes.push(mux);
+          }
+        } catch (err) {
+          console.warn("TLS setup skipped:", err);
+        }
+      }
+    };
+    applyLanListeners(lanEnabled);
     startPushWatcher(rootDir);
 
     if (wantOpen) void openBrowser();
