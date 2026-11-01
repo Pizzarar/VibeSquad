@@ -3,13 +3,13 @@ import type { PaseoAgent } from "@getpaseo/client";
 import { buildAgentDeepLink } from "@getpaseo/protocol/agent-deep-link";
 import {
   attachFiles,
-  clearNeedsAub,
+  clearNeedsYou,
   client,
   DEMO,
   SERVER_ID,
   sendMessage,
-  setNeedsAub,
-  snoozeNeedsAub,
+  setNeedsYou,
+  snoozeNeedsYou,
   stopAgent,
   updateAgent,
   upsertLocalAgent,
@@ -52,6 +52,7 @@ import {
   shouldComposerSubmit,
 } from "./IdeaInbox";
 import { Avatar, TokenMeter, providerSpec } from "./pixel";
+import { LEGACY_NEEDS_LABEL, LEGACY_NEEDS_REASON, LEGACY_NEEDS_UNTIL, needsYouBadge, useUserName } from "./userName";
 import { openAgentInTab, paneOfAgent } from "./panes";
 
 type Entry = { item: any; timestamp?: string; seqStart?: number };
@@ -268,12 +269,14 @@ function AssistantText({ text, agentId }: { text: string; agentId?: string }) {
   );
 }
 
-function NeedsAubControls({ agent }: { agent: PaseoAgent }) {
+function NeedsYouControls({ agent }: { agent: PaseoAgent }) {
   const [reason, setReason, clearReason] = useDraft(`${agent.id}:reason`);
   const [busy, setBusy] = useState(false);
   const labels = (agent.labels ?? {}) as Record<string, string>;
-  const flagged = !!labels["needs-aub"] && labels["needs-aub"] !== "cleared";
-  const until = Date.parse(labels["needs-aub-until"] ?? "");
+  const userName = useUserName();
+  const needsValue = labels["needs-you"] || labels[LEGACY_NEEDS_LABEL];
+  const flagged = !!needsValue && needsValue !== "cleared";
+  const until = Date.parse(labels["needs-you-until"] || labels[LEGACY_NEEDS_UNTIL] || "");
   const snoozed = flagged && !Number.isNaN(until) && until > Date.now();
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
@@ -288,27 +291,27 @@ function NeedsAubControls({ agent }: { agent: PaseoAgent }) {
 
   if (flagged)
     return (
-      <div className="aub-bar">
-        <span className="aub-tag">{snoozed ? "SNOOZED" : "NEEDS AUB"}</span>
-        <span className="aub-reason">
-          {labels["needs-aub-reason"] || labels["needs-aub"]}
+      <div className="you-bar">
+        <span className="you-tag">{snoozed ? "SNOOZED" : needsYouBadge(userName)}</span>
+        <span className="you-reason">
+          {labels["needs-you-reason"] || labels[LEGACY_NEEDS_REASON] || needsValue}
           {snoozed && <span className="muted"> · until {new Date(until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>}
         </span>
-        <button className="btn ok" disabled={busy} onClick={() => run(() => clearNeedsAub(agent))}>
+        <button className="btn ok" disabled={busy} onClick={() => run(() => clearNeedsYou(agent))}>
           Clear
         </button>
-        <button className="btn ghost" disabled={busy} onClick={() => run(() => snoozeNeedsAub(agent, 30 * 60_000))}>
+        <button className="btn ghost" disabled={busy} onClick={() => run(() => snoozeNeedsYou(agent, 30 * 60_000))}>
           Snooze 30m
         </button>
-        <button className="btn ghost" disabled={busy} onClick={() => run(() => snoozeNeedsAub(agent, 2 * 3_600_000))}>
+        <button className="btn ghost" disabled={busy} onClick={() => run(() => snoozeNeedsYou(agent, 2 * 3_600_000))}>
           Snooze 2h
         </button>
       </div>
     );
 
   return (
-    <div className="aub-flag">
-      <span className="muted small">+ Flag Needs Owner</span>
+    <div className="you-flag">
+      <span className="muted small">+ Flag needs {userName}</span>
       <input
         value={reason}
         placeholder="reason…"
@@ -316,14 +319,14 @@ function NeedsAubControls({ agent }: { agent: PaseoAgent }) {
         onKeyDown={(e) => {
           if (e.key === "Enter" && !isImeComposing(e) && reason.trim()) {
             e.preventDefault();
-            run(() => setNeedsAub(agent, reason.trim()).then(clearReason));
+            run(() => setNeedsYou(agent, reason.trim()).then(clearReason));
           }
         }}
       />
       <button
         className="btn bad"
         disabled={busy || !reason.trim()}
-        onClick={() => run(() => setNeedsAub(agent, reason.trim()).then(clearReason))}
+        onClick={() => run(() => setNeedsYou(agent, reason.trim()).then(clearReason))}
       >
         Flag
       </button>
@@ -1056,8 +1059,8 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
         </div>
       )}
 
-      {att && att.tone !== "needs-aub" && <div className={`banner ${att.tone}`}>{att.reason}</div>}
-      <NeedsAubControls agent={agent} />
+      {att && att.tone !== "needs-you" && <div className={`banner ${att.tone}`}>{att.reason}</div>}
+      <NeedsYouControls agent={agent} />
       <TitleLint agent={agent} />
       {kindOf(agent) === "lead" && onSuccessor && !agent.archivedAt && (
         <div className="lint-bar successor-bar">

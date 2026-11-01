@@ -31,7 +31,7 @@ built as one component.
 
 1. **Header**: team switcher (emblem + name ▾) and `◂ TEAM`, which exits focus.
 2. **NEEDS YOU, across all teams.** This is the only cross-team list. Rows are sorted in alert order:
-   permission › needs-aub › error › finished. Each row has a 28px portrait, the agent name, and the reason on a
+   permission › needs-you › error › finished. Each row has a 28px portrait, the agent name, and the reason on a
    second line (for example "PERM · Bash: rg --stats"). An agent from another team gets a muted team suffix.
    Show at most 5, then "+N more".
    - A click opens the owner (see Jumping, below). Ctrl+J opens the top one.

@@ -52,9 +52,10 @@ describe("repo hygiene", () => {
     const files = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard"], { cwd: rootDir, encoding: "utf8" })
       .split("\n")
       .filter(Boolean);
-    const parts = [["fu", "gma"], ["aub", "ross"], ["gma", "il"], ["escape-from", "-idle"], ["rosser", "logic"], ["192[.]", "168[.]"], ["100[.]", "83[.]"], ["[.]", "nord"]];
+    const parts = [["fu", "gma"], ["au", "bross"], ["gma", "il"], ["escape-from", "-idle"], ["rosser", "logic"], ["192[.]", "168[.]"], ["100[.]", "83[.]"], ["[.]", "nord"]];
     const personal = new RegExp(parts.map((p) => p.join("")).join("|"), "i");
-    const name = new RegExp("\\b" + ["Au", "b"].join("") + "\\b");
+    const name = new RegExp("\\b" + ["Au", "b"].join("") + "\\b", "i");
+    const legacyLabel = new RegExp("needs-" + ["au", "b"].join(""), "i");
     const skip = /\.(png|ico|exe|woff2?|icns|jpg|webp)$/i;
     const hits = [];
     for (const f of files) {
@@ -65,7 +66,7 @@ describe("repo hygiene", () => {
       } catch {
         continue;
       }
-      if (personal.test(text) || name.test(text)) hits.push(f);
+      if (personal.test(text) || name.test(text) || legacyLabel.test(text)) hits.push(f);
     }
     assert.deepEqual(hits, []);
   });
@@ -288,7 +289,7 @@ describe("WebSocket CSWSH upgrade guard", () => {
         headers: {
           Connection: "Upgrade",
           Upgrade: "websocket",
-          "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+          "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==", // gitleaks:allow
           "Sec-WebSocket-Version": "13",
           ...headers,
         },
@@ -311,5 +312,64 @@ describe("WebSocket CSWSH upgrade guard", () => {
 
   test("rejects unauthenticated WebSocket upgrade without Origin with 403", async () => {
     assert.equal(await tryUpgrade({}), 403);
+  });
+});
+
+describe("needs-you rename", () => {
+  const legacyUser = "au" + "b";
+  const legacyNeeds = "needs-" + legacyUser;
+
+  test("git grep -iw for the legacy owner name has 0 hits", () => {
+    let out = "";
+    try {
+      out = execFileSync("git", ["grep", "-iwI", legacyUser], { cwd: rootDir, encoding: "utf8" });
+    } catch (e) {
+      assert.equal(e.status, 1, "git grep should exit 1 (no matches)");
+    }
+    assert.equal(out, "");
+  });
+
+  test("legacy needs label is recognised by attentionOf", async () => {
+    const { attentionOf } = await import("../src/teams.ts");
+    const att = attentionOf({ id: "a1", status: "idle", labels: { [legacyNeeds]: "legacy decision needed" } });
+    assert.deepEqual(att, { tone: "needs-you", reason: "legacy decision needed" });
+  });
+
+  test("legacy needs label is still recognised by push notifications", async () => {
+    const { evaluateAgentTransition } = await import("../server/push.mjs");
+    const notes = evaluateAgentTransition(null, { id: "a1", title: "Legacy", labels: { [legacyNeeds]: "legacy decision needed" } }, new Set());
+    assert.equal(notes.length, 1);
+    assert.equal(notes[0].kind, "needs-you");
+    assert.equal(notes[0].title, "VibeSquad · Needs you");
+  });
+
+  describe("/__vibesquad/settings", () => {
+    let server;
+    let port;
+    before(async () => {
+      server = createServer(api.createVibesquadMiddleware(rootDir));
+      await new Promise((ok) => server.listen(0, "127.0.0.1", ok));
+      port = server.address().port;
+    });
+    after(() => server.close());
+
+    const call = (method, body) =>
+      new Promise((ok, fail) => {
+        const req = request({ host: "127.0.0.1", port, path: "/__vibesquad/settings", method, headers: { "content-type": "application/json" } }, (res) => {
+          let data = "";
+          res.on("data", (c) => (data += c));
+          res.on("end", () => ok({ status: res.statusCode, body: JSON.parse(data) }));
+        });
+        req.on("error", fail);
+        req.end(body ? JSON.stringify(body) : undefined);
+      });
+
+    test("defaults to 'you', then persists a new name to settings.json", async () => {
+      assert.deepEqual((await call("GET")).body, { ok: true, userName: "you" });
+      const saved = await call("POST", { userName: "Alex" });
+      assert.deepEqual(saved.body, { ok: true, userName: "Alex" });
+      assert.equal(JSON.parse(readFileSync(join(home, "settings.json"), "utf8")).userName, "Alex");
+      assert.deepEqual((await call("GET")).body, { ok: true, userName: "Alex" });
+    });
   });
 });

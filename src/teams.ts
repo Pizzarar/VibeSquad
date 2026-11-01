@@ -1,5 +1,6 @@
 import type { PaseoAgent } from "@getpaseo/client";
 import { useSyncExternalStore } from "react";
+import { LEGACY_NEEDS_LABEL, LEGACY_NEEDS_REASON, LEGACY_NEEDS_UNTIL, getUserName, needsYouBadge } from "./userName.ts";
 import teamsFile from "../teams.example.json" with { type: "json" };
 import {
   UNASSIGNED_TEAM_ID,
@@ -154,7 +155,7 @@ export type AgentType =
   | "art"
   | "unknown";
 
-export type Attention = { reason: string; tone: "permission" | "error" | "needs-aub" | "finished" } | null;
+export type Attention = { reason: string; tone: "permission" | "error" | "needs-you" | "finished" } | null;
 
 export type Member = {
   agent: PaseoAgent;
@@ -270,10 +271,10 @@ export function attentionOf(a: PaseoAgent): Attention {
   const l = labelsOf(a);
   if (a.pendingPermissions && a.pendingPermissions.length > 0)
     return { tone: "permission", reason: `${a.pendingPermissions.length} permission request(s)` };
-  const needs = l["needs-aub"];
-  const until = Date.parse(l["needs-aub-until"] ?? "");
+  const needs = l["needs-you"] || l[LEGACY_NEEDS_LABEL];
+  const until = Date.parse(l["needs-you-until"] || l[LEGACY_NEEDS_UNTIL] || "");
   const snoozed = !Number.isNaN(until) && until > Date.now();
-  if (needs && needs !== "cleared" && !snoozed) return { tone: "needs-aub", reason: l["needs-aub-reason"] || needs };
+  if (needs && needs !== "cleared" && !snoozed) return { tone: "needs-you", reason: l["needs-you-reason"] || l[LEGACY_NEEDS_REASON] || needs };
   if (a.status === "error") return { tone: "error", reason: a.lastError ?? "error" };
   if (a.requiresAttention)
     return { tone: a.attentionReason === "error" ? "error" : "finished", reason: a.attentionReason ?? "attention" };
@@ -1066,9 +1067,10 @@ export function buildTree(members: Member[]): AgentTree {
 export const OWNER_LABEL: Record<Kind, string> = { lead: "LEAD", "old-lead": "OLD LEAD", brainstorm: "BRAINSTORM", worker: "WORKER" };
 
 /** Alert type pill text. "finished" is a completion check, never a raised hand. */
-export const ALERT_LABEL: Record<NonNullable<Attention>["tone"], string> = {
-  permission: "⚑ PERM",
-  "needs-aub": "★ NEEDS AUB",
-  error: "✖ ERR",
-  finished: "✓ DONE",
-};
+export const alertLabel = (tone: NonNullable<Attention>["tone"], userName: string = getUserName()): string =>
+  ({
+    permission: "⚑ PERM",
+    "needs-you": `★ ${needsYouBadge(userName)}`,
+    error: "✖ ERR",
+    finished: "✓ DONE",
+  })[tone];

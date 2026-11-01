@@ -63,7 +63,7 @@ const CAST: Spec[] = [
   { id: "demo-impl-1", who: "deepseek", title: "Implement - drawer crash", status: "running", labels: vs({ role: "worker", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 245_000, ago: 2 },
   { id: "demo-impl-2", who: "claude", title: "Implement - team actions", status: "running", labels: vs({ role: "worker", "paseo.parent-agent-id": "demo-art-o" }), used: 37_000, ago: 4 },
   { id: "demo-mech", who: "codex", title: "Mechanical - rename sweep", status: "running", labels: vs({ role: "worker", "paseo.parent-agent-id": "demo-impl-2" }), used: 21_000, ago: 6 },
-  { id: "demo-rev", who: "sonnet", title: "Review - Sonnet · drawer", labels: vs({ role: "worker", "needs-aub": "pick", "needs-aub-reason": "pick option A or B", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 74_000, ago: 9 },
+  { id: "demo-rev", who: "sonnet", title: "Review - Sonnet · drawer", labels: vs({ role: "worker", "needs-you": "pick", "needs-you-reason": "pick option A or B", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 74_000, ago: 9 },
   {
     id: "demo-aud", who: "gemini", title: "Audit - token scout", labels: vs({ role: "worker" }), used: 186_000, ago: 5,
     extra: { pendingPermissions: [{ id: "p1", name: "Bash", title: "Bash: rg --stats", description: "Count tokens per handoff" }] },
@@ -75,7 +75,7 @@ const CAST: Spec[] = [
   { id: "demo-unk", who: "deepseek", title: "helper", labels: vs(), used: 9_000, ago: 40 },
   { id: "demo-rev-2", who: "gemini", title: "Review - Gemini · art", status: "closed", labels: vs({ role: "worker", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 92_000, ago: 200 },
   // Other teams, so the sidebar has several bosses.
-  { id: "demo-lead-efi", who: "claude", title: "★ MAIN GAME ord75", status: "running", labels: { team: "efi", lane: "main-game", role: "lead", ord: "75", "needs-aub": "merge", "needs-aub-reason": "approve the save-format merge" }, used: 97_000, cwd: EFI },
+  { id: "demo-lead-efi", who: "claude", title: "★ MAIN GAME ord75", status: "running", labels: { team: "efi", lane: "main-game", role: "lead", ord: "75", "needs-you": "merge", "needs-you-reason": "approve the save-format merge" }, used: 97_000, cwd: EFI },
   { id: "demo-lead-efi-dup", who: "sonnet", title: "★ MAIN GAME ord74", labels: { team: "efi", lane: "main-game", role: "lead", ord: "74" }, used: 90_000, cwd: EFI, ago: 30 },
   { id: "demo-bs-efi-1", who: "claude", title: "BRAINSTORM · MAIN GAME · OpenRouter pipeline critique", labels: { team: "efi", lane: "main-game", role: "brainstorm", topic: "OpenRouter pipeline critique" }, cwd: EFI, ago: 20 },
   { id: "demo-bs-efi-2", who: "gemini", title: "BRAINSTORM · MAIN GAME · site polish", labels: { team: "efi", lane: "main-game", role: "brainstorm", topic: "site polish" }, cwd: EFI, ago: 40 },
@@ -163,7 +163,7 @@ export function demoTimeline(agentId: string): { item: unknown; seqStart: number
 
 export function demoProviderUsage() {
   return [
-    { provider: "claude", account: "aub@max", usedPct: 62, resetAt: new Date(Date.now() + 3 * 3_600_000).toISOString() },
+    { provider: "claude", account: "you@max", usedPct: 62, resetAt: new Date(Date.now() + 3 * 3_600_000).toISOString() },
     { provider: "antigravity-cli", account: "ultra", usedPct: 91 },
     { provider: "codex", account: "plus", usedPct: 28 },
   ];
@@ -174,12 +174,12 @@ export type FeedEntry = { ts: string; agent: string; lane: string; type: string;
 export function demoLog(): FeedEntry[] {
   const e = (m: number, agent: string, lane: string, type: string, text: string, refs: string[] = []): FeedEntry => ({ ts: minsAgo(m), agent, lane, type, text, refs });
   return [
-    e(3, "aub", "", "aub", "Ship step 5B + 6U3 together, then pause for my review before any upstream filing."),
+    e(3, "you", "", "you", "Ship step 5B + 6U3 together, then pause for my review before any upstream filing."),
     e(6, "★ LEAD · VIBESQUAD ord1", "vibesquad", "metric", "first-dispatch context: 71k tokens (baseline 80k)"),
     e(14, "Pre-check - Flash", "vibesquad", "done", "PASS step4 team actions: build green, 3 files touched", ["docs/reports/step4.md"]),
     e(22, "★ LEAD · VIBESQUAD ord1", "vibesquad", "decision", "Successor spawns use the packet path, not a pasted summary.", ["docs/PLAN_STEP6_7_EFFICIENCY.md"]),
     e(41, "Implement - Sonnet", "vibesquad", "blocker", "Atlassian MCP needs auth; skipping Jira links."),
-    e(55, "★ LEAD · VIBESQUAD ord1", "vibesquad", "needs-aub", "Pick option A or B for the lead portrait pass."),
+    e(55, "★ LEAD · VIBESQUAD ord1", "vibesquad", "needs-you", "Pick option A or B for the lead portrait pass."),
     e(90, "(old) VIBESQUAD ord0", "vibesquad", "handoff", "packet-vibesquad.md written; 3 workers still attached.", ["packet-vibesquad.md"]),
   ];
 }

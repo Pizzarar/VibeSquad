@@ -8,6 +8,7 @@ import {
   readBrainstormSummary,
 } from "./brainstorm.mjs";
 import { effectiveAgentRole, isDigestAgent, isRetiredAgent, ordOf } from "./identity.mjs";
+import { LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE } from "./user-settings.mjs";
 import { findProfile, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
@@ -192,7 +193,7 @@ export function readLaneLogEntries({ teamId, laneId, sinceIso, baseHome }) {
           const entryLane = safeSegment(parsed.lane || safeLane);
           if (
             entryLane !== safeLane &&
-            !["decision", "aub", "needs-aub", "handoff"].includes(String(parsed.type))
+            !["decision", "you", "needs-you", "handoff", LEGACY_USER_TYPE, LEGACY_NEEDS_LABEL].includes(String(parsed.type))
           ) {
             continue;
           }
@@ -826,8 +827,8 @@ export function createLeadHandoffCoordinator(deps = {}) {
       flagged150.add(lead.id);
       const nextLabels = {
         ...labels,
-        "needs-aub": SOFT_FLAG_REASON,
-        "needs-aub-reason": SOFT_FLAG_REASON,
+        "needs-you": SOFT_FLAG_REASON,
+        "needs-you-reason": SOFT_FLAG_REASON,
         "handoff-flagged": "1",
       };
       await setLabels(lead.id, nextLabels);

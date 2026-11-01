@@ -1,7 +1,8 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { ProviderQuotaView } from "./antigravity";
-import { DEMO, archiveAgent, detachAgent, getPaseoState, loadArchived, retireAgent, setNeedsAub, updateAgent, upsertLocalAgent, usePaseo } from "./paseo";
+import { LEGACY_NEEDS_LABEL } from "./userName";
+import { DEMO, archiveAgent, detachAgent, getPaseoState, loadArchived, retireAgent, setNeedsYou, updateAgent, upsertLocalAgent, usePaseo } from "./paseo";
 import {
   AGENT_TYPE_LABEL,
   MAX_TREE_DEPTH,
@@ -343,7 +344,7 @@ const LeadBlock = memo(
           </div>
         )}
 
-        {/* DESIGN T1-4: Secondary slot is the Lead ("RUNS THE WORK"), promoted when needs-aub/attention */}
+        {/* DESIGN T1-4: Secondary slot is the Lead ("RUNS THE WORK"), promoted when needs-you/attention */}
         {lead && (
           <>
             <div className="lead-line lead-secondary-line">
@@ -1285,7 +1286,7 @@ export function App() {
   const archivedMembers = useMemo(() => resolve(archivedAgents), [archivedAgents, teamsVersion]);
   useAttentionAlerts(members);
 
-  // A lead past its handoff budget with no needs-aub flag would otherwise sit silently (only the card's
+  // A lead past its handoff budget with no needs-you flag would otherwise sit silently (only the card's
   // SPAWN SUCCESSOR button hints at it). Flag it once; "handoff-flagged" stops a cleared flag re-firing.
   const flaggedLeads = useRef(new Set<string>());
   useEffect(() => {
@@ -1294,11 +1295,12 @@ export function App() {
       const { flagTokens } = getLeadThresholds(m.team);
       if (m.kind !== "lead" || m.agent.archivedAt || usedTokens(m) < flagTokens) continue;
       const labels = (m.agent.labels ?? {}) as Record<string, string>;
-      const flagged = !!labels["needs-aub"] && labels["needs-aub"] !== "cleared";
+      const needsValue = labels["needs-you"] || labels[LEGACY_NEEDS_LABEL];
+      const flagged = !!needsValue && needsValue !== "cleared";
       if (flagged || labels["handoff-flagged"] || flaggedLeads.current.has(m.agent.id)) continue;
       flaggedLeads.current.add(m.agent.id);
       const reason = "Lead at 150k+ tokens: wrap up and hand off at a good stopping point";
-      setNeedsAub({ ...m.agent, labels: { ...labels, "handoff-flagged": "1" } } as PaseoAgent, reason).catch(() => flaggedLeads.current.delete(m.agent.id));
+      setNeedsYou({ ...m.agent, labels: { ...labels, "handoff-flagged": "1" } } as PaseoAgent, reason).catch(() => flaggedLeads.current.delete(m.agent.id));
     }
   }, [members]);
 

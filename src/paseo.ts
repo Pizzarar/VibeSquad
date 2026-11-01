@@ -2,6 +2,7 @@ import { createPaseoApi, type PaseoAgent, type PaseoClient, type PaseoWorkspace 
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { useSyncExternalStore } from "react";
 import { normalizeProviderUsage, type ProviderQuotaView } from "./antigravity";
+import { LEGACY_NEEDS_LABEL, LEGACY_NEEDS_UNTIL, LEGACY_NEEDS_REASON } from "./userName";
 import { demoAgents, demoArchived, demoProviderUsage, demoWorkspaces } from "./demo";
 
 declare const __PASEO_SERVER_ID__: string;
@@ -175,20 +176,27 @@ export async function updateAgent(agentId: string, updates: { name?: string; lab
 
 const labelsOf = (a: PaseoAgent) => (a.labels ?? {}) as Record<string, string>;
 
-export function setNeedsAub(agent: PaseoAgent, reason: string): Promise<void> {
+/** Legacy-labelled agents keep working: when the old label is set, clear/snooze it alongside the canonical one. */
+const hasLegacy = (a: PaseoAgent) => !!labelsOf(a)[LEGACY_NEEDS_LABEL];
+
+export function setNeedsYou(agent: PaseoAgent, reason: string): Promise<void> {
+  const legacy = hasLegacy(agent)
+    ? { [LEGACY_NEEDS_LABEL]: reason, [LEGACY_NEEDS_REASON]: reason, [LEGACY_NEEDS_UNTIL]: "" }
+    : {};
   return updateAgent(agent.id, {
-    labels: { ...labelsOf(agent), "needs-aub": reason, "needs-aub-reason": reason, "needs-aub-until": "" },
+    labels: { ...labelsOf(agent), ...legacy, "needs-you": reason, "needs-you-reason": reason, "needs-you-until": "" },
   });
 }
 
-export function clearNeedsAub(agent: PaseoAgent): Promise<void> {
-  return updateAgent(agent.id, { labels: { ...labelsOf(agent), "needs-aub": "cleared", "needs-aub-until": "" } });
+export function clearNeedsYou(agent: PaseoAgent): Promise<void> {
+  const legacy = hasLegacy(agent) ? { [LEGACY_NEEDS_LABEL]: "cleared", [LEGACY_NEEDS_UNTIL]: "" } : {};
+  return updateAgent(agent.id, { labels: { ...labelsOf(agent), ...legacy, "needs-you": "cleared", "needs-you-until": "" } });
 }
 
-export function snoozeNeedsAub(agent: PaseoAgent, durationMs: number): Promise<void> {
-  return updateAgent(agent.id, {
-    labels: { ...labelsOf(agent), "needs-aub-until": new Date(Date.now() + durationMs).toISOString() },
-  });
+export function snoozeNeedsYou(agent: PaseoAgent, durationMs: number): Promise<void> {
+  const until = new Date(Date.now() + durationMs).toISOString();
+  const legacy = hasLegacy(agent) ? { [LEGACY_NEEDS_UNTIL]: until } : {};
+  return updateAgent(agent.id, { labels: { ...labelsOf(agent), ...legacy, "needs-you-until": until } });
 }
 
 export async function loadArchived(): Promise<void> {
@@ -217,7 +225,7 @@ async function refetchAll() {
   // includeArchived:false keeps it to what the Paseo sidebar would show, plus closed ones.
   const res = await client.agents.list({ subscribe: {}, filter: { includeArchived: false } });
   // Keep the old object for agents that did not change so their rows stay memoized.
-  // Always publish a new Map: time-based state (needs-aub snooze expiry) is re-derived from it.
+  // Always publish a new Map: time-based state (needs-you snooze expiry) is re-derived from it.
   const next = new Map<string, PaseoAgent>();
   for (const e of res.entries) {
     const old = state.agents.get(e.agent.id);

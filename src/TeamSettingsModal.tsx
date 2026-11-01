@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { getUserName, saveUserName } from "./userName";
 import {
   AGENT_TYPE_NAME,
   BRAINSTORM_RESTART_DEFAULT,
@@ -248,6 +249,7 @@ export function TeamSettingsModal({ onClose }: { onClose: () => void }) {
     }
   };
 
+  const [nameDraft, setNameDraft] = useState(() => (getUserName() === "you" ? "" : getUserName()));
   const uiScale = useUiScale();
   const uiScalePct = Math.round(uiScale * 100);
   const patch = (i: number, p: Partial<TeamDef>) => setTeams((ts) => ts.map((t, j) => (j === i ? { ...t, ...p } : t)));
@@ -298,6 +300,20 @@ export function TeamSettingsModal({ onClose }: { onClose: () => void }) {
         </>
       }
     >
+      <section className="ts-team" data-testid="user-name-section">
+        <div className="field-label">YOUR NAME</div>
+        <div className="muted small">Shown on NEEDS badges, the owner feed entries and push notifications.</div>
+        <input
+          data-testid="settings-user-name-input"
+          value={nameDraft}
+          placeholder="you"
+          maxLength={40}
+          onChange={(e) => {
+            setNameDraft(e.target.value);
+            saveUserName(e.target.value);
+          }}
+        />
+      </section>
       <section className="ts-team ts-scale-section" data-testid="ui-scale-section">
         <div className="ts-scale-head">
           <div>

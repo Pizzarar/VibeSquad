@@ -20,7 +20,7 @@ const SPIN_UP_BUDDY_RULE =
 
 const LEAD_NOTE_BODY = [
   "Root coordinator for one project or lane. Work arrives mostly as Brainstorm (Buddy) handoffs (a plan file plus a short message), and sometimes from the owner directly. Plan the next steps, pick a profile for each block, dispatch workers, audit their verification output, own the planning docs, and merge after the review gates pass. Never write source code. Medium effort; go high only for planning-heavy turns.",
-  "Blocked on an owner decision → flag it (needs-aub label, one-line reason) and keep working on anything that doesn't depend on it. Don't wait in chat.",
+  "Blocked on an owner decision → flag it (needs-you label, one-line reason) and keep working on anything that doesn't depend on it. Don't wait in chat.",
   "Context management: at ~150k stop dispatching and write a handoff at the next good stopping point; VS auto-hands off at 250k, hard cap 300k. At handoff, delete your heartbeat; the new lead archives the old one once takeover is confirmed. Heartbeats only while waiting on a worker.",
   "Never read sweeps, long logs or raw worker output yourself. Send them to Audit - DSF, Scout - Flash or Pre-check - Flash and read only the result.",
   "Routing: ambiguous work → Implement - Sonnet. Tier A invariant work → Implement - Opus. Clear file scope → Planner - Sonnet + Work Order - DSP. One-file or mechanical → Mechanical - DSF.",

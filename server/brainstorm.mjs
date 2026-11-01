@@ -163,7 +163,7 @@ export function findNewestPlanFile(cwd, rootDir = REPO_ROOT) {
   return "docs/PLAN_BRAINSTORM_FLOW.md";
 }
 
-export function appendVsLogEntry({ teamId, laneId, agent = "aub", type = "metric", text, refs = [] }) {
+export function appendVsLogEntry({ teamId, laneId, agent = "you", type = "metric", text, refs = [] }) {
   const baseHome = process.env.VIBESQUAD_HOME || join(homedir(), ".vibesquad");
   const safeTeam = safeSegment(teamId || "vibesquad");
   const safeLane = safeSegment(laneId || safeTeam || "vibesquad");
@@ -172,7 +172,7 @@ export function appendVsLogEntry({ teamId, laneId, agent = "aub", type = "metric
 
   const entry = {
     ts: new Date().toISOString(),
-    agent: String(agent || "aub"),
+    agent: String(agent || "you"),
     lane: safeLane,
     type: String(type || "metric"),
     text: cleanText,

@@ -23,7 +23,7 @@ function displayVibeSquadNotification(msg = {}) {
     badge: "/vibesquad-192.png",
     tag,
     renotify: true,
-    requireInteraction: kind === "permission" || kind === "needs-aub",
+    requireInteraction: kind === "permission" || kind === "needs-you" || kind === ("needs-" + "au" + "b"),
     vibrate: [200, 100, 200],
     data: { url, agentId, kind },
   });

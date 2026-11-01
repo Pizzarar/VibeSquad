@@ -165,7 +165,7 @@ test("Done-when #1: simulated lead stepping 150k -> 250k -> 300k triggers flag, 
     assert.equal(r150a.triggered, true);
     assert.equal(r150a.stage, "flag-150");
     assert.equal(lead.labels["handoff-flagged"], "1");
-    assert.equal(lead.labels["needs-aub"], SOFT_FLAG_REASON);
+    assert.equal(lead.labels["needs-you"], SOFT_FLAG_REASON);
     assert.equal(messages.length, 1);
     assert.equal(messages[0].id, lead.id);
     assert.equal(messages[0].text, SOFT_FLAG_NUDGE);

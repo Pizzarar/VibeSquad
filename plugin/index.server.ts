@@ -33,6 +33,7 @@ import {
   resolveAgentIdentity,
   topicOf,
 } from "../server/identity.mjs";
+import { LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE, loadUserSettings } from "../server/user-settings.mjs";
 
 type Labels = Record<string, string>;
 type Paseo = any;
@@ -46,7 +47,7 @@ export const DIGEST_PROVIDER = "antigravity-cli/gemini-3.8-flash";
 export const DIGEST_PROFILE = "Pre-check - Flash";
 export const DIGEST_MODE_ID = "default";
 export const DIGEST_THINKING_OPTION_ID = "low";
-const WAKE_TYPES = new Set(["done", "blocker", "decision", "needs-aub", "aub"]);
+const WAKE_TYPES = new Set(["done", "blocker", "decision", "needs-you", "you", LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE]);
 const TRANSIENT_ERROR = /googleapis|EOF|no such host|ECONNRESET/i;
 const MAX_RETRIES = 2;
 const MAX_TEXT = 240;
@@ -60,8 +61,8 @@ export const EVERYONE_LAYER = [
   "Team rules (VibeSquad):",
   "- Your lead is the agent in your team and lane with label role=lead (never one titled (old)). Find it with `vs who lead`.",
   "- A Squad (`team` label) can run multiple feature lanes (`lane` label) in parallel, each with 1 Buddy (`role=brainstorm`, mascot name \"Buddy\") and 1 Lead (`role=lead`).",
-  "- To flag something for the owner, set label needs-aub=\"<one-line reason>\" on yourself (`paseo agent update $PASEO_AGENT_ID --label needs-aub=\"...\"`).",
-  "- Catch up on Squad state with `vs log --since-me` (shares `decision` / `aub` / `needs-aub` entries across all lanes in the Squad). Naming conventions: docs/NAMING.md.",
+  `- To flag something for the owner (${loadUserSettings().userName}), set label needs-you=\"<one-line reason>\" on yourself (\`paseo agent update $PASEO_AGENT_ID --label needs-you=\"...\"\`).`,
+  "- Catch up on Squad state with `vs log --since-me` (shares `decision` / `you` / `needs-you` entries across all lanes in the Squad). Naming conventions: docs/NAMING.md.",
   "- R1 (Search/Read): Use your provider's native search/read tools. If you must use the shell, cap the output (`| head -50`, `-m`, `Select-Object -First`).",
   "- R3 (Images): Don't re-read an image file you've already seen unless it changed. Take screenshots at the needed size, not full-page tall captures.",
   "- R4 (Large files): For files over ~30k chars, grep first, then read with offset/limit. Never re-read from byte 0.",
@@ -78,7 +79,7 @@ export const WORKER_PACK = [
 
 export const BRAINSTORM_PACK = [
   "Role: brainstorm (mascot: Buddy).",
-  "- You may write `vs log decision \"...\"`, `vs log needs-aub \"...\"`, `vs log handoff \"...\"`, and `vs log metric \"...\"` (240 chars max). Hand build work to a lead; do not implement.",
+  "- You may write `vs log decision \"...\"`, `vs log needs-you \"...\"`, `vs log handoff \"...\"`, and `vs log metric \"...\"` (240 chars max). Hand build work to a lead; do not implement.",
   "- Keep `docs/brainstorm/<lane>.md` (<5k tokens, sections: Decided / Open / In flight) updated with every plan handoff.",
   "- Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`paseo --help`, Paseo MCP tool list, `vs --help`, skills). Name what you checked in the plan's Decided section.",
   "- At >=80k tokens, add a one-line footer to your reply: \"getting heavy, restart from summary?\".",

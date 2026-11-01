@@ -4,6 +4,7 @@ import { realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE, loadUserSettings, saveUserSettings } from "./user-settings.mjs";
 import { authenticate, getAuthStatus, handleCaCrt, handleDevices, handlePairRedeem, handlePairStart, handleRevoke, hasDistIndex, isLocal, isLocalBrowserSafe, netConfig } from "./auth.mjs";
 import {
   appendVsLogEntry,
@@ -184,8 +185,8 @@ export function readPaseo(_rootDir = REPO_ROOT) {
 
 const TEAM_ID = /^[A-Za-z0-9_-]+$/;
 const teamDir = (team) => join(process.env.VIBESQUAD_HOME || join(homedir(), ".vibesquad"), "teams", team);
-const LOG_TYPES = new Set(["done", "decision", "blocker", "needs-aub", "handoff", "aub", "metric"]);
-const UI_LOG_TYPES = new Set(["aub", "handoff", "metric", "decision"]);
+const LOG_TYPES = new Set(["done", "decision", "blocker", "needs-you", "handoff", "you", "metric", LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE]);
+const UI_LOG_TYPES = new Set(["you", "needs-you", "handoff", "metric", "decision", LEGACY_USER_TYPE, LEGACY_NEEDS_LABEL]);
 
 const MAX_BODY_BYTES = 1024 * 1024;
 const AGENT_ID_STRICT = /^[A-Za-z0-9_-]{1,64}$/;
@@ -331,6 +332,15 @@ function handleTeams(req, res, rootDir) {
 }
 
 // GET ?team=<id>: recent log.jsonl entries. POST {team,type,text,refs?}: append (240-char limit).
+async function handleSettings(req, res) {
+  if (req.method === "GET") return sendJson(res, 200, { ok: true, ...loadUserSettings() });
+  if (req.method === "POST" || req.method === "PUT") {
+    const body = await readBody(req);
+    return sendJson(res, 200, { ok: true, ...saveUserSettings({ userName: body?.userName }) });
+  }
+  return sendJson(res, 405, { error: "method not allowed" });
+}
+
 async function handleLog(req, res) {
   try {
     if (req.method === "GET") {
@@ -348,7 +358,7 @@ async function handleLog(req, res) {
       return sendJson(res, 200, out);
     }
     if (req.method === "POST") {
-      const { team, type = "aub", text, refs, agent = "aub", lane = "" } = await readBody(req);
+      const { team, type = "you", text, refs, agent = loadUserSettings().userName, lane = "" } = await readBody(req);
       if (!TEAM_ID.test(String(team))) return sendJson(res, 400, { error: "bad team" });
       if (!LOG_TYPES.has(type) || !UI_LOG_TYPES.has(type)) return sendJson(res, 400, { error: `type ${type} not allowed from the UI` });
       const t = String(text ?? "").trim();
@@ -540,7 +550,7 @@ async function handleVsLog(req, res) {
       const resEntry = appendVsLogEntry({
         teamId,
         laneId,
-        agent: body.agent || body.agentId || "aub",
+        agent: body.agent || body.agentId || loadUserSettings().userName,
         type,
         text,
         refs: body.refs,
@@ -1056,6 +1066,8 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return handleRevoke(req, res, readBody);
       case "/__vibesquad/teams":
         return handleTeams(req, res, rootDir);
+      case "/__vibesquad/settings":
+        return handleSettings(req, res);
       case "/__vibesquad/log":
         return handleLog(req, res);
       case "/__vibesquad/attach":

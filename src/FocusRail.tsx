@@ -1,6 +1,6 @@
 import { memo, useState } from "react";
 import type { ProviderQuotaView } from "./antigravity";
-import { ALERT_LABEL, budgetFor, fmtTok, leadVariant, usedTokens, type Member, type TeamView } from "./teams";
+import { alertLabel, budgetFor, fmtTok, leadVariant, usedTokens, type Member, type TeamView } from "./teams";
 import {
   StatusDot,
   alertOrder,
@@ -16,6 +16,7 @@ import {
   useSelect,
 } from "./ui";
 import { setSheet, toggleFocus, useAgentPane } from "./panes";
+import { useUserName, needsYouBadge } from "./userName";
 import { Avatar, NeonEmblem, providerSpec } from "./pixel";
 
 // Focus rail (docs/design/FOCUS_CHAT.md): an interrupt queue and a switchboard, not a roster.
@@ -27,7 +28,7 @@ const PARENT = "paseo.parent-agent-id";
 
 let ac: { members: Member[] | null; list: Member[]; ids: Set<string> } = { members: null, list: [], ids: new Set() };
 
-/** Every team's alerts in alert order (permission › needs-aub › error › finished). Cached per store change. */
+/** Every team's alerts in alert order (permission › needs-you › error › finished). Cached per store change. */
 export function railAlerts() {
   const { members } = derived();
   if (ac.members !== members) {
@@ -43,6 +44,7 @@ const name = (m: Member) => cleanTitle(m.agent.title) || m.agent.id.slice(0, 8);
 const RailRow = memo(
   function RailRow({ m, alert, teamSuffix }: { m: Member; alert?: boolean; teamSuffix?: string }) {
     const a = m.agent;
+    const userName = useUserName();
     const pane = useAgentPane(a.id);
     const used = usedTokens(m);
     const pct = Math.min(1, used / budgetFor(m));
@@ -64,7 +66,7 @@ const RailRow = memo(
           </span>
           {alert && m.attention ? (
             <span className="rwhy">
-              {ALERT_LABEL[m.attention.tone]} · {m.attention.reason}
+              {alertLabel(m.attention.tone, userName)} · {m.attention.reason}
             </span>
           ) : (
             <span className={`rmini ${tone}`}>
@@ -81,6 +83,7 @@ const RailRow = memo(
 );
 
 function NeedsYou({ teamId }: { teamId: string }) {
+  const userName = useUserName();
   const list = useSelect(subscribeTree, () => railAlerts().list, sameList);
   const [all, setAll] = useState(false);
   if (!list.length) return null;
@@ -88,7 +91,7 @@ function NeedsYou({ teamId }: { teamId: string }) {
   return (
     <div className="rsec-block">
       <div className="rsec hot">
-        ● NEEDS YOU · {list.length}
+        ● {needsYouBadge(userName)} · {list.length}
         <span className="muted rsec-r">ALL TEAMS · Ctrl+J</span>
       </div>
       {shown.map((m) => (

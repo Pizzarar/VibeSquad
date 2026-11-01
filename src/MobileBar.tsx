@@ -94,7 +94,7 @@ const MobileTabRow = memo(function MobileTabRow({
 
 export function highlightNeedsYouTarget() {
   requestAnimationFrame(() => {
-    const target = document.querySelector(".pane-slot[style*='flex'] .perm, .pane-slot[style*='flex'] .aub-bar, .pane-slot[style*='flex'] .banner");
+    const target = document.querySelector(".pane-slot[style*='flex'] .perm, .pane-slot[style*='flex'] .you-bar, .pane-slot[style*='flex'] .banner");
     if (target instanceof HTMLElement) {
       target.classList.add("NeedsYouHighlight");
       target.scrollIntoView({ behavior: "smooth", block: "center" });

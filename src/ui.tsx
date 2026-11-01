@@ -2,9 +2,10 @@ import { memo, useEffect, useRef, useState, useSyncExternalStore, type KeyboardE
 import type { PaseoAgent } from "@getpaseo/client";
 import { archiveAgent, getPaseoState, stopAgent, subscribePaseo } from "./paseo";
 import { auditAntigravityAgent } from "./antigravity";
+import { useUserName } from "./userName";
 import {
   AGENT_TYPE_LABEL,
-  ALERT_LABEL,
+  alertLabel,
   MAX_TREE_DEPTH,
   OWNER_LABEL,
   attentionOf,
@@ -405,6 +406,7 @@ type AlertPillProps = { m: Member; onOpen: (id: string) => void; named?: boolean
 export const AlertPill = memo(
   function AlertPill({ m, onOpen, named = true }: AlertPillProps) {
     const att = m.attention;
+    const userName = useUserName();
     if (!att) return null;
     return (
       <button
@@ -423,14 +425,14 @@ export const AlertPill = memo(
       >
         <b className="alert-owner">{OWNER_LABEL[m.kind]}</b>
         {named && <span className="alert-who">{shortName(m)}</span>}
-        <span className="alert-type">{ALERT_LABEL[att.tone]}</span>
+        <span className="alert-type">{alertLabel(att.tone, userName)}</span>
       </button>
     );
   },
   (p, n) => sameMember(p.m, n.m) && p.onOpen === n.onOpen && p.named === n.named,
 );
 
-const TONE_ORDER = { permission: 0, "needs-aub": 1, error: 2, finished: 3 } as const;
+const TONE_ORDER = { permission: 0, "needs-you": 1, error: 2, finished: 3 } as const;
 export const alertOrder = (a: Member, b: Member) => TONE_ORDER[a.attention!.tone] - TONE_ORDER[b.attention!.tone];
 
 // ---- nested agent tree ---------------------------------------------------------------

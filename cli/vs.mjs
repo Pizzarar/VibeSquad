@@ -45,21 +45,30 @@ import {
   resolveAgentIdentity,
 } from "../server/identity.mjs";
 import { loadProfiles } from "../server/profiles.mjs";
+import {
+  LEGACY_NEEDS_LABEL,
+  LEGACY_NEEDS_REASON,
+  LEGACY_NEEDS_UNTIL,
+  LEGACY_USER_TYPE,
+  loadUserSettings,
+} from "../server/user-settings.mjs";
 
 const LOG_TYPES = [
   "done",
   "decision",
   "blocker",
-  "needs-aub",
+  "needs-you",
   "handoff",
-  "aub",
+  "you",
+  LEGACY_NEEDS_LABEL,
+  LEGACY_USER_TYPE,
   "metric",
   "tokens-per-plan",
   "restart-feedback",
   "audit-delta",
 ];
 const LOG_TYPE_SET = new Set(LOG_TYPES);
-const HIGH_PRIORITY = new Set(["decision", "aub", "needs-aub"]);
+const HIGH_PRIORITY = new Set(["decision", "you", "needs-you", LEGACY_USER_TYPE, LEGACY_NEEDS_LABEL]);
 const MAX_TEXT = 240;
 const MAX_READ_LINES = 40;
 const MAX_HANDOFF_LOG_LINES = 20;
@@ -517,7 +526,7 @@ function resolveIdentity(flags) {
 
   return {
     agentId,
-    agent: agentId || "aub",
+    agent: agentId || loadUserSettings(BASE_DIR).userName,
     title,
     cwd,
     labels,
@@ -638,7 +647,7 @@ Types: ${LOG_TYPES.join(", ")} (text 1..${MAX_TEXT} chars)
 Identity: PASEO_AGENT_ID + --team/--lane/--role/--ord (or VS_TEAM/VS_LANE/VS_ROLE/VS_ORD).
 Storage:  VIBESQUAD_HOME (default ~/.vibesquad)
 
-Only role=lead, role=brainstorm, Owner (type "aub"), and the Pre-check - Flash
+Only role=lead, role=brainstorm, Owner (type "you"), and the Pre-check - Flash
 digest may write to the team log. Workers are logged by the digest.`;
 
 function commandLog(flags) {
@@ -668,7 +677,8 @@ function commandLog(flags) {
   const mayWrite =
     identity.role === "lead" ||
     identity.role === "brainstorm" ||
-    type === "aub" ||
+    type === "you" ||
+    type === LEGACY_USER_TYPE ||
     identity.digest;
   if (!mayWrite) {
     throw new Error(
@@ -678,7 +688,7 @@ function commandLog(flags) {
 
   const entry = {
     ts: new Date().toISOString(),
-    agent: identity.agentId || "aub",
+    agent: identity.agentId || loadUserSettings(BASE_DIR).userName,
     lane: identity.lane,
     type,
     text,
@@ -709,9 +719,10 @@ function readSinceMe(flags, identity) {
     .slice(-limit);
 
   // Owner's entries come first when they are unread, then the rest in order.
-  const aub = matching.filter((e) => e?.type === "aub");
-  const rest = matching.filter((e) => e?.type !== "aub");
-  const ordered = [...aub, ...rest];
+  const isOwner = (e) => e?.type === "you" || e?.type === LEGACY_USER_TYPE;
+  const owner = matching.filter(isOwner);
+  const rest = matching.filter((e) => !isOwner(e));
+  const ordered = [...owner, ...rest];
 
   if (ordered.length) process.stdout.write(ordered.map(formatEntry).join("\n") + "\n");
 
@@ -820,25 +831,25 @@ function buildHandoffPacket(identity, agents, source) {
     }
   }
 
-  const needsAub = members.filter((a) => {
-    const value = a.labels?.["needs-aub"];
+  const needsYou = members.filter((a) => {
+    const value = a.labels?.["needs-you"] || a.labels?.[LEGACY_NEEDS_LABEL];
     if (!value || value === "cleared") return false;
-    const until = Date.parse(a.labels?.["needs-aub-until"] ?? "");
+    const until = Date.parse(a.labels?.["needs-you-until"] || a.labels?.[LEGACY_NEEDS_UNTIL] || "");
     return Number.isNaN(until) || until <= Date.now();
   });
   const attention = members.filter((a) => a.requiresAttention);
   const perms = members.filter((a) => Array.isArray(a.pendingPermissions) && a.pendingPermissions.length > 0);
 
-  lines.push("- **Pending Permissions & needs-aub:**");
-  if (!needsAub.length && !attention.length && !perms.length) {
+  lines.push("- **Pending Permissions & needs-you:**");
+  if (!needsYou.length && !attention.length && !perms.length) {
     lines.push("  - none");
   } else {
     for (const a of perms) lines.push(`  - permission: ${a.name || a.id} (${a.pendingPermissions.length} pending)`);
-    for (const a of needsAub) {
-      lines.push(`  - needs-aub: ${a.name || a.id} — ${a.labels?.["needs-aub-reason"] || a.labels?.["needs-aub"]}`);
+    for (const a of needsYou) {
+      lines.push(`  - needs-you: ${a.name || a.id} — ${a.labels?.["needs-you-reason"] || a.labels?.[LEGACY_NEEDS_REASON] || a.labels?.["needs-you"] || a.labels?.[LEGACY_NEEDS_LABEL]}`);
     }
     for (const a of attention) {
-      const alreadyListed = needsAub.includes(a) || perms.includes(a);
+      const alreadyListed = needsYou.includes(a) || perms.includes(a);
       if (!alreadyListed) lines.push(`  - attention: ${a.name || a.id} — ${a.attentionReason || "needs attention"}`);
     }
   }

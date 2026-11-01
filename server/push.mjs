@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { readPaseoConfig } from "./brainstorm.mjs";
+import { LEGACY_NEEDS_LABEL, loadUserSettings } from "./user-settings.mjs";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
 
@@ -399,17 +400,18 @@ export function evaluateAgentTransition(prev, next, dedupeSet) {
     }
   }
 
-  // 2. labels["needs-aub"] transitions
-  const needsAub = String(labels["needs-aub"] ?? "").trim();
-  const prevNeedsAub = String(prevLabels["needs-aub"] ?? "").trim();
-  if (needsAub && needsAub !== "cleared" && needsAub !== prevNeedsAub) {
-    emitOnce(`needs-aub:${needsAub}`, {
-      title: `VibeSquad · Needs You`,
-      body: `${title}: needs your attention`,
+  // 2. labels["needs-you"] transitions (legacy alias still read)
+  const needsYou = String(labels["needs-you"] ?? labels[LEGACY_NEEDS_LABEL] ?? "").trim();
+  const prevNeedsYou = String(prevLabels["needs-you"] ?? prevLabels[LEGACY_NEEDS_LABEL] ?? "").trim();
+  if (needsYou && needsYou !== "cleared" && needsYou !== prevNeedsYou) {
+    const userName = loadUserSettings().userName;
+    emitOnce(`needs-you:${needsYou}`, {
+      title: `VibeSquad · Needs ${userName}`,
+      body: `${title}: needs ${userName === "you" ? "your" : `${userName}'s`} attention`,
       url: deepUrl,
-      tag: `vs-needs-aub-${agentId}`,
+      tag: `vs-needs-you-${agentId}`,
       agentId,
-      kind: "needs-aub",
+      kind: "needs-you",
     });
   }
 
@@ -436,7 +438,7 @@ let activeWatcher = null;
 
 /**
  * Connects to the Paseo daemon via DaemonClient, seeds initial agent state,
- * and dispatches Web Push notifications on permission requests, needs-aub transitions,
+ * and dispatches Web Push notifications on permission requests, needs-you transitions,
  * and lead/worker turn completions or errors.
  */
 export function startPushWatcher(rootDir = REPO_ROOT) {
@@ -463,14 +465,14 @@ export function startPushWatcher(rootDir = REPO_ROOT) {
     agentsById.set(agent.id, agent);
 
     if (isInitialSeed) {
-      // Seed dedupe keys for already-existing permissions and needs-aub so startup doesn't re-page.
+      // Seed dedupe keys for already-existing permissions and needs-you so startup doesn't re-page.
       for (const p of Array.isArray(agent.pendingPermissions) ? agent.pendingPermissions : []) {
         const pid = String(p?.id ?? p?.requestId ?? p?.toolName ?? "perm");
         dedupeSet.add(`${agent.id}::perm:${pid}`);
       }
-      const needsAub = String(agent.labels?.["needs-aub"] ?? "").trim();
-      if (needsAub && needsAub !== "cleared") {
-        dedupeSet.add(`${agent.id}::needs-aub:${needsAub}`);
+      const needsYou = String(agent.labels?.["needs-you"] ?? agent.labels?.[LEGACY_NEEDS_LABEL] ?? "").trim();
+      if (needsYou && needsYou !== "cleared") {
+        dedupeSet.add(`${agent.id}::needs-you:${needsYou}`);
       }
       return;
     }

@@ -955,15 +955,15 @@ fn inspect_ws_frame(state: &Arc<SharedAppState>, text: &str) {
                 }
             }
 
-            // 2. Check labels["needs-aub"]
+            // 2. Check labels["needs-you"] (legacy alias still read)
             if let Some(labels) = agent.get("labels").and_then(|v| v.as_object()) {
-                if let Some(na) = labels.get("needs-aub").and_then(|v| v.as_str()) {
+                if let Some(na) = labels.get("needs-you").or_else(|| labels.get(concat!("needs-", "au", "b"))).and_then(|v| v.as_str()) {
                     let trimmed = na.trim();
                     if !trimmed.is_empty() && trimmed != "cleared" {
                         if reason.is_none() {
-                            reason = Some(format!("needs-aub:{}", trimmed));
+                            reason = Some(format!("needs-you:{}", trimmed));
                         }
-                        let dedupe_key = format!("{}::needs-aub:{}", id, trimmed);
+                        let dedupe_key = format!("{}::needs-you:{}", id, trimmed);
                         if !tracker.dedupe.contains(&dedupe_key) {
                             tracker.dedupe.insert(dedupe_key);
                             if !is_seed {

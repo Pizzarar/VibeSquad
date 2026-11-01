@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { start } from "./paseo";
+import { loadUserName } from "./userName";
 import { FiveLeads, SpriteSheet } from "./demo";
 import "./styles.css";
 
@@ -9,5 +10,8 @@ import "./styles.css";
 const q = new URLSearchParams(location.search);
 const cast = q.has("cast");
 const five = q.has("five-leads");
-if (!cast && !five) start();
+if (!cast && !five) {
+  start();
+  loadUserName();
+}
 createRoot(document.getElementById("root")!).render(five ? <FiveLeads /> : cast ? <SpriteSheet /> : <App />);
