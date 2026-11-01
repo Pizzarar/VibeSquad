@@ -106,8 +106,11 @@ const nsisDir = join(rootDir, "src-tauri", "target", "release", "bundle", "nsis"
 if (!existsSync(nsisDir)) {
   throw new Error(`NSIS bundle directory not found: ${nsisDir}`);
 }
-const nsisFiles = readdirSync(nsisDir);
-const setupExe = nsisFiles.find((f) => f.endsWith("-setup.exe") || (f.endsWith(".exe") && !f.endsWith(".sig")));
+const pkgVersion = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")).version;
+const nsisFiles = readdirSync(nsisDir)
+  .filter((f) => f.endsWith("-setup.exe") || (f.endsWith(".exe") && !f.endsWith(".sig")))
+  .sort((a, b) => statSync(join(nsisDir, b)).mtimeMs - statSync(join(nsisDir, a)).mtimeMs);
+const setupExe = nsisFiles.find((f) => f.includes(`_${pkgVersion}_`)) || nsisFiles[0];
 if (!setupExe) {
   throw new Error(`No NSIS installer .exe found in ${nsisDir}`);
 }
