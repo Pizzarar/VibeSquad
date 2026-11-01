@@ -234,7 +234,23 @@ export const dismissLooksDone = (messageId: string): void => dismiss(LOOKS_DONE_
 // A new pin is a lane in teams.json plus a brief; no agent is spawned. The first click on the pin
 // quick-starts its Brainstorm (openPin), so idle pins cost nothing.
 
-export type CreatePinDeps = Pick<OpenPinDeps, "fetch" | "getTeams" | "saveTeams">;
+export const LAST_BS_PROFILE_KEY = "vibesquad.lastBrainstormProfile";
+
+export function getLastBrainstormProfile(fallback = DEFAULT_PIN_PROFILE): string {
+  try {
+    return localStorage.getItem(LAST_BS_PROFILE_KEY) || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export function setLastBrainstormProfile(profile: string): void {
+  try {
+    localStorage.setItem(LAST_BS_PROFILE_KEY, profile);
+  } catch {}
+}
+
+export type CreatePinDeps = Pick<OpenPinDeps, "fetch" | "getTeams" | "saveTeams"> & { lastProfile?: string };
 
 /** The pinned team an idea most likely belongs to in this squad, or null ("Sounds like X. Use it?"). */
 export function overlappingPin(squadId: string, text: string, teams: TeamDef[] = getTeams()): PinLane | null {
@@ -249,7 +265,7 @@ export async function createPin(squadId: string, name: string, idea: string, dep
   const teams = (deps.getTeams ?? getTeams)();
   const squad = teams.find((t) => t.id === squadId);
   if (!squad) throw new Error(`Unknown squad ${squadId}`);
-  const lane: PinLane = { id: uniqueLaneId(slugLaneId(clean), allLaneIds(teams)), name: clean, state: "pinned" };
+  const lane: PinLane = { id: uniqueLaneId(slugLaneId(clean), allLaneIds(teams)), name: clean, state: "pinned", ...(deps.lastProfile ? { lastProfile: deps.lastProfile } : {}) };
   // Brief first: a failed write leaves no half-made pin behind.
   if (!DEMO) await writeBrief(lane.id, newPinBrief(lane.id, clean, idea), deps.fetch ?? fetch);
   const next = teams.map((t) => (t.id === squadId ? { ...t, lanes: [...t.lanes, lane] } : t));
