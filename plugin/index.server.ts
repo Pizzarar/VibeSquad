@@ -33,6 +33,7 @@ import {
   resolveAgentIdentity,
   topicOf,
 } from "../server/identity.mjs";
+import { refreshWhosHere } from "../server/whos-here.mjs";
 import {
   LEGACY_NEEDS_LABEL,
   LEGACY_USER_TYPE,
@@ -83,18 +84,20 @@ export const WORKER_PACK = [
 ].join("\n");
 
 export const BRAINSTORM_PACK = [
-  "Role: brainstorm (mascot: Buddy).",
+  "Role: brainstorm (the Brainstorm, head of a Team).",
+  "- Read `docs/brainstorm/<lane>.md` before anything else. After every decision update it as a short diff (<5k tokens; sections: Who's here / Done when / Decided / Open / In flight). Keep `## Done when`; never edit `## Who's here` (VS writes it). The brief is the handoff: don't write dated docs/BRAINSTORM_HANDOFF_*.md files.",
   "- You may write `vs log decision \"...\"`, `vs log needs-you \"...\"`, `vs log handoff \"...\"`, and `vs log metric \"...\"` (240 chars max). Hand build work to a lead; do not implement.",
-  "- Keep `docs/brainstorm/<lane>.md` (<5k tokens, sections: Decided / Open / In flight) updated with every plan handoff.",
   "- Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`paseo --help`, Paseo MCP tool list, `vs --help`, skills). Name what you checked in the plan's Decided section.",
-  "- At >=80k tokens, add a one-line footer to your reply: \"getting heavy, restart from summary?\".",
-  "- When the user drops unrelated ideas mid-chat, run `vs inbox add \"<idea 1>\" \"<idea 2>\"` (or use the UI's `Park in Inbox` button) and reply \"parked N ideas → Inbox\" instead of derailing the current chat.",
-  "- \"Spin up a buddy (for X)\" / \"spin up another buddy\" / \"get me a buddy for X\": spawn a new Buddy (role=brainstorm, title BRAINSTORM · <LANE> · <topic X>) in a new feature lane (lane=<slug from X>) under the same Squad (team=<product>). First check existing lanes/Buddies (`vs who brainstorm` and `vs log --since-me`) for file or feature overlap; if X overlaps an existing Buddy, say so and suggest using that Buddy instead. Otherwise spawn the new Buddy with a 2-3 line context brief (its Lead comes later at plan handoff).",
+  "- Never complete a Team yourself. When the lead reported PASS on the last plan block and nothing is Open, post: \"<Team> looks done. ✓ Mark complete · Not yet\" followed by a fenced block containing the single line `vs:looks-done`. Only Aub's click completes a Team.",
+  "- At >=80k tokens, update the brief now. At the hard limit VS retires you; the next click on the pin starts a fresh Brainstorm from the brief.",
+  "- If Aub raises something that belongs to another Team, offer: \"That sounds like <Team>. Send it there?\". Unrelated loose ideas: `vs inbox add \"<idea>\"` (or the UI's `Park in Inbox`) and reply \"parked N ideas → Inbox\".",
+  "- \"I just thought of X\" / \"spin up a Brainstorm for X\" is a new-pin request: spawn a new Brainstorm (role=brainstorm, title BRAINSTORM · <LANE> · <topic X>) in a new lane (lane=<slug from X>) under the same Squad (team=<product>). First check existing lanes (`vs who brainstorm`, `vs log --since-me`) for overlap; if X overlaps an existing Team, say so and suggest it instead. Otherwise spawn with a 2-3 line context brief (its Lead comes later).",
 ].join("\n");
 
 export const LEAD_FALLBACK_PACK = [
   "Role: lead.",
   "- Dispatch workers, read their digests via `vs log --since-me` (never raw transcripts), log decisions/blockers with `vs log`.",
+  "- When a plan block passes (PASS) or the whole plan is complete, add that line under `## In flight` in `docs/brainstorm/<lane>.md` so the Brainstorm can spot \"looks done\". Touch nothing else in the brief.",
   "- Context management: at ~150k stop dispatching and write a handoff at the next good stopping point; VS auto-hands off at 250k, hard cap 300k. Run `vs handoff` and fill the Judgment section.",
   "- Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`paseo --help`, Paseo MCP tool list, `vs --help`, skills). Name what you checked in the plan's Decided section.",
   "- \"Spin up a buddy (for X)\" / \"spin up another buddy\" / \"get me a buddy for X\": spawn a new Buddy (role=brainstorm, title BRAINSTORM · <LANE> · <topic X>) in a new feature lane (lane=<slug from X>) under the same Squad (team=<product>). First check existing lanes/Buddies (`vs who brainstorm` and `vs log --since-me`) for file or feature overlap; if X overlaps an existing Buddy, say so and suggest using that Buddy instead. Otherwise spawn the new Buddy with a 2-3 line context brief (its Lead comes later at plan handoff).",
@@ -956,6 +959,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             );
           }
 
+          if (team && lane) await refreshLaneWhosHere(paseo, lane);
+
           // First-dispatch context metric for a lead's first spawned child.
           if (parentId && parent && pl.role === "lead" && team) {
             const n = (childCount.get(parentId) ?? 0) + 1;
@@ -1167,6 +1172,17 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         text: `Relayed from former lead: child/turn completed on ${agent.title || agent.id}`,
         refs: agent.id ? [String(agent.id)] : [],
       });
+    }
+
+    /** Keep `## Who's here` in the lane brief current (live titles + worker count, no IDs). */
+    async function refreshLaneWhosHere(paseo: Paseo, lane: string) {
+      try {
+        const res = await paseo.agents.list({ includeBackground: true, filter: { includeBackground: true }, page: { limit: 200 } });
+        const agents = (res.entries as any[]).map((e) => ({ ...e.agent, labels: e.agent.labels ?? {} }));
+        refreshWhosHere({ laneId: lane, agents, rootDir: REPO_ROOT });
+      } catch (e) {
+        log(`whos-here refresh failed: ${e}`);
+      }
     }
 
     /** Lane integrity: a lane keeps one live lead and one live brainstorm per (team, lane, topic); the predecessor is marked former-*. */

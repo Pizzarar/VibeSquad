@@ -30,10 +30,16 @@ test("1. Prompt layers and default profiles include Buddy mascot and spin-up-a-b
     ["BRAINSTORM_PACK", BRAINSTORM_PACK],
     ["LEAD_FALLBACK_PACK", LEAD_FALLBACK_PACK],
   ]) {
-    assert.match(pack, /Buddy/, `${label} must mention Buddy`);
-    assert.match(pack, /spin up a buddy/i, `${label} must include spin up a buddy trigger`);
-    assert.match(pack, /spin up another buddy/i, `${label} must include spin up another buddy trigger`);
-    assert.match(pack, /get me a buddy for X/i, `${label} must include get me a buddy for X trigger`);
+    if (label === "BRAINSTORM_PACK") {
+      // Pinned teams: "I just thought of X" / "spin up a Brainstorm for X" is a new-pin request.
+      assert.match(pack, /spin up a Brainstorm for X/, `${label} must include the new-pin trigger`);
+      assert.match(pack, /I just thought of X/, `${label} must include the new-pin trigger`);
+    } else {
+      assert.match(pack, /Buddy/, `${label} must mention Buddy`);
+      assert.match(pack, /spin up a buddy/i, `${label} must include spin up a buddy trigger`);
+      assert.match(pack, /spin up another buddy/i, `${label} must include spin up another buddy trigger`);
+      assert.match(pack, /get me a buddy for X/i, `${label} must include get me a buddy for X trigger`);
+    }
     assert.match(pack, /\bvs who brainstorm/, `${label} must instruct checking existing lanes/Buddies`);
     assert.match(pack, /\bvs log --since-me/, `${label} must instruct checking squad log for overlap`);
     assert.match(pack, /overlap/i, `${label} must instruct checking for overlap`);
