@@ -181,7 +181,11 @@ function ShortcutSheet({ onClose }: { onClose: () => void }) {
 async function textsFor(agentId: string): Promise<string[]> {
   if (DEMO) return [];
   try {
-    const t = await daemonClient.fetchAgentTimeline(agentId, { direction: "tail" as any, limit: 200, projection: "projected" as any });
+    const p = Promise.race([
+      daemonClient.fetchAgentTimeline(agentId, { direction: "tail" as any, limit: 60, projection: "projected" as any }),
+      new Promise<any>((r) => setTimeout(() => r({ entries: [] }), 600)),
+    ]);
+    const t = await p;
     return ((t.entries ?? []) as any[])
       .map((e) => e?.item)
       .filter((it) => it && (it.type === "user_message" || it.type === "assistant_message") && typeof it.text === "string")
@@ -194,8 +198,9 @@ async function textsFor(agentId: string): Promise<string[]> {
 export async function searchTranscripts(members: Member[], q: string): Promise<SearchHit[]> {
   const query = q.trim();
   if (!query) return [];
+  const candidates = members.slice(0, 12);
   const per = await Promise.all(
-    members.map(async (m) => {
+    candidates.map(async (m) => {
       const title = cleanTitle(m.agent.title) || m.agent.id.slice(0, 8);
       const own = snippetAround(title, query);
       if (own) return { agentId: m.agent.id, title, team: m.team.name, snippet: own };
