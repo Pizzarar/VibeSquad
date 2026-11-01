@@ -2,9 +2,10 @@ import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, 
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, extname, join, resolve, sep } from "node:path";
+import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspectFirstRunStatus, startManagedPaseoInstall } from "./first-run.mjs";
+import { resolveTeamsFilePath, resolveTeamsWritePath } from "./teams-file.mjs";
 import {
   LEGACY_NEEDS_LABEL,
   LEGACY_USER_TYPE,
@@ -345,12 +346,10 @@ export function handleAuthStatus(req, res, rootDir = REPO_ROOT) {
   return sendJson(res, 200, full);
 }
 
-// Writes the Team Settings editor's teams back to teams.json. Keeps the other top-level keys.
+// The teams registry the CLI and plugin read (see teams-file.mjs). Writes keep the other top-level keys.
 function handleTeams(req, res, rootDir) {
-  const file = join(rootDir, "teams.json");
   if (req.method === "GET") {
-    const readFile = existsSync(file) ? file : join(rootDir, "teams.example.json");
-    const r = readJsonFileWithBom(readFile, { label: "teams.json", fallback: null, recordWarning: true });
+    const r = readJsonFileWithBom(resolveTeamsFilePath(rootDir), { label: "teams.json", fallback: null, recordWarning: true });
     if (r.ok && r.data) {
       return sendJson(res, 200, r.data);
     }
@@ -364,7 +363,7 @@ function handleTeams(req, res, rootDir) {
     try {
       const teams = Array.isArray(parsed) ? parsed : parsed.teams;
       if (!Array.isArray(teams)) throw new Error("teams must be an array");
-      const curRes = readJsonFileWithBom(existsSync(file) ? file : join(rootDir, "teams.example.json"), {
+      const curRes = readJsonFileWithBom(resolveTeamsFilePath(rootDir), {
         label: "teams.json",
         fallback: {},
         recordWarning: true,
@@ -399,6 +398,8 @@ function handleTeams(req, res, rootDir) {
         ...(typeof parsed.brainstormRestartTokens === "number" ? { brainstormRestartTokens: parsed.brainstormRestartTokens } : {}),
         teams,
       };
+      const file = resolveTeamsWritePath(rootDir);
+      mkdirSync(dirname(file), { recursive: true });
       writeFileSync(file, JSON.stringify(next, null, 2) + "\n", "utf8");
       clearConfigWarning(file);
       sendJson(res, 200, {
@@ -534,12 +535,10 @@ function paseoAgentCwds() {
 
 function allowedAttachRoots(rootDir, opts) {
   const roots = [rootDir, ...(opts.allowedCwdRoots ?? []), ...paseoAgentCwds()];
-  for (const file of [join(rootDir, "teams.json"), join(rootDir, "teams.example.json")]) {
-    try {
-      for (const t of JSON.parse(readFileSync(file, "utf8")).teams ?? []) for (const p of t.paths ?? []) roots.push(p);
-      break;
-    } catch {}
-  }
+  try {
+    const teams = JSON.parse(stripBom(readFileSync(resolveTeamsFilePath(rootDir), "utf8"))).teams ?? [];
+    for (const t of teams) for (const p of t.paths ?? []) roots.push(p);
+  } catch {}
   return roots.map(realOrNull).filter(Boolean);
 }
 

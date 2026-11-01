@@ -1,12 +1,13 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import os from "node:os";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
-import { effectiveAgentRole, findLaneInRegistry, isRetiredAgent, topicOf } from "./identity.mjs";
+import { effectiveAgentRole, findLaneInRegistry, isRetiredAgent, resolveWorktreeRootPath, topicOf } from "./identity.mjs";
 import { findProfile, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
 import { refreshWhosHere } from "./whos-here.mjs";
+import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
 
 // import.meta.dirname is undefined when bundled into the Paseo plugin; fall back like plugin/index.server.ts.
 const REPO_ROOT = resolve(process.env.VIBESQUAD_ROOT || (typeof import.meta.dirname === "string" ? join(import.meta.dirname, "..") : join(homedir(), "projects", "VibeSquad")));
@@ -52,20 +53,7 @@ export function createDaemonClient(rootDir = REPO_ROOT) {
 }
 
 function resolveTeamsFilePath(rootDir = REPO_ROOT) {
-  if (process.env.VIBESQUAD_TEAMS_FILE) {
-    const p = resolve(process.env.VIBESQUAD_TEAMS_FILE);
-    if (existsSync(p)) return p;
-  }
-  if (!process.env.VIBESQUAD_IGNORE_HOME_TEAMS) {
-    const homeTeams = join(
-      process.env.VIBESQUAD_HOME || join(os.homedir(), ".vibesquad"),
-      "teams.json",
-    );
-    if (existsSync(homeTeams)) return homeTeams;
-  }
-  const local = join(rootDir, "teams.json");
-  if (existsSync(local)) return local;
-  return join(rootDir, "teams.example.json");
+  return resolveSharedTeamsFilePath(rootDir);
 }
 
 function loadTeamsConfig(rootDir = REPO_ROOT) {
@@ -85,6 +73,47 @@ function laneDisplayName(laneId, rootDir = REPO_ROOT) {
     }
   }
   return { teamId: "", laneId: safeSegment(laneId), laneName: String(laneId || "vibesquad").replace(/-/g, " ") };
+}
+
+const isDir = (p) => {
+  try {
+    return statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Folder a never-spawned Team should start in. Registry paths are usually folder names ("MyGame")
+ * matched against agent cwds, so try each as an absolute path, then as a sibling of this repo's main checkout,
+ * then under ~/projects. Lane paths win over team paths. Returns null when nothing exists on disk.
+ */
+export function laneWorkingDir(teamId, laneId, rootDir = REPO_ROOT) {
+  const cfg = loadTeamsConfig(rootDir);
+  const needle = String(laneId ?? "").toLowerCase();
+  const teams = cfg.teams ?? [];
+  const team =
+    teams.find((t) => (t.lanes ?? []).some((l) => String(l.id).toLowerCase() === needle) && (!teamId || t.id === teamId)) ||
+    teams.find((t) => (t.lanes ?? []).some((l) => String(l.id).toLowerCase() === needle)) ||
+    teams.find((t) => t.id === teamId);
+  if (!team) return null;
+  const lane = (team.lanes ?? []).find((l) => String(l.id).toLowerCase() === needle);
+  const candidates = [...(lane?.paths ?? []), ...(lane?.path ? [lane.path] : []), ...(team.paths ?? [])]
+    .map((p) => String(p ?? "").trim())
+    .filter(Boolean);
+  const mainRoot = resolveWorktreeRootPath(rootDir) || rootDir;
+  const bases = [...new Set([dirname(resolve(mainRoot)), dirname(resolve(rootDir)), join(homedir(), "projects")])];
+  for (const p of candidates) {
+    if (isAbsolute(p)) {
+      if (isDir(p)) return resolve(p);
+      continue;
+    }
+    for (const base of bases) {
+      const full = join(base, p);
+      if (isDir(full)) return full;
+    }
+  }
+  return null;
 }
 
 function readLocalAgentRecord(agentId, rootDir = REPO_ROOT) {
@@ -445,7 +474,8 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       writeBrainstormSummary(laneId, body.summaryUpdate, rootDir);
     }
     const summary = readBrainstormSummary(laneId, rootDir);
-    const cwd = oldAgent?.cwd || rootDir;
+    // A never-spawned Team (e.g. an EFI pin) starts in its own repo, not wherever VibeSquad runs.
+    const cwd = oldAgent?.cwd || laneWorkingDir(teamId, laneId, rootDir) || rootDir;
     const latestPlan = findNewestPlanFile(cwd, rootDir);
 
     if (reason === "handoff") {
