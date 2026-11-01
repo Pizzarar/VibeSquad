@@ -98,7 +98,8 @@ if (isMain) {
   }
   const env = {
     ...process.env,
-    TAURI_SIGNING_PRIVATE_KEY: process.env.TAURI_SIGNING_PRIVATE_KEY || readFileSync(keyPath, "utf8").trim(),
+    TAURI_SIGNING_PRIVATE_KEY: keyPath,
+    TAURI_SIGNING_PRIVATE_KEY_PATH: keyPath,
   };
 
   if (!opts.skipBuild) {

@@ -89,13 +89,14 @@ console.log(`[build:desktop] staged runtime with ${closure.length} production pa
 const licenseFile = join(rootDir, "public", "THIRD-PARTY-LICENSES.txt");
 const defaultKeyPath = join(homedir(), ".tauri", "vibesquad-updater.key");
 const signingKeyPath = env.TAURI_SIGNING_PRIVATE_KEY_PATH || (existsSync(defaultKeyPath) ? defaultKeyPath : "");
-if (!env.TAURI_SIGNING_PRIVATE_KEY && signingKeyPath && existsSync(signingKeyPath)) {
-  env.TAURI_SIGNING_PRIVATE_KEY = readFileSync(signingKeyPath, "utf8").trim();
-  console.log(`[build:desktop] Loaded Tauri updater signing key from ${signingKeyPath}`);
+if (signingKeyPath && existsSync(signingKeyPath)) {
+  env.TAURI_SIGNING_PRIVATE_KEY = signingKeyPath;
+  console.log(`[build:desktop] Using Tauri updater signing key path ${signingKeyPath}`);
 }
 
 console.log("[build:desktop] 3/4 Building Tauri 2 NSIS installer...");
-execFileSync(process.platform === "win32" ? "cmd.exe" : "npx", process.platform === "win32" ? ["/d", "/s", "/c", "npx.cmd tauri build --bundles nsis"] : ["tauri", "build", "--bundles", "nsis"], {
+const tauriCliJs = require.resolve("@tauri-apps/cli/tauri.js");
+execFileSync(process.execPath, [tauriCliJs, "build", "--bundles", "nsis"], {
   cwd: rootDir,
   env,
   stdio: "inherit",
@@ -121,7 +122,6 @@ const destSig = `${destInstaller}.sig`;
 if (existsSync(srcSig)) {
   copyFileSync(srcSig, destSig);
 } else if (signingKeyPath && existsSync(signingKeyPath)) {
-  const tauriCliJs = require.resolve("@tauri-apps/cli/tauri.js");
   const signEnv = { ...env, TAURI_SIGNING_PRIVATE_KEY_PATH: signingKeyPath };
   delete signEnv.TAURI_SIGNING_PRIVATE_KEY;
   execFileSync(process.execPath, [tauriCliJs, "signer", "sign", destInstaller], {
