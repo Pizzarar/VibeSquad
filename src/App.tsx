@@ -74,6 +74,7 @@ import { FullToggle, PinGrid, SidebarPins, useFullView, type PinHandler } from "
 import { pinsForSquad, type Pin } from "./pins";
 import { clearPinFocus, exitPinFocus, focusPin, usePinFocus, usePinsHome } from "./pinFocus";
 import { PinFocusHeader, PinRail } from "./PinRail";
+import { PinToast } from "./PinIdeas";
 import { AddBuddyModal, Modal, NewAgentModal, ProfileImportModal, TeamSettingsModal, useProfiles } from "./TeamActions";
 import { PairDeviceModal } from "./PairDeviceModal";
 import { DaemonStatusBanner, DiagnosticsModal, HelpModal, checkForUpdates, updateLabel, type UpdateCheck } from "./DiagnosticsModal";
@@ -1862,6 +1863,7 @@ export function App() {
         />
       )}
       {pinFocusView && pinFocus && <PinRail view={pinFocusView} focus={pinFocus} onPick={onRailPick} />}
+      <PinToast />
       <MobileBar />
       {uiScaleHud && (
         <div className="ui-scale-hud" data-testid="ui-scale-hud" role="status" aria-live="polite">

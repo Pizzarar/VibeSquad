@@ -32,7 +32,8 @@ import {
   parkTopicBrainstorm,
   triageInboxCards,
 } from "../server/inbox.mjs";
-import { createDaemonClient } from "../server/brainstorm.mjs";
+import { createDaemonClient, readBrainstormSummary, writeBrainstormSummary } from "../server/brainstorm.mjs";
+import { bestOverlap, newPinBrief, slugLaneId, takenLaneIds, uniqueLaneId } from "../server/pin-ideas.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "../server/teams-file.mjs";
 import {
   UNASSIGNED_TEAM_ID,
@@ -410,6 +411,7 @@ function parseArgs(argv) {
     "card",
     "note",
     "binDir",
+    "brief",
   ]);
   const booleans = new Set([
     "sinceMe",
@@ -422,6 +424,7 @@ function parseArgs(argv) {
     "json",
     "notes",
     "dryRun",
+    "force",
   ]);
 
   for (let i = 0; i < argv.length; i++) {
@@ -626,6 +629,7 @@ Usage:
   vs inbox add "<idea 1>" ["<idea 2>" ...] [--lane <lane>] [--from-brainstorm]
   vs inbox list [--lane <lane>]
   vs inbox triage --merge <targetId> <sourceId...> | --bounce <cardId> --lane <newLane>
+  vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force]
   vs install-shim [--bin-dir <dir>]
 
 Types: ${LOG_TYPES.join(", ")} (text 1..${MAX_TEXT} chars)
@@ -1602,6 +1606,7 @@ export function installVsShim({ binDirs, targetScript, baseHome } = {}) {
     "server/inbox.mjs",
     "server/profiles.mjs",
     "server/brainstorm.mjs",
+    "server/pin-ideas.mjs",
     "docs/profiles/DEFAULT_PACK.md",
   ];
 
@@ -1726,6 +1731,62 @@ export function installVsShim({ binDirs, targetScript, baseHome } = {}) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// vs pin new: a pinned Team from an idea (docs/PLAN_PINNED_FEATURES.md §5). Writes the lane to
+// teams.json and the brief; never spawns an agent (the first click on the pin starts its Brainstorm).
+// ---------------------------------------------------------------------------
+
+function commandPin(flags) {
+  const sub = String(flags._.shift() ?? "").toLowerCase();
+  if (sub !== "new") throw new Error('usage: vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force]');
+  const name = flags._.join(" ").trim();
+  if (!name) throw new Error('pin new needs a name: vs pin new "<name>" --brief "<idea>"');
+  const brief = String(flags.brief ?? "").trim() || name;
+
+  const identity = resolveIdentity({ ...flags, lane: undefined });
+  const squadDef = findTeamDef(flags.team ? String(flags.team) : identity.team.id) ?? findTeamDef(identity.team.name);
+  if (!squadDef) throw new Error(`unknown squad "${flags.team ?? identity.team.name}". Pass --team <squad>.`);
+  const lanes = squadDef.lanes ?? [];
+
+  // Done teams never count as a match; --force skips the refusal entirely (ids still dedupe below).
+  const live = lanes.filter((l) => l.state !== "done");
+  const same = live.find((l) => String(l.name).toLowerCase() === name.toLowerCase() || l.id === slugLaneId(name));
+  const hit = flags.force ? null : same ? { lane: same } : bestOverlap(`${name}
+${brief}`, live);
+  if (hit) {
+    process.stderr.write(`Sounds like ${hit.lane.name} (${hit.lane.id}) in ${squadDef.name}. Use that Team${same ? "" : ", or re-run with --force to pin a new one"}.\n`);
+    return 1;
+  }
+
+  const taken = new Set(takenLaneIds(TEAM_DEFS.flatMap((t) => t.lanes ?? [])));
+  let id = uniqueLaneId(slugLaneId(name), taken);
+  // Lane ids and brief files are global: skip ids that still have a brief on disk.
+  while (fs.existsSync(readBrainstormSummary(id).fullPath)) {
+    taken.add(id);
+    id = uniqueLaneId(slugLaneId(name), taken);
+  }
+
+  const written = writeBrainstormSummary(id, newPinBrief(id, name, brief));
+  let file = resolveTeamsFilePath();
+  if (path.basename(file) === "teams.example.json") file = path.join(BASE_DIR, "teams.json");
+  const { value: cur } = readJsonFileWithBom(file, { fallback: null, label: "teams.json" });
+  const doc = Array.isArray(cur?.teams) ? cur : { ...TEAMS_FILE };
+  const target = doc.teams.find((t) => t.id === squadDef.id);
+  if (!target) throw new Error(`squad "${squadDef.id}" is not in ${file}`);
+  target.lanes = [...(target.lanes ?? []), { id, name, state: "pinned" }];
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, JSON.stringify(doc, null, 2) + "\n", "utf8");
+  fs.renameSync(tmp, file);
+
+  if (flags.json) {
+    process.stdout.write(JSON.stringify({ ok: true, squad: squadDef.id, laneId: id, name, brief: written.path, teamsFile: file }, null, 2) + "\n");
+    return 0;
+  }
+  process.stdout.write(`Pinned ${name} (${id}) in ${squadDef.name}. Brief: ${written.path}. No agent started; the first click on the pin starts its Brainstorm.\n`);
+  return 0;
+}
+
 function commandInstallShim(flags) {
   const binDirs = flags.binDir ? [path.resolve(String(flags.binDir))] : undefined;
   const res = installVsShim({ binDirs, baseHome: BASE_DIR });
@@ -1767,6 +1828,7 @@ function main(argv) {
     if (command === "log") return commandLog(flags);
     if (command === "handoff") return commandHandoff(flags);
     if (command === "inbox") return commandInbox(flags);
+    if (command === "pin") return commandPin(flags);
     if (command === "install-shim") return commandInstallShim(flags);
     process.stderr.write(`Error: unknown command "${command}". Try "vs --help".\n`);
     return 1;

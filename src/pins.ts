@@ -186,3 +186,22 @@ export function briefStamp(d = new Date()): string {
 
 /** Append one line to the end of a brief, keeping exactly one trailing newline. */
 export const appendBriefLine = (brief: string, line: string): string => `${brief.replace(/\s+$/, "")}\n\n${line}\n`;
+
+// ── Step 6: idea capture (docs/PLAN_PINNED_FEATURES.md §5) ────────────────────
+// Shared with `vs pin new` (cli/vs.mjs), so the pure helpers live in server/pin-ideas.mjs.
+import { takenLaneIds } from "../server/pin-ideas.mjs";
+export {
+  bestOverlap,
+  nameFromIdea,
+  newPinBrief,
+  OVERLAP_THRESHOLD,
+  overlapScore,
+  parseSendTo,
+  SEND_TO_MARKER,
+  slugLaneId,
+  takenLaneIds,
+  uniqueLaneId,
+} from "../server/pin-ideas.mjs";
+
+/** Every lane id and alias in every squad (lane ids and brief files are global). */
+export const allLaneIds = (teams: TeamDef[]): string[] => takenLaneIds(teams.flatMap((t) => t.lanes));
