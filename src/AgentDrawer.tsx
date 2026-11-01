@@ -185,6 +185,12 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
     localStorage.setItem("vs.right-dock.open", String(dockOpen));
   }, [dockOpen]);
 
+  useEffect(() => {
+    const onOpenDock = () => setDockOpen(true);
+    window.addEventListener("vs:open-right-dock", onOpenDock);
+    return () => window.removeEventListener("vs:open-right-dock", onOpenDock);
+  }, []);
+
   const loadSummary = useCallback(async () => {
     setSummaryLoading(true);
     try {

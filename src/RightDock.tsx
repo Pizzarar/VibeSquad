@@ -1,18 +1,42 @@
 import { useEffect, useRef, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
+import { ChangesPanel } from "./ChangesPanel";
+import { FilesPanel } from "./FilesPanel";
+import { TerminalPanel } from "./TerminalPanel";
+import { ScriptsPanel } from "./ScriptsPanel";
 
-type Tab = "Changes" | "Files" | "Terminal" | "Scripts";
-const TABS: Tab[] = ["Changes", "Files", "Terminal", "Scripts"];
+export type DockTab = "Changes" | "Files" | "Terminal" | "Scripts";
+const TABS: DockTab[] = ["Changes", "Files", "Terminal", "Scripts"];
+
+export type OpenRightDockDetail = {
+  tab: DockTab;
+  filePath?: string;
+  line?: number;
+};
+
+export function openRightDockTab(tab: DockTab, opts?: { filePath?: string; line?: number }) {
+  localStorage.setItem("vs.right-dock.open", "true");
+  localStorage.setItem("vs.right-dock.tab", tab);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent<OpenRightDockDetail>("vs:open-right-dock", {
+        detail: { tab, ...opts },
+      }),
+    );
+  }
+}
 
 type RightDockProps = {
   agent: PaseoAgent;
 };
 
-export function RightDock({ agent: _agent }: RightDockProps) {
-  const [activeTab, setActiveTab] = useState<Tab>(
-    () => (localStorage.getItem("vs.right-dock.tab") as Tab | null) ?? "Changes",
+export function RightDock({ agent }: RightDockProps) {
+  const [activeTab, setActiveTab] = useState<DockTab>(
+    () => (localStorage.getItem("vs.right-dock.tab") as DockTab | null) ?? "Changes",
   );
   const [width, setWidth] = useState(() => Number(localStorage.getItem("vs.right-dock.width")) || 320);
+  const [targetFile, setTargetFile] = useState<string | null>(null);
+  const [targetLine, setTargetLine] = useState<number | null>(null);
   const resizing = useRef(false);
   const startX = useRef(0);
   const startW = useRef(0);
@@ -24,6 +48,18 @@ export function RightDock({ agent: _agent }: RightDockProps) {
   useEffect(() => {
     localStorage.setItem("vs.right-dock.width", String(width));
   }, [width]);
+
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const detail = (e as CustomEvent<OpenRightDockDetail>).detail;
+      if (!detail) return;
+      if (detail.tab) setActiveTab(detail.tab);
+      if (detail.filePath !== undefined) setTargetFile(detail.filePath);
+      if (detail.line !== undefined) setTargetLine(detail.line ?? null);
+    };
+    window.addEventListener("vs:open-right-dock", onOpen);
+    return () => window.removeEventListener("vs:open-right-dock", onOpen);
+  }, []);
 
   const onMouseDown = (e: React.MouseEvent) => {
     resizing.current = true;
@@ -44,12 +80,13 @@ export function RightDock({ agent: _agent }: RightDockProps) {
   };
 
   return (
-    <div className="right-dock" style={{ width }}>
+    <div className="right-dock" data-testid="right-dock" style={{ width }}>
       <div className="right-dock-resize-handle" onMouseDown={onMouseDown} title="Drag to resize" />
       <div className="right-dock-tabs">
         {TABS.map((tab) => (
           <button
             key={tab}
+            data-testid={`right-dock-tab-${tab.toLowerCase()}`}
             className={`right-dock-tab${activeTab === tab ? " active" : ""}`}
             onClick={() => setActiveTab(tab)}
           >
@@ -58,10 +95,10 @@ export function RightDock({ agent: _agent }: RightDockProps) {
         ))}
       </div>
       <div className="right-dock-body">
-        <div className="right-dock-placeholder">
-          <span className="muted">{activeTab} panel</span>
-          <span className="muted small">Coming in Wave 1 · {activeTab === "Changes" ? "Batch D" : "Batch E"}</span>
-        </div>
+        {activeTab === "Changes" && <ChangesPanel agent={agent} />}
+        {activeTab === "Files" && <FilesPanel agent={agent} targetFile={targetFile} targetLine={targetLine} />}
+        {activeTab === "Terminal" && <TerminalPanel agent={agent} />}
+        {activeTab === "Scripts" && <ScriptsPanel agent={agent} />}
       </div>
     </div>
   );
