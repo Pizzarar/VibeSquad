@@ -1,3 +1,4 @@
+import { FIRST_RUN_DONE_KEY, FirstRunModal, fetchFirstRunStatus, type FirstRunStatus } from "./FirstRunModal";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { ProviderQuotaView } from "./antigravity";
@@ -1237,7 +1238,7 @@ function useExposedIps(): string[] {
   return ips;
 }
 
-function AboutLicensesModal({ onClose }: { onClose: () => void }) {
+function AboutLicensesModal({ onClose, onChecklist }: { onClose: () => void; onChecklist: () => void }) {
   const [text, setText] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
@@ -1252,8 +1253,13 @@ function AboutLicensesModal({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="About VibeSquad & Third-Party Licenses" onClose={onClose} wide>
       <div data-testid="about-licenses-modal">
-        <p>VibeSquad works with Paseo.</p>
+        <p>VibeSquad works with Paseo (pinned CLI v0.13.2).</p>
         <p>Licensed under the MIT License.</p>
+        <p>
+          <button className="btn ghost small" data-testid="about-setup-checklist-btn" onClick={onChecklist}>
+            Setup Checklist
+          </button>
+        </p>
         <pre style={{ maxHeight: "50vh", overflow: "auto", whiteSpace: "pre-wrap", fontSize: 11 }}>{text ?? "Loading…"}</pre>
       </div>
     </Modal>
@@ -1271,7 +1277,8 @@ export function App() {
   const mobileTeamView = useMobileTeamView();
   const uiScale = useUiScale();
   const uiScaleHud = useUiScaleHud();
-  const [modal, setModal] = useState<"new-agent" | "add-buddy" | "settings" | "pair-device" | "about" | null>(null);
+  const [modal, setModal] = useState<"new-agent" | "add-buddy" | "settings" | "pair-device" | "about" | "first-run" | null>(null);
+  const [firstRunStatus, setFirstRunStatus] = useState<FirstRunStatus | null>(null);
   const exposedIps = useExposedIps();
   const [successorId, setSuccessorId] = useState<string | null>(null);
   const [teamId, setTeamId] = useState(() => localStorage.getItem("vs.team") ?? views[0]?.team.id ?? "efi");
@@ -1303,6 +1310,15 @@ export function App() {
       setNeedsYou({ ...m.agent, labels: { ...labels, "handoff-flagged": "1" } } as PaseoAgent, reason).catch(() => flaggedLeads.current.delete(m.agent.id));
     }
   }, [members]);
+
+  useEffect(() => {
+    if (DEMO) return;
+    void fetchFirstRunStatus().then((s) => {
+      if (!s) return;
+      setFirstRunStatus(s);
+      if (!s.ready || !localStorage.getItem(FIRST_RUN_DONE_KEY)) setModal((m) => m ?? "first-run");
+    });
+  }, []);
 
   useEffect(() => {
     applyUiScaleToDom(uiScale);
@@ -1590,7 +1606,8 @@ export function App() {
       {modal === "new-agent" && view && <NewAgentModal view={view} onClose={() => setModal(null)} onCreated={selectAgent} />}
       {modal === "settings" && <TeamSettingsModal onClose={() => setModal(null)} />}
       {modal === "pair-device" && <PairDeviceModal onClose={() => setModal(null)} />}
-      {modal === "about" && <AboutLicensesModal onClose={() => setModal(null)} />}
+      {modal === "about" && <AboutLicensesModal onClose={() => setModal(null)} onChecklist={() => setModal("first-run")} />}
+      {modal === "first-run" && <FirstRunModal initial={firstRunStatus} onClose={() => setModal(null)} />}
       {!modal && profilesNeedSetup && !profilesSetupDismissed && <ProfileImportModal onClose={() => {}} />}
       {successorLead && (
         <HandoffModal

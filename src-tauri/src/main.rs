@@ -50,8 +50,9 @@ const DEFAULT_LAN_HOST: &str = "";
 const DEFAULT_MESHNET_HOST: &str = "";
 const DEFAULT_MESHNET_IP_HOST: &str = "";
 
+/// The bundled/local VibeSquad server. (DEFAULT_LAN_HOST stays empty so no personal IPs ship in the binary.)
 fn default_server_host() -> String {
-    DEFAULT_LAN_HOST.to_string()
+    "127.0.0.1:4180".to_string()
 }
 
 fn default_fallback_host() -> String {
@@ -276,6 +277,8 @@ pub struct SharedAppState {
     pub app_handle: RwLock<Option<AppHandle>>,
     pub tray_needs_item: RwLock<Option<MenuItem<tauri::Wry>>>,
     pub tracker: Mutex<AgentAlertTracker>,
+    /// The `node.exe server/serve.mjs` child we spawned (None when we reused an already-running server).
+    pub managed_server: Mutex<Option<std::process::Child>>,
 }
 
 impl SharedAppState {
@@ -1196,6 +1199,104 @@ async fn proxy_websocket(
     }
 }
 
+/// Locates `(node_exe, runtime_dir)`: installed runtime first, then the per-user copy, then a dev checkout.
+fn find_bundled_runtime() -> Option<(PathBuf, PathBuf)> {
+    let node_name = if cfg!(windows) { "node.exe" } else { "node" };
+    let mut roots: Vec<PathBuf> = Vec::new();
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+    if let Some(dir) = &exe_dir {
+        roots.push(dir.join("runtime"));
+        roots.push(dir.join("resources").join("runtime"));
+    }
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        if !local.trim().is_empty() {
+            roots.push(PathBuf::from(local).join("com.vibesquad.desktop").join("runtime"));
+        }
+    }
+    for root in roots {
+        let node = root.join(node_name);
+        if node.is_file() && root.join("server").join("serve.mjs").is_file() {
+            return Some((node, root));
+        }
+    }
+    // Dev fallback: target/<profile>/vibesquad.exe -> repo root, node from PATH.
+    let repo = exe_dir?.join("..").join("..").join("..");
+    if repo.join("server").join("serve.mjs").is_file() && repo.join("dist").join("index.html").is_file() {
+        let repo = repo.canonicalize().unwrap_or(repo);
+        return Some((PathBuf::from("node"), repo));
+    }
+    None
+}
+
+fn server_pid_path() -> PathBuf {
+    config_dir().join("server.pid")
+}
+
+/// Starts the bundled VibeSquad server when the configured local host is not healthy. Reuses a healthy one.
+async fn ensure_local_server_running(state: &Arc<SharedAppState>) {
+    let host = state.config.read().unwrap().server_host.clone();
+    if !is_local_host(&host) {
+        return;
+    }
+    if check_local_server_healthy(&state.http_client, &host).await.is_ok() {
+        return;
+    }
+    // Already spawned by us and still alive: just wait for it below.
+    let spawned_alive = {
+        let mut guard = state.managed_server.lock().unwrap();
+        match guard.as_mut() {
+            Some(child) => matches!(child.try_wait(), Ok(None)),
+            None => false,
+        }
+    };
+    if !spawned_alive {
+        // Anything left in server.pid belongs to a previous run that is no longer serving: forget it.
+        let _ = fs::remove_file(server_pid_path());
+        let Some((node, runtime_dir)) = find_bundled_runtime() else {
+            return;
+        };
+        let mut cmd = std::process::Command::new(&node);
+        cmd.arg("server/serve.mjs")
+            .current_dir(&runtime_dir)
+            .env("VIBESQUAD_RUNTIME_DIR", &runtime_dir)
+            .env("VIBESQUAD_BUNDLED_NODE", &node)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
+        match cmd.spawn() {
+            Ok(child) => {
+                let _ = fs::create_dir_all(config_dir());
+                let _ = fs::write(server_pid_path(), child.id().to_string());
+                *state.managed_server.lock().unwrap() = Some(child);
+            }
+            Err(_) => return,
+        }
+    }
+    for _ in 0..25 {
+        if check_local_server_healthy(&state.http_client, &host).await.is_ok() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+/// Kills the server we spawned (never one we merely reused) so quitting leaves no orphan node.exe.
+fn stop_managed_server(state: &Arc<SharedAppState>) {
+    let child = state.managed_server.lock().unwrap().take();
+    if let Some(mut child) = child {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = fs::remove_file(server_pid_path());
+    }
+}
+
 async fn proxy_http_handler(
     State(state): State<Arc<SharedAppState>>,
     req: Request,
@@ -1220,6 +1321,7 @@ async fn proxy_http_handler(
 
     // If configured for localhost, verify localhost is actually healthy before proxying root navigation
     if is_root_nav && is_local {
+        ensure_local_server_running(&state).await;
         if check_local_server_healthy(&state.http_client, &cfg.server_host)
             .await
             .is_err()
@@ -1548,6 +1650,7 @@ fn main() {
         app_handle: RwLock::new(None),
         tray_needs_item: RwLock::new(None),
         tracker: Mutex::new(AgentAlertTracker::default()),
+        managed_server: Mutex::new(None),
     });
 
     // Start background Tokio runtime and bind loopback server BEFORE Tauri opens the window
@@ -1569,9 +1672,15 @@ fn main() {
 
     // Headless proxy mode for automated CLI verification if requested
     let args: Vec<String> = std::env::args().collect();
-    if args.iter().any(|a| a == "--headless-proxy")
-        || std::env::var("VIBESQUAD_HEADLESS_PROXY").as_deref() == Ok("1")
-    {
+    let headless = args.iter().any(|a| a == "--headless-proxy")
+        || std::env::var("VIBESQUAD_HEADLESS_PROXY").as_deref() == Ok("1");
+    // Own the server process: start the bundled one (or reuse a healthy :4180) before the window opens.
+    // Headless test mode only does this when a runtime is actually bundled next to the exe.
+    if !headless || find_bundled_runtime().is_some() {
+        let st = shared_state.clone();
+        rt.block_on(async move { ensure_local_server_running(&st).await });
+    }
+    if headless {
         println!("VIBESQUAD_PROXY_LISTENING=http://127.0.0.1:{}", local_port);
         rt.block_on(async {
             loop {
@@ -1583,6 +1692,7 @@ fn main() {
 
     let state_for_setup = shared_state.clone();
     let state_for_window = shared_state.clone();
+    let state_for_exit = shared_state.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -1690,6 +1800,7 @@ fn main() {
                     }
                     "quit" => {
                         state_for_menu.quitting.store(true, Ordering::SeqCst);
+                        stop_managed_server(&state_for_menu);
                         app.exit(0);
                     }
                     _ => {}
@@ -1712,12 +1823,19 @@ fn main() {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 let exit_on_close =
                     std::env::var("VIBESQUAD_EXIT_ON_CLOSE").as_deref() == Ok("1");
-                if !state_for_window.quitting.load(Ordering::SeqCst) && !exit_on_close {
+                if exit_on_close {
+                    stop_managed_server(&state_for_window);
+                } else if !state_for_window.quitting.load(Ordering::SeqCst) {
                     api.prevent_close();
                     let _ = window.hide();
                 }
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running VibeSquad desktop application");
+        .build(tauri::generate_context!())
+        .expect("error while building VibeSquad desktop application")
+        .run(move |_app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                stop_managed_server(&state_for_exit);
+            }
+        });
 }

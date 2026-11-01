@@ -8,6 +8,18 @@ Paseo (@getpaseo/client, @getpaseo/protocol) - Apache-2.0
 Copyright (c) 2025-present Mohamed Boudra
 ==============================================================================
 
+==============================================================================
+Node.js LTS runtime (node.exe and npm) - MIT
+Copyright Node.js contributors. All rights reserved.
+Bundled in the VibeSquad desktop installer (runtime/). npm and its dependencies carry their own permissive licenses.
+==============================================================================
+
+==============================================================================
+Paseo CLI (@getpaseo/cli@0.13.2) - Apache-2.0
+Copyright (c) 2025-present Mohamed Boudra
+Not bundled: reused if already installed, otherwise downloaded from npm on first launch into a VibeSquad-managed folder.
+==============================================================================
+
 Production npm packages
 -----------------------
 @fontsource/jetbrains-mono@5.3.0  OFL-1.1

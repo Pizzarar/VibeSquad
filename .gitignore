@@ -9,6 +9,7 @@ scratch/
 /teams.json
 /dist-desktop/
 /src-tauri/certs/
+/src-tauri/runtime/
 docs/brainstorm/
 docs/journey/
 docs/audits/

@@ -29,6 +29,7 @@ import "./brainstorm.mjs";
 import "./inbox.mjs";
 import { installVsShim } from "../cli/vs.mjs";
 import { startPushWatcher } from "./push.mjs";
+import { ensurePaseoDaemon } from "./first-run.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
 const distDir = join(rootDir, "dist");
@@ -447,34 +448,11 @@ server.on("error", async (e) => {
 });
 const isMain = process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename);
 
-function ensurePaseoDaemon() {
-  const appData = process.env.APPDATA;
-  if (!appData) return;
-  const paseoCmd = join(appData, "npm", "paseo.cmd");
-  if (!existsSync(paseoCmd)) return;
-  const [host, p] = readPaseo(rootDir).listen.replace(/^wss?:\/\//, "").split(/:(?=\d+$)/);
-  const sock = connect(Number(p) || 6767, host || "127.0.0.1");
-  sock.setTimeout(1000);
-  const startDaemon = () => {
-    sock.destroy();
-    try {
-      spawn("cmd.exe", ["/c", `"${paseoCmd}" start`], {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true,
-      }).unref();
-    } catch {}
-  };
-  sock.once("connect", () => sock.destroy());
-  sock.once("error", startDaemon);
-  sock.once("timeout", startDaemon);
-}
-
 if (isMain) {
   try {
     installVsShim();
   } catch {}
-  ensurePaseoDaemon();
+  void ensurePaseoDaemon({ listen: readPaseo(rootDir).listen });
   server.listen(port, "127.0.0.1", () => {
     console.log(`VibeSquad serving ${distDir} on ${url}`);
     const { meshnetIp, meshnetHost, lanIp } = netConfig();
