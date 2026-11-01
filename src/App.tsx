@@ -75,6 +75,7 @@ import { clearPinFocus, exitPinFocus, focusPin, usePinFocus, usePinsHome } from 
 import { PinFocusHeader, PinRail } from "./PinRail";
 import { AddBuddyModal, Modal, NewAgentModal, ProfileImportModal, TeamSettingsModal, useProfiles } from "./TeamActions";
 import { PairDeviceModal } from "./PairDeviceModal";
+import { DaemonStatusBanner, DiagnosticsModal, HelpModal, checkForUpdates, updateLabel, type UpdateCheck } from "./DiagnosticsModal";
 import { BriefEditorHost } from "./BriefEditor";
 import { TeamFeed } from "./TeamFeed";
 import { HandoffModal } from "./HandoffModal";
@@ -518,6 +519,8 @@ const Sidebar = memo(function Sidebar(props: {
   onQuickStart: PinHandler;
   onPairDevice?: () => void;
   onAbout?: () => void;
+  onHelp?: () => void;
+  onDiagnostics?: () => void;
   onSettings: () => void;
   usage: ProviderQuotaView[];
 }) {
@@ -603,6 +606,12 @@ const Sidebar = memo(function Sidebar(props: {
       </button>
       <button className="btn ghost small" data-testid="about-licenses-btn" onClick={props.onAbout} title="About VibeSquad and third-party licenses">
         ℹ ABOUT &amp; LICENSES
+      </button>
+      <button className="btn ghost small" data-testid="open-help-btn" onClick={props.onHelp}>
+        ❓ Help &amp; Docs
+      </button>
+      <button className="btn ghost small" data-testid="open-diagnostics-btn" onClick={props.onDiagnostics}>
+        🩺 Diagnostics &amp; Logs
       </button>
       <div className="sidebar-footer-row">
         <button className="btn ghost small" onClick={props.onSettings} title="Edit squads, teams, path matchers and 4K UI scale">
@@ -1306,6 +1315,7 @@ function useExposedIps(): string[] {
 function AboutLicensesModal({ onClose, onChecklist }: { onClose: () => void; onChecklist: () => void }) {
   const [text, setText] = useState<string | null>(null);
   const updaterStatus = useUpdaterStatus();
+  const [upd, setUpd] = useState<UpdateCheck["state"]>("idle");
   useEffect(() => {
     void loadUpdaterStatus();
     let alive = true;
@@ -1322,6 +1332,19 @@ function AboutLicensesModal({ onClose, onChecklist }: { onClose: () => void; onC
       <div data-testid="about-licenses-modal">
         <p data-testid="about-version-channel">
           <b>VibeSquad v{updaterStatus.currentVersion}</b> · Channel: <code>{updaterStatus.channel}</code>
+        </p>
+        <p>
+          <button
+            className="btn ghost small"
+            data-testid="about-check-updates-btn"
+            disabled={upd === "checking"}
+            onClick={() => {
+              setUpd("checking");
+              void checkForUpdates().then((ok) => setUpd(ok ? "ok" : "error"));
+            }}
+          >
+            {updateLabel(upd, updaterStatus.currentVersion)}
+          </button>
         </p>
         <p>VibeSquad works with Paseo (pinned CLI v0.13.2).</p>
         <p>Licensed under the MIT License.</p>
@@ -1350,7 +1373,7 @@ export function App() {
   const mobileTeamView = useMobileTeamView();
   const uiScale = useUiScale();
   const uiScaleHud = useUiScaleHud();
-  const [modal, setModal] = useState<"new-agent" | "add-buddy" | "settings" | "pair-device" | "about" | "first-run" | null>(null);
+  const [modal, setModal] = useState<"new-agent" | "add-buddy" | "settings" | "pair-device" | "about" | "help" | "diagnostics" | "first-run" | null>(null);
   const [firstRunStatus, setFirstRunStatus] = useState<FirstRunStatus | null>(null);
   const exposedIps = useExposedIps();
   const updaterStatus = useUpdaterStatus();
@@ -1565,6 +1588,8 @@ export function App() {
   const openSettings = useCallback(() => setModal("settings"), []);
   const openPairDevice = useCallback(() => setModal("pair-device"), []);
   const openAbout = useCallback(() => setModal("about"), []);
+  const openHelp = useCallback(() => setModal("help"), []);
+  const openDiagnostics = useCallback(() => setModal("diagnostics"), []);
   const openAddBuddy = useCallback(() => setModal("add-buddy"), []);
   const openNewAgent = useCallback(() => setModal("new-agent"), []);
   const onSuccessor = useCallback((m: Member) => setSuccessorId(m.agent.id), []);
@@ -1684,6 +1709,7 @@ export function App() {
           </button>
         </div>
       )}
+      <DaemonStatusBanner />
       {!focus && (
         <Sidebar
           views={sidebarViews}
@@ -1700,6 +1726,8 @@ export function App() {
           onTeam={onTeam}
           onPairDevice={openPairDevice}
           onAbout={openAbout}
+          onHelp={openHelp}
+          onDiagnostics={openDiagnostics}
           onSettings={openSettings}
           onAgent={onAgent}
           onQuickStart={onQuickStart}
@@ -1778,6 +1806,8 @@ export function App() {
       {modal === "settings" && <TeamSettingsModal onClose={() => setModal(null)} />}
       {modal === "pair-device" && <PairDeviceModal onClose={() => setModal(null)} />}
       {modal === "about" && <AboutLicensesModal onClose={() => setModal(null)} onChecklist={() => setModal("first-run")} />}
+      {modal === "help" && <HelpModal onClose={() => setModal(null)} onTour={() => setModal("first-run")} />}
+      {modal === "diagnostics" && <DiagnosticsModal onClose={() => setModal(null)} />}
       {modal === "first-run" && <FirstRunModal initial={firstRunStatus} onClose={() => setModal(null)} />}
       <BriefEditorHost />
       {!modal && profilesNeedSetup && !profilesSetupDismissed && <ProfileImportModal onClose={() => {}} />}

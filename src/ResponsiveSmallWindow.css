@@ -1,0 +1,29 @@
+/* ADE batch I: small window (900x700), 120% zoom wrapping, 4K scaling, diagnostics UI. */
+.daemon-down-banner { position: fixed; top: 0; left: 0; right: 0; z-index: 9000; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 12px; background: #5a1420; color: #ffd9de; border-bottom: 2px solid #ff4d6a; font-size: 12px; }
+.daemon-down-banner .spacer { flex: 1; }
+.diag-log { max-height: 40vh; overflow: auto; white-space: pre-wrap; font-size: 11px; background: var(--panel); border: 1px solid var(--line); padding: 8px; }
+.diag-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.help-section { margin-bottom: 12px; }
+.help-section h4 { margin: 0 0 4px; }
+
+.ws-row { min-width: 0; }
+.ws-row > * { min-width: 0; }
+.ws-main { min-width: 0; }
+.ws-chips { min-width: 0; flex-wrap: wrap; }
+.ws-chips .chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 1100px) {
+  .ws-row { grid-template-columns: 90px minmax(0, 1fr); }
+  .ws-row .ws-chips { grid-column: 1 / -1; justify-content: flex-start; }
+}
+
+@media (max-width: 1000px), (max-height: 760px) {
+  .sidebar:not(.collapsed) { width: 170px; }
+  .drawer-head { padding: 4px 8px; }
+  .timeline { min-height: 180px; }
+  .composer { position: sticky; bottom: 0; flex-shrink: 0; }
+}
+
+@media (min-width: 2560px) {
+  html { font-size: 125%; }
+  .drawer, .panes-area { min-width: 0; width: 100%; max-width: none; }
+}
