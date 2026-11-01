@@ -13,6 +13,7 @@ import {
   topicOf as identityTopicOf,
 } from "./identity.ts";
 import type { PinFields } from "./pins.ts";
+import { mergeTeams } from "./teamsMerge.ts";
 
 // A lane is a pinned Team in the UI. Pin fields (state, doneAt, order, lastProfile) live in src/pins.ts
 // and round-trip through saveTeams untouched; lanes without `state` count as pinned.
@@ -108,20 +109,63 @@ const cacheTeams = (next: TeamDef[]) => {
 // Bumped by every local save so an in-flight refresh can't land a copy older than the edit.
 let saveSeq = 0;
 
-/** Save locally and to the shared teams registry (the same file the CLI and plugin read). */
-export async function saveTeams(next: TeamDef[]): Promise<{ disk: boolean }> {
-  saveSeq++;
+// Revision of the registry file our TEAMS came from (GET /api/teams). Unknown until the first GET lands,
+// so a save before then always gets 409 and merges onto the real file.
+let teamsRevision = "unknown";
+
+const applyLocal = (next: TeamDef[]) => {
   TEAMS = next;
   cacheTeams(next);
   notifyTeams();
-  const body = JSON.stringify({ teams: next });
+};
+
+/** The registry as this UI last saw it, plus the file revision it came from (base for a later saveTeams). */
+export type TeamsSnapshot = { teams: TeamDef[]; revision: string };
+export const snapshotTeams = (): TeamsSnapshot => ({ teams: TEAMS, revision: teamsRevision });
+
+export type TeamsUpdater = (cur: TeamDef[]) => TeamDef[];
+
+/**
+ * Save locally and to the shared teams registry (the same file the CLI and plugin read). Pass an updater to
+ * have it re-run on the fresh file if someone else wrote it first. A plain array is merged onto the fresh
+ * file (only the teams and lanes this edit touched win); its base is the live TEAMS unless the caller edited
+ * an older copy, e.g. a modal open across polls, which must pass that copy as `base`.
+ */
+export async function saveTeams(next: TeamDef[] | TeamsUpdater, opts: { base?: TeamsSnapshot } = {}): Promise<{ disk: boolean }> {
+  saveSeq++;
+  const base = opts.base?.teams ?? TEAMS;
+  const edit = typeof next === "function" ? next : (fresh: TeamDef[]) => mergeTeams(base, next, fresh);
+  let teams = typeof next === "function" ? next(TEAMS) : next;
+  // The revision our edit was made against: an older one makes the server answer 409 so we merge.
+  let revision = opts.base?.revision ?? teamsRevision;
+  applyLocal(teams);
   const headers = { "content-type": "application/json" };
   for (const [url, method] of [["/api/teams", "PUT"], ["/__vibesquad/teams", "POST"]] as const) {
     try {
-      const r = await fetch(url, { method, headers, body });
-      if (r.ok) {
-        registryFile = { ...registryFile, teams: next };
-        return { disk: true };
+      let conflicts = 0;
+      for (;;) {
+        const r = await fetch(url, { method, headers, body: JSON.stringify({ teams, revision }) });
+        if (r.ok) {
+          const data = await r.json().catch(() => null);
+          if (typeof data?.revision === "string") teamsRevision = data.revision;
+          registryFile = { ...registryFile, teams };
+          return { disk: true };
+        }
+        if (r.status !== 409) break;
+        // A second conflict in a row: show what's on disk rather than retry forever.
+        if (++conflicts > 1) {
+          void refreshTeams();
+          return { disk: false };
+        }
+        // Someone else wrote the file: re-apply the edit to the registry the server sent back, then retry once.
+        const data = await r.json().catch(() => null);
+        if (!Array.isArray(data?.teams)) break;
+        const { error: _error, ...file } = data;
+        registryFile = file;
+        teamsRevision = revision = typeof data.revision === "string" ? data.revision : "unknown";
+        teams = edit(data.teams);
+        saveSeq++;
+        applyLocal(teams);
       }
     } catch {}
   }
@@ -137,6 +181,7 @@ export async function refreshTeams(): Promise<boolean> {
     const data = await r.json();
     if (!Array.isArray(data?.teams) || seq !== saveSeq) return false;
     registryFile = data;
+    if (typeof data.revision === "string") teamsRevision = data.revision;
     if (JSON.stringify(data.teams) === JSON.stringify(TEAMS)) return false;
     TEAMS = data.teams;
     cacheTeams(TEAMS);

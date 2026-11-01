@@ -2,7 +2,7 @@
 // tested in node and retried safely. src/pinActions.ts markPinComplete wires the real effects.
 // Retry rules: the Brainstorm's profile is saved before anything retires, the brief gets at most
 // one "Done <date>" line per day, and state=done is saved last, only after every step succeeded.
-import type { Member, TeamDef } from "./teams.ts";
+import type { Member, TeamsUpdater } from "./teams.ts";
 import { appendBriefLine, briefStamp, completeBlocker, patchLane, type Pin } from "./pins.ts";
 
 export type CompleteEffects = {
@@ -11,8 +11,8 @@ export type CompleteEffects = {
   writeBrief: (laneId: string, content: string) => Promise<void>;
   retire: (agent: Member["agent"], laneName: string) => Promise<void>;
   archive: (id: string) => Promise<unknown>;
-  getTeams: () => TeamDef[];
-  saveTeams: (next: TeamDef[]) => Promise<unknown>;
+  /** Saves as an updater so the patch re-applies to the fresh registry on a write conflict. */
+  saveTeams: (update: TeamsUpdater) => Promise<unknown>;
   now?: () => Date;
   /** Skip the brief (demo mode). */
   skipBrief?: boolean;
@@ -33,7 +33,7 @@ export async function runMarkComplete(pin: Pin, fx: CompleteEffects): Promise<{ 
   // 1. Remember the Brainstorm's profile before it is archived, so a retry (no live Brainstorm) keeps it.
   const profile = bs?.labels?.profile;
   if (profile && profile !== pin.lane.lastProfile) {
-    await fx.saveTeams(patchLane(fx.getTeams(), pin.squad.id, pin.lane.id, { lastProfile: profile }));
+    await fx.saveTeams((cur) => patchLane(cur, pin.squad.id, pin.lane.id, { lastProfile: profile }));
   }
 
   // 2. One "Done <date>" line, even when a failed attempt already wrote it.
@@ -50,6 +50,6 @@ export async function runMarkComplete(pin: Pin, fx: CompleteEffects): Promise<{ 
   if (pin.lead) await fx.retire(pin.lead.agent, pin.lane.name);
 
   // 4. Only now move the pin to the Done shelf.
-  await fx.saveTeams(patchLane(fx.getTeams(), pin.squad.id, pin.lane.id, { state: "done", doneAt: now.toISOString() }));
+  await fx.saveTeams((cur) => patchLane(cur, pin.squad.id, pin.lane.id, { state: "done", doneAt: now.toISOString() }));
   return { ok: true };
 }
