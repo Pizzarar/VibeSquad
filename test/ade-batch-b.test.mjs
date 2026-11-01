@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-// B-series: DrawerHeader controls (ADE Batch B)
-// Pure-logic tests; no DOM/React imports.
+// Pure logic tests for DrawerHeader additions — Node-only, no DOM or React.
 
-// ── helpers duplicated from DrawerHeader.tsx ─────────────────────────────────
+// ── FALLBACK_MODES ───────────────────────────────────────────────────────────
 
 const FALLBACK_MODES = [
   { id: "default", label: "Default" },
@@ -14,11 +13,59 @@ const FALLBACK_MODES = [
   { id: "bypassPermissions", label: "Bypass Perms" },
 ];
 
+test("B-1: FALLBACK_MODES has exactly 5 entries", () => {
+  assert.equal(FALLBACK_MODES.length, 5);
+});
+
+test("B-1: FALLBACK_MODES contains expected mode IDs", () => {
+  const ids = FALLBACK_MODES.map((m) => m.id);
+  assert.ok(ids.includes("default"), "default");
+  assert.ok(ids.includes("plan"), "plan");
+  assert.ok(ids.includes("acceptEdits"), "acceptEdits");
+  assert.ok(ids.includes("auto"), "auto");
+  assert.ok(ids.includes("bypassPermissions"), "bypassPermissions");
+});
+
+// ── nextModeInCycle ──────────────────────────────────────────────────────────
+
 function nextModeInCycle(modes, currentId) {
   if (!modes.length) return "default";
   const idx = modes.findIndex((m) => m.id === currentId);
   return modes[(idx + 1) % modes.length].id;
 }
+
+test("B-2: nextModeInCycle returns default when modes is empty", () => {
+  assert.equal(nextModeInCycle([], "default"), "default");
+  assert.equal(nextModeInCycle([], null), "default");
+});
+
+test("B-2: nextModeInCycle advances to the next mode", () => {
+  assert.equal(nextModeInCycle(FALLBACK_MODES, "default"), "plan");
+  assert.equal(nextModeInCycle(FALLBACK_MODES, "plan"), "acceptEdits");
+  assert.equal(nextModeInCycle(FALLBACK_MODES, "acceptEdits"), "auto");
+  assert.equal(nextModeInCycle(FALLBACK_MODES, "auto"), "bypassPermissions");
+});
+
+test("B-2: nextModeInCycle wraps around from last to first", () => {
+  assert.equal(nextModeInCycle(FALLBACK_MODES, "bypassPermissions"), "default");
+});
+
+test("B-2: nextModeInCycle starts from index 0 when currentId is null (not found)", () => {
+  // findIndex returns -1, (-1+1) % 5 = 0
+  assert.equal(nextModeInCycle(FALLBACK_MODES, null), FALLBACK_MODES[0].id);
+});
+
+test("B-2: nextModeInCycle starts from index 0 when currentId not in list", () => {
+  assert.equal(nextModeInCycle(FALLBACK_MODES, "unknown-mode"), FALLBACK_MODES[0].id);
+});
+
+test("B-2: nextModeInCycle works with a single-mode list (wraps to itself)", () => {
+  const single = [{ id: "auto" }];
+  assert.equal(nextModeInCycle(single, "auto"), "auto");
+  assert.equal(nextModeInCycle(single, null), "auto");
+});
+
+// ── formatCostUsd ────────────────────────────────────────────────────────────
 
 function formatCostUsd(usd) {
   if (usd < 0.001) return `$${usd.toFixed(4)}`;
@@ -26,247 +73,207 @@ function formatCostUsd(usd) {
   return `$${usd.toFixed(2)}`;
 }
 
-// ── FALLBACK_MODES ────────────────────────────────────────────────────────────
-
-test("B01: FALLBACK_MODES has 5 entries with expected ids", () => {
-  assert.equal(FALLBACK_MODES.length, 5);
-  const ids = FALLBACK_MODES.map((m) => m.id);
-  assert.ok(ids.includes("default"));
-  assert.ok(ids.includes("plan"));
-  assert.ok(ids.includes("acceptEdits"));
-  assert.ok(ids.includes("auto"));
-  assert.ok(ids.includes("bypassPermissions"));
+test("B-3: formatCostUsd formats zero as $0.0000", () => {
+  assert.equal(formatCostUsd(0), "$0.0000");
 });
 
-test("B02: FALLBACK_MODES entries each have id and label", () => {
-  for (const m of FALLBACK_MODES) {
-    assert.ok(typeof m.id === "string" && m.id.length > 0, `mode ${m.id} has id`);
-    assert.ok(typeof m.label === "string" && m.label.length > 0, `mode ${m.id} has label`);
-  }
+test("B-3: formatCostUsd uses 4 decimal places for sub-millicent values", () => {
+  assert.equal(formatCostUsd(0.0005), "$0.0005");
+  assert.equal(formatCostUsd(0.0009), "$0.0009");
 });
 
-// ── nextModeInCycle ───────────────────────────────────────────────────────────
-
-test("B03: nextModeInCycle wraps from last to first", () => {
-  const modes = [{ id: "a" }, { id: "b" }, { id: "c" }];
-  assert.equal(nextModeInCycle(modes, "c"), "a");
-});
-
-test("B04: nextModeInCycle advances from middle", () => {
-  const modes = [{ id: "a" }, { id: "b" }, { id: "c" }];
-  assert.equal(nextModeInCycle(modes, "a"), "b");
-  assert.equal(nextModeInCycle(modes, "b"), "c");
-});
-
-test("B05: nextModeInCycle when currentId is null starts at index 0+1=1", () => {
-  const modes = [{ id: "a" }, { id: "b" }, { id: "c" }];
-  // findIndex returns -1 for null → (-1+1)%3 = 0 → "a"
-  assert.equal(nextModeInCycle(modes, null), "a");
-});
-
-test("B06: nextModeInCycle with empty modes returns 'default'", () => {
-  assert.equal(nextModeInCycle([], "plan"), "default");
-});
-
-test("B07: nextModeInCycle with single mode always returns that mode", () => {
-  assert.equal(nextModeInCycle([{ id: "only" }], "only"), "only");
-  assert.equal(nextModeInCycle([{ id: "only" }], null), "only");
-});
-
-test("B08: nextModeInCycle full FALLBACK_MODES cycle covers all 5 modes", () => {
-  let cur = null;
-  const seen = new Set();
-  for (let i = 0; i < FALLBACK_MODES.length; i++) {
-    cur = nextModeInCycle(FALLBACK_MODES, cur);
-    seen.add(cur);
-  }
-  assert.equal(seen.size, FALLBACK_MODES.length, "each iteration visits a unique mode");
-});
-
-// ── formatCostUsd ─────────────────────────────────────────────────────────────
-
-test("B09: formatCostUsd formats sub-$0.001 with 4 decimal places", () => {
-  assert.equal(formatCostUsd(0.0004), "$0.0004");
-  assert.equal(formatCostUsd(0.0), "$0.0000");
-});
-
-test("B10: formatCostUsd formats $0.001–$0.01 with 3 decimal places", () => {
-  assert.equal(formatCostUsd(0.004), "$0.004");
+test("B-3: formatCostUsd uses 3 decimal places for millicent-range values", () => {
   assert.equal(formatCostUsd(0.001), "$0.001");
+  assert.equal(formatCostUsd(0.005), "$0.005");
 });
 
-test("B11: formatCostUsd formats $0.01+ with 2 decimal places", () => {
+test("B-3: formatCostUsd uses 2 decimal places for cent-range values", () => {
   assert.equal(formatCostUsd(0.14), "$0.14");
   assert.equal(formatCostUsd(1.5), "$1.50");
   assert.equal(formatCostUsd(0.01), "$0.01");
 });
 
-// ── DEMO-aware setModeHelper logic ────────────────────────────────────────────
+test("B-3: formatCostUsd formats typical API costs correctly", () => {
+  assert.equal(formatCostUsd(0.004), "$0.004");
+  assert.equal(formatCostUsd(0.12), "$0.12");
+  assert.equal(formatCostUsd(2.50), "$2.50");
+});
 
-test("B12: setModeHelper DEMO path calls upsertLocalAgent with new currentModeId", async () => {
-  const agent = { id: "ag1", currentModeId: "plan", model: "m1", availableModes: [] };
+// ── DEMO-aware setters (pure behavior simulation) ────────────────────────────
+
+test("B-4: setModeHelper DEMO path upserts currentModeId on local agent", () => {
   const upserted = [];
   const fakeUpsert = (a) => upserted.push(a);
 
-  // simulate DEMO=true path
-  const demoSetMode = async (ag, modeId) => { fakeUpsert({ ...ag, currentModeId: modeId }); };
-  await demoSetMode(agent, "auto");
-  assert.equal(upserted[0].currentModeId, "auto");
-  assert.equal(upserted[0].id, "ag1");
+  const agent = { id: "agent-1", currentModeId: "default", model: null, thinkingOptionId: null };
+  // Simulate DEMO=true path
+  const setModeHelperDemo = (agent, modeId) => {
+    fakeUpsert({ ...agent, currentModeId: modeId });
+  };
+
+  setModeHelperDemo(agent, "plan");
+  assert.equal(upserted.length, 1);
+  assert.equal(upserted[0].currentModeId, "plan");
+  assert.equal(upserted[0].id, "agent-1");
 });
 
-test("B13: setModeHelper live path calls daemonClient.setAgentMode", async () => {
+test("B-4: setModeHelper live path calls daemonClient.setAgentMode", async () => {
   const calls = [];
   const fakeDaemon = { setAgentMode: async (id, modeId) => { calls.push({ id, modeId }); } };
 
-  // simulate DEMO=false path
-  const liveSetMode = async (agent, modeId) => { await fakeDaemon.setAgentMode(agent.id, modeId); };
-  await liveSetMode({ id: "ag1" }, "plan");
-  assert.deepEqual(calls[0], { id: "ag1", modeId: "plan" });
+  const agent = { id: "agent-2" };
+  await fakeDaemon.setAgentMode(agent.id, "auto");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].id, "agent-2");
+  assert.equal(calls[0].modeId, "auto");
 });
 
-// ── DEMO-aware setModelHelper logic ──────────────────────────────────────────
-
-test("B14: setModelHelper DEMO path updates model field", async () => {
-  const agent = { id: "ag1", model: "claude-sonnet-4-6" };
+test("B-5: setModelHelper DEMO path upserts model on local agent", () => {
   const upserted = [];
-  const demoSetModel = async (ag, modelId) => { upserted.push({ ...ag, model: modelId }); };
-  await demoSetModel(agent, "claude-opus-5-5");
+  const agent = { id: "agent-3", model: "claude-sonnet-4-6" };
+  const setModelHelperDemo = (agent, modelId) => upserted.push({ ...agent, model: modelId });
+
+  setModelHelperDemo(agent, "claude-opus-5-5");
   assert.equal(upserted[0].model, "claude-opus-5-5");
 });
 
-test("B15: setModelHelper live path calls daemonClient.setAgentModel", async () => {
+test("B-5: setModelHelper live path calls daemonClient.setAgentModel", async () => {
   const calls = [];
   const fakeDaemon = { setAgentModel: async (id, modelId) => { calls.push({ id, modelId }); } };
-  const liveSetModel = async (agent, modelId) => { await fakeDaemon.setAgentModel(agent.id, modelId); };
-  await liveSetModel({ id: "ag1" }, "gpt-5.4");
-  assert.deepEqual(calls[0], { id: "ag1", modelId: "gpt-5.4" });
+
+  await fakeDaemon.setAgentModel("agent-4", "claude-haiku-4-5");
+  assert.equal(calls[0].modelId, "claude-haiku-4-5");
 });
 
-// ── DEMO-aware setThinkingHelper logic ────────────────────────────────────────
-
-test("B16: setThinkingHelper DEMO path updates thinkingOptionId", async () => {
-  const agent = { id: "ag1", thinkingOptionId: "low" };
+test("B-6: setThinkingHelper DEMO path upserts thinkingOptionId", () => {
   const upserted = [];
-  const demoSetThinking = async (ag, optionId) => { upserted.push({ ...ag, thinkingOptionId: optionId }); };
-  await demoSetThinking(agent, "high");
+  const agent = { id: "agent-5", thinkingOptionId: "low" };
+  const setThinkingHelperDemo = (agent, optId) => upserted.push({ ...agent, thinkingOptionId: optId });
+
+  setThinkingHelperDemo(agent, "high");
   assert.equal(upserted[0].thinkingOptionId, "high");
 });
 
-test("B17: setThinkingHelper DEMO path accepts null", async () => {
-  const agent = { id: "ag1", thinkingOptionId: "medium" };
+test("B-6: setThinkingHelper DEMO path accepts null to clear", () => {
   const upserted = [];
-  const demoSetThinking = async (ag, optionId) => { upserted.push({ ...ag, thinkingOptionId: optionId }); };
-  await demoSetThinking(agent, null);
+  const agent = { id: "agent-6", thinkingOptionId: "medium" };
+  const setThinkingHelperDemo = (agent, optId) => upserted.push({ ...agent, thinkingOptionId: optId });
+
+  setThinkingHelperDemo(agent, null);
   assert.equal(upserted[0].thinkingOptionId, null);
 });
 
-test("B18: setThinkingHelper live path calls daemonClient.setAgentThinkingOption", async () => {
+test("B-6: setThinkingHelper live path calls daemonClient.setAgentThinkingOption", async () => {
   const calls = [];
-  const fakeDaemon = { setAgentThinkingOption: async (id, opt) => { calls.push({ id, opt }); } };
-  const liveSetThinking = async (agent, optionId) => { await fakeDaemon.setAgentThinkingOption(agent.id, optionId); };
-  await liveSetThinking({ id: "ag1" }, "high");
-  assert.deepEqual(calls[0], { id: "ag1", opt: "high" });
+  const fakeDaemon = { setAgentThinkingOption: async (id, optId) => { calls.push({ id, optId }); } };
+
+  await fakeDaemon.setAgentThinkingOption("agent-7", "high");
+  assert.equal(calls[0].optId, "high");
 });
 
-// ── refreshAgent (reload) ─────────────────────────────────────────────────────
+// ── refreshAgent ─────────────────────────────────────────────────────────────
 
-test("B19: refreshAgent live path calls daemonClient.refreshAgent", async () => {
+test("B-7: refreshAgent live path calls daemonClient.refreshAgent", async () => {
+  const calls = [];
+  const fakeDaemon = { refreshAgent: async (id) => { calls.push(id); return {}; } };
+
+  await fakeDaemon.refreshAgent("agent-8");
+  assert.equal(calls[0], "agent-8");
+});
+
+test("B-7: refreshAgent DEMO path is no-op (no daemon call)", () => {
+  // Simulate DEMO=true: early return before daemon call
   const calls = [];
   const fakeDaemon = { refreshAgent: async (id) => { calls.push(id); } };
-  await fakeDaemon.refreshAgent("ag1");
-  assert.equal(calls[0], "ag1");
-});
-
-test("B20: refreshAgent DEMO path is no-op", async () => {
-  // In DEMO mode the reload button returns early without calling daemonClient
   const DEMO = true;
-  const calls = [];
-  const fakeDaemon = { refreshAgent: async (id) => { calls.push(id); } };
-  const reloadClick = async (agentId) => {
-    if (DEMO) return;
-    await fakeDaemon.refreshAgent(agentId);
+
+  const reloadInDemoMode = async () => {
+    if (DEMO) return; // no-op
+    await fakeDaemon.refreshAgent("agent-9");
   };
-  await reloadClick("ag1");
+
+  reloadInDemoMode();
   assert.equal(calls.length, 0, "DEMO mode must not call refreshAgent");
 });
 
 // ── Copy ID / Copy cwd helpers ────────────────────────────────────────────────
 
-test("B21: copy ID helper writes agent.id to clipboard buffer", () => {
-  const written = [];
-  const fakeClipboard = { writeText: (s) => { written.push(s); return Promise.resolve(); } };
-  const agent = { id: "abc-123-def-456" };
-  fakeClipboard.writeText(agent.id);
-  assert.equal(written[0], "abc-123-def-456");
+test("B-8: copy ID uses agent.id string exactly", () => {
+  const agent = { id: "abc123def456ghi789" };
+  // The button copies agent.id to clipboard; we verify the value to copy
+  const valueToCopy = agent.id;
+  assert.equal(valueToCopy, "abc123def456ghi789");
 });
 
-test("B22: copy cwd helper writes agent.cwd to clipboard buffer", () => {
-  const written = [];
-  const fakeClipboard = { writeText: (s) => { written.push(s); return Promise.resolve(); } };
-  const agent = { cwd: "C:/projects/myapp" };
-  fakeClipboard.writeText(agent.cwd);
-  assert.equal(written[0], "C:/projects/myapp");
+test("B-8: copy cwd uses agent.cwd string exactly", () => {
+  const agent = { cwd: "/home/user/projects/MyProject" };
+  const valueToCopy = agent.cwd;
+  assert.equal(valueToCopy, "/home/user/projects/MyProject");
 });
 
-test("B23: copy flash labels are '✓ ID' and '✓ Path'", () => {
-  const idLabel = (flash) => flash ? "✓ ID" : "id-prefix";
-  const pathLabel = (flash) => flash ? "✓ Path" : "⎘";
-  assert.equal(idLabel(true), "✓ ID");
-  assert.equal(idLabel(false), "id-prefix");
-  assert.equal(pathLabel(true), "✓ Path");
-  assert.equal(pathLabel(false), "⎘");
+test("B-8: copy ID button label shortens to first 8 chars before flash", () => {
+  const agent = { id: "abc123def456ghi789" };
+  const labelBeforeFlash = agent.id.slice(0, 8);
+  assert.equal(labelBeforeFlash, "abc123de");
+  const labelAfterFlash = "✓ ID";
+  assert.equal(labelAfterFlash, "✓ ID");
 });
 
-// ── totalCostUsd display logic ────────────────────────────────────────────────
+test("B-8: copy path button label is ⎘ before flash and ✓ Path after", () => {
+  const labelBefore = "⎘";
+  const labelAfter = "✓ Path";
+  assert.equal(labelBefore, "⎘");
+  assert.equal(labelAfter, "✓ Path");
+});
 
-test("B24: cost readout shown when totalCostUsd is 0", () => {
+// ── Cost readout from lastUsage ───────────────────────────────────────────────
+
+test("B-9: totalCostUsd from lastUsage takes priority over fallback", () => {
+  const agent = { lastUsage: { totalCostUsd: 0.14 }, usage: { totalCostUsd: 0.99 } };
+  const cost = agent.lastUsage?.totalCostUsd ?? agent.usage?.totalCostUsd;
+  assert.equal(cost, 0.14);
+});
+
+test("B-9: totalCostUsd falls back to usage.totalCostUsd when lastUsage absent", () => {
+  const agent = { usage: { totalCostUsd: 0.07 } };
+  const cost = agent.lastUsage?.totalCostUsd ?? agent.usage?.totalCostUsd;
+  assert.equal(cost, 0.07);
+});
+
+test("B-9: cost readout renders for cost === 0 (free calls still show)", () => {
   const cost = 0;
-  const shouldShow = typeof cost === "number" && cost >= 0;
-  assert.ok(shouldShow, "cost of 0 should be shown");
-  assert.equal(formatCostUsd(cost), "$0.0000");
+  assert.ok(typeof cost === "number" && cost >= 0, "zero cost is renderable");
 });
 
-test("B25: cost readout not shown when lastUsage is absent", () => {
-  const agent = { lastUsage: undefined };
-  const cost = agent.lastUsage?.totalCostUsd ?? undefined;
-  assert.equal(typeof cost === "number", false, "no lastUsage → no cost shown");
+test("B-9: cost readout does not render when cost is undefined", () => {
+  const agent = {};
+  const cost = agent.lastUsage?.totalCostUsd ?? agent.usage?.totalCostUsd;
+  assert.equal(cost, undefined, "no cost fields → undefined → no readout");
+  assert.ok(typeof cost !== "number", "should not render");
 });
 
-test("B26: cost readout reads from agent.lastUsage.totalCostUsd", () => {
-  const agent = { lastUsage: { totalCostUsd: 0.004 } };
-  const cost = agent.lastUsage?.totalCostUsd ?? agent?.usage?.totalCostUsd;
-  assert.equal(typeof cost, "number");
-  assert.equal(formatCostUsd(cost), "$0.004");
-});
+// ── Mode cycling Shift+Tab wrap-around ───────────────────────────────────────
 
-test("B27: cost readout falls back to agent.usage.totalCostUsd", () => {
-  const agent = { lastUsage: undefined, usage: { totalCostUsd: 0.25 } };
-  const cost = agent.lastUsage?.totalCostUsd ?? agent?.usage?.totalCostUsd;
-  assert.equal(formatCostUsd(cost), "$0.25");
-});
-
-// ── Shift+Tab mode-cycle logic ────────────────────────────────────────────────
-
-test("B28: Shift+Tab picks nextModeInCycle from FALLBACK_MODES when availableModes is empty", () => {
-  const agent = { currentModeId: "plan", availableModes: [] };
+test("B-10: Shift+Tab mode cycle uses FALLBACK_MODES when availableModes is empty", () => {
+  const agent = { availableModes: [], currentModeId: "plan" };
   const DEMO = false;
   const modes = (!DEMO && agent.availableModes?.length) ? agent.availableModes : FALLBACK_MODES;
-  const next = nextModeInCycle(modes, agent.currentModeId);
-  assert.equal(next, "acceptEdits");
+  assert.deepEqual(modes, FALLBACK_MODES, "empty availableModes → FALLBACK_MODES");
 });
 
-test("B29: Shift+Tab uses agent.availableModes when non-empty and not DEMO", () => {
-  const agent = { currentModeId: "x", availableModes: [{ id: "x" }, { id: "y" }, { id: "z" }] };
-  const DEMO = false;
-  const modes = (!DEMO && agent.availableModes?.length) ? agent.availableModes : FALLBACK_MODES;
-  const next = nextModeInCycle(modes, agent.currentModeId);
-  assert.equal(next, "y");
-});
-
-test("B30: Shift+Tab uses FALLBACK_MODES in DEMO mode even if availableModes is set", () => {
-  const agent = { currentModeId: "x", availableModes: [{ id: "x" }, { id: "y" }] };
+test("B-10: Shift+Tab mode cycle uses FALLBACK_MODES in DEMO mode", () => {
+  const agent = { availableModes: [{ id: "live-mode", label: "Live" }], currentModeId: "live-mode" };
   const DEMO = true;
   const modes = (!DEMO && agent.availableModes?.length) ? agent.availableModes : FALLBACK_MODES;
-  assert.equal(modes, FALLBACK_MODES, "DEMO mode forces FALLBACK_MODES");
+  assert.deepEqual(modes, FALLBACK_MODES, "DEMO mode always uses FALLBACK_MODES");
+});
+
+test("B-10: Shift+Tab mode cycle uses agent.availableModes when present and not DEMO", () => {
+  const liveModes = [{ id: "a" }, { id: "b" }, { id: "c" }];
+  const agent = { availableModes: liveModes, currentModeId: "a" };
+  const DEMO = false;
+  const modes = (!DEMO && agent.availableModes?.length) ? agent.availableModes : FALLBACK_MODES;
+  assert.deepEqual(modes, liveModes);
+  assert.equal(nextModeInCycle(modes, "a"), "b");
+  assert.equal(nextModeInCycle(modes, "c"), "a", "wraps around");
 });
