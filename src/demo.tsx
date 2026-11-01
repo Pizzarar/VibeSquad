@@ -64,8 +64,8 @@ const CAST: Spec[] = [
   { id: "demo-bs-vs", who: "claude", title: "BRAINSTORM · neon-noir cast", labels: vs({ role: "brainstorm" }), used: 62_000, ago: 12 },
   { id: "demo-old-1", who: "claude", title: "(old) ★ LEAD · VIBESQUAD v0", status: "closed", labels: vs({ role: "old-lead" }), used: 128_000, ago: 300 },
   { id: "demo-old-2", who: "gemini", title: "(old) ★ LEAD · VIBESQUAD art round A", status: "closed", labels: vs({ role: "old-lead" }), used: 131_000, ago: 140 },
-  { id: "demo-art-o", who: "claude", title: "Art - Opus · neon-noir", status: "running", labels: vs({ role: "worker", task: "art", job: "neon-noir", profile: "opus", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 88_000, cwd: WT + "vibesquad-neon-opus", ago: 0 },
-  { id: "demo-art-g", who: "gemini", title: "Art - Gemini · neon-noir", status: "running", labels: vs({ role: "worker", job: "art", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 41_000, cwd: WT + "vibesquad-neon-gemini", ago: 4 },
+  { id: "demo-art-o", who: "claude", title: "Art Painter - Opus · neon-noir", status: "running", labels: vs({ role: "worker", task: "art", job: "neon-noir", profile: "opus", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 88_000, cwd: WT + "vibesquad-neon-opus", ago: 0 },
+  { id: "demo-art-g", who: "gemini", title: "Art Director - Gemini · neon-noir", status: "running", labels: vs({ role: "worker", job: "art", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 41_000, cwd: WT + "vibesquad-neon-gemini", ago: 4 },
   { id: "demo-impl-1", who: "deepseek", title: "Implement - drawer crash", status: "running", labels: vs({ role: "worker", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 245_000, ago: 2 },
   { id: "demo-impl-2", who: "claude", title: "Implement - team actions", status: "running", labels: vs({ role: "worker", "paseo.parent-agent-id": "demo-art-o" }), used: 37_000, ago: 4 },
   { id: "demo-mech", who: "codex", title: "Mechanical - rename sweep", status: "running", labels: vs({ role: "worker", "paseo.parent-agent-id": "demo-impl-2" }), used: 21_000, ago: 6 },
@@ -163,10 +163,10 @@ export function demoTimeline(agentId: string): { item: unknown; seqStart: number
   const agy = agyTimeline(agentId);
   if (agy.length) return agy.map((e, i) => ({ ...e, seqStart: i }));
   const items = [
-    { type: "user_message", text: "Run the neon-noir art duet. Both workers get the same brief and both hard-gate lists." },
-    { type: "assistant_message", text: "Dispatching Art - Opus and Art - Gemini in separate worktrees. Neither reads the other's work until cross-critique." },
-    { type: "tool_call", name: "create_agent", status: "completed", detail: { type: "plain", label: "Art - Opus · neon-noir" } },
-    { type: "tool_call", name: "create_agent", status: "completed", detail: { type: "plain", label: "Art - Gemini · neon-noir" } },
+    { type: "user_message", text: "Run the neon-noir Painter + Director loop. Painter renders a 4x gallery PNG; Director critiques against the brief." },
+    { type: "assistant_message", text: "Dispatching Art Painter - Opus and Art Director - Gemini. Painter draws and renders the gallery; Director judges the PNG and returns numbered fixes." },
+    { type: "tool_call", name: "create_agent", status: "completed", detail: { type: "plain", label: "Art Painter - Opus · neon-noir" } },
+    { type: "tool_call", name: "create_agent", status: "completed", detail: { type: "plain", label: "Art Director - Gemini · neon-noir" } },
     { type: "tool_call", name: "Agent", status: "running", detail: { type: "sub_agent", subAgentType: "Explore", description: "check handoff budget numbers" } },
     { type: "todo", items: [{ text: "Duet builds", status: "in_progress" }, { text: "Cross-critique", status: "pending" }, { text: "Show user 2 options", status: "pending" }] },
     { type: "tool_call", name: "Bash", status: "running", detail: { type: "shell", command: "vs who lead" } },

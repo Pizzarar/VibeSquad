@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -15,6 +15,7 @@ import {
   performBrainstormRestart,
   saveProfiles,
   seedDefaultPack,
+  syncProfilesToPaseo,
   toPaseoProfileShape,
   toPaseoSpawnConfig,
 } from "../server/vibesquad-api.mjs";
@@ -326,8 +327,9 @@ test("5. Editing a profile in ~/.vibesquad/profiles.json changes the next spawn 
 
     // Also verify diffProfiles detects the 3 modified fields against the fixture
     const rawFixture = JSON.parse(readFileSync(FIXTURE_PATH, "utf8"));
-    const diff = diffProfiles(loadProfiles(env.profilesPath).profiles, rawFixture.profiles);
-    const bsDiff = diff.find((d) => d.name === "Brainstorm - Claude");
+    const bsDiff = diffProfiles(loadProfiles(env.profilesPath).profiles, rawFixture.profiles).find(
+      (d) => d.name === "Brainstorm - Claude",
+    );
     assert.equal(bsDiff.status, "modified");
     assert.deepEqual(bsDiff.changedFields.sort(), ["model", "notes", "thinkingOptionId"]);
   } finally {
@@ -335,6 +337,61 @@ test("5. Editing a profile in ~/.vibesquad/profiles.json changes the next spawn 
     else process.env.VIBESQUAD_HOME = prevHome;
     if (prevProfilesPath === undefined) delete process.env.VIBESQUAD_PROFILES_PATH;
     else process.env.VIBESQUAD_PROFILES_PATH = prevProfilesPath;
+    env.cleanup();
+  }
+});
+
+test("6. syncProfilesToPaseo renames Art - Opus and Art - Gemini in place by id with no duplicates", () => {
+  const env = makeTempEnv();
+  try {
+    mkdirSync(join(env.dir, ".paseo"), { recursive: true });
+    writeFileSync(
+      env.paseoConfigPath,
+      JSON.stringify(
+        {
+          daemon: {
+            agentProfiles: [
+              {
+                id: "agent_profile_mvso6xcl_hk9afi1fz2r",
+                name: "Art - Gemini",
+                provider: "antigravity-cli",
+                model: "gemini-4-argon",
+                notes: "old duet note",
+              },
+              {
+                id: "agent_profile_mvwjrb2k_enr1rgj8hg5",
+                name: "Art - Opus",
+                provider: "claude",
+                model: "claude-opus-5-5",
+                notes: "old duet note",
+              },
+            ],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const seeded = seedDefaultPack(env.profilesPath);
+    const syncRes = syncProfilesToPaseo(seeded.profiles, env.paseoConfigPath);
+    assert.equal(syncRes.ok, true);
+
+    const names = syncRes.agentProfiles.map((p) => p.name);
+    assert.equal(names.includes("Art Director - Gemini"), true);
+    assert.equal(names.includes("Art Painter - Opus"), true);
+    assert.equal(names.includes("Art - Gemini"), false);
+    assert.equal(names.includes("Art - Opus"), false);
+
+    const director = syncRes.agentProfiles.find((p) => p.id === "agent_profile_mvso6xcl_hk9afi1fz2r");
+    const painter = syncRes.agentProfiles.find((p) => p.id === "agent_profile_mvwjrb2k_enr1rgj8hg5");
+    assert.equal(director.name, "Art Director - Gemini");
+    assert.equal(painter.name, "Art Painter - Opus");
+    assert.notEqual(director.notes, painter.notes);
+    assert.match(painter.notes, /Art Painter in the standard Painter \+ Director artwork loop/);
+    assert.match(director.notes, /Art Director in the standard Painter \+ Director artwork loop/);
+  } finally {
     env.cleanup();
   }
 });

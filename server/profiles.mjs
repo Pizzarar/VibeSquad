@@ -46,8 +46,15 @@ const BRAINSTORM_NOTE_BODY = [
   "If the repo has a brainstorm brief (see AGENTS.md), read it first.",
 ].join("\n");
 
-const ART_NOTE_BODY = [
-  "UI and art-direction experiments, as one half of an art duet. Build your own alternative direction on the project's current screens, in your own worktree (never main, never commit). Gemini's strength: spatial layout and composition. Opus's strength: hierarchy, typography, readability and clean theme structure. Both get the same brief and work separately; don't read the other's worktree until the lead asks for a cross-critique. Keep sessions short (1-2 screens per task). The lead reviews, picks or merges, and shows the owner. If one provider is capped, run the other alone.",
+export const ART_PAINTER_NOTE_BODY = [
+  "Art Painter in the standard Painter + Director artwork loop (sprites, icons, emblems, and UI screens). You are the only one who edits code or assets, in your own worktree. Draw from the brief using curated palettes per character or screen (never random seeded colours that clash with props).",
+  "After each pass, render a 4x gallery PNG of every sprite/portrait (or take screenshots for UI screens) and send the image path to Art Director - Gemini via Paseo send_agent_prompt. Fix only the numbered items the Director returns. Stop on PASS or after round 4, then hand the final gallery PNG and summary to the lead.",
+  "AI-generated art is concept/placeholder only: keep it under `AI_GENERATED/` and never ship it.",
+].join("\n");
+
+export const ART_DIRECTOR_NOTE_BODY = [
+  "Art Director in the standard Painter + Director artwork loop (sprites, icons, emblems, and UI screens). Never edit files and never open or read the source code. Judge only the rendered gallery PNG (or UI screenshot) and the brief.",
+  "Return numbered checks, each PASS or FAIL with a concrete visual fix, against standing gates: (1) silhouette reads clearly at target size, (2) held props/tools are clearly visible against the jacket/background behind them (no colour clashing), (3) pose and grip look natural, (4) no gross or ambiguous shapes (e.g. hair or hats that read as dripping blobs), and (5) the brief's no-copy gate. End every round with a plain `PASS` or the numbered list of fixes for the Painter.",
   "AI-generated art is concept/placeholder only: keep it under `AI_GENERATED/` and never ship it.",
 ].join("\n");
 
@@ -110,8 +117,8 @@ const NOTE_BODIES = {
   ].join("\n"),
   "Scout - Flash":
     'Answers one lookup question for a lead ("where is X used", "what does Y return"). Reply in ≤20 lines: the answer first, then file:line citations. No opinions or fixes. Read-only. If it isn\'t in the code, say NOT FOUND and list where you looked. One question per session. If Gemini is down, the lead uses Audit - DSF.',
-  "Art - Gemini": ART_NOTE_BODY,
-  "Art - Opus": ART_NOTE_BODY,
+  "Art Director - Gemini": ART_DIRECTOR_NOTE_BODY,
+  "Art Painter - Opus": ART_PAINTER_NOTE_BODY,
   "Senior Reasoning - DSP":
     'Escalation only. Use when DeepSeek Flash output passes procedural checks but fails on reasoning, trade-off judgment or long-horizon synthesis. Also for architectural "which variant ships and why" calls, genuine plan → act → verify loops, and second opinions on an audit the lead doubts. Not for routine inventory or summaries, anything Flash hasn\'t tried first, or high-frequency steps. Never a merge gate.',
 };
@@ -345,7 +352,7 @@ export const DEFAULT_PACK_PROFILES = [
   },
   {
     id: "agent_profile_mvso6xcl_hk9afi1fz2r",
-    name: "Art - Gemini",
+    name: "Art Director - Gemini",
     role: "worker",
     icon: "palette",
     color: "emerald",
@@ -358,17 +365,17 @@ export const DEFAULT_PACK_PROFILES = [
       sandbox: "off",
       shareMcp: "off",
     },
-    notes: DEFAULT_NOTES_MAP["Art - Gemini"],
+    notes: DEFAULT_NOTES_MAP["Art Director - Gemini"],
   },
   {
     id: "agent_profile_mvwjrb2k_enr1rgj8hg5",
-    name: "Art - Opus",
+    name: "Art Painter - Opus",
     role: "worker",
     provider: "claude",
     model: "claude-opus-5-5",
     modeId: "auto",
     thinkingOptionId: "medium",
-    notes: DEFAULT_NOTES_MAP["Art - Opus"],
+    notes: DEFAULT_NOTES_MAP["Art Painter - Opus"],
   },
   {
     id: "agent_profile_mvubmm57_98bxdnpwdc8",
@@ -389,6 +396,8 @@ export const DEFAULT_PROFILES = DEFAULT_PACK_PROFILES;
 export const LEGACY_PROFILE_ALIASES = {
   "Lead - Opus": "Lead - Claude",
   "Brainstorm - Opus": "Brainstorm - Claude",
+  "Art - Gemini": "Art Director - Gemini",
+  "Art - Opus": "Art Painter - Opus",
 };
 
 export function deriveRole(name, explicitRole) {
@@ -712,6 +721,61 @@ export function saveProfiles(input, profilesPath) {
     path: targetPath,
     profiles: nextProfiles,
   };
+}
+
+export function syncProfilesToPaseo(profilesInput, paseoConfigPath) {
+  const cfgPath = getPaseoConfigPath(paseoConfigPath);
+  if (!existsSync(cfgPath)) {
+    return { ok: false, skipped: true, path: cfgPath };
+  }
+  const res = readJsonFileWithBom(cfgPath, {
+    label: "~/.paseo/config.json",
+    fallback: null,
+    recordWarning: true,
+  });
+  if (!res.ok || !res.data || typeof res.data !== "object") {
+    return { ok: false, error: res.error || "Invalid Paseo config", path: cfgPath };
+  }
+  const raw = res.data;
+  if (!raw.daemon || typeof raw.daemon !== "object") raw.daemon = {};
+  const existing = Array.isArray(raw.daemon.agentProfiles) ? [...raw.daemon.agentProfiles] : [];
+  const incoming = (Array.isArray(profilesInput) ? profilesInput : [])
+    .map(normalizeProfile)
+    .filter(Boolean)
+    .map(toPaseoProfileShape);
+
+  for (const shaped of incoming) {
+    const idx = existing.findIndex(
+      (e) =>
+        (shaped.id && e?.id === shaped.id) ||
+        e?.name === shaped.name ||
+        (e?.name && LEGACY_PROFILE_ALIASES[e.name] === shaped.name),
+    );
+    if (idx >= 0) {
+      existing[idx] = shaped;
+    } else {
+      existing.push(shaped);
+    }
+  }
+
+  // Deduplicate by id and resolved name (keeping first match in order)
+  const seenIds = new Set();
+  const seenNames = new Set();
+  const deduped = [];
+  for (const item of existing) {
+    if (!item || typeof item !== "object") continue;
+    const resolvedName = LEGACY_PROFILE_ALIASES[item.name] || item.name;
+    if (item.id && seenIds.has(item.id)) continue;
+    if (resolvedName && seenNames.has(resolvedName)) continue;
+    if (item.id) seenIds.add(item.id);
+    if (resolvedName) seenNames.add(resolvedName);
+    deduped.push(item);
+  }
+
+  raw.daemon.agentProfiles = deduped;
+  writeFileSync(cfgPath, JSON.stringify(raw, null, 2) + "\n", "utf8");
+  clearConfigWarning(cfgPath);
+  return { ok: true, path: cfgPath, agentProfiles: deduped };
 }
 
 const DIFF_FIELDS = ["id", "name", "provider", "model", "modeId", "thinkingOptionId", "featureValues", "notes", "icon", "color"];
