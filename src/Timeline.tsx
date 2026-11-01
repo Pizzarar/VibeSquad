@@ -1,4 +1,5 @@
 import { Component, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { messageCtxItems, openContextMenu } from "./CommandPalette";
 import { daemonClient, client, DEMO } from "./paseo";
 import { demoTimeline } from "./demo";
 import { sentImagesFor } from "./imageDrafts";
@@ -587,7 +588,7 @@ export function TimelineItem({
         ? it.images.map((im: any) => (im.data ? `data:${im.mimeType ?? "image/png"};base64,${im.data}` : im.url)).filter(Boolean)
         : sentImagesFor(agentId, it.text);
       return (
-        <div className="tl tl-user">
+        <div className="tl tl-user" onContextMenu={(ev) => openContextMenu(ev, messageCtxItems(it.text ?? "", agentId, onParkText))}>
           {urls.length > 0 && (
             <div className="tl-images">
               {urls.map((u, i) => (
@@ -610,7 +611,7 @@ export function TimelineItem({
 
     case "assistant_message":
       return (
-        <div className="tl tl-assistant">
+        <div className="tl tl-assistant" onContextMenu={(ev) => openContextMenu(ev, messageCtxItems(it.text ?? "", agentId, onParkText))}>
           {typeof it.text === "string" ? <MarkdownRenderer text={it.text} agentId={agentId} /> : it.text}
           <div className="tl-actions">
             <CopyMsgButton text={it.text ?? ""} />
