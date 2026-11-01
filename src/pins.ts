@@ -4,6 +4,7 @@
 // steps 1 (sidebar + grid), 2 (focus rail) and 3 (resolver + quick start) all build on it.
 import type { LaneDef, Member, TeamDef, TeamView } from "./teams.ts";
 import { brainstormUsedTokens } from "./teams.ts";
+export { topicOfBrainstorm } from "./teams.ts";
 
 export type PinState = "pinned" | "done";
 
@@ -35,6 +36,8 @@ export type Pin = {
   running: number;
   /** Context tokens used by the live Brainstorm (0 when none). */
   contextUsed: number;
+  /** Live topic Brainstorms for this lane. */
+  topicBrainstorms: Member[];
 };
 
 export type PinResolution =
@@ -70,6 +73,7 @@ export function pinsForSquad(view: TeamView): { pinned: Pin[]; done: Pin[] } {
         needsYou: l.members.filter((m) => m.attention && m.attention.tone !== "finished" && m.kind !== "old-lead").length,
         running: l.members.filter((m) => m.agent.status === "running").length,
         contextUsed: brainstorm ? brainstormUsedTokens(brainstorm.agent) : 0,
+        topicBrainstorms: (l.topicBrainstorms ?? []).filter(isLive),
       };
     })
     .sort((a, b) => a.order - b.order);

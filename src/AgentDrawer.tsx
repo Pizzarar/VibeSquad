@@ -291,6 +291,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
           needsYou: 0,
           running: 0,
           contextUsed: 0,
+          topicBrainstorms: [],
         };
         const pane = paneOfAgent(agent.id);
         const newId = await openPin(pin);

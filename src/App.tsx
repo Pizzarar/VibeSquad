@@ -14,8 +14,11 @@ import {
   fmtTok,
   handoffPairs,
   isBrainstormAgent,
+  isLanBannerDismissed,
   isOverBudget,
   isTopicBrainstorm,
+  isUnsortedMember,
+  lanIpSetKey,
   ordOf,
   successorDue,
   topicOfBrainstorm,
@@ -93,6 +96,7 @@ import {
 } from "./uiScale";
 
 const COLLAPSED_TEAMS_KEY = "vibesquad.collapsedTeams";
+const DISMISSED_LAN_IPS_KEY = "vibesquad.dismissedLanIps";
 const SIDEBAR_COLLAPSED_KEY = "vibesquad.sidebarCollapsed";
 const SIDEBAR_WIDTH_KEY = "vibesquad.sidebarWidth";
 const SIDEBAR_MIN_W = 180;
@@ -464,7 +468,7 @@ const SidebarTeam = memo(function SidebarTeam({
           </button>
         )}
       </div>
-      {expanded && !full && v.team.id !== UNASSIGNED.id && <SidebarPins view={v} onPin={onPin} />}
+      {expanded && !full && v.team.id !== UNASSIGNED.id && <SidebarPins view={v} onPin={onPin} onOpenAgent={pick} />}
       {expanded && full && (
         <>
           <TeamTokens view={v} />
@@ -525,6 +529,8 @@ const Sidebar = memo(function Sidebar(props: {
   onDiagnostics?: () => void;
   onSettings: () => void;
   usage: ProviderQuotaView[];
+  lanExposed?: boolean;
+  lanIps?: string[];
 }) {
   const uiScale = useUiScale();
   const uiScalePct = Math.round(uiScale * 100);
@@ -539,6 +545,9 @@ const Sidebar = memo(function Sidebar(props: {
           <span className="brand-sub">NEON-NOIR // 198X</span>
         </div>
         <span className={`conn ${props.conn}`} title={`daemon: ${props.conn}`} />
+        {props.lanExposed && (
+          <span className="lan-status-dot badge warn" data-testid="lan-status-dot" title={`Exposed on LAN: ${(props.lanIps ?? []).join(", ")}`}>LAN</span>
+        )}
         <button
           type="button"
           className="btn ghost small sidebar-collapse-btn"
@@ -1037,6 +1046,71 @@ function UnassignedTray({
   );
 }
 
+function SquadUnsortedGroup({ view, onPick }: { view: TeamView; onPick: (id: string) => void }) {
+  const unsorted = view.unsorted ?? [];
+  const [selectedLanes, setSelectedLanes] = useState<Record<string, string>>(() => {
+    const defaults: Record<string, string> = {};
+    for (const m of unsorted) {
+      defaults[m.agent.id] = view.team.lanes[0]?.id ?? "";
+    }
+    return defaults;
+  });
+  const [assigningId, setAssigningId] = useState<string | null>(null);
+  if (!unsorted.length) return null;
+  const allLanes = [
+    ...view.team.lanes.map((l) => ({ teamId: view.team.id, laneId: l.id, label: `${view.team.name} / ${l.name}` })),
+    ...TEAMS.filter((t) => t.id !== view.team.id).flatMap((t) =>
+      t.lanes.map((l) => ({ teamId: t.id, laneId: l.id, label: `${t.name} / ${l.name}` })),
+    ),
+  ];
+  const adopt = async (a: PaseoAgent) => {
+    const laneId = selectedLanes[a.id] ?? allLanes[0]?.laneId ?? "";
+    if (!laneId) return;
+    setAssigningId(a.id);
+    try {
+      await assignAgentToLane(a, laneId, updateAgent);
+    } catch (err) {
+      alert(`Failed to assign lane: ${err}`);
+    } finally {
+      setAssigningId(null);
+    }
+  };
+  return (
+    <section data-testid="squad-unsorted-group" className="squad-unsorted-group">
+      <h3>{`UNSORTED IN ${view.team.name.toUpperCase()} (${unsorted.length})`}</h3>
+      {unsorted.map((m) => {
+        const a = m.agent;
+        return (
+          <div key={a.id} data-testid={`unsorted-agent-${a.id}`} className="unsorted-agent-row">
+            <button type="button" className="btn ghost small" onClick={() => onPick(a.id)}>
+              {cleanTitle(a.title) || a.id.slice(0, 8)}
+            </button>
+            <span className="muted small">{a.cwd}</span>
+            <select
+              data-testid={`adopt-lane-select-${a.id}`}
+              value={selectedLanes[a.id] ?? ""}
+              onChange={(e) => setSelectedLanes((prev) => ({ ...prev, [a.id]: e.target.value }))}
+            >
+              {allLanes.map((opt) => (
+                <option key={opt.laneId} value={opt.laneId}>{opt.label}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="btn ok small"
+              data-testid={`adopt-agent-btn-${a.id}`}
+              disabled={assigningId === a.id}
+              onClick={() => void adopt(a)}
+            >
+              {assigningId === a.id ? "Adopting…" : "Adopt into lane…"}
+            </button>
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
 const TeamPage = memo(function TeamPage(props: {
   view: TeamView;
   unassignedMembers: Member[];
@@ -1093,6 +1167,7 @@ const TeamPage = memo(function TeamPage(props: {
           }}
           onQuickStart={props.onQuickStart}
         />
+        <SquadUnsortedGroup view={view} onPick={onPick} />
         <IdeaInbox team={view.team} />
       </div>
     );
@@ -1135,10 +1210,11 @@ const TeamPage = memo(function TeamPage(props: {
       <UnassignedTray members={unassignedMembers} onPick={onPick} />
       <IdeaInbox team={view.team} />
       <TeamFeed team={view.team} />
+      <SquadUnsortedGroup view={view} onPick={onPick} />
 
-      {view.lanes.map(({ lane, lead, duplicateLeads, brainstorm, duplicateBrainstorms, members }) => {
+      {view.lanes.map(({ lane, lead, duplicateLeads, brainstorm, duplicateBrainstorms, topicBrainstorms, members }) => {
         const dupes = [...duplicateLeads, ...duplicateBrainstorms];
-        const rest = members.filter((m) => m !== lead && m !== brainstorm && !dupes.includes(m) && matchesSearch(m, query));
+        const rest = members.filter((m) => m !== lead && m !== brainstorm && !dupes.includes(m) && !(topicBrainstorms ?? []).includes(m) && matchesSearch(m, query));
         const live = rest.filter((m) => m.kind !== "old-lead");
         const shownBs = query ? hit(brainstorm) : brainstorm;
         const shownLead = query ? hit(lead) : lead;
@@ -1176,6 +1252,9 @@ const TeamPage = memo(function TeamPage(props: {
                     <Card label="Brainstorm" m={null} onPick={onPick} />
                   )}
                   <Card label="★ Lead" m={shownLead} onPick={onPick} onSuccessor={props.onSuccessor} />
+                  {(topicBrainstorms ?? []).map((tb) => (
+                    <Card key={tb.agent.id} label={`Topic Buddy · ${topicOfBrainstorm(tb.agent) || "topic"}`} m={tb} onPick={onPick} />
+                  ))}
                 </div>
                 {[brainstorm, lead].map(
                   (m) =>
@@ -1413,6 +1492,13 @@ export function App() {
   const [modal, setModal] = useState<"new-agent" | "add-buddy" | "settings" | "pair-device" | "about" | "help" | "diagnostics" | "first-run" | null>(null);
   const [firstRunStatus, setFirstRunStatus] = useState<FirstRunStatus | null>(null);
   const exposedIps = useExposedIps();
+  const [dismissedLanKey, setDismissedLanKey] = useState<string>(() => localStorage.getItem(DISMISSED_LAN_IPS_KEY) ?? "");
+  useEffect(() => {
+    if (exposedIps.length === 0 && dismissedLanKey !== "") {
+      setDismissedLanKey("");
+      localStorage.removeItem(DISMISSED_LAN_IPS_KEY);
+    }
+  }, [exposedIps, dismissedLanKey]);
   const updaterStatus = useUpdaterStatus();
   const configWarnings = useConfigWarnings();
   useEffect(() => {
@@ -1702,9 +1788,22 @@ export function App() {
       className={`app ${focus ? "focus" : ""} ${withPanes ? "with-panes" : ""} ${split && withPanes ? "split" : ""} ${pinFocused ? `pin-focus ${pinFocus?.agentId ? "" : "pin-no-drawer"}` : ""} ${hidePanes ? "pins-home" : ""} ${sheet ? "sheet-open" : ""} ${mobileTeamView ? "mobile-team-view" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
       style={{ "--sidebar-w": `${sidebarWidth}px` } as React.CSSProperties}
     >
-      {exposedIps.length > 0 && (
-        <div className="exposed-network-banner" data-testid="exposed-network-banner" role="alert" style={{ gridColumn: "1 / -1", background: "#ff2a85", color: "#05060d", fontWeight: 800, padding: "6px 12px", textAlign: "center" }}>
-          {`⚠ EXPOSED ON ${exposedIps.join(", ")} — LAN/meshnet access enabled`}
+      {exposedIps.length > 0 && !isLanBannerDismissed(exposedIps, dismissedLanKey) && (
+        <div className="exposed-network-banner" data-testid="exposed-network-banner" role="alert" style={{ gridColumn: "1 / -1", background: "#ff2a85", color: "#05060d", fontWeight: 800, padding: "6px 12px", textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+          <span>{`⚠ EXPOSED ON ${exposedIps.join(", ")} — LAN/meshnet access enabled`}</span>
+          <button
+            type="button"
+            data-testid="dismiss-lan-banner-btn"
+            aria-label="Dismiss LAN exposure banner"
+            style={{ background: "none", border: "none", cursor: "pointer", fontWeight: 900, fontSize: 16, color: "inherit", lineHeight: 1 }}
+            onClick={() => {
+              const key = lanIpSetKey(exposedIps);
+              setDismissedLanKey(key);
+              localStorage.setItem(DISMISSED_LAN_IPS_KEY, key);
+            }}
+          >
+            ✕
+          </button>
         </div>
       )}
       {configWarnings.length > 0 && (
@@ -1784,6 +1883,8 @@ export function App() {
           onSettings={openSettings}
           onAgent={onAgent}
           onQuickStart={onQuickStart}
+          lanExposed={exposedIps.length > 0}
+          lanIps={exposedIps}
         />
       )}
       {(focus || sheet) && (

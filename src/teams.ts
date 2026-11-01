@@ -224,6 +224,7 @@ export type TeamView = {
   }[];
   needsYou: number;
   running: number;
+  unsorted: Member[];
 };
 
 const labelsOf = (a: PaseoAgent): Record<string, string> => (a.labels ?? {}) as Record<string, string>;
@@ -901,12 +902,30 @@ export function buildTeamViews(members: Member[]): TeamView[] {
         lanes,
         needsYou: mine.filter((m) => m.attention && m.attention.tone !== "finished" && m.kind !== "old-lead").length,
         running: mine.filter((m) => m.agent.status === "running").length,
+        unsorted: mine.filter((m) => isUnsortedMember(m.agent)),
       };
     })
     .filter((v) => v.team !== UNASSIGNED || v.members.length > 0);
 }
 
 export const sortMembers = (ms: Member[]) => [...ms].sort(newest);
+
+// ── B8: LAN banner dismiss helpers ───────────────────────────────────────────
+export function lanIpSetKey(ips: string[]): string {
+  return [...ips].map((s) => s.trim()).filter(Boolean).sort().join(",");
+}
+
+export function isLanBannerDismissed(ips: string[], dismissedKey: string | null | undefined): boolean {
+  return ips.length > 0 && Boolean(dismissedKey) && lanIpSetKey(ips) === dismissedKey;
+}
+
+// ── B10: Unsorted agent detection ─────────────────────────────────────────────
+export function isUnsortedMember(agent: Pick<PaseoAgent, "labels" | "archivedAt" | "status" | "cwd">): boolean {
+  if (agent.archivedAt || agent.status === "closed") return false;
+  if (!agent.cwd) return false;
+  const labels = (agent.labels ?? {}) as Record<string, string>;
+  return !labels.lane?.trim() && !labels.lead?.trim() && !labels.team?.trim();
+}
 
 // Token budget: leads hand off around leadFlagTokens (see Lead profile notes).
 export const LEAD_BUDGET: number =

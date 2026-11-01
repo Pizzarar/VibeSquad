@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { daemonClient, DEMO } from "./paseo";
+import { daemonClient, DEMO, updateAgent } from "./paseo";
 import { openAgent } from "./panes";
 import { nextScheduleStatus, scheduleActionsFor, type ScheduleAction } from "./sessionLifecycle";
+import { TEAMS, assignAgentToLane } from "./teams";
 
 const call = (name: string, ...args: any[]): Promise<any> => {
   const fn = (daemonClient as any)[name];
@@ -104,10 +105,16 @@ export function SchedulesPanel({ onClose }: { onClose: () => void }) {
   );
 }
 
+const allImportLanes = TEAMS.flatMap((t) =>
+  t.lanes.map((l) => ({ teamId: t.id, laneId: l.id, label: `${t.name} / ${l.name}` })),
+);
+const DEFAULT_IMPORT_LANE = allImportLanes[0]?.laneId ?? "vibesquad";
+
 export function ImportSessionModal({ onClose }: { onClose: () => void }) {
   const [rows, setRows] = useState<any[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [chosenLaneId, setChosenLaneId] = useState(DEFAULT_IMPORT_LANE);
 
   useEffect(() => {
     if (DEMO) {
@@ -124,12 +131,21 @@ export function ImportSessionModal({ onClose }: { onClose: () => void }) {
     setErr(null);
     try {
       if (DEMO) return onClose();
-      const input = row.providerHandleId
-        ? { providerId: row.providerId ?? row.provider, providerHandleId: row.providerHandleId, cwd: row.cwd }
-        : { provider: row.provider, sessionId: row.sessionId, cwd: row.cwd };
+      const laneEntry = allImportLanes.find((l) => l.laneId === chosenLaneId) ?? allImportLanes[0];
+      const chosenTeamId = laneEntry?.teamId ?? "";
+      const chosenLane = laneEntry?.laneId ?? chosenLaneId;
+      const input = {
+        ...(row.providerHandleId
+          ? { providerId: row.providerId ?? row.provider, providerHandleId: row.providerHandleId, cwd: row.cwd }
+          : { provider: row.provider, sessionId: row.sessionId, cwd: row.cwd }),
+        labels: { team: chosenTeamId, lane: chosenLane, role: "worker" },
+      };
       const snap = await call("importAgent", input);
       const id = snap?.agent?.id ?? snap?.id;
-      if (id) openAgent(id);
+      if (id) {
+        await updateAgent(id, { labels: { team: chosenTeamId, lane: chosenLane, role: "worker" } }).catch(() => {});
+        openAgent(id);
+      }
       onClose();
     } catch (e) {
       setErr(String((e as Error).message ?? e));
@@ -141,6 +157,14 @@ export function ImportSessionModal({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="📥 IMPORT CLI SESSION" onClose={onClose} testid="import-session-modal">
       {err && <div className="banner warn">{err}</div>}
+      <div style={{ marginBottom: 8 }}>
+        <label style={{ marginRight: 6 }}>Import into lane:</label>
+        <select data-testid="import-session-lane-select" value={chosenLaneId} onChange={(e) => setChosenLaneId(e.target.value)}>
+          {allImportLanes.map((opt) => (
+            <option key={opt.laneId} value={opt.laneId}>{opt.label}</option>
+          ))}
+        </select>
+      </div>
       {rows.length === 0 && !err && <div className="pane-empty">No recent sessions.</div>}
       {rows.map((r) => (
         <div key={r.sessionId ?? r.providerHandleId} className="chip" style={{ display: "flex", gap: 8, margin: "4px 0" }} data-testid="import-session-row">

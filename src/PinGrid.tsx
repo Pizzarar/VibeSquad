@@ -5,7 +5,7 @@
 import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { client, DEMO, sendMessage } from "./paseo";
 import { demoTimeline } from "./demo";
-import { hasLooksDone, LOOKS_DONE_MARKER, pinsForSquad, SEND_TO_MARKER, type Pin } from "./pins";
+import { hasLooksDone, LOOKS_DONE_MARKER, pinsForSquad, SEND_TO_MARKER, topicOfBrainstorm, type Pin } from "./pins";
 import { IdeaPlusTile, noteSendTo, SendToCard, useSendTo } from "./PinIdeas";
 import { PinMenu } from "./PinMenu";
 import { DoneRow, DoneShelf, LooksDoneCard, useDoneShelfOpen } from "./PinDone";
@@ -117,13 +117,27 @@ const PinRow = memo(function PinRow({ pin, onPin }: { pin: Pin; onPin: (pin: Pin
   );
 });
 
-export function SidebarPins({ view, onPin }: { view: TeamView; onPin: (pin: Pin) => void }) {
+export function SidebarPins({ view, onPin, onOpenAgent }: { view: TeamView; onPin: (pin: Pin) => void; onOpenAgent?: (id: string) => void }) {
   const { pinned, done } = pinsForSquad(view);
   const [doneOpen, toggleDone] = useDoneShelfOpen(view.team.id);
   return (
     <div className="pin-list" data-testid={`sidebar-pins-${view.team.id}`}>
       {pinned.map((p) => (
-        <PinRow key={p.lane.id} pin={p} onPin={onPin} />
+        <div key={p.lane.id}>
+          <PinRow pin={p} onPin={onPin} />
+          {(p.topicBrainstorms ?? []).map((tb) => (
+            <button
+              key={tb.agent.id}
+              type="button"
+              className="pin-row pin-topic-row"
+              data-testid={`sidebar-topic-${tb.agent.id}`}
+              onClick={() => (onOpenAgent ? onOpenAgent(tb.agent.id) : onPin(p))}
+            >
+              <StatusDot agent={tb.agent} />
+              <span className="pin-row-name">💬 {tb.agent.title || topicOfBrainstorm(tb.agent) || "Topic Buddy"}</span>
+            </button>
+          ))}
+        </div>
       ))}
       {!pinned.length && <div className="pin-empty muted small">No teams yet</div>}
       {done.length > 0 && (
@@ -282,7 +296,7 @@ function QuickReply({ pin }: { pin: Pin }) {
   );
 }
 
-const PinTile = memo(function PinTile({ pin, onPin }: { pin: Pin; onPin: (pin: Pin) => Promise<void> }) {
+const PinTile = memo(function PinTile({ pin, onPin, onOpenAgent }: { pin: Pin; onPin: (pin: Pin) => Promise<void>; onOpenAgent: (id: string) => void }) {
   const bs = pin.brainstorm;
   const lines = usePreview(bs?.agent.id ?? null);
   const looksDoneId = useLooksDoneId(bs?.agent.id ?? null);
@@ -354,6 +368,22 @@ const PinTile = memo(function PinTile({ pin, onPin }: { pin: Pin; onPin: (pin: P
           {starting ? "Starting…" : "No session yet · click to start"}
         </div>
       )}
+      {(pin.topicBrainstorms ?? []).length > 0 && (
+        <div className="pin-topics-bar" data-testid={`pin-topics-${pin.lane.id}`}>
+          {(pin.topicBrainstorms ?? []).map((tb) => (
+            <button
+              key={tb.agent.id}
+              type="button"
+              className="tchip pin-topic-chip"
+              data-testid={`pin-topic-buddy-${tb.agent.id}`}
+              onClick={(e) => { e.stopPropagation(); onOpenAgent(tb.agent.id); }}
+            >
+              <StatusDot agent={tb.agent} />
+              {tb.agent.title || `Topic: ${topicOfBrainstorm(tb.agent)}`}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 });
@@ -379,7 +409,7 @@ export function PinGrid({
     <section className="pin-grid-wrap" data-testid="pin-grid">
       <div className="pin-grid">
         {pinned.map((p) => (
-          <PinTile key={p.lane.id} pin={p} onPin={onPin} />
+          <PinTile key={p.lane.id} pin={p} onPin={onPin} onOpenAgent={onOpenAgent} />
         ))}
         <IdeaPlusTile view={view} onQuickStart={onPin} />
       </div>
