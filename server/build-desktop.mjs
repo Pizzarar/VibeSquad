@@ -83,7 +83,7 @@ copyFileSync(join(rootDir, "docs", "profiles", "DEFAULT_PACK.md"), join(runtimeD
 copyFileSync(join(rootDir, "package.json"), join(runtimeDir, "package.json"));
 copyFileSync(join(rootDir, "teams.example.json"), join(runtimeDir, "teams.example.json"));
 const closure = productionClosure();
-for (const { dir, name } of closure) cpSync(dir, join(runtimeDir, "node_modules", ...name.split("/")), { recursive: true });
+for (const { dir, name } of closure) cpSync(dir, join(runtimeDir, "node_modules", ...name.split("/")), { recursive: true, dereference: true });
 console.log(`[build:desktop] staged runtime with ${closure.length} production packages`);
 
 const licenseFile = join(rootDir, "public", "THIRD-PARTY-LICENSES.txt");
