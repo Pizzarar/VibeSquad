@@ -1571,31 +1571,18 @@ export function App() {
     });
   }, []);
 
-  // BUG T1-3: Clicking a team header selects & expands if inactive, or toggles collapse if already active!
-  const onTeamHeaderClick = useCallback(
-    (id: string) => {
-      exitPinFocus();
-      if (id !== activeTeamId) {
-        setTeamId(id);
-        setScreen("teams");
-        setCollapsedTeams((prev) => {
-          if (!prev.has(id)) return prev;
-          const next = new Set(prev);
-          next.delete(id);
-          return next;
-        });
-      } else {
-        setScreen("teams");
-        setCollapsedTeams((prev) => {
-          const next = new Set(prev);
-          if (next.has(id)) next.delete(id);
-          else next.add(id);
-          return next;
-        });
-      }
-    },
-    [activeTeamId],
-  );
+  // Clicking a squad name opens its overview (expanding it if collapsed); only the caret collapses.
+  const onTeamHeaderClick = useCallback((id: string) => {
+    exitPinFocus();
+    setTeamId(id);
+    setScreen("teams");
+    setCollapsedTeams((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  }, []);
 
   const onToggleAllTeams = useCallback(() => {
     setCollapsedTeams((prev) => {

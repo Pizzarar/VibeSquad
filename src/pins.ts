@@ -205,3 +205,14 @@ export {
 
 /** Every lane id and alias in every squad (lane ids and brief files are global). */
 export const allLaneIds = (teams: TeamDef[]): string[] => takenLaneIds(teams.flatMap((t) => t.lanes));
+
+// ── Polish: display names, persisted focus (docs/PLAN_PINNED_FEATURES.md) ─────
+
+/** The Team's display name for a lane id (or alias) in any squad; the id itself when the lane is unknown. */
+export function laneDisplayName(teams: TeamDef[], laneId: string): string {
+  const key = laneId.toLowerCase();
+  for (const t of teams)
+    for (const l of t.lanes)
+      if (l.id.toLowerCase() === key || (l.aliases ?? []).some((a) => a.toLowerCase() === key)) return l.name || laneId;
+  return laneId;
+}

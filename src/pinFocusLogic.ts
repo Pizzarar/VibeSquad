@@ -49,3 +49,68 @@ export function escGoesHome(c: EscContext): boolean {
   if (c.inModal || c.inPerm || c.target === "field") return false;
   return !c.draft.trim();
 }
+
+// ── Persistence across a full reload ─────────────────────────────────────────
+// Keyed by squad + lane (never agent id: Brainstorms get replaced). Storage is injected so node tests run it.
+export type SavedFocus = { squadId: string; laneId: string };
+type KV = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+
+export const FOCUS_KEY = "vibesquad.pinFocus";
+export const doneShelfKey = (squadId: string) => `vibesquad.doneShelfOpen.${squadId}`;
+
+export function loadSavedFocus(kv: KV | undefined): SavedFocus | null {
+  try {
+    const v = JSON.parse(kv?.getItem(FOCUS_KEY) ?? "null");
+    return v && typeof v.squadId === "string" && typeof v.laneId === "string" ? { squadId: v.squadId, laneId: v.laneId } : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveFocus(kv: KV | undefined, f: SavedFocus | null) {
+  try {
+    if (f) kv?.setItem(FOCUS_KEY, JSON.stringify({ squadId: f.squadId, laneId: f.laneId }));
+    else kv?.removeItem(FOCUS_KEY);
+  } catch {}
+}
+
+export const loadDoneShelfOpen = (kv: KV | undefined, squadId: string): boolean => {
+  try {
+    return kv?.getItem(doneShelfKey(squadId)) === "1";
+  } catch {
+    return false;
+  }
+};
+
+export function saveDoneShelfOpen(kv: KV | undefined, squadId: string, open: boolean) {
+  try {
+    if (open) kv?.setItem(doneShelfKey(squadId), "1");
+    else kv?.removeItem(doneShelfKey(squadId));
+  } catch {}
+}
+
+export type RestorePlan =
+  | { kind: "none" }
+  /** The URL names an agent that is gone and nothing else is saved: land on the grid, never an empty rail. */
+  | { kind: "home"; closeStale: string }
+  /** Focus the saved pin: its current Brainstorm, or (agentId null) the Start fresh view. */
+  | { kind: "pin"; squadId: string; laneId: string; agentId: string | null; closeStale: string | null };
+
+/**
+ * Decide the startup focus. `pinBrainstorm`: undefined = the saved pin no longer exists (or is done),
+ * null = it has no live Brainstorm, string = its live Brainstorm. `urlAgentLive`: the ?agent= agent still exists.
+ */
+export function planRestore(a: {
+  saved: SavedFocus | null;
+  urlAgent: string | null;
+  urlAgentLive: boolean;
+  pinBrainstorm: string | null | undefined;
+}): RestorePlan {
+  const stale = a.urlAgent && !a.urlAgentLive ? a.urlAgent : null;
+  if (a.saved && a.pinBrainstorm !== undefined) {
+    // A live URL agent that isn't this pin's Brainstorm is an explicit deep link: leave it alone.
+    if (a.urlAgent && a.urlAgentLive && a.urlAgent !== a.pinBrainstorm) return { kind: "none" };
+    return { kind: "pin", squadId: a.saved.squadId, laneId: a.saved.laneId, agentId: a.pinBrainstorm, closeStale: stale };
+  }
+  return stale ? { kind: "home", closeStale: stale } : { kind: "none" };
+}
