@@ -823,6 +823,7 @@ export async function getPaseoConfigSurface(opts = {}) {
       browserToolsEnabled: Boolean(daemon?.browserTools?.enabled),
       autoArchiveAfterMerge: Boolean(daemon?.autoArchiveAfterMerge),
       enableTerminalAgentHooks: daemon?.enableTerminalAgentHooks !== false,
+      suppressDesktopFinishedNotifications: Boolean(daemon?.suppressDesktopFinishedNotifications),
     },
     skills: cfg?.agents?.skills ?? { selection: { mode: "all" } },
     profileCount: Array.isArray(daemon?.agentProfiles) ? daemon.agentProfiles.length : 0,
@@ -865,6 +866,9 @@ export async function updatePaseoSettingsPatch(patch = {}, opts = {}) {
     }
     if (typeof patch.enableTerminalAgentHooks === "boolean") {
       cfg.daemon.enableTerminalAgentHooks = patch.enableTerminalAgentHooks;
+    }
+    if (typeof patch.suppressDesktopFinishedNotifications === "boolean") {
+      cfg.daemon.suppressDesktopFinishedNotifications = patch.suppressDesktopFinishedNotifications;
     }
     return cfg;
   }, opts);

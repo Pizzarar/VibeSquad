@@ -115,6 +115,7 @@ interface PaseoSurfaceState {
     browserToolsEnabled: boolean;
     autoArchiveAfterMerge: boolean;
     enableTerminalAgentHooks: boolean;
+    suppressDesktopFinishedNotifications: boolean;
   };
   skills: unknown;
   profileCount: number;
@@ -1166,6 +1167,19 @@ export function PaseoSettingsSection({
               data-testid="paseo-behaviour-hooks-toggle"
               checked={surface.behaviour.enableTerminalAgentHooks}
               onChange={(e) => void applySurfacePatch({ enableTerminalAgentHooks: e.target.checked }, "Updated daemon.enableTerminalAgentHooks")}
+            />
+          </label>
+
+          <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
+            <div>
+              <b>Turn off Paseo&apos;s own finished notifications</b>
+              <div className="muted small">VibeSquad sends them now — disable Paseo&apos;s duplicate toasts.</div>
+            </div>
+            <input
+              type="checkbox"
+              data-testid="toggle-paseo-finished-notifications"
+              checked={surface.behaviour.suppressDesktopFinishedNotifications}
+              onChange={(e) => void applySurfacePatch({ suppressDesktopFinishedNotifications: e.target.checked }, "Updated daemon.suppressDesktopFinishedNotifications")}
             />
           </label>
         </div>

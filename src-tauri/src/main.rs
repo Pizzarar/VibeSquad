@@ -375,6 +375,9 @@ pub struct AgentAlertTracker {
     needs_by_agent: HashMap<String, String>,
     pub running_agents: HashSet<String>,
     dedupe: HashSet<String>,
+    prev_status: HashMap<String, String>,
+    last_reply_line: HashMap<String, String>,
+    finished_dedupe: HashSet<String>,
 }
 
 pub struct SharedAppState {
@@ -392,6 +395,7 @@ pub struct SharedAppState {
     pub updater: Mutex<updater::UpdaterState>,
     /// The `node.exe server/serve.mjs` child we spawned (None when we reused an already-running server).
     pub managed_server: Mutex<Option<std::process::Child>>,
+    pub last_notified_agent_id: RwLock<Option<String>>,
 }
 
 impl SharedAppState {
@@ -471,12 +475,9 @@ impl SharedAppState {
 
     pub fn fire_native_notification(&self, title: &str, body: &str) {
         if let Some(app) = self.app_handle.read().unwrap().as_ref() {
-            let _ = app
-                .notification()
-                .builder()
-                .title(title)
-                .body(body)
-                .show();
+            if let Err(e) = app.notification().builder().title(title).body(body).show() {
+                eprintln!("[vibesquad-notify] fire_native_notification failed (title={}): {}", title, e);
+            }
         }
     }
 }
@@ -1258,8 +1259,12 @@ fn inspect_ws_frame(state: &Arc<SharedAppState>, text: &str) {
             if archived || status == "closed" {
                 tracker.needs_by_agent.remove(&id);
                 tracker.running_agents.remove(&id);
+                tracker.prev_status.remove(&id);
+                tracker.last_reply_line.remove(&id);
                 return;
             }
+
+            let was_running = tracker.running_agents.contains(&id);
             if status == "running" {
                 tracker.running_agents.insert(id.clone());
             } else {
@@ -1272,6 +1277,88 @@ fn inspect_ws_frame(state: &Arc<SharedAppState>, text: &str) {
                 .filter(|s| !s.is_empty())
                 .unwrap_or(&id)
                 .to_string();
+
+            // Cache the first line of the agent's latest reply for finished toasts
+            if let Some(last_msg) = agent
+                .get("lastMessage")
+                .and_then(|v| v.as_str())
+                .or_else(|| agent.get("summary").and_then(|v| v.as_str()))
+            {
+                let first_line = last_msg.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+                if !first_line.is_empty() {
+                    let truncated = if first_line.len() > 120 {
+                        format!("{}…", &first_line[..117])
+                    } else {
+                        first_line.to_string()
+                    };
+                    tracker.last_reply_line.insert(id.clone(), truncated);
+                }
+            }
+
+            // Buddy/Lead finished toast: running -> idle, not seed, not worker
+            if !is_seed && was_running && status == "idle" {
+                let labels = agent.get("labels").and_then(|v| v.as_object());
+                let role_raw = labels
+                    .and_then(|l| l.get("role"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let role_lower = role_raw.to_lowercase();
+                let title_lower = title.to_lowercase();
+                let is_retired = role_lower.starts_with("former-")
+                    || role_lower.starts_with("old")
+                    || title_lower.starts_with("(old)");
+
+                let role_label = if !is_retired {
+                    if role_lower == "brainstorm" || role_lower == "buddy" {
+                        Some("Buddy")
+                    } else if role_lower == "lead" {
+                        Some("Lead")
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(role_label) = role_label {
+                    let team_label = labels
+                        .and_then(|l| {
+                            l.get("lane")
+                                .or_else(|| l.get("team"))
+                                .and_then(|v| v.as_str())
+                        })
+                        .filter(|s| !s.is_empty())
+                        .map(|s| {
+                            let mut c = s.chars();
+                            match c.next() {
+                                None => String::new(),
+                                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                            }
+                        })
+                        .unwrap_or_else(|| "VibeSquad".to_string());
+
+                    let first_line = tracker
+                        .last_reply_line
+                        .get(&id)
+                        .cloned()
+                        .unwrap_or_else(|| "Turn complete".to_string());
+
+                    let updated_at = agent
+                        .get("updatedAt")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let dedupe_key = format!("{}::finished:{}", id, updated_at);
+                    if !tracker.finished_dedupe.contains(&dedupe_key) {
+                        tracker.finished_dedupe.insert(dedupe_key);
+                        notes.push((
+                            format!("VibeSquad · {}", team_label),
+                            format!("{} finished: {}", role_label, first_line),
+                        ));
+                    }
+                }
+            }
+
+            tracker.prev_status.insert(id.clone(), status.to_string());
 
             let mut reason: Option<String> = None;
 
@@ -1410,6 +1497,11 @@ fn inspect_ws_frame(state: &Arc<SharedAppState>, text: &str) {
             }
         }
 
+        // Cap finished_dedupe to prevent unbounded growth
+        if tracker.finished_dedupe.len() > 500 {
+            tracker.finished_dedupe.clear();
+        }
+
         if changed {
             new_badge_count = Some(tracker.needs_by_agent.len());
         }
@@ -1418,8 +1510,26 @@ fn inspect_ws_frame(state: &Arc<SharedAppState>, text: &str) {
     if let Some(count) = new_badge_count {
         state.set_needs_count(count);
     }
-    for (title, body) in notifications_to_fire {
-        state.fire_native_notification(&title, &body);
+    for (title, body) in &notifications_to_fire {
+        state.fire_native_notification(title, body);
+    }
+    // Store the last notified agent ID for click-to-focus
+    if let Some((_, body)) = notifications_to_fire.last() {
+        if body.contains(" finished: ") {
+            // Extract agent context from the notification for click-to-focus
+            // The actual agent ID comes from the ws frame; re-parse to find it
+            if let Ok(parsed) = serde_json::from_str::<Value>(strip_bom(text)) {
+                let agent_id = parsed
+                    .get("agent")
+                    .or_else(|| parsed.get("payload").and_then(|p| p.get("agent")))
+                    .and_then(|a| a.get("id"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                if let Some(id) = agent_id {
+                    *state.last_notified_agent_id.write().unwrap() = Some(id);
+                }
+            }
+        }
     }
 }
 
@@ -1933,6 +2043,19 @@ fn focus_main_window(app: &AppHandle) {
     }
 }
 
+fn focus_main_window_with_agent(app: &AppHandle, agent_id: &str) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+        let js = format!(
+            "window.postMessage({{ type: 'vs:select-agent', agentId: '{}' }}, '*');",
+            agent_id.replace('\'', "\\'")
+        );
+        let _ = w.eval(&js);
+    }
+}
+
 async fn bind_loopback_listener() -> (TcpListener, u16) {
     let preferred_port = std::env::var("VIBESQUAD_DESKTOP_PORT")
         .ok()
@@ -2037,6 +2160,7 @@ fn main() {
         tracker: Mutex::new(AgentAlertTracker::default()),
         updater: Mutex::new(updater::UpdaterState::default()),
         managed_server: Mutex::new(None),
+        last_notified_agent_id: RwLock::new(None),
     });
 
     // Start background Tokio runtime and bind loopback server BEFORE Tauri opens the window
@@ -2155,6 +2279,7 @@ fn main() {
             });
 
             let state_for_menu = state_for_setup.clone();
+            let state_for_tray_click = state_for_setup.clone();
             let start_login_item_clone = start_login_item.clone();
 
             let _tray = TrayIconBuilder::with_id("main-tray")
@@ -2193,14 +2318,19 @@ fn main() {
                     }
                     _ => {}
                 })
-                .on_tray_icon_event(|tray, event| {
+                .on_tray_icon_event(move |tray, event| {
                     if let TrayIconEvent::Click {
                         button: MouseButton::Left,
                         button_state: MouseButtonState::Up,
                         ..
                     } = event
                     {
-                        focus_main_window(tray.app_handle());
+                        let agent_id = state_for_tray_click.last_notified_agent_id.write().unwrap().take();
+                        if let Some(id) = agent_id {
+                            focus_main_window_with_agent(tray.app_handle(), &id);
+                        } else {
+                            focus_main_window(tray.app_handle());
+                        }
                     }
                 })
                 .build(app)?;
@@ -2231,6 +2361,87 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_test_state() -> Arc<SharedAppState> {
+        let (http_client, ws_tls_connector) = build_http_and_ws_clients().unwrap();
+        Arc::new(SharedAppState {
+            config: RwLock::new(DesktopConfig::default()),
+            active_upstream: RwLock::new(None),
+            setup_mode: AtomicBool::new(false),
+            quitting: AtomicBool::new(false),
+            needs_count: AtomicUsize::new(0),
+            local_port: AtomicUsize::new(4189),
+            http_client: RwLock::new(http_client),
+            ws_tls_connector: RwLock::new(ws_tls_connector),
+            app_handle: RwLock::new(None),
+            tray_needs_item: RwLock::new(None),
+            tracker: Mutex::new(AgentAlertTracker::default()),
+            updater: Mutex::new(updater::UpdaterState::default()),
+            managed_server: Mutex::new(None),
+            last_notified_agent_id: RwLock::new(None),
+        })
+    }
+
+    #[test]
+    fn buddy_running_to_idle_emits_finished_toast() {
+        let state = make_test_state();
+        // Seed with a Buddy agent in running state
+        let seed = r#"{"entries":[{"agent":{"id":"a1","title":"BRAINSTORM · MyLane","status":"running","labels":{"role":"brainstorm","lane":"deploy","team":"vibesquad"},"lastMessage":"Here is my analysis of the issue."}}]}"#;
+        inspect_ws_frame(&state, seed);
+        let tracker = state.tracker.lock().unwrap();
+        assert!(tracker.running_agents.contains("a1"));
+        assert!(tracker.seeded);
+        drop(tracker);
+
+        // Transition to idle (non-seed)
+        let update = r#"{"agent":{"id":"a1","title":"BRAINSTORM · MyLane","status":"idle","updatedAt":"2026-11-01T10:00:00Z","labels":{"role":"brainstorm","lane":"deploy","team":"vibesquad"},"lastMessage":"Here is my analysis of the issue."}}"#;
+        inspect_ws_frame(&state, update);
+        let tracker = state.tracker.lock().unwrap();
+        assert!(!tracker.running_agents.contains("a1"));
+        assert!(tracker.finished_dedupe.iter().any(|k| k.starts_with("a1::finished:")));
+        drop(tracker);
+
+        // Repeat idle should NOT add another dedupe entry (already deduped)
+        let tracker = state.tracker.lock().unwrap();
+        let count = tracker.finished_dedupe.iter().filter(|k| k.starts_with("a1::finished:")).count();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn lead_running_to_idle_emits_finished_toast() {
+        let state = make_test_state();
+        // Seed with a Lead agent in running state
+        let seed = r#"{"entries":[{"agent":{"id":"lead1","title":"★ LEAD","status":"running","labels":{"role":"lead","lane":"core","team":"vibesquad"},"lastMessage":"Dispatched worker."}}]}"#;
+        inspect_ws_frame(&state, seed);
+
+        // Transition to idle
+        let update = r#"{"agent":{"id":"lead1","title":"★ LEAD","status":"idle","updatedAt":"2026-11-01T11:00:00Z","labels":{"role":"lead","lane":"core","team":"vibesquad"},"lastMessage":"Dispatched worker."}}"#;
+        inspect_ws_frame(&state, update);
+        let tracker = state.tracker.lock().unwrap();
+        assert!(tracker.finished_dedupe.iter().any(|k| k.starts_with("lead1::finished:")));
+    }
+
+    #[test]
+    fn worker_running_to_idle_does_not_emit_finished_toast() {
+        let state = make_test_state();
+        let seed = r#"{"entries":[{"agent":{"id":"w1","title":"Worker","status":"running","labels":{"role":"worker","lane":"deploy"}}}]}"#;
+        inspect_ws_frame(&state, seed);
+
+        let update = r#"{"agent":{"id":"w1","title":"Worker","status":"idle","updatedAt":"2026-11-01T12:00:00Z","labels":{"role":"worker","lane":"deploy"}}}"#;
+        inspect_ws_frame(&state, update);
+        let tracker = state.tracker.lock().unwrap();
+        assert!(!tracker.finished_dedupe.iter().any(|k| k.starts_with("w1::finished:")));
+    }
+
+    #[test]
+    fn seed_does_not_emit_finished_toast() {
+        let state = make_test_state();
+        // The initial seed has agents going from unknown -> idle, should NOT trigger finished toast
+        let seed = r#"{"entries":[{"agent":{"id":"b1","title":"BRAINSTORM","status":"idle","updatedAt":"2026-11-01T08:00:00Z","labels":{"role":"brainstorm","lane":"deploy"},"lastMessage":"Done."}}]}"#;
+        inspect_ws_frame(&state, seed);
+        let tracker = state.tracker.lock().unwrap();
+        assert!(tracker.finished_dedupe.is_empty());
+    }
 
     #[test]
     fn strip_bom_handles_utf8_bom_and_preserves_corrupt_config() {

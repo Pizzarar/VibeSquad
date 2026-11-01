@@ -135,13 +135,19 @@ if (isMain) {
 
   if (!opts.stageOnly) {
     const tag = channel === "beta" ? "beta" : `v${targetVersion}`;
-    const assets = [installerPath, latestJsonPath, join(distDesktopDir, "THIRD-PARTY-LICENSES.txt")].filter((p) => existsSync(p));
+    const releaseTitle = channel === "beta" ? `VibeSquad Beta (${targetVersion})` : `VibeSquad v${targetVersion}`;
+    const assets = [installerPath, sigPath, latestJsonPath, join(distDesktopDir, "THIRD-PARTY-LICENSES.txt")].filter((p) => existsSync(p));
+    let tagExists = false;
     try {
       execFileSync("gh", ["release", "view", tag], { cwd: rootDir, stdio: "ignore" });
+      tagExists = true;
     } catch {
-      const createArgs = ["release", "create", tag, "--title", channel === "beta" ? `VibeSquad Beta (${targetVersion})` : `VibeSquad v${targetVersion}`, "--notes", latestManifest.notes];
+      const createArgs = ["release", "create", tag, "--title", releaseTitle, "--notes", latestManifest.notes];
       if (channel === "beta") createArgs.push("--prerelease");
       execFileSync("gh", createArgs, { cwd: rootDir, stdio: "inherit" });
+    }
+    if (tagExists) {
+      execFileSync("gh", ["release", "edit", tag, "--title", releaseTitle, "--notes", latestManifest.notes], { cwd: rootDir, stdio: "inherit" });
     }
     execFileSync("gh", ["release", "upload", tag, ...assets, "--clobber"], { cwd: rootDir, stdio: "inherit" });
     console.log(`[release:${channel}] Published ${tag} with ${assets.length} asset(s).`);
