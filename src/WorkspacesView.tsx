@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import type { PaseoAgent, PaseoWorkspace } from "@getpaseo/client";
 import { archiveWorkspace, usePaseo } from "./paseo";
 import { ConfirmButton, ago } from "./ui";
+import { openRightDockTab } from "./RightDock";
 
 type Verdict = "in-use" | "check" | "safe";
 type Filter = "all" | "safe" | "check" | "in-use";
@@ -50,8 +51,22 @@ function assess(w: PaseoWorkspace, agents: PaseoAgent[], archived: PaseoAgent[])
 const VERDICT_LABEL: Record<Verdict, string> = { "in-use": "IN USE", check: "CHECK FIRST", safe: "SAFE TO CLEAN" };
 const VERDICT_RANK: Record<Verdict, number> = { safe: 0, check: 1, "in-use": 2 };
 
+/** Opens the Changes tab and optionally navigates to the first live agent for the workspace. */
+function openChangesForWorkspace(w: PaseoWorkspace, agents: Map<string, PaseoAgent>) {
+  const dir = norm(w.workspaceDirectory);
+  const liveAgents = [...agents.values()].filter((a) => {
+    const c = norm(a.cwd);
+    return a.status !== "closed" && (c === dir || c.startsWith(dir + "/"));
+  });
+  if (liveAgents.length > 0) {
+    window.dispatchEvent(new CustomEvent("vs:select-agent", { detail: { agentId: liveAgents[0].id } }));
+  }
+  openRightDockTab("Changes");
+}
+
 export function WorkspacesView() {
   const { workspaces, agents, archivedAgents } = usePaseo();
+  const handleChipClick = (w: PaseoWorkspace) => openChangesForWorkspace(w, agents);
   const [filter, setFilter] = useState<Filter>("all");
   const [sort, setSort] = useState<Sort>("activity");
 
@@ -137,14 +152,30 @@ export function WorkspacesView() {
               {r.reasons.length > 0 && <div className="ws-reasons">{r.reasons.join(" · ")}</div>}
             </div>
             <div className="ws-chips">
-              {git?.currentBranch && <span className="chip">⎇ {git.currentBranch}</span>}
-              <span className={`chip ${git?.isDirty ? "dirty" : "clean"}`}>{git?.isDirty ? "dirty" : "clean"}</span>
+              {git?.currentBranch && (
+                <span className="chip clickable" role="button" tabIndex={0} onClick={() => handleChipClick(r.w)} onKeyDown={(e) => e.key === "Enter" && handleChipClick(r.w)}>
+                  ⎇ {git.currentBranch}
+                </span>
+              )}
+              <span
+                className={`chip clickable ${git?.isDirty ? "dirty" : "clean"}`}
+                role="button"
+                tabIndex={0}
+                onClick={() => handleChipClick(r.w)}
+                onKeyDown={(e) => e.key === "Enter" && handleChipClick(r.w)}
+              >
+                {git?.isDirty ? "dirty" : "clean"}
+              </span>
               {ab && (ab.ahead > 0 || ab.behind > 0) && (
-                <span className="chip">
+                <span className="chip clickable" role="button" tabIndex={0} onClick={() => handleChipClick(r.w)} onKeyDown={(e) => e.key === "Enter" && handleChipClick(r.w)}>
                   ↑{ab.ahead} ↓{ab.behind}
                 </span>
               )}
-              {r.w.githubRuntime?.pullRequest && <span className="chip">PR {r.w.githubRuntime.pullRequest.state.toLowerCase()}</span>}
+              {r.w.githubRuntime?.pullRequest && (
+                <span className="chip clickable" role="button" tabIndex={0} onClick={() => handleChipClick(r.w)} onKeyDown={(e) => e.key === "Enter" && handleChipClick(r.w)}>
+                  PR {r.w.githubRuntime.pullRequest.state.toLowerCase()}
+                </span>
+              )}
               <span className="chip">
                 {r.live} live{r.archived ? ` · ${r.archived} archived` : ""}
               </span>
