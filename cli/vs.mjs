@@ -1609,6 +1609,8 @@ export function installVsShim({ binDirs, targetScript, baseHome } = {}) {
   const runtimeFiles = [
     "cli/vs.mjs",
     "teams.json",
+    "teams.example.json",
+    "server/user-settings.mjs",
     "server/identity.mjs",
     "server/inbox.mjs",
     "server/profiles.mjs",
