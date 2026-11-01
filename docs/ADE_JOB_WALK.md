@@ -24,8 +24,8 @@ Source audit: `docs/audits/basics-gap-2026-11.md` (local, gitignored). The gap I
 | # | Task | Steps | PASS criterion | Result 2026-11-01 | Maps to gap |
 |---|---|---|---|---|---|
 | 1 | Open the app in the morning | Load `/`; dismiss any first-run modal with ✕; reload | Lands on the team view; the Setup Checklist does not come back after ✕ + reload | clean | B6 |
-| 2 | Find yesterday's agent | From any team, find an agent last active yesterday in a *different* team, including archived ones | Found in under 30s through search, sort or group by date, across teams | painful | ANNOYS · Navigation |
-| 3 | Search all transcripts for a phrase | Copy a phrase visible in some agent's reply; search for it from the main UI | The agent and the matching message are found, across teams; a non-match shows "no results" | impossible | BLOCKS · Search transcripts |
+| 2 | Find yesterday's agent | From any team, find an agent last active yesterday in a *different* team, including archived ones | Found in under 30s through search, sort or group by date, across teams | clean | ANNOYS · Navigation |
+| 3 | Search all transcripts for a phrase | Copy a phrase visible in some agent's reply; search for it from the main UI | The agent and the matching message are found, across teams; a non-match shows "no results" | clean | BLOCKS · Search transcripts |
 | 4 | Read an agent's transcript | Open a tool-heavy agent (e.g. a Gemini lead); scroll its timeline | Every timeline row, including tool calls and failed tool calls, is visible (height > 0) | clean | B2 |
 | 5 | Scroll back through older history | Open a long-running agent; scroll to the top of the timeline | Can load entries older than the newest 60 ("load older" or infinite scroll) | clean | BLOCKS · Full history |
 | 6 | See which files an agent changed | Open an agent that edited files | A list of changed files for that agent or workspace is visible | clean | BLOCKS · Diff / changes view |
@@ -39,28 +39,28 @@ Source audit: `docs/audits/basics-gap-2026-11.md` (local, gitignored). The gap I
 | 14 | Switch model or effort for an agent | Open a running agent's drawer header | A model/effort picker exists and is wired to `setAgentModel`/`setAgentThinkingOption` (control-present) | control-present | ANNOYS · Agent control |
 | 15 | Spawn a new agent | Open New Agent; check its defaults; Cancel | Fields are empty or sensibly defaulted (no "VS-STEP4"); cwd can be any folder | clean | B4, BLOCKS · Add a project |
 | 16 | Queue or interrupt a message | Inspect the send path on a running agent (grep `activeTurnBehavior`) | Mid-turn send steers or queues by default, with an explicit "interrupt & send"; the UI shows a queued/steered state | clean | B1 |
-| 17 | Rewind/undo an agent turn | Look on a past message for rewind/checkpoint | A rewind control exists (conversation / files / both), wired to `rewindAgent` | impossible | ANNOYS · Agent control |
-| 18 | Command palette | Press Ctrl+K and Ctrl+Shift+P | A palette opens and can jump to an agent, team or action | impossible | ANNOYS · Navigation |
-| 19 | Keyboard shortcut list | Press `?`; look for a shortcuts entry | A cheat sheet lists all shortcuts | impossible | ANNOYS · Navigation |
-| 20 | Check app version / update | Open About | Version + channel shown, plus a "Check for updates" action | painful | [settings] |
-| 21 | Logs/diagnostics when an agent errors | Find an errored or failed agent; look for logs or diagnostics | Can see the error detail and open logs or a diagnostics bundle in-app | impossible | ANNOYS · Diagnostics |
+| 17 | Rewind/undo an agent turn | Look on a past message for rewind/checkpoint | A rewind control exists (conversation / files / both), wired to `rewindAgent` | control-present | ANNOYS · Agent control |
+| 18 | Command palette | Press Ctrl+K and Ctrl+Shift+P | A palette opens and can jump to an agent, team or action | clean | ANNOYS · Navigation |
+| 19 | Keyboard shortcut list | Press `?`; look for a shortcuts entry | A cheat sheet lists all shortcuts | clean | ANNOYS · Navigation |
+| 20 | Check app version / update | Open About | Version + channel shown, plus a "Check for updates" action | clean | [settings] |
+| 21 | Logs/diagnostics when an agent errors | Find an errored or failed agent; look for logs or diagnostics | Can see the error detail and open logs or a diagnostics bundle in-app | clean | ANNOYS · Diagnostics |
 | 22 | Empty state, nothing selected | Close all panes or tabs | Useful empty state; agent cards visible without scrolling past chrome | clean | POLISH · Layout |
-| 23 | Small window | Resize to 900×700; open an agent | Transcript and composer are both visible and usable; nothing overlaps | painful | ANNOYS · Other |
-| 24 | 4K window | Resize to 3840×2160 at 100% | Text is readable without manual scaling; the drawer uses the width sensibly | painful | POLISH · Layout |
-| 25 | Zoom in/out | Ctrl+=, Ctrl+-, Ctrl+0; check Workspaces at 120% | Zoom works with feedback; no overlapping or clipped layout at 120% | painful (zoom works, but layout overlaps at 120%) | POLISH · Layout |
-| 26 | Right-click an agent or message | Right-click a roster card and a message | A context menu with relevant actions (copy id, open folder, archive…) | impossible | POLISH |
-| 27 | Drag a file into the composer | Drag a .md/.log file onto the composer (inspect the drop handler if you can't drag) | Non-image files are accepted or clearly rejected with a message, not silently ignored | painful | ANNOYS · Composer |
-| 28 | Mention a file with @ | Type `@` and `/` in the composer | File autocomplete on `@`; command autocomplete on `/` | impossible | ANNOYS · Composer |
+| 23 | Small window | Resize to 900×700; open an agent | Transcript and composer are both visible and usable; nothing overlaps | clean | ANNOYS · Other |
+| 24 | 4K window | Resize to 3840×2160 at 100% | Text is readable without manual scaling; the drawer uses the width sensibly | clean | POLISH · Layout |
+| 25 | Zoom in/out | Ctrl+=, Ctrl+-, Ctrl+0; check Workspaces at 120% | Zoom works with feedback; no overlapping or clipped layout at 120% | clean | POLISH · Layout |
+| 26 | Right-click an agent or message | Right-click a roster card and a message | A context menu with relevant actions (copy id, open folder, archive…) | clean | POLISH |
+| 27 | Drag a file into the composer | Drag a .md/.log file onto the composer (inspect the drop handler if you can't drag) | Non-image files are accepted or clearly rejected with a message, not silently ignored | clean | ANNOYS · Composer |
+| 28 | Mention a file with @ | Type `@` and `/` in the composer | File autocomplete on `@`; command autocomplete on `/` | clean | ANNOYS · Composer |
 | 29 | See running terminals / project scripts | Look for a terminal or scripts panel for a workspace | Can list, start or stop scripts and view a terminal (control-present) | control-present | BLOCKS · Terminal, Scripts |
 | 30 | View an agent's plan/task list | Open an agent that used todos | Its current plan/task list is pinned and visible regardless of scroll | clean | ANNOYS · Reading output |
 | 31 | Get notified when an agent needs input | Check the alerts toggle, test push and the Needs You rail (Ctrl+J) | Notifications can be enabled; Needs You queue reachable | control-present | — (covered) |
 | 32 | Answer a permission request | Inspect a pending permission card (or a question/plan request) | Shows the command, args or diff; supports allow-always, deny-with-message, and question options | clean | B3, ANNOYS · Permissions |
-| 33 | Navigate back/forward | Open agent A, then B; press browser Back | Back returns to agent A inside the app; the URL reflects the current view | impossible | ANNOYS · Navigation |
-| 34 | Reopen a closed pane | Close a tab; try to reopen it | "Reopen closed tab" (shortcut or menu) restores it | painful | POLISH |
-| 35 | Export a transcript | Look for export on an agent | Export as markdown/JSON | impossible | POLISH |
-| 36 | Find help/docs | Look for Help, docs or a tour | An in-app help entry or docs link exists | impossible | ANNOYS · Diagnostics |
-| 37 | Recover when the daemon is down | Read the code path for disconnected state (`src/App.tsx`); do NOT stop the daemon | A visible banner (also in Focus mode) with a retry/restart action; stale data marked | painful | ANNOYS · Diagnostics |
-| 38 | Work in Focus mode | Ctrl+. at 1600 wide | The chat uses the available width; no large blank area | painful | POLISH · Layout |
+| 33 | Navigate back/forward | Open agent A, then B; press browser Back | Back returns to agent A inside the app; the URL reflects the current view | clean | ANNOYS · Navigation |
+| 34 | Reopen a closed pane | Close a tab; try to reopen it | "Reopen closed tab" (shortcut or menu) restores it | clean | POLISH |
+| 35 | Export a transcript | Look for export on an agent | Export as markdown/JSON | clean | POLISH |
+| 36 | Find help/docs | Look for Help, docs or a tour | An in-app help entry or docs link exists | clean | ANNOYS · Diagnostics |
+| 37 | Recover when the daemon is down | Read the code path for disconnected state (`src/App.tsx`); do NOT stop the daemon | A visible banner (also in Focus mode) with a retry/restart action; stale data marked | control-present | ANNOYS · Diagnostics |
+| 38 | Work in Focus mode | Ctrl+. at 1600 wide | The chat uses the available width; no large blank area | clean | POLISH · Layout |
 | 39 | Reach the composer with the LAN banner showing | With "EXPOSED ON…" visible at 1600×1000, open an agent | The composer and Send button are fully on-screen | clean | B5 |
 | 40 | Find app settings | Look for global settings from any view | A clearly labelled Settings entry, visible without scrolling | clean | [settings] |
 | 41 | Read the drawer header | Open a brainstorm agent's drawer | No overlap between labels, buttons and timeline; the header takes ≤ ~25% of the drawer height | clean | POLISH · Drawer header |
@@ -77,3 +77,4 @@ The original run counted tasks 12, 22 and 25 as clean. Under the stricter criter
 | 2026-11-01 | v0.1.1, baseline | 21/41 | 1 / 17 / 3 / 20 | Audit run; screenshots in `scratch/shots/gap-audit/` |
 | 2026-11-01 | B0 (B1–B7) + Paseo settings | 22/41 | 7 / 12 / 3 / 19 | B1 steer/interrupt, B2 timeline flex-shrink:0 (0 collapsed rows), B3 question/plan permission actions, B4 empty modal defaults, B5 banner grid row height (Send visible at 1600×1000), B6 FirstRunModal ✕ persistence, B7 unified `usedTokens()`, Paseo 8-tab settings |
 | 2026-11-01 | ADE Wave 1 (Batches A–E + Step S) | 31/41 | 18 / 9 / 4 / 10 | RightDock (Changes/Files/Terminal/Scripts), PermissionCard cmd/diff/suggestions/deny-msg, DrawerHeader mode/model/thinking/cost/reload/copy + compact 2-line chrome (19.9% height), Timeline expandable tool calls + Markdown + copy msg/code + load older + pinned todo + file links, NewAgentModal add-project/clone/worktree picker |
+| 2026-11-01 | ADE Wave 2 (Batches F–I) | 41/41 | 35 / 0 / 6 / 0 | Composer slash/@ autocomplete + any-file attach + prompt history, Command Palette (Ctrl+K) + `?` shortcuts + URL routing (`popstate` Back/Forward) + cross-team transcript search + date group filter + right-click context menus, Rewind + Fork + Export (.md/.json) + Schedules/Import CLI + Reopen closed tab, DaemonStatusBanner + Diagnostics/Help modals + 900×700 / 120% zoom / Focus mode full width |

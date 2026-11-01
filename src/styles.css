@@ -2972,7 +2972,7 @@ html {
 html, body, #root { overflow-x: hidden; }
 .app { overflow: hidden; }
 .team-page { min-width: 0; overflow-x: hidden; }
-.app.with-panes:not(.split) {
+.app.with-panes:not(.split):not(.focus) {
   grid-template-columns: var(--sidebar-w, 265px) minmax(300px, 1fr) clamp(340px, 38vw, 560px);
 }
 .app.with-panes.sidebar-collapsed:not(.focus):not(.split) {

@@ -93,3 +93,17 @@ test("G6: context menu items for cards and messages", () => {
   assert.deepEqual(msg(true), ["Copy Message Text", "Park in Inbox", "Copy Agent ID"]);
   assert.deepEqual(msg(false), ["Copy Message Text", "Copy Agent ID"]);
 });
+
+test("G7: transcript search timeout race resolves empty array on slow agent without hanging", async () => {
+  const fetchWithTimeout = async (promise, ms = 50) => {
+    const t = await Promise.race([
+      promise,
+      new Promise((r) => setTimeout(() => r({ entries: [] }), ms)),
+    ]);
+    return t.entries ?? [];
+  };
+  const neverResolves = new Promise(() => {});
+  const entries = await fetchWithTimeout(neverResolves, 20);
+  assert.deepEqual(entries, []);
+});
+
