@@ -358,10 +358,10 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
           {role === "worker" && (
             <div className="row2">
               <Field label="TASK">
-                <input value={task} placeholder="VS-STEP4" onChange={(e) => setTask(e.target.value)} />
+                <input value={task} placeholder="task-id" onChange={(e) => setTask(e.target.value)} />
               </Field>
               <Field label="JOB">
-                <input value={job} placeholder="team actions modal" onChange={(e) => setJob(e.target.value)} />
+                <input value={job} placeholder="short job name" onChange={(e) => setJob(e.target.value)} />
               </Field>
             </div>
           )}

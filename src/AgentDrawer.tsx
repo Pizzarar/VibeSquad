@@ -480,16 +480,6 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
         />
       ))}
 
-      <div className="labels">
-        {Object.entries(labels)
-          .filter(([k]) => !k.startsWith("paseo.open-agent-tab"))
-          .map(([k, v]) => (
-            <span key={k} className="chip">
-              {k}={v}
-            </span>
-          ))}
-      </div>
-
       <div className="drawer-shell">
         <Timeline
           agentId={agent.id}
