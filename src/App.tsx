@@ -1610,8 +1610,10 @@ export function App() {
       }
     };
     navigator.serviceWorker?.addEventListener("message", onSwMessage);
+    window.addEventListener("message", onSwMessage);
     return () => {
       navigator.serviceWorker?.removeEventListener("message", onSwMessage);
+      window.removeEventListener("message", onSwMessage);
     };
   }, []);
 
