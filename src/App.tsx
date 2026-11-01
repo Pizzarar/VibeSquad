@@ -75,6 +75,7 @@ import {
 import { WorkspacesView } from "./WorkspacesView";
 import { FullToggle, PinGrid, SidebarPins, useFullView, type PinHandler } from "./PinGrid";
 import { pinsForSquad, type Pin } from "./pins";
+import { urlAgentFor } from "./pinFocusLogic";
 import { clearPinFocus, exitPinFocus, focusPin, usePinFocus, usePinsHome } from "./pinFocus";
 import { PinFocusHeader, PinRail } from "./PinRail";
 import { PinToast } from "./PinIdeas";
@@ -1621,10 +1622,6 @@ export function App() {
   // URL routing: ?team=&agent= mirrors the selection; Back/Forward restore it.
   const activeAgentId = useSyncExternalStore(subscribePanes, () => getPanes().leftActiveId);
   useEffect(() => {
-    const next = serializeUrlState({ team: activeTeamId || null, agent: activeAgentId }, location.search);
-    if (next !== (location.search || "")) history.pushState(null, "", `${location.pathname}${next}${location.hash}`);
-  }, [activeTeamId, activeAgentId]);
-  useEffect(() => {
     const onPop = () => {
       const u = parseUrlState(location.search);
       if (u.team) setTeamId(u.team);
@@ -1740,6 +1737,11 @@ export function App() {
   const pinFocused = !!pinFocusView;
   const hidePanes = pinLayout && pinsHome && !pinFocused;
   const withPanes = (hasTabs || focus) && !pinFocused && !hidePanes;
+  const urlAgentId = urlAgentFor({ activeAgentId, onGrid: hidePanes, startFresh: pinFocused && !pinFocus?.agentId });
+  useEffect(() => {
+    const next = serializeUrlState({ team: activeTeamId || null, agent: urlAgentId }, location.search);
+    if (next !== (location.search || "")) history.pushState(null, "", `${location.pathname}${next}${location.hash}`);
+  }, [activeTeamId, urlAgentId]);
   const leftPinLayout = useRef(false);
   useEffect(() => {
     if (!pinLayout) clearPinFocus();

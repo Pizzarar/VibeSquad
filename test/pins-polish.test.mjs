@@ -73,3 +73,37 @@ test("planRestore: stale ?agent= falls back to the pin's Brainstorm, then Start 
   assert.deepEqual(planRestore({ saved, urlAgent: "lead", urlAgentLive: true, pinBrainstorm: "bs1" }), { kind: "none" });
   assert.deepEqual(planRestore({ saved: null, urlAgent: null, urlAgentLive: false, pinBrainstorm: undefined }), { kind: "none" });
 });
+
+import { createDoneShelfStore, isLiveUrlAgent, urlAgentFor } from "../src/pinFocusLogic.ts";
+
+test("a retired or archived ?agent= is not live, so restore falls back instead of an empty rail", () => {
+  const saved = { squadId: "efi", laneId: "ui-lab" };
+  assert.equal(isLiveUrlAgent(undefined, false), false);
+  assert.equal(isLiveUrlAgent({ archivedAt: "2026-01-01" }, false), false);
+  assert.equal(isLiveUrlAgent({}, true), false);
+  assert.equal(isLiveUrlAgent({}, false), true);
+  const live = isLiveUrlAgent({}, true);
+  assert.deepEqual(planRestore({ saved, urlAgent: "retired", urlAgentLive: live, pinBrainstorm: "bs2" }), { kind: "pin", ...saved, agentId: "bs2", closeStale: "retired" });
+});
+
+test("the URL drops ?agent= on the grid and on Start fresh", () => {
+  assert.equal(urlAgentFor({ activeAgentId: "a1", onGrid: false, startFresh: false }), "a1");
+  assert.equal(urlAgentFor({ activeAgentId: "a1", onGrid: true, startFresh: false }), null);
+  assert.equal(urlAgentFor({ activeAgentId: "a1", onGrid: false, startFresh: true }), null);
+});
+
+test("Done shelf store: shared across subscribers, per squad", () => {
+  const kv = memory();
+  const store = createDoneShelfStore(kv);
+  let pings = 0;
+  const off = store.subscribe(() => pings++);
+  assert.equal(store.get("efi"), false);
+  store.toggle("efi");
+  assert.equal(store.get("efi"), true);
+  assert.equal(store.get("other"), false);
+  assert.equal(pings, 1);
+  off();
+  store.toggle("efi");
+  assert.equal(store.get("efi"), false);
+  assert.equal(pings, 1);
+});

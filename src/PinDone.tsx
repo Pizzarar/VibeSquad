@@ -1,8 +1,8 @@
 // Pinned teams step 5 (docs/PLAN_PINNED_FEATURES.md §4): Mark complete, the Done shelf, Reopen and
 // the Brainstorm's "looks done" card. Every completion starts from a click here; agents never complete a team.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { completeBlocker, type Pin } from "./pins";
-import { loadDoneShelfOpen, saveDoneShelfOpen } from "./pinFocusLogic";
+import { createDoneShelfStore } from "./pinFocusLogic";
 import { dismissLooksDone, isLooksDoneDismissed, markPinComplete, reopenPin } from "./pinActions";
 
 type MarkState = { kind: "idle" } | { kind: "blocked"; why: string } | { kind: "armed" } | { kind: "busy" };
@@ -114,14 +114,10 @@ export function DoneRow({ pin, testId }: { pin: Pin; testId: string }) {
 }
 
 /** The Done shelf's open state, remembered across reloads per squad (collapsed by default). */
+const doneShelfStore = createDoneShelfStore(typeof localStorage === "undefined" ? undefined : localStorage);
 export function useDoneShelfOpen(squadId: string): [boolean, () => void] {
-  const [open, setOpen] = useState(() => loadDoneShelfOpen(localStorage, squadId));
-  const toggle = () =>
-    setOpen((v) => {
-      saveDoneShelfOpen(localStorage, squadId, !v);
-      return !v;
-    });
-  return [open, toggle];
+  const open = useSyncExternalStore(doneShelfStore.subscribe, () => doneShelfStore.get(squadId));
+  return [open, () => doneShelfStore.toggle(squadId)];
 }
 
 /** The squad page's collapsed Done shelf. */

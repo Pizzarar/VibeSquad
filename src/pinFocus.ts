@@ -5,10 +5,11 @@
 // The focus follows the pin, not the agent: a restarted Brainstorm is followed, a retired one leaves
 // the pin focused with "Start fresh Brainstorm" (src/pinFocusLogic.ts has the rules).
 import { useSyncExternalStore } from "react";
+import { isRetiredAgent } from "./identity";
 import { closeTab, getPanes, openAgent, subscribePanes, toggleSplit } from "./panes";
 import { getPaseoState, subscribePaseo } from "./paseo";
 import { openPin } from "./pinActions";
-import { loadSavedFocus, planRestore, reconcilePinFocus, saveFocus } from "./pinFocusLogic";
+import { isLiveUrlAgent, loadSavedFocus, planRestore, reconcilePinFocus, saveFocus } from "./pinFocusLogic";
 import { pinsForSquad, type Pin } from "./pins";
 import { subscribeTeams } from "./teams";
 import { derived } from "./ui";
@@ -155,6 +156,10 @@ export function focusComposerSoon(agentId: string) {
   const sel = `.agent-panes .pane-slot[data-agent="${CSS.escape(agentId)}"] .composer textarea`;
   const tick = () => {
     if (state.focus?.agentId !== agentId) return;
+    const ta0 = document.querySelector<HTMLTextAreaElement>(sel);
+    const cur = document.activeElement as HTMLElement | null;
+    // Don't steal focus from another field the user moved to meanwhile.
+    if (cur && cur !== ta0 && (/^(INPUT|TEXTAREA|SELECT)$/.test(cur.tagName) || cur.isContentEditable)) return;
     const ta = document.querySelector<HTMLTextAreaElement>(sel);
     if (ta && ta.offsetParent !== null) {
       ta.focus({ preventScroll: true });
@@ -175,7 +180,8 @@ function tryRestore() {
   if (state.focus) return;
   const saved = loadSavedFocus(store);
   const urlAgent = new URLSearchParams(location.search).get("agent");
-  const urlLive = !!urlAgent && ps.agents.has(urlAgent) && !ps.agents.get(urlAgent)!.archivedAt;
+  const urlAgentRow = urlAgent ? ps.agents.get(urlAgent) : undefined;
+  const urlLive = !!urlAgent && isLiveUrlAgent(urlAgentRow, isRetiredAgent(urlAgentRow));
   let pin: Pin | undefined;
   if (saved) {
     const view = derived().views.find((v) => v.team.id === saved.squadId);

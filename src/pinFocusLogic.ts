@@ -89,6 +89,29 @@ export function saveDoneShelfOpen(kv: KV | undefined, squadId: string, open: boo
   } catch {}
 }
 
+/** Tiny shared store for the Done shelf's open state, so the sidebar and the squad page stay in step. */
+export function createDoneShelfStore(kv: KV | undefined) {
+  const listeners = new Set<() => void>();
+  return {
+    get: (squadId: string) => loadDoneShelfOpen(kv, squadId),
+    toggle(squadId: string) {
+      saveDoneShelfOpen(kv, squadId, !loadDoneShelfOpen(kv, squadId));
+      listeners.forEach((l) => l());
+    },
+    subscribe(l: () => void) {
+      listeners.add(l);
+      return () => void listeners.delete(l);
+    },
+  };
+}
+
+/** An agent a ?agent= deep link can still point at: it exists and is neither archived nor retired. */
+export const isLiveUrlAgent = (agent: { archivedAt?: unknown } | undefined, retired: boolean): boolean => !!agent && !agent.archivedAt && !retired;
+
+/** The agent the URL should carry: none on the squad grid or the Start fresh view (a reload restores those from the saved pin). */
+export const urlAgentFor = (a: { activeAgentId: string | null; onGrid: boolean; startFresh: boolean }): string | null =>
+  a.onGrid || a.startFresh ? null : a.activeAgentId;
+
 export type RestorePlan =
   | { kind: "none" }
   /** The URL names an agent that is gone and nothing else is saved: land on the grid, never an empty rail. */
