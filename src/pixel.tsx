@@ -12,7 +12,7 @@
 import type { CSSProperties } from "react";
 import type { AgentType } from "./teams";
 
-const S = 28;
+export const S = 28;
 const cache = new Map<string, string>();
 
 function hash(s: string): number {
@@ -130,6 +130,85 @@ const SKINS = ["#f2c7a5", "#dca47c", "#bb7c56", "#8e5b3c", "#6b4630", "#f6d6c0"]
 const HAIRS = ["#1b1424", "#3a2418", "#5c2f1d", "#7a3b2a", "#26304f", "#6a4ac8", "#2f9c96", "#b8476e"];
 const JACKETS = ["#2a1f4f", "#1d2b52", "#3a1d48", "#173b4a", "#2b2b3d", "#41204a"];
 const PASTELS = ["#9ff3ff", "#c9a8ff", "#ffb8ec", "#ffe7a3", "#a8ffd9"];
+const OUTLINE = "#05060d"; // 1px separation behind held props
+
+// Curated looks per archetype, picked by seed. Hair is always a rich, dark-to-mid shade, and
+// jackets are dark enough that every archetype's prop reads against them.
+type Palette = { skin: string; hair: string; jacket: string; pastel: string };
+const P = (skin: string, hair: string, jacket: string, pastel: string): Palette => ({ skin, hair, jacket, pastel });
+const CURATED: Record<AgentType, Palette[]> = {
+  lead: [
+    P(SKINS[0], HAIRS[0], JACKETS[0], PASTELS[0]),
+    P(SKINS[1], HAIRS[2], JACKETS[1], PASTELS[1]),
+    P(SKINS[2], HAIRS[4], JACKETS[2], PASTELS[2]),
+    P(SKINS[3], HAIRS[5], JACKETS[3], PASTELS[3]),
+    P(SKINS[4], HAIRS[7], JACKETS[4], PASTELS[4]),
+  ],
+  "retired-lead": [
+    P(SKINS[5], "#8a8698", "#2a2440", PASTELS[0]),
+    P(SKINS[1], "#8a8698", "#1f2d4a", PASTELS[1]),
+    P(SKINS[3], "#8a8698", "#3b2350", PASTELS[2]),
+    P(SKINS[2], "#8a8698", "#2b2f3d", PASTELS[3]),
+    P(SKINS[4], "#8a8698", "#1d3340", PASTELS[4]),
+  ],
+  brainstorm: [
+    P(SKINS[0], "#1b1424", "#2a1f4f", "#9ff3ff"),
+    P(SKINS[1], "#6a4ac8", "#1d2b52", "#ffb8ec"),
+    P(SKINS[2], "#b8476e", "#173b4a", "#c9a8ff"),
+    P(SKINS[3], "#2f9c96", "#3a1d48", "#ffb8ec"),
+    P(SKINS[4], "#5c2f1d", "#2b2b3d", "#a8ffd9"),
+  ],
+  implement: [
+    P(SKINS[0], "#3a2418", "#3a1d48", "#9ff3ff"),
+    P(SKINS[1], "#1b1424", "#173b4a", "#ffb8ec"),
+    P(SKINS[2], "#26304f", "#4a1d2e", "#a8ffd9"),
+    P(SKINS[3], "#7a3b2a", "#1d2b52", "#ffe7a3"),
+    P(SKINS[4], "#5c2f1d", "#2a1f4f", "#c9a8ff"),
+  ],
+  mechanical: [
+    P(SKINS[0], "#3a2418", "#2b2f3d", "#9ff3ff"),
+    P(SKINS[1], "#1b1424", "#2b2f3d", "#c9a8ff"),
+    P(SKINS[2], "#5c2f1d", "#2b2f3d", "#ffb8ec"),
+    P(SKINS[3], "#26304f", "#2b2f3d", "#ffe7a3"),
+    P(SKINS[4], "#7a3b2a", "#2b2f3d", "#a8ffd9"),
+  ],
+  review: [
+    P(SKINS[0], "#1b1424", "#5a4a3a", "#9ff3ff"),
+    P(SKINS[1], "#5c2f1d", "#3e4a5e", "#c9a8ff"),
+    P(SKINS[2], "#26304f", "#5a3a4a", "#ffb8ec"),
+    P(SKINS[3], "#3a2418", "#4a4230", "#ffe7a3"),
+    P(SKINS[4], "#7a3b2a", "#3a3a52", "#a8ffd9"),
+  ],
+  audit: [
+    P(SKINS[0], "#1b1424", "#1d2040", "#9ff3ff"),
+    P(SKINS[1], "#26304f", "#2a1838", "#c9a8ff"),
+    P(SKINS[2], "#3a2418", "#18282a", "#ffb8ec"),
+    P(SKINS[3], "#6a4ac8", "#1a1a2d", "#ffe7a3"),
+    P(SKINS[4], "#5c2f1d", "#201838", "#a8ffd9"),
+  ],
+  spec: [
+    P(SKINS[0], "#1b1424", "#3a1d48", "#9ff3ff"),
+    P(SKINS[1], "#3a2418", "#2b2b3d", "#c9a8ff"),
+    P(SKINS[2], "#26304f", "#4a1d2e", "#ffb8ec"),
+    P(SKINS[3], "#5c2f1d", "#2a1f4f", "#ffe7a3"),
+    P(SKINS[4], "#6a4ac8", "#2b2b3d", "#a8ffd9"),
+  ],
+  art: [
+    P(SKINS[0], "#1b1424", "#2c3f73", "#ffb8ec"),
+    P(SKINS[1], "#3a2418", "#2c3f73", "#9ff3ff"),
+    P(SKINS[2], "#26304f", "#2c3f73", "#ffe7a3"),
+    P(SKINS[3], "#5c2f1d", "#2c3f73", "#a8ffd9"),
+    P(SKINS[4], "#7a3b2a", "#2c3f73", "#c9a8ff"),
+  ],
+  unknown: [
+    P(SKINS[0], "#1b1424", "#2a1f4f", "#9ff3ff"),
+    P(SKINS[1], "#3a2418", "#1d2b52", "#c9a8ff"),
+    P(SKINS[2], "#26304f", "#3a1d48", "#ffb8ec"),
+    P(SKINS[3], "#6a4ac8", "#173b4a", "#ffe7a3"),
+    P(SKINS[4], "#b8476e", "#2b2b3d", "#a8ffd9"),
+  ],
+};
+const BERETS = ["#6e1e3a", "#3b2a8a", "#5a2a8a", "#8a1f3f", "#2a2a6e"];
 
 class Sprite {
   px: (string | null)[] = Array(S * S).fill(null);
@@ -409,6 +488,27 @@ function torso(s: Sprite, k: Look, t: Torso) {
   }
 }
 
+// A held prop: stamps the map with a 1px OUTLINE ring around it so it never melts into the
+// jacket or face behind. Keys listed in `glow` are emissive.
+function prop(s: Sprite, x0: number, y0: number, map: string[], pal: Record<string, string>, glow = "") {
+  const solid = (x: number, y: number) => !!pal[map[y]?.[x] ?? "."];
+  map.forEach((line, y) =>
+    [...line].forEach((ch, x) => {
+      if (!pal[ch]) return;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]])
+        if (!solid(x + dx, y + dy)) s.set(x0 + x + dx, y0 + y + dy, OUTLINE);
+    }),
+  );
+  map.forEach((line, y) =>
+    [...line].forEach((ch, x) => {
+      const c = pal[ch];
+      if (c) (glow.includes(ch) ? s.glow : s.set)(x0 + x, y0 + y, c);
+    }),
+  );
+}
+// Gripping hand (h), knuckle crease (k) and sleeve cuff (c) for prop maps.
+const hands = (k: Look) => ({ h: k.skin, k: shade(k.skin, 0.72), c: shade(k.jacket, 0.75) });
+
 // ---- the cast ------------------------------------------------------------------
 
 // Lead looks: five buckets per trait. A lane's ordinal picks bucket i for each trait at a
@@ -416,9 +516,10 @@ function torso(s: Sprite, k: Look, t: Torso) {
 // Leads with no lane fall back to independent hash bits.
 const LEAD_SKINS = ["#f6d6c0", "#dca47c", "#8e5b3c", "#4a2e20", "#c9a26b"]; // peach, tan, brown, ebony, olive
 const LEAD_CUTS: HairStyle[] = ["pomp", "mullet", "curls", "spikes", "sweep"];
-const LEAD_HAIRS = ["#f1f5f9", "#00f0ff", "#ff4fd8", "#f97316", "#231724", "#a855f7", "#fde047", "#1e3a8a"];
+// Espresso, midnight, crimson, cyber-violet, near-black, auburn, charcoal, indigo: never pale.
+const LEAD_HAIRS = ["#2a1a14", "#1e2a5a", "#8a1f2f", "#6a3fc0", "#231724", "#9a4224", "#33333f", "#1e3a8a"];
 const LEAD_LENSES = ["#ffb020", "#00e5ff", "#ff3fb4", "#4dffb0", "#9b5cff"]; // amber, cyan, pink, mint, violet
-const LEAD_BLAZERS = ["#e9e4f2", "#4a1d6e", "#0f3b3f", "#6e1424", "#2a2f8a"]; // white, purple, teal-black, crimson, indigo
+const LEAD_BLAZERS = ["#25213a", "#4a1d6e", "#0f3b3f", "#6e1424", "#2a2f8a"]; // charcoal, purple, teal-black, crimson, indigo
 
 export type LeadLook = { skin: string; cut: HairStyle; hair: string; lens: string; blazer: string };
 export function leadLook(id: string, variant?: number): LeadLook {
@@ -474,10 +575,14 @@ function lead(s: Sprite, k: Look) {
   s.rect(17, 14, 19, 14, frame);
   s.glowDots([[7, 12], [8, 12], [16, 12], [17, 12]], "#ffffff");
   mouth(s, k, "grin");
+  // Cigar clamped in the corner of the grin: glowing ember and a curl of smoke.
+  prop(s, 18, 17, ["CCCCe"], { C: "#8a5a3a", e: "#ff6a1a" }, "e");
+  s.glowDots([[23, 16]], "#ffd166");
+  s.glowDots([[24, 15], [24, 13], [25, 12]], "#d8d4e8");
 }
 
 function retiredLead(s: Sprite, k: Look) {
-  const blazer = k.pick(["#e9e4f2", "#2a2440", "#1f2d4a", "#3b2350"]);
+  const blazer = k.jacket;
   torso(s, k, { color: blazer, shirt: k.pastel, pads: true });
   head(s, k);
   hair(s, { ...k, hair: "#a8a4b8" }, "crop");
@@ -492,34 +597,20 @@ function retiredLead(s: Sprite, k: Look) {
   mouth(s, k, "content");
   // Greyed out: everything painted so far loses most of its colour.
   s.recolor((c) => grey(c, 0.62));
-  // Warm coffee mug cradled at the centre of the chest in both hands.
-  const mug = "#d9573b";
-  const rim = "#fff3e6";
-  s.rect(10, 21, 17, 21, rim);
-  s.rect(10, 22, 10, 22, rim);
-  s.rect(17, 22, 17, 22, rim);
-  s.rect(11, 22, 16, 22, "#4a2a1c"); // coffee
-  s.rect(12, 22, 13, 22, "#7a4a30");
-  s.rect(10, 23, 17, 27, mug);
-  s.rect(11, 23, 11, 27, mix(mug, "#ffffff", 0.35)); // highlight
-  s.rect(16, 23, 17, 27, shade(mug, 0.72));
-  s.glowRect(11, 25, 16, 25, k.neon); // neon band
+  // Bright white coffee mug held off-centre against the dark jacket: handle on the right,
+  // hand gripping the left side, steam rising into the dark beside the jaw.
   const hand = grey(k.skin, 0.25);
-  const knuckle = shade(hand, 0.72);
-  // Hands cup the sides; fingers run horizontally across the mug, thumbs on the rim.
-  s.rect(8, 23, 10, 26, hand);
-  s.rect(8, 24, 10, 24, knuckle);
-  s.rect(8, 26, 10, 26, knuckle);
-  s.set(9, 22, hand);
-  s.rect(17, 23, 19, 26, hand);
-  s.rect(17, 24, 19, 24, knuckle);
-  s.rect(17, 26, 19, 26, knuckle);
-  s.set(18, 22, hand);
-  // Soft neon-tinted steam curling up past the chin.
-  const steam = mix("#f4f0ff", k.neon, 0.3);
-  s.glowDots([[12, 20], [15, 20]], mix(shade(grey(k.skin, 0.62), 0.7), steam, 0.6));
-  s.glowDots([[9, 20], [8, 19], [7, 18], [7, 17], [18, 20], [19, 19], [20, 18], [20, 17]], steam);
-  s.glowDots([[8, 16], [21, 16]], mix(steam, "#ffffff", 0.5));
+  prop(s, 14, 21, [
+    "....RRRRRR..",
+    "....RccccR..",
+    ".hhhMMMMMDH.",
+    ".kkkMMMMMD.H",
+    ".hhhMMMMMD.H",
+    ".zzzMMMMMDH.",
+    "....MMMMMD..",
+  ], { R: "#ffffff", c: "#4a2a1c", M: "#eef6ff", D: "#9fb4d4", H: "#eef6ff", h: hand, k: shade(hand, 0.72), z: shade(k.jacket, 0.75) });
+  s.glowDots([[20, 20], [21, 19], [20, 18], [22, 17], [23, 16], [24, 14]], "#ffffff");
+  s.glowDots([[22, 20], [23, 18], [24, 16]], "#9ff3ff");
 }
 
 function brainstorm(s: Sprite, k: Look) {
@@ -551,9 +642,20 @@ function brainstorm(s: Sprite, k: Look) {
     s.glow(26, y, k.neon);
   }
   s.glowDots([[2, 8], [3, 8], [24, 8], [25, 8], [2, 16], [3, 16], [24, 16], [25, 16]], shade(k.neon, 0.7));
-  // A little glowing lightbulb of an idea, upper right.
-  s.stamp(23, 2, [".oo.", "o##o", "o#w#", "o##o", ".oo.", ".bb."], { o: "#ffe66b", "#": "#fff7c2", w: "#ffffff", b: "#9aa0b8" }, true);
-  s.glowDots([[22, 1], [27, 1], [27, 5]], k.neon);
+  // A glowing lightbulb of an idea, held up in the right hand.
+  prop(s, 21, 16, [
+    "..ooo..",
+    ".oYYYo.",
+    ".oYWYo.",
+    ".oYYYo.",
+    "..oYo..",
+    "..bbb..",
+    "..bdb..",
+    ".hhhh..",
+    ".kkkk..",
+    ".cccc..",
+  ], { o: "#ffc93a", Y: "#fff4a8", W: "#ffffff", b: "#b8c0d8", d: "#5a6078", ...hands(k) }, "oYW");
+  s.glowDots([[21, 15], [27, 15], [27, 19]], "#9ff3ff");
 }
 
 function implement(s: Sprite, k: Look) {
@@ -563,26 +665,6 @@ function implement(s: Sprite, k: Look) {
   s.dots([[4, 23], [5, 24], [4, 25], [5, 26]], sheen);
   for (let x = 6; x <= 21; x++) if (x < 11 || x > 16) s.glow(x, 21, x % 2 ? k.neon : shade(k.neon, 0.6));
   s.glowRect(8, 25, 9, 26, k.pastel); // chest patch
-  // Steel wrench resting diagonally over the right shoulder: handle tucked behind the
-  // collar, open jaw angled up and out beside the jaw line.
-  const steel = "#b8c0d8";
-  const steelHi = "#eef2ff";
-  const steelLo = "#7d86a3";
-  s.stamp(23, 13, [
-    ".##..",
-    "##...",
-    "##..#",
-    "#####",
-    ".###.",
-  ], { "#": steel });
-  s.dots([[24, 13], [23, 14], [23, 15]], steelHi);
-  s.dots([[25, 17], [26, 16]], steelLo);
-  const handle: [number, number][] = [[17, 22], [18, 21], [19, 21], [20, 20], [21, 19], [22, 19], [23, 18]];
-  handle.forEach(([x, y]) => {
-    s.set(x, y, steelHi);
-    s.set(x, y + 1, steelLo);
-  });
-  s.rect(15, 22, 16, 23, steelLo); // end tucked under the collar
   head(s, k);
   hair(s, k, "crop");
   // Mechanic cap with a glowing front patch.
@@ -607,6 +689,21 @@ function implement(s: Sprite, k: Look) {
   brows(s, k, "flat");
   eyes(s, k, "open");
   mouth(s, k, "grin");
+  // Steel wrench gripped in the right hand, open jaw raised beside the face.
+  prop(s, 18, 13, [
+    "......S..S",
+    "......s..s",
+    "......sssd",
+    ".......sd.",
+    "......sd..",
+    ".....sd...",
+    "....sd....",
+    "...sd.....",
+    "..hhh.....",
+    "..kkk.....",
+    "..hhh.....",
+    "..ccc.....",
+  ], { S: "#bff6ff", s: "#d4dcf0", d: "#6e7896", ...hands(k) });
 }
 
 function mechanical(s: Sprite, k: Look) {
@@ -654,11 +751,28 @@ function mechanical(s: Sprite, k: Look) {
   s.glowRect(13, 4, 14, 4, "#ffffff");
   // Peak shadow across the brow.
   s.rect(5, 9, 22, 9, shade(k.skin, 0.68));
+  // Heavy ring spanner gripped in the left hand, ring end raised beside the face.
+  prop(s, 0, 11, [
+    ".SSS......",
+    "s...s.....",
+    "s...s.....",
+    ".sssd.....",
+    "...sd.....",
+    "....sd....",
+    ".....sd...",
+    "......sd..",
+    "......sd..",
+    ".......sd.",
+    "......hhh.",
+    "......kkk.",
+    "......hhh.",
+    "......ccc.",
+  ], { S: "#bff6ff", s: "#d4dcf0", d: "#6e7896", ...hands(k) });
 }
 
 function review(s: Sprite, k: Look) {
   // Pastel trench with a popped collar and a tie.
-  const coat = k.pick(["#b9a3e3", "#8fd8e8", "#e3a3cf", "#a3b8e3"]);
+  const coat = k.jacket;
   torso(s, k, { color: coat, shirt: "#2a2440" });
   s.rect(13, 22, 14, 27, shade(coat, 0.45)); // tie
   s.rect(13, 21, 14, 21, shade(coat, 0.6));
@@ -688,12 +802,24 @@ function review(s: Sprite, k: Look) {
   eyes(s, k, "glance");
   s.rect(10, 11, 11, 11, shade(k.skin, 0.66)); // left eye narrowed under the brim
   mouth(s, k, "smirk");
-  // Glowing loupe over the right eye, chain to the lapel.
-  const ring = mix(k.neon, "#ffffff", 0.25);
-  s.glowDots([[17, 10], [18, 10], [19, 10], [16, 11], [20, 11], [16, 12], [20, 12], [16, 13], [20, 13], [17, 14], [18, 14], [19, 14]], ring);
-  s.dots([[17, 11], [17, 12], [17, 13], [19, 12], [19, 13]], mix(k.skin, "#9fd8ff", 0.4));
-  s.glowDots([[19, 11]], "#ffffff");
-  s.glowDots([[20, 15], [21, 16], [21, 17], [20, 18], [19, 19]], shade(ring, 0.7));
+  // Round magnifying glass held up in the right hand: steel rim, glinting cyan lens, brass handle.
+  prop(s, 18, 10, [
+    ".....rrrr.",
+    "....rWLLLr",
+    "....rLLLLr",
+    "....rLLLLr",
+    "....rLLLLr",
+    ".....rrrr.",
+    "....g.....",
+    "...gg.....",
+    "...g......",
+    "..gg......",
+    "..g.......",
+    ".hhh......",
+    ".kkk......",
+    ".hhh......",
+    ".ccc......",
+  ], { r: "#c8d0e8", W: "#ffffff", L: "#7fe9ff", g: "#d9a54a", ...hands(k) }, "WL");
 }
 
 function audit(s: Sprite, k: Look) {
@@ -731,18 +857,18 @@ function audit(s: Sprite, k: Look) {
   s.rect(17, 20, 17, 22, "#cfcbe0");
   s.glowDots([[10, 23], [17, 23]], k.neon);
   brows(s, k, "furrow");
-  // Recon visor: twin lenses, cyan left and magenta right.
-  s.rect(3, 12, 24, 12, "#14121f"); // strap
-  s.rect(6, 10, 12, 14, "#1b1a2a");
-  s.rect(15, 10, 21, 14, "#1b1a2a");
-  s.rect(13, 11, 14, 12, "#1b1a2a");
-  s.glowRect(7, 11, 11, 13, "#3ee6ff");
-  s.glowRect(16, 11, 20, 13, "#ff4fd8");
-  s.glowRect(8, 12, 10, 12, "#a8f7ff");
-  s.glowRect(17, 12, 19, 12, "#ffb0ee");
-  s.glowDots([[7, 11], [16, 11]], "#ffffff");
-  s.glowDots([[12, 10], [21, 10]], k.neon);
   mouth(s, k, "line");
+  // Dual-barrel binoculars raised to the eyes, a hand on each side, two glowing lenses.
+  prop(s, 3, 9, [
+    "..bbbbbbbb..bbbbbbbb..",
+    "hhhRCCwCRbBBbRMMwMRhhh",
+    "kkkRCCCCRbBBbRMMMMRkkk",
+    "hhhRRRRRRbBBbRRRRRRhhh",
+    "hhbbbbbbbb..bbbbbbbbhh",
+    "ss..................ss",
+    ".ss................ss.",
+    ".ss................ss.",
+  ], { b: "#2a2838", R: "#6a6888", B: "#4a4860", C: "#3ee6ff", M: "#ff4fd8", w: "#ffffff", h: k.skin, k: shade(k.skin, 0.72), s: k.pastel }, "CMw");
 }
 
 function spec(s: Sprite, k: Look) {
@@ -752,17 +878,16 @@ function spec(s: Sprite, k: Look) {
   s.dots([[10, 21], [11, 22], [17, 21], [16, 22]], "#ffffff");
   s.glowRect(13, 21, 14, 21, k.neon);
   s.glowRect(13, 22, 14, 27, shade(k.neon, 0.75));
-  // Blueprint roll tucked diagonally across the lower chest.
-  const paper = "#1d4f9a";
-  const steps: [number, number][] = [[3, 27], [4, 26], [5, 26], [6, 25], [7, 25], [8, 24], [9, 23], [10, 23], [11, 22], [12, 22]];
-  steps.forEach(([x, y]) => {
-    s.set(x, y - 1, mix(paper, "#ffffff", 0.2));
-    s.set(x, y, paper);
-    s.set(x, y + 1, shade(paper, 0.75));
-  });
-  steps.forEach(([x, y], i) => i % 2 === 0 && s.glow(x, y, "#67e8f9"));
-  s.glowDots([[13, 20], [13, 21], [2, 27], [2, 28]], "#cfe9ff");
-  s.glowDots([[12, 20], [12, 21], [13, 22]], "#9ff3ff");
+  // Unrolled blueprint held open at the left: curled edges, cyan grid, a hand on the right edge.
+  prop(s, 2, 20, [
+    "RRRRRRRR....",
+    "BgBBgBBBhhh.",
+    "ggggggggkkk.",
+    "BgBwwBBBhhh.",
+    "BgBBgBBBccc.",
+    "gggggggg....",
+    "RRRRRRRR....",
+  ], { R: "#5aa8ff", B: "#1d4f9a", g: "#9ff3ff", w: "#ffffff", ...hands(k) }, "gw");
   head(s, k);
   hair(s, k, "part");
   brows(s, k, "arched");
@@ -790,11 +915,6 @@ function spec(s: Sprite, k: Look) {
 }
 
 function art(s: Sprite, k: Look) {
-  // Paintbrush tucked behind the right ear, angled up and out.
-  s.dots([[22, 11], [23, 10], [24, 9], [25, 8]], "#c08457");
-  s.dots([[22, 12], [23, 11], [24, 10]], "#8c5a36");
-  s.dots([[26, 7], [26, 6]], "#cbd5e1");
-  s.glowDots([[27, 5], [27, 4], [26, 5]], "#ff3df0");
   // Paint-splattered denim jacket with a lighter collar.
   torso(s, k, { color: "#2c3f73", shirt: k.pastel });
   const denim = "#4a63a6";
@@ -808,30 +928,49 @@ function art(s: Sprite, k: Look) {
   }
   head(s, k);
   hair(s, k, k.pick<HairStyle>(["crop", "curls", "tousled"]));
-  // A bright 80s streak through the fringe.
-  const streak = k.pick(["#ff4fd8", "#3ee6ff", "#ffe66b", "#a8ffd9"]);
-  s.dots([[15, 6], [16, 6], [16, 7], [17, 7], [17, 8], [18, 8]], streak);
   brows(s, k, "arched");
   eyes(s, k, "open");
   mouth(s, k, "grin");
   s.glowDots([[6, 16], [7, 16], [7, 17]], "#ff3df0"); // paint smudge on the cheek
-  // Jaunty beret slouched to the right, with a neon pin.
-  const beret = k.pick(["#5a2a8a", "#b0244f", "#14111f", "#2a5a6a"]);
-  s.dots([[11, 0], [12, 0]], shade(beret, 0.8));
-  s.rect(8, 1, 18, 1, beret);
-  s.rect(5, 2, 22, 2, beret);
-  s.rect(4, 3, 24, 4, beret);
-  s.rect(5, 5, 24, 5, shade(beret, 0.75));
-  s.dots([[24, 6], [23, 6]], shade(beret, 0.6));
-  s.dots([[8, 2], [9, 2], [10, 1]], mix(beret, "#ffffff", 0.3));
-  s.glowDots([[7, 3]], k.neon);
-  s.glowDots([[7, 4]], mix(k.neon, "#ffffff", 0.5));
+  // French beret tilted hard to the right: snug and low on the left, puffed up and drooping
+  // over the right ear, with a 1px stem on the crown and a neon pin.
+  const beret = k.pick(BERETS);
+  const under = shade(beret, 0.6);
+  s.set(15, 0, mix(beret, "#ffffff", 0.15)); // stem
+  s.rect(12, 1, 21, 1, beret);
+  s.rect(8, 2, 24, 2, beret);
+  s.rect(5, 3, 26, 3, beret);
+  s.rect(4, 4, 26, 4, beret);
+  s.rect(4, 5, 20, 5, shade(beret, 0.78)); // band hugging the brow
+  s.rect(21, 5, 26, 5, under);
+  s.rect(23, 6, 26, 6, under);
+  s.rect(25, 7, 26, 7, shade(beret, 0.5));
+  s.dots([[13, 1], [14, 1], [10, 2], [11, 2], [8, 3]], mix(beret, "#ffffff", 0.3));
+  s.glowDots([[8, 4]], k.neon);
+  s.glowDots([[9, 4]], mix(k.neon, "#ffffff", 0.5));
+  // Spray can gripped in the right hand: magenta cap, nozzle, neon mist drifting up and out.
+  prop(s, 18, 16, [
+    "....n.",
+    "...pp.",
+    "..SssS",
+    "..sLLs",
+    "chhhhs",
+    "ckkkks",
+    "chhhhs",
+    "..sLLs",
+    "..ssss",
+  ], { n: "#3a3a4a", p: "#ff3df0", S: "#ffffff", s: "#c8d0e8", L: "#00f0ff", ...hands(k) }, "L");
+  s.glowDots([[24, 15], [25, 14], [26, 15], [25, 12], [27, 13]], "#ff3df0");
+  s.glowDots([[24, 13], [26, 11], [27, 16]], "#00f0ff");
 }
 
 function unknown(s: Sprite, k: Look) {
-  // High-collared synth hoodie with neon piping.
-  torso(s, k, { color: k.jacket, vneck: false });
+  // Streetwear hoodie, hood down and bunched up behind the neck, with a 1px neon trim.
   const hood = shade(k.jacket, 1.3);
+  s.rect(4, 15, 23, 21, hood);
+  s.rect(3, 17, 24, 21, hood);
+  s.glowDots([[4, 14], [5, 14], [3, 16], [22, 14], [23, 14], [24, 16]], shade(k.neon, 0.85));
+  torso(s, k, { color: k.jacket, vneck: false });
   s.dots([[7, 19], [8, 19], [19, 19], [20, 19]], hood);
   s.rect(6, 20, 21, 20, hood);
   s.rect(5, 21, 22, 21, hood);
@@ -842,14 +981,10 @@ function unknown(s: Sprite, k: Look) {
   s.glowDots([[10, 25], [17, 25]], k.neon);
   for (let x = 2; x <= 25; x++) if (x < 9 || x > 18) s.glow(x, 23, shade(k.neon, 0.55));
   head(s, k);
-  hair(s, k, "tousled");
-  // Neon sweatband across the forehead.
-  s.glowRect(4, 8, 23, 8, k.neon);
-  s.glowRect(4, 9, 23, 9, shade(k.neon, 0.65));
-  s.glowDots([[6, 8], [7, 8]], "#ffffff");
-  brows(s, k, "furrow");
+  hair(s, k, "crop");
+  brows(s, k, "flat");
   eyes(s, k, "open");
-  mouth(s, k, "line");
+  mouth(s, k, "smirk");
 }
 
 const CAST: Record<AgentType, (s: Sprite, k: Look) => void> = {
@@ -894,21 +1029,30 @@ function finish(s: Sprite, neon: string, agentType: AgentType) {
     }
 }
 
-export function spriteUrl(id: string, agentType: AgentType, neon: string, variant?: number): string {
-  const key = `${id}|${agentType}|${neon}|${variant ?? ""}`;
-  const hit = cache.get(key);
-  if (hit) return hit;
-  const r = rng(hash(id));
+/** Raw 28x28 pixels (row-major hex colours, null = transparent). DOM-free, so the gallery script can use it. */
+export function paintPixels(id: string, agentType: AgentType, neon: string, variant?: number): (string | null)[] {
+  const h = hash(id);
+  const r = rng(h);
   const pick = <T,>(xs: T[]): T => xs[Math.floor(r() * xs.length)];
-  const look: Look = { r, pick, skin: pick(SKINS), hair: pick(HAIRS), jacket: pick(JACKETS), pastel: pick(PASTELS), neon };
+  const palettes = CURATED[agentType] ?? CURATED.unknown;
+  const pal = palettes[(h >>> 5) % palettes.length];
+  const look: Look = { r, pick, ...pal, neon };
   if (agentType === "lead") look.lead = leadLook(id, variant);
   const s = new Sprite();
   (CAST[agentType] ?? CAST.unknown)(s, look);
   finish(s, neon, agentType);
+  return s.px;
+}
+
+export function spriteUrl(id: string, agentType: AgentType, neon: string, variant?: number): string {
+  const key = `${id}|${agentType}|${neon}|${variant ?? ""}`;
+  const hit = cache.get(key);
+  if (hit) return hit;
+  const px = paintPixels(id, agentType, neon, variant);
   const cv = document.createElement("canvas");
   cv.width = cv.height = S;
   const ctx = cv.getContext("2d")!;
-  s.px.forEach((c, i) => {
+  px.forEach((c, i) => {
     if (!c) return;
     ctx.fillStyle = c;
     ctx.fillRect(i % S, Math.floor(i / S), 1, 1);
