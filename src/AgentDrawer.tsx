@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import { buildAgentDeepLink } from "@getpaseo/protocol/agent-deep-link";
+import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
 import {
   attachFiles,
   clearNeedsYou,
@@ -392,7 +393,7 @@ function HardeningBar({ agent, entries }: { agent: PaseoAgent; entries: Entry[] 
           action="Cancel & Resume"
           onAction={async () => {
             await stopAgent(agent.id);
-            await sendMessage(agent.id, CANCEL_AND_RESUME_PROMPT(a.a3HungTool!.name));
+            await sendMessage(agent.id, CANCEL_AND_RESUME_PROMPT(a.a3HungTool!.name), undefined, { activeTurnBehavior: "interrupt" });
           }}
         />
       )}
@@ -590,6 +591,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   const feedbackKey = `vs.restart-feedback.${agent.id}`;
   const [feedbackDismissed, setFeedbackDismissed] = useState(() => localStorage.getItem(feedbackKey) === "1");
   const autoRestartFired = useRef<string | null>(null);
+  const [lastSteered, setLastSteered] = useState<string | null>(null);
 
   const imgs = useImageDraft(`${agent.id}:images`);
   const [dragOver, setDragOver] = useState(false);
@@ -634,6 +636,10 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   useEffect(() => {
     setFeedbackDismissed(localStorage.getItem(feedbackKey) === "1");
   }, [feedbackKey]);
+
+  useEffect(() => {
+    if (agent.status !== "running") setLastSteered(null);
+  }, [agent.status]);
 
   useEffect(() => {
     const el = timeline.current;
@@ -711,7 +717,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
     }
   }, [isBs, agent.id, agent.archivedAt, agent.status, bsUsedTokens, restartTokens, draft, doRestart]);
 
-  const send = async () => {
+  const sendWithBehavior = async (behavior: ActiveTurnBehavior) => {
     if (!draft.trim() && !imgs.images.length) return;
     const text = draft.trim() ? draft : "(image)";
 
@@ -725,12 +731,13 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
     setBusy(true);
     try {
       if (imgs.images.length) {
-        await sendMessage(agent.id, text, await blobsToPaseoImages(imgs.images));
+        await sendMessage(agent.id, text, await blobsToPaseoImages(imgs.images), { activeTurnBehavior: behavior });
         rememberSent(agent.id, text, imgs.images);
         imgs.clear();
       } else {
-        await client.agents.ref(agent.id).send(draft);
+        await sendMessage(agent.id, draft, undefined, { activeTurnBehavior: behavior });
       }
+      if (agent.status === "running" && behavior === "steer") setLastSteered(text);
       clearDraft();
     } catch (e) {
       alert(`Send failed: ${e}`);
@@ -738,6 +745,9 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
       setBusy(false);
     }
   };
+
+  const send = () => sendWithBehavior("steer");
+  const sendInterrupt = () => sendWithBehavior("interrupt");
 
   const onFeedback = async (verdict: "good" | "lost") => {
     localStorage.setItem(feedbackKey, "1");
@@ -1149,13 +1159,21 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
             ))}
           </div>
         )}
+        {lastSteered && (
+          <div className="chip steered-chip" data-testid="steered-chip">steered</div>
+        )}
         <div className="composer-row">
           <textarea
             value={draft}
-            placeholder={`Message ${agent.title ?? "agent"}… (Enter to send, Shift+Enter for newline)`}
+            placeholder={`Message ${agent.title ?? "agent"}… (Enter to send, Ctrl+Enter to interrupt)`}
             onChange={(e) => setDraft(e.target.value)}
             onPaste={onPaste}
             onKeyDown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && !isImeComposing(e)) {
+                e.preventDefault();
+                void sendInterrupt();
+                return;
+              }
               if (shouldComposerSubmit(e)) {
                 e.preventDefault();
                 void send();
@@ -1190,6 +1208,17 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
           <button className="btn" disabled={busy || (!draft.trim() && !imgs.images.length)} onClick={send}>
             Send
           </button>
+          {agent.status === "running" && (
+            <button
+              className="btn warn composer-interrupt-btn"
+              disabled={busy || (!draft.trim() && !imgs.images.length)}
+              title="Interrupt current turn and send (Ctrl+Enter)"
+              data-testid="composer-interrupt-btn"
+              onClick={() => void sendInterrupt()}
+            >
+              ⚡ Interrupt &amp; send
+            </button>
+          )}
         </div>
       </footer>
     </aside>

@@ -1,5 +1,6 @@
 import { createPaseoApi, type PaseoAgent, type PaseoClient, type PaseoWorkspace } from "@getpaseo/client";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
+import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
 import { useSyncExternalStore } from "react";
 import { normalizeProviderUsage, type ProviderQuotaView } from "./antigravity";
 import { LEGACY_NEEDS_LABEL, LEGACY_NEEDS_UNTIL, LEGACY_NEEDS_REASON } from "./userName";
@@ -135,13 +136,19 @@ export async function stopAgent(agentId: string): Promise<void> {
   await daemonClient.cancelAgent(agentId);
 }
 
-export async function sendMessage(agentId: string, text: string, images?: Array<{ data: string; mimeType: string }>): Promise<void> {
+export async function sendMessage(
+  agentId: string,
+  text: string,
+  images?: Array<{ data: string; mimeType: string }>,
+  opts?: { activeTurnBehavior?: ActiveTurnBehavior },
+): Promise<void> {
   if (DEMO) return;
+  const sendOpts = { activeTurnBehavior: "steer" as ActiveTurnBehavior, ...opts };
   if (images?.length) {
-    await daemonClient.sendAgentMessage(agentId, text, { images });
+    await daemonClient.sendAgentMessage(agentId, text, { ...sendOpts, images });
     return;
   }
-  await client.agents.ref(agentId).send(text);
+  await daemonClient.sendAgentMessage(agentId, text, sendOpts);
 }
 
 export async function archiveAgent(agentId: string): Promise<{ archivedAt: string }> {
