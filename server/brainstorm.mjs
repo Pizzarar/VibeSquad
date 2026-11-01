@@ -6,6 +6,7 @@ import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { effectiveAgentRole, findLaneInRegistry, isRetiredAgent, topicOf } from "./identity.mjs";
 import { findProfile, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
+import { refreshWhosHere } from "./whos-here.mjs";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
 const MAX_SUMMARY_CHARS = 20_000;
@@ -106,7 +107,13 @@ function defaultSummaryTemplate(laneId, laneName) {
   return [
     `# Brainstorm Summary · ${upper} (\`${laneId}\`)`,
     "",
-    `> Rolling lane summary (\`< ~5k\` tokens). Updated on every plan handoff to \`★ ${upper}\`.`,
+    `> Rolling team brief (\`< ~5k\` tokens). Updated on every decision.`,
+    "",
+    "## Who's here",
+    "- (VibeSquad fills this in)",
+    "",
+    "## Done when",
+    "- (what makes this team finished)",
     "",
     "## Decided",
     "- (none recorded yet)",
@@ -204,13 +211,14 @@ export function buildBrainstormInitialPrompt({ laneId, laneUpper, summaryContent
       : `Summary loaded from docs/brainstorm/${laneId}.md. Reply in 1-2 short sentences confirming you are ready and listing the current Decided / In-Flight focus.`;
 
   return [
-    `You are BRAINSTORM · ${laneUpper} (fresh context restart for lane \`${laneId}\`).`,
+    `You are BRAINSTORM · ${laneUpper} (fresh start for lane \`${laneId}\`). Read the brief below before anything else.`,
     "",
     "Rules (BF-P1):",
-    `- Keep \`docs/brainstorm/${laneId}.md\` updated (< ~5k tokens, sections: Decided / Open / In flight) in the same step as every plan handoff to the lead.`,
+    `- Update \`docs/brainstorm/${laneId}.md\` after every decision as a short diff (< ~5k tokens; sections: Who's here / Done when / Decided / Open / In flight). Keep \`## Done when\`. Never edit \`## Who's here\`; VibeSquad writes it. The brief is the handoff; do not write dated docs/BRAINSTORM_HANDOFF_*.md files.`,
+    `- Never complete the team yourself. When the lead reported PASS on the last plan block and nothing is Open, post "<Team> looks done. ✓ Mark complete · Not yet" with the line \`vs:looks-done\` in a code fence.`,
     `- To find your current lead for handoff: run \`vs who lead\`.`,
     `- Before handing off a plan that adds a command, rule or feature, check for an existing primitive (\`paseo --help\`, Paseo MCP tool list, \`vs --help\`, skills). Name what you checked in the plan's Decided section.`,
-    `- At >=80k context tokens (or after handing off a plan), add one line: "getting heavy, restart from summary?"`,
+    `- At >=80k context tokens, update the brief now. At the hard limit VibeSquad retires you; the next click on the pin starts a fresh Brainstorm from the brief.`,
     `- Latest plan file: \`${latestPlan}\``,
     "",
     `--- BEGIN docs/brainstorm/${laneId}.md ---`,
@@ -372,6 +380,50 @@ export async function performBrainstormRestart(body, rootDir = REPO_ROOT) {
       Number(oldAgent?.lastUsage?.contextWindowUsedTokens) ||
       Number(oldAgent?.lastUsage?.inputTokens) ||
       0;
+
+    if (reason.startsWith("auto")) {
+      // Hard limit: retire, never spawn a successor. The next click on the pin quick-starts one from the brief.
+      const retiredLabels = { ...oldLabels, role: "former-brainstorm" };
+      delete retiredLabels["vs.mock-tokens"];
+      restartedAgents.set(agentId, { newAgentId: null, ts: Date.now(), tokens });
+      if (oldAgent && typeof oldAgent === "object") {
+        oldAgent.labels = retiredLabels;
+        oldAgent.archivedAt = oldAgent.archivedAt || new Date().toISOString();
+      }
+      if (connected && client) {
+        const rawOldTitle = String(oldAgent?.title || `BRAINSTORM · ${laneUpper}`).trim();
+        const retiredTitle = rawOldTitle.toLowerCase().startsWith("(old)") ? rawOldTitle : `(old) ${rawOldTitle}`;
+        await client.cancelAgent?.(agentId)?.catch?.(() => {});
+        await client.updateAgent?.(agentId, { name: retiredTitle, labels: retiredLabels })?.catch?.(() => {});
+        await client.archiveAgent?.(agentId)?.catch?.(() => {});
+      }
+      const retiredSummary = readBrainstormSummary(laneId, rootDir);
+      appendVsLogEntry({
+        teamId,
+        laneId,
+        agent: agentId,
+        type: "metric",
+        text: `brainstorm-retired (${reason}): ${tokens} tok, no successor`,
+        refs: [retiredSummary.path],
+      });
+      try {
+        const live = body.agents
+          ? body.agents instanceof Map ? [...body.agents.values()] : body.agents
+          : [];
+        refreshWhosHere({ laneId, agents: live.filter((a) => (a?.agent ?? a)?.id !== agentId), rootDir });
+      } catch {}
+      return {
+        ok: true,
+        retired: true,
+        oldAgentId: agentId,
+        newAgentId: null,
+        laneId,
+        teamId,
+        usedTokens: tokens,
+        summaryPath: retiredSummary.path,
+        pendingPrompt: pendingPrompt || undefined,
+      };
+    }
 
     if (typeof body.summaryUpdate === "string" && body.summaryUpdate.trim()) {
       writeBrainstormSummary(laneId, body.summaryUpdate, rootDir);
