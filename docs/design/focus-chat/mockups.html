@@ -1,0 +1,321 @@
+<!doctype html>
+<!-- Throwaway static mockups for docs/design/FOCUS_CHAT.md. Not app code.
+     Open directly in a browser; ?f=default|focus|split shows one frame (used for the PNGs). -->
+<html>
+<head>
+<meta charset="utf-8" />
+<title>VibeSquad · focus chat mockups</title>
+<link rel="stylesheet" href="../../../node_modules/@fontsource/pixelify-sans/700.css" />
+<link rel="stylesheet" href="../../../node_modules/@fontsource/silkscreen/400.css" />
+<link rel="stylesheet" href="../../../node_modules/@fontsource/jetbrains-mono/400.css" />
+<style>
+:root {
+  --bg: #070710; --navy: #0c0d1b; --panel: #111326; --panel-hi: #181b34; --line: #26294e;
+  --cyan: #00f0ff; --violet: #b86bff; --hot: #ff2a85; --amber: #f59e0b; --ok: #34d399;
+  --text: #eef2ff; --muted: #828ba8;
+  --arcade: "Silkscreen", monospace; --display: "Pixelify Sans", monospace; --mono: "JetBrains Mono", Consolas, monospace;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: #03030a; color: var(--text); font: 13px var(--mono); }
+img { image-rendering: pixelated; display: block; }
+.frame { width: 1440px; margin: 0 auto 40px; background: var(--bg); position: relative; }
+.title { font: 22px var(--display); color: var(--cyan); padding: 14px 18px 4px; }
+.title small { font: 12px var(--mono); color: var(--muted); margin-left: 10px; }
+.screen { height: 900px; display: grid; position: relative; overflow: hidden; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  background: radial-gradient(circle at 60% 0%, #1d153e 0%, #090a18 55%, #06060f 100%); }
+.legend { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px 22px; padding: 12px 18px 18px; font-size: 12px; color: #c9cfe6; }
+.legend b { color: var(--hot); font-family: var(--arcade); margin-right: 6px; }
+
+/* annotation markers */
+.n { position: absolute; z-index: 9; width: 22px; height: 22px; background: var(--hot); color: #fff; font: 12px var(--arcade);
+  display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 2px #000, 0 0 12px var(--hot); }
+
+/* shared bits */
+.av { position: relative; flex: none; border: 1px solid var(--p, var(--cyan)); background: radial-gradient(circle at 50% 35%, #1e293b, #070812 85%); }
+.av .b { position: absolute; right: -3px; bottom: -3px; font-size: 9px; line-height: 1; padding: 1px 2px; background: #06060e; border: 1px solid currentColor; }
+.dot { width: 7px; height: 7px; flex: none; background: #475569; }
+.dot.run { background: var(--cyan); box-shadow: 0 0 6px var(--cyan); }
+.dot.idle { background: var(--violet); opacity: .7; }
+.dot.hot { background: var(--hot); box-shadow: 0 0 6px var(--hot); }
+.pill { font: 9px var(--arcade); padding: 1px 5px; border: 1px solid var(--hot); color: var(--hot); background: #ff2a8518; white-space: nowrap; }
+.pill.amber { border-color: var(--amber); color: var(--amber); background: #f59e0b18; }
+.muted { color: var(--muted); }
+.btn { font: 10px var(--arcade); padding: 5px 9px; border: 1px solid var(--cyan); color: var(--cyan); background: transparent; white-space: nowrap; }
+.btn.hot { border-color: var(--hot); color: var(--hot); }
+.btn.on { background: var(--cyan); color: #000; }
+.kbd { font: 10px var(--mono); border: 1px solid var(--line); padding: 0 4px; color: var(--muted); }
+
+/* full sidebar (default) */
+.sidebar { background: linear-gradient(180deg, #0b0c1a 0%, #100e24 100%); border-right: 1px solid var(--line); padding: 12px 10px; display: flex; flex-direction: column; gap: 8px; }
+.brand { font: 15px var(--arcade); color: var(--cyan); display: flex; gap: 8px; align-items: center; }
+.brand i { width: 22px; height: 22px; background: linear-gradient(#ff3df0 0 45%, #080814 45% 55%, #00f0ff 55%); }
+.steam { border: 1px solid var(--line); background: #0d0f20; padding: 6px 8px; font: 13px var(--display); display: flex; gap: 8px; align-items: center; }
+.steam.on { border-color: var(--cyan); box-shadow: inset 3px 0 0 var(--cyan); }
+.leadl { display: flex; gap: 8px; align-items: center; padding: 2px 4px 2px 14px; font: 12px var(--display); color: #c9cfe6; }
+
+/* team page (default) */
+.page { padding: 18px 22px; overflow: hidden; }
+.h1 { font: 26px var(--display); display: flex; align-items: center; gap: 12px; }
+.h1 .st { font: 10px var(--arcade); color: var(--cyan); margin-left: auto; }
+.cards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; }
+.card { border: 1px solid var(--line); border-top: 2px solid var(--cyan); background: var(--panel); padding: 10px; display: flex; gap: 10px; }
+.card.bs { border-top-color: var(--violet); }
+.sec { font: 10px var(--arcade); color: var(--cyan); margin: 16px 0 6px; letter-spacing: 1px; }
+.prow { display: flex; gap: 10px; align-items: center; padding: 6px 4px; border-bottom: 1px solid #1a1d3a; }
+.prow .t { font: 13px var(--display); }
+.bar { height: 4px; background: #1a1d3a; width: 110px; flex: none; }
+.bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--cyan), var(--violet)); }
+.bar.warn i { background: linear-gradient(90deg, var(--violet), var(--amber)); }
+.bar.hot i { background: var(--hot); }
+
+/* chat column */
+.chat { display: flex; flex-direction: column; min-width: 0; background: var(--navy); border-left: 1px solid var(--cyan); }
+.tabs { display: flex; align-items: stretch; height: 40px; background: #090a16; border-bottom: 1px solid var(--line); }
+.tab { display: flex; align-items: center; gap: 6px; padding: 0 10px; border-right: 1px solid var(--line); font: 12px var(--display); color: #aab2cf; max-width: 210px; white-space: nowrap; overflow: hidden; }
+.tab.on { background: var(--panel-hi); color: var(--text); box-shadow: inset 0 2px 0 var(--cyan); }
+.tab.on.v { box-shadow: inset 0 2px 0 var(--violet); }
+.tab .x { color: var(--muted); margin-left: 4px; }
+.tab .dr { color: var(--amber); font-size: 11px; }
+.tabs .sp { flex: 1; }
+.tabs .tools { display: flex; align-items: center; gap: 6px; padding: 0 8px; }
+.chead { display: flex; gap: 12px; padding: 12px 14px; background: linear-gradient(180deg, var(--panel-hi), var(--panel)); border-bottom: 1px solid var(--line); }
+.chead .nm { font: 17px var(--display); }
+.tl { flex: 1; padding: 12px 16px; overflow: hidden; line-height: 1.55; }
+.tl .u { border: 1px solid var(--violet); background: #b86bff14; padding: 8px 10px; margin: 0 0 12px auto; max-width: 78%; }
+.tl .tool { color: var(--cyan); }
+.tl p { margin: 0 0 10px; }
+.composer { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); }
+.composer .in { flex: 1; border: 1px solid var(--line); background: #090a16; padding: 10px; color: var(--muted); height: 58px; }
+
+/* focus rail */
+.rail { background: linear-gradient(180deg, #0b0c1a 0%, #100e24 100%); border-right: 1px solid var(--line); display: flex; flex-direction: column; overflow: hidden; }
+.rhead { display: flex; align-items: center; gap: 8px; padding: 10px; border-bottom: 1px solid var(--line); }
+.rhead .tm { font: 15px var(--display); flex: 1; display: flex; gap: 6px; align-items: center; }
+.rhead .tm i { width: 18px; height: 18px; background: linear-gradient(#00f0ff 0 45%, #080814 45% 55%, #b86bff 55%); }
+.rsec { font: 9px var(--arcade); color: var(--muted); padding: 10px 10px 4px; letter-spacing: 1px; display: flex; gap: 6px; align-items: center; }
+.rsec.hot { color: var(--hot); }
+.rrow { display: flex; gap: 8px; align-items: center; padding: 4px 10px; position: relative; min-height: 36px; }
+.rrow .nm { font: 12px var(--display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rrow .col { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.rrow .tok { font: 10px var(--mono); color: var(--amber); }
+.rrow.open::before { content: ""; position: absolute; left: 0; top: 4px; bottom: 4px; width: 3px; background: var(--cyan); box-shadow: 0 0 8px var(--cyan); }
+.rrow.open.v::before { background: var(--violet); box-shadow: 0 0 8px var(--violet); }
+.rrow.open { background: #00f0ff0d; }
+.rrow.open.v { background: #b86bff0d; }
+.rrow.q { border-left: 0; background: #ff2a850c; margin: 0 6px 4px; border: 1px solid #ff2a8540; padding: 5px 6px; }
+.rrow.q .why { font: 11px var(--mono); color: #ffb3d1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tree { margin-left: 23px; border-left: 1px solid #2c3060; }
+.tree .rrow { padding-left: 10px; min-height: 32px; }
+.mini { height: 3px; background: #1a1d3a; width: 100%; }
+.mini i { display: block; height: 100%; background: #3b4270; }
+.mini.warn i { background: var(--amber); }
+.more { font: 11px var(--mono); color: var(--muted); padding: 3px 10px 3px 20px; }
+.oteam { display: flex; gap: 8px; align-items: center; padding: 6px 10px; font: 12px var(--display); color: #aab2cf; border-top: 1px solid #1a1d3a; }
+.oteam .sp { flex: 1; }
+.quota { margin-top: auto; padding: 8px 10px; border-top: 1px solid var(--line); display: flex; gap: 8px; align-items: center; font: 10px var(--mono); }
+.panes { display: grid; min-height: 0; }
+.pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--navy); }
+.pane + .pane { border-left: 1px solid var(--violet); }
+</style>
+</head>
+<body>
+
+<!-- ============ FRAME 1: default (Unit L tabs, team page visible) ============ -->
+<section class="frame" id="default">
+  <div class="title">1 · Default layout <small>Unit L tabs in the right column; team page in the middle. Focus is one click or Ctrl+. away.</small></div>
+  <div class="screen" style="grid-template-columns: 265px 1fr 560px">
+    <nav class="sidebar">
+      <div class="brand"><i></i>VIBESQUAD</div>
+      <div class="steam">Escape From Idle <span class="pill" style="margin-left:auto">1</span></div>
+      <div class="leadl"><div class="av" style="--p:#ff6e59"><img src="sprites/lead-efi.png" width="28"></div>Main Game</div>
+      <div class="leadl"><div class="av" style="--p:#b86bff"><img src="sprites/lead-ui.png" width="28"></div>UI Lab</div>
+      <div class="steam on">VibeSquad <span class="pill" style="margin-left:auto">2</span></div>
+      <div class="leadl"><div class="av"><img src="sprites/lead-vs.png" width="28"></div>VibeSquad</div>
+      <div class="steam">Plugins &amp; Tooling</div>
+      <div class="leadl"><div class="av" style="--p:#d4dce8"><img src="sprites/lead-pl.png" width="28"></div>Plugins</div>
+    </nav>
+    <div class="page">
+      <div class="h1">VibeSquad <span class="st">6 WORKING · <span style="color:var(--hot)">2 NEED YOU</span> · 14 AGENTS</span></div>
+      <div class="cards">
+        <div class="card"><div class="av"><img src="sprites/lead-vs.png" width="56"></div><div><div class="pill" style="border-color:var(--cyan);color:var(--cyan);display:inline-block">LEAD</div><div style="font:15px var(--display);margin-top:4px">VIBESQUAD ord1</div><div class="muted">gemini · 114k / 130k</div></div></div>
+        <div class="card bs"><div class="av" style="--p:#ff6e59"><img src="sprites/bs-vs.png" width="56"></div><div><div class="pill" style="border-color:var(--violet);color:var(--violet);display:inline-block">BRAINSTORM</div><div style="font:15px var(--display);margin-top:4px">neon-noir cast</div><div class="muted">claude · 62k / 200k</div></div></div>
+      </div>
+      <div class="sec">▾ NEEDS YOU (2)</div>
+      <div class="prow"><div class="av"><img src="sprites/aud.png" width="28"></div><span class="t">Audit - token scout</span><span class="pill amber">PERM</span><span style="flex:1"></span><div class="bar hot"><i style="width:93%"></i></div></div>
+      <div class="prow"><div class="av" style="--p:#ff6e59"><img src="sprites/rev.png" width="28"></div><span class="t">Review - Sonnet · drawer</span><span class="pill">NEEDS AUB</span><span style="flex:1"></span><div class="bar"><i style="width:37%"></i></div></div>
+      <div class="sec">▾ WORKING (5)</div>
+      <div class="prow"><div class="av" style="--p:#ff6e59"><img src="sprites/art-o.png" width="28"></div><span class="t">Art - Opus · neon-noir</span><span style="flex:1"></span><div class="bar"><i style="width:44%"></i></div></div>
+      <div class="prow"><div class="av"><img src="sprites/art-g.png" width="28"></div><span class="t">Art - Gemini · neon-noir</span><span style="flex:1"></span><div class="bar"><i style="width:20%"></i></div></div>
+      <div class="prow"><div class="av" style="--p:#b86bff"><img src="sprites/impl-1.png" width="28"></div><span class="t">Implement - drawer crash</span><span style="flex:1"></span><div class="bar warn"><i style="width:76%"></i></div></div>
+      <div class="prow"><div class="av" style="--p:#ff6e59"><img src="sprites/impl-2.png" width="28"></div><span class="t">Implement - team actions</span><span style="flex:1"></span><div class="bar"><i style="width:18%"></i></div></div>
+      <div class="prow"><div class="av" style="--p:#d4dce8"><img src="sprites/mech.png" width="28"></div><span class="t">Mechanical - rename sweep</span><span style="flex:1"></span><div class="bar"><i style="width:10%"></i></div></div>
+      <div class="sec">▸ IDLE (2) · ▸ CLOSED (1) · LIVE FOLDERS · TEAM FEED …</div>
+    </div>
+    <div class="chat">
+      <div class="tabs">
+        <div class="tab on"><div class="av"><img src="sprites/lead-vs.png" width="28"></div>★ ord1</div>
+        <div class="tab"><div class="av" style="--p:#ff6e59"><img src="sprites/art-o.png" width="28"></div>Art - Opus <span class="dr">✎</span></div>
+        <div class="sp"></div>
+        <div class="tools"><span class="btn">▣ FOCUS</span><span class="kbd">Ctrl+.</span></div>
+      </div>
+      <div class="chead"><div class="av"><img src="sprites/lead-vs.png" width="56"></div><div><div class="nm">★ LEAD · VIBESQUAD ord1</div><div class="muted">antigravity · gemini-4-argon · running</div><div class="bar warn" style="width:200px;margin-top:6px"><i style="width:87%"></i></div></div></div>
+      <div class="tl">
+        <div class="u">Run the neon-noir art duet. Both workers get the same brief.</div>
+        <p>Dispatching Art - Opus and Art - Gemini in separate worktrees.</p>
+        <p class="tool">create_agent Art - Opus · neon-noir</p>
+        <p class="tool">create_agent Art - Gemini · neon-noir</p>
+      </div>
+      <div class="composer"><div class="in">Message ★ ord1… (Ctrl+Enter to send)</div><span class="btn">SEND</span></div>
+    </div>
+    <span class="n" style="left:1284px;top:9px">A</span>
+    <span class="n" style="left:1116px;top:9px">B</span>
+  </div>
+  <div class="legend">
+    <div><b>A</b>Focus toggle lives on the chat tab bar, the thing you are about to focus. Ctrl+. does the same from anywhere.</div>
+    <div><b>B</b>Tabs are Unit L's. ✎ marks an unsent draft (Unit D). Nothing on this screen changes for focus mode.</div>
+    <div><b>·</b>Toggle is global (one localStorage key), not per team: it is about how the user is working, not about the team.</div>
+  </div>
+</section>
+
+<!-- ============ FRAME 2: focus mode, one pane ============ -->
+<section class="frame" id="focus">
+  <div class="title">2 · Focus chat <small>Team page and sidebar fold into one 264px rail. The chat takes the rest.</small></div>
+  <div class="screen" style="grid-template-columns: 264px 1fr">
+    <nav class="rail">
+      <div class="rhead"><span class="tm"><i></i>VibeSquad ▾</span><span class="btn">◂ TEAM</span></div>
+
+      <div class="rsec hot">● NEEDS YOU · 3 <span class="muted" style="margin-left:auto">ALL TEAMS · Ctrl+J</span></div>
+      <div class="rrow q"><div class="av"><img src="sprites/aud.png" width="28"></div><div class="col"><span class="nm">Audit - token scout</span><span class="why">PERM · Bash: rg --stats</span></div></div>
+      <div class="rrow q"><div class="av" style="--p:#ff6e59"><img src="sprites/rev.png" width="28"></div><div class="col"><span class="nm">Review - Sonnet · drawer</span><span class="why">NEEDS AUB · pick option A or B</span></div></div>
+      <div class="rrow q"><div class="av" style="--p:#ff6e59"><img src="sprites/lead-efi.png" width="28"></div><div class="col"><span class="nm">★ EFI main <span class="muted">· EFI</span></span><span class="why">NEEDS AUB · approve merge order</span></div></div>
+
+      <div class="rsec">VIBESQUAD LANE</div>
+      <div class="rrow open"><div class="av"><img src="sprites/lead-vs.png" width="28"></div><div class="col"><span class="nm">★ ord1</span><div class="mini warn"><i style="width:87%"></i></div></div><span class="tok">114k</span><span class="dot run"></span></div>
+      <div class="tree">
+        <div class="rrow open"><div class="av" style="--p:#ff6e59"><img src="sprites/art-o.png" width="28"></div><div class="col"><span class="nm">Art - Opus</span><div class="mini"><i style="width:44%"></i></div></div><span class="dot run"></span></div>
+        <div class="rrow"><div class="av"><img src="sprites/art-g.png" width="28"></div><div class="col"><span class="nm">Art - Gemini</span><div class="mini"><i style="width:20%"></i></div></div><span class="dot run"></span></div>
+        <div class="rrow"><div class="av" style="--p:#b86bff"><img src="sprites/impl-1.png" width="28"></div><div class="col"><span class="nm">Implement - drawer crash</span><div class="mini warn"><i style="width:76%"></i></div></div><span class="tok">152k</span><span class="dot run"></span></div>
+        <div class="rrow"><div class="av" style="--p:#ff6e59"><img src="sprites/impl-2.png" width="28"></div><div class="col"><span class="nm">Implement - team actions</span><div class="mini"><i style="width:18%"></i></div></div><span class="dot run"></span></div>
+        <div class="rrow"><div class="av" style="--p:#d4dce8"><img src="sprites/mech.png" width="28"></div><div class="col"><span class="nm">Mechanical - rename sweep</span><div class="mini"><i style="width:10%"></i></div></div><span class="dot run"></span></div>
+        <div class="more">▸ 2 idle · 1 closed</div>
+      </div>
+      <div class="rrow"><div class="av" style="--p:#ff6e59"><img src="sprites/bs-vs.png" width="28"></div><div class="col"><span class="nm">Brainstorm · neon-noir cast</span><div class="mini"><i style="width:31%"></i></div></div><span class="dot idle"></span></div>
+      <div class="tree"><div class="rrow"><div class="av" style="--p:#ff6e59"><img src="sprites/spec.png" width="28"></div><div class="col"><span class="nm">Spec - step 6 plugin</span><div class="mini"><i style="width:27%"></i></div></div><span class="dot idle"></span></div></div>
+
+      <div class="rsec" style="margin-top:6px">OTHER TEAMS</div>
+      <div class="oteam">Escape From Idle<span class="sp"></span><span class="pill">1</span><span class="muted">2▶</span></div>
+      <div class="oteam">Plugins &amp; Tooling<span class="sp"></span><span class="muted">1▶</span></div>
+      <div class="oteam">example-site<span class="sp"></span><span class="muted">idle</span></div>
+      <div class="quota"><span style="color:#00f0ff">◆ Gemini</span><span class="pill">91% USED</span><span class="muted" style="margin-left:auto">others ok</span></div>
+    </nav>
+    <div class="chat" style="border-left:0">
+      <div class="tabs">
+        <div class="tab on"><div class="av"><img src="sprites/lead-vs.png" width="28"></div>★ ord1</div>
+        <div class="tab"><div class="av" style="--p:#ff6e59"><img src="sprites/art-o.png" width="28"></div>Art - Opus <span class="dr">✎</span><span class="x">×</span></div>
+        <div class="sp"></div>
+        <div class="tools"><span class="btn">◫ SPLIT</span><span class="btn on">▣ FOCUS</span><span class="kbd">Ctrl+.</span></div>
+      </div>
+      <div class="chead"><div class="av"><img src="sprites/lead-vs.png" width="56"></div><div style="flex:1"><div class="nm">★ LEAD · VIBESQUAD ord1</div><div class="muted">antigravity · gemini-4-argon · VibeSquad · running</div><div class="bar warn" style="width:260px;margin-top:6px"><i style="width:87%"></i></div></div><div style="display:flex;gap:6px;align-items:flex-start"><span class="btn hot">STOP</span><span class="btn">OPEN IN PASEO</span></div></div>
+      <div class="tl" style="max-width:920px">
+        <div class="u">Run the neon-noir art duet. Both workers get the same brief and both hard-gate lists.</div>
+        <p>Dispatching Art - Opus and Art - Gemini in separate worktrees. Neither reads the other's work until cross-critique.</p>
+        <p class="tool">create_agent Art - Opus · neon-noir</p>
+        <p class="tool">create_agent Art - Gemini · neon-noir</p>
+        <p class="tool">◆ sub-agent [Explore] check handoff budget numbers · running</p>
+        <p>◐ Duet builds<br>☐ Cross-critique<br>☐ Show user 2 options</p>
+      </div>
+      <div class="composer"><div class="in">Message ★ ord1… (Ctrl+Enter to send · paste images)</div><span class="btn">SEND</span></div>
+    </div>
+    <span class="n" style="left:262px;top:100px">1</span>
+    <span class="n" style="left:262px;top:262px">2</span>
+    <span class="n" style="left:262px;top:292px">3</span>
+    <span class="n" style="left:236px;top:510px">4</span>
+    <span class="n" style="left:236px;top:684px">5</span>
+    <span class="n" style="left:236px;top:820px">6</span>
+    <span class="n" style="left:262px;top:12px">7</span>
+  </div>
+  <div class="legend">
+    <div><b>1</b>NEEDS YOU, all teams, alert order (perm › needs-aub › error). Click opens the owner as a tab. Ctrl+J jumps to the top one. An alerted agent leaves the tree below, so it is never listed twice.</div>
+    <div><b>2</b>Current team only, lead → workers, one level deep. 28px portraits at 1×. Name, status dot, a 3px budget bar; the token count shows only past 72%.</div>
+    <div><b>3</b>Lit left edge = open as a tab (cyan = active pane, violet = other pane). The rail marks open tabs; it never repeats them as a list.</div>
+    <div><b>4</b>Idle and closed collapse to one count line; deeper tree levels show as "▸ N under X". Brainstorm sits under the lead with its own children.</div>
+    <div><b>5</b>Other teams: one line each, alert count and running count. Click switches the rail's team. It never touches your tabs.</div>
+    <div><b>6</b>Provider quota only when one is hot (≥85%); otherwise the footer is empty.</div>
+    <div><b>7</b>◂ TEAM and ▣ FOCUS are the same toggle, shown where your eye is in each mode.</div>
+    <div><b>·</b>Out of the rail: cards, team feed, handoff panel, live folders, archived, search, roster legend, + NEW AGENT (stays in the tab bar "+" menu and the team page).</div>
+  </div>
+</section>
+
+<!-- ============ FRAME 3: focus mode + split ============ -->
+<section class="frame" id="split">
+  <div class="title">3 · Focus chat + split <small>Two chats side by side. Each pane keeps its own tab strip; the rail shows which pane holds whom.</small></div>
+  <div class="screen" style="grid-template-columns: 264px 1fr">
+    <nav class="rail">
+      <div class="rhead"><span class="tm"><i></i>VibeSquad ▾</span><span class="btn">◂ TEAM</span></div>
+      <div class="rsec hot">● NEEDS YOU · 2 <span class="muted" style="margin-left:auto">ALL TEAMS · Ctrl+J</span></div>
+      <div class="rrow q"><div class="av"><img src="sprites/aud.png" width="28"></div><div class="col"><span class="nm">Audit - token scout</span><span class="why">PERM · Bash: rg --stats</span></div></div>
+      <div class="rrow q"><div class="av" style="--p:#ff6e59"><img src="sprites/lead-efi.png" width="28"></div><div class="col"><span class="nm">★ EFI main <span class="muted">· EFI</span></span><span class="why">NEEDS AUB · approve merge order</span></div></div>
+      <div class="rsec">VIBESQUAD LANE</div>
+      <div class="rrow open"><div class="av"><img src="sprites/lead-vs.png" width="28"></div><div class="col"><span class="nm">★ ord1</span><div class="mini warn"><i style="width:87%"></i></div></div><span class="tok">114k</span><span class="dot run"></span></div>
+      <div class="tree">
+        <div class="rrow"><div class="av" style="--p:#ff6e59"><img src="sprites/art-o.png" width="28"></div><div class="col"><span class="nm">Art - Opus</span><div class="mini"><i style="width:44%"></i></div></div><span class="dot run"></span></div>
+        <div class="rrow"><div class="av"><img src="sprites/art-g.png" width="28"></div><div class="col"><span class="nm">Art - Gemini</span><div class="mini"><i style="width:20%"></i></div></div><span class="dot run"></span></div>
+        <div class="rrow open v"><div class="av" style="--p:#ff6e59"><img src="sprites/rev.png" width="28"></div><div class="col"><span class="nm">Review - Sonnet · drawer</span><div class="mini"><i style="width:37%"></i></div></div><span class="dot idle"></span></div>
+        <div class="rrow"><div class="av" style="--p:#b86bff"><img src="sprites/impl-1.png" width="28"></div><div class="col"><span class="nm">Implement - drawer crash</span><div class="mini warn"><i style="width:76%"></i></div></div><span class="tok">152k</span><span class="dot run"></span></div>
+        <div class="more">▸ 3 more working · 2 idle</div>
+      </div>
+      <div class="rrow"><div class="av" style="--p:#ff6e59"><img src="sprites/bs-vs.png" width="28"></div><div class="col"><span class="nm">Brainstorm · neon-noir cast</span><div class="mini"><i style="width:31%"></i></div></div><span class="dot idle"></span></div>
+      <div class="rsec" style="margin-top:6px">OTHER TEAMS</div>
+      <div class="oteam">Escape From Idle<span class="sp"></span><span class="pill">1</span><span class="muted">2▶</span></div>
+      <div class="oteam">Plugins &amp; Tooling<span class="sp"></span><span class="muted">1▶</span></div>
+      <div class="quota"><span class="muted">click = active pane · shift+click = other pane</span></div>
+    </nav>
+    <div class="panes" style="grid-template-columns: 1fr 1fr">
+      <div class="pane">
+        <div class="tabs">
+          <div class="tab on"><div class="av"><img src="sprites/lead-vs.png" width="28"></div>★ ord1</div>
+          <div class="tab"><div class="av" style="--p:#ff6e59"><img src="sprites/art-o.png" width="28"></div>Art - Opus <span class="dr">✎</span></div>
+          <div class="sp"></div>
+        </div>
+        <div class="chead"><div class="av"><img src="sprites/lead-vs.png" width="56"></div><div><div class="nm">★ LEAD · ord1</div><div class="muted">gemini-4-argon · running</div><div class="bar warn" style="width:180px;margin-top:6px"><i style="width:87%"></i></div></div></div>
+        <div class="tl">
+          <div class="u">Review says option A. Merge it after the build is green.</div>
+          <p>Merging Unit L after CI. Then I'll re-run the drawer screenshots.</p>
+          <p class="tool">Bash npm run build</p>
+          <p class="tool">gh pr merge --auto --squash</p>
+        </div>
+        <div class="composer"><div class="in">Message ★ ord1…</div><span class="btn">SEND</span></div>
+      </div>
+      <div class="pane">
+        <div class="tabs">
+          <div class="tab on v"><div class="av" style="--p:#ff6e59"><img src="sprites/rev.png" width="28"></div>Review - Sonnet</div>
+          <div class="sp"></div>
+          <div class="tools"><span class="btn on">◫ SPLIT</span><span class="btn on">▣ FOCUS</span></div>
+        </div>
+        <div class="chead"><div class="av" style="--p:#ff6e59"><img src="sprites/rev.png" width="56"></div><div><div class="nm">Review - Sonnet · drawer</div><div class="muted">claude-sonnet-5-5 · idle</div><div class="bar" style="width:180px;margin-top:6px"><i style="width:37%"></i></div></div></div>
+        <div class="tl">
+          <p>Two options for the drawer close behaviour:</p>
+          <p>A. Close keeps the tab mounted (draft survives).<br>B. Close unmounts and drops the draft.</p>
+          <p>I recommend A.</p>
+          <div class="u">A. Tell ord1.</div>
+        </div>
+        <div class="composer"><div class="in">Message Review - Sonnet…</div><span class="btn">SEND</span></div>
+      </div>
+    </div>
+    <span class="n" style="left:4px;top:330px">8</span>
+    <span class="n" style="left:836px;top:9px">9</span>
+    <span class="n" style="left:236px;top:870px">10</span>
+  </div>
+  <div class="legend">
+    <div><b>8</b>Pane colour carries through: cyan edge = left pane, violet edge = right pane. Review cleared its alert, so it dropped back into the tree, still lit as open.</div>
+    <div><b>9</b>Each pane has its own tab strip (Unit L split). The pane you last clicked in is "active", shown by its lit tab top.</div>
+    <div><b>10</b>Click a rail row: open or focus in the active pane. Shift+click: the other pane (opens the split if it is closed). Ctrl/middle-click: background tab. Nothing in the rail ever creates an agent.</div>
+  </div>
+</section>
+
+<script>
+const f = new URLSearchParams(location.search).get("f");
+if (f) document.querySelectorAll(".frame").forEach((s) => { if (s.id !== f) s.remove(); });
+</script>
+</body>
+</html>

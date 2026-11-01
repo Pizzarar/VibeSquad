@@ -1,0 +1,8 @@
+{
+  "id": "vibesquad",
+  "name": "VibeSquad",
+  "media": [],
+  "requirements": {
+    "paseo": ">=0.13.2"
+  }
+}

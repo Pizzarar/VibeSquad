@@ -1,0 +1,75 @@
+{
+  "leadHandoffTokens": 150000,
+  "leadFlagTokens": 150000,
+  "leadAutoHandoffTokens": 250000,
+  "leadHardCapTokens": 300000,
+  "workerBudgetTokens": 200000,
+  "brainstormWarnTokens": 80000,
+  "brainstormRestartTokens": 150000,
+  "teams": [
+    {
+      "id": "efi",
+      "name": "Main Game Project",
+      "color": "#e8a33d",
+      "leadFlagTokens": 150000,
+      "leadAutoHandoffTokens": 250000,
+      "leadHardCapTokens": 300000,
+      "brainstormWarnTokens": 80000,
+      "brainstormRestartTokens": 150000,
+      "paths": ["main-project"],
+      "lanes": [
+        {
+          "id": "main-game",
+          "name": "Main Game",
+          "paths": ["main-project"]
+        },
+        {
+          "id": "ui-lab",
+          "name": "UI Lab",
+          "paths": ["main-project"]
+        }
+      ]
+    },
+    {
+      "id": "site",
+      "name": "Site",
+      "color": "#5cc9a7",
+      "leadFlagTokens": 150000,
+      "leadAutoHandoffTokens": 250000,
+      "leadHardCapTokens": 300000,
+      "brainstormWarnTokens": 80000,
+      "brainstormRestartTokens": 150000,
+      "paths": ["example-site"],
+      "lanes": [
+        {
+          "id": "site-polish",
+          "name": "Site Polish",
+          "paths": ["example-site"]
+        }
+      ]
+    },
+    {
+      "id": "vibesquad",
+      "name": "VibeSquad",
+      "color": "#b07cf5",
+      "leadFlagTokens": 150000,
+      "leadAutoHandoffTokens": 250000,
+      "leadHardCapTokens": 300000,
+      "brainstormWarnTokens": 80000,
+      "brainstormRestartTokens": 150000,
+      "paths": ["vibesquad"],
+      "lanes": [
+        {
+          "id": "vibesquad",
+          "name": "VibeSquad",
+          "paths": ["vibesquad"]
+        },
+        {
+          "id": "plugins",
+          "name": "Plugins",
+          "paths": ["vibesquad-plugins"]
+        }
+      ]
+    }
+  ]
+}

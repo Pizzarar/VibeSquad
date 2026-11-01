@@ -1,0 +1,1723 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod ui_pages;
+
+use axum::{
+    body::Body,
+    extract::{
+        ws::{Message as AxumWsMessage, WebSocket, WebSocketUpgrade},
+        Request, State,
+    },
+    http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
+    middleware::Next,
+    response::{IntoResponse, Response},
+    routing::{get, post},
+    Json, Router,
+};
+use futures_util::{SinkExt, StreamExt};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    io::BufReader,
+    net::SocketAddr,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex, RwLock,
+    },
+    time::Duration,
+};
+use tauri::{
+    image::Image,
+    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    AppHandle, Manager, WindowEvent,
+};
+use tauri_plugin_notification::NotificationExt;
+use tokio::net::TcpListener;
+use tokio_tungstenite::{
+    connect_async_tls_with_config,
+    tungstenite::{client::IntoClientRequest, Message as TungMessage},
+    Connector,
+};
+
+const PINNED_CA_PEM: &[u8] = include_bytes!("../certs/vibesquad-ca.crt");
+const TRAY_ICON_PNG: &[u8] = include_bytes!("../icons/32x32.png");
+
+const DEFAULT_LAN_HOST: &str = "";
+const DEFAULT_MESHNET_HOST: &str = "";
+const DEFAULT_MESHNET_IP_HOST: &str = "";
+
+fn default_server_host() -> String {
+    DEFAULT_LAN_HOST.to_string()
+}
+
+fn default_fallback_host() -> String {
+    DEFAULT_MESHNET_HOST.to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopConfig {
+    #[serde(default = "default_server_host")]
+    pub server_host: String,
+    #[serde(default = "default_fallback_host")]
+    pub fallback_host: String,
+    #[serde(default)]
+    pub device_token: String,
+    #[serde(default)]
+    pub start_at_login: bool,
+    #[serde(default)]
+    pub last_hash: String,
+}
+
+impl Default for DesktopConfig {
+    fn default() -> Self {
+        Self {
+            server_host: default_server_host(),
+            fallback_host: default_fallback_host(),
+            device_token: String::new(),
+            start_at_login: false,
+            last_hash: String::new(),
+        }
+    }
+}
+
+/// Unifies config storage into `%LOCALAPPDATA%\com.vibesquad.desktop` alongside WebView2 state.
+pub fn config_dir() -> PathBuf {
+    if let Ok(custom) = std::env::var("VIBESQUAD_DESKTOP_CONFIG_DIR") {
+        let trimmed = custom.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+    if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
+        if !local_appdata.trim().is_empty() {
+            return PathBuf::from(local_appdata).join("com.vibesquad.desktop");
+        }
+    }
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        if !appdata.trim().is_empty() {
+            return PathBuf::from(appdata).join("com.vibesquad.desktop");
+        }
+    }
+    PathBuf::from(".").join(".vibesquad-desktop")
+}
+
+/// Removes legacy `%APPDATA%\VibeSquad` directory so stale config from earlier builds never traps the user.
+pub fn cleanup_legacy_config_dir() {
+    if std::env::var("VIBESQUAD_DESKTOP_CONFIG_DIR").is_ok() {
+        return;
+    }
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        let legacy_dir = PathBuf::from(appdata).join("VibeSquad");
+        if legacy_dir.exists() {
+            let _ = fs::remove_dir_all(&legacy_dir);
+        }
+    }
+}
+
+pub fn config_file_path() -> PathBuf {
+    config_dir().join("desktop-config.json")
+}
+
+pub fn load_config() -> DesktopConfig {
+    cleanup_legacy_config_dir();
+    let path = config_file_path();
+    if let Ok(raw) = fs::read_to_string(&path) {
+        if let Ok(mut cfg) = serde_json::from_str::<DesktopConfig>(&raw) {
+            if cfg.server_host.trim().is_empty() {
+                cfg.server_host = default_server_host();
+            }
+            if cfg.fallback_host.trim().is_empty() {
+                cfg.fallback_host = default_fallback_host();
+            }
+            return cfg;
+        }
+    }
+    let cfg = DesktopConfig::default();
+    let _ = save_config(&cfg);
+    cfg
+}
+
+pub fn save_config(cfg: &DesktopConfig) -> Result<(), String> {
+    let dir = config_dir();
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join("desktop-config.json");
+    let json_str = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
+    fs::write(&path, json_str).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn is_local_host(host: &str) -> bool {
+    let clean = normalize_host(host).to_lowercase();
+    clean.starts_with("localhost")
+        || clean.starts_with("127.0.0.1")
+        || clean.starts_with("[::1]")
+}
+
+pub fn normalize_host(input: &str) -> String {
+    let mut s = input.trim().to_string();
+    if let Some(rest) = s.strip_prefix("https://") {
+        s = rest.to_string();
+    } else if let Some(rest) = s.strip_prefix("http://") {
+        s = rest.to_string();
+    }
+    if let Some(idx) = s.find('/') {
+        s = s[..idx].to_string();
+    }
+    let s = s.trim().to_string();
+    if s.is_empty() {
+        return default_server_host();
+    }
+    if !s.contains(':') {
+        format!("{}:4180", s)
+    } else {
+        s
+    }
+}
+
+fn html_no_store_response(status: StatusCode, html_body: String) -> Response {
+    Response::builder()
+        .status(status)
+        .header(
+            axum::http::header::CONTENT_TYPE,
+            "text/html; charset=utf-8",
+        )
+        .header(
+            axum::http::header::CACHE_CONTROL,
+            "no-store, no-cache, must-revalidate",
+        )
+        .body(Body::from(html_body))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+/// Verifies that a local `127.0.0.1:4180` / `localhost:4180` server is actually running AND has a built `dist/index.html` (`<div id="root">`).
+async fn check_local_server_healthy(client: &reqwest::Client, host: &str) -> Result<(), String> {
+    let norm = normalize_host(host);
+    let status_url = format!("http://{}/api/auth/status", norm);
+    if let Ok(resp) = client
+        .get(&status_url)
+        .timeout(Duration::from_millis(1800))
+        .send()
+        .await
+    {
+        if let Ok(json_val) = resp.json::<Value>().await {
+            if json_val.get("distReady").and_then(|v| v.as_bool()) == Some(false) {
+                return Err("dist/index.html missing on localhost".to_string());
+            }
+        }
+    }
+
+    let root_url = format!("http://{}/", norm);
+    let resp = client
+        .get(&root_url)
+        .timeout(Duration::from_millis(1800))
+        .send()
+        .await
+        .map_err(|e| format!("Localhost unreachable: {}", e))?;
+
+    if resp.status() != reqwest::StatusCode::OK {
+        return Err(format!("Localhost returned HTTP {}", resp.status()));
+    }
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("Failed reading localhost response: {}", e))?;
+    if body.contains("dist/index.html missing") || !body.contains("<div id=\"root\">") {
+        return Err("dist/index.html missing on localhost".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn set_start_at_login_registry(enabled: bool) -> Result<(), String> {
+    use winreg::enums::*;
+    use winreg::RegKey;
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let (run_key, _) = hkcu
+        .create_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Run")
+        .map_err(|e| e.to_string())?;
+    if enabled {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let val = format!("\"{}\"", exe.display());
+        run_key
+            .set_value("VibeSquad", &val)
+            .map_err(|e| e.to_string())?;
+    } else {
+        let _ = run_key.delete_value("VibeSquad");
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn set_start_at_login_registry(_enabled: bool) -> Result<(), String> {
+    Ok(())
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AgentAlertTracker {
+    seeded: bool,
+    needs_by_agent: HashMap<String, String>,
+    dedupe: HashSet<String>,
+}
+
+pub struct SharedAppState {
+    pub config: RwLock<DesktopConfig>,
+    pub active_upstream: RwLock<Option<String>>,
+    pub setup_mode: AtomicBool,
+    pub quitting: AtomicBool,
+    pub needs_count: AtomicUsize,
+    pub local_port: AtomicUsize,
+    pub http_client: reqwest::Client,
+    pub ws_tls_connector: Connector,
+    pub app_handle: RwLock<Option<AppHandle>>,
+    pub tray_needs_item: RwLock<Option<MenuItem<tauri::Wry>>>,
+    pub tracker: Mutex<AgentAlertTracker>,
+}
+
+impl SharedAppState {
+    /// Builds the ordered candidate list for remote servers:
+    /// `active_upstream` (if valid), configured `server_host`, Home LAN, Meshnet host, and Meshnet IP, deduplicated.
+    pub fn candidate_hosts(&self) -> Vec<String> {
+        let cfg = self.config.read().unwrap().clone();
+        let primary = normalize_host(&cfg.server_host);
+        if is_local_host(&primary) {
+            return vec![primary];
+        }
+        let fallback = normalize_host(&cfg.fallback_host);
+        let mut list = Vec::new();
+        let push_unique = |vec: &mut Vec<String>, h: String| {
+            let trimmed = h.trim().to_string();
+            if !trimmed.is_empty() && !vec.contains(&trimmed) {
+                vec.push(trimmed);
+            }
+        };
+
+        if let Some(active) = self.active_upstream.read().unwrap().clone() {
+            if !is_local_host(&active) {
+                push_unique(&mut list, active);
+            }
+        }
+        push_unique(&mut list, primary);
+        push_unique(&mut list, DEFAULT_LAN_HOST.to_string());
+        push_unique(&mut list, fallback);
+        push_unique(&mut list, DEFAULT_MESHNET_HOST.to_string());
+        push_unique(&mut list, DEFAULT_MESHNET_IP_HOST.to_string());
+        list
+    }
+
+    pub fn set_needs_count(&self, count: usize) {
+        let _prev = self.needs_count.swap(count, Ordering::SeqCst);
+        if let Some(item) = self.tray_needs_item.read().unwrap().as_ref() {
+            let _ = item.set_text(format!("Needs You: {}", count));
+        }
+        if let Some(app) = self.app_handle.read().unwrap().as_ref() {
+            if let Some(tray) = app.tray_by_id("main-tray") {
+                let tooltip = if count > 0 {
+                    format!("VibeSquad — {} needs you", count)
+                } else {
+                    "VibeSquad — Connected".to_string()
+                };
+                let _ = tray.set_tooltip(Some(&tooltip));
+                if let Ok(icon) = render_tray_icon(count) {
+                    let _ = tray.set_icon(Some(icon));
+                }
+            }
+        }
+    }
+
+    pub fn fire_native_notification(&self, title: &str, body: &str) {
+        if let Some(app) = self.app_handle.read().unwrap().as_ref() {
+            let _ = app
+                .notification()
+                .builder()
+                .title(title)
+                .body(body)
+                .show();
+        }
+    }
+}
+
+pub fn render_tray_icon(needs_count: usize) -> Result<Image<'static>, String> {
+    let img = image::load_from_memory(TRAY_ICON_PNG)
+        .map_err(|e| e.to_string())?
+        .into_rgba8();
+    let (width, height) = img.dimensions();
+    let mut raw = img.into_raw();
+
+    if needs_count > 0 {
+        // Overlay a bright magenta/hot-pink circular notification badge in bottom-right
+        let cx = (width as i32) - 8;
+        let cy = (height as i32) - 8;
+        let outer_r = 7i32;
+        let inner_r = 5i32;
+        for y in 0..(height as i32) {
+            for x in 0..(width as i32) {
+                let dx = x - cx;
+                let dy = y - cy;
+                let dist_sq = dx * dx + dy * dy;
+                if dist_sq <= outer_r * outer_r {
+                    let idx = ((y as u32 * width + x as u32) * 4) as usize;
+                    if dist_sq <= inner_r * inner_r {
+                        // Bright neon magenta (#ff2a85) with a subtle top-left highlight
+                        if dx < -1 && dy < -1 {
+                            raw[idx] = 0xff;
+                            raw[idx + 1] = 0x7a;
+                            raw[idx + 2] = 0xb5;
+                            raw[idx + 3] = 0xff;
+                        } else {
+                            raw[idx] = 0xff;
+                            raw[idx + 1] = 0x2a;
+                            raw[idx + 2] = 0x85;
+                            raw[idx + 3] = 0xff;
+                        }
+                    } else {
+                        // Dark border ring (#0c0b14)
+                        raw[idx] = 0x0c;
+                        raw[idx + 1] = 0x0b;
+                        raw[idx + 2] = 0x14;
+                        raw[idx + 3] = 0xff;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(Image::new_owned(raw, width, height))
+}
+
+/// Root CAs to trust besides the public roots: the embedded one (if the build had it) and the
+/// locally generated `~/.vibesquad/tls/ca.crt`.
+fn load_ca_pems() -> Vec<Vec<u8>> {
+    let mut pems: Vec<Vec<u8>> = Vec::new();
+    if !PINNED_CA_PEM.is_empty() {
+        pems.push(PINNED_CA_PEM.to_vec());
+    }
+    let home = std::env::var("VIBESQUAD_HOME")
+        .map(PathBuf::from)
+        .ok()
+        .or_else(|| {
+            std::env::var("USERPROFILE")
+                .or_else(|_| std::env::var("HOME"))
+                .ok()
+                .map(|h| PathBuf::from(h).join(".vibesquad"))
+        });
+    if let Some(home) = home {
+        if let Ok(bytes) = fs::read(home.join("tls").join("ca.crt")) {
+            if !bytes.is_empty() && !pems.contains(&bytes) {
+                pems.push(bytes);
+            }
+        }
+    }
+    pems
+}
+
+fn build_http_and_ws_clients() -> Result<(reqwest::Client, Connector), String> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    let ca_pems = load_ca_pems();
+    let mut http_builder = reqwest::Client::builder().use_rustls_tls();
+    for pem in &ca_pems {
+        let cert = reqwest::Certificate::from_pem(pem).map_err(|e| format!("CA PEM err: {}", e))?;
+        http_builder = http_builder.add_root_certificate(cert);
+    }
+
+    let http_client = http_builder
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_millis(1500))
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("reqwest build err: {}", e))?;
+
+    let mut root_store = rustls::RootCertStore::empty();
+    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    for pem in &ca_pems {
+        let mut reader = BufReader::new(pem.as_slice());
+        for cert in rustls_pemfile::certs(&mut reader) {
+            let cert_der = cert.map_err(|e| format!("rustls cert parse err: {}", e))?;
+            root_store
+                .add(cert_der)
+                .map_err(|e| format!("rustls add root err: {}", e))?;
+        }
+    }
+
+    let tls_config = rustls::ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+
+    let ws_connector = Connector::Rustls(Arc::new(tls_config));
+    Ok((http_client, ws_connector))
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct PairSubmission {
+    #[serde(default)]
+    server_host: String,
+    #[serde(default)]
+    code: String,
+}
+
+fn extract_cookie_token(headers: &reqwest::header::HeaderMap, cookie_name: &str) -> Option<String> {
+    let prefix = format!("{}=", cookie_name);
+    for val in headers.get_all(reqwest::header::SET_COOKIE) {
+        if let Ok(s) = val.to_str() {
+            for part in s.split(';') {
+                let trimmed = part.trim();
+                if let Some(rest) = trimmed.strip_prefix(&prefix) {
+                    if !rest.is_empty() {
+                        return Some(rest.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+async fn handle_desktop_status(State(state): State<Arc<SharedAppState>>) -> impl IntoResponse {
+    let cfg = state.config.read().unwrap().clone();
+    let active = state.active_upstream.read().unwrap().clone();
+    let is_local = is_local_host(&cfg.server_host);
+    let paired = if is_local {
+        check_local_server_healthy(&state.http_client, &cfg.server_host)
+            .await
+            .is_ok()
+    } else {
+        !cfg.device_token.trim().is_empty()
+    };
+    Json(json!({
+        "ok": true,
+        "serverHost": cfg.server_host,
+        "fallbackHost": cfg.fallback_host,
+        "activeHost": active,
+        "paired": paired,
+        "setupMode": state.setup_mode.load(Ordering::SeqCst),
+        "needsCount": state.needs_count.load(Ordering::SeqCst),
+        "startAtLogin": cfg.start_at_login,
+        "localPort": state.local_port.load(Ordering::SeqCst),
+        "configDir": config_dir().to_string_lossy(),
+    }))
+}
+
+async fn handle_desktop_ping(
+    State(state): State<Arc<SharedAppState>>,
+    req: Request,
+) -> impl IntoResponse {
+    let want_all = req
+        .uri()
+        .query()
+        .map(|q| q.contains("probe=all"))
+        .unwrap_or(false);
+
+    let mut lan_ok = false;
+    let mut mesh_ok = false;
+    let mut local_ok = false;
+
+    if want_all {
+        let c1 = state.http_client.clone();
+        let c2 = state.http_client.clone();
+        let c3 = state.http_client.clone();
+        let (r_lan, r_mesh, r_loc) = tokio::join!(
+            async move {
+                c1.get(format!("https://{}/ca.crt", DEFAULT_LAN_HOST))
+                    .timeout(Duration::from_millis(1200))
+                    .send()
+                    .await
+                    .is_ok()
+            },
+            async move {
+                if c2
+                    .get(format!("https://{}/ca.crt", DEFAULT_MESHNET_HOST))
+                    .timeout(Duration::from_millis(1200))
+                    .send()
+                    .await
+                    .is_ok()
+                {
+                    true
+                } else {
+                    c2.get(format!("https://{}/ca.crt", DEFAULT_MESHNET_IP_HOST))
+                        .timeout(Duration::from_millis(1200))
+                        .send()
+                        .await
+                        .is_ok()
+                }
+            },
+            async move { check_local_server_healthy(&c3, "127.0.0.1:4180").await.is_ok() }
+        );
+        lan_ok = r_lan;
+        mesh_ok = r_mesh;
+        local_ok = r_loc;
+    }
+
+    let candidates = state.candidate_hosts();
+    for host in candidates {
+        if is_local_host(&host) {
+            if check_local_server_healthy(&state.http_client, &host)
+                .await
+                .is_ok()
+            {
+                *state.active_upstream.write().unwrap() = Some(host.clone());
+                return Json(json!({
+                    "ok": true,
+                    "reachable": true,
+                    "status": 200,
+                    "activeHost": host,
+                    "probes": {
+                        "lan": lan_ok,
+                        "meshnet": mesh_ok,
+                        "local": true,
+                    }
+                }));
+            }
+            continue;
+        }
+        let url = format!("https://{}/ca.crt", host);
+        if let Ok(resp) = state
+            .http_client
+            .get(&url)
+            .timeout(Duration::from_millis(1500))
+            .send()
+            .await
+        {
+            *state.active_upstream.write().unwrap() = Some(host.clone());
+            return Json(json!({
+                "ok": true,
+                "reachable": true,
+                "status": resp.status().as_u16(),
+                "activeHost": host,
+                "probes": {
+                    "lan": lan_ok || host == DEFAULT_LAN_HOST,
+                    "meshnet": mesh_ok || host == DEFAULT_MESHNET_HOST || host == DEFAULT_MESHNET_IP_HOST,
+                    "local": local_ok,
+                }
+            }));
+        }
+    }
+    Json(json!({
+        "ok": true,
+        "reachable": false,
+        "probes": {
+            "lan": lan_ok,
+            "meshnet": mesh_ok,
+            "local": local_ok,
+        }
+    }))
+}
+
+async fn handle_desktop_setup(State(state): State<Arc<SharedAppState>>) -> Response {
+    *state.active_upstream.write().unwrap() = None;
+    state.setup_mode.store(true, Ordering::SeqCst);
+    let cfg = state.config.read().unwrap().clone();
+    html_no_store_response(StatusCode::OK, ui_pages::render_pair_page(&cfg, None))
+}
+
+async fn handle_desktop_unpair(State(state): State<Arc<SharedAppState>>) -> impl IntoResponse {
+    {
+        let mut cfg = state.config.write().unwrap();
+        cfg.device_token.clear();
+        let _ = save_config(&cfg);
+    }
+    *state.active_upstream.write().unwrap() = None;
+    state.setup_mode.store(true, Ordering::SeqCst);
+    Json(json!({ "ok": true }))
+}
+
+async fn handle_desktop_pair(
+    State(state): State<Arc<SharedAppState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    let submission: PairSubmission = if content_type.contains("application/json") {
+        serde_json::from_slice(&body).unwrap_or_default()
+    } else if let Ok(sub) = serde_json::from_slice::<PairSubmission>(&body) {
+        sub
+    } else {
+        let mut sub = PairSubmission::default();
+        if let Ok(form_str) = std::str::from_utf8(&body) {
+            for pair in url::form_urlencoded::parse(form_str.as_bytes()) {
+                match pair.0.as_ref() {
+                    "serverHost" => sub.server_host = pair.1.into_owned(),
+                    "code" => sub.code = pair.1.into_owned(),
+                    _ => {}
+                }
+            }
+        }
+        sub
+    };
+
+    let mut raw_host = submission.server_host.trim().to_string();
+    let mut raw_code = submission.code.trim().to_string();
+
+    // If user pasted a full https://.../pair?code=... URL into either field, extract both!
+    for candidate in [&submission.code, &submission.server_host] {
+        let trimmed = candidate.trim();
+        if (trimmed.starts_with("https://") || trimmed.starts_with("http://"))
+            && trimmed.contains("code=")
+        {
+            if let Ok(parsed) = url::Url::parse(trimmed) {
+                if let Some(h) = parsed.host_str() {
+                    let port = parsed.port().unwrap_or(4180);
+                    raw_host = format!("{}:{}", h, port);
+                }
+                for (k, v) in parsed.query_pairs() {
+                    if k == "code" && !v.is_empty() {
+                        raw_code = v.into_owned();
+                    }
+                }
+            }
+        }
+    }
+
+    let server_host = if raw_host.is_empty() {
+        state.config.read().unwrap().server_host.clone()
+    } else {
+        normalize_host(&raw_host)
+    };
+
+    // Localhost mode: verify health & dist/index.html BEFORE saving or treating as paired!
+    if is_local_host(&server_host) {
+        if let Err(_reason) = check_local_server_healthy(&state.http_client, &server_host).await {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "ok": false,
+                    "error": "127.0.0.1:4180 does not have a built VibeSquad server (dist/index.html missing). Connect to a remote VibeSquad server instead."
+                })),
+            )
+                .into_response();
+        }
+        {
+            let mut cfg = state.config.write().unwrap();
+            cfg.server_host = server_host.clone();
+            let _ = save_config(&cfg);
+        }
+        *state.active_upstream.write().unwrap() = Some(server_host.clone());
+        state.setup_mode.store(false, Ordering::SeqCst);
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "redirect": "/",
+                "serverHost": server_host,
+                "local": true
+            })),
+        )
+            .into_response();
+    }
+
+    // Remote server mode: clean 6-digit code (strip spaces or hyphens if 6 digits)
+    let clean_code = {
+        let compact: String = raw_code
+            .chars()
+            .filter(|c| !c.is_whitespace() && *c != '-')
+            .collect();
+        if compact.len() == 6 && compact.chars().all(|c| c.is_ascii_digit()) {
+            compact
+        } else {
+            raw_code.clone()
+        }
+    };
+
+    if clean_code.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "ok": false,
+                "error": "Please enter the 6-digit pairing code from the server's PAIR DEVICE dialog."
+            })),
+        )
+            .into_response();
+    }
+
+    // Build ordered candidate list: configured server_host, then Home LAN, then Meshnet host & IP
+    let fallback_host = state.config.read().unwrap().fallback_host.clone();
+    let mut try_hosts = Vec::new();
+    let push_unique = |vec: &mut Vec<String>, h: String| {
+        let trimmed = h.trim().to_string();
+        if !trimmed.is_empty() && !vec.contains(&trimmed) {
+            vec.push(trimmed);
+        }
+    };
+    push_unique(&mut try_hosts, server_host.clone());
+    push_unique(&mut try_hosts, DEFAULT_LAN_HOST.to_string());
+    push_unique(&mut try_hosts, normalize_host(&fallback_host));
+    push_unique(&mut try_hosts, DEFAULT_MESHNET_HOST.to_string());
+    push_unique(&mut try_hosts, DEFAULT_MESHNET_IP_HOST.to_string());
+
+    let mut last_conn_err = String::new();
+    for host in &try_hosts {
+        let mut pair_url = match url::Url::parse(&format!("https://{}/pair", host)) {
+            Ok(u) => u,
+            Err(e) => {
+                last_conn_err = e.to_string();
+                continue;
+            }
+        };
+        pair_url
+            .query_pairs_mut()
+            .append_pair("code", &clean_code)
+            .append_pair("name", "Windows · VibeSquad App");
+
+        match state
+            .http_client
+            .get(pair_url.as_str())
+            .header("User-Agent", "VibeSquad-Desktop/0.1.0 (Windows)")
+            .timeout(Duration::from_millis(2500))
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                let status = resp.status();
+                if let Some(token) = extract_cookie_token(resp.headers(), "vs_device") {
+                    {
+                        let mut cfg = state.config.write().unwrap();
+                        cfg.server_host = server_host.clone();
+                        cfg.device_token = token;
+                        let _ = save_config(&cfg);
+                    }
+                    *state.active_upstream.write().unwrap() = Some(host.clone());
+                    state.setup_mode.store(false, Ordering::SeqCst);
+                    return (
+                        StatusCode::OK,
+                        Json(json!({
+                            "ok": true,
+                            "redirect": "/",
+                            "serverHost": server_host,
+                            "activeHost": host,
+                            "deviceTokenSaved": true
+                        })),
+                    )
+                        .into_response();
+                }
+
+                if status == reqwest::StatusCode::UNAUTHORIZED {
+                    return (
+                        StatusCode::UNAUTHORIZED,
+                        Json(json!({
+                            "ok": false,
+                            "error": "Pairing code is invalid, expired, or already used. Click 'New Code' in Pair Device on your server PC."
+                        })),
+                    )
+                        .into_response();
+                }
+
+                last_conn_err = format!("Unexpected response HTTP {} from {}", status, host);
+            }
+            Err(e) => {
+                last_conn_err = format!("{}: {}", host, e);
+            }
+        }
+    }
+
+    (
+        StatusCode::BAD_GATEWAY,
+        Json(json!({
+            "ok": false,
+            "error": format!("Could not reach VibeSquad server ({}). Check your server host configuration.", last_conn_err)
+        })),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize, Default)]
+struct HashUpdate {
+    #[serde(default)]
+    hash: String,
+}
+
+async fn handle_desktop_hash(
+    State(state): State<Arc<SharedAppState>>,
+    Json(payload): Json<HashUpdate>,
+) -> impl IntoResponse {
+    {
+        let mut cfg = state.config.write().unwrap();
+        cfg.last_hash = payload.hash;
+        let _ = save_config(&cfg);
+    }
+    Json(json!({ "ok": true }))
+}
+
+#[derive(Deserialize, Default)]
+struct BadgeUpdate {
+    #[serde(default)]
+    count: usize,
+}
+
+async fn handle_desktop_badge(
+    State(state): State<Arc<SharedAppState>>,
+    Json(payload): Json<BadgeUpdate>,
+) -> impl IntoResponse {
+    state.set_needs_count(payload.count);
+    Json(json!({ "ok": true, "needsCount": payload.count }))
+}
+
+#[derive(Deserialize, Default)]
+struct NotifyPayload {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    body: String,
+}
+
+async fn handle_desktop_notify(
+    State(state): State<Arc<SharedAppState>>,
+    Json(payload): Json<NotifyPayload>,
+) -> impl IntoResponse {
+    let title = if payload.title.trim().is_empty() {
+        "VibeSquad"
+    } else {
+        payload.title.trim()
+    };
+    state.fire_native_notification(title, payload.body.trim());
+    Json(json!({ "ok": true }))
+}
+
+/// Inspects Paseo `/ws` JSON frames flowing from upstream to track agents needing attention,
+/// update the System Tray badge count, and trigger native Windows notifications.
+fn inspect_ws_frame(state: &Arc<SharedAppState>, text: &str) {
+    let parsed: Value = match serde_json::from_str(text) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    let mut notifications_to_fire: Vec<(String, String)> = Vec::new();
+    let mut new_badge_count: Option<usize> = None;
+
+    {
+        let mut tracker = match state.tracker.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+
+        let process_agent = |agent: &Value,
+                             is_seed: bool,
+                             tracker: &mut AgentAlertTracker,
+                             notes: &mut Vec<(String, String)>| {
+            let id = match agent.get("id").and_then(|v| v.as_str()) {
+                Some(s) if !s.is_empty() => s.to_string(),
+                _ => return,
+            };
+            let archived = agent
+                .get("archivedAt")
+                .map(|v| !v.is_null() && v.as_str().unwrap_or("") != "")
+                .unwrap_or(false);
+            let status = agent
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("idle");
+            if archived || status == "closed" {
+                tracker.needs_by_agent.remove(&id);
+                return;
+            }
+
+            let title = agent
+                .get("title")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&id)
+                .to_string();
+
+            let mut reason: Option<String> = None;
+
+            // 1. Check pendingPermissions
+            if let Some(perms) = agent.get("pendingPermissions").and_then(|v| v.as_array()) {
+                if let Some(first) = perms.first() {
+                    let tool = first
+                        .get("toolName")
+                        .or_else(|| first.get("title"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Approval requested");
+                    let pid = first
+                        .get("id")
+                        .or_else(|| first.get("requestId"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(tool);
+                    reason = Some(format!("perm:{}:{}", pid, tool));
+                    let dedupe_key = format!("{}::perm:{}", id, pid);
+                    if !tracker.dedupe.contains(&dedupe_key) {
+                        tracker.dedupe.insert(dedupe_key);
+                        if !is_seed {
+                            notes.push((
+                                "VibeSquad · Permission Needed".to_string(),
+                                format!("{}: {}", title, tool),
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // 2. Check labels["needs-aub"]
+            if let Some(labels) = agent.get("labels").and_then(|v| v.as_object()) {
+                if let Some(na) = labels.get("needs-aub").and_then(|v| v.as_str()) {
+                    let trimmed = na.trim();
+                    if !trimmed.is_empty() && trimmed != "cleared" {
+                        if reason.is_none() {
+                            reason = Some(format!("needs-aub:{}", trimmed));
+                        }
+                        let dedupe_key = format!("{}::needs-aub:{}", id, trimmed);
+                        if !tracker.dedupe.contains(&dedupe_key) {
+                            tracker.dedupe.insert(dedupe_key);
+                            if !is_seed {
+                                notes.push((
+                                    "VibeSquad · Needs You".to_string(),
+                                    format!("{}: {}", title, trimmed),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 3. Check requiresAttention / status == waiting
+            if reason.is_none() {
+                let req_attn = agent
+                    .get("requiresAttention")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if req_attn || status == "waiting" {
+                    reason = Some("attention".to_string());
+                }
+            }
+
+            if let Some(r) = reason {
+                tracker.needs_by_agent.insert(id, r);
+            } else {
+                tracker.needs_by_agent.remove(&id);
+            }
+        };
+
+        let mut changed = false;
+
+        // Snapshot response containing entries: [{ agent: {...} }, ...]
+        if let Some(entries) = parsed
+            .get("entries")
+            .or_else(|| parsed.get("payload").and_then(|p| p.get("entries")))
+            .or_else(|| parsed.get("result").and_then(|r| r.get("entries")))
+            .and_then(|v| v.as_array())
+        {
+            let is_seed = !tracker.seeded;
+            if is_seed {
+                tracker.needs_by_agent.clear();
+            }
+            for entry in entries {
+                let ag = entry.get("agent").unwrap_or(entry);
+                process_agent(ag, is_seed, &mut tracker, &mut notifications_to_fire);
+            }
+            tracker.seeded = true;
+            changed = true;
+        }
+
+        // Single agent update event
+        if let Some(ag) = parsed
+            .get("agent")
+            .or_else(|| parsed.get("payload").and_then(|p| p.get("agent")))
+        {
+            if ag.is_object() {
+                let is_seed = false;
+                process_agent(ag, is_seed, &mut tracker, &mut notifications_to_fire);
+                changed = true;
+            }
+        }
+
+        // Explicit permission request event
+        if parsed.get("type").and_then(|v| v.as_str()) == Some("agent_permission_request") {
+            if let Some(aid) = parsed.get("agentId").and_then(|v| v.as_str()) {
+                let tool = parsed
+                    .get("request")
+                    .and_then(|r| r.get("toolName"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Approval requested");
+                let pid = parsed
+                    .get("request")
+                    .and_then(|r| r.get("id"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(tool);
+                let dedupe_key = format!("{}::perm:{}", aid, pid);
+                tracker
+                    .needs_by_agent
+                    .insert(aid.to_string(), format!("perm:{}", pid));
+                if !tracker.dedupe.contains(&dedupe_key) {
+                    tracker.dedupe.insert(dedupe_key);
+                    notifications_to_fire.push((
+                        "VibeSquad · Permission Needed".to_string(),
+                        format!("{}: {}", aid, tool),
+                    ));
+                }
+                changed = true;
+            }
+        }
+
+        if parsed.get("type").and_then(|v| v.as_str()) == Some("agent_deleted") {
+            if let Some(aid) = parsed.get("agentId").and_then(|v| v.as_str()) {
+                tracker.needs_by_agent.remove(aid);
+                changed = true;
+            }
+        }
+
+        if changed {
+            new_badge_count = Some(tracker.needs_by_agent.len());
+        }
+    }
+
+    if let Some(count) = new_badge_count {
+        state.set_needs_count(count);
+    }
+    for (title, body) in notifications_to_fire {
+        state.fire_native_notification(&title, &body);
+    }
+}
+
+async fn handle_ws_upgrade(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<SharedAppState>>,
+    req: Request,
+) -> Response {
+    let path_and_query = req
+        .uri()
+        .path_and_query()
+        .map(|pq| pq.as_str().to_string())
+        .unwrap_or_else(|| "/ws".to_string());
+
+    ws.on_upgrade(move |socket| proxy_websocket(socket, state, path_and_query))
+}
+
+async fn proxy_websocket(
+    client_ws: WebSocket,
+    state: Arc<SharedAppState>,
+    path_and_query: String,
+) {
+    let cfg = state.config.read().unwrap().clone();
+    let candidates = state.candidate_hosts();
+
+    let mut upstream_stream = None;
+    for host in candidates {
+        let is_local = is_local_host(&host);
+        let ws_scheme = if is_local { "ws" } else { "wss" };
+        let url_str = format!("{}://{}{}", ws_scheme, host, path_and_query);
+        let mut ws_req = match url_str.into_client_request() {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        if is_local {
+            if let Ok(hv) = HeaderValue::from_str(&format!("http://{}", host)) {
+                ws_req.headers_mut().insert("Origin", hv);
+            }
+        }
+        if !cfg.device_token.is_empty() {
+            if let Ok(hv) = HeaderValue::from_str(&format!("vs_device={}", cfg.device_token)) {
+                ws_req.headers_mut().insert("Cookie", hv);
+            }
+        }
+        let conn_res = if is_local {
+            tokio::time::timeout(
+                Duration::from_millis(2000),
+                connect_async_tls_with_config(ws_req, None, false, None),
+            )
+            .await
+        } else {
+            tokio::time::timeout(
+                Duration::from_millis(2000),
+                connect_async_tls_with_config(
+                    ws_req,
+                    None,
+                    false,
+                    Some(state.ws_tls_connector.clone()),
+                ),
+            )
+            .await
+        };
+
+        if let Ok(Ok((stream, _resp))) = conn_res {
+            *state.active_upstream.write().unwrap() = Some(host);
+            upstream_stream = Some(stream);
+            break;
+        }
+    }
+
+    let upstream_ws = match upstream_stream {
+        Some(s) => s,
+        None => {
+            let _ = client_ws.close().await;
+            return;
+        }
+    };
+
+    let (mut up_sink, mut up_stream) = upstream_ws.split();
+    let (mut cl_sink, mut cl_stream) = client_ws.split();
+
+    let state_for_up = state.clone();
+    let up_to_cl = async move {
+        while let Some(Ok(msg)) = up_stream.next().await {
+            let out = match msg {
+                TungMessage::Text(t) => {
+                    let s = t.to_string();
+                    inspect_ws_frame(&state_for_up, &s);
+                    AxumWsMessage::Text(s)
+                }
+                TungMessage::Binary(b) => AxumWsMessage::Binary(b.to_vec()),
+                TungMessage::Ping(p) => AxumWsMessage::Ping(p.to_vec()),
+                TungMessage::Pong(p) => AxumWsMessage::Pong(p.to_vec()),
+                TungMessage::Close(_) => break,
+                TungMessage::Frame(_) => continue,
+            };
+            if cl_sink.send(out).await.is_err() {
+                break;
+            }
+        }
+    };
+
+    let cl_to_up = async move {
+        while let Some(Ok(msg)) = cl_stream.next().await {
+            let out = match msg {
+                AxumWsMessage::Text(t) => TungMessage::Text(t.into()),
+                AxumWsMessage::Binary(b) => TungMessage::Binary(b.into()),
+                AxumWsMessage::Ping(p) => TungMessage::Ping(p.into()),
+                AxumWsMessage::Pong(p) => TungMessage::Pong(p.into()),
+                AxumWsMessage::Close(_) => break,
+            };
+            if up_sink.send(out).await.is_err() {
+                break;
+            }
+        }
+    };
+
+    tokio::select! {
+        _ = up_to_cl => {},
+        _ = cl_to_up => {},
+    }
+}
+
+async fn proxy_http_handler(
+    State(state): State<Arc<SharedAppState>>,
+    req: Request,
+) -> Response {
+    let method: Method = req.method().clone();
+    let uri = req.uri().clone();
+    let path = uri.path().to_string();
+    let path_and_query = uri
+        .path_and_query()
+        .map(|pq| pq.as_str().to_string())
+        .unwrap_or_else(|| "/".to_string());
+
+    let cfg = state.config.read().unwrap().clone();
+    let is_local = is_local_host(&cfg.server_host);
+    let is_root_nav = method == Method::GET && (path == "/" || path == "/index.html");
+    let query_setup = uri.query().map(|q| q.contains("setup=1")).unwrap_or(false);
+
+    // If setup mode is requested or remote server has no deviceToken yet, show Connect & Pair screen on GET /
+    if is_root_nav && (query_setup || state.setup_mode.load(Ordering::SeqCst) || (!is_local && cfg.device_token.trim().is_empty())) {
+        return html_no_store_response(StatusCode::OK, ui_pages::render_pair_page(&cfg, None));
+    }
+
+    // If configured for localhost, verify localhost is actually healthy before proxying root navigation
+    if is_root_nav && is_local {
+        if check_local_server_healthy(&state.http_client, &cfg.server_host)
+            .await
+            .is_err()
+        {
+            return html_no_store_response(
+                StatusCode::OK,
+                ui_pages::render_pair_page(
+                    &cfg,
+                    Some("Localhost (127.0.0.1:4180) does not have a healthy VibeSquad server (dist/index.html missing). Select a remote server below."),
+                ),
+            );
+        }
+    }
+
+    let req_headers = req.headers().clone();
+    let body_bytes = match axum::body::to_bytes(req.into_body(), 50 * 1024 * 1024).await {
+        Ok(b) => b,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    let candidates = state.candidate_hosts();
+    let mut last_err = String::new();
+
+    for host in candidates {
+        let host_is_local = is_local_host(&host);
+        let scheme = if host_is_local { "http" } else { "https" };
+        let target_url = format!("{}://{}{}", scheme, host, path_and_query);
+
+        let req_method = match reqwest::Method::from_bytes(method.as_str().as_bytes()) {
+            Ok(m) => m,
+            Err(_) => reqwest::Method::GET,
+        };
+
+        let mut builder = state.http_client.request(req_method, &target_url);
+
+        for (k, v) in req_headers.iter() {
+            let name_lower = k.as_str().to_lowercase();
+            if name_lower == "host"
+                || name_lower == "connection"
+                || name_lower == "content-length"
+                || name_lower == "origin"
+                || name_lower == "referer"
+            {
+                continue;
+            }
+            if let Ok(val_str) = v.to_str() {
+                builder = builder.header(k.as_str(), val_str);
+            }
+        }
+
+        if host_is_local {
+            builder = builder
+                .header("Host", &host)
+                .header("Origin", format!("http://{}", host));
+        }
+
+        if !cfg.device_token.is_empty() {
+            let existing_cookie = req_headers
+                .get(axum::http::header::COOKIE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            let merged = if existing_cookie.is_empty() {
+                format!("vs_device={}", cfg.device_token)
+            } else if existing_cookie.contains("vs_device=") {
+                existing_cookie.to_string()
+            } else {
+                format!("{}; vs_device={}", existing_cookie, cfg.device_token)
+            };
+            builder = builder.header("Cookie", merged);
+        }
+
+        if !body_bytes.is_empty() {
+            builder = builder.body(body_bytes.clone());
+        }
+
+        match builder.send().await {
+            Ok(up_resp) => {
+                *state.active_upstream.write().unwrap() = Some(host.clone());
+                let up_status = up_resp.status();
+
+                // If upstream rejects our token on root navigation (401 or redirect to /pair), show Connect & Pair screen
+                if is_root_nav
+                    && (up_status == reqwest::StatusCode::UNAUTHORIZED
+                        || up_status == reqwest::StatusCode::FOUND)
+                {
+                    if !host_is_local {
+                        let mut wcfg = state.config.write().unwrap();
+                        wcfg.device_token.clear();
+                        let _ = save_config(&wcfg);
+                        return html_no_store_response(
+                            StatusCode::OK,
+                            ui_pages::render_pair_page(
+                                &wcfg,
+                                Some("Device is unpaired or session was revoked. Enter a 6-digit pairing code to reconnect."),
+                            ),
+                        );
+                    }
+                }
+
+                let up_headers = up_resp.headers().clone();
+                let is_html = up_headers
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                    .map(|ct| ct.contains("text/html"))
+                    .unwrap_or(false);
+
+                let resp_bytes = match up_resp.bytes().await {
+                    Ok(b) => b,
+                    Err(e) => {
+                        return (
+                            StatusCode::BAD_GATEWAY,
+                            Json(json!({ "error": e.to_string() })),
+                        )
+                            .into_response();
+                    }
+                };
+
+                // Guard root navigation: NEVER render a raw 500/404/error text or missing dist/index.html as a dead end!
+                if is_root_nav {
+                    let body_str = String::from_utf8_lossy(&resp_bytes);
+                    let broken_root = up_status != reqwest::StatusCode::OK
+                        || body_str.contains("dist/index.html missing")
+                        || !body_str.contains("<div id=\"root\">");
+                    if broken_root {
+                        let err_msg = format!(
+                            "Upstream {} returned HTTP {} (dist/index.html missing or server rebuilding). Select a remote server below.",
+                            host,
+                            up_status.as_u16()
+                        );
+                        if host_is_local {
+                            return html_no_store_response(
+                                StatusCode::OK,
+                                ui_pages::render_pair_page(&cfg, Some(&err_msg)),
+                            );
+                        } else {
+                            return html_no_store_response(
+                                StatusCode::OK,
+                                ui_pages::render_unreachable_page(&cfg, &err_msg),
+                            );
+                        }
+                    }
+                }
+
+                let final_bytes = if is_root_nav && is_html && up_status == reqwest::StatusCode::OK {
+                    let html_str = String::from_utf8_lossy(&resp_bytes);
+                    let bridge = ui_pages::desktop_bridge_script(&cfg.last_hash);
+                    let injected = if html_str.contains("</body>") {
+                        html_str.replacen("</body>", &format!("{}\n</body>", bridge), 1)
+                    } else {
+                        format!("{}\n{}", html_str, bridge)
+                    };
+                    axum::body::Bytes::from(injected.into_bytes())
+                } else {
+                    resp_bytes
+                };
+
+                let status_code =
+                    StatusCode::from_u16(up_status.as_u16()).unwrap_or(StatusCode::OK);
+                let mut res_builder = Response::builder().status(status_code);
+                for (k, v) in up_headers.iter() {
+                    let name_lower = k.as_str().to_lowercase();
+                    if name_lower == "transfer-encoding"
+                        || name_lower == "content-length"
+                        || name_lower == "content-encoding"
+                        || ((is_root_nav || status_code.is_client_error() || status_code.is_server_error())
+                            && name_lower == "cache-control")
+                    {
+                        continue;
+                    }
+                    if let (Ok(hn), Ok(hv)) = (
+                        HeaderName::from_bytes(k.as_str().as_bytes()),
+                        HeaderValue::from_bytes(v.as_bytes()),
+                    ) {
+                        res_builder = res_builder.header(hn, hv);
+                    }
+                }
+
+                if is_root_nav || status_code.is_client_error() || status_code.is_server_error() {
+                    res_builder = res_builder.header(
+                        axum::http::header::CACHE_CONTROL,
+                        "no-store, no-cache, must-revalidate",
+                    );
+                }
+
+                return res_builder
+                    .body(Body::from(final_bytes))
+                    .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+            }
+            Err(e) => {
+                last_err = format!("{}: {}", host, e);
+            }
+        }
+    }
+
+    // Upstream unreachable!
+    if is_root_nav {
+        return html_no_store_response(
+            StatusCode::OK,
+            ui_pages::render_unreachable_page(&cfg, &last_err),
+        );
+    }
+
+    (
+        StatusCode::BAD_GATEWAY,
+        [
+            (
+                axum::http::header::CACHE_CONTROL,
+                "no-store, no-cache, must-revalidate",
+            ),
+        ],
+        Json(json!({
+            "error": "VibeSquad server unreachable",
+            "detail": last_err
+        })),
+    )
+        .into_response()
+}
+
+fn focus_main_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
+
+async fn bind_loopback_listener() -> (TcpListener, u16) {
+    let preferred_port = std::env::var("VIBESQUAD_DESKTOP_PORT")
+        .ok()
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(4189);
+
+    let preferred_addr = SocketAddr::from(([127, 0, 0, 1], preferred_port));
+    if let Ok(listener) = TcpListener::bind(preferred_addr).await {
+        let port = listener.local_addr().map(|a| a.port()).unwrap_or(preferred_port);
+        return (listener, port);
+    }
+
+    let fallback_addr = SocketAddr::from(([127, 0, 0, 1], 0));
+    let listener = TcpListener::bind(fallback_addr)
+        .await
+        .expect("failed to bind loopback port");
+    let port = listener.local_addr().unwrap().port();
+    (listener, port)
+}
+
+/// Rejects DNS-rebinding (foreign Host) and cross-site browser calls (foreign Origin) against the
+/// loopback proxy, so a random web page cannot hit /__desktop/pair, /__desktop/pick-folder or /ws.
+async fn guard_local_request(
+    State(state): State<Arc<SharedAppState>>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let port = state.local_port.load(Ordering::SeqCst);
+    let host_ok = req
+        .headers()
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .map(|h| h == format!("127.0.0.1:{}", port) || h == format!("localhost:{}", port))
+        .unwrap_or(false);
+    if !host_ok {
+        return (StatusCode::FORBIDDEN, "forbidden host").into_response();
+    }
+    let path = req.uri().path();
+    if path.starts_with("/__desktop/") || path == "/ws" {
+        if let Some(origin) = req.headers().get("origin") {
+            let allowed = [
+                format!("http://127.0.0.1:{}", port),
+                format!("http://localhost:{}", port),
+                "tauri://localhost".to_string(),
+                "http://tauri.localhost".to_string(),
+                "https://tauri.localhost".to_string(),
+            ];
+            let ok = origin
+                .to_str()
+                .map(|o| allowed.iter().any(|a| a == o))
+                .unwrap_or(false);
+            if !ok {
+                return (StatusCode::FORBIDDEN, "forbidden origin").into_response();
+            }
+        }
+    }
+    next.run(req).await
+}
+
+fn build_router(state: Arc<SharedAppState>) -> Router {
+    Router::new()
+        .route("/__desktop/status", get(handle_desktop_status))
+        .route("/__desktop/ping", get(handle_desktop_ping))
+        .route("/__desktop/setup", get(handle_desktop_setup))
+        .route("/__desktop/unpair", post(handle_desktop_unpair))
+        .route("/__desktop/pair", post(handle_desktop_pair))
+        .route("/__desktop/hash", post(handle_desktop_hash))
+        .route("/__desktop/badge", post(handle_desktop_badge))
+        .route("/__desktop/notify", post(handle_desktop_notify))
+        .route("/ws", get(handle_ws_upgrade))
+        .fallback(proxy_http_handler)
+        .layer(axum::middleware::from_fn_with_state(state.clone(), guard_local_request))
+        .with_state(state)
+}
+
+fn main() {
+    let initial_cfg = load_config();
+    if initial_cfg.start_at_login {
+        let _ = set_start_at_login_registry(true);
+    }
+
+    let (http_client, ws_tls_connector) =
+        build_http_and_ws_clients().expect("Failed to initialize TLS clients with pinned CA");
+
+    let shared_state = Arc::new(SharedAppState {
+        config: RwLock::new(initial_cfg),
+        active_upstream: RwLock::new(None),
+        setup_mode: AtomicBool::new(false),
+        quitting: AtomicBool::new(false),
+        needs_count: AtomicUsize::new(0),
+        local_port: AtomicUsize::new(4189),
+        http_client,
+        ws_tls_connector,
+        app_handle: RwLock::new(None),
+        tray_needs_item: RwLock::new(None),
+        tracker: Mutex::new(AgentAlertTracker::default()),
+    });
+
+    // Start background Tokio runtime and bind loopback server BEFORE Tauri opens the window
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to build Tokio runtime");
+
+    let state_for_server = shared_state.clone();
+    let local_port = rt.block_on(async move {
+        let (listener, port) = bind_loopback_listener().await;
+        state_for_server.local_port.store(port as usize, Ordering::SeqCst);
+        let router = build_router(state_for_server);
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        port
+    });
+
+    // Headless proxy mode for automated CLI verification if requested
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--headless-proxy")
+        || std::env::var("VIBESQUAD_HEADLESS_PROXY").as_deref() == Ok("1")
+    {
+        println!("VIBESQUAD_PROXY_LISTENING=http://127.0.0.1:{}", local_port);
+        rt.block_on(async {
+            loop {
+                tokio::time::sleep(Duration::from_secs(3600)).await;
+            }
+        });
+        return;
+    }
+
+    let state_for_setup = shared_state.clone();
+    let state_for_window = shared_state.clone();
+
+    tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            focus_main_window(app);
+        }))
+        .plugin(tauri_plugin_notification::init())
+        .setup(move |app| {
+            let handle = app.handle().clone();
+            *state_for_setup.app_handle.write().unwrap() = Some(handle.clone());
+
+            // Navigate main window if ephemeral port was used or if lastHash is saved
+            if let Some(main_win) = app.get_webview_window("main") {
+                let last_hash = state_for_setup.config.read().unwrap().last_hash.clone();
+                if local_port != 4189 || !last_hash.is_empty() {
+                    let hash_suffix = if last_hash.starts_with('#') {
+                        last_hash
+                    } else if !last_hash.is_empty() {
+                        format!("#{}", last_hash)
+                    } else {
+                        String::new()
+                    };
+                    if let Ok(target_url) =
+                        url::Url::parse(&format!("http://127.0.0.1:{}/{}", local_port, hash_suffix))
+                    {
+                        let _ = main_win.navigate(target_url);
+                    }
+                }
+            }
+
+            // Build System Tray Menu — keep "Change Server / Re-pair..." right below "Open VibeSquad"
+            let open_item = MenuItem::with_id(app, "open", "Open VibeSquad", true, None::<&str>)?;
+            let switch_server_item = MenuItem::with_id(
+                app,
+                "switch_server",
+                "Change Server / Re-pair...",
+                true,
+                None::<&str>,
+            )?;
+            let needs_item = MenuItem::with_id(app, "needs", "Needs You: 0", true, None::<&str>)?;
+            let start_login_checked = state_for_setup.config.read().unwrap().start_at_login;
+            let start_login_item = CheckMenuItem::with_id(
+                app,
+                "start_at_login",
+                "Start at Login",
+                true,
+                start_login_checked,
+                None::<&str>,
+            )?;
+            let sep1 = PredefinedMenuItem::separator(app)?;
+            let sep2 = PredefinedMenuItem::separator(app)?;
+            let quit_item = MenuItem::with_id(app, "quit", "Quit VibeSquad", true, None::<&str>)?;
+
+            *state_for_setup.tray_needs_item.write().unwrap() = Some(needs_item.clone());
+
+            let menu = Menu::with_items(
+                app,
+                &[
+                    &open_item,
+                    &switch_server_item,
+                    &needs_item,
+                    &sep1,
+                    &start_login_item,
+                    &sep2,
+                    &quit_item,
+                ],
+            )?;
+
+            let tray_icon = render_tray_icon(0).unwrap_or_else(|_| {
+                app.default_window_icon()
+                    .cloned()
+                    .expect("default window icon")
+            });
+
+            let state_for_menu = state_for_setup.clone();
+            let start_login_item_clone = start_login_item.clone();
+
+            let _tray = TrayIconBuilder::with_id("main-tray")
+                .icon(tray_icon)
+                .tooltip("VibeSquad — Connected")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(move |app, event| match event.id.as_ref() {
+                    "open" | "needs" => {
+                        focus_main_window(app);
+                    }
+                    "start_at_login" => {
+                        let enabled = start_login_item_clone.is_checked().unwrap_or(false);
+                        let _ = set_start_at_login_registry(enabled);
+                        let mut cfg = state_for_menu.config.write().unwrap();
+                        cfg.start_at_login = enabled;
+                        let _ = save_config(&cfg);
+                    }
+                    "switch_server" => {
+                        *state_for_menu.active_upstream.write().unwrap() = None;
+                        state_for_menu.setup_mode.store(true, Ordering::SeqCst);
+                        let port = state_for_menu.local_port.load(Ordering::SeqCst);
+                        if let Some(w) = app.get_webview_window("main") {
+                            if let Ok(u) =
+                                url::Url::parse(&format!("http://127.0.0.1:{}/__desktop/setup", port))
+                            {
+                                let _ = w.navigate(u);
+                            }
+                        }
+                        focus_main_window(app);
+                    }
+                    "quit" => {
+                        state_for_menu.quitting.store(true, Ordering::SeqCst);
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        focus_main_window(tray.app_handle());
+                    }
+                })
+                .build(app)?;
+
+            Ok(())
+        })
+        .on_window_event(move |window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let exit_on_close =
+                    std::env::var("VIBESQUAD_EXIT_ON_CLOSE").as_deref() == Ok("1");
+                if !state_for_window.quitting.load(Ordering::SeqCst) && !exit_on_close {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
+        .run(tauri::generate_context!())
+        .expect("error while running VibeSquad desktop application");
+}

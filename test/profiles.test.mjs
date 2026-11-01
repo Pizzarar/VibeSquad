@@ -1,0 +1,340 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import test from "node:test";
+import {
+  DEFAULT_PACK_PROFILES,
+  addInboxCards,
+  detectNoteWarnings,
+  diffProfiles,
+  findProfile,
+  importPaseoProfiles,
+  loadProfiles,
+  openTopicBrainstorm,
+  performBrainstormRestart,
+  saveProfiles,
+  seedDefaultPack,
+  toPaseoProfileShape,
+  toPaseoSpawnConfig,
+} from "../server/vibesquad-api.mjs";
+
+const FIXTURE_PATH = resolve(import.meta.dirname, "fixtures", "paseo-profiles.json");
+
+function makeTempEnv() {
+  const dir = mkdtempSync(join(tmpdir(), "vs-profiles-test-"));
+  const profilesPath = join(dir, ".vibesquad", "profiles.json");
+  const paseoConfigPath = join(dir, ".paseo", "config.json");
+  return {
+    dir,
+    profilesPath,
+    paseoConfigPath,
+    cleanup() {
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
+
+test("1. Golden fixture round-trips all 19 profiles with every Paseo field identical", () => {
+  const env = makeTempEnv();
+  try {
+    const rawFixture = JSON.parse(readFileSync(FIXTURE_PATH, "utf8"));
+    assert.equal(rawFixture.profiles.length, 19);
+
+    const imported = importPaseoProfiles(rawFixture.profiles, {
+      profilesPath: env.profilesPath,
+      write: true,
+    });
+    assert.equal(imported.profiles.length, 19);
+    assert.equal(imported.hasWarnings, false);
+
+    const disk = JSON.parse(readFileSync(env.profilesPath, "utf8"));
+    assert.equal(disk.profiles.length, 19);
+
+    for (let i = 0; i < rawFixture.profiles.length; i++) {
+      const expected = rawFixture.profiles[i];
+      const roundTripped = toPaseoProfileShape(disk.profiles[i]);
+      assert.deepEqual(
+        roundTripped,
+        expected,
+        `Profile #${i} (${expected.name}) did not round-trip identically`,
+      );
+    }
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("2. Fresh install with empty Paseo seeds 19-profile default pack with 0 EFI/ord38/C:\\ leaks and warns on project-specific notes", () => {
+  const env = makeTempEnv();
+  try {
+    const loaded = loadProfiles(env.profilesPath, {
+      paseoConfigPath: env.paseoConfigPath, // does not exist -> empty Paseo
+      autoSeed: true,
+    });
+    assert.equal(loaded.exists, true);
+    assert.equal(loaded.seeded, true);
+    assert.equal(loaded.needsSetup, false);
+    assert.equal(loaded.profiles.length, 19);
+
+    const forbidden = /[A-Za-z]:\\/i;
+    for (const p of loaded.profiles) {
+      assert.equal(
+        forbidden.test(p.notes),
+        false,
+        `Default note for "${p.name}" matched forbidden project-specific pattern: ${p.notes}`,
+      );
+      assert.deepEqual(detectNoteWarnings(p.notes), []);
+    }
+
+    // Verify that importing a profile with EFI / absolute path triggers the warning
+    const dirty = importPaseoProfiles([
+      {
+        name: "Brainstorm - Legacy",
+        provider: "claude",
+        model: "claude-opus-5-5",
+        modeId: "auto",
+        notes: "FIRST: read C:\\Users\\user\\AppData\\Local\\Temp\\myproject\\BRIEF.md for my-project",
+      },
+    ]);
+    assert.equal(dirty.hasWarnings, true);
+    const warns = dirty.warningsByProfile["Brainstorm - Legacy"] || [];
+    assert.equal(warns.length > 0, true);
+    assert.match(warns[0], /project-specific\? move it to the repo's AGENTS\.md/);
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("3. Spawning each role (lead, brainstorm, worker, restart, topic) matches Paseo profile config side by side", async () => {
+  const env = makeTempEnv();
+  const prevHome = process.env.VIBESQUAD_HOME;
+  const prevProfilesPath = process.env.VIBESQUAD_PROFILES_PATH;
+  process.env.VIBESQUAD_HOME = join(env.dir, ".vibesquad");
+  process.env.VIBESQUAD_PROFILES_PATH = env.profilesPath;
+  try {
+    seedDefaultPack(env.profilesPath);
+    const rawFixture = JSON.parse(readFileSync(FIXTURE_PATH, "utf8"));
+    const paseoByName = new Map(rawFixture.profiles.map((p) => [p.name, p]));
+    const { profiles } = loadProfiles(env.profilesPath);
+
+    // Side-by-side comparison for the 3 required profiles:
+    // Lead - Claude, Mechanical - DSF, Brainstorm - Gemini
+    const comparisonRows = [];
+    for (const targetName of ["Lead - Claude", "Mechanical - DSF", "Brainstorm - Gemini"]) {
+      const paseoProf = paseoByName.get(targetName);
+      const vsProf = findProfile(targetName, profiles);
+      const vsSpawn = toPaseoSpawnConfig(vsProf);
+
+      const paseoExpected = {
+        provider: paseoProf.provider,
+        model: paseoProf.model,
+        modeId: paseoProf.modeId,
+        thinkingOptionId: paseoProf.thinkingOptionId,
+        featureValues: paseoProf.featureValues ?? undefined,
+      };
+      const vsActual = {
+        provider: vsSpawn.provider,
+        model: vsSpawn.model,
+        modeId: vsSpawn.modeId,
+        thinkingOptionId: vsSpawn.thinkingOptionId,
+        featureValues: vsSpawn.featureValues ?? undefined,
+      };
+      assert.deepEqual(vsActual, paseoExpected, `Mismatch on ${targetName}`);
+      comparisonRows.push({
+        profile: targetName,
+        paseo: JSON.stringify(paseoExpected),
+        vibesquad: JSON.stringify(vsActual),
+      });
+    }
+    console.log("\n=== SIDE-BY-SIDE SPAWN CONFIG (PASEO vs VIBESQUAD) ===");
+    for (const row of comparisonRows) {
+      console.log(`Profile:   ${row.profile}`);
+      console.log(`Paseo:     ${row.paseo}`);
+      console.log(`VibeSquad: ${row.vibesquad}`);
+      console.log("---");
+    }
+
+    // Verify all 19 profiles match Paseo's provider/model/modeId/thinkingOptionId/featureValues
+    for (const paseoProf of rawFixture.profiles) {
+      const vsSpawn = toPaseoSpawnConfig(paseoProf.name, {}, profiles);
+      assert.equal(vsSpawn.provider, paseoProf.provider);
+      assert.equal(vsSpawn.model, paseoProf.model);
+      assert.equal(vsSpawn.modeId, paseoProf.modeId);
+      assert.equal(vsSpawn.thinkingOptionId, paseoProf.thinkingOptionId);
+      assert.deepEqual(vsSpawn.featureValues ?? undefined, paseoProf.featureValues ?? undefined);
+      assert.equal(vsSpawn.notes, paseoProf.notes);
+    }
+
+    // Also verify brainstorm restart and inbox topic brainstorm spawn payloads against Brainstorm - Gemini
+    const capturedCalls = [];
+    const mockDaemon = {
+      async createAgent(payload) {
+        capturedCalls.push(payload);
+        return { id: `agent-${capturedCalls.length}`, ...payload.config, labels: payload.labels };
+      },
+    };
+
+    await performBrainstormRestart(
+      {
+        agentId: "old-bs-1",
+        teamId: "vibesquad",
+        laneId: "vibesquad",
+        profile: "Brainstorm - Gemini",
+        daemonClient: mockDaemon,
+        profilesPath: env.profilesPath,
+      },
+      env.dir,
+    );
+    const restartCall = capturedCalls[0];
+    const bsGemini = paseoByName.get("Brainstorm - Gemini");
+    assert.equal(restartCall.config.provider, bsGemini.provider);
+    assert.equal(restartCall.config.model, bsGemini.model);
+    assert.equal(restartCall.config.modeId, bsGemini.modeId);
+    assert.equal(restartCall.config.thinkingOptionId, bsGemini.thinkingOptionId);
+    assert.deepEqual(restartCall.config.featureValues, bsGemini.featureValues);
+    assert.equal(restartCall.config.systemPrompt, bsGemini.notes);
+  } finally {
+    if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
+    else process.env.VIBESQUAD_HOME = prevHome;
+    if (prevProfilesPath === undefined) delete process.env.VIBESQUAD_PROFILES_PATH;
+    else process.env.VIBESQUAD_PROFILES_PATH = prevProfilesPath;
+    env.cleanup();
+  }
+});
+
+test("4. Claude brainstorm spawned by restart or Inbox topic runs in modeId: 'auto', never 'default' or undefined", async () => {
+  const env = makeTempEnv();
+  const prevHome = process.env.VIBESQUAD_HOME;
+  const prevProfilesPath = process.env.VIBESQUAD_PROFILES_PATH;
+  process.env.VIBESQUAD_HOME = join(env.dir, ".vibesquad");
+  process.env.VIBESQUAD_PROFILES_PATH = env.profilesPath;
+  try {
+    seedDefaultPack(env.profilesPath);
+    const captured = [];
+    const mockDaemon = {
+      async createAgent(payload) {
+        captured.push(payload);
+        return { id: `claude-bs-${captured.length}`, ...payload.config, labels: payload.labels };
+      },
+    };
+
+    // 4a. Brainstorm restart with old agent in 'default' mode must re-read 'Brainstorm - Claude' -> modeId: 'auto'
+    const restartRes = await performBrainstormRestart(
+      {
+        agentId: "old-claude-bs",
+        teamId: "vibesquad",
+        laneId: "vibesquad",
+        oldAgent: {
+          id: "old-claude-bs",
+          provider: "claude",
+          model: "claude-opus-5-5",
+          modeId: "default",
+          labels: { role: "brainstorm", profile: "Brainstorm - Claude" },
+        },
+        daemonClient: mockDaemon,
+        profilesPath: env.profilesPath,
+      },
+      env.dir,
+    );
+    assert.equal(restartRes.spawnConfig.modeId, "auto");
+    assert.equal(captured[0].config.modeId, "auto");
+    assert.notEqual(captured[0].config.modeId, "default");
+
+    // 4b. Inbox topic brainstorm defaults to 'Brainstorm - Claude' -> modeId: 'auto'
+    const added = addInboxCards(
+      {
+        teamId: "vibesquad",
+        laneId: "vibesquad",
+        ideas: ["Profile store sync and diff view"],
+      },
+      env.dir,
+    );
+    const cardId = added.added[0].id;
+    const topicRes = await openTopicBrainstorm(
+      {
+        cardId,
+        teamId: "vibesquad",
+        laneId: "vibesquad",
+        daemonClient: mockDaemon,
+        profilesPath: env.profilesPath,
+      },
+      env.dir,
+    );
+    assert.equal(topicRes.spawnConfig.modeId, "auto");
+    assert.equal(captured[1].config.modeId, "auto");
+    assert.equal(captured[1].labels.profile, "Brainstorm - Claude");
+  } finally {
+    if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
+    else process.env.VIBESQUAD_HOME = prevHome;
+    if (prevProfilesPath === undefined) delete process.env.VIBESQUAD_PROFILES_PATH;
+    else process.env.VIBESQUAD_PROFILES_PATH = prevProfilesPath;
+    env.cleanup();
+  }
+});
+
+test("5. Editing a profile in ~/.vibesquad/profiles.json changes the next spawn immediately without code edits", async () => {
+  const env = makeTempEnv();
+  const prevHome = process.env.VIBESQUAD_HOME;
+  const prevProfilesPath = process.env.VIBESQUAD_PROFILES_PATH;
+  process.env.VIBESQUAD_HOME = join(env.dir, ".vibesquad");
+  process.env.VIBESQUAD_PROFILES_PATH = env.profilesPath;
+  try {
+    seedDefaultPack(env.profilesPath);
+
+    // Edit "Brainstorm - Claude" in the store (change thinkingOptionId -> "high" and model -> "claude-sonnet-5-5")
+    const before = findProfile("Brainstorm - Claude", loadProfiles(env.profilesPath).profiles);
+    assert.equal(before.thinkingOptionId, "medium");
+
+    saveProfiles(
+      {
+        profile: {
+          ...before,
+          model: "claude-sonnet-5-5",
+          thinkingOptionId: "high",
+          notes: `${before.notes}\nCustom live-edited note line.`,
+        },
+      },
+      env.profilesPath,
+    );
+
+    const captured = [];
+    const mockDaemon = {
+      async createAgent(payload) {
+        captured.push(payload);
+        return { id: "edited-bs-1", ...payload.config, labels: payload.labels };
+      },
+    };
+
+    await performBrainstormRestart(
+      {
+        agentId: "bs-prev",
+        teamId: "vibesquad",
+        laneId: "vibesquad",
+        profile: "Brainstorm - Claude",
+        daemonClient: mockDaemon,
+        profilesPath: env.profilesPath,
+      },
+      env.dir,
+    );
+
+    assert.equal(captured.length, 1);
+    assert.equal(captured[0].config.model, "claude-sonnet-5-5");
+    assert.equal(captured[0].config.thinkingOptionId, "high");
+    assert.equal(captured[0].config.modeId, "auto");
+    assert.match(captured[0].config.systemPrompt, /Custom live-edited note line\./);
+
+    // Also verify diffProfiles detects the 3 modified fields against the fixture
+    const rawFixture = JSON.parse(readFileSync(FIXTURE_PATH, "utf8"));
+    const diff = diffProfiles(loadProfiles(env.profilesPath).profiles, rawFixture.profiles);
+    const bsDiff = diff.find((d) => d.name === "Brainstorm - Claude");
+    assert.equal(bsDiff.status, "modified");
+    assert.deepEqual(bsDiff.changedFields.sort(), ["model", "notes", "thinkingOptionId"]);
+  } finally {
+    if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
+    else process.env.VIBESQUAD_HOME = prevHome;
+    if (prevProfilesPath === undefined) delete process.env.VIBESQUAD_PROFILES_PATH;
+    else process.env.VIBESQUAD_PROFILES_PATH = prevProfilesPath;
+    env.cleanup();
+  }
+});
