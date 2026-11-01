@@ -214,11 +214,25 @@ function resolveTeamsFilePath(): string {
   return path.join(REPO_ROOT, "teams.example.json");
 }
 
+// Lanes are added to teams.json at runtime (new pins, feature lanes), so re-read it
+// whenever the file changes instead of trusting a snapshot from plugin load.
+let teamsCache: { file: string; mtimeMs: number; size: number; teams: TeamDef[] } | null = null;
+
 function loadTeams(): TeamDef[] {
   const file = resolveTeamsFilePath();
+  let stat: fs.Stats | null = null;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    stat = null;
+  }
+  if (stat && teamsCache && teamsCache.file === file && teamsCache.mtimeMs === stat.mtimeMs && teamsCache.size === stat.size) {
+    return teamsCache.teams;
+  }
   const { value: parsed } = readJsonFileWithBom(file, { fallback: null, label: "teams.json" });
-  if (Array.isArray(parsed?.teams)) return parsed.teams;
-  return [];
+  const teams: TeamDef[] = Array.isArray(parsed?.teams) ? parsed.teams : [];
+  teamsCache = stat ? { file, mtimeMs: stat.mtimeMs, size: stat.size, teams } : null;
+  return teams;
 }
 
 function safeSegment(value: string): string {
@@ -534,7 +548,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
   const deps: Deps = { ...DEFAULT_DEPS, ...overrides };
 
   return function contribute(server: PluginServerContext) {
-    const teams = loadTeams();
+    // Read per use (mtime-cached): a snapshot here missed lanes registered after load.
+    const currentTeams = () => loadTeams();
     const lifetime = new AbortController();
     const timers = new Set<ReturnType<typeof setTimeout>>();
     const stops: (() => void)[] = [];
@@ -590,7 +605,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         }
       },
       appendLog: (team: string, entry: any) => {
-        appendLog(teamIdOf(team, teams), {
+        appendLog(teamIdOf(team, currentTeams()), {
           agent: entry.agent ?? "plugin",
           lane: entry.lane ?? team,
           type: entry.type ?? "handoff",
@@ -625,10 +640,10 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     };
 
     const teamOf = (labels: Labels, cwd?: string): { team: string; lane: string } | null => {
-      const derived = deriveTeamForSpawn(labels, cwd, teams);
-      if (derived.team) return { team: teamIdOf(derived.team, teams), lane: derived.lane || derived.team };
-      if (labels.team) return { team: teamIdOf(labels.team, teams), lane: labels.lane || resolveByCwd(cwd, teams)?.lane || "" };
-      return resolveByCwd(cwd, teams);
+      const derived = deriveTeamForSpawn(labels, cwd, currentTeams());
+      if (derived.team) return { team: teamIdOf(derived.team, currentTeams()), lane: derived.lane || derived.team };
+      if (labels.team) return { team: teamIdOf(labels.team, currentTeams()), lane: labels.lane || resolveByCwd(cwd, currentTeams())?.lane || "" };
+      return resolveByCwd(cwd, currentTeams());
     };
 
     const recentBeforeMismatches = new Map<string, number>();
@@ -667,10 +682,16 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
 
         const role = explicitRole || matchedProfile?.role || "worker";
 
+        if (!matchedProfile && (reqLabels.team || reqLabels.lane || reqLabels.role)) {
+          log(
+            `no profile match for VS spawn "${title}" (provider=${provider}, model=${config?.model ?? ""}, mode=${config?.modeId ?? ""}): pass --label profile=<Profile name>`,
+          );
+        }
+
         if (rawReqLabels) {
           const resolved = resolveAgentIdentity(reqLabels, {
             cwd,
-            teams,
+            teams: currentTeams(),
             fallbackRole: role,
             recomputeOrphan: true,
           });
@@ -865,7 +886,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               labels,
             },
             {
-              teams,
+              teams: currentTeams(),
               fallbackRole: labels.role || "worker",
               recomputeOrphan: true,
               agentsById: parent && parentId ? { [parentId]: parent } : undefined,
@@ -953,8 +974,17 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
 
           const finalRole = labels.role || want.role || "";
           const finalTopic = finalRole === "brainstorm" ? brainstormTopicOf({ ...labels, ...want }) : "";
-          if ((finalRole === "lead" || finalRole === "brainstorm") && team && lane) {
-            await retirePredecessors(paseo, agent.id, finalRole, teamIdOf(team, teams), lane, finalTopic).catch((e) =>
+          // An explicit lane label beats cwd for retirement: if the label lane was
+          // overridden from cwd, the plugin is guessing, so never retire anyone on a guess.
+          const laneOverriddenFromCwd =
+            !resolved.isOrphan && resolved.autofixedFromCwd && !!resolved.callerLane && resolved.callerLane !== resolved.laneId;
+          if (laneOverriddenFromCwd && (finalRole === "lead" || finalRole === "brainstorm")) {
+            log(
+              `skipped retire for ${agent.id}: lane label "${resolved.callerLane}" is not in teams.json, cwd guessed "${resolved.laneId}"`,
+            );
+          }
+          if ((finalRole === "lead" || finalRole === "brainstorm") && team && lane && !laneOverriddenFromCwd) {
+            await retirePredecessors(paseo, agent.id, finalRole, teamIdOf(team, currentTeams()), lane, finalTopic).catch((e) =>
               log(`retire scan failed: ${e}`),
             );
           }
@@ -968,7 +998,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             if (n === 1 && !firstDispatchLogged.has(parentId)) {
               firstDispatchLogged.add(parentId);
               const used = parent.lastUsage?.contextWindowUsedTokens ?? parent.lastUsage?.inputTokens ?? 0;
-              appendLog(teamIdOf(team, teams), {
+              appendLog(teamIdOf(team, currentTeams()), {
                 agent: "plugin",
                 lane,
                 type: "metric",
@@ -1051,7 +1081,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const fallback = async (why: string) => {
         const last = await lastAssistantText(paseo, worker.id);
         const line = last.split(/\r?\n/).find((l) => l.trim()) ?? "no final message";
-        appendLog(teamIdOf(team, teams), {
+        appendLog(teamIdOf(team, currentTeams()), {
           agent: worker.id,
           lane,
           type: "done",
@@ -1194,7 +1224,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         .map((e) => ({ ...e.agent, labels: e.agent.labels ?? {} }) as AgentSnap)
         .filter((a) => a.id !== newId && !a.archivedAt && !a.internal && a.status !== "closed")
         .filter((a) => !isRetiredAgent(a))
-        .filter((a) => sameLaneRole(a, { role, team, lane, topic }, teams));
+        .filter((a) => sameLaneRole(a, { role, team, lane, topic }, currentTeams()));
       for (const old of others) {
         if (role === "lead" && (old.id === handoffFrom || handoffCoordinator.hasPendingTakeover(newId))) {
           // Delayed retirement: wait until successor confirms takeover in turn_ended / confirmTakeover.
@@ -1202,7 +1232,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         }
         const former = role === "lead" ? "former-lead" : "former-brainstorm";
         const ord = old.labels.ord;
-        const laneName = teams.flatMap((t: any) => t.lanes ?? []).find((x: any) => x.id === lane || x.aliases?.includes(lane))?.name ?? lane;
+        const laneName = currentTeams().flatMap((t: any) => t.lanes ?? []).find((x: any) => x.id === lane || x.aliases?.includes(lane))?.name ?? lane;
         const oldTitle = (old.title ?? "").trim();
         const name =
           role === "lead"
@@ -1233,8 +1263,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         .filter((a) => !a.archivedAt && !a.internal && a.status !== "closed")
         .filter((a) => effectiveAgentRole(a) === "lead")
         .filter((a) => {
-          const d = deriveTeamForSpawn(a.labels, a.cwd, teams);
-          const aTeam = teamIdOf(d.team || a.labels.team, teams);
+          const d = deriveTeamForSpawn(a.labels, a.cwd, currentTeams());
+          const aTeam = teamIdOf(d.team || a.labels.team, currentTeams());
           const aLane = (d.lane || a.labels.lane || a.labels.lead || "").toLowerCase();
           return aTeam === team && (!wantLane || aLane === wantLane);
         });
@@ -1272,8 +1302,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const isRetired = Boolean(target.archivedAt || target.status === "closed" || isRetiredLeadSnap(target));
       if (!isRetired) return undefined;
 
-      const { team: rawTeam, lane: rawLane } = deriveTeamForSpawn(target.labels, target.cwd, teams);
-      const team = teamIdOf(rawTeam || target.labels?.team || "", teams);
+      const { team: rawTeam, lane: rawLane } = deriveTeamForSpawn(target.labels, target.cwd, currentTeams());
+      const team = teamIdOf(rawTeam || target.labels?.team || "", currentTeams());
       const lane = rawLane || target.labels?.lane || target.labels?.lead || team;
 
       const dateStr = new Date().toISOString().slice(0, 10);
