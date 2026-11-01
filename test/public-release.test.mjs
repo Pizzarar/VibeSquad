@@ -73,7 +73,7 @@ describe("repo hygiene", () => {
 });
 
 describe("third-party licenses", () => {
-  const text = readFileSync(join(rootDir, "public", "THIRD-PARTY-LICENSES.txt"), "utf8");
+  const text = readFileSync(join(rootDir, "public", "THIRD-PARTY-LICENSES.txt"), "utf8").replace(/\r\n/g, "\n");
   test("credits Paseo under Apache-2.0", () => {
     assert.match(text, /@getpaseo\/client@[\d.]+\s+Apache-2\.0/);
     assert.match(text, /@getpaseo\/protocol@[\d.]+\s+Apache-2\.0/);

@@ -1,4 +1,4 @@
-import rawConfig from "../teams.json" with { type: "json" };
+import rawConfig from "../teams.example.json" with { type: "json" };
 
 export const UNASSIGNED_TEAM_ID = "_unassigned";
 export const UNASSIGNED_TEAM_NAME = "Unassigned";
