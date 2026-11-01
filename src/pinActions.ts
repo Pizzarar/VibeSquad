@@ -2,7 +2,8 @@
 // src/pins.ts stays pure; this file talks to the dev-server middleware and the teams store.
 import type { PaseoAgent } from "@getpaseo/client";
 import { DEMO, archiveAgent, getPaseoState, retireAgent, upsertLocalAgent } from "./paseo";
-import { appendBriefLine, briefStamp, completeBlocker, DEFAULT_PIN_PROFILE, patchLane, resolvePin, type Pin } from "./pins";
+import { appendBriefLine, briefStamp, DEFAULT_PIN_PROFILE, patchLane, resolvePin, type Pin } from "./pins";
+import { runMarkComplete } from "./pinComplete";
 import { findCrossTeamBrainstorm, getTeams, resolve, saveTeams, type TeamDef } from "./teams";
 
 export type OpenPinDeps = {
@@ -138,17 +139,25 @@ export function onOpenBriefEditor(fn: (t: BriefTarget) => void): () => void {
 // ── Step 5: Mark complete / Reopen (docs/PLAN_PINNED_FEATURES.md §4) ──────────
 // Only a click in the UI calls these. Agents never complete a team: there is no route or CLI for it.
 
-async function appendToBrief(laneId: string, line: string, doFetch: typeof fetch): Promise<void> {
+async function readBrief(laneId: string, doFetch: typeof fetch): Promise<string> {
   const url = `/__vibesquad/brainstorm-summary?lane=${encodeURIComponent(laneId)}`;
   const cur = (await (await doFetch(url)).json().catch(() => ({}))) as { ok?: boolean; content?: string; error?: string };
   if (!cur.ok) throw new Error(cur.error ?? "Could not read the brief");
+  return String(cur.content ?? "");
+}
+
+async function writeBrief(laneId: string, content: string, doFetch: typeof fetch): Promise<void> {
   const res = await doFetch("/__vibesquad/brainstorm-summary", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ laneId, content: appendBriefLine(String(cur.content ?? ""), line) }),
+    body: JSON.stringify({ laneId, content }),
   });
   const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
   if (!res.ok || !body.ok) throw new Error(body.error ?? `Brief save failed (${res.status})`);
+}
+
+async function appendToBrief(laneId: string, line: string, doFetch: typeof fetch): Promise<void> {
+  await writeBrief(laneId, appendBriefLine(await readBrief(laneId, doFetch), line), doFetch);
 }
 
 export type CompleteDeps = Pick<OpenPinDeps, "fetch" | "getTeams" | "saveTeams"> & {
@@ -160,30 +169,20 @@ export type CompleteDeps = Pick<OpenPinDeps, "fetch" | "getTeams" | "saveTeams">
  * Move a pin to the Done shelf: refuse while workers run or permissions are open, write
  * "Done <date>" into the brief, retire the live Brainstorm (former-brainstorm, archived like the
  * plugin's retirePredecessors) and the Lead (former-lead), then set state=done + doneAt.
- * Returns the blocker text instead of completing when the team is still busy.
+ * Returns the blocker text instead of completing when the team is still busy. Safe to retry
+ * after a failure (src/pinComplete.ts).
  */
-export async function markPinComplete(pin: Pin, deps: CompleteDeps = {}): Promise<{ ok: true } | { ok: false; blocked: string }> {
-  const blocked = completeBlocker(pin);
-  if (blocked) return { ok: false, blocked };
+export function markPinComplete(pin: Pin, deps: CompleteDeps = {}): Promise<{ ok: true } | { ok: false; blocked: string }> {
   const doFetch = deps.fetch ?? fetch;
-  const retire = deps.retire ?? retireAgent;
-  const archive = deps.archive ?? archiveAgent;
-  if (!DEMO) await appendToBrief(pin.lane.id, `Done ${briefStamp()}`, doFetch);
-  const bs = pin.brainstorm?.agent;
-  if (bs) {
-    await retire(bs, pin.lane.name);
-    await archive(bs.id).catch(() => {});
-  }
-  if (pin.lead) await retire(pin.lead.agent, pin.lane.name);
-  const profile = bs?.labels?.profile;
-  await (deps.saveTeams ?? saveTeams)(
-    patchLane((deps.getTeams ?? getTeams)(), pin.squad.id, pin.lane.id, {
-      state: "done",
-      doneAt: new Date().toISOString(),
-      ...(profile ? { lastProfile: profile } : {}),
-    }),
-  );
-  return { ok: true };
+  return runMarkComplete(pin, {
+    readBrief: (laneId) => readBrief(laneId, doFetch),
+    writeBrief: (laneId, content) => writeBrief(laneId, content, doFetch),
+    retire: deps.retire ?? retireAgent,
+    archive: deps.archive ?? archiveAgent,
+    getTeams: deps.getTeams ?? getTeams,
+    saveTeams: deps.saveTeams ?? saveTeams,
+    skipBrief: DEMO,
+  });
 }
 
 /** Put a done team back on the pins. The next click quick-starts a Brainstorm from the same brief (openPin). */
