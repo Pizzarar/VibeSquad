@@ -1623,10 +1623,7 @@ export function installVsShim({ binDirs, targetScript, baseHome } = {}) {
       const src = path.join(repoRoot, rel);
       const dst = path.join(runtimeDir, rel);
       try {
-        if (fs.existsSync(src)) {
-          fs.mkdirSync(path.dirname(dst), { recursive: true });
-          fs.copyFileSync(src, dst);
-        }
+        if (fs.existsSync(src)) { fs.mkdirSync(path.dirname(dst), { recursive: true }); fs.copyFileSync(src, dst); } else if (rel === "teams.json" && !fs.existsSync(dst)) { const ex = path.join(repoRoot, "teams.example.json"); if (fs.existsSync(ex)) { fs.mkdirSync(path.dirname(dst), { recursive: true }); fs.copyFileSync(ex, dst); } }
       } catch {
         // best-effort copy
       }
