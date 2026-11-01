@@ -1,8 +1,37 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Component, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { daemonClient, client, DEMO } from "./paseo";
 import { demoTimeline } from "./demo";
 import { sentImagesFor } from "./imageDrafts";
 import { openRightDockTab } from "./RightDock";
+
+export class TimelineErrorBoundary extends Component<
+  { children: ReactNode; fallbackLabel?: string },
+  { error: Error | null }
+> {
+  state: { error: Error | null } = { error: null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="tl tl-error" data-testid="tl-error-boundary">
+          <b>Render error{this.props.fallbackLabel ? ` (${this.props.fallbackLabel})` : ""}:</b>{" "}
+          {this.state.error.message}
+          <button
+            type="button"
+            className="btn-ghost"
+            style={{ marginLeft: 8, padding: "1px 6px", fontSize: 10 }}
+            onClick={() => this.setState({ error: null })}
+          >
+            Retry
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 export type Entry = { item: any; timestamp?: string; seqStart?: number };
 
@@ -15,6 +44,24 @@ export function localImageSrc(u: string, agentId?: string): string {
 }
 
 // ─── Pure helpers (exported for tests) ────────────────────────────────────────
+
+export function formatToolError(err: any): string {
+  if (err == null) return "";
+  if (typeof err === "string") return err;
+  if (typeof err.content === "string") return err.content;
+  if (Array.isArray(err.content)) {
+    return err.content
+      .map((c: any) => (typeof c === "string" ? c : c?.text ?? JSON.stringify(c)))
+      .join("\n");
+  }
+  if (typeof err.message === "string") return err.message;
+  if (typeof err.text === "string") return err.text;
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
+}
 
 export function isFailedTool(it: any, d: any): boolean {
   return it.status === "failed" || it.status === "error" || !!it.error || (d.exitCode != null && d.exitCode !== 0);
@@ -389,7 +436,7 @@ function ToolDetail({ it, d }: { it: any; d: any }) {
         {output && (
           <pre className="tl-tool-output" style={{ maxHeight: 240, overflow: "auto" }}>{String(output)}</pre>
         )}
-        {it.error && <div className="tl-tool-error" style={{ color: "#ff4d6d" }}>{it.error}</div>}
+        {it.error && <div className="tl-tool-error" style={{ color: "#ff4d6d" }}>{formatToolError(it.error)}</div>}
       </div>
     );
   }
@@ -399,7 +446,7 @@ function ToolDetail({ it, d }: { it: any; d: any }) {
       return (
         <div data-testid="tl-tool-detail" className="tl-tool-detail">
           <DiffView diff={diffText} />
-          {it.error && <div style={{ color: "#ff4d6d" }}>{it.error}</div>}
+          {it.error && <div style={{ color: "#ff4d6d" }}>{formatToolError(it.error)}</div>}
         </div>
       );
     }
@@ -408,7 +455,7 @@ function ToolDetail({ it, d }: { it: any; d: any }) {
     return (
       <div data-testid="tl-tool-detail" className="tl-tool-detail">
         <pre style={{ maxHeight: 240, overflow: "auto" }}>{String(content).slice(0, 2000)}</pre>
-        {it.error && <div style={{ color: "#ff4d6d" }}>{it.error}</div>}
+        {it.error && <div style={{ color: "#ff4d6d" }}>{formatToolError(it.error)}</div>}
       </div>
     );
   }
@@ -421,7 +468,7 @@ function ToolDetail({ it, d }: { it: any; d: any }) {
       ) : (
         <pre style={{ maxHeight: 240, overflow: "auto" }}>{JSON.stringify(d ?? it.input, null, 2)}</pre>
       )}
-      {it.error && <div style={{ color: "#ff4d6d" }}>{it.error}</div>}
+      {it.error && <div style={{ color: "#ff4d6d" }}>{formatToolError(it.error)}</div>}
     </div>
   );
 }
@@ -599,10 +646,11 @@ export function TimelineItem({
       const d = it.detail ?? {};
       const failed = isFailedTool(it, d);
       const isSubAgent = isSubAgentTool(it, d);
+      const errText = formatToolError(it.error);
 
       if (isSubAgent) {
         const subagentKey = d.subAgentId ?? d.agentId ?? it.callId ?? "";
-        const summary = d.description ?? d.type ?? it.name ?? "";
+        const summary = formatToolError(d.description ?? d.type ?? it.name ?? "");
         return (
           <div
             data-testid="tl-subagent-row"
@@ -613,7 +661,7 @@ export function TimelineItem({
             <span style={{ cursor: "pointer" }}>{expanded ? "▾" : "▸"}</span>{" "}
             <b>◈ sub-agent</b> {d.subAgentType ? `[${d.subAgentType}] ` : ""}
             {summary} <span className="muted">· {it.status}</span>
-            {failed && it.error && <div style={{ color: "#ff4d6d", fontSize: "0.85em" }}>{it.error}</div>}
+            {failed && errText && <div style={{ color: "#ff4d6d", fontSize: "0.85em" }}>{errText}</div>}
             {expanded && (
               <SubAgentBody agentId={agentId} subagentKey={subagentKey} d={d} />
             )}
@@ -623,7 +671,7 @@ export function TimelineItem({
 
       const rawSummary =
         d.type === "shell" ? d.command : d.filePath ?? d.query ?? d.url ?? d.label ?? d.text ?? "";
-      const summaryStr = String(rawSummary).slice(0, 160);
+      const summaryStr = formatToolError(rawSummary).slice(0, 160);
       return (
         <div
           data-testid="tl-tool-row"
@@ -634,7 +682,7 @@ export function TimelineItem({
           <span style={{ cursor: "pointer" }}>{expanded ? "▾" : "▸"}</span>{" "}
           <span className="tool-name">{it.name}</span>{" "}
           <SummaryWithLinks text={summaryStr} />
-          {failed && it.error && <span style={{ color: "#ff4d6d", marginLeft: 4 }}>{it.error}</span>}
+          {failed && errText && <span style={{ color: "#ff4d6d", marginLeft: 4 }}>{errText}</span>}
           {expanded && <ToolDetail it={it} d={d} />}
         </div>
       );
@@ -645,17 +693,17 @@ export function TimelineItem({
         <div className="tl tl-todo">
           {(Array.isArray(it.items) ? it.items : []).map((t: any, i: number) => (
             <div key={i}>
-              {t.completed || t.status === "completed" ? "☑" : t.status === "in_progress" ? "◐" : "☐"} {t.text}
+              {t.completed || t.status === "completed" ? "☑" : t.status === "in_progress" ? "◐" : "☐"} {formatToolError(t.text)}
             </div>
           ))}
         </div>
       );
 
     case "error":
-      return <div className="tl tl-error">{it.message}</div>;
+      return <div className="tl tl-error">{formatToolError(it.message ?? it.error)}</div>;
 
     case "notification":
-      return <div className={`tl tl-note ${it.level}`}>{it.message}</div>;
+      return <div className={`tl tl-note ${it.level}`}>{formatToolError(it.message)}</div>;
 
     default:
       return null;
@@ -887,7 +935,9 @@ export function Timeline({
       )}
       {error && <div className="tl tl-error">{error}</div>}
       {entries.map((e, i) => (
-        <TimelineItem key={e.seqStart ?? i} e={e} agentId={agentId} onParkText={onParkText} />
+        <TimelineErrorBoundary key={e.seqStart ?? i} fallbackLabel={`item #${i}`}>
+          <TimelineItem e={e} agentId={agentId} onParkText={onParkText} />
+        </TimelineErrorBoundary>
       ))}
       <div />
     </div>

@@ -22,7 +22,7 @@ import {
 import { handoffTopicBrainstormClient, parkIdeasInInbox, parkTopicBrainstormClient } from "./IdeaInbox";
 import { providerSpec } from "./pixel";
 import { openAgentInTab, paneOfAgent } from "./panes";
-import { useTimeline, Timeline } from "./Timeline";
+import { useTimeline, Timeline, TimelineErrorBoundary } from "./Timeline";
 import { PermissionCard } from "./PermissionCard";
 import { Composer } from "./Composer";
 import { DrawerHeader } from "./DrawerHeader";
@@ -481,16 +481,22 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
       ))}
 
       <div className="drawer-shell">
-        <Timeline
-          agentId={agent.id}
-          entries={entries}
-          error={error}
-          hasMore={hasMore}
-          loadingMore={loadingMore}
-          loadMore={loadMore}
-          onParkText={(txt) => void parkToInbox(txt, false)}
-        />
-        {dockOpen && <RightDock agent={agent} />}
+        <TimelineErrorBoundary fallbackLabel="timeline">
+          <Timeline
+            agentId={agent.id}
+            entries={entries}
+            error={error}
+            hasMore={hasMore}
+            loadingMore={loadingMore}
+            loadMore={loadMore}
+            onParkText={(txt) => void parkToInbox(txt, false)}
+          />
+        </TimelineErrorBoundary>
+        {dockOpen && (
+          <TimelineErrorBoundary fallbackLabel="dock">
+            <RightDock agent={agent} />
+          </TimelineErrorBoundary>
+        )}
       </div>
 
       {!isBs && inboxToast && (
