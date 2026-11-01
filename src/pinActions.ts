@@ -18,14 +18,15 @@ import {
   type PinLane,
 } from "./pins";
 import { runMarkComplete } from "./pinComplete";
-import { findCrossTeamBrainstorm, getTeams, resolve, saveTeams, type TeamDef } from "./teams";
+import { findCrossTeamBrainstorm, getTeams, resolve, saveTeams, type TeamDef, type TeamsUpdater } from "./teams";
 
 export type OpenPinDeps = {
   /** Agent map to re-check for a live Brainstorm before spawning (defaults to the live Paseo state). */
   agents?: Map<string, PaseoAgent>;
   fetch?: typeof fetch;
   getTeams?: () => TeamDef[];
-  saveTeams?: (next: TeamDef[]) => Promise<unknown>;
+  /** Takes an updater, re-run on the fresh registry if someone else wrote it first. */
+  saveTeams?: (update: TeamsUpdater) => Promise<unknown>;
   /** Called with the spawned agent so the caller can show it before the daemon pushes it (defaults to upsertLocalAgent). */
   onSpawned?: (agent: PaseoAgent) => void;
 };
@@ -120,8 +121,7 @@ async function quickStart(pin: Pin, profile: string, deps: OpenPinDeps): Promise
 
   const used = body.profile || profile;
   if (used !== pin.lane.lastProfile) {
-    const teams = (deps.getTeams ?? getTeams)();
-    await (deps.saveTeams ?? saveTeams)(patchLane(teams, squadId, laneId, { lastProfile: used }));
+    await (deps.saveTeams ?? saveTeams)((cur) => patchLane(cur, squadId, laneId, { lastProfile: used }));
   }
   return newAgentId;
 }
@@ -130,7 +130,7 @@ async function quickStart(pin: Pin, profile: string, deps: OpenPinDeps): Promise
 export async function renamePin(pin: Pin, name: string): Promise<void> {
   const clean = name.trim();
   if (!clean || clean === pin.lane.name) return;
-  await saveTeams(patchLane(getTeams(), pin.squad.id, pin.lane.id, { name: clean }));
+  await saveTeams((cur) => patchLane(cur, pin.squad.id, pin.lane.id, { name: clean }));
 }
 
 // ── Brief editor bus ───────────────────────────────────────────────────────────
@@ -174,7 +174,7 @@ async function appendToBrief(laneId: string, line: string, doFetch: typeof fetch
   await writeBrief(laneId, appendBriefLine(await readBrief(laneId, doFetch), line), doFetch);
 }
 
-export type CompleteDeps = Pick<OpenPinDeps, "fetch" | "getTeams" | "saveTeams"> & {
+export type CompleteDeps = Pick<OpenPinDeps, "fetch" | "saveTeams"> & {
   retire?: typeof retireAgent;
   archive?: (id: string) => Promise<unknown>;
 };
@@ -193,17 +193,14 @@ export function markPinComplete(pin: Pin, deps: CompleteDeps = {}): Promise<{ ok
     writeBrief: (laneId, content) => writeBrief(laneId, content, doFetch),
     retire: deps.retire ?? retireAgent,
     archive: deps.archive ?? archiveAgent,
-    getTeams: deps.getTeams ?? getTeams,
     saveTeams: deps.saveTeams ?? saveTeams,
     skipBrief: DEMO,
   });
 }
 
 /** Put a done team back on the pins. The next click quick-starts a Brainstorm from the same brief (openPin). */
-export async function reopenPin(pin: Pin, deps: Pick<CompleteDeps, "fetch" | "getTeams" | "saveTeams"> = {}): Promise<void> {
-  await (deps.saveTeams ?? saveTeams)(
-    patchLane((deps.getTeams ?? getTeams)(), pin.squad.id, pin.lane.id, { state: "pinned", doneAt: undefined }),
-  );
+export async function reopenPin(pin: Pin, deps: Pick<CompleteDeps, "fetch" | "saveTeams"> = {}): Promise<void> {
+  await (deps.saveTeams ?? saveTeams)((cur) => patchLane(cur, pin.squad.id, pin.lane.id, { state: "pinned", doneAt: undefined }));
   if (!DEMO) await appendToBrief(pin.lane.id, `Reopened ${briefStamp()}`, deps.fetch ?? fetch).catch(() => {});
 }
 
@@ -268,10 +265,13 @@ export async function createPin(squadId: string, name: string, idea: string, dep
   const lane: PinLane = { id: uniqueLaneId(slugLaneId(clean), allLaneIds(teams)), name: clean, state: "pinned", ...(deps.lastProfile ? { lastProfile: deps.lastProfile } : {}) };
   // Brief first: a failed write leaves no half-made pin behind.
   if (!DEMO) await writeBrief(lane.id, newPinBrief(lane.id, clean, idea), deps.fetch ?? fetch);
-  const next = teams.map((t) => (t.id === squadId ? { ...t, lanes: [...t.lanes, lane] } : t));
-  await (deps.saveTeams ?? saveTeams)(next);
+  // The brief write is async, so add the lane to whatever the registry holds by then.
+  let next = teams;
+  await (deps.saveTeams ?? saveTeams)((cur) =>
+    (next = cur.map((t) => (t.id === squadId && !t.lanes.some((l) => l.id === lane.id) ? { ...t, lanes: [...t.lanes, lane] } : t))),
+  );
   return {
-    squad: next.find((t) => t.id === squadId)!,
+    squad: next.find((t) => t.id === squadId) ?? squad,
     lane,
     state: "pinned",
     order: squad.lanes.length,

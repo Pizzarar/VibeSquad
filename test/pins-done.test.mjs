@@ -63,8 +63,7 @@ test("Mark complete is safe to retry after the lead retire throws", async () => 
       retired.push(a.id);
     },
     archive: async () => {},
-    getTeams: () => teams,
-    saveTeams: async (next) => void (teams = next),
+    saveTeams: async (update) => void (teams = update(teams)),
   };
   const bs = { agent: { id: "bs", status: "idle", labels: { profile: "Brainstorm - Gemini" } } };
   const lead = { agent: { id: "lead", status: "idle", labels: {} } };

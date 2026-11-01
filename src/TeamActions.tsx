@@ -9,6 +9,7 @@ import {
   slugifyFeatureLane,
   titleFor,
   type BuddyOverlapLogEntry,
+  type TeamDef,
   type TeamView,
 } from "./teams";
 import { useDraft } from "./drafts";
@@ -156,13 +157,13 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
     setAddProjectErr("");
     try {
       if (!DEMO) await daemonClient.addProject(addProjectPath.trim());
-      const currentTeams = getTeams();
-      const updatedTeams = currentTeams.map((t) =>
-        t.id === team.id && !t.paths.includes(addProjectPath.trim())
-          ? { ...t, paths: [...t.paths, addProjectPath.trim()] }
-          : t,
+      await saveTeams((cur) =>
+        cur.map((t) =>
+          t.id === team.id && !t.paths.includes(addProjectPath.trim())
+            ? { ...t, paths: [...t.paths, addProjectPath.trim()] }
+            : t,
+        ),
       );
-      await saveTeams(updatedTeams);
       setCwd(addProjectPath.trim());
       setAddProjectOpen(false);
       setAddProjectPath("");
@@ -627,20 +628,17 @@ export function AddBuddyModal({
     setBusy(true);
     setErr("");
     try {
-      const currentTeams = getTeams();
-      const targetTeam = currentTeams.find((t) => t.id === team.id);
-      if (
-        targetTeam &&
-        !targetTeam.lanes.some(
+      const hasLane = (t: TeamDef) =>
+        t.lanes.some(
           (l) =>
             l.id.toLowerCase() === laneId.toLowerCase() ||
             Boolean(l.aliases?.some((a) => a.toLowerCase() === laneId.toLowerCase())),
-        )
-      ) {
-        const updatedTeams = currentTeams.map((t) =>
-          t.id === team.id ? { ...t, lanes: [...t.lanes, { id: laneId, name: laneName }] } : t,
         );
-        await saveTeams(updatedTeams);
+      const targetTeam = getTeams().find((t) => t.id === team.id);
+      if (targetTeam && !hasLane(targetTeam)) {
+        await saveTeams((cur) =>
+          cur.map((t) => (t.id === team.id && !hasLane(t) ? { ...t, lanes: [...t.lanes, { id: laneId, name: laneName }] } : t)),
+        );
       }
 
       const r = await spawnTeamAgent({
