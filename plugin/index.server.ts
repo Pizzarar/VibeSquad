@@ -20,7 +20,7 @@ import {
   LEAD_FLAG_DEFAULT,
   LEAD_HARD_CAP_DEFAULT,
   createLeadHandoffCoordinator,
-} from "../server/lead-handoff.mjs";
+} from "@vibesquad/server/lead-handoff.mjs";
 import {
   UNASSIGNED_TEAM_ID,
   effectiveAgentRole,
@@ -32,14 +32,14 @@ import {
   normalizeRoleLabel,
   resolveAgentIdentity,
   topicOf,
-} from "../server/identity.mjs";
-import { refreshWhosHere } from "../server/whos-here.mjs";
+} from "@vibesquad/server/identity.mjs";
+import { refreshWhosHere } from "@vibesquad/server/whos-here.mjs";
 import {
   LEGACY_NEEDS_LABEL,
   LEGACY_USER_TYPE,
   loadUserSettings,
   readJsonFileWithBom,
-} from "../server/user-settings.mjs";
+} from "@vibesquad/server/user-settings.mjs";
 
 type Labels = Record<string, string>;
 type Paseo = any;

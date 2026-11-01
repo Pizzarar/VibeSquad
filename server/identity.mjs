@@ -4,8 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readJsonFileWithBom } from "./user-settings.mjs";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_ROOT = path.resolve(__dirname, "..");
+// import.meta.url is undefined when bundled into the Paseo plugin; fall back like plugin/index.server.ts.
+const DEFAULT_ROOT = path.resolve(process.env.VIBESQUAD_ROOT || (typeof import.meta.url === "string" && import.meta.url ? path.join(path.dirname(fileURLToPath(import.meta.url)), "..") : path.join(os.homedir(), "projects", "VibeSquad")));
 
 function resolveTeamsFilePath(rootDir = DEFAULT_ROOT) {
   if (process.env.VIBESQUAD_TEAMS_FILE) {

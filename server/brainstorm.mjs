@@ -8,7 +8,8 @@ import { findProfile, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
 import { refreshWhosHere } from "./whos-here.mjs";
 
-const REPO_ROOT = resolve(import.meta.dirname, "..");
+// import.meta.dirname is undefined when bundled into the Paseo plugin; fall back like plugin/index.server.ts.
+const REPO_ROOT = resolve(process.env.VIBESQUAD_ROOT || (typeof import.meta.dirname === "string" ? join(import.meta.dirname, "..") : join(homedir(), "projects", "VibeSquad")));
 const MAX_SUMMARY_CHARS = 20_000;
 const MAX_LOG_TEXT = 240;
 

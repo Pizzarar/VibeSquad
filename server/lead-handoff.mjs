@@ -11,7 +11,8 @@ import { effectiveAgentRole, isDigestAgent, isRetiredAgent, ordOf } from "./iden
 import { LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE, readJsonFileWithBom } from "./user-settings.mjs";
 import { findProfile, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 
-const REPO_ROOT = resolve(import.meta.dirname, "..");
+// import.meta.dirname is undefined when bundled into the Paseo plugin; fall back like plugin/index.server.ts.
+const REPO_ROOT = resolve(process.env.VIBESQUAD_ROOT || (typeof import.meta.dirname === "string" ? join(import.meta.dirname, "..") : join(homedir(), "projects", "VibeSquad")));
 
 export const LEAD_FLAG_DEFAULT = 150_000;
 export const LEAD_AUTO_HANDOFF_DEFAULT = 250_000;
