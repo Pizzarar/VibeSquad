@@ -1,6 +1,7 @@
 export type IdeaLane = { id: string; name: string; aliases?: string[]; state?: string };
 export function slugLaneId(name: string): string;
 export function uniqueLaneId(base: string, taken: Iterable<string>): string;
+export function takenLaneIds(lanes: { id: string; aliases?: string[] }[]): string[];
 export function ideaWords(text: string): string[];
 export const OVERLAP_THRESHOLD: number;
 export function overlapScore(text: string, lane: IdeaLane): number;

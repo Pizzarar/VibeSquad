@@ -24,6 +24,11 @@ export function uniqueLaneId(base, taken) {
   }
 }
 
+/** Every lane id and alias (lowercase) across the given lane defs: what a new lane id must not collide with. */
+export function takenLaneIds(lanes) {
+  return lanes.flatMap((l) => [l.id, ...(l.aliases ?? [])]).map((s) => String(s).toLowerCase());
+}
+
 const STOP = new Set(
   "a an and are as at be but by can do for from get how i if in into is it its just me my new of on or our so some that the then this to up we what when with x thought think idea team teams".split(" "),
 );

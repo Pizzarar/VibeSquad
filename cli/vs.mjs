@@ -33,7 +33,7 @@ import {
   triageInboxCards,
 } from "../server/inbox.mjs";
 import { createDaemonClient, readBrainstormSummary, writeBrainstormSummary } from "../server/brainstorm.mjs";
-import { bestOverlap, newPinBrief, slugLaneId, uniqueLaneId } from "../server/pin-ideas.mjs";
+import { bestOverlap, newPinBrief, slugLaneId, takenLaneIds, uniqueLaneId } from "../server/pin-ideas.mjs";
 import {
   UNASSIGNED_TEAM_ID,
   effectiveAgentRole as resolveEffectiveAgentRole,
@@ -1757,14 +1757,17 @@ function commandPin(flags) {
   if (!squadDef) throw new Error(`unknown squad "${flags.team ?? identity.team.name}". Pass --team <squad>.`);
   const lanes = squadDef.lanes ?? [];
 
-  const same = lanes.find((l) => String(l.name).toLowerCase() === name.toLowerCase() || l.id === slugLaneId(name));
-  const hit = same ? { lane: same } : flags.force ? null : bestOverlap(name, lanes);
+  // Done teams never count as a match; --force skips the refusal entirely (ids still dedupe below).
+  const live = lanes.filter((l) => l.state !== "done");
+  const same = live.find((l) => String(l.name).toLowerCase() === name.toLowerCase() || l.id === slugLaneId(name));
+  const hit = flags.force ? null : same ? { lane: same } : bestOverlap(`${name}
+${brief}`, live);
   if (hit) {
     process.stderr.write(`Sounds like ${hit.lane.name} (${hit.lane.id}) in ${squadDef.name}. Use that Team${same ? "" : ", or re-run with --force to pin a new one"}.\n`);
     return 1;
   }
 
-  const taken = new Set(TEAM_DEFS.flatMap((t) => (t.lanes ?? []).map((l) => String(l.id).toLowerCase())));
+  const taken = new Set(takenLaneIds(TEAM_DEFS.flatMap((t) => t.lanes ?? [])));
   let id = uniqueLaneId(slugLaneId(name), taken);
   // Lane ids and brief files are global: skip ids that still have a brief on disk.
   while (fs.existsSync(readBrainstormSummary(id).fullPath)) {

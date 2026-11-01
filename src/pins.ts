@@ -189,6 +189,7 @@ export const appendBriefLine = (brief: string, line: string): string => `${brief
 
 // ── Step 6: idea capture (docs/PLAN_PINNED_FEATURES.md §5) ────────────────────
 // Shared with `vs pin new` (cli/vs.mjs), so the pure helpers live in server/pin-ideas.mjs.
+import { takenLaneIds } from "../server/pin-ideas.mjs";
 export {
   bestOverlap,
   nameFromIdea,
@@ -198,8 +199,9 @@ export {
   parseSendTo,
   SEND_TO_MARKER,
   slugLaneId,
+  takenLaneIds,
   uniqueLaneId,
 } from "../server/pin-ideas.mjs";
 
-/** Every lane id in every squad (lane ids and brief files are global). */
-export const allLaneIds = (teams: TeamDef[]): string[] => teams.flatMap((t) => t.lanes.map((l) => l.id));
+/** Every lane id and alias in every squad (lane ids and brief files are global). */
+export const allLaneIds = (teams: TeamDef[]): string[] => takenLaneIds(teams.flatMap((t) => t.lanes));

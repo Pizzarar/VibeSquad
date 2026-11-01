@@ -9,7 +9,7 @@ import { allLaneIds, bestOverlap, nameFromIdea, newPinBrief, parseSendTo, slugLa
 const lanes = [
   { id: "scav-ui", name: "Scavenging UI" },
   { id: "audio", name: "Audio", aliases: ["sound"] },
-  { id: "old", name: "Crafting", state: "done" },
+  { id: "fishing", name: "Fishing", state: "done" },
   { id: "_other", name: "Other" },
 ];
 
@@ -21,6 +21,8 @@ test("slug and dedupe", () => {
   assert.equal(uniqueLaneId("audio", ["Audio", "audio-2"]), "audio-3");
   assert.equal(uniqueLaneId("fresh", ["audio"]), "fresh");
   assert.deepEqual(allLaneIds([{ lanes: [{ id: "a" }] }, { lanes: [{ id: "b" }, { id: "c" }] }]), ["a", "b", "c"]);
+  const taken = allLaneIds([{ lanes: [{ id: "audio", aliases: ["Sound"] }] }]);
+  assert.equal(uniqueLaneId(slugLaneId("Sound"), taken), "sound-2");
 });
 
 test("overlap offers the existing pinned team, weighted by the distinctive word", () => {
@@ -70,6 +72,24 @@ test("vs pin new writes the lane and brief, refuses overlaps", () => {
     assert.match(readFileSync(join(root, "docs", "brainstorm", "crafting-tree.md"), "utf8"), /## Open\n- tiers/);
 
     assert.equal(vs("Crafting tree", "--team", "efi").status, 1); // duplicate
+
+    // the brief text drives the overlap match
+    const byBrief = vs("Rarity colors", "--brief", "Show loot rarity colors on the scavenging results page", "--team", "efi");
+    assert.equal(byBrief.status, 1);
+    assert.match(byBrief.stderr, /Sounds like Scavenging UI/);
+
+    // --force skips the refusal; alias "sound" blocks the slug, so the id gets -2
+    const forced = vs("Sound", "--brief", "x", "--team", "efi", "--force");
+    assert.equal(forced.status, 0, forced.stderr);
+    assert.equal(JSON.parse(readFileSync(join(home, "teams.json"), "utf8")).teams[0].lanes.at(-1).id, "sound-2");
+
+    // done teams never match, even on an exact name, with or without --force
+    const cur = JSON.parse(readFileSync(join(home, "teams.json"), "utf8"));
+    cur.teams[0].lanes.push({ id: "fishing", name: "Fishing", state: "done" });
+    writeFileSync(join(home, "teams.json"), JSON.stringify(cur));
+    const reborn = vs("Fishing", "--brief", "again", "--team", "efi");
+    assert.equal(reborn.status, 0, reborn.stderr);
+    assert.equal(JSON.parse(readFileSync(join(home, "teams.json"), "utf8")).teams[0].lanes.at(-1).id, "fishing-2");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
