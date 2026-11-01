@@ -3,9 +3,10 @@
 // stays in a scrollable right rail in fixed pin order. Clicking a rail tile swaps it in. Needs-you is
 // a badge and never reorders the rail. The bar on top of the drawer is the only route to the plumbing.
 import { memo, useEffect, useLayoutEffect, useRef } from "react";
-import { useDraft } from "./drafts";
+import { getDraft, useDraft } from "./drafts";
 import { NeedsBadge, PinDot, setFullView, usePreview } from "./PinGrid";
 import { exitPinFocus, type PinFocus } from "./pinFocus";
+import { escGoesHome } from "./pinFocusLogic";
 import { pinsForSquad, type Pin } from "./pins";
 import { openAgent } from "./panes";
 import type { TeamView } from "./teams";
@@ -22,8 +23,12 @@ function animate(el: Element | null | undefined, frames: Keyframe[]) {
 const statusWord = (status: string) => (status === "running" || status === "error" ? status : "idle");
 
 // ── Rail tile ────────────────────────────────────────────────────────────────
-const RailTile = memo(function RailTile({ pin, focused, onPick }: { pin: Pin; focused: boolean; onPick: (pin: Pin) => void }) {
+const RailTile = memo(function RailTile(props: { pin: Pin; focused: boolean; gone: boolean; onPick: (pin: Pin) => void }) {
+  const { pin, focused, gone, onPick } = props;
   const bs = pin.brainstorm;
+  // The focused tile is inert while its Brainstorm is in the middle; once that Brainstorm is gone it
+  // is the one-click fresh start.
+  const clickable = !focused || gone;
   const lines = usePreview(bs?.agent.id ?? null);
   const [draft] = useDraft(bs ? `${bs.agent.id}:draft` : "pin-rail:none");
   const last = lines[lines.length - 1];
@@ -42,11 +47,13 @@ const RailTile = memo(function RailTile({ pin, focused, onPick }: { pin: Pin; fo
     <button
       ref={ref}
       type="button"
-      className={`pin-rail-tile ${focused ? "on" : ""} ${bs ? "" : "no-session"} ${pin.needsYou ? "needs-you" : ""}`}
+      className={`pin-rail-tile ${focused ? "on" : ""} ${clickable ? "" : "inert"} ${bs ? "" : "no-session"} ${pin.needsYou ? "needs-you" : ""}`}
       data-testid={`pin-rail-${pin.lane.id}`}
       aria-current={focused ? "true" : undefined}
-      title={focused ? `${pin.lane.name} is open` : bs ? `Open ${pin.lane.name}` : `${pin.lane.name}: no session yet · click to start`}
-      onClick={() => !focused && onPick(pin)}
+      title={
+        focused && !gone ? `${pin.lane.name} is open` : bs ? `Open ${pin.lane.name}` : `${pin.lane.name}: no session · click to start a fresh Brainstorm`
+      }
+      onClick={() => clickable && onPick(pin)}
     >
       <Avatar id={bs ? bs.agent.id : `bs-empty-${pin.squad.id}-${pin.lane.id}`} provider={bs?.agent.provider ?? "claude"} agentType="brainstorm" size={28} />
       <span className="pin-rail-col">
@@ -60,7 +67,7 @@ const RailTile = memo(function RailTile({ pin, focused, onPick }: { pin: Pin; fo
           )}
         </span>
         <span className="pin-rail-line muted small">
-          {focused ? "Open in the middle" : !bs ? "No session yet" : last ? `${last.who === "you" ? "you: " : ""}${last.text}` : "No messages yet"}
+          {focused && gone ? "Start fresh Brainstorm" : focused ? (bs ? "Open in the middle" : "Starting…") : !bs ? "No session yet" : last ? `${last.who === "you" ? "you: " : ""}${last.text}` : "No messages yet"}
         </span>
       </span>
       <NeedsBadge pin={pin} />
@@ -79,7 +86,7 @@ export function PinRail({ view, focus, onPick }: { view: TeamView; focus: PinFoc
       </div>
       <div className="pin-rail-list">
         {pinned.map((p) => (
-          <RailTile key={p.lane.id} pin={p} focused={p.lane.id === focus.laneId} onPick={onPick} />
+          <RailTile key={p.lane.id} pin={p} focused={p.lane.id === focus.laneId} gone={focus.gone} onPick={onPick} />
         ))}
       </div>
     </aside>
@@ -90,7 +97,7 @@ export function PinRail({ view, focus, onPick }: { view: TeamView; focus: PinFoc
 const isTyping = (t: EventTarget | null) =>
   t instanceof HTMLElement && (t.isContentEditable || t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.tagName === "SELECT");
 
-export function PinFocusBar({ view, focus }: { view: TeamView; focus: PinFocus }) {
+function PinFocusBar({ view, focus }: { view: TeamView; focus: PinFocus }) {
   const pin = pinsForSquad(view).pinned.find((p) => p.lane.id === focus.laneId);
   const agentIdRef = useRef(focus.agentId);
   agentIdRef.current = focus.agentId;
@@ -99,14 +106,18 @@ export function PinFocusBar({ view, focus }: { view: TeamView; focus: PinFocus }
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented || e.isComposing) return;
-      if (document.querySelector(".modal-back, [role='dialog']")) return;
-      const t = e.target;
-      if (isTyping(t) && ((t as HTMLInputElement).value ?? (t as HTMLElement).textContent ?? "").trim()) return;
-      // A half-written message in the focused drawer keeps you there, wherever keyboard focus is.
+      const t = e.target instanceof HTMLElement ? e.target : null;
+      const inComposer = !!t?.closest(".composer");
       const id = agentIdRef.current;
-      const composer = id ? document.querySelector<HTMLTextAreaElement>(`.agent-panes .pane-slot[data-agent="${CSS.escape(id)}"] textarea`) : null;
-      if (composer?.value.trim()) return;
-      exitPinFocus();
+      // A half-written message in the focused drawer keeps you there, wherever keyboard focus is.
+      const draft = (id ? getDraft(`${id}:draft`) : "") + (inComposer && isTyping(t) ? ((t as HTMLTextAreaElement).value ?? "") : "");
+      const home = escGoesHome({
+        inModal: !!document.querySelector(".modal-back, [role='dialog']"),
+        inPerm: !!t?.closest(".perm"),
+        target: isTyping(t) ? (inComposer ? "composer" : "field") : "none",
+        draft,
+      });
+      if (home) exitPinFocus();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -134,7 +145,6 @@ export function PinFocusBar({ view, focus }: { view: TeamView; focus: PinFocus }
       </button>
       <span className="pin-focus-name">{pin?.lane.name ?? focus.laneId}</span>
       <span className="muted small pin-focus-squad">{view.team.name}</span>
-      {!focus.agentId && <span className="pin-focus-starting small">Starting a fresh Brainstorm from the brief…</span>}
       <span className="pin-focus-spacer" />
       <button
         type="button"
@@ -146,5 +156,32 @@ export function PinFocusBar({ view, focus }: { view: TeamView; focus: PinFocus }
         Lead: {lead ? statusWord(lead.agent.status) : "none"} · {workers} {workers === 1 ? "worker" : "workers"} ▸
       </button>
     </div>
+  );
+}
+
+/** Row 1 of the focused middle: the bar, plus the "Start fresh" panel when the Brainstorm is gone. */
+export function PinFocusHeader(props: { view: TeamView; focus: PinFocus; onStart: (pin: Pin) => void }) {
+  const { view, focus, onStart } = props;
+  const pin = pinsForSquad(view).pinned.find((p) => p.lane.id === focus.laneId);
+  return (
+    <>
+      <PinFocusBar view={view} focus={focus} />
+      {!focus.agentId && (
+        <div className="pin-focus-empty" data-testid="pin-focus-empty">
+          {focus.gone ? (
+            <>
+              <span className="muted">{pin?.lane.name ?? "This team"}'s Brainstorm has ended. The brief keeps what was decided.</span>
+              {pin && (
+                <button type="button" className="btn ok" data-testid="pin-start-fresh" onClick={() => onStart(pin)}>
+                  Start fresh Brainstorm
+                </button>
+              )}
+            </>
+          ) : (
+            <span className="muted">Starting a fresh Brainstorm from the brief…</span>
+          )}
+        </div>
+      )}
+    </>
   );
 }

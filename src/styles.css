@@ -3134,7 +3134,12 @@ html, body, #root { overflow-x: hidden; }
 .app.pins-home { grid-template-columns: var(--sidebar-w, 265px) minmax(0, 1fr); }
 .app.pins-home.sidebar-collapsed { grid-template-columns: 56px minmax(0, 1fr); }
 .app.pins-home > .agent-panes { display: none; }
-.app.pin-starting .agent-panes .pane-slot { display: none !important; }
+/* Starting, or the Brainstorm is gone: no drawer in the middle, the header's panel takes row 2. */
+.app.pin-no-drawer .agent-panes .pane-slot { display: none !important; }
+.pin-focus-empty {
+  grid-row: 2; grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; padding: 24px; text-align: center;
+}
 
 .pin-focus-bar {
   grid-row: 1; grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; height: 40px; min-width: 0;
@@ -3143,7 +3148,6 @@ html, body, #root { overflow-x: hidden; }
 .pin-focus-home { font-size: 16px; padding: 2px 8px; }
 .pin-focus-name { font-family: var(--display); font-size: 14px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pin-focus-squad { white-space: nowrap; }
-.pin-focus-starting { color: var(--amber); }
 .pin-focus-spacer { flex: 1; }
 .pin-focus-plumbing {
   flex: none; background: transparent; border: 1px solid transparent; color: var(--muted);
@@ -3168,7 +3172,8 @@ html, body, #root { overflow-x: hidden; }
   border-left: 2px solid var(--violet); color: var(--text); font: inherit; text-align: left; cursor: pointer;
 }
 .pin-rail-tile:hover, .pin-rail-tile:focus-visible { border-color: var(--cyan); outline: none; }
-.pin-rail-tile.on { border-color: var(--cyan); box-shadow: inset 3px 0 0 var(--cyan); background: #00f0ff12; cursor: default; }
+.pin-rail-tile.on { border-color: var(--cyan); box-shadow: inset 3px 0 0 var(--cyan); background: #00f0ff12; }
+.pin-rail-tile.inert { cursor: default; }
 .pin-rail-tile.needs-you { border-left-color: var(--hot-pink); }
 .pin-rail-tile.no-session { border-left-color: var(--slate); border-style: dashed; }
 .pin-rail-tile .avatar { flex: none; }

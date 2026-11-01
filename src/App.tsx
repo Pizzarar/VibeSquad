@@ -72,7 +72,7 @@ import { WorkspacesView } from "./WorkspacesView";
 import { FullToggle, PinGrid, SidebarPins, useFullView, type PinHandler } from "./PinGrid";
 import { pinsForSquad, type Pin } from "./pins";
 import { clearPinFocus, exitPinFocus, focusPin, usePinFocus, usePinsHome } from "./pinFocus";
-import { PinFocusBar, PinRail } from "./PinRail";
+import { PinFocusHeader, PinRail } from "./PinRail";
 import { AddBuddyModal, Modal, NewAgentModal, ProfileImportModal, TeamSettingsModal, useProfiles } from "./TeamActions";
 import { PairDeviceModal } from "./PairDeviceModal";
 import { BriefEditorHost } from "./BriefEditor";
@@ -1621,7 +1621,7 @@ export function App() {
 
   return (
     <div
-      className={`app ${focus ? "focus" : ""} ${withPanes ? "with-panes" : ""} ${split && withPanes ? "split" : ""} ${pinFocused ? `pin-focus ${pinFocus?.agentId ? "" : "pin-starting"}` : ""} ${hidePanes ? "pins-home" : ""} ${sheet ? "sheet-open" : ""} ${mobileTeamView ? "mobile-team-view" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
+      className={`app ${focus ? "focus" : ""} ${withPanes ? "with-panes" : ""} ${split && withPanes ? "split" : ""} ${pinFocused ? `pin-focus ${pinFocus?.agentId ? "" : "pin-no-drawer"}` : ""} ${hidePanes ? "pins-home" : ""} ${sheet ? "sheet-open" : ""} ${mobileTeamView ? "mobile-team-view" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
       style={{ "--sidebar-w": `${sidebarWidth}px` } as React.CSSProperties}
     >
       {exposedIps.length > 0 && (
@@ -1753,7 +1753,7 @@ export function App() {
       {(hasTabs || focus || pinFocused) && (
         <AgentPanes
           onSuccessor={paneSuccessor}
-          header={pinFocusView && pinFocus ? <PinFocusBar view={pinFocusView} focus={pinFocus} /> : undefined}
+          header={pinFocusView && pinFocus ? <PinFocusHeader view={pinFocusView} focus={pinFocus} onStart={onRailPick} /> : undefined}
         />
       )}
       {pinFocusView && pinFocus && <PinRail view={pinFocusView} focus={pinFocus} onPick={onRailPick} />}
