@@ -168,6 +168,44 @@ const LEGACY_ALIASES: Record<string, string> = {
   "Brainstorm - Opus": "Brainstorm - Claude",
 };
 
+export interface ProfileMatch {
+  profile: StoredProfile;
+  /** True only when the caller named the profile (config.profile, `profile` label, VS_PROFILE). */
+  explicit: boolean;
+}
+
+export function matchStoredProfile(
+  profileHint?: string,
+  provider?: string,
+  title?: string | null,
+  role?: string,
+  profiles = loadStoredProfiles(),
+): ProfileMatch | null {
+  if (!profiles.length) return null;
+  const rawHint = (profileHint ?? "").trim();
+  const mappedHint = LEGACY_ALIASES[rawHint] || rawHint;
+  if (mappedHint) {
+    const exact = profiles.find((p) => p.name === mappedHint || p.name.toLowerCase() === mappedHint.toLowerCase());
+    if (exact) return { profile: exact, explicit: true };
+  }
+  const fuzzy = (profile: StoredProfile | undefined) => (profile ? { profile, explicit: false } : null);
+  const cleanTitle = (title ?? "").trim();
+  if (cleanTitle) {
+    const byTitle = profiles.find((p) => cleanTitle.toLowerCase().startsWith(p.name.toLowerCase()));
+    if (byTitle) return fuzzy(byTitle);
+  }
+  const isAgy = (provider ?? "").startsWith("antigravity-cli");
+  if (role === "lead") {
+    const want = isAgy ? "Lead - Gemini" : "Lead - Claude";
+    return fuzzy(profiles.find((p) => p.name === want));
+  }
+  if (role === "brainstorm") {
+    const want = isAgy ? "Brainstorm - Gemini" : "Brainstorm - Claude";
+    return fuzzy(profiles.find((p) => p.name === want));
+  }
+  return null;
+}
+
 export function resolveStoredProfile(
   profileHint?: string,
   provider?: string,
@@ -175,28 +213,46 @@ export function resolveStoredProfile(
   role?: string,
   profiles = loadStoredProfiles(),
 ): StoredProfile | null {
-  if (!profiles.length) return null;
-  const rawHint = (profileHint ?? "").trim();
-  const mappedHint = LEGACY_ALIASES[rawHint] || rawHint;
-  if (mappedHint) {
-    const exact = profiles.find((p) => p.name === mappedHint || p.name.toLowerCase() === mappedHint.toLowerCase());
-    if (exact) return exact;
-  }
-  const cleanTitle = (title ?? "").trim();
-  if (cleanTitle) {
-    const byTitle = profiles.find((p) => cleanTitle.toLowerCase().startsWith(p.name.toLowerCase()));
-    if (byTitle) return byTitle;
-  }
-  const isAgy = (provider ?? "").startsWith("antigravity-cli");
-  if (role === "lead") {
-    const want = isAgy ? "Lead - Gemini" : "Lead - Claude";
-    return profiles.find((p) => p.name === want) ?? null;
-  }
-  if (role === "brainstorm") {
-    const want = isAgy ? "Brainstorm - Gemini" : "Brainstorm - Claude";
-    return profiles.find((p) => p.name === want) ?? null;
-  }
-  return null;
+  return matchStoredProfile(profileHint, provider, title, role, profiles)?.profile ?? null;
+}
+
+export type ProfileField = "provider" | "model" | "mode" | "thinking";
+
+export interface ProfileFieldDiff {
+  field: ProfileField;
+  caller: string;
+  profile: string;
+}
+
+/** "claude/opus" → { provider: "claude", model: "opus" }; a separate model wins. */
+export function splitProviderModel(provider?: string | null, model?: string | null): { provider: string; model: string } {
+  const raw = String(provider ?? "").trim();
+  const slash = raw.indexOf("/");
+  if (slash < 0) return { provider: raw, model: String(model ?? "").trim() };
+  return { provider: raw.slice(0, slash), model: String(model ?? "").trim() || raw.slice(slash + 1) };
+}
+
+/**
+ * Fields where an explicit profile and the caller disagree. Only fields the profile
+ * sets count; `caller` is "" when the caller left the field blank (a fill, not a clash).
+ */
+export function profileFieldDiffs(
+  caller: { provider?: string | null; model?: string | null; modeId?: string | null; thinkingOptionId?: string | null },
+  profile: StoredProfile,
+): ProfileFieldDiff[] {
+  const c = splitProviderModel(caller.provider, caller.model);
+  const p = splitProviderModel(profile.provider, profile.model);
+  const pairs: [ProfileField, string, string][] = [
+    ["provider", c.provider, p.provider],
+    ["model", c.model, p.model],
+    ["mode", String(caller.modeId ?? "").trim(), String(profile.modeId ?? "").trim()],
+    ["thinking", String(caller.thinkingOptionId ?? "").trim(), String(profile.thinkingOptionId ?? "").trim()],
+  ];
+  return pairs.filter(([, cv, pv]) => pv && cv !== pv).map(([field, cv, pv]) => ({ field, caller: cv, profile: pv }));
+}
+
+export function profileOverrideMetric(agent: string, profile: string, d: ProfileFieldDiff, suffix = ""): string {
+  return `profile-override: agent=${agent || "(unnamed)"} profile=${profile} field=${d.field} caller=${d.caller || "(none)"} profile=${d.profile}${suffix ? ` ${suffix}` : ""}`;
 }
 
 function resolveTeamsFilePath(): string {
@@ -560,6 +616,42 @@ export interface Deps {
   briefRoot?: string;
   /** Grace before a retired Buddy is archived, so an in-flight turn is not killed mid-stream. */
   brainstormArchiveGraceMs?: number;
+  /** Post-spawn profile fix: the plugin SDK has no model/mode/thinking setters, so this goes via the daemon client. */
+  applyAgentSettings?(agentId: string, patch: AgentSettingsPatch): Promise<void>;
+  /** Stop and archive an agent that must not run (e.g. wrong provider for its explicit profile). */
+  refuseAgent?(agentId: string): Promise<void>;
+}
+
+export interface AgentSettingsPatch {
+  model?: string;
+  modeId?: string;
+  thinkingOptionId?: string;
+}
+
+async function withDaemonClient<T>(fn: (client: any) => Promise<T>): Promise<T> {
+  const { createDaemonClient } = await import("@vibesquad/server/brainstorm.mjs");
+  const client: any = createDaemonClient();
+  await client.connect();
+  try {
+    return await fn(client);
+  } finally {
+    await client.close().catch(() => {});
+  }
+}
+
+function daemonApplyAgentSettings(agentId: string, patch: AgentSettingsPatch): Promise<void> {
+  return withDaemonClient(async (client) => {
+    if (patch.model) await client.setAgentModel(agentId, patch.model);
+    if (patch.modeId) await client.setAgentMode(agentId, patch.modeId);
+    if (patch.thinkingOptionId) await client.setAgentThinkingOption(agentId, patch.thinkingOptionId);
+  });
+}
+
+function daemonRefuseAgent(agentId: string): Promise<void> {
+  return withDaemonClient(async (client) => {
+    await client.cancelAgent(agentId).catch(() => {});
+    await client.archiveAgent(agentId);
+  });
 }
 
 /** cmd.exe splits on whitespace and treats `&|<>^` as syntax; quote such args for the shell. */
@@ -611,6 +703,8 @@ function cliArchive(agentId: string): Promise<void> {
 const DEFAULT_DEPS: Deps = {
   setLabels: cliSetLabels,
   archiveAgent: cliArchive,
+  applyAgentSettings: daemonApplyAgentSettings,
+  refuseAgent: daemonRefuseAgent,
   debounceMs: 3000,
   retryBaseMs: 5000,
   watchIntervalMs: 1500,
@@ -674,6 +768,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           title: payload.title,
           prompt: payload.prompt,
           labels: payload.labels,
+          ...(payload.env ? { env: payload.env } : {}),
         });
         const created = handle?.agent ?? handle;
         return created ? { ...created, id: created.id ?? handle?.id } : null;
@@ -742,6 +837,80 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
 
     const recentBeforeMismatches = new Map<string, number>();
 
+    const logProfileMetric = (labels: Labels, cwd: string, text: string, refs: string[] = []) => {
+      const where = teamOf(labels, cwd);
+      if (!where) return log(text);
+      try {
+        appendLog(where.team, { agent: "plugin", lane: where.lane, type: "metric", text, refs });
+      } catch (err) {
+        log(`profile metric write failed: ${err}`);
+      }
+    };
+
+    /**
+     * Labels never reach before(agent.create), so a spawn that names its profile only by
+     * label (MCP create_agent, `paseo run --label profile=`) is fixed here, after the
+     * session exists. Model/mode/thinking are switched; a wrong provider can't be, so the
+     * agent is stopped and archived rather than left running on the wrong provider.
+     */
+    const enforceProfileAfterSpawn = async (agent: any, me: AgentSnap | null, labels: Labels): Promise<"refused" | void> => {
+      const hint = String(labels.profile ?? "").trim();
+      if (!hint) return;
+      const match = matchStoredProfile(hint);
+      if (!match?.explicit) return;
+      const profile = match.profile;
+      const s: any = me ?? {};
+      const actual = {
+        provider: s.provider ?? agent.provider,
+        model: s.model ?? null,
+        modeId: s.currentModeId ?? s.modeId ?? null,
+        thinkingOptionId: s.thinkingOptionId ?? null,
+      };
+      const diffs = profileFieldDiffs(actual, profile);
+      if (!diffs.length) return;
+      const name = agent.title || agent.id;
+      const cwd = agent.cwd ?? s.cwd ?? "";
+      const refs = agent.id ? [agent.id] : [];
+      const fresh = (d: ProfileFieldDiff) => {
+        const key = `profile:${agent.title ?? ""}:${d.field}`;
+        const ts = recentBeforeMismatches.get(key);
+        if (ts && Date.now() - ts < 5000) {
+          recentBeforeMismatches.delete(key);
+          return false;
+        }
+        return true;
+      };
+      if (String(labels["profile-override"] ?? "").trim()) {
+        for (const d of diffs.filter((x) => x.caller && fresh(x))) {
+          logProfileMetric(labels, cwd, profileOverrideMetric(name, profile.name, d, "kept=caller"), refs);
+        }
+        return;
+      }
+      const providerDiff = diffs.find((d) => d.field === "provider");
+      if (providerDiff) {
+        logProfileMetric(labels, cwd, profileOverrideMetric(name, profile.name, providerDiff, "action=refused"), refs);
+        log(`refusing ${agent.id}: profile ${profile.name} wants provider ${providerDiff.profile}, agent runs ${providerDiff.caller}`);
+        await (deps.refuseAgent ?? deps.archiveAgent)(agent.id).catch((e) => log(`refuse failed for ${agent.id}: ${e}`));
+        return "refused";
+      }
+      const patch: AgentSettingsPatch = {};
+      for (const d of diffs) {
+        if (d.field === "model") patch.model = d.profile;
+        if (d.field === "mode") patch.modeId = d.profile;
+        if (d.field === "thinking") patch.thinkingOptionId = d.profile;
+      }
+      for (const d of diffs.filter((x) => x.caller && fresh(x))) {
+        logProfileMetric(labels, cwd, profileOverrideMetric(name, profile.name, d), refs);
+      }
+      log(
+        `profile override (post-spawn): ${agent.id} ${profile.name} ` +
+          diffs.map((d) => `${d.field} ${d.caller || "-"}→${d.profile}`).join(" "),
+      );
+      if (deps.applyAgentSettings) {
+        await deps.applyAgentSettings(agent.id, patch).catch((e) => log(`profile settings fix failed for ${agent.id}: ${e}`));
+      }
+    };
+
     // ---- Hook 1: before agent.create ---------------------------------------
 
     stops.push(
@@ -767,12 +936,15 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
                 ? "worker"
                 : "";
 
-        const matchedProfile = resolveStoredProfile(
-          config.profile || reqLabels.profile || env?.VS_PROFILE,
-          provider,
-          title,
-          explicitRole || "worker",
-        );
+        // Paseo hands this hook only { config, env }: spawn labels never arrive here, so
+        // VibeSquad's own spawn paths also pass env VS_PROFILE. Label-only spawns are
+        // corrected in agent.created instead.
+        const profileHint = config.profile || reqLabels.profile || env?.VS_PROFILE;
+        const profileMatch = matchStoredProfile(profileHint, provider, title, explicitRole || "worker");
+        const matchedProfile = profileMatch?.profile ?? null;
+        if (String(profileHint ?? "").trim() && !profileMatch?.explicit) {
+          log(`profile "${profileHint}" named by spawn "${title}" is not in profiles.json; caller settings kept`);
+        }
 
         const role = explicitRole || matchedProfile?.role || "worker";
 
@@ -881,7 +1053,49 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           }
         }
 
-        if (matchedProfile) {
+        const keepCaller = Boolean(String(reqLabels["profile-override"] || env?.VS_PROFILE_OVERRIDE || "").trim());
+        if (matchedProfile && profileMatch?.explicit && !keepCaller) {
+          // An explicitly named profile wins over the caller's provider/model/mode/thinking.
+          const diffs = profileFieldDiffs(config, matchedProfile);
+          const want = splitProviderModel(matchedProfile.provider, matchedProfile.model);
+          const callerPm = splitProviderModel(config.provider, config.model);
+          const providerSwapped = !!want.provider && want.provider !== callerPm.provider;
+          // A swapped provider can't keep the caller's model/mode/thinking: they belong to the old one.
+          if (want.provider) next.provider = want.provider;
+          const model = want.model || (providerSwapped ? "" : callerPm.model);
+          if (model) next.model = model;
+          else delete next.model;
+          if (matchedProfile.modeId) next.modeId = matchedProfile.modeId;
+          else if (providerSwapped) delete next.modeId;
+          if (matchedProfile.thinkingOptionId) next.thinkingOptionId = matchedProfile.thinkingOptionId;
+          else if (providerSwapped) delete next.thinkingOptionId;
+          if (matchedProfile.featureValues && Object.keys(matchedProfile.featureValues).length > 0) {
+            next.featureValues = { ...(next.featureValues ?? {}), ...matchedProfile.featureValues };
+          }
+          changed = true;
+          const clashes = diffs.filter((d) => d.caller);
+          if (clashes.length > 0) {
+            const pick = (f: ProfileField) => clashes.find((d) => d.field === f);
+            const pm = pick("provider") || pick("model");
+            const mode = pick("mode");
+            log(
+              `profile override: ${matchedProfile.name}` +
+                (pm ? ` provider/model ${callerPm.provider}/${callerPm.model || "-"}→${want.provider}/${want.model || "-"}` : "") +
+                (mode ? ` mode ${mode.caller}→${mode.profile}` : "") +
+                (pick("thinking") ? ` thinking ${pick("thinking")!.caller}→${pick("thinking")!.profile}` : ""),
+            );
+            for (const d of clashes) {
+              recentBeforeMismatches.set(`profile:${title}:${d.field}`, Date.now());
+              logProfileMetric(reqLabels, cwd, profileOverrideMetric(title, matchedProfile.name, d));
+            }
+          }
+        } else if (matchedProfile) {
+          if (profileMatch?.explicit && keepCaller) {
+            for (const d of profileFieldDiffs(config, matchedProfile).filter((x) => x.caller)) {
+              recentBeforeMismatches.set(`profile:${title}:${d.field}`, Date.now());
+              logProfileMetric(reqLabels, cwd, profileOverrideMetric(title, matchedProfile.name, d, "kept=caller"));
+            }
+          }
           if (!next.modeId && matchedProfile.modeId) {
             next.modeId = matchedProfile.modeId;
             changed = true;
@@ -899,8 +1113,10 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           }
         }
 
-        // A1: Antigravity must never hang on an unsurfaced permission prompt.
-        if (provider.startsWith("antigravity-cli")) {
+        // A1: Antigravity must never hang on an unsurfaced permission prompt. Keyed on the
+        // final provider, after any profile override.
+        const finalProvider = String(next.provider ?? provider);
+        if (finalProvider.startsWith("antigravity-cli")) {
           const fv = { ...(next.featureValues ?? {}) };
           if (!fv.approvalPolicy || fv.approvalPolicy === "agy") fv.approvalPolicy = "skip";
           if (fv.approvalPolicy !== config.featureValues?.approvalPolicy) {
@@ -944,7 +1160,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
                 agent: "plugin",
                 lane: where.lane,
                 type: "metric",
-                text: `prompt-injection role=${role} provider=${provider} chars=${prefix.length}`,
+                text: `prompt-injection role=${role} provider=${finalProvider} chars=${prefix.length}`,
               });
             } catch (err) {
               log(`metric write failed: ${err}`);
@@ -1000,6 +1216,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         paseoApi = paseo;
         try {
           const { snap: me, labels } = await labelsFor(paseo, agent);
+          // Never let a wrong-provider agent go on to retire a predecessor or count as a dispatch.
+          if ((await enforceProfileAfterSpawn(agent, me, labels)) === "refused") return;
           const parentId = agent.parentAgentId || labels["paseo.parent-agent-id"];
           const parent = parentId ? await snap(paseo, parentId) : null;
           const pl = parent?.labels ?? {};
@@ -1234,6 +1452,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           title: `${DIGEST_PROFILE} digest`,
           prompt,
           labels: { team, lane, role: "worker", profile: DIGEST_PROFILE, digestFor: worker.id },
+          env: { VS_PROFILE: DIGEST_PROFILE },
           autoArchive: true,
         });
         // Backstop: if the digest agent errors out, write the entry directly.
