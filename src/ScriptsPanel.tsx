@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import { daemonClient, DEMO, usePaseo } from "./paseo";
 
+type PkgScript = { scriptName: string; command: string; source: "package.json" };
+
 type ScriptInfo = {
   scriptName: string;
   type: "script" | "service";
@@ -20,8 +22,10 @@ const DEMO_SCRIPTS: ScriptInfo[] = [
 export function ScriptsPanel({ agent }: { agent: PaseoAgent }) {
   const { workspaces } = usePaseo();
   const [scripts, setScripts] = useState<ScriptInfo[]>([]);
+  const [pkgScripts, setPkgScripts] = useState<PkgScript[]>([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<Set<string>>(new Set());
+  const [savingPkg, setSavingPkg] = useState<Set<string>>(new Set());
   const [err, setErr] = useState("");
 
   const workspaceId = useMemo(() => {
@@ -64,11 +68,30 @@ export function ScriptsPanel({ agent }: { agent: PaseoAgent }) {
         if (!cancelled) setLoading(false);
       }
     }
+    async function loadPkgScripts() {
+      const cwd = agent.cwd ?? "";
+      if (DEMO || !cwd) return;
+      try {
+        const res = await fetch(`/__vibesquad/workspace-package-scripts?cwd=${encodeURIComponent(cwd)}`);
+        const body = await res.json().catch(() => ({}));
+        if (!cancelled && body.ok && body.scripts && typeof body.scripts === "object") {
+          const parsed: PkgScript[] = Object.entries(body.scripts as Record<string, string>).map(([name, cmd]) => ({
+            scriptName: name,
+            command: String(cmd),
+            source: "package.json" as const,
+          }));
+          setPkgScripts(parsed);
+        }
+      } catch {
+        // best-effort: ignore
+      }
+    }
     load();
+    loadPkgScripts();
     return () => {
       cancelled = true;
     };
-  }, [workspaceId]);
+  }, [workspaceId, agent.cwd]);
 
   const startScript = async (scriptName: string) => {
     if (DEMO) {
@@ -90,6 +113,40 @@ export function ScriptsPanel({ agent }: { agent: PaseoAgent }) {
       setBusy((prev) => {
         const next = new Set(prev);
         next.delete(scriptName);
+        return next;
+      });
+    }
+  };
+
+  const saveScriptToConfig = async (s: PkgScript) => {
+    if (!workspaceId) return;
+    setSavingPkg((prev) => new Set([...prev, s.scriptName]));
+    try {
+      const dc = daemonClient as any;
+      if (typeof dc.writeProjectConfig === "function") {
+        const cwd = agent.cwd ?? "";
+        const existing = await dc.readProjectConfig(cwd).catch(() => null);
+        const curConfig = existing?.config ?? existing?.payload?.config ?? {};
+        const curScripts = curConfig.scripts ?? {};
+        const newConfig = {
+          ...curConfig,
+          scripts: {
+            ...curScripts,
+            [s.scriptName]: { command: `npm run ${s.scriptName}` },
+          },
+        };
+        await dc.writeProjectConfig({
+          repoRoot: cwd,
+          config: newConfig,
+          expectedRevision: existing?.revision ?? existing?.payload?.revision ?? null,
+        });
+      }
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setSavingPkg((prev) => {
+        const next = new Set(prev);
+        next.delete(s.scriptName);
         return next;
       });
     }
@@ -174,6 +231,25 @@ export function ScriptsPanel({ agent }: { agent: PaseoAgent }) {
           </div>
         );
       })}
+      {pkgScripts
+        .filter((ps) => !scripts.some((s) => s.scriptName === ps.scriptName))
+        .map((ps) => {
+          const isSaving = savingPkg.has(ps.scriptName);
+          return (
+            <div key={`pkg-${ps.scriptName}`} className="script-row script-row--pkg" data-testid="script-row">
+              <span className="script-name">{ps.scriptName}</span>
+              <span className="script-source muted small">package.json</span>
+              <button
+                className="btn ok small"
+                data-testid="save-scripts-config-btn"
+                disabled={isSaving || !workspaceId}
+                onClick={() => void saveScriptToConfig(ps)}
+              >
+                {isSaving ? "Saving…" : "Save to project config"}
+              </button>
+            </div>
+          );
+        })}
     </div>
   );
 }

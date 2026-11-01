@@ -558,6 +558,7 @@ export function DrawerHeader({
 }: DrawerHeaderProps) {
   const [modeBusy, setModeBusy] = useState(false);
   const [modelValue, setModelValue] = useState(agent.model ?? "");
+  const modelSubmittedRef = useRef<string | null>(null);
   const [thinkingBusy, setThinkingBusy] = useState(false);
   const [reloadBusy, setReloadBusy] = useState(false);
   const [reloadError, setReloadError] = useState("");
@@ -565,7 +566,10 @@ export function DrawerHeader({
   const [copyCwdFlash, setCopyCwdFlash] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
 
-  useEffect(() => { setModelValue(agent.model ?? ""); }, [agent.model]);
+  useEffect(() => {
+    setModelValue(agent.model ?? "");
+    modelSubmittedRef.current = null;
+  }, [agent.model]);
 
   const agentLabels = (agent.labels ?? {}) as Record<string, string>;
   const needsYouFlagged =
@@ -663,12 +667,18 @@ export function DrawerHeader({
               onChange={(e) => setModelValue(e.target.value)}
               onBlur={(e) => {
                 const next = e.target.value.trim();
-                if (next && next !== (agent.model ?? "")) setModelHelper(agent, next).catch(() => {});
+                if (next && next !== (agent.model ?? "") && next !== modelSubmittedRef.current) {
+                  modelSubmittedRef.current = next;
+                  setModelHelper(agent, next).catch(() => {});
+                }
               }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   const next = (e.target as HTMLInputElement).value.trim();
-                  if (next && next !== (agent.model ?? "")) setModelHelper(agent, next).catch(() => {});
+                  if (next && next !== (agent.model ?? "") && next !== modelSubmittedRef.current) {
+                    modelSubmittedRef.current = next;
+                    setModelHelper(agent, next).catch(() => {});
+                  }
                 }
               }}
             />
