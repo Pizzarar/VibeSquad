@@ -8,7 +8,7 @@ import { demoTimeline } from "./demo";
 import { hasLooksDone, LOOKS_DONE_MARKER, pinsForSquad, SEND_TO_MARKER, topicOfBrainstorm, type Pin } from "./pins";
 import { IdeaPlusTile, noteSendTo, SendToCard, useSendTo } from "./PinIdeas";
 import { PinMenu } from "./PinMenu";
-import { DoneRow, DoneShelf, LooksDoneCard } from "./PinDone";
+import { DoneRow, DoneShelf, LooksDoneCard, useDoneShelfOpen } from "./PinDone";
 import { getBrainstormThresholds, type TeamView } from "./teams";
 import { StatusDot, usePaneClass } from "./ui";
 import { Avatar } from "./pixel";
@@ -119,7 +119,7 @@ const PinRow = memo(function PinRow({ pin, onPin }: { pin: Pin; onPin: (pin: Pin
 
 export function SidebarPins({ view, onPin, onOpenAgent }: { view: TeamView; onPin: (pin: Pin) => void; onOpenAgent?: (id: string) => void }) {
   const { pinned, done } = pinsForSquad(view);
-  const [doneOpen, setDoneOpen] = useState(false);
+  const [doneOpen, toggleDone] = useDoneShelfOpen(view.team.id);
   return (
     <div className="pin-list" data-testid={`sidebar-pins-${view.team.id}`}>
       {pinned.map((p) => (
@@ -147,7 +147,7 @@ export function SidebarPins({ view, onPin, onOpenAgent }: { view: TeamView; onPi
             className="pin-done-toggle"
             aria-expanded={doneOpen}
             data-testid={`sidebar-done-${view.team.id}`}
-            onClick={() => setDoneOpen((v) => !v)}
+            onClick={toggleDone}
           >
             {doneOpen ? "▾" : "▸"} Done ({done.length})
           </button>

@@ -4,7 +4,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import os from "node:os";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { effectiveAgentRole, findLaneInRegistry, isRetiredAgent, resolveWorktreeRootPath, topicOf } from "./identity.mjs";
-import { findProfile, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
+import { findProfileOrFallback, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
 import { refreshWhosHere } from "./whos-here.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
@@ -504,7 +504,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
     const fallbackProfileName = rawOldProvider.startsWith("antigravity") ? "Brainstorm - Gemini" : "Brainstorm - Claude";
     const desiredProfileKey = String(body.profile || oldLabels.profile || fallbackProfileName).trim();
     const { profiles } = loadProfiles(body.profilesPath, { autoSeed: false });
-    const profile = findProfile(desiredProfileKey, profiles) || findProfile(fallbackProfileName, profiles);
+    const profile = findProfileOrFallback(desiredProfileKey, fallbackProfileName, profiles);
 
     const spawnCfg = profile
       ? toPaseoSpawnConfig(profile)

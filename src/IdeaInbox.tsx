@@ -3,7 +3,8 @@ import type { PaseoAgent } from "@getpaseo/client";
 import { DEMO, removeLocalAgent, upsertLocalAgent, usePaseo } from "./paseo";
 import { useDraft } from "./drafts";
 import { closeTab, openAgentInTab } from "./panes";
-import { isTopicBrainstorm, topicOfBrainstorm } from "./teams";
+import { getTeams, isTopicBrainstorm, topicOfBrainstorm, useTeams } from "./teams";
+import { laneDisplayName } from "./pins";
 import type { InboxCard, InboxScope, TeamDef } from "./types";
 
 export const TOPIC_SOFT_CAP = 3;
@@ -466,6 +467,8 @@ export const IdeaInbox = memo(function IdeaInbox({ team }: { team: TeamDef }) {
   }, []);
 
   const parkedCards = useMemo(() => cards.filter((c) => c.status === "parked"), [cards]);
+  useTeams();
+  const laneName = (id: string) => laneDisplayName(getTeams(), id);
   const teamLaneIds = useMemo(() => new Set((team.lanes ?? []).map((l) => l.id.toLowerCase())), [team]);
 
   const filteredCards = useMemo(() => {
@@ -608,7 +611,7 @@ export const IdeaInbox = memo(function IdeaInbox({ team }: { team: TeamDef }) {
                     className={`tchip ${laneFilter === lane ? "on" : ""}`}
                     onClick={() => setLaneFilter(lane)}
                   >
-                    {lane} ({count})
+                    {laneName(lane)} ({count})
                   </button>
                 );
               })}
@@ -656,7 +659,7 @@ export const IdeaInbox = memo(function IdeaInbox({ team }: { team: TeamDef }) {
                         className="inbox-lane-pill"
                         style={{ color: lColor, borderColor: lColor }}
                       >
-                        {card.laneId}
+                        {laneName(card.laneId)}
                       </span>
                       <span className={`inbox-scope-badge scope-${card.scope.toLowerCase()}`}>
                         {card.scope}
@@ -688,7 +691,7 @@ export const IdeaInbox = memo(function IdeaInbox({ team }: { team: TeamDef }) {
                           <option value="">Move to team ▾</option>
                           {INBOX_LANES.filter((l) => l !== card.laneId).map((l) => (
                             <option key={l} value={l}>
-                              → {l}
+                              → {laneName(l)}
                             </option>
                           ))}
                         </select>

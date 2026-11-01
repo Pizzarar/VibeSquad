@@ -840,6 +840,10 @@ export function findProfile(nameOrRole, profilesInput) {
   const exact = profiles.find((p) => p.name === resolvedName);
   if (exact) return exact;
 
+  // A stored profile id (agent_profile_...) matches exactly too.
+  const byId = profiles.find((p) => p.id && p.id === rawKey);
+  if (byId) return byId;
+
   const lower = resolvedName.toLowerCase();
   const ci = profiles.find((p) => p.name.toLowerCase() === lower);
   if (ci) return ci;
@@ -862,6 +866,20 @@ export function findProfile(nameOrRole, profilesInput) {
     );
   }
   return null;
+}
+
+/**
+ * Resolve the requested profile, or the fallback when it is unknown. An unknown request logs a warning
+ * (so a silent downgrade is visible); callers return the used profile's name so the UI self-corrects.
+ */
+export function findProfileOrFallback(requested, fallbackName, profiles, warn = console.warn) {
+  const found = findProfile(requested, profiles);
+  if (found) return found;
+  const fallback = findProfile(fallbackName, profiles);
+  if (String(requested ?? "").trim()) {
+    warn(`[vibesquad] profile "${requested}" not found; falling back to "${fallback?.name ?? fallbackName}"`);
+  }
+  return fallback;
 }
 
 export function toPaseoSpawnConfig(profileOrName, overrides = {}, profilesInput) {
