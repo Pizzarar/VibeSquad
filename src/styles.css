@@ -3055,3 +3055,19 @@ html, body, #root { overflow-x: hidden; }
   color: var(--cyan);
   border-color: var(--cyan);
 }
+
+/* ── Pinned teams step 3: BriefEditor + PinMenu (src/BriefEditor.tsx, src/PinMenu.tsx) ── */
+.brief-editor { display: flex; flex-direction: column; gap: 8px; height: min(70vh, 720px); }
+.brief-editor-meta { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 12px; }
+.modal textarea.brief-editor-text { flex: 1; resize: none; font-family: var(--mono, monospace); font-size: 13px; line-height: 1.5; padding: 10px 12px; }
+.pin-menu { position: relative; display: inline-block; }
+.pin-menu-btn { padding: 0 6px; line-height: 1.2; }
+.pin-menu-list { position: absolute; right: 0; top: calc(100% + 4px); z-index: 40; min-width: 180px; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--cyan); box-shadow: 0 0 16px var(--cyan-dim); padding: 4px 0; }
+.pin-menu-list > button { background: none; border: 0; color: var(--text); font: inherit; text-align: left; padding: 6px 12px; cursor: pointer; }
+.pin-menu-list > button:hover:not(:disabled) { background: var(--navy); color: var(--cyan); }
+.pin-menu-list > button:disabled { opacity: 0.5; cursor: default; }
+.pin-menu-rename { display: flex; gap: 6px; padding: 6px 8px; }
+.pin-menu-rename input { flex: 1; min-width: 0; background: var(--navy); color: var(--text); border: 1px solid var(--line); padding: 4px 6px; font: inherit; }
+/* Fresh-session divider for quick-started Brainstorms (rendered by AgentDrawer for label vs.fresh-session=brief). */
+.brainstorm-fresh-divider { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 12px; color: var(--muted); font-size: 12px; letter-spacing: 0.5px; }
+.brainstorm-fresh-divider .btn { padding: 0 6px; line-height: 1.2; }

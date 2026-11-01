@@ -71,6 +71,7 @@ import {
 import { WorkspacesView } from "./WorkspacesView";
 import { AddBuddyModal, Modal, NewAgentModal, ProfileImportModal, TeamSettingsModal, useProfiles } from "./TeamActions";
 import { PairDeviceModal } from "./PairDeviceModal";
+import { BriefEditorHost } from "./BriefEditor";
 import { TeamFeed } from "./TeamFeed";
 import { HandoffModal } from "./HandoffModal";
 import { Avatar, NeonEmblem, TokenMeter, providerSpec } from "./pixel";
@@ -1682,6 +1683,7 @@ export function App() {
       {modal === "pair-device" && <PairDeviceModal onClose={() => setModal(null)} />}
       {modal === "about" && <AboutLicensesModal onClose={() => setModal(null)} onChecklist={() => setModal("first-run")} />}
       {modal === "first-run" && <FirstRunModal initial={firstRunStatus} onClose={() => setModal(null)} />}
+      <BriefEditorHost />
       {!modal && profilesNeedSetup && !profilesSetupDismissed && <ProfileImportModal onClose={() => {}} />}
       {successorLead && (
         <HandoffModal
