@@ -476,6 +476,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
           key={p.id}
           p={p}
           agentId={agent.id}
+          agentName={agent.title ?? agent.id.slice(0, 8)}
           permInputs={permInputs}
           setPermInputs={setPermInputs}
         />
