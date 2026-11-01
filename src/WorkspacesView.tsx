@@ -151,7 +151,7 @@ export function WorkspacesView() {
               </div>
               {r.reasons.length > 0 && <div className="ws-reasons">{r.reasons.join(" · ")}</div>}
             </div>
-            <div className="ws-chips">
+            <div className="ws-chips" style={{ minWidth: 0, flexWrap: "wrap" }}>
               {git?.currentBranch && (
                 <span className="chip clickable" role="button" tabIndex={0} onClick={() => handleChipClick(r.w)} onKeyDown={(e) => e.key === "Enter" && handleChipClick(r.w)}>
                   ⎇ {git.currentBranch}
