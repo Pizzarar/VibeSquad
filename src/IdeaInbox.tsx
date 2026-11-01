@@ -592,7 +592,7 @@ export const IdeaInbox = memo(function IdeaInbox({ team }: { team: TeamDef }) {
                 className={`tchip ${laneFilter === "all" ? "on" : ""}`}
                 onClick={() => setLaneFilter("all")}
               >
-                All lanes ({parkedCards.length})
+                All teams ({parkedCards.length})
               </button>
               <button
                 className={`tchip ${laneFilter === "team" ? "on" : ""}`}
@@ -672,7 +672,7 @@ export const IdeaInbox = memo(function IdeaInbox({ team }: { team: TeamDef }) {
                           className="btn small ok inbox-open-topic-btn"
                           disabled={openingId === card.id}
                           onClick={() => void handleOpenTopic(card.id)}
-                          title="Spawn or focus a scoped topic brainstorm (BRAINSTORM · <LANE> · <topic>) seeded only with this card + lane summary"
+                          title="Spawn or focus a scoped topic brainstorm (BRAINSTORM · <LANE> · <topic>) seeded only with this card + team brief"
                           data-testid={`inbox-open-topic-${card.id}`}
                         >
                           {openingId === card.id ? "Opening…" : "💬 Open Topic"}
@@ -680,12 +680,12 @@ export const IdeaInbox = memo(function IdeaInbox({ team }: { team: TeamDef }) {
                         <select
                           className="inbox-select"
                           value=""
-                          aria-label={`Bounce ${card.id} to lane`}
+                          aria-label={`Move ${card.id} to another team`}
                           onChange={(e) => {
                             if (e.target.value) void handleBounce(card.id, e.target.value);
                           }}
                         >
-                          <option value="">Bounce lane ▾</option>
+                          <option value="">Move to team ▾</option>
                           {INBOX_LANES.filter((l) => l !== card.laneId).map((l) => (
                             <option key={l} value={l}>
                               → {l}

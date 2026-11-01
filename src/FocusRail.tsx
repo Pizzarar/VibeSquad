@@ -205,7 +205,7 @@ function LaneBlock({
         data-testid={`focus-rail-lane-toggle-${lane.lane.id}`}
       >
         <span>{collapsed ? "▸" : "▾"}</span>
-        <span>{lane.lane.name} LANE</span>
+        <span>{lane.lane.name}</span>
       </button>
       {!collapsed && (
         <>
@@ -286,7 +286,7 @@ export const FocusRail = memo(function FocusRail(props: {
           type="button"
           className="btn ghost small"
           onClick={toggleAllLanes}
-          title={allLanesCollapsed ? "Expand all lanes" : "Collapse all lanes"}
+          title={allLanesCollapsed ? "Expand all teams" : "Collapse all teams"}
           data-testid="focus-rail-collapse-all"
         >
           {allLanesCollapsed ? "Expand all" : "Collapse all"}

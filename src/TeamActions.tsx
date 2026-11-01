@@ -236,9 +236,9 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
                 <option value="worker">worker</option>
               </select>
             </Field>
-            <Field label="LANE">
+            <Field label="TEAM">
               <select value={laneId} onChange={(e) => setLaneId(e.target.value)}>
-                {team.lanes.length === 0 && <option value="">(no lanes)</option>}
+                {team.lanes.length === 0 && <option value="">(no teams)</option>}
                 {team.lanes.map((l) => (
                   <option key={l.id} value={l.id}>
                     {l.name}
@@ -476,7 +476,7 @@ export function AddBuddyModal({
 
   return (
     <Modal
-      title={`+ ADD BUDDY · ${team.name}`}
+      title={`+ TEAM · ${team.name}`}
       onClose={onClose}
       wide
       footer={
@@ -491,7 +491,7 @@ export function AddBuddyModal({
             disabled={!canSubmit}
             onClick={() => void submit()}
           >
-            {busy ? "Spawning Buddy…" : overlap ? "Spawn Separate Buddy Anyway" : "+ Spawn Buddy"}
+            {busy ? "Starting Brainstorm…" : overlap ? "Start Separate Team Anyway" : "+ Start Team"}
           </button>
         </>
       }
@@ -524,7 +524,7 @@ export function AddBuddyModal({
                       onClose();
                     }}
                   >
-                    Open existing Buddy ({overlap.buddy.agent.title || overlap.laneName})
+                    Open existing Team ({overlap.laneName})
                   </button>
                 )}
                 <label className="check small">
@@ -534,13 +534,13 @@ export function AddBuddyModal({
                     checked={confirmOverlap}
                     onChange={(e) => setConfirmOverlap(e.target.checked)}
                   />{" "}
-                  Separate scope — spin up a new Buddy anyway
+                  Separate scope — start a new Team anyway
                 </label>
               </div>
             </div>
           )}
           <div className="row2">
-            <Field label="BUDDY PROFILE">
+            <Field label="BRAINSTORM PROFILE">
               <select value={profile.name} onChange={(e) => setProfileName(e.target.value)}>
                 {(brainstormProfiles.length ? brainstormProfiles : profiles).map((p) => (
                   <option key={p.name} value={p.name}>
@@ -560,11 +560,11 @@ export function AddBuddyModal({
             </Field>
           </div>
           <div className="preview">
-            <div className="field-label">DERIVED FEATURE LANE</div>
+            <div className="field-label">TEAM</div>
             <div className="preview-title" data-testid="add-buddy-lane-preview">
               {laneName} <span className="muted small">({laneId})</span>
             </div>
-            <div className="field-label">BUDDY TITLE PREVIEW</div>
+            <div className="field-label">BRAINSTORM TITLE PREVIEW</div>
             <div className="preview-title">{title}</div>
             <div className="field-label">LABELS</div>
             <div className="pills">
@@ -587,7 +587,7 @@ export function AddBuddyModal({
           </Field>
           {customBrief !== null && (
             <button className="btn ghost small" onClick={() => setCustomBrief(null)}>
-              Reset to default Buddy brief
+              Reset to default Brainstorm brief
             </button>
           )}
         </div>

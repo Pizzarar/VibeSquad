@@ -3071,3 +3071,57 @@ html, body, #root { overflow-x: hidden; }
 /* Fresh-session divider for quick-started Brainstorms (rendered by AgentDrawer for label vs.fresh-session=brief). */
 .brainstorm-fresh-divider { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 12px; color: var(--muted); font-size: 12px; letter-spacing: 0.5px; }
 .brainstorm-fresh-divider .btn { padding: 0 6px; line-height: 1.2; }
+
+/* ── Pinned teams (src/PinGrid.tsx): sidebar pin list + squad page grid. Owned by the pinned team. ── */
+.pin-list { display: flex; flex-direction: column; padding: 2px 0 6px; }
+.pin-row {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 5px 8px 5px 22px; background: transparent; border: 0; border-left: 2px solid transparent;
+  color: var(--muted); font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.pin-row:hover, .pin-row.sel { color: var(--text); background: #00f0ff12; border-left-color: var(--cyan); }
+.pin-row.no-session .pin-row-name { opacity: 0.7; }
+.pin-row.done { cursor: default; opacity: 0.6; }
+.pin-row.done:hover { background: transparent; border-left-color: transparent; color: var(--muted); }
+.pin-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pin-done-check { color: var(--emerald); width: 8px; text-align: center; }
+.pin-done-toggle {
+  background: transparent; border: 0; color: var(--slate); font-family: var(--arcade); font-size: 10px;
+  padding: 4px 8px 2px 22px; text-align: left; cursor: pointer;
+}
+.pin-done-toggle:hover { color: var(--muted); }
+.pin-empty { padding: 4px 22px; }
+.pin-ctx { display: inline-block; width: 28px; height: 4px; background: #060711; border: 1px solid var(--line); flex: none; }
+.pin-ctx i { display: block; height: 100%; background: linear-gradient(90deg, var(--violet), var(--cyan)); }
+.pin-ctx.tone-amber i { background: var(--amber); }
+.pin-ctx.tone-red i { background: var(--hot-pink); }
+.pin-needs { flex: none; }
+
+.pin-grid-wrap { margin: 0 0 18px; }
+.pin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.pin-tile {
+  display: flex; flex-direction: column; gap: 10px; min-height: 190px; padding: 12px 14px;
+  background: linear-gradient(135deg, var(--panel) 0%, #0d0f22 100%);
+  border: 1px solid var(--line); border-top: 2px solid var(--violet);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5); cursor: pointer; text-align: left;
+}
+.pin-tile:hover, .pin-tile:focus-visible { border-color: var(--cyan); outline: none; }
+.pin-tile.sel { border-color: var(--cyan); box-shadow: 0 0 14px var(--cyan-dim); }
+.pin-tile.needs-you { border-top-color: var(--hot-pink); }
+.pin-tile.no-session { border-top-color: var(--slate); border-style: dashed; }
+.pin-tile-head { display: flex; align-items: center; gap: 10px; }
+.pin-tile-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pin-tile-name { font-family: var(--display); font-size: 16px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pin-tile-sub { display: flex; align-items: center; gap: 6px; }
+.pin-tile-lines { flex: 1; display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); min-height: 0; }
+.pin-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pin-line.you { color: var(--text); opacity: 0.8; }
+.pin-line.you b { color: var(--cyan); font-weight: 600; }
+.pin-tile-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--slate); font-family: var(--arcade); font-size: 11px; }
+.pin-tile.no-session:hover .pin-tile-empty { color: var(--cyan); }
+.pin-reply { display: flex; gap: 6px; flex-wrap: wrap; cursor: default; }
+.pin-reply input { flex: 1; min-width: 0; background: #060711; border: 1px solid var(--line); color: var(--text); padding: 5px 8px; font: inherit; font-size: 12px; }
+.pin-reply input:focus { border-color: var(--cyan); outline: none; }
+.pin-reply-err { flex-basis: 100%; }
+.pin-grid-done { margin-top: 10px; }
+.pin-full-toggle { align-self: center; }
