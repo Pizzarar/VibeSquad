@@ -93,8 +93,8 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   const [laneId, setLaneId] = useState(team.lanes[0]?.id ?? "");
   const [ord, setOrd] = useState("1");
   const [topic, setTopic, clearTopic] = useDraft(`new-agent:${team.id}:topic`);
-  const [task, setTask] = useState("VS-STEP4");
-  const [job, setJob] = useState("team actions modal");
+  const [task, setTask] = useState("");
+  const [job, setJob] = useState("");
   const [promptDraft, setPrompt, clearPrompt] = useDraft(`new-agent:${team.id}:${profileName}:prompt`);
   const prompt = promptDraft || profile.brief;
   const [cwd, setCwd] = useState("");
