@@ -3236,3 +3236,38 @@ html, body, #root { overflow-x: hidden; }
   padding: 8px 14px; background: var(--panel); border: 1px solid var(--emerald); color: var(--text);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6); font-size: 13px;
 }
+
+/* ADE Batch G: command palette, context menu, shortcut sheet, wide Focus mode */
+.cmd-palette {
+  position: fixed; top: 12vh; left: 50%; transform: translateX(-50%);
+  width: min(640px, 92vw); max-height: 70vh; display: flex; flex-direction: column;
+  background: var(--panel, #0b0d1a); border: 1px solid var(--cyan, #00f0ff); border-radius: 8px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6); z-index: 1000; overflow: hidden;
+}
+.cmd-palette > input { border: 0; border-bottom: 1px solid var(--cyan-dim, #134); background: transparent; color: inherit; padding: 12px 14px; font: inherit; outline: none; }
+.cmd-list { overflow-y: auto; display: flex; flex-direction: column; }
+.cmd-item { text-align: left; background: transparent; border: 0; color: inherit; padding: 7px 14px; font: inherit; cursor: pointer; }
+.cmd-item.on, .cmd-item:hover { background: var(--cyan-dim, rgba(0, 240, 255, 0.15)); }
+.cmd-kind { display: inline-block; min-width: 46px; font-size: 10px; text-transform: uppercase; opacity: 0.6; }
+.cmd-empty { padding: 14px; }
+.ctx-menu {
+  position: fixed; z-index: 1100; min-width: 210px; display: flex; flex-direction: column;
+  background: var(--panel, #0b0d1a); border: 1px solid var(--cyan, #00f0ff); border-radius: 6px; padding: 4px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6);
+}
+.ctx-menu button { text-align: left; background: transparent; border: 0; color: inherit; padding: 6px 10px; font: inherit; cursor: pointer; border-radius: 4px; }
+.ctx-menu button:hover { background: var(--cyan-dim, rgba(0, 240, 255, 0.15)); }
+.shortcut-modal {
+  background: var(--panel, #0b0d1a); border: 1px solid var(--cyan, #00f0ff); border-radius: 8px;
+  padding: 16px 20px; max-width: 480px; width: 92vw; margin: 10vh auto 0;
+}
+.shortcut-modal h3 { margin: 0 0 10px; }
+.shortcut-modal td { padding: 4px 10px 4px 0; vertical-align: top; }
+.shortcut-modal kbd { border: 1px solid var(--cyan-dim, #134); border-radius: 4px; padding: 1px 6px; font-size: 12px; white-space: nowrap; }
+.date-group-list { display: flex; flex-direction: column; gap: 8px; padding: 12px; }
+
+/* Task #38: Focus mode at wide screens uses the full width, no big blank margins. */
+@media (min-width: 1400px) {
+  .app.focus > .agent-panes { width: 100%; max-width: none; }
+  .app.focus > .agent-panes .tl, .app.focus > .agent-panes .composer { max-width: min(1400px, 100%); }
+}

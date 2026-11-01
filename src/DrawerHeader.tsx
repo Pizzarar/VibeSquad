@@ -29,6 +29,9 @@ import { LEGACY_NEEDS_LABEL, LEGACY_NEEDS_REASON, LEGACY_NEEDS_UNTIL, needsYouBa
 import { AGENT_TYPE_LABEL, expectedTitleFor, kindOf, leadLadderFor, leadVariant } from "./teams";
 import type { AgentType } from "./teams";
 import type { Entry } from "./Timeline";
+import { ImportSessionModal, SchedulesPanel } from "./SchedulesPanel";
+import { openAgent, openAgentInTab } from "./panes";
+import { exportFileName, forkSummaryPrompt, forkTitle, transcriptToJson, transcriptToMarkdown } from "./sessionLifecycle";
 import { openBriefEditor } from "./pinActions";
 
 const REQUEST_REPORT_PROMPT =
@@ -398,6 +401,103 @@ export type DrawerHeaderProps = {
   dockOpen: boolean;
   onToggleDock: () => void;
 };
+
+function download(name: string, mime: string, body: string) {
+  const url = URL.createObjectURL(new Blob([body], { type: mime }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  void navigator.clipboard?.writeText(body).catch(() => {});
+}
+
+function SessionActions({ agent, entries }: { agent: PaseoAgent; entries: Entry[] }) {
+  const [exportOpen, setExportOpen] = useState(false);
+  const [modal, setModal] = useState<"schedules" | "import" | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const dc = daemonClient as any;
+  const title = agent.title ?? agent.id;
+
+  const fork = async () => {
+    setBusy(true);
+    setMsg("");
+    try {
+      if (DEMO) return setMsg("Fork (demo): would open a new agent with this context.");
+      let prompt = forkSummaryPrompt(title, entries);
+      const ctx = await dc.buildAgentForkContext?.(agent.id).catch(() => null);
+      if (ctx?.attachment?.text) prompt = `Forked from "${title}".\n\n${ctx.attachment.text}`;
+      const snap = await dc.createAgent({
+        config: { provider: agent.provider, model: agent.model ?? undefined, cwd: agent.cwd, title: forkTitle(title) },
+        initialPrompt: prompt,
+        labels: {},
+      });
+      const id = snap?.agent?.id ?? snap?.id;
+      if (id) openAgentInTab(id);
+    } catch (e) {
+      setMsg(`Fork failed: ${(e as Error).message ?? e}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resume = async () => {
+    setBusy(true);
+    setMsg("");
+    try {
+      if (DEMO) return setMsg("Resume (demo)");
+      if (agent.archivedAt && dc.unarchiveAgent) await dc.unarchiveAgent(agent.id);
+      else await dc.resumeAgent?.((agent as any).persistence ?? { provider: agent.provider, sessionId: agent.id });
+      openAgent(agent.id);
+    } catch (e) {
+      setMsg(`Resume failed: ${(e as Error).message ?? e}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const exportAs = (ext: "md" | "json") => {
+    if (ext === "md") download(exportFileName(title, "md"), "text/markdown", transcriptToMarkdown(title, entries));
+    else download(exportFileName(title, "json"), "application/json", transcriptToJson(agent.id, title, entries));
+    setExportOpen(false);
+  };
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 10px", flexWrap: "wrap" }}>
+      <button className="btn ghost small" data-testid="drawer-fork-btn" disabled={busy} onClick={() => void fork()}>
+        ⑂ Fork
+      </button>
+      <button className="btn ghost small" data-testid="drawer-export-btn" onClick={() => setExportOpen((v) => !v)}>
+        ⬇ Export
+      </button>
+      {exportOpen && (
+        <>
+          <button className="btn small" data-testid="drawer-export-md" onClick={() => exportAs("md")}>
+            .md
+          </button>
+          <button className="btn small" data-testid="drawer-export-json" onClick={() => exportAs("json")}>
+            .json
+          </button>
+        </>
+      )}
+      {(agent.archivedAt || agent.status === "closed") && (
+        <button className="btn ok small" data-testid="drawer-resume-btn" disabled={busy} onClick={() => void resume()}>
+          ▶ Resume / Un-archive
+        </button>
+      )}
+      <button className="btn ghost small" data-testid="drawer-schedules-btn" onClick={() => setModal("schedules")}>
+        📅 Schedules
+      </button>
+      <button className="btn ghost small" data-testid="drawer-import-btn" onClick={() => setModal("import")}>
+        📥 Import CLI
+      </button>
+      {msg && <span className="chip">{msg}</span>}
+      {modal === "schedules" && <SchedulesPanel onClose={() => setModal(null)} />}
+      {modal === "import" && <ImportSessionModal onClose={() => setModal(null)} />}
+    </div>
+  );
+}
 
 export function DrawerHeader({
   agent,
@@ -893,6 +993,7 @@ export function DrawerHeader({
           )}
         </div>
       )}
+      <SessionActions agent={agent} entries={entries} />
       {(attachBlocked || moreOpen) ? <AttachFiles agent={agent} entries={entries} /> : null}
     </>
   );

@@ -1,4 +1,4 @@
-import { memo, useCallback, useSyncExternalStore, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useSyncExternalStore, type ReactNode } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import { getPaseoState, subscribePaseo } from "./paseo";
 import { AgentDrawer } from "./AgentDrawer";
@@ -11,10 +11,12 @@ import {
   closeTab,
   isShown,
   moveTab,
+  reopenClosedTab,
   setActivePane,
   setSheet,
   toggleFocus,
   toggleSplit,
+  useClosedTabCount,
   usePanes,
   type Pane,
 } from "./panes";
@@ -89,6 +91,7 @@ const Tab = memo(function Tab({ id, pane, on, split }: { id: string; pane: Pane;
 
 function TabStrip(props: { pane: Pane; tabs: string[]; activeId: string | null; split: boolean; focus: boolean; tools: boolean }) {
   const { pane, tabs, activeId, split, focus, tools } = props;
+  const closedCount = useClosedTabCount();
   return (
     <div className={`pane-tabs pane-${pane}`} role="tablist" onPointerDownCapture={() => setActivePane(pane)}>
       <button className="tab-btn pane-menu" title="Agents and teams" onClick={() => setSheet(true)}>
@@ -101,6 +104,11 @@ function TabStrip(props: { pane: Pane; tabs: string[]; activeId: string | null; 
       </div>
       {tools && (
         <div className="pane-tools">
+          {closedCount > 0 && (
+            <button className="btn small" data-testid="reopen-closed-tab-btn" title="Reopen closed tab (Ctrl+Shift+T)" onClick={reopenClosedTab}>
+              ↺ Reopen tab
+            </button>
+          )}
           <button className={`btn small ${split ? "on" : ""}`} title="Two panes side by side (Shift+click an agent)" onClick={toggleSplit}>
             ◫ SPLIT
           </button>
@@ -157,6 +165,16 @@ function EmptyPane({ pane, focus }: { pane: Pane; focus: boolean }) {
 /** `header` (pinned focus view) replaces the tab strips in row 1; the drawer list is unchanged. */
 export const AgentPanes = memo(function AgentPanes({ onSuccessor, header }: { onSuccessor: (id: string) => void; header?: ReactNode }) {
   const s = usePanes();
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "t") {
+        e.preventDefault();
+        reopenClosedTab();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const paneOf = (id: string): Pane => (s.rightTabs.includes(id) ? "right" : "left");
   return (
     <section className={`agent-panes ${s.split ? "split" : ""} active-${s.activePane}`}>

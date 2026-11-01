@@ -1,5 +1,7 @@
 import { Component, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { messageCtxItems, openContextMenu } from "./CommandPalette";
 import { daemonClient, client, DEMO } from "./paseo";
+import { REWIND_MODES, buildRewindRequest, truncateAfter, type RewindMode } from "./sessionLifecycle";
 import { demoTimeline } from "./demo";
 import { sentImagesFor } from "./imageDrafts";
 import { openRightDockTab } from "./RightDock";
@@ -558,16 +560,65 @@ function SummaryWithLinks({ text }: { text: string }) {
   return <>{parts}</>;
 }
 
+function RewindButton({ agentId, e, onRewound }: { agentId: string; e: Entry; onRewound?: (e: Entry) => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [text, setText] = useState<string>(e.item?.text ?? "");
+  const go = async (mode: RewindMode) => {
+    const req = buildRewindRequest(agentId, e, mode, text);
+    setBusy(true);
+    setErr(null);
+    try {
+      if (DEMO) {
+        onRewound?.(e);
+      } else {
+        if (!req) throw new Error("this message has no rewind id");
+        await (daemonClient as any).rewindAgent(req.agentId, req.messageId, req.mode);
+        if (req.resend) await (daemonClient as any).sendMessage(agentId, req.resend);
+      }
+      setOpen(false);
+    } catch (x) {
+      setErr(String((x as Error)?.message ?? x));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <span style={{ position: "relative" }}>
+      <button className="tl-park-btn" data-testid="tl-rewind-btn" title="Rewind to this message" onClick={() => setOpen((v) => !v)}>
+        ↺ Rewind
+      </button>
+      {open && (
+        <div className="tl-rewind-popover" data-testid="tl-rewind-popover" style={{ display: "flex", flexDirection: "column", gap: 4, padding: 6, marginTop: 4 }}>
+          {REWIND_MODES.map((m) => (
+            <button key={m.mode} className="btn small" disabled={busy} data-testid={`tl-rewind-${m.mode}`} onClick={() => void go(m.mode)}>
+              {m.label}
+            </button>
+          ))}
+          <label style={{ fontSize: 11 }}>
+            Edit &amp; Resend (optional)
+            <textarea data-testid="tl-rewind-edit" rows={2} value={text} onChange={(ev) => setText(ev.target.value)} style={{ width: "100%" }} />
+          </label>
+          {err && <div className="tl tl-error">{err}</div>}
+        </div>
+      )}
+    </span>
+  );
+}
+
 // ─── TimelineItem ─────────────────────────────────────────────────────────────
 
 export function TimelineItem({
   e,
   agentId,
   onParkText,
+  onRewound,
 }: {
   e: Entry;
   agentId: string;
   onParkText?: (text: string) => void;
+  onRewound?: (e: Entry) => void;
 }) {
   const it = e.item;
   const [expanded, setExpanded] = useState(false);
@@ -587,7 +638,7 @@ export function TimelineItem({
         ? it.images.map((im: any) => (im.data ? `data:${im.mimeType ?? "image/png"};base64,${im.data}` : im.url)).filter(Boolean)
         : sentImagesFor(agentId, it.text);
       return (
-        <div className="tl tl-user">
+        <div className="tl tl-user" onContextMenu={(ev) => openContextMenu(ev, messageCtxItems(it.text ?? "", agentId, onParkText))}>
           {urls.length > 0 && (
             <div className="tl-images">
               {urls.map((u, i) => (
@@ -603,6 +654,7 @@ export function TimelineItem({
                 📥 Park in Inbox
               </button>
             )}
+            <RewindButton agentId={agentId} e={e} onRewound={onRewound} />
           </div>
         </div>
       );
@@ -610,7 +662,7 @@ export function TimelineItem({
 
     case "assistant_message":
       return (
-        <div className="tl tl-assistant">
+        <div className="tl tl-assistant" onContextMenu={(ev) => openContextMenu(ev, messageCtxItems(it.text ?? "", agentId, onParkText))}>
           {typeof it.text === "string" ? <MarkdownRenderer text={it.text} agentId={agentId} /> : it.text}
           <div className="tl-actions">
             <CopyMsgButton text={it.text ?? ""} />
@@ -889,7 +941,9 @@ export function Timeline({
 }: TimelineProps) {
   const timelineRef = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
-  const pinnedTodo = findPinnedTodo(entries);
+  const [cut, setCut] = useState<Entry | null>(null);
+  const shown = cut ? truncateAfter(entries, cut) : entries;
+  const pinnedTodo = findPinnedTodo(shown);
 
   useEffect(() => {
     const el = timelineRef.current;
@@ -934,9 +988,9 @@ export function Timeline({
         </div>
       )}
       {error && <div className="tl tl-error">{error}</div>}
-      {entries.map((e, i) => (
+      {shown.map((e, i) => (
         <TimelineErrorBoundary key={e.seqStart ?? i} fallbackLabel={`item #${i}`}>
-          <TimelineItem e={e} agentId={agentId} onParkText={onParkText} />
+          <TimelineItem e={e} agentId={agentId} onParkText={onParkText} onRewound={setCut} />
         </TimelineErrorBoundary>
       ))}
       <div />

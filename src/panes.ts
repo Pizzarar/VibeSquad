@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { popClosed, pushClosed } from "./sessionLifecycle";
 
 // Open agent tabs, the optional 2-pane split and focus mode, outside React state. Rows, cards and
 // tabs subscribe to the one slice they draw (`useAgentPane(id)`), so opening or switching a tab
@@ -27,6 +28,8 @@ export type PanesState = {
   sheet: boolean;
   /** Mounted drawers in first-mount order. Order is stable so React never moves (and resets) a DOM node. */
   mounted: string[];
+  /** Recently closed tab ids, newest last. Not persisted. */
+  closedTabs: string[];
 };
 
 const other = (p: Pane): Pane => (p === "left" ? "right" : "left");
@@ -57,6 +60,7 @@ function load(): PanesState {
     focus: localStorage.getItem(FOCUS_KEY) === "1",
     sheet: false,
     mounted: [],
+    closedTabs: [],
   };
   if (!s.split) s = { ...s, leftTabs: [...leftTabs, ...rightTabs], rightTabs: [], rightActiveId: null, activePane: "left" };
   // Old deep links (?agent=) open as a tab.
@@ -208,7 +212,14 @@ export function activateTab(pane: Pane, id: string) {
 
 export function closeTab(id: string) {
   const n = remove(state, id);
-  commit(n, [n.leftActiveId, n.rightActiveId]);
+  commit(n === state ? n : { ...n, closedTabs: pushClosed(state.closedTabs, id) }, [n.leftActiveId, n.rightActiveId]);
+}
+
+/** Reopen the most recently closed tab that is not already open (Ctrl+Shift+T). */
+export function reopenClosedTab() {
+  const { id, rest } = popClosed(state.closedTabs, (x) => paneIn(state, x) !== null);
+  if (!id) return commit({ ...state, closedTabs: rest });
+  commit({ ...place({ ...state, closedTabs: rest }, id, state.activePane), activePane: state.activePane }, [id]);
 }
 
 /** Move a tab to `to` (default: the other pane). Opens the split when needed. */
@@ -278,4 +289,5 @@ export const isShown = (s: PanesState, id: string) => s.leftActiveId === id || (
 export const useIsShown = (id: string) => useSyncExternalStore(subscribePanes, () => isShown(state, id));
 
 export const useFocusMode = () => useSyncExternalStore(subscribePanes, () => state.focus);
+export const useClosedTabCount = () => useSyncExternalStore(subscribePanes, () => state.closedTabs.length);
 export const useHasTabs = () => useSyncExternalStore(subscribePanes, () => state.leftTabs.length > 0);

@@ -35,10 +35,11 @@ import {
   type TeamView,
 } from "./teams";
 import { AgentPanes } from "./AgentPanes";
+import { CommandPaletteHost, agentCtxItems, dateBucket, openContextMenu, openOverlay, parseUrlState, serializeUrlState, type DateBucket } from "./CommandPalette";
 import { PaseoUsageHeaderChip } from "./PaseoSettingsSection";
 import { MobileBar, useMobileTeamView } from "./MobileBar";
 import { FocusRail, railAlerts } from "./FocusRail";
-import { activateNth, getPanes, openAgent, setFocus, subscribePanes, toggleFocus, useFocusMode, useHasTabs } from "./panes";
+import { activateNth, getPanes, openAgent, openAgentInTab, setFocus, subscribePanes, toggleFocus, useFocusMode, useHasTabs } from "./panes";
 import {
   AgentActions,
   AgentRow,
@@ -76,6 +77,7 @@ import { PinFocusHeader, PinRail } from "./PinRail";
 import { PinToast } from "./PinIdeas";
 import { AddBuddyModal, Modal, NewAgentModal, ProfileImportModal, TeamSettingsModal, useProfiles } from "./TeamActions";
 import { PairDeviceModal } from "./PairDeviceModal";
+import { DaemonStatusBanner, DiagnosticsModal, HelpModal, checkForUpdates, updateLabel, type UpdateCheck } from "./DiagnosticsModal";
 import { BriefEditorHost } from "./BriefEditor";
 import { TeamFeed } from "./TeamFeed";
 import { HandoffModal } from "./HandoffModal";
@@ -519,6 +521,8 @@ const Sidebar = memo(function Sidebar(props: {
   onQuickStart: PinHandler;
   onPairDevice?: () => void;
   onAbout?: () => void;
+  onHelp?: () => void;
+  onDiagnostics?: () => void;
   onSettings: () => void;
   usage: ProviderQuotaView[];
 }) {
@@ -605,6 +609,12 @@ const Sidebar = memo(function Sidebar(props: {
       <button className="btn ghost small" data-testid="about-licenses-btn" onClick={props.onAbout} title="About VibeSquad and third-party licenses">
         ℹ ABOUT &amp; LICENSES
       </button>
+      <button className="btn ghost small" data-testid="open-help-btn" onClick={props.onHelp}>
+        ❓ Help &amp; Docs
+      </button>
+      <button className="btn ghost small" data-testid="open-diagnostics-btn" onClick={props.onDiagnostics}>
+        🩺 Diagnostics &amp; Logs
+      </button>
       <div className="sidebar-footer-row">
         <button className="btn ghost small" onClick={props.onSettings} title="Edit squads, teams, path matchers and 4K UI scale">
           ⚙ SQUADS
@@ -676,7 +686,20 @@ const Card = memo(function Card({ label, m, onPick, onSuccessor }: CardProps) {
       ? `card-secondary-lead ${hasNeedsYou ? "card-lead-needs-you" : ""}`
       : "";
   return (
-    <div className={`card ${paneCls} card-${m.agentType} ${slotCls}`} {...clickable(() => onPick(a.id))}>
+    <div
+      className={`card ${paneCls} card-${m.agentType} ${slotCls}`}
+      {...clickable(() => onPick(a.id))}
+      onContextMenu={(ev) =>
+        openContextMenu(
+          ev,
+          agentCtxItems(a, {
+            open: () => onPick(a.id),
+            split: () => openAgentInTab(a.id, "right"),
+            archive: () => void archiveAgent(a.id),
+          }),
+        )
+      }
+    >
       <Avatar id={a.id} provider={a.provider} agentType={m.agentType} variant={leadVariant(m)} size={56} />
       <div className="card-body">
         <div className="card-top-row">
@@ -1218,6 +1241,8 @@ const Toolbar = memo(function Toolbar(props: {
   onShowOld: (v: boolean) => void;
   showArchived: boolean;
   onShowArchived: (v: boolean) => void;
+  dateGroup: DateBucket | "all";
+  onDateGroup: (v: DateBucket | "all") => void;
 }) {
   const uiScale = useUiScale();
   const uiScalePct = Math.round(uiScale * 100);
@@ -1250,6 +1275,26 @@ const Toolbar = memo(function Toolbar(props: {
           <ShowClosedChip />
         </>
       )}
+      {props.screen === "teams" && (
+        <select
+          className="tchip"
+          data-testid="roster-date-group-toggle"
+          title="Find an agent by last-active day across all squads (enable Archived to include closed ones)"
+          value={props.dateGroup}
+          onChange={(e) => props.onDateGroup(e.target.value as DateBucket | "all")}
+        >
+          <option value="all">By squad</option>
+          <option value="today">Today</option>
+          <option value="yesterday">Yesterday</option>
+          <option value="older">Older</option>
+        </select>
+      )}
+      <button className="tchip" data-testid="global-transcript-search-btn" title="Search all transcripts" onClick={() => openOverlay("search")}>
+        🔍
+      </button>
+      <button className="tchip" data-testid="shortcut-help-btn" title="Keyboard shortcuts (?)" onClick={() => openOverlay("shortcuts")}>
+        ?
+      </button>
       <button
         className={`tchip ui-scale-indicator ${uiScalePct !== 100 ? "on" : ""}`}
         onClick={() => cycleUiScalePreset(true)}
@@ -1307,6 +1352,7 @@ function useExposedIps(): string[] {
 function AboutLicensesModal({ onClose, onChecklist }: { onClose: () => void; onChecklist: () => void }) {
   const [text, setText] = useState<string | null>(null);
   const updaterStatus = useUpdaterStatus();
+  const [upd, setUpd] = useState<UpdateCheck["state"]>("idle");
   useEffect(() => {
     void loadUpdaterStatus();
     let alive = true;
@@ -1323,6 +1369,19 @@ function AboutLicensesModal({ onClose, onChecklist }: { onClose: () => void; onC
       <div data-testid="about-licenses-modal">
         <p data-testid="about-version-channel">
           <b>VibeSquad v{updaterStatus.currentVersion}</b> · Channel: <code>{updaterStatus.channel}</code>
+        </p>
+        <p>
+          <button
+            className="btn ghost small"
+            data-testid="about-check-updates-btn"
+            disabled={upd === "checking"}
+            onClick={() => {
+              setUpd("checking");
+              void checkForUpdates().then((ok) => setUpd(ok ? "ok" : "error"));
+            }}
+          >
+            {updateLabel(upd, updaterStatus.currentVersion)}
+          </button>
         </p>
         <p>VibeSquad works with Paseo (pinned CLI v0.13.2).</p>
         <p>Licensed under the MIT License.</p>
@@ -1351,7 +1410,7 @@ export function App() {
   const mobileTeamView = useMobileTeamView();
   const uiScale = useUiScale();
   const uiScaleHud = useUiScaleHud();
-  const [modal, setModal] = useState<"new-agent" | "add-buddy" | "settings" | "pair-device" | "about" | "first-run" | null>(null);
+  const [modal, setModal] = useState<"new-agent" | "add-buddy" | "settings" | "pair-device" | "about" | "help" | "diagnostics" | "first-run" | null>(null);
   const [firstRunStatus, setFirstRunStatus] = useState<FirstRunStatus | null>(null);
   const exposedIps = useExposedIps();
   const updaterStatus = useUpdaterStatus();
@@ -1362,7 +1421,7 @@ export function App() {
     return () => clearInterval(id);
   }, []);
   const [successorId, setSuccessorId] = useState<string | null>(null);
-  const [teamId, setTeamId] = useState(() => localStorage.getItem("vs.team") ?? views[0]?.team.id ?? "efi");
+  const [teamId, setTeamId] = useState(() => parseUrlState(location.search).team ?? localStorage.getItem("vs.team") ?? views[0]?.team.id ?? "efi");
   const { needsSetup: profilesNeedSetup, setupDismissed: profilesSetupDismissed } = useProfiles();
   const [collapsedTeams, setCollapsedTeams] = useState<Set<string>>(() => readCollapsedTeams());
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1");
@@ -1371,6 +1430,7 @@ export function App() {
   const [query, setQuery] = useState("");
   const [showOld, setShowOld] = useState(true);
   const [showArchived, setShowArchived] = useState(false);
+  const [dateGroup, setDateGroup] = useState<DateBucket | "all">("all");
   const archivedMembers = useMemo(() => resolve(archivedAgents), [archivedAgents, teamsVersion]);
   useAttentionAlerts(members);
 
@@ -1406,8 +1466,8 @@ export function App() {
   }, [uiScale]);
 
   useEffect(() => {
-    if (showArchived) loadArchived();
-  }, [showArchived]);
+    loadArchived(); // palette + date finder search archived agents too
+  }, []);
 
   useEffect(() => {
     localStorage.setItem("vs.team", teamId);
@@ -1471,6 +1531,22 @@ export function App() {
 
   const view = sidebarViews.find((v) => v.team.id === teamId) ?? sidebarViews[0] ?? views[0];
   const activeTeamId = view?.team.id ?? teamId;
+
+  // URL routing: ?team=&agent= mirrors the selection; Back/Forward restore it.
+  const activeAgentId = useSyncExternalStore(subscribePanes, () => getPanes().leftActiveId);
+  useEffect(() => {
+    const next = serializeUrlState({ team: activeTeamId || null, agent: activeAgentId }, location.search);
+    if (next !== (location.search || "")) history.pushState(null, "", `${location.pathname}${next}${location.hash}`);
+  }, [activeTeamId, activeAgentId]);
+  useEffect(() => {
+    const onPop = () => {
+      const u = parseUrlState(location.search);
+      if (u.team) setTeamId(u.team);
+      if (u.agent) openAgent(u.agent);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   // Stable callbacks so the memoized sidebar and team page skip renders they do not need.
   // Switching teams never touches open tabs.
@@ -1566,6 +1642,8 @@ export function App() {
   const openSettings = useCallback(() => setModal("settings"), []);
   const openPairDevice = useCallback(() => setModal("pair-device"), []);
   const openAbout = useCallback(() => setModal("about"), []);
+  const openHelp = useCallback(() => setModal("help"), []);
+  const openDiagnostics = useCallback(() => setModal("diagnostics"), []);
   const openAddBuddy = useCallback(() => setModal("add-buddy"), []);
   const openNewAgent = useCallback(() => setModal("new-agent"), []);
   const onSuccessor = useCallback((m: Member) => setSuccessorId(m.agent.id), []);
@@ -1595,6 +1673,18 @@ export function App() {
     else if (leftPinLayout.current) exitPinFocus(); // back from FULL / focus mode: land on the grid
     leftPinLayout.current = !pinLayout;
   }, [pinLayout]);
+  const dateGrouped = useMemo(() => {
+    if (dateGroup === "all") return null;
+    const pool = showArchived ? [...members, ...archivedMembers] : members;
+    return pool
+      .filter((m) => dateBucket(m.agent.updatedAt) === dateGroup && matchesSearch(m, query))
+      .sort((a, b) => Date.parse(b.agent.updatedAt ?? "") - Date.parse(a.agent.updatedAt ?? ""));
+  }, [dateGroup, showArchived, members, archivedMembers, query]);
+  const paletteActions = useMemo(
+    () => ({ newAgent: openNewAgent, settings: openSettings, workspaces: () => setScreen("workspaces"), toggleFocus }),
+    [openNewAgent, openSettings],
+  );
+  const onPaletteAgent = useCallback((m: Member) => onAgent(m.team.id, m.agent.id), [onAgent]);
   const paneSuccessor = useCallback((id: string) => setSuccessorId(id), []);
 
   // Entering focus with nothing open shows the team's brainstorm or lead (opens it; never spawns).
@@ -1685,6 +1775,7 @@ export function App() {
           </button>
         </div>
       )}
+      <DaemonStatusBanner />
       {!focus && (
         <Sidebar
           views={sidebarViews}
@@ -1701,6 +1792,8 @@ export function App() {
           onTeam={onTeam}
           onPairDevice={openPairDevice}
           onAbout={openAbout}
+          onHelp={openHelp}
+          onDiagnostics={openDiagnostics}
           onSettings={openSettings}
           onAgent={onAgent}
           onQuickStart={onQuickStart}
@@ -1729,9 +1822,21 @@ export function App() {
             onShowOld={setShowOld}
             showArchived={showArchived}
             onShowArchived={setShowArchived}
+            dateGroup={dateGroup}
+            onDateGroup={setDateGroup}
           />
           {screen === "workspaces" ? (
             <WorkspacesView />
+          ) : dateGrouped ? (
+            <div className="team-body date-group-list" data-testid="roster-date-group-list">
+              {dateGrouped.length === 0 && <div className="muted">No agents active {dateGroup === "older" ? "before yesterday" : dateGroup} in any squad.</div>}
+              {dateGrouped.map((m) => (
+                <div key={m.agent.id} onContextMenu={(ev) => openContextMenu(ev, agentCtxItems(m.agent, { open: () => onAgent(m.team.id, m.agent.id), split: () => openAgentInTab(m.agent.id, "right"), archive: () => void archiveAgent(m.agent.id) }))}>
+                  <div className="muted small">{m.team.name}</div>
+                  <AgentRow m={m} onPick={(id) => onAgent(m.team.id, id)} />
+                </div>
+              ))}
+            </div>
           ) : view ? (
             <TeamPage
               view={view}
@@ -1780,7 +1885,10 @@ export function App() {
       {modal === "settings" && <TeamSettingsModal onClose={() => setModal(null)} />}
       {modal === "pair-device" && <PairDeviceModal onClose={() => setModal(null)} />}
       {modal === "about" && <AboutLicensesModal onClose={() => setModal(null)} onChecklist={() => setModal("first-run")} />}
+      {modal === "help" && <HelpModal onClose={() => setModal(null)} onTour={() => setModal("first-run")} />}
+      {modal === "diagnostics" && <DiagnosticsModal onClose={() => setModal(null)} />}
       {modal === "first-run" && <FirstRunModal initial={firstRunStatus} onClose={() => setModal(null)} />}
+      <CommandPaletteHost members={members} archived={archivedMembers} views={views} onAgent={onPaletteAgent} onTeam={onTeam} actions={paletteActions} />
       <BriefEditorHost />
       {!modal && profilesNeedSetup && !profilesSetupDismissed && <ProfileImportModal onClose={() => {}} />}
       {successorLead && (
