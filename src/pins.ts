@@ -1,4 +1,4 @@
-// Pinned teams (docs/PLAN_PINNED_FEATURES.md): the team (a lane in teams.json) is the place Aub
+// Pinned teams (docs/PLAN_PINNED_FEATURES.md): the team (a lane in teams.json) is the place the owner
 // clicks; its Brainstorm, Lead and Workers are swappable occupants behind it.
 // This file is the shared contract for the pinned-team UI. Keep it pure (no fetch, no React):
 // steps 1 (sidebar + grid), 2 (focus rail) and 3 (resolver + quick start) all build on it.
