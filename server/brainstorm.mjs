@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import os from "node:os";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { effectiveAgentRole, findLaneInRegistry, isRetiredAgent, resolveWorktreeRootPath, topicOf } from "./identity.mjs";
@@ -104,16 +104,23 @@ export function laneWorkingDir(teamId, laneId, rootDir = REPO_ROOT) {
   const mainRoot = resolveWorktreeRootPath(rootDir) || rootDir;
   const bases = [...new Set([dirname(resolve(mainRoot)), dirname(resolve(rootDir)), join(homedir(), "projects")])];
   for (const p of candidates) {
-    if (isAbsolute(p)) {
-      if (isDir(p)) return resolve(p);
-      continue;
-    }
-    for (const base of bases) {
-      const full = join(base, p);
-      if (isDir(full)) return full;
+    const tries = isAbsolute(p) ? [resolve(p)] : bases.map((base) => resolve(base, p));
+    for (const full of tries) {
+      if (!isDir(full)) continue;
+      if (insideProjectRoots(full, bases)) return full;
+      console.warn(`[vibesquad] ignoring lane path outside the project folders: ${full}`);
     }
   }
   return null;
+}
+
+// A lane folder must be a project under one of the sibling roots (the main checkout counts), never a root itself or above it.
+function insideProjectRoots(full, bases) {
+  const norm = (p) => (process.platform === "win32" ? p.toLowerCase() : p);
+  return bases.some((base) => {
+    const rel = relative(norm(resolve(base)), norm(full));
+    return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+  });
 }
 
 function readLocalAgentRecord(agentId, rootDir = REPO_ROOT) {

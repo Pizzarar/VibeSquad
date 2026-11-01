@@ -1,5 +1,6 @@
-import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
@@ -346,12 +347,53 @@ export function handleAuthStatus(req, res, rootDir = REPO_ROOT) {
   return sendJson(res, 200, full);
 }
 
+/** Content hash of the registry file; a PUT that sends a stale one gets 409 instead of overwriting newer edits. */
+export function teamsRevision(file) {
+  try {
+    return createHash("sha1").update(readFileSync(file)).digest("hex");
+  } catch {
+    return "none";
+  }
+}
+
+const MAX_TEAMS = 200;
+const MAX_LANES = 500;
+const MAX_PATHS = 64;
+const MAX_PATH_LEN = 1024;
+
+/** Throws on a teams array the registry can't safely hold (ids are slug-safe, paths are strings). */
+export function validateTeamsBody(teams) {
+  if (!Array.isArray(teams)) throw new Error("teams must be an array");
+  if (teams.length > MAX_TEAMS) throw new Error("too many teams");
+  const checkPaths = (obj, where) => {
+    if (obj.paths !== undefined) {
+      if (!Array.isArray(obj.paths) || obj.paths.length > MAX_PATHS) throw new Error(`${where}: paths must be an array of strings`);
+      for (const p of obj.paths) if (typeof p !== "string" || p.length > MAX_PATH_LEN) throw new Error(`${where}: paths must be strings`);
+    }
+    if (obj.path != null && (typeof obj.path !== "string" || obj.path.length > MAX_PATH_LEN)) throw new Error(`${where}: path must be a string`);
+  };
+  for (const t of teams) {
+    if (!t || typeof t !== "object" || Array.isArray(t)) throw new Error("each team must be an object");
+    if (typeof t.id !== "string" || !TEAM_ID.test(t.id)) throw new Error("bad team id");
+    checkPaths(t, `team ${t.id}`);
+    if (t.lanes === undefined) continue;
+    if (!Array.isArray(t.lanes) || t.lanes.length > MAX_LANES) throw new Error(`team ${t.id}: lanes must be an array`);
+    for (const l of t.lanes) {
+      if (!l || typeof l !== "object" || Array.isArray(l)) throw new Error(`team ${t.id}: each lane must be an object`);
+      if (typeof l.id !== "string" || !TEAM_ID.test(l.id)) throw new Error(`team ${t.id}: bad lane id`);
+      checkPaths(l, `lane ${l.id}`);
+    }
+  }
+}
+
 // The teams registry the CLI and plugin read (see teams-file.mjs). Writes keep the other top-level keys.
+// GET adds `revision`; a write that sends one must still match the file, or it gets 409 with the current registry.
 function handleTeams(req, res, rootDir) {
   if (req.method === "GET") {
-    const r = readJsonFileWithBom(resolveTeamsFilePath(rootDir), { label: "teams.json", fallback: null, recordWarning: true });
+    const file = resolveTeamsFilePath(rootDir);
+    const r = readJsonFileWithBom(file, { label: "teams.json", fallback: null, recordWarning: true });
     if (r.ok && r.data) {
-      return sendJson(res, 200, r.data);
+      return sendJson(res, 200, { ...r.data, revision: teamsRevision(file) });
     }
     return sendJson(res, 500, { error: r.error || "Failed to read teams.json" });
   }
@@ -362,13 +404,18 @@ function handleTeams(req, res, rootDir) {
   readBody(req).then((parsed) => {
     try {
       const teams = Array.isArray(parsed) ? parsed : parsed.teams;
-      if (!Array.isArray(teams)) throw new Error("teams must be an array");
-      const curRes = readJsonFileWithBom(resolveTeamsFilePath(rootDir), {
+      validateTeamsBody(teams);
+      const readPath = resolveTeamsFilePath(rootDir);
+      const curRes = readJsonFileWithBom(readPath, {
         label: "teams.json",
         fallback: {},
         recordWarning: true,
       });
-      const cur = curRes.data ?? {};
+      const { revision: _staleRevision, ...cur } = curRes.data ?? {};
+      const currentRevision = teamsRevision(readPath);
+      if (!Array.isArray(parsed) && typeof parsed.revision === "string" && parsed.revision !== currentRevision) {
+        return sendJson(res, 409, { error: "teams.json changed", ...cur, revision: currentRevision });
+      }
       const firstTeam = teams[0] ?? null;
       const leadFlagTokens =
         typeof parsed.leadFlagTokens === "number"
@@ -400,10 +447,13 @@ function handleTeams(req, res, rootDir) {
       };
       const file = resolveTeamsWritePath(rootDir);
       mkdirSync(dirname(file), { recursive: true });
-      writeFileSync(file, JSON.stringify(next, null, 2) + "\n", "utf8");
+      const tmp = `${file}.tmp-${process.pid}`;
+      writeFileSync(tmp, JSON.stringify(next, null, 2) + "\n", "utf8");
+      renameSync(tmp, file);
       clearConfigWarning(file);
       sendJson(res, 200, {
         ok: true,
+        revision: teamsRevision(resolveTeamsFilePath(rootDir)),
         teams: next.teams,
         leadFlagTokens: next.leadFlagTokens,
         leadAutoHandoffTokens: next.leadAutoHandoffTokens,
@@ -689,6 +739,9 @@ async function handleBrainstormRestart(req, res, rootDir) {
   }
   try {
     const body = await readBody(req);
+    if (body?.agentId != null && body.agentId !== "" && !AGENT_ID_STRICT.test(String(body.agentId))) {
+      return sendJson(res, 400, { ok: false, error: "bad agentId" });
+    }
     const result = await performBrainstormRestart(sanitizeBody(body), rootDir);
     return sendJson(res, 200, result);
   } catch (e) {

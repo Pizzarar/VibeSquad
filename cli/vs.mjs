@@ -250,8 +250,8 @@ function shellQuote(value) {
 }
 
 const AGENT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
-// cmd.exe still expands %VAR% and breaks out of quotes on `"`, so refuse those outright.
-const UNSAFE_SHELL_ARG = /[\r\n\0"%]/;
+// cmd.exe still expands %VAR% and breaks out of quotes on `"`, so refuse those outright, plus its other metacharacters.
+const UNSAFE_SHELL_ARG = /[\r\n\0"%^&|<>!]/;
 
 function run(command, args, timeoutMs) {
   try {
@@ -1769,13 +1769,15 @@ ${brief}`, live);
   const written = writeBrainstormSummary(id, newPinBrief(id, name, brief));
   let file = resolveTeamsFilePath();
   if (path.basename(file) === "teams.example.json") file = path.join(BASE_DIR, "teams.json");
+  // Re-read the file right before the write (the UI may have saved since TEAM_DEFS loaded) and swap it in with a
+  // rename, so a reader never sees half a file. The UI's revision check then refetches instead of overwriting this lane.
   const { value: cur } = readJsonFileWithBom(file, { fallback: null, label: "teams.json" });
   const doc = Array.isArray(cur?.teams) ? cur : { ...TEAMS_FILE };
   const target = doc.teams.find((t) => t.id === squadDef.id);
   if (!target) throw new Error(`squad "${squadDef.id}" is not in ${file}`);
   target.lanes = [...(target.lanes ?? []), { id, name, state: "pinned" }];
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}`;
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
   fs.writeFileSync(tmp, JSON.stringify(doc, null, 2) + "\n", "utf8");
   fs.renameSync(tmp, file);
 

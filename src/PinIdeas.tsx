@@ -2,6 +2,7 @@
 // ("Send to <Team> ↗ · Dismiss") on a tile and above the focused drawer, the overview "+" idea box,
 // and the toast both report to. Side effects live in src/pinActions.ts.
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 import { bestOverlap, nameFromIdea, parseSendTo, pinsForSquad, type Pin } from "./pins";
 import { createPin, dismissSendTo, isSendToDismissed, sendIdeaToTeam } from "./pinActions";
 import { getTeams, type TeamView } from "./teams";
@@ -82,14 +83,25 @@ const laneName = (laneId: string): string | null => {
   return null;
 };
 
-/** "<idea> · Send to <Team> ↗ · Dismiss". One click sends to B's Brainstorm or parks in B's inbox. */
+/**
+ * "<idea> · Send to <Team> ↗ · Dismiss". A one-line idea sends on one click; a longer one opens the full text
+ * first, so what gets sent to B's Brainstorm (or parked in B's inbox) is always what you saw.
+ */
 export function SendToCard({ pin, offer, variant = "tile" }: { pin: Pin; offer: SendToOffer; variant?: "tile" | "bar" }) {
   const [hidden, setHidden] = useState(() => isSendToDismissed(offer.id));
   const [busy, setBusy] = useState(false);
-  useEffect(() => setHidden(isSendToDismissed(offer.id)), [offer.id]);
+  const [preview, setPreview] = useState(false);
+  useEffect(() => {
+    setHidden(isSendToDismissed(offer.id));
+    setPreview(false);
+  }, [offer.id, offer.text]);
   if (hidden || !offer.text) return null;
   const target = laneName(offer.laneId);
+  const lines = offer.text.split("\n");
+  const multiLine = lines.length > 1;
+  const sendLabel = target ? `Send to ${target} ↗` : "Park in inbox ↗";
   const send = async () => {
+    setPreview(false);
     setBusy(true);
     try {
       showPinToast(await sendIdeaToTeam(offer.laneId, offer.text, pin.lane.name));
@@ -104,11 +116,58 @@ export function SendToCard({ pin, offer, variant = "tile" }: { pin: Pin; offer: 
   return (
     <div className={`pin-send-to ${variant}`} data-testid={`pin-send-to-${pin.lane.id}`} onClick={(e) => e.stopPropagation()}>
       <span className="pin-send-to-text" title={offer.text}>
-        {offer.text.split("\n")[0]}
+        {lines[0]}
       </span>
-      <button type="button" className="btn ok small" disabled={busy} data-testid={`pin-send-to-go-${pin.lane.id}`} onClick={() => void send()}>
-        {busy ? "…" : target ? `Send to ${target} ↗` : "Park in inbox ↗"}
+      {multiLine && <span className="muted small pin-send-to-more">+{lines.length - 1} more lines</span>}
+      <button
+        type="button"
+        className="btn ok small"
+        disabled={busy}
+        data-testid={`pin-send-to-go-${pin.lane.id}`}
+        onClick={() => (multiLine ? setPreview(true) : void send())}
+      >
+        {busy ? "…" : sendLabel}
       </button>
+      {preview &&
+        createPortal(
+        <div className="modal-back" onClick={() => setPreview(false)}>
+          <div
+            className="modal pin-send-preview"
+            role="dialog"
+            aria-label="Send idea"
+            data-testid={`pin-send-preview-${pin.lane.id}`}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                setPreview(false);
+              }
+            }}
+          >
+            <div className="modal-head">
+              <span>{target ? `SEND TO ${target.toUpperCase()}` : "PARK IN INBOX"}</span>
+              <button type="button" className="btn ghost small" onClick={() => setPreview(false)} title="Close (Esc)">
+                ✕
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="muted small">This whole message gets sent:</div>
+              <pre className="pin-send-preview-text" data-testid={`pin-send-preview-text-${pin.lane.id}`}>
+                {offer.text}
+              </pre>
+            </div>
+            <div className="modal-foot pin-idea-actions">
+              <button type="button" className="btn ghost" onClick={() => setPreview(false)}>
+                Cancel
+              </button>
+              <button type="button" className="btn ok" autoFocus data-testid={`pin-send-confirm-${pin.lane.id}`} onClick={() => void send()}>
+                {sendLabel}
+              </button>
+            </div>
+          </div>
+        </div>,
+          document.body,
+        )}
       <button
         type="button"
         className="btn ghost small"
