@@ -575,8 +575,14 @@ function lead(s: Sprite, k: Look) {
   s.rect(17, 14, 19, 14, frame);
   s.glowDots([[7, 12], [8, 12], [16, 12], [17, 12]], "#ffffff");
   mouth(s, k, "grin");
-  // Cigar clamped in the corner of the grin: glowing ember and a curl of smoke.
-  prop(s, 18, 17, ["CCCCe"], { C: "#8a5a3a", e: "#ff6a1a" }, "e");
+  // Cigar in the corner of the grin, pinched at the chin by the right hand: glowing ember
+  // and a curl of smoke.
+  prop(s, 18, 17, [
+    "CCCCe",
+    "..hhh",
+    "..kkk",
+    "..ccc",
+  ], { C: "#8a5a3a", e: "#ff6a1a", ...hands({ ...k, jacket: blazer }) }, "e");
   s.glowDots([[23, 16]], "#ffd166");
   s.glowDots([[24, 15], [24, 13], [25, 12]], "#d8d4e8");
 }
@@ -585,32 +591,66 @@ function retiredLead(s: Sprite, k: Look) {
   const blazer = k.jacket;
   torso(s, k, { color: blazer, shirt: k.pastel, pads: true });
   head(s, k);
-  hair(s, { ...k, hair: "#a8a4b8" }, "crop");
-  // Shades pushed up into the grey hair.
-  s.rect(5, 5, 22, 5, DARK);
-  s.rect(6, 6, 12, 6, mix(DARK, k.neon, 0.4));
-  s.rect(15, 6, 21, 6, mix(DARK, k.neon, 0.4));
-  s.set(7, 6, "#ffffff");
-  s.set(16, 6, "#ffffff");
-  brows(s, { ...k, hair: "#a8a4b8" }, "flat");
+  // Old shades folded and hooked over the breast pocket.
+  s.rect(3, 22, 9, 22, DARK);
+  s.rect(4, 23, 5, 23, mix(DARK, k.neon, 0.45));
+  s.rect(7, 23, 8, 23, mix(DARK, k.neon, 0.45));
+  s.set(4, 23, "#ffffff");
+  brows(s, { ...k, hair: "#c4c2d4" }, "flat");
   eyes(s, k, "tired");
   mouth(s, k, "content");
   // Greyed out: everything painted so far loses most of its colour.
   s.recolor((c) => grey(c, 0.62));
-  // Bright white coffee mug held off-centre against the dark jacket: handle on the right,
-  // hand gripping the left side, steam rising into the dark beside the jaw.
+  // Silver hair, painted after the grey-out so it keeps its own cool tones: swept back with
+  // a side part, receding at both temples, short at the sides. A charcoal edge and a cast
+  // shadow on the forehead keep it off every skin tone.
+  const skinAt = new Set<number>();
+  for (let i = 0; i < S * S; i++) if (s.px[i]) skinAt.add(i);
+  const silver = { O: "#34323f", D: "#5c5a6c", M: "#9896aa", L: "#c9c7d8", W: "#f0eefa" };
+  s.stamp(4, 1, [
+    ".....MLWWLMLLM......",
+    "...MLLDWLLMLWLLM....",
+    ".MLMLLDLWLLMLLWLMM..",
+    "DMLMLMDLMWLLMLLWLMMD",
+    "DMMD...LMLLM....DMMD",
+    "DMD......DD......DMD",
+    "DM................MD",
+    "DM................MD",
+    "DD................DD",
+    "DD................DD",
+    "O..................O",
+  ], silver);
+  // Charcoal edge where hair meets skin, and a soft shadow on the skin beneath it.
+  const isHair = (x: number, y: number) => Object.values(silver).includes(s.get(x, y) ?? "");
+  const edge: number[][] = [];
+  const cast: number[][] = [];
+  for (let y = 1; y <= 12; y++)
+    for (let x = 3; x <= 24; x++) {
+      if (!isHair(x, y)) continue;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1]]) {
+        const xx = x + dx;
+        const yy = y + dy;
+        if (isHair(xx, yy) || !skinAt.has(yy * S + xx)) continue;
+        edge.push([x, y]);
+        if (dy) cast.push([xx, yy]);
+      }
+    }
+  cast.forEach(([x, y]) => s.set(x, y, shade(s.get(x, y)!, 0.78)));
+  s.dots(edge, silver.O);
+  // Bright white coffee mug cradled low in both hands in front of the chest, steam curling
+  // up past the right of the jaw.
   const hand = grey(k.skin, 0.25);
-  prop(s, 14, 21, [
+  prop(s, 9, 22, [
     "....RRRRRR..",
     "....RccccR..",
-    ".hhhMMMMMDH.",
-    ".kkkMMMMMD.H",
-    ".hhhMMMMMD.H",
-    ".zzzMMMMMDH.",
-    "....MMMMMD..",
-  ], { R: "#ffffff", c: "#4a2a1c", M: "#eef6ff", D: "#9fb4d4", H: "#eef6ff", h: hand, k: shade(hand, 0.72), z: shade(k.jacket, 0.75) });
-  s.glowDots([[20, 20], [21, 19], [20, 18], [22, 17], [23, 16], [24, 14]], "#ffffff");
-  s.glowDots([[22, 20], [23, 18], [24, 16]], "#9ff3ff");
+    "hhhhMMMMMDhhh",
+    "kkkkMMMMMDkkk",
+    "hhhhMMMMMDhhh",
+    "zzz.MMMMMD.zz",
+  ], { R: "#ffffff", c: "#4a2a1c", M: "#eef6ff", D: "#9fb4d4", h: hand, k: shade(hand, 0.72), z: shade(k.jacket, 0.75) });
+  s.glowDots([[19, 20], [21, 17]], "#ffffff");
+  s.glowDots([[20, 19], [22, 15]], "#c9c4dc");
+  s.glowDots([[22, 16], [23, 14]], "#9ff3ff");
 }
 
 function brainstorm(s: Sprite, k: Look) {
@@ -642,20 +682,18 @@ function brainstorm(s: Sprite, k: Look) {
     s.glow(26, y, k.neon);
   }
   s.glowDots([[2, 8], [3, 8], [24, 8], [25, 8], [2, 16], [3, 16], [24, 16], [25, 16]], shade(k.neon, 0.7));
-  // A glowing lightbulb of an idea, held up in the right hand.
-  prop(s, 21, 16, [
-    "..ooo..",
-    ".oYYYo.",
-    ".oYWYo.",
-    ".oYYYo.",
-    "..oYo..",
-    "..bbb..",
-    "..bdb..",
-    ".hhhh..",
-    ".kkkk..",
-    ".cccc..",
+  // A glowing lightbulb of an idea, cradled in both hands and presented in front of the chest.
+  prop(s, 8, 20, [
+    "....oooo....",
+    "...oYYYYo...",
+    "...oYWYYo...",
+    "...oYYYYo...",
+    "....oYYo....",
+    ".hhhbbbbhhh.",
+    "ckkkbddbkkkc",
+    "chhhhhhhhhhc",
   ], { o: "#ffc93a", Y: "#fff4a8", W: "#ffffff", b: "#b8c0d8", d: "#5a6078", ...hands(k) }, "oYW");
-  s.glowDots([[21, 15], [27, 15], [27, 19]], "#9ff3ff");
+  s.glowDots([[9, 20], [18, 20], [8, 22], [19, 22]], "#9ff3ff");
 }
 
 function implement(s: Sprite, k: Look) {
@@ -689,20 +727,21 @@ function implement(s: Sprite, k: Look) {
   brows(s, k, "flat");
   eyes(s, k, "open");
   mouth(s, k, "grin");
-  // Steel wrench gripped in the right hand, open jaw raised beside the face.
-  prop(s, 18, 13, [
-    "......S..S",
-    "......s..s",
-    "......sssd",
-    ".......sd.",
-    "......sd..",
-    ".....sd...",
-    "....sd....",
-    "...sd.....",
-    "..hhh.....",
-    "..kkk.....",
-    "..hhh.....",
-    "..ccc.....",
+  // Steel wrench rested over the right shoulder: fist low at the chest, the shaft running up
+  // across the collarbone and the open jaw poking out behind the shoulder.
+  prop(s, 13, 16, [
+    "..........S..S",
+    "..........s..s",
+    "..........sssd",
+    ".........ssd..",
+    "........ssd...",
+    ".......ssd....",
+    ".....sssd.....",
+    "...sssd.......",
+    "hhhsd.........",
+    "kkkd..........",
+    "hhh...........",
+    "ccc...........",
   ], { S: "#bff6ff", s: "#d4dcf0", d: "#6e7896", ...hands(k) });
 }
 
@@ -751,22 +790,19 @@ function mechanical(s: Sprite, k: Look) {
   s.glowRect(13, 4, 14, 4, "#ffffff");
   // Peak shadow across the brow.
   s.rect(5, 9, 22, 9, shade(k.skin, 0.68));
-  // Heavy ring spanner gripped in the left hand, ring end raised beside the face.
-  prop(s, 0, 11, [
-    ".SSS......",
-    "s...s.....",
-    "s...s.....",
-    ".sssd.....",
-    "...sd.....",
-    "....sd....",
-    ".....sd...",
-    "......sd..",
-    "......sd..",
-    ".......sd.",
-    "......hhh.",
-    "......kkk.",
-    "......hhh.",
-    "......ccc.",
+  // Heavy ring spanner gripped low at the right hip and angled up across the chest, ring end
+  // resting on the left shoulder.
+  prop(s, 1, 17, [
+    ".SSS",
+    "s...s",
+    "s...s",
+    ".sssssss",
+    "....ddddssss",
+    "........ddddssss",
+    "............ddddsssshhh",
+    "................ddddkkk",
+    "....................hhh",
+    "....................ccc",
   ], { S: "#bff6ff", s: "#d4dcf0", d: "#6e7896", ...hands(k) });
 }
 
@@ -802,24 +838,21 @@ function review(s: Sprite, k: Look) {
   eyes(s, k, "glance");
   s.rect(10, 11, 11, 11, shade(k.skin, 0.66)); // left eye narrowed under the brim
   mouth(s, k, "smirk");
-  // Round magnifying glass held up in the right hand: steel rim, glinting cyan lens, brass handle.
-  prop(s, 18, 10, [
-    ".....rrrr.",
-    "....rWLLLr",
-    "....rLLLLr",
-    "....rLLLLr",
-    "....rLLLLr",
-    ".....rrrr.",
-    "....g.....",
-    "...gg.....",
-    "...g......",
-    "..gg......",
-    "..g.......",
-    ".hhh......",
-    ".kkk......",
-    ".hhh......",
-    ".ccc......",
-  ], { r: "#c8d0e8", W: "#ffffff", L: "#7fe9ff", g: "#d9a54a", ...hands(k) }, "WL");
+  // Round magnifying glass angled in front of the lower-right cheek, the skin tinted cyan
+  // behind the lens; brass handle running down to the hand over the coat's shoulder.
+  prop(s, 18, 14, [
+    ".rrrr...",
+    "rWLLLr..",
+    "rLLLLr..",
+    "rLLLLr..",
+    "rLLLLr..",
+    ".rrrrg..",
+    "......g.",
+    ".....hhh",
+    ".....kkk",
+    ".....hhh",
+    ".....ccc",
+  ], { r: "#c8d0e8", W: "#ffffff", L: mix(k.skin, "#7fe9ff", 0.6), g: "#d9a54a", ...hands(k) }, "WL");
 }
 
 function audit(s: Sprite, k: Look) {
@@ -878,15 +911,15 @@ function spec(s: Sprite, k: Look) {
   s.dots([[10, 21], [11, 22], [17, 21], [16, 22]], "#ffffff");
   s.glowRect(13, 21, 14, 21, k.neon);
   s.glowRect(13, 22, 14, 27, shade(k.neon, 0.75));
-  // Unrolled blueprint held open at the left: curled edges, cyan grid, a hand on the right edge.
-  prop(s, 2, 20, [
-    "RRRRRRRR....",
-    "BgBBgBBBhhh.",
-    "ggggggggkkk.",
-    "BgBwwBBBhhh.",
-    "BgBBgBBBccc.",
-    "gggggggg....",
-    "RRRRRRRR....",
+  // Unrolled blueprint held open wide and low across the torso, a hand on each curled edge:
+  // cyan grid and a white floor-plan sketch.
+  prop(s, 2, 22, [
+    "...RRRRRRRRRRRRRRRRRR...",
+    "hhhRgBBBgBBBgBBBgBBBRhhh",
+    "kkkRgwwwwwwwgBBBgBBBRkkk",
+    "hhhRgwBBgBBwggggggggRhhh",
+    "cccRgwwwwwwwgBBBgBBBRccc",
+    "...RRRRRRRRRRRRRRRRRR...",
   ], { R: "#5aa8ff", B: "#1d4f9a", g: "#9ff3ff", w: "#ffffff", ...hands(k) }, "gw");
   head(s, k);
   hair(s, k, "part");
@@ -948,10 +981,11 @@ function art(s: Sprite, k: Look) {
   s.dots([[13, 1], [14, 1], [10, 2], [11, 2], [8, 3]], mix(beret, "#ffffff", 0.3));
   s.glowDots([[8, 4]], k.neon);
   s.glowDots([[9, 4]], mix(k.neon, "#ffffff", 0.5));
-  // Spray can gripped in the right hand: magenta cap, nozzle, neon mist drifting up and out.
-  prop(s, 18, 16, [
-    "....n.",
-    "...pp.",
+  // Spray can gripped in the right hand: magenta cap with a side nozzle, and a cone of neon
+  // mist fanning out to the right: one bright pixel at the tip, a gap, then loose droplets
+  // and a short wisp drifting outward and up, dark background between them.
+  prop(s, 18, 17, [
+    "...ppn",
     "..SssS",
     "..sLLs",
     "chhhhs",
@@ -960,8 +994,10 @@ function art(s: Sprite, k: Look) {
     "..sLLs",
     "..ssss",
   ], { n: "#3a3a4a", p: "#ff3df0", S: "#ffffff", s: "#c8d0e8", L: "#00f0ff", ...hands(k) }, "L");
-  s.glowDots([[24, 15], [25, 14], [26, 15], [25, 12], [27, 13]], "#ff3df0");
-  s.glowDots([[24, 13], [26, 11], [27, 16]], "#00f0ff");
+  s.glowDots([[24, 17]], "#ffe0fb");
+  s.glowDots([[26, 16]], "#ff8bf0");
+  s.glowDots([[27, 15], [25, 14]], "#ff3df0");
+  s.glowDots([[27, 13], [27, 18]], "#00f0ff");
 }
 
 function unknown(s: Sprite, k: Look) {

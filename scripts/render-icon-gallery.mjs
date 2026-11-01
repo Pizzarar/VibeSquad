@@ -1,5 +1,5 @@
-// Dev-only: render every portrait at 4x to one PNG for the Painter -> Director loop.
-// Usage: node scripts/render-icon-gallery.mjs [out.png]
+// Dev-only: render every portrait to one PNG for the Painter -> Director loop.
+// Usage: node scripts/render-icon-gallery.mjs [out.png] [--scale 1|4]   (default 4x; 1x = native 28x28)
 // Rows: lead, retired-lead, brainstorm, implement, mechanical, review, audit, spec, art, unknown.
 // Left block: the 5 curated palettes (Claude rim). Right block: palette 0 under all 9 providers.
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -10,7 +10,10 @@ import { deflateSync } from "node:zlib";
 import { transformSync } from "rolldown/utils";
 
 const root = resolve(import.meta.dirname, "..");
-const out = resolve(process.argv[2] ?? join(root, "scratch", "shots", "icons-gallery.png"));
+const args = process.argv.slice(2);
+const si = args.indexOf("--scale");
+const SCALE = si >= 0 ? Math.max(1, parseInt(args.splice(si, 2)[1], 10) || 4) : 4;
+const out = resolve(args[0] ?? join(root, "scratch", "shots", "icons-gallery.png"));
 const src = readFileSync(join(root, "src", "pixel.tsx"), "utf8");
 const code = transformSync("pixel.tsx", src, { lang: "tsx", jsx: { runtime: "classic" } }).code;
 const tmp = join(mkdtempSync(join(tmpdir(), "vs-gallery-")), "pixel.mjs");
@@ -20,10 +23,9 @@ const { paintPixels, providerSpec, S } = await import(pathToFileURL(tmp).href);
 const TYPES = ["lead", "retired-lead", "brainstorm", "implement", "mechanical", "review", "audit", "spec", "art", "unknown"];
 const PROVIDERS = ["claude", "codex", "gemini", "opencode", "cursor", "copilot", "codewhale", "pi", "aider"];
 const SEEDS = 5;
-const SCALE = 4;
 const CELL = S * SCALE;
-const GAP = 8;
-const SPLIT = 32;
+const GAP = 2 * SCALE;
+const SPLIT = 8 * SCALE;
 const BG = [16, 14, 28];
 
 // Same FNV-1a as pixel.tsx, so we can pick ids that land on each curated palette.
