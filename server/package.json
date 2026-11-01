@@ -2,6 +2,7 @@
   "name": "@vibesquad/server",
   "private": true,
   "version": "0.0.0",
+  "license": "MIT",
   "type": "module",
   "description": "VibeSquad server modules, linked so the Paseo plugin can import them as a package."
 }
