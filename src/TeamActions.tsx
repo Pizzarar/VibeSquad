@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { defaultSpawnConfigFor } from "./antigravity";
-import { spawnTeamAgent, usePaseo } from "./paseo";
+import { daemonClient, DEMO, spawnTeamAgent, usePaseo } from "./paseo";
 import {
   checkBuddyOverlap,
   getTeams,
@@ -103,6 +103,98 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
+  // Directory suggestions
+  const [cwdSugs, setCwdSugs] = useState<string[]>([]);
+  const cwdSugTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Add project / clone drawer
+  const [addProjectOpen, setAddProjectOpen] = useState(false);
+  const [addProjectPath, setAddProjectPath] = useState("");
+  const [addingProject, setAddingProject] = useState(false);
+  const [cloneRepo, setCloneRepo] = useState("");
+  const [cloneDest, setCloneDest] = useState("");
+  const [cloning, setCloning] = useState(false);
+  const [addProjectErr, setAddProjectErr] = useState("");
+
+  // Worktree picker
+  type WorktreeEntry = { worktreePath: string; branchName?: string | null };
+  const [existingWts, setExistingWts] = useState<WorktreeEntry[]>([]);
+  const [wtMode, setWtMode] = useState<"none" | "existing" | "new">("none");
+  const [selectedWt, setSelectedWt] = useState("");
+
+  const fetchSuggestions = useCallback(async (query: string) => {
+    if (!query || DEMO) { setCwdSugs([]); return; }
+    try {
+      const res = await daemonClient.getDirectorySuggestions({ query, includeDirectories: true, includeFiles: false, limit: 8 });
+      setCwdSugs(res.directories ?? []);
+    } catch { setCwdSugs([]); }
+  }, []);
+
+  const onCwdChange = (val: string) => {
+    setCwd(val);
+    if (cwdSugTimer.current) clearTimeout(cwdSugTimer.current);
+    cwdSugTimer.current = setTimeout(() => void fetchSuggestions(val), 250);
+  };
+
+  useEffect(() => {
+    if (!cwd) return;
+    let cancelled = false;
+    async function loadWts() {
+      try {
+        if (DEMO) { setExistingWts([]); return; }
+        const res = await daemonClient.getPaseoWorktreeList({ cwd });
+        if (!cancelled) setExistingWts(res.worktrees ?? []);
+      } catch { if (!cancelled) setExistingWts([]); }
+    }
+    loadWts();
+    return () => { cancelled = true; };
+  }, [cwd]);
+
+  const addLocalProject = async () => {
+    if (!addProjectPath.trim()) return;
+    setAddingProject(true);
+    setAddProjectErr("");
+    try {
+      if (!DEMO) await daemonClient.addProject(addProjectPath.trim());
+      const currentTeams = getTeams();
+      const updatedTeams = currentTeams.map((t) =>
+        t.id === team.id && !t.paths.includes(addProjectPath.trim())
+          ? { ...t, paths: [...t.paths, addProjectPath.trim()] }
+          : t,
+      );
+      await saveTeams(updatedTeams);
+      setCwd(addProjectPath.trim());
+      setAddProjectOpen(false);
+      setAddProjectPath("");
+    } catch (e) {
+      setAddProjectErr(String(e));
+    } finally {
+      setAddingProject(false);
+    }
+  };
+
+  const cloneProject = async () => {
+    if (!cloneRepo.trim()) return;
+    setCloning(true);
+    setAddProjectErr("");
+    try {
+      const dest = cloneDest.trim() || cloneRepo.trim().split("/").pop()!.replace(/\.git$/, "");
+      let clonedPath = dest;
+      if (!DEMO) {
+        const res = await daemonClient.cloneGithubProject({ repo: cloneRepo.trim(), targetDirectory: dest });
+        clonedPath = (res as { path?: string }).path ?? dest;
+      }
+      setCwd(clonedPath);
+      setAddProjectOpen(false);
+      setCloneRepo("");
+      setCloneDest("");
+    } catch (e) {
+      setAddProjectErr(String(e));
+    } finally {
+      setCloning(false);
+    }
+  };
+
   const dirs = useMemo(() => {
     const set = new Set<string>();
     for (const m of view.members) if (m.agent.status !== "closed") set.add(m.agent.cwd);
@@ -183,7 +275,13 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   };
 
   const canSubmit =
-    !busy && !!cwd && !!laneId && (!newWt || !!branch) && !(role === "worker" && (!task || !job)) && title.length <= TITLE_LIMIT;
+    !busy &&
+    !!cwd &&
+    !!laneId &&
+    (!newWt || !!branch) &&
+    !(role === "worker" && (!task || !job)) &&
+    title.length <= TITLE_LIMIT &&
+    !(wtMode === "existing" && !selectedWt);
 
   return (
     <Modal
@@ -283,20 +381,122 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
             </div>
           </div>
           <Field label="WORKSPACE">
-            <select value={cwd} onChange={(e) => setCwd(e.target.value)}>
-              {dirs.map((d) => (
-                <option key={d}>{d}</option>
-              ))}
-            </select>
+            <>
+              <input
+                list="na-cwd-suggestions"
+                value={cwd}
+                placeholder="Project directory…"
+                onChange={(e) => onCwdChange(e.target.value)}
+              />
+              <datalist id="na-cwd-suggestions" data-testid="cwd-suggestions">
+                {[...new Set([...dirs, ...cwdSugs])].map((d) => (
+                  <option key={d} value={d} />
+                ))}
+              </datalist>
+            </>
           </Field>
-          <label className="check">
-            <input type="checkbox" checked={newWt} onChange={(e) => setNewWt(e.target.checked)} /> Create new git worktree
-          </label>
-          {newWt && (
-            <Field label="BRANCH NAME">
-              <input value={branch} placeholder="feat/vs-step4" onChange={(e) => setBranch(e.target.value)} />
-            </Field>
+          <button
+            className="btn ghost small"
+            data-testid="add-project-toggle"
+            style={{ marginBottom: 4 }}
+            onClick={() => { setAddProjectOpen((v) => !v); setAddProjectErr(""); }}
+          >
+            {addProjectOpen ? "▲ Close" : "+ Add folder / Clone repo"}
+          </button>
+          {addProjectOpen && (
+            <div className="add-project-drawer" style={{ border: "1px solid var(--border)", borderRadius: 4, padding: 8, marginBottom: 8 }}>
+              {addProjectErr && <div className="stat-alert small">{addProjectErr}</div>}
+              <Field label="LOCAL FOLDER PATH">
+                <>
+                  <input
+                    value={addProjectPath}
+                    placeholder="/path/to/my-project"
+                    onChange={(e) => setAddProjectPath(e.target.value)}
+                  />
+                  <button
+                    className="btn ok small"
+                    disabled={addingProject || !addProjectPath.trim()}
+                    onClick={() => void addLocalProject()}
+                  >
+                    {addingProject ? "Adding…" : "Add folder"}
+                  </button>
+                </>
+              </Field>
+              <div className="field-label" style={{ marginTop: 8 }}>CLONE GITHUB REPO</div>
+              <input
+                value={cloneRepo}
+                placeholder="owner/repo or https://github.com/…"
+                onChange={(e) => setCloneRepo(e.target.value)}
+                style={{ marginBottom: 4 }}
+              />
+              <input
+                value={cloneDest}
+                placeholder="Destination path (optional)"
+                onChange={(e) => setCloneDest(e.target.value)}
+                style={{ marginBottom: 4 }}
+              />
+              <button
+                className="btn ok small"
+                data-testid="clone-repo-btn"
+                disabled={cloning || !cloneRepo.trim()}
+                onClick={() => void cloneProject()}
+              >
+                {cloning ? "Cloning…" : "Clone repo"}
+              </button>
+            </div>
           )}
+          <div data-testid="worktree-picker" style={{ marginTop: 4 }}>
+            <div className="field-label">WORKTREE / BRANCH</div>
+            <div className="row2" style={{ gap: 6 }}>
+              <label className="check small">
+                <input
+                  type="radio"
+                  name="wt-mode"
+                  checked={wtMode === "none"}
+                  onChange={() => { setWtMode("none"); setNewWt(false); }}
+                />{" "}
+                Main checkout
+              </label>
+              {existingWts.length > 0 && (
+                <label className="check small">
+                  <input
+                    type="radio"
+                    name="wt-mode"
+                    checked={wtMode === "existing"}
+                    onChange={() => { setWtMode("existing"); setNewWt(false); setSelectedWt(existingWts[0]?.worktreePath ?? ""); }}
+                  />{" "}
+                  Existing worktree
+                </label>
+              )}
+              <label className="check small">
+                <input
+                  type="radio"
+                  name="wt-mode"
+                  checked={wtMode === "new"}
+                  onChange={() => { setWtMode("new"); setNewWt(true); }}
+                />{" "}
+                Create new worktree…
+              </label>
+            </div>
+            {wtMode === "existing" && existingWts.length > 0 && (
+              <select
+                value={selectedWt}
+                onChange={(e) => setSelectedWt(e.target.value)}
+                style={{ marginTop: 4, width: "100%" }}
+              >
+                {existingWts.map((w) => (
+                  <option key={w.worktreePath} value={w.worktreePath}>
+                    {w.branchName ?? w.worktreePath}
+                  </option>
+                ))}
+              </select>
+            )}
+            {wtMode === "new" && (
+              <Field label="BRANCH NAME">
+                <input value={branch} placeholder="feat/vs-step4" onChange={(e) => setBranch(e.target.value)} />
+              </Field>
+            )}
+          </div>
         </div>
         <div className="na-col">
           <Field label="BRIEF">
