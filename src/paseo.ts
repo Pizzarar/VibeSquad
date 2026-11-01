@@ -344,7 +344,10 @@ export type SpawnRequest = {
 export function retireAgent(agent: PaseoAgent, laneName?: string): Promise<void> {
   const l = labelsOf(agent);
   if (l.role === "brainstorm" || l.role === "buddy") {
-    return updateAgent(agent.id, { labels: { ...l, role: "former-brainstorm" } });
+    // Same title rule as the plugin's retirePredecessors: "(old) <title>".
+    const title = (agent.title ?? "").trim();
+    const name = title && !title.toLowerCase().startsWith("(old)") ? `(old) ${title}` : undefined;
+    return updateAgent(agent.id, { ...(name ? { name } : {}), labels: { ...l, role: "former-brainstorm" } });
   }
   const ord = l.ord;
   const lane = (laneName ?? l.lane ?? l.lead ?? "").toUpperCase();

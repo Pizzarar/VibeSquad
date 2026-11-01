@@ -3125,3 +3125,22 @@ html, body, #root { overflow-x: hidden; }
 .pin-reply-err { flex-basis: 100%; }
 .pin-grid-done { margin-top: 10px; }
 .pin-full-toggle { align-self: center; }
+
+/* ── Pinned teams step 5: Mark complete, Done shelf, Reopen, "looks done" card (src/PinDone.tsx). Owned by the pinned team. ── */
+.pin-menu-list > .pin-complete.armed { color: var(--emerald); }
+.pin-menu-list > .pin-complete.blocked { color: var(--amber); white-space: normal; }
+.pin-row.done .pin-reopen { padding: 0 6px; }
+.pin-done-shelf { margin-top: 12px; }
+.pin-done-shelf > .pin-done-toggle { padding-left: 0; }
+.pin-done-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.pin-done-item {
+  display: flex; align-items: center; gap: 8px; padding: 5px 8px 5px 10px;
+  background: var(--panel); border: 1px solid var(--line); color: var(--muted); font-size: 13px;
+}
+.pin-done-name { color: var(--text); }
+.pin-looks-done {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 8px; cursor: default;
+  background: #00e09a14; border: 1px solid var(--emerald);
+}
+.pin-looks-done-text { flex-basis: 100%; color: var(--text); font-size: 12px; }
+.pin-looks-done .pin-complete.blocked { white-space: normal; }

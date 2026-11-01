@@ -152,3 +152,37 @@ export function briefDiffSummary(before: string, after: string): string {
   }
   return parts.length ? parts.join(", ") : "no content changes";
 }
+
+// ── Step 5: completing a team (docs/PLAN_PINNED_FEATURES.md §4) ──────────────
+
+/**
+ * Why Mark complete is refused right now, or null when it is allowed. Running workers (and a running
+ * lead) or any open permission on the team block it. The Brainstorm itself may be running.
+ */
+export function completeBlocker(pin: Pin): string | null {
+  const crew = [...(pin.lead ? [pin.lead] : []), ...pin.workers];
+  const perms = [pin.brainstorm, ...crew].reduce((n, m) => n + (m?.agent.pendingPermissions?.length ?? 0), 0);
+  const runningWorkers = pin.workers.filter((m) => m.agent.status === "running").length;
+  const leadRunning = pin.lead?.agent.status === "running";
+  const parts: string[] = [];
+  if (runningWorkers) parts.push(`${runningWorkers} worker${runningWorkers === 1 ? "" : "s"} still running`);
+  if (leadRunning) parts.push("Lead still running");
+  if (perms) parts.push(`${perms} open permission${perms === 1 ? "" : "s"}`);
+  return parts.length ? parts.join(" · ") : null;
+}
+
+/** The fenced line a Brainstorm posts under "<Team> looks done. ✓ Mark complete · Not yet". */
+export const LOOKS_DONE_MARKER = "vs:looks-done";
+
+/** True when a message carries the looks-done marker on a line of its own (fenced or bare). */
+export const hasLooksDone = (text: string): boolean =>
+  text.replace(/\r\n/g, "\n").split("\n").some((l) => l.replace(/`/g, "").trim() === LOOKS_DONE_MARKER);
+
+/** Date stamp for the brief's "Done <date>" / "Reopened <date>" lines (local YYYY-MM-DD). */
+export function briefStamp(d = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** Append one line to the end of a brief, keeping exactly one trailing newline. */
+export const appendBriefLine = (brief: string, line: string): string => `${brief.replace(/\s+$/, "")}\n\n${line}\n`;

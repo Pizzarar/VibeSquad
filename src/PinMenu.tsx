@@ -1,8 +1,9 @@
 // Pinned teams step 3: the pin's ⋯ menu (docs/PLAN_PINNED_FEATURES.md §3).
-// Edit brief · Rename · Show plumbing · Mark complete (arrives in step 5).
+// Edit brief · Rename · Show plumbing · Mark complete (step 5, src/PinDone.tsx).
 import { useEffect, useRef, useState } from "react";
 import type { Pin } from "./pins";
 import { openBriefEditor, renamePin } from "./pinActions";
+import { MarkCompleteButton } from "./PinDone";
 
 type Props = {
   pin: Pin;
@@ -107,9 +108,7 @@ export function PinMenu({ pin, onShowPlumbing, onEditBrief }: Props) {
               >
                 Show plumbing
               </button>
-              <button role="menuitem" disabled title="Arrives in step 5">
-                Mark complete <span className="muted">(step 5)</span>
-              </button>
+              <MarkCompleteButton pin={pin} role="menuitem" />
             </>
           )}
         </div>
