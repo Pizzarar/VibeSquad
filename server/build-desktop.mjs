@@ -1,10 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { ensureTls, tlsDir } from "./auth.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
+const require = createRequire(import.meta.url);
 const cargoBin = join(homedir(), ".cargo", "bin");
 const env = {
   ...process.env,
@@ -85,6 +87,13 @@ for (const { dir, name } of closure) cpSync(dir, join(runtimeDir, "node_modules"
 console.log(`[build:desktop] staged runtime with ${closure.length} production packages`);
 
 const licenseFile = join(rootDir, "public", "THIRD-PARTY-LICENSES.txt");
+const defaultKeyPath = join(homedir(), ".tauri", "vibesquad-updater.key");
+const signingKeyPath = env.TAURI_SIGNING_PRIVATE_KEY_PATH || (existsSync(defaultKeyPath) ? defaultKeyPath : "");
+if (!env.TAURI_SIGNING_PRIVATE_KEY && signingKeyPath && existsSync(signingKeyPath)) {
+  env.TAURI_SIGNING_PRIVATE_KEY = readFileSync(signingKeyPath, "utf8").trim();
+  console.log(`[build:desktop] Loaded Tauri updater signing key from ${signingKeyPath}`);
+}
+
 console.log("[build:desktop] 3/4 Building Tauri 2 NSIS installer...");
 execFileSync(process.platform === "win32" ? "cmd.exe" : "npx", process.platform === "win32" ? ["/d", "/s", "/c", "npx.cmd tauri build --bundles nsis"] : ["tauri", "build", "--bundles", "nsis"], {
   cwd: rootDir,
@@ -96,7 +105,8 @@ const nsisDir = join(rootDir, "src-tauri", "target", "release", "bundle", "nsis"
 if (!existsSync(nsisDir)) {
   throw new Error(`NSIS bundle directory not found: ${nsisDir}`);
 }
-const setupExe = readdirSync(nsisDir).find((f) => f.endsWith("-setup.exe") || f.endsWith(".exe"));
+const nsisFiles = readdirSync(nsisDir);
+const setupExe = nsisFiles.find((f) => f.endsWith("-setup.exe") || (f.endsWith(".exe") && !f.endsWith(".sig")));
 if (!setupExe) {
   throw new Error(`No NSIS installer .exe found in ${nsisDir}`);
 }
@@ -106,6 +116,20 @@ const distDesktopDir = join(rootDir, "dist-desktop");
 mkdirSync(distDesktopDir, { recursive: true });
 const destInstaller = join(distDesktopDir, "VibeSquad-setup.exe");
 copyFileSync(srcInstaller, destInstaller);
+const srcSig = `${srcInstaller}.sig`;
+const destSig = `${destInstaller}.sig`;
+if (existsSync(srcSig)) {
+  copyFileSync(srcSig, destSig);
+} else if (signingKeyPath && existsSync(signingKeyPath)) {
+  const tauriCliJs = require.resolve("@tauri-apps/cli/tauri.js");
+  const signEnv = { ...env, TAURI_SIGNING_PRIVATE_KEY_PATH: signingKeyPath };
+  delete signEnv.TAURI_SIGNING_PRIVATE_KEY;
+  execFileSync(process.execPath, [tauriCliJs, "signer", "sign", destInstaller], {
+    cwd: rootDir,
+    env: signEnv,
+    stdio: "inherit",
+  });
+}
 const sizeMb = (statSync(destInstaller).size / (1024 * 1024)).toFixed(2);
 if (existsSync(licenseFile)) copyFileSync(licenseFile, join(distDesktopDir, "THIRD-PARTY-LICENSES.txt"));
 console.log(`[build:desktop] 4/4 Copied ${srcInstaller} -> ${destInstaller} (${sizeMb} MB)`);

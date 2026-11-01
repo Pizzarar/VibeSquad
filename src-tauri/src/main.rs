@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod ui_pages;
+mod updater;
 
 use axum::{
     body::Body,
@@ -311,6 +312,7 @@ fn set_start_at_login_registry(_enabled: bool) -> Result<(), String> {
 pub struct AgentAlertTracker {
     seeded: bool,
     needs_by_agent: HashMap<String, String>,
+    pub running_agents: HashSet<String>,
     dedupe: HashSet<String>,
 }
 
@@ -326,6 +328,7 @@ pub struct SharedAppState {
     pub app_handle: RwLock<Option<AppHandle>>,
     pub tray_needs_item: RwLock<Option<MenuItem<tauri::Wry>>>,
     pub tracker: Mutex<AgentAlertTracker>,
+    pub updater: Mutex<updater::UpdaterState>,
     /// The `node.exe server/serve.mjs` child we spawned (None when we reused an already-running server).
     pub managed_server: Mutex<Option<std::process::Child>>,
 }
@@ -1191,7 +1194,13 @@ fn inspect_ws_frame(state: &Arc<SharedAppState>, text: &str) {
                 .unwrap_or("idle");
             if archived || status == "closed" {
                 tracker.needs_by_agent.remove(&id);
+                tracker.running_agents.remove(&id);
                 return;
+            }
+            if status == "running" {
+                tracker.running_agents.insert(id.clone());
+            } else {
+                tracker.running_agents.remove(&id);
             }
 
             let title = agent
@@ -1904,6 +1913,11 @@ fn build_router(state: Arc<SharedAppState>) -> Router {
         .route("/__desktop/hash", post(handle_desktop_hash))
         .route("/__desktop/badge", post(handle_desktop_badge))
         .route("/__desktop/notify", post(handle_desktop_notify))
+        .route("/__desktop/updater/status", get(updater::handle_updater_status))
+        .route("/__desktop/updater/channel", post(updater::handle_updater_channel))
+        .route("/__desktop/updater/check", post(updater::handle_updater_check))
+        .route("/__desktop/updater/install", post(updater::handle_updater_install))
+        .route("/__desktop/updater/busy", post(updater::handle_updater_busy))
         .route("/ws", get(handle_ws_upgrade))
         .fallback(proxy_http_handler)
         .layer(axum::middleware::from_fn_with_state(state.clone(), guard_local_request))
@@ -1931,6 +1945,7 @@ fn main() {
         app_handle: RwLock::new(None),
         tray_needs_item: RwLock::new(None),
         tracker: Mutex::new(AgentAlertTracker::default()),
+        updater: Mutex::new(updater::UpdaterState::default()),
         managed_server: Mutex::new(None),
     });
 
@@ -1944,6 +1959,7 @@ fn main() {
     let local_port = rt.block_on(async move {
         let (listener, port) = bind_loopback_listener().await;
         state_for_server.local_port.store(port as usize, Ordering::SeqCst);
+        updater::spawn_updater_loop(state_for_server.clone());
         let router = build_router(state_for_server);
         tokio::spawn(async move {
             let _ = axum::serve(listener, router).await;
@@ -1980,6 +1996,7 @@ fn main() {
             focus_main_window(app);
         }))
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             let handle = app.handle().clone();
             *state_for_setup.app_handle.write().unwrap() = Some(handle.clone());

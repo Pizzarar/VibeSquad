@@ -2,7 +2,7 @@ import { FIRST_RUN_DONE_KEY, FirstRunModal, fetchFirstRunStatus, type FirstRunSt
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { ProviderQuotaView } from "./antigravity";
-import { LEGACY_NEEDS_LABEL, setLanExposureState, useExposedIpsStore } from "./userName";
+import { LEGACY_NEEDS_LABEL, dismissUpdateBanner, loadUpdaterStatus, setLanExposureState, triggerUpdateInstall, useExposedIpsStore, useUpdaterStatus } from "./userName";
 import { DEMO, archiveAgent, detachAgent, getPaseoState, loadArchived, retireAgent, setNeedsYou, updateAgent, upsertLocalAgent, usePaseo } from "./paseo";
 import {
   AGENT_TYPE_LABEL,
@@ -1242,7 +1242,9 @@ function useExposedIps(): string[] {
 
 function AboutLicensesModal({ onClose, onChecklist }: { onClose: () => void; onChecklist: () => void }) {
   const [text, setText] = useState<string | null>(null);
+  const updaterStatus = useUpdaterStatus();
   useEffect(() => {
+    void loadUpdaterStatus();
     let alive = true;
     fetch("/THIRD-PARTY-LICENSES.txt")
       .then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
@@ -1255,6 +1257,9 @@ function AboutLicensesModal({ onClose, onChecklist }: { onClose: () => void; onC
   return (
     <Modal title="About VibeSquad & Third-Party Licenses" onClose={onClose} wide>
       <div data-testid="about-licenses-modal">
+        <p data-testid="about-version-channel">
+          <b>VibeSquad v{updaterStatus.currentVersion}</b> · Channel: <code>{updaterStatus.channel}</code>
+        </p>
         <p>VibeSquad works with Paseo (pinned CLI v0.13.2).</p>
         <p>Licensed under the MIT License.</p>
         <p>
@@ -1282,6 +1287,12 @@ export function App() {
   const [modal, setModal] = useState<"new-agent" | "add-buddy" | "settings" | "pair-device" | "about" | "first-run" | null>(null);
   const [firstRunStatus, setFirstRunStatus] = useState<FirstRunStatus | null>(null);
   const exposedIps = useExposedIps();
+  const updaterStatus = useUpdaterStatus();
+  useEffect(() => {
+    void loadUpdaterStatus();
+    const id = setInterval(() => void loadUpdaterStatus(), 60_000);
+    return () => clearInterval(id);
+  }, []);
   const [successorId, setSuccessorId] = useState<string | null>(null);
   const [teamId, setTeamId] = useState(() => localStorage.getItem("vs.team") ?? views[0]?.team.id ?? "efi");
   const { needsSetup: profilesNeedSetup, setupDismissed: profilesSetupDismissed } = useProfiles();
@@ -1521,6 +1532,44 @@ export function App() {
       {exposedIps.length > 0 && (
         <div className="exposed-network-banner" data-testid="exposed-network-banner" role="alert" style={{ gridColumn: "1 / -1", background: "#ff2a85", color: "#05060d", fontWeight: 800, padding: "6px 12px", textAlign: "center" }}>
           {`⚠ EXPOSED ON ${exposedIps.join(", ")} — LAN/meshnet access enabled`}
+        </div>
+      )}
+      {updaterStatus.updateAvailable && !updaterStatus.dismissed && (
+        <div
+          className="update-available-banner"
+          data-testid="update-available-banner"
+          role="alert"
+          style={{
+            gridColumn: "1 / -1",
+            background: "#00f0ff",
+            color: "#05060d",
+            fontWeight: 800,
+            padding: "6px 12px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 12,
+          }}
+        >
+          <span>{`Update available (v${updaterStatus.availableVersion}) — restart?`}</span>
+          <button
+            type="button"
+            className="btn small"
+            data-testid="update-restart-btn"
+            style={{ background: "#05060d", color: "#00f0ff", borderColor: "#05060d" }}
+            onClick={() => void triggerUpdateInstall()}
+          >
+            Restart &amp; Update
+          </button>
+          <button
+            type="button"
+            className="btn small ghost"
+            data-testid="update-later-btn"
+            style={{ color: "#05060d", borderColor: "#05060d" }}
+            onClick={() => dismissUpdateBanner()}
+          >
+            Later
+          </button>
         </div>
       )}
       {!focus && (

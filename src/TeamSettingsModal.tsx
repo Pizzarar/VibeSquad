@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getUserName, saveLanEnabled, saveUserName, useExposedIpsStore, useLanEnabled } from "./userName";
+import { getUserName, loadUpdaterStatus, saveLanEnabled, saveUpdateChannel, saveUserName, useExposedIpsStore, useLanEnabled, useUpdaterStatus } from "./userName";
 import {
   AGENT_TYPE_NAME,
   BRAINSTORM_RESTART_DEFAULT,
@@ -252,6 +252,10 @@ export function TeamSettingsModal({ onClose }: { onClose: () => void }) {
   const [nameDraft, setNameDraft] = useState(() => (getUserName() === "you" ? "" : getUserName()));
   const lanEnabled = useLanEnabled();
   const exposedIps = useExposedIpsStore();
+  const updaterStatus = useUpdaterStatus();
+  useEffect(() => {
+    void loadUpdaterStatus();
+  }, []);
   const uiScale = useUiScale();
   const uiScalePct = Math.round(uiScale * 100);
   const patch = (i: number, p: Partial<TeamDef>) => setTeams((ts) => ts.map((t, j) => (j === i ? { ...t, ...p } : t)));
@@ -336,6 +340,34 @@ export function TeamSettingsModal({ onClose }: { onClose: () => void }) {
             />
             <span>{lanEnabled ? "Enabled" : "Off (loopback only)"}</span>
           </label>
+        </div>
+      </section>
+      <section className="ts-team" data-testid="update-channel-section">
+        <div className="ts-scale-head">
+          <div>
+            <div className="field-label">UPDATE CHANNEL (v{updaterStatus.currentVersion})</div>
+            <div className="muted small">
+              <b>Stable</b> prompts before restarting on new releases. <b>Beta</b> installs rolling pre-releases automatically when no agent turn is mid-flight.
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button
+              type="button"
+              className={`btn small ${updaterStatus.channel === "stable" ? "on" : "ghost"}`}
+              data-testid="update-channel-stable"
+              onClick={() => void saveUpdateChannel("stable")}
+            >
+              Stable
+            </button>
+            <button
+              type="button"
+              className={`btn small ${updaterStatus.channel === "beta" ? "on" : "ghost"}`}
+              data-testid="update-channel-beta"
+              onClick={() => void saveUpdateChannel("beta")}
+            >
+              Beta
+            </button>
+          </div>
         </div>
       </section>
       <section className="ts-team ts-scale-section" data-testid="ui-scale-section">

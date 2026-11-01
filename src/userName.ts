@@ -104,3 +104,104 @@ export async function saveLanEnabled(enabled: boolean): Promise<{ lanEnabled: bo
   } catch {}
   return { lanEnabled: getLanEnabled(), exposedIps: getExposedIps() };
 }
+
+export type UpdateChannel = "stable" | "beta";
+
+export interface UpdaterStatusView {
+  currentVersion: string;
+  channel: UpdateChannel;
+  updateAvailable: boolean;
+  availableVersion: string;
+  downloaded: boolean;
+  dismissed: boolean;
+}
+
+let updaterStatus: UpdaterStatusView = {
+  currentVersion: "0.1.1",
+  channel: "stable",
+  updateAvailable: false,
+  availableVersion: "",
+  downloaded: false,
+  dismissed: false,
+};
+
+export const getUpdaterStatus = (): UpdaterStatusView => updaterStatus;
+
+function setUpdaterStatus(patch: Partial<UpdaterStatusView>): void {
+  const next: UpdaterStatusView = { ...updaterStatus, ...patch };
+  if (
+    next.currentVersion === updaterStatus.currentVersion &&
+    next.channel === updaterStatus.channel &&
+    next.updateAvailable === updaterStatus.updateAvailable &&
+    next.availableVersion === updaterStatus.availableVersion &&
+    next.downloaded === updaterStatus.downloaded &&
+    next.dismissed === updaterStatus.dismissed
+  ) {
+    return;
+  }
+  updaterStatus = next;
+  listeners.forEach((l) => l());
+}
+
+export function useUpdaterStatus(): UpdaterStatusView {
+  return useSyncExternalStore(
+    (cb) => {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+    getUpdaterStatus,
+  );
+}
+
+export async function loadUpdaterStatus(): Promise<UpdaterStatusView> {
+  try {
+    const r = await fetch("/__desktop/updater/status", { cache: "no-store" });
+    if (r.ok) {
+      const d = await r.json();
+      setUpdaterStatus({
+        currentVersion: String(d.currentVersion || "0.1.1"),
+        channel: d.channel === "beta" ? "beta" : "stable",
+        updateAvailable: Boolean(d.updateAvailable),
+        availableVersion: String(d.availableVersion || ""),
+        downloaded: Boolean(d.downloaded),
+      });
+    }
+  } catch {}
+  return updaterStatus;
+}
+
+export async function saveUpdateChannel(channel: UpdateChannel): Promise<UpdaterStatusView> {
+  const ch: UpdateChannel = channel === "beta" ? "beta" : "stable";
+  setUpdaterStatus({ channel: ch, dismissed: false });
+  try {
+    const r = await fetch("/__desktop/updater/channel", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ channel: ch }),
+    });
+    if (r.ok) {
+      const d = await r.json();
+      setUpdaterStatus({
+        currentVersion: String(d.currentVersion || updaterStatus.currentVersion),
+        channel: d.channel === "beta" ? "beta" : "stable",
+        updateAvailable: Boolean(d.updateAvailable),
+        availableVersion: String(d.availableVersion || ""),
+        downloaded: Boolean(d.downloaded),
+      });
+    }
+  } catch {}
+  return updaterStatus;
+}
+
+export async function triggerUpdateInstall(): Promise<boolean> {
+  try {
+    const r = await fetch("/__desktop/updater/install", { method: "POST" });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+export function dismissUpdateBanner(): void {
+  setUpdaterStatus({ dismissed: true });
+}

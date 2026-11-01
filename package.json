@@ -1,7 +1,7 @@
 {
   "name": "vibesquad",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.1.1",
   "type": "module",
   "bin": {
     "vs": "./cli/vs.mjs"
@@ -11,6 +11,8 @@
     "start": "node server/serve.mjs",
     "build": "node server/generate-licenses.mjs && tsc --noEmit && vite build",
     "build:desktop": "node server/build-desktop.mjs",
+    "release:beta": "node server/release.mjs --channel beta",
+    "release:stable": "node server/release.mjs --channel stable",
     "desktop:dev": "tauri dev",
     "typecheck": "tsc --noEmit"
   },
