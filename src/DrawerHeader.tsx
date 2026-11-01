@@ -4,12 +4,15 @@ import { buildAgentDeepLink } from "@getpaseo/protocol/agent-deep-link";
 import {
   attachFiles,
   clearNeedsYou,
+  daemonClient,
+  DEMO,
   SERVER_ID,
   sendMessage,
   setNeedsYou,
   snoozeNeedsYou,
   stopAgent,
   updateAgent,
+  upsertLocalAgent,
 } from "./paseo";
 import {
   auditAntigravityAgent,
@@ -297,6 +300,47 @@ function TitleLint({ agent }: { agent: PaseoAgent }) {
   );
 }
 
+export const FALLBACK_MODES = [
+  { id: "default", label: "Default" },
+  { id: "plan", label: "Plan" },
+  { id: "acceptEdits", label: "Accept Edits" },
+  { id: "auto", label: "Auto" },
+  { id: "bypassPermissions", label: "Bypass Perms" },
+];
+
+export function nextModeInCycle(modes: Array<{ id: string }>, currentId: string | null): string {
+  if (!modes.length) return "default";
+  const idx = modes.findIndex((m) => m.id === currentId);
+  return modes[(idx + 1) % modes.length].id;
+}
+
+export function formatCostUsd(usd: number): string {
+  if (usd < 0.001) return `$${usd.toFixed(4)}`;
+  if (usd < 0.01) return `$${usd.toFixed(3)}`;
+  return `$${usd.toFixed(2)}`;
+}
+
+export async function setModeHelper(agent: PaseoAgent, modeId: string): Promise<void> {
+  if (DEMO) { upsertLocalAgent({ ...agent, currentModeId: modeId }); return; }
+  await daemonClient.setAgentMode(agent.id, modeId);
+}
+
+export async function setModelHelper(agent: PaseoAgent, modelId: string): Promise<void> {
+  if (DEMO) { upsertLocalAgent({ ...agent, model: modelId }); return; }
+  await daemonClient.setAgentModel(agent.id, modelId);
+}
+
+export async function setThinkingHelper(agent: PaseoAgent, optionId: string | null): Promise<void> {
+  if (DEMO) { upsertLocalAgent({ ...agent, thinkingOptionId: optionId }); return; }
+  await daemonClient.setAgentThinkingOption(agent.id, optionId);
+}
+
+const PROVIDER_MODEL_HINTS: Record<string, string[]> = {
+  claude: ["claude-opus-5-5", "claude-sonnet-4-6", "claude-sonnet-5-5", "claude-haiku-4-5", "claude-haiku-5-5"],
+  gemini: ["gemini-4-argon", "gemini-2.5-pro", "gemini-2.5-flash"],
+  openai: ["gpt-5.4", "gpt-4o", "gpt-4o-mini"],
+};
+
 export type DrawerHeaderProps = {
   agent: PaseoAgent;
   agentType: AgentType;
@@ -412,6 +456,40 @@ export function DrawerHeader({
   dockOpen,
   onToggleDock,
 }: DrawerHeaderProps) {
+  const [modeBusy, setModeBusy] = useState(false);
+  const [modelValue, setModelValue] = useState(agent.model ?? "");
+  const [thinkingBusy, setThinkingBusy] = useState(false);
+  const [reloadBusy, setReloadBusy] = useState(false);
+  const [reloadError, setReloadError] = useState("");
+  const [copyIdFlash, setCopyIdFlash] = useState(false);
+  const [copyCwdFlash, setCopyCwdFlash] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+
+  useEffect(() => { setModelValue(agent.model ?? ""); }, [agent.model]);
+
+  const agentLabels = (agent.labels ?? {}) as Record<string, string>;
+  const needsYouFlagged =
+    (!!agentLabels["needs-you"] && agentLabels["needs-you"] !== "cleared") ||
+    (!!agentLabels[LEGACY_NEEDS_LABEL] && agentLabels[LEGACY_NEEDS_LABEL] !== "cleared");
+  const attachBlocked = !!auditAntigravityAgent(agent, entries).a5ReadBlocked;
+
+  useEffect(() => {
+    if (!active) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.shiftKey && e.key === "Tab") {
+        e.preventDefault();
+        const modes = !DEMO && agent.availableModes?.length ? agent.availableModes : FALLBACK_MODES;
+        const next = nextModeInCycle(modes, agent.currentModeId ?? null);
+        if (!modeBusy) {
+          setModeBusy(true);
+          setModeHelper(agent, next).finally(() => setModeBusy(false));
+        }
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [active, agent, modeBusy]);
+
   return (
     <>
       <header className="drawer-head">
@@ -422,17 +500,138 @@ export function DrawerHeader({
             <span className="prov-pill" style={{ color: prov.color, borderColor: prov.color }}>
               {prov.symbol} {prov.name}
             </span>
+            {(() => {
+              const modes = (!DEMO && agent.availableModes?.length) ? agent.availableModes : FALLBACK_MODES;
+              return (
+                <select
+                  data-testid="drawer-mode-select"
+                  className="drawer-mode-select"
+                  value={agent.currentModeId ?? ""}
+                  disabled={modeBusy}
+                  onChange={(e) => {
+                    setModeBusy(true);
+                    setModeHelper(agent, e.target.value).finally(() => setModeBusy(false));
+                  }}
+                >
+                  {modes.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {(m as any).label || (m as any).name || m.id}
+                    </option>
+                  ))}
+                </select>
+              );
+            })()}
           </div>
           <div className="drawer-title">
             <StatusDot agent={agent} /> {agent.title ?? agent.id.slice(0, 8)}
           </div>
-          <div className="muted small">
-            {agent.provider}/{agent.model ?? "?"} · {shortPath(agent.cwd)} · updated {ago(agent.updatedAt)}
+          <div className="muted small drawer-meta-line">
+            {agent.provider}/
+            <input
+              data-testid="drawer-model-control"
+              className="drawer-model-input"
+              list="drawer-model-list"
+              value={modelValue}
+              onChange={(e) => setModelValue(e.target.value)}
+              onBlur={(e) => {
+                const next = e.target.value.trim();
+                if (next && next !== (agent.model ?? "")) setModelHelper(agent, next).catch(() => {});
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  const next = (e.target as HTMLInputElement).value.trim();
+                  if (next && next !== (agent.model ?? "")) setModelHelper(agent, next).catch(() => {});
+                }
+              }}
+            />
+            <datalist id="drawer-model-list">
+              {(PROVIDER_MODEL_HINTS[agent.provider] ?? []).map((m) => (
+                <option key={m} value={m} />
+              ))}
+            </datalist>
+            {" · "}
+            {shortPath(agent.cwd)}
+            {" · "}
+            <button
+              data-testid="drawer-copy-cwd-btn"
+              className="btn ghost small drawer-copy-btn"
+              title="Copy full working directory path"
+              onClick={() => {
+                navigator.clipboard.writeText(agent.cwd).catch(() => {});
+                setCopyCwdFlash(true);
+                setTimeout(() => setCopyCwdFlash(false), 1200);
+              }}
+            >
+              {copyCwdFlash ? "✓ Path" : "⎘"}
+            </button>
+            {" · updated "}
+            {ago(agent.updatedAt)}
             {runningSubs ? ` · ${runningSubs} sub-agent(s) running` : ""}
+            {" · "}
+            <button
+              data-testid="drawer-copy-id-btn"
+              className="btn ghost small drawer-copy-btn"
+              title="Copy agent ID"
+              onClick={() => {
+                navigator.clipboard.writeText(agent.id).catch(() => {});
+                setCopyIdFlash(true);
+                setTimeout(() => setCopyIdFlash(false), 1200);
+              }}
+            >
+              {copyIdFlash ? "✓ ID" : agent.id.slice(0, 8)}
+            </button>
+          </div>
+          <div className="drawer-extra-row">
+            <select
+              data-testid="drawer-thinking-select"
+              className="drawer-thinking-select"
+              value={agent.thinkingOptionId ?? ""}
+              disabled={thinkingBusy}
+              onChange={(e) => {
+                setThinkingBusy(true);
+                setThinkingHelper(agent, e.target.value || null).finally(() => setThinkingBusy(false));
+              }}
+            >
+              {(["low", "medium", "high"] as const).map((opt) => (
+                <option key={opt} value={opt}>{opt}</option>
+              ))}
+              {!["low", "medium", "high"].includes(agent.thinkingOptionId ?? "") && agent.thinkingOptionId && (
+                <option value={agent.thinkingOptionId}>{agent.thinkingOptionId}</option>
+              )}
+            </select>
+            {(() => {
+              const cost = (agent.lastUsage as any)?.totalCostUsd ?? (agent as any)?.usage?.totalCostUsd;
+              return typeof cost === "number" && cost >= 0 ? (
+                <span data-testid="drawer-cost-readout" className="drawer-cost-pill">
+                  {formatCostUsd(cost)}
+                </span>
+              ) : null;
+            })()}
           </div>
           <TokenMeter used={used} budget={budget ?? 0} ladder={kindOf(agent) === "lead" ? leadLadderFor(team) : undefined} />
         </div>
         <div className="drawer-actions">
+          <button
+            data-testid="drawer-reload-agent-btn"
+            className="btn ghost small"
+            title="Reload / refresh agent session"
+            disabled={reloadBusy}
+            onClick={async () => {
+              if (DEMO) return;
+              setReloadBusy(true);
+              setReloadError("");
+              try {
+                await daemonClient.refreshAgent(agent.id);
+              } catch (e) {
+                setReloadError(String(e));
+              } finally {
+                setReloadBusy(false);
+              }
+            }}
+          >
+            {reloadBusy ? "…" : "↻ Reload"}
+          </button>
+          {reloadError && <span className="small muted drawer-reload-error">{reloadError}</span>}
           <AgentActions agent={agent} archive />
           <button
             className={`btn ghost dock-toggle-btn${dockOpen ? " on" : ""}`}
@@ -658,7 +857,7 @@ export function DrawerHeader({
       )}
 
       {att && att.tone !== "needs-you" && <div className={`banner ${att.tone}`}>{att.reason}</div>}
-      <NeedsYouControls agent={agent} />
+      {(needsYouFlagged || moreOpen) ? <NeedsYouControls agent={agent} /> : null}
       <TitleLint agent={agent} />
       {kindOf(agent) === "lead" && onSuccessor && !agent.archivedAt && (
         <div className="lint-bar successor-bar">
@@ -669,7 +868,15 @@ export function DrawerHeader({
         </div>
       )}
       {active && <HardeningBar agent={agent} entries={entries} />}
-      <AttachFiles agent={agent} entries={entries} />
+      {!needsYouFlagged && (
+        <button
+          className="btn ghost small drawer-more-toggle"
+          onClick={() => setMoreOpen((v) => !v)}
+        >
+          {moreOpen ? "▾ Less" : "⋯ More"}
+        </button>
+      )}
+      {(attachBlocked || moreOpen) ? <AttachFiles agent={agent} entries={entries} /> : null}
     </>
   );
 }
