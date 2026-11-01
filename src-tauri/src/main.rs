@@ -1636,6 +1636,33 @@ async fn ensure_local_server_running(state: &Arc<SharedAppState>) {
 
 /// Kills the server we spawned (never one we merely reused) so quitting leaves no orphan node.exe.
 fn stop_managed_server(state: &Arc<SharedAppState>) {
+    // Before stopping the local VibeSquad server, ask it to evaluate the Paseo daemon quit policy
+    // (stops the daemon only if keepPaseoRunningOnQuit is false, daemon is VibeSquad-managed, and 0 busy agents).
+    let (mode, host) = {
+        let cfg = state.config.read().unwrap();
+        (cfg.server_mode.clone(), cfg.server_host.clone())
+    };
+    if mode == "local" && is_local_host(&host) {
+        let norm = normalize_host(&host);
+        if let Ok(addr) = norm.parse::<SocketAddr>() {
+            if let Ok(mut stream) = std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(400)) {
+                use std::io::{Read, Write};
+                let _ = stream.set_read_timeout(Some(Duration::from_millis(1200)));
+                let _ = stream.set_write_timeout(Some(Duration::from_millis(400)));
+                let body = b"{\"action\":\"stop\",\"reason\":\"app-quit\"}";
+                let req = format!(
+                    "POST /__vibesquad/paseo/daemon HTTP/1.1\r\nHost: {}\r\nOrigin: http://{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    norm,
+                    norm,
+                    body.len()
+                );
+                let _ = stream.write_all(req.as_bytes());
+                let _ = stream.write_all(body);
+                let mut buf = [0u8; 512];
+                let _ = stream.read(&mut buf);
+            }
+        }
+    }
     let child = state.managed_server.lock().unwrap().take();
     if let Some(mut child) = child {
         let _ = child.kill();

@@ -214,7 +214,72 @@ export function useUpdaterStatus(): UpdaterStatusView {
   );
 }
 
+export interface DesktopStatusView {
+  loaded: boolean;
+  isDesktop: boolean;
+  serverMode: "local" | "remote" | "";
+  serverHost: string;
+}
+
+let desktopStatus: DesktopStatusView = {
+  loaded: false,
+  isDesktop: false,
+  serverMode: "local",
+  serverHost: "127.0.0.1:4180",
+};
+
+export const getDesktopStatus = (): DesktopStatusView => desktopStatus;
+
+export function useDesktopStatus(): DesktopStatusView {
+  return useSyncExternalStore(
+    (cb) => {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+    getDesktopStatus,
+  );
+}
+
+export async function loadDesktopStatus(): Promise<DesktopStatusView> {
+  try {
+    const r = await fetch("/__desktop/status", { cache: "no-store" });
+    if (r.ok) {
+      const d = await r.json();
+      setDesktopConfigWarning(d.configWarning);
+      const next: DesktopStatusView = {
+        loaded: true,
+        isDesktop: true,
+        serverMode: d.serverMode === "remote" ? "remote" : d.serverMode === "local" ? "local" : "",
+        serverHost: String(d.serverHost || "127.0.0.1:4180"),
+      };
+      if (
+        next.loaded !== desktopStatus.loaded ||
+        next.isDesktop !== desktopStatus.isDesktop ||
+        next.serverMode !== desktopStatus.serverMode ||
+        next.serverHost !== desktopStatus.serverHost
+      ) {
+        desktopStatus = next;
+        listeners.forEach((l) => l());
+      }
+      return desktopStatus;
+    }
+  } catch {}
+  if (!desktopStatus.loaded) {
+    const host = typeof location !== "undefined" ? location.hostname : "127.0.0.1";
+    const isLoopback = host === "127.0.0.1" || host === "localhost" || host === "[::1]";
+    desktopStatus = {
+      loaded: true,
+      isDesktop: false,
+      serverMode: isLoopback ? "local" : "remote",
+      serverHost: typeof location !== "undefined" ? location.host : "127.0.0.1:4180",
+    };
+    listeners.forEach((l) => l());
+  }
+  return desktopStatus;
+}
+
 export async function loadUpdaterStatus(): Promise<UpdaterStatusView> {
+  void loadDesktopStatus();
   try {
     const r = await fetch("/__desktop/updater/status", { cache: "no-store" });
     if (r.ok) {

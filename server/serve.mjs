@@ -462,7 +462,9 @@ if (isMain) {
   try {
     installVsShim();
   } catch {}
-  void ensurePaseoDaemon({ listen: readPaseo(rootDir).listen });
+  if (loadUserSettings().startPaseoWithVibeSquad !== false) {
+    void ensurePaseoDaemon({ listen: readPaseo(rootDir).listen });
+  }
   server.listen(port, "127.0.0.1", () => {
     console.log(`VibeSquad serving ${distDir} on ${url}`);
     let activeMuxes = [];

@@ -100,6 +100,33 @@ import {
   resolveTeamAndLane,
   synthesizeHandoffPacket,
 } from "./lead-handoff.mjs";
+import {
+  SECRET_MASK,
+  clearManagedDaemonMarker,
+  controlPaseoDaemon,
+  controlPaseoHub,
+  controlPaseoPlugin,
+  createPaseoConfigBackup,
+  getPaseoConfigSurface,
+  getPaseoDaemonStatus,
+  getPaseoPairOffer,
+  getPaseoPlugins,
+  getPaseoProviderDiagnostic,
+  getPaseoProviderModels,
+  getPaseoProviders,
+  getPaseoUsage,
+  listPaseoConfigBackups,
+  maskSecrets,
+  maskSecretsInText,
+  openPaseoConfigInEditor,
+  readRawPaseoConfig,
+  restoreLastPaseoConfigBackup,
+  runPaseoCli,
+  saveCustomAcpProvider,
+  togglePaseoProvider,
+  updatePaseoSettingsPatch,
+  writePaseoConfigAndReload,
+} from "./paseo-control.mjs";
 
 export {
   appendVsLogEntry,
@@ -175,6 +202,31 @@ export {
   resolveLeadProfile,
   resolveTeamAndLane,
   synthesizeHandoffPacket,
+  SECRET_MASK,
+  clearManagedDaemonMarker,
+  controlPaseoDaemon,
+  controlPaseoHub,
+  controlPaseoPlugin,
+  createPaseoConfigBackup,
+  getPaseoConfigSurface,
+  getPaseoDaemonStatus,
+  getPaseoPairOffer,
+  getPaseoPlugins,
+  getPaseoProviderDiagnostic,
+  getPaseoProviderModels,
+  getPaseoProviders,
+  getPaseoUsage,
+  listPaseoConfigBackups,
+  maskSecrets,
+  maskSecretsInText,
+  openPaseoConfigInEditor,
+  readRawPaseoConfig,
+  restoreLastPaseoConfigBackup,
+  runPaseoCli,
+  saveCustomAcpProvider,
+  togglePaseoProvider,
+  updatePaseoSettingsPatch,
+  writePaseoConfigAndReload,
 };
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
@@ -380,6 +432,8 @@ async function handleSettings(req, res) {
     const patch = {};
     if (body && "userName" in body) patch.userName = body.userName;
     if (body && "lanEnabled" in body) patch.lanEnabled = Boolean(body.lanEnabled);
+    if (body && "keepPaseoRunningOnQuit" in body) patch.keepPaseoRunningOnQuit = Boolean(body.keepPaseoRunningOnQuit);
+    if (body && "startPaseoWithVibeSquad" in body) patch.startPaseoWithVibeSquad = Boolean(body.startPaseoWithVibeSquad);
     const saved = saveUserSettings(patch);
     if ("lanEnabled" in patch && typeof exposure.toggleHandler === "function") {
       try {
@@ -1183,6 +1237,91 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return handleProfilesImport(req, res);
       case "/__vibesquad/profiles/diff":
         return handleProfilesDiff(req, res);
+      case "/__vibesquad/paseo/status":
+        if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+        return getPaseoDaemonStatus(opts.paseo).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
+      case "/__vibesquad/paseo/daemon":
+        if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+        return readBody(req)
+          .then((body) => controlPaseoDaemon(String(body?.action || ""), { ...(opts.paseo || {}), confirmBusy: Boolean(body?.confirmBusy), reason: body?.reason }))
+          .then((r) => sendJson(res, r.ok ? 200 : r.needsConfirmation ? 409 : 400, r))
+          .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
+      case "/__vibesquad/paseo/usage":
+        if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+        return getPaseoUsage({ ...(opts.paseo || {}), refresh: new URL(req.url, "http://x").searchParams.get("refresh") === "1" })
+          .then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
+      case "/__vibesquad/paseo/providers":
+        if (req.method === "GET") {
+          return getPaseoProviders(opts.paseo).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
+        }
+        if (req.method === "POST") {
+          return readBody(req)
+            .then((body) => {
+              if (body?.mode === "custom-acp") return saveCustomAcpProvider(body, opts.paseo);
+              return togglePaseoProvider(body?.id, Boolean(body?.enabled), opts.paseo);
+            })
+            .then((r) => sendJson(res, r.ok ? 200 : 400, r))
+            .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
+        }
+        return sendJson(res, 405, { error: "method not allowed" });
+      case "/__vibesquad/paseo/providers/diagnostic":
+        if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+        return getPaseoProviderDiagnostic(new URL(req.url, "http://x").searchParams.get("provider"), opts.paseo)
+          .then((r) => sendJson(res, 200, r), (e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
+      case "/__vibesquad/paseo/providers/models":
+        if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+        return getPaseoProviderModels(new URL(req.url, "http://x").searchParams.get("provider"), opts.paseo)
+          .then((r) => sendJson(res, 200, r), (e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
+      case "/__vibesquad/paseo/plugins":
+        if (req.method === "GET") {
+          return getPaseoPlugins(opts.paseo).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
+        }
+        if (req.method === "POST") {
+          return readBody(req)
+            .then((body) => controlPaseoPlugin(String(body?.action || ""), body, opts.paseo))
+            .then((r) => sendJson(res, r.ok ? 200 : r.needsConfirmation ? 409 : 400, r))
+            .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
+        }
+        return sendJson(res, 405, { error: "method not allowed" });
+      case "/__vibesquad/paseo/surface":
+        if (req.method === "GET") {
+          return getPaseoConfigSurface(opts.paseo).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
+        }
+        if (req.method === "POST" || req.method === "PUT") {
+          return readBody(req)
+            .then((body) => updatePaseoSettingsPatch(body, opts.paseo))
+            .then((r) => sendJson(res, r.ok ? 200 : 400, r))
+            .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
+        }
+        return sendJson(res, 405, { error: "method not allowed" });
+      case "/__vibesquad/paseo/pair":
+        if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+        return getPaseoPairOffer(opts.paseo).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
+      case "/__vibesquad/paseo/hub":
+        if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+        return readBody(req)
+          .then((body) => controlPaseoHub(String(body?.action || "status"), body, opts.paseo))
+          .then((r) => sendJson(res, r.ok ? 200 : 400, r))
+          .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
+      case "/__vibesquad/paseo/raw/open":
+        if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+        return readBody(req)
+          .then((body) => sendJson(res, 200, openPaseoConfigInEditor({ ...(opts.paseo || {}), dryRun: Boolean(body?.dryRun) })))
+          .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
+      case "/__vibesquad/paseo/raw/restore":
+        if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+        return readBody(req)
+          .then((body) => {
+            const restored = restoreLastPaseoConfigBackup({ ...(opts.paseo || {}), backupPath: body?.backupPath });
+            return runPaseoCli(["reload"], opts.paseo).then(() =>
+              sendJson(res, 200, {
+                ok: true,
+                restoredFrom: restored.restoredFrom,
+                maskedConfig: maskSecrets(restored.config),
+              }),
+            );
+          })
+          .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
       default:
         return next?.();
     }

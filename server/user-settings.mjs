@@ -127,10 +127,17 @@ export function loadUserSettings(baseHome) {
       ...(res.error ? { parseError: res.error } : {}),
     };
   }
-  return {
+  const out = {
     userName: normalizeUserName(res.data?.userName),
     lanEnabled: Boolean(res.data?.lanEnabled),
   };
+  if (typeof res.data.keepPaseoRunningOnQuit === "boolean") {
+    out.keepPaseoRunningOnQuit = res.data.keepPaseoRunningOnQuit;
+  }
+  if (typeof res.data.startPaseoWithVibeSquad === "boolean") {
+    out.startPaseoWithVibeSquad = res.data.startPaseoWithVibeSquad;
+  }
+  return out;
 }
 
 export function saveUserSettings(patch, baseHome) {
@@ -140,6 +147,14 @@ export function saveUserSettings(patch, baseHome) {
     userName: normalizeUserName(patch && "userName" in patch ? patch.userName : current.userName),
     lanEnabled: patch && "lanEnabled" in patch ? Boolean(patch.lanEnabled) : current.lanEnabled,
   };
+  if ((patch && "keepPaseoRunningOnQuit" in patch) || "keepPaseoRunningOnQuit" in current) {
+    next.keepPaseoRunningOnQuit =
+      patch && "keepPaseoRunningOnQuit" in patch ? Boolean(patch.keepPaseoRunningOnQuit) : Boolean(current.keepPaseoRunningOnQuit);
+  }
+  if ((patch && "startPaseoWithVibeSquad" in patch) || "startPaseoWithVibeSquad" in current) {
+    next.startPaseoWithVibeSquad =
+      patch && "startPaseoWithVibeSquad" in patch ? Boolean(patch.startPaseoWithVibeSquad) : Boolean(current.startPaseoWithVibeSquad);
+  }
   mkdirSync(baseHome || vibesquadHome(), { recursive: true });
   writeFileSync(file, JSON.stringify(next, null, 2) + "\n", "utf8");
   clearConfigWarning(file);
