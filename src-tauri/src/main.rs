@@ -141,28 +141,88 @@ pub fn config_file_path() -> PathBuf {
     config_dir().join("desktop-config.json")
 }
 
+/// Strips a leading UTF-8 BOM (`\u{feff}` / `EF BB BF`) written by PowerShell `Set-Content`.
+pub fn strip_bom(s: &str) -> &str {
+    s.trim_start_matches('\u{feff}')
+}
+
+pub fn strip_bom_bytes(b: &[u8]) -> &[u8] {
+    b.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(b)
+}
+
+static DESKTOP_CONFIG_WARNING: std::sync::OnceLock<Mutex<Option<String>>> =
+    std::sync::OnceLock::new();
+
+fn config_warning_slot() -> &'static Mutex<Option<String>> {
+    DESKTOP_CONFIG_WARNING.get_or_init(|| Mutex::new(None))
+}
+
+pub fn get_config_warning() -> Option<String> {
+    config_warning_slot().lock().ok().and_then(|g| g.clone())
+}
+
+pub fn set_config_warning(warning: Option<String>) {
+    if let Ok(mut g) = config_warning_slot().lock() {
+        *g = warning;
+    }
+}
+
 pub fn load_config() -> DesktopConfig {
     cleanup_legacy_config_dir();
     let path = config_file_path();
-    if let Ok(raw) = fs::read_to_string(&path) {
-        if let Ok(mut cfg) = serde_json::from_str::<DesktopConfig>(&raw) {
-            if cfg.server_host.trim().is_empty() && cfg.server_mode != "remote" {
-                cfg.server_host = default_server_host();
-            }
-            if cfg.fallback_host.trim().is_empty() {
-                cfg.fallback_host = default_fallback_host();
-            }
-            if cfg.update_channel != "beta" && cfg.update_channel != "stable" {
-                cfg.update_channel = default_update_channel();
-            }
-            if cfg.server_mode.trim().is_empty() {
-                if !cfg.device_token.trim().is_empty() || !is_local_host(&cfg.server_host) {
-                    cfg.server_mode = "remote".to_string();
+    if path.exists() {
+        match fs::read_to_string(&path) {
+            Ok(raw) => {
+                let had_bom = raw.starts_with('\u{feff}');
+                let cleaned = strip_bom(&raw);
+                match serde_json::from_str::<DesktopConfig>(cleaned) {
+                    Ok(mut cfg) => {
+                        if cfg.server_host.trim().is_empty() && cfg.server_mode != "remote" {
+                            cfg.server_host = default_server_host();
+                        }
+                        if cfg.fallback_host.trim().is_empty() {
+                            cfg.fallback_host = default_fallback_host();
+                        }
+                        if cfg.update_channel != "beta" && cfg.update_channel != "stable" {
+                            cfg.update_channel = default_update_channel();
+                        }
+                        if cfg.server_mode.trim().is_empty() {
+                            if !cfg.device_token.trim().is_empty() || !is_local_host(&cfg.server_host) {
+                                cfg.server_mode = "remote".to_string();
+                            }
+                        }
+                        set_config_warning(None);
+                        if had_bom {
+                            let _ = save_config(&cfg);
+                        }
+                        return cfg;
+                    }
+                    Err(err) => {
+                        let msg = format!(
+                            "Invalid JSON in desktop-config.json ({}): {}",
+                            path.display(),
+                            err
+                        );
+                        eprintln!("[vibesquad-desktop] {}", msg);
+                        set_config_warning(Some(msg));
+                        // Never overwrite a corrupt config file on disk with defaults.
+                        return DesktopConfig::default();
+                    }
                 }
             }
-            return cfg;
+            Err(err) => {
+                let msg = format!(
+                    "Failed reading desktop-config.json ({}): {}",
+                    path.display(),
+                    err
+                );
+                eprintln!("[vibesquad-desktop] {}", msg);
+                set_config_warning(Some(msg));
+                return DesktopConfig::default();
+            }
         }
     }
+    set_config_warning(None);
     let cfg = DesktopConfig::default();
     let _ = save_config(&cfg);
     cfg
@@ -199,6 +259,7 @@ pub fn save_config(cfg: &DesktopConfig) -> Result<(), String> {
     let path = dir.join("desktop-config.json");
     let json_str = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
     fs::write(&path, json_str).map_err(|e| e.to_string())?;
+    set_config_warning(None);
     Ok(())
 }
 
@@ -650,6 +711,7 @@ async fn handle_desktop_status(State(state): State<Arc<SharedAppState>>) -> impl
         "updateChannel": cfg.update_channel,
         "localPort": state.local_port.load(Ordering::SeqCst),
         "configDir": config_dir().to_string_lossy(),
+        "configWarning": get_config_warning(),
     }))
 }
 
@@ -880,13 +942,14 @@ async fn handle_desktop_pair(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
+    let clean_body = strip_bom_bytes(&body);
     let submission: PairSubmission = if content_type.contains("application/json") {
-        serde_json::from_slice(&body).unwrap_or_default()
-    } else if let Ok(sub) = serde_json::from_slice::<PairSubmission>(&body) {
+        serde_json::from_slice(clean_body).unwrap_or_default()
+    } else if let Ok(sub) = serde_json::from_slice::<PairSubmission>(clean_body) {
         sub
     } else {
         let mut sub = PairSubmission::default();
-        if let Ok(form_str) = std::str::from_utf8(&body) {
+        if let Ok(form_str) = std::str::from_utf8(clean_body) {
             for pair in url::form_urlencoded::parse(form_str.as_bytes()) {
                 match pair.0.as_ref() {
                     "serverHost" => sub.server_host = pair.1.into_owned(),
@@ -1162,7 +1225,7 @@ async fn handle_desktop_notify(
 /// Inspects Paseo `/ws` JSON frames flowing from upstream to track agents needing attention,
 /// update the System Tray badge count, and trigger native Windows notifications.
 fn inspect_ws_frame(state: &Arc<SharedAppState>, text: &str) {
-    let parsed: Value = match serde_json::from_str(text) {
+    let parsed: Value = match serde_json::from_str(strip_bom(text)) {
         Ok(v) => v,
         Err(_) => return,
     };
@@ -2136,4 +2199,45 @@ fn main() {
                 stop_managed_server(&state_for_exit);
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_bom_handles_utf8_bom_and_preserves_corrupt_config() {
+        assert_eq!(strip_bom("\u{feff}{\"updateChannel\":\"beta\"}"), "{\"updateChannel\":\"beta\"}");
+        assert_eq!(strip_bom_bytes(&[0xEF, 0xBB, 0xBF, b'{', b'}']), b"{}");
+
+        let tmp = std::env::temp_dir().join(format!("vs-bom-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        std::env::set_var("VIBESQUAD_DESKTOP_CONFIG_DIR", &tmp);
+
+        let cfg_path = tmp.join("desktop-config.json");
+        // Write UTF-8 BOM + valid JSON
+        let mut bom_bytes = vec![0xEF, 0xBB, 0xBF];
+        bom_bytes.extend_from_slice(b"{\n  \"serverMode\": \"local\",\n  \"updateChannel\": \"beta\"\n}");
+        fs::write(&cfg_path, &bom_bytes).unwrap();
+
+        let loaded = load_config();
+        assert_eq!(loaded.server_mode, "local");
+        assert_eq!(loaded.update_channel, "beta");
+        assert!(get_config_warning().is_none());
+
+        // File on disk should have had its BOM scrubbed
+        let rewritten = fs::read(&cfg_path).unwrap();
+        assert!(!rewritten.starts_with(&[0xEF, 0xBB, 0xBF]));
+
+        // Corrupt JSON should record a warning and NEVER overwrite the file on disk
+        let corrupt = b"{broken json";
+        fs::write(&cfg_path, corrupt).unwrap();
+        let fallback = load_config();
+        assert_eq!(fallback.update_channel, "stable");
+        assert!(get_config_warning().unwrap_or_default().contains("Invalid JSON in desktop-config.json"));
+        assert_eq!(fs::read(&cfg_path).unwrap(), corrupt);
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
 }

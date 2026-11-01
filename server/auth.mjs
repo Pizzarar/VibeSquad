@@ -4,6 +4,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, wri
 import { homedir, networkInterfaces } from "node:os";
 import { join, resolve } from "node:path";
 import { qrSvg } from "./qr.mjs";
+import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
 
 export const DEVICE_COOKIE = "vs_device";
 const CODE_TTL_MS = 300_000;
@@ -157,10 +158,7 @@ export function ensureTls(cfg = netConfig()) {
   }
   const f = (n) => join(dir, n);
   const metaFile = f("meta.json");
-  let meta = {};
-  try {
-    meta = JSON.parse(readFileSync(metaFile, "utf8"));
-  } catch {}
+  let meta = readJsonFileWithBom(metaFile, { fallback: {}, label: "tls/meta.json" }).value ?? {};
 
   let caText = "";
   if (existsSync(f("ca.crt"))) {
@@ -327,19 +325,17 @@ let lastPersist = 0;
 
 function loadDevices() {
   if (devices) return devices;
-  try {
-    devices = JSON.parse(readFileSync(devicesFile(), "utf8")).devices ?? [];
-  } catch {
-    devices = [];
-  }
+  const { value } = readJsonFileWithBom(devicesFile(), { fallback: { devices: [] }, label: "devices.json" });
+  devices = Array.isArray(value?.devices) ? value.devices : [];
   return devices;
 }
 
 function saveDevices() {
   mkdirSync(vibesquadHome(), { recursive: true });
   const tmp = devicesFile() + ".tmp";
-  writeFileSync(tmp, JSON.stringify({ devices: loadDevices() }, null, 2));
+  writeFileSync(tmp, JSON.stringify({ devices: loadDevices() }, null, 2), "utf8");
   renameSync(tmp, devicesFile());
+  clearConfigWarning(devicesFile());
   lastPersist = Date.now();
 }
 

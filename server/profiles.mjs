@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
 
 export const SHARED_NOTE_PREFIX = [
   "Project rules first: read the repo's AGENTS.md (or CLAUDE.md), and docs/LEAD_RULES.md if you are a lead. Where they conflict with this note, they win. Report with evidence (raw output, file:line, commit hashes), never prose claims.",
@@ -18,6 +19,9 @@ const PRIOR_ART_CHECK_RULE =
 const SPIN_UP_BUDDY_RULE =
   '"Spin up a buddy (for X)" / "spin up another buddy" / "get me a buddy for X": spawn a new Buddy (role=brainstorm, title BRAINSTORM · <LANE> · <topic X>) in a new feature lane (lane=<slug from X>) under the same Squad (team=<product>). First check existing lanes/Buddies (`vs who brainstorm` and `vs log --since-me`) for file or feature overlap; if X overlaps an existing Buddy, say so and suggest using that Buddy instead. Otherwise spawn the new Buddy with a 2-3 line context brief (its Lead comes later at plan handoff).';
 
+const JSON_WRITE_RULE =
+  "Write JSON files with node (e.g. fs.writeFileSync(..., 'utf8')), never PowerShell Set-Content (which writes a UTF-8 BOM that breaks JSON parsers).";
+
 const LEAD_NOTE_BODY = [
   "Root coordinator for one project or lane. Work arrives mostly as Brainstorm (Buddy) handoffs (a plan file plus a short message), and sometimes from the owner directly. Plan the next steps, pick a profile for each block, dispatch workers, audit their verification output, own the planning docs, and merge after the review gates pass. Never write source code. Medium effort; go high only for planning-heavy turns.",
   "Blocked on an owner decision → flag it (needs-you label, one-line reason) and keep working on anything that doesn't depend on it. Don't wait in chat.",
@@ -27,6 +31,7 @@ const LEAD_NOTE_BODY = [
   "Review: Claude work → Review - Gemini (Tier A waits if Gemini is capped; Tier B falls back to Review - Sonnet unless Sonnet wrote it). Gemini work → Review - Sonnet. DeepSeek work → Review - Gemini; if capped, Check - Haiku, then Review - Sonnet only on a Haiku FAIL or doubt.",
   PRIOR_ART_CHECK_RULE,
   SPIN_UP_BUDDY_RULE,
+  JSON_WRITE_RULE,
 ].join("\n");
 
 const BRAINSTORM_NOTE_BODY = [
@@ -480,23 +485,25 @@ export function normalizeProviderOverrides(raw) {
 
 /** The raw providers/providerIcons block already on disk, so saves never drop it. */
 function readProviderBlock(targetPath) {
-  try {
-    if (!existsSync(targetPath)) return {};
-    const parsed = JSON.parse(readFileSync(targetPath, "utf8"));
-    if (!parsed || Array.isArray(parsed)) return {};
-    const block = {};
-    if (parsed.providers !== undefined) block.providers = parsed.providers;
-    if (parsed.providerIcons !== undefined) block.providerIcons = parsed.providerIcons;
-    return block;
-  } catch {
-    return {};
-  }
+  if (!existsSync(targetPath)) return {};
+  const res = readJsonFileWithBom(targetPath, {
+    label: "~/.vibesquad/profiles.json",
+    fallback: null,
+    recordWarning: true,
+  });
+  const parsed = res.data;
+  if (!parsed || Array.isArray(parsed)) return {};
+  const block = {};
+  if (parsed.providers !== undefined) block.providers = parsed.providers;
+  if (parsed.providerIcons !== undefined) block.providerIcons = parsed.providerIcons;
+  return block;
 }
 
 function writeProfilesFile(targetPath, profiles) {
   const block = readProviderBlock(targetPath);
   mkdirSync(dirname(targetPath), { recursive: true });
   writeFileSync(targetPath, JSON.stringify({ version: 1, ...block, profiles }, null, 2) + "\n", "utf8");
+  clearConfigWarning(targetPath);
 }
 
 export function importPaseoProfiles(rawInput, options = {}) {
@@ -552,35 +559,40 @@ export function readPaseoConfig(paseoConfigPath) {
       installedProviders: ["claude", "antigravity-cli", "opencode", "codex"],
     };
   }
-  try {
-    const raw = JSON.parse(readFileSync(cfgPath, "utf8"));
-    const agentProfiles = Array.isArray(raw?.daemon?.agentProfiles) ? raw.daemon.agentProfiles : [];
-    const installed = new Set();
-    const providers = raw?.agents?.providers ?? {};
-    for (const [k, v] of Object.entries(providers)) {
-      if (v && typeof v === "object" && v.enabled !== false) installed.add(k);
-    }
-    const plugins = raw?.plugins ?? {};
-    for (const [k, v] of Object.entries(plugins)) {
-      if (v && typeof v === "object" && v.enabled !== false) installed.add(k);
-    }
-    if (!installed.size) {
-      for (const p of ["claude", "antigravity-cli", "opencode", "codex"]) installed.add(p);
-    }
-    return {
-      exists: true,
-      path: cfgPath,
-      agentProfiles,
-      installedProviders: [...installed],
-    };
-  } catch {
+  const res = readJsonFileWithBom(cfgPath, {
+    label: "~/.paseo/config.json",
+    fallback: null,
+    recordWarning: true,
+  });
+  if (!res.ok || !res.data || typeof res.data !== "object") {
     return {
       exists: false,
       path: cfgPath,
       agentProfiles: [],
       installedProviders: ["claude", "antigravity-cli", "opencode", "codex"],
+      ...(res.error ? { parseError: res.error } : {}),
     };
   }
+  const raw = res.data;
+  const agentProfiles = Array.isArray(raw?.daemon?.agentProfiles) ? raw.daemon.agentProfiles : [];
+  const installed = new Set();
+  const providers = raw?.agents?.providers ?? {};
+  for (const [k, v] of Object.entries(providers)) {
+    if (v && typeof v === "object" && v.enabled !== false) installed.add(k);
+  }
+  const plugins = raw?.plugins ?? {};
+  for (const [k, v] of Object.entries(plugins)) {
+    if (v && typeof v === "object" && v.enabled !== false) installed.add(k);
+  }
+  if (!installed.size) {
+    for (const p of ["claude", "antigravity-cli", "opencode", "codex"]) installed.add(p);
+  }
+  return {
+    exists: true,
+    path: cfgPath,
+    agentProfiles,
+    installedProviders: [...installed],
+  };
 }
 
 export function loadProfiles(profilesPath, options = {}) {
@@ -597,8 +609,13 @@ export function loadProfiles(profilesPath, options = {}) {
 
   let providerOverrides = {};
   if (existsSync(targetPath)) {
-    try {
-      const parsed = JSON.parse(readFileSync(targetPath, "utf8"));
+    const res = readJsonFileWithBom(targetPath, {
+      label: "~/.vibesquad/profiles.json",
+      fallback: null,
+      recordWarning: true,
+    });
+    if (res.ok && res.data) {
+      const parsed = res.data;
       const rawList = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.profiles) ? parsed.profiles : [];
       const profiles = rawList.map(normalizeProfile).filter(Boolean);
       providerOverrides = normalizeProviderOverrides(parsed);
@@ -615,8 +632,6 @@ export function loadProfiles(profilesPath, options = {}) {
           paseoProfiles: paseoInfo.agentProfiles.map(normalizeProfile).filter(Boolean),
         };
       }
-    } catch {
-      // Fall through to recovery/seed
     }
   }
 

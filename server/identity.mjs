@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readJsonFileWithBom } from "./user-settings.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_ROOT = path.resolve(__dirname, "..");
@@ -37,13 +38,13 @@ export function loadTeamsRegistry(rootDirOrTeams = DEFAULT_ROOT) {
     return rootDirOrTeams.teams;
   }
   const rootDir = typeof rootDirOrTeams === "string" ? rootDirOrTeams : DEFAULT_ROOT;
-  try {
-    const file = resolveTeamsFilePath(rootDir);
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-    return Array.isArray(parsed?.teams) ? parsed.teams : [];
-  } catch {
-    return [];
-  }
+  const file = resolveTeamsFilePath(rootDir);
+  const res = readJsonFileWithBom(file, {
+    label: "teams.json",
+    fallback: null,
+    recordWarning: true,
+  });
+  return Array.isArray(res.data?.teams) ? res.data.teams : [];
 }
 
 function extractLabels(agentOrLabels) {

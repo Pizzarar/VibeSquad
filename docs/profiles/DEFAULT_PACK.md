@@ -24,3 +24,5 @@ VibeSquad owns its portable 19-profile store in `~/.vibesquad/profiles.json` (`s
   - When the user says `"spin up a buddy"`, `"spin up another buddy"`, or `"get me a buddy for X"`, spawn a new Buddy (`role=brainstorm`, title `BRAINSTORM · <LANE> · <topic X>`) in a new feature lane (`lane=<slug from X>`) under the same Squad (`team=<product>`).
   - First check existing lanes/Buddies (`vs who brainstorm` and `vs log --since-me`) for file or feature overlap; if `X` overlaps an existing Buddy, flag the overlap and suggest using that Buddy instead.
   - Otherwise spawn the new Buddy with a 2–3 line context brief (its Lead is spawned later at plan handoff).
+- **JSON Writing Rule (`Lead - Claude`, `Lead - Gemini`)**:
+  - Write JSON files with `node` (e.g. `fs.writeFileSync(..., 'utf8')`), never PowerShell `Set-Content` (which writes a UTF-8 BOM that breaks JSON parsers).

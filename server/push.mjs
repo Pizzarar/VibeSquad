@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { readPaseoConfig } from "./brainstorm.mjs";
-import { LEGACY_NEEDS_LABEL, loadUserSettings } from "./user-settings.mjs";
+import { LEGACY_NEEDS_LABEL, clearConfigWarning, loadUserSettings, readJsonFileWithBom } from "./user-settings.mjs";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
 
@@ -36,13 +36,9 @@ export function fromBase64Url(str) {
 export function getOrCreateVapidKeys() {
   const file = getVapidPath();
   if (existsSync(file)) {
-    try {
-      const parsed = JSON.parse(readFileSync(file, "utf8"));
-      if (parsed?.publicKey && parsed?.jwk?.x && parsed?.jwk?.y && parsed?.jwk?.d) {
-        return parsed;
-      }
-    } catch {
-      // regenerate if corrupt
+    const { value: parsed } = readJsonFileWithBom(file, { fallback: null, label: "vapid.json" });
+    if (parsed?.publicKey && parsed?.jwk?.x && parsed?.jwk?.y && parsed?.jwk?.d) {
+      return parsed;
     }
   }
 
@@ -67,6 +63,7 @@ export function getOrCreateVapidKeys() {
 
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify(record, null, 2) + "\n", "utf8");
+  clearConfigWarning(file);
   return record;
 }
 
@@ -217,19 +214,16 @@ export function decryptWebPushPayload(encryptedBody, uaEcdh, authSecretInput) {
 export function readPushSubscriptions() {
   const file = getPushSubsPath();
   if (!existsSync(file)) return [];
-  try {
-    const parsed = JSON.parse(readFileSync(file, "utf8"));
-    const list = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.subscriptions) ? parsed.subscriptions : [];
-    return list.filter((s) => s && typeof s.endpoint === "string" && s.keys?.p256dh && s.keys?.auth);
-  } catch {
-    return [];
-  }
+  const { value: parsed } = readJsonFileWithBom(file, { fallback: [], label: "push-subs.json" });
+  const list = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.subscriptions) ? parsed.subscriptions : [];
+  return list.filter((s) => s && typeof s.endpoint === "string" && s.keys?.p256dh && s.keys?.auth);
 }
 
 export function writePushSubscriptions(subs) {
   const file = getPushSubsPath();
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify(subs, null, 2) + "\n", "utf8");
+  clearConfigWarning(file);
   return subs;
 }
 

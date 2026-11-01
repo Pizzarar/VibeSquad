@@ -15,7 +15,16 @@ process.env.PASEO_HOME = join(home, "paseo");
 
 const auth = await import("../server/auth.mjs");
 const api = await import("../server/vibesquad-api.mjs");
-const { loadUserSettings, saveUserSettings } = await import("../server/user-settings.mjs");
+const {
+  clearAllConfigWarnings,
+  getConfigWarnings,
+  loadUserSettings,
+  readJsonFileWithBom,
+  saveUserSettings,
+  stripBom,
+} = await import("../server/user-settings.mjs");
+const { DEFAULT_PROFILES, loadProfiles } = await import("../server/profiles.mjs");
+const { loadTeamsRegistry } = await import("../server/identity.mjs");
 const { resolveLanEnabled, createMeshnetMux } = await import("../server/serve.mjs");
 
 after(() => {
@@ -125,6 +134,83 @@ describe("persistent LAN opt-in & precedence", () => {
     } finally {
       api.setExposure(false, [], null);
       srv.close();
+    }
+  });
+
+  test("UTF-8 BOM in settings.json, profiles.json, and teams.json is stripped cleanly and scrubbed on disk; corrupt JSON logs warning and surfaces in API", async () => {
+    const tmpHome = mkdtempSync(join(tmpdir(), "vs-bom-"));
+    try {
+      clearAllConfigWarnings();
+      // 1. Write settings.json with a leading UTF-8 BOM (EF BB BF) as PowerShell Set-Content does
+      const settingsPath = join(tmpHome, "settings.json");
+      const bomBuf = Buffer.concat([
+        Buffer.from([0xef, 0xbb, 0xbf]),
+        Buffer.from(JSON.stringify({ userName: "Alex", lanEnabled: true }, null, 2), "utf8"),
+      ]);
+      writeFileSync(settingsPath, bomBuf);
+      assert.equal(readFileSync(settingsPath)[0], 0xef);
+
+      const loaded = loadUserSettings(tmpHome);
+      assert.equal(loaded.userName, "Alex");
+      assert.equal(loaded.lanEnabled, true);
+      assert.equal(loaded.parseError, undefined);
+      assert.equal(getConfigWarnings().length, 0);
+
+      // BOM should have been scrubbed on disk automatically
+      assert.notEqual(readFileSync(settingsPath)[0], 0xef);
+
+      // 2. Write profiles.json with a leading UTF-8 BOM
+      const profilesPath = join(tmpHome, "profiles.json");
+      writeFileSync(
+        profilesPath,
+        Buffer.concat([
+          Buffer.from([0xef, 0xbb, 0xbf]),
+          Buffer.from(JSON.stringify({ profiles: DEFAULT_PROFILES.slice(0, 2) }, null, 2), "utf8"),
+        ]),
+      );
+      const profRes = loadProfiles(profilesPath);
+      assert.equal(profRes.exists, true);
+      assert.equal(profRes.profiles.length, 2);
+      assert.notEqual(readFileSync(profilesPath)[0], 0xef);
+
+      // 3. Write teams.json with a leading UTF-8 BOM
+      const teamsPath = join(tmpHome, "teams.json");
+      writeFileSync(
+        teamsPath,
+        Buffer.concat([
+          Buffer.from([0xef, 0xbb, 0xbf]),
+          Buffer.from(JSON.stringify({ teams: [{ id: "vibesquad", name: "VibeSquad", lanes: [{ id: "vibesquad", name: "VibeSquad" }], paths: ["VibeSquad"] }] }), "utf8"),
+        ]),
+      );
+      const prevTeamsFile = process.env.VIBESQUAD_TEAMS_FILE;
+      process.env.VIBESQUAD_TEAMS_FILE = teamsPath;
+      try {
+        const teams = loadTeamsRegistry(tmpHome);
+        assert.equal(teams.length, 1);
+        assert.equal(teams[0].id, "vibesquad");
+      } finally {
+        if (prevTeamsFile === undefined) delete process.env.VIBESQUAD_TEAMS_FILE;
+        else process.env.VIBESQUAD_TEAMS_FILE = prevTeamsFile;
+      }
+
+      // 4. Write malformed JSON into settings.json -> surfaces parseError and configWarnings without overwriting file
+      const corruptBytes = Buffer.from("{corrupt json", "utf8");
+      writeFileSync(settingsPath, corruptBytes);
+      const corruptLoaded = loadUserSettings(tmpHome);
+      assert.equal(corruptLoaded.lanEnabled, false);
+      assert.ok(corruptLoaded.parseError, "Expected parseError on corrupt settings.json");
+      assert.equal(getConfigWarnings().length, 1);
+      assert.match(getConfigWarnings()[0].label, /settings\.json/);
+      assert.deepEqual(readFileSync(settingsPath), corruptBytes, "Corrupt settings.json must not be silently overwritten on read");
+
+      // 5. Verify lead profile notes include the node JSON write rule (never PowerShell Set-Content)
+      const leadClaude = DEFAULT_PROFILES.find((p) => p.name === "Lead - Claude");
+      const leadGemini = DEFAULT_PROFILES.find((p) => p.name === "Lead - Gemini");
+      assert.match(leadClaude.notes, /Write JSON files with node.*never PowerShell Set-Content/);
+      assert.match(leadGemini.notes, /Write JSON files with node.*never PowerShell Set-Content/);
+    } finally {
+      clearAllConfigWarnings();
+      rmSync(tmpHome, { recursive: true, force: true });
     }
   });
 });

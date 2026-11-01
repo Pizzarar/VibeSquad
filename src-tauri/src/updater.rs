@@ -141,6 +141,7 @@ pub fn status_json(state: &Arc<SharedAppState>) -> Value {
         "installTriggered": up.install_triggered,
         "installedVersion": up.installed_version,
         "agentTurnMidFlight": busy,
+        "configWarning": crate::get_config_warning(),
     })
 }
 
@@ -182,7 +183,18 @@ pub async fn check_for_updates(state: &Arc<SharedAppState>) -> Value {
         return status_json(state);
     }
 
-    let manifest: Value = match resp.json().await {
+    let manifest_bytes = match resp.bytes().await {
+        Ok(b) => b,
+        Err(e) => {
+            let mut up = state.updater.lock().unwrap();
+            up.last_checked_at = checked_at;
+            up.last_error = format!("Failed reading update manifest: {}", e);
+            drop(up);
+            return status_json(state);
+        }
+    };
+
+    let manifest: Value = match serde_json::from_slice(crate::strip_bom_bytes(&manifest_bytes)) {
         Ok(v) => v,
         Err(e) => {
             let mut up = state.updater.lock().unwrap();

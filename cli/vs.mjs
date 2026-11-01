@@ -51,6 +51,9 @@ import {
   LEGACY_NEEDS_UNTIL,
   LEGACY_USER_TYPE,
   loadUserSettings,
+  parseJsonWithBom,
+  readJsonFileWithBom,
+  stripBom,
 } from "../server/user-settings.mjs";
 
 const LOG_TYPES = [
@@ -100,12 +103,8 @@ function resolveTeamsFilePath() {
 function loadTeamsFile() {
   const candidates = [resolveTeamsFilePath()];
   for (const file of candidates) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-      if (Array.isArray(parsed?.teams)) return parsed;
-    } catch {
-      // try the next location
-    }
+    const { value: parsed } = readJsonFileWithBom(file, { fallback: null, label: "teams.json" });
+    if (Array.isArray(parsed?.teams)) return parsed;
   }
   return { teams: [] };
 }
@@ -198,7 +197,7 @@ function teamByPath(cwd) {
   if (targetKey) {
     for (const [, file] of buildAgentIndex()) {
       try {
-        const record = JSON.parse(fs.readFileSync(file, "utf8"));
+        const record = parseJsonWithBom(fs.readFileSync(file, "utf8"));
         if (record?.cwd && record?.labels?.team && normalizePathKey(record.cwd) === targetKey) {
           const found = findTeamDef(record.labels.team) || findLane(record.labels.team)?.team;
           if (found) return found;
@@ -249,7 +248,7 @@ function readAgentRecord(agentId) {
   const file = buildAgentIndex().get(String(agentId));
   if (!file) return null;
   try {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
+    return parseJsonWithBom(fs.readFileSync(file, "utf8"));
   } catch {
     return null;
   }
@@ -369,7 +368,7 @@ function listAgentsOffline() {
   const agents = [];
   for (const [id, file] of buildAgentIndex()) {
     try {
-      const record = JSON.parse(fs.readFileSync(file, "utf8"));
+      const record = parseJsonWithBom(fs.readFileSync(file, "utf8"));
       if (record.internal) continue;
       const title = record.title ?? record.name ?? "";
       agents.push({
@@ -560,15 +559,16 @@ function readLog(identity) {
   const file = logFile(identity);
   let raw = "";
   try {
-    raw = fs.readFileSync(file, "utf8");
+    raw = stripBom(fs.readFileSync(file, "utf8"));
   } catch {
     return [];
   }
   const entries = [];
   for (const line of raw.split(/\r?\n/)) {
-    if (!line.trim()) continue;
+    const clean = stripBom(line).trim();
+    if (!clean) continue;
     try {
-      entries.push(JSON.parse(line));
+      entries.push(JSON.parse(clean));
     } catch {
       // leave malformed lines out of the view; don't rewrite them
     }
@@ -591,12 +591,8 @@ function appendLog(identity, entry) {
 }
 
 function readCursors(identity) {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(cursorFile(identity), "utf8"));
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
+  const { value: parsed } = readJsonFileWithBom(cursorFile(identity), { fallback: {} });
+  return parsed && typeof parsed === "object" ? parsed : {};
 }
 
 function writeCursors(identity, cursors) {
@@ -1386,7 +1382,7 @@ function commandMigrate(flags) {
 
   for (const [id, file] of storeIndex.entries()) {
     try {
-      const record = JSON.parse(fs.readFileSync(file, "utf8"));
+      const record = parseJsonWithBom(fs.readFileSync(file, "utf8"));
       if (record.internal) continue;
       recordsById.set(record.id ?? id, {
         id: record.id ?? id,
@@ -1505,7 +1501,7 @@ function commandMigrate(flags) {
       if (!entry.changed) continue;
       if (entry.file && fs.existsSync(entry.file)) {
         try {
-          const diskRec = JSON.parse(fs.readFileSync(entry.file, "utf8"));
+          const diskRec = parseJsonWithBom(fs.readFileSync(entry.file, "utf8"));
           diskRec.labels = { ...entry.proposedLabels };
           fs.writeFileSync(entry.file, JSON.stringify(diskRec, null, 2) + "\n", "utf8");
         } catch {

@@ -33,7 +33,12 @@ import {
   resolveAgentIdentity,
   topicOf,
 } from "../server/identity.mjs";
-import { LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE, loadUserSettings } from "../server/user-settings.mjs";
+import {
+  LEGACY_NEEDS_LABEL,
+  LEGACY_USER_TYPE,
+  loadUserSettings,
+  readJsonFileWithBom,
+} from "../server/user-settings.mjs";
 
 type Labels = Record<string, string>;
 type Paseo = any;
@@ -93,6 +98,7 @@ export const LEAD_FALLBACK_PACK = [
   "- Context management: at ~150k stop dispatching and write a handoff at the next good stopping point; VS auto-hands off at 250k, hard cap 300k. Run `vs handoff` and fill the Judgment section.",
   "- Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`paseo --help`, Paseo MCP tool list, `vs --help`, skills). Name what you checked in the plan's Decided section.",
   "- \"Spin up a buddy (for X)\" / \"spin up another buddy\" / \"get me a buddy for X\": spawn a new Buddy (role=brainstorm, title BRAINSTORM · <LANE> · <topic X>) in a new feature lane (lane=<slug from X>) under the same Squad (team=<product>). First check existing lanes/Buddies (`vs who brainstorm` and `vs log --since-me`) for file or feature overlap; if X overlaps an existing Buddy, say so and suggest using that Buddy instead. Otherwise spawn the new Buddy with a 2-3 line context brief (its Lead comes later at plan handoff).",
+  "- Write JSON files with node (e.g. fs.writeFileSync(..., 'utf8')), never PowerShell Set-Content (which writes a UTF-8 BOM that breaks JSON parsers).",
 ].join("\n");
 
 export const ROLE_PACKS = {
@@ -138,19 +144,16 @@ export function loadStoredProfiles(): StoredProfile[] {
     profilesFilePath(),
     process.env.PASEO_CONFIG_PATH ? path.resolve(process.env.PASEO_CONFIG_PATH) : path.join(os.homedir(), ".paseo", "config.json"),
   ]) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(candidate, "utf8"));
-      const list = Array.isArray(parsed)
-        ? parsed
-        : Array.isArray(parsed?.profiles)
-          ? parsed.profiles
-          : Array.isArray(parsed?.daemon?.agentProfiles)
-            ? parsed.daemon.agentProfiles
-            : [];
-      if (list.length > 0) return list as StoredProfile[];
-    } catch {
-      // try next
-    }
+    const { value: parsed } = readJsonFileWithBom(candidate, { fallback: null });
+    if (!parsed) continue;
+    const list = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.profiles)
+        ? parsed.profiles
+        : Array.isArray(parsed?.daemon?.agentProfiles)
+          ? parsed.daemon.agentProfiles
+          : [];
+    if (list.length > 0) return list as StoredProfile[];
   }
   return [];
 }
@@ -209,10 +212,9 @@ function resolveTeamsFilePath(): string {
 }
 
 function loadTeams(): TeamDef[] {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(resolveTeamsFilePath(), "utf8"));
-    if (Array.isArray(parsed?.teams)) return parsed.teams;
-  } catch {}
+  const file = resolveTeamsFilePath();
+  const { value: parsed } = readJsonFileWithBom(file, { fallback: null, label: "teams.json" });
+  if (Array.isArray(parsed?.teams)) return parsed.teams;
   return [];
 }
 

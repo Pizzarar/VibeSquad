@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getUserName, loadUpdaterStatus, saveLanEnabled, saveUpdateChannel, saveUserName, useExposedIpsStore, useLanEnabled, useUpdaterStatus } from "./userName";
+import { getUserName, loadUpdaterStatus, saveLanEnabled, saveUpdateChannel, saveUserName, useConfigWarnings, useExposedIpsStore, useLanEnabled, useUpdaterStatus } from "./userName";
 import {
   AGENT_TYPE_NAME,
   BRAINSTORM_RESTART_DEFAULT,
@@ -253,6 +253,7 @@ export function TeamSettingsModal({ onClose }: { onClose: () => void }) {
   const lanEnabled = useLanEnabled();
   const exposedIps = useExposedIpsStore();
   const updaterStatus = useUpdaterStatus();
+  const configWarnings = useConfigWarnings();
   useEffect(() => {
     void loadUpdaterStatus();
   }, []);
@@ -306,6 +307,16 @@ export function TeamSettingsModal({ onClose }: { onClose: () => void }) {
         </>
       }
     >
+      {configWarnings.length > 0 && (
+        <section className="ts-team" data-testid="settings-config-warnings" style={{ borderLeftColor: "#ffb000" }}>
+          <div className="field-label" style={{ color: "#ffb000" }}>⚠ CONFIG JSON PARSE WARNING</div>
+          {configWarnings.map((w, idx) => (
+            <div key={idx} className="stat-alert small">
+              {w}
+            </div>
+          ))}
+        </section>
+      )}
       <section className="ts-team" data-testid="user-name-section">
         <div className="field-label">YOUR NAME</div>
         <div className="muted small">Shown on NEEDS badges, the owner feed entries and push notifications.</div>

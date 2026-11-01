@@ -2,7 +2,7 @@ import { FIRST_RUN_DONE_KEY, FirstRunModal, fetchFirstRunStatus, type FirstRunSt
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { ProviderQuotaView } from "./antigravity";
-import { LEGACY_NEEDS_LABEL, dismissUpdateBanner, loadUpdaterStatus, setLanExposureState, triggerUpdateInstall, useExposedIpsStore, useUpdaterStatus } from "./userName";
+import { LEGACY_NEEDS_LABEL, dismissUpdateBanner, loadUpdaterStatus, setLanExposureState, setServerConfigWarnings, triggerUpdateInstall, useConfigWarnings, useExposedIpsStore, useUpdaterStatus } from "./userName";
 import { DEMO, archiveAgent, detachAgent, getPaseoState, loadArchived, retireAgent, setNeedsYou, updateAgent, upsertLocalAgent, usePaseo } from "./paseo";
 import {
   AGENT_TYPE_LABEL,
@@ -1231,6 +1231,9 @@ function useExposedIps(): string[] {
         if (alive && Array.isArray(h?.exposedIps)) {
           setLanExposureState(Boolean(h.lanEnabled), h.exposedIps.map(String));
         }
+        if (alive && Array.isArray(h?.configWarnings)) {
+          setServerConfigWarnings(h.configWarnings);
+        }
       })
       .catch(() => {});
     return () => {
@@ -1288,6 +1291,7 @@ export function App() {
   const [firstRunStatus, setFirstRunStatus] = useState<FirstRunStatus | null>(null);
   const exposedIps = useExposedIps();
   const updaterStatus = useUpdaterStatus();
+  const configWarnings = useConfigWarnings();
   useEffect(() => {
     void loadUpdaterStatus();
     const id = setInterval(() => void loadUpdaterStatus(), 60_000);
@@ -1532,6 +1536,23 @@ export function App() {
       {exposedIps.length > 0 && (
         <div className="exposed-network-banner" data-testid="exposed-network-banner" role="alert" style={{ gridColumn: "1 / -1", background: "#ff2a85", color: "#05060d", fontWeight: 800, padding: "6px 12px", textAlign: "center" }}>
           {`⚠ EXPOSED ON ${exposedIps.join(", ")} — LAN/meshnet access enabled`}
+        </div>
+      )}
+      {configWarnings.length > 0 && (
+        <div
+          className="config-warning-banner"
+          data-testid="config-warning-banner"
+          role="alert"
+          style={{
+            gridColumn: "1 / -1",
+            background: "#ffb000",
+            color: "#05060d",
+            fontWeight: 800,
+            padding: "6px 12px",
+            textAlign: "center",
+          }}
+        >
+          {`⚠ Config JSON parse error (using fallback defaults without overwriting): ${configWarnings.join(" · ")}`}
         </div>
       )}
       {updaterStatus.updateAvailable && !updaterStatus.dismissed && (

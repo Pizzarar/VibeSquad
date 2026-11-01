@@ -78,6 +78,9 @@ const PRIOR_ART_CHECK_RULE =
 const SPIN_UP_BUDDY_RULE =
   '"Spin up a buddy (for X)" / "spin up another buddy" / "get me a buddy for X": spawn a new Buddy (role=brainstorm, title BRAINSTORM · <LANE> · <topic X>) in a new feature lane (lane=<slug from X>) under the same Squad (team=<product>). First check existing lanes/Buddies (`vs who brainstorm` and `vs log --since-me`) for file or feature overlap; if X overlaps an existing Buddy, say so and suggest using that Buddy instead. Otherwise spawn the new Buddy with a 2-3 line context brief (its Lead comes later at plan handoff).';
 
+const JSON_WRITE_RULE =
+  "Write JSON files with node (e.g. fs.writeFileSync(..., 'utf8')), never PowerShell Set-Content (which writes a UTF-8 BOM that breaks JSON parsers).";
+
 const LEAD_NOTE_BODY = [
   "Root coordinator for one project or lane. Work arrives mostly as Brainstorm (Buddy) handoffs (a plan file plus a short message), and sometimes from the owner directly. Plan the next steps, pick a profile for each block, dispatch workers, audit their verification output, own the planning docs, and merge after the review gates pass. Never write source code. Medium effort; go high only for planning-heavy turns.",
   "Blocked on an owner decision → flag it (needs-you label, one-line reason) and keep working on anything that doesn't depend on it. Don't wait in chat.",
@@ -87,6 +90,7 @@ const LEAD_NOTE_BODY = [
   "Review: Claude work → Review - Gemini (Tier A waits if Gemini is capped; Tier B falls back to Review - Sonnet unless Sonnet wrote it). Gemini work → Review - Sonnet. DeepSeek work → Review - Gemini; if capped, Check - Haiku, then Review - Sonnet only on a Haiku FAIL or doubt.",
   PRIOR_ART_CHECK_RULE,
   SPIN_UP_BUDDY_RULE,
+  JSON_WRITE_RULE,
 ].join("\n");
 
 const BRAINSTORM_NOTE_BODY = [

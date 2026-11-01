@@ -10,6 +10,7 @@ import {
 } from "./brainstorm.mjs";
 import { findLaneInRegistry } from "./identity.mjs";
 import { findProfile, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
+import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
 const TITLE_MAX = 60;
@@ -57,29 +58,24 @@ function resolveTeamsFilePath(rootDir = REPO_ROOT) {
 }
 
 export function loadTeamsForInbox(rootDir = REPO_ROOT) {
-  try {
-    const raw = JSON.parse(readFileSync(resolveTeamsFilePath(rootDir), "utf8"));
-    return Array.isArray(raw?.teams) ? raw.teams : [];
-  } catch {
-    return [];
-  }
+  const file = resolveTeamsFilePath(rootDir);
+  const res = readJsonFileWithBom(file, { label: "teams.json", fallback: null, recordWarning: true });
+  return Array.isArray(res.data?.teams) ? res.data.teams : [];
 }
 
 export function readInboxCards(baseHome) {
   const file = getInboxPath(baseHome);
   if (!existsSync(file)) return [];
-  try {
-    const parsed = JSON.parse(readFileSync(file, "utf8"));
-    return Array.isArray(parsed) ? parsed : Array.isArray(parsed?.cards) ? parsed.cards : [];
-  } catch {
-    return [];
-  }
+  const res = readJsonFileWithBom(file, { label: "~/.vibesquad/inbox.json", fallback: null, recordWarning: true });
+  const parsed = res.data;
+  return Array.isArray(parsed) ? parsed : Array.isArray(parsed?.cards) ? parsed.cards : [];
 }
 
 export function writeInboxCards(cards, baseHome) {
   const file = getInboxPath(baseHome);
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify(cards, null, 2) + "\n", "utf8");
+  clearConfigWarning(file);
   return cards;
 }
 

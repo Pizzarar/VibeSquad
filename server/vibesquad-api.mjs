@@ -5,7 +5,17 @@ import { homedir, tmpdir } from "node:os";
 import { basename, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspectFirstRunStatus, startManagedPaseoInstall } from "./first-run.mjs";
-import { LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE, loadUserSettings, saveUserSettings } from "./user-settings.mjs";
+import {
+  LEGACY_NEEDS_LABEL,
+  LEGACY_USER_TYPE,
+  clearConfigWarning,
+  getConfigWarnings,
+  loadUserSettings,
+  parseJsonWithBom,
+  readJsonFileWithBom,
+  saveUserSettings,
+  stripBom,
+} from "./user-settings.mjs";
 import { authenticate, getAuthStatus, handleCaCrt, handleDevices, handlePairRedeem, handlePairStart, handleRevoke, hasDistIndex, isLocal, isLocalBrowserSafe, netConfig } from "./auth.mjs";
 import {
   appendVsLogEntry,
@@ -175,11 +185,16 @@ export function readPaseo(_rootDir = REPO_ROOT) {
   const home = join(homedir(), ".paseo");
   let listen = "127.0.0.1:6767";
   let serverId = "";
+  const cfgRes = readJsonFileWithBom(join(home, "config.json"), {
+    label: "~/.paseo/config.json",
+    fallback: null,
+    recordWarning: true,
+  });
+  if (cfgRes.ok && cfgRes.data) {
+    listen = cfgRes.data.daemon?.listen ?? listen;
+  }
   try {
-    listen = JSON.parse(readFileSync(join(home, "config.json"), "utf8")).daemon?.listen ?? listen;
-  } catch {}
-  try {
-    serverId = readFileSync(join(home, "server-id"), "utf8").trim();
+    serverId = stripBom(readFileSync(join(home, "server-id"), "utf8")).trim();
   } catch {}
   return { listen: process.env.PASEO_DAEMON ?? listen, serverId };
 }
@@ -218,7 +233,7 @@ function readBody(req) {
     req.on("end", () => {
       if (done) return;
       try {
-        ok(JSON.parse(body || "{}"));
+        ok(parseJsonWithBom(body || "{}"));
       } catch (e) {
         fail(e);
       }
@@ -253,7 +268,13 @@ export function handleHealth(req, res, rootDir = REPO_ROOT) {
   const distReady = hasDistIndex(rootDir);
   if (!isTrusted(req)) return sendJson(res, distReady ? 200 : 503, { ok: distReady, distReady });
   const { port } = netConfig();
-  const extra = { port, lanEnabled: exposure.lanEnabled, exposedIps: exposure.exposedIps };
+  const warnings = getConfigWarnings();
+  const extra = {
+    port,
+    lanEnabled: exposure.lanEnabled,
+    exposedIps: exposure.exposedIps,
+    ...(warnings.length ? { configWarnings: warnings } : {}),
+  };
   if (!distReady) return sendJson(res, 503, { ok: false, distReady: false, error: "dist/index.html missing", ...extra });
   return sendJson(res, 200, { ok: true, distReady: true, ...extra });
 }
@@ -273,12 +294,11 @@ function handleTeams(req, res, rootDir) {
   const file = join(rootDir, "teams.json");
   if (req.method === "GET") {
     const readFile = existsSync(file) ? file : join(rootDir, "teams.example.json");
-    try {
-      const cur = JSON.parse(readFileSync(readFile, "utf8"));
-      return sendJson(res, 200, cur);
-    } catch (e) {
-      return sendJson(res, 500, { error: String(e) });
+    const r = readJsonFileWithBom(readFile, { label: "teams.json", fallback: null, recordWarning: true });
+    if (r.ok && r.data) {
+      return sendJson(res, 200, r.data);
     }
+    return sendJson(res, 500, { error: r.error || "Failed to read teams.json" });
   }
   if (req.method !== "POST" && req.method !== "PUT") {
     res.statusCode = 405;
@@ -288,7 +308,12 @@ function handleTeams(req, res, rootDir) {
     try {
       const teams = Array.isArray(parsed) ? parsed : parsed.teams;
       if (!Array.isArray(teams)) throw new Error("teams must be an array");
-      const cur = JSON.parse(readFileSync(file, "utf8"));
+      const curRes = readJsonFileWithBom(existsSync(file) ? file : join(rootDir, "teams.example.json"), {
+        label: "teams.json",
+        fallback: {},
+        recordWarning: true,
+      });
+      const cur = curRes.data ?? {};
       const firstTeam = teams[0] ?? null;
       const leadFlagTokens =
         typeof parsed.leadFlagTokens === "number"
@@ -318,7 +343,8 @@ function handleTeams(req, res, rootDir) {
         ...(typeof parsed.brainstormRestartTokens === "number" ? { brainstormRestartTokens: parsed.brainstormRestartTokens } : {}),
         teams,
       };
-      writeFileSync(file, JSON.stringify(next, null, 2) + "\n");
+      writeFileSync(file, JSON.stringify(next, null, 2) + "\n", "utf8");
+      clearConfigWarning(file);
       sendJson(res, 200, {
         ok: true,
         teams: next.teams,
@@ -339,11 +365,14 @@ function handleTeams(req, res, rootDir) {
 // GET ?team=<id>: recent log.jsonl entries. POST {team,type,text,refs?}: append (240-char limit).
 async function handleSettings(req, res) {
   if (req.method === "GET") {
+    const current = loadUserSettings();
+    const warnings = getConfigWarnings();
     return sendJson(res, 200, {
       ok: true,
-      ...loadUserSettings(),
+      ...current,
       activeLanEnabled: exposure.lanEnabled,
       exposedIps: exposure.exposedIps,
+      ...(warnings.length ? { configWarnings: warnings } : {}),
     });
   }
   if (req.method === "POST" || req.method === "PUT") {
@@ -361,11 +390,13 @@ async function handleSettings(req, res) {
         }
       } catch {}
     }
+    const warnings = getConfigWarnings();
     return sendJson(res, 200, {
       ok: true,
       ...saved,
       activeLanEnabled: exposure.lanEnabled,
       exposedIps: exposure.exposedIps,
+      ...(warnings.length ? { configWarnings: warnings } : {}),
     });
   }
   return sendJson(res, 405, { error: "method not allowed" });
@@ -897,14 +928,20 @@ function resolveDesktopInstallerPath(rootDir = REPO_ROOT) {
 }
 
 function readDesktopVersion(rootDir = REPO_ROOT) {
-  try {
-    const conf = JSON.parse(readFileSync(join(rootDir, "src-tauri", "tauri.conf.json"), "utf8"));
-    if (conf?.version) return String(conf.version);
-  } catch {}
-  try {
-    const pkg = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8"));
-    if (pkg?.version) return String(pkg.version);
-  } catch {}
+  const conf = readJsonFileWithBom(join(rootDir, "src-tauri", "tauri.conf.json"), {
+    label: "tauri.conf.json",
+    fallback: null,
+    recordWarning: false,
+    rewriteBom: false,
+  }).data;
+  if (conf?.version) return String(conf.version);
+  const pkg = readJsonFileWithBom(join(rootDir, "package.json"), {
+    label: "package.json",
+    fallback: null,
+    recordWarning: false,
+    rewriteBom: false,
+  }).data;
+  if (pkg?.version) return String(pkg.version);
   return "0.1.0";
 }
 
@@ -978,7 +1015,7 @@ export function lookupAgentCwd(agentId, paseoHome) {
         if (!dir.isDirectory()) continue;
         const candidate = join(agentsRoot, dir.name, `${id}.json`);
         if (existsSync(candidate)) {
-          const record = JSON.parse(readFileSync(candidate, "utf8"));
+          const record = readJsonFileWithBom(candidate, { recordWarning: false, rewriteBom: false }).data;
           const cwd = record?.cwd ?? record?.Cwd ?? "";
           if (typeof cwd === "string" && cwd.trim()) return cwd.trim();
         }

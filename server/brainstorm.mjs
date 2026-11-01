@@ -5,6 +5,7 @@ import os from "node:os";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { effectiveAgentRole, findLaneInRegistry, isRetiredAgent, topicOf } from "./identity.mjs";
 import { findProfile, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
+import { readJsonFileWithBom } from "./user-settings.mjs";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
 const MAX_SUMMARY_CHARS = 20_000;
@@ -21,9 +22,14 @@ export function readPaseoConfig(_rootDir = REPO_ROOT) {
   const home = process.env.PASEO_HOME || join(homedir(), ".paseo");
   let listen = "127.0.0.1:6767";
   let serverId = "";
-  try {
-    listen = JSON.parse(readFileSync(join(home, "config.json"), "utf8")).daemon?.listen ?? listen;
-  } catch {}
+  const cfg = readJsonFileWithBom(join(home, "config.json"), {
+    label: "~/.paseo/config.json",
+    fallback: null,
+    recordWarning: true,
+  });
+  if (cfg.ok && cfg.data) {
+    listen = cfg.data.daemon?.listen ?? listen;
+  }
   try {
     serverId = readFileSync(join(home, "server-id"), "utf8").trim();
   } catch {}
@@ -61,11 +67,9 @@ function resolveTeamsFilePath(rootDir = REPO_ROOT) {
 }
 
 function loadTeamsConfig(rootDir = REPO_ROOT) {
-  try {
-    return JSON.parse(readFileSync(resolveTeamsFilePath(rootDir), "utf8"));
-  } catch {
-    return { teams: [] };
-  }
+  const file = resolveTeamsFilePath(rootDir);
+  const res = readJsonFileWithBom(file, { label: "teams.json", fallback: { teams: [] }, recordWarning: true });
+  return res.data ?? { teams: [] };
 }
 
 function laneDisplayName(laneId, rootDir = REPO_ROOT) {
@@ -90,7 +94,7 @@ function readLocalAgentRecord(agentId, rootDir = REPO_ROOT) {
       if (!dir.isDirectory()) continue;
       const candidate = join(agentsRoot, dir.name, `${agentId}.json`);
       if (existsSync(candidate)) {
-        return JSON.parse(readFileSync(candidate, "utf8"));
+        return readJsonFileWithBom(candidate, { recordWarning: false, rewriteBom: false }).data;
       }
     }
   } catch {}

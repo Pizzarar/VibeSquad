@@ -8,7 +8,7 @@ import {
   readBrainstormSummary,
 } from "./brainstorm.mjs";
 import { effectiveAgentRole, isDigestAgent, isRetiredAgent, ordOf } from "./identity.mjs";
-import { LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE } from "./user-settings.mjs";
+import { LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE, readJsonFileWithBom } from "./user-settings.mjs";
 import { findProfile, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
@@ -53,11 +53,9 @@ function resolveTeamsFilePath(rootDir = REPO_ROOT) {
 }
 
 export function loadTeamsConfig(rootDir = REPO_ROOT) {
-  try {
-    return JSON.parse(readFileSync(resolveTeamsFilePath(rootDir), "utf8"));
-  } catch {
-    return { teams: [] };
-  }
+  const file = resolveTeamsFilePath(rootDir);
+  const res = readJsonFileWithBom(file, { label: "teams.json", fallback: { teams: [] }, recordWarning: true });
+  return res.data ?? { teams: [] };
 }
 
 export function loadLeadThresholds(teamIdOrDef, rootDir = REPO_ROOT) {

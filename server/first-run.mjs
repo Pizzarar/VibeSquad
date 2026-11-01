@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { connect } from "node:net";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
+import { readJsonFileWithBom } from "./user-settings.mjs";
 
 export const PINNED_PASEO_VERSION = "0.13.2";
 const IS_WIN = process.platform === "win32";
@@ -27,13 +28,7 @@ function bundledNpmCli() {
   return candidates.find((c) => existsSync(c)) ?? null;
 }
 
-const readJson = (file) => {
-  try {
-    return JSON.parse(readFileSync(file, "utf8"));
-  } catch {
-    return null;
-  }
-};
+const readJson = (file) => readJsonFileWithBom(file, { fallback: null, rewriteIfBom: false }).value;
 
 function onPath(names, env = process.env) {
   const dirs = String(env.PATH ?? env.Path ?? "").split(delimiter).filter(Boolean);
@@ -80,10 +75,9 @@ export function parseListen(listen) {
 }
 
 export function readPaseoListen() {
-  let listen = "127.0.0.1:6767";
-  try {
-    listen = JSON.parse(readFileSync(join(homedir(), ".paseo", "config.json"), "utf8")).daemon?.listen ?? listen;
-  } catch {}
+  const cfgPath = join(homedir(), ".paseo", "config.json");
+  const parsed = readJsonFileWithBom(cfgPath, { fallback: null, label: "~/.paseo/config.json" }).value;
+  const listen = parsed?.daemon?.listen ?? "127.0.0.1:6767";
   return process.env.PASEO_DAEMON ?? listen;
 }
 

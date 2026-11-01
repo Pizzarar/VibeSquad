@@ -10,11 +10,66 @@ const DEFAULT_NAME = "you";
 let userName = DEFAULT_NAME;
 let lanEnabled = false;
 let exposedIps: string[] = [];
+let serverConfigWarnings: { file: string; label?: string; error: string }[] = [];
+let desktopConfigWarning = "";
 const listeners = new Set<() => void>();
 
 export const getUserName = () => userName;
 export const getLanEnabled = () => lanEnabled;
 export const getExposedIps = () => exposedIps;
+export const getConfigWarnings = (): string[] => {
+  const list = serverConfigWarnings.map((w) => `${w.label || w.file}: ${w.error}`);
+  if (desktopConfigWarning) list.push(desktopConfigWarning);
+  return list;
+};
+
+let cachedConfigWarningsKey = "";
+let cachedConfigWarningsList: string[] = [];
+function getConfigWarningsSnapshot(): string[] {
+  const list = getConfigWarnings();
+  const key = list.join("\n");
+  if (key !== cachedConfigWarningsKey) {
+    cachedConfigWarningsKey = key;
+    cachedConfigWarningsList = list;
+  }
+  return cachedConfigWarningsList;
+}
+
+export function setServerConfigWarnings(warnings: unknown): void {
+  const next = Array.isArray(warnings)
+    ? warnings
+        .filter((w) => w && typeof w === "object" && typeof (w as any).error === "string")
+        .map((w: any) => ({
+          file: String(w.file || ""),
+          label: w.label ? String(w.label) : undefined,
+          error: String(w.error),
+        }))
+    : [];
+  const prevKey = JSON.stringify(serverConfigWarnings);
+  const nextKey = JSON.stringify(next);
+  if (prevKey !== nextKey) {
+    serverConfigWarnings = next;
+    listeners.forEach((l) => l());
+  }
+}
+
+export function setDesktopConfigWarning(warning: unknown): void {
+  const next = typeof warning === "string" ? warning.trim() : "";
+  if (next !== desktopConfigWarning) {
+    desktopConfigWarning = next;
+    listeners.forEach((l) => l());
+  }
+}
+
+export function useConfigWarnings(): string[] {
+  return useSyncExternalStore(
+    (cb) => {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+    getConfigWarningsSnapshot,
+  );
+}
 
 export function setUserName(name: string): void {
   const next = name.trim().slice(0, 40) || DEFAULT_NAME;
@@ -70,6 +125,7 @@ export async function loadUserName(): Promise<void> {
       const data = await r.json();
       setUserName(String(data.userName ?? ""));
       setLanExposureState(Boolean(data.activeLanEnabled ?? data.lanEnabled), Array.isArray(data.exposedIps) ? data.exposedIps : undefined);
+      setServerConfigWarnings(data.configWarnings);
     }
   } catch {}
 }
@@ -78,11 +134,15 @@ export async function loadUserName(): Promise<void> {
 export async function saveUserName(name: string): Promise<void> {
   setUserName(name);
   try {
-    await fetch("/__vibesquad/settings", {
+    const r = await fetch("/__vibesquad/settings", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ userName: getUserName() }),
     });
+    if (r.ok) {
+      const data = await r.json();
+      setServerConfigWarnings(data.configWarnings);
+    }
   } catch {}
 }
 
@@ -99,6 +159,7 @@ export async function saveLanEnabled(enabled: boolean): Promise<{ lanEnabled: bo
       const nextLan = Boolean(data.activeLanEnabled ?? data.lanEnabled);
       const nextIps = Array.isArray(data.exposedIps) ? data.exposedIps.map(String) : [];
       setLanExposureState(nextLan, nextIps);
+      setServerConfigWarnings(data.configWarnings);
       return { lanEnabled: nextLan, exposedIps: nextIps };
     }
   } catch {}
@@ -158,6 +219,7 @@ export async function loadUpdaterStatus(): Promise<UpdaterStatusView> {
     const r = await fetch("/__desktop/updater/status", { cache: "no-store" });
     if (r.ok) {
       const d = await r.json();
+      setDesktopConfigWarning(d.configWarning);
       setUpdaterStatus({
         currentVersion: String(d.currentVersion || "0.1.1"),
         channel: d.channel === "beta" ? "beta" : "stable",
@@ -181,6 +243,7 @@ export async function saveUpdateChannel(channel: UpdateChannel): Promise<Updater
     });
     if (r.ok) {
       const d = await r.json();
+      setDesktopConfigWarning(d.configWarning);
       setUpdaterStatus({
         currentVersion: String(d.currentVersion || updaterStatus.currentVersion),
         channel: d.channel === "beta" ? "beta" : "stable",
