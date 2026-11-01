@@ -265,6 +265,7 @@ export async function createPin(squadId: string, name: string, idea: string, dep
     needsYou: 0,
     running: 0,
     contextUsed: 0,
+    topicBrainstorms: [],
   };
 }
 
