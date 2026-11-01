@@ -14,10 +14,10 @@
 
 ## Core Model: Squad > Team > Brainstorm > Lead / Workers
 
-UI and docs use these names (Aub, 2026-11-01). Labels, `teams.json` keys and code identifiers do **not** change: a Team is still a `lane`, a Squad is still a `team`.
+UI and docs use these names (2026-11-01). Labels, `teams.json` keys and code identifiers do **not** change: a Team is still a `lane`, a Squad is still a `team`.
 
 - **Squad** (`team` in labels and `teams.json`): the top-level sidebar entry, one per product (e.g. `Escape From Idle`, `VibeSquad`, `Personal Site`).
-- **Team** (`lane` in labels and `teams.json`): one feature inside a Squad (e.g. Scavenging UI). A Team is **pinned** automatically when it's created and stays on the squad page until Aub marks it complete (`state: "done"`, Done shelf, can be reopened). It holds one **Brainstorm**, one **Lead** (spawned at plan handoff) and the Lead's **Workers**.
+- **Team** (`lane` in labels and `teams.json`): one feature inside a Squad (e.g. Scavenging UI). A Team is **pinned** automatically when it's created and stays on the squad page until the owner marks it complete (`state: "done"`, Done shelf, can be reopened). It holds one **Brainstorm**, one **Lead** (spawned at plan handoff) and the Lead's **Workers**.
 - **Brainstorm** (`role=brainstorm`): the head of a Team, the one you talk to (`"TALK HERE"`). The UI says "Brainstorm", never "Buddy". Its title format is unchanged (`BRAINSTORM · <LANE>` or `BRAINSTORM · <LANE> · <topic>`).
 - **Lead / Workers** (`role=lead`, `role=worker`): run the work for a Team. Hidden on the default squad page; the **FULL** toggle shows them.
 - **Pin the feature, not the agent.** Clicking a Team opens its live Brainstorm, or starts a fresh one from the Team brief (`docs/brainstorm/<lane>.md`). Agent IDs, `(old)` rows, workers and worktrees are plumbing and stay behind FULL.
