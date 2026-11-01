@@ -881,6 +881,10 @@ code {
   background: #070813;
 }
 
+.timeline > * {
+  flex-shrink: 0;
+}
+
 .tl {
   white-space: pre-wrap;
   word-break: break-word;
@@ -904,6 +908,7 @@ code {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex-shrink: 0;
 }
 
 .tl-tool.running .tool-name {
