@@ -13,6 +13,9 @@ import type { CSSProperties } from "react";
 import type { AgentType } from "./teams";
 
 export const S = 28;
+
+/** Ship the propless cast (role shown by headwear + face gear) instead of held props. 1-line toggle. */
+export const SHIP_PROPLESS = false;
 const cache = new Map<string, string>();
 
 function hash(s: string): number {
@@ -158,12 +161,13 @@ const CURATED: Record<AgentType, Palette[]> = {
     P(SKINS[3], "#2f9c96", "#3a1d48", "#ffb8ec"),
     P(SKINS[4], "#5c2f1d", "#2b2b3d", "#a8ffd9"),
   ],
+  // Implement always wears a crimson tech jacket so it never reads as mechanical's navy overalls.
   implement: [
-    P(SKINS[0], "#3a2418", "#3a1d48", "#9ff3ff"),
-    P(SKINS[1], "#1b1424", "#173b4a", "#ffb8ec"),
-    P(SKINS[2], "#26304f", "#4a1d2e", "#a8ffd9"),
-    P(SKINS[3], "#7a3b2a", "#1d2b52", "#ffe7a3"),
-    P(SKINS[4], "#5c2f1d", "#2a1f4f", "#c9a8ff"),
+    P(SKINS[0], "#3a2418", "#a3162e", "#9ff3ff"),
+    P(SKINS[1], "#1b1424", "#b4232c", "#ffb8ec"),
+    P(SKINS[2], "#26304f", "#9a1b3d", "#a8ffd9"),
+    P(SKINS[3], "#7a3b2a", "#b8321c", "#ffe7a3"),
+    P(SKINS[4], "#5c2f1d", "#8f1530", "#c9a8ff"),
   ],
   mechanical: [
     P(SKINS[0], "#3a2418", "#2b2f3d", "#9ff3ff"),
@@ -225,7 +229,7 @@ class Sprite {
     this.px[y * S + x] = c;
     this.fx[y * S + x] = true;
   };
-  rect = (x0: number, y0: number, x1: number, y1: number, c: string) => {
+  rect = (x0: number, y0: number, x1: number, y1: number, c: string | null) => {
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) this.set(x, y, c);
   };
   glowRect = (x0: number, y0: number, x1: number, y1: number, c: string) => {
@@ -257,6 +261,8 @@ type Look = {
   pastel: string;
   neon: string;
   lead?: LeadLook;
+  /** Propless cast: no held props or hands; the role reads from headwear, face gear and outfit. */
+  propless: boolean;
 };
 
 // Caricature head: wide round cheeks (18px across), y=4..19, then a 1px neck at y=20.
@@ -575,16 +581,40 @@ function lead(s: Sprite, k: Look) {
   s.rect(17, 14, 19, 14, frame);
   s.glowDots([[7, 12], [8, 12], [16, 12], [17, 12]], "#ffffff");
   mouth(s, k, "grin");
-  // Cigar in the corner of the grin, pinched at the chin by the right hand: glowing ember
-  // and a curl of smoke.
-  prop(s, 18, 17, [
-    "CCCCe",
-    "..hhh",
-    "..kkk",
-    "..ccc",
-  ], { C: "#8a5a3a", e: "#ff6a1a", ...hands({ ...k, jacket: blazer }) }, "e");
-  s.glowDots([[23, 16]], "#ffd166");
-  s.glowDots([[24, 15], [24, 13], [25, 12]], "#d8d4e8");
+  if (k.propless) {
+    // Gold rim along the top of the shades.
+    s.rect(5, 11, 22, 11, "#e0a82e");
+    s.rect(13, 12, 14, 12, "#b07a1c");
+    // Captain's peaked cap over the cut: white crown, black band, gold braid and badge, black
+    // visor. Clear anything the cut stacked above the crown first.
+    s.rect(0, 0, S - 1, 1, null);
+    const crown = "#ece8f6";
+    s.rect(8, 1, 19, 1, crown);
+    s.rect(4, 2, 23, 4, crown);
+    s.rect(5, 5, 22, 5, "#bdb8cf"); // crown underside in shadow
+    s.dots([[8, 2], [9, 2], [10, 2], [6, 3], [7, 3]], "#ffffff");
+    s.rect(6, 6, 21, 6, "#14101e"); // band
+    s.rect(5, 7, 22, 7, "#e0a82e"); // braid
+    s.dots([[8, 7], [11, 7], [16, 7], [19, 7]], "#ffe28a");
+    s.rect(4, 8, 23, 8, "#120e1c"); // visor
+    s.rect(7, 8, 11, 8, "#3a3450");
+    s.rect(6, 9, 21, 9, shade(L.skin, 0.72)); // visor shadow on the brow
+    s.glowRect(12, 4, 15, 6, "#ffcf4a"); // badge
+    s.glowDots([[13, 4], [12, 5]], "#fff4c2");
+    s.glowDots([[13, 5], [14, 5]], k.neon);
+    return;
+  }
+  // Fat cigar jutting level out of the corner of the grin with a gold band, pinched below by
+  // the right hand: a two-tone glowing ember and a clean curl of smoke rising past the jaw.
+  prop(s, 17, 17, [
+    "CgCCCeE",
+    "...hhh.",
+    "...kkk.",
+    "...ccc.",
+  ], { C: "#a8703f", g: "#e0a82e", e: "#ff5500", E: "#ffaa00", ...hands({ ...k, jacket: blazer }) }, "eE");
+  s.glowDots([[24, 15]], "#ffffff");
+  s.glowDots([[25, 14], [25, 13]], "#e4e0f0");
+  s.glowDots([[24, 12], [24, 11]], "#a8a4bc");
 }
 
 function retiredLead(s: Sprite, k: Look) {
@@ -596,6 +626,15 @@ function retiredLead(s: Sprite, k: Look) {
   s.rect(4, 23, 5, 23, mix(DARK, k.neon, 0.45));
   s.rect(7, 23, 8, 23, mix(DARK, k.neon, 0.45));
   s.set(4, 23, "#ffffff");
+  if (k.propless) {
+    // Weathered greatcoat: wide notched lapels with a worn edge.
+    const lap = mix(blazer, "#ffffff", 0.28);
+    s.dots([[7, 19], [8, 19], [6, 20], [7, 20], [8, 20], [9, 20], [10, 21], [11, 22], [12, 23]], lap);
+    s.dots([[20, 19], [19, 19], [21, 20], [20, 20], [19, 20], [18, 20], [17, 21], [16, 22], [15, 23]], lap);
+    s.dots([[9, 21], [10, 22], [18, 21], [17, 22]], shade(blazer, 0.7)); // notches
+    s.dots([[5, 25], [4, 26], [22, 24], [23, 26]], mix(blazer, "#ffffff", 0.12)); // wear
+    s.rect(20, 25, 22, 25, shade(blazer, 0.7)); // pocket flap
+  }
   brows(s, { ...k, hair: "#c4c2d4" }, "flat");
   eyes(s, k, "tired");
   mouth(s, k, "content");
@@ -637,6 +676,17 @@ function retiredLead(s: Sprite, k: Look) {
     }
   cast.forEach(([x, y]) => s.set(x, y, shade(s.get(x, y)!, 0.78)));
   s.dots(edge, silver.O);
+  if (k.propless) {
+    // Gold monocle over the right eye on a chain to the lapel, painted after the grey-out.
+    const gold = "#e8b84a";
+    s.rect(17, 10, 19, 10, gold);
+    s.rect(16, 11, 16, 13, gold);
+    s.rect(20, 11, 20, 13, gold);
+    s.rect(17, 14, 19, 14, "#b0832a");
+    s.glowDots([[19, 11]], "#ffffff");
+    s.dots([[20, 15], [21, 16], [21, 17], [21, 18], [20, 19], [20, 20], [19, 21]], "#c99a3a");
+    return;
+  }
   // Bright white coffee mug cradled low in both hands in front of the chest, steam curling
   // up past the right of the jaw.
   const hand = grey(k.skin, 0.25);
@@ -682,6 +732,24 @@ function brainstorm(s: Sprite, k: Look) {
     s.glow(26, y, k.neon);
   }
   s.glowDots([[2, 8], [3, 8], [24, 8], [25, 8], [2, 16], [3, 16], [24, 16], [25, 16]], shade(k.neon, 0.7));
+  if (k.propless) {
+    // Neural nodes pulsing along the headband.
+    s.glowDots([[9, 0], [13, 0], [14, 0], [18, 0]], "#9ff3ff");
+    s.glowDots([[11, 0], [16, 0]], "#c9a8ff");
+    // Big round amber thinker glasses.
+    const amber = "#ffb020";
+    for (const x0 of [7, 15]) {
+      s.rect(x0 + 1, 10, x0 + 4, 10, amber);
+      s.rect(x0 + 1, 14, x0 + 4, 14, shade(amber, 0.75));
+      s.rect(x0, 11, x0, 13, amber);
+      s.rect(x0 + 5, 11, x0 + 5, 13, amber);
+      for (let y = 11; y <= 13; y++)
+        for (let x = x0 + 1; x <= x0 + 4; x++) if (s.get(x, y) !== DARK && s.get(x, y) !== WHITE) s.set(x, y, mix(k.skin, amber, 0.3));
+    }
+    s.rect(13, 11, 14, 11, amber);
+    s.glowDots([[8, 11], [16, 11]], "#fff4c2");
+    return;
+  }
   // A glowing lightbulb of an idea, cradled in both hands and presented in front of the chest.
   prop(s, 8, 20, [
     "....oooo....",
@@ -697,70 +765,74 @@ function brainstorm(s: Sprite, k: Look) {
 }
 
 function implement(s: Sprite, k: Look) {
-  // Satin bomber: sheen streaks and a ribbed neon collar.
-  torso(s, k, { color: k.jacket, shirt: WHITE });
-  const sheen = mix(k.jacket, "#ffffff", 0.35);
-  s.dots([[4, 23], [5, 24], [4, 25], [5, 26]], sheen);
-  for (let x = 6; x <= 21; x++) if (x < 11 || x > 16) s.glow(x, 21, x % 2 ? k.neon : shade(k.neon, 0.6));
-  s.glowRect(8, 25, 9, 26, k.pastel); // chest patch
+  // Crimson tech jacket, zip open over a black tee: orange zip tape down both edges, orange
+  // sleeve stripes and a glowing chest badge.
+  torso(s, k, { color: k.jacket, shirt: "#1a1626" });
+  const orange = "#ff7a1a";
+  s.dots([[10, 21], [11, 22], [12, 23], [12, 24], [12, 25], [12, 26], [12, 27]], orange);
+  s.dots([[17, 21], [16, 22], [15, 23], [15, 24], [15, 25], [15, 26], [15, 27]], orange);
+  s.rect(13, 24, 14, 27, "#1a1626");
+  s.rect(4, 23, 4, 27, orange);
+  s.rect(23, 23, 23, 27, orange);
+  s.dots([[3, 24], [3, 26]], mix(k.jacket, "#ffffff", 0.3)); // sheen
+  s.glowRect(7, 24, 9, 25, k.neon); // chest badge
+  s.glowDots([[7, 24]], mix(k.neon, "#ffffff", 0.6));
   head(s, k);
   hair(s, k, "crop");
-  // Mechanic cap with a glowing front patch.
-  const cap = shade(k.jacket, 1.45);
+  // Black visor cap with an orange peak and a glowing front patch.
+  const cap = "#231d30";
   s.rect(9, 1, 18, 1, cap);
   s.rect(7, 2, 20, 2, cap);
   s.rect(6, 3, 21, 4, cap);
   s.rect(5, 5, 22, 7, cap);
-  s.glowRect(12, 2, 15, 3, k.neon);
-  s.glowDots([[13, 2]], mix(k.neon, "#ffffff", 0.55));
-  s.dots([[8, 2], [9, 2], [7, 3]], mix(cap, "#ffffff", 0.25));
-  // Tech goggles resting on the brim, strap around the cap.
-  s.rect(4, 6, 23, 6, "#2a2440");
-  s.rect(6, 5, 10, 7, "#3a3450");
-  s.rect(17, 5, 21, 7, "#3a3450");
-  s.glowRect(7, 6, 9, 6, mix(k.neon, "#1d3c5a", 0.35));
-  s.glowRect(18, 6, 20, 6, mix(k.neon, "#1d3c5a", 0.35));
-  s.glowDots([[7, 6], [18, 6]], "#ffffff");
-  // Brim and the shadow it throws on the brow.
-  s.rect(4, 8, 23, 8, shade(cap, 0.62));
-  s.rect(6, 9, 21, 9, shade(k.skin, 0.76));
+  s.dots([[8, 2], [9, 2], [7, 3]], "#4a4060");
+  s.glowRect(11, 3, 16, 5, k.neon);
+  s.glowRect(12, 4, 15, 4, mix(k.neon, "#ffffff", 0.55));
+  s.rect(4, 8, 23, 8, orange);
+  s.rect(4, 8, 7, 8, shade(orange, 0.72));
+  s.rect(6, 9, 21, 9, shade(k.skin, 0.72));
   brows(s, k, "flat");
   eyes(s, k, "open");
   mouth(s, k, "grin");
-  // Steel wrench rested over the right shoulder: fist low at the chest, the shaft running up
-  // across the collarbone and the open jaw poking out behind the shoulder.
-  prop(s, 13, 16, [
-    "..........S..S",
-    "..........s..s",
-    "..........sssd",
-    ".........ssd..",
-    "........ssd...",
-    ".......ssd....",
-    ".....sssd.....",
-    "...sssd.......",
-    "hhhsd.........",
-    "kkkd..........",
-    "hhh...........",
-    "ccc...........",
-  ], { S: "#bff6ff", s: "#d4dcf0", d: "#6e7896", ...hands(k) });
+  // AR glasses: a thin dark frame to the ears and a glowing cyan HUD over the left eye.
+  const frame = "#1a1626";
+  s.rect(5, 10, 22, 10, frame);
+  s.rect(6, 10, 12, 14, frame);
+  s.glowRect(7, 11, 11, 13, "#22d3ee");
+  s.glowRect(7, 11, 11, 11, "#a5f3fc");
+  s.glowDots([[8, 12], [10, 12]], "#ecfeff");
+  if (k.propless) return;
+  // Handheld dev terminal held up against the crimson chest in the right hand: slate case,
+  // glowing cyan screen with lines of code, an orange status LED.
+  prop(s, 16, 19, [
+    "DDDDDD",
+    "DSSSSD",
+    "DssSSD",
+    "DSSSSD",
+    "DSsssD",
+    "DDDDLD",
+    "hhhhhh",
+    "kkkkkk",
+  ], { D: "#2a3142", S: "#0e7490", s: "#a5f3fc", L: "#ff7a1a", ...hands(k) }, "SsL");
 }
 
 function mechanical(s: Sprite, k: Look) {
-  // Dark work shirt with a hi-vis vest and glowing reflective straps.
-  torso(s, k, { color: "#2b2f3d", shirt: "#3a4052" });
-  const vest = "#fb8c1e";
-  s.rect(3, 22, 9, 27, vest);
-  s.rect(18, 22, 24, 27, vest);
-  s.rect(2, 23, 2, 27, vest);
-  s.rect(25, 23, 25, 27, vest);
-  s.rect(7, 21, 9, 21, vest);
-  s.rect(18, 21, 20, 21, vest);
-  const strip = "#eef7ff";
-  for (let y = 21; y < S; y++) {
-    s.glow(8, y, strip);
-    s.glow(19, y, strip);
-  }
-  for (let x = 2; x <= 25; x++) if (x < 10 || x > 17) s.glow(x, 26, mix(strip, k.neon, 0.25));
+  // Light steel work shirt under heavy navy dungarees: shoulder straps with brass buckles,
+  // a bib with a stitched utility pocket.
+  torso(s, k, { color: "#8b95a8", vneck: false });
+  s.dots([[10, 21], [11, 21], [16, 21], [17, 21]], "#c3cad8"); // shirt collar points
+  const navy = "#1f2d5c";
+  const seam = "#3d5596";
+  s.rect(8, 21, 10, 22, navy);
+  s.rect(17, 21, 19, 22, navy);
+  s.rect(7, 23, 20, 27, navy);
+  s.rect(2, 27, 25, 27, navy);
+  s.dots([[9, 21], [18, 21]], seam);
+  s.glowDots([[9, 23], [18, 23]], "#f2c14e"); // brass buckles
+  s.rect(10, 24, 17, 24, seam); // pocket top stitch
+  s.rect(10, 25, 17, 26, "#18234a");
+  s.dots([[10, 25], [17, 25], [10, 26], [17, 26]], seam);
+  s.rect(13, 25, 14, 25, "#e8ecff"); // pencil in the pocket
   head(s, k);
   hair(s, k, "crop");
   brows(s, k, "furrow");
@@ -790,6 +862,24 @@ function mechanical(s: Sprite, k: Look) {
   s.glowRect(13, 4, 14, 4, "#ffffff");
   // Peak shadow across the brow.
   s.rect(5, 9, 22, 9, shade(k.skin, 0.68));
+  if (k.propless) {
+    // Heavy brass welding goggles: round smoked-green lenses on a leather strap.
+    const brass = "#d9a54a";
+    const strap = "#3a2a20";
+    s.rect(3, 12, 6, 12, strap);
+    s.rect(21, 12, 24, 12, strap);
+    for (const x0 of [6, 15]) {
+      s.rect(x0 + 1, 10, x0 + 5, 10, brass);
+      s.rect(x0 + 1, 14, x0 + 5, 14, shade(brass, 0.7));
+      s.rect(x0, 11, x0, 13, brass);
+      s.rect(x0 + 6, 11, x0 + 6, 13, shade(brass, 0.8));
+      s.rect(x0 + 1, 11, x0 + 5, 13, "#163a2c");
+      s.glowDots([[x0 + 1, 11], [x0 + 2, 11]], "#7dffb0");
+      s.glowDots([[x0 + 4, 13]], "#2f8a5e");
+    }
+    s.rect(13, 12, 14, 12, brass);
+    return;
+  }
   // Heavy ring spanner gripped low at the right hip and angled up across the chest, ring end
   // resting on the left shoulder.
   prop(s, 1, 17, [
@@ -838,6 +928,19 @@ function review(s: Sprite, k: Look) {
   eyes(s, k, "glance");
   s.rect(10, 11, 11, 11, shade(k.skin, 0.66)); // left eye narrowed under the brim
   mouth(s, k, "smirk");
+  if (k.propless) {
+    // Jeweller's loupe screwed into the right eye: brass barrel, cyan lens, a magnified eye.
+    const brass = "#d9a54a";
+    s.rect(17, 9, 20, 9, brass);
+    s.rect(16, 10, 16, 14, brass);
+    s.rect(21, 10, 21, 14, shade(brass, 0.75));
+    s.rect(17, 15, 20, 15, shade(brass, 0.6));
+    s.glowRect(17, 10, 20, 14, mix(k.skin, "#7fe9ff", 0.6));
+    s.glowRect(18, 11, 19, 13, DARK);
+    s.glowDots([[17, 10], [19, 11]], "#ffffff");
+    s.rect(22, 11, 22, 13, shade(brass, 0.55)); // barrel depth
+    return;
+  }
   // Round magnifying glass angled in front of the lower-right cheek, the skin tinted cyan
   // behind the lens; brass handle running down to the hand over the coat's shoulder.
   prop(s, 18, 14, [
@@ -891,6 +994,32 @@ function audit(s: Sprite, k: Look) {
   s.glowDots([[10, 23], [17, 23]], k.neon);
   brows(s, k, "furrow");
   mouth(s, k, "line");
+  if (k.propless) {
+    // Flip-down night-vision tubes on a forehead mount: two round lime optics, a helmet strap
+    // across the hood, a bright headset mic boom across the cheek, tactical vest pouches.
+    prop(s, 4, 4, [
+      "ssssssssssssssssssss",
+      ".......mmmmmm.......",
+      ".........aa.........",
+      "",
+      "",
+      "",
+      "...OOOOO....OOOOO..",
+      "..OGGGGGO..OGGGGGO.",
+      "..OGLwLGOAAOGLwLGO.",
+      "..OGLLLGO..OGLLLGO.",
+      "..OGGGGGO..OGGGGGO.",
+      "...OOOOO....OOOOO..",
+    ], { s: "#14121e", m: "#3a3a4e", a: "#2a2838", O: "#1e2a22", A: "#2a2838", G: "#15803d", L: "#4ade80", w: "#f0fff4" }, "GLw");
+    s.rect(13, 7, 14, 9, "#2a2838"); // mount arm down to the bridge
+    const pouch = shade(k.jacket, 0.6);
+    s.rect(3, 22, 8, 23, pouch);
+    s.rect(19, 22, 24, 23, pouch);
+    s.dots([[5, 22], [21, 22]], mix(pouch, "#ffffff", 0.3));
+    s.dots([[22, 15], [21, 16], [20, 17], [19, 18]], "#c8d0e8");
+    s.glowRect(17, 18, 18, 18, "#ff3b5c");
+    return;
+  }
   // Dual-barrel binoculars raised to the eyes, a hand on each side, two glowing lenses.
   prop(s, 3, 9, [
     "..bbbbbbbb..bbbbbbbb..",
@@ -913,7 +1042,7 @@ function spec(s: Sprite, k: Look) {
   s.glowRect(13, 22, 14, 27, shade(k.neon, 0.75));
   // Unrolled blueprint held open wide and low across the torso, a hand on each curled edge:
   // cyan grid and a white floor-plan sketch.
-  prop(s, 2, 22, [
+  if (!k.propless) prop(s, 2, 22, [
     "...RRRRRRRRRRRRRRRRRR...",
     "hhhRgBBBgBBBgBBBgBBBRhhh",
     "kkkRgwwwwwwwgBBBgBBBRkkk",
@@ -945,6 +1074,23 @@ function spec(s: Sprite, k: Look) {
   s.glowDots([[7, 12], [8, 11], [16, 12]], "#ffffff");
   s.glowDots([[11, 13], [20, 13]], mix(k.neon, "#ffffff", 0.3));
   mouth(s, k, "smile");
+  if (!k.propless) return;
+  // Green drafting eyeshade on a dark band, a pencil behind the right ear, and a pocket
+  // protector full of pens.
+  s.rect(4, 5, 23, 6, "#14301f");
+  s.glowRect(5, 7, 22, 8, "#2fbf71");
+  s.glowRect(5, 7, 22, 7, "#7dffb0");
+  s.glowRect(4, 8, 5, 8, "#1f8a50");
+  s.glowRect(22, 8, 23, 8, "#1f8a50");
+  s.rect(6, 9, 21, 9, mix(shade(k.skin, 0.8), "#2fbf71", 0.3)); // green cast on the brow
+  s.dots([[23, 9], [24, 10], [24, 11]], "#ffd23a");
+  s.dots([[22, 8], [25, 12]], "#f3d9b0");
+  s.set(25, 12, "#3a3450");
+  s.rect(17, 24, 21, 27, "#e8ecff");
+  s.rect(17, 24, 21, 24, "#b8c0d8");
+  s.dots([[17, 23], [19, 23], [21, 23]], "#ff4f6a");
+  s.dots([[18, 23], [20, 23]], "#3ee6ff");
+  s.set(19, 23, "#ffd23a");
 }
 
 function art(s: Sprite, k: Look) {
@@ -981,6 +1127,35 @@ function art(s: Sprite, k: Look) {
   s.dots([[13, 1], [14, 1], [10, 2], [11, 2], [8, 3]], mix(beret, "#ffffff", 0.3));
   s.glowDots([[8, 4]], k.neon);
   s.glowDots([[9, 4]], mix(k.neon, "#ffffff", 0.5));
+  if (k.propless) {
+    // Cream smock bib over the denim, splattered with neon paint, straps to the neck.
+    const smock = "#f1e6d0";
+    s.rect(9, 20, 9, 21, smock);
+    s.rect(18, 20, 18, 21, smock);
+    s.rect(8, 22, 19, 27, smock);
+    s.rect(8, 22, 19, 22, mix(smock, "#ffffff", 0.4));
+    s.rect(10, 26, 17, 26, shade(smock, 0.8)); // front pocket
+    s.glowDots([[10, 23], [11, 23], [10, 24], [16, 23], [17, 24], [12, 25], [15, 27]], "#ff3df0");
+    s.glowDots([[14, 23], [18, 25], [9, 26], [13, 27]], "#00f0ff");
+    s.glowDots([[16, 25], [11, 27]], "#ffe66b");
+    // Paint-splashed shades: hot magenta frames, cyan lenses, a drip off the left lens.
+    const frame = "#ff3df0";
+    s.rect(6, 10, 12, 10, frame);
+    s.rect(15, 10, 21, 10, frame);
+    s.rect(6, 11, 6, 13, frame);
+    s.rect(12, 11, 12, 13, frame);
+    s.rect(15, 11, 15, 13, frame);
+    s.rect(21, 11, 21, 13, frame);
+    s.rect(7, 14, 11, 14, shade(frame, 0.7));
+    s.rect(16, 14, 20, 14, shade(frame, 0.7));
+    s.rect(13, 11, 14, 11, frame);
+    s.glowRect(7, 11, 11, 13, "#0bb5d6");
+    s.glowRect(16, 11, 20, 13, "#0bb5d6");
+    s.glowDots([[7, 11], [8, 11], [16, 11], [17, 11]], "#c8fbff");
+    s.glowDots([[10, 12], [19, 13]], "#ffe66b");
+    s.glowDots([[8, 15], [8, 16]], "#ffe66b");
+    return;
+  }
   // Spray can gripped in the right hand: magenta cap with a side nozzle, and a cone of neon
   // mist fanning out to the right: one bright pixel at the tip, a gap, then loose droplets
   // and a short wisp drifting outward and up, dark background between them.
@@ -1066,13 +1241,19 @@ function finish(s: Sprite, neon: string, agentType: AgentType) {
 }
 
 /** Raw 28x28 pixels (row-major hex colours, null = transparent). DOM-free, so the gallery script can use it. */
-export function paintPixels(id: string, agentType: AgentType, neon: string, variant?: number): (string | null)[] {
+export function paintPixels(
+  id: string,
+  agentType: AgentType,
+  neon: string,
+  variant?: number,
+  propless = SHIP_PROPLESS,
+): (string | null)[] {
   const h = hash(id);
   const r = rng(h);
   const pick = <T,>(xs: T[]): T => xs[Math.floor(r() * xs.length)];
   const palettes = CURATED[agentType] ?? CURATED.unknown;
   const pal = palettes[(h >>> 5) % palettes.length];
-  const look: Look = { r, pick, ...pal, neon };
+  const look: Look = { r, pick, ...pal, neon, propless };
   if (agentType === "lead") look.lead = leadLook(id, variant);
   const s = new Sprite();
   (CAST[agentType] ?? CAST.unknown)(s, look);
@@ -1080,11 +1261,11 @@ export function paintPixels(id: string, agentType: AgentType, neon: string, vari
   return s.px;
 }
 
-export function spriteUrl(id: string, agentType: AgentType, neon: string, variant?: number): string {
-  const key = `${id}|${agentType}|${neon}|${variant ?? ""}`;
+export function spriteUrl(id: string, agentType: AgentType, neon: string, variant?: number, propless = SHIP_PROPLESS): string {
+  const key = `${id}|${agentType}|${neon}|${variant ?? ""}|${propless ? "p" : ""}`;
   const hit = cache.get(key);
   if (hit) return hit;
-  const px = paintPixels(id, agentType, neon, variant);
+  const px = paintPixels(id, agentType, neon, variant, propless);
   const cv = document.createElement("canvas");
   cv.width = cv.height = S;
   const ctx = cv.getContext("2d")!;
@@ -1108,6 +1289,7 @@ export function Avatar({
   agentType = "unknown",
   size = 32,
   variant,
+  propless = SHIP_PROPLESS,
 }: {
   id: string;
   provider: string;
@@ -1116,6 +1298,8 @@ export function Avatar({
   size?: number;
   /** Lead look bucket (the lane ordinal); leads with none fall back to the id hash. */
   variant?: number;
+  /** Draw the propless variant (headwear + face gear) instead of held props. */
+  propless?: boolean;
 }) {
   const p = providerSpec(provider, providerLabel);
   const tag = String((hash(id) % 90) + 10);
@@ -1129,7 +1313,7 @@ export function Avatar({
       style={{ width: size, height: size, "--prov": p.color, "--prov-dim": p.dim } as CSSProperties}
       title={`${roleLabel} · ${p.name} (#${tag})`}
     >
-      <img src={spriteUrl(id, agentType, p.color, variant)} width={img} height={img} alt="" />
+      <img src={spriteUrl(id, agentType, p.color, variant, propless)} width={img} height={img} alt="" />
       <span className="prov-badge" style={{ color: p.color }}>
         {p.symbol}
       </span>
