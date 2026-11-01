@@ -50,7 +50,7 @@ export function getBrainstormThresholds(
 export function getLeadThresholds(
   team?: { leadFlagTokens?: number; leadAutoHandoffTokens?: number; leadHardCapTokens?: number } | null,
 ): { flagTokens: number; autoHandoffTokens: number; hardCapTokens: number } {
-  const fileAny = teamsFile as {
+  const fileAny = registryFile as {
     leadFlagTokens?: number;
     leadHandoffTokens?: number;
     leadAutoHandoffTokens?: number;
@@ -71,8 +71,11 @@ export function leadLadderFor(
 }
 
 const TEAMS_KEY = "vibesquad.teams";
-const diskTeams = (): TeamDef[] => JSON.parse(JSON.stringify(teamsFile.teams));
+// Last registry file seen from the server (~/.vibesquad/teams.json etc.); the bundled example until the first GET lands.
+let registryFile: { teams: TeamDef[]; [k: string]: unknown } = teamsFile as { teams: TeamDef[] };
+const diskTeams = (): TeamDef[] => JSON.parse(JSON.stringify(registryFile.teams));
 
+// localStorage is only a first-paint cache; refreshTeams() replaces it with the server's registry.
 function loadTeams(): TeamDef[] {
   try {
     const raw = localStorage.getItem(TEAMS_KEY);
@@ -96,35 +99,71 @@ const notifyTeams = () => {
 export const getTeams = (): TeamDef[] => TEAMS;
 export const getDiskTeams = diskTeams;
 
-/** Save to localStorage and (best effort) to teams.json on disk via the dev-server middleware. */
-export async function saveTeams(next: TeamDef[]): Promise<{ disk: boolean }> {
-  TEAMS = next;
+const cacheTeams = (next: TeamDef[]) => {
   try {
     localStorage.setItem(TEAMS_KEY, JSON.stringify(next));
   } catch {}
+};
+
+// Bumped by every local save so an in-flight refresh can't land a copy older than the edit.
+let saveSeq = 0;
+
+/** Save locally and to the shared teams registry (the same file the CLI and plugin read). */
+export async function saveTeams(next: TeamDef[]): Promise<{ disk: boolean }> {
+  saveSeq++;
+  TEAMS = next;
+  cacheTeams(next);
   notifyTeams();
+  const body = JSON.stringify({ teams: next });
+  const headers = { "content-type": "application/json" };
+  for (const [url, method] of [["/api/teams", "PUT"], ["/__vibesquad/teams", "POST"]] as const) {
+    try {
+      const r = await fetch(url, { method, headers, body });
+      if (r.ok) {
+        registryFile = { ...registryFile, teams: next };
+        return { disk: true };
+      }
+    } catch {}
+  }
+  return { disk: false };
+}
+
+/** Pull the registry from the server; the file wins over the localStorage cache. Returns true if TEAMS changed. */
+export async function refreshTeams(): Promise<boolean> {
+  const seq = saveSeq;
   try {
-    const body = JSON.stringify({ teams: next });
-    const headers = { "content-type": "application/json" };
-    const [r1, r2] = await Promise.allSettled([
-      fetch("/api/teams", { method: "PUT", headers, body }),
-      fetch("/__vibesquad/teams", { method: "POST", headers, body }),
-    ]);
-    const ok1 = r1.status === "fulfilled" && r1.value.ok;
-    const ok2 = r2.status === "fulfilled" && r2.value.ok;
-    return { disk: ok1 || ok2 };
+    const r = await fetch("/api/teams", { cache: "no-store" });
+    if (!r.ok) return false;
+    const data = await r.json();
+    if (!Array.isArray(data?.teams) || seq !== saveSeq) return false;
+    registryFile = data;
+    if (JSON.stringify(data.teams) === JSON.stringify(TEAMS)) return false;
+    TEAMS = data.teams;
+    cacheTeams(TEAMS);
+    notifyTeams();
+    return true;
   } catch {
-    return { disk: false };
+    return false;
   }
 }
 
-/** Drop the localStorage override and go back to what teams.json had at build time. */
+/** Drop the localStorage cache and go back to the last registry file the server sent. */
 export function resetTeamsToDisk(): void {
   try {
     localStorage.removeItem(TEAMS_KEY);
   } catch {}
   TEAMS = diskTeams();
   notifyTeams();
+  void refreshTeams();
+}
+
+// Agents edit the registry too (`vs pin new`), so re-read it on focus and every 10s while visible.
+if (typeof window !== "undefined" && typeof document !== "undefined") {
+  void refreshTeams();
+  window.addEventListener("focus", () => void refreshTeams());
+  setInterval(() => {
+    if (document.visibilityState === "visible") void refreshTeams();
+  }, 10_000);
 }
 
 export function subscribeTeams(l: () => void): () => void {

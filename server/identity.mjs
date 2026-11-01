@@ -3,25 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readJsonFileWithBom } from "./user-settings.mjs";
+import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
 
 // import.meta.url is undefined when bundled into the Paseo plugin; fall back like plugin/index.server.ts.
 const DEFAULT_ROOT = path.resolve(process.env.VIBESQUAD_ROOT || (typeof import.meta.url === "string" && import.meta.url ? path.join(path.dirname(fileURLToPath(import.meta.url)), "..") : path.join(os.homedir(), "projects", "VibeSquad")));
 
 function resolveTeamsFilePath(rootDir = DEFAULT_ROOT) {
-  if (process.env.VIBESQUAD_TEAMS_FILE) {
-    const p = path.resolve(process.env.VIBESQUAD_TEAMS_FILE);
-    if (fs.existsSync(p)) return p;
-  }
-  if (!process.env.VIBESQUAD_IGNORE_HOME_TEAMS) {
-    const homeTeams = path.join(
-      process.env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad"),
-      "teams.json",
-    );
-    if (fs.existsSync(homeTeams)) return homeTeams;
-  }
-  const local = path.join(rootDir, "teams.json");
-  if (fs.existsSync(local)) return local;
-  return path.join(rootDir, "teams.example.json");
+  return resolveSharedTeamsFilePath(rootDir);
 }
 
 export const UNASSIGNED_TEAM_ID = "_unassigned";
