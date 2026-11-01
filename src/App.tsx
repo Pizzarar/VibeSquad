@@ -70,8 +70,9 @@ import {
 } from "./ui";
 import { WorkspacesView } from "./WorkspacesView";
 import { FullToggle, PinGrid, SidebarPins, useFullView, type PinHandler } from "./PinGrid";
-import { openPin } from "./pinActions";
-import type { Pin } from "./pins";
+import { pinsForSquad, type Pin } from "./pins";
+import { clearPinFocus, exitPinFocus, focusPin, usePinFocus, usePinsHome } from "./pinFocus";
+import { PinFocusBar, PinRail } from "./PinRail";
 import { AddBuddyModal, Modal, NewAgentModal, ProfileImportModal, TeamSettingsModal, useProfiles } from "./TeamActions";
 import { PairDeviceModal } from "./PairDeviceModal";
 import { BriefEditorHost } from "./BriefEditor";
@@ -1059,7 +1060,15 @@ const TeamPage = memo(function TeamPage(props: {
             <FullToggle />
           </div>
         </header>
-        <PinGrid view={view} onOpenAgent={onPick} onQuickStart={props.onQuickStart} />
+        <PinGrid
+          view={view}
+          onOpenAgent={(id) => {
+            const pin = pinsForSquad(view).pinned.find((p) => p.brainstorm?.agent.id === id);
+            if (pin) void props.onQuickStart(pin);
+            else onPick(id);
+          }}
+          onQuickStart={props.onQuickStart}
+        />
         <IdeaInbox team={view.team} />
       </div>
     );
@@ -1465,6 +1474,7 @@ export function App() {
   // Stable callbacks so the memoized sidebar and team page skip renders they do not need.
   // Switching teams never touches open tabs.
   const onTeam = useCallback((id: string) => {
+    exitPinFocus();
     setTeamId(id);
     setScreen("teams");
     setCollapsedTeams((prev) => {
@@ -1487,6 +1497,7 @@ export function App() {
   // BUG T1-3: Clicking a team header selects & expands if inactive, or toggles collapse if already active!
   const onTeamHeaderClick = useCallback(
     (id: string) => {
+      exitPinFocus();
       if (id !== activeTeamId) {
         setTeamId(id);
         setScreen("teams");
@@ -1557,12 +1568,32 @@ export function App() {
   const openAddBuddy = useCallback(() => setModal("add-buddy"), []);
   const openNewAgent = useCallback(() => setModal("new-agent"), []);
   const onSuccessor = useCallback((m: Member) => setSuccessorId(m.agent.id), []);
-  // Pin click: open the live Brainstorm, or quick-start one from the team brief (src/pinActions.ts).
+  // Pin click (grid tile, sidebar pin, rail tile): focus that Team's Brainstorm in the middle with the
+  // other pins in the right rail; a pin with no live Brainstorm quick-starts one from its brief.
   const onQuickStart = useCallback<PinHandler>((pin) => {
     setTeamId(pin.squad.id);
     setScreen("teams");
-    return openPin(pin).then(openAgent);
+    return focusPin(pin);
   }, []);
+  const onRailPick = useCallback(
+    (pin: Pin) => void focusPin(pin).catch((e) => alert(`Could not start ${pin.lane.name}: ${e}`)),
+    [],
+  );
+  // The pinned layout (focus view + rail, or the clean grid) is the default page only: FULL, focus mode
+  // and the Workspaces screen show the panes as before.
+  const pinFocus = usePinFocus();
+  const pinsHome = usePinsHome();
+  const pinLayout = !full && !focus && screen === "teams";
+  const pinFocusView = pinLayout && pinFocus ? views.find((v) => v.team.id === pinFocus.squadId) : undefined;
+  const pinFocused = !!pinFocusView;
+  const hidePanes = pinLayout && pinsHome && !pinFocused;
+  const withPanes = (hasTabs || focus) && !pinFocused && !hidePanes;
+  const leftPinLayout = useRef(false);
+  useEffect(() => {
+    if (!pinLayout) clearPinFocus();
+    else if (leftPinLayout.current) exitPinFocus(); // back from FULL / focus mode: land on the grid
+    leftPinLayout.current = !pinLayout;
+  }, [pinLayout]);
   const paneSuccessor = useCallback((id: string) => setSuccessorId(id), []);
 
   // Entering focus with nothing open shows the team's brainstorm or lead (opens it; never spawns).
@@ -1590,7 +1621,7 @@ export function App() {
 
   return (
     <div
-      className={`app ${focus ? "focus" : ""} ${hasTabs || focus ? "with-panes" : ""} ${split ? "split" : ""} ${sheet ? "sheet-open" : ""} ${mobileTeamView ? "mobile-team-view" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
+      className={`app ${focus ? "focus" : ""} ${withPanes ? "with-panes" : ""} ${split && withPanes ? "split" : ""} ${pinFocused ? `pin-focus ${pinFocus?.agentId ? "" : "pin-starting"}` : ""} ${hidePanes ? "pins-home" : ""} ${sheet ? "sheet-open" : ""} ${mobileTeamView ? "mobile-team-view" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
       style={{ "--sidebar-w": `${sidebarWidth}px` } as React.CSSProperties}
     >
       {exposedIps.length > 0 && (
@@ -1685,7 +1716,7 @@ export function App() {
           onStartResize={onStartResize}
         />
       )}
-      {!focus && (
+      {!focus && !pinFocused && (
         <main className="team-page main">
           <Toolbar
             screen={screen}
@@ -1719,7 +1750,13 @@ export function App() {
           )}
         </main>
       )}
-      {(hasTabs || focus) && <AgentPanes onSuccessor={paneSuccessor} />}
+      {(hasTabs || focus || pinFocused) && (
+        <AgentPanes
+          onSuccessor={paneSuccessor}
+          header={pinFocusView && pinFocus ? <PinFocusBar view={pinFocusView} focus={pinFocus} /> : undefined}
+        />
+      )}
+      {pinFocusView && pinFocus && <PinRail view={pinFocusView} focus={pinFocus} onPick={onRailPick} />}
       <MobileBar />
       {uiScaleHud && (
         <div className="ui-scale-hud" data-testid="ui-scale-hud" role="status" aria-live="polite">

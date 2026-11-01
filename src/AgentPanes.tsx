@@ -1,4 +1,4 @@
-import { memo, useCallback, useSyncExternalStore } from "react";
+import { memo, useCallback, useSyncExternalStore, type ReactNode } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import { getPaseoState, subscribePaseo } from "./paseo";
 import { AgentDrawer } from "./AgentDrawer";
@@ -154,13 +154,14 @@ function EmptyPane({ pane, focus }: { pane: Pane; focus: boolean }) {
   );
 }
 
-export const AgentPanes = memo(function AgentPanes({ onSuccessor }: { onSuccessor: (id: string) => void }) {
+/** `header` (pinned focus view) replaces the tab strips in row 1; the drawer list is unchanged. */
+export const AgentPanes = memo(function AgentPanes({ onSuccessor, header }: { onSuccessor: (id: string) => void; header?: ReactNode }) {
   const s = usePanes();
   const paneOf = (id: string): Pane => (s.rightTabs.includes(id) ? "right" : "left");
   return (
     <section className={`agent-panes ${s.split ? "split" : ""} active-${s.activePane}`}>
-      <TabStrip pane="left" tabs={s.leftTabs} activeId={s.leftActiveId} split={s.split} focus={s.focus} tools={!s.split} />
-      {s.split && <TabStrip pane="right" tabs={s.rightTabs} activeId={s.rightActiveId} split focus={s.focus} tools />}
+      {header ?? <TabStrip pane="left" tabs={s.leftTabs} activeId={s.leftActiveId} split={s.split} focus={s.focus} tools={!s.split} />}
+      {!header && s.split && <TabStrip pane="right" tabs={s.rightTabs} activeId={s.rightActiveId} split focus={s.focus} tools />}
       {s.mounted.map((id) => (
         <DrawerSlot key={id} id={id} pane={paneOf(id)} shown={isShown(s, id)} onSuccessor={onSuccessor} />
       ))}

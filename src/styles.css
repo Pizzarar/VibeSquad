@@ -3125,3 +3125,63 @@ html, body, #root { overflow-x: hidden; }
 .pin-reply-err { flex-basis: 100%; }
 .pin-grid-done { margin-top: 10px; }
 .pin-full-toggle { align-self: center; }
+
+/* ── Pinned teams step 2: focus view + right rail (src/PinRail.tsx, src/pinFocus.ts). Owned by the pinned team. ──
+   sidebar | focused Brainstorm drawer (its own right dock stays inside it) | pin rail.
+   .pins-home = back on the grid: the panes stay mounted (scroll, drafts) but hidden. */
+.app.pin-focus { grid-template-columns: var(--sidebar-w, 265px) minmax(0, 1fr) 240px; }
+.app.pin-focus.sidebar-collapsed { grid-template-columns: 56px minmax(0, 1fr) 240px; }
+.app.pins-home { grid-template-columns: var(--sidebar-w, 265px) minmax(0, 1fr); }
+.app.pins-home.sidebar-collapsed { grid-template-columns: 56px minmax(0, 1fr); }
+.app.pins-home > .agent-panes { display: none; }
+.app.pin-starting .agent-panes .pane-slot { display: none !important; }
+
+.pin-focus-bar {
+  grid-row: 1; grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; height: 40px; min-width: 0;
+  padding: 0 10px 0 6px; background: #090a16; border-bottom: 1px solid var(--line);
+}
+.pin-focus-home { font-size: 16px; padding: 2px 8px; }
+.pin-focus-name { font-family: var(--display); font-size: 14px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pin-focus-squad { white-space: nowrap; }
+.pin-focus-starting { color: var(--amber); }
+.pin-focus-spacer { flex: 1; }
+.pin-focus-plumbing {
+  flex: none; background: transparent; border: 1px solid transparent; color: var(--muted);
+  font: inherit; font-size: 11px; padding: 3px 8px; cursor: pointer; white-space: nowrap;
+}
+.pin-focus-plumbing:hover, .pin-focus-plumbing:focus-visible { color: var(--text); border-color: var(--line); outline: none; }
+
+.app > .pin-rail { min-height: 0; height: 100%; }
+.pin-rail {
+  display: flex; flex-direction: column; min-width: 0; overflow: hidden;
+  background: var(--navy); border-left: 1px solid var(--line);
+}
+.pin-rail-head {
+  display: flex; align-items: center; gap: 8px; height: 40px; flex: none; padding: 0 10px;
+  background: #090a16; border-bottom: 1px solid var(--line);
+}
+.pin-rail-squad { flex: 1; min-width: 0; font-family: var(--display); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pin-rail-list { flex: 1; min-height: 0; overflow-y: auto; padding: 6px; display: flex; flex-direction: column; gap: 6px; }
+.pin-rail-tile {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 54px; flex: none; padding: 7px 8px;
+  background: linear-gradient(135deg, var(--panel) 0%, #0d0f22 100%); border: 1px solid var(--line);
+  border-left: 2px solid var(--violet); color: var(--text); font: inherit; text-align: left; cursor: pointer;
+}
+.pin-rail-tile:hover, .pin-rail-tile:focus-visible { border-color: var(--cyan); outline: none; }
+.pin-rail-tile.on { border-color: var(--cyan); box-shadow: inset 3px 0 0 var(--cyan); background: #00f0ff12; cursor: default; }
+.pin-rail-tile.needs-you { border-left-color: var(--hot-pink); }
+.pin-rail-tile.no-session { border-left-color: var(--slate); border-style: dashed; }
+.pin-rail-tile .avatar { flex: none; }
+.pin-rail-col { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.pin-rail-name { display: flex; align-items: center; gap: 6px; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pin-rail-line { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+@media (max-width: 900px) {
+  .app.pin-focus { grid-template-columns: var(--sidebar-w, 265px) minmax(0, 1fr) 64px; }
+  .pin-rail-col, .pin-rail-head .muted, .pin-rail-squad { display: none; }
+  .pin-rail-tile { justify-content: center; padding: 6px 4px; }
+}
+@media (max-width: 600px) {
+  .app.pin-focus { grid-template-columns: minmax(0, 1fr); }
+  .app.pin-focus > .sidebar, .app.pin-focus > .pin-rail { display: none; }
+}

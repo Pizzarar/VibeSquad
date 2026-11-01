@@ -81,12 +81,12 @@ function PinCtx({ pin }: { pin: Pin }) {
   );
 }
 
-function PinDot({ pin }: { pin: Pin }) {
+export function PinDot({ pin }: { pin: Pin }) {
   if (pin.brainstorm) return <StatusDot agent={pin.brainstorm.agent} />;
   return <span className="signal closed" title="No session yet" />;
 }
 
-function NeedsBadge({ pin }: { pin: Pin }) {
+export function NeedsBadge({ pin }: { pin: Pin }) {
   if (!pin.needsYou) return null;
   return (
     <span className="badge alert pin-needs" title={`${pin.needsYou} need you`}>
@@ -148,7 +148,7 @@ export function SidebarPins({ view, onPin }: { view: TeamView; onPin: (pin: Pin)
 }
 
 // ── Grid tile: last few chat lines, read-only ────────────────────────────────
-type Line = { who: "you" | "bs"; text: string };
+export type Line = { who: "you" | "bs"; text: string };
 const PREVIEW_LINES = 4;
 
 function linesFrom(entries: { item: any }[]): Line[] {
@@ -167,7 +167,7 @@ function linesFrom(entries: { item: any }[]): Line[] {
 }
 
 // Tail of the Brainstorm's timeline. Light version of the drawer's loader: small tail, debounced refetch.
-function usePreview(agentId: string | null): Line[] {
+export function usePreview(agentId: string | null): Line[] {
   const [lines, setLines] = useState<Line[]>([]);
   useEffect(() => {
     setLines([]);
