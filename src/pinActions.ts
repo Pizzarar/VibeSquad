@@ -1,8 +1,8 @@
 // Pinned teams step 3 (docs/PLAN_PINNED_FEATURES.md §3): the side-effecting half of the pin resolver.
 // src/pins.ts stays pure; this file talks to the dev-server middleware and the teams store.
 import type { PaseoAgent } from "@getpaseo/client";
-import { DEMO, getPaseoState, upsertLocalAgent } from "./paseo";
-import { DEFAULT_PIN_PROFILE, patchLane, resolvePin, type Pin } from "./pins";
+import { DEMO, archiveAgent, getPaseoState, retireAgent, upsertLocalAgent } from "./paseo";
+import { appendBriefLine, briefStamp, completeBlocker, DEFAULT_PIN_PROFILE, patchLane, resolvePin, type Pin } from "./pins";
 import { findCrossTeamBrainstorm, getTeams, resolve, saveTeams, type TeamDef } from "./teams";
 
 export type OpenPinDeps = {
@@ -133,4 +133,84 @@ export function onOpenBriefEditor(fn: (t: BriefTarget) => void): () => void {
   const h = (e: Event) => fn((e as CustomEvent<BriefTarget>).detail);
   window.addEventListener(BRIEF_EVENT, h);
   return () => window.removeEventListener(BRIEF_EVENT, h);
+}
+
+// ── Step 5: Mark complete / Reopen (docs/PLAN_PINNED_FEATURES.md §4) ──────────
+// Only a click in the UI calls these. Agents never complete a team: there is no route or CLI for it.
+
+async function appendToBrief(laneId: string, line: string, doFetch: typeof fetch): Promise<void> {
+  const url = `/__vibesquad/brainstorm-summary?lane=${encodeURIComponent(laneId)}`;
+  const cur = (await (await doFetch(url)).json().catch(() => ({}))) as { ok?: boolean; content?: string; error?: string };
+  if (!cur.ok) throw new Error(cur.error ?? "Could not read the brief");
+  const res = await doFetch("/__vibesquad/brainstorm-summary", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ laneId, content: appendBriefLine(String(cur.content ?? ""), line) }),
+  });
+  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+  if (!res.ok || !body.ok) throw new Error(body.error ?? `Brief save failed (${res.status})`);
+}
+
+export type CompleteDeps = Pick<OpenPinDeps, "fetch" | "getTeams" | "saveTeams"> & {
+  retire?: typeof retireAgent;
+  archive?: (id: string) => Promise<unknown>;
+};
+
+/**
+ * Move a pin to the Done shelf: refuse while workers run or permissions are open, write
+ * "Done <date>" into the brief, retire the live Brainstorm (former-brainstorm, archived like the
+ * plugin's retirePredecessors) and the Lead (former-lead), then set state=done + doneAt.
+ * Returns the blocker text instead of completing when the team is still busy.
+ */
+export async function markPinComplete(pin: Pin, deps: CompleteDeps = {}): Promise<{ ok: true } | { ok: false; blocked: string }> {
+  const blocked = completeBlocker(pin);
+  if (blocked) return { ok: false, blocked };
+  const doFetch = deps.fetch ?? fetch;
+  const retire = deps.retire ?? retireAgent;
+  const archive = deps.archive ?? archiveAgent;
+  if (!DEMO) await appendToBrief(pin.lane.id, `Done ${briefStamp()}`, doFetch);
+  const bs = pin.brainstorm?.agent;
+  if (bs) {
+    await retire(bs, pin.lane.name);
+    await archive(bs.id).catch(() => {});
+  }
+  if (pin.lead) await retire(pin.lead.agent, pin.lane.name);
+  const profile = bs?.labels?.profile;
+  await (deps.saveTeams ?? saveTeams)(
+    patchLane((deps.getTeams ?? getTeams)(), pin.squad.id, pin.lane.id, {
+      state: "done",
+      doneAt: new Date().toISOString(),
+      ...(profile ? { lastProfile: profile } : {}),
+    }),
+  );
+  return { ok: true };
+}
+
+/** Put a done team back on the pins. The next click quick-starts a Brainstorm from the same brief (openPin). */
+export async function reopenPin(pin: Pin, deps: Pick<CompleteDeps, "fetch" | "getTeams" | "saveTeams"> = {}): Promise<void> {
+  await (deps.saveTeams ?? saveTeams)(
+    patchLane((deps.getTeams ?? getTeams)(), pin.squad.id, pin.lane.id, { state: "pinned", doneAt: undefined }),
+  );
+  if (!DEMO) await appendToBrief(pin.lane.id, `Reopened ${briefStamp()}`, deps.fetch ?? fetch).catch(() => {});
+}
+
+// ── "Looks done" card dismissals (per Brainstorm message id) ──────────────────
+const LOOKS_DONE_KEY = "vibesquad.looksDoneDismissed";
+
+function dismissedSet(): Set<string> {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(LOOKS_DONE_KEY) ?? "[]") as string[]);
+  } catch {
+    return new Set();
+  }
+}
+
+export const isLooksDoneDismissed = (messageId: string): boolean => dismissedSet().has(messageId);
+
+export function dismissLooksDone(messageId: string): void {
+  // Keep the newest 200 ids so the key cannot grow without bound.
+  const ids = [...dismissedSet(), messageId].slice(-200);
+  try {
+    localStorage.setItem(LOOKS_DONE_KEY, JSON.stringify(ids));
+  } catch {}
 }

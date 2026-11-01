@@ -5,7 +5,9 @@
 import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { client, DEMO, sendMessage } from "./paseo";
 import { demoTimeline } from "./demo";
-import { pinsForSquad, type Pin } from "./pins";
+import { hasLooksDone, LOOKS_DONE_MARKER, pinsForSquad, type Pin } from "./pins";
+import { PinMenu } from "./PinMenu";
+import { DoneRow, DoneShelf, LooksDoneCard } from "./PinDone";
 import { getBrainstormThresholds, type TeamView } from "./teams";
 import { StatusDot, usePaneClass } from "./ui";
 import { Avatar } from "./pixel";
@@ -134,13 +136,7 @@ export function SidebarPins({ view, onPin }: { view: TeamView; onPin: (pin: Pin)
           >
             {doneOpen ? "▾" : "▸"} Done ({done.length})
           </button>
-          {doneOpen &&
-            done.map((p) => (
-              <div key={p.lane.id} className="pin-row done" data-testid={`sidebar-done-pin-${p.lane.id}`} title={p.lane.doneAt ? `Done ${new Date(p.lane.doneAt).toLocaleDateString()}` : "Done"}>
-                <span className="pin-done-check">✓</span>
-                <span className="pin-row-name">{p.lane.name}</span>
-              </div>
-            ))}
+          {doneOpen && done.map((p) => <DoneRow key={p.lane.id} pin={p} testId={`sidebar-done-pin-${p.lane.id}`} />)}
         </>
       )}
     </div>
@@ -151,7 +147,9 @@ export function SidebarPins({ view, onPin }: { view: TeamView; onPin: (pin: Pin)
 type Line = { who: "you" | "bs"; text: string };
 const PREVIEW_LINES = 4;
 
-function linesFrom(entries: { item: any }[]): Line[] {
+type TimelineEntry = { item: any; seqStart?: number; timestamp?: string };
+
+function linesFrom(entries: TimelineEntry[]): Line[] {
   const out: Line[] = [];
   for (const e of entries) {
     const it = e.item;
@@ -160,10 +158,41 @@ function linesFrom(entries: { item: any }[]): Line[] {
     if (!who) continue;
     for (const raw of it.text.split("\n")) {
       const text = raw.replace(/[`*#>_]+/g, "").trim();
-      if (text) out.push({ who, text });
+      if (text && text !== LOOKS_DONE_MARKER) out.push({ who, text });
     }
   }
   return out.slice(-PREVIEW_LINES);
+}
+
+/** Id of the newest Brainstorm message when it carries the vs:looks-done marker (step 5), else null. */
+function looksDoneIdFrom(agentId: string, entries: TimelineEntry[]): string | null {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const it = entries[i].item;
+    if (it?.type !== "assistant_message" || typeof it.text !== "string") continue;
+    if (!hasLooksDone(it.text)) return null;
+    return `${agentId}:${it.id ?? it.messageId ?? entries[i].seqStart ?? entries[i].timestamp ?? it.text.length}`;
+  }
+  return null;
+}
+
+// Looks-done id per Brainstorm, fed by usePreview's loads so tiles read it without a second fetch.
+const looksDoneIds = new Map<string, string | null>();
+const looksDoneListeners = new Set<() => void>();
+function setLooksDoneId(agentId: string, id: string | null) {
+  if ((looksDoneIds.get(agentId) ?? null) === id) return;
+  looksDoneIds.set(agentId, id);
+  looksDoneListeners.forEach((l) => l());
+}
+
+/** Id of the Brainstorm's newest message when it is a "looks done" card, else null. Needs a usePreview for the same agent. */
+export function useLooksDoneId(agentId: string | null): string | null {
+  return useSyncExternalStore(
+    (l) => {
+      looksDoneListeners.add(l);
+      return () => looksDoneListeners.delete(l);
+    },
+    () => (agentId ? (looksDoneIds.get(agentId) ?? null) : null),
+  );
 }
 
 // Tail of the Brainstorm's timeline. Light version of the drawer's loader: small tail, debounced refetch.
@@ -172,8 +201,12 @@ function usePreview(agentId: string | null): Line[] {
   useEffect(() => {
     setLines([]);
     if (!agentId) return;
+    const apply = (entries: TimelineEntry[]) => {
+      setLines(linesFrom(entries));
+      setLooksDoneId(agentId, looksDoneIdFrom(agentId, entries));
+    };
     if (DEMO) {
-      setLines(linesFrom(demoTimeline(agentId)));
+      apply(demoTimeline(agentId));
       return;
     }
     let alive = true;
@@ -182,7 +215,7 @@ function usePreview(agentId: string | null): Line[] {
     const load = async () => {
       try {
         const t = await handle.timeline.refetch({ direction: "tail", limit: 16, projection: "projected" });
-        if (alive && !t.error) setLines(linesFrom(t.entries as { item: any }[]));
+        if (alive && !t.error) apply(t.entries as TimelineEntry[]);
       } catch {}
     };
     load();
@@ -250,6 +283,7 @@ function QuickReply({ pin }: { pin: Pin }) {
 const PinTile = memo(function PinTile({ pin, onPin }: { pin: Pin; onPin: (pin: Pin) => Promise<void> }) {
   const bs = pin.brainstorm;
   const lines = usePreview(bs?.agent.id ?? null);
+  const looksDoneId = useLooksDoneId(bs?.agent.id ?? null);
   const paneCls = usePaneClass(bs?.agent.id ?? "");
   const [starting, setStarting] = useState(false);
   const busy = useRef(false);
@@ -292,7 +326,9 @@ const PinTile = memo(function PinTile({ pin, onPin }: { pin: Pin; onPin: (pin: P
         </div>
         <NeedsBadge pin={pin} />
         <PinCtx pin={pin} />
+        <PinMenu pin={pin} onShowPlumbing={() => setFullView(true)} />
       </div>
+      {bs && looksDoneId && <LooksDoneCard pin={pin} messageId={looksDoneId} />}
       {bs ? (
         <>
           <div className="pin-tile-lines" data-testid={`pin-lines-${pin.lane.id}`}>
@@ -343,7 +379,7 @@ export function PinGrid({
         ))}
       </div>
       {!pinned.length && <div className="muted">No pinned teams in {view.team.name} yet. Use + Team to add one.</div>}
-      {done.length > 0 && <div className="muted small pin-grid-done">Done ({done.length}): {done.map((p) => p.lane.name).join(" · ")}</div>}
+      <DoneShelf done={done} squadId={view.team.id} />
     </section>
   );
 }
