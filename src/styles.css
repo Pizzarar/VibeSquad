@@ -86,6 +86,7 @@ code {
   display: grid;
   grid-template-columns: 265px 1fr;
   height: 100vh;
+  overflow: hidden;
 }
 
 /* Unit L: chat column of mounted agent tabs; focus folds sidebar + team page into one rail. */
@@ -97,6 +98,16 @@ code {
 }
 .app.focus {
   grid-template-columns: 264px minmax(0, 1fr);
+}
+
+/* Ensure all direct grid children of .app stay within their row height so the
+   composer and Send button remain visible when top banners are present. */
+.app > .sidebar,
+.app > .team-page,
+.app > .focus-rail,
+.app > .agent-panes {
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* Sidebar */
