@@ -40,6 +40,7 @@ import {
   leadVariant,
   teamForAgent,
   topicOfBrainstorm,
+  usedTokens,
   useTeams,
 } from "./teams";
 import { AgentActions, StatusDot, ago, shortPath, useTick } from "./ui";
@@ -610,7 +611,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   const { team, laneId: resolvedLaneId } = teamForAgent(agent);
   const { warnTokens, restartTokens } = getBrainstormThresholds(team);
   const bsUsedTokens = isBs ? brainstormUsedTokens(agent) : 0;
-  const used = isBs ? bsUsedTokens : agent.lastUsage?.contextWindowUsedTokens;
+  const used = usedTokens(agent);
   const budget = budgetFor(agent);
   const agentType = classifyAgent(agent);
   const prov = providerSpec(agent.provider);
