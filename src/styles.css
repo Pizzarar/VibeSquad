@@ -3209,3 +3209,30 @@ html, body, #root { overflow-x: hidden; }
   .app.pin-focus { grid-template-columns: minmax(0, 1fr); }
   .app.pin-focus > .sidebar, .app.pin-focus > .pin-rail { display: none; }
 }
+
+/* ── Pinned teams step 6 (src/PinIdeas.tsx): misroute card, overview "+", idea box, toast. Owned by the pinned team. ── */
+.pin-send-to {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 8px; cursor: default;
+  background: #00f0ff10; border: 1px solid var(--cyan);
+}
+.pin-send-to-text { flex-basis: 100%; color: var(--text); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pin-send-to.bar { flex: 0 1 auto; flex-wrap: nowrap; min-width: 0; padding: 2px 6px; margin-left: 6px; }
+.pin-send-to.bar .pin-send-to-text { flex: 0 1 auto; flex-basis: auto; min-width: 40px; max-width: 220px; }
+.pin-send-to.bar .btn { flex: none; white-space: nowrap; }
+.pin-tile.pin-plus {
+  align-items: center; justify-content: center; gap: 6px; min-height: 190px;
+  border-style: dashed; border-top: 2px dashed var(--slate); color: var(--muted); font: inherit;
+}
+.pin-tile.pin-plus:hover, .pin-tile.pin-plus:focus-visible { color: var(--cyan); border-color: var(--cyan); }
+.pin-plus-icon { font-family: var(--display); font-size: 40px; line-height: 1; }
+.pin-idea-box textarea { width: 100%; resize: vertical; min-height: 84px; font: inherit; }
+.pin-idea-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.pin-idea-row select { flex: 0 1 auto; min-width: 0; max-width: 100%; }
+.pin-idea-row input { flex: 1; min-width: 0; }
+.pin-idea-hint { margin-top: 8px; color: var(--amber); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pin-idea-foot { margin-top: 8px; }
+.pin-toast {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 60;
+  padding: 8px 14px; background: var(--panel); border: 1px solid var(--emerald); color: var(--text);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6); font-size: 13px;
+}

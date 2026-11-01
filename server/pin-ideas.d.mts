@@ -1,0 +1,11 @@
+export type IdeaLane = { id: string; name: string; aliases?: string[]; state?: string };
+export function slugLaneId(name: string): string;
+export function uniqueLaneId(base: string, taken: Iterable<string>): string;
+export function ideaWords(text: string): string[];
+export const OVERLAP_THRESHOLD: number;
+export function overlapScore(text: string, lane: IdeaLane): number;
+export function bestOverlap<L extends IdeaLane>(text: string, lanes: L[]): { lane: L; score: number } | null;
+export function nameFromIdea(text: string): string;
+export function newPinBrief(laneId: string, name: string, idea: string): string;
+export const SEND_TO_MARKER: string;
+export function parseSendTo(text: string): { laneId: string; text: string } | null;

@@ -8,6 +8,7 @@ import { NeedsBadge, PinDot, setFullView, usePreview } from "./PinGrid";
 import { exitPinFocus, type PinFocus } from "./pinFocus";
 import { escGoesHome } from "./pinFocusLogic";
 import { pinsForSquad, type Pin } from "./pins";
+import { SendToBar } from "./PinIdeas";
 import { openAgent } from "./panes";
 import type { TeamView } from "./teams";
 import { Avatar, NeonEmblem } from "./pixel";
@@ -145,6 +146,7 @@ function PinFocusBar({ view, focus }: { view: TeamView; focus: PinFocus }) {
       </button>
       <span className="pin-focus-name">{pin?.lane.name ?? focus.laneId}</span>
       <span className="muted small pin-focus-squad">{view.team.name}</span>
+      {pin && focus.agentId && <SendToBar pin={pin} />}
       <span className="pin-focus-spacer" />
       <button
         type="button"

@@ -1,8 +1,22 @@
 // Pinned teams step 3 (docs/PLAN_PINNED_FEATURES.md §3): the side-effecting half of the pin resolver.
 // src/pins.ts stays pure; this file talks to the dev-server middleware and the teams store.
 import type { PaseoAgent } from "@getpaseo/client";
-import { DEMO, archiveAgent, getPaseoState, retireAgent, upsertLocalAgent } from "./paseo";
-import { appendBriefLine, briefStamp, DEFAULT_PIN_PROFILE, patchLane, resolvePin, type Pin } from "./pins";
+import { DEMO, archiveAgent, getPaseoState, retireAgent, sendMessage, upsertLocalAgent } from "./paseo";
+import { parkIdeasInInbox } from "./IdeaInbox";
+import {
+  allLaneIds,
+  appendBriefLine,
+  bestOverlap,
+  briefStamp,
+  DEFAULT_PIN_PROFILE,
+  newPinBrief,
+  patchLane,
+  resolvePin,
+  slugLaneId,
+  uniqueLaneId,
+  type Pin,
+  type PinLane,
+} from "./pins";
 import { runMarkComplete } from "./pinComplete";
 import { findCrossTeamBrainstorm, getTeams, resolve, saveTeams, type TeamDef } from "./teams";
 
@@ -196,9 +210,9 @@ export async function reopenPin(pin: Pin, deps: Pick<CompleteDeps, "fetch" | "ge
 // ── "Looks done" card dismissals (per Brainstorm message id) ──────────────────
 const LOOKS_DONE_KEY = "vibesquad.looksDoneDismissed";
 
-function dismissedSet(): Set<string> {
+function dismissedSet(key = LOOKS_DONE_KEY): Set<string> {
   try {
-    return new Set(JSON.parse(localStorage.getItem(LOOKS_DONE_KEY) ?? "[]") as string[]);
+    return new Set(JSON.parse(localStorage.getItem(key) ?? "[]") as string[]);
   } catch {
     return new Set();
   }
@@ -206,10 +220,85 @@ function dismissedSet(): Set<string> {
 
 export const isLooksDoneDismissed = (messageId: string): boolean => dismissedSet().has(messageId);
 
-export function dismissLooksDone(messageId: string): void {
+function dismiss(key: string, messageId: string): void {
   // Keep the newest 200 ids so the key cannot grow without bound.
-  const ids = [...dismissedSet(), messageId].slice(-200);
+  const ids = [...dismissedSet(key), messageId].slice(-200);
   try {
-    localStorage.setItem(LOOKS_DONE_KEY, JSON.stringify(ids));
+    localStorage.setItem(key, JSON.stringify(ids));
   } catch {}
 }
+
+export const dismissLooksDone = (messageId: string): void => dismiss(LOOKS_DONE_KEY, messageId);
+
+// ── Step 6: idea capture (docs/PLAN_PINNED_FEATURES.md §5) ────────────────────
+// A new pin is a lane in teams.json plus a brief; no agent is spawned. The first click on the pin
+// quick-starts its Brainstorm (openPin), so idle pins cost nothing.
+
+export type CreatePinDeps = Pick<OpenPinDeps, "fetch" | "getTeams" | "saveTeams">;
+
+/** The pinned team an idea most likely belongs to in this squad, or null ("Sounds like X. Use it?"). */
+export function overlappingPin(squadId: string, text: string, teams: TeamDef[] = getTeams()): PinLane | null {
+  const squad = teams.find((t) => t.id === squadId);
+  return squad ? (bestOverlap(text, squad.lanes as PinLane[])?.lane ?? null) : null;
+}
+
+/** Add a pinned team to a squad and write its brief with the idea under Open. Returns the (session-less) pin. */
+export async function createPin(squadId: string, name: string, idea: string, deps: CreatePinDeps = {}): Promise<Pin> {
+  const clean = name.trim();
+  if (!clean) throw new Error("A team needs a name");
+  const teams = (deps.getTeams ?? getTeams)();
+  const squad = teams.find((t) => t.id === squadId);
+  if (!squad) throw new Error(`Unknown squad ${squadId}`);
+  const lane: PinLane = { id: uniqueLaneId(slugLaneId(clean), allLaneIds(teams)), name: clean, state: "pinned" };
+  // Brief first: a failed write leaves no half-made pin behind.
+  if (!DEMO) await writeBrief(lane.id, newPinBrief(lane.id, clean, idea), deps.fetch ?? fetch);
+  const next = teams.map((t) => (t.id === squadId ? { ...t, lanes: [...t.lanes, lane] } : t));
+  await (deps.saveTeams ?? saveTeams)(next);
+  return {
+    squad: next.find((t) => t.id === squadId)!,
+    lane,
+    state: "pinned",
+    order: squad.lanes.length,
+    brainstorm: null,
+    lead: null,
+    workers: [],
+    needsYou: 0,
+    running: 0,
+    contextUsed: 0,
+  };
+}
+
+export type SendIdeaDeps = {
+  agents?: Map<string, PaseoAgent>;
+  getTeams?: () => TeamDef[];
+  send?: (agentId: string, text: string) => Promise<unknown>;
+  park?: typeof parkIdeasInInbox;
+};
+
+/**
+ * Hand an idea to another team: its live Brainstorm gets it as a message (Paseo queues it if busy),
+ * otherwise it is parked in that team's inbox. An unknown lane parks unassigned. Returns the toast text.
+ */
+export async function sendIdeaToTeam(laneId: string, text: string, from?: string, deps: SendIdeaDeps = {}): Promise<string> {
+  const idea = text.trim();
+  if (!idea) throw new Error("Nothing to send");
+  const teams = (deps.getTeams ?? getTeams)();
+  const squad = teams.find((t) => t.lanes.some((l) => l.id.toLowerCase() === laneId.toLowerCase()));
+  const lane = squad?.lanes.find((l) => l.id.toLowerCase() === laneId.toLowerCase());
+  const park = deps.park ?? parkIdeasInInbox;
+  if (!squad || !lane) {
+    await park({ ideas: [idea], source: "misroute" });
+    return "Parked in the inbox";
+  }
+  const live = findCrossTeamBrainstorm(resolve(deps.agents ?? getPaseoState().agents), lane.id);
+  if (live) {
+    await (deps.send ?? sendMessage)(live.agent.id, from ? `Idea sent over from ${from}:\n\n${idea}` : idea);
+    return `Sent to ${lane.name}`;
+  }
+  await park({ ideas: [idea], laneId: lane.id, teamId: squad.id, source: "misroute" });
+  return `Parked in ${lane.name}${/s$/i.test(lane.name) ? "'" : "'s"} inbox`;
+}
+
+const SEND_TO_KEY = "vibesquad.sendToDismissed";
+export const isSendToDismissed = (messageId: string): boolean => dismissedSet(SEND_TO_KEY).has(messageId);
+export const dismissSendTo = (messageId: string): void => dismiss(SEND_TO_KEY, messageId);

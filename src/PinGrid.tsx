@@ -5,7 +5,8 @@
 import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { client, DEMO, sendMessage } from "./paseo";
 import { demoTimeline } from "./demo";
-import { hasLooksDone, LOOKS_DONE_MARKER, pinsForSquad, type Pin } from "./pins";
+import { hasLooksDone, LOOKS_DONE_MARKER, pinsForSquad, SEND_TO_MARKER, type Pin } from "./pins";
+import { IdeaPlusTile, noteSendTo, SendToCard, useSendTo } from "./PinIdeas";
 import { PinMenu } from "./PinMenu";
 import { DoneRow, DoneShelf, LooksDoneCard } from "./PinDone";
 import { getBrainstormThresholds, type TeamView } from "./teams";
@@ -158,7 +159,7 @@ function linesFrom(entries: TimelineEntry[]): Line[] {
     if (!who) continue;
     for (const raw of it.text.split("\n")) {
       const text = raw.replace(/[`*#>_]+/g, "").trim();
-      if (text && text !== LOOKS_DONE_MARKER) out.push({ who, text });
+      if (text && text !== LOOKS_DONE_MARKER && !text.startsWith(SEND_TO_MARKER)) out.push({ who, text });
     }
   }
   return out.slice(-PREVIEW_LINES);
@@ -204,6 +205,7 @@ export function usePreview(agentId: string | null): Line[] {
     const apply = (entries: TimelineEntry[]) => {
       setLines(linesFrom(entries));
       setLooksDoneId(agentId, looksDoneIdFrom(agentId, entries));
+      noteSendTo(agentId, entries);
     };
     if (DEMO) {
       apply(demoTimeline(agentId));
@@ -284,6 +286,7 @@ const PinTile = memo(function PinTile({ pin, onPin }: { pin: Pin; onPin: (pin: P
   const bs = pin.brainstorm;
   const lines = usePreview(bs?.agent.id ?? null);
   const looksDoneId = useLooksDoneId(bs?.agent.id ?? null);
+  const sendTo = useSendTo(bs?.agent.id ?? null);
   const paneCls = usePaneClass(bs?.agent.id ?? "");
   const [starting, setStarting] = useState(false);
   const busy = useRef(false);
@@ -329,6 +332,7 @@ const PinTile = memo(function PinTile({ pin, onPin }: { pin: Pin; onPin: (pin: P
         <PinMenu pin={pin} onShowPlumbing={() => setFullView(true)} />
       </div>
       {bs && looksDoneId && <LooksDoneCard pin={pin} messageId={looksDoneId} />}
+      {bs && sendTo && <SendToCard pin={pin} offer={sendTo} />}
       {bs ? (
         <>
           <div className="pin-tile-lines" data-testid={`pin-lines-${pin.lane.id}`}>
@@ -377,8 +381,9 @@ export function PinGrid({
         {pinned.map((p) => (
           <PinTile key={p.lane.id} pin={p} onPin={onPin} />
         ))}
+        <IdeaPlusTile view={view} onQuickStart={onPin} />
       </div>
-      {!pinned.length && <div className="muted">No pinned teams in {view.team.name} yet. Use + Team to add one.</div>}
+      {!pinned.length && <div className="muted">No pinned teams in {view.team.name} yet. Use + New idea to pin one.</div>}
       <DoneShelf done={done} squadId={view.team.id} />
     </section>
   );
