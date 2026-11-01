@@ -35,6 +35,7 @@ import {
   type TeamView,
 } from "./teams";
 import { AgentPanes } from "./AgentPanes";
+import { PaseoUsageHeaderChip } from "./PaseoSettingsSection";
 import { MobileBar, useMobileTeamView } from "./MobileBar";
 import { FocusRail, railAlerts } from "./FocusRail";
 import { activateNth, getPanes, openAgent, setFocus, subscribePanes, toggleFocus, useFocusMode, useHasTabs } from "./panes";
@@ -1030,6 +1031,7 @@ const TeamPage = memo(function TeamPage(props: {
           </span>
         </h1>
         <div className="team-actions">
+          <PaseoUsageHeaderChip onOpenSettings={props.onSettings} />
           <button className="btn ok" data-testid="add-buddy-btn" onClick={props.onAddBuddy}>
             + ADD BUDDY
           </button>

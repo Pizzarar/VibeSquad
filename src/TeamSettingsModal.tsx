@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { getUserName, loadUpdaterStatus, saveLanEnabled, saveUpdateChannel, saveUserName, useConfigWarnings, useExposedIpsStore, useLanEnabled, useUpdaterStatus } from "./userName";
+import { getUserName, loadDesktopStatus, loadUpdaterStatus, saveLanEnabled, saveUpdateChannel, saveUserName, useConfigWarnings, useDesktopStatus, useExposedIpsStore, useLanEnabled, useUpdaterStatus } from "./userName";
+import { PaseoSettingsSection } from "./PaseoSettingsSection";
 import {
   AGENT_TYPE_NAME,
   BRAINSTORM_RESTART_DEFAULT,
@@ -253,10 +254,13 @@ export function TeamSettingsModal({ onClose }: { onClose: () => void }) {
   const lanEnabled = useLanEnabled();
   const exposedIps = useExposedIpsStore();
   const updaterStatus = useUpdaterStatus();
+  const desktopStatus = useDesktopStatus();
   const configWarnings = useConfigWarnings();
   useEffect(() => {
     void loadUpdaterStatus();
+    void loadDesktopStatus();
   }, []);
+  const isHostMode = desktopStatus.serverMode !== "remote";
   const uiScale = useUiScale();
   const uiScalePct = Math.round(uiScale * 100);
   const patch = (i: number, p: Partial<TeamDef>) => setTeams((ts) => ts.map((t, j) => (j === i ? { ...t, ...p } : t)));
@@ -433,6 +437,14 @@ export function TeamSettingsModal({ onClose }: { onClose: () => void }) {
           </div>
         </div>
       </section>
+      {isHostMode && (
+        <PaseoSettingsSection
+          lanIpHint={exposedIps[0]}
+          onJumpToProfiles={() => {
+            document.querySelector('[data-testid="profiles-settings-section"]')?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+          }}
+        />
+      )}
       <section className="ts-team" data-testid="profiles-settings-section">
         <div className="ts-scale-head" style={{ marginBottom: 8 }}>
           <div>
