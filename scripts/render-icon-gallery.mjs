@@ -1,7 +1,8 @@
 // Dev-only: render every portrait to one PNG for the Painter -> Director loop.
 // Usage: node scripts/render-icon-gallery.mjs [out.png] [--scale 1|4]   (default 4x; 1x = native 28x28)
 // Rows: lead, retired-lead, brainstorm, implement, mechanical, review, audit, spec, art, unknown.
-// Left block: the 5 curated palettes (Claude rim). Right block: palette 0 under all 9 providers.
+// Two sets side by side: left WITH PROPS, right PROPLESS (headwear & gear). In each set: the 5
+// curated palettes (Claude rim), then palette 0 under four more providers.
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -21,12 +22,18 @@ writeFileSync(tmp, code);
 const { paintPixels, providerSpec, S } = await import(pathToFileURL(tmp).href);
 
 const TYPES = ["lead", "retired-lead", "brainstorm", "implement", "mechanical", "review", "audit", "spec", "art", "unknown"];
-const PROVIDERS = ["claude", "codex", "gemini", "opencode", "cursor", "copilot", "codewhale", "pi", "aider"];
+const PROVIDERS = ["codex", "gemini", "cursor", "copilot"];
 const SEEDS = 5;
 const CELL = S * SCALE;
 const GAP = 2 * SCALE;
-const SPLIT = 8 * SCALE;
+const SPLIT = 4 * SCALE;
+const SET_GAP = 12 * SCALE;
+const HEAD = 11 * SCALE;
 const BG = [16, 14, 28];
+const SETS = [
+  { title: "WITH PROPS", propless: false, ink: [255, 176, 32] },
+  { title: "PROPLESS (HEADWEAR & GEAR)", propless: true, ink: [62, 230, 255] },
+];
 
 // Same FNV-1a as pixel.tsx, so we can pick ids that land on each curated palette.
 function hash(s) {
@@ -42,8 +49,9 @@ function idForPalette(type, i) {
 }
 
 const cols = SEEDS + PROVIDERS.length;
-const W = GAP + cols * (CELL + GAP) + SPLIT;
-const H = GAP + TYPES.length * (CELL + GAP);
+const SET_W = cols * (CELL + GAP) + SPLIT;
+const W = GAP + SETS.length * SET_W + (SETS.length - 1) * SET_GAP;
+const H = HEAD + GAP + TYPES.length * (CELL + GAP);
 const img = Buffer.alloc(W * H * 4);
 for (let i = 0; i < W * H; i++) img.set([...BG, 255], i * 4);
 
@@ -57,12 +65,42 @@ function blit(px, ox, oy) {
   });
 }
 
-TYPES.forEach((type, row) => {
-  const oy = GAP + row * (CELL + GAP);
-  const claude = providerSpec("claude").color;
-  for (let i = 0; i < SEEDS; i++) blit(paintPixels(idForPalette(type, i), type, claude, i), GAP + i * (CELL + GAP), oy);
-  const id0 = idForPalette(type, 0);
-  PROVIDERS.forEach((p, j) => blit(paintPixels(id0, type, providerSpec(p).color, 0), GAP + SPLIT + (SEEDS + j) * (CELL + GAP), oy));
+// Pixel font for the section headers: 3x5 glyphs, W is 5x5.
+const FONT = {
+  A: "010101111101101", D: "110101101101110", E: "111100110100111", G: "011100101101011", H: "101101111101101",
+  I: "111010010010111", L: "100100100100111", O: "010101101101010", P: "110101110100100", R: "110101110101101",
+  S: "011100010001110", T: "111010010010010", W: "1000110001101011010101010", "(": "010100100100010", ")": "010001001001010",
+  "&": "010101010101011", " ": "000000000000000",
+};
+function text(str, ox, oy, ink) {
+  const u = Math.max(1, SCALE);
+  let cx = 0;
+  for (const ch of str) {
+    const g = FONT[ch] ?? FONT[" "];
+    const gw = g.length / 5;
+    for (let i = 0; i < g.length; i++) {
+      if (g[i] !== "1") continue;
+      const x0 = ox + (cx + (i % gw)) * u;
+      const y0 = oy + Math.floor(i / gw) * u;
+      for (let y = y0; y < y0 + u; y++) for (let x = x0; x < x0 + u; x++) if (x < W) img.set([...ink, 255], (y * W + x) * 4);
+    }
+    cx += gw + 1;
+  }
+}
+
+SETS.forEach((set, si) => {
+  const sx = GAP + si * (SET_W + SET_GAP);
+  text(set.title, sx, 3 * SCALE, set.ink);
+  for (let x = sx; x < sx + SET_W - GAP; x++) for (let y = 9 * SCALE; y < 9 * SCALE + Math.max(1, SCALE / 2); y++) img.set([...set.ink, 255], (y * W + x) * 4);
+  TYPES.forEach((type, row) => {
+    const oy = HEAD + GAP + row * (CELL + GAP);
+    const claude = providerSpec("claude").color;
+    for (let i = 0; i < SEEDS; i++) blit(paintPixels(idForPalette(type, i), type, claude, i, set.propless), sx + i * (CELL + GAP), oy);
+    const id0 = idForPalette(type, 0);
+    PROVIDERS.forEach((p, j) =>
+      blit(paintPixels(id0, type, providerSpec(p).color, 0, set.propless), sx + SPLIT + (SEEDS + j) * (CELL + GAP), oy),
+    );
+  });
 });
 
 const crcTable = Array.from({ length: 256 }, (_, n) => {
