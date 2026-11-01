@@ -1085,7 +1085,7 @@ export function Avatar({
   const tag = String((hash(id) % 90) + 10);
   const retired = agentType === "retired-lead";
   const img = size >= S ? Math.floor(size / S) * S : size;
-  const roleLabel = agentType === "brainstorm" ? "Buddy (brainstorm)" : agentType;
+  const roleLabel = agentType === "brainstorm" ? "Brainstorm" : agentType;
 
   return (
     <span

@@ -612,7 +612,7 @@ export function TeamSettingsModal({ onClose }: { onClose: () => void }) {
               />
             </Field>
           </div>
-          <div className="field-label">LANES (id · name · aliases)</div>
+          <div className="field-label">TEAMS (id · name · aliases)</div>
           {t.lanes.map((l, k) => (
             <div key={k} className="row-lane">
               <input value={l.id} placeholder="id" onChange={(e) => patchLane(i, k, { id: e.target.value })} />
