@@ -62,6 +62,7 @@ import {
 import {
   DEFAULT_PACK_PROFILES,
   DEFAULT_PROFILES,
+  LEGACY_PROFILE_ALIASES,
   SHARED_NOTE_PREFIX,
   buildDefaultPackNotesMap,
   deriveRole,
@@ -76,6 +77,7 @@ import {
   readPaseoConfig,
   saveProfiles,
   seedDefaultPack,
+  syncProfilesToPaseo,
   toPaseoProfileShape,
   toPaseoSpawnConfig,
 } from "./profiles.mjs";
@@ -140,6 +142,7 @@ export {
   writePushSubscriptions,
   DEFAULT_PACK_PROFILES,
   DEFAULT_PROFILES,
+  LEGACY_PROFILE_ALIASES,
   SHARED_NOTE_PREFIX,
   buildDefaultPackNotesMap,
   deriveRole,
@@ -154,6 +157,7 @@ export {
   readPaseoConfig,
   saveProfiles,
   seedDefaultPack,
+  syncProfilesToPaseo,
   toPaseoProfileShape,
   toPaseoSpawnConfig,
   LEAD_AUTO_HANDOFF_DEFAULT,
@@ -842,6 +846,7 @@ async function handleProfilesImport(req, res) {
     const body = await readBody(req);
     if (body.mode === "default") {
       const seeded = seedDefaultPack();
+      syncProfilesToPaseo(seeded.profiles);
       return sendJson(res, 200, {
         ok: true,
         mode: "default",
@@ -858,10 +863,18 @@ async function handleProfilesImport(req, res) {
     });
     let finalProfiles = imported.profiles;
     if (body.merge && existsSync(getProfilesPath())) {
-      const existing = loadProfiles().profiles;
-      const byName = new Map(existing.map((p) => [p.name, p]));
-      for (const p of imported.profiles) byName.set(p.name, p);
-      finalProfiles = [...byName.values()];
+      const existing = [...loadProfiles().profiles];
+      for (const p of imported.profiles) {
+        const idx = existing.findIndex(
+          (e) =>
+            (p.id && e.id === p.id) ||
+            e.name === p.name ||
+            LEGACY_PROFILE_ALIASES[e.name] === p.name,
+        );
+        if (idx >= 0) existing[idx] = p;
+        else existing.push(p);
+      }
+      finalProfiles = existing;
     }
     if (!finalProfiles.length) {
       const seeded = seedDefaultPack();

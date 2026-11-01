@@ -231,7 +231,7 @@ export function classifyAgent(a: PaseoAgent): AgentType {
   const l = labelsOf(a);
   const hay = `${l.role ?? ""} ${l.profile ?? ""} ${l.job ?? ""} ${l.task ?? ""} ${a.title ?? ""}`.toLowerCase();
 
-  if (/\b(art|sprite|pixel|visual|theme|duet|neon)\b/.test(hay)) return "art";
+  if (/\b(art|sprite|pixel|visual|theme|duet|painter|director|neon)\b/.test(hay)) return "art";
   if (/\b(audit|scout|inventory|discover|probe|recon)\b/.test(hay)) return "audit";
   if (/\b(spec|plan|planner|architect|design)\b/.test(hay)) return "spec";
   if (/\b(review|check|critique|vet|verify|qa|gate)\b/.test(hay)) return "review";

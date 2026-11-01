@@ -26,3 +26,5 @@ VibeSquad owns its portable 19-profile store in `~/.vibesquad/profiles.json` (`s
   - Otherwise spawn the new Buddy with a 2–3 line context brief (its Lead is spawned later at plan handoff).
 - **JSON Writing Rule (`Lead - Claude`, `Lead - Gemini`)**:
   - Write JSON files with `node` (e.g. `fs.writeFileSync(..., 'utf8')`), never PowerShell `Set-Content` (which writes a UTF-8 BOM that breaks JSON parsers).
+- **Art Painter + Art Director Loop (`Art Painter - Opus`, `Art Director - Gemini`)**:
+  - Standard for all artwork (sprites, icons, emblems, and UI screens). `Art Painter - Opus` (`agent_profile_mvwjrb2k_enr1rgj8hg5`) edits code/assets using curated palettes, renders a 4x gallery PNG (or UI screenshot), and sends the image path to `Art Director - Gemini` (`agent_profile_mvso6xcl_hk9afi1fz2r`). The Director never opens the source code, judges only the image and brief against standing visual gates, and returns numbered PASS/FAIL fixes (max 4 rounds).
