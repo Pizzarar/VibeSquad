@@ -79,6 +79,7 @@ import { urlAgentFor } from "./pinFocusLogic";
 import { clearPinFocus, exitPinFocus, focusPin, usePinFocus, usePinsHome } from "./pinFocus";
 import { PinFocusHeader, PinRail } from "./PinRail";
 import { PinToast } from "./PinIdeas";
+import { NewSquadModal } from "./NewSquadModal";
 import { AddBuddyModal, Modal, NewAgentModal, ProfileImportModal, TeamSettingsModal, useProfiles } from "./TeamActions";
 import { PairDeviceModal } from "./PairDeviceModal";
 import { DaemonStatusBanner, DiagnosticsModal, HelpModal, checkForUpdates, updateLabel, type UpdateCheck } from "./DiagnosticsModal";
@@ -524,6 +525,7 @@ const Sidebar = memo(function Sidebar(props: {
   onTeam: (id: string) => void;
   onAgent: PickTeamAgent;
   onQuickStart: PinHandler;
+  onNewSquad: () => void;
   onPairDevice?: () => void;
   onAbout?: () => void;
   onHelp?: () => void;
@@ -590,6 +592,15 @@ const Sidebar = memo(function Sidebar(props: {
           onQuickStart={props.onQuickStart}
         />
       ))}
+      <button
+        type="button"
+        className="btn ghost small sidebar-new-squad-btn"
+        data-testid="sidebar-new-squad-btn"
+        title="Add a new squad (project folder or clone repo)"
+        onClick={props.onNewSquad}
+      >
+        {props.sidebarCollapsed ? "+" : "+ New squad"}
+      </button>
       <div className="sidebar-legend">
         <div className="legend-title">PROVIDER SIGNALS</div>
         <div className="legend-row">
@@ -1490,7 +1501,7 @@ export function App() {
   const mobileTeamView = useMobileTeamView();
   const uiScale = useUiScale();
   const uiScaleHud = useUiScaleHud();
-  const [modal, setModal] = useState<"new-agent" | "add-buddy" | "settings" | "pair-device" | "about" | "help" | "diagnostics" | "first-run" | null>(null);
+  const [modal, setModal] = useState<"new-agent" | "add-buddy" | "settings" | "pair-device" | "about" | "help" | "diagnostics" | "first-run" | "new-squad" | null>(null);
   const [firstRunStatus, setFirstRunStatus] = useState<FirstRunStatus | null>(null);
   const exposedIps = useExposedIps();
   const [dismissedLanKey, setDismissedLanKey] = useState<string>(() => localStorage.getItem(DISMISSED_LAN_IPS_KEY) ?? "");
@@ -1718,6 +1729,7 @@ export function App() {
   const openDiagnostics = useCallback(() => setModal("diagnostics"), []);
   const openAddBuddy = useCallback(() => setModal("add-buddy"), []);
   const openNewAgent = useCallback(() => setModal("new-agent"), []);
+  const openNewSquad = useCallback(() => setModal("new-squad"), []);
   const onSuccessor = useCallback((m: Member) => setSuccessorId(m.agent.id), []);
   // Pin click (grid tile, sidebar pin, rail tile): focus that Team's Brainstorm in the middle with the
   // other pins in the right rail; a pin with no live Brainstorm quick-starts one from its brief.
@@ -1887,6 +1899,7 @@ export function App() {
           onSettings={openSettings}
           onAgent={onAgent}
           onQuickStart={onQuickStart}
+          onNewSquad={openNewSquad}
           lanExposed={exposedIps.length > 0}
           lanIps={exposedIps}
         />
@@ -1980,6 +1993,16 @@ export function App() {
       {modal === "help" && <HelpModal onClose={() => setModal(null)} onTour={() => setModal("first-run")} />}
       {modal === "diagnostics" && <DiagnosticsModal onClose={() => setModal(null)} />}
       {modal === "first-run" && <FirstRunModal initial={firstRunStatus} onClose={() => setModal(null)} />}
+      {modal === "new-squad" && (
+        <NewSquadModal
+          onClose={() => setModal(null)}
+          onCreated={(newTeamId, pin) => {
+            setModal(null);
+            onTeam(newTeamId);
+            if (pin) void onQuickStart(pin);
+          }}
+        />
+      )}
       <CommandPaletteHost members={members} archived={archivedMembers} views={views} onAgent={onPaletteAgent} onTeam={onTeam} actions={paletteActions} />
       <BriefEditorHost />
       {!modal && profilesNeedSetup && !profilesSetupDismissed && <ProfileImportModal onClose={() => {}} />}

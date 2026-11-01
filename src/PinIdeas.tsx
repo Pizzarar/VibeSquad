@@ -3,10 +3,11 @@
 // and the toast both report to. Side effects live in src/pinActions.ts.
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { bestOverlap, nameFromIdea, parseSendTo, pinsForSquad, type Pin } from "./pins";
-import { createPin, dismissSendTo, isSendToDismissed, sendIdeaToTeam } from "./pinActions";
+import { bestOverlap, DEFAULT_PIN_PROFILE, nameFromIdea, parseSendTo, pinsForSquad, type Pin } from "./pins";
+import { createPin, dismissSendTo, getLastBrainstormProfile, isSendToDismissed, sendIdeaToTeam, setLastBrainstormProfile } from "./pinActions";
 import { getTeams, type TeamView } from "./teams";
 import type { PinHandler } from "./PinGrid";
+import { useProfiles } from "./profiles";
 
 // ── Toast ──────────────────────────────────────────────────────────────────
 let toast = "";
@@ -189,21 +190,66 @@ export function SendToBar({ pin }: { pin: Pin }) {
 }
 
 // ── Overview "+": type an idea, pick a team or make a new one ────────────────
-const NEW = "__new";
 
-function IdeaBox({ view, onClose, onQuickStart }: { view: TeamView; onClose: () => void; onQuickStart: PinHandler }) {
-  const pinned = pinsForSquad(view).pinned;
+export function describeIdeaAction(opts: {
+  mode: "new" | "existing";
+  teamName: string;
+  profile: string;
+  targetPin?: { lane: { name: string }; brainstorm: unknown | null } | null;
+}): string {
+  if (opts.mode === "new") {
+    return `Creates "${opts.teamName.trim() || "New team"}", puts your idea in its brief, and starts ${opts.profile || DEFAULT_PIN_PROFILE}. No lead until you approve a plan.`;
+  }
+  if (opts.targetPin?.brainstorm) {
+    return `Goes to ${opts.targetPin.lane.name}'s Buddy.`;
+  }
+  return `Goes to ${opts.targetPin?.lane.name ?? "team"}'s inbox (no Buddy live).`;
+}
+
+export function submitButtonLabel(opts: {
+  busy: boolean;
+  mode: "new" | "existing";
+  targetTeamName?: string;
+}): string {
+  if (opts.busy) return "…";
+  if (opts.mode === "new") return "Create team";
+  return `Send to ${opts.targetTeamName || "team"}`;
+}
+
+function IdeaBox({
+  view,
+  onClose,
+  onQuickStart,
+  presetMode,
+}: {
+  view: TeamView;
+  onClose: () => void;
+  onQuickStart: PinHandler;
+  presetMode?: "new" | "existing";
+}) {
+  const { pinned } = pinsForSquad(view);
   const [text, setText] = useState("");
-  const [picked, setPicked] = useState<string | null>(null); // null = follow the best match
-  const [name, setName] = useState<string | null>(null); // null = follow the first line
+  const [name, setName] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
   useEffect(() => ref.current?.focus(), []);
 
+  const { profiles } = useProfiles();
+  const bsProfiles = useMemo(() => {
+    const bs = profiles.filter((p) => p.role === "brainstorm");
+    return bs.length > 0 ? bs : [{ name: "Brainstorm - Claude" }, { name: "Brainstorm - Gemini" }];
+  }, [profiles]);
+
+  const [selectedProfile, setSelectedProfile] = useState(
+    () => pinned[0]?.lane.lastProfile ?? getLastBrainstormProfile(DEFAULT_PIN_PROFILE),
+  );
+  const [existingTargetId, setExistingTargetId] = useState<string>(pinned[0]?.lane.id ?? "");
+  const [mode, setMode] = useState<"new" | "existing">(() => presetMode ?? "new");
+
   const match = useMemo(() => (text.trim() ? bestOverlap(text, pinned.map((p) => p.lane)) : null), [text, pinned]);
-  const target = picked ?? match?.lane.id ?? NEW;
   const teamName = name ?? nameFromIdea(text);
+  const targetPin = pinned.find((p) => p.lane.id === existingTargetId) ?? null;
 
   const submit = async () => {
     const idea = text.trim();
@@ -211,12 +257,13 @@ function IdeaBox({ view, onClose, onQuickStart }: { view: TeamView; onClose: () 
     setBusy(true);
     setErr(null);
     try {
-      if (target !== NEW) {
-        showPinToast(await sendIdeaToTeam(target, idea));
+      if (mode === "existing" && existingTargetId) {
+        showPinToast(await sendIdeaToTeam(existingTargetId, idea));
         onClose();
         return;
       }
-      const pin = await createPin(view.team.id, teamName || "New team", idea);
+      setLastBrainstormProfile(selectedProfile);
+      const pin = await createPin(view.team.id, teamName || "New team", idea, { lastProfile: selectedProfile });
       onClose();
       showPinToast(`Pinned ${pin.lane.name}`);
       await onQuickStart(pin);
@@ -226,7 +273,7 @@ function IdeaBox({ view, onClose, onQuickStart }: { view: TeamView; onClose: () 
     }
   };
 
-  const overlapHint = target === NEW && match ? match.lane : null;
+  const overlapHint = mode === "new" && match ? match.lane : null;
   return (
     <div className="modal-back" onClick={onClose}>
       <div
@@ -263,47 +310,102 @@ function IdeaBox({ view, onClose, onQuickStart }: { view: TeamView; onClose: () 
               }
             }}
           />
-          <div className="pin-idea-row">
-            <label className="muted small" htmlFor="pin-idea-team">
-              Team
-            </label>
-            <select id="pin-idea-team" value={target} data-testid="pin-idea-team" onChange={(e) => setPicked(e.target.value)}>
-              {pinned.map((p) => (
-                <option key={p.lane.id} value={p.lane.id}>
-                  {p.lane.name}
-                  {match?.lane.id === p.lane.id ? " (best match)" : ""}
-                </option>
-              ))}
-              <option value={NEW}>+ New team</option>
-            </select>
-            {target === NEW && (
-              <input
-                value={teamName}
-                placeholder="Team name"
-                data-testid="pin-idea-name"
-                onChange={(e) => setName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void submit();
-                  }
-                }}
-              />
-            )}
+          <div className="seg pin-idea-seg" data-testid="pin-idea-mode-seg">
+            <button
+              type="button"
+              className={mode === "new" ? "on" : ""}
+              data-testid="pin-idea-mode-new"
+              onClick={() => setMode("new")}
+            >
+              ＋ New team
+            </button>
+            <button
+              type="button"
+              className={mode === "existing" ? "on" : ""}
+              data-testid="pin-idea-mode-existing"
+              disabled={pinned.length === 0}
+              onClick={() => setMode("existing")}
+            >
+              Add to existing team ▾
+            </button>
           </div>
           {overlapHint && (
             <div className="pin-idea-hint small" data-testid="pin-idea-overlap">
               Sounds like {overlapHint.name}.{" "}
-              <button type="button" className="btn ghost small" onClick={() => setPicked(overlapHint.id)}>
+              <button
+                type="button"
+                className="btn ghost small"
+                onClick={() => {
+                  setExistingTargetId(overlapHint.id);
+                  setMode("existing");
+                }}
+              >
                 Use it
               </button>
               <span className="muted"> · or make a new team</span>
             </div>
           )}
-          <div className="muted small pin-idea-foot">
-            {target === NEW
-              ? "Pins a new team with this idea in its brief and starts its Brainstorm."
-              : "Goes to that team's Brainstorm, or its inbox if nobody is there."}
+          {mode === "new" && (
+            <>
+              <div className="pin-idea-field">
+                <label className="muted small" htmlFor="pin-idea-name">
+                  Name
+                </label>
+                <input
+                  id="pin-idea-name"
+                  data-testid="pin-idea-name"
+                  style={{ width: "100%", minWidth: 220 }}
+                  value={teamName}
+                  placeholder="Team name (auto-filled from line 1)"
+                  onChange={(e) => setName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void submit();
+                    }
+                  }}
+                />
+              </div>
+              <div className="pin-idea-field">
+                <label className="muted small">Buddy</label>
+                <div className="pin-profile-chips" data-testid="pin-idea-profile-chips">
+                  {bsProfiles.map((p) => (
+                    <button
+                      key={p.name}
+                      type="button"
+                      data-testid={`pin-profile-chip-${p.name}`}
+                      className={`tchip ${selectedProfile === p.name ? "on" : ""}`}
+                      aria-pressed={selectedProfile === p.name}
+                      onClick={() => setSelectedProfile(p.name)}
+                    >
+                      {p.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+          {mode === "existing" && (
+            <div className="pin-idea-field">
+              <label className="muted small" htmlFor="pin-idea-team">
+                Team
+              </label>
+              <select
+                id="pin-idea-team"
+                data-testid="pin-idea-team"
+                value={existingTargetId}
+                onChange={(e) => setExistingTargetId(e.target.value)}
+              >
+                {pinned.map((p) => (
+                  <option key={p.lane.id} value={p.lane.id}>
+                    {p.lane.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          <div className="muted small pin-idea-foot" data-testid="pin-idea-live-sentence">
+            {describeIdeaAction({ mode, teamName, profile: selectedProfile, targetPin: mode === "existing" ? targetPin : null })}
           </div>
           {err && <div className="stat-alert small">{err}</div>}
         </div>
@@ -311,8 +413,14 @@ function IdeaBox({ view, onClose, onQuickStart }: { view: TeamView; onClose: () 
           <button type="button" className="btn ghost" onClick={onClose}>
             Cancel
           </button>
-          <button type="button" className="btn ok" disabled={busy || !text.trim() || (target === NEW && !teamName.trim())} data-testid="pin-idea-submit" onClick={() => void submit()}>
-            {busy ? "…" : target === NEW ? "Pin new team" : `Send to ${pinned.find((p) => p.lane.id === target)?.lane.name ?? "team"}`}
+          <button
+            type="button"
+            className="btn ok"
+            disabled={busy || !text.trim() || (mode === "new" && !teamName.trim())}
+            data-testid="pin-idea-submit"
+            onClick={() => void submit()}
+          >
+            {submitButtonLabel({ busy, mode, targetTeamName: mode === "existing" ? (targetPin?.lane.name ?? "team") : undefined })}
           </button>
         </div>
       </div>
@@ -320,16 +428,34 @@ function IdeaBox({ view, onClose, onQuickStart }: { view: TeamView; onClose: () 
   );
 }
 
-/** The "+" tile at the end of the squad grid. */
+/** The "+" tile and "New team" tile at the end of the squad grid. */
 export function IdeaPlusTile({ view, onQuickStart }: { view: TeamView; onQuickStart: PinHandler }) {
-  const [open, setOpen] = useState(false);
+  const [openNew, setOpenNew] = useState(false);
+  const [openTeam, setOpenTeam] = useState(false);
   return (
     <>
-      <button type="button" className="pin-tile pin-plus" data-testid="pin-plus" title="Capture an idea: send it to a team or pin a new one" onClick={() => setOpen(true)}>
+      <button
+        type="button"
+        className="pin-tile pin-plus"
+        data-testid="pin-plus"
+        title="Capture an idea: send it to a team or pin a new one"
+        onClick={() => setOpenNew(true)}
+      >
         <span className="pin-plus-icon">+</span>
         <span className="muted small">New idea</span>
       </button>
-      {open && <IdeaBox view={view} onClose={() => setOpen(false)} onQuickStart={onQuickStart} />}
+      <button
+        type="button"
+        className="pin-tile pin-plus pin-new-team"
+        data-testid="pin-new-team-tile"
+        title="Create a new pinned team with its own Buddy"
+        onClick={() => setOpenTeam(true)}
+      >
+        <span className="pin-plus-icon">＋</span>
+        <span className="muted small">New team</span>
+      </button>
+      {openNew && <IdeaBox view={view} onClose={() => setOpenNew(false)} onQuickStart={onQuickStart} />}
+      {openTeam && <IdeaBox view={view} presetMode="new" onClose={() => setOpenTeam(false)} onQuickStart={onQuickStart} />}
     </>
   );
 }
