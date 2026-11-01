@@ -1,4 +1,4 @@
-// Pinned teams (docs/PLAN_PINNED_FEATURES.md): the team (a lane in teams.json) is the place Aub
+// Pinned teams (docs/PLAN_PINNED_FEATURES.md): the team (a lane in teams.json) is the place the owner
 // clicks; its Brainstorm, Lead and Workers are swappable occupants behind it.
 // This file is the shared contract for the pinned-team UI. Keep it pure (no fetch, no React):
 // steps 1 (sidebar + grid), 2 (focus rail) and 3 (resolver + quick start) all build on it.
@@ -88,9 +88,67 @@ export function resolvePin(pin: Pin): PinResolution {
   };
 }
 
-/** Returns a copy of the squad list with one lane's pin fields patched (for saveTeams). */
-export function patchLane(teams: TeamDef[], squadId: string, laneId: string, patch: Partial<PinFields>): TeamDef[] {
+/** Profile a pin quick-starts with when it has no `lastProfile` yet. */
+export const DEFAULT_PIN_PROFILE = "Brainstorm - Claude";
+
+/** Returns a copy of the squad list with one lane's pin fields (or its display name) patched (for saveTeams). */
+export function patchLane(
+  teams: TeamDef[],
+  squadId: string,
+  laneId: string,
+  patch: Partial<PinFields> & { name?: string },
+): TeamDef[] {
   return teams.map((t) =>
     t.id !== squadId ? t : { ...t, lanes: t.lanes.map((l) => (l.id === laneId ? { ...l, ...patch } : l)) },
   );
+}
+
+/** Split a brief into its `## ` sections (the preamble before the first heading is ""). */
+function briefSections(text: string): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  let cur = "";
+  out.set(cur, []);
+  for (const line of text.replace(/\r\n/g, "\n").split("\n")) {
+    const h = /^##\s+(.+?)\s*$/.exec(line);
+    if (h) {
+      cur = h[1];
+      if (!out.has(cur)) out.set(cur, []);
+      continue;
+    }
+    out.get(cur)!.push(line);
+  }
+  return out;
+}
+
+/** Blank lines and placeholders like "- None." or "- (none recorded yet)" are not content. */
+const isContentLine = (l: string): boolean => Boolean(l) && !/^[-*]?\s*\(?\s*(none|nothing)( recorded)?( yet)?\s*\)?\.?$/i.test(l);
+
+/**
+ * One-line summary of a brief edit for the steer message, e.g. "Decided +2 −1, Open +1".
+ * Counts content lines added/removed per `## ` section (multiset diff, order ignored).
+ */
+export function briefDiffSummary(before: string, after: string): string {
+  const a = briefSections(before);
+  const b = briefSections(after);
+  const parts: string[] = [];
+  for (const name of new Set([...b.keys(), ...a.keys()])) {
+    const left = (a.get(name) ?? []).map((l) => l.trim()).filter(isContentLine);
+    const right = (b.get(name) ?? []).map((l) => l.trim()).filter(isContentLine);
+    const pool = new Map<string, number>();
+    for (const l of left) pool.set(l, (pool.get(l) ?? 0) + 1);
+    let added = 0;
+    for (const l of right) {
+      const n = pool.get(l) ?? 0;
+      if (n > 0) pool.set(l, n - 1);
+      else added++;
+    }
+    const removed = [...pool.values()].reduce((s, n) => s + n, 0);
+    const label = !a.has(name) ? `new section ${name}` : !b.has(name) ? `removed section ${name}` : name || "header";
+    if (!a.has(name) || !b.has(name)) {
+      if (left.length || right.length || name) parts.push(label);
+      continue;
+    }
+    if (added || removed) parts.push(`${label} ${[added && `+${added}`, removed && `−${removed}`].filter(Boolean).join(" ")}`);
+  }
+  return parts.length ? parts.join(", ") : "no content changes";
 }

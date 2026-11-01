@@ -69,8 +69,12 @@ import {
   openAndScrollToInbox,
 } from "./ui";
 import { WorkspacesView } from "./WorkspacesView";
+import { FullToggle, PinGrid, SidebarPins, useFullView, type PinHandler } from "./PinGrid";
+import { openPin } from "./pinActions";
+import type { Pin } from "./pins";
 import { AddBuddyModal, Modal, NewAgentModal, ProfileImportModal, TeamSettingsModal, useProfiles } from "./TeamActions";
 import { PairDeviceModal } from "./PairDeviceModal";
+import { BriefEditorHost } from "./BriefEditor";
 import { TeamFeed } from "./TeamFeed";
 import { HandoffModal } from "./HandoffModal";
 import { Avatar, NeonEmblem, TokenMeter, providerSpec } from "./pixel";
@@ -399,6 +403,7 @@ const SidebarTeam = memo(function SidebarTeam({
   onToggleExpand,
   onTeam,
   onAgent,
+  onQuickStart,
 }: {
   view: TeamView;
   active: boolean;
@@ -407,9 +412,15 @@ const SidebarTeam = memo(function SidebarTeam({
   onToggleExpand: (id: string) => void;
   onTeam: (id: string) => void;
   onAgent: PickTeamAgent;
+  onQuickStart: PinHandler;
 }) {
+  const full = useFullView();
   const others = useSelect(subscribeTree, () => sideAlerts(v), sameList);
   const pick = useCallback((id: string) => onAgent(v.team.id, id), [onAgent, v.team.id]);
+  const onPin = useCallback(
+    (pin: Pin) => void Promise.resolve(onQuickStart(pin)).catch((e) => alert(`Could not start ${pin.lane.name}: ${e}`)),
+    [onQuickStart],
+  );
   const firstAlert = v.members
     .filter((m) => m.attention && m.attention.tone !== "finished" && m.kind !== "old-lead")
     .sort(alertOrder)[0];
@@ -449,7 +460,8 @@ const SidebarTeam = memo(function SidebarTeam({
           </button>
         )}
       </div>
-      {expanded && (
+      {expanded && !full && v.team.id !== UNASSIGNED.id && <SidebarPins view={v} onPin={onPin} />}
+      {expanded && full && (
         <>
           <TeamTokens view={v} />
           {v.lanes.map((l) => {
@@ -502,6 +514,7 @@ const Sidebar = memo(function Sidebar(props: {
   onStartResize: (e: React.MouseEvent) => void;
   onTeam: (id: string) => void;
   onAgent: PickTeamAgent;
+  onQuickStart: PinHandler;
   onPairDevice?: () => void;
   onAbout?: () => void;
   onSettings: () => void;
@@ -509,7 +522,8 @@ const Sidebar = memo(function Sidebar(props: {
 }) {
   const uiScale = useUiScale();
   const uiScalePct = Math.round(uiScale * 100);
-  const allCollapsed = props.views.length > 0 && props.views.every((v) => props.collapsedTeams.has(v.team.id));
+  const views = props.views;
+  const allCollapsed = views.length > 0 && views.every((v) => props.collapsedTeams.has(v.team.id));
   return (
     <nav className={`sidebar ${props.sidebarCollapsed ? "collapsed" : ""}`} data-testid="sidebar">
       <div className="brand">
@@ -536,18 +550,18 @@ const Sidebar = memo(function Sidebar(props: {
         }}
       />
       <div className="sidebar-teams-header">
-        <span className="sidebar-teams-label">TEAMS</span>
+        <span className="sidebar-teams-label">SQUADS</span>
         <button
           type="button"
           className="btn ghost small sidebar-collapse-all-btn"
           onClick={props.onToggleAllTeams}
           data-testid="sidebar-collapse-all"
-          title={allCollapsed ? "Expand all teams" : "Collapse all teams"}
+          title={allCollapsed ? "Expand all squads" : "Collapse all squads"}
         >
           {allCollapsed ? "Expand all" : "Collapse all"}
         </button>
       </div>
-      {props.views.map((v) => (
+      {views.map((v) => (
         <SidebarTeam
           key={v.team.id}
           view={v}
@@ -557,6 +571,7 @@ const Sidebar = memo(function Sidebar(props: {
           onToggleExpand={props.onToggleTeamExpand}
           onTeam={props.onTeam}
           onAgent={props.onAgent}
+          onQuickStart={props.onQuickStart}
         />
       ))}
       <div className="sidebar-legend">
@@ -589,8 +604,8 @@ const Sidebar = memo(function Sidebar(props: {
         ℹ ABOUT &amp; LICENSES
       </button>
       <div className="sidebar-footer-row">
-        <button className="btn ghost small" onClick={props.onSettings} title="Edit teams, lanes, path matchers and 4K UI scale">
-          ⚙ TEAMS
+        <button className="btn ghost small" onClick={props.onSettings} title="Edit squads, teams, path matchers and 4K UI scale">
+          ⚙ SQUADS
         </button>
         <button
           className={`btn ghost small ui-scale-sidebar-btn ${uiScalePct !== 100 ? "on" : ""}`}
@@ -663,7 +678,7 @@ const Card = memo(function Card({ label, m, onPick, onSuccessor }: CardProps) {
       <Avatar id={a.id} provider={a.provider} agentType={m.agentType} variant={leadVariant(m)} size={56} />
       <div className="card-body">
         <div className="card-top-row">
-          <span className="card-label">{m.agentType === "brainstorm" ? "BRAINSTORM · BUDDY" : AGENT_TYPE_LABEL[m.agentType]}</span>
+          <span className="card-label">{m.agentType === "brainstorm" ? "BRAINSTORM" : AGENT_TYPE_LABEL[m.agentType]}</span>
           <span className="card-top-right">
             <AgentActions agent={a} />
             <span className="prov-pill" style={{ color: prov.color, borderColor: prov.color }}>
@@ -677,7 +692,7 @@ const Card = memo(function Card({ label, m, onPick, onSuccessor }: CardProps) {
         <div className="muted small">
           {isBs && (
             <b className="talk-here" data-testid="talk-here-badge">
-              BUDDY · TALK HERE ·{" "}
+              TALK HERE ·{" "}
             </b>
           )}
           {isLead && (
@@ -749,14 +764,14 @@ function EmptyBrainstormCard({
       <Avatar id={`bs-empty-${teamId}-${laneId}`} provider="claude" agentType="brainstorm" size={56} />
       <div className="card-body">
         <div className="card-top-row">
-          <span className="card-label">BRAINSTORM · BUDDY</span>
+          <span className="card-label">BRAINSTORM</span>
           <b className="talk-here" data-testid="talk-here-badge">
             TALK HERE
           </b>
         </div>
         <div className="card-title">BRAINSTORM · {laneName.toUpperCase()}</div>
         <div className="muted small">
-          <b className="talk-here">BUDDY · TALK HERE · </b>
+          <b className="talk-here">TALK HERE · </b>
           Seeded from <code>docs/brainstorm/{laneId}.md</code>
         </div>
         <button
@@ -766,7 +781,7 @@ function EmptyBrainstormCard({
           data-testid={`start-brainstorm-${laneId}`}
           onClick={() => void handleStart()}
         >
-          {starting ? "Starting Buddy…" : "+ Start Buddy (brainstorm)"}
+          {starting ? "Starting Brainstorm…" : "+ Start Brainstorm"}
         </button>
       </div>
     </div>
@@ -941,7 +956,7 @@ function UnassignedTray({
     <section className="lane unassigned-tray" data-testid="unassigned-tray">
       <h2>UNASSIGNED TRAY · ORPHAN AGENTS ({members.length})</h2>
       <div className="muted small" style={{ marginBottom: 8 }}>
-        Agents whose labels and working folder did not match any registered lane in <code>teams.json</code>. Assign each to a lane with one click:
+        Agents whose labels and working folder did not match any registered team in <code>teams.json</code>. Assign each to a team with one click:
       </div>
       {members.map((m) => {
         const a = m.agent;
@@ -988,7 +1003,7 @@ function UnassignedTray({
               data-testid={`assign-lane-btn-${a.id}`}
               onClick={() => void handleAssign(a)}
             >
-              {assigningId === a.id ? "Assigning…" : "Assign to lane"}
+              {assigningId === a.id ? "Assigning…" : "Assign to team"}
             </button>
           </div>
         );
@@ -1008,8 +1023,10 @@ const TeamPage = memo(function TeamPage(props: {
   onNewAgent: () => void;
   onSettings: () => void;
   onSuccessor: (m: Member) => void;
+  onQuickStart: PinHandler;
 }) {
   const { view, unassignedMembers, onPick, query, showOld, archivedMembers } = props;
+  const full = useFullView();
   const alerts = view.members.filter((m) => m.attention && m.kind !== "old-lead").sort(alertOrder);
   const worktrees = useMemo(() => {
     const map = new Map<string, number>();
@@ -1018,6 +1035,35 @@ const TeamPage = memo(function TeamPage(props: {
   }, [view]);
   const hit = (m: Member | null) => (m && matchesSearch(m, query) ? m : null);
   const handoff = useMemo(() => handoffOf(view), [view]);
+
+  // Default squad page: one tile per pinned Team. FULL brings back the plumbing view below.
+  if (!full) {
+    const teamCount = view.lanes.filter((l) => l.lane.id !== "_other" && l.lane.state !== "done").length;
+    return (
+      <div className="team-body">
+        <header className="team-header">
+          <h1>
+            <NeonEmblem color={view.team.color} seed={view.team.id} size={32} />
+            <span>{view.team.name}</span>
+            <span className="h1-stats">
+              {teamCount} TEAMS · <span className={view.needsYou > 0 ? "stat-alert" : ""}>{view.needsYou} NEED YOU</span>
+            </span>
+          </h1>
+          <div className="team-actions">
+            <button className="btn ok" data-testid="add-buddy-btn" onClick={props.onAddBuddy} title="Add a Team with its own Brainstorm">
+              + TEAM
+            </button>
+            <button className="btn ghost" onClick={props.onSettings}>
+              ⚙ SETTINGS
+            </button>
+            <FullToggle />
+          </div>
+        </header>
+        <PinGrid view={view} onOpenAgent={onPick} onQuickStart={props.onQuickStart} />
+        <IdeaInbox team={view.team} />
+      </div>
+    );
+  }
 
   return (
     <div className="team-body">
@@ -1033,14 +1079,15 @@ const TeamPage = memo(function TeamPage(props: {
         <div className="team-actions">
           <PaseoUsageHeaderChip onOpenSettings={props.onSettings} />
           <button className="btn ok" data-testid="add-buddy-btn" onClick={props.onAddBuddy}>
-            + ADD BUDDY
+            + TEAM
           </button>
           <button className="btn ok" onClick={props.onNewAgent}>
             + NEW AGENT
           </button>
           <button className="btn ghost" onClick={props.onSettings}>
-            ⚙ TEAM SETTINGS
+            ⚙ SETTINGS
           </button>
+          <FullToggle />
         </div>
       </header>
 
@@ -1164,17 +1211,19 @@ const Toolbar = memo(function Toolbar(props: {
 }) {
   const uiScale = useUiScale();
   const uiScalePct = Math.round(uiScale * 100);
+  const full = useFullView();
   return (
     <div className="toolbar">
       <div className="seg">
         <button className={props.screen === "teams" ? "on" : ""} onClick={() => props.onScreen("teams")}>
-          TEAMS
+          SQUADS
         </button>
         <button className={props.screen === "workspaces" ? "on" : ""} onClick={() => props.onScreen("workspaces")}>
           WORKSPACES ({props.workspaceCount})
         </button>
       </div>
-      {props.screen === "teams" && (
+      {/* Agent search and plumbing chips only filter the FULL view. */}
+      {props.screen === "teams" && full && (
         <>
           <input
             className="search"
@@ -1282,6 +1331,9 @@ export function App() {
   const { conn, archivedAgents, workspaces, providerUsage } = usePaseo();
   const teamsVersion = useTeams();
   const { members, views } = derived();
+  const full = useFullView();
+  // The Unassigned tray is plumbing: only FULL lists it in the sidebar or lets it be the selected squad.
+  const sidebarViews = useMemo(() => (full ? views : views.filter((v) => v.team.id !== UNASSIGNED.id)), [full, views]);
   const focus = useFocusMode();
   const hasTabs = useHasTabs();
   const sheet = useSheet();
@@ -1407,7 +1459,7 @@ export function App() {
     };
   }, []);
 
-  const view = views.find((v) => v.team.id === teamId) ?? views[0];
+  const view = sidebarViews.find((v) => v.team.id === teamId) ?? sidebarViews[0] ?? views[0];
   const activeTeamId = view?.team.id ?? teamId;
 
   // Stable callbacks so the memoized sidebar and team page skip renders they do not need.
@@ -1459,11 +1511,11 @@ export function App() {
 
   const onToggleAllTeams = useCallback(() => {
     setCollapsedTeams((prev) => {
-      const allIds = views.map((v) => v.team.id);
+      const allIds = sidebarViews.map((v) => v.team.id);
       const everyCollapsed = allIds.length > 0 && allIds.every((id) => prev.has(id));
       return everyCollapsed ? new Set() : new Set(allIds);
     });
-  }, [views]);
+  }, [sidebarViews]);
 
   const onToggleSidebarCollapse = useCallback(() => {
     setSidebarCollapsed((c) => !c);
@@ -1505,6 +1557,12 @@ export function App() {
   const openAddBuddy = useCallback(() => setModal("add-buddy"), []);
   const openNewAgent = useCallback(() => setModal("new-agent"), []);
   const onSuccessor = useCallback((m: Member) => setSuccessorId(m.agent.id), []);
+  // Pin click: open the live Brainstorm, or quick-start one from the team brief (src/pinActions.ts).
+  const onQuickStart = useCallback<PinHandler>((pin) => {
+    setTeamId(pin.squad.id);
+    setScreen("teams");
+    return openPin(pin).then(openAgent);
+  }, []);
   const paneSuccessor = useCallback((id: string) => setSuccessorId(id), []);
 
   // Entering focus with nothing open shows the team's brainstorm or lead (opens it; never spawns).
@@ -1597,7 +1655,7 @@ export function App() {
       )}
       {!focus && (
         <Sidebar
-          views={views}
+          views={sidebarViews}
           teamId={view?.team.id ?? ""}
           conn={conn}
           collapsedTeams={collapsedTeams}
@@ -1613,6 +1671,7 @@ export function App() {
           onAbout={openAbout}
           onSettings={openSettings}
           onAgent={onAgent}
+          onQuickStart={onQuickStart}
         />
       )}
       {(focus || sheet) && (
@@ -1653,6 +1712,7 @@ export function App() {
               onNewAgent={openNewAgent}
               onSettings={openSettings}
               onSuccessor={onSuccessor}
+              onQuickStart={onQuickStart}
             />
           ) : (
             <div className="muted">Connecting to Paseo…</div>
@@ -1682,6 +1742,7 @@ export function App() {
       {modal === "pair-device" && <PairDeviceModal onClose={() => setModal(null)} />}
       {modal === "about" && <AboutLicensesModal onClose={() => setModal(null)} onChecklist={() => setModal("first-run")} />}
       {modal === "first-run" && <FirstRunModal initial={firstRunStatus} onClose={() => setModal(null)} />}
+      <BriefEditorHost />
       {!modal && profilesNeedSetup && !profilesSetupDismissed && <ProfileImportModal onClose={() => {}} />}
       {successorLead && (
         <HandoffModal

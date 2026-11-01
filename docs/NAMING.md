@@ -12,16 +12,20 @@
   4. `paseo.parent-agent-id` parent chain (depth 8).
   5. Otherwise marked `orphan=1` and placed in the UI **Unassigned** tray (`_unassigned`).
 
-## Core Model: Squad, Feature Lane, and Buddy
+## Core Model: Squad > Team > Brainstorm > Lead / Workers
 
-- **Squad (`team`)**: The product-level umbrella (one Squad per project card, e.g. `VibeSquad` = the VibeSquad squad, `Personal Site` = the personal site squad, `Escape From Idle` = the Escape From Idle squad). Internally stored as `team` in `teams.json` (`team=` label, derived from `lane`).
-- **Feature Lane (`lane`)**: The unit inside a Squad — one **Buddy** (`role=brainstorm`, `"TALK HERE"`) + one **Lead** (`role=lead`, `"RUNS THE WORK"`, spawned at plan handoff) + their **Workers** (`role=worker`), working on one feature of that product. Internally stored as `lane` in `teams.json` (`lane=` label).
-- **Mascot `"Buddy"`**: The brainstorm role keeps its label (`role=brainstorm`) and title format (`BRAINSTORM · <LANE>` or `BRAINSTORM · <LANE> · <topic>`), and its mascot / friendly name is **Buddy** (shown in the UI on the Roster's `TALK HERE` card, empty card, and cast sprite labels).
-- **Multiple Buddies per Squad**: A Squad can have several live Buddies and several live Leads at once — one live Buddy and one live Lead **per Feature Lane** (`(team, lane)`), plus topic-scoped Buddies (`(team, lane, topic)`). There is NO "one live brainstorm per project/squad" limit. All Feature Lanes in a Squad share the same Squad `vs log` (`~/.vibesquad/teams/<team>/log.jsonl`) so `vs log --since-me` surfaces `[decision]`, `[you]`, and `[needs-you]` entries across the whole Squad.
-- **Trigger Phrase `"Spin up a buddy (for X)"` & `"+ ADD BUDDY"` button**:
-  - When the user says `"spin up a buddy"`, `"spin up another buddy"`, `"get me a buddy for X"`, or clicks **"+ ADD BUDDY"** on a Squad card, check whether `X` overlaps an existing Buddy / Feature Lane in the Squad (`vs who brainstorm` and `vs log --since-me` for files or feature scope).
-  - If it overlaps, flag the overlap and suggest using that existing Buddy instead.
-  - Otherwise create a new Feature Lane (`lane=<slug>`) under the Squad (`team=<squad>`) and spawn its Buddy (`role=brainstorm`, `title: BRAINSTORM · <LANE> · <topic X>` or `BRAINSTORM · <LANE>`) with a 2–3 line context brief. Its Lead is spawned later at plan handoff (looked up via `vs who lead`).
+UI and docs use these names (2026-11-01). Labels, `teams.json` keys and code identifiers do **not** change: a Team is still a `lane`, a Squad is still a `team`.
+
+- **Squad** (`team` in labels and `teams.json`): the top-level sidebar entry, one per product (e.g. `Escape From Idle`, `VibeSquad`, `Personal Site`).
+- **Team** (`lane` in labels and `teams.json`): one feature inside a Squad (e.g. Scavenging UI). A Team is **pinned** automatically when it's created and stays on the squad page until the owner marks it complete (`state: "done"`, Done shelf, can be reopened). It holds one **Brainstorm**, one **Lead** (spawned at plan handoff) and the Lead's **Workers**.
+- **Brainstorm** (`role=brainstorm`): the head of a Team, the one you talk to (`"TALK HERE"`). The UI says "Brainstorm", never "Buddy". Its title format is unchanged (`BRAINSTORM · <LANE>` or `BRAINSTORM · <LANE> · <topic>`).
+- **Lead / Workers** (`role=lead`, `role=worker`): run the work for a Team. Hidden on the default squad page; the **FULL** toggle shows them.
+- **Pin the feature, not the agent.** Clicking a Team opens its live Brainstorm, or starts a fresh one from the Team brief (`docs/brainstorm/<lane>.md`). Agent IDs, `(old)` rows, workers and worktrees are plumbing and stay behind FULL.
+- **Multiple Teams per Squad**: one live Brainstorm and one live Lead **per Team** (`(team, lane)`), plus topic-scoped Brainstorms (`(team, lane, topic)`). There is no "one live brainstorm per squad" limit. All Teams in a Squad share the Squad `vs log` (`~/.vibesquad/teams/<team>/log.jsonl`) so `vs log --since-me` surfaces `[decision]`, `[you]` and `[needs-you]` entries across the whole Squad.
+- **Trigger phrase `"Spin up a buddy (for X)"` and the `+ TEAM` button** (the phrase is kept so existing habits still work):
+  - When the user says `"spin up a buddy"`, `"get me a brainstorm for X"`, or clicks **+ TEAM** on a squad page, check whether `X` overlaps an existing Team in the Squad (`vs who brainstorm` and `vs log --since-me` for files or feature scope).
+  - If it overlaps, flag the overlap and offer that Team instead.
+  - Otherwise create a new Team (`lane=<slug>`) under the Squad (`team=<squad>`) and spawn its Brainstorm (`role=brainstorm`, `title: BRAINSTORM · <LANE> · <topic X>` or `BRAINSTORM · <LANE>`) with a 2–3 line context brief. Its Lead is spawned later at plan handoff (looked up via `vs who lead`).
 
 ## Roles, Labels, and Title Format
 
@@ -29,13 +33,13 @@
 |---|---|---|
 | Lead | `lane`, `role=lead`, `ord=N` (plus derived `team`) | `★ <LANE> ordN` (e.g. `★ VIBESQUAD ord1`) |
 | Retired lead | same, with `role=former-lead` | `(old) <LANE> ordN` |
-| Brainstorm (Buddy) | `lane`, `role=brainstorm` (plus optional `topic`) | `BRAINSTORM · <LANE>` or `BRAINSTORM · <LANE> · <topic>` (lane first, required) |
+| Brainstorm | `lane`, `role=brainstorm` (plus optional `topic`) | `BRAINSTORM · <LANE>` or `BRAINSTORM · <LANE> · <topic>` (lane first, required) |
 | Retired brainstorm | same, with `role=former-brainstorm` | unchanged (not rewritten) |
 | Worker | `lane`, `role=worker`, `job` | `<LANE> · <job>` |
 
-"TALK HERE" is shown in the UI on the lane's active Buddy / brainstorm card (primary top slot), and "RUNS THE WORK" is shown on the lead card (secondary style unless `needs-you` is set). Never include `(talk here: …)` in lead or brainstorm titles.
+"TALK HERE" is shown in the UI on the Team's active Brainstorm card (primary top slot), and "RUNS THE WORK" is shown on the lead card (secondary style unless `needs-you` is set). Never include `(talk here: …)` in lead or brainstorm titles.
 
 ## Lane integrity
-- Each **Feature Lane** (`(team, lane)`) has at most **one live lead and one live main Buddy (`role=brainstorm`)** (plus optional topic-scoped Buddies per `(team, lane, topic)`), while a **Squad** (`team`) can run multiple Feature Lanes in parallel.
+- Each **Team** (`(team, lane)`) has at most **one live lead and one live main Brainstorm (`role=brainstorm`)** (plus optional topic-scoped Brainstorms per `(team, lane, topic)`), while a **Squad** (`team`) can run multiple Teams in parallel.
 - Spawning a successor or a replacement brainstorm in the same `(team, lane, topic)` slot sets `role=former-lead` / `role=former-brainstorm` on the predecessor (slim server plugin on `agent.created`, and `spawnTeamAgent` in the UI as a fallback).
 - If more than one live one is found in the same lane slot anyway, the lane shows `DUPLICATE LIVE LEAD/BRAINSTORM · RETIRE ONE` with a two-tap retire button. No extra Squad/project rows are ever created.

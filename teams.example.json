@@ -21,12 +21,16 @@
         {
           "id": "main-game",
           "name": "Main Game",
-          "paths": ["main-project"]
+          "paths": ["main-project"],
+          "state": "pinned",
+          "order": 0,
+          "lastProfile": "Brainstorm - Claude"
         },
         {
           "id": "ui-lab",
           "name": "UI Lab",
-          "paths": ["main-project"]
+          "paths": ["main-project"],
+          "order": 1
         }
       ]
     },

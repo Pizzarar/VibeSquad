@@ -12,8 +12,11 @@ import {
   resolveAgentIdentity,
   topicOf as identityTopicOf,
 } from "./identity.ts";
+import type { PinFields } from "./pins.ts";
 
-export type LaneDef = { id: string; name: string; paths?: string[]; aliases?: string[] };
+// A lane is a pinned Team in the UI. Pin fields (state, doneAt, order, lastProfile) live in src/pins.ts
+// and round-trip through saveTeams untouched; lanes without `state` count as pinned.
+export type LaneDef = { id: string; name: string; paths?: string[]; aliases?: string[] } & PinFields;
 export type TeamDef = {
   id: string;
   name: string;

@@ -57,7 +57,7 @@ npm start
 
 ### teams.json
 
-`teams.json` (gitignored) defines your Squads and Feature Lanes. Copy `teams.example.json` to start. Each entry maps a lane ID to the project paths on disk:
+`teams.json` (gitignored) defines your Squads and their Teams (stored as `lanes`). Copy `teams.example.json` to start. Each entry maps a lane ID to the project paths on disk:
 
 ```json
 {
@@ -75,6 +75,12 @@ npm start
   ]
 }
 ```
+
+Each lane is a pinned **Team** in the UI. Optional pin fields:
+- `state`: `"pinned"` (default when missing) or `"done"` (moves the Team to the squad's Done shelf).
+- `doneAt`: ISO time the Team was marked complete.
+- `order`: sort position inside the squad (defaults to the order in the file).
+- `lastProfile`: profile of the last Brainstorm, reused when the Team quick-starts a new one.
 
 The CLI and plugin find `teams.json` in this order:
 1. `$VIBESQUAD_TEAMS_FILE` (if set and exists)

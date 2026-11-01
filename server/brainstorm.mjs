@@ -267,7 +267,22 @@ export function findExistingLaneBrainstorm(agents, laneId, topic = "") {
   return matches[0] ?? null;
 }
 
-export async function performBrainstormRestart(body, rootDir = REPO_ROOT) {
+// Pinned-team quick start (docs/PLAN_PINNED_FEATURES.md §3): concurrent "start-brainstorm" calls for the
+// same lane share one spawn, so a double-click or two open tabs can't create two Brainstorms.
+const startInFlight = new Map();
+
+export function performBrainstormRestart(body, rootDir = REPO_ROOT) {
+  const isStart = String(body?.reason || "").trim() === "start-brainstorm" || String(body?.agentId || "") === "start-brainstorm";
+  if (!isStart || body.forceNew) return performBrainstormRestartOnce(body, rootDir);
+  const key = [body.teamId || body.team || "", body.laneId || body.lane || "", body.topic || ""].map((s) => String(s).trim().toLowerCase()).join(":");
+  const pending = startInFlight.get(key);
+  if (pending) return pending.then((r) => (r?.ok && r.newAgentId ? { ...r, reused: true, existingAgentId: r.newAgentId } : r));
+  const run = performBrainstormRestartOnce(body, rootDir).finally(() => startInFlight.delete(key));
+  startInFlight.set(key, run);
+  return run;
+}
+
+async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
   const reason = String(body.reason || "manual").trim();
   const agentId = String(body.agentId || (reason === "start-brainstorm" ? "start-brainstorm" : "")).trim();
   if (!agentId) throw new Error("agentId is required");
@@ -495,6 +510,8 @@ export async function performBrainstormRestart(body, rootDir = REPO_ROOT) {
       "vs.restarted-from": agentId,
       "vs.restart-tokens": String(tokens),
       "vs.restart-reason": reason,
+      // Pinned-team quick start: the drawer shows "── Fresh session · from brief ⋯ ──" for this label.
+      ...(body.mode === "quick-start" ? { "vs.fresh-session": "brief" } : {}),
     };
     const initialPrompt = buildBrainstormInitialPrompt({
       laneId,
@@ -597,6 +614,7 @@ export async function performBrainstormRestart(body, rootDir = REPO_ROOT) {
       summaryPath: summary.path,
       latestPlan,
       spawnConfig: spawnCfg,
+      profile: newLabels.profile,
       agent: created,
     };
   } finally {
