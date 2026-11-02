@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import { updateAgent } from "./paseo";
-import { pruneRestoredTabs } from "./panes";
+import { getPanes, pruneRestoredTabs } from "./panes";
+import { exitSquadsHome, getPinFocus } from "./pinFocus";
 import { planAgentRename, renameDraftFor } from "./renameAgent";
 import { UNASSIGNED, saveTeams, type TeamDef } from "./teams";
 import {
@@ -225,5 +226,7 @@ export function useRestorePrune(agents: ReadonlyMap<string, PaseoAgent>, ready: 
       const a = agents.get(id);
       return !!a && !a.archivedAt;
     });
+    // Nothing left to show (restored agent gone or archived): land on the grid, not an empty pane.
+    if (!getPanes().leftActiveId && !getPinFocus()) exitSquadsHome();
   }, [agents, ready]);
 }

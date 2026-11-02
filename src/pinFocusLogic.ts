@@ -171,3 +171,14 @@ export function pickLead<T extends { agent: { status: string } }>(lanes: { lead:
   const leads = lanes.map((l) => l.lead).filter((m): m is T => !!m);
   return leads.find((m) => m.agent.status === "running") ?? leads[0] ?? null;
 }
+
+/**
+ * Whether the app starts on the grid. Default yes, even with tabs restored. Exceptions: a ?agent= deep link
+ * shows its drawer, and with "Reopen last view" on and a saved left tab the restored panes show. ?view=squads
+ * always starts on the grid.
+ */
+export function startsOnGrid(a: { deepLinked: boolean; viewSquads: boolean; restoreLastView: boolean; savedLeftTab: string | null }): boolean {
+  if (a.viewSquads) return true;
+  if (a.deepLinked) return false;
+  return !(a.restoreLastView && a.savedLeftTab);
+}

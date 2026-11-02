@@ -143,3 +143,17 @@ test("58: slow actions use a delayed indicator (open agent, load older, open dif
   assert.ok(read("src/ChangesPanel.tsx").includes("CHANGES_SLOW_MS")); // bug-chaser owns the Changes loading feedback
   assert.ok(read("src/Timeline.tsx").includes(".modal-back"));
 });
+
+test("42: restored panes show on launch only with the pref on and a saved tab; grid otherwise", async () => {
+  const { startsOnGrid } = await import("../src/pinFocusLogic.ts");
+  const base = { deepLinked: false, viewSquads: false, restoreLastView: true, savedLeftTab: "a1" };
+  assert.equal(startsOnGrid(base), false); // restored panes visible
+  assert.equal(startsOnGrid({ ...base, restoreLastView: false }), true);
+  assert.equal(startsOnGrid({ ...base, savedLeftTab: null }), true);
+  assert.equal(startsOnGrid({ ...base, deepLinked: true }), false);
+  assert.equal(startsOnGrid({ ...base, viewSquads: true }), true);
+  assert.equal(startsOnGrid({ ...base, deepLinked: true, restoreLastView: false }), false);
+  const src = read("src/pinFocus.ts");
+  assert.ok(src.includes("startsOnGrid(") && src.includes("getRestoreLastView()"));
+  assert.ok(read("src/QuickWinsUi.tsx").includes("exitSquadsHome()")); // prune with nothing left falls back to the grid
+});

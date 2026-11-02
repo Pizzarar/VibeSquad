@@ -9,7 +9,8 @@ import { isRetiredAgent } from "./identity";
 import { closeTab, getPanes, openAgent, subscribePanes, toggleSplit } from "./panes";
 import { getPaseoState, subscribePaseo } from "./paseo";
 import { openPin } from "./pinActions";
-import { isLiveUrlAgent, levelUp, loadSavedFocus, planRestore, reconcilePinFocus, saveFocus } from "./pinFocusLogic";
+import { isLiveUrlAgent, levelUp, loadSavedFocus, planRestore, reconcilePinFocus, saveFocus, startsOnGrid } from "./pinFocusLogic";
+import { getRestoreLastView } from "./prefs";
 import { pinsForSquad, type Pin } from "./pins";
 import { subscribeTeams } from "./teams";
 import { derived } from "./ui";
@@ -37,10 +38,17 @@ type State = {
   squadsHome: boolean;
 };
 
-// Start on the grid even if tabs were restored from last session; a ?agent= deep link shows its drawer.
+// Start on the grid even if tabs were restored from last session, unless "Reopen last view" is on and a tab was
+// saved (then the restored panes show); a ?agent= deep link shows its drawer.
 const deepLinked = typeof location !== "undefined" && new URLSearchParams(location.search).has("agent");
 const startOnSquadsHome = !deepLinked && typeof location !== "undefined" && new URLSearchParams(location.search).get("view") === "squads";
-let state: State = { focus: null, home: !deepLinked, homeActive: deepLinked ? null : getPanes().leftActiveId, squadsHome: startOnSquadsHome };
+const startHome = startsOnGrid({
+  deepLinked,
+  viewSquads: startOnSquadsHome,
+  restoreLastView: getRestoreLastView(),
+  savedLeftTab: getPanes().leftActiveId,
+});
+let state: State = { focus: null, home: startHome, homeActive: startHome ? getPanes().leftActiveId : null, squadsHome: startOnSquadsHome };
 let seq = 0;
 const listeners = new Set<() => void>();
 
