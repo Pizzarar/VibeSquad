@@ -152,21 +152,37 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   }, [cwd]);
 
   const addLocalProject = async () => {
-    if (!addProjectPath.trim()) return;
+    const path = addProjectPath.trim();
+    if (!path) return;
     setAddingProject(true);
     setAddProjectErr("");
+    let warn = "";
     try {
-      if (!DEMO) await daemonClient.addProject(addProjectPath.trim());
+      if (!DEMO) {
+        // The daemon may never answer project.add.request (older daemons); don't hang the button.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            daemonClient.addProject(path),
+            new Promise((_, rej) => {
+              timer = setTimeout(() => rej(new Error("daemon did not answer within 15s")), 15000);
+            }),
+          ]);
+        } catch (e) {
+          warn = `Folder saved, but the daemon could not register it (${String(e instanceof Error ? e.message : e)}).`;
+        } finally {
+          clearTimeout(timer);
+        }
+      }
       await saveTeams((cur) =>
         cur.map((t) =>
-          t.id === team.id && !t.paths.includes(addProjectPath.trim())
-            ? { ...t, paths: [...t.paths, addProjectPath.trim()] }
-            : t,
+          t.id === team.id && !t.paths.includes(path) ? { ...t, paths: [...t.paths, path] } : t,
         ),
       );
-      setCwd(addProjectPath.trim());
-      setAddProjectOpen(false);
+      setCwd(path);
       setAddProjectPath("");
+      if (warn) setAddProjectErr(warn);
+      else setAddProjectOpen(false);
     } catch (e) {
       setAddProjectErr(String(e));
     } finally {
@@ -198,7 +214,9 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
 
   const dirs = useMemo(() => {
     const set = new Set<string>();
-    for (const m of view.members) if (m.agent.status !== "closed") set.add(m.agent.cwd);
+    const isRuntime = (d: string) => /vibesquad[\\/]runtime/i.test(d);
+    for (const p of team.paths) if (/^([a-z]:|[\\/])/i.test(p)) set.add(p);
+    for (const m of view.members) if (m.agent.status !== "closed" && !isRuntime(m.agent.cwd)) set.add(m.agent.cwd);
     const needles = team.paths.map((p) => p.toLowerCase().replace(/-$/, ""));
     for (const w of workspaces.values()) {
       const d = (w as { workspaceDirectory?: string; directory?: string }).workspaceDirectory ?? (w as { directory?: string }).directory;
@@ -561,7 +579,9 @@ export function AddBuddyModal({
 
   const dirs = useMemo(() => {
     const set = new Set<string>();
-    for (const m of view.members) if (m.agent.status !== "closed" && m.agent.cwd) set.add(m.agent.cwd);
+    const isRuntime = (d: string) => /vibesquad[\\/]runtime/i.test(d);
+    for (const p of team.paths) if (/^([a-z]:|[\\/])/i.test(p)) set.add(p);
+    for (const m of view.members) if (m.agent.status !== "closed" && m.agent.cwd && !isRuntime(m.agent.cwd)) set.add(m.agent.cwd);
     const needles = team.paths.map((p) => p.toLowerCase().replace(/-$/, ""));
     for (const w of workspaces.values()) {
       const d =

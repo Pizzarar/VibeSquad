@@ -589,6 +589,7 @@ function RewindButton({ agentId, e, onRewound }: { agentId: string; e: Entry; on
         if (!req) throw new Error("this message has no rewind id");
         await (daemonClient as any).rewindAgent(req.agentId, req.messageId, req.mode);
         if (req.resend) await (daemonClient as any).sendMessage(agentId, req.resend);
+        else onRewound?.(e);
       }
       setOpen(false);
     } catch (x) {
@@ -994,6 +995,14 @@ export function Timeline({
   const timelineRef = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const [cut, setCut] = useState<Entry | null>(null);
+  const cutLen = useRef(0);
+  // New turns after a rewind arrive past the cut; drop the cut so they show.
+  useEffect(() => {
+    if (cut && entries.length !== cutLen.current) setCut(null);
+  }, [entries.length, cut]);
+  useEffect(() => {
+    setCut(null);
+  }, [agentId]);
   const [selectedEntryKey, setSelectedEntryKey] = useState<string | null>(null);
   const shown = cut ? truncateAfter(entries, cut) : entries;
   const pinnedTodo = findPinnedTodo(shown);
@@ -1059,7 +1068,7 @@ export function Timeline({
             e={e}
             agentId={agentId}
             onParkText={onParkText}
-            onRewound={setCut}
+            onRewound={(x) => { cutLen.current = entries.length; setCut(x); }}
             selected={selectedEntryKey === String(e.seqStart ?? i)}
             onSelect={() => setSelectedEntryKey((k) => (k === String(e.seqStart ?? i) ? null : String(e.seqStart ?? i)))}
           />

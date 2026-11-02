@@ -356,12 +356,24 @@ export function CommandPaletteHost(props: {
 
   const shown = useMemo(() => filterPalette(items, q).slice(0, 60), [items, q]);
 
+  /** The jumped-to drawer mounts after the palette closes; retry until its visible composer exists. Inactive panes stay mounted (display:none), so scope by agent and visibility. */
+  const focusComposer = (agentId: string, tries = 20) => {
+    const cur = document.activeElement as HTMLElement | null;
+    if (cur && cur !== document.body && !cur.closest(".cmd-palette, .modal-back") && (/^(INPUT|TEXTAREA|SELECT)$/.test(cur.tagName) || cur.isContentEditable)) return;
+    const ta = document.querySelector<HTMLTextAreaElement>(`.pane-slot[data-agent="${CSS.escape(agentId)}"] .composer-row textarea`);
+    if (ta && ta.offsetParent !== null) ta.focus({ preventScroll: true });
+    else if (tries > 0) setTimeout(() => focusComposer(agentId, tries - 1), 50);
+  };
+
   const run = (it: PaletteItem) => {
     setMode(null);
     const id = it.id.slice(it.id.indexOf(":") + 1);
     if (it.kind === "agent") {
       const m = all.find((x) => x.agent.id === id);
-      if (m) props.onAgent(m);
+      if (m) {
+        props.onAgent(m);
+        focusComposer(m.agent.id);
+      }
     } else if (it.kind === "team") props.onTeam(id);
     else if (id === "new") props.actions.newAgent();
     else if (id === "search") setMode("search");
@@ -385,6 +397,7 @@ export function CommandPaletteHost(props: {
           onPick={(m) => {
             setMode(null);
             props.onAgent(m);
+            focusComposer(m.agent.id);
           }}
           onClose={() => setMode(null)}
         />
