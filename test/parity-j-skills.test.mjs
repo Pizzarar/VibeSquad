@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   agentTemplate, commandTemplate, hookRows, normalizeName, parseFrontmatter, parseSettingsJson, serializeFrontmatter,
-  stemOf, validName, validateAgent, validateCommand, COMMAND_KEYS, AGENT_KEYS,
+  stemOf, validName, confineConfigPath, confineSettingsPath, validScopeCwd, validateAgent, validateCommand, COMMAND_KEYS, AGENT_KEYS,
 } from "../src/claudeConfigLogic.ts";
 
 test("parseFrontmatter reads flat fields, quotes and CRLF", () => {
@@ -84,4 +84,57 @@ test("hookRows flattens events, matchers and non-command hooks; tolerates junk",
 test("parseSettingsJson reports errors and strips BOM", () => {
   assert.equal(parseSettingsJson('﻿{"a":1}').value.a, 1);
   assert.ok(parseSettingsJson("{nope").error);
+});
+
+test("validName rejects Windows reserved device names", () => {
+  for (const n of ["con", "prn", "aux", "nul", "com1", "com9", "lpt1", "lpt9"]) assert.ok(!validName(n), n);
+  for (const n of ["com0", "com10", "con-test", "my-nul", "lpt", "console"]) assert.ok(validName(n), n);
+  assert.equal(normalizeName("CON.md"), "con");
+  assert.match(validateCommand("nul", { description: "d" }, "x", [], null), /lowercase/);
+});
+
+test("confineConfigPath accepts only .claude/<kind>/<validName>.md", () => {
+  assert.equal(confineConfigPath("command", "review-pr"), ".claude/commands/review-pr.md");
+  assert.equal(confineConfigPath("command", "review-pr.md"), ".claude/commands/review-pr.md");
+  assert.equal(confineConfigPath("agent", ".claude/agents/rev.md"), ".claude/agents/rev.md");
+  const bad = [
+    "", ".", "..", "../x", "..\\x", "a/b", "a\\b", "/etc/passwd", "\\x", "C:\\x.md", "C:/x.md", "c:x",
+    ".claude/commands/../../x.md", ".claude/commands/../settings.json", ".claude/agents/x.md", // wrong dir for a command
+    "%2e%2e", "%2e%2e%2fx", "..%2fx", "x%00", "x\0y", "x.md.md", "x.txt", "X", "a b", "a.b", "con", "nul.md", " x", "x ",
+    ".claude/commands/", ".claude/commands//x.md", "./x", ".\\x", "~/x", "//server/share/x.md", "x::$DATA", "x.",
+  ];
+  for (const b of bad) assert.throws(() => confineConfigPath("command", b), /Refusing/, JSON.stringify(b));
+  assert.throws(() => confineConfigPath("agent", ".claude/commands/x.md"), /Refusing/);
+  assert.throws(() => confineConfigPath("command", null), /Refusing/);
+});
+
+test("confineSettingsPath allows exactly the two settings files", () => {
+  assert.equal(confineSettingsPath("settings.json"), ".claude/settings.json");
+  assert.equal(confineSettingsPath("settings.local.json"), ".claude/settings.local.json");
+  for (const b of ["", "../settings.json", ".claude/settings.json", "settings.json/", "SETTINGS.json", "credentials.json", "settings.json\0"]) {
+    assert.throws(() => confineSettingsPath(b), /Refusing/, JSON.stringify(b));
+  }
+});
+
+test("validScopeCwd: normalized absolute paths only", () => {
+  for (const ok of ["C:\\Users\\Fugma\\proj", "C:/Users/x", "c:\\", "/", "/home/u/proj", "/home/u/proj/", "D:\\a b\\c"]) assert.ok(validScopeCwd(ok), ok);
+  const bad = [
+    "", " ", "relative/path", "./x", "..", "../x", "C:", "C:x", "C:\\a\\..\\b", "C:\\..\\x", "/a/../b", "/a/./b", "/a//b", "C:\\a\\\\b",
+    "//server/share", "\\\\server\\share", "/a/%2e%2e/b", "/a/%2E%2E%2Fb", "/a%5cb", "/a\0b", "/a\nb", " /a", "/a ", "~", "~/x", "x".repeat(1100),
+  ];
+  for (const b of bad) assert.ok(!validScopeCwd(b), JSON.stringify(b));
+  assert.ok(!validScopeCwd(undefined));
+});
+
+test("frontmatter: block lists and folded text are flattened, not dropped", () => {
+  const p = parseFrontmatter("---\nname: x\nallowed-tools:\n  - Bash(git status:*)\n  - Read\ndescription: >\n  line one\n  line two\n---\nbody\n");
+  assert.equal(p.fields["allowed-tools"], "Bash(git status:*), Read");
+  assert.equal(p.fields.description, "line one line two");
+  const out = serializeFrontmatter(p.fields, p.body, ["name", "description"], p.order);
+  assert.match(out, /allowed-tools: "Bash\(git status:\*\), Read"/);
+  assert.equal(parseFrontmatter(out).fields["allowed-tools"], "Bash(git status:*), Read");
+});
+
+test("serialize quotes any value containing a colon", () => {
+  assert.match(serializeFrontmatter({ description: "a:b" }, "x", ["description"]), /description: "a:b"/);
 });

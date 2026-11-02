@@ -2,12 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listProjects } from "./paseoWorkspaces";
 import {
   createConfigDoc, deleteConfigDoc, getSkillsStatus, listConfigFiles, readConfigDoc, reconcileSkills, saveConfigDoc,
-  saveSkillsSelection, tryReadConfigDoc, uninstallSkills,
+  saveSkillsSelection, readSettingsDoc, uninstallSkills,
   type ConfigFile, type SkillSelection, type SkillsSaveResult, type SkillsStatus,
 } from "./paseoSkills";
 import {
-  AGENT_KEYS, COMMAND_KEYS, DIRS, SUBAGENT_MODELS, agentTemplate, commandTemplate, fileNameFor, hookRows, normalizeName,
-  parseFrontmatter, parseSettingsJson, serializeFrontmatter, stemOf, validateAgent, validateCommand,
+  AGENT_KEYS, COMMAND_KEYS, DIRS, SUBAGENT_MODELS, agentTemplate, commandTemplate, hookRows, normalizeName,
+  parseFrontmatter, parseSettingsJson, serializeFrontmatter, stemOf, validScopeCwd, validateAgent, validateCommand,
   type ConfigKind, type HookRow,
 } from "./claudeConfigLogic";
 import { ConfirmButton } from "./ui";
@@ -162,12 +162,12 @@ function ConfigSection({ kind, cwd }: { kind: ConfigKind; cwd: string }) {
     const my = ++seq.current;
     setLoading(true);
     try {
-      const list = await listConfigFiles(cwd, dir);
+      const list = await listConfigFiles(cwd, kind);
       if (my === seq.current) setFiles(list);
     } finally {
       if (my === seq.current) setLoading(false);
     }
-  }, [cwd, dir]);
+  }, [cwd, kind]);
 
   useEffect(() => {
     setDraft(null);
@@ -197,7 +197,7 @@ function ConfigSection({ kind, cwd }: { kind: ConfigKind; cwd: string }) {
 
   const open = (f: ConfigFile, edit: boolean) =>
     guard(async () => {
-      const doc = await readConfigDoc(cwd, f.path);
+      const doc = await readConfigDoc(cwd, kind, f.path);
       if (!edit) {
         setDraft(null);
         setView({ name: f.name, text: doc.text });
@@ -219,15 +219,15 @@ function ConfigSection({ kind, cwd }: { kind: ConfigKind; cwd: string }) {
       const problem = (isAgent ? validateAgent : validateCommand)(name, fields, draft.body, stems, draft.editing);
       if (problem) throw new Error(problem);
       const content = serializeFrontmatter(fields, draft.body, keys, draft.order);
-      if (draft.path && draft.base) await saveConfigDoc(cwd, draft.path, content, draft.base);
-      else await createConfigDoc(cwd, dir, fileNameFor(name), content);
+      if (draft.path && draft.base) await saveConfigDoc(cwd, kind, draft.path, content, draft.base);
+      else await createConfigDoc(cwd, kind, name, content);
       setDraft(null);
       await reload();
     });
 
   const remove = (f: ConfigFile) =>
     guard(async () => {
-      await deleteConfigDoc(cwd, f.path);
+      await deleteConfigDoc(cwd, kind, f.path);
       setView(null);
       setDraft((d) => (d?.path === f.path ? null : d));
       await reload();
@@ -321,19 +321,22 @@ function HooksSection({ cwd }: { cwd: string }) {
   const [rows, setRows] = useState<HookRow[]>([]);
   const [notes, setNotes] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  const seq = useRef(0);
 
   const load = useCallback(async () => {
     if (!cwd) return;
+    const my = ++seq.current;
     setLoading(true);
     const out: HookRow[] = [];
     const warn: string[] = [];
-    for (const f of [".claude/settings.json", ".claude/settings.local.json"]) {
-      const doc = await tryReadConfigDoc(cwd, f);
+    for (const f of ["settings.json", "settings.local.json"]) {
+      const doc = await readSettingsDoc(cwd, f);
       if (!doc) continue;
       const parsed = parseSettingsJson(doc.text);
       if (parsed.error) warn.push(`${f}: invalid JSON (${parsed.error})`);
-      else out.push(...hookRows(parsed.value, f.replace(".claude/", "")));
+      else out.push(...hookRows(parsed.value, f));
     }
+    if (my !== seq.current) return;
     setRows(out);
     setNotes(warn);
     setLoading(false);
@@ -384,7 +387,7 @@ export function SkillsPanel() {
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         const h = typeof d?.home === "string" ? d.home : "";
-        const m = /^(.*)[\\/]\.paseo[\\/]?$/.exec(h);
+        const m = /^(.*)[\\/]\.paseo[\\/]?$/i.exec(h);
         if (alive && m) setUserHome(m[1]);
       })
       .catch(() => {});
@@ -394,7 +397,9 @@ export function SkillsPanel() {
   }, []);
 
   const isUser = scope === USER_SCOPE;
-  const cwd = isUser ? userHome : scope === CUSTOM_SCOPE ? custom.trim() : scope;
+  const rawCwd = isUser ? userHome : scope === CUSTOM_SCOPE ? custom.trim() : scope;
+  const cwd = validScopeCwd(rawCwd) ? rawCwd : "";
+  const cwdBad = rawCwd !== "" && cwd === "";
 
   return (
     <div className="paseo-ops skills-panel" data-testid="paseo-panel-skills">
@@ -411,7 +416,7 @@ export function SkillsPanel() {
         {scope === CUSTOM_SCOPE && (
           <input data-testid="skills-custom-cwd" value={custom} placeholder="Absolute path of a project or worktree" onChange={(e) => setCustom(e.target.value)} />
         )}
-        <div className="muted small skills-cwd" data-testid="skills-cwd">{cwd || "(pick a project)"}</div>
+        <div className="muted small skills-cwd" data-testid="skills-cwd">{cwdBad ? "Not a normalized absolute path (no .. segments, no relative paths)." : cwd || "(pick a project)"}</div>
       </div>
 
       <ConfigSection kind="command" cwd={cwd} />
