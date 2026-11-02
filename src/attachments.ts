@@ -1,4 +1,5 @@
 import { useCallback, useSyncExternalStore } from "react";
+import { normalizeRepoPath } from "./fileLinks.ts";
 
 // Non-image files staged in the composer. They are chips only: the draft text is never touched.
 // On send, composeMessage() turns them into fenced blocks (small text) or uploaded path references.
@@ -21,7 +22,9 @@ export function isBinaryBytes(bytes: Uint8Array): boolean {
 }
 
 export function fenceFile(name: string, content: string): string {
-  const fence = content.includes("```") ? "~~~~" : "```";
+  // Longer than any backtick run inside the content, so the parser can find the matching opener.
+  const longest = Math.max(0, ...(content.match(/`+/g) ?? []).map((r) => r.length));
+  const fence = "`".repeat(Math.max(3, longest + 1));
   return `\n[file: ${name}]\n${fence}\n${content}\n${fence}\n`;
 }
 
@@ -47,21 +50,35 @@ export async function composeMessage(
   return out;
 }
 
-const BLOCK_RE = /\n?\[file: ([^\]\n]+)\]\n(```|~~~~)\n[\s\S]*?\n\2\n?/g;
-const REF_RE = /\n?\[attached file: ([^\]\n]+)\]\n?/g;
+const REF_TAIL_RE = /\n\[attached file: ([^\]\n]+)\]\n$/;
+const FENCE_TAIL_RE = /\n(`{3,})\n$/;
+const HEAD_RE = /\n\[file: ([^\]\n]+)\]$/;
 
-/** Split a sent message back into its text and attachment chips (for the timeline). */
+/**
+ * Split a sent message back into its text and attachment chips (for the timeline).
+ * Only the trailing suffix composeMessage emits is parsed, so the same markers in ordinary text are left alone.
+ */
 export function parseSentAttachments(text: string): { body: string; chips: SentChip[] } {
   const chips: SentChip[] = [];
-  let body = text.replace(BLOCK_RE, (_m, name: string) => {
-    chips.push({ name });
-    return "";
-  });
-  body = body.replace(REF_RE, (_m, path: string) => {
-    chips.push({ name: path.split(/[\/]/).pop() || path, path });
-    return "";
-  });
-  return { body: chips.length ? body.replace(/\s+$/, "") : text, chips };
+  let rest = text;
+  for (;;) {
+    const ref = REF_TAIL_RE.exec(rest);
+    if (ref) {
+      chips.push({ name: ref[1].split(/[\\/]/).pop() || ref[1], path: ref[1] });
+      rest = rest.slice(0, ref.index);
+      continue;
+    }
+    const close = FENCE_TAIL_RE.exec(rest);
+    if (!close) break;
+    const fence = close[1];
+    const open = rest.lastIndexOf("\n" + fence + "\n", close.index - 1);
+    if (open < 0) break;
+    const head = HEAD_RE.exec(rest.slice(0, open));
+    if (!head) break;
+    chips.push({ name: head[1] });
+    rest = rest.slice(0, head.index);
+  }
+  return { body: chips.length ? rest.replace(/\s+$/, "") : text, chips: chips.reverse() };
 }
 
 // ── tiny per-agent store so Composer and AgentDrawer share the staged list ──
@@ -113,6 +130,8 @@ export function setAgentCwd(id: string, cwd: string | undefined) {
 export function repoPathFor(agentId: string, p: string): string | null {
   const norm = p.split("\\").join("/");
   const base = (cwds.get(agentId) ?? "").split("\\").join("/").replace(/\/$/, "");
-  const rel = base && norm.startsWith(base + "/") ? norm.slice(base.length + 1) : norm;
-  return rel.startsWith("/") || /^[A-Za-z]:/.test(rel) ? null : rel;
+  // Windows drive letters / paths are case-insensitive.
+  const ci = /^[A-Za-z]:/.test(base) || /^[A-Za-z]:/.test(norm);
+  const inside = base && (ci ? norm.toLowerCase().startsWith(base.toLowerCase() + "/") : norm.startsWith(base + "/"));
+  return normalizeRepoPath(inside ? norm.slice(base.length + 1) : norm);
 }

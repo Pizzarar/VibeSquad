@@ -347,7 +347,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
           await sendMessage(agent.id, text, undefined, { activeTurnBehavior: behavior });
         }
         atts.clear();
-        if (agent.status === "running" && behavior === "steer") setLastSteered(base);
+        if (agent.status === "running" && behavior === "steer") setLastSteered(base || "(files)");
         return true;
       },
     });

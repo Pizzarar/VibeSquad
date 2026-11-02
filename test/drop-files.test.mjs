@@ -66,3 +66,38 @@ test("formatSize", () => {
   assert.equal(formatSize(12), "12 B");
   assert.equal(formatSize(2048), "2 KB");
 });
+
+const roundTrip = async (text, files) => {
+  const items = files.map((f) => ({ name: f.name, size: f.size, file: f }));
+  return parseSentAttachments(await composeMessage(text, items, async ({ name }) => `/repo/up/${name}`));
+};
+
+test("repoPathFor confines chips to the repo, case-insensitive on Windows drives", async () => {
+  const { setAgentCwd, repoPathFor } = await import("../src/attachments.ts");
+  const win = (s) => s.replaceAll("/", String.fromCharCode(92));
+  setAgentCwd("w1", win("C:/Users/me/repo"));
+  assert.equal(repoPathFor("w1", win("c:/users/me/repo/src/a.ts")), "src/a.ts");
+  assert.equal(repoPathFor("w1", "C:/Users/me/repo/src/a.ts"), "src/a.ts");
+  assert.equal(repoPathFor("w1", win("C:/Users/me/repo/../../x")), null);
+  assert.equal(repoPathFor("w1", "../../etc/passwd"), null);
+  assert.equal(repoPathFor("w1", "~/secret"), null);
+  assert.equal(repoPathFor("w1", win("D:/other/a.ts")), null);
+  assert.equal(repoPathFor("w1", "src/a.ts"), "src/a.ts");
+});
+
+test("parseSentAttachments leaves inline [attached file: x] in plain text alone", () => {
+  const t = "see [attached file: x] and\n[attached file: y]\nmore text";
+  assert.deepEqual(parseSentAttachments(t), { body: t, chips: [] });
+});
+
+test("md attachment containing ``` and ~~~~ round-trips without spilling", async () => {
+  const md = "# t\n```js\nx\n```\n~~~~\ny\n~~~~\n````\nz\n````\n";
+  const r = await roundTrip("hi [attached file: x]", [mk("n.md", md), mk("b.bin", new Uint8Array([0]))]);
+  assert.equal(r.body, "hi [attached file: x]");
+  assert.deepEqual(r.chips, [{ name: "n.md" }, { name: "b.bin", path: "/repo/up/b.bin" }]);
+});
+
+test("chips-only steer keeps a non-empty steered label", async () => {
+  const fs = await import("node:fs");
+  assert.match(fs.readFileSync(new URL("../src/AgentDrawer.tsx", import.meta.url), "utf8"), /setLastSteered\(base \|\| "\(files\)"\)/);
+});
