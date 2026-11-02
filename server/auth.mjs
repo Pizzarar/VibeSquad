@@ -322,9 +322,10 @@ export function getTls() {
   return tlsCache;
 }
 
+// Read-only: never creates the CA. Unauthenticated GETs (/ca.crt, auth/status, devices) reach this, so CA creation
+// stays with getTls(): LAN/meshnet startup and POST /__vibesquad/pair/start.
 export function caCrtPem() {
   const file = join(tlsDir(), "ca.crt");
-  if (!existsSync(file)) try { getTls(); } catch {}
   return existsSync(file) ? readFileSync(file) : null;
 }
 
@@ -622,6 +623,21 @@ export function discardPairCode(rawCode) {
   const raw = String(rawCode ?? "").trim();
   codes.delete(raw);
   codes.delete(raw.replace(/[-\s]/g, ""));
+}
+
+/**
+ * Plain-HTTP /pair: burns the code under the same per-IP limits as /pair redeem, so a LAN host can't sweep the
+ * code space over HTTP to wipe the real one. A miss counts as a failure; a locked or throttled IP burns nothing.
+ */
+export function discardPlainHttpPairCode(rawCode, ip) {
+  const key = String(ip ?? "unknown").replace(/^::ffff:/, "");
+  if (pairLockRemainingMs(key) > 0 || pairRateLimited(key)) return false;
+  const raw = String(rawCode ?? "").trim();
+  if (!raw) return false;
+  const existed = codes.has(raw) || codes.has(raw.replace(/[-\s]/g, ""));
+  discardPairCode(raw);
+  if (!existed) recordPairFailure(key);
+  return existed;
 }
 
 function sweepCodes() {

@@ -15,7 +15,7 @@ import {
 } from "./vibesquad-api.mjs";
 import {
   authenticate,
-  discardPairCode,
+  discardPlainHttpPairCode,
   getLocalToken,
   getTls,
   mintLocalLoginNonce,
@@ -389,7 +389,7 @@ export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().mes
     }
     if (path === "/pair" && req.method === "GET") {
       // The code just crossed the LAN in cleartext: burn it and keep it out of the redirect.
-      discardPairCode(new URL(req.url ?? "/", "http://x").searchParams.get("code"));
+      discardPlainHttpPairCode(new URL(req.url ?? "/", "http://x").searchParams.get("code"), req.socket?.remoteAddress);
       res.statusCode = 302;
       res.setHeader("location", `https://${target(req)}/pair`);
       res.setHeader("cache-control", "no-store, no-cache, must-revalidate");

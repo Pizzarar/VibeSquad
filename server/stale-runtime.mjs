@@ -55,6 +55,11 @@ export function getStale({ rootDir, env = process.env, now = Date.now(), compute
   return value;
 }
 
+/** Last cached value only: no git, no stale.json write (the read-only /health path). */
+export function peekStale() {
+  return cached.value;
+}
+
 export function resetStaleCache() {
   cached = { at: 0, value: null };
 }

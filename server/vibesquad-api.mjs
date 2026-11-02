@@ -1,5 +1,5 @@
 import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { getStale } from "./stale-runtime.mjs";
+import { getStale, peekStale } from "./stale-runtime.mjs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
@@ -340,6 +340,41 @@ export function isGatedRead(path, url = "") {
   return false;
 }
 
+const READ_ONLY_CACHE_MS = 30_000;
+
+/**
+ * Ungated GETs that shell out (`--version`s, `paseo status`/`ls`): a read-only caller shares one in-flight run and
+ * reuses its result for READ_ONLY_CACHE_MS, so it can't make the server spawn more than one process per route per
+ * window. Owners always run fresh (and refresh the cache); `.clear()` drops it after an owner write.
+ */
+export function createReadOnlyCache(ttlMs = READ_ONLY_CACHE_MS, now = () => Date.now()) {
+  const entries = new Map(); // key -> { at, promise }
+  const cached = (key, owner, run) => {
+    const hit = entries.get(key);
+    if (!owner && hit && (hit.at === null || now() - hit.at < ttlMs)) return hit.promise;
+    const entry = { at: null, promise: null };
+    entry.promise = Promise.resolve()
+      .then(run)
+      .finally(() => {
+        entry.at = now();
+      });
+    entries.set(key, entry);
+    return entry.promise;
+  };
+  cached.clear = () => entries.clear();
+  return cached;
+}
+
+/** WebPush endpoints are capability URLs (whoever has one can push to that device): only the push service origin leaves. */
+export function redactPushEndpoint(endpoint) {
+  try {
+    const u = new URL(String(endpoint));
+    return u.protocol === "https:" || u.protocol === "http:" ? `${u.origin}/…` : `${u.protocol}//${u.host}`;
+  } catch {
+    return null;
+  }
+}
+
 export function handleHealth(req, res, rootDir = REPO_ROOT) {
   if (req.method !== "GET" && req.method !== "HEAD") {
     res.statusCode = 405;
@@ -354,7 +389,8 @@ export function handleHealth(req, res, rootDir = REPO_ROOT) {
     port,
     lanEnabled: exposure.lanEnabled,
     exposedIps: exposure.exposedIps,
-    stale: getStale({ rootDir }),
+    // Read-only callers (incl. the remote proxy) get the cached value: git + stale.json stay with the owner and startup.
+    stale: isOwner(req) ? getStale({ rootDir }) : peekStale(),
     ...(warnings.length ? { configWarnings: warnings } : {}),
   };
   if (!distReady) return sendJson(res, 503, { ok: false, distReady: false, error: "dist/index.html missing", ...extra });
@@ -963,7 +999,7 @@ function handlePushStatus(req, res) {
     desktopCount,
     subscriptions: subs.map((s) => ({
       type: s.type || "webpush",
-      endpoint: s.endpoint,
+      endpoint: redactPushEndpoint(s.endpoint),
       deviceName: s.deviceName || null,
       updatedAt: s.updatedAt || null,
     })),
@@ -1342,8 +1378,12 @@ async function handleWorkspacePackageScripts(req, res, rootDir, opts = {}) {
 // Everything except health, /ca.crt, /pair and /__vibesquad/local-login needs a paired device or a same-origin loopback
 // caller; a loopback caller without the local token is read-only (GET/HEAD, minus isGatedRead).
 export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
+  const readOnlyCache = createReadOnlyCache(opts.readOnlyCacheMs);
   return (req, res, next) => {
     const path = (req.url ?? "").split("?")[0];
+    const cachedRead = (run) => readOnlyCache(path, isOwner(req), run);
+    // An owner write (install, toggle, daemon restart) can change what those reads return.
+    if (req.method !== "GET" && req.method !== "HEAD" && isOwner(req)) readOnlyCache.clear();
     if (path === "/api/health" || path === "/__vibesquad/health") return handleHealth(req, res, rootDir);
     if (path === "/ca.crt") return handleCaCrt(req, res);
     if (path === "/pair") return handlePairRedeem(req, res);
@@ -1380,7 +1420,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return handleTeams(req, res, rootDir);
       case "/__vibesquad/first-run/status":
         if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
-        return inspectFirstRunStatus(opts.firstRun).then((st) => sendJson(res, 200, st), (e) => sendJson(res, 500, { error: String(e?.message ?? e) }));
+        return cachedRead(() => inspectFirstRunStatus(opts.firstRun)).then((st) => sendJson(res, 200, st), (e) => sendJson(res, 500, { error: String(e?.message ?? e) }));
       case "/__vibesquad/first-run/install-paseo":
         if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
         return startManagedPaseoInstall(opts.firstRun).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { error: String(e?.message ?? e) }));
@@ -1442,7 +1482,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
           .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
       case "/__vibesquad/paseo/status":
         if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
-        return getPaseoDaemonStatus(opts.paseo).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
+        return cachedRead(() => getPaseoDaemonStatus(opts.paseo)).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
       case "/__vibesquad/paseo/daemon":
         if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
         return readBody(req)
@@ -1451,11 +1491,14 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
           .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
       case "/__vibesquad/paseo/usage":
         if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
-        return getPaseoUsage({ ...(opts.paseo || {}), refresh: new URL(req.url, "http://x").searchParams.get("refresh") === "1" })
+        if (new URL(req.url, "http://x").searchParams.get("refresh") === "1") {
+          return getPaseoUsage({ ...(opts.paseo || {}), refresh: true }).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
+        }
+        return cachedRead(() => getPaseoUsage({ ...(opts.paseo || {}), refresh: false }))
           .then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
       case "/__vibesquad/paseo/providers":
         if (req.method === "GET") {
-          return getPaseoProviders(opts.paseo).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
+          return cachedRead(() => getPaseoProviders(opts.paseo)).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
         }
         if (req.method === "POST") {
           return readBody(req)
@@ -1477,7 +1520,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
           .then((r) => sendJson(res, 200, r), (e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
       case "/__vibesquad/paseo/plugins":
         if (req.method === "GET") {
-          return getPaseoPlugins(opts.paseo).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
+          return cachedRead(() => getPaseoPlugins(opts.paseo)).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
         }
         if (req.method === "POST") {
           return readBody(req)
