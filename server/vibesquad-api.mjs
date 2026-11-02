@@ -898,6 +898,27 @@ async function handlePushUnsubscribe(req, res) {
   }
 }
 
+function handlePushStatus(req, res) {
+  if (req.method !== "GET") {
+    res.statusCode = 405;
+    return res.end();
+  }
+  const subs = readPushSubscriptions();
+  const desktopCount = subs.filter((s) => s.type === "desktop").length;
+  return sendJson(res, 200, {
+    ok: true,
+    count: subs.length,
+    webPushCount: subs.length - desktopCount,
+    desktopCount,
+    subscriptions: subs.map((s) => ({
+      type: s.type || "webpush",
+      endpoint: s.endpoint,
+      deviceName: s.deviceName || null,
+      updatedAt: s.updatedAt || null,
+    })),
+  });
+}
+
 async function handlePushTest(req, res) {
   if (req.method !== "POST") {
     res.statusCode = 405;
@@ -1336,6 +1357,8 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return handlePushSubscribe(req, res);
       case "/__vibesquad/push/unsubscribe":
         return handlePushUnsubscribe(req, res);
+      case "/__vibesquad/push/status":
+        return handlePushStatus(req, res);
       case "/__vibesquad/push/test":
         return handlePushTest(req, res);
       case "/__vibesquad/profiles":
