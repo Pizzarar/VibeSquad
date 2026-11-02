@@ -77,9 +77,19 @@ export function agentCtxItems(m: { id: string; cwd?: string | null }, a: { open:
   ];
 }
 
-export function messageCtxItems(text: string, agentId: string, park?: (t: string) => void): CtxItem[] {
-  const items: CtxItem[] = [{ label: "Copy Message Text", run: () => void navigator.clipboard?.writeText(text) }];
-  if (park && text.trim()) items.push({ label: "Park in Inbox", run: () => park(text) });
+// Selected text inside `root` (the message element), or "" when the selection is empty or elsewhere.
+export function selectionWithin(root: Element | null): string {
+  const sel = typeof window !== "undefined" ? window.getSelection?.() : null;
+  if (!root || !sel || sel.isCollapsed || !sel.anchorNode || !root.contains(sel.anchorNode)) return "";
+  return sel.toString();
+}
+
+// Whole-message copy lives only on the hover "Copy" button; the menu copies just the highlight.
+export function messageCtxItems(text: string, agentId: string, park?: (t: string) => void, selected = ""): CtxItem[] {
+  const items: CtxItem[] = [];
+  if (selected.trim()) items.push({ label: "Copy", run: () => void navigator.clipboard?.writeText(selected) });
+  const parked = selected.trim() ? selected : text;
+  if (park && parked.trim()) items.push({ label: "Park in Inbox", run: () => park(parked) });
   items.push({ label: "Copy Agent ID", run: () => void navigator.clipboard?.writeText(agentId) });
   return items;
 }
