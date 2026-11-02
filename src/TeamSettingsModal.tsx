@@ -341,7 +341,7 @@ export function TeamSettingsModal({
           ))}
         </section>
       )}
-      {show("account") && <section className="ts-team" data-testid="user-name-section">
+      {show("account") && <section className="ts-team" data-testid="user-name-section" data-setting-id="user-name">
         <div className="field-label">YOUR NAME</div>
         <div className="muted small">Shown on NEEDS badges, the owner feed entries and push notifications.</div>
         <input
@@ -355,7 +355,7 @@ export function TeamSettingsModal({
           }}
         />
       </section>}
-      {show("account") && <section className="ts-team" data-testid="lan-access-section">
+      {show("account") && <section className="ts-team" data-testid="lan-access-section" data-setting-id="lan">
         <div className="ts-scale-head">
           <div>
             <div className="field-label">ALLOW OTHER DEVICES (HOME LAN / MESHNET)</div>
@@ -471,7 +471,7 @@ export function TeamSettingsModal({
       {show("paseo") && embedded && !isHostMode && (
         <div className="muted small" data-testid="paseo-settings-remote">Paseo settings live on the host machine; this device is connected remotely.</div>
       )}
-      {show("profiles") && <section className="ts-team" data-testid="profiles-settings-section">
+      {show("profiles") && <section className="ts-team" data-testid="profiles-settings-section" data-setting-id="profiles">
         <div className="ts-scale-head" style={{ marginBottom: 8 }}>
           <div>
             <div className="field-label">AGENT PROFILES (~/.vibesquad/profiles.json · {profiles.length} profiles)</div>
@@ -485,6 +485,7 @@ export function TeamSettingsModal({
               type="button"
               className="btn small"
               data-testid="open-paseo-sync-btn"
+              data-setting-id="profile-import"
               onClick={() => setShowImportModal(true)}
             >
               Re-import / Sync from Paseo
@@ -574,7 +575,8 @@ export function TeamSettingsModal({
       {showImportModal && <ProfileImportModal onClose={() => setShowImportModal(false)} />}
       {show("teams") && <>
       {teams.map((t, i) => (
-        <section key={i} className="ts-team" style={{ borderLeftColor: t.color }}>
+        // Settings-home jump anchors go on the first team only, so each id stays unique.
+        <section key={i} className="ts-team" style={{ borderLeftColor: t.color }} data-setting-id={i === 0 ? "teams" : undefined}>
           <div className="row2">
             <Field label="ID">
               <input value={t.id} onChange={(e) => patch(i, { id: e.target.value })} />
@@ -601,7 +603,7 @@ export function TeamSettingsModal({
             />{" "}
             Vibe mode: Buddy auto-dispatches bug fixes, approved plan blocks and parity gaps; features and outward actions wait in one digest
           </label>
-          <div className="row2">
+          <div className="row2" data-setting-id={i === 0 ? "token-thresholds" : undefined}>
             <Field label="Brainstorm warn tokens (amber)">
               <input
                 type="number"
@@ -666,7 +668,7 @@ export function TeamSettingsModal({
           <button className="btn ghost small" onClick={() => patch(i, { lanes: [...t.lanes, { id: "", name: "" }] })}>
             + lane
           </button>
-          <div className="field-label">PATH MATCHERS (folder segment; trailing - = prefix)</div>
+          <div className="field-label" data-setting-id={i === 0 ? "path-matchers" : undefined}>PATH MATCHERS (folder segment; trailing - = prefix)</div>
           {t.paths.map((p, k) => (
             <div key={k} className="row-lane paths">
               <input value={p} onChange={(e) => patch(i, { paths: t.paths.map((x, j) => (j === k ? e.target.value : x)) })} />

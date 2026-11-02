@@ -16,7 +16,7 @@ import {
 } from "./teams";
 import { freezeLaneCodes } from "./identity";
 import { useDraft } from "./drafts";
-import { getPref } from "./prefs";
+import { defaultNewAgentProfile, getPref, reapplyDefaultProfile } from "./prefs";
 import { findProfile, getProfiles, useProfiles, type Profile, type Role } from "./profiles";
 
 export { TeamSettingsModal, ProfileImportModal, ARCHETYPES } from "./TeamSettingsModal";
@@ -103,12 +103,21 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   const { profiles, installedProviders } = useProfiles();
   const team = view.team;
   // Settings › New Agent defaults prefill profile and folder (empty = the built-in choice).
-  const [profileName, setProfileName] = useState(() => {
-    const pref = getPref("newAgent.profile");
-    return (pref && findProfile(pref, profiles)?.name) || "Implement - Sonnet";
-  });
+  const resolveProfile = (name: string) => findProfile(name, profiles)?.name;
+  const [profileName, setProfileName] = useState(() => defaultNewAgentProfile(getPref("newAgent.profile"), resolveProfile));
   const profile = findProfile(profileName, profiles) ?? profiles[0]!;
   const [role, setRole] = useState<Role>(profile.role);
+  // The modal can open before /__vibesquad/profiles loads: re-apply a custom default once they arrive,
+  // unless the user already chose a profile or role.
+  const userPickedProfile = useRef(false);
+  useEffect(() => {
+    const next = reapplyDefaultProfile(profileName, getPref("newAgent.profile"), resolveProfile, userPickedProfile.current);
+    const p = next ? findProfile(next, profiles) : undefined;
+    if (!p) return;
+    setProfileName(p.name);
+    setRole(p.role);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when the profile list changes
+  }, [profiles]);
   const [laneId, setLaneId] = useState(shownLanesOf(team)[0]?.id ?? "");
   const [ord, setOrd] = useState("1");
   const [topic, setTopic, clearTopic] = useDraft(`new-agent:${team.id}:topic`);
@@ -247,6 +256,7 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   }, [dirs, cwd]);
 
   const pickProfile = (name: string) => {
+    userPickedProfile.current = true;
     const p = findProfile(name, profiles) ?? profiles[0]!;
     setProfileName(p.name);
     setRole(p.role);
@@ -393,7 +403,13 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
           </div>
           <div className="row2">
             <Field label="ROLE">
-              <select value={role} onChange={(e) => setRole(e.target.value as Role)}>
+              <select
+                value={role}
+                onChange={(e) => {
+                  userPickedProfile.current = true;
+                  setRole(e.target.value as Role);
+                }}
+              >
                 <option value="lead">lead</option>
                 <option value="brainstorm">brainstorm</option>
                 <option value="worker">worker</option>

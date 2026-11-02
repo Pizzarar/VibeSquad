@@ -391,6 +391,14 @@ export async function sendTestPush(overrides = {}) {
   return broadcastWebPush(payload);
 }
 
+const PUSH_KIND_PREF = { permission: "permission", "needs-you": "needsYou", [LEGACY_NEEDS_LABEL]: "needsYou", finished: "finished", error: "errored" };
+
+/** Settings › Notifications per-event toggles: false skips that kind. Missing/unknown = send. */
+export function pushKindEnabled(kind, pushEvents = loadUserSettings().pushEvents) {
+  const key = PUSH_KIND_PREF[kind];
+  return !key || pushEvents?.[key] !== false;
+}
+
 /**
  * Pure transition detector for Paseo daemon agent updates.
  * Deduplicates per `(agentId, eventKey)` using `dedupeSet`.
@@ -510,7 +518,7 @@ export function startPushWatcher(rootDir = REPO_ROOT) {
 
     const notes = evaluateAgentTransition(prev, agent, dedupeSet);
     for (const note of notes) {
-      broadcastWebPush(note).catch(() => {});
+      if (pushKindEnabled(note.kind)) broadcastWebPush(note).catch(() => {});
     }
   };
 
@@ -524,7 +532,7 @@ export function startPushWatcher(rootDir = REPO_ROOT) {
       const fullKey = `${event.agentId}::perm:${pid}`;
       if (!dedupeSet.has(fullKey)) {
         dedupeSet.add(fullKey);
-        broadcastWebPush({
+        if (pushKindEnabled("permission")) broadcastWebPush({
           title: "VibeSquad · Permission Needed",
           body: `${agent.title || event.agentId}: approval requested`,
           url: `/?agent=${encodeURIComponent(event.agentId)}&focus=needs-you`,

@@ -112,6 +112,16 @@ export function readJsonFileWithBom(
   }
 }
 
+// Settings › Notifications per-event toggles, mirrored here so the push watcher can honour them.
+// Only explicit booleans are kept; a missing or unknown key means "send" (the old behaviour).
+export const PUSH_EVENT_KEYS = ["permission", "needsYou", "finished", "errored"];
+export function normalizePushEvents(value) {
+  const out = {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) return out;
+  for (const k of PUSH_EVENT_KEYS) if (typeof value[k] === "boolean") out[k] = value[k];
+  return out;
+}
+
 export function normalizeUserName(value) {
   const name = typeof value === "string" ? value.trim().slice(0, MAX_NAME).trim() : "";
   return name || DEFAULT_USER_NAME;
@@ -141,6 +151,8 @@ export function loadUserSettings(baseHome) {
   if (typeof res.data.startPaseoWithVibeSquad === "boolean") {
     out.startPaseoWithVibeSquad = res.data.startPaseoWithVibeSquad;
   }
+  const pushEvents = normalizePushEvents(res.data.pushEvents);
+  if (Object.keys(pushEvents).length) out.pushEvents = pushEvents;
   return out;
 }
 
@@ -159,6 +171,8 @@ export function saveUserSettings(patch, baseHome) {
     next.startPaseoWithVibeSquad =
       patch && "startPaseoWithVibeSquad" in patch ? Boolean(patch.startPaseoWithVibeSquad) : Boolean(current.startPaseoWithVibeSquad);
   }
+  const pushEvents = normalizePushEvents(patch && "pushEvents" in patch ? patch.pushEvents : current.pushEvents);
+  if (Object.keys(pushEvents).length) next.pushEvents = pushEvents;
   mkdirSync(baseHome || vibesquadHome(), { recursive: true });
   writeFileSync(file, JSON.stringify(next, null, 2) + "\n", "utf8");
   clearConfigWarning(file);

@@ -3589,14 +3589,13 @@ button.file-chip { cursor: pointer; font: inherit; }
 .settings-pane h2 { font-family: var(--arcade); color: var(--cyan); font-size: 13px; letter-spacing: 1px; margin: 0 0 10px; font-weight: 400; display: flex; align-items: center; gap: 8px; }
 .settings-pane h2 .btn { margin-left: auto; }
 .settings-row { display: flex; align-items: center; gap: 12px; padding: 8px 6px; border-bottom: 1px solid var(--line); }
-.settings-row.flash { outline: 1px solid var(--cyan); background: var(--cyan-dim); }
+.settings-pane [data-flash] { outline: 1px solid var(--cyan); background: var(--cyan-dim); }
 .settings-row-text { flex: 1; min-width: 0; }
 .settings-row-label { font-weight: 700; }
 .settings-row-control { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .settings-row-control input:not([type="checkbox"]), .settings-row-control select { width: 220px; }
 .settings-row-control input[type="number"] { width: 80px; }
 .settings-note { border-left: 3px solid var(--cyan); padding: 6px 10px; margin: 0 0 12px; background: var(--cyan-dim); }
-.settings-hit { display: flex; justify-content: space-between; width: 100%; text-align: left; }
 .settings-embedded .modal-foot { position: sticky; bottom: -14px; background: var(--panel); }
 @media (max-width: 599px) {
   /* Full screen, above the mobile bottom bar (z 80) so the footer stays reachable. */
