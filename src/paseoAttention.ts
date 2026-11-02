@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 import { daemonClient, DEMO, getPaseoState } from "./paseo";
 import { alertEnabled, getPrefs } from "./prefs";
 import { playAlertChime } from "./notifications";
-import { attentionOf, type Member } from "./teams";
+import { attentionOf, kindOf, type Member } from "./teams";
 import { createAlertDedupe, decideEvent, workspaceToClear, type AlertTone } from "./paseoAttentionCore";
 
 const dedupe = createAlertDedupe();
@@ -25,7 +25,7 @@ export function usePaseoAttention(members: Member[]) {
       const m = ref.current.find((x) => x.agent.id === ev.agentId);
       if ("Notification" in window && Notification.permission === "granted") {
         const title = m ? `${m.team.name}: ${m.agent.title ?? "agent"}` : (ev.notification?.title ?? "Agent needs you");
-        new Notification(title, { body: m?.attention?.reason ?? ev.notification?.body ?? ev.reason, tag: ev.agentId });
+        new Notification(title, { body: (m?.attention?.tone === ev.reason ? m.attention.reason : undefined) ?? ev.notification?.body ?? ev.reason, tag: ev.agentId });
       }
       if (prefs["notify.sound"]) playAlertChime();
     });
@@ -38,7 +38,7 @@ export async function clearWorkspaceIfQuiet(agentId: string): Promise<void> {
   const agents = [...getPaseoState().agents.values()] as Array<{ id: string; workspaceId?: string }>;
   const ws = workspaceToClear(agentId, agents, (a) => {
     const full = a as unknown as Parameters<typeof attentionOf>[0];
-    return !(full as { archivedAt?: unknown }).archivedAt && full.status !== "closed" && !!attentionOf(full);
+    return !(full as { archivedAt?: unknown }).archivedAt && full.status !== "closed" && kindOf(full) !== "old-lead" && !!attentionOf(full);
   });
   if (!ws) return;
   try {
