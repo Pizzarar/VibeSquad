@@ -41,6 +41,8 @@ export type Pin = {
   contextUsed: number;
   /** Live topic Brainstorms for this lane. */
   topicBrainstorms: Member[];
+  /** Further live main Buddies besides `brainstorm` (should be none; the pin warns, docs/PLAN_BUGS_BATCH2.md block 0). */
+  duplicateBrainstorms?: Member[];
 };
 
 export type PinResolution =
@@ -84,10 +86,51 @@ export function pinsForSquad(view: TeamView): { pinned: Pin[]; done: Pin[] } {
         running: l.members.filter((m) => m.agent.status === "running").length,
         contextUsed: brainstorm ? brainstormUsedTokens(brainstorm.agent) : 0,
         topicBrainstorms: (l.topicBrainstorms ?? []).filter(isLive),
+        duplicateBrainstorms: live(l.duplicateBrainstorms ?? []),
       };
     })
     .sort((a, b) => a.order - b.order);
   return { pinned: pins.filter((p) => p.state === "pinned"), done: pins.filter((p) => p.state === "done") };
+}
+
+/** Every live main Buddy of the pin when there are 2+ (the duplicate warning lists them), else []. */
+export function liveBuddyDupes(pin: Pin): Member[] {
+  const all = [pin.brainstorm, ...(pin.duplicateBrainstorms ?? [])].filter(isLive);
+  return all.length > 1 ? all : [];
+}
+
+export type KeepBuddyDeps = {
+  /** Detach a Buddy's live children so a later archive can't cascade to its lead. */
+  detachChildren: (buddyId: string) => Promise<unknown>;
+  /** Relabel one Buddy (name + labels patch). */
+  update: (id: string, updates: { name?: string; labels: Record<string, string> }) => Promise<unknown>;
+};
+
+/**
+ * "Keep this one" on the duplicate-Buddy warning: retire every other live main Buddy of the pin
+ * (children detached, "(old)" title, former-brainstorm, vs.restarted-into=<kept id>). Nothing is archived.
+ * A failure on one Buddy doesn't stop the rest.
+ */
+export async function keepBuddy(pin: Pin, keepId: string, deps: KeepBuddyDeps): Promise<{ retired: string[]; failed: string[] }> {
+  const retired: string[] = [];
+  const failed: string[] = [];
+  const dupes = liveBuddyDupes(pin);
+  if (!dupes.some((m) => m.agent.id === keepId)) return { retired, failed };
+  for (const m of dupes) {
+    if (m.agent.id === keepId) continue;
+    const title = (m.agent.title ?? "").trim() || "Buddy";
+    try {
+      await deps.detachChildren(m.agent.id);
+      await deps.update(m.agent.id, {
+        ...(title.toLowerCase().startsWith("(old)") ? {} : { name: `(old) ${title}` }),
+        labels: { role: "former-brainstorm", "vs.restarted-into": keepId },
+      });
+      retired.push(m.agent.id);
+    } catch {
+      failed.push(m.agent.id);
+    }
+  }
+  return { retired, failed };
 }
 
 /** Decide what clicking a pin does: open the live Brainstorm, or quick-start one from the brief. */

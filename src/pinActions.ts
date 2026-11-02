@@ -1,12 +1,13 @@
 // Pinned teams step 3 (docs/PLAN_PINNED_FEATURES.md §3): the side-effecting half of the pin resolver.
 // src/pins.ts stays pure; this file talks to the dev-server middleware and the teams store.
 import type { PaseoAgent } from "@getpaseo/client";
-import { DEMO, archiveAgent, archiveWorkspace, getPaseoState, retireAgent, sendMessage, upsertLocalAgent } from "./paseo";
+import { DEMO, archiveAgent, archiveWorkspace, detachAgent, getPaseoState, retireAgent, sendMessage, updateAgent, upsertLocalAgent } from "./paseo";
 import { parkIdeasInInbox } from "./IdeaInbox";
 import {
   allLaneIds,
   appendBriefLine,
   bestOverlap,
+  keepBuddy,
   briefStamp,
   DEFAULT_PIN_PROFILE,
   newPinBrief,
@@ -211,6 +212,23 @@ export function markPinComplete(pin: Pin, deps: CompleteDeps = {}): Promise<{ ok
 export async function reopenPin(pin: Pin, deps: Pick<CompleteDeps, "fetch" | "saveTeams"> = {}): Promise<void> {
   await (deps.saveTeams ?? saveTeams)((cur) => patchLane(cur, pin.squad.id, pin.lane.id, { state: "pinned", doneAt: undefined }));
   if (!DEMO) await appendToBrief(pin.lane.id, `Reopened ${briefStamp()}`, deps.fetch ?? fetch).catch(() => {});
+}
+
+// ── Duplicate Buddies (docs/PLAN_BUGS_BATCH2.md block 0) ──────────────────────
+
+const PARENT_LABEL = "paseo.parent-agent-id";
+
+/** "Keep this one": retire the pin's other live Buddies (no archive). Their live children are detached first. */
+export function keepPinBuddy(pin: Pin, keepId: string): Promise<{ retired: string[]; failed: string[] }> {
+  return keepBuddy(pin, keepId, {
+    detachChildren: async (buddyId) => {
+      for (const a of getPaseoState().agents.values()) {
+        if (a.archivedAt || a.status === "closed" || (a.labels as Record<string, string> | undefined)?.[PARENT_LABEL] !== buddyId) continue;
+        await detachAgent(a.id);
+      }
+    },
+    update: (id, updates) => updateAgent(id, updates),
+  });
 }
 
 // ── Remove team (docs/PLAN_BUGS_BATCH1.md block 1) ────────────────────────────

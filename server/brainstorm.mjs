@@ -7,7 +7,7 @@ import { effectiveAgentRole, findLaneInRegistry, formatDisplayTitle, isRetiredAg
 import { findProfileOrFallback, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
 import { briefRootFor, laneWorkingDir } from "./brief-path.mjs";
-import { detachLiveChildrenViaClient } from "./detach-children.mjs";
+import { detachLiveChildrenViaClient, listDaemonAgents } from "./detach-children.mjs";
 import { BRIEF_HISTORY_KEEP, BRIEF_SHRINK_FROM, BRIEF_SHRINK_TO, backupBrief, writeBriefFile } from "./brief-write.mjs";
 import { liveInFlightBlock } from "./in-flight.mjs";
 import { refreshWhosHere } from "./whos-here.mjs";
@@ -299,6 +299,44 @@ export function findExistingLaneBrainstorm(agents, laneId, topic = "") {
   const closed = (a) => (a.status === "closed" ? 1 : 0);
   matches.sort((a, b) => closed(a) - closed(b) || String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")));
   return matches[0] ?? null;
+}
+
+const retiredTitleOf = (title) => {
+  const t = String(title || "").trim() || "Buddy";
+  return t.toLowerCase().startsWith("(old)") ? t : `(old) ${t}`;
+};
+
+/**
+ * Backstop for one main Buddy per (team, lane, topic) (docs/PLAN_BUGS_BATCH2.md block 0): after a real
+ * spawn of `newId`, retire every other unarchived role=brainstorm in the lane, live or closed. Closed
+ * ones matter most: the plugin's agent.created retire skips them, so a closed old Buddy kept
+ * role=brainstorm and came back when messaged. Retire = cancel (if live), "(old)" title,
+ * former-brainstorm + vs.restarted-into, then archive with its children detached. Never throws.
+ */
+export async function retireOtherLaneBuddies(client, { newId, teamId, laneId, topic = "", exceptIds = [] }) {
+  const retired = [];
+  if (!client || !newId || !laneId) return retired;
+  const agents = await listDaemonAgents(client);
+  const wantLane = String(laneId).toLowerCase();
+  const wantTeam = String(teamId || "").toLowerCase();
+  const wantTopic = String(topic || "").trim().toLowerCase();
+  const skip = new Set([newId, ...exceptIds]);
+  for (const a of agents) {
+    if (!a?.id || skip.has(a.id) || a.archivedAt || restartedAgents.has(a.id)) continue;
+    const labels = a.labels ?? {};
+    if (effectiveAgentRole({ labels }) !== "brainstorm") continue;
+    if (String(labels.lane || labels.lead || "").trim().toLowerCase() !== wantLane) continue;
+    if (wantTeam && labels.team && String(labels.team).toLowerCase() !== wantTeam) continue;
+    if (parseBrainstormTopic(a) !== wantTopic) continue;
+    restartedAgents.set(a.id, { newAgentId: newId, ts: Date.now(), tokens: 0 });
+    if (a.status !== "closed") await client.cancelAgent?.(a.id)?.catch?.(() => {});
+    const retiredLabels = { ...labels, role: "former-brainstorm", "vs.restarted-into": newId };
+    await client.updateAgent?.(a.id, { name: retiredTitleOf(a.title), labels: retiredLabels })?.catch?.(() => {});
+    await archiveBuddyKeepingChildren(client, a.id);
+    console.log(`[vibesquad] retired duplicate Buddy ${a.id} in ${teamId}/${laneId} (into ${newId})`);
+    retired.push(a.id);
+  }
+  return retired;
 }
 
 // Pinned-team quick start (docs/PLAN_PINNED_FEATURES.md §3): concurrent "start-brainstorm" calls for the
@@ -631,6 +669,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
     }
 
     timer.mark("createAgent");
+    const spawned = Boolean(created?.id);
     if (!created) {
       created = {
         id: `bs-${laneId}-${Date.now().toString(36)}`,
@@ -683,6 +722,24 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
           console.log(`[vibesquad] spawn-timing retire-background=${Date.now() - retireT0}ms`);
         })().catch(() => {});
       }
+    }
+    if (spawned) {
+      // Backstop (PLAN_BUGS_BATCH2 block 0): the start-brainstorm path above never retires anyone, and the
+      // plugin's agent.created retire skips closed Buddies. Wait a moment so the plugin retires the live ones
+      // first (with its brief snapshot); this then catches whatever is still role=brainstorm in the lane.
+      // It uses its own client so the spawn's client still closes as soon as the restart retire settles.
+      const delayMs = typeof body.backstopDelayMs === "number" ? body.backstopDelayMs : 5000;
+      const newId = created.id;
+      void (async () => {
+        await new Promise((r) => setTimeout(r, delayMs).unref?.()); // the HTTP server keeps the process up
+        const c = injectedClient || (body.clientFactory || createDaemonClient)(rootDir);
+        try {
+          if (!injectedClient) await c.connect?.();
+          await retireOtherLaneBuddies(c, { newId, teamId, laneId, topic, exceptIds: [agentId] });
+        } finally {
+          if (!injectedClient) await c.close?.()?.catch?.(() => {});
+        }
+      })().catch((e) => console.warn(`[vibesquad] duplicate-Buddy backstop failed: ${e?.message ?? e}`));
     }
     timer.flush({ teamId, laneId, agent: created.id });
 
