@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Field } from "./TeamActions";
 import { PaseoOpsPanel } from "./PaseoOpsPanel";
+import { SkillsPanel } from "./SkillsPanel";
 
 export type PaseoSettingsTab =
   | "daemon"
@@ -11,7 +12,8 @@ export type PaseoSettingsTab =
   | "usage"
   | "profiles"
   | "raw"
-  | "ops";
+  | "ops"
+  | "skills";
 
 export interface PaseoDaemonStatus {
   ok: boolean;
@@ -486,6 +488,7 @@ export function PaseoSettingsSection({
     { id: "profiles", label: "7. Profiles / Skills" },
     { id: "raw", label: "8. Raw Config" },
     { id: "ops", label: "9. Ops" },
+    { id: "skills", label: "Skills" },
   ];
 
   const defaultLanListen = lanIpHint ? `${lanIpHint}:6767` : "0.0.0.0:6767";
@@ -1275,6 +1278,7 @@ export function PaseoSettingsSection({
       )}
 
       {tab === "ops" && <PaseoOpsPanel />}
+      {tab === "skills" && <SkillsPanel />}
 
       {tab === "raw" && surface && (
         <div data-testid="paseo-panel-raw" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
