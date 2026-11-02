@@ -4,6 +4,7 @@ import { buildAgentDeepLink } from "@getpaseo/protocol/agent-deep-link";
 import {
   attachFiles,
   clearNeedsYou,
+  markAgentUnread,
   daemonClient,
   DEMO,
   SERVER_ID,
@@ -990,6 +991,17 @@ export function DrawerHeader({
           >
             {moreOpen ? "▾ Less" : "⋯ More"}
           </button>
+          {moreOpen && (
+            <button
+              className="btn ghost small"
+              style={{ padding: "1px 6px", fontSize: 10 }}
+              title="Put this chat back in the team's needs-you list"
+              data-testid="mark-unread"
+              onClick={() => void markAgentUnread(agent)}
+            >
+              Mark unread
+            </button>
+          )}
           {moreOpen && (
             <div className="labels" style={{ padding: 0, border: "none" }}>
               {Object.entries(agentLabels)

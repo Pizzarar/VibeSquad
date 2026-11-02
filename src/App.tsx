@@ -73,6 +73,7 @@ import {
   openAndScrollToInbox,
 } from "./ui";
 import { WorkspacesView } from "./WorkspacesView";
+import { AttentionBadge } from "./AttentionList";
 import { FullToggle, PinGrid, SidebarPins, SquadsHome, useFullView, type PinHandler } from "./PinGrid";
 import { pinsForSquad, type Pin } from "./pins";
 import { urlAgentFor } from "./pinFocusLogic";
@@ -458,18 +459,7 @@ const SidebarTeam = memo(function SidebarTeam({
           <span className="team-name">{v.team.name}</span>
           {v.running > 0 && <span className="badge">{v.running}▶</span>}
         </button>
-        {firstAlert && (
-          <button
-            className="badge alert"
-            title={`Open ${firstAlert.agent.title ?? "agent"} (${v.needsYou} need you)`}
-            onClick={(e) => {
-              e.stopPropagation();
-              pick(firstAlert.agent.id);
-            }}
-          >
-            {v.needsYou}
-          </button>
-        )}
+        {firstAlert && <AttentionBadge view={v} onOpen={pick} />}
       </div>
       {expanded && !full && v.team.id !== UNASSIGNED.id && <SidebarPins view={v} onPin={onPin} onOpenAgent={pick} />}
       {expanded && full && (
@@ -1967,7 +1957,7 @@ export function App() {
               ))}
             </div>
           ) : pinLayout && pinsHome && squadsHome ? (
-            <SquadsHome views={sidebarViews} onSelectSquad={onTeam} onOpenPin={onQuickStart} onNewSquad={openNewSquad} />
+            <SquadsHome views={sidebarViews} onSelectSquad={onTeam} onOpenPin={onQuickStart} onNewSquad={openNewSquad} onOpenAgent={onAgent} />
           ) : view ? (
             <TeamPage
               view={view}

@@ -1,5 +1,6 @@
 import type { PaseoAgent } from "@getpaseo/client";
 import { useSyncExternalStore } from "react";
+import { isLocallyHidden, isMarkedUnread } from "./attentionLocal.ts";
 import { LEGACY_NEEDS_LABEL, LEGACY_NEEDS_REASON, LEGACY_NEEDS_UNTIL, getUserName, needsYouBadge } from "./userName.ts";
 import teamsFile from "../teams.example.json" with { type: "json" };
 import {
@@ -363,8 +364,9 @@ export function attentionOf(a: PaseoAgent): Attention {
   const until = Date.parse(l["needs-you-until"] || l[LEGACY_NEEDS_UNTIL] || "");
   const snoozed = !Number.isNaN(until) && until > Date.now();
   if (needs && needs !== "cleared" && !snoozed) return { tone: "needs-you", reason: l["needs-you-reason"] || l[LEGACY_NEEDS_REASON] || needs };
-  if (a.status === "error") return { tone: "error", reason: a.lastError ?? "error" };
-  if (a.requiresAttention)
+  if (isMarkedUnread(a.id) && !isLocallyHidden(a.id, "unread")) return { tone: "needs-you", reason: "marked unread" };
+  if (a.status === "error" && !isLocallyHidden(a.id, a.lastError ?? "error")) return { tone: "error", reason: a.lastError ?? "error" };
+  if (a.requiresAttention && !isLocallyHidden(a.id, a.attentionReason ?? "attention"))
     return { tone: a.attentionReason === "error" ? "error" : "finished", reason: a.attentionReason ?? "attention" };
   return null;
 }

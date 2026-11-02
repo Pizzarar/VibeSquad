@@ -1,4 +1,5 @@
 import { createPaseoApi, type PaseoAgent, type PaseoClient, type PaseoWorkspace } from "@getpaseo/client";
+import { markUnreadLocal, subscribeAttentionLocal } from "./attentionLocal";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
 import { useSyncExternalStore } from "react";
@@ -178,7 +179,39 @@ export async function updateAgent(agentId: string, updates: { name?: string; lab
     }
     return;
   }
-  await daemonClient.updateAgent(agentId, updates);
+  // Optimistic: badges drop at once; the daemon's push confirms (or we roll back below).
+  const cur = state.agents.get(agentId);
+  if (cur && updates.labels) upsertLocalAgent({ ...cur, labels: { ...(cur.labels ?? {}), ...updates.labels } });
+  try {
+    await daemonClient.updateAgent(agentId, updates);
+  } catch (err) {
+    if (cur) upsertLocalAgent(cur);
+    throw err;
+  }
+}
+
+/** Re-derive everything that depends on local attention state or the clock (new Map, same agents). */
+export function bumpAgents() {
+  state = { ...state, agents: new Map(state.agents) };
+  listeners.forEach((l) => l());
+}
+subscribeAttentionLocal(bumpAgents);
+
+export async function clearAgentAttention(agentId: string): Promise<void> {
+  if (DEMO) return;
+  await daemonClient.clearAgentAttention(agentId);
+}
+
+/** Mark a chat unread: local flag puts it back in the attention list; Paseo's flag is best effort. */
+export async function markAgentUnread(agent: PaseoAgent): Promise<void> {
+  markUnreadLocal(agent.id);
+  const ws = (agent as { workspaceId?: string }).workspaceId;
+  if (DEMO || !ws) return;
+  try {
+    await daemonClient.markWorkspaceUnread(ws);
+  } catch (err) {
+    console.warn("markWorkspaceUnread failed", err);
+  }
 }
 
 const labelsOf = (a: PaseoAgent) => (a.labels ?? {}) as Record<string, string>;
