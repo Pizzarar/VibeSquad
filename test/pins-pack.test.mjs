@@ -72,6 +72,10 @@ test("(b) a brainstorm over the hard limit is retired with no successor", async 
 
 test("(c) Who's here refresh for the pinned lane", () => {
   const dir = mkdtempSync(join(tmpdir(), "vs-whos-here-"));
+  // Hermetic registry: a real "pinned" lane in ~/.vibesquad would redirect the brief to its project dir.
+  const prevTeams = process.env.VIBESQUAD_TEAMS_FILE;
+  writeFileSync(join(dir, "teams.json"), '{"teams":[]}');
+  process.env.VIBESQUAD_TEAMS_FILE = join(dir, "teams.json");
   try {
     mkdirSync(join(dir, "docs", "brainstorm"), { recursive: true });
     const brief = join(dir, "docs", "brainstorm", "pinned.md");
@@ -98,6 +102,8 @@ test("(c) Who's here refresh for the pinned lane", () => {
     assert.match(next, /Brainstorm: none running/);
     assert.equal(next.match(/## Who's here/g).length, 1);
   } finally {
+    if (prevTeams === undefined) delete process.env.VIBESQUAD_TEAMS_FILE;
+    else process.env.VIBESQUAD_TEAMS_FILE = prevTeams;
     rmSync(dir, { recursive: true, force: true });
   }
 });

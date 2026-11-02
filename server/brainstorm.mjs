@@ -6,6 +6,7 @@ import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { effectiveAgentRole, findLaneInRegistry, isRetiredAgent, resolveWorktreeRootPath, topicOf } from "./identity.mjs";
 import { findProfileOrFallback, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
+import { briefRootFor, laneWorkingDir } from "./brief-path.mjs";
 import { refreshWhosHere } from "./whos-here.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
 
@@ -75,54 +76,6 @@ function laneDisplayName(laneId, rootDir = REPO_ROOT) {
   return { teamId: "", laneId: safeSegment(laneId), laneName: String(laneId || "vibesquad").replace(/-/g, " ") };
 }
 
-const isDir = (p) => {
-  try {
-    return statSync(p).isDirectory();
-  } catch {
-    return false;
-  }
-};
-
-/**
- * Folder a never-spawned Team should start in. Registry paths are usually folder names ("MyGame")
- * matched against agent cwds, so try each as an absolute path, then as a sibling of this repo's main checkout,
- * then under ~/projects. Lane paths win over team paths. Returns null when nothing exists on disk.
- */
-export function laneWorkingDir(teamId, laneId, rootDir = REPO_ROOT) {
-  const cfg = loadTeamsConfig(rootDir);
-  const needle = String(laneId ?? "").toLowerCase();
-  const teams = cfg.teams ?? [];
-  const team =
-    teams.find((t) => (t.lanes ?? []).some((l) => String(l.id).toLowerCase() === needle) && (!teamId || t.id === teamId)) ||
-    teams.find((t) => (t.lanes ?? []).some((l) => String(l.id).toLowerCase() === needle)) ||
-    teams.find((t) => t.id === teamId);
-  if (!team) return null;
-  const lane = (team.lanes ?? []).find((l) => String(l.id).toLowerCase() === needle);
-  const candidates = [...(lane?.paths ?? []), ...(lane?.path ? [lane.path] : []), ...(team.paths ?? [])]
-    .map((p) => String(p ?? "").trim())
-    .filter(Boolean);
-  const mainRoot = resolveWorktreeRootPath(rootDir) || rootDir;
-  const bases = [...new Set([dirname(resolve(mainRoot)), dirname(resolve(rootDir)), join(homedir(), "projects")])];
-  for (const p of candidates) {
-    const tries = isAbsolute(p) ? [resolve(p)] : bases.map((base) => resolve(base, p));
-    for (const full of tries) {
-      if (!isDir(full)) continue;
-      if (insideProjectRoots(full, bases)) return full;
-      console.warn(`[vibesquad] ignoring lane path outside the project folders: ${full}`);
-    }
-  }
-  return null;
-}
-
-// A lane folder must be a project under one of the sibling roots (the main checkout counts), never a root itself or above it.
-function insideProjectRoots(full, bases) {
-  const norm = (p) => (process.platform === "win32" ? p.toLowerCase() : p);
-  return bases.some((base) => {
-    const rel = relative(norm(resolve(base)), norm(full));
-    return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
-  });
-}
-
 function readLocalAgentRecord(agentId, rootDir = REPO_ROOT) {
   if (!agentId) return null;
   const { home } = readPaseoConfig(rootDir);
@@ -139,13 +92,7 @@ function readLocalAgentRecord(agentId, rootDir = REPO_ROOT) {
   return null;
 }
 
-/**
- * Folder holding `docs/brainstorm/<lane>.md`: the lane's project working dir, because the installed app's
- * rootDir is its own runtime folder. Falls back to rootDir only when no project dir resolves (dev).
- */
-export function briefRootFor(teamId, laneId, rootDir = REPO_ROOT) {
-  return laneWorkingDir(teamId, laneId, rootDir) || rootDir;
-}
+export { briefRootFor, laneWorkingDir };
 
 export const NO_BRIEF_LINE = "(no brief yet)";
 
@@ -153,11 +100,10 @@ export function readBrainstormSummary(laneRaw, rootDir = REPO_ROOT) {
   const { teamId, laneId } = laneDisplayName(laneRaw, rootDir);
   const safeLane = safeSegment(laneId || laneRaw || "vibesquad");
   const relPath = `docs/brainstorm/${safeLane}.md`;
-  const projectRoot = briefRootFor(teamId, laneId, rootDir);
-  // A project brief wins; rootDir's copy only counts when the project has none (e.g. written before the lane resolved).
-  const fullPath = [join(projectRoot, "docs", "brainstorm", `${safeLane}.md`), join(rootDir, "docs", "brainstorm", `${safeLane}.md`)].find((p) => existsSync(p));
-  const content = fullPath ? readFileSync(fullPath, "utf8") : NO_BRIEF_LINE;
-  return { laneId: safeLane, path: relPath, fullPath: fullPath || join(projectRoot, "docs", "brainstorm", `${safeLane}.md`), content };
+  // Only the lane's project dir counts; a stale copy under rootDir is ignored once the project dir resolves.
+  const fullPath = join(briefRootFor(teamId, laneId, rootDir), "docs", "brainstorm", `${safeLane}.md`);
+  const content = existsSync(fullPath) ? readFileSync(fullPath, "utf8") : NO_BRIEF_LINE;
+  return { laneId: safeLane, path: relPath, fullPath, content };
 }
 
 export function writeBrainstormSummary(laneRaw, content, rootDir = REPO_ROOT) {
