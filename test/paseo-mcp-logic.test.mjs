@@ -88,18 +88,3 @@ test("unsafe keys rejected; server named env/headers/__proto__ survives ops and 
   assert.deepEqual(parsed.servers.map((s) => s.name), ["__proto__"]);
   assert.ok(applyOp(parsed.doc, { kind: "upsert", name: "z", config: {} }).includes("__proto__"));
 });
-
-test("unsafe keys rejected; server named env/headers/__proto__ survives ops and masking", () => {
-  const d = { ...emptyDraft(), command: "n" };
-  for (const n of ["__proto__", "constructor", "prototype"]) assert.match(validateDraft({ ...d, name: n }, [], null)[0], /Name/);
-  assert.match(validateDraft({ ...d, name: "ok", env: [{ key: "__proto__", value: "x" }] }, [], null)[0], /not allowed/);
-  assert.match(validateDraft({ ...d, name: "h", transport: "http", url: "http://" }, [], null)[0], /valid/);
-  const doc = JSON.parse('{"mcpServers":{"env":{"command":"n","env":{"A":"secret"}},"headers":{"type":"http","url":"https://h.test"}}}');
-  const out = JSON.parse(maskedJson(doc));
-  assert.equal(out.mcpServers.env.command, "n");
-  assert.equal(out.mcpServers.env.env.A, MASKED);
-  assert.equal(out.mcpServers.headers.url, "https://h.test");
-  const parsed = parseMcpFile('{"mcpServers":{"__proto__":{"command":"x"}}}');
-  assert.deepEqual(parsed.servers.map((s) => s.name), ["__proto__"]);
-  assert.ok(applyOp(parsed.doc, { kind: "upsert", name: "z", config: {} }).includes("__proto__"));
-});
