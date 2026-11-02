@@ -5,6 +5,8 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { daemonClient, DEMO } from "./paseo";
+import { captureFileName, captureText } from "./fileOps";
+import { captureTerminalLines, renameTerminalTitle } from "./paseoFiles";
 
 type TerminalTab = { id: string; name: string };
 type TerminalInstance = { term: Terminal; fit: FitAddon };
@@ -50,6 +52,10 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
   const termInstancesRef = useRef<Map<string, TerminalInstance>>(new Map());
   const containerRefsMap = useRef<Map<string, HTMLDivElement>>(new Map());
   const pendingOutputRef = useRef<Map<string, (Uint8Array | string)[]>>(new Map());
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [tabErr, setTabErr] = useState("");
+  const [capture, setCapture] = useState<{ title: string; text: string; err: string; busy: boolean; copied: boolean } | null>(null);
 
   const writeToTerm = useCallback((id: string, data: Uint8Array | string) => {
     const inst = termInstancesRef.current.get(id);
@@ -231,6 +237,58 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
     });
   };
 
+  const startRename = (t: TerminalTab) => {
+    setTabErr("");
+    setRenamingId(t.id);
+    setRenameValue(t.name);
+  };
+
+  const commitRename = async () => {
+    const id = renamingId;
+    if (!id) return;
+    const title = renameValue.trim();
+    setRenamingId(null);
+    if (!title || title === tabs.find((t) => t.id === id)?.name) return;
+    try {
+      if (!DEMO) await renameTerminalTitle(id, title);
+      setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, name: title } : t)));
+    } catch (e) {
+      setTabErr(`Rename failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  const captureActive = async () => {
+    const tab = tabs.find((t) => t.id === activeId);
+    if (!tab) return;
+    setCapture({ title: tab.name, text: "", err: "", busy: true, copied: false });
+    try {
+      const lines = DEMO ? ["$ npm run build", "build ok", ""] : await captureTerminalLines(tab.id);
+      setCapture((c) => c && { ...c, text: captureText(lines), busy: false });
+    } catch (e) {
+      setCapture((c) => c && { ...c, err: e instanceof Error ? e.message : String(e), busy: false });
+    }
+  };
+
+  const copyCapture = async () => {
+    if (!capture) return;
+    try {
+      await navigator.clipboard.writeText(capture.text);
+      setCapture((c) => c && { ...c, copied: true });
+    } catch {
+      setCapture((c) => c && { ...c, err: "Copy blocked by the browser" });
+    }
+  };
+
+  const saveCapture = () => {
+    if (!capture) return;
+    const url = URL.createObjectURL(new Blob([capture.text], { type: "text/plain;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = captureFileName(capture.title, new Date());
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  };
+
   return (
     <div className="terminal-panel" data-testid="terminal-panel">
       <div className="terminal-tabs">
@@ -241,8 +299,29 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
             data-testid="terminal-tab"
             title={t.name}
             onClick={() => setActiveId(t.id)}
+            onDoubleClick={() => startRename(t)}
           >
-            <span className="terminal-tab-name">{t.name}</span>
+            {renamingId === t.id ? (
+              <input
+                className="terminal-tab-input"
+                data-testid="terminal-rename-input"
+                autoFocus
+                value={renameValue}
+                maxLength={60}
+                onClick={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => e.stopPropagation()}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onFocus={(e) => e.currentTarget.select()}
+                onBlur={() => void commitRename()}
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === "Enter") void commitRename();
+                  else if (e.key === "Escape") setRenamingId(null);
+                }}
+              />
+            ) : (
+              <span className="terminal-tab-name">{t.name}</span>
+            )}
             <span
               className="terminal-tab-close"
               role="button"
@@ -263,7 +342,52 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
         >
           + New Terminal
         </button>
+        {activeId && (
+          <>
+            <button
+              className="btn ghost small"
+              data-testid="terminal-rename-btn"
+              title="Rename this terminal (or double-click its tab)"
+              onClick={() => { const t = tabs.find((x) => x.id === activeId); if (t) startRename(t); }}
+            >
+              Rename
+            </button>
+            <button
+              className="btn ghost small"
+              data-testid="terminal-capture-btn"
+              title="Snapshot this terminal's output as text"
+              onClick={() => void captureActive()}
+            >
+              Capture output
+            </button>
+          </>
+        )}
       </div>
+      {tabErr && <div className="stat-alert small" data-testid="terminal-tab-error">{tabErr}</div>}
+      {capture && (
+        <div className="modal-back" onMouseDown={() => setCapture(null)}>
+          <div className="modal wide terminal-capture-modal" data-testid="terminal-capture-modal" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <span>Captured output · {capture.title}</span>
+            </div>
+            <div className="modal-body">
+              {capture.busy ? (
+                <div className="muted small">Capturing…</div>
+              ) : capture.err ? (
+                <div className="stat-alert small" data-testid="terminal-capture-error">{capture.err}</div>
+              ) : (
+                <pre className="terminal-capture-text" data-testid="terminal-capture-text">{capture.text || "(terminal is empty)"}</pre>
+              )}
+            </div>
+            <div className="modal-foot">
+              {capture.copied && <span className="muted small">Copied</span>}
+              <button className="btn ghost" data-testid="terminal-capture-copy" disabled={capture.busy || !capture.text} onClick={() => void copyCapture()}>Copy</button>
+              <button className="btn ok" data-testid="terminal-capture-save" disabled={capture.busy || !capture.text} onClick={saveCapture}>Save as .txt</button>
+              <button className="btn ghost" data-testid="terminal-capture-close" onClick={() => setCapture(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
       {tabs.length === 0 ? (
         <div className="muted" style={{ padding: 16 }}>
           No terminals open — click <b>+ New Terminal</b> to start one.
