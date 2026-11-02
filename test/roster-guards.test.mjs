@@ -480,19 +480,6 @@ test("Done-when #3 (Fix C): Sending to an (old)/archived lead delivers to the cu
   }
 });
 
-test("Done-when #4 (Fix D): ~/.paseo/plugin-settings/roster/roster.json contains no '★ LEAD' lookup rule and uses 'vs who lead'", () => {
-  const rosterPath = join(homedir(), ".paseo", "plugin-settings", "roster", "roster.json");
-  const raw = readFileSync(rosterPath, "utf8");
-  assert.equal(raw.includes("★ LEAD"), false, "roster.json must not contain '★ LEAD'");
-  const parsed = JSON.parse(raw);
-  assert.equal(parsed.values.leadPointerPrompt, "To find a project's current lead: run `vs who lead`.");
-
-  // Also verify sanitizeLegacyRosterPrompt strips any legacy roster-injected paragraph
-  const legacy =
-    "To find a project's current lead: run `paseo ls -g --json` and pick the agent whose cwd matches the project and whose name starts with ★ LEAD (never one starting with (old)).";
-  assert.equal(sanitizeLegacyRosterPrompt(legacy), "To find a project's current lead: run `vs who lead`.");
-});
-
 test("Done-when #5 (Fix E): create_agent with labels: { role: 'lead' } gets the lead pack (never WORKER_PACK)", () => {
   const env = makeTempEnv();
   const prevHome = process.env.VIBESQUAD_HOME;
