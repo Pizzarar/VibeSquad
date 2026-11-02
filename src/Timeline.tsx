@@ -1,5 +1,5 @@
 import { Component, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
-import { messageCtxItems, openContextMenu } from "./CommandPalette";
+import { messageCtxItems, openContextMenu, selectionWithin } from "./CommandPalette";
 import { daemonClient, client, DEMO } from "./paseo";
 import { REWIND_MODES, buildRewindRequest, truncateAfter, type RewindMode } from "./sessionLifecycle";
 import { demoTimeline } from "./demo";
@@ -317,7 +317,7 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
     <div className="tl-code-block" style={{ position: "relative" }}>
       <button
         data-testid="code-copy-btn"
-        style={{ position: "absolute", top: 4, right: 4, fontSize: "0.75em" }}
+        style={{ position: "absolute", top: 4, right: 4, fontSize: "0.75em", userSelect: "none" }}
         onClick={copy}
       >
         {copied ? "✓ Copied" : "Copy"}
@@ -674,7 +674,7 @@ export function TimelineItem({
         ? it.images.map((im: any) => (im.data ? `data:${im.mimeType ?? "image/png"};base64,${im.data}` : im.url)).filter(Boolean)
         : sentImagesFor(agentId, it.text);
       return (
-        <div className={`tl tl-user${selected ? " tl-selected" : ""}`} data-selected={selected ? "true" : undefined} onClick={(ev) => onMessageClick(ev, onSelect)} onContextMenu={(ev) => openContextMenu(ev, messageCtxItems(it.text ?? "", agentId, onParkText))}>
+        <div className={`tl tl-user${selected ? " tl-selected" : ""}`} data-selected={selected ? "true" : undefined} onClick={(ev) => onMessageClick(ev, onSelect)} onContextMenu={(ev) => openContextMenu(ev, messageCtxItems(it.text ?? "", agentId, onParkText, selectionWithin(ev.currentTarget)))}>
           {urls.length > 0 && (
             <div className="tl-images">
               {urls.map((u, i) => (
@@ -698,7 +698,7 @@ export function TimelineItem({
 
     case "assistant_message":
       return (
-        <div className={`tl tl-assistant${selected ? " tl-selected" : ""}`} data-selected={selected ? "true" : undefined} onClick={(ev) => onMessageClick(ev, onSelect)} onContextMenu={(ev) => openContextMenu(ev, messageCtxItems(it.text ?? "", agentId, onParkText))}>
+        <div className={`tl tl-assistant${selected ? " tl-selected" : ""}`} data-selected={selected ? "true" : undefined} onClick={(ev) => onMessageClick(ev, onSelect)} onContextMenu={(ev) => openContextMenu(ev, messageCtxItems(it.text ?? "", agentId, onParkText, selectionWithin(ev.currentTarget)))}>
           {typeof it.text === "string" ? <MarkdownRenderer text={it.text} agentId={agentId} /> : it.text}
           {selected && <div className="tl-actions">
             <CopyMsgButton text={it.text ?? ""} />

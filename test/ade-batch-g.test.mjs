@@ -88,10 +88,10 @@ test("G5: transcript search aggregation returns one hit per matching agent, empt
 
 test("G6: context menu items for cards and messages", () => {
   const card = ["Open Agent", "Open in Split Pane", "Copy Agent ID", "Copy Working Folder (cwd)", "Archive Agent"];
-  const msg = (park) => ["Copy Message Text", ...(park ? ["Park in Inbox"] : []), "Copy Agent ID"];
+  const msg = (park) => [...(park ? ["Park in Inbox"] : []), "Copy Agent ID"];
   assert.equal(card.length, 5);
-  assert.deepEqual(msg(true), ["Copy Message Text", "Park in Inbox", "Copy Agent ID"]);
-  assert.deepEqual(msg(false), ["Copy Message Text", "Copy Agent ID"]);
+  assert.deepEqual(msg(true), ["Park in Inbox", "Copy Agent ID"]);
+  assert.deepEqual(msg(false), ["Copy Agent ID"]);
 });
 
 test("G7: transcript search timeout race resolves empty array on slow agent without hanging", async () => {
