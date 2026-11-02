@@ -55,7 +55,10 @@ export function buildNewSquadTeamDef(opts: {
     leadAutoHandoffTokens: LEAD_AUTO_HANDOFF_DEFAULT,
     leadHardCapTokens: LEAD_HARD_CAP_DEFAULT,
     lanes: [lane],
-    paths: [folderSegment || opts.folderPath.trim()],
+    paths: [
+      folderSegment || opts.folderPath.trim(),
+      ...(/^([a-z]:|[\\/])/i.test(normalized) && normalized !== folderSegment ? [normalized] : []),
+    ],
   };
 }
 
