@@ -367,7 +367,7 @@ test("Audit §3B & §3C & §3D: inspectGitSpawnState injected at agent.create, v
   }
 });
 
-test("misroute-old metric: turn_ended on a former-lead or (old) agent logs a metric entry with misroute-old", async () => {
+test("misroute-old metric: turn_ended logs relay-old and turn_started agent-message on a former-lead logs misroute-old", async () => {
   const env = makeMockEnv();
   const prevHome = process.env.VIBESQUAD_HOME;
   process.env.VIBESQUAD_HOME = env.vsHome;
@@ -384,6 +384,18 @@ test("misroute-old metric: turn_ended on a former-lead or (old) agent logs a met
         ord: "0",
       },
     };
+    const liveLead = {
+      id: "live-lead-43",
+      title: "★ VIBESQUAD ord1",
+      cwd: REPO_ROOT,
+      status: "idle",
+      labels: {
+        team: "vibesquad",
+        lane: "vibesquad",
+        role: "lead",
+        ord: "1",
+      },
+    };
     const handlers = new Map();
     const server = {
       before: () => () => {},
@@ -395,11 +407,25 @@ test("misroute-old metric: turn_ended on a former-lead or (old) agent logs a met
     const paseo = {
       agents: {
         ref: (id) => ({
-          refresh: async () => ({ agent: id === retiredLead.id ? retiredLead : null }),
+          refresh: async () => ({
+            agent: id === retiredLead.id ? retiredLead : id === liveLead.id ? liveLead : null,
+          }),
+          timeline: {
+            refetch: async () => ({
+              entries: [
+                {
+                  item: {
+                    type: "user_message",
+                    text: `<paseo-system version="1" kind="agent-message" source-agent-id="worker-9" message-id="msg-42">\nReport for lead.\n</paseo-system>`,
+                  },
+                },
+              ],
+            }),
+          },
           send: async () => {},
           archive: async () => {},
         }),
-        list: async () => ({ entries: [{ agent: retiredLead }] }),
+        list: async () => ({ entries: [{ agent: retiredLead }, { agent: liveLead }] }),
       },
     };
 
@@ -411,13 +437,22 @@ test("misroute-old metric: turn_ended on a former-lead or (old) agent logs a met
         { paseo },
       );
 
+      const turnStarted = handlers.get("agent.turn_started");
+      await turnStarted({ agent: retiredLead }, { paseo });
+      await new Promise((r) => setTimeout(r, 30));
+
       const logPath = join(env.vsHome, "teams", "vibesquad", "log.jsonl");
       const lines = readFileSync(logPath, "utf8")
         .trim()
         .split(/\r?\n/)
         .map((l) => JSON.parse(l));
+      const relayEntry = lines.find((e) => e.type === "metric" && e.text.startsWith("relay-old:"));
+      assert.ok(relayEntry, "Expected relay-old metric entry in team log on turn_ended");
+      assert.match(relayEntry.text, /relay-old: date=\d{4}-\d{2}-\d{2} count=1 target=old-lead-42/);
+      assert.deepEqual(relayEntry.refs, ["old-lead-42"]);
+
       const metricEntry = lines.find((e) => e.type === "metric" && e.text.startsWith("misroute-old:"));
-      assert.ok(metricEntry, "Expected misroute-old metric entry in team log");
+      assert.ok(metricEntry, "Expected misroute-old metric entry in team log on turn_started");
       assert.match(metricEntry.text, /misroute-old: date=\d{4}-\d{2}-\d{2} count=1 target=old-lead-42/);
       assert.deepEqual(metricEntry.refs, ["old-lead-42"]);
     } finally {
