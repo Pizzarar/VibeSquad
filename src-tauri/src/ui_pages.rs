@@ -1003,6 +1003,10 @@ pub fn render_unreachable_page(cfg: &DesktopConfig, last_error: &str) -> String 
     const statusEl = document.getElementById('retry-status');
     const retryBtn = document.getElementById('retry-btn');
     let checking = false;
+    const RELOAD_KEY = 'vs.reconnect.reloads';
+    const MAX_RELOADS = 3;
+    let reloads = 0;
+    try {{ reloads = Number(sessionStorage.getItem(RELOAD_KEY) || 0) || 0; }} catch (_) {{}}
 
     async function checkNow() {{
       if (checking) return;
@@ -1012,7 +1016,9 @@ pub fn render_unreachable_page(cfg: &DesktopConfig, last_error: &str) -> String 
         const res = await fetch('/__desktop/ping', {{ cache: 'no-store' }});
         const data = await res.json().catch(() => ({{}}));
         if (data.reachable) {{
+          if (reloads >= MAX_RELOADS) {{ statusEl.textContent = 'Server answers but the app is not loading · press Retry Now'; return; }}
           statusEl.textContent = 'Connected! Loading…';
+          try {{ sessionStorage.setItem(RELOAD_KEY, String(reloads + 1)); }} catch (_) {{}}
           window.location.replace('/');
           return;
         }}
@@ -1024,7 +1030,7 @@ pub fn render_unreachable_page(cfg: &DesktopConfig, last_error: &str) -> String 
       }}
     }}
 
-    retryBtn.addEventListener('click', checkNow);
+    retryBtn.addEventListener('click', () => {{ reloads = 0; try {{ sessionStorage.removeItem(RELOAD_KEY); }} catch (_) {{}} checkNow(); }});
     setInterval(checkNow, 3000);
   </script>
 </body>
@@ -1039,24 +1045,44 @@ pub fn render_unreachable_page(cfg: &DesktopConfig, last_error: &str) -> String 
 /// Restores/saves lastHash, forwards browser Notification calls to native Windows toasts,
 /// provides Ctrl+Shift+S / Alt+S shortcut to Change Server / Re-pair, a 3.5s empty-#root
 /// recovery watchdog bar, and monitors upstream reachability.
-pub fn desktop_bridge_script(last_hash: &str) -> String {
+pub fn desktop_bridge_script(last_hash: &str, last_route: &str) -> String {
     let escaped_hash = serde_json::to_string(last_hash).unwrap_or_else(|_| "\"\"".to_string());
+    let escaped_route = serde_json::to_string(&restore_path(last_route, last_hash)).unwrap_or_else(|_| "\"/\"".to_string()).replace('<', "\\u003c");
     format!(
         r#"<script>
 (function() {{
   if (window.__VIBESQUAD_DESKTOP_BRIDGE__) return;
   window.__VIBESQUAD_DESKTOP_BRIDGE__ = true;
+  try {{ sessionStorage.removeItem('vs.reconnect.reloads'); }} catch (_) {{}} // the app shell loaded: reset the reload-loop guard
   const savedHash = {escaped_hash};
-  if (!window.location.hash && savedHash && savedHash.startsWith('#')) {{
+  const savedRoute = {escaped_route};
+  // A reload/reconnect lands on a bare "/": put the last route (path + ?team=&agent= + #hash) back before the app boots.
+  if (window.location.pathname === '/' && !window.location.search && !window.location.hash && savedRoute && savedRoute !== '/') {{
+    try {{ history.replaceState(null, '', savedRoute); }} catch (_) {{}}
+  }} else if (!window.location.hash && savedHash && savedHash.startsWith('#')) {{
     try {{ history.replaceState(null, '', savedHash); }} catch (_) {{}}
   }}
-  window.addEventListener('hashchange', () => {{
-    fetch('/__desktop/hash', {{
-      method: 'POST',
-      headers: {{ 'Content-Type': 'application/json' }},
-      body: JSON.stringify({{ hash: window.location.hash || '' }})
-    }}).catch(() => {{}});
-  }});
+  let routeTimer = 0;
+  function saveRoute() {{
+    clearTimeout(routeTimer);
+    routeTimer = setTimeout(() => {{
+      fetch('/__desktop/hash', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        keepalive: true,
+        body: JSON.stringify({{
+          hash: window.location.hash || '',
+          route: window.location.pathname + window.location.search + window.location.hash
+        }})
+      }}).catch(() => {{}});
+    }}, 250);
+  }}
+  window.addEventListener('hashchange', saveRoute);
+  window.addEventListener('popstate', saveRoute);
+  for (const fn of ['pushState', 'replaceState']) {{
+    const orig = history[fn];
+    history[fn] = function () {{ const r = orig.apply(this, arguments); saveRoute(); return r; }};
+  }}
 
   // Global keyboard shortcut: Ctrl+Shift+S or Alt+S -> Change Server / Re-pair
   window.addEventListener('keydown', (e) => {{
@@ -1138,6 +1164,114 @@ pub fn desktop_bridge_script(last_hash: &str) -> String {
 }})();
 </script>"#,
         escaped_hash = escaped_hash
+    )
+}
+
+/// The path + query + hash to open after a restart: the saved full route, else `/` plus the legacy saved hash.
+/// Only same-origin app routes are accepted (never `//host`, never the relay's own `/__desktop/*`).
+pub fn restore_path(last_route: &str, last_hash: &str) -> String {
+    let r = last_route.trim();
+    if r.starts_with('/') && !r.starts_with("//") && !r.starts_with("/__desktop") && !r.contains('\\') && !r.contains(['\n', '\r']) {
+        return r.to_string();
+    }
+    let h = last_hash.trim();
+    if h.starts_with('#') {
+        format!("/{}", h)
+    } else if !h.is_empty() {
+        format!("/#{}", h)
+    } else {
+        "/".to_string()
+    }
+}
+
+/// "Reconnecting…" card served instead of the browser's own error page while the upstream restarts.
+/// Polls `/__desktop/ping` and reloads the same URL (route intact) once the server answers; after ~30 s
+/// it becomes the Server Unreachable card with Retry · Switch server.
+pub fn render_reconnecting_page(_cfg: &DesktopConfig, last_error: &str) -> String {
+    format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VibeSquad — Reconnecting…</title>
+<style>
+  :root {{ --bg:#0c0b14; --panel:#121120; --panel-hi:#18172b; --line:#282644; --cyan:#00f0ff; --pink:#ff2a85; --amber:#ffb800; --text:#eef2ff; --muted:#8a93b2; }}
+  * {{ box-sizing: border-box; user-select: none; }}
+  body {{ margin:0; min-height:100vh; background:radial-gradient(circle at 50% 0%, #24132c 0%, var(--bg) 65%); color:var(--text);
+    font-family:"JetBrains Mono","Cascadia Mono",Consolas,monospace; display:flex; align-items:center; justify-content:center; padding:24px; }}
+  .shell {{ width:100%; max-width:560px; background:var(--panel); border:1px solid var(--line); box-shadow:0 20px 60px rgba(0,0,0,.65),0 0 28px rgba(255,42,133,.1); padding:28px; position:relative; }}
+  .shell::before {{ content:""; position:absolute; top:0; left:0; right:0; height:3px; background:linear-gradient(90deg,var(--pink),var(--amber)); }}
+  h1 {{ margin:0 0 12px; font-size:18px; font-weight:800; color:var(--amber); letter-spacing:1.4px; text-transform:uppercase; }}
+  h1.down {{ color:var(--pink); }}
+  .status-pill {{ display:inline-flex; align-items:center; gap:7px; padding:4px 9px; font-size:11px; background:rgba(255,184,0,.12); border:1px solid var(--amber); color:var(--amber); }}
+  .pulse {{ width:7px; height:7px; border-radius:50%; background:var(--amber); animation:blink 1.2s infinite ease-in-out; }}
+  @keyframes blink {{ 0%,100% {{ opacity:1; }} 50% {{ opacity:.25; }} }}
+  p {{ font-size:12px; line-height:1.5; color:var(--muted); margin:14px 0 0; }}
+  .err-detail {{ margin-top:10px; font-size:11px; color:var(--muted); word-break:break-all; }}
+  .actions {{ display:none; gap:10px; margin-top:20px; flex-wrap:wrap; }}
+  .actions.show {{ display:flex; }}
+  .btn-primary {{ flex:1; min-width:120px; padding:11px 16px; background:var(--cyan); color:#05060d; border:none; font-family:inherit; font-size:12px; font-weight:800; letter-spacing:1px; text-transform:uppercase; cursor:pointer; }}
+  .btn-secondary {{ padding:11px 14px; background:var(--panel-hi); color:var(--text); border:1px solid var(--line); font-family:inherit; font-size:12px; font-weight:600; text-decoration:none; display:inline-flex; align-items:center; }}
+  .btn-secondary:hover {{ border-color:var(--cyan); color:var(--cyan); }}
+</style>
+</head>
+<body>
+  <div class="shell" id="reconnect-card">
+    <h1 id="title">Reconnecting…</h1>
+    <span class="status-pill"><span class="pulse"></span><span id="retry-status">Server is restarting. You will be back where you were.</span></span>
+    <p id="body-text">Your chat, squad and drafts are kept. This page reloads on its own as soon as the server answers.</p>
+    <div class="err-detail" id="err-detail">{last_error}</div>
+    <div class="actions" id="actions">
+      <button type="button" class="btn-primary" id="retry-btn">Retry</button>
+      <a href="/__desktop/setup" class="btn-secondary" id="switch-server-btn">Switch server</a>
+    </div>
+  </div>
+  <script>
+    const started = Date.now();
+    const GIVE_UP_MS = 30000;
+    const statusEl = document.getElementById('retry-status');
+    let checking = false;
+    // Loop guard: after 3 reloads that land back here, stop reloading and wait for a manual Retry.
+    const RELOAD_KEY = 'vs.reconnect.reloads';
+    const MAX_RELOADS = 3;
+    let reloads = 0;
+    try {{ reloads = Number(sessionStorage.getItem(RELOAD_KEY) || 0) || 0; }} catch (_) {{}}
+    let halted = reloads >= MAX_RELOADS;
+    function reloadApp() {{
+      if (reloads >= MAX_RELOADS) {{ halted = true; showDown(); statusEl.textContent = 'Server answers but the app is not loading'; return; }}
+      try {{ sessionStorage.setItem(RELOAD_KEY, String(reloads + 1)); }} catch (_) {{}}
+      window.location.replace(window.location.pathname + window.location.search + window.location.hash);
+    }}
+    function showDown() {{
+      const t = document.getElementById('title');
+      t.textContent = 'Server Unreachable';
+      t.className = 'down';
+      document.getElementById('body-text').textContent = 'The server has not come back. Retry, or switch to another server. Your place is saved.';
+      document.getElementById('actions').className = 'actions show';
+    }}
+    async function checkNow() {{
+      if (checking) return;
+      checking = true;
+      try {{
+        const res = await fetch('/__desktop/ping', {{ cache: 'no-store' }});
+        const data = await res.json().catch(() => ({{}}));
+        if (data.reachable) {{
+          statusEl.textContent = 'Connected! Loading…';
+          reloadApp();
+          return;
+        }}
+      }} catch (e) {{}}
+      finally {{ checking = false; }}
+      if (Date.now() - started > GIVE_UP_MS) {{ showDown(); statusEl.textContent = 'Unreachable · retrying…'; }}
+    }}
+    document.getElementById('retry-btn').addEventListener('click', () => {{ reloads = 0; halted = false; try {{ sessionStorage.removeItem(RELOAD_KEY); }} catch (_) {{}} checkNow(); }});
+    if (halted) {{ showDown(); statusEl.textContent = 'Server answers but the app is not loading'; }}
+    setInterval(() => {{ if (!halted) checkNow(); }}, 1500);
+  </script>
+</body>
+</html>"#,
+        last_error = html_escape(last_error),
     )
 }
 
