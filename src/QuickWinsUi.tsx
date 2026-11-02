@@ -217,10 +217,10 @@ export function AgentTitleEdit({ agent, children }: { agent: PaseoAgent; childre
 
 // ---- restore last view (walk 42) --------------------------------------------------------
 /** Once the roster has loaded, drop restored tabs whose agent is gone or archived. Runs once per launch. */
-export function useRestorePrune(agents: ReadonlyMap<string, PaseoAgent>, ready: boolean) {
+export function useRestorePrune(agents: ReadonlyMap<string, PaseoAgent>, rosterLoaded: boolean) {
   const done = useRef(false);
   useEffect(() => {
-    if (done.current || !ready || agents.size === 0) return;
+    if (done.current || !rosterLoaded) return;
     done.current = true;
     pruneRestoredTabs((id) => {
       const a = agents.get(id);
@@ -228,5 +228,5 @@ export function useRestorePrune(agents: ReadonlyMap<string, PaseoAgent>, ready: 
     });
     // Nothing left to show (restored agent gone or archived): land on the grid, not an empty pane.
     if (!getPanes().leftActiveId && !getPinFocus()) exitSquadsHome();
-  }, [agents, ready]);
+  }, [agents, rosterLoaded]);
 }
