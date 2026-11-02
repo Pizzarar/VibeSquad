@@ -462,6 +462,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
     const oldTitle = `(old) ${laneUpper} ord${oldOrd}`;
 
     const timer = createSpawnTimer("lead-handoff");
+    if (typeof deps.connectMs === "number") timer.add("connect", deps.connectMs);
     const allAgents = await listAgents();
     const openWorkers = findOpenWorkersForLead(allAgents, oldLead, teamId, laneId);
     timer.mark("fetchAgents");
@@ -871,15 +872,17 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
   const client = injectedClient || (body.skipDaemon ? null : createDaemonClient(rootDir));
   let connected = Boolean(injectedClient);
   const connectT0 = Date.now();
+  let connectMs;
 
   try {
     if (client && !injectedClient && typeof client.connect === "function") {
       await client.connect().catch(() => {});
       connected = true;
-      console.log(`[vibesquad] spawn-timing lead-handoff connect=${Date.now() - connectT0}ms`);
+      connectMs = Date.now() - connectT0;
     }
 
     const coordinator = createLeadHandoffCoordinator({
+      connectMs,
       rootDir,
       baseHome: body.baseHome,
       profilesPath: body.profilesPath,

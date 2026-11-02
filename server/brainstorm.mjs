@@ -200,6 +200,9 @@ export function createSpawnTimer(kind) {
   const marks = [];
   let last = t0;
   return {
+    add(step, ms) {
+      marks.push([step, ms]);
+    },
     mark(step) {
       const now = Date.now();
       marks.push([step, now - last]);
@@ -246,6 +249,8 @@ export function findExistingLaneBrainstorm(agents, laneId, topic = "") {
     .filter(Boolean)
     .filter((a) => {
       if (isRetiredAgent(a)) return false;
+      // A restarted Buddy keeps role=brainstorm on the daemon until its backgrounded retire lands.
+      if (restartedAgents.has(a.id)) return false;
       if (effectiveAgentRole(a) !== "brainstorm") return false;
       const labels = a.labels ?? {};
       const aLane = String(labels.lane || labels.lead || "").trim().toLowerCase();
@@ -280,7 +285,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
   const timer = createSpawnTimer(agentId === "start-brainstorm" ? "new-buddy" : "buddy-restart");
 
   const injectedClient = body.daemonClient || null;
-  const client = injectedClient || (body.skipDaemon ? null : createDaemonClient(rootDir));
+  const client = injectedClient || (body.skipDaemon ? null : (body.clientFactory || createDaemonClient)(rootDir));
   let oldAgent = body.oldAgent || null;
   let connected = Boolean(injectedClient);
   // Retiring the predecessor (cancel -> update -> archive, ~4-6 s) runs after the reply is sent; the client closes once it settles.
@@ -296,6 +301,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
         if (!oldAgent && agentId !== "start-brainstorm" && connected && typeof client.fetchAgent === "function") {
           const fetched = await client.fetchAgent(agentId).catch(() => null);
           oldAgent = fetched?.agent ?? null;
+          timer.mark("fetchAgent");
         }
       } catch {
         if (!oldAgent) oldAgent = null;
