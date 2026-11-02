@@ -161,3 +161,58 @@ test("wiring: both badges open the list; ⋯ More has Mark unread; classes style
   assert.match(src("paseo.ts"), /daemonClient\.clearAgentAttention\(agentId\)/);
   assert.match(src("paseo.ts"), /daemonClient\.markWorkspaceUnread\(ws\)/);
 });
+
+import { applyLabelsOptimistic } from "../src/attentionItems.ts";
+import { loadAttentionLocal, snapshotAttentionLocal } from "../src/attentionLocal.ts";
+
+test("optimistic label update: a daemon push survives a failing update's rollback", async () => {
+  let labels = { "needs-you": "merge", other: "a" };
+  let status = "idle";
+  const io = {
+    get: () => labels,
+    patch: (fn) => void (labels = fn(labels)),
+    send: async () => {
+      status = "running"; // live push lands mid-flight, plus a newer value for another key
+      labels = { ...labels, other: "pushed" };
+      throw new Error("daemon down");
+    },
+  };
+  await assert.rejects(applyLabelsOptimistic({ "needs-you": "cleared", "needs-you-until": "" }, io), /daemon down/);
+  assert.equal(status, "running");
+  assert.equal(labels.other, "pushed");
+  assert.equal(labels["needs-you"], "merge", "our key rolled back");
+  assert.ok(!("needs-you-until" in labels), "key we added is removed");
+});
+
+test("optimistic label update: rollback leaves a key a newer edit owns; two quick edits both survive", async () => {
+  let labels = { a: "1" };
+  const patch = (fn) => void (labels = fn(labels));
+  let failFirst;
+  const first = applyLabelsOptimistic({ a: "2" }, { get: () => labels, patch, send: () => new Promise((_, rej) => (failFirst = rej)) });
+  await applyLabelsOptimistic({ b: "x" }, { get: () => labels, patch, send: async () => {} });
+  assert.deepEqual(labels, { a: "2", b: "x" });
+  failFirst(new Error("late fail"));
+  await assert.rejects(first);
+  assert.deepEqual(labels, { a: "1", b: "x" }, "only the failed edit's key reverts");
+});
+
+test("attentionLocal: invalid JSON shapes reset to empty", () => {
+  for (const raw of ["null", "42", '"x"', "[]", "{bad", '{"unread":"nope","snoozed":[],"dismissed":5}']) {
+    loadAttentionLocal(raw);
+    assert.deepEqual(snapshotAttentionLocal(), { snoozed: {}, dismissed: {}, unread: [] }, raw);
+  }
+});
+
+test("attentionLocal: expired snoozes are pruned on load; entries capped; bad values dropped", () => {
+  const now = 1_000_000;
+  const snoozedIn = { old: now - 1, live: now + 5, bad: "x" };
+  for (let i = 0; i < 300; i++) snoozedIn[`s${i}`] = now + 1000 + i;
+  loadAttentionLocal(JSON.stringify({ snoozed: snoozedIn, dismissed: { a: "sig", b: 3 }, unread: ["u", 7, ...Array.from({ length: 300 }, (_, i) => `n${i}`)] }), now);
+  const s = snapshotAttentionLocal(now);
+  assert.ok(!("old" in s.snoozed) && !("bad" in s.snoozed));
+  assert.equal(Object.keys(s.snoozed).length, 200);
+  assert.deepEqual(s.dismissed, { a: "sig" });
+  assert.equal(s.unread.length, 200);
+  assert.ok(s.unread.every((u) => typeof u === "string"));
+  resetAttentionLocal();
+});

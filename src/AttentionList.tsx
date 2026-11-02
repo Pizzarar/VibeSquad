@@ -16,8 +16,8 @@ import { bumpAgents, clearAgentAttention, clearNeedsYou, snoozeNeedsYou } from "
 import type { TeamView } from "./teams";
 
 const deps: AttentionDeps = {
-  clearNeedsYou,
-  snoozeNeedsYou,
+  clearNeedsYou: (a) => clearNeedsYou(a, { optimistic: true }),
+  snoozeNeedsYou: (a, ms) => snoozeNeedsYou(a, ms, { optimistic: true }),
   clearAgentAttention,
   respondToPermission,
   snoozeLocal,
@@ -91,6 +91,7 @@ function Popover({ view, anchor, onClose, onOpen }: { view: TeamView; anchor: DO
   const items = attentionItems(view.members);
   const [confirm, setConfirm] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [clearing, setClearing] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const down = (e: MouseEvent) => {
@@ -142,10 +143,15 @@ function Popover({ view, anchor, onClose, onOpen }: { view: TeamView; anchor: DO
           <button
             className={`btn small ${confirm ? "bad" : "ghost"}`}
             data-testid="attn-clear-all"
+            disabled={clearing}
             onClick={() => {
+              if (clearing) return;
               if (!confirm) return setConfirm(true);
               setConfirm(false);
-              void clearAll(items, deps).then((r) => r.failed && setErr(`${r.failed} could not be cleared`));
+              setClearing(true);
+              void clearAll(items, deps)
+                .then((r) => r.failed && setErr(`${r.failed} could not be cleared`))
+                .finally(() => setClearing(false));
             }}
           >
             {confirm ? `Tap again to clear ${clearable.length}` : "Clear all"}

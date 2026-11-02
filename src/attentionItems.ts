@@ -112,3 +112,32 @@ export async function clearAll(items: AttentionItem[], d: AttentionDeps): Promis
   );
   return { cleared, failed };
 }
+
+type Labels = Record<string, string>;
+
+/**
+ * Show `labels` at once, then roll back only the keys we changed, and only if they still hold our value.
+ * Other fields, live daemon pushes and queued updates are never touched.
+ */
+export async function applyLabelsOptimistic(
+  labels: Labels,
+  io: { get: () => Labels | undefined; patch: (fn: (cur: Labels) => Labels) => void; send: () => Promise<void> },
+): Promise<void> {
+  const prev = io.get() ?? {};
+  const changed = Object.keys(labels).filter((k) => prev[k] !== labels[k]);
+  io.patch((cur) => ({ ...cur, ...labels }));
+  try {
+    await io.send();
+  } catch (err) {
+    io.patch((cur) => {
+      const next = { ...cur };
+      for (const k of changed) {
+        if (next[k] !== labels[k]) continue; // a push or newer edit owns this key now
+        if (k in prev) next[k] = prev[k];
+        else delete next[k];
+      }
+      return next;
+    });
+    throw err;
+  }
+}

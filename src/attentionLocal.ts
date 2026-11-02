@@ -19,23 +19,52 @@ const store = (): Storage | null => {
   }
 };
 
-function load() {
+const MAX_ENTRIES = 200;
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+/** Keep only well-typed entries, newest MAX_ENTRIES, and drop snoozes that already ended. */
+function parse(raw: string | null | undefined, now: number): Snapshot {
+  const out: Snapshot = { snoozed: {}, dismissed: {}, unread: [] };
+  if (!raw) return out;
+  let s: unknown;
   try {
-    const raw = store()?.getItem(KEY);
-    if (!raw) return;
-    const s = JSON.parse(raw) as Partial<Snapshot>;
-    snoozed = new Map(Object.entries(s.snoozed ?? {}));
-    dismissed = new Map(Object.entries(s.dismissed ?? {}));
-    unread = new Set(s.unread ?? []);
+    s = JSON.parse(raw);
   } catch {
-    /* corrupt entry: start clean */
+    return out;
   }
+  if (!isRecord(s)) return out;
+  if (isRecord(s.snoozed))
+    for (const [k, v] of Object.entries(s.snoozed)) if (typeof v === "number" && Number.isFinite(v) && v > now) out.snoozed[k] = v;
+  if (isRecord(s.dismissed)) for (const [k, v] of Object.entries(s.dismissed)) if (typeof v === "string") out.dismissed[k] = v;
+  if (Array.isArray(s.unread)) out.unread = s.unread.filter((v): v is string => typeof v === "string");
+  out.snoozed = Object.fromEntries(Object.entries(out.snoozed).slice(-MAX_ENTRIES));
+  out.dismissed = Object.fromEntries(Object.entries(out.dismissed).slice(-MAX_ENTRIES));
+  out.unread = out.unread.slice(-MAX_ENTRIES);
+  return out;
 }
-load();
+
+/** Exported for tests: parse a stored snapshot into the in-memory state. */
+export function loadAttentionLocal(raw: string | null | undefined, now: number = Date.now()) {
+  const s = parse(raw, now);
+  snoozed = new Map(Object.entries(s.snoozed));
+  dismissed = new Map(Object.entries(s.dismissed));
+  unread = new Set(s.unread);
+}
+
+/** Exported for tests: the snapshot save() would persist (pruned and capped). */
+export function snapshotAttentionLocal(now: number = Date.now()): Snapshot {
+  return parse(JSON.stringify({ snoozed: Object.fromEntries(snoozed), dismissed: Object.fromEntries(dismissed), unread: [...unread] }), now);
+}
+
+loadAttentionLocal(store()?.getItem(KEY));
 
 function save() {
+  const s = snapshotAttentionLocal();
+  snoozed = new Map(Object.entries(s.snoozed));
+  dismissed = new Map(Object.entries(s.dismissed));
+  unread = new Set(s.unread);
   try {
-    const s: Snapshot = { snoozed: Object.fromEntries(snoozed), dismissed: Object.fromEntries(dismissed), unread: [...unread] };
     store()?.setItem(KEY, JSON.stringify(s));
   } catch {
     /* quota or private mode: in-memory only */
