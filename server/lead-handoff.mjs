@@ -9,6 +9,9 @@ import {
   readBrainstormSummary,
 } from "./brainstorm.mjs";
 import { effectiveAgentRole, isDigestAgent, isRetiredAgent, ordOf } from "./identity.mjs";
+import { listDaemonAgents } from "./detach-children.mjs";
+// Re-exported: the HTTP handoff used `client.listAgents`, which DaemonClient lacks, so workers were never re-pointed.
+export { listDaemonAgents };
 import { LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE, readJsonFileWithBom } from "./user-settings.mjs";
 import { findProfile, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
@@ -864,28 +867,6 @@ export function createLeadHandoffCoordinator(deps = {}) {
       confirmedTakeovers,
     },
   };
-}
-
-/**
- * Every non-archived agent from the daemon. DaemonClient has `fetchAgents` (paged, max 200 a page), not
- * `listAgents`: the old `typeof client.listAgents` guard was always false, so workers were never re-pointed.
- * Returns [] when the daemon can't be read (same as before: the handoff still runs, just without workers).
- */
-export async function listDaemonAgents(client, { maxPages = 10 } = {}) {
-  if (!client || typeof client.fetchAgents !== "function") return [];
-  const out = [];
-  let cursor;
-  for (let page = 0; page < maxPages; page++) {
-    const res = await client
-      .fetchAgents({ filter: { includeArchived: false }, page: { limit: 200, ...(cursor ? { cursor } : {}) } })
-      .catch(() => null);
-    if (!res) break;
-    const entries = Array.isArray(res) ? res : Array.isArray(res.entries) ? res.entries : [];
-    for (const e of entries) out.push(e?.agent ?? e);
-    cursor = res.pageInfo?.hasMore ? res.pageInfo.nextCursor : null;
-    if (!cursor) break;
-  }
-  return out;
 }
 
 export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
