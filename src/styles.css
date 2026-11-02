@@ -3545,3 +3545,7 @@ html, body, #root { overflow-x: hidden; }
 .attn-reason { color: var(--muted); margin: 2px 0 6px; overflow-wrap: anywhere; }
 .attn-actions { display: flex; gap: 6px; }
 .attn-foot { margin-top: 8px; display: flex; justify-content: flex-end; }
+
+.stale-build-banner {
+  font-size: 13px;
+}

@@ -12,6 +12,7 @@ let lanEnabled = false;
 let exposedIps: string[] = [];
 let serverConfigWarnings: { file: string; label?: string; error: string }[] = [];
 let desktopConfigWarning = "";
+let staleBuild: { built: string; head: string; behind: number } | null = null;
 const listeners = new Set<() => void>();
 
 export const getUserName = () => userName;
@@ -51,6 +52,25 @@ export function setServerConfigWarnings(warnings: unknown): void {
     serverConfigWarnings = next;
     listeners.forEach((l) => l());
   }
+}
+
+export function setStaleBuild(stale: unknown): void {
+  const s = stale as { built?: unknown; head?: unknown; behind?: unknown } | null;
+  const next = s && typeof s.behind === "number" && s.behind > 0 ? { built: String(s.built), head: String(s.head), behind: s.behind } : null;
+  if (JSON.stringify(next) !== JSON.stringify(staleBuild)) {
+    staleBuild = next;
+    listeners.forEach((l) => l());
+  }
+}
+
+export function useStaleBuild() {
+  return useSyncExternalStore(
+    (cb) => {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+    () => staleBuild,
+  );
 }
 
 export function setDesktopConfigWarning(warning: unknown): void {

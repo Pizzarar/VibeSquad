@@ -31,6 +31,7 @@ import { installVsShim } from "../cli/vs.mjs";
 import { startPushWatcher } from "./push.mjs";
 import { ensurePaseoDaemon } from "./first-run.mjs";
 import { logServerStart } from "./server-start.mjs";
+import { getStale } from "./stale-runtime.mjs";
 import { loadUserSettings } from "./user-settings.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
@@ -469,6 +470,7 @@ if (isMain) {
   server.listen(port, "127.0.0.1", () => {
     console.log(`VibeSquad serving ${distDir} on ${url}`);
     logServerStart({ rootDir });
+    setImmediate(() => getStale({ rootDir }));
     let activeMuxes = [];
     const applyLanListeners = (wantLan) => {
       for (const m of activeMuxes) {

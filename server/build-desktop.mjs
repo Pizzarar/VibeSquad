@@ -82,6 +82,14 @@ mkdirSync(join(runtimeDir, "docs", "profiles"), { recursive: true });
 copyFileSync(join(rootDir, "docs", "profiles", "DEFAULT_PACK.md"), join(runtimeDir, "docs", "profiles", "DEFAULT_PACK.md"));
 copyFileSync(join(rootDir, "package.json"), join(runtimeDir, "package.json"));
 copyFileSync(join(rootDir, "teams.example.json"), join(runtimeDir, "teams.example.json"));
+try {
+  const gitOut = (...args) => execFileSync("git", ["-C", rootDir, ...args], { encoding: "utf8" }).trim();
+  const stamp = { commit: gitOut("rev-parse", "HEAD"), repo: gitOut("rev-parse", "--path-format=absolute", "--git-common-dir"), builtAt: new Date().toISOString() };
+  writeFileSync(join(runtimeDir, "build-stamp.json"), JSON.stringify(stamp));
+  console.log(`[build:desktop] stamped runtime with commit ${stamp.commit.slice(0, 7)}`);
+} catch {
+  console.warn("[build:desktop] no git commit to stamp; stale-runtime guard disabled for this build");
+}
 const closure = productionClosure();
 for (const { dir, name } of closure) cpSync(dir, join(runtimeDir, "node_modules", ...name.split("/")), { recursive: true, dereference: true });
 console.log(`[build:desktop] staged runtime with ${closure.length} production packages`);
