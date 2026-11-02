@@ -38,6 +38,8 @@ import {
 import { refreshWhosHere } from "@vibesquad/server/whos-here.mjs";
 import { briefRootFor } from "@vibesquad/server/brief-path.mjs";
 import { seedBriefIfMissing } from "@vibesquad/server/brief-write.mjs";
+import { deriveRole } from "@vibesquad/server/profiles.mjs";
+import { leanApplies, leanProviderOptions } from "@vibesquad/server/lean-tools.mjs";
 import {
   LEGACY_NEEDS_LABEL,
   LEGACY_USER_TYPE,
@@ -160,7 +162,8 @@ export function loadStoredProfiles(): StoredProfile[] {
         : Array.isArray(parsed?.daemon?.agentProfiles)
           ? parsed.daemon.agentProfiles
           : [];
-    if (list.length > 0) return list as StoredProfile[];
+    // Stored profiles may lack `role` (paseo config.json strips it): derive it from the name.
+    if (list.length > 0) return list.map((p: any) => (p && typeof p === "object" ? { ...p, role: deriveRole(p.name, p.role) } : p)) as StoredProfile[];
   }
   return [];
 }
@@ -1255,6 +1258,11 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               }
             }
           }
+        }
+
+        if (leanApplies(next.provider ?? provider, env)) {
+          next.providerOptions = leanProviderOptions(next.providerOptions, role);
+          changed = true;
         }
 
         return changed
