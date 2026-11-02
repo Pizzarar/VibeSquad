@@ -292,7 +292,8 @@ function runPaseo(args, timeoutMs = DAEMON_TIMEOUT_MS) {
   const idArg = args[0] === "inspect" ? args[1] : args[0] === "agent" ? args[2] : undefined;
   if ((args[0] === "inspect" || args[0] === "agent") && !AGENT_ID_RE.test(String(idArg ?? ""))) return null;
   const cli = process.env.PASEO_CLI || "paseo";
-  const result = run(cli, args, timeoutMs);
+  const effectiveTimeout = hasCustomMockCli() ? Math.max(timeoutMs, 5000) : timeoutMs;
+  const result = run(cli, args, effectiveTimeout);
   if (result.error || result.status !== 0) return null;
   return result.stdout ?? null;
 }

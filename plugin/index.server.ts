@@ -699,10 +699,10 @@ export function inspectGitSpawnState(cwd: string): string | null {
 
   const runGit = (args: string[]) => {
     try {
-      return spawnSync("git", args, {
+      return spawnSync("git", ["--no-optional-locks", ...args], {
         cwd: resolved,
         encoding: "utf8",
-        timeout: 1000,
+        timeout: 3000,
         windowsHide: true,
       });
     } catch {
