@@ -120,3 +120,116 @@ export function summarizeUsageReport(entry: UsageReportLike): UsageReportRow {
   }
   return { id: entry.id, title: `${entry.sourceLabel}${acct}`, status: r.status, summary, fetchedAt: entry.fetchedAt };
 }
+
+// ---- Daemon config editing (allowlisted, non-secret, low-risk fields only) ----
+
+export type ConfigFieldSpec =
+  | { path: string; label: string; help: string; kind: "boolean"; fallback: boolean }
+  | { path: string; label: string; help: string; kind: "enum"; options: string[]; fallback: string }
+  | { path: string; label: string; help: string; kind: "number"; min: number; max: number; fallback: number }
+  | { path: string; label: string; help: string; kind: "string"; maxLength: number; fallback: string };
+
+// Only paths the 0.14 MutableDaemonConfigPatch schema accepts AND that are harmless to flip at runtime.
+export const EDITABLE_CONFIG_FIELDS: ConfigFieldSpec[] = [
+  { path: "autoArchiveAfterMerge", label: "Auto-archive after merge", help: "Archive a workspace's agents once its branch is merged.", kind: "boolean", fallback: false },
+  { path: "enableTerminalAgentHooks", label: "Terminal agent hooks", help: "Let terminal-run agents report status back to the daemon.", kind: "boolean", fallback: false },
+  { path: "idleRuntimeCleanup", label: "Idle runtime cleanup", help: "Free runtime resources of idle agents.", kind: "boolean", fallback: false },
+  { path: "browserTools.enabled", label: "Browser tools", help: "Expose the daemon's browser automation tools to agents.", kind: "boolean", fallback: false },
+];
+
+// Shown read-only with "change via Paseo CLI": security or connectivity critical.
+export const LOCKED_CONFIG_SECTIONS: { path: string; label: string }[] = [
+  { path: "auth / password", label: "Daemon password" },
+  { path: "relay", label: "Relay settings" },
+  { path: "listen / host / port", label: "Listen address and port" },
+  { path: "hostnames", label: "Allowed hostnames" },
+  { path: "cors.allowedOrigins", label: "CORS / allowed origins" },
+  { path: "trustedProxies", label: "Trusted proxies" },
+  { path: "plugins", label: "Plugin install sources" },
+  { path: "providers.*.env / args / command", label: "Provider env, args and commands" },
+  { path: "mcp", label: "MCP" },
+];
+export const LOCKED_NOTE = "change via Paseo CLI";
+
+export function isEditableConfigPath(path: string): boolean {
+  return EDITABLE_CONFIG_FIELDS.some((f) => f.path === path);
+}
+
+export function readConfigPath(config: unknown, path: string): unknown {
+  let cur: unknown = config;
+  for (const seg of path.split(".")) {
+    if (!cur || typeof cur !== "object" || Array.isArray(cur)) return undefined;
+    cur = (cur as Record<string, unknown>)[seg];
+  }
+  return cur;
+}
+
+export type FieldValidation = { ok: true; value: boolean | string | number } | { ok: false; error: string };
+
+export function validateFieldValue(field: ConfigFieldSpec, raw: unknown): FieldValidation {
+  switch (field.kind) {
+    case "boolean":
+      return typeof raw === "boolean" ? { ok: true, value: raw } : { ok: false, error: "must be on or off" };
+    case "enum":
+      return typeof raw === "string" && field.options.includes(raw) ? { ok: true, value: raw } : { ok: false, error: `must be one of ${field.options.join(", ")}` };
+    case "number": {
+      const n = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() !== "" ? Number(raw) : NaN;
+      if (!Number.isInteger(n)) return { ok: false, error: "must be a whole number" };
+      if (n < field.min || n > field.max) return { ok: false, error: `must be between ${field.min} and ${field.max}` };
+      return { ok: true, value: n };
+    }
+    case "string":
+      if (typeof raw !== "string") return { ok: false, error: "must be text" };
+      if (raw.length > field.maxLength) return { ok: false, error: `at most ${field.maxLength} characters` };
+      if (SECRET_VALUE.test(raw)) return { ok: false, error: "looks like a credential" };
+      return { ok: true, value: raw };
+  }
+}
+
+export interface ConfigDiffEntry {
+  path: string;
+  label: string;
+  from: unknown;
+  to: unknown;
+}
+
+/** Entries for editable fields whose draft value differs from the current one. Unknown paths are ignored. */
+export function buildConfigDiff(config: unknown, draft: Record<string, unknown>): ConfigDiffEntry[] {
+  const out: ConfigDiffEntry[] = [];
+  for (const f of EDITABLE_CONFIG_FIELDS) {
+    if (!Object.hasOwn(draft, f.path)) continue;
+    const v = validateFieldValue(f, draft[f.path]);
+    if (!v.ok) continue;
+    const cur = readConfigPath(config, f.path);
+    if (cur === v.value || (cur === undefined && v.value === f.fallback)) continue;
+    out.push({ path: f.path, label: f.label, from: cur === undefined ? f.fallback : cur, to: v.value });
+  }
+  return out;
+}
+
+/** Nested patch object ({ browserTools: { enabled } }) for the diff entries; non-editable paths are dropped. */
+export function buildConfigPatch(diff: ConfigDiffEntry[]): Record<string, unknown> {
+  const patch: Record<string, unknown> = {};
+  for (const d of diff) {
+    if (!isEditableConfigPath(d.path)) continue;
+    const segs = d.path.split(".");
+    let cur = patch;
+    for (const s of segs.slice(0, -1)) cur = (cur[s] ??= {}) as Record<string, unknown>;
+    cur[segs[segs.length - 1]] = d.to;
+  }
+  return patch;
+}
+
+export function formatDiffValue(v: unknown): string {
+  return typeof v === "boolean" ? (v ? "on" : "off") : String(v);
+}
+
+/** Extra confirm-step lines for changes that widen what agents or terminals can do. */
+export function configChangeWarnings(diff: ConfigDiffEntry[]): { path: string; level: "warn" | "note"; text: string }[] {
+  const out: { path: string; level: "warn" | "note"; text: string }[] = [];
+  for (const d of diff) {
+    if (d.path === "browserTools.enabled" && d.to === true) out.push({ path: d.path, level: "warn", text: "Enabling browser tools lets agents navigate, click, fill, upload files and run JavaScript in connected browser tabs." });
+    if (d.path === "enableTerminalAgentHooks" && d.to === true) out.push({ path: d.path, level: "note", text: "Terminal hooks inject daemon status env and hooks into newly spawned terminal agents." });
+  }
+  return out;
+}

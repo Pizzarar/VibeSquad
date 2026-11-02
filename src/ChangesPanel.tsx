@@ -1,6 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
-import { daemonClient, client, DEMO } from "./paseo";
+import { daemonClient, DEMO, spawnTeamAgent } from "./paseo";
+import { openAgent } from "./panes";
+import { findProfile } from "./profiles";
+import { usePref } from "./prefs";
+import { fenceFor } from "./attachments";
+import { undoHunk, undoDelta, hunkKey, ideUrl, firstChangedLine, clientOnDaemonHost, diffAsText } from "./hunkUndo";
 import { CHANGES_SLOW_MS, changesErrorText, withTimeout } from "./changesLoad";
 import * as git from "./paseoGit";
 import type { CommitInfo, CheckDetails, TimelineItem } from "./paseoGit";
@@ -164,23 +169,56 @@ const LINE_CLS: Record<string, string> = {
   context: "",
 };
 
+/** Keep/Undo/Open handlers for the working-tree diff; commit diffs in History render without them. */
+type HunkActions = {
+  hidden: (h: DiffHunk) => boolean;
+  busy: boolean;
+  onKeep: (h: DiffHunk) => void;
+  onUndo: (h: DiffHunk) => void;
+  ideHref: (h: DiffHunk) => string | null;
+};
+
 /** Renders one parsed diff file, including the binary and too_large states. */
-function FileDiffView({ file }: { file: DiffFile }) {
+function FileDiffView({ file, actions }: { file: DiffFile; actions?: HunkActions }) {
   if (file.status === "binary") return <div className="muted small">Binary file</div>;
   if (file.status === "too_large") return <div className="muted small">Diff too large to display</div>;
   if (!file.hunks?.length) return <div className="muted small">No textual changes.</div>;
+  const shown = actions ? file.hunks.filter((h) => !actions.hidden(h)) : file.hunks;
+  if (!shown.length) return <div className="muted small">All hunks kept or undone.</div>;
   return (
     <>
-      {file.hunks.map((hunk, hi) =>
-        hunk.lines.map((line, li) => (
-          <div key={`${hi}-${li}`} className={`diff-line ${LINE_CLS[line.type] ?? ""}`}>
-            <code>{line.content}</code>
-          </div>
-        ))
+      {shown.map((hunk, hi) =>
+        hunk.lines.map((line, li) => {
+          if (!actions || line.type !== "header") {
+            return (
+              <div key={`${hi}-${li}`} className={`diff-line ${LINE_CLS[line.type] ?? ""}`}>
+                <code>{line.content}</code>
+              </div>
+            );
+          }
+          const href = actions.ideHref(hunk);
+          return (
+            <div key={`${hi}-${li}`} className="diff-line diff-header changes-hunk-head" data-testid="changes-hunk">
+              <code>{line.content}</code>
+              <span className="spacer" />
+              {href && <a className="btn ghost small" data-testid="changes-open-ide" href={href} title="Open in your IDE at this line">IDE ↗</a>}
+              <button className="btn ghost small" data-testid="changes-hunk-keep" disabled={actions.busy} onClick={() => actions.onKeep(hunk)} title="Hide this hunk for this session">Keep</button>
+              <button className="btn ghost small" data-testid="changes-hunk-undo" disabled={actions.busy} onClick={() => actions.onUndo(hunk)} title="Write the reverse of this hunk to the file">Undo</button>
+            </div>
+          );
+        })
       )}
     </>
   );
 }
+
+// Kept hunks stay hidden for the session (across tab switches): (cwd, path) → hunk keys (text + position).
+const keptHunks = new Map<string, Set<string>>();
+const keptFor = (cwd: string, path: string) => JSON.stringify([cwd, path]);
+const MAX_UNDO_BYTES = 2 * 1024 * 1024;
+const REVIEW_PROFILE = "Review - Sonnet";
+// Diff chars copied into the review prompt; the reviewer runs `git diff` itself for the rest.
+const REVIEW_DIFF_CAP = 40_000;
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
@@ -229,6 +267,13 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
   const seq = useRef({ hist: 0, diff: 0, check: 0, timeline: 0 });
 
   const [reviewSpawned, setReviewSpawned] = useState<string | null>(null);
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [ide] = usePref("app.openInIde");
+  const [, setHunkVer] = useState(0);
+  const [undoBusy, setUndoBusy] = useState(false);
+  // Hunks undone since the last diff snapshot: hidden until the snapshot catches up, and their
+  // line deltas shift the later hunks of the same file that are still on screen.
+  const undone = useRef(new Map<string, { newStart: number; delta: number; key: string }[]>());
   const [statusMsg, setStatusMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
   const flash = useCallback((text: string, ok = true) => {
@@ -305,6 +350,8 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
     };
   }, [cwd, attempt]);
 
+  useEffect(() => { undone.current.clear(); }, [diff]);
+
   // ─── Derived ─────────────────────────────────────────────────────────────────
 
   const files = diff?.files ?? [];
@@ -317,7 +364,75 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
   const pr = prData?.status ?? null;
   const autoMergeOn = !!(pr?.github?.autoMergeRequest);
 
+  const ideOn = ide !== "none" && (DEMO || clientOnDaemonHost(location.hostname));
+
   // ─── Actions ─────────────────────────────────────────────────────────────────
+
+  const isKept = (path: string, h: DiffHunk) => !!keptHunks.get(keptFor(cwd, path))?.has(hunkKey(path, h));
+  const hunkHidden = (path: string, h: DiffHunk) => {
+    const k = hunkKey(path, h);
+    return !!keptHunks.get(keptFor(cwd, path))?.has(k) || (undone.current.get(path) ?? []).some((u) => u.key === k);
+  };
+
+  function keepHunks(path: string, hunks: DiffHunk[]) {
+    const set = keptHunks.get(keptFor(cwd, path)) ?? new Set<string>();
+    for (const h of hunks) set.add(hunkKey(path, h));
+    keptHunks.set(keptFor(cwd, path), set);
+    setHunkVer((n) => n + 1);
+  }
+
+  function unkeepFile(path: string) {
+    keptHunks.delete(keptFor(cwd, path));
+    setHunkVer((n) => n + 1);
+  }
+
+  /** Undo hunks of one file: read it, reverse each hunk bottom-up, and write it back only if all apply. */
+  async function undoFileHunks(f: DiffFile, hunks: DiffHunk[]) {
+    if (!hunks.length) return;
+    const n = `${hunks.length} hunk${hunks.length === 1 ? "" : "s"}`;
+    const record = () => {
+      const list = undone.current.get(f.path) ?? [];
+      for (const h of hunks) list.push({ newStart: h.newStart, delta: undoDelta(h), key: hunkKey(f.path, h) });
+      undone.current.set(f.path, list);
+      setHunkVer((v) => v + 1);
+    };
+    if (DEMO) { record(); flash(`Undid ${n} (demo)`); return; }
+    if (f.isDeleted) { flash("The file was deleted: use Discard to restore it", false); return; }
+    setUndoBusy(true);
+    try {
+      const read = await daemonClient.readFile(cwd, f.path, undefined, MAX_UNDO_BYTES + 1);
+      if (read.bytes.length > MAX_UNDO_BYTES) { flash("File too large to undo hunks here", false); return; }
+      let content: string;
+      try { content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(read.bytes); }
+      catch { flash("Not UTF-8 text: can't undo hunks in this file", false); return; }
+      const prior = undone.current.get(f.path) ?? [];
+      let next = content;
+      for (const h of [...hunks].sort((a, b) => b.newStart - a.newStart)) {
+        const offset = prior.filter((u) => u.newStart < h.newStart).reduce((sum, u) => sum + u.delta, 0);
+        const r = undoHunk(next, h, offset);
+        if (!r.ok) { flash(r.error, false); return; }
+        next = r.content;
+      }
+      if (next === "" && f.isNew) {
+        const del = await daemonClient.deleteFileEntry({ cwd, path: f.path });
+        if (!del.success) { flash(`Not undone: ${del.error ?? "delete failed"}`, false); return; }
+      } else {
+        const res = await daemonClient.writeFile({ cwd, path: f.path, content: next, expectedModifiedAt: read.modifiedAt });
+        // writeFile resolves (doesn't throw) on a stale or failed write, so check the status.
+        const w = res as { status?: string; error?: string };
+        if (w?.status === "conflict") { flash("Not undone: the file changed on disk while undoing. Try again.", false); return; }
+        if (w?.status === "error") { flash(`Not undone: ${w.error ?? "write failed"}`, false); return; }
+      }
+      record();
+      flash(`Undid ${n} in ${f.path}`);
+    } catch (e: unknown) {
+      flash(e instanceof Error ? e.message : "Undo failed", false);
+    } finally {
+      setUndoBusy(false);
+    }
+  }
+
+  const ideHref = (path: string) => (h: DiffHunk) => (ideOn ? ideUrl(ide, cwd, path, firstChangedLine(h)) : null);
 
   async function handleDiscard(paths: string[]) {
     setDiscardState(null);
@@ -500,33 +615,54 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
   async function handleReviewDiff() {
     const summary = files.map((f) => `${f.isNew ? "A" : f.isDeleted ? "D" : "M"} ${f.path} (+${f.additions}/-${f.deletions})`).join("\n");
     const labels = (agent.labels ?? {}) as Record<string, string>;
+    const { text, truncated } = diffAsText(files, REVIEW_DIFF_CAP);
+    const diffBody = text.trimEnd();
+    const fence = fenceFor(diffBody);
+    const p = findProfile(REVIEW_PROFILE);
+    const prompt = [
+      `Code review (/code-review style) of the uncommitted changes in ${cwd}${currentBranch ? ` on branch ${currentBranch}` : ""}.`,
+      "",
+      "Changed files:",
+      summary,
+      "",
+      `Run \`git status\` and \`git diff\` in that folder for the full, current diff${truncated ? " (the copy below is truncated)" : ""}, and read the surrounding code where you need it.`,
+      "Report findings by severity: correctness bugs, security, data loss, then reuse and simplification. For each, give file:line, why it is wrong and the fix. End with PASS if nothing should block a commit, else FAIL.",
+      "Read-only: don't edit, stage, commit or push anything.",
+      "",
+      `${fence}diff`,
+      diffBody,
+      fence,
+    ].join("\n");
 
-    if (DEMO) {
-      const id = "demo-review-" + Date.now().toString(36);
-      setReviewSpawned(id);
-      flash("Review agent spawned (demo)");
-      return;
-    }
-
+    setReviewBusy(true);
     try {
-      const handle = await (client as any).agents.create({
-        config: { provider: "claude/claude-opus-5-5" },
-        cwd,
-        title: "Review diff",
+      // The profile's exact provider/model/mode; the fallback mirrors the built-in Review - Sonnet.
+      const r = await spawnTeamAgent({
+        provider: p?.provider ?? "claude",
+        model: p?.model ?? "claude-sonnet-5-5",
+        modeId: p?.modeId ?? "auto",
+        thinkingOptionId: p?.thinkingOptionId,
+        featureValues: p?.featureValues,
+        notes: p?.notes,
+        title: `${REVIEW_PROFILE} · ${currentBranch || "diff"}`.slice(0, 60),
         labels: {
-          team: labels.team ?? "vibesquad",
-          lane: labels.lane ?? "review",
+          ...(labels.team ? { team: labels.team } : {}),
+          ...(labels.lane ? { lane: labels.lane } : {}),
           role: "worker",
-          profile: "Review - Opus",
+          profile: REVIEW_PROFILE,
           job: "diff-review",
+          "paseo.parent-agent-id": agent.id,
         },
-        prompt: `Review the uncommitted changes in ${cwd}.\n\nChanged files:\n${summary}\n\nPlease review the uncommitted changes and provide feedback on code quality, correctness, and potential issues.`,
+        prompt,
+        cwd,
       });
-      const id = (handle as any).id as string;
-      setReviewSpawned(id);
-      flash("Review agent spawned");
+      setReviewSpawned(r.id);
+      openAgent(r.id, "background");
+      flash(DEMO ? "Review agent opened in a new tab (demo)" : "Review agent opened in a new tab");
     } catch (e: unknown) {
       flash(e instanceof Error ? e.message : "Spawn failed", false);
+    } finally {
+      setReviewBusy(false);
     }
   }
 
@@ -592,6 +728,25 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
                 <span className="changes-file-path">{f.path}</span>
                 <span className="muted small">+{f.additions} -{f.deletions}</span>
                 <span className="spacer" />
+                {f.status !== "binary" && f.status !== "too_large" && (f.hunks?.length ?? 0) > 0 && (() => {
+                  const live = f.hunks.filter((h) => !hunkHidden(f.path, h));
+                  const kept = f.hunks.filter((h) => isKept(f.path, h)).length;
+                  return (
+                    <>
+                      {kept > 0 && (
+                        <button className="btn ghost small" data-testid="changes-file-unkeep" title="Show the kept hunks again" onClick={(e) => { e.stopPropagation(); unkeepFile(f.path); }}>
+                          {kept} kept
+                        </button>
+                      )}
+                      {live.length > 0 && (
+                        <>
+                          <button className="btn ghost small" data-testid="changes-file-keep-all" onClick={(e) => { e.stopPropagation(); keepHunks(f.path, live); }}>Keep all</button>
+                          <button className="btn ghost small" data-testid="changes-file-undo-all" disabled={undoBusy} onClick={(e) => { e.stopPropagation(); void undoFileHunks(f, live); }}>Undo all</button>
+                        </>
+                      )}
+                    </>
+                  );
+                })()}
 
                 {isArmed ? (
                   <span className="discard-confirm-group">
@@ -621,7 +776,16 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
 
               {expandedFile === f.path && (
                 <div className="changes-file-diff" data-testid="changes-file-diff">
-                  <FileDiffView file={f} />
+                  <FileDiffView
+                    file={f}
+                    actions={{
+                      hidden: (h) => hunkHidden(f.path, h),
+                      busy: undoBusy,
+                      onKeep: (h) => keepHunks(f.path, [h]),
+                      onUndo: (h) => void undoFileHunks(f, [h]),
+                      ideHref: ideHref(f.path),
+                    }}
+                  />
                 </div>
               )}
             </div>
@@ -820,9 +984,10 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
           className="btn ghost"
           data-testid="changes-review-diff-btn"
           onClick={handleReviewDiff}
-          disabled={files.length === 0}
+          disabled={files.length === 0 || reviewBusy}
+          title={`Spawns a ${REVIEW_PROFILE} agent on this diff; it reports in its own tab`}
         >
-          🔍 Review this diff
+          {reviewBusy ? "Spawning review…" : "🔍 Review this diff"}
         </button>
         {reviewSpawned && (
           <span className="muted small"> Agent {reviewSpawned.slice(0, 8)}…</span>

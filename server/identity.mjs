@@ -232,6 +232,12 @@ export function findLaneInRegistry(laneQuery, teams = loadTeamsRegistry()) {
   return null;
 }
 
+/** Mirror of isHubLane in src/teams.ts: explicit `hub: true`, else the lane whose id is the Squad id when no lane is flagged. */
+export function isHubLane(team, lane) {
+  if (lane?.hub === true) return true;
+  return lane?.id != null && !(team?.lanes || []).some((l) => l.hub === true) && lane.id === team?.id;
+}
+
 /**
  * Look up a Squad (team) in the teams.json registry by id or name (case-insensitive).
  */
@@ -662,6 +668,7 @@ export function formatDisplayTitle({
   topic = "",
   job = "",
   title = "",
+  hub = false,
 } = {}) {
   const laneUpper = String(laneName || laneId || "AGENT").trim().toUpperCase();
   const c = cleanLaneCode(code) || laneCodeCandidates({ id: laneId, name: laneName || laneId })[0] || laneUpper;
@@ -682,6 +689,7 @@ export function formatDisplayTitle({
       !cleanTopic ||
       cleanTopic.toLowerCase() === String(laneName || "").trim().toLowerCase() ||
       cleanTopic.toLowerCase() === String(laneId || "").trim().toLowerCase();
+    if (hub && topicMatchesLane) return "RiffBot";
     return topicMatchesLane ? `${c} Buddy` : `${c} Buddy · ${cleanTopic}`;
   }
   if (r === "former-brainstorm" || r === "digest") {

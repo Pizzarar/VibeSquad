@@ -11,10 +11,17 @@ import {
   providerFamily,
   withTimeout,
 } from "./projectContext";
+import { CLAUDE_TEMPLATE, collectRuleFiles, RULE_GROUP_LABEL, RULES_MAX_DEPTH, shouldDescend, type RuleFile, type RuleGroup } from "./contextSources";
 
-type Scan = { status: "loading" } | { status: "error" } | { status: "ok"; present: Set<string> };
+type Scan = { status: "loading" } | { status: "error" } | { status: "ok"; present: Set<string>; rules: RuleFile[]; rulesCapped: boolean };
 
 const DEMO_PRESENT = new Set(["AGENTS.md", "CLAUDE.md"]);
+const DEMO_RULES: RuleFile[] = [
+  { path: ".claude/rules/testing.md", group: "claude-rules" },
+  { path: ".cursor/rules/style.mdc", group: "cursor-rules" },
+  { path: "server/CLAUDE.md", group: "nested" },
+  { path: "src/AGENTS.md", group: "nested" },
+];
 
 /** File names in `dir` (relative to cwd), time-boxed. A missing folder lists as empty; null = couldn't list. */
 async function listNames(cwd: string, dir: string): Promise<string[] | null> {
@@ -26,6 +33,40 @@ async function listNames(cwd: string, dir: string): Promise<string[] | null> {
   return timedOut ? null : value;
 }
 
+const WALK_MAX_DIRS = 120;
+const WALK_BUDGET_MS = 8000;
+
+/** Breadth-first walk of cwd for rules files (bounded depth, dir count and time). Never throws: a failed folder is skipped. */
+async function discoverRules(cwd: string): Promise<{ files: RuleFile[]; capped: boolean }> {
+  const found: string[] = [];
+  const deadline = Date.now() + WALK_BUDGET_MS;
+  let level = [""];
+  let visited = 0;
+  let walkCapped = false;
+  for (let depth = 0; depth <= RULES_MAX_DEPTH && level.length; depth++) {
+    const next: string[] = [];
+    await Promise.all(
+      level.map(async (dir) => {
+        if (visited++ >= WALK_MAX_DIRS || Date.now() > deadline) {
+          walkCapped = true;
+          return;
+        }
+        const left = Math.max(500, deadline - Date.now());
+        const { value, timedOut } = await withTimeout(daemonClient.listDirectory(cwd, dir).then((r) => r.entries, () => []), left, []);
+        if (timedOut) walkCapped = true;
+        for (const e of value) {
+          const rel = dir ? `${dir}/${e.name}` : e.name;
+          if (e.kind === "file") found.push(rel);
+          else if (shouldDescend(e.name, depth + 1)) next.push(rel);
+        }
+      }),
+    );
+    level = next;
+  }
+  const r = collectRuleFiles(found);
+  return { files: r.files, capped: r.capped || walkCapped };
+}
+
 export function ProjectPanel({ agent }: { agent: PaseoAgent }) {
   const cwd = agent.cwd ?? "";
   const lane = ((agent.labels ?? {}) as Record<string, string>).lane;
@@ -33,7 +74,7 @@ export function ProjectPanel({ agent }: { agent: PaseoAgent }) {
   const family = providerFamily(agent.provider);
   const [scan, setScan] = useState<Scan>({ status: "loading" });
   const [nonce, setNonce] = useState(0);
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState<string | null>(null);
   const [createErr, setCreateErr] = useState("");
 
   useEffect(() => {
@@ -42,7 +83,7 @@ export function ProjectPanel({ agent }: { agent: PaseoAgent }) {
     setScan({ status: "loading" });
     (async () => {
       if (DEMO) {
-        setScan({ status: "ok", present: DEMO_PRESENT });
+        setScan({ status: "ok", present: DEMO_PRESENT, rules: DEMO_RULES, rulesCapped: false });
         return;
       }
       const dirs = [...new Set(files.map((f) => f.path.split("/").slice(0, -1).join("/")))];
@@ -52,7 +93,9 @@ export function ProjectPanel({ agent }: { agent: PaseoAgent }) {
         setScan({ status: "error" });
         return;
       }
-      setScan({ status: "ok", present: new Set(lists.flatMap((l) => l ?? [])) });
+      const rules = await discoverRules(cwd);
+      if (cancelled) return;
+      setScan({ status: "ok", present: new Set(lists.flatMap((l) => l ?? [])), rules: rules.files, rulesCapped: rules.capped });
     })();
     return () => {
       cancelled = true;
@@ -60,26 +103,28 @@ export function ProjectPanel({ agent }: { agent: PaseoAgent }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cwd, lane, nonce]);
 
-  const createAgentsMd = useCallback(async () => {
-    setCreating(true);
+  const createRootFile = useCallback(async (name: "AGENTS.md" | "CLAUDE.md", template: string) => {
+    setCreating(name);
     setCreateErr("");
     try {
       // writeFile only updates existing files, so make the empty file first, then fill it.
-      const made = await daemonClient.createFileEntry({ cwd, parentPath: "", name: "AGENTS.md", kind: "file" });
+      const made = await daemonClient.createFileEntry({ cwd, parentPath: "", name, kind: "file" });
       const err = (made as { error?: string | null })?.error;
       if (err) throw new Error(err);
-      const cur = await daemonClient.readFile(cwd, "AGENTS.md");
-      const res = await daemonClient.writeFile({ cwd, path: "AGENTS.md", content: AGENTS_TEMPLATE, expectedModifiedAt: cur.modifiedAt });
+      const cur = await daemonClient.readFile(cwd, name);
+      const res = await daemonClient.writeFile({ cwd, path: name, content: template, expectedModifiedAt: cur.modifiedAt });
       const status = (res as { status?: string; error?: string })?.status;
       if (status === "conflict" || status === "error") throw new Error((res as { error?: string }).error || `write ${status}`);
       setNonce((n) => n + 1);
-      openRightDockTab("Files", { filePath: "AGENTS.md" });
+      openRightDockTab("Files", { filePath: name });
     } catch (e) {
-      setCreateErr(`Couldn't create AGENTS.md: ${e instanceof Error ? e.message : String(e)}`);
+      setCreateErr(`Couldn't create ${name}: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
-      setCreating(false);
+      setCreating(null);
     }
   }, [cwd]);
+  const createAgentsMd = () => createRootFile("AGENTS.md", AGENTS_TEMPLATE);
+  const createClaudeMd = () => createRootFile("CLAUDE.md", CLAUDE_TEMPLATE);
 
   if (!cwd) {
     return (
@@ -146,20 +191,53 @@ export function ProjectPanel({ agent }: { agent: PaseoAgent }) {
                   {!f.loadedBy.length && <span className="project-badge none">{f.note ?? "not auto-loaded"}</span>}
                 </span>
                 {present && mine && <span className="project-mine small">loaded by this agent</span>}
+                {!present && f.path === "CLAUDE.md" && (
+                  <button
+                    className="btn small"
+                    data-testid="project-create-claude"
+                    disabled={!!creating}
+                    onClick={() => void createClaudeMd()}
+                  >
+                    {creating === "CLAUDE.md" ? "Creating…" : "Create CLAUDE.md"}
+                  </button>
+                )}
                 {!present && f.path === "AGENTS.md" && (
                   <button
                     className="btn small"
                     data-testid="project-create-agents"
-                    disabled={creating}
+                    disabled={!!creating}
                     onClick={() => void createAgentsMd()}
                   >
-                    {creating ? "Creating…" : "Create AGENTS.md"}
+                    {creating === "AGENTS.md" ? "Creating…" : "Create AGENTS.md"}
                   </button>
                 )}
               </li>
             );
           })}
         </ul>
+      )}
+      {scan.status === "ok" && scan.rules.length > 0 && (
+        <div className="project-rules" data-testid="project-rules">
+          {(["claude-rules", "cursor-rules", "nested"] as RuleGroup[]).map((g) => {
+            const rows = scan.rules.filter((r) => r.group === g);
+            if (!rows.length) return null;
+            return (
+              <div key={g} data-testid="project-rules-group" data-group={g}>
+                <div className="muted small project-rules-head">{RULE_GROUP_LABEL[g]}</div>
+                <ul className="project-files">
+                  {rows.map((r) => (
+                    <li key={r.path} className="project-file" data-testid="project-rule" data-path={r.path}>
+                      <button className="project-file-name" title={`Open ${r.path} in Files`} onClick={() => openRightDockTab("Files", { filePath: r.path })}>
+                        📄 {r.path}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })}
+          {scan.rulesCapped && <div className="muted small">Showing the first matches only.</div>}
+        </div>
       )}
       {createErr && <div className="stat-alert small">{createErr}</div>}
     </div>

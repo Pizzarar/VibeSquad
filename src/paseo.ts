@@ -390,6 +390,7 @@ export type SpawnRequest = {
   title: string;
   labels: Record<string, string>;
   prompt: string;
+  images?: Array<{ data: string; mimeType: string }>;
   cwd: string;
   worktree?: { branch: string };
 };
@@ -477,6 +478,7 @@ export async function spawnTeamAgent(req: SpawnRequest): Promise<{ id: string; c
     labels: req.labels,
     ...(spawnEnvFor(req.labels) ? { env: spawnEnvFor(req.labels) } : {}),
     prompt: req.prompt || undefined,
+    ...(req.images?.length ? { images: req.images } : {}),
     worktree: req.worktree ? { mode: "branch-off", newBranch: req.worktree.branch } : undefined,
   });
   const newId = (handle as { id: string }).id;

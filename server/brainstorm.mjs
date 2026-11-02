@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import os from "node:os";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
-import { effectiveAgentRole, findLaneInRegistry, formatDisplayTitle, isRetiredAgent, laneCodeFor, resolveWorktreeRootPath, topicOf } from "./identity.mjs";
+import { effectiveAgentRole, findLaneInRegistry, formatDisplayTitle, isHubLane, isRetiredAgent, laneCodeFor, resolveWorktreeRootPath, topicOf } from "./identity.mjs";
 import { findProfileOrFallback, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
 import { briefRootFor, laneWorkingDir } from "./brief-path.mjs";
@@ -86,8 +86,10 @@ function loadTeamsConfig(rootDir = REPO_ROOT) {
 /** Lane-code Buddy title: `<Code> Buddy[ · topic]` (docs/NAMING.md). */
 export function buddyTitle(laneId, laneName, topic, rootDir = REPO_ROOT) {
   const teams = loadTeamsConfig(rootDir).teams;
-  const code = laneCodeFor(laneId, Array.isArray(teams) ? teams : []);
-  return formatDisplayTitle({ role: "brainstorm", laneId, laneName, code, topic });
+  const list = Array.isArray(teams) ? teams : [];
+  const code = laneCodeFor(laneId, list);
+  const found = findLaneInRegistry(laneId, list);
+  return formatDisplayTitle({ role: "brainstorm", laneId, laneName, code, topic, hub: found ? isHubLane(found.team, found.lane) : false });
 }
 
 function laneDisplayName(laneId, rootDir = REPO_ROOT) {
@@ -202,7 +204,37 @@ export function appendVsLogEntry({ teamId, laneId, agent = "you", type = "metric
 export const VIBE_HEARTBEAT_LINE =
   "- Vibe mode is ON: your predecessor's check-in heartbeat targets the old Buddy. Recreate it for yourself (`create_heartbeat`, same prompt, your agent id as target), then delete the old one.";
 
-export function buildBrainstormInitialPrompt({ laneId, laneUpper, buddyName, summaryContent, latestPlan, pendingPrompt, inFlight, vibeMode = false }) {
+/** Boot-prompt rules for the Squad's hub Buddy (RiffBot). Appended only for the hub lane; a Team Buddy's prompt is unchanged. */
+export const HUB_BOOT_RULES = [
+  `- You are this Squad's hub (RiffBot). Keep \`## Teams\` (one line per Team: state + current block) and \`## Unsplit threads\` in the brief; add them if missing. Boot from them and the live Teams below.`,
+  `- First message: the Squad status in <=6 lines, plus the top split you'd propose now (a \`vs:spin-off\` block, still confirmed by the user).`,
+  `- Never mark the hub done; never spawn a Lead. Team Buddies design; you sort and split.`,
+];
+
+const TEAM_STATES = new Set(["pinned", "done"]);
+
+const sameLane = (a, laneId) => String(a?.labels?.lane || a?.labels?.lead || "").trim().toLowerCase() === String(laneId).toLowerCase();
+
+/**
+ * Live Teams block for a hub boot prompt: one line per non-hub, non-removed lane with its state and its
+ * live lead's `job`. `agents` null means the daemon list could not be read. Pure.
+ */
+export function hubTeamsBlock({ team, agents }) {
+  const out = ["Teams in this Squad (live, generated at boot):"];
+  const lanes = (team?.lanes ?? []).filter((l) => l.id !== "_other" && !isHubLane(team, l) && (l.state ?? "pinned") !== "removed");
+  if (!lanes.length) out.push("- (no Teams besides the hub yet)");
+  const live = agents == null ? null : agents.map((a) => a?.agent ?? a).filter((a) => a && !a.archivedAt && !a.internal && a.status !== "closed" && !isRetiredAgent(a));
+  for (const l of lanes) {
+    const state = TEAM_STATES.has(l.state) ? l.state : "pinned";
+    const lead = live?.find((a) => sameLane(a, l.id) && effectiveAgentRole(a) === "lead");
+    const job = String(lead?.labels?.job ?? "").trim();
+    const who = live == null ? "lead unknown" : lead ? `lead working${job ? `: ${job}` : ""}` : "no lead running";
+    out.push(`- ${l.name || l.id} (\`${l.id}\`) · ${state} · ${who}`);
+  }
+  return out.join("\n");
+}
+
+export function buildBrainstormInitialPrompt({ laneId, laneUpper, buddyName, summaryContent, latestPlan, pendingPrompt, inFlight, vibeMode = false, hubTeams = "" }) {
   const tail =
     pendingPrompt && String(pendingPrompt).trim()
       ? `Pending message from the user to answer now:\n${String(pendingPrompt).trim()}`
@@ -218,6 +250,7 @@ export function buildBrainstormInitialPrompt({ laneId, laneUpper, buddyName, sum
     `- Before handing off a plan that adds a command, rule or feature, check for an existing primitive (\`paseo --help\`, Paseo MCP tool list, \`vs --help\`, skills). Name what you checked in the plan's Decided section.`,
     `- At >=80k context tokens, update the brief now. At the hard limit VibeSquad retires you; the next click on the pin starts a fresh Brainstorm from the brief.`,
     ...(vibeMode ? [VIBE_HEARTBEAT_LINE] : []),
+    ...(hubTeams ? HUB_BOOT_RULES : []),
     `- Latest plan file: \`${latestPlan}\``,
     "",
     `--- BEGIN docs/brainstorm/${laneId}.md ---`,
@@ -225,6 +258,7 @@ export function buildBrainstormInitialPrompt({ laneId, laneUpper, buddyName, sum
     `--- END docs/brainstorm/${laneId}.md ---`,
     "",
     ...(inFlight ? [inFlight, ""] : []),
+    ...(hubTeams ? [hubTeams, ""] : []),
     tail,
   ].join("\n");
 }
@@ -638,7 +672,11 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       liveForBoot = Array.isArray(src) ? src : null;
     }
     timer.mark("inFlight");
+    const bootTeam = (loadTeamsConfig(rootDir).teams ?? []).find((t) => t.id === teamId);
+    const bootLane = bootTeam?.lanes?.find((l) => l.id === laneId);
+    const hubTeams = bootTeam && bootLane && !topic && isHubLane(bootTeam, bootLane) ? hubTeamsBlock({ team: bootTeam, agents: liveForBoot }) : "";
     const initialPrompt = buildBrainstormInitialPrompt({
+      hubTeams,
       inFlight: liveInFlightBlock({ agents: liveForBoot, laneId, teamId }),
       laneId,
       laneUpper,

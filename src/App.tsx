@@ -41,7 +41,7 @@ import {
   type Member,
   type TeamView,
 } from "./teams";
-import { titleFor } from "./teams";
+import { isHubLaneId, titleFor } from "./teams";
 import { AgentPanes } from "./AgentPanes";
 import { CommandPaletteHost, agentCtxItems, dateBucket, teamCtxItems, openContextMenu, openOverlay, parseUrlState, serializeUrlState, type DateBucket } from "./CommandPalette";
 import { PaseoUsageHeaderChip } from "./PaseoSettingsSection";
@@ -84,6 +84,7 @@ import { pinsForSquad, type Pin } from "./pins";
 import { popAction, urlAgentFor } from "./pinFocusLogic";
 import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, usePinFocus, usePinsHome, useSquadsHome } from "./pinFocus";
 import { TopBreadcrumb } from "./Breadcrumb";
+import { HubBar } from "./HubBar";
 import { PinFocusHeader, PinRail } from "./PinRail";
 import { PinToast } from "./PinIdeas";
 import { NewSquadModal } from "./NewSquadModal";
@@ -741,7 +742,7 @@ const Card = memo(function Card({ label, m, onPick, onSuccessor }: CardProps) {
       <Avatar id={a.id} provider={a.provider} agentType={m.agentType} variant={leadVariant(m)} size={56} />
       <div className="card-body">
         <div className="card-top-row">
-          <span className="card-label">{m.agentType === "brainstorm" ? "BRAINSTORM" : AGENT_TYPE_LABEL[m.agentType]}</span>
+          <span className="card-label">{m.agentType === "brainstorm" ? (!isTopicBrainstorm(a) && isHubLaneId(m.laneId ?? undefined) ? "RIFFBOT" : "BRAINSTORM") : AGENT_TYPE_LABEL[m.agentType]}</span>
           <span className="card-top-right">
             <AgentActions agent={a} />
             <span className="prov-pill" style={{ color: prov.color, borderColor: prov.color }}>
@@ -827,7 +828,7 @@ function EmptyBrainstormCard({
       <Avatar id={`bs-empty-${teamId}-${laneId}`} provider="claude" agentType="brainstorm" size={56} />
       <div className="card-body">
         <div className="card-top-row">
-          <span className="card-label">BRAINSTORM</span>
+          <span className="card-label">{isHubLaneId(laneId) ? "RIFFBOT" : "BRAINSTORM"}</span>
           <b className="talk-here" data-testid="talk-here-badge">
             TALK HERE
           </b>
@@ -2038,6 +2039,7 @@ export function App() {
             squadName={view?.team.name ?? ""}
             onSelectSquad={onTeam}
           />
+          {screen === "teams" && !(pinLayout && pinsHome && squadsHome) && <HubBar view={view} onOpen={onQuickStart} />}
           {screen === "workspaces" ? (
             <WorkspacesView />
           ) : dateGrouped ? (
@@ -2074,7 +2076,7 @@ export function App() {
       {(hasTabs || focus || pinFocused) && (
         <AgentPanes
           onSuccessor={paneSuccessor}
-          header={pinFocusView && pinFocus ? <PinFocusHeader view={pinFocusView} focus={pinFocus} onStart={onRailPick} onSelectSquad={onTeam} /> : undefined}
+          header={pinFocusView && pinFocus ? <PinFocusHeader view={pinFocusView} focus={pinFocus} onStart={onRailPick} onSelectSquad={onTeam} belowBar={<HubBar view={pinFocusView} onOpen={onQuickStart} />} /> : undefined}
         />
       )}
       {pinFocusView && pinFocus && <PinRail view={pinFocusView} focus={pinFocus} onPick={onRailPick} />}

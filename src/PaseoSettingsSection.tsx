@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Field } from "./TeamActions";
 import { PaseoOpsPanel } from "./PaseoOpsPanel";
+import { McpPanel } from "./McpPanel";
+import { SkillsPanel } from "./SkillsPanel";
 
 export type PaseoSettingsTab =
   | "daemon"
@@ -11,7 +13,9 @@ export type PaseoSettingsTab =
   | "usage"
   | "profiles"
   | "raw"
-  | "ops";
+  | "ops"
+  | "mcp"
+  | "skills";
 
 export interface PaseoDaemonStatus {
   ok: boolean;
@@ -486,6 +490,8 @@ export function PaseoSettingsSection({
     { id: "profiles", label: "7. Profiles / Skills" },
     { id: "raw", label: "8. Raw Config" },
     { id: "ops", label: "9. Ops" },
+    { id: "mcp", label: "10. MCP" },
+    { id: "skills", label: "11. Skills" },
   ];
 
   const defaultLanListen = lanIpHint ? `${lanIpHint}:6767` : "0.0.0.0:6767";
@@ -1275,6 +1281,8 @@ export function PaseoSettingsSection({
       )}
 
       {tab === "ops" && <PaseoOpsPanel />}
+      {tab === "mcp" && <McpPanel />}
+      {tab === "skills" && <SkillsPanel />}
 
       {tab === "raw" && surface && (
         <div data-testid="paseo-panel-raw" style={{ display: "flex", flexDirection: "column", gap: 10 }}>

@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
-import { daemonClient, DEMO } from "./paseo";
+import { daemonClient, DEMO, usePaseo } from "./paseo";
+import { workspaceIdForAgent } from "./workspaceLogic";
+import { addCtxSource, ctxGroupsFor, gitMenuItems, isCtxItem, useCtxSources, type CtxMenuItem } from "./contextSources";
+import { fetchChatContext, fetchGitContext, fetchTerminalContext, listTerminalNames } from "./contextFetch";
 import type { DraftImageView } from "./imageDrafts";
 import { formatSize, MAX_INLINE_BYTES, fenceFile, type useAttachments } from "./attachments";
 import { isImeComposing, shouldComposerSubmit } from "./IdeaInbox";
@@ -192,6 +195,10 @@ export function Composer({
   const [history, setHistory] = useState<string[]>(() => loadHistory(agent.id));
   const [histIdx, setHistIdx] = useState(-1);
   const origDraft = useRef("");
+  const { agents, workspaces } = usePaseo();
+  const ctx = useCtxSources(agent.id);
+  const [terms, setTerms] = useState<Array<{ id: string; name: string }>>([]);
+  const [ctxStatus, setCtxStatus] = useState<{ tone: "busy" | "fail"; text: string } | null>(null);
   const [searching, setSearching] = useState(false);
   const [hq, setHq] = useState("");
 
@@ -201,6 +208,25 @@ export function Composer({
   const urlItem: MentionEntry | null = mention && isUrlMention(mention.query) ? { path: mention.query, kind: "file" } : null;
   const mentionItems: MentionEntry[] = urlItem ? [urlItem] : mention ? filterMentionEntries(files, mention.query) : [];
   const urlChips = urlMentions(draft);
+  const ctxGroups = mention && !urlItem ? ctxGroupsFor(mention.query) : [];
+  const myLabels = (agent.labels ?? {}) as Record<string, string>;
+  const lane = myLabels.lane;
+  const ctxItems: CtxMenuItem[] = [
+    ...(ctxGroups.includes("git") ? gitMenuItems() : []),
+    ...(ctxGroups.includes("terminal")
+      ? terms.map((t): CtxMenuItem => ({ ctx: true, kind: "terminal", label: `@terminal ${t.name}`, hint: "last 200 lines", arg: t.id }))
+      : []),
+    ...(ctxGroups.includes("chat") && lane
+      ? [...agents.values()]
+          .filter((a) => {
+            const l = (a.labels ?? {}) as Record<string, string>;
+            return a.id !== agent.id && !a.archivedAt && l.lane === lane && l.team === myLabels.team;
+          })
+          .slice(0, 8)
+          .map((a): CtxMenuItem => ({ ctx: true, kind: "chat", label: `@chat ${a.title || a.id.slice(0, 8)}`, hint: "last turns", arg: a.id }))
+      : []),
+  ];
+  const menuItems: Array<MentionEntry | CtxMenuItem> = [...ctxItems, ...mentionItems];
   const histItems = searching ? searchHistory(history, hq) : [];
 
   useEffect(() => {
@@ -280,6 +306,31 @@ export function Composer({
     };
   }, [mq, agent.cwd]);
 
+  const termsWanted = ctxGroups.includes("terminal");
+  const workspaceId = workspaceIdForAgent(agent, workspaces);
+  const agentIdRef = useRef(agent.id);
+  agentIdRef.current = agent.id;
+  // Another agent or workspace: drop the old terminal list and any status line.
+  useEffect(() => {
+    setTerms([]);
+    setCtxStatus(null);
+  }, [agent.id, workspaceId]);
+  useEffect(() => {
+    if (!termsWanted) {
+      // Leaving @terminal clears its "No terminals" / failure line (a busy fetch line belongs to pickCtx).
+      setCtxStatus((s) => (s?.tone === "fail" ? null : s));
+      return;
+    }
+    let cancelled = false;
+    listTerminalNames(agent.cwd ?? "", workspaceId).then(
+      (t) => !cancelled && (setTerms(t), setCtxStatus(t.length ? null : { tone: "fail", text: "No terminals open for this workspace" })),
+      (e) => !cancelled && setCtxStatus({ tone: "fail", text: e instanceof Error ? e.message : String(e) }),
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [termsWanted, agent.id, agent.cwd, workspaceId]);
+
   const insertAt = (start: number, replacement: string) => {
     const r = replaceToken(draft, start, caret, replacement);
     setDraft(r.text);
@@ -292,6 +343,27 @@ export function Composer({
   };
   const pickSlash = (c: string) => slash && insertAt(slash.start, `${c} `);
   const pickMention = (e: MentionEntry) => mention && insertAt(mention.start, mentionInsertText(e));
+  const pickCtx = async (it: CtxMenuItem) => {
+    if (!mention) return;
+    insertAt(mention.start, "");
+    const forAgent = agent.id;
+    const live = () => agentIdRef.current === forAgent;
+    setCtxStatus({ tone: "busy", text: `Fetching ${it.label.replace(/^@/, "")}…` });
+    try {
+      const src =
+        it.kind === "terminal"
+          ? await fetchTerminalContext({ id: it.arg!, name: it.label.replace(/^@terminal /, "") })
+          : it.kind === "chat"
+            ? await fetchChatContext(it.arg!, it.label.replace(/^@chat /, ""))
+            : await fetchGitContext(agent.cwd ?? "", it.kind as "git" | "git-base");
+      // A slow fetch that lands after switching agents must not add a pill to the new one.
+      if (!live()) return addCtxSource(forAgent, src);
+      ctx.add(src);
+      setCtxStatus(null);
+    } catch (e) {
+      if (live()) setCtxStatus({ tone: "fail", text: `Couldn't add ${it.label}: ${e instanceof Error ? e.message : String(e)}` });
+    }
+  };
 
   const addFiles = (all: File[]) => {
     if (all.length) setNotice(stageFiles(all, imgs, atts));
@@ -320,7 +392,7 @@ export function Composer({
 
   const [sendKey] = usePref("chat.sendKey");
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    const menu = slash ? slashItems : mention ? mentionItems : [];
+    const menu: Array<string | MentionEntry | CtxMenuItem> = slash ? slashItems : mention ? menuItems : [];
     if (menu.length && !isImeComposing(e)) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
@@ -331,6 +403,7 @@ export function Composer({
         e.preventDefault();
         const item = menu[Math.min(sel, menu.length - 1)];
         if (slash) pickSlash(item as string);
+        else if (isCtxItem(item)) void pickCtx(item);
         else pickMention(item as MentionEntry);
         return;
       }
@@ -467,14 +540,47 @@ export function Composer({
           ))}
         </div>
       )}
-      {mention && !mentionItems.length && listFailed && (
+      {ctx.items.length > 0 && (
+        <div className="composer-files">
+          {ctx.items.map((c) => (
+            <span key={c.id} className="chip file-chip link-chip" data-testid="composer-ctx-chip" title={`${c.label}, ${c.text.length} characters, appended on send`}>
+              {c.kind === "terminal" ? "⌨" : c.kind === "chat" ? "💬" : "±"} <span className="file-chip-name">{c.label}</span>{" "}
+              <button className="thumb-x" aria-label={`Remove ${c.label}`} onClick={() => ctx.remove(c.id)}>
+                ✕
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      {ctxStatus && (
+        <div className={`chip ${ctxStatus.tone === "fail" ? "warn" : ""}`} data-testid="composer-ctx-status">
+          {ctxStatus.text}
+        </div>
+      )}
+      {mention && !mentionItems.length && !ctxItems.length && listFailed && (
         <div className="composer-menu muted small" style={MENU_STYLE} data-testid="composer-mention-failed">
           Couldn't list files here. Type the path and it is sent as written.
         </div>
       )}
-      {mentionItems.length > 0 && (
+      {menuItems.length > 0 && (
         <div className="composer-menu" style={MENU_STYLE} data-testid="composer-mention-menu" role="listbox">
-          {mentionItems.map((f, i) => (
+          {menuItems.map((f, i) =>
+            isCtxItem(f) ? (
+              <div
+                key={`ctx:${f.kind}:${f.arg ?? f.label}`}
+                role="option"
+                aria-selected={i === sel}
+                className={`composer-menu-item ${i === sel ? "active" : ""}`}
+                style={i === sel ? { background: "rgba(127,127,127,.25)", cursor: "pointer" } : { cursor: "pointer" }}
+                data-testid="composer-ctx-item"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  void pickCtx(f);
+                }}
+              >
+                {f.label} <span className="muted small">{f.hint}</span>
+              </div>
+            ) : (
             <div
               key={`${f.kind}:${f.path}`}
               role="option"
@@ -489,7 +595,8 @@ export function Composer({
             >
               {f === urlItem ? `🔗 ${f.path}` : mentionLabel(f)}
             </div>
-          ))}
+            ),
+          )}
         </div>
       )}
       {searching && (
@@ -573,13 +680,13 @@ export function Composer({
             📥 Park in Inbox
           </button>
         )}
-        <button className="btn" disabled={busy || (!draft.trim() && !imgs.images.length && !atts.items.length)} onClick={send}>
+        <button className="btn" disabled={busy || (!draft.trim() && !imgs.images.length && !atts.items.length && !ctx.items.length)} onClick={send}>
           Send
         </button>
         {agent.status === "running" && (
           <button
             className="btn warn composer-interrupt-btn"
-            disabled={busy || (!draft.trim() && !imgs.images.length && !atts.items.length)}
+            disabled={busy || (!draft.trim() && !imgs.images.length && !atts.items.length && !ctx.items.length)}
             title={`Interrupt current turn and send (${sendKey === "ctrl-enter" ? "Ctrl+Shift+Enter" : "Ctrl+Enter"})`}
             data-testid="composer-interrupt-btn"
             onClick={onInterrupt}

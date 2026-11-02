@@ -21,7 +21,8 @@ const JS_ONLY = new Set([
 ]);
 
 const SRC = new URL("../src/", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
-const css = readFileSync(join(SRC, "styles.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+// Component-owned stylesheets (src/HubBar.css) count too.
+const css = readdirSync(SRC).filter((f) => f.endsWith(".css")).map((f) => readFileSync(join(SRC, f), "utf8")).join("\n").replace(/\/\*[\s\S]*?\*\//g, "");
 const defined = new Set([...css.matchAll(/\.(-?[_a-zA-Z][\w-]*)/g)].map((m) => m[1]));
 
 function literalTokens(text) {

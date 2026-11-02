@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
 test("New Squad saves the full absolute path next to the basename", () => {
-  const s = src("NewSquadModal.tsx");
+  const s = src("newSquadDef.ts");
   assert.ok(s.includes("normalized !== folderSegment ? [normalized] : []"));
   assert.ok(s.includes("folderSegment || opts.folderPath.trim(),"));
 });

@@ -20,7 +20,13 @@ import { mergeTeams } from "./teamsMerge.ts";
 
 // A lane is a pinned Team in the UI. Pin fields (state, doneAt, order, lastProfile) live in src/pins.ts
 // and round-trip through saveTeams untouched; lanes without `state` count as pinned.
-export type LaneDef = { id: string; name: string; code?: string; paths?: string[]; aliases?: string[] } & PinFields;
+export type LaneDef = { id: string; name: string; code?: string; paths?: string[]; aliases?: string[]; hub?: boolean } & PinFields;
+/** The Squad's hub lane (RiffBot's). Explicit `hub: true` wins; with no flagged lane, the lane whose id is the Squad id. */
+export function isHubLane(team: Pick<TeamDef, "id" | "lanes">, lane: Pick<LaneDef, "id" | "hub">): boolean {
+  if (lane.hub === true) return true;
+  return lane.id != null && !team.lanes.some((l) => l.hub === true) && lane.id === team.id;
+}
+
 export type TeamDef = {
   id: string;
   name: string;
@@ -1055,7 +1061,7 @@ const clip = (s: string) => (s.length > TITLE_MAX ? s.slice(0, TITLE_MAX - 1) + 
 export function titleFor(
   role: "lead" | "brainstorm" | "worker",
   lane: string,
-  i: { ord?: string; topic?: string; job?: string; code?: string; laneId?: string },
+  i: { ord?: string; topic?: string; job?: string; code?: string; laneId?: string; hub?: boolean },
 ): string {
   return clip(
     formatDisplayTitle({
@@ -1066,6 +1072,7 @@ export function titleFor(
       ord: role === "lead" ? i.ord || "?" : i.ord,
       topic: i.topic,
       job: role === "worker" ? i.job || "job" : i.job,
+      hub: role === "brainstorm" && (i.hub ?? isHubLaneId(i.laneId || lane)),
     }),
   );
 }
@@ -1073,6 +1080,12 @@ export function titleFor(
 /** `(old) <Code><ord>[ · objective]` for a retired lead. */
 export function retiredLeadTitle(lane: string, laneId: string, ord: string | number, job?: string): string {
   return clip(formatDisplayTitle({ role: "former-lead", laneName: lane, laneId, code: laneCodeOf(laneId || lane), ord, job }));
+}
+
+/** True when the lane (id, alias or name) is its Squad's hub lane. */
+export function isHubLaneId(laneKey: string | undefined): boolean {
+  const found = laneById(laneKey);
+  return found ? isHubLane(found.team, found.lane) : false;
 }
 
 /** The lane's code: stored `code` or the generated one, deduped within its Squad. */

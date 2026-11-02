@@ -595,6 +595,7 @@ export function formatDisplayTitle({
   topic = "",
   job = "",
   title = "",
+  hub = false,
 }: {
   role?: string;
   laneName?: string;
@@ -604,6 +605,8 @@ export function formatDisplayTitle({
   topic?: string;
   job?: string;
   title?: string;
+  /** The agent is the Squad's hub Buddy (isHubLane): a topic-less brainstorm reads "RiffBot". */
+  hub?: boolean;
 } = {}): string {
   const laneUpper = String(laneName || laneId || "AGENT").trim().toUpperCase();
   const c = cleanLaneCode(code) || laneCodeCandidates({ id: laneId, name: laneName || laneId })[0] || laneUpper;
@@ -624,6 +627,7 @@ export function formatDisplayTitle({
       !cleanTopic ||
       cleanTopic.toLowerCase() === String(laneName || "").trim().toLowerCase() ||
       cleanTopic.toLowerCase() === String(laneId || "").trim().toLowerCase();
+    if (hub && topicMatchesLane) return "RiffBot";
     return topicMatchesLane ? `${c} Buddy` : `${c} Buddy · ${cleanTopic}`;
   }
   if (r === "former-brainstorm" || r === "digest") {

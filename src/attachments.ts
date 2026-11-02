@@ -21,10 +21,13 @@ export function isBinaryBytes(bytes: Uint8Array): boolean {
   return false;
 }
 
+export const longestBacktickRun = (content: string): number => Math.max(0, ...(content.match(/`+/g) ?? []).map((r) => r.length));
+
+/** A code fence longer than any backtick run inside `content`, so the parser can find the matching opener. */
+export const fenceFor = (content: string): string => "`".repeat(Math.max(3, longestBacktickRun(content) + 1));
+
 export function fenceFile(name: string, content: string): string {
-  // Longer than any backtick run inside the content, so the parser can find the matching opener.
-  const longest = Math.max(0, ...(content.match(/`+/g) ?? []).map((r) => r.length));
-  const fence = "`".repeat(Math.max(3, longest + 1));
+  const fence = fenceFor(content);
   return `\n[file: ${name}]\n${fence}\n${content}\n${fence}\n`;
 }
 
