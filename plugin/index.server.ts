@@ -948,6 +948,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const config: any = request.config ?? {};
         const env = (request as any).env as Record<string, string> | undefined;
         const rawReqLabels = ((request as any).labels ?? config?.labels) as Labels | undefined;
+        const callerLane = String(rawReqLabels?.lane ?? "").trim(); // before identity resolution rewrites it from cwd
         const reqLabels: Labels = { ...(rawReqLabels ?? {}) };
         const rawRole = (reqLabels.role || config?.role || env?.VS_ROLE || "").trim().toLowerCase();
         const title: string = config?.title ?? (request as any).title ?? (request as any).name ?? "";
@@ -1201,7 +1202,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         // Every Buddy starts from its lane brief, even when spawned by Roster or the
         // legacy board (whose boot prompt never loads docs/brainstorm/<lane>.md).
         if (role === "brainstorm") {
-          const briefLane = (reqLabels.orphan === "1" ? "" : reqLabels.lane) || resolveByCwd(cwd, currentTeams())?.lane || "";
+          // Never guess the lane from cwd: a spawn from inside another lane's worktree got that lane's brief.
+          const briefLane = (reqLabels.orphan === "1" ? "" : callerLane || env?.VS_LANE || "").trim();
           const marker = briefBeginMarker(briefLane);
           const reqPrompt = String((request as any).prompt ?? (request as any).initialPrompt ?? "");
           const currentSys = String(next.systemPrompt ?? sanitizedSysPrompt ?? "");
