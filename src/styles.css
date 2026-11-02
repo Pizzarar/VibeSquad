@@ -3114,6 +3114,9 @@ html, body, #root { overflow-x: hidden; }
 .diff-line.diff-add { background: #4df7a61f; color: var(--emerald); }
 .diff-line.diff-remove { background: #ff4fd81f; color: var(--hot-pink); }
 .diff-line.diff-header { color: var(--violet); }
+.diff-line.changes-hunk-head { display: flex; align-items: center; gap: 4px; padding: 2px 8px; margin-top: 4px; border-top: 1px solid #b06bff33; }
+.diff-line.changes-hunk-head:first-child { margin-top: 0; border-top: 0; }
+.changes-hunk-head .btn.small { padding: 0 6px; line-height: 1.5; text-decoration: none; }
 .changes-discard-all-row { justify-content: flex-end; }
 .changes-commit-box { flex-wrap: nowrap; align-items: flex-start; }
 .changes-commit-msg { flex: 1; min-width: 0; }

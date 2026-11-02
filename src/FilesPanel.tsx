@@ -6,6 +6,8 @@ import { MarkdownRenderer } from "./Timeline";
 import { normalizeRepoPath } from "./fileLinks";
 import { baseName, isUnder, nameTaken, parentPath, remapPath, validateEntryName } from "./fileOps";
 import { createEntry, deleteEntry, duplicateEntry, renameEntry } from "./paseoFiles";
+import { usePref } from "./prefs";
+import { clientOnDaemonHost, ideUrl } from "./hunkUndo";
 
 type DirEntry = FileExplorerDirectoryPayload["entries"][number];
 
@@ -117,6 +119,7 @@ export function FilesPanel({
   const [dialogErr, setDialogErr] = useState("");
   const [opBusy, setOpBusy] = useState(false);
   const [opErr, setOpErr] = useState("");
+  const [ide] = usePref("app.openInIde");
 
   // Load root directory on mount / cwd change
   useEffect(() => {
@@ -568,6 +571,13 @@ export function FilesPanel({
         <div className="files-viewer">
           <div className="files-viewer-header">
             <span className="muted small">{openFile}</span>
+            {ide !== "none" && (DEMO || clientOnDaemonHost(location.hostname)) && cwd && (() => {
+              const atTarget = targetLine && openFile === (targetFile ? normalizeRepoPath(targetFile)?.replace(/\/+$/, "") : null);
+              const href = ideUrl(ide, cwd, openFile, atTarget ? targetLine! : 1);
+              return href && (
+                <a className="btn ghost small" data-testid="files-open-ide" href={href} title="Open in your IDE at this line">IDE ↗</a>
+              );
+            })()}
             {isMd && !notFound && !notice && !editMode && (
               <button
                 className="btn ghost small"
