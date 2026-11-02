@@ -1167,6 +1167,8 @@ async function commandWho(flags) {
 
   const { agents } = collectAgents();
   const rawMatched = [];
+  // Removed teams (Remove team in the UI) are hidden; a leftover agent labelled with one is not listed.
+  const removedLanes = new Set((identity.team.lanes ?? []).filter((l) => l.state === "removed").map((l) => String(l.id).toLowerCase()));
 
   for (const a of agents) {
     const status = String(a.status ?? "unknown").trim();
@@ -1179,6 +1181,7 @@ async function commandWho(flags) {
     const { teamId, lane } = resolveAgentTeamAndLane(a);
     if (teamId.toLowerCase() !== wantTeamId) continue;
     if (!squadWide && lane.toLowerCase() !== wantLane) continue;
+    if (removedLanes.has(lane.toLowerCase())) continue;
 
     const role = effectiveAgentRole(a);
     if (target === "lead" && role !== "lead") continue;
@@ -1775,8 +1778,8 @@ function commandPin(flags) {
   if (!squadDef) throw new Error(`unknown squad "${flags.team ?? identity.team.name}". Pass --team <squad>.`);
   const lanes = squadDef.lanes ?? [];
 
-  // Done teams never count as a match; --force skips the refusal entirely (ids still dedupe below).
-  const live = lanes.filter((l) => l.state !== "done");
+  // Done and removed teams never count as a match; --force skips the refusal entirely (ids still dedupe below).
+  const live = lanes.filter((l) => l.state !== "done" && l.state !== "removed");
   const same = live.find((l) => String(l.name).toLowerCase() === name.toLowerCase() || l.id === slugLaneId(name));
   const hit = flags.force ? null : same ? { lane: same } : bestOverlap(`${name}
 ${brief}`, live);

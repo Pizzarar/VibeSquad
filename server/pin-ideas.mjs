@@ -66,13 +66,13 @@ export function overlapScore(text, lane) {
 }
 
 /**
- * The pinned team an idea most likely belongs to, or null. Done lanes and the "_other" bucket are skipped.
+ * The pinned team an idea most likely belongs to, or null. Done and removed lanes and the "_other" bucket are skipped.
  * `lanes` are teams.json lane defs ({ id, name, aliases?, state? }).
  */
 export function bestOverlap(text, lanes) {
   let best = null;
   for (const lane of lanes) {
-    if (!lane || lane.id === "_other" || lane.state === "done") continue;
+    if (!lane || lane.id === "_other" || lane.state === "done" || lane.state === "removed") continue;
     const score = String(lane.name).toLowerCase() === String(text).trim().toLowerCase() ? 1 : overlapScore(text, lane);
     if (score >= OVERLAP_THRESHOLD && (!best || score > best.score)) best = { lane, score };
   }

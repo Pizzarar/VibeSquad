@@ -872,13 +872,22 @@ export function checkBuddyOverlap(
   return result;
 }
 
+/** A squad's lanes minus removed ones (Remove team): what lane pickers and counts offer. */
+export const shownLanesOf = (team: Pick<TeamDef, "lanes">): LaneDef[] => (team.lanes ?? []).filter((l) => l.state !== "removed");
+
+/** Counts toward a needs-you badge: open attention on a live (not archived, not closed) agent that is not a retired lead. */
+export const countsAsNeedsYou = (m: Member): boolean =>
+  Boolean(m.attention) && m.attention!.tone !== "finished" && m.kind !== "old-lead" && !m.agent.archivedAt && m.agent.status !== "closed";
+
 export function buildTeamViews(members: Member[]): TeamView[] {
   const all = [...TEAMS, UNASSIGNED];
   return all
     .map((team) => {
       const mine = members.filter((m) => m.team.id === team.id);
+      // Removed lanes (Remove team) are hidden. An agent still labelled with one shows up as a dynamic lane so it can be found.
+      const shownLanes = shownLanesOf(team);
       const declaredMatches = (laneId: string) =>
-        team.lanes.some(
+        shownLanes.some(
           (l) =>
             l.id.toLowerCase() === laneId.toLowerCase() ||
             Boolean(l.aliases?.some((a) => a.toLowerCase() === laneId.toLowerCase())),
@@ -898,9 +907,9 @@ export function buildTeamViews(members: Member[]): TeamView[] {
         });
       }
       const laneDefs: LaneDef[] = [
-        ...team.lanes,
+        ...shownLanes,
         ...dynamicLanes,
-        { id: "_other", name: team.lanes.length || dynamicLanes.length ? "Other" : "Agents" },
+        { id: "_other", name: shownLanes.length || dynamicLanes.length ? "Other" : "Agents" },
       ];
       const lanes = laneDefs
         .map((lane) => {
@@ -947,7 +956,7 @@ export function buildTeamViews(members: Member[]): TeamView[] {
         team,
         members: mine,
         lanes,
-        needsYou: mine.filter((m) => m.attention && m.attention.tone !== "finished" && m.kind !== "old-lead").length,
+        needsYou: mine.filter(countsAsNeedsYou).length,
         running: mine.filter((m) => m.agent.status === "running").length,
         unsorted: mine.filter((m) => isUnsortedMember(m.agent)),
       };

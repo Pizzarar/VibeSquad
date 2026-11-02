@@ -61,6 +61,7 @@ import {
   fromBase64Url,
   writePushSubscriptions,
 } from "./push.mjs";
+import { removeTeamWorktrees } from "./team-worktrees.mjs";
 import {
   DEFAULT_PACK_PROFILES,
   DEFAULT_PROFILES,
@@ -1370,6 +1371,11 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return handleProfilesDiff(req, res);
       case "/__vibesquad/workspace-package-scripts":
         return handleWorkspacePackageScripts(req, res, rootDir, opts);
+      case "/__vibesquad/remove-team-worktrees":
+        if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+        return readBody(req)
+          .then((body) => sendJson(res, 200, { ok: true, results: removeTeamWorktrees(body?.worktrees) }))
+          .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
       case "/__vibesquad/paseo/status":
         if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
         return getPaseoDaemonStatus(opts.paseo).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));

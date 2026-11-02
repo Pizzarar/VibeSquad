@@ -1,9 +1,10 @@
 // Pinned teams step 3: the pin's ⋯ menu (docs/PLAN_PINNED_FEATURES.md §3).
-// Edit brief · Rename · Show plumbing · Mark complete (step 5, src/PinDone.tsx).
+// Edit brief · Rename · Show plumbing · Mark complete (step 5, src/PinDone.tsx) · Remove team… (src/PinRemove.tsx).
 import { useEffect, useRef, useState } from "react";
 import type { Pin } from "./pins";
 import { openBriefEditor, renamePin } from "./pinActions";
 import { MarkCompleteButton } from "./PinDone";
+import { RemoveTeamDialog } from "./PinRemove";
 
 type Props = {
   pin: Pin;
@@ -16,6 +17,7 @@ type Props = {
 export function PinMenu({ pin, onShowPlumbing, onEditBrief }: Props) {
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const [name, setName] = useState(pin.lane.name);
   const root = useRef<HTMLDivElement>(null);
 
@@ -109,10 +111,22 @@ export function PinMenu({ pin, onShowPlumbing, onEditBrief }: Props) {
                 Show plumbing
               </button>
               <MarkCompleteButton pin={pin} role="menuitem" />
+              <button
+                role="menuitem"
+                className="pin-remove-item"
+                data-testid={`pin-remove-item-${pin.lane.id}`}
+                onClick={() => {
+                  close();
+                  setRemoving(true);
+                }}
+              >
+                Remove team…
+              </button>
             </>
           )}
         </div>
       )}
+      {removing && <RemoveTeamDialog pin={pin} onClose={() => setRemoving(false)} />}
     </div>
   );
 }
