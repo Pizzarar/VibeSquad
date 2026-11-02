@@ -4,6 +4,7 @@ import { daemonClient, DEMO, spawnTeamAgent } from "./paseo";
 import { openAgent } from "./panes";
 import { findProfile } from "./profiles";
 import { usePref } from "./prefs";
+import { fenceFor } from "./attachments";
 import { undoHunk, undoDelta, hunkKey, ideUrl, firstChangedLine, clientOnDaemonHost, diffAsText } from "./hunkUndo";
 import { CHANGES_SLOW_MS, changesErrorText, withTimeout } from "./changesLoad";
 import * as git from "./paseoGit";
@@ -211,10 +212,13 @@ function FileDiffView({ file, actions }: { file: DiffFile; actions?: HunkActions
   );
 }
 
-// Kept hunks stay hidden for the session (across tab switches), keyed by cwd + hunk text and position.
-const keptHunks = new Set<string>();
+// Kept hunks stay hidden for the session (across tab switches): (cwd, path) → hunk keys (text + position).
+const keptHunks = new Map<string, Set<string>>();
+const keptFor = (cwd: string, path: string) => JSON.stringify([cwd, path]);
 const MAX_UNDO_BYTES = 2 * 1024 * 1024;
 const REVIEW_PROFILE = "Review - Sonnet";
+// Diff chars copied into the review prompt; the reviewer runs `git diff` itself for the rest.
+const REVIEW_DIFF_CAP = 40_000;
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
@@ -364,19 +368,21 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
 
   // ─── Actions ─────────────────────────────────────────────────────────────────
 
-  const isKept = (path: string, h: DiffHunk) => keptHunks.has(`${cwd}|${hunkKey(path, h)}`);
+  const isKept = (path: string, h: DiffHunk) => !!keptHunks.get(keptFor(cwd, path))?.has(hunkKey(path, h));
   const hunkHidden = (path: string, h: DiffHunk) => {
     const k = hunkKey(path, h);
-    return keptHunks.has(`${cwd}|${k}`) || (undone.current.get(path) ?? []).some((u) => u.key === k);
+    return !!keptHunks.get(keptFor(cwd, path))?.has(k) || (undone.current.get(path) ?? []).some((u) => u.key === k);
   };
 
   function keepHunks(path: string, hunks: DiffHunk[]) {
-    for (const h of hunks) keptHunks.add(`${cwd}|${hunkKey(path, h)}`);
+    const set = keptHunks.get(keptFor(cwd, path)) ?? new Set<string>();
+    for (const h of hunks) set.add(hunkKey(path, h));
+    keptHunks.set(keptFor(cwd, path), set);
     setHunkVer((n) => n + 1);
   }
 
   function unkeepFile(path: string) {
-    for (const k of [...keptHunks]) if (k.startsWith(`${cwd}|${path}@`)) keptHunks.delete(k);
+    keptHunks.delete(keptFor(cwd, path));
     setHunkVer((n) => n + 1);
   }
 
@@ -609,7 +615,9 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
   async function handleReviewDiff() {
     const summary = files.map((f) => `${f.isNew ? "A" : f.isDeleted ? "D" : "M"} ${f.path} (+${f.additions}/-${f.deletions})`).join("\n");
     const labels = (agent.labels ?? {}) as Record<string, string>;
-    const { text, truncated } = diffAsText(files);
+    const { text, truncated } = diffAsText(files, REVIEW_DIFF_CAP);
+    const diffBody = text.trimEnd();
+    const fence = fenceFor(diffBody);
     const p = findProfile(REVIEW_PROFILE);
     const prompt = [
       `Code review (/code-review style) of the uncommitted changes in ${cwd}${currentBranch ? ` on branch ${currentBranch}` : ""}.`,
@@ -621,9 +629,9 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
       "Report findings by severity: correctness bugs, security, data loss, then reuse and simplification. For each, give file:line, why it is wrong and the fix. End with PASS if nothing should block a commit, else FAIL.",
       "Read-only: don't edit, stage, commit or push anything.",
       "",
-      "```diff",
-      text.trimEnd(),
-      "```",
+      `${fence}diff`,
+      diffBody,
+      fence,
     ].join("\n");
 
     setReviewBusy(true);

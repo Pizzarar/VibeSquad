@@ -240,3 +240,31 @@ test("firstChangedLine, clientOnDaemonHost, diffAsText", () => {
   assert.equal(d.text, "--- a/a.ts\n+++ b/a.ts\n@@ -1,1 +1,1 @@\n-x\n+y\n");
   assert.equal(H.diffAsText([{ path: "a.ts", hunks: [hunk(1, 1, 1, 1, [["add", "y".repeat(100)]])] }], 50).truncated, true);
 });
+
+test("ideUrl encodes #, ?, %, spaces per segment and keeps the drive letter and slashes", () => {
+  assert.equal(
+    H.ideUrl("vscode", "C:\\src\\C# 100%", "x?/a#b.cs", 4),
+    "vscode://file/C:/src/C%23%20100%25/x%3F/a%23b.cs:4",
+  );
+  assert.equal(H.ideUrl("vscode", "/home/me/C#", "q?.ts", 1), "vscode://file/home/me/C%23/q%3F.ts:1");
+  assert.equal(
+    H.ideUrl("jetbrains", "D:\\w\\C# app", "src\\a #1?.cs", 9),
+    "jetbrains://idea/navigate/reference?project=C%23%20app&path=src/a%20%231%3F.cs:9",
+  );
+  assert.equal(H.encodePath("C:/a b/c%d"), "C:/a%20b/c%25d");
+  // A decoded vscode URL path round-trips to the original file path.
+  const u = H.ideUrl("vscode", "C:\\p", "dir#1/f?.ts");
+  assert.equal(decodeURIComponent(new URL(u).pathname.replace(/^\/+/, "")), "C:/p/dir#1/f?.ts");
+});
+
+test("review prompt: diff fence outruns any backtick run in the diff, and the copy is capped", async () => {
+  const A = await import("../src/attachments.ts");
+  assert.equal(A.fenceFor("plain"), "```");
+  assert.equal(A.fenceFor("has ```` four"), "`````");
+  assert.equal(A.longestBacktickRun("a ` b `` c"), 2);
+  const s = src("ChangesPanel.tsx");
+  assert.match(s, /fenceFor\(diffBody\)/);
+  assert.match(s, /diffAsText\(files, REVIEW_DIFF_CAP\)/);
+  assert.match(s, /REVIEW_DIFF_CAP = 40_000/);
+  assert.doesNotMatch(s, /"```diff"/);
+});

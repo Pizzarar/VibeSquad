@@ -119,6 +119,14 @@ export type IdeChoice = "none" | "vscode" | "jetbrains";
 
 const fwd = (p: string) => p.replace(/\\/g, "/");
 
+/** Percent-encodes each segment of a forward-slash path (`#`, `?`, `%`, spaces…), keeping `/` and a leading `C:`. */
+export function encodePath(p: string): string {
+  return p
+    .split("/")
+    .map((seg, i) => (i === 0 && /^[a-zA-Z]:$/.test(seg) ? seg : encodeURIComponent(seg)))
+    .join("/");
+}
+
 /** Joins a workspace cwd and a repo-relative path, keeping the cwd's style. */
 export function absPath(cwd: string, rel: string): string {
   if (/^([a-zA-Z]:[\\/]|\/)/.test(rel)) return rel;
@@ -134,12 +142,12 @@ export function ideUrl(ide: IdeChoice, cwd: string, rel: string, line?: number):
   const ln = line && line > 0 ? `:${line}` : "";
   if (ide === "vscode") {
     const abs = fwd(absPath(cwd, rel));
-    return `vscode://file/${encodeURI(abs.replace(/^\//, ""))}${ln}`;
+    return `vscode://file/${encodePath(abs.replace(/^\//, ""))}${ln}`;
   }
   if (ide === "jetbrains") {
     const project = fwd(cwd).replace(/\/+$/, "").split("/").pop() ?? "";
     const relFwd = fwd(rel).replace(/^\/+/, "");
-    return `jetbrains://idea/navigate/reference?project=${encodeURIComponent(project)}&path=${encodeURIComponent(relFwd).replace(/%2F/g, "/")}${ln}`;
+    return `jetbrains://idea/navigate/reference?project=${encodeURIComponent(project)}&path=${encodePath(relFwd)}${ln}`;
   }
   return null;
 }
