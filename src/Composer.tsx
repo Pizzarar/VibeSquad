@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import { daemonClient, DEMO } from "./paseo";
 import type { DraftImageView } from "./imageDrafts";
+import { formatSize, MAX_INLINE_BYTES, fenceFile, type useAttachments } from "./attachments";
 import { isImeComposing, shouldComposerSubmit } from "./IdeaInbox";
 
 // ── Pure helpers (mirrored in test/ade-batch-f.test.mjs) ──────────────────────
@@ -9,7 +10,7 @@ import { isImeComposing, shouldComposerSubmit } from "./IdeaInbox";
 export const FALLBACK_COMMANDS = ["/compact", "/clear", "/help", "/model", "/mode", "/rewind"];
 export const DEMO_MENTION_FILES = ["src/App.tsx", "src/Composer.tsx", "package.json", "README.md"];
 export const MAX_FILE_BYTES = 2 * 1024 * 1024;
-export const MAX_INLINE_BYTES = 100 * 1024;
+export { MAX_INLINE_BYTES, fenceFile };
 export const FILE_ACCEPT =
   "image/*,.md,.txt,.log,.json,.ts,.tsx,.js,.mjs,.py,.rs,.css,.html,.yml,.yaml,.toml,.csv";
 
@@ -64,9 +65,16 @@ export function partitionFiles<T extends { type: string; size: number }>(files: 
   return { images, text, tooLarge };
 }
 
-export function fenceFile(name: string, content: string): string {
-  const fence = content.includes("```") ? "~~~~" : "```";
-  return `\n[file: ${name}]\n${fence}\n${content}\n${fence}\n`;
+/** Route dropped/pasted/picked files: images to thumbnails, the rest to chips. Never touches the draft. */
+export function stageFiles(
+  all: File[],
+  imgs: { add: (f: File[]) => void },
+  atts: { add: (f: File[]) => void },
+): string | null {
+  const { images, text, tooLarge } = partitionFiles(all);
+  if (images.length) imgs.add(images);
+  if (text.length) atts.add(text);
+  return tooLarge.length ? `Too large (max 2MB): ${tooLarge.map((f) => f.name).join(", ")}` : null;
 }
 
 /** Step through history. idx -1 = original draft. Returns next idx (clamped). */
@@ -120,8 +128,6 @@ const MENU_STYLE: React.CSSProperties = {
   fontSize: 13,
 };
 
-type StagedFile = { id: string; name: string; block: string };
-
 type ImgDraft = {
   images: DraftImageView[];
   add: (files: Array<File | Blob>) => void;
@@ -138,6 +144,7 @@ type ComposerProps = {
   inboxParking: boolean;
   lastSteered: string | null;
   imgs: ImgDraft;
+  atts: ReturnType<typeof useAttachments>;
   onSend: () => void;
   onInterrupt: () => void;
   onParkToInbox: (text: string, fromComposer: boolean) => void;
@@ -153,6 +160,7 @@ export function Composer({
   inboxParking,
   lastSteered,
   imgs,
+  atts,
   onSend,
   onInterrupt,
   onParkToInbox,
@@ -166,7 +174,6 @@ export function Composer({
   const [files, setFiles] = useState<string[]>(DEMO ? DEMO_MENTION_FILES : []);
   const [sel, setSel] = useState(0);
   const [dismissed, setDismissed] = useState(false);
-  const [staged, setStaged] = useState<StagedFile[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [history, setHistory] = useState<string[]>(() => loadHistory(agent.id));
   const [histIdx, setHistIdx] = useState(-1);
@@ -183,7 +190,6 @@ export function Composer({
   useEffect(() => {
     setHistory(loadHistory(agent.id));
     setHistIdx(-1);
-    setStaged([]);
     let cancelled = false;
     const cached = commandCache.get(agent.id);
     if (cached) {
@@ -253,35 +259,8 @@ export function Composer({
   const pickSlash = (c: string) => slash && insertAt(slash.start, `${c} `);
   const pickMention = (f: string) => mention && insertAt(mention.start, `@${f} `);
 
-  const addFiles = async (all: File[]) => {
-    const { images, text, tooLarge } = partitionFiles(all);
-    if (images.length) imgs.add(images);
-    setNotice(tooLarge.length ? `Too large (max 2MB): ${tooLarge.map((f) => f.name).join(", ")}` : null);
-    const next: StagedFile[] = [];
-    for (const f of text) {
-      let block: string;
-      if (f.size <= MAX_INLINE_BYTES) {
-        block = fenceFile(f.name, await f.text());
-      } else {
-        try {
-          const up = await dc.uploadFile?.({ cwd: agent.cwd, name: f.name, file: f });
-          if (!up?.path) throw new Error("no upload");
-          block = `\n[attached file: ${up.path}]\n`;
-        } catch {
-          setNotice(`${f.name} is over 100KB and upload is unavailable`);
-          continue;
-        }
-      }
-      next.push({ id: `${f.name}-${Date.now()}-${next.length}`, name: f.name, block });
-    }
-    if (next.length) {
-      setStaged((p) => [...p, ...next]);
-      setDraft(draft + next.map((n) => n.block).join(""));
-    }
-  };
-  const removeStaged = (f: StagedFile) => {
-    setStaged((p) => p.filter((x) => x.id !== f.id));
-    setDraft(draft.includes(f.block) ? draft.replace(f.block, "") : draft);
+  const addFiles = (all: File[]) => {
+    if (all.length) setNotice(stageFiles(all, imgs, atts));
   };
 
   const send = () => {
@@ -291,7 +270,6 @@ export function Composer({
       saveHistory(agent.id, h);
     }
     setHistIdx(-1);
-    setStaged([]);
     onSend();
   };
 
@@ -302,7 +280,7 @@ export function Composer({
       .filter((f): f is File => !!f);
     if (fl.length) {
       e.preventDefault();
-      void addFiles(fl);
+      addFiles(fl);
     }
   };
 
@@ -374,7 +352,7 @@ export function Composer({
       onDrop={(e) => {
         e.preventDefault();
         setDragOver(false);
-        void addFiles(Array.from(e.dataTransfer?.files ?? []));
+        addFiles(Array.from(e.dataTransfer?.files ?? []));
       }}
     >
       {imgs.images.length > 0 && (
@@ -404,12 +382,12 @@ export function Composer({
           {notice}
         </div>
       )}
-      {staged.length > 0 && (
+      {atts.items.length > 0 && (
         <div className="composer-files">
-          {staged.map((f) => (
-            <span key={f.id} className="chip" data-testid="composer-file-chip" title={f.name}>
-              📄 {f.name}{" "}
-              <button className="thumb-x" aria-label={`Remove ${f.name}`} onClick={() => removeStaged(f)}>
+          {atts.items.map((f) => (
+            <span key={f.id} className="chip file-chip" data-testid="composer-file-chip" title={f.name}>
+              📄 <span className="file-chip-name">{f.name}</span> <span className="file-chip-size">{formatSize(f.size)}</span>{" "}
+              <button className="thumb-x" aria-label={`Remove ${f.name}`} onClick={() => atts.remove(f.id)}>
                 ✕
               </button>
             </span>
@@ -515,7 +493,7 @@ export function Composer({
           multiple
           hidden
           onChange={(e) => {
-            void addFiles(Array.from(e.target.files ?? []));
+            addFiles(Array.from(e.target.files ?? []));
             e.target.value = "";
           }}
         />
@@ -537,13 +515,13 @@ export function Composer({
             📥 Park in Inbox
           </button>
         )}
-        <button className="btn" disabled={busy || (!draft.trim() && !imgs.images.length)} onClick={send}>
+        <button className="btn" disabled={busy || (!draft.trim() && !imgs.images.length && !atts.items.length)} onClick={send}>
           Send
         </button>
         {agent.status === "running" && (
           <button
             className="btn warn composer-interrupt-btn"
-            disabled={busy || (!draft.trim() && !imgs.images.length)}
+            disabled={busy || (!draft.trim() && !imgs.images.length && !atts.items.length)}
             title="Interrupt current turn and send (Ctrl+Enter)"
             data-testid="composer-interrupt-btn"
             onClick={onInterrupt}

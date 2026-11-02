@@ -3545,3 +3545,12 @@ html, body, #root { overflow-x: hidden; }
 .attn-reason { color: var(--muted); margin: 2px 0 6px; overflow-wrap: anywhere; }
 .attn-actions { display: flex; gap: 6px; }
 .attn-foot { margin-top: 8px; display: flex; justify-content: flex-end; }
+
+/* drop-to-attach */
+.drawer { position: relative; }
+.drop-overlay { position: absolute; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; pointer-events: none; font-size: 1.2em; color: var(--cyan); background: rgba(8, 18, 26, 0.82); border: 2px dashed var(--cyan); }
+.file-chip { display: inline-flex; align-items: center; gap: 4px; }
+.file-chip-size { opacity: 0.6; font-size: 0.85em; }
+.tl-file-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+button.file-chip { cursor: pointer; font: inherit; }
+.file-chip-name { max-width: 14em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
