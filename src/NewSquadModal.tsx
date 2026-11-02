@@ -43,6 +43,7 @@ export function buildNewSquadTeamDef(opts: {
   const lane: PinLane = {
     id: laneId,
     name: opts.name.trim() || "New Squad",
+    hub: true,
     state: "pinned",
     ...(opts.lastProfile ? { lastProfile: opts.lastProfile } : {}),
   };

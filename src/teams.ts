@@ -20,7 +20,13 @@ import { mergeTeams } from "./teamsMerge.ts";
 
 // A lane is a pinned Team in the UI. Pin fields (state, doneAt, order, lastProfile) live in src/pins.ts
 // and round-trip through saveTeams untouched; lanes without `state` count as pinned.
-export type LaneDef = { id: string; name: string; code?: string; paths?: string[]; aliases?: string[] } & PinFields;
+export type LaneDef = { id: string; name: string; code?: string; paths?: string[]; aliases?: string[]; hub?: boolean } & PinFields;
+/** The Squad's hub lane (RiffBot's). Explicit `hub: true` wins; with no flagged lane, the lane whose id is the Squad id. */
+export function isHubLane(team: Pick<TeamDef, "id" | "lanes">, lane: Pick<LaneDef, "id" | "hub">): boolean {
+  if (lane.hub === true) return true;
+  return !team.lanes.some((l) => l.hub === true) && lane.id === team.id;
+}
+
 export type TeamDef = {
   id: string;
   name: string;

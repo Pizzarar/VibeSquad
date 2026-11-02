@@ -232,6 +232,12 @@ export function findLaneInRegistry(laneQuery, teams = loadTeamsRegistry()) {
   return null;
 }
 
+/** Mirror of isHubLane in src/teams.ts: explicit `hub: true`, else the lane whose id is the Squad id when no lane is flagged. */
+export function isHubLane(team, lane) {
+  if (lane?.hub === true) return true;
+  return !(team?.lanes || []).some((l) => l.hub === true) && lane?.id === team?.id;
+}
+
 /**
  * Look up a Squad (team) in the teams.json registry by id or name (case-insensitive).
  */
