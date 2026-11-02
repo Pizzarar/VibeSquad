@@ -404,7 +404,7 @@ describe("PLAN_PASEO_CONTROLS — Paseo settings & daemon controls (isolated tem
     const port = srv.address().port;
 
     try {
-      const surfaceResp = await fetch(`http://127.0.0.1:${port}/__vibesquad/paseo/surface`);
+      const surfaceResp = await fetch(`http://127.0.0.1:${port}/__vibesquad/paseo/surface`, { headers: ownerHeaders() });
       assert.equal(surfaceResp.status, 200);
       const surfaceText = await surfaceResp.text();
       assert.ok(!surfaceText.includes("TOP_SECRET_TOKEN_VALUE_888"), "No secret value may appear in /paseo/surface response");

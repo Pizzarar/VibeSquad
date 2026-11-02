@@ -19,7 +19,7 @@ import {
   saveUserSettings,
   stripBom,
 } from "./user-settings.mjs";
-import { authenticate, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handlePairRedeem, handlePairStart, handleRevoke, hasDistIndex, isLocal, isLocalBrowserSafe, isLocalOwner, netConfig, READ_ONLY_ERROR } from "./auth.mjs";
+import { authenticate, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handlePairRedeem, handlePairStart, handleRevoke, hasDistIndex, isLocal, isLocalBrowserSafe, isLocalOwner, netConfig, READ_ONLY_ERROR } from "./auth.mjs";
 import {
   appendVsLogEntry,
   createDaemonClient,
@@ -333,6 +333,8 @@ export function isGatedRead(path, url = "") {
   if (path === "/__vibesquad/push/vapid-public-key") return true; // creates and writes vapid.json on first call
   if (path === "/__vibesquad/paseo/providers/diagnostic" || path === "/__vibesquad/paseo/providers/models") return true; // runs the provider's own CLI
   if (path === "/__vibesquad/paseo/usage") return new URL(url, "http://x").searchParams.get("refresh") === "1"; // forces provider API calls
+  if (path === "/__vibesquad/paseo/surface") return true; // daemon config: listen, CORS, hub, backups
+  if (path === "/__vibesquad/local-image") return true; // file contents
   return false;
 }
 
@@ -594,6 +596,16 @@ const insideDir = (child, root) => {
   return c === r || c.startsWith(r.endsWith(sep) ? r : r + sep);
 };
 
+// UNC and device paths (\\host\share, //host/share, \\?\UNC\..., \\.\pipe) make Windows contact another
+// machine (and send NTLM credentials) on a mere stat. Refuse them before any fs call.
+export const isUncLikePath = (p) => /^[\\/]{2}/.test(String(p ?? ""));
+
+/** Lexical allowlist check on the resolved path, before anything touches the disk. Roots count in both forms. */
+const lexicallyInside = (p, roots) => {
+  const r = resolve(String(p));
+  return roots.some((root) => insideDir(r, root) || insideDir(r, resolve(root)));
+};
+
 function paseoAgentCwds() {
   const out = [];
   const agentsRoot = join(process.env.PASEO_HOME || join(homedir(), ".paseo"), "agents");
@@ -636,10 +648,14 @@ async function handleAttach(req, res, rootDir, opts = {}) {
   }
   try {
     const { cwd, files } = await readBody(req);
-    if (typeof cwd !== "string" || !existsSync(cwd) || !statSync(cwd).isDirectory()) return sendJson(res, 400, { error: "cwd is not a directory" });
+    if (typeof cwd !== "string" || isUncLikePath(cwd)) return sendJson(res, 400, { error: "cwd is not a directory" });
+    const roots = allowedAttachRoots(rootDir, opts);
+    if (!lexicallyInside(cwd, roots)) return sendJson(res, 403, { error: "cwd is not a known agent or team path" });
+    if (!existsSync(cwd) || !statSync(cwd).isDirectory()) return sendJson(res, 400, { error: "cwd is not a directory" });
     const realCwd = realpathSync(resolve(cwd));
-    if (!allowedAttachRoots(rootDir, opts).some((root) => insideDir(realCwd, root))) return sendJson(res, 403, { error: "cwd is not a known agent or team path" });
+    if (!roots.some((root) => insideDir(realCwd, root))) return sendJson(res, 403, { error: "cwd is not a known agent or team path" });
     if (!Array.isArray(files) || !files.length) return sendJson(res, 400, { error: "no files given" });
+    if (files.some((f) => isUncLikePath(f))) return sendJson(res, 403, { error: "source path is not allowed" });
     const dest = join(realCwd, "scratch", "inputs");
     mkdirSync(dest, { recursive: true });
     const copied = [];
@@ -1218,9 +1234,8 @@ export function resolveAllowedImage(raw, roots = imageAllowedRoots(), extraCwd =
     let p = String(raw ?? "");
     if (!p || p.includes("\0")) return null;
     if (/^file:/i.test(p)) p = fileURLToPath(p);
+    if (isUncLikePath(p)) return null;
     if (!IMAGE_MIME[extname(p).toLowerCase()]) return null;
-    const real = realpathSync(resolve(p));
-    if (!statSync(real).isFile()) return null;
     const allRoots = Array.isArray(roots) ? [...roots] : imageAllowedRoots();
     let resolvedExtra = null;
     if (typeof extraCwd === "string" && extraCwd.trim()) {
@@ -1228,11 +1243,14 @@ export function resolveAllowedImage(raw, roots = imageAllowedRoots(), extraCwd =
     } else if (extraCwd && typeof extraCwd === "object") {
       resolvedExtra = extraCwd.extraCwd || (extraCwd.agentId ? lookupAgentCwd(extraCwd.agentId, extraCwd.paseoHome) : null);
     }
-    if (resolvedExtra) {
+    if (resolvedExtra && !isUncLikePath(resolvedExtra)) {
       try {
         allRoots.push(realpathSync(resolve(resolvedExtra)));
       } catch {}
     }
+    if (!lexicallyInside(p, allRoots.filter((r) => !isUncLikePath(r)))) return null;
+    const real = realpathSync(resolve(p));
+    if (!statSync(real).isFile()) return null;
     const norm = (x) => (process.platform === "win32" ? x.toLowerCase() : x);
     const r = norm(real);
     return allRoots.some((root) => {
@@ -1280,11 +1298,13 @@ async function handleWorkspacePackageScripts(req, res, rootDir, opts = {}) {
   }
   try {
     const cwd = new URL(req.url, "http://x").searchParams.get("cwd") ?? "";
-    if (!cwd || !existsSync(cwd) || !statSync(cwd).isDirectory()) {
+    if (!cwd || isUncLikePath(cwd)) return sendJson(res, 400, { ok: false, scripts: {} });
+    const allowed = allowedAttachRoots(rootDir, opts);
+    if (!lexicallyInside(cwd, allowed)) return sendJson(res, 403, { ok: false, error: "cwd not in allowed roots" });
+    if (!existsSync(cwd) || !statSync(cwd).isDirectory()) {
       return sendJson(res, 400, { ok: false, scripts: {} });
     }
     const realCwd = realpathSync(resolve(cwd));
-    const allowed = allowedAttachRoots(rootDir, opts);
     if (!allowed.some((root) => insideDir(realCwd, root))) {
       return sendJson(res, 403, { ok: false, error: "cwd not in allowed roots" });
     }
@@ -1315,6 +1335,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     if (path === "/ca.crt") return handleCaCrt(req, res);
     if (path === "/pair") return handlePairRedeem(req, res);
     if (path === "/__vibesquad/local-login") return handleLocalLogin(req, res);
+    if (path === "/__vibesquad/local-login/nonce") return handleLocalLoginNonce(req, res);
     const isApi = path.startsWith("/__vibesquad/") || path.startsWith("/api/");
     if (isApi && !isTrusted(req)) {
       if (isLocal(req)) return sendJson(res, 403, { error: "forbidden" });

@@ -223,8 +223,8 @@ describe("request guard", () => {
     });
 
     test("local-image answers 404 for everything it refuses", async () => {
-      const missing = await call(`/__vibesquad/local-image?path=${encodeURIComponent(join(home, "nope.png"))}`);
-      const existsButDenied = await call(`/__vibesquad/local-image?path=${encodeURIComponent(join(rootDir, "package.json"))}`);
+      const missing = await call(`/__vibesquad/local-image?path=${encodeURIComponent(join(home, "nope.png"))}`, { headers: ownerHeaders() });
+      const existsButDenied = await call(`/__vibesquad/local-image?path=${encodeURIComponent(join(rootDir, "package.json"))}`, { headers: ownerHeaders() });
       assert.equal(missing.status, 404);
       assert.equal(existsButDenied.status, 404);
       assert.equal(missing.body, existsButDenied.body);

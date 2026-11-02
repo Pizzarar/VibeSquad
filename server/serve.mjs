@@ -18,6 +18,7 @@ import {
   discardPairCode,
   getLocalToken,
   getTls,
+  mintLocalLoginNonce,
   handleCaCrt,
   handlePairRedeem,
   isAllowedHostHeader,
@@ -32,6 +33,7 @@ import {
 import "./brainstorm.mjs";
 import "./inbox.mjs";
 import { installVsShim } from "../cli/vs.mjs";
+import { requestLocalLoginUrl } from "./local-token.mjs";
 import { startPushWatcher } from "./push.mjs";
 import { ensurePaseoDaemon } from "./first-run.mjs";
 import { checkDaemonListenExposure } from "./paseo-control.mjs";
@@ -113,13 +115,17 @@ function findExe(candidates) {
   return candidates.find((c) => c.includes(sep) && existsSync(c)) ?? null;
 }
 
-// The launcher's own URL: the local-login bootstrap sets the vs_local cookie, then redirects to /.
-const openUrl = () => `${url}/__vibesquad/local-login?t=${getLocalToken()}`;
+// The launcher's own URL: a single-use local-login nonce (never the master token, which would sit on the
+// browser's command line), minted here when this process serves, else by the server already running.
+async function openUrl() {
+  if (server.listening) return `${url}/__vibesquad/local-login?t=${mintLocalLoginNonce()}`;
+  return requestLocalLoginUrl({ port }).catch(() => url);
+}
 
-function launchApp(exe) {
+function launchApp(exe, target) {
   // A bare name relies on PATH; spawn reports a missing binary via the error event.
   return new Promise((ok) => {
-    const child = spawn(exe, [`--app=${openUrl()}`], { detached: true, stdio: "ignore", windowsHide: false });
+    const child = spawn(exe, [`--app=${target}`], { detached: true, stdio: "ignore", windowsHide: false });
     child.on("error", () => ok(false));
     setTimeout(() => {
       child.unref();
@@ -130,6 +136,7 @@ function launchApp(exe) {
 
 async function openBrowser() {
   if (await focusExistingWindow()) return;
+  const target = await openUrl();
   const pf = process.env["ProgramFiles"] ?? "C:\\Program Files";
   const pf86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
   const browsers = [
@@ -138,10 +145,10 @@ async function openBrowser() {
   ];
   for (const list of browsers) {
     const exe = findExe(list) ?? list[list.length - 1];
-    if (await launchApp(exe)) return;
+    if (await launchApp(exe, target)) return;
   }
   // `start` is a cmd builtin; the empty "" is the window title argument.
-  spawn("cmd.exe", ["/c", "start", "", openUrl()], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+  spawn("cmd.exe", ["/c", "start", "", target], { detached: true, stdio: "ignore", windowsHide: true }).unref();
 }
 
 function isListening() {

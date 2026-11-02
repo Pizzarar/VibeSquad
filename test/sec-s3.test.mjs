@@ -119,7 +119,7 @@ describe("loopback API: owner vs read-only", () => {
   });
 
   test("gated GETs need the token too", async () => {
-    for (const path of ["/__vibesquad/paseo/pair", "/__vibesquad/push/vapid-public-key", "/__vibesquad/paseo/providers/diagnostic?provider=x", "/__vibesquad/paseo/providers/models?provider=x", "/__vibesquad/paseo/usage?refresh=1"]) {
+    for (const path of ["/__vibesquad/paseo/pair", "/__vibesquad/push/vapid-public-key", "/__vibesquad/paseo/providers/diagnostic?provider=x", "/__vibesquad/paseo/providers/models?provider=x", "/__vibesquad/paseo/usage?refresh=1", "/__vibesquad/paseo/surface", "/__vibesquad/local-image?path=x.png"]) {
       const r = await call(port, path);
       assert.equal(r.status, 403, path);
       assert.equal(json(r).readOnly, true, path);
@@ -136,8 +136,18 @@ describe("loopback API: owner vs read-only", () => {
     assert.equal(json(await call(port, "/__vibesquad/health")).localAccess, "read-only");
   });
 
-  test("local-login: a good t sets an HttpOnly SameSite=Strict cookie and redirects; the cookie is owner", async () => {
-    const r = await call(port, `/__vibesquad/local-login?t=${token}`);
+  const nonceFromServer = async () => {
+    const r = await call(port, "/__vibesquad/local-login/nonce", { method: "POST", headers: { "x-vibesquad-token": token } });
+    assert.equal(r.status, 200, r.body);
+    const body = json(r);
+    assert.match(body.nonce, /^[0-9a-f]{32}$/);
+    assert.equal(body.path, `/__vibesquad/local-login?t=${body.nonce}`);
+    assert.ok(!r.body.includes(token));
+    return body.nonce;
+  };
+
+  test("local-login: a fresh nonce sets an HttpOnly SameSite=Strict session cookie and redirects; the cookie is owner", async () => {
+    const r = await call(port, `/__vibesquad/local-login?t=${await nonceFromServer()}`);
     assert.equal(r.status, 302);
     assert.equal(r.headers.location, "/");
     assert.equal(r.headers["referrer-policy"], "no-referrer");
@@ -146,6 +156,7 @@ describe("loopback API: owner vs read-only", () => {
     assert.match(setCookie, /HttpOnly/);
     assert.match(setCookie, /SameSite=Strict/);
     assert.match(setCookie, /Path=\//);
+    assert.doesNotMatch(setCookie, /Max-Age|Expires/i, "session cookie");
     assert.ok(!setCookie.includes(token), "cookie value is derived, not the header secret");
     const cookie = setCookie.split(";")[0];
     const browser = { cookie, origin: `http://127.0.0.1:${port}`, "sec-fetch-site": "same-origin", "user-agent": "Mozilla/5.0" };
@@ -153,14 +164,48 @@ describe("loopback API: owner vs read-only", () => {
     assert.equal(json(await call(port, "/__vibesquad/auth/status", { headers: browser })).localAccess, "owner");
   });
 
-  test("local-login refuses a bad or missing t and sets no cookie", async () => {
-    for (const q of ["", "?t=", "?t=nope", `?t=${"f".repeat(64)}`]) {
+  test("local-login refuses a bad or missing t, and the master token itself, and sets no cookie", async () => {
+    for (const q of ["", "?t=", "?t=nope", `?t=${"f".repeat(32)}`, `?t=${token}`]) {
       const r = await call(port, `/__vibesquad/local-login${q}`);
       assert.equal(r.status, 403, q);
       assert.equal(r.headers["set-cookie"], undefined, q);
     }
-    assert.equal((await call(port, `/__vibesquad/local-login?t=${token}`, { method: "POST" })).status, 405);
-    assert.equal((await call(port, `/__vibesquad/local-login?t=${token}`, { headers: { host: "evil.example" } })).status, 403);
+    assert.equal((await call(port, `/__vibesquad/local-login?t=${await nonceFromServer()}`, { method: "POST" })).status, 405);
+    assert.equal((await call(port, `/__vibesquad/local-login?t=${await nonceFromServer()}`, { headers: { host: "evil.example" } })).status, 403);
+  });
+
+  test("a nonce works once", async () => {
+    const n = await nonceFromServer();
+    assert.equal((await call(port, `/__vibesquad/local-login?t=${n}`)).status, 302);
+    const again = await call(port, `/__vibesquad/local-login?t=${n}`);
+    assert.equal(again.status, 403);
+    assert.equal(again.headers["set-cookie"], undefined);
+  });
+
+  test("a nonce expires", async () => {
+    const n = auth.mintLocalLoginNonce(5);
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal((await call(port, `/__vibesquad/local-login?t=${n}`)).status, 403);
+    assert.equal((await call(port, `/__vibesquad/local-login?t=${auth.mintLocalLoginNonce()}`)).status, 302, "an in-process nonce (serve.mjs --open) works");
+  });
+
+  test("the nonce endpoint needs the header token: no token, a bad one, the cookie or GET all fail", async () => {
+    const login = await call(port, `/__vibesquad/local-login?t=${auth.mintLocalLoginNonce()}`);
+    const cookie = String(login.headers["set-cookie"]).split(";")[0];
+    for (const headers of [{}, { "x-vibesquad-token": "0".repeat(64) }, { cookie, origin: `http://127.0.0.1:${port}` }, { "x-vibesquad-token": token, host: "evil.example" }]) {
+      const r = await call(port, "/__vibesquad/local-login/nonce", { method: "POST", headers });
+      assert.equal(r.status, 403, JSON.stringify(headers));
+      assert.ok(!/[0-9a-f]{32}/.test(r.body));
+    }
+    assert.equal((await call(port, "/__vibesquad/local-login/nonce", { headers: { "x-vibesquad-token": token } })).status, 405);
+  });
+
+  test("requestLocalLoginUrl (vs open, a second --open) gets a nonce URL, never the token", async () => {
+    const url = await localToken.requestLocalLoginUrl({ port, file: join(home, "local-token") });
+    assert.match(url, new RegExp(`^http://localhost:${port}/__vibesquad/local-login\\?t=[0-9a-f]{32}$`));
+    assert.ok(!url.includes(token));
+    assert.equal((await call(port, new URL(url).pathname + new URL(url).search)).status, 302);
+    await assert.rejects(localToken.requestLocalLoginUrl({ port, file: join(home, "missing") }), /no local token/);
   });
 });
 
@@ -215,9 +260,49 @@ describe("loopback /ws upgrade", () => {
     assert.match(await upgrade({ Origin: "http://evil.example", "x-vibesquad-token": token }), /403/);
     assert.equal(upstreamHits, 0);
     assert.match(await upgrade({ "x-vibesquad-token": token }), /101/);
-    const r = await call(port, `/__vibesquad/local-login?t=${token}`);
+    const r = await call(port, `/__vibesquad/local-login?t=${auth.mintLocalLoginNonce()}`);
     const cookie = String(r.headers["set-cookie"]).split(";")[0];
     assert.match(await upgrade({ Origin: `http://127.0.0.1:${port}`, Cookie: cookie }), /101/);
     assert.equal(upstreamHits, 2);
+  });
+});
+
+describe("UNC / device paths never reach the filesystem", () => {
+  let srv;
+  let port;
+  let token;
+  before(async () => {
+    token = auth.getLocalToken();
+    srv = createServer(api.createVibesquadMiddleware(rootDir));
+    await new Promise((ok) => srv.listen(0, "127.0.0.1", ok));
+    port = srv.address().port;
+  });
+  after(() => new Promise((ok) => srv.close(ok)));
+  const UNC = ["\\\\attacker\\share\\x", "//attacker/share/x", "\\\\?\\UNC\\attacker\\share\\x", "\\\\.\\pipe\\x"];
+
+  test("isUncLikePath", () => {
+    for (const p of UNC) assert.equal(api.isUncLikePath(p), true, p);
+    for (const p of ["C:\\x", "/home/x", "x/y", "", undefined]) assert.equal(api.isUncLikePath(p), false, String(p));
+  });
+
+  test("local-image refuses UNC paths and file:// URLs to another host", () => {
+    for (const p of [...UNC.map((u) => u + ".png"), "file://attacker/share/x.png"]) assert.equal(api.resolveAllowedImage(p, [tmpdir()]), null, p);
+  });
+
+  test("workspace-package-scripts: UNC is 400, and a path outside the roots is 403 before any existence check", async () => {
+    for (const p of UNC) {
+      const r = await call(port, `/__vibesquad/workspace-package-scripts?cwd=${encodeURIComponent(p)}`, { headers: { "x-vibesquad-token": token } });
+      assert.equal(r.status, 400, p);
+    }
+    const missing = join(tmpdir(), "vs-s3-definitely-missing-dir");
+    const r = await call(port, `/__vibesquad/workspace-package-scripts?cwd=${encodeURIComponent(missing)}`, { headers: { "x-vibesquad-token": token } });
+    assert.equal(r.status, 403, "allowlist runs before existsSync");
+  });
+
+  test("attach refuses a UNC cwd or source file, and checks the allowlist before touching cwd", async () => {
+    const post = (body) => call(port, "/__vibesquad/attach", { method: "POST", headers: { "content-type": "application/json", "x-vibesquad-token": token }, body: JSON.stringify(body) });
+    for (const p of UNC) assert.equal((await post({ cwd: p, files: ["a"] })).status, 400, p);
+    assert.equal((await post({ cwd: join(tmpdir(), "vs-s3-missing-cwd"), files: ["a"] })).status, 403);
+    for (const p of UNC) assert.equal((await post({ cwd: rootDir, files: [p] })).status, 403, p);
   });
 });

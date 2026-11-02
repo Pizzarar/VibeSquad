@@ -272,11 +272,22 @@ pub fn save_config(cfg: &DesktopConfig) -> Result<(), String> {
     Ok(())
 }
 
+/// Exact loopback names only (with or without a port): `localhost.evil.com` or `127.0.0.1.nip.io` are remote.
 pub fn is_local_host(host: &str) -> bool {
     let clean = normalize_host(host).to_lowercase();
-    clean.starts_with("localhost")
-        || clean.starts_with("127.0.0.1")
-        || clean.starts_with("[::1]")
+    let (name, rest) = if clean.starts_with('[') {
+        match clean.find(']') {
+            Some(i) => clean.split_at(i + 1),
+            None => return false,
+        }
+    } else {
+        match clean.find(':') {
+            Some(i) => clean.split_at(i),
+            None => (clean.as_str(), ""),
+        }
+    };
+    let port_ok = rest.is_empty() || rest.strip_prefix(':').map(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())).unwrap_or(false);
+    port_ok && matches!(name, "localhost" | "127.0.0.1" | "[::1]")
 }
 
 pub fn normalize_host(input: &str) -> String {
@@ -415,6 +426,15 @@ pub struct SharedAppState {
 }
 
 impl SharedAppState {
+    /// The local token to send to a local server. None in headless mode: with the desktop key off, any local
+    /// process can reach this proxy, so it must not carry owner credentials.
+    pub fn local_token(&self) -> Option<String> {
+        if !self.require_desktop_key.load(Ordering::SeqCst) {
+            return None;
+        }
+        read_local_token(&self.local_token_file)
+    }
+
     pub fn client(&self) -> reqwest::Client {
         self.http_client.read().unwrap().clone()
     }
@@ -1630,7 +1650,7 @@ async fn proxy_websocket(
             if let Ok(hv) = HeaderValue::from_str(&format!("http://{}", host)) {
                 ws_req.headers_mut().insert("Origin", hv);
             }
-            if let Some(hv) = read_local_token(&state.local_token_file).and_then(|t| HeaderValue::from_str(&t).ok()) {
+            if let Some(hv) = state.local_token().and_then(|t| HeaderValue::from_str(&t).ok()) {
                 ws_req.headers_mut().insert(LOCAL_TOKEN_HEADER, hv);
             }
         }
@@ -1825,7 +1845,7 @@ fn stop_managed_server(state: &Arc<SharedAppState>) {
                 let _ = stream.set_read_timeout(Some(Duration::from_millis(1200)));
                 let _ = stream.set_write_timeout(Some(Duration::from_millis(400)));
                 let body = b"{\"action\":\"stop\",\"reason\":\"app-quit\"}";
-                let token_line = read_local_token(&state.local_token_file)
+                let token_line = state.local_token()
                     .map(|t| format!("{}: {}\r\n", LOCAL_TOKEN_HEADER, t))
                     .unwrap_or_default();
                 let req = format!(
@@ -1981,7 +2001,7 @@ async fn proxy_http_handler(
             builder = builder
                 .header("Host", &host)
                 .header("Origin", format!("http://{}", host));
-            if let Some(t) = read_local_token(&state.local_token_file) {
+            if let Some(t) = state.local_token() {
                 builder = builder.header(LOCAL_TOKEN_HEADER, t);
             }
         }
@@ -2950,6 +2970,16 @@ mod tests {
     }
 
     #[test]
+    fn is_local_host_is_an_exact_match() {
+        for h in ["localhost", "localhost:4180", "127.0.0.1", "127.0.0.1:4180", "http://127.0.0.1:4180/x", "[::1]", "[::1]:4180", "LOCALHOST:1"] {
+            assert!(is_local_host(h), "{h}");
+        }
+        for h in ["localhost.evil.com", "localhost.evil.com:4180", "127.0.0.1.nip.io", "127.0.0.1.nip.io:4180", "127.0.0.10:4180", "[::1].evil", "[::1]:x", "localhost:4180:1", "evil.com", "10.0.0.5:4180"] {
+            assert!(!is_local_host(h), "{h}");
+        }
+    }
+
+    #[test]
     fn local_token_file_must_be_64_lowercase_hex() {
         let dir = std::env::temp_dir().join(format!("vs-desktop-token-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
@@ -3054,6 +3084,11 @@ mod tests {
         assert_eq!(r.status(), reqwest::StatusCode::OK);
         assert_eq!(r.text().await.unwrap(), format!("token={} cookie=other=1", token));
         assert_eq!(hits.load(Ordering::SeqCst), 1);
+
+        // Headless (desktop key off): reachable without the cookie, so it carries no local token.
+        state.require_desktop_key.store(false, Ordering::SeqCst);
+        let r = client.post(format!("{}/api/teams", base)).send().await.unwrap();
+        assert_eq!(r.text().await.unwrap(), "token= cookie=");
         let _ = fs::remove_dir_all(&dir);
     }
 }

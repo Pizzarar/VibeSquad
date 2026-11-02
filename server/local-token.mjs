@@ -28,6 +28,24 @@ export function localTokenHeaders(file = localTokenPath()) {
   return t ? { [LOCAL_TOKEN_HEADER]: t } : {};
 }
 
+/**
+ * Asks a running local server for a single-use login URL (POST /__vibesquad/local-login/nonce with the header
+ * token). The URL carries a ~60 s nonce, never the master token, so it is safe on a browser command line.
+ */
+export async function requestLocalLoginUrl({ port = Number(process.env.VIBESQUAD_PORT || 4180), file = localTokenPath(), timeoutMs = 5000 } = {}) {
+  const token = readLocalToken(file);
+  if (!token) throw new Error(`no local token at ${file}; start the VibeSquad server once to create it`);
+  const res = await fetch(`http://127.0.0.1:${port}/__vibesquad/local-login/nonce`, {
+    method: "POST",
+    headers: { [LOCAL_TOKEN_HEADER]: token },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) throw new Error(`VibeSquad server on port ${port} refused a login nonce (${res.status}); is it running this version?`);
+  const { path } = await res.json();
+  if (typeof path !== "string" || !path.startsWith("/__vibesquad/local-login?t=")) throw new Error("unexpected nonce response");
+  return `http://localhost:${port}${path}`;
+}
+
 /** Reads the token, creating it (32 random bytes, hex, mode 0o600) when missing or malformed. */
 export function ensureLocalToken(file = localTokenPath()) {
   const existing = readLocalToken(file);
@@ -41,8 +59,12 @@ export function ensureLocalToken(file = localTokenPath()) {
   } catch (e) {
     if (e?.code !== "EEXIST") throw e;
   }
-  const raced = readLocalToken(file);
-  if (raced) return raced;
+  // Another process just created it and may still be writing: give it ~100 ms before calling it malformed.
+  for (let i = 0; i < 5; i++) {
+    const raced = readLocalToken(file);
+    if (raced) return raced;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+  }
   // A malformed file: replace it whole.
   const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
   try {

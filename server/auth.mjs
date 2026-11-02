@@ -453,11 +453,42 @@ export function hasLocalToken(req) {
 /** Owner on loopback: the existing Host/Origin checks plus the local token. */
 export const isLocalOwner = (req) => isLocalBrowserSafe(req) && hasLocalToken(req);
 
+/** True only for the x-vibesquad-token header (never the cookie): the nonce endpoint is for CLI/launcher callers. */
+export function hasLocalTokenHeader(req) {
+  const header = req.headers[LOCAL_TOKEN_HEADER];
+  return typeof header === "string" && sameSecret(header.trim(), getLocalToken());
+}
+
+// Single-use login nonces: the URL a launcher puts on a command line never carries the master token.
+const LOGIN_NONCE_TTL_MS = 60_000;
+const loginNonces = new Map(); // nonce -> expiresAt
+
+/** A fresh 128-bit nonce for /__vibesquad/local-login?t=, valid once for ~60 s. In memory, so mint it in the server process. */
+export function mintLocalLoginNonce(ttlMs = LOGIN_NONCE_TTL_MS) {
+  const now = Date.now();
+  for (const [n, exp] of loginNonces) if (exp <= now) loginNonces.delete(n);
+  const nonce = randomBytes(16).toString("hex");
+  loginNonces.set(nonce, now + ttlMs);
+  return nonce;
+}
+
+function consumeLocalLoginNonce(raw) {
+  const nonce = String(raw ?? "").trim();
+  if (!/^[0-9a-f]{32}$/.test(nonce)) return false;
+  const exp = loginNonces.get(nonce);
+  loginNonces.delete(nonce);
+  return exp !== undefined && exp > Date.now();
+}
+
+export function resetLocalLoginNoncesForTest() {
+  loginNonces.clear();
+}
+
 export const READ_ONLY_ERROR = "read-only: this loopback request has no VibeSquad local token. Open VibeSquad from its launcher or desktop app (or run `vs open`), or send the x-vibesquad-token header from ~/.vibesquad/local-token.";
 
 /**
- * GET /__vibesquad/local-login?t=<token>: launcher-only bootstrap. Sets the vs_local cookie and redirects to /.
- * Loopback only; a missing or wrong t gets 403 and no cookie.
+ * GET /__vibesquad/local-login?t=<nonce>: launcher-only bootstrap. Sets the vs_local session cookie and redirects
+ * to /. Loopback only; t must be an unused, unexpired nonce (never the master token), else 403 and no cookie.
  */
 export function handleLocalLogin(req, res) {
   if (req.method !== "GET") {
@@ -466,14 +497,25 @@ export function handleLocalLogin(req, res) {
   }
   res.setHeader("referrer-policy", "no-referrer");
   if (!isLocalBrowserSafe(req)) return sendJson(res, 403, { error: "local login is only available on the PC itself" });
-  const t = new URL(req.url ?? "/", "http://x").searchParams.get("t") ?? "";
-  const token = getLocalToken();
-  if (!sameSecret(t.trim(), token)) return sendHtml(res, 403, "Local login failed", "That link is not valid. Open VibeSquad from its launcher or desktop app, or run <code>vs open</code>.");
+  const t = new URL(req.url ?? "/", "http://x").searchParams.get("t");
+  if (!consumeLocalLoginNonce(t)) return sendHtml(res, 403, "Local login failed", "That link is not valid, already used, or expired. Open VibeSquad from its launcher or desktop app, or run <code>vs open</code>.");
   res.statusCode = 302;
-  res.setHeader("set-cookie", `${LOCAL_COOKIE}=${localCookieValue(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`);
+  // Session cookie (no Max-Age): a fresh launcher run unlocks the next browser session.
+  res.setHeader("set-cookie", `${LOCAL_COOKIE}=${localCookieValue(getLocalToken())}; HttpOnly; SameSite=Strict; Path=/`);
   res.setHeader("location", "/");
   res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
   res.end();
+}
+
+/** POST /__vibesquad/local-login/nonce with the x-vibesquad-token header: { nonce, path, expiresInMs } for `vs open`. */
+export function handleLocalLoginNonce(req, res) {
+  if (req.method !== "POST") {
+    res.statusCode = 405;
+    return res.end();
+  }
+  if (!isLocalBrowserSafe(req) || !hasLocalTokenHeader(req)) return sendJson(res, 403, { error: "the x-vibesquad-token header is required" });
+  const nonce = mintLocalLoginNonce();
+  sendJson(res, 200, { nonce, path: `/__vibesquad/local-login?t=${nonce}`, expiresInMs: LOGIN_NONCE_TTL_MS });
 }
 
 /** Host header values this server answers to; anything else is not echoed into redirects. */
