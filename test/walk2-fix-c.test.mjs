@@ -20,6 +20,8 @@ test("disabled Spawn says what is needed; Task/Job marked required", () => {
 test("spawn closes when agent appears, times out readably, Cancel stays enabled", () => {
   const s = src("TeamActions.tsx");
   assert.match(s, /a\.title === spawnedTitle\.current/);
+  assert.ok(s.includes("!existingIds.current.has(a.id) && a.title === spawnedTitle.current"));
+  assert.ok(s.includes("existingIds.current = new Set(agents.keys())"));
   assert.match(s, /90000/);
   assert.match(s, /check the roster before retrying/);
   const i = s.indexOf("Spawn agent");

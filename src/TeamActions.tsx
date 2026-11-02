@@ -282,14 +282,16 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   };
   // Paseo create can take >60s or error after the agent exists: close as soon as it shows in the live list.
   const spawnedTitle = useRef<string | null>(null);
+  const existingIds = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!busy || !spawnedTitle.current) return;
-    for (const a of agents.values()) if (a.title === spawnedTitle.current) return finish(a.id);
+    for (const a of agents.values()) if (!existingIds.current.has(a.id) && a.title === spawnedTitle.current) return finish(a.id);
   }, [agents, busy]);
 
   const submit = async () => {
     setBusy(true);
     setErr("");
+    existingIds.current = new Set(agents.keys());
     spawnedTitle.current = title;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
