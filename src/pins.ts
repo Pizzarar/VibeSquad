@@ -190,7 +190,7 @@ function briefSections(text: string): Map<string, string[]> {
 }
 
 /** Blank lines and placeholders like "- None." or "- (none recorded yet)" are not content. */
-const isContentLine = (l: string): boolean => Boolean(l) && !/^[-*]?\s*\(?\s*(none|nothing)( recorded)?( yet)?\s*\)?\.?$/i.test(l);
+export const isContentLine = (l: string): boolean => Boolean(l) && !/^[-*]?\s*\(?\s*(none|nothing)( recorded)?( yet)?\s*\)?\.?$/i.test(l);
 
 /**
  * One-line summary of a brief edit for the steer message, e.g. "Decided +2 −1, Open +1".

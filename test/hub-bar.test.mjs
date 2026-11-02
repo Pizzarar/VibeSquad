@@ -21,3 +21,9 @@ test("countUnsplit: stops at the next ## heading", () => {
 test("countUnsplit: blank lines ignored, nested bullets count too, prose doesn't", () => {
   assert.equal(countUnsplit("## Unsplit threads\n\n- a\n\n  - sub\n\nsome prose\n- b\n"), 3);
 });
+
+test("countUnsplit: the seeded '(none yet)' placeholder counts as 0", () => {
+  assert.equal(countUnsplit("## Unsplit threads\n- (none yet)\n\n## Open\n- x\n"), 0);
+  assert.equal(countUnsplit("## Unsplit threads\n- (none yet)\n- dark mode\n"), 1);
+  assert.equal(countUnsplit("## Unsplit threads\n- None.\n- n/a\n"), 0);
+});

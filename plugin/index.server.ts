@@ -101,8 +101,18 @@ export const BRAINSTORM_PACK = [
   "- At >=80k tokens, update the brief now. At the hard limit VS retires you; the next click on the pin starts a fresh Brainstorm from the brief.",
   "- If the user raises something that belongs to another Team, offer: \"That sounds like <Team>. Send it there?\" followed by a fenced block: line 1 `vs:send-to <lane-id>`, then the idea text (VS shows a one-click Send button). Unrelated loose ideas: `vs inbox add \"<idea>\"` (or the UI's `Park in Inbox`) and reply \"parked N ideas → Inbox\".",
   "- \"I just thought of X\" / \"spin up a Brainstorm for X\" is a new-pin request: run `vs pin new \"<short name>\" --brief \"<X in 1-3 lines>\"` (same Squad by default). It refuses when X overlaps an existing Team and names it: offer that Team instead. For work in flight that isn't a Team yet, check `vs who brainstorm` / `vs log --since-me` first. Don't spawn the Brainstorm; the first click on the new pin starts it.",
-  "- In a hub chat, sort every new idea: stays here / existing Team (`vs:send-to`) / new Team (`vs:spin-off`). Anything that isn't hub business gets proposed as a spin-off. Never spin off without the user's confirmation.",
+].join("\n");
+
+/** Appended to the Buddy pack only for the Squad's hub Buddy (RiffBot; isHubLane contract). Team Buddies never get it. */
+export const HUB_BUDDY_RULES = [
+  "Hub rules:",
+  "- You are this Squad's hub. You sort and split; Team Buddies design.",
+  "- End **every** reply with `Open threads:` listing ideas that have no Team yet (or `none`). Keep `## Unsplit threads` in the brief in sync.",
+  "- As soon as a thread can be worked on its own (its files and decisions don't overlap another thread or an in-flight Team), propose it in a `vs:spin-off` block. Don't wait for it to be fully figured out. Propose as many Teams as can run in parallel without clashing. When you merge or hold back an idea, give the reason in one line. Never spin off without the user's confirmation.",
   "- Propose spin-offs as one fenced block, line 1 ```vs:spin-off, then one Team per line: `Name | 1-line brief`. The user edits in words (4 proposed, \"energy and food in one lane called Needs\" → re-post the block with 3); only the newest block gets the button.",
+  "- If the user keeps riffing on a thread that already has a Team, redirect: \"That's <Team>'s. Send it there?\" plus `vs:send-to`.",
+  "- On boot, read `## Teams` and `## Unsplit threads`. Your first message is the Squad status in ≤6 lines, plus the top split you'd propose now.",
+  "- Never mark the hub done. Never spawn a Lead.",
 ].join("\n");
 
 /** Appended to the Buddy pack only while the Squad's `vibeMode` is on (teams.json). Off = pack text unchanged. */
@@ -139,7 +149,7 @@ interface TeamDef {
   id: string;
   name?: string;
   vibeMode?: boolean;
-  lanes?: { id: string; aliases?: string[] }[];
+  lanes?: { id: string; hub?: boolean; aliases?: string[] }[];
   paths?: string[];
 }
 
@@ -312,6 +322,13 @@ function loadTeams(): TeamDef[] {
   const teams: TeamDef[] = Array.isArray(parsed?.teams) ? parsed.teams : [];
   teamsCache = stat ? { file, mtimeMs: stat.mtimeMs, size: stat.size, teams } : null;
   return teams;
+}
+
+/** Plugin-side mirror of isHubLane (src/teams.ts): lane `hub: true`, else the lane whose id is the Squad id when no lane is flagged. */
+export function isHubCwd(team: TeamDef | undefined, laneId: string | undefined): boolean {
+  const lanes = team?.lanes ?? [];
+  const lane = lanes.find((l) => l.id === laneId);
+  return Boolean(team && lane && (lane.hub === true || (!lanes.some((l) => l.hub === true) && lane.id === team.id)));
 }
 
 function safeSegment(value: string): string {
@@ -504,7 +521,7 @@ function findProjectRoot(cwd: string): string {
   return path.resolve(cwd);
 }
 
-export function rolePack(role: string, cwd: string, vibeMode = false): string {
+export function rolePack(role: string, cwd: string, vibeMode = false, isHub = false): string {
   if (role === "lead") {
     try {
       const text = fs.readFileSync(path.join(findProjectRoot(cwd), "docs", "LEAD_RULES.md"), "utf8").trim();
@@ -514,7 +531,7 @@ export function rolePack(role: string, cwd: string, vibeMode = false): string {
     }
     return LEAD_FALLBACK_PACK;
   }
-  if (role === "brainstorm") return vibeMode ? `${BRAINSTORM_PACK}\n${VIBE_MODE_BUDDY_RULES}` : BRAINSTORM_PACK;
+  if (role === "brainstorm") return [BRAINSTORM_PACK, vibeMode && VIBE_MODE_BUDDY_RULES, isHub && HUB_BUDDY_RULES].filter(Boolean).join("\n");
   if (role === "worker") return WORKER_PACK;
   return "";
 }
@@ -632,8 +649,8 @@ export function firstDispatchMetricText(
   return "first-dispatch context: " + size + " (lead=" + parentId + ", ord=" + (ord ?? "?") + ", provider=" + (parent.provider || "?") + ", model=" + (parent.model || "?") + ")";
 }
 
-export function injectedPrefix(role: string, cwd: string, vibeMode = false): string {
-  return [EVERYONE_LAYER, rolePack(role, cwd, vibeMode)].filter(Boolean).join("\n\n");
+export function injectedPrefix(role: string, cwd: string, vibeMode = false, isHub = false): string {
+  return [EVERYONE_LAYER, rolePack(role, cwd, vibeMode, isHub)].filter(Boolean).join("\n\n");
 }
 
 export function inspectGitSpawnState(cwd: string): string | null {
@@ -1240,9 +1257,11 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           changed = true;
         }
 
-        const spawnTeamId = teamOf(reqLabels, cwd)?.team;
-        const vibeMode = Boolean(spawnTeamId && currentTeams().find((t) => t.id === spawnTeamId)?.vibeMode === true);
-        const prefix = injectedPrefix(role, cwd, vibeMode);
+        const spawnLoc = teamOf(reqLabels, cwd);
+        const spawnTeamId = spawnLoc?.team;
+        const spawnTeam = spawnTeamId ? currentTeams().find((t) => t.id === spawnTeamId) : undefined;
+        const vibeMode = spawnTeam?.vibeMode === true;
+        const prefix = injectedPrefix(role, cwd, vibeMode, role === "brainstorm" && isHubCwd(spawnTeam, spawnLoc?.lane));
         const profileNotes = dedupeNotesAgainst((matchedProfile?.notes ?? "").trim(), prefix);
         const gitState = inspectGitSpawnState(cwd);
         if (prefix && !sanitizedSysPrompt.includes(EVERYONE_LAYER)) {
