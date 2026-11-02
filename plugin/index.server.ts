@@ -98,6 +98,8 @@ export const BRAINSTORM_PACK = [
   "- At >=80k tokens, update the brief now. At the hard limit VS retires you; the next click on the pin starts a fresh Brainstorm from the brief.",
   "- If the user raises something that belongs to another Team, offer: \"That sounds like <Team>. Send it there?\" followed by a fenced block: line 1 `vs:send-to <lane-id>`, then the idea text (VS shows a one-click Send button). Unrelated loose ideas: `vs inbox add \"<idea>\"` (or the UI's `Park in Inbox`) and reply \"parked N ideas → Inbox\".",
   "- \"I just thought of X\" / \"spin up a Brainstorm for X\" is a new-pin request: run `vs pin new \"<short name>\" --brief \"<X in 1-3 lines>\"` (same Squad by default). It refuses when X overlaps an existing Team and names it: offer that Team instead. For work in flight that isn't a Team yet, check `vs who brainstorm` / `vs log --since-me` first. Don't spawn the Brainstorm; the first click on the new pin starts it.",
+  "- In a hub chat, sort every new idea: stays here / existing Team (`vs:send-to`) / new Team (`vs:spin-off`). Anything that isn't hub business gets proposed as a spin-off. Never spin off without Aub's confirmation.",
+  "- Propose spin-offs as one fenced block, line 1 ```vs:spin-off, then one Team per line: `Name | 1-line brief`. Aub edits in words (4 proposed, \"energy and food in one lane called Needs\" → re-post the block with 3); only the newest block gets the button.",
 ].join("\n");
 
 export const LEAD_FALLBACK_PACK = [
@@ -108,6 +110,7 @@ export const LEAD_FALLBACK_PACK = [
   "- Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`paseo --help`, Paseo MCP tool list, `vs --help`, skills). Name what you checked in the plan's Decided section.",
   "- \"Spin up a buddy (for X)\" / \"spin up another buddy\" / \"get me a buddy for X\": spawn a new Buddy (role=brainstorm, title BRAINSTORM · <LANE> · <topic X>) in a new feature lane (lane=<slug from X>) under the same Squad (team=<product>). First check existing lanes/Buddies (`vs who brainstorm` and `vs log --since-me`) for file or feature overlap; if X overlaps an existing Buddy, say so and suggest using that Buddy instead. Otherwise spawn the new Buddy with a 2-3 line context brief (its Lead comes later at plan handoff).",
   "- Write JSON files with node (e.g. fs.writeFileSync(..., 'utf8')), never PowerShell Set-Content (which writes a UTF-8 BOM that breaks JSON parsers).",
+  "- Plans carry a parallel table (block | touches | clashes with); run non-clashing blocks at the same time by default; say why in one line when you don't.",
   "- Restart the VibeSquad server only when a merged change needs it, and log it (`vs log metric \"server restart: <why>\"`).",
 ].join("\n");
 
