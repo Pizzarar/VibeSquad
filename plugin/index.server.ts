@@ -421,7 +421,6 @@ export function sameLaneRole(
   return true;
 }
 
-/** Digest/pre-check agents must never be digested again (infinite spawn loop). */
 /** Throwaway workers are not worth a [done] entry: no job label, or "probe" in the title/job. */
 export function isDigestNoise(labels: Labels, title?: string | null): boolean {
   const job = String(labels.job ?? "").trim();
@@ -433,6 +432,7 @@ export function statesVerdict(text: string): boolean {
   return /\b(PASS|FAIL)\b/.test(text);
 }
 
+/** Digest/pre-check agents must never be digested again (infinite spawn loop). */
 export function isDigestAgent(labels: Labels, _title?: string | null): boolean {
   return isDigestIdentity(labels);
 }
