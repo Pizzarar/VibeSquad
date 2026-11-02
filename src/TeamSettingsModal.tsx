@@ -214,7 +214,22 @@ export function ProfileImportModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-export function TeamSettingsModal({ onClose }: { onClose: () => void }) {
+/** The groups of this editor. The Settings home renders them in separate sections; the modal shows all. */
+export type TeamSettingsPart = "account" | "update" | "scale" | "paseo" | "profiles" | "teams";
+
+export function TeamSettingsModal({
+  onClose,
+  embedded = false,
+  parts,
+  onJumpToProfiles,
+}: {
+  onClose: () => void;
+  /** Render inline (inside the Settings home) instead of as its own modal. */
+  embedded?: boolean;
+  parts?: TeamSettingsPart[];
+  onJumpToProfiles?: () => void;
+}) {
+  const show = (p: TeamSettingsPart) => !parts || parts.includes(p);
   // The registry this editor started from (and its file revision). Saving merges against it, so a lane the
   // CLI added while the modal was open isn't mistaken for one the user deleted.
   const [base, setBase] = useState(snapshotTeams);
@@ -288,12 +303,7 @@ export function TeamSettingsModal({ onClose }: { onClose: () => void }) {
     setMsg(r.disk ? "Saved to browser and teams.json" : "Saved to browser only (no dev server to write teams.json)");
   };
 
-  return (
-    <Modal
-      title="Settings"
-      onClose={onClose}
-      wide
-      footer={
+  const footer = (
         <>
           <span className="muted small">{msg}</span>
           <button
@@ -317,9 +327,11 @@ export function TeamSettingsModal({ onClose }: { onClose: () => void }) {
             Save
           </button>
         </>
-      }
-    >
-      {configWarnings.length > 0 && (
+  );
+
+  const body = (
+    <>
+      {show("account") && configWarnings.length > 0 && (
         <section className="ts-team" data-testid="settings-config-warnings" style={{ borderLeftColor: "#ffb000" }}>
           <div className="field-label" style={{ color: "#ffb000" }}>⚠ CONFIG JSON PARSE WARNING</div>
           {configWarnings.map((w, idx) => (
@@ -329,7 +341,7 @@ export function TeamSettingsModal({ onClose }: { onClose: () => void }) {
           ))}
         </section>
       )}
-      <section className="ts-team" data-testid="user-name-section">
+      {show("account") && <section className="ts-team" data-testid="user-name-section">
         <div className="field-label">YOUR NAME</div>
         <div className="muted small">Shown on NEEDS badges, the owner feed entries and push notifications.</div>
         <input
@@ -342,8 +354,8 @@ export function TeamSettingsModal({ onClose }: { onClose: () => void }) {
             saveUserName(e.target.value);
           }}
         />
-      </section>
-      <section className="ts-team" data-testid="lan-access-section">
+      </section>}
+      {show("account") && <section className="ts-team" data-testid="lan-access-section">
         <div className="ts-scale-head">
           <div>
             <div className="field-label">ALLOW OTHER DEVICES (HOME LAN / MESHNET)</div>
@@ -364,8 +376,8 @@ export function TeamSettingsModal({ onClose }: { onClose: () => void }) {
             <span>{lanEnabled ? "Enabled" : "Off (loopback only)"}</span>
           </label>
         </div>
-      </section>
-      <section className="ts-team" data-testid="update-channel-section">
+      </section>}
+      {show("update") && <section className="ts-team" data-testid="update-channel-section">
         <div className="ts-scale-head">
           <div>
             <div className="field-label">UPDATE CHANNEL (v{updaterStatus.currentVersion})</div>
@@ -392,8 +404,8 @@ export function TeamSettingsModal({ onClose }: { onClose: () => void }) {
             </button>
           </div>
         </div>
-      </section>
-      <section className="ts-team ts-scale-section" data-testid="ui-scale-section">
+      </section>}
+      {show("scale") && <section className="ts-team ts-scale-section" data-testid="ui-scale-section">
         <div className="ts-scale-head">
           <div>
             <div className="field-label">DISPLAY &amp; 4K UI SCALE</div>
@@ -444,16 +456,22 @@ export function TeamSettingsModal({ onClose }: { onClose: () => void }) {
             </button>
           </div>
         </div>
-      </section>
-      {isHostMode && (
+      </section>}
+      {show("paseo") && isHostMode && (
         <PaseoSettingsSection
           lanIpHint={exposedIps[0]}
-          onJumpToProfiles={() => {
-            document.querySelector('[data-testid="profiles-settings-section"]')?.scrollIntoView?.({ behavior: "smooth", block: "start" });
-          }}
+          onJumpToProfiles={
+            onJumpToProfiles ??
+            (() => {
+              document.querySelector('[data-testid="profiles-settings-section"]')?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+            })
+          }
         />
       )}
-      <section className="ts-team" data-testid="profiles-settings-section">
+      {show("paseo") && embedded && !isHostMode && (
+        <div className="muted small" data-testid="paseo-settings-remote">Paseo settings live on the host machine; this device is connected remotely.</div>
+      )}
+      {show("profiles") && <section className="ts-team" data-testid="profiles-settings-section">
         <div className="ts-scale-head" style={{ marginBottom: 8 }}>
           <div>
             <div className="field-label">AGENT PROFILES (~/.vibesquad/profiles.json · {profiles.length} profiles)</div>
@@ -552,8 +570,9 @@ export function TeamSettingsModal({ onClose }: { onClose: () => void }) {
             </div>
           </div>
         )}
-      </section>
+      </section>}
       {showImportModal && <ProfileImportModal onClose={() => setShowImportModal(false)} />}
+      {show("teams") && <>
       {teams.map((t, i) => (
         <section key={i} className="ts-team" style={{ borderLeftColor: t.color }}>
           <div className="row2">
@@ -688,6 +707,21 @@ export function TeamSettingsModal({ onClose }: { onClose: () => void }) {
           ))}
         </div>
       </details>
+      </>}
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <div className="settings-embedded">
+        {body}
+        {show("teams") ? <div className="modal-foot">{footer}</div> : msg && <div className="muted small">{msg}</div>}
+      </div>
+    );
+  }
+  return (
+    <Modal title="Settings" onClose={onClose} wide footer={footer}>
+      {body}
     </Modal>
   );
 }

@@ -85,14 +85,17 @@ import { TopBreadcrumb } from "./Breadcrumb";
 import { PinFocusHeader, PinRail } from "./PinRail";
 import { PinToast } from "./PinIdeas";
 import { NewSquadModal } from "./NewSquadModal";
-import { AddBuddyModal, Modal, NewAgentModal, ProfileImportModal, TeamSettingsModal, useProfiles } from "./TeamActions";
+import { AddBuddyModal, Modal, NewAgentModal, ProfileImportModal, useProfiles } from "./TeamActions";
 import { PairDeviceModal } from "./PairDeviceModal";
 import { DaemonStatusBanner, DiagnosticsModal, HelpModal, checkForUpdates, updateLabel, type UpdateCheck } from "./DiagnosticsModal";
 import { BriefEditorHost } from "./BriefEditor";
 import { TeamFeed } from "./TeamFeed";
 import { HandoffModal } from "./HandoffModal";
 import { Avatar, NeonEmblem, TokenMeter, providerSpec } from "./pixel";
-import { PushNotificationControls } from "./notifications";
+import { playAlertChime } from "./notifications";
+import { SettingsHome, requestSettingsTarget } from "./SettingsHome";
+import { alertEnabled, getPrefs, getPref } from "./prefs";
+import { setCloseGuard } from "./drafts";
 import {
   applyUiScaleToDom,
   cycleUiScalePreset,
@@ -190,19 +193,25 @@ export async function startLaneBrainstorm(opts: {
   return newAgentId;
 }
 
-// Fire a desktop notification when an agent newly needs you.
+// Fire a desktop notification (and the optional chime) when an agent newly needs you. Settings ›
+// Notifications picks which events alert.
 function useAttentionAlerts(members: Member[]) {
   const seen = useRef(new Map<string, string>());
   useEffect(() => {
+    const prefs = getPrefs();
+    let chime = false;
     for (const m of members) {
-      const key = m.attention && m.attention.tone !== "finished" ? `${m.attention.tone}:${m.attention.reason}` : "";
+      const key = m.attention ? `${m.attention.tone}:${m.attention.reason}` : "";
       const prev = seen.current.get(m.agent.id);
       seen.current.set(m.agent.id, key);
       // prev === undefined means first load: don't spam for everything already waiting.
-      if (key && prev !== undefined && prev !== key && "Notification" in window && Notification.permission === "granted") {
+      if (!key || prev === undefined || prev === key || !alertEnabled(m.attention!.tone, prefs)) continue;
+      chime = true;
+      if ("Notification" in window && Notification.permission === "granted") {
         new Notification(`${m.team.name}: ${m.agent.title ?? "agent"}`, { body: m.attention!.reason, tag: m.agent.id });
       }
     }
+    if (chime && prefs["notify.sound"]) playAlertChime();
   }, [members]);
 }
 
@@ -631,8 +640,8 @@ const Sidebar = memo(function Sidebar(props: {
         🩺 Diagnostics &amp; Logs
       </button>
       <div className="sidebar-footer-row">
-        <button className="btn ghost small" onClick={props.onSettings} title="Edit squads, teams, path matchers and 4K UI scale">
-          ⚙ SQUADS
+        <button className="btn ghost small" data-testid="sidebar-settings-btn" onClick={props.onSettings} title="Settings: app, chat, notifications, teams, Paseo, profiles">
+          ⚙ SETTINGS
         </button>
         <button
           className={`btn ghost small ui-scale-sidebar-btn ${uiScalePct !== 100 ? "on" : ""}`}
@@ -643,7 +652,6 @@ const Sidebar = memo(function Sidebar(props: {
           🔍 {uiScalePct}%
         </button>
       </div>
-      <PushNotificationControls />
       <div
         className="sidebar-resizer"
         data-testid="sidebar-resizer"
@@ -1537,6 +1545,13 @@ export function App() {
   const [dateGroup, setDateGroup] = useState<DateBucket | "all">("all");
   const archivedMembers = useMemo(() => resolve(archivedAgents), [archivedAgents, teamsVersion]);
   useAttentionAlerts(members);
+  // Settings › App › "Confirm before closing while agents run": the beforeunload hook in drafts.ts asks this.
+  const membersRef = useRef(members);
+  membersRef.current = members;
+  useEffect(() => {
+    setCloseGuard(() => getPref("app.confirmClose") && membersRef.current.some((m) => m.agent.status === "running"));
+    return () => setCloseGuard(null);
+  }, []);
 
   // A lead past its handoff budget with no needs-you flag would otherwise sit silently (only the card's
   // SPAWN SUCCESSOR button hints at it). Flag it once; "handoff-flagged" stops a cleared flag re-firing.
@@ -1809,7 +1824,15 @@ export function App() {
       .sort((a, b) => Date.parse(b.agent.updatedAt ?? "") - Date.parse(a.agent.updatedAt ?? ""));
   }, [dateGroup, showArchived, members, archivedMembers, query]);
   const paletteActions = useMemo(
-    () => ({ newAgent: openNewAgent, settings: openSettings, workspaces: () => setScreen("workspaces"), toggleFocus }),
+    () => ({
+      newAgent: openNewAgent,
+      settings: (target?: string) => {
+        if (target) requestSettingsTarget(target);
+        openSettings();
+      },
+      workspaces: () => setScreen("workspaces"),
+      toggleFocus,
+    }),
     [openNewAgent, openSettings],
   );
   const onPaletteAgent = useCallback((m: Member) => onAgent(m.team.id, m.agent.id), [onAgent]);
@@ -2042,7 +2065,14 @@ export function App() {
         />
       )}
       {modal === "new-agent" && view && <NewAgentModal view={view} onClose={() => setModal(null)} onCreated={selectAgent} />}
-      {modal === "settings" && <TeamSettingsModal onClose={() => setModal(null)} />}
+      {modal === "settings" && (
+        <SettingsHome
+          onClose={() => setModal(null)}
+          onDiagnostics={openDiagnostics}
+          onLicenses={openAbout}
+          onChecklist={() => setModal("first-run")}
+        />
+      )}
       {modal === "pair-device" && <PairDeviceModal onClose={() => setModal(null)} />}
       {modal === "about" && <AboutLicensesModal onClose={() => setModal(null)} onChecklist={() => setModal("first-run")} />}
       {modal === "help" && <HelpModal onClose={() => setModal(null)} onTour={() => setModal("first-run")} />}

@@ -16,6 +16,7 @@ import {
 } from "./teams";
 import { freezeLaneCodes } from "./identity";
 import { useDraft } from "./drafts";
+import { getPref } from "./prefs";
 import { findProfile, getProfiles, useProfiles, type Profile, type Role } from "./profiles";
 
 export { TeamSettingsModal, ProfileImportModal, ARCHETYPES } from "./TeamSettingsModal";
@@ -58,7 +59,7 @@ export function buildName(i: NameInput): { title: string; labels: Record<string,
   return { title, labels };
 }
 
-export function Modal(props: { title: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode; wide?: boolean }) {
+export function Modal(props: { title: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode; wide?: boolean; className?: string }) {
   const { onClose } = props;
   const openerRef = useRef(document.activeElement as HTMLElement | null); // render-time: before autoFocus children run
   useEffect(() => {
@@ -76,7 +77,7 @@ export function Modal(props: { title: string; onClose: () => void; children: Rea
   }, [onClose]);
   return (
     <div className="modal-back" onMouseDown={onClose}>
-      <div className={`modal ${props.wide ? "wide" : ""}`} onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-label={props.title}>
+      <div className={`modal ${props.wide ? "wide" : ""} ${props.className ?? ""}`} onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-label={props.title}>
         <div className="modal-head">
           <span>{props.title}</span>
           <button className="btn ghost small" onClick={onClose}>
@@ -101,7 +102,11 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   const { agents, workspaces } = usePaseo();
   const { profiles, installedProviders } = useProfiles();
   const team = view.team;
-  const [profileName, setProfileName] = useState("Implement - Sonnet");
+  // Settings › New Agent defaults prefill profile and folder (empty = the built-in choice).
+  const [profileName, setProfileName] = useState(() => {
+    const pref = getPref("newAgent.profile");
+    return (pref && findProfile(pref, profiles)?.name) || "Implement - Sonnet";
+  });
   const profile = findProfile(profileName, profiles) ?? profiles[0]!;
   const [role, setRole] = useState<Role>(profile.role);
   const [laneId, setLaneId] = useState(shownLanesOf(team)[0]?.id ?? "");
@@ -111,7 +116,7 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   const [job, setJob] = useState("");
   const [promptDraft, setPrompt, clearPrompt] = useDraft(`new-agent:${team.id}:${profileName}:prompt`);
   const prompt = promptDraft || profile.brief;
-  const [cwd, setCwd] = useState("");
+  const [cwd, setCwd] = useState(() => getPref("newAgent.folder").trim());
   const [newWt, setNewWt] = useState(false);
   const [branch, setBranch] = useState("");
   const [busy, setBusy] = useState(false);

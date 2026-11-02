@@ -3,6 +3,7 @@ import { DEMO, daemonClient } from "./paseo";
 import { getPanes, openAgent, subscribePanes } from "./panes";
 import { AGENT_TYPE_LABEL, type Member, type TeamView } from "./teams";
 import { Ago, cleanTitle } from "./ui";
+import { settingsPaletteItems } from "./prefs";
 
 // ---- pure helpers (mirrored in test/ade-batch-g.test.mjs) ---------------------------------
 
@@ -288,7 +289,8 @@ function TranscriptSearch({ members, onPick, onClose }: { members: Member[]; onP
 
 export type PaletteActions = {
   newAgent: () => void;
-  settings: () => void;
+  /** With a target: open Settings at that setting (a SettingHit id from src/prefs.ts). */
+  settings: (target?: string) => void;
   workspaces: () => void;
   toggleFocus: () => void;
 };
@@ -389,6 +391,8 @@ export function CommandPaletteHost(props: {
       act("reopen", "Reopen Closed Tab"),
       ...teams,
       ...agents,
+      // Last so an empty query still lists agents first; typing "settings" or a setting name finds them.
+      ...settingsPaletteItems().map<PaletteItem>((s) => ({ id: `action:${s.id}`, kind: "action", label: s.label, hint: "settings" })),
     ];
   }, [all, props.views]);
 
@@ -417,6 +421,7 @@ export function CommandPaletteHost(props: {
     else if (id === "search") setMode("search");
     else if (id === "shortcuts") setMode("shortcuts");
     else if (id === "settings") props.actions.settings();
+    else if (id.startsWith("setting:")) props.actions.settings(id.slice("setting:".length));
     else if (id === "workspaces") props.actions.workspaces();
     else if (id === "focus") props.actions.toggleFocus();
     else if (id === "reopen") {
