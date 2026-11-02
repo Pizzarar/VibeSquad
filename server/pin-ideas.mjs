@@ -138,3 +138,39 @@ export function parseSendTo(text) {
   }
   return null;
 }
+
+export const SPIN_OFF_MARKER = "vs:spin-off";
+export const SPIN_OFF_MAX = 6;
+
+/**
+ * Parse a spin-off proposal: a fence opened by ```vs:spin-off, one Team per line as `Name | 1-line brief`.
+ * Blank and malformed lines (no `|`, empty name) are skipped; at most SPIN_OFF_MAX rows. Null when the message
+ * has no such fence or no valid row.
+ */
+export function parseSpinOff(text) {
+  const lines = String(text ?? "").replace(/\r\n/g, "\n").split("\n");
+  const start = lines.findIndex((l) => /^\s*```\s*vs:spin-off\s*$/.test(l));
+  if (start < 0) return null;
+  const teams = [];
+  for (let i = start + 1; i < lines.length && !/^\s*```/.test(lines[i]); i++) {
+    const bar = lines[i].indexOf("|");
+    if (bar < 0) continue;
+    const name = lines[i].slice(0, bar).trim();
+    const brief = lines[i].slice(bar + 1).trim();
+    if (name && brief) teams.push({ name, brief });
+    if (teams.length >= SPIN_OFF_MAX) break;
+  }
+  return teams.length ? teams : null;
+}
+
+/** The spin-off offer in the newest assistant message of a Brainstorm timeline, else null. Same message-id scheme as sendToFrom. */
+export function spinOffFrom(agentId, entries) {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const it = entries[i].item;
+    if (it?.type !== "assistant_message" || typeof it.text !== "string") continue;
+    const teams = parseSpinOff(it.text);
+    if (!teams) return null;
+    return { teams, id: `${agentId}:${it.id ?? it.messageId ?? entries[i].seqStart ?? entries[i].timestamp ?? it.text.length}` };
+  }
+  return null;
+}

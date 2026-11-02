@@ -12,6 +12,7 @@ import {
   newPinBrief,
   patchLane,
   resolvePin,
+  runSpinOff,
   slugLaneId,
   uniqueLaneId,
   type Pin,
@@ -319,3 +320,14 @@ export async function sendIdeaToTeam(laneId: string, text: string, from?: string
 const SEND_TO_KEY = "vibesquad.sendToDismissed";
 export const isSendToDismissed = (messageId: string): boolean => dismissedSet(SEND_TO_KEY).has(messageId);
 export const dismissSendTo = (messageId: string): void => dismiss(SEND_TO_KEY, messageId);
+
+const SPIN_OFF_KEY = "vibesquad.spinOffDismissed";
+export const isSpinOffDismissed = (messageId: string): boolean => dismissedSet(SPIN_OFF_KEY).has(messageId);
+export const dismissSpinOff = (messageId: string): void => dismiss(SPIN_OFF_KEY, messageId);
+
+/**
+ * Create every Team of a confirmed spin-off block as a pin in the squad (no overlap refusal: the user confirmed the
+ * list; exact ids still dedupe inside createPin). No agents are spawned.
+ */
+export const createSpinOffPins = (squadId: string, teams: { name: string; brief: string }[], deps: CreatePinDeps = {}) =>
+  runSpinOff((name, brief) => createPin(squadId, name, brief, deps), teams);

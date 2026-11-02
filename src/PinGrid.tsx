@@ -9,7 +9,7 @@ import { openContextMenu } from "./CommandPalette";
 import { demoTimeline } from "./demo";
 import { hasLooksDone, LOOKS_DONE_MARKER, pinsForSquad, SEND_TO_MARKER, topicOfBrainstorm, type Pin } from "./pins";
 import { openBriefEditor } from "./pinActions";
-import { IdeaPlusTile, noteSendTo, SendToCard, useSendTo } from "./PinIdeas";
+import { IdeaPlusTile, noteSendTo, SendToCard, SpinOffCard, useSendTo, useSpinOff } from "./PinIdeas";
 import { PinMenu } from "./PinMenu";
 import { DoneRow, DoneShelf, LooksDoneCard, useDoneShelfOpen } from "./PinDone";
 import { getBrainstormThresholds, type TeamView } from "./teams";
@@ -307,6 +307,7 @@ const PinTile = memo(function PinTile({ pin, onPin, onOpenAgent }: { pin: Pin; o
   const lines = usePreview(bs?.agent.id ?? null);
   const looksDoneId = useLooksDoneId(bs?.agent.id ?? null);
   const sendTo = useSendTo(bs?.agent.id ?? null);
+  const spinOff = useSpinOff(bs?.agent.id ?? null);
   const paneCls = usePaneClass(bs?.agent.id ?? "");
   const [starting, setStarting] = useState(false);
   const busy = useRef(false);
@@ -360,6 +361,7 @@ const PinTile = memo(function PinTile({ pin, onPin, onOpenAgent }: { pin: Pin; o
       </div>
       {bs && looksDoneId && <LooksDoneCard pin={pin} messageId={looksDoneId} />}
       {bs && sendTo && <SendToCard pin={pin} offer={sendTo} />}
+      {bs && spinOff && <SpinOffCard pin={pin} offer={spinOff} />}
       {bs ? (
         <>
           <div className="pin-tile-lines" data-testid={`pin-lines-${pin.lane.id}`}>

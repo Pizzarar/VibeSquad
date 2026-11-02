@@ -191,6 +191,29 @@ export function briefStamp(d = new Date()): string {
 /** Append one line to the end of a brief, keeping exactly one trailing newline. */
 export const appendBriefLine = (brief: string, line: string): string => `${brief.replace(/\s+$/, "")}\n\n${line}\n`;
 
+export type SpinOffResult<P = unknown> = { name: string; pin?: P; error?: string };
+
+/** Run `create` for each row in order (lane ids are global, so each sees the previous lane). A failed row does not stop the rest. */
+export async function runSpinOff<P>(create: (name: string, brief: string) => Promise<P>, teams: { name: string; brief: string }[]): Promise<SpinOffResult<P>[]> {
+  const out: SpinOffResult<P>[] = [];
+  for (const t of teams) {
+    try {
+      out.push({ name: t.name, pin: await create(t.name, t.brief) });
+    } catch (e) {
+      out.push({ name: t.name, error: (e as Error)?.message ?? String(e) });
+    }
+  }
+  return out;
+}
+
+/** "Pinned 3 Teams", plus " · Failed: Name (reason), …" per failed row. */
+export function describeSpinOff(results: SpinOffResult[]): string {
+  const ok = results.filter((r) => r.pin).length;
+  const failed = results.filter((r) => r.error);
+  const head = `Pinned ${ok} Team${ok === 1 ? "" : "s"}`;
+  return failed.length ? `${head} · Failed: ${failed.map((r) => `${r.name} (${r.error})`).join(", ")}` : head;
+}
+
 // ── Step 6: idea capture (docs/PLAN_PINNED_FEATURES.md §5) ────────────────────
 // Shared with `vs pin new` (cli/vs.mjs), so the pure helpers live in server/pin-ideas.mjs.
 import { takenLaneIds } from "../server/pin-ideas.mjs";
@@ -201,6 +224,9 @@ export {
   OVERLAP_THRESHOLD,
   overlapScore,
   parseSendTo,
+  parseSpinOff,
+  spinOffFrom,
+  SPIN_OFF_MARKER,
   SEND_TO_MARKER,
   slugLaneId,
   takenLaneIds,

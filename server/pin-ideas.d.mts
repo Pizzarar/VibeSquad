@@ -10,3 +10,8 @@ export function nameFromIdea(text: string): string;
 export function newPinBrief(laneId: string, name: string, idea: string): string;
 export const SEND_TO_MARKER: string;
 export function parseSendTo(text: string): { laneId: string; text: string } | null;
+export const SPIN_OFF_MARKER: string;
+export const SPIN_OFF_MAX: number;
+export type SpinOffRow = { name: string; brief: string };
+export function parseSpinOff(text: string): SpinOffRow[] | null;
+export function spinOffFrom(agentId: string, entries: { item: any; seqStart?: number; timestamp?: string }[]): { id: string; teams: SpinOffRow[] } | null;
