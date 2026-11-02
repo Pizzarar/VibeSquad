@@ -139,14 +139,14 @@ describe("S2 fix 2: non-loopback daemon.listen needs confirmExposure and raises 
     for (const l of ["127.0.0.1:6767", "127.0.0.2:1", "localhost:6767", "[::1]:6767", "ws://127.0.0.1:6767", "\\\\.\\pipe\\paseo", "unix:/tmp/p.sock", ""]) {
       assert.equal(isLoopbackListen(l), true, l);
     }
-    for (const l of ["0.0.0.0:6767", "192.168.1.135:6767", "[::]:6767", "10.0.0.5:6767", "my-pc.mesh.test:6767"]) {
+    for (const l of ["0.0.0.0:6767", "172.16.1.5:6767", "[::]:6767", "10.0.0.5:6767", "my-pc.mesh.test:6767"]) {
       assert.equal(isLoopbackListen(l), false, l);
     }
   });
 
   test("non-loopback listen without confirmExposure is refused and nothing is written", async () => {
     writeCfg("127.0.0.1:6767");
-    const res = await updatePaseoSettingsPatch({ listen: "192.168.1.135:6767", relayEnabled: true }, { paseoHome, cliRunner, skipReload: true });
+    const res = await updatePaseoSettingsPatch({ listen: "172.16.1.5:6767", relayEnabled: true }, { paseoHome, cliRunner, skipReload: true });
     assert.equal(res.ok, false);
     assert.equal(res.needsConfirmation, true);
     assert.match(res.warning, /not loopback/);
@@ -170,7 +170,7 @@ describe("S2 fix 2: non-loopback daemon.listen needs confirmExposure and raises 
   });
 
   test("startup check flags an existing non-loopback config without changing it", () => {
-    writeCfg("192.168.1.135:6767");
+    writeCfg("172.16.1.5:6767");
     const before = readFileSync(join(paseoHome, "config.json"), "utf8");
     assert.ok(checkDaemonListenExposure({ paseoHome }));
     assert.equal(getConfigWarnings().filter((x) => x.kind === "exposure").length, 1);

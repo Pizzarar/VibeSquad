@@ -139,17 +139,35 @@ function lockDown(dir) {
   execFileSync("icacls", [dir, "/inheritance:r", "/grant:r", `${user}:(OI)(CI)F`], { stdio: "pipe", windowsHide: true });
 }
 
+// Secrets that live directly in ~/.vibesquad (VAPID private key, device token hashes, push endpoints).
+const HOME_SECRET_FILES = ["vapid.json", "devices.json", "push-subs.json"];
+
+/**
+ * Restricts ~/.vibesquad to the current user: icacls on Windows, 0700 dir + 0600 secret files elsewhere.
+ * Runs at every startup (not only when LAN/TLS is on). `deps` lets tests stub the platform and fs/exec calls.
+ */
+export function lockDownVibesquadHome({ home = vibesquadHome(), platform = process.platform, lock = lockDown, chmod = chmodSync, exists = existsSync, mkdir = mkdirSync } = {}) {
+  mkdir(home, { recursive: true });
+  if (platform === "win32") {
+    lock(home);
+    return;
+  }
+  try { chmod(home, 0o700); } catch {}
+  for (const name of HOME_SECRET_FILES) {
+    const f = join(home, name);
+    if (exists(f)) {
+      try { chmod(f, 0o600); } catch {}
+    }
+  }
+}
+
 /** Creates (or reuses) ~/.vibesquad/tls/{ca,server}.{key,crt}. Rotates the CA if its name constraints lack private LAN ranges or host/ip. */
 export function ensureTls(cfg = netConfig()) {
   const { meshnetIp = detectMeshnetIp(), meshnetHost = DEFAULT_MESHNET_HOST, lanIp = detectLanIp() } = cfg ?? {};
   const dir = tlsDir();
-  mkdirSync(vibesquadHome(), { recursive: true });
+  lockDownVibesquadHome();
   mkdirSync(dir, { recursive: true });
-  lockDown(vibesquadHome());
   lockDown(dir);
-  if (process.platform !== "win32") {
-    try { chmodSync(vibesquadHome(), 0o700); } catch {}
-  }
   const okHost = meshnetHost && HOST_RE.test(meshnetHost) ? meshnetHost : "";
   const okMeshIp = meshnetIp && IPV4_RE.test(meshnetIp) ? meshnetIp : "";
   const okLanIp = lanIp && IPV4_RE.test(lanIp) ? lanIp : "";
@@ -333,7 +351,7 @@ function loadDevices() {
 function saveDevices() {
   mkdirSync(vibesquadHome(), { recursive: true });
   const tmp = devicesFile() + ".tmp";
-  writeFileSync(tmp, JSON.stringify({ devices: loadDevices() }, null, 2), "utf8");
+  writeFileSync(tmp, JSON.stringify({ devices: loadDevices() }, null, 2), { encoding: "utf8", mode: 0o600 });
   renameSync(tmp, devicesFile());
   clearConfigWarning(devicesFile());
   lastPersist = Date.now();

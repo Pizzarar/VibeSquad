@@ -22,6 +22,7 @@ import {
   isAllowedHostHeader,
   isLocalBrowserSafe,
   isLoopbackOrigin,
+  lockDownVibesquadHome,
   netConfig,
   sendUnpaired,
   setNoFraming,
@@ -494,6 +495,11 @@ if (isMain) {
   try {
     checkDaemonListenExposure();
   } catch {}
+  try {
+    lockDownVibesquadHome();
+  } catch (err) {
+    console.warn("Could not restrict ~/.vibesquad to the current user:", err?.message ?? err);
+  }
   server.listen(port, "127.0.0.1", () => {
     console.log(`VibeSquad serving ${distDir} on ${url}`);
     logServerStart({ rootDir });
