@@ -399,6 +399,39 @@ export function isRetiredLeadSnap(
   return isRetiredRole(target.labels?.role);
 }
 
+/** The live role a retired agent used to hold: a former Buddy maps to brainstorm, every other retired role to lead. */
+export function retiredHolderRole(target: { labels?: Labels } | null | undefined): "lead" | "brainstorm" {
+  return String(target?.labels?.role ?? "").trim().toLowerCase() === "former-brainstorm" ? "brainstorm" : "lead";
+}
+
+/**
+ * Paseo wraps an agent-to-agent send (MCP send_agent_prompt / paseo send) in a
+ * `<paseo-system kind="agent-message" source-agent-id=...>` envelope. Returns the sender and body,
+ * or null for anything else (the user typing, plugin wakeups, handoff prompts).
+ */
+export function parseAgentMessageEnvelope(
+  text: string | null | undefined,
+): { senderId: string; senderTitle: string; messageId: string; body: string } | null {
+  const m = /<paseo-system\b([^>]*)>([\s\S]*?)(?:<\/paseo-system>|$)/.exec(String(text ?? ""));
+  if (!m) return null;
+  const attrs: Record<string, string> = {};
+  for (const a of m[1]!.matchAll(/([\w-]+)="([^"]*)"/g)) attrs[a[1]!] = a[2]!;
+  if (attrs.kind !== "agent-message" || !attrs["source-agent-id"]) return null;
+  const decode = (s: string) =>
+    s
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&amp;/g, "&");
+  return {
+    senderId: decode(attrs["source-agent-id"]),
+    senderTitle: decode(attrs["source-agent-title"] ?? ""),
+    messageId: decode(attrs["message-id"] ?? ""),
+    body: decode(m[2]!.trim()),
+  };
+}
+
 export function extractLeadShortName(target: { id: string; title?: string | null; labels?: Labels }): string {
   const ord = target.labels?.ord;
   if (ord) return `ord${String(ord).replace(/^ord/i, "")}`;
@@ -878,6 +911,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     const retries = new Map<string, number>();
     const offsets = new Map<string, number>();
     const misrouteCounts = new Map<string, number>();
+    const relayCounts = new Map<string, number>();
+    const forwardedFromRetired = new Set<string>(); // `${retiredId}:${messageId}` already redirected
     const pendingWake = new Map<string, LogEntry[]>(); // lead id -> entries awaiting a wake
     const wakeQueue: { team: string; entry: LogEntry }[] = [];
     let wakeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1790,15 +1825,17 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         }
       }
       if (!relay) return;
+      // A relay is routine (the old lead finishing up, or its children ending turns): its own
+      // `relay-old` counter, so `misroute-old` counts only real sends to a retired agent.
       const dateStr = new Date().toISOString().slice(0, 10);
       const countKey = `${dateStr}:${where.team}`;
-      const dailyCount = (misrouteCounts.get(countKey) ?? 0) + 1;
-      misrouteCounts.set(countKey, dailyCount);
+      const dailyCount = (relayCounts.get(countKey) ?? 0) + 1;
+      relayCounts.set(countKey, dailyCount);
       appendLog(where.team, {
         agent: String(agent.id ?? "former-lead"),
         lane: where.lane,
         type: "metric",
-        text: `misroute-old: date=${dateStr} count=${dailyCount} target=${targetId}`,
+        text: `relay-old: date=${dateStr} count=${dailyCount} target=${targetId}`,
         refs: agent.id ? [String(agent.id)] : [],
       });
       queueWake(where.team, {
@@ -1937,13 +1974,13 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }, grace);
     }
 
-    async function findLead(paseo: Paseo, team: string, lane: string): Promise<AgentSnap | null> {
+    async function findLead(paseo: Paseo, team: string, lane: string, role: "lead" | "brainstorm" = "lead"): Promise<AgentSnap | null> {
       const res = await paseo.agents.list({ includeBackground: true, filter: { includeBackground: true }, page: { limit: 200 } });
       const wantLane = (lane || "").toLowerCase();
       const leads = (res.entries as any[])
         .map((e) => ({ ...e.agent, labels: e.agent.labels ?? {} }) as AgentSnap)
         .filter((a) => !a.archivedAt && !a.internal && a.status !== "closed")
-        .filter((a) => effectiveAgentRole(a) === "lead")
+        .filter((a) => effectiveAgentRole(a) === role)
         .filter((a) => {
           const d = deriveTeamForSpawn(a.labels, a.cwd, currentTeams());
           const aTeam = teamIdOf(d.team || a.labels.team, currentTeams());
@@ -1987,6 +2024,10 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const { team: rawTeam, lane: rawLane } = deriveTeamForSpawn(target.labels, target.cwd, currentTeams());
       const team = teamIdOf(rawTeam || target.labels?.team || "", currentTeams());
       const lane = rawLane || target.labels?.lane || target.labels?.lead || team;
+      const role = retiredHolderRole(target);
+      const current = await findLead(paseo, team, rawLane || target.labels?.lane || target.labels?.lead || "", role);
+      // The successor talking to its predecessor (handoff questions) is not a misroute.
+      if (current && senderId && current.id === senderId) return undefined;
 
       const dateStr = new Date().toISOString().slice(0, 10);
       const countKey = `${dateStr}:${team}`;
@@ -2002,11 +2043,11 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         });
       }
 
-      const currentLead = await findLead(paseo, team, rawLane || target.labels?.lane || target.labels?.lead || "");
       const oldShort = extractLeadShortName(target);
-      if (!currentLead) {
-        throw new Error(`${oldShort} is retired and no live lead exists for ${team}/${lane}`);
+      if (!current) {
+        throw new Error(`${oldShort} is retired and no live ${role === "brainstorm" ? "Buddy" : "lead"} exists for ${team}/${lane}`);
       }
+      const currentLead = current;
       const newShort = extractLeadShortName(currentLead);
       const notice = `${oldShort} is retired; delivered to ${newShort}`;
       await paseo.agents.ref(currentLead.id).send(promptText);
@@ -2025,6 +2066,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       };
     }
 
+    // Paseo's before() only fires for agent.create / agent.session_open / workspace.create, so these
+    // never see an MCP send_agent_prompt (kept in case a host adds them). The live redirect is the
+    // agent.turn_started handler below, which fires on the retired agent itself.
     for (const hookName of ["send_agent_prompt", "agent.send"]) {
       try {
         stops.push(
@@ -2049,16 +2093,30 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               .ref(agent.id)
               .timeline?.refetch?.({ direction: "tail", limit: 10 })
               .catch(() => null);
-            let lastUserText = "";
+            let lastUser: any = null;
             for (const entry of page?.entries ?? []) {
               const item = entry?.item ?? entry;
               if ((item?.type === "user_message" || item?.role === "user") && item?.text?.trim()) {
-                lastUserText = item.text.trim();
+                lastUser = item;
               }
             }
-            if (!lastUserText) return;
-            await handleSendAgentPrompt({ agentId: agent.id, prompt: lastUserText }, { paseo }).catch((e) =>
-              log(`turn_started redirect failed: ${e}`),
+            // Only another agent's send is a misroute: the user typing, plugin wakeups and handoff
+            // prompts to a retiring lead stay with it.
+            const msg = parseAgentMessageEnvelope(lastUser?.text);
+            if (!msg || msg.senderId === agent.id) return;
+            const key = `${agent.id}:${msg.messageId || lastUser.messageId || msg.body}`;
+            if (forwardedFromRetired.has(key)) return;
+            forwardedFromRetired.add(key);
+            const from = msg.senderTitle ? `${msg.senderTitle} (${msg.senderId})` : msg.senderId;
+            const prompt = `Forwarded by VibeSquad: ${from} sent this to retired ${extractLeadShortName(me)} (${me.id}).\n\n${msg.body}`;
+            // Not awaited: a send can block for up to 60 s and the hook RPC times out first.
+            void handleSendAgentPrompt({ agentId: agent.id, senderAgentId: msg.senderId, prompt }, { paseo }).catch(
+              (e: any) => {
+                log(`turn_started redirect failed: ${e}`);
+                if (/ is retired and no live /.test(String(e?.message ?? ""))) {
+                  paseo.agents.ref(msg.senderId).send(String(e.message)).catch(() => {});
+                }
+              },
             );
           } catch (err) {
             log(`turn_started handler failed: ${err}`);
