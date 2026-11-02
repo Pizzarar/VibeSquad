@@ -94,7 +94,7 @@ export const Field = ({ label, children }: { label: string; children: React.Reac
 );
 
 export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; onClose: () => void; onCreated: (id: string) => void }) {
-  const { workspaces } = usePaseo();
+  const { agents, workspaces } = usePaseo();
   const { profiles, installedProviders } = useProfiles();
   const team = view.team;
   const [profileName, setProfileName] = useState("Implement - Sonnet");
@@ -271,11 +271,29 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
     badges.push(["shareMcp", String(defaults.shareMcp)]);
   }
 
+  const finished = useRef(false);
+  const finish = (id: string) => {
+    if (finished.current) return;
+    finished.current = true;
+    clearTopic();
+    clearPrompt();
+    onCreated(id);
+    onClose();
+  };
+  // Paseo create can take >60s or error after the agent exists: close as soon as it shows in the live list.
+  const spawnedTitle = useRef<string | null>(null);
+  useEffect(() => {
+    if (!busy || !spawnedTitle.current) return;
+    for (const a of agents.values()) if (a.title === spawnedTitle.current) return finish(a.id);
+  }, [agents, busy]);
+
   const submit = async () => {
     setBusy(true);
     setErr("");
+    spawnedTitle.current = title;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const r = await spawnTeamAgent({
+      const r = await Promise.race([spawnTeamAgent({
         provider: profile.provider,
         model: profile.model,
         modeId,
@@ -290,14 +308,16 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
         prompt,
         cwd,
         worktree: newWt && branch ? { branch } : undefined,
-      });
-      clearTopic();
-      clearPrompt();
-      onCreated(r.id);
-      onClose();
+      }), new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error("Spawn timed out after 90s. The agent may still have been created: check the roster before retrying.")), 90000); })]);
+      finish(r.id);
     } catch (e) {
-      setErr(String(e));
+      if (!finished.current) {
+        const msg = String(e instanceof Error ? e.message : e).replace(/^Error: /, "");
+        setErr(/did not start|timeout|timed out/i.test(msg) && !/roster/.test(msg) ? `${msg} The agent may still have been created: check the roster before retrying.` : msg);
+      }
     } finally {
+      clearTimeout(timer);
+      spawnedTitle.current = null;
       setBusy(false);
     }
   };
@@ -322,6 +342,9 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
           <button className="btn ghost" onClick={onClose}>
             Cancel
           </button>
+          {!busy && !canSubmit && role === "worker" && (!task || !job) && (
+            <span className="small muted" data-testid="spawn-needs">Needs: {[!task && "Task id", !job && "Job"].filter(Boolean).join(", ")}</span>
+          )}
           <button className="btn ok" disabled={!canSubmit} onClick={submit}>
             {busy ? "Spawning…" : "Spawn agent"}
           </button>
@@ -385,10 +408,10 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
           )}
           {role === "worker" && (
             <div className="row2">
-              <Field label="TASK">
+              <Field label="TASK (required)">
                 <input value={task} placeholder="task-id" onChange={(e) => setTask(e.target.value)} />
               </Field>
-              <Field label="JOB">
+              <Field label="JOB (required)">
                 <input value={job} placeholder="short job name" onChange={(e) => setJob(e.target.value)} />
               </Field>
             </div>
