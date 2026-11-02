@@ -153,7 +153,7 @@ export async function startLaneBrainstorm(opts: {
     }),
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok && !DEMO) {
+  if ((!res.ok || body.ok === false) && !DEMO) {
     throw new Error(body.error ?? `Start brainstorm failed (${res.status})`);
   }
   if (body.reused && (body.existingAgentId || body.newAgentId)) {

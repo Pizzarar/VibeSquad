@@ -78,7 +78,7 @@ export async function triggerBrainstormRestart(opts: {
     }),
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok && !DEMO) {
+  if ((!res.ok || body.ok === false) && !DEMO) {
     throw new Error(body.error ?? `brainstorm-restart failed (${res.status})`);
   }
   if (body.retired) {

@@ -7,6 +7,8 @@ import { effectiveAgentRole, findLaneInRegistry, isRetiredAgent, resolveWorktree
 import { findProfileOrFallback, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
 import { briefRootFor, laneWorkingDir } from "./brief-path.mjs";
+import { BRIEF_HISTORY_KEEP, BRIEF_SHRINK_FROM, BRIEF_SHRINK_TO, backupBrief, writeBriefFile } from "./brief-write.mjs";
+import { liveInFlightBlock } from "./in-flight.mjs";
 import { refreshWhosHere } from "./whos-here.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
 
@@ -106,6 +108,8 @@ export function readBrainstormSummary(laneRaw, rootDir = REPO_ROOT) {
   return { laneId: safeLane, path: relPath, fullPath, content };
 }
 
+export { BRIEF_HISTORY_KEEP, BRIEF_SHRINK_FROM, BRIEF_SHRINK_TO, backupBrief };
+
 export function writeBrainstormSummary(laneRaw, content, rootDir = REPO_ROOT) {
   const text = String(content ?? "");
   if (text.length > MAX_SUMMARY_CHARS) {
@@ -117,7 +121,7 @@ export function writeBrainstormSummary(laneRaw, content, rootDir = REPO_ROOT) {
   const dir = join(briefRootFor(teamId, laneId, rootDir), "docs", "brainstorm");
   mkdirSync(dir, { recursive: true });
   const fullPath = join(dir, `${safeLane}.md`);
-  writeFileSync(fullPath, text, "utf8");
+  writeBriefFile(fullPath, safeLane, text);
   return { laneId: safeLane, path: relPath, fullPath, content: text };
 }
 
@@ -169,11 +173,11 @@ export function appendVsLogEntry({ teamId, laneId, agent = "you", type = "metric
   return { entry, path: laneLogPath, teamLogPath };
 }
 
-export function buildBrainstormInitialPrompt({ laneId, laneUpper, summaryContent, latestPlan, pendingPrompt }) {
+export function buildBrainstormInitialPrompt({ laneId, laneUpper, summaryContent, latestPlan, pendingPrompt, inFlight }) {
   const tail =
     pendingPrompt && String(pendingPrompt).trim()
       ? `Pending message from the user to answer now:\n${String(pendingPrompt).trim()}`
-      : `Summary loaded from docs/brainstorm/${laneId}.md. Reply in 1-2 short sentences confirming you are ready and listing the current Decided / In-Flight focus.`;
+      : `Summary loaded from docs/brainstorm/${laneId}.md. Work the top Open item now: reply with your take or the next question on it, in a few short sentences. Ask the user only if you are blocked. Do not just confirm you are ready.`;
 
   return [
     `You are BRAINSTORM · ${laneUpper} (fresh start for lane \`${laneId}\`). Read the brief below before anything else.`,
@@ -190,6 +194,7 @@ export function buildBrainstormInitialPrompt({ laneId, laneUpper, summaryContent
     summaryContent.trim(),
     `--- END docs/brainstorm/${laneId}.md ---`,
     "",
+    ...(inFlight ? [inFlight, ""] : []),
     tail,
   ].join("\n");
 }
@@ -339,6 +344,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       }
     }
 
+    let liveForBoot; // live agent list for the boot prompt's In-flight block (undefined = not read yet)
     const laneCooldownKey = `${teamId}:${laneId}:${topic.toLowerCase()}`;
     if (reason.startsWith("auto")) {
       const cooldownMs = typeof body.cooldownMs === "number" ? body.cooldownMs : 60_000;
@@ -357,17 +363,27 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
     }
 
     if ((reason === "start-brainstorm" || agentId === "start-brainstorm") && !body.forceNew) {
-      let liveAgents = [];
-      if (body.agents) {
-        liveAgents = body.agents instanceof Map ? [...body.agents.values()] : Array.isArray(body.agents) ? body.agents : [];
-      } else if (connected && client && typeof client.fetchAgents === "function") {
-        const res = await client.fetchAgents().catch(() => null);
-        liveAgents = Array.isArray(res) ? res : Array.isArray(res?.entries) ? res.entries : Array.isArray(res?.agents) ? res.agents : [];
-      } else if (connected && client && typeof client.listAgents === "function") {
-        const res = await client.listAgents().catch(() => null);
-        liveAgents = Array.isArray(res) ? res : Array.isArray(res?.entries) ? res.entries : [];
+      // Fail closed: if the live-agent list can't be read (daemon restarting), spawning could create a
+      // second Buddy for the lane. An empty list gets one retry before it is believed.
+      const asList = (res) => (Array.isArray(res) ? res : Array.isArray(res?.entries) ? res.entries : Array.isArray(res?.agents) ? res.agents : null);
+      const readLive = async () => {
+        if (body.agents) return body.agents instanceof Map ? [...body.agents.values()] : Array.isArray(body.agents) ? body.agents : [];
+        // A daemon client was expected but never connected (daemon restarting): unknown, not empty.
+        if (client && !connected) return null;
+        if (connected && client && typeof client.fetchAgents === "function") return asList(await client.fetchAgents().catch(() => null));
+        if (connected && client && typeof client.listAgents === "function") return asList(await client.listAgents().catch(() => null));
+        return [];
+      };
+      let liveAgents = await readLive();
+      if (liveAgents && liveAgents.length === 0 && connected && client && !body.agents) {
+        await new Promise((r) => setTimeout(r, typeof body.emptyRetryMs === "number" ? body.emptyRetryMs : 250));
+        liveAgents = await readLive();
+      }
+      if (!liveAgents) {
+        return { ok: false, spawned: false, reason: "agent-list-unavailable", error: "Could not read the live agent list; not starting a Buddy so the lane can't get a duplicate. Try again in a moment.", laneId, teamId };
       }
       timer.mark("fetchAgents");
+      liveForBoot = liveAgents;
       const existing = findExistingLaneBrainstorm(liveAgents, laneId, topic);
       if (existing) {
         if (existing.labels && existing.labels.team !== teamId) {
@@ -515,7 +531,20 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       ...(body.mode === "quick-start" ? { "vs.fresh-session": "brief" } : {}),
     };
     timer.mark("prep");
+    if (liveForBoot === undefined) {
+      const src = body.agents
+        ? (body.agents instanceof Map ? [...body.agents.values()] : body.agents)
+        : connected && client && typeof client.fetchAgents === "function"
+          ? await Promise.race([
+              client.fetchAgents().then((r) => (Array.isArray(r) ? r : Array.isArray(r?.entries) ? r.entries : Array.isArray(r?.agents) ? r.agents : null)),
+              new Promise((r) => setTimeout(() => r(null), 1500)),
+            ]).catch(() => null)
+          : null;
+      liveForBoot = Array.isArray(src) ? src : null;
+    }
+    timer.mark("inFlight");
     const initialPrompt = buildBrainstormInitialPrompt({
+      inFlight: liveInFlightBlock({ agents: liveForBoot, laneId, teamId }),
       laneId,
       laneUpper,
       summaryContent: summary.content,
@@ -523,6 +552,10 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       pendingPrompt,
     });
 
+    // The spawn env sets VS_BRIEF_INLINE, so the plugin won't log brief-injected; this is the live check for the lane.
+    try {
+      appendVsLogEntry({ teamId, laneId, agent: agentId, type: "metric", text: `brief-inlined: lane=${laneId} chars=${summary.content.length}` });
+    } catch {}
     let created = null;
     if (connected && client && typeof client.createAgent === "function") {
       created = await client.createAgent({
@@ -540,7 +573,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
         initialPrompt,
         labels: newLabels,
         // Labels never reach the plugin's before(agent.create); env does, so the profile is forced at spawn.
-        ...(newLabels.profile ? { env: { VS_PROFILE: newLabels.profile } } : {}),
+        env: { ...(newLabels.profile ? { VS_PROFILE: newLabels.profile } : {}), VS_LANE: laneId, VS_TEAM: teamId, VS_BRIEF_INLINE: "1" },
       });
     }
 

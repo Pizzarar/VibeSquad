@@ -37,6 +37,7 @@ import {
 } from "@vibesquad/server/identity.mjs";
 import { refreshWhosHere } from "@vibesquad/server/whos-here.mjs";
 import { briefRootFor } from "@vibesquad/server/brief-path.mjs";
+import { seedBriefIfMissing } from "@vibesquad/server/brief-write.mjs";
 import {
   LEGACY_NEEDS_LABEL,
   LEGACY_USER_TYPE,
@@ -544,6 +545,40 @@ export function snapshotIntoBrief(
 }
 
 /** Layers 1 and 3 joined in the fixed order; layer 2 (AGENTS.md) is loaded by the provider. */
+/**
+ * Profile notes (stored in profiles.json, so old installs keep the old text) repeat the
+ * R1-R7 rules that EVERYONE_LAYER already injects. Drop those lines so each rule appears once.
+ */
+export function dedupeNotesAgainst(notes: string, prefix: string): string {
+  const tags = new Set([...prefix.matchAll(/^- (R[\d/R]+)\b/gm)].map((m) => m[1]));
+  const lines = prefix.split("\n").map((l) => l.trim());
+  return notes
+    .split(/\r?\n/)
+    .filter((l) => {
+      const t = l.trim();
+      if (!t) return true;
+      if (lines.includes(t)) return false;
+      const m = t.match(/^[-*]\s*\**(R[\d/R]+)\b/);
+      return !(m && tags.has(m[1]));
+    })
+    .join("\n")
+    .trim();
+}
+
+/**
+ * First-dispatch metric line. Only `contextWindowUsedTokens` is a context size; `inputTokens` is one
+ * request's input (about 2k on Antigravity), so a missing window reads n/a instead of a wrong number.
+ */
+export function firstDispatchMetricText(
+  parent: { lastUsage?: { contextWindowUsedTokens?: number } | null; provider?: string; model?: string | null },
+  parentId: string,
+  ord?: string,
+): string {
+  const used = parent.lastUsage?.contextWindowUsedTokens;
+  const size = typeof used === "number" && Number.isFinite(used) && used > 0 ? Math.round(used / 1000) + "k tokens" : "n/a";
+  return "first-dispatch context: " + size + " (lead=" + parentId + ", ord=" + (ord ?? "?") + ", provider=" + (parent.provider || "?") + ", model=" + (parent.model || "?") + ")";
+}
+
 export function injectedPrefix(role: string, cwd: string): string {
   return [EVERYONE_LAYER, rolePack(role, cwd)].filter(Boolean).join("\n\n");
 }
@@ -726,6 +761,8 @@ interface AgentSnap {
   archivedAt?: string | null;
   internal?: boolean;
   labels: Labels;
+  provider?: string;
+  model?: string | null;
   lastUsage?: { contextWindowUsedTokens?: number; inputTokens?: number } | null;
 }
 
@@ -928,6 +965,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const config: any = request.config ?? {};
         const env = (request as any).env as Record<string, string> | undefined;
         const rawReqLabels = ((request as any).labels ?? config?.labels) as Labels | undefined;
+        const callerLane = String(rawReqLabels?.lane || rawReqLabels?.lead || "").trim(); // legacy `lead` label = lane; // before identity resolution rewrites it from cwd
         const reqLabels: Labels = { ...(rawReqLabels ?? {}) };
         const rawRole = (reqLabels.role || config?.role || env?.VS_ROLE || "").trim().toLowerCase();
         const title: string = config?.title ?? (request as any).title ?? (request as any).name ?? "";
@@ -1147,7 +1185,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         }
 
         const prefix = injectedPrefix(role, cwd);
-        const profileNotes = (matchedProfile?.notes ?? "").trim();
+        const profileNotes = dedupeNotesAgainst((matchedProfile?.notes ?? "").trim(), prefix);
         const gitState = inspectGitSpawnState(cwd);
         if (prefix && !sanitizedSysPrompt.includes(EVERYONE_LAYER)) {
           const existing = sanitizedSysPrompt.trim();
@@ -1181,14 +1219,24 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         // Every Buddy starts from its lane brief, even when spawned by Roster or the
         // legacy board (whose boot prompt never loads docs/brainstorm/<lane>.md).
         if (role === "brainstorm") {
-          const briefLane = (reqLabels.orphan === "1" ? "" : reqLabels.lane) || resolveByCwd(cwd, currentTeams())?.lane || "";
+          // Never guess the lane from cwd: a spawn from inside another lane's worktree got that lane's brief.
+          const briefLane = (reqLabels.orphan === "1" ? "" : callerLane || env?.VS_LANE || "").trim();
           const marker = briefBeginMarker(briefLane);
           const reqPrompt = String((request as any).prompt ?? (request as any).initialPrompt ?? "");
           const currentSys = String(next.systemPrompt ?? sanitizedSysPrompt ?? "");
           // VS's own restart path (server/brainstorm.mjs) already puts the brief in the first prompt.
-          const fromVsRestart = Boolean(reqLabels["vs.restarted-from"]);
+          const fromVsRestart = Boolean(reqLabels["vs.restarted-from"]) || env?.VS_BRIEF_INLINE === "1";
           if (briefLane && !fromVsRestart && !currentSys.includes(marker) && !reqPrompt.includes(marker)) {
-            const block = laneBriefBlock(deps.briefRoot ?? briefRootFor("", briefLane, REPO_ROOT), briefLane);
+            const briefRoot = deps.briefRoot ?? briefRootFor(reqLabels.team || env?.VS_TEAM || "", briefLane, REPO_ROOT);
+            // No brief file yet: the spawn prompt is the idea. Persist it (guarded writer, never overwrites) so it
+            // survives this first prompt; the prompt already carries it, so skip injecting it back.
+            let seeded: string | null = null;
+            try {
+              seeded = seedBriefIfMissing({ root: briefRoot, lane: briefLane, idea: reqPrompt });
+            } catch (err) {
+              log(`brief seed failed for ${briefLane}: ${err}`);
+            }
+            const block = seeded ? "" : laneBriefBlock(briefRoot, briefLane);
             if (block) {
               next.systemPrompt = [currentSys.trim(), block].filter(Boolean).join("\n\n");
               changed = true;
@@ -1351,12 +1399,11 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             childCount.set(parentId, n);
             if (n === 1 && !firstDispatchLogged.has(parentId)) {
               firstDispatchLogged.add(parentId);
-              const used = parent.lastUsage?.contextWindowUsedTokens ?? parent.lastUsage?.inputTokens ?? 0;
               appendLog(teamIdOf(team, currentTeams()), {
                 agent: "plugin",
                 lane,
                 type: "metric",
-                text: `first-dispatch context: ${Math.round(used / 1000)}k tokens (lead=${parentId}, ord=${pl.ord ?? "?"})`,
+                text: firstDispatchMetricText(parent, parentId, pl.ord),
               });
             }
           }
