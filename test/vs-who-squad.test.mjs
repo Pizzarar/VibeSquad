@@ -123,8 +123,10 @@ test("who lead for a caller without a lane label in a multi-lane squad does not 
 test("whoami for an agent with a team label but no lane label prints lane: unassigned", () => {
   const env = makeEnv();
   try {
+    // Team but no lane is an orphan, never the Squad's first lane.
     const res = env.run(["whoami", "--agent", "no-lane"]);
-    assert.match(res.stdout, /^lane: unassigned · squad: efi/);
+    assert.equal(res.status, 1);
+    assert.match(res.stdout, /^lane: unassigned · squad: _unassigned/);
     const labelled = env.run(["whoami", "--agent", "worker-main"]);
     assert.match(labelled.stdout, /^lane: main-game · squad: efi/);
   } finally {

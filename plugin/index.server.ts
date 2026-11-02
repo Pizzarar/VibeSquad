@@ -421,6 +421,27 @@ export function sameLaneRole(
   return true;
 }
 
+/** Role label to stamp on a spawn: a digest is labelled `worker` (digestFor/profile mark it), never `digest`. */
+export function spawnRoleLabel(role: string): string {
+  return role === "digest" ? "worker" : role;
+}
+
+/** Next lead ord for a lane: one past the highest ord on any lead or former lead in it (self excluded). */
+export function nextLeadOrd(agents: Array<{ id: string; labels?: Labels }>, lane: string, selfId: string): string {
+  const want = lane.trim().toLowerCase();
+  let max = 0;
+  for (const a of agents) {
+    if (a.id === selfId || !want) continue;
+    const l = a.labels ?? {};
+    if (String(l.lane || l.lead || "").trim().toLowerCase() !== want) continue;
+    const role = String(l.role ?? "").trim().toLowerCase();
+    if (role !== "lead" && !isRetiredRole(role)) continue;
+    const n = Number(String(l.ord ?? "").replace(/^ord/i, ""));
+    if (Number.isFinite(n) && n > max) max = n;
+  }
+  return String(max + 1);
+}
+
 /** Digest/pre-check agents must never be digested again (infinite spawn loop). */
 export function isDigestAgent(labels: Labels, _title?: string | null): boolean {
   return isDigestIdentity(labels);
@@ -1037,7 +1058,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               changed = true;
             }
             if (!reqLabels.role) {
-              reqLabels.role = resolved.role;
+              reqLabels.role = spawnRoleLabel(resolved.role);
               changed = true;
             }
             if (reqLabels.orphan) {
@@ -1092,7 +1113,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               changed = true;
             }
             if (!reqLabels.role) {
-              reqLabels.role = resolved.role;
+              reqLabels.role = spawnRoleLabel(resolved.role);
               changed = true;
             }
             const orphanKey = `orphan:${resolved.callerLane}:${resolved.callerTeam}:${cwd}`;
@@ -1320,7 +1341,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             team = resolved.teamId;
             if (labels.lane !== lane) want.lane = lane;
             if (labels.team !== resolved.teamId) want.team = resolved.teamId;
-            if (!labels.role) want.role = resolved.role;
+            if (!labels.role) want.role = spawnRoleLabel(resolved.role);
             if (labels.orphan) want.orphan = "";
 
             if (resolved.teamMismatch) {
@@ -1370,7 +1391,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             }
           } else {
             if (labels.orphan !== "1") want.orphan = "1";
-            if (!labels.role) want.role = resolved.role;
+            if (!labels.role) want.role = spawnRoleLabel(resolved.role);
             const orphanKey = `orphan:${resolved.callerLane}:${resolved.callerTeam}:${agentCwd}`;
             const prevTs = recentBeforeMismatches.get(orphanKey);
             if (prevTs && Date.now() - prevTs < 2000) {
@@ -1383,6 +1404,20 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
                 text: `orphan: lane=${resolved.callerLane || "(none)"} team=${resolved.callerTeam || "(none)"} cwd=${agentCwd || "(none)"}`,
                 refs: agent.id ? [agent.id] : [],
               });
+            }
+          }
+
+          // A lead always carries an ord: one past the lane's highest lead/former-lead ord.
+          if ((labels.role || want.role) === "lead" && !String(labels.ord ?? "").trim()) {
+            const ordLane = lane || resolved.callerLane;
+            want.ord = "1";
+            if (ordLane) {
+              await Promise.resolve()
+                .then(() => paseo.agents.list({ includeBackground: true, filter: { includeBackground: true }, page: { limit: 200 } }))
+                .then((res: any) => {
+                  want.ord = nextLeadOrd((res?.entries ?? []).map((e: any) => e.agent), ordLane, agent.id);
+                })
+                .catch((e: unknown) => log(`lead ord scan failed for ${agent.id}: ${e}`));
             }
           }
 
