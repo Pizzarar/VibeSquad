@@ -39,7 +39,7 @@ export class TimelineErrorBoundary extends Component<
 export type Entry = { item: any; timestamp?: string; seqStart?: number };
 
 const MD_IMAGE = /!\[([^\]]*)\]\(((?:file:\/\/|[A-Za-z]:[\\/])[^)\s]+)\)/g;
-const FILE_LINK_RE = /(?<![`"'(])([a-zA-Z0-9_.\-/\\]+\.[a-zA-Z]{1,6})(?::(\d+)|#L(\d+))(?![a-zA-Z0-9_])/g;
+const FILE_LINK_RE = /(?<![`"'\w@.\/\x5c:#~-])([a-zA-Z0-9_.\-\/\x5c]+\.[a-zA-Z]{1,6})(?::(\d+)(?:-\d+)?|#L(\d+)(?:-L?\d+)?)(?![a-zA-Z0-9_])/g;
 
 export function localImageSrc(u: string, agentId?: string): string {
   const base = `/__vibesquad/local-image?path=${encodeURIComponent(u)}`;
@@ -89,7 +89,8 @@ export function extractFileLinks(text: string): Array<{ filePath: string; line: 
   while ((m = re.exec(text)) !== null) {
     const filePath = m[1];
     const lineStr = m[2] ?? m[3];
-    results.push({ filePath, line: lineStr ? parseInt(lineStr, 10) : null });
+    const t = parseFileToken(m[0]);
+    if (t) results.push({ filePath: t.path, line: t.line });
   }
   return results;
 }
@@ -224,9 +225,9 @@ function renderInline(text: string, agentId?: string): React.ReactNode[] {
     // Link
     { re: /\[([^\]]+)\]\(([^)]+)\)/g, key: "link" },
     // File:line (colon notation)
-    { re: /(?<![`"'(])([a-zA-Z0-9_.\-/\\]+\.[a-zA-Z]{1,6}):(\d+)(?![a-zA-Z0-9_])/g, key: "filelink" },
+    { re: /(?<![`"'\w@.\/\x5c:#~-])([a-zA-Z0-9_.\-\/\x5c]+\.[a-zA-Z]{1,6}):(\d+)(?:-\d+)?(?![a-zA-Z0-9_])/g, key: "filelink" },
     // File:line (#L notation)
-    { re: /(?<![`"'(])([a-zA-Z0-9_.\-/\\]+\.[a-zA-Z]{1,6})#L(\d+)(?![a-zA-Z0-9_])/g, key: "filelink2" },
+    { re: /(?<![`"'\w@.\/\x5c:#~-])([a-zA-Z0-9_.\-\/\x5c]+\.[a-zA-Z]{1,6})#L(\d+)(?:-L?\d+)?(?![a-zA-Z0-9_])/g, key: "filelink2" },
     // Bare repo path (dir/file.ext, dir/); validated by parseFileToken
     { re: BARE_PATH_RE, key: "barepath" },
   ];
@@ -256,7 +257,7 @@ function renderInline(text: string, agentId?: string): React.ReactNode[] {
       nodes.push(<strong key={keyIdx++}>{m[5]}</strong>);
     } else if (m[6] !== undefined) {
       // inline code
-      const tgt = parseFileToken(m[7]);
+      const tgt = parseFileToken(m[7], { backticked: true });
       nodes.push(
         tgt ? (
           <code key={keyIdx++} className="tl-icode tl-file-link" role="button" tabIndex={0}
@@ -271,37 +272,17 @@ function renderInline(text: string, agentId?: string): React.ReactNode[] {
       nodes.push(
         <a key={keyIdx++} href={m[10]} target="_blank" rel="noopener noreferrer">{m[9]}</a>,
       );
-    } else if (m[11] !== undefined) {
-      // file:line colon
-      const fp = m[12];
-      const ln = m[13] ? parseInt(m[13], 10) : null;
+    } else if (m[11] !== undefined || m[14] !== undefined) {
+      // path:line / path#L12 (incl. :200-213); gated by parseFileToken like every other chat path
+      const raw = (m[11] ?? m[14]) as string;
+      const tgt = parseFileToken(raw);
       nodes.push(
-        <button
-          key={keyIdx++}
-          className="tl-file-link"
-          data-testid="tl-file-link"
-          onClick={() => {
-            openRightDockTab("Files", { filePath: fp, line: ln ?? undefined });
-          }}
-        >
-          {m[11]}
-        </button>,
-      );
-    } else if (m[14] !== undefined) {
-      // file#L notation
-      const fp = m[15];
-      const ln = m[16] ? parseInt(m[16], 10) : null;
-      nodes.push(
-        <button
-          key={keyIdx++}
-          className="tl-file-link"
-          data-testid="tl-file-link"
-          onClick={() => {
-            openRightDockTab("Files", { filePath: fp, line: ln ?? undefined });
-          }}
-        >
-          {m[14]}
-        </button>,
+        tgt ? (
+          <button key={keyIdx++} className="tl-file-link" data-testid="tl-file-link"
+            onClick={() => openFileTarget(tgt)}>{raw}</button>
+        ) : (
+          <span key={keyIdx++}>{raw}</span>
+        ),
       );
     } else if (m[17] !== undefined) {
       // bare repo path
@@ -577,19 +558,14 @@ function SummaryWithLinks({ text }: { text: string }) {
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
     if (m.index > last) parts.push(<span key={ki++} className="muted">{text.slice(last, m.index)}</span>);
-    const fp = m[1];
-    const ln = m[2] ? parseInt(m[2], 10) : m[3] ? parseInt(m[3], 10) : null;
+    const tgt = parseFileToken(m[0]);
     parts.push(
-      <button
-        key={ki++}
-        className="tl-file-link"
-        data-testid="tl-file-link"
-        onClick={() => {
-          openRightDockTab("Files", { filePath: fp, line: ln ?? undefined });
-        }}
-      >
-        {m[0]}
-      </button>,
+      tgt ? (
+        <button key={ki++} className="tl-file-link" data-testid="tl-file-link"
+          onClick={() => openFileTarget(tgt)}>{m[0]}</button>
+      ) : (
+        <span key={ki++} className="muted">{m[0]}</span>
+      ),
     );
     last = m.index + m[0].length;
   }
