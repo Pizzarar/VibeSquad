@@ -76,7 +76,7 @@ import { WorkspacesView } from "./WorkspacesView";
 import { AttentionBadge } from "./AttentionList";
 import { FullToggle, PinGrid, SidebarPins, SquadsHome, useFullView, type PinHandler } from "./PinGrid";
 import { pinsForSquad, type Pin } from "./pins";
-import { urlAgentFor } from "./pinFocusLogic";
+import { popAction, urlAgentFor } from "./pinFocusLogic";
 import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, usePinFocus, usePinsHome, useSquadsHome } from "./pinFocus";
 import { TopBreadcrumb } from "./Breadcrumb";
 import { PinFocusHeader, PinRail } from "./PinRail";
@@ -1639,9 +1639,10 @@ export function App() {
     const onPop = () => {
       const u = parseUrlState(location.search);
       if (u.team) setTeamId(u.team);
-      if (u.agent) openAgent(u.agent);
-      else if (new URLSearchParams(location.search).get("view") === "squads") enterSquadsHome();
-      else if (getSquadsHome()) exitSquadsHome();
+      const act = popAction(location.search);
+      if (act === "agent" && u.agent) openAgent(u.agent);
+      else if (act === "squads-home") enterSquadsHome();
+      else exitSquadsHome(); // Back from a chat lands on the squad page, so the URL effect doesn't re-push ?agent=
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);

@@ -1003,6 +1003,10 @@ pub fn render_unreachable_page(cfg: &DesktopConfig, last_error: &str) -> String 
     const statusEl = document.getElementById('retry-status');
     const retryBtn = document.getElementById('retry-btn');
     let checking = false;
+    const RELOAD_KEY = 'vs.reconnect.reloads';
+    const MAX_RELOADS = 3;
+    let reloads = 0;
+    try {{ reloads = Number(sessionStorage.getItem(RELOAD_KEY) || 0) || 0; }} catch (_) {{}}
 
     async function checkNow() {{
       if (checking) return;
@@ -1012,7 +1016,9 @@ pub fn render_unreachable_page(cfg: &DesktopConfig, last_error: &str) -> String 
         const res = await fetch('/__desktop/ping', {{ cache: 'no-store' }});
         const data = await res.json().catch(() => ({{}}));
         if (data.reachable) {{
+          if (reloads >= MAX_RELOADS) {{ statusEl.textContent = 'Server answers but the app is not loading · press Retry Now'; return; }}
           statusEl.textContent = 'Connected! Loading…';
+          try {{ sessionStorage.setItem(RELOAD_KEY, String(reloads + 1)); }} catch (_) {{}}
           window.location.replace('/');
           return;
         }}
@@ -1024,7 +1030,7 @@ pub fn render_unreachable_page(cfg: &DesktopConfig, last_error: &str) -> String 
       }}
     }}
 
-    retryBtn.addEventListener('click', checkNow);
+    retryBtn.addEventListener('click', () => {{ reloads = 0; try {{ sessionStorage.removeItem(RELOAD_KEY); }} catch (_) {{}} checkNow(); }});
     setInterval(checkNow, 3000);
   </script>
 </body>
@@ -1047,6 +1053,7 @@ pub fn desktop_bridge_script(last_hash: &str, last_route: &str) -> String {
 (function() {{
   if (window.__VIBESQUAD_DESKTOP_BRIDGE__) return;
   window.__VIBESQUAD_DESKTOP_BRIDGE__ = true;
+  try {{ sessionStorage.removeItem('vs.reconnect.reloads'); }} catch (_) {{}} // the app shell loaded: reset the reload-loop guard
   const savedHash = {escaped_hash};
   const savedRoute = {escaped_route};
   // A reload/reconnect lands on a bare "/": put the last route (path + ?team=&agent= + #hash) back before the app boots.
@@ -1225,6 +1232,17 @@ pub fn render_reconnecting_page(_cfg: &DesktopConfig, last_error: &str) -> Strin
     const GIVE_UP_MS = 30000;
     const statusEl = document.getElementById('retry-status');
     let checking = false;
+    // Loop guard: after 3 reloads that land back here, stop reloading and wait for a manual Retry.
+    const RELOAD_KEY = 'vs.reconnect.reloads';
+    const MAX_RELOADS = 3;
+    let reloads = 0;
+    try {{ reloads = Number(sessionStorage.getItem(RELOAD_KEY) || 0) || 0; }} catch (_) {{}}
+    let halted = reloads >= MAX_RELOADS;
+    function reloadApp() {{
+      if (reloads >= MAX_RELOADS) {{ halted = true; showDown(); statusEl.textContent = 'Server answers but the app is not loading'; return; }}
+      try {{ sessionStorage.setItem(RELOAD_KEY, String(reloads + 1)); }} catch (_) {{}}
+      window.location.replace(window.location.pathname + window.location.search + window.location.hash);
+    }}
     function showDown() {{
       const t = document.getElementById('title');
       t.textContent = 'Server Unreachable';
@@ -1240,16 +1258,16 @@ pub fn render_reconnecting_page(_cfg: &DesktopConfig, last_error: &str) -> Strin
         const data = await res.json().catch(() => ({{}}));
         if (data.reachable) {{
           statusEl.textContent = 'Connected! Loading…';
-          window.location.replace(window.location.pathname + window.location.search + window.location.hash);
+          reloadApp();
           return;
         }}
       }} catch (e) {{}}
       finally {{ checking = false; }}
       if (Date.now() - started > GIVE_UP_MS) {{ showDown(); statusEl.textContent = 'Unreachable · retrying…'; }}
     }}
-    document.getElementById('retry-btn').addEventListener('click', checkNow);
-    setInterval(checkNow, 1500);
-    checkNow();
+    document.getElementById('retry-btn').addEventListener('click', () => {{ reloads = 0; halted = false; try {{ sessionStorage.removeItem(RELOAD_KEY); }} catch (_) {{}} checkNow(); }});
+    if (halted) {{ showDown(); statusEl.textContent = 'Server answers but the app is not loading'; }}
+    setInterval(() => {{ if (!halted) checkNow(); }}, 1500);
   </script>
 </body>
 </html>"#,

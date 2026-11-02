@@ -52,3 +52,13 @@ test("popstate applies Squads Home both ways and the saved pin never beats ?view
   assert.match(app, /get\("view"\) === "squads"\) enterSquadsHome\(\);\n\s+else if \(getSquadsHome\(\)\) exitSquadsHome\(\);/);
   assert.match(src("src/pinFocus.ts"), /state\.home && state\.squadsHome\) return;[^\n]*\n\s+const saved = loadSavedFocus/);
 });
+
+test("popAction: Back from a chat returns to the squad page; view=squads goes to Squads Home", async () => {
+  const { popAction } = await import("../src/pinFocusLogic.ts");
+  assert.equal(popAction("?team=x&agent=abc"), "agent");
+  assert.equal(popAction("?team=x"), "squad-page");
+  assert.equal(popAction(""), "squad-page");
+  assert.equal(popAction("?view=squads"), "squads-home");
+  assert.equal(popAction("?team=x&view=squads"), "squads-home");
+  assert.match(src("src/App.tsx"), /const act = popAction\(location\.search\)/);
+});

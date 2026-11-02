@@ -888,19 +888,12 @@ async fn handle_desktop_ping(
             }
             continue;
         }
-        let url = format!("https://{}/ca.crt", host);
-        if let Ok(resp) = state
-            .client()
-            .get(&url)
-            .timeout(Duration::from_millis(1500))
-            .send()
-            .await
-        {
+        if check_shell_ready(&state.client(), &host, &cfg.device_token).await {
             *state.active_upstream.write().unwrap() = Some(host.clone());
             return Json(json!({
                 "ok": true,
                 "reachable": true,
-                "status": resp.status().as_u16(),
+                "status": 200,
                 "activeHost": host,
                 "lanHost": lan_target,
                 "meshnetHost": mesh_target,
@@ -1796,6 +1789,31 @@ fn stop_managed_server(state: &Arc<SharedAppState>) {
     }
 }
 
+/// An SPA route (no file extension, not an API/internal prefix) as opposed to a download or endpoint.
+fn is_app_route_path(path: &str) -> bool {
+    if path.starts_with("/api/") || path.starts_with("/__vibesquad/") || path.starts_with("/__desktop/") || path == "/ws" {
+        return false;
+    }
+    !path.rsplit('/').next().unwrap_or("").contains('.')
+}
+
+/// The upstream really serves the app shell: 200 with the React root, not a 401/500/rebuilding page.
+async fn check_shell_ready(client: &reqwest::Client, host: &str, token: &str) -> bool {
+    let scheme = if is_local_host(host) { "http" } else { "https" };
+    let mut req = client.get(format!("{}://{}/", scheme, host)).timeout(Duration::from_millis(1800));
+    if !token.is_empty() {
+        req = req.header("Cookie", format!("vs_device={}", token));
+    }
+    match req.send().await {
+        Ok(resp) if resp.status() == reqwest::StatusCode::OK => resp
+            .text()
+            .await
+            .map(|b| b.contains("<div id=\"root\">") && !b.contains("dist/index.html missing"))
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
 /// Short in-relay retry for page navigations while the upstream restarts (the page itself keeps polling for ~30 s).
 const RELAY_RETRY_BACKOFF_MS: [u64; 3] = [250, 500, 1000];
 
@@ -1817,7 +1835,10 @@ async fn proxy_http_handler(
     // broken-root guard, desktop bridge injection, and the Reconnecting page. API fetches don't match.
     let is_doc_nav = req.headers().get("sec-fetch-dest").and_then(|v| v.to_str().ok()) == Some("document")
         || req.headers().get(axum::http::header::ACCEPT).and_then(|v| v.to_str().ok()).map(|a| a.starts_with("text/html")).unwrap_or(false);
-    let is_root_nav = method == Method::GET && (path == "/" || path == "/index.html" || is_doc_nav);
+    let is_root_nav = method == Method::GET && (path == "/" || path == "/index.html");
+    // Other document navigations to app routes (?team=… links, SPA paths) get the bridge and the Reconnecting
+    // page, but never the root guard: files, /api/*, /__vibesquad/* and 404s pass through untouched.
+    let is_app_route_nav = method == Method::GET && !is_root_nav && is_doc_nav && is_app_route_path(&path);
     let query_setup = uri.query().map(|q| q.contains("setup=1")).unwrap_or(false);
 
     // First launch: if no mode choice has been saved yet and setup=1 wasn't explicitly requested, show the mode choice screen before spawning anything!
@@ -1860,13 +1881,7 @@ async fn proxy_http_handler(
     };
 
     // Browser navigations (root or deep link) ride out a restarting upstream; API calls fail fast.
-    let is_html_nav = method == Method::GET
-        && (is_root_nav
-            || req_headers
-                .get(axum::http::header::ACCEPT)
-                .and_then(|v| v.to_str().ok())
-                .map(|a| a.contains("text/html"))
-                .unwrap_or(false));
+    let is_html_nav = is_root_nav || is_app_route_nav;
     let mut last_err = String::new();
     let mut attempt = 0usize;
 
@@ -1992,7 +2007,12 @@ async fn proxy_http_handler(
                     }
                 }
 
-                let final_bytes = if is_root_nav && is_html && up_status == reqwest::StatusCode::OK {
+                let is_attachment = up_headers
+                    .get(reqwest::header::CONTENT_DISPOSITION)
+                    .and_then(|v| v.to_str().ok())
+                    .map(|v| v.to_ascii_lowercase().contains("attachment"))
+                    .unwrap_or(false);
+                let final_bytes = if (is_root_nav || is_app_route_nav) && is_html && !is_attachment && up_status == reqwest::StatusCode::OK {
                     let html_str = String::from_utf8_lossy(&resp_bytes);
                     let bridge = ui_pages::desktop_bridge_script(&cfg.last_hash, &cfg.last_route);
                     let injected = if html_str.contains("</body>") {
@@ -2479,6 +2499,97 @@ mod tests {
             let html = String::from_utf8_lossy(&body);
             assert_eq!(html.contains("__VIBESQUAD_DESKTOP_BRIDGE__"), bridged, "{uri}: {html}");
         }
+    }
+
+    async fn spawn_upstream(router: Router) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        addr.to_string()
+    }
+
+    fn direct_state(host: &str) -> Arc<SharedAppState> {
+        let state = make_test_state();
+        {
+            let mut cfg = state.config.write().unwrap();
+            cfg.server_mode = "direct".into();
+            cfg.server_host = host.into();
+            cfg.device_token = "t".into();
+        }
+        state
+    }
+
+    #[tokio::test]
+    async fn downloads_404s_and_json_pass_through_untouched() {
+        use axum::routing::get;
+        let upstream = Router::new()
+            .route("/ca.crt", get(|| async {
+                Response::builder().header("content-type", "application/x-x509-ca-cert").body(Body::from("CERT")).unwrap()
+            }))
+            .route("/setup.exe", get(|| async {
+                Response::builder().header("content-type", "text/html").header("content-disposition", "attachment; filename=a.html").body(Body::from("<html><body>dl</body></html>")).unwrap()
+            }))
+            .route("/api/data", get(|| async { Json(json!({ "ok": true })) }))
+            .fallback(|| async {
+                Response::builder().status(404).header("content-type", "text/html").body(Body::from("<html><body>nope</body></html>")).unwrap()
+            });
+        let state = direct_state(&spawn_upstream(upstream).await);
+        let cases = [
+            ("/ca.crt", "CERT"),
+            ("/setup.exe", "dl"),
+            ("/api/data", "\"ok\":true"),
+            ("/missing.png", "nope"),
+        ];
+        for (uri, needle) in cases {
+            let req = Request::builder().method("GET").uri(uri).header("accept", "text/html").header("sec-fetch-dest", "document").body(Body::empty()).unwrap();
+            let resp = proxy_http_handler(State(state.clone()), req).await;
+            let status = resp.status();
+            let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+            let text = String::from_utf8_lossy(&body);
+            assert!(text.contains(needle), "{uri}: {text}");
+            assert!(!text.contains("__VIBESQUAD_DESKTOP_BRIDGE__") && !text.contains("Reconnecting"), "{uri}: {text}");
+            assert_eq!(status == StatusCode::NOT_FOUND, uri == "/missing.png", "{uri}");
+        }
+    }
+
+    #[tokio::test]
+    async fn ping_is_reachable_only_when_the_app_shell_is_served() {
+        use axum::routing::get;
+        let ok = spawn_upstream(Router::new().route("/", get(|| async { "<html><div id=\"root\"></div></html>" })).route("/api/auth/status", get(|| async { Json(json!({ "distReady": true })) }))).await;
+        let unauthorized = spawn_upstream(Router::new().fallback(|| async { (StatusCode::UNAUTHORIZED, "no") })).await;
+        let server_error = spawn_upstream(Router::new().fallback(|| async { (StatusCode::INTERNAL_SERVER_ERROR, "<div id=\"root\">") })).await;
+        let broken = spawn_upstream(Router::new().fallback(|| async { "dist/index.html missing" })).await;
+        let client = make_test_state().client();
+        assert!(check_shell_ready(&client, &ok, "").await);
+        assert!(!check_shell_ready(&client, &unauthorized, "").await);
+        assert!(!check_shell_ready(&client, &server_error, "").await);
+        assert!(!check_shell_ready(&client, &broken, "").await);
+        for (host, want) in [(&ok, true), (&unauthorized, false), (&server_error, false), (&broken, false)] {
+            let state = direct_state(host);
+            let resp = handle_desktop_ping(State(state), Request::builder().uri("/__desktop/ping").body(Body::empty()).unwrap()).await.into_response();
+            let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+            let v: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(v["reachable"].as_bool(), Some(want), "{host}: {v}");
+        }
+    }
+
+    #[test]
+    fn app_route_paths_exclude_files_and_endpoints() {
+        for p in ["/some/spa/path", "/team/x"] { assert!(is_app_route_path(p), "{p}"); }
+        for p in ["/ca.crt", "/VibeSquad-setup.exe", "/api/x", "/__vibesquad/local-image", "/__desktop/ping", "/ws"] { assert!(!is_app_route_path(p), "{p}"); }
+    }
+
+    #[test]
+    fn pages_guard_against_reload_loops() {
+        let cfg = DesktopConfig::default();
+        for html in [ui_pages::render_reconnecting_page(&cfg, ""), ui_pages::render_unreachable_page(&cfg, "")] {
+            assert!(html.contains("vs.reconnect.reloads") && html.contains("MAX_RELOADS = 3"));
+        }
+        let r = ui_pages::render_reconnecting_page(&cfg, "");
+        assert!(!r.contains("
+    checkNow();
+"), "no immediate check on load");
+        assert!(ui_pages::desktop_bridge_script("", "").contains("removeItem('vs.reconnect.reloads')"));
     }
 
     #[test]
