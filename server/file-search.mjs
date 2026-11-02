@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { delimiter, isAbsolute, join, sep } from "node:path";
+import { delimiter, isAbsolute, join, resolve, sep } from "node:path";
 
 // Quick open (GET /__vibesquad/files) and find in files (GET /__vibesquad/search) for the Files dock.
 // The Paseo daemon has no content-search RPC, so both run here: `git ls-files` / `git grep` (git is always
@@ -30,6 +30,11 @@ export function confineCwd(cwd, roots) {
   if (/^[\\/]{2}/.test(cwd)) return { error: "network (UNC) paths are not allowed" };
   if (cwd.split(/[\\/]/).includes("..")) return { error: "cwd must not contain .." };
   if (!isAbsolute(cwd)) return { error: "cwd must be absolute" };
+  // Lexical roots check before any stat/realpath, so a path outside every root never touches the disk.
+  const lexical = resolve(cwd);
+  if (!roots.some((r) => insideDir(lexical, r) || insideDir(lexical, resolve(r)))) {
+    return { error: "cwd is not a known agent or team path", status: 403 };
+  }
   let real;
   try {
     if (!statSync(cwd).isDirectory()) return { error: "cwd is not a directory" };

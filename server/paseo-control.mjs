@@ -6,7 +6,7 @@ import { execFile, spawn } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
-import { bundledNode, findPaseoCli, isDaemonListening, parseListen, resolveCmdShimEntry } from "./first-run.mjs";
+import { bundledNode, findPaseoCli, isDaemonListening, parseListen, resolveCmdShimEntry, UNSAFE_CMD_ARG } from "./first-run.mjs";
 import { clearConfigWarning, loadUserSettings, parseJsonWithBom, readJsonFileWithBom, recordConfigWarning, stripBom } from "./user-settings.mjs";
 
 const IS_WIN = process.platform === "win32";
@@ -168,11 +168,10 @@ export function readRawPaseoConfig(opts = {}) {
   };
 }
 
-// cmd.exe fallback only: every arg is double-quoted, but refuse anything that could still break out or expand,
-// plus a trailing backslash (it would escape the closing quote for the CLI's own argv parser).
-const UNSAFE_CMD_ARG = /["&|<>^%!\r\n\0]|\\$/;
 // `paseo plugin install <source>`: a directory, Git URL or npm package spec. No leading `-` (option injection).
 const PLUGIN_SOURCE_RE = /^(?!-)[A-Za-z0-9@._\/\\:+~# -]{1,512}$/;
+// Provider / plugin ids go into `paseo provider|plugin <cmd> <id>` argv: no leading `-` either.
+export const PASEO_ID_RE = /^(?!-)[A-Za-z0-9_.-]+$/;
 
 /** Validates a plugin install source; throws on anything outside the allowlist. */
 export function validatePluginSource(raw) {
@@ -256,7 +255,8 @@ export function runPaseoCli(args = [], opts = {}) {
         if (entry) {
           run(node, [...entry.nodeArgs, entry.script, ...fullArgs], { timeout, windowsHide: true, env, maxBuffer: 8 * 1024 * 1024 }, cb);
         } else {
-          if (fullArgs.some((a) => UNSAFE_CMD_ARG.test(String(a)))) {
+          // cli.bin is spliced into the same command line, so it gets the same check as the args.
+          if ([cli.bin, ...fullArgs].some((a) => UNSAFE_CMD_ARG.test(String(a)))) {
             return resolvePromise({ ok: false, code: 1, stdout: "", stderr: "refusing argument with shell metacharacters", data: null });
           }
           // `/s /c "<line>"`: cmd strips only the outer quotes, so every arg stays quoted.
@@ -627,7 +627,7 @@ export async function getPaseoProviders(opts = {}) {
 
 export async function togglePaseoProvider(providerId, enabled, opts = {}) {
   const id = String(providerId || "").trim();
-  if (!id || !/^[A-Za-z0-9_.-]+$/.test(id)) throw new Error("Invalid provider id");
+  if (!id || !PASEO_ID_RE.test(id)) throw new Error("Invalid provider id");
   return writePaseoConfigAndReload((cfg) => {
     cfg.agents = cfg.agents && typeof cfg.agents === "object" ? cfg.agents : {};
     cfg.agents.providers = cfg.agents.providers && typeof cfg.agents.providers === "object" ? cfg.agents.providers : {};
@@ -649,7 +649,7 @@ export async function saveCustomAcpProvider(payload, opts = {}) {
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/^-|-$/g, "");
+    .replace(/^-+|-+$/g, "");
   if (!id) throw new Error("Provider ID is required");
   const label = String(payload?.label || id).trim();
   const description = String(payload?.description || "").trim();
@@ -698,7 +698,7 @@ export async function saveCustomAcpProvider(payload, opts = {}) {
 
 export async function getPaseoProviderDiagnostic(providerId, opts = {}) {
   const id = String(providerId || "").trim();
-  if (!id || !/^[A-Za-z0-9_.-]+$/.test(id)) throw new Error("Invalid provider id");
+  if (!id || !PASEO_ID_RE.test(id)) throw new Error("Invalid provider id");
   const res = await runPaseoCli(["provider", "diagnostic", id, "--json"], opts);
   const rawDiag = res.data?.diagnostic || res.stdout || res.stderr || "";
   return {
@@ -710,7 +710,7 @@ export async function getPaseoProviderDiagnostic(providerId, opts = {}) {
 
 export async function getPaseoProviderModels(providerId, opts = {}) {
   const id = String(providerId || "").trim();
-  if (!id || !/^[A-Za-z0-9_.-]+$/.test(id)) throw new Error("Invalid provider id");
+  if (!id || !PASEO_ID_RE.test(id)) throw new Error("Invalid provider id");
   const res = await runPaseoCli(["provider", "models", id, "--json"], opts);
   return {
     ok: res.ok,
@@ -772,7 +772,7 @@ export async function getPaseoPlugins(opts = {}) {
 export async function controlPaseoPlugin(action, payload = {}, opts = {}) {
   const id = String(payload.id || "").trim();
   if (action === "enable" || action === "disable") {
-    if (!id || !/^[A-Za-z0-9_.-]+$/.test(id)) throw new Error("Invalid plugin id");
+    if (!id || !PASEO_ID_RE.test(id)) throw new Error("Invalid plugin id");
     if (action === "disable" && id === "vibesquad" && !payload.confirmDisableVibeSquad) {
       return {
         ok: false,
@@ -795,7 +795,7 @@ export async function controlPaseoPlugin(action, payload = {}, opts = {}) {
   }
 
   if (action === "reload" || action === "update" || action === "remove") {
-    if (!id || !/^[A-Za-z0-9_.-]+$/.test(id)) throw new Error("Invalid plugin id");
+    if (!id || !PASEO_ID_RE.test(id)) throw new Error("Invalid plugin id");
     const res = await runPaseoCli(["plugin", action, id], { ...opts, timeoutMs: 30_000 });
     return {
       ok: res.ok,
@@ -808,7 +808,7 @@ export async function controlPaseoPlugin(action, payload = {}, opts = {}) {
   }
 
   if (action === "logs") {
-    if (!id || !/^[A-Za-z0-9_.-]+$/.test(id)) throw new Error("Invalid plugin id");
+    if (!id || !PASEO_ID_RE.test(id)) throw new Error("Invalid plugin id");
     const res = await runPaseoCli(["plugin", "logs", id], opts);
     return {
       ok: res.ok,

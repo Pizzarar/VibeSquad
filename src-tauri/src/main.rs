@@ -2242,10 +2242,16 @@ fn allowed_local_origins(port: usize) -> [String; 5] {
 /// reach it. Allowed: a loopback Host plus either an allowlisted Origin, or no Origin with
 /// Sec-Fetch-Site absent / none / same-origin, or no Origin with an allowlisted Referer.
 fn check_local_request(headers: &HeaderMap, port: usize) -> Result<(), &'static str> {
+    // A repeated Host/Origin/Sec-Fetch-Site/Referer is never sent by a browser: refuse it rather than pick one.
+    for name in ["host", "origin", "sec-fetch-site", "referer"] {
+        if headers.get_all(name).iter().nth(1).is_some() {
+            return Err("duplicate header");
+        }
+    }
     // Non-ASCII values read as "" so they never match anything below.
     let header = |name: &str| headers.get(name).map(|v| v.to_str().unwrap_or(""));
     let host_ok = header("host")
-        .map(|h| h == format!("127.0.0.1:{}", port) || h == format!("localhost:{}", port))
+        .map(|h| h.eq_ignore_ascii_case(&format!("127.0.0.1:{}", port)) || h.eq_ignore_ascii_case(&format!("localhost:{}", port)))
         .unwrap_or(false);
     if !host_ok {
         return Err("forbidden host");
@@ -2254,7 +2260,7 @@ fn check_local_request(headers: &HeaderMap, port: usize) -> Result<(), &'static 
     if let Some(origin) = header("origin") {
         // An allowlisted Origin is our own page (tauri:// to 127.0.0.1 reads as cross-site, so this
         // wins over Sec-Fetch-Site). Anything else, including "null", is refused.
-        return if allowed.iter().any(|a| a == origin) { Ok(()) } else { Err("forbidden origin") };
+        return if allowed.iter().any(|a| a.eq_ignore_ascii_case(origin)) { Ok(()) } else { Err("forbidden origin") };
     }
     match header("sec-fetch-site") {
         None | Some("none") | Some("same-origin") => Ok(()),
@@ -2913,6 +2919,21 @@ mod tests {
         assert!(check_local_request(&hdrs(&[host, ("sec-fetch-site", "cross-site")]), port).is_err());
         assert!(check_local_request(&hdrs(&[host, ("sec-fetch-site", "same-site")]), port).is_err());
         assert!(check_local_request(&hdrs(&[host, ("sec-fetch-site", "cross-site"), ("referer", "https://evil.example/")]), port).is_err());
+        // Host/Origin compare case-insensitively (still exact otherwise).
+        assert_eq!(check_local_request(&hdrs(&[("host", "LOCALHOST:4189"), ("origin", "HTTP://127.0.0.1:4189")]), port), Ok(()));
+        assert!(check_local_request(&hdrs(&[host, ("origin", "HTTP://EVIL.example")]), port).is_err());
+        // Duplicate Host / Origin / Sec-Fetch-Site / Referer are refused, even when the first value is allowed.
+        for (name, good, bad) in [
+            ("host", "127.0.0.1:4189", "evil.example:4189"),
+            ("origin", "http://127.0.0.1:4189", "https://evil.example"),
+            ("sec-fetch-site", "same-origin", "cross-site"),
+            ("referer", "http://127.0.0.1:4189/", "https://evil.example/"),
+        ] {
+            let mut h = if name == "host" { HeaderMap::new() } else { hdrs(&[host]) };
+            h.append(HeaderName::from_bytes(name.as_bytes()).unwrap(), HeaderValue::from_str(good).unwrap());
+            h.append(HeaderName::from_bytes(name.as_bytes()).unwrap(), HeaderValue::from_str(bad).unwrap());
+            assert_eq!(check_local_request(&h, port), Err("duplicate header"), "{name}");
+        }
     }
 
     #[tokio::test]
