@@ -138,3 +138,53 @@ export function parseSendTo(text) {
   }
   return null;
 }
+
+export const SPIN_OFF_MARKER = "vs:spin-off";
+export const SPIN_OFF_MAX = 6;
+
+/**
+ * Parse a spin-off proposal: a fence opened by ```vs:spin-off, one Team per line as `Name | 1-line brief`.
+ * A leading "- ", "* " or "1. " on the name is dropped. Blank and malformed lines (no `|`, empty name) are
+ * skipped; at most SPIN_OFF_MAX rows. A fence nested inside another fence (````, ~~~, ```md) or a blockquote is an
+ * example, not an offer; the LAST real vs:spin-off fence wins. Null when there is none or it has no valid row.
+ */
+export function parseSpinOff(text) {
+  const lines = String(text ?? "").replace(/\r\n/g, "\n").split("\n");
+  let outer = null; // { ch, len } of an open non-spin-off fence
+  let block = null; // rows of the open spin-off fence
+  let last = null;
+  for (const line of lines) {
+    const f = /^ {0,3}(`{3,}|~{3,})\s*(.*?)\s*$/.exec(line);
+    if (block) {
+      if (f && f[1][0] === "`" && !f[2]) {
+        last = block;
+        block = null;
+        continue;
+      }
+      const bar = line.indexOf("|");
+      if (bar < 0 || block.length >= SPIN_OFF_MAX) continue;
+      const name = line.slice(0, bar).replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").trim();
+      const brief = line.slice(bar + 1).trim();
+      if (name && brief) block.push({ name, brief });
+    } else if (outer) {
+      if (f && f[1][0] === outer.ch && f[1].length >= outer.len && !f[2]) outer = null;
+    } else if (f) {
+      if (f[1] === "```" && f[2] === "vs:spin-off") block = [];
+      else outer = { ch: f[1][0], len: f[1].length };
+    }
+  }
+  if (block) last = block; // unterminated fence (message cut off)
+  return last?.length ? last : null;
+}
+
+/** The spin-off offer in the newest assistant message of a Brainstorm timeline, else null. Same message-id scheme as sendToFrom. */
+export function spinOffFrom(agentId, entries) {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const it = entries[i].item;
+    if (it?.type !== "assistant_message" || typeof it.text !== "string") continue;
+    const teams = parseSpinOff(it.text);
+    if (!teams) return null;
+    return { teams, id: `${agentId}:${it.id ?? it.messageId ?? entries[i].seqStart ?? entries[i].timestamp ?? it.text.length}` };
+  }
+  return null;
+}

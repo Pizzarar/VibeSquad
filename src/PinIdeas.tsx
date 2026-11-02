@@ -3,8 +3,8 @@
 // and the toast both report to. Side effects live in src/pinActions.ts.
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { bestOverlap, DEFAULT_PIN_PROFILE, nameFromIdea, parseSendTo, pinsForSquad, type Pin } from "./pins";
-import { createPin, dismissSendTo, getLastBrainstormProfile, isSendToDismissed, sendIdeaToTeam, setLastBrainstormProfile } from "./pinActions";
+import { bestOverlap, DEFAULT_PIN_PROFILE, nameFromIdea, parseSendTo, pinsForSquad, describeSpinOff, isSpinOffRunning, spinOffFrom, spinOffRemaining, spinOffVersion, subscribeSpinOff, type Pin } from "./pins";
+import { createPin, createSpinOffPins, dismissSendTo, dismissSpinOff, isSpinOffDismissed, getLastBrainstormProfile, isSendToDismissed, sendIdeaToTeam, setLastBrainstormProfile } from "./pinActions";
 import { getTeams, type TeamView } from "./teams";
 import type { PinHandler } from "./PinGrid";
 import { useProfiles } from "./profiles";
@@ -62,6 +62,7 @@ const offers = new Map<string, SendToOffer | null>();
 const offerListeners = new Set<() => void>();
 
 export function noteSendTo(agentId: string, entries: TimelineEntry[]) {
+  noteSpinOff(agentId, entries);
   const next = sendToFrom(agentId, entries);
   const cur = offers.get(agentId) ?? null;
   if (cur?.id === next?.id && cur?.text === next?.text) return;
@@ -76,6 +77,69 @@ export function useSendTo(agentId: string | null): SendToOffer | null {
       return () => offerListeners.delete(l);
     },
     () => (agentId ? (offers.get(agentId) ?? null) : null),
+  );
+}
+
+// ── Spin-off offer (vs:spin-off fence in the newest Brainstorm message) ───────
+export type SpinOffOffer = { id: string; teams: { name: string; brief: string }[] };
+const spinOffs = new Map<string, SpinOffOffer | null>();
+
+function noteSpinOff(agentId: string, entries: TimelineEntry[]) {
+  const next = spinOffFrom(agentId, entries) as SpinOffOffer | null;
+  const cur = spinOffs.get(agentId) ?? null;
+  if (cur?.id === next?.id && JSON.stringify(cur?.teams) === JSON.stringify(next?.teams)) return;
+  spinOffs.set(agentId, next);
+  offerListeners.forEach((l) => l());
+}
+
+export function useSpinOff(agentId: string | null): SpinOffOffer | null {
+  return useSyncExternalStore(
+    (l) => {
+      offerListeners.add(l);
+      return () => offerListeners.delete(l);
+    },
+    () => (agentId ? (spinOffs.get(agentId) ?? null) : null),
+  );
+}
+
+/** "Spin up 3 Teams: A, B, C · Not yet". One click pins them all in this Squad; no Buddies start. */
+export function SpinOffCard({ pin, offer, variant = "tile" }: { pin: Pin; offer: SpinOffOffer; variant?: "tile" | "bar" }) {
+  const [hidden, setHidden] = useState(() => isSpinOffDismissed(offer.id));
+  useEffect(() => setHidden(isSpinOffDismissed(offer.id)), [offer.id]);
+  useSyncExternalStore(subscribeSpinOff, spinOffVersion);
+  const busy = isSpinOffRunning(offer.id);
+  const teams = spinOffRemaining(offer.id, offer.teams);
+  if (hidden || !teams.length) return null;
+  const n = teams.length;
+  const go = async () => {
+    const results = await createSpinOffPins(offer.id, pin.squad.id, offer.teams); // the full list: runSpinOffOnce skips the rows already created
+    if (!results) return; // already running (double click, or the other card)
+    showPinToast(describeSpinOff(results));
+    if (results.every((r) => r.pin)) {
+      dismissSpinOff(offer.id);
+      setHidden(true);
+    }
+  };
+  return (
+    <div className={`pin-send-to ${variant}`} data-testid={`pin-spin-off-${pin.lane.id}`} onClick={(e) => e.stopPropagation()}>
+      <span className="pin-send-to-text" title={teams.map((t) => `${t.name}: ${t.brief}`).join("\n")}>
+        Spin up {n} Team{n === 1 ? "" : "s"}: {teams.map((t) => t.name).join(", ")}
+      </span>
+      <button type="button" className="btn ok small" disabled={busy} data-testid={`pin-spin-off-go-${pin.lane.id}`} onClick={() => void go()}>
+        {busy ? "…" : `Spin up ${n} ↗`}
+      </button>
+      <button
+        type="button"
+        className="btn ghost small"
+        data-testid={`pin-spin-off-no-${pin.lane.id}`}
+        onClick={() => {
+          dismissSpinOff(offer.id);
+          setHidden(true);
+        }}
+      >
+        Not yet
+      </button>
+    </div>
   );
 }
 
@@ -186,7 +250,13 @@ export function SendToCard({ pin, offer, variant = "tile" }: { pin: Pin; offer: 
 /** The card above the focused drawer (rendered in PinFocusHeader). */
 export function SendToBar({ pin }: { pin: Pin }) {
   const offer = useSendTo(pin.brainstorm?.agent.id ?? null);
-  return offer ? <SendToCard pin={pin} offer={offer} variant="bar" /> : null;
+  const spin = useSpinOff(pin.brainstorm?.agent.id ?? null);
+  return (
+    <>
+      {offer && <SendToCard pin={pin} offer={offer} variant="bar" />}
+      {spin && <SpinOffCard pin={pin} offer={spin} variant="bar" />}
+    </>
+  );
 }
 
 // ── Overview "+": type an idea, pick a team or make a new one ────────────────
