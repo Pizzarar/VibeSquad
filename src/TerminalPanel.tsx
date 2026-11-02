@@ -53,6 +53,7 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
   const containerRefsMap = useRef<Map<string, HTMLDivElement>>(new Map());
   const pendingOutputRef = useRef<Map<string, (Uint8Array | string)[]>>(new Map());
   const [renamingId, setRenamingId] = useState<string | null>(null);
+  const renamingRef = useRef<string | null>(null); // guards Enter + blur from committing twice
   const [renameValue, setRenameValue] = useState("");
   const [tabErr, setTabErr] = useState("");
   const [capture, setCapture] = useState<{ title: string; text: string; err: string; busy: boolean; copied: boolean } | null>(null);
@@ -239,14 +240,16 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
 
   const startRename = (t: TerminalTab) => {
     setTabErr("");
+    renamingRef.current = t.id;
     setRenamingId(t.id);
     setRenameValue(t.name);
   };
 
   const commitRename = async () => {
-    const id = renamingId;
+    const id = renamingRef.current;
     if (!id) return;
     const title = renameValue.trim();
+    renamingRef.current = null;
     setRenamingId(null);
     if (!title || title === tabs.find((t) => t.id === id)?.name) return;
     try {
@@ -256,6 +259,13 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
       setTabErr(`Rename failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
+
+  useEffect(() => {
+    if (!capture) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setCapture(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [capture]);
 
   const captureActive = async () => {
     const tab = tabs.find((t) => t.id === activeId);
@@ -316,7 +326,7 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
                 onKeyDown={(e) => {
                   e.stopPropagation();
                   if (e.key === "Enter") void commitRename();
-                  else if (e.key === "Escape") setRenamingId(null);
+                  else if (e.key === "Escape") { renamingRef.current = null; setRenamingId(null); }
                 }}
               />
             ) : (

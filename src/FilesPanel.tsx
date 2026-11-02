@@ -4,7 +4,7 @@ import type { FileExplorerDirectoryPayload } from "@getpaseo/client/internal/dae
 import { daemonClient, DEMO } from "./paseo";
 import { MarkdownRenderer } from "./Timeline";
 import { normalizeRepoPath } from "./fileLinks";
-import { baseName, nameTaken, parentPath, validateEntryName } from "./fileOps";
+import { baseName, isUnder, nameTaken, parentPath, remapPath, validateEntryName } from "./fileOps";
 import { createEntry, deleteEntry, duplicateEntry, renameEntry } from "./paseoFiles";
 
 type DirEntry = FileExplorerDirectoryPayload["entries"][number];
@@ -340,7 +340,7 @@ export function FilesPanel({
   }, [cwd, loadDir]);
 
   const closeViewerIf = (path: string) => {
-    if (openFile && (openFile === path || openFile.startsWith(`${path}/`))) {
+    if (openFile && isUnder(openFile, path)) {
       unsubscribeRef.current?.();
       unsubscribeRef.current = null;
       setOpenFile(null);
@@ -348,9 +348,17 @@ export function FilesPanel({
     }
   };
 
-  const siblingNames = (parent: string): string[] => {
+  // Names already in `parent`; asks the daemon when the folder was never expanded (children not loaded).
+  const siblingNames = async (parent: string): Promise<string[]> => {
     const list = parent ? findNode(tree, parent)?.children : tree;
-    return (list ?? []).map((n) => n.name);
+    if (list) return list.map((n) => n.name);
+    const dir = await daemonClient.listDirectory(cwd, parent);
+    return dir.entries.map((e) => e.name);
+  };
+
+  const setExpandedBoth = (next: Set<string>) => {
+    expandedRef.current = next;
+    setExpanded(next);
   };
 
   const openDialog = (d: FileDialog) => {
@@ -369,24 +377,27 @@ export function FilesPanel({
       if (dialog.kind === "delete") {
         await deleteEntry(cwd, dialog.node.path);
         closeViewerIf(dialog.node.path);
+        setExpandedBoth(new Set([...expandedRef.current].filter((p) => !isUnder(p, dialog.node.path))));
       } else {
         const name = dialogName.trim();
         const bad = validateEntryName(name);
         if (bad) throw new Error(bad);
         if (dialog.kind === "create") {
-          if (nameTaken(siblingNames(dialog.parent), name)) throw new Error(`"${name}" already exists here`);
+          if (nameTaken(await siblingNames(dialog.parent), name)) throw new Error(`"${name}" already exists here`);
           await createEntry(cwd, dialog.parent, name, dialog.entry);
-          if (dialog.parent) {
-            expandedRef.current = new Set([...expandedRef.current, dialog.parent]);
-            setExpanded(expandedRef.current);
-          }
+          if (dialog.parent) setExpandedBoth(new Set([...expandedRef.current, dialog.parent]));
         } else if (name !== dialog.node.name) {
-          if (nameTaken(siblingNames(parentPath(dialog.node.path)), name, dialog.node.name)) {
+          if (nameTaken(await siblingNames(parentPath(dialog.node.path)), name, dialog.node.name)) {
             throw new Error(`"${name}" already exists here`);
           }
-          const renamed = await renameEntry(cwd, dialog.node.path, name);
-          if (openFile === dialog.node.path && renamed) void openFileNode(renamed);
-          else closeViewerIf(dialog.node.path);
+          const oldPath = dialog.node.path;
+          const renamed = await renameEntry(cwd, oldPath, name);
+          if (renamed) {
+            setExpandedBoth(new Set([...expandedRef.current].map((p) => remapPath(p, oldPath, renamed))));
+            if (openFile && isUnder(openFile, oldPath)) void openFileNode(remapPath(openFile, oldPath, renamed));
+          } else {
+            closeViewerIf(oldPath);
+          }
         }
       }
       setDialog(null);
@@ -434,6 +445,13 @@ export function FilesPanel({
 
   // Folder rows create inside themselves; file rows create next to themselves; no row = repo root.
   const createParentFor = (node: TreeNode | null) => (!node ? "" : node.kind === "directory" ? node.path : parentPath(node.path));
+
+  useEffect(() => {
+    if (!dialog || opBusy) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setDialog(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [dialog, opBusy]);
 
   useEffect(() => {
     if (!menu) return;

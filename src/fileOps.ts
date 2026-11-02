@@ -7,7 +7,7 @@ export function validateEntryName(name: string): string | null {
   const n = name.trim();
   if (!n) return "Name is required";
   if (n === "." || n === "..") return "Name can't be . or ..";
-  if (/[\/]/.test(n)) return "Name can't contain / or \\";
+  if (/[\\/]/.test(n)) return "Name can't contain / or \\";
   if (/[<>:"|?*\x00-\x1f]/.test(n)) return "Name has characters that aren't allowed";
   if (/[. ]$/.test(n)) return "Name can't end with a dot or space";
   if (WIN_RESERVED.test(n)) return "That name is reserved on Windows";
@@ -48,4 +48,15 @@ export function captureFileName(title: string, now: Date): string {
   const p = (n: number) => String(n).padStart(2, "0");
   const stamp = `${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}-${p(now.getHours())}${p(now.getMinutes())}`;
   return `terminal-${slug}-${stamp}.txt`;
+}
+
+/** Remap `p` after `oldPath` was renamed to `newPath` (covers `p` inside a renamed folder). */
+export function remapPath(p: string, oldPath: string, newPath: string): string {
+  if (p === oldPath) return newPath;
+  return p.startsWith(`${oldPath}/`) ? newPath + p.slice(oldPath.length) : p;
+}
+
+/** True when `p` is `base` or lives under it. */
+export function isUnder(p: string, base: string): boolean {
+  return p === base || p.startsWith(`${base}/`);
 }

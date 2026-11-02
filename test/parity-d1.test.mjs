@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateEntryName, parentPath, baseName, joinPath, nameTaken, captureText, captureFileName } from "../src/fileOps.ts";
+import { remapPath, isUnder, validateEntryName, parentPath, baseName, joinPath, nameTaken, captureText, captureFileName } from "../src/fileOps.ts";
 
 test("validateEntryName", () => {
   assert.equal(validateEntryName("notes.md"), null);
   assert.equal(validateEntryName(".gitignore"), null);
-  for (const bad of ["", "  ", ".", "..", "a/b", "a\b", "a:b", "x?", "end.", "CON", "nul.txt", "a".repeat(256)]) {
+  for (const bad of ["", "  ", ".", "..", "a/b", "a\\b", "..\\evil", "sub\\file","a:b", "x?", "end.", "CON", "nul.txt", "a".repeat(256)]) {
     assert.notEqual(validateEntryName(bad), null, JSON.stringify(bad));
   }
 });
@@ -33,4 +33,12 @@ test("captureText trims trailing blanks", () => {
 test("captureFileName", () => {
   assert.equal(captureFileName("Build & Test!", new Date(2026, 10, 2, 14, 5)), "terminal-build-test-20261102-1405.txt");
   assert.equal(captureFileName("???", new Date(2026, 0, 3, 1, 2)), "terminal-capture-20260103-0102.txt");
+});
+
+test("remapPath / isUnder", () => {
+  assert.equal(remapPath("src/old", "src/old", "src/new"), "src/new");
+  assert.equal(remapPath("src/old/a.ts", "src/old", "src/new"), "src/new/a.ts");
+  assert.equal(remapPath("src/older/a.ts", "src/old", "src/new"), "src/older/a.ts");
+  assert.equal(isUnder("a/b/c", "a/b"), true);
+  assert.equal(isUnder("a/bc", "a/b"), false);
 });
