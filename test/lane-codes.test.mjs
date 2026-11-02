@@ -105,3 +105,10 @@ test("spawn paths: prompts name the new agent by its title", () => {
   const b = buildBrainstormInitialPrompt({ laneId: "vibesquad", laneUpper: "VIBESQUAD", buddyName: "Hub Buddy", summaryContent: "", latestPlan: null });
   assert.match(b, /You are Hub Buddy \(fresh start/);
 });
+
+import { buildTopicBrainstormPrompt } from "../server/inbox.mjs";
+
+test("topic Buddy prompt names the agent by its lane-code title", () => {
+  const p = buildTopicBrainstormPrompt({ card: { id: "c1", title: "t", text: "x" }, topic: "naming", laneId: "vibesquad", laneUpper: "VIBESQUAD", summaryContent: "", buddyName: "Hub Buddy · naming" });
+  assert.match(p, /focused topic brainstorm \(Hub Buddy · naming\)/);
+});

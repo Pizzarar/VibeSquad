@@ -4,6 +4,7 @@ import { daemonClient, DEMO, spawnTeamAgent, usePaseo } from "./paseo";
 import {
   checkBuddyOverlap,
   getTeams,
+  ordOf,
   resolve,
   saveTeams,
   slugifyFeatureLane,
@@ -246,13 +247,16 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   };
 
   const lane = team.lanes.find((l) => l.id === laneId);
+  // A worker is titled with its lane's live lead ord (the ORD field is lead-only).
+  const liveLead = view.lanes.find((l) => l.lane.id === laneId)?.lead;
+  const effectiveOrd = role === "lead" ? ord : liveLead ? String(ordOf(liveLead.agent)) : "";
   const { title, labels } = buildName({
     team: team.id,
     laneId,
     laneName: lane?.name ?? laneId,
     role,
     profile: profile.name,
-    ord,
+    ord: effectiveOrd,
     topic,
     task,
     job,
