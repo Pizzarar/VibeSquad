@@ -3634,3 +3634,15 @@ button.file-chip { cursor: pointer; font: inherit; }
 .sched-inspect dt { color: var(--cyan); }
 .sched-inspect dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .sched-prompt { margin: 0; white-space: pre-wrap; max-height: 140px; overflow: auto; }
+.changes-history { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.changes-history-list { display: flex; flex-direction: column; gap: 4px; align-self: stretch; }
+.changes-commit-files { display: flex; flex-direction: column; gap: 4px; padding: 4px 8px 8px; border-top: 1px solid var(--line); }
+.changes-sha { flex: none; color: var(--cyan); font-size: 11px; }
+.changes-history-note { font-size: 11px; width: 100%; }
+.changes-history-note.err { color: var(--hot-pink); }
+.check-run.clickable { cursor: pointer; }
+.check-run.clickable:hover .check-name { text-decoration: underline; }
+.changes-check-details, .changes-pr-timeline { display: flex; flex-direction: column; gap: 4px; padding: 4px 8px; border: 1px solid var(--line); background: var(--navy); }
+.changes-check-text { margin: 0; max-height: 140px; overflow: auto; white-space: pre-wrap; font-family: var(--mono); font-size: 11px; }
+.changes-timeline-item { border-bottom: 1px solid var(--line); padding-bottom: 3px; }
+@media (max-width: 480px) { .changes-commit-files .changes-file-header { flex-wrap: wrap; } }
