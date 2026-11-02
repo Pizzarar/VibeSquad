@@ -1378,7 +1378,7 @@ code {
 .pane-tab:hover .tab-move, .pane-tab.on .tab-move { opacity: 1; }
 .pane-menu { display: none; padding: 0 10px; font-size: 16px; border-right: 1px solid var(--line); }
 .pane-tools { display: flex; align-items: center; gap: 6px; padding: 0 8px; flex: none; }
-.btn.on { background: var(--cyan); color: #05050a; }
+.btn.on { background: var(--cyan-dim); color: var(--cyan); border-color: var(--cyan); }
 .kbd { font: 10px var(--mono); border: 1px solid var(--line); padding: 0 4px; color: var(--muted); }
 .pane-slot { grid-row: 2; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .pane-slot.pane-left { grid-column: 1; }
@@ -3082,10 +3082,67 @@ html, body, #root { overflow-x: hidden; }
   gap: 6px;
   text-align: center;
 }
-.dock-toggle-btn.on {
-  color: var(--cyan);
-  border-color: var(--cyan);
-}
+/* ── Dock tabs: Changes, Files, Scripts (src/ChangesPanel.tsx, FilesPanel.tsx, ScriptsPanel.tsx) ── */
+.changes-panel, .scripts-panel { display: flex; flex-direction: column; gap: 10px; font-size: 12px; }
+.right-dock-body input[type="text"], .right-dock-body textarea { background: var(--navy); color: var(--text); border: 1px solid var(--line); padding: 5px 8px; font: inherit; width: 100%; }
+.right-dock-body input[type="text"]:focus, .right-dock-body textarea:focus { outline: none; border-color: var(--cyan); }
+.right-dock-body textarea { resize: vertical; }
+.changes-status-bar, .changes-git-actions, .changes-stash, .changes-review, .changes-commit-box, .changes-discard-all-row, .changes-pr-actions, .changes-branch-dropdown, .discard-confirm-group, .script-row, .files-viewer-header { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.changes-status-bar .spacer, .changes-file-header .spacer { flex: 1; }
+.changes-status-msg.ok { color: var(--emerald); }
+.changes-status-msg.err { color: var(--hot-pink); }
+.changes-file-list { display: flex; flex-direction: column; gap: 4px; }
+.changes-file { border: 1px solid var(--line); background: var(--navy); }
+.changes-file-header { display: flex; align-items: center; gap: 6px; padding: 4px 8px; cursor: pointer; }
+.changes-file-header:hover { background: var(--panel-hi); }
+.changes-file-header .muted { flex: none; white-space: nowrap; }
+.changes-file-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.changes-file-badge { font-family: var(--arcade); font-size: 10px; padding: 0 5px; border: 1px solid var(--line); }
+.changes-file-badge.new { color: var(--emerald); border-color: var(--emerald); }
+.changes-file-badge.del { color: var(--hot-pink); border-color: var(--hot-pink); }
+.changes-file-badge.mod { color: var(--amber); border-color: var(--amber); }
+.changes-file-diff { border-top: 1px solid var(--line); max-height: 260px; overflow: auto; font-family: var(--mono); font-size: 11px; }
+.diff-line { padding: 0 8px; white-space: pre; }
+.diff-line.diff-add { background: #4df7a61f; color: var(--emerald); }
+.diff-line.diff-remove { background: #ff4fd81f; color: var(--hot-pink); }
+.diff-line.diff-header { color: var(--violet); }
+.changes-discard-all-row { justify-content: flex-end; }
+.changes-commit-box { flex-wrap: nowrap; align-items: flex-start; }
+.changes-commit-msg { flex: 1; min-width: 0; }
+.changes-branch-switch { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.changes-branch-dropdown { width: 100%; }
+.changes-branch-dropdown input { flex: 1 1 140px; width: auto; min-width: 0; }
+.changes-pr-section { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 8px; }
+.changes-pr-toggle { align-self: flex-start; }
+.changes-pr-body, .changes-pr-existing, .changes-pr-create { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
+.changes-pr-create .btn { align-self: flex-start; }
+.changes-pr-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.changes-pr-checks { display: flex; flex-direction: column; gap: 2px; }
+.check-run { display: flex; gap: 6px; align-items: center; }
+.check-run.success .check-name { color: var(--emerald); }
+.check-run.failure .check-name { color: var(--hot-pink); }
+.warning-banner { padding: 4px 8px; font-size: 11px; color: var(--amber); border: 1px solid var(--amber); }
+.files-panel { display: flex; height: 100%; min-height: 0; font-size: 12px; }
+.files-tree { flex: 0 0 38%; min-width: 0; overflow: auto; border-right: 1px solid var(--line); padding-right: 6px; display: flex; flex-direction: column; }
+.files-tree-entry { display: flex; align-items: center; gap: 4px; padding: 2px 4px; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+.files-tree-entry:hover { background: var(--panel-hi); color: var(--text); }
+.files-tree-entry.active { color: var(--cyan); background: var(--cyan-dim); }
+.files-icon { flex: none; width: 14px; }
+.files-viewer { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; padding-left: 8px; overflow: hidden; }
+.files-viewer-header .muted { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.files-code { flex: 1; overflow: auto; font-family: var(--mono); font-size: 11px; background: var(--navy); border: 1px solid var(--line); padding: 4px 0; }
+.files-line { display: flex; white-space: pre; }
+.files-line.highlighted { background: var(--cyan-dim); }
+.files-lineno { flex: none; width: 3.5em; text-align: right; padding-right: 8px; color: var(--slate); user-select: none; }
+.files-linetext { min-width: 0; }
+.files-editor { flex: 1; min-height: 200px; font-family: var(--mono); font-size: 11px; resize: none; }
+.script-row { padding: 6px 8px; border: 1px solid var(--line); background: var(--navy); }
+.script-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.script-port, .script-source { flex: none; }
+.script-status.ok { color: var(--emerald); }
+.script-proxy { color: var(--cyan); }
+.script-row--pkg { border-style: dashed; }
+.changes-branch { color: var(--cyan); border-color: var(--cyan); }
 
 /* ── Pinned teams step 3: BriefEditor + PinMenu (src/BriefEditor.tsx, src/PinMenu.tsx) ── */
 .brief-editor { display: flex; flex-direction: column; gap: 8px; height: min(70vh, 720px); }

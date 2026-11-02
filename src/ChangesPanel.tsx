@@ -431,14 +431,14 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
                 {isArmed ? (
                   <span className="discard-confirm-group">
                     <button
-                      className="btn-danger small"
+                      className="btn bad small"
                       data-testid="changes-confirm-discard"
                       onClick={(e) => { e.stopPropagation(); handleDiscard([f.path]); }}
                     >
                       Confirm discard?
                     </button>
                     <button
-                      className="btn-ghost small"
+                      className="btn ghost small"
                       onClick={(e) => { e.stopPropagation(); setDiscardState(discardCancel()); }}
                     >
                       Cancel
@@ -446,7 +446,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
                   </span>
                 ) : (
                   <button
-                    className="btn-ghost small"
+                    className="btn ghost small"
                     onClick={(e) => { e.stopPropagation(); setDiscardState(discardArm([f.path])); }}
                   >
                     Discard
@@ -478,19 +478,19 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
             {discardIsArmed(discardState) && discardState.length > 1 ? (
               <span className="discard-confirm-group">
                 <button
-                  className="btn-danger small"
+                  className="btn bad small"
                   data-testid="changes-confirm-discard"
                   onClick={() => handleDiscard(discardState)}
                 >
                   Confirm discard all?
                 </button>
-                <button className="btn-ghost small" onClick={() => setDiscardState(discardCancel())}>
+                <button className="btn ghost small" onClick={() => setDiscardState(discardCancel())}>
                   Cancel
                 </button>
               </span>
             ) : (
               <button
-                className="btn-ghost small"
+                className="btn ghost small"
                 onClick={() => setDiscardState(discardArm(files.map((f) => f.path)))}
               >
                 Discard all
@@ -511,7 +511,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
           rows={2}
         />
         <button
-          className="btn-primary"
+          className="btn ok"
           data-testid="changes-commit-btn"
           onClick={handleCommit}
           disabled={!commitMsg.trim()}
@@ -522,14 +522,14 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
 
       {/* ── Push / Pull / Merge from base ── */}
       <div className="changes-git-actions">
-        <button className="btn-ghost" data-testid="changes-push-btn" onClick={handlePush}>Push</button>
-        <button className="btn-ghost" data-testid="changes-pull-btn" onClick={handlePull}>Pull</button>
-        <button className="btn-ghost" data-testid="changes-merge-base-btn" onClick={handleMergeBase}>Merge from base</button>
+        <button className="btn ghost" data-testid="changes-push-btn" onClick={handlePush}>Push</button>
+        <button className="btn ghost" data-testid="changes-pull-btn" onClick={handlePull}>Pull</button>
+        <button className="btn ghost" data-testid="changes-merge-base-btn" onClick={handleMergeBase}>Merge from base</button>
       </div>
 
       {/* ── Branch switch ── */}
       <div className="changes-branch-switch">
-        <button className="btn-ghost small" onClick={() => setBranchOpen(!branchOpen)}>
+        <button className="btn ghost small" onClick={() => setBranchOpen(!branchOpen)}>
           Switch branch…
         </button>
         {branchOpen && (
@@ -543,10 +543,10 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
               onKeyDown={(e) => e.key === "Enter" && handleSwitchBranch()}
               autoFocus
             />
-            <button className="btn-primary small" onClick={handleSwitchBranch} disabled={!branchInput.trim()}>
+            <button className="btn ok small" onClick={handleSwitchBranch} disabled={!branchInput.trim()}>
               Switch
             </button>
-            <button className="btn-ghost small" onClick={() => { setBranchOpen(false); setBranchInput(""); }}>
+            <button className="btn ghost small" onClick={() => { setBranchOpen(false); setBranchInput(""); }}>
               Cancel
             </button>
           </div>
@@ -555,11 +555,11 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
 
       {/* ── Stash ── */}
       <div className="changes-stash">
-        <button className="btn-ghost" data-testid="changes-stash-btn" onClick={handleStash}>
+        <button className="btn ghost" data-testid="changes-stash-btn" onClick={handleStash}>
           Stash
         </button>
         <button
-          className="btn-ghost"
+          className="btn ghost"
           data-testid="changes-stash-pop-btn"
           onClick={handleStashPop}
           disabled={stash.length === 0}
@@ -571,7 +571,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
       {/* ── Review diff ── */}
       <div className="changes-review">
         <button
-          className="btn-ghost"
+          className="btn ghost"
           data-testid="changes-review-diff-btn"
           onClick={handleReviewDiff}
           disabled={files.length === 0}
@@ -585,7 +585,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
 
       {/* ── PR section ── */}
       <div className="changes-pr-section" data-testid="changes-pr-section">
-        <button className="changes-pr-toggle btn-ghost small" onClick={() => setPrOpen(!prOpen)}>
+        <button className="changes-pr-toggle btn ghost small" onClick={() => setPrOpen(!prOpen)}>
           {pr ? `PR #${pr.number ?? "?"} · ${pr.state}` : "Pull Request"} {prOpen ? "▲" : "▼"}
         </button>
 
@@ -618,7 +618,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
                 )}
 
                 <div className="changes-pr-actions">
-                  <button className="btn-ghost small" onClick={handleAutoMerge}>
+                  <button className="btn ghost small" onClick={handleAutoMerge}>
                     {autoMergeOn ? "Disable auto-merge" : "Enable auto-merge"}
                   </button>
 
@@ -628,19 +628,19 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
                         <span className="muted small">⚠ Workflow / release files — confirm?</span>
                       )}
                       <button
-                        className="btn-danger small"
+                        className="btn bad small"
                         data-testid="changes-pr-merge-btn"
                         onClick={handlePrMerge}
                       >
                         Confirm merge
                       </button>
-                      <button className="btn-ghost small" onClick={() => setPrMergeArmed(false)}>
+                      <button className="btn ghost small" onClick={() => setPrMergeArmed(false)}>
                         Cancel
                       </button>
                     </span>
                   ) : (
                     <button
-                      className="btn-primary small"
+                      className="btn ok small"
                       data-testid="changes-pr-merge-btn"
                       onClick={() => setPrMergeArmed(true)}
                     >
@@ -670,7 +670,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
                   onChange={(e) => setPrBase(e.target.value)}
                 />
                 <button
-                  className="btn-primary small"
+                  className="btn ok small"
                   data-testid="changes-pr-create-btn"
                   onClick={handlePrCreate}
                   disabled={!prTitle.trim()}

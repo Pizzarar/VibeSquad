@@ -22,7 +22,7 @@ export class TimelineErrorBoundary extends Component<
           {this.state.error.message}
           <button
             type="button"
-            className="btn-ghost"
+            className="btn ghost"
             style={{ marginLeft: 8, padding: "1px 6px", fontSize: 10 }}
             onClick={() => this.setState({ error: null })}
           >
