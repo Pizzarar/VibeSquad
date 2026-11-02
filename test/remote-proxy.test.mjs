@@ -9,10 +9,15 @@ import { after, before, describe, test } from "node:test";
 import {
   REMOTE_ALLOW,
   REMOTE_BLOCKED,
+  REMOTE_BUDGET_PER_MIN,
   REMOTE_MAX_BODY_BYTES,
+  REMOTE_MAX_IN_FLIGHT,
   REMOTE_TIMEOUT_MS,
+  REMOTE_WRITES_AFTER_S4,
+  createRateLimiter,
   decideProxyRequest,
   normalizeProxyPath,
+  redactBody,
 } from "../plugin/server/remote-proxy-rules.ts";
 import { makeVsHttpHandler, remoteEnabled, vsHttp, vsTokenHeaders } from "../plugin/server/remote-proxy.ts";
 import { installRemoteTransport, isRemoteMode, proxiedPath } from "../src/remoteTransport.ts";
@@ -20,6 +25,8 @@ import { loadUserSettings, saveUserSettings } from "../server/user-settings.mjs"
 
 const TOKEN = "a".repeat(64);
 const home = mkdtempSync(join(tmpdir(), "vs-remote-proxy-"));
+// Test-only allow map: exercises the write plumbing that REMOTE_ALLOW keeps closed until S4.
+const WRITE_ALLOW = { ...REMOTE_ALLOW, "/api/teams": ["GET", "PUT"], "/__vibesquad/teams": ["GET", "POST"] };
 after(() => rmSync(home, { recursive: true, force: true }));
 const setGate = (enabled) => writeFileSync(join(home, "settings.json"), JSON.stringify({ userName: "t", remote: { enabled } }));
 
@@ -64,16 +71,14 @@ describe("normalise", () => {
 });
 
 describe("allowlist", () => {
-  test("allows the UI's read and squad endpoints", () => {
+  test("allows the UI's read endpoints", () => {
     for (const [p, m] of [
       ["/api/teams", "GET"],
-      ["/api/teams", "PUT"],
-      ["/__vibesquad/teams", "POST"],
-      ["/__vibesquad/inbox/triage", "POST"],
+      ["/__vibesquad/inbox?teamId=a", "GET"],
       ["/__vibesquad/log?team=core", "GET"],
       ["/__vibesquad/brainstorm-summary?lane=a", "GET"],
       ["/__vibesquad/settings", "GET"],
-      ["/__vibesquad/paseo/providers/models?provider=claude", "GET"],
+      ["/__vibesquad/paseo/usage", "GET"],
       ["/__vibesquad/paseo/plugins", "get"],
     ]) {
       const d = decideProxyRequest(m, p);
@@ -122,9 +127,57 @@ describe("allowlist", () => {
       assert.equal(d.ok, false, p);
     }
   });
-  test("write-protected endpoints are read-only", () => {
-    for (const p of ["/__vibesquad/settings", "/__vibesquad/paseo/plugins", "/__vibesquad/paseo/surface", "/__vibesquad/profiles"]) {
+  test("GET-only until S4: every allowlisted path refuses every write method", () => {
+    for (const [p, methods] of Object.entries(REMOTE_ALLOW)) {
+      assert.deepEqual(methods, ["GET"], p);
       for (const m of ["POST", "PUT", "PATCH", "DELETE"]) assert.equal(decideProxyRequest(m, p).code, "method", `${m} ${p}`);
+    }
+  });
+  test("POST-only handlers (spawn/archive/inject) are unreachable; handoff POST is not even queued for S4", () => {
+    for (const p of [
+      "/__vibesquad/inbox/open-topic",
+      "/__vibesquad/inbox/triage",
+      "/__vibesquad/inbox/park-topic",
+      "/__vibesquad/inbox/handoff-topic",
+      "/__vibesquad/lead-handoff",
+      "/__vibesquad/lead-handoff/confirm",
+      "/__vibesquad/brainstorm-restart",
+    ]) {
+      assert.equal(decideProxyRequest("POST", p).code, "not-allowed", p);
+      assert.ok(REMOTE_WRITES_AFTER_S4[p], `${p} listed for reopening`);
+    }
+    assert.equal(decideProxyRequest("POST", "/__vibesquad/handoff").code, "method");
+    assert.equal(REMOTE_WRITES_AFTER_S4["/__vibesquad/handoff"], undefined);
+    for (const p of [
+      "/__vibesquad/paseo/surface",
+      "/__vibesquad/paseo/providers/models",
+      "/__vibesquad/paseo/providers/diagnostic",
+      "/__vibesquad/files",
+      "/__vibesquad/search",
+    ]) {
+      assert.equal(decideProxyRequest("GET", p).ok, false, p);
+    }
+  });
+  test("write plumbing still works with an injected allow map", () => {
+    assert.equal(decideProxyRequest("PUT", "/api/teams", WRITE_ALLOW).ok, true);
+    assert.equal(decideProxyRequest("PATCH", "/api/teams", WRITE_ALLOW).code, "method");
+    assert.equal(decideProxyRequest("POST", "/__vibesquad/pair/start", { "/__vibesquad/pair/start": ["POST"] }).code, "blocked");
+  });
+  test("usage: refresh is stripped from the query", () => {
+    const strip = (q) => decideProxyRequest("GET", `/__vibesquad/paseo/usage${q}`).search;
+    assert.equal(strip("?refresh=1"), "");
+    assert.equal(strip("?a=1&refresh=1&b=2"), "?a=1&b=2");
+    assert.equal(strip("?%72efresh=1"), "");
+    assert.equal(strip("?refresh"), "");
+    assert.equal(decideProxyRequest("GET", "/__vibesquad/log?refresh=1").search, "?refresh=1");
+  });
+  test("no allowlisted GET is an S3 gated read (token-less GETs work; S3 backs the allowlist)", async () => {
+    const { isGatedRead } = await import("../server/vibesquad-api.mjs");
+    for (const p of Object.keys(REMOTE_ALLOW)) {
+      for (const q of ["", "?refresh=1"]) {
+        const d = decideProxyRequest("GET", p + q);
+        assert.equal(isGatedRead(d.pathname, d.pathname + d.search), false, p + q);
+      }
     }
   });
   test("method filter", () => {
@@ -143,9 +196,58 @@ describe("contract", () => {
     assert.deepEqual(await vsHttp.input.parseAsync({ method: "GET", path: "/api/teams" }), { method: "GET", path: "/api/teams" });
     assert.equal(vsHttp.name, "vs.http");
   });
-  test("caps and timeout values", () => {
+  test("caps, timeout and rate values", () => {
     assert.equal(REMOTE_MAX_BODY_BYTES, 512 * 1024);
     assert.equal(REMOTE_TIMEOUT_MS, 10_000);
+    assert.equal(REMOTE_MAX_IN_FLIGHT, 4);
+    assert.deepEqual(REMOTE_BUDGET_PER_MIN, { read: 120, write: 20 });
+  });
+});
+
+describe("rate limiter", () => {
+  test("at most 4 in flight; a release frees a slot", () => {
+    const rl = createRateLimiter();
+    const slots = [1, 2, 3, 4].map(() => rl.acquire("read"));
+    assert.ok(slots.every((s) => s.ok));
+    const fifth = rl.acquire("read");
+    assert.equal(fifth.ok, false);
+    assert.match(fifth.error, /too many requests in flight \(max 4\)/);
+    slots[0].release();
+    slots[0].release(); // idempotent
+    assert.equal(rl.acquire("read").ok, true);
+    assert.equal(rl.acquire("read").ok, false);
+  });
+  test("per-minute budget per kind, rolling window", () => {
+    let t = 1_000_000;
+    const rl = createRateLimiter({ now: () => t });
+    for (let i = 0; i < 120; i++) {
+      const s = rl.acquire("read");
+      assert.ok(s.ok, `read ${i}`);
+      s.release();
+    }
+    const over = rl.acquire("read");
+    assert.equal(over.ok, false);
+    assert.match(over.error, /rate limited: 120 reads per minute, retry in 60 s/);
+    const w = rl.acquire("write"); // separate budget
+    assert.ok(w.ok);
+    w.release();
+    t += 60_000;
+    assert.equal(rl.acquire("read").ok, true);
+  });
+});
+
+describe("redaction", () => {
+  const H = "C:\\Users\\Jordan";
+  test("home path in every form and the bare username become ~", () => {
+    const raw = JSON.stringify({ a: "C:\\Users\\Jordan\\projects\\x", b: "c:/users/jordan/.vibesquad", c: "by Jordan.", d: "JordanTool" });
+    const out = redactBody(raw, H, "Jordan");
+    assert.deepEqual(JSON.parse(out), { a: "~\\projects\\x", b: "~/.vibesquad", c: "by ~.", d: "JordanTool" });
+    assert.equal(redactBody("C:\\Users\\Jordan\\a", H, "Jordan"), "~\\a");
+    assert.equal(redactBody("/home/jordan/x", "/home/jordan", "jordan"), "~/x");
+  });
+  test("short or empty identities redact nothing", () => {
+    assert.equal(redactBody("ab /x/ab", "/", "ab"), "ab /x/ab");
+    assert.equal(redactBody("hello", "", ""), "hello");
   });
 });
 
@@ -210,6 +312,14 @@ describe("handler against a fake loopback VS server", () => {
           res.setHeader("content-type", "application/json; charset=utf-8");
           return res.end(JSON.stringify({ echo: body }));
         }
+        if (req.url === "/__vibesquad/settings") {
+          res.setHeader("content-type", "application/json");
+          return res.end(JSON.stringify({ ok: true, userName: "Jordan", path: "C:\\Users\\Jordan\\.vibesquad\\settings.json", remote: { enabled: true } }));
+        }
+        if (req.url.startsWith("/__vibesquad/paseo/usage")) {
+          res.setHeader("content-type", "application/json");
+          return res.end("{}");
+        }
         if (req.url === "/__vibesquad/inbox") {
           res.setHeader("content-type", "application/json");
           return res.end(JSON.stringify({ big: "x".repeat(REMOTE_MAX_BODY_BYTES) }));
@@ -256,26 +366,57 @@ describe("handler against a fake loopback VS server", () => {
     assert.equal(seen.length, n);
   });
 
-  test("gate on: GET forwards path + query with only the token header, returns a header subset", async () => {
+  test("gate on: GET forwards path + query with no token or caller headers, returns a header subset", async () => {
     setGate(true);
     const out = await handler()({ method: "GET", path: "/__vibesquad/log?team=a%20b" });
     assert.equal(out.status, 200);
     assert.deepEqual(JSON.parse(out.body), { ok: true, url: "/__vibesquad/log?team=a%20b" });
     assert.deepEqual(out.headers, { "content-type": "application/json", etag: '"r1"' });
     const req = seen.at(-1);
-    assert.equal(req.headers["x-vibesquad-token"], TOKEN);
+    assert.equal(req.headers["x-vibesquad-token"], undefined);
     assert.equal(req.headers.host, `127.0.0.1:${port}`);
     assert.equal(req.headers.origin, undefined);
     assert.equal(req.headers.cookie, undefined);
   });
 
-  test("POST/PUT forward the body as JSON and pass through the status", async () => {
+  test("production allowlist refuses writes before fetching", async () => {
     setGate(true);
-    const out = await handler()({ method: "put", path: "/api/teams", body: '{"a":1}' });
+    const n = seen.length;
+    await assert.rejects(handler()({ method: "PUT", path: "/api/teams", body: "{}" }), /PUT not available remotely/);
+    await assert.rejects(handler()({ method: "POST", path: "/__vibesquad/inbox/open-topic", body: '{"cwd":"C:/"}' }), /not available remotely/);
+    assert.equal(seen.length, n);
+  });
+
+  test("writes (injected allow) forward the body as JSON with the S3 token and pass through the status", async () => {
+    setGate(true);
+    const out = await handler({ allow: WRITE_ALLOW })({ method: "put", path: "/api/teams", body: '{"a":1}' });
     assert.equal(out.status, 409);
     assert.deepEqual(JSON.parse(out.body), { echo: '{"a":1}' });
     assert.equal(seen.at(-1).method, "PUT");
     assert.equal(seen.at(-1).headers["content-type"], "application/json");
+    assert.equal(seen.at(-1).headers["x-vibesquad-token"], TOKEN);
+  });
+
+  test("responses are redacted; settings lose `remote`; usage loses refresh", async () => {
+    setGate(true);
+    const h = handler({ homeDir: "C:\\Users\\Jordan", userName: "Jordan" });
+    const settings = await h({ method: "GET", path: "/__vibesquad/settings" });
+    assert.deepEqual(JSON.parse(settings.body), { ok: true, userName: "~", path: "~\\.vibesquad\\settings.json" });
+    await h({ method: "GET", path: "/__vibesquad/paseo/usage?refresh=1" });
+    assert.equal(seen.at(-1).url, "/__vibesquad/paseo/usage");
+  });
+
+  test("rate limit: 5th concurrent request is refused without fetching", async () => {
+    setGate(true);
+    const h = handler({ timeoutMs: 300 });
+    const n = seen.length;
+    const hung = [1, 2, 3, 4].map(() => h({ method: "GET", path: "/__vibesquad/handoff" }).catch((e) => e));
+    await new Promise((r) => setTimeout(r, 50));
+    await assert.rejects(h({ method: "GET", path: "/api/teams" }), /too many requests in flight/);
+    await Promise.all(hung);
+    assert.equal(seen.length, n + 4);
+    const ok = await h({ method: "GET", path: "/api/teams" });
+    assert.equal(ok.status, 200);
   });
 
   test("blocked and unknown paths never reach the server", async () => {
@@ -292,7 +433,10 @@ describe("handler against a fake loopback VS server", () => {
   test("request body over the cap is refused before fetching", async () => {
     setGate(true);
     const n = seen.length;
-    await assert.rejects(handler()({ method: "POST", path: "/api/teams", body: "z".repeat(REMOTE_MAX_BODY_BYTES + 1) }), /request body too large/);
+    await assert.rejects(
+      handler({ allow: WRITE_ALLOW })({ method: "PUT", path: "/api/teams", body: "z".repeat(REMOTE_MAX_BODY_BYTES + 1) }),
+      /request body too large/,
+    );
     assert.equal(seen.length, n);
   });
 
@@ -346,13 +490,48 @@ describe("handler against a fake loopback VS server", () => {
       const input = await reg.contract.input.parseAsync({ method: "GET", path: "/__vibesquad/log?team=x" });
       const out = await reg.contract.output.parseAsync(await reg.fn(input, { paseo: {} }));
       assert.equal(out.status, 200);
-      assert.equal(seen.at(-1).headers["x-vibesquad-token"], TOKEN);
+      assert.equal(seen.at(-1).url, "/__vibesquad/log?team=x");
     } finally {
       stop();
       for (const [k, v] of Object.entries({ VIBESQUAD_HOME: prev.home, VIBESQUAD_PORT: prev.port })) {
         if (v === undefined) delete process.env[k];
         else process.env[k] = v;
       }
+    }
+  });
+});
+
+describe("against the real VS middleware with S3", () => {
+  test("token-less GET reads work; a gated read is refused; writes with the S3 token pass the owner check", async () => {
+    const prevHome = process.env.VIBESQUAD_HOME;
+    const h = mkdtempSync(join(tmpdir(), "vs-remote-s3-"));
+    process.env.VIBESQUAD_HOME = h;
+    writeFileSync(join(h, "settings.json"), JSON.stringify({ userName: "Owner", remote: { enabled: true } }));
+    const { createVibesquadMiddleware } = await import("../server/vibesquad-api.mjs");
+    const mw = createVibesquadMiddleware(h);
+    const srv = createServer((req, res) => mw(req, res, () => ((res.statusCode = 404), res.end())));
+    await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+    const port = srv.address().port;
+    try {
+      const vs = makeVsHttpHandler({ port, home: h, allow: { ...REMOTE_ALLOW, "/api/teams": ["GET", "PUT"], "/__vibesquad/paseo/surface": ["GET"] } });
+      const settings = await vs({ method: "GET", path: "/__vibesquad/settings" });
+      assert.equal(settings.status, 200);
+      const body = JSON.parse(settings.body);
+      assert.equal(body.userName, "Owner");
+      assert.equal("remote" in body, false);
+      // Injected only to prove the backstop: S3 refuses a gated read sent without the token.
+      const gated = await vs({ method: "GET", path: "/__vibesquad/paseo/surface" });
+      assert.equal(gated.status, 403);
+      // The token file now exists (the server created it on first use); a write carries it and gets past
+      // the owner gate (400 from the handler's own body check, not 403 read-only).
+      const w = await vs({ method: "PUT", path: "/api/teams", body: "{}" });
+      assert.notEqual(w.status, 403, w.body);
+    } finally {
+      srv.closeAllConnections?.();
+      await new Promise((r) => srv.close(r));
+      if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
+      else process.env.VIBESQUAD_HOME = prevHome;
+      rmSync(h, { recursive: true, force: true });
     }
   });
 });

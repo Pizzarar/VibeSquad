@@ -8,13 +8,20 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { localTokenHeaders, localTokenPath } from "@vibesquad/server/local-token.mjs";
 import {
+  REMOTE_ALLOW,
   REMOTE_MAX_BODY_BYTES,
   REMOTE_RESPONSE_HEADERS,
   REMOTE_TIMEOUT_MS,
+  createRateLimiter,
   decideProxyRequest,
   isTextContentType,
+  redactBody,
+  scrubSettingsBody,
   utf8Bytes,
+  type AllowMap,
+  type RateLimiter,
 } from "./remote-proxy-rules.ts";
 
 export type VsHttpInput = { method: string; path: string; body?: string };
@@ -36,17 +43,18 @@ export function remoteEnabled(home = vsHome()): boolean {
   return s?.remote?.enabled === true;
 }
 
-// Loopback token (security S3, branch unit-sec-s3). Until S3 is on master this mirrors its
-// readLocalToken(); once merged, swap the body for
-//   import { localTokenHeaders } from "@vibesquad/server/local-token.mjs";
-const LOCAL_TOKEN_HEADER = "x-vibesquad-token";
+// Loopback owner token (security S3, server/local-token.mjs). Sent only on writes: remote GETs go without
+// it, so S3's read-only loopback mode is a second wall (no writes, no isGatedRead paths) behind the allowlist.
 export function vsTokenHeaders(home = vsHome()): Record<string, string> {
+  return localTokenHeaders(localTokenPath(home));
+}
+
+function ownerIdentity(): { homeDir: string; userName: string } {
+  let userName = "";
   try {
-    const t = fs.readFileSync(path.join(home, "local-token"), "utf8").trim();
-    return /^[0-9a-f]{64}$/.test(t) ? { [LOCAL_TOKEN_HEADER]: t } : {};
-  } catch {
-    return {};
-  }
+    userName = os.userInfo().username;
+  } catch {}
+  return { homeDir: os.homedir(), userName };
 }
 
 // Contract in the shape Paseo's plugin host expects (it only calls input/output.parseAsync).
@@ -110,20 +118,29 @@ export type VsHttpDeps = {
   home?: string;
   fetch?: typeof fetch;
   timeoutMs?: number;
+  allow?: AllowMap; // tests only; production is REMOTE_ALLOW
+  limiter?: RateLimiter;
+  homeDir?: string;
+  userName?: string;
 };
 
 export function makeVsHttpHandler(deps: VsHttpDeps = {}) {
+  const limiter = deps.limiter ?? createRateLimiter();
+  const owner = { ...ownerIdentity(), ...(deps.homeDir !== undefined ? { homeDir: deps.homeDir } : {}), ...(deps.userName !== undefined ? { userName: deps.userName } : {}) };
   return async (input: VsHttpInput): Promise<VsHttpOutput> => {
     const home = deps.home ?? vsHome();
     if (!remoteEnabled(home)) {
       throw new Error('vs.http: remote access is off (set "remote": { "enabled": true } in ~/.vibesquad/settings.json)');
     }
-    const d = decideProxyRequest(input.method, input.path);
+    const d = decideProxyRequest(input.method, input.path, deps.allow ?? REMOTE_ALLOW);
     if (!d.ok) throw new Error(`vs.http: ${d.error}`);
     if (input.body !== undefined && utf8Bytes(input.body) > REMOTE_MAX_BODY_BYTES) {
       throw new Error(`vs.http: request body too large (cap ${REMOTE_MAX_BODY_BYTES} bytes)`);
     }
-    const hasBody = input.body !== undefined && d.method !== "GET";
+    const write = d.method !== "GET";
+    const slot = limiter.acquire(write ? "write" : "read");
+    if (!slot.ok) throw new Error(`vs.http: ${slot.error}`);
+    const hasBody = input.body !== undefined && write;
     const port = deps.port ?? Number(process.env.VIBESQUAD_PORT || 4180);
     // Host is fixed: the caller only ever supplies an allowlisted pathname + query.
     const url = `http://127.0.0.1:${port}${d.pathname}${d.search}`;
@@ -133,7 +150,7 @@ export function makeVsHttpHandler(deps: VsHttpDeps = {}) {
       const res = await (deps.fetch ?? fetch)(url, {
         method: d.method,
         // No caller headers are forwarded: just our content type and the loopback token.
-        headers: { ...(hasBody ? { "content-type": "application/json" } : {}), ...vsTokenHeaders(home) },
+        headers: { ...(hasBody ? { "content-type": "application/json" } : {}), ...(write ? vsTokenHeaders(home) : {}) },
         ...(hasBody ? { body: input.body } : {}),
         redirect: "manual",
         signal: abort.signal,
@@ -143,7 +160,7 @@ export function makeVsHttpHandler(deps: VsHttpDeps = {}) {
         res.body?.cancel().catch(() => {});
         throw new Error(`vs.http: non-text response (${ct}) is not proxied`);
       }
-      const body = await readCapped(res, abort.signal);
+      const body = redactBody(scrubSettingsBody(d.pathname, await readCapped(res, abort.signal)), owner.homeDir, owner.userName);
       const headers: Record<string, string> = {};
       for (const h of REMOTE_RESPONSE_HEADERS) {
         const v = res.headers.get(h);
@@ -156,6 +173,7 @@ export function makeVsHttpHandler(deps: VsHttpDeps = {}) {
       throw new Error(`vs.http: VibeSquad server unreachable on 127.0.0.1:${port}`);
     } finally {
       clearTimeout(timer);
+      slot.release();
     }
   };
 }
