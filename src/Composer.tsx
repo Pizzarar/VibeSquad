@@ -4,6 +4,7 @@ import { daemonClient, DEMO } from "./paseo";
 import type { DraftImageView } from "./imageDrafts";
 import { formatSize, MAX_INLINE_BYTES, fenceFile, type useAttachments } from "./attachments";
 import { isImeComposing, shouldComposerSubmit } from "./IdeaInbox";
+import { composerKeyAction, usePref } from "./prefs";
 
 // ── Pure helpers (mirrored in test/ade-batch-f.test.mjs) ──────────────────────
 
@@ -284,6 +285,7 @@ export function Composer({
     }
   };
 
+  const [sendKey] = usePref("chat.sendKey");
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const menu = slash ? slashItems : mention ? mentionItems : [];
     if (menu.length && !isImeComposing(e)) {
@@ -325,6 +327,15 @@ export function Composer({
       const n = historyStep(history.length, histIdx, "down");
       setHistIdx(n);
       setDraft(n < 0 ? origDraft.current : history[n]);
+      return;
+    }
+    if (sendKey === "ctrl-enter" && e.key === "Enter" && !isImeComposing(e)) {
+      // Settings › Chat › Send key = Ctrl+Enter: plain Enter is a new line, Ctrl+Shift+Enter interrupts.
+      const action = composerKeyAction(e, sendKey);
+      if (action === "newline") return;
+      e.preventDefault();
+      if (action === "interrupt") onInterrupt();
+      else if (!e.repeat && !busy) send();
       return;
     }
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && !isImeComposing(e)) {
@@ -474,7 +485,7 @@ export function Composer({
         <textarea
           ref={taRef}
           value={draft}
-          placeholder={`Message ${agent.title ?? "agent"}… (Enter to send, Ctrl+Enter to interrupt)`}
+          placeholder={`Message ${agent.title ?? "agent"}… (${sendKey === "ctrl-enter" ? "Ctrl+Enter to send, Ctrl+Shift+Enter to interrupt" : "Enter to send, Ctrl+Enter to interrupt"})`}
           onChange={(e) => {
             setDismissed(false);
             setSel(0);
@@ -522,7 +533,7 @@ export function Composer({
           <button
             className="btn warn composer-interrupt-btn"
             disabled={busy || (!draft.trim() && !imgs.images.length && !atts.items.length)}
-            title="Interrupt current turn and send (Ctrl+Enter)"
+            title={`Interrupt current turn and send (${sendKey === "ctrl-enter" ? "Ctrl+Shift+Enter" : "Ctrl+Enter"})`}
             data-testid="composer-interrupt-btn"
             onClick={onInterrupt}
           >

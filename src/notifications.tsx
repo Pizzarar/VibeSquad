@@ -63,6 +63,31 @@ async function desktopAvailable(): Promise<boolean> {
   }
 }
 
+/** Short two-note chime for in-app alerts (Settings › Notifications › Alert sound). */
+export function playAlertChime(): void {
+  try {
+    const Ctx = window.AudioContext ?? (window as any).webkitAudioContext;
+    if (!Ctx) return;
+    const ctx: AudioContext = new Ctx();
+    const at = ctx.currentTime;
+    [880, 1320].forEach((hz, i) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "square";
+      o.frequency.value = hz;
+      g.gain.setValueAtTime(0.0001, at + i * 0.12);
+      g.gain.exponentialRampToValueAtTime(0.06, at + i * 0.12 + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, at + i * 0.12 + 0.11);
+      o.connect(g).connect(ctx.destination);
+      o.start(at + i * 0.12);
+      o.stop(at + i * 0.12 + 0.12);
+    });
+    setTimeout(() => void ctx.close().catch(() => {}), 500);
+  } catch {
+    /* audio unavailable */
+  }
+}
+
 export const PushNotificationControls = memo(function PushNotificationControls() {
   const [enabled, setEnabled] = useState<boolean>(() => localStorage.getItem("vs.push.enabled") === "1");
   const [busy, setBusy] = useState(false);

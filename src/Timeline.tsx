@@ -7,6 +7,7 @@ import { sentImagesFor } from "./imageDrafts";
 import { parseSentAttachments, repoPathFor } from "./attachments";
 import { openRightDockTab } from "./RightDock";
 import { BARE_PATH_RE, parseFileToken } from "./fileLinks";
+import { toolStartsExpanded, usePref } from "./prefs";
 
 export class TimelineErrorBoundary extends Component<
   { children: ReactNode; fallbackLabel?: string },
@@ -658,7 +659,10 @@ export function TimelineItem({
   onSelect?: () => void;
 }) {
   const it = e.item;
-  const [expanded, setExpanded] = useState(false);
+  // null = not toggled yet: tool rows follow Settings › Chat › Collapse successful tool calls.
+  const [expandedState, setExpanded] = useState<boolean | null>(null);
+  const expanded = expandedState ?? false;
+  const [collapseTools] = usePref("chat.collapseToolCalls");
   if (!it || typeof it !== "object") return null;
 
   if (isCompaction(it) || (it.type === "notification" && typeof it.message === "string" && it.message.includes("compacted"))) {
@@ -772,6 +776,7 @@ export function TimelineItem({
         );
       }
 
+      const open = expandedState ?? toolStartsExpanded(failed, collapseTools);
       const rawSummary =
         d.type === "shell" ? d.command : d.filePath ?? d.query ?? d.url ?? d.label ?? d.text ?? "";
       const summaryStr = formatToolError(rawSummary).slice(0, 160);
@@ -780,13 +785,13 @@ export function TimelineItem({
           data-testid="tl-tool-row"
           className={`tl tl-tool ${it.status ?? ""}${failed ? " failed" : ""}`}
           style={failed ? { borderLeft: "3px solid #ff4d6d" } : undefined}
-          onClick={() => setExpanded((v) => !v)}
+          onClick={() => setExpanded(!open)}
         >
-          <span style={{ cursor: "pointer" }}>{expanded ? "▾" : "▸"}</span>{" "}
+          <span style={{ cursor: "pointer" }}>{open ? "▾" : "▸"}</span>{" "}
           <span className="tool-name">{it.name}</span>{" "}
           <SummaryWithLinks text={summaryStr} />
           {failed && errText && <span style={{ color: "#ff4d6d", marginLeft: 4 }}>{errText}</span>}
-          {expanded && <ToolDetail it={it} d={d} />}
+          {open && <ToolDetail it={it} d={d} />}
         </div>
       );
     }
