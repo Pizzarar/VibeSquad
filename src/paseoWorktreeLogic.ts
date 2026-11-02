@@ -46,6 +46,9 @@ export function archiveGuard(worktreePath: string, agents: WtAgent[]): string | 
   return `${running.length} running agent${running.length > 1 ? "s" : ""} inside (${names}${more}). Stop ${running.length > 1 ? "them" : "it"} first.`;
 }
 
+/** Click-time guard for the destructive path: reads the agent list when called, never a render-time snapshot. */
+export const archiveGuardNow = (worktreePath: string, readAgents: () => WtAgent[]): string | null => archiveGuard(worktreePath, readAgents());
+
 /** Live (non-archived, non-closed) agents whose cwd is inside the worktree. */
 export const linkedAgents = <A extends WtAgent>(worktreePath: string, agents: A[]): A[] =>
   agents.filter((a) => !a.archivedAt && a.status !== "closed" && isInside(a.cwd, worktreePath));

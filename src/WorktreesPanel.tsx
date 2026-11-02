@@ -1,10 +1,11 @@
 // Block P1: Paseo worktree manager, one section per git project (list, create, archive).
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PaseoAgent, PaseoWorkspace } from "@getpaseo/client";
 import { ConfirmButton, ago } from "./ui";
+import { getPaseoState } from "./paseo";
 import { validateBranch } from "./paseoWorkspaces";
 import { archivePaseoWorktree, createPaseoWorktree, listPaseoWorktrees, WORKTREE_LIST_TIMEOUT_MS } from "./paseoWorktrees";
-import { archiveGuard, baseRefError, linkedAgents, linkedWorkspace, worktreeSlugError, type WorktreeEntry } from "./paseoWorktreeLogic";
+import { archiveGuard, archiveGuardNow, baseRefError, linkedAgents, linkedWorkspace, worktreeSlugError, type WorktreeEntry } from "./paseoWorktreeLogic";
 import { branchHint, type BranchHint } from "./workspaceLogic";
 import type { ProjectRow } from "./WorkspaceTools";
 
@@ -29,22 +30,29 @@ function ProjectWorktrees({ project, workspaces, agents }: { project: ProjectRow
   const [err, setErr] = useState("");
   const [creating, setCreating] = useState(false);
   // Mounted only while the Worktrees panel is open; the list is cached per repo root, so reopening is instant.
+  // Only the latest load may set state: a Reload mid-list or an unmount bumps the id and drops older answers.
+  const reqId = useRef(0);
   const load = useCallback((force: boolean) => {
-    let live = true;
+    const id = ++reqId.current;
     setErr("");
     if (force) setRows(null);
     listPaseoWorktrees(root, force).then(
-      (r) => live && setRows(r),
+      (r) => {
+        if (reqId.current !== id) return;
+        setRows(r);
+      },
       (e) => {
-        if (!live) return;
+        if (reqId.current !== id) return;
         setRows([]);
         setErr(/timed out/.test(errMsg(e)) ? `Paseo didn't list worktrees within ${WORKTREE_LIST_TIMEOUT_MS / 1000}s. Reload to try again.` : errMsg(e));
       },
     );
-    return () => { live = false; };
   }, [root]);
-  useEffect(() => load(false), [load]);
-  const reload = () => void load(true);
+  useEffect(() => {
+    load(false);
+    return () => void ++reqId.current;
+  }, [load]);
+  const reload = () => load(true);
 
   return (
     <div className="wt-project">
@@ -95,8 +103,8 @@ function WorktreeRow({ wt, root, workspaces, agents, onArchived }: { wt: Worktre
           title="Archives its Paseo workspaces and deletes the worktree folder from disk (uncommitted work is lost)."
           onConfirm={async () => {
             setErr("");
-            // Re-check at click time: an agent may have started since render.
-            const late = archiveGuard(wt.worktreePath, agents);
+            // Re-check against the live store at click time: an agent may have started since render.
+            const late = archiveGuardNow(wt.worktreePath, () => [...getPaseoState().agents.values()]);
             if (late) return setErr(late);
             try {
               await archivePaseoWorktree(wt.worktreePath, root);

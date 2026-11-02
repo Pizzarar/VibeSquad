@@ -72,7 +72,7 @@ test("wiring: wrappers stay out of paseo.ts, panel is rendered from WorkspacesVi
   const view = readFileSync(new URL("../src/WorkspacesView.tsx", import.meta.url), "utf8");
   assert.match(view, /<WorktreesPanel /);
   const panel = readFileSync(new URL("../src/WorktreesPanel.tsx", import.meta.url), "utf8");
-  assert.match(panel, /const late = archiveGuard\(/);
+  assert.match(panel, /const late = archiveGuardNow\(/);
   assert.match(panel, /<ConfirmButton/);
 });
 
@@ -88,4 +88,23 @@ test("P1 follow-up: slow list is cached per root with a 60s timeout, lazy panel 
   assert.ok(!/setInterval/.test(panel), "no polling");
   const view = readFileSync(new URL("../src/WorkspacesView.tsx", import.meta.url), "utf8");
   assert.match(view, /panel === "worktrees" && <WorktreesPanel /, "panel (and its list call) only mounts when toggled open");
+});
+
+test("review: archive click guard reads live agents at call time, not a render snapshot", async () => {
+  const { archiveGuardNow } = await import("../src/paseoWorktreeLogic.ts");
+  const wt = "C:/repo/.paseo/worktrees/feat";
+  let store = [{ id: "a", cwd: wt, status: "idle" }];
+  const read = () => store;
+  assert.equal(archiveGuardNow(wt, read), null);
+  store = [{ id: "a", title: "Late starter", cwd: wt, status: "running" }];
+  assert.match(archiveGuardNow(wt, read), /Late starter/);
+  const panel = readFileSync(new URL("../src/WorktreesPanel.tsx", import.meta.url), "utf8");
+  assert.match(panel, /const late = archiveGuardNow\(wt\.worktreePath, \(\) => \[\.\.\.getPaseoState\(\)\.agents\.values\(\)\]\)/);
+});
+
+test("review: list loads are guarded by a request id (reload mid-flight, unmount)", () => {
+  const panel = readFileSync(new URL("../src/WorktreesPanel.tsx", import.meta.url), "utf8");
+  assert.match(panel, /const id = \+\+reqId\.current;/);
+  assert.equal(panel.match(/if \(reqId\.current !== id\) return;/g)?.length, 2);
+  assert.match(panel, /return \(\) => void \+\+reqId\.current;/);
 });
