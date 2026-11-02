@@ -1661,12 +1661,6 @@ export function App() {
     exitSquadsHome();
     setTeamId(id);
     setScreen("teams");
-    setCollapsedTeams((prev) => {
-      if (!prev.has(id)) return prev;
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
   }, []);
 
   const onToggleTeamExpand = useCallback((id: string) => {

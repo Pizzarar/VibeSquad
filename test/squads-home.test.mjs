@@ -51,3 +51,22 @@ test("H1 Squads Home tiles: huddle portraits stop propagation, + NEW SQUAD tile,
   assert.match(css, /@media \(max-width: 520px\) \{ \.squads-home-grid, \.pin-grid \{ grid-template-columns: 1fr; \} \}/);
   assert.match(css, /\.squad-home-portrait:not\(:first-child\) \{ margin-left: -10px; \}/);
 });
+
+// ── H2: navigating in the center leaves the sidebar alone ────────────────────
+test("H2 only the sidebar callbacks mutate collapsedTeams", () => {
+  const app = src("App.tsx").replace(/\r\n/g, "\n");
+  const body = (name) => {
+    const i = app.indexOf(`const ${name} = useCallback`);
+    assert.ok(i > 0, name);
+    return app.slice(i, app.indexOf("\n  }, ", i));
+  };
+  for (const n of ["onTeam", "onAgent", "onQuickStart", "onRailPick"]) assert.doesNotMatch(body(n), /setCollapsedTeams/, n);
+  for (const n of ["onToggleTeamExpand", "onTeamHeaderClick", "onToggleAllTeams"]) assert.match(body(n), /setCollapsedTeams/, n);
+  // The store functions never see the sidebar state at all.
+  assert.doesNotMatch(src("pinFocus.ts"), /collapsedTeams/i);
+});
+
+test("H2 centre navigation still moves the active squad and agent", () => {
+  const app = src("App.tsx");
+  assert.match(app, /const onTeam = useCallback\(\(id: string\) => \{\s*exitSquadsHome\(\);\s*setTeamId\(id\);\s*setScreen\("teams"\);/);
+});
