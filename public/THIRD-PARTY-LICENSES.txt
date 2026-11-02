@@ -15,7 +15,7 @@ Bundled in the VibeSquad desktop installer (runtime/). npm and its dependencies 
 ==============================================================================
 
 ==============================================================================
-Paseo CLI (@getpaseo/cli@0.13.2) - Apache-2.0
+Paseo CLI (@getpaseo/cli@0.14.0) - Apache-2.0
 Copyright (c) 2025-present Mohamed Boudra
 Not bundled: reused if already installed, otherwise downloaded from npm on first launch into a VibeSquad-managed folder.
 ==============================================================================
@@ -25,9 +25,9 @@ Production npm packages
 @fontsource/jetbrains-mono@5.3.0  OFL-1.1
 @fontsource/pixelify-sans@5.3.0  OFL-1.1
 @fontsource/silkscreen@5.3.0  OFL-1.1
-@getpaseo/client@0.13.2  Apache-2.0  Copyright (c) 2025-present Mohamed Boudra
-@getpaseo/protocol@0.13.2  Apache-2.0  Copyright (c) 2025-present Mohamed Boudra
-@getpaseo/relay@0.13.2  Apache-2.0  Copyright (c) 2025-present Mohamed Boudra
+@getpaseo/client@0.14.0  Apache-2.0  Copyright (c) 2025-present Mohamed Boudra
+@getpaseo/protocol@0.14.0  Apache-2.0  Copyright (c) 2025-present Mohamed Boudra
+@getpaseo/relay@0.14.0  Apache-2.0  Copyright (c) 2025-present Mohamed Boudra
 @noble/ciphers@2.4.0  MIT
 @noble/curves@2.4.0  MIT
 @noble/hashes@2.4.0  MIT

@@ -1514,7 +1514,7 @@ function AboutLicensesModal({ onClose, onChecklist }: { onClose: () => void; onC
             {updateLabel(upd, updaterStatus.currentVersion)}
           </button>
         </p>
-        <p>VibeSquad works with Paseo (pinned CLI v0.13.2).</p>
+        <p>VibeSquad works with Paseo (pinned CLI v0.14.0).</p>
         <p>Licensed under the MIT License.</p>
         <p>
           <button className="btn ghost small" data-testid="about-setup-checklist-btn" onClick={onChecklist}>

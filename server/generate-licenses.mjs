@@ -142,7 +142,7 @@ function build() {
     bar,
     "",
     bar,
-    "Paseo CLI (@getpaseo/cli@0.13.2) - Apache-2.0",
+    "Paseo CLI (@getpaseo/cli@0.14.0) - Apache-2.0",
     "Copyright (c) 2025-present Mohamed Boudra",
     "Not bundled: reused if already installed, otherwise downloaded from npm on first launch into a VibeSquad-managed folder.",
     bar,
