@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import {
   appendVsLogEntry,
   createDaemonClient,
+  createSpawnTimer,
   findNewestPlanFile,
   readBrainstormSummary,
 } from "./brainstorm.mjs";
@@ -460,8 +461,10 @@ export function createLeadHandoffCoordinator(deps = {}) {
     const newTitle = `★ ${laneUpper} ord${nextOrd}`;
     const oldTitle = `(old) ${laneUpper} ord${oldOrd}`;
 
+    const timer = createSpawnTimer("lead-handoff");
     const allAgents = await listAgents();
     const openWorkers = findOpenWorkersForLead(allAgents, oldLead, teamId, laneId);
+    timer.mark("fetchAgents");
 
     const packetPath = getHandoffPacketPath(teamId, laneId, getBase());
     let packetContent = "";
@@ -527,6 +530,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
       "vs.handoff-trigger": trigger,
     };
 
+    timer.mark("prep");
     let created = null;
     if (typeof deps.createAgent === "function") {
       created = await deps.createAgent({
@@ -550,6 +554,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
       });
     }
 
+    timer.mark("createAgent");
     const successorId = created?.id || `lead-${laneId}-ord${nextOrd}-${Date.now().toString(36)}`;
     const successor = {
       id: successorId,
@@ -577,6 +582,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
       repointedWorkers.push(w.id);
     }
 
+    timer.mark("repoint");
     // Delete old lead's heartbeat.
     await deleteHeartbeat(oldLead.id);
 
@@ -621,6 +627,8 @@ export function createLeadHandoffCoordinator(deps = {}) {
       pendingTakeover.set(successor.id, takeoverRecord);
     }
 
+    timer.mark("retire");
+    timer.flush({ teamId, laneId, agent: successor.id });
     return {
       ok: true,
       trigger,
@@ -862,11 +870,13 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
   const injectedClient = body.daemonClient || null;
   const client = injectedClient || (body.skipDaemon ? null : createDaemonClient(rootDir));
   let connected = Boolean(injectedClient);
+  const connectT0 = Date.now();
 
   try {
     if (client && !injectedClient && typeof client.connect === "function") {
       await client.connect().catch(() => {});
       connected = true;
+      console.log(`[vibesquad] spawn-timing lead-handoff connect=${Date.now() - connectT0}ms`);
     }
 
     const coordinator = createLeadHandoffCoordinator({

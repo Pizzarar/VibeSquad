@@ -915,7 +915,16 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     // ---- Hook 1: before agent.create ---------------------------------------
 
     stops.push(
-      server.before("agent.create", ({ request }: { request: any }) => {
+      server.before("agent.create", (ctx: { request: any }) => {
+        const t0 = Date.now();
+        try {
+          return beforeAgentCreate(ctx);
+        } finally {
+          log(`spawn-timing hook=${Date.now() - t0}ms`);
+        }
+      }),
+    );
+    const beforeAgentCreate = ({ request }: { request: any }) => {
         const config: any = request.config ?? {};
         const env = (request as any).env as Record<string, string> | undefined;
         const rawReqLabels = ((request as any).labels ?? config?.labels) as Labels | undefined;
@@ -1207,8 +1216,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               config: next,
             }
           : undefined;
-      }),
-    );
+    };
 
     // ---- agent.created: auto-label, antigravity everyone-layer, first dispatch
 

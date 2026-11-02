@@ -194,6 +194,30 @@ export function buildBrainstormInitialPrompt({ laneId, laneUpper, summaryContent
   ].join("\n");
 }
 
+// Per-step spawn timing (docs/PLAN_SPAWN_SPEED.md): marks are ms since start, flushed as one log line + one `spawn-timing` metric.
+export function createSpawnTimer(kind) {
+  const t0 = Date.now();
+  const marks = [];
+  let last = t0;
+  return {
+    mark(step) {
+      const now = Date.now();
+      marks.push([step, now - last]);
+      last = now;
+    },
+    summary() {
+      return `${kind}: ${marks.map(([k, v]) => `${k}=${v}ms`).join(" ")} total=${Date.now() - t0}ms`;
+    },
+    flush({ teamId, laneId, agent }) {
+      const text = `spawn-timing ${this.summary()}`;
+      console.log(`[vibesquad] ${text}`);
+      try {
+        appendVsLogEntry({ teamId, laneId, agent, type: "metric", text });
+      } catch {}
+    },
+  };
+}
+
 const restartedAgents = new Map();
 const lastAutoRestartByLane = new Map();
 
@@ -253,6 +277,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
   if (!agentId) throw new Error("agentId is required");
 
   const pendingPrompt = typeof body.pendingPrompt === "string" ? body.pendingPrompt : "";
+  const timer = createSpawnTimer(agentId === "start-brainstorm" ? "new-buddy" : "buddy-restart");
 
   const injectedClient = body.daemonClient || null;
   const client = injectedClient || (body.skipDaemon ? null : createDaemonClient(rootDir));
@@ -264,6 +289,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
         if (!injectedClient && typeof client.connect === "function") {
           await client.connect();
           connected = true;
+          timer.mark("connect");
         }
         if (!oldAgent && agentId !== "start-brainstorm" && connected && typeof client.fetchAgent === "function") {
           const fetched = await client.fetchAgent(agentId).catch(() => null);
@@ -333,6 +359,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
         const res = await client.listAgents().catch(() => null);
         liveAgents = Array.isArray(res) ? res : Array.isArray(res?.entries) ? res.entries : [];
       }
+      timer.mark("fetchAgents");
       const existing = findExistingLaneBrainstorm(liveAgents, laneId, topic);
       if (existing) {
         if (existing.labels && existing.labels.team !== teamId) {
@@ -479,6 +506,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       // Pinned-team quick start: the drawer shows "── Fresh session · from brief ⋯ ──" for this label.
       ...(body.mode === "quick-start" ? { "vs.fresh-session": "brief" } : {}),
     };
+    timer.mark("prep");
     const initialPrompt = buildBrainstormInitialPrompt({
       laneId,
       laneUpper,
@@ -508,6 +536,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       });
     }
 
+    timer.mark("createAgent");
     if (!created) {
       created = {
         id: `bs-${laneId}-${Date.now().toString(36)}`,
@@ -561,7 +590,9 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
           ?.catch?.(() => {});
         await client.archiveAgent?.(agentId)?.catch?.(() => {});
       }
+      timer.mark("retire");
     }
+    timer.flush({ teamId, laneId, agent: created.id });
 
     if (reason.startsWith("auto")) {
       lastAutoRestartByLane.set(laneCooldownKey, {
