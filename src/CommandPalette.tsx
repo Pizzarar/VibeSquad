@@ -269,7 +269,7 @@ export function teamCtxItems(view: TeamView): CtxItem[] {
 
 /** Effective (rebindable) bindings first, then the fixed ones. Unbound commands are left out. */
 export function shortcutRows(b: Bindings): [string, string][] {
-  const bound = KEY_COMMANDS.filter((c) => !c.scope || c.scope === "global").flatMap<[string, string]>((c) => (bindingLabel(b, c.id) ? [[bindingLabel(b, c.id), c.label]] : []));
+  const bound = KEY_COMMANDS.flatMap<[string, string]>((c) => (bindingLabel(b, c.id) ? [[bindingLabel(b, c.id), c.label]] : []));
   return [...bound, ...FIXED_SHORTCUTS];
 }
 
