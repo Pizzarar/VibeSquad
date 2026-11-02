@@ -18,6 +18,8 @@ import {
 } from "./teams";
 import { freezeLaneCodes } from "./identity";
 import { useDraft } from "./drafts";
+import { rememberSent, useImageDraft } from "./imageDrafts";
+import { spawnTeamAgentWithImages } from "./paseoSpawn";
 import { defaultNewAgentProfile, getPref, reapplyDefaultProfile } from "./prefs";
 import { findProfile, getProfiles, useProfiles, type Profile, type Role } from "./profiles";
 
@@ -127,6 +129,10 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   const [job, setJob] = useState("");
   const [promptDraft, setPrompt, clearPrompt] = useDraft(`new-agent:${team.id}:${profileName}:prompt`);
   const prompt = promptDraft || profile.brief;
+  const imgs = useImageDraft(`new-agent:${team.id}:${profileName}:images`);
+  const [dragOver, setDragOver] = useState(false);
+  const imgInput = useRef<HTMLInputElement>(null);
+  const stageImages = (fl: File[]) => imgs.add(fl.filter((f) => f.type.startsWith("image/")));
   const [cwd, setCwd] = useState(() => getPref("newAgent.folder").trim());
   const [newWt, setNewWt] = useState(false);
   const [branch, setBranch] = useState("");
@@ -312,11 +318,15 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   }
 
   const finished = useRef(false);
+  // Snapshot at submit: finish() can run from the live-agents subscription before create resolves.
+  const sentFirst = useRef<{ text: string; images: Array<{ blob: Blob }> }>({ text: "", images: [] });
   const finish = (id: string) => {
     if (finished.current) return;
     finished.current = true;
+    if (sentFirst.current.images.length) rememberSent(id, sentFirst.current.text, sentFirst.current.images);
     clearTopic();
     clearPrompt();
+    imgs.clear();
     onCreated(id);
     onClose();
   };
@@ -332,10 +342,11 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
     setBusy(true);
     setErr("");
     existingIds.current = new Set(agents.keys());
+    sentFirst.current = { text: prompt, images: imgs.images.map((i) => ({ blob: i.blob })) };
     spawnedTitle.current = title;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const r = await Promise.race([spawnTeamAgent({
+      const r = await Promise.race([spawnTeamAgentWithImages({
         provider: profile.provider,
         model: profile.model,
         modeId,
@@ -350,7 +361,7 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
         prompt,
         cwd,
         worktree: newWt && branch ? { branch } : undefined,
-      }), new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error("Spawn timed out after 90s. The agent may still have been created: check the roster before retrying.")), 90000); })]);
+      }, sentFirst.current.images), new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error("Spawn timed out after 90s. The agent may still have been created: check the roster before retrying.")), 90000); })]);
       finish(r.id);
     } catch (e) {
       if (!finished.current) {
@@ -616,8 +627,59 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
               value={prompt}
               rows={14}
               onChange={(e) => setPrompt(e.target.value)}
+              className={dragOver ? "drag-over" : ""}
+              onPaste={(e) => {
+                const fl = Array.from(e.clipboardData?.items ?? [])
+                  .filter((i) => i.kind === "file")
+                  .map((i) => i.getAsFile())
+                  .filter((f): f is File => !!f && f.type.startsWith("image/"));
+                if (fl.length) {
+                  e.preventDefault();
+                  stageImages(fl);
+                }
+              }}
+              onDragOver={(e) => {
+                if (Array.from(e.dataTransfer?.types ?? []).includes("Files")) {
+                  e.preventDefault();
+                  setDragOver(true);
+                }
+              }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragOver(false);
+                stageImages(Array.from(e.dataTransfer?.files ?? []));
+              }}
             />
           </Field>
+          <input
+            ref={imgInput}
+            type="file"
+            accept="image/*"
+            multiple
+            hidden
+            data-testid="new-agent-image-input"
+            onChange={(e) => {
+              stageImages(Array.from(e.target.files ?? []));
+              e.target.value = "";
+            }}
+          />
+          {imgs.images.length > 0 && (
+            <div className="composer-images composer-thumbs" data-testid="new-agent-thumbs">
+              {imgs.images.map((im) => (
+                <div key={im.id} className="composer-thumb" title={im.name}>
+                  <img src={im.url} alt={im.name} />
+                  <span className="thumb-name">{im.name}</span>
+                  <button className="thumb-x composer-thumb-remove" aria-label={`Remove ${im.name}`} onClick={() => imgs.remove(im.id)}>
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <button className="btn ghost small" onClick={() => imgInput.current?.click()}>
+            📎 Attach images
+          </button>
           <button
             className="btn ghost small"
             onClick={clearPrompt}
