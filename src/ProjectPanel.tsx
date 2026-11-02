@@ -42,13 +42,18 @@ async function discoverRules(cwd: string): Promise<{ files: RuleFile[]; capped: 
   const deadline = Date.now() + WALK_BUDGET_MS;
   let level = [""];
   let visited = 0;
+  let walkCapped = false;
   for (let depth = 0; depth <= RULES_MAX_DEPTH && level.length; depth++) {
     const next: string[] = [];
     await Promise.all(
       level.map(async (dir) => {
-        if (visited++ >= WALK_MAX_DIRS || Date.now() > deadline) return;
+        if (visited++ >= WALK_MAX_DIRS || Date.now() > deadline) {
+          walkCapped = true;
+          return;
+        }
         const left = Math.max(500, deadline - Date.now());
-        const { value } = await withTimeout(daemonClient.listDirectory(cwd, dir).then((r) => r.entries, () => []), left, []);
+        const { value, timedOut } = await withTimeout(daemonClient.listDirectory(cwd, dir).then((r) => r.entries, () => []), left, []);
+        if (timedOut) walkCapped = true;
         for (const e of value) {
           const rel = dir ? `${dir}/${e.name}` : e.name;
           if (e.kind === "file") found.push(rel);
@@ -58,7 +63,8 @@ async function discoverRules(cwd: string): Promise<{ files: RuleFile[]; capped: 
     );
     level = next;
   }
-  return collectRuleFiles(found);
+  const r = collectRuleFiles(found);
+  return { files: r.files, capped: r.capped || walkCapped };
 }
 
 export function ProjectPanel({ agent }: { agent: PaseoAgent }) {
@@ -68,7 +74,7 @@ export function ProjectPanel({ agent }: { agent: PaseoAgent }) {
   const family = providerFamily(agent.provider);
   const [scan, setScan] = useState<Scan>({ status: "loading" });
   const [nonce, setNonce] = useState(0);
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState<string | null>(null);
   const [createErr, setCreateErr] = useState("");
 
   useEffect(() => {
@@ -98,7 +104,7 @@ export function ProjectPanel({ agent }: { agent: PaseoAgent }) {
   }, [cwd, lane, nonce]);
 
   const createRootFile = useCallback(async (name: "AGENTS.md" | "CLAUDE.md", template: string) => {
-    setCreating(true);
+    setCreating(name);
     setCreateErr("");
     try {
       // writeFile only updates existing files, so make the empty file first, then fill it.
@@ -114,7 +120,7 @@ export function ProjectPanel({ agent }: { agent: PaseoAgent }) {
     } catch (e) {
       setCreateErr(`Couldn't create ${name}: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
-      setCreating(false);
+      setCreating(null);
     }
   }, [cwd]);
   const createAgentsMd = () => createRootFile("AGENTS.md", AGENTS_TEMPLATE);
@@ -189,20 +195,20 @@ export function ProjectPanel({ agent }: { agent: PaseoAgent }) {
                   <button
                     className="btn small"
                     data-testid="project-create-claude"
-                    disabled={creating}
+                    disabled={!!creating}
                     onClick={() => void createClaudeMd()}
                   >
-                    {creating ? "Creating…" : "Create CLAUDE.md"}
+                    {creating === "CLAUDE.md" ? "Creating…" : "Create CLAUDE.md"}
                   </button>
                 )}
                 {!present && f.path === "AGENTS.md" && (
                   <button
                     className="btn small"
                     data-testid="project-create-agents"
-                    disabled={creating}
+                    disabled={!!creating}
                     onClick={() => void createAgentsMd()}
                   >
-                    {creating ? "Creating…" : "Create AGENTS.md"}
+                    {creating === "AGENTS.md" ? "Creating…" : "Create AGENTS.md"}
                   </button>
                 )}
               </li>

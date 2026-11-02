@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import { daemonClient, DEMO, usePaseo } from "./paseo";
 import { workspaceIdForAgent } from "./workspaceLogic";
-import { ctxGroupsFor, gitMenuItems, isCtxItem, useCtxSources, type CtxMenuItem } from "./contextSources";
+import { addCtxSource, ctxGroupsFor, gitMenuItems, isCtxItem, useCtxSources, type CtxMenuItem } from "./contextSources";
 import { fetchChatContext, fetchGitContext, fetchTerminalContext, listTerminalNames } from "./contextFetch";
 import type { DraftImageView } from "./imageDrafts";
 import { formatSize, MAX_INLINE_BYTES, fenceFile, type useAttachments } from "./attachments";
@@ -209,7 +209,8 @@ export function Composer({
   const mentionItems: MentionEntry[] = urlItem ? [urlItem] : mention ? filterMentionEntries(files, mention.query) : [];
   const urlChips = urlMentions(draft);
   const ctxGroups = mention && !urlItem ? ctxGroupsFor(mention.query) : [];
-  const lane = ((agent.labels ?? {}) as Record<string, string>).lane;
+  const myLabels = (agent.labels ?? {}) as Record<string, string>;
+  const lane = myLabels.lane;
   const ctxItems: CtxMenuItem[] = [
     ...(ctxGroups.includes("git") ? gitMenuItems() : []),
     ...(ctxGroups.includes("terminal")
@@ -217,7 +218,10 @@ export function Composer({
       : []),
     ...(ctxGroups.includes("chat") && lane
       ? [...agents.values()]
-          .filter((a) => a.id !== agent.id && !a.archivedAt && ((a.labels ?? {}) as Record<string, string>).lane === lane)
+          .filter((a) => {
+            const l = (a.labels ?? {}) as Record<string, string>;
+            return a.id !== agent.id && !a.archivedAt && l.lane === lane && l.team === myLabels.team;
+          })
           .slice(0, 8)
           .map((a): CtxMenuItem => ({ ctx: true, kind: "chat", label: `@chat ${a.title || a.id.slice(0, 8)}`, hint: "last turns", arg: a.id }))
       : []),
@@ -304,8 +308,19 @@ export function Composer({
 
   const termsWanted = ctxGroups.includes("terminal");
   const workspaceId = workspaceIdForAgent(agent, workspaces);
+  const agentIdRef = useRef(agent.id);
+  agentIdRef.current = agent.id;
+  // Another agent or workspace: drop the old terminal list and any status line.
   useEffect(() => {
-    if (!termsWanted) return;
+    setTerms([]);
+    setCtxStatus(null);
+  }, [agent.id, workspaceId]);
+  useEffect(() => {
+    if (!termsWanted) {
+      // Leaving @terminal clears its "No terminals" / failure line (a busy fetch line belongs to pickCtx).
+      setCtxStatus((s) => (s?.tone === "fail" ? null : s));
+      return;
+    }
     let cancelled = false;
     listTerminalNames(agent.cwd ?? "", workspaceId).then(
       (t) => !cancelled && (setTerms(t), setCtxStatus(t.length ? null : { tone: "fail", text: "No terminals open for this workspace" })),
@@ -314,7 +329,7 @@ export function Composer({
     return () => {
       cancelled = true;
     };
-  }, [termsWanted, agent.cwd, workspaceId]);
+  }, [termsWanted, agent.id, agent.cwd, workspaceId]);
 
   const insertAt = (start: number, replacement: string) => {
     const r = replaceToken(draft, start, caret, replacement);
@@ -331,6 +346,8 @@ export function Composer({
   const pickCtx = async (it: CtxMenuItem) => {
     if (!mention) return;
     insertAt(mention.start, "");
+    const forAgent = agent.id;
+    const live = () => agentIdRef.current === forAgent;
     setCtxStatus({ tone: "busy", text: `Fetching ${it.label.replace(/^@/, "")}…` });
     try {
       const src =
@@ -339,10 +356,12 @@ export function Composer({
           : it.kind === "chat"
             ? await fetchChatContext(it.arg!, it.label.replace(/^@chat /, ""))
             : await fetchGitContext(agent.cwd ?? "", it.kind as "git" | "git-base");
+      // A slow fetch that lands after switching agents must not add a pill to the new one.
+      if (!live()) return addCtxSource(forAgent, src);
       ctx.add(src);
       setCtxStatus(null);
     } catch (e) {
-      setCtxStatus({ tone: "fail", text: `Couldn't add ${it.label}: ${e instanceof Error ? e.message : String(e)}` });
+      if (live()) setCtxStatus({ tone: "fail", text: `Couldn't add ${it.label}: ${e instanceof Error ? e.message : String(e)}` });
     }
   };
 
@@ -548,7 +567,7 @@ export function Composer({
           {menuItems.map((f, i) =>
             isCtxItem(f) ? (
               <div
-                key={`ctx:${f.label}`}
+                key={`ctx:${f.kind}:${f.arg ?? f.label}`}
                 role="option"
                 aria-selected={i === sel}
                 className={`composer-menu-item ${i === sel ? "active" : ""}`}
@@ -661,13 +680,13 @@ export function Composer({
             📥 Park in Inbox
           </button>
         )}
-        <button className="btn" disabled={busy || (!draft.trim() && !imgs.images.length && !atts.items.length)} onClick={send}>
+        <button className="btn" disabled={busy || (!draft.trim() && !imgs.images.length && !atts.items.length && !ctx.items.length)} onClick={send}>
           Send
         </button>
         {agent.status === "running" && (
           <button
             className="btn warn composer-interrupt-btn"
-            disabled={busy || (!draft.trim() && !imgs.images.length && !atts.items.length)}
+            disabled={busy || (!draft.trim() && !imgs.images.length && !atts.items.length && !ctx.items.length)}
             title={`Interrupt current turn and send (${sendKey === "ctrl-enter" ? "Ctrl+Shift+Enter" : "Ctrl+Enter"})`}
             data-testid="composer-interrupt-btn"
             onClick={onInterrupt}

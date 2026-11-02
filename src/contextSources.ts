@@ -24,9 +24,22 @@ export function stripAnsi(s: string): string {
 /** Cut `s` to at most `max` characters, with a note saying how much went. Cuts at a line boundary when it can. */
 export function truncateWithNote(s: string, max: number, keep: "head" | "tail" = "head"): string {
   if (s.length <= max) return s;
-  let cut = keep === "head" ? s.slice(0, max) : s.slice(s.length - max);
-  const nl = keep === "head" ? cut.lastIndexOf("\n") : cut.indexOf("\n");
-  if (nl > max / 2) cut = keep === "head" ? cut.slice(0, nl) : cut.slice(nl + 1);
+  const isHigh = (c: number) => c >= 0xd800 && c <= 0xdbff;
+  const isLow = (c: number) => c >= 0xdc00 && c <= 0xdfff;
+  let cut: string;
+  if (keep === "head") {
+    // Never end on half a surrogate pair.
+    const end = max > 0 && isHigh(s.charCodeAt(max - 1)) ? max - 1 : max;
+    cut = s.slice(0, end);
+    const nl = cut.lastIndexOf("\n");
+    if (nl > max / 2) cut = cut.slice(0, nl);
+  } else {
+    // Never start on the second half of a surrogate pair; snap forward to the next line start if it is close.
+    const start = s.length - max;
+    cut = s.slice(isLow(s.charCodeAt(start)) ? start + 1 : start);
+    const nl = cut.indexOf("\n");
+    if (nl >= 0 && nl < max / 2) cut = cut.slice(nl + 1);
+  }
   const dropped = s.length - cut.length;
   const note = `[truncated: ${dropped} of ${s.length} characters ${keep === "head" ? "after this point" : "before this point"} omitted]`;
   return keep === "head" ? `${cut}\n${note}` : `${note}\n${cut}`;
@@ -118,7 +131,7 @@ export type RuleFile = { path: string; group: RuleGroup };
 /** Which group (if any) a repo-relative path belongs to. Root CLAUDE.md/AGENTS.md are the fixed table's, not nested. */
 export function ruleGroupOf(path: string): RuleGroup | null {
   const p = path.replace(/\\/g, "/").replace(/^\.\//, "");
-  if (/^\.claude\/rules\/[^/]+\.(md|mdc|txt)$/i.test(p)) return "claude-rules";
+  if (/^\.claude\/rules\/(?:.+\/)?[^/]+\.(md|mdc|txt)$/i.test(p)) return "claude-rules";
   if (/^\.cursor\/rules\/(?:.+\/)?[^/]+\.(mdc|md)$/i.test(p)) return "cursor-rules";
   if (p.includes("/") && /(^|\/)(CLAUDE|AGENTS)\.md$/.test(p)) return "nested";
   return null;

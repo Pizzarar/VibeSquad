@@ -89,7 +89,7 @@ test("ctxGroupsFor: which @ queries show which sources", () => {
 
 test("ruleGroupOf: claude/cursor rules and nested files; root and look-alikes excluded", () => {
   assert.equal(C.ruleGroupOf(".claude/rules/testing.md"), "claude-rules");
-  assert.equal(C.ruleGroupOf(".claude/rules/sub/x.md"), null);
+  assert.equal(C.ruleGroupOf(".claude/rules/sub/x.md"), "claude-rules");
   assert.equal(C.ruleGroupOf(".cursor/rules/style.mdc"), "cursor-rules");
   assert.equal(C.ruleGroupOf(".cursor/rules/a/b.md"), "cursor-rules");
   assert.equal(C.ruleGroupOf("server/CLAUDE.md"), "nested");
@@ -131,4 +131,48 @@ test("wiring: Composer pills + AgentDrawer expand on send, ProjectPanel has Crea
   assert.match(src("Composer.tsx"), /workspaceIdForAgent\(agent, workspaces\)/);
   assert.match(src("ProjectPanel.tsx"), /project-create-claude/);
   assert.match(src("contextFetch.ts"), /CTX_TIMEOUT_MS/);
+});
+
+test("truncateWithNote tail: snaps forward to a close line start, never drops over half", () => {
+  const s = "aaaa\nbbbb\ncccc\ndddd\neeee"; // 24 chars
+  const t = C.truncateWithNote(s, 12, "tail"); // raw tail "\ncccc\ndddd\neeee"? starts mid-line
+  assert.ok(t.startsWith("[truncated:"));
+  const body = t.split("\n").slice(1).join("\n");
+  assert.ok(s.endsWith(body));
+  assert.ok(body.length >= 6, "kept more than half");
+  assert.ok(body.startsWith("dddd") || body.startsWith("cccc"), `starts on a line: ${body}`);
+  // far newline: do not snap (would drop most of the tail)
+  const u = "x".repeat(10) + "\n" + "y".repeat(40);
+  const body2 = C.truncateWithNote(u, 30, "tail").split("\n").slice(1).join("\n");
+  assert.equal(body2, "y".repeat(30));
+});
+
+test("truncateWithNote head: snaps back to a line end only when it keeps over half", () => {
+  const s = "aaaa\nbbbb\ncccc\ndddd";
+  assert.ok(C.truncateWithNote(s, 12, "head").startsWith("aaaa\nbbbb\n[truncated"));
+  const u = "x".repeat(5) + "\n" + "y".repeat(40);
+  // newline at 5 is before the halfway mark: keep the full 30 characters, no snap
+  assert.ok(C.truncateWithNote(u, 30, "head").startsWith("xxxxx\n" + "y".repeat(24) + "\n[truncated"));
+});
+
+test("truncateWithNote never splits a surrogate pair", () => {
+  const s = "😀".repeat(20); // 40 UTF-16 units
+  for (const keep of ["head", "tail"]) {
+    for (const max of [9, 10, 11, 12]) {
+      const out = C.truncateWithNote(s, max, keep);
+      assert.ok(!/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(out), `${keep} ${max}`);
+    }
+  }
+});
+
+test(".claude/rules accepts nested subfolders like .cursor/rules", () => {
+  assert.equal(C.ruleGroupOf(".claude/rules/sub/x.md"), "claude-rules");
+});
+
+test("composer: pills-only send enabled, chat scoped by team, stale results guarded", () => {
+  const c = src("Composer.tsx");
+  assert.equal((c.match(/!atts\.items\.length && !ctx\.items\.length/g) ?? []).length, 2);
+  assert.match(c, /l\.team === myLabels\.team/);
+  assert.match(c, /agentIdRef/);
+  assert.match(c, /key=\{`ctx:\$\{f\.kind\}:\$\{f\.arg \?\? f\.label\}`\}/);
 });
