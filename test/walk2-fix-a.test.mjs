@@ -55,5 +55,5 @@ test("palette jump focuses composer", () => {
   assert.equal((s.match(/focusComposer\(m\.agent\.id\)/g) ?? []).length, 2);
   assert.match(s, /\.pane-slot\[data-agent=/);
   assert.match(s, /offsetParent !== null/);
-  assert.match(s, /isContentEditable\) return/);
+  assert.match(s, /isContentEditable\)\) return/);
 });
