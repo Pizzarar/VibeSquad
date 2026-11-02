@@ -3703,3 +3703,11 @@ button.project-file-name:hover { text-decoration: underline; }
 .terminal-capture-modal .modal-body { padding: 0; }
 .terminal-capture-text { margin: 0; padding: 12px 14px; font-family: var(--mono); font-size: 11px; line-height: 1.4; white-space: pre-wrap; word-break: break-all; max-height: 60vh; overflow: auto; background: var(--navy); color: var(--text); }
 .terminal-capture-modal .modal-body > .muted, .terminal-capture-modal .modal-body > .stat-alert { margin: 14px; }
+/* Paseo ops panel (Settings → Paseo → 9. Ops) */
+.paseo-ops { display: flex; flex-direction: column; gap: 14px; }
+.paseo-ops-block { display: flex; flex-direction: column; gap: 6px; }
+.paseo-ops-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.paseo-ops-err { border: 1px solid var(--red, #ff4d6d); padding: 6px 8px; font-size: 12px; }
+.paseo-ops-pre { margin: 0; padding: 8px; max-height: 260px; overflow: auto; border: 1px solid var(--line); font-size: 11px; white-space: pre-wrap; word-break: break-word; }
+.paseo-ops-report { border: 1px solid var(--line); padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; }
+.paseo-ops-report-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; background: none; border: 0; color: inherit; font: inherit; padding: 0; cursor: pointer; text-align: left; }
