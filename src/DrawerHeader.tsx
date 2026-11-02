@@ -15,6 +15,7 @@ import {
   updateAgent,
   upsertLocalAgent,
 } from "./paseo";
+import { clearWorkspaceIfQuiet } from "./paseoAttention";
 import {
   auditAntigravityAgent,
   CANCEL_AND_RESUME_PROMPT,
@@ -73,13 +74,13 @@ function NeedsYouControls({ agent }: { agent: PaseoAgent }) {
             </span>
           )}
         </span>
-        <button className="btn ok" disabled={busy} onClick={() => run(() => clearNeedsYou(agent))}>
+        <button className="btn ok" disabled={busy} onClick={() => run(() => clearNeedsYou(agent).then(() => clearWorkspaceIfQuiet(agent.id)))}>
           Clear
         </button>
-        <button className="btn ghost" disabled={busy} onClick={() => run(() => snoozeNeedsYou(agent, 30 * 60_000))}>
+        <button className="btn ghost" disabled={busy} onClick={() => run(() => snoozeNeedsYou(agent, 30 * 60_000).then(() => clearWorkspaceIfQuiet(agent.id)))}>
           Snooze 30m
         </button>
-        <button className="btn ghost" disabled={busy} onClick={() => run(() => snoozeNeedsYou(agent, 2 * 3_600_000))}>
+        <button className="btn ghost" disabled={busy} onClick={() => run(() => snoozeNeedsYou(agent, 2 * 3_600_000).then(() => clearWorkspaceIfQuiet(agent.id)))}>
           Snooze 2h
         </button>
       </div>

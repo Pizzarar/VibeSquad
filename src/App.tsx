@@ -97,6 +97,7 @@ import { TeamFeed } from "./TeamFeed";
 import { HandoffModal } from "./HandoffModal";
 import { Avatar, NeonEmblem, TokenMeter, providerSpec } from "./pixel";
 import { playAlertChime } from "./notifications";
+import { claimAlert, usePaseoAttention } from "./paseoAttention";
 import { SettingsHome, requestSettingsTarget } from "./SettingsHome";
 import { alertEnabled, getPrefs, getPref , getRestoreLastView } from "./prefs";
 import { setCloseGuard } from "./drafts";
@@ -210,6 +211,7 @@ function useAttentionAlerts(members: Member[]) {
       seen.current.set(m.agent.id, key);
       // prev === undefined means first load: don't spam for everything already waiting.
       if (!key || prev === undefined || prev === key || !alertEnabled(m.attention!.tone, prefs)) continue;
+      if (!claimAlert(m.agent.id, m.attention!.tone)) continue; // the daemon event already alerted
       chime = true;
       if ("Notification" in window && Notification.permission === "granted") {
         new Notification(`${m.team.name}: ${m.agent.title ?? "agent"}`, { body: m.attention!.reason, tag: m.agent.id });
@@ -1577,6 +1579,7 @@ export function App() {
   const [dateGroup, setDateGroup] = useState<DateBucket | "all">("all");
   const archivedMembers = useMemo(() => resolve(archivedAgents), [archivedAgents, teamsVersion]);
   useAttentionAlerts(members);
+  usePaseoAttention(members);
   // Settings › App › "Confirm before closing while agents run": the beforeunload hook in drafts.ts asks this.
   const membersRef = useRef(members);
   membersRef.current = members;

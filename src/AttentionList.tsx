@@ -13,16 +13,20 @@ import {
 import { clearUnreadLocal, dismissLocal, snoozeLocal } from "./attentionLocal";
 import { respondToPermission } from "./PermissionCard";
 import { bumpAgents, clearAgentAttention, clearNeedsYou, snoozeNeedsYou } from "./paseo";
+import { clearWorkspaceIfQuiet } from "./paseoAttention";
 import type { TeamView } from "./teams";
 
 const deps: AttentionDeps = {
-  clearNeedsYou: (a) => clearNeedsYou(a, { optimistic: true }),
-  snoozeNeedsYou: (a, ms) => snoozeNeedsYou(a, ms, { optimistic: true }),
-  clearAgentAttention,
+  clearNeedsYou: (a) => clearNeedsYou(a, { optimistic: true }).then(() => clearWorkspaceIfQuiet(a.id)),
+  snoozeNeedsYou: (a, ms) => snoozeNeedsYou(a, ms, { optimistic: true }).then(() => clearWorkspaceIfQuiet(a.id)),
+  clearAgentAttention: (id) => clearAgentAttention(id).then(() => clearWorkspaceIfQuiet(id)),
   respondToPermission,
   snoozeLocal,
   dismissLocal,
-  clearUnreadLocal,
+  clearUnreadLocal: (id) => {
+    clearUnreadLocal(id);
+    void clearWorkspaceIfQuiet(id);
+  },
   now: () => Date.now(),
   after: (ms, fn) => void setTimeout(fn, Math.min(ms, 2 ** 31 - 1)),
   refresh: bumpAgents,
@@ -55,7 +59,7 @@ function Row({ item, onOpen, onError }: { item: AttentionItem; onOpen: (id: stri
         <button
           className="btn ghost small"
           onClick={() => {
-            if (item.kind === "unread") clearUnreadLocal(item.id); // opening it is reading it
+            if (item.kind === "unread") deps.clearUnreadLocal(item.id); // opening it is reading it
             onOpen(item.id);
           }}
         >
