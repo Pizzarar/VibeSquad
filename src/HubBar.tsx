@@ -3,17 +3,10 @@
 import "./HubBar.css";
 import { useEffect, useRef, useState } from "react";
 import { pinsForSquad, type Pin } from "./pins";
-import type { LaneDef, TeamDef } from "./teams";
-import type { TeamView } from "./teams";
+import { isHubLane, type TeamView } from "./teams";
 import { Avatar } from "./pixel";
 import { PinDot } from "./PinGrid";
 import { countUnsplit } from "./hubBarLogic";
-
-// TODO: import from teams.ts after block 1
-export const isHubLane = (team: TeamDef, lane: LaneDef): boolean => {
-  const flagged = team.lanes.some((l) => (l as LaneDef & { hub?: boolean }).hub === true);
-  return (lane as LaneDef & { hub?: boolean }).hub === true || (!flagged && lane.id === team.id);
-};
 
 const REFETCH_MIN_MS = 10_000;
 

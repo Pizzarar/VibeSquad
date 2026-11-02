@@ -18,7 +18,7 @@ UI and docs use these names (2026-11-01). Labels, `teams.json` keys and code ide
 
 - **Squad** (`team` in labels and `teams.json`): the top-level sidebar entry, one per product (e.g. `Escape From Idle`, `VibeSquad`, `Personal Site`).
 - **Team** (`lane` in labels and `teams.json`): one feature inside a Squad (e.g. Scavenging UI). A Team is **pinned** automatically when it's created and stays on the squad page until the owner marks it complete (`state: "done"`, Done shelf, can be reopened). It holds one **Brainstorm**, one **Lead** (spawned at plan handoff) and the Lead's **Workers**.
-- **Brainstorm** (`role=brainstorm`): the head of a Team, the one you talk to (`"TALK HERE"`). The UI says "Brainstorm", never "Buddy". Its title is `<Code> Buddy[ · <topic>]` (see the table).
+- **Brainstorm** (`role=brainstorm`): the head of a Team, the one you talk to (`"TALK HERE"`). The UI says "Brainstorm", never "Buddy" (the hub Buddy is the exception: the UI says **RiffBot**, see the table). Its title is `<Code> Buddy[ · <topic>]` (see the table).
 - **Lead / Workers** (`role=lead`, `role=worker`): run the work for a Team. Hidden on the default squad page; the **FULL** toggle shows them.
 - **Pin the feature, not the agent.** Clicking a Team opens its live Brainstorm, or starts a fresh one from the Team brief (`docs/brainstorm/<lane>.md`). Agent IDs, `(old)` rows, workers and worktrees are plumbing and stay behind FULL.
 - **Multiple Teams per Squad**: one live Brainstorm and one live Lead **per Team** (`(team, lane)`), plus topic-scoped Brainstorms (`(team, lane, topic)`). There is no "one live brainstorm per squad" limit. All Teams in a Squad share the Squad `vs log` (`~/.vibesquad/teams/<team>/log.jsonl`) so `vs log --since-me` surfaces `[decision]`, `[you]` and `[needs-you]` entries across the whole Squad.
@@ -34,6 +34,7 @@ UI and docs use these names (2026-11-01). Labels, `teams.json` keys and code ide
 | Lead | `lane`, `role=lead`, `ord=N`, optional `job` = current objective (plus derived `team`) | `★ <Code><ord> · <objective>` (e.g. `★ Hub6 · squad view`); no `job` → `★ <Code><ord>` |
 | Retired lead | same, with `role=former-lead` | `(old) <Code><ord> · <objective>`, or `(old) <Code><ord>` |
 | Brainstorm (Buddy) | `lane`, `role=brainstorm` (plus optional `topic`) | `<Code> Buddy` or `<Code> Buddy · <topic>` (e.g. `Bug Buddy`) |
+| RiffBot (the hub lane's Buddy) | `lane` = the Squad's hub lane (`hub: true`, else the lane whose id is the Squad id), `role=brainstorm`, no `topic` | `RiffBot`; with a topic: `Hub Buddy · <topic>` (e.g. `<Code> Buddy · <topic>` with the hub's code). "Hub" is internal only (flag, `isHubLane`); the UI says RiffBot. |
 | Retired brainstorm | same, with `role=former-brainstorm` | unchanged (not rewritten) |
 | Worker | `lane`, `role=worker`, `job`, `ord` (its lead's) | `<Code><ord> · <job>` (e.g. `Hub6 · drop files`); no `ord` → `<Code> · <job>` |
 

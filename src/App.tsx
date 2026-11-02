@@ -742,7 +742,7 @@ const Card = memo(function Card({ label, m, onPick, onSuccessor }: CardProps) {
       <Avatar id={a.id} provider={a.provider} agentType={m.agentType} variant={leadVariant(m)} size={56} />
       <div className="card-body">
         <div className="card-top-row">
-          <span className="card-label">{m.agentType === "brainstorm" ? "BRAINSTORM" : AGENT_TYPE_LABEL[m.agentType]}</span>
+          <span className="card-label">{m.agentType === "brainstorm" ? (!isTopicBrainstorm(a) && isHubLaneId(m.laneId ?? undefined) ? "RIFFBOT" : "BRAINSTORM") : AGENT_TYPE_LABEL[m.agentType]}</span>
           <span className="card-top-right">
             <AgentActions agent={a} />
             <span className="prov-pill" style={{ color: prov.color, borderColor: prov.color }}>

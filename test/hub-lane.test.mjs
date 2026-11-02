@@ -27,7 +27,9 @@ test("new Squad's first lane is the hub", () => {
   assert.equal(isHubTs(team, team.lanes[0]), true);
 });
 
-test("isHubLane: a lane with no id is never the hub", () => {
-  assert.equal(isHubMjs({}, {}), false);
-  assert.equal(isHubMjs(undefined, undefined), false);
-});
+for (const [name, isHub] of [["teams.ts", isHubTs], ["identity.mjs", isHubMjs]]) {
+  test(`isHubLane (${name}): a lane with no id is never the hub`, () => {
+    assert.equal(isHub({ lanes: [] }, {}), false);
+    assert.equal(isHub({ id: undefined, lanes: [] }, { id: undefined }), false);
+  });
+}

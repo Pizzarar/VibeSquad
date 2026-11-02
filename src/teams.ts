@@ -24,7 +24,7 @@ export type LaneDef = { id: string; name: string; code?: string; paths?: string[
 /** The Squad's hub lane (RiffBot's). Explicit `hub: true` wins; with no flagged lane, the lane whose id is the Squad id. */
 export function isHubLane(team: Pick<TeamDef, "id" | "lanes">, lane: Pick<LaneDef, "id" | "hub">): boolean {
   if (lane.hub === true) return true;
-  return !team.lanes.some((l) => l.hub === true) && lane.id === team.id;
+  return lane.id != null && !team.lanes.some((l) => l.hub === true) && lane.id === team.id;
 }
 
 export type TeamDef = {
