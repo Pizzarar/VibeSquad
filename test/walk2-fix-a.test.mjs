@@ -34,6 +34,12 @@ test("rewind updates timeline without resend", () => {
   assert.match(s, /cutLen/);
 });
 
+test("rewind cut clears on any length change and on agent change", () => {
+  const s = src("Timeline.tsx");
+  assert.match(s, /entries.length !== cutLen.current/);
+  assert.match(s, /setCut\(null\);\s*\}, \[agentId\]\)/);
+});
+
 test("send failure has inline Retry", () => {
   assert.match(src("AgentDrawer.tsx"), /data-testid="send-retry"/);
 });

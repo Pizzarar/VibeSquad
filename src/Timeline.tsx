@@ -998,8 +998,11 @@ export function Timeline({
   const cutLen = useRef(0);
   // New turns after a rewind arrive past the cut; drop the cut so they show.
   useEffect(() => {
-    if (cut && entries.length > cutLen.current) setCut(null);
+    if (cut && entries.length !== cutLen.current) setCut(null);
   }, [entries.length, cut]);
+  useEffect(() => {
+    setCut(null);
+  }, [agentId]);
   const [selectedEntryKey, setSelectedEntryKey] = useState<string | null>(null);
   const shown = cut ? truncateAfter(entries, cut) : entries;
   const pinnedTodo = findPinnedTodo(shown);
