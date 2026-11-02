@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import { daemonClient, client, DEMO } from "./paseo";
 import { CHANGES_SLOW_MS, changesErrorText, withTimeout } from "./changesLoad";
@@ -164,6 +164,24 @@ const LINE_CLS: Record<string, string> = {
   context: "",
 };
 
+/** Renders one parsed diff file, including the binary and too_large states. */
+function FileDiffView({ file }: { file: DiffFile }) {
+  if (file.status === "binary") return <div className="muted small">Binary file</div>;
+  if (file.status === "too_large") return <div className="muted small">Diff too large to display</div>;
+  if (!file.hunks?.length) return <div className="muted small">No textual changes.</div>;
+  return (
+    <>
+      {file.hunks.map((hunk, hi) =>
+        hunk.lines.map((line, li) => (
+          <div key={`${hi}-${li}`} className={`diff-line ${LINE_CLS[line.type] ?? ""}`}>
+            <code>{line.content}</code>
+          </div>
+        ))
+      )}
+    </>
+  );
+}
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
@@ -207,6 +225,9 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
   const [checkInfo, setCheckInfo] = useState<CheckDetails | "loading" | { error: string } | null>(null);
   const [timeline, setTimeline] = useState<{ items: TimelineItem[]; truncated: boolean } | "loading" | { error: string } | null>(null);
 
+  // Monotonic request ids: a slow response must not overwrite a newer selection (or another checkout's data).
+  const seq = useRef({ hist: 0, diff: 0, check: 0, timeline: 0 });
+
   const [reviewSpawned, setReviewSpawned] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
@@ -219,6 +240,13 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
 
   useEffect(() => {
     let alive = true;
+    const q = seq.current;
+    q.hist++; q.diff++; q.check++; q.timeline++;
+    setCommits(null); setOpenSha(null); setOpenCommitFile(null); setCommitDiff(null);
+    setRenameOpen(false); setRenameInput(""); setRenameArmed(false); setRenameNote(null);
+    setAutoMergeArmed(false); setPrMergeArmed(false); setDiscardState(null);
+    setCheckOpen(null); setCheckInfo(null); setTimeline(null);
+    setExpandedFile(null);
     setLoading(true);
     setLoadError(null);
     setSlow(false);
@@ -302,26 +330,26 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
     if (!commitMsg.trim()) { flash("Enter a commit message", false); return; }
     if (DEMO) { flash("Committed (demo)"); setCommitMsg(""); return; }
     const r = await gitActionWrapper(() => daemonClient.checkoutCommit(cwd, { message: commitMsg, addAll: true }));
-    if (r.ok) { flash("Committed"); setCommitMsg(""); }
+    if (r.ok) { flash("Committed"); setCommitMsg(""); if (histOpen) void loadHistory(); }
     else flash(r.error ?? "Commit failed", false);
   }
 
   async function handlePush() {
     if (DEMO) { flash("Pushed (demo)"); return; }
     const r = await gitActionWrapper(() => daemonClient.checkoutPush(cwd));
-    r.ok ? flash("Pushed") : flash(r.error ?? "Push failed", false);
+    r.ok ? (flash("Pushed"), histOpen && void loadHistory()) : flash(r.error ?? "Push failed", false);
   }
 
   async function handlePull() {
     if (DEMO) { flash("Pulled (demo)"); return; }
     const r = await gitActionWrapper(() => daemonClient.checkoutPull(cwd));
-    r.ok ? flash("Pulled") : flash(r.error ?? "Pull failed", false);
+    r.ok ? (flash("Pulled"), histOpen && void loadHistory()) : flash(r.error ?? "Pull failed", false);
   }
 
   async function handleMergeBase() {
     if (DEMO) { flash("Merged from base (demo)"); return; }
     const r = await gitActionWrapper(() => daemonClient.checkoutMergeFromBase(cwd, {}));
-    r.ok ? flash("Merged from base") : flash(r.error ?? "Merge failed", false);
+    r.ok ? (flash("Merged from base"), histOpen && void loadHistory()) : flash(r.error ?? "Merge failed", false);
   }
 
   async function handleSwitchBranch() {
@@ -383,8 +411,17 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
   async function loadHistory() {
     if (DEMO) { setCommits(DEMO_COMMITS); return; }
     setCommits(null);
+    const id = ++seq.current.hist;
     const r = await gitActionWrapper(() => git.listCommits(cwd));
+    if (id !== seq.current.hist) return;
     if (r.ok) setCommits(r.result!.commits); else { setCommits([]); flash(r.error ?? "History failed", false); }
+  }
+
+  function toggleCommit(sha: string) {
+    seq.current.diff++;
+    setOpenSha(openSha === sha ? null : sha);
+    setOpenCommitFile(null);
+    setCommitDiff(null);
   }
 
   function toggleHistory() {
@@ -394,11 +431,14 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
   }
 
   async function openCommitFileDiff(sha: string, path: string) {
-    if (openCommitFile === path) { setOpenCommitFile(null); return; }
+    if (openCommitFile === path) { seq.current.diff++; setOpenCommitFile(null); return; }
     setOpenCommitFile(path);
+    setCommitDiff("loading");
     if (DEMO) { setCommitDiff(DEMO_DIFF.files[0]); return; }
     setCommitDiff("loading");
+    const id = ++seq.current.diff;
     const r = await gitActionWrapper(() => git.commitFileDiff(cwd, sha, path));
+    if (id !== seq.current.diff) return;
     setCommitDiff(r.ok && r.result ? (r.result as unknown as DiffFile) : "none");
   }
 
@@ -414,13 +454,17 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
     } else flash(r.error ?? "Rename failed", false);
   }
 
+  useEffect(() => { setRenameArmed(false); setRenameNote(null); }, [currentBranch]);
+  useEffect(() => { setAutoMergeArmed(false); }, [pr?.number, autoMergeOn]);
+
   async function armRename() {
     const local = branchNameError(renameInput, currentBranch);
     if (local) { setRenameNote(local); return; }
     if (!DEMO) {
       const v = await gitActionWrapper(() => git.validateBranchName(cwd, renameInput.trim()));
-      if (v.ok && v.result?.error) { setRenameNote(v.result.error); return; }
-      if (v.ok && v.result?.exists) { setRenameNote("A branch with that name already exists"); return; }
+      if (!v.ok) { setRenameNote(v.error ?? "Could not validate the branch name"); return; }
+      if (v.result?.error) { setRenameNote(v.result.error); return; }
+      if (v.result?.exists) { setRenameNote("A branch with that name already exists"); return; }
     }
     setRenameNote(null);
     setRenameArmed(true);
@@ -432,11 +476,13 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
     setCheckOpen(key);
     if (DEMO) { setCheckInfo({ name: c.name, status: c.status, output: { title: "Demo output", summary: "All assertions passed." } }); return; }
     setCheckInfo("loading");
+    const id = ++seq.current.check;
     const ref = parsePrUrl(pr?.url);
     const r = await gitActionWrapper(() => git.checkDetails(cwd, {
       checkRunId: c.checkRunId, workflowRunId: c.workflowRunId,
       repoOwner: ref?.repoOwner, repoName: ref?.repoName, changeRequestNumber: pr?.number ?? ref?.number,
     }));
+    if (id !== seq.current.check) return;
     setCheckInfo(r.ok ? (r.result ?? { error: "No details available" }) : { error: r.error ?? "Failed" });
   }
 
@@ -445,7 +491,9 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
     if (DEMO) { setTimeline({ truncated: false, items: [{ id: "1", kind: "review", author: "reviewer", body: "Looks good.", createdAt: Date.now() - 3600e3, url: "", reviewState: "approved" }] }); return; }
     if (!ref) { setTimeline({ error: "Cannot read repo from PR url" }); return; }
     setTimeline("loading");
+    const id = ++seq.current.timeline;
     const r = await gitActionWrapper(() => git.prTimeline(cwd, pr?.number ?? ref.number, ref.repoOwner, ref.repoName));
+    if (id !== seq.current.timeline) return;
     setTimeline(r.ok ? r.result! : { error: r.error ?? "Failed" });
   }
 
@@ -521,6 +569,9 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
       </div>
 
       {/* ── File list ── */}
+      {diff?.diffTooLarge && (
+        <div className="warning-banner" data-testid="changes-diff-too-large">⚠ Diff too large — some files are not shown</div>
+      )}
       <div className="changes-file-list" data-testid="changes-file-list">
         {files.length === 0 && <div className="muted small">No uncommitted changes.</div>}
 
@@ -570,17 +621,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
 
               {expandedFile === f.path && (
                 <div className="changes-file-diff" data-testid="changes-file-diff">
-                  {f.status === "binary" ? (
-                    <div className="muted small">Binary file</div>
-                  ) : (
-                    f.hunks.map((hunk, hi) =>
-                      hunk.lines.map((line, li) => (
-                        <div key={`${hi}-${li}`} className={`diff-line ${LINE_CLS[line.type] ?? ""}`}>
-                          <code>{line.content}</code>
-                        </div>
-                      ))
-                    )
-                  )}
+                  <FileDiffView file={f} />
                 </div>
               )}
             </div>
@@ -716,8 +757,8 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
                   data-testid="changes-commit-row"
                   role="button"
                   tabIndex={0}
-                  onClick={() => { setOpenSha(openSha === c.sha ? null : c.sha); setOpenCommitFile(null); }}
-                  onKeyDown={(e) => e.key === "Enter" && setOpenSha(openSha === c.sha ? null : c.sha)}
+                  onClick={() => toggleCommit(c.sha)}
+                  onKeyDown={(e) => e.key === "Enter" && toggleCommit(c.sha)}
                 >
                   <code className="changes-sha">{c.shortSha}</code>
                   <span className="changes-file-path">{c.subject}</span>
@@ -745,15 +786,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
                           <div className="changes-file-diff" data-testid="changes-commit-diff">
                             {commitDiff === "loading" && <div className="muted small">Loading diff…</div>}
                             {commitDiff === "none" && <div className="muted small">No diff available.</div>}
-                            {commitDiff && typeof commitDiff === "object" && (commitDiff.status === "binary" ? (
-                              <div className="muted small">Binary file</div>
-                            ) : commitDiff.hunks.map((hunk, hi) =>
-                              hunk.lines.map((line, li) => (
-                                <div key={`${hi}-${li}`} className={`diff-line ${LINE_CLS[line.type] ?? ""}`}>
-                                  <code>{line.content}</code>
-                                </div>
-                              ))
-                            ))}
+                            {commitDiff && typeof commitDiff === "object" && <FileDiffView file={commitDiff} />}
                           </div>
                         )}
                       </div>
