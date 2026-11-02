@@ -11,6 +11,7 @@ import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, matc
 import { BARE_PATH_RE, parseFileToken } from "./fileLinks";
 import { toolStartsExpanded, usePref } from "./prefs";
 import { getPanes } from "./panes";
+import { SubagentList } from "./SubagentList";
 import { Spinner, Stamp, TimelineSkeleton, useDelayedBusy } from "./QuickWinsUi";
 
 export class TimelineErrorBoundary extends Component<
@@ -1247,6 +1248,7 @@ export function Timeline({
         </div>
       )}
       {slowFirstLoad && <TimelineSkeleton />}
+      <SubagentList agentId={agentId} entries={entries} isSubAgent={isSubAgentTool} renderBody={(id) => <SubAgentBody agentId={agentId} subagentKey={id} d={{}} />} />
       {pinnedTodo && <PinnedTodo entry={pinnedTodo} />}
       </div>}
       {shouldShowLoadOlder(entries, hasMore) && (
