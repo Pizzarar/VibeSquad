@@ -853,11 +853,13 @@ async function handleLeadHandoff(req, res, rootDir, actionOverride) {
   }
   try {
     const body = await readBody(req);
+    const clean = sanitizeBody(body);
     const result = await performLeadHandoffHttp(
-      actionOverride ? { ...sanitizeBody(body), action: actionOverride } : sanitizeBody(body),
+      actionOverride ? { ...clean, action: actionOverride } : { httpWaitMs: 2000, ...clean },
       rootDir,
     );
-    return sendJson(res, 200, result);
+    const status = result?.status || (result?.accepted ? 202 : 200);
+    return sendJson(res, status, result);
   } catch (e) {
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
   }
