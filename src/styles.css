@@ -974,6 +974,14 @@ code {
   color: var(--muted);
 }
 
+.send-error {
+  border-top: 1px solid var(--hot-pink);
+  padding: 6px 10px;
+  color: var(--hot-pink);
+  background: var(--panel);
+  font-size: 12px;
+}
+
 .composer {
   border-top: 1px solid var(--line);
   padding: 8px;
