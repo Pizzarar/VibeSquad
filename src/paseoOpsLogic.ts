@@ -197,7 +197,7 @@ export interface ConfigDiffEntry {
 export function buildConfigDiff(config: unknown, draft: Record<string, unknown>): ConfigDiffEntry[] {
   const out: ConfigDiffEntry[] = [];
   for (const f of EDITABLE_CONFIG_FIELDS) {
-    if (!(f.path in draft)) continue;
+    if (!Object.hasOwn(draft, f.path)) continue;
     const v = validateFieldValue(f, draft[f.path]);
     if (!v.ok) continue;
     const cur = readConfigPath(config, f.path);
@@ -222,4 +222,14 @@ export function buildConfigPatch(diff: ConfigDiffEntry[]): Record<string, unknow
 
 export function formatDiffValue(v: unknown): string {
   return typeof v === "boolean" ? (v ? "on" : "off") : String(v);
+}
+
+/** Extra confirm-step lines for changes that widen what agents or terminals can do. */
+export function configChangeWarnings(diff: ConfigDiffEntry[]): { path: string; level: "warn" | "note"; text: string }[] {
+  const out: { path: string; level: "warn" | "note"; text: string }[] = [];
+  for (const d of diff) {
+    if (d.path === "browserTools.enabled" && d.to === true) out.push({ path: d.path, level: "warn", text: "Enabling browser tools lets agents navigate, click, fill, upload files and run JavaScript in connected browser tabs." });
+    if (d.path === "enableTerminalAgentHooks" && d.to === true) out.push({ path: d.path, level: "note", text: "Terminal hooks inject daemon status env and hooks into newly spawned terminal agents." });
+  }
+  return out;
 }

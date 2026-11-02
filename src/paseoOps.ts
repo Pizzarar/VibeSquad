@@ -36,15 +36,24 @@ export async function measureRtt(): Promise<number> {
 }
 
 /** Apply a validated patch (see buildConfigPatch), then reload; returns the reload result and the fresh config. */
-export async function patchAndReloadDaemonConfig(patch: Record<string, unknown>): Promise<{ reload: DaemonReloadResult; config: unknown }> {
+export async function patchAndReloadDaemonConfig(
+  patch: Record<string, unknown>,
+  onPatched?: (config: unknown) => void,
+): Promise<{ reload: DaemonReloadResult; config: unknown }> {
   if (DEMO) {
     demoConfigPatch = mergePatch(demoConfigPatch, patch);
-    return { reload: { appliedPaths: Object.keys(patch), restartRequiredPaths: [], overrideControlledPaths: [] }, config: await fetchDaemonConfig() };
+    const config = await fetchDaemonConfig();
+    onPatched?.(config);
+    return { reload: { appliedPaths: Object.keys(patch), restartRequiredPaths: [], overrideControlledPaths: [] }, config };
   }
   // The patch response carries the config as saved; a getDaemonConfig right after reload can still return the pre-patch snapshot.
   const saved = await daemonClient.patchDaemonConfig(patch);
-  const reload = await reloadDaemonConfig();
-  return { reload, config: saved.config };
+  onPatched?.(saved.config);
+  try {
+    return { reload: await reloadDaemonConfig(), config: saved.config };
+  } catch (e) {
+    throw new Error(`Config saved, but reload failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 function mergePatch(base: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {

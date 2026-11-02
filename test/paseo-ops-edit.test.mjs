@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { EDITABLE_CONFIG_FIELDS, LOCKED_CONFIG_SECTIONS, isEditableConfigPath, readConfigPath, validateFieldValue, buildConfigDiff, buildConfigPatch, formatDiffValue } from "../src/paseoOpsLogic.ts";
+import { EDITABLE_CONFIG_FIELDS, LOCKED_CONFIG_SECTIONS, isEditableConfigPath, readConfigPath, validateFieldValue, buildConfigDiff, buildConfigPatch, formatDiffValue, configChangeWarnings } from "../src/paseoOpsLogic.ts";
 
 test("editable allowlist excludes security and connectivity paths", () => {
   const bad = /auth|password|relay|listen|host|port|cors|origin|plugin|env|args|command|mcp|token|secret/i;
@@ -42,4 +42,24 @@ test("buildConfigPatch nests dotted paths and drops non-editable ones", () => {
   assert.equal(readConfigPath({ a: { b: 3 } }, "a.b"), 3);
   assert.equal(readConfigPath({ a: 1 }, "a.b"), undefined);
   assert.equal(formatDiffValue(true), "on");
+});
+
+test("prototype keys and deep or locked paths never reach the diff or patch", () => {
+  const cfg = {};
+  const draft = JSON.parse('{"__proto__":{"polluted":true},"constructor":{"prototype":{"polluted":true}},"toString":true}');
+  Object.assign(draft, { "providers.claude.env.FOO": "x", "relay.enabled": true, "auth.password": "hunter2", "constructor.prototype.polluted": true });
+  assert.deepEqual(buildConfigDiff(cfg, draft), []);
+  const bad = ["__proto__.polluted", "constructor.prototype.polluted", "toString", "providers.claude.env.FOO", "relay.enabled", "auth.password"];
+  const patch = buildConfigPatch(bad.map((path) => ({ path, label: "", from: false, to: true })));
+  assert.deepEqual(patch, {});
+  assert.equal(Object.keys(patch).length, 0);
+  assert.equal(({}).polluted, undefined);
+  for (const p of bad) assert.equal(isEditableConfigPath(p), false, p);
+});
+
+test("configChangeWarnings flags browser tools (warning) and terminal hooks (note) only when turned on", () => {
+  const e = (path, to) => ({ path, label: "", from: !to, to });
+  const w = configChangeWarnings([e("browserTools.enabled", true), e("enableTerminalAgentHooks", true), e("autoArchiveAfterMerge", true)]);
+  assert.deepEqual(w.map((x) => [x.path, x.level]), [["browserTools.enabled", "warn"], ["enableTerminalAgentHooks", "note"]]);
+  assert.deepEqual(configChangeWarnings([e("browserTools.enabled", false), e("enableTerminalAgentHooks", false)]), []);
 });

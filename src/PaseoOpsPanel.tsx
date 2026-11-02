@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchDaemonConfig, fetchUsageReports, measureRtt, patchAndReloadDaemonConfig, reloadDaemonConfig, type DaemonReloadResult } from "./paseoOps";
-import { EDITABLE_CONFIG_FIELDS, LOCKED_CONFIG_SECTIONS, LOCKED_NOTE, buildConfigDiff, buildConfigPatch, formatDiffValue, readConfigPath, validateFieldValue, formatConfigJson, formatLatency, formatMaskedJson, latencyTone, summarizeUsageReport, type UsageReportLike } from "./paseoOpsLogic";
+import { EDITABLE_CONFIG_FIELDS, LOCKED_CONFIG_SECTIONS, LOCKED_NOTE, buildConfigDiff, buildConfigPatch, configChangeWarnings, formatDiffValue, readConfigPath, validateFieldValue, formatConfigJson, formatLatency, formatMaskedJson, latencyTone, summarizeUsageReport, type UsageReportLike } from "./paseoOpsLogic";
 
 export function PaseoOpsPanel() {
   const [config, setConfig] = useState<unknown>(null);
@@ -57,7 +57,7 @@ export function PaseoOpsPanel() {
   const closeEdit = () => { setEditing(false); setConfirming(false); setDraft({}); };
   const applyEdit = () =>
     run(async () => {
-      const { reload: r, config: c } = await patchAndReloadDaemonConfig(buildConfigPatch(diff));
+      const { reload: r, config: c } = await patchAndReloadDaemonConfig(buildConfigPatch(diff), (saved) => { if (mounted.current) setConfig(saved); });
       if (!mounted.current) return;
       setReload(r);
       setConfig(c);
@@ -137,6 +137,9 @@ export function PaseoOpsPanel() {
                   <div key={d.path} className="paseo-ops-diff-row" data-testid={`paseo-ops-diff-${d.path}`}>
                     <code>{d.path}</code>: <span className="paseo-ops-old">{formatDiffValue(d.from)}</span> → <span className="paseo-ops-new">{formatDiffValue(d.to)}</span>
                   </div>
+                ))}
+                {configChangeWarnings(diff).map((w) => (
+                  <div key={w.path} className={w.level === "warn" ? "paseo-ops-err" : "muted small"} data-testid={`paseo-ops-warn-${w.path}`}>{w.level === "warn" ? "Warning: " : "Note: "}{w.text}</div>
                 ))}
                 <div className="muted small">Saved to the daemon, then the config is reloaded.</div>
                 <div className="paseo-ops-row">
