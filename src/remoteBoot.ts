@@ -6,10 +6,12 @@
 import { installRemoteTransport, type VsHttpInvoke } from "./remoteTransport.ts";
 import { isRemote, needsPairing } from "./remoteSession.ts";
 
+type RemoteConnState = { status: string; reason?: string; nextRetryAt?: string };
+
 type RemoteRpcClient = {
   invokePluginRpc(pluginId: string, method: string, input: unknown): Promise<unknown>;
-  getConnectionState(): { status: string };
-  subscribeConnectionStatus(listener: (s: { status: string }) => void): () => void;
+  getConnectionState(): RemoteConnState;
+  subscribeConnectionStatus(listener: (s: RemoteConnState) => void): () => void;
 };
 
 const CONNECT_WAIT_MS = 30_000;
@@ -17,17 +19,36 @@ const CONNECT_WAIT_MS = 30_000;
 let bind: (c: RemoteRpcClient) => void = () => {};
 const bound = new Promise<RemoteRpcClient>((resolve) => (bind = resolve));
 
-/** Resolves once `client` is connected; rejects after `ms` (the shim's caller sees a failed fetch). */
+function terminalDisconnectError(s: RemoteConnState): Error | null {
+  if (s.status === "disposed" || (s.status === "disconnected" && !s.nextRetryAt)) {
+    return new Error(`Relay disconnected: ${s.reason || s.status}`);
+  }
+  return null;
+}
+
+/** Resolves once `client` is connected; rejects on terminal disconnect/dispose or after `ms`. */
 export function whenConnected(client: RemoteRpcClient, ms = CONNECT_WAIT_MS): Promise<void> {
-  if (client.getConnectionState().status === "connected") return Promise.resolve();
+  const init = client.getConnectionState();
+  if (init.status === "connected") return Promise.resolve();
+  const initErr = terminalDisconnectError(init);
+  if (initErr) return Promise.reject(initErr);
   return new Promise((resolve, reject) => {
-    const t = setTimeout(() => (off(), reject(new Error("remote: timed out waiting for the relay connection"))), ms);
-    const off = client.subscribeConnectionStatus((s) => {
-      if (s.status !== "connected") return;
+    let done = false;
+    let off = () => {};
+    const finish = (fn: () => void) => {
+      if (done) return;
+      done = true;
       clearTimeout(t);
       off();
-      resolve();
+      fn();
+    };
+    const t = setTimeout(() => finish(() => reject(new Error("remote: timed out waiting for the relay connection"))), ms);
+    off = client.subscribeConnectionStatus((s) => {
+      if (s.status === "connected") return finish(resolve);
+      const err = terminalDisconnectError(s);
+      if (err) finish(() => reject(err));
     });
+    if (done) off();
   });
 }
 

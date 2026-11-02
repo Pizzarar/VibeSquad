@@ -51,12 +51,18 @@ export function hasOfferFragment(hash: string): boolean {
   return /(^|[#&])offer=/.test(hash);
 }
 
-export type RemoteEnv = { search: string; hash: string; storage: Get | null; buildFlag: boolean };
+export function isLocalHost(hostname: string): boolean {
+  const h = (hostname ?? "").trim().toLowerCase();
+  return h === "127.0.0.1" || h === "localhost" || h === "::1" || h === "[::1]" || h === "tauri.localhost" || h.endsWith(".localhost");
+}
 
-/** Pure core of isRemote(): build flag, `?remote=1`, an `#offer=` fragment, a stored session, or R2-1's flag. */
+export type RemoteEnv = { search: string; hash: string; storage: Get | null; buildFlag: boolean; hostname?: string };
+
+/** Pure core of isRemote(): build flag, `?remote=1`, or (on non-local origins) `#offer=`, a stored session, or R2-1's flag. */
 export function detectRemote(env: RemoteEnv): boolean {
   if (env.buildFlag) return true;
   if (new URLSearchParams(env.search).get("remote") === "1") return true;
+  if (env.hostname && isLocalHost(env.hostname)) return false;
   if (hasOfferFragment(env.hash)) return true;
   const s = env.storage;
   if (!s) return false;
@@ -69,6 +75,7 @@ export function isRemote(): boolean {
   if (remoteCached === null) {
     const loc = (globalThis as any).location as Location | undefined;
     remoteCached = detectRemote({
+      hostname: loc?.hostname ?? "",
       search: loc?.search ?? "",
       hash: loc?.hash ?? "",
       storage: browserStorage("localStorage"),

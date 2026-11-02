@@ -6,7 +6,7 @@
 import { useEffect, useState } from "react";
 import { parseConnectionOfferFromUrl } from "@getpaseo/protocol/connection-offer";
 import { probeRemote } from "./paseoRemote";
-import { hasOfferFragment, parseOfferInput, readSession, saveSession, takeAuthNote, remoteError, type RemoteError } from "./remoteSession";
+import { clearSession, hasOfferFragment, parseOfferInput, readSession, saveSession, takeAuthNote, remoteError, type RemoteError } from "./remoteSession";
 
 function initialLink(): string {
   return hasOfferFragment(location.hash) ? location.href : "";
@@ -24,15 +24,14 @@ export function RemotePair() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<RemoteError | null>(initialError);
   // After an auth failure the offer is still stored: only the password is asked for again.
-  const stored = readSession();
-  const [hashOffer, setHashOffer] = useState(() => hasOfferFragment(location.hash));
-  const linkNeeded = !stored || hashOffer;
+  const [hasStored, setHasStored] = useState<boolean>(() => readSession() !== null);
+  const [linkNeeded, setLinkNeeded] = useState<boolean>(() => readSession() === null || hasOfferFragment(location.hash));
 
   // A pairing link opened while this screen is up only changes the hash (no reload): take it.
   useEffect(() => {
     const onHash = () => {
       if (!hasOfferFragment(location.hash)) return;
-      setHashOffer(true);
+      setLinkNeeded(true);
       setLink(location.href);
       setError(null);
     };
@@ -40,9 +39,18 @@ export function RemotePair() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
+  function forget() {
+    clearSession();
+    setHasStored(false);
+    setLinkNeeded(true);
+    setError(null);
+    setBusy(false);
+  }
+
   async function connect(e: React.FormEvent) {
     e.preventDefault();
     if (busy) return;
+    const stored = hasStored ? readSession() : null;
     let offer = stored?.offer;
     if (linkNeeded) {
       const parsed = parseOfferInput(link, parseConnectionOfferFromUrl);
@@ -59,6 +67,7 @@ export function RemotePair() {
     }
     try {
       saveSession(offer, password, remember);
+      setHasStored(true);
     } catch (x) {
       setBusy(false);
       return setError(remoteError("unknown", `Couldn't save the pairing on this device: ${(x as Error)?.message ?? x}`));
@@ -106,6 +115,11 @@ export function RemotePair() {
         <button className="btn ok remote-pair-go" type="submit" disabled={busy || (linkNeeded && !link.trim())}>
           {busy ? "Connecting…" : "Connect"}
         </button>
+        {(hasStored || !linkNeeded) && (
+          <button className="btn remote-pair-forget" type="button" data-testid="remote-pair-forget" onClick={forget}>
+            Forget saved device
+          </button>
+        )}
       </form>
     </div>
   );

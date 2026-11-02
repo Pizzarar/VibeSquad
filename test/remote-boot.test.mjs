@@ -11,6 +11,7 @@ import {
   clearSession,
   detectRemote,
   hasOfferFragment,
+  isLocalHost,
   isPasswordRemembered,
   mapRemoteError,
   needsPairing,
@@ -68,6 +69,25 @@ describe("remote mode detection", () => {
   test("throwing storage reads as off", () => {
     const bad = { getItem: () => { throw new Error("denied"); } };
     assert.equal(detectRemote({ ...base, storage: bad }), false);
+  });
+  test("local origins ignore #offer=, stored session, and stored flag unless ?remote=1 or buildFlag", () => {
+    for (const h of ["127.0.0.1", "localhost", "LOCALHOST", "::1", "[::1]", "tauri.localhost", "dev.localhost"]) {
+      assert.equal(isLocalHost(h), true, h);
+    }
+    for (const h of ["", "app.paseo.sh", "192.168.1.20"]) {
+      assert.equal(isLocalHost(h), false, h);
+    }
+    const sSession = mem();
+    sSession.setItem(REMOTE_SESSION_KEY, "{}");
+    const sFlag = mem();
+    sFlag.setItem("vs.remote", "1");
+    for (const hostname of ["127.0.0.1", "localhost", "tauri.localhost"]) {
+      assert.equal(detectRemote({ ...base, hostname, hash: "#offer=abc" }), false, `${hostname} #offer`);
+      assert.equal(detectRemote({ ...base, hostname, storage: sSession }), false, `${hostname} storedSession`);
+      assert.equal(detectRemote({ ...base, hostname, storage: sFlag }), false, `${hostname} storedFlag`);
+      assert.equal(detectRemote({ ...base, hostname, search: "?remote=1" }), true, `${hostname} ?remote=1`);
+      assert.equal(detectRemote({ ...base, hostname, buildFlag: true }), true, `${hostname} buildFlag`);
+    }
   });
   test("offer fragment matcher", () => {
     assert.equal(hasOfferFragment("#offer=x"), true);
@@ -239,6 +259,8 @@ describe("wiring guards", () => {
     assert.doesNotMatch(src, /from "\.\/paseo"/);
     assert.match(src, /parseConnectionOfferFromUrl/);
     assert.match(src, /location\.replace\(location\.pathname \+ location\.search\)/, "fragment dropped after pairing");
+    assert.match(src, /data-testid="remote-pair-forget"/, "forget button wired");
+    assert.match(src, /clearSession\(\)/, "clearSession called on forget");
   });
   test("paseoRemote.ts: relay URL + e2ee from the offer", () => {
     const src = read("src/paseoRemote.ts");
@@ -248,13 +270,14 @@ describe("wiring guards", () => {
 });
 
 describe("remote shim invoke waits for the relay connection", () => {
-  function fakeClient(status = "connecting") {
+  function fakeClient(status = "connecting", extra = {}) {
     const ls = new Set();
     const calls = [];
+    let state = { status, ...extra };
     return {
       calls,
-      setStatus(st) { status = st; for (const l of [...ls]) l({ status: st }); },
-      getConnectionState: () => ({ status }),
+      setStatus(st, details = {}) { state = { status: st, ...details }; for (const l of [...ls]) l(state); },
+      getConnectionState: () => state,
       subscribeConnectionStatus: (l) => (ls.add(l), () => ls.delete(l)),
       invokePluginRpc: async (pluginId, method, input) => (calls.push({ pluginId, method, input }), { status: 200, headers: {}, body: "{}" }),
       listeners: ls,
@@ -263,13 +286,28 @@ describe("remote shim invoke waits for the relay connection", () => {
   test("connected: resolves at once", async () => {
     await whenConnected(fakeClient("connected"), 50);
   });
-  test("waits for connected, then unsubscribes", async () => {
+  test("waits for connected across retryable disconnects, then unsubscribes", async () => {
     const c = fakeClient();
     const p = whenConnected(c, 1000);
-    c.setStatus("disconnected");
+    c.setStatus("disconnected", { nextRetryAt: "2026-01-01T00:00:00.000Z" });
     c.setStatus("connected");
     await p;
     assert.equal(c.listeners.size, 0);
+  });
+  test("rejects immediately when state transitions to disposed or terminal disconnected", async () => {
+    const c1 = fakeClient();
+    const p1 = whenConnected(c1, 10_000);
+    c1.setStatus("disposed");
+    await assert.rejects(p1, /Relay disconnected: disposed/);
+    assert.equal(c1.listeners.size, 0);
+
+    const c2 = fakeClient();
+    const p2 = whenConnected(c2, 10_000);
+    c2.setStatus("disconnected", { reason: "Password required" });
+    await assert.rejects(p2, /Relay disconnected: Password required/);
+    assert.equal(c2.listeners.size, 0);
+
+    await assert.rejects(whenConnected(fakeClient("disposed"), 10_000), /Relay disconnected: disposed/);
   });
   test("times out and unsubscribes", async () => {
     const c = fakeClient();
