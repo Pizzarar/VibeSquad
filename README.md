@@ -26,7 +26,7 @@ The **Paseo daemon** manages agent sessions. VibeSquad adds:
 Run `VibeSquad-setup.exe`. It bundles everything VibeSquad itself needs: a pinned Node.js LTS (`node.exe` plus npm), the built web app, the server, the `vs` CLI and its production dependencies. No system-wide Node is required, and `vs` works from any terminal afterwards.
 
 - **Paseo:** if you already have Paseo installed (or a daemon is already listening on its port), VibeSquad reuses it and never starts a second daemon.
-- **No Paseo yet:** on first launch the Setup Checklist screen downloads `@getpaseo/cli@0.13.2` (~500 MB) from npm into `%LOCALAPPDATA%\com.vibesquad.desktop\paseo`, with live progress and a Retry button if you are offline.
+- **No Paseo yet:** on first launch the Setup Checklist screen downloads `@getpaseo/cli@0.14.0` (~500 MB) from npm into `%LOCALAPPDATA%\com.vibesquad.desktop\paseo`, with live progress and a Retry button if you are offline.
 - **Your accounts:** you still install and log in to Claude Code and/or Gemini yourself; the checklist shows what it detects and links to the installers.
 - Quitting VibeSquad stops the server it started.
 

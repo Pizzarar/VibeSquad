@@ -46,6 +46,9 @@ function resizeTerminal(terminalId: string, cols: number, rows: number) {
 
 export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
   const cwd = agent.cwd ?? "";
+  // Paseo 0.14 scopes terminals by workspace: listTerminals(cwd) alone comes back empty.
+  const workspaceId = (agent as { workspaceId?: string | null }).workspaceId ?? undefined;
+  const scope = workspaceId ? { workspaceId } : undefined;
   const [tabs, setTabs] = useState<TerminalTab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const unsubsRef = useRef<Map<string, () => void>>(new Map());
@@ -128,7 +131,7 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
         return;
       }
       try {
-        const result = await daemonClient.listTerminals(cwd);
+        const result = await daemonClient.listTerminals(cwd, undefined, scope);
         const loaded = result.terminals.map((t) => ({
           id: t.id,
           name: (t as { title?: string; name?: string }).title ?? (t as { name?: string }).name ?? t.id.slice(-6),
@@ -146,7 +149,7 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
     loadTerminals();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cwd]);
+  }, [cwd, workspaceId]);
 
   // Refit + resize the daemon PTY on tab switch, container resize and window resize
   useEffect(() => {
@@ -194,7 +197,7 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
       return;
     }
     try {
-      const result = await daemonClient.createTerminal(cwd, `Terminal ${tabs.length + 1}`);
+      const result = await daemonClient.createTerminal(cwd, `Terminal ${tabs.length + 1}`, undefined, scope);
       const termId = (result as { terminal?: { id?: string } }).terminal?.id;
       if (!termId) return;
       const newTab: TerminalTab = { id: termId, name: `Terminal ${tabs.length + 1}` };

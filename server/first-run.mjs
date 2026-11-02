@@ -8,7 +8,7 @@ import { delimiter, dirname, join, resolve, sep } from "node:path";
 import { readJsonFileWithBom } from "./user-settings.mjs";
 import { markDaemonManagedByVibeSquad } from "./paseo-control.mjs";
 
-export const PINNED_PASEO_VERSION = "0.13.2";
+export const PINNED_PASEO_VERSION = "0.14.0";
 const IS_WIN = process.platform === "win32";
 
 export const vibesquadHome = () => process.env.VIBESQUAD_HOME || join(homedir(), ".vibesquad");

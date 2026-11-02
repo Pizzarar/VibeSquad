@@ -20,7 +20,7 @@
     "typecheck": "node scripts/sync-shared.mjs --check && tsc --noEmit"
   },
   "devDependencies": {
-    "@getpaseo/plugin": "0.13.2",
+    "@getpaseo/plugin": "0.14.0",
     "@tanstack/react-query": "^5.90.11",
     "@types/node": "^22.20.5",
     "@types/react": "~19.2.0",

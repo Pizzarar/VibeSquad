@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@getpaseo/plugin": "0.13.2",
+    "@getpaseo/plugin": "0.14.0",
     "typescript": "^5.9.3"
   }
 }
