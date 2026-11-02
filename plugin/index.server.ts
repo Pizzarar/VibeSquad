@@ -36,6 +36,7 @@ import {
   topicOf,
 } from "@vibesquad/server/identity.mjs";
 import { refreshWhosHere } from "@vibesquad/server/whos-here.mjs";
+import { briefRootFor } from "@vibesquad/server/brief-path.mjs";
 import {
   LEGACY_NEEDS_LABEL,
   LEGACY_USER_TYPE,
@@ -1178,7 +1179,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           // VS's own restart path (server/brainstorm.mjs) already puts the brief in the first prompt.
           const fromVsRestart = Boolean(reqLabels["vs.restarted-from"]);
           if (briefLane && !fromVsRestart && !currentSys.includes(marker) && !reqPrompt.includes(marker)) {
-            const block = laneBriefBlock(deps.briefRoot ?? REPO_ROOT, briefLane);
+            const block = laneBriefBlock(deps.briefRoot ?? briefRootFor("", briefLane, REPO_ROOT), briefLane);
             if (block) {
               next.systemPrompt = [currentSys.trim(), block].filter(Boolean).join("\n\n");
               changed = true;
@@ -1617,7 +1618,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           // and the log names both Buddies before anything is relabelled or archived.
           let brief = "missing";
           try {
-            brief = snapshotIntoBrief(deps.briefRoot ?? REPO_ROOT, lane, old, await lastAssistantText(paseo, old.id));
+            brief = snapshotIntoBrief(deps.briefRoot ?? briefRootFor("", lane, REPO_ROOT), lane, old, await lastAssistantText(paseo, old.id));
           } catch (err) {
             log(`brief snapshot failed for ${old.id}: ${err}`);
           }

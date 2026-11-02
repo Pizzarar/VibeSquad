@@ -1607,6 +1607,8 @@ export function installVsShim({ binDirs, targetScript, baseHome } = {}) {
     "server/inbox.mjs",
     "server/profiles.mjs",
     "server/brainstorm.mjs",
+    "server/brief-path.mjs",
+    "server/whos-here.mjs",
     "server/pin-ideas.mjs",
     "docs/profiles/DEFAULT_PACK.md",
   ];

@@ -1,5 +1,6 @@
 // "## Who's here" section of a lane brief: written by VibeSquad, never by the agent.
 // Live Brainstorm + Lead titles and a worker count. No IDs, no (old) rows.
+import { briefRootFor } from "./brief-path.mjs";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { effectiveAgentRole, isDigestAgent, isRetiredAgent } from "./identity.mjs";
@@ -54,7 +55,7 @@ export function applyWhosHere(content, body) {
 
 /** Refresh the brief on disk if it exists and the section changed. Returns { changed, body, path }. */
 export function refreshWhosHere({ laneId, agents, rootDir }) {
-  const path = join(rootDir, "docs", "brainstorm", `${laneId}.md`);
+  const path = join(briefRootFor("", laneId, rootDir), "docs", "brainstorm", `${laneId}.md`);
   const body = whosHereBody(agents, laneId);
   if (!existsSync(path)) return { changed: false, body, path };
   const before = readFileSync(path, "utf8");
