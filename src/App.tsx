@@ -1717,6 +1717,27 @@ export function App() {
     selectAgent(aid);
     setScreen("teams");
   }, []);
+  // Return focus to whatever opened a modal once it closes (otherwise it falls to <body>).
+  const lastOutside = useRef<HTMLElement | null>(null);
+  const modalOpener = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const onFocus = (e: FocusEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && !t.closest?.(".modal-back")) lastOutside.current = t;
+    };
+    document.addEventListener("focusin", onFocus);
+    return () => document.removeEventListener("focusin", onFocus);
+  }, []);
+  useEffect(() => {
+    if (modal) {
+      modalOpener.current ??= lastOutside.current;
+    } else if (modalOpener.current) {
+      const el = modalOpener.current;
+      modalOpener.current = null;
+      if (el.isConnected && el !== document.body) el.focus();
+    }
+  }, [modal]);
+
   const openSettings = useCallback(() => setModal("settings"), []);
   const openPairDevice = useCallback(() => setModal("pair-device"), []);
   const openAbout = useCallback(() => setModal("about"), []);

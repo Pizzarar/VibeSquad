@@ -290,7 +290,7 @@ export function TeamSettingsModal({ onClose }: { onClose: () => void }) {
 
   return (
     <Modal
-      title="TEAM SETTINGS"
+      title="Settings"
       onClose={onClose}
       wide
       footer={

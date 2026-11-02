@@ -1940,7 +1940,7 @@ code {
 /* Send-guard: markdown output must wrap inside the pane; the selected message makes room for its action bar. */
 .tl-assistant > * { max-width: 100%; }
 .tl-code-block { max-width: 100%; min-width: 0; }
-.tl-code-block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }
+.tl-code-block pre { padding-top: 28px; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }
 .tl-table { display: block; max-width: 100%; overflow-x: auto; }
 .tl-assistant[data-selected="true"], .tl-user[data-selected="true"] { padding-top: 40px; }
 .composer-park-inbox-btn {
@@ -3405,13 +3405,22 @@ html, body, #root { overflow-x: hidden; }
   flex-wrap: wrap;
 }
 .terminal-tab {
+  max-width: 200px;
+  min-width: 0;
+  white-space: nowrap;
   display: inline-flex;
   align-items: center;
   gap: 8px;
   padding: 4px 10px;
   border-radius: 6px;
 }
+.terminal-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
 .terminal-tab-close {
+  flex: none;
   margin-left: 6px;
   padding: 0 4px;
   cursor: pointer;

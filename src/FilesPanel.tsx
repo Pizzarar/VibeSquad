@@ -42,6 +42,16 @@ function stripAnsiForText(bytes: Uint8Array): string {
   }
 }
 
+const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|ico|bmp)$/i;
+const BIN_EXT = /\.(exe|dll|zip|gz|tgz|7z|rar|tar|pdf|woff2?|ttf|otf|mp[34]|mov|wav|class|jar|bin|so|dylib|o|node)$/i;
+const MAX_TEXT_BYTES = 1024 * 1024;
+
+function isBinaryBytes(bytes: Uint8Array): boolean {
+  const n = Math.min(bytes.length, 8192);
+  for (let i = 0; i < n; i++) if (bytes[i] === 0) return true;
+  return false;
+}
+
 export function FilesPanel({
   agent,
   targetFile,
@@ -66,6 +76,8 @@ export function FilesPanel({
   const [loading, setLoading] = useState(false);
   const [notFound, setNotFound] = useState(false);
   const [sourceView, setSourceView] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [imgUrl, setImgUrl] = useState<string | null>(null);
   const [revealDir, setRevealDir] = useState<string | null>(null);
   const treeRef = useRef<HTMLDivElement | null>(null);
   const lineRefs = useRef<Map<number, HTMLElement>>(new Map());
@@ -168,6 +180,8 @@ export function FilesPanel({
       setEditMode(false);
       setSaveErr("");
       setNotFound(false);
+      setNotice("");
+      setImgUrl(null);
       setSourceView(line !== undefined); // a line target reads in Source; otherwise .md renders
       if (normalizeRepoPath(path) === null) {
         // defense in depth: never ask the daemon for absolute / `..` paths
@@ -182,7 +196,29 @@ export function FilesPanel({
       }
       try {
         const result = await daemonClient.readFile(cwd, path);
+        const kb = Math.max(1, Math.round(result.bytes.length / 1024));
+        if (IMG_EXT.test(path)) {
+          const mime = /\.svg$/i.test(path) ? "image/svg+xml" : result.mime || "image/*";
+          setImgUrl(URL.createObjectURL(new Blob([result.bytes as BlobPart], { type: mime })));
+          setFileContent("");
+          return;
+        }
+        if (BIN_EXT.test(path) || isBinaryBytes(result.bytes)) {
+          setFileContent("");
+          setNotice(`Binary file, ${kb} KB, not shown`);
+          return;
+        }
+        if (result.bytes.length > MAX_TEXT_BYTES) {
+          setFileContent("");
+          setNotice(`File too large to preview (${kb} KB)`);
+          return;
+        }
         const text = stripAnsiForText(result.bytes);
+        if (result.bytes.length === 0 || /^\/\/ Could not read file/.test(text)) {
+          setFileContent("");
+          setNotFound(true);
+          return;
+        }
         setFileContent(text);
         setEditValue(text);
         setFileModifiedAt(result.modifiedAt);
@@ -197,6 +233,8 @@ export function FilesPanel({
     },
     [cwd],
   );
+
+  useEffect(() => () => { if (imgUrl) URL.revokeObjectURL(imgUrl); }, [imgUrl]);
 
   useEffect(
     () => () => {
@@ -254,7 +292,7 @@ export function FilesPanel({
         <div className="files-viewer">
           <div className="files-viewer-header">
             <span className="muted small">{openFile}</span>
-            {isMd && !notFound && !editMode && (
+            {isMd && !notFound && !notice && !editMode && (
               <button
                 className="btn ghost small"
                 data-testid="files-source-btn"
@@ -263,7 +301,7 @@ export function FilesPanel({
                 {sourceView ? "Rendered" : "Source"}
               </button>
             )}
-            {!editMode && !notFound && (
+            {!editMode && !notFound && !notice && !imgUrl && (
               <button
                 className="btn ghost small"
                 data-testid="files-edit-btn"
@@ -302,6 +340,12 @@ export function FilesPanel({
             />
           ) : notFound ? (
             <div className="muted small" data-testid="files-not-found">File not found: {openFile}</div>
+          ) : imgUrl ? (
+            <div className="files-md" data-testid="files-image-view">
+              <img src={imgUrl} alt={openFile} style={{ maxWidth: "100%" }} />
+            </div>
+          ) : notice ? (
+            <div className="muted small" data-testid="files-notice">{notice}</div>
           ) : isMd && !sourceView ? (
             <div className="files-md" data-testid="files-md-view">
               <MarkdownRenderer text={fileContent} agentId={agent.id} doc />
