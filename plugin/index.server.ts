@@ -28,7 +28,6 @@ import {
   isDigestAgent as isDigestIdentity,
   isRetiredAgent,
   isRetiredRole,
-  isThrowawayLane,
   laneLeadMismatch,
   matchPathInRegistry,
   normalizeRoleLabel,
@@ -376,13 +375,13 @@ export function extractLeadShortName(target: { id: string; title?: string | null
 }
 
 /**
- * Lane label to write after resolution: a throwaway lane (`walk-*`, `*-tmp`, ...) keeps
- * its own slug instead of being folded into the cwd lane, so it never collides with
- * that lane's real lead/Buddy.
+ * Lane label to write after resolution: an explicit lane label is never overwritten (an unknown
+ * or throwaway lane like `walk-*` / `*-tmp` keeps its own slug instead of being folded into the
+ * cwd lane, so it never collides with that lane's real lead/Buddy). The cwd lane only fills a blank.
  */
 export function keptLaneOf(resolved: { laneId: string; callerLane: string; autofixedFromCwd: boolean }): string {
   const caller = (resolved.callerLane ?? "").trim().toLowerCase();
-  if (resolved.autofixedFromCwd && caller && isThrowawayLane(caller)) return caller;
+  if (resolved.autofixedFromCwd && caller) return caller;
   return resolved.laneId;
 }
 
@@ -1047,7 +1046,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
                 log(`mismatch metric write failed: ${err}`);
               }
             }
-            if (resolved.autofixedFromCwd) {
+            if (resolved.autofixedFromCwd && !resolved.callerLane) {
               const autofixKey = `autofix:${resolved.callerLane}->${resolved.laneId}:${cwd}`;
               recentBeforeMismatches.set(autofixKey, Date.now());
               try {
@@ -1325,7 +1324,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
                 });
               }
             }
-            if (resolved.autofixedFromCwd) {
+            if (resolved.autofixedFromCwd && !resolved.callerLane) {
               const autofixKey = `autofix:${resolved.callerLane}->${resolved.laneId}:${agentCwd}`;
               const prevTs = recentBeforeMismatches.get(autofixKey);
               if (prevTs && Date.now() - prevTs < 2000) {

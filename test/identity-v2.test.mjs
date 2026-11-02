@@ -345,15 +345,14 @@ test("Done-when #2: Spawn validation handles no team, wrong team, unknown lane +
         "Expected team-mismatch metric in site log",
       );
 
-      // Case 2: Spawn with unknown lane ("unknown-lane-xyz") + matching cwd ("/path/to/main-project/worktree-1")
-      // -> auto-fixes lane="main-game", team="efi" and logs lane-autofix
+      // Case 2: Spawn with NO lane + matching cwd ("/path/to/main-project/worktree-1")
+      // -> lane-autofix fills the blank: lane="main-game", team="efi", and logs lane-autofix
       agents.set("agent-autofix", {
         id: "agent-autofix",
         title: "EFI · worker",
         cwd: "/path/to/main-project/worktree-1",
         status: "running",
         labels: {
-          lane: "unknown-lane-xyz",
           role: "worker",
         },
       });
@@ -373,10 +372,29 @@ test("Done-when #2: Spawn validation handles no team, wrong team, unknown lane +
         efiLogs.some(
           (e) =>
             e.type === "metric" &&
-            e.text.includes("lane-autofix: callerLane=unknown-lane-xyz derivedLane=main-game team=efi"),
+            e.text.includes("lane-autofix: callerLane=(none) derivedLane=main-game team=efi"),
         ),
         true,
         "Expected lane-autofix metric in efi log",
+      );
+
+      // Case 2b: an explicit lane that is not in teams.json is kept (never overwritten from cwd), no lane-autofix logged
+      agents.set("agent-explicit", {
+        id: "agent-explicit",
+        title: "EFI · worker",
+        cwd: "/path/to/main-project/worktree-1",
+        status: "running",
+        labels: { lane: "zz-x", role: "worker" },
+      });
+      await onCreated({ agent: agents.get("agent-explicit") }, { paseo });
+      const explicitUpdate = labelUpdates.find((u) => u.agentId === "agent-explicit");
+      assert.notEqual(explicitUpdate?.labels.lane, "main-game", "explicit lane must not be overwritten from cwd");
+      assert.ok(!explicitUpdate || explicitUpdate.labels.lane === "zz-x", "explicit lane kept");
+      const efiLogs2 = readFileSync(efiLogPath, "utf8").trim().split(/\r?\n/).map((l) => JSON.parse(l));
+      assert.equal(
+        efiLogs2.some((e) => e.type === "metric" && e.text.includes("callerLane=zz-x")),
+        false,
+        "no lane-autofix metric for an explicit lane",
       );
 
       // Case 4: Unmatched spawn (unknown lane "mystery-lane" + unmatched cwd "C:/tmp/scratch")
