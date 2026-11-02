@@ -1,0 +1,148 @@
+{
+  "AgentPanes.tsx": [
+    "tab-x"
+  ],
+  "App.tsx": [
+    "archived-lane",
+    "config-warning-banner",
+    "exposed-network-banner",
+    "lan-status-dot",
+    "lane-select",
+    "lead-secondary-line",
+    "sidebar-collapse-all-btn",
+    "squad-unsorted-group",
+    "team-body",
+    "teams",
+    "ui-scale-sidebar-btn",
+    "unassigned-row",
+    "unassigned-tray",
+    "unsorted-agent-row",
+    "update-available-banner",
+    "workspaces"
+  ],
+  "Composer.tsx": [
+    "composer-files",
+    "composer-history-search",
+    "composer-interrupt-btn",
+    "composer-menu",
+    "composer-menu-item",
+    "steered-chip"
+  ],
+  "DiagnosticsModal.tsx": [
+    "daemon-disconnect-actions",
+    "daemon-disconnect-card",
+    "daemon-disconnect-title",
+    "diag-actions",
+    "diag-log",
+    "help-section"
+  ],
+  "DrawerHeader.tsx": [
+    "btn-brainstorm-handoff",
+    "btn-brainstorm-inbox",
+    "btn-brainstorm-summary",
+    "btn-topic-park",
+    "drawer-copy-btn",
+    "drawer-meta-line",
+    "drawer-mode-select",
+    "drawer-model-input",
+    "drawer-more-toggle",
+    "drawer-reload-error",
+    "drawer-thinking-select"
+  ],
+  "FirstRunModal.tsx": [
+    "spinner"
+  ],
+  "FocusRail.tsx": [
+    "rnode",
+    "root",
+    "rsec-block"
+  ],
+  "IdeaInbox.tsx": [
+    "btn-park-oldest-topic",
+    "inbox-archive-btn",
+    "inbox-empty",
+    "inbox-oneclick-merge",
+    "inbox-park-btn",
+    "inbox-zero-cost"
+  ],
+  "MobileBar.tsx": [
+    "mobile-bar-needs",
+    "mobile-bar-tabs",
+    "mobile-bar-teams"
+  ],
+  "NewSquadModal.tsx": [
+    "clone",
+    "path"
+  ],
+  "PairDeviceModal.tsx": [
+    "na-col",
+    "pair-modal"
+  ],
+  "PermissionCard.tsx": [
+    "perm-deny-msg",
+    "perm-error",
+    "perm-plan",
+    "perm-plan-body",
+    "perm-preview-cmd",
+    "perm-preview-diff",
+    "perm-preview-input",
+    "perm-q-header-chip",
+    "perm-q-text",
+    "perm-question",
+    "perm-question-descriptions",
+    "perm-question-item",
+    "perm-question-options",
+    "perm-rec-badge",
+    "perm-text-input"
+  ],
+  "PinGrid.tsx": [
+    "pin-topic-chip",
+    "pin-topic-row",
+    "pin-topics-bar"
+  ],
+  "PinIdeas.tsx": [
+    "existing",
+    "pin-idea-actions",
+    "pin-new-team"
+  ],
+  "TeamActions.tsx": [
+    "add-project-drawer",
+    "na-col"
+  ],
+  "Timeline.tsx": [
+    "tl-code-block",
+    "tl-code-lang",
+    "tl-compaction",
+    "tl-diff",
+    "tl-exit-badge",
+    "tl-file-link",
+    "tl-icode",
+    "tl-md",
+    "tl-ol",
+    "tl-p",
+    "tl-reasoning",
+    "tl-reasoning-body",
+    "tl-rewind-popover",
+    "tl-table",
+    "tl-tool-detail",
+    "tl-tool-error",
+    "tl-tool-output",
+    "tl-ul"
+  ],
+  "WorkspacesView.tsx": [
+    "clickable",
+    "team-body",
+    "ws-main",
+    "ws-view"
+  ],
+  "demo.tsx": [
+    "big"
+  ],
+  "pixel.tsx": [
+    "meter-ladder"
+  ],
+  "ui.tsx": [
+    "prov-inline",
+    "tree-node"
+  ]
+}
