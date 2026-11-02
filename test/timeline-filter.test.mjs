@@ -9,15 +9,13 @@ const entries = [
   e({ type: "tool_call", name: "Bash", status: "failed" }, 3),
   e({ type: "assistant_message", text: "bug fixed, bug gone" }, 5),
   e({ type: "error", message: "boom" }, 6),
-  e({ type: "permission_request", id: "p" }, 7),
 ];
 
 test("filters pick the right item kinds", () => {
-  assert.equal(filterEntries(entries, "all").length, 6);
+  assert.equal(filterEntries(entries, "all").length, 5);
   assert.deepEqual(filterEntries(entries, "text").map((x) => x.seqStart), [0, 5]);
   assert.deepEqual(filterEntries(entries, "tools").map((x) => x.seqStart), [2, 3]);
   assert.deepEqual(filterEntries(entries, "errors").map((x) => x.seqStart), [3, 6]);
-  assert.deepEqual(filterEntries(entries, "permissions").map((x) => x.seqStart), [7]);
   assert.equal(matchesFilter(null, "text"), false);
 });
 

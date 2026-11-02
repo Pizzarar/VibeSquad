@@ -1,6 +1,6 @@
 // Pure helpers for timeline filters, search hits and prompt jumps (no daemon imports, node --test friendly).
-export type TimelineFilter = "all" | "text" | "tools" | "errors" | "permissions";
-export const TIMELINE_FILTERS: TimelineFilter[] = ["all", "text", "tools", "errors", "permissions"];
+export type TimelineFilter = "all" | "text" | "tools" | "errors";
+export const TIMELINE_FILTERS: TimelineFilter[] = ["all", "text", "tools", "errors"];
 
 type Ent = { item: any; timestamp?: string; seqStart?: number };
 
@@ -18,8 +18,6 @@ export function matchesFilter(it: any, f: TimelineFilter): boolean {
       return t === "tool_call";
     case "errors":
       return t === "error" || (t === "tool_call" && isFailed(it));
-    case "permissions":
-      return t.includes("permission") || (t === "tool_call" && /permission/i.test(String(it.status ?? "")));
   }
 }
 

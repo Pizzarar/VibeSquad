@@ -1,4 +1,4 @@
-import { Component, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { Component, Fragment, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { messageCtxItems, openContextMenu, selectionWithin } from "./CommandPalette";
 import { daemonClient, client, DEMO } from "./paseo";
 import { REWIND_MODES, buildRewindRequest, truncateAfter, type RewindMode } from "./sessionLifecycle";
@@ -7,7 +7,7 @@ import { sentImagesFor } from "./imageDrafts";
 import { parseSentAttachments, repoPathFor } from "./attachments";
 import { openRightDockTab } from "./RightDock";
 import { listTimelinePrompts, searchTimeline, type TimelinePrompt } from "./paseoTimeline";
-import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, localPrompts, localSearch, sortedHits, stepIndex, type SearchLocation, type TimelineFilter } from "./timelineFilter";
+import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, matchesFilter, localPrompts, localSearch, sortedHits, stepIndex, type SearchLocation, type TimelineFilter } from "./timelineFilter";
 import { BARE_PATH_RE, parseFileToken } from "./fileLinks";
 
 export class TimelineErrorBoundary extends Component<
@@ -971,7 +971,7 @@ function PinnedTodo({ entry }: { entry: Entry }) {
   return (
     <div
       data-testid="tl-pinned-todo"
-      style={{ position: "sticky", top: 0, zIndex: 10, background: "var(--bg, #1e1e1e)", borderBottom: "1px solid #444", padding: "4px 8px", cursor: "pointer" }}
+      style={{ background: "var(--bg, #1e1e1e)", borderBottom: "1px solid #444", padding: "4px 8px", cursor: "pointer" }}
       onClick={() => setOpen((v) => !v)}
     >
       {open ? "▾" : "▸"} 📋 Plan / Tasks ({done}/{total})
@@ -1031,6 +1031,8 @@ export function Timeline({
   const [prompts, setPrompts] = useState<TimelinePrompt[]>([]);
   const [promptsOpen, setPromptsOpen] = useState(false);
   const curSeq = useRef<number | null>(null);
+  const reqId = useRef(0);
+  const [pendingJump, setPendingJump] = useState<{ seq: number; n: number } | null>(null);
   const base = cut ? truncateAfter(entries, cut) : entries;
   const shown = filterEntries(base, filter);
   const pinnedTodo = findPinnedTodo(shown);
@@ -1043,6 +1045,8 @@ export function Timeline({
   useEffect(() => {
     setFilter("all"); setBarOpen(false); setQuery(""); setHits([]); setHitIdx(-1); setPrompts([]); setPromptsOpen(false); setBarMsg("");
     curSeq.current = null;
+    reqId.current++;
+    setPendingJump(null); setSearching(false);
   }, [agentId]);
   // The drawer header's search button fires this.
   useEffect(() => {
@@ -1054,34 +1058,42 @@ export function Timeline({
   }, [agentId]);
 
   const jumpToSeq = (seq: number) => {
+    curSeq.current = seq; // advance even when the target isn't loaded, so prompt stepping can't stall
     const idx = entryIndexForSeq(base, seq);
     if (idx < 0) { setBarMsg("Older than the loaded history - load older messages first"); return; }
     setBarMsg("");
-    curSeq.current = seq;
-    setFilter("all");
-    requestAnimationFrame(() => {
-      const wrap = timelineRef.current?.querySelector(`[data-tl-idx="${idx}"]`);
-      const el = (wrap?.firstElementChild ?? null) as HTMLElement | null;
-      if (!el) return;
-      el.scrollIntoView({ block: "center", behavior: "smooth" });
-      el.classList.add("tl-flash");
-      setTimeout(() => el.classList.remove("tl-flash"), 1800);
-    });
+    if (!matchesFilter(base[idx].item, filter)) setFilter("all");
+    setPendingJump((j) => ({ seq: base[idx].seqStart ?? seq, n: (j?.n ?? 0) + 1 }));
   };
+  // Scroll + flash after React has committed the (possibly re-filtered) list.
+  useEffect(() => {
+    if (!pendingJump) return;
+    let marker = timelineRef.current?.querySelector(`[data-tl-seq="${pendingJump.seq}"]`) as HTMLElement | null;
+    let el = marker?.nextElementSibling as HTMLElement | null;
+    if (el?.hasAttribute("data-tl-seq")) el = null; // item rendered nothing
+    setPendingJump(null);
+    if (!el) return;
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    el.classList.add("tl-flash");
+    const t = setTimeout(() => el!.classList.remove("tl-flash"), 1800);
+    return () => clearTimeout(t);
+  }, [pendingJump, shown.length]);
   const runSearch = async () => {
     const q = query.trim();
     if (!q) { setHits([]); setHitIdx(-1); setBarMsg(""); return; }
+    const my = ++reqId.current;
     setSearching(true);
     try {
       const found = sortedHits(DEMO ? localSearch(base, q) : await searchTimeline(agentId, q));
+      if (my !== reqId.current) return;
       setHits(found);
       setBarMsg(found.length ? "" : "No matches");
       setHitIdx(found.length ? found.length - 1 : -1);
       if (found.length) jumpToSeq(found[found.length - 1].seq);
     } catch (err) {
-      setBarMsg(String((err as Error)?.message ?? err));
+      if (my === reqId.current) setBarMsg(String((err as Error)?.message ?? err));
     } finally {
-      setSearching(false);
+      if (my === reqId.current) setSearching(false);
     }
   };
   const stepHit = (dir: 1 | -1) => {
@@ -1091,12 +1103,14 @@ export function Timeline({
     jumpToSeq(hits[i].seq);
   };
   const loadPrompts = async (): Promise<TimelinePrompt[]> => {
+    const my = reqId.current;
     try {
       const list = DEMO ? localPrompts(base) : await listTimelinePrompts(agentId);
+      if (my !== reqId.current) return [];
       setPrompts(list);
       return list;
     } catch (err) {
-      setBarMsg(String((err as Error)?.message ?? err));
+      if (my === reqId.current) setBarMsg(String((err as Error)?.message ?? err));
       return [];
     }
   };
@@ -1144,6 +1158,7 @@ export function Timeline({
         pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
       }}
     >
+      <div className="tl-head">
       {barOpen && (
         <div className="tl-bar" data-testid="tl-bar">
           <div className="tl-bar-row">
@@ -1190,6 +1205,7 @@ export function Timeline({
         </div>
       )}
       {pinnedTodo && <PinnedTodo entry={pinnedTodo} />}
+      </div>
       {shouldShowLoadOlder(entries, hasMore) && (
         <div style={{ textAlign: "center", padding: "4px 0" }}>
           <button
@@ -1203,7 +1219,8 @@ export function Timeline({
       )}
       {error && <div className="tl tl-error">{error}</div>}
       {shown.map((e, i) => (
-        <div key={e.seqStart ?? i} data-tl-idx={i} style={{ display: "contents" }}>
+        <Fragment key={e.seqStart ?? i}>
+        <i hidden data-tl-seq={e.seqStart ?? i} />
         <TimelineErrorBoundary fallbackLabel={`item #${i}`}>
           <TimelineItem
             e={e}
@@ -1214,7 +1231,7 @@ export function Timeline({
             onSelect={() => setSelectedEntryKey((k) => (k === String(e.seqStart ?? i) ? null : String(e.seqStart ?? i)))}
           />
         </TimelineErrorBoundary>
-        </div>
+        </Fragment>
       ))}
       <div />
     </div>
