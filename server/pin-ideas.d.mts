@@ -7,7 +7,7 @@ export const OVERLAP_THRESHOLD: number;
 export function overlapScore(text: string, lane: IdeaLane): number;
 export function bestOverlap<L extends IdeaLane>(text: string, lanes: L[]): { lane: L; score: number } | null;
 export function nameFromIdea(text: string): string;
-export function newPinBrief(laneId: string, name: string, idea: string): string;
+export function newPinBrief(laneId: string, name: string, idea: string, opts?: { hub?: boolean }): string;
 export const SEND_TO_MARKER: string;
 export function parseSendTo(text: string): { laneId: string; text: string } | null;
 export const SPIN_OFF_MARKER: string;
