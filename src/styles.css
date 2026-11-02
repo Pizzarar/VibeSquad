@@ -3749,3 +3749,8 @@ button.project-file-name:hover { text-decoration: underline; }
 @media (max-width: 600px) {
   .drawer-features-menu { position: fixed; left: 8px; right: 8px; top: 96px; width: auto; max-width: none; }
 }
+
+/* NoWorkspaceBanner: shown where a panel needs a Paseo workspace the folder doesn't have yet */
+.no-workspace-banner { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; padding: 16px; max-width: 100%; }
+.no-workspace-cwd { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.no-workspace-actions { display: flex; gap: 8px; }

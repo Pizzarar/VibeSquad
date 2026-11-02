@@ -6,6 +6,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { daemonClient, DEMO, usePaseo } from "./paseo";
 import { workspaceIdForAgent } from "./workspaceLogic";
+import { NoWorkspaceBanner } from "./NoWorkspaceBanner";
 import { captureFileName, captureText } from "./fileOps";
 import { captureTerminalLines, renameTerminalTitle } from "./paseoFiles";
 
@@ -49,7 +50,8 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
   const cwd = agent.cwd ?? "";
   const { workspaces } = usePaseo();
   // Paseo 0.14 scopes terminals by workspace: listTerminals(cwd) alone comes back empty.
-  const workspaceId = useMemo(() => workspaceIdForAgent(agent, workspaces), [agent, workspaces]);
+  const [addedWs, setAddedWs] = useState<{ cwd: string; id: string } | null>(null);
+  const workspaceId = useMemo(() => workspaceIdForAgent(agent, workspaces) ?? (addedWs?.cwd === cwd ? addedWs.id : null), [agent, workspaces, addedWs, cwd]);
   const scope = workspaceId ? { workspaceId } : undefined;
   const noWorkspace = !DEMO && !workspaceId;
   const scopeKey = `${cwd}|${workspaceId ?? ""}`;
@@ -412,8 +414,8 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
         </div>
       )}
       {noWorkspace ? (
-        <div className="muted" style={{ padding: 16 }} data-testid="terminal-no-workspace">
-          No Paseo workspace for this folder, so there are no terminals to show. Open it as a project in Workspaces first.
+        <div data-testid="terminal-no-workspace">
+          <NoWorkspaceBanner cwd={cwd} onReady={(id) => setAddedWs({ cwd, id })} />
         </div>
       ) : tabs.length === 0 ? (
         <div className="muted" style={{ padding: 16 }}>

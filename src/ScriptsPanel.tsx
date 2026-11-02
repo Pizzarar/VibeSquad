@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import { daemonClient, DEMO, usePaseo } from "./paseo";
 import { workspaceIdForAgent } from "./workspaceLogic";
+import { NoWorkspaceBanner } from "./NoWorkspaceBanner";
 
 type PkgScript = { scriptName: string; command: string; source: "package.json" };
 
@@ -29,7 +30,9 @@ export function ScriptsPanel({ agent }: { agent: PaseoAgent }) {
   const [savingPkg, setSavingPkg] = useState<Set<string>>(new Set());
   const [err, setErr] = useState("");
 
-  const workspaceId = useMemo(() => workspaceIdForAgent(agent, workspaces), [agent, workspaces]);
+  const [addedWs, setAddedWs] = useState<{ cwd: string; id: string } | null>(null);
+  const agentCwd = agent.cwd ?? "";
+  const workspaceId = useMemo(() => workspaceIdForAgent(agent, workspaces) ?? (addedWs?.cwd === agentCwd ? addedWs.id : null), [agent, workspaces, addedWs, agentCwd]);
 
   useEffect(() => {
     let cancelled = false;
@@ -170,7 +173,7 @@ export function ScriptsPanel({ agent }: { agent: PaseoAgent }) {
       {err && <div className="stat-alert small">{err}</div>}
       {loading && <div className="muted small">Loading scripts…</div>}
       {!loading && !workspaceId && !DEMO && (
-        <div className="muted small">No workspace found for this agent.</div>
+        <NoWorkspaceBanner cwd={agentCwd} onReady={(id) => setAddedWs({ cwd: agentCwd, id })} />
       )}
       {scripts.length === 0 && !loading && (workspaceId || DEMO) && !err && (
         <div className="muted small">No scripts configured.</div>
