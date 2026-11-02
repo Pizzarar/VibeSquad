@@ -140,5 +140,6 @@ test("58: slow actions use a delayed indicator (open agent, load older, open dif
   const tl = read("src/Timeline.tsx");
   assert.match(tl, /useDelayedBusy\(!loaded && entries\.length === 0\)/);
   assert.match(tl, /useDelayedBusy\(loadingMore\)/);
-  assert.match(read("src/ChangesPanel.tsx"), /useDelayedBusy\(loading\)/);
+  assert.ok(read("src/ChangesPanel.tsx").includes("CHANGES_SLOW_MS")); // bug-chaser owns the Changes loading feedback
+  assert.ok(read("src/Timeline.tsx").includes(".modal-back"));
 });
