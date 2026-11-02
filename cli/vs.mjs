@@ -460,6 +460,8 @@ function parseArgs(argv) {
   return flags;
 }
 
+const UNASSIGNED_LANE = "unassigned";
+
 function resolveIdentity(flags) {
   const agentId = String(flags.agent ?? process.env.PASEO_AGENT_ID ?? "").trim();
 
@@ -498,7 +500,9 @@ function resolveIdentity(flags) {
     const labelLaneHit = findLane(laneFromLabels);
     if (labelLaneHit && labelLaneHit.team.id === team.id) lane = labelLaneHit.lane.id;
   }
-  if (!lane && team.lanes.length >= 1) lane = team.lanes[0].id;
+  // No lane label: a one-lane squad is unambiguous; otherwise don't guess lanes[0].
+  if (!lane && team.lanes.length === 1) lane = team.lanes[0].id;
+  if (!lane && team.lanes.length > 1) lane = UNASSIGNED_LANE;
   if (!lane) lane = team.id || "vibesquad";
 
   const role = normalizeRoleLabel(
@@ -1157,6 +1161,9 @@ async function commandWho(flags) {
   const identity = resolveIdentity(flags);
   const wantTeamId = identity.team.id.toLowerCase();
   const wantLane = identity.lane.toLowerCase();
+  // `who all` without --lane lists the whole squad, grouped by lane.
+  const explicitLane = flags.lane ?? process.env.VS_LANE;
+  const squadWide = target === "all" && !(typeof explicitLane === "string" && explicitLane.trim());
 
   const { agents } = collectAgents();
   const rawMatched = [];
@@ -1170,7 +1177,8 @@ async function commandWho(flags) {
     if (isRetiredAgent(labels)) continue;
 
     const { teamId, lane } = resolveAgentTeamAndLane(a);
-    if (teamId.toLowerCase() !== wantTeamId || lane.toLowerCase() !== wantLane) continue;
+    if (teamId.toLowerCase() !== wantTeamId) continue;
+    if (!squadWide && lane.toLowerCase() !== wantLane) continue;
 
     const role = effectiveAgentRole(a);
     if (target === "lead" && role !== "lead") continue;
@@ -1182,6 +1190,12 @@ async function commandWho(flags) {
   }
 
   await enrichZeroTokenAgents(rawMatched.map((m) => m.agent));
+
+  if (squadWide) {
+    const order = new Map(identity.team.lanes.map((l, i) => [String(l.id).toLowerCase(), i]));
+    const rank = (m) => order.get(m.lane.toLowerCase()) ?? order.size;
+    rawMatched.sort((x, y) => rank(x) - rank(y) || x.lane.localeCompare(y.lane));
+  }
 
   const matched = rawMatched.map(({ agent: a, title, role, status, teamId, lane }) => {
     const { tokens, tokensLabel } = extractAgentTokens(a);
@@ -1230,7 +1244,12 @@ async function commandWho(flags) {
     process.stdout.write("NONE\n");
     return 1;
   }
+  let lastLane = null;
   for (const item of matched) {
+    if (squadWide && item.lane !== lastLane) {
+      process.stdout.write(`[${item.lane}]\n`);
+      lastLane = item.lane;
+    }
     process.stdout.write(`${item.line}\n`);
   }
   return 0;
@@ -1279,6 +1298,11 @@ async function commandWhoami(flags) {
       agentsById,
     },
   );
+
+  // A bare team label (no lane) used to fall back to the squad's first lane; show it as unassigned instead.
+  if (resolved.source === "team-fallback" && !(laneOverride || labels.lane || labels.lead)) {
+    resolved.laneId = "";
+  }
 
   let currentLead = null;
   if (!resolved.isOrphan && resolved.laneId && resolved.teamId) {
