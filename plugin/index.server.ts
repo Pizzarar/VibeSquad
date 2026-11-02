@@ -564,6 +564,20 @@ export function dedupeNotesAgainst(notes: string, prefix: string): string {
     .trim();
 }
 
+/**
+ * First-dispatch metric line. Only `contextWindowUsedTokens` is a context size; `inputTokens` is one
+ * request's input (about 2k on Antigravity), so a missing window reads n/a instead of a wrong number.
+ */
+export function firstDispatchMetricText(
+  parent: { lastUsage?: { contextWindowUsedTokens?: number } | null; provider?: string; model?: string | null },
+  parentId: string,
+  ord?: string,
+): string {
+  const used = parent.lastUsage?.contextWindowUsedTokens;
+  const size = typeof used === "number" && Number.isFinite(used) && used > 0 ? Math.round(used / 1000) + "k tokens" : "n/a";
+  return "first-dispatch context: " + size + " (lead=" + parentId + ", ord=" + (ord ?? "?") + ", provider=" + (parent.provider || "?") + ", model=" + (parent.model || "?") + ")";
+}
+
 export function injectedPrefix(role: string, cwd: string): string {
   return [EVERYONE_LAYER, rolePack(role, cwd)].filter(Boolean).join("\n\n");
 }
@@ -746,6 +760,8 @@ interface AgentSnap {
   archivedAt?: string | null;
   internal?: boolean;
   labels: Labels;
+  provider?: string;
+  model?: string | null;
   lastUsage?: { contextWindowUsedTokens?: number; inputTokens?: number } | null;
 }
 
@@ -1373,12 +1389,11 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             childCount.set(parentId, n);
             if (n === 1 && !firstDispatchLogged.has(parentId)) {
               firstDispatchLogged.add(parentId);
-              const used = parent.lastUsage?.contextWindowUsedTokens ?? parent.lastUsage?.inputTokens ?? 0;
               appendLog(teamIdOf(team, currentTeams()), {
                 agent: "plugin",
                 lane,
                 type: "metric",
-                text: `first-dispatch context: ${Math.round(used / 1000)}k tokens (lead=${parentId}, ord=${pl.ord ?? "?"})`,
+                text: firstDispatchMetricText(parent, parentId, pl.ord),
               });
             }
           }

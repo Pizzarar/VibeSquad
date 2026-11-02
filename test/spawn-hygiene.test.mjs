@@ -239,3 +239,17 @@ test("block 6: a new lane may start small; normal overwrites back up the previou
     assert.equal(files.length, BRIEF_HISTORY_KEEP);
     assert.equal(readFileSync(join(history, files.at(-1)), "utf8"), `# v${BRIEF_HISTORY_KEEP + 3}\n`);
   }));
+
+// ---- block 8: honest first-dispatch metric ----
+import { firstDispatchMetricText } from "../plugin/index.server.ts";
+
+test("block 8: missing contextWindowUsedTokens logs n/a (never inputTokens); provider/model recorded", () => {
+  const agy = { provider: "antigravity-cli", model: "gemini-3.8-pro", lastUsage: { inputTokens: 2100 } };
+  const t = firstDispatchMetricText(agy, "L1", "3");
+  assert.match(t, /first-dispatch context: n\/a /);
+  assert.ok(!t.includes("2k"));
+  assert.match(t, /provider=antigravity-cli, model=gemini-3.8-pro/);
+  const claude = { provider: "claude", model: "claude-opus-5-5", lastUsage: { contextWindowUsedTokens: 31400, inputTokens: 5 } };
+  assert.match(firstDispatchMetricText(claude, "L2", "4"), /first-dispatch context: 31k tokens \(lead=L2, ord=4, provider=claude/);
+  assert.match(firstDispatchMetricText({}, "L3"), /n\/a/);
+});
