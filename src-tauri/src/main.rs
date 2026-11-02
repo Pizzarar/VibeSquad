@@ -405,6 +405,13 @@ pub struct SharedAppState {
     /// The `node.exe server/serve.mjs` child we spawned (None when we reused an already-running server).
     pub managed_server: Mutex<Option<std::process::Child>>,
     pub last_notified_agent_id: RwLock<Option<String>>,
+    /// Per-launch secret: the webview gets it as the vs_desktop cookie via /__desktop/boot, and every request
+    /// to this proxy must carry it, so other local processes can't borrow the proxy's server credentials.
+    pub desktop_key: String,
+    /// Off only in --headless-proxy (test automation), where no webview exists to hold the cookie.
+    pub require_desktop_key: AtomicBool,
+    /// `~/.vibesquad/local-token`: sent as x-vibesquad-token to a local VibeSquad server (owner access).
+    pub local_token_file: PathBuf,
 }
 
 impl SharedAppState {
@@ -545,6 +552,57 @@ pub fn render_tray_icon(needs_count: usize) -> Result<Image<'static>, String> {
     Ok(Image::new_owned(raw, width, height))
 }
 
+fn vibesquad_home_dir() -> Option<PathBuf> {
+    std::env::var("VIBESQUAD_HOME").map(PathBuf::from).ok().or_else(|| {
+        std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .ok()
+            .map(|h| PathBuf::from(h).join(".vibesquad"))
+    })
+}
+
+pub const DESKTOP_COOKIE: &str = "vs_desktop";
+pub const LOCAL_TOKEN_HEADER: &str = "x-vibesquad-token";
+
+pub fn default_local_token_file() -> PathBuf {
+    vibesquad_home_dir().unwrap_or_else(|| PathBuf::from(".vibesquad")).join("local-token")
+}
+
+/// The server's per-install token (64 lowercase hex chars), or None before the server first ran. Read per
+/// request, so a server that created it after this app started is picked up.
+pub fn read_local_token(file: &std::path::Path) -> Option<String> {
+    let raw = fs::read_to_string(file).ok()?;
+    let t = strip_bom(&raw).trim();
+    (t.len() == 64 && t.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))).then(|| t.to_string())
+}
+
+pub fn random_hex_key() -> String {
+    let mut bytes = [0u8; 32];
+    rustls::crypto::ring::default_provider()
+        .secure_random
+        .fill(&mut bytes)
+        .expect("system RNG unavailable");
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+fn cookie_value<'a>(cookie_header: &'a str, name: &str) -> Option<&'a str> {
+    cookie_header.split(';').map(str::trim).find_map(|kv| kv.strip_prefix(name)?.strip_prefix('='))
+}
+
+/// The browser's Cookie header minus the cookies that belong to this machine only (never sent upstream).
+fn strip_local_cookies(cookie_header: &str) -> String {
+    cookie_header
+        .split(';')
+        .map(str::trim)
+        .filter(|kv| !kv.is_empty() && !kv.starts_with("vs_desktop=") && !kv.starts_with("vs_local="))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 /// Root CAs to trust besides the public roots: the embedded one (if the build had it),
 /// any remote CAs pinned during pairing in `config_dir()/trusted-cas/`, and the locally
 /// generated `~/.vibesquad/tls/ca.crt`.
@@ -570,16 +628,7 @@ fn load_ca_pems() -> Vec<Vec<u8>> {
             }
         }
     }
-    let home = std::env::var("VIBESQUAD_HOME")
-        .map(PathBuf::from)
-        .ok()
-        .or_else(|| {
-            std::env::var("USERPROFILE")
-                .or_else(|_| std::env::var("HOME"))
-                .ok()
-                .map(|h| PathBuf::from(h).join(".vibesquad"))
-        });
-    if let Some(home) = home {
+    if let Some(home) = vibesquad_home_dir() {
         if let Ok(bytes) = fs::read(home.join("tls").join("ca.crt")) {
             if !bytes.is_empty() && !pems.contains(&bytes) {
                 pems.push(bytes);
@@ -1581,6 +1630,9 @@ async fn proxy_websocket(
             if let Ok(hv) = HeaderValue::from_str(&format!("http://{}", host)) {
                 ws_req.headers_mut().insert("Origin", hv);
             }
+            if let Some(hv) = read_local_token(&state.local_token_file).and_then(|t| HeaderValue::from_str(&t).ok()) {
+                ws_req.headers_mut().insert(LOCAL_TOKEN_HEADER, hv);
+            }
         }
         if !cfg.device_token.is_empty() {
             if let Ok(hv) = HeaderValue::from_str(&format!("vs_device={}", cfg.device_token)) {
@@ -1773,10 +1825,14 @@ fn stop_managed_server(state: &Arc<SharedAppState>) {
                 let _ = stream.set_read_timeout(Some(Duration::from_millis(1200)));
                 let _ = stream.set_write_timeout(Some(Duration::from_millis(400)));
                 let body = b"{\"action\":\"stop\",\"reason\":\"app-quit\"}";
+                let token_line = read_local_token(&state.local_token_file)
+                    .map(|t| format!("{}: {}\r\n", LOCAL_TOKEN_HEADER, t))
+                    .unwrap_or_default();
                 let req = format!(
-                    "POST /__vibesquad/paseo/daemon HTTP/1.1\r\nHost: {}\r\nOrigin: http://{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    "POST /__vibesquad/paseo/daemon HTTP/1.1\r\nHost: {}\r\nOrigin: http://{}\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                     norm,
                     norm,
+                    token_line,
                     body.len()
                 );
                 let _ = stream.write_all(req.as_bytes());
@@ -1911,6 +1967,8 @@ async fn proxy_http_handler(
                 || name_lower == "content-length"
                 || name_lower == "origin"
                 || name_lower == "referer"
+                || name_lower == "cookie"
+                || name_lower == LOCAL_TOKEN_HEADER
             {
                 continue;
             }
@@ -1923,20 +1981,25 @@ async fn proxy_http_handler(
             builder = builder
                 .header("Host", &host)
                 .header("Origin", format!("http://{}", host));
+            if let Some(t) = read_local_token(&state.local_token_file) {
+                builder = builder.header(LOCAL_TOKEN_HEADER, t);
+            }
         }
 
-        if !cfg.device_token.is_empty() {
-            let existing_cookie = req_headers
+        let existing_cookie = strip_local_cookies(
+            req_headers
                 .get(axum::http::header::COOKIE)
                 .and_then(|v| v.to_str().ok())
-                .unwrap_or("");
-            let merged = if existing_cookie.is_empty() {
-                format!("vs_device={}", cfg.device_token)
-            } else if existing_cookie.contains("vs_device=") {
-                existing_cookie.to_string()
-            } else {
-                format!("{}; vs_device={}", existing_cookie, cfg.device_token)
-            };
+                .unwrap_or(""),
+        );
+        let merged = if cfg.device_token.is_empty() || existing_cookie.contains("vs_device=") {
+            existing_cookie
+        } else if existing_cookie.is_empty() {
+            format!("vs_device={}", cfg.device_token)
+        } else {
+            format!("{}; vs_device={}", existing_cookie, cfg.device_token)
+        };
+        if !merged.is_empty() {
             builder = builder.header("Cookie", merged);
         }
 
@@ -2189,6 +2252,8 @@ fn check_local_request(headers: &HeaderMap, port: usize) -> Result<(), &'static 
 /// Rejects DNS-rebinding (foreign Host) and cross-site browser calls (foreign Origin, cross-site
 /// Sec-Fetch-Site) before any handler runs, so a random web page cannot hit /__desktop/*, /ws, or the
 /// token-bearing /api/* and /__vibesquad/* passthrough.
+/// Then, outside headless mode, requires the per-launch vs_desktop cookie: a local process (or another Windows
+/// user) that sends no Origin passes the checks above, and must not get the token/cookie this proxy attaches.
 async fn guard_local_request(
     State(state): State<Arc<SharedAppState>>,
     req: Request,
@@ -2198,7 +2263,45 @@ async fn guard_local_request(
     if let Err(reason) = check_local_request(req.headers(), port) {
         return (StatusCode::FORBIDDEN, reason).into_response();
     }
+    if req.uri().path() == "/__desktop/boot" {
+        return handle_desktop_boot(&state, req.uri().query().unwrap_or(""));
+    }
+    if state.require_desktop_key.load(Ordering::SeqCst) {
+        let cookie = req.headers().get(axum::http::header::COOKIE).and_then(|v| v.to_str().ok()).unwrap_or("");
+        let ok = cookie_value(cookie, DESKTOP_COOKIE).map(|v| ct_eq(v.as_bytes(), state.desktop_key.as_bytes())).unwrap_or(false);
+        if !ok {
+            return (StatusCode::FORBIDDEN, "VibeSquad desktop: open this from the VibeSquad app window").into_response();
+        }
+    }
     next.run(req).await
+}
+
+/// GET /__desktop/boot?k=<per-launch key>&next=<path>: the app navigates its own window here at startup;
+/// sets the vs_desktop cookie and redirects to `next` (same-origin paths only).
+fn handle_desktop_boot(state: &SharedAppState, query: &str) -> Response {
+    let mut key = String::new();
+    let mut next_path = String::from("/");
+    for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
+        match k.as_ref() {
+            "k" => key = v.into_owned(),
+            "next" if v.starts_with('/') && !v.starts_with("//") && !v.contains('\\') => next_path = v.into_owned(),
+            _ => {}
+        }
+    }
+    if !ct_eq(key.as_bytes(), state.desktop_key.as_bytes()) {
+        return (StatusCode::FORBIDDEN, "invalid desktop key").into_response();
+    }
+    let mut resp = StatusCode::FOUND.into_response();
+    let h = resp.headers_mut();
+    if let Ok(v) = HeaderValue::from_str(&next_path) {
+        h.insert(axum::http::header::LOCATION, v);
+    }
+    if let Ok(v) = HeaderValue::from_str(&format!("{}={}; HttpOnly; SameSite=Strict; Path=/", DESKTOP_COOKIE, state.desktop_key)) {
+        h.insert(axum::http::header::SET_COOKIE, v);
+    }
+    h.insert(axum::http::header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    h.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
+    resp
 }
 
 fn build_router(state: Arc<SharedAppState>) -> Router {
@@ -2247,6 +2350,9 @@ fn main() {
         updater: Mutex::new(updater::UpdaterState::default()),
         managed_server: Mutex::new(None),
         last_notified_agent_id: RwLock::new(None),
+        desktop_key: random_hex_key(),
+        require_desktop_key: AtomicBool::new(true),
+        local_token_file: default_local_token_file(),
     });
 
     // Start background Tokio runtime and bind loopback server BEFORE Tauri opens the window
@@ -2278,6 +2384,7 @@ fn main() {
         rt.block_on(async move { ensure_local_server_running(&st).await });
     }
     if headless {
+        shared_state.require_desktop_key.store(false, Ordering::SeqCst);
         println!("VIBESQUAD_PROXY_LISTENING=http://127.0.0.1:{}", local_port);
         rt.block_on(async {
             loop {
@@ -2301,19 +2408,19 @@ fn main() {
             let handle = app.handle().clone();
             *state_for_setup.app_handle.write().unwrap() = Some(handle.clone());
 
-            // Navigate main window if ephemeral port was used or if lastHash is saved
+            // Always boot through /__desktop/boot (sets the vs_desktop cookie), then the saved route.
             if let Some(main_win) = app.get_webview_window("main") {
                 let (last_hash, last_route) = {
                     let c = state_for_setup.config.read().unwrap();
                     (c.last_hash.clone(), c.last_route.clone())
                 };
                 let restore = ui_pages::restore_path(&last_route, &last_hash);
-                if local_port != 4189 || restore != "/" {
-                    if let Ok(target_url) =
-                        url::Url::parse(&format!("http://127.0.0.1:{}{}", local_port, restore))
-                    {
-                        let _ = main_win.navigate(target_url);
-                    }
+                let next: String = url::form_urlencoded::byte_serialize(restore.as_bytes()).collect();
+                if let Ok(target_url) = url::Url::parse(&format!(
+                    "http://127.0.0.1:{}/__desktop/boot?k={}&next={}",
+                    local_port, state_for_setup.desktop_key, next
+                )) {
+                    let _ = main_win.navigate(target_url);
                 }
             }
 
@@ -2479,6 +2586,9 @@ mod tests {
             updater: Mutex::new(updater::UpdaterState::default()),
             managed_server: Mutex::new(None),
             last_notified_agent_id: RwLock::new(None),
+            desktop_key: "k".repeat(64),
+            require_desktop_key: AtomicBool::new(false),
+            local_token_file: std::env::temp_dir().join("vs-desktop-test-no-token"),
         })
     }
 
@@ -2837,5 +2947,113 @@ mod tests {
             assert!(resp.text().await.unwrap().contains("vs_device=t"), "{hdrs:?}");
         }
         assert_eq!(hits.load(Ordering::SeqCst), 4);
+    }
+
+    #[test]
+    fn local_token_file_must_be_64_lowercase_hex() {
+        let dir = std::env::temp_dir().join(format!("vs-desktop-token-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("local-token");
+        assert_eq!(read_local_token(&f), None);
+        let good = "ab".repeat(32);
+        fs::write(&f, format!("\u{feff}{}\n", good)).unwrap();
+        assert_eq!(read_local_token(&f).as_deref(), Some(good.as_str()));
+        for bad in ["AB".repeat(32), "ab".repeat(31), "zz".repeat(32)] {
+            fs::write(&f, bad).unwrap();
+            assert_eq!(read_local_token(&f), None);
+        }
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(random_hex_key().len(), 64);
+        assert_ne!(random_hex_key(), random_hex_key());
+        assert_eq!(strip_local_cookies("a=1; vs_desktop=x; vs_local=y;vs_device=z"), "a=1; vs_device=z");
+    }
+
+    #[tokio::test]
+    async fn desktop_key_gates_the_proxy_and_the_local_token_is_attached() {
+        use std::sync::atomic::AtomicUsize as Counter;
+        // Upstream echoes the token header and cookie it received.
+        let hits = Arc::new(Counter::new(0));
+        let hits_up = hits.clone();
+        let upstream = Router::new().fallback(move |headers: HeaderMap| {
+            let hits = hits_up.clone();
+            async move {
+                hits.fetch_add(1, Ordering::SeqCst);
+                let h = |n: &str| headers.get(n).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+                format!("token={} cookie={}", h(LOCAL_TOKEN_HEADER), h("cookie"))
+            }
+        });
+        let upstream_host = spawn_upstream(upstream).await;
+        let dir = std::env::temp_dir().join(format!("vs-desktop-gate-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let token = "cd".repeat(32);
+        fs::write(dir.join("local-token"), &token).unwrap();
+        let state = {
+            let base = make_test_state();
+            let st = SharedAppState {
+                config: RwLock::new(DesktopConfig { server_mode: "direct".into(), server_host: upstream_host.clone(), ..DesktopConfig::default() }),
+                active_upstream: RwLock::new(None),
+                setup_mode: AtomicBool::new(false),
+                quitting: AtomicBool::new(false),
+                needs_count: AtomicUsize::new(0),
+                local_port: AtomicUsize::new(0),
+                http_client: RwLock::new(base.client()),
+                ws_tls_connector: RwLock::new(base.ws_connector()),
+                app_handle: RwLock::new(None),
+                tray_needs_item: RwLock::new(None),
+                tracker: Mutex::new(AgentAlertTracker::default()),
+                updater: Mutex::new(updater::UpdaterState::default()),
+                managed_server: Mutex::new(None),
+                last_notified_agent_id: RwLock::new(None),
+                desktop_key: random_hex_key(),
+                require_desktop_key: AtomicBool::new(true),
+                local_token_file: dir.join("local-token"),
+            };
+            Arc::new(st)
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        state.local_port.store(port as usize, Ordering::SeqCst);
+        let app = build_router(state.clone());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+        let base = format!("http://127.0.0.1:{}", port);
+
+        // No cookie (any local process): refused before anything is attached, /__desktop/* included.
+        for path in ["/api/teams", "/__vibesquad/x", "/__desktop/status", "/"] {
+            let r = client.post(format!("{}{}", base, path)).send().await.unwrap();
+            assert_eq!(r.status(), reqwest::StatusCode::FORBIDDEN, "{path}");
+        }
+        let wrong = format!("{}=nope", DESKTOP_COOKIE);
+        assert_eq!(client.get(format!("{}/api/teams", base)).header("cookie", wrong).send().await.unwrap().status(), reqwest::StatusCode::FORBIDDEN);
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+
+        // Boot: a wrong key sets nothing; the right one sets the cookie and redirects to a same-origin path only.
+        let bad = client.get(format!("{}/__desktop/boot?k=nope", base)).send().await.unwrap();
+        assert_eq!(bad.status(), reqwest::StatusCode::FORBIDDEN);
+        assert!(bad.headers().get("set-cookie").is_none());
+        let boot = client.get(format!("{}/__desktop/boot?k={}&next=%2F%3Fteam%3Defi", base, state.desktop_key)).send().await.unwrap();
+        assert_eq!(boot.status(), reqwest::StatusCode::FOUND);
+        assert_eq!(boot.headers().get("location").unwrap(), "/?team=efi");
+        let set_cookie = boot.headers().get("set-cookie").unwrap().to_str().unwrap().to_string();
+        assert!(set_cookie.starts_with(&format!("{}={};", DESKTOP_COOKIE, state.desktop_key)), "{set_cookie}");
+        assert!(set_cookie.contains("HttpOnly") && set_cookie.contains("SameSite=Strict"), "{set_cookie}");
+        for next in ["%2F%2Fevil.example", "https%3A%2F%2Fevil.example", "%2F%5Cevil.example"] {
+            let r = client.get(format!("{}/__desktop/boot?k={}&next={}", base, state.desktop_key, next)).send().await.unwrap();
+            assert_eq!(r.headers().get("location").unwrap(), "/", "{next}");
+        }
+
+        // With the cookie: proxied, local token attached, machine-only cookies never forwarded.
+        let cookie = format!("{}={}; vs_local=abc; other=1", DESKTOP_COOKIE, state.desktop_key);
+        let r = client
+            .post(format!("{}/api/teams", base))
+            .header("cookie", cookie)
+            .header(LOCAL_TOKEN_HEADER, "spoofed")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), reqwest::StatusCode::OK);
+        assert_eq!(r.text().await.unwrap(), format!("token={} cookie=other=1", token));
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

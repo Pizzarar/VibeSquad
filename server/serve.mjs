@@ -16,11 +16,12 @@ import {
 import {
   authenticate,
   discardPairCode,
+  getLocalToken,
   getTls,
   handleCaCrt,
   handlePairRedeem,
   isAllowedHostHeader,
-  isLocalBrowserSafe,
+  isLocalOwner,
   isLoopbackOrigin,
   lockDownVibesquadHome,
   netConfig,
@@ -112,10 +113,13 @@ function findExe(candidates) {
   return candidates.find((c) => c.includes(sep) && existsSync(c)) ?? null;
 }
 
+// The launcher's own URL: the local-login bootstrap sets the vs_local cookie, then redirects to /.
+const openUrl = () => `${url}/__vibesquad/local-login?t=${getLocalToken()}`;
+
 function launchApp(exe) {
   // A bare name relies on PATH; spawn reports a missing binary via the error event.
   return new Promise((ok) => {
-    const child = spawn(exe, [`--app=${url}`], { detached: true, stdio: "ignore", windowsHide: false });
+    const child = spawn(exe, [`--app=${openUrl()}`], { detached: true, stdio: "ignore", windowsHide: false });
     child.on("error", () => ok(false));
     setTimeout(() => {
       child.unref();
@@ -137,7 +141,7 @@ async function openBrowser() {
     if (await launchApp(exe)) return;
   }
   // `start` is a cmd builtin; the empty "" is the window title argument.
-  spawn("cmd.exe", ["/c", "start", "", url], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+  spawn("cmd.exe", ["/c", "start", "", openUrl()], { detached: true, stdio: "ignore", windowsHide: true }).unref();
 }
 
 function isListening() {
@@ -467,10 +471,11 @@ if (wantOpen && (await isListening())) {
 export const server = createServer(handle);
 server.on("upgrade", (req, socket, head) => {
   if (!req.url?.startsWith("/ws")) return socket.destroy();
-  // Cross-site WebSocket hijacking: a browser page can open ws://127.0.0.1 with any Origin.
+  // Cross-site WebSocket hijacking: a browser page can open ws://127.0.0.1 with any Origin. The daemon
+  // controls agents, so loopback also needs the local token (header) or the vs_local cookie.
   if (!authenticate(req)) {
     const origin = req.headers.origin;
-    if (!isLocalBrowserSafe(req) || origin === undefined || !isLoopbackOrigin(origin)) return rejectUpgrade(socket, "403 Forbidden");
+    if (!isLocalOwner(req) || (origin !== undefined && !isLoopbackOrigin(origin))) return rejectUpgrade(socket, "403 Forbidden");
   }
   proxyUpgrade(req, socket, head);
 });
@@ -500,6 +505,7 @@ if (isMain) {
   } catch (err) {
     console.warn("Could not restrict ~/.vibesquad to the current user:", err?.message ?? err);
   }
+  getLocalToken();
   server.listen(port, "127.0.0.1", () => {
     console.log(`VibeSquad serving ${distDir} on ${url}`);
     logServerStart({ rootDir });

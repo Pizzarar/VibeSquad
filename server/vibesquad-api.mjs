@@ -19,7 +19,7 @@ import {
   saveUserSettings,
   stripBom,
 } from "./user-settings.mjs";
-import { authenticate, getAuthStatus, handleCaCrt, handleDevices, handlePairRedeem, handlePairStart, handleRevoke, hasDistIndex, isLocal, isLocalBrowserSafe, netConfig } from "./auth.mjs";
+import { authenticate, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handlePairRedeem, handlePairStart, handleRevoke, hasDistIndex, isLocal, isLocalBrowserSafe, isLocalOwner, netConfig, READ_ONLY_ERROR } from "./auth.mjs";
 import {
   appendVsLogEntry,
   createDaemonClient,
@@ -322,7 +322,19 @@ export function setExposure(lanEnabled, exposedIps, toggleHandler = exposure.tog
   };
 }
 
+// Trusted = may read. Owner = may also change things: a paired device, or a loopback caller with the local token.
 const isTrusted = (req) => isLocalBrowserSafe(req) || Boolean(authenticate(req));
+const isOwner = (req) => Boolean(authenticate(req)) || isLocalOwner(req);
+const localAccess = (req) => (isOwner(req) ? "owner" : "read-only");
+
+// GETs a read-only loopback caller still can't make: they hand out a credential, write a key, or launch provider CLIs.
+export function isGatedRead(path, url = "") {
+  if (path === "/__vibesquad/paseo/pair") return true; // daemon pairing offer (a credential)
+  if (path === "/__vibesquad/push/vapid-public-key") return true; // creates and writes vapid.json on first call
+  if (path === "/__vibesquad/paseo/providers/diagnostic" || path === "/__vibesquad/paseo/providers/models") return true; // runs the provider's own CLI
+  if (path === "/__vibesquad/paseo/usage") return new URL(url, "http://x").searchParams.get("refresh") === "1"; // forces provider API calls
+  return false;
+}
 
 export function handleHealth(req, res, rootDir = REPO_ROOT) {
   if (req.method !== "GET" && req.method !== "HEAD") {
@@ -334,6 +346,7 @@ export function handleHealth(req, res, rootDir = REPO_ROOT) {
   const { port } = netConfig();
   const warnings = getConfigWarnings();
   const extra = {
+    localAccess: localAccess(req),
     port,
     lanEnabled: exposure.lanEnabled,
     exposedIps: exposure.exposedIps,
@@ -351,7 +364,7 @@ export function handleAuthStatus(req, res, rootDir = REPO_ROOT) {
   }
   const full = getAuthStatus(rootDir);
   if (!isTrusted(req)) return sendJson(res, 200, { ok: true, distReady: full.distReady, caFingerprint: full.caFingerprint });
-  return sendJson(res, 200, full);
+  return sendJson(res, 200, { ...full, localAccess: localAccess(req) });
 }
 
 /** Content hash of the registry file; a PUT that sends a stale one gets 409 instead of overwriting newer edits. */
@@ -1293,16 +1306,22 @@ async function handleWorkspacePackageScripts(req, res, rootDir, opts = {}) {
 }
 
 // Connect-style middleware: handles /__vibesquad/* and /api/*, calls next() for everything else.
-// Everything except health, /ca.crt and /pair needs a paired device or a same-origin loopback caller.
+// Everything except health, /ca.crt, /pair and /__vibesquad/local-login needs a paired device or a same-origin loopback
+// caller; a loopback caller without the local token is read-only (GET/HEAD, minus isGatedRead).
 export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
   return (req, res, next) => {
     const path = (req.url ?? "").split("?")[0];
     if (path === "/api/health" || path === "/__vibesquad/health") return handleHealth(req, res, rootDir);
     if (path === "/ca.crt") return handleCaCrt(req, res);
     if (path === "/pair") return handlePairRedeem(req, res);
-    if ((path.startsWith("/__vibesquad/") || path.startsWith("/api/")) && !isTrusted(req)) {
+    if (path === "/__vibesquad/local-login") return handleLocalLogin(req, res);
+    const isApi = path.startsWith("/__vibesquad/") || path.startsWith("/api/");
+    if (isApi && !isTrusted(req)) {
       if (isLocal(req)) return sendJson(res, 403, { error: "forbidden" });
       return sendJson(res, 401, { error: "unpaired device" });
+    }
+    if (isApi && !isOwner(req) && ((req.method !== "GET" && req.method !== "HEAD") || isGatedRead(path, req.url))) {
+      return sendJson(res, 403, { error: READ_ONLY_ERROR, readOnly: true });
     }
     if (Number(req.headers["content-length"] ?? 0) > MAX_BODY_BYTES) return sendJson(res, 413, { error: "payload too large" });
     if (path === "/api/auth/status" || path === "/__vibesquad/auth/status") return handleAuthStatus(req, res, rootDir);

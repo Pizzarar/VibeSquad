@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, networkInterfaces } from "node:os";
 import { join, resolve } from "node:path";
+import { ensureLocalToken, LOCAL_TOKEN_FILE, LOCAL_TOKEN_HEADER, localTokenPath } from "./local-token.mjs";
 import { qrSvg } from "./qr.mjs";
 import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
 
@@ -140,7 +141,7 @@ function lockDown(dir) {
 }
 
 // Secrets that live directly in ~/.vibesquad (VAPID private key, device token hashes, push endpoints).
-const HOME_SECRET_FILES = ["vapid.json", "devices.json", "push-subs.json"];
+const HOME_SECRET_FILES = ["vapid.json", "devices.json", "push-subs.json", LOCAL_TOKEN_FILE];
 
 /**
  * Restricts ~/.vibesquad to the current user: icacls on Windows, 0700 dir + 0600 secret files elsewhere.
@@ -384,7 +385,8 @@ export function authenticate(req) {
   return dev;
 }
 
-// Requests on the loopback listener are the PC itself and skip the token check.
+// The loopback listener is the PC itself, but not only its owner (other apps, other Windows users):
+// owner access there needs the local token (header) or the vs_local cookie the launcher sets.
 const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 export const isLocal = (req) => LOOPBACK.has(req.socket.localAddress ?? "");
 
@@ -411,6 +413,67 @@ export function isLocalBrowserSafe(req) {
   if (site !== undefined && site !== "same-origin" && site !== "none") return false;
   if (["POST", "PUT", "DELETE", "PATCH"].includes(req.method ?? "") && isBrowserRequest(h) && origin === undefined) return false;
   return true;
+}
+
+// ---- Local token (owner trust on loopback) ----
+
+export const LOCAL_COOKIE = "vs_local";
+const localTokenCache = new Map(); // token file -> token (keyed so a test that moves VIBESQUAD_HOME gets that home's token)
+
+/** The per-install token, created on first use (server start calls this after locking the home dir). */
+export function getLocalToken() {
+  const file = localTokenPath();
+  let token = localTokenCache.get(file);
+  if (!token) localTokenCache.set(file, (token = ensureLocalToken(file)));
+  return token;
+}
+
+export function resetLocalTokenForTest() {
+  localTokenCache.clear();
+}
+
+// The cookie carries a value derived from the token, so a leaked cookie isn't the header secret too.
+const localCookieValue = (token) => sha256Hex(`vs_local-cookie:${token}`);
+
+const sameSecret = (got, want) => {
+  const a = Buffer.from(String(got ?? ""), "utf8");
+  const b = Buffer.from(want, "utf8");
+  return a.length === b.length && timingSafeEqual(a, b);
+};
+
+/** True when the request carries the local token header or the vs_local cookie. Says nothing about the listener. */
+export function hasLocalToken(req) {
+  const token = getLocalToken();
+  const header = req.headers[LOCAL_TOKEN_HEADER];
+  if (typeof header === "string" && sameSecret(header.trim(), token)) return true;
+  const cookie = parseCookies(req.headers.cookie)[LOCAL_COOKIE];
+  return Boolean(cookie) && sameSecret(cookie, localCookieValue(token));
+}
+
+/** Owner on loopback: the existing Host/Origin checks plus the local token. */
+export const isLocalOwner = (req) => isLocalBrowserSafe(req) && hasLocalToken(req);
+
+export const READ_ONLY_ERROR = "read-only: this loopback request has no VibeSquad local token. Open VibeSquad from its launcher or desktop app (or run `vs open`), or send the x-vibesquad-token header from ~/.vibesquad/local-token.";
+
+/**
+ * GET /__vibesquad/local-login?t=<token>: launcher-only bootstrap. Sets the vs_local cookie and redirects to /.
+ * Loopback only; a missing or wrong t gets 403 and no cookie.
+ */
+export function handleLocalLogin(req, res) {
+  if (req.method !== "GET") {
+    res.statusCode = 405;
+    return res.end();
+  }
+  res.setHeader("referrer-policy", "no-referrer");
+  if (!isLocalBrowserSafe(req)) return sendJson(res, 403, { error: "local login is only available on the PC itself" });
+  const t = new URL(req.url ?? "/", "http://x").searchParams.get("t") ?? "";
+  const token = getLocalToken();
+  if (!sameSecret(t.trim(), token)) return sendHtml(res, 403, "Local login failed", "That link is not valid. Open VibeSquad from its launcher or desktop app, or run <code>vs open</code>.");
+  res.statusCode = 302;
+  res.setHeader("set-cookie", `${LOCAL_COOKIE}=${localCookieValue(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`);
+  res.setHeader("location", "/");
+  res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
+  res.end();
 }
 
 /** Host header values this server answers to; anything else is not echoed into redirects. */

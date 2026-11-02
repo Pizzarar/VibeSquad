@@ -1,6 +1,7 @@
 export function readPaseo(rootDir?: string): { listen: string; serverId: string };
 export function createVibesquadMiddleware(rootDir?: string): (req: any, res: any, next?: (err?: unknown) => void) => void;
 export function handleHealth(req: any, res: any, rootDir?: string): void;
+export function isGatedRead(path: string, url?: string): boolean;
 export function handleAuthStatus(req: any, res: any, rootDir?: string): void;
 export function handleDesktopInstaller(req: any, res: any, rootDir?: string): void;
 export function handleDesktopUpdateJson(req: any, res: any, rootDir?: string): void;

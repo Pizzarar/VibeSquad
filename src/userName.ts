@@ -77,6 +77,27 @@ export function useStaleBuild() {
   );
 }
 
+// Loopback without the local token (a plain browser tab) is read-only; the server says so in /health.
+let localReadOnly = false;
+
+export function setLocalAccess(access: unknown): void {
+  const next = access === "read-only";
+  if (next !== localReadOnly) {
+    localReadOnly = next;
+    listeners.forEach((l) => l());
+  }
+}
+
+export function useLocalReadOnly() {
+  return useSyncExternalStore(
+    (cb) => {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+    () => localReadOnly,
+  );
+}
+
 export function setDesktopConfigWarning(warning: unknown): void {
   const next = typeof warning === "string" ? warning.trim() : "";
   if (next !== desktopConfigWarning) {

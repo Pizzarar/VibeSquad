@@ -278,7 +278,7 @@ test("review 1+2: with the daemon down the API answers 503 {ok:false}, not 200",
     resetBrainstormRestartState();
     const r = await fetch(`http://127.0.0.1:${srv.address().port}/__vibesquad/brainstorm-restart`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: ownerHeaders({ "content-type": "application/json" }),
       body: JSON.stringify({ reason: "start-brainstorm", teamId: "sq", laneId: "down-test" }),
     });
     const body = await r.json();
@@ -338,6 +338,7 @@ test("review 3: Buddy spawn sets VS_BRIEF_INLINE and inlines the brief in the fi
 });
 
 import { backupBrief } from "../server/brief-write.mjs";
+import { ownerHeaders } from "./helpers/local-owner.mjs";
 
 test("backupBrief never files an empty lane under vibesquad", () => {
   const dir = mkdtempSync(join(tmpdir(), "vs-bk-"));

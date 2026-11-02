@@ -4,6 +4,7 @@ import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, before, describe, test } from "node:test";
+import { ownerHeaders } from "./helpers/local-owner.mjs";
 
 const home = mkdtempSync(join(tmpdir(), "vs-u3-"));
 process.env.VIBESQUAD_HOME = home;
@@ -40,7 +41,7 @@ describe("push-subs.json persistence", () => {
 function httpCall(port, path, method = "GET", body) {
   return new Promise((ok, fail) => {
     const r = request(
-      { host: "127.0.0.1", port, path, method, headers: { "content-type": "application/json", origin: `http://127.0.0.1:${port}` } },
+      { host: "127.0.0.1", port, path, method, headers: ownerHeaders({ "content-type": "application/json", origin: `http://127.0.0.1:${port}` }) },
       (res) => {
         let t = "";
         res.on("data", (c) => (t += c));

@@ -49,6 +49,7 @@ import {
 } from "../server/identity.mjs";
 import { loadProfiles } from "../server/profiles.mjs";
 import { staleWarning } from "../server/stale-runtime.mjs";
+import { localTokenPath, readLocalToken } from "../server/local-token.mjs";
 import {
   LEGACY_NEEDS_LABEL,
   LEGACY_NEEDS_REASON,
@@ -429,6 +430,7 @@ function parseArgs(argv) {
     "notes",
     "dryRun",
     "force",
+    "print",
   ]);
 
   for (let i = 0; i < argv.length; i++) {
@@ -640,6 +642,7 @@ Usage:
   vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force]
   vs wait <agent> [--timeout <seconds>]   block until idle (exit 0), error or blocked (1), timeout (2); no limit by default
   vs install-shim [--bin-dir <dir>]
+  vs open [--print]   open the local web UI with owner access (sets the vs_local cookie); --print shows the URL only
 
 Types: ${LOG_TYPES.join(", ")} (text 1..${MAX_TEXT} chars)
 
@@ -1879,6 +1882,26 @@ function commandInstallShim(flags) {
   return 0;
 }
 
+// The launcher-only bootstrap URL: /__vibesquad/local-login checks the token, sets the vs_local cookie, redirects to /.
+export function localLoginUrl({ port = Number(process.env.VIBESQUAD_PORT || 4180), token = readLocalToken(localTokenPath(BASE_DIR)) } = {}) {
+  if (!token) throw new Error(`no local token at ${localTokenPath(BASE_DIR)}; start the VibeSquad server once to create it`);
+  return `http://localhost:${port}/__vibesquad/local-login?t=${token}`;
+}
+
+function commandOpen(flags) {
+  const url = localLoginUrl();
+  if (flags.print) {
+    process.stdout.write(url + "\n");
+    return 0;
+  }
+  const [cmd, args] =
+    process.platform === "win32" ? ["cmd.exe", ["/c", "start", "", url]] : [process.platform === "darwin" ? "open" : "xdg-open", [url]];
+  const r = spawnSync(cmd, args, { stdio: "ignore", windowsHide: true });
+  if (r.error || r.status !== 0) throw new Error(`could not open a browser (${r.error?.message ?? `exit ${r.status}`}); run vs open --print and paste the URL`);
+  process.stdout.write("Opened VibeSquad with owner access.\n");
+  return 0;
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -1910,6 +1933,7 @@ function main(argv) {
     if (command === "pin") return commandPin(flags);
     if (command === "wait") return commandWait(flags);
     if (command === "install-shim") return commandInstallShim(flags);
+    if (command === "open") return commandOpen(flags);
     process.stderr.write(`Error: unknown command "${command}". Try "vs --help".\n`);
     return 1;
   } catch (err) {

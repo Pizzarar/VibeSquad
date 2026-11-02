@@ -27,6 +27,7 @@ import {
 } from "../server/paseo-control.mjs";
 import { saveUserSettings } from "../server/user-settings.mjs";
 import { createVibesquadMiddleware } from "../server/vibesquad-api.mjs";
+import { ownerHeaders } from "./helpers/local-owner.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
 
@@ -412,7 +413,7 @@ describe("PLAN_PASEO_CONTROLS — Paseo settings & daemon controls (isolated tem
       // A non-loopback daemon.listen needs confirmExposure: 409 and no write without it
       const unconfirmedResp = await fetch(`http://127.0.0.1:${port}/__vibesquad/paseo/surface`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: ownerHeaders({ "content-type": "application/json" }),
         body: JSON.stringify({ listen: "0.0.0.0:16767", browserToolsEnabled: true }),
       });
       assert.equal(unconfirmedResp.status, 409);
@@ -424,7 +425,7 @@ describe("PLAN_PASEO_CONTROLS — Paseo settings & daemon controls (isolated tem
       // Changing daemon.listen flags restartRequired: true
       const listenPatchResp = await fetch(`http://127.0.0.1:${port}/__vibesquad/paseo/surface`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: ownerHeaders({ "content-type": "application/json" }),
         body: JSON.stringify({ listen: "0.0.0.0:16767", browserToolsEnabled: true, confirmExposure: true }),
       });
       const listenPatchJson = await listenPatchResp.json();
