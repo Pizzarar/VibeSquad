@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { client, DEMO } from "./paseo";
 import { isImeComposing } from "./IdeaInbox";
 import { MarkdownRenderer } from "./Timeline";
@@ -146,6 +146,26 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
   const [planEditing, setPlanEditing] = useState(false);
   const [planDraft, setPlanDraft] = useState<string | null>(null);
 
+  // A card can stay mounted while the next request arrives: never carry a draft or feedback across requests.
+  useEffect(() => {
+    setPlanEditing(false);
+    setPlanDraft(null);
+    setDenyMsg("");
+    setError(null);
+    setSelectedByQ({});
+    setOtherByQ({});
+    setMoreMenuOpen(false);
+  }, [p.id]);
+
+  useEffect(() => {
+    if (!moreMenuOpen) return;
+    const close = (e: MouseEvent) => {
+      if (!(e.target as Element | null)?.closest?.("[data-perm-more]")) setMoreMenuOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [moreMenuOpen]);
+
   const doRespond = async (requestId: string, response: Record<string, unknown>) => {
     setSubmitting(true);
     setError(null);
@@ -223,7 +243,7 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
               </>
             )}
           </div>
-          <div style={{ position: "relative" }}>
+          <div style={{ position: "relative" }} data-perm-more>
             <button
               type="button"
               className="btn ghost small"

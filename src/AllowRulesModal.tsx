@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { addSavedRule, agentCwd, loadRuleFiles, removeSavedRule, type RuleFile } from "./paseoPermissions";
-import { RULE_LISTS, splitRule, type RuleList } from "./paseoPermissionsLogic";
+import { DEFAULT_SETTINGS_FILE, RULE_LISTS, SETTINGS_FILES, splitRule, validateRule, type RuleList, type SettingsFile } from "./paseoPermissionsLogic";
 
 const LIST_LABEL: Record<RuleList, string> = { allow: "Allow", deny: "Deny", ask: "Ask" };
 
@@ -13,10 +13,20 @@ export function AllowRulesModal({ agentId, onClose }: { agentId: string; onClose
   const [busy, setBusy] = useState(false);
   const [newRule, setNewRule] = useState("");
   const [newList, setNewList] = useState<RuleList>("allow");
+  const [target, setTarget] = useState<SettingsFile>(DEFAULT_SETTINGS_FILE);
+  const mounted = useRef(true);
+  useEffect(() => () => { mounted.current = false; }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const ruleError = newRule.trim() ? validateRule(newRule, newList) : null;
 
   const reload = useCallback(async (dir: string) => {
     try {
-      setFiles(await loadRuleFiles(dir));
+      const f = await loadRuleFiles(dir);
+      if (mounted.current) setFiles(f);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -42,16 +52,15 @@ export function AllowRulesModal({ agentId, onClose }: { agentId: string; onClose
     setError(null);
     try {
       await fn();
+      if (!mounted.current) return;
       setConfirm(null);
       await reload(cwd);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (mounted.current) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   };
-
-  const localPath = ".claude/settings.local.json";
 
   return (
     <div className="modal-back" onMouseDown={onClose}>
@@ -126,7 +135,7 @@ export function AllowRulesModal({ agentId, onClose }: { agentId: string; onClose
           <input
             data-testid="allow-rule-new"
             style={{ flex: 1, minWidth: 140 }}
-            placeholder="e.g. Bash(npm run test:*) → local file"
+            placeholder="e.g. Bash(npm run test:*)"
             value={newRule}
             onChange={(e) => setNewRule(e.target.value)}
           />
@@ -134,12 +143,17 @@ export function AllowRulesModal({ agentId, onClose }: { agentId: string; onClose
             type="button"
             className="btn small"
             data-testid="allow-rule-add"
-            disabled={busy || !newRule.trim() || !cwd}
-            onClick={() => void run(async () => { await addSavedRule(cwd!, localPath, newList, newRule.trim()); setNewRule(""); })}
+            disabled={busy || !newRule.trim() || !cwd || !!ruleError}
+            onClick={() => void run(async () => { await addSavedRule(cwd!, newList, newRule.trim(), target); setNewRule(""); })}
           >
             Add
           </button>
+          <select value={target} onChange={(e) => setTarget(e.target.value as SettingsFile)} style={{ width: "auto" }} aria-label="Save to" data-testid="allow-rule-target">
+            <option value={SETTINGS_FILES[0]}>Save to: local (private)</option>
+            <option value={SETTINGS_FILES[1]}>Save to: settings.json (shared, committed)</option>
+          </select>
         </div>
+        {ruleError && <div className="small" data-testid="allow-rule-invalid" style={{ color: "#f44336", marginTop: 4 }}>{ruleError}</div>}
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
           <button type="button" className="btn ghost" onClick={onClose}>Close</button>
         </div>

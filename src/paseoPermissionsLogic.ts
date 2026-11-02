@@ -75,44 +75,89 @@ export type RuleList = "allow" | "deny" | "ask";
 export type Rules = Record<RuleList, string[]>;
 export const RULE_LISTS: RuleList[] = ["allow", "deny", "ask"];
 export const SETTINGS_FILES = [".claude/settings.local.json", ".claude/settings.json"] as const;
+export type SettingsFile = (typeof SETTINGS_FILES)[number];
+export const DEFAULT_SETTINGS_FILE: SettingsFile = SETTINGS_FILES[0];
 
-export function parseRules(text: string | null | undefined): Rules {
-  const out: Rules = { allow: [], deny: [], ask: [] };
-  if (!text || !text.trim()) return out;
+export function isSettingsFile(path: string): path is SettingsFile {
+  return (SETTINGS_FILES as readonly string[]).includes(path);
+}
+
+/** Parse a settings file into its root object. Refuses anything that is not a plain JSON object so we never overwrite it. */
+export function parseSettingsObject(text: string | null | undefined): Record<string, any> {
+  if (!text || !text.trim()) return {};
   let j: any;
   try {
     j = JSON.parse(text);
   } catch {
     throw new Error("settings file is not valid JSON");
   }
-  const perm = j && typeof j === "object" ? j.permissions : null;
-  if (perm && typeof perm === "object") {
-    for (const k of RULE_LISTS) if (Array.isArray(perm[k])) out[k] = perm[k].filter((x: unknown) => typeof x === "string");
+  if (j === null || typeof j !== "object" || Array.isArray(j)) throw new Error("settings file is not a JSON object");
+  const p = j.permissions;
+  if (p !== undefined && (p === null || typeof p !== "object" || Array.isArray(p))) {
+    throw new Error("settings file has a permissions value that is not an object");
   }
+  return j;
+}
+
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+const RULE_SHAPE = /^([A-Za-z0-9_*.-]+)(?:\(([\s\S]+)\))?$/;
+
+/**
+ * Check a rule against Claude Code permission syntax: ToolName or ToolName(pattern), e.g. Bash(npm run test:*),
+ * Read(./src/**), WebFetch(domain:x), mcp__server__tool. Returns an error message, or null when valid.
+ */
+export function validateRule(rule: string, list: RuleList = "allow"): string | null {
+  const r = rule.trim();
+  if (!r) return "Rule cannot be empty";
+  if (CONTROL_CHARS.test(r)) return "Rule cannot contain newlines or control characters";
+  const m = RULE_SHAPE.exec(r);
+  if (!m) return "Rule must be ToolName or ToolName(pattern)";
+  const tool = m[1];
+  const pattern = m[2];
+  let depth = 0;
+  for (const ch of pattern ?? "") {
+    if (ch === "(") depth++;
+    else if (ch === ")" && --depth < 0) return "Rule has unbalanced parentheses";
+  }
+  if (depth !== 0) return "Rule has unbalanced parentheses";
+  if (pattern !== undefined && tool.startsWith("mcp__")) return "mcp__ rules cannot have a (pattern)";
+  if (list === "allow" && tool.includes("*") && !/^mcp__[^*]+__/.test(tool)) {
+    return "Allow rules may only use * in the tool name after mcp__<server>__";
+  }
+  return null;
+}
+
+export function parseRules(text: string | null | undefined): Rules {
+  const out: Rules = { allow: [], deny: [], ask: [] };
+  const perm = parseSettingsObject(text).permissions;
+  if (perm) for (const k of RULE_LISTS) if (Array.isArray(perm[k])) out[k] = perm[k].filter((x: unknown) => typeof x === "string");
   return out;
 }
 
 /** Remove one rule from a list, keeping every other key (2-space JSON layout). */
 export function removeRule(text: string, list: RuleList, rule: string): string {
-  const j = JSON.parse(text);
-  const arr = j?.permissions?.[list];
+  const j = parseSettingsObject(text);
+  const arr = j.permissions?.[list];
   if (!Array.isArray(arr)) return text;
   j.permissions[list] = arr.filter((r: unknown) => r !== rule);
   return JSON.stringify(j, null, 2) + "\n";
 }
 
-/** Add a rule (no duplicates), creating permissions/list when absent. Empty text starts a fresh file. */
+/** Add a validated rule (no duplicates), creating permissions/list when absent. Empty text starts a fresh file. */
 export function addRule(text: string | null | undefined, list: RuleList, rule: string): string {
-  const j = text && text.trim() ? JSON.parse(text) : {};
-  if (!j.permissions || typeof j.permissions !== "object") j.permissions = {};
+  const bad = validateRule(rule, list);
+  if (bad) throw new Error(bad);
+  const j = parseSettingsObject(text);
+  if (!j.permissions) j.permissions = {};
   const arr: string[] = Array.isArray(j.permissions[list]) ? j.permissions[list] : [];
-  if (!arr.includes(rule)) arr.push(rule);
+  const r = rule.trim();
+  if (!arr.includes(r)) arr.push(r);
   j.permissions[list] = arr;
   return JSON.stringify(j, null, 2) + "\n";
 }
 
 /** Split "Bash(npm run test:*)" into tool + pattern for display. */
 export function splitRule(rule: string): { tool: string; pattern: string } {
-  const m = /^([^(]+?)(?:\((.*)\))?$/s.exec(rule.trim());
+  const m = RULE_SHAPE.exec(rule.trim());
   return { tool: m?.[1] ?? rule, pattern: m?.[2] ?? "" };
 }
