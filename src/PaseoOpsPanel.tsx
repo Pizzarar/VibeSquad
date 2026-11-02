@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchDaemonConfig, fetchUsageReports, measureRtt, reloadDaemonConfig, type DaemonReloadResult } from "./paseoOps";
-import { formatConfigJson, formatLatency, formatMaskedJson, latencyTone, summarizeUsageReport, type UsageReportLike } from "./paseoOpsLogic";
+import { fetchDaemonConfig, fetchUsageReports, measureRtt, patchAndReloadDaemonConfig, reloadDaemonConfig, type DaemonReloadResult } from "./paseoOps";
+import { EDITABLE_CONFIG_FIELDS, LOCKED_CONFIG_SECTIONS, LOCKED_NOTE, buildConfigDiff, buildConfigPatch, formatDiffValue, readConfigPath, validateFieldValue, formatConfigJson, formatLatency, formatMaskedJson, latencyTone, summarizeUsageReport, type UsageReportLike } from "./paseoOpsLogic";
 
 export function PaseoOpsPanel() {
   const [config, setConfig] = useState<unknown>(null);
@@ -9,6 +9,9 @@ export function PaseoOpsPanel() {
   const [openReport, setOpenReport] = useState<string | null>(null);
   const [rtt, setRtt] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<Record<string, unknown>>({});
+  const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const mounted = useRef(true);
   const pending = useRef(0);
@@ -45,6 +48,22 @@ export function PaseoOpsPanel() {
     void loadReports(false);
   }, [ping, loadConfig, loadReports]);
 
+  const diff = config ? buildConfigDiff(config, draft) : [];
+  const fieldValue = (f: (typeof EDITABLE_CONFIG_FIELDS)[number]) => {
+    if (f.path in draft) return draft[f.path];
+    const cur = readConfigPath(config, f.path);
+    return cur === undefined ? f.fallback : cur;
+  };
+  const closeEdit = () => { setEditing(false); setConfirming(false); setDraft({}); };
+  const applyEdit = () =>
+    run(async () => {
+      const { reload: r, config: c } = await patchAndReloadDaemonConfig(buildConfigPatch(diff));
+      if (!mounted.current) return;
+      setReload(r);
+      setConfig(c);
+      closeEdit();
+    });
+
   return (
     <div className="paseo-ops" data-testid="paseo-panel-ops">
       {err && <div className="paseo-ops-err" data-testid="paseo-ops-error">{err}</div>}
@@ -58,7 +77,7 @@ export function PaseoOpsPanel() {
       </div>
 
       <div className="paseo-ops-block">
-        <div className="field-label">DAEMON CONFIG (READ-ONLY · SECRETS REDACTED)</div>
+        <div className="field-label">DAEMON CONFIG (SECRETS REDACTED)</div>
         <div className="paseo-ops-row">
           <button
             type="button"
@@ -78,6 +97,62 @@ export function PaseoOpsPanel() {
         {reload && reload.appliedPaths.length > 0 && <div className="muted small">Applied: {reload.appliedPaths.join(", ")}</div>}
         {reload && reload.restartRequiredPaths.length > 0 && <div className="muted small">Restart required for: {reload.restartRequiredPaths.join(", ")}</div>}
         {reload && reload.overrideControlledPaths.length > 0 && <div className="muted small">Overridden: {reload.overrideControlledPaths.join(", ")}</div>}
+        <div className="paseo-ops-row">
+          {!editing ? (
+            <button type="button" className="btn ghost small" disabled={busy || !config} data-testid="paseo-ops-edit-btn" onClick={() => setEditing(true)}>Edit settings</button>
+          ) : (
+            <button type="button" className="btn ghost small" disabled={busy} data-testid="paseo-ops-edit-cancel" onClick={closeEdit}>Cancel edit</button>
+          )}
+        </div>
+        {editing && (
+          <div className="paseo-ops-edit" data-testid="paseo-ops-edit">
+            {EDITABLE_CONFIG_FIELDS.map((f) => {
+              const val = fieldValue(f);
+              const check = validateFieldValue(f, val);
+              const id = `paseo-ops-field-${f.path}`;
+              return (
+                <div key={f.path} className="paseo-ops-field">
+                  <label htmlFor={id}><b>{f.label}</b> <span className="muted small">{f.path}</span></label>
+                  {f.kind === "boolean" && <input id={id} type="checkbox" data-testid={id} checked={val === true} disabled={busy || confirming} onChange={(e) => setDraft({ ...draft, [f.path]: e.target.checked })} />}
+                  {f.kind === "enum" && (
+                    <select id={id} data-testid={id} value={String(val)} disabled={busy || confirming} onChange={(e) => setDraft({ ...draft, [f.path]: e.target.value })}>
+                      {f.options.map((o) => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  )}
+                  {f.kind === "number" && <input id={id} type="number" data-testid={id} min={f.min} max={f.max} value={String(val)} disabled={busy || confirming} onChange={(e) => setDraft({ ...draft, [f.path]: e.target.value })} />}
+                  {f.kind === "string" && <input id={id} type="text" data-testid={id} maxLength={f.maxLength} value={String(val)} disabled={busy || confirming} onChange={(e) => setDraft({ ...draft, [f.path]: e.target.value })} />}
+                  <div className="muted small">{f.help}</div>
+                  {!check.ok && <div className="paseo-ops-err">{check.error}</div>}
+                </div>
+              );
+            })}
+            {!confirming ? (
+              <button type="button" className="btn small" disabled={busy || diff.length === 0} data-testid="paseo-ops-edit-review" onClick={() => setConfirming(true)}>
+                Review changes{diff.length ? ` (${diff.length})` : ""}
+              </button>
+            ) : (
+              <div className="paseo-ops-diff" data-testid="paseo-ops-diff">
+                <div className="field-label">CONFIRM CHANGES</div>
+                {diff.map((d) => (
+                  <div key={d.path} className="paseo-ops-diff-row" data-testid={`paseo-ops-diff-${d.path}`}>
+                    <code>{d.path}</code>: <span className="paseo-ops-old">{formatDiffValue(d.from)}</span> → <span className="paseo-ops-new">{formatDiffValue(d.to)}</span>
+                  </div>
+                ))}
+                <div className="muted small">Saved to the daemon, then the config is reloaded.</div>
+                <div className="paseo-ops-row">
+                  <button type="button" className="btn small" disabled={busy || diff.length === 0} data-testid="paseo-ops-edit-apply" onClick={() => void applyEdit()}>Apply and reload</button>
+                  <button type="button" className="btn ghost small" disabled={busy} data-testid="paseo-ops-edit-back" onClick={() => setConfirming(false)}>Back</button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+        <div className="paseo-ops-locked" data-testid="paseo-ops-locked">
+          <div className="muted small">Read-only here ({LOCKED_NOTE}):</div>
+          <ul>
+            {LOCKED_CONFIG_SECTIONS.map((l) => <li key={l.path}><span>{l.label}</span> <code className="muted small">{l.path}</code></li>)}
+          </ul>
+        </div>
         <pre className="paseo-ops-pre" data-testid="paseo-ops-config">{config ? formatConfigJson(config) : busy ? "(loading…)" : "(unavailable)"}</pre>
       </div>
 

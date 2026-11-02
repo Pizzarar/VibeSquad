@@ -3709,5 +3709,13 @@ button.project-file-name:hover { text-decoration: underline; }
 .paseo-ops-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .paseo-ops-err { border: 1px solid var(--red, #ff4d6d); padding: 6px 8px; font-size: 12px; }
 .paseo-ops-pre { margin: 0; padding: 8px; max-height: 260px; overflow: auto; border: 1px solid var(--line); font-size: 11px; white-space: pre-wrap; word-break: break-word; }
+.paseo-ops-edit, .paseo-ops-locked { border: 1px solid var(--line); padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+.paseo-ops-field { display: flex; flex-direction: column; gap: 3px; }
+.paseo-ops-field select, .paseo-ops-field input[type="text"], .paseo-ops-field input[type="number"] { max-width: 100%; }
+.paseo-ops-diff { display: flex; flex-direction: column; gap: 6px; }
+.paseo-ops-diff-row { font-size: 12px; word-break: break-word; }
+.paseo-ops-old { color: var(--red, #ff4d6d); }
+.paseo-ops-new { color: var(--green, #3ddc97); }
+.paseo-ops-locked ul { margin: 0; padding-left: 18px; font-size: 12px; }
 .paseo-ops-report { border: 1px solid var(--line); padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; }
 .paseo-ops-report-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; background: none; border: 0; color: inherit; font: inherit; padding: 0; cursor: pointer; text-align: left; }
