@@ -75,3 +75,18 @@ test("overlay: dropFromOverlay evicts archived / removed ids", () => {
   assert.deepEqual([...dropFromOverlay(ov, ["a", "z"]).keys()], ["b"]);
   assert.equal(dropFromOverlay(ov, ["z"]), ov);
 });
+
+test("workspaceIdForAgent: own id first, else deepest folder holding the cwd", async () => {
+  const { workspaceIdForAgent } = await import("../src/workspaceLogic.ts");
+  const ws = new Map([
+    ["root", { workspaceDirectory: "C:\\repo" }],
+    ["wt", { workspaceDirectory: "C:\\repo\\.worktrees\\a\\" }],
+    ["other", { workspaceDirectory: "C:\\repo-two" }],
+  ]);
+  assert.equal(workspaceIdForAgent({ cwd: "C:\\repo\\.worktrees\\a\\src", workspaceId: "own" }, ws), "own");
+  assert.equal(workspaceIdForAgent({ cwd: "c:/repo/.worktrees/a/src" }, ws), "wt");
+  assert.equal(workspaceIdForAgent({ cwd: "C:\\repo" }, ws), "root");
+  assert.equal(workspaceIdForAgent({ cwd: "C:\\repo-two\\x" }, ws), "other");
+  assert.equal(workspaceIdForAgent({ cwd: "C:\\elsewhere" }, ws), null);
+  assert.equal(workspaceIdForAgent({ cwd: "" }, ws), null);
+});

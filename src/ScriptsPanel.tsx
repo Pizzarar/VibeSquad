@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import { daemonClient, DEMO, usePaseo } from "./paseo";
+import { workspaceIdForAgent } from "./workspaceLogic";
 
 type PkgScript = { scriptName: string; command: string; source: "package.json" };
 
@@ -28,20 +29,7 @@ export function ScriptsPanel({ agent }: { agent: PaseoAgent }) {
   const [savingPkg, setSavingPkg] = useState<Set<string>>(new Set());
   const [err, setErr] = useState("");
 
-  const workspaceId = useMemo(() => {
-    if ((agent as { workspaceId?: string }).workspaceId) {
-      return (agent as { workspaceId?: string }).workspaceId!;
-    }
-    const cwd = (agent.cwd ?? "").toLowerCase();
-    for (const [id, ws] of workspaces) {
-      const dir =
-        ((ws as { workspaceDirectory?: string }).workspaceDirectory ??
-          (ws as { directory?: string }).directory ??
-          "").toLowerCase();
-      if (dir && cwd.startsWith(dir)) return id;
-    }
-    return null;
-  }, [agent, workspaces]);
+  const workspaceId = useMemo(() => workspaceIdForAgent(agent, workspaces), [agent, workspaces]);
 
   useEffect(() => {
     let cancelled = false;

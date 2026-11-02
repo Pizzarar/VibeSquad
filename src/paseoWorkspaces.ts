@@ -13,7 +13,10 @@ const withTimeout = <T,>(p: Promise<T>, ms: number, what: string): Promise<T> =>
 export const setWorkspaceTitle = (id: string, title: string | null) => daemonClient.setWorkspaceTitle(id, title);
 export const setWorkspacePinned = (id: string, pinned: boolean) => daemonClient.setWorkspacePinned(id, pinned);
 
-/** Creates a standalone workspace. Paseo 0.14 sends the final response (0.13 clients only saw the "accepted" update). */
+/**
+ * Creates a standalone workspace. Paseo 0.14 sends the final response (0.13 clients only saw the "accepted" update).
+ * Our timeout only stops waiting: createWorkspace takes no AbortSignal in 0.14, so the SDK's own waiter outlives it.
+ */
 export async function createStandaloneWorkspace(source: CreateSource, title?: string, timeoutMs = 30000): Promise<{ workspace: PaseoWorkspace | null; workspaceId: string | null }> {
   const res = await withTimeout(daemonClient.createWorkspace({ source, ...(title ? { title } : {}) }), timeoutMs, "Create").catch((e: Error) => {
     throw e.message === "Create timed out" ? new Error("Create timed out. The workspace may still have appeared: check the list.") : e;

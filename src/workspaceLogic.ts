@@ -109,3 +109,25 @@ export function dropFromOverlay<W>(overlay: Map<string, OverlayEntry<W>>, ids: s
   for (const i of ids) next.delete(i);
   return next;
 }
+
+const normDir = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+
+/**
+ * The agent's Paseo workspace: its own workspaceId, else the workspace whose folder holds the agent's cwd
+ * (deepest folder wins, so a worktree's workspace beats the repo root's).
+ */
+export function workspaceIdForAgent(
+  agent: { cwd?: string | null; workspaceId?: string | null },
+  workspaces: Iterable<[string, { workspaceDirectory?: string | null; directory?: string | null }]>,
+): string | null {
+  if (agent.workspaceId) return agent.workspaceId;
+  const cwd = normDir(agent.cwd ?? "");
+  if (!cwd) return null;
+  let best: { id: string; len: number } | null = null;
+  for (const [id, ws] of workspaces) {
+    const dir = normDir(ws.workspaceDirectory ?? ws.directory ?? "");
+    if (!dir || (cwd !== dir && !cwd.startsWith(dir + "/"))) continue;
+    if (!best || dir.length > best.len) best = { id, len: dir.length };
+  }
+  return best?.id ?? null;
+}

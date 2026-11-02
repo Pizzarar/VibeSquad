@@ -168,5 +168,5 @@ test("failed install surfaces an error and a retry succeeds", async () => {
 test("third-party licenses credit Node.js and the pinned Paseo CLI", () => {
   const text = readFileSync(join(ROOT, "public", "THIRD-PARTY-LICENSES.txt"), "utf8");
   assert.match(text, /Copyright Node\.js contributors/);
-  assert.match(text, /@getpaseo\/cli@0\.13\.2/);
+  assert.match(text, /@getpaseo\/cli@0\.14\.0/);
 });
