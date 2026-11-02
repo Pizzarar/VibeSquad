@@ -8,7 +8,7 @@ import test from "node:test";
 import { attentionItems } from "../src/attentionItems.ts";
 import { bestOverlap, patchLane, pinStateOf, pinsForSquad } from "../src/pins.ts";
 import { removeTeamPlan, runRemoveTeam } from "../src/pinRemoveLogic.ts";
-import { buildTeamViews, countsAsNeedsYou, getTeams, refreshTeams, resolve, shownLanesOf } from "../src/teams.ts";
+import { assignAgentToLane, buildTeamViews, countsAsNeedsYou, getTeams, refreshTeams, resolve, shownLanesOf } from "../src/teams.ts";
 import { removeTeamWorktrees } from "../server/team-worktrees.mjs";
 
 // The live registry shape: the legacy `pinned` lane shares VibeSquad's paths; `gone` is already removed.
@@ -25,7 +25,7 @@ const REGISTRY = [
       { id: "gone", name: "Gone Team", state: "removed", removedAt: "2026-11-01T00:00:00.000Z" },
     ],
   },
-  { id: "site", name: "Site", color: "#f0f", paths: ["rosserlogic.tech"], lanes: [{ id: "site-polish", name: "Site Polish", paths: ["rosserlogic.tech"] }] },
+  { id: "site", name: "Site", color: "#f0f", paths: ["example.dev"], lanes: [{ id: "site-polish", name: "Site Polish", paths: ["example.dev"] }] },
 ];
 
 async function useRegistry(teams = REGISTRY) {
@@ -281,8 +281,8 @@ test("server: real git round trip removes a clean worktree + merged branch and k
 test("an archived or closed agent with needs-you set counts 0 in the lane, squad and attention list", () => {
   const needs = { "needs-you": "approve the plan" };
   const agents = [
-    agent("arch", { team: "site", lane: "site-polish", role: "brainstorm", ...needs }, { cwd: "C:\\p\\rosserlogic.tech", archivedAt: "2026-11-02T02:55:24.297Z" }),
-    agent("closed", { team: "site", lane: "site-polish", role: "worker", ...needs }, { cwd: "C:\\p\\rosserlogic.tech", status: "closed" }),
+    agent("arch", { team: "site", lane: "site-polish", role: "brainstorm", ...needs }, { cwd: "C:\\p\\example.dev", archivedAt: "2026-11-02T02:55:24.297Z" }),
+    agent("closed", { team: "site", lane: "site-polish", role: "worker", ...needs }, { cwd: "C:\\p\\example.dev", status: "closed" }),
   ];
   const members = resolve(asMap(agents));
   assert.ok(members.every((m) => m.attention?.tone === "needs-you"), "attention itself is still derived");
@@ -293,9 +293,28 @@ test("an archived or closed agent with needs-you set counts 0 in the lane, squad
   assert.equal(attentionItems(members).length, 0);
 
   // A live agent with the same label still counts.
-  const live = resolve(asMap([...agents, agent("live", { team: "site", lane: "site-polish", role: "lead", ...needs }, { cwd: "C:\\p\\rosserlogic.tech" })]));
+  const live = resolve(asMap([...agents, agent("live", { team: "site", lane: "site-polish", role: "lead", ...needs }, { cwd: "C:\\p\\example.dev" })]));
   const v2 = buildTeamViews(live).find((v) => v.team.id === "site");
   assert.equal(v2.needsYou, 1);
   assert.equal(pinsForSquad(v2).pinned[0].needsYou, 1);
   assert.equal(attentionItems(live).length, 1);
+});
+
+// ── Block 4: assignAgentToLane stale-label merge ──────────────────────────────
+
+test("assigning a lane patches only the keys it changes and leaves the agent object alone", async () => {
+  // A render-time snapshot: needs-you was set then; since then the agent cleared it on the daemon.
+  const snap = agent("orph", { orphan: "1", lead: "old-lane", "needs-you": "approve plan", job: "x" });
+  const before = JSON.stringify(snap);
+  const patches = [];
+  const r = await assignAgentToLane(snap, "bug-chaser", async (id, patch) => void patches.push(patch));
+  assert.deepEqual(patches, [{ labels: { lane: "bug-chaser", team: "vibesquad", orphan: "", role: "worker", lead: "bug-chaser" } }]);
+  assert.ok(!("needs-you" in patches[0].labels), "a stale needs-you is never written back");
+  assert.equal(JSON.stringify(snap), before, "no in-place mutation of the store's agent");
+  assert.equal(r.labels["needs-you"], "approve plan", "the returned labels are snapshot + patch");
+
+  // An existing role is kept by not sending one; no lead label means none is added.
+  const p2 = [];
+  await assignAgentToLane(agent("lead2", { role: "lead", ord: "2" }), "site-polish", async (_id, patch) => void p2.push(patch.labels));
+  assert.deepEqual(p2, [{ lane: "site-polish", team: "site", orphan: "" }]);
 });

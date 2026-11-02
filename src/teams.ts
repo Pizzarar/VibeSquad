@@ -451,25 +451,20 @@ export async function assignAgentToLane(
     throw new Error(`Unknown lane "${laneId}"`);
   }
   const existing = labelsOf(agent);
+  // Send only the keys that change. The daemon merges label patches, so resending the whole (possibly
+  // stale) snapshot would write back values changed since this render, e.g. a needs-you already cleared.
+  // The agent object is not mutated: the daemon's upsert updates the store.
   const nextLabels: Record<string, string> = {
-    ...existing,
     lane: found.lane.id,
     team: found.team.id,
     orphan: "",
-    role: existing.role || "worker",
+    ...(existing.role ? {} : { role: "worker" }),
+    ...("lead" in existing ? { lead: found.lane.id } : {}),
   };
-  if ("lead" in nextLabels) {
-    nextLabels.lead = found.lane.id;
-  }
-  if (agent.labels && typeof agent.labels === "object") {
-    Object.assign(agent.labels, nextLabels);
-  } else {
-    (agent as any).labels = { ...nextLabels };
-  }
   if (typeof updateFn === "function") {
     await updateFn(agent.id, { labels: nextLabels });
   }
-  return { laneId: found.lane.id, teamId: found.team.id, labels: nextLabels };
+  return { laneId: found.lane.id, teamId: found.team.id, labels: { ...existing, ...nextLabels } };
 }
 
 const memberCache = new WeakMap<PaseoAgent, Member>();
