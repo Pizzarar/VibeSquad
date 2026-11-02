@@ -1,0 +1,13 @@
+/* RiffBot hub bar (docs/PLAN_HUB_BUDDY.md block 4). Accent: --hot-pink, unused by Team Buddy chips and Leads. */
+.hub-bar { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; padding: 6px 12px; border: 1px solid var(--hot-pink-dim); background: var(--panel); border-radius: 6px; min-width: 0; }
+.hub-bar-head { min-width: 0; }
+.hub-bar-head > .hub-bar { margin: 0; border-radius: 0; border-width: 0 0 1px; }
+.hub-bar-btn { background: var(--hot-pink-dim); color: var(--hot-pink); border: 1px solid var(--hot-pink); border-radius: 4px; padding: 4px 12px; font-family: var(--arcade); font-size: 10px; letter-spacing: 0.8px; cursor: pointer; white-space: nowrap; }
+.hub-bar-btn:hover, .hub-bar-btn:focus-visible { background: var(--hot-pink); color: var(--bg); box-shadow: 0 0 8px var(--hot-pink-dim); }
+.hub-bar-long { display: inline; }
+.hub-bar-short { display: none; }
+.hub-bar-badge { color: var(--hot-pink); border: 1px solid var(--hot-pink-dim); border-radius: 10px; padding: 1px 8px; font-size: 11px; white-space: nowrap; }
+@media (max-width: 600px) {
+  .hub-bar-long { display: none; }
+  .hub-bar-short { display: inline; }
+}

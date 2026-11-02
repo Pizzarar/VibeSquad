@@ -84,6 +84,7 @@ import { pinsForSquad, type Pin } from "./pins";
 import { popAction, urlAgentFor } from "./pinFocusLogic";
 import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, usePinFocus, usePinsHome, useSquadsHome } from "./pinFocus";
 import { TopBreadcrumb } from "./Breadcrumb";
+import { HubBar } from "./HubBar";
 import { PinFocusHeader, PinRail } from "./PinRail";
 import { PinToast } from "./PinIdeas";
 import { NewSquadModal } from "./NewSquadModal";
@@ -2035,6 +2036,7 @@ export function App() {
             squadName={view?.team.name ?? ""}
             onSelectSquad={onTeam}
           />
+          {screen === "teams" && !squadsHome && <HubBar view={view} onOpen={onQuickStart} />}
           {screen === "workspaces" ? (
             <WorkspacesView />
           ) : dateGrouped ? (
@@ -2071,7 +2073,7 @@ export function App() {
       {(hasTabs || focus || pinFocused) && (
         <AgentPanes
           onSuccessor={paneSuccessor}
-          header={pinFocusView && pinFocus ? <PinFocusHeader view={pinFocusView} focus={pinFocus} onStart={onRailPick} onSelectSquad={onTeam} /> : undefined}
+          header={pinFocusView && pinFocus ? <div className="hub-bar-head"><PinFocusHeader view={pinFocusView} focus={pinFocus} onStart={onRailPick} onSelectSquad={onTeam} /><HubBar view={pinFocusView} onOpen={onQuickStart} /></div> : undefined}
         />
       )}
       {pinFocusView && pinFocus && <PinRail view={pinFocusView} focus={pinFocus} onPick={onRailPick} />}
