@@ -69,6 +69,11 @@ describe("auto-update config & release helpers", () => {
     assert.equal(computeNextBetaVersion("0.1.1"), "0.1.1-beta.1");
     assert.equal(computeNextBetaVersion("0.1.1-beta.1"), "0.1.1-beta.2");
     assert.equal(computeNextBetaVersion("0.1.1-beta.9"), "0.1.1-beta.10");
+    // 0d: once v0.1.1 shipped as stable, betas move past it (0.1.1-beta.N < 0.1.1 in semver).
+    const shipped = { stableReleased: (b) => b === "0.1.1" };
+    assert.equal(computeNextBetaVersion("0.1.1-beta.5", shipped), "0.1.2-beta.1");
+    assert.equal(computeNextBetaVersion("0.1.1", shipped), "0.1.2-beta.1");
+    assert.equal(computeNextBetaVersion("0.1.2-beta.1", shipped), "0.1.2-beta.2");
     assert.equal(computeStableVersion("0.1.1-beta.3"), "0.1.1");
   });
 

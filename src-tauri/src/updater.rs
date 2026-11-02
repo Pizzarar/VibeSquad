@@ -48,6 +48,25 @@ pub fn normalize_channel(ch: &str) -> String {
     }
 }
 
+/// The channel the updater follows. An explicit pick (Settings) wins. Otherwise a pre-release build
+/// (0.1.1-beta.5) follows beta: with the first-run default "stable" it was offered the older 0.1.1 stable
+/// and never saw the next beta (docs/PLAN_BUGS_BATCH1.md block 0d). Stable builds keep stable.
+pub fn effective_channel(configured: &str, explicit: bool, current_version: &str) -> String {
+    let ch = normalize_channel(configured);
+    if explicit || ch == "beta" {
+        return ch;
+    }
+    let pre = semver::Version::parse(current_version.trim().trim_start_matches('v'))
+        .map(|v| !v.pre.is_empty())
+        .unwrap_or(false);
+    if pre { "beta".to_string() } else { ch }
+}
+
+fn channel_of(state: &Arc<SharedAppState>) -> String {
+    let cfg = state.config.read().unwrap();
+    effective_channel(&cfg.update_channel, cfg.update_channel_explicit, env!("CARGO_PKG_VERSION"))
+}
+
 pub fn endpoint_for_channel(channel: &str) -> String {
     let ch = normalize_channel(channel);
     if let Ok(base) = std::env::var("VIBESQUAD_UPDATE_BASE_URL") {
@@ -121,7 +140,7 @@ fn now_unix_secs() -> u64 {
 }
 
 pub fn status_json(state: &Arc<SharedAppState>) -> Value {
-    let channel = normalize_channel(&state.config.read().unwrap().update_channel);
+    let channel = channel_of(state);
     let endpoint = endpoint_for_channel(&channel);
     let up = state.updater.lock().unwrap().clone();
     let busy = is_any_agent_running(state);
@@ -153,7 +172,7 @@ pub fn is_any_agent_running(state: &Arc<SharedAppState>) -> bool {
 }
 
 pub async fn check_for_updates(state: &Arc<SharedAppState>) -> Value {
-    let channel = normalize_channel(&state.config.read().unwrap().update_channel);
+    let channel = channel_of(state);
     let endpoint = endpoint_for_channel(&channel);
     let checked_at = now_unix_secs();
 
@@ -454,6 +473,7 @@ pub async fn handle_updater_channel(
     {
         let mut cfg = state.config.write().unwrap();
         cfg.update_channel = raw;
+        cfg.update_channel_explicit = true;
         let _ = save_config(&cfg);
     }
     {
@@ -495,7 +515,7 @@ pub async fn handle_updater_busy(
         let mut up = state.updater.lock().unwrap();
         up.forced_busy = payload.busy;
     }
-    let channel = normalize_channel(&state.config.read().unwrap().update_channel);
+    let channel = channel_of(&state);
     let ready = {
         let up = state.updater.lock().unwrap();
         up.downloaded && !up.install_triggered
@@ -515,7 +535,7 @@ pub fn spawn_updater_loop(state: Arc<SharedAppState>) {
             tokio::time::sleep(Duration::from_secs(30)).await;
             ticks += 1;
             // Every 30s, if beta has a downloaded update waiting for an in-flight agent turn to finish, install once idle.
-            let channel = normalize_channel(&state.config.read().unwrap().update_channel);
+            let channel = channel_of(&state);
             let pending_beta = {
                 let up = state.updater.lock().unwrap();
                 channel == "beta" && up.downloaded && !up.install_triggered
