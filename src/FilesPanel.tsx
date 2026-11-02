@@ -4,6 +4,8 @@ import type { FileExplorerDirectoryPayload } from "@getpaseo/client/internal/dae
 import { daemonClient, DEMO } from "./paseo";
 import { MarkdownRenderer } from "./Timeline";
 import { normalizeRepoPath } from "./fileLinks";
+import { baseName, isUnder, nameTaken, parentPath, remapPath, validateEntryName } from "./fileOps";
+import { createEntry, deleteEntry, duplicateEntry, renameEntry } from "./paseoFiles";
 
 type DirEntry = FileExplorerDirectoryPayload["entries"][number];
 
@@ -55,6 +57,15 @@ function isBinaryBytes(bytes: Uint8Array): boolean {
   return false;
 }
 
+const MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024;
+
+type FileDialog =
+  | { kind: "create"; entry: "file" | "directory"; parent: string }
+  | { kind: "rename"; node: TreeNode }
+  | { kind: "delete"; node: TreeNode };
+
+type FileMenu = { x: number; y: number; node: TreeNode | null };
+
 function findNode(nodes: TreeNode[], path: string): TreeNode | undefined {
   for (const n of nodes) {
     if (n.path === path) return n;
@@ -98,6 +109,14 @@ export function FilesPanel({
   const treeRef2 = useRef<TreeNode[]>([]);
   treeRef2.current = tree;
   const unsubscribeRef = useRef<(() => void) | null>(null);
+  const expandedRef = useRef<Set<string>>(expanded);
+  expandedRef.current = expanded;
+  const [menu, setMenu] = useState<FileMenu | null>(null);
+  const [dialog, setDialog] = useState<FileDialog | null>(null);
+  const [dialogName, setDialogName] = useState("");
+  const [dialogErr, setDialogErr] = useState("");
+  const [opBusy, setOpBusy] = useState(false);
+  const [opErr, setOpErr] = useState("");
 
   // Load root directory on mount / cwd change
   useEffect(() => {
@@ -318,14 +337,233 @@ export function FilesPanel({
     }
   };
 
-  const isMd = !!openFile && /\.(md|markdown)$/i.test(openFile);
+  // Re-list the root and every expanded folder (shallowest first so parents exist before children).
+  const refreshTree = useCallback(async () => {
+    if (DEMO) return;
+    try {
+      const dir = await daemonClient.listDirectory(cwd, "");
+      setTree(entriesToNodes(dir.entries));
+    } catch {
+      return;
+    }
+    const open = [...expandedRef.current].sort((a, b) => a.split("/").length - b.split("/").length);
+    for (const p of open) await loadDir(p);
+  }, [cwd, loadDir]);
+
+  const closeViewerIf = (path: string) => {
+    if (openFile && isUnder(openFile, path)) {
+      unsubscribeRef.current?.();
+      unsubscribeRef.current = null;
+      setOpenFile(null);
+      setEditMode(false);
+    }
+  };
+
+  // Names already in `parent`; asks the daemon when the folder was never expanded (children not loaded).
+  const siblingNames = async (parent: string): Promise<string[]> => {
+    const list = parent ? findNode(tree, parent)?.children : tree;
+    if (list) return list.map((n) => n.name);
+    const dir = await daemonClient.listDirectory(cwd, parent);
+    return dir.entries.map((e) => e.name);
+  };
+
+  const setExpandedBoth = (next: Set<string>) => {
+    expandedRef.current = next;
+    setExpanded(next);
+  };
+
+  const openDialog = (d: FileDialog) => {
+    setMenu(null);
+    setDialog(d);
+    setDialogErr("");
+    setDialogName(d.kind === "rename" ? d.node.name : "");
+  };
+
+  const submitDialog = async () => {
+    if (!dialog || opBusy) return;
+    setDialogErr("");
+    setOpBusy(true);
+    try {
+      if (DEMO) throw new Error("File operations aren't available in demo mode");
+      if (dialog.kind === "delete") {
+        await deleteEntry(cwd, dialog.node.path);
+        closeViewerIf(dialog.node.path);
+        setExpandedBoth(new Set([...expandedRef.current].filter((p) => !isUnder(p, dialog.node.path))));
+      } else {
+        const name = dialogName.trim();
+        const bad = validateEntryName(name);
+        if (bad) throw new Error(bad);
+        if (dialog.kind === "create") {
+          if (nameTaken(await siblingNames(dialog.parent), name)) throw new Error(`"${name}" already exists here`);
+          await createEntry(cwd, dialog.parent, name, dialog.entry);
+          if (dialog.parent) setExpandedBoth(new Set([...expandedRef.current, dialog.parent]));
+        } else if (name !== dialog.node.name) {
+          if (nameTaken(await siblingNames(parentPath(dialog.node.path)), name, dialog.node.name)) {
+            throw new Error(`"${name}" already exists here`);
+          }
+          const oldPath = dialog.node.path;
+          const renamed = await renameEntry(cwd, oldPath, name);
+          if (renamed) {
+            setExpandedBoth(new Set([...expandedRef.current].map((p) => remapPath(p, oldPath, renamed))));
+            if (openFile && isUnder(openFile, oldPath)) void openFileNode(remapPath(openFile, oldPath, renamed));
+          } else {
+            closeViewerIf(oldPath);
+          }
+        }
+      }
+      setDialog(null);
+      await refreshTree();
+    } catch (e) {
+      setDialogErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setOpBusy(false);
+    }
+  };
+
+  const duplicateNode = async (node: TreeNode) => {
+    setMenu(null);
+    setOpErr("");
+    try {
+      if (DEMO) throw new Error("File operations aren't available in demo mode");
+      await duplicateEntry(cwd, node.path);
+      await refreshTree();
+    } catch (e) {
+      setOpErr(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  // Download = read the bytes over the existing socket and hand them to the browser. The daemon's
+  // requestDownloadToken is an opaque token for its own HTTP route, which VS doesn't proxy.
+  const downloadNode = async (node: TreeNode) => {
+    setMenu(null);
+    setOpErr("");
+    try {
+      if (DEMO) throw new Error("Download isn't available in demo mode");
+      const tooBig = "File too large to download (over 25 MB)";
+      if (node.size !== undefined && node.size > MAX_DOWNLOAD_BYTES) throw new Error(tooBig);
+      const r = await daemonClient.readFile(cwd, node.path, undefined, MAX_DOWNLOAD_BYTES + 1);
+      if (r.bytes.length > MAX_DOWNLOAD_BYTES) throw new Error(tooBig);
+      const url = URL.createObjectURL(new Blob([r.bytes as BlobPart], { type: r.mime || "application/octet-stream" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = node.name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch (e) {
+      setOpErr(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  // Folder rows create inside themselves; file rows create next to themselves; no row = repo root.
+  const createParentFor = (node: TreeNode | null) => (!node ? "" : node.kind === "directory" ? node.path : parentPath(node.path));
+
+  useEffect(() => {
+    if (!dialog || opBusy) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setDialog(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [dialog, opBusy]);
+
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [menu]);
+
+  const isMd =!!openFile && /\.(md|markdown)$/i.test(openFile);
 
   return (
     <div className="files-panel" data-testid="files-panel">
-      <div className="files-tree" ref={treeRef}>
+      <div className="files-tree" ref={treeRef} onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, node: null }); }}>
+        <div className="files-toolbar">
+          <button className="btn ghost small" data-testid="files-new-file-btn" onClick={() => openDialog({ kind: "create", entry: "file", parent: "" })}>+ File</button>
+          <button className="btn ghost small" data-testid="files-new-folder-btn" onClick={() => openDialog({ kind: "create", entry: "directory", parent: "" })}>+ Folder</button>
+          <button className="btn ghost small" data-testid="files-refresh-btn" title="Refresh tree" onClick={() => void refreshTree()}>↻</button>
+        </div>
+        {opErr && <div className="stat-alert small" data-testid="files-op-error">{opErr}</div>}
         {loading && <div className="muted small">Loading…</div>}
-        {renderNodes(tree, expanded, toggleDir, openFileNode, openFile)}
+        {renderNodes(tree, expanded, toggleDir, openFileNode, openFile, (e, node) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setMenu({ x: e.clientX, y: e.clientY, node });
+        })}
       </div>
+      {menu && (
+        <div
+          className="ctx-menu files-ctx-menu"
+          data-testid="files-ctx-menu"
+          role="menu"
+          style={{ left: Math.max(4, Math.min(menu.x, window.innerWidth - 170)), top: Math.max(4, Math.min(menu.y, window.innerHeight - 220)) }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          <button role="menuitem" data-testid="files-menu-new-file" onClick={() => openDialog({ kind: "create", entry: "file", parent: createParentFor(menu.node) })}>New file…</button>
+          <button role="menuitem" data-testid="files-menu-new-folder" onClick={() => openDialog({ kind: "create", entry: "directory", parent: createParentFor(menu.node) })}>New folder…</button>
+          {menu.node && (
+            <>
+              <button role="menuitem" data-testid="files-menu-rename" onClick={() => openDialog({ kind: "rename", node: menu.node! })}>Rename…</button>
+              <button role="menuitem" data-testid="files-menu-duplicate" onClick={() => void duplicateNode(menu.node!)}>Duplicate</button>
+              {menu.node.kind === "file" && (
+                <button role="menuitem" data-testid="files-menu-download" onClick={() => void downloadNode(menu.node!)}>Download</button>
+              )}
+              <button role="menuitem" className="bad" data-testid="files-menu-delete" onClick={() => openDialog({ kind: "delete", node: menu.node! })}>Delete…</button>
+            </>
+          )}
+        </div>
+      )}
+      {dialog && (
+        <div className="modal-back" onMouseDown={() => !opBusy && setDialog(null)}>
+          <div className="modal files-dialog" data-testid="files-dialog" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <span>
+                {dialog.kind === "delete" ? "Delete" : dialog.kind === "rename" ? "Rename" : dialog.entry === "file" ? "New file" : "New folder"}
+              </span>
+            </div>
+            <div className="modal-body">
+              {dialog.kind === "delete" ? (
+                <div data-testid="files-delete-confirm">
+                  Delete <b>{dialog.node.path}</b>
+                  {dialog.node.kind === "directory" ? " and everything inside it" : ""}? This can't be undone.
+                </div>
+              ) : (
+                <>
+                  <div className="muted small files-dialog-where">
+                    {dialog.kind === "create" ? `in ${dialog.parent || "repo root"}` : `${baseName(dialog.node.path)} in ${parentPath(dialog.node.path) || "repo root"}`}
+                  </div>
+                  <input
+                    autoFocus
+                    data-testid="files-dialog-input"
+                    value={dialogName}
+                    placeholder={dialog.kind === "create" && dialog.entry === "directory" ? "folder-name" : "file-name.ext"}
+                    onChange={(e) => setDialogName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") void submitDialog(); }}
+                    onFocus={(e) => { if (dialog.kind === "rename") e.currentTarget.select(); }}
+                    spellCheck={false}
+                  />
+                </>
+              )}
+            </div>
+            <div className="modal-foot">
+              {dialogErr && <span className="stat-alert small" data-testid="files-dialog-error">{dialogErr}</span>}
+              <button className="btn ghost" onClick={() => setDialog(null)} disabled={opBusy}>Cancel</button>
+              <button
+                className={`btn ${dialog.kind === "delete" ? "bad" : "ok"}`}
+                data-testid="files-dialog-confirm"
+                onClick={() => void submitDialog()}
+                disabled={opBusy}
+              >
+                {opBusy ? "Working…" : dialog.kind === "delete" ? "Delete" : dialog.kind === "rename" ? "Rename" : "Create"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {openFile && (
         <div className="files-viewer">
           <div className="files-viewer-header">
@@ -430,34 +668,42 @@ function renderNodes(
   onToggle: (p: string) => void,
   onOpen: (p: string) => void,
   openFile: string | null,
+  onMenu: (e: React.MouseEvent, node: TreeNode) => void,
   depth = 0,
 ): React.ReactNode {
   return nodes.map((n) => (
     <div key={n.path} style={{ paddingLeft: depth * 12 }}>
       {n.kind === "directory" ? (
         <>
-          <button
-            className={`files-tree-entry dir${expanded.has(n.path) ? " open" : ""}`}
-            data-testid="files-dir-row"
-            data-path={n.path}
-            onClick={() => onToggle(n.path)}
-          >
-            <span className="files-icon">{expanded.has(n.path) ? "▾" : "▸"}</span>
-            {n.name}
-          </button>
+          <div className="files-row" onContextMenu={(e) => onMenu(e, n)}>
+            <button
+              className={`files-tree-entry dir${expanded.has(n.path) ? " open" : ""}`}
+              data-testid="files-dir-row"
+              data-path={n.path}
+              onClick={() => onToggle(n.path)}
+            >
+              <span className="files-icon">{expanded.has(n.path) ? "▾" : "▸"}</span>
+              {n.name}
+            </button>
+            <button className="files-row-more" data-testid="files-row-more" aria-label={`Actions for ${n.name}`} onClick={(e) => onMenu(e, n)}>⋯</button>
+          </div>
           {expanded.has(n.path) && n.children
-            ? renderNodes(n.children, expanded, onToggle, onOpen, openFile, depth + 1)
+            ? renderNodes(n.children, expanded, onToggle, onOpen, openFile, onMenu, depth + 1)
             : null}
         </>
       ) : (
-        <button
-          className={`files-tree-entry file${n.path === openFile ? " active" : ""}`}
-          data-testid="files-file-row"
-          onClick={() => onOpen(n.path)}
-        >
-          <span className="files-icon">📄</span>
-          {n.name}
-        </button>
+        <div className="files-row" onContextMenu={(e) => onMenu(e, n)}>
+          <button
+            className={`files-tree-entry file${n.path === openFile ? " active" : ""}`}
+            data-testid="files-file-row"
+            data-path={n.path}
+            onClick={() => onOpen(n.path)}
+          >
+            <span className="files-icon">📄</span>
+            {n.name}
+          </button>
+          <button className="files-row-more" data-testid="files-row-more" aria-label={`Actions for ${n.name}`} onClick={(e) => onMenu(e, n)}>⋯</button>
+        </div>
       )}
     </div>
   ));

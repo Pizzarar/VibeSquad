@@ -3688,3 +3688,18 @@ button.project-file-name:hover { text-decoration: underline; }
 .changes-check-text { margin: 0; max-height: 140px; overflow: auto; white-space: pre-wrap; font-family: var(--mono); font-size: 11px; }
 .changes-timeline-item { border-bottom: 1px solid var(--line); padding-bottom: 3px; }
 @media (max-width: 480px) { .changes-commit-files .changes-file-header { flex-wrap: wrap; } }
+
+/* ---- Parity D1: file ops + terminal capture ---- */
+.files-toolbar { display: flex; gap: 6px; padding-bottom: 6px; }
+.files-row { display: flex; align-items: center; }
+.files-row .files-tree-entry { flex: 1; min-width: 0; }
+.files-row-more { flex: none; background: transparent; border: 0; color: var(--slate, #8a93b2); cursor: pointer; padding: 2px 8px; font: inherit; border-radius: 4px; }
+.files-row-more:hover { color: var(--cyan); background: var(--panel-hi); }
+.files-ctx-menu { min-width: 150px; }
+.files-ctx-menu button.bad { color: var(--hot-pink); }
+.files-dialog { width: 420px; }
+.files-dialog-where { margin-bottom: 6px; word-break: break-all; }
+.terminal-tab-input { width: 110px; min-width: 0; background: var(--navy); color: var(--text); border: 1px solid var(--cyan); font: inherit; padding: 0 4px; }
+.terminal-capture-modal .modal-body { padding: 0; }
+.terminal-capture-text { margin: 0; padding: 12px 14px; font-family: var(--mono); font-size: 11px; line-height: 1.4; white-space: pre-wrap; word-break: break-all; max-height: 60vh; overflow: auto; background: var(--navy); color: var(--text); }
+.terminal-capture-modal .modal-body > .muted, .terminal-capture-modal .modal-body > .stat-alert { margin: 14px; }
