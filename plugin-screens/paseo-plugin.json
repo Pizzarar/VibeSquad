@@ -1,0 +1,9 @@
+{
+  "id": "vibesquad-screens",
+  "name": "VibeSquad screens",
+  "description": "Read-only VibeSquad Squads home inside Paseo. Off until enabled in its settings.",
+  "media": [],
+  "requirements": {
+    "paseo": ">=0.13.2"
+  }
+}
