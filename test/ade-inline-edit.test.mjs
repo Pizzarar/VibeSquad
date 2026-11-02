@@ -171,3 +171,11 @@ test("review nits: cheat-sheet rows keyed by command id, stale-session guards, b
   assert.match(ie, /if \(!cur \|\| cur\.id !== id\) return;/);
   assert.match(ie, /const stats = hunkStats\(live\)/);
 });
+
+test("slow sends: a send timeout keeps watching, and the idle fallback starts only after the send settles", () => {
+  const ie = src("InlineEdit.tsx");
+  assert.match(ie, /if \(!\/timeout\/i\.test\(msg\)\)/, "only non-timeout send failures end the session");
+  const send = ie.indexOf("await sendMessage(opts.agentId, sent)");
+  const timer = ie.indexOf("const t = setTimeout(() => { sawRunning = true; check(); }, 15_000)");
+  assert.ok(send > 0 && timer > send, "fallback timer is armed after the send");
+});

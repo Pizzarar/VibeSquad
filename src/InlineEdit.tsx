@@ -91,7 +91,7 @@ async function refresh(key: string, id: number) {
     const cur = sessions.get(key);
     if (!cur || cur.id !== id) return;
     const changed = text !== cur.snapshot;
-    patch(key, id, { current: text, currentMtime: mtime, phase: changed ? "changed" : cur.agentDone ? "untouched" : "pending" });
+    patch(key, id, { current: text, currentMtime: mtime, phase: changed ? "changed" : cur.agentDone ? "untouched" : "pending", ...(changed ? { error: "" } : {}) });
   } catch (e) {
     patch(key, id, { phase: "error", error: e instanceof Error ? e.message : String(e) });
   }
@@ -151,16 +151,23 @@ export async function startInlineEdit(opts: { cwd: string; path: string; agentId
     }
   };
   offs.push(subscribePaseo(check));
-  // An agent that finished before the store ever showed it running still settles.
-  const t = setTimeout(() => { sawRunning = true; check(); }, 15_000);
-  offs.push(() => clearTimeout(t));
 
   try {
     await sendMessage(opts.agentId, sent);
   } catch (e) {
-    patch(key, id, { phase: "error", error: `Not sent: ${e instanceof Error ? e.message : String(e)}` });
-    return null;
+    const msg = e instanceof Error ? e.message : String(e);
+    // A timeout only means the daemon didn't confirm in time; a busy daemon often still delivers, so keep watching.
+    if (!/timeout/i.test(msg)) {
+      patch(key, id, { phase: "error", error: `Not sent: ${msg}` });
+      return null;
+    }
+    patch(key, id, { error: "The daemon was slow to confirm the send; still watching the file." });
   }
+  if (!alive(key, id)) return null;
+  // An agent that finished before the store ever showed it running still settles. Counted from the
+  // send settling, so a slow send can't be mistaken for "finished without touching".
+  const t = setTimeout(() => { sawRunning = true; check(); }, 15_000);
+  offs.push(() => clearTimeout(t));
   check();
   return null;
 }
