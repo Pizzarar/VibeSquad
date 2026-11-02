@@ -292,12 +292,23 @@ export function FilesPanel({
     setSaving(true);
     setSaveErr("");
     try {
-      await daemonClient.writeFile({
+      const res = await daemonClient.writeFile({
         cwd,
         path: openFile,
         content: editValue,
         expectedModifiedAt: fileModifiedAt,
       });
+      // writeFile resolves (doesn't throw) on a stale or failed write, so check the status.
+      const r = res as { status?: string; error?: string; modifiedAt?: string };
+      if (r?.status === "conflict") {
+        setSaveErr("Not saved: the file changed on disk since you opened it. Copy your edit, reopen the file and try again.");
+        return;
+      }
+      if (r?.status === "error") {
+        setSaveErr(`Not saved: ${r.error ?? "write failed"}`);
+        return;
+      }
+      if (r?.modifiedAt) setFileModifiedAt(r.modifiedAt); // a second save in the same session stays fresh
       setFileContent(editValue);
       setEditMode(false);
     } catch (e) {

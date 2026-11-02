@@ -5,11 +5,27 @@ import type { DraftImageView } from "./imageDrafts";
 import { formatSize, MAX_INLINE_BYTES, fenceFile, type useAttachments } from "./attachments";
 import { isImeComposing, shouldComposerSubmit } from "./IdeaInbox";
 import { composerKeyAction, usePref } from "./prefs";
+import {
+  filterListing,
+  filterMentionEntries,
+  isUrlMention,
+  LIST_TIMEOUT_MS,
+  mentionInsertText,
+  mentionLabel,
+  parentDirOf,
+  urlMentions,
+  withTimeout,
+  type MentionEntry,
+} from "./projectContext";
 
 // ── Pure helpers (mirrored in test/ade-batch-f.test.mjs) ──────────────────────
 
 export const FALLBACK_COMMANDS = ["/compact", "/clear", "/help", "/model", "/mode", "/rewind"];
 export const DEMO_MENTION_FILES = ["src/App.tsx", "src/Composer.tsx", "package.json", "README.md"];
+const DEMO_ENTRIES: MentionEntry[] = [
+  { path: "src", kind: "directory" },
+  ...DEMO_MENTION_FILES.map((path) => ({ path, kind: "file" as const })),
+];
 export const MAX_FILE_BYTES = 2 * 1024 * 1024;
 export { MAX_INLINE_BYTES, fenceFile };
 export const FILE_ACCEPT =
@@ -115,6 +131,7 @@ function saveHistory(id: string, h: string[]) {
 }
 
 const commandCache = new Map<string, string[]>();
+const listingCache = new Map<string, Promise<MentionEntry[]>>();
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const dc = daemonClient as any;
 
@@ -172,7 +189,8 @@ export function Composer({
   const taRef = useRef<HTMLTextAreaElement>(null);
   const [caret, setCaret] = useState(0);
   const [cmds, setCmds] = useState<string[]>(FALLBACK_COMMANDS);
-  const [files, setFiles] = useState<string[]>(DEMO ? DEMO_MENTION_FILES : []);
+  const [files, setFiles] = useState<MentionEntry[]>(DEMO ? DEMO_ENTRIES : []);
+  const [listFailed, setListFailed] = useState(false);
   const [sel, setSel] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -185,7 +203,9 @@ export function Composer({
   const slash = dismissed ? null : slashToken(draft, caret);
   const mention = dismissed || slash ? null : mentionToken(draft, caret);
   const slashItems = slash ? filterSlash(cmds, slash.query) : [];
-  const mentionItems = mention ? filterMentionFiles(files, mention.query) : [];
+  const urlItem: MentionEntry | null = mention && isUrlMention(mention.query) ? { path: mention.query, kind: "file" } : null;
+  const mentionItems: MentionEntry[] = urlItem ? [urlItem] : mention ? filterMentionEntries(files, mention.query) : [];
+  const urlChips = urlMentions(draft);
   const histItems = searching ? searchHistory(history, hq) : [];
 
   useEffect(() => {
@@ -219,28 +239,52 @@ export function Composer({
     };
   }, [agent.id]);
 
-  const mq = mention?.query;
+  const mq = mention && !isUrlMention(mention.query) ? mention.query : undefined;
   useEffect(() => {
     if (mq === undefined) return;
     if (DEMO) {
-      setFiles(DEMO_MENTION_FILES);
+      setFiles(DEMO_ENTRIES);
       return;
     }
     let cancelled = false;
+    const toEntry = (e: { path?: string; kind?: string } | string): MentionEntry =>
+      typeof e === "string"
+        ? { path: e.replace(/\/+$/, ""), kind: e.endsWith("/") ? "directory" : "file" }
+        : { path: e.path ?? "", kind: e.kind === "directory" ? "directory" : "file" };
+    const cwd = agent.cwd ?? "";
+    // Fuzzy suggestions can take 15s+ on a big repo with a busy daemon, so list the query's parent
+    // folder in parallel (cached per folder) and use it when suggestions miss the deadline.
+    const dir = parentDirOf(mq);
+    const key = `${cwd}\n${dir}`;
+    let listing = listingCache.get(key);
+    if (!listing) {
+      listing = Promise.resolve(dc.listDirectory?.(cwd, dir)).then((r: { entries?: Array<{ path: string; kind: string }> } | undefined) =>
+        (r?.entries ?? []).map(toEntry),
+      );
+      listingCache.set(key, listing);
+      listing.catch(() => listingCache.delete(key));
+      setTimeout(() => listingCache.delete(key), 30_000);
+    }
+    const suggest = (async () => {
+      const res = await dc.getDirectorySuggestions?.({ cwd: agent.cwd, query: mq, includeFiles: true, includeDirectories: true, limit: 8 });
+      let list: MentionEntry[] = (res?.entries ?? []).map(toEntry);
+      if (!list.length) list = ((res?.directories ?? []) as string[]).map((d) => ({ path: d, kind: "directory" as const }));
+      return list.filter((e) => e.path);
+    })();
     (async () => {
-      try {
-        const res = await dc.getDirectorySuggestions?.({ cwd: agent.cwd, query: mq, includeFiles: true, includeDirectories: true, limit: 8 });
-        let paths: string[] = (res?.entries ?? res?.suggestions ?? [])
-          .map((e: { path?: string } | string) => (typeof e === "string" ? e : (e.path ?? "")))
-          .filter(Boolean);
-        if (!paths.length) {
-          const dir = await dc.listDirectory?.(agent.cwd, "");
-          paths = (dir?.entries ?? []).map((e: { path: string }) => e.path);
-        }
-        if (!cancelled) setFiles(paths.map((x) => relativizePath(x, agent.cwd ?? "")));
-      } catch {
-        if (!cancelled) setFiles([]);
+      // Time-boxed: a slow or hung listing shows "couldn't list" instead of freezing the menu.
+      const sug = await withTimeout(suggest, LIST_TIMEOUT_MS, [] as MentionEntry[]);
+      if (cancelled) return;
+      let value = sug.value;
+      let failed = false;
+      if (!value.length) {
+        const ls = await withTimeout(listing!, LIST_TIMEOUT_MS, null as MentionEntry[] | null);
+        if (cancelled) return;
+        value = ls.value ? filterListing(ls.value, mq) : [];
+        failed = !ls.value && sug.timedOut;
       }
+      setListFailed(failed);
+      setFiles(value.map((e) => ({ ...e, path: relativizePath(e.path, cwd) })));
     })();
     return () => {
       cancelled = true;
@@ -258,7 +302,7 @@ export function Composer({
     });
   };
   const pickSlash = (c: string) => slash && insertAt(slash.start, `${c} `);
-  const pickMention = (f: string) => mention && insertAt(mention.start, `@${f} `);
+  const pickMention = (e: MentionEntry) => mention && insertAt(mention.start, mentionInsertText(e));
 
   const addFiles = (all: File[]) => {
     if (all.length) setNotice(stageFiles(all, imgs, atts));
@@ -297,8 +341,8 @@ export function Composer({
       if (e.key === "Enter" || e.key === "Tab") {
         e.preventDefault();
         const item = menu[Math.min(sel, menu.length - 1)];
-        if (slash) pickSlash(item);
-        else pickMention(item);
+        if (slash) pickSlash(item as string);
+        else pickMention(item as MentionEntry);
         return;
       }
       if (e.key === "Escape") {
@@ -425,22 +469,36 @@ export function Composer({
           ))}
         </div>
       )}
+      {urlChips.length > 0 && (
+        <div className="composer-files">
+          {urlChips.map((u) => (
+            <span key={u} className="chip file-chip link-chip" data-testid="composer-url-chip" title="Sent as-is; VibeSquad doesn't fetch it">
+              🔗 <span className="file-chip-name">{u}</span>
+            </span>
+          ))}
+        </div>
+      )}
+      {mention && !mentionItems.length && listFailed && (
+        <div className="composer-menu muted small" style={MENU_STYLE} data-testid="composer-mention-failed">
+          Couldn't list files here. Type the path and it is sent as written.
+        </div>
+      )}
       {mentionItems.length > 0 && (
         <div className="composer-menu" style={MENU_STYLE} data-testid="composer-mention-menu" role="listbox">
           {mentionItems.map((f, i) => (
             <div
-              key={f}
+              key={`${f.kind}:${f.path}`}
               role="option"
               aria-selected={i === sel}
               className={`composer-menu-item ${i === sel ? "active" : ""}`}
               style={i === sel ? { background: "rgba(127,127,127,.25)", cursor: "pointer" } : { cursor: "pointer" }}
-              data-testid="composer-mention-item"
+              data-testid={f.kind === "directory" ? "composer-mention-folder" : "composer-mention-item"}
               onMouseDown={(e) => {
                 e.preventDefault();
                 pickMention(f);
               }}
             >
-              @{f}
+              {f === urlItem ? `🔗 ${f.path}` : mentionLabel(f)}
             </div>
           ))}
         </div>

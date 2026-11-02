@@ -46,8 +46,9 @@ test("send failure has inline Retry", () => {
 
 test("mention list does not leak demo files into live composer", () => {
   const s = src("Composer.tsx");
-  assert.match(s, /DEMO \? DEMO_MENTION_FILES : \[\]/);
-  assert.match(s, /if \(!cancelled\) setFiles\(paths/);
+  // Block 3 (@folder): entries carry a kind, and a failed/timed-out listing falls back to [] (never demo files).
+  assert.match(s, /DEMO \? DEMO_ENTRIES : \[\]/);
+  assert.match(s, /LIST_TIMEOUT_MS,\s*\[\] as MentionEntry\[\]/);
 });
 
 test("palette jump focuses composer", () => {
