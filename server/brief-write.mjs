@@ -11,16 +11,18 @@ export const BRIEF_SHRINK_FROM = 1000;
 export const BRIEF_SHRINK_TO = 300;
 export const SEED_IDEA_MAX_CHARS = 2000;
 
-const segment = (v) =>
+// No fallback: an empty slug must never be routed to some other lane's file.
+const slug = (v) =>
   String(v ?? "")
     .trim()
     .replace(/[^A-Za-z0-9_-]+/g, "-")
-    .replace(/^-|-$/g, "") || "vibesquad";
+    .replace(/^-+|-+$/g, "");
+const RESERVED_LANES = new Set(["unassigned", "unknown"]);
 
 /** Copy the current brief to brief-history and keep the newest BRIEF_HISTORY_KEEP. */
 export function backupBrief(laneId, fullPath) {
   if (!existsSync(fullPath)) return null;
-  const dir = join(process.env.VIBESQUAD_HOME || join(homedir(), ".vibesquad"), "brief-history", segment(laneId));
+  const dir = join(process.env.VIBESQUAD_HOME || join(homedir(), ".vibesquad"), "brief-history", slug(laneId) || "_unnamed");
   mkdirSync(dir, { recursive: true });
   let ts = new Date().toISOString().replace(/[:.]/g, "-");
   while (existsSync(join(dir, ts + ".md"))) ts += "x";
@@ -51,9 +53,10 @@ export function writeBriefFile(fullPath, laneId, text) {
  */
 export function seedBriefIfMissing({ root, lane, idea }) {
   const text = String(idea ?? "").trim().slice(0, SEED_IDEA_MAX_CHARS);
-  if (!text || !lane) return null;
-  const fullPath = join(root, "docs", "brainstorm", `${segment(lane)}.md`);
+  const laneSlug = slug(lane);
+  if (!text || !laneSlug || RESERVED_LANES.has(laneSlug.toLowerCase())) return null;
+  const fullPath = join(root, "docs", "brainstorm", `${laneSlug}.md`);
   if (existsSync(fullPath)) return null;
-  writeBriefFile(fullPath, lane, newPinBrief(lane, lane, text));
+  writeBriefFile(fullPath, laneSlug, newPinBrief(laneSlug, laneSlug, text));
   return fullPath;
 }

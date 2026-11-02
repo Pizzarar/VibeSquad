@@ -552,6 +552,10 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       pendingPrompt,
     });
 
+    // The spawn env sets VS_BRIEF_INLINE, so the plugin won't log brief-injected; this is the live check for the lane.
+    try {
+      appendVsLogEntry({ teamId, laneId, agent: agentId, type: "metric", text: `brief-inlined: lane=${laneId} chars=${summary.content.length}` });
+    } catch {}
     let created = null;
     if (connected && client && typeof client.createAgent === "function") {
       created = await client.createAgent({

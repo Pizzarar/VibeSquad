@@ -361,3 +361,52 @@ test("block 6: a Buddy spawned for a lane with no brief file gets one written fr
     spawn({ labels: { role: "brainstorm", team: "vibesquad", lane: "no-idea" } });
     assert.ok(!existsSync(join(briefRoot, "docs", "brainstorm", "no-idea.md")));
   }));
+
+// ---- round 2: seed never routes to the wrong or a reserved lane ----
+import { backupBrief, seedBriefIfMissing } from "../server/brief-write.mjs";
+
+test("seed: reserved or empty-slug lanes write nothing; the slug (not a fallback) names the file", () => {
+  const root = mkdtempSync(join(tmpdir(), "vs-seed-"));
+  try {
+    for (const lane of ["unassigned", "Unknown", "---", "  ", "", "!!!"]) {
+      assert.equal(seedBriefIfMissing({ root, lane, idea: "an idea" }), null, JSON.stringify(lane));
+    }
+    assert.ok(!existsSync(join(root, "docs")), "nothing created");
+    const ok = seedBriefIfMissing({ root, lane: " my lane! ", idea: "an idea" });
+    assert.equal(ok, join(root, "docs", "brainstorm", "my-lane.md"));
+    assert.ok(!existsSync(join(root, "docs", "brainstorm", "vibesquad.md")));
+    assert.match(readFileSync(ok, "utf8"), /`my-lane`/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("backupBrief never files an empty lane under vibesquad", () => {
+  const dir = mkdtempSync(join(tmpdir(), "vs-bk-"));
+  const prev = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = join(dir, "home");
+  try {
+    const f = join(dir, "b.md");
+    writeFileSync(f, "x");
+    const dest = backupBrief("---", f);
+    assert.ok(dest.includes("_unnamed") && !dest.includes("vibesquad"));
+  } finally {
+    prev === undefined ? delete process.env.VIBESQUAD_HOME : (process.env.VIBESQUAD_HOME = prev);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("pin spawn logs brief-inlined: lane=X", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vs-spawn-hygiene-bi-"));
+  const prev = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = join(dir, ".vibesquad");
+  try {
+    resetBrainstormRestartState();
+    const daemon = { fetchAgents: async () => [{ id: "z", labels: { lane: "other" } }], createAgent: async () => ({ id: "n", labels: {} }), archiveAgent: async () => {}, updateAgent: async () => {}, cancelAgent: async () => {} };
+    await performBrainstormRestart({ reason: "start-brainstorm", teamId: "sq", laneId: "inl-log", daemonClient: daemon }, dir);
+    assert.match(readFileSync(join(dir, ".vibesquad", "teams", "sq", "log.jsonl"), "utf8"), /brief-inlined: lane=inl-log/);
+  } finally {
+    prev === undefined ? delete process.env.VIBESQUAD_HOME : (process.env.VIBESQUAD_HOME = prev);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
