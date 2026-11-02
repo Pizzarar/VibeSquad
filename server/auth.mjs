@@ -443,14 +443,38 @@ export function revokeDevice(id) {
 const codes = new Map(); // code -> expiresAt
 const PAIR_WINDOW_MS = 60_000;
 const PAIR_MAX_ATTEMPTS = 5;
+// Bad codes lock out only the IP that sent them (other IPs' live codes stay valid): 1 min, doubling up to 1 h.
 const PAIR_MAX_FAILURES = 5;
+const PAIR_LOCK_BASE_MS = 60_000;
+const PAIR_LOCK_MAX_MS = 60 * 60_000;
+const PAIR_FAILURE_FORGET_MS = 60 * 60_000;
 const pairAttempts = new Map(); // ip -> timestamps
-let pairFailures = 0;
+const pairFailuresByIp = new Map(); // ip -> { count, lastAt, lockedUntil }
 
 export function resetPairRateLimitForTest() {
   pairAttempts.clear();
-  pairFailures = 0;
+  pairFailuresByIp.clear();
   codes.clear();
+}
+
+function prunePairState(now) {
+  for (const [ip, ts] of pairAttempts) if (!ts.some((t) => now - t < PAIR_WINDOW_MS)) pairAttempts.delete(ip);
+  for (const [ip, f] of pairFailuresByIp) if (f.lockedUntil <= now && now - f.lastAt > PAIR_FAILURE_FORGET_MS) pairFailuresByIp.delete(ip);
+}
+
+function pairLockRemainingMs(ip, now = Date.now()) {
+  const f = pairFailuresByIp.get(ip);
+  return f && f.lockedUntil > now ? f.lockedUntil - now : 0;
+}
+
+function recordPairFailure(ip, now = Date.now()) {
+  const f = pairFailuresByIp.get(ip) ?? { count: 0, lastAt: 0, lockedUntil: 0 };
+  f.count += 1;
+  f.lastAt = now;
+  if (f.count >= PAIR_MAX_FAILURES) {
+    f.lockedUntil = now + Math.min(PAIR_LOCK_MAX_MS, PAIR_LOCK_BASE_MS * 2 ** (f.count - PAIR_MAX_FAILURES));
+  }
+  pairFailuresByIp.set(ip, f);
 }
 
 export function createPairCode(ttlMs = CODE_TTL_MS) {
@@ -463,10 +487,18 @@ export function createPairCode(ttlMs = CODE_TTL_MS) {
 
 function pairRateLimited(ip) {
   const now = Date.now();
+  prunePairState(now);
   const recent = (pairAttempts.get(ip) ?? []).filter((t) => now - t < PAIR_WINDOW_MS);
   recent.push(now);
   pairAttempts.set(ip, recent);
   return recent.length > PAIR_MAX_ATTEMPTS;
+}
+
+/** Invalidates a pair code, e.g. one that arrived over plain HTTP and may have been seen on the LAN. */
+export function discardPairCode(rawCode) {
+  const raw = String(rawCode ?? "").trim();
+  codes.delete(raw);
+  codes.delete(raw.replace(/[-\s]/g, ""));
 }
 
 function sweepCodes() {
@@ -574,26 +606,29 @@ export function handlePairRedeem(req, res) {
     res.statusCode = 405;
     return res.end();
   }
-  if (pairRateLimited(req.socket?.remoteAddress ?? "unknown")) {
+  const ip = String(req.socket?.remoteAddress ?? "unknown").replace(/^::ffff:/, "");
+  const lockedMs = pairLockRemainingMs(ip);
+  if (lockedMs > 0 || pairRateLimited(ip)) {
+    const retrySecs = Math.max(60, Math.ceil(lockedMs / 1000));
     res.statusCode = 429;
-    res.setHeader("retry-after", "60");
+    res.setHeader("retry-after", String(retrySecs));
     res.setHeader("content-type", "text/plain; charset=utf-8");
-    return res.end("Too many pairing attempts. Try again in a minute.");
+    return res.end(lockedMs > 0 ? `Too many failed pairing attempts. Try again in ${Math.ceil(retrySecs / 60)} min.` : "Too many pairing attempts. Try again in a minute.");
   }
   const q = new URL(req.url, "http://x").searchParams;
   const rawCode = (q.get("code") ?? "").trim();
+  if (!rawCode) {
+    return sendHtml(res, 400, "No pairing code", "Scan the QR code on your PC (it opens an https:// link with the code).");
+  }
   const code = /^\d{3}[-\s]?\d{3}$/.test(rawCode) ? rawCode.replace(/[-\s]/g, "") : rawCode;
   const exp = codes.get(code) ?? codes.get(rawCode);
   codes.delete(code); // one-shot, even when expired
   codes.delete(rawCode);
   if (!exp || exp <= Date.now()) {
-    if (++pairFailures >= PAIR_MAX_FAILURES) {
-      codes.clear();
-      pairFailures = 0;
-    }
+    recordPairFailure(ip);
     return sendHtml(res, 401, "Pairing failed", "This pairing code is invalid, already used, or expired. Generate a new QR code on your PC.");
   }
-  pairFailures = 0;
+  pairFailuresByIp.delete(ip);
   const token = randomBytes(32).toString("base64url");
   const now = new Date().toISOString();
   const name = (q.get("name") || deviceNameFromUa(String(req.headers["user-agent"] ?? ""))).slice(0, 40);
