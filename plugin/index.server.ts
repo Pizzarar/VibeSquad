@@ -544,6 +544,26 @@ export function snapshotIntoBrief(
 }
 
 /** Layers 1 and 3 joined in the fixed order; layer 2 (AGENTS.md) is loaded by the provider. */
+/**
+ * Profile notes (stored in profiles.json, so old installs keep the old text) repeat the
+ * R1-R7 rules that EVERYONE_LAYER already injects. Drop those lines so each rule appears once.
+ */
+export function dedupeNotesAgainst(notes: string, prefix: string): string {
+  const tags = new Set([...prefix.matchAll(/^- (R[\d/R]+)\b/gm)].map((m) => m[1]));
+  const lines = prefix.split("\n").map((l) => l.trim());
+  return notes
+    .split(/\r?\n/)
+    .filter((l) => {
+      const t = l.trim();
+      if (!t) return true;
+      if (lines.includes(t)) return false;
+      const m = t.match(/^[-*]\s*\**(R[\d/R]+)\b/);
+      return !(m && tags.has(m[1]));
+    })
+    .join("\n")
+    .trim();
+}
+
 export function injectedPrefix(role: string, cwd: string): string {
   return [EVERYONE_LAYER, rolePack(role, cwd)].filter(Boolean).join("\n\n");
 }
@@ -1147,7 +1167,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         }
 
         const prefix = injectedPrefix(role, cwd);
-        const profileNotes = (matchedProfile?.notes ?? "").trim();
+        const profileNotes = dedupeNotesAgainst((matchedProfile?.notes ?? "").trim(), prefix);
         const gitState = inspectGitSpawnState(cwd);
         if (prefix && !sanitizedSysPrompt.includes(EVERYONE_LAYER)) {
           const existing = sanitizedSysPrompt.trim();
