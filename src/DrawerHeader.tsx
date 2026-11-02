@@ -35,6 +35,7 @@ import { ImportSessionModal, SchedulesPanel } from "./SchedulesPanel";
 import { openAgent, openAgentInTab } from "./panes";
 import { exportFileName, forkSummaryPrompt, forkTitle, transcriptToJson, transcriptToMarkdown } from "./sessionLifecycle";
 import { openBriefEditor } from "./pinActions";
+import { FeaturesMenu } from "./FeaturesMenu";
 
 const REQUEST_REPORT_PROMPT =
   "Your last turn produced no report. Reply now with your final report as a normal message (what you did, files changed, done-check result). Do not use SendMessage or ListAgents.";
@@ -656,6 +657,7 @@ export function DrawerHeader({
                 <option value={agent.thinkingOptionId}>{agent.thinkingOptionId}</option>
               )}
             </select>
+            <FeaturesMenu agent={agent} />
             {(() => {
               const cost = (agent.lastUsage as any)?.totalCostUsd ?? (agent as any)?.usage?.totalCostUsd;
               return typeof cost === "number" && cost >= 0 ? (
