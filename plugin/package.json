@@ -7,7 +7,8 @@
   "files": [
     "paseo-plugin.json",
     "index.server.ts",
-    "index.ts"
+    "index.ts",
+    "server/"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit"

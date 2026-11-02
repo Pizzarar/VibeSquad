@@ -153,6 +153,9 @@ export function loadUserSettings(baseHome) {
   }
   const pushEvents = normalizePushEvents(res.data.pushEvents);
   if (Object.keys(pushEvents).length) out.pushEvents = pushEvents;
+  // Remote (relay) proxy gate, read by plugin/server/remote-proxy.ts. Hand-edited only: saveUserSettings
+  // carries it over but never takes it from a patch, so no HTTP caller can switch it on.
+  if (res.data.remote && typeof res.data.remote === "object") out.remote = { enabled: res.data.remote.enabled === true };
   return out;
 }
 
@@ -173,6 +176,7 @@ export function saveUserSettings(patch, baseHome) {
   }
   const pushEvents = normalizePushEvents(patch && "pushEvents" in patch ? patch.pushEvents : current.pushEvents);
   if (Object.keys(pushEvents).length) next.pushEvents = pushEvents;
+  if (current.remote) next.remote = current.remote;
   mkdirSync(baseHome || vibesquadHome(), { recursive: true });
   writeFileSync(file, JSON.stringify(next, null, 2) + "\n", "utf8");
   clearConfigWarning(file);

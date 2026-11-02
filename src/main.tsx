@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
-import { start } from "./paseo";
+import { daemonClient, start } from "./paseo";
+import { installRemoteTransport, isRemoteMode } from "./remoteTransport";
 import { loadUserName } from "./userName";
 import { FiveLeads, SpriteSheet } from "./demo";
 import "./styles.css";
@@ -11,6 +12,8 @@ const q = new URLSearchParams(location.search);
 const cast = q.has("cast");
 const five = q.has("five-leads");
 if (!cast && !five) {
+  // Remote mode (R2-1): VS server calls go over the daemon connection via the plugin's vs.http RPC.
+  if (isRemoteMode()) installRemoteTransport((input) => daemonClient.invokePluginRpc("vibesquad", "vs.http", input));
   start();
   loadUserName();
 }
