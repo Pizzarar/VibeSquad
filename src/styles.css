@@ -3400,3 +3400,26 @@ html, body, #root { overflow-x: hidden; }
   .row { grid-template-columns: 36px minmax(0, 1fr) auto; grid-template-areas: "avatar title pill" "avatar meta meta" "avatar meter actions"; }
   .row-meter { width: 100%; }
 }
+
+/* Squads Home + breadcrumb (docs/PLAN_SQUADS_HOME.md §H1) */
+.top-breadcrumb { display: flex; align-items: center; gap: 4px; min-width: 0; font-size: 12px; }
+.breadcrumb-seg { background: none; border: 0; padding: 2px 6px; color: var(--muted, #8b93b8); cursor: pointer; font: inherit; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+.breadcrumb-seg:hover, .breadcrumb-seg:focus-visible { color: var(--cyan); }
+.breadcrumb-seg.current, .breadcrumb-seg[aria-current="page"] { color: inherit; cursor: default; font-weight: 700; }
+.breadcrumb-sep { opacity: 0.5; }
+.squad-page-home-btn { margin-right: 8px; }
+.squads-home { padding: 14px 0; }
+.squads-home-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.squad-home-tile { display: flex; flex-direction: column; gap: 10px; padding: 14px; text-align: left; color: inherit; background: var(--panel, #0d1020); border: 1px solid var(--line, #232846); border-radius: 10px; cursor: pointer; min-width: 0; }
+.squad-home-tile:hover, .squad-home-tile:focus-visible { border-color: var(--cyan); }
+.squad-home-tile.needs-you { border-color: #ff2a85; }
+.squad-home-tile.pin-plus { align-items: center; justify-content: center; min-height: 120px; }
+.squad-home-tile-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.squad-home-tile-name { flex: 1; min-width: 0; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.squad-home-huddle { display: flex; align-items: center; padding-left: 10px; min-height: 42px; }
+.squad-home-portrait { position: relative; background: none; border: 0; padding: 0; cursor: pointer; border-radius: 50%; }
+.squad-home-portrait:not(:first-child) { margin-left: -10px; }
+.squad-home-portrait:hover, .squad-home-portrait:focus-visible { z-index: 2; transform: translateY(-2px); }
+.squad-home-portrait-pip { position: absolute; right: -2px; bottom: -2px; display: flex; align-items: center; gap: 2px; }
+.squad-home-lead-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 520px) { .squads-home-grid, .pin-grid { grid-template-columns: 1fr; } }

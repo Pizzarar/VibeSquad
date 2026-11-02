@@ -137,3 +137,30 @@ export function planRestore(a: {
   }
   return stale ? { kind: "home", closeStale: stale } : { kind: "none" };
 }
+
+// ── Squads Home: chat → squad page → Squads Home ladder ──────────────────────
+export type NavLevel = { focused: boolean; home: boolean; squadsHome: boolean };
+
+/** What Esc / the ⊞ button does one level up: from chat to the squad page, from the squad page to Squads Home. */
+export function levelUp(s: NavLevel): "squad-page" | "squads-home" | "none" {
+  if (s.focused) return "squad-page";
+  if (s.home && s.squadsHome) return "none";
+  if (s.home) return "squads-home";
+  return "squad-page";
+}
+
+export type Crumb = { key: "squads" | "squad" | "brainstorm"; label: string; current?: boolean };
+
+/** Breadcrumb segments: Squads › Squad › BRAINSTORM · lane, trimmed to the current level. */
+export function breadcrumbOf(c: { squadsHome: boolean; squadName: string; laneName: string | null }): Crumb[] {
+  const out: Crumb[] = [{ key: "squads", label: "Squads", current: c.squadsHome }];
+  if (!c.squadsHome) out.push({ key: "squad", label: c.squadName, current: c.laneName === null });
+  if (c.laneName !== null) out.push({ key: "brainstorm", label: `BRAINSTORM · ${c.laneName}`, current: true });
+  return out;
+}
+
+/** Primary lead of a squad across its lanes: a running lead first, else any live one. */
+export function pickLead<T extends { agent: { status: string } }>(lanes: { lead: T | null }[]): T | null {
+  const leads = lanes.map((l) => l.lead).filter((m): m is T => !!m);
+  return leads.find((m) => m.agent.status === "running") ?? leads[0] ?? null;
+}

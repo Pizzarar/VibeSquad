@@ -13,7 +13,10 @@ import { PinMenu } from "./PinMenu";
 import { DoneRow, DoneShelf, LooksDoneCard, useDoneShelfOpen } from "./PinDone";
 import { getBrainstormThresholds, type TeamView } from "./teams";
 import { StatusDot, usePaneClass } from "./ui";
-import { Avatar } from "./pixel";
+import { Avatar, NeonEmblem } from "./pixel";
+import { ordOf } from "./teams";
+import { cleanTitle } from "./ui";
+import { pickLead } from "./pinFocusLogic";
 
 // ── FULL toggle (persisted) ──────────────────────────────────────────────────
 const FULL_VIEW_KEY = "vibesquad.squadFullView";
@@ -424,6 +427,96 @@ export function PinGrid({
       </div>
       {!pinned.length && <div className="muted">No pinned teams in {view.team.name} yet. Use + New idea to pin one.</div>}
       <DoneShelf done={done} squadId={view.team.id} />
+    </section>
+  );
+}
+
+// ── Squads Home: one tile per squad, one level above the squad page (docs/PLAN_SQUADS_HOME.md §H1) ──
+function SquadTile({ v, onSelectSquad, onOpenPin }: { v: TeamView; onSelectSquad: (id: string) => void; onOpenPin: PinHandler }) {
+  const { pinned } = pinsForSquad(v);
+  const lead = pickLead(v.lanes);
+  const ord = lead ? ordOf(lead.agent) : null;
+  const leadName = lead ? (ord ? `ord${ord}` : cleanTitle(lead.agent.title)) : "none";
+  const leadState = !lead ? "idle" : lead.agent.status === "running" ? "working" : lead.agent.status === "error" ? "error" : "idle";
+  const open = () => onSelectSquad(v.team.id);
+  return (
+    <div
+      className={`squad-home-tile ${v.needsYou > 0 ? "needs-you" : ""}`}
+      role="button"
+      tabIndex={0}
+      data-testid={`squad-home-tile-${v.team.id}`}
+      onClick={open}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          open();
+        }
+      }}
+    >
+      <div className="squad-home-tile-head">
+        <NeonEmblem color={v.team.color} seed={v.team.id} size={28} />
+        <span className="squad-home-tile-name">{v.team.name}</span>
+        <span className={`badge ${v.needsYou > 0 ? "alert" : "muted"}`} data-testid={`squad-home-needs-${v.team.id}`}>
+          {v.needsYou} need you
+        </span>
+      </div>
+      <div className="squad-home-huddle" data-testid={`squad-home-huddle-${v.team.id}`}>
+        {pinned.map((pin) => (
+          <button
+            key={pin.lane.id}
+            type="button"
+            className="squad-home-portrait"
+            data-testid={`squad-home-portrait-${v.team.id}-${pin.lane.id}`}
+            title={`${pin.lane.name}${pin.brainstorm ? ` (${pin.brainstorm.agent.title ?? "Brainstorm"})` : " (click to start Brainstorm)"}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              void Promise.resolve(onOpenPin(pin)).catch((err) => alert(`Could not start ${pin.lane.name}: ${err}`));
+            }}
+          >
+            <Avatar
+              id={pin.brainstorm ? pin.brainstorm.agent.id : `bs-empty-${v.team.id}-${pin.lane.id}`}
+              provider={pin.brainstorm?.agent.provider ?? "claude"}
+              agentType="brainstorm"
+              size={38}
+            />
+            <span className="squad-home-portrait-pip">
+              <PinDot pin={pin} />
+              <NeedsBadge pin={pin} />
+              <PinCtx pin={pin} />
+            </span>
+          </button>
+        ))}
+      </div>
+      <div className="squad-home-lead-line muted small" data-testid={`squad-home-lead-${v.team.id}`}>
+        Lead: {leadName} · {leadState}
+      </div>
+    </div>
+  );
+}
+
+export function SquadsHome({
+  views,
+  onSelectSquad,
+  onOpenPin,
+  onNewSquad,
+}: {
+  views: TeamView[];
+  onSelectSquad: (id: string) => void;
+  onOpenPin: PinHandler;
+  onNewSquad: () => void;
+}) {
+  return (
+    <section className="squads-home" data-testid="squads-home">
+      <div className="squads-home-grid">
+        {views.map((v) => (
+          <SquadTile key={v.team.id} v={v} onSelectSquad={onSelectSquad} onOpenPin={onOpenPin} />
+        ))}
+        <button type="button" className="squad-home-tile pin-plus" data-testid="squad-home-new-tile" onClick={onNewSquad}>
+          <span className="pin-plus-icon">+</span>
+          <span>+ NEW SQUAD</span>
+        </button>
+      </div>
     </section>
   );
 }

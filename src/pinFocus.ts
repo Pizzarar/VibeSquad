@@ -9,7 +9,7 @@ import { isRetiredAgent } from "./identity";
 import { closeTab, getPanes, openAgent, subscribePanes, toggleSplit } from "./panes";
 import { getPaseoState, subscribePaseo } from "./paseo";
 import { openPin } from "./pinActions";
-import { isLiveUrlAgent, loadSavedFocus, planRestore, reconcilePinFocus, saveFocus } from "./pinFocusLogic";
+import { isLiveUrlAgent, levelUp, loadSavedFocus, planRestore, reconcilePinFocus, saveFocus } from "./pinFocusLogic";
 import { pinsForSquad, type Pin } from "./pins";
 import { subscribeTeams } from "./teams";
 import { derived } from "./ui";
@@ -33,11 +33,13 @@ type State = {
   home: boolean;
   /** The active tab when we went home; opening anything else leaves "home". */
   homeActive: string | null;
+  /** One level above the squad page: the grid of all squads. Only meaningful while home is true. */
+  squadsHome: boolean;
 };
 
 // Start on the grid even if tabs were restored from last session; a ?agent= deep link shows its drawer.
 const deepLinked = typeof location !== "undefined" && new URLSearchParams(location.search).has("agent");
-let state: State = { focus: null, home: !deepLinked, homeActive: deepLinked ? null : getPanes().leftActiveId };
+let state: State = { focus: null, home: !deepLinked, homeActive: deepLinked ? null : getPanes().leftActiveId, squadsHome: false };
 let seq = 0;
 const listeners = new Set<() => void>();
 
@@ -58,6 +60,9 @@ const subscribe = (l: () => void) => {
 export const getPinFocus = () => state.focus;
 export const usePinFocus = () => useSyncExternalStore(subscribe, () => state.focus);
 export const usePinsHome = () => useSyncExternalStore(subscribe, () => state.home);
+export const getPinsHome = () => state.home;
+export const getSquadsHome = () => state.home && !state.focus && state.squadsHome;
+export const useSquadsHome = () => useSyncExternalStore(subscribe, getSquadsHome);
 
 const show = (id: string) => {
   if (getPanes().split) toggleSplit(); // one drawer on screen: fold the split, nothing remounts
@@ -75,7 +80,7 @@ function liveBrainstorm(f: PinFocus): string | null {
 let reconciling = false;
 function reconcile() {
   const active = getPanes().leftActiveId;
-  if (state.home && !state.focus && active !== state.homeActive) return set({ home: false, homeActive: null });
+  if (state.home && !state.focus && active !== state.homeActive) return set({ home: false, homeActive: null, squadsHome: false });
   const f = state.focus;
   if (!f || reconciling) return;
   const d = reconcilePinFocus(f, liveBrainstorm(f), active);
@@ -110,6 +115,7 @@ export async function focusPin(pin: Pin): Promise<string> {
     focus: { squadId: pin.squad.id, laneId: pin.lane.id, agentId: live, gone: false, held: live ? null : active, seq: mine },
     home: false,
     homeActive: null,
+    squadsHome: false,
   });
   if (live) {
     show(live);
@@ -134,15 +140,27 @@ export async function focusPin(pin: Pin): Promise<string> {
   }
 }
 
-/** Esc / ⊞: back to the grid. The drawers stay mounted, hidden, so drafts and scroll survive. */
+/** Esc / ⊞: one level up. Chat → squad page → Squads Home. The drawers stay mounted, hidden, so drafts and scroll survive. */
 export function exitPinFocus() {
-  if (!state.focus && state.home) return;
-  set({ focus: null, home: true, homeActive: getPanes().leftActiveId });
+  const up = levelUp({ focused: !!state.focus, home: state.home, squadsHome: state.squadsHome });
+  if (up === "none") return;
+  set({ focus: null, home: true, squadsHome: up === "squads-home", homeActive: getPanes().leftActiveId });
+}
+
+/** Go to the grid of all squads (breadcrumb "Squads", the squad page's ⊞). */
+export function enterSquadsHome() {
+  if (getSquadsHome()) return;
+  set({ focus: null, home: true, squadsHome: true, homeActive: getPanes().leftActiveId });
+}
+
+/** Show the active squad's page (opening a squad from Squads Home, the sidebar or the breadcrumb). */
+export function exitSquadsHome() {
+  set({ focus: null, home: true, squadsHome: false, homeActive: getPanes().leftActiveId });
 }
 
 /** Leave the pinned layout entirely (FULL, focus mode): the panes show as usual again. */
 export function clearPinFocus() {
-  if (state.focus || state.home) set({ focus: null, home: false, homeActive: null });
+  if (state.focus || state.home) set({ focus: null, home: false, homeActive: null, squadsHome: false });
 }
 
 /**
@@ -195,13 +213,13 @@ function tryRestore() {
   });
   if (plan.kind === "none") return;
   if (plan.closeStale) closeTab(plan.closeStale);
-  if (plan.kind === "home") return set({ focus: null, home: true, homeActive: getPanes().leftActiveId });
+  if (plan.kind === "home") return set({ focus: null, home: true, squadsHome: false, homeActive: getPanes().leftActiveId });
   const seqNow = ++seq;
   if (plan.agentId) {
-    set({ focus: { squadId: plan.squadId, laneId: plan.laneId, agentId: plan.agentId, gone: false, held: null, seq: seqNow }, home: false, homeActive: null });
+    set({ focus: { squadId: plan.squadId, laneId: plan.laneId, agentId: plan.agentId, gone: false, held: null, seq: seqNow }, home: false, homeActive: null, squadsHome: false });
     show(plan.agentId);
   } else {
-    set({ focus: { squadId: plan.squadId, laneId: plan.laneId, agentId: null, gone: true, held: getPanes().leftActiveId, seq: seqNow }, home: false, homeActive: null });
+    set({ focus: { squadId: plan.squadId, laneId: plan.laneId, agentId: null, gone: true, held: getPanes().leftActiveId, seq: seqNow }, home: false, homeActive: null, squadsHome: false });
   }
 }
 subscribePaseo(tryRestore);
