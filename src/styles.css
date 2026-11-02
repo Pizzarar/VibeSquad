@@ -2326,7 +2326,10 @@ code {
   .perm-actions .btn {
     min-height: 48px;
     min-width: 48px;
-    flex: 1;
+    flex: 1 1 auto;
+    max-width: 100%;
+    white-space: normal;
+    text-align: center;
     display: inline-flex;
     align-items: center;
     justify-content: center;
