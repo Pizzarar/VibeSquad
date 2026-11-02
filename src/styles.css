@@ -3712,6 +3712,21 @@ button.project-file-name:hover { text-decoration: underline; }
 [data-testid="ws-projects"] > div:first-child input { flex: 1; }
 .ws-controls { flex-wrap: wrap; }
 
+/* Parity block P1: Paseo worktree manager */
+.ws-row.wt-panel { display: flex; flex-direction: column; gap: 10px; }
+.wt-project { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 8px; min-width: 0; }
+.wt-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.wt-head .ws-path { min-width: 0; flex: 0 1 auto; }
+.wt-head .spacer { flex: 1; }
+.wt-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 6px 8px; background: var(--navy); border: 1px solid var(--line); }
+.wt-create { display: grid; gap: 6px; padding: 6px 0; }
+.wt-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.wt-hint.ok { color: var(--cyan); }
+.wt-hint.warn { color: var(--amber); }
+.wt-hint.bad { color: var(--hot-pink); }
+.wt-hint.muted { color: var(--muted, #8a8fa8); }
+@media (max-width: 640px) { .wt-row { grid-template-columns: minmax(0, 1fr); } .wt-row .ws-chips { justify-content: flex-start; } }
+
 .changes-history { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .changes-history-list { display: flex; flex-direction: column; gap: 4px; align-self: stretch; }
 .changes-commit-files { display: flex; flex-direction: column; gap: 4px; padding: 4px 8px 8px; border-top: 1px solid var(--line); }
