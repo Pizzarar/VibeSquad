@@ -3622,3 +3622,15 @@ button.file-chip { cursor: pointer; font: inherit; }
 .tl-prompt-row { text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tl-prompt-ts { color: #888; }
 .tl-flash { outline: 2px solid var(--cyan); outline-offset: 2px; }
+
+.sched-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0; }
+.sched-main { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
+.sched-field { display: flex; flex-direction: column; gap: 3px; margin-bottom: 8px; font-size: 12px; }
+.sched-field > span:first-child { color: var(--cyan); }
+.sched-pair { display: flex; gap: 6px; }
+.sched-check { display: flex; gap: 6px; align-items: center; margin: 4px 0 8px; }
+.sched-inspect { border: 1px solid var(--line); padding: 8px 10px; margin: 8px 0; }
+.sched-inspect dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 10px; margin: 0; }
+.sched-inspect dt { color: var(--cyan); }
+.sched-inspect dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.sched-prompt { margin: 0; white-space: pre-wrap; max-height: 140px; overflow: auto; }
