@@ -234,11 +234,13 @@ export function hubTeamsBlock({ team, agents }) {
   return out.join("\n");
 }
 
-export function buildBrainstormInitialPrompt({ laneId, laneUpper, buddyName, summaryContent, latestPlan, pendingPrompt, inFlight, vibeMode = false, hubTeams = "" }) {
+export function buildBrainstormInitialPrompt({ laneId, laneUpper, buddyName, summaryContent, latestPlan, pendingPrompt, inFlight, vibeMode = false, hubTeams = "", autoRetire = false }) {
   const tail =
     pendingPrompt && String(pendingPrompt).trim()
       ? `Pending message from the user to answer now:\n${String(pendingPrompt).trim()}`
-      : `Summary loaded from docs/brainstorm/${laneId}.md. Work the top Open item now: reply with your take or the next question on it, in a few short sentences. Ask the user only if you are blocked. Do not just confirm you are ready.`;
+      : autoRetire
+        ? `Summary loaded from docs/brainstorm/${laneId}.md. Keep this first turn small: read the brief above, then wait for the user.`
+        : `Summary loaded from docs/brainstorm/${laneId}.md. Work the top Open item now: reply with your take or the next question on it, in a few short sentences. Ask the user only if you are blocked. Do not just confirm you are ready.`;
 
   return [
     `You are ${buddyName || `BRAINSTORM · ${laneUpper}`} (fresh start for lane \`${laneId}\`). Read the brief below before anything else.`,
@@ -535,56 +537,6 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       Number(oldAgent?.lastUsage?.inputTokens) ||
       0;
 
-    if (reason.startsWith("auto")) {
-      // Hard limit: retire, never spawn a successor. The next click on the pin quick-starts one from the brief.
-      const retiredLabels = { ...oldLabels, role: "former-brainstorm" };
-      delete retiredLabels["vs.mock-tokens"];
-      restartedAgents.set(agentId, { newAgentId: null, ts: Date.now(), tokens });
-      if (oldAgent && typeof oldAgent === "object") {
-        oldAgent.labels = retiredLabels;
-        oldAgent.archivedAt = oldAgent.archivedAt || new Date().toISOString();
-      }
-      if (connected && client) {
-        const rawOldTitle = String(oldAgent?.title || `BRAINSTORM · ${laneUpper}`).trim();
-        const retiredTitle = rawOldTitle.toLowerCase().startsWith("(old)") ? rawOldTitle : `(old) ${rawOldTitle}`;
-        await client.cancelAgent?.(agentId)?.catch?.(() => {});
-        await client.updateAgent?.(agentId, { name: retiredTitle, labels: retiredLabels })?.catch?.(() => {});
-        await archiveBuddyKeepingChildren(client, agentId);
-      }
-      const retiredSummary = readBrainstormSummary(laneId, rootDir);
-      appendVsLogEntry({
-        teamId,
-        laneId,
-        agent: agentId,
-        type: "metric",
-        text: `brainstorm-retired (${reason}): ${tokens} tok, no successor`,
-        refs: [retiredSummary.path],
-      });
-      try {
-        // HTTP callers never carry `agents` (sanitizeBody strips it), so read the daemon. An empty
-        // stand-in list wrote "none running / none / 0" over a live lane. Unknown list = no refresh.
-        const live = body.agents
-          ? body.agents instanceof Map ? [...body.agents.values()] : body.agents
-          : connected && client
-            ? await listDaemonAgents(client)
-            : null;
-        if (Array.isArray(live) && live.length) {
-          refreshWhosHere({ laneId, agents: live.filter((a) => (a?.agent ?? a)?.id !== agentId), rootDir });
-        }
-      } catch {}
-      return {
-        ok: true,
-        retired: true,
-        oldAgentId: agentId,
-        newAgentId: null,
-        laneId,
-        teamId,
-        usedTokens: tokens,
-        summaryPath: retiredSummary.path,
-        pendingPrompt: pendingPrompt || undefined,
-      };
-    }
-
     if (typeof body.summaryUpdate === "string" && body.summaryUpdate.trim()) {
       writeBrainstormSummary(laneId, body.summaryUpdate, rootDir);
     }
@@ -687,6 +639,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       latestPlan,
       pendingPrompt,
       vibeMode: bootTeam?.vibeMode === true,
+      autoRetire: reason.startsWith("auto"),
     });
 
     // The spawn env sets VS_BRIEF_INLINE, so the plugin won't log brief-injected; this is the live check for the lane.
@@ -767,7 +720,35 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
           await archiveBuddyKeepingChildren(client, agentId);
           console.log(`[vibesquad] spawn-timing retire-background=${Date.now() - retireT0}ms`);
         })().catch(() => {});
+        if (reason.startsWith("auto")) {
+          await retireDone;
+          retireDone = null;
+        }
       }
+    }
+    if (reason.startsWith("auto")) {
+      appendVsLogEntry({
+        teamId,
+        laneId,
+        agent: agentId,
+        type: "metric",
+        text: `brainstorm-retired (${reason}): ${tokens} tok, successor=${created.id}`,
+        refs: [summary.path, created.id],
+      });
+      try {
+        const live = body.agents
+          ? body.agents instanceof Map ? [...body.agents.values()] : body.agents
+          : connected && client
+            ? await listDaemonAgents(client)
+            : null;
+        if (Array.isArray(live) && live.length) {
+          const withoutOld = live.filter((a) => (a?.agent ?? a)?.id !== agentId);
+          if (spawned && !withoutOld.some((a) => (a?.agent ?? a)?.id === created.id)) {
+            withoutOld.push(created);
+          }
+          refreshWhosHere({ laneId, agents: withoutOld, rootDir });
+        }
+      } catch {}
     }
     if (spawned) {
       // Backstop (PLAN_BUGS_BATCH2 block 0): the start-brainstorm path above never retires anyone, and the
@@ -799,6 +780,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
 
     return {
       ok: true,
+      ...(reason.startsWith("auto") ? { retired: true } : {}),
       oldAgentId: agentId,
       newAgentId: created.id,
       title: created.title || newTitle,
@@ -810,6 +792,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       spawnConfig: spawnCfg,
       profile: newLabels.profile,
       agent: created,
+      ...(pendingPrompt ? { pendingPrompt } : {}),
     };
   } finally {
     if (!injectedClient && client && typeof client.close === "function") {

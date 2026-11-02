@@ -34,7 +34,7 @@ test("(a) packs carry the new rules", () => {
   assert.ok(readBrainstormSummary("no-such-lane-xyz").content.includes("no brief yet"));
 });
 
-test("(b) a brainstorm over the hard limit is retired with no successor", async () => {
+test("(b) a brainstorm over the hard limit is retired and spawns a successor right away", async () => {
   const dir = mkdtempSync(join(tmpdir(), "vs-pins-pack-"));
   const prev = process.env.VIBESQUAD_HOME;
   process.env.VIBESQUAD_HOME = join(dir, ".vibesquad");
@@ -43,7 +43,7 @@ test("(b) a brainstorm over the hard limit is retired with no successor", async 
     mkdirSync(join(dir, "docs", "brainstorm"), { recursive: true });
     const calls = { create: 0, update: [], archive: [] };
     const daemon = {
-      async createAgent() { calls.create++; return { id: "never" }; },
+      async createAgent() { calls.create++; return { id: "bs-next" }; },
       async cancelAgent() {},
       async updateAgent(id, patch) { calls.update.push({ id, patch }); },
       async archiveAgent(id) { calls.archive.push(id); },
@@ -54,13 +54,14 @@ test("(b) a brainstorm over the hard limit is retired with no successor", async 
         pendingPrompt: "keep this message",
         oldAgent: { id: "bs-1", title: "BRAINSTORM · PINNED", cwd: dir, labels: { team: "site", lane: "pinned", role: "brainstorm" } },
         daemonClient: daemon,
+        backstopDelayMs: 60000,
       },
       dir,
     );
     assert.equal(r.retired, true);
-    assert.equal(r.newAgentId, null);
+    assert.equal(r.newAgentId, "bs-next");
     assert.equal(r.pendingPrompt, "keep this message");
-    assert.equal(calls.create, 0);
+    assert.equal(calls.create, 1);
     assert.equal(calls.update[0].patch.labels.role, "former-brainstorm");
     assert.deepEqual(calls.archive, ["bs-1"]);
   } finally {

@@ -524,7 +524,7 @@ test("Done-when #5 (Fix E): create_agent with labels: { role: 'lead' } gets the 
   }
 });
 
-test("Done-when #6 (Fix F): Repeated performBrainstormRestart calls at 152000 tokens retire only ONCE (no successor) and log only ONE entry", async () => {
+test("Done-when #6 (Fix F): Repeated performBrainstormRestart calls at 152000 tokens retire and spawn successor only ONCE and log only ONE entry", async () => {
   const env = makeTempEnv();
   const prevHome = process.env.VIBESQUAD_HOME;
   const prevProfiles = process.env.VIBESQUAD_PROFILES_PATH;
@@ -590,15 +590,15 @@ test("Done-when #6 (Fix F): Repeated performBrainstormRestart calls at 152000 to
     assert.equal(results[0].ok, true);
     assert.equal(Boolean(results[0].skipped), false);
     assert.equal(results[0].retired, true);
-    assert.equal(results[0].newAgentId, null);
+    assert.equal(results[0].newAgentId, "bs-succ-1");
 
     for (let i = 1; i < 5; i++) {
       assert.equal(results[i].ok, true);
       assert.equal(results[i].skipped, true);
-      assert.equal(results[i].newAgentId, null);
+      assert.equal(results[i].newAgentId, "bs-succ-1");
     }
 
-    assert.equal(spawned.length, 0, "Hard limit retires; it never spawns a successor");
+    assert.equal(spawned.length, 1, "Hard limit retires and spawns exactly one successor");
 
     const siteLogPath = join(env.vsHome, "teams", "site", "log.jsonl");
     const logEntries = readFileSync(siteLogPath, "utf8")
@@ -608,6 +608,7 @@ test("Done-when #6 (Fix F): Repeated performBrainstormRestart calls at 152000 to
       .map((l) => JSON.parse(l));
     const restartLogs = logEntries.filter((e) => e.text.startsWith("brainstorm-retired"));
     assert.equal(restartLogs.length, 1, "Must log only 1 brainstorm-retired entry across 5 calls");
+    assert.ok(restartLogs[0].text.includes("successor=bs-succ-1"), restartLogs[0].text);
   } finally {
     resetBrainstormRestartState();
     if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
