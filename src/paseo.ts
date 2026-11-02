@@ -1,4 +1,6 @@
 import { createPaseoApi, type PaseoAgent, type PaseoClient, type PaseoWorkspace } from "@getpaseo/client";
+import { applyLabelsOptimistic } from "./attentionItems";
+import { markUnreadLocal, subscribeAttentionLocal } from "./attentionLocal";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
 import { useSyncExternalStore } from "react";
@@ -166,7 +168,11 @@ export async function detachAgent(agentId: string): Promise<void> {
   await client.agents.ref(agentId).detach();
 }
 
-export async function updateAgent(agentId: string, updates: { name?: string; labels?: Record<string, string> }): Promise<void> {
+export async function updateAgent(
+  agentId: string,
+  updates: { name?: string; labels?: Record<string, string> },
+  opts: { optimistic?: boolean } = {},
+): Promise<void> {
   if (DEMO) {
     const cur = state.agents.get(agentId);
     if (cur) {
@@ -178,10 +184,53 @@ export async function updateAgent(agentId: string, updates: { name?: string; lab
     }
     return;
   }
+  if (opts.optimistic && updates.labels) return updateLabelsOptimistic(agentId, updates.labels);
   await daemonClient.updateAgent(agentId, updates);
 }
 
+/** Opt-in (attention list only): see applyLabelsOptimistic. */
+function updateLabelsOptimistic(agentId: string, labels: Record<string, string>): Promise<void> {
+  return applyLabelsOptimistic(labels, {
+    get: () => state.agents.get(agentId)?.labels as Record<string, string> | undefined,
+    patch: (fn) => {
+      const agent = state.agents.get(agentId);
+      if (!agent) return;
+      const agents = new Map(state.agents);
+      agents.set(agentId, { ...agent, labels: fn((agent.labels ?? {}) as Record<string, string>) });
+      state = { ...state, agents };
+      listeners.forEach((l) => l());
+    },
+    send: () => daemonClient.updateAgent(agentId, { labels }),
+  });
+}
+
+/** Re-derive everything that depends on local attention state or the clock (new Map, same agents). */
+export function bumpAgents() {
+  state = { ...state, agents: new Map(state.agents) };
+  listeners.forEach((l) => l());
+}
+subscribeAttentionLocal(bumpAgents);
+
+export async function clearAgentAttention(agentId: string): Promise<void> {
+  if (DEMO) return;
+  await daemonClient.clearAgentAttention(agentId);
+}
+
+/** Mark a chat unread: local flag puts it back in the attention list; Paseo's flag is best effort. */
+export async function markAgentUnread(agent: PaseoAgent): Promise<void> {
+  markUnreadLocal(agent.id);
+  const ws = (agent as { workspaceId?: string }).workspaceId;
+  if (DEMO || !ws) return;
+  try {
+    await daemonClient.markWorkspaceUnread(ws);
+  } catch (err) {
+    console.warn("markWorkspaceUnread failed", err);
+  }
+}
+
 const labelsOf = (a: PaseoAgent) => (a.labels ?? {}) as Record<string, string>;
+/** Labels as of now, not as of the render that handed us `agent`. */
+const latestLabels = (a: PaseoAgent) => labelsOf(state.agents.get(a.id) ?? a);
 
 /** Legacy-labelled agents keep working: when the old label is set, clear/snooze it alongside the canonical one. */
 const hasLegacy = (a: PaseoAgent) => !!labelsOf(a)[LEGACY_NEEDS_LABEL];
@@ -191,19 +240,19 @@ export function setNeedsYou(agent: PaseoAgent, reason: string): Promise<void> {
     ? { [LEGACY_NEEDS_LABEL]: reason, [LEGACY_NEEDS_REASON]: reason, [LEGACY_NEEDS_UNTIL]: "" }
     : {};
   return updateAgent(agent.id, {
-    labels: { ...labelsOf(agent), ...legacy, "needs-you": reason, "needs-you-reason": reason, "needs-you-until": "" },
+    labels: { ...latestLabels(agent), ...legacy, "needs-you": reason, "needs-you-reason": reason, "needs-you-until": "" },
   });
 }
 
-export function clearNeedsYou(agent: PaseoAgent): Promise<void> {
+export function clearNeedsYou(agent: PaseoAgent, opts?: { optimistic?: boolean }): Promise<void> {
   const legacy = hasLegacy(agent) ? { [LEGACY_NEEDS_LABEL]: "cleared", [LEGACY_NEEDS_UNTIL]: "" } : {};
-  return updateAgent(agent.id, { labels: { ...labelsOf(agent), ...legacy, "needs-you": "cleared", "needs-you-until": "" } });
+  return updateAgent(agent.id, { labels: { ...latestLabels(agent), ...legacy, "needs-you": "cleared", "needs-you-until": "" } }, opts);
 }
 
-export function snoozeNeedsYou(agent: PaseoAgent, durationMs: number): Promise<void> {
+export function snoozeNeedsYou(agent: PaseoAgent, durationMs: number, opts?: { optimistic?: boolean }): Promise<void> {
   const until = new Date(Date.now() + durationMs).toISOString();
   const legacy = hasLegacy(agent) ? { [LEGACY_NEEDS_UNTIL]: until } : {};
-  return updateAgent(agent.id, { labels: { ...labelsOf(agent), ...legacy, "needs-you-until": until } });
+  return updateAgent(agent.id, { labels: { ...latestLabels(agent), ...legacy, "needs-you-until": until } }, opts);
 }
 
 export async function loadArchived(): Promise<void> {

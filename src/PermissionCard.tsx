@@ -10,7 +10,7 @@ type PermissionCardProps = {
   setPermInputs: React.Dispatch<React.SetStateAction<Record<string, string>>>;
 };
 
-function respondToPermission(agentId: string, requestId: string, response: Record<string, unknown>): Promise<void> {
+export function respondToPermission(agentId: string, requestId: string, response: Record<string, unknown>): Promise<void> {
   if (DEMO) return Promise.resolve();
   return client.agents.ref(agentId).respondToPermission({ requestId, response: response as any });
 }

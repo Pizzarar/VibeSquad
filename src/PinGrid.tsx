@@ -2,6 +2,7 @@
 // Teams, and the sidebar lists the same pins. Clicking a pin opens its live Brainstorm in today's drawer;
 // with no live Brainstorm the caller's onQuickStart(pin) decides what happens (src/pinActions.ts openPin).
 // FULL brings back the old plumbing view (agent cards, workers, handoff, folders, retired agents).
+import { AttentionBadge } from "./AttentionList";
 import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { client, DEMO, sendMessage } from "./paseo";
 import { openContextMenu } from "./CommandPalette";
@@ -432,7 +433,7 @@ export function PinGrid({
 }
 
 // ── Squads Home: one tile per squad, one level above the squad page (docs/PLAN_SQUADS_HOME.md §H1) ──
-function SquadTile({ v, onSelectSquad, onOpenPin }: { v: TeamView; onSelectSquad: (id: string) => void; onOpenPin: PinHandler }) {
+function SquadTile({ v, onSelectSquad, onOpenPin, onOpenAgent }: { v: TeamView; onSelectSquad: (id: string) => void; onOpenPin: PinHandler; onOpenAgent?: (teamId: string, agentId: string) => void }) {
   const { pinned } = pinsForSquad(v);
   const lead = pickLead(v.lanes);
   const ord = lead ? ordOf(lead.agent) : null;
@@ -457,9 +458,15 @@ function SquadTile({ v, onSelectSquad, onOpenPin }: { v: TeamView; onSelectSquad
       <div className="squad-home-tile-head">
         <NeonEmblem color={v.team.color} seed={v.team.id} size={28} />
         <span className="squad-home-tile-name">{v.team.name}</span>
-        <span className={`badge ${v.needsYou > 0 ? "alert" : "muted"}`} data-testid={`squad-home-needs-${v.team.id}`}>
-          {v.needsYou} need you
-        </span>
+        {v.needsYou > 0 && onOpenAgent ? (
+          <AttentionBadge view={v} onOpen={(id) => onOpenAgent(v.team.id, id)} testId={`squad-home-needs-${v.team.id}`}>
+            {v.needsYou} need you
+          </AttentionBadge>
+        ) : (
+          <span className={`badge ${v.needsYou > 0 ? "alert" : "muted"}`} data-testid={`squad-home-needs-${v.team.id}`}>
+            {v.needsYou} need you
+          </span>
+        )}
       </div>
       <div className="squad-home-huddle" data-testid={`squad-home-huddle-${v.team.id}`}>
         {pinned.map((pin) => (
@@ -500,17 +507,19 @@ export function SquadsHome({
   onSelectSquad,
   onOpenPin,
   onNewSquad,
+  onOpenAgent,
 }: {
   views: TeamView[];
   onSelectSquad: (id: string) => void;
   onOpenPin: PinHandler;
   onNewSquad: () => void;
+  onOpenAgent?: (teamId: string, agentId: string) => void;
 }) {
   return (
     <section className="squads-home" data-testid="squads-home">
       <div className="squads-home-grid">
         {views.map((v) => (
-          <SquadTile key={v.team.id} v={v} onSelectSquad={onSelectSquad} onOpenPin={onOpenPin} />
+          <SquadTile key={v.team.id} v={v} onSelectSquad={onSelectSquad} onOpenPin={onOpenPin} onOpenAgent={onOpenAgent} />
         ))}
         <button type="button" className="squad-home-tile pin-plus" data-testid="squad-home-new-tile" onClick={onNewSquad}>
           <span className="pin-plus-icon">+</span>
