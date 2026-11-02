@@ -294,11 +294,13 @@ export function CommandPaletteHost(props: {
   const [sel, setSel] = useState(0);
   const closed = useRef<string[]>([]);
   const opener = useRef<HTMLElement | null>(null);
+  // Capture during render: autoFocus children focus at commit, before any effect would run.
+  if (mode && !opener.current) opener.current = document.activeElement as HTMLElement | null;
   useEffect(() => {
-    if (mode) opener.current ??= document.activeElement as HTMLElement | null;
-    else if (!restoreOnClose.current) opener.current = null;
+    if (!mode && !restoreOnClose.current) opener.current = null;
   }, [mode]);
   const restoreOnClose = useRef(false);
+  const modeRef = useRef(mode);
   const dismissRef = useRef<() => void>(() => {});
   const dismiss = () => {
     restoreOnClose.current = true;
@@ -332,7 +334,8 @@ export function CommandPaletteHost(props: {
         e.preventDefault();
         setQ("");
         setSel(0);
-        setMode((m) => (m === "palette" ? null : "palette"));
+        if (modeRef.current === "palette") dismissRef.current();
+        else setMode("palette");
       } else if (e.key === "?" && !mod && !typing) {
         e.preventDefault();
         setMode("shortcuts");
@@ -348,6 +351,7 @@ export function CommandPaletteHost(props: {
   }, []);
 
   dismissRef.current = dismiss;
+  modeRef.current = mode;
 
   const all = useMemo(() => [...props.members, ...props.archived], [props.members, props.archived]);
 
@@ -398,7 +402,7 @@ export function CommandPaletteHost(props: {
   return (
     <>
       <ContextMenuHost />
-      {mode === "shortcuts" && <ShortcutSheet onClose={() => setMode(null)} />}
+      {mode === "shortcuts" && <ShortcutSheet onClose={dismiss} />}
       {mode === "search" && (
         <TranscriptSearch
           members={all}
@@ -406,7 +410,7 @@ export function CommandPaletteHost(props: {
             setMode(null);
             props.onAgent(m);
           }}
-          onClose={() => setMode(null)}
+          onClose={dismiss}
         />
       )}
       {mode === "palette" && (

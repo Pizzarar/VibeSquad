@@ -51,3 +51,11 @@ test("round 2: Modal and palette restore focus; diagnostics guards in-flight ret
   assert.match(d, /inFlight\.current/);
   assert.match(d, /clearTimeout\(timer\)/);
 });
+
+test("round 3: openers captured at render, before autoFocus; palette closes route through dismiss", () => {
+  assert.match(src("TeamActions.tsx"), /useRef\(document\.activeElement/);
+  const c = src("CommandPalette.tsx");
+  assert.match(c, /if \(mode && !opener\.current\) opener\.current = document\.activeElement/);
+  assert.match(c, /<ShortcutSheet onClose=\{dismiss\}/);
+  assert.match(c, /modeRef\.current === "palette"\) dismissRef\.current\(\)/);
+});
