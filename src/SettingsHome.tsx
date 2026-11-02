@@ -297,7 +297,7 @@ function PrefControl({ k, value, set }: { k: PrefKey; value: any; set: (v: any) 
 function SoundTest() {
   return (
     <div className="settings-row">
-      <div className="settings-row-text muted small">Alerts fire in this window for the events turned on above. Push alerts are sent by the server for every event.</div>
+      <div className="settings-row-text muted small">The events turned on above alert in this window and in push notifications (phone / lock screen). Push follows the device that changed them last.</div>
       <button className="btn ghost small" data-testid="settings-test-sound" onClick={playAlertChime}>
         ▶ Test sound
       </button>

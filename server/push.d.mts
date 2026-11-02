@@ -64,3 +64,4 @@ export function evaluateAgentTransition(prev: any, next: any, dedupeSet: Set<str
   kind: string;
 }>;
 export function startPushWatcher(rootDir?: string): { stop(): Promise<void> };
+export function pushKindEnabled(kind: string, pushEvents?: Partial<Record<"permission" | "needsYou" | "finished" | "errored", boolean>>): boolean;

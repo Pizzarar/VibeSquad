@@ -77,7 +77,7 @@ export const PREF_DEFAULTS: Prefs = {
   "notify.sound": false,
   "notify.permission": true,
   "notify.needsYou": true,
-  "notify.finished": false,
+  "notify.finished": true, // the server already pushed "finished"; the toggle now gates push too, so on keeps that
   "notify.errored": true,
   "notify.push": false,
   "newAgent.profile": "",
@@ -481,6 +481,11 @@ export function reapplyDefaultProfile(current: string, pref: string, resolve: (n
   if (userPicked) return null;
   const next = defaultNewAgentProfile(pref, resolve);
   return next !== current ? next : null;
+}
+
+/** The per-event toggles as the server stores them (~/.vibesquad/settings.json pushEvents). */
+export function pushEventsFromPrefs(p: Pick<Prefs, "notify.permission" | "notify.needsYou" | "notify.finished" | "notify.errored">) {
+  return { permission: p["notify.permission"], needsYou: p["notify.needsYou"], finished: p["notify.finished"], errored: p["notify.errored"] };
 }
 
 /** Alert tone → the pref that gates it. */

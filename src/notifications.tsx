@@ -1,4 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { DEMO } from "./paseo";
+import { getPrefs, pushEventsFromPrefs, subscribePrefs } from "./prefs";
 
 export function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -61,6 +63,23 @@ async function desktopAvailable(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+// Push filter: the server's watcher skips any event turned off in Settings › Notifications. Synced through the
+// existing /__vibesquad/settings endpoint on load and whenever a toggle changes (the last device to change wins).
+let lastPushEvents = "";
+function syncPushEvents(): void {
+  const pushEvents = pushEventsFromPrefs(getPrefs());
+  const key = JSON.stringify(pushEvents);
+  if (key === lastPushEvents || DEMO) return;
+  lastPushEvents = key;
+  void fetch("/__vibesquad/settings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pushEvents }) }).catch(() => {
+    lastPushEvents = "";
+  });
+}
+if (typeof window !== "undefined") {
+  syncPushEvents();
+  subscribePrefs(syncPushEvents);
 }
 
 /** Short two-note chime for in-app alerts (Settings › Notifications › Alert sound). */

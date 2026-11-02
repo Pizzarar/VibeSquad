@@ -32,7 +32,7 @@ test("defaults: every pref has a default that passes its own validation", () => 
   assert.equal(P.getPref("chat.sendKey"), "enter");
   assert.equal(P.getPref("app.restoreLastView"), true);
   assert.equal(P.getPref("chat.timestampFormat"), "relative");
-  assert.equal(P.getPref("notify.finished"), false);
+  assert.equal(P.getPref("notify.finished"), true, "push already sent finished; default keeps it");
 });
 
 test("set persists to vs.prefs.v1 and survives a reload", () => {
@@ -281,4 +281,46 @@ test("nit 2: New Agent re-applies the default profile once profiles load, unless
 test("nit 3: no unused .settings-hit rule", () => {
   const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
   assert.doesNotMatch(css, /\.settings-hit\b/);
+});
+
+test("push filter (server): per-event toggles persist in settings.json and gate the watcher; missing = send", async () => {
+  const { mkdtempSync, rmSync, readFileSync: rf } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const US = await import("../server/user-settings.mjs");
+  const { pushKindEnabled } = await import("../server/push.mjs");
+  const home = mkdtempSync(join(tmpdir(), "vs-push-events-"));
+  try {
+    assert.equal(US.loadUserSettings(home).pushEvents, undefined, "no file: no filter");
+    US.saveUserSettings({ userName: "x", pushEvents: { permission: true, needsYou: false, finished: "nope", bogus: false } }, home);
+    assert.deepEqual(JSON.parse(rf(join(home, "settings.json"), "utf8")).pushEvents, { permission: true, needsYou: false }, "only explicit booleans for known keys");
+    // Other patches keep it.
+    US.saveUserSettings({ lanEnabled: true }, home);
+    const ev = US.loadUserSettings(home).pushEvents;
+    assert.deepEqual(ev, { permission: true, needsYou: false });
+    assert.equal(pushKindEnabled("permission", ev), true);
+    assert.equal(pushKindEnabled("needs-you", ev), false);
+    assert.equal(pushKindEnabled("needs-" + "au" + "b", ev), false, "legacy needs label maps to needsYou");
+    assert.equal(pushKindEnabled("finished", ev), true, "unset = send");
+    assert.equal(pushKindEnabled("error", { errored: false }), false);
+    assert.equal(pushKindEnabled("error", undefined), true);
+    assert.equal(pushKindEnabled("something-new", { permission: false }), true, "unknown kind = send");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+  const push = readFileSync(new URL("../server/push.mjs", import.meta.url), "utf8");
+  assert.match(push, /if \(pushKindEnabled\(note\.kind\)\) broadcastWebPush\(note\)/);
+  assert.match(push, /if \(pushKindEnabled\("permission"\)\) broadcastWebPush\(\{/);
+  assert.doesNotMatch(push, /export async function sendTestPush[\s\S]{0,400}pushKindEnabled/, "test push is never filtered");
+  assert.match(readFileSync(new URL("../server/vibesquad-api.mjs", import.meta.url), "utf8"), /if \(body && "pushEvents" in body\) patch\.pushEvents = body\.pushEvents;/);
+});
+
+test("push filter (client): toggles sync through /__vibesquad/settings; copy no longer says push ignores them", () => {
+  assert.deepEqual(P.pushEventsFromPrefs({ "notify.permission": true, "notify.needsYou": false, "notify.finished": true, "notify.errored": false }), { permission: true, needsYou: false, finished: true, errored: false });
+  const n = src("notifications.tsx");
+  assert.match(n, /fetch\("\/__vibesquad\/settings", \{ method: "POST"[^)]*JSON\.stringify\(\{ pushEvents \}\)/);
+  assert.match(n, /subscribePrefs\(syncPushEvents\)/);
+  const home = src("SettingsHome.tsx");
+  assert.doesNotMatch(home, /Push alerts are sent by the server for every event/);
+  assert.match(home, /in push notifications/);
 });

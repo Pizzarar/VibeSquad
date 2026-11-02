@@ -502,6 +502,7 @@ async function handleSettings(req, res) {
     if (body && "lanEnabled" in body) patch.lanEnabled = Boolean(body.lanEnabled);
     if (body && "keepPaseoRunningOnQuit" in body) patch.keepPaseoRunningOnQuit = Boolean(body.keepPaseoRunningOnQuit);
     if (body && "startPaseoWithVibeSquad" in body) patch.startPaseoWithVibeSquad = Boolean(body.startPaseoWithVibeSquad);
+    if (body && "pushEvents" in body) patch.pushEvents = body.pushEvents;
     const saved = saveUserSettings(patch);
     if ("lanEnabled" in patch && typeof exposure.toggleHandler === "function") {
       try {
