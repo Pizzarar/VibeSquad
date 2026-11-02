@@ -68,11 +68,16 @@ function makeMockEnv() {
       writeFileSync(join(agentsDir, `${record.id}.json`), JSON.stringify(record, null, 2), "utf8");
     },
     runVs(args, extraEnv = {}) {
+      // Hermetic: drop the caller's agent identity and live paseo CLI so a run inside an agent
+      // session (PASEO_AGENT_ID, PASEO_CLI) cannot change what vs resolves or reach the daemon.
+      const base = Object.fromEntries(
+        Object.entries(process.env).filter(([k]) => !/^(PASEO_(AGENT_|CLI)|VS_)/.test(k)),
+      );
       return spawnSync(process.execPath, [CLI_PATH, ...args], {
         cwd: REPO_ROOT,
         encoding: "utf8",
         env: {
-          ...process.env,
+          ...base,
           VIBESQUAD_HOME: vsHome,
           PASEO_HOME: paseoHome,
           ...extraEnv,

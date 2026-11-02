@@ -41,6 +41,7 @@
     "btn-brainstorm-inbox",
     "btn-brainstorm-summary",
     "btn-topic-park",
+    "dock-toggle-btn${…}",
     "drawer-copy-btn",
     "drawer-meta-line",
     "drawer-mode-select",
@@ -116,6 +117,7 @@
     "tl-diff",
     "tl-exit-badge",
     "tl-file-link",
+    "tl-filters",
     "tl-icode",
     "tl-md",
     "tl-ol",
@@ -139,9 +141,11 @@
     "big"
   ],
   "pixel.tsx": [
-    "meter-ladder"
+    "meter-ladder",
+    "type-${…}"
   ],
   "ui.tsx": [
+    "depth-${…}",
     "prov-inline",
     "tree-node"
   ]

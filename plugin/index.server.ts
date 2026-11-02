@@ -422,6 +422,17 @@ export function sameLaneRole(
 }
 
 /** Digest/pre-check agents must never be digested again (infinite spawn loop). */
+/** Throwaway workers are not worth a [done] entry: no job label, or "probe" in the title/job. */
+export function isDigestNoise(labels: Labels, title?: string | null): boolean {
+  const job = String(labels.job ?? "").trim();
+  return !job || /\bprobe/i.test(job) || /\bprobe/i.test(String(title ?? ""));
+}
+
+/** A report is loggable as [done] only if it states PASS or FAIL. */
+export function statesVerdict(text: string): boolean {
+  return /\b(PASS|FAIL)\b/.test(text);
+}
+
 export function isDigestAgent(labels: Labels, _title?: string | null): boolean {
   return isDigestIdentity(labels);
 }
@@ -1488,7 +1499,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     }
 
     async function spawnDigest(paseo: Paseo, worker: any, turnId: string | null, labels: Labels) {
-      if (isDigestAgent(labels, worker.title)) return;
+      if (isDigestAgent(labels, worker.title) || isDigestNoise(labels, worker.title)) return;
       const key = `${worker.id}:${turnId ?? ""}`;
       if (digested.has(key)) return;
       digested.add(key);
@@ -1500,11 +1511,12 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         `run \`paseo inspect ${worker.id}\` / read its last assistant message and any report it names. Do not modify files.`,
         `Then run exactly once:`,
         `vs log done "<PASS|FAIL>: <1-line summary, max 200 chars>" --digest --ref ${worker.id}`,
-        `Use FAIL if the worker reported errors, failing tests, or did not finish. Then stop.`,
+        `Use FAIL if the worker reported errors, failing tests, or did not finish. If its report states neither PASS nor FAIL, log nothing. Then stop.`,
       ].join("\n");
 
       const fallback = async (why: string) => {
         const last = await lastAssistantText(paseo, worker.id);
+        if (!statesVerdict(last)) return;
         const line = last.split(/\r?\n/).find((l) => l.trim()) ?? "no final message";
         appendLog(teamIdOf(team, currentTeams()), {
           agent: worker.id,
