@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { defaultSpawnConfigFor } from "./antigravity";
 import { daemonClient, DEMO, spawnTeamAgent, usePaseo } from "./paseo";
+import { branchSuggestions, validateBranch } from "./paseoWorkspaces";
+import { branchHint } from "./workspaceLogic";
 import {
   checkBuddyOverlap,
   getTeams,
@@ -140,6 +142,22 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   const [existingWts, setExistingWts] = useState<WorktreeEntry[]>([]);
   const [wtMode, setWtMode] = useState<"none" | "existing" | "new">("none");
   const [selectedWt, setSelectedWt] = useState("");
+
+  // Branch hint: debounced validateBranch + suggestions for the NEW branch field.
+  const [branchCheck, setBranchCheck] = useState<Awaited<ReturnType<typeof validateBranch>> | null>(null);
+  const [branchSugs, setBranchSugs] = useState<string[]>([]);
+  useEffect(() => {
+    setBranchCheck(null);
+    setBranchSugs([]);
+    if (DEMO || !cwd || !branch.trim()) return;
+    let cancelled = false;
+    const t = setTimeout(() => {
+      validateBranch(cwd, branch.trim()).then((v) => !cancelled && setBranchCheck(v)).catch(() => !cancelled && setBranchCheck({ exists: false, isRemote: false, resolvedRef: null, error: "couldn't check (is this folder a Paseo project?)", requestId: "" }));
+      branchSuggestions(cwd, branch.trim()).then((b) => !cancelled && setBranchSugs(b.filter((x) => x !== branch.trim()).slice(0, 5))).catch(() => {});
+    }, 300);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [cwd, branch]);
+  const hint = branchHint(branch, branchCheck);
 
   const fetchSuggestions = useCallback(async (query: string) => {
     if (!query || DEMO) { setCwdSugs([]); return; }
@@ -559,6 +577,19 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
             {wtMode === "new" && (
               <Field label="BRANCH NAME">
                 <input value={branch} placeholder="feat/vs-step4" onChange={(e) => setBranch(e.target.value)} />
+                {hint && (
+                  <div data-testid="branch-hint" className="small" style={{ marginTop: 4, color: hint.tone === "bad" ? "var(--red, #ff5c7a)" : hint.tone === "warn" ? "var(--amber, #ffb84d)" : hint.tone === "ok" ? "var(--cyan, #4de1ff)" : undefined }}>
+                    {hint.text}
+                  </div>
+                )}
+                {branchSugs.length > 0 && (
+                  <div className="small muted" style={{ marginTop: 4, display: "flex", gap: 4, flexWrap: "wrap" }}>
+                    existing:
+                    {branchSugs.map((b) => (
+                      <span key={b} className="chip" style={{ maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis" }}>{b}</span>
+                    ))}
+                  </div>
+                )}
               </Field>
             )}
           </div>
