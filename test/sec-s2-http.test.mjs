@@ -156,6 +156,7 @@ describe("S2 fix 6: ~/.vibesquad is locked down at startup regardless of LAN", (
       ["/h/.vibesquad", 0o700],
       ["/h/.vibesquad/vapid.json", 0o600],
       ["/h/.vibesquad/devices.json", 0o600],
+      ["/h/.vibesquad/local-token", 0o600],
     ]);
   });
 

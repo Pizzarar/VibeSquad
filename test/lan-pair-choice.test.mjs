@@ -6,6 +6,7 @@ import { createServer as createNetServer } from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, before, describe, test } from "node:test";
+import { ownerHeaders } from "./helpers/local-owner.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
 const home = mkdtempSync(join(tmpdir(), "vs-lan-pair-"));
@@ -58,7 +59,7 @@ function findLocalNonLoopbackIpv4() {
 
 function httpCall({ host = "127.0.0.1", port, path, method = "GET", headers = {}, body }) {
   return new Promise((ok, fail) => {
-    const req = request({ host, port, path, method, headers }, (res) => {
+    const req = request({ host, port, path, method, headers: ownerHeaders(headers) }, (res) => {
       let data = "";
       res.on("data", (c) => (data += c));
       res.on("end", () => ok({ status: res.statusCode, headers: res.headers, body: data }));

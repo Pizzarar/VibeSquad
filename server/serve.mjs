@@ -16,11 +16,13 @@ import {
 import {
   authenticate,
   discardPairCode,
+  getLocalToken,
   getTls,
+  mintLocalLoginNonce,
   handleCaCrt,
   handlePairRedeem,
   isAllowedHostHeader,
-  isLocalBrowserSafe,
+  isLocalOwner,
   isLoopbackOrigin,
   lockDownVibesquadHome,
   netConfig,
@@ -31,6 +33,7 @@ import {
 import "./brainstorm.mjs";
 import "./inbox.mjs";
 import { installVsShim } from "../cli/vs.mjs";
+import { requestLocalLoginUrl } from "./local-token.mjs";
 import { startPushWatcher } from "./push.mjs";
 import { ensurePaseoDaemon } from "./first-run.mjs";
 import { checkDaemonListenExposure } from "./paseo-control.mjs";
@@ -112,10 +115,15 @@ function findExe(candidates) {
   return candidates.find((c) => c.includes(sep) && existsSync(c)) ?? null;
 }
 
-function launchApp(exe) {
+// The launcher's own URL: a single-use local-login nonce (never the master token, which would sit on the
+// browser's command line). The serving process mints it in memory; a second --open asks the running server.
+const servedOpenUrl = () => `${url}/__vibesquad/local-login?t=${mintLocalLoginNonce()}`;
+const runningServerOpenUrl = () => requestLocalLoginUrl({ port }).catch(() => url);
+
+function launchApp(exe, target) {
   // A bare name relies on PATH; spawn reports a missing binary via the error event.
   return new Promise((ok) => {
-    const child = spawn(exe, [`--app=${url}`], { detached: true, stdio: "ignore", windowsHide: false });
+    const child = spawn(exe, [`--app=${target}`], { detached: true, stdio: "ignore", windowsHide: false });
     child.on("error", () => ok(false));
     setTimeout(() => {
       child.unref();
@@ -124,7 +132,9 @@ function launchApp(exe) {
   });
 }
 
-async function openBrowser() {
+async function openBrowser(target) {
+  // Test hook: report the URL instead of focusing or launching a browser.
+  if (process.env.VIBESQUAD_TEST_OPEN_PRINT === "1") return void process.stdout.write(`VIBESQUAD_OPEN_URL=${target}\n`);
   if (await focusExistingWindow()) return;
   const pf = process.env["ProgramFiles"] ?? "C:\\Program Files";
   const pf86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
@@ -134,10 +144,10 @@ async function openBrowser() {
   ];
   for (const list of browsers) {
     const exe = findExe(list) ?? list[list.length - 1];
-    if (await launchApp(exe)) return;
+    if (await launchApp(exe, target)) return;
   }
   // `start` is a cmd builtin; the empty "" is the window title argument.
-  spawn("cmd.exe", ["/c", "start", "", url], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+  spawn("cmd.exe", ["/c", "start", "", target], { detached: true, stdio: "ignore", windowsHide: true }).unref();
 }
 
 function isListening() {
@@ -460,24 +470,25 @@ export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().mes
 }
 
 if (wantOpen && (await isListening())) {
-  await openBrowser();
+  await openBrowser(await runningServerOpenUrl());
   process.exit(0);
 }
 
 export const server = createServer(handle);
 server.on("upgrade", (req, socket, head) => {
   if (!req.url?.startsWith("/ws")) return socket.destroy();
-  // Cross-site WebSocket hijacking: a browser page can open ws://127.0.0.1 with any Origin.
+  // Cross-site WebSocket hijacking: a browser page can open ws://127.0.0.1 with any Origin. The daemon
+  // controls agents, so loopback also needs the local token (header) or the vs_local cookie.
   if (!authenticate(req)) {
     const origin = req.headers.origin;
-    if (!isLocalBrowserSafe(req) || origin === undefined || !isLoopbackOrigin(origin)) return rejectUpgrade(socket, "403 Forbidden");
+    if (!isLocalOwner(req) || (origin !== undefined && !isLoopbackOrigin(origin))) return rejectUpgrade(socket, "403 Forbidden");
   }
   proxyUpgrade(req, socket, head);
 });
 server.on("error", async (e) => {
   // Lost a race with another launcher: if it is ours, behave like the already-running case.
   if (e.code === "EADDRINUSE" && (await isListening())) {
-    if (wantOpen) await openBrowser();
+    if (wantOpen) await openBrowser(await runningServerOpenUrl());
     process.exit(0);
   }
   console.error(e);
@@ -500,6 +511,7 @@ if (isMain) {
   } catch (err) {
     console.warn("Could not restrict ~/.vibesquad to the current user:", err?.message ?? err);
   }
+  getLocalToken();
   server.listen(port, "127.0.0.1", () => {
     console.log(`VibeSquad serving ${distDir} on ${url}`);
     logServerStart({ rootDir });
@@ -541,6 +553,6 @@ if (isMain) {
     applyLanListeners(lanEnabled);
     startPushWatcher(rootDir);
 
-    if (wantOpen) void openBrowser();
+    if (wantOpen) void openBrowser(servedOpenUrl());
   });
 }

@@ -7,6 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { briefShrinkWarning } from "../src/pins.ts";
 import { createVibesquadMiddleware } from "../server/vibesquad-api.mjs";
+import { ownerHeaders } from "./helpers/local-owner.mjs";
 
 test("client pre-check mirrors the server thresholds", () => {
   const big = "x".repeat(1500);
@@ -18,7 +19,7 @@ test("client pre-check mirrors the server thresholds", () => {
 async function post(port, body) {
   const r = await fetch(`http://127.0.0.1:${port}/__vibesquad/brainstorm-summary`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: ownerHeaders({ "content-type": "application/json" }),
     body: JSON.stringify(body),
   });
   return { status: r.status, body: await r.json() };

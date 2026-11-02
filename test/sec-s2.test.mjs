@@ -18,6 +18,7 @@ import {
 } from "../server/paseo-control.mjs";
 import { clearAllConfigWarnings, getConfigWarnings } from "../server/user-settings.mjs";
 import { createVibesquadMiddleware } from "../server/vibesquad-api.mjs";
+import { ownerHeaders } from "./helpers/local-owner.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
 
@@ -218,7 +219,7 @@ describe("S2 fix 3: config restore is confined to the Paseo backup files", () =>
     try {
       const r = await fetch(`http://127.0.0.1:${srv.address().port}/__vibesquad/paseo/raw/restore`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: ownerHeaders({ "content-type": "application/json" }),
         body: JSON.stringify({ backupPath: join(root, "evil.json") }),
       });
       assert.equal(r.status, 400);

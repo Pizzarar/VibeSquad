@@ -3566,7 +3566,8 @@ html, body, #root { overflow-x: hidden; }
 button.file-chip { cursor: pointer; font: inherit; }
 .file-chip-name { max-width: 14em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.stale-build-banner {
+.stale-build-banner,
+.read-only-banner {
   font-size: 13px;
 }
 
@@ -3762,3 +3763,9 @@ button.project-file-name:hover { text-decoration: underline; }
 @media (max-width: 640px) { .skills-item-actions { width: 100%; } }
 .skills-panel { min-width: 0; }
 .skills-view { display: flex; flex-direction: column; gap: 6px; }
+
+.drawer-features-btn { white-space: nowrap; }
+.drawer-features-menu { position: absolute; z-index: 30; margin-top: 2px; width: 260px; max-width: calc(100vw - 16px); background: var(--panel); border: 1px solid var(--line); padding: 8px; display: grid; gap: 6px; font-size: 11px; box-shadow: 0 4px 14px rgba(0,0,0,.45); }
+@media (max-width: 600px) {
+  .drawer-features-menu { position: fixed; left: 8px; right: 8px; top: 96px; width: auto; max-width: none; }
+}

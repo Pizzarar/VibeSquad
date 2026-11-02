@@ -52,6 +52,18 @@ export function authenticate(req: IncomingMessage): {
   tokenHash: string;
 } | null;
 export function isLocal(req: IncomingMessage): boolean;
+export const LOCAL_COOKIE: string;
+export const READ_ONLY_ERROR: string;
+export function getLocalToken(): string;
+export function hasLocalTokenHeader(req: IncomingMessage): boolean;
+export function mintLocalLoginNonce(ttlMs?: number): string;
+export function resetLocalLoginNoncesForTest(): void;
+export function handleLocalLoginNonce(req: IncomingMessage, res: ServerResponse): void;
+export function lockDownVibesquadHome(deps?: Record<string, unknown>): void;
+export function resetLocalTokenForTest(): void;
+export function hasLocalToken(req: IncomingMessage): boolean;
+export function isLocalOwner(req: IncomingMessage): boolean;
+export function handleLocalLogin(req: IncomingMessage, res: ServerResponse): void;
 export function trackSocket(deviceId: string, socket: Duplex): void;
 export function revokeDevice(id: string): boolean;
 export function htmlPage(title: string, message: string): string;
