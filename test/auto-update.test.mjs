@@ -169,9 +169,19 @@ describe("desktop updater verification: channels, signature rejection, and idle 
       }
       assert.ok(ready, "Headless proxy did not start in time");
 
-      // 1. Default channel is stable
+      // 1. Default channel: stable, except a pre-release build follows beta until the user picks one
+      //    (effective_channel, docs/PLAN_BUGS_BATCH1.md block 0d). Then pick stable explicitly.
       const st0 = JSON.parse((await httpCall({ port: proxyPort, path: "/__desktop/updater/status" })).body);
-      assert.equal(st0.channel, "stable");
+      assert.equal(st0.channel, String(st0.currentVersion).includes("-") ? "beta" : "stable");
+      const pickStable = await httpCall({
+        port: proxyPort,
+        path: "/__desktop/updater/channel",
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ channel: "stable" }),
+      });
+      assert.equal(pickStable.status, 200);
+      assert.equal(JSON.parse(pickStable.body).channel, "stable");
 
       // 2. Stable channel ignores beta pre-release versions (e.g. 0.1.2-beta.1)
       stableManifest = {
