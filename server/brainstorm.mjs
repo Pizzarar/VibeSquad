@@ -357,15 +357,22 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
     }
 
     if ((reason === "start-brainstorm" || agentId === "start-brainstorm") && !body.forceNew) {
-      let liveAgents = [];
-      if (body.agents) {
-        liveAgents = body.agents instanceof Map ? [...body.agents.values()] : Array.isArray(body.agents) ? body.agents : [];
-      } else if (connected && client && typeof client.fetchAgents === "function") {
-        const res = await client.fetchAgents().catch(() => null);
-        liveAgents = Array.isArray(res) ? res : Array.isArray(res?.entries) ? res.entries : Array.isArray(res?.agents) ? res.agents : [];
-      } else if (connected && client && typeof client.listAgents === "function") {
-        const res = await client.listAgents().catch(() => null);
-        liveAgents = Array.isArray(res) ? res : Array.isArray(res?.entries) ? res.entries : [];
+      // Fail closed: if the live-agent list can't be read (daemon restarting), spawning could create a
+      // second Buddy for the lane. An empty list gets one retry before it is believed.
+      const asList = (res) => (Array.isArray(res) ? res : Array.isArray(res?.entries) ? res.entries : Array.isArray(res?.agents) ? res.agents : null);
+      const readLive = async () => {
+        if (body.agents) return body.agents instanceof Map ? [...body.agents.values()] : Array.isArray(body.agents) ? body.agents : [];
+        if (connected && client && typeof client.fetchAgents === "function") return asList(await client.fetchAgents().catch(() => null));
+        if (connected && client && typeof client.listAgents === "function") return asList(await client.listAgents().catch(() => null));
+        return [];
+      };
+      let liveAgents = await readLive();
+      if (liveAgents && liveAgents.length === 0 && connected && client && !body.agents) {
+        await new Promise((r) => setTimeout(r, typeof body.emptyRetryMs === "number" ? body.emptyRetryMs : 250));
+        liveAgents = await readLive();
+      }
+      if (!liveAgents) {
+        return { ok: false, spawned: false, reason: "agent-list-unavailable", error: "Could not read the live agent list; not starting a Buddy so the lane can't get a duplicate. Try again in a moment.", laneId, teamId };
       }
       timer.mark("fetchAgents");
       const existing = findExistingLaneBrainstorm(liveAgents, laneId, topic);

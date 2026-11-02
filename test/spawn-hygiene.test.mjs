@@ -75,3 +75,65 @@ test("block 2: lane label (or VS_LANE env) picks the brief; cwd never does", () 
     const unknown = spawn({ labels: { role: "brainstorm" } });
     assert.ok(!unknown.includes("--- BEGIN docs/brainstorm/"), "no lane -> no brief, even from a vibesquad worktree cwd");
   }));
+
+// ---- block 3: no duplicate Buddy when the agent list can't be read ----
+import { performBrainstormRestart, resetBrainstormRestartState } from "../server/brainstorm.mjs";
+
+function brainstormDaemon(fetchAgents) {
+  const created = [];
+  return {
+    created,
+    fetchAgents,
+    async createAgent(req) {
+      created.push(req);
+      return { id: `new-${created.length}`, labels: {} };
+    },
+    async archiveAgent() {},
+    async updateAgent() {},
+    async cancelAgent() {},
+  };
+}
+
+test("block 3: fetchAgents rejecting (or returning junk) spawns nothing", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vs-spawn-hygiene-b3-"));
+  const prev = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = join(dir, ".vibesquad");
+  try {
+    for (const fetchAgents of [async () => { throw new Error("daemon restarting"); }, async () => null, async () => ({ nope: 1 })]) {
+      resetBrainstormRestartState();
+      const daemon = brainstormDaemon(fetchAgents);
+      const r = await performBrainstormRestart(
+        { reason: "start-brainstorm", teamId: "sq", laneId: "dup-test", daemonClient: daemon, emptyRetryMs: 1 },
+        dir,
+      );
+      assert.equal(r.ok, false);
+      assert.equal(r.reason, "agent-list-unavailable");
+      assert.equal(daemon.created.length, 0, "must not spawn");
+    }
+  } finally {
+    prev === undefined ? delete process.env.VIBESQUAD_HOME : (process.env.VIBESQUAD_HOME = prev);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("block 3: an empty list is retried once; a readable list reuses the live Buddy", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vs-spawn-hygiene-b3b-"));
+  const prev = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = join(dir, ".vibesquad");
+  try {
+    resetBrainstormRestartState();
+    let calls = 0;
+    const live = { id: "bs1", status: "idle", title: "BRAINSTORM", labels: { team: "sq", lane: "dup-test", role: "brainstorm" } };
+    const daemon = brainstormDaemon(async () => (++calls === 1 ? [] : [live]));
+    const r = await performBrainstormRestart(
+      { reason: "start-brainstorm", teamId: "sq", laneId: "dup-test", daemonClient: daemon, emptyRetryMs: 1 },
+      dir,
+    );
+    assert.equal(calls, 2);
+    assert.equal(r.reused, true);
+    assert.equal(daemon.created.length, 0);
+  } finally {
+    prev === undefined ? delete process.env.VIBESQUAD_HOME : (process.env.VIBESQUAD_HOME = prev);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
