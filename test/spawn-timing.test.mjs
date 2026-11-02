@@ -38,7 +38,43 @@ test("a Buddy restart writes one spawn-timing metric with every step", async () 
     const timing = lines.filter((e) => e.text.startsWith("spawn-timing buddy-restart:"));
     assert.equal(timing.length, 1);
     assert.equal(timing[0].type, "metric");
-    for (const step of ["prep=", "createAgent=", "retire=", "total="]) assert.ok(timing[0].text.includes(step), step);
+    for (const step of ["prep=", "createAgent=", "total="]) assert.ok(timing[0].text.includes(step), step);
+  } finally {
+    if (prev === undefined) delete process.env.VIBESQUAD_HOME;
+    else process.env.VIBESQUAD_HOME = prev;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a restart replies before the old Buddy finishes retiring, and still retires it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vs-spawn-retire-"));
+  const prev = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = join(dir, ".vibesquad");
+  resetBrainstormRestartState();
+  try {
+    mkdirSync(join(dir, "docs", "brainstorm"), { recursive: true });
+    const calls = [];
+    let releaseArchive;
+    const gate = new Promise((r) => (releaseArchive = r));
+    const daemon = {
+      async createAgent() { return { id: "new-2" }; },
+      async cancelAgent(id) { calls.push(["cancel", id]); },
+      async updateAgent(id) { calls.push(["update", id]); },
+      async archiveAgent(id) { await gate; calls.push(["archive", id]); },
+    };
+    const r = await performBrainstormRestart(
+      {
+        agentId: "bs-2", teamId: "site", laneId: "pinned", reason: "manual",
+        oldAgent: { id: "bs-2", title: "BRAINSTORM · PINNED", cwd: dir, labels: { team: "site", lane: "pinned", role: "brainstorm" } },
+        daemonClient: daemon,
+      },
+      dir,
+    );
+    assert.equal(r.newAgentId, "new-2");
+    assert.ok(!calls.some(([k]) => k === "archive"), "reply must not wait for archive");
+    releaseArchive();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual(calls.map(([k]) => k), ["cancel", "update", "archive"]);
   } finally {
     if (prev === undefined) delete process.env.VIBESQUAD_HOME;
     else process.env.VIBESQUAD_HOME = prev;

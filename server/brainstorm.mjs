@@ -283,6 +283,8 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
   const client = injectedClient || (body.skipDaemon ? null : createDaemonClient(rootDir));
   let oldAgent = body.oldAgent || null;
   let connected = Boolean(injectedClient);
+  // Retiring the predecessor (cancel -> update -> archive, ~4-6 s) runs after the reply is sent; the client closes once it settles.
+  let retireDone = null;
   try {
     if (client) {
       try {
@@ -581,16 +583,14 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       if (connected && client) {
         const rawOldTitle = String(oldAgent?.title || newTitle).trim();
         const retiredTitle = rawOldTitle.toLowerCase().startsWith("(old)") ? rawOldTitle : `(old) ${rawOldTitle}`;
-        await client.cancelAgent?.(agentId)?.catch?.(() => {});
-        await client
-          .updateAgent?.(agentId, {
-            name: retiredTitle,
-            labels: retiredLabels,
-          })
-          ?.catch?.(() => {});
-        await client.archiveAgent?.(agentId)?.catch?.(() => {});
+        const retireT0 = Date.now();
+        retireDone = (async () => {
+          await client.cancelAgent?.(agentId)?.catch?.(() => {});
+          await client.updateAgent?.(agentId, { name: retiredTitle, labels: retiredLabels })?.catch?.(() => {});
+          await client.archiveAgent?.(agentId)?.catch?.(() => {});
+          console.log(`[vibesquad] spawn-timing retire-background=${Date.now() - retireT0}ms`);
+        })().catch(() => {});
       }
-      timer.mark("retire");
     }
     timer.flush({ teamId, laneId, agent: created.id });
 
@@ -618,7 +618,8 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
     };
   } finally {
     if (!injectedClient && client && typeof client.close === "function") {
-      await client.close().catch(() => {});
+      if (retireDone) retireDone.finally(() => client.close().catch(() => {}));
+      else await client.close().catch(() => {});
     }
   }
 }
