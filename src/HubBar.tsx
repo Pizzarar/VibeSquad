@@ -7,26 +7,13 @@ import type { LaneDef, TeamDef } from "./teams";
 import type { TeamView } from "./teams";
 import { Avatar } from "./pixel";
 import { PinDot } from "./PinGrid";
+import { countUnsplit } from "./hubBarLogic";
 
 // TODO: import from teams.ts after block 1
 export const isHubLane = (team: TeamDef, lane: LaneDef): boolean => {
   const flagged = team.lanes.some((l) => (l as LaneDef & { hub?: boolean }).hub === true);
   return (lane as LaneDef & { hub?: boolean }).hub === true || (!flagged && lane.id === team.id);
 };
-
-/** Count the bullets under `## Unsplit threads` (a lone "none" bullet counts as 0). */
-export function countUnsplit(brief: string): number {
-  const lines = brief.split(/\r?\n/);
-  const start = lines.findIndex((l) => /^##\s+Unsplit threads\s*$/i.test(l));
-  if (start < 0) return 0;
-  let n = 0;
-  for (const l of lines.slice(start + 1)) {
-    if (/^##\s/.test(l)) break;
-    const m = /^\s*[-*]\s+(.*\S)/.exec(l);
-    if (m && !/^(none|n\/a|-)\.?$/i.test(m[1].replace(/[*_`]/g, "").trim())) n++;
-  }
-  return n;
-}
 
 function useUnsplit(laneId: string, refreshKey: string): number | null {
   const [n, setN] = useState<number | null>(null);
