@@ -1,6 +1,8 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
-import { daemonClient, DEMO, spawnTeamAgent } from "./paseo";
+import { daemonClient, DEMO, spawnTeamAgent, usePaseo } from "./paseo";
+import { workspaceIdForAgent } from "./workspaceLogic";
+import { NoWorkspaceBanner } from "./NoWorkspaceBanner";
 import { openAgent } from "./panes";
 import { findProfile } from "./profiles";
 import { usePref } from "./prefs";
@@ -224,6 +226,11 @@ const REVIEW_DIFF_CAP = 40_000;
 
 export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
   const cwd = agent.cwd ?? DEMO_CWD;
+  // Checkout RPCs hang for folders the daemon has no workspace for, so offer to add one instead of waiting 40s.
+  const { workspaces } = usePaseo();
+  const [addedWs, setAddedWs] = useState<{ cwd: string; id: string } | null>(null);
+  const workspaceId = useMemo(() => workspaceIdForAgent(agent, workspaces) ?? (addedWs?.cwd === cwd ? addedWs.id : null), [agent, workspaces, addedWs, cwd]);
+  const noWorkspace = !DEMO && !workspaceId;
 
   const [status, setStatus] = useState<CheckoutStatusInfo | null>(null);
   const [diff, setDiff] = useState<DiffPayload | null>(null);
@@ -292,6 +299,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
     setAutoMergeArmed(false); setPrMergeArmed(false); setDiscardState(null);
     setCheckOpen(null); setCheckInfo(null); setTimeline(null);
     setExpandedFile(null);
+    if (noWorkspace) return;
     setLoading(true);
     setLoadError(null);
     setSlow(false);
@@ -348,7 +356,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
       unsub?.();
       subRelease?.();
     };
-  }, [cwd, attempt]);
+  }, [cwd, attempt, noWorkspace]);
 
   useEffect(() => { undone.current.clear(); }, [diff]);
 
@@ -667,6 +675,16 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
   }
 
   // ─── Render ──────────────────────────────────────────────────────────────────
+
+  if (noWorkspace) {
+    return (
+      <div className="right-dock-placeholder" data-testid="changes-panel">
+        <div data-testid="changes-no-workspace">
+          <NoWorkspaceBanner cwd={cwd} onReady={(id) => setAddedWs({ cwd, id })} />
+        </div>
+      </div>
+    );
+  }
 
   if (loadError && !DEMO) {
     return (

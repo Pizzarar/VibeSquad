@@ -268,3 +268,12 @@ test("review prompt: diff fence outruns any backtick run in the diff, and the co
   assert.match(s, /REVIEW_DIFF_CAP = 40_000/);
   assert.doesNotMatch(s, /"```diff"/);
 });
+
+test("Changes: a folder with no Paseo workspace shows NoWorkspaceBanner instead of calling checkout RPCs", () => {
+  const s = src("ChangesPanel.tsx");
+  assert.match(s, /workspaceIdForAgent\(agent, workspaces\) \?\? \(addedWs\?\.cwd === cwd \? addedWs\.id : null\)/);
+  assert.match(s, /<NoWorkspaceBanner cwd=\{cwd\} onReady=\{\(id\) => setAddedWs\(\{ cwd, id \}\)\} \/>/);
+  // The load effect bails before any daemon call and reruns once the workspace exists.
+  const effect = s.slice(s.indexOf("q.hist++"), s.indexOf("}, [cwd, attempt, noWorkspace]);"));
+  assert.ok(effect.indexOf("if (noWorkspace) return;") >= 0 && effect.indexOf("if (noWorkspace) return;") < effect.indexOf("daemonClient."));
+});
