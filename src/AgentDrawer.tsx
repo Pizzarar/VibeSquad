@@ -5,6 +5,7 @@ import { DEMO, removeLocalAgent, sendMessage, upsertLocalAgent } from "./paseo";
 import { openPin } from "./pinActions";
 import type { Pin, PinLane } from "./pins";
 import { useDraft } from "./drafts";
+import { createSendLock, guardedSend, restoredDraft } from "./sendGuard";
 import { blobsToPaseoImages, rememberSent, useImageDraft } from "./imageDrafts";
 import {
   attentionOf,
@@ -270,61 +271,72 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
     }
   }, [isBs, agent.id, agent.archivedAt, agent.status, bsUsedTokens, restartTokens, doRestart]);
 
+  const sendLock = useRef(createSendLock());
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const [sendError, setSendError] = useState<string | null>(null);
+
   const sendWithBehavior = async (behavior: ActiveTurnBehavior) => {
     if (!draft.trim() && !imgs.images.length) return;
+    if (sendLock.current.held) return;
     const text = draft.trim() ? draft : "(image)";
+    const typed = draft;
+    setSendError(null);
 
-    // BF-P1: Auto-restart without asking at >= restartTokens (150k) or when next turn would push it past 150k.
-    if (isBs && (bsUsedTokens >= restartTokens || bsUsedTokens + Math.ceil(draft.length / 3) >= restartTokens)) {
-      autoRestartFired.current = agent.id;
-      const r = await doRestart("auto-150k", text);
-      if (r?.retired) {
-        const laneDef = (team.lanes?.find((l) => l.id === laneId) ?? { id: laneId, name: laneId }) as PinLane;
-        const pin: Pin = {
-          squad: team,
-          lane: laneDef,
-          state: "pinned",
-          order: 0,
-          brainstorm: null,
-          lead: null,
-          workers: [],
-          needsYou: 0,
-          running: 0,
-          contextUsed: 0,
-          topicBrainstorms: [],
-        };
-        const pane = paneOfAgent(agent.id);
-        const newId = await openPin(pin);
-        openAgentInTab(newId, pane, agent.id);
-        const promptToSend = r.pendingPrompt ?? text;
+    await guardedSend({
+      lock: sendLock.current,
+      clear: () => {
+        setBusy(true);
+        clearDraft();
+      },
+      restore: () => setDraft(restoredDraft(typed, draftRef.current)),
+      onError: (e) => setSendError(`Send failed: ${e instanceof Error ? e.message : String(e)}`),
+      run: async () => {
+        // BF-P1: Auto-restart without asking at >= restartTokens (150k) or when next turn would push it past 150k.
+        if (isBs && (bsUsedTokens >= restartTokens || bsUsedTokens + Math.ceil(typed.length / 3) >= restartTokens)) {
+          autoRestartFired.current = agent.id;
+          const r = await doRestart("auto-150k", text);
+          if (!r?.retired) return undefined;
+          const laneDef = (team.lanes?.find((l) => l.id === laneId) ?? { id: laneId, name: laneId }) as PinLane;
+          const pin: Pin = {
+            squad: team,
+            lane: laneDef,
+            state: "pinned",
+            order: 0,
+            brainstorm: null,
+            lead: null,
+            workers: [],
+            needsYou: 0,
+            running: 0,
+            contextUsed: 0,
+            topicBrainstorms: [],
+          };
+          const pane = paneOfAgent(agent.id);
+          const newId = await openPin(pin);
+          openAgentInTab(newId, pane, agent.id);
+          const promptToSend = r.pendingPrompt ?? text;
+          if (imgs.images.length) {
+            await sendMessage(newId, promptToSend, await blobsToPaseoImages(imgs.images), { activeTurnBehavior: behavior });
+            rememberSent(newId, promptToSend, imgs.images);
+            imgs.clear();
+          } else {
+            await sendMessage(newId, promptToSend, undefined, { activeTurnBehavior: behavior });
+          }
+          return true;
+        }
+
         if (imgs.images.length) {
-          await sendMessage(newId, promptToSend, await blobsToPaseoImages(imgs.images), { activeTurnBehavior: behavior });
-          rememberSent(newId, promptToSend, imgs.images);
+          await sendMessage(agent.id, text, await blobsToPaseoImages(imgs.images), { activeTurnBehavior: behavior });
+          rememberSent(agent.id, text, imgs.images);
           imgs.clear();
         } else {
-          await sendMessage(newId, promptToSend, undefined, { activeTurnBehavior: behavior });
+          await sendMessage(agent.id, typed, undefined, { activeTurnBehavior: behavior });
         }
-        clearDraft();
-      }
-      return;
-    }
-
-    setBusy(true);
-    try {
-      if (imgs.images.length) {
-        await sendMessage(agent.id, text, await blobsToPaseoImages(imgs.images), { activeTurnBehavior: behavior });
-        rememberSent(agent.id, text, imgs.images);
-        imgs.clear();
-      } else {
-        await sendMessage(agent.id, draft, undefined, { activeTurnBehavior: behavior });
-      }
-      if (agent.status === "running" && behavior === "steer") setLastSteered(text);
-      clearDraft();
-    } catch (e) {
-      alert(`Send failed: ${e}`);
-    } finally {
-      setBusy(false);
-    }
+        if (agent.status === "running" && behavior === "steer") setLastSteered(text);
+        return true;
+      },
+    });
+    setBusy(false);
   };
 
   const send = () => sendWithBehavior("steer");
@@ -504,6 +516,12 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
       {!isBs && inboxToast && (
         <div className="brainstorm-inbox-toast" role="status" data-testid="brainstorm-inbox-toast">
           <span>📥 {inboxToast}</span>
+        </div>
+      )}
+
+      {sendError && (
+        <div className="send-error" role="alert" data-testid="send-error">
+          {sendError}
         </div>
       )}
 

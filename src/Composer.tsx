@@ -356,6 +356,7 @@ export function Composer({
     }
     if (shouldComposerSubmit(e)) {
       e.preventDefault();
+      if (e.repeat || busy) return;
       send();
     }
   };

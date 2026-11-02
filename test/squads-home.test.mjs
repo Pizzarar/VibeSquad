@@ -39,7 +39,9 @@ test("H1 store wiring: opening a squad leaves Squads Home; focusPin clears it", 
   const app = src("App.tsx");
   assert.match(app, /const onTeam = useCallback\(\(id: string\) => \{\s*exitSquadsHome\(\);/);
   assert.match(app, /<SquadsHome views=\{sidebarViews\} onSelectSquad=\{onTeam\} onOpenPin=\{onQuickStart\} onNewSquad=\{openNewSquad\}/);
-  assert.match(app, /data-testid="squad-page-home-btn"/);
+  // Send-guard: the ⊞ button is gone; the SQUADS tab goes home when already on teams.
+  assert.doesNotMatch(app, /squad-page-home-btn/);
+  assert.match(app, /props\.screen === "teams" \? enterSquadsHome\(\)/);
 });
 
 test("H1 Squads Home tiles: huddle portraits stop propagation, + NEW SQUAD tile, 390px single column", () => {
