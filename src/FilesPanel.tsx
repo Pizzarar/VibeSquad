@@ -6,8 +6,12 @@ import { MarkdownRenderer } from "./Timeline";
 import { normalizeRepoPath } from "./fileLinks";
 import { baseName, isUnder, nameTaken, parentPath, remapPath, validateEntryName } from "./fileOps";
 import { createEntry, deleteEntry, duplicateEntry, renameEntry } from "./paseoFiles";
-import { usePref } from "./prefs";
+import { useKeyBindings, usePref } from "./prefs";
+import { bindingLabel } from "./keymap";
 import { clientOnDaemonHost, ideUrl } from "./hunkUndo";
+import { KEY_COMMAND_EVENT } from "./CommandPalette";
+import { InlineEditBox, InlineEditReview, useInlineSession, useSessionContent } from "./InlineEdit";
+import { clampRange, lineRangeFromOffsets, textLines, type LineRange } from "./inlineEditLogic";
 
 type DirEntry = FileExplorerDirectoryPayload["entries"][number];
 
@@ -120,6 +124,20 @@ export function FilesPanel({
   const [opBusy, setOpBusy] = useState(false);
   const [opErr, setOpErr] = useState("");
   const [ide] = usePref("app.openInIde");
+  const viewerRef = useRef<HTMLDivElement | null>(null);
+  const codeRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const [inlineBox, setInlineBox] = useState<{ range: LineRange; top: number } | null>(null);
+  const [inlineErr, setInlineErr] = useState("");
+  const inlineSession = useInlineSession(cwd, openFile);
+  const inlineKeys = bindingLabel(useKeyBindings().bindings, "inlineEdit");
+  // The agent's edits land in the view as the session re-reads the file (not while you're editing).
+  useSessionContent(inlineSession, (text, mtime) => {
+    if (editMode || text === fileContent) return;
+    setFileContent(text);
+    setEditValue(text);
+    setFileModifiedAt(mtime);
+  });
 
   // Load root directory on mount / cwd change
   useEffect(() => {
@@ -214,6 +232,8 @@ export function FilesPanel({
         unsubscribeRef.current = null;
       }
       setOpenFile(path);
+      setInlineBox(null);
+      setInlineErr("");
       setEditMode(false);
       setSaveErr("");
       setNotFound(false);
@@ -481,6 +501,55 @@ export function FilesPanel({
 
   const isMd =!!openFile && /\.(md|markdown)$/i.test(openFile);
 
+  // Ctrl+K (rebindable, scoped to the Files editor): the selected lines → the inline edit prompt box.
+  const openInlineEdit = () => {
+    setInlineErr("");
+    const viewer = viewerRef.current;
+    if (!openFile || !viewer || notFound || notice || imgUrl) return;
+    const below = (r: DOMRect) => r.bottom - viewer.getBoundingClientRect().top + 4;
+    if (editMode) {
+      const ta = textareaRef.current;
+      if (!ta) return;
+      if (editValue !== fileContent) { setInlineErr("Save or cancel your edit first: inline edit works on the saved file."); return; }
+      const range = lineRangeFromOffsets(editValue, ta.selectionStart, ta.selectionEnd);
+      const st = getComputedStyle(ta);
+      const lh = parseFloat(st.lineHeight) || 1.4 * parseFloat(st.fontSize) || 16;
+      const taTop = ta.getBoundingClientRect().top - viewer.getBoundingClientRect().top;
+      const top = taTop + parseFloat(st.paddingTop || "0") + range.to * lh - ta.scrollTop + 4;
+      setInlineBox({ range, top: Math.max(taTop, Math.min(top, taTop + ta.clientHeight - 8)) });
+      return;
+    }
+    if (isMd && !sourceView) { setInlineErr("Switch to Source to select lines."); return; }
+    const sel = window.getSelection();
+    const code = codeRef.current;
+    if (!code || !sel || sel.rangeCount === 0) { setInlineErr("Select some lines first."); return; }
+    const r = sel.getRangeAt(0);
+    const lineOf = (n: Node) => (n instanceof Element ? n : n.parentElement)?.closest<HTMLElement>("[data-line]");
+    const a = code.contains(r.startContainer) ? lineOf(r.startContainer) : null;
+    let b = code.contains(r.endContainer) ? lineOf(r.endContainer) : null;
+    if (!a || !b) { setInlineErr("Select some lines first."); return; }
+    // A triple-click ends at offset 0 of the next line: that line isn't part of the selection.
+    if (!r.collapsed && r.endOffset === 0 && b !== a && b.previousElementSibling instanceof HTMLElement) b = b.previousElementSibling;
+    const range = clampRange({ from: Number(a.dataset.line), to: Number(b.dataset.line) }, textLines(fileContent).length);
+    const last = lineRefs.current.get(range.to);
+    setInlineBox({ range, top: last ? below(last.getBoundingClientRect()) : 40 });
+  };
+  const openInlineEditRef = useRef(openInlineEdit);
+  openInlineEditRef.current = openInlineEdit;
+  useEffect(() => {
+    const on = (e: Event) => {
+      const d = (e as CustomEvent<{ id: string; target: HTMLElement | null }>).detail;
+      if (d?.id === "inlineEdit" && d.target && viewerRef.current?.contains(d.target)) openInlineEditRef.current();
+    };
+    window.addEventListener(KEY_COMMAND_EVENT, on);
+    return () => window.removeEventListener(KEY_COMMAND_EVENT, on);
+  }, []);
+  const closeInlineBox = () => {
+    setInlineBox(null);
+    (editMode ? textareaRef.current : codeRef.current)?.focus();
+  };
+  const inlineRange = inlineBox?.range ?? (inlineSession?.phase === "pending" ? inlineSession.range : null);
+
   return (
     <div className="files-panel" data-testid="files-panel">
       <div className="files-tree" ref={treeRef} onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, node: null }); }}>
@@ -568,7 +637,7 @@ export function FilesPanel({
         </div>
       )}
       {openFile && (
-        <div className="files-viewer">
+        <div className="files-viewer" ref={viewerRef} data-keyscope="files-editor">
           <div className="files-viewer-header">
             <span className="muted small">{openFile}</span>
             {ide !== "none" && (DEMO || clientOnDaemonHost(location.hostname)) && cwd && (() => {
@@ -616,8 +685,14 @@ export function FilesPanel({
             )}
           </div>
           {saveErr && <div className="stat-alert small">{saveErr}</div>}
+          {inlineErr && <div className="stat-alert small" data-testid="inline-edit-hint">{inlineErr}</div>}
+          {inlineSession && <InlineEditReview session={inlineSession} />}
+          {inlineBox && (
+            <InlineEditBox cwd={cwd} path={openFile} range={inlineBox.range} viewText={fileContent} top={inlineBox.top} onClose={closeInlineBox} />
+          )}
           {editMode ? (
             <textarea
+              ref={textareaRef}
               data-testid="files-editor-textarea"
               className="files-editor"
               value={editValue}
@@ -637,15 +712,16 @@ export function FilesPanel({
               <MarkdownRenderer text={fileContent} agentId={agent.id} doc />
             </div>
           ) : (
-            <div className="files-code" data-testid="files-code-view">
+            <div className="files-code" data-testid="files-code-view" ref={codeRef} tabIndex={0} title={inlineKeys ? `Select lines and press ${inlineKeys} to ask an agent to edit them` : undefined}>
               {fileContent.split("\n").map((line, i) => {
                 const lineNum = i + 1;
                 const isHighlighted = targetLine === lineNum && openFile === (targetFile ? normalizeRepoPath(targetFile)?.replace(/\/+$/, "") : null);
                 return (
                   <div
                     key={i}
-                    className={`files-line${isHighlighted ? " highlighted" : ""}`}
+                    className={`files-line${isHighlighted ? " highlighted" : ""}${inlineRange && lineNum >= inlineRange.from && lineNum <= inlineRange.to ? " inline-range" : ""}`}
                     data-testid={isHighlighted ? "files-highlighted-line" : undefined}
+                    data-line={lineNum}
                     ref={(el) => {
                       if (el) lineRefs.current.set(lineNum, el);
                       else lineRefs.current.delete(lineNum);

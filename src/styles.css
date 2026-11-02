@@ -3530,6 +3530,33 @@ html, body, #root { overflow-x: hidden; }
 .files-line { display: flex; gap: 8px; white-space: pre-wrap; }
 .files-line.highlighted { background: rgba(0, 255, 240, 0.18); }
 .files-lineno { opacity: 0.45; min-width: 3ch; text-align: right; }
+.files-viewer { position: relative; }
+.files-code:focus { outline: none; }
+.files-line.inline-range { background: var(--violet-dim); }
+
+/* Inline edit on a selection (Ctrl+K in the Files editor) */
+.inline-edit-box {
+  position: absolute; z-index: 20; left: 12px; right: 12px; display: flex; flex-direction: column; gap: 6px;
+  background: var(--panel); border: 1px solid var(--violet); border-radius: 6px; padding: 6px 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6), 0 0 12px var(--violet-dim);
+}
+.inline-edit-box-head, .inline-edit-box-foot, .inline-edit-review-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.inline-edit-box-head > span { color: var(--violet); font-size: 11px; flex: 1; }
+.inline-edit-box-head select { max-width: 60%; font-size: 11px; }
+.inline-edit-box-foot .spacer, .inline-edit-review-head .spacer { flex: 1; }
+.inline-edit-input { width: 100%; resize: vertical; font-family: var(--mono); font-size: 11px; }
+.inline-edit-review { margin: 0 8px; border: 1px solid var(--violet); border-radius: 6px; background: var(--navy); max-height: 45%; display: flex; flex-direction: column; min-height: 0; }
+.inline-edit-review.phase-error { border-color: var(--hot-pink); }
+.inline-edit-review.phase-untouched { border-color: var(--line); }
+.inline-edit-review-head { padding: 4px 6px; font-size: 11px; }
+.inline-edit-review-head .btn.small { padding: 0 6px; line-height: 1.5; }
+.inline-edit-tag { color: var(--violet); font-family: var(--mono); }
+.inline-edit-status { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.inline-edit-review.phase-error .inline-edit-status { color: var(--hot-pink); }
+.inline-edit-spin { width: 8px; height: 8px; border-radius: 50%; background: var(--violet); animation: inline-edit-pulse 1s ease-in-out infinite; }
+@keyframes inline-edit-pulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+.inline-edit-sent { margin: 0 6px 6px; padding: 4px 6px; max-height: 120px; overflow: auto; font-size: 10px; white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line); }
+.inline-edit-hunks { overflow: auto; font-family: var(--mono); font-size: 11px; border-top: 1px solid var(--line); }
 .tl-quote { margin: 6px 0; padding: 2px 10px; border-left: 3px solid var(--line); opacity: 0.85; }
 
 /* ── Attention list: opens from a team's pink badge ── */

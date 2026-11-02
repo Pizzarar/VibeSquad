@@ -31,6 +31,7 @@ export const KEY_COMMANDS: KeyCommand[] = [
   { id: "settings", label: "Settings", defaults: [] },
   { id: "workspaces", label: "Workspaces", defaults: [] },
   { id: "reopen", label: "Reopen closed tab", defaults: [] },
+  { id: "inlineEdit", label: "Inline edit the selection (Files editor)", defaults: ["Ctrl+K"], scope: "files-editor" },
 ];
 
 /** Shown in the cheat sheet, not rebindable. Also reserved: binding one of these is a conflict. */

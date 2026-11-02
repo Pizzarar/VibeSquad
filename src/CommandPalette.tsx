@@ -267,10 +267,10 @@ export function teamCtxItems(view: TeamView): CtxItem[] {
 
 // ---- shortcut cheat sheet -----------------------------------------------------------------
 
-/** Effective (rebindable) bindings first, then the fixed ones. Unbound commands are left out. */
-export function shortcutRows(b: Bindings): [string, string][] {
-  const bound = KEY_COMMANDS.filter((c) => !c.scope || c.scope === "global").flatMap<[string, string]>((c) => (bindingLabel(b, c.id) ? [[bindingLabel(b, c.id), c.label]] : []));
-  return [...bound, ...FIXED_SHORTCUTS];
+/** Effective (rebindable) bindings first, then the fixed ones, as [row key, keys, label]. Unbound commands are left out. */
+export function shortcutRows(b: Bindings): [string, string, string][] {
+  const bound = KEY_COMMANDS.flatMap<[string, string, string]>((c) => (bindingLabel(b, c.id) ? [[c.id, bindingLabel(b, c.id), c.label]] : []));
+  return [...bound, ...FIXED_SHORTCUTS.map<[string, string, string]>(([k, d]) => [`fixed:${k}`, k, d])];
 }
 
 function ShortcutSheet({ onClose, bindings, onEdit }: { onClose: () => void; bindings: Bindings; onEdit: () => void }) {
@@ -280,8 +280,8 @@ function ShortcutSheet({ onClose, bindings, onEdit }: { onClose: () => void; bin
         <h3>Keyboard shortcuts</h3>
         <table>
           <tbody>
-            {shortcutRows(bindings).map(([k, d]) => (
-              <tr key={k}>
+            {shortcutRows(bindings).map(([id, k, d]) => (
+              <tr key={id}>
                 <td>
                   <kbd>{k}</kbd>
                 </td>
