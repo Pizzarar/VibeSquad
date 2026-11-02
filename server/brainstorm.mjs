@@ -7,6 +7,7 @@ import { effectiveAgentRole, findLaneInRegistry, isRetiredAgent, resolveWorktree
 import { findProfileOrFallback, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
 import { briefRootFor, laneWorkingDir } from "./brief-path.mjs";
+import { liveInFlightBlock } from "./in-flight.mjs";
 import { refreshWhosHere } from "./whos-here.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
 
@@ -169,7 +170,7 @@ export function appendVsLogEntry({ teamId, laneId, agent = "you", type = "metric
   return { entry, path: laneLogPath, teamLogPath };
 }
 
-export function buildBrainstormInitialPrompt({ laneId, laneUpper, summaryContent, latestPlan, pendingPrompt }) {
+export function buildBrainstormInitialPrompt({ laneId, laneUpper, summaryContent, latestPlan, pendingPrompt, inFlight }) {
   const tail =
     pendingPrompt && String(pendingPrompt).trim()
       ? `Pending message from the user to answer now:\n${String(pendingPrompt).trim()}`
@@ -190,6 +191,7 @@ export function buildBrainstormInitialPrompt({ laneId, laneUpper, summaryContent
     summaryContent.trim(),
     `--- END docs/brainstorm/${laneId}.md ---`,
     "",
+    ...(inFlight ? [inFlight, ""] : []),
     tail,
   ].join("\n");
 }
@@ -339,6 +341,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       }
     }
 
+    let liveForBoot; // live agent list for the boot prompt's In-flight block (undefined = not read yet)
     const laneCooldownKey = `${teamId}:${laneId}:${topic.toLowerCase()}`;
     if (reason.startsWith("auto")) {
       const cooldownMs = typeof body.cooldownMs === "number" ? body.cooldownMs : 60_000;
@@ -375,6 +378,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
         return { ok: false, spawned: false, reason: "agent-list-unavailable", error: "Could not read the live agent list; not starting a Buddy so the lane can't get a duplicate. Try again in a moment.", laneId, teamId };
       }
       timer.mark("fetchAgents");
+      liveForBoot = liveAgents;
       const existing = findExistingLaneBrainstorm(liveAgents, laneId, topic);
       if (existing) {
         if (existing.labels && existing.labels.team !== teamId) {
@@ -522,7 +526,20 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       ...(body.mode === "quick-start" ? { "vs.fresh-session": "brief" } : {}),
     };
     timer.mark("prep");
+    if (liveForBoot === undefined) {
+      const src = body.agents
+        ? (body.agents instanceof Map ? [...body.agents.values()] : body.agents)
+        : connected && client && typeof client.fetchAgents === "function"
+          ? await Promise.race([
+              client.fetchAgents().then((r) => (Array.isArray(r) ? r : Array.isArray(r?.entries) ? r.entries : Array.isArray(r?.agents) ? r.agents : null)),
+              new Promise((r) => setTimeout(() => r(null), 1500)),
+            ]).catch(() => null)
+          : null;
+      liveForBoot = Array.isArray(src) ? src : null;
+    }
+    timer.mark("inFlight");
     const initialPrompt = buildBrainstormInitialPrompt({
+      inFlight: liveInFlightBlock({ agents: liveForBoot, laneId, teamId }),
       laneId,
       laneUpper,
       summaryContent: summary.content,

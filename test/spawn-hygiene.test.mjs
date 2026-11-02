@@ -148,3 +148,56 @@ test("block 4: boot prompt tells the Buddy to work the top Open item, not confir
   const withPending = buildBrainstormInitialPrompt({ laneId: "x", laneUpper: "X", summaryContent: "s", latestPlan: "p", pendingPrompt: "hello" });
   assert.match(withPending, /Pending message from the user to answer now:\nhello/);
 });
+
+// ---- block 5: live In-flight block at boot ----
+test("block 5: boot prompt lists the lane's running lead, workers and latest log entries", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vs-spawn-hygiene-b5-"));
+  const home = join(dir, ".vibesquad");
+  const prev = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = home;
+  try {
+    mkdirSync(join(home, "teams", "sq"), { recursive: true });
+    writeFileSync(
+      join(home, "teams", "sq", "log.jsonl"),
+      [
+        { ts: "t1", agent: "x", lane: "lane-a", type: "decision", text: "chose A" },
+        { ts: "t2", agent: "x", lane: "lane-b", type: "decision", text: "other lane" },
+        { ts: "t3", agent: "x", lane: "lane-a", type: "metric", text: "spawn-timing noise" },
+        { ts: "t4", agent: "plugin", lane: "lane-a", type: "done", text: "block 3 PASS" },
+      ].map((e) => JSON.stringify(e)).join("\n") + "\n",
+      "utf8",
+    );
+    const agents = [
+      { id: "L1", title: "★ LANE ord3", status: "running", updatedAt: "2026-11-01T10:00:00Z", labels: { team: "sq", lane: "lane-a", role: "lead" } },
+      { id: "W1", title: "worker one", status: "running", labels: { team: "sq", lane: "lane-a", role: "worker" } },
+      { id: "L2", title: "other lane lead", status: "running", labels: { team: "sq", lane: "lane-b", role: "lead" } },
+    ];
+    resetBrainstormRestartState();
+    const created = [];
+    const daemon = {
+      fetchAgents: async () => agents,
+      createAgent: async (req) => (created.push(req), { id: "new1", labels: {} }),
+      archiveAgent: async () => {},
+      updateAgent: async () => {},
+      cancelAgent: async () => {},
+    };
+    await performBrainstormRestart({ reason: "start-brainstorm", teamId: "sq", laneId: "lane-a", daemonClient: daemon, emptyRetryMs: 1 }, dir);
+    const p = created[0].initialPrompt;
+    assert.match(p, /In flight \(live/);
+    assert.match(p, /Lead: ★ LANE ord3 \[running/);
+    assert.match(p, /Workers: worker one/);
+    assert.ok(!p.includes("other lane lead") && !p.includes("other lane\n"));
+    assert.match(p, /block 3 PASS/);
+    assert.match(p, /chose A/);
+    assert.ok(!p.includes("spawn-timing noise"));
+  } finally {
+    prev === undefined ? delete process.env.VIBESQUAD_HOME : (process.env.VIBESQUAD_HOME = prev);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("block 5: unreadable agent list is stated, not guessed", async () => {
+  const { liveInFlightBlock } = await import("../server/in-flight.mjs");
+  const b = liveInFlightBlock({ agents: null, laneId: "z", teamId: "nope", home: tmpdir() });
+  assert.match(b, /Live agents: unavailable/);
+});
