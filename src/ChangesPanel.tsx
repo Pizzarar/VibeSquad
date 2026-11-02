@@ -125,11 +125,11 @@ export const DEMO_DIFF: DiffPayload = {
 };
 
 const DEMO_COMMITS: CommitInfo[] = [
-  { sha: "a1b2c3d4e5f6", shortSha: "a1b2c3d", subject: "Changes panel: commit history browser", authorName: "Aub", authorDate: new Date(Date.now() - 3600e3).toISOString(), isOnRemote: false, files: [
+  { sha: "a1b2c3d4e5f6", shortSha: "a1b2c3d", subject: "Changes panel: commit history browser", authorName: "Demo Dev", authorDate: new Date(Date.now() - 3600e3).toISOString(), isOnRemote: false, files: [
     { path: "src/ChangesPanel.tsx", additions: 120, deletions: 8, status: "modified" },
     { path: "src/paseoGit.ts", additions: 52, deletions: 0, status: "added" },
   ] },
-  { sha: "b2c3d4e5f6a1", shortSha: "b2c3d4e", subject: "Vibe mode: per-Squad flag", authorName: "Aub", authorDate: new Date(Date.now() - 86400e3 * 2).toISOString(), isOnRemote: true, files: [
+  { sha: "b2c3d4e5f6a1", shortSha: "b2c3d4e", subject: "Vibe mode: per-Squad flag", authorName: "Demo Dev", authorDate: new Date(Date.now() - 86400e3 * 2).toISOString(), isOnRemote: true, files: [
     { path: "src/teams.ts", additions: 14, deletions: 2, status: "modified" },
   ] },
 ];
