@@ -4,5 +4,9 @@ declare module "@getpaseo/plugin/server" {
   export interface PluginServerContext {
     before(event: string, handler: (input: any) => any): () => void;
     on(event: string, handler: (input: any, ctx: { paseo: any }) => any): () => void;
+    handle?(
+      contract: { name: string; input: { parseAsync(v: unknown): Promise<any> }; output: { parseAsync(v: unknown): Promise<any> } },
+      handler: (input: any, ctx: { paseo: any }) => unknown,
+    ): void;
   }
 }

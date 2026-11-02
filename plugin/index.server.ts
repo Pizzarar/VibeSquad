@@ -42,6 +42,7 @@ import { detachLiveChildren } from "@vibesquad/server/detach-children.mjs";
 import { briefRootFor } from "@vibesquad/server/brief-path.mjs";
 import { deriveRole } from "@vibesquad/server/profiles.mjs";
 import { leanApplies, leanProviderOptions } from "@vibesquad/server/lean-tools.mjs";
+import { makeVsHttpHandler, vsHttp } from "./server/remote-proxy.ts";
 import {
   LEGACY_NEEDS_LABEL,
   LEGACY_USER_TYPE,
@@ -833,6 +834,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     const stops: (() => void)[] = [];
     const firstDispatchLogged = new Set<string>();
     const childCount = new Map<string, number>();
+
+    // R2-1 remote proxy RPC (vs.http). Gated off by default; see server/remote-proxy.ts.
+    if (typeof server.handle === "function") server.handle(vsHttp, makeVsHttpHandler());
     const digested = new Set<string>();
     const retries = new Map<string, number>();
     const offsets = new Map<string, number>();
