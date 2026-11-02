@@ -23,6 +23,7 @@ import {
   TRANSIENT_RETRY_PROMPT,
 } from "./antigravity";
 import { useDraft } from "./drafts";
+import { AgentTitleEdit } from "./QuickWinsUi";
 import { isImeComposing, shouldComposerSubmit, TOPIC_SOFT_CAP, TopicCapBanner } from "./IdeaInbox";
 import { Avatar, TokenMeter, providerSpec } from "./pixel";
 import { AgentActions, StatusDot, ago, shortPath, useTick } from "./ui";
@@ -665,7 +666,7 @@ export function DrawerHeader({
             })()}
           </div>
           <div className="drawer-title" style={{ fontSize: 15 }}>
-            <StatusDot agent={agent} /> {agent.title ?? agent.id.slice(0, 8)}
+            <StatusDot agent={agent} /> <AgentTitleEdit agent={agent}>{agent.title ?? agent.id.slice(0, 8)}</AgentTitleEdit>
           </div>
           <div className="muted small drawer-meta-line" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4 }}>
             <span>{agent.provider}/</span>

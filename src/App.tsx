@@ -88,6 +88,7 @@ import { PinFocusHeader, PinRail } from "./PinRail";
 import { PinToast } from "./PinIdeas";
 import { NewSquadModal } from "./NewSquadModal";
 import { AddBuddyModal, Modal, NewAgentModal, ProfileImportModal, useProfiles } from "./TeamActions";
+import { AgentTitleEdit, TeamNameEdit, useAttentionTitle, useRestorePrune } from "./QuickWinsUi";
 import { PairDeviceModal } from "./PairDeviceModal";
 import { DaemonStatusBanner, DiagnosticsModal, HelpModal, checkForUpdates, updateLabel, type UpdateCheck } from "./DiagnosticsModal";
 import { BriefEditorHost } from "./BriefEditor";
@@ -96,7 +97,7 @@ import { HandoffModal } from "./HandoffModal";
 import { Avatar, NeonEmblem, TokenMeter, providerSpec } from "./pixel";
 import { playAlertChime } from "./notifications";
 import { SettingsHome, requestSettingsTarget } from "./SettingsHome";
-import { alertEnabled, getPrefs, getPref } from "./prefs";
+import { alertEnabled, getPrefs, getPref , getRestoreLastView } from "./prefs";
 import { setCloseGuard } from "./drafts";
 import {
   applyUiScaleToDom,
@@ -470,7 +471,7 @@ const SidebarTeam = memo(function SidebarTeam({
             {expanded ? "▾" : "▸"}
           </span>
           <NeonEmblem color={v.team.color} seed={v.team.id} size={18} />
-          <span className="team-name">{v.team.name}</span>
+          <span className="team-name"><TeamNameEdit team={v.team} /></span>
           {v.running > 0 && <span className="badge">{v.running}▶</span>}
         </button>
         {firstAlert && <AttentionBadge view={v} onOpen={pick} />}
@@ -762,7 +763,7 @@ const Card = memo(function Card({ label, m, onPick, onSuccessor }: CardProps) {
               RUNS THE WORK ·{" "}
             </span>
           )}
-          {a.model} · {shortPath(a.cwd)} · <Ago iso={a.updatedAt} />
+          {a.model} · {shortPath(a.cwd)} · <Ago iso={a.updatedAt} /> ago
         </div>
         {isBs ? (
           <BrainstormCtxPill agent={a} team={m.team} />
@@ -1171,7 +1172,7 @@ const TeamPage = memo(function TeamPage(props: {
         <header className="team-header">
           <h1>
             <NeonEmblem color={view.team.color} seed={view.team.id} size={32} />
-            <span>{view.team.name}</span>
+            <TeamNameEdit team={view.team} />
             <span className="h1-stats">
               {teamCount} TEAMS · <span className={view.needsYou > 0 ? "stat-alert" : ""}>{view.needsYou} NEED YOU</span>
             </span>
@@ -1206,7 +1207,7 @@ const TeamPage = memo(function TeamPage(props: {
       <header className="team-header">
         <h1>
           <NeonEmblem color={view.team.color} seed={view.team.id} size={32} />
-          <span>{view.team.name}</span>
+          <TeamNameEdit team={view.team} />
           <span className="h1-stats">
             <span className="stat-cyan">{view.running} WORKING</span> ·{" "}
             <span className={view.needsYou > 0 ? "stat-alert" : ""}>{view.needsYou} NEED YOU</span> · {view.members.length} AGENTS
@@ -1527,7 +1528,7 @@ function AboutLicensesModal({ onClose, onChecklist }: { onClose: () => void; onC
 }
 
 export function App() {
-  const { conn, archivedAgents, workspaces, providerUsage } = usePaseo();
+  const { conn, archivedAgents, workspaces, providerUsage, agents } = usePaseo();
   const teamsVersion = useTeams();
   const { members, views } = derived();
   const full = useFullView();
@@ -1559,7 +1560,7 @@ export function App() {
     return () => clearInterval(id);
   }, []);
   const [successorId, setSuccessorId] = useState<string | null>(null);
-  const [teamId, setTeamId] = useState(() => parseUrlState(location.search).team ?? localStorage.getItem("vs.team") ?? views[0]?.team.id ?? "efi");
+  const [teamId, setTeamId] = useState(() => parseUrlState(location.search).team ?? (getRestoreLastView() ? localStorage.getItem("vs.team") : null) ?? views[0]?.team.id ?? "efi");
   const { needsSetup: profilesNeedSetup, setupDismissed: profilesSetupDismissed } = useProfiles();
   const [collapsedTeams, setCollapsedTeams] = useState<Set<string>>(() => readCollapsedTeams());
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1");
@@ -1578,6 +1579,8 @@ export function App() {
     setCloseGuard(() => getPref("app.confirmClose") && membersRef.current.some((m) => m.agent.status === "running"));
     return () => setCloseGuard(null);
   }, []);
+  useAttentionTitle(views);
+  useRestorePrune(agents, conn === "connected");
 
   // A lead past its handoff budget with no needs-you flag would otherwise sit silently (only the card's
   // SPAWN SUCCESSOR button hints at it). Flag it once; "handoff-flagged" stops a cleared flag re-firing.

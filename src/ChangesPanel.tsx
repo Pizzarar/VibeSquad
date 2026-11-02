@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import { daemonClient, client, DEMO } from "./paseo";
+import { Spinner, useDelayedBusy } from "./QuickWinsUi";
 
 // ─── Pure utilities (exported for unit tests) ────────────────────────────────
 
@@ -160,6 +161,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
   const [prData, setPrData] = useState<typeof DEMO_PR_STATUS | null>(null);
   const [stash, setStash] = useState<StashEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const slowLoading = useDelayedBusy(loading);
 
   const [expandedFile, setExpandedFile] = useState<string | null>(null);
   const [discardState, setDiscardState] = useState<DiscardState>(null);
@@ -382,7 +384,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
   if (loading && !DEMO) {
     return (
       <div className="right-dock-placeholder" data-testid="changes-panel">
-        <span className="muted">Loading changes…</span>
+        {slowLoading ? <Spinner label="Loading changes…" /> : <span className="muted">&nbsp;</span>}
       </div>
     );
   }
