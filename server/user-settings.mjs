@@ -38,7 +38,8 @@ export function parseJsonWithBom(raw) {
   return JSON.parse(stripBom(raw));
 }
 
-export function recordConfigWarning(filePath, label, error) {
+/** `kind` defaults to "parse" (JSON parse error); other kinds (e.g. "exposure") are config problems that aren't parse errors. */
+export function recordConfigWarning(filePath, label, error, { kind = "parse" } = {}) {
   const key = normalizePathKey(filePath);
   const msg = String(error?.message ?? error ?? "Invalid JSON");
   const entry = {
@@ -46,9 +47,12 @@ export function recordConfigWarning(filePath, label, error) {
     label: String(label || filePath),
     error: msg,
     ts: new Date().toISOString(),
+    ...(kind !== "parse" ? { kind } : {}),
   };
+  const prev = configWarningsByFile.get(key);
   configWarningsByFile.set(key, entry);
-  console.warn(`[vibesquad] JSON parse error in ${entry.label} (${entry.file}): ${msg}`);
+  if (kind === "parse") console.warn(`[vibesquad] JSON parse error in ${entry.label} (${entry.file}): ${msg}`);
+  else if (prev?.error !== msg) console.warn(`[vibesquad] ${entry.label}: ${msg}`);
   return entry;
 }
 

@@ -370,7 +370,7 @@ export const AgentRow = memo(
           <span className="prov-inline" style={{ color: prov.color }}>
             {prov.symbol} {a.model ?? a.provider}
           </span>{" "}
-          · {shortPath(a.cwd)} · <Ago iso={a.updatedAt} />
+          · {shortPath(a.cwd)} · <Ago iso={a.updatedAt} /> ago
         </span>
         <span className="row-actions">
           <AgentActions agent={a} archive={archive} />

@@ -109,6 +109,7 @@ import {
 } from "./lead-handoff.mjs";
 import {
   SECRET_MASK,
+  checkDaemonListenExposure,
   clearManagedDaemonMarker,
   controlPaseoDaemon,
   controlPaseoHub,
@@ -213,6 +214,7 @@ export {
   resolveTeamAndLane,
   synthesizeHandoffPacket,
   SECRET_MASK,
+  checkDaemonListenExposure,
   clearManagedDaemonMarker,
   controlPaseoDaemon,
   controlPaseoHub,
@@ -1433,7 +1435,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         if (req.method === "POST" || req.method === "PUT") {
           return readBody(req)
             .then((body) => updatePaseoSettingsPatch(body, opts.paseo))
-            .then((r) => sendJson(res, r.ok ? 200 : 400, r))
+            .then((r) => sendJson(res, r.ok ? 200 : r.needsConfirmation ? 409 : 400, r))
             .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
         }
         return sendJson(res, 405, { error: "method not allowed" });
@@ -1456,6 +1458,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return readBody(req)
           .then((body) => {
             const restored = restoreLastPaseoConfigBackup({ ...(opts.paseo || {}), backupPath: body?.backupPath });
+            checkDaemonListenExposure(opts.paseo);
             return runPaseoCli(["reload"], opts.paseo).then(() =>
               sendJson(res, 200, {
                 ok: true,

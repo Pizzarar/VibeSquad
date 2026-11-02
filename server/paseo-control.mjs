@@ -5,9 +5,9 @@
 import { execFile, spawn } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
-import { bundledNode, findPaseoCli, isDaemonListening, parseListen } from "./first-run.mjs";
-import { clearConfigWarning, loadUserSettings, parseJsonWithBom, readJsonFileWithBom, stripBom } from "./user-settings.mjs";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
+import { bundledNode, findPaseoCli, isDaemonListening, parseListen, resolveCmdShimEntry } from "./first-run.mjs";
+import { clearConfigWarning, loadUserSettings, parseJsonWithBom, readJsonFileWithBom, recordConfigWarning, stripBom } from "./user-settings.mjs";
 
 const IS_WIN = process.platform === "win32";
 export const SECRET_MASK = "••••••••";
@@ -120,12 +120,25 @@ export function createPaseoConfigBackup(opts = {}) {
   return backupPath;
 }
 
+const BACKUP_NAME_RE = /^config\.json\.bak-\d+(?:-\d+)?$/;
+
+/** A caller-supplied backup must be one of our own `config.json.bak-<ts>[-n]` files directly in the Paseo home. Throws otherwise. */
+function confinedBackupPath(backupPath, opts = {}) {
+  const home = resolve(getPaseoHome(opts));
+  const target = resolve(home, String(backupPath));
+  const sameDir = IS_WIN ? dirname(target).toLowerCase() === home.toLowerCase() : dirname(target) === home;
+  if (!sameDir || !BACKUP_NAME_RE.test(basename(target))) {
+    throw new Error("backupPath must be a config.json backup in the Paseo home");
+  }
+  return target;
+}
+
 /**
  * Restores the most recent `config.json.bak-<ts>` (or a specific backup path) to `config.json` without BOM.
  */
 export function restoreLastPaseoConfigBackup(opts = {}) {
   const cfgPath = getPaseoConfigPathForHome(opts);
-  const targetBackup = opts.backupPath || listPaseoConfigBackups(opts)[0]?.path;
+  const targetBackup = opts.backupPath ? confinedBackupPath(opts.backupPath, opts) : listPaseoConfigBackups(opts)[0]?.path;
   if (!targetBackup || !existsSync(targetBackup)) {
     throw new Error("No config.json backup available to restore");
   }
@@ -153,6 +166,36 @@ export function readRawPaseoConfig(opts = {}) {
     config: res.data && typeof res.data === "object" ? res.data : { version: 1, daemon: { listen: "127.0.0.1:6767" } },
     error: res.error,
   };
+}
+
+// cmd.exe fallback only: every arg is double-quoted, but refuse anything that could still break out or expand,
+// plus a trailing backslash (it would escape the closing quote for the CLI's own argv parser).
+const UNSAFE_CMD_ARG = /["&|<>^%!\r\n\0]|\\$/;
+// `paseo plugin install <source>`: a directory, Git URL or npm package spec. No leading `-` (option injection).
+const PLUGIN_SOURCE_RE = /^(?!-)[A-Za-z0-9@._\/\\:+~# -]{1,512}$/;
+
+/** Validates a plugin install source; throws on anything outside the allowlist. */
+export function validatePluginSource(raw) {
+  const source = String(raw ?? "").trim();
+  if (!source) throw new Error("Plugin source (directory, Git URL, or npm package) is required");
+  if (!PLUGIN_SOURCE_RE.test(source)) throw new Error("Plugin source contains characters that aren't allowed");
+  return source;
+}
+
+/** Validates a Paseo hub origin and returns its normalized `scheme://host[:port]`; throws otherwise. */
+export function validateHubOrigin(raw) {
+  const value = String(raw ?? "").trim();
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("Hub origin must be an http(s) URL");
+  }
+  if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password || (!/^[A-Za-z0-9.-]+$/.test(url.hostname) && !/^\[[0-9a-fA-F:.]+\]$/.test(url.hostname))) {
+    throw new Error("Hub origin must be an http(s) URL");
+  }
+  if ((url.pathname !== "/" && url.pathname !== "") || url.search || url.hash) throw new Error("Hub origin must not have a path, query or fragment");
+  return url.origin;
 }
 
 /**
@@ -203,18 +246,29 @@ export function runPaseoCli(args = [], opts = {}) {
       });
     };
 
+    const run = opts.execFile ?? execFile;
     try {
       if (cli.kind === "node") {
-        execFile(node, [cli.bin, ...fullArgs], { timeout, windowsHide: true, env, maxBuffer: 8 * 1024 * 1024 }, cb);
+        run(node, [cli.bin, ...fullArgs], { timeout, windowsHide: true, env, maxBuffer: 8 * 1024 * 1024 }, cb);
       } else if (cli.kind === "cmd") {
-        execFile(
-          "cmd.exe",
-          ["/d", "/s", "/c", `"${cli.bin}" ${fullArgs.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" ")}`],
-          { timeout, windowsHide: true, env, windowsVerbatimArguments: true, maxBuffer: 8 * 1024 * 1024 },
-          cb,
-        );
+        // Prefer the shim's node entry so request-derived args never pass through cmd.exe.
+        const entry = (opts.resolveCmdShim ?? resolveCmdShimEntry)(cli.bin);
+        if (entry) {
+          run(node, [...entry.nodeArgs, entry.script, ...fullArgs], { timeout, windowsHide: true, env, maxBuffer: 8 * 1024 * 1024 }, cb);
+        } else {
+          if (fullArgs.some((a) => UNSAFE_CMD_ARG.test(String(a)))) {
+            return resolvePromise({ ok: false, code: 1, stdout: "", stderr: "refusing argument with shell metacharacters", data: null });
+          }
+          // `/s /c "<line>"`: cmd strips only the outer quotes, so every arg stays quoted.
+          run(
+            "cmd.exe",
+            ["/d", "/s", "/c", `"${[cli.bin, ...fullArgs].map((a) => `"${a}"`).join(" ")}"`],
+            { timeout, windowsHide: true, env, windowsVerbatimArguments: true, maxBuffer: 8 * 1024 * 1024 },
+            cb,
+          );
+        }
       } else {
-        execFile(cli.bin, fullArgs, { timeout, windowsHide: true, env, maxBuffer: 8 * 1024 * 1024 }, cb);
+        run(cli.bin, fullArgs, { timeout, windowsHide: true, env, maxBuffer: 8 * 1024 * 1024 }, cb);
       }
     } catch (e) {
       resolvePromise({
@@ -764,8 +818,7 @@ export async function controlPaseoPlugin(action, payload = {}, opts = {}) {
   }
 
   if (action === "install") {
-    const source = String(payload.source || "").trim();
-    if (!source) throw new Error("Plugin source (directory, Git URL, or npm package) is required");
+    const source = validatePluginSource(payload.source);
     if (!payload.confirmUnsandboxed) {
       return {
         ok: false,
@@ -837,6 +890,10 @@ export async function getPaseoConfigSurface(opts = {}) {
  * Changing `daemon.listen` updates `config.json` and flags `restartRequired: true` (does not force restart without confirmation).
  */
 export async function updatePaseoSettingsPatch(patch = {}, opts = {}) {
+  const wantListen = typeof patch.listen === "string" ? patch.listen.trim() : "";
+  if (wantListen && !isLoopbackListen(wantListen) && patch.confirmExposure !== true) {
+    return { ok: false, needsConfirmation: true, warning: exposureWarning(wantListen) };
+  }
   let listenChanged = false;
   const res = await writePaseoConfigAndReload((cfg) => {
     cfg.daemon = cfg.daemon && typeof cfg.daemon === "object" ? cfg.daemon : {};
@@ -873,11 +930,38 @@ export async function updatePaseoSettingsPatch(patch = {}, opts = {}) {
     return cfg;
   }, opts);
 
+  checkDaemonListenExposure(opts);
   return {
     ...res,
     restartRequired: listenChanged,
+    ...(wantListen && !isLoopbackListen(wantListen) ? { warning: exposureWarning(wantListen) } : {}),
     surface: await getPaseoConfigSurface(opts),
   };
+}
+
+/** True for loopback hosts (127.0.0.0/8, localhost, ::1) and local IPC paths (named pipe / unix socket). */
+export function isLoopbackListen(listen) {
+  const s = String(listen ?? "").trim();
+  if (!s) return true;
+  if (/^(unix:|\\\\\.\\pipe\\|\/)/i.test(s)) return true;
+  const host = parseListen(s).host.replace(/^\[|\]$/g, "").toLowerCase();
+  return host === "localhost" || host === "::1" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+}
+
+function exposureWarning(listen) {
+  return `daemon.listen ${listen} is not loopback: any device that can reach it controls your agents with no pairing or token. VibeSquad's LAN mode already proxies the daemon with auth, so 127.0.0.1:6767 is enough.`;
+}
+
+/** Records (or clears) a config warning when `~/.paseo/config.json` daemon.listen isn't loopback. Never edits the file. */
+export function checkDaemonListenExposure(opts = {}) {
+  const cfgPath = getPaseoConfigPathForHome(opts);
+  const key = `${cfgPath}#daemon.listen`;
+  const listen = readRawPaseoConfig(opts).config?.daemon?.listen;
+  if (typeof listen === "string" && !isLoopbackListen(listen)) {
+    return recordConfigWarning(key, "~/.paseo/config.json", exposureWarning(listen), { kind: "exposure" });
+  }
+  clearConfigWarning(key);
+  return null;
 }
 
 export async function getPaseoPairOffer(opts = {}) {
@@ -903,7 +987,7 @@ export async function controlPaseoHub(action, payload = {}, opts = {}) {
   if (action === "connect") {
     const args = ["hub", "connect"];
     if (payload.origin && typeof payload.origin === "string" && payload.origin.trim()) {
-      args.push(payload.origin.trim());
+      args.push(validateHubOrigin(payload.origin));
     }
     const res = await runPaseoCli(args, { ...opts, timeoutMs: 20_000 });
     return {

@@ -15,14 +15,17 @@ import {
 } from "./vibesquad-api.mjs";
 import {
   authenticate,
+  discardPairCode,
   getTls,
   handleCaCrt,
   handlePairRedeem,
   isAllowedHostHeader,
   isLocalBrowserSafe,
   isLoopbackOrigin,
+  lockDownVibesquadHome,
   netConfig,
   sendUnpaired,
+  setNoFraming,
   trackSocket,
 } from "./auth.mjs";
 import "./brainstorm.mjs";
@@ -30,6 +33,7 @@ import "./inbox.mjs";
 import { installVsShim } from "../cli/vs.mjs";
 import { startPushWatcher } from "./push.mjs";
 import { ensurePaseoDaemon } from "./first-run.mjs";
+import { checkDaemonListenExposure } from "./paseo-control.mjs";
 import { logServerStart } from "./server-start.mjs";
 import { getStale } from "./stale-runtime.mjs";
 import { loadUserSettings } from "./user-settings.mjs";
@@ -174,6 +178,7 @@ function findDistFile(urlPath) {
 function sendFile(res, file) {
   res.statusCode = 200;
   res.setHeader("content-type", MIME[extname(file).toLowerCase()] ?? "application/octet-stream");
+  if (extname(file).toLowerCase() === ".html") setNoFraming(res);
   if (file.includes(`${sep}assets${sep}`)) {
     res.setHeader("cache-control", "public, max-age=31536000, immutable");
   } else {
@@ -293,6 +298,7 @@ function handle(req, res) {
     if (!index) {
       res.statusCode = 500;
       res.setHeader("content-type", "text/html; charset=utf-8");
+      setNoFraming(res);
       res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
       return res.end(renderMissingDistHtml());
     }
@@ -372,8 +378,10 @@ export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().mes
       return handleAuthStatus(req, res, rootDir);
     }
     if (path === "/pair" && req.method === "GET") {
+      // The code just crossed the LAN in cleartext: burn it and keep it out of the redirect.
+      discardPairCode(new URL(req.url ?? "/", "http://x").searchParams.get("code"));
       res.statusCode = 302;
-      res.setHeader("location", `https://${target(req)}${req.url}`);
+      res.setHeader("location", `https://${target(req)}/pair`);
       res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
       return res.end();
     }
@@ -483,6 +491,14 @@ if (isMain) {
   } catch {}
   if (loadUserSettings().startPaseoWithVibeSquad !== false) {
     void ensurePaseoDaemon({ listen: readPaseo(rootDir).listen });
+  }
+  try {
+    checkDaemonListenExposure();
+  } catch {}
+  try {
+    lockDownVibesquadHome();
+  } catch (err) {
+    console.warn("Could not restrict ~/.vibesquad to the current user:", err?.message ?? err);
   }
   server.listen(port, "127.0.0.1", () => {
     console.log(`VibeSquad serving ${distDir} on ${url}`);

@@ -4,7 +4,7 @@ import { spawn, execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { connect } from "node:net";
 import { homedir } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve, sep } from "node:path";
 import { readJsonFileWithBom } from "./user-settings.mjs";
 import { markDaemonManagedByVibeSquad } from "./paseo-control.mjs";
 
@@ -68,6 +68,27 @@ export function findPaseoCli(opts = {}) {
   const managed = resolvePaseoPackage(opts.prefix ?? managedPaseoPrefix());
   if (managed) return { source: "managed", kind: "node", ...managed };
   return null;
+}
+
+// npm cmd-shim line: `"%_prog%" [--node-flag ...] "%dp0%\node_modules\...\bin\paseo" %*`.
+const CMD_SHIM_ENTRY_RE = /"%_prog%"((?:\s+--[A-Za-z0-9-]+(?:=[A-Za-z0-9,_-]+)?)*)\s+"%dp0%\\([^"%]+)"\s+%\*/;
+
+/** Resolves an npm `.cmd` shim to `{ script, nodeArgs }` so callers can run node directly instead of cmd.exe. Null when unrecognised. */
+export function resolveCmdShimEntry(shimPath, readFile = (p) => readFileSync(p, "utf8")) {
+  let text;
+  try {
+    text = String(readFile(shimPath));
+  } catch {
+    return null;
+  }
+  const m = text.match(CMD_SHIM_ENTRY_RE);
+  if (!m) return null;
+  const shimDir = resolve(dirname(shimPath));
+  const script = resolve(shimDir, m[2]);
+  const prefix = shimDir.endsWith(sep) ? shimDir : shimDir + sep;
+  if (!(IS_WIN ? script.toLowerCase().startsWith(prefix.toLowerCase()) : script.startsWith(prefix))) return null;
+  const nodeArgs = m[1].trim() ? m[1].trim().split(/\s+/) : [];
+  return { script, nodeArgs };
 }
 
 export function parseListen(listen) {

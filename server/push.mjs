@@ -62,7 +62,7 @@ export function getOrCreateVapidKeys() {
   };
 
   mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, JSON.stringify(record, null, 2) + "\n", "utf8");
+  writeFileSync(file, JSON.stringify(record, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
   clearConfigWarning(file);
   return record;
 }
@@ -228,7 +228,7 @@ export function isDesktopSubscription(s) {
 export function writePushSubscriptions(subs) {
   const file = getPushSubsPath();
   mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, JSON.stringify(subs, null, 2) + "\n", "utf8");
+  writeFileSync(file, JSON.stringify(subs, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
   clearConfigWarning(file);
   return subs;
 }

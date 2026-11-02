@@ -333,7 +333,7 @@ export function TeamSettingsModal({
     <>
       {show("account") && configWarnings.length > 0 && (
         <section className="ts-team" data-testid="settings-config-warnings" style={{ borderLeftColor: "#ffb000" }}>
-          <div className="field-label" style={{ color: "#ffb000" }}>⚠ CONFIG JSON PARSE WARNING</div>
+          <div className="field-label" style={{ color: "#ffb000" }}>⚠ CONFIG WARNING</div>
           {configWarnings.map((w, idx) => (
             <div key={idx} className="stat-alert small">
               {w}

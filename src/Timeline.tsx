@@ -10,6 +10,8 @@ import { listTimelinePrompts, searchTimeline, type TimelinePrompt } from "./pase
 import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, matchesFilter, localPrompts, localSearch, sortedHits, stepIndex, type SearchLocation, type TimelineFilter } from "./timelineFilter";
 import { BARE_PATH_RE, parseFileToken } from "./fileLinks";
 import { toolStartsExpanded, usePref } from "./prefs";
+import { getPanes } from "./panes";
+import { Spinner, Stamp, TimelineSkeleton, useDelayedBusy } from "./QuickWinsUi";
 
 export class TimelineErrorBoundary extends Component<
   { children: ReactNode; fallbackLabel?: string },
@@ -691,6 +693,7 @@ export function TimelineItem({
             </div>
           )}
           {sent.chips.length ? sent.body : it.text}
+          <Stamp iso={e.timestamp} />
           {sent.chips.length > 0 && (
             <div className="tl-file-chips">
               {sent.chips.map((c, i) =>
@@ -721,6 +724,7 @@ export function TimelineItem({
       return (
         <div className={`tl tl-assistant${selected ? " tl-selected" : ""}`} data-selected={selected ? "true" : undefined} onClick={(ev) => onMessageClick(ev, onSelect)} onContextMenu={(ev) => openContextMenu(ev, messageCtxItems(it.text ?? "", agentId, onParkText, selectionWithin(ev.currentTarget)))}>
           {typeof it.text === "string" ? <MarkdownRenderer text={it.text} agentId={agentId} /> : it.text}
+          <Stamp iso={e.timestamp} />
           {selected && <div className="tl-actions">
             <CopyMsgButton text={it.text ?? ""} />
             {onParkText && typeof it.text === "string" && it.text.trim() && (
@@ -827,6 +831,7 @@ export function useTimeline(agentId: string, status: string, active = true) {
   const [error, setError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const earliestCursor = useRef<any>(null);
   const activeRef = useRef(active);
   activeRef.current = active;
@@ -840,6 +845,7 @@ export function useTimeline(agentId: string, status: string, active = true) {
       return;
     }
     let alive = true;
+    setLoaded(false);
     let timer: ReturnType<typeof setTimeout> | null = null;
     const handle = client.agents.ref(agentId);
 
@@ -865,6 +871,7 @@ export function useTimeline(agentId: string, status: string, active = true) {
       } catch (e) {
         if (alive) setError(String(e));
       }
+      if (alive) setLoaded(true);
     };
 
     const soon = () => {
@@ -962,7 +969,7 @@ export function useTimeline(agentId: string, status: string, active = true) {
     }
   }, [agentId, hasMore, loadingMore]);
 
-  return { entries, error, hasMore, loadingMore, loadMore };
+  return { entries, error, hasMore, loadingMore, loadMore, loaded };
 }
 
 // ─── PinnedTodo ───────────────────────────────────────────────────────────────
@@ -1003,6 +1010,8 @@ type TimelineProps = {
   hasMore?: boolean;
   loadMore?: () => void;
   loadingMore?: boolean;
+  /** False until the first fetch for this agent finishes (drives the delayed skeleton). */
+  loaded?: boolean;
 };
 
 export function Timeline({
@@ -1013,6 +1022,7 @@ export function Timeline({
   hasMore = false,
   loadMore = () => {},
   loadingMore = false,
+  loaded = true,
 }: TimelineProps) {
   const timelineRef = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
@@ -1040,6 +1050,9 @@ export function Timeline({
   const [pendingJump, setPendingJump] = useState<{ seq: number; n: number } | null>(null);
   const base = cut ? truncateAfter(entries, cut) : entries;
   const shown = filterEntries(base, filter);
+  const slowFirstLoad = useDelayedBusy(!loaded && entries.length === 0);
+  const slowMore = useDelayedBusy(loadingMore);
+  const slowSearch = useDelayedBusy(searching);
   const pinnedTodo = findPinnedTodo(shown);
 
   useEffect(() => {
@@ -1061,6 +1074,22 @@ export function Timeline({
     window.addEventListener("vs:timeline-search", on);
     return () => window.removeEventListener("vs:timeline-search", on);
   }, [agentId]);
+  // Ctrl+F opens (or refocuses) the search bar of the transcript in the active, visible pane.
+  useEffect(() => {
+    const onFind = (ev: KeyboardEvent) => {
+      if (!(ev.ctrlKey || ev.metaKey) || ev.shiftKey || ev.altKey || ev.key.toLowerCase() !== "f") return;
+      const el = timelineRef.current;
+      if (!el || !el.offsetParent) return;
+      if (document.querySelector(".modal-back, [role='dialog']")) return; // a modal or the palette owns the keyboard
+      const slot = el.closest(".pane-slot");
+      if (slot && !slot.classList.contains(`pane-${getPanes().activePane}`)) return;
+      ev.preventDefault();
+      setBarOpen(true);
+      el.querySelector<HTMLInputElement>('[data-testid="tl-search-input"]')?.select();
+    };
+    window.addEventListener("keydown", onFind);
+    return () => window.removeEventListener("keydown", onFind);
+  }, []);
 
   const jumpToSeq = (seq: number) => {
     curSeq.current = seq; // advance even when the target isn't loaded, so prompt stepping can't stall
@@ -1189,7 +1218,7 @@ export function Timeline({
                 if (ev.key === "Escape") setBarOpen(false);
               }}
             />
-            <button className="btn ghost small" data-testid="tl-search-go" disabled={searching} onClick={() => void runSearch()}>{searching ? "…" : "Find"}</button>
+            <button className="btn ghost small" data-testid="tl-search-go" disabled={searching} onClick={() => void runSearch()}>{searching ? (slowSearch ? <Spinner /> : "…") : "Find"}</button>
             <button className="btn ghost small" title="Previous match" disabled={!hits.length} onClick={() => stepHit(-1)}>↑</button>
             <button className="btn ghost small" title="Next match" disabled={!hits.length} onClick={() => stepHit(1)}>↓</button>
             <span className="tl-bar-count" data-testid="tl-search-count">{hits.length ? `${hitIdx + 1}/${hits.length}` : ""}</span>
@@ -1217,6 +1246,7 @@ export function Timeline({
           )}
         </div>
       )}
+      {slowFirstLoad && <TimelineSkeleton />}
       {pinnedTodo && <PinnedTodo entry={pinnedTodo} />}
       </div>}
       {shouldShowLoadOlder(entries, hasMore) && (
@@ -1226,7 +1256,7 @@ export function Timeline({
             disabled={loadingMore}
             onClick={handleLoadMore}
           >
-            {loadingMore ? "Loading…" : "↑ Load older messages"}
+            {loadingMore ? (slowMore ? <Spinner label="Loading…" /> : "Loading…") : "↑ Load older messages"}
           </button>
         </div>
       )}

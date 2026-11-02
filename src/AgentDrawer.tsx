@@ -119,7 +119,7 @@ type DrawerProps = { agent: PaseoAgent; onClose: () => void; onSuccessor?: () =>
 
 export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccessor, active = true }: DrawerProps) {
   useTeams();
-  const { entries, error, hasMore, loadingMore, loadMore } = useTimeline(agent.id, agent.status, active);
+  const { entries, error, hasMore, loadingMore, loadMore, loaded } = useTimeline(agent.id, agent.status, active);
   const [draft, setDraft, clearDraft] = useDraft(`${agent.id}:draft`);
   const [busy, setBusy] = useState(false);
   const [restarting, setRestarting] = useState(false);
@@ -546,6 +546,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
             error={error}
             hasMore={hasMore}
             loadingMore={loadingMore}
+            loaded={loaded}
             loadMore={loadMore}
             onParkText={(txt) => void parkToInbox(txt, false)}
           />
