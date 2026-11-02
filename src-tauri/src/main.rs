@@ -1813,7 +1813,11 @@ async fn proxy_http_handler(
 
     let cfg = state.config.read().unwrap().clone();
     let is_local = cfg.server_mode == "local" || (cfg.server_mode != "remote" && is_local_host(&cfg.server_host));
-    let is_root_nav = method == Method::GET && (path == "/" || path == "/index.html");
+    // Any GET document navigation (root, ?team=… deep links, SPA paths) gets the root treatment:
+    // broken-root guard, desktop bridge injection, and the Reconnecting page. API fetches don't match.
+    let is_doc_nav = req.headers().get("sec-fetch-dest").and_then(|v| v.to_str().ok()) == Some("document")
+        || req.headers().get(axum::http::header::ACCEPT).and_then(|v| v.to_str().ok()).map(|a| a.starts_with("text/html")).unwrap_or(false);
+    let is_root_nav = method == Method::GET && (path == "/" || path == "/index.html" || is_doc_nav);
     let query_setup = uri.query().map(|q| q.contains("setup=1")).unwrap_or(false);
 
     // First launch: if no mode choice has been saved yet and setup=1 wasn't explicitly requested, show the mode choice screen before spawning anything!
@@ -2446,6 +2450,37 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
     }
 
+    #[tokio::test]
+    async fn deep_link_navigation_gets_desktop_bridge() {
+        let upstream = Router::new().fallback(|| async {
+            Response::builder()
+                .header("content-type", "text/html")
+                .body(Body::from("<html><body><div id=\"root\"></div></body></html>"))
+                .unwrap()
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        let state = make_test_state();
+        {
+            let mut cfg = state.config.write().unwrap();
+            cfg.server_mode = "direct".into();
+            cfg.server_host = addr.to_string();
+            cfg.device_token = "t".into();
+        }
+        for (uri, hdr, val, bridged) in [
+            ("/?team=x&agent=y", "accept", "text/html,application/xhtml+xml", true),
+            ("/some/spa/path", "sec-fetch-dest", "document", true),
+            ("/api/data", "accept", "*/*", false),
+        ] {
+            let req = Request::builder().method("GET").uri(uri).header(hdr, val).body(Body::empty()).unwrap();
+            let resp = proxy_http_handler(State(state.clone()), req).await;
+            let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+            let html = String::from_utf8_lossy(&body);
+            assert_eq!(html.contains("__VIBESQUAD_DESKTOP_BRIDGE__"), bridged, "{uri}: {html}");
+        }
+    }
+
     #[test]
     fn restore_path_covers_chat_squad_page_and_squads_home() {
         // Chat, squad page and Squads Home are all query routes; each round-trips exactly.
@@ -2457,6 +2492,7 @@ mod tests {
         assert_eq!(ui_pages::restore_path("", "#/chat/1"), "/#/chat/1");
         // Unsafe routes are rejected.
         assert_eq!(ui_pages::restore_path("//evil.example/x", ""), "/");
+        assert_eq!(ui_pages::restore_path("/\\evil.example", ""), "/");
         assert_eq!(ui_pages::restore_path("/__desktop/setup", ""), "/");
     }
 

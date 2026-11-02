@@ -1640,6 +1640,8 @@ export function App() {
       const u = parseUrlState(location.search);
       if (u.team) setTeamId(u.team);
       if (u.agent) openAgent(u.agent);
+      else if (new URLSearchParams(location.search).get("view") === "squads") enterSquadsHome();
+      else if (getSquadsHome()) exitSquadsHome();
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);

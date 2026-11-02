@@ -197,6 +197,7 @@ function tryRestore() {
   if (ps.conn !== "connected" || ps.agents.size === 0) return;
   restored = true;
   if (state.focus) return;
+  if (state.home && state.squadsHome) return; // ?view=squads in the URL wins over the saved pin
   const saved = loadSavedFocus(store);
   const urlAgent = new URLSearchParams(location.search).get("agent");
   const urlAgentRow = urlAgent ? ps.agents.get(urlAgent) : undefined;

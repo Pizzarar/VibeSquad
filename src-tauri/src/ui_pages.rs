@@ -1164,7 +1164,7 @@ pub fn desktop_bridge_script(last_hash: &str, last_route: &str) -> String {
 /// Only same-origin app routes are accepted (never `//host`, never the relay's own `/__desktop/*`).
 pub fn restore_path(last_route: &str, last_hash: &str) -> String {
     let r = last_route.trim();
-    if r.starts_with('/') && !r.starts_with("//") && !r.starts_with("/__desktop") && !r.contains(['\n', '\r']) {
+    if r.starts_with('/') && !r.starts_with("//") && !r.starts_with("/__desktop") && !r.contains('\\') && !r.contains(['\n', '\r']) {
         return r.to_string();
     }
     let h = last_hash.trim();

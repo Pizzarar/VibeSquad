@@ -46,3 +46,9 @@ test("useDraft persists composer drafts per agent in localStorage", () => {
   assert.match(s, /localStorage/);
   assert.match(s, /export function useDraft/);
 });
+
+test("popstate applies Squads Home both ways and the saved pin never beats ?view=squads", () => {
+  const app = src("src/App.tsx");
+  assert.match(app, /get\("view"\) === "squads"\) enterSquadsHome\(\);\n\s+else if \(getSquadsHome\(\)\) exitSquadsHome\(\);/);
+  assert.match(src("src/pinFocus.ts"), /state\.home && state\.squadsHome\) return;[^\n]*\n\s+const saved = loadSavedFocus/);
+});
