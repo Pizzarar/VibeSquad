@@ -117,7 +117,7 @@ test("confineSettingsPath allows exactly the two settings files", () => {
 });
 
 test("validScopeCwd: normalized absolute paths only", () => {
-  for (const ok of ["C:\\Users\\Fugma\\proj", "C:/Users/x", "c:\\", "/", "/home/u/proj", "/home/u/proj/", "D:\\a b\\c"]) assert.ok(validScopeCwd(ok), ok);
+  for (const ok of ["C:\\Users\\someone\\proj", "C:/Users/x", "c:\\", "/", "/home/u/proj", "/home/u/proj/", "D:\\a b\\c"]) assert.ok(validScopeCwd(ok), ok);
   const bad = [
     "", " ", "relative/path", "./x", "..", "../x", "C:", "C:x", "C:\\a\\..\\b", "C:\\..\\x", "/a/../b", "/a/./b", "/a//b", "C:\\a\\\\b",
     "//server/share", "\\\\server\\share", "/a/%2e%2e/b", "/a/%2E%2E%2Fb", "/a%5cb", "/a\0b", "/a\nb", " /a", "/a ", "~", "~/x", "x".repeat(1100),
