@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  EMPTY_FORM, cadenceLabel, formFromSchedule, intervalToMs, isHeartbeat, toCreateRequest, toUpdateRequest, validateCron, validateForm,
+  EMPTY_FORM, cadenceLabel, formFromSchedule, intervalToMs, isHeartbeat, toLocalInput, toCreateRequest, toUpdateRequest, validateCron, validateForm,
 } from "../src/scheduleForm.ts";
 
 const f = (o = {}) => ({ ...EMPTY_FORM, prompt: "hi", cwd: "/tmp/x", ...o });
@@ -69,4 +69,18 @@ test("prefill + labels", () => {
   assert.equal(isHeartbeat(s), true);
   assert.equal(cadenceLabel(s.cadence), "every 2h");
   assert.equal(cadenceLabel({ type: "cron", expression: "0 2 * * *" }), "0 2 * * *");
+});
+
+test("review fixes: dow max, single-value step, unsafe integers, local expiry", () => {
+  assert.match(validateCron("0 9 * * 7"), /outside/);
+  assert.equal(validateCron("0 9 * * 6"), null);
+  assert.match(validateCron("5/15 * * * *"), /single number/);
+  assert.equal(validateCron("*/15 * * * *"), null);
+  assert.equal(validateCron("5-50/15 * * * *"), null);
+  assert.equal(intervalToMs("99999999999999999999", "d"), null);
+  assert.ok(validateForm(f({ maxRuns: "99999999999999999999" })).some((e) => /Max runs/.test(e)));
+  assert.deepEqual(validateForm(f({ maxRuns: "5" })), []);
+  const d = new Date(2026, 10, 3, 14, 30);
+  assert.equal(toLocalInput(d.toISOString()), "2026-11-03T14:30");
+  assert.equal(formFromSchedule({ expiresAt: d.toISOString() }).expiresAt, "2026-11-03T14:30");
 });

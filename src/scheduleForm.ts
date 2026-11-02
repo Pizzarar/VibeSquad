@@ -49,7 +49,7 @@ const FIELD_RANGES: Array<[string, number, number]> = [
   ["hour", 0, 23],
   ["day of month", 1, 31],
   ["month", 1, 12],
-  ["day of week", 0, 7],
+  ["day of week", 0, 6],
 ];
 
 function validateCronField(src: string, label: string, min: number, max: number): string | null {
@@ -63,6 +63,7 @@ function validateCronField(src: string, label: string, min: number, max: number)
     if (!m) return `${label}: cannot read "${part}"`;
     const lo = Number(m[1]);
     const hi = m[2] === undefined ? lo : Number(m[2]);
+    if (step !== undefined && m[2] === undefined) return `${label}: a step needs "*" or a range, not a single number, in "${part}"`;
     if (lo < min || hi > max) return `${label}: ${part} is outside ${min}-${max}`;
     if (lo > hi) return `${label}: range ${part} runs backwards`;
   }
@@ -84,7 +85,7 @@ export function validateCron(expr: string): string | null {
 export function intervalToMs(value: string, unit: IntervalUnit): number | null {
   if (!/^\d+(\.\d+)?$/.test(value.trim())) return null;
   const ms = Math.round(Number(value) * UNIT_MS[unit]);
-  return Number.isFinite(ms) && ms > 0 ? ms : null;
+  return Number.isSafeInteger(ms) && ms > 0 ? ms : null;
 }
 
 export function formatEveryMs(ms: number): string {
@@ -117,7 +118,7 @@ export function validateForm(f: ScheduleForm, mode: "create" | "edit" = "create"
     if (f.targetKind === "new-agent" && !f.provider.trim()) errs.push("Provider is required for a new agent");
     if (f.targetKind !== "new-agent" && !f.agentId.trim()) errs.push("Pick an agent");
   }
-  if (f.maxRuns.trim() && !/^[1-9]\d*$/.test(f.maxRuns.trim())) errs.push("Max runs must be a whole number of 1 or more");
+  if (f.maxRuns.trim() && (!/^[1-9]\d*$/.test(f.maxRuns.trim()) || !Number.isSafeInteger(Number(f.maxRuns)))) errs.push("Max runs must be a whole number of 1 or more");
   if (f.expiresAt.trim() && Number.isNaN(Date.parse(f.expiresAt))) errs.push("Expiry is not a valid date");
   return errs;
 }
@@ -193,8 +194,16 @@ export function formFromSchedule(s: any): ScheduleForm {
     cwd: t?.config?.cwd ?? "",
     model: t?.config?.model ?? "",
     maxRuns: s?.maxRuns ? String(s.maxRuns) : "",
-    expiresAt: s?.expiresAt ? String(s.expiresAt).slice(0, 16) : "",
+    expiresAt: s?.expiresAt ? toLocalInput(s.expiresAt) : "",
   };
 }
 
 export const isHeartbeat = (s: any): boolean => s?.target?.type === "self";
+
+/** ISO timestamp -> value for <input type="datetime-local"> in the viewer's local time. */
+export function toLocalInput(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}

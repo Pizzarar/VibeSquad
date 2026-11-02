@@ -188,7 +188,7 @@ export function SchedulesPanel({ onClose }: { onClose: () => void }) {
             <dt>Last run</dt>
             <dd>{inspected.lastRunAt ?? "-"}</dd>
             <dt>Runs</dt>
-            <dd>{inspected.runCount ?? 0}{inspected.maxRuns ? ` / ${inspected.maxRuns}` : ""}</dd>
+            <dd>{inspected.runCount ?? inspected.runs?.length ?? 0}{inspected.maxRuns ? ` / ${inspected.maxRuns}` : ""}</dd>
             {inspected.expiresAt && (
               <>
                 <dt>Expires</dt>
