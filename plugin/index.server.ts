@@ -1224,9 +1224,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           const reqPrompt = String((request as any).prompt ?? (request as any).initialPrompt ?? "");
           const currentSys = String(next.systemPrompt ?? sanitizedSysPrompt ?? "");
           // VS's own restart path (server/brainstorm.mjs) already puts the brief in the first prompt.
-          const fromVsRestart = Boolean(reqLabels["vs.restarted-from"]);
+          const fromVsRestart = Boolean(reqLabels["vs.restarted-from"]) || env?.VS_BRIEF_INLINE === "1";
           if (briefLane && !fromVsRestart && !currentSys.includes(marker) && !reqPrompt.includes(marker)) {
-            const block = laneBriefBlock(deps.briefRoot ?? briefRootFor("", briefLane, REPO_ROOT), briefLane);
+            const block = laneBriefBlock(deps.briefRoot ?? briefRootFor(reqLabels.team || env?.VS_TEAM || "", briefLane, REPO_ROOT), briefLane);
             if (block) {
               next.systemPrompt = [currentSys.trim(), block].filter(Boolean).join("\n\n");
               changed = true;

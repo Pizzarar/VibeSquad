@@ -253,3 +253,86 @@ test("block 8: missing contextWindowUsedTokens logs n/a (never inputTokens); pro
   assert.match(firstDispatchMetricText(claude, "L2", "4"), /first-dispatch context: 31k tokens \(lead=L2, ord=4, provider=claude/);
   assert.match(firstDispatchMetricText({}, "L3"), /n\/a/);
 });
+
+// ---- review fixes ----
+import { createServer } from "node:http";
+import { createVibesquadMiddleware } from "../server/vibesquad-api.mjs";
+
+test("review 1: all three Buddy-start callers throw on ok:false even when HTTP is 200", () => {
+  // src/*.tsx pull in the browser runtime, so this checks the guard in source.
+  for (const f of ["src/pinActions.ts", "src/App.tsx", "src/AgentDrawer.tsx"]) {
+    assert.match(readFileSync(f, "utf8"), /(!res.ok || body.ok === false) && !DEMO/, f);
+  }
+});
+
+test("review 1+2: with the daemon down the API answers 503 {ok:false}, not 200", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vs-spawn-hygiene-r1-"));
+  const keys = ["VIBESQUAD_HOME", "PASEO_HOME", "PASEO_DAEMON"];
+  const prev = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+  process.env.VIBESQUAD_HOME = join(dir, ".vibesquad");
+  process.env.PASEO_HOME = join(dir, ".paseo");
+  process.env.PASEO_DAEMON = "127.0.0.1:1"; // nothing listens here
+  const srv = createServer(createVibesquadMiddleware(dir));
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  try {
+    resetBrainstormRestartState();
+    const r = await fetch(`http://127.0.0.1:${srv.address().port}/__vibesquad/brainstorm-restart`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reason: "start-brainstorm", teamId: "sq", laneId: "down-test" }),
+    });
+    const body = await r.json();
+    assert.equal(r.status, 503);
+    assert.equal(body.ok, false);
+    assert.equal(body.reason, "agent-list-unavailable");
+    assert.ok(!body.newAgentId, "no synthetic offline agent");
+  } finally {
+    await new Promise((r) => srv.close(r));
+    for (const k of keys) prev[k] === undefined ? delete process.env[k] : (process.env[k] = prev[k]);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("review 2: connect() rejecting fails closed (nothing spawned)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vs-spawn-hygiene-r2-"));
+  const prev = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = join(dir, ".vibesquad");
+  try {
+    resetBrainstormRestartState();
+    const created = [];
+    const client = { connect: async () => { throw new Error("ECONNREFUSED"); }, createAgent: async (r) => (created.push(r), { id: "x" }), close: async () => {} };
+    const r = await performBrainstormRestart({ reason: "start-brainstorm", teamId: "sq", laneId: "down-test", clientFactory: () => client }, dir);
+    assert.equal(r.ok, false);
+    assert.equal(r.reason, "agent-list-unavailable");
+    assert.equal(created.length, 0);
+  } finally {
+    prev === undefined ? delete process.env.VIBESQUAD_HOME : (process.env.VIBESQUAD_HOME = prev);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("review 3: a VS-inlined brief (VS_BRIEF_INLINE) is not injected again by the hook; others still get it", () =>
+  withBriefEnv(({ spawn }) => {
+    const inlined = spawn({ env: { VS_ROLE: "brainstorm", VS_LANE: "token-checker", VS_TEAM: "vibesquad", VS_BRIEF_INLINE: "1" } });
+    assert.ok(!inlined.includes("--- BEGIN docs/brainstorm/"), "no double brief");
+    const other = spawn({ env: { VS_ROLE: "brainstorm", VS_LANE: "token-checker", VS_TEAM: "vibesquad" } });
+    assert.ok(other.includes("token-checker-marker"));
+  }));
+
+test("review 3: Buddy spawn sets VS_BRIEF_INLINE and inlines the brief in the first prompt", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vs-spawn-hygiene-r3-"));
+  const prev = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = join(dir, ".vibesquad");
+  try {
+    resetBrainstormRestartState();
+    const created = [];
+    const daemon = { fetchAgents: async () => [{ id: "z", status: "idle", labels: { lane: "other" } }], createAgent: async (r) => (created.push(r), { id: "n", labels: {} }), archiveAgent: async () => {}, updateAgent: async () => {}, cancelAgent: async () => {} };
+    await performBrainstormRestart({ reason: "start-brainstorm", teamId: "sq", laneId: "inl-test", daemonClient: daemon }, dir);
+    assert.equal(created[0].env.VS_BRIEF_INLINE, "1");
+    assert.equal(created[0].env.VS_LANE, "inl-test");
+    assert.match(created[0].initialPrompt, /BEGIN docs\/brainstorm\/inl-test\.md/);
+  } finally {
+    prev === undefined ? delete process.env.VIBESQUAD_HOME : (process.env.VIBESQUAD_HOME = prev);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
