@@ -1259,7 +1259,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         }
 
         if (leanApplies(next.provider ?? provider, env)) {
-          next.providerOptions = leanProviderOptions(next.providerOptions);
+          next.providerOptions = leanProviderOptions(next.providerOptions, role);
           changed = true;
         }
 

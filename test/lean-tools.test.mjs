@@ -22,9 +22,14 @@ test("leanProviderOptions: unions deny lists, caller extraArgs win, keeps other 
   assert.equal(out.disallowedTools.filter((t) => t === "Workflow").length, 1);
   for (const t of ["Workflow", "PowerShell", "Agent", "ScheduleWakeup", "ReportFindings"]) assert.ok(out.disallowedTools.includes(t), t);
   assert.equal(out.extraArgs["strict-mcp-config"], "x");
-  assert.equal(out.extraArgs["disable-slash-commands"], null);
   assert.equal(out.extraArgs.other, "1");
-  assert.deepEqual(leanProviderOptions(undefined), { disallowedTools: LEAN_DENY, extraArgs: LEAN_ARGS });
+  assert.equal(out.extraArgs["disable-slash-commands"], undefined);
+  assert.deepEqual(leanProviderOptions(undefined), { disallowedTools: LEAN_DENY });
+  assert.equal(leanProviderOptions(undefined).extraArgs, undefined);
+  assert.ok(leanProviderOptions({}, "worker").disallowedTools.includes("AskUserQuestion"));
+  assert.ok(leanProviderOptions({}, "lead").disallowedTools.includes("AskUserQuestion"));
+  assert.ok(!leanProviderOptions({}, "brainstorm").disallowedTools.includes("AskUserQuestion"));
+  assert.ok(leanProviderOptions({}, "brainstorm").disallowedTools.includes("Workflow"));
 });
 
 test("core tools and the paseo MCP are never denied", () => {
@@ -49,7 +54,10 @@ test("before(agent.create) adds lean providerOptions to claude spawns only", () 
   try {
     const c = create({ provider: "claude", model: "claude-sonnet-5-5", title: "w" });
     assert.ok(c.config.providerOptions.disallowedTools.includes("Workflow"));
-    assert.equal(c.config.providerOptions.extraArgs["disable-slash-commands"], null);
+    assert.equal(c.config.providerOptions.extraArgs, undefined);
+    assert.ok(c.config.providerOptions.disallowedTools.includes("AskUserQuestion"));
+    const b = create({ provider: "claude", title: "BRAINSTORM · X" }, { VS_ROLE: "brainstorm" });
+    assert.ok(!b.config.providerOptions.disallowedTools.includes("AskUserQuestion"));
     assert.equal(create({ provider: "codex", title: "w" }).config.providerOptions, undefined);
     assert.equal(create({ provider: "claude", title: "w" }, { VS_LEAN: "off" }).config.providerOptions, undefined);
   } finally {

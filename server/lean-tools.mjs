@@ -1,8 +1,7 @@
-// Lean per-spawn tool set for Claude agents (block 7). Measured with Paseo create_agent in a sandbox cwd:
-// default claude spawn 37.3k first-turn tokens; with this set 10.8k. Deny rules drop tool schemas from the
-// prompt; --strict-mcp-config drops user/project MCP servers (Paseo's own injected paseo MCP is kept and stays
-// deferred); --disable-slash-commands drops the skills listing. Do not use `--tools`: it makes the paseo MCP
-// schemas load eagerly (18.3k).
+// Lean per-spawn tool set for Claude agents (block 7). Deny rules drop tool schemas from the prompt.
+// MCP servers (Godot, Playwright, paseo) and skills stay on for everyone: no --strict-mcp-config, no
+// --disable-slash-commands, and Skill is never denied. Buddies (role=brainstorm) keep AskUserQuestion.
+// Do not use `--tools`: it makes the paseo MCP schemas load eagerly.
 export const LEAN_DENY = [
   "Workflow",
   "PowerShell",
@@ -31,7 +30,7 @@ export const LEAN_DENY = [
   "ReadMcpResourceDirTool",
 ];
 
-export const LEAN_ARGS = { "strict-mcp-config": null, "disable-slash-commands": null };
+export const LEAN_ARGS = {};
 
 /** True unless the spawn opts out (env VS_LEAN=off) or is not a Claude spawn. */
 export function leanApplies(provider, env) {
@@ -40,8 +39,10 @@ export function leanApplies(provider, env) {
 }
 
 /** Merge the lean set into the caller's providerOptions (union of deny lists, caller extraArgs win). */
-export function leanProviderOptions(existing) {
+export function leanProviderOptions(existing, role) {
   const base = existing && typeof existing === "object" ? existing : {};
-  const deny = [...new Set([...(Array.isArray(base.disallowedTools) ? base.disallowedTools : []), ...LEAN_DENY])];
-  return { ...base, disallowedTools: deny, extraArgs: { ...LEAN_ARGS, ...(base.extraArgs ?? {}) } };
+  const deny = [...new Set([...(Array.isArray(base.disallowedTools) ? base.disallowedTools : []), ...LEAN_DENY.filter((t) => !(role === "brainstorm" && t === "AskUserQuestion"))])];
+  const out = { ...base, disallowedTools: deny };
+  if (base.extraArgs) out.extraArgs = { ...LEAN_ARGS, ...base.extraArgs };
+  return out;
 }
