@@ -38,6 +38,7 @@ import {
 import { refreshWhosHere } from "@vibesquad/server/whos-here.mjs";
 import { briefRootFor } from "@vibesquad/server/brief-path.mjs";
 import { seedBriefIfMissing } from "@vibesquad/server/brief-write.mjs";
+import { leanApplies, leanProviderOptions } from "@vibesquad/server/lean-tools.mjs";
 import {
   LEGACY_NEEDS_LABEL,
   LEGACY_USER_TYPE,
@@ -1255,6 +1256,11 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               }
             }
           }
+        }
+
+        if (leanApplies(next.provider ?? provider, env)) {
+          next.providerOptions = leanProviderOptions(next.providerOptions);
+          changed = true;
         }
 
         return changed
