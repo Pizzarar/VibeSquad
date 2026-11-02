@@ -3,7 +3,7 @@
 // and the toast both report to. Side effects live in src/pinActions.ts.
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { bestOverlap, DEFAULT_PIN_PROFILE, nameFromIdea, parseSendTo, pinsForSquad, describeSpinOff, spinOffFrom, type Pin } from "./pins";
+import { bestOverlap, DEFAULT_PIN_PROFILE, nameFromIdea, parseSendTo, pinsForSquad, describeSpinOff, isSpinOffRunning, spinOffFrom, spinOffRemaining, spinOffVersion, subscribeSpinOff, type Pin } from "./pins";
 import { createPin, createSpinOffPins, dismissSendTo, dismissSpinOff, isSpinOffDismissed, getLastBrainstormProfile, isSendToDismissed, sendIdeaToTeam, setLastBrainstormProfile } from "./pinActions";
 import { getTeams, type TeamView } from "./teams";
 import type { PinHandler } from "./PinGrid";
@@ -105,27 +105,25 @@ export function useSpinOff(agentId: string | null): SpinOffOffer | null {
 /** "Spin up 3 Teams: A, B, C · Not yet". One click pins them all in this Squad; no Buddies start. */
 export function SpinOffCard({ pin, offer, variant = "tile" }: { pin: Pin; offer: SpinOffOffer; variant?: "tile" | "bar" }) {
   const [hidden, setHidden] = useState(() => isSpinOffDismissed(offer.id));
-  const [busy, setBusy] = useState(false);
   useEffect(() => setHidden(isSpinOffDismissed(offer.id)), [offer.id]);
-  if (hidden) return null;
-  const n = offer.teams.length;
+  useSyncExternalStore(subscribeSpinOff, spinOffVersion);
+  const busy = isSpinOffRunning(offer.id);
+  const teams = spinOffRemaining(offer.id, offer.teams);
+  if (hidden || !teams.length) return null;
+  const n = teams.length;
   const go = async () => {
-    setBusy(true);
-    try {
-      const results = await createSpinOffPins(pin.squad.id, offer.teams);
-      showPinToast(describeSpinOff(results));
-      if (results.some((r) => r.pin)) {
-        dismissSpinOff(offer.id);
-        setHidden(true);
-      }
-    } finally {
-      setBusy(false);
+    const results = await createSpinOffPins(offer.id, pin.squad.id, teams);
+    if (!results) return; // already running (double click, or the other card)
+    showPinToast(describeSpinOff(results));
+    if (results.every((r) => r.pin)) {
+      dismissSpinOff(offer.id);
+      setHidden(true);
     }
   };
   return (
     <div className={`pin-send-to ${variant}`} data-testid={`pin-spin-off-${pin.lane.id}`} onClick={(e) => e.stopPropagation()}>
-      <span className="pin-send-to-text" title={offer.teams.map((t) => `${t.name}: ${t.brief}`).join("\n")}>
-        Spin up {n} Team{n === 1 ? "" : "s"}: {offer.teams.map((t) => t.name).join(", ")}
+      <span className="pin-send-to-text" title={teams.map((t) => `${t.name}: ${t.brief}`).join("\n")}>
+        Spin up {n} Team{n === 1 ? "" : "s"}: {teams.map((t) => t.name).join(", ")}
       </span>
       <button type="button" className="btn ok small" disabled={busy} data-testid={`pin-spin-off-go-${pin.lane.id}`} onClick={() => void go()}>
         {busy ? "…" : `Spin up ${n} ↗`}

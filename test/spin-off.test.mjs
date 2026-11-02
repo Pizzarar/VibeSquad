@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { allLaneIds, describeSpinOff, parseSpinOff, runSpinOff, slugLaneId, spinOffFrom, uniqueLaneId } from "../src/pins.ts";
+import { allLaneIds, describeSpinOff, parseSpinOff, runSpinOff, runSpinOffOnce, slugLaneId, spinOffFrom, spinOffRemaining, uniqueLaneId, withoutSpinOffFence } from "../src/pins.ts";
 
 const NEEDS = ["Needs | energy + food", "Ammo | a", "Map | m"].join("\n");
 const FOUR = ["Energy | e", "Food | f", "Ammo | a", "Map | m"].join("\n");
@@ -66,4 +66,49 @@ test("failures are reported per row and do not stop the rest", async () => {
   const res = await runSpinOff(f.create, [{ name: "A", brief: "boom" }, { name: "B", brief: "b" }]);
   assert.equal(describeSpinOff(res), "Pinned 1 Team · Failed: A (brief write failed)");
   assert.deepEqual(f.squad.lanes.map((l) => l.id), ["b"]);
+});
+
+test("leading bullets and numbering are stripped from names", () => {
+  assert.deepEqual(parseSpinOff(fence("- Energy | e\n* Food | f\n1. Ammo | a\n2) Map | m")).map((t) => t.name), ["Energy", "Food", "Ammo", "Map"]);
+});
+
+test("fences nested in an outer fence or blockquote are ignored; the last real fence wins", () => {
+  const example = fence("Old | o") + "\n";
+  assert.equal(parseSpinOff("Format:\n````md\n" + example + "````\n"), null);
+  assert.equal(parseSpinOff("~~~\n" + example + "~~~\n"), null);
+  assert.equal(parseSpinOff("```md\n" + example + "```\n"), null);
+  assert.equal(parseSpinOff("> ```vs:spin-off\n> Old | o\n> ```\n"), null);
+  assert.deepEqual(parseSpinOff("````md\n" + example + "````\n" + fence("Real | r")), [{ name: "Real", brief: "r" }]);
+  assert.deepEqual(parseSpinOff(fence("First | f") + "\nrevised:\n" + fence("Second | s")), [{ name: "Second", brief: "s" }]);
+});
+
+test("tile preview strips the vs:spin-off fence and its rows", () => {
+  const out = withoutSpinOffFence(fence(NEEDS).split("\n"));
+  assert.deepEqual(out, ["Here is the plan.", "", "Ok?"]);
+});
+
+test("two concurrent calls create once", async () => {
+  const f = fakeSquad();
+  let calls = 0;
+  const create = async (n, b) => { calls++; await new Promise((r) => setTimeout(r, 10)); return f.create(n, b); };
+  const teams = parseSpinOff(fence(NEEDS));
+  const [a, b] = await Promise.all([runSpinOffOnce("g1", create, teams), runSpinOffOnce("g1", create, teams)]);
+  assert.equal(b, null);
+  assert.equal(a.length, 3);
+  assert.equal(calls, 3);
+  assert.deepEqual(f.squad.lanes.map((l) => l.id), ["needs", "ammo", "map"]);
+  assert.deepEqual(spinOffRemaining("g1", teams), []);
+});
+
+test("partial failure: retry offers and creates only the failed rows", async () => {
+  const f = fakeSquad();
+  const teams = [{ name: "A", brief: "a" }, { name: "B", brief: "boom" }, { name: "C", brief: "c" }];
+  const first = await runSpinOffOnce("g2", f.create, teams);
+  assert.equal(describeSpinOff(first), "Pinned 2 Teams · Failed: B (brief write failed)");
+  assert.deepEqual(spinOffRemaining("g2", teams).map((t) => t.name), ["B"]);
+  const fixed = teams.map((t) => ({ ...t, brief: t.brief === "boom" ? "b" : t.brief }));
+  const second = await runSpinOffOnce("g2", f.create, fixed);
+  assert.equal(second.length, 1);
+  assert.deepEqual(f.squad.lanes.map((l) => l.id), ["a", "c", "b"]); // no a-2 / c-2 copies
+  assert.deepEqual(spinOffRemaining("g2", fixed), []);
 });

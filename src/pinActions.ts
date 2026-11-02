@@ -12,7 +12,7 @@ import {
   newPinBrief,
   patchLane,
   resolvePin,
-  runSpinOff,
+  runSpinOffOnce,
   slugLaneId,
   uniqueLaneId,
   type Pin,
@@ -329,5 +329,5 @@ export const dismissSpinOff = (messageId: string): void => dismiss(SPIN_OFF_KEY,
  * Create every Team of a confirmed spin-off block as a pin in the squad (no overlap refusal: the user confirmed the
  * list; exact ids still dedupe inside createPin). No agents are spawned.
  */
-export const createSpinOffPins = (squadId: string, teams: { name: string; brief: string }[], deps: CreatePinDeps = {}) =>
-  runSpinOff((name, brief) => createPin(squadId, name, brief, deps), teams);
+export const createSpinOffPins = (key: string, squadId: string, teams: { name: string; brief: string }[], deps: CreatePinDeps = {}) =>
+  runSpinOffOnce(key, (name, brief) => createPin(squadId, name, brief, deps), teams);

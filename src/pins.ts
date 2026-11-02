@@ -214,6 +214,56 @@ export function describeSpinOff(results: SpinOffResult[]): string {
   return failed.length ? `${head} · Failed: ${failed.map((r) => `${r.name} (${r.error})`).join(", ")}` : head;
 }
 
+/** The lines of a message without any ```vs:spin-off fence (its rows belong to the card, not the tile preview). */
+export function withoutSpinOffFence(lines: string[]): string[] {
+  const out: string[] = [];
+  let inside = false;
+  for (const l of lines) {
+    if (inside) inside = !/^\s*```/.test(l);
+    else if (/^\s*```\s*vs:spin-off\s*$/.test(l)) inside = true;
+    else out.push(l);
+  }
+  return out;
+}
+
+// One run per offer (agentId:messageId) at a time, however many cards show it (tile + drawer bar, double click).
+// Rows that already succeeded are remembered, so a retry after a partial failure only offers the failed ones.
+const spinFlight = new Set<string>();
+const spinDone = new Map<string, Set<number>>();
+const spinListeners = new Set<() => void>();
+let spinVersion = 0;
+const spinChanged = () => {
+  spinVersion++;
+  spinListeners.forEach((l) => l());
+};
+
+export const subscribeSpinOff = (l: () => void): (() => void) => {
+  spinListeners.add(l);
+  return () => spinListeners.delete(l);
+};
+export const spinOffVersion = (): number => spinVersion;
+export const isSpinOffRunning = (key: string): boolean => spinFlight.has(key);
+/** The rows of an offer that have not been created yet. */
+export const spinOffRemaining = <T,>(key: string, teams: T[]): T[] => teams.filter((_, i) => !spinDone.get(key)?.has(i));
+
+/** Create the not-yet-created rows. Null when a run for this key is already in flight (nothing happens). */
+export async function runSpinOffOnce<P>(key: string, create: (name: string, brief: string) => Promise<P>, teams: { name: string; brief: string }[]): Promise<SpinOffResult<P>[] | null> {
+  if (spinFlight.has(key)) return null;
+  spinFlight.add(key);
+  spinChanged();
+  try {
+    const todo = teams.map((t, i) => ({ t, i })).filter(({ i }) => !spinDone.get(key)?.has(i));
+    const results = await runSpinOff(create, todo.map(({ t }) => t));
+    const done = spinDone.get(key) ?? new Set<number>();
+    results.forEach((r, k) => r.pin && done.add(todo[k].i));
+    spinDone.set(key, done);
+    return results;
+  } finally {
+    spinFlight.delete(key);
+    spinChanged();
+  }
+}
+
 // ── Step 6: idea capture (docs/PLAN_PINNED_FEATURES.md §5) ────────────────────
 // Shared with `vs pin new` (cli/vs.mjs), so the pure helpers live in server/pin-ideas.mjs.
 import { takenLaneIds } from "../server/pin-ideas.mjs";
