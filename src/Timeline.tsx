@@ -1080,6 +1080,7 @@ export function Timeline({
       if (!(ev.ctrlKey || ev.metaKey) || ev.shiftKey || ev.altKey || ev.key.toLowerCase() !== "f") return;
       const el = timelineRef.current;
       if (!el || !el.offsetParent) return;
+      if (document.querySelector(".modal-back, [role='dialog']")) return; // a modal or the palette owns the keyboard
       const slot = el.closest(".pane-slot");
       if (slot && !slot.classList.contains(`pane-${getPanes().activePane}`)) return;
       ev.preventDefault();

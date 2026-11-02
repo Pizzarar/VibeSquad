@@ -55,7 +55,7 @@ function makeTempEnv() {
           name: "Main Project",
           paths: ["main-project"],
           lanes: [
-            { id: "main-game", name: "Main Game" },
+            { id: "main-game", name: "Main Game", aliases: ["main-old"] },
             { id: "ui-lab", name: "UI Lab" },
           ],
         },
@@ -347,12 +347,12 @@ test("Done-when #2: Spawn validation handles no team, wrong team, unknown lane +
         "Expected team-mismatch metric in site log",
       );
 
-      // Case 2: Spawn with NO lane + matching cwd ("/path/to/main-project/worktree-1")
-      // -> lane-autofix fills the blank: lane="main-game", team="efi", and logs lane-autofix
+      // Case 2: Spawn with NO lane + cwd in a one-lane Squad ("/path/to/example-site/worktree-1")
+      // -> lane-autofix fills the blank: lane="site-polish", team="site", and logs lane-autofix
       agents.set("agent-autofix", {
         id: "agent-autofix",
-        title: "EFI · worker",
-        cwd: "/path/to/main-project/worktree-1",
+        title: "SITE · worker",
+        cwd: "/path/to/example-site/worktree-1",
         status: "running",
         labels: {
           role: "worker",
@@ -361,24 +361,35 @@ test("Done-when #2: Spawn validation handles no team, wrong team, unknown lane +
       await onCreated({ agent: agents.get("agent-autofix") }, { paseo });
       const autofixUpdate = labelUpdates.find((u) => u.agentId === "agent-autofix");
       assert.ok(autofixUpdate, "Expected setLabels on agent-autofix");
-      assert.equal(autofixUpdate.labels.lane, "main-game");
-      assert.equal(autofixUpdate.labels.team, "efi");
-
-      const efiLogPath = join(env.vsHome, "teams", "efi", "log.jsonl");
-      assert.equal(existsSync(efiLogPath), true);
-      const efiLogs = readFileSync(efiLogPath, "utf8")
+      assert.equal(autofixUpdate.labels.lane, "site-polish");
+      assert.equal(autofixUpdate.labels.team, "site");
+      const siteLogs2 = readFileSync(siteLogPath, "utf8")
         .trim()
         .split(/\r?\n/)
         .map((l) => JSON.parse(l));
       assert.equal(
-        efiLogs.some(
+        siteLogs2.some(
           (e) =>
             e.type === "metric" &&
-            e.text.includes("lane-autofix: callerLane=(none) derivedLane=main-game team=efi"),
+            e.text.includes("lane-autofix: callerLane=(none) derivedLane=site-polish team=site"),
         ),
         true,
-        "Expected lane-autofix metric in efi log",
+        "Expected lane-autofix metric in site log",
       );
+
+      // Case 2a: NO lane + team label + cwd in a multi-lane Squad -> orphan, never the Squad's first lane
+      agents.set("agent-multilane", {
+        id: "agent-multilane",
+        title: "EFI · worker",
+        cwd: "/path/to/main-project/worktree-1",
+        status: "running",
+        labels: { team: "efi", role: "worker" },
+      });
+      await onCreated({ agent: agents.get("agent-multilane") }, { paseo });
+      const multiUpdate = labelUpdates.find((u) => u.agentId === "agent-multilane");
+      assert.ok(multiUpdate, "Expected setLabels on agent-multilane");
+      assert.equal(multiUpdate.labels.orphan, "1");
+      assert.notEqual(multiUpdate.labels.lane, "main-game", "no lanes[0] guess");
 
       // Case 2b: an explicit lane that is not in teams.json is kept (never overwritten from cwd), no lane-autofix logged
       agents.set("agent-explicit", {
@@ -392,7 +403,10 @@ test("Done-when #2: Spawn validation handles no team, wrong team, unknown lane +
       const explicitUpdate = labelUpdates.find((u) => u.agentId === "agent-explicit");
       assert.notEqual(explicitUpdate?.labels.lane, "main-game", "explicit lane must not be overwritten from cwd");
       assert.ok(!explicitUpdate || explicitUpdate.labels.lane === "zz-x", "explicit lane kept");
-      const efiLogs2 = readFileSync(efiLogPath, "utf8").trim().split(/\r?\n/).map((l) => JSON.parse(l));
+      const efiLogPath = join(env.vsHome, "teams", "efi", "log.jsonl");
+      const efiLogs2 = existsSync(efiLogPath)
+        ? readFileSync(efiLogPath, "utf8").trim().split(/\r?\n/).map((l) => JSON.parse(l))
+        : [];
       assert.equal(
         efiLogs2.some((e) => e.type === "metric" && e.text.includes("callerLane=zz-x")),
         false,
@@ -643,7 +657,7 @@ test("Done-when #4: vs migrate identity --dry-run lists all agents with proposed
       cwd: "/path/to/example-site",
       labels: { role: "worker" },
     });
-    // 4. Legacy team-only fallback
+    // 4. Team label, no lane: an orphan, never the Squad's first lane
     const fTeamOnly = env.writeAgent({
       id: "ag-team-only",
       title: "PLUGINS · audit",
@@ -669,7 +683,8 @@ test("Done-when #4: vs migrate identity --dry-run lists all agents with proposed
     assert.match(dryText.stdout, /ag-alias \(idle\).*lane=main-old.*->.*lane=main-game, team=efi.*\[CHANGED\]/);
     assert.match(dryText.stdout, /ag-archived-cwd \(archived\).*\[CHANGED\]/);
     assert.match(dryText.stdout, /ag-orphan \(idle\).*\[ORPHAN\]/);
-    assert.match(dryText.stdout, /total=5 changed=4 unchanged=1 orphans=1/);
+    assert.match(dryText.stdout, /ag-team-only \(idle\).*\[ORPHAN\]/);
+    assert.match(dryText.stdout, /total=5 changed=4 unchanged=1 orphans=2 archived-orphans=0/);
 
     // Verify --dry-run did NOT modify files or create backups
     assert.equal(readFileSync(fAlias, "utf8"), snapshotBeforeDryRun);
@@ -683,7 +698,7 @@ test("Done-when #4: vs migrate identity --dry-run lists all agents with proposed
     assert.equal(out1.total, 5);
     assert.equal(out1.changed, 4);
     assert.equal(out1.unchanged, 1);
-    assert.equal(out1.orphans, 1);
+    assert.equal(out1.orphans, 2);
     assert.ok(out1.backupDir, "Expected backupDir to be created");
     assert.equal(existsSync(join(out1.backupDir, "teams.json")), true, "Expected teams.json backup");
     assert.equal(
@@ -711,9 +726,9 @@ test("Done-when #4: vs migrate identity --dry-run lists all agents with proposed
       role: "worker",
     });
     assert.deepEqual(JSON.parse(readFileSync(fTeamOnly, "utf8")).labels, {
-      lane: "plugins",
       team: "plugins",
       role: "brainstorm",
+      orphan: "1",
     });
     assert.deepEqual(JSON.parse(readFileSync(fOrphan, "utf8")).labels, {
       lane: "unknown-free-text",

@@ -411,7 +411,7 @@ export function teamForAgent(a: PaseoAgent): { team: TeamDef; laneId: string } {
   if (!resolved.isOrphan) {
     const team = TEAMS.find((t) => t.id === resolved.teamId) ?? UNASSIGNED;
     if (team !== UNASSIGNED) {
-      return { team, laneId: resolved.laneId || team.lanes[0]?.id || team.id };
+      return { team, laneId: resolved.laneId };
     }
   }
   return { team: UNASSIGNED, laneId: "" };

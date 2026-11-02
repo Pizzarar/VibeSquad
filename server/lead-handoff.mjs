@@ -142,12 +142,11 @@ export function resolveTeamAndLane(lead, rootDir = REPO_ROOT) {
 
   const teamId = safeSegment(matchedTeam?.id || teamHint || "vibesquad");
   const teamName = matchedTeam?.name || teamHint || "VibeSquad";
-  const laneId = safeSegment(
-    matchedLane?.id || laneHint || matchedTeam?.lanes?.[0]?.id || teamId || "vibesquad",
-  );
+  // No lane label: only a one-lane squad names its lane; never guess lanes[0] of a multi-lane squad.
+  const onlyLane = matchedTeam?.lanes?.length === 1 ? matchedTeam.lanes[0] : null;
+  const laneId = safeSegment(matchedLane?.id || laneHint || onlyLane?.id || teamId || "vibesquad");
   const laneName =
-    matchedLane?.name ||
-    (laneHint ? laneHint.replace(/-/g, " ") : matchedTeam?.lanes?.[0]?.name || teamName);
+    matchedLane?.name || (laneHint ? laneHint.replace(/-/g, " ") : onlyLane?.name || teamName);
 
   return { teamId, teamName, laneId, laneName, teamDef: matchedTeam };
 }

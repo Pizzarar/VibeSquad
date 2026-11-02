@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import { daemonClient, client, DEMO } from "./paseo";
-import { Spinner, useDelayedBusy } from "./QuickWinsUi";
+import { CHANGES_SLOW_MS, changesErrorText, withTimeout } from "./changesLoad";
 
 // ─── Pure utilities (exported for unit tests) ────────────────────────────────
 
@@ -161,7 +161,9 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
   const [prData, setPrData] = useState<typeof DEMO_PR_STATUS | null>(null);
   const [stash, setStash] = useState<StashEntry[]>([]);
   const [loading, setLoading] = useState(true);
-  const slowLoading = useDelayedBusy(loading);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [slow, setSlow] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   const [expandedFile, setExpandedFile] = useState<string | null>(null);
   const [discardState, setDiscardState] = useState<DiscardState>(null);
@@ -189,6 +191,10 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
   useEffect(() => {
     let alive = true;
     setLoading(true);
+    setLoadError(null);
+    setSlow(false);
+    const slowTimer = setTimeout(() => { if (alive) setSlow(true); }, CHANGES_SLOW_MS);
+    const fail = (e: unknown) => { if (alive) { setLoadError(changesErrorText(e)); setLoading(false); } };
 
     if (DEMO) {
       setStatus(DEMO_STATUS);
@@ -196,6 +202,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
       setPrData(DEMO_PR_STATUS);
       setStash([]);
       setLoading(false);
+      clearTimeout(slowTimer);
       return;
     }
 
@@ -206,11 +213,11 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
     try {
       const sub = daemonClient.observeCheckoutDiff(cwd, { mode: "uncommitted" });
       subRelease = () => sub.release();
-      sub.ready.then((snap: any) => {
+      withTimeout(sub.ready as Promise<any>).then((snap: any) => {
         if (!alive) return;
         setDiff({ files: snap.files ?? [], diffTooLarge: snap.diffTooLarge });
         setLoading(false);
-      }).catch(() => { if (alive) setLoading(false); });
+      }).catch(fail);
       unsub = sub.subscribe({
         snapshot: (snap: any) => {
           if (!alive) return;
@@ -220,11 +227,11 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
       });
     } catch {
       // Daemon version does not support observeCheckoutDiff — fall back to a one-shot fetch
-      daemonClient.getCheckoutDiff(cwd, { mode: "uncommitted" }).then((d: any) => {
+      withTimeout(daemonClient.getCheckoutDiff(cwd, { mode: "uncommitted" })).then((d: any) => {
         if (!alive) return;
         setDiff({ files: d.files ?? [], diffTooLarge: d.diffTooLarge });
         setLoading(false);
-      }).catch(() => { if (alive) setLoading(false); });
+      }).catch(fail);
     }
 
     Promise.all([
@@ -235,10 +242,11 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
 
     return () => {
       alive = false;
+      clearTimeout(slowTimer);
       unsub?.();
       subRelease?.();
     };
-  }, [cwd]);
+  }, [cwd, attempt]);
 
   // ─── Derived ─────────────────────────────────────────────────────────────────
 
@@ -381,10 +389,19 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
 
   // ─── Render ──────────────────────────────────────────────────────────────────
 
+  if (loadError && !DEMO) {
+    return (
+      <div className="right-dock-placeholder" data-testid="changes-panel">
+        <span className="stat-alert" data-testid="changes-error">Could not load changes: {loadError}</span>
+        <button className="btn ghost" data-testid="changes-retry" onClick={() => setAttempt((n) => n + 1)}>Retry</button>
+      </div>
+    );
+  }
+
   if (loading && !DEMO) {
     return (
       <div className="right-dock-placeholder" data-testid="changes-panel">
-        {slowLoading ? <Spinner label="Loading changes…" /> : <span className="muted">&nbsp;</span>}
+        <span className="muted">{slow ? "Still loading… the daemon is slow right now." : "Loading changes…"}</span>
       </div>
     );
   }
