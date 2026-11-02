@@ -56,7 +56,7 @@ async function withBriefEnv(fn) {
       const f = join(vsHome, "teams", "vibesquad", "log.jsonl");
       return existsSync(f) ? readFileSync(f, "utf8") : "";
     };
-    await fn({ spawn, log });
+    await fn({ spawn, log, briefRoot });
   } finally {
     for (const [k, v] of Object.entries(prev)) v === undefined ? delete process.env[k] : (process.env[k] = v);
     rmSync(dir, { recursive: true, force: true });
@@ -336,3 +336,28 @@ test("review 3: Buddy spawn sets VS_BRIEF_INLINE and inlines the brief in the fi
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ---- block 6 addendum: a missing brief is written from the spawn's idea text ----
+test("block 6: a Buddy spawned for a lane with no brief file gets one written from its idea; existing briefs are never overwritten", () =>
+  withBriefEnv(({ spawn, briefRoot }) => {
+    const file = join(briefRoot, "docs", "brainstorm", "fresh-idea.md");
+    assert.ok(!existsSync(file));
+    spawn({ labels: { role: "brainstorm", team: "vibesquad", lane: "fresh-idea" }, prompt: "Basic ADE: agentic development explained for beginners" });
+    const written = readFileSync(file, "utf8");
+    assert.match(written, /## Open\n- Basic ADE: agentic development explained for beginners/);
+    assert.match(written, /## Done when/);
+
+    // A second spawn with a different prompt leaves the file alone.
+    spawn({ labels: { role: "brainstorm", team: "vibesquad", lane: "fresh-idea" }, prompt: "something else entirely" });
+    assert.equal(readFileSync(file, "utf8"), written);
+
+    // An existing brief (token-checker) is untouched and is still injected.
+    const before = readFileSync(join(briefRoot, "docs", "brainstorm", "token-checker.md"), "utf8");
+    const sys = spawn({ labels: { role: "brainstorm", team: "vibesquad", lane: "token-checker" }, prompt: "hi" });
+    assert.ok(sys.includes("token-checker-marker"));
+    assert.equal(readFileSync(join(briefRoot, "docs", "brainstorm", "token-checker.md"), "utf8"), before);
+
+    // No prompt, no seed.
+    spawn({ labels: { role: "brainstorm", team: "vibesquad", lane: "no-idea" } });
+    assert.ok(!existsSync(join(briefRoot, "docs", "brainstorm", "no-idea.md")));
+  }));

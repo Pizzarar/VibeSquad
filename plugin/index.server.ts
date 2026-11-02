@@ -37,6 +37,7 @@ import {
 } from "@vibesquad/server/identity.mjs";
 import { refreshWhosHere } from "@vibesquad/server/whos-here.mjs";
 import { briefRootFor } from "@vibesquad/server/brief-path.mjs";
+import { seedBriefIfMissing } from "@vibesquad/server/brief-write.mjs";
 import {
   LEGACY_NEEDS_LABEL,
   LEGACY_USER_TYPE,
@@ -1226,7 +1227,16 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           // VS's own restart path (server/brainstorm.mjs) already puts the brief in the first prompt.
           const fromVsRestart = Boolean(reqLabels["vs.restarted-from"]) || env?.VS_BRIEF_INLINE === "1";
           if (briefLane && !fromVsRestart && !currentSys.includes(marker) && !reqPrompt.includes(marker)) {
-            const block = laneBriefBlock(deps.briefRoot ?? briefRootFor(reqLabels.team || env?.VS_TEAM || "", briefLane, REPO_ROOT), briefLane);
+            const briefRoot = deps.briefRoot ?? briefRootFor(reqLabels.team || env?.VS_TEAM || "", briefLane, REPO_ROOT);
+            // No brief file yet: the spawn prompt is the idea. Persist it (guarded writer, never overwrites) so it
+            // survives this first prompt; the prompt already carries it, so skip injecting it back.
+            let seeded: string | null = null;
+            try {
+              seeded = seedBriefIfMissing({ root: briefRoot, lane: briefLane, idea: reqPrompt });
+            } catch (err) {
+              log(`brief seed failed for ${briefLane}: ${err}`);
+            }
+            const block = seeded ? "" : laneBriefBlock(briefRoot, briefLane);
             if (block) {
               next.systemPrompt = [currentSys.trim(), block].filter(Boolean).join("\n\n");
               changed = true;

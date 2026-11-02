@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import os from "node:os";
@@ -7,6 +7,7 @@ import { effectiveAgentRole, findLaneInRegistry, isRetiredAgent, resolveWorktree
 import { findProfileOrFallback, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
 import { briefRootFor, laneWorkingDir } from "./brief-path.mjs";
+import { BRIEF_HISTORY_KEEP, BRIEF_SHRINK_FROM, BRIEF_SHRINK_TO, backupBrief, writeBriefFile } from "./brief-write.mjs";
 import { liveInFlightBlock } from "./in-flight.mjs";
 import { refreshWhosHere } from "./whos-here.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
@@ -107,23 +108,7 @@ export function readBrainstormSummary(laneRaw, rootDir = REPO_ROOT) {
   return { laneId: safeLane, path: relPath, fullPath, content };
 }
 
-export const BRIEF_HISTORY_KEEP = 20;
-export const BRIEF_SHRINK_FROM = 1000;
-export const BRIEF_SHRINK_TO = 300;
-
-// Copy the current brief to <VIBESQUAD_HOME>/brief-history/<lane>/<ts>.md and keep the newest BRIEF_HISTORY_KEEP.
-export function backupBrief(laneId, fullPath) {
-  if (!existsSync(fullPath)) return null;
-  const dir = join(process.env.VIBESQUAD_HOME || join(homedir(), ".vibesquad"), "brief-history", safeSegment(laneId));
-  mkdirSync(dir, { recursive: true });
-  let ts = new Date().toISOString().replace(/[:.]/g, "-");
-  while (existsSync(join(dir, ts + ".md"))) ts += "x";
-  const dest = join(dir, ts + ".md");
-  writeFileSync(dest, readFileSync(fullPath));
-  const old = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
-  for (const f of old.slice(0, Math.max(0, old.length - BRIEF_HISTORY_KEEP))) rmSync(join(dir, f), { force: true });
-  return dest;
-}
+export { BRIEF_HISTORY_KEEP, BRIEF_SHRINK_FROM, BRIEF_SHRINK_TO, backupBrief };
 
 export function writeBrainstormSummary(laneRaw, content, rootDir = REPO_ROOT) {
   const text = String(content ?? "");
@@ -136,15 +121,7 @@ export function writeBrainstormSummary(laneRaw, content, rootDir = REPO_ROOT) {
   const dir = join(briefRootFor(teamId, laneId, rootDir), "docs", "brainstorm");
   mkdirSync(dir, { recursive: true });
   const fullPath = join(dir, `${safeLane}.md`);
-  if (existsSync(fullPath)) {
-    const before = readFileSync(fullPath);
-    if (before.length > BRIEF_SHRINK_FROM && Buffer.byteLength(text) < BRIEF_SHRINK_TO) {
-      backupBrief(safeLane, fullPath);
-      throw new Error(`Refusing to replace a ${before.length}-byte brief with ${Buffer.byteLength(text)} bytes (the old one is kept and backed up).`);
-    }
-    if (!before.equals(Buffer.from(text, "utf8"))) backupBrief(safeLane, fullPath);
-  }
-  writeFileSync(fullPath, text, "utf8");
+  writeBriefFile(fullPath, safeLane, text);
   return { laneId: safeLane, path: relPath, fullPath, content: text };
 }
 
