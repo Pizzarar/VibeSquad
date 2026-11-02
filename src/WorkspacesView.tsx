@@ -7,6 +7,7 @@ import { agentsWithoutWorkspaceId, bulkLabels, buildFolders, clearLabels, isLive
 import { listProjects, setWorkspacePinned, setWorkspaceTitle } from "./paseoWorkspaces";
 import { dropFromOverlay, mergeOverlay, pinnedFirst, pruneOverlay, type OverlayEntry } from "./workspaceLogic";
 import { CreateWorkspacePanel, NameEditor, ProjectsPanel, RecoverPanel, SetupChip, type ProjectRow } from "./WorkspaceTools";
+import { WorktreesPanel } from "./WorktreesPanel";
 
 type Filter = "all" | "safe" | "check" | "in-use";
 type Sort = "activity" | "cleanup" | "name";
@@ -47,7 +48,7 @@ export function WorkspacesView() {
   const [filter, setFilter] = useState<Filter>("all");
   const [sort, setSort] = useState<Sort>("activity");
   const [open, setOpen] = useState<Set<string>>(new Set());
-  const [panel, setPanel] = useState<"" | "create" | "projects" | "recover">("");
+  const [panel, setPanel] = useState<"" | "create" | "projects" | "worktrees" | "recover">("");
   const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [rowErr, setRowErr] = useState("");
@@ -116,6 +117,7 @@ export function WorkspacesView() {
         {noId > 0 && <span className="muted small">{noId} agent{noId > 1 ? "s" : ""} without a workspace id (matched by folder)</span>}
         <button className={`btn small ${panel === "create" ? "ok" : "ghost"}`} onClick={() => setPanel(panel === "create" ? "" : "create")}>+ New workspace</button>
         <button className={`btn small ${panel === "projects" ? "ok" : "ghost"}`} onClick={() => setPanel(panel === "projects" ? "" : "projects")}>Projects ({projects.length})</button>
+        <button className={`btn small ${panel === "worktrees" ? "ok" : "ghost"}`} onClick={() => setPanel(panel === "worktrees" ? "" : "worktrees")}>Worktrees</button>
         <button className={`btn small ${panel === "recover" ? "ok" : "ghost"}`} onClick={() => setPanel(panel === "recover" ? "" : "recover")}>Recover</button>
         {safe.length > 0 && (
           <ConfirmButton
@@ -133,6 +135,7 @@ export function WorkspacesView() {
       {panel === "create" && <CreateWorkspacePanel projects={projects} onDone={() => setPanel("")} onCreated={(w) => setOverlay((o) => new Map(o).set(w.id, { created: w, patch: {} }))} />}
       {panel === "recover" && <RecoverPanel />}
       {panel === "projects" && <ProjectsPanel projects={projects} reload={reloadProjects} workspaceCounts={wsCounts} onRemoved={evict} />}
+      {panel === "worktrees" && <WorktreesPanel projects={projects} workspaces={[...workspaces.values()]} agents={[...agents.values()]} />}
       {rowErr && <div className="ws-reasons">{rowErr}</div>}
       {shown.length === 0 && <div className="muted">No folders match.</div>}
       {shown.map((r) => {
