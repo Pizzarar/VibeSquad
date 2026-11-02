@@ -139,43 +139,25 @@ function readLocalAgentRecord(agentId, rootDir = REPO_ROOT) {
   return null;
 }
 
-function defaultSummaryTemplate(laneId, laneName) {
-  const upper = (laneName || laneId).toUpperCase();
-  return [
-    `# Brainstorm Summary · ${upper} (\`${laneId}\`)`,
-    "",
-    `> Rolling team brief (\`< ~5k\` tokens). Updated on every decision.`,
-    "",
-    "## Who's here",
-    "- (VibeSquad fills this in)",
-    "",
-    "## Done when",
-    "- (what makes this team finished)",
-    "",
-    "## Decided",
-    "- (none recorded yet)",
-    "",
-    "## Open",
-    "- (none recorded yet)",
-    "",
-    "## In Flight",
-    "- (none recorded yet)",
-    "",
-  ].join("\n");
+/**
+ * Folder holding `docs/brainstorm/<lane>.md`: the lane's project working dir, because the installed app's
+ * rootDir is its own runtime folder. Falls back to rootDir only when no project dir resolves (dev).
+ */
+export function briefRootFor(teamId, laneId, rootDir = REPO_ROOT) {
+  return laneWorkingDir(teamId, laneId, rootDir) || rootDir;
 }
 
+export const NO_BRIEF_LINE = "(no brief yet)";
+
 export function readBrainstormSummary(laneRaw, rootDir = REPO_ROOT) {
-  const { laneId, laneName } = laneDisplayName(laneRaw, rootDir);
+  const { teamId, laneId } = laneDisplayName(laneRaw, rootDir);
   const safeLane = safeSegment(laneId || laneRaw || "vibesquad");
   const relPath = `docs/brainstorm/${safeLane}.md`;
-  const fullPath = join(rootDir, "docs", "brainstorm", `${safeLane}.md`);
-  let content = "";
-  if (existsSync(fullPath)) {
-    content = readFileSync(fullPath, "utf8");
-  } else {
-    content = defaultSummaryTemplate(safeLane, laneName);
-  }
-  return { laneId: safeLane, path: relPath, fullPath, content };
+  const projectRoot = briefRootFor(teamId, laneId, rootDir);
+  // A project brief wins; rootDir's copy only counts when the project has none (e.g. written before the lane resolved).
+  const fullPath = [join(projectRoot, "docs", "brainstorm", `${safeLane}.md`), join(rootDir, "docs", "brainstorm", `${safeLane}.md`)].find((p) => existsSync(p));
+  const content = fullPath ? readFileSync(fullPath, "utf8") : NO_BRIEF_LINE;
+  return { laneId: safeLane, path: relPath, fullPath: fullPath || join(projectRoot, "docs", "brainstorm", `${safeLane}.md`), content };
 }
 
 export function writeBrainstormSummary(laneRaw, content, rootDir = REPO_ROOT) {
@@ -183,10 +165,10 @@ export function writeBrainstormSummary(laneRaw, content, rootDir = REPO_ROOT) {
   if (text.length > MAX_SUMMARY_CHARS) {
     throw new Error(`Summary is ${text.length} chars; must be <= ${MAX_SUMMARY_CHARS} chars (~5k tokens)`);
   }
-  const { laneId } = laneDisplayName(laneRaw, rootDir);
+  const { teamId, laneId } = laneDisplayName(laneRaw, rootDir);
   const safeLane = safeSegment(laneId || laneRaw || "vibesquad");
   const relPath = `docs/brainstorm/${safeLane}.md`;
-  const dir = join(rootDir, "docs", "brainstorm");
+  const dir = join(briefRootFor(teamId, laneId, rootDir), "docs", "brainstorm");
   mkdirSync(dir, { recursive: true });
   const fullPath = join(dir, `${safeLane}.md`);
   writeFileSync(fullPath, text, "utf8");

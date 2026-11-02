@@ -31,7 +31,7 @@ test("(a) packs carry the new rules", () => {
   assert.ok(LEAD_FALLBACK_PACK.includes("PASS"));
   const prompt = buildBrainstormInitialPrompt({ laneId: "pinned", laneUpper: "PINNED", summaryContent: "x", latestPlan: "docs/PLAN_X.md" });
   assert.ok(prompt.includes("vs:looks-done") && prompt.includes("Who's here") && prompt.includes("Done when"));
-  assert.ok(readBrainstormSummary("no-such-lane-xyz").content.includes("## Done when"));
+  assert.ok(readBrainstormSummary("no-such-lane-xyz").content.includes("no brief yet"));
 });
 
 test("(b) a brainstorm over the hard limit is retired with no successor", async () => {
