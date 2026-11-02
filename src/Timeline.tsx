@@ -6,6 +6,8 @@ import { demoTimeline } from "./demo";
 import { sentImagesFor } from "./imageDrafts";
 import { parseSentAttachments, repoPathFor } from "./attachments";
 import { openRightDockTab } from "./RightDock";
+import { listTimelinePrompts, searchTimeline, type TimelinePrompt } from "./paseoTimeline";
+import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, localPrompts, localSearch, sortedHits, stepIndex, type SearchLocation, type TimelineFilter } from "./timelineFilter";
 import { BARE_PATH_RE, parseFileToken } from "./fileLinks";
 
 export class TimelineErrorBoundary extends Component<
@@ -1019,13 +1021,91 @@ export function Timeline({
     setCut(null);
   }, [agentId]);
   const [selectedEntryKey, setSelectedEntryKey] = useState<string | null>(null);
-  const shown = cut ? truncateAfter(entries, cut) : entries;
+  const [filter, setFilter] = useState<TimelineFilter>("all");
+  const [barOpen, setBarOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [hits, setHits] = useState<SearchLocation[]>([]);
+  const [hitIdx, setHitIdx] = useState(-1);
+  const [searching, setSearching] = useState(false);
+  const [barMsg, setBarMsg] = useState("");
+  const [prompts, setPrompts] = useState<TimelinePrompt[]>([]);
+  const [promptsOpen, setPromptsOpen] = useState(false);
+  const curSeq = useRef<number | null>(null);
+  const base = cut ? truncateAfter(entries, cut) : entries;
+  const shown = filterEntries(base, filter);
   const pinnedTodo = findPinnedTodo(shown);
 
   useEffect(() => {
     const el = timelineRef.current;
     if (el && pinned.current && el.offsetParent) el.scrollTop = el.scrollHeight;
   }, [entries.length]);
+
+  useEffect(() => {
+    setFilter("all"); setBarOpen(false); setQuery(""); setHits([]); setHitIdx(-1); setPrompts([]); setPromptsOpen(false); setBarMsg("");
+    curSeq.current = null;
+  }, [agentId]);
+  // The drawer header's search button fires this.
+  useEffect(() => {
+    const on = (ev: Event) => {
+      if ((ev as CustomEvent).detail?.agentId === agentId) setBarOpen((o) => !o);
+    };
+    window.addEventListener("vs:timeline-search", on);
+    return () => window.removeEventListener("vs:timeline-search", on);
+  }, [agentId]);
+
+  const jumpToSeq = (seq: number) => {
+    const idx = entryIndexForSeq(base, seq);
+    if (idx < 0) { setBarMsg("Older than the loaded history - load older messages first"); return; }
+    setBarMsg("");
+    curSeq.current = seq;
+    setFilter("all");
+    requestAnimationFrame(() => {
+      const wrap = timelineRef.current?.querySelector(`[data-tl-idx="${idx}"]`);
+      const el = (wrap?.firstElementChild ?? null) as HTMLElement | null;
+      if (!el) return;
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      el.classList.add("tl-flash");
+      setTimeout(() => el.classList.remove("tl-flash"), 1800);
+    });
+  };
+  const runSearch = async () => {
+    const q = query.trim();
+    if (!q) { setHits([]); setHitIdx(-1); setBarMsg(""); return; }
+    setSearching(true);
+    try {
+      const found = sortedHits(DEMO ? localSearch(base, q) : await searchTimeline(agentId, q));
+      setHits(found);
+      setBarMsg(found.length ? "" : "No matches");
+      setHitIdx(found.length ? found.length - 1 : -1);
+      if (found.length) jumpToSeq(found[found.length - 1].seq);
+    } catch (err) {
+      setBarMsg(String((err as Error)?.message ?? err));
+    } finally {
+      setSearching(false);
+    }
+  };
+  const stepHit = (dir: 1 | -1) => {
+    const i = stepIndex(hitIdx, dir, hits.length);
+    if (i < 0) return;
+    setHitIdx(i);
+    jumpToSeq(hits[i].seq);
+  };
+  const loadPrompts = async (): Promise<TimelinePrompt[]> => {
+    try {
+      const list = DEMO ? localPrompts(base) : await listTimelinePrompts(agentId);
+      setPrompts(list);
+      return list;
+    } catch (err) {
+      setBarMsg(String((err as Error)?.message ?? err));
+      return [];
+    }
+  };
+  const stepPrompt = async (dir: 1 | -1) => {
+    const list = await loadPrompts();
+    const from = curSeq.current ?? (dir === 1 ? -1 : Infinity);
+    const p = adjacentPrompt(list, from, dir);
+    if (p) jumpToSeq(p.seq);
+  };
 
   useEffect(() => {
     if (!selectedEntryKey) return;
@@ -1064,6 +1144,51 @@ export function Timeline({
         pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
       }}
     >
+      {barOpen && (
+        <div className="tl-bar" data-testid="tl-bar">
+          <div className="tl-bar-row">
+            <input
+              data-testid="tl-search-input"
+              autoFocus
+              placeholder="Search transcript…"
+              value={query}
+              onChange={(ev) => { setQuery(ev.target.value); setHits([]); setHitIdx(-1); }}
+              onKeyDown={(ev) => {
+                if (ev.key === "Enter") {
+                  if (hits.length) stepHit(ev.shiftKey ? -1 : 1);
+                  else void runSearch();
+                }
+                if (ev.key === "Escape") setBarOpen(false);
+              }}
+            />
+            <button className="btn ghost small" data-testid="tl-search-go" disabled={searching} onClick={() => void runSearch()}>{searching ? "…" : "Find"}</button>
+            <button className="btn ghost small" title="Previous match" disabled={!hits.length} onClick={() => stepHit(-1)}>↑</button>
+            <button className="btn ghost small" title="Next match" disabled={!hits.length} onClick={() => stepHit(1)}>↓</button>
+            <span className="tl-bar-count" data-testid="tl-search-count">{hits.length ? `${hitIdx + 1}/${hits.length}` : ""}</span>
+            <button className="btn ghost small" title="Previous prompt" data-testid="tl-prompt-prev" onClick={() => void stepPrompt(-1)}>⇡ Prompt</button>
+            <button className="btn ghost small" title="Next prompt" data-testid="tl-prompt-next" onClick={() => void stepPrompt(1)}>⇣ Prompt</button>
+            <button className="btn ghost small" title="List my prompts" data-testid="tl-prompt-list-btn" onClick={() => { const o = !promptsOpen; setPromptsOpen(o); if (o) void loadPrompts(); }}>☰</button>
+            <button className="btn ghost small" title="Close" onClick={() => setBarOpen(false)}>✕</button>
+          </div>
+          <div className="tl-bar-row tl-filters" data-testid="tl-filters">
+            {TIMELINE_FILTERS.map((f) => (
+              <button key={f} className={`chip tl-filter${filter === f ? " on" : ""}`} data-testid={`tl-filter-${f}`} onClick={() => setFilter(f)}>{f}</button>
+            ))}
+            {filter !== "all" && <span className="tl-bar-count">{shown.length}/{base.length}</span>}
+          </div>
+          {barMsg && <div className="tl-bar-msg" data-testid="tl-bar-msg">{barMsg}</div>}
+          {promptsOpen && (
+            <div className="tl-prompts" data-testid="tl-prompts">
+              {prompts.length === 0 && <div className="tl-bar-msg">No prompts</div>}
+              {prompts.map((p) => (
+                <button key={p.seq} className="tl-prompt-row" onClick={() => { jumpToSeq(p.seq); setPromptsOpen(false); }}>
+                  <span className="tl-prompt-ts">{p.timestamp ? new Date(p.timestamp).toLocaleTimeString() : `#${p.seq}`}</span> {p.preview}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       {pinnedTodo && <PinnedTodo entry={pinnedTodo} />}
       {shouldShowLoadOlder(entries, hasMore) && (
         <div style={{ textAlign: "center", padding: "4px 0" }}>
@@ -1078,7 +1203,8 @@ export function Timeline({
       )}
       {error && <div className="tl tl-error">{error}</div>}
       {shown.map((e, i) => (
-        <TimelineErrorBoundary key={e.seqStart ?? i} fallbackLabel={`item #${i}`}>
+        <div key={e.seqStart ?? i} data-tl-idx={i} style={{ display: "contents" }}>
+        <TimelineErrorBoundary fallbackLabel={`item #${i}`}>
           <TimelineItem
             e={e}
             agentId={agentId}
@@ -1088,6 +1214,7 @@ export function Timeline({
             onSelect={() => setSelectedEntryKey((k) => (k === String(e.seqStart ?? i) ? null : String(e.seqStart ?? i)))}
           />
         </TimelineErrorBoundary>
+        </div>
       ))}
       <div />
     </div>
