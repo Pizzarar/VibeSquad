@@ -125,7 +125,7 @@ export const VIBE_MODE_BUDDY_RULES = [
 export const LEAD_FALLBACK_PACK = [
   "Role: lead.",
   "- Dispatch workers, read their digests via `vs log --since-me` (never raw transcripts), log decisions/blockers with `vs log`. When you start a plan, set `job=<objective in a few words>` (`paseo agent update --label job=...`); refer to agents by short name (e.g. Bug1, Hub5).",
-  "- Title each worker `<your Code><your ord> · <job>` (e.g. `Hub5 · drop files`) and label it `job=<job>` and `ord=<your ord>`, so its title matches the generated one.",
+  "- Title each worker `<your Code><your ord> · <job>` (e.g. `Hub5 · drop files`) and label it `job=<job>` and `ord=<your ord>`, so its title matches the generated one. When calling `create_agent`, pass `provider`, `model`, `mode` and the `profile` label, with no `features` (the plugin adds provider feature defaults).",
   "- When a plan block passes (PASS) or the whole plan is complete, add that line under `## In flight` in `docs/brainstorm/<lane>.md` so the Brainstorm can spot \"looks done\". Touch nothing else in the brief.",
   "- Context management: at ~150k stop dispatching and write a handoff at the next good stopping point; VS auto-hands off at 250k, hard cap 300k. Run `vs handoff` and fill the Judgment section.",
   "- Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`paseo --help`, Paseo MCP tool list, `vs --help`, skills). Name what you checked in the plan's Decided section.",
@@ -726,6 +726,8 @@ export interface Deps {
   applyAgentSettings?(agentId: string, patch: AgentSettingsPatch): Promise<void>;
   /** Stop and archive an agent that must not run (e.g. wrong provider for its explicit profile). */
   refuseAgent?(agentId: string): Promise<void>;
+  /** Delay after agent.created before checking whether an idle 0-token agent needs its initial prompt redelivered. */
+  firstPromptRedeliverMs?: number;
 }
 
 export interface AgentSettingsPatch {
@@ -816,6 +818,7 @@ const DEFAULT_DEPS: Deps = {
   watchIntervalMs: 1500,
   startWatcher: true,
   brainstormArchiveGraceMs: 120_000,
+  firstPromptRedeliverMs: 30_000,
 };
 
 // ---------------------------------------------------------------------------
@@ -851,6 +854,23 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     const stops: (() => void)[] = [];
     const firstDispatchLogged = new Set<string>();
     const childCount = new Map<string, number>();
+    const pendingInitialPrompts: { id?: string; title: string; cwd: string; prompt: string; at: number }[] = [];
+    const initialPromptsById = new Map<string, string>();
+    const turnSeen = new Set<string>();
+    const firstPromptRedelivered = new Set<string>();
+    const firstPromptTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+    const markTurnSeen = (agentId: string | null | undefined) => {
+      const id = String(agentId ?? "").trim();
+      if (!id) return;
+      turnSeen.add(id);
+      const t = firstPromptTimers.get(id);
+      if (t) {
+        firstPromptTimers.delete(id);
+        clearTimeout(t);
+        timers.delete(t);
+      }
+    };
 
     // R2-1 remote proxy RPC (vs.http). Gated off by default; see server/remote-proxy.ts.
     if (typeof server.handle === "function") server.handle(vsHttp, makeVsHttpHandler());
@@ -1044,6 +1064,19 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const title: string = config?.title ?? (request as any).title ?? (request as any).name ?? "";
         const cwd: string = config?.cwd ?? (request as any).cwd ?? "";
         const provider: string = config?.provider ?? (request as any).provider ?? "";
+        const initialPrompt = String(
+          (request as any).prompt ??
+            (request as any).initialPrompt ??
+            config?.prompt ??
+            config?.initialPrompt ??
+            "",
+        ).trim();
+        const reqAgentId = String((request as any).id ?? config?.id ?? "").trim();
+        if (initialPrompt) {
+          if (reqAgentId) initialPromptsById.set(reqAgentId, initialPrompt);
+          pendingInitialPrompts.push({ id: reqAgentId || undefined, title, cwd, prompt: initialPrompt, at: Date.now() });
+          while (pendingInitialPrompts.length > 100) pendingInitialPrompts.shift();
+        }
         let changed = false;
         const next: any = { ...config };
         let nextReqLabels: Labels | undefined = rawReqLabels ? { ...rawReqLabels } : undefined;
@@ -1489,6 +1522,80 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
 
           if (team && lane) await refreshLaneWhosHere(paseo, lane);
 
+          // Block 2a: If a new agent had an initial prompt and stays idle with 0 tokens ~30 s after
+          // creation without ever running, redeliver the initial prompt once and log first-prompt-redelivered.
+          const aid = String(agent?.id ?? "").trim();
+          const directPrompt = String(
+            (agent as any)?.prompt ??
+              (agent as any)?.initialPrompt ??
+              (me as any)?.prompt ??
+              (me as any)?.initialPrompt ??
+              "",
+          ).trim();
+          let rememberedPrompt = directPrompt || (aid ? initialPromptsById.get(aid) ?? "" : "");
+          if (!rememberedPrompt && aid) {
+            const now = Date.now();
+            const aTitle = String(agent.title ?? me?.title ?? "");
+            let idx = pendingInitialPrompts.findIndex(
+              (p) => now - p.at < 300_000 && p.title === aTitle && (!p.cwd || !agentCwd || p.cwd === agentCwd),
+            );
+            if (idx < 0) {
+              idx = pendingInitialPrompts.findIndex(
+                (p) => now - p.at < 300_000 && (!p.cwd || !agentCwd || p.cwd === agentCwd),
+              );
+            }
+            if (idx >= 0) {
+              rememberedPrompt = pendingInitialPrompts[idx]!.prompt;
+              pendingInitialPrompts.splice(idx, 1);
+            }
+          }
+          if (rememberedPrompt && aid) {
+            initialPromptsById.set(aid, rememberedPrompt);
+            if (!firstPromptTimers.has(aid) && !firstPromptRedelivered.has(aid) && !turnSeen.has(aid)) {
+              const redeliverMs = Math.max(0, deps.firstPromptRedeliverMs ?? 30_000);
+              const fallbackTeam = team ? teamIdOf(team, currentTeams()) : "";
+              const fallbackLane = lane;
+              const t = later(async () => {
+                firstPromptTimers.delete(aid);
+                if (firstPromptRedelivered.has(aid) || turnSeen.has(aid)) return;
+                const cur: any = await snap(paseo, aid);
+                if (!cur || cur.archivedAt || cur.status !== "idle") return;
+                const usedTokens =
+                  (cur.lastUsage?.contextWindowUsedTokens ?? 0) + (cur.lastUsage?.inputTokens ?? 0);
+                if (usedTokens > 0 || cur.lastUserMessageAt || turnSeen.has(aid) || firstPromptRedelivered.has(aid)) {
+                  return;
+                }
+                const tl = await paseo.agents
+                  .ref(aid)
+                  .timeline?.refetch?.({ direction: "tail", limit: 5 })
+                  .catch(() => null);
+                if ((tl?.entries ?? []).length > 0) return;
+                if (firstPromptRedelivered.has(aid) || turnSeen.has(aid)) return;
+                firstPromptRedelivered.add(aid);
+                try {
+                  await paseo.agents.ref(aid).send(rememberedPrompt);
+                  const where =
+                    teamOf(cur.labels ?? {}, cur.cwd ?? agentCwd) ??
+                    (fallbackTeam ? { team: fallbackTeam, lane: fallbackLane || fallbackTeam } : null);
+                  const text = `first-prompt-redelivered: agent=${aid}`;
+                  log(text);
+                  if (where) {
+                    appendLog(where.team, {
+                      agent: "plugin",
+                      lane: where.lane,
+                      type: "metric",
+                      text,
+                      refs: [aid],
+                    });
+                  }
+                } catch (err) {
+                  log(`first-prompt redeliver failed for ${aid}: ${err}`);
+                }
+              }, redeliverMs);
+              firstPromptTimers.set(aid, t);
+            }
+          }
+
           // First-dispatch context metric for a lead's first spawned child.
           if (parentId && parent && pl.role === "lead" && team) {
             const n = (childCount.get(parentId) ?? 0) + 1;
@@ -1519,6 +1626,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           { paseo }: { paseo: any },
         ) => {
           paseoApi = paseo;
+          markTurnSeen(agent?.id);
           try {
             if (outcome.kind === "failed") return await handleFailure(paseo, agent, outcome.error.message);
             if (outcome.kind !== "completed") return;
@@ -1933,6 +2041,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       stops.push(
         server.on("agent.turn_started" as any, async ({ agent }: { agent: any }, { paseo }: { paseo: any }) => {
           paseoApi = paseo;
+          markTurnSeen(agent?.id);
           try {
             const me = await snap(paseo, agent.id);
             if (!me || !isRetiredLeadSnap(me)) return;
