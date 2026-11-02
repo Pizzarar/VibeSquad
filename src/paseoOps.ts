@@ -25,7 +25,7 @@ export async function fetchUsageReports(forceRefresh = false): Promise<UsageRepo
       { id: "codex", sourceLabel: "Codex", fetchedAt: new Date().toISOString(), report: { status: "error", error: "not signed in" } },
     ];
   }
-  return (await daemonClient.listUsageReports({ forceRefresh })).reports as unknown as UsageReportLike[];
+  return (await daemonClient.listUsageReports({ forceRefresh })).reports;
 }
 
 export async function measureRtt(): Promise<number> {

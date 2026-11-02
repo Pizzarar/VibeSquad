@@ -1,20 +1,60 @@
 // Pure helpers for the Paseo ops panel (daemon config view, usage reports, latency). No imports.
 
-const SECRET_KEY = /pass(word|wd)?|token|secret|api[-_]?key|private[-_]?key|credential|auth|bearer|(^|[-_])key$/i;
-export const REDACTED = "••• redacted";
+export const REDACTED = "••• hidden";
 
-/** Deep copy of `value` with every secret-looking key's value replaced. */
-export function redactConfig(value: unknown, depth = 0): unknown {
-  if (depth > 12) return "…";
-  if (Array.isArray(value)) return value.map((v) => redactConfig(v, depth + 1));
+// Allowlist of MutableDaemonConfig (@getpaseo/protocol) leaf paths that are clearly non-secret.
+// "*" matches any record key or array index. Everything else (unknown keys the $loose schemas
+// pass through, env maps, args, commands, free text) renders as REDACTED; key names stay visible.
+const SHOWN_PATHS = [
+  "relay.enabled", "relay.requireProtectedSecurity",
+  "mcp.enabled", "mcp.injectIntoAgents",
+  "hostnames", "hostnames.*",
+  "cors.allowedOrigins.*",
+  "trustedProxies", "trustedProxies.*",
+  "git.maxProcessesPerSecond", "git.maxProcessConcurrency",
+  "app.baseUrl",
+  "catalogRefreshTimeoutMs",
+  "browserTools.enabled",
+  "providers.*.enabled", "providers.*.paseoTools.enabled", "providers.*.paseoTools.disabledTools.*",
+  "providers.*.additionalModels.*.id", "providers.*.additionalModels.*.label", "providers.*.additionalModels.*.isDefault",
+  "metadataGeneration.providers.*.provider", "metadataGeneration.providers.*.model", "metadataGeneration.providers.*.thinkingOptionId",
+  "autoArchiveAfterMerge", "enableTerminalAgentHooks",
+  "terminalProfiles.*.id", "terminalProfiles.*.name", "terminalProfiles.*.icon",
+  "agentProfiles.*.id", "agentProfiles.*.name", "agentProfiles.*.icon", "agentProfiles.*.color",
+  "agentProfiles.*.provider", "agentProfiles.*.model", "agentProfiles.*.modeId", "agentProfiles.*.thinkingOptionId",
+  "skills.selection.mode", "skills.selection.skills.*",
+  "pluginsEnabled", "plugins.*.source", "plugins.*.enabled",
+].map((p) => p.split("."));
+
+function pathShown(path: string[]): boolean {
+  return SHOWN_PATHS.some((pat) => pat.length === path.length && pat.every((seg, i) => seg === "*" || seg === path[i]));
+}
+
+// Backstop for strings that are on the allowlist but still look like credentials.
+const SECRET_VALUE =
+  /sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]{8,}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|xox[abeoprs]-[A-Za-z0-9-]{6,}|AIza[0-9A-Za-z_-]{20,}|Bearer\s+\S+|\$2[abxy]?\$\d+\$[./A-Za-z0-9]{20,}|[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/i;
+
+export function maskSecretValue(s: string): string {
+  return SECRET_VALUE.test(s) ? REDACTED : s;
+}
+
+/** Deep copy of a daemon config showing only allowlisted leaves (booleans are always shown). */
+export function redactConfig(value: unknown, path: string[] = []): unknown {
+  if (path.length > 12) return "…";
+  if (Array.isArray(value)) return value.map((v, i) => redactConfig(v, [...path, String(i)]));
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = SECRET_KEY.test(k) && v !== null && v !== undefined && v !== "" ? REDACTED : redactConfig(v, depth + 1);
-    }
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = redactConfig(v, [...path, k]);
     return out;
   }
-  return value;
+  if (value === null || value === undefined || value === "" || typeof value === "boolean") return value;
+  if (!pathShown(path)) return REDACTED;
+  return typeof value === "string" ? maskSecretValue(value) : value;
+}
+
+/** Pretty JSON for non-config payloads (usage reports): shown as-is except credential-shaped strings. */
+export function formatMaskedJson(value: unknown): string {
+  return JSON.stringify(value, (_k, v) => (typeof v === "string" ? maskSecretValue(v) : v), 2);
 }
 
 export function formatConfigJson(config: unknown): string {
@@ -42,7 +82,7 @@ export interface UsageReportLike {
     status: string;
     planLabel?: string;
     error?: string;
-    problem?: { kind: string; detail?: string };
+    problem?: { kind: string; detail?: string; expiresAt?: string; status?: number };
     windows?: { label: string; usedPct?: number | null; remainingPct?: number | null; resetsAt?: string | null }[];
   };
 }
@@ -73,7 +113,10 @@ export function summarizeUsageReport(entry: UsageReportLike): UsageReportRow {
   } else if (r.status === "error") {
     summary = r.error ?? "error";
   } else {
-    summary = r.problem ? `${r.problem.kind}${r.problem.detail ? `: ${r.problem.detail}` : ""}` : r.status;
+    if (r.problem) {
+      const extra = r.problem.detail ?? (r.problem.status ? `HTTP ${r.problem.status}` : r.problem.expiresAt);
+      summary = `${r.problem.kind}${extra ? `: ${extra}` : ""}`;
+    } else summary = r.status;
   }
   return { id: entry.id, title: `${entry.sourceLabel}${acct}`, status: r.status, summary, fetchedAt: entry.fetchedAt };
 }

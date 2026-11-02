@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchDaemonConfig, fetchUsageReports, measureRtt, reloadDaemonConfig, type DaemonReloadResult } from "./paseoOps";
-import { formatConfigJson, formatLatency, latencyTone, summarizeUsageReport, type UsageReportLike } from "./paseoOpsLogic";
+import { formatConfigJson, formatLatency, formatMaskedJson, latencyTone, summarizeUsageReport, type UsageReportLike } from "./paseoOpsLogic";
 
 export function PaseoOpsPanel() {
   const [config, setConfig] = useState<unknown>(null);
@@ -10,22 +10,34 @@ export function PaseoOpsPanel() {
   const [rtt, setRtt] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const mounted = useRef(true);
+  const pending = useRef(0);
 
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  // Several requests run at once: busy stays true until the last one settles.
   const run = useCallback(async (fn: () => Promise<void>) => {
+    pending.current += 1;
     setBusy(true);
     setErr(null);
     try {
       await fn();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      if (mounted.current) setErr(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      pending.current -= 1;
+      if (mounted.current && pending.current === 0) setBusy(false);
     }
   }, []);
 
-  const ping = useCallback(() => run(async () => setRtt(await measureRtt())), [run]);
-  const loadConfig = useCallback(() => run(async () => setConfig(await fetchDaemonConfig())), [run]);
-  const loadReports = useCallback((force: boolean) => run(async () => setReports(await fetchUsageReports(force))), [run]);
+  const ping = useCallback(() => run(async () => { const v = await measureRtt(); if (mounted.current) setRtt(v); }), [run]);
+  const loadConfig = useCallback(() => run(async () => { const v = await fetchDaemonConfig(); if (mounted.current) setConfig(v); }), [run]);
+  const loadReports = useCallback((force: boolean) => run(async () => { const v = await fetchUsageReports(force); if (mounted.current) setReports(v); }), [run]);
 
   useEffect(() => {
     void ping();
@@ -53,7 +65,7 @@ export function PaseoOpsPanel() {
             className="btn small"
             disabled={busy}
             data-testid="paseo-ops-reload-btn"
-            onClick={() => void run(async () => { setReload(await reloadDaemonConfig()); setConfig(await fetchDaemonConfig()); })}
+            onClick={() => void run(async () => { const r = await reloadDaemonConfig(); if (mounted.current) setReload(r); const c = await fetchDaemonConfig(); if (mounted.current) setConfig(c); })}
           >
             Reload config
           </button>
@@ -63,10 +75,10 @@ export function PaseoOpsPanel() {
             </span>
           )}
         </div>
-        {reload && reload.restartRequiredPaths.length > 0 && (
-          <div className="muted small">Restart required for: {reload.restartRequiredPaths.join(", ")}</div>
-        )}
-        <pre className="paseo-ops-pre" data-testid="paseo-ops-config">{config ? formatConfigJson(config) : "(loading…)"}</pre>
+        {reload && reload.appliedPaths.length > 0 && <div className="muted small">Applied: {reload.appliedPaths.join(", ")}</div>}
+        {reload && reload.restartRequiredPaths.length > 0 && <div className="muted small">Restart required for: {reload.restartRequiredPaths.join(", ")}</div>}
+        {reload && reload.overrideControlledPaths.length > 0 && <div className="muted small">Overridden: {reload.overrideControlledPaths.join(", ")}</div>}
+        <pre className="paseo-ops-pre" data-testid="paseo-ops-config">{config ? formatConfigJson(config) : busy ? "(loading…)" : "(unavailable)"}</pre>
       </div>
 
       <div className="paseo-ops-block">
@@ -85,7 +97,7 @@ export function PaseoOpsPanel() {
                 <span className={`pill diag ${row.status === "available" ? "ok" : "warn"}`}>{row.status}</span>
               </button>
               <div className="muted small">{row.summary}</div>
-              {open && <pre className="paseo-ops-pre">{formatConfigJson(entry)}</pre>}
+              {open && <pre className="paseo-ops-pre">{formatMaskedJson(entry)}</pre>}
             </div>
           );
         })}
