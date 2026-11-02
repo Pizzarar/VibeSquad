@@ -751,7 +751,8 @@ async function handleBrainstormRestart(req, res, rootDir) {
       return sendJson(res, 400, { ok: false, error: "bad agentId" });
     }
     const result = await performBrainstormRestart(sanitizeBody(body), rootDir);
-    return sendJson(res, 200, result);
+    // ok:false (e.g. agent-list-unavailable) must not look like success to the UI.
+    return sendJson(res, result?.ok === false ? 503 : 200, result);
   } catch (e) {
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
   }

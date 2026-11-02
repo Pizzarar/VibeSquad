@@ -92,7 +92,7 @@ async function quickStart(pin: Pin, profile: string, deps: OpenPinDeps): Promise
     profile?: string;
     agent?: PaseoAgent;
   };
-  if (!res.ok && !DEMO) throw new Error(body.error ?? `Quick start failed (${res.status})`);
+  if ((!res.ok || body.ok === false) && !DEMO) throw new Error(body.error ?? `Quick start failed (${res.status})`);
   if (body.reused && (body.existingAgentId || body.newAgentId)) return String(body.existingAgentId || body.newAgentId);
 
   const newAgentId = body.newAgentId || `demo-bs-${laneId}-${Date.now().toString(36)}`;
