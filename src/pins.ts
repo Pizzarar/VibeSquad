@@ -306,3 +306,17 @@ export function laneDisplayName(teams: TeamDef[], laneId: string): string {
       if (l.id.toLowerCase() === key || (l.aliases ?? []).some((a) => a.toLowerCase() === key)) return l.name || laneId;
   return laneId;
 }
+
+// Same thresholds as server/brief-write.mjs (the server guard is the authority; this only explains it before the round trip).
+const BRIEF_SHRINK_FROM = 1000;
+const BRIEF_SHRINK_TO = 300;
+
+/** Non-empty reason when saving `after` over `before` would be refused as a near-empty replace. */
+export function briefShrinkWarning(before: string, after: string): string {
+  const old = new TextEncoder().encode(before).length;
+  const next = new TextEncoder().encode(after).length;
+  if (old > BRIEF_SHRINK_FROM && next < BRIEF_SHRINK_TO) {
+    return `This would replace a ${old}-byte brief with ${next} bytes. The save is refused; the old brief is kept.`;
+  }
+  return "";
+}

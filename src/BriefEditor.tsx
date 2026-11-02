@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { isImeComposing } from "./IdeaInbox";
 import { sendMessage, usePaseo } from "./paseo";
-import { briefDiffSummary, briefPathFor } from "./pins";
+import { briefDiffSummary, briefPathFor, briefShrinkWarning } from "./pins";
 import { onOpenBriefEditor, type BriefTarget } from "./pinActions";
 import { Modal } from "./TeamActions";
 import { findCrossTeamBrainstorm, resolve } from "./teams";
@@ -55,6 +55,12 @@ export function BriefEditor({ laneId, laneName, onClose }: Props) {
 
   const save = async () => {
     if (saving || loading || !dirty) return;
+    // Same guard as the server's brief writes (server/brief-write.mjs): explain it here instead of a bare 400.
+    const shrink = briefShrinkWarning(original, text);
+    if (shrink) {
+      setError(shrink);
+      return;
+    }
     setSaving(true);
     setError("");
     try {
