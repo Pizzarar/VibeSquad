@@ -1310,11 +1310,6 @@ async function commandWhoami(flags) {
     },
   );
 
-  // A bare team label (no lane) used to fall back to the squad's first lane; show it as unassigned instead.
-  if (resolved.source === "team-fallback" && !(laneOverride || labels.lane || labels.lead)) {
-    resolved.laneId = "";
-  }
-
   let currentLead = null;
   if (!resolved.isOrphan && resolved.laneId && resolved.teamId) {
     const wantTeamId = resolved.teamId.toLowerCase();
@@ -1350,18 +1345,20 @@ async function commandWhoami(flags) {
     }
   }
 
-  const exitCode = resolved.isOrphan ? 1 : 0;
+  // Lane-less is orphan: JSON says lane: null + orphan: true, never lane: "".
+  const orphan = Boolean(resolved.isOrphan || !resolved.laneId);
+  const exitCode = orphan ? 1 : 0;
   if (flags.json) {
     const out = {
       agentId: agentId || null,
-      lane: resolved.isOrphan ? null : resolved.laneId,
+      lane: orphan ? null : resolved.laneId,
       squad: resolved.teamId,
       squadName: resolved.teamName,
       team: resolved.teamId,
       teamName: resolved.teamName,
       role: resolved.role,
       ord: resolved.ord,
-      orphan: Boolean(resolved.isOrphan),
+      orphan,
       source: resolved.source,
       currentLead,
     };
@@ -1447,11 +1444,13 @@ function commandMigrate(flags) {
   let changedCount = 0;
   let unchangedCount = 0;
   let orphanCount = 0;
+  let archivedOrphanCount = 0;
 
   for (const [id, item] of recordsById.entries()) {
     const rec = item.record;
     const currentLabels = { ...(rec.labels ?? {}) };
-    const status = rec.archivedAt || rec.archived ? "archived" : String(rec.lastStatus ?? rec.status ?? "unknown");
+    const archived = Boolean(rec.archivedAt || rec.archived);
+    const status = archived ? "archived" : String(rec.lastStatus ?? rec.status ?? "unknown");
     const title = String(rec.title ?? rec.name ?? id).trim();
 
     const resolved = resolveAgentIdentity(rec, {
@@ -1462,7 +1461,9 @@ function commandMigrate(flags) {
     });
 
     const proposedLabels = { ...currentLabels };
-    proposedLabels.role = resolved.role;
+    // Digests are spawned with role=worker (digestFor/profile mark them): don't flip that label to role=digest.
+    proposedLabels.role =
+      resolved.role === "digest" && currentLabels.role !== "digest" ? "worker" : resolved.role;
     if (resolved.role === "lead" || resolved.role === "former-lead") {
       proposedLabels.ord = resolved.ord || "1";
     }
@@ -1482,9 +1483,11 @@ function commandMigrate(flags) {
     const isOrphan = Boolean(resolved.isOrphan);
     if (changed) changedCount++;
     else unchangedCount++;
-    if (isOrphan) orphanCount++;
+    // Archived agents are history, not orphans to fix: count them apart so `orphans` lists only live ones.
+    if (isOrphan && archived) archivedOrphanCount++;
+    else if (isOrphan) orphanCount++;
 
-    const tag = isOrphan ? "ORPHAN" : changed ? "CHANGED" : "OK";
+    const tag = isOrphan ? (archived ? "ARCHIVED-ORPHAN" : "ORPHAN") : changed ? "CHANGED" : "OK";
     entries.push({
       id,
       file: item.file,
@@ -1556,6 +1559,7 @@ function commandMigrate(flags) {
     changed: changedCount,
     unchanged: unchangedCount,
     orphans: orphanCount,
+    archivedOrphans: archivedOrphanCount,
     entries: entries.map(({ file: _file, ...rest }) => rest),
   };
 
@@ -1568,7 +1572,7 @@ function commandMigrate(flags) {
     process.stdout.write(`${entry.line}\n`);
   }
   process.stdout.write(
-    `total=${summary.total} changed=${summary.changed} unchanged=${summary.unchanged} orphans=${summary.orphans}${backupDir ? ` backup=${backupDir}` : ""}\n`,
+    `total=${summary.total} changed=${summary.changed} unchanged=${summary.unchanged} orphans=${summary.orphans} archived-orphans=${summary.archivedOrphans}${backupDir ? ` backup=${backupDir}` : ""}\n`,
   );
   return 0;
 }
