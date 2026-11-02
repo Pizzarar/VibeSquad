@@ -2036,7 +2036,7 @@ export function App() {
             squadName={view?.team.name ?? ""}
             onSelectSquad={onTeam}
           />
-          {screen === "teams" && !squadsHome && <HubBar view={view} onOpen={onQuickStart} />}
+          {screen === "teams" && !(pinLayout && pinsHome && squadsHome) && <HubBar view={view} onOpen={onQuickStart} />}
           {screen === "workspaces" ? (
             <WorkspacesView />
           ) : dateGrouped ? (
@@ -2073,7 +2073,7 @@ export function App() {
       {(hasTabs || focus || pinFocused) && (
         <AgentPanes
           onSuccessor={paneSuccessor}
-          header={pinFocusView && pinFocus ? <div className="hub-bar-head"><PinFocusHeader view={pinFocusView} focus={pinFocus} onStart={onRailPick} onSelectSquad={onTeam} /><HubBar view={pinFocusView} onOpen={onQuickStart} /></div> : undefined}
+          header={pinFocusView && pinFocus ? <PinFocusHeader view={pinFocusView} focus={pinFocus} onStart={onRailPick} onSelectSquad={onTeam} belowBar={<HubBar view={pinFocusView} onOpen={onQuickStart} />} /> : undefined}
         />
       )}
       {pinFocusView && pinFocus && <PinRail view={pinFocusView} focus={pinFocus} onPick={onRailPick} />}
