@@ -7,6 +7,7 @@ import test from "node:test";
 import { laneWorkingDir } from "../server/brainstorm.mjs";
 import { resolveTeamsFilePath, resolveTeamsWritePath } from "../server/teams-file.mjs";
 import { createVibesquadMiddleware, performBrainstormRestart, resetBrainstormRestartState, seedDefaultPack } from "../server/vibesquad-api.mjs";
+import { ownerHeaders } from "./helpers/local-owner.mjs";
 
 const ENV_KEYS = ["VIBESQUAD_HOME", "VIBESQUAD_TEAMS_FILE", "VIBESQUAD_IGNORE_HOME_TEAMS"];
 
@@ -89,7 +90,7 @@ test(
       assert.equal(got.teams[0].lanes[0].id, "pinned");
 
       const teams = [{ ...got.teams[0], lanes: [...got.teams[0].lanes, { id: "fresh", name: "Fresh", state: "pinned" }] }];
-      const put = await fetch(`${base}/api/teams`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ teams }) });
+      const put = await fetch(`${base}/api/teams`, { method: "PUT", headers: ownerHeaders({ "content-type": "application/json" }), body: JSON.stringify({ teams }) });
       assert.equal(put.status, 200);
 
       const saved = readJson(homeFile);
@@ -110,7 +111,7 @@ test(
     writeJson(join(repo, "teams.example.json"), { teams: [], exampleKey: 1 });
     await withServer(repo, async (base) => {
       const teams = [{ id: "t", name: "T", lanes: [], paths: [] }];
-      const put = await fetch(`${base}/__vibesquad/teams`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ teams }) });
+      const put = await fetch(`${base}/__vibesquad/teams`, { method: "POST", headers: ownerHeaders({ "content-type": "application/json" }), body: JSON.stringify({ teams }) });
       assert.equal(put.status, 200);
     });
     const saved = readJson(join(vsHome, "teams.json"));
@@ -173,7 +174,7 @@ test(
       const got = await (await fetch(`${base}/api/teams`)).json();
       assert.equal(got.teams[0].vibeMode, undefined);
       const teams = [{ ...got.teams[0], vibeMode: true }];
-      const put = await fetch(`${base}/api/teams`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ teams }) });
+      const put = await fetch(`${base}/api/teams`, { method: "PUT", headers: ownerHeaders({ "content-type": "application/json" }), body: JSON.stringify({ teams }) });
       assert.equal(put.status, 200);
       assert.equal(readJson(homeFile).teams[0].vibeMode, true);
       assert.equal((await (await fetch(`${base}/api/teams`)).json()).teams[0].vibeMode, true);

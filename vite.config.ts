@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 import { createVibesquadMiddleware, readPaseo } from "./server/vibesquad-api.mjs";
 import "./server/brainstorm.mjs";
 import "./server/inbox.mjs";
-import "./server/auth.mjs";
+import { getLocalToken, lockDownVibesquadHome } from "./server/auth.mjs";
 import "./server/qr.mjs";
 import "./server/push.mjs";
 
@@ -15,6 +15,9 @@ function vibesquadApi() {
   return {
     name: "vibesquad-api",
     configureServer(server: any) {
+      // Same order as serve.mjs: lock ~/.vibesquad, then create the local token the middleware checks.
+      lockDownVibesquadHome();
+      getLocalToken();
       server.middlewares.use(createVibesquadMiddleware());
     },
   };

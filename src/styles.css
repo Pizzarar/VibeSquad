@@ -3566,7 +3566,8 @@ html, body, #root { overflow-x: hidden; }
 button.file-chip { cursor: pointer; font: inherit; }
 .file-chip-name { max-width: 14em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.stale-build-banner {
+.stale-build-banner,
+.read-only-banner {
   font-size: 13px;
 }
 

@@ -2,7 +2,7 @@ import { FIRST_RUN_DONE_KEY, FirstRunModal, fetchFirstRunStatus, type FirstRunSt
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { ProviderQuotaView } from "./antigravity";
-import { LEGACY_NEEDS_LABEL, dismissUpdateBanner, loadUpdaterStatus, setLanExposureState, setServerConfigWarnings, setStaleBuild, triggerUpdateInstall, useStaleBuild, useConfigWarnings, useExposedIpsStore, useUpdaterStatus } from "./userName";
+import { LEGACY_NEEDS_LABEL, dismissUpdateBanner, loadUpdaterStatus, setLanExposureState, setLocalAccess, setServerConfigWarnings, setStaleBuild, triggerUpdateInstall, useLocalReadOnly, useStaleBuild, useConfigWarnings, useExposedIpsStore, useUpdaterStatus } from "./userName";
 import { DEMO, archiveAgent, detachAgent, getPaseoState, loadArchived, retireAgent, setNeedsYou, updateAgent, upsertLocalAgent, usePaseo } from "./paseo";
 import {
   AGENT_TYPE_LABEL,
@@ -1472,6 +1472,7 @@ function useExposedIps(): string[] {
           setServerConfigWarnings(h.configWarnings);
         }
         if (alive) setStaleBuild(h?.stale);
+        if (alive) setLocalAccess(h?.localAccess);
       })
       .catch(() => {});
     return () => {
@@ -1555,6 +1556,7 @@ export function App() {
   const updaterStatus = useUpdaterStatus();
   const configWarnings = useConfigWarnings();
   const staleBuild = useStaleBuild();
+  const localReadOnly = useLocalReadOnly();
   useEffect(() => {
     void loadUpdaterStatus();
     const id = setInterval(() => void loadUpdaterStatus(), 60_000);
@@ -1912,6 +1914,16 @@ export function App() {
           >
             ✕
           </button>
+        </div>
+      )}
+      {localReadOnly && (
+        <div
+          className="read-only-banner"
+          data-testid="read-only-banner"
+          role="alert"
+          style={{ gridColumn: "1 / -1", background: "#ffb000", color: "#05060d", fontWeight: 800, padding: "6px 12px", textAlign: "center" }}
+        >
+          Read-only: this tab has no VibeSquad local token. Open VibeSquad from its launcher or desktop app, or run vs open.
         </div>
       )}
       {staleBuild && (

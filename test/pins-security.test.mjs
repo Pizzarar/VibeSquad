@@ -10,6 +10,7 @@ import { createVibesquadMiddleware, validateTeamsBody } from "../server/vibesqua
 import { refreshTeams, saveTeams, getTeams, snapshotTeams } from "../src/teams.ts";
 import { mergeTeams } from "../src/teamsMerge.ts";
 import { patchLane } from "../src/pins.ts";
+import { ownerHeaders } from "./helpers/local-owner.mjs";
 
 const ENV_KEYS = ["VIBESQUAD_HOME", "VIBESQUAD_TEAMS_FILE", "VIBESQUAD_IGNORE_HOME_TEAMS"];
 
@@ -38,7 +39,7 @@ function withEnv(fn) {
 
 const writeJson = (file, data) => writeFileSync(file, JSON.stringify(data, null, 2), "utf8");
 const readJson = (file) => JSON.parse(readFileSync(file, "utf8"));
-const put = (base, body) => fetch(`${base}/api/teams`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+const put = (base, body) => fetch(`${base}/api/teams`, { method: "PUT", headers: ownerHeaders({ "content-type": "application/json" }), body: JSON.stringify(body) });
 
 async function withServer(rootDir, fn) {
   const srv = createServer(createVibesquadMiddleware(rootDir));
@@ -84,7 +85,7 @@ test(
     writeJson(file, seed);
     await withServer(repo, async (base) => {
       const realFetch = globalThis.fetch;
-      globalThis.fetch = (url, init) => realFetch(`${base}${url}`, init);
+      globalThis.fetch = (url, init) => realFetch(`${base}${url}`, { ...init, headers: ownerHeaders(init?.headers) });
       try {
         await refreshTeams();
         assert.deepEqual(getTeams()[0].lanes.map((l) => l.id), ["scav-ui"]);
@@ -119,7 +120,7 @@ async function modalSaveAcrossPoll({ repo, vsHome }, editCopy) {
   let lanes;
   await withServer(repo, async (base) => {
     const realFetch = globalThis.fetch;
-    globalThis.fetch = (url, init) => realFetch(`${base}${url}`, init);
+    globalThis.fetch = (url, init) => realFetch(`${base}${url}`, { ...init, headers: ownerHeaders(init?.headers) });
     try {
       await refreshTeams();
       const opened = snapshotTeams();
@@ -163,7 +164,7 @@ test(
     writeJson(file, seed);
     await withServer(repo, async (base) => {
       const realFetch = globalThis.fetch;
-      globalThis.fetch = (url, init) => realFetch(`${base}${url}`, init);
+      globalThis.fetch = (url, init) => realFetch(`${base}${url}`, { ...init, headers: ownerHeaders(init?.headers) });
       try {
         await refreshTeams();
         // Someone else writes between our GET and our PUT.
@@ -259,7 +260,7 @@ test(
     await withServer(repo, async (base) => {
       const r = await fetch(`${base}/__vibesquad/brainstorm-restart`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: ownerHeaders({ "content-type": "application/json" }),
         body: JSON.stringify({ agentId: "../../x/y", teamId: "t", laneId: "l", reason: "start-brainstorm" }),
       });
       assert.equal(r.status, 400);

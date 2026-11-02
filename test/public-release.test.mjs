@@ -5,6 +5,7 @@ import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, before, describe, test } from "node:test";
+import { ownerHeaders } from "./helpers/local-owner.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
 const home = mkdtempSync(join(tmpdir(), "vs-public-"));
@@ -180,7 +181,7 @@ describe("request guard", () => {
       assert.equal((await call("/__vibesquad/vs-log?team=demo", { headers: { "sec-fetch-site": "cross-site" } })).status, 403);
       const post = await call("/__vibesquad/inbox", {
         method: "POST",
-        headers: { "content-type": "text/plain", "user-agent": "Mozilla/5.0" },
+        headers: ownerHeaders({ "content-type": "text/plain", "user-agent": "Mozilla/5.0" }),
         body: "{}",
       });
       assert.equal(post.status, 403);
@@ -201,7 +202,7 @@ describe("request guard", () => {
     });
 
     test("oversized bodies are refused with 413", async () => {
-      const r = await call("/__vibesquad/inbox", { method: "POST", headers: { "content-type": "application/json", "content-length": String(2 * 1024 * 1024) } });
+      const r = await call("/__vibesquad/inbox", { method: "POST", headers: ownerHeaders({ "content-type": "application/json", "content-length": String(2 * 1024 * 1024) }) });
       assert.equal(r.status, 413);
     });
 
@@ -211,7 +212,7 @@ describe("request guard", () => {
         // The daemon is unreachable in tests, so the handler may hang or reset; only the side effects matter.
         await call("/__vibesquad/lead-handoff", {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: ownerHeaders({ "content-type": "application/json" }),
           body: JSON.stringify({ baseHome: evil, profilesPath: join(evil, "p.json"), oldLead: { id: "x", cwd: evil, labels: {} }, agentId: "x" }),
           timeoutMs: 1500,
         }).catch(() => {});
@@ -222,8 +223,8 @@ describe("request guard", () => {
     });
 
     test("local-image answers 404 for everything it refuses", async () => {
-      const missing = await call(`/__vibesquad/local-image?path=${encodeURIComponent(join(home, "nope.png"))}`);
-      const existsButDenied = await call(`/__vibesquad/local-image?path=${encodeURIComponent(join(rootDir, "package.json"))}`);
+      const missing = await call(`/__vibesquad/local-image?path=${encodeURIComponent(join(home, "nope.png"))}`, { headers: ownerHeaders() });
+      const existsButDenied = await call(`/__vibesquad/local-image?path=${encodeURIComponent(join(rootDir, "package.json"))}`, { headers: ownerHeaders() });
       assert.equal(missing.status, 404);
       assert.equal(existsButDenied.status, 404);
       assert.equal(missing.body, existsButDenied.body);
@@ -355,7 +356,7 @@ describe("needs-you rename", () => {
 
     const call = (method, body) =>
       new Promise((ok, fail) => {
-        const req = request({ host: "127.0.0.1", port, path: "/__vibesquad/settings", method, headers: { "content-type": "application/json" } }, (res) => {
+        const req = request({ host: "127.0.0.1", port, path: "/__vibesquad/settings", method, headers: ownerHeaders({ "content-type": "application/json" }) }, (res) => {
           let data = "";
           res.on("data", (c) => (data += c));
           res.on("end", () => ok({ status: res.statusCode, body: JSON.parse(data) }));
