@@ -50,23 +50,9 @@ export function featureChange(row: FeatureRow, next: boolean | string): boolean 
   return typeof next === "string" && next !== (row.value ?? "") ? next : null;
 }
 
-/** Whether the daemon advertises the one-shot applyAgentConfig bundle. */
-export function supportsApplyConfig(serverFeatures: unknown): boolean {
-  return !!(serverFeatures as { agentConfigApply?: boolean } | null | undefined)?.agentConfigApply;
-}
-
-/** The note shown after a change. Running agents pick model/thinking changes up on the next turn. */
-export function turnNote(status: string | null | undefined, field: "feature" | "model" | "thinking" | "both" | "mode"): string {
-  if (field === "mode") return "";
-  const running = status === "running";
-  if (!running) return "";
-  if (field === "feature") return "Applies from the next turn.";
-  if (field === "both") return "Model and thinking changes apply from the next turn.";
-  return `${field === "model" ? "Model" : "Thinking"} change applies from the next turn.`;
-}
-
-export function noticeText(n: { type: string; message: string } | null | undefined): string {
-  return n && n.message ? `${n.type}: ${n.message}` : "";
+/** The note shown after a feature change: a running agent picks it up on the next turn. */
+export function turnNote(status: string | null | undefined): string {
+  return status === "running" ? "Applies from the next turn." : "";
 }
 
 export function describeError(e: unknown): string {

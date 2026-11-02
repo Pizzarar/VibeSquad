@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { featureChange, featureRows, noticeText, supportsApplyConfig, turnNote } from "../src/paseoFeaturesLogic.ts";
+import { featureChange, featureRows, turnNote } from "../src/paseoFeaturesLogic.ts";
 
 test("featureRows normalizes toggles and selects, drops junk", () => {
   const rows = featureRows([
@@ -28,14 +28,9 @@ test("featureChange skips no-ops", () => {
   assert.equal(featureChange(s, "a"), null);
 });
 
-test("supportsApplyConfig / turnNote / noticeText", () => {
-  assert.equal(supportsApplyConfig({ agentConfigApply: true }), true);
-  assert.equal(supportsApplyConfig(null), false);
-  assert.equal(turnNote("running", "model"), "Model change applies from the next turn.");
-  assert.equal(turnNote("idle", "model"), "");
-  assert.equal(turnNote("running", "mode"), "");
-  assert.equal(noticeText({ type: "warning", message: "hi" }), "warning: hi");
-  assert.equal(noticeText(null), "");
+test("turnNote only notes running agents", () => {
+  assert.equal(turnNote("running"), "Applies from the next turn.");
+  assert.equal(turnNote("idle"), "");
 });
 
 test("featureRows: tooltip fallback, null options dropped; turnNote both", () => {
@@ -45,5 +40,4 @@ test("featureRows: tooltip fallback, null options dropped; turnNote both", () =>
   ]);
   assert.equal(rows[0].hint, "Toggle fast");
   assert.deepEqual(rows[1].options, [{ id: "x", label: "X" }]);
-  assert.equal(turnNote("running", "both"), "Model and thinking changes apply from the next turn.");
 });

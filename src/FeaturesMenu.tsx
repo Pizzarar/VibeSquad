@@ -5,7 +5,7 @@ import { describeError, featureChange, featureRows, setFeature, turnNote } from 
 const CTRL = { background: "var(--panel-alt)", color: "var(--fg)", border: "1px solid var(--line)", fontSize: 10, padding: "1px 4px" } as const;
 
 // Provider features (setAgentFeature) for the running agent. Model, thinking and mode live in the header
-// selects, which go through applyAgentConfig. Values always come from the agent snapshot, so the menu
+// selects, which use the single-field setters (applyAgentConfig hangs on model changes). Values always come from the agent snapshot, so the menu
 // reflects the daemon's state after each change. Hidden when the provider exposes no features.
 export function FeaturesMenu({ agent }: { agent: PaseoAgent }) {
   const [open, setOpen] = useState(false);
@@ -52,7 +52,7 @@ export function FeaturesMenu({ agent }: { agent: PaseoAgent }) {
     setNote("");
     try {
       await setFeature(agent, key, value);
-      if (live()) setNote(turnNote(agent.status, "feature") || "Applied.");
+      if (live()) setNote(turnNote(agent.status) || "Applied.");
     } catch (e) {
       if (live()) setError(`Change failed: ${describeError(e)}`);
     } finally {
