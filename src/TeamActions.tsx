@@ -12,6 +12,7 @@ import {
   type TeamDef,
   type TeamView,
 } from "./teams";
+import { freezeLaneCodes } from "./identity";
 import { useDraft } from "./drafts";
 import { findProfile, getProfiles, useProfiles, type Profile, type Role } from "./profiles";
 
@@ -691,7 +692,7 @@ export function AddBuddyModal({
       const targetTeam = getTeams().find((t) => t.id === team.id);
       if (targetTeam && !hasLane(targetTeam)) {
         await saveTeams((cur) =>
-          cur.map((t) => (t.id === team.id && !hasLane(t) ? { ...t, lanes: [...t.lanes, { id: laneId, name: laneName }] } : t)),
+          cur.map((t) => (t.id === team.id && !hasLane(t) ? { ...t, lanes: freezeLaneCodes([...freezeLaneCodes(t.lanes), { id: laneId, name: laneName }]) } : t)),
         );
       }
 

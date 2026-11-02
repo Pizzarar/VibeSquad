@@ -18,7 +18,7 @@ import {
   type Pin,
   type PinLane,
 } from "./pins";
-import { laneCodesForTeam } from "./identity";
+import { freezeLaneCodes, laneCodesForTeam } from "./identity";
 import { runMarkComplete } from "./pinComplete";
 import { findCrossTeamBrainstorm, getTeams, resolve, saveTeams, type TeamDef, type TeamsUpdater } from "./teams";
 
@@ -128,11 +128,17 @@ async function quickStart(pin: Pin, profile: string, deps: OpenPinDeps): Promise
   return newAgentId;
 }
 
+/** Persist a code on every lane of one Squad that lacks one. */
+export function freezeSquadCodes(teams: TeamDef[], squadId: string): TeamDef[] {
+  return teams.map((t) => (t.id === squadId ? { ...t, lanes: freezeLaneCodes(t.lanes) } : t));
+}
+
 /** Rename a pinned team (display name only; the lane id and labels stay). */
 export async function renamePin(pin: Pin, name: string): Promise<void> {
   const clean = name.trim();
   if (!clean || clean === pin.lane.name) return;
-  await saveTeams((cur) => patchLane(cur, pin.squad.id, pin.lane.id, { name: clean }));
+  // Freeze codes first so the rename can never change this lane's (or a sibling's) generated code.
+  await saveTeams((cur) => patchLane(freezeSquadCodes(cur, pin.squad.id), pin.squad.id, pin.lane.id, { name: clean }));
 }
 
 // ── Brief editor bus ───────────────────────────────────────────────────────────
@@ -273,7 +279,7 @@ export async function createPin(squadId: string, name: string, idea: string, dep
   // The brief write is async, so add the lane to whatever the registry holds by then.
   let next = teams;
   await (deps.saveTeams ?? saveTeams)((cur) =>
-    (next = cur.map((t) => (t.id === squadId && !t.lanes.some((l) => l.id === lane.id) ? { ...t, lanes: [...t.lanes, lane] } : t))),
+    (next = cur.map((t) => (t.id === squadId && !t.lanes.some((l) => l.id === lane.id) ? { ...t, lanes: freezeLaneCodes([...freezeLaneCodes(t.lanes), lane]) } : t))),
   );
   return {
     squad: next.find((t) => t.id === squadId) ?? squad,

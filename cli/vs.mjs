@@ -41,8 +41,8 @@ import {
   findLaneInRegistry,
   findTeamInRegistry,
   isDigestAgent,
+  freezeLaneCodes,
   isRetiredRole,
-  laneCodesForTeam,
   normalizeRoleLabel,
   ordStringOf,
   resolveAgentIdentity,
@@ -1805,9 +1805,8 @@ ${brief}`, live);
   const doc = Array.isArray(cur?.teams) ? cur : { ...TEAMS_FILE };
   const target = doc.teams.find((t) => t.id === squadDef.id);
   if (!target) throw new Error(`squad "${squadDef.id}" is not in ${file}`);
-  // Freeze the generated lane code (deduped within the Squad) on the new lane.
-  const code = laneCodesForTeam({ lanes: [...(target.lanes ?? []), { id, name }] })[id];
-  target.lanes = [...(target.lanes ?? []), { id, name, ...(code ? { code } : {}), state: "pinned" }];
+  // Freeze: persist generated codes on every lane of the Squad that lacks one, plus the new lane's.
+  target.lanes = freezeLaneCodes([...freezeLaneCodes(target.lanes ?? []), { id, name, state: "pinned" }]);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
   fs.writeFileSync(tmp, JSON.stringify(doc, null, 2) + "\n", "utf8");
