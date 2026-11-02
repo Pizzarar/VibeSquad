@@ -201,3 +201,41 @@ test("block 5: unreadable agent list is stated, not guessed", async () => {
   const b = liveInFlightBlock({ agents: null, laneId: "z", teamId: "nope", home: tmpdir() });
   assert.match(b, /Live agents: unavailable/);
 });
+
+// ---- block 6: brief durability ----
+import { BRIEF_HISTORY_KEEP, writeBrainstormSummary } from "../server/brainstorm.mjs";
+import { readdirSync } from "node:fs";
+
+function withBriefDirs(fn) {
+  const dir = mkdtempSync(join(tmpdir(), "vs-spawn-hygiene-b6-"));
+  const prev = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = join(dir, ".vibesquad");
+  try {
+    const repo = join(dir, "repo");
+    mkdirSync(join(repo, "docs", "brainstorm"), { recursive: true });
+    return fn({ repo, history: join(dir, ".vibesquad", "brief-history", "lane-x"), file: join(repo, "docs", "brainstorm", "lane-x.md") });
+  } finally {
+    prev === undefined ? delete process.env.VIBESQUAD_HOME : (process.env.VIBESQUAD_HOME = prev);
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("block 6: a near-empty write keeps the old brief (and a backup exists)", () =>
+  withBriefDirs(({ repo, history, file }) => {
+    const big = "# Brief\n" + "- decision line\n".repeat(100);
+    writeBrainstormSummary("lane-x", big, repo);
+    assert.throws(() => writeBrainstormSummary("lane-x", "# Brief\n", repo), /Refusing to replace/);
+    assert.equal(readFileSync(file, "utf8"), big);
+    assert.ok(readdirSync(history).length >= 1);
+  }));
+
+test("block 6: a new lane may start small; normal overwrites back up the previous text; keeps 20", () =>
+  withBriefDirs(({ repo, history, file }) => {
+    writeBrainstormSummary("lane-x", "# tiny\n", repo);
+    assert.equal(readFileSync(file, "utf8"), "# tiny\n");
+    assert.ok(!existsSync(history), "no backup for a brand-new brief");
+    for (let i = 0; i < BRIEF_HISTORY_KEEP + 5; i++) writeBrainstormSummary("lane-x", `# v${i}\n`, repo);
+    const files = readdirSync(history).sort();
+    assert.equal(files.length, BRIEF_HISTORY_KEEP);
+    assert.equal(readFileSync(join(history, files.at(-1)), "utf8"), `# v${BRIEF_HISTORY_KEEP + 3}\n`);
+  }));
