@@ -35,7 +35,7 @@ test("createInflight clears after a rejection so retry works", async () => {
 import { unsafeWorkspaceCwdReason as bad } from "../src/ensureWorkspaceLogic.ts";
 
 test("unsafeWorkspaceCwdReason refuses dangerous folders", () => {
-  for (const p of ["", "   ", "C:/a\nb", "C:/a\0b", "relative/dir", "proj", "C:/a/../b", "/a/./b", "\\srv\share", "//srv/share/x", "C:", "C:" + B, "/", "C:/Windows", "C:/Windows/System32".slice(0, 10), "/etc", "/usr", "C:/Users", "C:/Users/me", "C:/users/ME/", "/home", "/home/me", "C:/Program Files"]) {
+  for (const p of ["", "   ", "C:/a\nb", "C:/a\0b", "relative/dir", "proj", "C:/a/../b", "/a/./b", "\\\\srv\\share", "//srv/share/x", "C:", "C:\\", "/", "C:/Windows","/etc", "/usr", "C:/Users", "C:/Users/me", "C:/users/ME/", "/home", "/home/me", "C:/Program Files"]) {
     assert.ok(bad(p) !== null, `should refuse ${JSON.stringify(p)}`);
   }
 });
