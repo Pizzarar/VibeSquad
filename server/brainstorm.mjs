@@ -391,6 +391,8 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       const asList = (res) => (Array.isArray(res) ? res : Array.isArray(res?.entries) ? res.entries : Array.isArray(res?.agents) ? res.agents : null);
       const readLive = async () => {
         if (body.agents) return body.agents instanceof Map ? [...body.agents.values()] : Array.isArray(body.agents) ? body.agents : [];
+        // A daemon client was expected but never connected (daemon restarting): unknown, not empty.
+        if (client && !connected) return null;
         if (connected && client && typeof client.fetchAgents === "function") return asList(await client.fetchAgents().catch(() => null));
         if (connected && client && typeof client.listAgents === "function") return asList(await client.listAgents().catch(() => null));
         return [];
