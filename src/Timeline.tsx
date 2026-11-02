@@ -5,6 +5,7 @@ import { REWIND_MODES, buildRewindRequest, truncateAfter, type RewindMode } from
 import { demoTimeline } from "./demo";
 import { sentImagesFor } from "./imageDrafts";
 import { openRightDockTab } from "./RightDock";
+import { BARE_PATH_RE, parseFileToken } from "./fileLinks";
 
 export class TimelineErrorBoundary extends Component<
   { children: ReactNode; fallbackLabel?: string },
@@ -38,7 +39,7 @@ export class TimelineErrorBoundary extends Component<
 export type Entry = { item: any; timestamp?: string; seqStart?: number };
 
 const MD_IMAGE = /!\[([^\]]*)\]\(((?:file:\/\/|[A-Za-z]:[\\/])[^)\s]+)\)/g;
-const FILE_LINK_RE = /(?<![`"'(])([a-zA-Z0-9_.\-/\\]+\.[a-zA-Z]{1,6})(?::(\d+)|#L(\d+))(?![a-zA-Z0-9_])/g;
+const FILE_LINK_RE = /(?<![`"'\w@.\/\x5c:#~-])([a-zA-Z0-9_.\-\/\x5c]+\.[a-zA-Z]{1,6})(?::(\d+)(?:-\d+)?|#L(\d+)(?:-L?\d+)?)(?![a-zA-Z0-9_])/g;
 
 export function localImageSrc(u: string, agentId?: string): string {
   const base = `/__vibesquad/local-image?path=${encodeURIComponent(u)}`;
@@ -88,7 +89,8 @@ export function extractFileLinks(text: string): Array<{ filePath: string; line: 
   while ((m = re.exec(text)) !== null) {
     const filePath = m[1];
     const lineStr = m[2] ?? m[3];
-    results.push({ filePath, line: lineStr ? parseInt(lineStr, 10) : null });
+    const t = parseFileToken(m[0]);
+    if (t) results.push({ filePath: t.path, line: t.line });
   }
   return results;
 }
@@ -114,11 +116,13 @@ type Token =
   | { type: "bullet_list"; items: string[] }
   | { type: "ordered_list"; items: string[] }
   | { type: "paragraph"; text: string }
+  | { type: "blockquote"; text: string }
   | { type: "blank" };
 
-export function tokenizeMarkdown(text: string): Token[] {
+/** `doc` mode is for whole files (Files dock): CRLF/BOM tolerant, and `>` blockquotes. Chat keeps its old behaviour. */
+export function tokenizeMarkdown(text: string, doc = false): Token[] {
   const tokens: Token[] = [];
-  const lines = text.split("\n");
+  const lines = doc ? text.replace(/^﻿/, "").split(/\r?\n/) : text.split("\n");
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
@@ -141,6 +145,15 @@ export function tokenizeMarkdown(text: string): Token[] {
     if (hMatch) {
       tokens.push({ type: "heading", level: hMatch[1].length as 1 | 2 | 3, text: hMatch[2] });
       i++;
+      continue;
+    }
+    if (doc && /^\s*>/.test(line)) {
+      const quoted: string[] = [];
+      while (i < lines.length && /^\s*>/.test(lines[i])) {
+        quoted.push(lines[i].replace(/^\s*>\s?/, ""));
+        i++;
+      }
+      tokens.push({ type: "blockquote", text: quoted.join(" ").trim() });
       continue;
     }
     // Table (line contains |)
@@ -195,6 +208,10 @@ export function tokenizeMarkdown(text: string): Token[] {
 
 // ─── Inline renderers ─────────────────────────────────────────────────────────
 
+function openFileTarget(t: { path: string; line: number | null; isDir: boolean }) {
+  openRightDockTab("Files", { filePath: t.isDir ? `${t.path}/` : t.path, line: t.line ?? undefined });
+}
+
 function renderInline(text: string, agentId?: string): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
   // Process: bold, inline code, links, file:line, images, plain text
@@ -208,9 +225,11 @@ function renderInline(text: string, agentId?: string): React.ReactNode[] {
     // Link
     { re: /\[([^\]]+)\]\(([^)]+)\)/g, key: "link" },
     // File:line (colon notation)
-    { re: /(?<![`"'(])([a-zA-Z0-9_.\-/\\]+\.[a-zA-Z]{1,6}):(\d+)(?![a-zA-Z0-9_])/g, key: "filelink" },
+    { re: /(?<![`"'\w@.\/\x5c:#~-])([a-zA-Z0-9_.\-\/\x5c]+\.[a-zA-Z]{1,6}):(\d+)(?:-\d+)?(?![a-zA-Z0-9_])/g, key: "filelink" },
     // File:line (#L notation)
-    { re: /(?<![`"'(])([a-zA-Z0-9_.\-/\\]+\.[a-zA-Z]{1,6})#L(\d+)(?![a-zA-Z0-9_])/g, key: "filelink2" },
+    { re: /(?<![`"'\w@.\/\x5c:#~-])([a-zA-Z0-9_.\-\/\x5c]+\.[a-zA-Z]{1,6})#L(\d+)(?:-L?\d+)?(?![a-zA-Z0-9_])/g, key: "filelink2" },
+    // Bare repo path (dir/file.ext, dir/); validated by parseFileToken
+    { re: BARE_PATH_RE, key: "barepath" },
   ];
 
   // Build a combined regex
@@ -238,45 +257,43 @@ function renderInline(text: string, agentId?: string): React.ReactNode[] {
       nodes.push(<strong key={keyIdx++}>{m[5]}</strong>);
     } else if (m[6] !== undefined) {
       // inline code
-      nodes.push(<code key={keyIdx++} className="tl-icode">{m[7]}</code>);
+      const tgt = parseFileToken(m[7], { backticked: true });
+      nodes.push(
+        tgt ? (
+          <code key={keyIdx++} className="tl-icode tl-file-link" role="button" tabIndex={0}
+            data-testid="tl-file-link" onClick={() => openFileTarget(tgt)}
+            onKeyDown={(e) => { if (e.key === "Enter") openFileTarget(tgt); }}>{m[7]}</code>
+        ) : (
+          <code key={keyIdx++} className="tl-icode">{m[7]}</code>
+        ),
+      );
     } else if (m[8] !== undefined) {
       // link
       nodes.push(
         <a key={keyIdx++} href={m[10]} target="_blank" rel="noopener noreferrer">{m[9]}</a>,
       );
-    } else if (m[11] !== undefined) {
-      // file:line colon
-      const fp = m[12];
-      const ln = m[13] ? parseInt(m[13], 10) : null;
+    } else if (m[11] !== undefined || m[14] !== undefined) {
+      // path:line / path#L12 (incl. :200-213); gated by parseFileToken like every other chat path
+      const raw = (m[11] ?? m[14]) as string;
+      const tgt = parseFileToken(raw);
       nodes.push(
-        <button
-          key={keyIdx++}
-          className="tl-file-link"
-          data-testid="tl-file-link"
-          onClick={() => {
-            openRightDockTab("Files", { filePath: fp, line: ln ?? undefined });
-            navigator.clipboard.writeText(fp).catch(() => {});
-          }}
-        >
-          {m[11]}
-        </button>,
+        tgt ? (
+          <button key={keyIdx++} className="tl-file-link" data-testid="tl-file-link"
+            onClick={() => openFileTarget(tgt)}>{raw}</button>
+        ) : (
+          <span key={keyIdx++}>{raw}</span>
+        ),
       );
-    } else if (m[14] !== undefined) {
-      // file#L notation
-      const fp = m[15];
-      const ln = m[16] ? parseInt(m[16], 10) : null;
+    } else if (m[17] !== undefined) {
+      // bare repo path
+      const tgt = parseFileToken(m[17]);
       nodes.push(
-        <button
-          key={keyIdx++}
-          className="tl-file-link"
-          data-testid="tl-file-link"
-          onClick={() => {
-            openRightDockTab("Files", { filePath: fp, line: ln ?? undefined });
-            navigator.clipboard.writeText(fp).catch(() => {});
-          }}
-        >
-          {m[14]}
-        </button>,
+        tgt ? (
+          <button key={keyIdx++} className="tl-file-link" data-testid="tl-file-link"
+            onClick={() => openFileTarget(tgt)}>{m[17]}</button>
+        ) : (
+          <span key={keyIdx++}>{m[17]}</span>
+        ),
       );
     }
     last = m.index + m[0].length;
@@ -313,9 +330,9 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 
 // ─── Markdown renderer ────────────────────────────────────────────────────────
 
-function MarkdownRenderer({ text, agentId }: { text: string; agentId?: string }) {
+export function MarkdownRenderer({ text, agentId, doc = false }: { text: string; agentId?: string; doc?: boolean }) {
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
-  const tokens = tokenizeMarkdown(text);
+  const tokens = tokenizeMarkdown(text, doc);
 
   const renderInlineWithImages = (t: string) => {
     // Replace local images separately so they can get lightbox
@@ -384,6 +401,8 @@ function MarkdownRenderer({ text, agentId }: { text: string; agentId?: string })
         );
       case "paragraph":
         return <p key={i} className="tl-p">{renderInlineWithImages(tok.text)}</p>;
+      case "blockquote":
+        return <blockquote key={i} className="tl-quote">{renderInlineWithImages(tok.text)}</blockquote>;
       case "blank":
         return null;
     }
@@ -539,20 +558,14 @@ function SummaryWithLinks({ text }: { text: string }) {
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
     if (m.index > last) parts.push(<span key={ki++} className="muted">{text.slice(last, m.index)}</span>);
-    const fp = m[1];
-    const ln = m[2] ? parseInt(m[2], 10) : m[3] ? parseInt(m[3], 10) : null;
+    const tgt = parseFileToken(m[0]);
     parts.push(
-      <button
-        key={ki++}
-        className="tl-file-link"
-        data-testid="tl-file-link"
-        onClick={() => {
-          openRightDockTab("Files", { filePath: fp, line: ln ?? undefined });
-          navigator.clipboard.writeText(fp).catch(() => {});
-        }}
-      >
-        {m[0]}
-      </button>,
+      tgt ? (
+        <button key={ki++} className="tl-file-link" data-testid="tl-file-link"
+          onClick={() => openFileTarget(tgt)}>{m[0]}</button>
+      ) : (
+        <span key={ki++} className="muted">{m[0]}</span>
+      ),
     );
     last = m.index + m[0].length;
   }

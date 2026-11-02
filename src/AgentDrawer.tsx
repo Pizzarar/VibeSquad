@@ -508,7 +508,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
         </TimelineErrorBoundary>
         {dockOpen && (
           <TimelineErrorBoundary fallbackLabel="dock">
-            <RightDock agent={agent} />
+            <RightDock key={agent.id} agent={agent} />
           </TimelineErrorBoundary>
         )}
       </div>
