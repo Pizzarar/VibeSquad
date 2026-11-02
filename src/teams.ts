@@ -1058,6 +1058,11 @@ export function titleFor(
   );
 }
 
+/** `(old) <Code><ord>[ · objective]` for a retired lead. */
+export function retiredLeadTitle(lane: string, laneId: string, ord: string | number, job?: string): string {
+  return clip(formatDisplayTitle({ role: "former-lead", laneName: lane, laneId, code: laneCodeOf(laneId || lane), ord, job }));
+}
+
 /** The lane's code: stored `code` or the generated one, deduped within its Squad. */
 export function laneCodeOf(laneKey: string | undefined): string {
   const found = laneById(laneKey);

@@ -4,7 +4,7 @@ import { useDraft } from "./drafts";
 import { DEMO, sendMessage, spawnTeamAgent, updateAgent } from "./paseo";
 import { buildName, Field, Modal, TITLE_LIMIT, findProfile, useProfiles } from "./TeamActions";
 import { postLog } from "./TeamFeed";
-import { fmtTok, ordOf, usedTokens, type Member, type TeamView } from "./teams";
+import { fmtTok, ordOf, retiredLeadTitle, usedTokens, type Member, type TeamView } from "./teams";
 
 const PARENT = "paseo.parent-agent-id";
 const labelsOf = (m: Member) => m.agent.labels as Record<string, string>;
@@ -52,7 +52,7 @@ export function HandoffModal({ view, lead, onClose, onCreated }: { view: TeamVie
     task: "",
     job: "",
   });
-  const oldTitle = `(old) ${(laneName || laneId).toUpperCase()} ord${ord}`;
+  const oldTitle = retiredLeadTitle(laneName || laneId, laneId, ord, labelsOf(lead).job);
 
   const workers = useMemo(
     () =>

@@ -20,7 +20,7 @@ import {
 } from "./pins";
 import { freezeLaneCodes, laneCodesForTeam } from "./identity";
 import { runMarkComplete } from "./pinComplete";
-import { findCrossTeamBrainstorm, getTeams, resolve, saveTeams, type TeamDef, type TeamsUpdater } from "./teams";
+import { findCrossTeamBrainstorm, getTeams, resolve, saveTeams, titleFor, type TeamDef, type TeamsUpdater } from "./teams";
 
 export type OpenPinDeps = {
   /** Agent map to re-check for a live Brainstorm before spawning (defaults to the live Paseo state). */
@@ -102,7 +102,7 @@ async function quickStart(pin: Pin, profile: string, deps: OpenPinDeps): Promise
     body.agent ??
     ({
       id: newAgentId,
-      title: `BRAINSTORM · ${pin.lane.name.toUpperCase()}`,
+      title: titleFor("brainstorm", pin.lane.name, { laneId: pin.lane.id }),
       provider: "claude",
       model: "claude-opus-5-5",
       cwd: "",

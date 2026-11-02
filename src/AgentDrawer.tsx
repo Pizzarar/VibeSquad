@@ -20,6 +20,7 @@ import {
   usedTokens,
   useTeams,
 } from "./teams";
+import { titleFor } from "./teams";
 import { handoffTopicBrainstormClient, parkIdeasInInbox, parkTopicBrainstormClient } from "./IdeaInbox";
 import { providerSpec } from "./pixel";
 import { openAgentInTab, paneOfAgent } from "./panes";
@@ -87,7 +88,7 @@ export async function triggerBrainstormRestart(opts: {
     return { newAgentId: null, retired: true, pendingPrompt: body.pendingPrompt ?? pendingPrompt };
   }
   const newAgentId: string = body.newAgentId || `demo-bs-${Date.now().toString(36)}`;
-  const title: string = body.title || `BRAINSTORM · ${laneId.toUpperCase()}`;
+  const title: string = body.title || titleFor("brainstorm", laneId, { laneId });
   const createdAgent: PaseoAgent =
     body.agent ??
     ({

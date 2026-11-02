@@ -33,7 +33,7 @@ export type NameInput = {
   job: string;
 };
 
-/** Naming Standard v1 (docs/NAMING.md): labels are the source of truth, the title is generated. */
+/** Naming Standard v2 (docs/NAMING.md): labels are the source of truth, the title is generated. */
 export function buildName(i: NameInput): { title: string; labels: Record<string, string> } {
   const labels: Record<string, string> = { team: i.team };
   if (i.laneId) {
@@ -49,9 +49,10 @@ export function buildName(i: NameInput): { title: string; labels: Record<string,
     if (i.topic.trim()) labels.topic = i.topic.trim();
   } else {
     labels.job = (i.job || "job").trim() || "job";
+    if (i.ord) labels.ord = i.ord; // the lead's ord, so the title is `<Code><ord> · <job>`
     if (i.task) labels.task = i.task;
   }
-  const title = titleFor(i.role === "lead" || i.role === "brainstorm" ? i.role : "worker", LANE_, { ord: i.ord, topic: i.topic, job: i.job });
+  const title = titleFor(i.role === "lead" || i.role === "brainstorm" ? i.role : "worker", LANE_, { ord: i.ord, topic: i.topic, job: i.job, laneId: i.laneId });
   return { title, labels };
 }
 
@@ -664,7 +665,7 @@ export function AddBuddyModal({
   const existingLane = team.lanes.some(
     (l) => l.id.toLowerCase() === laneId.toLowerCase() || Boolean(l.aliases?.some((a) => a.toLowerCase() === laneId.toLowerCase())),
   );
-  const title = titleFor("brainstorm", laneName, { topic: existingLane ? topic.trim() : "" });
+  const title = titleFor("brainstorm", laneName, { topic: existingLane ? topic.trim() : "", laneId });
   const brief = customBrief ?? defaultBuddyBrief(team.name, topic);
   const labels: Record<string, string> = {
     team: team.id,

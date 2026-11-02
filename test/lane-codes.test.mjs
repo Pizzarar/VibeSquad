@@ -53,3 +53,55 @@ test("freeze: persisting codes makes later colliding stored codes unable to disp
     assert.deepEqual(freeze(frozen), frozen);
   }
 });
+
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { buddyTitle, buildBrainstormInitialPrompt } from "../server/brainstorm.mjs";
+import { buildSuccessorPrompt, leadTitles } from "../server/lead-handoff.mjs";
+
+function sandboxRoot() {
+  const root = mkdtempSync(join(tmpdir(), "vs-lane-codes-"));
+  writeFileSync(
+    join(root, "teams.json"),
+    JSON.stringify({
+      teams: [
+        { id: "vibesquad", name: "VibeSquad", paths: [], lanes: [{ id: "vibesquad", name: "VibeSquad" }, { id: "bug-chaser", name: "Bug Chaser" }] },
+      ],
+    }),
+  );
+  return root;
+}
+
+test("spawn paths: lead handoff and Buddy titles use the lane code (sandbox registry)", () => {
+  const root = sandboxRoot();
+  try {
+    const prev = process.env.VIBESQUAD_HOME;
+    process.env.VIBESQUAD_HOME = root;
+    try {
+      const t = leadTitles({ laneId: "vibesquad", laneName: "VibeSquad", nextOrd: 2, oldOrd: 1, oldLead: { labels: { job: "squad view" } }, rootDir: root });
+      assert.equal(t.newTitle, "★ Hub2");
+      assert.equal(t.oldTitle, "(old) Hub1 · squad view");
+      const noJob = leadTitles({ laneId: "bug-chaser", laneName: "Bug Chaser", nextOrd: 5, oldOrd: 4, oldLead: { labels: {} }, rootDir: root });
+      assert.deepEqual(noJob, { newTitle: "★ Bug5", oldTitle: "(old) Bug4" });
+      assert.equal(buddyTitle("bug-chaser", "Bug Chaser", "", root), "Bug Buddy");
+      assert.equal(buddyTitle("bug-chaser", "Bug Chaser", "flaky tests", root), "Bug Buddy · flaky tests");
+    } finally {
+      if (prev === undefined) delete process.env.VIBESQUAD_HOME;
+      else process.env.VIBESQUAD_HOME = prev;
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("spawn paths: prompts name the new agent by its title", () => {
+  const p = buildSuccessorPrompt({
+    laneId: "vibesquad", laneName: "VibeSquad", nextOrd: 2, newTitle: "★ Hub2", oldLead: { id: "x", title: "★ Hub1" },
+    oldTitle: "(old) Hub1", trigger: "self", packetPath: "p", packetContent: "c", summaryPath: "s", summaryContent: "", latestPlan: null,
+  });
+  assert.match(p, /You are ★ Hub2, the successor lead/);
+  assert.match(p, /retired to "\(old\) Hub1"/);
+  const b = buildBrainstormInitialPrompt({ laneId: "vibesquad", laneUpper: "VIBESQUAD", buddyName: "Hub Buddy", summaryContent: "", latestPlan: null });
+  assert.match(b, /You are Hub Buddy \(fresh start/);
+});

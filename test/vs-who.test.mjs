@@ -137,7 +137,7 @@ test("Done-when #1: vs who lead returns only the live lead (ignoring former-lead
     if (liveRes.status === 0) {
       const liveLines = liveRes.stdout.trim().split(/\r?\n/);
       assert.equal(liveLines.length, 1);
-      assert.match(liveLines[0], /^★ VIBESQUAD ord\d+ · [0-9a-f-]+ · \w+ · \d+k$/);
+      assert.match(liveLines[0], /^★ (?:VIBESQUAD ord|[A-Za-z]{2,5})\d+(?: · .+?)? · [0-9a-f-]+ · \w+ · \d+k$/);
     }
   } finally {
     env.cleanup();

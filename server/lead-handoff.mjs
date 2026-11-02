@@ -8,7 +8,7 @@ import {
   findNewestPlanFile,
   readBrainstormSummary,
 } from "./brainstorm.mjs";
-import { effectiveAgentRole, isDigestAgent, isRetiredAgent, ordOf } from "./identity.mjs";
+import { effectiveAgentRole, formatDisplayTitle, isDigestAgent, isRetiredAgent, laneCodeFor, ordOf } from "./identity.mjs";
 import { LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE, readJsonFileWithBom } from "./user-settings.mjs";
 import { findProfile, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
@@ -74,6 +74,17 @@ export function loadLeadThresholds(teamIdOrDef, rootDir = REPO_ROOT) {
     flagTokens: Number(teamObj?.leadFlagTokens) || topFlag,
     autoHandoffTokens: Number(teamObj?.leadAutoHandoffTokens) || topAuto,
     hardCapTokens: Number(teamObj?.leadHardCapTokens) || topHard,
+  };
+}
+
+/** Lane-code lead titles (docs/NAMING.md): the successor `★ <Code><ord>` and the retired `(old) <Code><ord>[ · objective]`. */
+export function leadTitles({ laneId, laneName, nextOrd, oldOrd, oldLead, rootDir = REPO_ROOT }) {
+  const teams = loadTeamsConfig(rootDir).teams;
+  const code = laneCodeFor(laneId, Array.isArray(teams) ? teams : []);
+  const base = { laneId, laneName, code };
+  return {
+    newTitle: formatDisplayTitle({ ...base, role: "lead", ord: nextOrd }),
+    oldTitle: formatDisplayTitle({ ...base, role: "former-lead", ord: oldOrd, job: oldLead?.labels?.job }),
   };
 }
 
@@ -311,6 +322,7 @@ export function buildSuccessorPrompt({
   laneId,
   laneName,
   nextOrd,
+  newTitle,
   oldLead,
   oldTitle,
   trigger,
@@ -329,7 +341,7 @@ export function buildSuccessorPrompt({
     : ["- none"];
 
   return [
-    `You are ★ ${laneUpper} ord${nextOrd}, the successor lead for lane \`${laneId}\` (handoff trigger=${trigger} from ${oldLead?.id || oldTitle}).`,
+    `You are ${newTitle || `★ ${laneUpper} ord${nextOrd}`}, the successor lead for lane \`${laneId}\` (handoff trigger=${trigger} from ${oldLead?.id || oldTitle}).`,
     `The previous lead (${oldLead?.title || oldLead?.id}) will be retired to "${oldTitle}" once you confirm takeover.`,
     "",
     `- **Handoff packet:** \`${packetPath}\``,
@@ -458,8 +470,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
     const oldOrd = parseLeadOrd(oldLead);
     const nextOrd = oldOrd + 1;
     const laneUpper = (laneName || laneId).toUpperCase();
-    const newTitle = `★ ${laneUpper} ord${nextOrd}`;
-    const oldTitle = `(old) ${laneUpper} ord${oldOrd}`;
+    const { newTitle, oldTitle } = leadTitles({ laneId, laneName, nextOrd, oldOrd, oldLead, rootDir });
 
     const timer = createSpawnTimer("lead-handoff");
     if (typeof deps.connectMs === "number") timer.add("connect", deps.connectMs);
@@ -509,6 +520,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
       laneId,
       laneName,
       nextOrd,
+      newTitle,
       oldLead,
       oldTitle,
       trigger,
@@ -670,7 +682,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
           rec = {
             oldLeadId: old.id,
             successorId: id,
-            oldTitle: `(old) ${(laneName || laneId).toUpperCase()} ord${oldOrd}`,
+            oldTitle: leadTitles({ laneId, laneName, nextOrd: oldOrd + 1, oldOrd, oldLead: old, rootDir }).oldTitle,
             ord: String(oldOrd),
             teamId,
             laneId,

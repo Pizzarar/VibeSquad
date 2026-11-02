@@ -27,7 +27,9 @@ import {
   findLaneInRegistry,
   isDigestAgent as isDigestIdentity,
   isRetiredAgent,
+  formatDisplayTitle,
   isRetiredRole,
+  laneCodeFor,
   laneLeadMismatch,
   matchPathInRegistry,
   normalizeRoleLabel,
@@ -103,10 +105,11 @@ export const BRAINSTORM_PACK = [
 export const LEAD_FALLBACK_PACK = [
   "Role: lead.",
   "- Dispatch workers, read their digests via `vs log --since-me` (never raw transcripts), log decisions/blockers with `vs log`. When you start a plan, set `job=<objective in a few words>` (`paseo agent update --label job=...`); refer to agents by short name (e.g. Bug1, Hub5).",
+  "- Title each worker `<your Code><your ord> · <job>` (e.g. `Hub5 · drop files`) and label it `job=<job>` and `ord=<your ord>`, so its title matches the generated one.",
   "- When a plan block passes (PASS) or the whole plan is complete, add that line under `## In flight` in `docs/brainstorm/<lane>.md` so the Brainstorm can spot \"looks done\". Touch nothing else in the brief.",
   "- Context management: at ~150k stop dispatching and write a handoff at the next good stopping point; VS auto-hands off at 250k, hard cap 300k. Run `vs handoff` and fill the Judgment section.",
   "- Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`paseo --help`, Paseo MCP tool list, `vs --help`, skills). Name what you checked in the plan's Decided section.",
-  "- \"Spin up a buddy (for X)\" / \"spin up another buddy\" / \"get me a buddy for X\": spawn a new Buddy (role=brainstorm, title BRAINSTORM · <LANE> · <topic X>) in a new feature lane (lane=<slug from X>) under the same Squad (team=<product>). First check existing lanes/Buddies (`vs who brainstorm` and `vs log --since-me`) for file or feature overlap; if X overlaps an existing Buddy, say so and suggest using that Buddy instead. Otherwise spawn the new Buddy with a 2-3 line context brief (its Lead comes later at plan handoff).",
+  "- \"Spin up a buddy (for X)\" / \"spin up another buddy\" / \"get me a buddy for X\": spawn a new Buddy (role=brainstorm, title <Code> Buddy · <topic X>, Code = the new lane's short code) in a new feature lane (lane=<slug from X>) under the same Squad (team=<product>). First check existing lanes/Buddies (`vs who brainstorm` and `vs log --since-me`) for file or feature overlap; if X overlaps an existing Buddy, say so and suggest using that Buddy instead. Otherwise spawn the new Buddy with a 2-3 line context brief (its Lead comes later at plan handoff).",
   "- Write JSON files with node (e.g. fs.writeFileSync(..., 'utf8')), never PowerShell Set-Content (which writes a UTF-8 BOM that breaks JSON parsers).",
   "- Plans carry a parallel table (block | touches | clashes with); run non-clashing blocks at the same time by default; say why in one line when you don't.",
   "- Restart the VibeSquad server only when a merged change needs it, and log it (`vs log metric \"server restart: <why>\"`).",
@@ -1667,9 +1670,16 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const name =
           role === "lead"
             ? ord
-              ? `(old) ${laneName.toUpperCase()} ord${ord}`
+              ? formatDisplayTitle({
+                  role: "former-lead",
+                  laneId: lane,
+                  laneName,
+                  code: laneCodeFor(lane, currentTeams()),
+                  ord,
+                  job: old.labels.job,
+                })
               : `(old) ${oldTitle}`
-            : `(old) ${oldTitle || "BRAINSTORM"}`;
+            : `(old) ${oldTitle || "Buddy"}`;
         if (role === "brainstorm") {
           // The brief is the Buddy handoff: make sure it holds the predecessor's last turn
           // and the log names both Buddies before anything is relabelled or archived.

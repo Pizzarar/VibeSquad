@@ -368,7 +368,7 @@ test("Done-when #2 (250k auto-handoff & 300k forced synthesis): successor has sa
     // 1. Successor has same profile ("Lead - Gemini") and next ordN (ord19)
     assert.equal(createdAgents.length, 1);
     const succ = createdAgents[0];
-    assert.equal(succ.title, "★ SITE POLISH ord19");
+    assert.equal(succ.title, "★ Sit19");
     assert.equal(succ.labels.profile, "Lead - Gemini");
     assert.equal(succ.labels.ord, "19");
     assert.equal(succ.labels.role, "lead");
@@ -389,7 +389,7 @@ test("Done-when #2 (250k auto-handoff & 300k forced synthesis): successor has sa
     assert.equal(closedWorker.labels["paseo.parent-agent-id"], oldLead.id);
     const workerNotice = messages.find((m) => m.id === openWorker.id);
     assert.ok(workerNotice, "Expected open worker to be notified of new lead");
-    assert.match(workerNotice.text, /Report to ★ SITE POLISH ord19 \(succ-ord19\)/i);
+    assert.match(workerNotice.text, /Report to ★ Sit19 \(succ-ord19\)/i);
 
     // 4. Old lead's heartbeat deleted and handoff logged with trigger=hard-300
     assert.deepEqual(deletedHeartbeats, [oldLead.id]);
@@ -405,7 +405,7 @@ test("Done-when #2 (250k auto-handoff & 300k forced synthesis): successor has sa
     // 6. Once successor confirms takeover, old lead retires to (old) SITE POLISH ord18 / former-lead
     const confirmed = await coordinator.confirmTakeover(succ.id);
     assert.equal(confirmed.confirmed, true);
-    assert.equal(oldLead.title, "(old) SITE POLISH ord18");
+    assert.equal(oldLead.title, "(old) Sit18");
     assert.equal(oldLead.labels.role, "former-lead");
     assert.equal(oldLead.labels.ord, "18");
     assert.equal(coordinator.hasPendingTakeover(succ.id), false);
@@ -497,7 +497,7 @@ test("Plugin integration: successor turn_ended automatically confirms takeover a
     await turnEnded({ agent: oldLead, turnId: "t1", outcome: { kind: "completed" } }, { paseo });
     const succ = store.get("lead-2");
     assert.ok(succ, "Expected successor lead-2 to be spawned");
-    assert.equal(succ.title, "★ VIBESQUAD ord2");
+    assert.equal(succ.title, "★ Hub2");
     assert.equal(oldLead.labels.role, "lead");
 
     // 2. Even when agent.created fires for lead-2, oldLead is NOT retired prematurely
@@ -508,7 +508,7 @@ test("Plugin integration: successor turn_ended automatically confirms takeover a
     // 3. When lead-2 finishes its first turn (confirming takeover), oldLead is retired to (old) VIBESQUAD ord1
     await turnEnded({ agent: succ, turnId: "t2", outcome: { kind: "completed" } }, { paseo });
     assert.equal(oldLead.labels.role, "former-lead");
-    assert.equal(oldLead.title, "(old) VIBESQUAD ord1");
+    assert.equal(oldLead.title, "(old) Hub1");
 
     plugin();
   } finally {
