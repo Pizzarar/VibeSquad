@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
-import { sandboxPosture, sourceLabel } from "./paseoSandboxLogic";
+import { missingLine, sandboxPosture, sourceLabel } from "./paseoSandboxLogic";
 
 // Read-only sandbox / permission posture for the running agent. Changes stay in the Features menu.
 export function SandboxView({ agent }: { agent: PaseoAgent }) {
@@ -24,7 +24,8 @@ export function SandboxView({ agent }: { agent: PaseoAgent }) {
       document.removeEventListener("keydown", onKey);
     };
   }, [open]);
-  const rows = sandboxPosture(agent as any);
+  const posture = sandboxPosture(agent as any);
+  const missing = missingLine(posture);
   return (
     <span ref={ref} className="drawer-sandbox">
       <button
@@ -39,13 +40,14 @@ export function SandboxView({ agent }: { agent: PaseoAgent }) {
       </button>
       {open && (
         <div data-testid="drawer-sandbox-panel" className="drawer-sandbox-panel">
-          {rows.map((r) => (
+          {posture.rows.map((r) => (
             <div key={r.key} className="drawer-sandbox-row">
               <span className="drawer-sandbox-label">{r.label}</span>
-              <span className={r.source === "none" ? "drawer-sandbox-val missing" : "drawer-sandbox-val"}>{r.value}</span>
-              {r.source !== "none" && <span className="drawer-sandbox-src">{sourceLabel(r.source)}</span>}
+              <span className="drawer-sandbox-val" title={r.full}>{r.value}</span>
+              <span className="drawer-sandbox-src">{sourceLabel(r.source)}</span>
             </div>
           ))}
+          {missing && <div className="drawer-sandbox-note">{missing}</div>}
           <div className="drawer-sandbox-note">Read-only. Change features in the Features menu.</div>
         </div>
       )}
