@@ -3,7 +3,7 @@ import { Fragment } from "react";
 import { breadcrumbOf } from "./pinFocusLogic";
 import { enterSquadsHome } from "./pinFocus";
 
-export function TopBreadcrumb(props: { squadsHome: boolean; squadId: string; squadName: string; laneName: string | null; onSelectSquad: (id: string) => void }) {
+export function TopBreadcrumb(props: { squadsHome: boolean; squadId: string; squadName: string; laneName: string | null; hub?: boolean; onSelectSquad: (id: string) => void }) {
   const crumbs = breadcrumbOf(props);
   return (
     <nav className="top-breadcrumb" aria-label="Breadcrumb" data-testid="top-breadcrumb">

@@ -8,7 +8,7 @@ import { NeedsBadge, PinDot, setFullView, usePreview } from "./PinGrid";
 import { exitPinFocus, type PinFocus } from "./pinFocus";
 import { TopBreadcrumb } from "./Breadcrumb";
 import { escGoesHome } from "./pinFocusLogic";
-import { pinsForSquad, type Pin } from "./pins";
+import { isHubPin, pinsForSquad, type Pin } from "./pins";
 import { SendToBar } from "./PinIdeas";
 import { openAgent } from "./panes";
 import type { TeamView } from "./teams";
@@ -148,7 +148,7 @@ function PinFocusBar({ view, focus, onSelectSquad }: { view: TeamView; focus: Pi
       <button type="button" className="btn ghost small pin-focus-home" data-testid="pin-focus-home" title="Back to all teams (Esc)" onClick={exitPinFocus}>
         ⊞
       </button>
-      <TopBreadcrumb squadsHome={false} squadId={view.team.id} squadName={view.team.name} laneName={pin?.lane.name ?? focus.laneId} onSelectSquad={onSelectSquad} />
+      <TopBreadcrumb squadsHome={false} squadId={view.team.id} squadName={view.team.name} laneName={pin?.lane.name ?? focus.laneId} hub={pin ? isHubPin(pin) : false} onSelectSquad={onSelectSquad} />
       <span className="pin-focus-name">{pin?.lane.name ?? focus.laneId}</span>
       <span className="muted small pin-focus-squad">{view.team.name}</span>
       {pin && focus.agentId && <SendToBar pin={pin} />}

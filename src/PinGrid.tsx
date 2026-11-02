@@ -116,7 +116,7 @@ const PinRow = memo(function PinRow({ pin, onPin }: { pin: Pin; onPin: (pin: Pin
       onClick={() => onPin(pin)}
     >
       <PinDot pin={pin} />
-      <span className="pin-row-name">{pin.lane.name}</span>
+      <span className="pin-row-name">{isHubPin(pin) ? "RiffBot" : pin.lane.name}</span>
       <NeedsBadge pin={pin} />
       <PinCtx pin={pin} />
     </button>

@@ -86,8 +86,10 @@ function loadTeamsConfig(rootDir = REPO_ROOT) {
 /** Lane-code Buddy title: `<Code> Buddy[ · topic]` (docs/NAMING.md). */
 export function buddyTitle(laneId, laneName, topic, rootDir = REPO_ROOT) {
   const teams = loadTeamsConfig(rootDir).teams;
-  const code = laneCodeFor(laneId, Array.isArray(teams) ? teams : []);
-  return formatDisplayTitle({ role: "brainstorm", laneId, laneName, code, topic });
+  const list = Array.isArray(teams) ? teams : [];
+  const code = laneCodeFor(laneId, list);
+  const found = findLaneInRegistry(laneId, list);
+  return formatDisplayTitle({ role: "brainstorm", laneId, laneName, code, topic, hub: found ? isHubLane(found.team, found.lane) : false });
 }
 
 function laneDisplayName(laneId, rootDir = REPO_ROOT) {

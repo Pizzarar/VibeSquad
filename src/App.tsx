@@ -41,7 +41,7 @@ import {
   type Member,
   type TeamView,
 } from "./teams";
-import { titleFor } from "./teams";
+import { isHubLaneId, titleFor } from "./teams";
 import { AgentPanes } from "./AgentPanes";
 import { CommandPaletteHost, agentCtxItems, dateBucket, teamCtxItems, openContextMenu, openOverlay, parseUrlState, serializeUrlState, type DateBucket } from "./CommandPalette";
 import { PaseoUsageHeaderChip } from "./PaseoSettingsSection";
@@ -827,7 +827,7 @@ function EmptyBrainstormCard({
       <Avatar id={`bs-empty-${teamId}-${laneId}`} provider="claude" agentType="brainstorm" size={56} />
       <div className="card-body">
         <div className="card-top-row">
-          <span className="card-label">BRAINSTORM</span>
+          <span className="card-label">{isHubLaneId(laneId) ? "RIFFBOT" : "BRAINSTORM"}</span>
           <b className="talk-here" data-testid="talk-here-badge">
             TALK HERE
           </b>
