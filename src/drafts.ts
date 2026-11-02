@@ -28,8 +28,22 @@ function flush() {
   pending.clear();
 }
 
+// Settings "confirm before closing while agents run": App registers a guard; true = ask before unload.
+let closeGuard: (() => boolean) | null = null;
+export function setCloseGuard(fn: (() => boolean) | null): void {
+  closeGuard = fn;
+}
+
+export function onBeforeUnload(e: { preventDefault: () => void; returnValue?: unknown }): boolean {
+  flush();
+  if (!closeGuard?.()) return false;
+  e.preventDefault();
+  e.returnValue = ""; // legacy browsers need returnValue set to show the prompt
+  return true;
+}
+
 if (typeof window !== "undefined") {
-  window.addEventListener("beforeunload", flush);
+  window.addEventListener("beforeunload", onBeforeUnload);
   window.addEventListener("pagehide", flush);
   document.addEventListener("visibilitychange", () => document.hidden && flush());
 }

@@ -730,6 +730,14 @@ export function DrawerHeader({
         </div>
         <div className="drawer-actions" style={{ flexWrap: "wrap", gap: 4, alignItems: "center" }}>
           <button
+            data-testid="drawer-search-btn"
+            className="btn ghost small"
+            title="Search transcript, jump between prompts, filter the timeline"
+            onClick={() => window.dispatchEvent(new CustomEvent("vs:timeline-search", { detail: { agentId: agent.id } }))}
+          >
+            🔍 Search
+          </button>
+          <button
             data-testid="drawer-reload-agent-btn"
             className="btn ghost small"
             title="Reload / refresh agent session"
