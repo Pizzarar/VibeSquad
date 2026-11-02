@@ -422,6 +422,26 @@ export function settingsPaletteItems(): { id: string; label: string }[] {
   return allSettings().map((s) => ({ id: `setting:${s.id}`, label: `Settings: ${s.label}` }));
 }
 
+type FlashEl = {
+  getAttribute(name: string): string | null;
+  setAttribute(name: string, value: string): void;
+  removeAttribute(name: string): void;
+  click(): void;
+  scrollIntoView?: (opts?: { block?: "center" }) => void;
+};
+
+/** Settings-home jump: find the setting's element under root, open it if it is a tab, scroll to it and flash it.
+ *  The flash is a data attribute, not a className, so React re-renders of rehoused components don't clear it. */
+export function flashSettingTarget(root: { querySelector(sel: string): unknown }, id: string, ms = 1600): boolean {
+  const el = root.querySelector(`[data-setting-id="${id}"]`) as FlashEl | null; // ids are fixed [a-z.-] slugs
+  if (!el) return false;
+  if (el.getAttribute("role") === "tab" && el.getAttribute("aria-selected") !== "true") el.click();
+  el.scrollIntoView?.({ block: "center" });
+  el.setAttribute("data-flash", "");
+  setTimeout(() => el.removeAttribute("data-flash"), ms);
+  return true;
+}
+
 // ---- small pure helpers the UI uses ---------------------------------------------------------------
 
 export const MONO_STACK: Record<MonoFont, string> = {
@@ -446,6 +466,21 @@ export function composerKeyAction(
   if (mod) return "interrupt";
   if (e.shiftKey || e.altKey || touch) return "newline";
   return "send";
+}
+
+export const BUILTIN_NEW_AGENT_PROFILE = "Implement - Sonnet";
+
+/** The profile New Agent preselects: Settings › New Agent defaults › Default profile if it resolves, else the built-in one. */
+export function defaultNewAgentProfile(pref: string, resolve: (name: string) => string | undefined): string {
+  return (pref && resolve(pref)) || BUILTIN_NEW_AGENT_PROFILE;
+}
+
+/** Profiles arrived after New Agent opened: the profile to switch to, or null to leave the picker alone
+ *  (the user already picked one, or the default already shows). */
+export function reapplyDefaultProfile(current: string, pref: string, resolve: (name: string) => string | undefined, userPicked: boolean): string | null {
+  if (userPicked) return null;
+  const next = defaultNewAgentProfile(pref, resolve);
+  return next !== current ? next : null;
 }
 
 /** Alert tone → the pref that gates it. */

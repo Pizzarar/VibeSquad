@@ -503,6 +503,7 @@ export function PaseoSettingsSection({
             role="tab"
             aria-selected={tab === t.id}
             data-testid={`paseo-tab-${t.id}`}
+            data-setting-id={t.id === "daemon" ? "paseo-daemon" : t.id === "providers" ? "paseo-providers" : undefined}
             className={`btn small ${tab === t.id ? "on" : "ghost"}`}
             onClick={() => {
               setTab(t.id);

@@ -8,6 +8,7 @@ import { useUpdaterStatus } from "./userName";
 import {
   allSettings,
   exportPrefs,
+  flashSettingTarget,
   getPref,
   importPrefs,
   PREF_DEFAULTS,
@@ -50,7 +51,6 @@ export function SettingsHome(props: { onClose: () => void; onDiagnostics: () => 
   const [section, setSection] = useState<HomeSection>("app");
   const [visited, setVisited] = useState<Set<HomeSection>>(() => new Set(["app"]));
   const [q, setQ] = useState("");
-  const [flash, setFlash] = useState<string | null>(null);
   const [msg, setMsg] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
   const paneRef = useRef<HTMLDivElement>(null);
@@ -65,9 +65,8 @@ export function SettingsHome(props: { onClose: () => void; onDiagnostics: () => 
     if (!hit) return;
     setQ("");
     go(hit.section);
-    setFlash(id);
-    setTimeout(() => paneRef.current?.querySelector(`[data-setting-id="${CSS.escape(id)}"]`)?.scrollIntoView?.({ block: "center" }), 30);
-    setTimeout(() => setFlash((f) => (f === id ? null : f)), 1600);
+    // After the section renders: scroll to the setting's own row (rehoused ones too) and flash it.
+    setTimeout(() => paneRef.current && flashSettingTarget(paneRef.current, id), 30);
   };
 
   useEffect(() => {
@@ -98,7 +97,6 @@ export function SettingsHome(props: { onClose: () => void; onDiagnostics: () => 
     if (fileRef.current) fileRef.current.value = "";
   };
 
-  const scaleFlash = flash === "ui-scale";
   const hits = searchSettings(q);
   const searching = q.trim().length > 0;
 
@@ -155,17 +153,15 @@ export function SettingsHome(props: { onClose: () => void; onDiagnostics: () => 
                 Agents keep running when you close this window — they live in the Paseo daemon.
               </p>
             )}
-            {PREF_SECTIONS.has(n.id) && visiblePrefDefs().filter((d) => d.section === n.id).map((d) => <PrefRow key={d.key} k={d.key} flash={flash === d.key} />)}
+            {PREF_SECTIONS.has(n.id) && visiblePrefDefs().filter((d) => d.section === n.id).map((d) => <PrefRow key={d.key} k={d.key} />)}
             {n.id === "notifications" && <SoundTest />}
             {n.id === "app" && (
-              <div data-setting-id="ui-scale" className={scaleFlash ? "settings-row flash" : undefined}>
+              <div data-setting-id="ui-scale">
                 <TeamSettingsModal embedded parts={["scale"]} onClose={props.onClose} />
               </div>
             )}
             {REHOUSED[n.id] && (
-              <div data-setting-id={n.id} className={flash && allSettings().find((s) => s.id === flash)?.section === n.id ? "flash" : undefined}>
-                <TeamSettingsModal embedded parts={REHOUSED[n.id]} onClose={props.onClose} onJumpToProfiles={() => go("profiles")} />
-              </div>
+              <TeamSettingsModal embedded parts={REHOUSED[n.id]} onClose={props.onClose} onJumpToProfiles={() => go("profiles")} />
             )}
             {n.id === "about" && <About {...props} />}
           </div>
@@ -218,12 +214,12 @@ function ResetSectionButton({ section, onDone }: { section: PrefSection; onDone:
   );
 }
 
-function PrefRow({ k, flash = false, sectionTag }: { k: PrefKey; flash?: boolean; sectionTag?: string }) {
+function PrefRow({ k, sectionTag }: { k: PrefKey; sectionTag?: string }) {
   const d = prefDef(k);
   const [value, set] = usePref(k);
   const isDefault = value === PREF_DEFAULTS[k];
   return (
-    <div className={`settings-row ${flash ? "flash" : ""}`} data-setting-id={k} data-testid={`pref-row-${k}`}>
+    <div className="settings-row" data-setting-id={k} data-testid={`pref-row-${k}`}>
       <div className="settings-row-text">
         <label className="settings-row-label" htmlFor={`pref-${k}`}>
           {d.label}

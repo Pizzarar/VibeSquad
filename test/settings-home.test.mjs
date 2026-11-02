@@ -219,3 +219,66 @@ test("Settings home: one entry point, all sections, rehoused Team/Paseo/Profiles
   // The standalone modal still renders every part when no parts are passed.
   assert.match(src("TeamSettingsModal.tsx"), /const show = \(p: TeamSettingsPart\) => !parts \|\| parts\.includes\(p\);/);
 });
+
+test("nit 1: every jumpable setting has a data-setting-id anchor in the component that renders it", () => {
+  const rendered = ["SettingsHome.tsx", "TeamSettingsModal.tsx", "PaseoSettingsSection.tsx"].map(src).join("\n");
+  const anchors = new Set();
+  for (const m of rendered.matchAll(/data-setting-id=(?:"([^"]+)"|\{([^}]*)\})/g)) {
+    if (m[1]) anchors.add(m[1]);
+    else for (const s of m[2].matchAll(/"([a-z][a-z.-]*)"/g)) anchors.add(s[1]);
+  }
+  for (const s of P.EXTRA_SETTINGS) assert.ok(anchors.has(s.id), `anchor for ${s.id}`);
+  // Prefs rows carry their key; the old section-level wrapper id (which shadowed "profiles") is gone.
+  assert.match(src("SettingsHome.tsx"), /data-setting-id=\{k\}/);
+  assert.doesNotMatch(src("SettingsHome.tsx"), /data-setting-id=\{n\.id\}/);
+});
+
+test("nit 1: flashSettingTarget scrolls to, opens and flashes the real element", async () => {
+  const mk = (attrs) => {
+    const el = { attrs: { ...attrs }, clicks: 0, scrolled: null };
+    el.getAttribute = (n) => (n in el.attrs ? el.attrs[n] : null);
+    el.setAttribute = (n, v) => void (el.attrs[n] = v);
+    el.removeAttribute = (n) => void delete el.attrs[n];
+    el.click = () => el.clicks++;
+    el.scrollIntoView = (o) => (el.scrolled = o);
+    return el;
+  };
+  const row = mk({ "data-setting-id": "lan" });
+  const tab = mk({ "data-setting-id": "paseo-providers", role: "tab", "aria-selected": "false" });
+  const seen = [];
+  const root = { querySelector: (sel) => (seen.push(sel), sel.includes('"lan"') ? row : sel.includes('"paseo-providers"') ? tab : null) };
+  assert.equal(P.flashSettingTarget(root, "lan", 5), true);
+  assert.equal(seen[0], '[data-setting-id="lan"]');
+  assert.deepEqual(row.scrolled, { block: "center" });
+  assert.equal(row.getAttribute("data-flash"), "");
+  assert.equal(row.clicks, 0, "plain rows are not clicked");
+  assert.equal(P.flashSettingTarget(root, "paseo-providers", 5), true);
+  assert.equal(tab.clicks, 1, "a Paseo tab target is selected");
+  tab.attrs["aria-selected"] = "true";
+  P.flashSettingTarget(root, "paseo-providers", 5);
+  assert.equal(tab.clicks, 1, "an already-selected tab is not toggled");
+  assert.equal(P.flashSettingTarget(root, "nope"), false);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(row.getAttribute("data-flash"), null, "flash clears");
+});
+
+test("nit 2: New Agent re-applies the default profile once profiles load, unless the user picked one", () => {
+  const before = (n) => (n === "Implement - Sonnet" ? n : undefined); // built-in pack only
+  const after = (n) => (["Implement - Sonnet", "My Custom"].includes(n) ? n : undefined);
+  assert.equal(P.defaultNewAgentProfile("", after), "Implement - Sonnet");
+  assert.equal(P.defaultNewAgentProfile("My Custom", before), "Implement - Sonnet", "custom default not loaded yet");
+  assert.equal(P.reapplyDefaultProfile("Implement - Sonnet", "My Custom", after, false), "My Custom");
+  assert.equal(P.reapplyDefaultProfile("Implement - Sonnet", "My Custom", after, true), null, "user's pick wins");
+  assert.equal(P.reapplyDefaultProfile("My Custom", "My Custom", after, false), null, "already showing");
+  assert.equal(P.reapplyDefaultProfile("Implement - Sonnet", "", after, false), null, "no pref: leave it");
+  assert.equal(P.reapplyDefaultProfile("Implement - Sonnet", "Gone", after, false), null, "missing profile: leave it");
+  const ta = src("TeamActions.tsx");
+  assert.match(ta, /reapplyDefaultProfile\(profileName, getPref\("newAgent\.profile"\), resolveProfile, userPickedProfile\.current\)/);
+  assert.match(ta, /\}, \[profiles\]\);/);
+  assert.match(ta, /const pickProfile = \(name: string\) => \{\s*userPickedProfile\.current = true;/);
+});
+
+test("nit 3: no unused .settings-hit rule", () => {
+  const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+  assert.doesNotMatch(css, /\.settings-hit\b/);
+});
