@@ -7,6 +7,7 @@ import {
   ordOf,
   resolve,
   saveTeams,
+  shownLanesOf,
   slugifyFeatureLane,
   titleFor,
   type BuddyOverlapLogEntry,
@@ -103,7 +104,7 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   const [profileName, setProfileName] = useState("Implement - Sonnet");
   const profile = findProfile(profileName, profiles) ?? profiles[0]!;
   const [role, setRole] = useState<Role>(profile.role);
-  const [laneId, setLaneId] = useState(team.lanes[0]?.id ?? "");
+  const [laneId, setLaneId] = useState(shownLanesOf(team)[0]?.id ?? "");
   const [ord, setOrd] = useState("1");
   const [topic, setTopic, clearTopic] = useDraft(`new-agent:${team.id}:topic`);
   const [task, setTask] = useState("");
@@ -395,8 +396,8 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
             </Field>
             <Field label="TEAM">
               <select value={laneId} onChange={(e) => setLaneId(e.target.value)}>
-                {team.lanes.length === 0 && <option value="">(no teams)</option>}
-                {team.lanes.map((l) => (
+                {shownLanesOf(team).length === 0 && <option value="">(no teams)</option>}
+                {shownLanesOf(team).map((l) => (
                   <option key={l.id} value={l.id}>
                     {l.name}
                   </option>

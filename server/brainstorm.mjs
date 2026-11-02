@@ -7,6 +7,7 @@ import { effectiveAgentRole, findLaneInRegistry, formatDisplayTitle, isRetiredAg
 import { findProfileOrFallback, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
 import { briefRootFor, laneWorkingDir } from "./brief-path.mjs";
+import { detachLiveChildrenViaClient } from "./detach-children.mjs";
 import { BRIEF_HISTORY_KEEP, BRIEF_SHRINK_FROM, BRIEF_SHRINK_TO, backupBrief, writeBriefFile } from "./brief-write.mjs";
 import { liveInFlightBlock } from "./in-flight.mjs";
 import { refreshWhosHere } from "./whos-here.mjs";
@@ -40,6 +41,23 @@ export function readPaseoConfig(_rootDir = REPO_ROOT) {
     serverId = readFileSync(join(home, "server-id"), "utf8").trim();
   } catch {}
   return { listen: process.env.PASEO_DAEMON ?? listen, serverId, home };
+}
+
+/**
+ * Archive a retired Buddy without taking its lead and workers along (Paseo cascades archives to
+ * children, docs/PLAN_BUGS_BATCH1.md block 0). Live children are detached first; if any detach fails,
+ * the Buddy stays retired but unarchived rather than risk the cascade.
+ */
+export async function archiveBuddyKeepingChildren(client, agentId) {
+  if (typeof client?.archiveAgent !== "function") return { archived: false, detached: [], failed: [] };
+  const { detached, failed } = await detachLiveChildrenViaClient(client, agentId);
+  if (detached.length) console.log(`[vibesquad] detached ${detached.length} child(ren) of ${agentId} before archive: ${detached.join(", ")}`);
+  if (failed.length) {
+    console.warn(`[vibesquad] kept ${agentId} unarchived: could not detach ${failed.map((f) => f.id).join(", ")}`);
+    return { archived: false, detached, failed };
+  }
+  await client.archiveAgent(agentId).catch(() => {});
+  return { archived: true, detached, failed };
 }
 
 export function createDaemonClient(rootDir = REPO_ROOT) {
@@ -260,16 +278,21 @@ export function findExistingLaneBrainstorm(agents, laneId, topic = "") {
     .map((item) => item?.agent ?? item)
     .filter(Boolean)
     .filter((a) => {
-      if (isRetiredAgent(a)) return false;
+      // Closed is not retired: every agent is `closed` after a daemon restart, and a closed Buddy is
+      // reopened from its session, never replaced (docs/PLAN_BUGS_BATCH1.md block 0c). Archived or a
+      // retired role (former-brainstorm) still never counts.
+      if (a.archivedAt || isRetiredAgent({ labels: a.labels ?? {} })) return false;
       // A restarted Buddy keeps role=brainstorm on the daemon until its backgrounded retire lands.
       if (restartedAgents.has(a.id)) return false;
-      if (effectiveAgentRole(a) !== "brainstorm") return false;
+      if (effectiveAgentRole({ ...a, status: undefined }) !== "brainstorm") return false;
       const labels = a.labels ?? {};
       const aLane = String(labels.lane || labels.lead || "").trim().toLowerCase();
       if (aLane !== wantLane) return false;
       return parseBrainstormTopic(a) === wantTopic;
     });
-  matches.sort((a, b) => String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")));
+  // A running/idle Buddy beats a closed one; then newest first.
+  const closed = (a) => (a.status === "closed" ? 1 : 0);
+  matches.sort((a, b) => closed(a) - closed(b) || String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")));
   return matches[0] ?? null;
 }
 
@@ -279,7 +302,19 @@ const startInFlight = new Map();
 
 export function performBrainstormRestart(body, rootDir = REPO_ROOT) {
   const isStart = String(body?.reason || "").trim() === "start-brainstorm" || String(body?.agentId || "") === "start-brainstorm";
-  if (!isStart || body.forceNew) return performBrainstormRestartOnce(body, rootDir);
+  if (body?.forceNew) return performBrainstormRestartOnce(body, rootDir);
+  if (!isStart) {
+    // A restart click while the first one is still spawning (createAgent took ~110 s at 04:24Z) shares that
+    // spawn: two clicks made two Buddies, the second retired the first (docs/PLAN_BUGS_BATCH1.md block 0c).
+    const oldId = String(body?.agentId || "").trim();
+    if (!oldId) return performBrainstormRestartOnce(body, rootDir);
+    const rkey = `restart:${oldId}`;
+    const busy = startInFlight.get(rkey);
+    if (busy) return busy.then((r) => (r?.ok ? { ...r, reused: true, reason: "already-restarting" } : r));
+    const once = performBrainstormRestartOnce(body, rootDir).finally(() => startInFlight.delete(rkey));
+    startInFlight.set(rkey, once);
+    return once;
+  }
   const key = [body.teamId || body.team || "", body.laneId || body.lane || "", body.topic || ""].map((s) => String(s).trim().toLowerCase()).join(":");
   const pending = startInFlight.get(key);
   if (pending) return pending.then((r) => (r?.ok && r.newAgentId ? { ...r, reused: true, existingAgentId: r.newAgentId } : r));
@@ -397,9 +432,13 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
           existing.labels = { ...existing.labels, team: teamId };
           await client?.updateAgent?.(existing.id, { labels: existing.labels })?.catch?.(() => {});
         }
+        // Reopen a closed Buddy (daemon restart unloads every session) from its saved session.
+        const reopened = existing.status === "closed" && connected && typeof client?.refreshAgent === "function";
+        if (reopened) await client.refreshAgent(existing.id).catch((e) => console.warn(`[vibesquad] reopen ${existing.id} failed: ${e?.message ?? e}`));
         return {
           ok: true,
           reused: true,
+          ...(reopened ? { reopened: true } : {}),
           existingAgentId: existing.id,
           newAgentId: existing.id,
           title: existing.title,
@@ -433,7 +472,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
         const retiredTitle = rawOldTitle.toLowerCase().startsWith("(old)") ? rawOldTitle : `(old) ${rawOldTitle}`;
         await client.cancelAgent?.(agentId)?.catch?.(() => {});
         await client.updateAgent?.(agentId, { name: retiredTitle, labels: retiredLabels })?.catch?.(() => {});
-        await client.archiveAgent?.(agentId)?.catch?.(() => {});
+        await archiveBuddyKeepingChildren(client, agentId);
       }
       const retiredSummary = readBrainstormSummary(laneId, rootDir);
       appendVsLogEntry({
@@ -634,7 +673,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
         retireDone = (async () => {
           await client.cancelAgent?.(agentId)?.catch?.(() => {});
           await client.updateAgent?.(agentId, { name: retiredTitle, labels: retiredLabels })?.catch?.(() => {});
-          await client.archiveAgent?.(agentId)?.catch?.(() => {});
+          await archiveBuddyKeepingChildren(client, agentId);
           console.log(`[vibesquad] spawn-timing retire-background=${Date.now() - retireT0}ms`);
         })().catch(() => {});
       }

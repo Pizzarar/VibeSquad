@@ -8,15 +8,30 @@ import { fileURLToPath } from "node:url";
 const rootDir = resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
 
-export function computeNextBetaVersion(currentVersion) {
+/**
+ * Next beta version. `stableReleased(base)` says whether `v<base>` already shipped as stable: then the next
+ * beta moves to the next patch (0.1.1 shipped → 0.1.2-beta.1), because semver ranks 0.1.1-beta.N *below*
+ * 0.1.1 and nobody on 0.1.1 would ever be offered it (docs/PLAN_BUGS_BATCH1.md block 0d).
+ */
+export function computeNextBetaVersion(currentVersion, { stableReleased = () => false } = {}) {
   const clean = String(currentVersion || "0.1.1").trim().replace(/^v/, "");
-  const m = clean.match(/^(\d+\.\d+\.\d+)(?:-beta\.(\d+))?$/);
+  const m = clean.match(/^(\d+)\.(\d+)\.(\d+)(?:-beta\.(\d+))?$/);
   if (!m) {
     return `${clean.split("-")[0]}-beta.1`;
   }
-  const base = m[1];
-  const n = m[2] ? Number(m[2]) + 1 : 1;
+  const base = `${m[1]}.${m[2]}.${m[3]}`;
+  if (stableReleased(base)) return `${m[1]}.${m[2]}.${Number(m[3]) + 1}-beta.1`;
+  const n = m[4] ? Number(m[4]) + 1 : 1;
   return `${base}-beta.${n}`;
+}
+
+/** True when tag v<base> exists on origin (a shipped stable). */
+export function stableTagExists(base, cwd = rootDir) {
+  try {
+    return execFileSync("git", ["ls-remote", "--tags", "origin", `refs/tags/v${base}`], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim().length > 0;
+  } catch {
+    return false;
+  }
 }
 
 export function computeStableVersion(currentVersion, explicitVersion) {
@@ -85,7 +100,7 @@ if (isMain) {
   const targetVersion = opts.version
     ? opts.version.replace(/^v/, "")
     : channel === "beta"
-      ? computeNextBetaVersion(currentVersion)
+      ? computeNextBetaVersion(currentVersion, { stableReleased: (base) => stableTagExists(base) })
       : computeStableVersion(currentVersion);
 
   console.log(`[release:${channel}] Setting version ${currentVersion} -> ${targetVersion}`);

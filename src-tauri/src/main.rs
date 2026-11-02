@@ -88,6 +88,10 @@ pub struct DesktopConfig {
     pub last_route: String,
     #[serde(default = "default_update_channel")]
     pub update_channel: String,
+    /// True once the user picked a channel (Settings). Until then a beta build follows beta
+    /// (docs/PLAN_BUGS_BATCH1.md block 0d): the "stable" written at first run is only the default.
+    #[serde(default)]
+    pub update_channel_explicit: bool,
 }
 
 impl Default for DesktopConfig {
@@ -103,6 +107,7 @@ impl Default for DesktopConfig {
             last_hash: String::new(),
             last_route: String::new(),
             update_channel: default_update_channel(),
+            update_channel_explicit: false,
         }
     }
 }
@@ -719,7 +724,7 @@ async fn handle_desktop_status(State(state): State<Arc<SharedAppState>>) -> impl
         "setupMode": state.setup_mode.load(Ordering::SeqCst),
         "needsCount": state.needs_count.load(Ordering::SeqCst),
         "startAtLogin": cfg.start_at_login,
-        "updateChannel": cfg.update_channel,
+        "updateChannel": updater::effective_channel(&cfg.update_channel, cfg.update_channel_explicit, env!("CARGO_PKG_VERSION")),
         "localPort": state.local_port.load(Ordering::SeqCst),
         "configDir": config_dir().to_string_lossy(),
         "configWarning": get_config_warning(),
@@ -2419,6 +2424,23 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn beta_build_follows_beta_until_the_user_picks() {
+        // docs/PLAN_BUGS_BATCH1.md 0d: the first-run default "stable" must not pin a beta build to stable.
+        assert_eq!(updater::effective_channel("stable", false, "0.1.1-beta.5"), "beta");
+        assert_eq!(updater::effective_channel("stable", true, "0.1.1-beta.5"), "stable");
+        assert_eq!(updater::effective_channel("stable", false, "0.1.1"), "stable");
+        assert_eq!(updater::effective_channel("beta", false, "0.1.1"), "beta");
+        assert_eq!(updater::effective_channel("junk", false, "0.1.2-beta.1"), "beta");
+        // Old configs have no updateChannelExplicit field: it reads as false.
+        let old: DesktopConfig = serde_json::from_str(r#"{"updateChannel":"stable"}"#).unwrap();
+        assert!(!old.update_channel_explicit);
+        // The beta endpoint is the beta tag's latest.json, never releases/latest (which skips pre-releases).
+        assert!(updater::endpoint_for_channel("beta").ends_with("/releases/download/beta/latest.json"));
+        // A beta build on the beta channel takes the next beta, not the older same-number stable.
+        assert!(updater::is_version_newer_for_channel("0.1.1-beta.5", "0.1.2-beta.1", "beta").unwrap());
+    }
 
     fn make_test_state() -> Arc<SharedAppState> {
         let (http_client, ws_tls_connector) = build_http_and_ws_clients().unwrap();

@@ -392,20 +392,21 @@ export type SpawnRequest = {
 };
 
 /** Lane integrity: mark a lead or brainstorm as retired (role=former-*). Leads also get `(old) <Code><ord>[ · objective]`. */
+/** Patches only role (and ord); the daemon merges labels, so the rest are left as they are now, not as of `agent`. */
 export function retireAgent(agent: PaseoAgent, laneName?: string): Promise<void> {
   const l = labelsOf(agent);
   if (l.role === "brainstorm" || l.role === "buddy") {
     // Same title rule as the plugin's retirePredecessors: "(old) <title>".
     const title = (agent.title ?? "").trim();
     const name = title && !title.toLowerCase().startsWith("(old)") ? `(old) ${title}` : undefined;
-    return updateAgent(agent.id, { ...(name ? { name } : {}), labels: { ...l, role: "former-brainstorm" } });
+    return updateAgent(agent.id, { ...(name ? { name } : {}), labels: { role: "former-brainstorm" } });
   }
   const ord = l.ord;
   const laneId = l.lane ?? l.lead ?? "";
   const lane = laneName ?? laneId;
   return updateAgent(agent.id, {
     ...(lane && ord ? { name: retiredLeadTitle(lane, laneId, ord, l.job) } : {}),
-    labels: { ...l, role: "former-lead", ...(ord ? { ord } : {}) },
+    labels: { role: "former-lead", ...(ord ? { ord } : {}) },
   });
 }
 

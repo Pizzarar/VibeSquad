@@ -37,6 +37,7 @@ import {
   topicOf,
 } from "@vibesquad/server/identity.mjs";
 import { refreshWhosHere } from "@vibesquad/server/whos-here.mjs";
+import { detachLiveChildren } from "@vibesquad/server/detach-children.mjs";
 import { briefRootFor } from "@vibesquad/server/brief-path.mjs";
 import { deriveRole } from "@vibesquad/server/profiles.mjs";
 import { leanApplies, leanProviderOptions } from "@vibesquad/server/lean-tools.mjs";
@@ -1380,6 +1381,14 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           }
 
           const finalRole = labels.role || want.role || "";
+          // A lead outlives the Buddy (or old lead) that spawned it: Paseo archives children with their
+          // parent, so a chained lead and all its workers went down with every Buddy restart. Start it detached.
+          if (finalRole === "lead" && parentId) {
+            await Promise.resolve()
+              .then(() => paseo.agents.ref(agent.id).detach())
+              .then(() => log(`detached new lead ${agent.id} from parent ${parentId}`))
+              .catch((e: unknown) => log(`detach failed for lead ${agent.id}: ${e}`));
+          }
           const finalTopic = finalRole === "brainstorm" ? brainstormTopicOf({ ...labels, ...want }) : "";
           // An explicit lane label beats cwd for retirement: if the label lane was
           // overridden from cwd, the plugin is guessing, so never retire anyone on a guess.
@@ -1719,6 +1728,17 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         if (!cur || cur.archivedAt || cur.status === "closed") return;
         if (cur.labels.role !== "former-brainstorm") return;
         if (cur.status === "running" && attempt < 15) return scheduleBuddyArchive(paseo, id, attempt + 1);
+        // Paseo archives children with their parent: detach the Buddy's live lead (and anything else it
+        // spawned) first, and keep the Buddy unarchived if that fails (docs/PLAN_BUGS_BATCH1.md block 0).
+        const { detached, failed } = await detachLiveChildren(id, {
+          list: async () =>
+            ((await paseo.agents.list({ includeBackground: true, filter: { includeBackground: true }, page: { limit: 200 } })).entries as any[]).map(
+              (e) => e.agent,
+            ),
+          detach: (childId: string) => paseo.agents.ref(childId).detach(),
+        });
+        if (detached.length) log(`detached ${detached.join(", ")} from retired Buddy ${id} before archive`);
+        if (failed.length) return log(`kept ${id} unarchived: could not detach ${failed.map((f) => f.id).join(", ")}`);
         await Promise.resolve()
           .then(() => paseo.agents.ref(id).archive())
           .catch(() => deps.archiveAgent(id))

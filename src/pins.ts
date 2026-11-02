@@ -3,16 +3,19 @@
 // This file is the shared contract for the pinned-team UI. Keep it pure (no fetch, no React):
 // steps 1 (sidebar + grid), 2 (focus rail) and 3 (resolver + quick start) all build on it.
 import type { LaneDef, Member, TeamDef, TeamView } from "./teams.ts";
-import { brainstormUsedTokens } from "./teams.ts";
+import { brainstormUsedTokens, countsAsNeedsYou } from "./teams.ts";
 export { topicOfBrainstorm } from "./teams.ts";
 
-export type PinState = "pinned" | "done";
+/** "removed" lanes stay in teams.json (brief + history kept) but are hidden everywhere. */
+export type PinState = "pinned" | "done" | "removed";
 
 /** Extra lane fields stored in teams.json. Lanes without `state` count as pinned. */
 export type PinFields = {
   state?: PinState;
   /** ISO time the team was marked complete. */
   doneAt?: string;
+  /** ISO time the team was removed (Team ⋯ → Remove team). */
+  removedAt?: string;
   /** Fixed sort order inside the squad; falls back to teams.json order. */
   order?: number;
   /** Profile name of the last Brainstorm, reused when the pin quick-starts. */
@@ -26,7 +29,7 @@ export type Pin = {
   lane: PinLane;
   state: PinState;
   order: number;
-  /** The live main Brainstorm, or null when the pin has to quick-start one. */
+  /** The main Brainstorm (live, or closed but unarchived: opening it reopens the session), or null when the pin has to quick-start one. */
   brainstorm: Member | null;
   /** The live lead, or null. */
   lead: Member | null;
@@ -47,20 +50,27 @@ export type PinResolution =
 /** Lane briefs live in the VibeSquad repo for every squad (server/brainstorm.mjs reads them there). */
 export const briefPathFor = (laneId: string): string => `docs/brainstorm/${laneId}.md`;
 
-export const pinStateOf = (lane: LaneDef): PinState => ((lane as PinLane).state === "done" ? "done" : "pinned");
+export const pinStateOf = (lane: LaneDef): PinState => {
+  const s = (lane as PinLane).state;
+  return s === "done" || s === "removed" ? s : "pinned";
+};
+
+/** True for a lane removed with Remove team. Removed lanes never show as pins, Done entries or squad counts. */
+export const isRemovedLane = (lane: LaneDef | null | undefined): boolean => (lane as PinLane | undefined)?.state === "removed";
 
 const isLive = (m: Member | null | undefined): m is Member =>
   Boolean(m) && !m!.agent.archivedAt && m!.agent.status !== "closed";
 
 const live = (ms: Member[]) => ms.filter(isLive);
 
-/** Build the pins for one squad. Pins are ordered by `order`, then by teams.json order. The "_other" bucket is never a pin. */
+/** Build the pins for one squad. Pins are ordered by `order`, then by teams.json order. The "_other" bucket and removed lanes are never pins. */
 export function pinsForSquad(view: TeamView): { pinned: Pin[]; done: Pin[] } {
   const pins = view.lanes
-    .filter((l) => l.lane.id !== "_other")
+    .filter((l) => l.lane.id !== "_other" && !isRemovedLane(l.lane))
     .map((l, i): Pin => {
       const lane = l.lane as PinLane;
-      const brainstorm = isLive(l.brainstorm) ? l.brainstorm : null;
+      // A closed Buddy (daemon restart) is still the pin's Buddy: clicking reopens it, never replaces it (block 0c).
+      const brainstorm = l.brainstorm && !l.brainstorm.agent.archivedAt ? l.brainstorm : null;
       const workers = live(l.members.filter((m) => m.kind === "worker"));
       return {
         squad: view.team,
@@ -70,7 +80,7 @@ export function pinsForSquad(view: TeamView): { pinned: Pin[]; done: Pin[] } {
         brainstorm,
         lead: isLive(l.lead) ? l.lead : null,
         workers,
-        needsYou: l.members.filter((m) => m.attention && m.attention.tone !== "finished" && m.kind !== "old-lead").length,
+        needsYou: l.members.filter(countsAsNeedsYou).length,
         running: l.members.filter((m) => m.agent.status === "running").length,
         contextUsed: brainstorm ? brainstormUsedTokens(brainstorm.agent) : 0,
         topicBrainstorms: (l.topicBrainstorms ?? []).filter(isLive),

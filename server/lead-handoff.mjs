@@ -9,6 +9,9 @@ import {
   readBrainstormSummary,
 } from "./brainstorm.mjs";
 import { effectiveAgentRole, formatDisplayTitle, isDigestAgent, isRetiredAgent, laneCodeFor, ordOf } from "./identity.mjs";
+import { listDaemonAgents } from "./detach-children.mjs";
+// Re-exported: the HTTP handoff used `client.listAgents`, which DaemonClient lacks, so workers were never re-pointed.
+export { listDaemonAgents };
 import { LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE, readJsonFileWithBom } from "./user-settings.mjs";
 import { findProfile, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
@@ -900,12 +903,7 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
       profilesPath: body.profilesPath,
       async listAgents() {
         if (Array.isArray(body.agents)) return body.agents;
-        if (connected && client && typeof client.listAgents === "function") {
-          const res = await client.listAgents().catch(() => null);
-          if (Array.isArray(res?.entries)) return res.entries.map((e) => e.agent ?? e);
-          if (Array.isArray(res)) return res;
-        }
-        return [];
+        return connected && client ? listDaemonAgents(client) : [];
       },
       async getAgent(id) {
         if (body.oldLead && body.oldLead.id === id) return body.oldLead;

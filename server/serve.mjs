@@ -342,7 +342,18 @@ function isAllowedWsOrigin(origin) {
   }
 }
 
-export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().meshnetHost, tls = getTls() } = {}) {
+/**
+ * Where a plain-http request should go: the Host it used when this server answers to it, else the
+ * meshnet name, else the meshnet IP (the TLS cert always carries it), else localhost. Never an empty
+ * host: with no meshnet name configured the 426 page used to say "https://:4180" (PLAN_BUGS_BATCH1 block 5).
+ */
+export function httpsTargetHost(hostHeader, { port: p = port, meshnetHost = "", meshnetIp = "", allowed = isAllowedHostHeader } = {}) {
+  if (hostHeader && allowed(hostHeader)) return /:\d+$/.test(hostHeader) ? hostHeader : `${hostHeader}:${p}`;
+  return `${meshnetHost || meshnetIp || "localhost"}:${p}`;
+}
+
+export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().meshnetHost, meshnetIp = netConfig().meshnetIp, tls = getTls() } = {}) {
+  const target = (req) => httpsTargetHost(req.headers.host, { port: p, meshnetHost, meshnetIp });
   const handleMeshnetHttp = (req, res) => {
     const path = (req.url ?? "").split("?")[0];
     if (path === "/ca.crt" && (req.method === "GET" || req.method === "HEAD")) {
@@ -361,9 +372,15 @@ export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().mes
       return handleAuthStatus(req, res, rootDir);
     }
     if (path === "/pair" && req.method === "GET") {
-      const targetHost = isAllowedHostHeader(req.headers.host) ? req.headers.host : `${meshnetHost || "localhost"}:${p}`;
       res.statusCode = 302;
-      res.setHeader("location", `https://${targetHost}${req.url}`);
+      res.setHeader("location", `https://${target(req)}${req.url}`);
+      res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
+      return res.end();
+    }
+    // Phones type http://: send page loads straight to https instead of a dead-end 426.
+    if (req.method === "GET" || req.method === "HEAD") {
+      res.statusCode = 301;
+      res.setHeader("location", `https://${target(req)}${req.url}`);
       res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
       return res.end();
     }
@@ -371,7 +388,7 @@ export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().mes
     res.setHeader("Upgrade", "TLS/1.3, HTTP/1.1");
     res.setHeader("content-type", "text/plain; charset=utf-8");
     res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
-    res.end("426 Upgrade Required — use https://" + meshnetHost + ":" + p + " (or GET /VibeSquad-setup.exe or GET /ca.crt)");
+    res.end(`426 Upgrade Required — use https://${target(req)} (or GET /VibeSquad-setup.exe or GET /ca.crt)`);
   };
 
   const handleMeshnetHttps = (req, res) => {

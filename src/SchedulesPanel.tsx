@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { daemonClient, DEMO, updateAgent } from "./paseo";
 import { openAgent } from "./panes";
 import { nextScheduleStatus, scheduleActionsFor, type ScheduleAction } from "./sessionLifecycle";
-import { TEAMS, assignAgentToLane } from "./teams";
+import { TEAMS, assignAgentToLane, shownLanesOf } from "./teams";
 
 const call = (name: string, ...args: any[]): Promise<any> => {
   const fn = (daemonClient as any)[name];
@@ -106,7 +106,7 @@ export function SchedulesPanel({ onClose }: { onClose: () => void }) {
 }
 
 const allImportLanes = TEAMS.flatMap((t) =>
-  t.lanes.map((l) => ({ teamId: t.id, laneId: l.id, label: `${t.name} / ${l.name}` })),
+  shownLanesOf(t).map((l) => ({ teamId: t.id, laneId: l.id, label: `${t.name} / ${l.name}` })),
 );
 const DEFAULT_IMPORT_LANE = allImportLanes[0]?.laneId ?? "vibesquad";
 

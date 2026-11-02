@@ -27,10 +27,12 @@ import {
   TEAMS,
   UNASSIGNED,
   assignAgentToLane,
+  countsAsNeedsYou,
   getLeadThresholds,
   leadLadderFor,
   matchesSearch,
   resolve,
+  shownLanesOf,
   sortMembers,
   useTeams,
   type HandoffPair,
@@ -138,7 +140,7 @@ export async function startLaneBrainstorm(opts: {
   agents?: Map<string, PaseoAgent>;
 }): Promise<string | null> {
   const { teamId, laneId, laneName, cwd, onPick } = opts;
-  const existing = findCrossTeamBrainstorm(resolve(opts.agents ?? getPaseoState().agents), laneId);
+  const existing = findCrossTeamBrainstorm(resolve(opts.agents ?? getPaseoState().agents), laneId, "", { includeClosed: true });
   if (existing) {
     onPick(existing.agent.id);
     return existing.agent.id;
@@ -435,7 +437,7 @@ const SidebarTeam = memo(function SidebarTeam({
     [onQuickStart],
   );
   const firstAlert = v.members
-    .filter((m) => m.attention && m.attention.tone !== "finished" && m.kind !== "old-lead")
+    .filter(countsAsNeedsYou)
     .sort(alertOrder)[0];
   return (
     <div className={`team ${active ? "active" : ""} ${expanded ? "expanded" : "collapsed"}`} data-testid={`sidebar-team-${v.team.id}`}>
@@ -962,7 +964,7 @@ function UnassignedTray({
   const allLanes = useMemo(
     () =>
       TEAMS.flatMap((team) =>
-        team.lanes.map((lane) => ({
+        shownLanesOf(team).map((lane) => ({
           teamId: team.id,
           teamName: team.name,
           laneId: lane.id,
@@ -1062,9 +1064,9 @@ function SquadUnsortedGroup({ view, onPick }: { view: TeamView; onPick: (id: str
   const [assigningId, setAssigningId] = useState<string | null>(null);
   if (!unsorted.length) return null;
   const allLanes = [
-    ...view.team.lanes.map((l) => ({ teamId: view.team.id, laneId: l.id, label: `${view.team.name} / ${l.name}` })),
+    ...shownLanesOf(view.team).map((l) => ({ teamId: view.team.id, laneId: l.id, label: `${view.team.name} / ${l.name}` })),
     ...TEAMS.filter((t) => t.id !== view.team.id).flatMap((t) =>
-      t.lanes.map((l) => ({ teamId: t.id, laneId: l.id, label: `${t.name} / ${l.name}` })),
+      shownLanesOf(t).map((l) => ({ teamId: t.id, laneId: l.id, label: `${t.name} / ${l.name}` })),
     ),
   ];
   const adopt = async (a: PaseoAgent) => {
@@ -1141,7 +1143,7 @@ const TeamPage = memo(function TeamPage(props: {
 
   // Default squad page: one tile per pinned Team. FULL brings back the plumbing view below.
   if (!full) {
-    const teamCount = view.lanes.filter((l) => l.lane.id !== "_other" && l.lane.state !== "done").length;
+    const teamCount = view.lanes.filter((l) => l.lane.id !== "_other" && l.lane.state !== "done" && l.lane.state !== "removed").length;
     return (
       <div className="team-body">
         <header className="team-header">

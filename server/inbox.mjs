@@ -4,6 +4,7 @@ import os from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
   appendVsLogEntry,
+  archiveBuddyKeepingChildren,
   createDaemonClient,
   readBrainstormSummary,
   writeBrainstormSummary,
@@ -958,9 +959,7 @@ export async function handoffTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
         if (typeof client.cancelAgent === "function") {
           await client.cancelAgent(targetAgentId).catch(() => {});
         }
-        if (typeof client.archiveAgent === "function") {
-          await client.archiveAgent(targetAgentId).catch(() => {});
-        }
+        await archiveBuddyKeepingChildren(client, targetAgentId);
       }
     } catch {
       // daemon offline is non-fatal
@@ -1074,9 +1073,7 @@ export async function parkTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
         if (typeof client.cancelAgent === "function") {
           await client.cancelAgent(targetAgentId).catch(() => {});
         }
-        if (typeof client.archiveAgent === "function") {
-          await client.archiveAgent(targetAgentId).catch(() => {});
-        }
+        await archiveBuddyKeepingChildren(client, targetAgentId);
       }
     } catch {
       // daemon offline is non-fatal

@@ -1,7 +1,7 @@
 // Pinned teams step 3 (docs/PLAN_PINNED_FEATURES.md §3): the side-effecting half of the pin resolver.
 // src/pins.ts stays pure; this file talks to the dev-server middleware and the teams store.
 import type { PaseoAgent } from "@getpaseo/client";
-import { DEMO, archiveAgent, getPaseoState, retireAgent, sendMessage, upsertLocalAgent } from "./paseo";
+import { DEMO, archiveAgent, archiveWorkspace, getPaseoState, retireAgent, sendMessage, upsertLocalAgent } from "./paseo";
 import { parkIdeasInInbox } from "./IdeaInbox";
 import {
   allLaneIds,
@@ -20,6 +20,7 @@ import {
 } from "./pins";
 import { freezeLaneCodes, laneCodesForTeam } from "./identity";
 import { runMarkComplete } from "./pinComplete";
+import { runRemoveTeam, type RemovePlan, type RemoveResult, type WorktreeResult } from "./pinRemoveLogic";
 import { findCrossTeamBrainstorm, getTeams, resolve, saveTeams, titleFor, type TeamDef, type TeamsUpdater } from "./teams";
 
 export type OpenPinDeps = {
@@ -69,7 +70,7 @@ async function quickStart(pin: Pin, profile: string, deps: OpenPinDeps): Promise
   const squadId = pin.squad.id;
   const laneId = pin.lane.id;
   // A live Brainstorm may have appeared since the pin was built (another tab, the lead, a slow push).
-  const live = findCrossTeamBrainstorm(resolve(deps.agents ?? getPaseoState().agents), laneId);
+  const live = findCrossTeamBrainstorm(resolve(deps.agents ?? getPaseoState().agents), laneId, "", { includeClosed: true });
   if (live) return live.agent.id;
 
   const doFetch = deps.fetch ?? fetch;
@@ -210,6 +211,33 @@ export function markPinComplete(pin: Pin, deps: CompleteDeps = {}): Promise<{ ok
 export async function reopenPin(pin: Pin, deps: Pick<CompleteDeps, "fetch" | "saveTeams"> = {}): Promise<void> {
   await (deps.saveTeams ?? saveTeams)((cur) => patchLane(cur, pin.squad.id, pin.lane.id, { state: "pinned", doneAt: undefined }));
   if (!DEMO) await appendToBrief(pin.lane.id, `Reopened ${briefStamp()}`, deps.fetch ?? fetch).catch(() => {});
+}
+
+// ── Remove team (docs/PLAN_BUGS_BATCH1.md block 1) ────────────────────────────
+// Only the Team ⋯ menu's confirm dialog calls this; there is no route or CLI to remove a team.
+
+export type RemoveDeps = Pick<CompleteDeps, "fetch" | "saveTeams" | "archive"> & { archiveWorkspace?: (id: string) => Promise<unknown> };
+
+/** Archive the team's agents, hide the lane (state removed) and, when opted in, delete its worktrees + branches. */
+export function removePin(pin: Pin, plan: RemovePlan, opts: { deleteWorktrees: boolean }, deps: RemoveDeps = {}): Promise<RemoveResult> {
+  const doFetch = deps.fetch ?? fetch;
+  return runRemoveTeam(pin, plan, opts, {
+    archive: deps.archive ?? archiveAgent,
+    saveTeams: deps.saveTeams ?? saveTeams,
+    ...(DEMO ? {} : { readBrief: (laneId: string) => readBrief(laneId, doFetch), writeBrief: (laneId: string, c: string) => writeBrief(laneId, c, doFetch) }),
+    removeWorktrees: async (worktrees) => {
+      if (DEMO) return worktrees.map((w) => ({ ...w, worktree: "removed" as const, branchResult: "deleted" }));
+      const res = await doFetch("/__vibesquad/remove-team-worktrees", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ worktrees }),
+      });
+      const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; results?: WorktreeResult[] };
+      if (!res.ok || !body.ok) throw new Error(body.error ?? `Worktree removal failed (${res.status})`);
+      return body.results ?? [];
+    },
+    archiveWorkspace: deps.archiveWorkspace ?? archiveWorkspace,
+  });
 }
 
 // ── "Looks done" card dismissals (per Brainstorm message id) ──────────────────

@@ -457,6 +457,8 @@ test("Done-when #2: Spawn validation handles no team, wrong team, unknown lane +
       assert.equal(assignPatches[0].patch.labels.team, "efi");
       assert.equal(assignPatches[0].patch.labels.orphan, "");
 
+      // The daemon merges the patch and pushes the agent back (assignAgentToLane no longer mutates it).
+      uiMap.set(uiOrphanAgent.id, { ...uiOrphanAgent, labels: { ...uiOrphanAgent.labels, ...assignPatches[0].patch.labels } });
       const viewsAfter = buildTeamViews(resolveMembers(uiMap));
       assert.equal(
         viewsAfter.some((v) => v.team.id === "_unassigned"),

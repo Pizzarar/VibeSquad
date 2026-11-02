@@ -3172,6 +3172,14 @@ html, body, #root { overflow-x: hidden; }
 .pin-menu-list > .pin-complete.armed { color: var(--emerald); }
 .pin-menu-list > .pin-complete.blocked { color: var(--amber); white-space: normal; }
 .pin-row.done .pin-reopen { padding: 0 6px; }
+/* Remove team (src/PinRemove.tsx, docs/PLAN_BUGS_BATCH1.md block 1). */
+.pin-menu-list > .pin-remove-item { color: var(--hot-pink); }
+.pin-remove { display: flex; flex-direction: column; gap: 8px; min-width: min(520px, 80vw); }
+.pin-remove-section { font-weight: 600; }
+.pin-remove-list { margin: 0; padding-left: 18px; max-height: 180px; overflow-y: auto; font-size: 12px; }
+.pin-remove-list code { word-break: break-all; }
+.pin-remove-check { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.pin-remove-check.disabled { opacity: 0.6; cursor: default; }
 .pin-done-shelf { margin-top: 12px; }
 .pin-done-shelf > .pin-done-toggle { padding-left: 0; }
 .pin-done-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }

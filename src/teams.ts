@@ -453,25 +453,20 @@ export async function assignAgentToLane(
     throw new Error(`Unknown lane "${laneId}"`);
   }
   const existing = labelsOf(agent);
+  // Send only the keys that change. The daemon merges label patches, so resending the whole (possibly
+  // stale) snapshot would write back values changed since this render, e.g. a needs-you already cleared.
+  // The agent object is not mutated: the daemon's upsert updates the store.
   const nextLabels: Record<string, string> = {
-    ...existing,
     lane: found.lane.id,
     team: found.team.id,
     orphan: "",
-    role: existing.role || "worker",
+    ...(existing.role ? {} : { role: "worker" }),
+    ...("lead" in existing ? { lead: found.lane.id } : {}),
   };
-  if ("lead" in nextLabels) {
-    nextLabels.lead = found.lane.id;
-  }
-  if (agent.labels && typeof agent.labels === "object") {
-    Object.assign(agent.labels, nextLabels);
-  } else {
-    (agent as any).labels = { ...nextLabels };
-  }
   if (typeof updateFn === "function") {
     await updateFn(agent.id, { labels: nextLabels });
   }
-  return { laneId: found.lane.id, teamId: found.team.id, labels: nextLabels };
+  return { laneId: found.lane.id, teamId: found.team.id, labels: { ...existing, ...nextLabels } };
 }
 
 const memberCache = new WeakMap<PaseoAgent, Member>();
@@ -479,19 +474,25 @@ const sameAttention = (a: Attention, b: Attention) => a === b || (!!a && !!b && 
 
 const newest = (a: Member, b: Member) => (b.agent.updatedAt ?? "").localeCompare(a.agent.updatedAt ?? "");
 
-export function findCrossTeamBrainstorm(members: Member[], laneId: string, topic = ""): Member | null {
+/**
+ * The lane's main (or topic) Buddy. Live only by default; `includeClosed` also takes a closed, unarchived
+ * one (every session is closed after a daemon restart) so opening a pin reopens it instead of spawning a
+ * new Buddy (docs/PLAN_BUGS_BATCH1.md block 0c). A live one always wins.
+ */
+export function findCrossTeamBrainstorm(members: Member[], laneId: string, topic = "", opts: { includeClosed?: boolean } = {}): Member | null {
   const targetLane = canonicalLaneKey(laneId);
   if (!targetLane) return null;
   const wantTopic = topic.trim().toLowerCase();
   const hits = members.filter((m) => {
-    if (m.kind !== "brainstorm" || m.agent.archivedAt || m.agent.status === "closed") return false;
+    if (m.kind !== "brainstorm" || m.agent.archivedAt || (m.agent.status === "closed" && !opts.includeClosed)) return false;
     const l = labelsOf(m.agent);
     const mLane = canonicalLaneKey(m.laneId || l.lane || l.lead);
     if (mLane !== targetLane) return false;
     const mTopic = topicOfBrainstorm(m).trim().toLowerCase();
     return mTopic === wantTopic;
   });
-  return hits.sort(newest)[0] ?? null;
+  const closed = (m: Member) => (m.agent.status === "closed" ? 1 : 0);
+  return hits.sort((a, b) => closed(a) - closed(b) || newest(a, b))[0] ?? null;
 }
 
 // Pick the lane's lead/brainstorm: live (not closed) first, else the newest closed non-archived one,
@@ -874,13 +875,22 @@ export function checkBuddyOverlap(
   return result;
 }
 
+/** A squad's lanes minus removed ones (Remove team): what lane pickers and counts offer. */
+export const shownLanesOf = (team: Pick<TeamDef, "lanes">): LaneDef[] => (team.lanes ?? []).filter((l) => l.state !== "removed");
+
+/** Counts toward a needs-you badge: open attention on a live (not archived, not closed) agent that is not a retired lead. */
+export const countsAsNeedsYou = (m: Member): boolean =>
+  Boolean(m.attention) && m.attention!.tone !== "finished" && m.kind !== "old-lead" && !m.agent.archivedAt && m.agent.status !== "closed";
+
 export function buildTeamViews(members: Member[]): TeamView[] {
   const all = [...TEAMS, UNASSIGNED];
   return all
     .map((team) => {
       const mine = members.filter((m) => m.team.id === team.id);
+      // Removed lanes (Remove team) are hidden. An agent still labelled with one shows up as a dynamic lane so it can be found.
+      const shownLanes = shownLanesOf(team);
       const declaredMatches = (laneId: string) =>
-        team.lanes.some(
+        shownLanes.some(
           (l) =>
             l.id.toLowerCase() === laneId.toLowerCase() ||
             Boolean(l.aliases?.some((a) => a.toLowerCase() === laneId.toLowerCase())),
@@ -900,9 +910,9 @@ export function buildTeamViews(members: Member[]): TeamView[] {
         });
       }
       const laneDefs: LaneDef[] = [
-        ...team.lanes,
+        ...shownLanes,
         ...dynamicLanes,
-        { id: "_other", name: team.lanes.length || dynamicLanes.length ? "Other" : "Agents" },
+        { id: "_other", name: shownLanes.length || dynamicLanes.length ? "Other" : "Agents" },
       ];
       const lanes = laneDefs
         .map((lane) => {
@@ -949,7 +959,7 @@ export function buildTeamViews(members: Member[]): TeamView[] {
         team,
         members: mine,
         lanes,
-        needsYou: mine.filter((m) => m.attention && m.attention.tone !== "finished" && m.kind !== "old-lead").length,
+        needsYou: mine.filter(countsAsNeedsYou).length,
         running: mine.filter((m) => m.agent.status === "running").length,
         unsorted: mine.filter((m) => isUnsortedMember(m.agent)),
       };
