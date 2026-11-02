@@ -4,10 +4,11 @@ import { ChangesPanel } from "./ChangesPanel";
 import { FilesPanel } from "./FilesPanel";
 import { TerminalPanel } from "./TerminalPanel";
 import { ScriptsPanel } from "./ScriptsPanel";
+import { ProjectPanel } from "./ProjectPanel";
 import { claimPending, makePending, type PendingOpen } from "./fileLinks";
 
-export type DockTab = "Changes" | "Files" | "Terminal" | "Scripts";
-const TABS: DockTab[] = ["Changes", "Files", "Terminal", "Scripts"];
+export type DockTab = "Changes" | "Files" | "Terminal" | "Scripts" | "Project";
+const TABS: DockTab[] = ["Changes", "Files", "Terminal", "Scripts", "Project"];
 
 export type OpenRightDockDetail = {
   tab: DockTab;
@@ -122,6 +123,7 @@ export function RightDock({ agent }: RightDockProps) {
         {activeTab === "Files" && <FilesPanel agent={agent} targetFile={targetFile} targetLine={targetLine} targetNonce={targetNonce} />}
         {activeTab === "Terminal" && <TerminalPanel agent={agent} />}
         {activeTab === "Scripts" && <ScriptsPanel agent={agent} />}
+        {activeTab === "Project" && <ProjectPanel agent={agent} />}
       </div>
     </div>
   );

@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { expandFolderMentions } from "./projectContext";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
 import { daemonClient, DEMO, removeLocalAgent, sendMessage, upsertLocalAgent } from "./paseo";
@@ -300,11 +301,16 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
       restore: () => setDraft(restoredDraft(typed, draftRef.current)),
       onError: (e) => setSendError(`Send failed: ${e instanceof Error ? e.message : String(e)}`),
       run: async () => {
-        const text = await composeMessage(base, sentFiles, async ({ name, file }) => {
+        const composed = await composeMessage(base, sentFiles, async ({ name, file }) => {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const up = await (daemonClient as any).uploadFile?.({ cwd: agent.cwd, name, file });
           if (!up?.path) throw new Error(`upload of ${name} failed`);
           return up.path as string;
+        });
+        // Providers that ignore `@dir/` (Gemini) get a time-boxed "Folder: …" listing line appended.
+        const text = await expandFolderMentions(composed, agent.provider, async (dir) => {
+          const res = await daemonClient.listDirectory(agent.cwd ?? "", dir);
+          return res.entries.map((e) => ({ path: e.path, kind: e.kind }));
         });
         // BF-P1: Auto-restart without asking at >= restartTokens (150k) or when next turn would push it past 150k.
         if (isBs && (bsUsedTokens >= restartTokens || bsUsedTokens + Math.ceil(text.length / 3) >= restartTokens)) {
