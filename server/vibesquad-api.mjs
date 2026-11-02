@@ -8,6 +8,7 @@ import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspectFirstRunStatus, startManagedPaseoInstall } from "./first-run.mjs";
 import { resolveTeamsFilePath, resolveTeamsWritePath } from "./teams-file.mjs";
+import { seedHubBriefs } from "./hub-seed.mjs";
 import { ADE_GATED_READ_PATHS, handleFileList, handleSearch } from "./file-search.mjs";
 import {
   LEGACY_NEEDS_LABEL,
@@ -483,6 +484,7 @@ function handleTeams(req, res, rootDir) {
         throw e;
       }
       clearConfigWarning(file);
+      seedHubBriefs(cur.teams, teams, rootDir);
       sendJson(res, 200, {
         ok: true,
         revision: teamsRevision(resolveTeamsFilePath(rootDir)),
