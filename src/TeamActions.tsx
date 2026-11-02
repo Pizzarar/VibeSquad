@@ -57,6 +57,14 @@ export function buildName(i: NameInput): { title: string; labels: Record<string,
 export function Modal(props: { title: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode; wide?: boolean }) {
   const { onClose } = props;
   useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    return () => {
+      const cur = document.activeElement;
+      const stranded = !cur || cur === document.body || !!cur.closest?.(".modal-back"); // don't steal focus a jump/action already moved
+      if (stranded && opener && opener.isConnected && opener !== document.body) opener.focus();
+    };
+  }, []);
+  useEffect(() => {
     const k = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", k);
     return () => window.removeEventListener("keydown", k);

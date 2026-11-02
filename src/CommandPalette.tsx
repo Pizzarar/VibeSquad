@@ -293,6 +293,24 @@ export function CommandPaletteHost(props: {
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(0);
   const closed = useRef<string[]>([]);
+  const opener = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (mode) opener.current ??= document.activeElement as HTMLElement | null;
+    else if (!restoreOnClose.current) opener.current = null;
+  }, [mode]);
+  const restoreOnClose = useRef(false);
+  const dismissRef = useRef<() => void>(() => {});
+  const dismiss = () => {
+    restoreOnClose.current = true;
+    setMode(null);
+    setTimeout(() => {
+      const el = opener.current;
+      opener.current = null;
+      restoreOnClose.current = false;
+      const cur = document.activeElement;
+      if (el && el.isConnected && el !== document.body && (!cur || cur === document.body)) el.focus();
+    }, 0);
+  };
 
   // Remember closed tabs so "Reopen Closed Tab" has something to reopen.
   useEffect(() => {
@@ -318,7 +336,7 @@ export function CommandPaletteHost(props: {
       } else if (e.key === "?" && !mod && !typing) {
         e.preventDefault();
         setMode("shortcuts");
-      } else if (e.key === "Escape") setMode(null);
+      } else if (e.key === "Escape") dismissRef.current();
     };
     const onOpen = (e: Event) => setMode((e as CustomEvent<string>).detail as "search" | "shortcuts");
     window.addEventListener("keydown", onKey);
@@ -328,6 +346,8 @@ export function CommandPaletteHost(props: {
       window.removeEventListener("vs:open-overlay", onOpen);
     };
   }, []);
+
+  dismissRef.current = dismiss;
 
   const all = useMemo(() => [...props.members, ...props.archived], [props.members, props.archived]);
 
@@ -390,7 +410,7 @@ export function CommandPaletteHost(props: {
         />
       )}
       {mode === "palette" && (
-        <div className="modal-back" onMouseDown={() => setMode(null)}>
+        <div className="modal-back" onMouseDown={dismiss}>
           <div className="cmd-palette" data-testid="command-palette" role="dialog" aria-label="Command palette" onMouseDown={(e) => e.stopPropagation()}>
             <input
               autoFocus

@@ -76,18 +76,24 @@ export function DaemonStatusBanner({ onOpenDiagnostics }: { onOpenDiagnostics?: 
     return () => clearTimeout(t);
   }, [down]);
 
+  const inFlight = useRef(false);
   const retry = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       // connect() may never settle on a dead socket; cap the wait so RETRY NOW re-enables
       const attempt = (async () => {
         await (daemonClient as unknown as { connect?: () => Promise<unknown> }).connect?.();
         await dc.getDaemonStatus?.();
       })();
-      await Promise.race([attempt, new Promise((r) => setTimeout(r, RETRY_TIMEOUT_MS))]);
+      await Promise.race([attempt, new Promise((r) => { timer = setTimeout(r, RETRY_TIMEOUT_MS); })]);
     } catch {
       /* still down; the scrim stays */
     } finally {
+      clearTimeout(timer);
+      inFlight.current = false;
       setBusy(false);
     }
   }, []);
