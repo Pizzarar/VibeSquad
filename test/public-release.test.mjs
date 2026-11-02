@@ -120,13 +120,13 @@ describe("pairing in an isolated home", () => {
     assert.equal(codes[5], 429);
   });
 
-  test("5 failed attempts wipe active codes", () => {
+  test("failed attempts from other IPs don't wipe active codes", () => {
     auth.resetPairRateLimitForTest();
     const code = auth.createPairCode();
     for (let i = 0; i < 5; i++) auth.handlePairRedeem(fakeReq({ url: "/pair?code=999999", remote: `198.51.100.${i + 10}` }), fakeRes());
     const res = fakeRes();
     auth.handlePairRedeem(fakeReq({ url: `/pair?code=${code}`, remote: "198.51.100.99" }), res);
-    assert.equal(res.statusCode, 401);
+    assert.equal(res.statusCode, 302);
   });
 });
 
