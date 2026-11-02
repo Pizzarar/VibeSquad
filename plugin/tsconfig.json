@@ -11,5 +11,5 @@
     "allowImportingTsExtensions": true,
     "erasableSyntaxOnly": true
   },
-  "include": ["*.ts", "*.d.ts"]
+  "include": ["*.ts", "*.d.ts", "server/**/*.ts"]
 }

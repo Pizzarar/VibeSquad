@@ -13,6 +13,7 @@ import {
   resetFirstRunState,
   startManagedPaseoInstall,
 } from "../server/first-run.mjs";
+import { ownerHeaders } from "./helpers/local-owner.mjs";
 
 const ROOT = join(fileURLToPath(import.meta.url), "../../");
 const tmp = mkdtempSync(join(tmpdir(), "vs-first-run-"));
@@ -79,7 +80,7 @@ test("existing daemon is reused: source existing, install does not run npm", asy
   assert.equal(st.paseo.source, "existing");
   assert.equal(st.paseo.installed, true);
   await withApi(opts, async (base) => {
-    const r = await fetch(`${base}/__vibesquad/first-run/install-paseo`, { method: "POST" });
+    const r = await fetch(`${base}/__vibesquad/first-run/install-paseo`, { method: "POST", headers: ownerHeaders() });
     const body = await r.json();
     assert.equal(body.alreadyInstalled, true);
   });
@@ -150,13 +151,13 @@ test("failed install surfaces an error and a retry succeeds", async () => {
     },
   };
   await withApi(opts, async (base) => {
-    await (await fetch(`${base}/__vibesquad/first-run/install-paseo`, { method: "POST" })).json();
+    await (await fetch(`${base}/__vibesquad/first-run/install-paseo`, { method: "POST", headers: ownerHeaders() })).json();
     const failed = await (await fetch(`${base}/__vibesquad/first-run/status`)).json();
     assert.equal(failed.paseo.installing, false);
     assert.equal(failed.paseo.installed, false);
     assert.match(failed.paseo.error, /ENOTFOUND/);
 
-    await (await fetch(`${base}/__vibesquad/first-run/install-paseo`, { method: "POST" })).json();
+    await (await fetch(`${base}/__vibesquad/first-run/install-paseo`, { method: "POST", headers: ownerHeaders() })).json();
     const ok = await (await fetch(`${base}/__vibesquad/first-run/status`)).json();
     assert.equal(ok.paseo.installed, true);
     assert.equal(ok.paseo.error, null);

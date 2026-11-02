@@ -245,7 +245,7 @@ export function buildBrainstormInitialPrompt({ laneId, laneUpper, buddyName, sum
     "",
     "Rules (BF-P1):",
     `- Update \`docs/brainstorm/${laneId}.md\` after every decision as a short diff (< ~5k tokens; sections: Who's here / Done when / Decided / Open / In flight). Keep \`## Done when\`. Never edit \`## Who's here\`; VibeSquad writes it. The brief is the handoff; do not write dated docs/BRAINSTORM_HANDOFF_*.md files.`,
-    `- Never complete the team yourself. When the lead reported PASS on the last plan block and nothing is Open, post "<Team> looks done. ✓ Mark complete · Not yet" with the line \`vs:looks-done\` in a code fence.`,
+    ...(hubTeams ? [] : [`- Never complete the team yourself. When the lead reported PASS on the last plan block and nothing is Open, post "<Team> looks done. ✓ Mark complete · Not yet" with the line \`vs:looks-done\` in a code fence.`]),
     `- To find your current lead for handoff: run \`vs who lead\`.`,
     `- Before handing off a plan that adds a command, rule or feature, check for an existing primitive (\`paseo --help\`, Paseo MCP tool list, \`vs --help\`, skills). Name what you checked in the plan's Decided section.`,
     `- At >=80k context tokens, update the brief now. At the hard limit VibeSquad retires you; the next click on the pin starts a fresh Brainstorm from the brief.`,
@@ -672,8 +672,10 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       liveForBoot = Array.isArray(src) ? src : null;
     }
     timer.mark("inFlight");
-    const bootTeam = (loadTeamsConfig(rootDir).teams ?? []).find((t) => t.id === teamId);
-    const bootLane = bootTeam?.lanes?.find((l) => l.id === laneId);
+    const bootTeams = loadTeamsConfig(rootDir).teams ?? [];
+    const sameId = (x, y) => String(x ?? "").toLowerCase() === String(y ?? "").toLowerCase();
+    const bootTeam = bootTeams.find((t) => sameId(t.id, teamId));
+    const bootLane = bootTeam?.lanes?.find((l) => sameId(l.id, laneId));
     const hubTeams = bootTeam && bootLane && !topic && isHubLane(bootTeam, bootLane) ? hubTeamsBlock({ team: bootTeam, agents: liveForBoot }) : "";
     const initialPrompt = buildBrainstormInitialPrompt({
       hubTeams,
@@ -684,7 +686,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       summaryContent: summary.content,
       latestPlan,
       pendingPrompt,
-      vibeMode: (loadTeamsConfig(rootDir).teams ?? []).find((t) => t.id === teamId)?.vibeMode === true,
+      vibeMode: bootTeam?.vibeMode === true,
     });
 
     // The spawn env sets VS_BRIEF_INLINE, so the plugin won't log brief-injected; this is the live check for the lane.

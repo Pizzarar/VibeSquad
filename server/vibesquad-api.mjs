@@ -8,7 +8,8 @@ import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspectFirstRunStatus, startManagedPaseoInstall } from "./first-run.mjs";
 import { resolveTeamsFilePath, resolveTeamsWritePath } from "./teams-file.mjs";
-import { handleFileList, handleSearch } from "./file-search.mjs";
+import { seedHubBriefs } from "./hub-seed.mjs";
+import { ADE_GATED_READ_PATHS, handleFileList, handleSearch } from "./file-search.mjs";
 import {
   LEGACY_NEEDS_LABEL,
   LEGACY_USER_TYPE,
@@ -20,7 +21,7 @@ import {
   saveUserSettings,
   stripBom,
 } from "./user-settings.mjs";
-import { authenticate, getAuthStatus, handleCaCrt, handleDevices, handlePairRedeem, handlePairStart, handleRevoke, hasDistIndex, isLocal, isLocalBrowserSafe, netConfig } from "./auth.mjs";
+import { authenticate, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handlePairRedeem, handlePairStart, handleRevoke, hasDistIndex, isLocal, isLocalBrowserSafe, isLocalOwner, netConfig, READ_ONLY_ERROR } from "./auth.mjs";
 import {
   appendVsLogEntry,
   createDaemonClient,
@@ -323,7 +324,22 @@ export function setExposure(lanEnabled, exposedIps, toggleHandler = exposure.tog
   };
 }
 
+// Trusted = may read. Owner = may also change things: a paired device, or a loopback caller with the local token.
 const isTrusted = (req) => isLocalBrowserSafe(req) || Boolean(authenticate(req));
+const isOwner = (req) => Boolean(authenticate(req)) || isLocalOwner(req);
+const localAccess = (req) => (isOwner(req) ? "owner" : "read-only");
+
+// GETs a read-only loopback caller still can't make: they hand out a credential, write a key, or launch provider CLIs.
+export function isGatedRead(path, url = "") {
+  if (path === "/__vibesquad/paseo/pair") return true; // daemon pairing offer (a credential)
+  if (path === "/__vibesquad/push/vapid-public-key") return true; // creates and writes vapid.json on first call
+  if (path === "/__vibesquad/paseo/providers/diagnostic" || path === "/__vibesquad/paseo/providers/models") return true; // runs the provider's own CLI
+  if (path === "/__vibesquad/paseo/usage") return new URL(url, "http://x").searchParams.get("refresh") === "1"; // forces provider API calls
+  if (path === "/__vibesquad/paseo/surface") return true; // daemon config: listen, CORS, hub, backups
+  if (path === "/__vibesquad/local-image") return true; // file contents
+  if (ADE_GATED_READ_PATHS.includes(path)) return true; // quick open / find in files: workspace file names and contents
+  return false;
+}
 
 export function handleHealth(req, res, rootDir = REPO_ROOT) {
   if (req.method !== "GET" && req.method !== "HEAD") {
@@ -335,6 +351,7 @@ export function handleHealth(req, res, rootDir = REPO_ROOT) {
   const { port } = netConfig();
   const warnings = getConfigWarnings();
   const extra = {
+    localAccess: localAccess(req),
     port,
     lanEnabled: exposure.lanEnabled,
     exposedIps: exposure.exposedIps,
@@ -352,7 +369,7 @@ export function handleAuthStatus(req, res, rootDir = REPO_ROOT) {
   }
   const full = getAuthStatus(rootDir);
   if (!isTrusted(req)) return sendJson(res, 200, { ok: true, distReady: full.distReady, caFingerprint: full.caFingerprint });
-  return sendJson(res, 200, full);
+  return sendJson(res, 200, { ...full, localAccess: localAccess(req) });
 }
 
 /** Content hash of the registry file; a PUT that sends a stale one gets 409 instead of overwriting newer edits. */
@@ -467,6 +484,7 @@ function handleTeams(req, res, rootDir) {
         throw e;
       }
       clearConfigWarning(file);
+      seedHubBriefs(cur.teams, teams, rootDir);
       sendJson(res, 200, {
         ok: true,
         revision: teamsRevision(resolveTeamsFilePath(rootDir)),
@@ -582,6 +600,16 @@ const insideDir = (child, root) => {
   return c === r || c.startsWith(r.endsWith(sep) ? r : r + sep);
 };
 
+// UNC and device paths (\\host\share, //host/share, \\?\UNC\..., \\.\pipe) make Windows contact another
+// machine (and send NTLM credentials) on a mere stat. Refuse them before any fs call.
+export const isUncLikePath = (p) => /^[\\/]{2}/.test(String(p ?? ""));
+
+/** Lexical allowlist check on the resolved path, before anything touches the disk. Roots count in both forms. */
+const lexicallyInside = (p, roots) => {
+  const r = resolve(String(p));
+  return roots.some((root) => insideDir(r, root) || insideDir(r, resolve(root)));
+};
+
 function paseoAgentCwds() {
   const out = [];
   const agentsRoot = join(process.env.PASEO_HOME || join(homedir(), ".paseo"), "agents");
@@ -635,10 +663,14 @@ async function handleAttach(req, res, rootDir, opts = {}) {
   }
   try {
     const { cwd, files } = await readBody(req);
-    if (typeof cwd !== "string" || !existsSync(cwd) || !statSync(cwd).isDirectory()) return sendJson(res, 400, { error: "cwd is not a directory" });
+    if (typeof cwd !== "string" || isUncLikePath(cwd)) return sendJson(res, 400, { error: "cwd is not a directory" });
+    const roots = allowedAttachRoots(rootDir, opts);
+    if (!lexicallyInside(cwd, roots)) return sendJson(res, 403, { error: "cwd is not a known agent or team path" });
+    if (!existsSync(cwd) || !statSync(cwd).isDirectory()) return sendJson(res, 400, { error: "cwd is not a directory" });
     const realCwd = realpathSync(resolve(cwd));
-    if (!allowedAttachRoots(rootDir, opts).some((root) => insideDir(realCwd, root))) return sendJson(res, 403, { error: "cwd is not a known agent or team path" });
+    if (!roots.some((root) => insideDir(realCwd, root))) return sendJson(res, 403, { error: "cwd is not a known agent or team path" });
     if (!Array.isArray(files) || !files.length) return sendJson(res, 400, { error: "no files given" });
+    if (files.some((f) => isUncLikePath(f))) return sendJson(res, 403, { error: "source path is not allowed" });
     const dest = join(realCwd, "scratch", "inputs");
     mkdirSync(dest, { recursive: true });
     const copied = [];
@@ -1217,9 +1249,8 @@ export function resolveAllowedImage(raw, roots = imageAllowedRoots(), extraCwd =
     let p = String(raw ?? "");
     if (!p || p.includes("\0")) return null;
     if (/^file:/i.test(p)) p = fileURLToPath(p);
+    if (isUncLikePath(p)) return null;
     if (!IMAGE_MIME[extname(p).toLowerCase()]) return null;
-    const real = realpathSync(resolve(p));
-    if (!statSync(real).isFile()) return null;
     const allRoots = Array.isArray(roots) ? [...roots] : imageAllowedRoots();
     let resolvedExtra = null;
     if (typeof extraCwd === "string" && extraCwd.trim()) {
@@ -1227,11 +1258,14 @@ export function resolveAllowedImage(raw, roots = imageAllowedRoots(), extraCwd =
     } else if (extraCwd && typeof extraCwd === "object") {
       resolvedExtra = extraCwd.extraCwd || (extraCwd.agentId ? lookupAgentCwd(extraCwd.agentId, extraCwd.paseoHome) : null);
     }
-    if (resolvedExtra) {
+    if (resolvedExtra && !isUncLikePath(resolvedExtra)) {
       try {
         allRoots.push(realpathSync(resolve(resolvedExtra)));
       } catch {}
     }
+    if (!lexicallyInside(p, allRoots.filter((r) => !isUncLikePath(r)))) return null;
+    const real = realpathSync(resolve(p));
+    if (!statSync(real).isFile()) return null;
     const norm = (x) => (process.platform === "win32" ? x.toLowerCase() : x);
     const r = norm(real);
     return allRoots.some((root) => {
@@ -1279,11 +1313,13 @@ async function handleWorkspacePackageScripts(req, res, rootDir, opts = {}) {
   }
   try {
     const cwd = new URL(req.url, "http://x").searchParams.get("cwd") ?? "";
-    if (!cwd || !existsSync(cwd) || !statSync(cwd).isDirectory()) {
+    if (!cwd || isUncLikePath(cwd)) return sendJson(res, 400, { ok: false, scripts: {} });
+    const allowed = allowedAttachRoots(rootDir, opts);
+    if (!lexicallyInside(cwd, allowed)) return sendJson(res, 403, { ok: false, error: "cwd not in allowed roots" });
+    if (!existsSync(cwd) || !statSync(cwd).isDirectory()) {
       return sendJson(res, 400, { ok: false, scripts: {} });
     }
     const realCwd = realpathSync(resolve(cwd));
-    const allowed = allowedAttachRoots(rootDir, opts);
     if (!allowed.some((root) => insideDir(realCwd, root))) {
       return sendJson(res, 403, { ok: false, error: "cwd not in allowed roots" });
     }
@@ -1305,16 +1341,23 @@ async function handleWorkspacePackageScripts(req, res, rootDir, opts = {}) {
 }
 
 // Connect-style middleware: handles /__vibesquad/* and /api/*, calls next() for everything else.
-// Everything except health, /ca.crt and /pair needs a paired device or a same-origin loopback caller.
+// Everything except health, /ca.crt, /pair and /__vibesquad/local-login needs a paired device or a same-origin loopback
+// caller; a loopback caller without the local token is read-only (GET/HEAD, minus isGatedRead).
 export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
   return (req, res, next) => {
     const path = (req.url ?? "").split("?")[0];
     if (path === "/api/health" || path === "/__vibesquad/health") return handleHealth(req, res, rootDir);
     if (path === "/ca.crt") return handleCaCrt(req, res);
     if (path === "/pair") return handlePairRedeem(req, res);
-    if ((path.startsWith("/__vibesquad/") || path.startsWith("/api/")) && !isTrusted(req)) {
+    if (path === "/__vibesquad/local-login") return handleLocalLogin(req, res);
+    if (path === "/__vibesquad/local-login/nonce") return handleLocalLoginNonce(req, res);
+    const isApi = path.startsWith("/__vibesquad/") || path.startsWith("/api/");
+    if (isApi && !isTrusted(req)) {
       if (isLocal(req)) return sendJson(res, 403, { error: "forbidden" });
       return sendJson(res, 401, { error: "unpaired device" });
+    }
+    if (isApi && !isOwner(req) && ((req.method !== "GET" && req.method !== "HEAD") || isGatedRead(path, req.url))) {
+      return sendJson(res, 403, { error: READ_ONLY_ERROR, readOnly: true });
     }
     if (Number(req.headers["content-length"] ?? 0) > MAX_BODY_BYTES) return sendJson(res, 413, { error: "payload too large" });
     if (path === "/api/auth/status" || path === "/__vibesquad/auth/status") return handleAuthStatus(req, res, rootDir);

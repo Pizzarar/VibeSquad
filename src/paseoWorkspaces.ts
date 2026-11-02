@@ -1,5 +1,6 @@
 // Block C wrappers: workspace/project CRUD + branch validation. Kept out of paseo.ts on purpose.
-import { daemonClient } from "./paseo";
+import { daemonClient, getPaseoState } from "./paseo";
+import { createInflight, findWorkspaceForCwd, unsafeWorkspaceCwdReason, workspaceKey } from "./ensureWorkspaceLogic";
 import type { PaseoWorkspace } from "@getpaseo/client";
 import type { CreateSource } from "./workspaceLogic";
 
@@ -50,4 +51,27 @@ export const validateBranch = (cwd: string, branchName: string) => withTimeout(d
 export async function branchSuggestions(cwd: string, query: string) {
   const res = await withTimeout(daemonClient.getBranchSuggestions({ cwd, query, limit: 8 }), 6000, "getBranchSuggestions");
   return res.error ? [] : res.branches;
+}
+
+const ENSURE_TIMEOUT_MS = 15000;
+const ensureInflight = createInflight<{ workspaceId: string; created: boolean }>();
+
+/**
+ * Makes sure the daemon has a workspace covering `cwd` (Changes, terminals and scripts hang without one).
+ * Resolves against the live workspace list first; otherwise registers the folder as a local workspace.
+ * Concurrent calls for the same folder share one request; a later call finds the new workspace and returns created: false.
+ */
+export function ensureWorkspace(cwd: string): Promise<{ workspaceId: string; created: boolean }> {
+  const dir = cwd.trim();
+  const unsafe = unsafeWorkspaceCwdReason(dir);
+  if (unsafe) return Promise.reject(new Error(unsafe));
+  return ensureInflight.run(workspaceKey(dir), async () => {
+    const known = findWorkspaceForCwd(dir, getPaseoState().workspaces);
+    if (known) return { workspaceId: known, created: false };
+    const { workspaceId } = await createStandaloneWorkspace({ kind: "directory", path: dir }, undefined, ENSURE_TIMEOUT_MS).catch((e: Error) => {
+      throw new Error(/timed out/i.test(e.message) ? `Paseo didn't register ${dir} within 15s. Check that the daemon is running and the folder exists, then retry.` : `Couldn't add ${dir} as a workspace: ${e.message}`);
+    });
+    if (!workspaceId) throw new Error(`Paseo didn't return a workspace for ${dir}.`);
+    return { workspaceId, created: true };
+  });
 }
