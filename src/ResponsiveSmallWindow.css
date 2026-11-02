@@ -1,6 +1,10 @@
 /* ADE batch I: small window (900x700), 120% zoom wrapping, 4K scaling, diagnostics UI. */
-.daemon-down-banner { position: fixed; top: 0; left: 0; right: 0; z-index: 9000; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 12px; background: #5a1420; color: #ffd9de; border-bottom: 2px solid #ff4d6a; font-size: 12px; }
-.daemon-down-banner .spacer { flex: 1; }
+.daemon-disconnect-scrim { position: fixed; inset: 0; z-index: 9500; background: rgba(5, 6, 13, 0.72); backdrop-filter: blur(2px); display: flex; align-items: center; justify-content: center; pointer-events: auto; }
+.daemon-disconnect-card { display: flex; flex-direction: column; gap: 12px; align-items: center; padding: 20px 24px; max-width: 92vw; background: var(--panel); border: 1px solid #ff4d6a; box-shadow: 0 0 24px rgba(255, 77, 106, 0.35); text-align: center; }
+.daemon-disconnect-title { font-weight: 700; color: #ffd9de; }
+.daemon-disconnect-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+/* Diagnostics opened from the disconnect card must sit above the scrim. */
+.modal-back:has([data-testid="diagnostics-modal"]) { z-index: 9600; }
 .diag-log { max-height: 40vh; overflow: auto; white-space: pre-wrap; font-size: 11px; background: var(--panel); border: 1px solid var(--line); padding: 8px; }
 .diag-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
 .help-section { margin-bottom: 12px; }

@@ -6,6 +6,7 @@ import { memo, useEffect, useLayoutEffect, useRef } from "react";
 import { getDraft, useDraft } from "./drafts";
 import { NeedsBadge, PinDot, setFullView, usePreview } from "./PinGrid";
 import { exitPinFocus, type PinFocus } from "./pinFocus";
+import { TopBreadcrumb } from "./Breadcrumb";
 import { escGoesHome } from "./pinFocusLogic";
 import { pinsForSquad, type Pin } from "./pins";
 import { SendToBar } from "./PinIdeas";
@@ -98,7 +99,7 @@ export function PinRail({ view, focus, onPick }: { view: TeamView; focus: PinFoc
 const isTyping = (t: EventTarget | null) =>
   t instanceof HTMLElement && (t.isContentEditable || t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.tagName === "SELECT");
 
-function PinFocusBar({ view, focus }: { view: TeamView; focus: PinFocus }) {
+function PinFocusBar({ view, focus, onSelectSquad }: { view: TeamView; focus: PinFocus; onSelectSquad: (id: string) => void }) {
   const pin = pinsForSquad(view).pinned.find((p) => p.lane.id === focus.laneId);
   const agentIdRef = useRef(focus.agentId);
   agentIdRef.current = focus.agentId;
@@ -118,7 +119,10 @@ function PinFocusBar({ view, focus }: { view: TeamView; focus: PinFocus }) {
         target: isTyping(t) ? (inComposer ? "composer" : "field") : "none",
         draft,
       });
-      if (home) exitPinFocus();
+      if (home) {
+        e.preventDefault(); // the squad page's own Esc handler must not climb a second level
+        exitPinFocus();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -144,6 +148,7 @@ function PinFocusBar({ view, focus }: { view: TeamView; focus: PinFocus }) {
       <button type="button" className="btn ghost small pin-focus-home" data-testid="pin-focus-home" title="Back to all teams (Esc)" onClick={exitPinFocus}>
         ⊞
       </button>
+      <TopBreadcrumb squadsHome={false} squadId={view.team.id} squadName={view.team.name} laneName={pin?.lane.name ?? focus.laneId} onSelectSquad={onSelectSquad} />
       <span className="pin-focus-name">{pin?.lane.name ?? focus.laneId}</span>
       <span className="muted small pin-focus-squad">{view.team.name}</span>
       {pin && focus.agentId && <SendToBar pin={pin} />}
@@ -162,12 +167,12 @@ function PinFocusBar({ view, focus }: { view: TeamView; focus: PinFocus }) {
 }
 
 /** Row 1 of the focused middle: the bar, plus the "Start fresh" panel when the Brainstorm is gone. */
-export function PinFocusHeader(props: { view: TeamView; focus: PinFocus; onStart: (pin: Pin) => void }) {
-  const { view, focus, onStart } = props;
+export function PinFocusHeader(props: { view: TeamView; focus: PinFocus; onStart: (pin: Pin) => void; onSelectSquad: (id: string) => void }) {
+  const { view, focus, onStart, onSelectSquad } = props;
   const pin = pinsForSquad(view).pinned.find((p) => p.lane.id === focus.laneId);
   return (
     <>
-      <PinFocusBar view={view} focus={focus} />
+      <PinFocusBar view={view} focus={focus} onSelectSquad={onSelectSquad} />
       {!focus.agentId && (
         <div className="pin-focus-empty" data-testid="pin-focus-empty">
           {focus.gone ? (

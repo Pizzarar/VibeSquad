@@ -53,5 +53,5 @@ test("I5: components are wired with the required test ids", () => {
   const a = read("src/App.tsx");
   for (const id of ["daemon-down-banner", "diagnostics-log-viewer", "diagnostics-copy-btn", "help-docs-modal"]) assert.ok(d.includes(id), id);
   for (const id of ["open-diagnostics-btn", "open-help-btn", "about-check-updates-btn"]) assert.ok(a.includes(id), id);
-  assert.ok(a.includes("<DaemonStatusBanner />"));
+  assert.ok(a.includes("<DaemonStatusBanner onOpenDiagnostics={openDiagnostics} />"));
 });

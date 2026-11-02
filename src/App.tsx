@@ -73,10 +73,11 @@ import {
   openAndScrollToInbox,
 } from "./ui";
 import { WorkspacesView } from "./WorkspacesView";
-import { FullToggle, PinGrid, SidebarPins, useFullView, type PinHandler } from "./PinGrid";
+import { FullToggle, PinGrid, SidebarPins, SquadsHome, useFullView, type PinHandler } from "./PinGrid";
 import { pinsForSquad, type Pin } from "./pins";
 import { urlAgentFor } from "./pinFocusLogic";
-import { clearPinFocus, exitPinFocus, focusPin, usePinFocus, usePinsHome } from "./pinFocus";
+import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, usePinFocus, usePinsHome, useSquadsHome } from "./pinFocus";
+import { TopBreadcrumb } from "./Breadcrumb";
 import { PinFocusHeader, PinRail } from "./PinRail";
 import { PinToast } from "./PinIdeas";
 import { NewSquadModal } from "./NewSquadModal";
@@ -1153,6 +1154,9 @@ const TeamPage = memo(function TeamPage(props: {
     return (
       <div className="team-body">
         <header className="team-header">
+          <button type="button" className="btn ghost small squad-page-home-btn" data-testid="squad-page-home-btn" title="All squads (Esc)" onClick={enterSquadsHome}>
+            ⊞
+          </button>
           <h1>
             <NeonEmblem color={view.team.color} seed={view.team.id} size={32} />
             <span>{view.team.name}</span>
@@ -1334,6 +1338,10 @@ const Toolbar = memo(function Toolbar(props: {
   onShowArchived: (v: boolean) => void;
   dateGroup: DateBucket | "all";
   onDateGroup: (v: DateBucket | "all") => void;
+  squadsHome: boolean;
+  squadId: string;
+  squadName: string;
+  onSelectSquad: (id: string) => void;
 }) {
   const uiScale = useUiScale();
   const uiScalePct = Math.round(uiScale * 100);
@@ -1348,6 +1356,9 @@ const Toolbar = memo(function Toolbar(props: {
           WORKSPACES ({props.workspaceCount})
         </button>
       </div>
+      {props.screen === "teams" && (
+        <TopBreadcrumb squadsHome={props.squadsHome} squadId={props.squadId} squadName={props.squadName} laneName={null} onSelectSquad={props.onSelectSquad} />
+      )}
       {/* Agent search and plumbing chips only filter the FULL view. */}
       {props.screen === "teams" && full && (
         <>
@@ -1647,15 +1658,9 @@ export function App() {
   // Stable callbacks so the memoized sidebar and team page skip renders they do not need.
   // Switching teams never touches open tabs.
   const onTeam = useCallback((id: string) => {
-    exitPinFocus();
+    exitSquadsHome();
     setTeamId(id);
     setScreen("teams");
-    setCollapsedTeams((prev) => {
-      if (!prev.has(id)) return prev;
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
   }, []);
 
   const onToggleTeamExpand = useCallback((id: string) => {
@@ -1669,7 +1674,7 @@ export function App() {
 
   // Clicking a squad name opens its overview (expanding it if collapsed); only the caret collapses.
   const onTeamHeaderClick = useCallback((id: string) => {
-    exitPinFocus();
+    exitSquadsHome();
     setTeamId(id);
     setScreen("teams");
     setCollapsedTeams((prev) => {
@@ -1746,6 +1751,7 @@ export function App() {
   // and the Workspaces screen show the panes as before.
   const pinFocus = usePinFocus();
   const pinsHome = usePinsHome();
+  const squadsHome = useSquadsHome();
   const pinLayout = !full && !focus && screen === "teams";
   const pinFocusView = pinLayout && pinFocus ? views.find((v) => v.team.id === pinFocus.squadId) : undefined;
   const pinFocused = !!pinFocusView;
@@ -1756,10 +1762,24 @@ export function App() {
     const next = serializeUrlState({ team: activeTeamId || null, agent: urlAgentId }, location.search);
     if (next !== (location.search || "")) history.pushState(null, "", `${location.pathname}${next}${location.hash}`);
   }, [activeTeamId, urlAgentId]);
+  // Esc on the squad page goes up to Squads Home (chat's own Esc handler runs first and marks the event handled).
+  useEffect(() => {
+    if (!pinLayout) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented || e.isComposing) return;
+      if (getPinFocus() || !getPinsHome() || getSquadsHome()) return;
+      const t = e.target instanceof HTMLElement ? e.target : null;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      if (document.querySelector(".modal-back, [role='dialog']")) return;
+      enterSquadsHome();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [pinLayout]);
   const leftPinLayout = useRef(false);
   useEffect(() => {
     if (!pinLayout) clearPinFocus();
-    else if (leftPinLayout.current) exitPinFocus(); // back from FULL / focus mode: land on the grid
+    else if (leftPinLayout.current) exitSquadsHome(); // back from FULL / focus mode: land on the grid
     leftPinLayout.current = !pinLayout;
   }, [pinLayout]);
   const dateGrouped = useMemo(() => {
@@ -1877,7 +1897,7 @@ export function App() {
           </button>
         </div>
       )}
-      <DaemonStatusBanner />
+      <DaemonStatusBanner onOpenDiagnostics={openDiagnostics} />
       {!focus && (
         <Sidebar
           views={sidebarViews}
@@ -1929,6 +1949,10 @@ export function App() {
             onShowArchived={setShowArchived}
             dateGroup={dateGroup}
             onDateGroup={setDateGroup}
+            squadsHome={pinLayout && pinsHome && squadsHome}
+            squadId={view?.team.id ?? ""}
+            squadName={view?.team.name ?? ""}
+            onSelectSquad={onTeam}
           />
           {screen === "workspaces" ? (
             <WorkspacesView />
@@ -1942,6 +1966,8 @@ export function App() {
                 </div>
               ))}
             </div>
+          ) : pinLayout && pinsHome && squadsHome ? (
+            <SquadsHome views={sidebarViews} onSelectSquad={onTeam} onOpenPin={onQuickStart} onNewSquad={openNewSquad} />
           ) : view ? (
             <TeamPage
               view={view}
@@ -1964,7 +1990,7 @@ export function App() {
       {(hasTabs || focus || pinFocused) && (
         <AgentPanes
           onSuccessor={paneSuccessor}
-          header={pinFocusView && pinFocus ? <PinFocusHeader view={pinFocusView} focus={pinFocus} onStart={onRailPick} /> : undefined}
+          header={pinFocusView && pinFocus ? <PinFocusHeader view={pinFocusView} focus={pinFocus} onStart={onRailPick} onSelectSquad={onTeam} /> : undefined}
         />
       )}
       {pinFocusView && pinFocus && <PinRail view={pinFocusView} focus={pinFocus} onPick={onRailPick} />}
