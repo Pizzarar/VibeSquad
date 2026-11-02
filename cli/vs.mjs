@@ -415,6 +415,7 @@ function parseArgs(argv) {
     "note",
     "binDir",
     "brief",
+    "timeout",
   ]);
   const booleans = new Set([
     "sinceMe",
@@ -637,6 +638,7 @@ Usage:
   vs inbox list [--lane <lane>]
   vs inbox triage --merge <targetId> <sourceId...> | --bounce <cardId> --lane <newLane>
   vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force]
+  vs wait <agent> [--timeout <seconds>]   block until idle (exit 0), error or blocked (1), timeout (2); no limit by default
   vs install-shim [--bin-dir <dir>]
 
 Types: ${LOG_TYPES.join(", ")} (text 1..${MAX_TEXT} chars)
@@ -1827,6 +1829,39 @@ ${brief}`, live);
   return 0;
 }
 
+/** Maps a waitForFinish result to the CLI exit code and a one-line summary. */
+export function summarizeWait(agentId, result) {
+  const status = result?.status ?? "error";
+  const code = status === "idle" ? 0 : status === "timeout" ? 2 : 1;
+  const extra = status === "error" && result?.error ? ` (${result.error})` : "";
+  return { code, line: `${agentId}: ${status}${extra}` };
+}
+
+/** vs wait <agent> [--timeout s]: waits on the daemon (waitForFinish). Injectable client for tests. */
+export async function runWait(client, agentId, timeoutSec) {
+  const timeoutMs = timeoutSec === undefined ? 0 : Math.round(timeoutSec * 1000);
+  return summarizeWait(agentId, await client.waitForFinish(agentId, timeoutMs));
+}
+
+async function commandWait(flags) {
+  const agentId = flags._[0] ?? "";
+  if (!agentId) throw new Error("usage: vs wait <agent> [--timeout <seconds>]");
+  let timeoutSec;
+  if (flags.timeout !== undefined) {
+    timeoutSec = Number(flags.timeout);
+    if (!Number.isFinite(timeoutSec) || timeoutSec <= 0) throw new Error("--timeout must be a positive number of seconds");
+  }
+  const client = createDaemonClient();
+  try {
+    await client.connect();
+    const { code, line } = await runWait(client, agentId, timeoutSec);
+    process.stdout.write(line + "\n");
+    return code;
+  } finally {
+    await Promise.resolve(client.close?.()).catch(() => {});
+  }
+}
+
 function commandInstallShim(flags) {
   const binDirs = flags.binDir ? [path.resolve(String(flags.binDir))] : undefined;
   const res = installVsShim({ binDirs, baseHome: BASE_DIR });
@@ -1869,6 +1904,7 @@ function main(argv) {
     if (command === "handoff") return commandHandoff(flags);
     if (command === "inbox") return commandInbox(flags);
     if (command === "pin") return commandPin(flags);
+    if (command === "wait") return commandWait(flags);
     if (command === "install-shim") return commandInstallShim(flags);
     process.stderr.write(`Error: unknown command "${command}". Try "vs --help".\n`);
     return 1;

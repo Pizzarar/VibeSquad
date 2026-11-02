@@ -4,6 +4,7 @@ import { getPanes, openAgent, subscribePanes } from "./panes";
 import { AGENT_TYPE_LABEL, type Member, type TeamView } from "./teams";
 import { Ago, cleanTitle } from "./ui";
 import { settingsPaletteItems } from "./prefs";
+import { bulkStopTargets, deleteGuard, getOpRequest, hardDeleteAgent, reloadAgent, requestAgentOp, runningCwds, stopAgents, subscribeOpRequest } from "./paseoAgentOps";
 
 // ---- pure helpers (mirrored in test/ade-batch-g.test.mjs) ---------------------------------
 
@@ -70,13 +71,15 @@ export function snippetAround(text: string, q: string, radius = 50): string | nu
 export type CtxItem = { label: string; run: () => void };
 export type CtxMenuState = { x: number; y: number; items: CtxItem[] } | null;
 
-export function agentCtxItems(m: { id: string; cwd?: string | null }, a: { open: () => void; split: () => void; archive: () => void }): CtxItem[] {
+export function agentCtxItems(m: { id: string; cwd?: string | null; title?: string | null; status?: string | null; archivedAt?: string | null; labels?: Record<string, string> | null }, a: { open: () => void; split: () => void; archive: () => void }): CtxItem[] {
   return [
     { label: "Open Agent", run: a.open },
     { label: "Open in Split Pane", run: a.split },
     { label: "Copy Agent ID", run: () => void navigator.clipboard?.writeText(m.id) },
     { label: "Copy Working Folder (cwd)", run: () => void navigator.clipboard?.writeText(m.cwd ?? "") },
+    ...(m.archivedAt ? [] : [{ label: "Reload Agent", run: () => void reloadAgent(m.id).catch((e) => alert(`Could not reload: ${e}`)) }]),
     { label: "Archive Agent", run: a.archive },
+    { label: "Delete Agent…", run: () => requestAgentOp({ kind: "delete", agent: m }) },
   ];
 }
 
@@ -153,6 +156,110 @@ function ContextMenuHost() {
       ))}
     </div>
   );
+}
+
+// ---- delete / bulk-stop confirm -----------------------------------------------------------
+
+function AgentOpConfirmHost() {
+  const req = useSyncExternalStore(subscribeOpRequest, getOpRequest);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    setBusy(false);
+    setErr("");
+  }, [req]);
+  useEffect(() => {
+    if (!req) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && requestAgentOp(null);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [req]);
+  if (!req) return null;
+  const close = () => requestAgentOp(null);
+  const isDelete = req.kind === "delete";
+  const warning = req.kind === "delete" ? deleteGuard(req.agent).warning : null;
+  const run = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      if (req.kind === "delete") await hardDeleteAgent(req.agent.id);
+      else {
+        const failed = await stopAgents(req.agents.map((a) => a.id));
+        if (failed.length) {
+          setErr(`Could not stop ${failed.length} of ${req.agents.length}.`);
+          setBusy(false);
+          return;
+        }
+      }
+      close();
+    } catch (e) {
+      setErr(String((e as Error)?.message ?? e));
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="modal-back" onMouseDown={close}>
+      <div className="shortcut-modal" data-testid={isDelete ? "agent-delete-confirm" : "bulk-stop-confirm"} role="alertdialog" aria-label={isDelete ? "Delete agent" : "Stop agents"} onMouseDown={(e) => e.stopPropagation()}>
+        {req.kind === "delete" ? (
+          <>
+            <h3>Delete agent permanently?</h3>
+            <p>
+              <b>{cleanTitle(req.agent.title) || req.agent.id.slice(0, 8)}</b> and its history will be removed from the daemon. This cannot be undone. Archive keeps it recoverable.
+            </p>
+            {warning && (
+              <p className="dup-warning" role="alert" data-testid="agent-delete-warning">
+                {warning}
+              </p>
+            )}
+          </>
+        ) : (
+          <>
+            <h3>{req.title}</h3>
+            <p>
+              Stops the current run of {req.agents.length} agent{req.agents.length === 1 ? "" : "s"}. They stay available and can be prompted again.
+            </p>
+            <ul data-testid="bulk-stop-list" style={{ maxHeight: 220, overflow: "auto", paddingLeft: 18, margin: "6px 0" }}>
+              {req.agents.map((a) => (
+                <li key={a.id}>
+                  {cleanTitle(a.title) || a.id.slice(0, 8)}
+                  {a.labels?.role === "lead" || a.labels?.role === "brainstorm" ? <span className="muted small"> · {a.labels.role === "lead" ? "Lead" : "Brainstorm"}</span> : null}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+        {err && (
+          <p className="dup-warning" role="alert">
+            {err}
+          </p>
+        )}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+          <button className="btn" onClick={close} disabled={busy}>
+            Cancel
+          </button>
+          <button className="btn bad" data-testid="agent-op-confirm" onClick={() => void run()} disabled={busy}>
+            {busy ? "Working…" : req.kind === "delete" ? "Delete permanently" : `Stop ${req.agents.length}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Team ⋯ menu entries (stop all running agents in the team, with a confirm). */
+export function teamCtxItems(view: TeamView): CtxItem[] {
+  const targets = bulkStopTargets(
+    view.members.map((m) => ({ agent: m.agent, teamId: view.team.id })),
+    { teamId: view.team.id },
+  );
+  return [
+    {
+      label: targets.length ? `Stop All Running (${targets.length})…` : "Stop All Running (none running)",
+      run: () => {
+        if (targets.length) requestAgentOp({ kind: "stop", title: `Stop all running agents in ${view.team.name}?`, agents: targets });
+      },
+    },
+  ];
 }
 
 // ---- shortcut cheat sheet -----------------------------------------------------------------
@@ -381,6 +488,18 @@ export function CommandPaletteHost(props: {
       ts: m.agent.updatedAt,
     }));
     const teams = props.views.map<PaletteItem>((v) => ({ id: `team:${v.team.id}`, kind: "team", label: v.team.name, hint: "squad team" }));
+    const ops = all.flatMap<PaletteItem>((m) => {
+      const t = cleanTitle(m.agent.title) || m.agent.id.slice(0, 8);
+      const del: PaletteItem = { id: `action:delete:${m.agent.id}`, kind: "action", label: `Delete Agent: ${t}`, hint: "permanent" };
+      const rel: PaletteItem = { id: `action:reload:${m.agent.id}`, kind: "action", label: `Reload Agent: ${t}`, hint: "" };
+      return m.agent.archivedAt ? [del] : [del, rel];
+    });
+    const stops = runningCwds(props.members.map((m) => m.agent)).map<PaletteItem>((c) => ({
+      id: `action:stopcwd:${c.cwd}`,
+      kind: "action",
+      label: `Stop Running Agents in ${c.cwd} (${c.count})`,
+      hint: "bulk stop workspace",
+    }));
     return [
       act("new", "New Agent"),
       act("search", "Search All Transcripts…"),
@@ -389,12 +508,14 @@ export function CommandPaletteHost(props: {
       act("workspaces", "Workspaces"),
       act("focus", "Toggle Focus Mode (Ctrl+.)"),
       act("reopen", "Reopen Closed Tab"),
+      ...stops,
       ...teams,
       ...agents,
+      ...ops,
       // Last so an empty query still lists agents first; typing "settings" or a setting name finds them.
       ...settingsPaletteItems().map<PaletteItem>((s) => ({ id: `action:${s.id}`, kind: "action", label: s.label, hint: "settings" })),
     ];
-  }, [all, props.views]);
+  }, [all, props.members, props.views]);
 
   const shown = useMemo(() => filterPalette(items, q).slice(0, 60), [items, q]);
 
@@ -417,7 +538,16 @@ export function CommandPaletteHost(props: {
         focusComposer(m.agent.id);
       }
     } else if (it.kind === "team") props.onTeam(id);
-    else if (id === "new") props.actions.newAgent();
+    else if (id.startsWith("delete:") || id.startsWith("reload:")) {
+      const target = all.find((x) => x.agent.id === id.slice(id.indexOf(":") + 1));
+      if (!target) return;
+      if (id.startsWith("delete:")) requestAgentOp({ kind: "delete", agent: target.agent });
+      else void reloadAgent(target.agent.id).catch((e) => alert(`Could not reload: ${e}`));
+    } else if (id.startsWith("stopcwd:")) {
+      const cwd = id.slice("stopcwd:".length);
+      const agents = bulkStopTargets(props.members.map((m) => ({ agent: m.agent, teamId: m.team.id })), { cwd });
+      if (agents.length) requestAgentOp({ kind: "stop", title: `Stop all running agents in ${cwd}?`, agents });
+    } else if (id === "new") props.actions.newAgent();
     else if (id === "search") setMode("search");
     else if (id === "shortcuts") setMode("shortcuts");
     else if (id === "settings") props.actions.settings();
@@ -433,6 +563,7 @@ export function CommandPaletteHost(props: {
   return (
     <>
       <ContextMenuHost />
+      <AgentOpConfirmHost />
       {mode === "shortcuts" && <ShortcutSheet onClose={dismiss} />}
       {mode === "search" && (
         <TranscriptSearch

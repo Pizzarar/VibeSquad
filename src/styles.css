@@ -3615,6 +3615,7 @@ button.file-chip { cursor: pointer; font: inherit; }
 .tl-bar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .tl-bar-row input { flex: 1 1 140px; min-width: 0; }
 .tl-bar-count, .tl-bar-msg { color: #888; font-size: 0.85em; }
+.tl-filters { justify-content: flex-start; }
 .tl-filter { cursor: pointer; text-transform: capitalize; }
 .tl-filter.on { outline: 1px solid var(--cyan); color: var(--cyan); }
 .tl-prompts { max-height: 180px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
