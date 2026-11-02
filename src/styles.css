@@ -3370,3 +3370,33 @@ html, body, #root { overflow-x: hidden; }
   background: var(--line);
   border-radius: 3px;
 }
+
+/* ---- Unit U4: nothing clipped at the edges ---- */
+.push-controls { min-width: 0; }
+.push-controls-row { flex-wrap: wrap; gap: 6px; min-width: 0; }
+.push-toggle-btn,
+.push-test-btn {
+  min-width: 0;
+  flex: 1 1 auto;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.pin-focus-bar { height: auto; min-height: 40px; flex-wrap: wrap; row-gap: 2px; }
+.pin-focus-plumbing {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pin-focus-squad { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.row,
+.tree-row,
+.sidebar-pin-row { min-width: 0; max-width: 100%; box-sizing: border-box; }
+.row-meter { min-width: 0; overflow: hidden; }
+.tree-row { flex-wrap: wrap; }
+.tree-row > * { min-width: 0; }
+@media (max-width: 900px) {
+  .row { grid-template-columns: 36px minmax(0, 1fr) auto; grid-template-areas: "avatar title pill" "avatar meta meta" "avatar meter actions"; }
+  .row-meter { width: 100%; }
+}
