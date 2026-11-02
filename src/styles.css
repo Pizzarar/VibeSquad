@@ -3823,3 +3823,11 @@ button.project-file-name:hover { text-decoration: underline; }
 /* Parity H: plan edit + allow rules modal */
 .perm-plan-edit { background: var(--navy); color: var(--text); border: 1px solid var(--line); padding: 6px 8px; resize: vertical; }
 .allow-rules-modal { width: 560px; padding: 12px; }
+.drawer-sandbox { display: inline-block; position: relative; }
+.drawer-sandbox-panel { position: absolute; z-index: 30; margin-top: 2px; width: 300px; max-width: calc(100vw - 16px); background: var(--panel); border: 1px solid var(--line); padding: 8px; display: grid; gap: 6px; font-size: 11px; box-shadow: 0 4px 14px rgba(0,0,0,.45); }
+.drawer-sandbox-row { display: grid; gap: 1px; }
+.drawer-sandbox-label { font-size: 10px; opacity: .7; }
+.drawer-sandbox-val.missing { opacity: .6; font-style: italic; }
+.drawer-sandbox-src { font-size: 9px; opacity: .55; }
+.drawer-sandbox-note { font-size: 10px; opacity: .6; }
+@media (max-width: 700px) { .drawer-sandbox-panel { position: fixed; left: 8px; right: 8px; top: 96px; width: auto; max-width: none; } }
