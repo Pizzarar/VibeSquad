@@ -1528,7 +1528,7 @@ function AboutLicensesModal({ onClose, onChecklist }: { onClose: () => void; onC
 }
 
 export function App() {
-  const { conn, archivedAgents, workspaces, providerUsage, agents } = usePaseo();
+  const { conn, archivedAgents, workspaces, providerUsage, agents, rosterLoaded } = usePaseo();
   const teamsVersion = useTeams();
   const { members, views } = derived();
   const full = useFullView();
@@ -1580,7 +1580,7 @@ export function App() {
     return () => setCloseGuard(null);
   }, []);
   useAttentionTitle(views);
-  useRestorePrune(agents, conn === "connected");
+  useRestorePrune(agents, rosterLoaded);
 
   // A lead past its handoff budget with no needs-you flag would otherwise sit silently (only the card's
   // SPAWN SUCCESSOR button hints at it). Flag it once; "handoff-flagged" stops a cleared flag re-firing.

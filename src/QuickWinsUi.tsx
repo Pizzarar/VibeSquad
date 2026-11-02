@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import { updateAgent } from "./paseo";
-import { pruneRestoredTabs } from "./panes";
+import { getPanes, pruneRestoredTabs } from "./panes";
+import { exitSquadsHome, getPinFocus } from "./pinFocus";
 import { planAgentRename, renameDraftFor } from "./renameAgent";
 import { UNASSIGNED, saveTeams, type TeamDef } from "./teams";
 import {
@@ -216,14 +217,16 @@ export function AgentTitleEdit({ agent, children }: { agent: PaseoAgent; childre
 
 // ---- restore last view (walk 42) --------------------------------------------------------
 /** Once the roster has loaded, drop restored tabs whose agent is gone or archived. Runs once per launch. */
-export function useRestorePrune(agents: ReadonlyMap<string, PaseoAgent>, ready: boolean) {
+export function useRestorePrune(agents: ReadonlyMap<string, PaseoAgent>, rosterLoaded: boolean) {
   const done = useRef(false);
   useEffect(() => {
-    if (done.current || !ready || agents.size === 0) return;
+    if (done.current || !rosterLoaded) return;
     done.current = true;
     pruneRestoredTabs((id) => {
       const a = agents.get(id);
       return !!a && !a.archivedAt;
     });
-  }, [agents, ready]);
+    // Nothing left to show (restored agent gone or archived): land on the grid, not an empty pane.
+    if (!getPanes().leftActiveId && !getPinFocus()) exitSquadsHome();
+  }, [agents, rosterLoaded]);
 }

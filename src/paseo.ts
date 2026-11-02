@@ -24,6 +24,8 @@ export type ConnStatus = "connecting" | "connected" | "disconnected";
 type State = {
   conn: ConnStatus;
   agents: Map<string, PaseoAgent>;
+  /** The first agent list has arrived (it may be empty). conn can be "connected" before this. */
+  rosterLoaded: boolean;
   archivedAgents: Map<string, PaseoAgent>;
   archivedStatus: "idle" | "loading" | "ready" | "error";
   workspaces: Map<string, PaseoWorkspace>;
@@ -33,6 +35,7 @@ type State = {
 let state: State = {
   conn: "connecting",
   agents: new Map(),
+  rosterLoaded: false,
   archivedAgents: new Map(),
   archivedStatus: "idle",
   workspaces: new Map(),
@@ -290,7 +293,7 @@ async function refetchAll() {
     next.set(e.agent.id, old && sameAgent(old, e.agent) ? old : e.agent);
   }
   pendingAgents.clear(); // anything queued is older than this snapshot
-  set({ agents: next });
+  set({ agents: next, rosterLoaded: true });
 }
 
 // A9: per-provider quota for the sidebar. Best effort: older daemons lack providers.listUsage.
@@ -315,7 +318,7 @@ export function start() {
   if (started) return;
   started = true;
   if (DEMO) {
-    set({ conn: "connected", agents: demoAgents(), workspaces: demoWorkspaces() as Map<string, PaseoWorkspace>, providerUsage: normalizeProviderUsage(demoProviderUsage()) });
+    set({ conn: "connected", rosterLoaded: true, agents: demoAgents(), workspaces: demoWorkspaces() as Map<string, PaseoWorkspace>, providerUsage: normalizeProviderUsage(demoProviderUsage()) });
     return;
   }
 

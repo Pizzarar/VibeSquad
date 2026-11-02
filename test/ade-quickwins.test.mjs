@@ -143,3 +143,41 @@ test("58: slow actions use a delayed indicator (open agent, load older, open dif
   assert.ok(read("src/ChangesPanel.tsx").includes("CHANGES_SLOW_MS")); // bug-chaser owns the Changes loading feedback
   assert.ok(read("src/Timeline.tsx").includes(".modal-back"));
 });
+
+test("42: restored panes show on launch only with the pref on and a saved tab; grid otherwise", async () => {
+  const { startsOnGrid } = await import("../src/pinFocusLogic.ts");
+  const base = { deepLinked: false, viewSquads: false, restoreLastView: true, savedLeftTab: "a1" };
+  assert.equal(startsOnGrid(base), false); // restored panes visible
+  assert.equal(startsOnGrid({ ...base, restoreLastView: false }), true);
+  assert.equal(startsOnGrid({ ...base, savedLeftTab: null }), true);
+  assert.equal(startsOnGrid({ ...base, deepLinked: true }), false);
+  assert.equal(startsOnGrid({ ...base, viewSquads: true }), true);
+  assert.equal(startsOnGrid({ ...base, deepLinked: true, restoreLastView: false }), false);
+  const src = read("src/pinFocus.ts");
+  assert.ok(src.includes("startsOnGrid(") && src.includes("getRestoreLastView()"));
+  assert.ok(read("src/QuickWinsUi.tsx").includes("exitSquadsHome()")); // prune with nothing left falls back to the grid
+});
+
+test("42: restore planning uses the launch URL's ?agent=, not one pushed from the restored tab", async () => {
+  const { planRestore } = await import("../src/pinFocusLogic.ts");
+  // stale restored active tab, no launch deep link: nothing to do (the prune keeps the live tab)
+  assert.deepEqual(planRestore({ saved: null, urlAgent: null, urlAgentLive: false, pinBrainstorm: undefined }), { kind: "none" });
+  // what the bug saw: the pushed ?agent=stale looked like a dead deep link and forced the grid
+  assert.equal(planRestore({ saved: null, urlAgent: "stale", urlAgentLive: false, pinBrainstorm: undefined }).kind, "home");
+  // saved pin on "Start fresh Brainstorm" with no launch deep link: the pin focus restores
+  const saved = { squadId: "s", laneId: "l" };
+  const plan = planRestore({ saved, urlAgent: null, urlAgentLive: false, pinBrainstorm: null });
+  assert.equal(plan.kind, "pin");
+  assert.equal(plan.agentId, null);
+  // with the pushed live tab as urlAgent it was skipped
+  assert.equal(planRestore({ saved, urlAgent: "live", urlAgentLive: true, pinBrainstorm: null }).kind, "none");
+  const src = read("src/pinFocus.ts");
+  assert.ok(src.includes("const urlAgent = initialUrlAgent;"));
+  assert.ok(!/const urlAgent = new URLSearchParams\(location\.search\)/.test(src));
+});
+
+test("42: prune waits for the roster, not for a non-empty roster", () => {
+  const ui = read("src/QuickWinsUi.tsx");
+  assert.ok(ui.includes("!rosterLoaded") && !ui.includes("agents.size === 0"));
+  assert.ok(read("src/paseo.ts").includes("set({ agents: next, rosterLoaded: true })"));
+});
