@@ -3721,4 +3721,7 @@ button.project-file-name:hover { text-decoration: underline; }
 .paseo-ops-report-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; background: none; border: 0; color: inherit; font: inherit; padding: 0; cursor: pointer; text-align: left; }
 
 .drawer-features-btn { white-space: nowrap; }
-.drawer-features-menu { box-shadow: 0 4px 14px rgba(0,0,0,.45); }
+.drawer-features-menu { position: absolute; z-index: 30; margin-top: 2px; width: 260px; max-width: calc(100vw - 16px); background: var(--panel); border: 1px solid var(--line); padding: 8px; display: grid; gap: 6px; font-size: 11px; box-shadow: 0 4px 14px rgba(0,0,0,.45); }
+@media (max-width: 600px) {
+  .drawer-features-menu { position: fixed; left: 8px; right: 8px; top: 96px; width: auto; max-width: none; }
+}

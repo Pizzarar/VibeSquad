@@ -6,6 +6,7 @@ export type FeatureLike = {
   id: string;
   label: string;
   description?: string;
+  tooltip?: string;
   value: boolean | string | null;
   options?: Array<{ id: string; label: string }>;
 };
@@ -26,15 +27,17 @@ export function featureRows(features: readonly unknown[] | null | undefined): Fe
     const f = raw as FeatureLike;
     if (!f || typeof f.id !== "string" || !f.id) continue;
     if (f.type === "toggle") {
-      rows.push({ id: f.id, label: f.label || f.id, hint: f.description ?? "", kind: "toggle", value: !!f.value, options: [] });
+      rows.push({ id: f.id, label: f.label || f.id, hint: f.description || f.tooltip || "", kind: "toggle", value: !!f.value, options: [] });
     } else if (f.type === "select" && Array.isArray(f.options)) {
       rows.push({
         id: f.id,
         label: f.label || f.id,
-        hint: f.description ?? "",
+        hint: f.description || f.tooltip || "",
         kind: "select",
         value: f.value ?? null,
-        options: f.options.map((o) => ({ id: o.id, label: o.label || o.id })),
+        options: f.options
+          .filter((o) => !!o && typeof o.id === "string" && !!o.id)
+          .map((o) => ({ id: o.id, label: o.label || o.id })),
       });
     }
   }
@@ -53,11 +56,13 @@ export function supportsApplyConfig(serverFeatures: unknown): boolean {
 }
 
 /** The note shown after a change. Running agents pick model/thinking changes up on the next turn. */
-export function turnNote(status: string | null | undefined, field: "feature" | "model" | "thinking" | "mode"): string {
+export function turnNote(status: string | null | undefined, field: "feature" | "model" | "thinking" | "both" | "mode"): string {
   if (field === "mode") return "";
   const running = status === "running";
   if (!running) return "";
-  return field === "feature" ? "Applies from the next turn." : `${field === "model" ? "Model" : "Thinking"} change applies from the next turn.`;
+  if (field === "feature") return "Applies from the next turn.";
+  if (field === "both") return "Model and thinking changes apply from the next turn.";
+  return `${field === "model" ? "Model" : "Thinking"} change applies from the next turn.`;
 }
 
 export function noticeText(n: { type: string; message: string } | null | undefined): string {

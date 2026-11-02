@@ -2,14 +2,14 @@
 // Pure logic lives in paseoFeaturesLogic.ts. The drawer re-reads the agent snapshot after each change.
 import type { PaseoAgent } from "@getpaseo/client";
 import { DEMO, daemonClient, upsertLocalAgent } from "./paseo";
-import { supportsApplyConfig } from "./paseoFeaturesLogic.ts";
+import { describeError, noticeText, supportsApplyConfig } from "./paseoFeaturesLogic";
 
-export { describeError, featureChange, featureRows, noticeText, supportsApplyConfig, turnNote } from "./paseoFeaturesLogic.ts";
-export type { FeatureRow } from "./paseoFeaturesLogic.ts";
+export { describeError, featureChange, featureRows, noticeText, supportsApplyConfig, turnNote } from "./paseoFeaturesLogic";
+export type { FeatureRow } from "./paseoFeaturesLogic";
 
 export async function setFeature(agent: PaseoAgent, featureId: string, value: boolean | string): Promise<void> {
   if (DEMO) {
-    const features = ((agent as any).features ?? []).map((f: any) => (f.id === featureId ? { ...f, value } : f));
+    const features = (agent.features ?? []).map((f: any) => (f.id === featureId ? { ...f, value } : f));
     upsertLocalAgent({ ...agent, features } as PaseoAgent);
     return;
   }
@@ -29,13 +29,17 @@ export async function applyConfig(agent: PaseoAgent, config: ConfigBundle): Prom
     } as PaseoAgent);
     return "";
   }
-  let notice: { type: string; message: string } | null = null;
   if (supportsApplyConfig(daemonClient.getLastServerInfoMessage()?.features)) {
-    notice = await daemonClient.applyAgentConfig(agent.id, config);
-  } else {
-    if (config.modelId !== undefined) await daemonClient.setAgentModel(agent.id, config.modelId);
-    if (config.modeId !== undefined) notice = await daemonClient.setAgentMode(agent.id, config.modeId);
-    if (config.thinkingOptionId !== undefined) notice = (await daemonClient.setAgentThinkingOption(agent.id, config.thinkingOptionId)) ?? notice;
+    return noticeText(await daemonClient.applyAgentConfig(agent.id, config));
   }
-  return notice?.message ? `${notice.type}: ${notice.message}` : "";
+  const notices: string[] = [];
+  const applied: string[] = [];
+  try {
+    if (config.modelId !== undefined) { await daemonClient.setAgentModel(agent.id, config.modelId); applied.push("model"); }
+    if (config.modeId !== undefined) { notices.push(noticeText(await daemonClient.setAgentMode(agent.id, config.modeId))); applied.push("mode"); }
+    if (config.thinkingOptionId !== undefined) { notices.push(noticeText(await daemonClient.setAgentThinkingOption(agent.id, config.thinkingOptionId))); applied.push("thinking"); }
+  } catch (e) {
+    throw new Error(`${describeError(e)}${applied.length ? ` (${applied.join(", ")} already applied)` : ""}`);
+  }
+  return notices.filter(Boolean).join(" ");
 }
