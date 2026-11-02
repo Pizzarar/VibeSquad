@@ -24,7 +24,7 @@ The `before("agent.create")` request carries no labels, so the plugin uses env `
 
 ## Antigravity (Gemini)
 
-`antigravity-cli*` providers ignore `systemPrompt`, so after creation the plugin steers the same prefix in as a first message. Spawns also get `approvalPolicy: skip` (including an inherited `agy`, which stalls silently, A1) and `modeId: accept-edits`.
+`antigravity-cli*` providers ignore `systemPrompt`, so after creation the plugin steers the same prefix in as a first message. When leads spawn via `create_agent`, they pass `provider`/`model`/`mode` plus the `profile` label and omit `features` — the plugin adds the required provider feature defaults (overriding any inherited `agy`, which stalls silently, A1) and `modeId: accept-edits`.
 
 ### Worker report routing (A11)
 
