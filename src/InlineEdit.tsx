@@ -19,6 +19,8 @@ import { buildInlineEditPrompt, diffHunks, editTargets, hunkStats, rangeLabel, s
 type Phase = "pending" | "changed" | "untouched" | "error";
 
 export type InlineSession = {
+  /** Unique per edit: a new Ctrl+K on the same file replaces the session, and late async work for the old one is dropped. */
+  id: number;
   cwd: string;
   path: string;
   agentId: string;
@@ -42,10 +44,14 @@ const sessions = new Map<string, InlineSession>();
 const teardowns = new Map<string, () => void>();
 const listeners = new Set<() => void>();
 const keyOf = (cwd: string, path: string) => JSON.stringify([cwd, path]);
+let nextId = 1;
 
-function patch(key: string, p: Partial<InlineSession>) {
+/** True while session `id` is still the one shown for `key` (not dismissed or replaced). */
+const alive = (key: string, id: number) => sessions.get(key)?.id === id;
+
+function patch(key: string, id: number, p: Partial<InlineSession>) {
   const s = sessions.get(key);
-  if (!s) return;
+  if (!s || s.id !== id) return;
   sessions.set(key, { ...s, ...p });
   listeners.forEach((l) => l());
 }
@@ -77,17 +83,17 @@ async function readText(cwd: string, path: string): Promise<{ text: string; mtim
 }
 
 /** Re-reads the file and moves the session to changed / pending / untouched. */
-async function refresh(key: string) {
+async function refresh(key: string, id: number) {
   const s = sessions.get(key);
-  if (!s) return;
+  if (!s || s.id !== id) return;
   try {
     const { text, mtime } = await readText(s.cwd, s.path);
     const cur = sessions.get(key);
-    if (!cur) return;
+    if (!cur || cur.id !== id) return;
     const changed = text !== cur.snapshot;
-    patch(key, { current: text, currentMtime: mtime, phase: changed ? "changed" : cur.agentDone ? "untouched" : "pending" });
+    patch(key, id, { current: text, currentMtime: mtime, phase: changed ? "changed" : cur.agentDone ? "untouched" : "pending" });
   } catch (e) {
-    patch(key, { phase: "error", error: e instanceof Error ? e.message : String(e) });
+    patch(key, id, { phase: "error", error: e instanceof Error ? e.message : String(e) });
   }
 }
 
@@ -106,8 +112,11 @@ export async function startInlineEdit(opts: { cwd: string; path: string; agentId
     if (snap.text !== opts.viewText) return "The file changed on disk since it was opened here. Reopen it and select again.";
   }
   const sent = buildInlineEditPrompt(opts.agentRel, range, opts.instruction, sliceLines(snap.text, range));
+  // Another Ctrl+K on this file may have started while the snapshot was read: the newer one wins.
+  if (sessions.has(key)) return null;
+  const id = nextId++;
   sessions.set(key, {
-    cwd, path, agentId: opts.agentId, agentTitle: opts.agentTitle, range, sent,
+    id, cwd, path, agentId: opts.agentId, agentTitle: opts.agentTitle, range, sent,
     snapshot: snap.text, current: snap.text, currentMtime: snap.mtime,
     phase: "pending", agentDone: false, undone: false, error: "", busy: false, kept: new Set(),
   });
@@ -120,8 +129,8 @@ export async function startInlineEdit(opts: { cwd: string; path: string; agentId
   offs.push(() => { released = true; });
   daemonClient
     .subscribeFile({ cwd, path }, (v) => {
-      if (v.status === "ready" && v.modifiedAt !== sessions.get(key)?.currentMtime) void refresh(key);
-      else if (v.status === "missing") patch(key, { phase: "error", error: "The file was deleted." });
+      if (v.status === "ready" && v.modifiedAt !== sessions.get(key)?.currentMtime) void refresh(key, id);
+      else if (v.status === "missing") patch(key, id, { phase: "error", error: "The file was deleted." });
     })
     .then((sub) => {
       if (released) void sub.unsubscribe().catch(() => {});
@@ -134,11 +143,11 @@ export async function startInlineEdit(opts: { cwd: string; path: string; agentId
   const check = () => {
     const a = getPaseoState().agents.get(opts.agentId);
     const s = sessions.get(key);
-    if (!s || s.agentDone) return;
+    if (!s || s.id !== id || s.agentDone) return;
     if (a?.status === "running") { sawRunning = true; return; }
     if (sawRunning || !a) {
-      patch(key, { agentDone: true });
-      void refresh(key);
+      patch(key, id, { agentDone: true });
+      void refresh(key, id);
     }
   };
   offs.push(subscribePaseo(check));
@@ -149,7 +158,7 @@ export async function startInlineEdit(opts: { cwd: string; path: string; agentId
   try {
     await sendMessage(opts.agentId, sent);
   } catch (e) {
-    patch(key, { phase: "error", error: `Not sent: ${e instanceof Error ? e.message : String(e)}` });
+    patch(key, id, { phase: "error", error: `Not sent: ${e instanceof Error ? e.message : String(e)}` });
     return null;
   }
   check();
@@ -159,24 +168,28 @@ export async function startInlineEdit(opts: { cwd: string; path: string; agentId
 async function undoInline(key: string, hunks: Hunk[]) {
   const s = sessions.get(key);
   if (!s || !hunks.length) return;
-  if (DEMO) { patch(key, { error: "Undo isn't available in demo mode" }); return; }
-  patch(key, { busy: true, error: "" });
+  const id = s.id;
+  if (DEMO) { patch(key, id, { error: "Undo isn't available in demo mode" }); return; }
+  patch(key, id, { busy: true, error: "" });
   try {
     const { text, mtime } = await readText(s.cwd, s.path);
+    // Dismissed or replaced while reading: these hunks belong to an old edit, so write nothing.
+    if (!alive(key, id)) return;
     const r = hunks.length === 1 ? undoHunk(text, hunks[0]) : undoHunks(text, hunks);
-    if (!r.ok) { patch(key, { error: r.error }); return; }
+    if (!r.ok) { patch(key, id, { error: r.error }); return; }
     const res = await daemonClient.writeFile({ cwd: s.cwd, path: s.path, content: r.content, expectedModifiedAt: mtime });
     // writeFile resolves (doesn't throw) on a stale or failed write, so check the status.
     const w = res as { status?: string; error?: string; modifiedAt?: string };
-    if (w?.status === "conflict") { patch(key, { error: "Not undone: the file changed on disk while undoing. Try again." }); return; }
-    if (w?.status === "error") { patch(key, { error: `Not undone: ${w.error ?? "write failed"}` }); return; }
+    if (w?.status === "conflict") { patch(key, id, { error: "Not undone: the file changed on disk while undoing. Try again." }); return; }
+    if (w?.status === "error") { patch(key, id, { error: `Not undone: ${w.error ?? "write failed"}` }); return; }
     const cur = sessions.get(key);
-    const back = !!cur && r.content === cur.snapshot;
-    if (cur) patch(key, { current: r.content, currentMtime: w?.modifiedAt ?? cur.currentMtime, undone: cur.undone || back, phase: back ? (cur.agentDone ? "untouched" : "pending") : "changed" });
+    if (!cur || cur.id !== id) return;
+    const back = r.content === cur.snapshot;
+    patch(key, id, { current: r.content, currentMtime: w?.modifiedAt ?? cur.currentMtime, undone: cur.undone || back, phase: back ? (cur.agentDone ? "untouched" : "pending") : "changed" });
   } catch (e) {
-    patch(key, { error: e instanceof Error ? e.message : String(e) });
+    patch(key, id, { error: e instanceof Error ? e.message : String(e) });
   } finally {
-    patch(key, { busy: false });
+    patch(key, id, { busy: false });
   }
 }
 
@@ -256,8 +269,8 @@ export function InlineEditReview({ session: s }: { session: InlineSession }) {
   const key = keyOf(s.cwd, s.path);
   const hunks = useMemo(() => diffHunks(s.snapshot, s.current), [s.snapshot, s.current]);
   const live = hunks.filter((h) => !s.kept.has(snapshotHunkKey(s.path, h)));
-  const stats = hunkStats(hunks);
-  const keep = (hs: Hunk[]) => patch(key, { kept: new Set([...s.kept, ...hs.map((h) => snapshotHunkKey(s.path, h))]) });
+  const stats = hunkStats(live); // what is still to review, not what was already kept
+  const keep = (hs: Hunk[]) => patch(key, s.id, { kept: new Set([...s.kept, ...hs.map((h) => snapshotHunkKey(s.path, h))]) });
   const [showSent, setShowSent] = useState(false);
   const status =
     s.phase === "pending" ? `${s.agentTitle} is working…`

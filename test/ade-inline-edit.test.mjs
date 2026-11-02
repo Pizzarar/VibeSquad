@@ -158,3 +158,16 @@ test("FilesPanel / InlineEdit wiring: keyscope, key-command event, existing send
   assert.match(ie, /expectedModifiedAt/);
   assert.match(ie, /openRightDockTab\("Changes"\)/);
 });
+
+test("review nits: cheat-sheet rows keyed by command id, stale-session guards, banner stats from live hunks", () => {
+  const cp = src("CommandPalette.tsx");
+  assert.match(cp, /\[\[c\.id, bindingLabel\(b, c\.id\), c\.label\]\]/, "bound rows carry the command id");
+  assert.match(cp, /`fixed:\$\{k\}`/, "fixed rows get their own key");
+  assert.match(cp, /<tr key=\{id\}>/);
+  const ie = src("InlineEdit.tsx");
+  assert.match(ie, /function patch\(key: string, id: number,/, "patches name the session they belong to");
+  assert.doesNotMatch(ie, /patch\(key, \{/, "no unguarded patch");
+  assert.match(ie, /if \(!alive\(key, id\)\) return;\s*\n\s*const r = hunks\.length/, "undo writes nothing once the session is gone or replaced");
+  assert.match(ie, /if \(!cur \|\| cur\.id !== id\) return;/);
+  assert.match(ie, /const stats = hunkStats\(live\)/);
+});
