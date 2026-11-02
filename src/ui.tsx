@@ -217,7 +217,9 @@ export const useClock = <T extends string | number | boolean>(read: (now: number
 
 /** Relative age ("5m") that refreshes itself without re-rendering its parent. */
 export function Ago({ iso }: { iso?: string | null }) {
-  return <>{useClock((now) => ago(iso, now))}</>;
+  const text = useClock((now) => ago(iso, now));
+  const full = iso ? new Date(iso).toLocaleString() : undefined;
+  return <span title={full && full !== "Invalid Date" ? full : undefined}>{text}</span>;
 }
 
 // ---- selection ---------------------------------------------------------------------

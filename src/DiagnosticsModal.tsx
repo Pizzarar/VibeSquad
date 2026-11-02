@@ -50,6 +50,7 @@ export async function buildBundle(conn: string, agents: Iterable<{ id: string; s
 /** A blip shorter than this shows nothing: the scrim only appears once the daemon has been away this long. */
 export const DISCONNECT_DEBOUNCE_MS = 2000;
 const RETRY_SECONDS = 3;
+const RETRY_TIMEOUT_MS = 10_000;
 
 export function shouldShowDisconnectOverlay(conn: string, disconnectedSinceMs: number | null, nowMs: number, debounceMs = DISCONNECT_DEBOUNCE_MS): boolean {
   return conn !== "connected" && disconnectedSinceMs !== null && nowMs - disconnectedSinceMs >= debounceMs;
@@ -75,14 +76,24 @@ export function DaemonStatusBanner({ onOpenDiagnostics }: { onOpenDiagnostics?: 
     return () => clearTimeout(t);
   }, [down]);
 
+  const inFlight = useRef(false);
   const retry = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await (daemonClient as unknown as { connect?: () => Promise<unknown> }).connect?.();
-      await dc.getDaemonStatus?.();
+      // connect() may never settle on a dead socket; cap the wait so RETRY NOW re-enables
+      const attempt = (async () => {
+        await (daemonClient as unknown as { connect?: () => Promise<unknown> }).connect?.();
+        await dc.getDaemonStatus?.();
+      })();
+      await Promise.race([attempt, new Promise((r) => { timer = setTimeout(r, RETRY_TIMEOUT_MS); })]);
     } catch {
       /* still down; the scrim stays */
     } finally {
+      clearTimeout(timer);
+      inFlight.current = false;
       setBusy(false);
     }
   }, []);

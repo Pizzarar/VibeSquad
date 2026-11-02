@@ -11,6 +11,7 @@ type TreeNode = {
   name: string;
   path: string;
   kind: "file" | "directory";
+  size?: number;
   children?: TreeNode[] | null; // null = not yet loaded
 };
 
@@ -30,6 +31,7 @@ function entriesToNodes(entries: DirEntry[]): TreeNode[] {
     name: e.name,
     path: e.path,
     kind: e.kind,
+    size: e.kind === "file" ? e.size : undefined,
     children: e.kind === "directory" ? null : undefined,
   }));
 }
@@ -40,6 +42,28 @@ function stripAnsiForText(bytes: Uint8Array): string {
   } catch {
     return "";
   }
+}
+
+const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|ico|bmp)$/i;
+const BIN_EXT = /\.(exe|dll|zip|gz|tgz|7z|rar|tar|pdf|woff2?|ttf|otf|mp[34]|mov|wav|class|jar|bin|so|dylib|o|node)$/i;
+const MAX_TEXT_BYTES = 1024 * 1024;
+const MAX_IMG_BYTES = 5 * 1024 * 1024;
+
+function isBinaryBytes(bytes: Uint8Array): boolean {
+  const n = Math.min(bytes.length, 8192);
+  for (let i = 0; i < n; i++) if (bytes[i] === 0) return true;
+  return false;
+}
+
+function findNode(nodes: TreeNode[], path: string): TreeNode | undefined {
+  for (const n of nodes) {
+    if (n.path === path) return n;
+    if (n.children) {
+      const f = findNode(n.children, path);
+      if (f) return f;
+    }
+  }
+  return undefined;
 }
 
 export function FilesPanel({
@@ -66,9 +90,13 @@ export function FilesPanel({
   const [loading, setLoading] = useState(false);
   const [notFound, setNotFound] = useState(false);
   const [sourceView, setSourceView] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [imgUrl, setImgUrl] = useState<string | null>(null);
   const [revealDir, setRevealDir] = useState<string | null>(null);
   const treeRef = useRef<HTMLDivElement | null>(null);
   const lineRefs = useRef<Map<number, HTMLElement>>(new Map());
+  const treeRef2 = useRef<TreeNode[]>([]);
+  treeRef2.current = tree;
   const unsubscribeRef = useRef<(() => void) | null>(null);
 
   // Load root directory on mount / cwd change
@@ -100,9 +128,8 @@ export function FilesPanel({
     if (!targetFile) return;
     const clean = normalizeRepoPath(targetFile);
     if (clean === null) {
-      // absolute / `..` / drive paths never reach the daemon
-      setOpenFile(targetFile);
-      setNotFound(true);
+      // absolute / `..` / drive paths never reach the daemon; openFileNode resets all view state
+      void openFileNode(targetFile);
       return;
     }
     if (clean.endsWith("/")) void revealFolder(clean.replace(/\/+$/, ""));
@@ -168,11 +195,27 @@ export function FilesPanel({
       setEditMode(false);
       setSaveErr("");
       setNotFound(false);
+      setNotice("");
+      setImgUrl(null);
       setSourceView(line !== undefined); // a line target reads in Source; otherwise .md renders
       if (normalizeRepoPath(path) === null) {
         // defense in depth: never ask the daemon for absolute / `..` paths
         setFileContent("");
         setNotFound(true);
+        return;
+      }
+      const isImg = IMG_EXT.test(path);
+      const cap = isImg ? MAX_IMG_BYTES : MAX_TEXT_BYTES;
+      const tooBig = (kb: number) => setNotice(`File too large to preview${kb ? ` (${kb} KB)` : ""}`);
+      if (BIN_EXT.test(path) && !isImg) {
+        setFileContent("");
+        setNotice("Binary file, not shown");
+        return;
+      }
+      const known = findNode(treeRef2.current, path)?.size;
+      if (known !== undefined && known > cap) {
+        setFileContent("");
+        tooBig(Math.round(known / 1024));
         return;
       }
       if (DEMO) {
@@ -181,7 +224,26 @@ export function FilesPanel({
         return;
       }
       try {
-        const result = await daemonClient.readFile(cwd, path);
+        const result = await daemonClient.readFile(cwd, path, undefined, cap + 1);
+        const kb = Math.max(1, Math.round(result.bytes.length / 1024));
+        if (result.bytes.length > cap) {
+          setFileContent("");
+          tooBig(kb);
+          return;
+        }
+        if (isImg) {
+          const url = /\.svg$/i.test(path)
+            ? `data:image/svg+xml;base64,${btoa(Array.from(result.bytes, (b) => String.fromCharCode(b)).join(""))}` // data: (not blob:) so "open in new tab" can't run embedded scripts on our origin
+            : URL.createObjectURL(new Blob([result.bytes as BlobPart], { type: result.mime || "image/*" }));
+          setImgUrl(url);
+          setFileContent("");
+          return;
+        }
+        if (isBinaryBytes(result.bytes)) {
+          setFileContent("");
+          setNotice(`Binary file, ${kb} KB, not shown`);
+          return;
+        }
         const text = stripAnsiForText(result.bytes);
         setFileContent(text);
         setEditValue(text);
@@ -190,13 +252,16 @@ export function FilesPanel({
         // Subscribe to live updates
         const sub = daemonClient.observeFile({ cwd, path });
         unsubscribeRef.current = () => { sub.release().catch(() => {}); };
-      } catch {
+      } catch (e) {
         setFileContent("");
-        setNotFound(true);
+        if (/too large|max.?bytes|exceeds/i.test(String(e))) tooBig(0);
+        else setNotFound(true);
       }
     },
     [cwd],
   );
+
+  useEffect(() => () => { if (imgUrl) URL.revokeObjectURL(imgUrl); }, [imgUrl]);
 
   useEffect(
     () => () => {
@@ -254,7 +319,7 @@ export function FilesPanel({
         <div className="files-viewer">
           <div className="files-viewer-header">
             <span className="muted small">{openFile}</span>
-            {isMd && !notFound && !editMode && (
+            {isMd && !notFound && !notice && !editMode && (
               <button
                 className="btn ghost small"
                 data-testid="files-source-btn"
@@ -263,7 +328,7 @@ export function FilesPanel({
                 {sourceView ? "Rendered" : "Source"}
               </button>
             )}
-            {!editMode && !notFound && (
+            {!editMode && !notFound && !notice && !imgUrl && (
               <button
                 className="btn ghost small"
                 data-testid="files-edit-btn"
@@ -302,6 +367,12 @@ export function FilesPanel({
             />
           ) : notFound ? (
             <div className="muted small" data-testid="files-not-found">File not found: {openFile}</div>
+          ) : imgUrl ? (
+            <div className="files-md" data-testid="files-image-view">
+              <img src={imgUrl} alt={openFile} style={{ maxWidth: "100%" }} />
+            </div>
+          ) : notice ? (
+            <div className="muted small" data-testid="files-notice">{notice}</div>
           ) : isMd && !sourceView ? (
             <div className="files-md" data-testid="files-md-view">
               <MarkdownRenderer text={fileContent} agentId={agent.id} doc />

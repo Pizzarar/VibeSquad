@@ -239,9 +239,10 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
             key={t.id}
             className={`terminal-tab${t.id === activeId ? " active" : ""}`}
             data-testid="terminal-tab"
+            title={t.name}
             onClick={() => setActiveId(t.id)}
           >
-            {t.name}
+            <span className="terminal-tab-name">{t.name}</span>
             <span
               className="terminal-tab-close"
               role="button"

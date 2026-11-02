@@ -293,6 +293,26 @@ export function CommandPaletteHost(props: {
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(0);
   const closed = useRef<string[]>([]);
+  const opener = useRef<HTMLElement | null>(null);
+  // Capture during render: autoFocus children focus at commit, before any effect would run.
+  if (mode && !opener.current) opener.current = document.activeElement as HTMLElement | null;
+  useEffect(() => {
+    if (!mode && !restoreOnClose.current) opener.current = null;
+  }, [mode]);
+  const restoreOnClose = useRef(false);
+  const modeRef = useRef(mode);
+  const dismissRef = useRef<() => void>(() => {});
+  const dismiss = () => {
+    restoreOnClose.current = true;
+    setMode(null);
+    setTimeout(() => {
+      const el = opener.current;
+      opener.current = null;
+      restoreOnClose.current = false;
+      const cur = document.activeElement;
+      if (el && el.isConnected && el !== document.body && (!cur || cur === document.body)) el.focus();
+    }, 0);
+  };
 
   // Remember closed tabs so "Reopen Closed Tab" has something to reopen.
   useEffect(() => {
@@ -314,11 +334,12 @@ export function CommandPaletteHost(props: {
         e.preventDefault();
         setQ("");
         setSel(0);
-        setMode((m) => (m === "palette" ? null : "palette"));
+        if (modeRef.current === "palette") dismissRef.current();
+        else setMode("palette");
       } else if (e.key === "?" && !mod && !typing) {
         e.preventDefault();
         setMode("shortcuts");
-      } else if (e.key === "Escape") setMode(null);
+      } else if (e.key === "Escape") dismissRef.current();
     };
     const onOpen = (e: Event) => setMode((e as CustomEvent<string>).detail as "search" | "shortcuts");
     window.addEventListener("keydown", onKey);
@@ -328,6 +349,9 @@ export function CommandPaletteHost(props: {
       window.removeEventListener("vs:open-overlay", onOpen);
     };
   }, []);
+
+  dismissRef.current = dismiss;
+  modeRef.current = mode;
 
   const all = useMemo(() => [...props.members, ...props.archived], [props.members, props.archived]);
 
@@ -390,7 +414,7 @@ export function CommandPaletteHost(props: {
   return (
     <>
       <ContextMenuHost />
-      {mode === "shortcuts" && <ShortcutSheet onClose={() => setMode(null)} />}
+      {mode === "shortcuts" && <ShortcutSheet onClose={dismiss} />}
       {mode === "search" && (
         <TranscriptSearch
           members={all}
@@ -399,11 +423,11 @@ export function CommandPaletteHost(props: {
             props.onAgent(m);
             focusComposer(m.agent.id);
           }}
-          onClose={() => setMode(null)}
+          onClose={dismiss}
         />
       )}
       {mode === "palette" && (
-        <div className="modal-back" onMouseDown={() => setMode(null)}>
+        <div className="modal-back" onMouseDown={dismiss}>
           <div className="cmd-palette" data-testid="command-palette" role="dialog" aria-label="Command palette" onMouseDown={(e) => e.stopPropagation()}>
             <input
               autoFocus
