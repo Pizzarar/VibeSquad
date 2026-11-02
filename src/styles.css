@@ -3726,6 +3726,26 @@ button.project-file-name:hover { text-decoration: underline; }
 .paseo-ops-report { border: 1px solid var(--line); padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; }
 .paseo-ops-report-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; background: none; border: 0; color: inherit; font: inherit; padding: 0; cursor: pointer; text-align: left; }
 
+/* ADE editor depth block 2: quick open, find in files, keybinding editor */
+.nav-path { font-family: var(--mono); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nav-path mark, .find-text mark { background: transparent; color: var(--cyan); font-weight: 700; text-decoration: underline; }
+.find-files { width: min(820px, 94vw); }
+.find-files-bar { display: flex; align-items: center; gap: 4px; border-bottom: 1px solid var(--cyan-dim, #134); padding-right: 8px; }
+.find-files-bar > input { flex: 1; min-width: 0; border: 0; background: transparent; color: inherit; padding: 12px 14px; font: inherit; outline: none; }
+.find-toggle { background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: 4px; padding: 2px 7px; font-family: var(--mono); font-size: 12px; cursor: pointer; }
+.find-toggle.on { border-color: var(--cyan); color: var(--cyan); background: var(--cyan-dim); }
+.find-group { border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+.find-group-head { padding: 6px 14px 2px; font-family: var(--mono); font-size: 12px; color: var(--violet); position: sticky; top: 0; background: var(--panel); }
+.find-hit { display: flex; width: 100%; gap: 10px; padding: 3px 14px 3px 22px; font-family: var(--mono); font-size: 12px; }
+.find-lineno { flex: none; min-width: 4ch; text-align: right; color: var(--slate); }
+.find-text { min-width: 0; white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+.keybinding-control { flex-wrap: wrap; justify-content: flex-end; }
+.keybinding-chip { display: inline-flex; align-items: center; gap: 2px; }
+.keybinding-chip kbd, .settings-note kbd { border: 1px solid var(--cyan-dim, #134); border-radius: 4px; padding: 1px 6px; font-size: 12px; white-space: nowrap; font-family: var(--mono); }
+.keybinding-remove { background: transparent; border: 0; color: var(--slate); cursor: pointer; padding: 0 3px; font: inherit; }
+.keybinding-remove:hover { color: var(--hot-pink); }
+.keybinding-recording { color: var(--amber); font-size: 12px; animation: pulse 1.2s ease-in-out infinite; }
+
 /* Skills / commands / subagents panel (Settings → Paseo → Skills) */
 .skills-block { display: flex; flex-direction: column; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
 .skills-radio { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }

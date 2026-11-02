@@ -3,7 +3,10 @@ import { DEMO, daemonClient } from "./paseo";
 import { getPanes, openAgent, subscribePanes } from "./panes";
 import { AGENT_TYPE_LABEL, type Member, type TeamView } from "./teams";
 import { Ago, cleanTitle } from "./ui";
-import { settingsPaletteItems } from "./prefs";
+import { settingsPaletteItems, useKeyBindings } from "./prefs";
+import { FIXED_SHORTCUTS, KEY_COMMANDS, bindingLabel, comboFromEvent, firesWhileTyping, resolveCommand, type Bindings, type KeyScope } from "./keymap";
+import { QuickOpen, type NavAgent } from "./QuickOpen";
+import { FindInFiles } from "./FindInFiles";
 import { bulkStopTargets, deleteGuard, getOpRequest, hardDeleteAgent, reloadAgent, requestAgentOp, runningCwds, stopAgents, subscribeOpRequest } from "./paseoAgentOps";
 
 // ---- pure helpers (mirrored in test/ade-batch-g.test.mjs) ---------------------------------
@@ -264,26 +267,20 @@ export function teamCtxItems(view: TeamView): CtxItem[] {
 
 // ---- shortcut cheat sheet -----------------------------------------------------------------
 
-const SHORTCUTS: [string, string][] = [
-  ["Ctrl+K / Ctrl+Shift+P", "Command palette"],
-  ["Ctrl+.", "Toggle Focus mode"],
-  ["Ctrl+J", "Open the top NEEDS YOU agent"],
-  ["Ctrl+1 … 9", "Switch tab in the active pane"],
-  ["Shift+Tab", "Cycle permission mode (composer)"],
-  ["Ctrl+R", "Reload the page"],
-  ["?", "This cheat sheet"],
-  ["Ctrl+= / Ctrl+- / Ctrl+0", "UI scale up / down / reset"],
-  ["Esc", "Close dialogs and menus"],
-];
+/** Effective (rebindable) bindings first, then the fixed ones. Unbound commands are left out. */
+export function shortcutRows(b: Bindings): [string, string][] {
+  const bound = KEY_COMMANDS.filter((c) => !c.scope || c.scope === "global").flatMap<[string, string]>((c) => (bindingLabel(b, c.id) ? [[bindingLabel(b, c.id), c.label]] : []));
+  return [...bound, ...FIXED_SHORTCUTS];
+}
 
-function ShortcutSheet({ onClose }: { onClose: () => void }) {
+function ShortcutSheet({ onClose, bindings, onEdit }: { onClose: () => void; bindings: Bindings; onEdit: () => void }) {
   return (
     <div className="modal-back" onMouseDown={onClose}>
       <div className="shortcut-modal" data-testid="shortcut-cheat-sheet" role="dialog" aria-label="Keyboard shortcuts" onMouseDown={(e) => e.stopPropagation()}>
         <h3>Keyboard shortcuts</h3>
         <table>
           <tbody>
-            {SHORTCUTS.map(([k, d]) => (
+            {shortcutRows(bindings).map(([k, d]) => (
               <tr key={k}>
                 <td>
                   <kbd>{k}</kbd>
@@ -293,6 +290,9 @@ function ShortcutSheet({ onClose }: { onClose: () => void }) {
             ))}
           </tbody>
         </table>
+        <button className="btn ghost small" data-testid="shortcut-sheet-edit" onClick={onEdit}>
+          Edit keybindings…
+        </button>
       </div>
     </div>
   );
@@ -400,9 +400,24 @@ export type PaletteActions = {
   settings: (target?: string) => void;
   workspaces: () => void;
   toggleFocus: () => void;
+  /** Ctrl+J: open the top NEEDS YOU agent. */
+  needsYou?: () => void;
 };
 
-export const openOverlay = (which: "search" | "shortcuts") => window.dispatchEvent(new CustomEvent("vs:open-overlay", { detail: which }));
+type Overlay = "search" | "shortcuts" | "quickOpen" | "findInFiles";
+export const openOverlay = (which: Overlay) => window.dispatchEvent(new CustomEvent("vs:open-overlay", { detail: which }));
+
+/** Keymap commands this host doesn't run (focus-scoped ones such as block 4's inline edit) go out as this event. */
+export const KEY_COMMAND_EVENT = "vs:key-command";
+
+/** The agent shown in the active pane: quick open / find in files work in its cwd. */
+function activeNavAgent(all: Member[]): NavAgent | null {
+  const s = getPanes();
+  const id = s.split && s.activePane === "right" ? s.rightActiveId : s.leftActiveId;
+  const m = id ? all.find((x) => x.agent.id === id) : undefined;
+  if (!m?.agent.cwd) return null;
+  return { id: m.agent.id, cwd: m.agent.cwd, title: cleanTitle(m.agent.title) || m.agent.id.slice(0, 8) };
+}
 
 export function CommandPaletteHost(props: {
   members: Member[];
@@ -412,7 +427,9 @@ export function CommandPaletteHost(props: {
   onTeam: (id: string) => void;
   actions: PaletteActions;
 }) {
-  const [mode, setMode] = useState<"palette" | "search" | "shortcuts" | null>(null);
+  const [mode, setMode] = useState<"palette" | Overlay | null>(null);
+  const [navAgent, setNavAgent] = useState<NavAgent | null>(null);
+  const { bindings } = useKeyBindings();
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(0);
   const closed = useRef<string[]>([]);
@@ -437,6 +454,13 @@ export function CommandPaletteHost(props: {
     }, 0);
   };
 
+  const openMode = (m: Overlay) => {
+    if (m === "quickOpen" || m === "findInFiles") setNavAgent(activeNavAgent(allRef.current));
+    setMode(m);
+  };
+  const openModeRef = useRef(openMode);
+  openModeRef.current = openMode;
+
   // Remember closed tabs so "Reopen Closed Tab" has something to reopen.
   useEffect(() => {
     let prev = new Set(getPanes().leftTabs.concat(getPanes().rightTabs ?? []));
@@ -448,23 +472,24 @@ export function CommandPaletteHost(props: {
     });
   }, []);
 
+  // One keymap dispatcher (src/keymap.ts): defaults + Settings › Keybindings overrides. A focus-scoped
+  // binding (data-keyscope on an ancestor of the focused element) wins over a global one.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const mod = e.ctrlKey || e.metaKey;
+      if (e.key === "Escape") return dismissRef.current();
+      if (e.isComposing) return;
+      const combo = comboFromEvent(e);
+      if (!combo) return;
       const el = e.target as HTMLElement | null;
-      const typing = !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
-      if (mod && !e.altKey && (e.key === "k" || e.key === "K" || (e.shiftKey && (e.key === "p" || e.key === "P")))) {
-        e.preventDefault();
-        setQ("");
-        setSel(0);
-        if (modeRef.current === "palette") dismissRef.current();
-        else setMode("palette");
-      } else if (e.key === "?" && !mod && !typing) {
-        e.preventDefault();
-        setMode("shortcuts");
-      } else if (e.key === "Escape") dismissRef.current();
+      const typing = !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
+      if (typing && !firesWhileTyping(combo)) return;
+      const scope = el?.closest?.("[data-keyscope]")?.getAttribute("data-keyscope") as KeyScope | null | undefined;
+      const id = resolveCommand(combo, bindingsRef.current, scope ? [scope] : []);
+      if (!id) return;
+      e.preventDefault();
+      runCommandRef.current(id, el);
     };
-    const onOpen = (e: Event) => setMode((e as CustomEvent<string>).detail as "search" | "shortcuts");
+    const onOpen = (e: Event) => openModeRef.current((e as CustomEvent<string>).detail as Overlay);
     window.addEventListener("keydown", onKey);
     window.addEventListener("vs:open-overlay", onOpen);
     return () => {
@@ -475,11 +500,18 @@ export function CommandPaletteHost(props: {
 
   dismissRef.current = dismiss;
   modeRef.current = mode;
+  const bindingsRef = useRef(bindings);
+  bindingsRef.current = bindings;
 
   const all = useMemo(() => [...props.members, ...props.archived], [props.members, props.archived]);
+  const allRef = useRef(all);
+  allRef.current = all;
 
   const items = useMemo<PaletteItem[]>(() => {
-    const act = (id: string, label: string): PaletteItem => ({ id: `action:${id}`, kind: "action", label, hint: "" });
+    const act = (id: string, label: string): PaletteItem => {
+      const keys = bindingLabel(bindings, id);
+      return { id: `action:${id}`, kind: "action", label: keys ? `${label} (${keys})` : label, hint: "" };
+    };
     const agents = all.map<PaletteItem>((m) => ({
       id: `agent:${m.agent.id}`,
       kind: "agent",
@@ -502,11 +534,13 @@ export function CommandPaletteHost(props: {
     }));
     return [
       act("new", "New Agent"),
+      act("quickOpen", "Quick Open File…"),
+      act("findInFiles", "Find in Files…"),
       act("search", "Search All Transcripts…"),
-      act("shortcuts", "Keyboard Shortcuts (?)"),
+      act("shortcuts", "Keyboard Shortcuts"),
       act("settings", "Settings"),
       act("workspaces", "Workspaces"),
-      act("focus", "Toggle Focus Mode (Ctrl+.)"),
+      act("focus", "Toggle Focus Mode"),
       act("reopen", "Reopen Closed Tab"),
       ...stops,
       ...teams,
@@ -515,7 +549,7 @@ export function CommandPaletteHost(props: {
       // Last so an empty query still lists agents first; typing "settings" or a setting name finds them.
       ...settingsPaletteItems().map<PaletteItem>((s) => ({ id: `action:${s.id}`, kind: "action", label: s.label, hint: "settings" })),
     ];
-  }, [all, props.members, props.views]);
+  }, [all, props.members, props.views, bindings]);
 
   const shown = useMemo(() => filterPalette(items, q).slice(0, 60), [items, q]);
 
@@ -547,7 +581,13 @@ export function CommandPaletteHost(props: {
       const cwd = id.slice("stopcwd:".length);
       const agents = bulkStopTargets(props.members.map((m) => ({ agent: m.agent, teamId: m.team.id })), { cwd });
       if (agents.length) requestAgentOp({ kind: "stop", title: `Stop all running agents in ${cwd}?`, agents });
-    } else if (id === "new") props.actions.newAgent();
+    } else runAction(id);
+  };
+
+  /** Palette actions by id; the keymap runs the same ones. */
+  const runAction = (id: string) => {
+    setMode(null);
+    if (id === "new") props.actions.newAgent();
     else if (id === "search") setMode("search");
     else if (id === "shortcuts") setMode("shortcuts");
     else if (id === "settings") props.actions.settings();
@@ -557,14 +597,31 @@ export function CommandPaletteHost(props: {
     else if (id === "reopen") {
       const last = closed.current.pop();
       if (last) openAgent(last);
-    }
+    } else if (id === "quickOpen" || id === "findInFiles") openMode(id);
+  };
+
+  const runCommandRef = useRef<(id: string, target: HTMLElement | null) => void>(() => {});
+  runCommandRef.current = (id, target) => {
+    if (id === "palette") {
+      setQ("");
+      setSel(0);
+      if (modeRef.current === "palette") dismissRef.current();
+      else setMode("palette");
+    } else if (id === "quickOpen" || id === "findInFiles") {
+      if (modeRef.current === id) dismissRef.current();
+      else openMode(id);
+    } else if (id === "needsYou") props.actions.needsYou?.();
+    else if (KEY_COMMANDS.some((c) => c.id === id && (c.scope ?? "global") === "global")) runAction(id);
+    else window.dispatchEvent(new CustomEvent(KEY_COMMAND_EVENT, { detail: { id, target } }));
   };
 
   return (
     <>
       <ContextMenuHost />
       <AgentOpConfirmHost />
-      {mode === "shortcuts" && <ShortcutSheet onClose={dismiss} />}
+      {mode === "shortcuts" && <ShortcutSheet onClose={dismiss} bindings={bindings} onEdit={() => runAction("setting:keybindings")} />}
+      {mode === "quickOpen" && <QuickOpen agent={navAgent} onClose={dismiss} />}
+      {mode === "findInFiles" && <FindInFiles agent={navAgent} onClose={dismiss} />}
       {mode === "search" && (
         <TranscriptSearch
           members={all}

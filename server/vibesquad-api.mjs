@@ -8,6 +8,7 @@ import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspectFirstRunStatus, startManagedPaseoInstall } from "./first-run.mjs";
 import { resolveTeamsFilePath, resolveTeamsWritePath } from "./teams-file.mjs";
+import { ADE_GATED_READ_PATHS, handleFileList, handleSearch } from "./file-search.mjs";
 import {
   LEGACY_NEEDS_LABEL,
   LEGACY_USER_TYPE,
@@ -335,6 +336,7 @@ export function isGatedRead(path, url = "") {
   if (path === "/__vibesquad/paseo/usage") return new URL(url, "http://x").searchParams.get("refresh") === "1"; // forces provider API calls
   if (path === "/__vibesquad/paseo/surface") return true; // daemon config: listen, CORS, hub, backups
   if (path === "/__vibesquad/local-image") return true; // file contents
+  if (ADE_GATED_READ_PATHS.includes(path)) return true; // quick open / find in files: workspace file names and contents
   return false;
 }
 
@@ -630,8 +632,19 @@ function allowedAttachRoots(rootDir, opts) {
     const teams = JSON.parse(stripBom(readFileSync(resolveTeamsFilePath(rootDir), "utf8"))).teams ?? [];
     for (const t of teams) for (const p of t.paths ?? []) roots.push(p);
   } catch {}
-  return roots.map(realOrNull).filter(Boolean);
+  return [...new Set(roots)].map(realOrNull).filter(Boolean);
 }
+
+// Quick open / find in files call per keystroke and the agent scan reads every ~/.paseo agent file:
+// reuse the roots for 30s; file-search.mjs rescans (fresh) once before it answers 403.
+const navRootsCache = new Map();
+const navRoots = (rootDir, opts) => (fresh) => {
+  const hit = navRootsCache.get(rootDir);
+  if (!fresh && hit && Date.now() - hit.at < 30_000) return hit.roots;
+  const roots = allowedAttachRoots(rootDir, opts);
+  navRootsCache.set(rootDir, { at: Date.now(), roots });
+  return roots;
+};
 
 function isSensitiveSource(real) {
   const home = homedir();
@@ -1418,6 +1431,10 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return handleProfilesDiff(req, res);
       case "/__vibesquad/workspace-package-scripts":
         return handleWorkspacePackageScripts(req, res, rootDir, opts);
+      case "/__vibesquad/files":
+        return handleFileList(req, res, navRoots(rootDir, opts), sendJson);
+      case "/__vibesquad/search":
+        return handleSearch(req, res, navRoots(rootDir, opts), sendJson);
       case "/__vibesquad/remove-team-worktrees":
         if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
         return readBody(req)

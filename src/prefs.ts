@@ -1,4 +1,5 @@
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { effectiveBindings, parseOverrides, serializeOverrides, type Bindings, type KeyOverrides } from "./keymap.ts";
 
 // App-level preferences, per device. One typed registry (PREF_DEFS) drives the store, the Settings home,
 // search, the command palette, reset and import/export. Stored as one JSON blob under vs.prefs.v1.
@@ -9,7 +10,7 @@ import { useCallback, useSyncExternalStore } from "react";
 export const PREFS_KEY = "vs.prefs.v1";
 export const PREFS_EXPORT_KIND = "vibesquad-prefs";
 
-export type PrefSection = "app" | "chat" | "notifications" | "newAgent" | "layout";
+export type PrefSection = "app" | "chat" | "notifications" | "newAgent" | "layout" | "keys";
 export type Density = "comfortable" | "compact";
 export type Accent = "cyan" | "magenta" | "violet" | "amber";
 export type MonoFont = "jetbrains" | "cascadia" | "consolas" | "system";
@@ -40,6 +41,8 @@ export type Prefs = {
   "layout.rightDockOpen": boolean;
   "layout.rightDockTab": string;
   "layout.rightDockWidth": number;
+  /** JSON of keymap.ts KeyOverrides (command id -> combos); "" = all defaults. */
+  "keys.bindings": string;
 };
 export type PrefKey = keyof Prefs;
 
@@ -88,6 +91,7 @@ export const PREF_DEFAULTS: Prefs = {
   "layout.rightDockOpen": false,
   "layout.rightDockTab": "Changes",
   "layout.rightDockWidth": 320,
+  "keys.bindings": "",
 };
 
 export const PREF_DEFS: PrefDef[] = [
@@ -155,6 +159,8 @@ export const PREF_DEFS: PrefDef[] = [
     max: 4000,
     legacy: { key: "vs.right-dock.width", read: (r) => (Number(r) > 0 ? Number(r) : undefined), write: String },
   },
+  // Edited in Settings › Keybindings (its own section UI), so no generic row.
+  { key: "keys.bindings", section: "keys", label: "Keybindings", kind: "text", hidden: true },
 ];
 
 export const PREF_SECTION_LABEL: Record<PrefSection, string> = {
@@ -163,6 +169,7 @@ export const PREF_SECTION_LABEL: Record<PrefSection, string> = {
   notifications: "Notifications",
   newAgent: "New Agent defaults",
   layout: "Layout",
+  keys: "Keybindings",
 };
 
 const DEF = new Map(PREF_DEFS.map((d) => [d.key, d]));
@@ -179,7 +186,17 @@ export function coercePref<K extends PrefKey>(key: K, value: unknown): Prefs[K] 
     if ((d.min !== undefined && value < d.min) || (d.max !== undefined && value > d.max)) return undefined;
     return value as Prefs[K];
   }
+  if (key === "keys.bindings") return typeof value === "string" && value.length <= 8000 && (value === "" || isJsonObject(value)) ? (value as Prefs[K]) : undefined;
   return typeof value === "string" && value.length <= 1000 ? (value as Prefs[K]) : undefined;
+}
+
+function isJsonObject(s: string): boolean {
+  try {
+    const j = JSON.parse(s);
+    return !!j && typeof j === "object" && !Array.isArray(j);
+  } catch {
+    return false;
+  }
 }
 
 // ---- store ----------------------------------------------------------------------------------------
@@ -353,6 +370,17 @@ export function _resetPrefsCache(): void {
 
 export const getRestoreLastView = (): boolean => getPref("app.restoreLastView");
 export const getTimestampFormat = (): TimestampFormat => getPref("chat.timestampFormat");
+export const getKeyOverrides = (): KeyOverrides => parseOverrides(getPref("keys.bindings"));
+export const setKeyOverrides = (o: KeyOverrides): boolean => setPref("keys.bindings", serializeOverrides(o));
+
+/** Effective keymap (defaults + overrides); re-renders when the overrides change. */
+export function useKeyBindings(): { overrides: KeyOverrides; bindings: Bindings } {
+  const raw = useSyncExternalStore(subscribePrefs, () => getPref("keys.bindings"));
+  return useMemo(() => {
+    const overrides = parseOverrides(raw);
+    return { overrides, bindings: effectiveBindings(overrides) };
+  }, [raw]);
+}
 
 // ---- export / import ----------------------------------------------------------------------------
 
@@ -392,9 +420,10 @@ export function importPrefs(text: string): ImportResult {
 export const visiblePrefDefs = (): PrefDef[] => PREF_DEFS.filter((d) => !d.hidden);
 
 /** Settings that live in rehoused components (Team, Paseo, Profiles, About): searchable by label, open their section. */
-export type HomeSection = "app" | "chat" | "notifications" | "newAgent" | "team" | "paseo" | "profiles" | "about";
+export type HomeSection = "app" | "chat" | "notifications" | "newAgent" | "keys" | "team" | "paseo" | "profiles" | "about";
 export const EXTRA_SETTINGS: { id: string; section: HomeSection; label: string }[] = [
   { id: "ui-scale", section: "app", label: "UI scale (4K)" },
+  { id: "keybindings", section: "keys", label: "Keybindings (rebind shortcuts)" },
   { id: "user-name", section: "team", label: "Your name" },
   { id: "lan", section: "team", label: "Allow other devices (LAN / Meshnet)" },
   { id: "teams", section: "team", label: "Teams and lanes" },
