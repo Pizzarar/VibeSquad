@@ -104,7 +104,7 @@ export function FindInFiles({ agent, onClose }: { agent: NavAgent | null; onClos
             onKeyDown={(e) => {
               if (e.key === "ArrowDown") {
                 e.preventDefault();
-                setSel((s) => Math.min(flat.length - 1, s + 1));
+                setSel((s) => Math.max(0, Math.min(flat.length - 1, s + 1)));
               } else if (e.key === "ArrowUp") {
                 e.preventDefault();
                 setSel((s) => Math.max(0, s - 1));

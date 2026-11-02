@@ -54,11 +54,12 @@ const RESERVED: Record<string, string> = {
   "Ctrl+X": "cut",
   "Ctrl+A": "select all",
   "Ctrl+Z": "undo",
+  "Ctrl+F": "transcript search",
   "Ctrl+W": "the browser (close tab)",
   "Ctrl+T": "the browser (new tab)",
   "Ctrl+N": "the browser (new window)",
   "Ctrl+Shift+N": "the browser",
-  "Ctrl+Shift+T": "the browser",
+  "Ctrl+Shift+T": "reopen closed tab",
 };
 for (let i = 1; i <= 9; i++) RESERVED[`Ctrl+${i}`] = "switch tab";
 
@@ -165,7 +166,10 @@ export const firesWhileTyping = (combo: string): boolean => /^(Ctrl|Alt)\+/.test
 
 export type KeyOverrides = Record<string, string[]>;
 
-/** Drops unknown commands and invalid combos; normalizes; an empty list means "unbound". */
+/**
+ * Drops unknown commands and invalid combos; normalizes. An explicit [] means "unbound", but an entry whose
+ * combos were all invalid is dropped (the command keeps its defaults), and so is one equal to the defaults.
+ */
 export function sanitizeOverrides(obj: unknown, commands: KeyCommand[] = KEY_COMMANDS): KeyOverrides {
   const out: KeyOverrides = {};
   if (!obj || typeof obj !== "object" || Array.isArray(obj)) return out;
@@ -173,6 +177,9 @@ export function sanitizeOverrides(obj: unknown, commands: KeyCommand[] = KEY_COM
   for (const [id, v] of Object.entries(obj as Record<string, unknown>)) {
     if (!known.has(id) || !Array.isArray(v)) continue;
     const combos = [...new Set(v.map((x) => normalizeCombo(String(x))).filter((x): x is string => !!x))].slice(0, 4);
+    if (v.length && !combos.length) continue;
+    const defaults = commands.find((c) => c.id === id)!.defaults.map(normalizeCombo).filter((x): x is string => !!x);
+    if (sameList(combos, defaults)) continue;
     out[id] = combos;
   }
   return out;

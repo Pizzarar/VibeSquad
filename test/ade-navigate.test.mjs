@@ -78,6 +78,10 @@ test("overrides: set / reset / sanitize / serialize round trip", () => {
   assert.deepEqual(K.setBinding({}, "nope", ["Ctrl+O"]), {}, "unknown command ignored");
   assert.deepEqual(K.sanitizeOverrides({ quickOpen: ["Ctrl+O", "junk+x", "ctrl+o"], bogus: ["Ctrl+B"], focus: "Ctrl+." }), { quickOpen: ["Ctrl+O"] });
   assert.deepEqual(K.parseOverrides("not json"), {});
+  assert.deepEqual(K.sanitizeOverrides({ quickOpen: ["junk+x", "Hyper+P"] }), {}, "all-invalid entry is dropped, not an unbind");
+  assert.deepEqual(K.effectiveBindings(K.sanitizeOverrides({ quickOpen: ["junk+x"] })).get("quickOpen"), ["Ctrl+P"]);
+  assert.deepEqual(K.sanitizeOverrides({ focus: [] }), { focus: [] }, "explicit [] still unbinds");
+  assert.deepEqual(K.sanitizeOverrides({ palette: ["ctrl+k", "Ctrl+Shift+P"], quickOpen: ["Ctrl+P"] }), {}, "entries equal to the defaults are stripped");
   assert.equal(K.serializeOverrides({}), "");
   assert.deepEqual(K.parseOverrides(K.serializeOverrides({ quickOpen: ["Ctrl+O"] })), { quickOpen: ["Ctrl+O"] });
 });
@@ -88,6 +92,9 @@ test("conflicts: same combo twice in one scope, reserved keys; different scopes 
   assert.deepEqual(c.get("quickOpen"), [{ combo: "Ctrl+K", with: "Command palette" }]);
   assert.deepEqual(c.get("palette"), [{ combo: "Ctrl+K", with: "Quick open file" }]);
   assert.match(c.get("focus")[0].with, /reserved for switch tab/);
+  const r = K.findConflicts(K.effectiveBindings({ search: ["Ctrl+F"], reopen: ["Ctrl+Shift+T"] }));
+  assert.match(r.get("search")[0].with, /transcript search/);
+  assert.match(r.get("reopen")[0].with, /reopen closed tab/);
   const cmds = [...K.KEY_COMMANDS, { id: "inlineEdit", label: "Inline edit", defaults: ["Ctrl+K"], scope: "files-editor" }];
   assert.equal(K.findConflicts(K.effectiveBindings({}, cmds), cmds).size, 0, "a focus-scoped Ctrl+K is not a conflict");
 });
@@ -137,6 +144,7 @@ test("wiring: palette dispatches through the keymap; cheat sheet shows effective
   assert.match(home, /label: "Keybindings"/);
   assert.match(home, /<KeybindingsEditor \/>/);
   assert.match(src("src/KeybindingsEditor.tsx"), /addEventListener\("keydown", onKey, true\)/, "recorder captures before the dispatcher");
+  for (const f of ["src/QuickOpen.tsx", "src/FindInFiles.tsx"]) assert.match(src(f), /setSel\(\(s\) => Math\.max\(0, Math\.min\(/, `${f}: ArrowDown on an empty list stays at 0`);
   assert.match(src("src/QuickOpen.tsx"), /openRightDockTab\("Files", \{ filePath: path, line \}\)/);
 });
 
@@ -223,6 +231,8 @@ test("confineCwd: absolute existing dir under an allowed root only", () => {
   const out = S.confineCwd(tmpdir(), [repo]);
   assert.equal(out.status, 403);
   assert.equal(S.confineCwd("", [repo]).error, "cwd is required");
+  assert.match(S.confineCwd("\\\\host\\share\\x", [repo]).error, /UNC/);
+  assert.match(S.confineCwd("//host/share", [repo]).error, /UNC/);
 });
 
 test("runSearch (git grep): tracked + untracked, honours .gitignore, case, regex, cap", async () => {
@@ -246,7 +256,7 @@ test("runSearch (git grep): tracked + untracked, honours .gitignore, case, regex
   const ac = new AbortController();
   ac.abort();
   const aborted = await S.runSearch(repo, { q: "needle", regex: false, caseSensitive: false }, { rg: null, signal: ac.signal });
-  assert.ok(Array.isArray(aborted.matches));
+  assert.deepEqual(aborted.matches, [], "already aborted: nothing is spawned");
 });
 
 test("listFiles: git ls-files (tracked + untracked, not ignored) and the walk fallback", () => {

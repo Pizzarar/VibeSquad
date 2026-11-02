@@ -26,6 +26,8 @@ const insideDir = (child, root) => {
 /** Real path of cwd if it is an absolute existing directory under one of `roots`, else an error string. */
 export function confineCwd(cwd, roots) {
   if (typeof cwd !== "string" || !cwd.trim()) return { error: "cwd is required" };
+  // UNC / network paths (\\host\share, //host) would make stat/realpath reach out over SMB: refuse first.
+  if (/^[\\/]{2}/.test(cwd)) return { error: "network (UNC) paths are not allowed" };
   if (cwd.split(/[\\/]/).includes("..")) return { error: "cwd must not contain .." };
   if (!isAbsolute(cwd)) return { error: "cwd must be absolute" };
   let real;
@@ -128,6 +130,7 @@ export function runSearch(cwd, opts, { signal, timeoutMs = SEARCH_TIMEOUT_MS, ma
   const cmd = rg ?? "git";
   const args = rg ? rgArgs(opts) : gitGrepArgs(opts, { noIndex: !isGitRepo(cwd) });
   const parse = rg ? parseRgLine : parseGitGrepLine;
+  if (signal?.aborted) return Promise.resolve({ matches: [], truncated: false, timedOut: false, engine });
   return new Promise((done) => {
     const matches = [];
     let truncated = false;
