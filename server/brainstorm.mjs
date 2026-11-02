@@ -527,10 +527,16 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
         refs: [retiredSummary.path],
       });
       try {
+        // HTTP callers never carry `agents` (sanitizeBody strips it), so read the daemon. An empty
+        // stand-in list wrote "none running / none / 0" over a live lane. Unknown list = no refresh.
         const live = body.agents
           ? body.agents instanceof Map ? [...body.agents.values()] : body.agents
-          : [];
-        refreshWhosHere({ laneId, agents: live.filter((a) => (a?.agent ?? a)?.id !== agentId), rootDir });
+          : connected && client
+            ? await listDaemonAgents(client)
+            : null;
+        if (Array.isArray(live) && live.length) {
+          refreshWhosHere({ laneId, agents: live.filter((a) => (a?.agent ?? a)?.id !== agentId), rootDir });
+        }
       } catch {}
       return {
         ok: true,

@@ -1,9 +1,10 @@
 // "## Who's here" section of a lane brief: written by VibeSquad, never by the agent.
 // Live Brainstorm + Lead titles and a worker count. No IDs, no (old) rows.
 import { briefRootFor } from "./brief-path.mjs";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { effectiveAgentRole, isDigestAgent, isRetiredAgent } from "./identity.mjs";
+import { writeBriefFile } from "./brief-write.mjs";
 
 export const WHOS_HERE_HEADING = "## Who's here";
 
@@ -53,14 +54,28 @@ export function applyWhosHere(content, body) {
   return `${text.replace(/\s*$/, "")}\n\n${section}`;
 }
 
-/** Refresh the brief on disk if it exists and the section changed. Returns { changed, body, path }. */
+/** True when `content` is a real brief: some `## ` section besides Who's here. */
+export function looksLikeBrief(content) {
+  return String(content ?? "")
+    .split("\n")
+    .some((l) => /^## /.test(l) && l.trim() !== WHOS_HERE_HEADING);
+}
+
+/**
+ * Refresh the brief on disk if it exists and the section changed. Returns { changed, body, path, skipped? }.
+ * Skips (never writes) when the agent list is unknown (not an array) or the read came back empty or headless:
+ * a reader racing a truncate-then-write sees 0 bytes, and writing Who's here into that wiped
+ * docs/brainstorm/vibesquad.md to 80 bytes (2026-11-02). Writes go through writeBriefFile (backup + shrink guard).
+ */
 export function refreshWhosHere({ laneId, agents, rootDir }) {
   const path = join(briefRootFor("", laneId, rootDir), "docs", "brainstorm", `${laneId}.md`);
+  if (!Array.isArray(agents)) return { changed: false, body: "", path, skipped: "agents-unknown" };
   const body = whosHereBody(agents, laneId);
   if (!existsSync(path)) return { changed: false, body, path };
   const before = readFileSync(path, "utf8");
+  if (!looksLikeBrief(before)) return { changed: false, body, path, skipped: "not-a-brief" };
   const after = applyWhosHere(before, body);
   if (after === before) return { changed: false, body, path };
-  writeFileSync(path, after, "utf8");
+  writeBriefFile(path, laneId, after);
   return { changed: true, body, path };
 }

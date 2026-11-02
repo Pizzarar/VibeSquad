@@ -37,6 +37,7 @@ import {
   topicOf,
 } from "@vibesquad/server/identity.mjs";
 import { refreshWhosHere } from "@vibesquad/server/whos-here.mjs";
+import { writeBriefFile } from "@vibesquad/server/brief-write.mjs";
 import { detachLiveChildren } from "@vibesquad/server/detach-children.mjs";
 import { briefRootFor } from "@vibesquad/server/brief-path.mjs";
 import { deriveRole } from "@vibesquad/server/profiles.mjs";
@@ -570,6 +571,8 @@ export function snapshotIntoBrief(
   } catch {
     return "missing";
   }
+  // An empty read is a writer mid-truncate, not an empty brief: appending to it would wipe the brief.
+  if (!before.trim()) return "missing";
   const turn = String(lastTurn ?? "").replace(/\s+/g, " ").trim();
   if (!turn) return "no-turn";
   const lastActive = Date.parse(old.updatedAt ?? "");
@@ -589,7 +592,7 @@ export function snapshotIntoBrief(
   }
   const after = lines.join("\n");
   if (after.length > MAX_BRIEF_CHARS) return "too-large";
-  fs.writeFileSync(file, after, "utf8");
+  writeBriefFile(file, lane, after);
   return "snapshotted";
 }
 

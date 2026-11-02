@@ -1,7 +1,7 @@
 // Brief file writes with durability (docs/PLAN_SPAWN_HYGIENE.md block 6): every replace is backed up to
 // <VIBESQUAD_HOME>/brief-history/<lane>/<ts>.md (newest 20 kept) and a big brief is never replaced by a near-empty one.
 // Kept free of daemon imports so the Paseo plugin can use it too.
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -30,6 +30,28 @@ export function backupBrief(laneId, fullPath) {
   return dest;
 }
 
+/**
+ * Write via a temp file + rename, so a concurrent reader sees the old brief or the new one, never a
+ * truncated 0-byte file (a Who's here refresh that read one wiped docs/brainstorm/vibesquad.md, 2026-11-02).
+ * Windows can refuse the rename while another process holds the file open: retry, then write in place.
+ */
+export function writeFileAtomic(fullPath, text) {
+  const tmp = `${fullPath}.${process.pid}.${Date.now().toString(36)}.tmp`;
+  writeFileSync(tmp, text, "utf8");
+  for (let i = 0; i < 5; i++) {
+    try {
+      renameSync(tmp, fullPath);
+      return;
+    } catch (e) {
+      if (!["EPERM", "EBUSY", "EACCES"].includes(e?.code) || i === 4) break;
+      const until = Date.now() + 20 * (i + 1);
+      while (Date.now() < until);
+    }
+  }
+  rmSync(tmp, { force: true });
+  writeFileSync(fullPath, text, "utf8");
+}
+
 /** Guarded write of a brief file. Throws (old content kept) on a big-to-near-empty replace. */
 export function writeBriefFile(fullPath, laneId, text) {
   mkdirSync(dirname(fullPath), { recursive: true });
@@ -41,5 +63,5 @@ export function writeBriefFile(fullPath, laneId, text) {
     }
     if (!before.equals(Buffer.from(text, "utf8"))) backupBrief(laneId, fullPath);
   }
-  writeFileSync(fullPath, text, "utf8");
+  writeFileAtomic(fullPath, text);
 }
