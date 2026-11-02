@@ -1052,6 +1052,7 @@ export function Timeline({
   const shown = filterEntries(base, filter);
   const slowFirstLoad = useDelayedBusy(!loaded && entries.length === 0);
   const slowMore = useDelayedBusy(loadingMore);
+  const slowSearch = useDelayedBusy(searching);
   const pinnedTodo = findPinnedTodo(shown);
 
   useEffect(() => {
@@ -1216,7 +1217,7 @@ export function Timeline({
                 if (ev.key === "Escape") setBarOpen(false);
               }}
             />
-            <button className="btn ghost small" data-testid="tl-search-go" disabled={searching} onClick={() => void runSearch()}>{searching ? "…" : "Find"}</button>
+            <button className="btn ghost small" data-testid="tl-search-go" disabled={searching} onClick={() => void runSearch()}>{searching ? (slowSearch ? <Spinner /> : "…") : "Find"}</button>
             <button className="btn ghost small" title="Previous match" disabled={!hits.length} onClick={() => stepHit(-1)}>↑</button>
             <button className="btn ghost small" title="Next match" disabled={!hits.length} onClick={() => stepHit(1)}>↓</button>
             <span className="tl-bar-count" data-testid="tl-search-count">{hits.length ? `${hitIdx + 1}/${hits.length}` : ""}</span>
