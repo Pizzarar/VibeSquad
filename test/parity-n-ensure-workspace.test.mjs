@@ -31,3 +31,21 @@ test("createInflight clears after a rejection so retry works", async () => {
   await assert.rejects(f.run("k", () => Promise.reject(new Error("x"))));
   assert.equal(await f.run("k", async () => 5), 5);
 });
+
+import { unsafeWorkspaceCwdReason as bad } from "../src/ensureWorkspaceLogic.ts";
+
+test("unsafeWorkspaceCwdReason refuses dangerous folders", () => {
+  for (const p of ["", "   ", "C:/a\nb", "C:/a\0b", "relative/dir", "proj", "C:/a/../b", "/a/./b", "\\srv\share", "//srv/share/x", "C:", "C:" + B, "/", "C:/Windows", "C:/Windows/System32".slice(0, 10), "/etc", "/usr", "C:/Users", "C:/Users/me", "C:/users/ME/", "/home", "/home/me", "C:/Program Files"]) {
+    assert.ok(bad(p) !== null, `should refuse ${JSON.stringify(p)}`);
+  }
+});
+
+test("unsafeWorkspaceCwdReason allows real project folders", () => {
+  for (const p of ["C:/Users/me/proj", "C:" + "\\" + "Users" + "\\" + "me" + "\\" + "proj" + "\\", "D:/code", "/home/me/proj", "/srv/app", "C:/Users/me/.worktrees/x"]) assert.equal(bad(p), null, p);
+});
+
+test("normDir/workspaceKey collapse repeated slashes", () => {
+  assert.equal(workspaceKey("C:/Repo//sub"), workspaceKey("c:/repo/sub"));
+  assert.equal(workspaceKey("C:" + "\\\\" + "Repo" + "\\\\\\\\" + "sub"), workspaceKey("c:/repo/sub"));
+  assert.equal(findWorkspaceForCwd("C:/Repo//sub//x", [["a", { workspaceDirectory: "c:/repo/sub" }]]), "a");
+});

@@ -1,6 +1,6 @@
 // Block C wrappers: workspace/project CRUD + branch validation. Kept out of paseo.ts on purpose.
 import { daemonClient, getPaseoState } from "./paseo";
-import { createInflight, findWorkspaceForCwd, workspaceKey } from "./ensureWorkspaceLogic";
+import { createInflight, findWorkspaceForCwd, unsafeWorkspaceCwdReason, workspaceKey } from "./ensureWorkspaceLogic";
 import type { PaseoWorkspace } from "@getpaseo/client";
 import type { CreateSource } from "./workspaceLogic";
 
@@ -63,7 +63,8 @@ const ensureInflight = createInflight<{ workspaceId: string; created: boolean }>
  */
 export function ensureWorkspace(cwd: string): Promise<{ workspaceId: string; created: boolean }> {
   const dir = cwd.trim();
-  if (!dir) return Promise.reject(new Error("No folder to add as a workspace."));
+  const unsafe = unsafeWorkspaceCwdReason(dir);
+  if (unsafe) return Promise.reject(new Error(unsafe));
   return ensureInflight.run(workspaceKey(dir), async () => {
     const known = findWorkspaceForCwd(dir, getPaseoState().workspaces);
     if (known) return { workspaceId: known, created: false };

@@ -110,7 +110,7 @@ export function dropFromOverlay<W>(overlay: Map<string, OverlayEntry<W>>, ids: s
   return next;
 }
 
-export const normDir = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+export const normDir = (p: string) => p.replace(/[\\/]+/g, "/").replace(/\/+$/, "").toLowerCase();
 
 /**
  * The agent's Paseo workspace: its own workspaceId, else the workspace whose folder holds the agent's cwd
