@@ -28,7 +28,6 @@ import {
   isDigestAgent as isDigestIdentity,
   isRetiredAgent,
   isRetiredRole,
-  isThrowawayLane,
   laneLeadMismatch,
   matchPathInRegistry,
   normalizeRoleLabel,
@@ -37,7 +36,6 @@ import {
 } from "@vibesquad/server/identity.mjs";
 import { refreshWhosHere } from "@vibesquad/server/whos-here.mjs";
 import { briefRootFor } from "@vibesquad/server/brief-path.mjs";
-import { seedBriefIfMissing } from "@vibesquad/server/brief-write.mjs";
 import { deriveRole } from "@vibesquad/server/profiles.mjs";
 import { leanApplies, leanProviderOptions } from "@vibesquad/server/lean-tools.mjs";
 import {
@@ -93,21 +91,24 @@ export const BRAINSTORM_PACK = [
   "Role: brainstorm (the Brainstorm, head of a Team).",
   "- Read `docs/brainstorm/<lane>.md` before anything else. After every decision update it as a short diff (<5k tokens; sections: Who's here / Done when / Decided / Open / In flight). Keep `## Done when`; never edit `## Who's here` (VS writes it). The brief is the handoff: don't write dated docs/BRAINSTORM_HANDOFF_*.md files.",
   "- You may write `vs log decision \"...\"`, `vs log needs-you \"...\"`, `vs log handoff \"...\"`, and `vs log metric \"...\"` (240 chars max). Hand build work to a lead; do not implement.",
-  "- Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`paseo --help`, Paseo MCP tool list, `vs --help`, skills). Name what you checked in the plan's Decided section.",
+  "- Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`paseo --help`, Paseo MCP tool list, `vs --help`, skills). Name what you checked in the plan's Decided section. Every plan lists its blocks in a `| Block | Touches | Clashes with |` table (files/areas each touches, what it clashes with).",
   "- Never complete a Team yourself. When the lead reported PASS on the last plan block and nothing is Open, post: \"<Team> looks done. ✓ Mark complete · Not yet\" followed by a fenced block containing the single line `vs:looks-done`. Only the user's click completes a Team.",
   "- At >=80k tokens, update the brief now. At the hard limit VS retires you; the next click on the pin starts a fresh Brainstorm from the brief.",
   "- If the user raises something that belongs to another Team, offer: \"That sounds like <Team>. Send it there?\" followed by a fenced block: line 1 `vs:send-to <lane-id>`, then the idea text (VS shows a one-click Send button). Unrelated loose ideas: `vs inbox add \"<idea>\"` (or the UI's `Park in Inbox`) and reply \"parked N ideas → Inbox\".",
   "- \"I just thought of X\" / \"spin up a Brainstorm for X\" is a new-pin request: run `vs pin new \"<short name>\" --brief \"<X in 1-3 lines>\"` (same Squad by default). It refuses when X overlaps an existing Team and names it: offer that Team instead. For work in flight that isn't a Team yet, check `vs who brainstorm` / `vs log --since-me` first. Don't spawn the Brainstorm; the first click on the new pin starts it.",
+  "- In a hub chat, sort every new idea: stays here / existing Team (`vs:send-to`) / new Team (`vs:spin-off`). Anything that isn't hub business gets proposed as a spin-off. Never spin off without the user's confirmation.",
+  "- Propose spin-offs as one fenced block, line 1 ```vs:spin-off, then one Team per line: `Name | 1-line brief`. The user edits in words (4 proposed, \"energy and food in one lane called Needs\" → re-post the block with 3); only the newest block gets the button.",
 ].join("\n");
 
 export const LEAD_FALLBACK_PACK = [
   "Role: lead.",
-  "- Dispatch workers, read their digests via `vs log --since-me` (never raw transcripts), log decisions/blockers with `vs log`.",
+  "- Dispatch workers, read their digests via `vs log --since-me` (never raw transcripts), log decisions/blockers with `vs log`. When you start a plan, set `job=<objective in a few words>` (`paseo agent update --label job=...`); refer to agents by short name (e.g. Bug1, Hub5).",
   "- When a plan block passes (PASS) or the whole plan is complete, add that line under `## In flight` in `docs/brainstorm/<lane>.md` so the Brainstorm can spot \"looks done\". Touch nothing else in the brief.",
   "- Context management: at ~150k stop dispatching and write a handoff at the next good stopping point; VS auto-hands off at 250k, hard cap 300k. Run `vs handoff` and fill the Judgment section.",
   "- Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`paseo --help`, Paseo MCP tool list, `vs --help`, skills). Name what you checked in the plan's Decided section.",
   "- \"Spin up a buddy (for X)\" / \"spin up another buddy\" / \"get me a buddy for X\": spawn a new Buddy (role=brainstorm, title BRAINSTORM · <LANE> · <topic X>) in a new feature lane (lane=<slug from X>) under the same Squad (team=<product>). First check existing lanes/Buddies (`vs who brainstorm` and `vs log --since-me`) for file or feature overlap; if X overlaps an existing Buddy, say so and suggest using that Buddy instead. Otherwise spawn the new Buddy with a 2-3 line context brief (its Lead comes later at plan handoff).",
   "- Write JSON files with node (e.g. fs.writeFileSync(..., 'utf8')), never PowerShell Set-Content (which writes a UTF-8 BOM that breaks JSON parsers).",
+  "- Plans carry a parallel table (block | touches | clashes with); run non-clashing blocks at the same time by default; say why in one line when you don't.",
   "- Restart the VibeSquad server only when a merged change needs it, and log it (`vs log metric \"server restart: <why>\"`).",
 ].join("\n");
 
@@ -374,13 +375,13 @@ export function extractLeadShortName(target: { id: string; title?: string | null
 }
 
 /**
- * Lane label to write after resolution: a throwaway lane (`walk-*`, `*-tmp`, ...) keeps
- * its own slug instead of being folded into the cwd lane, so it never collides with
- * that lane's real lead/Buddy.
+ * Lane label to write after resolution: an explicit lane label is never overwritten (an unknown
+ * or throwaway lane like `walk-*` / `*-tmp` keeps its own slug instead of being folded into the
+ * cwd lane, so it never collides with that lane's real lead/Buddy). The cwd lane only fills a blank.
  */
 export function keptLaneOf(resolved: { laneId: string; callerLane: string; autofixedFromCwd: boolean }): string {
   const caller = (resolved.callerLane ?? "").trim().toLowerCase();
-  if (resolved.autofixedFromCwd && caller && isThrowawayLane(caller)) return caller;
+  if (resolved.autofixedFromCwd && caller) return caller;
   return resolved.laneId;
 }
 
@@ -1045,7 +1046,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
                 log(`mismatch metric write failed: ${err}`);
               }
             }
-            if (resolved.autofixedFromCwd) {
+            if (resolved.autofixedFromCwd && !resolved.callerLane) {
               const autofixKey = `autofix:${resolved.callerLane}->${resolved.laneId}:${cwd}`;
               recentBeforeMismatches.set(autofixKey, Date.now());
               try {
@@ -1232,15 +1233,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           const fromVsRestart = Boolean(reqLabels["vs.restarted-from"]) || env?.VS_BRIEF_INLINE === "1";
           if (briefLane && !fromVsRestart && !currentSys.includes(marker) && !reqPrompt.includes(marker)) {
             const briefRoot = deps.briefRoot ?? briefRootFor(reqLabels.team || env?.VS_TEAM || "", briefLane, REPO_ROOT);
-            // No brief file yet: the spawn prompt is the idea. Persist it (guarded writer, never overwrites) so it
-            // survives this first prompt; the prompt already carries it, so skip injecting it back.
-            let seeded: string | null = null;
-            try {
-              seeded = seedBriefIfMissing({ root: briefRoot, lane: briefLane, idea: reqPrompt });
-            } catch (err) {
-              log(`brief seed failed for ${briefLane}: ${err}`);
-            }
-            const block = seeded ? "" : laneBriefBlock(briefRoot, briefLane);
+            const block = laneBriefBlock(briefRoot, briefLane);
             if (block) {
               next.systemPrompt = [currentSys.trim(), block].filter(Boolean).join("\n\n");
               changed = true;
@@ -1331,7 +1324,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
                 });
               }
             }
-            if (resolved.autofixedFromCwd) {
+            if (resolved.autofixedFromCwd && !resolved.callerLane) {
               const autofixKey = `autofix:${resolved.callerLane}->${resolved.laneId}:${agentCwd}`;
               const prevTs = recentBeforeMismatches.get(autofixKey);
               if (prevTs && Date.now() - prevTs < 2000) {

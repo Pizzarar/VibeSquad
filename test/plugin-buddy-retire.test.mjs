@@ -126,7 +126,8 @@ test("helpers: throwaway lanes and lane/lead mismatch", () => {
   assert.equal(laneLeadMismatch({ lane: "vibesquad", lead: "VibeSquad" }), "");
   assert.equal(laneLeadMismatch({ lane: "vibesquad" }), "");
   assert.equal(keptLaneOf({ laneId: "vibesquad", callerLane: "walk-tmp", autofixedFromCwd: true }), "walk-tmp");
-  assert.equal(keptLaneOf({ laneId: "vibesquad", callerLane: "unknown-x", autofixedFromCwd: true }), "vibesquad");
+  assert.equal(keptLaneOf({ laneId: "vibesquad", callerLane: "unknown-x", autofixedFromCwd: true }), "unknown-x", "explicit unknown lane kept");
+  assert.equal(keptLaneOf({ laneId: "vibesquad", callerLane: "", autofixedFromCwd: true }), "vibesquad", "missing lane gets the cwd lane");
 });
 
 test(
