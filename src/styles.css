@@ -3655,3 +3655,16 @@ button.file-chip { cursor: pointer; font: inherit; }
 .ws-name .btn.small { padding: 1px 8px; font-size: 10px; }
 [data-testid="ws-projects"] > div:first-child input { flex: 1; }
 .ws-controls { flex-wrap: wrap; }
+
+.changes-history { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.changes-history-list { display: flex; flex-direction: column; gap: 4px; align-self: stretch; }
+.changes-commit-files { display: flex; flex-direction: column; gap: 4px; padding: 4px 8px 8px; border-top: 1px solid var(--line); }
+.changes-sha { flex: none; color: var(--cyan); font-size: 11px; }
+.changes-history-note { font-size: 11px; width: 100%; }
+.changes-history-note.err { color: var(--hot-pink); }
+.check-run.clickable { cursor: pointer; }
+.check-run.clickable:hover .check-name { text-decoration: underline; }
+.changes-check-details, .changes-pr-timeline { display: flex; flex-direction: column; gap: 4px; padding: 4px 8px; border: 1px solid var(--line); background: var(--navy); }
+.changes-check-text { margin: 0; max-height: 140px; overflow: auto; white-space: pre-wrap; font-family: var(--mono); font-size: 11px; }
+.changes-timeline-item { border-bottom: 1px solid var(--line); padding-bottom: 3px; }
+@media (max-width: 480px) { .changes-commit-files .changes-file-header { flex-wrap: wrap; } }
