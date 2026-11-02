@@ -473,11 +473,17 @@ impl SharedAppState {
         }
     }
 
-    pub fn fire_native_notification(&self, title: &str, body: &str) {
+    pub fn fire_native_notification(&self, title: &str, body: &str) -> Result<(), String> {
         if let Some(app) = self.app_handle.read().unwrap().as_ref() {
-            if let Err(e) = app.notification().builder().title(title).body(body).show() {
-                eprintln!("[vibesquad-notify] fire_native_notification failed (title={}): {}", title, e);
+            match app.notification().builder().title(title).body(body).show() {
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    eprintln!("[vibesquad-notify] fire_native_notification failed (title={}): {}", title, e);
+                    Err(e.to_string())
+                }
             }
+        } else {
+            Err("app_handle not ready".to_string())
         }
     }
 }
@@ -1219,8 +1225,8 @@ async fn handle_desktop_notify(
     } else {
         payload.title.trim()
     };
-    state.fire_native_notification(title, payload.body.trim());
-    Json(json!({ "ok": true }))
+    let res = state.fire_native_notification(title, payload.body.trim());
+    Json(json!({ "ok": res.is_ok(), "shown": res.is_ok(), "error": res.err() }))
 }
 
 /// Inspects Paseo `/ws` JSON frames flowing from upstream to track agents needing attention,
@@ -1511,7 +1517,7 @@ fn inspect_ws_frame(state: &Arc<SharedAppState>, text: &str) {
         state.set_needs_count(count);
     }
     for (title, body) in &notifications_to_fire {
-        state.fire_native_notification(title, body);
+        let _ = state.fire_native_notification(title, body);
     }
     // Store the last notified agent ID for click-to-focus
     if let Some((_, body)) = notifications_to_fire.last() {

@@ -216,7 +216,13 @@ export function readPushSubscriptions() {
   if (!existsSync(file)) return [];
   const { value: parsed } = readJsonFileWithBom(file, { fallback: [], label: "push-subs.json" });
   const list = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.subscriptions) ? parsed.subscriptions : [];
-  return list.filter((s) => s && typeof s.endpoint === "string" && s.keys?.p256dh && s.keys?.auth);
+  return list.filter((s) => s && typeof s.endpoint === "string" && (isDesktopSubscription(s) || (s.keys?.p256dh && s.keys?.auth)));
+}
+
+export const DESKTOP_ENDPOINT = "desktop://local";
+
+export function isDesktopSubscription(s) {
+  return s?.type === "desktop" && s?.endpoint === DESKTOP_ENDPOINT;
 }
 
 export function writePushSubscriptions(subs) {
@@ -251,8 +257,31 @@ function assertPublicHttpsEndpoint(endpoint) {
   }
 }
 
+function saveDesktopSubscription(sub) {
+  const now = new Date().toISOString();
+  const existing = readPushSubscriptions();
+  const idx = existing.findIndex((s) => s.endpoint === DESKTOP_ENDPOINT);
+  const entry = {
+    endpoint: DESKTOP_ENDPOINT,
+    type: "desktop",
+    deviceName: String(sub.deviceName || "Windows · VibeSquad App").slice(0, 120),
+    createdAt: idx >= 0 ? existing[idx].createdAt : now,
+    updatedAt: now,
+  };
+  if (idx >= 0) existing[idx] = entry;
+  else existing.push(entry);
+  writePushSubscriptions(existing);
+  return { ok: true, type: "desktop", subCount: existing.length, count: existing.length, subscription: entry };
+}
+
 export function savePushSubscription(input) {
   const sub = input?.subscription ?? input;
+  if (sub?.type === "desktop" || sub?.endpoint === DESKTOP_ENDPOINT) {
+    if (sub.type !== "desktop" || sub.endpoint !== DESKTOP_ENDPOINT) {
+      throw new Error('Desktop subscription requires type "desktop" and endpoint "desktop://local"');
+    }
+    return saveDesktopSubscription(sub);
+  }
   const endpoint = String(sub?.endpoint ?? "").trim();
   const p256dh = String(sub?.keys?.p256dh ?? "").trim();
   const auth = String(sub?.keys?.auth ?? "").trim();
@@ -267,6 +296,9 @@ export function savePushSubscription(input) {
   const entry = {
     endpoint,
     keys: { p256dh, auth },
+    type: "webpush",
+    ...(sub.deviceName ? { deviceName: String(sub.deviceName).slice(0, 120) } : {}),
+    ...(sub.userAgent ? { userAgent: String(sub.userAgent).slice(0, 300) } : {}),
     expirationTime: sub.expirationTime ?? null,
     createdAt: idx >= 0 ? existing[idx].createdAt : now,
     updatedAt: now,
@@ -274,7 +306,7 @@ export function savePushSubscription(input) {
   if (idx >= 0) existing[idx] = entry;
   else existing.push(entry);
   writePushSubscriptions(existing);
-  return { ok: true, subCount: existing.length, subscription: entry };
+  return { ok: true, type: "webpush", count: existing.length, subCount: existing.length, subscription: entry };
 }
 
 export function removePushSubscription(endpointInput) {
@@ -314,7 +346,9 @@ export async function sendWebPushToSubscription(sub, payloadObj, vapid = getOrCr
 }
 
 export async function broadcastWebPush(payloadObj) {
-  const subs = readPushSubscriptions();
+  const all = readPushSubscriptions();
+  // Desktop subscriptions are served by the Tauri shell's native toasts, not by HTTP Web Push.
+  const subs = all.filter((s) => s.keys?.p256dh && s.keys?.auth);
   const vapid = getOrCreateVapidKeys();
   let sent = 0;
   let failed = 0;
@@ -336,7 +370,10 @@ export async function broadcastWebPush(payloadObj) {
     ok: true,
     sent,
     failed,
-    subCount: subs.length,
+    subCount: all.length,
+    total: all.length,
+    webPushCount: subs.length,
+    desktopSubscribed: all.some(isDesktopSubscription),
     payload: payloadObj,
     ...(errors.length ? { errors } : {}),
   };

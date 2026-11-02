@@ -12,6 +12,57 @@ export function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuf
   return outputArray;
 }
 
+export interface TestPushOutcome {
+  webPushSent: number;
+  desktopShown: boolean;
+  desktopError?: string | null;
+  browserShown: boolean;
+  totalSubscribed: number;
+  permission?: string;
+}
+
+/** Truthful test-push status: never claims a toast that nothing displayed. */
+export function formatTestPushStatus(o: TestPushOutcome): string {
+  const devices = `${o.webPushSent} device${o.webPushSent === 1 ? "" : "s"}`;
+  if (o.desktopShown) {
+    return o.webPushSent > 0 ? `Desktop toast shown · Sent to ${devices}` : "Desktop toast shown";
+  }
+  if (o.desktopError) return `Desktop toast blocked (${o.desktopError})`;
+  if (o.webPushSent > 0) return `Sent to ${devices}`;
+  if (o.browserShown) return "Browser notification shown";
+  if (o.permission && o.permission !== "granted" && o.permission !== "unsupported") {
+    return `Blocked (notification permission ${o.permission})`;
+  }
+  return "No devices subscribed";
+}
+
+const DESKTOP_SUB = { type: "desktop", endpoint: "desktop://local", deviceName: "Windows · VibeSquad Desktop" };
+
+async function postSubscription(body: unknown): Promise<boolean> {
+  try {
+    const r = await fetch("/__vibesquad/push/subscribe", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function desktopAvailable(): Promise<boolean> {
+  if ((window as any).__VIBESQUAD_DESKTOP__) return true;
+  try {
+    const r = await fetch("/__desktop/status");
+    if (!r.ok) return false;
+    const j = await r.json().catch(() => null);
+    return j?.ok === true;
+  } catch {
+    return false;
+  }
+}
+
 export const PushNotificationControls = memo(function PushNotificationControls() {
   const [enabled, setEnabled] = useState<boolean>(() => localStorage.getItem("vs.push.enabled") === "1");
   const [busy, setBusy] = useState(false);
@@ -27,13 +78,32 @@ export const PushNotificationControls = memo(function PushNotificationControls()
         if (cancelled) return;
         regRef.current = reg;
         try {
-          const existing = await reg.pushManager?.getSubscription();
+          let existing = await reg.pushManager?.getSubscription();
           if (!cancelled && existing) {
-            setEnabled(true);
-            localStorage.setItem("vs.push.enabled", "1");
+            // The VAPID key may have rotated; a stale subscription can never receive pushes.
+            const keyRes = await fetch("/__vibesquad/push/vapid-public-key").then((r) => r.json()).catch(() => null);
+            const publicKey: string = keyRes?.publicKey ?? "";
+            const storedKey = localStorage.getItem("vs.push.vapidKey");
+            if (publicKey && storedKey && storedKey !== publicKey) {
+              await existing.unsubscribe().catch(() => {});
+              existing = await reg.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: urlBase64ToUint8Array(publicKey),
+              });
+            }
+            if (publicKey) localStorage.setItem("vs.push.vapidKey", publicKey);
+            // Always re-register so push-subs.json recovers even if the file was lost.
+            await postSubscription(existing.toJSON());
+            if (!cancelled) {
+              setEnabled(true);
+              localStorage.setItem("vs.push.enabled", "1");
+            }
           }
         } catch {
           // PushManager may not be available in all contexts
+        }
+        if (!cancelled && localStorage.getItem("vs.push.enabled") === "1" && (await desktopAvailable())) {
+          await postSubscription(DESKTOP_SUB);
         }
       })
       .catch(() => {});
@@ -104,17 +174,32 @@ export const PushNotificationControls = memo(function PushNotificationControls()
         }
       }
 
+      let webPushOk = false;
       if (subJson?.endpoint && subJson?.keys?.p256dh && subJson?.keys?.auth) {
-        await fetch("/__vibesquad/push/subscribe", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(subJson),
-        });
+        webPushOk = await postSubscription(subJson);
+        if (webPushOk && publicKey) localStorage.setItem("vs.push.vapidKey", publicKey);
+      }
+
+      let desktopOk = false;
+      if (await desktopAvailable()) desktopOk = await postSubscription(DESKTOP_SUB);
+
+      const browserOk = "Notification" in window && Notification.permission === "granted";
+      if (!webPushOk && !desktopOk && !browserOk) {
+        setStatusMsg("Alerts unavailable: no Web Push service, desktop shell, or notification permission");
+        return;
       }
 
       setEnabled(true);
       localStorage.setItem("vs.push.enabled", "1");
-      setStatusMsg("Alerts active");
+      setStatusMsg(
+        webPushOk && desktopOk
+          ? "Alerts active (phone + desktop)"
+          : desktopOk
+            ? "Alerts active (desktop toasts)"
+            : webPushOk
+              ? "Alerts active (Web Push)"
+              : "Alerts active (this browser only)",
+      );
     } catch (err: any) {
       setStatusMsg(String(err?.message ?? "Failed"));
     } finally {
@@ -145,29 +230,54 @@ export const PushNotificationControls = memo(function PushNotificationControls()
         kind: "permission",
       };
 
-      // Also trigger via Service Worker message / showNotification so the OS notification shade
-      // always receives the alert even on offline/emulator networks without FCM relay access.
-      const reg = await ensureSwRegistration();
-      const worker = reg?.active || reg?.waiting || reg?.installing || navigator.serviceWorker?.controller;
-      if (worker) {
-        worker.postMessage({ type: "VS_SHOW_NOTIFICATION", payload });
-      } else if (reg && typeof reg.showNotification === "function" && Notification.permission === "granted") {
-        await reg.showNotification(payload.title, {
-          body: payload.body,
-          icon: "/vibesquad-192.png",
-          badge: "/vibesquad-192.png",
-          tag: payload.tag || "vs-test-push",
-          data: { url: payload.url || "/?focus=needs-you" },
+      let desktopShown = false;
+      let desktopError: string | null = null;
+      let browserShown = false;
+
+      // Desktop shell: ask the Tauri host to fire a real Windows toast.
+      try {
+        const dr = await fetch("/__desktop/notify", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ title: payload.title, body: payload.body }),
         });
-      } else if ("Notification" in window && Notification.permission === "granted") {
-        new Notification(payload.title, {
-          body: payload.body,
-          icon: "/vibesquad-192.png",
-          tag: payload.tag || "vs-test-push",
-        });
+        if (dr.ok) {
+          const dj = await dr.json().catch(() => null);
+          if (dj?.ok === true && dj?.shown === true) desktopShown = true;
+          else if (dj) desktopError = String(dj.error ?? "unknown error");
+        }
+      } catch {
+        // Not running inside the desktop shell.
       }
 
-      setStatusMsg(res?.sent > 0 ? `Sent (${res.sent})` : "Test alert shown");
+      if (!desktopShown && !desktopError && "Notification" in window && Notification.permission === "granted") {
+        try {
+          const reg = await ensureSwRegistration();
+          if (reg && typeof reg.showNotification === "function") {
+            await reg.showNotification(payload.title, {
+              body: payload.body,
+              icon: "/vibesquad-192.png",
+              badge: "/vibesquad-192.png",
+              tag: payload.tag || "vs-test-push",
+              data: { url: payload.url || "/?focus=needs-you" },
+            });
+            browserShown = true;
+          }
+        } catch {
+          browserShown = false;
+        }
+      }
+
+      setStatusMsg(
+        formatTestPushStatus({
+          webPushSent: Number(res?.sent ?? 0),
+          desktopShown,
+          desktopError,
+          browserShown,
+          totalSubscribed: Number(res?.total ?? res?.subCount ?? 0),
+          permission: "Notification" in window ? Notification.permission : "unsupported",
+        }),
+      );
     } catch (err: any) {
       setStatusMsg(String(err?.message ?? "Test failed"));
     } finally {
