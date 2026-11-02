@@ -359,7 +359,7 @@ export function CommandPaletteHost(props: {
   /** The jumped-to drawer mounts after the palette closes; retry until its visible composer exists. Inactive panes stay mounted (display:none), so scope by agent and visibility. */
   const focusComposer = (agentId: string, tries = 20) => {
     const cur = document.activeElement as HTMLElement | null;
-    if (cur && cur !== document.body && (/^(INPUT|TEXTAREA|SELECT)$/.test(cur.tagName) || cur.isContentEditable)) return;
+    if (cur && cur !== document.body && !cur.closest(".cmd-palette, .modal-back") && (/^(INPUT|TEXTAREA|SELECT)$/.test(cur.tagName) || cur.isContentEditable)) return;
     const ta = document.querySelector<HTMLTextAreaElement>(`.pane-slot[data-agent="${CSS.escape(agentId)}"] .composer-row textarea`);
     if (ta && ta.offsetParent !== null) ta.focus({ preventScroll: true });
     else if (tries > 0) setTimeout(() => focusComposer(agentId, tries - 1), 50);
