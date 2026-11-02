@@ -269,9 +269,10 @@ export function matchPathInRegistry(
     const teamPaths = Array.isArray(team.paths) ? team.paths : [];
     for (const pat of teamPaths) {
       const p = String(pat ?? "").replace(/\\/g, "/").toLowerCase();
+      // A Squad-level path only names a lane when the Squad has exactly one; never guess lanes[0].
       if (p && norm.includes(p)) {
-        const defaultLane = team.lanes?.[0] ?? { id: team.id, name: team.name };
-        return { team, lane: defaultLane };
+        if (team.lanes?.length === 1) return { team, lane: team.lanes[0] };
+        break;
       }
     }
   }
@@ -411,16 +412,14 @@ export function resolveAgentIdentity(
     }
   }
 
-  // Step 3: Legacy 2-week `labels.team` fallback
-  if (rawTeam && (!cwd || !rawLane)) {
+  // Step 3: `labels.team` + an unregistered lane label keeps that lane. A team with no lane is an orphan
+  // (falls through to the parent chain), never the Squad's first lane.
+  if (rawTeam && rawLane && !cwd) {
     const matchedTeam = findTeamInRegistry(rawTeam, teams);
     if (matchedTeam) {
-      const defaultLane = matchedTeam.lanes?.[0] ?? { id: matchedTeam.id, name: matchedTeam.name };
-      const laneId = rawLane || defaultLane.id;
-      const laneName = rawLane ? rawLane : defaultLane.name || defaultLane.id;
       return {
-        laneId,
-        laneName,
+        laneId: rawLane,
+        laneName: rawLane,
         teamId: matchedTeam.id,
         teamName: matchedTeam.name || matchedTeam.id,
         role,
