@@ -171,7 +171,7 @@ export function demoTimeline(agentId: string): { item: unknown; seqStart: number
     { type: "todo", items: [{ text: "Duet builds", status: "in_progress" }, { text: "Cross-critique", status: "pending" }, { text: "Show user 2 options", status: "pending" }] },
     { type: "tool_call", name: "Bash", status: "running", detail: { type: "shell", command: "vs who lead" } },
   ];
-  return agentId ? items.map((item, i) => ({ item, seqStart: i })) : [];
+  return agentId ? items.map((item, i) => ({ item, seqStart: i, timestamp: new Date(Date.now() - (items.length - i) * 7 * 60_000).toISOString() })) : [];
 }
 
 export function demoProviderUsage() {

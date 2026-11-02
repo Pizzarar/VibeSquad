@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { popClosed, pushClosed } from "./sessionLifecycle";
+import { pruneView } from "./quickwins";
+import { getRestoreLastView } from "./prefs";
 
 // Open agent tabs, the optional 2-pane split and focus mode, outside React state. Rows, cards and
 // tabs subscribe to the one slice they draw (`useAgentPane(id)`), so opening or switching a tab
@@ -42,6 +44,7 @@ let recent: string[] = [];
 function load(): PanesState {
   let saved: Partial<PanesState> = {};
   try {
+    if (!getRestoreLastView()) throw new Error("app.restoreLastView is off");
     saved = JSON.parse(localStorage.getItem(PANES_KEY) ?? "{}") ?? {};
   } catch {
     /* corrupt or unavailable: start empty */
@@ -144,6 +147,14 @@ function commit(next: PanesState, touched: (string | null)[] = []) {
   }
   if (prev.focus !== next.focus) localStorage.setItem(FOCUS_KEY, next.focus ? "1" : "0");
   listeners.forEach((l) => l());
+}
+
+/** After a restore, drop tabs whose agent is gone or archived so no pane sits on a ghost. */
+export function pruneRestoredTabs(live: (id: string) => boolean) {
+  const { leftTabs, rightTabs, leftActiveId, rightActiveId, split, activePane } = state;
+  const p = pruneView({ leftTabs, rightTabs, leftActiveId, rightActiveId, split, activePane }, live);
+  if (sameIds(p.leftTabs, leftTabs) && sameIds(p.rightTabs, rightTabs)) return;
+  commit({ ...state, ...p }, [p.leftActiveId, p.rightActiveId]);
 }
 
 export const subscribePanes = (l: () => void) => {

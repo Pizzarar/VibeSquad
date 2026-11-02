@@ -3623,6 +3623,16 @@ button.file-chip { cursor: pointer; font: inherit; }
 .tl-prompt-ts { color: #888; }
 .tl-flash { outline: 2px solid var(--cyan); outline-offset: 2px; }
 
+/* ---- quick wins: spinner, skeleton, find bar, stamps, inline rename ---- */
+.qw-spinner-wrap { display: inline-flex; align-items: center; gap: 6px; }
+.qw-spinner { width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; display: inline-block; animation: qw-spin 0.7s linear infinite; opacity: 0.8; }
+@keyframes qw-spin { to { transform: rotate(360deg); } }
+.qw-skeleton { display: flex; flex-direction: column; gap: 10px; padding: 14px 10px; }
+.qw-skel-line { height: 14px; border-radius: 4px; background: currentColor; opacity: 0.12; animation: qw-skel 1.2s ease-in-out infinite alternate; }
+@keyframes qw-skel { from { opacity: 0.08; } to { opacity: 0.2; } }
+.tl-stamp { font-size: 10px; opacity: 0.55; margin-top: 2px; cursor: default; }
+.qw-rename { font: inherit; color: inherit; background: rgba(255,255,255,0.08); border: 1px solid var(--accent, #7c5cff); border-radius: 3px; padding: 0 4px; min-width: 6ch; max-width: 100%; }
+
 .sched-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0; }
 .sched-main { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
 .sched-field { display: flex; flex-direction: column; gap: 3px; margin-bottom: 8px; font-size: 12px; }
