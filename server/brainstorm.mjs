@@ -173,7 +173,7 @@ export function buildBrainstormInitialPrompt({ laneId, laneUpper, summaryContent
   const tail =
     pendingPrompt && String(pendingPrompt).trim()
       ? `Pending message from the user to answer now:\n${String(pendingPrompt).trim()}`
-      : `Summary loaded from docs/brainstorm/${laneId}.md. Reply in 1-2 short sentences confirming you are ready and listing the current Decided / In-Flight focus.`;
+      : `Summary loaded from docs/brainstorm/${laneId}.md. Work the top Open item now: reply with your take or the next question on it, in a few short sentences. Ask the user only if you are blocked. Do not just confirm you are ready.`;
 
   return [
     `You are BRAINSTORM · ${laneUpper} (fresh start for lane \`${laneId}\`). Read the brief below before anything else.`,

@@ -137,3 +137,14 @@ test("block 3: an empty list is retried once; a readable list reuses the live Bu
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ---- block 4: boot acts, not confirms ----
+import { buildBrainstormInitialPrompt } from "../server/brainstorm.mjs";
+
+test("block 4: boot prompt tells the Buddy to work the top Open item, not confirm readiness", () => {
+  const p = buildBrainstormInitialPrompt({ laneId: "x", laneUpper: "X", summaryContent: "## Open\n- q1", latestPlan: "docs/PLAN_X.md" });
+  assert.match(p, /Work the top Open item now/);
+  assert.ok(!/confirming you are ready/.test(p));
+  const withPending = buildBrainstormInitialPrompt({ laneId: "x", laneUpper: "X", summaryContent: "s", latestPlan: "p", pendingPrompt: "hello" });
+  assert.match(withPending, /Pending message from the user to answer now:\nhello/);
+});
