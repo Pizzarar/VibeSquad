@@ -317,7 +317,7 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
     <div className="tl-code-block" style={{ position: "relative" }}>
       <button
         data-testid="code-copy-btn"
-        style={{ position: "absolute", top: 4, right: 4, fontSize: "0.75em" }}
+        style={{ position: "absolute", top: 4, right: 4, fontSize: "0.75em", userSelect: "none" }}
         onClick={copy}
       >
         {copied ? "✓ Copied" : "Copy"}

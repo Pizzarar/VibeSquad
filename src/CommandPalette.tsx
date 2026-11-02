@@ -77,11 +77,13 @@ export function agentCtxItems(m: { id: string; cwd?: string | null }, a: { open:
   ];
 }
 
-// Selected text inside `root` (the message element), or "" when the selection is empty or elsewhere.
+// Current highlight when it is non-empty and touches `root` (the message element), else "".
+// Returns the whole highlight (same as native Ctrl+C), even if it extends into other messages.
 export function selectionWithin(root: Element | null): string {
   const sel = typeof window !== "undefined" ? window.getSelection?.() : null;
-  if (!root || !sel || sel.isCollapsed || !sel.anchorNode || !root.contains(sel.anchorNode)) return "";
-  return sel.toString();
+  if (!root || !sel || sel.isCollapsed || !sel.rangeCount) return "";
+  for (let i = 0; i < sel.rangeCount; i++) if (sel.getRangeAt(i).intersectsNode(root)) return sel.toString();
+  return "";
 }
 
 // Whole-message copy lives only on the hover "Copy" button; the menu copies just the highlight.

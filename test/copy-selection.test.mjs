@@ -39,3 +39,42 @@ test("hover Copy button still copies the whole message", () => {
   assert.match(tl, /function CopyMsgButton\(\{ text \}[^]*?navigator\.clipboard\.writeText\(text\)/);
   assert.equal((tl.match(/<CopyMsgButton text=\{it\.text \?\? ""\} \/>/g) ?? []).length, 2);
 });
+
+// ---- selectionWithin, compiled from the real source with a fake Selection/Range ----
+const sStart = src.indexOf("export function selectionWithin");
+const sBody = src.slice(sStart, src.indexOf("// Whole-message copy"));
+globalThis.__sw = null;
+const swJs = stripTypeScriptTypes(sBody.replace("export ", "") + "\n" + "globalThis.__sw = selectionWithin;");
+new Function(swJs)();
+const selectionWithin = globalThis.__sw;
+
+// Elements are plain tokens; a range "touches" the nodes listed in its `hits`.
+const fakeSel = (text, hits, collapsed = false) => ({
+  isCollapsed: collapsed,
+  rangeCount: hits ? 1 : 0,
+  getRangeAt: () => ({ intersectsNode: (n) => hits.includes(n) }),
+  toString: () => text,
+});
+const withSel = (sel, fn) => {
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { getSelection: () => sel } });
+  try { return fn(); } finally { delete globalThis.window; }
+};
+const A = { id: "A" }, B = { id: "B" }, C = { id: "C" };
+
+test("selectionWithin: inside only", () => {
+  assert.equal(withSel(fakeSel("hi", [A]), () => selectionWithin(A)), "hi");
+});
+test("selectionWithin: starts outside and ends inside -> Copy offered with whole highlight", () => {
+  assert.equal(withSel(fakeSel("tail of A + head of B", [A, B]), () => selectionWithin(B)), "tail of A + head of B");
+});
+test("selectionWithin: spans A->B, both offer Copy", () => {
+  const s = fakeSel("A..B", [A, B]);
+  assert.equal(withSel(s, () => selectionWithin(A)), "A..B");
+  assert.equal(withSel(s, () => selectionWithin(B)), "A..B");
+});
+test("selectionWithin: collapsed / none / elsewhere / null root -> empty", () => {
+  assert.equal(withSel(fakeSel("", [A], true), () => selectionWithin(A)), "");
+  assert.equal(withSel(fakeSel("x", null), () => selectionWithin(A)), "");
+  assert.equal(withSel(fakeSel("x", [C]), () => selectionWithin(A)), "");
+  assert.equal(withSel(fakeSel("x", [A]), () => selectionWithin(null)), "");
+});
