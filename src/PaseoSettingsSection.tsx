@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Field } from "./TeamActions";
 import { PaseoOpsPanel } from "./PaseoOpsPanel";
 import { McpPanel } from "./McpPanel";
@@ -6,7 +6,7 @@ import { SkillsPanel } from "./SkillsPanel";
 import { listAvailableProviders, listProviderModels, listProviderModes } from "./paseoProviders";
 import { sortProviders, providerState, describeModel, type CatalogProvider, type CatalogModel, type CatalogMode } from "./paseoProvidersLogic";
 import { previewPluginUpdates, applyPluginUpdates, type PluginUpdatePreviewRow, type PluginUpdateResultRow } from "./paseoPluginUpdates";
-import { isTakeable, toggleSelection, selectedProposals, describeTarget, outcomeLabel, summarizeResults } from "./paseoPluginUpdatesLogic";
+import { isTakeable, toggleSelection, selectedProposals, describeTarget, outcomeLabel, resultNote, summarizeResults } from "./paseoPluginUpdatesLogic";
 
 export type PaseoSettingsTab =
   | "daemon"
@@ -212,18 +212,22 @@ function ProviderCatalogPanel() {
     void load();
   }, [load]);
 
+  const seq = useRef(0);
   const pick = async (provider: string) => {
+    const my = ++seq.current;
     setSel(provider);
     setModels([]);
     setModes([]);
     setErr("");
     try {
       const [mo, md] = await Promise.all([listProviderModels(provider), listProviderModes(provider)]);
+      if (my !== seq.current) return;
       setModels((mo.models ?? []) as CatalogModel[]);
       setModes((md.modes ?? []) as CatalogMode[]);
       const e = mo.error || md.error;
       if (e) setErr(e);
     } catch (e) {
+      if (my !== seq.current) return;
       setErr(e instanceof Error ? e.message : String(e));
     }
   };
@@ -378,7 +382,7 @@ function PluginUpdatesPanel({ onApplied }: { onApplied: () => void }) {
           {results.map((r) => (
             <div key={r.id} className="small">
               <span className={`pill diag ${r.outcome === "updated" ? "ok" : "hot"}`}>{r.outcome}</span> {r.id}
-              {r.error && <span className="muted"> — {r.error}</span>}
+              {resultNote(r) && <span className="muted"> — {resultNote(r)}</span>}
             </div>
           ))}
         </div>

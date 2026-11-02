@@ -31,6 +31,12 @@ test("takeable + selection", () => {
   assert.deepEqual([...pruneSelection(new Set(["a", "b"]), prev)], ["a"]);
   assert.deepEqual(selectedProposals(prev, new Set(["a", "b", "c"])), [{ id: "a" }]);
 });
+test("result note shows error and warning", async () => {
+  const { resultNote } = await import("../src/paseoPluginUpdatesLogic.ts");
+  assert.equal(resultNote({}), "");
+  assert.equal(resultNote({ warning: "restart needed" }), "warning: restart needed");
+  assert.equal(resultNote({ error: "x", warning: "y" }), "x · warning: y");
+});
 test("describe + labels + summary", () => {
   assert.equal(describeTarget(prev[0]), "abcdef01 → 12345678");
   assert.equal(describeTarget({ id: "n", outcome: "update", target: { kind: "npm", version: "2.0.0" } }), "? → v2.0.0");

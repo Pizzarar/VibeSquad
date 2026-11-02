@@ -49,7 +49,12 @@ export function outcomeLabel(o: UpdatePreviewLike["outcome"]): { label: string; 
   }
 }
 
-export function summarizeResults(results: readonly { id: string; outcome: "updated" | "error"; error?: string }[]): string {
+/** Detail shown beside a result row: the error and/or the warning (an updated plugin can still carry a warning). */
+export function resultNote(r: { error?: string; warning?: string }): string {
+  return [r.error, r.warning ? `warning: ${r.warning}` : ""].filter(Boolean).join(" · ");
+}
+
+export function summarizeResults(results: readonly { id: string; outcome: "updated" | "error"; error?: string; warning?: string }[]): string {
   const ok = results.filter((r) => r.outcome === "updated").length;
   const bad = results.length - ok;
   return `${ok} updated${bad ? `, ${bad} failed` : ""}`;
