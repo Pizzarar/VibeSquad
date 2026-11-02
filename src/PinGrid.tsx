@@ -7,13 +7,13 @@ import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { client, DEMO, sendMessage } from "./paseo";
 import { openContextMenu } from "./CommandPalette";
 import { demoTimeline } from "./demo";
-import { hasLooksDone, LOOKS_DONE_MARKER, pinsForSquad, SEND_TO_MARKER, topicOfBrainstorm, withoutSpinOffFence, type Pin } from "./pins";
-import { openBriefEditor } from "./pinActions";
+import { hasLooksDone, liveBuddyDupes, LOOKS_DONE_MARKER, pinsForSquad, SEND_TO_MARKER, topicOfBrainstorm, withoutSpinOffFence, type Pin } from "./pins";
+import { keepPinBuddy, openBriefEditor } from "./pinActions";
 import { IdeaPlusTile, noteSendTo, SendToCard, SpinOffCard, useSendTo, useSpinOff } from "./PinIdeas";
 import { PinMenu } from "./PinMenu";
 import { DoneRow, DoneShelf, LooksDoneCard, useDoneShelfOpen } from "./PinDone";
 import { getBrainstormThresholds, type TeamView } from "./teams";
-import { StatusDot, usePaneClass } from "./ui";
+import { ConfirmButton, StatusDot, usePaneClass } from "./ui";
 import { Avatar, NeonEmblem } from "./pixel";
 import { laneCodeOf, ordOf } from "./teams";
 import { cleanTitle } from "./ui";
@@ -302,6 +302,36 @@ function QuickReply({ pin }: { pin: Pin }) {
   );
 }
 
+/** Two live Buddies in one lane (docs/PLAN_BUGS_BATCH2.md block 0): list them, "Keep this one" retires the others. */
+function BuddyDupeWarning({ pin, onOpenAgent }: { pin: Pin; onOpenAgent: (id: string) => void }) {
+  const dupes = liveBuddyDupes(pin);
+  if (!dupes.length) return null;
+  return (
+    <div className="dup-warning" role="alert" data-testid={`pin-buddy-dupes-${pin.lane.id}`} onClick={(e) => e.stopPropagation()}>
+      <b>⚠ {dupes.length} live Buddies in this team · keep one</b>
+      {dupes.map((m) => (
+        <div key={m.agent.id} className="dup-row">
+          <StatusDot agent={m.agent} />
+          <button type="button" className="btn ghost small" onClick={() => onOpenAgent(m.agent.id)}>
+            {cleanTitle(m.agent.title) || m.agent.id.slice(0, 8)}
+          </button>
+          <span className="muted small">{m.agent.id.slice(0, 8)}</span>
+          <ConfirmButton
+            label="Keep this one"
+            armedLabel="Tap again to retire the others"
+            busyLabel="Retiring…"
+            tone="warn"
+            onConfirm={async () => {
+              const { failed } = await keepPinBuddy(pin, m.agent.id);
+              if (failed.length) throw new Error(`could not retire ${failed.join(", ")}`);
+            }}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 const PinTile = memo(function PinTile({ pin, onPin, onOpenAgent }: { pin: Pin; onPin: (pin: Pin) => Promise<void>; onOpenAgent: (id: string) => void }) {
   const bs = pin.brainstorm;
   const lines = usePreview(bs?.agent.id ?? null);
@@ -359,6 +389,7 @@ const PinTile = memo(function PinTile({ pin, onPin, onOpenAgent }: { pin: Pin; o
         <PinCtx pin={pin} />
         <PinMenu pin={pin} onShowPlumbing={() => setFullView(true)} />
       </div>
+      <BuddyDupeWarning pin={pin} onOpenAgent={onOpenAgent} />
       {bs && looksDoneId && <LooksDoneCard pin={pin} messageId={looksDoneId} />}
       {bs && sendTo && <SendToCard pin={pin} offer={sendTo} />}
       {bs && spinOff && <SpinOffCard pin={pin} offer={spinOff} />}

@@ -1217,7 +1217,11 @@ async function commandWho(flags) {
     return { ...entry, line: formatWhoLine(entry) };
   });
 
-  if (target === "lead") {
+  // Two live main Buddies for one (lane, topic) is a conflict too (docs/PLAN_BUGS_BATCH2.md block 0).
+  // Topic Buddies are separate seats, so only same-topic pairs count.
+  const bsTopics = rawMatched.map((m) => String(m.agent.labels?.topic ?? m.agent.labels?.["vs.inbox-card-id"] ?? "").trim().toLowerCase());
+  const bsConflict = target === "brainstorm" && bsTopics.some((t, i) => bsTopics.indexOf(t) !== i);
+  if (target === "lead" || bsConflict) {
     const status = matched.length === 1 ? "ok" : matched.length === 0 ? "none" : "conflict";
     const exitCode = matched.length === 1 ? 0 : matched.length === 0 ? 1 : 2;
     if (flags.json) {
