@@ -866,6 +866,28 @@ export function createLeadHandoffCoordinator(deps = {}) {
   };
 }
 
+/**
+ * Every non-archived agent from the daemon. DaemonClient has `fetchAgents` (paged, max 200 a page), not
+ * `listAgents`: the old `typeof client.listAgents` guard was always false, so workers were never re-pointed.
+ * Returns [] when the daemon can't be read (same as before: the handoff still runs, just without workers).
+ */
+export async function listDaemonAgents(client, { maxPages = 10 } = {}) {
+  if (!client || typeof client.fetchAgents !== "function") return [];
+  const out = [];
+  let cursor;
+  for (let page = 0; page < maxPages; page++) {
+    const res = await client
+      .fetchAgents({ filter: { includeArchived: false }, page: { limit: 200, ...(cursor ? { cursor } : {}) } })
+      .catch(() => null);
+    if (!res) break;
+    const entries = Array.isArray(res) ? res : Array.isArray(res.entries) ? res.entries : [];
+    for (const e of entries) out.push(e?.agent ?? e);
+    cursor = res.pageInfo?.hasMore ? res.pageInfo.nextCursor : null;
+    if (!cursor) break;
+  }
+  return out;
+}
+
 export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
   const trigger = String(body.trigger || "self").trim();
   const injectedClient = body.daemonClient || null;
@@ -888,12 +910,7 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
       profilesPath: body.profilesPath,
       async listAgents() {
         if (Array.isArray(body.agents)) return body.agents;
-        if (connected && client && typeof client.listAgents === "function") {
-          const res = await client.listAgents().catch(() => null);
-          if (Array.isArray(res?.entries)) return res.entries.map((e) => e.agent ?? e);
-          if (Array.isArray(res)) return res;
-        }
-        return [];
+        return connected && client ? listDaemonAgents(client) : [];
       },
       async getAgent(id) {
         if (body.oldLead && body.oldLead.id === id) return body.oldLead;
