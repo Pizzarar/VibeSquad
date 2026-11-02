@@ -1066,17 +1066,25 @@ export function Timeline({
     setPendingJump((j) => ({ seq: base[idx].seqStart ?? seq, n: (j?.n ?? 0) + 1 }));
   };
   // Scroll + flash after React has committed the (possibly re-filtered) list.
+  const handledJump = useRef(0);
+  const flashTimer = useRef<{ el: HTMLElement; t: ReturnType<typeof setTimeout> } | null>(null);
+  const clearFlash = () => {
+    if (!flashTimer.current) return;
+    clearTimeout(flashTimer.current.t);
+    flashTimer.current.el.classList.remove("tl-flash");
+    flashTimer.current = null;
+  };
+  useEffect(() => clearFlash, []);
   useEffect(() => {
-    if (!pendingJump) return;
-    let marker = timelineRef.current?.querySelector(`[data-tl-seq="${pendingJump.seq}"]`) as HTMLElement | null;
-    let el = marker?.nextElementSibling as HTMLElement | null;
-    if (el?.hasAttribute("data-tl-seq")) el = null; // item rendered nothing
-    setPendingJump(null);
-    if (!el) return;
+    if (!pendingJump || handledJump.current === pendingJump.n) return;
+    handledJump.current = pendingJump.n;
+    const marker = timelineRef.current?.querySelector(`[data-tl-seq="${pendingJump.seq}"]`) as HTMLElement | null;
+    const el = marker?.nextElementSibling as HTMLElement | null;
+    if (!el?.classList.contains("tl")) return; // item rendered nothing
+    clearFlash();
     el.scrollIntoView({ block: "center", behavior: "smooth" });
     el.classList.add("tl-flash");
-    const t = setTimeout(() => el!.classList.remove("tl-flash"), 1800);
-    return () => clearTimeout(t);
+    flashTimer.current = { el, t: setTimeout(clearFlash, 1800) };
   }, [pendingJump, shown.length]);
   const runSearch = async () => {
     const q = query.trim();
@@ -1158,7 +1166,7 @@ export function Timeline({
         pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
       }}
     >
-      <div className="tl-head">
+      {(barOpen || pinnedTodo) && <div className="tl-head">
       {barOpen && (
         <div className="tl-bar" data-testid="tl-bar">
           <div className="tl-bar-row">
@@ -1205,7 +1213,7 @@ export function Timeline({
         </div>
       )}
       {pinnedTodo && <PinnedTodo entry={pinnedTodo} />}
-      </div>
+      </div>}
       {shouldShowLoadOlder(entries, hasMore) && (
         <div style={{ textAlign: "center", padding: "4px 0" }}>
           <button
