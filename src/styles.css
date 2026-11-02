@@ -3608,3 +3608,16 @@ button.file-chip { cursor: pointer; font: inherit; }
   .settings-row { flex-wrap: wrap; }
   .settings-row-control input:not([type="checkbox"]), .settings-row-control select { width: 100%; }
 }
+
+/* Timeline search / prompt navigator / filters */
+.tl-head { position: sticky; top: 0; z-index: 10; display: flex; flex-direction: column; }
+.tl-bar { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; background: #0a0b1e; border: 1px solid var(--cyan); }
+.tl-bar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.tl-bar-row input { flex: 1 1 140px; min-width: 0; }
+.tl-bar-count, .tl-bar-msg { color: #888; font-size: 0.85em; }
+.tl-filter { cursor: pointer; text-transform: capitalize; }
+.tl-filter.on { outline: 1px solid var(--cyan); color: var(--cyan); }
+.tl-prompts { max-height: 180px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.tl-prompt-row { text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tl-prompt-ts { color: #888; }
+.tl-flash { outline: 2px solid var(--cyan); outline-offset: 2px; }
