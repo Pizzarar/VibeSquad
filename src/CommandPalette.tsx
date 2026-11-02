@@ -26,10 +26,12 @@ export function parseUrlState(search: string): UrlState {
 }
 
 /** Merges team/agent into an existing query string, keeping unrelated params (demo, dock, ...). */
-export function serializeUrlState(state: UrlState, search = ""): string {
+export function serializeUrlState(state: UrlState & { squadsHome?: boolean }, search = ""): string {
   const p = new URLSearchParams(search);
   p.delete("team");
   p.delete("agent");
+  p.delete("view");
+  if (state.squadsHome) p.set("view", "squads"); // Squads Home survives a reload/reconnect
   if (state.team) p.set("team", state.team);
   if (state.agent) p.set("agent", state.agent);
   const s = p.toString();

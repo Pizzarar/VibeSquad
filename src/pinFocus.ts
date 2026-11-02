@@ -39,7 +39,8 @@ type State = {
 
 // Start on the grid even if tabs were restored from last session; a ?agent= deep link shows its drawer.
 const deepLinked = typeof location !== "undefined" && new URLSearchParams(location.search).has("agent");
-let state: State = { focus: null, home: !deepLinked, homeActive: deepLinked ? null : getPanes().leftActiveId, squadsHome: false };
+const startOnSquadsHome = !deepLinked && typeof location !== "undefined" && new URLSearchParams(location.search).get("view") === "squads";
+let state: State = { focus: null, home: !deepLinked, homeActive: deepLinked ? null : getPanes().leftActiveId, squadsHome: startOnSquadsHome };
 let seq = 0;
 const listeners = new Set<() => void>();
 
@@ -196,6 +197,7 @@ function tryRestore() {
   if (ps.conn !== "connected" || ps.agents.size === 0) return;
   restored = true;
   if (state.focus) return;
+  if (state.home && state.squadsHome) return; // ?view=squads in the URL wins over the saved pin
   const saved = loadSavedFocus(store);
   const urlAgent = new URLSearchParams(location.search).get("agent");
   const urlAgentRow = urlAgent ? ps.agents.get(urlAgent) : undefined;

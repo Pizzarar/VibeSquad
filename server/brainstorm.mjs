@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import os from "node:os";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
-import { effectiveAgentRole, findLaneInRegistry, isRetiredAgent, resolveWorktreeRootPath, topicOf } from "./identity.mjs";
+import { effectiveAgentRole, findLaneInRegistry, formatDisplayTitle, isRetiredAgent, laneCodeFor, resolveWorktreeRootPath, topicOf } from "./identity.mjs";
 import { findProfileOrFallback, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
 import { briefRootFor, laneWorkingDir } from "./brief-path.mjs";
@@ -81,6 +81,13 @@ function loadTeamsConfig(rootDir = REPO_ROOT) {
   const file = resolveTeamsFilePath(rootDir);
   const res = readJsonFileWithBom(file, { label: "teams.json", fallback: { teams: [] }, recordWarning: true });
   return res.data ?? { teams: [] };
+}
+
+/** Lane-code Buddy title: `<Code> Buddy[ · topic]` (docs/NAMING.md). */
+export function buddyTitle(laneId, laneName, topic, rootDir = REPO_ROOT) {
+  const teams = loadTeamsConfig(rootDir).teams;
+  const code = laneCodeFor(laneId, Array.isArray(teams) ? teams : []);
+  return formatDisplayTitle({ role: "brainstorm", laneId, laneName, code, topic });
 }
 
 function laneDisplayName(laneId, rootDir = REPO_ROOT) {
@@ -191,14 +198,14 @@ export function appendVsLogEntry({ teamId, laneId, agent = "you", type = "metric
   return { entry, path: laneLogPath, teamLogPath };
 }
 
-export function buildBrainstormInitialPrompt({ laneId, laneUpper, summaryContent, latestPlan, pendingPrompt, inFlight }) {
+export function buildBrainstormInitialPrompt({ laneId, laneUpper, buddyName, summaryContent, latestPlan, pendingPrompt, inFlight }) {
   const tail =
     pendingPrompt && String(pendingPrompt).trim()
       ? `Pending message from the user to answer now:\n${String(pendingPrompt).trim()}`
       : `Summary loaded from docs/brainstorm/${laneId}.md. Work the top Open item now: reply with your take or the next question on it, in a few short sentences. Ask the user only if you are blocked. Do not just confirm you are ready.`;
 
   return [
-    `You are BRAINSTORM · ${laneUpper} (fresh start for lane \`${laneId}\`). Read the brief below before anything else.`,
+    `You are ${buddyName || `BRAINSTORM · ${laneUpper}`} (fresh start for lane \`${laneId}\`). Read the brief below before anything else.`,
     "",
     "Rules (BF-P1):",
     `- Update \`docs/brainstorm/${laneId}.md\` after every decision as a short diff (< ~5k tokens; sections: Who's here / Done when / Decided / Open / In flight). Keep \`## Done when\`. Never edit \`## Who's here\`; VibeSquad writes it. The brief is the handoff; do not write dated docs/BRAINSTORM_HANDOFF_*.md files.`,
@@ -519,11 +526,11 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       laneId,
       agent: agentId,
       type: "metric",
-      text: `brainstorm-restart (${reason}): ${tokens} tok -> spawning fresh BRAINSTORM · ${laneUpper}`,
+      text: `brainstorm-restart (${reason}): ${tokens} tok -> spawning fresh ${buddyTitle(laneId, resolved.laneName, "", rootDir)}`,
       refs: [summary.path, latestPlan],
     });
 
-    const newTitle = topic ? `BRAINSTORM · ${laneUpper} · ${topic}` : `BRAINSTORM · ${laneUpper}`;
+    const newTitle = buddyTitle(laneId, resolved.laneName, topic, rootDir);
 
     const rawOldProvider = String(body.provider || oldAgent?.provider || "claude");
     const fallbackProfileName = rawOldProvider.startsWith("antigravity") ? "Brainstorm - Gemini" : "Brainstorm - Claude";
@@ -586,6 +593,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       inFlight: liveInFlightBlock({ agents: liveForBoot, laneId, teamId }),
       laneId,
       laneUpper,
+      buddyName: newTitle,
       summaryContent: summary.content,
       latestPlan,
       pendingPrompt,

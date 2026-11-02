@@ -4,6 +4,7 @@ import { daemonClient, client, DEMO } from "./paseo";
 import { REWIND_MODES, buildRewindRequest, truncateAfter, type RewindMode } from "./sessionLifecycle";
 import { demoTimeline } from "./demo";
 import { sentImagesFor } from "./imageDrafts";
+import { parseSentAttachments, repoPathFor } from "./attachments";
 import { openRightDockTab } from "./RightDock";
 import { BARE_PATH_RE, parseFileToken } from "./fileLinks";
 
@@ -673,6 +674,7 @@ export function TimelineItem({
       const urls: string[] = it.images?.length
         ? it.images.map((im: any) => (im.data ? `data:${im.mimeType ?? "image/png"};base64,${im.data}` : im.url)).filter(Boolean)
         : sentImagesFor(agentId, it.text);
+      const sent = parseSentAttachments(typeof it.text === "string" ? it.text : "");
       return (
         <div className={`tl tl-user${selected ? " tl-selected" : ""}`} data-selected={selected ? "true" : undefined} onClick={(ev) => onMessageClick(ev, onSelect)} onContextMenu={(ev) => openContextMenu(ev, messageCtxItems(it.text ?? "", agentId, onParkText, selectionWithin(ev.currentTarget)))}>
           {urls.length > 0 && (
@@ -682,7 +684,20 @@ export function TimelineItem({
               ))}
             </div>
           )}
-          {it.text}
+          {sent.chips.length ? sent.body : it.text}
+          {sent.chips.length > 0 && (
+            <div className="tl-file-chips">
+              {sent.chips.map((c, i) =>
+                c.path && repoPathFor(agentId, c.path) ? (
+                  <button key={i} className="chip file-chip" data-testid="tl-file-chip" title={c.path} onClick={(ev) => { ev.stopPropagation(); openFileTarget({ path: repoPathFor(agentId, c.path!)!, line: null, isDir: false }); }}>
+                    📄 {c.name}
+                  </button>
+                ) : (
+                  <span key={i} className="chip file-chip" data-testid="tl-file-chip">📄 {c.name}</span>
+                ),
+              )}
+            </div>
+          )}
           {selected && <div className="tl-actions">
             <CopyMsgButton text={it.text ?? ""} />
             {onParkText && typeof it.text === "string" && it.text.trim() && (

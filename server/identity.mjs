@@ -570,6 +570,86 @@ export function resolveAgentIdentity(agentOrInput, options = {}) {
   };
 }
 
+
+// ---- Lane codes (docs/PLAN_LANE_CODES.md) ----
+// Reserved codes for lanes whose generic code would be unhelpful (the hub lane).
+const RESERVED_LANE_CODES = { vibesquad: "Hub" };
+
+const codeCase = (s) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+
+/** A stored `code` if it is 2-5 alphanumerics (all-caps kept, e.g. ADE; else Capitalised), else "". */
+export function cleanLaneCode(raw) {
+  const s = String(raw ?? "").trim();
+  if (!/^[A-Za-z0-9]{2,5}$/.test(s)) return "";
+  return s === s.toUpperCase() ? s : codeCase(s);
+}
+
+/**
+ * Candidate codes for a lane, best first. Rule: an all-caps acronym (2-5 letters) among the first three words of the
+ * name wins ("Basic ADE (...)" -> Ade, "UI Lab" -> Ui); otherwise the first word's first 3 letters ("Bug Chaser" -> Bug,
+ * "Token Checker" -> Tok). Collisions fall back to 4-5 letters of the first word, then first word + next initials.
+ */
+export function laneCodeCandidates(lane) {
+  const id = String(lane?.id ?? "");
+  const name = String(lane?.name ?? "").trim() || id;
+  const reserved = RESERVED_LANE_CODES[id.toLowerCase()] ?? RESERVED_LANE_CODES[name.toLowerCase()];
+  const words = name.split(/[^A-Za-z0-9]+/).filter(Boolean);
+  const out = [];
+  const add = (c) => {
+    const k = cleanLaneCode(c);
+    if (k && !out.includes(k)) out.push(k);
+  };
+  if (reserved) add(reserved);
+  const acronym = words.slice(0, 3).find((w) => /^[A-Z]{2,5}$/.test(w));
+  if (acronym) add(acronym);
+  const first = (words[0] ?? id).replace(/[^A-Za-z0-9]/g, "");
+  for (const n of [3, 4, 5]) add(first.slice(0, n));
+  for (let i = 1; i < words.length && i < 4; i++) add(first.slice(0, 3) + words[i].charAt(0));
+  add(first.slice(0, 2) + (words[1] ?? "x").charAt(0));
+  for (const ch of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") add(first.slice(0, 3) + ch);
+  return out;
+}
+
+/**
+ * Codes for every lane of one Squad, keyed by lane id. Stored codes win; the rest are generated in registry order,
+ * the first free candidate each, so the result is stable for a given registry and unique within the Squad.
+ */
+export function laneCodesForTeam(team) {
+  const out = {};
+  const used = new Set();
+  const lanes = team?.lanes ?? [];
+  for (const lane of lanes) {
+    const c = cleanLaneCode(lane.code);
+    if (c && !used.has(c.toLowerCase())) {
+      out[lane.id] = c;
+      used.add(c.toLowerCase());
+    }
+  }
+  for (const lane of lanes) {
+    if (out[lane.id]) continue;
+    const c = laneCodeCandidates(lane).find((k) => !used.has(k.toLowerCase())) ?? codeCase(String(lane.id).slice(0, 5));
+    out[lane.id] = c;
+    used.add(c.toLowerCase());
+  }
+  return out;
+}
+
+/**
+ * Freeze: the Squad's lanes with a `code` on every one (stored codes kept, missing ones generated). Persist this whenever
+ * a lane is written so a later stored code can never displace an existing lane's generated code.
+ */
+export function freezeLaneCodes(lanes) {
+  const codes = laneCodesForTeam({ lanes });
+  return lanes.map((l) => (cleanLaneCode(l.code) === codes[l.id] ? l : { ...l, code: codes[l.id] }));
+}
+
+/** The code for one lane (stored or generated, deduped within its Squad). Unknown lane: the undeduped generic code. */
+export function laneCodeFor(laneQuery, teams = loadTeamsRegistry()) {
+  const found = findLaneInRegistry(laneQuery, teams);
+  if (found) return laneCodesForTeam(found.team)[found.lane.id] ?? "";
+  return laneCodeCandidates({ id: String(laneQuery ?? ""), name: String(laneQuery ?? "") })[0] ?? "";
+}
+
 /**
  * Generate a display-only title from resolved labels (`docs/NAMING.md`).
  * Never used to infer identity; only formats titles for display/lint.
@@ -578,32 +658,35 @@ export function formatDisplayTitle({
   role = "worker",
   laneName = "",
   laneId = "",
-  ord = "1",
+  code = "",
+  ord = "",
   topic = "",
   job = "",
   title = "",
 } = {}) {
   const laneUpper = String(laneName || laneId || "AGENT").trim().toUpperCase();
+  const c = cleanLaneCode(code) || laneCodeCandidates({ id: laneId, name: laneName || laneId })[0] || laneUpper;
   const r = String(role || "worker").trim().toLowerCase();
-  const ordClean = String(ord || "1").replace(/^ord/i, "").trim() || "1";
+  const ordRaw = String(ord || "").replace(/^ord/i, "").trim();
+  const ordClean = ordRaw || "1";
   const cleanTopic = String(topic || "").trim();
+  const cleanJob = String(job || "").trim();
 
   if (r === "lead") {
-    return `★ ${laneUpper} ord${ordClean}`;
+    return cleanJob ? `★ ${c}${ordClean} · ${cleanJob}` : `★ ${c}${ordClean}`;
   }
   if (r === "former-lead" || r === "old-lead" || r === "retired") {
-    return `(old) ${laneUpper} ord${ordClean}`;
+    return cleanJob ? `(old) ${c}${ordClean} · ${cleanJob}` : `(old) ${c}${ordClean}`;
   }
   if (r === "brainstorm" || r === "buddy") {
     const topicMatchesLane =
       !cleanTopic ||
       cleanTopic.toLowerCase() === String(laneName || "").trim().toLowerCase() ||
       cleanTopic.toLowerCase() === String(laneId || "").trim().toLowerCase();
-    return topicMatchesLane ? `BRAINSTORM · ${laneUpper}` : `BRAINSTORM · ${laneUpper} · ${cleanTopic}`;
+    return topicMatchesLane ? `${c} Buddy` : `${c} Buddy · ${cleanTopic}`;
   }
   if (r === "former-brainstorm" || r === "digest") {
     return String(title || "").trim() || `${laneUpper} · ${r}`;
   }
-  const cleanJob = String(job || "").trim() || "worker";
-  return `${laneUpper} · ${cleanJob}`;
+  return `${c}${ordRaw} · ${cleanJob || "worker"}`;
 }

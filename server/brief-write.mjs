@@ -4,12 +4,10 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { newPinBrief } from "./pin-ideas.mjs";
 
 export const BRIEF_HISTORY_KEEP = 20;
 export const BRIEF_SHRINK_FROM = 1000;
 export const BRIEF_SHRINK_TO = 300;
-export const SEED_IDEA_MAX_CHARS = 2000;
 
 // No fallback: an empty slug must never be routed to some other lane's file.
 const slug = (v) =>
@@ -17,7 +15,6 @@ const slug = (v) =>
     .trim()
     .replace(/[^A-Za-z0-9_-]+/g, "-")
     .replace(/^-+|-+$/g, "");
-const RESERVED_LANES = new Set(["unassigned", "unknown"]);
 
 /** Copy the current brief to brief-history and keep the newest BRIEF_HISTORY_KEEP. */
 export function backupBrief(laneId, fullPath) {
@@ -45,18 +42,4 @@ export function writeBriefFile(fullPath, laneId, text) {
     if (!before.equals(Buffer.from(text, "utf8"))) backupBrief(laneId, fullPath);
   }
   writeFileSync(fullPath, text, "utf8");
-}
-
-/**
- * A Buddy spawned for a lane whose brief file is missing: write the brief from the spawn's idea text so
- * it survives the first prompt. Never overwrites. Returns the path written, or null.
- */
-export function seedBriefIfMissing({ root, lane, idea }) {
-  const text = String(idea ?? "").trim().slice(0, SEED_IDEA_MAX_CHARS);
-  const laneSlug = slug(lane);
-  if (!text || !laneSlug || RESERVED_LANES.has(laneSlug.toLowerCase())) return null;
-  const fullPath = join(root, "docs", "brainstorm", `${laneSlug}.md`);
-  if (existsSync(fullPath)) return null;
-  writeBriefFile(fullPath, laneSlug, newPinBrief(laneSlug, laneSlug, text));
-  return fullPath;
 }

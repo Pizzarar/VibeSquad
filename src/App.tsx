@@ -2,7 +2,7 @@ import { FIRST_RUN_DONE_KEY, FirstRunModal, fetchFirstRunStatus, type FirstRunSt
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { ProviderQuotaView } from "./antigravity";
-import { LEGACY_NEEDS_LABEL, dismissUpdateBanner, loadUpdaterStatus, setLanExposureState, setServerConfigWarnings, triggerUpdateInstall, useConfigWarnings, useExposedIpsStore, useUpdaterStatus } from "./userName";
+import { LEGACY_NEEDS_LABEL, dismissUpdateBanner, loadUpdaterStatus, setLanExposureState, setServerConfigWarnings, setStaleBuild, triggerUpdateInstall, useStaleBuild, useConfigWarnings, useExposedIpsStore, useUpdaterStatus } from "./userName";
 import { DEMO, archiveAgent, detachAgent, getPaseoState, loadArchived, retireAgent, setNeedsYou, updateAgent, upsertLocalAgent, usePaseo } from "./paseo";
 import {
   AGENT_TYPE_LABEL,
@@ -39,6 +39,7 @@ import {
   type Member,
   type TeamView,
 } from "./teams";
+import { titleFor } from "./teams";
 import { AgentPanes } from "./AgentPanes";
 import { CommandPaletteHost, agentCtxItems, dateBucket, openContextMenu, openOverlay, parseUrlState, serializeUrlState, type DateBucket } from "./CommandPalette";
 import { PaseoUsageHeaderChip } from "./PaseoSettingsSection";
@@ -78,7 +79,7 @@ import { WorkspacesView } from "./WorkspacesView";
 import { AttentionBadge } from "./AttentionList";
 import { FullToggle, PinGrid, SidebarPins, SquadsHome, useFullView, type PinHandler } from "./PinGrid";
 import { pinsForSquad, type Pin } from "./pins";
-import { urlAgentFor } from "./pinFocusLogic";
+import { popAction, urlAgentFor } from "./pinFocusLogic";
 import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, usePinFocus, usePinsHome, useSquadsHome } from "./pinFocus";
 import { TopBreadcrumb } from "./Breadcrumb";
 import { PinFocusHeader, PinRail } from "./PinRail";
@@ -165,7 +166,7 @@ export async function startLaneBrainstorm(opts: {
     return reusedId;
   }
   const newAgentId: string = body.newAgentId || `demo-bs-${laneId}-${Date.now().toString(36)}`;
-  const title: string = body.title || `BRAINSTORM · ${laneName.toUpperCase()}`;
+  const title: string = body.title || titleFor("brainstorm", laneName, { laneId });
   const createdAgent: PaseoAgent =
     body.agent ??
     ({
@@ -1434,6 +1435,7 @@ function useExposedIps(): string[] {
         if (alive && Array.isArray(h?.configWarnings)) {
           setServerConfigWarnings(h.configWarnings);
         }
+        if (alive) setStaleBuild(h?.stale);
       })
       .catch(() => {});
     return () => {
@@ -1516,6 +1518,7 @@ export function App() {
   }, [exposedIps, dismissedLanKey]);
   const updaterStatus = useUpdaterStatus();
   const configWarnings = useConfigWarnings();
+  const staleBuild = useStaleBuild();
   useEffect(() => {
     void loadUpdaterStatus();
     const id = setInterval(() => void loadUpdaterStatus(), 60_000);
@@ -1641,7 +1644,10 @@ export function App() {
     const onPop = () => {
       const u = parseUrlState(location.search);
       if (u.team) setTeamId(u.team);
-      if (u.agent) openAgent(u.agent);
+      const act = popAction(location.search);
+      if (act === "agent" && u.agent) openAgent(u.agent);
+      else if (act === "squads-home") enterSquadsHome();
+      else exitSquadsHome(); // Back from a chat lands on the squad page, so the URL effect doesn't re-push ?agent=
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
@@ -1772,9 +1778,9 @@ export function App() {
   const withPanes = (hasTabs || focus) && !pinFocused && !hidePanes;
   const urlAgentId = urlAgentFor({ activeAgentId, onGrid: hidePanes, startFresh: pinFocused && !pinFocus?.agentId });
   useEffect(() => {
-    const next = serializeUrlState({ team: activeTeamId || null, agent: urlAgentId }, location.search);
+    const next = serializeUrlState({ team: activeTeamId || null, agent: urlAgentId, squadsHome: pinLayout && pinsHome && squadsHome }, location.search);
     if (next !== (location.search || "")) history.pushState(null, "", `${location.pathname}${next}${location.hash}`);
-  }, [activeTeamId, urlAgentId]);
+  }, [activeTeamId, urlAgentId, pinLayout, pinsHome, squadsHome]);
   // Esc on the squad page goes up to Squads Home (chat's own Esc handler runs first and marks the event handled).
   useEffect(() => {
     if (!pinLayout) return;
@@ -1853,6 +1859,16 @@ export function App() {
           >
             ✕
           </button>
+        </div>
+      )}
+      {staleBuild && (
+        <div
+          className="stale-build-banner"
+          data-testid="stale-build-banner"
+          role="alert"
+          style={{ gridColumn: "1 / -1", background: "#ffb000", color: "#05060d", fontWeight: 800, padding: "6px 12px", textAlign: "center" }}
+        >
+          {`Running an older build: ${staleBuild.behind} commit${staleBuild.behind === 1 ? "" : "s"} behind. Rebuild.`}
         </div>
       )}
       {configWarnings.length > 0 && (

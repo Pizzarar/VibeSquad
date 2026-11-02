@@ -7,15 +7,15 @@ import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { client, DEMO, sendMessage } from "./paseo";
 import { openContextMenu } from "./CommandPalette";
 import { demoTimeline } from "./demo";
-import { hasLooksDone, LOOKS_DONE_MARKER, pinsForSquad, SEND_TO_MARKER, topicOfBrainstorm, type Pin } from "./pins";
+import { hasLooksDone, LOOKS_DONE_MARKER, pinsForSquad, SEND_TO_MARKER, topicOfBrainstorm, withoutSpinOffFence, type Pin } from "./pins";
 import { openBriefEditor } from "./pinActions";
-import { IdeaPlusTile, noteSendTo, SendToCard, useSendTo } from "./PinIdeas";
+import { IdeaPlusTile, noteSendTo, SendToCard, SpinOffCard, useSendTo, useSpinOff } from "./PinIdeas";
 import { PinMenu } from "./PinMenu";
 import { DoneRow, DoneShelf, LooksDoneCard, useDoneShelfOpen } from "./PinDone";
 import { getBrainstormThresholds, type TeamView } from "./teams";
 import { StatusDot, usePaneClass } from "./ui";
 import { Avatar, NeonEmblem } from "./pixel";
-import { ordOf } from "./teams";
+import { laneCodeOf, ordOf } from "./teams";
 import { cleanTitle } from "./ui";
 import { pickLead } from "./pinFocusLogic";
 
@@ -177,7 +177,7 @@ function linesFrom(entries: TimelineEntry[]): Line[] {
     if (!it || typeof it.text !== "string") continue;
     const who = it.type === "user_message" ? "you" : it.type === "assistant_message" ? "bs" : null;
     if (!who) continue;
-    for (const raw of it.text.split("\n")) {
+    for (const raw of withoutSpinOffFence(it.text.split("\n"))) {
       const text = raw.replace(/[`*#>_]+/g, "").trim();
       if (text && text !== LOOKS_DONE_MARKER && !text.startsWith(SEND_TO_MARKER)) out.push({ who, text });
     }
@@ -307,6 +307,7 @@ const PinTile = memo(function PinTile({ pin, onPin, onOpenAgent }: { pin: Pin; o
   const lines = usePreview(bs?.agent.id ?? null);
   const looksDoneId = useLooksDoneId(bs?.agent.id ?? null);
   const sendTo = useSendTo(bs?.agent.id ?? null);
+  const spinOff = useSpinOff(bs?.agent.id ?? null);
   const paneCls = usePaneClass(bs?.agent.id ?? "");
   const [starting, setStarting] = useState(false);
   const busy = useRef(false);
@@ -360,6 +361,7 @@ const PinTile = memo(function PinTile({ pin, onPin, onOpenAgent }: { pin: Pin; o
       </div>
       {bs && looksDoneId && <LooksDoneCard pin={pin} messageId={looksDoneId} />}
       {bs && sendTo && <SendToCard pin={pin} offer={sendTo} />}
+      {bs && spinOff && <SpinOffCard pin={pin} offer={spinOff} />}
       {bs ? (
         <>
           <div className="pin-tile-lines" data-testid={`pin-lines-${pin.lane.id}`}>
@@ -437,7 +439,7 @@ function SquadTile({ v, onSelectSquad, onOpenPin, onOpenAgent }: { v: TeamView; 
   const { pinned } = pinsForSquad(v);
   const lead = pickLead(v.lanes);
   const ord = lead ? ordOf(lead.agent) : null;
-  const leadName = lead ? (ord ? `ord${ord}` : cleanTitle(lead.agent.title)) : "none";
+  const leadName = lead ? (ord ? `${laneCodeOf(lead.laneId || v.team.id)}${ord}` : cleanTitle(lead.agent.title)) : "none";
   const leadState = !lead ? "idle" : lead.agent.status === "running" ? "working" : lead.agent.status === "error" ? "error" : "idle";
   const open = () => onSelectSquad(v.team.id);
   return (

@@ -12,14 +12,16 @@ import {
   newPinBrief,
   patchLane,
   resolvePin,
+  runSpinOffOnce,
   slugLaneId,
   uniqueLaneId,
   type Pin,
   type PinLane,
 } from "./pins";
+import { freezeLaneCodes, laneCodesForTeam } from "./identity";
 import { runMarkComplete } from "./pinComplete";
 import { runRemoveTeam, type RemovePlan, type RemoveResult, type WorktreeResult } from "./pinRemoveLogic";
-import { findCrossTeamBrainstorm, getTeams, resolve, saveTeams, type TeamDef, type TeamsUpdater } from "./teams";
+import { findCrossTeamBrainstorm, getTeams, resolve, saveTeams, titleFor, type TeamDef, type TeamsUpdater } from "./teams";
 
 export type OpenPinDeps = {
   /** Agent map to re-check for a live Brainstorm before spawning (defaults to the live Paseo state). */
@@ -101,7 +103,7 @@ async function quickStart(pin: Pin, profile: string, deps: OpenPinDeps): Promise
     body.agent ??
     ({
       id: newAgentId,
-      title: `BRAINSTORM · ${pin.lane.name.toUpperCase()}`,
+      title: titleFor("brainstorm", pin.lane.name, { laneId: pin.lane.id }),
       provider: "claude",
       model: "claude-opus-5-5",
       cwd: "",
@@ -127,11 +129,17 @@ async function quickStart(pin: Pin, profile: string, deps: OpenPinDeps): Promise
   return newAgentId;
 }
 
+/** Persist a code on every lane of one Squad that lacks one. */
+export function freezeSquadCodes(teams: TeamDef[], squadId: string): TeamDef[] {
+  return teams.map((t) => (t.id === squadId ? { ...t, lanes: freezeLaneCodes(t.lanes) } : t));
+}
+
 /** Rename a pinned team (display name only; the lane id and labels stay). */
 export async function renamePin(pin: Pin, name: string): Promise<void> {
   const clean = name.trim();
   if (!clean || clean === pin.lane.name) return;
-  await saveTeams((cur) => patchLane(cur, pin.squad.id, pin.lane.id, { name: clean }));
+  // Freeze codes first so the rename can never change this lane's (or a sibling's) generated code.
+  await saveTeams((cur) => patchLane(freezeSquadCodes(cur, pin.squad.id), pin.squad.id, pin.lane.id, { name: clean }));
 }
 
 // ── Brief editor bus ───────────────────────────────────────────────────────────
@@ -290,13 +298,16 @@ export async function createPin(squadId: string, name: string, idea: string, dep
   const teams = (deps.getTeams ?? getTeams)();
   const squad = teams.find((t) => t.id === squadId);
   if (!squad) throw new Error(`Unknown squad ${squadId}`);
-  const lane: PinLane = { id: uniqueLaneId(slugLaneId(clean), allLaneIds(teams)), name: clean, state: "pinned", ...(deps.lastProfile ? { lastProfile: deps.lastProfile } : {}) };
+  const id = uniqueLaneId(slugLaneId(clean), allLaneIds(teams));
+  // Freeze the generated code on the lane so later registry changes never rename its agents.
+  const code = laneCodesForTeam({ lanes: [...squad.lanes, { id, name: clean }] })[id];
+  const lane: PinLane = { id, name: clean, ...(code ? { code } : {}), state: "pinned", ...(deps.lastProfile ? { lastProfile: deps.lastProfile } : {}) };
   // Brief first: a failed write leaves no half-made pin behind.
   if (!DEMO) await writeBrief(lane.id, newPinBrief(lane.id, clean, idea), deps.fetch ?? fetch);
   // The brief write is async, so add the lane to whatever the registry holds by then.
   let next = teams;
   await (deps.saveTeams ?? saveTeams)((cur) =>
-    (next = cur.map((t) => (t.id === squadId && !t.lanes.some((l) => l.id === lane.id) ? { ...t, lanes: [...t.lanes, lane] } : t))),
+    (next = cur.map((t) => (t.id === squadId && !t.lanes.some((l) => l.id === lane.id) ? { ...t, lanes: freezeLaneCodes([...freezeLaneCodes(t.lanes), lane]) } : t))),
   );
   return {
     squad: next.find((t) => t.id === squadId) ?? squad,
@@ -347,3 +358,14 @@ export async function sendIdeaToTeam(laneId: string, text: string, from?: string
 const SEND_TO_KEY = "vibesquad.sendToDismissed";
 export const isSendToDismissed = (messageId: string): boolean => dismissedSet(SEND_TO_KEY).has(messageId);
 export const dismissSendTo = (messageId: string): void => dismiss(SEND_TO_KEY, messageId);
+
+const SPIN_OFF_KEY = "vibesquad.spinOffDismissed";
+export const isSpinOffDismissed = (messageId: string): boolean => dismissedSet(SPIN_OFF_KEY).has(messageId);
+export const dismissSpinOff = (messageId: string): void => dismiss(SPIN_OFF_KEY, messageId);
+
+/**
+ * Create every Team of a confirmed spin-off block as a pin in the squad (no overlap refusal: the user confirmed the
+ * list; exact ids still dedupe inside createPin). No agents are spawned.
+ */
+export const createSpinOffPins = (key: string, squadId: string, teams: { name: string; brief: string }[], deps: CreatePinDeps = {}) =>
+  runSpinOffOnce(key, (name, brief) => createPin(squadId, name, brief, deps), teams);

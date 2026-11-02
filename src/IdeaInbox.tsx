@@ -3,7 +3,7 @@ import type { PaseoAgent } from "@getpaseo/client";
 import { DEMO, removeLocalAgent, upsertLocalAgent, usePaseo } from "./paseo";
 import { useDraft } from "./drafts";
 import { closeTab, openAgentInTab } from "./panes";
-import { getTeams, isTopicBrainstorm, topicOfBrainstorm, useTeams } from "./teams";
+import { getTeams, isTopicBrainstorm, titleFor, topicOfBrainstorm, useTeams } from "./teams";
 import { laneDisplayName } from "./pins";
 import type { InboxCard, InboxScope, TeamDef } from "./types";
 
@@ -332,7 +332,7 @@ export function useOpenTopicBrainstorms(): {
       const cardId = l["vs.inbox-card-id"] || "";
       const matchingCard = cardId ? cards.find((c) => c.id === cardId) : cards.find((c) => c.topicAgentId === a.id);
       const topic = topicOfBrainstorm(a) || matchingCard?.title || a.title || a.id;
-      const title = a.title || matchingCard?.topicTitle || `BRAINSTORM · ${topic}`;
+      const title = a.title || matchingCard?.topicTitle || titleFor("brainstorm", l.lane ?? "", { topic, laneId: l.lane });
       const openedAt = l["vs.opened-at"] || matchingCard?.topicOpenedAt || a.updatedAt || matchingCard?.updatedAt || "";
       byAgentId.set(a.id, {
         agentId: a.id,
@@ -675,7 +675,7 @@ export const IdeaInbox = memo(function IdeaInbox({ team }: { team: TeamDef }) {
                           className="btn small ok inbox-open-topic-btn"
                           disabled={openingId === card.id}
                           onClick={() => void handleOpenTopic(card.id)}
-                          title="Spawn or focus a scoped topic brainstorm (BRAINSTORM · <LANE> · <topic>) seeded only with this card + team brief"
+                          title="Spawn or focus a scoped topic brainstorm (<Code> Buddy · <topic>) seeded only with this card + team brief"
                           data-testid={`inbox-open-topic-${card.id}`}
                         >
                           {openingId === card.id ? "Opening…" : "💬 Open Topic"}

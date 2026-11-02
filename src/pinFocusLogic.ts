@@ -139,6 +139,13 @@ export function planRestore(a: {
 }
 
 // ── Squads Home: chat → squad page → Squads Home ladder ──────────────────────
+/** What Back/Forward should show for a URL: its agent chat, Squads Home, or (no agent, no view) the squad page. */
+export function popAction(search: string): "agent" | "squads-home" | "squad-page" {
+  const p = new URLSearchParams(search);
+  if (p.get("agent")) return "agent";
+  return p.get("view") === "squads" ? "squads-home" : "squad-page";
+}
+
 export type NavLevel = { focused: boolean; home: boolean; squadsHome: boolean };
 
 /** What Esc / the ⊞ button does one level up: from chat to the squad page, from the squad page to Squads Home. */

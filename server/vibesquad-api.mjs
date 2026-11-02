@@ -1,4 +1,5 @@
 import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { getStale } from "./stale-runtime.mjs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
@@ -334,6 +335,7 @@ export function handleHealth(req, res, rootDir = REPO_ROOT) {
     port,
     lanEnabled: exposure.lanEnabled,
     exposedIps: exposure.exposedIps,
+    stale: getStale({ rootDir }),
     ...(warnings.length ? { configWarnings: warnings } : {}),
   };
   if (!distReady) return sendJson(res, 503, { ok: false, distReady: false, error: "dist/index.html missing", ...extra });
