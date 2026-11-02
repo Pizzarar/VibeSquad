@@ -613,3 +613,97 @@ test("HTTP handoff with a real-shaped daemon client re-points the open workers t
     env.cleanup();
   }
 });
+
+test("HTTP self-handoff without oldLead resolves Hub8 from daemon, titles successor ★ Hub9, and dedupes retries per (team, lane, ord)", async () => {
+  const env = makeTempEnv();
+  const prevHome = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = env.vsHome;
+  try {
+    const hub8 = {
+      id: "hub-8-id",
+      title: "★ Hub8 · sec followups",
+      provider: "claude",
+      model: "claude-opus-5-5",
+      cwd: env.dir,
+      status: "idle",
+      createdAt: "2026-11-02T18:00:00.000Z",
+      labels: { team: "vibesquad", lane: "vibesquad", role: "lead", ord: "8", job: "sec followups", profile: "Lead - Claude" },
+    };
+    const agents = new Map([[hub8.id, hub8]]);
+    const client = fakeDaemonClient(agents, 10);
+
+    // Simulate HTTP body after sanitizeBody strips oldLead: only { trigger: "self", lane: "vibesquad" } or { agentId }
+    const [r1, r2] = await Promise.all([
+      performLeadHandoffHttp({ trigger: "self", lane: "vibesquad", daemonClient: client, baseHome: env.vsHome, profilesPath: env.profilesPath }, env.dir),
+      performLeadHandoffHttp({ trigger: "self", agentId: hub8.id, daemonClient: client, baseHome: env.vsHome, profilesPath: env.profilesPath }, env.dir),
+    ]);
+    const r3 = await performLeadHandoffHttp(
+      { trigger: "self", agentId: hub8.id, daemonClient: client, baseHome: env.vsHome, profilesPath: env.profilesPath },
+      env.dir,
+    );
+
+    assert.equal(client.calls.createAgent.length, 1, "must spawn only one successor across concurrent and sequential retries");
+    assert.equal(r1.oldLeadId, "hub-8-id");
+    assert.equal(r1.ord, 8);
+    assert.equal(r1.nextOrd, 9);
+    assert.equal(r1.title, "★ Hub9");
+    assert.equal(r1.oldTitle, "(old) Hub8 · sec followups");
+    assert.equal(Boolean(r1.deduped) !== Boolean(r2.deduped), true, "exactly one concurrent request spawns and the other dedupes");
+    assert.equal(r2.successorId, r1.successorId);
+    assert.equal(r3.deduped, true);
+    assert.equal(r3.successorId, r1.successorId);
+  } finally {
+    if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
+    else process.env.VIBESQUAD_HOME = prevHome;
+    env.cleanup();
+  }
+});
+
+test("HTTP self-handoff with slow createAgent returns 202 + handoffId quickly without blocking HTTP response and dedupes retries", async () => {
+  const env = makeTempEnv();
+  const prevHome = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = env.vsHome;
+  try {
+    const hub8 = {
+      id: "hub-slow-8",
+      title: "★ Hub8 · parity",
+      provider: "claude",
+      model: "claude-opus-5-5",
+      cwd: env.dir,
+      status: "idle",
+      createdAt: "2026-11-02T18:00:00.000Z",
+      labels: { team: "vibesquad", lane: "vibesquad", role: "lead", ord: "8", job: "parity", profile: "Lead - Claude" },
+    };
+    const agents = new Map([[hub8.id, hub8]]);
+    const baseClient = fakeDaemonClient(agents, 10);
+    const slowClient = {
+      ...baseClient,
+      async createAgent(payload) {
+        await new Promise((r) => setTimeout(r, 120));
+        return baseClient.createAgent(payload);
+      },
+    };
+
+    const rFast = await performLeadHandoffHttp(
+      { trigger: "self", agentId: hub8.id, httpWaitMs: 20, daemonClient: slowClient, baseHome: env.vsHome, profilesPath: env.profilesPath },
+      env.dir,
+    );
+    assert.equal(rFast.accepted, true);
+    assert.equal(rFast.status, 202);
+    assert.equal(rFast.handoffId, "vibesquad:vibesquad:ord8->ord9");
+    assert.equal(rFast.title, "★ Hub9");
+
+    // Retry after completion resolves the same successor without spawning a second one
+    const rRetry = await performLeadHandoffHttp(
+      { trigger: "self", agentId: hub8.id, daemonClient: slowClient, baseHome: env.vsHome, profilesPath: env.profilesPath },
+      env.dir,
+    );
+    assert.equal(rRetry.deduped, true);
+    assert.equal(rRetry.successorId, "succ-http");
+    assert.equal(baseClient.calls.createAgent.length, 1);
+  } finally {
+    if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
+    else process.env.VIBESQUAD_HOME = prevHome;
+    env.cleanup();
+  }
+});
