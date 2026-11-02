@@ -1891,8 +1891,7 @@ code {
   position: relative;
 }
 .tl-park-btn {
-  display: none;
-  margin-top: 4px;
+  display: inline-block;
   padding: 2px 6px;
   font-family: var(--arcade);
   font-size: 9px;
@@ -1901,8 +1900,34 @@ code {
   border: 1px solid #00f0ff55;
   cursor: pointer;
 }
-.tl:hover .tl-park-btn {
-  display: inline-block;
+.tl-user:hover,
+.tl-assistant:hover {
+  background-color: #1a1f45;
+}
+.tl-assistant:hover {
+  background-color: #0e1030;
+}
+.tl-user,
+.tl-assistant {
+  cursor: default;
+}
+.tl-selected {
+  outline: 1px solid var(--cyan);
+  outline-offset: 2px;
+}
+.tl-actions {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  background: var(--bg-elevated, #121624);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
 }
 .composer-park-inbox-btn {
   white-space: nowrap;
@@ -3289,3 +3314,89 @@ html, body, #root { overflow-x: hidden; }
 /* ── Sidebar + New squad button ────────────────────────────────────────────── */
 .sidebar-new-squad-btn { margin: 2px 8px 6px; width: calc(100% - 16px); justify-content: flex-start; }
 .sidebar.collapsed .sidebar-new-squad-btn { width: 40px; margin: 2px auto 6px; justify-content: center; overflow: hidden; font-size: 18px; padding: 4px; }
+
+/* ---- Unit U2: dock terminal fills the panel ---- */
+.terminal-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+.terminal-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.terminal-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 6px;
+}
+.terminal-tab-close {
+  margin-left: 6px;
+  padding: 0 4px;
+  cursor: pointer;
+}
+.terminal-output {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  padding: 8px;
+  box-sizing: border-box;
+  background: #0d111c;
+  overflow: hidden;
+}
+.terminal-output .xterm {
+  height: 100%;
+}
+.terminal-output .xterm-viewport {
+  background-color: #0d111c !important;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+.terminal-output .xterm-viewport::-webkit-scrollbar {
+  width: 6px;
+}
+.terminal-output .xterm-viewport::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 3px;
+}
+
+/* ---- Unit U4: nothing clipped at the edges ---- */
+.push-controls { min-width: 0; }
+.push-controls-row { flex-wrap: wrap; gap: 6px; min-width: 0; }
+.push-toggle-btn,
+.push-test-btn {
+  min-width: 0;
+  flex: 1 1 auto;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.pin-focus-bar { height: auto; min-height: 40px; flex-wrap: wrap; row-gap: 2px; }
+.pin-focus-plumbing {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pin-focus-squad { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.row,
+.tree-row,
+.sidebar-pin-row { min-width: 0; max-width: 100%; box-sizing: border-box; }
+.row-meter { min-width: 0; overflow: hidden; }
+.tree-row { flex-wrap: wrap; }
+.tree-row > * { min-width: 0; }
+@media (max-width: 900px) {
+  .row { grid-template-columns: 36px minmax(0, 1fr) auto; grid-template-areas: "avatar title pill" "avatar meta meta" "avatar meter actions"; }
+  .row-meter { width: 100%; }
+}

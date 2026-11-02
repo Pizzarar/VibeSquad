@@ -216,6 +216,14 @@ export function submitButtonLabel(opts: {
   return `Send to ${opts.targetTeamName || "team"}`;
 }
 
+export function resolveIdeaTeamName(typedName: string, ideaText: string): string {
+  return typedName.trim() || nameFromIdea(ideaText).trim();
+}
+
+export function ideaModalFieldOrder(mode: "new" | "existing"): string[] {
+  return mode === "new" ? ["tabs", "name", "idea", "buddy"] : ["tabs", "idea", "team"];
+}
+
 function IdeaBox({
   view,
   onClose,
@@ -229,11 +237,11 @@ function IdeaBox({
 }) {
   const { pinned } = pinsForSquad(view);
   const [text, setText] = useState("");
-  const [name, setName] = useState<string | null>(null);
+  const [name, setName] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => ref.current?.focus(), []);
+  const nameRef = useRef<HTMLInputElement>(null);
 
   const { profiles } = useProfiles();
   const bsProfiles = useMemo(() => {
@@ -248,7 +256,11 @@ function IdeaBox({
   const [mode, setMode] = useState<"new" | "existing">(() => presetMode ?? "new");
 
   const match = useMemo(() => (text.trim() ? bestOverlap(text, pinned.map((p) => p.lane)) : null), [text, pinned]);
-  const teamName = name ?? nameFromIdea(text);
+  const effectiveTeamName = resolveIdeaTeamName(name, text);
+  useEffect(() => {
+    if (mode === "new") nameRef.current?.focus();
+    else ref.current?.focus();
+  }, [mode]);
   const targetPin = pinned.find((p) => p.lane.id === existingTargetId) ?? null;
 
   const submit = async () => {
@@ -263,7 +275,7 @@ function IdeaBox({
         return;
       }
       setLastBrainstormProfile(selectedProfile);
-      const pin = await createPin(view.team.id, teamName || "New team", idea, { lastProfile: selectedProfile });
+      const pin = await createPin(view.team.id, resolveIdeaTeamName(name, idea) || "New team", idea, { lastProfile: selectedProfile });
       onClose();
       showPinToast(`Pinned ${pin.lane.name}`);
       await onQuickStart(pin);
@@ -296,20 +308,6 @@ function IdeaBox({
           </button>
         </div>
         <div className="modal-body">
-          <textarea
-            ref={ref}
-            value={text}
-            rows={4}
-            placeholder="I just thought of…"
-            data-testid="pin-idea-text"
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-                e.preventDefault();
-                void submit();
-              }
-            }}
-          />
           <div className="seg pin-idea-seg" data-testid="pin-idea-mode-seg">
             <button
               type="button"
@@ -329,6 +327,43 @@ function IdeaBox({
               Add to existing team ▾
             </button>
           </div>
+          {mode === "new" && (
+            <div className="pin-idea-field">
+              <label className="muted small" htmlFor="pin-idea-name">
+                Name
+              </label>
+              <input
+                id="pin-idea-name"
+                ref={nameRef}
+                data-testid="pin-idea-name"
+                style={{ width: "100%", minWidth: 220 }}
+                value={name}
+                placeholder="Team name (or leave blank to use line 1)"
+                onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+                    e.preventDefault();
+                    if (text.trim()) void submit();
+                    else ref.current?.focus();
+                  }
+                }}
+              />
+            </div>
+          )}
+          <textarea
+            ref={ref}
+            value={text}
+            rows={4}
+            placeholder="I just thought of…"
+            data-testid="pin-idea-text"
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                void submit();
+              }
+            }}
+          />
           {overlapHint && (
             <div className="pin-idea-hint small" data-testid="pin-idea-overlap">
               Sounds like {overlapHint.name}.{" "}
@@ -346,44 +381,23 @@ function IdeaBox({
             </div>
           )}
           {mode === "new" && (
-            <>
-              <div className="pin-idea-field">
-                <label className="muted small" htmlFor="pin-idea-name">
-                  Name
-                </label>
-                <input
-                  id="pin-idea-name"
-                  data-testid="pin-idea-name"
-                  style={{ width: "100%", minWidth: 220 }}
-                  value={teamName}
-                  placeholder="Team name (auto-filled from line 1)"
-                  onChange={(e) => setName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      void submit();
-                    }
-                  }}
-                />
+            <div className="pin-idea-field">
+              <label className="muted small">Buddy</label>
+              <div className="pin-profile-chips" data-testid="pin-idea-profile-chips">
+                {bsProfiles.map((p) => (
+                  <button
+                    key={p.name}
+                    type="button"
+                    data-testid={`pin-profile-chip-${p.name}`}
+                    className={`tchip ${selectedProfile === p.name ? "on" : ""}`}
+                    aria-pressed={selectedProfile === p.name}
+                    onClick={() => setSelectedProfile(p.name)}
+                  >
+                    {p.name}
+                  </button>
+                ))}
               </div>
-              <div className="pin-idea-field">
-                <label className="muted small">Buddy</label>
-                <div className="pin-profile-chips" data-testid="pin-idea-profile-chips">
-                  {bsProfiles.map((p) => (
-                    <button
-                      key={p.name}
-                      type="button"
-                      data-testid={`pin-profile-chip-${p.name}`}
-                      className={`tchip ${selectedProfile === p.name ? "on" : ""}`}
-                      aria-pressed={selectedProfile === p.name}
-                      onClick={() => setSelectedProfile(p.name)}
-                    >
-                      {p.name}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </>
+            </div>
           )}
           {mode === "existing" && (
             <div className="pin-idea-field">
@@ -405,7 +419,7 @@ function IdeaBox({
             </div>
           )}
           <div className="muted small pin-idea-foot" data-testid="pin-idea-live-sentence">
-            {describeIdeaAction({ mode, teamName, profile: selectedProfile, targetPin: mode === "existing" ? targetPin : null })}
+            {describeIdeaAction({ mode, teamName: effectiveTeamName, profile: selectedProfile, targetPin: mode === "existing" ? targetPin : null })}
           </div>
           {err && <div className="stat-alert small">{err}</div>}
         </div>
@@ -416,7 +430,7 @@ function IdeaBox({
           <button
             type="button"
             className="btn ok"
-            disabled={busy || !text.trim() || (mode === "new" && !teamName.trim())}
+            disabled={busy || !text.trim() || (mode === "new" && !effectiveTeamName)}
             data-testid="pin-idea-submit"
             onClick={() => void submit()}
           >

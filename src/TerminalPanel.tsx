@@ -11,6 +11,37 @@ type TerminalInstance = { term: Terminal; fit: FitAddon };
 
 let demoCounter = 0;
 
+export const TERMINAL_THEME = {
+  background: "#0d111c",
+  foreground: "#e2e8f0",
+  cursor: "#00f5d4",
+  cursorAccent: "#0d111c",
+  selectionBackground: "rgba(0, 245, 212, 0.22)",
+  black: "#0d111c",
+  red: "#ff5c8a",
+  green: "#2ee59d",
+  yellow: "#ffd166",
+  blue: "#5cc8ff",
+  magenta: "#c77dff",
+  cyan: "#00f5d4",
+  white: "#e2e8f0",
+  brightBlack: "#4a5578",
+  brightRed: "#ff85a8",
+  brightGreen: "#5cf2b8",
+  brightYellow: "#ffe08f",
+  brightBlue: "#8ad8ff",
+  brightMagenta: "#d9a3ff",
+  brightCyan: "#5ffbe6",
+  brightWhite: "#ffffff",
+};
+
+function resizeTerminal(terminalId: string, cols: number, rows: number) {
+  if (DEMO || cols < 1 || rows < 1) return;
+  try {
+    daemonClient.sendTerminalInput(terminalId, { type: "resize", cols, rows } as never);
+  } catch {}
+}
+
 export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
   const cwd = agent.cwd ?? "";
   const [tabs, setTabs] = useState<TerminalTab[]>([]);
@@ -33,7 +64,15 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
 
   const mountXterm = useCallback((terminalId: string, el: HTMLDivElement) => {
     if (termInstancesRef.current.has(terminalId)) return;
-    const term = new Terminal({ convertEol: true, scrollback: 5000, cursorBlink: true });
+    const term = new Terminal({
+      convertEol: true,
+      theme: TERMINAL_THEME,
+      fontFamily: "'JetBrains Mono', 'Cascadia Mono', Consolas, monospace",
+      fontSize: 12,
+      lineHeight: 1.35,
+      cursorBlink: true,
+      scrollback: 5000,
+    });
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(el);
@@ -102,7 +141,7 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cwd]);
 
-  // ResizeObserver + FitAddon when active tab changes
+  // Refit + resize the daemon PTY on tab switch, container resize and window resize
   useEffect(() => {
     if (!activeId) return;
     const el = containerRefsMap.current.get(activeId);
@@ -110,16 +149,22 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
     const inst = termInstancesRef.current.get(activeId);
     if (!inst) return;
 
-    requestAnimationFrame(() => {
-      try { inst.fit.fit(); } catch {}
-    });
-
-    const ro = new ResizeObserver(() => {
-      try { inst.fit.fit(); } catch {}
-    });
+    const refit = () => {
+      try {
+        inst.fit.fit();
+        resizeTerminal(activeId, inst.term.cols, inst.term.rows);
+      } catch {}
+    };
+    const raf = requestAnimationFrame(refit);
+    const ro = new ResizeObserver(refit);
     ro.observe(el);
-    return () => ro.disconnect();
-  }, [activeId]);
+    window.addEventListener("resize", refit);
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+      window.removeEventListener("resize", refit);
+    };
+  }, [activeId, tabs.length]);
 
   // Cleanup on unmount
   useEffect(
@@ -230,7 +275,7 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
               key={t.id}
               className="terminal-output"
               data-testid={isActive ? "terminal-output" : undefined}
-              style={{ display: isActive ? "flex" : "none", flex: 1 }}
+              style={{ display: isActive ? "block" : "none" }}
               ref={(el) => {
                 if (el) {
                   containerRefsMap.current.set(t.id, el);

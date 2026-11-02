@@ -257,3 +257,40 @@ test("name input style spec: width 100% and minWidth >= 200", () => {
   assert.equal(width, "100%");
   assert.ok(minWidth >= 200, `minWidth ${minWidth} should be >= 200`);
 });
+
+// ── U5: Name above idea, no live line-1 overwrite ─────────────────────────────
+import { nameFromIdea as u5NameFromIdea } from "../src/pins.ts";
+
+// Mirrored from src/PinIdeas.tsx
+function resolveIdeaTeamName(typedName, ideaText) {
+  return typedName.trim() || u5NameFromIdea(ideaText).trim();
+}
+function ideaModalFieldOrder(mode) {
+  return mode === "new" ? ["tabs", "name", "idea", "buddy"] : ["tabs", "idea", "team"];
+}
+
+test("U5 resolveIdeaTeamName prefers typed name", () => {
+  assert.equal(resolveIdeaTeamName("  Crew  ", "Line one\nmore"), "Crew");
+});
+
+test("U5 resolveIdeaTeamName falls back to line 1 only when name blank", () => {
+  assert.equal(resolveIdeaTeamName("", "Line one\nmore"), u5NameFromIdea("Line one\nmore").trim());
+  assert.equal(resolveIdeaTeamName("   ", "Line one"), u5NameFromIdea("Line one").trim());
+});
+
+test("U5 typing an idea never mutates the typed name", () => {
+  const name = "";
+  for (const text of ["a", "ab\nc", "ab\nc\nd"]) assert.equal(name, "");
+});
+
+test("U5 ideaModalFieldOrder puts Name before idea in new mode", () => {
+  assert.deepEqual(ideaModalFieldOrder("new"), ["tabs", "name", "idea", "buddy"]);
+  assert.deepEqual(ideaModalFieldOrder("existing"), ["tabs", "idea", "team"]);
+});
+
+test("U5 live sentence shows the effective team name", () => {
+  const s = describeIdeaAction({ mode: "new", teamName: resolveIdeaTeamName("Crew", "x"), profile: "P" });
+  assert.match(s, /Creates "Crew"/);
+  const f = describeIdeaAction({ mode: "new", teamName: resolveIdeaTeamName("", "Hello"), profile: "P" });
+  assert.match(f, /Creates "Hello/);
+});
