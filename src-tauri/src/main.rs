@@ -2142,41 +2142,61 @@ async fn bind_loopback_listener() -> (TcpListener, u16) {
     (listener, port)
 }
 
-/// Rejects DNS-rebinding (foreign Host) and cross-site browser calls (foreign Origin) against the
-/// loopback proxy, so a random web page cannot hit /__desktop/pair, /__desktop/pick-folder or /ws.
+/// The origins the desktop webview loads from (tauri.conf.json window url is http://127.0.0.1:<port>/;
+/// the tauri:// and tauri.localhost forms cover the bundled-asset schemes on macOS/Linux and Windows).
+fn allowed_local_origins(port: usize) -> [String; 5] {
+    [
+        format!("http://127.0.0.1:{}", port),
+        format!("http://localhost:{}", port),
+        "tauri://localhost".to_string(),
+        "http://tauri.localhost".to_string(),
+        "https://tauri.localhost".to_string(),
+    ]
+}
+
+/// Origin/Host policy for every request on the loopback proxy, not just /__desktop and /ws: the proxy
+/// attaches the paired device token to /api/* and /__vibesquad/*, so a cross-site request must never
+/// reach it. Allowed: a loopback Host plus either an allowlisted Origin, or no Origin with
+/// Sec-Fetch-Site absent / none / same-origin, or no Origin with an allowlisted Referer.
+fn check_local_request(headers: &HeaderMap, port: usize) -> Result<(), &'static str> {
+    // Non-ASCII values read as "" so they never match anything below.
+    let header = |name: &str| headers.get(name).map(|v| v.to_str().unwrap_or(""));
+    let host_ok = header("host")
+        .map(|h| h == format!("127.0.0.1:{}", port) || h == format!("localhost:{}", port))
+        .unwrap_or(false);
+    if !host_ok {
+        return Err("forbidden host");
+    }
+    let allowed = allowed_local_origins(port);
+    if let Some(origin) = header("origin") {
+        // An allowlisted Origin is our own page (tauri:// to 127.0.0.1 reads as cross-site, so this
+        // wins over Sec-Fetch-Site). Anything else, including "null", is refused.
+        return if allowed.iter().any(|a| a == origin) { Ok(()) } else { Err("forbidden origin") };
+    }
+    match header("sec-fetch-site") {
+        None | Some("none") | Some("same-origin") => Ok(()),
+        Some(_) => {
+            let referer_ok = header("referer")
+                .and_then(|r| url::Url::parse(r).ok())
+                .map(|u| u.origin().ascii_serialization())
+                .map(|o| allowed.iter().any(|a| *a == o))
+                .unwrap_or(false);
+            if referer_ok { Ok(()) } else { Err("forbidden cross-site request") }
+        }
+    }
+}
+
+/// Rejects DNS-rebinding (foreign Host) and cross-site browser calls (foreign Origin, cross-site
+/// Sec-Fetch-Site) before any handler runs, so a random web page cannot hit /__desktop/*, /ws, or the
+/// token-bearing /api/* and /__vibesquad/* passthrough.
 async fn guard_local_request(
     State(state): State<Arc<SharedAppState>>,
     req: Request,
     next: Next,
 ) -> Response {
     let port = state.local_port.load(Ordering::SeqCst);
-    let host_ok = req
-        .headers()
-        .get("host")
-        .and_then(|v| v.to_str().ok())
-        .map(|h| h == format!("127.0.0.1:{}", port) || h == format!("localhost:{}", port))
-        .unwrap_or(false);
-    if !host_ok {
-        return (StatusCode::FORBIDDEN, "forbidden host").into_response();
-    }
-    let path = req.uri().path();
-    if path.starts_with("/__desktop/") || path == "/ws" {
-        if let Some(origin) = req.headers().get("origin") {
-            let allowed = [
-                format!("http://127.0.0.1:{}", port),
-                format!("http://localhost:{}", port),
-                "tauri://localhost".to_string(),
-                "http://tauri.localhost".to_string(),
-                "https://tauri.localhost".to_string(),
-            ];
-            let ok = origin
-                .to_str()
-                .map(|o| allowed.iter().any(|a| a == o))
-                .unwrap_or(false);
-            if !ok {
-                return (StatusCode::FORBIDDEN, "forbidden origin").into_response();
-            }
-        }
+    if let Err(reason) = check_local_request(req.headers(), port) {
+        return (StatusCode::FORBIDDEN, reason).into_response();
     }
     next.run(req).await
 }
@@ -2732,5 +2752,90 @@ mod tests {
         assert_eq!(fs::read(&cfg_path).unwrap(), corrupt);
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn local_request_guard_policy() {
+        let port = 4189usize;
+        let hdrs = |pairs: &[(&str, &str)]| {
+            let mut h = HeaderMap::new();
+            for (k, v) in pairs {
+                h.insert(HeaderName::from_bytes(k.as_bytes()).unwrap(), HeaderValue::from_str(v).unwrap());
+            }
+            h
+        };
+        let host = ("host", "127.0.0.1:4189");
+        // Allowed: every app origin, top-level/programmatic navigation, same-origin fetch, no Origin at all.
+        for origin in allowed_local_origins(port) {
+            assert_eq!(check_local_request(&hdrs(&[host, ("origin", &origin), ("sec-fetch-site", "cross-site")]), port), Ok(()), "{origin}");
+        }
+        assert_eq!(check_local_request(&hdrs(&[host]), port), Ok(()));
+        assert_eq!(check_local_request(&hdrs(&[("host", "localhost:4189")]), port), Ok(()));
+        assert_eq!(check_local_request(&hdrs(&[host, ("sec-fetch-site", "none")]), port), Ok(()));
+        assert_eq!(check_local_request(&hdrs(&[host, ("sec-fetch-site", "same-origin")]), port), Ok(()));
+        assert_eq!(check_local_request(&hdrs(&[host, ("sec-fetch-site", "cross-site"), ("referer", "http://localhost:4189/x")]), port), Ok(()));
+        // Refused: foreign/null Origin, foreign Host, cross-site or same-site without an app Origin/Referer.
+        for origin in ["https://evil.example", "null", "http://127.0.0.1:4180", "http://127.0.0.1:41890"] {
+            assert!(check_local_request(&hdrs(&[host, ("origin", origin), ("sec-fetch-site", "same-origin")]), port).is_err(), "{origin}");
+        }
+        assert!(check_local_request(&hdrs(&[("host", "evil.example:4189")]), port).is_err());
+        assert!(check_local_request(&hdrs(&[]), port).is_err());
+        assert!(check_local_request(&hdrs(&[host, ("sec-fetch-site", "cross-site")]), port).is_err());
+        assert!(check_local_request(&hdrs(&[host, ("sec-fetch-site", "same-site")]), port).is_err());
+        assert!(check_local_request(&hdrs(&[host, ("sec-fetch-site", "cross-site"), ("referer", "https://evil.example/")]), port).is_err());
+    }
+
+    #[tokio::test]
+    async fn guard_blocks_cross_site_requests_before_the_token_is_attached() {
+        use std::sync::atomic::AtomicUsize as Counter;
+        // Upstream counts hits and echoes the cookie, so a blocked request provably never left the proxy.
+        let hits = Arc::new(Counter::new(0));
+        let hits_up = hits.clone();
+        let upstream = Router::new().fallback(move |headers: HeaderMap| {
+            let hits = hits_up.clone();
+            async move {
+                hits.fetch_add(1, Ordering::SeqCst);
+                headers.get("cookie").and_then(|v| v.to_str().ok()).unwrap_or("").to_string()
+            }
+        });
+        let state = direct_state(&spawn_upstream(upstream).await);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        state.local_port.store(port as usize, Ordering::SeqCst);
+        let app = build_router(state.clone());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = reqwest::Client::new();
+        let base = format!("http://127.0.0.1:{}", port);
+        let send = |method: reqwest::Method, path: &str, hdrs: Vec<(&'static str, String)>| {
+            let mut b = client.request(method, format!("{}{}", base, path));
+            for (k, v) in hdrs { b = b.header(k, v); }
+            b.send()
+        };
+
+        for path in ["/api/teams", "/__vibesquad/x", "/__vibesquad/paseo/providers", "/__desktop/status"] {
+            for hdrs in [
+                vec![("origin", "https://evil.example".to_string())],
+                vec![("origin", "null".to_string())],
+                vec![("sec-fetch-site", "cross-site".to_string())],
+                vec![("host", "evil.example".to_string())],
+            ] {
+                let resp = send(reqwest::Method::POST, path, hdrs.clone()).await.unwrap();
+                assert_eq!(resp.status(), reqwest::StatusCode::FORBIDDEN, "{path} {hdrs:?}");
+            }
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 0, "a blocked request reached the upstream");
+
+        // The real app still goes through, with the token attached.
+        for hdrs in [
+            vec![],
+            vec![("origin", base.clone()), ("sec-fetch-site", "same-origin".to_string())],
+            vec![("origin", "http://tauri.localhost".to_string()), ("sec-fetch-site", "cross-site".to_string())],
+            vec![("sec-fetch-site", "none".to_string())],
+        ] {
+            let resp = send(reqwest::Method::POST, "/api/teams", hdrs.clone()).await.unwrap();
+            assert_eq!(resp.status(), reqwest::StatusCode::OK, "{hdrs:?}");
+            assert!(resp.text().await.unwrap().contains("vs_device=t"), "{hdrs:?}");
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 4);
     }
 }
