@@ -14,6 +14,7 @@ import {
   REMOTE_MAX_BODY_BYTES,
   REMOTE_RESPONSE_HEADERS,
   REMOTE_TIMEOUT_MS,
+  checkRemoteBody,
   createRateLimiter,
   decideProxyRequest,
   isTextContentType,
@@ -138,6 +139,9 @@ export function makeVsHttpHandler(deps: VsHttpDeps = {}) {
       throw new Error(`vs.http: request body too large (cap ${REMOTE_MAX_BODY_BYTES} bytes)`);
     }
     const write = d.method !== "GET";
+    // Per-endpoint body-key allowlist (S4): checked before a rate-limit slot is spent.
+    const bodyCheck = checkRemoteBody(d.method, d.pathname, input.body);
+    if (!bodyCheck.ok) throw new Error(`vs.http: ${bodyCheck.error}`);
     const slot = limiter.acquire(write ? "write" : "read");
     if (!slot.ok) throw new Error(`vs.http: ${slot.error}`);
     const hasBody = input.body !== undefined && write;

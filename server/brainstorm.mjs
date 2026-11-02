@@ -7,6 +7,7 @@ import { effectiveAgentRole, findLaneInRegistry, formatDisplayTitle, isHubLane, 
 import { findProfileOrFallback, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
 import { briefRootFor, laneWorkingDir } from "./brief-path.mjs";
+import { defangPromptFences } from "./write-guards.mjs";
 import { detachLiveChildrenViaClient, listDaemonAgents } from "./detach-children.mjs";
 import { BRIEF_HISTORY_KEEP, BRIEF_SHRINK_FROM, BRIEF_SHRINK_TO, backupBrief, writeBriefFile } from "./brief-write.mjs";
 import { liveInFlightBlock } from "./in-flight.mjs";
@@ -256,7 +257,7 @@ export function buildBrainstormInitialPrompt({ laneId, laneUpper, buddyName, sum
     `- Latest plan file: \`${latestPlan}\``,
     "",
     `--- BEGIN docs/brainstorm/${laneId}.md ---`,
-    summaryContent.trim(),
+    defangPromptFences(summaryContent.trim()),
     `--- END docs/brainstorm/${laneId}.md ---`,
     "",
     ...(inFlight ? [inFlight, ""] : []),
@@ -439,6 +440,10 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
     }
 
     const oldLabels = { ...(oldAgent?.labels ?? {}) };
+    // Only Buddies restart: a lead or worker id would be retired and archived (S4 mass-archive guard).
+    if (agentId !== "start-brainstorm" && oldLabels.role && !["brainstorm", "former-brainstorm"].includes(oldLabels.role)) {
+      throw new Error(`not a brainstorm agent: ${agentId}`);
+    }
     const laneHint = body.laneId || body.lane || oldLabels.lane || oldLabels.lead || "vibesquad";
     const resolved = laneDisplayName(laneHint, rootDir);
     const laneId = safeSegment(body.laneId || body.lane || resolved.laneId || "vibesquad");

@@ -9,10 +9,12 @@ import {
   readBrainstormSummary,
   writeBrainstormSummary,
 } from "./brainstorm.mjs";
+import { laneWorkingDir } from "./brief-path.mjs";
 import { findLaneInRegistry, formatDisplayTitle, laneCodeFor } from "./identity.mjs";
 import { findProfile, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
+import { defangPromptFences, isSpawnId } from "./write-guards.mjs";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
 const TITLE_MAX = 60;
@@ -576,13 +578,13 @@ export function triageInboxCards(body = {}, rootDir = REPO_ROOT) {
     const card = cards.find((c) => c.id === cardId);
     if (!card) throw new Error(`Card not found: ${cardId}`);
 
+    // No topicAgentId: it names the agent park/handoff-topic archive, so only open-topic sets it.
     const allowed = [
       "status",
       "title",
       "text",
       "scope",
       "summaryNote",
-      "topicAgentId",
       "topicTitle",
       "topicOpenedAt",
       "handedOffAt",
@@ -685,13 +687,13 @@ export function buildTopicBrainstormPrompt({ card, topic, laneId, laneUpper, sum
     ...(Array.isArray(card.mergedFromIds) && card.mergedFromIds.length
       ? [`Merged from: ${card.mergedFromIds.join(", ")}`]
       : []),
-    ...(card.summaryNote ? [`Prior Session Summary Note:\n${String(card.summaryNote).trim()}`] : []),
+    ...(card.summaryNote ? [`Prior Session Summary Note:\n${defangPromptFences(String(card.summaryNote).trim())}`] : []),
     "",
-    String(card.text || "").trim(),
+    defangPromptFences(String(card.text || "").trim()),
     `--- END INBOX CARD #${card.id} ---`,
     "",
     `--- BEGIN docs/brainstorm/${laneId}.md ---`,
-    String(summaryContent || "").trim(),
+    defangPromptFences(String(summaryContent || "").trim()),
     `--- END docs/brainstorm/${laneId}.md ---`,
   ].join("\n");
 }
@@ -725,6 +727,9 @@ export async function openTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
     summaryContent: summary.content,
   });
 
+  // Provider/model only pick among installed CLIs: anything that isn't a plain id is refused.
+  if (body.provider != null && body.provider !== "" && !isSpawnId(String(body.provider).replace("/", ":"))) throw new Error("bad provider");
+  if (body.model != null && body.model !== "" && !isSpawnId(String(body.model))) throw new Error("bad model");
   const rawProvider = String(body.provider || "claude");
   const fallbackProfileName = rawProvider.startsWith("antigravity") ? "Brainstorm - Gemini" : "Brainstorm - Claude";
   const desiredProfileKey = String(body.profile || fallbackProfileName).trim();
@@ -756,7 +761,8 @@ export async function openTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
   const modeId = spawnCfg.modeId;
   const thinkingOptionId = spawnCfg.thinkingOptionId;
   const featureValues = spawnCfg.featureValues ? { ...spawnCfg.featureValues } : undefined;
-  const cwd = body.cwd || rootDir;
+  // Derived server-side from the card's lane (confined to the project roots), never taken from the body.
+  const cwd = laneWorkingDir(teamId, laneId, rootDir) || rootDir;
 
   const newLabels = {
     team: teamId,
@@ -912,6 +918,19 @@ export async function openTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
   };
 }
 
+/**
+ * The agent park/handoff-topic may cancel and archive: the card's own topic Buddy, or a restarted one
+ * (role=brainstorm carrying this card's vs.inbox-card-id). Any other agentId archives nothing.
+ */
+async function topicArchiveTarget(client, card, reqAgentId) {
+  const own = String(card.topicAgentId || "").trim();
+  if (!reqAgentId || reqAgentId === own) return own || null;
+  if (typeof client?.fetchAgent !== "function") return null;
+  const fetched = await client.fetchAgent(reqAgentId).catch(() => null);
+  const labels = (fetched?.agent ?? fetched)?.labels ?? {};
+  return labels.role === "brainstorm" && labels["vs.inbox-card-id"] === card.id ? reqAgentId : null;
+}
+
 export async function handoffTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
   const baseHome = body.baseHome;
   const reqCardId = String(body.cardId || "").trim();
@@ -937,6 +956,7 @@ export async function handoffTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
   const summary = readBrainstormSummary(laneId, rootDir);
 
   let usedTokens = Number(body.usedTokens) || 0;
+  let archivedAgentId = null;
   const injectedClient = body.daemonClient || null;
   const client = injectedClient || (body.skipDaemon ? null : createDaemonClient(rootDir));
   if (client && targetAgentId) {
@@ -946,9 +966,10 @@ export async function handoffTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
         await client.connect();
         connected = true;
       }
-      if (connected) {
+      archivedAgentId = connected ? await topicArchiveTarget(client, card, targetAgentId) : null;
+      if (archivedAgentId) {
         if (!usedTokens && typeof client.fetchAgent === "function") {
-          const fetched = await client.fetchAgent(targetAgentId).catch(() => null);
+          const fetched = await client.fetchAgent(archivedAgentId).catch(() => null);
           const ag = fetched?.agent;
           usedTokens =
             Number(ag?.contextUsage?.usedTokens) ||
@@ -957,9 +978,9 @@ export async function handoffTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
             0;
         }
         if (typeof client.cancelAgent === "function") {
-          await client.cancelAgent(targetAgentId).catch(() => {});
+          await client.cancelAgent(archivedAgentId).catch(() => {});
         }
-        await archiveBuddyKeepingChildren(client, targetAgentId);
+        await archiveBuddyKeepingChildren(client, archivedAgentId);
       }
     } catch {
       // daemon offline is non-fatal
@@ -1010,7 +1031,7 @@ export async function handoffTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
     ok: true,
     card,
     cards,
-    archivedAgentId: targetAgentId || null,
+    archivedAgentId,
     handedOffAt: now,
     summaryPath: summary.path,
   };
@@ -1034,6 +1055,7 @@ export async function parkTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
   const rawNote = typeof body.summaryNote === "string" ? body.summaryNote.trim() : "";
   const isDefaultPlaceholder = !rawNote || /^Parked from topic brainstorm$/i.test(rawNote);
   let latestAssistantText = "";
+  let archivedAgentId = null;
 
   const injectedClient = body.daemonClient || null;
   const client = injectedClient || (body.skipDaemon ? null : createDaemonClient(rootDir));
@@ -1044,15 +1066,16 @@ export async function parkTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
         await client.connect();
         connected = true;
       }
-      if (connected) {
+      archivedAgentId = connected ? await topicArchiveTarget(client, card, targetAgentId) : null;
+      if (archivedAgentId) {
         if (isDefaultPlaceholder) {
           let timeline = null;
           if (typeof client.fetchAgentTimeline === "function") {
             timeline = await client
-              .fetchAgentTimeline(targetAgentId, { direction: "tail", limit: 20, projection: "projected" })
+              .fetchAgentTimeline(archivedAgentId, { direction: "tail", limit: 20, projection: "projected" })
               .catch(() => null);
           } else if (typeof client.getAgentTimeline === "function") {
-            timeline = await client.getAgentTimeline(targetAgentId).catch(() => null);
+            timeline = await client.getAgentTimeline(archivedAgentId).catch(() => null);
           }
           const entries = Array.isArray(timeline?.entries)
             ? timeline.entries
@@ -1071,9 +1094,9 @@ export async function parkTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
           }
         }
         if (typeof client.cancelAgent === "function") {
-          await client.cancelAgent(targetAgentId).catch(() => {});
+          await client.cancelAgent(archivedAgentId).catch(() => {});
         }
-        await archiveBuddyKeepingChildren(client, targetAgentId);
+        await archiveBuddyKeepingChildren(client, archivedAgentId);
       }
     } catch {
       // daemon offline is non-fatal
@@ -1109,6 +1132,6 @@ export async function parkTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
     card,
     cards,
     parkedSummary,
-    archivedAgentId: targetAgentId || null,
+    archivedAgentId,
   };
 }

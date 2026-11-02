@@ -1,6 +1,6 @@
 import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { getStale, peekStale } from "./stale-runtime.mjs";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -9,6 +9,8 @@ import { fileURLToPath } from "node:url";
 import { inspectFirstRunStatus, startManagedPaseoInstall } from "./first-run.mjs";
 import { resolveTeamsFilePath, resolveTeamsWritePath } from "./teams-file.mjs";
 import { seedHubBriefs } from "./hub-seed.mjs";
+import { resolveProjectPath } from "./brief-path.mjs";
+import { contentRevision, createWindowLimiter } from "./write-guards.mjs";
 import { ADE_GATED_READ_PATHS, handleFileList, handleSearch } from "./file-search.mjs";
 import {
   LEGACY_NEEDS_LABEL,
@@ -272,14 +274,31 @@ const UI_LOG_TYPES = new Set(["you", "needs-you", "handoff", "metric", "decision
 
 const MAX_BODY_BYTES = 1024 * 1024;
 const AGENT_ID_STRICT = /^[A-Za-z0-9_-]{1,64}$/;
-// Test/DI hooks that must never be taken from an HTTP body.
-const INTERNAL_BODY_KEYS = ["baseHome", "profilesPath", "daemonClient", "oldAgent", "oldLead", "execSpawn", "teamsFilePath", "skipDaemon", "agents"];
+// Test/DI hooks and server-derived values that must never be taken from an HTTP body. `cwd` and `labels`
+// are derived from the lane or the daemon's own agent record; the timing knobs would skip cooldowns.
+export const INTERNAL_BODY_KEYS = [
+  "baseHome", "profilesPath", "daemonClient", "clientFactory", "oldAgent", "oldLead", "execSpawn", "teamsFilePath",
+  "skipDaemon", "agents", "cwd", "labels", "title", "forceNew", "cooldownMs", "emptyRetryMs", "backstopDelayMs",
+];
 
 export function sanitizeBody(body) {
   const out = { ...(body && typeof body === "object" ? body : {}) };
   for (const k of INTERNAL_BODY_KEYS) delete out[k];
   return out;
 }
+
+/** readBody + sanitizeBody: what every write handler that hands its body to a helper must use. */
+const readCleanBody = async (req) => sanitizeBody(await readBody(req));
+
+// Agent archives reachable over HTTP (brainstorm-restart, inbox park/handoff-topic) share one budget, so a
+// loop over agent ids can't retire every Buddy at once.
+export const ARCHIVE_BUDGET_PER_MIN = 10;
+export const archiveBudget = createWindowLimiter({ max: ARCHIVE_BUDGET_PER_MIN });
+const overArchiveBudget = (res) => {
+  if (archiveBudget.take()) return false;
+  sendJson(res, 429, { ok: false, error: `too many agent restarts/archives: ${ARCHIVE_BUDGET_PER_MIN} per minute` });
+  return true;
+};
 
 function readBody(req) {
   return new Promise((ok, fail) => {
@@ -553,7 +572,7 @@ async function handleSettings(req, res) {
     });
   }
   if (req.method === "POST" || req.method === "PUT") {
-    const body = await readBody(req);
+    const body = await readCleanBody(req);
     const patch = {};
     if (body && "userName" in body) patch.userName = body.userName;
     if (body && "lanEnabled" in body) patch.lanEnabled = Boolean(body.lanEnabled);
@@ -599,7 +618,7 @@ async function handleLog(req, res) {
       return sendJson(res, 200, out);
     }
     if (req.method === "POST") {
-      const { team, type = "you", text, refs, agent = loadUserSettings().userName, lane = "" } = await readBody(req);
+      const { team, type = "you", text, refs, agent = loadUserSettings().userName, lane = "" } = await readCleanBody(req);
       if (!TEAM_ID.test(String(team))) return sendJson(res, 400, { error: "bad team" });
       if (!LOG_TYPES.has(type) || !UI_LOG_TYPES.has(type)) return sendJson(res, 400, { error: `type ${type} not allowed from the UI` });
       const t = String(text ?? "").trim();
@@ -668,7 +687,13 @@ function allowedAttachRoots(rootDir, opts) {
   const roots = [rootDir, ...(opts.allowedCwdRoots ?? []), ...paseoAgentCwds()];
   try {
     const teams = JSON.parse(stripBom(readFileSync(resolveTeamsFilePath(rootDir), "utf8"))).teams ?? [];
-    for (const t of teams) for (const p of t.paths ?? []) roots.push(p);
+    // Same confinement as lane working dirs: a registry path outside the project roots widens nothing.
+    for (const t of teams) {
+      for (const p of t.paths ?? []) {
+        const full = resolveProjectPath(p, rootDir);
+        if (full) roots.push(full);
+      }
+    }
   } catch {}
   return [...new Set(roots)].map(realOrNull).filter(Boolean);
 }
@@ -698,6 +723,7 @@ async function handleAttach(req, res, rootDir, opts = {}) {
     return res.end();
   }
   try {
+    // The one body that carries a cwd on purpose: it is confined right below (roots + UNC + realpath).
     const { cwd, files } = await readBody(req);
     if (typeof cwd !== "string" || isUncLikePath(cwd)) return sendJson(res, 400, { error: "cwd is not a directory" });
     const roots = allowedAttachRoots(rootDir, opts);
@@ -724,11 +750,21 @@ async function handleAttach(req, res, rootDir, opts = {}) {
   }
 }
 
+// `vs handoff` runs async (it used to execFileSync for up to 60 s and stall every request), one at a time.
+export const HANDOFF_TIMEOUT_MS = 60_000;
+let handoffRunning = false;
+const runVsHandoff = (cli, rootDir, env) =>
+  new Promise((ok, fail) => {
+    execFile(process.execPath, [cli, "handoff"], { cwd: rootDir, env, timeout: HANDOFF_TIMEOUT_MS, windowsHide: true }, (err) =>
+      err ? fail(err) : ok(),
+    );
+  });
+
 // GET ?team&lane: does the successor packet exist? POST {team,lane,agentId}: run `vs handoff` to make it.
 async function handleHandoff(req, res, rootDir) {
   try {
     const q = req.method === "GET" ? new URL(req.url, "http://x").searchParams : null;
-    const body = req.method === "POST" ? await readBody(req) : {};
+    const body = req.method === "POST" ? await readCleanBody(req) : {};
     const team = String(q?.get("team") ?? body.team ?? "");
     const lane = String(q?.get("lane") ?? body.lane ?? "");
     if (!TEAM_ID.test(team) || !TEAM_ID.test(lane)) return sendJson(res, 400, { error: "bad team/lane" });
@@ -741,13 +777,13 @@ async function handleHandoff(req, res, rootDir) {
     if (body.agentId !== undefined && !AGENT_ID_STRICT.test(String(body.agentId))) return sendJson(res, 400, { error: "bad agentId" });
     const cli = join(rootDir, "cli", "vs.mjs");
     if (!existsSync(cli)) return sendJson(res, 200, { exists: existsSync(packet), path: packet, ran: false, note: "cli/vs.mjs not found" });
-    execFileSync(process.execPath, [cli, "handoff"], {
-      cwd: rootDir,
-      env: { ...process.env, ...(body.agentId ? { PASEO_AGENT_ID: String(body.agentId) } : {}) },
-      timeout: 60_000,
-      stdio: "pipe",
-      windowsHide: true,
-    });
+    if (handoffRunning) return sendJson(res, 429, { error: "a handoff is already running; try again when it finishes" });
+    handoffRunning = true;
+    try {
+      await runVsHandoff(cli, rootDir, { ...process.env, ...(body.agentId ? { PASEO_AGENT_ID: String(body.agentId) } : {}) });
+    } finally {
+      handoffRunning = false;
+    }
     sendJson(res, 200, { exists: existsSync(packet), path: packet, ran: true });
   } catch (e) {
     sendJson(res, 500, { error: String(e) });
@@ -760,17 +796,23 @@ async function handleBrainstormSummary(req, res, rootDir) {
       const q = new URL(req.url, "http://x").searchParams;
       const lane = q.get("lane") || q.get("laneId") || "vibesquad";
       const s = readBrainstormSummary(lane, rootDir);
-      return sendJson(res, 200, { ok: true, laneId: s.laneId, path: s.path, content: s.content });
+      return sendJson(res, 200, { ok: true, laneId: s.laneId, path: s.path, content: s.content, revision: contentRevision(s.content) });
     }
     if (req.method === "POST" || req.method === "PUT") {
-      const body = await readBody(req);
+      const body = await readCleanBody(req);
       const lane = body.laneId || body.lane || "vibesquad";
       const content = String(body.content ?? "");
       if (content.length >= 20_000) {
         return sendJson(res, 400, { ok: false, error: `Summary is ${content.length} chars; must be < 20000 chars (~5k tokens)` });
       }
+      // Like teams.json: a write that sends the revision it read gets 409 if the brief changed since.
+      if (body.revision !== undefined) {
+        const cur = readBrainstormSummary(lane, rootDir);
+        const revision = contentRevision(cur.content);
+        if (body.revision !== revision) return sendJson(res, 409, { ok: false, error: "brief changed", content: cur.content, revision });
+      }
       const s = writeBrainstormSummary(lane, content, rootDir);
-      return sendJson(res, 200, { ok: true, laneId: s.laneId, path: s.path, content: s.content });
+      return sendJson(res, 200, { ok: true, laneId: s.laneId, path: s.path, content: s.content, revision: contentRevision(s.content) });
     }
     res.statusCode = 405;
     res.end();
@@ -804,7 +846,7 @@ async function handleVsLog(req, res) {
       return sendJson(res, 200, { ok: true, entries });
     }
     if (req.method === "POST") {
-      const body = await readBody(req);
+      const body = await readCleanBody(req);
       const teamId = body.teamId || body.team || "vibesquad";
       const laneId = body.laneId || body.lane || teamId;
       if (!TEAM_ID.test(String(teamId)) || !TEAM_ID.test(String(laneId))) return sendJson(res, 400, { ok: false, error: "bad team/lane" });
@@ -834,11 +876,12 @@ async function handleBrainstormRestart(req, res, rootDir) {
     return res.end();
   }
   try {
-    const body = await readBody(req);
+    const body = await readCleanBody(req);
     if (body?.agentId != null && body.agentId !== "" && !AGENT_ID_STRICT.test(String(body.agentId))) {
       return sendJson(res, 400, { ok: false, error: "bad agentId" });
     }
-    const result = await performBrainstormRestart(sanitizeBody(body), rootDir);
+    if (body.reason !== "start-brainstorm" && overArchiveBudget(res)) return;
+    const result = await performBrainstormRestart(body, rootDir);
     // ok:false (e.g. agent-list-unavailable) must not look like success to the UI.
     return sendJson(res, result?.ok === false ? 503 : 200, result);
   } catch (e) {
@@ -852,10 +895,9 @@ async function handleLeadHandoff(req, res, rootDir, actionOverride) {
     return res.end();
   }
   try {
-    const body = await readBody(req);
-    const clean = sanitizeBody(body);
+    const body = await readCleanBody(req);
     const result = await performLeadHandoffHttp(
-      actionOverride ? { ...clean, action: actionOverride } : { httpWaitMs: 2000, ...clean },
+      actionOverride ? { ...body, action: actionOverride } : { httpWaitMs: 2000, ...body },
       rootDir,
     );
     const status = result?.status || (result?.accepted ? 202 : 200);
@@ -880,7 +922,7 @@ async function handleInbox(req, res, rootDir) {
       return sendJson(res, 200, { ok: true, cards });
     }
     if (req.method === "POST") {
-      const body = await readBody(req);
+      const body = await readCleanBody(req);
       const result = addInboxCards(body, rootDir);
       return sendJson(res, 200, result);
     }
@@ -897,7 +939,7 @@ async function handleInboxTriage(req, res, rootDir) {
     return res.end();
   }
   try {
-    const body = await readBody(req);
+    const body = await readCleanBody(req);
     const result = triageInboxCards(body, rootDir);
     return sendJson(res, 200, result);
   } catch (e) {
@@ -911,7 +953,7 @@ async function handleInboxOpenTopic(req, res, rootDir) {
     return res.end();
   }
   try {
-    const body = await readBody(req);
+    const body = await readCleanBody(req);
     const result = await openTopicBrainstorm(body, rootDir);
     return sendJson(res, 200, result);
   } catch (e) {
@@ -925,7 +967,8 @@ async function handleInboxHandoffTopic(req, res, rootDir) {
     return res.end();
   }
   try {
-    const body = await readBody(req);
+    const body = await readCleanBody(req);
+    if (overArchiveBudget(res)) return;
     const result = await handoffTopicBrainstorm(body, rootDir);
     return sendJson(res, 200, result);
   } catch (e) {
@@ -939,7 +982,8 @@ async function handleInboxParkTopic(req, res, rootDir) {
     return res.end();
   }
   try {
-    const body = await readBody(req);
+    const body = await readCleanBody(req);
+    if (overArchiveBudget(res)) return;
     const result = await parkTopicBrainstorm(body, rootDir);
     return sendJson(res, 200, result);
   } catch (e) {
@@ -967,7 +1011,7 @@ async function handlePushSubscribe(req, res) {
     return res.end();
   }
   try {
-    const body = await readBody(req);
+    const body = await readCleanBody(req);
     const result = savePushSubscription(body);
     return sendJson(res, 200, result);
   } catch (e) {
@@ -981,7 +1025,7 @@ async function handlePushUnsubscribe(req, res) {
     return res.end();
   }
   try {
-    const body = await readBody(req);
+    const body = await readCleanBody(req);
     const result = removePushSubscription(body);
     return sendJson(res, 200, result);
   } catch (e) {
@@ -1016,7 +1060,7 @@ async function handlePushTest(req, res) {
     return res.end();
   }
   try {
-    const body = await readBody(req);
+    const body = await readCleanBody(req);
     const result = await sendTestPush(body);
     return sendJson(res, 200, result);
   } catch (e) {
@@ -1048,7 +1092,7 @@ async function handleProfiles(req, res) {
       });
     }
     if (req.method === "POST" || req.method === "PUT") {
-      const body = await readBody(req);
+      const body = await readCleanBody(req);
       const saved = saveProfiles(body);
       return sendJson(res, 200, {
         ok: true,
@@ -1069,7 +1113,7 @@ async function handleProfilesImport(req, res) {
     return res.end();
   }
   try {
-    const body = await readBody(req);
+    const body = await readCleanBody(req);
     if (body.mode === "default") {
       const seeded = seedDefaultPack();
       syncProfilesToPaseo(seeded.profiles);
