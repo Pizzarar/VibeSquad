@@ -70,3 +70,33 @@ test("H2 centre navigation still moves the active squad and agent", () => {
   const app = src("App.tsx");
   assert.match(app, /const onTeam = useCallback\(\(id: string\) => \{\s*exitSquadsHome\(\);\s*setTeamId\(id\);\s*setScreen\("teams"\);/);
 });
+
+// ── H3: a daemon disconnect shows a centered card over a scrim and never reflows the app ──
+test("H3 shouldShowDisconnectOverlay debounces blips under 2s", async () => {
+  // DiagnosticsModal imports React components; check the helper through its source instead of importing the module.
+  const dm = src("DiagnosticsModal.tsx");
+  assert.match(dm, /export const DISCONNECT_DEBOUNCE_MS = 2000;/);
+  const fn = new Function(
+    `const DISCONNECT_DEBOUNCE_MS = 2000; ${dm
+      .match(/export function shouldShowDisconnectOverlay[\s\S]*?\n\}/)[0]
+      .replace("export ", "")
+      .replace(/\(conn: string, disconnectedSinceMs: number \| null, nowMs: number, debounceMs = DISCONNECT_DEBOUNCE_MS\): boolean/, "(conn, disconnectedSinceMs, nowMs, debounceMs = DISCONNECT_DEBOUNCE_MS)")}; return shouldShowDisconnectOverlay;`,
+  )();
+  assert.equal(fn("connected", 0, 10_000), false);
+  assert.equal(fn("disconnected", null, 10_000), false);
+  assert.equal(fn("disconnected", 0, 1_999), false);
+  assert.equal(fn("disconnected", 0, 2_000), true);
+  assert.equal(fn("connecting", 1_000, 2_500, 1_000), true);
+});
+
+test("H3 scrim is fixed, does not use role=alert on the outer element, and .app rows ignore it", () => {
+  const dm = src("DiagnosticsModal.tsx");
+  assert.match(dm, /<div className="daemon-disconnect-scrim" data-testid="daemon-disconnect-scrim">/);
+  assert.match(dm, /className="daemon-disconnect-card" data-testid="daemon-down-banner" role="alert"/);
+  assert.match(dm, /Daemon disconnected · retrying in \{retryIn\}s/);
+  const css = src("ResponsiveSmallWindow.css");
+  assert.match(css, /\.daemon-disconnect-scrim \{ position: fixed; inset: 0; z-index: 9500; background: rgba\(5, 6, 13, 0\.72\);/);
+  assert.match(css, /\.modal-back:has\(\[data-testid="diagnostics-modal"\]\) \{ z-index: 9600; \}/);
+  assert.match(src("styles.css"), /\.app:has\(> \[role="alert"\]:not\(\.daemon-disconnect-scrim\)\)/);
+  assert.match(src("App.tsx"), /<DaemonStatusBanner onOpenDiagnostics=\{openDiagnostics\} \/>/);
+});

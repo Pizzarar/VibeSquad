@@ -1897,7 +1897,7 @@ export function App() {
           </button>
         </div>
       )}
-      <DaemonStatusBanner />
+      <DaemonStatusBanner onOpenDiagnostics={openDiagnostics} />
       {!focus && (
         <Sidebar
           views={sidebarViews}

@@ -90,7 +90,7 @@ code {
   overflow: hidden;
 }
 
-.app:has(> [role="alert"]) {
+.app:has(> [role="alert"]:not(.daemon-disconnect-scrim)) {
   grid-template-rows: auto minmax(0, 1fr);
 }
 .app:has(> [role="alert"] + [role="alert"]) {

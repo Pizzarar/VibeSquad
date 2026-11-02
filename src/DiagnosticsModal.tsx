@@ -47,27 +47,81 @@ export async function buildBundle(conn: string, agents: Iterable<{ id: string; s
   };
 }
 
-export function DaemonStatusBanner() {
+/** A blip shorter than this shows nothing: the scrim only appears once the daemon has been away this long. */
+export const DISCONNECT_DEBOUNCE_MS = 2000;
+const RETRY_SECONDS = 3;
+
+export function shouldShowDisconnectOverlay(conn: string, disconnectedSinceMs: number | null, nowMs: number, debounceMs = DISCONNECT_DEBOUNCE_MS): boolean {
+  return conn !== "connected" && disconnectedSinceMs !== null && nowMs - disconnectedSinceMs >= debounceMs;
+}
+
+/** Centered card over a dimmed scrim. position: fixed and not a role="alert" child of .app, so the layout underneath never changes. */
+export function DaemonStatusBanner({ onOpenDiagnostics }: { onOpenDiagnostics?: () => void }) {
   const { conn } = usePaseo();
   const [busy, setBusy] = useState(false);
-  const act = useCallback(async (name: string) => {
+  const [visible, setVisible] = useState(false);
+  const [retryIn, setRetryIn] = useState(RETRY_SECONDS);
+  const down = conn !== "connected";
+
+  useEffect(() => {
+    if (!down) {
+      setVisible(false);
+      return;
+    }
+    const since = Date.now();
+    const t = setTimeout(() => {
+      if (shouldShowDisconnectOverlay("disconnected", since, Date.now())) setVisible(true);
+    }, DISCONNECT_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [down]);
+
+  const retry = useCallback(async () => {
     setBusy(true);
     try {
-      await dc[name]?.();
+      await (daemonClient as unknown as { connect?: () => Promise<unknown> }).connect?.();
+      await dc.getDaemonStatus?.();
     } catch {
-      /* status stays down; banner remains */
+      /* still down; the scrim stays */
     } finally {
       setBusy(false);
     }
   }, []);
-  if (conn === "connected") return null;
+
+  useEffect(() => {
+    if (!visible) {
+      setRetryIn(RETRY_SECONDS);
+      return;
+    }
+    const iv = setInterval(() => {
+      setRetryIn((n) => {
+        if (n > 1) return n - 1;
+        void retry();
+        return RETRY_SECONDS;
+      });
+    }, 1000);
+    return () => clearInterval(iv);
+  }, [visible, retry]);
+
+  if (!down || !visible) return null;
+  const onRetryNow = () => {
+    setRetryIn(RETRY_SECONDS);
+    void retry();
+  };
   return (
-    <div className="daemon-down-banner" data-testid="daemon-down-banner" role="alert">
-      <b>{conn === "connecting" ? "Connecting to Paseo daemon…" : "Paseo daemon is down."}</b>
-      <span>Data shown may be stale.</span>
-      <span className="spacer" />
-      <button className="btn small" disabled={busy} onClick={() => void act("getDaemonStatus")}>↻ Retry Connection</button>
-      <button className="btn small" disabled={busy} onClick={() => void act("restartServer")}>⚡ Restart Daemon Server</button>
+    <div className="daemon-disconnect-scrim" data-testid="daemon-disconnect-scrim">
+      <div className="daemon-disconnect-card" data-testid="daemon-down-banner" role="alert">
+        <div className="daemon-disconnect-title" data-testid="daemon-disconnect-text">
+          Daemon disconnected · retrying in {retryIn}s
+        </div>
+        <div className="daemon-disconnect-actions">
+          <button type="button" className="btn ok small" data-testid="daemon-retry-btn" disabled={busy} onClick={onRetryNow}>
+            RETRY NOW
+          </button>
+          <button type="button" className="btn ghost small" data-testid="daemon-diagnostics-btn" onClick={onOpenDiagnostics}>
+            DIAGNOSTICS
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
