@@ -65,7 +65,11 @@ function PairRows({
           <button type="button" className="btn ghost small" onClick={() => setShown({ ...shown, [i]: !shown[i] })}>
             {shown[i] ? "Hide" : "Reveal"}
           </button>
-          <button type="button" className="btn ghost small bad-btn" onClick={() => onChange(rows.filter((_, j) => j !== i))}>
+          <button type="button" className="btn ghost small bad-btn" onClick={() => {
+              // Reveal flags follow their rows: removing row i must not shift a revealed flag onto the next row.
+              setShown((prev) => Object.fromEntries(Object.entries(prev).filter(([k]) => Number(k) !== i).map(([k, v]) => [Number(k) > i ? Number(k) - 1 : Number(k), v])));
+              onChange(rows.filter((_, j) => j !== i));
+            }}>
             ✕
           </button>
         </div>
@@ -86,7 +90,7 @@ export function McpPanel() {
   }, [agents]);
   const [cwd, setCwd] = useState("");
   useEffect(() => {
-    if (!cwd && cwds.length) setCwd(cwds[0]);
+    if (cwds.length && !cwds.includes(cwd)) setCwd(cwds[0]);
   }, [cwd, cwds]);
 
   const [file, setFile] = useState<McpFileState | null>(null);
@@ -108,25 +112,42 @@ export function McpPanel() {
 
   const parsed = useMemo(() => (file ? parseMcpFile(file.text) : null), [file]);
 
-  const load = useCallback(async () => {
-    if (!cwd) return;
-    setErr("");
-    try {
-      const [f, d] = await Promise.all([readMcpFile(cwd), readDaemonMcp().catch(() => null)]);
-      if (!mounted.current) return;
-      setFile(f);
-      setDaemon(d);
-    } catch (e) {
-      if (mounted.current) setErr(e instanceof Error ? e.message : String(e));
-    }
-  }, [cwd]);
+  // Host-wide, so it loads once and does not depend on a project folder (or on any agent existing).
+  useEffect(() => {
+    void readDaemonMcp()
+      .then((d) => {
+        if (mounted.current) setDaemon(d);
+      })
+      .catch(() => {});
+  }, []);
+
+  // A stale read (the folder changed while it was in flight) is dropped via isCancelled.
+  const load = useCallback(
+    async (isCancelled?: () => boolean) => {
+      if (!cwd) return;
+      setErr("");
+      try {
+        const f = await readMcpFile(cwd);
+        if (!mounted.current || isCancelled?.()) return;
+        setFile(f);
+      } catch (e) {
+        if (mounted.current && !isCancelled?.()) setErr(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [cwd],
+  );
 
   useEffect(() => {
+    let cancelled = false;
     setFile(null);
     setDraft(null);
+    setEditing(null);
     setPending(null);
     setRevealed({});
-    void load();
+    void load(() => cancelled);
+    return () => {
+      cancelled = true;
+    };
   }, [load]);
 
   const reviewDraft = () => {
@@ -162,6 +183,7 @@ export function McpPanel() {
       setPending(null);
       setDraft(null);
       setEditing(null);
+      setRevealed({});
       await load();
     } catch (e) {
       if (mounted.current) setErr(e instanceof Error ? e.message : String(e));
@@ -177,7 +199,8 @@ export function McpPanel() {
       const restart = await patchDaemonMcp(patch);
       if (!mounted.current) return;
       setNotice(restart.length ? `Saved. Restart needed for: ${restart.join(", ")}` : "Saved and reloaded.");
-      setDaemon(await readDaemonMcp());
+      const d = await readDaemonMcp();
+      if (mounted.current) setDaemon(d);
     } catch (e) {
       if (mounted.current) setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -254,8 +277,7 @@ export function McpPanel() {
           </div>
           {parsed.servers.length === 0 && <div className="muted small">No servers in this project.</div>}
           {parsed.servers.map((s) => {
-            const open = !!revealed[s.name];
-            const pairs = Object.entries(s.transport === "stdio" ? s.env : s.headers);
+                        const pairs = Object.entries(s.transport === "stdio" ? s.env : s.headers);
             return (
               <div key={s.name} data-testid={`mcp-row-${s.name}`} className="ts-team" style={{ borderLeftColor: TRANSPORT_COLOR[s.transport], marginBottom: 6 }}>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
@@ -265,7 +287,7 @@ export function McpPanel() {
                   </span>
                   <span className={`pill diag ${s.enabled ? "ok" : "warn"}`}>{s.enabled ? "enabled" : "disabled"}</span>
                   <span style={{ flex: 1 }} />
-                  <button type="button" className="btn ghost small" data-testid={`mcp-edit-${s.name}`} onClick={() => { setDraft(draftFromView(s)); setEditing(s.name); setErr(""); setNotice(""); }}>
+                  <button type="button" className="btn ghost small" data-testid={`mcp-edit-${s.name}`} onClick={() => { setPending(null); setDraft(draftFromView(s)); setEditing(s.name); setErr(""); setNotice(""); }}>
                     Edit
                   </button>
                   <button type="button" className="btn ghost small bad-btn" data-testid={`mcp-remove-${s.name}`} onClick={() => reviewRemove(s)}>
@@ -278,17 +300,24 @@ export function McpPanel() {
                 {pairs.length > 0 && (
                   <div className="small muted" style={{ wordBreak: "break-all" }}>
                     {s.transport === "stdio" ? "env" : "headers"}:{" "}
-                    {pairs.map(([k, v]) => `${k}=${open ? v : MASKED}`).join(", ")}{" "}
-                    <button type="button" className="btn ghost small" onClick={() => setRevealed({ ...revealed, [s.name]: !open })}>
-                      {open ? "Hide" : "Reveal"}
-                    </button>
+                    {pairs.map(([k, v]) => {
+                      const rk = `${s.name}:${k}`;
+                      return (
+                        <span key={k} style={{ marginRight: 8 }}>
+                          {k}={revealed[rk] ? v : MASKED}{" "}
+                          <button type="button" className="btn ghost small" aria-label={`${revealed[rk] ? "Hide" : "Reveal"} ${k}`} onClick={() => setRevealed({ ...revealed, [rk]: !revealed[rk] })}>
+                            {revealed[rk] ? "Hide" : "Reveal"}
+                          </button>
+                        </span>
+                      );
+                    })}
                   </div>
                 )}
               </div>
             );
           })}
           {!draft && (
-            <button type="button" className="btn small" data-testid="mcp-add" onClick={() => { setDraft(emptyDraft()); setEditing(null); setErr(""); setNotice(""); }}>
+            <button type="button" className="btn small" data-testid="mcp-add" onClick={() => { setPending(null); setDraft(emptyDraft()); setEditing(null); setErr(""); setNotice(""); }}>
               + Add server
             </button>
           )}
@@ -296,7 +325,7 @@ export function McpPanel() {
       )}
 
       {draft && !pending && (
-        <div data-testid="mcp-form" className="ts-team" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div key={`${editing ?? "__new__"}:${draft.transport}`} data-testid="mcp-form" className="ts-team" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <div className="field-label">{editing ? `EDIT ${editing}` : "NEW SERVER"}</div>
           <Field label="NAME">
             <input type="text" data-testid="mcp-f-name" value={draft.name} onChange={(e) => setD({ name: e.target.value })} />

@@ -1,7 +1,20 @@
-// Pure helpers for MCP server management (.mcp.json parse / validate / edit / diff). No imports.
+// Pure helpers for MCP server management (.mcp.json parse / validate / edit / diff). Only imports the pure masking constant.
+import { REDACTED } from "./paseoOpsLogic.ts";
 
 export const MCP_FILE = ".mcp.json";
-export const MASKED = "••• hidden";
+export const MASKED = REDACTED;
+
+const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+function isValidHttpUrl(u: string): boolean {
+  if (!/^https?:\/\/\S+$/i.test(u)) return false;
+  try {
+    const p = new URL(u);
+    return (p.protocol === "http:" || p.protocol === "https:") && !!p.hostname;
+  } catch {
+    return false;
+  }
+}
 
 export type McpTransport = "stdio" | "http" | "sse";
 
@@ -35,9 +48,7 @@ export interface ParsedMcpFile {
 
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const strMap = (v: unknown): Record<string, string> => {
-  const out: Record<string, string> = {};
-  if (isObj(v)) for (const [k, x] of Object.entries(v)) out[k] = typeof x === "string" ? x : String(x);
-  return out;
+  return isObj(v) ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, typeof x === "string" ? x : String(x)])) : {};
 };
 
 export function toView(name: string, raw: unknown): McpServerView {
@@ -95,14 +106,14 @@ const NAME_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 export function validateDraft(d: McpDraft, existing: string[], editing: string | null): string[] {
   const errs: string[] = [];
   const name = d.name.trim();
-  if (!NAME_RE.test(name)) errs.push("Name: 1–64 letters, digits, _ . -");
+  if (!NAME_RE.test(name) || UNSAFE_KEYS.has(name)) errs.push("Name: 1–64 letters, digits, _ . - (not __proto__, constructor or prototype)");
   else if (name !== editing && existing.includes(name)) errs.push(`A server named "${name}" already exists`);
   if (d.transport === "stdio") {
     if (!d.command.trim()) errs.push("Command is required");
   } else {
     const u = d.url.trim();
     if (!u) errs.push("URL is required");
-    else if (!/^https?:\/\/\S+$/i.test(u)) errs.push("URL must start with http:// or https://");
+    else if (!isValidHttpUrl(u)) errs.push("URL must be a valid http:// or https:// address");
   }
   const pairs = d.transport === "stdio" ? d.env : d.headers;
   const keys = new Set<string>();
@@ -112,6 +123,7 @@ export function validateDraft(d: McpDraft, existing: string[], editing: string |
       if (p.value) errs.push("Every value needs a key");
       continue;
     }
+    if (UNSAFE_KEYS.has(k)) errs.push(`Key "${k}" is not allowed`);
     if (keys.has(k)) errs.push(`Duplicate key "${k}"`);
     keys.add(k);
   }
@@ -119,9 +131,7 @@ export function validateDraft(d: McpDraft, existing: string[], editing: string |
 }
 
 function pairsToMap(p: { key: string; value: string }[]): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const { key, value } of p) if (key.trim()) out[key.trim()] = value;
-  return out;
+  return Object.fromEntries(p.filter((x) => x.key.trim()).map((x) => [x.key.trim(), x.value]));
 }
 
 /** The `.mcp.json` entry for a draft, merged over the old entry so unknown keys survive an edit. */
@@ -144,33 +154,31 @@ export type McpOp =
 /** New file text after the op. Keeps other top-level keys and the other servers' order. */
 export function applyOp(doc: Record<string, unknown>, op: McpOp): string {
   const old = isObj(doc.mcpServers) ? (doc.mcpServers as Record<string, unknown>) : {};
-  const servers: Record<string, unknown> = {};
-  if (op.kind === "remove") {
-    for (const [k, v] of Object.entries(old)) if (k !== op.name) servers[k] = v;
-  } else {
+  let entries = Object.entries(old);
+  if (op.kind === "remove") entries = entries.filter(([k]) => k !== op.name);
+  else {
     const from = op.renameFrom ?? op.name;
-    let placed = false;
-    for (const [k, v] of Object.entries(old)) {
-      if (k === from) {
-        servers[op.name] = op.config;
-        placed = true;
-      } else if (k !== op.name) servers[k] = v;
-    }
-    if (!placed) servers[op.name] = op.config;
+    const placed = entries.some(([k]) => k === from);
+    entries = entries.flatMap(([k, v]): [string, unknown][] => (k === from ? [[op.name, op.config]] : k === op.name ? [] : [[k, v]]));
+    if (!placed) entries.push([op.name, op.config]);
   }
-  return JSON.stringify({ ...doc, mcpServers: servers }, null, 2) + "\n";
+  // fromEntries defines own properties, so odd names are never swallowed by the prototype setter.
+  return JSON.stringify({ ...doc, mcpServers: Object.fromEntries(entries) }, null, 2) + "\n";
 }
 
-/** Same document with every env / headers value masked (for display and diff previews). */
+function maskServer(cfg: unknown): unknown {
+  if (!isObj(cfg)) return cfg;
+  return Object.fromEntries(
+    Object.entries(cfg).map(([k, v]) => [k, (k === "env" || k === "headers") && isObj(v) ? Object.fromEntries(Object.keys(v).map((x) => [x, MASKED])) : v]),
+  );
+}
+
+/** Same document with env / headers values masked inside each server config only (a server *named* env stays readable). */
 export function maskDoc(doc: unknown): unknown {
-  if (Array.isArray(doc)) return doc.map(maskDoc);
   if (!isObj(doc)) return doc;
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(doc)) {
-    if ((k === "env" || k === "headers") && isObj(v)) out[k] = Object.fromEntries(Object.keys(v).map((x) => [x, MASKED]));
-    else out[k] = maskDoc(v);
-  }
-  return out;
+  return Object.fromEntries(
+    Object.entries(doc).map(([k, v]) => [k, k === "mcpServers" && isObj(v) ? Object.fromEntries(Object.entries(v).map(([n, c]) => [n, maskServer(c)])) : v]),
+  );
 }
 
 export function maskedJson(doc: unknown): string {

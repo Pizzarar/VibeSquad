@@ -40,10 +40,14 @@ export async function writeMcpFile(cwd: string, text: string, prev: McpFileState
   }
   let modifiedAt = prev.modifiedAt;
   if (!prev.exists) {
-    const made = await daemonClient.createFileEntry({ cwd, parentPath: "", name: MCP_FILE, kind: "file" });
-    const err = (made as { error?: string | null })?.error;
-    if (err) throw new Error(err);
-    modifiedAt = (await daemonClient.readFile(cwd, MCP_FILE)).modifiedAt;
+    // A retry after a failed first write finds the file already there: reuse it instead of creating again.
+    const now = await readMcpFile(cwd);
+    if (now.exists) modifiedAt = now.modifiedAt;
+    else {
+      const made = (await daemonClient.createFileEntry({ cwd, parentPath: "", name: MCP_FILE, kind: "file" })) as { success?: boolean; error?: string | null };
+      if (made.success === false || made.error) throw new Error(made.error || "create failed");
+      modifiedAt = (await daemonClient.readFile(cwd, MCP_FILE)).modifiedAt;
+    }
   }
   const res = (await daemonClient.writeFile({ cwd, path: MCP_FILE, content: text, expectedModifiedAt: modifiedAt })) as { status?: string; error?: string };
   if (res.status === "conflict") throw new Error(".mcp.json changed on disk since it was loaded. Reload and redo the change.");
@@ -63,7 +67,7 @@ export async function readDaemonMcp(): Promise<DaemonMcpSection> {
 /** Patches only the two known `mcp` toggles, then reloads the daemon config so agents spawned next see it. */
 export async function patchDaemonMcp(patch: { enabled?: boolean; injectIntoAgents?: boolean }): Promise<string[]> {
   if (DEMO) return ["mcp"];
-  await daemonClient.patchDaemonConfig({ mcp: patch } as never);
+  await daemonClient.patchDaemonConfig({ mcp: patch });
   const r = await daemonClient.reloadDaemonConfig();
   return r.restartRequiredPaths.filter((p) => p === "mcp" || p.startsWith("mcp."));
 }
