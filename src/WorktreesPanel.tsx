@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { PaseoAgent, PaseoWorkspace } from "@getpaseo/client";
 import { ConfirmButton, ago } from "./ui";
 import { validateBranch } from "./paseoWorkspaces";
-import { archivePaseoWorktree, createPaseoWorktree, listPaseoWorktrees } from "./paseoWorktrees";
+import { archivePaseoWorktree, createPaseoWorktree, listPaseoWorktrees, WORKTREE_LIST_TIMEOUT_MS } from "./paseoWorktrees";
 import { archiveGuard, baseRefError, linkedAgents, linkedWorkspace, worktreeSlugError, type WorktreeEntry } from "./paseoWorktreeLogic";
 import { branchHint, type BranchHint } from "./workspaceLogic";
 import type { ProjectRow } from "./WorkspaceTools";
@@ -14,7 +14,7 @@ export function WorktreesPanel({ projects, workspaces, agents }: { projects: Pro
   const git = projects.filter((p) => p.projectKind === "git");
   return (
     <div className="ws-row wt-panel" data-testid="ws-worktrees">
-      <div className="muted small">Paseo-owned worktrees per git project. Archiving removes the worktree and its Paseo records.</div>
+      <div className="muted small">Paseo-owned worktrees per git project. Archiving removes its Paseo records and deletes the folder from disk.</div>
       {git.length === 0 && <div className="muted small">No git projects yet. Add one under Projects.</div>}
       {git.map((p) => (
         <ProjectWorktrees key={p.projectId} project={p} workspaces={workspaces} agents={agents} />
@@ -28,14 +28,23 @@ function ProjectWorktrees({ project, workspaces, agents }: { project: ProjectRow
   const [rows, setRows] = useState<WorktreeEntry[] | null>(null);
   const [err, setErr] = useState("");
   const [creating, setCreating] = useState(false);
-  const reload = useCallback(() => {
+  // Mounted only while the Worktrees panel is open; the list is cached per repo root, so reopening is instant.
+  const load = useCallback((force: boolean) => {
+    let live = true;
     setErr("");
-    listPaseoWorktrees(root).then(setRows, (e) => {
-      setRows([]);
-      setErr(errMsg(e));
-    });
+    if (force) setRows(null);
+    listPaseoWorktrees(root, force).then(
+      (r) => live && setRows(r),
+      (e) => {
+        if (!live) return;
+        setRows([]);
+        setErr(/timed out/.test(errMsg(e)) ? `Paseo didn't list worktrees within ${WORKTREE_LIST_TIMEOUT_MS / 1000}s. Reload to try again.` : errMsg(e));
+      },
+    );
+    return () => { live = false; };
   }, [root]);
-  useEffect(reload, [reload]);
+  useEffect(() => load(false), [load]);
+  const reload = () => void load(true);
 
   return (
     <div className="wt-project">
@@ -43,12 +52,12 @@ function ProjectWorktrees({ project, workspaces, agents }: { project: ProjectRow
         <span className="ws-name">{project.projectCustomName || project.projectDisplayName}</span>
         <span className="muted small ws-path" title={root}>{root}</span>
         <span className="spacer" />
-        <button className="btn ghost small" onClick={reload}>Reload</button>
+        <button className="btn ghost small" disabled={rows === null} onClick={reload}>Reload</button>
         <button className={`btn small ${creating ? "ok" : "ghost"}`} onClick={() => setCreating(!creating)}>+ Worktree</button>
       </div>
       {creating && <CreateWorktreeForm project={project} onDone={() => setCreating(false)} onCreated={reload} />}
       {err && <div className="ws-reasons">{err}</div>}
-      {rows === null && <div className="muted small">Loading…</div>}
+      {rows === null && <div className="muted small">Loading worktrees… (the daemon can take ~20–30s)</div>}
       {rows?.length === 0 && !err && <div className="muted small">No Paseo worktrees.</div>}
       {rows?.map((w) => <WorktreeRow key={w.worktreePath} wt={w} root={root} workspaces={workspaces} agents={agents} onArchived={reload} />)}
     </div>
@@ -80,10 +89,10 @@ function WorktreeRow({ wt, root, workspaces, agents, onArchived }: { wt: Worktre
       ) : (
         <ConfirmButton
           label="Archive"
-          armedLabel={dirty ? "Dirty: archive anyway?" : "Archive worktree?"}
+          armedLabel={dirty ? "Dirty! Delete folder?" : "Delete folder?"}
           busyLabel="Archiving…"
           tone="danger"
-          title="Removes the worktree and its Paseo workspace records."
+          title="Archives its Paseo workspaces and deletes the worktree folder from disk (uncommitted work is lost)."
           onConfirm={async () => {
             setErr("");
             // Re-check at click time: an agent may have started since render.

@@ -75,3 +75,17 @@ test("wiring: wrappers stay out of paseo.ts, panel is rendered from WorkspacesVi
   assert.match(panel, /const late = archiveGuard\(/);
   assert.match(panel, /<ConfirmButton/);
 });
+
+test("P1 follow-up: slow list is cached per root with a 60s timeout, lazy panel copy, archive says the folder is deleted", () => {
+  const wrap = readFileSync(new URL("../src/paseoWorktrees.ts", import.meta.url), "utf8");
+  assert.match(wrap, /WORKTREE_LIST_TIMEOUT_MS = 60000/);
+  assert.match(wrap, /listCache\.get\(key\)/);
+  assert.match(wrap, /if \(hit && !force\) return hit;/);
+  assert.match(wrap, /listCache\.delete\(key\)/, "failures must not stay cached");
+  const panel = readFileSync(new URL("../src/WorktreesPanel.tsx", import.meta.url), "utf8");
+  assert.match(panel, /Loading worktrees… \(the daemon can take ~20–30s\)/);
+  assert.match(panel, /deletes the worktree folder from disk/);
+  assert.ok(!/setInterval/.test(panel), "no polling");
+  const view = readFileSync(new URL("../src/WorkspacesView.tsx", import.meta.url), "utf8");
+  assert.match(view, /panel === "worktrees" && <WorktreesPanel /, "panel (and its list call) only mounts when toggled open");
+});
