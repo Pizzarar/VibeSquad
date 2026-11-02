@@ -3437,3 +3437,4 @@ html, body, #root { overflow-x: hidden; }
 .files-line { display: flex; gap: 8px; white-space: pre-wrap; }
 .files-line.highlighted { background: rgba(0, 255, 240, 0.18); }
 .files-lineno { opacity: 0.45; min-width: 3ch; text-align: right; }
+.tl-quote { margin: 6px 0; padding: 2px 10px; border-left: 3px solid var(--line); opacity: 0.85; }

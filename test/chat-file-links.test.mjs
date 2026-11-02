@@ -53,3 +53,24 @@ test("FilesPanel renders .md by default, toggles to source, reports missing file
   assert.match(f, /File not found: \{openFile\}/);
   assert.match(f, /revealFolder/);
 });
+
+test("RightDock keeps a pending open request for clicks made while the dock is closed", () => {
+  const r = src("src/RightDock.tsx");
+  assert.match(r, /if \(!dockMounted\) pendingOpen = /);
+  assert.match(r, /dockMounted\+\+/);
+  assert.match(r, /onOpen\(new CustomEvent\("vs:open-right-dock", \{ detail: p \}\)\)/);
+});
+
+test("doc-mode markdown: CRLF/BOM tolerant, blockquotes, chat mode untouched", () => {
+  const t = src("src/Timeline.tsx");
+  assert.match(t, /tokenizeMarkdown\(text: string, doc = false\)/);
+  assert.ok(t.includes("doc ? text.replace(") && t.includes("r?"));
+  assert.ok(t.includes("if (doc && /") && t.includes('type: "blockquote"'));
+  assert.match(src("src/FilesPanel.tsx"), /agentId=\{agent\.id\} doc \/>/);
+});
+
+test("a line target opens .md in Source; no line renders", () => {
+  const f = src("src/FilesPanel.tsx");
+  assert.match(f, /setSourceView\(line !== undefined\)/);
+  assert.match(f, /openFileNode\(clean, targetLine \?\? undefined\)/);
+});

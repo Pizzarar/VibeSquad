@@ -115,11 +115,13 @@ type Token =
   | { type: "bullet_list"; items: string[] }
   | { type: "ordered_list"; items: string[] }
   | { type: "paragraph"; text: string }
+  | { type: "blockquote"; text: string }
   | { type: "blank" };
 
-export function tokenizeMarkdown(text: string): Token[] {
+/** `doc` mode is for whole files (Files dock): CRLF/BOM tolerant, and `>` blockquotes. Chat keeps its old behaviour. */
+export function tokenizeMarkdown(text: string, doc = false): Token[] {
   const tokens: Token[] = [];
-  const lines = text.split("\n");
+  const lines = doc ? text.replace(/^﻿/, "").split(/\r?\n/) : text.split("\n");
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
@@ -142,6 +144,15 @@ export function tokenizeMarkdown(text: string): Token[] {
     if (hMatch) {
       tokens.push({ type: "heading", level: hMatch[1].length as 1 | 2 | 3, text: hMatch[2] });
       i++;
+      continue;
+    }
+    if (doc && /^\s*>/.test(line)) {
+      const quoted: string[] = [];
+      while (i < lines.length && /^\s*>/.test(lines[i])) {
+        quoted.push(lines[i].replace(/^\s*>\s?/, ""));
+        i++;
+      }
+      tokens.push({ type: "blockquote", text: quoted.join(" ").trim() });
       continue;
     }
     // Table (line contains |)
@@ -338,9 +349,9 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 
 // ─── Markdown renderer ────────────────────────────────────────────────────────
 
-export function MarkdownRenderer({ text, agentId }: { text: string; agentId?: string }) {
+export function MarkdownRenderer({ text, agentId, doc = false }: { text: string; agentId?: string; doc?: boolean }) {
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
-  const tokens = tokenizeMarkdown(text);
+  const tokens = tokenizeMarkdown(text, doc);
 
   const renderInlineWithImages = (t: string) => {
     // Replace local images separately so they can get lightbox
@@ -409,6 +420,8 @@ export function MarkdownRenderer({ text, agentId }: { text: string; agentId?: st
         );
       case "paragraph":
         return <p key={i} className="tl-p">{renderInlineWithImages(tok.text)}</p>;
+      case "blockquote":
+        return <blockquote key={i} className="tl-quote">{renderInlineWithImages(tok.text)}</blockquote>;
       case "blank":
         return null;
     }

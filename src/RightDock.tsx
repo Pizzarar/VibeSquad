@@ -14,7 +14,13 @@ export type OpenRightDockDetail = {
   line?: number;
 };
 
+// The dock isn't mounted while closed, so an event fired by a click would be lost: keep the
+// request here and let the dock claim it on mount.
+let dockMounted = 0;
+let pendingOpen: OpenRightDockDetail | null = null;
+
 export function openRightDockTab(tab: DockTab, opts?: { filePath?: string; line?: number }) {
+  if (!dockMounted) pendingOpen = { tab, ...opts };
   localStorage.setItem("vs.right-dock.open", "true");
   localStorage.setItem("vs.right-dock.tab", tab);
   if (typeof window !== "undefined") {
@@ -53,13 +59,23 @@ export function RightDock({ agent }: RightDockProps) {
     const onOpen = (e: Event) => {
       const detail = (e as CustomEvent<OpenRightDockDetail>).detail;
       if (!detail) return;
+      pendingOpen = null;
       if (detail.tab) setActiveTab(detail.tab);
       if (detail.filePath !== undefined) setTargetFile(detail.filePath);
       if (detail.filePath !== undefined) setTargetLine(detail.line ?? null);
       else if (detail.line !== undefined) setTargetLine(detail.line);
     };
     window.addEventListener("vs:open-right-dock", onOpen);
-    return () => window.removeEventListener("vs:open-right-dock", onOpen);
+    dockMounted++;
+    if (pendingOpen) {
+      const p = pendingOpen;
+      pendingOpen = null;
+      onOpen(new CustomEvent("vs:open-right-dock", { detail: p }));
+    }
+    return () => {
+      dockMounted--;
+      window.removeEventListener("vs:open-right-dock", onOpen);
+    };
   }, []);
 
   const onMouseDown = (e: React.MouseEvent) => {

@@ -97,16 +97,16 @@ export function FilesPanel({
     if (!targetFile) return;
     const clean = targetFile.replace(/\\/g, "/").replace(/^(\.\/)+/, "");
     if (clean.endsWith("/")) void revealFolder(clean.replace(/\/+$/, ""));
-    else openFileNode(clean);
+    else openFileNode(clean, targetLine ?? undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [targetFile]);
+  }, [targetFile, targetLine]);
 
   // Scroll to targetLine after file opens
   useEffect(() => {
     if (!targetLine || !openFile) return;
     const el = lineRefs.current.get(targetLine);
     if (el) el.scrollIntoView({ block: "center" });
-  }, [openFile, targetLine, fileContent]);
+  }, [openFile, targetLine, fileContent, sourceView]);
 
   const loadDir = useCallback(
     async (path: string) => {
@@ -150,7 +150,7 @@ export function FilesPanel({
   }, [revealDir, tree]);
 
   const openFileNode = useCallback(
-    async (path: string) => {
+    async (path: string, line?: number) => {
       if (unsubscribeRef.current) {
         unsubscribeRef.current();
         unsubscribeRef.current = null;
@@ -159,7 +159,7 @@ export function FilesPanel({
       setEditMode(false);
       setSaveErr("");
       setNotFound(false);
-      setSourceView(false);
+      setSourceView(line !== undefined); // a line target reads in Source; otherwise .md renders
       if (DEMO) {
         setFileContent(`// ${path}\n// DEMO mode — live content unavailable\n`);
         setFileModifiedAt(new Date().toISOString());
@@ -289,7 +289,7 @@ export function FilesPanel({
             <div className="muted small" data-testid="files-not-found">File not found: {openFile}</div>
           ) : isMd && !sourceView ? (
             <div className="files-md" data-testid="files-md-view">
-              <MarkdownRenderer text={fileContent} agentId={agent.id} />
+              <MarkdownRenderer text={fileContent} agentId={agent.id} doc />
             </div>
           ) : (
             <div className="files-code" data-testid="files-code-view">
