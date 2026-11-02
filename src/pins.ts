@@ -29,7 +29,7 @@ export type Pin = {
   lane: PinLane;
   state: PinState;
   order: number;
-  /** The live main Brainstorm, or null when the pin has to quick-start one. */
+  /** The main Brainstorm (live, or closed but unarchived: opening it reopens the session), or null when the pin has to quick-start one. */
   brainstorm: Member | null;
   /** The live lead, or null. */
   lead: Member | null;
@@ -69,7 +69,8 @@ export function pinsForSquad(view: TeamView): { pinned: Pin[]; done: Pin[] } {
     .filter((l) => l.lane.id !== "_other" && !isRemovedLane(l.lane))
     .map((l, i): Pin => {
       const lane = l.lane as PinLane;
-      const brainstorm = isLive(l.brainstorm) ? l.brainstorm : null;
+      // A closed Buddy (daemon restart) is still the pin's Buddy: clicking reopens it, never replaces it (block 0c).
+      const brainstorm = l.brainstorm && !l.brainstorm.agent.archivedAt ? l.brainstorm : null;
       const workers = live(l.members.filter((m) => m.kind === "worker"));
       return {
         squad: view.team,

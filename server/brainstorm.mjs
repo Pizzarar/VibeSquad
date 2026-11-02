@@ -271,16 +271,21 @@ export function findExistingLaneBrainstorm(agents, laneId, topic = "") {
     .map((item) => item?.agent ?? item)
     .filter(Boolean)
     .filter((a) => {
-      if (isRetiredAgent(a)) return false;
+      // Closed is not retired: every agent is `closed` after a daemon restart, and a closed Buddy is
+      // reopened from its session, never replaced (docs/PLAN_BUGS_BATCH1.md block 0c). Archived or a
+      // retired role (former-brainstorm) still never counts.
+      if (a.archivedAt || isRetiredAgent({ labels: a.labels ?? {} })) return false;
       // A restarted Buddy keeps role=brainstorm on the daemon until its backgrounded retire lands.
       if (restartedAgents.has(a.id)) return false;
-      if (effectiveAgentRole(a) !== "brainstorm") return false;
+      if (effectiveAgentRole({ ...a, status: undefined }) !== "brainstorm") return false;
       const labels = a.labels ?? {};
       const aLane = String(labels.lane || labels.lead || "").trim().toLowerCase();
       if (aLane !== wantLane) return false;
       return parseBrainstormTopic(a) === wantTopic;
     });
-  matches.sort((a, b) => String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")));
+  // A running/idle Buddy beats a closed one; then newest first.
+  const closed = (a) => (a.status === "closed" ? 1 : 0);
+  matches.sort((a, b) => closed(a) - closed(b) || String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")));
   return matches[0] ?? null;
 }
 
@@ -290,7 +295,19 @@ const startInFlight = new Map();
 
 export function performBrainstormRestart(body, rootDir = REPO_ROOT) {
   const isStart = String(body?.reason || "").trim() === "start-brainstorm" || String(body?.agentId || "") === "start-brainstorm";
-  if (!isStart || body.forceNew) return performBrainstormRestartOnce(body, rootDir);
+  if (body?.forceNew) return performBrainstormRestartOnce(body, rootDir);
+  if (!isStart) {
+    // A restart click while the first one is still spawning (createAgent took ~110 s at 04:24Z) shares that
+    // spawn: two clicks made two Buddies, the second retired the first (docs/PLAN_BUGS_BATCH1.md block 0c).
+    const oldId = String(body?.agentId || "").trim();
+    if (!oldId) return performBrainstormRestartOnce(body, rootDir);
+    const rkey = `restart:${oldId}`;
+    const busy = startInFlight.get(rkey);
+    if (busy) return busy.then((r) => (r?.ok ? { ...r, reused: true, reason: "already-restarting" } : r));
+    const once = performBrainstormRestartOnce(body, rootDir).finally(() => startInFlight.delete(rkey));
+    startInFlight.set(rkey, once);
+    return once;
+  }
   const key = [body.teamId || body.team || "", body.laneId || body.lane || "", body.topic || ""].map((s) => String(s).trim().toLowerCase()).join(":");
   const pending = startInFlight.get(key);
   if (pending) return pending.then((r) => (r?.ok && r.newAgentId ? { ...r, reused: true, existingAgentId: r.newAgentId } : r));
@@ -408,9 +425,13 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
           existing.labels = { ...existing.labels, team: teamId };
           await client?.updateAgent?.(existing.id, { labels: existing.labels })?.catch?.(() => {});
         }
+        // Reopen a closed Buddy (daemon restart unloads every session) from its saved session.
+        const reopened = existing.status === "closed" && connected && typeof client?.refreshAgent === "function";
+        if (reopened) await client.refreshAgent(existing.id).catch((e) => console.warn(`[vibesquad] reopen ${existing.id} failed: ${e?.message ?? e}`));
         return {
           ok: true,
           reused: true,
+          ...(reopened ? { reopened: true } : {}),
           existingAgentId: existing.id,
           newAgentId: existing.id,
           title: existing.title,

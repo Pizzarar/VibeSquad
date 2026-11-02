@@ -68,7 +68,7 @@ async function quickStart(pin: Pin, profile: string, deps: OpenPinDeps): Promise
   const squadId = pin.squad.id;
   const laneId = pin.lane.id;
   // A live Brainstorm may have appeared since the pin was built (another tab, the lead, a slow push).
-  const live = findCrossTeamBrainstorm(resolve(deps.agents ?? getPaseoState().agents), laneId);
+  const live = findCrossTeamBrainstorm(resolve(deps.agents ?? getPaseoState().agents), laneId, "", { includeClosed: true });
   if (live) return live.agent.id;
 
   const doFetch = deps.fetch ?? fetch;

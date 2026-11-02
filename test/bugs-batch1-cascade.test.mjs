@@ -243,3 +243,83 @@ test("0b: start-brainstorm for bug-chaser from the VibeSquad folder embeds bug-c
     assert.doesNotMatch(everything, /--- BEGIN docs\/brainstorm\/vibesquad\.md ---/);
     assert.doesNotMatch(everything, /Lane brief for `vibesquad`/);
   }));
+
+// ---- block 0c: a closed (daemon-restarted) Buddy is reopened, never replaced ----
+import { findExistingLaneBrainstorm } from "../server/brainstorm.mjs";
+import { pinsForSquad, resolvePin } from "../src/pins.ts";
+import { buildTeamViews, findCrossTeamBrainstorm, resolve } from "../src/teams.ts";
+
+const bsAgent = (id, over = {}) => ({
+  id,
+  title: "BRAINSTORM · ADE",
+  status: "closed",
+  updatedAt: "2026-11-02T04:00:00Z",
+  labels: { team: "sq", lane: "ade", role: "brainstorm" },
+  ...over,
+});
+
+test("0c server: a pin click on a lane whose Buddy is closed reuses and reopens it; nothing spawned or retired", () =>
+  withHome(async (dir) => {
+    resetBrainstormRestartState();
+    const d = cascadingDaemon([bsAgent("bs-closed")]);
+    const refreshed = [];
+    d.refreshAgent = async (id) => void refreshed.push(id);
+    let created = 0;
+    d.createAgent = async () => (created++, { id: "nope", labels: {} });
+    const r = await performBrainstormRestart({ reason: "start-brainstorm", teamId: "sq", laneId: "ade", daemonClient: d }, dir);
+    assert.equal(r.reused, true);
+    assert.equal(r.reopened, true);
+    assert.equal(r.existingAgentId, "bs-closed");
+    assert.equal(created, 0, "no new Buddy");
+    assert.deepEqual(refreshed, ["bs-closed"], "session reloaded");
+    assert.deepEqual(d.calls.archive, [], "nothing archived");
+    assert.equal(d.agents.get("bs-closed").labels.role, "brainstorm", "not retired");
+  }));
+
+test("0c server: live beats closed; archived or former-brainstorm never count", () => {
+  const live = bsAgent("live", { status: "idle", updatedAt: "2026-11-01T00:00:00Z" });
+  const closedNewer = bsAgent("closed-newer", { updatedAt: "2026-11-02T05:00:00Z" });
+  assert.equal(findExistingLaneBrainstorm([closedNewer, live], "ade")?.id, "live");
+  assert.equal(findExistingLaneBrainstorm([closedNewer], "ade")?.id, "closed-newer");
+  assert.equal(findExistingLaneBrainstorm([bsAgent("arch", { archivedAt: "x" })], "ade"), null);
+  assert.equal(findExistingLaneBrainstorm([bsAgent("old", { labels: { team: "sq", lane: "ade", role: "former-brainstorm" } })], "ade"), null);
+});
+
+test("0c server: a second Restart click while the first is still spawning shares it (one new Buddy)", () =>
+  withHome(async (dir) => {
+    resetBrainstormRestartState();
+    const d = cascadingDaemon([bsAgent("bs-old", { status: "idle" })]);
+    let created = 0;
+    let release;
+    const gate = new Promise((r) => (release = r));
+    d.createAgent = async (req) => {
+      created++;
+      await gate;
+      const id = `bs-new-${created}`;
+      d.agents.set(id, { id, status: "idle", labels: { ...req.labels } });
+      return { id, labels: { ...req.labels } };
+    };
+    const body = { agentId: "bs-old", reason: "handoff", teamId: "sq", laneId: "ade", daemonClient: d };
+    const first = performBrainstormRestart(body, dir);
+    const second = performBrainstormRestart({ ...body }, dir);
+    release();
+    const [a, b] = await Promise.all([first, second]);
+    assert.equal(created, 1);
+    assert.equal(a.newAgentId, b.newAgentId);
+    assert.equal(b.reused, true);
+  }));
+
+test("0c client: a closed Buddy stays the pin's Buddy, so clicking the pin opens the same agent id", () => {
+  const agents = new Map(
+    [
+      { id: "bs-c", title: "BRAINSTORM · VIBESQUAD", status: "closed", updatedAt: "2026-11-02T04:00:00Z", cwd: "/p/VibeSquad", labels: { team: "vibesquad", lane: "vibesquad", role: "brainstorm" } },
+    ].map((a) => [a.id, a]),
+  );
+  const members = resolve(agents);
+  const view = buildTeamViews(members).find((v) => v.team.id === "vibesquad");
+  const pin = pinsForSquad(view).pinned.find((p) => p.lane.id === "vibesquad");
+  assert.equal(pin.brainstorm?.agent.id, "bs-c");
+  assert.deepEqual(resolvePin(pin), { kind: "live", agent: pin.brainstorm });
+  assert.equal(findCrossTeamBrainstorm(members, "vibesquad"), null, "live-only by default (messages don't wake it)");
+  assert.equal(findCrossTeamBrainstorm(members, "vibesquad", "", { includeClosed: true })?.agent.id, "bs-c");
+});

@@ -472,19 +472,25 @@ const sameAttention = (a: Attention, b: Attention) => a === b || (!!a && !!b && 
 
 const newest = (a: Member, b: Member) => (b.agent.updatedAt ?? "").localeCompare(a.agent.updatedAt ?? "");
 
-export function findCrossTeamBrainstorm(members: Member[], laneId: string, topic = ""): Member | null {
+/**
+ * The lane's main (or topic) Buddy. Live only by default; `includeClosed` also takes a closed, unarchived
+ * one (every session is closed after a daemon restart) so opening a pin reopens it instead of spawning a
+ * new Buddy (docs/PLAN_BUGS_BATCH1.md block 0c). A live one always wins.
+ */
+export function findCrossTeamBrainstorm(members: Member[], laneId: string, topic = "", opts: { includeClosed?: boolean } = {}): Member | null {
   const targetLane = canonicalLaneKey(laneId);
   if (!targetLane) return null;
   const wantTopic = topic.trim().toLowerCase();
   const hits = members.filter((m) => {
-    if (m.kind !== "brainstorm" || m.agent.archivedAt || m.agent.status === "closed") return false;
+    if (m.kind !== "brainstorm" || m.agent.archivedAt || (m.agent.status === "closed" && !opts.includeClosed)) return false;
     const l = labelsOf(m.agent);
     const mLane = canonicalLaneKey(m.laneId || l.lane || l.lead);
     if (mLane !== targetLane) return false;
     const mTopic = topicOfBrainstorm(m).trim().toLowerCase();
     return mTopic === wantTopic;
   });
-  return hits.sort(newest)[0] ?? null;
+  const closed = (m: Member) => (m.agent.status === "closed" ? 1 : 0);
+  return hits.sort((a, b) => closed(a) - closed(b) || newest(a, b))[0] ?? null;
 }
 
 // Pick the lane's lead/brainstorm: live (not closed) first, else the newest closed non-archived one,
