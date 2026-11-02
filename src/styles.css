@@ -1891,8 +1891,7 @@ code {
   position: relative;
 }
 .tl-park-btn {
-  display: none;
-  margin-top: 4px;
+  display: inline-block;
   padding: 2px 6px;
   font-family: var(--arcade);
   font-size: 9px;
@@ -1901,8 +1900,34 @@ code {
   border: 1px solid #00f0ff55;
   cursor: pointer;
 }
-.tl:hover .tl-park-btn {
-  display: inline-block;
+.tl-user:hover,
+.tl-assistant:hover {
+  background-color: #1a1f45;
+}
+.tl-assistant:hover {
+  background-color: #0e1030;
+}
+.tl-user,
+.tl-assistant {
+  cursor: default;
+}
+.tl-selected {
+  outline: 1px solid var(--cyan);
+  outline-offset: 2px;
+}
+.tl-actions {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  background: var(--bg-elevated, #121624);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
 }
 .composer-park-inbox-btn {
   white-space: nowrap;

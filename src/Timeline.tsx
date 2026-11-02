@@ -609,16 +609,38 @@ function RewindButton({ agentId, e, onRewound }: { agentId: string; e: Entry; on
 
 // ─── TimelineItem ─────────────────────────────────────────────────────────────
 
+const CLICK_GUARD_TAGS = new Set(["a", "button", "input", "textarea", "select", "img"]);
+
+/** A click selects a message unless it ends a text selection or lands on an interactive element. */
+export function shouldSelectMessageOnClick(targetTagNames: string[], selectionText: string): boolean {
+  if (selectionText.length > 0) return false;
+  return !targetTagNames.some((t) => CLICK_GUARD_TAGS.has(t.toLowerCase()) || t === ".tl-actions");
+}
+
+function onMessageClick(ev: React.MouseEvent<HTMLElement>, onSelect?: () => void) {
+  if (!onSelect) return;
+  const names: string[] = [];
+  for (let n = ev.target as HTMLElement | null; n && n !== ev.currentTarget; n = n.parentElement) {
+    names.push(n.tagName.toLowerCase());
+    if (n.classList?.contains("tl-actions") || n.classList?.contains("copy-btn")) names.push(".tl-actions");
+  }
+  if (shouldSelectMessageOnClick(names, window.getSelection()?.toString() ?? "")) onSelect();
+}
+
 export function TimelineItem({
   e,
   agentId,
   onParkText,
   onRewound,
+  selected = false,
+  onSelect,
 }: {
   e: Entry;
   agentId: string;
   onParkText?: (text: string) => void;
   onRewound?: (e: Entry) => void;
+  selected?: boolean;
+  onSelect?: () => void;
 }) {
   const it = e.item;
   const [expanded, setExpanded] = useState(false);
@@ -638,7 +660,7 @@ export function TimelineItem({
         ? it.images.map((im: any) => (im.data ? `data:${im.mimeType ?? "image/png"};base64,${im.data}` : im.url)).filter(Boolean)
         : sentImagesFor(agentId, it.text);
       return (
-        <div className="tl tl-user" onContextMenu={(ev) => openContextMenu(ev, messageCtxItems(it.text ?? "", agentId, onParkText))}>
+        <div className={`tl tl-user${selected ? " tl-selected" : ""}`} data-selected={selected ? "true" : undefined} onClick={(ev) => onMessageClick(ev, onSelect)} onContextMenu={(ev) => openContextMenu(ev, messageCtxItems(it.text ?? "", agentId, onParkText))}>
           {urls.length > 0 && (
             <div className="tl-images">
               {urls.map((u, i) => (
@@ -647,7 +669,7 @@ export function TimelineItem({
             </div>
           )}
           {it.text}
-          <div className="tl-actions">
+          {selected && <div className="tl-actions">
             <CopyMsgButton text={it.text ?? ""} />
             {onParkText && typeof it.text === "string" && it.text.trim() && (
               <button className="tl-park-btn" title="Park message lines in Idea Inbox (0 tokens)" onClick={() => onParkText(it.text)}>
@@ -655,23 +677,23 @@ export function TimelineItem({
               </button>
             )}
             <RewindButton agentId={agentId} e={e} onRewound={onRewound} />
-          </div>
+          </div>}
         </div>
       );
     }
 
     case "assistant_message":
       return (
-        <div className="tl tl-assistant" onContextMenu={(ev) => openContextMenu(ev, messageCtxItems(it.text ?? "", agentId, onParkText))}>
+        <div className={`tl tl-assistant${selected ? " tl-selected" : ""}`} data-selected={selected ? "true" : undefined} onClick={(ev) => onMessageClick(ev, onSelect)} onContextMenu={(ev) => openContextMenu(ev, messageCtxItems(it.text ?? "", agentId, onParkText))}>
           {typeof it.text === "string" ? <MarkdownRenderer text={it.text} agentId={agentId} /> : it.text}
-          <div className="tl-actions">
+          {selected && <div className="tl-actions">
             <CopyMsgButton text={it.text ?? ""} />
             {onParkText && typeof it.text === "string" && it.text.trim() && (
               <button className="tl-park-btn" title="Park message lines in Idea Inbox (0 tokens)" onClick={() => onParkText(it.text)}>
                 📥 Park in Inbox
               </button>
             )}
-          </div>
+          </div>}
         </div>
       );
 
@@ -959,6 +981,7 @@ export function Timeline({
   const timelineRef = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const [cut, setCut] = useState<Entry | null>(null);
+  const [selectedEntryKey, setSelectedEntryKey] = useState<string | null>(null);
   const shown = cut ? truncateAfter(entries, cut) : entries;
   const pinnedTodo = findPinnedTodo(shown);
 
@@ -966,6 +989,15 @@ export function Timeline({
     const el = timelineRef.current;
     if (el && pinned.current && el.offsetParent) el.scrollTop = el.scrollHeight;
   }, [entries.length]);
+
+  useEffect(() => {
+    if (!selectedEntryKey) return;
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") setSelectedEntryKey(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedEntryKey]);
 
   const handleLoadMore = () => {
     const el = timelineRef.current;
@@ -987,6 +1019,9 @@ export function Timeline({
     <div
       className="timeline"
       ref={timelineRef}
+      onClick={(ev) => {
+        if (ev.target === ev.currentTarget) setSelectedEntryKey(null);
+      }}
       onScroll={(e) => {
         const el = e.currentTarget;
         pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
@@ -1007,7 +1042,14 @@ export function Timeline({
       {error && <div className="tl tl-error">{error}</div>}
       {shown.map((e, i) => (
         <TimelineErrorBoundary key={e.seqStart ?? i} fallbackLabel={`item #${i}`}>
-          <TimelineItem e={e} agentId={agentId} onParkText={onParkText} onRewound={setCut} />
+          <TimelineItem
+            e={e}
+            agentId={agentId}
+            onParkText={onParkText}
+            onRewound={setCut}
+            selected={selectedEntryKey === String(e.seqStart ?? i)}
+            onSelect={() => setSelectedEntryKey((k) => (k === String(e.seqStart ?? i) ? null : String(e.seqStart ?? i)))}
+          />
         </TimelineErrorBoundary>
       ))}
       <div />
