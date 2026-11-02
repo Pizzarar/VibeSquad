@@ -37,6 +37,7 @@ import {
   type Member,
   type TeamView,
 } from "./teams";
+import { titleFor } from "./teams";
 import { AgentPanes } from "./AgentPanes";
 import { CommandPaletteHost, agentCtxItems, dateBucket, openContextMenu, openOverlay, parseUrlState, serializeUrlState, type DateBucket } from "./CommandPalette";
 import { PaseoUsageHeaderChip } from "./PaseoSettingsSection";
@@ -163,7 +164,7 @@ export async function startLaneBrainstorm(opts: {
     return reusedId;
   }
   const newAgentId: string = body.newAgentId || `demo-bs-${laneId}-${Date.now().toString(36)}`;
-  const title: string = body.title || `BRAINSTORM · ${laneName.toUpperCase()}`;
+  const title: string = body.title || titleFor("brainstorm", laneName, { laneId });
   const createdAgent: PaseoAgent =
     body.agent ??
     ({

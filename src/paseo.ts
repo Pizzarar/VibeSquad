@@ -5,6 +5,7 @@ import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { spawnEnvFor } from "./spawn-env";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
 import { useSyncExternalStore } from "react";
+import { retiredLeadTitle } from "./teams";
 import { normalizeProviderUsage, type ProviderQuotaView } from "./antigravity";
 import { LEGACY_NEEDS_LABEL, LEGACY_NEEDS_UNTIL, LEGACY_NEEDS_REASON } from "./userName";
 import { demoAgents, demoArchived, demoProviderUsage, demoWorkspaces } from "./demo";
@@ -390,7 +391,7 @@ export type SpawnRequest = {
   worktree?: { branch: string };
 };
 
-/** Lane integrity: mark a lead or brainstorm as retired (role=former-*). Leads also get `(old) <LANE> ordN`. */
+/** Lane integrity: mark a lead or brainstorm as retired (role=former-*). Leads also get `(old) <Code><ord>[ · objective]`. */
 export function retireAgent(agent: PaseoAgent, laneName?: string): Promise<void> {
   const l = labelsOf(agent);
   if (l.role === "brainstorm" || l.role === "buddy") {
@@ -400,9 +401,10 @@ export function retireAgent(agent: PaseoAgent, laneName?: string): Promise<void>
     return updateAgent(agent.id, { ...(name ? { name } : {}), labels: { ...l, role: "former-brainstorm" } });
   }
   const ord = l.ord;
-  const lane = (laneName ?? l.lane ?? l.lead ?? "").toUpperCase();
+  const laneId = l.lane ?? l.lead ?? "";
+  const lane = laneName ?? laneId;
   return updateAgent(agent.id, {
-    ...(lane && ord ? { name: `(old) ${lane} ord${ord}` } : {}),
+    ...(lane && ord ? { name: retiredLeadTitle(lane, laneId, ord, l.job) } : {}),
     labels: { ...l, role: "former-lead", ...(ord ? { ord } : {}) },
   });
 }

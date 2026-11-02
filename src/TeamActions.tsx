@@ -4,6 +4,7 @@ import { daemonClient, DEMO, spawnTeamAgent, usePaseo } from "./paseo";
 import {
   checkBuddyOverlap,
   getTeams,
+  ordOf,
   resolve,
   saveTeams,
   slugifyFeatureLane,
@@ -12,6 +13,7 @@ import {
   type TeamDef,
   type TeamView,
 } from "./teams";
+import { freezeLaneCodes } from "./identity";
 import { useDraft } from "./drafts";
 import { findProfile, getProfiles, useProfiles, type Profile, type Role } from "./profiles";
 
@@ -32,7 +34,7 @@ export type NameInput = {
   job: string;
 };
 
-/** Naming Standard v1 (docs/NAMING.md): labels are the source of truth, the title is generated. */
+/** Naming Standard v2 (docs/NAMING.md): labels are the source of truth, the title is generated. */
 export function buildName(i: NameInput): { title: string; labels: Record<string, string> } {
   const labels: Record<string, string> = { team: i.team };
   if (i.laneId) {
@@ -48,9 +50,10 @@ export function buildName(i: NameInput): { title: string; labels: Record<string,
     if (i.topic.trim()) labels.topic = i.topic.trim();
   } else {
     labels.job = (i.job || "job").trim() || "job";
+    if (i.ord) labels.ord = i.ord; // the lead's ord, so the title is `<Code><ord> · <job>`
     if (i.task) labels.task = i.task;
   }
-  const title = titleFor(i.role === "lead" || i.role === "brainstorm" ? i.role : "worker", LANE_, { ord: i.ord, topic: i.topic, job: i.job });
+  const title = titleFor(i.role === "lead" || i.role === "brainstorm" ? i.role : "worker", LANE_, { ord: i.ord, topic: i.topic, job: i.job, laneId: i.laneId });
   return { title, labels };
 }
 
@@ -244,13 +247,16 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   };
 
   const lane = team.lanes.find((l) => l.id === laneId);
+  // A worker is titled with its lane's live lead ord (the ORD field is lead-only).
+  const liveLead = view.lanes.find((l) => l.lane.id === laneId)?.lead;
+  const effectiveOrd = role === "lead" ? ord : liveLead ? String(ordOf(liveLead.agent)) : "";
   const { title, labels } = buildName({
     team: team.id,
     laneId,
     laneName: lane?.name ?? laneId,
     role,
     profile: profile.name,
-    ord,
+    ord: effectiveOrd,
     topic,
     task,
     job,
@@ -663,7 +669,7 @@ export function AddBuddyModal({
   const existingLane = team.lanes.some(
     (l) => l.id.toLowerCase() === laneId.toLowerCase() || Boolean(l.aliases?.some((a) => a.toLowerCase() === laneId.toLowerCase())),
   );
-  const title = titleFor("brainstorm", laneName, { topic: existingLane ? topic.trim() : "" });
+  const title = titleFor("brainstorm", laneName, { topic: existingLane ? topic.trim() : "", laneId });
   const brief = customBrief ?? defaultBuddyBrief(team.name, topic);
   const labels: Record<string, string> = {
     team: team.id,
@@ -691,7 +697,7 @@ export function AddBuddyModal({
       const targetTeam = getTeams().find((t) => t.id === team.id);
       if (targetTeam && !hasLane(targetTeam)) {
         await saveTeams((cur) =>
-          cur.map((t) => (t.id === team.id && !hasLane(t) ? { ...t, lanes: [...t.lanes, { id: laneId, name: laneName }] } : t)),
+          cur.map((t) => (t.id === team.id && !hasLane(t) ? { ...t, lanes: freezeLaneCodes([...freezeLaneCodes(t.lanes), { id: laneId, name: laneName }]) } : t)),
         );
       }
 

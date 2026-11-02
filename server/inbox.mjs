@@ -8,7 +8,7 @@ import {
   readBrainstormSummary,
   writeBrainstormSummary,
 } from "./brainstorm.mjs";
-import { findLaneInRegistry } from "./identity.mjs";
+import { findLaneInRegistry, formatDisplayTitle, laneCodeFor } from "./identity.mjs";
 import { findProfile, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
@@ -632,6 +632,7 @@ function resolveLaneMeta(laneRaw, rootDir = REPO_ROOT) {
       laneId: hit.lane.id,
       laneName: hit.lane.name || hit.lane.id,
       laneUpper: String(hit.lane.name || hit.lane.id).toUpperCase(),
+      code: laneCodeFor(hit.lane.id, teams),
     };
   }
   const fallbackLane = String(laneRaw || "vibesquad").trim() || "vibesquad";
@@ -671,8 +672,8 @@ export function buildTopicTitle(rawTitleOrText) {
     .join(" ");
 }
 
-export function buildTopicBrainstormPrompt({ card, topic, laneId, laneUpper, summaryContent }) {
-  const fullTitle = `BRAINSTORM · ${laneUpper} · ${topic}`;
+export function buildTopicBrainstormPrompt({ card, topic, laneId, laneUpper, summaryContent, buddyName }) {
+  const fullTitle = buddyName || `BRAINSTORM · ${laneUpper} · ${topic}`;
   return [
     `You are a focused topic brainstorm (${fullTitle}) for Inbox card #${card.id}. Stay strictly on this topic. When the plan is ready and handed off to the lead, click 'Hand off & close topic' so the card is marked handed-off and this chat closes.`,
     "",
@@ -710,11 +711,13 @@ export async function openTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
 
   const summary = readBrainstormSummary(laneId, rootDir);
   const topic = buildTopicTitle(card.title || card.text);
-  const newTitle = clipTitle(`BRAINSTORM · ${laneUpper} · ${topic}`);
+  const buddyName = formatDisplayTitle({ role: "brainstorm", laneId, laneName: meta.laneName, code: meta.code, topic });
+  const newTitle = clipTitle(buddyName);
   const now = new Date().toISOString();
 
   const initialPrompt = buildTopicBrainstormPrompt({
     card,
+    buddyName,
     topic,
     laneId,
     laneUpper,

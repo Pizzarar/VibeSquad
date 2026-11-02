@@ -14,6 +14,7 @@ import {
 import { allLaneIds, DEFAULT_PIN_PROFILE, slugLaneId, uniqueLaneId, type Pin, type PinLane } from "./pins";
 import { useProfiles } from "./profiles";
 import { Modal } from "./TeamActions";
+import { freezeLaneCodes } from "./identity";
 
 export function deriveSquadNameFromPath(rawPath: string): { id: string; name: string; pathMatcher: string } {
   const normalized = rawPath.replace(/\.git$/, "").replace(/[/\\]+$/, "");
@@ -54,7 +55,7 @@ export function buildNewSquadTeamDef(opts: {
     leadFlagTokens: LEAD_FLAG_DEFAULT,
     leadAutoHandoffTokens: LEAD_AUTO_HANDOFF_DEFAULT,
     leadHardCapTokens: LEAD_HARD_CAP_DEFAULT,
-    lanes: [lane],
+    lanes: freezeLaneCodes([lane]),
     paths: [
       folderSegment || opts.folderPath.trim(),
       ...(/^([a-z]:|[\\/])/i.test(normalized) && normalized !== folderSegment ? [normalized] : []),

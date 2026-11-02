@@ -15,7 +15,7 @@ import { DoneRow, DoneShelf, LooksDoneCard, useDoneShelfOpen } from "./PinDone";
 import { getBrainstormThresholds, type TeamView } from "./teams";
 import { StatusDot, usePaneClass } from "./ui";
 import { Avatar, NeonEmblem } from "./pixel";
-import { ordOf } from "./teams";
+import { laneCodeOf, ordOf } from "./teams";
 import { cleanTitle } from "./ui";
 import { pickLead } from "./pinFocusLogic";
 
@@ -439,7 +439,7 @@ function SquadTile({ v, onSelectSquad, onOpenPin, onOpenAgent }: { v: TeamView; 
   const { pinned } = pinsForSquad(v);
   const lead = pickLead(v.lanes);
   const ord = lead ? ordOf(lead.agent) : null;
-  const leadName = lead ? (ord ? `ord${ord}` : cleanTitle(lead.agent.title)) : "none";
+  const leadName = lead ? (ord ? `${laneCodeOf(lead.laneId || v.team.id)}${ord}` : cleanTitle(lead.agent.title)) : "none";
   const leadState = !lead ? "idle" : lead.agent.status === "running" ? "working" : lead.agent.status === "error" ? "error" : "idle";
   const open = () => onSelectSquad(v.team.id);
   return (
