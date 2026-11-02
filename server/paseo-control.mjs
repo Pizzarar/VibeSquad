@@ -6,7 +6,7 @@ import { execFile, spawn } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
-import { bundledNode, findPaseoCli, isDaemonListening, parseListen } from "./first-run.mjs";
+import { bundledNode, findPaseoCli, isDaemonListening, parseListen, resolveCmdShimEntry } from "./first-run.mjs";
 import { clearConfigWarning, loadUserSettings, parseJsonWithBom, readJsonFileWithBom, stripBom } from "./user-settings.mjs";
 
 const IS_WIN = process.platform === "win32";
@@ -155,6 +155,36 @@ export function readRawPaseoConfig(opts = {}) {
   };
 }
 
+// cmd.exe fallback only: every arg is double-quoted, but refuse anything that could still break out or expand,
+// plus a trailing backslash (it would escape the closing quote for the CLI's own argv parser).
+const UNSAFE_CMD_ARG = /["&|<>^%!\r\n\0]|\\$/;
+// `paseo plugin install <source>`: a directory, Git URL or npm package spec. No leading `-` (option injection).
+const PLUGIN_SOURCE_RE = /^(?!-)[A-Za-z0-9@._\/\\:+~# -]{1,512}$/;
+
+/** Validates a plugin install source; throws on anything outside the allowlist. */
+export function validatePluginSource(raw) {
+  const source = String(raw ?? "").trim();
+  if (!source) throw new Error("Plugin source (directory, Git URL, or npm package) is required");
+  if (!PLUGIN_SOURCE_RE.test(source)) throw new Error("Plugin source contains characters that aren't allowed");
+  return source;
+}
+
+/** Validates a Paseo hub origin and returns its normalized `scheme://host[:port]`; throws otherwise. */
+export function validateHubOrigin(raw) {
+  const value = String(raw ?? "").trim();
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("Hub origin must be an http(s) URL");
+  }
+  if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password || (!/^[A-Za-z0-9.-]+$/.test(url.hostname) && !/^\[[0-9a-fA-F:.]+\]$/.test(url.hostname))) {
+    throw new Error("Hub origin must be an http(s) URL");
+  }
+  if ((url.pathname !== "/" && url.pathname !== "") || url.search || url.hash) throw new Error("Hub origin must not have a path, query or fragment");
+  return url.origin;
+}
+
 /**
  * Runs a Paseo CLI command with `--home <paseoHome>` and optional `--json`, returning `{ ok, code, stdout, stderr, data }`.
  */
@@ -203,18 +233,29 @@ export function runPaseoCli(args = [], opts = {}) {
       });
     };
 
+    const run = opts.execFile ?? execFile;
     try {
       if (cli.kind === "node") {
-        execFile(node, [cli.bin, ...fullArgs], { timeout, windowsHide: true, env, maxBuffer: 8 * 1024 * 1024 }, cb);
+        run(node, [cli.bin, ...fullArgs], { timeout, windowsHide: true, env, maxBuffer: 8 * 1024 * 1024 }, cb);
       } else if (cli.kind === "cmd") {
-        execFile(
-          "cmd.exe",
-          ["/d", "/s", "/c", `"${cli.bin}" ${fullArgs.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" ")}`],
-          { timeout, windowsHide: true, env, windowsVerbatimArguments: true, maxBuffer: 8 * 1024 * 1024 },
-          cb,
-        );
+        // Prefer the shim's node entry so request-derived args never pass through cmd.exe.
+        const entry = (opts.resolveCmdShim ?? resolveCmdShimEntry)(cli.bin);
+        if (entry) {
+          run(node, [...entry.nodeArgs, entry.script, ...fullArgs], { timeout, windowsHide: true, env, maxBuffer: 8 * 1024 * 1024 }, cb);
+        } else {
+          if (fullArgs.some((a) => UNSAFE_CMD_ARG.test(String(a)))) {
+            return resolvePromise({ ok: false, code: 1, stdout: "", stderr: "refusing argument with shell metacharacters", data: null });
+          }
+          // `/s /c "<line>"`: cmd strips only the outer quotes, so every arg stays quoted.
+          run(
+            "cmd.exe",
+            ["/d", "/s", "/c", `"${[cli.bin, ...fullArgs].map((a) => `"${a}"`).join(" ")}"`],
+            { timeout, windowsHide: true, env, windowsVerbatimArguments: true, maxBuffer: 8 * 1024 * 1024 },
+            cb,
+          );
+        }
       } else {
-        execFile(cli.bin, fullArgs, { timeout, windowsHide: true, env, maxBuffer: 8 * 1024 * 1024 }, cb);
+        run(cli.bin, fullArgs, { timeout, windowsHide: true, env, maxBuffer: 8 * 1024 * 1024 }, cb);
       }
     } catch (e) {
       resolvePromise({
@@ -764,8 +805,7 @@ export async function controlPaseoPlugin(action, payload = {}, opts = {}) {
   }
 
   if (action === "install") {
-    const source = String(payload.source || "").trim();
-    if (!source) throw new Error("Plugin source (directory, Git URL, or npm package) is required");
+    const source = validatePluginSource(payload.source);
     if (!payload.confirmUnsandboxed) {
       return {
         ok: false,
@@ -903,7 +943,7 @@ export async function controlPaseoHub(action, payload = {}, opts = {}) {
   if (action === "connect") {
     const args = ["hub", "connect"];
     if (payload.origin && typeof payload.origin === "string" && payload.origin.trim()) {
-      args.push(payload.origin.trim());
+      args.push(validateHubOrigin(payload.origin));
     }
     const res = await runPaseoCli(args, { ...opts, timeoutMs: 20_000 });
     return {
