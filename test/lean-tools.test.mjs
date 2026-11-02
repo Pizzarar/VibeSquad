@@ -66,3 +66,49 @@ test("before(agent.create) adds lean providerOptions to claude spawns only", () 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+function roleHarness(profiles) {
+  const dir = mkdtempSync(join(tmpdir(), "vs-role-test-"));
+  const prev = { h: process.env.VIBESQUAD_HOME, t: process.env.VIBESQUAD_TEAMS_FILE, p: process.env.VIBESQUAD_PROFILES_PATH };
+  mkdirSync(join(dir, "h"), { recursive: true });
+  writeFileSync(join(dir, "h", "teams.json"), JSON.stringify({ teams: [] }), "utf8");
+  writeFileSync(join(dir, "h", "profiles.json"), JSON.stringify({ profiles }), "utf8");
+  process.env.VIBESQUAD_HOME = join(dir, "h");
+  process.env.VIBESQUAD_TEAMS_FILE = join(dir, "h", "teams.json");
+  process.env.VIBESQUAD_PROFILES_PATH = join(dir, "h", "profiles.json");
+  const before = new Map();
+  const stop = createPlugin({ startWatcher: false })({ before: (n, f) => (before.set(n, f), () => {}), on: () => () => {} });
+  const create = (config, env) => {
+    const req = { config: { cwd: dir, provider: "claude", ...config }, ...(env ? { env } : {}) };
+    return before.get("agent.create")({ request: req }) ?? req;
+  };
+  const done = () => {
+    stop?.();
+    for (const [k, v] of [["VIBESQUAD_HOME", prev.h], ["VIBESQUAD_TEAMS_FILE", prev.t], ["VIBESQUAD_PROFILES_PATH", prev.p]]) v === undefined ? delete process.env[k] : (process.env[k] = v);
+    rmSync(dir, { recursive: true, force: true });
+  };
+  return { create, done };
+}
+const asks = (out) => out.config.providerOptions.disallowedTools.includes("AskUserQuestion");
+const sys = (out) => String(out.config.systemPrompt ?? "");
+
+test("role-less stored profile: role derived from its name (VS_PROFILE only)", () => {
+  const h = roleHarness([{ name: "Brainstorm - Claude", provider: "claude", model: "claude-opus-5-5" }, { name: "Lead - Claude", provider: "claude" }]);
+  try {
+    const b = h.create({ title: "x" }, { VS_PROFILE: "Brainstorm - Claude" });
+    assert.equal(asks(b), false);
+    assert.match(sys(b), /Role: brainstorm/);
+    assert.match(sys(h.create({ title: "x" }, { VS_PROFILE: "Lead - Claude" })), /Role: lead/);
+  } finally {
+    h.done();
+  }
+});
+
+test("explicit VS_ROLE beats the title convention", () => {
+  const h = roleHarness([]);
+  try {
+    assert.match(sys(h.create({ title: "BRAINSTORM · X" }, { VS_ROLE: "worker" })), /Role: worker/);
+  } finally {
+    h.done();
+  }
+});
