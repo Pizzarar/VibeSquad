@@ -6,7 +6,7 @@ import { execFile, spawn } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
-import { bundledNode, findPaseoCli, isDaemonListening, parseListen, resolveCmdShimEntry } from "./first-run.mjs";
+import { bundledNode, findPaseoCli, isDaemonListening, parseListen, resolveCmdShimEntry, UNSAFE_CMD_ARG } from "./first-run.mjs";
 import { clearConfigWarning, loadUserSettings, parseJsonWithBom, readJsonFileWithBom, recordConfigWarning, stripBom } from "./user-settings.mjs";
 
 const IS_WIN = process.platform === "win32";
@@ -168,9 +168,6 @@ export function readRawPaseoConfig(opts = {}) {
   };
 }
 
-// cmd.exe fallback only: every arg is double-quoted, but refuse anything that could still break out or expand,
-// plus a trailing backslash (it would escape the closing quote for the CLI's own argv parser).
-const UNSAFE_CMD_ARG = /["&|<>^%!\r\n\0]|\\$/;
 // `paseo plugin install <source>`: a directory, Git URL or npm package spec. No leading `-` (option injection).
 const PLUGIN_SOURCE_RE = /^(?!-)[A-Za-z0-9@._\/\\:+~# -]{1,512}$/;
 // Provider / plugin ids go into `paseo provider|plugin <cmd> <id>` argv: no leading `-` either.
@@ -652,7 +649,7 @@ export async function saveCustomAcpProvider(payload, opts = {}) {
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/^-|-$/g, "");
+    .replace(/^-+|-+$/g, "");
   if (!id) throw new Error("Provider ID is required");
   const label = String(payload?.label || id).trim();
   const description = String(payload?.description || "").trim();

@@ -15,6 +15,7 @@ const push = await import("../server/push.mjs");
 const stale = await import("../server/stale-runtime.mjs");
 const fileSearch = await import("../server/file-search.mjs");
 const paseo = await import("../server/paseo-control.mjs");
+const firstRun = await import("../server/first-run.mjs");
 const { createMeshnetMux } = await import("../server/serve.mjs");
 after(() => rmSync(home, { recursive: true, force: true }));
 
@@ -242,5 +243,64 @@ describe("plain-HTTP /pair burns codes under the per-IP limiter", () => {
     const code = auth.createPairCode();
     assert.equal(auth.discardPlainHttpPairCode(code, "10.0.0.5"), true);
     assert.equal(auth.discardPlainHttpPairCode(code, "10.0.0.6"), false, "already gone");
+  });
+});
+
+describe("review nits on 1be096a", () => {
+  test("plain-HTTP HEAD /pair burns the code too and never echoes it into Location", async () => {
+    auth.resetPairRateLimitForTest();
+    const code = auth.createPairCode();
+    const { mux } = createMeshnetMux({ port: 4180, meshnetHost: "", meshnetIp: "100.64.0.7", tls: { key: "", cert: "" } });
+    await new Promise((ok) => mux.listen(0, "127.0.0.1", ok));
+    try {
+      const r = await call(mux.address().port, `/pair?code=${code}`, { method: "HEAD", headers: { host: "100.64.0.7:4180" } });
+      assert.equal(r.status, 302);
+      assert.equal(r.headers.location, "https://100.64.0.7:4180/pair");
+    } finally {
+      await new Promise((ok) => mux.close(ok));
+    }
+    assert.equal(auth.discardPlainHttpPairCode(code, "10.1.1.1"), false, "HEAD already burnt it");
+    auth.resetPairRateLimitForTest();
+  });
+
+  test("a missing code uses up no rate-limit attempt", () => {
+    auth.resetPairRateLimitForTest();
+    for (let i = 0; i < 20; i++) assert.equal(auth.discardPlainHttpPairCode("", "10.2.2.2"), false);
+    const code = auth.createPairCode();
+    assert.equal(auth.discardPlainHttpPairCode(code, "10.2.2.2"), true, "the IP isn't throttled by empty requests");
+    auth.resetPairRateLimitForTest();
+  });
+
+  test("ensurePaseoDaemon: cmd.exe fallback refuses an unsafe cli.bin; a resolved shim runs node directly", async () => {
+    const spawned = [];
+    const spawn = (file, args) => (spawned.push({ file, args }), { on() {}, unref() {}, pid: 1 });
+    const base = { isListening: async () => false, spawn, paseoHome: join(home, "paseo-home") };
+    for (const bin of ["C:/tools&calc/paseo.cmd", "C:/%TEMP%/paseo.cmd", 'C:/a"b/paseo.cmd', "C:/a|b/paseo.cmd"]) {
+      const r = await firstRun.ensurePaseoDaemon({ ...base, cli: { kind: "cmd", bin, source: "path" }, resolveCmdShim: () => null });
+      assert.equal(r.started, false, bin);
+      assert.match(r.reason, /metacharacters/);
+    }
+    assert.equal(spawned.length, 0);
+    await firstRun.ensurePaseoDaemon({ ...base, cli: { kind: "cmd", bin: "C:/tools&x/paseo.cmd", source: "path" }, resolveCmdShim: () => ({ script: "C:/tools/cli/paseo", nodeArgs: [] }) });
+    assert.equal(spawned.length, 1);
+    assert.notEqual(spawned[0].file, "cmd.exe");
+    assert.deepEqual(spawned[0].args.slice(-2), ["C:/tools/cli/paseo", "start"]);
+    await firstRun.ensurePaseoDaemon({ ...base, cli: { kind: "cmd", bin: "C:/Program Files/npm/paseo.cmd", source: "path" }, resolveCmdShim: () => null });
+    assert.equal(spawned[1].file, "cmd.exe");
+    assert.equal(spawned[1].args[3], '""C:/Program Files/npm/paseo.cmd" start"');
+  });
+
+  test("custom ACP provider ids strip every leading/trailing '-'", async () => {
+    const paseoHome = mkdtempSync(join(tmpdir(), "vs-acp-id-"));
+    try {
+      const opts = { paseoHome, cliRunner: () => ({ ok: true, code: 0, stdout: "", stderr: "", data: null }) };
+      await paseo.saveCustomAcpProvider({ id: "--foo--", command: "foo-acp --stdio" }, opts);
+      const ids = Object.keys(paseo.readRawPaseoConfig(opts).config?.agents?.providers ?? {});
+      assert.ok(ids.includes("foo"), JSON.stringify(ids));
+      assert.ok(!ids.some((id) => id.startsWith("-")), JSON.stringify(ids));
+      await assert.rejects(paseo.saveCustomAcpProvider({ id: "---", command: "x" }, opts), /Provider ID is required/);
+    } finally {
+      rmSync(paseoHome, { recursive: true, force: true });
+    }
   });
 });

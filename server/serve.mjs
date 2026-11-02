@@ -387,7 +387,7 @@ export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().mes
     if ((path === "/api/auth/status" || path === "/__vibesquad/auth/status") && (req.method === "GET" || req.method === "HEAD")) {
       return handleAuthStatus(req, res, rootDir);
     }
-    if (path === "/pair" && req.method === "GET") {
+    if (path === "/pair" && (req.method === "GET" || req.method === "HEAD")) {
       // The code just crossed the LAN in cleartext: burn it and keep it out of the redirect.
       discardPlainHttpPairCode(new URL(req.url ?? "/", "http://x").searchParams.get("code"), req.socket?.remoteAddress);
       res.statusCode = 302;

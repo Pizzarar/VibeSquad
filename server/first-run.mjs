@@ -73,6 +73,10 @@ export function findPaseoCli(opts = {}) {
 // npm cmd-shim line: `"%_prog%" [--node-flag ...] "%dp0%\node_modules\...\bin\paseo" %*`.
 const CMD_SHIM_ENTRY_RE = /"%_prog%"((?:\s+--[A-Za-z0-9-]+(?:=[A-Za-z0-9,_-]+)?)*)\s+"%dp0%\\([^"%]+)"\s+%\*/;
 
+// cmd.exe fallback only: every arg is double-quoted, but refuse anything that could still break out or expand,
+// plus a trailing backslash (it would escape the closing quote for the CLI's own argv parser).
+export const UNSAFE_CMD_ARG = /["&|<>^%!\r\n\0]|\\$/;
+
 /** Resolves an npm `.cmd` shim to `{ script, nodeArgs }` so callers can run node directly instead of cmd.exe. Null when unrecognised. */
 export function resolveCmdShimEntry(shimPath, readFile = (p) => readFileSync(p, "utf8")) {
   let text;
@@ -132,13 +136,20 @@ export async function ensurePaseoDaemon(opts = {}) {
   const node = bundledNode();
   const env = { ...process.env, PATH: `${dirname(node)}${delimiter}${process.env.PATH ?? ""}` };
   const spawnOpts = { detached: true, stdio: "ignore", windowsHide: true, env };
+  // Same rule as runPaseoCli: prefer the shim's node entry; on the cmd.exe fallback cli.bin must pass UNSAFE_CMD_ARG.
+  const entry = cli.kind === "cmd" ? (opts.resolveCmdShim ?? resolveCmdShimEntry)(cli.bin) : null;
+  if (cli.kind === "cmd" && !entry && UNSAFE_CMD_ARG.test(String(cli.bin))) {
+    return { started: false, reason: "refusing a Paseo CLI path with shell metacharacters" };
+  }
   try {
     const child =
       cli.kind === "node"
         ? spawnFn(node, [cli.bin, "start"], spawnOpts)
-        : cli.kind === "cmd"
-          ? spawnFn("cmd.exe", ["/d", "/s", "/c", `"${cli.bin}" start`], { ...spawnOpts, windowsVerbatimArguments: true })
-          : spawnFn(cli.bin, ["start"], spawnOpts);
+        : entry
+          ? spawnFn(node, [...entry.nodeArgs, entry.script, "start"], spawnOpts)
+          : cli.kind === "cmd"
+            ? spawnFn("cmd.exe", ["/d", "/s", "/c", `""${cli.bin}" start"`], { ...spawnOpts, windowsVerbatimArguments: true })
+            : spawnFn(cli.bin, ["start"], spawnOpts);
     child?.on?.("error", () => {});
     child?.unref?.();
     markDaemonManagedByVibeSquad(child?.pid || "managed", opts);

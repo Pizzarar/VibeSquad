@@ -630,10 +630,10 @@ export function discardPairCode(rawCode) {
  * code space over HTTP to wipe the real one. A miss counts as a failure; a locked or throttled IP burns nothing.
  */
 export function discardPlainHttpPairCode(rawCode, ip) {
+  const raw = String(rawCode ?? "").trim();
+  if (!raw) return false; // no code: nothing to burn, and no rate-limit attempt used up
   const key = String(ip ?? "unknown").replace(/^::ffff:/, "");
   if (pairLockRemainingMs(key) > 0 || pairRateLimited(key)) return false;
-  const raw = String(rawCode ?? "").trim();
-  if (!raw) return false;
   const existed = codes.has(raw) || codes.has(raw.replace(/[-\s]/g, ""));
   discardPairCode(raw);
   if (!existed) recordPairFailure(key);
