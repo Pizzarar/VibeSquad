@@ -112,7 +112,7 @@ export function SpinOffCard({ pin, offer, variant = "tile" }: { pin: Pin; offer:
   if (hidden || !teams.length) return null;
   const n = teams.length;
   const go = async () => {
-    const results = await createSpinOffPins(offer.id, pin.squad.id, teams);
+    const results = await createSpinOffPins(offer.id, pin.squad.id, offer.teams); // the full list: runSpinOffOnce skips the rows already created
     if (!results) return; // already running (double click, or the other card)
     showPinToast(describeSpinOff(results));
     if (results.every((r) => r.pin)) {

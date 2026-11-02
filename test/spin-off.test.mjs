@@ -112,3 +112,33 @@ test("partial failure: retry offers and creates only the failed rows", async () 
   assert.deepEqual(f.squad.lanes.map((l) => l.id), ["a", "c", "b"]); // no a-2 / c-2 copies
   assert.deepEqual(spinOffRemaining("g2", fixed), []);
 });
+
+// The card's path: always the FULL offer list; runSpinOffOnce alone skips rows already created.
+test("card path: [A ok, B fail, C ok] retry creates B, 'Pinned 1 Team', then nothing remains", async () => {
+  const f = fakeSquad();
+  const failing = new Set(["B"]);
+  const create = (n, b) => (failing.has(n) ? Promise.reject(new Error("down")) : f.create(n, b));
+  const offer = [{ name: "A", brief: "a" }, { name: "B", brief: "b" }, { name: "C", brief: "c" }];
+  const first = await runSpinOffOnce("g3", create, offer);
+  assert.equal(describeSpinOff(first), "Pinned 2 Teams · Failed: B (down)");
+  assert.deepEqual(spinOffRemaining("g3", offer).map((t) => t.name), ["B"]);
+  failing.clear();
+  const retry = await runSpinOffOnce("g3", create, offer);
+  assert.equal(describeSpinOff(retry), "Pinned 1 Team");
+  assert.ok(retry.every((r) => r.pin));
+  assert.deepEqual(f.squad.lanes.map((l) => l.id), ["a", "c", "b"]);
+  assert.deepEqual(spinOffRemaining("g3", offer), []);
+});
+
+test("card path: [A fail, B ok, C fail] retry creates A and C", async () => {
+  const f = fakeSquad();
+  const failing = new Set(["A", "C"]);
+  const create = (n, b) => (failing.has(n) ? Promise.reject(new Error("down")) : f.create(n, b));
+  const offer = [{ name: "A", brief: "a" }, { name: "B", brief: "b" }, { name: "C", brief: "c" }];
+  await runSpinOffOnce("g4", create, offer);
+  assert.deepEqual(spinOffRemaining("g4", offer).map((t) => t.name), ["A", "C"]);
+  failing.clear();
+  const retry = await runSpinOffOnce("g4", create, offer);
+  assert.equal(describeSpinOff(retry), "Pinned 2 Teams");
+  assert.deepEqual(f.squad.lanes.map((l) => l.id), ["b", "a", "c"]);
+});
