@@ -39,7 +39,8 @@ type State = {
 
 // Start on the grid even if tabs were restored from last session; a ?agent= deep link shows its drawer.
 const deepLinked = typeof location !== "undefined" && new URLSearchParams(location.search).has("agent");
-let state: State = { focus: null, home: !deepLinked, homeActive: deepLinked ? null : getPanes().leftActiveId, squadsHome: false };
+const startOnSquadsHome = !deepLinked && typeof location !== "undefined" && new URLSearchParams(location.search).get("view") === "squads";
+let state: State = { focus: null, home: !deepLinked, homeActive: deepLinked ? null : getPanes().leftActiveId, squadsHome: startOnSquadsHome };
 let seq = 0;
 const listeners = new Set<() => void>();
 

@@ -83,6 +83,9 @@ pub struct DesktopConfig {
     pub start_at_login: bool,
     #[serde(default)]
     pub last_hash: String,
+    /// Full UI route (path + query + hash), e.g. `/?team=x&agent=y`; restored after any reconnect or reload.
+    #[serde(default)]
+    pub last_route: String,
     #[serde(default = "default_update_channel")]
     pub update_channel: String,
 }
@@ -98,6 +101,7 @@ impl Default for DesktopConfig {
             device_token: String::new(),
             start_at_login: false,
             last_hash: String::new(),
+            last_route: String::new(),
             update_channel: default_update_channel(),
         }
     }
@@ -1180,6 +1184,8 @@ async fn handle_desktop_pair(
 struct HashUpdate {
     #[serde(default)]
     hash: String,
+    #[serde(default)]
+    route: Option<String>,
 }
 
 async fn handle_desktop_hash(
@@ -1189,6 +1195,9 @@ async fn handle_desktop_hash(
     {
         let mut cfg = state.config.write().unwrap();
         cfg.last_hash = payload.hash;
+        if let Some(route) = payload.route {
+            cfg.last_route = route;
+        }
         let _ = save_config(&cfg);
     }
     Json(json!({ "ok": true }))
@@ -1787,6 +1796,9 @@ fn stop_managed_server(state: &Arc<SharedAppState>) {
     }
 }
 
+/// Short in-relay retry for page navigations while the upstream restarts (the page itself keeps polling for ~30 s).
+const RELAY_RETRY_BACKOFF_MS: [u64; 3] = [250, 500, 1000];
+
 async fn proxy_http_handler(
     State(state): State<Arc<SharedAppState>>,
     req: Request,
@@ -1843,9 +1855,19 @@ async fn proxy_http_handler(
         }
     };
 
-    let candidates = state.candidate_hosts();
+    // Browser navigations (root or deep link) ride out a restarting upstream; API calls fail fast.
+    let is_html_nav = method == Method::GET
+        && (is_root_nav
+            || req_headers
+                .get(axum::http::header::ACCEPT)
+                .and_then(|v| v.to_str().ok())
+                .map(|a| a.contains("text/html"))
+                .unwrap_or(false));
     let mut last_err = String::new();
+    let mut attempt = 0usize;
 
+    loop {
+    let candidates = state.candidate_hosts();
     for host in candidates {
         let host_is_local = is_local_host(&host);
         let scheme = if host_is_local { "http" } else { "https" };
@@ -1968,7 +1990,7 @@ async fn proxy_http_handler(
 
                 let final_bytes = if is_root_nav && is_html && up_status == reqwest::StatusCode::OK {
                     let html_str = String::from_utf8_lossy(&resp_bytes);
-                    let bridge = ui_pages::desktop_bridge_script(&cfg.last_hash);
+                    let bridge = ui_pages::desktop_bridge_script(&cfg.last_hash, &cfg.last_route);
                     let injected = if html_str.contains("</body>") {
                         html_str.replacen("</body>", &format!("{}\n</body>", bridge), 1)
                     } else {
@@ -2016,12 +2038,21 @@ async fn proxy_http_handler(
             }
         }
     }
+    if is_html_nav && attempt < RELAY_RETRY_BACKOFF_MS.len() {
+        tokio::time::sleep(std::time::Duration::from_millis(RELAY_RETRY_BACKOFF_MS[attempt])).await;
+        attempt += 1;
+        continue;
+    }
+    break;
+    }
 
-    // Upstream unreachable!
-    if is_root_nav {
+    // Upstream unreachable! Never let WebView2 show its own error page: serve the Reconnecting card
+    // (it polls /__desktop/ping, reloads the same URL when the server is back, and turns into the
+    // Retry / Switch server card after ~30 s).
+    if is_html_nav {
         return html_no_store_response(
             StatusCode::OK,
-            ui_pages::render_unreachable_page(&cfg, &last_err),
+            ui_pages::render_reconnecting_page(&cfg, &last_err),
         );
     }
 
@@ -2223,17 +2254,14 @@ fn main() {
 
             // Navigate main window if ephemeral port was used or if lastHash is saved
             if let Some(main_win) = app.get_webview_window("main") {
-                let last_hash = state_for_setup.config.read().unwrap().last_hash.clone();
-                if local_port != 4189 || !last_hash.is_empty() {
-                    let hash_suffix = if last_hash.starts_with('#') {
-                        last_hash
-                    } else if !last_hash.is_empty() {
-                        format!("#{}", last_hash)
-                    } else {
-                        String::new()
-                    };
+                let (last_hash, last_route) = {
+                    let c = state_for_setup.config.read().unwrap();
+                    (c.last_hash.clone(), c.last_route.clone())
+                };
+                let restore = ui_pages::restore_path(&last_route, &last_hash);
+                if local_port != 4189 || restore != "/" {
                     if let Ok(target_url) =
-                        url::Url::parse(&format!("http://127.0.0.1:{}/{}", local_port, hash_suffix))
+                        url::Url::parse(&format!("http://127.0.0.1:{}{}", local_port, restore))
                     {
                         let _ = main_win.navigate(target_url);
                     }
@@ -2386,6 +2414,58 @@ mod tests {
             managed_server: Mutex::new(None),
             last_notified_agent_id: RwLock::new(None),
         })
+    }
+
+    #[tokio::test]
+    async fn relay_serves_reconnect_page_while_upstream_is_down() {
+        let state = make_test_state();
+        {
+            let mut cfg = state.config.write().unwrap();
+            cfg.server_mode = "remote".into();
+            cfg.server_host = "127.0.0.1:1".into();
+            cfg.fallback_host = "127.0.0.1:2".into();
+            cfg.device_token = "t".into();
+        }
+        for (uri, accept) in [("/", "text/html"), ("/?team=x&agent=y", "text/html"), ("/some/deep/link", "text/html")] {
+            let req = Request::builder()
+                .method("GET")
+                .uri(uri)
+                .header("accept", accept)
+                .body(Body::empty())
+                .unwrap();
+            let resp = proxy_http_handler(State(state.clone()), req).await;
+            assert_eq!(resp.status(), StatusCode::OK, "{uri}");
+            let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+            let html = String::from_utf8_lossy(&body);
+            assert!(html.contains("Reconnecting"), "{uri}: {html}");
+            assert!(html.contains("Switch server"), "{uri}");
+        }
+        // API calls still fail fast with a JSON 502.
+        let req = Request::builder().method("GET").uri("/api/x").body(Body::empty()).unwrap();
+        let resp = proxy_http_handler(State(state.clone()), req).await;
+        assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+    }
+
+    #[test]
+    fn restore_path_covers_chat_squad_page_and_squads_home() {
+        // Chat, squad page and Squads Home are all query routes; each round-trips exactly.
+        for route in ["/?team=vibesquad&agent=abc-123", "/?team=vibesquad", "/?view=squads", "/?team=vibesquad&view=squads#x"] {
+            assert_eq!(ui_pages::restore_path(route, ""), route);
+        }
+        // Nothing saved: plain root (the app's own default), legacy hash still honoured.
+        assert_eq!(ui_pages::restore_path("", ""), "/");
+        assert_eq!(ui_pages::restore_path("", "#/chat/1"), "/#/chat/1");
+        // Unsafe routes are rejected.
+        assert_eq!(ui_pages::restore_path("//evil.example/x", ""), "/");
+        assert_eq!(ui_pages::restore_path("/__desktop/setup", ""), "/");
+    }
+
+    #[test]
+    fn bridge_restores_saved_route_and_saves_on_history_changes() {
+        let js = ui_pages::desktop_bridge_script("", "/?team=t&agent=a");
+        assert!(js.contains(r#"const savedRoute = "/?team=t&agent=a";"#));
+        assert!(js.contains("history[fn]") && js.contains("popstate"));
+        assert!(js.contains("route: window.location.pathname"));
     }
 
     #[test]

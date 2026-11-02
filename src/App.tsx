@@ -1770,9 +1770,9 @@ export function App() {
   const withPanes = (hasTabs || focus) && !pinFocused && !hidePanes;
   const urlAgentId = urlAgentFor({ activeAgentId, onGrid: hidePanes, startFresh: pinFocused && !pinFocus?.agentId });
   useEffect(() => {
-    const next = serializeUrlState({ team: activeTeamId || null, agent: urlAgentId }, location.search);
+    const next = serializeUrlState({ team: activeTeamId || null, agent: urlAgentId, squadsHome: pinLayout && pinsHome && squadsHome }, location.search);
     if (next !== (location.search || "")) history.pushState(null, "", `${location.pathname}${next}${location.hash}`);
-  }, [activeTeamId, urlAgentId]);
+  }, [activeTeamId, urlAgentId, pinLayout, pinsHome, squadsHome]);
   // Esc on the squad page goes up to Squads Home (chat's own Esc handler runs first and marks the event handled).
   useEffect(() => {
     if (!pinLayout) return;
