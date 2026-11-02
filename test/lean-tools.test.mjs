@@ -112,3 +112,11 @@ test("explicit VS_ROLE beats the title convention", () => {
     h.done();
   }
 });
+
+test("spawnEnvFor carries role and profile into env for label-only spawn paths", async () => {
+  const { spawnEnvFor } = await import("../src/spawn-env.ts");
+  assert.deepEqual(spawnEnvFor({ role: "brainstorm", lane: "x", profile: "Brainstorm - Claude" }), { VS_ROLE: "brainstorm", VS_PROFILE: "Brainstorm - Claude" });
+  assert.deepEqual(spawnEnvFor({ role: "lead" }), { VS_ROLE: "lead" });
+  assert.equal(spawnEnvFor({ role: "former-lead" }), undefined);
+  assert.equal(spawnEnvFor({}), undefined);
+});

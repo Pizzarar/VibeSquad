@@ -551,7 +551,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
         initialPrompt: prompt,
         labels: newLabels,
         // Labels never reach the plugin's before(agent.create); env does, so the profile is forced at spawn.
-        ...(profileName ? { env: { VS_PROFILE: profileName } } : {}),
+        env: { VS_ROLE: "lead", ...(profileName ? { VS_PROFILE: profileName } : {}) },
       });
     }
 

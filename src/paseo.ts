@@ -1,5 +1,6 @@
 import { createPaseoApi, type PaseoAgent, type PaseoClient, type PaseoWorkspace } from "@getpaseo/client";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
+import { spawnEnvFor } from "./spawn-env";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
 import { useSyncExternalStore } from "react";
 import { normalizeProviderUsage, type ProviderQuotaView } from "./antigravity";
@@ -419,6 +420,7 @@ export async function spawnTeamAgent(req: SpawnRequest): Promise<{ id: string; c
     cwd: req.cwd,
     title: req.title,
     labels: req.labels,
+    ...(spawnEnvFor(req.labels) ? { env: spawnEnvFor(req.labels) } : {}),
     prompt: req.prompt || undefined,
     worktree: req.worktree ? { mode: "branch-off", newBranch: req.worktree.branch } : undefined,
   });
