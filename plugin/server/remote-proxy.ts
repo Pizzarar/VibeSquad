@@ -15,9 +15,12 @@ import {
   REMOTE_RESPONSE_HEADERS,
   REMOTE_TIMEOUT_MS,
   checkRemoteBody,
+  checkRemoteRegistry,
   createRateLimiter,
   decideProxyRequest,
+  decisionStatus,
   isTextContentType,
+  needsRegistry,
   redactBody,
   scrubSettingsBody,
   utf8Bytes,
@@ -84,6 +87,15 @@ export const vsHttp = {
   output: { parse: parseOutput, parseAsync: async (v: unknown) => parseOutput(v) },
 };
 
+/** A refusal: the message carries the HTTP-style status ("[403]") and so does `status` on the error. */
+export class RemoteDenied extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(`vs.http: ${message} [${status}]`);
+    this.status = status;
+  }
+}
+
 async function readCapped(res: Response, signal: AbortSignal): Promise<string> {
   const len = Number(res.headers.get("content-length") ?? NaN);
   if (Number.isFinite(len) && len > REMOTE_MAX_BODY_BYTES) {
@@ -114,6 +126,20 @@ async function readCapped(res: Response, signal: AbortSignal): Promise<string> {
   return new TextDecoder().decode(buf);
 }
 
+/** The live registry for registry-checked writes: a token-less loopback GET /api/teams. null when unreadable. */
+async function readRegistry(port: number, doFetch: typeof fetch, signal: AbortSignal): Promise<unknown> {
+  try {
+    const res = await doFetch(`http://127.0.0.1:${port}/api/teams`, { method: "GET", redirect: "manual", signal });
+    if (res.status !== 200) {
+      res.body?.cancel().catch(() => {});
+      return null;
+    }
+    return JSON.parse(await readCapped(res, signal));
+  } catch {
+    return null;
+  }
+}
+
 export type VsHttpDeps = {
   port?: number;
   home?: string;
@@ -131,31 +157,40 @@ export function makeVsHttpHandler(deps: VsHttpDeps = {}) {
   return async (input: VsHttpInput): Promise<VsHttpOutput> => {
     const home = deps.home ?? vsHome();
     if (!remoteEnabled(home)) {
-      throw new Error('vs.http: remote access is off (set "remote": { "enabled": true } in ~/.vibesquad/settings.json)');
+      throw new RemoteDenied(403, 'remote access is off (set "remote": { "enabled": true } in ~/.vibesquad/settings.json)');
     }
     const d = decideProxyRequest(input.method, input.path, deps.allow ?? REMOTE_ALLOW);
-    if (!d.ok) throw new Error(`vs.http: ${d.error}`);
+    if (!d.ok) throw new RemoteDenied(decisionStatus(d.code), d.error);
     if (input.body !== undefined && utf8Bytes(input.body) > REMOTE_MAX_BODY_BYTES) {
-      throw new Error(`vs.http: request body too large (cap ${REMOTE_MAX_BODY_BYTES} bytes)`);
+      throw new RemoteDenied(413, `request body too large (cap ${REMOTE_MAX_BODY_BYTES} bytes)`);
     }
     const write = d.method !== "GET";
-    // Per-endpoint body-key allowlist (S4): checked before a rate-limit slot is spent.
+    // Per-endpoint typed body allowlist (R2-5): checked before a rate-limit slot is spent.
     const bodyCheck = checkRemoteBody(d.method, d.pathname, input.body);
-    if (!bodyCheck.ok) throw new Error(`vs.http: ${bodyCheck.error}`);
+    if (!bodyCheck.ok) throw new RemoteDenied(bodyCheck.status, bodyCheck.error);
     const slot = limiter.acquire(write ? "write" : "read");
-    if (!slot.ok) throw new Error(`vs.http: ${slot.error}`);
+    if (!slot.ok) throw new RemoteDenied(429, slot.error);
     const hasBody = input.body !== undefined && write;
+    // What was checked is what is sent: the parsed body, re-serialised (after any registry pinning).
+    let sendBody = hasBody ? JSON.stringify(bodyCheck.value) : undefined;
     const port = deps.port ?? Number(process.env.VIBESQUAD_PORT || 4180);
     // Host is fixed: the caller only ever supplies an allowlisted pathname + query.
     const url = `http://127.0.0.1:${port}${d.pathname}${d.search}`;
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), deps.timeoutMs ?? REMOTE_TIMEOUT_MS);
     try {
+      if (write && needsRegistry(d.pathname)) {
+        const reg = checkRemoteRegistry(d.pathname, bodyCheck.value, await readRegistry(port, deps.fetch ?? fetch, abort.signal), (s) =>
+          redactBody(s, owner.homeDir, owner.userName),
+        );
+        if (!reg.ok) throw new RemoteDenied(reg.status, reg.error);
+        if (hasBody) sendBody = JSON.stringify(reg.value);
+      }
       const res = await (deps.fetch ?? fetch)(url, {
         method: d.method,
         // No caller headers are forwarded: just our content type and the loopback token.
         headers: { ...(hasBody ? { "content-type": "application/json" } : {}), ...(write ? vsTokenHeaders(home) : {}) },
-        ...(hasBody ? { body: input.body } : {}),
+        ...(hasBody ? { body: sendBody } : {}),
         redirect: "manual",
         signal: abort.signal,
       });

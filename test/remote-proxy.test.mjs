@@ -13,9 +13,14 @@ import {
   REMOTE_MAX_BODY_BYTES,
   REMOTE_MAX_IN_FLIGHT,
   REMOTE_TIMEOUT_MS,
-  REMOTE_WRITES_AFTER_S4,
+  REMOTE_BODY_POLICY,
+  REMOTE_FORBIDDEN_BODY_KEYS,
+  REMOTE_WRITES_CLOSED,
+  checkLaneExists,
+  checkRemoteBody,
   createRateLimiter,
   decideProxyRequest,
+  pinTeamsRegistry,
   normalizeProxyPath,
   redactBody,
 } from "../plugin/server/remote-proxy-rules.ts";
@@ -25,8 +30,10 @@ import { loadUserSettings, saveUserSettings } from "../server/user-settings.mjs"
 
 const TOKEN = "a".repeat(64);
 const home = mkdtempSync(join(tmpdir(), "vs-remote-proxy-"));
-// Test-only allow map: exercises the write plumbing that REMOTE_ALLOW keeps closed until S4.
+// Test-only allow map (the production map now opens these too; kept so plumbing tests don't depend on it).
 const WRITE_ALLOW = { ...REMOTE_ALLOW, "/api/teams": ["GET", "PUT"], "/__vibesquad/teams": ["GET", "POST"] };
+// What the fake loopback server answers on GET /api/teams (the registry the proxy checks writes against).
+const REGISTRY = { teams: [{ id: "sq", name: "Squad", paths: ["Proj"], lanes: [{ id: "lane1", name: "One", lastProfile: "P" }] }], revision: "r1" };
 after(() => rmSync(home, { recursive: true, force: true }));
 const setGate = (enabled) => writeFileSync(join(home, "settings.json"), JSON.stringify({ userName: "t", remote: { enabled } }));
 
@@ -118,7 +125,7 @@ describe("allowlist", () => {
     });
   }
   test("no allowlisted path is also blocked", () => {
-    for (const p of Object.keys(REMOTE_ALLOW)) assert.equal(decideProxyRequest("GET", p).ok, true, p);
+    for (const [p, methods] of Object.entries(REMOTE_ALLOW)) assert.equal(decideProxyRequest(methods[0], p).ok, true, p);
     assert.ok(REMOTE_BLOCKED.length > 10);
   });
   test("deny by default: unknown endpoints and non-API paths", () => {
@@ -127,27 +134,22 @@ describe("allowlist", () => {
       assert.equal(d.ok, false, p);
     }
   });
-  test("GET-only until S4: every allowlisted path refuses every write method", () => {
+  test("every reopened write has a body policy, and every policy belongs to an open write", () => {
     for (const [p, methods] of Object.entries(REMOTE_ALLOW)) {
-      assert.deepEqual(methods, ["GET"], p);
-      for (const m of ["POST", "PUT", "PATCH", "DELETE"]) assert.equal(decideProxyRequest(m, p).code, "method", `${m} ${p}`);
+      if (methods.some((m) => m !== "GET")) assert.ok(REMOTE_BODY_POLICY[p], `${p} has a body policy`);
+      for (const m of ["PATCH", "DELETE"]) assert.equal(decideProxyRequest(m, p).code, "method", `${m} ${p}`);
     }
+    for (const p of Object.keys(REMOTE_BODY_POLICY)) assert.ok(REMOTE_ALLOW[p]?.some((m) => m !== "GET"), `${p} policy without a write`);
   });
-  test("POST-only handlers (spawn/archive/inject) are unreachable; handoff POST is not even queued for S4", () => {
-    for (const p of [
-      "/__vibesquad/inbox/open-topic",
-      "/__vibesquad/inbox/triage",
-      "/__vibesquad/inbox/park-topic",
-      "/__vibesquad/inbox/handoff-topic",
-      "/__vibesquad/lead-handoff",
-      "/__vibesquad/lead-handoff/confirm",
-      "/__vibesquad/brainstorm-restart",
-    ]) {
+  test("closed writes: handoff POST, lead-handoff and confirm stay unreachable, each with a reason", () => {
+    for (const p of ["/__vibesquad/lead-handoff", "/__vibesquad/lead-handoff/confirm"]) {
       assert.equal(decideProxyRequest("POST", p).code, "not-allowed", p);
-      assert.ok(REMOTE_WRITES_AFTER_S4[p], `${p} listed for reopening`);
+      assert.equal(REMOTE_BODY_POLICY[p], undefined, p);
     }
     assert.equal(decideProxyRequest("POST", "/__vibesquad/handoff").code, "method");
-    assert.equal(REMOTE_WRITES_AFTER_S4["/__vibesquad/handoff"], undefined);
+    for (const p of [...Object.keys(REMOTE_WRITES_CLOSED)]) assert.ok(REMOTE_WRITES_CLOSED[p].length > 20, p);
+    assert.equal(REMOTE_BODY_POLICY["/__vibesquad/handoff"], undefined);
+    assert.equal(decideProxyRequest("POST", "/__vibesquad/settings").code, "method");
     for (const p of [
       "/__vibesquad/paseo/surface",
       "/__vibesquad/paseo/providers/models",
@@ -173,9 +175,10 @@ describe("allowlist", () => {
   });
   test("no allowlisted GET is an S3 gated read (token-less GETs work; S3 backs the allowlist)", async () => {
     const { isGatedRead } = await import("../server/vibesquad-api.mjs");
-    for (const p of Object.keys(REMOTE_ALLOW)) {
+    for (const p of Object.keys(REMOTE_ALLOW).filter((k) => REMOTE_ALLOW[k].includes("GET"))) {
       for (const q of ["", "?refresh=1"]) {
         const d = decideProxyRequest("GET", p + q);
+        assert.equal(d.ok, true, p + q);
         assert.equal(isGatedRead(d.pathname, d.pathname + d.search), false, p + q);
       }
     }
@@ -308,8 +311,9 @@ describe("handler against a fake loopback VS server", () => {
           return res.end(JSON.stringify({ ok: true, url: req.url }));
         }
         if (req.url === "/api/teams") {
-          res.statusCode = req.method === "PUT" ? 409 : 200;
           res.setHeader("content-type", "application/json; charset=utf-8");
+          if (req.method === "GET") return res.end(JSON.stringify(REGISTRY));
+          res.statusCode = 409;
           return res.end(JSON.stringify({ echo: body }));
         }
         if (req.url === "/__vibesquad/settings") {
@@ -382,8 +386,9 @@ describe("handler against a fake loopback VS server", () => {
   test("production allowlist refuses writes before fetching", async () => {
     setGate(true);
     const n = seen.length;
-    await assert.rejects(handler()({ method: "PUT", path: "/api/teams", body: "{}" }), /PUT not available remotely/);
-    await assert.rejects(handler()({ method: "POST", path: "/__vibesquad/inbox/open-topic", body: '{"cwd":"C:/"}' }), /not available remotely/);
+    await assert.rejects(handler()({ method: "PUT", path: "/api/teams", body: "{}" }), /key required remotely: body\.teams \[403\]/);
+    await assert.rejects(handler()({ method: "POST", path: "/__vibesquad/inbox/open-topic", body: '{"cwd":"C:/"}' }), /body key not allowed remotely: cwd \[403\]/);
+    await assert.rejects(handler()({ method: "POST", path: "/__vibesquad/lead-handoff", body: '{"agentId":"a"}' }), /not available remotely.*\[403\]/);
     assert.equal(seen.length, n);
   });
 
@@ -393,6 +398,8 @@ describe("handler against a fake loopback VS server", () => {
     const out = await handler({ allow: WRITE_ALLOW })({ method: "put", path: "/api/teams", body: sent });
     assert.equal(out.status, 409);
     assert.deepEqual(JSON.parse(out.body), { echo: sent });
+    assert.equal(seen.at(-2).method, "GET", "registry read first");
+    assert.equal(seen.at(-2).headers["x-vibesquad-token"], undefined, "registry read carries no token");
     assert.equal(seen.at(-1).method, "PUT");
     assert.equal(seen.at(-1).headers["content-type"], "application/json");
     assert.equal(seen.at(-1).headers["x-vibesquad-token"], TOKEN);
@@ -436,7 +443,7 @@ describe("handler against a fake loopback VS server", () => {
     const n = seen.length;
     await assert.rejects(
       handler({ allow: WRITE_ALLOW })({ method: "PUT", path: "/api/teams", body: "z".repeat(REMOTE_MAX_BODY_BYTES + 1) }),
-      /request body too large/,
+      /request body too large.*\[413\]/,
     );
     assert.equal(seen.length, n);
   });
@@ -508,6 +515,10 @@ describe("against the real VS middleware with S3", () => {
     const h = mkdtempSync(join(tmpdir(), "vs-remote-s3-"));
     process.env.VIBESQUAD_HOME = h;
     writeFileSync(join(h, "settings.json"), JSON.stringify({ userName: "Owner", remote: { enabled: true } }));
+    const prevTeams = process.env.VIBESQUAD_TEAMS_FILE;
+    const teamsFile = join(h, "teams.json");
+    process.env.VIBESQUAD_TEAMS_FILE = teamsFile;
+    writeFileSync(teamsFile, JSON.stringify({ teams: [{ id: "sq", name: "Squad", paths: ["C:\\Users\\Owner\\proj"], lanes: [{ id: "l1", name: "One" }] }] }));
     const { createVibesquadMiddleware } = await import("../server/vibesquad-api.mjs");
     const mw = createVibesquadMiddleware(h);
     const srv = createServer((req, res) => mw(req, res, () => ((res.statusCode = 404), res.end())));
@@ -527,7 +538,23 @@ describe("against the real VS middleware with S3", () => {
       // the owner gate (400 from the handler's own body check, not 403 read-only).
       const w = await vs({ method: "PUT", path: "/api/teams", body: '{"teams":[],"revision":"stale"}' });
       assert.notEqual(w.status, 403, w.body);
+      // R2-5 end to end on the production allowlist: the remote GET shows the redacted path; echoing it back
+      // renames the lane and keeps the real path on disk.
+      const prod = makeVsHttpHandler({ port, home: h, homeDir: "C:\\Users\\Owner", userName: "Owner" });
+      const got = JSON.parse((await prod({ method: "GET", path: "/api/teams" })).body);
+      assert.deepEqual(got.teams[0].paths, ["~\\proj"]);
+      got.teams[0].lanes[0].name = "Renamed";
+      const put = await prod({ method: "PUT", path: "/api/teams", body: JSON.stringify({ teams: got.teams, revision: got.revision }) });
+      assert.equal(put.status, 200, put.body);
+      const disk = JSON.parse(readFileSync(teamsFile, "utf8"));
+      assert.equal(disk.teams[0].lanes[0].name, "Renamed");
+      assert.deepEqual(disk.teams[0].paths, ["C:\\Users\\Owner\\proj"]);
+      got.teams[0].paths = ["Elsewhere"];
+      const fresh = JSON.parse((await prod({ method: "GET", path: "/api/teams" })).body);
+      await assert.rejects(prod({ method: "PUT", path: "/api/teams", body: JSON.stringify({ teams: got.teams, revision: fresh.revision }) }), /paths can't be changed remotely \[403\]/);
     } finally {
+      if (prevTeams === undefined) delete process.env.VIBESQUAD_TEAMS_FILE;
+      else process.env.VIBESQUAD_TEAMS_FILE = prevTeams;
       srv.closeAllConnections?.();
       await new Promise((r) => srv.close(r));
       if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
@@ -613,5 +640,233 @@ describe("fetch shim", () => {
     const p = t.fetch("/api/teams", { signal: ac.signal });
     ac.abort();
     await assert.rejects(p, { name: "AbortError" });
+  });
+});
+
+// Block R2-5: one row per reopened write. `ok` is a body the UI sends; each must pass, and each forbidden
+// key (top level and nested), an unknown key, an oversize value and a wrong method must be refused.
+const LANE_OK = { id: "lane1", name: "One", state: "pinned", lastProfile: "P" };
+const ENDPOINTS = [
+  { path: "/api/teams", method: "PUT", ok: { teams: [{ id: "sq", name: "Squad", color: "#fff", paths: ["Proj"], lanes: [LANE_OK] }], revision: "r1" }, big: { revision: "r".repeat(129) }, nest: (b, k) => (b.teams[0].lanes[0][k] = "x") },
+  { path: "/__vibesquad/teams", method: "POST", ok: { teams: [{ id: "sq", lanes: [{ id: "lane1" }] }], revision: "r1", leadFlagTokens: 150000 }, big: { teams: Array.from({ length: 201 }, (_, i) => ({ id: `t${i}` })) }, nest: (b, k) => (b.teams[0][k] = "x") },
+  { path: "/__vibesquad/inbox", method: "POST", ok: { text: "an idea", splitDump: false, laneId: "lane1" }, big: { text: "x".repeat(20_001) } },
+  { path: "/__vibesquad/inbox/triage", method: "POST", ok: { action: "update", cardId: "idea-3", patch: { status: "parked", summaryNote: "n" } }, big: { patch: { relatedReason: "x".repeat(501) } }, nest: (b, k) => (b.patch[k] = "x") },
+  { path: "/__vibesquad/inbox/open-topic", method: "POST", ok: { cardId: "idea-3" }, big: { cardId: "i".repeat(65) } },
+  { path: "/__vibesquad/inbox/park-topic", method: "POST", ok: { cardId: "idea-3", agentId: "abc-123", summaryNote: "parked" }, big: { summaryNote: "x".repeat(4001) } },
+  { path: "/__vibesquad/inbox/handoff-topic", method: "POST", ok: { cardId: "idea-3", agentId: "abc-123", planNote: "p", usedTokens: 1200 }, big: { planNote: "x".repeat(4001) } },
+  { path: "/__vibesquad/log", method: "POST", ok: { team: "sq", lane: "lane1", type: "you", text: "hi", refs: ["a"] }, big: { text: "x".repeat(241) } },
+  { path: "/__vibesquad/vs-log", method: "POST", ok: { teamId: "sq", laneId: "lane1", type: "metric", text: "m" }, big: { text: "x".repeat(2001) } },
+  { path: "/__vibesquad/brainstorm-summary", method: "POST", ok: { laneId: "lane1", content: "# brief", revision: "abc" }, big: { content: "x".repeat(20_001) } },
+  { path: "/__vibesquad/brainstorm-summary", method: "PUT", ok: { lane: "lane1", content: "# brief", revision: "abc" }, big: { content: "x".repeat(20_001) } },
+  { path: "/__vibesquad/brainstorm-restart", method: "POST", ok: { reason: "start-brainstorm", mode: "quick-start", teamId: "sq", laneId: "lane1", laneName: "One" }, big: { laneName: "x".repeat(201) } },
+];
+const clone = (v) => JSON.parse(JSON.stringify(v));
+const bodyErr = (method, path, body) => checkRemoteBody(method, path, typeof body === "string" ? body : JSON.stringify(body));
+
+describe("R2-5 body policy per endpoint", () => {
+  for (const e of ENDPOINTS) {
+    describe(`${e.method} ${e.path}`, () => {
+      test("the UI's body passes and the method is open", () => {
+        assert.equal(decideProxyRequest(e.method, e.path).ok, true);
+        assert.deepEqual(bodyErr(e.method, e.path, e.ok), { ok: true, value: e.ok });
+      });
+      test("every forbidden key is refused with 403, top level and nested", () => {
+        for (const k of REMOTE_FORBIDDEN_BODY_KEYS) {
+          // Raw JSON so __proto__ is a real own key, as JSON.parse makes it.
+          const top = bodyErr(e.method, e.path, `{"${k}":"x",${JSON.stringify(e.ok).slice(1)}`);
+          assert.equal(top.ok, false, k);
+          assert.equal(top.status, 403, k);
+          const deep = clone(e.ok);
+          let raw;
+          if (e.nest && k !== "__proto__") {
+            e.nest(deep, k);
+            raw = JSON.stringify(deep);
+          } else {
+            raw = `{"wrap":{"inner":[{"${k}":"x"}]},${JSON.stringify(deep).slice(1)}`;
+          }
+          const r = bodyErr(e.method, e.path, raw);
+          assert.equal(r.ok, false, `nested ${k}`);
+          assert.equal(r.status, 403, `nested ${k}`);
+          assert.match(r.error, new RegExp(`body key not allowed remotely: ${k}`), `nested ${k} caught by the deep scan`);
+        }
+      });
+      test("unknown key, wrong type, oversize value and missing required key: 403; bad JSON: 400", () => {
+        assert.match(bodyErr(e.method, e.path, { ...e.ok, sneaky: 1 }).error, /key not allowed remotely: body\.sneaky/);
+        const big = bodyErr(e.method, e.path, { ...e.ok, ...e.big });
+        assert.equal(big.ok, false);
+        assert.equal(big.status, 403);
+        const key = Object.keys(e.ok)[0];
+        assert.equal(bodyErr(e.method, e.path, { ...e.ok, [key]: { nested: true } }).status, 403);
+        for (const k of REMOTE_BODY_POLICY[e.path].require ?? []) {
+          const { [k]: _drop, ...rest } = e.ok;
+          assert.match(bodyErr(e.method, e.path, rest).error, new RegExp(`key required remotely: body\\.${k}`));
+        }
+        assert.equal(bodyErr(e.method, e.path, "[1]").status, 400);
+        assert.equal(bodyErr(e.method, e.path, "{oops").status, 400);
+      });
+      test("wrong methods are refused", () => {
+        for (const m of ["PATCH", "DELETE"]) assert.equal(decideProxyRequest(m, e.path).code, "method", m);
+      });
+    });
+  }
+
+  test("spawn config and titles can't ride inside a nested object; enums and ids are checked", () => {
+    const r = bodyErr("POST", "/__vibesquad/inbox/triage", { action: "update", cardId: "idea-1", patch: { title: "x" } });
+    assert.match(r.error, /body key not allowed remotely: title/);
+    assert.equal(bodyErr("POST", "/__vibesquad/brainstorm-restart", { reason: "start-brainstorm", topic: "t" }).status, 403);
+    assert.equal(bodyErr("POST", "/__vibesquad/brainstorm-restart", { reason: "Bad Reason!" }).status, 403);
+    assert.equal(bodyErr("POST", "/__vibesquad/log", { team: "sq", text: "t", type: "done" }).status, 403);
+    assert.equal(bodyErr("POST", "/__vibesquad/log", { team: "../x", text: "t" }).status, 403);
+    assert.equal(bodyErr("POST", "/__vibesquad/inbox/triage", { action: "merge", sourceIds: Array(101).fill("idea-1") }).status, 403);
+    assert.equal(bodyErr("PUT", "/api/teams", { teams: [{ id: "sq", lanes: [{ id: "l", order: 1e9 }] }], revision: "r" }).ok, false);
+    assert.equal(bodyErr("POST", "/__vibesquad/inbox", { text: null }).status, 403);
+  });
+
+  test("a write with no policy is refused even if an allow map opens it", () => {
+    const r = checkRemoteBody("POST", "/__vibesquad/lead-handoff", '{"agentId":"a"}');
+    assert.deepEqual(r, { ok: false, status: 403, error: "no remote body policy for /__vibesquad/lead-handoff" });
+  });
+});
+
+describe("R2-5 registry checks", () => {
+  const cur = { teams: [{ id: "sq", paths: ["C:\\Users\\Jo\\proj"], lanes: [{ id: "l1", paths: ["A"], lastProfile: "P", aliases: ["old-l1"] }, { id: "l2" }] }] };
+  const redact = (s) => redactBody(s, "C:\\Users\\Jo", "Jo");
+  const body = (teams) => ({ teams, revision: "r" });
+
+  test("teams: echoed (raw or redacted) or omitted pinned fields are forwarded as the disk values", () => {
+    const r = pinTeamsRegistry(body([{ id: "sq", paths: ["~\\proj"], lanes: [{ id: "l1", name: "N" }, { id: "l2" }] }]), cur, redact);
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.value.teams[0].paths, ["C:\\Users\\Jo\\proj"]);
+    assert.deepEqual(r.value.teams[0].lanes[0], { id: "l1", name: "N", paths: ["A"], lastProfile: "P" });
+    assert.equal("paths" in r.value.teams[0].lanes[1], false);
+    const raw = pinTeamsRegistry(body([{ id: "sq", paths: ["C:\\Users\\Jo\\proj"], lanes: [{ id: "l1", paths: ["A"], lastProfile: "P" }] }]), cur, redact);
+    assert.equal(raw.ok, true);
+  });
+  test("teams: changing paths/path/lastProfile, or setting them on a new team or lane, is 403", () => {
+    const cases = [
+      [{ id: "sq", paths: ["Other"] }, /team sq\.paths can't be changed/],
+      [{ id: "sq", path: "Other" }, /team sq\.path can't be changed/],
+      [{ id: "sq", lanes: [{ id: "l1", lastProfile: "Yolo" }] }, /lane l1\.lastProfile can't be changed/],
+      [{ id: "sq", lanes: [{ id: "l2", paths: ["X"] }] }, /lane l2\.paths can't be changed/],
+      [{ id: "sq", lanes: [{ id: "new", path: "X" }] }, /lane new\.path can't be set remotely on a new entry/],
+      [{ id: "new-team", paths: ["X"] }, /team new-team\.paths can't be set remotely/],
+    ];
+    for (const [team, re] of cases) {
+      const r = pinTeamsRegistry(body([team]), cur, redact);
+      assert.equal(r.ok, false);
+      assert.equal(r.status, 403);
+      assert.match(r.error, re);
+    }
+    assert.equal(pinTeamsRegistry(body([{ id: "new-team", lanes: [{ id: "x", name: "pin" }] }]), cur, redact).ok, true);
+  });
+  test("unreadable registry fails closed (503)", () => {
+    assert.equal(pinTeamsRegistry(body([]), null).status, 503);
+    assert.equal(pinTeamsRegistry(body([]), { echo: "" }).status, 503);
+    assert.equal(checkLaneExists({ laneId: "l1" }, null).status, 503);
+  });
+  test("lane checks: id or alias passes, unknown lane is 403, no lane passes", () => {
+    assert.equal(checkLaneExists({ laneId: "L1" }, cur).ok, true);
+    assert.equal(checkLaneExists({ lane: "old-l1" }, cur).ok, true);
+    assert.equal(checkLaneExists({ laneId: "ghost" }, cur).status, 403);
+    assert.equal(checkLaneExists({ reason: "x" }, cur).ok, true);
+  });
+});
+
+describe("R2-5 handler: reopened writes against a fake loopback server", () => {
+  let server;
+  let port;
+  const seen = [];
+  before(async () => {
+    writeFileSync(join(home, "local-token"), TOKEN);
+    server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        seen.push({ method: req.method, url: req.url, headers: req.headers, body });
+        res.setHeader("content-type", "application/json");
+        if (req.url === "/api/teams" && req.method === "GET") return res.end(JSON.stringify(REGISTRY));
+        res.end(JSON.stringify({ ok: true, echo: body }));
+      });
+    });
+    await new Promise((r) => server.listen(0, "127.0.0.1", r));
+    port = server.address().port;
+  });
+  after(() => {
+    server.closeAllConnections?.();
+    server.close();
+  });
+
+  for (const e of ENDPOINTS) {
+    test(`${e.method} ${e.path}: allowed body forwards with the token (not echoed back); refused bodies never fetch`, async () => {
+      setGate(true);
+      const h = makeVsHttpHandler({ port, home });
+      const out = await h({ method: e.method, path: e.path, body: JSON.stringify(e.ok) });
+      assert.equal(out.status, 200, out.body);
+      const last = seen.at(-1);
+      assert.equal(last.method, e.method);
+      assert.equal(last.headers["x-vibesquad-token"], TOKEN);
+      assert.ok(!JSON.stringify(out).includes(TOKEN), "token never in the response");
+      const n = seen.length;
+      await assert.rejects(h({ method: e.method, path: e.path, body: JSON.stringify({ ...e.ok, cwd: "C:/" }) }), /\[403\]/);
+      await assert.rejects(h({ method: e.method, path: e.path, body: JSON.stringify({ ...e.ok, extra: 1 }) }), /\[403\]/);
+      await assert.rejects(h({ method: "DELETE", path: e.path, body: JSON.stringify(e.ok) }), /\[405\]/);
+      await assert.rejects(h({ method: e.method, path: e.path, body: "z".repeat(REMOTE_MAX_BODY_BYTES + 1) }), /\[413\]/);
+      assert.equal(seen.length, n, "nothing reached the server");
+    });
+  }
+
+  test("registry-checked writes: unknown lane and changed paths are refused after only the registry read", async () => {
+    setGate(true);
+    const h = makeVsHttpHandler({ port, home });
+    const n = seen.length;
+    await assert.rejects(
+      h({ method: "POST", path: "/__vibesquad/brainstorm-summary", body: '{"laneId":"ghost","content":"x","revision":"r"}' }),
+      /lane ghost is not in teams\.json \[403\]/,
+    );
+    await assert.rejects(
+      h({ method: "PUT", path: "/api/teams", body: JSON.stringify({ teams: [{ id: "sq", paths: ["Elsewhere"] }], revision: "r1" }) }),
+      /team sq\.paths can't be changed remotely \[403\]/,
+    );
+    assert.deepEqual(seen.slice(n).map((r) => `${r.method} ${r.url}`), ["GET /api/teams", "GET /api/teams"]);
+    // Omitted pinned fields go out as the disk values.
+    await h({ method: "PUT", path: "/api/teams", body: JSON.stringify({ teams: [{ id: "sq", name: "S2", lanes: [{ id: "lane1" }] }], revision: "r1" }) });
+    assert.deepEqual(JSON.parse(seen.at(-1).body), { teams: [{ id: "sq", name: "S2", lanes: [{ id: "lane1", lastProfile: "P" }], paths: ["Proj"] }], revision: "r1" });
+  });
+
+  test("write budget: the 21st write in a minute is refused (429) without fetching", async () => {
+    setGate(true);
+    const h = makeVsHttpHandler({ port, home });
+    const body = JSON.stringify({ team: "sq", text: "t" });
+    for (let i = 0; i < REMOTE_BUDGET_PER_MIN.write; i++) await h({ method: "POST", path: "/__vibesquad/log", body });
+    const n = seen.length;
+    await assert.rejects(h({ method: "POST", path: "/__vibesquad/log", body }), /rate limited: 20 writes per minute.*\[429\]/);
+    assert.equal(seen.length, n);
+    const r = await h({ method: "GET", path: "/__vibesquad/log?team=sq" });
+    assert.equal(r.status, 200, "reads keep their own budget");
+  });
+
+  test("still denied: blocked paths win over any allow entry; settings and handoff POST are 405", async () => {
+    setGate(true);
+    const everything = Object.fromEntries(
+      [
+        "/__vibesquad/first-run/install-paseo",
+        "/__vibesquad/paseo/daemon",
+        "/__vibesquad/paseo/raw/x",
+        "/__vibesquad/pair/start",
+        "/__vibesquad/devices/revoke",
+        "/__vibesquad/push/subscribe",
+        "/__vibesquad/remove-team-worktrees",
+        "/__vibesquad/local-image",
+      ].map((p) => [p, ["GET", "POST"]]),
+    );
+    const h = makeVsHttpHandler({ port, home, allow: { ...REMOTE_ALLOW, ...everything } });
+    const n = seen.length;
+    for (const p of Object.keys(everything)) {
+      await assert.rejects(h({ method: "POST", path: p, body: "{}" }), /blocked remotely.*\[403\]/, p);
+      assert.equal(decideProxyRequest("POST", p).code, "blocked", p);
+    }
+    await assert.rejects(h({ method: "POST", path: "/__vibesquad/settings", body: "{}" }), /\[405\]/);
+    await assert.rejects(h({ method: "POST", path: "/__vibesquad/handoff", body: '{"team":"sq","lane":"lane1"}' }), /\[405\]/);
+    assert.equal(seen.length, n);
   });
 });
