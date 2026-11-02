@@ -1,7 +1,7 @@
 // Hub flag contract (PLAN_HUB_BUDDY block 1): src/teams.ts and its server/identity.mjs mirror agree.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
+import { buildNewSquadTeamDef } from "../src/newSquadDef.ts";
 import { isHubLane as isHubTs } from "../src/teams.ts";
 import { isHubLane as isHubMjs } from "../server/identity.mjs";
 
@@ -22,7 +22,12 @@ for (const [name, isHub] of [["teams.ts", isHubTs], ["identity.mjs", isHubMjs]])
 }
 
 test("new Squad's first lane is the hub", () => {
-  const src = readFileSync(new URL("../src/NewSquadModal.tsx", import.meta.url), "utf8");
-  const laneBlock = src.match(/const lane: PinLane = \{[\s\S]*?\};/)[0];
-  assert.match(laneBlock, /hub: true/);
+  const team = buildNewSquadTeamDef({ id: "demo", name: "Demo", folderPath: "C:/x/demo", existingTeams: [] });
+  assert.equal(team.lanes[0].hub, true);
+  assert.equal(isHubTs(team, team.lanes[0]), true);
+});
+
+test("isHubLane: a lane with no id is never the hub", () => {
+  assert.equal(isHubMjs({}, {}), false);
+  assert.equal(isHubMjs(undefined, undefined), false);
 });

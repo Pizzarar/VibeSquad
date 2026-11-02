@@ -1,5 +1,6 @@
 // PLAN_HUB_BUDDY block 3: hub boot prompt lists the Teams and threads; a Team Buddy's prompt is unchanged.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { buildBrainstormInitialPrompt, hubTeamsBlock, HUB_BOOT_RULES } from "../server/brainstorm.mjs";
 import { newPinBrief } from "../server/pin-ideas.mjs";
@@ -36,7 +37,9 @@ test("unreadable daemon list says lead unknown", () => {
 
 test("a Team Buddy's boot prompt is unchanged", () => {
   const plain = buildBrainstormInitialPrompt(base);
-  assert.equal(plain, buildBrainstormInitialPrompt({ ...base, hubTeams: "" }));
+  // Fixture: the output of master a49b24e's buildBrainstormInitialPrompt for the same input.
+  const fixture = readFileSync(new URL("./fixtures/team-buddy-boot-a49b24e.txt", import.meta.url), "utf8");
+  assert.equal(plain, fixture);
   assert.doesNotMatch(plain, /RiffBot|Unsplit threads\` in the brief|Teams in this Squad/);
 });
 

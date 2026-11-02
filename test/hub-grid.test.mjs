@@ -1,7 +1,7 @@
 // PLAN_HUB_BUDDY block 5: the hub lane stays out of the Team grid and Done shelf; its looks-done is ignored.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { gridPinsForSquad, looksDoneOffered, pinsForSquad } from "../src/pins.ts";
+import { gridPinsForSquad, looksDoneFor, pinsForSquad } from "../src/pins.ts";
 
 const agent = (id) => ({ id, status: "idle", labels: {} });
 function view() {
@@ -34,6 +34,6 @@ test("hub's vs:looks-done is ignored, a Team's is not", () => {
   const { pinned } = pinsForSquad(view());
   const hub = pinned.find((p) => p.lane.id === "hubsq");
   const team = pinned.find((p) => p.lane.id === "a");
-  assert.equal(looksDoneOffered(hub, "```\nvs:looks-done\n```"), false);
-  assert.equal(looksDoneOffered(team, "```\nvs:looks-done\n```"), true);
+  assert.equal(looksDoneFor(hub, "msg-1"), null);
+  assert.equal(looksDoneFor(team, "msg-1"), "msg-1");
 });

@@ -102,8 +102,8 @@ export function gridPinsForSquad(view: TeamView): { pinned: Pin[]; done: Pin[] }
   return { pinned: pinned.filter((p) => !isHubPin(p)), done: done.filter((p) => !isHubPin(p)) };
 }
 
-/** The `vs:looks-done` offer for a pin's message text; never offered for the hub (it is never marked done). */
-export const looksDoneOffered = (pin: Pin, text: string): boolean => !isHubPin(pin) && hasLooksDone(text);
+/** The pin's looks-done message id, or null: never offered for the hub (it is never marked done). */
+export const looksDoneFor = (pin: Pin, id: string | null): string | null => (isHubPin(pin) ? null : id);
 
 /** Every live main Buddy of the pin when there are 2+ (the duplicate warning lists them), else []. */
 export function liveBuddyDupes(pin: Pin): Member[] {
