@@ -41,7 +41,7 @@ import {
 } from "./teams";
 import { titleFor } from "./teams";
 import { AgentPanes } from "./AgentPanes";
-import { CommandPaletteHost, agentCtxItems, dateBucket, openContextMenu, openOverlay, parseUrlState, serializeUrlState, type DateBucket } from "./CommandPalette";
+import { CommandPaletteHost, agentCtxItems, dateBucket, teamCtxItems, openContextMenu, openOverlay, parseUrlState, serializeUrlState, type DateBucket } from "./CommandPalette";
 import { PaseoUsageHeaderChip } from "./PaseoSettingsSection";
 import { MobileBar, useMobileTeamView } from "./MobileBar";
 import { FocusRail, railAlerts } from "./FocusRail";
@@ -463,6 +463,18 @@ const SidebarTeam = memo(function SidebarTeam({
           {v.running > 0 && <span className="badge">{v.running}▶</span>}
         </button>
         {firstAlert && <AttentionBadge view={v} onOpen={pick} />}
+        {v.team.id !== UNASSIGNED.id && (
+          <button
+            className="tchip"
+            style={{ alignSelf: "center" }}
+            aria-label={`${v.team.name} menu`}
+            title="Team actions"
+            data-testid={`team-menu-${v.team.id}`}
+            onClick={(e) => openContextMenu(e, teamCtxItems(v))}
+          >
+            ⋯
+          </button>
+        )}
       </div>
       {expanded && !full && v.team.id !== UNASSIGNED.id && <SidebarPins view={v} onPin={onPin} onOpenAgent={pick} />}
       {expanded && full && (
