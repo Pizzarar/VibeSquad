@@ -1050,7 +1050,7 @@ export function titleFor(
       role,
       laneName: lane,
       laneId: i.laneId,
-      code: i.code,
+      code: i.code || laneCodeOf(i.laneId || lane),
       ord: role === "lead" ? i.ord || "?" : i.ord,
       topic: i.topic,
       job: role === "worker" ? i.job || "job" : i.job,
@@ -1064,8 +1064,9 @@ export function laneCodeOf(laneKey: string | undefined): string {
   return found ? (laneCodesForTeam(found.team)[found.lane.id] ?? "") : "";
 }
 
-// Title generated from labels per docs/NAMING.md. Null when required labels are missing or the agent is retired.
-export function expectedTitleFor(agent: PaseoAgent): string | null {
+// v2 (lane code) title generated from labels per docs/NAMING.md. Null when required labels are missing or the agent is retired.
+// Block 4's one-time rename uses this directly (not expectedTitleFor, which tolerates v1 titles).
+export function expectedV2TitleFor(agent: PaseoAgent): string | null {
   const l = labelsOf(agent);
   if (agent.archivedAt || agent.status === "closed" || kindOf(agent) === "old-lead") return null;
   const rawTitle = agent.title ?? "";
@@ -1090,6 +1091,27 @@ export function expectedTitleFor(agent: PaseoAgent): string | null {
     return rawTitle.replace(/\s*\(talk here[^)]*\)/gi, "").trim();
   }
   return null;
+}
+
+/** The pre-lane-code (v1) title for an agent's labels, or null. Live agents still wearing it are tolerated, not flagged. */
+export function legacyTitleFor(agent: PaseoAgent): string | null {
+  const l = labelsOf(agent);
+  const laneKey = l.lane ?? l.lead;
+  if (!laneKey) return null;
+  const LANE = (laneById(laneKey)?.lane.name ?? laneKey).toUpperCase();
+  const role = l.role ?? (kindOf(agent) === "lead" ? "lead" : kindOf(agent) === "brainstorm" ? "brainstorm" : undefined);
+  if (role === "lead") return l.ord ? clip(`★ ${LANE} ord${l.ord}`) : null;
+  if (role === "former-lead") return l.ord ? clip(`(old) ${LANE} ord${l.ord}`) : null;
+  if (role === "brainstorm") return clip(`BRAINSTORM · ${LANE}${l.topic?.trim() ? ` · ${l.topic.trim()}` : ""}`);
+  if (role === "worker") return l.job ? clip(`${LANE} · ${l.job.trim() || "job"}`) : null;
+  return null;
+}
+
+/** What the title lint expects: the v2 title, except null (no lint) while the live title is still the exact v1 one. */
+export function expectedTitleFor(agent: PaseoAgent): string | null {
+  const expected = expectedV2TitleFor(agent);
+  if (expected && agent.title === legacyTitleFor(agent)) return null;
+  return expected;
 }
 
 export function lintTitle(agent: PaseoAgent): string | null {

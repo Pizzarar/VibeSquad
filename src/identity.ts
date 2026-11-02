@@ -524,8 +524,8 @@ export function cleanLaneCode(raw: unknown): string {
  */
 export function laneCodeCandidates(lane: { id?: string; name?: string }): string[] {
   const id = String(lane?.id ?? "");
-  const reserved = RESERVED_LANE_CODES[id.toLowerCase()];
   const name = String(lane?.name ?? "").trim() || id;
+  const reserved = RESERVED_LANE_CODES[id.toLowerCase()] ?? RESERVED_LANE_CODES[name.toLowerCase()];
   const words = name.split(/[^A-Za-z0-9]+/).filter(Boolean);
   const out: string[] = [];
   const add = (c: string) => {
@@ -565,6 +565,15 @@ export function laneCodesForTeam(team: { lanes?: { id: string; name?: string; co
     used.add(c.toLowerCase());
   }
   return out;
+}
+
+/**
+ * Freeze: the Squad's lanes with a `code` on every one (stored codes kept, missing ones generated). Persist this whenever
+ * a lane is written so a later stored code can never displace an existing lane's generated code.
+ */
+export function freezeLaneCodes<L extends { id: string; name?: string; code?: string }>(lanes: L[]): L[] {
+  const codes = laneCodesForTeam({ lanes });
+  return lanes.map((l) => (cleanLaneCode(l.code) === codes[l.id] ? l : { ...l, code: codes[l.id] }));
 }
 
 /** The code for one lane (stored or generated, deduped within its Squad). Unknown lane: the undeduped generic code. */
