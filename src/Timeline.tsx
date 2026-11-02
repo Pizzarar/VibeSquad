@@ -5,6 +5,7 @@ import { REWIND_MODES, buildRewindRequest, truncateAfter, type RewindMode } from
 import { demoTimeline } from "./demo";
 import { sentImagesFor } from "./imageDrafts";
 import { openRightDockTab } from "./RightDock";
+import { BARE_PATH_RE, parseFileToken } from "./fileLinks";
 
 export class TimelineErrorBoundary extends Component<
   { children: ReactNode; fallbackLabel?: string },
@@ -195,6 +196,10 @@ export function tokenizeMarkdown(text: string): Token[] {
 
 // ─── Inline renderers ─────────────────────────────────────────────────────────
 
+function openFileTarget(t: { path: string; line: number | null; isDir: boolean }) {
+  openRightDockTab("Files", { filePath: t.isDir ? `${t.path}/` : t.path, line: t.line ?? undefined });
+}
+
 function renderInline(text: string, agentId?: string): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
   // Process: bold, inline code, links, file:line, images, plain text
@@ -211,6 +216,8 @@ function renderInline(text: string, agentId?: string): React.ReactNode[] {
     { re: /(?<![`"'(])([a-zA-Z0-9_.\-/\\]+\.[a-zA-Z]{1,6}):(\d+)(?![a-zA-Z0-9_])/g, key: "filelink" },
     // File:line (#L notation)
     { re: /(?<![`"'(])([a-zA-Z0-9_.\-/\\]+\.[a-zA-Z]{1,6})#L(\d+)(?![a-zA-Z0-9_])/g, key: "filelink2" },
+    // Bare repo path (dir/file.ext, dir/); validated by parseFileToken
+    { re: BARE_PATH_RE, key: "barepath" },
   ];
 
   // Build a combined regex
@@ -238,7 +245,16 @@ function renderInline(text: string, agentId?: string): React.ReactNode[] {
       nodes.push(<strong key={keyIdx++}>{m[5]}</strong>);
     } else if (m[6] !== undefined) {
       // inline code
-      nodes.push(<code key={keyIdx++} className="tl-icode">{m[7]}</code>);
+      const tgt = parseFileToken(m[7]);
+      nodes.push(
+        tgt ? (
+          <code key={keyIdx++} className="tl-icode tl-file-link" role="button" tabIndex={0}
+            data-testid="tl-file-link" onClick={() => openFileTarget(tgt)}
+            onKeyDown={(e) => { if (e.key === "Enter") openFileTarget(tgt); }}>{m[7]}</code>
+        ) : (
+          <code key={keyIdx++} className="tl-icode">{m[7]}</code>
+        ),
+      );
     } else if (m[8] !== undefined) {
       // link
       nodes.push(
@@ -255,7 +271,6 @@ function renderInline(text: string, agentId?: string): React.ReactNode[] {
           data-testid="tl-file-link"
           onClick={() => {
             openRightDockTab("Files", { filePath: fp, line: ln ?? undefined });
-            navigator.clipboard.writeText(fp).catch(() => {});
           }}
         >
           {m[11]}
@@ -272,11 +287,21 @@ function renderInline(text: string, agentId?: string): React.ReactNode[] {
           data-testid="tl-file-link"
           onClick={() => {
             openRightDockTab("Files", { filePath: fp, line: ln ?? undefined });
-            navigator.clipboard.writeText(fp).catch(() => {});
           }}
         >
           {m[14]}
         </button>,
+      );
+    } else if (m[17] !== undefined) {
+      // bare repo path
+      const tgt = parseFileToken(m[17]);
+      nodes.push(
+        tgt ? (
+          <button key={keyIdx++} className="tl-file-link" data-testid="tl-file-link"
+            onClick={() => openFileTarget(tgt)}>{m[17]}</button>
+        ) : (
+          <span key={keyIdx++}>{m[17]}</span>
+        ),
       );
     }
     last = m.index + m[0].length;
@@ -313,7 +338,7 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 
 // ─── Markdown renderer ────────────────────────────────────────────────────────
 
-function MarkdownRenderer({ text, agentId }: { text: string; agentId?: string }) {
+export function MarkdownRenderer({ text, agentId }: { text: string; agentId?: string }) {
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const tokens = tokenizeMarkdown(text);
 
@@ -548,7 +573,6 @@ function SummaryWithLinks({ text }: { text: string }) {
         data-testid="tl-file-link"
         onClick={() => {
           openRightDockTab("Files", { filePath: fp, line: ln ?? undefined });
-          navigator.clipboard.writeText(fp).catch(() => {});
         }}
       >
         {m[0]}

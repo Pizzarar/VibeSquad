@@ -55,7 +55,8 @@ export function RightDock({ agent }: RightDockProps) {
       if (!detail) return;
       if (detail.tab) setActiveTab(detail.tab);
       if (detail.filePath !== undefined) setTargetFile(detail.filePath);
-      if (detail.line !== undefined) setTargetLine(detail.line ?? null);
+      if (detail.filePath !== undefined) setTargetLine(detail.line ?? null);
+      else if (detail.line !== undefined) setTargetLine(detail.line);
     };
     window.addEventListener("vs:open-right-dock", onOpen);
     return () => window.removeEventListener("vs:open-right-dock", onOpen);
