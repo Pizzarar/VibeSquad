@@ -7,7 +7,7 @@ import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { client, DEMO, sendMessage } from "./paseo";
 import { openContextMenu } from "./CommandPalette";
 import { demoTimeline } from "./demo";
-import { hasLooksDone, liveBuddyDupes, LOOKS_DONE_MARKER, pinsForSquad, SEND_TO_MARKER, topicOfBrainstorm, withoutSpinOffFence, type Pin } from "./pins";
+import { hasLooksDone, gridPinsForSquad, isHubPin, liveBuddyDupes, LOOKS_DONE_MARKER, pinsForSquad, SEND_TO_MARKER, topicOfBrainstorm, withoutSpinOffFence, type Pin } from "./pins";
 import { keepPinBuddy, openBriefEditor } from "./pinActions";
 import { IdeaPlusTile, noteSendTo, SendToCard, SpinOffCard, useSendTo, useSpinOff } from "./PinIdeas";
 import { PinMenu } from "./PinMenu";
@@ -335,7 +335,8 @@ function BuddyDupeWarning({ pin, onOpenAgent }: { pin: Pin; onOpenAgent: (id: st
 const PinTile = memo(function PinTile({ pin, onPin, onOpenAgent }: { pin: Pin; onPin: (pin: Pin) => Promise<void>; onOpenAgent: (id: string) => void }) {
   const bs = pin.brainstorm;
   const lines = usePreview(bs?.agent.id ?? null);
-  const looksDoneId = useLooksDoneId(bs?.agent.id ?? null);
+  const looksDoneRaw = useLooksDoneId(bs?.agent.id ?? null);
+  const looksDoneId = isHubPin(pin) ? null : looksDoneRaw;
   const sendTo = useSendTo(bs?.agent.id ?? null);
   const spinOff = useSpinOff(bs?.agent.id ?? null);
   const paneCls = usePaneClass(bs?.agent.id ?? "");
@@ -443,7 +444,7 @@ export function PinGrid({
   onOpenAgent: (id: string) => void;
   onQuickStart: PinHandler;
 }) {
-  const { pinned, done } = pinsForSquad(view);
+  const { pinned, done } = gridPinsForSquad(view);
   const onPin = async (pin: Pin) => {
     try {
       await openPinOr(pin, onOpenAgent, onQuickStart);
