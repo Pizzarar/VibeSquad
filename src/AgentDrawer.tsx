@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { expandFolderMentions } from "./projectContext";
+import { appendContext, useCtxSources } from "./contextSources";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
 import { daemonClient, DEMO, removeLocalAgent, sendMessage, upsertLocalAgent } from "./paseo";
@@ -144,6 +145,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
 
   const imgs = useImageDraft(`${agent.id}:images`);
   const atts = useAttachments(`${agent.id}:files`);
+  const ctxSrc = useCtxSources(agent.id);
   const [paneDrop, setPaneDrop] = useState(false);
   setAgentCwd(agent.id, agent.cwd);
 
@@ -284,9 +286,10 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   const lastBehavior = useRef<ActiveTurnBehavior | null>(null);
 
   const sendWithBehavior = async (behavior: ActiveTurnBehavior) => {
-    if (!draft.trim() && !imgs.images.length && !atts.items.length) return;
+    if (!draft.trim() && !imgs.images.length && !atts.items.length && !ctxSrc.items.length) return;
     if (sendLock.current.held) return;
     const sentFiles = atts.items;
+    const sentCtx = ctxSrc.items;
     const base = draft.trim() ? draft : imgs.images.length ? "(image)" : "";
     const typed = draft;
     setSendError(null);
@@ -308,10 +311,12 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
           return up.path as string;
         });
         // Providers that ignore `@dir/` (Gemini) get a time-boxed "Folder: …" listing line appended.
-        const text = await expandFolderMentions(composed, agent.provider, async (dir) => {
+        const expanded = await expandFolderMentions(composed, agent.provider, async (dir) => {
           const res = await daemonClient.listDirectory(agent.cwd ?? "", dir);
           return res.entries.map((e) => ({ path: e.path, kind: e.kind }));
         });
+        // @git / @terminal / @chat pills expand into fenced blocks for every provider.
+        const text = appendContext(expanded, sentCtx);
         // BF-P1: Auto-restart without asking at >= restartTokens (150k) or when next turn would push it past 150k.
         if (isBs && (bsUsedTokens >= restartTokens || bsUsedTokens + Math.ceil(text.length / 3) >= restartTokens)) {
           autoRestartFired.current = agent.id;
@@ -343,6 +348,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
             await sendMessage(newId, promptToSend, undefined, { activeTurnBehavior: behavior });
           }
           atts.clear();
+          ctxSrc.clear();
           return true;
         }
 
@@ -354,6 +360,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
           await sendMessage(agent.id, text, undefined, { activeTurnBehavior: behavior });
         }
         atts.clear();
+        ctxSrc.clear();
         if (agent.status === "running" && behavior === "steer") setLastSteered(base || "(files)");
         return true;
       },
