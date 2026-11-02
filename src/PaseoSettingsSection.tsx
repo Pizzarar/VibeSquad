@@ -3,6 +3,10 @@ import { Field } from "./TeamActions";
 import { PaseoOpsPanel } from "./PaseoOpsPanel";
 import { McpPanel } from "./McpPanel";
 import { SkillsPanel } from "./SkillsPanel";
+import { listAvailableProviders, listProviderModels, listProviderModes } from "./paseoProviders";
+import { sortProviders, providerState, describeModel, type CatalogProvider, type CatalogModel, type CatalogMode } from "./paseoProvidersLogic";
+import { previewPluginUpdates, applyPluginUpdates, type PluginUpdatePreviewRow, type PluginUpdateResultRow } from "./paseoPluginUpdates";
+import { isTakeable, toggleSelection, selectedProposals, describeTarget, outcomeLabel, summarizeResults } from "./paseoPluginUpdatesLogic";
 
 export type PaseoSettingsTab =
   | "daemon"
@@ -15,7 +19,8 @@ export type PaseoSettingsTab =
   | "raw"
   | "ops"
   | "mcp"
-  | "skills";
+  | "skills"
+  | "catalog";
 
 export interface PaseoDaemonStatus {
   ok: boolean;
@@ -178,6 +183,207 @@ export function PaseoUsageHeaderChip({ onOpenSettings }: { onOpenSettings?: () =
         );
       })}
     </button>
+  );
+}
+
+/** Read-only catalog: what the daemon reports for each provider (availability, models, modes). */
+function ProviderCatalogPanel() {
+  const [rows, setRows] = useState<CatalogProvider[]>([]);
+  const [sel, setSel] = useState("");
+  const [models, setModels] = useState<CatalogModel[]>([]);
+  const [modes, setModes] = useState<CatalogMode[]>([]);
+  const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setErr("");
+    try {
+      const r = await listAvailableProviders();
+      setRows(sortProviders((r.providers ?? []) as CatalogProvider[]));
+      if (r.error) setErr(r.error);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const pick = async (provider: string) => {
+    setSel(provider);
+    setModels([]);
+    setModes([]);
+    setErr("");
+    try {
+      const [mo, md] = await Promise.all([listProviderModels(provider), listProviderModes(provider)]);
+      setModels((mo.models ?? []) as CatalogModel[]);
+      setModes((md.modes ?? []) as CatalogMode[]);
+      const e = mo.error || md.error;
+      if (e) setErr(e);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  return (
+    <div data-testid="paseo-panel-catalog" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span className="muted small">Read-only view of the providers the daemon reports.</span>
+        <button type="button" className="btn ghost small" data-testid="paseo-catalog-refresh" disabled={loading} onClick={() => void load()}>
+          {loading ? "Loading…" : "Refresh"}
+        </button>
+      </div>
+      {err && <div className="stat-alert small" data-testid="paseo-catalog-error">{err}</div>}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {rows.map((p) => {
+          const st = providerState(p);
+          return (
+            <button
+              key={p.provider}
+              type="button"
+              className={`btn small ${sel === p.provider ? "on" : "ghost"}`}
+              data-testid={`paseo-catalog-provider-${p.provider}`}
+              title={p.error ?? st.label}
+              onClick={() => void pick(p.provider)}
+            >
+              {p.provider} <span className={`pill diag ${st.tone}`}>{st.label}</span>
+            </button>
+          );
+        })}
+        {!loading && rows.length === 0 && <span className="muted small">No providers reported.</span>}
+      </div>
+      {sel && (
+        <div className="ts-team" data-testid="paseo-catalog-detail" style={{ padding: "8px 10px" }}>
+          <div className="field-label">MODELS · {sel} ({models.length})</div>
+          {models.map((m) => (
+            <div key={m.id} className="small" data-testid={`paseo-catalog-model-${m.id}`}>
+              <b>{m.label}</b> <span className="muted">({m.id})</span> <span className="muted">{describeModel(m)}</span>
+              {m.description && <div className="muted small">{m.description}</div>}
+            </div>
+          ))}
+          <div className="field-label" style={{ marginTop: 8 }}>MODES · {sel} ({modes.length})</div>
+          {modes.map((m) => (
+            <div key={m.id} className="small" data-testid={`paseo-catalog-mode-${m.id}`}>
+              <b>{m.label}</b> <span className="muted">({m.id})</span>
+              {m.description && <div className="muted small">{m.description}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Check all plugins for updates, tick the ones to take, confirm to apply. Per-plugin Update stays in the rows. */
+function PluginUpdatesPanel({ onApplied }: { onApplied: () => void }) {
+  const [previews, setPreviews] = useState<PluginUpdatePreviewRow[] | null>(null);
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [results, setResults] = useState<PluginUpdateResultRow[] | null>(null);
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const check = async () => {
+    setBusy(true);
+    setErr("");
+    setResults(null);
+    setConfirm(false);
+    try {
+      setPreviews(await previewPluginUpdates());
+      setSel(new Set());
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const apply = async () => {
+    if (!previews) return;
+    const proposals = selectedProposals(previews, sel);
+    if (proposals.length === 0) return;
+    setBusy(true);
+    setErr("");
+    try {
+      setResults(await applyPluginUpdates(proposals));
+      setConfirm(false);
+      setPreviews(null);
+      onApplied();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="ts-team" data-testid="paseo-plugin-updates" style={{ padding: "10px 12px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <div className="field-label">PLUGIN UPDATES</div>
+        <button type="button" className="btn ghost small" data-testid="paseo-plugin-updates-check" disabled={busy} onClick={() => void check()}>
+          {busy && !confirm ? "Checking…" : "Check for updates"}
+        </button>
+      </div>
+      {err && <div className="stat-alert small" data-testid="paseo-plugin-updates-error">{err}</div>}
+      {previews && previews.length === 0 && <div className="muted small">No plugins to check.</div>}
+      {previews?.map((p) => {
+        const o = outcomeLabel(p.outcome);
+        return (
+          <div key={p.id} data-testid={`paseo-plugin-update-preview-${p.id}`} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
+            <input
+              type="checkbox"
+              data-testid={`paseo-plugin-update-pick-${p.id}`}
+              disabled={!isTakeable(p)}
+              checked={sel.has(p.id)}
+              onChange={() => setSel((s) => toggleSelection(s, p.id))}
+            />
+            <b>{p.id}</b>
+            <span className={`pill diag ${o.tone}`}>{o.label}</span>
+            <span className="muted small">{describeTarget(p)}</span>
+            {p.error && <span className="muted small">{p.error}</span>}
+            {(p.links ?? []).map((l) => (
+              <a key={l} className="small" href={l} target="_blank" rel="noreferrer">
+                diff
+              </a>
+            ))}
+          </div>
+        );
+      })}
+      {previews && sel.size > 0 && !confirm && (
+        <button type="button" className="btn small" style={{ marginTop: 8 }} data-testid="paseo-plugin-updates-apply" disabled={busy} onClick={() => setConfirm(true)}>
+          Update {sel.size} selected…
+        </button>
+      )}
+      {confirm && (
+        <div className="dup-warning" data-testid="paseo-plugin-updates-confirm" style={{ marginTop: 8 }}>
+          <b>⚠ Update {sel.size} plugin(s)? Plugins run unsandboxed; the new code replaces the installed code.</b>
+          <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+            <button type="button" className="btn small bad-btn" data-testid="paseo-plugin-updates-confirm-btn" disabled={busy} onClick={() => void apply()}>
+              {busy ? "Updating…" : "Confirm update"}
+            </button>
+            <button type="button" className="btn ghost small" onClick={() => setConfirm(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {results && (
+        <div data-testid="paseo-plugin-updates-results" style={{ marginTop: 8 }}>
+          <div className="small">
+            <b>{summarizeResults(results)}</b>
+          </div>
+          {results.map((r) => (
+            <div key={r.id} className="small">
+              <span className={`pill diag ${r.outcome === "updated" ? "ok" : "hot"}`}>{r.outcome}</span> {r.id}
+              {r.error && <span className="muted"> — {r.error}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -492,6 +698,7 @@ export function PaseoSettingsSection({
     { id: "ops", label: "9. Ops" },
     { id: "mcp", label: "10. MCP" },
     { id: "skills", label: "11. Skills" },
+    { id: "catalog", label: "12. Providers catalog" },
   ];
 
   const defaultLanListen = lanIpHint ? `${lanIpHint}:6767` : "0.0.0.0:6767";
@@ -1098,6 +1305,8 @@ export function PaseoSettingsSection({
             </div>
           ))}
 
+          <PluginUpdatesPanel onApplied={() => void loadTabDetails("plugins")} />
+
           <div className="ts-team" style={{ padding: "10px 12px" }}>
             <div className="field-label">INSTALL PLUGIN (directory, git repository, or npm package)</div>
             <div className="stat-alert small" style={{ marginBottom: 6 }}>
@@ -1283,6 +1492,7 @@ export function PaseoSettingsSection({
       {tab === "ops" && <PaseoOpsPanel />}
       {tab === "mcp" && <McpPanel />}
       {tab === "skills" && <SkillsPanel />}
+      {tab === "catalog" && <ProviderCatalogPanel />}
 
       {tab === "raw" && surface && (
         <div data-testid="paseo-panel-raw" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
