@@ -964,7 +964,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const config: any = request.config ?? {};
         const env = (request as any).env as Record<string, string> | undefined;
         const rawReqLabels = ((request as any).labels ?? config?.labels) as Labels | undefined;
-        const callerLane = String(rawReqLabels?.lane ?? "").trim(); // before identity resolution rewrites it from cwd
+        const callerLane = String(rawReqLabels?.lane || rawReqLabels?.lead || "").trim(); // legacy `lead` label = lane; // before identity resolution rewrites it from cwd
         const reqLabels: Labels = { ...(rawReqLabels ?? {}) };
         const rawRole = (reqLabels.role || config?.role || env?.VS_ROLE || "").trim().toLowerCase();
         const title: string = config?.title ?? (request as any).title ?? (request as any).name ?? "";
