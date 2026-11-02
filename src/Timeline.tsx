@@ -10,6 +10,7 @@ import { listTimelinePrompts, searchTimeline, type TimelinePrompt } from "./pase
 import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, matchesFilter, localPrompts, localSearch, sortedHits, stepIndex, type SearchLocation, type TimelineFilter } from "./timelineFilter";
 import { BARE_PATH_RE, parseFileToken } from "./fileLinks";
 import { toolStartsExpanded, usePref } from "./prefs";
+import { getPanes } from "./panes";
 import { Spinner, Stamp, TimelineSkeleton, useDelayedBusy } from "./QuickWinsUi";
 
 export class TimelineErrorBoundary extends Component<
@@ -1072,6 +1073,21 @@ export function Timeline({
     window.addEventListener("vs:timeline-search", on);
     return () => window.removeEventListener("vs:timeline-search", on);
   }, [agentId]);
+  // Ctrl+F opens (or refocuses) the search bar of the transcript in the active, visible pane.
+  useEffect(() => {
+    const onFind = (ev: KeyboardEvent) => {
+      if (!(ev.ctrlKey || ev.metaKey) || ev.shiftKey || ev.altKey || ev.key.toLowerCase() !== "f") return;
+      const el = timelineRef.current;
+      if (!el || !el.offsetParent) return;
+      const slot = el.closest(".pane-slot");
+      if (slot && !slot.classList.contains(`pane-${getPanes().activePane}`)) return;
+      ev.preventDefault();
+      setBarOpen(true);
+      el.querySelector<HTMLInputElement>('[data-testid="tl-search-input"]')?.select();
+    };
+    window.addEventListener("keydown", onFind);
+    return () => window.removeEventListener("keydown", onFind);
+  }, []);
 
   const jumpToSeq = (seq: number) => {
     curSeq.current = seq; // advance even when the target isn't loaded, so prompt stepping can't stall
