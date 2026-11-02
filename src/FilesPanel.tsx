@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { FileExplorerDirectoryPayload } from "@getpaseo/client/internal/daemon-client";
 import { daemonClient, DEMO } from "./paseo";
+import { MarkdownRenderer } from "./Timeline";
 
 type DirEntry = FileExplorerDirectoryPayload["entries"][number];
 
@@ -60,6 +61,10 @@ export function FilesPanel({
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState("");
   const [loading, setLoading] = useState(false);
+  const [notFound, setNotFound] = useState(false);
+  const [sourceView, setSourceView] = useState(false);
+  const [revealDir, setRevealDir] = useState<string | null>(null);
+  const treeRef = useRef<HTMLDivElement | null>(null);
   const lineRefs = useRef<Map<number, HTMLElement>>(new Map());
   const unsubscribeRef = useRef<(() => void) | null>(null);
 
@@ -90,7 +95,9 @@ export function FilesPanel({
   // Auto-open targetFile
   useEffect(() => {
     if (!targetFile) return;
-    openFileNode(targetFile);
+    const clean = targetFile.replace(/\\/g, "/").replace(/^(\.\/)+/, "");
+    if (clean.endsWith("/")) void revealFolder(clean.replace(/\/+$/, ""));
+    else openFileNode(clean);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetFile]);
 
@@ -117,6 +124,31 @@ export function FilesPanel({
     [cwd],
   );
 
+  // Expand every ancestor of a folder (loading each level in turn), then scroll it into view.
+  const revealFolder = useCallback(
+    async (dir: string) => {
+      const parts = dir.split("/").filter(Boolean);
+      let acc = "";
+      for (const part of parts) {
+        acc = acc ? `${acc}/${part}` : part;
+        setExpanded((prev) => new Set([...prev, acc]));
+        await loadDir(acc);
+      }
+      setRevealDir(dir);
+    },
+    [loadDir],
+  );
+
+  useEffect(() => {
+    if (!revealDir) return;
+    const rows = treeRef.current?.querySelectorAll<HTMLElement>("[data-path]");
+    const el = Array.from(rows ?? []).find((r) => r.dataset.path === revealDir);
+    if (el) {
+      el.scrollIntoView({ block: "center" });
+      setRevealDir(null);
+    }
+  }, [revealDir, tree]);
+
   const openFileNode = useCallback(
     async (path: string) => {
       if (unsubscribeRef.current) {
@@ -126,6 +158,8 @@ export function FilesPanel({
       setOpenFile(path);
       setEditMode(false);
       setSaveErr("");
+      setNotFound(false);
+      setSourceView(false);
       if (DEMO) {
         setFileContent(`// ${path}\n// DEMO mode — live content unavailable\n`);
         setFileModifiedAt(new Date().toISOString());
@@ -142,7 +176,8 @@ export function FilesPanel({
         const sub = daemonClient.observeFile({ cwd, path });
         unsubscribeRef.current = () => { sub.release().catch(() => {}); };
       } catch {
-        setFileContent("// Could not read file");
+        setFileContent("");
+        setNotFound(true);
       }
     },
     [cwd],
@@ -192,9 +227,11 @@ export function FilesPanel({
     }
   };
 
+  const isMd = !!openFile && /\.(md|markdown)$/i.test(openFile);
+
   return (
     <div className="files-panel" data-testid="files-panel">
-      <div className="files-tree">
+      <div className="files-tree" ref={treeRef}>
         {loading && <div className="muted small">Loading…</div>}
         {renderNodes(tree, expanded, toggleDir, openFileNode, openFile)}
       </div>
@@ -202,7 +239,16 @@ export function FilesPanel({
         <div className="files-viewer">
           <div className="files-viewer-header">
             <span className="muted small">{openFile}</span>
-            {!editMode && (
+            {isMd && !notFound && !editMode && (
+              <button
+                className="btn ghost small"
+                data-testid="files-source-btn"
+                onClick={() => setSourceView((v) => !v)}
+              >
+                {sourceView ? "Rendered" : "Source"}
+              </button>
+            )}
+            {!editMode && !notFound && (
               <button
                 className="btn ghost small"
                 data-testid="files-edit-btn"
@@ -239,6 +285,12 @@ export function FilesPanel({
               onChange={(e) => setEditValue(e.target.value)}
               spellCheck={false}
             />
+          ) : notFound ? (
+            <div className="muted small" data-testid="files-not-found">File not found: {openFile}</div>
+          ) : isMd && !sourceView ? (
+            <div className="files-md" data-testid="files-md-view">
+              <MarkdownRenderer text={fileContent} agentId={agent.id} />
+            </div>
           ) : (
             <div className="files-code" data-testid="files-code-view">
               {fileContent.split("\n").map((line, i) => {
@@ -290,6 +342,7 @@ function renderNodes(
           <button
             className={`files-tree-entry dir${expanded.has(n.path) ? " open" : ""}`}
             data-testid="files-dir-row"
+            data-path={n.path}
             onClick={() => onToggle(n.path)}
           >
             <span className="files-icon">{expanded.has(n.path) ? "▾" : "▸"}</span>
