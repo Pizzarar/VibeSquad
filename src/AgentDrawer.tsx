@@ -275,6 +275,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   const draftRef = useRef(draft);
   draftRef.current = draft;
   const [sendError, setSendError] = useState<string | null>(null);
+  const lastBehavior = useRef<ActiveTurnBehavior | null>(null);
 
   const sendWithBehavior = async (behavior: ActiveTurnBehavior) => {
     if (!draft.trim() && !imgs.images.length) return;
@@ -282,6 +283,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
     const text = draft.trim() ? draft : "(image)";
     const typed = draft;
     setSendError(null);
+    lastBehavior.current = behavior;
 
     await guardedSend({
       lock: sendLock.current,
@@ -522,6 +524,9 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
       {sendError && (
         <div className="send-error" role="alert" data-testid="send-error">
           {sendError}
+          <button className="btn small" data-testid="send-retry" style={{ marginLeft: 8 }} onClick={() => lastBehavior.current && void sendWithBehavior(lastBehavior.current)}>
+            Retry
+          </button>
         </div>
       )}
 

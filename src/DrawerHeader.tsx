@@ -560,6 +560,16 @@ export function DrawerHeader({
   const [modeBusy, setModeBusy] = useState(false);
   const [modelValue, setModelValue] = useState(agent.model ?? "");
   const modelSubmittedRef = useRef<string | null>(null);
+  const [modelError, setModelError] = useState("");
+  const submitModel = (next: string) => {
+    modelSubmittedRef.current = next;
+    setModelError("");
+    setModelHelper(agent, next).catch((e) => {
+      modelSubmittedRef.current = null;
+      setModelValue(agent.model ?? "");
+      setModelError(`Model change failed: ${e instanceof Error ? e.message : e}`);
+    });
+  };
   const [thinkingBusy, setThinkingBusy] = useState(false);
   const [reloadBusy, setReloadBusy] = useState(false);
   const [reloadError, setReloadError] = useState("");
@@ -669,16 +679,14 @@ export function DrawerHeader({
               onBlur={(e) => {
                 const next = e.target.value.trim();
                 if (next && next !== (agent.model ?? "") && next !== modelSubmittedRef.current) {
-                  modelSubmittedRef.current = next;
-                  setModelHelper(agent, next).catch(() => {});
+                  submitModel(next);
                 }
               }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   const next = (e.target as HTMLInputElement).value.trim();
                   if (next && next !== (agent.model ?? "") && next !== modelSubmittedRef.current) {
-                    modelSubmittedRef.current = next;
-                    setModelHelper(agent, next).catch(() => {});
+                    submitModel(next);
                   }
                 }
               }}
@@ -741,6 +749,7 @@ export function DrawerHeader({
           >
             {reloadBusy ? "…" : "↻ Reload"}
           </button>
+          {modelError && <span className="small drawer-reload-error" role="alert" style={{ color: "var(--bad, #e5484d)" }}>{modelError}</span>}
           {reloadError && <span className="small muted drawer-reload-error">{reloadError}</span>}
           <AgentActions agent={agent} archive />
           <button

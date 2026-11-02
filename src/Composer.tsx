@@ -163,7 +163,7 @@ export function Composer({
   const taRef = useRef<HTMLTextAreaElement>(null);
   const [caret, setCaret] = useState(0);
   const [cmds, setCmds] = useState<string[]>(FALLBACK_COMMANDS);
-  const [files, setFiles] = useState<string[]>(DEMO_MENTION_FILES);
+  const [files, setFiles] = useState<string[]>(DEMO ? DEMO_MENTION_FILES : []);
   const [sel, setSel] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const [staged, setStaged] = useState<StagedFile[]>([]);
@@ -230,9 +230,9 @@ export function Composer({
           const dir = await dc.listDirectory?.(agent.cwd, "");
           paths = (dir?.entries ?? []).map((e: { path: string }) => e.path);
         }
-        if (!cancelled && paths.length) setFiles(paths.map((x) => relativizePath(x, agent.cwd ?? "")));
+        if (!cancelled) setFiles(paths.map((x) => relativizePath(x, agent.cwd ?? "")));
       } catch {
-        /* keep previous list */
+        if (!cancelled) setFiles([]);
       }
     })();
     return () => {

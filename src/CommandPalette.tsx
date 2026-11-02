@@ -356,12 +356,22 @@ export function CommandPaletteHost(props: {
 
   const shown = useMemo(() => filterPalette(items, q).slice(0, 60), [items, q]);
 
+  /** The jumped-to agent drawer mounts after the palette closes; retry briefly until its composer exists. */
+  const focusComposer = (tries = 20) => {
+    const ta = document.querySelector<HTMLTextAreaElement>(".composer-row textarea");
+    if (ta) ta.focus();
+    else if (tries > 0) setTimeout(() => focusComposer(tries - 1), 50);
+  };
+
   const run = (it: PaletteItem) => {
     setMode(null);
     const id = it.id.slice(it.id.indexOf(":") + 1);
     if (it.kind === "agent") {
       const m = all.find((x) => x.agent.id === id);
-      if (m) props.onAgent(m);
+      if (m) {
+        props.onAgent(m);
+        focusComposer();
+      }
     } else if (it.kind === "team") props.onTeam(id);
     else if (id === "new") props.actions.newAgent();
     else if (id === "search") setMode("search");
@@ -385,6 +395,7 @@ export function CommandPaletteHost(props: {
           onPick={(m) => {
             setMode(null);
             props.onAgent(m);
+            focusComposer();
           }}
           onClose={() => setMode(null)}
         />
