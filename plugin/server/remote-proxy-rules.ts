@@ -5,17 +5,15 @@
 // Deny by default. A path must normalise cleanly AND be listed in REMOTE_ALLOW; REMOTE_BLOCKED is checked
 // first and wins even if someone later adds an overlapping ALLOW entry.
 //
-// GET-ONLY UNTIL SECURITY S4 (hub lane: sanitizeBody on every handler + cwd validation). The R2-1 security
-// cross-review showed the write handlers let a link-holder spawn auto-mode agents in a chosen cwd
-// (inbox/open-topic, lead-handoff), inject DI keys (baseHome, profilesPath) on the inbox handlers, write
-// persistent prompt injection into briefs (brainstorm-summary POST) and mass-archive agents.
-// Once S4 lands, reopen by copying entries from REMOTE_WRITES_AFTER_S4 into REMOTE_ALLOW, each with a
-// per-endpoint body-key allowlist:
-//   allowed body keys: cardId, agentId, laneId, teamId, text
-//   never allowed:     cwd, provider, model, profile, profilesPath, baseHome, labels, title,
-//                      pendingPrompt, summaryUpdate (also skipDaemon, daemonClient, forceNew)
-// /__vibesquad/handoff POST stays closed for good: it blocks the VS server event loop for up to 60 s
-// (execFileSync), and the proxy timeout can't cancel it.
+// GET-ONLY UNTIL REOPENED PER ENDPOINT. The R2-1 security cross-review showed the write handlers let a
+// link-holder spawn auto-mode agents in a chosen cwd (inbox/open-topic, lead-handoff), inject DI keys
+// (baseHome, profilesPath) on the inbox handlers, write persistent prompt injection into briefs
+// (brainstorm-summary POST) and mass-archive agents. Security S4 fixed those server-side (sanitizeBody on
+// every handler, cwd derived server-side, real-lead lookup, archive binding + budget, brief revision).
+// Reopen by copying an entry from REMOTE_WRITES_AFTER_S4 into REMOTE_ALLOW; its REMOTE_BODY_POLICY entry is
+// then enforced by checkRemoteBody (a write without a policy is refused).
+// /__vibesquad/handoff POST stays closed: it runs `vs handoff` for up to 60 s (async and one at a time since
+// S4, but still a heavy CLI run the proxy timeout can't cancel).
 
 export const REMOTE_MAX_BODY_BYTES = 512 * 1024; // request and response bodies; relay frames allow 32 MiB
 export const REMOTE_TIMEOUT_MS = 10_000;
@@ -68,6 +66,59 @@ export const REMOTE_WRITES_AFTER_S4: AllowMap = {
   "/__vibesquad/inbox/park-topic": ["POST"],
   "/__vibesquad/inbox/handoff-topic": ["POST"],
 };
+
+/**
+ * Body keys each write endpoint accepts remotely (security S4). Deny by default: a write to a path with no
+ * entry here is refused, and so is any key outside `allow` or inside REMOTE_FORBIDDEN_BODY_KEYS.
+ * `require` keys must be present (the revision keeps a remote write from blindly overwriting newer edits).
+ */
+export type BodyPolicy = { allow: readonly string[]; require?: readonly string[] };
+export const REMOTE_BODY_POLICY: Readonly<Record<string, BodyPolicy>> = {
+  "/api/teams": { allow: ["teams", "revision", "leadFlagTokens", "leadAutoHandoffTokens", "leadHardCapTokens", "brainstormWarnTokens", "brainstormRestartTokens"], require: ["teams", "revision"] },
+  "/__vibesquad/teams": { allow: ["teams", "revision", "leadFlagTokens", "leadAutoHandoffTokens", "leadHardCapTokens", "brainstormWarnTokens", "brainstormRestartTokens"], require: ["teams", "revision"] },
+  "/__vibesquad/log": { allow: ["team", "lane", "type", "text", "refs"], require: ["team", "text"] },
+  "/__vibesquad/vs-log": { allow: ["teamId", "team", "laneId", "lane", "type", "text", "refs"], require: ["text"] },
+  "/__vibesquad/brainstorm-summary": { allow: ["laneId", "lane", "content", "revision"], require: ["content", "revision"] },
+  "/__vibesquad/brainstorm-restart": { allow: ["agentId", "teamId", "laneId", "laneName", "reason", "usedTokens", "topic", "mode"], require: ["reason"] },
+  "/__vibesquad/lead-handoff": { allow: ["agentId", "trigger", "usedTokens"], require: ["agentId"] },
+  "/__vibesquad/lead-handoff/confirm": { allow: ["agentId", "successorId", "confirmSuccessorId"] },
+  "/__vibesquad/inbox": { allow: ["text", "ideas", "splitDump", "laneId", "teamId", "defaultLaneId"] },
+  "/__vibesquad/inbox/triage": { allow: ["action", "cardId", "targetId", "sourceIds", "sourceId", "laneId", "lane", "teamId", "scope", "patch", "archive"], require: ["action"] },
+  "/__vibesquad/inbox/open-topic": { allow: ["cardId"], require: ["cardId"] },
+  "/__vibesquad/inbox/park-topic": { allow: ["cardId", "agentId", "summaryNote"], require: ["cardId"] },
+  "/__vibesquad/inbox/handoff-topic": { allow: ["cardId", "agentId", "planNote", "usedTokens"], require: ["cardId"] },
+};
+
+/** Never accepted in a remote body, whatever a policy says: spawn config, DI hooks, prompt and brief text. */
+export const REMOTE_FORBIDDEN_BODY_KEYS: readonly string[] = [
+  "cwd", "provider", "model", "profile", "profilesPath", "baseHome", "labels", "title", "pendingPrompt", "summaryUpdate",
+  "skipDaemon", "daemonClient", "clientFactory", "forceNew", "oldAgent", "oldLead", "agents", "execSpawn", "teamsFilePath",
+  "cooldownMs", "emptyRetryMs", "backstopDelayMs", "__proto__", "constructor", "prototype",
+];
+
+/** Checks a remote write body against its endpoint's policy. GETs never forward a body, so they pass. */
+export function checkRemoteBody(method: RemoteMethod, pathname: string, body: string | undefined): { ok: true } | { ok: false; error: string } {
+  if (method === "GET") return { ok: true };
+  const policy = Object.hasOwn(REMOTE_BODY_POLICY, pathname) ? REMOTE_BODY_POLICY[pathname] : undefined;
+  if (!policy) return { ok: false, error: `no remote body policy for ${pathname}` };
+  let parsed: unknown = {};
+  if (body !== undefined && body.trim() !== "") {
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      return { ok: false, error: "body must be a JSON object" };
+    }
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { ok: false, error: "body must be a JSON object" };
+  const keys = Object.keys(parsed);
+  const forbidden = keys.find((k) => REMOTE_FORBIDDEN_BODY_KEYS.includes(k));
+  if (forbidden) return { ok: false, error: `body key not allowed remotely: ${forbidden}` };
+  const unknown = keys.find((k) => !policy.allow.includes(k));
+  if (unknown) return { ok: false, error: `body key not allowed remotely on ${pathname}: ${unknown}` };
+  const missing = (policy.require ?? []).find((k) => !keys.includes(k));
+  if (missing) return { ok: false, error: `body key required remotely on ${pathname}: ${missing}` };
+  return { ok: true };
+}
 
 /** Never proxied, whatever ALLOW says. Entries ending in "*" are prefixes. */
 export const REMOTE_BLOCKED: readonly string[] = [

@@ -179,6 +179,7 @@ test("3. Spawning each role (lead, brainstorm, worker, restart, topic) matches P
     await performBrainstormRestart(
       {
         agentId: "old-bs-1",
+        oldAgent: { id: "old-bs-1", labels: { role: "brainstorm" } }, // S4: only a known Buddy restarts
         teamId: "vibesquad",
         laneId: "vibesquad",
         profile: "Brainstorm - Gemini",
@@ -310,6 +311,7 @@ test("5. Editing a profile in ~/.vibesquad/profiles.json changes the next spawn 
     await performBrainstormRestart(
       {
         agentId: "bs-prev",
+        oldAgent: { id: "bs-prev", labels: { role: "brainstorm" } }, // S4: only a known Buddy restarts
         teamId: "vibesquad",
         laneId: "vibesquad",
         profile: "Brainstorm - Claude",

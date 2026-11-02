@@ -38,6 +38,7 @@ import {
 } from "@vibesquad/server/identity.mjs";
 import { refreshWhosHere } from "@vibesquad/server/whos-here.mjs";
 import { writeBriefFile } from "@vibesquad/server/brief-write.mjs";
+import { defangPromptFences } from "@vibesquad/server/write-guards.mjs";
 import { detachLiveChildren } from "@vibesquad/server/detach-children.mjs";
 import { briefRootFor } from "@vibesquad/server/brief-path.mjs";
 import { deriveRole } from "@vibesquad/server/profiles.mjs";
@@ -598,7 +599,7 @@ export function laneBriefBlock(root: string, lane: string): string {
   return [
     `Lane brief for \`${lane}\`: read it before anything else; it is the Buddy handoff.`,
     briefBeginMarker(lane),
-    text.slice(0, MAX_BRIEF_CHARS),
+    defangPromptFences(text.slice(0, MAX_BRIEF_CHARS)),
     `--- END docs/brainstorm/${lane}.md ---`,
   ].join("\n");
 }

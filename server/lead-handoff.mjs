@@ -15,6 +15,7 @@ export { listDaemonAgents };
 import { LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE, readJsonFileWithBom } from "./user-settings.mjs";
 import { findProfile, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
+import { defangPromptFences } from "./write-guards.mjs";
 
 // import.meta.dirname is undefined when bundled into the Paseo plugin; fall back like plugin/index.server.ts.
 const REPO_ROOT = resolve(process.env.VIBESQUAD_ROOT || (typeof import.meta.dirname === "string" ? join(import.meta.dirname, "..") : join(homedir(), "projects", "VibeSquad")));
@@ -381,11 +382,11 @@ export function buildSuccessorPrompt({
     ...workerLines,
     "",
     `--- BEGIN HANDOFF PACKET (${packetPath}) ---`,
-    String(packetContent ?? "").trim(),
+    defangPromptFences(String(packetContent ?? "").trim()),
     `--- END HANDOFF PACKET ---`,
     "",
     `--- BEGIN BRAINSTORM SUMMARY (${summaryPath}) ---`,
-    String(summaryContent ?? "").trim(),
+    defangPromptFences(String(summaryContent ?? "").trim()),
     `--- END BRAINSTORM SUMMARY ---`,
     "",
     TAKEOVER_CONFIRM_INSTRUCTION,
@@ -972,7 +973,7 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
       connectMs = Date.now() - connectT0;
     }
 
-    const coordinator = createLeadHandoffCoordinator({
+    const deps = {
       connectMs,
       rootDir,
       baseHome: body.baseHome,
@@ -1020,13 +1021,19 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
           await client.deleteHeartbeat(agentId).catch(() => {});
         }
       },
-    });
+    };
+    const coordinator = createLeadHandoffCoordinator(deps);
 
     if (body.action === "confirm" || body.confirmSuccessorId) {
       return await coordinator.confirmTakeover(body.confirmSuccessorId || body.successorId || body.agentId);
     }
 
+    // In-process callers may pass oldLead; HTTP callers can't (sanitizeBody strips it and `agents`), so the
+    // lead is a live role=lead agent from the daemon, by agentId or by lane. Never synthesized from the body.
     let lead = body.oldLead || null;
+    if (!lead && body.agentId != null && !/^[A-Za-z0-9_-]{1,64}$/.test(String(body.agentId))) {
+      throw new Error("lead-handoff: bad agentId");
+    }
     if (!lead && body.agentId) {
       if (Array.isArray(body.agents)) {
         lead = body.agents.find((a) => (a?.agent ?? a)?.id === body.agentId) ?? null;
@@ -1060,29 +1067,8 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
         }
       }
     }
-    if (!lead) {
-      const fallbackLane = String(body.laneId || body.lane || body.team || "vibesquad").trim();
-      const fallbackTeam = String(body.teamId || body.team || "vibesquad").trim();
-      const fallbackOrd = String(body.ord || "1");
-      const fallbackTitles = leadTitles({
-        laneId: fallbackLane,
-        laneName: fallbackLane,
-        nextOrd: Number(fallbackOrd) || 1,
-        oldOrd: Number(fallbackOrd) || 1,
-        oldLead: { labels: { job: body.job } },
-        job: body.job,
-        rootDir,
-      });
-      lead = {
-        id: body.agentId || "lead-1",
-        title: body.title || fallbackTitles.newTitle,
-        provider: body.provider || "claude",
-        model: body.model || "claude-opus-5-5",
-        cwd: body.cwd || rootDir,
-        status: body.status || "idle",
-        labels: body.labels || { team: fallbackTeam, lane: fallbackLane, role: "lead", ord: fallbackOrd, ...(body.job ? { job: body.job } : {}) },
-      };
-    }
+    if (!lead || !lead.id) throw new Error(`lead agent not found: ${body.agentId || body.laneId || body.lane || "vibesquad"}`);
+    if (!body.oldLead && effectiveAgentRole(lead) !== "lead") throw new Error(`not a lead: ${lead.id}`);
 
     const handoffPromise =
       trigger === "self"

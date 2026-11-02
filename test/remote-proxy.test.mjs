@@ -389,9 +389,10 @@ describe("handler against a fake loopback VS server", () => {
 
   test("writes (injected allow) forward the body as JSON with the S3 token and pass through the status", async () => {
     setGate(true);
-    const out = await handler({ allow: WRITE_ALLOW })({ method: "put", path: "/api/teams", body: '{"a":1}' });
+    const sent = '{"teams":[],"revision":"r1"}';
+    const out = await handler({ allow: WRITE_ALLOW })({ method: "put", path: "/api/teams", body: sent });
     assert.equal(out.status, 409);
-    assert.deepEqual(JSON.parse(out.body), { echo: '{"a":1}' });
+    assert.deepEqual(JSON.parse(out.body), { echo: sent });
     assert.equal(seen.at(-1).method, "PUT");
     assert.equal(seen.at(-1).headers["content-type"], "application/json");
     assert.equal(seen.at(-1).headers["x-vibesquad-token"], TOKEN);
@@ -524,7 +525,7 @@ describe("against the real VS middleware with S3", () => {
       assert.equal(gated.status, 403);
       // The token file now exists (the server created it on first use); a write carries it and gets past
       // the owner gate (400 from the handler's own body check, not 403 read-only).
-      const w = await vs({ method: "PUT", path: "/api/teams", body: "{}" });
+      const w = await vs({ method: "PUT", path: "/api/teams", body: '{"teams":[],"revision":"stale"}' });
       assert.notEqual(w.status, 403, w.body);
     } finally {
       srv.closeAllConnections?.();

@@ -7,6 +7,7 @@ import { effectiveAgentRole, findLaneInRegistry, formatDisplayTitle, isHubLane, 
 import { findProfileOrFallback, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
 import { briefRootFor, laneWorkingDir } from "./brief-path.mjs";
+import { defangPromptFences } from "./write-guards.mjs";
 import { detachLiveChildrenViaClient, listDaemonAgents } from "./detach-children.mjs";
 import { BRIEF_HISTORY_KEEP, BRIEF_SHRINK_FROM, BRIEF_SHRINK_TO, backupBrief, writeBriefFile } from "./brief-write.mjs";
 import { liveInFlightBlock } from "./in-flight.mjs";
@@ -237,7 +238,7 @@ export function hubTeamsBlock({ team, agents }) {
 export function buildBrainstormInitialPrompt({ laneId, laneUpper, buddyName, summaryContent, latestPlan, pendingPrompt, inFlight, vibeMode = false, hubTeams = "", autoRetire = false }) {
   const tail =
     pendingPrompt && String(pendingPrompt).trim()
-      ? `Pending message from the user to answer now:\n${String(pendingPrompt).trim()}`
+      ? `Pending message from the user to answer now:\n${defangPromptFences(String(pendingPrompt).trim())}`
       : autoRetire
         ? `Summary loaded from docs/brainstorm/${laneId}.md. Keep this first turn small: read the brief above, then wait for the user.`
         : `Summary loaded from docs/brainstorm/${laneId}.md. Work the top Open item now: reply with your take or the next question on it, in a few short sentences. Ask the user only if you are blocked. Do not just confirm you are ready.`;
@@ -256,7 +257,7 @@ export function buildBrainstormInitialPrompt({ laneId, laneUpper, buddyName, sum
     `- Latest plan file: \`${latestPlan}\``,
     "",
     `--- BEGIN docs/brainstorm/${laneId}.md ---`,
-    summaryContent.trim(),
+    defangPromptFences(summaryContent.trim()),
     `--- END docs/brainstorm/${laneId}.md ---`,
     "",
     ...(inFlight ? [inFlight, ""] : []),
@@ -439,6 +440,11 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
     }
 
     const oldLabels = { ...(oldAgent?.labels ?? {}) };
+    // Only known Buddies restart: a lead, worker, unlabelled or unknown id would be retired and archived
+    // (S4 mass-archive guard), so anything else fails closed.
+    if (agentId !== "start-brainstorm" && !(oldAgent && ["brainstorm", "former-brainstorm"].includes(oldLabels.role))) {
+      throw new Error(`not a brainstorm agent: ${agentId}`);
+    }
     const laneHint = body.laneId || body.lane || oldLabels.lane || oldLabels.lead || "vibesquad";
     const resolved = laneDisplayName(laneHint, rootDir);
     const laneId = safeSegment(body.laneId || body.lane || resolved.laneId || "vibesquad");
