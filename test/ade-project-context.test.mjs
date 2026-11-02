@@ -139,7 +139,7 @@ test("wiring: Project tab in RightDock, Composer time-boxes the @ listing, Agent
   assert.match(dock, /"Changes", "Files", "Terminal", "Scripts", "Project"/);
   assert.match(dock, /<ProjectPanel agent=\{agent\} \/>/);
   const comp = src("Composer.tsx");
-  assert.match(comp, /withTimeout\(/);
+  assert.match(comp, /resolveMentionEntries\(/);
   assert.match(comp, /includeDirectories: true/);
   assert.match(comp, /composer-mention-failed/);
   assert.match(src("AgentDrawer.tsx"), /expandFolderMentions\(composed, agent\.provider/);
@@ -147,4 +147,29 @@ test("wiring: Project tab in RightDock, Composer time-boxes the @ listing, Agent
   assert.match(panel, /openRightDockTab\("Files", \{ filePath: f\.path \}\)/);
   assert.match(panel, /Create AGENTS\.md/);
   assert.match(panel, /project-panel-empty/);
+});
+
+test("resolveMentionEntries: one shared deadline, failed flag, hung listing evicted", async () => {
+  const hang = () => new Promise(() => {});
+  const e = [{ path: "a", kind: "file" }];
+  // listing hangs after suggest returns [] fast: total wait stays near one deadline, flag set, key evicted
+  let evicted = 0;
+  const t0 = Date.now();
+  const r = await C.resolveMentionEntries(Promise.resolve([]), hang(), 60, () => evicted++);
+  assert.ok(Date.now() - t0 < 120);
+  assert.deepEqual(r, { value: [], fromListing: true, failed: true });
+  assert.equal(evicted, 1);
+  // suggest slow + listing hangs: still one deadline, not two
+  const t1 = Date.now();
+  const slow = await C.resolveMentionEntries(new Promise((res) => setTimeout(() => res([]), 40)), hang(), 60, () => evicted++);
+  assert.ok(Date.now() - t1 < 110);
+  assert.equal(slow.failed, true);
+  // listing rejects after suggest [] -> failed, and evicted
+  const rej = await C.resolveMentionEntries(Promise.resolve([]), Promise.reject(new Error("x")), 60, () => evicted++);
+  assert.equal(rej.failed, true);
+  assert.equal(evicted, 3);
+  // good listing, suggestions hit, and empty-but-healthy cases are not failures
+  assert.deepEqual(await C.resolveMentionEntries(Promise.resolve([]), Promise.resolve(e), 60), { value: e, fromListing: true, failed: false });
+  assert.equal((await C.resolveMentionEntries(Promise.resolve(e), hang(), 60)).failed, false);
+  assert.equal((await C.resolveMentionEntries(Promise.resolve([]), Promise.resolve([]), 60)).failed, false);
 });
