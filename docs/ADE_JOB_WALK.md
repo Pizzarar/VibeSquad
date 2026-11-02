@@ -1,6 +1,6 @@
 # ADE job walk: acceptance test
 
-A repeatable, read-only walk through 41 everyday dev tasks in the live VibeSquad UI. It is the acceptance test for every ADE batch. Re-run it after each batch, record the score, and update the "Result" column.
+A repeatable, read-only walk through 64+ everyday dev tasks (41 job tasks + v2 "feels like an app" basics from row 42) in the live VibeSquad UI. It is the acceptance test for every ADE batch. Re-run it after each batch, record the score, and update the "Result" column.
 
 **Baseline (2026-11-01, v0.1.1, 1600×1000):** **21 / 41** completable in-app. Only 3 are clean; 20 are impossible.
 Source audit: `docs/audits/basics-gap-2026-11.md` (local, gitignored). The gap IDs below (B1–B7 and section names) refer to it.
@@ -16,7 +16,7 @@ Source audit: `docs/audits/basics-gap-2026-11.md` (local, gitignored). The gap I
    - **control-present**: the control exists, but the action is a mutation that wasn't executed.
    - **impossible**: you must leave VibeSquad (Paseo app, terminal, editor) or it can't be done at all.
 5. If the UI looks like a feature is missing, grep `src/` before marking it impossible. A feature that exists but can't be found is **painful**, with a note saying it can't be discovered.
-6. **Score** = (clean + painful + control-present) / 41. Report it as `N/41 (clean C, painful P, control-present K, impossible I)` with a diff against the previous run.
+6. **Score** = (clean + painful + control-present) / total rows (41 before v2; 64+ from v2). Report it as `N/M (clean C, painful P, control-present K, impossible I)` with a diff against the previous run.
 7. Update this file's Result column and the run log at the bottom, and commit.
 
 ## Tasks
@@ -64,6 +64,29 @@ Source audit: `docs/audits/basics-gap-2026-11.md` (local, gitignored). The gap I
 | 39 | Reach the composer with the LAN banner showing | With "EXPOSED ON…" visible at 1600×1000, open an agent | The composer and Send button are fully on-screen | clean | B5 |
 | 40 | Find app settings | Look for global settings from any view | A clearly labelled Settings entry, visible without scrolling | clean | [settings] |
 | 41 | Read the drawer header | Open a brainstorm agent's drawer | No overlap between labels, buttons and timeline; the header takes ≤ ~25% of the drawer height | clean | POLISH · Drawer header |
+| 42 | Close and reopen the app | Pick a team, agent, split panes; close the tab; open `/` fresh | Back on the last team, agent, panes and split | — | v2 · State |
+| 43 | Reload mid-draft | Type a draft and paste an image in a composer (throwaway agent); reload | Draft text and images survive the reload | — | v2 · State |
+| 44 | Open any file type | From a chat link or Files, open a `.md`, a `.ts`, a `.png` and a binary (e.g. `.exe`/`.zip`) | `.md` rendered, code highlighted, image shown, binary handled with a message (no garbage, no blank) | — | v2 · Files |
+| 45 | Open a bad path | Open a path outside the repo and a missing file (chat link or Files) | A clear message; no blank pane, no crash | — | v2 · Files |
+| 46 | Close the window while agents work | Throwaway agent mid-turn; close the tab; reopen | The agent kept running and the progress shows; a visible "keeps running in background" setting or explanation exists (score what exists; tray is PLAN_DESKTOP_APP) | — | v2 · Background |
+| 47 | Settings behave | Open Settings; check every control | Every setting is labelled, saves, survives reload, and can be reset to default | — | v2 · Settings |
+| 48 | Add folder context | In a composer, try `@folder/` or attach a folder | A folder can be referenced or attached and is sent to the agent | — | v2 · Context |
+| 49 | Project context | Look for the repo's CLAUDE.md / AGENTS.md in-app | Can see and edit them from the app, and it's clear they apply to agents in that repo | — | v2 · Context |
+| 50 | Empty states | View a team with no agents / no teams (filter or scratch team) | Guidance and a next action, not a blank screen | — | v2 · Empty/Error |
+| 51 | Error states | Fail a send or a spawn on a throwaway (e.g. bad cwd) | A readable error plus a retry | — | v2 · Empty/Error |
+| 52 | Destructive actions confirm | Archive, close tab, stop (throwaway agent) | Each has a confirm or an undo | — | v2 · Safety |
+| 53 | Keyboard-only | Switch agent, send (throwaway), open palette, close a modal, mouse unused | All doable from the keyboard with visible focus | — | v2 · Keyboard |
+| 54 | Esc and focus | Open a modal on top of another (e.g. palette over drawer, confirm over settings); press Esc | Esc closes only the topmost layer; focus returns to the opener | — | v2 · Keyboard |
+| 55 | Common window sizes | Resize to 1280×720 and 2560×1440 | No clipping, overflow or overlap | — | v2 · Layout |
+| 56 | Select and copy transcript text | Drag-select across a message; right-click on the selection | Selection works and copies; right-click doesn't drop the selection or block native copy | — | v2 · Reading |
+| 57 | Unread / needs-you in the tab | Look at the document title and favicon while something needs you | A count or marker in the title or favicon | — | v2 · Attention |
+| 58 | Loading feedback | Trigger slow actions (open agent, load older, search, open diff) | Anything over ~300ms shows a spinner/skeleton; the UI never looks frozen | — | v2 · Feedback |
+| 59 | Long content | View a very long message, wide code block and long path | Wraps or scrolls in place; the layout doesn't break | — | v2 · Layout |
+| 60 | Zoom extremes | Ctrl+= to 150%, Ctrl+- to 80% | Layout stays readable and usable | — | v2 · Layout |
+| 61 | About + update | Open About | Version shown and an update check that gives a result (up to date / available / error) | — | v2 · Settings |
+| 62 | Rename inline | Rename a throwaway agent and a scratch team | Inline rename (or obvious rename action) that saves | — | v2 · Agent control |
+| 63 | Find in transcript | Ctrl+F or a find box in the open transcript | Finds and highlights matches inside the open agent (incl. older loaded history) | — | v2 · Reading |
+| 64 | Timestamps | Look at message and card times | Relative times ("5m ago"), hover shows the full date/time | — | v2 · Reading |
 
 \* For tasks 15 and 32 the control exists, so they score as passing, but they still fail their full PASS criterion (B4, B3). Re-mark them **clean** only when the criterion is fully met.
 
