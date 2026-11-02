@@ -1,9 +1,12 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { PaseoAgent, PaseoWorkspace } from "@getpaseo/client";
 import { archiveWorkspace, usePaseo } from "./paseo";
 import { ConfirmButton, ago } from "./ui";
 import { openRightDockTab } from "./RightDock";
 import { agentsWithoutWorkspaceId, bulkLabels, buildFolders, clearLabels, isLiveAgent, normDir, type Folder, type Verdict } from "./workspaceGroups";
+import { listProjects, setWorkspacePinned, setWorkspaceTitle } from "./paseoWorkspaces";
+import { dropFromOverlay, mergeOverlay, pinnedFirst, pruneOverlay, type OverlayEntry } from "./workspaceLogic";
+import { CreateWorkspacePanel, NameEditor, ProjectsPanel, RecoverPanel, SetupChip, type ProjectRow } from "./WorkspaceTools";
 
 type Filter = "all" | "safe" | "check" | "in-use";
 type Sort = "activity" | "cleanup" | "name";
@@ -25,16 +28,36 @@ function openChangesForWorkspace(w: PaseoWorkspace, agents: Map<string, PaseoAge
 }
 
 /** Archives every record of a folder (primary last, so a failure leaves the folder row visible). */
-async function archiveFolder(f: Folder) {
+async function archiveFolder(f: Folder, evict: (ids: string[]) => void) {
   for (const r of [...f.records].reverse()) await archiveWorkspace(r.id);
+  evict(f.records.map((r) => r.id));
 }
 
 export function WorkspacesView() {
-  const { workspaces, agents, archivedAgents } = usePaseo();
+  const { workspaces: stored, agents, archivedAgents } = usePaseo();
+  // The store only holds the first page of workspaces and may lag: keep just-created workspaces and pending
+  // rename/pin patches here, and evict each entry as soon as the store catches up (or the workspace is archived/removed).
+  const [overlay, setOverlay] = useState<Map<string, OverlayEntry<PaseoWorkspace>>>(new Map());
+  const workspaces = useMemo(() => mergeOverlay(stored, overlay), [stored, overlay]);
+  useEffect(() => setOverlay((o) => pruneOverlay(stored, o)), [stored]);
+  const patchOverlay = (id: string, patch: Partial<PaseoWorkspace>) =>
+    setOverlay((o) => new Map(o).set(id, { ...o.get(id), patch: { ...o.get(id)?.patch, ...patch } }));
+  const evict = (ids: string[]) => setOverlay((o) => dropFromOverlay(o, ids));
   const handleChipClick = (w: PaseoWorkspace) => openChangesForWorkspace(w, agents);
   const [filter, setFilter] = useState<Filter>("all");
   const [sort, setSort] = useState<Sort>("activity");
   const [open, setOpen] = useState<Set<string>>(new Set());
+  const [panel, setPanel] = useState<"" | "create" | "projects" | "recover">("");
+  const [projects, setProjects] = useState<ProjectRow[]>([]);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [rowErr, setRowErr] = useState("");
+  const reloadProjects = useCallback(() => void listProjects().then(setProjects).catch(() => {}), []);
+  useEffect(reloadProjects, [reloadProjects, workspaces]);
+  const wsCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const w of workspaces.values()) m.set(w.projectId, (m.get(w.projectId) ?? 0) + 1);
+    return m;
+  }, [workspaces]);
 
   const rows = useMemo(() => {
     const live = [...agents.values()];
@@ -46,11 +69,11 @@ export function WorkspacesView() {
 
   const shown = useMemo(() => {
     const f = rows.filter((r) => filter === "all" || r.verdict === filter);
-    return f.sort((a, b) => {
+    return pinnedFirst(f.sort((a, b) => {
       if (sort === "name") return a.w.name.localeCompare(b.w.name);
       if (sort === "cleanup") return VERDICT_RANK[a.verdict] - VERDICT_RANK[b.verdict] || b.idleDays - a.idleDays;
       return a.idleDays - b.idleDays;
-    });
+    }), (r) => r.w.pinnedAt);
   }, [rows, filter, sort]);
 
   const safe = rows.filter((r) => r.verdict === "safe");
@@ -91,6 +114,9 @@ export function WorkspacesView() {
         </label>
         <span className="spacer" />
         {noId > 0 && <span className="muted small">{noId} agent{noId > 1 ? "s" : ""} without a workspace id (matched by folder)</span>}
+        <button className={`btn small ${panel === "create" ? "ok" : "ghost"}`} onClick={() => setPanel(panel === "create" ? "" : "create")}>+ New workspace</button>
+        <button className={`btn small ${panel === "projects" ? "ok" : "ghost"}`} onClick={() => setPanel(panel === "projects" ? "" : "projects")}>Projects ({projects.length})</button>
+        <button className={`btn small ${panel === "recover" ? "ok" : "ghost"}`} onClick={() => setPanel(panel === "recover" ? "" : "recover")}>Recover</button>
         {safe.length > 0 && (
           <ConfirmButton
             label={bulkLabels(safe).label}
@@ -98,12 +124,16 @@ export function WorkspacesView() {
             busyLabel="Archiving…"
             tone="danger"
             onConfirm={async () => {
-              for (const r of safe) await archiveFolder(r);
+              for (const r of safe) await archiveFolder(r, evict);
             }}
           />
         )}
       </div>
 
+      {panel === "create" && <CreateWorkspacePanel projects={projects} onDone={() => setPanel("")} onCreated={(w) => setOverlay((o) => new Map(o).set(w.id, { created: w, patch: {} }))} />}
+      {panel === "recover" && <RecoverPanel />}
+      {panel === "projects" && <ProjectsPanel projects={projects} reload={reloadProjects} workspaceCounts={wsCounts} onRemoved={evict} />}
+      {rowErr && <div className="ws-reasons">{rowErr}</div>}
       {shown.length === 0 && <div className="muted">No folders match.</div>}
       {shown.map((r) => {
         const git = r.w.gitRuntime;
@@ -116,7 +146,30 @@ export function WorkspacesView() {
             <span className={`verdict ${r.verdict}`}>{VERDICT_LABEL[r.verdict]}</span>
             <div className="ws-main">
               <div className="ws-name">
-                {r.w.name} <span className="muted small">{r.w.workspaceKind}</span>
+                {renaming === r.w.id ? (
+                  <NameEditor
+                    initial={r.w.title ?? ""}
+                    placeholder={`empty = reset to "${r.w.title ? "default" : r.w.name}"`}
+                    onCancel={() => setRenaming(null)}
+                    onSave={async (v) => {
+                      const res = await setWorkspaceTitle(r.w.id, v);
+                      patchOverlay(r.w.id, { title: res.title, name: res.title ?? (r.w.worktreeSlug || r.w.projectDisplayName || r.w.name) });
+                      setRenaming(null);
+                    }}
+                  />
+                ) : (
+                  <>
+                    {r.w.pinnedAt && <span title="Pinned">📌 </span>}
+                    {r.w.name} <span className="muted small">{r.w.workspaceKind}</span>
+                    <button className="btn ghost small" onClick={() => setRenaming(r.w.id)}>Rename</button>
+                    <button
+                      className="btn ghost small"
+                                            onClick={() => void setWorkspacePinned(r.w.id, !r.w.pinnedAt).then((res) => patchOverlay(r.w.id, { pinnedAt: res.pinnedAt })).catch((e) => setRowErr(String(e?.message ?? e)))}
+                    >
+                      {r.w.pinnedAt ? "Unpin" : "Pin"}
+                    </button>
+                  </>
+                )}
               </div>
               <div className="muted small ws-path" title={r.w.workspaceDirectory}>
                 {r.w.workspaceDirectory}
@@ -183,6 +236,7 @@ export function WorkspacesView() {
               <span className="chip">
                 {r.live} live{r.archived ? ` · ${r.archived} archived` : ""}
               </span>
+              <SetupChip id={r.w.id} status={r.w.setupStatus} />
               <span className="chip">{Number.isFinite(r.idleDays) ? `${ago(r.w.activityAt)} ago` : "no activity"}</span>
             </div>
             {r.verdict !== "in-use" && (
@@ -191,7 +245,7 @@ export function WorkspacesView() {
                 armedLabel={lbl.armed}
                 busyLabel="Archiving…"
                 tone={r.deletesFolder ? "danger" : "warn"}
-                onConfirm={() => archiveFolder(r)}
+                onConfirm={() => archiveFolder(r, evict)}
               />
             )}
           </div>

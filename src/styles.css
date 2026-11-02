@@ -3643,3 +3643,15 @@ button.file-chip { cursor: pointer; font: inherit; }
 .sched-inspect dt { color: var(--cyan); }
 .sched-inspect dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .sched-prompt { margin: 0; white-space: pre-wrap; max-height: 140px; overflow: auto; }
+
+/* Parity block C: workspace/project tools */
+.ws-main { min-width: 0; }
+.ws-rename { display: inline-flex; gap: 6px; flex-wrap: wrap; align-items: center; max-width: 100%; }
+.ws-row input, .ws-row select, [data-testid="ws-projects"] > div > input {
+  background: #070710; color: var(--text); border: 1px solid var(--line); padding: 5px 10px; font-family: var(--mono); font-size: 12px; min-width: 0; max-width: 100%;
+}
+.ws-row input:focus, [data-testid="ws-projects"] > div > input:focus { outline: none; border-color: var(--cyan); box-shadow: 0 0 8px var(--cyan-dim); }
+.ws-name { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.ws-name .btn.small { padding: 1px 8px; font-size: 10px; }
+[data-testid="ws-projects"] > div:first-child input { flex: 1; }
+.ws-controls { flex-wrap: wrap; }
