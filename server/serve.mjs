@@ -116,11 +116,9 @@ function findExe(candidates) {
 }
 
 // The launcher's own URL: a single-use local-login nonce (never the master token, which would sit on the
-// browser's command line), minted here when this process serves, else by the server already running.
-async function openUrl() {
-  if (server.listening) return `${url}/__vibesquad/local-login?t=${mintLocalLoginNonce()}`;
-  return requestLocalLoginUrl({ port }).catch(() => url);
-}
+// browser's command line). The serving process mints it in memory; a second --open asks the running server.
+const servedOpenUrl = () => `${url}/__vibesquad/local-login?t=${mintLocalLoginNonce()}`;
+const runningServerOpenUrl = () => requestLocalLoginUrl({ port }).catch(() => url);
 
 function launchApp(exe, target) {
   // A bare name relies on PATH; spawn reports a missing binary via the error event.
@@ -134,9 +132,10 @@ function launchApp(exe, target) {
   });
 }
 
-async function openBrowser() {
+async function openBrowser(target) {
+  // Test hook: report the URL instead of focusing or launching a browser.
+  if (process.env.VIBESQUAD_TEST_OPEN_PRINT === "1") return void process.stdout.write(`VIBESQUAD_OPEN_URL=${target}\n`);
   if (await focusExistingWindow()) return;
-  const target = await openUrl();
   const pf = process.env["ProgramFiles"] ?? "C:\\Program Files";
   const pf86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
   const browsers = [
@@ -471,7 +470,7 @@ export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().mes
 }
 
 if (wantOpen && (await isListening())) {
-  await openBrowser();
+  await openBrowser(await runningServerOpenUrl());
   process.exit(0);
 }
 
@@ -489,7 +488,7 @@ server.on("upgrade", (req, socket, head) => {
 server.on("error", async (e) => {
   // Lost a race with another launcher: if it is ours, behave like the already-running case.
   if (e.code === "EADDRINUSE" && (await isListening())) {
-    if (wantOpen) await openBrowser();
+    if (wantOpen) await openBrowser(await runningServerOpenUrl());
     process.exit(0);
   }
   console.error(e);
@@ -554,6 +553,6 @@ if (isMain) {
     applyLanListeners(lanEnabled);
     startPushWatcher(rootDir);
 
-    if (wantOpen) void openBrowser();
+    if (wantOpen) void openBrowser(servedOpenUrl());
   });
 }

@@ -1,8 +1,9 @@
 // Security phase B, S3: owner trust on the loopback listener needs the per-install local token
 // (x-vibesquad-token header or vs_local cookie). Without it a loopback caller is read-only.
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, request } from "node:http";
+import { spawn } from "node:child_process";
 import { connect, createServer as createTcpServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -264,6 +265,41 @@ describe("loopback /ws upgrade", () => {
     const cookie = String(r.headers["set-cookie"]).split(";")[0];
     assert.match(await upgrade({ Origin: `http://127.0.0.1:${port}`, Cookie: cookie }), /101/);
     assert.equal(upstreamHits, 2);
+  });
+
+  test("a second `serve.mjs --open` while the server runs gets a nonce URL from it (no TDZ crash, no token on argv)", async (t) => {
+    // If the child ever misses the running server it falls through to a full startup: sandbox the vs shims
+    // (installVsShim writes under APPDATA / the home dir) and keep it from starting a Paseo daemon.
+    const sandbox = mkdtempSync(join(tmpdir(), "vs-s3-open-"));
+    const childHome = join(sandbox, "vshome");
+    mkdirSync(childHome, { recursive: true });
+    writeFileSync(join(childHome, "settings.json"), JSON.stringify({ startPaseoWithVibeSquad: false }));
+    writeFileSync(join(childHome, "local-token"), readFileSync(join(home, "local-token")));
+    t.after(() => rmSync(sandbox, { recursive: true, force: true }));
+    // Async: this process hosts the running server the child must reach.
+    const child = await new Promise((ok, fail) => {
+      const c = spawn(process.execPath, [join(rootDir, "server", "serve.mjs"), "--open"], {
+        env: { ...process.env, VIBESQUAD_HOME: childHome, USERPROFILE: sandbox, HOME: sandbox, APPDATA: join(sandbox, "appdata"), VIBESQUAD_PORT: String(port), VIBESQUAD_TEST_OPEN_PRINT: "1" },
+        windowsHide: true,
+      });
+      let stdout = "";
+      let stderr = "";
+      c.stdout.on("data", (d) => (stdout += d));
+      c.stderr.on("data", (d) => (stderr += d));
+      const timer = setTimeout(() => c.kill(), 30_000);
+      c.on("error", fail);
+      c.on("close", (status) => {
+        clearTimeout(timer);
+        ok({ status, stdout, stderr });
+      });
+    });
+    assert.equal(child.status, 0, child.stderr);
+    assert.doesNotMatch(child.stderr, /ReferenceError/);
+    const url = /VIBESQUAD_OPEN_URL=(\S+)/.exec(child.stdout)?.[1];
+    assert.match(url ?? "", new RegExp(`^http://localhost:${port}/__vibesquad/local-login\\?t=[0-9a-f]{32}$`), child.stdout);
+    assert.ok(!url.includes(token));
+    const u = new URL(url);
+    assert.equal((await call(port, u.pathname + u.search)).status, 302, "the running server minted it");
   });
 });
 
