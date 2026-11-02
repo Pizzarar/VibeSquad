@@ -89,7 +89,7 @@ export function sortSubagents(rows: SubagentRow[]): SubagentRow[] {
 }
 
 function subIdOf(it: any, d: any): string {
-  return String(d.subAgentId ?? d.agentId ?? it.callId ?? "");
+  return String(d.subAgentId ?? d.agentId ?? it.subagentId ?? it.callId ?? "");
 }
 
 // Changes whenever a sub_agent tool call appears or its status changes -> refetch trigger.

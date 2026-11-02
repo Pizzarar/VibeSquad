@@ -52,3 +52,18 @@ test("scraped ids prefer subAgentId over callId", () => {
   const out = scrapedSubagents([tc("c1", "running", { subAgentId: "s1", description: "do it" })], isSub);
   assert.deepEqual(out, [{ id: "s1", title: "do it", status: "running" }]);
 });
+
+test("scraped ids honor it.subagentId like isSubAgentTool", () => {
+  const e = { item: { type: "tool_call", callId: "c9", subagentId: "s9", status: "running", detail: {} } };
+  const out = scrapedSubagents([e], (it) => !!it.subagentId);
+  assert.equal(out[0].id, "s9");
+});
+
+test("SubagentList is mounted outside the tl-head guard", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../src/Timeline.tsx", import.meta.url), "utf8");
+  const head = src.indexOf("{(barOpen || pinnedTodo) && <div className=\"tl-head\">");
+  const close = src.indexOf("</div>}", head);
+  const at = src.indexOf("<SubagentList");
+  assert.ok(head > 0 && close > head && at > close);
+});

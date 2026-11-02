@@ -1248,9 +1248,9 @@ export function Timeline({
         </div>
       )}
       {slowFirstLoad && <TimelineSkeleton />}
-      <SubagentList agentId={agentId} entries={entries} isSubAgent={isSubAgentTool} renderBody={(id) => <SubAgentBody agentId={agentId} subagentKey={id} d={{}} />} />
       {pinnedTodo && <PinnedTodo entry={pinnedTodo} />}
       </div>}
+      <SubagentList agentId={agentId} entries={entries} isSubAgent={isSubAgentTool} renderBody={(id) => <SubAgentBody agentId={agentId} subagentKey={id} d={{}} />} />
       {shouldShowLoadOlder(entries, hasMore) && (
         <div style={{ textAlign: "center", padding: "4px 0" }}>
           <button
