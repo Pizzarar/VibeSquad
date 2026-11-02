@@ -52,5 +52,8 @@ test("mention list does not leak demo files into live composer", () => {
 
 test("palette jump focuses composer", () => {
   const s = src("CommandPalette.tsx");
-  assert.equal((s.match(/focusComposer\(\)/g) ?? []).length, 2);
+  assert.equal((s.match(/focusComposer\(m\.agent\.id\)/g) ?? []).length, 2);
+  assert.match(s, /\.pane-slot\[data-agent=/);
+  assert.match(s, /offsetParent !== null/);
+  assert.match(s, /isContentEditable\) return/);
 });
