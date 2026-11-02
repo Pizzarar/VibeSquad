@@ -1440,17 +1440,19 @@ const Toolbar = memo(function Toolbar(props: {
 const useSheet = () => useSyncExternalStore(subscribePanes, () => getPanes().sheet);
 const useSplit = () => useSyncExternalStore(subscribePanes, () => getPanes().split);
 
-// Ctrl+= / Ctrl+- / Ctrl+0 UI scale, Ctrl+. focus, Ctrl+J top NEEDS YOU, Ctrl+1..9 tabs of the active pane. Esc stays the composer's.
+// Fixed keys: Ctrl+= / Ctrl+- / Ctrl+0 UI scale, Ctrl+1..9 tabs of the active pane. Esc stays the composer's.
+// Rebindable ones (palette, Ctrl+. focus, Ctrl+J top NEEDS YOU, ...) go through the keymap in CommandPalette.tsx.
 function onShortcut(e: KeyboardEvent) {
   if (handleUiScaleKeyDown(e)) return;
   if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
-  if (e.key === ".") toggleFocus();
-  else if (e.key === "j" || e.key === "J") {
-    const top = railAlerts().list[0];
-    if (top) openAgent(top.agent.id);
-  } else if (/^[1-9]$/.test(e.key)) activateNth(Number(e.key) - 1);
+  if (/^[1-9]$/.test(e.key)) activateNth(Number(e.key) - 1);
   else return;
   e.preventDefault();
+}
+
+function openTopNeedsYou() {
+  const top = railAlerts().list[0];
+  if (top) openAgent(top.agent.id);
 }
 
 const LICENSES_FALLBACK =
@@ -1861,6 +1863,7 @@ export function App() {
       },
       workspaces: () => setScreen("workspaces"),
       toggleFocus,
+      needsYou: openTopNeedsYou,
     }),
     [openNewAgent, openSettings],
   );

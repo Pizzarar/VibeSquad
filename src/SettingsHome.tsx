@@ -5,6 +5,7 @@ import { PushNotificationControls, playAlertChime } from "./notifications";
 import { checkForUpdates, updateLabel, type UpdateCheck } from "./DiagnosticsModal";
 import { useProfiles } from "./profiles";
 import { useUpdaterStatus } from "./userName";
+import { KeybindingsEditor } from "./KeybindingsEditor";
 import {
   allSettings,
   exportPrefs,
@@ -31,6 +32,7 @@ const NAV: { id: HomeSection; label: string }[] = [
   { id: "chat", label: "Chat" },
   { id: "notifications", label: "Notifications" },
   { id: "newAgent", label: "New Agent defaults" },
+  { id: "keys", label: "Keybindings" },
   { id: "team", label: "Team" },
   { id: "paseo", label: "Paseo" },
   { id: "profiles", label: "Profiles" },
@@ -162,6 +164,11 @@ export function SettingsHome(props: { onClose: () => void; onDiagnostics: () => 
             )}
             {REHOUSED[n.id] && (
               <TeamSettingsModal embedded parts={REHOUSED[n.id]} onClose={props.onClose} onJumpToProfiles={() => go("profiles")} />
+            )}
+            {n.id === "keys" && (
+              <div data-setting-id="keybindings">
+                <KeybindingsEditor />
+              </div>
             )}
             {n.id === "about" && <About {...props} />}
           </div>
