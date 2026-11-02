@@ -1154,9 +1154,6 @@ const TeamPage = memo(function TeamPage(props: {
     return (
       <div className="team-body">
         <header className="team-header">
-          <button type="button" className="btn ghost small squad-page-home-btn" data-testid="squad-page-home-btn" title="All squads (Esc)" onClick={enterSquadsHome}>
-            ⊞
-          </button>
           <h1>
             <NeonEmblem color={view.team.color} seed={view.team.id} size={32} />
             <span>{view.team.name}</span>
@@ -1349,7 +1346,10 @@ const Toolbar = memo(function Toolbar(props: {
   return (
     <div className="toolbar">
       <div className="seg">
-        <button className={props.screen === "teams" ? "on" : ""} onClick={() => props.onScreen("teams")}>
+        <button
+          className={props.screen === "teams" ? "on" : ""}
+          onClick={() => (props.screen === "teams" ? enterSquadsHome() : props.onScreen("teams"))}
+        >
           SQUADS
         </button>
         <button className={props.screen === "workspaces" ? "on" : ""} onClick={() => props.onScreen("workspaces")}>

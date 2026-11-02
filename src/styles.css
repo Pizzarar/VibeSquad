@@ -1929,6 +1929,12 @@ code {
   border-radius: 6px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
 }
+/* Send-guard: markdown output must wrap inside the pane; the selected message makes room for its action bar. */
+.tl-assistant > * { max-width: 100%; }
+.tl-code-block { max-width: 100%; min-width: 0; }
+.tl-code-block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }
+.tl-table { display: block; max-width: 100%; overflow-x: auto; }
+.tl-assistant[data-selected="true"], .tl-user[data-selected="true"] { padding-top: 40px; }
 .composer-park-inbox-btn {
   white-space: nowrap;
   border-color: var(--violet);
@@ -3407,7 +3413,6 @@ html, body, #root { overflow-x: hidden; }
 .breadcrumb-seg:hover, .breadcrumb-seg:focus-visible { color: var(--cyan); }
 .breadcrumb-seg.current, .breadcrumb-seg[aria-current="page"] { color: inherit; cursor: default; font-weight: 700; }
 .breadcrumb-sep { opacity: 0.5; }
-.squad-page-home-btn { margin-right: 8px; }
 .squads-home { padding: 14px 0; }
 .squads-home-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
 .squad-home-tile { display: flex; flex-direction: column; gap: 10px; padding: 14px; text-align: left; color: inherit; background: var(--panel, #0d1020); border: 1px solid var(--line, #232846); border-radius: 10px; cursor: pointer; min-width: 0; }
