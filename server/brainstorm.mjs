@@ -441,7 +441,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
           ...(reopened ? { reopened: true } : {}),
           existingAgentId: existing.id,
           newAgentId: existing.id,
-          title: existing.title,
+          title: existing.title || buddyTitle(laneId, resolved.laneName, topic, rootDir),
           laneId,
           teamId,
           message: `Open existing brainstorm (${existing.title || existing.id})`,

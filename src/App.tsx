@@ -809,7 +809,7 @@ function EmptyBrainstormCard({
             TALK HERE
           </b>
         </div>
-        <div className="card-title">BRAINSTORM · {laneName.toUpperCase()}</div>
+        <div className="card-title">{titleFor("brainstorm", laneName, { laneId })}</div>
         <div className="muted small">
           <b className="talk-here">TALK HERE · </b>
           Seeded from <code>docs/brainstorm/{laneId}.md</code>
