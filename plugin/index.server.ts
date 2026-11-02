@@ -103,6 +103,13 @@ export const BRAINSTORM_PACK = [
   "- Propose spin-offs as one fenced block, line 1 ```vs:spin-off, then one Team per line: `Name | 1-line brief`. The user edits in words (4 proposed, \"energy and food in one lane called Needs\" → re-post the block with 3); only the newest block gets the button.",
 ].join("\n");
 
+/** Appended to the Buddy pack only while the Squad's `vibeMode` is on (teams.json). Off = pack text unchanged. */
+export const VIBE_MODE_BUDDY_RULES = [
+  "Vibe mode is ON for this Squad:",
+  "- Act on your own for bug fixes, approved plan blocks and parity gaps: dispatch them without waiting. Log each auto call as `vs log decision \"(auto) ...\"`.",
+  "- New features, scope changes, public/outward actions, money and destructive actions wait for the user: collect them into ONE needs-you digest, not one ping each.",
+].join("\n");
+
 export const LEAD_FALLBACK_PACK = [
   "Role: lead.",
   "- Dispatch workers, read their digests via `vs log --since-me` (never raw transcripts), log decisions/blockers with `vs log`. When you start a plan, set `job=<objective in a few words>` (`paseo agent update --label job=...`); refer to agents by short name (e.g. Bug1, Hub5).",
@@ -129,6 +136,7 @@ export const ROLE_PACKS = {
 interface TeamDef {
   id: string;
   name?: string;
+  vibeMode?: boolean;
   lanes?: { id: string; aliases?: string[] }[];
   paths?: string[];
 }
@@ -462,7 +470,7 @@ function findProjectRoot(cwd: string): string {
   return path.resolve(cwd);
 }
 
-export function rolePack(role: string, cwd: string): string {
+export function rolePack(role: string, cwd: string, vibeMode = false): string {
   if (role === "lead") {
     try {
       const text = fs.readFileSync(path.join(findProjectRoot(cwd), "docs", "LEAD_RULES.md"), "utf8").trim();
@@ -472,7 +480,7 @@ export function rolePack(role: string, cwd: string): string {
     }
     return LEAD_FALLBACK_PACK;
   }
-  if (role === "brainstorm") return BRAINSTORM_PACK;
+  if (role === "brainstorm") return vibeMode ? `${BRAINSTORM_PACK}\n${VIBE_MODE_BUDDY_RULES}` : BRAINSTORM_PACK;
   if (role === "worker") return WORKER_PACK;
   return "";
 }
@@ -588,8 +596,8 @@ export function firstDispatchMetricText(
   return "first-dispatch context: " + size + " (lead=" + parentId + ", ord=" + (ord ?? "?") + ", provider=" + (parent.provider || "?") + ", model=" + (parent.model || "?") + ")";
 }
 
-export function injectedPrefix(role: string, cwd: string): string {
-  return [EVERYONE_LAYER, rolePack(role, cwd)].filter(Boolean).join("\n\n");
+export function injectedPrefix(role: string, cwd: string, vibeMode = false): string {
+  return [EVERYONE_LAYER, rolePack(role, cwd, vibeMode)].filter(Boolean).join("\n\n");
 }
 
 export function inspectGitSpawnState(cwd: string): string | null {
@@ -1193,7 +1201,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           changed = true;
         }
 
-        const prefix = injectedPrefix(role, cwd);
+        const spawnTeamId = teamOf(reqLabels, cwd)?.team;
+        const vibeMode = Boolean(spawnTeamId && currentTeams().find((t) => t.id === spawnTeamId)?.vibeMode === true);
+        const prefix = injectedPrefix(role, cwd, vibeMode);
         const profileNotes = dedupeNotesAgainst((matchedProfile?.notes ?? "").trim(), prefix);
         const gitState = inspectGitSpawnState(cwd);
         if (prefix && !sanitizedSysPrompt.includes(EVERYONE_LAYER)) {

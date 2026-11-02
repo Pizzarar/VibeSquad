@@ -29,6 +29,8 @@ import {
   assignAgentToLane,
   countsAsNeedsYou,
   getLeadThresholds,
+  getTeams,
+  saveTeams,
   leadLadderFor,
   matchesSearch,
   resolve,
@@ -1336,6 +1338,8 @@ const Toolbar = memo(function Toolbar(props: {
   const uiScale = useUiScale();
   const uiScalePct = Math.round(uiScale * 100);
   const full = useFullView();
+  useTeams();
+  const vibeOn = getTeams().find((t) => t.id === props.squadId)?.vibeMode === true;
   return (
     <div className="toolbar">
       <div className="seg">
@@ -1383,6 +1387,16 @@ const Toolbar = memo(function Toolbar(props: {
           <option value="yesterday">Yesterday</option>
           <option value="older">Older</option>
         </select>
+      )}
+      {vibeOn && (
+        <button
+          className="tchip on"
+          data-testid="vibe-mode-chip"
+          title={`Vibe mode is on for ${props.squadName || "this Squad"}. Click to turn it off.`}
+          onClick={() => void saveTeams((cur) => cur.map((t) => (t.id === props.squadId ? { ...t, vibeMode: false } : t)))}
+        >
+          Vibe mode
+        </button>
       )}
       <button className="tchip" data-testid="global-transcript-search-btn" title="Search all transcripts" onClick={() => openOverlay("search")}>
         🔍

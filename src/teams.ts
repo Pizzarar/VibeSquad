@@ -32,6 +32,8 @@ export type TeamDef = {
   leadFlagTokens?: number;
   leadAutoHandoffTokens?: number;
   leadHardCapTokens?: number;
+  /** Per-Squad "Vibe mode": Buddy auto-dispatches routine work. Off when absent. */
+  vibeMode?: boolean;
 };
 export type TeamConfig = TeamDef;
 

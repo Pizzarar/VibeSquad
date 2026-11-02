@@ -198,7 +198,11 @@ export function appendVsLogEntry({ teamId, laneId, agent = "you", type = "metric
   return { entry, path: laneLogPath, teamLogPath };
 }
 
-export function buildBrainstormInitialPrompt({ laneId, laneUpper, buddyName, summaryContent, latestPlan, pendingPrompt, inFlight }) {
+/** Boot-prompt line for a successor Buddy in a Vibe mode Squad: the old Buddy's check-in heartbeat does not follow it. */
+export const VIBE_HEARTBEAT_LINE =
+  "- Vibe mode is ON: your predecessor's check-in heartbeat targets the old Buddy. Recreate it for yourself (`create_heartbeat`, same prompt, your agent id as target), then delete the old one.";
+
+export function buildBrainstormInitialPrompt({ laneId, laneUpper, buddyName, summaryContent, latestPlan, pendingPrompt, inFlight, vibeMode = false }) {
   const tail =
     pendingPrompt && String(pendingPrompt).trim()
       ? `Pending message from the user to answer now:\n${String(pendingPrompt).trim()}`
@@ -213,6 +217,7 @@ export function buildBrainstormInitialPrompt({ laneId, laneUpper, buddyName, sum
     `- To find your current lead for handoff: run \`vs who lead\`.`,
     `- Before handing off a plan that adds a command, rule or feature, check for an existing primitive (\`paseo --help\`, Paseo MCP tool list, \`vs --help\`, skills). Name what you checked in the plan's Decided section.`,
     `- At >=80k context tokens, update the brief now. At the hard limit VibeSquad retires you; the next click on the pin starts a fresh Brainstorm from the brief.`,
+    ...(vibeMode ? [VIBE_HEARTBEAT_LINE] : []),
     `- Latest plan file: \`${latestPlan}\``,
     "",
     `--- BEGIN docs/brainstorm/${laneId}.md ---`,
@@ -597,6 +602,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       summaryContent: summary.content,
       latestPlan,
       pendingPrompt,
+      vibeMode: (loadTeamsConfig(rootDir).teams ?? []).find((t) => t.id === teamId)?.vibeMode === true,
     });
 
     // The spawn env sets VS_BRIEF_INLINE, so the plugin won't log brief-injected; this is the live check for the lane.
