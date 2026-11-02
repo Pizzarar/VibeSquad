@@ -7,6 +7,8 @@ import {
   UNASSIGNED_TEAM_ID,
   UNASSIGNED_TEAM_NAME,
   findLaneInRegistry,
+  formatDisplayTitle,
+  laneCodesForTeam,
   isBrainstormAgent as identityIsBrainstormAgent,
   kindOf as identityKindOf,
   ordOf as identityOrdOf,
@@ -18,7 +20,7 @@ import { mergeTeams } from "./teamsMerge.ts";
 
 // A lane is a pinned Team in the UI. Pin fields (state, doneAt, order, lastProfile) live in src/pins.ts
 // and round-trip through saveTeams untouched; lanes without `state` count as pinned.
-export type LaneDef = { id: string; name: string; paths?: string[]; aliases?: string[] } & PinFields;
+export type LaneDef = { id: string; name: string; code?: string; paths?: string[]; aliases?: string[] } & PinFields;
 export type TeamDef = {
   id: string;
   name: string;
@@ -1037,12 +1039,29 @@ export function handoffPairs(members: Member[]): HandoffPair[] {
 const TITLE_MAX = 60; // create_agent rejects longer titles
 const clip = (s: string) => (s.length > TITLE_MAX ? s.slice(0, TITLE_MAX - 1) + "\u2026" : s);
 
-/** Naming Standard v1 titles. Shared by buildName (TeamActions) so both produce the same string. */
-export function titleFor(role: "lead" | "brainstorm" | "worker", lane: string, i: { ord?: string; topic?: string; job?: string }): string {
-  const LANE = lane.toUpperCase();
-  if (role === "lead") return clip(`★ ${LANE} ord${i.ord || "?"}`);
-  if (role === "brainstorm") return clip(`BRAINSTORM · ${LANE}${i.topic?.trim() ? ` · ${i.topic.trim()}` : ""}`);
-  return clip(`${LANE} · ${(i.job ?? "").trim() || "job"}`);
+/** Naming Standard v2 titles (lane code format). Shared by buildName (TeamActions) so both produce the same string. */
+export function titleFor(
+  role: "lead" | "brainstorm" | "worker",
+  lane: string,
+  i: { ord?: string; topic?: string; job?: string; code?: string; laneId?: string },
+): string {
+  return clip(
+    formatDisplayTitle({
+      role,
+      laneName: lane,
+      laneId: i.laneId,
+      code: i.code,
+      ord: role === "lead" ? i.ord || "?" : i.ord,
+      topic: i.topic,
+      job: role === "worker" ? i.job || "job" : i.job,
+    }),
+  );
+}
+
+/** The lane's code: stored `code` or the generated one, deduped within its Squad. */
+export function laneCodeOf(laneKey: string | undefined): string {
+  const found = laneById(laneKey);
+  return found ? (laneCodesForTeam(found.team)[found.lane.id] ?? "") : "";
 }
 
 // Title generated from labels per docs/NAMING.md. Null when required labels are missing or the agent is retired.
@@ -1052,17 +1071,18 @@ export function expectedTitleFor(agent: PaseoAgent): string | null {
   const rawTitle = agent.title ?? "";
   const laneKey = l.lane ?? l.lead;
   const lane = laneKey ? (laneById(laneKey)?.lane.name ?? laneKey) : null;
+  const code = laneCodeOf(laneKey);
   const role = l.role ?? (kindOf(agent) === "lead" ? "lead" : kindOf(agent) === "brainstorm" ? "brainstorm" : undefined);
   if (lane && role) {
     switch (role) {
       case "lead": {
         const ord = l.ord;
-        return ord ? titleFor("lead", lane, { ord }) : null;
+        return ord ? titleFor("lead", lane, { ord, job: l.job, code, laneId: laneKey }) : null;
       }
       case "brainstorm":
-        return titleFor("brainstorm", lane, { topic: l.topic });
+        return titleFor("brainstorm", lane, { topic: l.topic, code, laneId: laneKey });
       case "worker":
-        return l.job ? titleFor("worker", lane, { job: l.job }) : null;
+        return l.job ? titleFor("worker", lane, { job: l.job, ord: l.ord, code, laneId: laneKey }) : null;
     }
   }
   // DESIGN T1-4: Flag any live title still carrying legacy "(talk here...)" so Fix title cleans it.

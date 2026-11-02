@@ -68,7 +68,7 @@ test("vs pin new writes the lane and brief, refuses overlaps", () => {
     const ok = vs("Crafting tree", "--brief", "tiers", "--team", "efi");
     assert.equal(ok.status, 0, ok.stderr);
     const teams = JSON.parse(readFileSync(join(home, "teams.json"), "utf8"));
-    assert.deepEqual(teams.teams[0].lanes.at(-1), { id: "crafting-tree", name: "Crafting tree", state: "pinned" });
+    assert.deepEqual(teams.teams[0].lanes.at(-1), { id: "crafting-tree", name: "Crafting tree", code: "Cra", state: "pinned" });
     assert.match(readFileSync(join(root, "docs", "brainstorm", "crafting-tree.md"), "utf8"), /## Open\n- tiers/);
 
     assert.equal(vs("Crafting tree", "--team", "efi").status, 1); // duplicate

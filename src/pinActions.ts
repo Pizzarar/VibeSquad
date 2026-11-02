@@ -18,6 +18,7 @@ import {
   type Pin,
   type PinLane,
 } from "./pins";
+import { laneCodesForTeam } from "./identity";
 import { runMarkComplete } from "./pinComplete";
 import { findCrossTeamBrainstorm, getTeams, resolve, saveTeams, type TeamDef, type TeamsUpdater } from "./teams";
 
@@ -263,7 +264,10 @@ export async function createPin(squadId: string, name: string, idea: string, dep
   const teams = (deps.getTeams ?? getTeams)();
   const squad = teams.find((t) => t.id === squadId);
   if (!squad) throw new Error(`Unknown squad ${squadId}`);
-  const lane: PinLane = { id: uniqueLaneId(slugLaneId(clean), allLaneIds(teams)), name: clean, state: "pinned", ...(deps.lastProfile ? { lastProfile: deps.lastProfile } : {}) };
+  const id = uniqueLaneId(slugLaneId(clean), allLaneIds(teams));
+  // Freeze the generated code on the lane so later registry changes never rename its agents.
+  const code = laneCodesForTeam({ lanes: [...squad.lanes, { id, name: clean }] })[id];
+  const lane: PinLane = { id, name: clean, ...(code ? { code } : {}), state: "pinned", ...(deps.lastProfile ? { lastProfile: deps.lastProfile } : {}) };
   // Brief first: a failed write leaves no half-made pin behind.
   if (!DEMO) await writeBrief(lane.id, newPinBrief(lane.id, clean, idea), deps.fetch ?? fetch);
   // The brief write is async, so add the lane to whatever the registry holds by then.
