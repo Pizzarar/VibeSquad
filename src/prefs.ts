@@ -15,12 +15,14 @@ export type Accent = "cyan" | "magenta" | "violet" | "amber";
 export type MonoFont = "jetbrains" | "cascadia" | "consolas" | "system";
 export type SendKey = "enter" | "ctrl-enter";
 export type TimestampFormat = "relative" | "absolute" | "both";
+export type OpenInIde = "none" | "vscode" | "jetbrains";
 
 export type Prefs = {
   "app.density": Density;
   "app.accent": Accent;
   "app.confirmClose": boolean;
   "app.restoreLastView": boolean;
+  "app.openInIde": OpenInIde;
   "chat.fontSize": number;
   "chat.monoFont": MonoFont;
   "chat.maxWidth": number;
@@ -68,6 +70,7 @@ export const PREF_DEFAULTS: Prefs = {
   "app.accent": "cyan",
   "app.confirmClose": true,
   "app.restoreLastView": true,
+  "app.openInIde": "none",
   "chat.fontSize": 14,
   "chat.monoFont": "jetbrains",
   "chat.maxWidth": 0,
@@ -99,6 +102,14 @@ export const PREF_DEFS: PrefDef[] = [
   },
   { key: "app.confirmClose", section: "app", label: "Confirm before closing while agents run", hint: "Asks before the window closes or reloads while any agent is working.", kind: "bool" },
   { key: "app.restoreLastView", section: "app", label: "Reopen last view on launch", hint: "Restore the last squad, agent and panes when the app opens.", kind: "bool" },
+  {
+    key: "app.openInIde",
+    section: "app",
+    label: "Open in IDE",
+    hint: "Adds an Open-in-IDE action at the line in Changes and Files. Works when this browser runs on the daemon's machine. JetBrains needs Toolbox and the project open.",
+    kind: "enum",
+    options: [{ value: "none", label: "Off" }, { value: "vscode", label: "VS Code" }, { value: "jetbrains", label: "JetBrains (Toolbox)" }],
+  },
   { key: "chat.fontSize", section: "chat", label: "Chat font size", hint: "Pixels, for the transcript and composer.", kind: "number", min: 11, max: 22, step: 1 },
   {
     key: "chat.monoFont",
