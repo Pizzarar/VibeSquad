@@ -163,3 +163,20 @@ test(
     assert.equal(created[0].labels.lane, "efi-pin");
   }),
 );
+
+test(
+  "vibeMode round-trips through PUT /api/teams and is absent by default",
+  withEnv(async ({ repo, vsHome }) => {
+    const homeFile = join(vsHome, "teams.json");
+    writeJson(homeFile, { teams: [{ id: "vibesquad", name: "VibeSquad", lanes: [], paths: [] }] });
+    await withServer(repo, async (base) => {
+      const got = await (await fetch(`${base}/api/teams`)).json();
+      assert.equal(got.teams[0].vibeMode, undefined);
+      const teams = [{ ...got.teams[0], vibeMode: true }];
+      const put = await fetch(`${base}/api/teams`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ teams }) });
+      assert.equal(put.status, 200);
+      assert.equal(readJson(homeFile).teams[0].vibeMode, true);
+      assert.equal((await (await fetch(`${base}/api/teams`)).json()).teams[0].vibeMode, true);
+    });
+  }),
+);

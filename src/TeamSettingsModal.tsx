@@ -573,6 +573,15 @@ export function TeamSettingsModal({ onClose }: { onClose: () => void }) {
               Delete team
             </button>
           </div>
+          <label className="muted small" style={{ display: "block", margin: "6px 0" }}>
+            <input
+              type="checkbox"
+              aria-label="Vibe mode"
+              checked={t.vibeMode === true}
+              onChange={(e) => patch(i, { vibeMode: e.target.checked })}
+            />{" "}
+            Vibe mode: Buddy auto-dispatches bug fixes, approved plan blocks and parity gaps; features and outward actions wait in one digest
+          </label>
           <div className="row2">
             <Field label="Brainstorm warn tokens (amber)">
               <input
