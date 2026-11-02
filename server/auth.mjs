@@ -483,9 +483,17 @@ function sendJson(res, code, data) {
   res.end(JSON.stringify(data));
 }
 
+/** Anti-clickjacking for HTML responses: X-Frame-Options plus CSP frame-ancestors, merged into any CSP already set. */
+export function setNoFraming(res) {
+  res.setHeader("x-frame-options", "DENY");
+  const prev = String(res.getHeader?.("content-security-policy") ?? "").trim().replace(/;\s*$/, "");
+  res.setHeader("content-security-policy", !prev ? "frame-ancestors 'none'" : /(^|;)\s*frame-ancestors\b/i.test(prev) ? prev : `${prev}; frame-ancestors 'none'`);
+}
+
 function sendHtml(res, code, title, message) {
   res.statusCode = code;
   res.setHeader("content-type", "text/html; charset=utf-8");
+  setNoFraming(res);
   res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
   res.end(htmlPage(title, message));
 }

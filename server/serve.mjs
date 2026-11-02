@@ -23,6 +23,7 @@ import {
   isLoopbackOrigin,
   netConfig,
   sendUnpaired,
+  setNoFraming,
   trackSocket,
 } from "./auth.mjs";
 import "./brainstorm.mjs";
@@ -175,6 +176,7 @@ function findDistFile(urlPath) {
 function sendFile(res, file) {
   res.statusCode = 200;
   res.setHeader("content-type", MIME[extname(file).toLowerCase()] ?? "application/octet-stream");
+  if (extname(file).toLowerCase() === ".html") setNoFraming(res);
   if (file.includes(`${sep}assets${sep}`)) {
     res.setHeader("cache-control", "public, max-age=31536000, immutable");
   } else {
@@ -294,6 +296,7 @@ function handle(req, res) {
     if (!index) {
       res.statusCode = 500;
       res.setHeader("content-type", "text/html; charset=utf-8");
+      setNoFraming(res);
       res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
       return res.end(renderMissingDistHtml());
     }
