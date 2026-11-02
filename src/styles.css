@@ -3554,3 +3554,7 @@ html, body, #root { overflow-x: hidden; }
 .tl-file-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 button.file-chip { cursor: pointer; font: inherit; }
 .file-chip-name { max-width: 14em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.stale-build-banner {
+  font-size: 13px;
+}

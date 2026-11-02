@@ -2,7 +2,7 @@ import { FIRST_RUN_DONE_KEY, FirstRunModal, fetchFirstRunStatus, type FirstRunSt
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { ProviderQuotaView } from "./antigravity";
-import { LEGACY_NEEDS_LABEL, dismissUpdateBanner, loadUpdaterStatus, setLanExposureState, setServerConfigWarnings, triggerUpdateInstall, useConfigWarnings, useExposedIpsStore, useUpdaterStatus } from "./userName";
+import { LEGACY_NEEDS_LABEL, dismissUpdateBanner, loadUpdaterStatus, setLanExposureState, setServerConfigWarnings, setStaleBuild, triggerUpdateInstall, useStaleBuild, useConfigWarnings, useExposedIpsStore, useUpdaterStatus } from "./userName";
 import { DEMO, archiveAgent, detachAgent, getPaseoState, loadArchived, retireAgent, setNeedsYou, updateAgent, upsertLocalAgent, usePaseo } from "./paseo";
 import {
   AGENT_TYPE_LABEL,
@@ -1432,6 +1432,7 @@ function useExposedIps(): string[] {
         if (alive && Array.isArray(h?.configWarnings)) {
           setServerConfigWarnings(h.configWarnings);
         }
+        if (alive) setStaleBuild(h?.stale);
       })
       .catch(() => {});
     return () => {
@@ -1514,6 +1515,7 @@ export function App() {
   }, [exposedIps, dismissedLanKey]);
   const updaterStatus = useUpdaterStatus();
   const configWarnings = useConfigWarnings();
+  const staleBuild = useStaleBuild();
   useEffect(() => {
     void loadUpdaterStatus();
     const id = setInterval(() => void loadUpdaterStatus(), 60_000);
@@ -1854,6 +1856,16 @@ export function App() {
           >
             ✕
           </button>
+        </div>
+      )}
+      {staleBuild && (
+        <div
+          className="stale-build-banner"
+          data-testid="stale-build-banner"
+          role="alert"
+          style={{ gridColumn: "1 / -1", background: "#ffb000", color: "#05060d", fontWeight: 800, padding: "6px 12px", textAlign: "center" }}
+        >
+          {`Running an older build: ${staleBuild.behind} commit${staleBuild.behind === 1 ? "" : "s"} behind. Rebuild.`}
         </div>
       )}
       {configWarnings.length > 0 && (

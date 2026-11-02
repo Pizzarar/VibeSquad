@@ -47,6 +47,7 @@ import {
   resolveAgentIdentity,
 } from "../server/identity.mjs";
 import { loadProfiles } from "../server/profiles.mjs";
+import { staleWarning } from "../server/stale-runtime.mjs";
 import {
   LEGACY_NEEDS_LABEL,
   LEGACY_NEEDS_REASON,
@@ -1633,6 +1634,7 @@ export function installVsShim({ binDirs, targetScript, baseHome } = {}) {
     "server/brainstorm.mjs",
     "server/brief-path.mjs",
     "server/whos-here.mjs",
+    "server/stale-runtime.mjs",
     "server/pin-ideas.mjs",
     "docs/profiles/DEFAULT_PACK.md",
   ];
@@ -1871,6 +1873,9 @@ const invokedArg = process.argv[1] ? path.resolve(process.argv[1]) : "";
 const selfFile = path.resolve(import.meta.filename);
 const invokedBase = path.basename(invokedArg, path.extname(invokedArg)).toLowerCase();
 if (invokedArg === selfFile || invokedBase === "vs") {
+  const warning = staleWarning();
+  if (warning) process.stderr.write(`${warning}
+`);
   const result = main(process.argv.slice(2));
   if (result && typeof result.then === "function") {
     result.then(
