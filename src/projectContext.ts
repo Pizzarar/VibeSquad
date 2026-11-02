@@ -121,6 +121,26 @@ export function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<
   });
 }
 
+/**
+ * Suggestions first, the folder listing as the fallback, both inside one shared `ms` deadline.
+ * `failed` is set whenever nothing came back and either call timed out or failed;
+ * `onListingFailed` lets the caller evict a hung listing from its cache.
+ */
+export async function resolveMentionEntries(
+  suggest: Promise<MentionEntry[]>,
+  listing: Promise<MentionEntry[]>,
+  ms = LIST_TIMEOUT_MS,
+  onListingFailed?: () => void,
+): Promise<{ value: MentionEntry[]; fromListing: boolean; failed: boolean }> {
+  const start = Date.now();
+  const sug = await withTimeout(suggest, ms, [] as MentionEntry[]);
+  if (sug.value.length) return { value: sug.value, fromListing: false, failed: false };
+  const ls = await withTimeout(listing, Math.max(0, ms - (Date.now() - start)), null as MentionEntry[] | null);
+  if (ls.timedOut) onListingFailed?.();
+  const value = ls.value ?? [];
+  return { value, fromListing: true, failed: !value.length && (sug.timedOut || ls.timedOut) };
+}
+
 /** `@path/` tokens in a message (at start or after whitespace). Absolute and `..` paths are skipped. */
 export function folderMentions(text: string): string[] {
   const out: string[] = [];

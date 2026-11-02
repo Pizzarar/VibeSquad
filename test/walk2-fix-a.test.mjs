@@ -48,7 +48,8 @@ test("mention list does not leak demo files into live composer", () => {
   const s = src("Composer.tsx");
   // Block 3 (@folder): entries carry a kind, and a failed/timed-out listing falls back to [] (never demo files).
   assert.match(s, /DEMO \? DEMO_ENTRIES : \[\]/);
-  assert.match(s, /LIST_TIMEOUT_MS,\s*\[\] as MentionEntry\[\]/);
+  assert.match(s, /resolveMentionEntries\(suggest, listing!, LIST_TIMEOUT_MS/);
+  assert.match(src("projectContext.ts"), /\[\] as MentionEntry\[\]/);
 });
 
 test("palette jump focuses composer", () => {

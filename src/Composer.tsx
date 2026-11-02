@@ -14,7 +14,7 @@ import {
   mentionLabel,
   parentDirOf,
   urlMentions,
-  withTimeout,
+  resolveMentionEntries,
   type MentionEntry,
 } from "./projectContext";
 
@@ -59,11 +59,6 @@ export function relativizePath(p: string, cwd: string): string {
   const norm = p.split("\\").join("/");
   const base = cwd.split("\\").join("/").replace(/\/$/, "");
   return base && norm.startsWith(base + "/") ? norm.slice(base.length + 1) : norm;
-}
-
-export function filterMentionFiles(files: string[], query: string): string[] {
-  const q = query.toLowerCase();
-  return files.filter((f) => f.toLowerCase().includes(q)).slice(0, 8);
 }
 
 export function isImageFile(f: { type: string }): boolean {
@@ -273,16 +268,10 @@ export function Composer({
     })();
     (async () => {
       // Time-boxed: a slow or hung listing shows "couldn't list" instead of freezing the menu.
-      const sug = await withTimeout(suggest, LIST_TIMEOUT_MS, [] as MentionEntry[]);
+      const r = await resolveMentionEntries(suggest, listing!, LIST_TIMEOUT_MS, () => listingCache.delete(key));
       if (cancelled) return;
-      let value = sug.value;
-      let failed = false;
-      if (!value.length) {
-        const ls = await withTimeout(listing!, LIST_TIMEOUT_MS, null as MentionEntry[] | null);
-        if (cancelled) return;
-        value = ls.value ? filterListing(ls.value, mq) : [];
-        failed = !ls.value && sug.timedOut;
-      }
+      const value = r.fromListing ? filterListing(r.value, mq) : r.value;
+      const failed = r.failed;
       setListFailed(failed);
       setFiles(value.map((e) => ({ ...e, path: relativizePath(e.path, cwd) })));
     })();
