@@ -1,6 +1,9 @@
 import { useState } from "react";
 import { client, DEMO } from "./paseo";
 import { isImeComposing } from "./IdeaInbox";
+import { MarkdownRenderer } from "./Timeline";
+import { AllowRulesModal } from "./AllowRulesModal";
+import { buildKeepPlanning, buildPlanApprove, orderPlanActions, planWasEdited, suggestionLabel, suggestionScope, type PlanAction } from "./paseoPermissionsLogic";
 
 type PermissionCardProps = {
   p: any;
@@ -139,6 +142,9 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
   const [selectedByQ, setSelectedByQ] = useState<Record<number, string>>({});
   const [otherByQ, setOtherByQ] = useState<Record<number, string>>({});
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [rulesOpen, setRulesOpen] = useState(false);
+  const [planEditing, setPlanEditing] = useState(false);
+  const [planDraft, setPlanDraft] = useState<string | null>(null);
 
   const doRespond = async (requestId: string, response: Record<string, unknown>) => {
     setSubmitting(true);
@@ -165,6 +171,7 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
 
   const isQuestion = p.kind === "question";
   const isPlan = p.kind === "plan";
+  const isMode = p.kind === "mode";
   const isToolPerm = !isQuestion && !isPlan;
 
   const commandPreview = isToolPerm ? extractCommandPreview(inputObj, detailObj) : null;
@@ -181,6 +188,14 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
     void doRespond(p.id, msg ? { behavior: "deny", message: msg } : { behavior: "deny" });
   };
 
+  const planActions = orderPlanActions(Array.isArray(p.actions) ? (p.actions as PlanAction[]) : []);
+  const planApprovals = planActions.filter((a) => a.behavior === "allow");
+  const planDenials = planActions.filter((a) => a.behavior !== "allow");
+  const edited = planText !== undefined && planDraft !== null && planWasEdited(planText, planDraft);
+  const approvePlan = (a?: PlanAction) =>
+    void doRespond(p.id, buildPlanApprove(a, edited ? planDraft! : undefined, inputObj));
+  const keepPlanning = () => void doRespond(p.id, buildKeepPlanning(denyMsg, planDenials[0]));
+
   const handleSuggestion = (suggestion: any) => {
     void doRespond(p.id, { behavior: "allow", updatedPermissions: [suggestion] });
   };
@@ -196,31 +211,45 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
   return (
     <div className="perm NeedsYouHighlight" style={{ flexDirection: "column", alignItems: "stretch" }}>
       <div>
-        {isQuestion ? (
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <b data-testid="perm-question-agent-title">{agentName || p.agentName || "Agent"}</b>
-            <div style={{ position: "relative" }}>
-              <button
-                type="button"
-                className="btn ghost small"
-                data-testid="perm-question-more-btn"
-                onClick={() => setMoreMenuOpen((v) => !v)}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 6 }}>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            {isQuestion ? (
+              <b data-testid="perm-question-agent-title">{agentName || p.agentName || "Agent"}</b>
+            ) : (
+              <>
+                <b>{p.title ?? p.name}</b>
+                {isMode && <span className="chip" data-testid="perm-mode-chip" style={{ marginLeft: 6 }}>mode change</span>}
+                {p.description && <div className="muted small">{p.description}</div>}
+              </>
+            )}
+          </div>
+          <div style={{ position: "relative" }}>
+            <button
+              type="button"
+              className="btn ghost small"
+              data-testid="perm-question-more-btn"
+              aria-label="More"
+              onClick={() => setMoreMenuOpen((v) => !v)}
+            >
+              ⋯
+            </button>
+            {moreMenuOpen && (
+              <div
+                style={{
+                  position: "absolute",
+                  right: 0,
+                  top: "100%",
+                  background: "var(--bg, #1e1e1e)",
+                  border: "1px solid var(--line)",
+                  padding: 4,
+                  zIndex: 100,
+                  minWidth: 120,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 4,
+                }}
               >
-                ⋯
-              </button>
-              {moreMenuOpen && (
-                <div
-                  style={{
-                    position: "absolute",
-                    right: 0,
-                    top: "100%",
-                    background: "var(--bg, #1e1e1e)",
-                    border: "1px solid var(--line)",
-                    padding: 4,
-                    zIndex: 100,
-                    minWidth: 120,
-                  }}
-                >
+                {isQuestion && (
                   <button
                     type="button"
                     className="btn bad small"
@@ -230,33 +259,41 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
                   >
                     Deny question
                   </button>
-                </div>
-              )}
-            </div>
+                )}
+                <button
+                  type="button"
+                  className="btn ghost small"
+                  data-testid="perm-allow-rules-menu-item"
+                  onClick={() => { setMoreMenuOpen(false); setRulesOpen(true); }}
+                >
+                  Allow rules…
+                </button>
+              </div>
+            )}
           </div>
-        ) : (
-          <>
-            <b>{p.title ?? p.name}</b>
-            {p.description && <div className="muted small">{p.description}</div>}
-          </>
-        )}
+        </div>
+        {rulesOpen && <AllowRulesModal agentId={agentId} onClose={() => setRulesOpen(false)} />}
 
         {isPlan && planText && (
-          <pre
-            className="perm-plan-body"
-            style={{
-              maxHeight: 180,
-              overflowY: "auto",
-              margin: "6px 0",
-              padding: 8,
-              background: "#090a16",
-              border: "1px solid var(--line)",
-              whiteSpace: "pre-wrap",
-              fontSize: 11,
-            }}
-          >
-            {planText}
-          </pre>
+          planEditing ? (
+            <textarea
+              className="perm-plan-edit"
+              data-testid="perm-plan-edit"
+              aria-label="Edit plan"
+              value={planDraft ?? planText}
+              onChange={(e) => setPlanDraft(e.target.value)}
+              style={{ width: "100%", boxSizing: "border-box", minHeight: 180, maxHeight: "50vh", margin: "6px 0", fontFamily: "monospace", fontSize: 12 }}
+            />
+          ) : (
+            <div
+              className="perm-plan-body"
+              data-testid="perm-plan-body"
+              style={{ maxHeight: "40vh", overflowY: "auto", margin: "6px 0", padding: 8, background: "#090a16", border: "1px solid var(--line)", fontSize: 12 }}
+            >
+              <MarkdownRenderer text={edited ? planDraft! : planText} agentId={agentId} doc />
+              {edited && <div className="muted small" data-testid="perm-plan-edited">edited, will be sent on approve</div>}
+            </div>
+          )
         )}
 
         {isQuestion && questions.length === 0 && (
@@ -466,39 +503,59 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
         </div>
       ) : isPlan ? (
         <div className="perm-actions perm-plan" style={{ flexWrap: "wrap" }}>
-          {p.actions?.length ? (
-            p.actions.map((a: any) => (
+          {planApprovals.length ? (
+            planApprovals.map((a) => (
               <button
                 key={a.id}
-                className={`btn ${a.variant === "danger" ? "bad" : a.intent === "implement" || a.intent === "implement_resume" ? "ok" : "ghost"}`}
+                data-testid="perm-plan-approve"
+                className={`btn ${a.intent === "implement" || a.intent === "implement_resume" ? "ok" : "ghost"}`}
                 disabled={submitting}
-                onClick={() => void doRespond(p.id, { behavior: a.behavior === "allow" ? "allow" : "deny", selectedActionId: a.id })}
+                onClick={() => approvePlan(a)}
               >
-                {a.label}
+                {edited ? `${a.label} (edited)` : a.label}
               </button>
             ))
           ) : (
-            <button className="btn ok" disabled={submitting} onClick={() => void doRespond(p.id, { behavior: "allow" })}>
-              Approve
+            <button className="btn ok" data-testid="perm-plan-approve" disabled={submitting} onClick={() => approvePlan()}>
+              {edited ? "Approve (edited)" : "Approve"}
             </button>
           )}
-          <button className="btn bad" data-testid="perm-deny-btn" disabled={submitting} onClick={handleDeny}>
-            Deny
-          </button>
-          <input
-            className="perm-deny-msg"
-            data-testid="perm-deny-msg-input"
-            type="text"
-            placeholder="Tell the agent what to do instead (optional)…"
-            value={denyMsg}
-            onChange={(e) => setDenyMsg(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !isImeComposing(e)) {
-                e.preventDefault();
-                handleDeny();
-              }
-            }}
-          />
+          {planText !== undefined && (
+            <button
+              type="button"
+              className="btn ghost"
+              data-testid="perm-plan-edit-toggle"
+              disabled={submitting}
+              onClick={() => { setPlanDraft((d) => d ?? planText); setPlanEditing((v) => !v); }}
+            >
+              {planEditing ? "Done editing" : "Edit plan, then approve"}
+            </button>
+          )}
+          <div style={{ display: "flex", gap: 6, flexBasis: "100%", flexWrap: "wrap" }}>
+            <input
+              className="perm-deny-msg"
+              data-testid="perm-deny-msg-input"
+              type="text"
+              style={{ flex: 1, minWidth: 160 }}
+              placeholder="Feedback: what should change in the plan?"
+              value={denyMsg}
+              onChange={(e) => setDenyMsg(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !isImeComposing(e)) {
+                  e.preventDefault();
+                  keepPlanning();
+                }
+              }}
+            />
+            <button type="button" className="btn" data-testid="perm-plan-keep-planning" disabled={submitting} onClick={keepPlanning}>
+              Keep planning
+            </button>
+            {!planDenials.length && (
+              <button className="btn bad" data-testid="perm-deny-btn" disabled={submitting} onClick={handleDeny}>
+                Reject
+              </button>
+            )}
+          </div>
         </div>
       ) : (
         <div className="perm-actions" style={{ flexWrap: "wrap" }}>
@@ -522,10 +579,11 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
               key={i}
               className="btn ok"
               data-testid="perm-allow-suggestion"
+              data-scope={suggestionScope(s)}
               disabled={submitting}
               onClick={() => handleSuggestion(s)}
             >
-              {s.label ?? s.description ?? "Allow always"}
+              {suggestionLabel(s)}
             </button>
           ))}
           {(p.name ?? p.title) && (
