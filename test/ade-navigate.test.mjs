@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createServer, request } from "node:http";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,6 +14,11 @@ Object.defineProperty(globalThis, "localStorage", {
   configurable: true,
   writable: true,
 });
+
+// S3: the middleware reads the local token from VIBESQUAD_HOME; keep it in a temp home.
+const vsHome = mkdtempSync(join(tmpdir(), "vs-nav-home-"));
+process.env.VIBESQUAD_HOME = vsHome;
+test.after(() => rmSync(vsHome, { recursive: true, force: true }));
 
 const K = await import("../src/keymap.ts");
 const N = await import("../src/navigateLogic.ts");
@@ -292,4 +298,40 @@ test("handlers: 403 outside roots, 400 without q, JSON results", async () => {
   assert.ok(files.body.files.includes("src/one.ts"));
   assert.match(src("server/vibesquad-api.mjs"), /case "\/__vibesquad\/search":\s*return handleSearch\(req, res, navRoots\(rootDir, opts\), sendJson\)/);
   assert.doesNotMatch(src("server/file-search.mjs"), /shell:\s*true/);
+});
+
+test("S3: /__vibesquad/files and /search are gated reads: loopback without the owner token gets 403 readOnly, owner passes", async () => {
+  const api = await import("../server/vibesquad-api.mjs");
+  const { ownerHeaders } = await import("./helpers/local-owner.mjs");
+  for (const p of S.ADE_GATED_READ_PATHS) assert.equal(api.isGatedRead(p, p), true, p);
+  const rootDir = join(import.meta.dirname, "..");
+  const srv = createServer(api.createVibesquadMiddleware(rootDir));
+  await new Promise((ok) => srv.listen(0, "127.0.0.1", ok));
+  const port = srv.address().port;
+  const get = (path, headers = {}) =>
+    new Promise((ok, fail) => {
+      const r = request({ host: "127.0.0.1", port, path, headers }, (res) => {
+        let body = "";
+        res.on("data", (c) => (body += c));
+        res.on("end", () => ok({ status: res.statusCode, json: JSON.parse(body || "{}") }));
+      });
+      r.on("error", fail);
+      r.end();
+    });
+  try {
+    const cwd = encodeURIComponent(rootDir);
+    for (const path of [`/__vibesquad/files?cwd=${cwd}`, `/__vibesquad/search?cwd=${cwd}&q=ADE_GATED_READ_PATHS`]) {
+      const anon = await get(path);
+      assert.equal(anon.status, 403, path);
+      assert.equal(anon.json.readOnly, true, path);
+      assert.equal(anon.json.files ?? anon.json.matches, undefined, "nothing leaks");
+      const owner = await get(path, ownerHeaders());
+      assert.equal(owner.status, 200, `${path}: ${JSON.stringify(owner.json).slice(0, 200)}`);
+      assert.equal(owner.json.ok, true);
+    }
+    const owned = await get(`/__vibesquad/search?cwd=${cwd}&q=ADE_GATED_READ_PATHS`, ownerHeaders());
+    assert.ok(owned.json.matches.some((m) => m.path === "server/file-search.mjs"));
+  } finally {
+    await new Promise((ok) => srv.close(ok));
+  }
 });

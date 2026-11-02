@@ -8,7 +8,7 @@ import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspectFirstRunStatus, startManagedPaseoInstall } from "./first-run.mjs";
 import { resolveTeamsFilePath, resolveTeamsWritePath } from "./teams-file.mjs";
-import { handleFileList, handleSearch } from "./file-search.mjs";
+import { ADE_GATED_READ_PATHS, handleFileList, handleSearch } from "./file-search.mjs";
 import {
   LEGACY_NEEDS_LABEL,
   LEGACY_USER_TYPE,
@@ -336,6 +336,7 @@ export function isGatedRead(path, url = "") {
   if (path === "/__vibesquad/paseo/usage") return new URL(url, "http://x").searchParams.get("refresh") === "1"; // forces provider API calls
   if (path === "/__vibesquad/paseo/surface") return true; // daemon config: listen, CORS, hub, backups
   if (path === "/__vibesquad/local-image") return true; // file contents
+  if (ADE_GATED_READ_PATHS.includes(path)) return true; // quick open / find in files: workspace file names and contents
   return false;
 }
 
