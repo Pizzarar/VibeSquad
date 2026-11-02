@@ -19,7 +19,7 @@ test("title lint: v1-titled live agents are not flagged; wrong titles still are"
   assert.equal(lintTitle(bs("BRAINSTORM · VIBESQUAD")), null);
   assert.equal(lintTitle(bs("BRAINSTORM · VIBESQUAD · naming", "naming")), null);
   assert.equal(lintTitle(bs("BRAINSTORM · VIBESQUAD · wrong", "naming")), "Hub Buddy · naming");
-  assert.equal(lintTitle(bs("whatever")), "Hub Buddy");
+  assert.equal(lintTitle(bs("whatever")), "RiffBot");
 
   const worker = (title) => agent(title, { team: "vibesquad", lane: "vibesquad", role: "worker", job: "drop files" });
   assert.equal(lintTitle(worker("VIBESQUAD · drop files")), null);
@@ -30,7 +30,7 @@ test("title lint: v1-titled live agents are not flagged; wrong titles still are"
 });
 
 test("titleFor defaults the code from the lane (hub lane is Hub, not Vib)", () => {
-  assert.equal(titleFor("brainstorm", "VibeSquad", {}), "Hub Buddy");
+  assert.equal(titleFor("brainstorm", "VibeSquad", {}), "RiffBot");
   assert.equal(titleFor("lead", "VibeSquad", { ord: "1" }), "★ Hub1");
   assert.equal(titleFor("lead", "VibeSquad", { ord: "2", laneId: "vibesquad" }), "★ Hub2");
   assert.equal(titleFor("worker", "VibeSquad", { ord: "2", job: "x" }), "Hub2 · x");

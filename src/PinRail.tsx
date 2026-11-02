@@ -2,13 +2,13 @@
 // Brainstorm is the real drawer in the middle (an ordinary panes.ts tab); every pin of the squad
 // stays in a scrollable right rail in fixed pin order. Clicking a rail tile swaps it in. Needs-you is
 // a badge and never reorders the rail. The bar on top of the drawer is the only route to the plumbing.
-import { memo, useEffect, useLayoutEffect, useRef } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { getDraft, useDraft } from "./drafts";
 import { NeedsBadge, PinDot, setFullView, usePreview } from "./PinGrid";
 import { exitPinFocus, type PinFocus } from "./pinFocus";
 import { TopBreadcrumb } from "./Breadcrumb";
 import { escGoesHome } from "./pinFocusLogic";
-import { pinsForSquad, type Pin } from "./pins";
+import { isHubPin, pinsForSquad, type Pin } from "./pins";
 import { SendToBar } from "./PinIdeas";
 import { openAgent } from "./panes";
 import type { TeamView } from "./teams";
@@ -148,7 +148,7 @@ function PinFocusBar({ view, focus, onSelectSquad }: { view: TeamView; focus: Pi
       <button type="button" className="btn ghost small pin-focus-home" data-testid="pin-focus-home" title="Back to all teams (Esc)" onClick={exitPinFocus}>
         ⊞
       </button>
-      <TopBreadcrumb squadsHome={false} squadId={view.team.id} squadName={view.team.name} laneName={pin?.lane.name ?? focus.laneId} onSelectSquad={onSelectSquad} />
+      <TopBreadcrumb squadsHome={false} squadId={view.team.id} squadName={view.team.name} laneName={pin?.lane.name ?? focus.laneId} hub={pin ? isHubPin(pin) : false} onSelectSquad={onSelectSquad} />
       <span className="pin-focus-name">{pin?.lane.name ?? focus.laneId}</span>
       <span className="muted small pin-focus-squad">{view.team.name}</span>
       {pin && focus.agentId && <SendToBar pin={pin} />}
@@ -167,12 +167,19 @@ function PinFocusBar({ view, focus, onSelectSquad }: { view: TeamView; focus: Pi
 }
 
 /** Row 1 of the focused middle: the bar, plus the "Start fresh" panel when the Brainstorm is gone. */
-export function PinFocusHeader(props: { view: TeamView; focus: PinFocus; onStart: (pin: Pin) => void; onSelectSquad: (id: string) => void }) {
-  const { view, focus, onStart, onSelectSquad } = props;
+export function PinFocusHeader(props: { view: TeamView; focus: PinFocus; onStart: (pin: Pin) => void; onSelectSquad: (id: string) => void; /** Rendered under the bar in the same row-1 grid cell (the hub bar). */ belowBar?: ReactNode }) {
+  const { view, focus, onStart, onSelectSquad, belowBar } = props;
   const pin = pinsForSquad(view).pinned.find((p) => p.lane.id === focus.laneId);
   return (
     <>
-      <PinFocusBar view={view} focus={focus} onSelectSquad={onSelectSquad} />
+      {belowBar ? (
+        <div className="pin-focus-head">
+          <PinFocusBar view={view} focus={focus} onSelectSquad={onSelectSquad} />
+          {belowBar}
+        </div>
+      ) : (
+        <PinFocusBar view={view} focus={focus} onSelectSquad={onSelectSquad} />
+      )}
       {!focus.agentId && (
         <div className="pin-focus-empty" data-testid="pin-focus-empty">
           {focus.gone ? (

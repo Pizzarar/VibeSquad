@@ -87,7 +87,7 @@ export function nameFromIdea(text) {
 }
 
 /** A fresh team brief (same sections as server/brainstorm.mjs) with the idea under Open. */
-export function newPinBrief(laneId, name, idea) {
+export function newPinBrief(laneId, name, idea, { hub = false } = {}) {
   const ideaLines = String(idea ?? "")
     .replace(/\r\n/g, "\n")
     .split("\n")
@@ -113,6 +113,7 @@ export function newPinBrief(laneId, name, idea) {
     "## In flight",
     "- (none recorded yet)",
     "",
+    ...(hub ? ["## Teams", "- (none yet: one line per Team, state + current block)", "", "## Unsplit threads", "- (none yet)", ""] : []),
   ].join("\n");
 }
 

@@ -159,10 +159,10 @@ export function levelUp(s: NavLevel): "squad-page" | "squads-home" | "none" {
 export type Crumb = { key: "squads" | "squad" | "brainstorm"; label: string; current?: boolean };
 
 /** Breadcrumb segments: Squads › Squad › BRAINSTORM · lane, trimmed to the current level. */
-export function breadcrumbOf(c: { squadsHome: boolean; squadName: string; laneName: string | null }): Crumb[] {
+export function breadcrumbOf(c: { squadsHome: boolean; squadName: string; laneName: string | null; hub?: boolean }): Crumb[] {
   const out: Crumb[] = [{ key: "squads", label: "Squads", current: c.squadsHome }];
   if (!c.squadsHome) out.push({ key: "squad", label: c.squadName, current: c.laneName === null });
-  if (c.laneName !== null) out.push({ key: "brainstorm", label: `BRAINSTORM · ${c.laneName}`, current: true });
+  if (c.laneName !== null) out.push({ key: "brainstorm", label: c.hub ? "RiffBot" : `BRAINSTORM · ${c.laneName}`, current: true });
   return out;
 }
 

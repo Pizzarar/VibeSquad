@@ -3,7 +3,7 @@
 // This file is the shared contract for the pinned-team UI. Keep it pure (no fetch, no React):
 // steps 1 (sidebar + grid), 2 (focus rail) and 3 (resolver + quick start) all build on it.
 import type { LaneDef, Member, TeamDef, TeamView } from "./teams.ts";
-import { brainstormUsedTokens, countsAsNeedsYou } from "./teams.ts";
+import { brainstormUsedTokens, countsAsNeedsYou, isHubLane } from "./teams.ts";
 export { topicOfBrainstorm } from "./teams.ts";
 
 /** "removed" lanes stay in teams.json (brief + history kept) but are hidden everywhere. */
@@ -92,6 +92,18 @@ export function pinsForSquad(view: TeamView): { pinned: Pin[]; done: Pin[] } {
     .sort((a, b) => a.order - b.order);
   return { pinned: pins.filter((p) => p.state === "pinned"), done: pins.filter((p) => p.state === "done") };
 }
+
+/** True for the Squad's hub pin (RiffBot's lane). It lives in the hub bar, not the Team grid or Done shelf. */
+export const isHubPin = (pin: Pin): boolean => isHubLane(pin.squad, pin.lane);
+
+/** The pins the squad page shows as Team tiles and Done entries: `pinsForSquad` without the hub lane. */
+export function gridPinsForSquad(view: TeamView): { pinned: Pin[]; done: Pin[] } {
+  const { pinned, done } = pinsForSquad(view);
+  return { pinned: pinned.filter((p) => !isHubPin(p)), done: done.filter((p) => !isHubPin(p)) };
+}
+
+/** The pin's looks-done message id, or null: never offered for the hub (it is never marked done). */
+export const looksDoneFor = (pin: Pin, id: string | null): string | null => (isHubPin(pin) ? null : id);
 
 /** Every live main Buddy of the pin when there are 2+ (the duplicate warning lists them), else []. */
 export function liveBuddyDupes(pin: Pin): Member[] {
