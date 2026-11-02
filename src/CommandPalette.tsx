@@ -221,7 +221,7 @@ function AgentOpConfirmHost() {
               {req.agents.map((a) => (
                 <li key={a.id}>
                   {cleanTitle(a.title) || a.id.slice(0, 8)}
-                  {a.labels?.role === "lead" || a.labels?.role === "brainstorm" ? <span className="muted small"> · {a.labels.role === "lead" ? "Lead" : "Buddy"}</span> : null}
+                  {a.labels?.role === "lead" || a.labels?.role === "brainstorm" ? <span className="muted small"> · {a.labels.role === "lead" ? "Lead" : "Brainstorm"}</span> : null}
                 </li>
               ))}
             </ul>
@@ -511,7 +511,7 @@ export function CommandPaletteHost(props: {
       ...agents,
       ...ops,
     ];
-  }, [all, props.views]);
+  }, [all, props.members, props.views]);
 
   const shown = useMemo(() => filterPalette(items, q).slice(0, 60), [items, q]);
 

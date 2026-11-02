@@ -1,16 +1,18 @@
 // Agent ops parity with Paseo: hard delete, bulk stop, reload. Wrappers over daemonClient plus
 // the pure logic (targets, guards) the UI and tests share. Labels, never titles, decide roles.
-import { DEMO, daemonClient, loadArchived, removeLocalAgent } from "./paseo";
+import { DEMO, daemonClient, getPaseoState, loadArchived, removeLocalAgent } from "./paseo";
+import { closeTab } from "./panes";
 import type { OpAgent } from "./paseoAgentOpsLogic.ts";
 
 export { bulkStopTargets, deleteGuard, runningCwds } from "./paseoAgentOpsLogic.ts";
 export type { OpAgent, StopCandidate, StopScope } from "./paseoAgentOpsLogic.ts";
 
 export async function hardDeleteAgent(id: string): Promise<void> {
-  if (DEMO) return void removeLocalAgent(id);
-  await daemonClient.deleteAgent(id);
-  removeLocalAgent(id); // moves it to the local archived map; the reload below drops it for good
-  void loadArchived();
+  if (!DEMO) await daemonClient.deleteAgent(id);
+  removeLocalAgent(id); // archives locally; evict that entry right away (same tick, before React re-reads state)
+  getPaseoState().archivedAgents.delete(id);
+  closeTab(id);
+  if (!DEMO) void loadArchived();
 }
 
 /** Cancels each agent's current run. Returns the ids that failed. */

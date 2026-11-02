@@ -638,7 +638,7 @@ Usage:
   vs inbox list [--lane <lane>]
   vs inbox triage --merge <targetId> <sourceId...> | --bounce <cardId> --lane <newLane>
   vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force]
-  vs wait <agent> [--timeout <seconds>]   block until the agent is idle (exit 0), errored/blocked (1) or timed out (2)
+  vs wait <agent> [--timeout <seconds>]   block until idle (exit 0), error or blocked (1), timeout (2); no limit by default
   vs install-shim [--bin-dir <dir>]
 
 Types: ${LOG_TYPES.join(", ")} (text 1..${MAX_TEXT} chars)
@@ -1835,7 +1835,7 @@ export function summarizeWait(agentId, result) {
 
 /** vs wait <agent> [--timeout s]: waits on the daemon (waitForFinish). Injectable client for tests. */
 export async function runWait(client, agentId, timeoutSec) {
-  const timeoutMs = timeoutSec === undefined ? undefined : Math.round(timeoutSec * 1000);
+  const timeoutMs = timeoutSec === undefined ? 0 : Math.round(timeoutSec * 1000);
   return summarizeWait(agentId, await client.waitForFinish(agentId, timeoutMs));
 }
 

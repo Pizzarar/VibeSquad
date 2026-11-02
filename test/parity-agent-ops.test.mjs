@@ -7,7 +7,7 @@ const ag = (id, extra = {}) => ({ id, title: id, status: "idle", cwd: "C:\\w\\a"
 
 test("deleteGuard warns for live lead and buddy only, by label", () => {
   assert.match(deleteGuard(ag("l", { labels: { role: "lead" } })).warning, /live Lead/);
-  assert.match(deleteGuard(ag("b", { labels: { role: "brainstorm" } })).warning, /live Buddy/);
+  assert.match(deleteGuard(ag("b", { labels: { role: "brainstorm" } })).warning, /live Brainstorm/);
   assert.equal(deleteGuard(ag("w", { labels: { role: "worker" } })).warning, null);
   assert.equal(deleteGuard(ag("old", { labels: { role: "lead" }, archivedAt: "2026-01-01" })).warning, null);
   assert.equal(deleteGuard(ag("c", { labels: { role: "lead" }, status: "closed" })).warning, null);
@@ -51,5 +51,5 @@ test("vs wait: exit codes and client call", async () => {
   assert.equal((await runWait(client, "agent1", 5)).code, 0);
   assert.deepEqual(calls, [["agent1", 5000]]);
   await runWait(client, "agent2");
-  assert.deepEqual(calls[1], ["agent2", undefined]);
+  assert.deepEqual(calls[1], ["agent2", 0]);
 });

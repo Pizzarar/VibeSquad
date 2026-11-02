@@ -17,7 +17,7 @@ const isLive = (a: OpAgent) => !a.archivedAt && a.status !== "closed";
 export function deleteGuard(a: OpAgent): { warning: string | null } {
   const role = roleOf(a);
   if (isLive(a) && (role === "lead" || role === "brainstorm")) {
-    const what = role === "lead" ? "Lead" : "Buddy";
+    const what = role === "lead" ? "Lead" : "Brainstorm";
     return { warning: `This is a live ${what}. Deleting it removes the ${what} for its lane and can orphan attached workers.` };
   }
   return { warning: null };
