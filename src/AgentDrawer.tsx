@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
-import { DEMO, removeLocalAgent, sendMessage, upsertLocalAgent } from "./paseo";
+import { daemonClient, DEMO, removeLocalAgent, sendMessage, upsertLocalAgent } from "./paseo";
 import { openPin } from "./pinActions";
 import type { Pin, PinLane } from "./pins";
 import { useDraft } from "./drafts";
@@ -25,7 +25,8 @@ import { providerSpec } from "./pixel";
 import { openAgentInTab, paneOfAgent } from "./panes";
 import { useTimeline, Timeline, TimelineErrorBoundary } from "./Timeline";
 import { PermissionCard } from "./PermissionCard";
-import { Composer } from "./Composer";
+import { Composer, stageFiles } from "./Composer";
+import { composeMessage, setAgentCwd, useAttachments } from "./attachments";
 import { DrawerHeader } from "./DrawerHeader";
 import { RightDock } from "./RightDock";
 
@@ -140,6 +141,9 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   const [dockOpen, setDockOpen] = useState(() => localStorage.getItem("vs.right-dock.open") === "true");
 
   const imgs = useImageDraft(`${agent.id}:images`);
+  const atts = useAttachments(`${agent.id}:files`);
+  const [paneDrop, setPaneDrop] = useState(false);
+  setAgentCwd(agent.id, agent.cwd);
 
   const labels = (agent.labels ?? {}) as Record<string, string>;
   const isBs = isBrainstormAgent(agent);
@@ -278,9 +282,10 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   const lastBehavior = useRef<ActiveTurnBehavior | null>(null);
 
   const sendWithBehavior = async (behavior: ActiveTurnBehavior) => {
-    if (!draft.trim() && !imgs.images.length) return;
+    if (!draft.trim() && !imgs.images.length && !atts.items.length) return;
     if (sendLock.current.held) return;
-    const text = draft.trim() ? draft : "(image)";
+    const sentFiles = atts.items;
+    const base = draft.trim() ? draft : imgs.images.length ? "(image)" : "";
     const typed = draft;
     setSendError(null);
     lastBehavior.current = behavior;
@@ -294,8 +299,14 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
       restore: () => setDraft(restoredDraft(typed, draftRef.current)),
       onError: (e) => setSendError(`Send failed: ${e instanceof Error ? e.message : String(e)}`),
       run: async () => {
+        const text = await composeMessage(base, sentFiles, async ({ name, file }) => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const up = await (daemonClient as any).uploadFile?.({ cwd: agent.cwd, name, file });
+          if (!up?.path) throw new Error(`upload of ${name} failed`);
+          return up.path as string;
+        });
         // BF-P1: Auto-restart without asking at >= restartTokens (150k) or when next turn would push it past 150k.
-        if (isBs && (bsUsedTokens >= restartTokens || bsUsedTokens + Math.ceil(typed.length / 3) >= restartTokens)) {
+        if (isBs && (bsUsedTokens >= restartTokens || bsUsedTokens + Math.ceil(text.length / 3) >= restartTokens)) {
           autoRestartFired.current = agent.id;
           const r = await doRestart("auto-150k", text);
           if (!r?.retired) return undefined;
@@ -324,6 +335,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
           } else {
             await sendMessage(newId, promptToSend, undefined, { activeTurnBehavior: behavior });
           }
+          atts.clear();
           return true;
         }
 
@@ -332,9 +344,10 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
           rememberSent(agent.id, text, imgs.images);
           imgs.clear();
         } else {
-          await sendMessage(agent.id, typed, undefined, { activeTurnBehavior: behavior });
+          await sendMessage(agent.id, text, undefined, { activeTurnBehavior: behavior });
         }
-        if (agent.status === "running" && behavior === "steer") setLastSteered(text);
+        atts.clear();
+        if (agent.status === "running" && behavior === "steer") setLastSteered(base || "(files)");
         return true;
       },
     });
@@ -426,7 +439,29 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   }, [agent.id, draft, lastAssistantMsg, topicCardId, topicName, topicParking]);
 
   return (
-    <aside className="drawer">
+    <aside
+      className="drawer"
+      onDragOver={(e) => {
+        if (Array.from(e.dataTransfer?.types ?? []).includes("Files")) {
+          e.preventDefault();
+          setPaneDrop(true);
+        }
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setPaneDrop(false);
+      }}
+      onDrop={(e) => {
+        setPaneDrop(false);
+        if (e.defaultPrevented) return; // the composer already took it
+        e.preventDefault();
+        stageFiles(Array.from(e.dataTransfer?.files ?? []), imgs, atts);
+      }}
+    >
+      {paneDrop && (
+        <div className="drop-overlay" data-testid="drop-overlay">
+          Drop to attach
+        </div>
+      )}
       <DrawerHeader
         agent={agent}
         agentType={agentType}
@@ -539,6 +574,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
         inboxParking={inboxParking}
         lastSteered={lastSteered}
         imgs={imgs}
+        atts={atts}
         onSend={send}
         onInterrupt={sendInterrupt}
         onParkToInbox={parkToInbox}
