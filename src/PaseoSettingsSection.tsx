@@ -317,6 +317,13 @@ export function PaseoSettingsSection({
         body: JSON.stringify(patch),
       });
       const d = await r.json();
+      if (r.status === 409 && d.needsConfirmation && patch.confirmExposure !== true) {
+        if (window.confirm(`${d.warning}\n\nSave anyway?`)) {
+          return applySurfacePatch({ ...patch, confirmExposure: true }, label);
+        }
+        setNotice("Kept the current daemon.listen.");
+        return;
+      }
       if (!r.ok || !d.ok) {
         setErrorMsg(d.error || "Failed to update Paseo config");
       } else {
@@ -325,7 +332,8 @@ export function PaseoSettingsSection({
           setListenDraft(d.surface.network.listen);
           setCorsDraft(d.surface.network.corsAllowedOrigins);
         }
-        setNotice(d.restartRequired ? `${label} — restart required to apply new listen address.` : `${label} (reloaded).`);
+        const base = d.restartRequired ? `${label} — restart required to apply new listen address.` : `${label} (reloaded).`;
+        setNotice(d.warning ? `${base} ⚠ ${d.warning}` : base);
         await loadAll();
       }
     } catch (e) {

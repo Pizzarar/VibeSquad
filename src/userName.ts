@@ -10,7 +10,7 @@ const DEFAULT_NAME = "you";
 let userName = DEFAULT_NAME;
 let lanEnabled = false;
 let exposedIps: string[] = [];
-let serverConfigWarnings: { file: string; label?: string; error: string }[] = [];
+let serverConfigWarnings: { file: string; label?: string; error: string; kind?: string }[] = [];
 let desktopConfigWarning = "";
 let staleBuild: { built: string; head: string; behind: number } | null = null;
 const listeners = new Set<() => void>();
@@ -19,7 +19,10 @@ export const getUserName = () => userName;
 export const getLanEnabled = () => lanEnabled;
 export const getExposedIps = () => exposedIps;
 export const getConfigWarnings = (): string[] => {
-  const list = serverConfigWarnings.map((w) => `${w.label || w.file}: ${w.error}`);
+  // Parse errors keep their fallback note; other kinds (e.g. "exposure") are shown as-is.
+  const list = serverConfigWarnings.map((w) =>
+    w.kind ? `${w.label || w.file}: ${w.error}` : `${w.label || w.file}: JSON parse error (using fallback defaults without overwriting): ${w.error}`,
+  );
   if (desktopConfigWarning) list.push(desktopConfigWarning);
   return list;
 };
@@ -44,6 +47,7 @@ export function setServerConfigWarnings(warnings: unknown): void {
           file: String(w.file || ""),
           label: w.label ? String(w.label) : undefined,
           error: String(w.error),
+          ...(typeof w.kind === "string" && w.kind ? { kind: w.kind } : {}),
         }))
     : [];
   const prevKey = JSON.stringify(serverConfigWarnings);

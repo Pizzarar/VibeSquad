@@ -409,14 +409,27 @@ describe("PLAN_PASEO_CONTROLS — Paseo settings & daemon controls (isolated tem
       assert.ok(!surfaceText.includes("TOP_SECRET_TOKEN_VALUE_888"), "No secret value may appear in /paseo/surface response");
       assert.ok(!surfaceText.includes("sk-or-secret-value-777"), "No provider env secret may appear in /paseo/surface response");
 
-      // Changing daemon.listen flags restartRequired: true
-      const listenPatchResp = await fetch(`http://127.0.0.1:${port}/__vibesquad/paseo/surface`, {
+      // A non-loopback daemon.listen needs confirmExposure: 409 and no write without it
+      const unconfirmedResp = await fetch(`http://127.0.0.1:${port}/__vibesquad/paseo/surface`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ listen: "0.0.0.0:16767", browserToolsEnabled: true }),
       });
+      assert.equal(unconfirmedResp.status, 409);
+      const unconfirmedJson = await unconfirmedResp.json();
+      assert.equal(unconfirmedJson.needsConfirmation, true);
+      assert.match(unconfirmedJson.warning, /not loopback/);
+      assert.equal(JSON.parse(readFileSync(join(tempPaseoHome, "config.json"), "utf8")).daemon.listen, "127.0.0.1:16767");
+
+      // Changing daemon.listen flags restartRequired: true
+      const listenPatchResp = await fetch(`http://127.0.0.1:${port}/__vibesquad/paseo/surface`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ listen: "0.0.0.0:16767", browserToolsEnabled: true, confirmExposure: true }),
+      });
       const listenPatchJson = await listenPatchResp.json();
       assert.equal(listenPatchJson.ok, true);
+      assert.match(listenPatchJson.warning, /not loopback/);
       assert.equal(listenPatchJson.restartRequired, true);
       assert.equal(listenPatchJson.surface.network.listen, "0.0.0.0:16767");
       assert.equal(listenPatchJson.surface.behaviour.browserToolsEnabled, true);

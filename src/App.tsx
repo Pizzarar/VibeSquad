@@ -1899,7 +1899,7 @@ export function App() {
             textAlign: "center",
           }}
         >
-          {`⚠ Config JSON parse error (using fallback defaults without overwriting): ${configWarnings.join(" · ")}`}
+          {`⚠ Config warning: ${configWarnings.join(" · ")}`}
         </div>
       )}
       {updaterStatus.updateAvailable && !updaterStatus.dismissed && (

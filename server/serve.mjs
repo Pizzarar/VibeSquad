@@ -30,6 +30,7 @@ import "./inbox.mjs";
 import { installVsShim } from "../cli/vs.mjs";
 import { startPushWatcher } from "./push.mjs";
 import { ensurePaseoDaemon } from "./first-run.mjs";
+import { checkDaemonListenExposure } from "./paseo-control.mjs";
 import { logServerStart } from "./server-start.mjs";
 import { getStale } from "./stale-runtime.mjs";
 import { loadUserSettings } from "./user-settings.mjs";
@@ -484,6 +485,9 @@ if (isMain) {
   if (loadUserSettings().startPaseoWithVibeSquad !== false) {
     void ensurePaseoDaemon({ listen: readPaseo(rootDir).listen });
   }
+  try {
+    checkDaemonListenExposure();
+  } catch {}
   server.listen(port, "127.0.0.1", () => {
     console.log(`VibeSquad serving ${distDir} on ${url}`);
     logServerStart({ rootDir });
