@@ -13,6 +13,7 @@ import { toolStartsExpanded, usePref } from "./prefs";
 import { getPanes } from "./panes";
 import { SubagentList } from "./SubagentList";
 import { Spinner, Stamp, TimelineSkeleton, useDelayedBusy } from "./QuickWinsUi";
+import { MermaidView } from "./MermaidView";
 
 export class TimelineErrorBoundary extends Component<
   { children: ReactNode; fallbackLabel?: string },
@@ -380,6 +381,9 @@ export function MarkdownRenderer({ text, agentId, doc = false }: { text: string;
         return <h3 key={i} className={cls}>{tok.text}</h3>;
       }
       case "code_block":
+        if (tok.lang.trim().toLowerCase() === "mermaid") {
+          return <MermaidView key={i} code={tok.code} />;
+        }
         return <CodeBlock key={i} lang={tok.lang} code={tok.code} />;
       case "table":
         return (
