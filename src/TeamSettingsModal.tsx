@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { getUserName, loadDesktopStatus, loadUpdaterStatus, saveLanEnabled, saveUpdateChannel, saveUserName, useConfigWarnings, useDesktopStatus, useExposedIpsStore, useLanEnabled, useUpdaterStatus } from "./userName";
+import { getUserName, loadDesktopStatus, loadUpdaterStatus, loadUserName, saveLanEnabled, saveRemoteEnabled, saveUpdateChannel, saveUserName, useConfigWarnings, useDesktopStatus, useExposedIpsStore, useLanEnabled, useRemoteEnabled, useUpdaterStatus } from "./userName";
 import { PaseoSettingsSection } from "./PaseoSettingsSection";
+import { PairDeviceModal } from "./PairDeviceModal";
 import {
   AGENT_TYPE_NAME,
   BRAINSTORM_RESTART_DEFAULT,
@@ -230,7 +231,7 @@ export function ProfileImportModal({ onClose }: { onClose: () => void }) {
 }
 
 /** The groups of this editor. The Settings home renders them in separate sections; the modal shows all. */
-export type TeamSettingsPart = "account" | "update" | "scale" | "paseo" | "profiles" | "teams";
+export type TeamSettingsPart = "account" | "remote" | "update" | "scale" | "paseo" | "profiles" | "teams";
 
 export function TeamSettingsModal({
   onClose,
@@ -345,11 +346,14 @@ export function TeamSettingsModal({
 
   const [nameDraft, setNameDraft] = useState(() => (getUserName() === "you" ? "" : getUserName()));
   const lanEnabled = useLanEnabled();
+  const remoteEnabled = useRemoteEnabled();
+  const [showPairModal, setShowPairModal] = useState(false);
   const exposedIps = useExposedIpsStore();
   const updaterStatus = useUpdaterStatus();
   const desktopStatus = useDesktopStatus();
   const configWarnings = useConfigWarnings();
   useEffect(() => {
+    void loadUserName();
     void fetchProfiles();
     void loadUpdaterStatus();
     void loadDesktopStatus();
@@ -440,19 +444,94 @@ export function TeamSettingsModal({
               {lanEnabled && exposedIps.length > 0 ? ` Active on: ${exposedIps.join(", ")}.` : ""}
             </div>
           </div>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontWeight: 700 }}>
-            <input
-              type="checkbox"
-              data-testid="settings-lan-enabled-toggle"
-              checked={lanEnabled}
-              onChange={(e) => {
-                void saveLanEnabled(e.target.checked);
-              }}
-            />
-            <span>{lanEnabled ? "Enabled" : "Off (loopback only)"}</span>
-          </label>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontWeight: 700 }}>
+              <input
+                type="checkbox"
+                data-testid="settings-lan-enabled-toggle"
+                checked={lanEnabled}
+                onChange={(e) => {
+                  void saveLanEnabled(e.target.checked);
+                }}
+              />
+              <span>{lanEnabled ? "Enabled" : "Off (loopback only)"}</span>
+            </label>
+            <button
+              type="button"
+              className="btn small"
+              onClick={() => setShowPairModal(true)}
+            >
+              📱 Link / Pair a Device
+            </button>
+          </div>
         </div>
       </section>}
+      {show("remote") && (
+        <>
+          <section className="ts-team" data-testid="remote-control-section" data-setting-id="remote-control">
+            <div className="ts-scale-head">
+              <div>
+                <div className="field-label">REMOTE CONTROL (PASEO RELAY &amp; REMOTE ACCESS)</div>
+                <div className="muted small">
+                  Allow paired phones, tablets, and laptops to open VibeSquad through Paseo Relay (<code>~/.vibesquad/settings.json</code> → <code>remote.enabled</code>). Fixes &quot;VibeSquad remote access is off on the PC&quot;.
+                </div>
+              </div>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontWeight: 700 }}>
+                <input
+                  type="checkbox"
+                  data-testid="settings-remote-enabled-toggle"
+                  checked={remoteEnabled}
+                  onChange={(e) => {
+                    void saveRemoteEnabled(e.target.checked);
+                  }}
+                />
+                <span>{remoteEnabled ? "Enabled" : "Off"}</span>
+              </label>
+            </div>
+          </section>
+          <section className="ts-team" data-testid="remote-lan-section">
+            <div className="ts-scale-head">
+              <div>
+                <div className="field-label">DIRECT HOME LAN / NORDVPN MESHNET</div>
+                <div className="muted small">
+                  Expose HTTPS on port <code>4180</code> over your Home Wi-Fi / LAN or NordVPN Meshnet.
+                  {lanEnabled && exposedIps.length > 0 ? ` Active on: ${exposedIps.join(", ")}.` : ""}
+                </div>
+              </div>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontWeight: 700 }}>
+                <input
+                  type="checkbox"
+                  data-testid="settings-remote-lan-toggle"
+                  checked={lanEnabled}
+                  onChange={(e) => {
+                    void saveLanEnabled(e.target.checked);
+                  }}
+                />
+                <span>{lanEnabled ? "Enabled" : "Off (loopback only)"}</span>
+              </label>
+            </div>
+          </section>
+          <section className="ts-team" data-testid="settings-remote-pair-card">
+            <div className="ts-scale-head">
+              <div>
+                <div className="field-label">LINK / PAIR A DEVICE</div>
+                <div className="muted small">
+                  Generate a QR code, 6-digit pairing code, or Paseo Relay offer link to connect another PC, phone, or tablet in seconds.
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn ok small"
+                data-testid="settings-open-pair-device-btn"
+                onClick={() => setShowPairModal(true)}
+              >
+                📱 Link / Pair a Device (QR &amp; 6-Digit Code)
+              </button>
+            </div>
+          </section>
+        </>
+      )}
+      {showPairModal && <PairDeviceModal onClose={() => setShowPairModal(false)} />}
       {show("update") && <section className="ts-team" data-testid="update-channel-section">
         <div className="ts-scale-head">
           <div>

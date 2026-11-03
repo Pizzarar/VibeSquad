@@ -182,3 +182,14 @@ export function saveUserSettings(patch, baseHome) {
   clearConfigWarning(file);
   return next;
 }
+
+export function saveRemoteAccess(enabled, baseHome) {
+  const file = settingsFile(baseHome);
+  const current = loadUserSettings(baseHome);
+  const next = { ...current, remote: { enabled: Boolean(enabled) } };
+  delete next.parseError;
+  mkdirSync(baseHome || vibesquadHome(), { recursive: true });
+  writeFileSync(file, JSON.stringify(next, null, 2) + "\n", "utf8");
+  clearConfigWarning(file);
+  return next;
+}

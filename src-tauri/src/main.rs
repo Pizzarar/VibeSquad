@@ -718,7 +718,7 @@ fn build_http_and_ws_clients() -> Result<(reqwest::Client, Connector), String> {
     let http_client = http_builder
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_millis(1500))
-        .timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(120))
         .build()
         .map_err(|e| format!("reqwest build err: {}", e))?;
 
@@ -1851,7 +1851,8 @@ fn find_bundled_runtime() -> Option<(PathBuf, PathBuf)> {
     }
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
         if !local.trim().is_empty() {
-            roots.push(PathBuf::from(local).join("com.vibesquad.desktop").join("runtime"));
+            roots.push(PathBuf::from(&local).join("com.vibesquad.desktop").join("runtime"));
+            roots.push(PathBuf::from(&local).join("VibeSquad").join("runtime"));
         }
     }
     for root in roots {
@@ -2088,56 +2089,69 @@ async fn proxy_http_handler(
             Err(_) => reqwest::Method::GET,
         };
 
-        let mut builder = state.client().request(req_method, &target_url);
+        let build_req = || {
+            let mut builder = state.client().request(req_method.clone(), &target_url);
 
-        for (k, v) in req_headers.iter() {
-            let name_lower = k.as_str().to_lowercase();
-            if name_lower == "host"
-                || name_lower == "connection"
-                || name_lower == "content-length"
-                || name_lower == "origin"
-                || name_lower == "referer"
-                || name_lower == "cookie"
-                || name_lower == LOCAL_TOKEN_HEADER
-            {
-                continue;
+            for (k, v) in req_headers.iter() {
+                let name_lower = k.as_str().to_lowercase();
+                if name_lower == "host"
+                    || name_lower == "connection"
+                    || name_lower == "content-length"
+                    || name_lower == "origin"
+                    || name_lower == "referer"
+                    || name_lower == "cookie"
+                    || name_lower == LOCAL_TOKEN_HEADER
+                {
+                    continue;
+                }
+                if let Ok(val_str) = v.to_str() {
+                    builder = builder.header(k.as_str(), val_str);
+                }
             }
-            if let Ok(val_str) = v.to_str() {
-                builder = builder.header(k.as_str(), val_str);
-            }
-        }
 
-        if host_is_local {
-            builder = builder
-                .header("Host", &host)
-                .header("Origin", format!("http://{}", host));
-            if let Some(t) = state.local_token() {
-                builder = builder.header(LOCAL_TOKEN_HEADER, t);
+            if host_is_local {
+                builder = builder
+                    .header("Host", &host)
+                    .header("Origin", format!("http://{}", host));
+                if let Some(t) = state.local_token() {
+                    builder = builder.header(LOCAL_TOKEN_HEADER, t);
+                }
             }
-        }
 
-        let existing_cookie = strip_local_cookies(
-            req_headers
-                .get(axum::http::header::COOKIE)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or(""),
-        );
-        let merged = if cfg.device_token.is_empty() || existing_cookie.contains("vs_device=") {
-            existing_cookie
-        } else if existing_cookie.is_empty() {
-            format!("vs_device={}", cfg.device_token)
-        } else {
-            format!("{}; vs_device={}", existing_cookie, cfg.device_token)
+            let existing_cookie = strip_local_cookies(
+                req_headers
+                    .get(axum::http::header::COOKIE)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or(""),
+            );
+            let merged = if cfg.device_token.is_empty() || existing_cookie.contains("vs_device=") {
+                existing_cookie
+            } else if existing_cookie.is_empty() {
+                format!("vs_device={}", cfg.device_token)
+            } else {
+                format!("{}; vs_device={}", existing_cookie, cfg.device_token)
+            };
+            if !merged.is_empty() {
+                builder = builder.header("Cookie", merged);
+            }
+
+            if !body_bytes.is_empty() {
+                builder = builder.body(body_bytes.clone());
+            }
+
+            builder
         };
-        if !merged.is_empty() {
-            builder = builder.header("Cookie", merged);
-        }
 
-        if !body_bytes.is_empty() {
-            builder = builder.body(body_bytes.clone());
-        }
+        let send_res = match build_req().send().await {
+            Ok(resp) => Ok(resp),
+            Err(_) if host_is_local && is_local => {
+                ensure_local_server_running(&state).await;
+                build_req().send().await
+            }
+            Err(e) => Err(e),
+        };
 
-        match builder.send().await {
+        match send_res {
             Ok(up_resp) => {
                 *state.active_upstream.write().unwrap() = Some(host.clone());
                 let up_status = up_resp.status();

@@ -21,6 +21,7 @@ import {
   loadUserSettings,
   parseJsonWithBom,
   readJsonFileWithBom,
+  saveRemoteAccess,
   saveUserSettings,
   stripBom,
 } from "./user-settings.mjs";
@@ -618,7 +619,16 @@ async function handleSettings(req, res) {
     if (body && "keepPaseoRunningOnQuit" in body) patch.keepPaseoRunningOnQuit = Boolean(body.keepPaseoRunningOnQuit);
     if (body && "startPaseoWithVibeSquad" in body) patch.startPaseoWithVibeSquad = Boolean(body.startPaseoWithVibeSquad);
     if (body && "pushEvents" in body) patch.pushEvents = body.pushEvents;
-    const saved = saveUserSettings(patch);
+    let saved = saveUserSettings(patch);
+    if (
+      body &&
+      (typeof body.remoteEnabled === "boolean" ||
+        (body.remote && typeof body.remote === "object" && typeof body.remote.enabled === "boolean"))
+    ) {
+      const wantRemote =
+        typeof body.remoteEnabled === "boolean" ? body.remoteEnabled : Boolean(body.remote.enabled);
+      saved = saveRemoteAccess(wantRemote);
+    }
     if ("lanEnabled" in patch && typeof exposure.toggleHandler === "function") {
       try {
         const resToggle = await exposure.toggleHandler(saved.lanEnabled);

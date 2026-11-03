@@ -23,6 +23,7 @@ import {
   saveCustomAcpProvider,
   togglePaseoProvider,
   updatePaseoSettingsPatch,
+  withWindowsHideNodeOptions,
   writePaseoConfigAndReload,
 } from "../server/paseo-control.mjs";
 import { saveUserSettings } from "../server/user-settings.mjs";
@@ -442,5 +443,27 @@ describe("PLAN_PASEO_CONTROLS — Paseo settings & daemon controls (isolated tem
     } finally {
       srv.close();
     }
+  });
+
+  test("7. Headless Windows preload & zero-spawn daemon status polling", async () => {
+    const winEnv = withWindowsHideNodeOptions({ FOO: "1" }, "win32");
+    assert.match(winEnv.NODE_OPTIONS, /--import .*windows-hide-preload\.mjs/);
+    const winEnvIdempotent = withWindowsHideNodeOptions(winEnv, "win32");
+    assert.equal(winEnvIdempotent.NODE_OPTIONS, winEnv.NODE_OPTIONS);
+    const posixEnv = withWindowsHideNodeOptions({ FOO: "1" }, "linux");
+    assert.equal(posixEnv.NODE_OPTIONS, undefined);
+
+    writeFileSync(join(tempPaseoHome, "daemon.pid"), "61616\n", "utf8");
+    writeFileSync(join(tempPaseoHome, "server-id"), "srv_fast_poll_test\n", "utf8");
+
+    const fastStatus = await getPaseoDaemonStatus({
+      paseoHome: tempPaseoHome,
+      baseHome: tempVsHome,
+      isListening: async () => true,
+    });
+    assert.equal(fastStatus.running, true);
+    assert.equal(fastStatus.pid, 61616);
+    assert.equal(fastStatus.serverId, "srv_fast_poll_test");
+    assert.equal(fastStatus.busyAgentCount, 0);
   });
 });
