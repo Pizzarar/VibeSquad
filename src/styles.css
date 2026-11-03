@@ -3861,6 +3861,7 @@ button.project-file-name:hover { text-decoration: underline; }
   color: #ff4d6d;
 }
 
+<<<<<<< HEAD
 .drawer-sandbox { display: inline-block; position: relative; }
 .drawer-sandbox-panel { position: absolute; z-index: 30; margin-top: 2px; width: 300px; max-width: calc(100vw - 16px); background: var(--panel); border: 1px solid var(--line); padding: 8px; display: grid; gap: 6px; font-size: 11px; box-shadow: 0 4px 14px rgba(0,0,0,.45); }
 .drawer-sandbox-row { display: grid; gap: 1px; }
@@ -3869,3 +3870,17 @@ button.project-file-name:hover { text-decoration: underline; }
 .drawer-sandbox-src { font-size: 9px; opacity: .55; }
 .drawer-sandbox-note { font-size: 10px; opacity: .6; }
 @media (max-width: 700px) { .drawer-sandbox-panel { position: fixed; left: 8px; right: 8px; top: 96px; width: auto; max-width: none; } }
+=======
+/* Remote pairing screen (R2-2, src/RemotePair.tsx): phone-first, centred card. */
+.remote-pair { min-height: 100vh; min-height: 100dvh; display: flex; align-items: center; justify-content: center; padding: 16px; background: var(--bg); }
+.remote-pair-card { width: 100%; max-width: 440px; display: flex; flex-direction: column; gap: 12px; padding: 20px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+.remote-pair-title { margin: 0; font-family: var(--display); font-size: 20px; color: var(--cyan); }
+.remote-pair-help { margin: 0; color: var(--muted); line-height: 1.45; }
+.remote-pair-field { display: flex; flex-direction: column; gap: 4px; color: var(--text); }
+.remote-pair-field em { color: var(--muted); font-style: normal; }
+.remote-pair-field textarea, .remote-pair-field input { width: 100%; box-sizing: border-box; font-family: var(--mono); font-size: 16px; padding: 8px; color: var(--text); background: var(--navy); border: 1px solid var(--line); border-radius: 4px; resize: vertical; }
+.remote-pair-field textarea { font-size: 13px; word-break: break-all; }
+.remote-pair-check { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+.remote-pair-error { padding: 8px 10px; color: var(--coral); background: #ff857314; border: 1px solid var(--coral); border-radius: 4px; line-height: 1.4; }
+.remote-pair-go { align-self: stretch; padding: 10px; font-size: 15px; }
+>>>>>>> unit-parity-r22
