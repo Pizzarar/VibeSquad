@@ -7,6 +7,9 @@ import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 
 import {
+  ENDPOINT_WRITE_LIMITS_PER_MIN,
+  PINNED_LANE_KEYS,
+  PINNED_TEAM_KEYS,
   REMOTE_ALLOW,
   REMOTE_BLOCKED,
   REMOTE_BUDGET_PER_MIN,
@@ -16,13 +19,15 @@ import {
   REMOTE_BODY_POLICY,
   REMOTE_FORBIDDEN_BODY_KEYS,
   REMOTE_WRITES_CLOSED,
-  checkLaneExists,
+   checkLaneExists,
   checkRemoteBody,
   createRateLimiter,
   decideProxyRequest,
+  isAllowedRoute,
   pinTeamsRegistry,
   normalizeProxyPath,
   redactBody,
+  scrubResponseBody,
 } from "../plugin/server/remote-proxy-rules.ts";
 import { makeVsHttpHandler, remoteEnabled, vsHttp, vsTokenHeaders } from "../plugin/server/remote-proxy.ts";
 import { installRemoteTransport, isRemoteMode, proxiedPath } from "../src/remoteTransport.ts";
@@ -141,10 +146,17 @@ describe("allowlist", () => {
     }
     for (const p of Object.keys(REMOTE_BODY_POLICY)) assert.ok(REMOTE_ALLOW[p]?.some((m) => m !== "GET"), `${p} policy without a write`);
   });
-  test("closed writes: handoff POST, lead-handoff and confirm stay unreachable, each with a reason", () => {
-    for (const p of ["/__vibesquad/lead-handoff", "/__vibesquad/lead-handoff/confirm"]) {
+  test("closed writes: handoff POST, lead-handoff, confirm, open-topic and brainstorm-restart stay unreachable, each with a reason", () => {
+    for (const p of [
+      "/__vibesquad/lead-handoff",
+      "/__vibesquad/lead-handoff/confirm",
+      "/__vibesquad/inbox/open-topic",
+      "/__vibesquad/brainstorm-restart",
+    ]) {
       assert.equal(decideProxyRequest("POST", p).code, "not-allowed", p);
+      assert.equal(isAllowedRoute("POST", p), false, p);
       assert.equal(REMOTE_BODY_POLICY[p], undefined, p);
+      assert.ok(REMOTE_WRITES_CLOSED[p], p);
     }
     assert.equal(decideProxyRequest("POST", "/__vibesquad/handoff").code, "method");
     for (const p of [...Object.keys(REMOTE_WRITES_CLOSED)]) assert.ok(REMOTE_WRITES_CLOSED[p].length > 20, p);
@@ -318,7 +330,15 @@ describe("handler against a fake loopback VS server", () => {
         }
         if (req.url === "/__vibesquad/settings") {
           res.setHeader("content-type", "application/json");
-          return res.end(JSON.stringify({ ok: true, userName: "Jordan", path: "C:\\Users\\Jordan\\.vibesquad\\settings.json", remote: { enabled: true } }));
+          return res.end(
+            JSON.stringify({
+              ok: true,
+              userName: "Jordan",
+              dir: "C:\\Users\\Jordan\\.vibesquad",
+              path: "C:\\Users\\Jordan\\.vibesquad\\settings.json",
+              remote: { enabled: true },
+            }),
+          );
         }
         if (req.url.startsWith("/__vibesquad/paseo/usage")) {
           res.setHeader("content-type", "application/json");
@@ -387,14 +407,16 @@ describe("handler against a fake loopback VS server", () => {
     setGate(true);
     const n = seen.length;
     await assert.rejects(handler()({ method: "PUT", path: "/api/teams", body: "{}" }), /key required remotely: body\.teams \[403\]/);
-    await assert.rejects(handler()({ method: "POST", path: "/__vibesquad/inbox/open-topic", body: '{"cwd":"C:/"}' }), /body key not allowed remotely: cwd \[403\]/);
+    await assert.rejects(handler()({ method: "POST", path: "/__vibesquad/inbox", body: '{"cwd":"C:/"}' }), /body key not allowed remotely: cwd \[403\]/);
+    await assert.rejects(handler()({ method: "POST", path: "/__vibesquad/inbox/open-topic", body: '{"cardId":"idea-1"}' }), /not available remotely.*\[403\]/);
+    await assert.rejects(handler()({ method: "POST", path: "/__vibesquad/brainstorm-restart", body: '{"reason":"start-brainstorm"}' }), /not available remotely.*\[403\]/);
     await assert.rejects(handler()({ method: "POST", path: "/__vibesquad/lead-handoff", body: '{"agentId":"a"}' }), /not available remotely.*\[403\]/);
     assert.equal(seen.length, n);
   });
 
   test("writes (injected allow) forward the body as JSON with the S3 token and pass through the status", async () => {
     setGate(true);
-    const sent = '{"teams":[],"revision":"r1"}';
+    const sent = JSON.stringify({ teams: REGISTRY.teams, revision: "r1" });
     const out = await handler({ allow: WRITE_ALLOW })({ method: "put", path: "/api/teams", body: sent });
     assert.equal(out.status, 409);
     assert.deepEqual(JSON.parse(out.body), { echo: sent });
@@ -405,11 +427,11 @@ describe("handler against a fake loopback VS server", () => {
     assert.equal(seen.at(-1).headers["x-vibesquad-token"], TOKEN);
   });
 
-  test("responses are redacted; settings lose `remote`; usage loses refresh", async () => {
+  test("responses are redacted; settings lose `remote` and `path`; usage loses refresh", async () => {
     setGate(true);
     const h = handler({ homeDir: "C:\\Users\\Jordan", userName: "Jordan" });
     const settings = await h({ method: "GET", path: "/__vibesquad/settings" });
-    assert.deepEqual(JSON.parse(settings.body), { ok: true, userName: "~", path: "~\\.vibesquad\\settings.json" });
+    assert.deepEqual(JSON.parse(settings.body), { ok: true, userName: "~", dir: "~\\.vibesquad" });
     await h({ method: "GET", path: "/__vibesquad/paseo/usage?refresh=1" });
     assert.equal(seen.at(-1).url, "/__vibesquad/paseo/usage");
   });
@@ -535,8 +557,12 @@ describe("against the real VS middleware with S3", () => {
       const gated = await vs({ method: "GET", path: "/__vibesquad/paseo/surface" });
       assert.equal(gated.status, 403);
       // The token file now exists (the server created it on first use); a write carries it and gets past
-      // the owner gate (400 from the handler's own body check, not 403 read-only).
-      const w = await vs({ method: "PUT", path: "/api/teams", body: '{"teams":[],"revision":"stale"}' });
+      // the owner gate (409 from the handler's own revision check, not 403 read-only).
+      const w = await vs({
+        method: "PUT",
+        path: "/api/teams",
+        body: JSON.stringify({ teams: [{ id: "sq", name: "Squad", lanes: [{ id: "l1", name: "One" }] }], revision: "stale" }),
+      });
       assert.notEqual(w.status, 403, w.body);
       // R2-5 end to end on the production allowlist: the remote GET shows the redacted path; echoing it back
       // renames the lane and keeps the real path on disk.
@@ -650,15 +676,13 @@ const ENDPOINTS = [
   { path: "/api/teams", method: "PUT", ok: { teams: [{ id: "sq", name: "Squad", color: "#fff", paths: ["Proj"], lanes: [LANE_OK] }], revision: "r1" }, big: { revision: "r".repeat(129) }, nest: (b, k) => (b.teams[0].lanes[0][k] = "x") },
   { path: "/__vibesquad/teams", method: "POST", ok: { teams: [{ id: "sq", lanes: [{ id: "lane1" }] }], revision: "r1", leadFlagTokens: 150000 }, big: { teams: Array.from({ length: 201 }, (_, i) => ({ id: `t${i}` })) }, nest: (b, k) => (b.teams[0][k] = "x") },
   { path: "/__vibesquad/inbox", method: "POST", ok: { text: "an idea", splitDump: false, laneId: "lane1" }, big: { text: "x".repeat(20_001) } },
-  { path: "/__vibesquad/inbox/triage", method: "POST", ok: { action: "update", cardId: "idea-3", patch: { status: "parked", summaryNote: "n" } }, big: { patch: { relatedReason: "x".repeat(501) } }, nest: (b, k) => (b.patch[k] = "x") },
-  { path: "/__vibesquad/inbox/open-topic", method: "POST", ok: { cardId: "idea-3" }, big: { cardId: "i".repeat(65) } },
+  { path: "/__vibesquad/inbox/triage", method: "POST", ok: { action: "update", cardId: "idea-3", laneId: "lane1", patch: { status: "parked", summaryNote: "n" } }, big: { patch: { relatedReason: "x".repeat(501) } }, nest: (b, k) => (b.patch[k] = "x") },
   { path: "/__vibesquad/inbox/park-topic", method: "POST", ok: { cardId: "idea-3", agentId: "abc-123", summaryNote: "parked" }, big: { summaryNote: "x".repeat(4001) } },
   { path: "/__vibesquad/inbox/handoff-topic", method: "POST", ok: { cardId: "idea-3", agentId: "abc-123", planNote: "p", usedTokens: 1200 }, big: { planNote: "x".repeat(4001) } },
   { path: "/__vibesquad/log", method: "POST", ok: { team: "sq", lane: "lane1", type: "you", text: "hi", refs: ["a"] }, big: { text: "x".repeat(241) } },
   { path: "/__vibesquad/vs-log", method: "POST", ok: { teamId: "sq", laneId: "lane1", type: "metric", text: "m" }, big: { text: "x".repeat(2001) } },
-  { path: "/__vibesquad/brainstorm-summary", method: "POST", ok: { laneId: "lane1", content: "# brief", revision: "abc" }, big: { content: "x".repeat(20_001) } },
-  { path: "/__vibesquad/brainstorm-summary", method: "PUT", ok: { lane: "lane1", content: "# brief", revision: "abc" }, big: { content: "x".repeat(20_001) } },
-  { path: "/__vibesquad/brainstorm-restart", method: "POST", ok: { reason: "start-brainstorm", mode: "quick-start", teamId: "sq", laneId: "lane1", laneName: "One" }, big: { laneName: "x".repeat(201) } },
+  { path: "/__vibesquad/brainstorm-summary", method: "POST", ok: { laneId: "lane1", content: "# brief", revision: "abc" }, big: { content: "x".repeat(20_000) } },
+  { path: "/__vibesquad/brainstorm-summary", method: "PUT", ok: { lane: "lane1", content: "# brief", revision: "abc" }, big: { content: "x".repeat(20_000) } },
 ];
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const bodyErr = (method, path, body) => checkRemoteBody(method, path, typeof body === "string" ? body : JSON.stringify(body));
@@ -710,16 +734,35 @@ describe("R2-5 body policy per endpoint", () => {
     });
   }
 
-  test("spawn config and titles can't ride inside a nested object; enums and ids are checked", () => {
-    const r = bodyErr("POST", "/__vibesquad/inbox/triage", { action: "update", cardId: "idea-1", patch: { title: "x" } });
+  test("spawn config and titles can't ride inside a nested object; enums, caps and required laneId are checked", () => {
+    const r = bodyErr("POST", "/__vibesquad/inbox/triage", { action: "update", cardId: "idea-1", laneId: "lane1", patch: { title: "x" } });
     assert.match(r.error, /body key not allowed remotely: title/);
-    assert.equal(bodyErr("POST", "/__vibesquad/brainstorm-restart", { reason: "start-brainstorm", topic: "t" }).status, 403);
-    assert.equal(bodyErr("POST", "/__vibesquad/brainstorm-restart", { reason: "Bad Reason!" }).status, 403);
-    assert.equal(bodyErr("POST", "/__vibesquad/log", { team: "sq", text: "t", type: "done" }).status, 403);
-    assert.equal(bodyErr("POST", "/__vibesquad/log", { team: "../x", text: "t" }).status, 403);
-    assert.equal(bodyErr("POST", "/__vibesquad/inbox/triage", { action: "merge", sourceIds: Array(101).fill("idea-1") }).status, 403);
+    assert.equal(bodyErr("POST", "/__vibesquad/inbox/open-topic", { cardId: "idea-1" }).status, 403);
+    assert.equal(bodyErr("POST", "/__vibesquad/brainstorm-restart", { reason: "start-brainstorm" }).status, 403);
+    assert.equal(bodyErr("POST", "/__vibesquad/log", { team: "sq", lane: "lane1", text: "t", type: "done" }).status, 403);
+    assert.equal(bodyErr("POST", "/__vibesquad/log", { team: "../x", lane: "lane1", text: "t" }).status, 403);
+    assert.equal(bodyErr("POST", "/__vibesquad/inbox/triage", { action: "merge", laneId: "lane1", sourceIds: Array(101).fill("idea-1") }).status, 403);
     assert.equal(bodyErr("PUT", "/api/teams", { teams: [{ id: "sq", lanes: [{ id: "l", order: 1e9 }] }], revision: "r" }).ok, false);
-    assert.equal(bodyErr("POST", "/__vibesquad/inbox", { text: null }).status, 403);
+    assert.equal(bodyErr("POST", "/__vibesquad/inbox", { text: null, laneId: "lane1" }).status, 403);
+    // Inbox ideas cap (max 20 items, each text <= 5000 chars) and brainstorm-summary cap (19,999 chars).
+    assert.equal(bodyErr("POST", "/__vibesquad/inbox", { laneId: "lane1", ideas: Array(20).fill("ok") }).ok, true);
+    assert.equal(bodyErr("POST", "/__vibesquad/inbox", { laneId: "lane1", ideas: Array(21).fill("ok") }).status, 403);
+    assert.equal(bodyErr("POST", "/__vibesquad/inbox", { laneId: "lane1", ideas: ["x".repeat(5000)] }).ok, true);
+    assert.equal(bodyErr("POST", "/__vibesquad/inbox", { laneId: "lane1", ideas: ["x".repeat(5001)] }).status, 403);
+    assert.equal(bodyErr("POST", "/__vibesquad/brainstorm-summary", { laneId: "lane1", content: "x".repeat(19_999), revision: "r" }).ok, true);
+    assert.equal(bodyErr("POST", "/__vibesquad/brainstorm-summary", { laneId: "lane1", content: "x".repeat(20_000), revision: "r" }).status, 403);
+    // Requiring laneId / lane on lane-scoped writes:
+    for (const [p, b] of [
+      ["/__vibesquad/inbox", { text: "idea" }],
+      ["/__vibesquad/inbox/triage", { action: "archive", cardId: "idea-1" }],
+      ["/__vibesquad/log", { team: "sq", text: "hi" }],
+      ["/__vibesquad/vs-log", { teamId: "sq", text: "hi" }],
+      ["/__vibesquad/brainstorm-summary", { content: "c", revision: "r" }],
+    ]) {
+      const res = bodyErr("POST", p, b);
+      assert.equal(res.ok, false, p);
+      assert.equal(res.status, 403, p);
+    }
   });
 
   test("a write with no policy is refused even if an allow map opens it", () => {
@@ -729,27 +772,61 @@ describe("R2-5 body policy per endpoint", () => {
 });
 
 describe("R2-5 registry checks", () => {
-  const cur = { teams: [{ id: "sq", paths: ["C:\\Users\\Jo\\proj"], lanes: [{ id: "l1", paths: ["A"], lastProfile: "P", aliases: ["old-l1"] }, { id: "l2" }] }] };
+  const cur = {
+    teams: [
+      {
+        id: "sq",
+        name: "Squad",
+        paths: ["C:\\Users\\Jo\\proj"],
+        vibeMode: true,
+        customTeamMeta: "keep-team",
+        lanes: [
+          { id: "l1", paths: ["A"], lastProfile: "P", worktree: "WT1", branch: "b1", aliases: ["old-l1"], customLaneMeta: "keep-lane" },
+          { id: "l2" },
+        ],
+      },
+    ],
+  };
   const redact = (s) => redactBody(s, "C:\\Users\\Jo", "Jo");
   const body = (teams) => ({ teams, revision: "r" });
 
-  test("teams: echoed (raw or redacted) or omitted pinned fields are forwarded as the disk values", () => {
-    const r = pinTeamsRegistry(body([{ id: "sq", paths: ["~\\proj"], lanes: [{ id: "l1", name: "N" }, { id: "l2" }] }]), cur, redact);
+  test("teams: echoed (raw or redacted) or omitted pinned fields are forwarded as the disk values, preserving unknown fields", () => {
+    assert.deepEqual(PINNED_TEAM_KEYS, ["paths", "path", "vibeMode"]);
+    assert.ok(PINNED_LANE_KEYS.includes("worktree") && PINNED_LANE_KEYS.includes("branch") && PINNED_LANE_KEYS.includes("cwd"));
+    const r = pinTeamsRegistry(body([{ id: "SQ", paths: ["~\\proj"], lanes: [{ id: "L1", name: "N" }, { id: "l2" }] }]), cur, redact);
     assert.equal(r.ok, true);
+    assert.equal(r.value.teams[0].id, "sq", "canonical on-disk team id preserved");
     assert.deepEqual(r.value.teams[0].paths, ["C:\\Users\\Jo\\proj"]);
-    assert.deepEqual(r.value.teams[0].lanes[0], { id: "l1", name: "N", paths: ["A"], lastProfile: "P" });
+    assert.equal(r.value.teams[0].vibeMode, true);
+    assert.equal(r.value.teams[0].customTeamMeta, "keep-team");
+    assert.deepEqual(r.value.teams[0].lanes[0], {
+      id: "l1",
+      name: "N",
+      paths: ["A"],
+      lastProfile: "P",
+      worktree: "WT1",
+      branch: "b1",
+      aliases: ["old-l1"],
+      customLaneMeta: "keep-lane",
+    });
     assert.equal("paths" in r.value.teams[0].lanes[1], false);
-    const raw = pinTeamsRegistry(body([{ id: "sq", paths: ["C:\\Users\\Jo\\proj"], lanes: [{ id: "l1", paths: ["A"], lastProfile: "P" }] }]), cur, redact);
+    const raw = pinTeamsRegistry(
+      body([{ id: "sq", paths: ["C:\\Users\\Jo\\proj"], vibeMode: true, lanes: [{ id: "l1", paths: ["A"], lastProfile: "P" }, { id: "l2" }] }]),
+      cur,
+      redact,
+    );
     assert.equal(raw.ok, true);
   });
-  test("teams: changing paths/path/lastProfile, or setting them on a new team or lane, is 403", () => {
+  test("teams: changing paths/path/vibeMode/lastProfile, or setting them on a new team or lane, is 403", () => {
     const cases = [
       [{ id: "sq", paths: ["Other"] }, /team sq\.paths can't be changed/],
       [{ id: "sq", path: "Other" }, /team sq\.path can't be changed/],
-      [{ id: "sq", lanes: [{ id: "l1", lastProfile: "Yolo" }] }, /lane l1\.lastProfile can't be changed/],
-      [{ id: "sq", lanes: [{ id: "l2", paths: ["X"] }] }, /lane l2\.paths can't be changed/],
-      [{ id: "sq", lanes: [{ id: "new", path: "X" }] }, /lane new\.path can't be set remotely on a new entry/],
+      [{ id: "sq", vibeMode: false }, /RemoteDenied: team paths and vibeMode are pinned on host/],
+      [{ id: "sq", lanes: [{ id: "l1", lastProfile: "Yolo" }, { id: "l2" }] }, /lane l1\.lastProfile can't be changed/],
+      [{ id: "sq", lanes: [{ id: "l1" }, { id: "l2", paths: ["X"] }] }, /lane l2\.paths can't be changed/],
+      [{ id: "sq", lanes: [{ id: "l1" }, { id: "l2" }, { id: "new", path: "X" }] }, /lane new\.path can't be set remotely on a new entry/],
       [{ id: "new-team", paths: ["X"] }, /team new-team\.paths can't be set remotely/],
+      [{ id: "new-team", vibeMode: true }, /RemoteDenied: new remote teams cannot enable vibeMode/],
     ];
     for (const [team, re] of cases) {
       const r = pinTeamsRegistry(body([team]), cur, redact);
@@ -757,18 +834,83 @@ describe("R2-5 registry checks", () => {
       assert.equal(r.status, 403);
       assert.match(r.error, re);
     }
-    assert.equal(pinTeamsRegistry(body([{ id: "new-team", lanes: [{ id: "x", name: "pin" }] }]), cur, redact).ok, true);
+    assert.equal(
+      pinTeamsRegistry(
+        body([
+          { id: "sq", lanes: [{ id: "l1" }, { id: "l2" }] },
+          { id: "new-team", vibeMode: false, lanes: [{ id: "x", name: "pin" }] },
+        ]),
+        cur,
+        redact,
+      ).ok,
+      true,
+    );
+  });
+  test("teams: refuses deleting or reordering teams/lanes, caps new additions, prevents cross-team lane moves", () => {
+    const twoTeams = {
+      teams: [
+        { id: "t1", name: "Team One", lanes: [{ id: "l1", name: "Lane 1" }, { id: "l2", name: "Lane 2" }] },
+        { id: "t2", name: "Team Two", lanes: [{ id: "l3", name: "Lane 3" }] },
+      ],
+    };
+    // Deleting team t2
+    const delTeam = pinTeamsRegistry(body([twoTeams.teams[0]]), twoTeams);
+    assert.equal(delTeam.ok, false);
+    assert.match(delTeam.error, /cannot delete teams remotely/);
+    // Reordering t2 before t1
+    const reordTeam = pinTeamsRegistry(body([twoTeams.teams[1], twoTeams.teams[0]]), twoTeams);
+    assert.equal(reordTeam.ok, false);
+    assert.match(reordTeam.error, /cannot reorder existing teams remotely/);
+    // Deleting lane l2 from t1
+    const delLane = pinTeamsRegistry(body([{ id: "t1", lanes: [{ id: "l1" }] }, twoTeams.teams[1]]), twoTeams);
+    assert.equal(delLane.ok, false);
+    assert.match(delLane.error, /cannot delete lanes remotely/);
+    // Reordering lanes l2 before l1 in t1
+    const reordLane = pinTeamsRegistry(body([{ id: "t1", lanes: [{ id: "l2" }, { id: "l1" }] }, twoTeams.teams[1]]), twoTeams);
+    assert.equal(reordLane.ok, false);
+    assert.match(reordLane.error, /cannot reorder existing lanes remotely/);
+    // > 1 new team per save
+    const tooManyTeams = pinTeamsRegistry(
+      body([...twoTeams.teams, { id: "t3", lanes: [] }, { id: "t4", lanes: [] }]),
+      twoTeams,
+    );
+    assert.equal(tooManyTeams.ok, false);
+    assert.match(tooManyTeams.error, /at most 1 new team per remote save/);
+    // > 3 new lanes per save
+    const tooManyLanes = pinTeamsRegistry(
+      body([
+        { id: "t1", lanes: [{ id: "l1" }, { id: "l2" }, { id: "n1" }, { id: "n2" }] },
+        { id: "t2", lanes: [{ id: "l3" }, { id: "n3" }, { id: "n4" }] },
+      ]),
+      twoTeams,
+    );
+    assert.equal(tooManyLanes.ok, false);
+    assert.match(tooManyLanes.error, /at most 3 new lanes per remote save/);
+    // Moving / duplicating lane l2 into t2
+    const crossMove = pinTeamsRegistry(
+      body([
+        twoTeams.teams[0],
+        { id: "t2", lanes: [{ id: "l3" }, { id: "L2" }] },
+      ]),
+      twoTeams,
+    );
+    assert.equal(crossMove.ok, false);
+    assert.equal(crossMove.status, 403);
   });
   test("unreadable registry fails closed (503)", () => {
     assert.equal(pinTeamsRegistry(body([]), null).status, 503);
     assert.equal(pinTeamsRegistry(body([]), { echo: "" }).status, 503);
     assert.equal(checkLaneExists({ laneId: "l1" }, null).status, 503);
   });
-  test("lane checks: id or alias passes, unknown lane is 403, no lane passes", () => {
+  test("lane checks: id or alias passes, team-lane ownership enforced, missing lane is 400 (never fail-open)", () => {
     assert.equal(checkLaneExists({ laneId: "L1" }, cur).ok, true);
     assert.equal(checkLaneExists({ lane: "old-l1" }, cur).ok, true);
+    assert.equal(checkLaneExists({ teamId: "sq", laneId: "l1" }, cur).ok, true);
+    assert.equal(checkLaneExists({ teamId: "unknown", laneId: "l1" }, cur).status, 403);
+    assert.equal(checkLaneExists({ teamId: "sq", laneId: "ghost" }, cur).status, 403);
     assert.equal(checkLaneExists({ laneId: "ghost" }, cur).status, 403);
-    assert.equal(checkLaneExists({ reason: "x" }, cur).ok, true);
+    assert.equal(checkLaneExists({ reason: "x" }, cur).status, 400);
+    assert.equal(checkLaneExists({}, cur).status, 400);
   });
 });
 
@@ -785,7 +927,7 @@ describe("R2-5 handler: reopened writes against a fake loopback server", () => {
         seen.push({ method: req.method, url: req.url, headers: req.headers, body });
         res.setHeader("content-type", "application/json");
         if (req.url === "/api/teams" && req.method === "GET") return res.end(JSON.stringify(REGISTRY));
-        res.end(JSON.stringify({ ok: true, echo: body }));
+        res.end(JSON.stringify({ ok: true, echo: body, path: "C:\\Users\\Jordan\\secret\\file.jsonl", teamLogPath: "C:\\Users\\Jordan\\secret\\team.jsonl" }));
       });
     });
     await new Promise((r) => server.listen(0, "127.0.0.1", r));
@@ -797,11 +939,14 @@ describe("R2-5 handler: reopened writes against a fake loopback server", () => {
   });
 
   for (const e of ENDPOINTS) {
-    test(`${e.method} ${e.path}: allowed body forwards with the token (not echoed back); refused bodies never fetch`, async () => {
+    test(`${e.method} ${e.path}: allowed body forwards with the token (not echoed back) and strips path/teamLogPath; refused bodies never fetch`, async () => {
       setGate(true);
       const h = makeVsHttpHandler({ port, home });
       const out = await h({ method: e.method, path: e.path, body: JSON.stringify(e.ok) });
       assert.equal(out.status, 200, out.body);
+      const parsedOut = JSON.parse(out.body);
+      assert.equal("path" in parsedOut, false, "path stripped from response");
+      assert.equal("teamLogPath" in parsedOut, false, "teamLogPath stripped from response");
       const last = seen.at(-1);
       assert.equal(last.method, e.method);
       assert.equal(last.headers["x-vibesquad-token"], TOKEN);
@@ -815,7 +960,7 @@ describe("R2-5 handler: reopened writes against a fake loopback server", () => {
     });
   }
 
-  test("registry-checked writes: unknown lane and changed paths are refused after only the registry read", async () => {
+  test("registry-checked writes: unknown lane, mismatched team/lane and changed paths are refused after only the registry read", async () => {
     setGate(true);
     const h = makeVsHttpHandler({ port, home });
     const n = seen.length;
@@ -824,25 +969,68 @@ describe("R2-5 handler: reopened writes against a fake loopback server", () => {
       /lane ghost is not in teams\.json \[403\]/,
     );
     await assert.rejects(
-      h({ method: "PUT", path: "/api/teams", body: JSON.stringify({ teams: [{ id: "sq", paths: ["Elsewhere"] }], revision: "r1" }) }),
-      /team sq\.paths can't be changed remotely \[403\]/,
+      h({ method: "POST", path: "/__vibesquad/log", body: '{"team":"sq","lane":"ghost","text":"x"}' }),
+      /lane "ghost" does not belong to team "sq" \[403\]/,
     );
-    assert.deepEqual(seen.slice(n).map((r) => `${r.method} ${r.url}`), ["GET /api/teams", "GET /api/teams"]);
-    // Omitted pinned fields go out as the disk values.
+    await assert.rejects(
+      h({ method: "PUT", path: "/api/teams", body: JSON.stringify({ teams: [{ id: "sq", paths: ["Elsewhere"] }], revision: "r1" }) }),
+      /team sq\.paths can't be changed remotely.*\[403\]/,
+    );
+    assert.deepEqual(seen.slice(n).map((r) => `${r.method} ${r.url}`), ["GET /api/teams", "GET /api/teams", "GET /api/teams"]);
+    // Omitted pinned fields and unknown on-disk fields go out as the disk values.
     await h({ method: "PUT", path: "/api/teams", body: JSON.stringify({ teams: [{ id: "sq", name: "S2", lanes: [{ id: "lane1" }] }], revision: "r1" }) });
-    assert.deepEqual(JSON.parse(seen.at(-1).body), { teams: [{ id: "sq", name: "S2", lanes: [{ id: "lane1", lastProfile: "P" }], paths: ["Proj"] }], revision: "r1" });
+    assert.deepEqual(JSON.parse(seen.at(-1).body), {
+      teams: [{ id: "sq", name: "S2", lanes: [{ id: "lane1", name: "One", lastProfile: "P" }], paths: ["Proj"] }],
+      revision: "r1",
+    });
   });
 
-  test("write budget: the 21st write in a minute is refused (429) without fetching", async () => {
+  test("write budget: per-endpoint cap (5 on /api/teams, 10 on /log) and global 20/min write budget", async () => {
     setGate(true);
-    const h = makeVsHttpHandler({ port, home });
-    const body = JSON.stringify({ team: "sq", text: "t" });
-    for (let i = 0; i < REMOTE_BUDGET_PER_MIN.write; i++) await h({ method: "POST", path: "/__vibesquad/log", body });
+    assert.equal(ENDPOINT_WRITE_LIMITS_PER_MIN["POST /api/teams"], 5);
+    assert.equal(ENDPOINT_WRITE_LIMITS_PER_MIN["POST /__vibesquad/brainstorm-summary"], 5);
+    assert.equal(ENDPOINT_WRITE_LIMITS_PER_MIN["POST /__vibesquad/log"], 10);
+    const hTeams = makeVsHttpHandler({ port, home });
+    const teamsBody = JSON.stringify({ teams: REGISTRY.teams, revision: "r1" });
+    for (let i = 0; i < 5; i++) await hTeams({ method: "POST", path: "/api/teams", body: teamsBody });
+    await assert.rejects(hTeams({ method: "POST", path: "/api/teams", body: teamsBody }), /rate limited: 5 writes per minute on POST \/api\/teams.*\[429\]/);
+
+    const hGlobal = makeVsHttpHandler({ port, home });
+    const logBody = JSON.stringify({ team: "sq", lane: "lane1", text: "t" });
+    const vsLogBody = JSON.stringify({ teamId: "sq", laneId: "lane1", text: "t" });
+    for (let i = 0; i < 10; i++) await hGlobal({ method: "POST", path: "/__vibesquad/log", body: logBody });
+    for (let i = 0; i < 10; i++) await hGlobal({ method: "POST", path: "/__vibesquad/vs-log", body: vsLogBody });
     const n = seen.length;
-    await assert.rejects(h({ method: "POST", path: "/__vibesquad/log", body }), /rate limited: 20 writes per minute.*\[429\]/);
+    await assert.rejects(
+      hGlobal({ method: "POST", path: "/__vibesquad/inbox", body: JSON.stringify({ text: "t", laneId: "lane1" }) }),
+      /rate limited: 20 writes per minute.*\[429\]/,
+    );
     assert.equal(seen.length, n);
-    const r = await h({ method: "GET", path: "/__vibesquad/log?team=sq" });
+    const r = await hGlobal({ method: "GET", path: "/__vibesquad/log?team=sq" });
     assert.equal(r.status, 200, "reads keep their own budget");
+  });
+
+  test("scrubResponseBody strips path/teamLogPath and scrubs >= 400 error bodies", () => {
+    assert.deepEqual(
+      JSON.parse(scrubResponseBody("/__vibesquad/vs-log", JSON.stringify({ ok: true, path: "C:\\a\\b.jsonl", teamLogPath: "/home/u/x.jsonl" }), 200)),
+      { ok: true },
+    );
+    const errOut = JSON.parse(
+      scrubResponseBody(
+        "/api/teams",
+        JSON.stringify({
+          ok: false,
+          error: "ENOENT: open C:\\Users\\Owner\\secret\\teams.json",
+          path: "C:\\Users\\Owner\\secret\\teams.json",
+          teamLogPath: "C:\\Users\\Owner\\log.jsonl",
+          cwd: "C:\\Users\\Owner",
+          worktree: "C:\\Users\\Owner\\wt",
+          stack: "Error: boom\n at Object.<anonymous>",
+        }),
+        500,
+      ),
+    );
+    assert.deepEqual(errOut, { ok: false, error: "ENOENT: open [redacted-path]" });
   });
 
   test("still denied: blocked paths win over any allow entry; settings and handoff POST are 405", async () => {

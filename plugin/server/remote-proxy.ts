@@ -22,7 +22,7 @@ import {
   isTextContentType,
   needsRegistry,
   redactBody,
-  scrubSettingsBody,
+  scrubResponseBody,
   utf8Bytes,
   type AllowMap,
   type RateLimiter,
@@ -168,7 +168,7 @@ export function makeVsHttpHandler(deps: VsHttpDeps = {}) {
     // Per-endpoint typed body allowlist (R2-5): checked before a rate-limit slot is spent.
     const bodyCheck = checkRemoteBody(d.method, d.pathname, input.body);
     if (!bodyCheck.ok) throw new RemoteDenied(bodyCheck.status, bodyCheck.error);
-    const slot = limiter.acquire(write ? "write" : "read");
+    const slot = limiter.acquire(write ? "write" : "read", `${d.method} ${d.pathname}`);
     if (!slot.ok) throw new RemoteDenied(429, slot.error);
     const hasBody = input.body !== undefined && write;
     // What was checked is what is sent: the parsed body, re-serialised (after any registry pinning).
@@ -199,7 +199,7 @@ export function makeVsHttpHandler(deps: VsHttpDeps = {}) {
         res.body?.cancel().catch(() => {});
         throw new Error(`vs.http: non-text response (${ct}) is not proxied`);
       }
-      const body = redactBody(scrubSettingsBody(d.pathname, await readCapped(res, abort.signal)), owner.homeDir, owner.userName);
+      const body = redactBody(scrubResponseBody(d.pathname, await readCapped(res, abort.signal), res.status), owner.homeDir, owner.userName);
       const headers: Record<string, string> = {};
       for (const h of REMOTE_RESPONSE_HEADERS) {
         const v = res.headers.get(h);
