@@ -992,11 +992,57 @@ async fn handle_desktop_ping(
     }))
 }
 
-async fn handle_desktop_setup(State(state): State<Arc<SharedAppState>>) -> Response {
+async fn handle_desktop_mode(State(state): State<Arc<SharedAppState>>) -> Response {
+    *state.active_upstream.write().unwrap() = None;
+    state.setup_mode.store(false, Ordering::SeqCst);
+    let cfg = state.config.read().unwrap().clone();
+    html_no_store_response(StatusCode::OK, ui_pages::render_mode_choice_page(&cfg, None))
+}
+
+async fn handle_desktop_setup(
+    State(state): State<Arc<SharedAppState>>,
+    req: Request,
+) -> Response {
+    let want_mode_choice = req
+        .uri()
+        .query()
+        .map(|q| q.contains("mode=choice") || q.contains("first-run=1"))
+        .unwrap_or(false);
+    if want_mode_choice {
+        return handle_desktop_mode(State(state)).await;
+    }
     *state.active_upstream.write().unwrap() = None;
     state.setup_mode.store(true, Ordering::SeqCst);
     let cfg = state.config.read().unwrap().clone();
     html_no_store_response(StatusCode::OK, ui_pages::render_pair_page(&cfg, None))
+}
+
+fn extract_offer_hash(raw: &str) -> Option<String> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if let Some(idx) = s.find("#offer=") {
+        let rest = s[idx..].trim();
+        if rest.len() > "#offer=".len() {
+            return Some(rest.to_string());
+        }
+    }
+    if let Some(rest) = s.strip_prefix("offer=") {
+        let clean = rest.trim();
+        if !clean.is_empty() {
+            return Some(format!("#offer={}", clean));
+        }
+    }
+    for sep in ["?offer=", "&offer="] {
+        if let Some(idx) = s.find(sep) {
+            let val = s[idx + sep.len()..].split(&['&', '#', ' '][..]).next().unwrap_or("");
+            if !val.is_empty() {
+                return Some(format!("#offer={}", val));
+            }
+        }
+    }
+    None
 }
 
 async fn handle_desktop_unpair(State(state): State<Arc<SharedAppState>>) -> impl IntoResponse {
@@ -1038,6 +1084,33 @@ async fn handle_desktop_pair(
         }
         sub
     };
+
+    if let Some(offer_hash) = extract_offer_hash(&submission.server_host)
+        .or_else(|| extract_offer_hash(&submission.code))
+    {
+        let redirect = format!("/?remote=1{}", offer_hash);
+        {
+            let mut cfg = state.config.write().unwrap();
+            cfg.server_mode = "local".to_string();
+            cfg.server_host = default_server_host();
+            cfg.last_hash = offer_hash;
+            cfg.last_route = redirect.clone();
+            let _ = save_config(&cfg);
+        }
+        state.setup_mode.store(false, Ordering::SeqCst);
+        ensure_local_server_running(&state).await;
+        *state.active_upstream.write().unwrap() = Some(default_server_host());
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "redirect": redirect,
+                "serverMode": "local",
+                "offer": true
+            })),
+        )
+            .into_response();
+    }
 
     let mut raw_host = submission.server_host.trim().to_string();
     let mut raw_code = submission.code.trim().to_string();
@@ -1615,8 +1688,19 @@ fn inspect_ws_frame(state: &Arc<SharedAppState>, text: &str) {
     }
 }
 
+fn extract_ws_protocols(headers: &HeaderMap) -> Vec<String> {
+    headers
+        .get_all("sec-websocket-protocol")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|s| s.split(','))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
 async fn handle_ws_upgrade(
-    ws: WebSocketUpgrade,
+    mut ws: WebSocketUpgrade,
     State(state): State<Arc<SharedAppState>>,
     req: Request,
 ) -> Response {
@@ -1625,14 +1709,19 @@ async fn handle_ws_upgrade(
         .path_and_query()
         .map(|pq| pq.as_str().to_string())
         .unwrap_or_else(|| "/ws".to_string());
+    let protocols = extract_ws_protocols(req.headers());
+    if !protocols.is_empty() {
+        ws = ws.protocols(protocols.clone());
+    }
 
-    ws.on_upgrade(move |socket| proxy_websocket(socket, state, path_and_query))
+    ws.on_upgrade(move |socket| proxy_websocket(socket, state, path_and_query, protocols))
 }
 
 async fn proxy_websocket(
     client_ws: WebSocket,
     state: Arc<SharedAppState>,
     path_and_query: String,
+    protocols: Vec<String>,
 ) {
     let cfg = state.config.read().unwrap().clone();
     let candidates = state.candidate_hosts();
@@ -1646,6 +1735,11 @@ async fn proxy_websocket(
             Ok(r) => r,
             Err(_) => continue,
         };
+        if !protocols.is_empty() {
+            if let Ok(hv) = HeaderValue::from_str(&protocols.join(", ")) {
+                ws_req.headers_mut().insert("Sec-WebSocket-Protocol", hv);
+            }
+        }
         if is_local {
             if let Ok(hv) = HeaderValue::from_str(&format!("http://{}", host)) {
                 ws_req.headers_mut().insert("Origin", hv);
@@ -1921,9 +2015,19 @@ async fn proxy_http_handler(
     // page, but never the root guard: files, /api/*, /__vibesquad/* and 404s pass through untouched.
     let is_app_route_nav = method == Method::GET && !is_root_nav && is_doc_nav && is_app_route_path(&path);
     let query_setup = uri.query().map(|q| q.contains("setup=1")).unwrap_or(false);
+    let query_first_run = uri
+        .query()
+        .map(|q| q.contains("first-run=1") || q.contains("mode=choice"))
+        .unwrap_or(false);
 
-    // First launch: if no mode choice has been saved yet and setup=1 wasn't explicitly requested, show the mode choice screen before spawning anything!
-    if is_root_nav && cfg.server_mode.trim().is_empty() && !query_setup && !state.setup_mode.load(Ordering::SeqCst) {
+    // First launch (or explicit ?first-run=1 / ?mode=choice): show the mode choice screen before spawning anything!
+    if is_root_nav
+        && (query_first_run
+            || (cfg.server_mode.trim().is_empty()
+                && !query_setup
+                && !state.setup_mode.load(Ordering::SeqCst)))
+    {
+        state.setup_mode.store(false, Ordering::SeqCst);
         return html_no_store_response(StatusCode::OK, ui_pages::render_mode_choice_page(&cfg, None));
     }
 
@@ -2334,6 +2438,7 @@ fn build_router(state: Arc<SharedAppState>) -> Router {
     Router::new()
         .route("/__desktop/status", get(handle_desktop_status))
         .route("/__desktop/choose-mode", post(handle_desktop_choose_mode))
+        .route("/__desktop/mode", get(handle_desktop_mode))
         .route("/__desktop/ping", get(handle_desktop_ping))
         .route("/__desktop/setup", get(handle_desktop_setup))
         .route("/__desktop/unpair", post(handle_desktop_unpair))
@@ -3111,5 +3216,79 @@ mod tests {
         let r = client.post(format!("{}/api/teams", base)).send().await.unwrap();
         assert_eq!(r.text().await.unwrap(), "token= cookie=");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn ws_proxy_echoes_and_forwards_subprotocol_and_mode_routes_render_first_time_screen() {
+        use axum::routing::get;
+
+        let upstream = Router::new().route(
+            "/ws",
+            get(|ws: WebSocketUpgrade, req: Request| async move {
+                let protos = extract_ws_protocols(req.headers());
+                let chosen = protos.first().cloned().unwrap_or_default();
+                let mut ws = ws;
+                if !protos.is_empty() {
+                    ws = ws.protocols(protos);
+                }
+                ws.on_upgrade(move |mut socket| async move {
+                    let _ = socket.send(AxumWsMessage::Text(format!("proto={}", chosen))).await;
+                })
+            }),
+        );
+        let upstream_host = spawn_upstream(upstream).await;
+        let state = direct_state(&upstream_host);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        state.local_port.store(port as usize, Ordering::SeqCst);
+        let app = build_router(state.clone());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        // 1. WebSocket upgrade with Sec-WebSocket-Protocol: paseo.bearer.secret123
+        let ws_url = format!("ws://127.0.0.1:{}/ws", port);
+        let mut ws_req = ws_url.into_client_request().unwrap();
+        ws_req
+            .headers_mut()
+            .insert("Sec-WebSocket-Protocol", HeaderValue::from_static("paseo.bearer.secret123"));
+        let (mut ws_stream, ws_resp) = connect_async_tls_with_config(ws_req, None, false, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            ws_resp
+                .headers()
+                .get("sec-websocket-protocol")
+                .and_then(|v| v.to_str().ok()),
+            Some("paseo.bearer.secret123")
+        );
+        if let Some(Ok(TungMessage::Text(msg))) = ws_stream.next().await {
+            assert_eq!(msg.as_str(), "proto=paseo.bearer.secret123");
+        } else {
+            panic!("expected text frame from upstream ws");
+        }
+
+        // 2. /__desktop/mode, /__desktop/setup?mode=choice, and /?first-run=1 render the mode choice page
+        let client = reqwest::Client::new();
+        for path in ["/__desktop/mode", "/__desktop/setup?mode=choice", "/?first-run=1"] {
+            state.setup_mode.store(true, Ordering::SeqCst);
+            let resp = client
+                .get(format!("http://127.0.0.1:{}{}", port, path))
+                .header("accept", "text/html")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), reqwest::StatusCode::OK, "{path}");
+            let html = resp.text().await.unwrap();
+            assert!(html.contains("data-testid=\"desktop-mode-choice\""), "{path}");
+            assert!(!state.setup_mode.load(Ordering::SeqCst), "{path}");
+        }
+
+        // 3. Reconnecting, Unreachable, and Pair pages all expose a link to /__desktop/mode
+        let cfg = DesktopConfig::default();
+        assert!(ui_pages::render_reconnecting_page(&cfg, "").contains("href=\"/__desktop/mode\""));
+        assert!(ui_pages::render_reconnecting_page(&cfg, "").contains(".actions { display:flex;"));
+        assert!(ui_pages::render_unreachable_page(&cfg, "").contains("href=\"/__desktop/mode\""));
+        let pair_html = ui_pages::render_pair_page(&cfg, None);
+        assert!(pair_html.contains("data-testid=\"back-to-mode-choice\""));
+        assert!(!pair_html.contains("id=\"serverHost\"\n          name=\"serverHost\"\n          value=\"\"\n          placeholder=\"server-ip:4180 or meshnet-host:4180\"\n          autocomplete=\"off\"\n          spellcheck=\"false\"\n          required"));
     }
 }

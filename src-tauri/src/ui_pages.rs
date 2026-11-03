@@ -475,9 +475,11 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
     display: flex;
     gap: 10px;
     margin-top: 20px;
+    flex-wrap: wrap;
   }}
   .btn-primary {{
     flex: 1;
+    min-width: 160px;
     padding: 12px 16px;
     background: var(--cyan);
     color: #05060d;
@@ -493,6 +495,24 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
   .btn-primary:hover {{ filter: brightness(1.1); }}
   .btn-primary:active {{ transform: translateY(1px); }}
   .btn-primary:disabled {{ opacity: 0.5; cursor: wait; }}
+  .btn-secondary {{
+    padding: 11px 14px;
+    background: var(--panel-hi);
+    color: var(--text);
+    border: 1px solid var(--line);
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }}
+  .btn-secondary:hover {{
+    border-color: var(--cyan);
+    color: var(--cyan);
+  }}
   .footer-note {{
     margin-top: 18px;
     padding-top: 12px;
@@ -520,7 +540,7 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
       <span class="brand-badge">DESKTOP CLIENT</span>
     </div>
     <div class="subtitle">
-      Connect to your VibeSquad server over your <b>Home LAN</b>, <b>Meshnet</b>, or <b>Localhost</b>. The Root CA is pinned inside this app — no Windows certificate install needed.
+      Connect to your VibeSquad server over your <b>Home LAN</b>, <b>Meshnet</b>, or <b>Localhost</b>, or paste a pairing link. The Root CA is pinned inside this app — no Windows certificate install needed.
     </div>
 
     {err_banner}
@@ -547,26 +567,25 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
         </div>
 
         <div class="label-row" style="margin-top:10px">
-          <label for="serverHost">Server Address</label>
+          <label for="serverHost">Server Address or Pairing Link</label>
         </div>
         <input
           type="text"
           id="serverHost"
           name="serverHost"
           value="{server_host_display}"
-          placeholder="server-ip:4180 or meshnet-host:4180"
+          placeholder="server-ip:4180, https://.../pair?code=..., or Paseo #offer= link"
           autocomplete="off"
           spellcheck="false"
-          required
         />
         <div class="hint">
-          Enter the Home LAN or Meshnet address shown on your server PC's <b>Pair a device</b> screen.
+          Enter the Home LAN / Meshnet address, or paste a full <code>https://.../pair?code=...</code> or Paseo <code>#offer=...</code> pairing link.
         </div>
       </div>
 
       <div class="field" id="code-field">
         <div class="label-row">
-          <label for="code">6-Digit Pairing Code</label>
+          <label for="code">6-Digit Pairing Code (or Link)</label>
           <span style="font-size:11px;color:var(--muted)">From server's <b>PAIR DEVICE</b> modal</span>
         </div>
         <input
@@ -580,7 +599,7 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
           autofocus
         />
         <div class="hint">
-          Open VibeSquad on your server PC → click <b>📱 Pair a device</b> → enter the 6-digit code (works for both Home LAN and Meshnet).
+          Open VibeSquad on your server PC → click <b>📱 Pair a device</b> → enter the 6-digit code or paste the pairing link.
         </div>
       </div>
 
@@ -593,6 +612,9 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
         <button type="submit" class="btn-primary" id="submit-btn">
           Connect &amp; Pair
         </button>
+        <a href="/__desktop/mode" class="btn-secondary" id="back-to-mode-choice" data-testid="back-to-mode-choice">
+          ← First-Time Setup (Local / Remote)
+        </a>
       </div>
     </form>
 
@@ -653,16 +675,45 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
       }}
     }}
 
+    function extractOfferHash(raw) {{
+      const s = (raw || '').trim();
+      if (!s) return null;
+      const hashIdx = s.indexOf('#offer=');
+      if (hashIdx >= 0) return s.slice(hashIdx);
+      const m = s.match(/[?#&]offer=([^&\s]+)/i);
+      if (m && m[1]) return '#offer=' + m[1];
+      if (s.startsWith('offer=')) return '#' + s;
+      return null;
+    }}
+
+    function tryExtractPairUrl(inputEl) {{
+      const raw = (inputEl.value || '').trim();
+      if (!raw) return;
+      if (/^https?:\/\//i.test(raw) && raw.includes('code=')) {{
+        try {{
+          const u = new URL(raw);
+          const c = u.searchParams.get('code');
+          if (u.host) hostInput.value = u.port ? u.host : (u.hostname + ':4180');
+          if (c) codeInput.value = c.trim();
+        }} catch (_) {{}}
+      }}
+    }}
+
     function syncLocalState() {{
       syncPresetButtons();
       const val = (hostInput.value || '').trim();
+      const codeVal = (codeInput.value || '').trim();
+      const offerHash = extractOfferHash(val) || extractOfferHash(codeVal);
       const lanHost = presetLan.dataset.host;
       const meshHost = presetMesh.dataset.host;
       presetLan.classList.toggle('active', Boolean(lanHost) && val.startsWith(lanHost));
       presetMesh.classList.toggle('active', Boolean(meshHost) && val.startsWith(meshHost));
       localhostBtn.classList.toggle('active', isLocal(val));
 
-      if (isLocal(val)) {{
+      if (offerHash) {{
+        codeInput.placeholder = 'Paseo offer link detected';
+        submitBtn.textContent = 'Connect via Paseo Offer Link';
+      }} else if (isLocal(val)) {{
         codeInput.placeholder = 'No code needed on Server PC';
         submitBtn.textContent = 'Connect to Localhost';
       }} else {{
@@ -671,7 +722,14 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
       }}
     }}
 
-    hostInput.addEventListener('input', syncLocalState);
+    hostInput.addEventListener('input', () => {{
+      tryExtractPairUrl(hostInput);
+      syncLocalState();
+    }});
+    codeInput.addEventListener('input', () => {{
+      tryExtractPairUrl(codeInput);
+      syncLocalState();
+    }});
     syncLocalState();
 
     presetLan.addEventListener('click', () => {{
@@ -744,6 +802,18 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
       const origText = submitBtn.textContent;
       submitBtn.textContent = 'Connecting…';
       try {{
+        tryExtractPairUrl(hostInput);
+        tryExtractPairUrl(codeInput);
+        const offerHash = extractOfferHash(hostInput.value) || extractOfferHash(codeInput.value);
+        if (offerHash) {{
+          await fetch('/__desktop/choose-mode', {{
+            method: 'POST',
+            headers: {{ 'Content-Type': 'application/json' }},
+            body: JSON.stringify({{ mode: 'local' }})
+          }}).catch(() => {{}});
+          window.location.replace('/?remote=1' + offerHash);
+          return;
+        }}
         const res = await fetch('/__desktop/pair', {{
           method: 'POST',
           headers: {{
@@ -995,7 +1065,7 @@ pub fn render_unreachable_page(cfg: &DesktopConfig, last_error: &str) -> String 
     <div class="actions">
       <button type="button" class="btn-primary" id="retry-btn">Retry Now</button>
       <a href="/__desktop/setup" class="btn-secondary" id="change-server-btn">Change Server / Re-pair</a>
-      <a href="/__desktop/setup" class="btn-secondary" id="use-lan-btn">Change Server / Re-pair</a>
+      <a href="/__desktop/mode" class="btn-secondary" id="first-time-setup-btn">First-Time Setup</a>
     </div>
   </div>
 
@@ -1209,7 +1279,7 @@ pub fn render_reconnecting_page(_cfg: &DesktopConfig, last_error: &str) -> Strin
   @keyframes blink {{ 0%,100% {{ opacity:1; }} 50% {{ opacity:.25; }} }}
   p {{ font-size:12px; line-height:1.5; color:var(--muted); margin:14px 0 0; }}
   .err-detail {{ margin-top:10px; font-size:11px; color:var(--muted); word-break:break-all; }}
-  .actions {{ display:none; gap:10px; margin-top:20px; flex-wrap:wrap; }}
+  .actions {{ display:flex; gap:10px; margin-top:20px; flex-wrap:wrap; }}
   .actions.show {{ display:flex; }}
   .btn-primary {{ flex:1; min-width:120px; padding:11px 16px; background:var(--cyan); color:#05060d; border:none; font-family:inherit; font-size:12px; font-weight:800; letter-spacing:1px; text-transform:uppercase; cursor:pointer; }}
   .btn-secondary {{ padding:11px 14px; background:var(--panel-hi); color:var(--text); border:1px solid var(--line); font-family:inherit; font-size:12px; font-weight:600; text-decoration:none; display:inline-flex; align-items:center; }}
@@ -1224,7 +1294,8 @@ pub fn render_reconnecting_page(_cfg: &DesktopConfig, last_error: &str) -> Strin
     <div class="err-detail" id="err-detail">{last_error}</div>
     <div class="actions" id="actions">
       <button type="button" class="btn-primary" id="retry-btn">Retry</button>
-      <a href="/__desktop/setup" class="btn-secondary" id="switch-server-btn">Switch server</a>
+      <a href="/__desktop/setup" class="btn-secondary" id="switch-server-btn">Switch server / Re-pair</a>
+      <a href="/__desktop/mode" class="btn-secondary" id="first-time-setup-btn">First-Time Setup</a>
     </div>
   </div>
   <script>
