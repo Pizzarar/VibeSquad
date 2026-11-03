@@ -34,10 +34,10 @@ import { AGENT_TYPE_LABEL, expectedTitleFor, kindOf, leadLadderFor, leadVariant 
 import type { AgentType, Member } from "./teams";
 import type { Entry } from "./Timeline";
 import { ImportSessionModal, SchedulesPanel } from "./SchedulesPanel";
-import { openAgent, openAgentInTab, useIsShown } from "./panes";
+import { openAgent, openAgentInTab, usePanes } from "./panes";
 import { exportFileName, forkSummaryPrompt, forkTitle, transcriptToJson, transcriptToMarkdown } from "./sessionLifecycle";
 import { openBriefEditor } from "./pinActions";
-import { usePinFocus } from "./pinFocus";
+import { useInFocusedLane, usePinFocus } from "./pinFocus";
 import { WorkingChip } from "./WorkingBar";
 import { usePinSlot, useRailCardVisible } from "./pinSlots";
 import { FeaturesMenu } from "./FeaturesMenu";
@@ -425,6 +425,7 @@ export type DrawerHeaderProps = {
   team: any;
   runningSubs: number;
   working: Member[];
+  extraSubs: number;
   laneId: string;
   entries: Entry[];
   active: boolean;
@@ -581,6 +582,7 @@ export function DrawerHeader({
   team,
   runningSubs,
   working,
+  extraSubs,
   laneId,
   entries,
   active,
@@ -906,11 +908,12 @@ export function DrawerHeader({
   const pinFocus = usePinFocus();
   const barSlot = usePinSlot("bar");
   const cardSlot = usePinSlot("card");
-  // Only while this drawer is the one shown (a Lead / worker opened over it takes the middle with its own header), and
-  // not at <=900px where the rail hides the Active Buddy Card: there the full inline inspector comes back.
-  const shownHere = useIsShown(agent.id);
+  // Whichever lane drawer (Buddy, Lead, worker, topic Buddy) is the left-pane tab owns the slots, so exactly one portals.
+  // Not at <=900px where the rail hides the Active Buddy Card: there the full inline inspector comes back.
+  const shownHere = usePanes().leftActiveId === agent.id;
+  const inLane = useInFocusedLane(agent.id);
   const railCardVisible = useRailCardVisible();
-  const compact = !!pinFocus && pinFocus.agentId === agent.id && shownHere && railCardVisible && !!barSlot && !!cardSlot;
+  const compact = !!pinFocus && shownHere && inLane && railCardVisible && !!barSlot && !!cardSlot;
 
   const paseoLink = (
     <>
@@ -1243,7 +1246,7 @@ export function DrawerHeader({
         {thinkingSelect}
         <span className="muted small">{agent.provider}/</span>
         {modelControl}
-        <WorkingChip members={working} subs={runningSubs} />
+        <WorkingChip members={working} subs={extraSubs} />
         <span className="drawer-head-compact-spacer" />
         {dockBtns}
       </div>

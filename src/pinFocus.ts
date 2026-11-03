@@ -13,7 +13,7 @@ import { isLiveUrlAgent, levelUp, loadSavedFocus, planRestore, reconcilePinFocus
 import { getRestoreLastView } from "./prefs";
 import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import { subscribeTeams } from "./teams";
-import { derived } from "./ui";
+import { derived, subscribeTree } from "./ui";
 
 export type PinFocus = {
   squadId: string;
@@ -148,6 +148,13 @@ export async function focusPin(pin: Pin): Promise<string> {
   }
   return "";
 }
+
+/** Is this agent the focused pin's Buddy, Lead, worker or topic Buddy? */
+export const useInFocusedLane = (agentId: string): boolean =>
+  useSyncExternalStore(subscribeTree, () => {
+    const f = state.focus;
+    return !!f && (f.agentId === agentId || laneMemberIdsOf(focusedPin(f)).has(agentId));
+  });
 
 /**
  * Open one of a pin's own agents (Lead, worker, topic Buddy or the Buddy) in the middle while the pin stays
