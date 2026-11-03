@@ -3,6 +3,7 @@ import { Modal } from "./TeamActions";
 import { daemonClient, reconnectWithDaemonPassword, usePaseo } from "./paseo";
 import { submitDaemonPassword } from "./paseoDaemonAuth";
 import { clearSession, isRemote } from "./remoteSession";
+import { loadUpdaterStatus, triggerUpdateInstall, useUpdaterStatus } from "./userName";
 import "./ResponsiveSmallWindow.css";
 
 type AnyClient = Record<string, ((...a: unknown[]) => Promise<unknown>) | undefined>;
@@ -66,6 +67,8 @@ export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
   onRePair?: () => void;
 }) {
   const { conn, status, error, authFailureReason } = usePaseo();
+  const updaterStatus = useUpdaterStatus();
+  const [updateChecking, setUpdateChecking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [visible, setVisible] = useState(false);
   const [retryIn, setRetryIn] = useState(RETRY_SECONDS);
@@ -233,6 +236,29 @@ export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
           <button type="button" className="btn ghost small" data-testid="daemon-banner-diagnostics" onClick={props.onOpenDiagnostics}>
             OPEN DIAGNOSTICS
           </button>
+          {updaterStatus.updateAvailable && updaterStatus.downloaded ? (
+            <button
+              type="button"
+              className="btn ok small"
+              data-testid="daemon-banner-update"
+              onClick={() => void triggerUpdateInstall()}
+            >
+              RESTART &amp; UPDATE (v{updaterStatus.availableVersion})
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn ghost small"
+              data-testid="daemon-banner-update"
+              disabled={updateChecking}
+              onClick={() => {
+                setUpdateChecking(true);
+                void checkForUpdates().finally(() => setUpdateChecking(false));
+              }}
+            >
+              {updateChecking ? "CHECKING UPDATES…" : "CHECK FOR UPDATES"}
+            </button>
+          )}
           {props.onOpenSetup && (
             <button type="button" className="btn ghost small" data-testid="daemon-banner-setup" onClick={props.onOpenSetup}>
               SETUP / DAEMON
@@ -343,6 +369,13 @@ export function updateLabel(state: UpdateCheck["state"], version: string): strin
   return "Check for updates";
 }
 export async function checkForUpdates(): Promise<boolean> {
+  try {
+    const r = await fetch("/__desktop/updater/check", { method: "POST", cache: "no-store" });
+    if (r.ok) {
+      await loadUpdaterStatus();
+      return true;
+    }
+  } catch {}
   try {
     return (await fetch("/__vibesquad/health", { cache: "no-store" })).ok;
   } catch {

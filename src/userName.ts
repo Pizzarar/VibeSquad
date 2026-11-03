@@ -224,7 +224,7 @@ export interface UpdaterStatusView {
 }
 
 let updaterStatus: UpdaterStatusView = {
-  currentVersion: "0.1.1",
+  currentVersion: "0.2.0",
   channel: "stable",
   updateAvailable: false,
   availableVersion: "",
@@ -287,7 +287,9 @@ export function useDesktopStatus(): DesktopStatusView {
 }
 
 export async function loadDesktopStatus(): Promise<DesktopStatusView> {
-  if (isRemote()) return desktopStatus;
+  if (!(globalThis as any).__VIBESQUAD_DESKTOP_BRIDGE__) {
+    if (isRemote()) return desktopStatus;
+  }
   try {
     const r = await fetch("/__desktop/status", { cache: "no-store" });
     if (r.ok) {
@@ -326,7 +328,9 @@ export async function loadDesktopStatus(): Promise<DesktopStatusView> {
 }
 
 export async function loadUpdaterStatus(): Promise<UpdaterStatusView> {
-  if (isRemote()) return updaterStatus;
+  if (!(globalThis as any).__VIBESQUAD_DESKTOP_BRIDGE__) {
+    if (isRemote()) return updaterStatus;
+  }
   void loadDesktopStatus();
   try {
     const r = await fetch("/__desktop/updater/status", { cache: "no-store" });
@@ -334,7 +338,7 @@ export async function loadUpdaterStatus(): Promise<UpdaterStatusView> {
       const d = await r.json();
       setDesktopConfigWarning(d.configWarning);
       setUpdaterStatus({
-        currentVersion: String(d.currentVersion || "0.1.1"),
+        currentVersion: String(d.currentVersion || "0.2.0"),
         channel: d.channel === "beta" ? "beta" : "stable",
         updateAvailable: Boolean(d.updateAvailable),
         availableVersion: String(d.availableVersion || ""),

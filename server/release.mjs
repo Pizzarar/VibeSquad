@@ -190,5 +190,30 @@ if (isMain) {
     }
     execFileSync("gh", ["release", "upload", tag, ...assets, "--clobber"], { cwd: rootDir, stdio: "inherit" });
     console.log(`[release:${channel}] Published ${tag} with ${assets.length} asset(s).`);
+
+    if (channel === "stable") {
+      const betaManifest = buildLatestJson({ version: targetVersion, channel: "beta", signature });
+      writeFileSync(latestJsonPath, JSON.stringify(betaManifest, null, 2) + "\n");
+      const betaTitle = `VibeSquad Beta (${targetVersion})`;
+      let betaTagExists = false;
+      try {
+        execFileSync("gh", ["release", "view", "beta"], { cwd: rootDir, stdio: "ignore" });
+        betaTagExists = true;
+      } catch {
+        execFileSync("gh", ["release", "create", "beta", "--prerelease", "--title", betaTitle, "--notes", betaManifest.notes], {
+          cwd: rootDir,
+          stdio: "inherit",
+        });
+      }
+      if (betaTagExists) {
+        execFileSync("gh", ["release", "edit", "beta", "--title", betaTitle, "--notes", betaManifest.notes], {
+          cwd: rootDir,
+          stdio: "inherit",
+        });
+      }
+      execFileSync("gh", ["release", "upload", "beta", ...assets, "--clobber"], { cwd: rootDir, stdio: "inherit" });
+      writeFileSync(latestJsonPath, JSON.stringify(latestManifest, null, 2) + "\n");
+      console.log(`[release:stable] Also synced rolling beta tag to v${targetVersion}.`);
+    }
   }
 }
