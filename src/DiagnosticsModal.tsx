@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Modal } from "./TeamActions";
 import { daemonClient, reconnectWithDaemonPassword, usePaseo } from "./paseo";
 import { submitDaemonPassword } from "./paseoDaemonAuth";
-import { clearSession, isRemote } from "./remoteSession";
+import { clearSession, isLocalHost, isRemote } from "./remoteSession";
 import { getStaleBuild, loadUpdaterStatus, triggerUpdateInstall, useStaleBuild, useUpdaterStatus } from "./userName";
 import "./ResponsiveSmallWindow.css";
 
@@ -151,9 +151,23 @@ export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
       props.onRePair();
       return;
     }
+    if (isLocalHost(location.hostname)) {
+      props.onOpenSetup?.();
+      return;
+    }
     window.location.href = "/?remote=1";
   };
   const onPaseoLinkClick = () => {
+    if ((window as any).__VIBESQUAD_DESKTOP_BRIDGE__) {
+      window.location.href = "/__desktop/mode";
+      return;
+    }
+    if (isLocalHost(location.hostname)) {
+      // A local window never opens a bare /?remote=1: that would try to relay to its own PC.
+      if (props.onRePair) props.onRePair();
+      else props.onOpenDiagnostics?.();
+      return;
+    }
     clearSession();
     window.location.href = "/?remote=1";
   };

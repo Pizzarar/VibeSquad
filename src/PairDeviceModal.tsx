@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Modal } from "./TeamActions";
 import { Ago } from "./ui";
+import { isLocalHost } from "./remoteSession";
 
 type Fingerprint = { full: string | null; short: string | null };
 
@@ -413,16 +414,19 @@ export function PairDeviceModal({ onClose }: { onClose: () => void }) {
             <div className="field-label" style={{ color: "var(--cyan)" }}>
               🔗 PASEO LINK PAIRING (<code>#offer=…</code>)
             </div>
+            {((window as any).__VIBESQUAD_DESKTOP_BRIDGE__ || !isLocalHost(location.hostname)) && (
             <button
               type="button"
               className="btn ghost small"
               data-testid="open-paseo-link-pair"
               onClick={() => {
-                window.location.href = "/?remote=1";
+                if ((window as any).__VIBESQUAD_DESKTOP_BRIDGE__) window.location.href = "/__desktop/mode";
+                else if (!isLocalHost(location.hostname)) window.location.href = "/?remote=1";
               }}
             >
               Pair with a Paseo #offer= Link →
             </button>
+            )}
           </div>
           <div className="muted small" style={{ marginTop: 4 }}>
             Pair any remote browser or VibeSquad window over the encrypted Paseo relay using an <code>#offer=…</code> connection link.
