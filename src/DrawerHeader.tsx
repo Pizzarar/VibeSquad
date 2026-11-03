@@ -17,6 +17,7 @@ import {
   upsertLocalAgent,
 } from "./paseo";
 import { clearWorkspaceIfQuiet } from "./paseoAttention";
+import { listProviderModels } from "./paseoProviders";
 import {
   auditAntigravityAgent,
   CANCEL_AND_RESUME_PROMPT,
@@ -347,11 +348,49 @@ export async function setThinkingHelper(agent: PaseoAgent, optionId: string | nu
   await daemonClient.setAgentThinkingOption(agent.id, optionId);
 }
 
-const PROVIDER_MODEL_HINTS: Record<string, string[]> = {
-  claude: ["claude-opus-5-5", "claude-sonnet-4-6", "claude-sonnet-5-5", "claude-haiku-4-5", "claude-haiku-5-5"],
-  gemini: ["gemini-4-argon", "gemini-2.5-pro", "gemini-2.5-flash"],
+export const PROVIDER_MODEL_HINTS: Record<string, string[]> = {
+  claude: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-sonnet-4-6", "claude-haiku-5-5", "claude-haiku-4-5"],
+  "antigravity-cli": ["gemini-4-argon", "gemini-3.8-flash", "gemini-2.5-pro", "gemini-2.5-flash"],
+  antigravity: ["gemini-4-argon", "gemini-3.8-flash", "gemini-2.5-pro", "gemini-2.5-flash"],
+  gemini: ["gemini-4-argon", "gemini-3.8-flash", "gemini-2.5-pro", "gemini-2.5-flash"],
+  codex: ["gpt-5.4", "gpt-5.3-codex", "gpt-4o", "gpt-4o-mini"],
   openai: ["gpt-5.4", "gpt-4o", "gpt-4o-mini"],
+  opencode: ["deepseek/deepseek-v4-pro", "deepseek/deepseek-flash"],
+  codewhale: ["claude-opus-5-5", "claude-sonnet-5-5", "gpt-5.4"],
 };
+
+export function buildProviderModelOptions(
+  provider: string,
+  currentModel?: string | null,
+  liveModels?: Array<{ id: string }>,
+): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const add = (val?: string | null) => {
+    const trimmed = typeof val === "string" ? val.trim() : "";
+    if (trimmed && !seen.has(trimmed)) {
+      seen.add(trimmed);
+      out.push(trimmed);
+    }
+  };
+  add(currentModel);
+  if (Array.isArray(liveModels)) {
+    for (const m of liveModels) {
+      add(m?.id);
+    }
+  }
+  const normProvider = String(provider ?? "").trim();
+  const hints =
+    PROVIDER_MODEL_HINTS[normProvider] ??
+    PROVIDER_MODEL_HINTS[normProvider.toLowerCase().split("/")[0]] ??
+    [];
+  for (const h of hints) {
+    add(h);
+  }
+  return out;
+}
+
+const providerModelsCache = new Map<string, Array<{ id: string }>>();
 
 const COUNTERPART_PROFILE_MAP: Record<string, string> = {
   "Lead - Claude": "Lead - Gemini",
@@ -634,6 +673,10 @@ export function DrawerHeader({
 }: DrawerHeaderProps) {
   const [modeBusy, setModeBusy] = useState(false);
   const [modelValue, setModelValue] = useState(agent.model ?? "");
+  const [customModelMode, setCustomModelMode] = useState(false);
+  const [liveModels, setLiveModels] = useState<Array<{ id: string }>>(
+    () => providerModelsCache.get(agent.provider) ?? [],
+  );
   const modelSubmittedRef = useRef<string | null>(null);
   const [modelError, setModelError] = useState("");
   const submitModel = (next: string) => {
@@ -657,6 +700,35 @@ export function DrawerHeader({
     setModelValue(agent.model ?? "");
     modelSubmittedRef.current = null;
   }, [agent.model]);
+
+  useEffect(() => {
+    const cached = providerModelsCache.get(agent.provider);
+    if (cached && cached.length > 0) {
+      setLiveModels(cached);
+      return;
+    }
+    setLiveModels([]);
+    if (DEMO || !agent.provider) return;
+    let cancelled = false;
+    listProviderModels(agent.provider)
+      .then((res) => {
+        if (cancelled) return;
+        const list = Array.isArray(res?.models)
+          ? res.models.filter((m) => typeof m?.id === "string" && m.id.trim().length > 0)
+          : [];
+        if (list.length > 0) {
+          providerModelsCache.set(agent.provider, list);
+        }
+        setLiveModels(list);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [agent.provider]);
+
+  const modelOptions = buildProviderModelOptions(agent.provider, modelValue || agent.model, liveModels);
+  const modelListId = `drawer-model-list-${agent.id}`;
 
   const agentLabels = (agent.labels ?? {}) as Record<string, string>;
   const switchTarget = oppositeProviderTarget(agent.provider, agentLabels.profile);
@@ -738,20 +810,26 @@ export function DrawerHeader({
             })()}
     </>
   );
-  const modelControl = (
+  const modelControl = customModelMode ? (
     <>
             <input
-              data-testid="drawer-model-control"
+              data-testid="drawer-model-input"
               className="drawer-model-input"
+              aria-label="Model"
+              title={`Custom model (${agent.provider})`}
               style={{ background: "var(--panel-alt)", color: "var(--fg)", border: "1px solid var(--line)", fontSize: 10, padding: "1px 4px", width: 120, height: 18 }}
-              list="drawer-model-list"
+              list={modelListId}
               value={modelValue}
+              autoFocus
               onChange={(e) => setModelValue(e.target.value)}
               onBlur={(e) => {
                 const next = e.target.value.trim();
                 if (next && next !== (agent.model ?? "") && next !== modelSubmittedRef.current) {
                   submitModel(next);
+                } else if (!next) {
+                  setModelValue(agent.model ?? "");
                 }
+                setCustomModelMode(false);
               }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
@@ -759,15 +837,47 @@ export function DrawerHeader({
                   if (next && next !== (agent.model ?? "") && next !== modelSubmittedRef.current) {
                     submitModel(next);
                   }
+                  setCustomModelMode(false);
+                } else if (e.key === "Escape") {
+                  setModelValue(agent.model ?? "");
+                  setCustomModelMode(false);
                 }
               }}
             />
-            <datalist id="drawer-model-list">
-              {(PROVIDER_MODEL_HINTS[agent.provider] ?? []).map((m) => (
+            <datalist id={modelListId}>
+              {modelOptions.map((m) => (
                 <option key={m} value={m} />
               ))}
             </datalist>
     </>
+  ) : (
+            <select
+              data-testid="drawer-model-select"
+              className="drawer-model-input"
+              aria-label="Model"
+              title={`Model (${agent.provider})`}
+              style={{ background: "var(--panel-alt)", color: "var(--fg)", border: "1px solid var(--line)", fontSize: 10, padding: "1px 4px", width: 120, height: 20 }}
+              value={modelValue || modelOptions[0] || ""}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (val === "__custom__") {
+                  setCustomModelMode(true);
+                  return;
+                }
+                const next = val.trim();
+                setModelValue(next);
+                if (next && next !== (agent.model ?? "") && next !== modelSubmittedRef.current) {
+                  submitModel(next);
+                }
+              }}
+            >
+              {modelOptions.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+              <option value="__custom__">Custom model…</option>
+            </select>
   );
   const metaRest = (
     <>
