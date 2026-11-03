@@ -21,7 +21,6 @@ function lastIndexOfType(events: TimelineEntry[], type: string): number {
 
 export type SpawnDefaults = {
   modeId?: string;
-  thinkingOptionId?: string;
   approvalPolicy?: string;
   sandbox?: string;
   shareMcp: boolean;
@@ -30,7 +29,7 @@ export type SpawnDefaults = {
 export function defaultSpawnConfigFor(provider: string): SpawnDefaults {
   switch (provider) {
     case AGY:
-      return { approvalPolicy: "skip", modeId: "accept-edits", thinkingOptionId: "medium", shareMcp: true };
+      return { approvalPolicy: "skip", modeId: "accept-edits", shareMcp: true };
     case "claude":
       return { modeId: "auto", shareMcp: true };
     case "codex":

@@ -101,7 +101,7 @@ export function HandoffModal({ view, lead, onClose, onCreated }: { view: TeamVie
         provider: targetProvider,
         model: targetModel,
         modeId: profile?.modeId ?? defaults.modeId,
-        thinkingOptionId: profile?.thinkingOptionId ?? defaults.thinkingOptionId,
+        thinkingOptionId: profile?.thinkingOptionId,
         featureValues: profile?.featureValues,
         notes: profile?.notes,
         approvalPolicy: defaults.approvalPolicy,

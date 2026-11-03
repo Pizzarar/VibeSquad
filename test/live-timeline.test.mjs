@@ -62,8 +62,8 @@ test("text filter includes reasoning", () => {
   assert.deepEqual(filterEntries(es, "text").map((x) => x.seqStart), [0, 1]);
 });
 
-test("antigravity-cli defaults to medium thinking", () => {
-  assert.equal(defaultSpawnConfigFor("antigravity-cli").thinkingOptionId, "medium");
+test("antigravity-cli sets no thinking option (effort is part of the model id)", () => {
+  assert.equal(defaultSpawnConfigFor("antigravity-cli").thinkingOptionId, undefined);
 });
 
 test("cumulative snapshots with the same id replace instead of doubling", () => {
