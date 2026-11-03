@@ -11,12 +11,16 @@ $startup = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup
 CreateObject("WScript.Shell").Run "wscript.exe ""$launcher""", 0, False
 "@ | Set-Content -Path (Join-Path $startup "VibeSquad.vbs") -Encoding ASCII
 
-# Desktop shortcut: points to the installed Tauri app %LOCALAPPDATA%\VibeSquad\VibeSquad.exe if installed, or falls back to wscript.exe "<launcher>" --open.
+# Desktop shortcut: points to the installed Tauri app (%LOCALAPPDATA%\VibeSquad\VibeSquad.exe or %LOCALAPPDATA%\Programs\VibeSquad\VibeSquad.exe) if installed, or falls back to wscript.exe "<launcher>" --open.
 $desktop = [Environment]::GetFolderPath("Desktop")
-$tauriExe = Join-Path $env:LOCALAPPDATA "VibeSquad\VibeSquad.exe"
+$tauriCandidates = @(
+  (Join-Path $env:LOCALAPPDATA "VibeSquad\VibeSquad.exe"),
+  (Join-Path $env:LOCALAPPDATA "Programs\VibeSquad\VibeSquad.exe")
+)
+$tauriExe = $tauriCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 $ws = New-Object -ComObject WScript.Shell
 $lnk = $ws.CreateShortcut((Join-Path $desktop "VibeSquad.lnk"))
-if (Test-Path $tauriExe) {
+if ($tauriExe -and (Test-Path $tauriExe)) {
   $lnk.TargetPath = $tauriExe
   $lnk.Arguments = ""
   $lnk.WorkingDirectory = Split-Path -Parent $tauriExe
