@@ -12,6 +12,7 @@ import { seedHubBriefs } from "./hub-seed.mjs";
 import { resolveProjectPath } from "./brief-path.mjs";
 import { contentRevision, createWindowLimiter } from "./write-guards.mjs";
 import { ADE_GATED_READ_PATHS, handleFileList, handleSearch } from "./file-search.mjs";
+import { handleSecretInputRequest } from "./secret-input.mjs";
 import {
   LEGACY_NEEDS_LABEL,
   LEGACY_USER_TYPE,
@@ -1523,6 +1524,8 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return handleFileList(req, res, navRoots(rootDir, opts), sendJson);
       case "/__vibesquad/search":
         return handleSearch(req, res, navRoots(rootDir, opts), sendJson);
+      case "/__vibesquad/secret-input":
+        return handleSecretInputRequest(req, res, { readBody: readCleanBody, sendJson, isOwner, secretsDir: opts.secretsDir });
       case "/__vibesquad/remove-team-worktrees":
         if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
         return readBody(req)

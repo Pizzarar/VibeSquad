@@ -7,6 +7,7 @@ import { fetchChatContext, fetchGitContext, fetchTerminalContext, listTerminalNa
 import type { DraftImageView } from "./imageDrafts";
 import { formatSize, MAX_INLINE_BYTES, fenceFile, type useAttachments } from "./attachments";
 import { isImeComposing, shouldComposerSubmit } from "./IdeaInbox";
+import { SecretInputPopover } from "./SecretInputPopover";
 import { composerKeyAction, usePref } from "./prefs";
 import {
   filterListing,
@@ -201,6 +202,7 @@ export function Composer({
   const [ctxStatus, setCtxStatus] = useState<{ tone: "busy" | "fail"; text: string } | null>(null);
   const [searching, setSearching] = useState(false);
   const [hq, setHq] = useState("");
+  const [secretOpen, setSecretOpen] = useState(false);
 
   const slash = dismissed ? null : slashToken(draft, caret);
   const mention = dismissed || slash ? null : mentionToken(draft, caret);
@@ -635,6 +637,24 @@ export function Composer({
           ))}
         </div>
       )}
+      {secretOpen && (
+        <SecretInputPopover
+          onClose={() => {
+            setSecretOpen(false);
+            taRef.current?.focus();
+          }}
+          onInsert={(token) => {
+            const next = draft && !/\s$/.test(draft) ? `${draft} ${token}` : `${draft}${token}`;
+            setDraft(next);
+            setCaret(next.length);
+            setSecretOpen(false);
+            requestAnimationFrame(() => {
+              taRef.current?.focus();
+              taRef.current?.setSelectionRange(next.length, next.length);
+            });
+          }}
+        />
+      )}
       <div className="composer-row">
         <textarea
           ref={taRef}
@@ -668,6 +688,16 @@ export function Composer({
           onClick={() => fileInput.current?.click()}
         >
           📎
+        </button>
+        <button
+          type="button"
+          className="btn ghost composer-secret-btn"
+          title="Insert sealed secret (written to 0600 temp file, never shown in chat)"
+          aria-label="Secure Input"
+          data-testid="composer-secret-btn"
+          onClick={() => setSecretOpen((v) => !v)}
+        >
+          🔒
         </button>
         {isBs && (
           <button
