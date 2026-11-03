@@ -1,4 +1,5 @@
 import { Component, Fragment, type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { PaseoAgentTimelineEvent } from "@getpaseo/client";
 import { messageCtxItems, openContextMenu, selectionWithin } from "./CommandPalette";
 import { daemonClient, client, DEMO } from "./paseo";
 import { REWIND_MODES, buildRewindRequest, truncateAfter, type RewindMode } from "./sessionLifecycle";
@@ -898,9 +899,12 @@ export function useTimeline(agentId: string, status: string, active = true) {
 
     reload.current = load;
     load();
-    const sub = handle.timeline.subscribe((ev: any) => {
-      if (ev && ev.type === "timeline" && ev.item) {
-        setEntries((cur) => mergeLiveItem(cur, ev.item, ev.timestamp));
+    const sub = handle.timeline.subscribe((ev: PaseoAgentTimelineEvent) => {
+      if (ev.event.type === "timeline") {
+        const item = ev.event.item;
+        const seq = "seq" in ev ? ev.seq : undefined;
+        const ts = "timestamp" in ev ? ev.timestamp : undefined;
+        setEntries((cur) => mergeLiveItem(cur, item, ts, seq));
       }
       soon();
     });
