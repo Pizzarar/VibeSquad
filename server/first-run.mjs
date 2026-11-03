@@ -6,7 +6,7 @@ import { connect } from "node:net";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve, sep } from "node:path";
 import { readJsonFileWithBom } from "./user-settings.mjs";
-import { markDaemonManagedByVibeSquad, readPaseoPid } from "./paseo-control.mjs";
+import { markDaemonManagedByVibeSquad, readPaseoPid, withWindowsHideNodeOptions } from "./paseo-control.mjs";
 import { getDaemonAuthStatus } from "./daemon-password.mjs";
 
 export const PINNED_PASEO_VERSION = "0.14.0";
@@ -135,7 +135,10 @@ export async function ensurePaseoDaemon(opts = {}) {
   if (!cli) return { started: false, reason: "not-installed" };
   const spawnFn = opts.spawn ?? spawn;
   const node = bundledNode();
-  const env = { ...process.env, PATH: `${dirname(node)}${delimiter}${process.env.PATH ?? ""}` };
+  const env = withWindowsHideNodeOptions({
+    ...process.env,
+    PATH: `${dirname(node)}${delimiter}${process.env.PATH ?? ""}`,
+  });
   const spawnOpts = { detached: true, stdio: "ignore", windowsHide: true, env };
   // Same rule as runPaseoCli: prefer the shim's node entry; on the cmd.exe fallback cli.bin must pass UNSAFE_CMD_ARG.
   const entry = cli.kind === "cmd" ? (opts.resolveCmdShim ?? resolveCmdShimEntry)(cli.bin) : null;

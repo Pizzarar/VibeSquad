@@ -35,13 +35,14 @@ const NAV: { id: HomeSection; label: string }[] = [
   { id: "newAgent", label: "New Agent defaults" },
   { id: "keys", label: "Keybindings" },
   { id: "team", label: "Team" },
+  { id: "remote", label: "Remote Control" },
   { id: "paseo", label: "Paseo" },
   { id: "profiles", label: "Profiles" },
   { id: "about", label: "About" },
 ];
 const navLabel = (s: HomeSection) => NAV.find((n) => n.id === s)!.label;
 const PREF_SECTIONS = new Set<HomeSection>(["app", "chat", "notifications", "newAgent"]);
-const REHOUSED: Partial<Record<HomeSection, TeamSettingsPart[]>> = { team: ["account", "teams"], paseo: ["paseo"], profiles: ["profiles"] };
+const REHOUSED: Partial<Record<HomeSection, TeamSettingsPart[]>> = { team: ["account", "teams"], paseo: ["paseo"], profiles: ["profiles"], remote: ["remote"] };
 
 // The palette ("Settings: <name>") asks for a setting before the home mounts; the home picks it up on open.
 let pendingTarget: string | null = null;

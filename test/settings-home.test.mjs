@@ -324,3 +324,29 @@ test("push filter (client): toggles sync through /__vibesquad/settings; copy no 
   assert.doesNotMatch(home, /Push alerts are sent by the server for every event/);
   assert.match(home, /in push notifications/);
 });
+
+test("Remote Control section in Settings: saveRemoteAccess persists remote.enabled and UI exposes Remote Control & Link Device", async () => {
+  const { mkdtempSync, rmSync, readFileSync: rf } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const US = await import("../server/user-settings.mjs");
+  const home = mkdtempSync(join(tmpdir(), "vs-remote-access-"));
+  try {
+    assert.equal(US.loadUserSettings(home).remote, undefined);
+    const enabledCfg = US.saveRemoteAccess(true, home);
+    assert.equal(enabledCfg.remote.enabled, true);
+    assert.equal(JSON.parse(rf(join(home, "settings.json"), "utf8")).remote.enabled, true);
+    const disabledCfg = US.saveRemoteAccess(false, home);
+    assert.equal(disabledCfg.remote.enabled, false);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+  const homeSrc = src("SettingsHome.tsx");
+  assert.ok(homeSrc.includes('label: "Remote Control"'));
+  assert.match(homeSrc, /remote: \["remote"\]/);
+  const modalSrc = src("TeamSettingsModal.tsx");
+  assert.match(modalSrc, /data-testid="remote-control-section"/);
+  assert.match(modalSrc, /data-testid="settings-remote-enabled-toggle"/);
+  assert.match(modalSrc, /data-testid="settings-open-pair-device-btn"/);
+  assert.match(modalSrc, /<PairDeviceModal/);
+});

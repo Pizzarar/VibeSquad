@@ -10,6 +10,7 @@ export const LEGACY_NEEDS_UNTIL = LEGACY_NEEDS_LABEL + "-until";
 const DEFAULT_NAME = "you";
 let userName = DEFAULT_NAME;
 let lanEnabled = false;
+let remoteEnabled = false;
 let exposedIps: string[] = [];
 let serverConfigWarnings: { file: string; label?: string; error: string; kind?: string }[] = [];
 let desktopConfigWarning = "";
@@ -18,6 +19,7 @@ const listeners = new Set<() => void>();
 
 export const getUserName = () => userName;
 export const getLanEnabled = () => lanEnabled;
+export const getRemoteEnabled = () => remoteEnabled;
 export const getExposedIps = () => exposedIps;
 export const getConfigWarnings = (): string[] => {
   // Parse errors keep their fallback note; other kinds (e.g. "exposure") are shown as-is.
@@ -131,6 +133,14 @@ export function setLanExposureState(nextLan: boolean, nextIps?: string[]): void 
   if (changed) listeners.forEach((l) => l());
 }
 
+export function setRemoteEnabledState(next: boolean): void {
+  const val = Boolean(next);
+  if (val !== remoteEnabled) {
+    remoteEnabled = val;
+    listeners.forEach((l) => l());
+  }
+}
+
 export function useUserName(): string {
   return useSyncExternalStore(
     (cb) => {
@@ -148,6 +158,16 @@ export function useLanEnabled(): boolean {
       return () => listeners.delete(cb);
     },
     getLanEnabled,
+  );
+}
+
+export function useRemoteEnabled(): boolean {
+  return useSyncExternalStore(
+    (cb) => {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+    getRemoteEnabled,
   );
 }
 
@@ -171,6 +191,7 @@ export async function loadUserName(): Promise<void> {
       const data = await r.json();
       setUserName(String(data.userName ?? ""));
       setLanExposureState(Boolean(data.activeLanEnabled ?? data.lanEnabled), Array.isArray(data.exposedIps) ? data.exposedIps : undefined);
+      setRemoteEnabledState(Boolean(data.remote?.enabled));
       setServerConfigWarnings(data.configWarnings);
     }
   } catch {}
@@ -210,6 +231,25 @@ export async function saveLanEnabled(enabled: boolean): Promise<{ lanEnabled: bo
     }
   } catch {}
   return { lanEnabled: getLanEnabled(), exposedIps: getExposedIps() };
+}
+
+export async function saveRemoteEnabled(enabled: boolean): Promise<boolean> {
+  setRemoteEnabledState(enabled);
+  try {
+    const r = await fetch("/__vibesquad/settings", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ remoteEnabled: Boolean(enabled) }),
+    });
+    if (r.ok) {
+      const data = await r.json();
+      const next = Boolean(data.remote?.enabled);
+      setRemoteEnabledState(next);
+      setServerConfigWarnings(data.configWarnings);
+      return next;
+    }
+  } catch {}
+  return getRemoteEnabled();
 }
 
 export type UpdateChannel = "stable" | "beta";

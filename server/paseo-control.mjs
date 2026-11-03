@@ -6,6 +6,7 @@ import { execFile, spawn } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { bundledNode, findPaseoCli, isDaemonListening, parseListen, resolveCmdShimEntry, UNSAFE_CMD_ARG } from "./first-run.mjs";
 import { clearConfigWarning, loadUserSettings, parseJsonWithBom, readJsonFileWithBom, recordConfigWarning, stripBom } from "./user-settings.mjs";
 
@@ -13,6 +14,18 @@ const IS_WIN = process.platform === "win32";
 export const SECRET_MASK = "••••••••";
 export const SECRET_KEY_RE = /token|secret|key|password|cred|auth/i;
 export const MAX_BACKUPS = 5;
+
+export function withWindowsHideNodeOptions(env = process.env, platform = process.platform) {
+  const out = { ...(env || {}) };
+  if (platform !== "win32") return out;
+  const preloadPath = resolve(import.meta.dirname, "windows-hide-preload.mjs");
+  const preloadUrl = pathToFileURL(preloadPath).href;
+  if (/[\s"']/.test(preloadUrl)) return out;
+  const existing = String(out.NODE_OPTIONS ?? "").trim();
+  if (existing.includes("windows-hide-preload.mjs")) return out;
+  out.NODE_OPTIONS = existing ? `${existing} --import ${preloadUrl}` : `--import ${preloadUrl}`;
+  return out;
+}
 
 export function getPaseoHome(opts = {}) {
   if (opts.paseoHome) return resolve(String(opts.paseoHome));
@@ -232,12 +245,12 @@ export function runPaseoCli(args = [], opts = {}) {
     });
   }
   const node = bundledNode();
-  const env = {
+  const env = withWindowsHideNodeOptions({
     ...process.env,
     ...(opts.env ?? {}),
     PASEO_HOME: paseoHome,
     PATH: `${dirname(node)}${delimiter}${process.env.PATH ?? ""}`,
-  };
+  });
   const fullArgs = ["--home", paseoHome, ...args];
   const timeout = opts.timeoutMs ?? 12_000;
 
@@ -429,16 +442,46 @@ export function clearManagedDaemonMarker(opts = {}) {
 
 /**
  * Inspects full Daemon status for Tab 1 (Daemon).
+ * When `cliRunner` / `runCli` is not supplied and `probeCli !== true`, uses fast non-blocking
+ * disk + socket reads (`daemon.pid`, `server-id`, CLI package.json) instead of spawning subprocesses.
  */
 export async function getPaseoDaemonStatus(opts = {}) {
+  const pHome = getPaseoHome(opts);
   const rawCfg = readRawPaseoConfig(opts);
   const configuredListen = rawCfg.config?.daemon?.listen || "127.0.0.1:6767";
-  const statusRes = await runPaseoCli(["status", "--json"], { ...opts, timeoutMs: 5000 });
-  const statusObj = statusRes.data && typeof statusRes.data === "object" ? statusRes.data : {};
+  const useCli =
+    typeof opts.cliRunner === "function" ||
+    typeof opts.runCli === "function" ||
+    opts.probeCli === true;
+
+  let statusObj = {};
+  if (useCli) {
+    const statusRes = await runPaseoCli(["status", "--json"], { ...opts, timeoutMs: 5000 });
+    statusObj = statusRes.data && typeof statusRes.data === "object" ? statusRes.data : {};
+  } else {
+    const pid = readPaseoPid(opts);
+    const serverIdPath = join(pHome, "server-id");
+    let serverId = null;
+    if (existsSync(serverIdPath)) {
+      try {
+        serverId = readFileSync(serverIdPath, "utf8").trim() || null;
+      } catch {}
+    }
+    const cli = opts.cli !== undefined ? opts.cli : findPaseoCli(opts);
+    statusObj = {
+      pid,
+      serverId,
+      daemonVersion: cli?.version ?? null,
+    };
+  }
+
   const listen = statusObj.listen || configuredListen;
   const listening = await (opts.isListening ?? isDaemonListening)(listen, 800);
   const running = statusObj.localDaemon === "running" || listening;
-  const { liveCount, busyCount, busyAgents } = running ? await inspectDaemonAgents(opts) : { liveCount: 0, busyCount: 0, busyAgents: [] };
+  const { liveCount, busyCount, busyAgents } =
+    running && (useCli || opts.inspectAgents === true)
+      ? await inspectDaemonAgents(opts)
+      : { liveCount: 0, busyCount: 0, busyAgents: [] };
   const managedByVibeSquad = isVibeSquadManagedDaemon(statusObj, opts);
   const startedAt = statusObj.startedAt || null;
   const uptimeMs = startedAt ? Math.max(0, Date.now() - new Date(startedAt).getTime()) : null;
@@ -446,10 +489,10 @@ export async function getPaseoDaemonStatus(opts = {}) {
 
   return {
     ok: true,
-    home: getPaseoHome(opts),
+    home: pHome,
     running,
     version: statusObj.daemonVersion || null,
-    pid: statusObj.pid || null,
+    pid: statusObj.pid || readPaseoPid(opts) || null,
     startedAt,
     uptimeMs,
     listen,
@@ -474,7 +517,9 @@ export async function getPaseoDaemonStatus(opts = {}) {
  * On app quit (`reason === "app-quit"`), an external daemon is NEVER stopped, and if `keepPaseoRunningOnQuit` is true, it is never stopped.
  */
 export async function controlPaseoDaemon(action, opts = {}) {
-  const status = await getPaseoDaemonStatus(opts);
+  const status = await getPaseoDaemonStatus(
+    action === "stop" || action === "restart" ? { ...opts, inspectAgents: true } : opts,
+  );
 
   if (action === "reload") {
     const res = await runPaseoCli(["reload"], opts);
