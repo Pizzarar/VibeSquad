@@ -58,13 +58,37 @@ export function syncVersionFiles(dir, newVersion) {
   writeFileSync(cargoPath, updatedCargo);
 }
 
+export const COMMUNITY_ACCOLADES_020 = [
+  "Implemented ability to render Mermaid diagrams in Chat & Briefs — Thanks to Mermaid by dutchakdev",
+  "Implemented ability to preview images, PDFs, HTML, audio, and video in Briefs & Files — Thanks to File preview by gil-pingping, PDF viewer (PDF.js) by bendavid, and PDF and Office viewer by nkwib",
+  "Implemented Sealed Secret Input (0600 temp file injection without logging secrets in chat) — Thanks to Secure Input by dutchakdev",
+  "Implemented Workspace Listening Ports auto-detection & clickable pills — Thanks to Ports by zedobaia and Server Browser by zhjiang22",
+  "Implemented Provider Quota Failover & 1-Click Provider Switch (Claude ↔ Gemini) — Thanks to Continuity by Chechulin Serhii, Switch provider by anh-chu, Usage Auto Resume by babo-jeonguk, and Zerosub by Kapybara",
+  "Implemented CLAUDE_CODE_ENTRYPOINT=Paseo spawn environment tag — Thanks to Claude Code entrypoint by getpaseo",
+  "Implemented Session Janitor to auto-archive closed worker sessions — Thanks to session-janitor by sm1ee",
+  "Implemented Keep Host Awake while agents are running — Thanks to Keep Awake by Hicham Boushaba",
+  "Implemented Per-hunk Diff Review, Line Quote & Code Annotations — Thanks to Annotations by neunzig-zehn, Quote by Chechulin Serhii, and Codex Style Annotations by xzthemeofsss",
+  "Implemented Turn Recap & Digest Summaries — Thanks to Recap by Kingsley",
+  "Built on the Paseo Daemon, CLI, and ACP Plugin Runtime — Thanks to Paseo (@getpaseo) by the Paseo team (getpaseo)",
+];
+
+export function defaultReleaseNotes(version, channel = "stable") {
+  const cleanVer = String(version || "0.2.0").trim().replace(/^v/, "");
+  return [
+    `VibeSquad v${cleanVer} (${channel})`,
+    "",
+    "### Community Accolades & Credits",
+    ...COMMUNITY_ACCOLADES_020.map((line) => `- ${line}`),
+  ].join("\n");
+}
+
 export function buildLatestJson({ version, channel, signature, repo = "Pizzarar/VibeSquad", pubDate = new Date().toISOString(), notes }) {
   const cleanVer = String(version).trim().replace(/^v/, "");
   const tag = channel === "beta" ? "beta" : `v${cleanVer}`;
   const downloadUrl = `https://github.com/${repo}/releases/download/${tag}/VibeSquad-setup.exe`;
   return {
     version: cleanVer,
-    notes: notes || `VibeSquad v${cleanVer} (${channel})`,
+    notes: notes || defaultReleaseNotes(cleanVer, channel),
     pub_date: pubDate,
     platforms: {
       "windows-x86_64": {
