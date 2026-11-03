@@ -119,7 +119,11 @@ export function mergeLiveItem<T extends Ent>(entries: T[], item: any, timestamp?
       const field = type === "reasoning" && last.item.text == null && last.item.summary != null ? "summary" : "text";
       const prev = String(last.item[field] ?? "");
       const add = type === "reasoning" ? reasoningText(item) : String(item.text ?? "");
-      const merged = { ...last.item, [field]: prev + add };
+      // Snapshot providers resend the whole text; delta providers send only the new part. A strictly longer text
+      // that extends the tail is a snapshot (replace), everything else is a delta (append). The message id can't
+      // tell them apart: claude deltas reuse one messageId (claude/agent.js:943).
+      const text = add.length > prev.length && add.startsWith(prev) ? add : prev + add;
+      const merged = { ...last.item, [field]: text };
       return [...entries.slice(0, -1), { ...last, item: merged, liveSeqs: seq != null ? [...(last.liveSeqs ?? []), seq] : last.liveSeqs }];
     }
   }

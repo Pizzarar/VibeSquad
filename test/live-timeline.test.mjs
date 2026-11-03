@@ -65,3 +65,21 @@ test("text filter includes reasoning", () => {
 test("antigravity-cli defaults to medium thinking", () => {
   assert.equal(defaultSpawnConfigFor("antigravity-cli").thinkingOptionId, "medium");
 });
+
+test("cumulative snapshots with the same id replace instead of doubling", () => {
+  let e = apply(base, ev({ type: "assistant_message", id: "t:1", messageId: "t:1", text: "Hel" }, 1));
+  e = apply(e, ev({ type: "assistant_message", id: "t:1", messageId: "t:1", text: "Hello" }, 2));
+  e = apply(e, ev({ type: "assistant_message", id: "t:1", messageId: "t:1", text: "Hello world" }, 3));
+  assert.equal(e.length, 2);
+  assert.equal(e[1].item.text, "Hello world");
+});
+
+test("deltas append, with or without a (shared) messageId", () => {
+  let e = apply(base, ev({ type: "assistant_message", text: "foo" }, 1));
+  e = apply(e, ev({ type: "assistant_message", text: "bar" }, 2));
+  assert.equal(e[1].item.text, "foobar");
+  let c = apply(base, ev({ type: "assistant_message", messageId: "m", text: "ab" }, 1));
+  c = apply(c, ev({ type: "assistant_message", messageId: "m", text: "cd" }, 2));
+  c = apply(c, ev({ type: "assistant_message", messageId: "m", text: "ab" }, 3)); // repeated delta text, new seq
+  assert.equal(c[1].item.text, "abcdab");
+});
