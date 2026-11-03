@@ -74,7 +74,7 @@ import {
 } from "./ui";
 import { WorkspacesView } from "./WorkspacesView";
 import { AttentionBadge } from "./AttentionList";
-import { FullToggle, PinGrid, SidebarPins, SquadsHome, useFullView, type PinHandler } from "./PinGrid";
+import { FullToggle, PinGrid, SidebarPins, SquadsHome, setFullView, useFullView, type PinHandler } from "./PinGrid";
 import { pinsForSquad, type Pin } from "./pins";
 import { popAction, urlAgentFor } from "./pinFocusLogic";
 import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, spinUpPin, usePinFocus, usePinsHome, useSquadsHome } from "./pinFocus";
@@ -1235,7 +1235,12 @@ const Toolbar = memo(function Toolbar(props: {
       <div className="seg">
         <button
           className={props.screen === "teams" ? "on" : ""}
-          onClick={() => (props.screen === "teams" ? enterSquadsHome() : props.onScreen("teams"))}
+          onClick={() => {
+            setFullView(false);
+            setFocus(false);
+            if (props.screen !== "teams") props.onScreen("teams");
+            enterSquadsHome();
+          }}
         >
           SQUADS
         </button>
@@ -1576,6 +1581,8 @@ export function App() {
   // Stable callbacks so the memoized sidebar and team page skip renders they do not need.
   // Switching teams never touches open tabs.
   const onTeam = useCallback((id: string) => {
+    setFullView(false);
+    setFocus(false);
     exitSquadsHome();
     setTeamId(id);
     setScreen("teams");
@@ -1592,6 +1599,8 @@ export function App() {
 
   // Clicking a squad name opens its overview (expanding it if collapsed); only the caret collapses.
   const onTeamHeaderClick = useCallback((id: string) => {
+    setFullView(false);
+    setFocus(false);
     exitSquadsHome();
     setTeamId(id);
     setScreen("teams");
@@ -1722,7 +1731,7 @@ export function App() {
   const leftPinLayout = useRef(false);
   useEffect(() => {
     if (!pinLayout) clearPinFocus();
-    else if (leftPinLayout.current) exitSquadsHome(); // back from FULL / focus mode: land on the grid
+    else if (leftPinLayout.current && !getSquadsHome()) exitSquadsHome(); // back from FULL / focus mode: land on the grid (unless SQUADS asked for Squads Home)
     leftPinLayout.current = !pinLayout;
   }, [pinLayout]);
   const dateGrouped = useMemo(() => {
