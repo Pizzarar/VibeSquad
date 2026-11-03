@@ -112,7 +112,7 @@ describe("desktop updater verification: channels, signature rejection, and idle 
       return;
     }
 
-    const validInstallerBytes = Buffer.from("MZ-FAKE-SIGNED-VIBESQUAD-INSTALLER-PAYLOAD-0.1.2");
+    const validInstallerBytes = Buffer.from("MZ-FAKE-SIGNED-VIBESQUAD-INSTALLER-PAYLOAD-0.3.0");
     const validSignature = signPayloadWithTauriKey(validInstallerBytes, keyPath);
 
     let stableManifest = {};
@@ -183,9 +183,9 @@ describe("desktop updater verification: channels, signature rejection, and idle 
       assert.equal(pickStable.status, 200);
       assert.equal(JSON.parse(pickStable.body).channel, "stable");
 
-      // 2. Stable channel ignores beta pre-release versions (e.g. 0.1.2-beta.1)
+      // 2. Stable channel ignores beta pre-release versions (e.g. 0.3.0-beta.1)
       stableManifest = {
-        version: "0.1.2-beta.1",
+        version: "0.3.0-beta.1",
         notes: "Beta build",
         pub_date: "2026-11-01T18:00:00Z",
         platforms: { "windows-x86_64": { signature: validSignature, url: downloadUrl } },
@@ -197,7 +197,7 @@ describe("desktop updater verification: channels, signature rejection, and idle 
 
       // 3. Unsigned latest.json (empty signature) is rejected
       stableManifest = {
-        version: "0.1.2",
+        version: "0.3.0",
         notes: "Unsigned build",
         pub_date: "2026-11-01T18:00:00Z",
         platforms: { "windows-x86_64": { signature: "", url: downloadUrl } },
@@ -210,12 +210,12 @@ describe("desktop updater verification: channels, signature rejection, and idle 
 
       // 4. Tampered installer binary is rejected by Minisign verification
       stableManifest = {
-        version: "0.1.2",
+        version: "0.3.0",
         notes: "Tampered build",
         pub_date: "2026-11-01T18:00:00Z",
         platforms: { "windows-x86_64": { signature: validSignature, url: downloadUrl } },
       };
-      servedInstallerBytes = Buffer.from("MZ-TAMPERED-MALICIOUS-BYTES-0.1.2");
+      servedInstallerBytes = Buffer.from("MZ-TAMPERED-MALICIOUS-BYTES-0.3.0");
       const chkTampered = await httpCall({ port: proxyPort, path: "/__desktop/updater/check", method: "POST" });
       assert.equal(chkTampered.status, 400);
       const bTampered = JSON.parse(chkTampered.body);
@@ -223,17 +223,24 @@ describe("desktop updater verification: channels, signature rejection, and idle 
       assert.equal(bTampered.downloaded, false);
       assert.match(bTampered.lastError, /tampered|Signature verification failed/i);
 
-      // 5. Valid signed stable release is downloaded & verified, sets updateAvailable=true without auto-installing
+      // 5. Valid signed stable release is downloaded & verified, waits while an agent turn is mid-flight
+      await httpCall({
+        port: proxyPort,
+        path: "/__desktop/updater/busy",
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ busy: true }),
+      });
       servedInstallerBytes = validInstallerBytes;
       const chkValidStable = await httpCall({ port: proxyPort, path: "/__desktop/updater/check", method: "POST" });
       assert.equal(chkValidStable.status, 200);
       const bValidStable = JSON.parse(chkValidStable.body);
       assert.equal(bValidStable.updateAvailable, true);
-      assert.equal(bValidStable.availableVersion, "0.1.2");
+      assert.equal(bValidStable.availableVersion, "0.3.0");
       assert.equal(bValidStable.downloaded, true);
-      assert.equal(bValidStable.installTriggered, false, "Stable channel should prompt user rather than auto-installing");
+      assert.equal(bValidStable.installTriggered, false, "Stable channel should wait while an agent turn is mid-flight");
 
-      // 6. Beta channel with agent turn mid-flight downloads & verifies 0.1.2-beta.1, waits until turn finishes, then auto-installs
+      // 6. Beta channel with agent turn mid-flight downloads & verifies 0.3.0-beta.1, waits until turn finishes, then auto-installs
       await httpCall({
         port: proxyPort,
         path: "/__desktop/updater/busy",
@@ -242,7 +249,7 @@ describe("desktop updater verification: channels, signature rejection, and idle 
         body: JSON.stringify({ busy: true }),
       });
       betaManifest = {
-        version: "0.1.2-beta.1",
+        version: "0.3.0-beta.1",
         notes: "Rolling beta",
         pub_date: "2026-11-01T18:30:00Z",
         platforms: { "windows-x86_64": { signature: validSignature, url: downloadUrl } },
@@ -258,7 +265,7 @@ describe("desktop updater verification: channels, signature rejection, and idle 
       const bBetaBusy = JSON.parse(switchBeta.body);
       assert.equal(bBetaBusy.channel, "beta");
       assert.equal(bBetaBusy.updateAvailable, true);
-      assert.equal(bBetaBusy.availableVersion, "0.1.2-beta.1");
+      assert.equal(bBetaBusy.availableVersion, "0.3.0-beta.1");
       assert.equal(bBetaBusy.downloaded, true);
       assert.equal(bBetaBusy.agentTurnMidFlight, true);
       assert.equal(bBetaBusy.installTriggered, false, "Beta must wait while an agent turn is mid-flight");
@@ -274,7 +281,7 @@ describe("desktop updater verification: channels, signature rejection, and idle 
       const bBetaIdle = JSON.parse(clearBusy.body);
       assert.equal(bBetaIdle.agentTurnMidFlight, false);
       assert.equal(bBetaIdle.installTriggered, true, "Beta must auto-install as soon as no agent turn is mid-flight");
-      assert.equal(bBetaIdle.installedVersion, "0.1.2-beta.1");
+      assert.equal(bBetaIdle.installedVersion, "0.3.0-beta.1");
     } finally {
       child.kill();
       updateServer.close();
