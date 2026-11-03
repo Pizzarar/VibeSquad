@@ -9,6 +9,16 @@ import { workspaceIdForAgent } from "./workspaceLogic";
 import { NoWorkspaceBanner } from "./NoWorkspaceBanner";
 import { captureFileName, captureText } from "./fileOps";
 import { captureTerminalLines, renameTerminalTitle } from "./paseoFiles";
+import {
+  detectPortsInText,
+  dismissWorkspacePort,
+  getWorkspacePorts,
+  recordWorkspacePorts,
+  subscribeWorkspacePorts,
+  type DetectedPort,
+} from "./portsDetect";
+
+const utf8Decoder = new TextDecoder();
 
 type TerminalTab = { id: string; name: string };
 type TerminalInstance = { term: Terminal; fit: FitAddon };
@@ -57,6 +67,10 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
   const scopeKey = `${cwd}|${workspaceId ?? ""}`;
   const scopeKeyRef = useRef(scopeKey);
   scopeKeyRef.current = scopeKey;
+  const portsKey = cwd || workspaceId || agent.id || "default";
+  const portsKeyRef = useRef(portsKey);
+  portsKeyRef.current = portsKey;
+  const [detectedPorts, setDetectedPorts] = useState<DetectedPort[]>(() => getWorkspacePorts(portsKey));
   const [tabs, setTabs] = useState<TerminalTab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const unsubsRef = useRef<Map<string, () => void>>(new Map());
@@ -69,7 +83,18 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
   const [tabErr, setTabErr] = useState("");
   const [capture, setCapture] = useState<{ title: string; text: string; err: string; busy: boolean; copied: boolean } | null>(null);
 
+  useEffect(() => {
+    setDetectedPorts(getWorkspacePorts(portsKey));
+    return subscribeWorkspacePorts(() => {
+      setDetectedPorts(getWorkspacePorts(portsKey));
+    });
+  }, [portsKey]);
+
   const writeToTerm = useCallback((id: string, data: Uint8Array | string) => {
+    const textChunk = typeof data === "string" ? data : utf8Decoder.decode(data);
+    if (textChunk && detectPortsInText(textChunk).length > 0) {
+      recordWorkspacePorts(portsKeyRef.current, textChunk);
+    }
     const inst = termInstancesRef.current.get(id);
     if (inst) {
       inst.term.write(data);
@@ -386,6 +411,62 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
               Capture output
             </button>
           </>
+        )}
+        {detectedPorts.length > 0 && (
+          <div
+            className="terminal-ports-bar"
+            data-testid="terminal-ports-bar"
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, marginLeft: "auto" }}
+          >
+            {detectedPorts.map((p) => (
+              <span
+                key={p.port}
+                className="terminal-port-pill"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 3,
+                  padding: "1px 6px",
+                  borderRadius: 999,
+                  background: "rgba(0, 245, 212, 0.12)",
+                  border: "1px solid rgba(0, 245, 212, 0.35)",
+                  fontSize: 11,
+                }}
+              >
+                <a
+                  href={p.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-testid={`port-pill-${p.port}`}
+                  title={`Open ${p.url}`}
+                  style={{ color: "#00f5d4", textDecoration: "none", fontFamily: "monospace" }}
+                >
+                  :{p.port}
+                </a>
+                <button
+                  type="button"
+                  data-testid={`port-pill-dismiss-${p.port}`}
+                  aria-label={`Dismiss port ${p.port}`}
+                  title={`Dismiss :${p.port}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    dismissWorkspacePort(portsKey, p.port);
+                  }}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "#94a3b8",
+                    cursor: "pointer",
+                    padding: "0 2px",
+                    fontSize: 11,
+                    lineHeight: 1,
+                  }}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
         )}
       </div>
       {tabErr && <div className="stat-alert small" data-testid="terminal-tab-error">{tabErr}</div>}
