@@ -31,7 +31,7 @@ import {
   type TeamView,
 } from "./teams";
 import { Avatar, TokenMeter, providerSpec } from "./pixel";
-import { getPanes, modeFromEvent, openAgent, subscribePanes, useAgentPane } from "./panes";
+import { getPanes, modeFromEvent, openAgent, subscribePanes, useAgentPane, useShownPane } from "./panes";
 
 export function ago(iso?: string | null, now = Date.now()): string {
   if (!iso) return "?";
@@ -239,7 +239,7 @@ const getActiveId = () => {
 export const useIsSelected = (id: string) => useAgentPane(id) !== null;
 /** Row classes for an open agent: lit edge, cyan for the left pane, violet for the right. */
 export function usePaneClass(id: string): string {
-  const pane = useAgentPane(id);
+  const pane = useShownPane(id);
   return pane ? `sel pane-${pane}` : "";
 }
 

@@ -94,7 +94,11 @@ export function buddyTitle(laneId, laneName, topic, rootDir = REPO_ROOT) {
   const list = Array.isArray(teams) ? teams : [];
   const code = laneCodeFor(laneId, list);
   const found = findLaneInRegistry(laneId, list);
-  return formatDisplayTitle({ role: "brainstorm", laneId, laneName, code, topic, hub: found ? isHubLane(found.team, found.lane) : false });
+  const needle = String(laneId ?? "").toLowerCase();
+  const isHub = found
+    ? isHubLane(found.team, found.lane)
+    : list.some((t) => String(t.id).toLowerCase() === needle && isHubLane(t, { id: t.id }));
+  return formatDisplayTitle({ role: "brainstorm", laneId, laneName, code, topic, hub: isHub });
 }
 
 function laneDisplayName(laneId, rootDir = REPO_ROOT) {
@@ -105,6 +109,11 @@ function laneDisplayName(laneId, rootDir = REPO_ROOT) {
       if (String(l.id).toLowerCase() === needle || (l.aliases ?? []).some((a) => String(a).toLowerCase() === needle)) {
         return { teamId: t.id, laneId: l.id, laneName: l.name || l.id };
       }
+    }
+  }
+  for (const t of cfg.teams ?? []) {
+    if (String(t.id).toLowerCase() === needle && isHubLane(t, { id: t.id })) {
+      return { teamId: t.id, laneId: t.id, laneName: "RiffBot" };
     }
   }
   return { teamId: "", laneId: safeSegment(laneId), laneName: String(laneId || "vibesquad").replace(/-/g, " ") };
@@ -638,7 +647,8 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
     const sameId = (x, y) => String(x ?? "").toLowerCase() === String(y ?? "").toLowerCase();
     const bootTeam = bootTeams.find((t) => sameId(t.id, teamId));
     const bootLane = bootTeam?.lanes?.find((l) => sameId(l.id, laneId));
-    const hubTeams = bootTeam && bootLane && !topic && isHubLane(bootTeam, bootLane) ? hubTeamsBlock({ team: bootTeam, agents: liveForBoot }) : "";
+    const isBootHub = Boolean(bootTeam && !topic && (bootLane ? isHubLane(bootTeam, bootLane) : isHubLane(bootTeam, { id: laneId })));
+    const hubTeams = isBootHub ? hubTeamsBlock({ team: bootTeam, agents: liveForBoot }) : "";
     const initialPrompt = buildBrainstormInitialPrompt({
       hubTeams,
       inFlight: liveInFlightBlock({ agents: liveForBoot, laneId, teamId }),

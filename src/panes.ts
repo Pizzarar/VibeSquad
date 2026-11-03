@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
-import { popClosed, pushClosed } from "./sessionLifecycle";
-import { pruneView } from "./quickwins";
-import { getRestoreLastView } from "./prefs";
+import { popClosed, pushClosed } from "./sessionLifecycle.ts";
+import { pruneView } from "./quickwins.ts";
+import { getRestoreLastView } from "./prefs.ts";
 
 // Open agent tabs, the optional 2-pane split and focus mode, outside React state. Rows, cards and
 // tabs subscribe to the one slice they draw (`useAgentPane(id)`), so opening or switching a tab
@@ -60,14 +60,14 @@ function load(): PanesState {
     rightActiveId: pick(rightTabs, saved.rightActiveId),
     split: !!saved.split && rightTabs.length > 0,
     activePane: saved.activePane === "right" ? "right" : "left",
-    focus: localStorage.getItem(FOCUS_KEY) === "1",
+    focus: typeof localStorage !== "undefined" && localStorage.getItem(FOCUS_KEY) === "1",
     sheet: false,
     mounted: [],
     closedTabs: [],
   };
   if (!s.split) s = { ...s, leftTabs: [...leftTabs, ...rightTabs], rightTabs: [], rightActiveId: null, activePane: "left" };
   // Old deep links (?agent=) open as a tab.
-  const linked = new URLSearchParams(location.search).get("agent");
+  const linked = typeof location !== "undefined" ? new URLSearchParams(location.search).get("agent") : null;
   if (linked) s = place(s, linked, s.activePane, false);
   return settle(s, [s.leftActiveId, s.rightActiveId]);
 }
@@ -294,6 +294,11 @@ export const usePanes = () => useSyncExternalStore(subscribePanes, getPanes);
 
 /** Which pane holds this agent's tab. Re-renders a row only when its own answer flips. */
 export const useAgentPane = (id: string): Pane | null => useSyncExternalStore(subscribePanes, () => paneIn(state, id));
+
+/** Which visible pane currently has this agent as its active tab. Background tabs in leftTabs/rightTabs return null. */
+export const shownPaneIn = (s: PanesState, id: string): Pane | null =>
+  !id ? null : s.leftActiveId === id ? "left" : s.split && s.rightActiveId === id ? "right" : null;
+export const useShownPane = (id: string): Pane | null => useSyncExternalStore(subscribePanes, () => shownPaneIn(state, id));
 
 /** On screen right now (the active tab of a visible pane). */
 export const isShown = (s: PanesState, id: string) => s.leftActiveId === id || (s.split && s.rightActiveId === id);

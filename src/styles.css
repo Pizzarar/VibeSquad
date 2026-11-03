@@ -3202,6 +3202,45 @@ html, body, #root { overflow-x: hidden; }
 .pin-looks-done .pin-complete.blocked { white-space: normal; }
 
 /* ── Pinned teams (src/PinGrid.tsx): sidebar pin list + squad page grid. Owned by the pinned team. ── */
+.sidebar-pins { display: flex; flex-direction: column; padding: 2px 0 6px; }
+.sidebar-riffbot-wrap { padding: 4px 8px 6px 14px; border-bottom: 1px solid #162238; }
+.sidebar-riffbot {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  padding: 5px 8px; background: linear-gradient(135deg, #071b1a 0%, #091224 100%);
+  border: 1px solid #1b4d46; border-left: 3px solid var(--emerald); border-radius: 4px;
+  color: var(--text); font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+  transition: border-color 0.12s, background 0.12s, box-shadow 0.12s;
+}
+.sidebar-riffbot:hover, .sidebar-riffbot.sel {
+  border-color: var(--emerald); background: linear-gradient(135deg, #0b2926 0%, #0d1b33 100%);
+  box-shadow: 0 0 12px rgba(77, 247, 166, 0.2);
+}
+.sidebar-riffbot.is-running { border-left-color: var(--cyan); }
+.sidebar-riffbot.is-live { border-left-color: var(--emerald); }
+.sidebar-riffbot.is-ready { border-left-color: var(--emerald); opacity: 0.92; }
+.sidebar-riffbot-badge {
+  font-family: var(--arcade); font-size: 9px; letter-spacing: 0.8px;
+  padding: 1px 5px; background: #041210; color: var(--emerald); border: 1px solid var(--emerald);
+  border-radius: 3px; flex: none;
+}
+.sidebar-riffbot-title {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font-size: 11px;
+}
+.sidebar-riffbot-state {
+  font-family: var(--arcade); font-size: 9px; letter-spacing: 0.6px;
+  padding: 1px 4px; border-radius: 2px; flex: none;
+}
+.sidebar-riffbot-state.running { color: var(--cyan); background: #00f0ff14; }
+.sidebar-riffbot-state.live { color: var(--emerald); background: #4df7a614; }
+.sidebar-riffbot-state.ready { color: var(--slate); }
+.sidebar-teams-divider {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 5px 10px 2px 22px; font-family: var(--arcade); font-size: 9px;
+  letter-spacing: 0.8px; color: var(--slate);
+}
+.sidebar-teams-divider i { font-style: normal; opacity: 0.8; }
+.sidebar.collapsed .sidebar-pins { display: none; }
 .pin-list { display: flex; flex-direction: column; padding: 2px 0 6px; }
 .pin-row {
   display: flex; align-items: center; gap: 8px; width: 100%;

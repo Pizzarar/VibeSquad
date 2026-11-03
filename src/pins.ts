@@ -3,7 +3,7 @@
 // This file is the shared contract for the pinned-team UI. Keep it pure (no fetch, no React):
 // steps 1 (sidebar + grid), 2 (focus rail) and 3 (resolver + quick start) all build on it.
 import type { LaneDef, Member, TeamDef, TeamView } from "./teams.ts";
-import { brainstormUsedTokens, countsAsNeedsYou, isHubLane } from "./teams.ts";
+import { UNASSIGNED, brainstormUsedTokens, countsAsNeedsYou, isHubLane, isTopicBrainstorm } from "./teams.ts";
 export { topicOfBrainstorm } from "./teams.ts";
 
 /** "removed" lanes stay in teams.json (brief + history kept) but are hidden everywhere. */
@@ -95,6 +95,42 @@ export function pinsForSquad(view: TeamView): { pinned: Pin[]; done: Pin[] } {
 
 /** True for the Squad's hub pin (RiffBot's lane). It lives in the hub bar, not the Team grid or Done shelf. */
 export const isHubPin = (pin: Pin): boolean => isHubLane(pin.squad, pin.lane);
+
+/** Every non-unassigned Squad has a ready-to-go RiffBot hub pin, even if teams.json has no explicit hub lane yet. */
+export function hubPinForSquad(view: TeamView | null | undefined): Pin | null {
+  if (!view?.team?.id || view.team.id === UNASSIGNED.id) return null;
+  const { pinned, done } = pinsForSquad(view);
+  const existing = [...pinned, ...done].find((p) => isHubLane(view.team, p.lane));
+  if (existing) return existing;
+  const hubLane: PinLane = { id: view.team.id, name: "RiffBot", hub: true, state: "pinned" };
+  const target = view.team.id.toLowerCase();
+  const inHub = (view.members ?? []).filter((m) => {
+    const l = (m.agent.labels ?? {}) as Record<string, string>;
+    const lid = (m.laneId ?? l.lane ?? l.lead ?? "").trim().toLowerCase();
+    return lid === target;
+  });
+  const newest = (a: Member, b: Member) => (b.agent.updatedAt ?? "").localeCompare(a.agent.updatedAt ?? "");
+  const mainBsCands = inHub.filter((m) => m.kind === "brainstorm" && !isTopicBrainstorm(m) && !m.agent.archivedAt);
+  const liveBs = mainBsCands.filter(isLive).sort(newest);
+  const brainstorm = liveBs[0] ?? mainBsCands.sort(newest)[0] ?? null;
+  const lead = inHub.filter((m) => m.kind === "lead" && isLive(m)).sort(newest)[0] ?? null;
+  const workers = live(inHub.filter((m) => m.kind === "worker"));
+  const topicBrainstorms = inHub.filter((m) => m.kind === "brainstorm" && isTopicBrainstorm(m) && isLive(m)).sort(newest);
+  return {
+    squad: view.team,
+    lane: hubLane,
+    state: "pinned",
+    order: -1,
+    brainstorm,
+    lead,
+    workers,
+    needsYou: inHub.filter(countsAsNeedsYou).length,
+    running: inHub.filter((m) => m.agent.status === "running").length,
+    contextUsed: brainstorm ? brainstormUsedTokens(brainstorm.agent) : 0,
+    topicBrainstorms,
+    duplicateBrainstorms: liveBs.slice(1),
+  };
+}
 
 /** The pins the squad page shows as Team tiles and Done entries: `pinsForSquad` without the hub lane. */
 export function gridPinsForSquad(view: TeamView): { pinned: Pin[]; done: Pin[] } {

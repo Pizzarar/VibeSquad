@@ -1092,7 +1092,11 @@ export function retiredLeadTitle(lane: string, laneId: string, ord: string | num
 /** True when the lane (id, alias or name) is its Squad's hub lane. */
 export function isHubLaneId(laneKey: string | undefined): boolean {
   const found = laneById(laneKey);
-  return found ? isHubLane(found.team, found.lane) : false;
+  if (found) return isHubLane(found.team, found.lane);
+  const needle = (laneKey ?? "").trim().toLowerCase();
+  if (!needle) return false;
+  const team = TEAMS.find((t) => t.id.toLowerCase() === needle);
+  return team ? isHubLane(team, { id: team.id }) : false;
 }
 
 /** The lane's code: stored `code` or the generated one, deduped within its Squad. */

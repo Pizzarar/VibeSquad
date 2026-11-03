@@ -7,12 +7,13 @@ import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { client, DEMO, sendMessage } from "./paseo";
 import { openContextMenu } from "./CommandPalette";
 import { demoTimeline } from "./demo";
-import { hasLooksDone, gridPinsForSquad, isHubPin, liveBuddyDupes, looksDoneFor, LOOKS_DONE_MARKER, pinsForSquad, SEND_TO_MARKER, topicOfBrainstorm, withoutSpinOffFence, type Pin } from "./pins";
-import { keepPinBuddy, openBriefEditor } from "./pinActions";
+import { hasLooksDone, gridPinsForSquad, hubPinForSquad, isHubPin, liveBuddyDupes, looksDoneFor, LOOKS_DONE_MARKER, pinsForSquad, SEND_TO_MARKER, topicOfBrainstorm, withoutSpinOffFence, type Pin } from "./pins";
+import { keepPinBuddy, openBriefEditor, openPin as openPinAction } from "./pinActions";
+import { usePinFocus } from "./pinFocus";
 import { IdeaPlusTile, noteSendTo, SendToCard, SpinOffCard, useSendTo, useSpinOff } from "./PinIdeas";
 import { PinMenu } from "./PinMenu";
 import { DoneRow, DoneShelf, LooksDoneCard, useDoneShelfOpen } from "./PinDone";
-import { getBrainstormThresholds, type TeamView } from "./teams";
+import { getBrainstormThresholds, isHubLane, saveTeams, type TeamView } from "./teams";
 import { ConfirmButton, StatusDot, usePaneClass } from "./ui";
 import { Avatar, NeonEmblem } from "./pixel";
 import { laneCodeOf, ordOf } from "./teams";
@@ -66,15 +67,51 @@ export function FullToggle() {
 
 export type PinHandler = (pin: Pin) => void | Promise<unknown>;
 
+export function pinByKey(views: TeamView[], key: { squadId: string; laneId: string }): Pin | null {
+  for (const v of views) {
+    if (v.team.id !== key.squadId) continue;
+    const { pinned, done } = pinsForSquad(v);
+    const hit = [...pinned, ...done].find((p) => p.lane.id === key.laneId);
+    if (hit) return hit;
+    const hub = hubPinForSquad(v);
+    if (hub && hub.lane.id === key.laneId) return hub;
+  }
+  return null;
+}
+
+export async function ensureHubLaneRegistered(pin: Pin): Promise<void> {
+  if (isHubLane(pin.squad, pin.lane) && !pin.squad.lanes.some((l) => isHubLane(pin.squad, l) && l.state !== "removed")) {
+    await saveTeams((cur) =>
+      cur.map((t) =>
+        t.id !== pin.squad.id
+          ? t
+          : {
+              ...t,
+              lanes: [{ id: pin.lane.id, name: "RiffBot", hub: true, state: "pinned" }, ...t.lanes.filter((l) => l.id !== pin.lane.id)],
+            },
+      ),
+    );
+  }
+}
+
+export async function openPin(pin: Pin): Promise<string> {
+  await ensureHubLaneRegistered(pin);
+  return openPinAction(pin);
+}
+
 /** Opens the live Brainstorm, or hands the pin to onQuickStart when there is none. */
 export function openPinOr(pin: Pin, onOpenAgent: (id: string) => void, onQuickStart: PinHandler) {
   if (pin.brainstorm) onOpenAgent(pin.brainstorm.agent.id);
-  else return onQuickStart(pin);
+  else {
+    void ensureHubLaneRegistered(pin);
+    return onQuickStart(pin);
+  }
 }
 
 // ── Context meter for the live Brainstorm ────────────────────────────────────
-function PinCtx({ pin }: { pin: Pin }) {
+function PinCtx({ pin, showLabel }: { pin: Pin; showLabel?: boolean }) {
   if (!pin.brainstorm) return null;
+  if (!showLabel && (pin.brainstorm.agent.status === "closed" || pin.contextUsed <= 0)) return null;
   const { warnTokens, restartTokens } = getBrainstormThresholds(pin.squad);
   const used = pin.contextUsed;
   const pct = Math.min(100, Math.max(0, (used / Math.max(1, restartTokens)) * 100));
@@ -105,15 +142,20 @@ export function NeedsBadge({ pin }: { pin: Pin }) {
 }
 
 // ── Sidebar: a squad's pins + a collapsed Done shelf ─────────────────────────
-const PinRow = memo(function PinRow({ pin, onPin }: { pin: Pin; onPin: (pin: Pin) => void }) {
+const PinRow = memo(function PinRow({ pin, dimmed, onPin }: { pin: Pin; dimmed?: boolean; onPin: (pin: Pin) => void }) {
   const paneCls = usePaneClass(pin.brainstorm?.agent.id ?? "");
+  const focus = usePinFocus();
+  const isSelected = focus ? focus.squadId === pin.squad.id && focus.laneId === pin.lane.id : Boolean(paneCls);
   return (
     <button
       type="button"
-      className={`pin-row ${paneCls} ${pin.brainstorm ? "" : "no-session"}`}
+      className={`pin-row ${isSelected ? (paneCls || "sel pane-left") : ""} ${pin.brainstorm ? "" : "no-session"} ${dimmed ? "done" : ""}`}
       data-testid={`sidebar-pin-${pin.lane.id}`}
       title={pin.brainstorm ? `Open ${pin.lane.name}` : `${pin.lane.name}: no session yet · click to start`}
-      onClick={() => onPin(pin)}
+      onClick={() => {
+        void ensureHubLaneRegistered(pin);
+        onPin(pin);
+      }}
     >
       <PinDot pin={pin} />
       <span className="pin-row-name">{isHubPin(pin) ? "RiffBot" : pin.lane.name}</span>
@@ -123,41 +165,92 @@ const PinRow = memo(function PinRow({ pin, onPin }: { pin: Pin; onPin: (pin: Pin
   );
 });
 
-export function SidebarPins({ view, onPin, onOpenAgent }: { view: TeamView; onPin: (pin: Pin) => void; onOpenAgent?: (id: string) => void }) {
-  const { pinned, done } = pinsForSquad(view);
-  const [doneOpen, toggleDone] = useDoneShelfOpen(view.team.id);
+export const SidebarRiffBot = memo(function SidebarRiffBot({ pin, onPin }: { pin: Pin; onPin?: (pin: Pin) => void }) {
+  const bs = pin.brainstorm;
+  const paneCls = usePaneClass(bs?.agent.id ?? "");
+  const focus = usePinFocus();
+  const isSelected = focus ? focus.squadId === pin.squad.id && focus.laneId === pin.lane.id : Boolean(paneCls);
+  const statusMod = bs?.agent.status === "running" ? "is-running" : bs && bs.agent.status !== "closed" ? "is-live" : "is-ready";
   return (
-    <div className="pin-list" data-testid={`sidebar-pins-${view.team.id}`}>
-      {pinned.map((p) => (
-        <div key={p.lane.id}>
-          <PinRow pin={p} onPin={onPin} />
-          {(p.topicBrainstorms ?? []).map((tb) => (
-            <button
-              key={tb.agent.id}
-              type="button"
-              className="pin-row pin-topic-row"
-              data-testid={`sidebar-topic-${tb.agent.id}`}
-              onClick={() => (onOpenAgent ? onOpenAgent(tb.agent.id) : onPin(p))}
-            >
-              <StatusDot agent={tb.agent} />
-              <span className="pin-row-name">💬 {tb.agent.title || topicOfBrainstorm(tb.agent) || "Topic Buddy"}</span>
-            </button>
-          ))}
+    <button
+      type="button"
+      className={`sidebar-riffbot ${isSelected ? (paneCls || "sel pane-left") : ""} ${statusMod}`}
+      data-testid={`sidebar-riffbot-${pin.squad.id}`}
+      title={bs ? `Open RiffBot (${pin.squad.name} Hub)` : `Start RiffBot for ${pin.squad.name}`}
+      onClick={() => {
+        void ensureHubLaneRegistered(pin);
+        if (onPin) onPin(pin);
+        else void openPin(pin);
+      }}
+    >
+      <PinDot pin={pin} />
+      <span className="sidebar-riffbot-badge">RIFFBOT</span>
+      <span className="sidebar-riffbot-title">Squad Hub</span>
+      {pin.needsYou > 0 ? (
+        <NeedsBadge pin={pin} />
+      ) : bs?.agent.status === "running" ? (
+        <span className="sidebar-riffbot-state running">THINKING</span>
+      ) : bs && bs.agent.status !== "closed" ? (
+        <span className="sidebar-riffbot-state live">LIVE</span>
+      ) : (
+        <span className="sidebar-riffbot-state ready">READY</span>
+      )}
+      <PinCtx pin={pin} />
+    </button>
+  );
+});
+
+export function SidebarPins({ view, onPin, onOpenAgent }: { view: TeamView; onPin: (pin: Pin) => void; onOpenAgent?: (id: string) => void }) {
+  const hub = hubPinForSquad(view);
+  const { pinned, done } = gridPinsForSquad(view);
+  const [doneOpen, toggleDone] = useDoneShelfOpen(view.team.id);
+  if (!hub && !pinned.length && !done.length) return null;
+  return (
+    <div className="sidebar-pins" data-testid={`sidebar-pins-${view.team.id}`}>
+      {hub && (
+        <div className="sidebar-riffbot-wrap">
+          <SidebarRiffBot pin={hub} onPin={onPin} />
         </div>
-      ))}
-      {!pinned.length && <div className="pin-empty muted small">No teams yet</div>}
-      {done.length > 0 && (
+      )}
+      {(pinned.length > 0 || done.length > 0) && (
         <>
-          <button
-            type="button"
-            className="pin-done-toggle"
-            aria-expanded={doneOpen}
-            data-testid={`sidebar-done-${view.team.id}`}
-            onClick={toggleDone}
-          >
-            {doneOpen ? "▾" : "▸"} Done ({done.length})
-          </button>
-          {doneOpen && done.map((p) => <DoneRow key={p.lane.id} pin={p} testId={`sidebar-done-pin-${p.lane.id}`} />)}
+          <div className="sidebar-teams-divider">
+            <span>TEAMS</span>
+            <i>{pinned.length}</i>
+          </div>
+          <div className="pin-list">
+            {pinned.map((p) => (
+              <div key={p.lane.id}>
+                <PinRow pin={p} onPin={onPin} />
+                {(p.topicBrainstorms ?? []).map((tb) => (
+                  <button
+                    key={tb.agent.id}
+                    type="button"
+                    className="pin-row pin-topic-row"
+                    data-testid={`sidebar-topic-${tb.agent.id}`}
+                    onClick={() => (onOpenAgent ? onOpenAgent(tb.agent.id) : onPin(p))}
+                  >
+                    <StatusDot agent={tb.agent} />
+                    <span className="pin-row-name">💬 {tb.agent.title || topicOfBrainstorm(tb.agent) || "Topic Buddy"}</span>
+                  </button>
+                ))}
+              </div>
+            ))}
+            {done.length > 0 && (
+              <>
+                <button
+                  type="button"
+                  className="pin-done-toggle"
+                  aria-expanded={doneOpen}
+                  data-testid={`sidebar-done-${view.team.id}`}
+                  onClick={toggleDone}
+                >
+                  {doneOpen ? "▾" : "▸"} Done ({done.length})
+                </button>
+                {doneOpen && done.map((p) => <DoneRow key={p.lane.id} pin={p} testId={`sidebar-done-pin-${p.lane.id}`} />)}
+              </>
+            )}
+          </div>
         </>
       )}
     </div>
@@ -386,7 +479,7 @@ const PinTile = memo(function PinTile({ pin, onPin, onOpenAgent }: { pin: Pin; o
           </span>
         </div>
         <NeedsBadge pin={pin} />
-        <PinCtx pin={pin} />
+        <PinCtx pin={pin} showLabel />
         <PinMenu pin={pin} onShowPlumbing={() => setFullView(true)} />
       </div>
       <BuddyDupeWarning pin={pin} onOpenAgent={onOpenAgent} />

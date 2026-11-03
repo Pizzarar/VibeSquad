@@ -2,8 +2,8 @@
 // hub Buddy (or starts a fresh one from its brief), same as a pin click.
 import "./HubBar.css";
 import { useEffect, useRef, useState } from "react";
-import { pinsForSquad, type Pin } from "./pins";
-import { isHubLane, type TeamView } from "./teams";
+import { hubPinForSquad, type Pin } from "./pins";
+import type { TeamView } from "./teams";
 import { Avatar } from "./pixel";
 import { PinDot } from "./PinGrid";
 import { countUnsplit } from "./hubBarLogic";
@@ -36,17 +36,15 @@ function useUnsplit(laneId: string, refreshKey: string): number | null {
 }
 
 export function HubBar({ view, onOpen }: { view: TeamView | undefined; onOpen: (pin: Pin) => void | Promise<unknown> }) {
-  const hubLane = view?.team.lanes.find((l) => isHubLane(view.team, l));
-  const pins = view ? pinsForSquad(view) : undefined;
-  const pin = hubLane ? pins?.pinned.concat(pins.done).find((p) => p.lane.id === hubLane.id) : undefined;
-  const unsplit = useUnsplit(hubLane?.id ?? "", pin?.brainstorm?.agent.updatedAt ?? "");
-  if (!view || !hubLane || !pin) return null;
-  const label = pin.brainstorm ? "Talk to RiffBot" : "Start RiffBot";
+  const hub = view ? hubPinForSquad(view) : null;
+  const unsplit = useUnsplit(hub?.lane.id ?? "", hub?.brainstorm?.agent.updatedAt ?? "");
+  if (!view || !hub) return null;
+  const label = hub.brainstorm ? "Talk to RiffBot" : "Start RiffBot";
   return (
     <div className="hub-bar" data-testid="hub-bar">
-      <Avatar id={pin.brainstorm?.agent.id ?? `bs-empty-${view.team.id}-${hubLane.id}`} provider={pin.brainstorm?.agent.provider ?? "claude"} agentType="brainstorm" size={24} />
-      <PinDot pin={pin} />
-      <button type="button" className="hub-bar-btn" data-testid="hub-bar-btn" title={pin.brainstorm ? "Riff on the whole Squad" : "No session yet · click to start"} onClick={() => void Promise.resolve(onOpen(pin)).catch((e) => alert(`Could not start RiffBot: ${e}`))}>
+      <Avatar id={hub.brainstorm?.agent.id ?? `bs-empty-${view.team.id}-${hub.lane.id}`} provider={hub.brainstorm?.agent.provider ?? "claude"} agentType="brainstorm" size={24} />
+      <PinDot pin={hub} />
+      <button type="button" className="hub-bar-btn" data-testid="hub-bar-btn" title={hub.brainstorm ? "Riff on the whole Squad" : "No session yet · click to start"} onClick={() => void Promise.resolve(onOpen(hub)).catch((e) => alert(`Could not start RiffBot: ${e}`))}>
         <span className="hub-bar-short">Riff</span>
         <span className="hub-bar-long">{label}</span>
       </button>
