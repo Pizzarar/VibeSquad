@@ -132,3 +132,38 @@ test("a restarted Brainstorm is followed without pulling the user off the Lead",
   const lane = new Set(["a", "b", "lead-1"]);
   assert.deepEqual(reconcilePinFocus(shown("a"), "b", "lead-1", lane), { kind: "follow", agentId: "b", open: false });
 });
+
+const srcOf = (f) => fs.readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
+
+test("U5: sidebar lanes are flat single rows (no caret, no lane children, no LeadBlock / alert dump)", () => {
+  const pg = srcOf("PinGrid.tsx");
+  const app = srcOf("App.tsx");
+  const css = srcOf("styles.css");
+  assert.doesNotMatch(pg, /pin-row-caret|sidebar-pin-children|sidebar-pin-caret/);
+  assert.doesNotMatch(css, /\.pin-row-caret|\.sidebar-pin-children/);
+  assert.doesNotMatch(app, /LeadBlock|sideAlerts|RUNS WORK|side-alerts/);
+  assert.match(app, /expanded && v\.team\.id !== UNASSIGNED\.id && <SidebarPins/);
+});
+
+test("U5: PinTeamRows hides non-running workers behind a collapsed Completed toggle", () => {
+  const pg = srcOf("PinGrid.tsx");
+  assert.match(pg, /useState\(false\)/);
+  assert.match(pg, /w\.agent\.status === "running"/);
+  assert.match(pg, /w\.agent\.status !== "running"/);
+  assert.match(pg, /-completed-toggle/);
+  assert.match(pg, /Completed \(\{completed\.length\}\)/);
+});
+
+test("U5: TeamPage collapses finished pills and the Idle section", () => {
+  const app = srcOf("App.tsx");
+  assert.match(app, /m\.attention\.tone !== "finished" && m\.kind !== "old-lead"\)\.sort\(alertOrder\)/);
+  assert.match(app, /data-testid="team-completed-toggle"/);
+  assert.match(app, /Completed \(\{doneAlerts\.length\}\)/);
+  assert.match(app, /title="Idle"[\s\S]{0,260}?collapsed\s+archive/);
+});
+
+test("U5: PinFocusBar lead click opens the Lead in pin focus instead of FULL view", () => {
+  const pr = srcOf("PinRail.tsx");
+  assert.match(pr, /openPinMember\(pin, lead\.agent\.id\)/);
+  assert.doesNotMatch(pr, /setFullView/);
+});
