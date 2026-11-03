@@ -148,8 +148,10 @@ test("U5: sidebar lanes are flat single rows (no caret, no lane children, no Lea
 test("U5: PinTeamRows hides non-running workers behind a collapsed Completed toggle", () => {
   const pg = srcOf("PinGrid.tsx");
   assert.match(pg, /useState\(false\)/);
-  assert.match(pg, /w\.agent\.status === "running"/);
-  assert.match(pg, /w\.agent\.status !== "running"/);
+  assert.match(pg, /pin\.workers\.filter\(isActiveWorker\)/);
+  assert.match(pg, /pin\.workers\.filter\(\(w\) => !isActiveWorker\(w\)\)/);
+  const fn = pg.slice(pg.indexOf("const isActiveWorker"), pg.indexOf("export function PinTeamRows"));
+  for (const re of [/status === "running"/, /status === "initializing"/, /status === "error"/, /countsAsNeedsYou\(w\)/, /attention\.tone !== "finished"/]) assert.match(fn, re);
   assert.match(pg, /-completed-toggle/);
   assert.match(pg, /Completed \(\{completed\.length\}\)/);
 });

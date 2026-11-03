@@ -14,7 +14,7 @@ import { useIsShown } from "./panes";
 import { IdeaPlusTile, noteSendTo, SendToCard, SpinOffCard, useSendTo, useSpinOff } from "./PinIdeas";
 import { PinMenu } from "./PinMenu";
 import { DoneRow, DoneShelf, LooksDoneCard, useDoneShelfOpen } from "./PinDone";
-import { getBrainstormThresholds, isHubLane, saveTeams, type Member, type TeamView } from "./teams";
+import { countsAsNeedsYou, getBrainstormThresholds, isHubLane, saveTeams, type Member, type TeamView } from "./teams";
 import { ConfirmButton, StatusDot, usePaneClass } from "./ui";
 import { Avatar, NeonEmblem } from "./pixel";
 import { laneCodeOf, ordOf } from "./teams";
@@ -166,12 +166,20 @@ function TeamRow({ pin, m, glyph, depth, testId, active }: { pin: Pin; m: Member
   );
 }
 
+// Visible without opening "Completed": working, starting, erroring, or anything still asking for the owner.
+const isActiveWorker = (w: Member) =>
+  w.agent.status === "running" ||
+  w.agent.status === "initializing" ||
+  w.agent.status === "error" ||
+  countsAsNeedsYou(w) ||
+  Boolean(w.attention && w.attention.tone !== "finished");
+
 /** Buddy, Lead and running workers; finished workers and topic Buddies sit behind a collapsed "Completed" toggle. */
 export function PinTeamRows({ pin, withBuddy, prefix }: { pin: Pin; withBuddy?: boolean; prefix: string }) {
   const bs = pin.brainstorm;
   const [showDone, setShowDone] = useState(false);
-  const running = pin.workers.filter((w) => w.agent.status === "running");
-  const completed = pin.workers.filter((w) => w.agent.status !== "running");
+  const running = pin.workers.filter(isActiveWorker);
+  const completed = pin.workers.filter((w) => !isActiveWorker(w));
   const wDepth = withBuddy ? 2 : 1;
   return (
     <>
