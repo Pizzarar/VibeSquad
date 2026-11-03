@@ -4,7 +4,7 @@
 // a badge and never reorders the rail. The bar on top of the drawer is the only route to the plumbing.
 import { memo, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { getDraft, useDraft } from "./drafts";
-import { NeedsBadge, PinDot, setFullView, usePreview } from "./PinGrid";
+import { NeedsBadge, PinDot, PinTeamTree, setFullView, usePreview } from "./PinGrid";
 import { exitPinFocus, type PinFocus } from "./pinFocus";
 import { TopBreadcrumb } from "./Breadcrumb";
 import { escGoesHome } from "./pinFocusLogic";
@@ -85,6 +85,7 @@ export function PinRail({ view, focus, onPick }: { view: TeamView; focus: PinFoc
           {!focus.agentId && (
             <span className="muted small">{focus.gone ? "No active chat" : bs ? "Starting…" : "Starting a fresh Brainstorm…"}</span>
           )}
+          {active && <PinTeamTree pin={active} />}
           {/* The focused drawer's DrawerHeader portals its inspector here (src/pinSlots.ts). */}
           <div className="pin-rail-active-inspector" ref={slotRef("card")} />
         </section>

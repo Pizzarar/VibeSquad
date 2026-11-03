@@ -81,13 +81,23 @@ const show = (id: string) => {
   openAgent(id);
 };
 
-/** The focused pin's live Brainstorm id right now, as the rail sees it. */
-function liveBrainstorm(f: PinFocus): string | null {
+/** The focused pin as the rail sees it right now. */
+function focusedPin(f: PinFocus): Pin | null {
   const view = derived().views.find((v) => v.team.id === f.squadId);
   if (!view) return null;
   const { pinned, done } = pinsForSquad(view);
-  const hit = [...pinned, ...done].find((p) => p.lane.id === f.laneId) ?? (hubPinForSquad(view)?.lane.id === f.laneId ? hubPinForSquad(view) : null);
-  return hit?.brainstorm?.agent.id ?? null;
+  const hub = hubPinForSquad(view);
+  return [...pinned, ...done].find((p) => p.lane.id === f.laneId) ?? (hub?.lane.id === f.laneId ? hub : null);
+}
+
+/** Every agent of a pin's lane: its Buddy, Lead, workers and topic Buddies. */
+export function laneMemberIdsOf(pin: Pin | null): Set<string> {
+  const ids = new Set<string>();
+  if (!pin) return ids;
+  if (pin.brainstorm) ids.add(pin.brainstorm.agent.id);
+  if (pin.lead) ids.add(pin.lead.agent.id);
+  for (const m of [...pin.workers, ...pin.topicBrainstorms]) ids.add(m.agent.id);
+  return ids;
 }
 
 let reconciling = false;
@@ -96,7 +106,8 @@ function reconcile() {
   if (state.home && !state.focus && active !== state.homeActive) return set({ home: false, homeActive: null, squadsHome: false });
   const f = state.focus;
   if (!f || reconciling) return;
-  const d = reconcilePinFocus(f, liveBrainstorm(f), active);
+  const pin = focusedPin(f);
+  const d = reconcilePinFocus(f, pin?.brainstorm?.agent.id ?? null, active, laneMemberIdsOf(pin));
   if (d.kind === "keep") return;
   reconciling = true;
   try {
@@ -136,6 +147,16 @@ export async function focusPin(pin: Pin): Promise<string> {
     return live;
   }
   return "";
+}
+
+/**
+ * Open one of a pin's own agents (Lead, worker, topic Buddy or the Buddy) in the middle while the pin stays
+ * focused and the rail stays visible. A pin that isn't focused yet is focused first.
+ */
+export function openPinMember(pin: Pin, agentId: string) {
+  const f = state.focus;
+  if (!f || f.squadId !== pin.squad.id || f.laneId !== pin.lane.id) void focusPin(pin);
+  show(agentId);
 }
 
 /** Explicitly spin up a Brainstorm / RiffBot chat for a selected pin when the user clicks Spin Up. */

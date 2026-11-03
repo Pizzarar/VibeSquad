@@ -29,6 +29,7 @@ import { PermissionCard } from "./PermissionCard";
 import { Composer, stageFiles } from "./Composer";
 import { composeMessage, setAgentCwd, useAttachments } from "./attachments";
 import { DrawerHeader } from "./DrawerHeader";
+import { useWorkingMembers, WorkingBar } from "./WorkingBar";
 import { RightDock } from "./RightDock";
 
 export { localImageSrc } from "./Timeline";
@@ -166,6 +167,8 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   const runningSubs = entries.filter(
     (e) => e.item?.type === "tool_call" && e.item?.detail?.type === "sub_agent" && e.item?.status === "running",
   ).length;
+
+  const working = useWorkingMembers(agent.id, isBs, team.id, laneId);
 
   const lastAssistantMsg = (() => {
     for (let i = entries.length - 1; i >= 0; i--) {
@@ -437,6 +440,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
         budget={budget}
         team={team}
         runningSubs={runningSubs}
+        working={working}
         laneId={laneId}
         entries={entries}
         active={active}
@@ -532,6 +536,8 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
           </button>
         </div>
       )}
+
+      <WorkingBar members={working} subs={runningSubs} />
 
       <Composer
         agent={agent}

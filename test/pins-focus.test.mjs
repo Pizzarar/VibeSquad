@@ -112,3 +112,22 @@ test("pin-focus hides the RiffBot HubBar while a chat drawer is open", () => {
   const css = fs.readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
   assert.match(css, /\.pin-rail \.signal\.running,[\s\S]*?\.pane-tab \.signal\.running \{\s*animation: none;/);
 });
+
+test("opening the pin's Lead / worker / topic Buddy keeps the focus", () => {
+  const lane = new Set(["a", "lead-1", "w-1", "t-1"]);
+  for (const id of ["lead-1", "w-1", "t-1"]) assert.deepEqual(reconcilePinFocus(shown("a"), "a", id, lane), { kind: "keep" });
+  // An agent outside the lane still exits.
+  assert.deepEqual(reconcilePinFocus(shown("a"), "a", "other", lane), { kind: "exit" });
+  // Without lane ids the old behaviour holds.
+  assert.deepEqual(reconcilePinFocus(shown("a"), "a", "lead-1"), { kind: "exit" });
+});
+
+test("a gone / starting pin stays focused while a lane member is open", () => {
+  const lane = new Set(["lead-1"]);
+  assert.deepEqual(reconcilePinFocus({ agentId: null, gone: true, held: "a" }, null, "lead-1", lane), { kind: "keep" });
+});
+
+test("a restarted Brainstorm is followed without pulling the user off the Lead", () => {
+  const lane = new Set(["a", "b", "lead-1"]);
+  assert.deepEqual(reconcilePinFocus(shown("a"), "b", "lead-1", lane), { kind: "follow", agentId: "b", open: false });
+});

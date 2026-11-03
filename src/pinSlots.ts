@@ -18,3 +18,14 @@ export const slotRef = (slot: Slot) => (el: HTMLElement | null) => {
 };
 
 export const usePinSlot = (slot: Slot) => useSyncExternalStore(subscribe, () => els[slot]);
+
+// The rail collapses to a 64px icon strip at <=900px and hides the Active Buddy Card (styles.css), so nothing may be portalled there.
+const NARROW = "(max-width: 900px)";
+const subscribeNarrow = (l: () => void) => {
+  if (typeof matchMedia !== "function") return () => {};
+  const mq = matchMedia(NARROW);
+  mq.addEventListener("change", l);
+  return () => mq.removeEventListener("change", l);
+};
+export const useRailCardVisible = () =>
+  useSyncExternalStore(subscribeNarrow, () => !(typeof matchMedia === "function" && matchMedia(NARROW).matches));

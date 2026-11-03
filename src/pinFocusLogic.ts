@@ -22,15 +22,18 @@ export type FocusDecision =
 /**
  * Reconcile the focused pin with the pin's live Brainstorm (`live`, from pinsForSquad) and the
  * panes' active tab (`active`). Runs on every Paseo, teams and panes change.
+ * `laneMemberIds`: the pin's Brainstorm, Lead, workers and topic Buddies. Opening one of them swaps the
+ * middle pane but keeps the pin focused (and the rail visible); only an unrelated agent exits.
  */
-export function reconcilePinFocus(f: FocusSnapshot, live: string | null, active: string | null): FocusDecision {
-  // A restart / successor / quick start elsewhere: the pin follows its Brainstorm.
-  if (live && live !== f.agentId) return { kind: "follow", agentId: live, open: active !== live };
+export function reconcilePinFocus(f: FocusSnapshot, live: string | null, active: string | null, laneMemberIds?: ReadonlySet<string>): FocusDecision {
+  const inLane = !!active && !!laneMemberIds?.has(active);
+  // A restart / successor / quick start elsewhere: the pin follows its Brainstorm (without pulling the user off a Lead / worker).
+  if (live && live !== f.agentId) return { kind: "follow", agentId: live, open: active !== live && !inLane };
   // Starting or gone: the middle shows no drawer, so a different tab opening means "go there".
-  if (!f.agentId) return active !== f.held ? { kind: "exit" } : { kind: "keep" };
+  if (!f.agentId) return active !== f.held && !inLane ? { kind: "exit" } : { kind: "keep" };
   if (!live) return { kind: "gone" };
   // live === f.agentId: only an unrelated tab taking the middle ends the focus.
-  return active !== f.agentId ? { kind: "exit" } : { kind: "keep" };
+  return active !== f.agentId && !inLane ? { kind: "exit" } : { kind: "keep" };
 }
 
 export type EscContext = {
