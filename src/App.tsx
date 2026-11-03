@@ -2222,7 +2222,7 @@ export function App() {
       {(withPanes || pinFocused) && (
         <AgentPanes
           onSuccessor={paneSuccessor}
-          header={pinFocusView && pinFocus ? <PinFocusHeader view={pinFocusView} focus={pinFocus} onStart={onSpinUpPin} onSelectSquad={onTeam} belowBar={<HubBar view={pinFocusView} onOpen={onQuickStart} />} /> : undefined}
+          header={pinFocusView && pinFocus ? <PinFocusHeader view={pinFocusView} focus={pinFocus} onStart={onSpinUpPin} onSelectSquad={onTeam} belowBar={pinFocus.agentId ? undefined : <HubBar view={pinFocusView} onOpen={onQuickStart} />} /> : undefined}
         />
       )}
       {pinFocusView && pinFocus && <PinRail view={pinFocusView} focus={pinFocus} onPick={onRailPick} />}
