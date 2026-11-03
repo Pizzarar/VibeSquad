@@ -103,7 +103,8 @@ test("PinRail: active Buddy card on top, other Buddies below, no inert 'Open in 
   assert.match(pr, /ref=\{slotRef\("card"\)\}/, "the card hosts the inspector slot");
   assert.match(pr, /ref=\{slotRef\("bar"\)\}/, "the single bar hosts the compact controls slot");
   assert.match(dh, /createPortal\(/, "DrawerHeader portals the compact bar + inspector in pin-focus");
-  assert.match(dh, /const compact = !!pinFocus && pinFocus\.agentId === agent\.id/, "only the focused drawer goes compact");
+  assert.match(dh, /const compact = !!pinFocus && shownHere && inLane/, "only the shown lane drawer (Buddy, Lead, worker, topic) goes compact");
+  assert.match(dh, /shownHere = usePanes\(\)\.leftActiveId === agent\.id/, "a single owner of the slots: the left active tab");
 });
 
 test("pin-focus hides the RiffBot HubBar while a chat drawer is open", () => {
@@ -111,4 +112,23 @@ test("pin-focus hides the RiffBot HubBar while a chat drawer is open", () => {
   assert.match(app, /belowBar=\{pinFocus\.agentId \? undefined : <HubBar/);
   const css = fs.readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
   assert.match(css, /\.pin-rail \.signal\.running,[\s\S]*?\.pane-tab \.signal\.running \{\s*animation: none;/);
+});
+
+test("opening the pin's Lead / worker / topic Buddy keeps the focus", () => {
+  const lane = new Set(["a", "lead-1", "w-1", "t-1"]);
+  for (const id of ["lead-1", "w-1", "t-1"]) assert.deepEqual(reconcilePinFocus(shown("a"), "a", id, lane), { kind: "keep" });
+  // An agent outside the lane still exits.
+  assert.deepEqual(reconcilePinFocus(shown("a"), "a", "other", lane), { kind: "exit" });
+  // Without lane ids the old behaviour holds.
+  assert.deepEqual(reconcilePinFocus(shown("a"), "a", "lead-1"), { kind: "exit" });
+});
+
+test("a gone / starting pin stays focused while a lane member is open", () => {
+  const lane = new Set(["lead-1"]);
+  assert.deepEqual(reconcilePinFocus({ agentId: null, gone: true, held: "a" }, null, "lead-1", lane), { kind: "keep" });
+});
+
+test("a restarted Brainstorm is followed without pulling the user off the Lead", () => {
+  const lane = new Set(["a", "b", "lead-1"]);
+  assert.deepEqual(reconcilePinFocus(shown("a"), "b", "lead-1", lane), { kind: "follow", agentId: "b", open: false });
 });

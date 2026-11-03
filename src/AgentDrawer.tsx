@@ -29,6 +29,7 @@ import { PermissionCard } from "./PermissionCard";
 import { Composer, stageFiles } from "./Composer";
 import { composeMessage, setAgentCwd, useAttachments } from "./attachments";
 import { DrawerHeader } from "./DrawerHeader";
+import { useWorkingMembers, WorkingBar } from "./WorkingBar";
 import { RightDock } from "./RightDock";
 
 export { localImageSrc } from "./Timeline";
@@ -166,6 +167,15 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   const runningSubs = entries.filter(
     (e) => e.item?.type === "tool_call" && e.item?.detail?.type === "sub_agent" && e.item?.status === "running",
   ).length;
+
+  const working = useWorkingMembers(agent.id, isBs, team.id, laneId);
+  // A sub_agent call that names a running child agent (detail.subAgentId / agentId) is already a chip: count it once.
+  // Calls carrying no id can't be matched to a child agent, so they stay counted.
+  const workingIds = new Set(working.map((m) => m.agent.id));
+  const extraSubs = entries.filter((e) => {
+    const d = e.item?.detail;
+    return e.item?.type === "tool_call" && d?.type === "sub_agent" && e.item?.status === "running" && !workingIds.has(d.subAgentId ?? d.agentId);
+  }).length;
 
   const lastAssistantMsg = (() => {
     for (let i = entries.length - 1; i >= 0; i--) {
@@ -437,6 +447,8 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
         budget={budget}
         team={team}
         runningSubs={runningSubs}
+        working={working}
+        extraSubs={extraSubs}
         laneId={laneId}
         entries={entries}
         active={active}
@@ -532,6 +544,8 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
           </button>
         </div>
       )}
+
+      <WorkingBar members={working} subs={extraSubs} />
 
       <Composer
         agent={agent}

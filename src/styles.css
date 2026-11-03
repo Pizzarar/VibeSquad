@@ -4123,3 +4123,31 @@ button.project-file-name:hover { text-decoration: underline; }
   .pin-rail-active-buddy, .pin-rail-section-label { display: none; }
 }
 .pin-rail-buddy-tools { min-width: 0; }
+
+/* ── UI polish U4: team under a Buddy (rail card + sidebar caret) and the live "working" chip / bar ── */
+.pin-rail-team-tree { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.pin-rail-team-tree .pin-rail-section-label { padding: 0 0 2px; }
+.pin-team-row {
+  display: flex; align-items: center; gap: 6px; min-width: 0; padding: 3px 6px; background: transparent; border: 0;
+  border-left: 2px solid transparent; color: var(--muted); font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+}
+.pin-team-row:hover, .pin-team-row:focus-visible { color: var(--text); background: #00f0ff12; outline: none; }
+.pin-team-row.on { color: var(--text); border-left-color: var(--cyan); background: #00f0ff1f; }
+.pin-row-wrap { display: flex; align-items: stretch; min-width: 0; }
+.pin-row-wrap > .pin-row { flex: 1; min-width: 0; }
+.pin-row-caret { flex: none; width: 16px; padding: 0; background: transparent; border: 0; color: var(--muted); font-size: 10px; cursor: pointer; }
+.pin-row-caret:hover, .pin-row-caret:focus-visible { color: var(--text); outline: none; }
+.sidebar-pin-children { display: flex; flex-direction: column; margin-left: 16px; }
+.drawer-working-chip {
+  flex: none; padding: 1px 8px; font-size: 11px; color: var(--cyan); background: #00f0ff14; border: 1px solid var(--cyan); cursor: pointer;
+}
+.drawer-working-chip:disabled { cursor: default; }
+.drawer-subagents-bar {
+  flex: none; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 3px 10px; border-top: 1px solid var(--line);
+  background: #00f0ff0d; max-height: 52px; overflow-y: auto;
+}
+.drawer-subagent-chip {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 220px; padding: 1px 8px; font-size: 11px; color: var(--text);
+  background: transparent; border: 1px solid var(--line); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.drawer-subagent-chip:hover, .drawer-subagent-chip:focus-visible { border-color: var(--cyan); outline: none; }
