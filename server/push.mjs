@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { readPaseoConfig } from "./brainstorm.mjs";
+import { readDaemonPassword } from "./daemon-password.mjs";
 import { LEGACY_NEEDS_LABEL, clearConfigWarning, loadUserSettings, readJsonFileWithBom } from "./user-settings.mjs";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
@@ -474,6 +475,36 @@ export function evaluateAgentTransition(prev, next, dedupeSet) {
 }
 
 let activeWatcher = null;
+let watcherClient = null;
+let watcherStarted = false;
+let lastRootDir = null;
+
+function unrefClientTimers(client) {
+  if (!client || typeof client !== "object") return;
+  for (const key of ["connectTimeout", "reconnectTimeout", "livenessHeartbeatTimer", "pendingGenericTransportErrorTimeout"]) {
+    client[key]?.unref?.();
+  }
+}
+
+export async function stopPushWatcher() {
+  watcherStarted = false;
+  const current = activeWatcher;
+  activeWatcher = null;
+  watcherClient = null;
+  if (current) {
+    await current.stop();
+  }
+}
+
+export async function restartPushWatcher(rootDir) {
+  await stopPushWatcher();
+  watcherStarted = false;
+  const targetRoot = rootDir || lastRootDir;
+  if (targetRoot) {
+    return startPushWatcher(targetRoot);
+  }
+  return null;
+}
 
 /**
  * Connects to the Paseo daemon via DaemonClient, seeds initial agent state,
@@ -481,7 +512,9 @@ let activeWatcher = null;
  * and lead/worker turn completions or errors.
  */
 export function startPushWatcher(rootDir = REPO_ROOT) {
+  lastRootDir = rootDir;
   if (activeWatcher) return activeWatcher;
+  watcherStarted = true;
 
   const agentsById = new Map();
   const dedupeSet = new Set();
@@ -489,14 +522,17 @@ export function startPushWatcher(rootDir = REPO_ROOT) {
 
   const { listen } = readPaseoConfig(rootDir);
   const wsUrl = listen.startsWith("ws://") || listen.startsWith("wss://") ? `${listen.replace(/\/$/, "")}/ws` : `ws://${listen}/ws`;
+  const password = readDaemonPassword();
   const client = new DaemonClient({
     url: wsUrl,
     clientId: `vibesquad-push-watcher-${ process.pid }`,
     clientType: "cli",
     appVersion: "0.0.1",
     connectTimeoutMs: 5000,
+    ...(password ? { password } : {}),
     reconnect: { enabled: true, baseDelayMs: 1500, maxDelayMs: 15000 },
   });
+  watcherClient = client;
 
   const handleAgentSnapshot = (agent, isInitialSeed = false) => {
     if (!agent || !agent.id) return;
@@ -558,17 +594,22 @@ export function startPushWatcher(rootDir = REPO_ROOT) {
   };
 
   client.subscribeConnectionStatus((st) => {
+    queueMicrotask(() => unrefClientTimers(client));
     if (!stopped && st.status === "connected") {
       void seedAgents();
     }
   });
 
   client.connect().then(() => seedAgents()).catch(() => {});
+  unrefClientTimers(client);
+  queueMicrotask(() => unrefClientTimers(client));
 
   activeWatcher = {
     stop() {
       stopped = true;
+      watcherStarted = false;
       activeWatcher = null;
+      if (watcherClient === client) watcherClient = null;
       return client.close().catch(() => {});
     },
   };

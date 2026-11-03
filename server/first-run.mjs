@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve, sep } from "node:path";
 import { readJsonFileWithBom } from "./user-settings.mjs";
 import { markDaemonManagedByVibeSquad } from "./paseo-control.mjs";
+import { getDaemonAuthStatus } from "./daemon-password.mjs";
 
 export const PINNED_PASEO_VERSION = "0.14.0";
 const IS_WIN = process.platform === "win32";
@@ -229,6 +230,14 @@ export async function inspectFirstRunStatus(opts = {}) {
     installUrl: "https://github.com/google-gemini/gemini-cli",
   };
   const git = { installed: Boolean(gitBin), version: gitV, installUrl: "https://git-scm.com/downloads" };
+  const authStatus = getDaemonAuthStatus(
+    opts.daemonAuthOpts || {
+      ...(opts.home ? { home: opts.home } : {}),
+      ...(opts.env ? { env: opts.env } : {}),
+      ...(opts.paseoHome ? { paseoHome: opts.paseoHome } : {}),
+      ...(opts.configPath ? { configPath: opts.configPath } : {}),
+    },
+  );
   const paseo = {
     installed: installed || running,
     running,
@@ -238,6 +247,9 @@ export async function inspectFirstRunStatus(opts = {}) {
     progress: state.progress,
     error: state.error,
     installDurationMs: state.durationMs,
+    passwordRequired: authStatus.required,
+    passwordConfigured: authStatus.configured,
+    passwordSource: authStatus.source,
   };
   return {
     pinnedPaseoVersion: PINNED_PASEO_VERSION,
