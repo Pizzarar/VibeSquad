@@ -484,3 +484,49 @@ test("7. R5: loadProfiles auto-imports Paseo profiles on first run (merging miss
     env.cleanup();
   }
 });
+
+test("8. DEFAULT_PROFILES in src/profiles.ts has all 19 default pack profiles matching DEFAULT_PACK_PROFILES and TeamSettingsModal renders visible profile roster", async () => {
+  const { stripTypeScriptTypes } = await import("node:module");
+  const tsPath = resolve(import.meta.dirname, "..", "src", "profiles.ts");
+  const tsRaw = readFileSync(tsPath, "utf8");
+
+  // Extract from `const BRIEF` up to `export const LEGACY_PROFILE_ALIASES` and evaluate as pure JS
+  const startIdx = tsRaw.indexOf("const BRIEF =");
+  const endIdx = tsRaw.indexOf("export function deriveRole");
+  assert.ok(startIdx > 0 && endIdx > startIdx, "Expected DEFAULT_PROFILES block in src/profiles.ts");
+  const jsSlice = stripTypeScriptTypes(tsRaw.slice(startIdx, endIdx))
+    .replace(/^export\s+/gm, "");
+  const evaluated = new Function(`${jsSlice}\nreturn { DEFAULT_PROFILES, LEGACY_PROFILE_ALIASES };`)();
+
+  assert.equal(evaluated.DEFAULT_PROFILES.length, 19);
+  assert.equal(DEFAULT_PACK_PROFILES.length, 19);
+
+  for (let i = 0; i < DEFAULT_PACK_PROFILES.length; i++) {
+    const serverProf = DEFAULT_PACK_PROFILES[i];
+    const clientProf = evaluated.DEFAULT_PROFILES[i];
+    assert.equal(clientProf.id, serverProf.id, `Profile #${i} id mismatch`);
+    assert.equal(clientProf.name, serverProf.name, `Profile #${i} name mismatch`);
+    assert.equal(clientProf.role, serverProf.role, `Profile #${i} (${serverProf.name}) role mismatch`);
+    assert.equal(clientProf.icon, serverProf.icon, `Profile #${i} (${serverProf.name}) icon mismatch`);
+    assert.equal(clientProf.color, serverProf.color, `Profile #${i} (${serverProf.name}) color mismatch`);
+    assert.equal(clientProf.provider, serverProf.provider, `Profile #${i} (${serverProf.name}) provider mismatch`);
+    assert.equal(clientProf.model, serverProf.model, `Profile #${i} (${serverProf.name}) model mismatch`);
+    assert.equal(clientProf.modeId, serverProf.modeId, `Profile #${i} (${serverProf.name}) modeId mismatch`);
+    assert.equal(
+      clientProf.thinkingOptionId,
+      serverProf.thinkingOptionId,
+      `Profile #${i} (${serverProf.name}) thinkingOptionId mismatch`,
+    );
+    assert.deepEqual(
+      clientProf.featureValues,
+      serverProf.featureValues,
+      `Profile #${i} (${serverProf.name}) featureValues mismatch`,
+    );
+    assert.equal(clientProf.notes, serverProf.notes, `Profile #${i} (${serverProf.name}) notes mismatch`);
+  }
+
+  const modalSrc = readFileSync(resolve(import.meta.dirname, "..", "src", "TeamSettingsModal.tsx"), "utf8");
+  assert.ok(modalSrc.includes('data-testid="settings-profile-roster"'), "Missing settings-profile-roster in TeamSettingsModal.tsx");
+  assert.ok(modalSrc.includes("Seed Default Pack (19)"), "Missing Seed Default Pack (19) button in TeamSettingsModal.tsx");
+  assert.ok(modalSrc.includes("+ New Profile"), "Missing + New Profile button in TeamSettingsModal.tsx");
+});
