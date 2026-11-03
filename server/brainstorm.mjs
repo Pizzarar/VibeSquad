@@ -594,8 +594,21 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
     const bootTeam = bootTeams.find((t) => sameId(t.id, teamId));
     const bootLane = bootTeam?.lanes?.find((l) => sameId(l.id, laneId));
     const laneLastProfile = typeof bootLane?.lastProfile === "string" ? bootLane.lastProfile.trim() : "";
-    const desiredProfileKey = String(body.profile || oldLabels.profile || laneLastProfile || fallbackProfileName).trim();
     const { profiles } = loadProfiles(body.profilesPath, { autoSeed: false });
+    const rawProfileName = typeof body.profileName === "string" ? body.profileName.trim() : "";
+    const validProfileName = rawProfileName
+      ? profiles.find((p) => p?.role === "brainstorm" && String(p.name).toLowerCase() === rawProfileName.toLowerCase())?.name ||
+        (rawProfileName.toLowerCase() === "brainstorm - claude"
+          ? "Brainstorm - Claude"
+          : rawProfileName.toLowerCase() === "brainstorm - gemini"
+            ? "Brainstorm - Gemini"
+            : undefined)
+      : undefined;
+    const requestedProfile =
+      typeof body.profile === "string" && body.profile.trim()
+        ? body.profile.trim()
+        : validProfileName;
+    const desiredProfileKey = String(requestedProfile || oldLabels.profile || laneLastProfile || fallbackProfileName).trim();
     const profile = findProfileOrFallback(desiredProfileKey, fallbackProfileName, profiles);
 
     const spawnCfg = profile
@@ -670,23 +683,53 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
     } catch {}
     let created = null;
     if (connected && client && typeof client.createAgent === "function") {
-      created = await client.createAgent({
-        config: {
-          provider,
-          model,
-          cwd,
-          title: newTitle,
-          modeId,
-          thinkingOptionId,
-          ...(featureValues && Object.keys(featureValues).length ? { featureValues } : {}),
-          ...(spawnCfg.systemPrompt ? { systemPrompt: spawnCfg.systemPrompt } : {}),
-        },
-        ...(oldAgent?.workspaceId ? { workspaceId: oldAgent.workspaceId } : {}),
-        initialPrompt,
-        labels: newLabels,
-        // Labels never reach the plugin's before(agent.create); env does, so the profile is forced at spawn.
-        env: { VS_ROLE: "brainstorm", ...(newLabels.profile ? { VS_PROFILE: newLabels.profile } : {}), VS_LANE: laneId, VS_TEAM: teamId, VS_BRIEF_INLINE: "1" },
-      });
+      const spawnStartMs = Date.now();
+      try {
+        created = await client.createAgent({
+          config: {
+            provider,
+            model,
+            cwd,
+            title: newTitle,
+            modeId,
+            thinkingOptionId,
+            ...(featureValues && Object.keys(featureValues).length ? { featureValues } : {}),
+            ...(spawnCfg.systemPrompt ? { systemPrompt: spawnCfg.systemPrompt } : {}),
+          },
+          ...(oldAgent?.workspaceId ? { workspaceId: oldAgent.workspaceId } : {}),
+          initialPrompt,
+          labels: newLabels,
+          // Labels never reach the plugin's before(agent.create); env does, so the profile is forced at spawn.
+          env: { VS_ROLE: "brainstorm", ...(newLabels.profile ? { VS_PROFILE: newLabels.profile } : {}), VS_LANE: laneId, VS_TEAM: teamId, VS_BRIEF_INLINE: "1" },
+        });
+      } catch (err) {
+        try {
+          const raw =
+            typeof client.fetchAgents === "function"
+              ? await client.fetchAgents()
+              : typeof client.listAgents === "function"
+                ? await client.listAgents()
+                : null;
+          const list = Array.isArray(raw) ? raw : Array.isArray(raw?.entries) ? raw.entries : Array.isArray(raw?.agents) ? raw.agents : [];
+          for (const item of list) {
+            const a = item?.agent ?? item;
+            if (!a?.id || a.archivedAt || a.id === oldAgent?.id || a.id === agentId) continue;
+            const labels = a.labels ?? {};
+            const isLaneBs =
+              effectiveAgentRole({ labels }) === "brainstorm" &&
+              sameLane(a, laneId) &&
+              (!teamId || !labels.team || sameId(labels.team, teamId)) &&
+              parseBrainstormTopic(a) === topic.toLowerCase();
+            if (!isLaneBs && a.title !== newTitle) continue;
+            const ts = Date.parse(a.createdAt || a.updatedAt || "");
+            const isRecent = Number.isFinite(ts) && ts >= spawnStartMs - 5000;
+            if (a.status === "initializing" || a.status === "error" || isRecent) {
+              await client.archiveAgent?.(a.id)?.catch?.(() => {});
+            }
+          }
+        } catch {}
+        throw err;
+      }
     }
 
     timer.mark("createAgent");

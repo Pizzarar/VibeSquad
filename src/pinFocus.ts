@@ -26,9 +26,11 @@ export type PinFocus = {
   held: string | null;
   /** Bumped on every pin change so the swap animation and stale quick starts can key off it. */
   seq: number;
+  /** Inline error when Spin Up fails, cleared when changing pins or starting a new Spin Up. */
+  spinUpError?: string | null;
 };
 
-type State = {
+export type PinFocusSnapshot = {
   focus: PinFocus | null;
   /** Back on the grid: the panes stay mounted (scroll, drafts) but hidden until something else opens. */
   home: boolean;
@@ -36,7 +38,11 @@ type State = {
   homeActive: string | null;
   /** One level above the squad page: the grid of all squads. Only meaningful while home is true. */
   squadsHome: boolean;
+  /** Error from the most recent Spin Up failure on the focused pin, or null. */
+  spinUpError: string | null;
 };
+
+type State = PinFocusSnapshot;
 
 // Start on the grid even if tabs were restored from last session, unless "Reopen last view" is on and a tab was
 // saved (then the restored panes show); a ?agent= deep link shows its drawer.
@@ -51,14 +57,14 @@ const startHome = startsOnGrid({
   restoreLastView: getRestoreLastView(),
   savedLeftTab: getPanes().leftActiveId,
 });
-let state: State = { focus: null, home: startHome, homeActive: startHome ? getPanes().leftActiveId : null, squadsHome: startOnSquadsHome };
+let state: State = { focus: null, home: startHome, homeActive: startHome ? getPanes().leftActiveId : null, squadsHome: startOnSquadsHome, spinUpError: null };
 let seq = 0;
 const listeners = new Set<() => void>();
 
 const store = typeof localStorage === "undefined" ? undefined : localStorage;
 
 function set(next: Partial<State>) {
-  state = { ...state, ...next };
+  state = { ...state, ...(next.focus === null && !("spinUpError" in next) ? { spinUpError: null } : {}), ...next };
   // The focused pin survives a reload (squad + lane, not agent id). Leaving the pinned layout forgets it.
   if ("focus" in next) saveFocus(store, state.focus ? { squadId: state.focus.squadId, laneId: state.focus.laneId } : null);
   listeners.forEach((l) => l());
@@ -71,6 +77,8 @@ const subscribe = (l: () => void) => {
 
 export const getPinFocus = () => state.focus;
 export const usePinFocus = () => useSyncExternalStore(subscribe, () => state.focus);
+export const getSpinUpError = () => state.focus?.spinUpError ?? state.spinUpError;
+export const useSpinUpError = () => useSyncExternalStore(subscribe, getSpinUpError);
 export const usePinsHome = () => useSyncExternalStore(subscribe, () => state.home);
 export const getPinsHome = () => state.home;
 export const getSquadsHome = () => state.home && !state.focus && state.squadsHome;
@@ -136,10 +144,11 @@ export async function focusPin(pin: Pin): Promise<string> {
   const active = getPanes().leftActiveId;
   // Set the focus before opening so the reconcile on the panes change sees the expected tab.
   set({
-    focus: { squadId: pin.squad.id, laneId: pin.lane.id, agentId: live, gone: !live, held: live ? null : active, seq: mine },
+    focus: { squadId: pin.squad.id, laneId: pin.lane.id, agentId: live, gone: !live, held: live ? null : active, seq: mine, spinUpError: null },
     home: false,
     homeActive: null,
     squadsHome: false,
+    spinUpError: null,
   });
   if (live) {
     show(live);
@@ -167,28 +176,31 @@ export function openPinMember(pin: Pin, agentId: string) {
 }
 
 /** Explicitly spin up a Brainstorm / RiffBot chat for a selected pin when the user clicks Spin Up. */
-export async function spinUpPin(pin: Pin): Promise<string> {
+export async function spinUpPin(pin: Pin, profile?: string, openPinFn: typeof openPin = openPin): Promise<string> {
   const mine = ++seq;
   const active = getPanes().leftActiveId;
   set({
-    focus: { squadId: pin.squad.id, laneId: pin.lane.id, agentId: null, gone: false, held: active, seq: mine },
+    focus: { squadId: pin.squad.id, laneId: pin.lane.id, agentId: null, gone: false, held: active, seq: mine, spinUpError: null },
     home: false,
     homeActive: null,
     squadsHome: false,
+    spinUpError: null,
   });
   try {
-    const id = await openPin(pin);
+    const id = openPinFn !== openPin ? await openPinFn(pin, profile) : profile ? await openPin(pin, profile) : await openPin(pin);
+    if (!id) throw new Error("Could not start Brainstorm session");
     const f = state.focus;
     if (f?.seq === mine && f.agentId !== id) {
-      set({ focus: { ...f, agentId: id, gone: false, held: null } });
+      set({ focus: { ...f, agentId: id, gone: false, held: null, spinUpError: null }, spinUpError: null });
       show(id);
     }
     if (state.focus?.seq === mine) focusComposerSoon(id);
     return id;
-  } catch (e) {
+  } catch (err: any) {
+    const spinUpError = err?.message || String(err);
     const f = state.focus;
-    if (f?.seq === mine) set({ focus: { ...f, gone: true, held: getPanes().leftActiveId } });
-    throw e;
+    if (f?.seq === mine) set({ focus: { ...f, gone: true, held: getPanes().leftActiveId, spinUpError }, spinUpError });
+    throw err;
   }
 }
 

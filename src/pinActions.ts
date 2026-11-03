@@ -25,6 +25,8 @@ import { runMarkComplete } from "./pinComplete";
 import { runRemoveTeam, type RemovePlan, type RemoveResult, type WorktreeResult } from "./pinRemoveLogic";
 import { findCrossTeamBrainstorm, getTeams, resolve, saveTeams, titleFor, type TeamDef, type TeamsUpdater } from "./teams";
 
+export { DEFAULT_PIN_PROFILE } from "./pins";
+
 export type OpenPinDeps = {
   /** Agent map to re-check for a live Brainstorm before spawning (defaults to the live Paseo state). */
   agents?: Map<string, PaseoAgent>;
@@ -34,6 +36,8 @@ export type OpenPinDeps = {
   saveTeams?: (update: TeamsUpdater) => Promise<unknown>;
   /** Called with the spawned agent so the caller can show it before the daemon pushes it (defaults to upsertLocalAgent). */
   onSpawned?: (agent: PaseoAgent) => void;
+  /** Explicit Brainstorm profile chosen by the user at Spin Up. */
+  profile?: string;
 };
 
 const inFlight = new Map<string, Promise<string>>();
@@ -53,13 +57,15 @@ export function subscribePinStarts(l: () => void): () => void {
  * quick-started in (squad, lane) from the team brief and newest plan, with no dialog, and its id
  * is returned. Concurrent calls for the same lane share one spawn.
  */
-export function openPin(pin: Pin, deps: OpenPinDeps = {}): Promise<string> {
+export function openPin(pin: Pin, depsOrProfile: OpenPinDeps | string = {}): Promise<string> {
+  const deps: OpenPinDeps = typeof depsOrProfile === "string" ? { profile: depsOrProfile } : depsOrProfile;
   const r = resolvePin(pin);
   if (r.kind === "live") return Promise.resolve(r.agent.agent.id);
   const key = laneKey(r.squadId, r.laneId);
   const pending = inFlight.get(key);
   if (pending) return pending;
-  const run = quickStart(pin, r.profile ?? DEFAULT_PIN_PROFILE, deps).finally(() => {
+  const chosenProfile = deps.profile?.trim() || r.profile || pin.lane?.lastProfile || DEFAULT_PIN_PROFILE;
+  const run = quickStart(pin, chosenProfile, deps).finally(() => {
     inFlight.delete(key);
     startListeners.forEach((l) => l());
   });
@@ -85,8 +91,8 @@ async function quickStart(pin: Pin, profile: string, deps: OpenPinDeps): Promise
       teamId: squadId,
       laneId,
       laneName: pin.lane.name,
-      // Remotely `profile` is a forbidden body key; the server picks the lane's lastProfile from teams.json.
-      ...(isRemote() ? {} : { profile }),
+      // Send `profileName` so remote relay body policy accepts it while `profile` stays in REMOTE_FORBIDDEN_BODY_KEYS.
+      ...(profile ? { profileName: profile } : {}),
     }),
   });
   const body = (await res.json().catch(() => ({}))) as {

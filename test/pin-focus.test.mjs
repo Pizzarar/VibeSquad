@@ -1,0 +1,168 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import { registerHooks } from "node:module";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import test from "node:test";
+import { checkRemoteBody } from "../plugin/server/remote-proxy-rules.ts";
+
+// Allow Node to import src/pinFocus.ts and src/pinActions.ts directly by resolving extensionless .ts imports
+// and providing lightweight stubs for browser-only .tsx modules.
+const SRC_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "src");
+
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier.startsWith("./") && context.parentURL?.startsWith(pathToFileURL(SRC_DIR).href)) {
+      if (specifier === "./paseo" || specifier === "./PinGrid" || specifier === "./ui" || specifier === "./IdeaInbox") {
+        return { url: `data:text/javascript,${encodeURIComponent(stubFor(specifier))}`, shortCircuit: true };
+      }
+      const parentDir = dirname(fileURLToPath(context.parentURL));
+      const tsCandidate = resolve(parentDir, `${specifier}.ts`);
+      if (fs.existsSync(tsCandidate)) {
+        return nextResolve(pathToFileURL(tsCandidate).href, context);
+      }
+      const tsxCandidate = resolve(parentDir, `${specifier}.tsx`);
+      if (fs.existsSync(tsxCandidate)) {
+        return { url: `data:text/javascript,${encodeURIComponent(stubFor(specifier))}`, shortCircuit: true };
+      }
+    }
+    return nextResolve(specifier, context);
+  },
+});
+
+function stubFor(specifier) {
+  if (specifier === "./paseo") {
+    return [
+      "export const DEMO = false;",
+      "export const getPaseoState = () => ({ conn: 'connected', agents: new Map() });",
+      "export const subscribePaseo = () => () => {};",
+      "export const archiveAgent = async () => {};",
+      "export const archiveWorkspace = async () => {};",
+      "export const detachAgent = async () => {};",
+      "export const retireAgent = async () => {};",
+      "export const sendMessage = async () => {};",
+      "export const updateAgent = async () => {};",
+      "export const upsertLocalAgent = () => {};",
+    ].join("\n");
+  }
+  if (specifier === "./PinGrid") {
+    return `export async function openPin(pin, profile) { return globalThis.__testOpenPin(pin, profile); }`;
+  }
+  if (specifier === "./ui") {
+    return `export const derived = () => ({ views: globalThis.__testViews ?? [] }); export const subscribeTree = () => () => {};`;
+  }
+  if (specifier === "./IdeaInbox") {
+    return `export const parkIdeasInInbox = async () => {};`;
+  }
+  return `export {};`;
+}
+
+const pinFocusMod = await import("../src/pinFocus.ts");
+const pinActionsMod = await import("../src/pinActions.ts");
+
+function makePin(laneId = "bug-chaser", lastProfile = undefined) {
+  return {
+    squad: { id: "vibesquad", name: "VibeSquad", color: "#00f0ff", lanes: [{ id: laneId, name: "Bug Chaser", ...(lastProfile ? { lastProfile } : {}) }], paths: [] },
+    lane: { id: laneId, name: "Bug Chaser", state: "pinned", ...(lastProfile ? { lastProfile } : {}) },
+    state: "pinned",
+    order: 0,
+    brainstorm: null,
+    lead: null,
+    workers: [],
+    needsYou: 0,
+    running: 0,
+    contextUsed: 0,
+    topicBrainstorms: [],
+  };
+}
+
+test("spinUpPin(pin, profile) forwards profile to openPin and clears spinUpError on success", async () => {
+  const calls = [];
+  const pin = makePin("lane-a");
+  globalThis.__testOpenPin = async (p, profile) => {
+    calls.push({ laneId: p.lane.id, profile });
+    const spawnedMember = {
+      agent: { id: "bs-spawned-1", status: "idle", labels: { team: p.squad.id, lane: p.lane.id, role: "brainstorm" } },
+      kind: "brainstorm",
+      agentType: "brainstorm",
+      team: p.squad,
+      laneId: p.lane.id,
+    };
+    globalThis.__testViews = [
+      {
+        team: p.squad,
+        lanes: [{ lane: p.lane, brainstorm: spawnedMember, lead: null, members: [spawnedMember], topicBrainstorms: [], duplicateBrainstorms: [] }],
+        members: [spawnedMember],
+        needsYou: 0,
+      },
+    ];
+    return "bs-spawned-1";
+  };
+  const id = await pinFocusMod.spinUpPin(pin, "Brainstorm - Gemini");
+  assert.equal(id, "bs-spawned-1");
+  assert.deepEqual(calls, [{ laneId: "lane-a", profile: "Brainstorm - Gemini" }]);
+  assert.equal(pinFocusMod.getPinFocus()?.agentId, "bs-spawned-1");
+  assert.equal(pinFocusMod.getPinFocus()?.spinUpError, null);
+  assert.equal(pinFocusMod.getSpinUpError(), null);
+});
+
+test("spinUpPin sets spinUpError on failure and clears it when changing pins or retrying Spin Up", async () => {
+  globalThis.__testOpenPin = async () => {
+    throw new Error("Timed out refreshing Claude after 120000ms; pending: version");
+  };
+  const pinA = makePin("lane-timeout");
+  await assert.rejects(
+    () => pinFocusMod.spinUpPin(pinA, "Brainstorm - Claude"),
+    /Timed out refreshing Claude after 120000ms; pending: version/,
+  );
+
+  const focusAfterErr = pinFocusMod.getPinFocus();
+  assert.equal(focusAfterErr?.gone, true);
+  assert.equal(focusAfterErr?.agentId, null);
+  assert.equal(focusAfterErr?.spinUpError, "Timed out refreshing Claude after 120000ms; pending: version");
+  assert.equal(pinFocusMod.getSpinUpError(), "Timed out refreshing Claude after 120000ms; pending: version");
+
+  // Switching to another pin clears spinUpError.
+  await pinFocusMod.focusPin(makePin("lane-other"));
+  assert.equal(pinFocusMod.getPinFocus()?.spinUpError, null);
+  assert.equal(pinFocusMod.getSpinUpError(), null);
+});
+
+test("openPin in pinActions forwards explicit profile as profileName (accepted by remote relay policy)", async () => {
+  const posted = [];
+  const pin = makePin("lane-remote", "Brainstorm - Claude");
+  const id = await pinActionsMod.openPin(pin, {
+    profile: "Brainstorm - Gemini",
+    agents: new Map(),
+    onSpawned: () => {},
+    saveTeams: async () => {},
+    fetch: async (url, init) => {
+      posted.push({ url, body: JSON.parse(init.body) });
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return { ok: true, newAgentId: "bs-gemini-1", profile: "Brainstorm - Gemini" };
+        },
+      };
+    },
+  });
+
+  assert.equal(id, "bs-gemini-1");
+  assert.equal(posted.length, 1);
+  assert.equal(posted[0].url, "/__vibesquad/brainstorm-restart");
+  assert.equal(posted[0].body.profileName, "Brainstorm - Gemini");
+  assert.equal("profile" in posted[0].body, false, "profile key must not be sent so remote relay never rejects with 403");
+
+  const remoteCheck = checkRemoteBody("POST", "/__vibesquad/brainstorm-restart", JSON.stringify(posted[0].body));
+  assert.equal(remoteCheck.ok, true);
+});
+
+test("PinFocusHeader renders profile picker chips and inline spinUpError alert inside .pin-focus-empty", () => {
+  const pr = fs.readFileSync(new URL("../src/PinRail.tsx", import.meta.url), "utf8");
+  assert.match(pr, /data-testid="pin-spin-up-error"/, "renders inline spinUpError alert");
+  assert.match(pr, /className="pin-focus-spinup-error"/, "uses pin-focus-spinup-error class");
+  assert.match(pr, /data-testid="pin-spin-up-profile-chips"/, "renders profile picker chips container");
+  assert.match(pr, /data-testid=\{`pin-spin-up-profile-chip-\$\{name\}`\}/, "renders each profile chip with testid");
+  assert.match(pr, /onStart\(pin,\s*selectedProfile\)/, "Spin Up button passes selectedProfile to onStart");
+});
