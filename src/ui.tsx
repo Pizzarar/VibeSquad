@@ -298,6 +298,7 @@ export function sameMember(a: Member | null, b: Member | null): boolean {
         x.status === y.status &&
         x.requiresAttention === y.requiresAttention &&
         (x.pendingPermissions?.length ?? 0) === (y.pendingPermissions?.length ?? 0) &&
+        usedTokens(a) === usedTokens(b) &&
         x.lastUsage?.contextWindowUsedTokens === y.lastUsage?.contextWindowUsedTokens &&
         xl["vs.mock-tokens"] === yl["vs.mock-tokens"] &&
         xl["vs.restarted-from"] === yl["vs.restarted-from"] &&
@@ -380,7 +381,7 @@ export const AgentRow = memo(
             <BrainstormCtxPill agent={a} team={m.team} />
           ) : (
             <TokenMeter
-              used={a.lastUsage?.contextWindowUsedTokens}
+              used={usedTokens(m)}
               budget={budgetFor(m)}
               ladder={m.kind === "lead" ? leadLadderFor(m.team) : undefined}
             />
@@ -548,7 +549,7 @@ const TreeRow = memo(
             <TreeCaret id={a.id} />
           </span>
           <TokenMeter
-            used={a.lastUsage?.contextWindowUsedTokens}
+            used={usedTokens(m)}
             budget={budgetFor(m)}
             ladder={m.kind === "lead" ? leadLadderFor(m.team) : undefined}
           />
