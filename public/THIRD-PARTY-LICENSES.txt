@@ -31,7 +31,7 @@ Production npm packages
 @noble/ciphers@2.4.0  MIT
 @noble/curves@2.4.0  MIT
 @noble/hashes@2.4.0  MIT
-@vibesquad/server@0.0.0  MIT
+@vibesquad/server@0.2.0  MIT
 @xterm/addon-fit@0.10.0  MIT
 @xterm/xterm@5.5.0  MIT
 ansi-regex@5.0.1  MIT

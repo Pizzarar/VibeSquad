@@ -1,10 +1,22 @@
 // Generates public/THIRD-PARTY-LICENSES.txt from the production npm dependency closure and src-tauri/Cargo.lock.
 // Fails if a production npm package has a license outside the permissive allowlist.
+import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 const rootDir = resolve(import.meta.dirname, "..");
+const commonRootDir = (() => {
+  try {
+    const commonGitDir = execFileSync("git", ["-C", rootDir, "rev-parse", "--path-format=absolute", "--git-common-dir"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return commonGitDir ? dirname(commonGitDir) : null;
+  } catch {
+    return null;
+  }
+})();
 
 const ALLOWED = new Set([
   "MIT", "ISC", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "0BSD", "BlueOak-1.0.0", "CC0-1.0",
@@ -39,16 +51,29 @@ function isAllowed(expr) {
   return clean.split(/\s+AND\s+/).every((p) => ALLOWED.has(p.trim()));
 }
 
-/** Node-style lookup: nearest node_modules/<name> walking up from `fromDir`. */
+/** Node-style lookup: local `file:` dep in `fromDir`, nearest node_modules/<name> walking up, or git common-dir root node_modules in worktrees. */
 function findPackageDir(name, fromDir) {
+  const fromPkgPath = join(fromDir, "package.json");
+  if (existsSync(fromPkgPath)) {
+    const spec = readJson(fromPkgPath).dependencies?.[name];
+    if (typeof spec === "string" && spec.startsWith("file:")) {
+      const localDir = resolve(fromDir, spec.slice(5));
+      if (existsSync(join(localDir, "package.json"))) return localDir;
+    }
+  }
   let dir = fromDir;
   for (;;) {
     const candidate = join(dir, "node_modules", name);
     if (existsSync(join(candidate, "package.json"))) return candidate;
     const parent = dirname(dir);
-    if (parent === dir) return null;
+    if (parent === dir) break;
     dir = parent;
   }
+  if (commonRootDir && commonRootDir !== rootDir) {
+    const fallback = join(commonRootDir, "node_modules", name);
+    if (existsSync(join(fallback, "package.json"))) return fallback;
+  }
+  return null;
 }
 
 function collectNpm() {
