@@ -70,7 +70,7 @@ test("closed agents are never woken by usePreview, hidden panes, Composer, Subag
 
   const pr = fs.readFileSync(new URL("../src/PinRail.tsx", import.meta.url), "utf8");
   assert.match(pr, /usePreview\(bs && bs\.agent\.status !== "closed" \? bs\.agent\.id : null\)/, "RailTile does not pass closed agentId to usePreview");
-  assert.match(pr, /const clickable = !focused;/, "RailTile does not re-trigger onPick when already focused and gone");
+  assert.doesNotMatch(pr, /const clickable = !focused;/, "RailTile is only for the other Buddies now (no inert focused tile)");
   assert.match(pr, /Spin Up RiffBot/, "PinFocusHeader shows Spin Up RiffBot button");
   assert.match(pr, /Spin Up Brainstorm/, "PinFocusHeader shows Spin Up Brainstorm button");
 
@@ -89,4 +89,83 @@ test("closed agents are never woken by usePreview, hidden panes, Composer, Subag
   const app = fs.readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
   assert.match(app, /\{\(withPanes \|\| pinFocused\) && \(/, "App only mounts AgentPanes when withPanes or pinFocused");
   assert.match(app, /onStart=\{onSpinUpPin\}/, "PinFocusHeader onStart is wired to onSpinUpPin");
+});
+
+test("PinRail: active Buddy card on top, other Buddies below, no inert 'Open in the middle' tile", () => {
+  const pr = fs.readFileSync(new URL("../src/PinRail.tsx", import.meta.url), "utf8");
+  const dh = fs.readFileSync(new URL("../src/DrawerHeader.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(pr, /Open in the middle/);
+  const card = pr.indexOf('className={`pin-rail-active-buddy');
+  const label = pr.indexOf("Other Buddies");
+  const list = pr.indexOf("others.map(");
+  assert.ok(card > 0 && card < label && label < list, "active card, then 'Other Buddies' label, then the remaining pins");
+  assert.match(pr, /pinned\.filter\(\(p\) => p\.lane\.id !== focus\.laneId\)/, "the focused pin is excluded from the tile list");
+  assert.match(pr, /ref=\{slotRef\("card"\)\}/, "the card hosts the inspector slot");
+  assert.match(pr, /ref=\{slotRef\("bar"\)\}/, "the single bar hosts the compact controls slot");
+  assert.match(dh, /createPortal\(/, "DrawerHeader portals the compact bar + inspector in pin-focus");
+  assert.match(dh, /const compact = !!pinFocus && shownHere && inLane/, "only the shown lane drawer (Buddy, Lead, worker, topic) goes compact");
+  assert.match(dh, /shownHere = usePanes\(\)\.leftActiveId === agent\.id/, "a single owner of the slots: the left active tab");
+});
+
+test("pin-focus hides the RiffBot HubBar while a chat drawer is open", () => {
+  const app = fs.readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  assert.match(app, /belowBar=\{pinFocus\.agentId \? undefined : <HubBar/);
+  const css = fs.readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+  assert.match(css, /\.pin-rail \.signal\.running,[\s\S]*?\.pane-tab \.signal\.running \{\s*animation: none;/);
+});
+
+test("opening the pin's Lead / worker / topic Buddy keeps the focus", () => {
+  const lane = new Set(["a", "lead-1", "w-1", "t-1"]);
+  for (const id of ["lead-1", "w-1", "t-1"]) assert.deepEqual(reconcilePinFocus(shown("a"), "a", id, lane), { kind: "keep" });
+  // An agent outside the lane still exits.
+  assert.deepEqual(reconcilePinFocus(shown("a"), "a", "other", lane), { kind: "exit" });
+  // Without lane ids the old behaviour holds.
+  assert.deepEqual(reconcilePinFocus(shown("a"), "a", "lead-1"), { kind: "exit" });
+});
+
+test("a gone / starting pin stays focused while a lane member is open", () => {
+  const lane = new Set(["lead-1"]);
+  assert.deepEqual(reconcilePinFocus({ agentId: null, gone: true, held: "a" }, null, "lead-1", lane), { kind: "keep" });
+});
+
+test("a restarted Brainstorm is followed without pulling the user off the Lead", () => {
+  const lane = new Set(["a", "b", "lead-1"]);
+  assert.deepEqual(reconcilePinFocus(shown("a"), "b", "lead-1", lane), { kind: "follow", agentId: "b", open: false });
+});
+
+const srcOf = (f) => fs.readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
+
+test("U5: sidebar lanes are flat single rows (no caret, no lane children, no LeadBlock / alert dump)", () => {
+  const pg = srcOf("PinGrid.tsx");
+  const app = srcOf("App.tsx");
+  const css = srcOf("styles.css");
+  assert.doesNotMatch(pg, /pin-row-caret|sidebar-pin-children|sidebar-pin-caret/);
+  assert.doesNotMatch(css, /\.pin-row-caret|\.sidebar-pin-children/);
+  assert.doesNotMatch(app, /LeadBlock|sideAlerts|RUNS WORK|side-alerts/);
+  assert.match(app, /expanded && v\.team\.id !== UNASSIGNED\.id && <SidebarPins/);
+});
+
+test("U5: PinTeamRows hides non-running workers behind a collapsed Completed toggle", () => {
+  const pg = srcOf("PinGrid.tsx");
+  assert.match(pg, /useState\(false\)/);
+  assert.match(pg, /pin\.workers\.filter\(isActiveWorker\)/);
+  assert.match(pg, /pin\.workers\.filter\(\(w\) => !isActiveWorker\(w\)\)/);
+  const fn = pg.slice(pg.indexOf("const isActiveWorker"), pg.indexOf("export function PinTeamRows"));
+  for (const re of [/status === "running"/, /status === "initializing"/, /status === "error"/, /countsAsNeedsYou\(w\)/, /attention\.tone !== "finished"/]) assert.match(fn, re);
+  assert.match(pg, /-completed-toggle/);
+  assert.match(pg, /Completed \(\{completed\.length\}\)/);
+});
+
+test("U5: TeamPage collapses finished pills and the Idle section", () => {
+  const app = srcOf("App.tsx");
+  assert.match(app, /m\.attention\.tone !== "finished" && m\.kind !== "old-lead"\)\.sort\(alertOrder\)/);
+  assert.match(app, /data-testid="team-completed-toggle"/);
+  assert.match(app, /Completed \(\{doneAlerts\.length\}\)/);
+  assert.match(app, /title="Idle"[\s\S]{0,260}?collapsed\s+archive/);
+});
+
+test("U5: PinFocusBar lead click opens the Lead in pin focus instead of FULL view", () => {
+  const pr = srcOf("PinRail.tsx");
+  assert.match(pr, /openPinMember\(pin, lead\.agent\.id\)/);
+  assert.doesNotMatch(pr, /setFullView/);
 });

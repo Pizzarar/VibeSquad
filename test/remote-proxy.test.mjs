@@ -146,21 +146,19 @@ describe("allowlist", () => {
     }
     for (const p of Object.keys(REMOTE_BODY_POLICY)) assert.ok(REMOTE_ALLOW[p]?.some((m) => m !== "GET"), `${p} policy without a write`);
   });
-  test("closed writes: handoff POST, lead-handoff, confirm, open-topic and brainstorm-restart stay unreachable, each with a reason", () => {
-    for (const p of [
-      "/__vibesquad/lead-handoff",
-      "/__vibesquad/lead-handoff/confirm",
-      "/__vibesquad/inbox/open-topic",
-      "/__vibesquad/brainstorm-restart",
-    ]) {
+  test("closed writes: lead-handoff, confirm and open-topic stay unreachable, each with a reason; Block 4 reopened handoff POST and brainstorm-restart", () => {
+    for (const p of ["/__vibesquad/lead-handoff", "/__vibesquad/lead-handoff/confirm", "/__vibesquad/inbox/open-topic"]) {
       assert.equal(decideProxyRequest("POST", p).code, "not-allowed", p);
       assert.equal(isAllowedRoute("POST", p), false, p);
       assert.equal(REMOTE_BODY_POLICY[p], undefined, p);
       assert.ok(REMOTE_WRITES_CLOSED[p], p);
     }
-    assert.equal(decideProxyRequest("POST", "/__vibesquad/handoff").code, "method");
+    for (const p of ["/__vibesquad/handoff", "/__vibesquad/brainstorm-restart"]) {
+      assert.equal(decideProxyRequest("POST", p).ok, true, p);
+      assert.equal(REMOTE_BODY_POLICY[p].registry, "lane", p);
+      assert.equal(REMOTE_WRITES_CLOSED[p], undefined, p);
+    }
     for (const p of [...Object.keys(REMOTE_WRITES_CLOSED)]) assert.ok(REMOTE_WRITES_CLOSED[p].length > 20, p);
-    assert.equal(REMOTE_BODY_POLICY["/__vibesquad/handoff"], undefined);
     assert.equal(decideProxyRequest("POST", "/__vibesquad/settings").code, "method");
     for (const p of [
       "/__vibesquad/paseo/surface",
@@ -409,7 +407,8 @@ describe("handler against a fake loopback VS server", () => {
     await assert.rejects(handler()({ method: "PUT", path: "/api/teams", body: "{}" }), /key required remotely: body\.teams \[403\]/);
     await assert.rejects(handler()({ method: "POST", path: "/__vibesquad/inbox", body: '{"cwd":"C:/"}' }), /body key not allowed remotely: cwd \[403\]/);
     await assert.rejects(handler()({ method: "POST", path: "/__vibesquad/inbox/open-topic", body: '{"cardId":"idea-1"}' }), /not available remotely.*\[403\]/);
-    await assert.rejects(handler()({ method: "POST", path: "/__vibesquad/brainstorm-restart", body: '{"reason":"start-brainstorm"}' }), /not available remotely.*\[403\]/);
+    await assert.rejects(handler()({ method: "POST", path: "/__vibesquad/brainstorm-restart", body: '{"reason":"start-brainstorm"}' }), /key required remotely: body\.laneId \[403\]/);
+    await assert.rejects(handler()({ method: "POST", path: "/__vibesquad/brainstorm-restart", body: '{"laneId":"lane1","profile":"P"}' }), /body key not allowed remotely: profile \[403\]/);
     await assert.rejects(handler()({ method: "POST", path: "/__vibesquad/lead-handoff", body: '{"agentId":"a"}' }), /not available remotely.*\[403\]/);
     assert.equal(seen.length, n);
   });
@@ -683,6 +682,9 @@ const ENDPOINTS = [
   { path: "/__vibesquad/vs-log", method: "POST", ok: { teamId: "sq", laneId: "lane1", type: "metric", text: "m" }, big: { text: "x".repeat(2001) } },
   { path: "/__vibesquad/brainstorm-summary", method: "POST", ok: { laneId: "lane1", content: "# brief", revision: "abc" }, big: { content: "x".repeat(20_000) } },
   { path: "/__vibesquad/brainstorm-summary", method: "PUT", ok: { lane: "lane1", content: "# brief", revision: "abc" }, big: { content: "x".repeat(20_000) } },
+  { path: "/__vibesquad/brainstorm-restart", method: "POST", ok: { reason: "start-brainstorm", mode: "quick-start", teamId: "sq", laneId: "lane1", laneName: "One" }, big: { laneName: "x".repeat(201) } },
+  { path: "/__vibesquad/brainstorm-restart", method: "POST", ok: { reason: "manual", teamId: "sq", laneId: "lane1", agentId: "bs-1", usedTokens: 50000 }, big: { usedTokens: 100_000_001 } },
+  { path: "/__vibesquad/handoff", method: "POST", ok: { team: "sq", lane: "lane1", agentId: "lead-1" }, big: { agentId: "x".repeat(65) } },
 ];
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const bodyErr = (method, path, body) => checkRemoteBody(method, path, typeof body === "string" ? body : JSON.stringify(body));
@@ -738,7 +740,8 @@ describe("R2-5 body policy per endpoint", () => {
     const r = bodyErr("POST", "/__vibesquad/inbox/triage", { action: "update", cardId: "idea-1", laneId: "lane1", patch: { title: "x" } });
     assert.match(r.error, /body key not allowed remotely: title/);
     assert.equal(bodyErr("POST", "/__vibesquad/inbox/open-topic", { cardId: "idea-1" }).status, 403);
-    assert.equal(bodyErr("POST", "/__vibesquad/brainstorm-restart", { reason: "start-brainstorm" }).status, 403);
+    assert.equal(bodyErr("POST", "/__vibesquad/brainstorm-restart", { reason: "start-brainstorm" }).status, 403); // no laneId
+    assert.equal(bodyErr("POST", "/__vibesquad/brainstorm-restart", { reason: "auto-hard-limit", laneId: "lane1" }).status, 403);
     assert.equal(bodyErr("POST", "/__vibesquad/log", { team: "sq", lane: "lane1", text: "t", type: "done" }).status, 403);
     assert.equal(bodyErr("POST", "/__vibesquad/log", { team: "../x", lane: "lane1", text: "t" }).status, 403);
     assert.equal(bodyErr("POST", "/__vibesquad/inbox/triage", { action: "merge", laneId: "lane1", sourceIds: Array(101).fill("idea-1") }).status, 403);
@@ -1033,7 +1036,7 @@ describe("R2-5 handler: reopened writes against a fake loopback server", () => {
     assert.deepEqual(errOut, { ok: false, error: "ENOENT: open [redacted-path]" });
   });
 
-  test("still denied: blocked paths win over any allow entry; settings and handoff POST are 405", async () => {
+  test("still denied: blocked paths win over any allow entry; settings POST is 405; a bad handoff POST is refused", async () => {
     setGate(true);
     const everything = Object.fromEntries(
       [
@@ -1054,7 +1057,8 @@ describe("R2-5 handler: reopened writes against a fake loopback server", () => {
       assert.equal(decideProxyRequest("POST", p).code, "blocked", p);
     }
     await assert.rejects(h({ method: "POST", path: "/__vibesquad/settings", body: "{}" }), /\[405\]/);
-    await assert.rejects(h({ method: "POST", path: "/__vibesquad/handoff", body: '{"team":"sq","lane":"lane1"}' }), /\[405\]/);
+    await assert.rejects(h({ method: "POST", path: "/__vibesquad/handoff", body: '{"team":"sq","lane":"lane1","cwd":"C:/"}' }), /body key not allowed remotely: cwd \[403\]/);
+    await assert.rejects(h({ method: "POST", path: "/__vibesquad/handoff", body: '{"team":"sq"}' }), /key required remotely: body\.lane \[403\]/);
     assert.equal(seen.length, n);
   });
 });

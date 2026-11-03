@@ -4,13 +4,13 @@
 // a badge and never reorders the rail. The bar on top of the drawer is the only route to the plumbing.
 import { memo, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { getDraft, useDraft } from "./drafts";
-import { NeedsBadge, PinDot, setFullView, usePreview } from "./PinGrid";
-import { exitPinFocus, type PinFocus } from "./pinFocus";
+import { NeedsBadge, PinDot, PinTeamTree, usePreview } from "./PinGrid";
+import { exitPinFocus, openPinMember, type PinFocus } from "./pinFocus";
 import { TopBreadcrumb } from "./Breadcrumb";
 import { escGoesHome } from "./pinFocusLogic";
 import { hubPinForSquad, isHubPin, pinsForSquad, type Pin } from "./pins";
 import { SendToBar } from "./PinIdeas";
-import { openAgent } from "./panes";
+import { slotRef } from "./pinSlots";
 import type { TeamView } from "./teams";
 import { Avatar, NeonEmblem } from "./pixel";
 
@@ -25,50 +25,34 @@ function animate(el: Element | null | undefined, frames: Keyframe[]) {
 const statusWord = (status: string) => (status === "running" || status === "error" ? status : "idle");
 
 // ── Rail tile ────────────────────────────────────────────────────────────────
-const RailTile = memo(function RailTile(props: { pin: Pin; focused: boolean; gone: boolean; onPick: (pin: Pin) => void }) {
-  const { pin, focused, gone, onPick } = props;
+// Only the *other* Buddies are tiles; the focused one is the Active Buddy Card above them.
+const RailTile = memo(function RailTile(props: { pin: Pin; onPick: (pin: Pin) => void }) {
+  const { pin, onPick } = props;
   const bs = pin.brainstorm;
-  // The focused tile is inert while its Brainstorm is in the middle; spin-up uses the explicit Spin Up button.
-  const clickable = !focused;
   const lines = usePreview(bs && bs.agent.status !== "closed" ? bs.agent.id : null);
   const [draft] = useDraft(bs ? `${bs.agent.id}:draft` : "pin-rail:none");
   const last = lines[lines.length - 1];
-  const ref = useRef<HTMLButtonElement>(null);
-  const wasFocused = useRef(focused);
-  // The Brainstorm that just left the middle shrinks back into its rail slot.
-  useLayoutEffect(() => {
-    if (wasFocused.current && !focused)
-      animate(ref.current, [
-        { transform: "scale(1.06)", opacity: 0.5 },
-        { transform: "scale(1)", opacity: 1 },
-      ]);
-    wasFocused.current = focused;
-  }, [focused]);
   return (
     <button
-      ref={ref}
       type="button"
-      className={`pin-rail-tile ${focused ? "on" : ""} ${clickable ? "" : "inert"} ${bs ? "" : "no-session"} ${pin.needsYou ? "needs-you" : ""}`}
+      className={`pin-rail-tile ${bs ? "" : "no-session"} ${pin.needsYou ? "needs-you" : ""}`}
       data-testid={`pin-rail-${pin.lane.id}`}
-      aria-current={focused ? "true" : undefined}
-      title={
-        focused && !gone ? `${pin.lane.name} is open` : bs ? `Open ${pin.lane.name}` : `${pin.lane.name}: no session · click to start a fresh Brainstorm`
-      }
-      onClick={() => clickable && onPick(pin)}
+      title={bs ? `Open ${pin.lane.name}` : `${pin.lane.name}: no session · click to start a fresh Brainstorm`}
+      onClick={() => onPick(pin)}
     >
       <Avatar id={bs ? bs.agent.id : `bs-empty-${pin.squad.id}-${pin.lane.id}`} provider={bs?.agent.provider ?? "claude"} agentType="brainstorm" size={28} />
       <span className="pin-rail-col">
         <span className="pin-rail-name">
           <PinDot pin={pin} />
           {pin.lane.name}
-          {draft.trim() && !focused && (
+          {draft.trim() && (
             <span className="tab-draft" title="Unsent draft">
               ✎
             </span>
           )}
         </span>
         <span className="pin-rail-line muted small">
-          {focused && gone ? "Start fresh Brainstorm" : focused ? (bs ? "Open in the middle" : "Starting…") : !bs ? "No session yet" : last ? `${last.who === "you" ? "you: " : ""}${last.text}` : "No messages yet"}
+          {!bs ? "No session yet" : last ? `${last.who === "you" ? "you: " : ""}${last.text}` : "No messages yet"}
         </span>
       </span>
       <NeedsBadge pin={pin} />
@@ -78,6 +62,10 @@ const RailTile = memo(function RailTile(props: { pin: Pin; focused: boolean; gon
 
 export function PinRail({ view, focus, onPick }: { view: TeamView; focus: PinFocus; onPick: (pin: Pin) => void }) {
   const { pinned } = pinsForSquad(view);
+  const hubPin = hubPinForSquad(view);
+  const active = pinned.find((p) => p.lane.id === focus.laneId) ?? (hubPin?.lane.id === focus.laneId ? hubPin : undefined);
+  const others = pinned.filter((p) => p.lane.id !== focus.laneId);
+  const bs = active?.brainstorm;
   return (
     <aside className="pin-rail" data-testid="pin-rail" aria-label={`${view.team.name} teams`}>
       <div className="pin-rail-head">
@@ -85,10 +73,30 @@ export function PinRail({ view, focus, onPick }: { view: TeamView; focus: PinFoc
         <span className="pin-rail-squad">{view.team.name}</span>
         <span className="muted small">{pinned.length} teams</span>
       </div>
-      <div className="pin-rail-list">
-        {pinned.map((p) => (
-          <RailTile key={p.lane.id} pin={p} focused={p.lane.id === focus.laneId} gone={focus.gone} onPick={onPick} />
-        ))}
+      <div className="pin-rail-scroll">
+        <section className={`pin-rail-active-buddy ${active?.needsYou ? "needs-you" : ""}`} data-testid="pin-rail-active-buddy" aria-label="Active Buddy">
+          <div className="pin-rail-active-head">
+            {active && <PinDot pin={active} />}
+            <span className="pin-rail-name">{active?.lane.name ?? focus.laneId}</span>
+            {active && <NeedsBadge pin={active} />}
+          </div>
+          {active && focus.agentId && <SendToBar pin={active} />}
+          {!focus.agentId && (
+            <span className="muted small">{focus.gone ? "No active chat" : bs ? "Starting…" : "Starting a fresh Brainstorm…"}</span>
+          )}
+          {active && <PinTeamTree pin={active} />}
+          {/* The focused drawer's DrawerHeader portals its inspector here (src/pinSlots.ts). */}
+          <div className="pin-rail-active-inspector" ref={slotRef("card")} />
+        </section>
+        <div className="pin-rail-section-label" data-testid="pin-rail-others-label">
+          Other Buddies
+        </div>
+        <div className="pin-rail-list">
+          {others.map((p) => (
+            <RailTile key={p.lane.id} pin={p} onPick={onPick} />
+          ))}
+          {others.length === 0 && <span className="muted small">No other Buddies pinned</span>}
+        </div>
       </div>
     </aside>
   );
@@ -139,9 +147,8 @@ function PinFocusBar({ view, focus, onSelectSquad }: { view: TeamView; focus: Pi
 
   const lead = pin?.lead ?? null;
   const workers = pin?.workers.length ?? 0;
-  const showPlumbing = () => {
-    setFullView(true);
-    if (lead) openAgent(lead.agent.id);
+  const openLead = () => {
+    if (pin && lead) openPinMember(pin, lead.agent.id);
   };
   return (
     <div className="pin-focus-bar" data-testid="pin-focus-bar">
@@ -149,16 +156,16 @@ function PinFocusBar({ view, focus, onSelectSquad }: { view: TeamView; focus: Pi
         ⊞
       </button>
       <TopBreadcrumb squadsHome={false} squadId={view.team.id} squadName={view.team.name} laneName={pin?.lane.name ?? focus.laneId} hub={pin ? isHubPin(pin) : false} onSelectSquad={onSelectSquad} />
-      <span className="pin-focus-name">{pin?.lane.name ?? focus.laneId}</span>
-      <span className="muted small pin-focus-squad">{view.team.name}</span>
-      {pin && focus.agentId && <SendToBar pin={pin} />}
+      {/* The focused drawer's DrawerHeader portals its compact controls here (src/pinSlots.ts). */}
+      <div className="pin-focus-slot" ref={slotRef("bar")} />
+      {!focus.agentId && <span className="pin-focus-name">{pin?.lane.name ?? focus.laneId}</span>}
       <span className="pin-focus-spacer" />
       <button
         type="button"
         className="pin-focus-plumbing small"
         data-testid="pin-focus-plumbing"
-        title="Show this team's lead, workers, handoffs and worktrees (FULL view)"
-        onClick={showPlumbing}
+        title="Open this team's Lead"
+        onClick={openLead}
       >
         Lead: {lead ? statusWord(lead.agent.status) : "none"} · {workers} {workers === 1 ? "worker" : "workers"} ▸
       </button>

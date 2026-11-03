@@ -9,17 +9,23 @@ import { fmtTok, ordOf, retiredLeadTitle, usedTokens, type Member, type TeamView
 const PARENT = "paseo.parent-agent-id";
 const labelsOf = (m: Member) => m.agent.labels as Record<string, string>;
 
-type Packet = { exists: boolean; path: string };
+type Packet = { exists: boolean; path: string; running?: boolean; error?: string };
+
+const HANDOFF_POLL_MS = 1000;
+const HANDOFF_POLL_LIMIT_MS = 60_000;
+// The remote proxy strips `path` from JSON responses, so fall back to the conventional packet location.
+const packetPathFor = (team: string, lane: string) => `~/.vibesquad/teams/${team}/packet-${lane}.md`;
 
 async function packetStatus(team: string, lane: string): Promise<Packet> {
-  if (DEMO) return { exists: false, path: `~/.vibesquad/teams/${team}/packet-${lane}.md` };
+  if (DEMO) return { exists: false, path: packetPathFor(team, lane) };
   const res = await fetch(`/__vibesquad/handoff?team=${encodeURIComponent(team)}&lane=${encodeURIComponent(lane)}`);
   if (!res.ok) throw new Error(`packet check failed (${res.status})`);
-  return res.json();
+  const p = (await res.json()) as Partial<Packet>;
+  return { ...p, exists: Boolean(p.exists), path: p.path ?? packetPathFor(team, lane) };
 }
 
 async function runHandoff(team: string, lane: string, agentId: string): Promise<Packet & { ran?: boolean; note?: string }> {
-  if (DEMO) return { exists: true, path: `~/.vibesquad/teams/${team}/packet-${lane}.md`, ran: true };
+  if (DEMO) return { exists: true, path: packetPathFor(team, lane), ran: true };
   const res = await fetch("/__vibesquad/handoff", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -27,7 +33,19 @@ async function runHandoff(team: string, lane: string, agentId: string): Promise<
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error ?? `vs handoff failed (${res.status})`);
-  return body;
+  // 202: `vs handoff` is still running server-side (it can take up to 60 s); poll until the packet lands.
+  if (res.status === 202 || body.accepted || body.running) {
+    const deadline = Date.now() + HANDOFF_POLL_LIMIT_MS;
+    let status: Packet = { exists: false, path: packetPathFor(team, lane), running: true };
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, HANDOFF_POLL_MS));
+      status = await packetStatus(team, lane);
+      if (status.exists || !status.running) break;
+    }
+    if (status.error && !status.exists) throw new Error(`vs handoff failed: ${status.error}`);
+    return { ...status, ran: !status.running };
+  }
+  return { ...body, path: body.path ?? packetPathFor(team, lane) };
 }
 
 /** Spawn the ord+1 lead, retitle the old lead, re-parent its live lane workers, and log the handoff. */
@@ -82,7 +100,7 @@ export function HandoffModal({ view, lead, onClose, onCreated }: { view: TeamVie
       .catch((e) => setErr(String(e)));
   }, [team.id, laneId]);
 
-  const packetPath = packet?.path ?? `~/.vibesquad/teams/${team.id}/packet-${laneId}.md`;
+  const packetPath = packet?.path ?? packetPathFor(team.id, laneId);
   const defaultPrompt = `You are the successor lead for the ${laneName} lane (ord${ord + 1}). Read the handoff packet at ${packetPath} first, then continue the lane. The previous lead is now "${oldTitle}"; its live workers have been re-parented to you. Reply confirming takeover so the previous lead can be retired.`;
   const prompt = promptDraft || defaultPrompt;
 

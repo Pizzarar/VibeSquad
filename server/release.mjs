@@ -82,7 +82,22 @@ export function defaultReleaseNotes(version, channel = "stable") {
   ].join("\n");
 }
 
-export function buildLatestJson({ version, channel, signature, repo = "Pizzarar/VibeSquad", pubDate = new Date().toISOString(), notes }) {
+export const DEFAULT_RELEASE_REPO = process.env.VIBESQUAD_RELEASE_REPO || "Pizzarar/VibeSquad";
+
+export function buildSigningEnv(baseEnv = process.env, keyPath = "") {
+  const password = baseEnv.TAURI_SIGNING_PRIVATE_KEY_PASSWORD ?? "";
+  return {
+    ...baseEnv,
+    ...(keyPath ? { TAURI_SIGNING_PRIVATE_KEY: keyPath, TAURI_SIGNING_PRIVATE_KEY_PATH: keyPath } : {}),
+    TAURI_SIGNING_PRIVATE_KEY_PASSWORD: password,
+  };
+}
+
+export function ghReleaseArgs(subcommandArgs, repo = DEFAULT_RELEASE_REPO) {
+  return ["release", ...subcommandArgs, "--repo", repo];
+}
+
+export function buildLatestJson({ version, channel, signature, repo = DEFAULT_RELEASE_REPO, pubDate = new Date().toISOString(), notes }) {
   const cleanVer = String(version).trim().replace(/^v/, "");
   const tag = channel === "beta" ? "beta" : `v${cleanVer}`;
   const downloadUrl = `https://github.com/${repo}/releases/download/${tag}/VibeSquad-setup.exe`;
@@ -254,11 +269,7 @@ if (isMain) {
   if (!process.env.TAURI_SIGNING_PRIVATE_KEY && !existsSync(keyPath)) {
     throw new Error(`Signing key not found at ${keyPath}. Run 'npx tauri signer generate -w ~/.tauri/vibesquad-updater.key' first.`);
   }
-  const env = {
-    ...process.env,
-    TAURI_SIGNING_PRIVATE_KEY: keyPath,
-    TAURI_SIGNING_PRIVATE_KEY_PATH: keyPath,
-  };
+  const env = buildSigningEnv(process.env, keyPath);
 
   if (!opts.skipBuild) {
     execFileSync(process.execPath, [join(rootDir, "server", "build-desktop.mjs")], {
@@ -276,11 +287,15 @@ if (isMain) {
     const tauriCliJs = require.resolve("@tauri-apps/cli/tauri.js");
     const signEnv = { ...env, TAURI_SIGNING_PRIVATE_KEY_PATH: keyPath };
     delete signEnv.TAURI_SIGNING_PRIVATE_KEY;
-    execFileSync(process.execPath, [tauriCliJs, "signer", "sign", installerPath], {
-      cwd: rootDir,
-      env: signEnv,
-      stdio: "inherit",
-    });
+    execFileSync(
+      process.execPath,
+      [tauriCliJs, "signer", "sign", "-f", keyPath, "-p", env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD, installerPath],
+      {
+        cwd: rootDir,
+        env: signEnv,
+        stdio: "inherit",
+      },
+    );
   }
   if (!existsSync(sigPath)) {
     throw new Error(`Signature file missing at ${sigPath}`);
@@ -293,14 +308,43 @@ if (isMain) {
 
   if (!opts.stageOnly) {
     const assets = [installerPath, sigPath, latestJsonPath, join(distDesktopDir, "THIRD-PARTY-LICENSES.txt")].filter((p) => existsSync(p));
-    publishRelease({
-      channel,
-      targetVersion,
-      assets,
-      latestJsonPath,
-      latestManifest,
-      signature,
-      cwd: rootDir,
-    });
+    let tagExists = false;
+    try {
+      execFileSync("gh", ghReleaseArgs(["view", tag]), { cwd: rootDir, stdio: "ignore" });
+      tagExists = true;
+    } catch {
+      const createArgs = ghReleaseArgs(["create", tag, "--title", releaseTitle, "--notes", latestManifest.notes, ...(channel === "beta" ? ["--prerelease"] : [])]);
+      execFileSync("gh", createArgs, { cwd: rootDir, stdio: "inherit" });
+    }
+    if (tagExists) {
+      execFileSync("gh", ghReleaseArgs(["edit", tag, "--title", releaseTitle, "--notes", latestManifest.notes]), { cwd: rootDir, stdio: "inherit" });
+    }
+    execFileSync("gh", ghReleaseArgs(["upload", tag, ...assets, "--clobber"]), { cwd: rootDir, stdio: "inherit" });
+    console.log(`[release:${channel}] Published ${tag} with ${assets.length} asset(s).`);
+
+    if (channel === "stable") {
+      const betaManifest = buildLatestJson({ version: targetVersion, channel: "beta", signature });
+      writeFileSync(latestJsonPath, JSON.stringify(betaManifest, null, 2) + "\n");
+      const betaTitle = `VibeSquad Beta (${targetVersion})`;
+      let betaTagExists = false;
+      try {
+        execFileSync("gh", ghReleaseArgs(["view", "beta"]), { cwd: rootDir, stdio: "ignore" });
+        betaTagExists = true;
+      } catch {
+        execFileSync("gh", ghReleaseArgs(["create", "beta", "--prerelease", "--title", betaTitle, "--notes", betaManifest.notes]), {
+          cwd: rootDir,
+          stdio: "inherit",
+        });
+      }
+      if (betaTagExists) {
+        execFileSync("gh", ghReleaseArgs(["edit", "beta", "--title", betaTitle, "--notes", betaManifest.notes]), {
+          cwd: rootDir,
+          stdio: "inherit",
+        });
+      }
+      execFileSync("gh", ghReleaseArgs(["upload", "beta", ...assets, "--clobber"]), { cwd: rootDir, stdio: "inherit" });
+      writeFileSync(latestJsonPath, JSON.stringify(latestManifest, null, 2) + "\n");
+      console.log(`[release:stable] Also synced rolling beta tag to v${targetVersion}.`);
+    }
   }
 }

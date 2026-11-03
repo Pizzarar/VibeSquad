@@ -3,20 +3,17 @@ import { clearSession, isRemote } from "./remoteSession";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { ProviderQuotaView } from "./antigravity";
-import { LEGACY_NEEDS_LABEL, dismissUpdateBanner, loadUpdaterStatus, setLanExposureState, setLocalAccess, setServerConfigWarnings, setStaleBuild, triggerUpdateInstall, useLocalReadOnly, useStaleBuild, useConfigWarnings, useExposedIpsStore, useUpdaterStatus } from "./userName";
+import { LEGACY_NEEDS_LABEL, dismissStaleBuild, dismissUpdateBanner, loadUpdaterStatus, setLanExposureState, setLocalAccess, setServerConfigWarnings, setStaleBuild, triggerUpdateInstall, useLocalReadOnly, useStaleBuild, useStaleBuildDismissed, useConfigWarnings, useExposedIpsStore, useUpdaterStatus } from "./userName";
 import { DEMO, archiveAgent, detachAgent, getPaseoState, loadArchived, retireAgent, setNeedsYou, updateAgent, upsertLocalAgent, usePaseo } from "./paseo";
 import {
   AGENT_TYPE_LABEL,
-  MAX_TREE_DEPTH,
   leadVariant,
   budgetFor,
   chainedLeads,
   findCrossTeamBrainstorm,
-  fmtTok,
   handoffPairs,
   isBrainstormAgent,
   isLanBannerDismissed,
-  isOverBudget,
   isTopicBrainstorm,
   isUnsortedMember,
   lanIpSetKey,
@@ -64,15 +61,12 @@ import {
   cleanTitle,
   clickable,
   derived,
-  getTreeState,
   sameList,
   sameMember,
   selectAgent,
   setTreeShowClosed,
   shortPath,
-  subscribeTree,
   usePaneClass,
-  useSelect,
   useTreeState,
   IdeaInbox,
   SidebarInboxBadge,
@@ -80,7 +74,7 @@ import {
 } from "./ui";
 import { WorkspacesView } from "./WorkspacesView";
 import { AttentionBadge } from "./AttentionList";
-import { FullToggle, PinGrid, SidebarPins, SquadsHome, useFullView, type PinHandler } from "./PinGrid";
+import { FullToggle, PinGrid, SidebarPins, SquadsHome, setFullView, useFullView, type PinHandler } from "./PinGrid";
 import { pinsForSquad, type Pin } from "./pins";
 import { popAction, urlAgentFor } from "./pinFocusLogic";
 import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, spinUpPin, usePinFocus, usePinsHome, useSquadsHome } from "./pinFocus";
@@ -161,7 +155,7 @@ export async function startLaneBrainstorm(opts: {
       teamId,
       laneId,
       laneName,
-      cwd,
+      // No cwd: the server derives it from the lane (and refuses it over the remote relay).
       reason: "start-brainstorm",
     }),
   });
@@ -222,209 +216,9 @@ function useAttentionAlerts(members: Member[]) {
   }, [members]);
 }
 
-// Context tokens in use across a team's live agents, plus a flag for workers past workerBudgetTokens.
-function TeamTokens({ view }: { view: TeamView }) {
-  const live = view.members.filter((m) => m.kind !== "old-lead" && m.agent.status !== "closed");
-  const total = live.reduce((n, m) => n + usedTokens(m), 0);
-  const over = live.filter(isOverBudget);
-  if (!total) return null;
-  return (
-    <div className="team-tokens" title={over.map((m) => `${m.agent.title}: ${fmtTok(usedTokens(m))}`).join(", ")}>
-      <span className="tok-total">{fmtTok(total)} tok</span>
-      {over.length > 0 && <span className="pill diag hot">{over.length} OVER BUDGET</span>}
-    </div>
-  );
-}
-
 const quotaTone = (pct?: number) => (pct === undefined ? "" : pct >= 85 ? "hot" : pct >= 60 ? "warn" : "ok");
 
 type PickTeamAgent = (teamId: string, agentId: string) => void;
-
-// Agents already on screen inside an expanded lead/brainstorm tree carry their own alert marker; the rest
-// of the team's alerts go in the sidebar alert strip.
-function sideAlerts(v: TeamView): Member[] {
-  const { open, showClosed } = getTreeState();
-  const { tree } = derived();
-  const shownInTree = (rootId: string, out: Set<string>, depth = 0) => {
-    if (!open.has(rootId) || depth >= MAX_TREE_DEPTH) return out;
-    for (const c of tree.childrenOf(rootId, showClosed))
-      if (!out.has(c.agent.id)) shownInTree(c.agent.id, out.add(c.agent.id), depth + 1);
-    return out;
-  };
-  const shown = new Set<string>();
-  for (const l of v.lanes) {
-    if (l.brainstorm) shownInTree(l.brainstorm.agent.id, shown.add(l.brainstorm.agent.id));
-    if (l.lead) shownInTree(l.lead.agent.id, shown.add(l.lead.agent.id));
-  }
-  return v.members.filter((m) => m.attention && m.kind !== "old-lead" && !shown.has(m.agent.id)).sort(alertOrder);
-}
-
-const LaneTopics = memo(
-  function LaneTopics({ laneId, topics, pick }: { laneId: string; topics: Member[]; pick: (id: string) => void }) {
-    const [open, setOpen] = useState(false);
-    if (!topics.length) return null;
-    return (
-      <div className={`lane-topics ${open ? "open" : ""}`} data-testid={`lane-topics-${laneId}`}>
-        <button
-          className="lane-topics-toggle"
-          aria-expanded={open}
-          onClick={() => setOpen((v) => !v)}
-          data-testid={`lane-topics-toggle-${laneId}`}
-        >
-          <span>
-            {open ? "▾" : "▸"} Topics ({topics.length})
-          </span>
-        </button>
-        {open && (
-          <div className="lane-topics-list">
-            {topics.map((m) => (
-              <button
-                key={m.agent.id}
-                className="lane-topic-item"
-                onClick={() => pick(m.agent.id)}
-                title={m.agent.title ?? ""}
-                data-testid={`lane-topic-item-${m.agent.id}`}
-              >
-                <StatusDot agent={m.agent} />
-                <span className="lane-topic-name">{topicOfBrainstorm(m.agent) || cleanTitle(m.agent.title)}</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  },
-  (p, n) => p.laneId === n.laneId && p.pick === n.pick && sameList(p.topics, n.topics),
-);
-
-const LeadBlock = memo(
-  function LeadBlock({
-    teamId,
-    laneId,
-    laneName,
-    cwd,
-    brainstorm,
-    lead,
-    topics = [],
-    pick,
-  }: {
-    teamId: string;
-    laneId: string;
-    laneName: string;
-    cwd: string;
-    brainstorm: Member | null;
-    lead: Member | null;
-    topics?: Member[];
-    pick: (id: string) => void;
-  }) {
-    const bsPaneCls = usePaneClass(brainstorm?.agent.id ?? "");
-    const leadPaneCls = usePaneClass(lead?.agent.id ?? "");
-    const [startingBs, setStartingBs] = useState(false);
-    const leadNeedsYou = !!(lead?.attention && lead.attention.tone !== "finished");
-
-    const onStartBs = async (e: React.MouseEvent) => {
-      e.stopPropagation();
-      if (startingBs) return;
-      setStartingBs(true);
-      try {
-        await startLaneBrainstorm({ teamId, laneId, laneName, cwd, onPick: pick });
-      } catch (err) {
-        alert(`Start brainstorm failed: ${err}`);
-      } finally {
-        setStartingBs(false);
-      }
-    };
-
-    return (
-      <div className="lead-block" data-testid={`sidebar-lane-${laneId}`}>
-        {/* DESIGN T1-4: Primary slot is the lane's active Brainstorm ("TALK HERE") */}
-        {brainstorm ? (
-          <>
-            <div className="lead-line">
-              <button
-                className={`lead-link primary-talk ${bsPaneCls}`}
-                onClick={() => pick(brainstorm.agent.id)}
-                title={brainstorm.agent.title ?? ""}
-              >
-                <Avatar
-                  id={brainstorm.agent.id}
-                  provider={brainstorm.agent.provider}
-                  agentType={brainstorm.agentType}
-                  size={28}
-                />
-                <span className="lead-name">{laneName}</span>
-                <b className="talk-here sidebar-role-pill">TALK HERE</b>
-                <StatusDot agent={brainstorm.agent} />
-              </button>
-              <TreeCaret id={brainstorm.agent.id} />
-            </div>
-            {brainstorm.attention && (
-              <div className="lead-alert">
-                <AlertPill m={brainstorm} onOpen={pick} named={false} />
-              </div>
-            )}
-            <TreeChildren parentId={brainstorm.agent.id} onPick={pick} compact />
-          </>
-        ) : (
-          <div className="lead-line">
-            <span className="lead-link muted">{laneName}</span>
-            <button
-              type="button"
-              className="btn ok small sidebar-start-bs-btn"
-              disabled={startingBs}
-              data-testid={`sidebar-start-brainstorm-${laneId}`}
-              onClick={onStartBs}
-              title={`Spawn fresh brainstorm from docs/brainstorm/${laneId}.md`}
-            >
-              {startingBs ? "…" : "+ Brainstorm"}
-            </button>
-          </div>
-        )}
-
-        {/* DESIGN T1-4: Secondary slot is the Lead ("RUNS THE WORK"), promoted when needs-you/attention */}
-        {lead && (
-          <>
-            <div className="lead-line lead-secondary-line">
-              <button
-                className={`lead-link secondary-lead ${leadNeedsYou ? "lead-needs-you" : ""} ${leadPaneCls}`}
-                onClick={() => pick(lead.agent.id)}
-                title={lead.agent.title ?? ""}
-              >
-                <Avatar
-                  id={lead.agent.id}
-                  provider={lead.agent.provider}
-                  agentType={lead.agentType}
-                  variant={leadVariant(lead)}
-                  size={24}
-                />
-                <span className="lead-name">★ {cleanTitle(lead.agent.title) || laneName}</span>
-                <span className="runs-the-work sidebar-role-pill">RUNS WORK</span>
-                <StatusDot agent={lead.agent} />
-              </button>
-              <TreeCaret id={lead.agent.id} />
-            </div>
-            {lead.attention && (
-              <div className="lead-alert">
-                <AlertPill m={lead} onOpen={pick} named={false} />
-              </div>
-            )}
-            <TreeChildren parentId={lead.agent.id} onPick={pick} compact />
-          </>
-        )}
-        {topics.length > 0 && <LaneTopics laneId={laneId} topics={topics} pick={pick} />}
-      </div>
-    );
-  },
-  (p, n) =>
-    p.teamId === n.teamId &&
-    p.laneId === n.laneId &&
-    p.laneName === n.laneName &&
-    p.cwd === n.cwd &&
-    sameMember(p.brainstorm, n.brainstorm) &&
-    sameMember(p.lead, n.lead) &&
-    sameList(p.topics ?? [], n.topics ?? []) &&
-    p.pick === n.pick,
-);
 
 const SidebarTeam = memo(function SidebarTeam({
   view: v,
@@ -445,8 +239,6 @@ const SidebarTeam = memo(function SidebarTeam({
   onAgent: PickTeamAgent;
   onQuickStart: PinHandler;
 }) {
-  const full = useFullView();
-  const others = useSelect(subscribeTree, () => sideAlerts(v), sameList);
   const pick = useCallback((id: string) => onAgent(v.team.id, id), [onAgent, v.team.id]);
   const onPin = useCallback(
     (pin: Pin) => void Promise.resolve(onQuickStart(pin)).catch((e) => alert(`Could not start ${pin.lane.name}: ${e}`)),
@@ -492,43 +284,7 @@ const SidebarTeam = memo(function SidebarTeam({
           </button>
         )}
       </div>
-      {expanded && !full && v.team.id !== UNASSIGNED.id && <SidebarPins view={v} onPin={onPin} onOpenAgent={pick} />}
-      {expanded && full && (
-        <>
-          <TeamTokens view={v} />
-          {v.lanes.map((l) => {
-            const topics = l.members.filter(
-              (m) => m.kind === "brainstorm" && isTopicBrainstorm(m.agent) && !m.agent.archivedAt,
-            );
-            if (!l.lead && !l.brainstorm && !topics.length && l.lane.id === "_other") return null;
-            return (
-              <LeadBlock
-                key={l.lane.id}
-                teamId={v.team.id}
-                laneId={l.lane.id}
-                laneName={l.lane.name}
-                cwd={l.lead?.agent.cwd || l.brainstorm?.agent.cwd || v.team.paths?.[0] || ""}
-                brainstorm={l.brainstorm}
-                lead={l.lead}
-                topics={topics}
-                pick={pick}
-              />
-            );
-          })}
-          {others.length > 0 && (
-            <div className="side-alerts">
-              {others.slice(0, 3).map((m) => (
-                <AlertPill key={m.agent.id} m={m} onOpen={pick} />
-              ))}
-              {others.length > 3 && (
-                <button className="tchip" onClick={() => onTeam(v.team.id)} title="See every alert on the team page">
-                  +{others.length - 3} more
-                </button>
-              )}
-            </div>
-          )}
-        </>
-      )}
+      {expanded && v.team.id !== UNASSIGNED.id && <SidebarPins view={v} onPin={onPin} onOpenAgent={pick} />}
     </div>
   );
 });
@@ -561,6 +317,23 @@ const Sidebar = memo(function Sidebar(props: {
   const uiScalePct = Math.round(uiScale * 100);
   const views = props.views;
   const allCollapsed = views.length > 0 && views.every((v) => props.collapsedTeams.has(v.team.id));
+  const staleBuild = useStaleBuild();
+  const [signalsOpen, setSignalsOpen] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("vs.sidebarSignalsOpen") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggleSignals = () => {
+    setSignalsOpen((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("vs.sidebarSignalsOpen", next ? "1" : "0");
+      } catch {}
+      return next;
+    });
+  };
   return (
     <nav className={`sidebar ${props.sidebarCollapsed ? "collapsed" : ""}`} data-testid="sidebar">
       <div className="brand">
@@ -601,89 +374,152 @@ const Sidebar = memo(function Sidebar(props: {
           {allCollapsed ? "Expand all" : "Collapse all"}
         </button>
       </div>
-      {views.map((v) => (
-        <SidebarTeam
-          key={v.team.id}
-          view={v}
-          active={v.team.id === props.teamId}
-          expanded={!props.collapsedTeams.has(v.team.id)}
-          onTeamHeaderClick={props.onTeamHeaderClick}
-          onToggleExpand={props.onToggleTeamExpand}
-          onTeam={props.onTeam}
-          onAgent={props.onAgent}
-          onQuickStart={props.onQuickStart}
-        />
-      ))}
-      <button
-        type="button"
-        className="btn ghost small sidebar-new-squad-btn"
-        data-testid="sidebar-new-squad-btn"
-        title="Add a new squad (project folder or clone repo)"
-        onClick={props.onNewSquad}
-      >
-        {props.sidebarCollapsed ? "+" : "+ New squad"}
-      </button>
-      <div className="sidebar-legend">
-        <div className="legend-title">PROVIDER SIGNALS</div>
-        <div className="legend-row">
-          <span style={{ color: "#ff8573" }}>✶ Claude</span>
-          <span style={{ color: "#38f6ff" }}>◆ Gemini</span>
-          <span style={{ color: "#c28cff" }}>▲ DeepSeek</span>
-          <span style={{ color: "#e2e8f0" }}>● Codex</span>
-        </div>
-        {props.usage.map((u) => {
-          const prov = providerSpec(u.provider);
-          return (
-            <div
-              key={`${u.provider}-${u.account ?? ""}`}
-              className={`quota-pill ${quotaTone(u.usedPct)}`}
-              title={[u.account, u.resetAt && `resets ${new Date(u.resetAt).toLocaleString()}`, u.staleModelListWarning && "model list may be stale"].filter(Boolean).join(" · ")}
-            >
-              <span style={{ color: prov.color }}>{prov.symbol} {prov.name}</span>
-              <span>{u.usedPct !== undefined ? `${Math.round(u.usedPct)}% used` : u.remainingLabel}</span>
-              <span className="quota-bar"><i style={{ width: `${u.usedPct ?? 0}%` }} /></span>
-            </div>
-          );
-        })}
+      <div className="sidebar-scroll" data-testid="sidebar-scroll">
+        {views.map((v) => (
+          <SidebarTeam
+            key={v.team.id}
+            view={v}
+            active={v.team.id === props.teamId}
+            expanded={!props.collapsedTeams.has(v.team.id)}
+            onTeamHeaderClick={props.onTeamHeaderClick}
+            onToggleExpand={props.onToggleTeamExpand}
+            onTeam={props.onTeam}
+            onAgent={props.onAgent}
+            onQuickStart={props.onQuickStart}
+          />
+        ))}
+        <button
+          type="button"
+          className="btn ghost small sidebar-new-squad-btn"
+          data-testid="sidebar-new-squad-btn"
+          title="Add a new squad (project folder or clone repo)"
+          onClick={props.onNewSquad}
+        >
+          {props.sidebarCollapsed ? "+" : "+ New squad"}
+        </button>
       </div>
-      {isRemote() ? (
+      <div className="sidebar-dock" data-testid="sidebar-dock">
         <button
-          className="btn ghost small"
-          data-testid="sidebar-unpair-btn"
-          onClick={() => {
-            clearSession();
-            location.reload();
-          }}
-          title="Forget the saved pairing and password on this browser"
+          type="button"
+          className="sidebar-signals-toggle"
+          data-testid="sidebar-signals-toggle"
+          onClick={toggleSignals}
+          title="Toggle provider quota signals"
         >
-          🔌 UNPAIR DEVICE
+          <span>PROVIDER SIGNALS {signalsOpen ? "▾" : "▸"}</span>
+          <span className="sidebar-signals-dots">
+            <span style={{ color: "#ff8573" }}>✶</span>
+            <span style={{ color: "#38f6ff" }}>◆</span>
+            <span style={{ color: "#c28cff" }}>▲</span>
+            <span style={{ color: "#e2e8f0" }}>●</span>
+          </span>
         </button>
-      ) : (
-        <button className="btn ghost small" onClick={props.onPairDevice} title="Pair a phone or PC over NordVPN Meshnet HTTPS">
-          📱 PAIR DEVICE
-        </button>
-      )}
-      <button className="btn ghost small" data-testid="about-licenses-btn" onClick={props.onAbout} title="About VibeSquad and third-party licenses">
-        ℹ ABOUT &amp; LICENSES
-      </button>
-      <button className="btn ghost small" data-testid="open-help-btn" onClick={props.onHelp}>
-        ❓ Help &amp; Docs
-      </button>
-      <button className="btn ghost small" data-testid="open-diagnostics-btn" onClick={props.onDiagnostics}>
-        🩺 Diagnostics &amp; Logs
-      </button>
-      <div className="sidebar-footer-row">
-        <button className="btn ghost small" data-testid="sidebar-settings-btn" onClick={props.onSettings} title="Settings: app, chat, notifications, teams, Paseo, profiles">
-          ⚙ SETTINGS
-        </button>
-        <button
-          className={`btn ghost small ui-scale-sidebar-btn ${uiScalePct !== 100 ? "on" : ""}`}
-          onClick={() => cycleUiScalePreset(true)}
-          title="Cycle UI scale preset (Ctrl+= / Ctrl+- / Ctrl+0)"
-          data-testid="sidebar-ui-scale-btn"
-        >
-          🔍 {uiScalePct}%
-        </button>
+        {signalsOpen && (
+          <div className="sidebar-legend">
+            <div className="legend-title">PROVIDER SIGNALS</div>
+            <div className="legend-row">
+              <span style={{ color: "#ff8573" }}>✶ Claude</span>
+              <span style={{ color: "#38f6ff" }}>◆ Gemini</span>
+              <span style={{ color: "#c28cff" }}>▲ DeepSeek</span>
+              <span style={{ color: "#e2e8f0" }}>● Codex</span>
+            </div>
+            {props.usage.map((u) => {
+              const prov = providerSpec(u.provider);
+              return (
+                <div
+                  key={`${u.provider}-${u.account ?? ""}`}
+                  className={`quota-pill ${quotaTone(u.usedPct)}`}
+                  title={[u.account, u.resetAt && `resets ${new Date(u.resetAt).toLocaleString()}`, u.staleModelListWarning && "model list may be stale"].filter(Boolean).join(" · ")}
+                >
+                  <span style={{ color: prov.color }}>{prov.symbol} {prov.name}</span>
+                  <span>{u.usedPct !== undefined ? `${Math.round(u.usedPct)}% used` : u.remainingLabel}</span>
+                  <span className="quota-bar"><i style={{ width: `${u.usedPct ?? 0}%` }} /></span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <div className="sidebar-footer-row">
+          <div className="sidebar-footer-left">
+            <button
+              type="button"
+              className={`btn ghost small ui-scale-sidebar-btn ${uiScalePct !== 100 ? "on" : ""}`}
+              onClick={() => cycleUiScalePreset(true)}
+              title="Cycle UI scale preset (Ctrl+= / Ctrl+- / Ctrl+0)"
+              data-testid="sidebar-ui-scale-btn"
+            >
+              🔍 {uiScalePct}%
+            </button>
+            {isRemote() ? (
+              <button
+                type="button"
+                className="btn ghost small sidebar-icon-btn"
+                data-testid="sidebar-unpair-btn"
+                onClick={() => {
+                  clearSession();
+                  location.reload();
+                }}
+                title="Unpair Device — forget the saved pairing and password on this browser"
+                aria-label="Unpair Device"
+              >
+                🔌
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn ghost small sidebar-icon-btn"
+                onClick={props.onPairDevice}
+                title="Pair a phone or PC over LAN / Meshnet / Remote Relay"
+                aria-label="Pair Device"
+              >
+                📱
+              </button>
+            )}
+          </div>
+          <div className="sidebar-footer-right">
+            <button
+              type="button"
+              className="btn ghost small sidebar-icon-btn"
+              data-testid="open-help-btn"
+              onClick={props.onHelp}
+              title="Help & Docs"
+              aria-label="Help & Docs"
+            >
+              ❓
+            </button>
+            <button
+              type="button"
+              className="btn ghost small sidebar-icon-btn"
+              data-testid="about-licenses-btn"
+              onClick={props.onAbout}
+              title="About VibeSquad & Third-Party Licenses"
+              aria-label="About & Licenses"
+            >
+              ℹ
+            </button>
+            <button
+              type="button"
+              className="btn ghost small sidebar-icon-btn"
+              data-testid="open-diagnostics-btn"
+              onClick={props.onDiagnostics}
+              title={staleBuild ? `Diagnostics & Logs (build ${staleBuild.behind} commit(s) behind)` : "Diagnostics & Logs"}
+              aria-label="Diagnostics & Logs"
+            >
+              🩺
+              {staleBuild && !isRemote() && <span className="sidebar-stale-dot" />}
+            </button>
+            <button
+              type="button"
+              className="btn ghost small sidebar-icon-btn sidebar-cog-btn"
+              data-testid="sidebar-settings-btn"
+              onClick={props.onSettings}
+              title="Settings: app, chat, notifications, teams, Paseo, profiles"
+              aria-label="Settings"
+            >
+              ⚙
+            </button>
+          </div>
+        </div>
       </div>
       <div
         className="sidebar-resizer"
@@ -1173,7 +1009,9 @@ const TeamPage = memo(function TeamPage(props: {
 }) {
   const { view, unassignedMembers, onPick, query, showOld, archivedMembers } = props;
   const full = useFullView();
-  const alerts = view.members.filter((m) => m.attention && m.kind !== "old-lead").sort(alertOrder);
+  const [showDoneAlerts, setShowDoneAlerts] = useState(false);
+  const alerts = view.members.filter((m) => m.attention && m.attention.tone !== "finished" && m.kind !== "old-lead").sort(alertOrder);
+  const doneAlerts = view.members.filter((m) => m.attention?.tone === "finished" && m.kind !== "old-lead").sort(alertOrder);
   const worktrees = useMemo(() => {
     const map = new Map<string, number>();
     for (const m of view.members) if (m.agent.status !== "closed") map.set(m.agent.cwd, (map.get(m.agent.cwd) ?? 0) + 1);
@@ -1246,11 +1084,23 @@ const TeamPage = memo(function TeamPage(props: {
         </div>
       </header>
 
-      {alerts.length > 0 && (
+      {(alerts.length > 0 || doneAlerts.length > 0) && (
         <div className="header-alerts">
           {alerts.map((m) => (
             <AlertPill key={m.agent.id} m={m} onOpen={onPick} />
           ))}
+          {doneAlerts.length > 0 && (
+            <button
+              type="button"
+              className="tchip"
+              aria-expanded={showDoneAlerts}
+              data-testid="team-completed-toggle"
+              onClick={() => setShowDoneAlerts((v) => !v)}
+            >
+              {showDoneAlerts ? "▾" : "▸"} Completed ({doneAlerts.length})
+            </button>
+          )}
+          {showDoneAlerts && doneAlerts.map((m) => <AlertPill key={m.agent.id} m={m} onOpen={onPick} />)}
         </div>
       )}
       <HandoffPanel handoff={handoff} />
@@ -1329,6 +1179,7 @@ const TeamPage = memo(function TeamPage(props: {
                 (m) => !(m.attention && m.attention.tone !== "finished") && m.agent.status !== "running" && m.agent.status !== "closed",
               )}
               onPick={onPick}
+              collapsed
               archive
             />
             <Section title="Closed" collapsed members={live.filter((m) => m.agent.status === "closed")} onPick={onPick} archive />
@@ -1384,7 +1235,12 @@ const Toolbar = memo(function Toolbar(props: {
       <div className="seg">
         <button
           className={props.screen === "teams" ? "on" : ""}
-          onClick={() => (props.screen === "teams" ? enterSquadsHome() : props.onScreen("teams"))}
+          onClick={() => {
+            setFullView(false);
+            setFocus(false);
+            if (props.screen !== "teams") props.onScreen("teams");
+            enterSquadsHome();
+          }}
         >
           SQUADS
         </button>
@@ -1576,6 +1432,7 @@ export function App() {
   const updaterStatus = useUpdaterStatus();
   const configWarnings = useConfigWarnings();
   const staleBuild = useStaleBuild();
+  const staleBuildDismissed = useStaleBuildDismissed();
   const localReadOnly = useLocalReadOnly();
   useEffect(() => {
     void loadUpdaterStatus();
@@ -1724,6 +1581,8 @@ export function App() {
   // Stable callbacks so the memoized sidebar and team page skip renders they do not need.
   // Switching teams never touches open tabs.
   const onTeam = useCallback((id: string) => {
+    setFullView(false);
+    setFocus(false);
     exitSquadsHome();
     setTeamId(id);
     setScreen("teams");
@@ -1740,6 +1599,8 @@ export function App() {
 
   // Clicking a squad name opens its overview (expanding it if collapsed); only the caret collapses.
   const onTeamHeaderClick = useCallback((id: string) => {
+    setFullView(false);
+    setFocus(false);
     exitSquadsHome();
     setTeamId(id);
     setScreen("teams");
@@ -1870,7 +1731,7 @@ export function App() {
   const leftPinLayout = useRef(false);
   useEffect(() => {
     if (!pinLayout) clearPinFocus();
-    else if (leftPinLayout.current) exitSquadsHome(); // back from FULL / focus mode: land on the grid
+    else if (leftPinLayout.current && !getSquadsHome()) exitSquadsHome(); // back from FULL / focus mode: land on the grid (unless SQUADS asked for Squads Home)
     leftPinLayout.current = !pinLayout;
   }, [pinLayout]);
   const dateGrouped = useMemo(() => {
@@ -1942,7 +1803,7 @@ export function App() {
           </button>
         </div>
       )}
-      {localReadOnly && (
+      {localReadOnly && !isRemote() && (
         <div
           className="read-only-banner"
           data-testid="read-only-banner"
@@ -1952,14 +1813,31 @@ export function App() {
           Read-only: this tab has no VibeSquad local token. Open VibeSquad from its launcher or desktop app, or run vs open.
         </div>
       )}
-      {staleBuild && (
+      {staleBuild && !isRemote() && !staleBuildDismissed && (
         <div
           className="stale-build-banner"
           data-testid="stale-build-banner"
-          role="alert"
-          style={{ gridColumn: "1 / -1", background: "#ffb000", color: "#05060d", fontWeight: 800, padding: "6px 12px", textAlign: "center" }}
+          role="status"
         >
-          {`Running an older build: ${staleBuild.behind} commit${staleBuild.behind === 1 ? "" : "s"} behind. Rebuild.`}
+          <span>
+            {`Running an older build: ${staleBuild.behind} commit${staleBuild.behind === 1 ? "" : "s"} behind (${staleBuild.built} → ${staleBuild.head}).`}
+          </span>
+          <button
+            type="button"
+            className="btn small ghost"
+            onClick={() => setModal("diagnostics")}
+          >
+            Diagnostics
+          </button>
+          <button
+            type="button"
+            className="btn small ghost"
+            data-testid="dismiss-stale-build-btn"
+            aria-label="Dismiss older build notice"
+            onClick={() => dismissStaleBuild()}
+          >
+            ✕
+          </button>
         </div>
       )}
       {configWarnings.length > 0 && (
@@ -2124,7 +2002,7 @@ export function App() {
       {(withPanes || pinFocused) && (
         <AgentPanes
           onSuccessor={paneSuccessor}
-          header={pinFocusView && pinFocus ? <PinFocusHeader view={pinFocusView} focus={pinFocus} onStart={onSpinUpPin} onSelectSquad={onTeam} belowBar={<HubBar view={pinFocusView} onOpen={onQuickStart} />} /> : undefined}
+          header={pinFocusView && pinFocus ? <PinFocusHeader view={pinFocusView} focus={pinFocus} onStart={onSpinUpPin} onSelectSquad={onTeam} belowBar={pinFocus.agentId ? undefined : <HubBar view={pinFocusView} onOpen={onQuickStart} />} /> : undefined}
         />
       )}
       {pinFocusView && pinFocus && <PinRail view={pinFocusView} focus={pinFocus} onPick={onRailPick} />}

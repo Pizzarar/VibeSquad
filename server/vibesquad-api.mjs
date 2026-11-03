@@ -330,6 +330,16 @@ const overArchiveBudget = (res) => {
   return true;
 };
 
+// Agent spawns reachable over HTTP (brainstorm-restart start + restart) get their own budget, so a remote
+// loop can't flood the host with Buddies even within the proxy's per-endpoint limit.
+export const SPAWN_BUDGET_PER_MIN = 10;
+export const spawnBudget = createWindowLimiter({ max: SPAWN_BUDGET_PER_MIN });
+const overSpawnBudget = (res) => {
+  if (spawnBudget.take()) return false;
+  sendJson(res, 429, { ok: false, error: `too many agent spawns: ${SPAWN_BUDGET_PER_MIN} per minute` });
+  return true;
+};
+
 function readBody(req) {
   return new Promise((ok, fail) => {
     let body = "";
@@ -800,8 +810,12 @@ async function handleAttach(req, res, rootDir, opts = {}) {
 }
 
 // `vs handoff` runs async (it used to execFileSync for up to 60 s and stall every request), one at a time.
+// POST waits at most HANDOFF_HTTP_WAIT_MS, then answers 202 and the run finishes in the background; the UI
+// polls GET (running/exists/error). That keeps it well under the 10 s remote proxy timeout.
 export const HANDOFF_TIMEOUT_MS = 60_000;
+export const HANDOFF_HTTP_WAIT_MS = 2000;
 let handoffRunning = false;
+let lastHandoffError = null;
 const runVsHandoff = (cli, rootDir, env) =>
   new Promise((ok, fail) => {
     execFile(process.execPath, [cli, "handoff"], { cwd: rootDir, env, timeout: HANDOFF_TIMEOUT_MS, windowsHide: true }, (err) =>
@@ -818,7 +832,14 @@ async function handleHandoff(req, res, rootDir) {
     const lane = String(q?.get("lane") ?? body.lane ?? "");
     if (!TEAM_ID.test(team) || !TEAM_ID.test(lane)) return sendJson(res, 400, { error: "bad team/lane" });
     const packet = join(teamDir(team), `packet-${lane}.md`);
-    if (req.method === "GET") return sendJson(res, 200, { exists: existsSync(packet), path: packet });
+    if (req.method === "GET") {
+      return sendJson(res, 200, {
+        exists: existsSync(packet),
+        path: packet,
+        running: handoffRunning,
+        ...(lastHandoffError ? { error: lastHandoffError } : {}),
+      });
+    }
     if (req.method !== "POST") {
       res.statusCode = 405;
       return res.end();
@@ -828,11 +849,28 @@ async function handleHandoff(req, res, rootDir) {
     if (!existsSync(cli)) return sendJson(res, 200, { exists: existsSync(packet), path: packet, ran: false, note: "cli/vs.mjs not found" });
     if (handoffRunning) return sendJson(res, 429, { error: "a handoff is already running; try again when it finishes" });
     handoffRunning = true;
-    try {
-      await runVsHandoff(cli, rootDir, { ...process.env, ...(body.agentId ? { PASEO_AGENT_ID: String(body.agentId) } : {}) });
-    } finally {
-      handoffRunning = false;
-    }
+    lastHandoffError = null;
+    const run = runVsHandoff(cli, rootDir, { ...process.env, ...(body.agentId ? { PASEO_AGENT_ID: String(body.agentId) } : {}) })
+      .then(
+        () => ({ done: true }),
+        (err) => {
+          lastHandoffError = String(err?.message ?? err);
+          return { done: true, error: lastHandoffError };
+        },
+      )
+      .finally(() => {
+        handoffRunning = false;
+      });
+    let timer;
+    const outcome = await Promise.race([
+      run,
+      new Promise((ok) => {
+        timer = setTimeout(() => ok({ done: false }), HANDOFF_HTTP_WAIT_MS);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (!outcome.done) return sendJson(res, 202, { exists: existsSync(packet), path: packet, accepted: true, running: true });
+    if (outcome.error) return sendJson(res, 500, { error: outcome.error });
     sendJson(res, 200, { exists: existsSync(packet), path: packet, ran: true });
   } catch (e) {
     sendJson(res, 500, { error: String(e) });
@@ -929,7 +967,13 @@ async function handleBrainstormRestart(req, res, rootDir) {
     if (body?.agentId != null && body.agentId !== "" && !AGENT_ID_STRICT.test(String(body.agentId))) {
       return sendJson(res, 400, { ok: false, error: "bad agentId" });
     }
-    if (body.reason !== "start-brainstorm" && overArchiveBudget(res)) return;
+    if (body.reason === "start-brainstorm" || body.agentId === "start-brainstorm") {
+      if (overSpawnBudget(res)) return;
+    } else {
+      // A restart archives the old Buddy and spawns a new one: it spends from both budgets.
+      if (overArchiveBudget(res)) return;
+      if (overSpawnBudget(res)) return;
+    }
     const result = await performBrainstormRestart(body, rootDir);
     // ok:false (e.g. agent-list-unavailable) must not look like success to the UI.
     return sendJson(res, result?.ok === false ? 503 : 200, result);

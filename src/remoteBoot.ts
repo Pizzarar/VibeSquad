@@ -4,7 +4,7 @@
 // client and it is connected. Local boot and the pairing screen: nothing is installed.
 
 import { installRemoteTransport, type VsHttpInvoke } from "./remoteTransport.ts";
-import { isRemote, needsPairing } from "./remoteSession.ts";
+import { clearSession, isLocalHost, isRemote, needsPairing, offerFromHash, readSession, stripRemoteFromUrl } from "./remoteSession.ts";
 
 type RemoteConnState = { status: string; reason?: string; nextRetryAt?: string };
 
@@ -66,4 +66,24 @@ export function bindRemoteClient(client: RemoteRpcClient): void {
 }
 
 export const remoteShimInstalled = isRemote() && !needsPairing(true, location.hash);
+
+// Fallback when the build had no baked-in serverId: ask the local server who it is. If the "remote" target is
+// this very PC, forget the pairing and reload as a plain local window. Uses native fetch, captured before the shim.
+if (typeof window !== "undefined" && isRemote() && isLocalHost(location.hostname)) {
+  const nativeFetch = window.fetch.bind(window);
+  const target = offerFromHash(location.hash) ?? readSession()?.offer ?? null;
+  if (target) {
+    void nativeFetch("/__vibesquad/paseo/status")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (j && typeof j.serverId === "string" && j.serverId === target.serverId) {
+          clearSession();
+          history.replaceState(null, "", stripRemoteFromUrl(location));
+          location.reload();
+        }
+      })
+      .catch(() => {});
+  }
+}
+
 if (remoteShimInstalled) installRemoteTransport(remoteInvoke(bound));

@@ -11,13 +11,27 @@ export type VsHttpInvoke = (input: VsHttpRequest) => Promise<unknown>;
 export const REMOTE_FLAG_KEY = "vs.remote";
 export const MAX_REMOTE_REQ_BODY_BYTES = 256 * 1024;
 
+const STATUS_TAIL = /\[(\d{3})\](?:\s+\w+=\S+)*\s*$/;
+
+/** Plain-English message for a vs.http rejection: strips Paseo's DaemonRpcError wrapping, keeps `[status]`. */
+export function formatRemoteRpcError(err: unknown): string {
+  const raw = String((err && typeof err === "object" ? (err as { message?: unknown }).message : err) ?? "");
+  const msg = raw.replace(/^\s*DaemonRpcError:\s*/, "").replace(/^Request failed:\s*/, "");
+  const m = STATUS_TAIL.exec(msg);
+  const status = m ? m[1] : "";
+  if (/vs\.http:\s*(?:[A-Z]+\s+)?not available remotely/i.test(msg)) {
+    return `Starting Buddies and handoffs only works on the host PC [${status || "403"}]`;
+  }
+  return msg.replace(/(\s+(?:requestType|code)=\S+)+\s*$/, "").trim();
+}
+
 export function errorToRemoteResponse(err: unknown): Response | null {
-  const msg = String((err && typeof err === "object" ? (err as { message?: unknown }).message : err) ?? "");
-  if (!msg) return null;
-  const m = /\[(\d{3})\]\s*$/.exec(msg);
-  const status = m ? Number(m[1]) : /vs\.http:\s*remote access is off/i.test(msg) ? 403 : 0;
+  const raw = String((err && typeof err === "object" ? (err as { message?: unknown }).message : err) ?? "");
+  if (!raw) return null;
+  const m = STATUS_TAIL.exec(raw);
+  const status = m ? Number(m[1]) : /vs\.http:\s*remote access is off/i.test(raw) ? 403 : 0;
   if (status >= 400 && status <= 599) {
-    return new Response(JSON.stringify({ ok: false, error: msg }), {
+    return new Response(JSON.stringify({ ok: false, error: formatRemoteRpcError(err) }), {
       status,
       headers: { "content-type": "application/json" },
     });

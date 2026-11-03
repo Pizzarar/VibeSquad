@@ -16,6 +16,8 @@ import {
   mapRemoteError,
   needsPairing,
   normalizeOfferInput,
+  offerFromHash,
+  stripRemoteFromUrl,
   noteAuthFailure,
   parseOfferInput,
   peekAuthNote,
@@ -25,6 +27,7 @@ import {
   saveSession,
   takeAuthNote,
 } from "../src/remoteSession.ts";
+import { errorToRemoteResponse, formatRemoteRpcError } from "../src/remoteTransport.ts";
 import { remoteInvoke, remoteShimInstalled, whenConnected } from "../src/remoteBoot.ts";
 
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
@@ -85,7 +88,7 @@ describe("remote mode detection", () => {
       assert.equal(detectRemote({ ...base, hostname, hash: "#offer=abc" }), false, `${hostname} #offer`);
       assert.equal(detectRemote({ ...base, hostname, storage: sSession }), false, `${hostname} storedSession`);
       assert.equal(detectRemote({ ...base, hostname, storage: sFlag }), false, `${hostname} storedFlag`);
-      assert.equal(detectRemote({ ...base, hostname, search: "?remote=1" }), true, `${hostname} ?remote=1`);
+      assert.equal(detectRemote({ ...base, hostname, search: "?remote=1" }), false, `${hostname} bare ?remote=1 is local`);
       assert.equal(detectRemote({ ...base, hostname, buildFlag: true }), true, `${hostname} buildFlag`);
     }
   });
@@ -328,5 +331,52 @@ describe("remote shim invoke waits for the relay connection", () => {
     const out = await p;
     assert.equal(out.status, 200);
     assert.deepEqual(c.calls, [{ pluginId: "vibesquad", method: "vs.http", input: { method: "GET", path: "/api/teams" } }]);
+  });
+});
+
+describe("local relay mode (bug7): never relay to yourself", () => {
+  const base = { search: "", hash: "", storage: mem(), buildFlag: false };
+  const other = { ...OFFER, serverId: "srv_other" };
+  const localId = OFFER.serverId;
+  for (const hostname of ["127.0.0.1", "localhost", "tauri.localhost"]) {
+    test(`${hostname}: bare / own-daemon ?remote=1 is local, another PC's offer is remote`, () => {
+      const env = { ...base, hostname, search: "?remote=1", localServerId: localId };
+      assert.equal(detectRemote(env), false, "bare");
+      assert.equal(detectRemote({ ...env, hash: `#offer=${b64url(other)}` }), true, "different serverId");
+      assert.equal(detectRemote({ ...env, hash: `#offer=${b64url(OFFER)}` }), false, "same serverId");
+      const sOther = mem();
+      saveSession(other, "", false, sOther, null);
+      assert.equal(detectRemote({ ...env, storage: sOther }), true, "stored other");
+      const sSame = mem();
+      saveSession(OFFER, "", false, sSame, null);
+      assert.equal(detectRemote({ ...env, storage: sSame }), false, "stored same");
+    });
+  }
+  test("offerFromHash / stripRemoteFromUrl", () => {
+    assert.deepEqual(offerFromHash(`#offer=${b64url(OFFER)}`), OFFER);
+    assert.equal(offerFromHash("#offer=!!!"), null);
+    assert.equal(offerFromHash(""), null);
+    assert.equal(stripRemoteFromUrl({ pathname: "/", search: "?remote=1&team=a", hash: "" }), "/?team=a");
+    assert.equal(stripRemoteFromUrl({ pathname: "/", search: "?remote=1", hash: "#offer=abc" }), "/");
+    assert.equal(stripRemoteFromUrl({ pathname: "/x", search: "", hash: "#a=1&offer=abc" }), "/x#a=1");
+  });
+  test("DaemonRpcError 'not available remotely' becomes a plain-English 403", async () => {
+    const err = new Error(
+      "DaemonRpcError: Request failed: vs.http: not available remotely: /__vibesquad/brainstorm-restart [403] requestType=plugin.rpc.invoke.request code=handler_error",
+    );
+    const r = errorToRemoteResponse(err);
+    assert.equal(r.status, 403);
+    const { error } = await r.json();
+    assert.match(error, /Starting Buddies and handoffs only works on the host PC/);
+    assert.doesNotMatch(error, /DaemonRpcError|requestType=/);
+    assert.equal(formatRemoteRpcError(err), error);
+    assert.equal(formatRemoteRpcError(new Error("DaemonRpcError: Request failed: vs.http: Rejected [400] requestType=x code=y")), "vs.http: Rejected [400]");
+  });
+  test("modals never send a local window to bare /?remote=1", () => {
+    const diag = read("src/DiagnosticsModal.tsx");
+    const pair = read("src/PairDeviceModal.tsx");
+    assert.match(diag, /isLocalHost\(location\.hostname\)/);
+    assert.match(pair, /!isLocalHost\(location\.hostname\)/);
+    assert.doesNotMatch(pair, /\n\s*window\.location\.href = "\/\?remote=1";\n\s*\}\}/);
   });
 });

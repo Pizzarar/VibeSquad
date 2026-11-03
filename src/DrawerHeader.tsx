@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { PaseoAgent } from "@getpaseo/client";
 import { buildAgentDeepLink } from "@getpaseo/protocol/agent-deep-link";
 import {
@@ -30,12 +31,15 @@ import { Avatar, TokenMeter, providerSpec } from "./pixel";
 import { AgentActions, StatusDot, ago, shortPath, useTick } from "./ui";
 import { LEGACY_NEEDS_LABEL, LEGACY_NEEDS_REASON, LEGACY_NEEDS_UNTIL, needsYouBadge, useUserName } from "./userName";
 import { AGENT_TYPE_LABEL, expectedTitleFor, kindOf, leadLadderFor, leadVariant } from "./teams";
-import type { AgentType } from "./teams";
+import type { AgentType, Member } from "./teams";
 import type { Entry } from "./Timeline";
 import { ImportSessionModal, SchedulesPanel } from "./SchedulesPanel";
-import { openAgent, openAgentInTab } from "./panes";
+import { openAgent, openAgentInTab, usePanes } from "./panes";
 import { exportFileName, forkSummaryPrompt, forkTitle, transcriptToJson, transcriptToMarkdown } from "./sessionLifecycle";
 import { openBriefEditor } from "./pinActions";
+import { useInFocusedLane, usePinFocus } from "./pinFocus";
+import { WorkingChip } from "./WorkingBar";
+import { usePinSlot, useRailCardVisible } from "./pinSlots";
 import { FeaturesMenu } from "./FeaturesMenu";
 import { SandboxView } from "./SandboxView";
 
@@ -420,6 +424,8 @@ export type DrawerHeaderProps = {
   budget: number | undefined;
   team: any;
   runningSubs: number;
+  working: Member[];
+  extraSubs: number;
   laneId: string;
   entries: Entry[];
   active: boolean;
@@ -575,6 +581,8 @@ export function DrawerHeader({
   budget,
   team,
   runningSubs,
+  working,
+  extraSubs,
   laneId,
   entries,
   active,
@@ -674,17 +682,7 @@ export function DrawerHeader({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [active, agent, modeBusy]);
 
-  return (
-    <>
-      <header className="drawer-head" style={{ flexWrap: "wrap", padding: "8px 12px", gap: 8, alignItems: "center" }}>
-        <Avatar id={agent.id} provider={agent.provider} agentType={agentType} variant={leadVariant(agent)} size={40} />
-        <div className="drawer-id" style={{ flex: "1 1 240px", minWidth: 0 }}>
-          <div className="drawer-role-line" style={{ flexWrap: "wrap", gap: 4 }}>
-            <span className="role-tag">{AGENT_TYPE_LABEL[agentType]}</span>
-            <span className="prov-pill" style={{ color: prov.color, borderColor: prov.color }}>
-              {prov.symbol} {prov.name}
-            </span>
-            {(() => {
+  const modeSelect = (() => {
               const modes = (!DEMO && agent.availableModes?.length) ? agent.availableModes : FALLBACK_MODES;
               return (
                 <select
@@ -705,7 +703,8 @@ export function DrawerHeader({
                   ))}
                 </select>
               );
-            })()}
+            })();
+  const thinkingSelect = (
             <select
               data-testid="drawer-thinking-select"
               className="drawer-thinking-select"
@@ -724,6 +723,9 @@ export function DrawerHeader({
                 <option value={agent.thinkingOptionId}>{agent.thinkingOptionId}</option>
               )}
             </select>
+  );
+  const featureChips = (
+    <>
             <FeaturesMenu agent={agent} />
             <SandboxView agent={agent} />
             {(() => {
@@ -734,12 +736,10 @@ export function DrawerHeader({
                 </span>
               ) : null;
             })()}
-          </div>
-          <div className="drawer-title" style={{ fontSize: 15 }}>
-            <StatusDot agent={agent} /> <AgentTitleEdit agent={agent}>{agent.title ?? agent.id.slice(0, 8)}</AgentTitleEdit>
-          </div>
-          <div className="muted small drawer-meta-line" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4 }}>
-            <span>{agent.provider}/</span>
+    </>
+  );
+  const modelControl = (
+    <>
             <input
               data-testid="drawer-model-control"
               className="drawer-model-input"
@@ -767,6 +767,10 @@ export function DrawerHeader({
                 <option key={m} value={m} />
               ))}
             </datalist>
+    </>
+  );
+  const metaRest = (
+    <>
             <span>· {shortPath(agent.cwd)}</span>
             <button
               data-testid="drawer-copy-cwd-btn"
@@ -796,10 +800,10 @@ export function DrawerHeader({
             >
               {copyIdFlash ? "✓ ID" : agent.id.slice(0, 8)}
             </button>
-          </div>
-          {!isBs && <TokenMeter used={used} budget={budget ?? 0} ladder={kindOf(agent) === "lead" ? leadLadderFor(team) : undefined} />}
-        </div>
-        <div className="drawer-actions" style={{ flexWrap: "wrap", gap: 4, alignItems: "center" }}>
+    </>
+  );
+  const extraActions = (
+    <>
           {switchTarget && (
             <button
               data-testid="drawer-switch-provider-btn"
@@ -896,6 +900,32 @@ export function DrawerHeader({
           {modelError && <span className="small drawer-reload-error" role="alert" style={{ color: "var(--bad, #e5484d)" }}>{modelError}</span>}
           {reloadError && <span className="small muted drawer-reload-error">{reloadError}</span>}
           <AgentActions agent={agent} archive />
+    </>
+  );
+
+  // Pin-focus (single ~44px bar): the focused Brainstorm's compact controls go into PinFocusBar and its inspector
+  // into the PinRail's Active Buddy Card. Same component, same state — only where it renders changes.
+  const pinFocus = usePinFocus();
+  const barSlot = usePinSlot("bar");
+  const cardSlot = usePinSlot("card");
+  // Whichever lane drawer (Buddy, Lead, worker, topic Buddy) is the left-pane tab owns the slots, so exactly one portals.
+  // Not at <=900px where the rail hides the Active Buddy Card: there the full inline inspector comes back.
+  const shownHere = usePanes().leftActiveId === agent.id;
+  const inLane = useInFocusedLane(agent.id);
+  const railCardVisible = useRailCardVisible();
+  const compact = !!pinFocus && shownHere && inLane && railCardVisible && !!barSlot && !!cardSlot;
+
+  const paseoLink = (
+    <>
+          {SERVER_ID && (
+            <a className="btn" href={buildAgentDeepLink({ serverId: SERVER_ID, agentId: agent.id })}>
+              Open in Paseo
+            </a>
+          )}
+    </>
+  );
+  const dockBtns = (
+    <>
           <button
             className={`btn ghost dock-toggle-btn${dockOpen ? " on" : ""}`}
             title={dockOpen ? "Close side dock" : "Open: Changes / Files / Terminal / Scripts"}
@@ -903,16 +933,13 @@ export function DrawerHeader({
           >
             Dock {dockOpen ? "▶" : "◀"}
           </button>
-          {SERVER_ID && (
-            <a className="btn" href={buildAgentDeepLink({ serverId: SERVER_ID, agentId: agent.id })}>
-              Open in Paseo
-            </a>
-          )}
           <button className="btn ghost" onClick={onClose}>
             ✕
           </button>
-        </div>
-      </header>
+    </>
+  );
+  const inspector = (
+    <>
 
       {isBs && (
         <div className={`brainstorm-ctx-bar tone-${bsTone}`} data-testid="brainstorm-ctx-bar" style={{ padding: "4px 8px", margin: "4px 8px 0" }}>
@@ -1170,6 +1197,88 @@ export function DrawerHeader({
       )}
       <SessionActions agent={agent} entries={entries} />
       {(attachBlocked || moreOpen) ? <AttachFiles agent={agent} entries={entries} /> : null}
+    </>
+  );
+  const header = (
+    <>
+      <header className="drawer-head" style={{ flexWrap: "wrap", padding: "8px 12px", gap: 8, alignItems: "center" }}>
+        <Avatar id={agent.id} provider={agent.provider} agentType={agentType} variant={leadVariant(agent)} size={40} />
+        <div className="drawer-id" style={{ flex: "1 1 240px", minWidth: 0 }}>
+          <div className="drawer-role-line" style={{ flexWrap: "wrap", gap: 4 }}>
+            <span className="role-tag">{AGENT_TYPE_LABEL[agentType]}</span>
+            <span className="prov-pill" style={{ color: prov.color, borderColor: prov.color }}>
+              {prov.symbol} {prov.name}
+            </span>
+            {modeSelect}
+            {thinkingSelect}
+            {featureChips}
+          </div>
+          <div className="drawer-title" style={{ fontSize: 15 }}>
+            <StatusDot agent={agent} /> <AgentTitleEdit agent={agent}>{agent.title ?? agent.id.slice(0, 8)}</AgentTitleEdit>
+          </div>
+          <div className="muted small drawer-meta-line" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4 }}>
+            <span>{agent.provider}/</span>
+            {modelControl}
+            {metaRest}
+          </div>
+          {!isBs && <TokenMeter used={used} budget={budget ?? 0} ladder={kindOf(agent) === "lead" ? leadLadderFor(team) : undefined} />}
+        </div>
+        <div className="drawer-actions" style={{ flexWrap: "wrap", gap: 4, alignItems: "center" }}>
+          {extraActions}
+          {paseoLink}
+          {dockBtns}
+        </div>
+      </header>
+    </>
+  );
+
+  if (compact)
+    return (
+      <>
+        {createPortal(
+          <>
+      <div className="drawer-head-compact" data-testid="drawer-head-compact">
+        <Avatar id={agent.id} provider={agent.provider} agentType={agentType} variant={leadVariant(agent)} size={24} />
+        <span className="drawer-head-compact-title">
+          <StatusDot agent={agent} /> <AgentTitleEdit agent={agent}>{agent.title ?? agent.id.slice(0, 8)}</AgentTitleEdit>
+        </span>
+        {modeSelect}
+        {thinkingSelect}
+        <span className="muted small">{agent.provider}/</span>
+        {modelControl}
+        <WorkingChip members={working} subs={extraSubs} />
+        <span className="drawer-head-compact-spacer" />
+        {dockBtns}
+      </div>
+          </>,
+          barSlot!,
+        )}
+        {createPortal(
+          <>
+      <div className="drawer-actions pin-rail-buddy-tools" data-testid="pin-rail-buddy-tools" style={{ flexWrap: "wrap", gap: 4, alignItems: "center" }}>
+        <span className="role-tag">{AGENT_TYPE_LABEL[agentType]}</span>
+        <span className="prov-pill" style={{ color: prov.color, borderColor: prov.color }}>
+          {prov.symbol} {prov.name}
+        </span>
+        {featureChips}
+        {extraActions}
+        {paseoLink}
+      </div>
+      <div className="muted small drawer-meta-line" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4 }}>
+        {metaRest}
+      </div>
+      {!isBs && <TokenMeter used={used} budget={budget ?? 0} ladder={kindOf(agent) === "lead" ? leadLadderFor(team) : undefined} />}
+
+            {inspector}
+          </>,
+          cardSlot!,
+        )}
+      </>
+    );
+  return (
+    <>
+      {header}
+      {inspector}
     </>
   );
 }

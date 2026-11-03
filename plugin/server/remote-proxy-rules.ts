@@ -43,7 +43,11 @@ export const REMOTE_ALLOW: AllowMap = {
   // R2-5 #3 log/vs-log: text and refs only; the author is the owner (no agent/agentId).
   "/__vibesquad/log": ["GET", "POST"],
   "/__vibesquad/vs-log": ["GET", "POST"],
-  "/__vibesquad/handoff": READ, // "does the packet exist?" (path redacted). POST stays closed.
+  // Block 4: GET polls "does the packet exist / is vs handoff still running?" (path redacted). POST starts
+  // `vs handoff` and answers 202 within 2 s if it is still running, so the 10 s proxy timeout never fires.
+  "/__vibesquad/handoff": ["GET", "POST"],
+  // Block 4: Buddy start + restart. Profile/cwd come from the lane in teams.json; spawnBudget caps it server-side.
+  "/__vibesquad/brainstorm-restart": ["POST"],
   // R2-5 #4 brainstorm-summary: revision required, lane must exist in teams.json.
   "/__vibesquad/brainstorm-summary": ["GET", "POST", "PUT"],
   // R2-5 #2 inbox: cards only; spawn config (provider/model/profile) and card titles never come remotely.
@@ -62,12 +66,10 @@ export const REMOTE_ALLOW: AllowMap = {
 
 /** Writes that stay closed remotely, and why. Reopening one needs the server change named here first. */
 export const REMOTE_WRITES_CLOSED: Readonly<Record<string, string>> = {
-  "/__vibesquad/handoff": "POST runs `vs handoff` for up to 60 s; the proxy timeout can't cancel the CLI run",
   "/__vibesquad/lead-handoff":
-    "spawns a successor lead and retires the old one with no server-side spawn/archive budget (archiveBudget covers only Buddies); the UI never calls it",
+    "spawns a successor lead and retires the old one; the UI never calls it (HandoffModal spawns the successor via client.agents.create over the relay WebSocket after POST /__vibesquad/handoff)",
   "/__vibesquad/lead-handoff/confirm": "relabels/renames the old lead and deletes its heartbeat; only the lead-handoff flow calls it",
   "/__vibesquad/inbox/open-topic": "Spawns a live Buddy agent on the host; agent creation stays local-only",
-  "/__vibesquad/brainstorm-restart": "Spawns a replacement Buddy agent on the host; agent lifecycle stays local-only",
 };
 
 // ---- remote body policy (R2-5) ----------------------------------------------------------------------
@@ -228,6 +230,26 @@ export const REMOTE_BODY_POLICY: Readonly<Record<string, BodyPolicy>> = {
   },
   "/__vibesquad/inbox/park-topic": { fields: { cardId, agentId: id, summaryNote: str(4000) }, require: ["cardId"] },
   "/__vibesquad/inbox/handoff-topic": { fields: { cardId, agentId: id, planNote: str(4000), usedTokens: tokens }, require: ["cardId"] },
+  // Block 4: no profile/cwd/provider/model/pendingPrompt/summaryUpdate (REMOTE_FORBIDDEN_BODY_KEYS); the server
+  // takes the profile from the lane's lastProfile and the cwd from the lane's paths.
+  "/__vibesquad/brainstorm-restart": {
+    fields: {
+      reason: oneOf("start-brainstorm", "manual", "warn-80k", "handoff"),
+      mode: oneOf("quick-start"),
+      teamId: id,
+      laneId: id,
+      laneName: str(200),
+      agentId: id,
+      usedTokens: tokens,
+    },
+    require: ["laneId"],
+    registry: "lane",
+  },
+  "/__vibesquad/handoff": {
+    fields: { team: id, lane: id, teamId: id, laneId: id, agentId: id },
+    require: ["team", "lane"],
+    registry: "lane",
+  },
 };
 export const WRITE_SCHEMAS = REMOTE_BODY_POLICY;
 
@@ -900,6 +922,8 @@ export const ENDPOINT_WRITE_LIMITS_PER_MIN: Record<string, number> = {
   "POST /__vibesquad/inbox/handoff-topic": 10,
   "POST /__vibesquad/log": 10,
   "POST /__vibesquad/vs-log": 10,
+  "POST /__vibesquad/brainstorm-restart": 5,
+  "POST /__vibesquad/handoff": 5,
 };
 
 export type RateKind = "read" | "write";

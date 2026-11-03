@@ -129,12 +129,62 @@ code {
 .sidebar {
   background: linear-gradient(180deg, #0b0c1a 0%, #100e24 100%);
   padding: 12px 10px;
-  overflow-y: auto;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   gap: 10px;
   border-right: 1px solid var(--line);
   box-shadow: 4px 0 20px rgba(0, 0, 0, 0.6);
+}
+
+.sidebar-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 2px;
+}
+
+.sidebar-dock {
+  flex-shrink: 0;
+  margin-top: auto;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: linear-gradient(180deg, rgba(16, 14, 36, 0.95) 0%, #0b0c1a 100%);
+}
+
+.sidebar-signals-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 5px 8px;
+  background: #090a16;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-family: var(--arcade);
+  font-size: 9px;
+  letter-spacing: 1px;
+  cursor: pointer;
+}
+
+.sidebar-signals-toggle:hover {
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
+
+.sidebar-signals-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--mono);
+  font-size: 10px;
 }
 
 .brand {
@@ -264,7 +314,6 @@ code {
 }
 
 .sidebar-legend {
-  margin-top: auto;
   padding: 8px;
   background: #090a16;
   border: 1px solid var(--line);
@@ -300,6 +349,14 @@ code {
   background: var(--cyan);
   box-shadow: 0 0 8px var(--cyan);
   animation: blink 0.9s steps(2) infinite;
+}
+
+/* Navigation lists glow steadily; only the active chat header dot (and error/attn) animates. */
+.sidebar-pins .signal.running,
+.sidebar-riffbot-row .signal.running,
+.pin-rail .signal.running,
+.pane-tab .signal.running {
+  animation: none;
 }
 
 .signal.idle {
@@ -909,6 +966,28 @@ code {
 
 .timeline > * {
   flex-shrink: 0;
+}
+
+.tl-jump-bottom {
+  position: sticky;
+  bottom: 8px;
+  align-self: center;
+  z-index: 3;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--neon-cyan);
+  background: #0b0d1c;
+  color: var(--neon-cyan);
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
+}
+
+.tl-reasoning-body {
+  max-height: 40vh;
+  overflow-y: auto;
+  border-left: 2px solid #333;
+  padding-left: 8px;
 }
 
 .tl {
@@ -2715,13 +2794,49 @@ html {
 
 .sidebar-footer-row {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 6px;
-  align-items: stretch;
 }
 
-.sidebar-footer-row > .btn {
-  flex: 1;
-  text-align: center;
+.sidebar-footer-left,
+.sidebar-footer-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sidebar-icon-btn {
+  position: relative;
+  padding: 5px 7px;
+  min-width: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.sidebar-cog-btn {
+  color: var(--cyan);
+  border-color: rgba(0, 240, 255, 0.35);
+  font-size: 15px;
+}
+
+.sidebar-cog-btn:hover {
+  border-color: var(--cyan);
+  box-shadow: 0 0 10px var(--cyan-dim);
+}
+
+.sidebar-stale-dot {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ffb000;
+  box-shadow: 0 0 6px #ffb000;
 }
 
 .ts-scale-section {
@@ -2890,8 +3005,13 @@ html {
 .sidebar.collapsed .sidebar-legend,
 .sidebar.collapsed .sidebar-inbox-badge span:not(:first-child),
 .sidebar.collapsed .push-controls,
-.sidebar.collapsed > .btn,
-.sidebar.collapsed .sidebar-footer-row {
+.sidebar.collapsed > .btn {
+  display: none;
+}
+
+.sidebar.collapsed .sidebar-signals-toggle,
+.sidebar.collapsed .sidebar-footer-left,
+.sidebar.collapsed .sidebar-footer-right > :not(.sidebar-cog-btn) {
   display: none;
 }
 
@@ -3297,8 +3417,8 @@ html, body, #root { overflow-x: hidden; }
 /* ── Pinned teams step 2: focus view + right rail (src/PinRail.tsx, src/pinFocus.ts). Owned by the pinned team. ──
    sidebar | focused Brainstorm drawer (its own right dock stays inside it) | pin rail.
    .pins-home = back on the grid: the panes stay mounted (scroll, drafts) but hidden. */
-.app.pin-focus { grid-template-columns: var(--sidebar-w, 265px) minmax(0, 1fr) 240px; }
-.app.pin-focus.sidebar-collapsed { grid-template-columns: 56px minmax(0, 1fr) 240px; }
+.app.pin-focus { grid-template-columns: var(--sidebar-w, 265px) minmax(0, 1fr) 300px; }
+.app.pin-focus.sidebar-collapsed { grid-template-columns: 56px minmax(0, 1fr) 300px; }
 .app.pins-home { grid-template-columns: var(--sidebar-w, 265px) minmax(0, 1fr); }
 .app.pins-home.sidebar-collapsed { grid-template-columns: 56px minmax(0, 1fr); }
 .app.pins-home > .agent-panes { display: none; }
@@ -3635,9 +3755,46 @@ html, body, #root { overflow-x: hidden; }
 button.file-chip { cursor: pointer; font: inherit; }
 .file-chip-name { max-width: 14em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.stale-build-banner,
+.stale-build-banner {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 520px;
+  padding: 10px 14px;
+  background: #161426;
+  border: 1px solid #ffb000;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.75), 0 0 16px rgba(255, 176, 0, 0.2);
+  color: #ffe08a;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .read-only-banner {
   font-size: 13px;
+}
+
+.diag-build-status {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  background: #090a16;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.diag-build-status.ok {
+  border-color: rgba(0, 240, 255, 0.35);
+  color: var(--cyan);
+}
+
+.diag-build-status.stale {
+  border-color: #ffb000;
+  color: #ffe08a;
 }
 
 /* ---- Settings home: app prefs (src/prefs.ts) ---- */
@@ -3938,3 +4095,57 @@ button.project-file-name:hover { text-decoration: underline; }
 .terminal-ports-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .terminal-port-pill { display: inline-flex; align-items: center; gap: 4px; text-decoration: none; }
 
+
+/* ── UI polish U2: one ~44px chat bar in pin-focus; the active Buddy's inspector lives atop the rail ── */
+.pin-focus-bar { height: 44px; min-height: 44px; flex-wrap: nowrap; row-gap: 0; overflow: hidden; gap: 8px; }
+.pin-focus-bar .pin-focus-slot { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; }
+.pin-focus-bar .pin-focus-plumbing { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; }
+.drawer-head-compact { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; height: 44px; overflow: hidden; }
+.drawer-head-compact > * { flex: none; }
+.drawer-head-compact .avatar { flex: none; }
+.drawer-head-compact-title { flex: 0 1 auto; min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--display); font-size: 13px; }
+.drawer-head-compact-spacer { flex: 1 1 0; min-width: 0; }
+.drawer-head-compact .drawer-model-input { width: 100px; }
+.drawer-head-compact .drawer-mode-select, .drawer-head-compact .drawer-thinking-select { max-width: 96px; }
+.pin-rail-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.pin-rail-scroll .pin-rail-list { flex: none; overflow: visible; }
+.pin-rail-active-buddy {
+  flex: none; display: flex; flex-direction: column; gap: 6px; margin: 6px; padding: 8px; min-width: 0;
+  background: #00f0ff12; border: 1px solid var(--cyan); border-left-width: 3px;
+}
+.pin-rail-active-buddy.needs-you { border-left-color: var(--hot-pink); }
+.pin-rail-active-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.pin-rail-active-inspector { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.pin-rail-active-inspector .brainstorm-ctx-bar { margin: 0 !important; }
+.pin-rail-active-inspector .brainstorm-ctx-main, .pin-rail-active-inspector .brainstorm-ctx-actions { flex-wrap: wrap !important; }
+.pin-rail-section-label { flex: none; padding: 4px 10px 0; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+@media (max-width: 900px) {
+  .pin-rail-active-buddy, .pin-rail-section-label { display: none; }
+}
+.pin-rail-buddy-tools { min-width: 0; }
+
+/* ── UI polish U4: team under a Buddy (rail card + sidebar caret) and the live "working" chip / bar ── */
+.pin-rail-team-tree { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.pin-rail-team-tree .pin-rail-section-label { padding: 0 0 2px; }
+.pin-team-row {
+  display: flex; align-items: center; gap: 6px; min-width: 0; padding: 3px 6px; background: transparent; border: 0;
+  border-left: 2px solid transparent; color: var(--muted); font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+}
+.pin-team-row:hover, .pin-team-row:focus-visible { color: var(--text); background: #00f0ff12; outline: none; }
+.pin-team-row.on { color: var(--text); border-left-color: var(--cyan); background: #00f0ff1f; }
+.pin-team-row.pin-team-completed { opacity: 0.8; }
+.pin-row-wrap { display: flex; align-items: stretch; min-width: 0; }
+.pin-row-wrap > .pin-row { flex: 1; min-width: 0; }
+.drawer-working-chip {
+  flex: none; padding: 1px 8px; font-size: 11px; color: var(--cyan); background: #00f0ff14; border: 1px solid var(--cyan); cursor: pointer;
+}
+.drawer-working-chip:disabled { cursor: default; }
+.drawer-subagents-bar {
+  flex: none; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 3px 10px; border-top: 1px solid var(--line);
+  background: #00f0ff0d; max-height: 52px; overflow-y: auto;
+}
+.drawer-subagent-chip {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 220px; padding: 1px 8px; font-size: 11px; color: var(--text);
+  background: transparent; border: 1px solid var(--line); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.drawer-subagent-chip:hover, .drawer-subagent-chip:focus-visible { border-color: var(--cyan); outline: none; }

@@ -56,13 +56,65 @@ export function isLocalHost(hostname: string): boolean {
   return h === "127.0.0.1" || h === "localhost" || h === "::1" || h === "[::1]" || h === "tauri.localhost" || h.endsWith(".localhost");
 }
 
-export type RemoteEnv = { search: string; hash: string; storage: Get | null; buildFlag: boolean; hostname?: string };
+export type RemoteEnv = { search: string; hash: string; storage: Get | null; buildFlag: boolean; hostname?: string; localServerId?: string };
 
-/** Pure core of isRemote(): build flag, `?remote=1`, or (on non-local origins) `#offer=`, a stored session, or R2-1's flag. */
+declare const __PASEO_SERVER_ID__: string | undefined;
+/** This build's own daemon serverId (vite define); empty in remote builds and node. */
+const BUILD_SERVER_ID: string = (() => {
+  try {
+    return typeof __PASEO_SERVER_ID__ === "string" ? __PASEO_SERVER_ID__ : "";
+  } catch {
+    return "";
+  }
+})();
+
+/** Decodes the base64url `offer=` payload in a URL hash; null when missing, malformed or not an offer. */
+export function offerFromHash(hash: string): RemoteOffer | null {
+  const m = /(?:^|[#&])offer=([^&]+)/.exec(hash ?? "");
+  if (!m) return null;
+  return safe(() => {
+    let b64 = decodeURIComponent(m[1]).replace(/-/g, "+").replace(/_/g, "/");
+    while (b64.length % 4) b64 += "=";
+    const g = globalThis as any;
+    const json =
+      typeof g.atob === "function"
+        ? new TextDecoder().decode(Uint8Array.from(g.atob(b64), (c: string) => c.charCodeAt(0)))
+        : g.Buffer.from(b64, "base64").toString("utf8");
+    const o = JSON.parse(json);
+    return isOffer(o) ? o : null;
+  }, null);
+}
+
+/** Removes `remote` from the query and any `#offer=` from the hash; other params survive. */
+export function stripRemoteFromUrl(loc: { pathname?: string; search: string; hash?: string }): string {
+  const q = new URLSearchParams(loc.search ?? "");
+  q.delete("remote");
+  const qs = q.toString();
+  const hash = hasOfferFragment(loc.hash ?? "")
+    ? (loc.hash ?? "")
+        .replace(/^#/, "")
+        .split("&")
+        .filter((x) => !x.startsWith("offer="))
+        .join("&")
+    : (loc.hash ?? "").replace(/^#/, "");
+  return (loc.pathname ?? "/") + (qs ? `?${qs}` : "") + (hash ? `#${hash}` : "");
+}
+
+/**
+ * Pure core of isRemote(): build flag, `?remote=1`, or (on non-local origins) `#offer=`, a stored session, or R2-1's flag.
+ * On a local origin `?remote=1` only counts when it targets another PC: a bare one, or one whose offer is this PC's own daemon, is local.
+ */
 export function detectRemote(env: RemoteEnv): boolean {
   if (env.buildFlag) return true;
-  if (new URLSearchParams(env.search).get("remote") === "1") return true;
-  if (env.hostname && isLocalHost(env.hostname)) return false;
+  const flagged = new URLSearchParams(env.search).get("remote") === "1";
+  if (env.hostname && isLocalHost(env.hostname)) {
+    if (!flagged) return false;
+    const target = offerFromHash(env.hash) ?? readSession(env.storage)?.offer ?? null;
+    if (!target) return false;
+    const localId = (env.localServerId ?? BUILD_SERVER_ID).trim();
+    return !(localId && target.serverId === localId);
+  }
+  if (flagged) return true;
   if (hasOfferFragment(env.hash)) return true;
   const s = env.storage;
   if (!s) return false;
@@ -81,6 +133,14 @@ export function isRemote(): boolean {
       storage: browserStorage("localStorage"),
       buildFlag: BUILD_REMOTE,
     });
+    if (
+      remoteCached === false &&
+      loc &&
+      isLocalHost(loc.hostname ?? "") &&
+      new URLSearchParams(loc.search ?? "").get("remote") === "1"
+    ) {
+      safe(() => (globalThis as any).history.replaceState(null, "", stripRemoteFromUrl(loc)), undefined);
+    }
   }
   return remoteCached;
 }
