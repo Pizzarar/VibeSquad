@@ -3,8 +3,12 @@
 .daemon-disconnect-card { display: flex; flex-direction: column; gap: 12px; align-items: center; padding: 20px 24px; max-width: 92vw; background: var(--panel); border: 1px solid #ff4d6a; box-shadow: 0 0 24px rgba(255, 77, 106, 0.35); text-align: center; }
 .daemon-disconnect-title { font-weight: 700; color: #ffd9de; }
 .daemon-disconnect-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
-/* Diagnostics opened from the disconnect card must sit above the scrim. */
+/* Diagnostics, Setup Checklist, and Settings opened from the disconnect card must sit above the scrim. */
 .modal-back:has([data-testid="diagnostics-modal"]) { z-index: 9600; }
+.modal-back:has([data-testid="diagnostics-modal"], [data-testid="first-run-checklist-modal"], .settings-home) { z-index: 9600; }
+.daemon-disconnect-subtext { font-size: 12px; color: var(--muted); max-width: 440px; }
+.daemon-disconnect-error { font-size: 12px; color: #ff4d6a; font-weight: 600; }
+.daemon-banner-auth-form { display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap; width: 100%; }
 .diag-log { max-height: 40vh; overflow: auto; white-space: pre-wrap; font-size: 11px; background: var(--panel); border: 1px solid var(--line); padding: 8px; }
 .diag-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
 .help-section { margin-bottom: 12px; }

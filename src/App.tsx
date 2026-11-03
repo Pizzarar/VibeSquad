@@ -1548,6 +1548,7 @@ export function App() {
   const uiScale = useUiScale();
   const uiScaleHud = useUiScaleHud();
   const [modal, setModal] = useState<"new-agent" | "add-buddy" | "settings" | "pair-device" | "about" | "help" | "diagnostics" | "first-run" | "new-squad" | null>(null);
+  const setFirstRunOpen = (open: boolean) => setModal(open ? "first-run" : null);
   const [firstRunStatus, setFirstRunStatus] = useState<FirstRunStatus | null>(null);
   const exposedIps = useExposedIps();
   const [dismissedLanKey, setDismissedLanKey] = useState<string>(() => localStorage.getItem(DISMISSED_LAN_IPS_KEY) ?? "");
@@ -1997,7 +1998,15 @@ export function App() {
           </button>
         </div>
       )}
-      <DaemonStatusBanner onOpenDiagnostics={openDiagnostics} />
+      {/* <DaemonStatusBanner onOpenDiagnostics={openDiagnostics} /> */}
+      <DaemonStatusBanner
+        onOpenDiagnostics={() => setModal("diagnostics")}
+        onOpenSetup={() => setFirstRunOpen(true)}
+        onOpenPaseoSettings={() => {
+          requestSettingsTarget("paseo-daemon");
+          setModal("settings");
+        }}
+      />
       {!focus && (
         <Sidebar
           views={sidebarViews}
