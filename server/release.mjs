@@ -99,6 +99,125 @@ export function buildLatestJson({ version, channel, signature, repo = "Pizzarar/
   };
 }
 
+function resolveHeadCommit(exec, cwd) {
+  return String(exec("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }) || "").trim();
+}
+
+function resolveTagCommit(tag, exec, cwd) {
+  try {
+    const remoteOut = String(
+      exec("git", ["ls-remote", "--tags", "origin", `refs/tags/${tag}`, `refs/tags/${tag}^{}`], {
+        cwd,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }) || "",
+    ).trim();
+    if (remoteOut) {
+      const lines = remoteOut.split(/\r?\n/).filter(Boolean);
+      const peeled = lines.find((l) => l.endsWith(`refs/tags/${tag}^{}`));
+      const direct = lines.find((l) => l.endsWith(`refs/tags/${tag}`));
+      const chosen = peeled || direct || lines[0];
+      const sha = chosen.split(/\s+/)[0]?.trim();
+      if (sha) return sha;
+    }
+  } catch {
+    // Fall back to local tag resolution
+  }
+  try {
+    const localSha = String(
+      exec("git", ["rev-parse", `refs/tags/${tag}^{commit}`], {
+        cwd,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }) || "",
+    ).trim();
+    if (localSha) return localSha;
+  } catch {
+    // Unresolved
+  }
+  return "";
+}
+
+function repointBetaTagToHead(exec, cwd) {
+  exec("git", ["tag", "-f", "beta", "HEAD"], { cwd, stdio: "inherit" });
+  exec("git", ["push", "-f", "origin", "refs/tags/beta"], { cwd, stdio: "inherit" });
+}
+
+export function publishRelease({
+  channel,
+  targetVersion,
+  assets = [],
+  latestJsonPath,
+  latestManifest,
+  signature,
+  cwd = rootDir,
+  exec = execFileSync,
+  writeManifest = (filePath, manifest) => writeFileSync(filePath, JSON.stringify(manifest, null, 2) + "\n"),
+}) {
+  const cleanVer = String(targetVersion).trim().replace(/^v/, "");
+  const effectiveManifest = latestManifest || buildLatestJson({ version: cleanVer, channel, signature });
+  const tag = channel === "beta" ? "beta" : `v${cleanVer}`;
+  const releaseTitle = channel === "beta" ? `VibeSquad Beta (${cleanVer})` : `VibeSquad v${cleanVer}`;
+
+  let tagExists = false;
+  try {
+    exec("gh", ["release", "view", tag], { cwd, stdio: "ignore" });
+    tagExists = true;
+  } catch {
+    const createArgs = ["release", "create", tag, "--title", releaseTitle, "--notes", effectiveManifest.notes];
+    if (channel === "beta") createArgs.push("--prerelease");
+    exec("gh", createArgs, { cwd, stdio: "inherit" });
+  }
+
+  if (tagExists) {
+    if (/^v\d+\.\d+\.\d+/.test(tag)) {
+      const headSha = resolveHeadCommit(exec, cwd);
+      const tagSha = resolveTagCommit(tag, exec, cwd);
+      if (!headSha || !tagSha || tagSha !== headSha) {
+        throw new Error(
+          `Refusing to overwrite existing versioned release tag ${tag}: tag points at ${tagSha || "<unresolved>"}, which does not match HEAD (${headSha || "<unresolved>"}). Bump the version or re-tag deliberately.`,
+        );
+      }
+    } else if (tag === "beta") {
+      repointBetaTagToHead(exec, cwd);
+    }
+    exec("gh", ["release", "edit", tag, "--title", releaseTitle, "--notes", effectiveManifest.notes], { cwd, stdio: "inherit" });
+  }
+
+  exec("gh", ["release", "upload", tag, ...assets, "--clobber"], { cwd, stdio: "inherit" });
+  console.log(`[release:${channel}] Published ${tag} with ${assets.length} asset(s).`);
+
+  if (channel === "stable") {
+    const betaManifest = buildLatestJson({ version: cleanVer, channel: "beta", signature });
+    if (latestJsonPath) {
+      writeManifest(latestJsonPath, betaManifest);
+    }
+    const betaTitle = `VibeSquad Beta (${cleanVer})`;
+    let betaTagExists = false;
+    try {
+      exec("gh", ["release", "view", "beta"], { cwd, stdio: "ignore" });
+      betaTagExists = true;
+    } catch {
+      exec("gh", ["release", "create", "beta", "--prerelease", "--title", betaTitle, "--notes", betaManifest.notes], {
+        cwd,
+        stdio: "inherit",
+      });
+    }
+    if (betaTagExists) {
+      repointBetaTagToHead(exec, cwd);
+      exec("gh", ["release", "edit", "beta", "--title", betaTitle, "--notes", betaManifest.notes], {
+        cwd,
+        stdio: "inherit",
+      });
+    }
+    exec("gh", ["release", "upload", "beta", ...assets, "--clobber"], { cwd, stdio: "inherit" });
+    if (latestJsonPath) {
+      writeManifest(latestJsonPath, effectiveManifest);
+    }
+    console.log(`[release:stable] Also synced rolling beta tag to v${cleanVer}.`);
+  }
+}
+
 function parseArgs(argv) {
   const out = { channel: "beta", version: "", stageOnly: false, skipBuild: false };
   for (let i = 0; i < argv.length; i++) {
@@ -173,47 +292,15 @@ if (isMain) {
   console.log(`[release:${channel}] Wrote signed ${latestJsonPath} for v${targetVersion}`);
 
   if (!opts.stageOnly) {
-    const tag = channel === "beta" ? "beta" : `v${targetVersion}`;
-    const releaseTitle = channel === "beta" ? `VibeSquad Beta (${targetVersion})` : `VibeSquad v${targetVersion}`;
     const assets = [installerPath, sigPath, latestJsonPath, join(distDesktopDir, "THIRD-PARTY-LICENSES.txt")].filter((p) => existsSync(p));
-    let tagExists = false;
-    try {
-      execFileSync("gh", ["release", "view", tag], { cwd: rootDir, stdio: "ignore" });
-      tagExists = true;
-    } catch {
-      const createArgs = ["release", "create", tag, "--title", releaseTitle, "--notes", latestManifest.notes];
-      if (channel === "beta") createArgs.push("--prerelease");
-      execFileSync("gh", createArgs, { cwd: rootDir, stdio: "inherit" });
-    }
-    if (tagExists) {
-      execFileSync("gh", ["release", "edit", tag, "--title", releaseTitle, "--notes", latestManifest.notes], { cwd: rootDir, stdio: "inherit" });
-    }
-    execFileSync("gh", ["release", "upload", tag, ...assets, "--clobber"], { cwd: rootDir, stdio: "inherit" });
-    console.log(`[release:${channel}] Published ${tag} with ${assets.length} asset(s).`);
-
-    if (channel === "stable") {
-      const betaManifest = buildLatestJson({ version: targetVersion, channel: "beta", signature });
-      writeFileSync(latestJsonPath, JSON.stringify(betaManifest, null, 2) + "\n");
-      const betaTitle = `VibeSquad Beta (${targetVersion})`;
-      let betaTagExists = false;
-      try {
-        execFileSync("gh", ["release", "view", "beta"], { cwd: rootDir, stdio: "ignore" });
-        betaTagExists = true;
-      } catch {
-        execFileSync("gh", ["release", "create", "beta", "--prerelease", "--title", betaTitle, "--notes", betaManifest.notes], {
-          cwd: rootDir,
-          stdio: "inherit",
-        });
-      }
-      if (betaTagExists) {
-        execFileSync("gh", ["release", "edit", "beta", "--title", betaTitle, "--notes", betaManifest.notes], {
-          cwd: rootDir,
-          stdio: "inherit",
-        });
-      }
-      execFileSync("gh", ["release", "upload", "beta", ...assets, "--clobber"], { cwd: rootDir, stdio: "inherit" });
-      writeFileSync(latestJsonPath, JSON.stringify(latestManifest, null, 2) + "\n");
-      console.log(`[release:stable] Also synced rolling beta tag to v${targetVersion}.`);
-    }
+    publishRelease({
+      channel,
+      targetVersion,
+      assets,
+      latestJsonPath,
+      latestManifest,
+      signature,
+      cwd: rootDir,
+    });
   }
 }
