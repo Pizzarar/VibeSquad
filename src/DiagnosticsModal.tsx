@@ -3,7 +3,7 @@ import { Modal } from "./TeamActions";
 import { daemonClient, reconnectWithDaemonPassword, usePaseo } from "./paseo";
 import { submitDaemonPassword } from "./paseoDaemonAuth";
 import { clearSession, isRemote } from "./remoteSession";
-import { loadUpdaterStatus, triggerUpdateInstall, useUpdaterStatus } from "./userName";
+import { getStaleBuild, loadUpdaterStatus, triggerUpdateInstall, useStaleBuild, useUpdaterStatus } from "./userName";
 import "./ResponsiveSmallWindow.css";
 
 type AnyClient = Record<string, ((...a: unknown[]) => Promise<unknown>) | undefined>;
@@ -18,6 +18,7 @@ export type DiagnosticsBundle = {
   daemon: unknown;
   provider: unknown;
   pluginLogs: unknown;
+  staleBuild: { built: string; head: string; behind: number } | null;
 };
 
 async function tryCall(name: string): Promise<unknown> {
@@ -47,6 +48,7 @@ export async function buildBundle(conn: string, agents: Iterable<{ id: string; s
     daemon,
     provider,
     pluginLogs,
+    staleBuild: getStaleBuild(),
   };
 }
 
@@ -282,6 +284,8 @@ export function DiagnosticsModal({ onClose }: { onClose: () => void }) {
   connRef.current = conn;
   agentsRef.current = agents;
 
+  const staleBuild = useStaleBuild();
+  const updaterStatus = useUpdaterStatus();
   const [bundle, setBundle] = useState<DiagnosticsBundle | null>(null);
   const [collecting, setCollecting] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -326,6 +330,20 @@ export function DiagnosticsModal({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="Diagnostics & Logs" onClose={onClose} wide>
       <div data-testid="diagnostics-modal">
+        <div
+          className={`diag-build-status ${staleBuild ? "stale" : "ok"}`}
+          data-testid="diagnostics-build-status"
+        >
+          {staleBuild ? (
+            <span>
+              {`⚠ Runtime build is ${staleBuild.behind} commit${staleBuild.behind === 1 ? "" : "s"} behind local repo (${staleBuild.built} → ${staleBuild.head}) — run npm run build / rebuild installer to sync.`}
+            </span>
+          ) : (
+            <span>
+              {`✓ Runtime build is up to date (v${updaterStatus.currentVersion})`}
+            </span>
+          )}
+        </div>
         <div className="diag-actions">
           <button className="btn small" data-testid="diagnostics-copy-btn" onClick={() => void copy()}>{copied ? "✓ Copied" : "📋 Copy Diagnostics Bundle"}</button>
           <button className="btn small" data-testid="diagnostics-download-btn" onClick={download}>⬇ Download .json</button>
