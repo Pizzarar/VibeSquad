@@ -153,6 +153,7 @@ describe("P0-B · paseoDaemonAuth helpers", () => {
       configured: true,
       source: "file",
       password: "local-secret-pw",
+      localCredential: null,
     });
 
     const status = await fetchDaemonAuthStatus(mockFetch);
@@ -187,6 +188,7 @@ describe("P0-B · paseoDaemonAuth helpers", () => {
       configured: false,
       source: "none",
       password: null,
+      localCredential: null,
     });
   });
 
@@ -226,7 +228,7 @@ describe("P0-B · paseoDaemonAuth helpers", () => {
     assert.match(paseo, /readClientAuthFailure/);
 
     const app = read("src/App.tsx");
-    assert.match(app, /onOpenSetup=\{\(\) => setFirstRunOpen\(true\)\}/);
+    assert.match(app, /onOpenSetup=\{\(\) => \{[\s\S]*?setFirstRunOpen\(true\)/);
     assert.match(app, /requestSettingsTarget\("paseo-daemon"\)/);
   });
 });
