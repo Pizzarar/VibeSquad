@@ -397,3 +397,90 @@ test("6. syncProfilesToPaseo renames Art - Opus and Art - Gemini in place by id 
     env.cleanup();
   }
 });
+
+test("7. R5: loadProfiles auto-imports Paseo profiles on first run (merging missing default pack) and appends newly added Paseo profiles when profiles.json already exists", () => {
+  const env = makeTempEnv();
+  try {
+    mkdirSync(join(env.dir, ".paseo"), { recursive: true });
+    writeFileSync(
+      env.paseoConfigPath,
+      JSON.stringify({
+        daemon: {
+          agentProfiles: [
+            {
+              id: "custom_paseo_1",
+              name: "Custom Paseo Worker",
+              provider: "claude",
+              model: "claude-sonnet-5-5",
+              modeId: "auto",
+              notes: "Custom Paseo worker instructions",
+            },
+          ],
+        },
+      }),
+      "utf8",
+    );
+
+    // Explicit autoSeed: false without autoImportPaseo returns paseo-unimported without writing disk
+    const unimported = loadProfiles(env.profilesPath, {
+      paseoConfigPath: env.paseoConfigPath,
+      autoSeed: false,
+    });
+    assert.equal(unimported.exists, false);
+    assert.equal(unimported.needsSetup, true);
+    assert.equal(unimported.seeded, false);
+    assert.equal(unimported.source, "paseo-unimported");
+
+    // Default / autoImportPaseo: true imports Paseo profiles + merges missing 19 default pack profiles and persists
+    const imported = loadProfiles(env.profilesPath, {
+      paseoConfigPath: env.paseoConfigPath,
+      autoImportPaseo: true,
+    });
+    assert.equal(imported.exists, true);
+    assert.equal(imported.needsSetup, false);
+    assert.equal(imported.seeded, true);
+    assert.equal(imported.source, "paseo-imported");
+    assert.equal(imported.profiles.length, 20);
+    assert.equal(imported.profiles[0].name, "Custom Paseo Worker");
+
+    // When profiles.json already exists on disk and a new profile appears in Paseo config, loadProfiles appends & persists it
+    writeFileSync(
+      env.paseoConfigPath,
+      JSON.stringify({
+        daemon: {
+          agentProfiles: [
+            {
+              id: "custom_paseo_1",
+              name: "Custom Paseo Worker",
+              provider: "claude",
+              model: "claude-sonnet-5-5",
+              modeId: "auto",
+              notes: "Custom Paseo worker instructions",
+            },
+            {
+              id: "custom_paseo_2",
+              name: "Second Paseo Agent",
+              provider: "antigravity-cli",
+              model: "gemini-4-argon",
+              modeId: "accept-edits",
+              notes: "Second custom Paseo agent",
+            },
+          ],
+        },
+      }),
+      "utf8",
+    );
+
+    const reloaded = loadProfiles(env.profilesPath, {
+      paseoConfigPath: env.paseoConfigPath,
+      autoImportPaseo: true,
+    });
+    assert.equal(reloaded.source, "vibesquad");
+    assert.equal(reloaded.profiles.length, 21);
+    assert.ok(reloaded.profiles.some((p) => p.name === "Second Paseo Agent"));
+    const onDisk = JSON.parse(readFileSync(env.profilesPath, "utf8"));
+    assert.equal(onDisk.profiles.length, 21);
+  } finally {
+    env.cleanup();
+  }
+});

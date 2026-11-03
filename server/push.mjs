@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { readPaseoConfig } from "./brainstorm.mjs";
-import { readDaemonPassword } from "./daemon-password.mjs";
+import { readDaemonPassword, readPaseoLocalCredential } from "./daemon-password.mjs";
 import { LEGACY_NEEDS_LABEL, clearConfigWarning, loadUserSettings, readJsonFileWithBom } from "./user-settings.mjs";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
@@ -530,6 +530,7 @@ export function startPushWatcher(rootDir = REPO_ROOT) {
     appVersion: "0.0.1",
     connectTimeoutMs: 5000,
     ...(password ? { password } : {}),
+    localCredential: () => readPaseoLocalCredential() || null,
     reconnect: { enabled: true, baseDelayMs: 1500, maxDelayMs: 15000 },
   });
   watcherClient = client;

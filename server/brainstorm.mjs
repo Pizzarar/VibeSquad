@@ -13,7 +13,7 @@ import { BRIEF_HISTORY_KEEP, BRIEF_SHRINK_FROM, BRIEF_SHRINK_TO, backupBrief, wr
 import { liveInFlightBlock } from "./in-flight.mjs";
 import { refreshWhosHere } from "./whos-here.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
-import { readDaemonPassword } from "./daemon-password.mjs";
+import { readDaemonPassword, readPaseoLocalCredential } from "./daemon-password.mjs";
 
 // import.meta.dirname is undefined when bundled into the Paseo plugin; fall back like plugin/index.server.ts.
 const REPO_ROOT = resolve(process.env.VIBESQUAD_ROOT || (typeof import.meta.dirname === "string" ? join(import.meta.dirname, "..") : join(homedir(), "projects", "VibeSquad")));
@@ -73,6 +73,7 @@ export function createDaemonClient(rootDir = REPO_ROOT) {
     appVersion: "0.0.1",
     connectTimeoutMs: 5000,
     ...(password ? { password } : {}),
+    localCredential: () => readPaseoLocalCredential() || null,
     reconnect: { enabled: false },
   });
 }

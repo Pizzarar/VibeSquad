@@ -624,6 +624,20 @@ export function readPaseoConfig(paseoConfigPath) {
   };
 }
 
+function matchesProfileIdentity(a, b) {
+  if (!a || !b) return false;
+  if (a.id && b.id && a.id === b.id) return true;
+  const aName = String(a.name ?? "").trim();
+  const bName = String(b.name ?? "").trim();
+  if (!aName || !bName) return false;
+  if (aName.toLowerCase() === bName.toLowerCase()) return true;
+  const aAlias = LEGACY_PROFILE_ALIASES[aName];
+  if (aAlias && aAlias.toLowerCase() === bName.toLowerCase()) return true;
+  const bAlias = LEGACY_PROFILE_ALIASES[bName];
+  if (bAlias && bAlias.toLowerCase() === aName.toLowerCase()) return true;
+  return false;
+}
+
 export function loadProfiles(profilesPath, options = {}) {
   const targetPath = getProfilesPath(profilesPath);
   const paseoInfo =
@@ -649,6 +663,24 @@ export function loadProfiles(profilesPath, options = {}) {
       const profiles = rawList.map(normalizeProfile).filter(Boolean);
       providerOverrides = normalizeProviderOverrides(parsed);
       if (profiles.length > 0) {
+        const normalizedPaseo = paseoInfo.agentProfiles.map(normalizeProfile).filter(Boolean);
+        if (
+          (options.autoImportPaseo === true ||
+            options.paseoConfigPath !== undefined ||
+            options.paseoProfiles !== undefined) &&
+          normalizedPaseo.length > 0
+        ) {
+          let added = false;
+          for (const pp of normalizedPaseo) {
+            if (!profiles.some((ep) => matchesProfileIdentity(ep, pp))) {
+              profiles.push(pp);
+              added = true;
+            }
+          }
+          if (added) {
+            writeProfilesFile(targetPath, profiles);
+          }
+        }
         return {
           providerOverrides,
           exists: true,
@@ -658,22 +690,46 @@ export function loadProfiles(profilesPath, options = {}) {
           path: targetPath,
           profiles,
           installedProviders: paseoInfo.installedProviders,
-          paseoProfiles: paseoInfo.agentProfiles.map(normalizeProfile).filter(Boolean),
+          paseoProfiles: normalizedPaseo,
         };
       }
     }
   }
 
-  // First-run: if Paseo has profiles, surface them for import (needsSetup: true);
-  // if Paseo has none, seed the 19-profile default pack automatically.
+  // First-run: if Paseo has profiles, auto-import them (and merge missing default-pack roles) when autoSeed !== false or autoImportPaseo === true;
+  // when autoSeed === false and autoImportPaseo !== true, surface them as paseo-unimported.
   if (paseoInfo.agentProfiles.length > 0) {
     const imported = importPaseoProfiles(paseoInfo.agentProfiles);
+    if (options.autoImportPaseo === true || options.autoSeed !== false) {
+      const mergedProfiles = [...imported.profiles];
+      if (options.mergeDefaultPack !== false) {
+        for (const rawDef of DEFAULT_PACK_PROFILES) {
+          const def = normalizeProfile(rawDef);
+          if (def && !mergedProfiles.some((ep) => matchesProfileIdentity(ep, def))) {
+            mergedProfiles.push(def);
+          }
+        }
+      }
+      writeProfilesFile(targetPath, mergedProfiles);
+      return {
+        exists: true,
+        needsSetup: false,
+        seeded: true,
+        providerOverrides,
+        source: "paseo-imported",
+        path: targetPath,
+        profiles: mergedProfiles,
+        warningsByProfile: imported.warningsByProfile,
+        installedProviders: paseoInfo.installedProviders,
+        paseoProfiles: imported.profiles,
+      };
+    }
     return {
       exists: false,
       needsSetup: true,
       seeded: false,
       providerOverrides,
-    source: "paseo-unimported",
+      source: "paseo-unimported",
       path: targetPath,
       profiles: imported.profiles,
       warningsByProfile: imported.warningsByProfile,

@@ -6,7 +6,7 @@ import { connect } from "node:net";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve, sep } from "node:path";
 import { readJsonFileWithBom } from "./user-settings.mjs";
-import { markDaemonManagedByVibeSquad } from "./paseo-control.mjs";
+import { markDaemonManagedByVibeSquad, readPaseoPid } from "./paseo-control.mjs";
 import { getDaemonAuthStatus } from "./daemon-password.mjs";
 
 export const PINNED_PASEO_VERSION = "0.14.0";
@@ -153,7 +153,7 @@ export async function ensurePaseoDaemon(opts = {}) {
             : spawnFn(cli.bin, ["start"], spawnOpts);
     child?.on?.("error", () => {});
     child?.unref?.();
-    markDaemonManagedByVibeSquad(child?.pid || "managed", opts);
+    markDaemonManagedByVibeSquad(readPaseoPid(opts) || child?.pid || "managed", opts);
     return { started: true, source: cli.source };
   } catch (e) {
     return { started: false, reason: String(e?.message ?? e) };
