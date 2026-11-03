@@ -287,6 +287,96 @@ describe("2 & 3. PINNED_TEAM_KEYS (vibeMode) and hardened pinTeamsRegistry", () 
     );
     assert.equal(crossTeamMove.ok, false);
     assert.equal(crossTeamMove.status, 403);
+
+    // Modifying an existing lane's aliases or name to match another team's lane id/name/alias is rejected with 403
+    for (const badLaneA of [
+      { id: "lane-a", aliases: ["lane-c"] },
+      { id: "lane-a", aliases: ["Lane C"] },
+      { id: "lane-a", name: "lane-c" },
+      { id: "lane-a", name: "Lane C" },
+    ]) {
+      const collideExisting = pinTeamsRegistry(
+        {
+          teams: [
+            { id: "alpha", lanes: [badLaneA, { id: "lane-b" }] },
+            { id: "beta", lanes: [{ id: "lane-c" }] },
+          ],
+          revision: "r1",
+        },
+        disk,
+      );
+      assert.deepEqual(collideExisting, {
+        ok: false,
+        status: 403,
+        error: "RemoteDenied: lane id, name, or alias collides with an existing lane",
+      });
+    }
+
+    // Modifying an existing lane in beta to collide with alpha's existing lane alias "la"
+    const collideBetaAlias = pinTeamsRegistry(
+      {
+        teams: [
+          { id: "alpha", lanes: [{ id: "lane-a" }, { id: "lane-b" }] },
+          { id: "beta", lanes: [{ id: "lane-c", aliases: ["LA"] }] },
+        ],
+        revision: "r1",
+      },
+      disk,
+    );
+    assert.deepEqual(collideBetaAlias, {
+      ok: false,
+      status: 403,
+      error: "RemoteDenied: lane id, name, or alias collides with an existing lane",
+    });
+
+    // Cross-team collision between two newly added aliases in the same payload
+    const collideSamePayload = pinTeamsRegistry(
+      {
+        teams: [
+          { id: "alpha", lanes: [{ id: "lane-a", aliases: ["brand-new"] }, { id: "lane-b" }] },
+          { id: "beta", lanes: [{ id: "lane-c", aliases: ["BRAND-NEW"] }] },
+        ],
+        revision: "r1",
+      },
+      disk,
+    );
+    assert.deepEqual(collideSamePayload, {
+      ok: false,
+      status: 403,
+      error: "RemoteDenied: lane id, name, or alias collides with an existing lane",
+    });
+
+    // Pre-existing shared generic lane name on disk is allowed if unchanged on those lanes, but rejected on another lane
+    const sharedDisk = {
+      teams: [
+        { id: "alpha", lanes: [{ id: "lane-a", name: "main" }, { id: "lane-b", name: "secondary" }] },
+        { id: "beta", lanes: [{ id: "lane-c", name: "main" }] },
+      ],
+    };
+    const keepShared = pinTeamsRegistry(
+      {
+        teams: [
+          { id: "alpha", lanes: [{ id: "lane-a", name: "main" }, { id: "lane-b", name: "secondary" }] },
+          { id: "beta", lanes: [{ id: "lane-c", name: "main" }] },
+        ],
+        revision: "r1",
+      },
+      sharedDisk,
+    );
+    assert.equal(keepShared.ok, true);
+
+    const stealShared = pinTeamsRegistry(
+      {
+        teams: [
+          { id: "alpha", lanes: [{ id: "lane-a", name: "main" }, { id: "lane-b", name: "main" }] },
+          { id: "beta", lanes: [{ id: "lane-c", name: "main" }] },
+        ],
+        revision: "r1",
+      },
+      sharedDisk,
+    );
+    assert.equal(stealShared.ok, false);
+    assert.equal(stealShared.status, 403);
   });
 });
 
@@ -334,6 +424,53 @@ describe("4 & 5. Required laneId, team-lane verification, and tightened size cap
       assert.equal(r.ok, false, p);
       assert.equal(r.status, 403, p);
     }
+
+    // defaultLaneId validation
+    assert.deepEqual(checkLaneExists({ teamId: "alpha", laneId: "lane-a", defaultLaneId: "lane-a" }, disk), { ok: true });
+    assert.deepEqual(checkLaneExists({ teamId: "alpha", laneId: "lane-a", defaultLaneId: "lane-b" }, disk), {
+      ok: false,
+      status: 403,
+      error: 'RemoteDenied: lane "lane-b" does not belong to team "alpha"',
+    });
+    assert.deepEqual(checkLaneExists({ laneId: "lane-a", defaultLaneId: "ghost" }, disk), {
+      ok: false,
+      status: 403,
+      error: "RemoteDenied: lane ghost is not in teams.json",
+    });
+
+    // ideas[i].laneId / teamId validation
+    assert.deepEqual(
+      checkLaneExists({ teamId: "alpha", laneId: "lane-a", ideas: [{ text: "ok", laneId: "lane-a" }] }, disk),
+      { ok: true },
+    );
+    assert.deepEqual(
+      checkLaneExists({ teamId: "alpha", laneId: "lane-a", ideas: [{ text: "ok", teamId: "beta", laneId: "lane-b" }] }, disk),
+      { ok: true },
+    );
+    assert.deepEqual(
+      checkLaneExists({ teamId: "alpha", laneId: "lane-a", ideas: [{ text: "bad", laneId: "lane-b" }] }, disk),
+      {
+        ok: false,
+        status: 403,
+        error: 'RemoteDenied: lane "lane-b" does not belong to team "alpha"',
+      },
+    );
+    assert.deepEqual(
+      checkLaneExists({ teamId: "alpha", laneId: "lane-a", ideas: [{ text: "bad", teamId: "beta" }] }, disk),
+      {
+        ok: false,
+        status: 403,
+        error: 'RemoteDenied: lane "lane-a" does not belong to team "beta"',
+      },
+    );
+    assert.deepEqual(
+      checkLaneExists({ laneId: "lane-a", ideas: [{ text: "bad", lane: "ghost" }] }, disk),
+      {
+        ok: false,
+        status: 403,
+        error: "RemoteDenied: lane ghost is not in teams.json",
+      },
+    );
   });
 
   test("field size caps on brainstorm-summary (19,999) and inbox ideas (max 20, text 5000)", () => {
@@ -442,6 +579,25 @@ describe("6 & 7. Per-endpoint write rate limits and response/error path scrubbin
         ok: false,
         error: "Failed at [redacted-path]",
       });
+
+      // Non-object JSON >= 400 error bodies (string and array) are also scrubbed
+      assert.equal(
+        JSON.parse(scrubResponseBody("/__vibesquad/inbox", JSON.stringify("Failed at /Users/owner/secret/server.js"), 500)),
+        "Failed at [redacted-path]",
+      );
+      assert.deepEqual(
+        JSON.parse(
+          scrubResponseBody(
+            "/__vibesquad/inbox",
+            JSON.stringify([
+              "Error in C:\\Users\\Owner\\secret\\file.ts",
+              { msg: "at /home/owner/app/index.js", path: "/home/owner/app/index.js", stack: "trace" },
+            ]),
+            400,
+          ),
+        ),
+        ["Error in [redacted-path]", { msg: "at [redacted-path]" }],
+      );
     } finally {
       srv.closeAllConnections?.();
       await new Promise((r) => srv.close(r));

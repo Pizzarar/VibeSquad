@@ -265,7 +265,7 @@ function checkValue(spec: FieldSpec, v: unknown, where: string, depth: number): 
   switch (spec.t) {
     case "string":
       if (where.startsWith("body.ideas[") && v && typeof v === "object" && !Array.isArray(v)) {
-        return checkFields({ text: spec, laneId: id, teamId: id, scope: INBOX_SCOPE }, ["text"], v as Record<string, unknown>, where, depth + 1);
+        return checkFields({ text: spec, laneId: id, lane: id, teamId: id, team: id, scope: INBOX_SCOPE }, ["text"], v as Record<string, unknown>, where, depth + 1);
       }
       if (typeof v !== "string") return `${where} must be a string`;
       if (v.length > spec.max) return `${where} is ${v.length} chars, cap ${spec.max}`;
@@ -387,6 +387,7 @@ export function pinTeamsRegistry(
 
   const diskTeamsById = new Map<string, { team: Record<string, unknown>; index: number }>();
   const diskTeamsByAnyKey = new Map<string, Record<string, unknown>>();
+  const allDiskLaneIds = new Map<string, { lane: Record<string, unknown>; teamId: string }>();
   const allDiskLanes = new Map<string, { lane: Record<string, unknown>; teamId: string }>();
 
   for (let i = 0; i < curTeams.length; i++) {
@@ -405,12 +406,15 @@ export function pinTeamsRegistry(
     for (const dl of asArray(dt.lanes) as Record<string, unknown>[]) {
       if (!dl || typeof dl !== "object") continue;
       const dlId = normKey(dl.id);
-      if (dlId) allDiskLanes.set(dlId, { lane: dl, teamId: dtId });
+      if (dlId) {
+        allDiskLaneIds.set(dlId, { lane: dl, teamId: dtId });
+        allDiskLanes.set(dlId, { lane: dl, teamId: dtId });
+      }
       const dlName = normKey(dl.name);
-      if (dlName) allDiskLanes.set(dlName, { lane: dl, teamId: dtId });
+      if (dlName && !allDiskLaneIds.has(dlName)) allDiskLanes.set(dlName, { lane: dl, teamId: dtId });
       for (const a of asArray(dl.aliases)) {
         const ak = normKey(a);
-        if (ak) allDiskLanes.set(ak, { lane: dl, teamId: dtId });
+        if (ak && !allDiskLaneIds.has(ak)) allDiskLanes.set(ak, { lane: dl, teamId: dtId });
       }
     }
   }
@@ -514,7 +518,7 @@ export function pinTeamsRegistry(
 
   // 4. Validate lanes per team (uniqueness, cross-team collisions, no drops, no reorder, <= 3 new lanes) and merge onto disk.
   let totalNewLanes = 0;
-  const seenAllNewLaneKeys = new Set<string>();
+  const seenAllLaneKeys = new Map<string, { teamId: string; laneId: string; isPreExistingOwnKey: boolean }>();
   const mergedTeams: Record<string, unknown>[] = [];
 
   for (const t of inTeams) {
@@ -536,7 +540,20 @@ export function pinTeamsRegistry(
       const l = inLanes[li];
       const lId = normKey(l?.id);
       if (!lId) return { ok: false, status: 403, error: "RemoteDenied: lane id is required" };
-      const isExistingInTeam = diskLanesById.has(lId);
+      const diskLaneEntry = diskLanesById.get(lId);
+      const isExistingInTeam = Boolean(diskLaneEntry);
+      const diskLane = diskLaneEntry?.lane;
+      const ownDiskKeys = new Set<string>();
+      if (diskLane) {
+        const dId = normKey(diskLane.id);
+        if (dId) ownDiskKeys.add(dId);
+        const dName = normKey(diskLane.name);
+        if (dName) ownDiskKeys.add(dName);
+        for (const a of asArray(diskLane.aliases)) {
+          const ak = normKey(a);
+          if (ak) ownDiskKeys.add(ak);
+        }
+      }
       const keysToCheck = [lId];
       const lName = normKey(l?.name);
       if (lName && lName !== lId) keysToCheck.push(lName);
@@ -555,17 +572,24 @@ export function pinTeamsRegistry(
           return { ok: false, status: 403, error: `RemoteDenied: duplicate lane identifier "${k}"` };
         }
         seenLaneKeys.set(k, li);
-        if (!isExistingInTeam) {
-          if (allDiskLanes.has(k)) {
-            return { ok: false, status: 403, error: `RemoteDenied: new lane "${k}" collides with an existing lane in teams.json` };
-          }
-          if (seenAllNewLaneKeys.has(k)) {
-            return { ok: false, status: 403, error: `RemoteDenied: duplicate new lane identifier "${k}"` };
+        const isPreExistingOwnKey = isExistingInTeam && ownDiskKeys.has(k);
+        const idOwner = allDiskLaneIds.get(k);
+        if (idOwner && (idOwner.teamId !== tId || normKey(idOwner.lane.id) !== lId)) {
+          return { ok: false, status: 403, error: "RemoteDenied: lane id, name, or alias collides with an existing lane" };
+        }
+        const diskOwner = allDiskLanes.get(k);
+        if (diskOwner && (diskOwner.teamId !== tId || normKey(diskOwner.lane.id) !== lId) && !isPreExistingOwnKey) {
+          return { ok: false, status: 403, error: "RemoteDenied: lane id, name, or alias collides with an existing lane" };
+        }
+        const prevSeen = seenAllLaneKeys.get(k);
+        if (prevSeen && (prevSeen.teamId !== tId || prevSeen.laneId !== lId)) {
+          if (!isPreExistingOwnKey || !prevSeen.isPreExistingOwnKey || k === lId) {
+            return { ok: false, status: 403, error: "RemoteDenied: lane id, name, or alias collides with an existing lane" };
           }
         }
+        seenAllLaneKeys.set(k, { teamId: tId, laneId: lId, isPreExistingOwnKey });
       }
       if (!isExistingInTeam) {
-        for (const k of keysToCheck) seenAllNewLaneKeys.add(k);
         totalNewLanes++;
       }
     }
@@ -650,7 +674,7 @@ export function checkLaneExists(
   body: Record<string, unknown>,
   current: unknown,
 ): { ok: true } | { ok: false; status: 400 | 403 | 503; error: string } {
-  const laneId = String(body?.laneId ?? body?.lane ?? "").trim();
+  const laneId = String(body?.laneId ?? body?.lane ?? body?.defaultLaneId ?? "").trim();
   if (!laneId) {
     return { ok: false, status: 400, error: "BadRequest: laneId is required" };
   }
@@ -658,31 +682,55 @@ export function checkLaneExists(
   if (!diskTeams) {
     return { ok: false, status: 503, error: "could not read teams.json to check the lane" };
   }
+  const verifyPair = (wantTeam: string, wantLane: string): { ok: true } | { ok: false; status: 403; error: string } => {
+    if (wantTeam) {
+      const team = diskTeams.find((t) => teamMatches(t, wantTeam));
+      if (!team) {
+        return { ok: false, status: 403, error: `RemoteDenied: unknown team "${wantTeam}"` };
+      }
+      const foundInTeam = asArray(team.lanes).some((l: RegLane) => laneMatches(l, wantLane));
+      if (!foundInTeam) {
+        return { ok: false, status: 403, error: `RemoteDenied: lane "${wantLane}" does not belong to team "${wantTeam}"` };
+      }
+    } else {
+      const foundAnywhere = diskTeams.some((t) => asArray(t?.lanes).some((l: RegLane) => laneMatches(l, wantLane)));
+      if (!foundAnywhere) {
+        return { ok: false, status: 403, error: `RemoteDenied: lane ${wantLane} is not in teams.json` };
+      }
+    }
+    return { ok: true };
+  };
+
   const teamId = String(body?.teamId ?? body?.team ?? "").trim();
-  if (teamId) {
-    const team = diskTeams.find((t) => teamMatches(t, teamId));
-    if (!team) {
-      return { ok: false, status: 403, error: `RemoteDenied: unknown team "${teamId}"` };
-    }
-    const foundInTeam = asArray(team.lanes).some((l: RegLane) => laneMatches(l, laneId));
-    if (!foundInTeam) {
-      return { ok: false, status: 403, error: `RemoteDenied: lane "${laneId}" does not belong to team "${teamId}"` };
-    }
-  } else {
-    const foundAnywhere = diskTeams.some((t) => asArray(t?.lanes).some((l: RegLane) => laneMatches(l, laneId)));
-    if (!foundAnywhere) {
-      return { ok: false, status: 403, error: `RemoteDenied: lane ${laneId} is not in teams.json` };
+  const topCheck = verifyPair(teamId, laneId);
+  if (!topCheck.ok) return topCheck;
+
+  const defaultLaneId = String(body?.defaultLaneId ?? "").trim();
+  if (defaultLaneId) {
+    const defCheck = verifyPair(teamId, defaultLaneId);
+    if (!defCheck.ok) return defCheck;
+  }
+
+  if (Array.isArray(body?.ideas)) {
+    for (const item of body.ideas) {
+      if (item && typeof item === "object" && !Array.isArray(item)) {
+        const rec = item as Record<string, unknown>;
+        const itemTeam = String(rec.teamId ?? rec.team ?? "").trim();
+        const itemLane = String(rec.laneId ?? rec.lane ?? "").trim();
+        if (itemTeam || itemLane) {
+          const checkItem = verifyPair(itemTeam || teamId, itemLane || laneId);
+          if (!checkItem.ok) return checkItem;
+        }
+      }
     }
   }
+
   if (body?.patch && typeof body.patch === "object" && !Array.isArray(body.patch)) {
     const patch = body.patch as Record<string, unknown>;
     const patchTeam = String(patch.teamId ?? "").trim();
     const patchLane = String(patch.laneId ?? "").trim();
     if (patchTeam || patchLane) {
-      const checkPatch = checkLaneExists(
-        { teamId: patchTeam || teamId, laneId: patchLane || laneId },
-        current,
-      );
+      const checkPatch = verifyPair(patchTeam || teamId, patchLane || laneId);
       if (!checkPatch.ok) return checkPatch;
     }
   }
@@ -1005,6 +1053,9 @@ export function scrubResponseBody(pathname: string, body: string, status?: numbe
         return JSON.stringify(scrubErrorValue(parsed));
       }
       return mutated ? JSON.stringify(parsed) : body;
+    }
+    if (isError && (typeof parsed === "string" || Array.isArray(parsed))) {
+      return JSON.stringify(scrubErrorValue(parsed));
     }
   } catch {
     if (isError) {

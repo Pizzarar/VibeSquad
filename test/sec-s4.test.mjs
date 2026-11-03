@@ -335,7 +335,7 @@ describe("S4-4: park/handoff-topic and restart only archive the card's own Buddy
 // ---- 6. remote body-key allowlist ----------------------------------------------------------------
 
 describe("S4-6: the R2 body-key allowlist is enforced in code", () => {
-  const P = "/__vibesquad/inbox/open-topic";
+  const P = "/__vibesquad/inbox/park-topic";
   test("forbidden, unknown and missing keys are refused; a clean body passes", () => {
     assert.deepEqual(rules.checkRemoteBody("POST", P, '{"cardId":"1"}'), { ok: true, value: { cardId: "1" } });
     for (const k of ["cwd", "provider", "model", "profile", "baseHome", "profilesPath", "labels", "pendingPrompt", "summaryUpdate", "__proto__"]) {
