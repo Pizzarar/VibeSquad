@@ -1,8 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { DEMO, usePaseo } from "./paseo";
 import { fetchDaemonConfig, fetchUsageReports, measureRtt, patchAndReloadDaemonConfig, reloadDaemonConfig, type DaemonReloadResult } from "./paseoOps";
 import { EDITABLE_CONFIG_FIELDS, LOCKED_CONFIG_SECTIONS, LOCKED_NOTE, buildConfigDiff, buildConfigPatch, configChangeWarnings, formatDiffValue, readConfigPath, validateFieldValue, formatConfigJson, formatLatency, formatMaskedJson, latencyTone, summarizeUsageReport, type UsageReportLike } from "./paseoOpsLogic";
 
+const KEEP_AWAKE_STORAGE_KEY = "vs:keep-host-awake";
+
+function readInitialKeepAwake(): boolean {
+  try {
+    const raw = localStorage.getItem(KEEP_AWAKE_STORAGE_KEY);
+    if (raw === "false" || raw === "0") return false;
+    if (raw === "true" || raw === "1") return true;
+  } catch {}
+  return true;
+}
+
 export function PaseoOpsPanel() {
+  const { agents } = usePaseo();
+  const [keepAwake, setKeepAwake] = useState<boolean>(readInitialKeepAwake);
   const [config, setConfig] = useState<unknown>(null);
   const [reload, setReload] = useState<DaemonReloadResult | null>(null);
   const [reports, setReports] = useState<UsageReportLike[]>([]);
@@ -48,6 +62,34 @@ export function PaseoOpsPanel() {
     void loadReports(false);
   }, [ping, loadConfig, loadReports]);
 
+  let runningAgentCount = 0;
+  for (const a of agents.values()) {
+    if (a && !a.archivedAt && a.status === "running") runningAgentCount += 1;
+  }
+  const holdingWakeLock = keepAwake && runningAgentCount > 0;
+  const keepAwakeStatusText = !keepAwake
+    ? "OFF"
+    : holdingWakeLock
+      ? `ACTIVE (holding wake lock · ${runningAgentCount} running)`
+      : "ARMED (waiting for running agents)";
+  const keepAwakeTone = !keepAwake ? "none" : holdingWakeLock ? "ok" : "warn";
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(KEEP_AWAKE_STORAGE_KEY, keepAwake ? "true" : "false");
+    } catch {}
+    if (DEMO) return;
+    const payload = {
+      enabled: keepAwake,
+      agents: Array.from(agents.values()).map((a) => ({ id: a.id, status: a.status, archivedAt: a.archivedAt })),
+    };
+    fetch("/__vibesquad/keep-awake", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    }).catch(() => {});
+  }, [keepAwake, runningAgentCount, agents]);
+
   const diff = config ? buildConfigDiff(config, draft) : [];
   const fieldValue = (f: (typeof EDITABLE_CONFIG_FIELDS)[number]) => {
     if (f.path in draft) return draft[f.path];
@@ -73,6 +115,24 @@ export function PaseoOpsPanel() {
         <div className="paseo-ops-row">
           <span className={`pill diag ${latencyTone(rtt)}`} data-testid="paseo-ops-rtt">RTT {formatLatency(rtt)}</span>
           <button type="button" className="btn ghost small" disabled={busy} data-testid="paseo-ops-rtt-btn" onClick={() => void ping()}>Measure</button>
+        </div>
+      </div>
+
+      <div className="paseo-ops-block">
+        <div className="field-label">KEEP HOST AWAKE</div>
+        <div className="paseo-ops-row">
+          <label className="paseo-ops-field">
+            <input
+              type="checkbox"
+              data-testid="paseo-ops-keep-awake-toggle"
+              checked={keepAwake}
+              onChange={(e) => setKeepAwake(e.target.checked)}
+            />{" "}
+            <span>Keep host awake while agents run</span>
+          </label>
+          <span className={`pill diag ${keepAwakeTone}`} data-testid="paseo-ops-keep-awake-status">
+            {keepAwakeStatusText}
+          </span>
         </div>
       </div>
 
