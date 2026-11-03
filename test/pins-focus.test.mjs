@@ -70,7 +70,7 @@ test("closed agents are never woken by usePreview, hidden panes, Composer, Subag
 
   const pr = fs.readFileSync(new URL("../src/PinRail.tsx", import.meta.url), "utf8");
   assert.match(pr, /usePreview\(bs && bs\.agent\.status !== "closed" \? bs\.agent\.id : null\)/, "RailTile does not pass closed agentId to usePreview");
-  assert.match(pr, /const clickable = !focused;/, "RailTile does not re-trigger onPick when already focused and gone");
+  assert.doesNotMatch(pr, /const clickable = !focused;/, "RailTile is only for the other Buddies now (no inert focused tile)");
   assert.match(pr, /Spin Up RiffBot/, "PinFocusHeader shows Spin Up RiffBot button");
   assert.match(pr, /Spin Up Brainstorm/, "PinFocusHeader shows Spin Up Brainstorm button");
 
@@ -89,4 +89,26 @@ test("closed agents are never woken by usePreview, hidden panes, Composer, Subag
   const app = fs.readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
   assert.match(app, /\{\(withPanes \|\| pinFocused\) && \(/, "App only mounts AgentPanes when withPanes or pinFocused");
   assert.match(app, /onStart=\{onSpinUpPin\}/, "PinFocusHeader onStart is wired to onSpinUpPin");
+});
+
+test("PinRail: active Buddy card on top, other Buddies below, no inert 'Open in the middle' tile", () => {
+  const pr = fs.readFileSync(new URL("../src/PinRail.tsx", import.meta.url), "utf8");
+  const dh = fs.readFileSync(new URL("../src/DrawerHeader.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(pr, /Open in the middle/);
+  const card = pr.indexOf('className={`pin-rail-active-buddy');
+  const label = pr.indexOf("Other Buddies");
+  const list = pr.indexOf("others.map(");
+  assert.ok(card > 0 && card < label && label < list, "active card, then 'Other Buddies' label, then the remaining pins");
+  assert.match(pr, /pinned\.filter\(\(p\) => p\.lane\.id !== focus\.laneId\)/, "the focused pin is excluded from the tile list");
+  assert.match(pr, /ref=\{slotRef\("card"\)\}/, "the card hosts the inspector slot");
+  assert.match(pr, /ref=\{slotRef\("bar"\)\}/, "the single bar hosts the compact controls slot");
+  assert.match(dh, /createPortal\(/, "DrawerHeader portals the compact bar + inspector in pin-focus");
+  assert.match(dh, /const compact = !!pinFocus && pinFocus\.agentId === agent\.id/, "only the focused drawer goes compact");
+});
+
+test("pin-focus hides the RiffBot HubBar while a chat drawer is open", () => {
+  const app = fs.readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  assert.match(app, /belowBar=\{pinFocus\.agentId \? undefined : <HubBar/);
+  const css = fs.readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+  assert.match(css, /\.pin-rail \.signal\.running,[\s\S]*?\.pane-tab \.signal\.running \{\s*animation: none;/);
 });

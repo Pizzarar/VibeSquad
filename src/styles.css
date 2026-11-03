@@ -351,6 +351,14 @@ code {
   animation: blink 0.9s steps(2) infinite;
 }
 
+/* Navigation lists glow steadily; only the active chat header dot (and error/attn) animates. */
+.sidebar-pins .signal.running,
+.sidebar-riffbot-row .signal.running,
+.pin-rail .signal.running,
+.pane-tab .signal.running {
+  animation: none;
+}
+
 .signal.idle {
   background: var(--violet);
   box-shadow: 0 0 5px var(--violet-dim);
@@ -3387,8 +3395,8 @@ html, body, #root { overflow-x: hidden; }
 /* ── Pinned teams step 2: focus view + right rail (src/PinRail.tsx, src/pinFocus.ts). Owned by the pinned team. ──
    sidebar | focused Brainstorm drawer (its own right dock stays inside it) | pin rail.
    .pins-home = back on the grid: the panes stay mounted (scroll, drafts) but hidden. */
-.app.pin-focus { grid-template-columns: var(--sidebar-w, 265px) minmax(0, 1fr) 240px; }
-.app.pin-focus.sidebar-collapsed { grid-template-columns: 56px minmax(0, 1fr) 240px; }
+.app.pin-focus { grid-template-columns: var(--sidebar-w, 265px) minmax(0, 1fr) 300px; }
+.app.pin-focus.sidebar-collapsed { grid-template-columns: 56px minmax(0, 1fr) 300px; }
 .app.pins-home { grid-template-columns: var(--sidebar-w, 265px) minmax(0, 1fr); }
 .app.pins-home.sidebar-collapsed { grid-template-columns: 56px minmax(0, 1fr); }
 .app.pins-home > .agent-panes { display: none; }
@@ -4065,3 +4073,31 @@ button.project-file-name:hover { text-decoration: underline; }
 .terminal-ports-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .terminal-port-pill { display: inline-flex; align-items: center; gap: 4px; text-decoration: none; }
 
+
+/* ── UI polish U2: one ~44px chat bar in pin-focus; the active Buddy's inspector lives atop the rail ── */
+.pin-focus-bar { height: 44px; min-height: 44px; flex-wrap: nowrap; row-gap: 0; overflow: hidden; gap: 8px; }
+.pin-focus-bar .pin-focus-slot { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; }
+.pin-focus-bar .pin-focus-plumbing { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; }
+.drawer-head-compact { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; height: 44px; overflow: hidden; }
+.drawer-head-compact > * { flex: none; }
+.drawer-head-compact .avatar { flex: none; }
+.drawer-head-compact-title { flex: 0 1 auto; min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--display); font-size: 13px; }
+.drawer-head-compact-spacer { flex: 1 1 0; min-width: 0; }
+.drawer-head-compact .drawer-model-input { width: 100px; }
+.drawer-head-compact .drawer-mode-select, .drawer-head-compact .drawer-thinking-select { max-width: 96px; }
+.pin-rail-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.pin-rail-scroll .pin-rail-list { flex: none; overflow: visible; }
+.pin-rail-active-buddy {
+  flex: none; display: flex; flex-direction: column; gap: 6px; margin: 6px; padding: 8px; min-width: 0;
+  background: #00f0ff12; border: 1px solid var(--cyan); border-left-width: 3px;
+}
+.pin-rail-active-buddy.needs-you { border-left-color: var(--hot-pink); }
+.pin-rail-active-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.pin-rail-active-inspector { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.pin-rail-active-inspector .brainstorm-ctx-bar { margin: 0 !important; }
+.pin-rail-active-inspector .brainstorm-ctx-main, .pin-rail-active-inspector .brainstorm-ctx-actions { flex-wrap: wrap !important; }
+.pin-rail-section-label { flex: none; padding: 4px 10px 0; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+@media (max-width: 900px) {
+  .pin-rail-active-buddy, .pin-rail-section-label { display: none; }
+}
+.pin-rail-buddy-tools { min-width: 0; }
