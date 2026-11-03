@@ -241,6 +241,7 @@ export const REMOTE_BODY_POLICY: Readonly<Record<string, BodyPolicy>> = {
       laneName: str(200),
       agentId: id,
       usedTokens: tokens,
+      profileName: str(120),
     },
     require: ["laneId"],
     registry: "lane",

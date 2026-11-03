@@ -95,9 +95,9 @@ export async function ensureHubLaneRegistered(pin: Pin): Promise<void> {
   }
 }
 
-export async function openPin(pin: Pin): Promise<string> {
+export async function openPin(pin: Pin, profile?: string): Promise<string> {
   await ensureHubLaneRegistered(pin);
-  return openPinAction(pin);
+  return openPinAction(pin, profile ? { profile } : undefined);
 }
 
 /** Opens the live Brainstorm, or hands the pin to onQuickStart when there is none. */

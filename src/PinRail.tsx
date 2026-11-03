@@ -2,14 +2,16 @@
 // Brainstorm is the real drawer in the middle (an ordinary panes.ts tab); every pin of the squad
 // stays in a scrollable right rail in fixed pin order. Clicking a rail tile swaps it in. Needs-you is
 // a badge and never reorders the rail. The bar on top of the drawer is the only route to the plumbing.
-import { memo, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getDraft, useDraft } from "./drafts";
 import { NeedsBadge, PinDot, PinTeamTree, usePreview } from "./PinGrid";
 import { exitPinFocus, openPinMember, type PinFocus } from "./pinFocus";
 import { TopBreadcrumb } from "./Breadcrumb";
 import { escGoesHome } from "./pinFocusLogic";
+import { DEFAULT_PIN_PROFILE, getLastBrainstormProfile, setLastBrainstormProfile } from "./pinActions";
 import { hubPinForSquad, isHubPin, pinsForSquad, type Pin } from "./pins";
 import { SendToBar } from "./PinIdeas";
+import { useProfiles } from "./profiles";
 import { slotRef } from "./pinSlots";
 import type { TeamView } from "./teams";
 import { Avatar, NeonEmblem } from "./pixel";
@@ -174,10 +176,34 @@ function PinFocusBar({ view, focus, onSelectSquad }: { view: TeamView; focus: Pi
 }
 
 /** Row 1 of the focused middle: the bar, plus the "Start fresh" panel when the Brainstorm is gone. */
-export function PinFocusHeader(props: { view: TeamView; focus: PinFocus; onStart: (pin: Pin) => void; onSelectSquad: (id: string) => void; /** Rendered under the bar in the same row-1 grid cell (the hub bar). */ belowBar?: ReactNode }) {
+export function PinFocusHeader(props: {
+  view: TeamView;
+  focus: PinFocus;
+  onStart: (pin: Pin, profile?: string) => void;
+  onSelectSquad: (id: string) => void;
+  /** Rendered under the bar in the same row-1 grid cell (the hub bar). */
+  belowBar?: ReactNode;
+  spinUpError?: string | null;
+}) {
   const { view, focus, onStart, onSelectSquad, belowBar } = props;
+  const spinUpError = props.spinUpError ?? focus.spinUpError ?? null;
   const hubPin = hubPinForSquad(view);
   const pin = pinsForSquad(view).pinned.find((p) => p.lane.id === focus.laneId) ?? (hubPin?.lane.id === focus.laneId ? hubPin : undefined);
+  const { profiles } = useProfiles();
+  const brainstormProfiles = useMemo(() => {
+    const names = profiles.filter((p) => p.role === "brainstorm").map((p) => p.name);
+    const list = names.length > 0 ? names : ["Brainstorm - Claude", "Brainstorm - Gemini"];
+    const last = pin?.lane?.lastProfile?.trim();
+    if (last && !list.includes(last)) return [...list, last];
+    return list;
+  }, [profiles, pin?.lane?.lastProfile]);
+  const pinKey = `${focus.squadId}:${focus.laneId}`;
+  const [selectedProfile, setSelectedProfile] = useState(
+    () => pin?.lane?.lastProfile || getLastBrainstormProfile(DEFAULT_PIN_PROFILE),
+  );
+  useEffect(() => {
+    setSelectedProfile(pin?.lane?.lastProfile || getLastBrainstormProfile(DEFAULT_PIN_PROFILE));
+  }, [pinKey, pin?.lane?.lastProfile]);
   return (
     <>
       {belowBar ? (
@@ -190,6 +216,11 @@ export function PinFocusHeader(props: { view: TeamView; focus: PinFocus; onStart
       )}
       {!focus.agentId && (
         <div className="pin-focus-empty" data-testid="pin-focus-empty">
+          {spinUpError && (
+            <div className="pin-focus-spinup-error" role="alert" data-testid="pin-spin-up-error">
+              {spinUpError}
+            </div>
+          )}
           {focus.gone ? (
             <>
               <span className="muted">
@@ -198,9 +229,32 @@ export function PinFocusHeader(props: { view: TeamView; focus: PinFocus; onStart
                   : `${pin?.lane.name ?? "This team"} has no active Brainstorm chat yet. Click Spin Up when you want to start a session from the brief.`}
               </span>
               {pin && (
-                <button type="button" className="btn ok" data-testid="pin-start-fresh" onClick={() => onStart(pin)}>
-                  {isHubPin(pin) ? "Spin Up RiffBot" : "Spin Up Brainstorm"}
-                </button>
+                <>
+                  <div className="pin-profile-chips" data-testid="pin-spin-up-profile-chips">
+                    {brainstormProfiles.map((name) => {
+                      const active = selectedProfile === name;
+                      const shortName = name.replace(/^Brainstorm\s*-\s*/i, "") || name;
+                      return (
+                        <button
+                          type="button"
+                          key={name}
+                          className={"idea-box-profile-chip" + (active ? " is-active" : "")}
+                          aria-pressed={active}
+                          data-testid={`pin-spin-up-profile-chip-${name}`}
+                          onClick={() => {
+                            setSelectedProfile(name);
+                            setLastBrainstormProfile(name);
+                          }}
+                        >
+                          {shortName}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <button type="button" className="btn ok" data-testid="pin-start-fresh" onClick={() => onStart(pin, selectedProfile)}>
+                    {isHubPin(pin) ? "Spin Up RiffBot" : "Spin Up Brainstorm"}
+                  </button>
+                </>
               )}
             </>
           ) : (
