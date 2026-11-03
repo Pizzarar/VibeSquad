@@ -146,6 +146,25 @@ pub fn render_mode_choice_page(_cfg: &DesktopConfig, error_msg: Option<&str>) ->
     line-height: 1.45;
     color: var(--muted);
   }}
+  .footer-actions {{
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 16px;
+  }}
+  .btn-secondary {{
+    padding: 9px 12px;
+    background: var(--panel-hi);
+    color: var(--text);
+    border: 1px solid var(--line);
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+  }}
+  .btn-secondary:hover {{
+    border-color: var(--cyan);
+    color: var(--cyan);
+  }}
 </style>
 </head>
 <body>
@@ -181,11 +200,16 @@ pub fn render_mode_choice_page(_cfg: &DesktopConfig, error_msg: Option<&str>) ->
         </div>
       </button>
     </div>
+
+    <div class="footer-actions">
+      <button type="button" class="btn-secondary" id="check-update-btn" data-testid="desktop-check-update-btn">Check for Updates</button>
+    </div>
   </div>
 
   <script>
     const localBtn = document.getElementById('choose-local-btn');
     const remoteBtn = document.getElementById('choose-remote-btn');
+    const checkUpdateBtn = document.getElementById('check-update-btn');
 
     async function pickMode(mode) {{
       localBtn.disabled = true;
@@ -206,6 +230,26 @@ pub fn render_mode_choice_page(_cfg: &DesktopConfig, error_msg: Option<&str>) ->
 
     localBtn.addEventListener('click', () => pickMode('local'));
     remoteBtn.addEventListener('click', () => pickMode('remote'));
+    if (checkUpdateBtn) {{
+      checkUpdateBtn.addEventListener('click', async () => {{
+        checkUpdateBtn.disabled = true;
+        checkUpdateBtn.textContent = 'Checking for updates…';
+        try {{
+          const res = await fetch('/__desktop/updater/check', {{ method: 'POST' }});
+          const data = await res.json().catch(() => ({{}}));
+          if (data && data.updateAvailable && data.downloaded) {{
+            checkUpdateBtn.textContent = 'Installing v' + data.availableVersion + '…';
+            await fetch('/__desktop/updater/install', {{ method: 'POST' }});
+            return;
+          }}
+          checkUpdateBtn.textContent = data && data.currentVersion ? ('Up to date (v' + data.currentVersion + ')') : 'Up to date';
+        }} catch (_) {{
+          checkUpdateBtn.textContent = 'Update check failed';
+        }} finally {{
+          checkUpdateBtn.disabled = false;
+        }}
+      }});
+    }}
   </script>
 </body>
 </html>"#,
@@ -615,6 +659,9 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
         <a href="/__desktop/mode" class="btn-secondary" id="back-to-mode-choice" data-testid="back-to-mode-choice">
           ← First-Time Setup (Local / Remote)
         </a>
+        <button type="button" class="btn-secondary" id="check-update-btn" data-testid="desktop-check-update-btn">
+          Check for Updates
+        </button>
       </div>
     </form>
 
@@ -846,6 +893,27 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
       e.preventDefault();
       submitPair();
     }});
+    const checkUpdateBtn = document.getElementById('check-update-btn');
+    if (checkUpdateBtn) {{
+      checkUpdateBtn.addEventListener('click', async () => {{
+        checkUpdateBtn.disabled = true;
+        checkUpdateBtn.textContent = 'Checking for updates…';
+        try {{
+          const res = await fetch('/__desktop/updater/check', {{ method: 'POST' }});
+          const data = await res.json().catch(() => ({{}}));
+          if (data && data.updateAvailable && data.downloaded) {{
+            checkUpdateBtn.textContent = 'Installing v' + data.availableVersion + '…';
+            await fetch('/__desktop/updater/install', {{ method: 'POST' }});
+            return;
+          }}
+          checkUpdateBtn.textContent = data && data.currentVersion ? ('Up to date (v' + data.currentVersion + ')') : 'Up to date';
+        }} catch (_) {{
+          checkUpdateBtn.textContent = 'Update check failed';
+        }} finally {{
+          checkUpdateBtn.disabled = false;
+        }}
+      }});
+    }}
   </script>
 </body>
 </html>"#,
@@ -1066,12 +1134,14 @@ pub fn render_unreachable_page(cfg: &DesktopConfig, last_error: &str) -> String 
       <button type="button" class="btn-primary" id="retry-btn">Retry Now</button>
       <a href="/__desktop/setup" class="btn-secondary" id="change-server-btn">Change Server / Re-pair</a>
       <a href="/__desktop/mode" class="btn-secondary" id="first-time-setup-btn">First-Time Setup</a>
+      <button type="button" class="btn-secondary" id="check-update-btn" data-testid="desktop-check-update-btn">Check for Updates</button>
     </div>
   </div>
 
   <script>
     const statusEl = document.getElementById('retry-status');
     const retryBtn = document.getElementById('retry-btn');
+    const checkUpdateBtn = document.getElementById('check-update-btn');
     let checking = false;
     const RELOAD_KEY = 'vs.reconnect.reloads';
     const MAX_RELOADS = 3;
@@ -1101,6 +1171,26 @@ pub fn render_unreachable_page(cfg: &DesktopConfig, last_error: &str) -> String 
     }}
 
     retryBtn.addEventListener('click', () => {{ reloads = 0; try {{ sessionStorage.removeItem(RELOAD_KEY); }} catch (_) {{}} checkNow(); }});
+    if (checkUpdateBtn) {{
+      checkUpdateBtn.addEventListener('click', async () => {{
+        checkUpdateBtn.disabled = true;
+        checkUpdateBtn.textContent = 'Checking for updates…';
+        try {{
+          const res = await fetch('/__desktop/updater/check', {{ method: 'POST' }});
+          const data = await res.json().catch(() => ({{}}));
+          if (data && data.updateAvailable && data.downloaded) {{
+            checkUpdateBtn.textContent = 'Installing v' + data.availableVersion + '…';
+            await fetch('/__desktop/updater/install', {{ method: 'POST' }});
+            return;
+          }}
+          checkUpdateBtn.textContent = data && data.currentVersion ? ('Up to date (v' + data.currentVersion + ')') : 'Up to date';
+        }} catch (_) {{
+          checkUpdateBtn.textContent = 'Update check failed';
+        }} finally {{
+          checkUpdateBtn.disabled = false;
+        }}
+      }});
+    }}
     setInterval(checkNow, 3000);
   </script>
 </body>
@@ -1296,12 +1386,14 @@ pub fn render_reconnecting_page(_cfg: &DesktopConfig, last_error: &str) -> Strin
       <button type="button" class="btn-primary" id="retry-btn">Retry</button>
       <a href="/__desktop/setup" class="btn-secondary" id="switch-server-btn">Switch server / Re-pair</a>
       <a href="/__desktop/mode" class="btn-secondary" id="first-time-setup-btn">First-Time Setup</a>
+      <button type="button" class="btn-secondary" id="check-update-btn" data-testid="desktop-check-update-btn">Check for Updates</button>
     </div>
   </div>
   <script>
     const started = Date.now();
     const GIVE_UP_MS = 30000;
     const statusEl = document.getElementById('retry-status');
+    const checkUpdateBtn = document.getElementById('check-update-btn');
     let checking = false;
     // Loop guard: after 3 reloads that land back here, stop reloading and wait for a manual Retry.
     const RELOAD_KEY = 'vs.reconnect.reloads';
@@ -1337,6 +1429,26 @@ pub fn render_reconnecting_page(_cfg: &DesktopConfig, last_error: &str) -> Strin
       if (Date.now() - started > GIVE_UP_MS) {{ showDown(); statusEl.textContent = 'Unreachable · retrying…'; }}
     }}
     document.getElementById('retry-btn').addEventListener('click', () => {{ reloads = 0; halted = false; try {{ sessionStorage.removeItem(RELOAD_KEY); }} catch (_) {{}} checkNow(); }});
+    if (checkUpdateBtn) {{
+      checkUpdateBtn.addEventListener('click', async () => {{
+        checkUpdateBtn.disabled = true;
+        checkUpdateBtn.textContent = 'Checking for updates…';
+        try {{
+          const res = await fetch('/__desktop/updater/check', {{ method: 'POST' }});
+          const data = await res.json().catch(() => ({{}}));
+          if (data && data.updateAvailable && data.downloaded) {{
+            checkUpdateBtn.textContent = 'Installing v' + data.availableVersion + '…';
+            await fetch('/__desktop/updater/install', {{ method: 'POST' }});
+            return;
+          }}
+          checkUpdateBtn.textContent = data && data.currentVersion ? ('Up to date (v' + data.currentVersion + ')') : 'Up to date';
+        }} catch (_) {{
+          checkUpdateBtn.textContent = 'Update check failed';
+        }} finally {{
+          checkUpdateBtn.disabled = false;
+        }}
+      }});
+    }}
     if (halted) {{ showDown(); statusEl.textContent = 'Server answers but the app is not loading'; }}
     setInterval(() => {{ if (!halted) checkNow(); }}, 1500);
   </script>

@@ -179,7 +179,7 @@ pub async fn check_for_updates(state: &Arc<SharedAppState>) -> Value {
     let resp = match state
         .client()
         .get(&endpoint)
-        .header("User-Agent", "VibeSquad-Desktop-Updater/0.1.1")
+        .header("User-Agent", concat!("VibeSquad-Desktop-Updater/", env!("CARGO_PKG_VERSION")))
         .timeout(Duration::from_secs(10))
         .send()
         .await
@@ -309,7 +309,7 @@ pub async fn check_for_updates(state: &Arc<SharedAppState>) -> Value {
     let bin_resp = match state
         .client()
         .get(&download_url)
-        .header("User-Agent", "VibeSquad-Desktop-Updater/0.1.1")
+        .header("User-Agent", concat!("VibeSquad-Desktop-Updater/", env!("CARGO_PKG_VERSION")))
         .timeout(Duration::from_secs(120))
         .send()
         .await
@@ -388,8 +388,8 @@ pub async fn check_for_updates(state: &Arc<SharedAppState>) -> Value {
         up.last_error.clear();
     }
 
-    // Beta channel: auto-install immediately when no agent turn is mid-flight.
-    if channel == "beta" && !is_any_agent_running(state) {
+    // Auto-install immediately when no agent turn is mid-flight.
+    if !is_any_agent_running(state) {
         let _ = install_downloaded_update(state);
     }
 
@@ -515,12 +515,11 @@ pub async fn handle_updater_busy(
         let mut up = state.updater.lock().unwrap();
         up.forced_busy = payload.busy;
     }
-    let channel = channel_of(&state);
     let ready = {
         let up = state.updater.lock().unwrap();
         up.downloaded && !up.install_triggered
     };
-    if channel == "beta" && ready && !is_any_agent_running(&state) {
+    if ready && !is_any_agent_running(&state) {
         let _ = install_downloaded_update(&state);
     }
     Json(status_json(&state))
@@ -534,17 +533,17 @@ pub fn spawn_updater_loop(state: Arc<SharedAppState>) {
         loop {
             tokio::time::sleep(Duration::from_secs(30)).await;
             ticks += 1;
-            // Every 30s, if beta has a downloaded update waiting for an in-flight agent turn to finish, install once idle.
-            let channel = channel_of(&state);
-            let pending_beta = {
+            // Every 30s, if a downloaded update is waiting for an in-flight agent turn to finish, install once idle.
+            let pending = {
                 let up = state.updater.lock().unwrap();
-                channel == "beta" && up.downloaded && !up.install_triggered
+                up.downloaded && !up.install_triggered
             };
-            if pending_beta && !is_any_agent_running(&state) {
+            if pending && !is_any_agent_running(&state) {
                 let _ = install_downloaded_update(&state);
             }
-            // Full remote check every 4 hours (480 * 30s = 14400s).
-            if ticks % 480 == 0 {
+            // Poll every 5 minutes (10 * 30s) when disconnected, or every 4 hours (480 * 30s = 14400s) when connected.
+            let disconnected = state.active_upstream.read().unwrap().is_none();
+            if (disconnected && ticks % 10 == 0) || ticks % 480 == 0 {
                 let _ = check_for_updates(&state).await;
             }
         }

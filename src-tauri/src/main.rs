@@ -941,10 +941,16 @@ async fn handle_desktop_ping(
     let candidates = state.candidate_hosts();
     for host in candidates {
         if is_local_host(&host) {
-            if check_local_server_healthy(&state.client(), &host)
+            let mut healthy = check_local_server_healthy(&state.client(), &host)
                 .await
-                .is_ok()
-            {
+                .is_ok();
+            if !healthy && cfg.server_mode == "local" {
+                ensure_local_server_running(&state).await;
+                healthy = check_local_server_healthy(&state.client(), &host)
+                    .await
+                    .is_ok();
+            }
+            if healthy {
                 *state.active_upstream.write().unwrap() = Some(host.clone());
                 return Json(json!({
                     "ok": true,
@@ -1256,7 +1262,7 @@ async fn handle_desktop_pair(
         match state
             .client()
             .get(pair_url.as_str())
-            .header("User-Agent", "VibeSquad-Desktop/0.1.1 (Windows)")
+            .header("User-Agent", concat!("VibeSquad-Desktop/", env!("CARGO_PKG_VERSION"), " (Windows)"))
             .timeout(Duration::from_millis(2500))
             .send()
             .await
@@ -2564,6 +2570,20 @@ fn main() {
                 true,
                 None::<&str>,
             )?;
+            let first_time_setup_item = MenuItem::with_id(
+                app,
+                "first_time_setup",
+                "First-Time Setup (Local / Remote)...",
+                true,
+                None::<&str>,
+            )?;
+            let check_updates_item = MenuItem::with_id(
+                app,
+                "check_updates",
+                "Check for Updates...",
+                true,
+                None::<&str>,
+            )?;
             let needs_item = MenuItem::with_id(app, "needs", "Needs You: 0", true, None::<&str>)?;
             let start_login_checked = state_for_setup.config.read().unwrap().start_at_login;
             let start_login_item = CheckMenuItem::with_id(
@@ -2585,6 +2605,8 @@ fn main() {
                 &[
                     &open_item,
                     &switch_server_item,
+                    &first_time_setup_item,
+                    &check_updates_item,
                     &needs_item,
                     &sep1,
                     &start_login_item,
@@ -2630,6 +2652,26 @@ fn main() {
                                 let _ = w.navigate(u);
                             }
                         }
+                        focus_main_window(app);
+                    }
+                    "first_time_setup" => {
+                        *state_for_menu.active_upstream.write().unwrap() = None;
+                        state_for_menu.setup_mode.store(false, Ordering::SeqCst);
+                        let port = state_for_menu.local_port.load(Ordering::SeqCst);
+                        if let Some(w) = app.get_webview_window("main") {
+                            if let Ok(u) =
+                                url::Url::parse(&format!("http://127.0.0.1:{}/__desktop/mode", port))
+                            {
+                                let _ = w.navigate(u);
+                            }
+                        }
+                        focus_main_window(app);
+                    }
+                    "check_updates" => {
+                        let st = state_for_menu.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = updater::check_for_updates(&st).await;
+                        });
                         focus_main_window(app);
                     }
                     "quit" => {
@@ -3282,13 +3324,19 @@ mod tests {
             assert!(!state.setup_mode.load(Ordering::SeqCst), "{path}");
         }
 
-        // 3. Reconnecting, Unreachable, and Pair pages all expose a link to /__desktop/mode
+        // 3. Reconnecting, Unreachable, Mode Choice, and Pair pages all expose /__desktop/mode and Check for Updates
         let cfg = DesktopConfig::default();
-        assert!(ui_pages::render_reconnecting_page(&cfg, "").contains("href=\"/__desktop/mode\""));
-        assert!(ui_pages::render_reconnecting_page(&cfg, "").contains(".actions { display:flex;"));
-        assert!(ui_pages::render_unreachable_page(&cfg, "").contains("href=\"/__desktop/mode\""));
+        let mode_html = ui_pages::render_mode_choice_page(&cfg, None);
+        let reconnect_html = ui_pages::render_reconnecting_page(&cfg, "");
+        let unreachable_html = ui_pages::render_unreachable_page(&cfg, "");
         let pair_html = ui_pages::render_pair_page(&cfg, None);
+        assert!(reconnect_html.contains("href=\"/__desktop/mode\""));
+        assert!(reconnect_html.contains(".actions { display:flex;"));
+        assert!(unreachable_html.contains("href=\"/__desktop/mode\""));
         assert!(pair_html.contains("data-testid=\"back-to-mode-choice\""));
         assert!(!pair_html.contains("id=\"serverHost\"\n          name=\"serverHost\"\n          value=\"\"\n          placeholder=\"server-ip:4180 or meshnet-host:4180\"\n          autocomplete=\"off\"\n          spellcheck=\"false\"\n          required"));
+        for html in [&mode_html, &pair_html, &unreachable_html, &reconnect_html] {
+            assert!(html.contains("data-testid=\"desktop-check-update-btn\""), "missing desktop-check-update-btn");
+        }
     }
 }
