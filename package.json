@@ -10,6 +10,7 @@
     "dev": "vite",
     "start": "node server/serve.mjs",
     "build": "node server/generate-licenses.mjs && tsc --noEmit && vite build",
+    "build:remote": "vite build --mode remote",
     "build:desktop": "node server/build-desktop.mjs",
     "release:beta": "node server/release.mjs --channel beta",
     "release:stable": "node server/release.mjs --channel stable",
