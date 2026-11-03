@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { PaseoAgent, PaseoWorkspace } from "@getpaseo/client";
-import { archiveWorkspace, usePaseo } from "./paseo";
+import { DEMO, archiveAgent, archiveWorkspace, daemonClient, removeLocalAgent, usePaseo } from "./paseo";
 import { ConfirmButton, ago } from "./ui";
 import { openRightDockTab } from "./RightDock";
 import { agentsWithoutWorkspaceId, bulkLabels, buildFolders, clearLabels, isLiveAgent, normDir, type Folder, type Verdict } from "./workspaceGroups";
@@ -52,8 +52,62 @@ export function WorkspacesView() {
   const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [rowErr, setRowErr] = useState("");
+  const [janitorBusy, setJanitorBusy] = useState(false);
+  const [janitorStatus, setJanitorStatus] = useState("");
   const reloadProjects = useCallback(() => void listProjects().then(setProjects).catch(() => {}), []);
   useEffect(reloadProjects, [reloadProjects, workspaces]);
+
+  const closedWorkers = useMemo(() => {
+    const allClosedWorkers = [...agents.values()].filter(
+      (a) => !a.archivedAt && a.status === "closed" && (a.labels?.role ?? "").toLowerCase() === "worker",
+    );
+    const now = Date.now();
+    const stale = allClosedWorkers.filter((a) => {
+      const ts = Date.parse(a.updatedAt || (a as { closedAt?: string; createdAt?: string }).closedAt || (a as { createdAt?: string }).createdAt || "");
+      return Number.isFinite(ts) && now - ts >= 2 * 3600_000;
+    });
+    return stale.length > 0 ? stale : allClosedWorkers;
+  }, [agents]);
+
+  const handleRunJanitor = async () => {
+    if (janitorBusy) return;
+    setJanitorBusy(true);
+    setJanitorStatus("");
+    try {
+      let archivedCount = 0;
+      const res = await fetch("/__vibesquad/janitor/run", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ maxAgeMs: 2 * 3600_000 }),
+      }).catch(() => null);
+      if (res && res.ok) {
+        const data = await res.json().catch(() => null);
+        if (Array.isArray(data?.archived)) {
+          archivedCount += data.archived.length;
+          for (const id of data.archived) removeLocalAgent(id);
+        }
+      }
+      if (!DEMO) {
+        for (const a of closedWorkers) {
+          try {
+            await (daemonClient.archiveAgent ? daemonClient.archiveAgent(a.id) : archiveAgent(a.id));
+            removeLocalAgent(a.id);
+            archivedCount++;
+          } catch {}
+        }
+      } else {
+        for (const a of closedWorkers) {
+          removeLocalAgent(a.id);
+          archivedCount++;
+        }
+      }
+      setJanitorStatus(archivedCount > 0 ? `Cleaned up ${archivedCount} closed worker${archivedCount === 1 ? "" : "s"}.` : "No closed workers to archive.");
+    } catch (e: any) {
+      setRowErr(String(e?.message ?? e));
+    } finally {
+      setJanitorBusy(false);
+    }
+  };
   const wsCounts = useMemo(() => {
     const m = new Map<string, number>();
     for (const w of workspaces.values()) m.set(w.projectId, (m.get(w.projectId) ?? 0) + 1);
@@ -119,6 +173,14 @@ export function WorkspacesView() {
         <button className={`btn small ${panel === "projects" ? "ok" : "ghost"}`} onClick={() => setPanel(panel === "projects" ? "" : "projects")}>Projects ({projects.length})</button>
         <button className={`btn small ${panel === "worktrees" ? "ok" : "ghost"}`} onClick={() => setPanel(panel === "worktrees" ? "" : "worktrees")}>Worktrees</button>
         <button className={`btn small ${panel === "recover" ? "ok" : "ghost"}`} onClick={() => setPanel(panel === "recover" ? "" : "recover")}>Recover</button>
+        <button
+          className="btn small ghost"
+          data-testid="ws-janitor-btn"
+          disabled={janitorBusy}
+          onClick={() => void handleRunJanitor()}
+        >
+          {janitorBusy ? "Cleaning up…" : `Clean up closed workers (${closedWorkers.length})`}
+        </button>
         {safe.length > 0 && (
           <ConfirmButton
             label={bulkLabels(safe).label}
@@ -136,6 +198,7 @@ export function WorkspacesView() {
       {panel === "recover" && <RecoverPanel />}
       {panel === "projects" && <ProjectsPanel projects={projects} reload={reloadProjects} workspaceCounts={wsCounts} onRemoved={evict} />}
       {panel === "worktrees" && <WorktreesPanel projects={projects} workspaces={[...workspaces.values()]} agents={[...agents.values()]} />}
+      {janitorStatus && <div className="muted small" data-testid="ws-janitor-status">{janitorStatus}</div>}
       {rowErr && <div className="ws-reasons">{rowErr}</div>}
       {shown.length === 0 && <div className="muted">No folders match.</div>}
       {shown.map((r) => {
