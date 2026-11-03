@@ -167,10 +167,14 @@ export async function parkIdeasInInbox(opts: {
   source?: string;
   splitDump?: boolean;
 }): Promise<{ added: InboxCard[]; cards: InboxCard[]; summary: string }> {
+  const { source, ...rest } = opts;
+  const reqBody = isRemote()
+    ? { ...rest, laneId: opts.laneId || opts.defaultLaneId }
+    : { ...opts, laneId: opts.laneId || opts.defaultLaneId, ...(source !== undefined ? { source } : {}) };
   const res = await fetch("/__vibesquad/inbox", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ ...opts, laneId: opts.laneId || opts.defaultLaneId }),
+    body: JSON.stringify(reqBody),
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {

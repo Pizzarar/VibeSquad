@@ -8,6 +8,11 @@ import {
   errorToRemoteResponse,
   installRemoteTransport,
 } from "../src/remoteTransport.ts";
+import { buildNewSquadTeamDef } from "../src/newSquadDef.ts";
+import {
+  checkRemoteBody,
+  pinTeamsRegistry,
+} from "../plugin/server/remote-proxy-rules.ts";
 
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
 
@@ -118,6 +123,7 @@ describe("R2-4 remote UI & module-load guards", () => {
 
   test("IdeaInbox.tsx and NewSquadModal.tsx align payloads with R2-5 remote body policies", () => {
     const inbox = read("src/IdeaInbox.tsx");
+    assert.match(inbox, /const \{ source, \.\.\.rest \} = opts;/);
     assert.match(inbox, /laneId: opts\.laneId \|\| opts\.defaultLaneId/);
     assert.match(inbox, /action: "bounce", cardId, teamId: team\.id, laneId: newLane/);
     assert.match(inbox, /action: "merge",\s*targetId,\s*sourceIds,\s*teamId: team\.id,\s*laneId:/);
@@ -126,6 +132,68 @@ describe("R2-4 remote UI & module-load guards", () => {
 
     const newSquad = read("src/NewSquadModal.tsx");
     assert.match(newSquad, /data-testid="new-squad-remote-note"/);
+    assert.match(newSquad, /lastProfile: !remote && startBuddy \? selectedProfile : undefined/);
     assert.match(newSquad, /const \{ paths: _paths, path: _path, \.\.\.restTeam \} = builtTeam/);
+    assert.match(newSquad, /paths: _lp, path: _lpath, lastProfile: _lastProfile, \.\.\.restLane/);
+    assert.match(newSquad, /onCreated\(newTeam\.id, remote \? null : pin\)/);
+    assert.match(newSquad, /\{!remote && \(\s*<>\s*<label[^>]*>\s*<input\s+type="checkbox"\s+data-testid="new-squad-start-buddy"/);
+  });
+
+  test("remote parkIdeasInInbox payload omits source and passes checkRemoteBody", () => {
+    for (const source of ["ui", "brainstorm-dump"]) {
+      const opts = {
+        text: "Add dark mode toggle",
+        teamId: "vibesquad",
+        defaultLaneId: "main-game",
+        source,
+        splitDump: source === "brainstorm-dump",
+      };
+      const { source: _source, ...rest } = opts;
+      const remoteReqBody = { ...rest, laneId: opts.laneId || opts.defaultLaneId };
+      assert.equal("source" in remoteReqBody, false);
+
+      const check = checkRemoteBody("POST", "/__vibesquad/inbox", JSON.stringify(remoteReqBody));
+      assert.equal(check.ok, true, `expected POST /__vibesquad/inbox to pass for source=${source}, got: ${JSON.stringify(check)}`);
+    }
+  });
+
+  test("remote NewSquadModal team payload strips paths/path/lastProfile and passes checkRemoteBody + pinTeamsRegistry", () => {
+    const onDiskTeams = [
+      {
+        id: "existing-squad",
+        name: "Existing Squad",
+        color: "#ff00aa",
+        paths: ["C:\\Users\\Owner\\projects\\existing"],
+        lanes: [{ id: "existing-lane", name: "Existing Lane", hub: true, state: "pinned", lastProfile: "Brainstorm - Claude" }],
+      },
+    ];
+    const remote = true;
+    const startBuddy = true;
+    const selectedProfile = "Brainstorm - Claude";
+
+    const builtTeam = buildNewSquadTeamDef({
+      id: "team-mobile-squad",
+      name: "Mobile Squad",
+      folderPath: "",
+      existingTeams: onDiskTeams,
+      lastProfile: !remote && startBuddy ? selectedProfile : undefined,
+    });
+    const { paths: _paths, path: _path, ...restTeam } = builtTeam;
+    const newTeam = {
+      ...restTeam,
+      lanes: builtTeam.lanes.map(({ paths: _lp, path: _lpath, lastProfile: _lastProfile, ...restLane }) => restLane),
+    };
+
+    // Strip pinned fields from existing teams as echoed or keep valid representation
+    const savePayload = {
+      teams: [...onDiskTeams, newTeam],
+      revision: "rev-123",
+    };
+
+    const bodyCheck = checkRemoteBody("PUT", "/api/teams", JSON.stringify(savePayload));
+    assert.equal(bodyCheck.ok, true, `checkRemoteBody failed: ${JSON.stringify(bodyCheck)}`);
+
+    const regCheck = pinTeamsRegistry(bodyCheck.value, { teams: onDiskTeams });
+    assert.equal(regCheck.ok, true, `pinTeamsRegistry failed: ${JSON.stringify(regCheck)}`);
   });
 });

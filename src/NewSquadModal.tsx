@@ -94,20 +94,22 @@ export function NewSquadModal({
         name: squadName.trim() || "New Squad",
         folderPath: finalPath,
         existingTeams: teams,
-        lastProfile: startBuddy ? selectedProfile : undefined,
+        lastProfile: !remote && startBuddy ? selectedProfile : undefined,
       });
       let newTeam: TeamDef = builtTeam;
       if (remote) {
         const { paths: _paths, path: _path, ...restTeam } = builtTeam as TeamDef & { path?: unknown };
         newTeam = {
           ...restTeam,
-          lanes: builtTeam.lanes.map(({ paths: _lp, path: _lpath, ...restLane }: any) => restLane),
+          lanes: builtTeam.lanes.map(
+            ({ paths: _lp, path: _lpath, lastProfile: _lastProfile, ...restLane }: any) => restLane,
+          ),
         } as unknown as TeamDef;
       }
       await saveTeams([...teams, newTeam]);
 
       let pin: Pin | null = null;
-      if (startBuddy && newTeam.lanes[0]) {
+      if (!remote && startBuddy && newTeam.lanes[0]) {
         const lane = newTeam.lanes[0] as PinLane;
         pin = {
           squad: newTeam,
@@ -123,7 +125,7 @@ export function NewSquadModal({
           topicBrainstorms: [],
         };
       }
-      onCreated(newTeam.id, pin);
+      onCreated(newTeam.id, remote ? null : pin);
     } catch (e) {
       setErr(String((e as Error)?.message ?? e));
     } finally {
@@ -216,30 +218,34 @@ export function NewSquadModal({
           }}
         />
       </div>
-      <label style={{ display: "flex", alignItems: "center", gap: 8, margin: "10px 0 6px", cursor: "pointer" }}>
-        <input
-          type="checkbox"
-          data-testid="new-squad-start-buddy"
-          checked={startBuddy}
-          onChange={(e) => setStartBuddy(e.target.checked)}
-        />
-        <span>Start a Buddy</span>
-      </label>
-      {startBuddy && (
-        <div className="pin-profile-chips" data-testid="new-squad-profile-chips">
-          {bsProfiles.map((p) => (
-            <button
-              key={p.name}
-              type="button"
-              data-testid={`new-squad-profile-${p.name}`}
-              className={`tchip ${selectedProfile === p.name ? "on" : ""}`}
-              aria-pressed={selectedProfile === p.name}
-              onClick={() => setSelectedProfile(p.name)}
-            >
-              {p.name}
-            </button>
-          ))}
-        </div>
+      {!remote && (
+        <>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, margin: "10px 0 6px", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              data-testid="new-squad-start-buddy"
+              checked={startBuddy}
+              onChange={(e) => setStartBuddy(e.target.checked)}
+            />
+            <span>Start a Buddy</span>
+          </label>
+          {startBuddy && (
+            <div className="pin-profile-chips" data-testid="new-squad-profile-chips">
+              {bsProfiles.map((p) => (
+                <button
+                  key={p.name}
+                  type="button"
+                  data-testid={`new-squad-profile-${p.name}`}
+                  className={`tchip ${selectedProfile === p.name ? "on" : ""}`}
+                  aria-pressed={selectedProfile === p.name}
+                  onClick={() => setSelectedProfile(p.name)}
+                >
+                  {p.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </>
       )}
       {err && <div className="stat-alert small" style={{ marginTop: 8 }}>{err}</div>}
     </Modal>
