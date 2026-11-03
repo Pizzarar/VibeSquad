@@ -10,6 +10,7 @@ import { DEFAULT_PIN_PROFILE, slugLaneId, type Pin, type PinLane } from "./pins"
 import { useProfiles } from "./profiles";
 import { Modal } from "./TeamActions";
 import { buildNewSquadTeamDef } from "./newSquadDef";
+import { isRemote } from "./remoteSession";
 
 export function deriveSquadNameFromPath(rawPath: string): { id: string; name: string; pathMatcher: string } {
   const normalized = rawPath.replace(/\.git$/, "").replace(/[/\\]+$/, "");
@@ -47,31 +48,38 @@ export function NewSquadModal({
     return bs.length > 0 ? bs : [{ name: "Brainstorm - Claude" }, { name: "Brainstorm - Gemini" }];
   }, [profiles]);
 
+  const remote = isRemote();
   const rawPath =
     source === "path" ? folderPath : cloneDest || cloneRepo.split("/").pop()?.replace(/\.git$/, "") || "";
   const derived = useMemo(() => deriveSquadNameFromPath(rawPath), [rawPath]);
 
   useEffect(() => {
-    if (!nameEdited) setSquadName(derived.name);
-  }, [derived.name, nameEdited]);
+    if (!nameEdited && !remote) setSquadName(derived.name);
+  }, [derived.name, nameEdited, remote]);
 
-  const canSubmit = source === "path" ? folderPath.trim().length > 0 : cloneRepo.trim().length > 0;
+  const canSubmit = remote
+    ? squadName.trim().length > 0
+    : source === "path"
+      ? folderPath.trim().length > 0
+      : cloneRepo.trim().length > 0;
 
   const create = async () => {
     setBusy(true);
     setErr("");
     try {
       let finalPath = folderPath.trim();
-      if (source === "clone") {
-        const dest = cloneDest.trim() || cloneRepo.trim().split("/").pop()!.replace(/\.git$/, "");
-        if (!DEMO) {
-          const res = await (daemonClient as any).cloneGithubProject({ repo: cloneRepo.trim(), targetDirectory: dest });
-          finalPath = (res as { path?: string }).path ?? dest;
+      if (!remote) {
+        if (source === "clone") {
+          const dest = cloneDest.trim() || cloneRepo.trim().split("/").pop()!.replace(/\.git$/, "");
+          if (!DEMO) {
+            const res = await (daemonClient as any).cloneGithubProject({ repo: cloneRepo.trim(), targetDirectory: dest });
+            finalPath = (res as { path?: string }).path ?? dest;
+          } else {
+            finalPath = dest;
+          }
         } else {
-          finalPath = dest;
+          if (!DEMO) await (daemonClient as any).addProject(finalPath);
         }
-      } else {
-        if (!DEMO) await (daemonClient as any).addProject(finalPath);
       }
 
       const teams = getTeams();
@@ -81,13 +89,21 @@ export function NewSquadModal({
       let n = 2;
       while (taken.has(teamId)) teamId = `${base}-${n++}`;
 
-      const newTeam = buildNewSquadTeamDef({
+      const builtTeam = buildNewSquadTeamDef({
         id: teamId,
         name: squadName.trim() || "New Squad",
         folderPath: finalPath,
         existingTeams: teams,
         lastProfile: startBuddy ? selectedProfile : undefined,
       });
+      let newTeam: TeamDef = builtTeam;
+      if (remote) {
+        const { paths: _paths, path: _path, ...restTeam } = builtTeam as TeamDef & { path?: unknown };
+        newTeam = {
+          ...restTeam,
+          lanes: builtTeam.lanes.map(({ paths: _lp, path: _lpath, ...restLane }: any) => restLane),
+        } as unknown as TeamDef;
+      }
       await saveTeams([...teams, newTeam]);
 
       let pin: Pin | null = null;
@@ -136,44 +152,52 @@ export function NewSquadModal({
         </>
       }
     >
-      <div className="seg" style={{ display: "flex", width: "100%", marginBottom: 12 }}>
-        <button type="button" className={source === "path" ? "on" : ""} onClick={() => setSource("path")}>
-          Folder path
-        </button>
-        <button type="button" className={source === "clone" ? "on" : ""} onClick={() => setSource("clone")}>
-          Clone repo URL
-        </button>
-      </div>
-      {source === "path" ? (
-        <div className="pin-idea-field">
-          <label className="muted small">Folder path</label>
-          <input
-            value={folderPath}
-            placeholder="C:\Users\you\projects\my-app"
-            style={{ width: "100%" }}
-            onChange={(e) => setFolderPath(e.target.value)}
-          />
-        </div>
+      {remote ? (
+        <p className="muted small" data-testid="new-squad-remote-note">
+          Remote mode: creates a squad entry on the host; folder paths are configured on the PC
+        </p>
       ) : (
         <>
-          <div className="pin-idea-field">
-            <label className="muted small">Repo URL or owner/repo</label>
-            <input
-              value={cloneRepo}
-              placeholder="owner/repo or https://github.com/owner/repo"
-              style={{ width: "100%" }}
-              onChange={(e) => setCloneRepo(e.target.value)}
-            />
+          <div className="seg" style={{ display: "flex", width: "100%", marginBottom: 12 }}>
+            <button type="button" className={source === "path" ? "on" : ""} onClick={() => setSource("path")}>
+              Folder path
+            </button>
+            <button type="button" className={source === "clone" ? "on" : ""} onClick={() => setSource("clone")}>
+              Clone repo URL
+            </button>
           </div>
-          <div className="pin-idea-field">
-            <label className="muted small">Clone to (optional)</label>
-            <input
-              value={cloneDest}
-              placeholder="Target directory name"
-              style={{ width: "100%" }}
-              onChange={(e) => setCloneDest(e.target.value)}
-            />
-          </div>
+          {source === "path" ? (
+            <div className="pin-idea-field">
+              <label className="muted small">Folder path</label>
+              <input
+                value={folderPath}
+                placeholder="C:\Users\you\projects\my-app"
+                style={{ width: "100%" }}
+                onChange={(e) => setFolderPath(e.target.value)}
+              />
+            </div>
+          ) : (
+            <>
+              <div className="pin-idea-field">
+                <label className="muted small">Repo URL or owner/repo</label>
+                <input
+                  value={cloneRepo}
+                  placeholder="owner/repo or https://github.com/owner/repo"
+                  style={{ width: "100%" }}
+                  onChange={(e) => setCloneRepo(e.target.value)}
+                />
+              </div>
+              <div className="pin-idea-field">
+                <label className="muted small">Clone to (optional)</label>
+                <input
+                  value={cloneDest}
+                  placeholder="Target directory name"
+                  style={{ width: "100%" }}
+                  onChange={(e) => setCloneDest(e.target.value)}
+                />
+              </div>
+            </>
+          )}
         </>
       )}
       <div className="pin-idea-field">

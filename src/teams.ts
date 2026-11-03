@@ -16,6 +16,7 @@ import {
   topicOf as identityTopicOf,
 } from "./identity.ts";
 import type { PinFields } from "./pins.ts";
+import { isRemote, needsPairing } from "./remoteSession.ts";
 import { mergeTeams } from "./teamsMerge.ts";
 
 // A lane is a pinned Team in the UI. Pin fields (state, doneAt, order, lastProfile) live in src/pins.ts
@@ -143,6 +144,9 @@ export type TeamsUpdater = (cur: TeamDef[]) => TeamDef[];
  * an older copy, e.g. a modal open across polls, which must pass that copy as `base`.
  */
 export async function saveTeams(next: TeamDef[] | TeamsUpdater, opts: { base?: TeamsSnapshot } = {}): Promise<{ disk: boolean }> {
+  if (isRemote() && teamsRevision === "unknown") {
+    await refreshTeams();
+  }
   saveSeq++;
   const base = opts.base?.teams ?? TEAMS;
   const edit = typeof next === "function" ? next : (fresh: TeamDef[]) => mergeTeams(base, next, fresh);
@@ -151,7 +155,10 @@ export async function saveTeams(next: TeamDef[] | TeamsUpdater, opts: { base?: T
   let revision = opts.base?.revision ?? teamsRevision;
   applyLocal(teams);
   const headers = { "content-type": "application/json" };
-  for (const [url, method] of [["/api/teams", "PUT"], ["/__vibesquad/teams", "POST"]] as const) {
+  const endpoints = isRemote()
+    ? ([["/api/teams", "PUT"]] as const)
+    : ([["/api/teams", "PUT"], ["/__vibesquad/teams", "POST"]] as const);
+  for (const [url, method] of endpoints) {
     try {
       let conflicts = 0;
       for (;;) {
@@ -214,7 +221,7 @@ export function resetTeamsToDisk(): void {
 }
 
 // Agents edit the registry too (`vs pin new`), so re-read it on focus and every 10s while visible.
-if (typeof window !== "undefined" && typeof document !== "undefined") {
+if (typeof window !== "undefined" && typeof document !== "undefined" && !(isRemote() && needsPairing(true, location.hash))) {
   void refreshTeams();
   window.addEventListener("focus", () => void refreshTeams());
   setInterval(() => {

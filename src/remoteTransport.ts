@@ -9,6 +9,21 @@ export type VsHttpResponse = { status: number; headers: Record<string, string>; 
 export type VsHttpInvoke = (input: VsHttpRequest) => Promise<unknown>;
 
 export const REMOTE_FLAG_KEY = "vs.remote";
+export const MAX_REMOTE_REQ_BODY_BYTES = 256 * 1024;
+
+export function errorToRemoteResponse(err: unknown): Response | null {
+  const msg = String((err && typeof err === "object" ? (err as { message?: unknown }).message : err) ?? "");
+  if (!msg) return null;
+  const m = /\[(\d{3})\]\s*$/.exec(msg);
+  const status = m ? Number(m[1]) : /vs\.http:\s*remote access is off/i.test(msg) ? 403 : 0;
+  if (status >= 400 && status <= 599) {
+    return new Response(JSON.stringify({ ok: false, error: msg }), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+  }
+  return null;
+}
 
 /** Remote mode flag. A later boot block will set it; for now `?remote=1` or localStorage `vs.remote=1`. */
 export function isRemoteMode(loc: { search: string } = location, storage: Pick<Storage, "getItem"> | null = safeStorage()): boolean {
@@ -73,13 +88,27 @@ export function installRemoteTransport(invoke: VsHttpInvoke, target: { fetch: ty
     } else if (isReq && method !== "GET" && method !== "HEAD") {
       body = await (input as Request).text();
     }
-    const call = invoke({ method, path, ...(body !== undefined && body !== "" ? { body } : {}) });
-    const out = signal
-      ? await Promise.race([
-          call,
-          new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(abortError()), { once: true })),
-        ])
-      : await call;
+    if (body !== undefined && new TextEncoder().encode(body).byteLength > MAX_REMOTE_REQ_BODY_BYTES) {
+      return new Response(
+        JSON.stringify({ ok: false, error: "PayloadTooLarge: request body exceeds 256 KiB limit" }),
+        { status: 413, headers: { "content-type": "application/json" } },
+      );
+    }
+    let out: unknown;
+    try {
+      const call = invoke({ method, path, ...(body !== undefined && body !== "" ? { body } : {}) });
+      out = signal
+        ? await Promise.race([
+            call,
+            new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(abortError()), { once: true })),
+          ])
+        : await call;
+    } catch (err) {
+      if (signal?.aborted || (err as any)?.name === "AbortError") throw err;
+      const mapped = errorToRemoteResponse(err);
+      if (mapped) return mapped;
+      throw err;
+    }
     return toResponse(out);
   };
   target.fetch = shim;

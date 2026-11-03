@@ -1,4 +1,5 @@
 import { FIRST_RUN_DONE_KEY, FirstRunModal, fetchFirstRunStatus, type FirstRunStatus } from "./FirstRunModal";
+import { clearSession, isRemote } from "./remoteSession";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { ProviderQuotaView } from "./antigravity";
@@ -645,9 +646,23 @@ const Sidebar = memo(function Sidebar(props: {
           );
         })}
       </div>
-      <button className="btn ghost small" onClick={props.onPairDevice} title="Pair a phone or PC over NordVPN Meshnet HTTPS">
-        📱 PAIR DEVICE
-      </button>
+      {isRemote() ? (
+        <button
+          className="btn ghost small"
+          data-testid="sidebar-unpair-btn"
+          onClick={() => {
+            clearSession();
+            location.reload();
+          }}
+          title="Forget the saved pairing and password on this browser"
+        >
+          🔌 UNPAIR DEVICE
+        </button>
+      ) : (
+        <button className="btn ghost small" onClick={props.onPairDevice} title="Pair a phone or PC over NordVPN Meshnet HTTPS">
+          📱 PAIR DEVICE
+        </button>
+      )}
       <button className="btn ghost small" data-testid="about-licenses-btn" onClick={props.onAbout} title="About VibeSquad and third-party licenses">
         ℹ ABOUT &amp; LICENSES
       </button>
@@ -1610,7 +1625,7 @@ export function App() {
   }, [members]);
 
   useEffect(() => {
-    if (DEMO) return;
+    if (DEMO || isRemote()) return;
     void fetchFirstRunStatus().then((s) => {
       if (!s) return;
       setFirstRunStatus(s);
@@ -1905,7 +1920,7 @@ export function App() {
       className={`app ${focus ? "focus" : ""} ${withPanes ? "with-panes" : ""} ${split && withPanes ? "split" : ""} ${pinFocused ? `pin-focus ${pinFocus?.agentId ? "" : "pin-no-drawer"}` : ""} ${hidePanes ? "pins-home" : ""} ${sheet ? "sheet-open" : ""} ${mobileTeamView ? "mobile-team-view" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
       style={{ "--sidebar-w": `${sidebarWidth}px` } as React.CSSProperties}
     >
-      {exposedIps.length > 0 && !isLanBannerDismissed(exposedIps, dismissedLanKey) && (
+      {exposedIps.length > 0 && !isRemote() && !isLanBannerDismissed(exposedIps, dismissedLanKey) && (
         <div className="exposed-network-banner" data-testid="exposed-network-banner" role="alert" style={{ gridColumn: "1 / -1", background: "#ff2a85", color: "#05060d", fontWeight: 800, padding: "6px 12px", textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
           <span>{`⚠ EXPOSED ON ${exposedIps.join(", ")} — LAN/meshnet access enabled`}</span>
           <button
@@ -1960,7 +1975,7 @@ export function App() {
           {`⚠ Config warning: ${configWarnings.join(" · ")}`}
         </div>
       )}
-      {updaterStatus.updateAvailable && !updaterStatus.dismissed && (
+      {updaterStatus.updateAvailable && !isRemote() && !updaterStatus.dismissed && (
         <div
           className="update-available-banner"
           data-testid="update-available-banner"
@@ -2029,7 +2044,7 @@ export function App() {
           onAgent={onAgent}
           onQuickStart={onQuickStart}
           onNewSquad={openNewSquad}
-          lanExposed={exposedIps.length > 0}
+          lanExposed={exposedIps.length > 0 && !isRemote()}
           lanIps={exposedIps}
         />
       )}

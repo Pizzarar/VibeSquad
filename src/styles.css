@@ -3882,3 +3882,4 @@ button.project-file-name:hover { text-decoration: underline; }
 .remote-pair-check { display: flex; align-items: center; gap: 8px; color: var(--muted); }
 .remote-pair-error { padding: 8px 10px; color: var(--coral); background: #ff857314; border: 1px solid var(--coral); border-radius: 4px; line-height: 1.4; }
 .remote-pair-go { align-self: stretch; padding: 10px; font-size: 15px; }
+.remote-pair-forget { align-self: stretch; }

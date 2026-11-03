@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { isRemote } from "./remoteSession.ts";
 
 // Legacy owner aliases are assembled at runtime so the old literal never appears in tracked files.
 export const LEGACY_USER_TYPE = "au" + "b";
@@ -286,6 +287,7 @@ export function useDesktopStatus(): DesktopStatusView {
 }
 
 export async function loadDesktopStatus(): Promise<DesktopStatusView> {
+  if (isRemote()) return desktopStatus;
   try {
     const r = await fetch("/__desktop/status", { cache: "no-store" });
     if (r.ok) {
@@ -324,6 +326,7 @@ export async function loadDesktopStatus(): Promise<DesktopStatusView> {
 }
 
 export async function loadUpdaterStatus(): Promise<UpdaterStatusView> {
+  if (isRemote()) return updaterStatus;
   void loadDesktopStatus();
   try {
     const r = await fetch("/__desktop/updater/status", { cache: "no-store" });

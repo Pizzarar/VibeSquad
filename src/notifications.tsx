@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { DEMO } from "./paseo";
 import { getPrefs, pushEventsFromPrefs, subscribePrefs } from "./prefs";
+import { isRemote } from "./remoteSession";
 
 export function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -69,6 +70,7 @@ async function desktopAvailable(): Promise<boolean> {
 // existing /__vibesquad/settings endpoint on load and whenever a toggle changes (the last device to change wins).
 let lastPushEvents = "";
 function syncPushEvents(): void {
+  if (isRemote()) return;
   const pushEvents = pushEventsFromPrefs(getPrefs());
   const key = JSON.stringify(pushEvents);
   if (key === lastPushEvents || DEMO) return;
@@ -114,7 +116,7 @@ export const PushNotificationControls = memo(function PushNotificationControls()
   const regRef = useRef<ServiceWorkerRegistration | null>(null);
 
   useEffect(() => {
-    if (typeof window === "undefined" || !("serviceWorker" in navigator)) return;
+    if (isRemote() || typeof window === "undefined" || !("serviceWorker" in navigator)) return;
     let cancelled = false;
     navigator.serviceWorker
       .register("/sw.js", { scope: "/" })
@@ -328,6 +330,14 @@ export const PushNotificationControls = memo(function PushNotificationControls()
       setBusy(false);
     }
   }, [busy, ensureSwRegistration]);
+
+  if (isRemote()) {
+    return (
+      <span className="muted small" data-testid="push-remote-disabled">
+        Managed on host PC
+      </span>
+    );
+  }
 
   return (
     <div className="push-controls" data-testid="push-controls">

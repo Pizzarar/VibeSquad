@@ -5,6 +5,7 @@ import { PushNotificationControls, playAlertChime } from "./notifications";
 import { checkForUpdates, updateLabel, type UpdateCheck } from "./DiagnosticsModal";
 import { useProfiles } from "./profiles";
 import { useUpdaterStatus } from "./userName";
+import { clearSession, isRemote } from "./remoteSession";
 import { KeybindingsEditor } from "./KeybindingsEditor";
 import {
   allSettings,
@@ -128,7 +129,7 @@ export function SettingsHome(props: { onClose: () => void; onDiagnostics: () => 
     >
       <nav className="settings-nav" aria-label="Settings sections">
         <input data-testid="settings-search" autoFocus placeholder="Search settings…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search settings" />
-        {NAV.map((n) => (
+        {NAV.filter((n) => !isRemote() || n.id !== "paseo").map((n) => (
           <button
             key={n.id}
             className={`settings-nav-item ${!searching && section === n.id ? "on" : ""}`}
@@ -144,7 +145,7 @@ export function SettingsHome(props: { onClose: () => void; onDiagnostics: () => 
       </nav>
       <div className="settings-pane" ref={paneRef} data-testid="settings-pane">
         {searching && <SearchResults hits={hits} q={q} onOpen={jumpTo} />}
-        {NAV.filter((n) => visited.has(n.id)).map((n) => (
+        {NAV.filter((n) => (!isRemote() || n.id !== "paseo") && visited.has(n.id)).map((n) => (
           <div key={n.id} hidden={searching || section !== n.id} data-testid={`settings-section-${n.id}`}>
             <h2>
               {n.label}
@@ -344,6 +345,18 @@ function About(props: { onDiagnostics: () => void; onLicenses: () => void; onChe
         <button className="btn ghost small" onClick={props.onChecklist}>
           Setup Checklist
         </button>
+        {isRemote() && (
+          <button
+            className="btn ghost small"
+            data-testid="settings-unpair-btn"
+            onClick={() => {
+              clearSession();
+              location.reload();
+            }}
+          >
+            Unpair / Forget this device
+          </button>
+        )}
       </p>
     </div>
   );
