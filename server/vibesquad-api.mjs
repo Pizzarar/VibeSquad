@@ -58,14 +58,27 @@ import {
   getVapidPath,
   readPushSubscriptions,
   removePushSubscription,
+  restartPushWatcher,
   savePushSubscription,
   sendTestPush,
   sendWebPushToSubscription,
   startPushWatcher,
+  stopPushWatcher,
   toBase64Url,
   fromBase64Url,
   writePushSubscriptions,
 } from "./push.mjs";
+import {
+  DAEMON_PASSWORD_FILE,
+  daemonPasswordPath,
+  daemonPasswordSource,
+  getDaemonAuthStatus,
+  isDaemonPasswordRequired,
+  probeDaemonPassword,
+  readDaemonListen,
+  readDaemonPassword,
+  writeDaemonPassword,
+} from "./daemon-password.mjs";
 import { removeTeamWorktrees } from "./team-worktrees.mjs";
 import {
   DEFAULT_PACK_PROFILES,
@@ -170,13 +183,24 @@ export {
   getVapidPath,
   readPushSubscriptions,
   removePushSubscription,
+  restartPushWatcher,
   savePushSubscription,
   sendTestPush,
   sendWebPushToSubscription,
   startPushWatcher,
+  stopPushWatcher,
   toBase64Url,
   fromBase64Url,
   writePushSubscriptions,
+  DAEMON_PASSWORD_FILE,
+  daemonPasswordPath,
+  daemonPasswordSource,
+  getDaemonAuthStatus,
+  isDaemonPasswordRequired,
+  probeDaemonPassword,
+  readDaemonListen,
+  readDaemonPassword,
+  writeDaemonPassword,
   DEFAULT_PACK_PROFILES,
   DEFAULT_PROFILES,
   LEGACY_PROFILE_ALIASES,
@@ -349,7 +373,17 @@ const isOwner = (req) => Boolean(authenticate(req)) || isLocalOwner(req);
 const localAccess = (req) => (isOwner(req) ? "owner" : "read-only");
 
 // GETs a read-only loopback caller still can't make: they hand out a credential, write a key, or launch provider CLIs.
-export function isGatedRead(path, url = "") {
+export function isGatedRead(pathOrMethod, urlOrPath = "") {
+  const path =
+    typeof urlOrPath === "string" && urlOrPath.startsWith("/") && !String(pathOrMethod ?? "").startsWith("/")
+      ? urlOrPath.split("?")[0]
+      : pathOrMethod;
+  const url =
+    typeof urlOrPath === "string" && urlOrPath.startsWith("/") && !String(pathOrMethod ?? "").startsWith("/")
+      ? urlOrPath
+      : urlOrPath;
+  if (path === "/__vibesquad/paseo/daemon-auth") return true; // daemon password status / handoff
+  if (path === "/__vibesquad/local-token") return true; // local bootstrap handoff
   if (path === "/__vibesquad/paseo/pair") return true; // daemon pairing offer (a credential)
   if (path === "/__vibesquad/push/vapid-public-key") return true; // creates and writes vapid.json on first call
   if (path === "/__vibesquad/paseo/providers/diagnostic" || path === "/__vibesquad/paseo/providers/models") return true; // runs the provider's own CLI
@@ -1528,9 +1562,76 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return readBody(req)
           .then((body) => sendJson(res, 200, { ok: true, results: removeTeamWorktrees(body?.worktrees) }))
           .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
+      case "/__vibesquad/local-token": {
+        if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+        const authOpts = opts?.daemonAuthOpts || opts?.paseo || {};
+        return sendJson(res, 200, {
+          ok: true,
+          daemonPassword: readDaemonPassword(authOpts) || null,
+        });
+      }
+      case "/__vibesquad/paseo/daemon-auth": {
+        const authOpts = opts?.daemonAuthOpts || opts?.paseo || {};
+        if (req.method === "GET") {
+          const includePassword = new URL(req.url ?? "", "http://x").searchParams.get("includePassword") === "1";
+          const status = getDaemonAuthStatus(authOpts);
+          if (includePassword) {
+            return sendJson(res, 200, { ...status, password: readDaemonPassword(authOpts) || null });
+          }
+          return sendJson(res, 200, status);
+        }
+        if (req.method === "POST") {
+          return readBody(req)
+            .then(async (body) => {
+              if (body?.clear === true) {
+                writeDaemonPassword("", authOpts);
+                restartPushWatcher(rootDir).catch(() => {});
+                return sendJson(res, 200, { ...getDaemonAuthStatus(authOpts), cleared: true });
+              }
+              const candidate = typeof body?.password === "string" ? body.password.trim() : "";
+              if (!candidate) {
+                return sendJson(res, 400, { ok: false, error: "password required (or pass clear: true)" });
+              }
+              const probe = await (opts?.probeDaemonPassword || probeDaemonPassword)(candidate, opts?.daemonProbeOpts);
+              if (!probe?.ok) {
+                if (probe?.authFailureReason) {
+                  return sendJson(res, 401, {
+                    ...getDaemonAuthStatus(authOpts),
+                    ok: false,
+                    error: probe.error || "Invalid daemon password",
+                    authFailureReason: probe.authFailureReason,
+                  });
+                }
+                return sendJson(res, 503, {
+                  ...getDaemonAuthStatus(authOpts),
+                  ok: false,
+                  error: probe?.error || "Paseo daemon unreachable",
+                  unreachable: true,
+                });
+              }
+              writeDaemonPassword(candidate, authOpts);
+              restartPushWatcher(rootDir).catch(() => {});
+              return sendJson(res, 200, { ...getDaemonAuthStatus(authOpts), verified: true });
+            })
+            .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
+        }
+        return sendJson(res, 405, { error: "method not allowed" });
+      }
       case "/__vibesquad/paseo/status":
         if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
-        return cachedRead(() => getPaseoDaemonStatus(opts.paseo)).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
+        return cachedRead(() => getPaseoDaemonStatus(opts.paseo)).then(
+          (r) => {
+            const authStatus = getDaemonAuthStatus(opts?.daemonAuthOpts || opts?.paseo || {});
+            return sendJson(res, 200, {
+              ...r,
+              passwordRequired: authStatus.required,
+              passwordConfigured: authStatus.configured,
+              passwordSource: authStatus.source,
+              auth: authStatus,
+            });
+          },
+          (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }),
+        );
       case "/__vibesquad/paseo/daemon":
         if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
         return readBody(req)

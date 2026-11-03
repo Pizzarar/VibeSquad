@@ -140,8 +140,8 @@ function lockDown(dir) {
   execFileSync("icacls", [dir, "/inheritance:r", "/grant:r", `${user}:(OI)(CI)F`], { stdio: "pipe", windowsHide: true });
 }
 
-// Secrets that live directly in ~/.vibesquad (VAPID private key, device token hashes, push endpoints).
-const HOME_SECRET_FILES = ["vapid.json", "devices.json", "push-subs.json", LOCAL_TOKEN_FILE];
+// Secrets that live directly in ~/.vibesquad (VAPID private key, device token hashes, push endpoints, daemon password).
+export const HOME_SECRET_FILES = ["local-token", "vapid.json", "push-subs.json", "devices.json", "daemon-password"];
 
 /**
  * Restricts ~/.vibesquad to the current user: icacls on Windows, 0700 dir + 0600 secret files elsewhere.
@@ -445,7 +445,7 @@ const sameSecret = (got, want) => {
 /** True when the request carries the local token header or the vs_local cookie. Says nothing about the listener. */
 export function hasLocalToken(req) {
   const token = getLocalToken();
-  const header = req.headers[LOCAL_TOKEN_HEADER];
+  const header = req.headers[LOCAL_TOKEN_HEADER] ?? req.headers["x-vs-token"];
   if (typeof header === "string" && sameSecret(header.trim(), token)) return true;
   const cookie = parseCookies(req.headers.cookie)[LOCAL_COOKIE];
   return Boolean(cookie) && sameSecret(cookie, localCookieValue(token));
@@ -456,7 +456,7 @@ export const isLocalOwner = (req) => isLocalBrowserSafe(req) && hasLocalToken(re
 
 /** True only for the x-vibesquad-token header (never the cookie): the nonce endpoint is for CLI/launcher callers. */
 export function hasLocalTokenHeader(req) {
-  const header = req.headers[LOCAL_TOKEN_HEADER];
+  const header = req.headers[LOCAL_TOKEN_HEADER] ?? req.headers["x-vs-token"];
   return typeof header === "string" && sameSecret(header.trim(), getLocalToken());
 }
 

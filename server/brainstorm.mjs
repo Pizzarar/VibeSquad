@@ -13,6 +13,7 @@ import { BRIEF_HISTORY_KEEP, BRIEF_SHRINK_FROM, BRIEF_SHRINK_TO, backupBrief, wr
 import { liveInFlightBlock } from "./in-flight.mjs";
 import { refreshWhosHere } from "./whos-here.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
+import { readDaemonPassword } from "./daemon-password.mjs";
 
 // import.meta.dirname is undefined when bundled into the Paseo plugin; fall back like plugin/index.server.ts.
 const REPO_ROOT = resolve(process.env.VIBESQUAD_ROOT || (typeof import.meta.dirname === "string" ? join(import.meta.dirname, "..") : join(homedir(), "projects", "VibeSquad")));
@@ -64,12 +65,14 @@ export async function archiveBuddyKeepingChildren(client, agentId) {
 export function createDaemonClient(rootDir = REPO_ROOT) {
   const { listen } = readPaseoConfig(rootDir);
   const wsUrl = listen.startsWith("ws://") || listen.startsWith("wss://") ? `${listen.replace(/\/$/, "")}/ws` : `ws://${listen}/ws`;
+  const password = readDaemonPassword();
   return new DaemonClient({
     url: wsUrl,
     clientId: `vibesquad-bf-${Date.now().toString(36)}`,
     clientType: "cli",
     appVersion: "0.0.1",
     connectTimeoutMs: 5000,
+    ...(password ? { password } : {}),
     reconnect: { enabled: false },
   });
 }
