@@ -349,6 +349,69 @@ const PROVIDER_MODEL_HINTS: Record<string, string[]> = {
   openai: ["gpt-5.4", "gpt-4o", "gpt-4o-mini"],
 };
 
+const COUNTERPART_PROFILE_MAP: Record<string, string> = {
+  "Lead - Claude": "Lead - Gemini",
+  "Lead - Gemini": "Lead - Claude",
+  "Brainstorm - Claude": "Brainstorm - Gemini",
+  "Brainstorm - Gemini": "Brainstorm - Claude",
+  "Review - Sonnet": "Review - Gemini",
+  "Review - Gemini": "Review - Sonnet",
+  "Check - Haiku": "Pre-check - Flash",
+  "Pre-check - Flash": "Check - Haiku",
+  "Art Painter - Opus": "Art Director - Gemini",
+  "Art Director - Gemini": "Art Painter - Opus",
+  "Implement - Sonnet": "Lead - Gemini",
+  "Implement - Opus": "Lead - Gemini",
+  "Planner - Sonnet": "Lead - Gemini",
+  "Spec - Opus": "Lead - Gemini",
+};
+
+export type OppositeProviderTarget = {
+  provider: "claude" | "antigravity-cli";
+  model: string;
+  providerSpec: string;
+  modeId: string;
+  label: "⇄ Switch to Gemini" | "⇄ Switch to Claude";
+  profile?: string;
+};
+
+export function oppositeProviderTarget(provider: string, profileName?: string): OppositeProviderTarget | null {
+  const norm = String(provider ?? "").trim().toLowerCase().split("/")[0];
+  const rawProf = String(profileName ?? "").trim();
+  const resolveSwitchedProfile = (toGemini: boolean): string | undefined => {
+    if (!rawProf) return undefined;
+    if (COUNTERPART_PROFILE_MAP[rawProf]) return COUNTERPART_PROFILE_MAP[rawProf];
+    if (toGemini && /(?:\s*-\s*)Claude$/i.test(rawProf)) {
+      return rawProf.replace(/(-\s*)Claude$/i, "$1Gemini");
+    }
+    if (!toGemini && /(?:\s*-\s*)Gemini$/i.test(rawProf)) {
+      return rawProf.replace(/(-\s*)Gemini$/i, "$1Claude");
+    }
+    return undefined;
+  };
+  if (norm === "claude" || norm === "anthropic" || norm.startsWith("claude-")) {
+    return {
+      provider: "antigravity-cli",
+      model: "gemini-4-argon",
+      providerSpec: "antigravity-cli/gemini-4-argon",
+      modeId: "accept-edits",
+      label: "⇄ Switch to Gemini",
+      profile: resolveSwitchedProfile(true),
+    };
+  }
+  if (norm === "antigravity-cli" || norm === "antigravity" || norm === "gemini" || norm.startsWith("gemini-")) {
+    return {
+      provider: "claude",
+      model: "claude-opus-5-5",
+      providerSpec: "claude/claude-opus-5-5",
+      modeId: "auto",
+      label: "⇄ Switch to Claude",
+      profile: resolveSwitchedProfile(false),
+    };
+  }
+  return null;
+}
+
 export type DrawerHeaderProps = {
   agent: PaseoAgent;
   agentType: AgentType;
@@ -577,6 +640,7 @@ export function DrawerHeader({
   const [thinkingBusy, setThinkingBusy] = useState(false);
   const [reloadBusy, setReloadBusy] = useState(false);
   const [reloadError, setReloadError] = useState("");
+  const [switchBusy, setSwitchBusy] = useState(false);
   const [copyIdFlash, setCopyIdFlash] = useState(false);
   const [copyCwdFlash, setCopyCwdFlash] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -587,6 +651,7 @@ export function DrawerHeader({
   }, [agent.model]);
 
   const agentLabels = (agent.labels ?? {}) as Record<string, string>;
+  const switchTarget = oppositeProviderTarget(agent.provider, agentLabels.profile);
   const needsYouFlagged =
     (!!agentLabels["needs-you"] && agentLabels["needs-you"] !== "cleared") ||
     (!!agentLabels[LEGACY_NEEDS_LABEL] && agentLabels[LEGACY_NEEDS_LABEL] !== "cleared");
@@ -735,6 +800,71 @@ export function DrawerHeader({
           {!isBs && <TokenMeter used={used} budget={budget ?? 0} ladder={kindOf(agent) === "lead" ? leadLadderFor(team) : undefined} />}
         </div>
         <div className="drawer-actions" style={{ flexWrap: "wrap", gap: 4, alignItems: "center" }}>
+          {switchTarget && (
+            <button
+              data-testid="drawer-switch-provider-btn"
+              className="btn ghost small"
+              title={`Switch provider to ${switchTarget.providerSpec}${switchTarget.profile ? ` (${switchTarget.profile})` : ""}`}
+              disabled={switchBusy}
+              onClick={async () => {
+                setSwitchBusy(true);
+                setReloadError("");
+                try {
+                  const nextProfile =
+                    switchTarget.profile ??
+                    (kindOf(agent) === "lead"
+                      ? switchTarget.provider === "claude"
+                        ? "Lead - Claude"
+                        : "Lead - Gemini"
+                      : isBs
+                        ? switchTarget.provider === "claude"
+                          ? "Brainstorm - Claude"
+                          : "Brainstorm - Gemini"
+                        : undefined);
+                  const nextLabels = {
+                    ...agentLabels,
+                    ...(nextProfile ? { profile: nextProfile } : {}),
+                  };
+                  if (DEMO) {
+                    upsertLocalAgent({
+                      ...agent,
+                      provider: switchTarget.provider,
+                      model: switchTarget.model,
+                      currentModeId: switchTarget.modeId,
+                      labels: nextLabels,
+                    });
+                    return;
+                  }
+                  await updateAgent(agent.id, { labels: nextLabels });
+                  if (kindOf(agent) === "lead" && onSuccessor) {
+                    onSuccessor();
+                  } else if (isBs) {
+                    await doRestart("provider-switch");
+                  } else {
+                    const dc = daemonClient as any;
+                    const snap = await dc.createAgent({
+                      config: {
+                        provider: switchTarget.provider,
+                        model: switchTarget.model,
+                        modeId: switchTarget.modeId,
+                        cwd: agent.cwd,
+                        title: agent.title ?? agent.id,
+                      },
+                      labels: nextLabels,
+                    });
+                    const newId = snap?.agent?.id ?? snap?.id;
+                    if (newId) openAgentInTab(newId);
+                  }
+                } catch (e) {
+                  setReloadError(`Switch provider failed: ${e instanceof Error ? e.message : e}`);
+                } finally {
+                  setSwitchBusy(false);
+                }
+              }}
+            >
+              {switchBusy ? "…" : switchTarget.label}
+            </button>
+          )}
           <button
             data-testid="drawer-search-btn"
             className="btn ghost small"

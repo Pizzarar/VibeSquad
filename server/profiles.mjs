@@ -2,6 +2,22 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
+import {
+  COUNTERPART_PROFILES,
+  QUOTA_FAILOVER_THRESHOLD,
+  counterpartProfileName,
+  isProviderOverQuota,
+  registerDefaultFailoverProfiles,
+  resolveProfileWithFailover,
+} from "./provider-failover.mjs";
+
+export {
+  COUNTERPART_PROFILES,
+  QUOTA_FAILOVER_THRESHOLD,
+  counterpartProfileName,
+  isProviderOverQuota,
+  resolveProfileWithFailover,
+};
 
 export const SHARED_NOTE_PREFIX = [
   "Project rules first: read the repo's AGENTS.md (or CLAUDE.md), and docs/LEAD_RULES.md if you are a lead. Where they conflict with this note, they win. Report with evidence (raw output, file:line, commit hashes), never prose claims.",
@@ -393,11 +409,15 @@ export const DEFAULT_PACK_PROFILES = [
 
 export const DEFAULT_PROFILES = DEFAULT_PACK_PROFILES;
 
+registerDefaultFailoverProfiles(DEFAULT_PACK_PROFILES);
+
 export const LEGACY_PROFILE_ALIASES = {
   "Lead - Opus": "Lead - Claude",
   "Brainstorm - Opus": "Brainstorm - Claude",
   "Art - Gemini": "Art Director - Gemini",
   "Art - Opus": "Art Painter - Opus",
+  "Builder - Gemini": "Lead - Gemini",
+  "Reviewer - Gemini": "Review - Gemini",
 };
 
 export function deriveRole(name, explicitRole) {
@@ -883,13 +903,34 @@ export function findProfileOrFallback(requested, fallbackName, profiles, warn = 
 }
 
 export function toPaseoSpawnConfig(profileOrName, overrides = {}, profilesInput) {
-  const profile =
+  let profile =
     typeof profileOrName === "string"
       ? findProfile(profileOrName, profilesInput)
       : profileOrName;
   if (!profile) {
     throw new Error(`Profile not found: ${String(profileOrName)}`);
   }
+
+  let failoverMeta = null;
+  if (overrides?.usageProviders !== undefined) {
+    const profilesList =
+      Array.isArray(profilesInput) && profilesInput.length
+        ? profilesInput
+        : loadProfiles(undefined, { autoSeed: false }).profiles;
+    const failoverRes = resolveProfileWithFailover(profile, profilesList, overrides.usageProviders, {
+      threshold: overrides.quotaThreshold ?? QUOTA_FAILOVER_THRESHOLD,
+    });
+    if (failoverRes.failedOver && failoverRes.profile) {
+      profile = failoverRes.profile;
+      failoverMeta = {
+        failedOver: true,
+        fromProfile: failoverRes.fromProfile,
+        toProfile: failoverRes.toProfile,
+        reason: failoverRes.reason,
+      };
+    }
+  }
+
   const mergedFeatures = {
     ...(profile.featureValues ?? {}),
     ...(overrides.featureValues ?? {}),
@@ -910,6 +951,7 @@ export function toPaseoSpawnConfig(profileOrName, overrides = {}, profilesInput)
     ...(hasFeatures ? { featureValues: mergedFeatures } : {}),
     notes,
     systemPrompt,
+    ...(failoverMeta ? { failover: failoverMeta } : {}),
   };
   return out;
 }

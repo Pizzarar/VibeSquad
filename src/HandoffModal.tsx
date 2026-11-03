@@ -39,14 +39,21 @@ export function HandoffModal({ view, lead, onClose, onCreated }: { view: TeamVie
   const laneName = lane?.name ?? laneId;
   const ord = ordOf(lead.agent);
   const fallbackLeadProfile = lead.agent.provider.startsWith("antigravity-cli") ? "Lead - Gemini" : "Lead - Claude";
-  const profile = findProfile(labelsOf(lead).profile || fallbackLeadProfile, profiles) ?? findProfile(fallbackLeadProfile, profiles);
-  const defaults = defaultSpawnConfigFor(lead.agent.provider);
+  const initialLeadProfile =
+    labelsOf(lead).profile === "Lead - Gemini" || labelsOf(lead).profile === "Lead - Claude"
+      ? labelsOf(lead).profile
+      : fallbackLeadProfile;
+  const [targetProfileName, setTargetProfileName] = useState<string>(initialLeadProfile);
+  const profile = findProfile(targetProfileName, profiles) ?? findProfile(fallbackLeadProfile, profiles);
+  const targetProvider = profile?.provider ?? (targetProfileName === "Lead - Gemini" ? "antigravity-cli" : "claude");
+  const targetModel = profile?.model ?? (targetProfileName === "Lead - Gemini" ? "gemini-4-argon" : "claude-opus-5-5");
+  const defaults = defaultSpawnConfigFor(targetProvider);
   const next = buildName({
     team: team.id,
     laneId,
     laneName,
     role: "lead",
-    profile: profile?.name ?? labelsOf(lead).profile ?? fallbackLeadProfile,
+    profile: profile?.name ?? targetProfileName,
     ord: String(ord + 1),
     topic: "",
     task: "",
@@ -91,8 +98,8 @@ export function HandoffModal({ view, lead, onClose, onCreated }: { view: TeamVie
       }
       setStep("Spawning successor…");
       const r = await spawnTeamAgent({
-        provider: profile?.provider ?? lead.agent.provider,
-        model: profile?.model ?? lead.agent.model ?? "",
+        provider: targetProvider,
+        model: targetModel,
         modeId: profile?.modeId ?? defaults.modeId,
         thinkingOptionId: profile?.thinkingOptionId,
         featureValues: profile?.featureValues,
@@ -101,7 +108,7 @@ export function HandoffModal({ view, lead, onClose, onCreated }: { view: TeamVie
         sandbox: defaults.sandbox,
         shareMcp: defaults.shareMcp,
         title,
-        labels: { ...next.labels, profile: profile?.name ?? labelsOf(lead).profile ?? fallbackLeadProfile },
+        labels: { ...next.labels, profile: profile?.name ?? targetProfileName },
         prompt,
         cwd: lead.agent.cwd,
       });
@@ -152,10 +159,18 @@ export function HandoffModal({ view, lead, onClose, onCreated }: { view: TeamVie
       <Field label="New title">
         <input value={title} onChange={(e) => setTitle(e.target.value)} />
       </Field>
-      <div className="pills" style={{ margin: "8px 0" }}>
+      <div className="pills" style={{ margin: "8px 0", display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
         <span className="chip">
-          {lead.agent.provider}/{lead.agent.model ?? "?"}
+          {targetProvider}/{targetModel} ({profile?.name ?? targetProfileName})
         </span>
+        <button
+          type="button"
+          className="btn ghost small"
+          data-testid="handoff-switch-provider-btn"
+          onClick={() => setTargetProfileName((prev) => (prev === "Lead - Gemini" ? "Lead - Claude" : "Lead - Gemini"))}
+        >
+          ⇄ Switch Provider (Claude ↔ Gemini)
+        </button>
         <span className="chip">role=lead ord={ord + 1}</span>
         <span className="chip">old → {oldTitle} (role=former-lead)</span>
         <span className="chip">{workers.length} worker(s) re-parented</span>
