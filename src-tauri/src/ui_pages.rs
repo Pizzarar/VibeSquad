@@ -280,25 +280,20 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
     } else {
         cfg.fallback_host.trim()
     };
-    let lan_disabled_attr = if saved_lan.is_empty() {
-        r#"disabled class="preset-btn disabled""#
+    let picker_display = if saved_lan.is_empty() && saved_mesh.is_empty() {
+        "display:none"
     } else {
-        r#"class="preset-btn""#
+        ""
     };
-    let mesh_disabled_attr = if saved_mesh.is_empty() {
-        r#"disabled class="preset-btn disabled""#
+    let lan_display = if saved_lan.is_empty() {
+        "display:none"
     } else {
-        r#"class="preset-btn""#
+        ""
     };
-    let lan_initial_tag = if saved_lan.is_empty() {
-        "Server not detected".to_string()
+    let mesh_display = if saved_mesh.is_empty() {
+        "display:none"
     } else {
-        "Recommended on Wi-Fi/LAN".to_string()
-    };
-    let mesh_initial_tag = if saved_mesh.is_empty() {
-        "Server not detected".to_string()
-    } else {
-        "Remote / VPN".to_string()
+        ""
     };
     let server_host_display = if cfg.server_mode == "remote" && crate::is_local_host(&cfg.server_host) {
         if !saved_lan.is_empty() {
@@ -310,6 +305,13 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
         }
     } else {
         cfg.server_host.clone()
+    };
+    let code_field_display = if server_host_display.is_empty()
+        || crate::is_local_host(&server_host_display)
+    {
+        "display:none"
+    } else {
+        ""
     };
 
     format!(
@@ -431,18 +433,17 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
     color: var(--ok);
     background: rgba(0, 230, 118, 0.1);
   }}
-  .preset-grid {{
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 7px;
-    margin-bottom: 10px;
+  .preset-pills {{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
   }}
   .preset-btn {{
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    justify-content: space-between;
-    width: 100%;
-    padding: 9px 12px;
+    gap: 8px;
+    width: auto;
+    padding: 7px 11px;
     background: var(--panel-hi);
     border: 1px solid var(--line);
     color: var(--text);
@@ -573,6 +574,18 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
     align-items: center;
     gap: 6px;
   }}
+  .footer-link {{
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--muted);
+    font-family: inherit;
+    font-size: 11px;
+    text-decoration: none;
+    cursor: pointer;
+    transition: color 0.15s;
+  }}
+  .footer-link:hover {{ color: var(--cyan); }}
 </style>
 </head>
 <body>
@@ -584,52 +597,51 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
       <span class="brand-badge">DESKTOP CLIENT</span>
     </div>
     <div class="subtitle">
-      Connect to your VibeSquad server over your <b>Home LAN</b>, <b>Meshnet</b>, or <b>Localhost</b>, or paste a pairing link. The Root CA is pinned inside this app — no Windows certificate install needed.
+      Paste a pairing link or enter your server address to connect.
     </div>
 
     {err_banner}
 
     <form id="pair-form">
+      <div class="field" id="server-picker" style="{picker_display}">
+        <div class="label-row">
+          <label>Saved / Detected Servers</label>
+          <span class="probe-badge" id="probe-badge">Probing…</span>
+        </div>
+        <div class="preset-pills">
+          <button type="button" class="preset-btn" id="preset-lan" data-host="{saved_lan_host}" style="{lan_display}">
+            <span>🏠 Home LAN</span>
+            <span class="preset-tag" id="tag-lan">{saved_lan_host}</span>
+          </button>
+          <button type="button" class="preset-btn" id="preset-meshnet" data-host="{saved_meshnet_host}" style="{mesh_display}">
+            <span>🌐 Meshnet</span>
+            <span class="preset-tag" id="tag-meshnet">{saved_meshnet_host}</span>
+          </button>
+        </div>
+      </div>
+
       <div class="field">
         <div class="label-row">
-          <label>Quick Server Picker</label>
-          <span class="probe-badge" id="probe-badge">Probing LAN &amp; Meshnet…</span>
-        </div>
-        <div class="preset-grid">
-          <button type="button" id="preset-lan" data-host="{saved_lan_host}" {lan_disabled_attr}>
-            <span>🏠 Home LAN</span>
-            <span class="preset-tag" id="tag-lan">{lan_initial_tag}</span>
-          </button>
-          <button type="button" id="preset-meshnet" data-host="{saved_meshnet_host}" {mesh_disabled_attr}>
-            <span>🌐 Meshnet</span>
-            <span class="preset-tag" id="tag-meshnet">{mesh_initial_tag}</span>
-          </button>
-          <button type="button" class="preset-btn" id="use-localhost-btn" data-host="127.0.0.1:4180" title="Start or connect to local server on this PC without a pairing code">
-            <span>💻 Run agents on this PC · <b>127.0.0.1:4180</b></span>
-            <span class="preset-tag" id="tag-local">No code needed</span>
-          </button>
-        </div>
-
-        <div class="label-row" style="margin-top:10px">
-          <label for="serverHost">Server Address or Pairing Link</label>
+          <label for="serverHost">Pairing Link or Server Address</label>
         </div>
         <input
           type="text"
           id="serverHost"
           name="serverHost"
           value="{server_host_display}"
-          placeholder="server-ip:4180, https://.../pair?code=..., or Paseo #offer= link"
+          placeholder="Paste pairing link, or enter server-ip:4180"
           autocomplete="off"
           spellcheck="false"
+          autofocus
         />
         <div class="hint">
-          Enter the Home LAN / Meshnet address, or paste a full <code>https://.../pair?code=...</code> or Paseo <code>#offer=...</code> pairing link.
+          Open VibeSquad on your server PC → click <b>📱 Pair a device</b>.
         </div>
       </div>
 
-      <div class="field" id="code-field">
+      <div class="field" id="code-field" style="{code_field_display}">
         <div class="label-row">
-          <label for="code">6-Digit Pairing Code (or Link)</label>
+          <label for="code">6-Digit Pairing Code</label>
           <span style="font-size:11px;color:var(--muted)">From server's <b>PAIR DEVICE</b> modal</span>
         </div>
         <input
@@ -640,11 +652,7 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
           placeholder="000000"
           autocomplete="off"
           spellcheck="false"
-          autofocus
         />
-        <div class="hint">
-          Open VibeSquad on your server PC → click <b>📱 Pair a device</b> → enter the 6-digit code or paste the pairing link.
-        </div>
       </div>
 
       <div id="form-error" class="alert-box" style="display:none">
@@ -656,18 +664,16 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
         <button type="submit" class="btn-primary" id="submit-btn">
           Connect &amp; Pair
         </button>
-        <a href="/__desktop/mode" class="btn-secondary" id="back-to-mode-choice" data-testid="back-to-mode-choice">
-          ← First-Time Setup (Local / Remote)
-        </a>
-        <button type="button" class="btn-secondary" id="check-update-btn" data-testid="desktop-check-update-btn">
-          Check for Updates
-        </button>
       </div>
     </form>
 
     <div class="footer-note">
-      <span class="ca-pill">✓ Pinned Root CA (LAN + Meshnet)</span>
-      <span>Shortcut: Ctrl+Shift+S</span>
+      <a href="/__desktop/mode" class="footer-link" id="back-to-mode-choice" data-testid="back-to-mode-choice">
+        ← Switch Mode (Local / Remote)
+      </a>
+      <button type="button" class="footer-link" id="check-update-btn" data-testid="desktop-check-update-btn">
+        Check for Updates
+      </button>
     </div>
   </div>
 
@@ -678,11 +684,11 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
     const submitBtn = document.getElementById('submit-btn');
     const presetLan = document.getElementById('preset-lan');
     const presetMesh = document.getElementById('preset-meshnet');
-    const localhostBtn = document.getElementById('use-localhost-btn');
+    const serverPicker = document.getElementById('server-picker');
+    const codeField = document.getElementById('code-field');
     const probeBadge = document.getElementById('probe-badge');
     const tagLan = document.getElementById('tag-lan');
     const tagMesh = document.getElementById('tag-meshnet');
-    const tagLocal = document.getElementById('tag-local');
     const errBox = document.getElementById('form-error');
     const errText = document.getElementById('form-error-text');
 
@@ -700,26 +706,11 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
     function syncPresetButtons() {{
       const lanHost = (presetLan.dataset.host || '').trim();
       const meshHost = (presetMesh.dataset.host || '').trim();
-      if (!lanHost) {{
-        presetLan.disabled = true;
-        presetLan.classList.add('disabled');
-        tagLan.textContent = 'Server not detected';
-        tagLan.classList.remove('ok');
-      }} else {{
-        presetLan.disabled = false;
-        presetLan.classList.remove('disabled');
-        if (tagLan.textContent === 'Server not detected') tagLan.textContent = 'Recommended on Wi-Fi/LAN';
-      }}
-      if (!meshHost) {{
-        presetMesh.disabled = true;
-        presetMesh.classList.add('disabled');
-        tagMesh.textContent = 'Server not detected';
-        tagMesh.classList.remove('ok');
-      }} else {{
-        presetMesh.disabled = false;
-        presetMesh.classList.remove('disabled');
-        if (tagMesh.textContent === 'Server not detected') tagMesh.textContent = 'Remote / VPN';
-      }}
+      presetLan.style.display = lanHost ? 'inline-flex' : 'none';
+      if (lanHost && !tagLan.textContent) tagLan.textContent = lanHost;
+      presetMesh.style.display = meshHost ? 'inline-flex' : 'none';
+      if (meshHost && !tagMesh.textContent) tagMesh.textContent = meshHost;
+      serverPicker.style.display = (lanHost || meshHost) ? 'block' : 'none';
     }}
 
     function extractOfferHash(raw) {{
@@ -755,7 +746,7 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
       const meshHost = presetMesh.dataset.host;
       presetLan.classList.toggle('active', Boolean(lanHost) && val.startsWith(lanHost));
       presetMesh.classList.toggle('active', Boolean(meshHost) && val.startsWith(meshHost));
-      localhostBtn.classList.toggle('active', isLocal(val));
+      codeField.style.display = (!val || isLocal(val) || Boolean(offerHash)) ? 'none' : 'block';
 
       if (offerHash) {{
         codeInput.placeholder = 'Paseo offer link detected';
@@ -793,13 +784,6 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
       codeInput.focus();
     }});
 
-    localhostBtn.addEventListener('click', async () => {{
-      hostInput.value = '127.0.0.1:4180';
-      codeInput.value = '';
-      syncLocalState();
-      await submitPair();
-    }});
-
     async function runProbe() {{
       try {{
         const res = await fetch('/__desktop/ping?probe=all', {{ cache: 'no-store' }});
@@ -826,19 +810,14 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
         }} else if (presetMesh.dataset.host) {{
           tagMesh.textContent = presetMesh.dataset.host;
         }}
-        if (p.local) {{
-          localhostBtn.classList.add('reachable');
-          tagLocal.textContent = '● Healthy (This PC)';
-          tagLocal.classList.add('ok');
-        }}
         if (data.reachable && data.activeHost) {{
           probeBadge.textContent = '● Reachable: ' + data.activeHost;
           probeBadge.classList.add('online');
         }} else {{
-          probeBadge.textContent = 'Server not detected yet';
+          probeBadge.textContent = '';
         }}
       }} catch (_) {{
-        probeBadge.textContent = 'Probe offline';
+        probeBadge.textContent = '';
       }}
     }}
     runProbe();
@@ -920,11 +899,11 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
         err_banner = err_banner,
         saved_lan_host = html_escape(saved_lan),
         saved_meshnet_host = html_escape(saved_mesh),
-        lan_disabled_attr = lan_disabled_attr,
-        mesh_disabled_attr = mesh_disabled_attr,
-        lan_initial_tag = lan_initial_tag,
-        mesh_initial_tag = mesh_initial_tag,
+        picker_display = picker_display,
+        lan_display = lan_display,
+        mesh_display = mesh_display,
         server_host_display = html_escape(&server_host_display),
+        code_field_display = code_field_display,
     )
 }
 
@@ -1465,4 +1444,42 @@ fn html_escape(input: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::DesktopConfig;
+
+    #[test]
+    fn render_pair_page_simplifies_connect_ux_and_discloses_code_progressively() {
+        let default_html = render_pair_page(&DesktopConfig::default(), None);
+        assert!(!default_html.contains("Server not detected"));
+        assert!(!default_html.contains("Pinned Root CA"));
+        assert!(!default_html.contains("Shortcut: Ctrl+Shift+S"));
+        assert!(!default_html.contains("use-localhost-btn"));
+        assert!(
+            default_html.contains("id=\"server-picker\" style=\"display:none\""),
+            "empty config should hide the server picker"
+        );
+        assert!(
+            default_html.contains("id=\"code-field\" style=\"display:none\""),
+            "localhost config should hide the pairing-code field"
+        );
+        assert!(default_html.contains("data-testid=\"back-to-mode-choice\""));
+        assert!(default_html.contains("data-testid=\"desktop-check-update-btn\""));
+
+        let mut cfg = DesktopConfig::default();
+        cfg.server_mode = "remote".to_string();
+        cfg.last_lan_host = "192.168.1.50:4180".to_string();
+        let remote_html = render_pair_page(&cfg, None);
+        assert!(
+            remote_html.contains("id=\"server-picker\" style=\"\""),
+            "saved LAN host should reveal the server picker"
+        );
+        assert!(
+            remote_html.contains("id=\"code-field\" style=\"\""),
+            "remote host should reveal the pairing-code field"
+        );
+    }
 }
