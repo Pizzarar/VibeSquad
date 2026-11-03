@@ -332,9 +332,11 @@ function proxyUpgrade(req, socket, head) {
     let raw = `${req.method} ${req.url} HTTP/${req.httpVersion}\r\n`;
     for (let i = 0; i < req.rawHeaders.length; i += 2) {
       const name = req.rawHeaders[i];
-      if (name.toLowerCase() === "origin") continue;
+      const lower = name.toLowerCase();
+      if (lower === "origin" || lower === "host") continue;
       raw += `${name}: ${req.rawHeaders[i + 1]}\r\n`;
     }
+    raw += `Host: ${host || "127.0.0.1"}:${p}\r\n`;
     raw += `Origin: http://${host || "127.0.0.1"}:${p}\r\n`;
     upstream.write(raw + "\r\n");
     if (head?.length) upstream.write(head);

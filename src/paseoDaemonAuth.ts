@@ -4,8 +4,9 @@ export type DaemonAuthStatus = {
   ok: boolean;
   required: boolean;
   configured: boolean;
-  source: "env" | "file" | "none";
+  source: "env" | "file" | "local-credential" | "none";
   password?: string | null;
+  localCredential?: string | null;
   error?: string;
   authFailureReason?: DaemonAuthFailureReason;
   unreachable?: boolean;
@@ -20,7 +21,11 @@ function normalizeReason(val: unknown): DaemonAuthFailureReason {
   return null;
 }
 
-export function applyDaemonClientPassword(dc: unknown, password: string | null | undefined): void {
+export function applyDaemonClientPassword(
+  dc: unknown,
+  password: string | null | undefined,
+  localCredential?: string | null,
+): void {
   if (!dc || typeof dc !== "object") return;
   const c = dc as { config?: Record<string, any> };
   if (!c.config || typeof c.config !== "object") return;
@@ -31,6 +36,11 @@ export function applyDaemonClientPassword(dc: unknown, password: string | null |
   };
   if (trimmed) nextConfig.password = trimmed;
   else delete nextConfig.password;
+  if (localCredential !== undefined) {
+    const trimmedCred = typeof localCredential === "string" ? localCredential.trim() : "";
+    if (trimmedCred) nextConfig.localCredential = () => trimmedCred;
+    else delete nextConfig.localCredential;
+  }
   c.config = nextConfig;
 }
 
@@ -52,17 +62,23 @@ export function readClientAuthFailure(dc: unknown, err?: unknown): DaemonAuthFai
   return null;
 }
 
-function normalizeSource(source: unknown): "env" | "file" | "none" {
-  return source === "env" || source === "file" ? source : "none";
+function normalizeSource(source: unknown): "env" | "file" | "local-credential" | "none" {
+  return source === "env" || source === "file" || source === "local-credential" ? source : "none";
 }
 
 export async function fetchLocalDaemonPassword(
   fetchImpl: typeof fetch = fetch,
-): Promise<{ required: boolean; configured: boolean; source: "env" | "file" | "none"; password: string | null }> {
+): Promise<{
+  required: boolean;
+  configured: boolean;
+  source: "env" | "file" | "local-credential" | "none";
+  password: string | null;
+  localCredential: string | null;
+}> {
   try {
     const res = await fetchImpl("/__vibesquad/paseo/daemon-auth?includePassword=1");
     if (!res.ok) {
-      return { required: false, configured: false, source: "none", password: null };
+      return { required: false, configured: false, source: "none", password: null, localCredential: null };
     }
     const data = (await res.json()) as Record<string, unknown> | null;
     return {
@@ -70,9 +86,10 @@ export async function fetchLocalDaemonPassword(
       configured: Boolean(data?.configured),
       source: normalizeSource(data?.source),
       password: typeof data?.password === "string" && data.password ? data.password : null,
+      localCredential: typeof data?.localCredential === "string" && data.localCredential ? data.localCredential : null,
     };
   } catch {
-    return { required: false, configured: false, source: "none", password: null };
+    return { required: false, configured: false, source: "none", password: null, localCredential: null };
   }
 }
 

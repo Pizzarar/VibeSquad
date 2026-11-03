@@ -71,6 +71,7 @@ import {
 } from "./push.mjs";
 import {
   DAEMON_PASSWORD_FILE,
+  PASEO_LOCAL_CREDENTIAL_FILE,
   daemonPasswordPath,
   daemonPasswordSource,
   getDaemonAuthStatus,
@@ -78,6 +79,7 @@ import {
   probeDaemonPassword,
   readDaemonListen,
   readDaemonPassword,
+  readPaseoLocalCredential,
   writeDaemonPassword,
 } from "./daemon-password.mjs";
 import { removeTeamWorktrees } from "./team-worktrees.mjs";
@@ -194,6 +196,7 @@ export {
   fromBase64Url,
   writePushSubscriptions,
   DAEMON_PASSWORD_FILE,
+  PASEO_LOCAL_CREDENTIAL_FILE,
   daemonPasswordPath,
   daemonPasswordSource,
   getDaemonAuthStatus,
@@ -201,6 +204,7 @@ export {
   probeDaemonPassword,
   readDaemonListen,
   readDaemonPassword,
+  readPaseoLocalCredential,
   writeDaemonPassword,
   DEFAULT_PACK_PROFILES,
   DEFAULT_PROFILES,
@@ -1106,7 +1110,7 @@ async function handlePushTest(req, res) {
 async function handleProfiles(req, res) {
   try {
     if (req.method === "GET") {
-      const state = loadProfiles(undefined, { autoSeed: false });
+      const state = loadProfiles(undefined, { autoImportPaseo: true });
       const diff = diffProfiles(state.profiles, state.paseoProfiles);
       const warningsByProfile = { ...(state.warningsByProfile ?? {}) };
       for (const d of diff) {
@@ -1571,6 +1575,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return sendJson(res, 200, {
           ok: true,
           daemonPassword: readDaemonPassword(authOpts) || null,
+          localCredential: readPaseoLocalCredential(authOpts) || null,
         });
       }
       case "/__vibesquad/paseo/daemon-auth": {
@@ -1579,7 +1584,11 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
           const includePassword = new URL(req.url ?? "", "http://x").searchParams.get("includePassword") === "1";
           const status = getDaemonAuthStatus(authOpts);
           if (includePassword) {
-            return sendJson(res, 200, { ...status, password: readDaemonPassword(authOpts) || null });
+            return sendJson(res, 200, {
+              ...status,
+              password: readDaemonPassword(authOpts) || null,
+              localCredential: readPaseoLocalCredential(authOpts) || null,
+            });
           }
           return sendJson(res, 200, status);
         }

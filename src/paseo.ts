@@ -334,7 +334,9 @@ async function connect(): Promise<void> {
   try {
     if (!DEMO && !isRemote()) {
       const auth = await fetchLocalDaemonPassword();
-      if (auth.password) applyDaemonClientPassword(daemonClient, auth.password);
+      if (auth.password || auth.localCredential) {
+        applyDaemonClientPassword(daemonClient, auth.password, auth.localCredential);
+      }
     }
     await daemonClient.connect();
     set({ conn: "connected", status: "connected", error: undefined, authFailureReason: null });

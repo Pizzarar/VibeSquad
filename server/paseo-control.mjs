@@ -28,6 +28,19 @@ export function getManagedPaseoPidPath(opts = {}) {
   return join(getPaseoHome(opts), "vibesquad-managed.pid");
 }
 
+export function readPaseoPid(opts = {}) {
+  const home = getPaseoHome(opts);
+  for (const name of ["daemon.pid", "paseo.pid"]) {
+    const p = join(home, name);
+    if (!existsSync(p)) continue;
+    try {
+      const n = Number(readFileSync(p, "utf8").trim());
+      if (Number.isFinite(n) && n > 0) return n;
+    } catch {}
+  }
+  return null;
+}
+
 export function isSecretKeyName(key) {
   return SECRET_KEY_RE.test(String(key ?? ""));
 }
@@ -203,6 +216,9 @@ export function validateHubOrigin(raw) {
 export function runPaseoCli(args = [], opts = {}) {
   if (typeof opts.cliRunner === "function") {
     return Promise.resolve(opts.cliRunner(args, opts));
+  }
+  if (typeof opts.runCli === "function") {
+    return Promise.resolve(opts.runCli(args, opts));
   }
   const paseoHome = getPaseoHome(opts);
   const cli = opts.cli ?? findPaseoCli(opts);
@@ -472,17 +488,39 @@ export async function controlPaseoDaemon(action, opts = {}) {
     if (status.running) {
       return { ok: true, action: "start", alreadyRunning: true, status };
     }
-    const res = await runPaseoCli(["daemon", "start"], { ...opts, timeoutMs: 15_000 });
+    if (typeof opts.runCli === "function" || typeof opts.cliRunner === "function") {
+      const res = await runPaseoCli(["daemon", "start"], { ...opts, timeoutMs: 15_000 });
+      const after = await getPaseoDaemonStatus(opts);
+      if (after.running) {
+        markDaemonManagedByVibeSquad(after.pid || readPaseoPid(opts) || "managed", opts);
+        after.managedByVibeSquad = true;
+        after.ownership = "vibesquad-managed";
+      }
+      return {
+        ok: after.running || res.ok,
+        action: "start",
+        error: !after.running && !res.ok ? (res.stderr || res.stdout || "Failed to start Paseo daemon").trim() : undefined,
+        status: after,
+      };
+    }
+    const { ensurePaseoDaemon } = await import("./first-run.mjs");
+    const launched = await ensurePaseoDaemon(opts);
+    const checkListening = opts.isListening ?? isDaemonListening;
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      if (await checkListening(status.configuredListen)) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
     const after = await getPaseoDaemonStatus(opts);
-    if (after.running) {
-      markDaemonManagedByVibeSquad(after.pid || "managed", opts);
+    if (after.running || launched?.started) {
+      markDaemonManagedByVibeSquad(after.pid || readPaseoPid(opts) || "managed", opts);
       after.managedByVibeSquad = true;
       after.ownership = "vibesquad-managed";
     }
     return {
-      ok: after.running || res.ok,
+      ok: after.running || Boolean(launched?.started),
       action: "start",
-      error: !after.running && !res.ok ? (res.stderr || res.stdout || "Failed to start Paseo daemon").trim() : undefined,
+      error: !after.running && !launched?.started ? (launched?.reason || "Failed to start Paseo daemon") : undefined,
       status: after,
     };
   }

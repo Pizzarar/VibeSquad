@@ -13,14 +13,17 @@ process.env.PASEO_HOME = paseoHome;
 
 const {
   DAEMON_PASSWORD_FILE,
+  PASEO_LOCAL_CREDENTIAL_FILE,
   daemonPasswordPath,
   daemonPasswordSource,
   getDaemonAuthStatus,
   isDaemonPasswordRequired,
   probeDaemonPassword,
   readDaemonPassword,
+  readPaseoLocalCredential,
   writeDaemonPassword,
 } = await import("../server/daemon-password.mjs");
+const { applyDaemonClientPassword, fetchLocalDaemonPassword } = await import("../src/paseoDaemonAuth.ts");
 const { getLocalToken, HOME_SECRET_FILES, resetLocalTokenForTest } = await import("../server/auth.mjs");
 const { inspectFirstRunStatus } = await import("../server/first-run.mjs");
 const { createVibesquadMiddleware, isGatedRead, stopPushWatcher } = await import("../server/vibesquad-api.mjs");
@@ -164,6 +167,57 @@ describe("daemon-password store and helpers", () => {
     assert.equal(status.paseo.passwordConfigured, true);
     assert.equal(status.paseo.passwordSource, "file");
   });
+
+  test("readPaseoLocalCredential and local-credential fallback in daemonPasswordSource & getDaemonAuthStatus (R5)", async () => {
+    assert.equal(PASEO_LOCAL_CREDENTIAL_FILE, "local-credential");
+    const credStoreHome = mkdtempSync(join(home, "cred-store-"));
+    const credPaseoHome = mkdtempSync(join(home, "cred-paseo-"));
+    writeFileSync(join(credPaseoHome, "config.json"), JSON.stringify({ daemon: { auth: { password: "pw" } } }), "utf8");
+
+    assert.equal(readPaseoLocalCredential({ paseoHome: credPaseoHome, env: {} }), "");
+    assert.deepEqual(getDaemonAuthStatus({ home: credStoreHome, paseoHome: credPaseoHome, env: {} }), {
+      ok: true,
+      required: true,
+      configured: false,
+      source: "none",
+    });
+
+    writeFileSync(join(credPaseoHome, "local-credential"), "\uFEFF  local-cred-token-abc \r\n", "utf8");
+    assert.equal(readPaseoLocalCredential({ paseoHome: credPaseoHome, env: {} }), "local-cred-token-abc");
+    assert.equal(daemonPasswordSource({ home: credStoreHome, paseoHome: credPaseoHome, env: {} }), "local-credential");
+    assert.deepEqual(getDaemonAuthStatus({ home: credStoreHome, paseoHome: credPaseoHome, env: {} }), {
+      ok: true,
+      required: true,
+      configured: true,
+      source: "local-credential",
+    });
+
+    // applyDaemonClientPassword & fetchLocalDaemonPassword support localCredential
+    const fakeClient = { config: { reconnect: { enabled: false } } };
+    applyDaemonClientPassword(fakeClient, null, "local-cred-token-abc");
+    assert.equal(fakeClient.config.password, undefined);
+    assert.equal(typeof fakeClient.config.localCredential, "function");
+    assert.equal(fakeClient.config.localCredential(), "local-cred-token-abc");
+
+    const fetched = await fetchLocalDaemonPassword(async () => ({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        required: true,
+        configured: true,
+        source: "local-credential",
+        password: null,
+        localCredential: "local-cred-token-abc",
+      }),
+    }));
+    assert.deepEqual(fetched, {
+      required: true,
+      configured: true,
+      source: "local-credential",
+      password: null,
+      localCredential: "local-cred-token-abc",
+    });
+  });
 });
 
 describe("/__vibesquad/paseo/daemon-auth HTTP endpoints", () => {
@@ -302,5 +356,24 @@ describe("/__vibesquad/paseo/daemon-auth HTTP endpoints", () => {
     });
     assert.equal(existsSync(daemonPasswordPath(apiHome)), false);
     assert.equal(readDaemonPassword({ home: apiHome, env: {} }), "");
+
+    // 5. R5: when local-credential exists in apiPaseo, /__vibesquad/local-token and /__vibesquad/paseo/daemon-auth?includePassword=1 surface it
+    writeFileSync(join(apiPaseo, "local-credential"), "paseo-local-cred-xyz\n", "utf8");
+    const ltRes = await fetch(`${base}/__vibesquad/local-token`, {
+      headers: { "X-VS-Token": token },
+    });
+    assert.equal(ltRes.status, 200);
+    const ltBody = await ltRes.json();
+    assert.equal(ltBody.ok, true);
+    assert.equal(ltBody.daemonPassword, null);
+    assert.equal(ltBody.localCredential, "paseo-local-cred-xyz");
+
+    const authCredRes = await fetch(`${base}/__vibesquad/paseo/daemon-auth?includePassword=1`, {
+      headers: { "X-VS-Token": token },
+    });
+    const authCredBody = await authCredRes.json();
+    assert.equal(authCredBody.source, "local-credential");
+    assert.equal(authCredBody.configured, true);
+    assert.equal(authCredBody.localCredential, "paseo-local-cred-xyz");
   });
 });

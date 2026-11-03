@@ -5,6 +5,7 @@ import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { readRawPaseoConfig } from "./paseo-control.mjs";
 
 export const DAEMON_PASSWORD_FILE = "daemon-password";
+export const PASEO_LOCAL_CREDENTIAL_FILE = "local-credential";
 
 export function vibeSquadHome() {
   return process.env.VIBESQUAD_HOME || join(homedir(), ".vibesquad");
@@ -12,6 +13,18 @@ export function vibeSquadHome() {
 
 export function daemonPasswordPath(home = vibeSquadHome()) {
   return join(home, DAEMON_PASSWORD_FILE);
+}
+
+export function readPaseoLocalCredential({ paseoHome, env = process.env } = {}) {
+  const targetHome = paseoHome || env?.PASEO_HOME || process.env.PASEO_HOME || join(homedir(), ".paseo");
+  const p = join(targetHome, PASEO_LOCAL_CREDENTIAL_FILE);
+  if (!existsSync(p)) return "";
+  try {
+    const raw = readFileSync(p, "utf8");
+    return raw.replace(/^\uFEFF/, "").replace(/\r?\n$/, "").trim();
+  } catch {
+    return "";
+  }
 }
 
 export function readDaemonPassword({ home = vibeSquadHome(), env = process.env } = {}) {
@@ -28,7 +41,7 @@ export function readDaemonPassword({ home = vibeSquadHome(), env = process.env }
   }
 }
 
-export function daemonPasswordSource({ home = vibeSquadHome(), env = process.env } = {}) {
+export function daemonPasswordSource({ home = vibeSquadHome(), env = process.env, paseoHome } = {}) {
   if (typeof env?.PASEO_DAEMON_PASSWORD === "string" && env.PASEO_DAEMON_PASSWORD.trim()) {
     return "env";
   }
@@ -38,6 +51,9 @@ export function daemonPasswordSource({ home = vibeSquadHome(), env = process.env
       const raw = readFileSync(p, "utf8").replace(/^\uFEFF/, "").replace(/\r?\n$/, "").trim();
       if (raw) return "file";
     } catch {}
+  }
+  if (readPaseoLocalCredential({ paseoHome, env })) {
+    return "local-credential";
   }
   return "none";
 }
@@ -135,7 +151,7 @@ export async function probeDaemonPassword(password, { listen, clientFactory, tim
       clientType: "cli",
       appVersion: "0.0.1",
       connectTimeoutMs: timeoutMs,
-      ...(args.password ? { password: args.password } : {}),
+      ...(args.password ? { password: args.password } : { localCredential: () => readPaseoLocalCredential(opts) || null }),
       reconnect: { enabled: false },
     });
   };
@@ -191,10 +207,11 @@ export async function probeDaemonPassword(password, { listen, clientFactory, tim
 }
 
 export function getDaemonAuthStatus({ home = vibeSquadHome(), env = process.env, paseoHome, configPath } = {}) {
+  const source = daemonPasswordSource({ home, env, paseoHome });
   return {
     ok: true,
     required: isDaemonPasswordRequired({ paseoHome, configPath }),
-    configured: Boolean(readDaemonPassword({ home, env })),
-    source: daemonPasswordSource({ home, env }),
+    configured: source !== "none",
+    source,
   };
 }
