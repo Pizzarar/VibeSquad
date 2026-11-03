@@ -9,7 +9,9 @@ import { retiredLeadTitle } from "./teams";
 import { normalizeProviderUsage, type ProviderQuotaView } from "./antigravity";
 import { LEGACY_NEEDS_LABEL, LEGACY_NEEDS_UNTIL, LEGACY_NEEDS_REASON } from "./userName";
 import { demoAgents, demoArchived, demoProviderUsage, demoWorkspaces } from "./demo";
+import { applyDaemonClientPassword, fetchLocalDaemonPassword, readClientAuthFailure } from "./paseoDaemonAuth";
 import { remoteDaemonClient } from "./paseoRemote";
+import { isRemote } from "./remoteSession";
 
 declare const __PASEO_SERVER_ID__: string;
 export const SERVER_ID = __PASEO_SERVER_ID__;
@@ -24,6 +26,9 @@ export type ConnStatus = "connecting" | "connected" | "disconnected";
 
 type State = {
   conn: ConnStatus;
+  status: "connecting" | "connected" | "disconnected" | "error";
+  error?: string;
+  authFailureReason: "password_required" | "incorrect_password" | null;
   agents: Map<string, PaseoAgent>;
   /** The first agent list has arrived (it may be empty). conn can be "connected" before this. */
   rosterLoaded: boolean;
@@ -35,6 +40,8 @@ type State = {
 
 let state: State = {
   conn: "connecting",
+  status: "connecting",
+  authFailureReason: null,
   agents: new Map(),
   rosterLoaded: false,
   archivedAgents: new Map(),
@@ -317,12 +324,58 @@ async function refetchWorkspaces() {
   set({ workspaces: next });
 }
 
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function connect(): Promise<void> {
+  if (retryTimer) {
+    clearTimeout(retryTimer);
+    retryTimer = null;
+  }
+  try {
+    if (!DEMO && !isRemote()) {
+      const auth = await fetchLocalDaemonPassword();
+      if (auth.password) applyDaemonClientPassword(daemonClient, auth.password);
+    }
+    await daemonClient.connect();
+    set({ conn: "connected", status: "connected", error: undefined, authFailureReason: null });
+    refetchAll().catch(console.error);
+    refetchWorkspaces().catch(console.error);
+    refetchProviderUsage();
+  } catch (e) {
+    const authReason = readClientAuthFailure(daemonClient, e);
+    if (authReason) {
+      set({
+        conn: "disconnected",
+        status: "error",
+        error: authReason === "password_required" ? "Daemon password required" : "Daemon password rejected",
+        authFailureReason: authReason,
+      });
+    } else {
+      set({
+        conn: "disconnected",
+        status: "error",
+        error: String((e as Error)?.message ?? e),
+        authFailureReason: null,
+      });
+      retryTimer = setTimeout(connect, 3000);
+    }
+  }
+}
+
+export async function reconnectWithDaemonPassword(password?: string): Promise<void> {
+  if (password !== undefined) {
+    applyDaemonClientPassword(daemonClient, password);
+  }
+  set({ authFailureReason: null, error: undefined, status: "connecting", conn: "connecting" });
+  await connect();
+}
+
 let started = false;
 export function start() {
   if (started) return;
   started = true;
   if (DEMO) {
-    set({ conn: "connected", rosterLoaded: true, agents: demoAgents(), workspaces: demoWorkspaces() as Map<string, PaseoWorkspace>, providerUsage: normalizeProviderUsage(demoProviderUsage()) });
+    set({ conn: "connected", status: "connected", error: undefined, authFailureReason: null, rosterLoaded: true, agents: demoAgents(), workspaces: demoWorkspaces() as Map<string, PaseoWorkspace>, providerUsage: normalizeProviderUsage(demoProviderUsage()) });
     return;
   }
 
@@ -342,12 +395,50 @@ export function start() {
     set({ workspaces });
   });
 
+  (daemonClient as unknown as { subscribeConnectionStatus?: (cb: (s: { status: string; reason?: string }) => void) => () => void }).subscribeConnectionStatus?.((s) => {
+    if (s.status === "connected") {
+      set({ conn: "connected", status: "connected", error: undefined, authFailureReason: null });
+      return;
+    }
+    if (s.status === "disconnected") {
+      const authReason = readClientAuthFailure(daemonClient, s);
+      if (authReason) {
+        if (retryTimer) {
+          clearTimeout(retryTimer);
+          retryTimer = null;
+        }
+        set({
+          conn: "disconnected",
+          status: "error",
+          error: authReason === "password_required" ? "Daemon password required" : "Daemon password rejected",
+          authFailureReason: authReason,
+        });
+      }
+    }
+  });
+
   // The SDK reconnects on its own; we watch the state so we can refetch after a gap.
   let last: string | null = null;
   setInterval(() => {
     const s = client.getConnectionState().status;
+    const authReason = s === "connected" ? null : readClientAuthFailure(daemonClient);
     const conn: ConnStatus = s === "connected" ? "connected" : s === "connecting" || s === "idle" ? "connecting" : "disconnected";
-    if (conn !== state.conn) set({ conn });
+    if (s === "connected") {
+      if (state.conn !== "connected" || state.authFailureReason !== null) {
+        set({ conn: "connected", status: "connected", error: undefined, authFailureReason: null });
+      }
+    } else if (authReason) {
+      if (state.authFailureReason !== authReason || state.conn !== "disconnected") {
+        set({
+          conn: "disconnected",
+          status: "error",
+          error: authReason === "password_required" ? "Daemon password required" : "Daemon password rejected",
+          authFailureReason: authReason,
+        });
+      }
+    } else if (conn !== state.conn) {
+      set({ conn, status: conn });
+    }
     if (s === "connected" && last !== "connected") {
       refetchAll().catch(console.error);
       refetchWorkspaces().catch(console.error);
@@ -364,10 +455,7 @@ export function start() {
     }
   }, 60_000);
 
-  client.connect().catch((err) => {
-    console.error("connect failed", err);
-    set({ conn: "disconnected" });
-  });
+  void connect();
 }
 
 export function subscribePaseo(l: () => void): () => void {

@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Modal } from "./TeamActions";
-import { daemonClient, usePaseo } from "./paseo";
+import { daemonClient, reconnectWithDaemonPassword, usePaseo } from "./paseo";
+import { submitDaemonPassword } from "./paseoDaemonAuth";
 import "./ResponsiveSmallWindow.css";
 
 type AnyClient = Record<string, ((...a: unknown[]) => Promise<unknown>) | undefined>;
@@ -57,16 +58,27 @@ export function shouldShowDisconnectOverlay(conn: string, disconnectedSinceMs: n
 }
 
 /** Centered card over a dimmed scrim. position: fixed and not a role="alert" child of .app, so the layout underneath never changes. */
-export function DaemonStatusBanner({ onOpenDiagnostics }: { onOpenDiagnostics?: () => void }) {
-  const { conn } = usePaseo();
+export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
+  onOpenDiagnostics?: () => void;
+  onOpenSetup?: () => void;
+  onOpenPaseoSettings?: () => void;
+}) {
+  const { conn, status, error, authFailureReason } = usePaseo();
   const [busy, setBusy] = useState(false);
   const [visible, setVisible] = useState(false);
   const [retryIn, setRetryIn] = useState(RETRY_SECONDS);
-  const down = conn !== "connected";
+  const [pw, setPw] = useState("");
+  const [unlockBusy, setUnlockBusy] = useState(false);
+  const [unlockErr, setUnlockErr] = useState<string | null>(null);
+  const down = conn !== "connected" && status !== "connected";
 
   useEffect(() => {
     if (!down) {
       setVisible(false);
+      return;
+    }
+    if (authFailureReason) {
+      setVisible(true);
       return;
     }
     const since = Date.now();
@@ -74,7 +86,7 @@ export function DaemonStatusBanner({ onOpenDiagnostics }: { onOpenDiagnostics?: 
       if (shouldShowDisconnectOverlay("disconnected", since, Date.now())) setVisible(true);
     }, DISCONNECT_DEBOUNCE_MS);
     return () => clearTimeout(t);
-  }, [down]);
+  }, [down, authFailureReason]);
 
   const inFlight = useRef(false);
   const retry = useCallback(async () => {
@@ -85,7 +97,7 @@ export function DaemonStatusBanner({ onOpenDiagnostics }: { onOpenDiagnostics?: 
     try {
       // connect() may never settle on a dead socket; cap the wait so RETRY NOW re-enables
       const attempt = (async () => {
-        await (daemonClient as unknown as { connect?: () => Promise<unknown> }).connect?.();
+        await reconnectWithDaemonPassword();
         await dc.getDaemonStatus?.();
       })();
       await Promise.race([attempt, new Promise((r) => { timer = setTimeout(r, RETRY_TIMEOUT_MS); })]);
@@ -99,7 +111,7 @@ export function DaemonStatusBanner({ onOpenDiagnostics }: { onOpenDiagnostics?: 
   }, []);
 
   useEffect(() => {
-    if (!visible) {
+    if (!visible || authFailureReason) {
       setRetryIn(RETRY_SECONDS);
       return;
     }
@@ -111,31 +123,90 @@ export function DaemonStatusBanner({ onOpenDiagnostics }: { onOpenDiagnostics?: 
       });
     }, 1000);
     return () => clearInterval(iv);
-  }, [visible, retry]);
+  }, [visible, authFailureReason, retry]);
 
   if (!down || !visible) return null;
   const onRetryNow = () => {
     setRetryIn(RETRY_SECONDS);
     void retry();
   };
+  const onUnlockSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = pw.trim();
+    if (!trimmed || unlockBusy) return;
+    setUnlockBusy(true);
+    setUnlockErr(null);
+    try {
+      const res = await submitDaemonPassword(trimmed);
+      if (!res.ok) {
+        setUnlockErr(res.error || "Failed to verify password");
+        return;
+      }
+      setPw("");
+      setUnlockErr(null);
+      await reconnectWithDaemonPassword(trimmed);
+    } catch (err) {
+      setUnlockErr(err instanceof Error ? err.message : String(err));
+    } finally {
+      setUnlockBusy(false);
+    }
+  };
   return (
     <div className="daemon-disconnect-scrim" data-testid="daemon-disconnect-scrim">
       <div className="daemon-disconnect-card" data-testid="daemon-down-banner" role="alert">
         <div className="daemon-disconnect-title" data-testid="daemon-disconnect-text">
-          Daemon disconnected · retrying in {retryIn}s
+          {authFailureReason ? "PASEO DAEMON LOCKED" : <>Daemon disconnected · retrying in {retryIn}s</>}
         </div>
+        {authFailureReason ? (
+          <>
+            <div className="daemon-disconnect-subtext">
+              {authFailureReason === "password_required"
+                ? "The local Paseo daemon requires a password (daemon.auth.password is set in ~/.paseo/config.json)."
+                : "The stored daemon password was rejected by the local Paseo daemon."}
+            </div>
+            <form className="daemon-banner-auth-form" data-testid="daemon-banner-auth-form" onSubmit={(e) => void onUnlockSubmit(e)}>
+              <input
+                type="password"
+                data-testid="daemon-banner-password-input"
+                value={pw}
+                onChange={(e) => setPw(e.target.value)}
+                placeholder="Enter Paseo daemon password…"
+              />
+              <button type="submit" className="btn small" data-testid="daemon-banner-unlock-btn" disabled={unlockBusy || !pw.trim()}>
+                {unlockBusy ? "VERIFYING…" : "UNLOCK & SAVE"}
+              </button>
+            </form>
+            {unlockErr && (
+              <div className="daemon-disconnect-error" data-testid="daemon-banner-auth-error">
+                {unlockErr}
+              </div>
+            )}
+          </>
+        ) : error ? (
+          <div className="daemon-disconnect-subtext">{error}</div>
+        ) : null}
         <div className="daemon-disconnect-actions">
-          <button type="button" className="btn ok small" data-testid="daemon-retry-btn" disabled={busy} onClick={onRetryNow}>
+          <button type="button" className="btn ok small" data-testid="daemon-banner-retry" disabled={busy} onClick={onRetryNow}>
             RETRY NOW
           </button>
-          <button type="button" className="btn ghost small" data-testid="daemon-diagnostics-btn" onClick={onOpenDiagnostics}>
-            DIAGNOSTICS
+          <button type="button" className="btn ghost small" data-testid="daemon-banner-diagnostics" onClick={props.onOpenDiagnostics}>
+            OPEN DIAGNOSTICS
           </button>
+          {props.onOpenSetup && (
+            <button type="button" className="btn ghost small" data-testid="daemon-banner-setup" onClick={props.onOpenSetup}>
+              SETUP / DAEMON
+            </button>
+          )}
+          {props.onOpenPaseoSettings && (
+            <button type="button" className="btn ghost small" data-testid="daemon-banner-paseo-settings" onClick={props.onOpenPaseoSettings}>
+              PASEO SETTINGS
+            </button>
+          )}
         </div>
       </div>
     </div>
   );
-}
+});
 
 export function DiagnosticsModal({ onClose }: { onClose: () => void }) {
   const { conn, agents } = usePaseo();
