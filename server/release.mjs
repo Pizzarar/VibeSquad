@@ -307,6 +307,8 @@ if (isMain) {
   console.log(`[release:${channel}] Wrote signed ${latestJsonPath} for v${targetVersion}`);
 
   if (!opts.stageOnly) {
+    const tag = channel === "beta" ? "beta" : `v${targetVersion}`;
+    const releaseTitle = channel === "beta" ? `VibeSquad Beta (${targetVersion})` : `VibeSquad v${targetVersion}`;
     const assets = [installerPath, sigPath, latestJsonPath, join(distDesktopDir, "THIRD-PARTY-LICENSES.txt")].filter((p) => existsSync(p));
     let tagExists = false;
     try {
