@@ -47,8 +47,17 @@ type DevicesResponse = {
   lanDesktopInstallerUrl?: string | null;
 };
 
+type PaseoPairOfferResponse = {
+  ok?: boolean;
+  relayEnabled?: boolean;
+  url?: string | null;
+  qr?: string;
+  error?: string;
+};
+
 export function PairDeviceModal({ onClose }: { onClose: () => void }) {
   const [pair, setPair] = useState<PairStartResponse | null>(null);
+  const [paseoOffer, setPaseoOffer] = useState<PaseoPairOfferResponse | null>(null);
   const [devices, setDevices] = useState<PairedDevice[]>([]);
   const [meta, setMeta] = useState<{
     caFingerprint: Fingerprint;
@@ -88,6 +97,13 @@ export function PairDeviceModal({ onClose }: { onClose: () => void }) {
       });
       if (!data.lanIp) {
         setNetworkMode("meshnet");
+      }
+    } catch {}
+    try {
+      const pr = await fetch("/__vibesquad/paseo/pair");
+      if (pr.ok) {
+        const pdata = (await pr.json()) as PaseoPairOfferResponse;
+        setPaseoOffer(pdata);
       }
     } catch {}
   }, []);
@@ -390,6 +406,72 @@ export function PairDeviceModal({ onClose }: { onClose: () => void }) {
           <div className="muted small" style={{ marginTop: 4 }}>
             Type either address into the Desktop App&apos;s Server Address field along with the 6-digit code above.
           </div>
+        </div>
+
+        <div className="preview" style={{ marginBottom: 0 }} data-testid="paseo-link-pairing-card">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+            <div className="field-label" style={{ color: "var(--cyan)" }}>
+              🔗 PASEO LINK PAIRING (<code>#offer=…</code>)
+            </div>
+            <button
+              type="button"
+              className="btn ghost small"
+              data-testid="open-paseo-link-pair"
+              onClick={() => {
+                window.location.href = "/?remote=1";
+              }}
+            >
+              Pair with a Paseo #offer= Link →
+            </button>
+          </div>
+          <div className="muted small" style={{ marginTop: 4 }}>
+            Pair any remote browser or VibeSquad window over the encrypted Paseo relay using an <code>#offer=…</code> connection link.
+          </div>
+          {paseoOffer?.url ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                <code className="small" style={{ wordBreak: "break-all", color: "var(--cyan)" }} data-testid="paseo-offer-url">
+                  {paseoOffer.url}
+                </code>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    className="btn ok small"
+                    data-testid="copy-paseo-link"
+                    onClick={() => copyText("paseo-link", paseoOffer.url!)}
+                  >
+                    {copied === "paseo-link" ? "✓ Copied Paseo Link" : "Copy Paseo Link"}
+                  </button>
+                  {paseoOffer.url.includes("#offer=") && (
+                    <button
+                      type="button"
+                      className="btn ghost small"
+                      data-testid="copy-vibesquad-relay-link"
+                      onClick={() =>
+                        copyText(
+                          "vs-relay-link",
+                          `${location.origin}/?remote=1#offer=${paseoOffer.url!.split("#offer=")[1]}`,
+                        )
+                      }
+                    >
+                      {copied === "vs-relay-link" ? "✓ Copied Relay Link" : "Copy VibeSquad Relay Link"}
+                    </button>
+                  )}
+                </div>
+              </div>
+              {paseoOffer.url.includes("#offer=") && (
+                <div className="muted small" style={{ wordBreak: "break-all" }}>
+                  VibeSquad Relay link: <code>{`${location.origin}/?remote=1#offer=${paseoOffer.url.split("#offer=")[1]}`}</code>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="muted small" style={{ marginTop: 6 }}>
+              {paseoOffer?.error
+                ? `Paseo relay link unavailable (${paseoOffer.error}). Enable Relay in Settings → Paseo → Network & Remote, or click "Pair with a Paseo #offer= Link →" to connect to another PC.`
+                : 'Enable Relay in Settings → Paseo → Network & Remote to generate a Paseo #offer= link for this PC, or click "Pair with a Paseo #offer= Link →" to connect to another PC.'}
+            </div>
+          )}
         </div>
 
         <div className="na-grid">

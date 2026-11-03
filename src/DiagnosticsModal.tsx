@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Modal } from "./TeamActions";
 import { daemonClient, reconnectWithDaemonPassword, usePaseo } from "./paseo";
 import { submitDaemonPassword } from "./paseoDaemonAuth";
+import { clearSession, isRemote } from "./remoteSession";
 import "./ResponsiveSmallWindow.css";
 
 type AnyClient = Record<string, ((...a: unknown[]) => Promise<unknown>) | undefined>;
@@ -62,6 +63,7 @@ export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
   onOpenDiagnostics?: () => void;
   onOpenSetup?: () => void;
   onOpenPaseoSettings?: () => void;
+  onRePair?: () => void;
 }) {
   const { conn, status, error, authFailureReason } = usePaseo();
   const [busy, setBusy] = useState(false);
@@ -130,6 +132,36 @@ export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
     setRetryIn(RETRY_SECONDS);
     void retry();
   };
+  const onRePairClick = () => {
+    if (isRemote()) {
+      clearSession();
+      location.replace(location.pathname + "?remote=1");
+      return;
+    }
+    if ((window as any).__VIBESQUAD_DESKTOP_BRIDGE__) {
+      window.location.href = "/__desktop/setup";
+      return;
+    }
+    if (props.onRePair) {
+      props.onRePair();
+      return;
+    }
+    window.location.href = "/?remote=1";
+  };
+  const onPaseoLinkClick = () => {
+    clearSession();
+    window.location.href = "/?remote=1";
+  };
+  const onFirstTimeSetupClick = () => {
+    if ((window as any).__VIBESQUAD_DESKTOP_BRIDGE__) {
+      window.location.href = "/__desktop/mode";
+      return;
+    }
+    try {
+      localStorage.removeItem("vs.firstRunDone");
+    } catch {}
+    props.onOpenSetup?.();
+  };
   const onUnlockSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = pw.trim();
@@ -188,6 +220,15 @@ export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
         <div className="daemon-disconnect-actions">
           <button type="button" className="btn ok small" data-testid="daemon-banner-retry" disabled={busy} onClick={onRetryNow}>
             RETRY NOW
+          </button>
+          <button type="button" className="btn ghost small" data-testid="daemon-banner-repair" onClick={onRePairClick}>
+            RE-PAIR / CHANGE SERVER
+          </button>
+          <button type="button" className="btn ghost small" data-testid="daemon-banner-paseo-link" onClick={onPaseoLinkClick}>
+            PAIR WITH PASEO LINK
+          </button>
+          <button type="button" className="btn ghost small" data-testid="daemon-banner-first-time" onClick={onFirstTimeSetupClick}>
+            FIRST-TIME SETUP
           </button>
           <button type="button" className="btn ghost small" data-testid="daemon-banner-diagnostics" onClick={props.onOpenDiagnostics}>
             OPEN DIAGNOSTICS

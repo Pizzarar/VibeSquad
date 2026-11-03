@@ -2016,7 +2016,12 @@ export function App() {
       {/* <DaemonStatusBanner onOpenDiagnostics={openDiagnostics} /> */}
       <DaemonStatusBanner
         onOpenDiagnostics={() => setModal("diagnostics")}
-        onOpenSetup={() => setFirstRunOpen(true)}
+        onOpenSetup={() => {
+          try {
+            localStorage.removeItem(FIRST_RUN_DONE_KEY);
+          } catch {}
+          setFirstRunOpen(true);
+        }}
         onOpenPaseoSettings={() => {
           requestSettingsTarget("paseo-daemon");
           setModal("settings");
