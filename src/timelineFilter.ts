@@ -13,7 +13,7 @@ export function matchesFilter(it: any, f: TimelineFilter): boolean {
   const t = String(it.type ?? "");
   switch (f) {
     case "text":
-      return t === "user_message" || t === "assistant_message";
+      return t === "user_message" || t === "assistant_message" || t === "reasoning";
     case "tools":
       return t === "tool_call";
     case "errors":
@@ -84,4 +84,50 @@ export function localPrompts(entries: Ent[]): Array<{ seq: number; timestamp: st
     if (e.item?.type === "user_message") out.push({ seq: e.seqStart ?? i, timestamp: e.timestamp ?? "", preview: entryText(e.item).slice(0, 120) });
   });
   return out;
+}
+
+// ---- live stream merging (optimistic entries until the authoritative refetch lands) ----
+
+/** Thought text across provider shapes (antigravity-cli puts it in summary/thinking/detail). */
+export function reasoningText(it: any): string {
+  return String(it?.text ?? it?.summary ?? it?.thinking ?? it?.detail?.text ?? "");
+}
+
+const STREAMED = new Set(["assistant_message", "reasoning"]);
+
+/**
+ * Fold one live `timeline` stream item into the loaded entries. Streamed text/reasoning chunks extend the
+ * tail entry of the same type, a tool_call with the same callId replaces its row, anything else appends.
+ * The debounced projected refetch replaces the whole list, so optimistic rows never linger or duplicate.
+ */
+export function mergeLiveItem<T extends Ent>(entries: T[], item: any, timestamp?: string): T[] {
+  if (!item || typeof item !== "object") return entries;
+  const type = String(item.type ?? "");
+  const last = entries[entries.length - 1];
+  if (last && last.item && last.item.type === type) {
+    if (STREAMED.has(type)) {
+      const field = type === "reasoning" && last.item.text == null && last.item.summary != null ? "summary" : "text";
+      const prev = String(last.item[field] ?? "");
+      const add = type === "reasoning" ? reasoningText(item) : String(item.text ?? "");
+      const merged = { ...last.item, [field]: prev + add };
+      return [...entries.slice(0, -1), { ...last, item: merged }];
+    }
+  }
+  if (type === "tool_call" && item.callId != null) {
+    for (let i = entries.length - 1; i >= 0 && i >= entries.length - 20; i--) {
+      const x = entries[i].item;
+      if (x && x.type === "tool_call" && x.callId === item.callId) {
+        const next = entries.slice();
+        next[i] = { ...entries[i], item: { ...x, ...item, detail: { ...(x.detail ?? {}), ...(item.detail ?? {}) } } };
+        return next;
+      }
+    }
+  }
+  return [...entries, { item, timestamp } as T];
+}
+
+/** Index of the most recent reasoning entry, or -1. */
+export function latestReasoningIndex(entries: Ent[]): number {
+  for (let i = entries.length - 1; i >= 0; i--) if (entries[i].item?.type === "reasoning") return i;
+  return -1;
 }

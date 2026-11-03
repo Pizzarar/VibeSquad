@@ -960,6 +960,28 @@ code {
   flex-shrink: 0;
 }
 
+.tl-jump-bottom {
+  position: sticky;
+  bottom: 8px;
+  align-self: center;
+  z-index: 3;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--neon-cyan);
+  background: #0b0d1c;
+  color: var(--neon-cyan);
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
+}
+
+.tl-reasoning-body {
+  max-height: 40vh;
+  overflow-y: auto;
+  border-left: 2px solid #333;
+  padding-left: 8px;
+}
+
 .tl {
   white-space: pre-wrap;
   word-break: break-word;

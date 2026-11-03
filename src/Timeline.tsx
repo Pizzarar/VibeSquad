@@ -1,4 +1,4 @@
-import { Component, Fragment, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { Component, Fragment, type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { messageCtxItems, openContextMenu, selectionWithin } from "./CommandPalette";
 import { daemonClient, client, DEMO } from "./paseo";
 import { REWIND_MODES, buildRewindRequest, truncateAfter, type RewindMode } from "./sessionLifecycle";
@@ -7,7 +7,7 @@ import { sentImagesFor } from "./imageDrafts";
 import { parseSentAttachments, repoPathFor } from "./attachments";
 import { openRightDockTab } from "./RightDock";
 import { listTimelinePrompts, searchTimeline, type TimelinePrompt } from "./paseoTimeline";
-import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, matchesFilter, localPrompts, localSearch, sortedHits, stepIndex, type SearchLocation, type TimelineFilter } from "./timelineFilter";
+import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, matchesFilter, localPrompts, localSearch, mergeLiveItem, latestReasoningIndex, reasoningText, sortedHits, stepIndex, type SearchLocation, type TimelineFilter } from "./timelineFilter";
 import { BARE_PATH_RE, parseFileToken } from "./fileLinks";
 import { toolStartsExpanded, usePref } from "./prefs";
 import { getPanes } from "./panes";
@@ -659,6 +659,7 @@ export function TimelineItem({
   onRewound,
   selected = false,
   onSelect,
+  latestReasoning = false,
 }: {
   e: Entry;
   agentId: string;
@@ -666,6 +667,8 @@ export function TimelineItem({
   onRewound?: (e: Entry) => void;
   selected?: boolean;
   onSelect?: () => void;
+  /** The most recent thought in the loaded timeline opens by default; a user toggle still wins. */
+  latestReasoning?: boolean;
 }) {
   const it = e.item;
   // null = not toggled yet: tool rows follow Settings › Chat › Collapse successful tool calls.
@@ -742,18 +745,20 @@ export function TimelineItem({
       );
 
     case "reasoning": {
-      const preview = (it.text ?? it.summary ?? "").slice(0, 80);
+      const txt = reasoningText(it);
+      const open = expandedState ?? latestReasoning;
+      const preview = txt.slice(0, 80);
       return (
         <div
           data-testid="tl-reasoning-row"
           className="tl tl-reasoning"
           style={{ cursor: "pointer", color: "#888", fontSize: "0.9em" }}
-          onClick={() => setExpanded((v) => !v)}
+          onClick={() => setExpanded(!open)}
         >
-          {expanded ? "▾" : "▸"} Thinking…{!expanded && preview ? ` ${preview}${(it.text ?? it.summary ?? "").length > 80 ? "…" : ""}` : ""}
-          {expanded && (
+          {open ? "▾" : "▸"} Thinking…{!open && preview ? ` ${preview}${txt.length > 80 ? "…" : ""}` : ""}
+          {open && (
             <div className="tl-reasoning-body" style={{ marginTop: 4, whiteSpace: "pre-wrap" }}>
-              {it.text ?? it.summary ?? ""}
+              {txt}
             </div>
           )}
         </div>
@@ -893,7 +898,12 @@ export function useTimeline(agentId: string, status: string, active = true) {
 
     reload.current = load;
     load();
-    const sub = handle.timeline.subscribe(() => soon());
+    const sub = handle.timeline.subscribe((ev: any) => {
+      if (ev && ev.type === "timeline" && ev.item) {
+        setEntries((cur) => mergeLiveItem(cur, ev.item, ev.timestamp));
+      }
+      soon();
+    });
     return () => {
       alive = false;
       if (timer) clearTimeout(timer);
@@ -1031,6 +1041,7 @@ export function Timeline({
 }: TimelineProps) {
   const timelineRef = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
+  const [isPinned, setIsPinned] = useState(true);
   const [cut, setCut] = useState<Entry | null>(null);
   const cutLen = useRef(0);
   // New turns after a rewind arrive past the cut; drop the cut so they show.
@@ -1060,10 +1071,31 @@ export function Timeline({
   const slowSearch = useDelayedBusy(searching);
   const pinnedTodo = findPinnedTodo(shown);
 
-  useEffect(() => {
+  const lastEntry = entries[entries.length - 1];
+  const tailSig = [
+    entries.length,
+    lastEntry?.seqStart,
+    lastEntry?.item?.type,
+    lastEntry?.item?.status,
+    reasoningText(lastEntry?.item).length || String(lastEntry?.item?.text ?? "").length,
+    JSON.stringify(lastEntry?.item?.detail ?? "").length,
+  ].join("|");
+  const stickToBottom = () => {
     const el = timelineRef.current;
     if (el && pinned.current && el.offsetParent) el.scrollTop = el.scrollHeight;
-  }, [entries.length]);
+  };
+  useLayoutEffect(stickToBottom, [tailSig]);
+  // Rows grow without the entry list changing (images, expanding thoughts, markdown): follow while pinned.
+  useEffect(() => {
+    const el = timelineRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(stickToBottom);
+    const watch = () => { for (const c of Array.from(el.children)) ro.observe(c); };
+    watch();
+    const mo = new MutationObserver(() => { ro.disconnect(); watch(); stickToBottom(); });
+    mo.observe(el, { childList: true });
+    return () => { mo.disconnect(); ro.disconnect(); };
+  }, [agentId]);
 
   useEffect(() => {
     setFilter("all"); setBarOpen(false); setQuery(""); setHits([]); setHitIdx(-1); setPrompts([]); setPromptsOpen(false); setBarMsg("");
@@ -1202,7 +1234,9 @@ export function Timeline({
       }}
       onScroll={(e) => {
         const el = e.currentTarget;
-        pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+        const near = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+        pinned.current = near;
+        setIsPinned((p) => (p === near ? p : near));
       }}
     >
       {(barOpen || pinnedTodo) && <div className="tl-head">
@@ -1276,6 +1310,7 @@ export function Timeline({
             agentId={agentId}
             onParkText={onParkText}
             onRewound={(x) => { cutLen.current = entries.length; setCut(x); }}
+            latestReasoning={e === entries[latestReasoningIndex(entries)]}
             selected={selectedEntryKey === String(e.seqStart ?? i)}
             onSelect={() => setSelectedEntryKey((k) => (k === String(e.seqStart ?? i) ? null : String(e.seqStart ?? i)))}
           />
@@ -1283,6 +1318,20 @@ export function Timeline({
         </Fragment>
       ))}
       <div />
+      {!isPinned && (
+        <button
+          className="tl-jump-bottom"
+          data-testid="tl-jump-bottom"
+          onClick={() => {
+            const el = timelineRef.current;
+            pinned.current = true;
+            setIsPinned(true);
+            if (el) el.scrollTop = el.scrollHeight;
+          }}
+        >
+          ↓ Follow output
+        </button>
+      )}
     </div>
   );
 }
