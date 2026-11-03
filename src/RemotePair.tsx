@@ -6,7 +6,7 @@
 import { useEffect, useState } from "react";
 import { parseConnectionOfferFromUrl } from "@getpaseo/protocol/connection-offer";
 import { probeRemote } from "./paseoRemote";
-import { clearSession, hasOfferFragment, parseOfferInput, readSession, saveSession, takeAuthNote, remoteError, type RemoteError } from "./remoteSession";
+import { clearSession, hasOfferFragment, isLocalHost, parseOfferInput, readSession, saveSession, takeAuthNote, remoteError, type RemoteError } from "./remoteSession";
 
 function initialLink(): string {
   return hasOfferFragment(location.hash) ? location.href : "";
@@ -45,6 +45,14 @@ export function RemotePair() {
     setLinkNeeded(true);
     setError(null);
     setBusy(false);
+  }
+
+  function useLocalDaemon() {
+    clearSession();
+    try {
+      localStorage.removeItem("vs.remote");
+    } catch {}
+    window.location.href = (window as any).__VIBESQUAD_DESKTOP_BRIDGE__ ? "/__desktop/mode" : "/";
   }
 
   async function connect(e: React.FormEvent) {
@@ -118,6 +126,11 @@ export function RemotePair() {
         {(hasStored || !linkNeeded) && (
           <button className="btn remote-pair-forget" type="button" data-testid="remote-pair-forget" onClick={forget}>
             Forget saved device
+          </button>
+        )}
+        {isLocalHost(location.hostname) && (
+          <button className="btn remote-pair-forget" type="button" data-testid="remote-pair-local" onClick={useLocalDaemon}>
+            ← Use Local Daemon / First-Time Setup
           </button>
         )}
       </form>
