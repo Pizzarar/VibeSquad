@@ -59,35 +59,38 @@ function makeMockEnv() {
     }) + "\n",
     "utf8",
   );
-  return {
-    dir,
-    vsHome,
-    paseoHome,
-    agentsDir,
-    writeAgent(record) {
-      writeFileSync(join(agentsDir, `${record.id}.json`), JSON.stringify(record, null, 2), "utf8");
-    },
-    runVs(args, extraEnv = {}) {
-      // Hermetic: drop the caller's agent identity and live paseo CLI so a run inside an agent
-      // session (PASEO_AGENT_ID, PASEO_CLI) cannot change what vs resolves or reach the daemon.
-      const base = Object.fromEntries(
-        Object.entries(process.env).filter(([k]) => !/^(PASEO_(AGENT_|CLI)|VS_)/.test(k)),
-      );
-      return spawnSync(process.execPath, [CLI_PATH, ...args], {
-        cwd: REPO_ROOT,
-        encoding: "utf8",
-        env: {
-          ...base,
-          VIBESQUAD_HOME: vsHome,
-          PASEO_HOME: paseoHome,
-          ...extraEnv,
-        },
-      });
-    },
-    cleanup() {
-      rmSync(dir, { recursive: true, force: true });
-    },
-  };
+    return {
+      dir,
+      vsHome,
+      paseoHome,
+      agentsDir,
+      baseEnv() {
+        return Object.fromEntries(
+          Object.entries(process.env).filter(([k]) => !/^(PASEO_(AGENT_|CLI)|VS_)/.test(k)),
+        );
+      },
+      writeAgent(record) {
+        writeFileSync(join(agentsDir, `${record.id}.json`), JSON.stringify(record, null, 2), "utf8");
+      },
+      runVs(args, extraEnv = {}) {
+        // Hermetic: drop the caller's agent identity and live paseo CLI so a run inside an agent
+        // session (PASEO_AGENT_ID, PASEO_CLI) cannot change what vs resolves or reach the daemon.
+        const base = this.baseEnv();
+        return spawnSync(process.execPath, [CLI_PATH, ...args], {
+          cwd: REPO_ROOT,
+          encoding: "utf8",
+          env: {
+            ...base,
+            VIBESQUAD_HOME: vsHome,
+            PASEO_HOME: paseoHome,
+            ...extraEnv,
+          },
+        });
+      },
+      cleanup() {
+        rmSync(dir, { recursive: true, force: true });
+      },
+    };
 }
 
 test("Done-when #1: vs who lead returns only the live lead (ignoring former-lead and (old)), and prints ★ VIBESQUAD ord1 in the live repo", () => {
@@ -439,9 +442,17 @@ test("misroute-old metric: turn_ended logs relay-old and turn_started agent-mess
 
       const turnStarted = handlers.get("agent.turn_started");
       await turnStarted({ agent: retiredLead }, { paseo });
-      await new Promise((r) => setTimeout(r, 30));
 
       const logPath = join(env.vsHome, "teams", "vibesquad", "log.jsonl");
+      const deadline = Date.now() + 1500;
+      while (Date.now() < deadline) {
+        if (existsSync(logPath)) {
+          const raw = readFileSync(logPath, "utf8");
+          if (raw.includes("relay-old:") && raw.includes("misroute-old:")) break;
+        }
+        await new Promise((r) => setTimeout(r, 20));
+      }
+
       const lines = readFileSync(logPath, "utf8")
         .trim()
         .split(/\r?\n/)
@@ -578,12 +589,14 @@ test("Fix 1a: vs who lead and vs log --since-me work when cwd is outside the Vib
     ]);
     assert.equal(logRes.status, 0);
 
+    const baseEnv = env.baseEnv();
+
     // Case A: cwd is os.homedir() (outside any repo) with PASEO_AGENT_ID=site-worker-1
     const homeWho = spawnSync(process.execPath, [CLI_PATH, "who", "lead"], {
       cwd: homedir(),
       encoding: "utf8",
       env: {
-        ...process.env,
+        ...baseEnv,
         VIBESQUAD_HOME: env.vsHome,
         PASEO_HOME: env.paseoHome,
         PASEO_AGENT_ID: "site-worker-1",
@@ -596,7 +609,7 @@ test("Fix 1a: vs who lead and vs log --since-me work when cwd is outside the Vib
       cwd: homedir(),
       encoding: "utf8",
       env: {
-        ...process.env,
+        ...baseEnv,
         VIBESQUAD_HOME: env.vsHome,
         PASEO_HOME: env.paseoHome,
         PASEO_AGENT_ID: "site-worker-1",
@@ -618,7 +631,7 @@ test("Fix 1a: vs who lead and vs log --since-me work when cwd is outside the Vib
       cwd: wtDir,
       encoding: "utf8",
       env: {
-        ...process.env,
+        ...baseEnv,
         VIBESQUAD_HOME: env.vsHome,
         PASEO_HOME: env.paseoHome,
         PASEO_AGENT_ID: "",
@@ -665,7 +678,7 @@ test("Fix 1b: vs install-shim --bin-dir <tempDir> creates vs, vs.cmd, vs.ps1 + r
       encoding: "utf8",
       shell: isWin,
       env: {
-        ...process.env,
+        ...env.baseEnv(),
         VIBESQUAD_HOME: env.vsHome,
         PASEO_HOME: env.paseoHome,
       },
