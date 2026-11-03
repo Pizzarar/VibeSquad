@@ -19,6 +19,8 @@ import { Avatar } from "./pixel";
 import { useDraft } from "./drafts";
 import { Field, Modal } from "./TeamActions";
 import {
+  SHARED_NOTE_PREFIX,
+  defaultBriefFor,
   detectNoteWarnings,
   dismissSetupPrompt,
   fetchProfiles,
@@ -27,6 +29,7 @@ import {
   seedDefaultPack,
   useProfiles,
   type Profile,
+  type Role,
 } from "./profiles";
 import {
   UI_SCALE_PRESETS,
@@ -64,6 +67,15 @@ export function ProfileImportModal({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     void fetchProfiles();
   }, []);
+
+  useEffect(() => {
+    setSelected((prev) => {
+      if (candidates.length === 0) return prev;
+      const next = new Set(prev);
+      for (const p of candidates) next.add(p.name);
+      return next;
+    });
+  }, [candidates]);
 
   const toggle = (name: string) => {
     setSelected((prev) => {
@@ -131,7 +143,7 @@ export function ProfileImportModal({ onClose }: { onClose: () => void }) {
             data-testid="profiles-seed-default-btn"
             onClick={onSeedDefault}
           >
-            Seed Default Pack (19 project-neutral)
+            Seed Default Pack (19)
           </button>
           <button
             type="button"
@@ -148,12 +160,15 @@ export function ProfileImportModal({ onClose }: { onClose: () => void }) {
       <div className="muted small" style={{ marginBottom: 10 }}>
         VibeSquad stores profiles in <code>~/.vibesquad/profiles.json</code>. Check the Paseo profiles to import, or seed the 19-profile project-neutral default pack.
       </div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
         <button type="button" className="btn ghost small" onClick={() => setSelected(new Set(candidates.map((p) => p.name)))}>
           Select all ({candidates.length})
         </button>
         <button type="button" className="btn ghost small" onClick={() => setSelected(new Set())}>
           Select none
+        </button>
+        <button type="button" className="btn ghost small" disabled={busy} onClick={onSeedDefault}>
+          Seed Default Pack (19)
         </button>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: "52vh", overflowY: "auto" }}>
@@ -242,15 +257,73 @@ export function TeamSettingsModal({
   const [featuresJson, setFeaturesJson] = useState<string>(() =>
     activeProfile?.featureValues ? JSON.stringify(activeProfile.featureValues) : "{}",
   );
+  const [profileDirty, setProfileDirty] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
 
-  const selectProfileForEdit = (name: string) => {
+  const handleSelectProfile = (name: string) => {
     setSelectedProfileName(name);
+    setProfileDirty(false);
     const found = profiles.find((p) => p.name === name);
     if (found) {
       setDraftProfile({ ...found });
       setFeaturesJson(found.featureValues ? JSON.stringify(found.featureValues) : "{}");
     }
+  };
+  const selectProfileForEdit = handleSelectProfile;
+
+  useEffect(() => {
+    if (!profiles.length) return;
+    const found = profiles.find((p) => p.name === selectedProfileName);
+    if (!found) {
+      if (profileDirty && draftProfile) return;
+      const first = profiles[0];
+      setSelectedProfileName(first.name);
+      setDraftProfile({ ...first });
+      setFeaturesJson(first.featureValues ? JSON.stringify(first.featureValues) : "{}");
+      setProfileDirty(false);
+    } else if (!draftProfile || !profileDirty) {
+      setDraftProfile({ ...found });
+      setFeaturesJson(found.featureValues ? JSON.stringify(found.featureValues) : "{}");
+    }
+  }, [profiles, selectedProfileName, profileDirty]);
+
+  const onSeedDefaultPackInSettings = async () => {
+    try {
+      const res = await seedDefaultPack();
+      setProfileDirty(false);
+      if (res.profiles.length > 0) {
+        const next = res.profiles.find((p) => p.name === selectedProfileName) ?? res.profiles[0];
+        setSelectedProfileName(next.name);
+        setDraftProfile({ ...next });
+        setFeaturesJson(next.featureValues ? JSON.stringify(next.featureValues) : "{}");
+      }
+      setMsg(`Seeded ${res.profiles.length} default pack profiles to ~/.vibesquad/profiles.json`);
+    } catch (e) {
+      setMsg(`Seed default pack error: ${e}`);
+    }
+  };
+
+  const onNewProfile = () => {
+    let idx = 1;
+    let candidateName = "Custom - Worker";
+    while (profiles.some((p) => p.name === candidateName)) {
+      idx += 1;
+      candidateName = `Custom - Worker ${idx}`;
+    }
+    const fresh: Profile = {
+      name: candidateName,
+      role: "worker",
+      provider: "claude",
+      model: "claude-sonnet-5-5",
+      modeId: "auto",
+      thinkingOptionId: "medium",
+      notes: `${SHARED_NOTE_PREFIX}\n\nCustom worker profile.`,
+      brief: defaultBriefFor(candidateName, "worker"),
+    };
+    setSelectedProfileName(candidateName);
+    setDraftProfile(fresh);
+    setFeaturesJson("{}");
+    setProfileDirty(true);
   };
 
   const onSaveProfile = async () => {
@@ -262,6 +335,8 @@ export function TeamSettingsModal({
         ...draftProfile,
         featureValues: cleanFv,
       });
+      setSelectedProfileName(draftProfile.name);
+      setProfileDirty(false);
       setMsg(`Saved profile "${draftProfile.name}" to ~/.vibesquad/profiles.json`);
     } catch (e) {
       setMsg(`Profile save error: ${e}`);
@@ -275,6 +350,7 @@ export function TeamSettingsModal({
   const desktopStatus = useDesktopStatus();
   const configWarnings = useConfigWarnings();
   useEffect(() => {
+    void fetchProfiles();
     void loadUpdaterStatus();
     void loadDesktopStatus();
   }, []);
@@ -480,7 +556,15 @@ export function TeamSettingsModal({
               {diff.some((d) => d.status !== "same") ? " Diff detected against Paseo config." : ""}
             </div>
           </div>
-          <div style={{ display: "flex", gap: 6 }}>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              className="btn small"
+              data-testid="settings-seed-default-pack-btn"
+              onClick={() => void onSeedDefaultPackInSettings()}
+            >
+              Seed Default Pack (19)
+            </button>
             <button
               type="button"
               className="btn small"
@@ -490,17 +574,103 @@ export function TeamSettingsModal({
             >
               Re-import / Sync from Paseo
             </button>
+            <button
+              type="button"
+              className="btn ghost small"
+              data-testid="settings-new-profile-btn"
+              onClick={onNewProfile}
+            >
+              + New Profile
+            </button>
           </div>
+        </div>
+        <div
+          data-testid="settings-profile-roster"
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+            maxHeight: 280,
+            overflowY: "auto",
+            marginBottom: 12,
+            padding: 6,
+            border: "1px solid rgba(255,255,255,0.08)",
+            background: "rgba(0,0,0,0.2)",
+          }}
+        >
+          {profiles.map((p) => {
+            const d = diff.find((entry) => entry.name === p.name);
+            const syncLabel =
+              !d || d.status === "same"
+                ? "SYNCED"
+                : d.status === "modified"
+                  ? "MODIFIED"
+                  : d.status === "vs-only"
+                    ? "VS ONLY"
+                    : "PASEO ONLY";
+            const isSelected = p.name === selectedProfileName;
+            const inst = installedProviders.includes(p.provider);
+            return (
+              <button
+                key={p.name}
+                type="button"
+                data-testid={`roster-profile-row-${p.name}`}
+                onClick={() => handleSelectProfile(p.name)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8,
+                  flexWrap: "wrap",
+                  padding: "6px 10px",
+                  textAlign: "left",
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                  color: "inherit",
+                  background: isSelected ? "rgba(0, 240, 255, 0.12)" : "rgba(255, 255, 255, 0.02)",
+                  border: isSelected ? "1px solid #00f0ff" : "1px solid rgba(255, 255, 255, 0.06)",
+                  opacity: inst ? 1 : 0.7,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span className="chip">{p.role.toUpperCase()}</span>
+                  <b>{p.name}</b>
+                  <span className="def-badge">
+                    {p.provider} / {p.model}
+                  </span>
+                  {p.modeId && (
+                    <span className="def-badge">
+                      <b>mode</b> {p.modeId}
+                    </span>
+                  )}
+                  {p.thinkingOptionId && (
+                    <span className="def-badge">
+                      <b>think</b> {p.thinkingOptionId}
+                    </span>
+                  )}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  {!inst && <span className="pill diag warn">install {p.provider}</span>}
+                  <span className={`pill diag ${syncLabel === "MODIFIED" ? "hot" : syncLabel === "VS ONLY" ? "warn" : "ok"}`}>
+                    {syncLabel}
+                  </span>
+                </div>
+              </button>
+            );
+          })}
         </div>
         {draftProfile && (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <div className="row2">
               <Field label="PROFILE">
                 <select
-                  value={selectedProfileName}
+                  value={profiles.some((p) => p.name === selectedProfileName) ? selectedProfileName : ""}
                   data-testid="settings-profile-select"
                   onChange={(e) => selectProfileForEdit(e.target.value)}
                 >
+                  {!profiles.some((p) => p.name === selectedProfileName) && (
+                    <option value="">{draftProfile.name} (unsaved)</option>
+                  )}
                   {profiles.map((p) => {
                     const inst = installedProviders.includes(p.provider);
                     return (
@@ -511,18 +681,50 @@ export function TeamSettingsModal({
                   })}
                 </select>
               </Field>
+              <Field label="NAME">
+                <input
+                  value={draftProfile.name}
+                  data-testid="settings-profile-name"
+                  onChange={(e) => {
+                    setProfileDirty(true);
+                    setDraftProfile({ ...draftProfile, name: e.target.value });
+                  }}
+                />
+              </Field>
+              <Field label="ROLE">
+                <select
+                  value={draftProfile.role}
+                  data-testid="settings-profile-role"
+                  onChange={(e) => {
+                    setProfileDirty(true);
+                    setDraftProfile({ ...draftProfile, role: e.target.value as Role });
+                  }}
+                >
+                  <option value="lead">LEAD</option>
+                  <option value="brainstorm">BRAINSTORM</option>
+                  <option value="worker">WORKER</option>
+                </select>
+              </Field>
+            </div>
+            <div className="row2">
               <Field label="PROVIDER">
                 <input
                   value={draftProfile.provider}
                   data-testid="settings-profile-provider"
-                  onChange={(e) => setDraftProfile({ ...draftProfile, provider: e.target.value })}
+                  onChange={(e) => {
+                    setProfileDirty(true);
+                    setDraftProfile({ ...draftProfile, provider: e.target.value });
+                  }}
                 />
               </Field>
               <Field label="MODEL">
                 <input
                   value={draftProfile.model}
                   data-testid="settings-profile-model"
-                  onChange={(e) => setDraftProfile({ ...draftProfile, model: e.target.value })}
+                  onChange={(e) => {
+                    setProfileDirty(true);
+                    setDraftProfile({ ...draftProfile, model: e.target.value });
+                  }}
                 />
               </Field>
             </div>
@@ -532,7 +734,10 @@ export function TeamSettingsModal({
                   value={draftProfile.modeId ?? ""}
                   placeholder="auto / accept-edits / build / plan / default"
                   data-testid="settings-profile-mode"
-                  onChange={(e) => setDraftProfile({ ...draftProfile, modeId: e.target.value || undefined })}
+                  onChange={(e) => {
+                    setProfileDirty(true);
+                    setDraftProfile({ ...draftProfile, modeId: e.target.value || undefined });
+                  }}
                 />
               </Field>
               <Field label="THINKING">
@@ -540,14 +745,20 @@ export function TeamSettingsModal({
                   value={draftProfile.thinkingOptionId ?? ""}
                   placeholder="low / medium / high / default"
                   data-testid="settings-profile-thinking"
-                  onChange={(e) => setDraftProfile({ ...draftProfile, thinkingOptionId: e.target.value || undefined })}
+                  onChange={(e) => {
+                    setProfileDirty(true);
+                    setDraftProfile({ ...draftProfile, thinkingOptionId: e.target.value || undefined });
+                  }}
                 />
               </Field>
               <Field label="FEATURE VALUES (JSON)">
                 <input
                   value={featuresJson}
                   data-testid="settings-profile-features"
-                  onChange={(e) => setFeaturesJson(e.target.value)}
+                  onChange={(e) => {
+                    setProfileDirty(true);
+                    setFeaturesJson(e.target.value);
+                  }}
                 />
               </Field>
             </div>
@@ -556,7 +767,10 @@ export function TeamSettingsModal({
                 rows={4}
                 value={draftProfile.notes}
                 data-testid="settings-profile-notes"
-                onChange={(e) => setDraftProfile({ ...draftProfile, notes: e.target.value })}
+                onChange={(e) => {
+                  setProfileDirty(true);
+                  setDraftProfile({ ...draftProfile, notes: e.target.value });
+                }}
               />
             </Field>
             {detectNoteWarnings(draftProfile.notes).map((w, idx) => (

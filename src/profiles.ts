@@ -74,7 +74,7 @@ export const SHARED_NOTE_PREFIX = [
 ].join("\n");
 
 const PRIOR_ART_CHECK_RULE =
-  "Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`paseo --help`, Paseo MCP tool list, `vs --help`, skills). Name what you checked in the plan's Decided section.";
+  'Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`paseo --help`, Paseo MCP tool list, `vs --help`, skills). Name what you checked in the plan\'s Decided section. Whenever designing, committing, or releasing parity/plugin-inspired features, record the original plugin/project name and publisher in plans, commits, `CREDITS.md`, and release notes using: "Implemented <feature> — Thanks to <Plugin/Project> by <Author>".';
 
 const SPIN_UP_BUDDY_RULE =
   '"Spin up a buddy (for X)" / "spin up another buddy" / "get me a buddy for X": spawn a new Buddy (role=brainstorm, title <Code> Buddy · <topic X>, Code = the short code of the new lane) in a new feature lane (lane=<slug from X>) under the same Squad (team=<product>). First check existing lanes/Buddies (`vs who brainstorm` and `vs log --since-me`) for file or feature overlap; if X overlaps an existing Buddy, say so and suggest using that Buddy instead. Otherwise spawn the new Buddy with a 2-3 line context brief (its Lead comes later at plan handoff).';
@@ -401,11 +401,15 @@ export const DEFAULT_PROFILES: Profile[] = [
   },
 ];
 
+export const DEFAULT_PACK_PROFILES: Profile[] = DEFAULT_PROFILES;
+
 export const LEGACY_PROFILE_ALIASES: Record<string, string> = {
   "Lead - Opus": "Lead - Claude",
   "Brainstorm - Opus": "Brainstorm - Claude",
   "Art - Gemini": "Art Director - Gemini",
   "Art - Opus": "Art Painter - Opus",
+  "Builder - Gemini": "Lead - Gemini",
+  "Reviewer - Gemini": "Review - Gemini",
 };
 
 export function deriveRole(name: string, explicitRole?: string): Role {
