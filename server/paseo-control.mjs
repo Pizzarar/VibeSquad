@@ -22,10 +22,16 @@ export function withWindowsHideNodeOptions(env = process.env, platform = process
   const preloadUrl = pathToFileURL(preloadPath).href;
   if (/[\s"']/.test(preloadUrl)) return out;
   const existing = String(out.NODE_OPTIONS ?? "").trim();
-  if (existing.includes("windows-hide-preload.mjs")) return out;
+  if (existing.includes(preloadUrl)) return out;
+  if (existing.includes("windows-hide-preload.mjs")) {
+    out.NODE_OPTIONS = existing.replace(/--import\s+\S*windows-hide-preload\.mjs/g, `--import ${preloadUrl}`);
+    return out;
+  }
   out.NODE_OPTIONS = existing ? `${existing} --import ${preloadUrl}` : `--import ${preloadUrl}`;
   return out;
 }
+
+export const envWithWindowsHidePreload = withWindowsHideNodeOptions;
 
 export function getPaseoHome(opts = {}) {
   if (opts.paseoHome) return resolve(String(opts.paseoHome));
@@ -227,11 +233,40 @@ export function validateHubOrigin(raw) {
  * Runs a Paseo CLI command with `--home <paseoHome>` and optional `--json`, returning `{ ok, code, stdout, stderr, data }`.
  */
 export function runPaseoCli(args = [], opts = {}) {
-  if (typeof opts.cliRunner === "function") {
-    return Promise.resolve(opts.cliRunner(args, opts));
-  }
-  if (typeof opts.runCli === "function") {
-    return Promise.resolve(opts.runCli(args, opts));
+  const customRunner = opts.cliRunner ?? opts.runCli ?? opts._runCli;
+  if (typeof customRunner === "function") {
+    return Promise.resolve(customRunner(args, opts)).then((res) => {
+      if (res && typeof res === "object" && !Array.isArray(res)) {
+        if (res.data === undefined && args.includes("--json") && typeof res.stdout === "string" && res.stdout.trim()) {
+          try {
+            return {
+              ok: res.ok ?? (res.code === undefined || res.code === 0),
+              code: res.code ?? 0,
+              stderr: "",
+              ...res,
+              data: parseJsonWithBom(res.stdout.trim()),
+            };
+          } catch {}
+        }
+        return {
+          ok: res.ok ?? (res.code === undefined || res.code === 0),
+          code: res.code ?? 0,
+          stdout: res.stdout ?? "",
+          stderr: res.stderr ?? "",
+          data: res.data ?? null,
+          ...res,
+        };
+      }
+      if (typeof res === "string" && args.includes("--json") && res.trim()) {
+        try {
+          return { ok: true, code: 0, stdout: res, stderr: "", data: parseJsonWithBom(res.trim()) };
+        } catch {}
+      }
+      if (Array.isArray(res)) {
+        return { ok: true, code: 0, stdout: JSON.stringify(res), stderr: "", data: res };
+      }
+      return res;
+    });
   }
   const paseoHome = getPaseoHome(opts);
   const cli = opts.cli ?? findPaseoCli(opts);
@@ -452,6 +487,7 @@ export async function getPaseoDaemonStatus(opts = {}) {
   const useCli =
     typeof opts.cliRunner === "function" ||
     typeof opts.runCli === "function" ||
+    typeof opts._runCli === "function" ||
     opts.probeCli === true;
 
   let statusObj = {};
@@ -476,7 +512,7 @@ export async function getPaseoDaemonStatus(opts = {}) {
   }
 
   const listen = statusObj.listen || configuredListen;
-  const listening = await (opts.isListening ?? isDaemonListening)(listen, 800);
+  const listening = await (opts.isListening ?? opts._probe ?? isDaemonListening)(listen, 800);
   const running = statusObj.localDaemon === "running" || listening;
   const { liveCount, busyCount, busyAgents } =
     running && (useCli || opts.inspectAgents === true)
@@ -511,6 +547,45 @@ export async function getPaseoDaemonStatus(opts = {}) {
   };
 }
 
+export const getPaseoStatus = getPaseoDaemonStatus;
+
+/**
+ * Inspects provider health after daemon start/restart.
+ * Polls briefly if any enabled provider is still `refreshing` or `initializing`.
+ */
+export async function checkStartedDaemonProviders(opts = {}) {
+  if (opts.checkProviders === false) {
+    return { providerWarning: null, erroredProviders: [] };
+  }
+  const waitMs = opts.providerWaitMs ?? 5000;
+  const pollMs = opts.providerPollMs ?? 500;
+  const deadline = Date.now() + Math.max(0, waitMs);
+  let providers = [];
+
+  while (true) {
+    const res = await getPaseoProviders(opts);
+    providers = Array.isArray(res?.providers) ? res.providers : [];
+    const pending = providers.some(
+      (p) => p && p.enabled !== false && (p.status === "refreshing" || p.status === "initializing"),
+    );
+    if (!pending || Date.now() >= deadline) break;
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+
+  const errored = providers.filter(
+    (p) => p && p.enabled !== false && String(p.status || "").toLowerCase() === "error",
+  );
+  if (errored.length === 0) {
+    return { providerWarning: null, erroredProviders: [] };
+  }
+  const providerWarning =
+    "Daemon started but providers failed: " +
+    errored
+      .map((p) => `${p.id || p.label}${p.error || p.detail ? ` (${p.error || p.detail})` : ""}`)
+      .join(", ");
+  return { providerWarning, erroredProviders: errored };
+}
+
 /**
  * Performs Daemon lifecycle actions: `start` | `stop` | `restart` | `reload`.
  * Stop and Restart require `confirmBusy: true` when `busyAgentCount > 0`.
@@ -531,26 +606,51 @@ export async function controlPaseoDaemon(action, opts = {}) {
 
   if (action === "start") {
     if (status.running) {
-      return { ok: true, action: "start", alreadyRunning: true, status };
+      const health =
+        opts.checkProviders === false
+          ? { providerWarning: null, erroredProviders: [] }
+          : await checkStartedDaemonProviders(opts);
+      status.providerWarning = health.providerWarning || null;
+      status.erroredProviders = health.erroredProviders || [];
+      return {
+        ok: true,
+        action: "start",
+        alreadyRunning: true,
+        providerWarning: health.providerWarning || null,
+        erroredProviders: health.erroredProviders || [],
+        status,
+      };
     }
-    if (typeof opts.runCli === "function" || typeof opts.cliRunner === "function") {
+    if (
+      typeof opts.runCli === "function" ||
+      typeof opts.cliRunner === "function" ||
+      typeof opts._runCli === "function"
+    ) {
       const res = await runPaseoCli(["daemon", "start"], { ...opts, timeoutMs: 15_000 });
       const after = await getPaseoDaemonStatus(opts);
-      if (after.running) {
+      if (after.running || res.ok) {
         markDaemonManagedByVibeSquad(after.pid || readPaseoPid(opts) || "managed", opts);
         after.managedByVibeSquad = true;
         after.ownership = "vibesquad-managed";
       }
+      const health =
+        (after.running || res.ok) && opts.checkProviders !== false
+          ? await checkStartedDaemonProviders(opts)
+          : { providerWarning: null, erroredProviders: [] };
+      after.providerWarning = health.providerWarning || null;
+      after.erroredProviders = health.erroredProviders || [];
       return {
         ok: after.running || res.ok,
         action: "start",
         error: !after.running && !res.ok ? (res.stderr || res.stdout || "Failed to start Paseo daemon").trim() : undefined,
+        providerWarning: health.providerWarning || null,
+        erroredProviders: health.erroredProviders || [],
         status: after,
       };
     }
     const { ensurePaseoDaemon } = await import("./first-run.mjs");
     const launched = await ensurePaseoDaemon(opts);
-    const checkListening = opts.isListening ?? isDaemonListening;
+    const checkListening = opts.isListening ?? opts._probe ?? isDaemonListening;
     const deadline = Date.now() + 8000;
     while (Date.now() < deadline) {
       if (await checkListening(status.configuredListen)) break;
@@ -562,10 +662,20 @@ export async function controlPaseoDaemon(action, opts = {}) {
       after.managedByVibeSquad = true;
       after.ownership = "vibesquad-managed";
     }
+    const health =
+      launched?.providerWarning !== undefined
+        ? { providerWarning: launched.providerWarning || null, erroredProviders: launched.erroredProviders || [] }
+        : (after.running || launched?.started) && opts.checkProviders !== false
+          ? await checkStartedDaemonProviders(opts)
+          : { providerWarning: null, erroredProviders: [] };
+    after.providerWarning = health.providerWarning || null;
+    after.erroredProviders = health.erroredProviders || [];
     return {
       ok: after.running || Boolean(launched?.started),
       action: "start",
       error: !after.running && !launched?.started ? (launched?.reason || "Failed to start Paseo daemon") : undefined,
+      providerWarning: health.providerWarning || null,
+      erroredProviders: health.erroredProviders || [],
       status: after,
     };
   }
@@ -602,6 +712,22 @@ export async function controlPaseoDaemon(action, opts = {}) {
       markDaemonManagedByVibeSquad(after.pid || "managed", opts);
       after.managedByVibeSquad = true;
       after.ownership = "vibesquad-managed";
+    }
+    if (action === "restart") {
+      const health =
+        (after.running || res.ok) && opts.checkProviders !== false
+          ? await checkStartedDaemonProviders(opts)
+          : { providerWarning: null, erroredProviders: [] };
+      after.providerWarning = health.providerWarning || null;
+      after.erroredProviders = health.erroredProviders || [];
+      return {
+        ok: res.ok,
+        action,
+        error: !res.ok ? (res.stderr || res.stdout || `paseo daemon ${action} failed`).trim() : undefined,
+        providerWarning: health.providerWarning || null,
+        erroredProviders: health.erroredProviders || [],
+        status: after,
+      };
     }
     return {
       ok: res.ok,
@@ -663,14 +789,16 @@ export async function getPaseoProviders(opts = {}) {
   const list = [];
 
   for (const row of cliList) {
-    const id = String(row.provider || "").trim();
+    const id = String(row.provider || row.id || "").trim();
     if (!id) continue;
     seen.add(id);
     const cfgEntry = cfgProviders[id] && typeof cfgProviders[id] === "object" ? cfgProviders[id] : {};
     const enabled =
       typeof cfgEntry.enabled === "boolean"
         ? cfgEntry.enabled
-        : String(row.enabled || "").toLowerCase() === "enabled" || row.enabled === true;
+        : row.enabled === undefined
+          ? true
+          : String(row.enabled || "").toLowerCase() === "enabled" || row.enabled === true;
     list.push({
       id,
       label: String(cfgEntry.label || row.label || id),
@@ -684,6 +812,8 @@ export async function getPaseoProviders(opts = {}) {
       command: Array.isArray(cfgEntry.command) ? cfgEntry.command.map(String) : [],
       envKeys: cfgEntry.env && typeof cfgEntry.env === "object" ? Object.keys(cfgEntry.env) : [],
       envMasked: maskSecrets(cfgEntry.env || {}, "env", true),
+      ...(row.error ? { error: maskSecretsInText(String(row.error)) } : {}),
+      ...(row.detail ? { detail: maskSecretsInText(String(row.detail)) } : {}),
     });
   }
 
