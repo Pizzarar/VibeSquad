@@ -335,27 +335,38 @@ describe("S4-4: park/handoff-topic and restart only archive the card's own Buddy
 // ---- 6. remote body-key allowlist ----------------------------------------------------------------
 
 describe("S4-6: the R2 body-key allowlist is enforced in code", () => {
-  const P = "/__vibesquad/inbox/open-topic";
+  const P = "/__vibesquad/inbox/park-topic";
   test("forbidden, unknown and missing keys are refused; a clean body passes", () => {
-    assert.deepEqual(rules.checkRemoteBody("POST", P, '{"cardId":"1"}'), { ok: true });
+    assert.deepEqual(rules.checkRemoteBody("POST", P, '{"cardId":"1"}'), { ok: true, value: { cardId: "1" } });
     for (const k of ["cwd", "provider", "model", "profile", "baseHome", "profilesPath", "labels", "pendingPrompt", "summaryUpdate", "__proto__"]) {
       const r = rules.checkRemoteBody("POST", P, `{"cardId":"1","${k}":"x"}`);
       assert.equal(r.ok, false, k);
       assert.match(r.error, /not allowed remotely/);
     }
-    assert.match(rules.checkRemoteBody("POST", P, '{"cardId":"1","extra":1}').error, /not allowed remotely on/);
+    assert.match(rules.checkRemoteBody("POST", P, '{"cardId":"1","extra":1}').error, /key not allowed remotely: body\.extra/);
     assert.match(rules.checkRemoteBody("POST", P, "{}").error, /required/);
     assert.match(rules.checkRemoteBody("POST", P, "[1]").error, /JSON object/);
     assert.match(rules.checkRemoteBody("POST", P, "{bad").error, /JSON object/);
     assert.match(rules.checkRemoteBody("POST", "/__vibesquad/settings", '{"lanEnabled":true}').error, /no remote body policy/);
-    assert.deepEqual(rules.checkRemoteBody("GET", "/__vibesquad/anything", "ignored"), { ok: true });
+    assert.deepEqual(rules.checkRemoteBody("GET", "/__vibesquad/anything", "ignored"), { ok: true, value: {} });
     assert.match(rules.checkRemoteBody("POST", "/__vibesquad/brainstorm-summary", '{"laneId":"x","content":"y"}').error, /required.*revision/);
   });
 
-  test("every write that can be reopened has a policy, and no policy allows a forbidden key", () => {
-    for (const path of Object.keys(rules.REMOTE_WRITES_AFTER_S4)) assert.ok(rules.REMOTE_BODY_POLICY[path], path);
+  test("every open write has a policy, and no policy allows a forbidden key at any depth", () => {
+    for (const [path, methods] of Object.entries(rules.REMOTE_ALLOW)) {
+      if (methods.some((m) => m !== "GET")) assert.ok(rules.REMOTE_BODY_POLICY[path], path);
+    }
+    const keys = (fields, out = []) => {
+      for (const [k, spec] of Object.entries(fields)) {
+        out.push(k);
+        let inner = spec;
+        while (inner.t === "array") inner = inner.of;
+        if (inner.t === "object") keys(inner.fields, out);
+      }
+      return out;
+    };
     for (const [path, pol] of Object.entries(rules.REMOTE_BODY_POLICY)) {
-      for (const k of pol.allow) assert.ok(!rules.REMOTE_FORBIDDEN_BODY_KEYS.includes(k), `${path} allows ${k}`);
+      for (const k of keys(pol.fields)) assert.ok(!rules.REMOTE_FORBIDDEN_BODY_KEYS.includes(k), `${path} allows ${k}`);
     }
   });
 

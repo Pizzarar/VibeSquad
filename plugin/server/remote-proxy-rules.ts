@@ -5,15 +5,15 @@
 // Deny by default. A path must normalise cleanly AND be listed in REMOTE_ALLOW; REMOTE_BLOCKED is checked
 // first and wins even if someone later adds an overlapping ALLOW entry.
 //
-// GET-ONLY UNTIL REOPENED PER ENDPOINT. The R2-1 security cross-review showed the write handlers let a
+// WRITES REOPEN PER ENDPOINT (block R2-5). The R2-1 security cross-review showed the write handlers let a
 // link-holder spawn auto-mode agents in a chosen cwd (inbox/open-topic, lead-handoff), inject DI keys
 // (baseHome, profilesPath) on the inbox handlers, write persistent prompt injection into briefs
 // (brainstorm-summary POST) and mass-archive agents. Security S4 fixed those server-side (sanitizeBody on
 // every handler, cwd derived server-side, real-lead lookup, archive binding + budget, brief revision).
-// Reopen by copying an entry from REMOTE_WRITES_AFTER_S4 into REMOTE_ALLOW; its REMOTE_BODY_POLICY entry is
-// then enforced by checkRemoteBody (a write without a policy is refused).
-// /__vibesquad/handoff POST stays closed: it runs `vs handoff` for up to 60 s (async and one at a time since
-// S4, but still a heavy CLI run the proxy timeout can't cancel).
+// A write in REMOTE_ALLOW must also have a REMOTE_BODY_POLICY entry: checkRemoteBody enforces its typed key
+// allowlist (a write without a policy is refused), and a policy with `registry` is checked against the live
+// teams.json by checkRemoteRegistry before the proxy forwards.
+// Still closed, with the reason, in REMOTE_WRITES_CLOSED.
 
 export const REMOTE_MAX_BODY_BYTES = 512 * 1024; // request and response bodies; relay frames allow 32 MiB
 export const REMOTE_TIMEOUT_MS = 10_000;
@@ -27,20 +27,30 @@ export type AllowMap = Readonly<Record<string, readonly RemoteMethod[]>>;
 
 const READ: readonly RemoteMethod[] = ["GET"];
 
-/** Exact pathnames the remote UI may reach, with the methods allowed on each. All GET until S4. */
+/**
+ * Exact pathnames the remote UI may reach, with the methods allowed on each. Writes were reopened one at a
+ * time in block R2-5, each after its server handler was checked for S4 (sanitised body, server-side cwd).
+ */
 export const REMOTE_ALLOW: AllowMap = {
   "/api/health": READ,
   "/__vibesquad/health": READ,
   "/api/auth/status": READ,
   "/__vibesquad/auth/status": READ,
-  "/api/teams": READ,
-  "/__vibesquad/teams": READ,
+  // R2-5 #1 teams/pins: a pin is a lane in teams.json. paths/path/vibeMode/lastProfile are pinned to disk (registry).
+  "/api/teams": ["GET", "PUT", "POST"],
+  "/__vibesquad/teams": ["GET", "POST", "PUT"],
   "/__vibesquad/settings": READ, // `remote` is dropped from the response
-  "/__vibesquad/log": READ,
-  "/__vibesquad/vs-log": READ,
-  "/__vibesquad/handoff": READ, // "does the packet exist?" (path redacted)
-  "/__vibesquad/brainstorm-summary": READ,
-  "/__vibesquad/inbox": READ,
+  // R2-5 #3 log/vs-log: text and refs only; the author is the owner (no agent/agentId).
+  "/__vibesquad/log": ["GET", "POST"],
+  "/__vibesquad/vs-log": ["GET", "POST"],
+  "/__vibesquad/handoff": READ, // "does the packet exist?" (path redacted). POST stays closed.
+  // R2-5 #4 brainstorm-summary: revision required, lane must exist in teams.json.
+  "/__vibesquad/brainstorm-summary": ["GET", "POST", "PUT"],
+  // R2-5 #2 inbox: cards only; spawn config (provider/model/profile) and card titles never come remotely.
+  "/__vibesquad/inbox": ["GET", "POST"],
+  "/__vibesquad/inbox/triage": ["POST"],
+  "/__vibesquad/inbox/park-topic": ["POST"],
+  "/__vibesquad/inbox/handoff-topic": ["POST"],
   "/__vibesquad/profiles": READ,
   "/__vibesquad/profiles/diff": READ,
   "/__vibesquad/workspace-package-scripts": READ,
@@ -50,74 +60,702 @@ export const REMOTE_ALLOW: AllowMap = {
   "/__vibesquad/paseo/plugins": READ,
 };
 
-/** NOT ACTIVE. The methods each endpoint gets back once S4 sanitises bodies (see the header comment). */
-export const REMOTE_WRITES_AFTER_S4: AllowMap = {
-  "/api/teams": ["POST", "PUT"],
-  "/__vibesquad/teams": ["POST", "PUT"],
-  "/__vibesquad/log": ["POST"],
-  "/__vibesquad/vs-log": ["POST"],
-  "/__vibesquad/brainstorm-summary": ["POST", "PUT"],
-  "/__vibesquad/brainstorm-restart": ["POST"],
-  "/__vibesquad/lead-handoff": ["POST"],
-  "/__vibesquad/lead-handoff/confirm": ["POST"],
-  "/__vibesquad/inbox": ["POST"],
-  "/__vibesquad/inbox/triage": ["POST"],
-  "/__vibesquad/inbox/open-topic": ["POST"],
-  "/__vibesquad/inbox/park-topic": ["POST"],
-  "/__vibesquad/inbox/handoff-topic": ["POST"],
+/** Writes that stay closed remotely, and why. Reopening one needs the server change named here first. */
+export const REMOTE_WRITES_CLOSED: Readonly<Record<string, string>> = {
+  "/__vibesquad/handoff": "POST runs `vs handoff` for up to 60 s; the proxy timeout can't cancel the CLI run",
+  "/__vibesquad/lead-handoff":
+    "spawns a successor lead and retires the old one with no server-side spawn/archive budget (archiveBudget covers only Buddies); the UI never calls it",
+  "/__vibesquad/lead-handoff/confirm": "relabels/renames the old lead and deletes its heartbeat; only the lead-handoff flow calls it",
+  "/__vibesquad/inbox/open-topic": "Spawns a live Buddy agent on the host; agent creation stays local-only",
+  "/__vibesquad/brainstorm-restart": "Spawns a replacement Buddy agent on the host; agent lifecycle stays local-only",
 };
+
+// ---- remote body policy (R2-5) ----------------------------------------------------------------------
+
+/** A typed value schema. Strings and arrays always carry a cap; objects list every key they accept. */
+export type FieldSpec =
+  | { t: "string"; max: number; re?: RegExp; oneOf?: readonly string[] }
+  | { t: "number"; min: number; max: number; int?: boolean }
+  | { t: "boolean" }
+  | { t: "array"; max: number; of: FieldSpec }
+  | { t: "object"; fields: Readonly<Record<string, FieldSpec>>; require?: readonly string[] };
 
 /**
- * Body keys each write endpoint accepts remotely (security S4). Deny by default: a write to a path with no
- * entry here is refused, and so is any key outside `allow` or inside REMOTE_FORBIDDEN_BODY_KEYS.
+ * Body keys each write endpoint accepts remotely. Deny by default: a write to a path with no entry here is
+ * refused, and so is any key (at any depth) outside `fields` or inside REMOTE_FORBIDDEN_BODY_KEYS.
  * `require` keys must be present (the revision keeps a remote write from blindly overwriting newer edits).
+ * `registry` names a check against the live teams.json (checkRemoteRegistry).
  */
-export type BodyPolicy = { allow: readonly string[]; require?: readonly string[] };
-export const REMOTE_BODY_POLICY: Readonly<Record<string, BodyPolicy>> = {
-  "/api/teams": { allow: ["teams", "revision", "leadFlagTokens", "leadAutoHandoffTokens", "leadHardCapTokens", "brainstormWarnTokens", "brainstormRestartTokens"], require: ["teams", "revision"] },
-  "/__vibesquad/teams": { allow: ["teams", "revision", "leadFlagTokens", "leadAutoHandoffTokens", "leadHardCapTokens", "brainstormWarnTokens", "brainstormRestartTokens"], require: ["teams", "revision"] },
-  "/__vibesquad/log": { allow: ["team", "lane", "type", "text", "refs"], require: ["team", "text"] },
-  "/__vibesquad/vs-log": { allow: ["teamId", "team", "laneId", "lane", "type", "text", "refs"], require: ["text"] },
-  "/__vibesquad/brainstorm-summary": { allow: ["laneId", "lane", "content", "revision"], require: ["content", "revision"] },
-  "/__vibesquad/brainstorm-restart": { allow: ["agentId", "teamId", "laneId", "laneName", "reason", "usedTokens", "topic", "mode"], require: ["reason"] },
-  "/__vibesquad/lead-handoff": { allow: ["agentId", "trigger", "usedTokens"], require: ["agentId"] },
-  "/__vibesquad/lead-handoff/confirm": { allow: ["agentId", "successorId", "confirmSuccessorId"] },
-  "/__vibesquad/inbox": { allow: ["text", "ideas", "splitDump", "laneId", "teamId", "defaultLaneId"] },
-  "/__vibesquad/inbox/triage": { allow: ["action", "cardId", "targetId", "sourceIds", "sourceId", "laneId", "lane", "teamId", "scope", "patch", "archive"], require: ["action"] },
-  "/__vibesquad/inbox/open-topic": { allow: ["cardId"], require: ["cardId"] },
-  "/__vibesquad/inbox/park-topic": { allow: ["cardId", "agentId", "summaryNote"], require: ["cardId"] },
-  "/__vibesquad/inbox/handoff-topic": { allow: ["cardId", "agentId", "planNote", "usedTokens"], require: ["cardId"] },
+export type BodyPolicy = {
+  fields: Readonly<Record<string, FieldSpec>>;
+  require?: readonly string[];
+  registry?: "teams" | "lane";
 };
 
-/** Never accepted in a remote body, whatever a policy says: spawn config, DI hooks, prompt and brief text. */
+const ID_RE = /^[A-Za-z0-9_-]{1,64}$/; // TEAM_ID / AGENT_ID_STRICT on the server
+const CARD_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
+const SLUG_RE = /^[a-z0-9-]{1,40}$/;
+const id: FieldSpec = { t: "string", max: 64, re: ID_RE };
+const cardId: FieldSpec = { t: "string", max: 64, re: CARD_RE };
+const str = (max: number): FieldSpec => ({ t: "string", max });
+const oneOf = (...values: string[]): FieldSpec => ({ t: "string", max: 40, oneOf: values });
+const tokens: FieldSpec = { t: "number", min: 0, max: 100_000_000, int: true };
+const isoTime: FieldSpec = { t: "string", max: 40, re: /^[0-9T:.+Z-]{0,40}$/ };
+const pathList: FieldSpec = { t: "array", max: 64, of: str(1024) }; // MAX_PATHS / MAX_PATH_LEN
+const refs: FieldSpec = { t: "array", max: 20, of: str(512) };
+
+const LANE: FieldSpec = {
+  t: "object",
+  require: ["id"],
+  fields: {
+    id,
+    name: str(200),
+    code: str(16),
+    paths: pathList,
+    path: str(1024),
+    worktree: str(1024),
+    branch: str(200),
+    aliases: { t: "array", max: 32, of: str(200) },
+    hub: { t: "boolean" },
+    state: oneOf("pinned", "done", "removed"),
+    doneAt: isoTime,
+    removedAt: isoTime,
+    order: { t: "number", min: -1_000_000, max: 1_000_000 },
+    lastProfile: str(200),
+  },
+};
+const TEAM: FieldSpec = {
+  t: "object",
+  require: ["id"],
+  fields: {
+    id,
+    name: str(200),
+    aliases: { t: "array", max: 32, of: str(200) },
+    color: str(32),
+    lanes: { t: "array", max: 500, of: LANE }, // MAX_LANES
+    paths: pathList,
+    path: str(1024),
+    leadFlagTokens: tokens,
+    leadAutoHandoffTokens: tokens,
+    leadHardCapTokens: tokens,
+    brainstormWarnTokens: tokens,
+    brainstormRestartTokens: tokens,
+    vibeMode: { t: "boolean" },
+  },
+};
+const TEAMS_POLICY: BodyPolicy = {
+  fields: {
+    teams: { t: "array", max: 200, of: TEAM }, // MAX_TEAMS
+    revision: str(128),
+    leadFlagTokens: tokens,
+    leadAutoHandoffTokens: tokens,
+    leadHardCapTokens: tokens,
+    brainstormWarnTokens: tokens,
+    brainstormRestartTokens: tokens,
+  },
+  require: ["teams", "revision"],
+  registry: "teams",
+};
+// UI_LOG_TYPES on the server; vs-log takes any type server-side, so the remote list is the UI's.
+const LOG_TYPE = oneOf("you", "needs-you", "handoff", "metric", "decision");
+const INBOX_STATUS = oneOf("parked", "handed-off", "archived");
+const INBOX_SCOPE = oneOf("art", "mechanic", "plugin", "UI", "infra", "docs", "other");
+
+export const REMOTE_BODY_POLICY: Readonly<Record<string, BodyPolicy>> = {
+  "/api/teams": TEAMS_POLICY,
+  "/__vibesquad/teams": TEAMS_POLICY,
+  "/__vibesquad/log": {
+    fields: { team: id, teamId: id, lane: id, laneId: id, type: LOG_TYPE, text: str(240), refs },
+    require: ["team", "text"],
+    registry: "lane",
+  },
+  "/__vibesquad/vs-log": {
+    fields: { teamId: id, team: id, laneId: id, lane: id, type: LOG_TYPE, text: str(2000), refs },
+    require: ["text"],
+    registry: "lane",
+  },
+  "/__vibesquad/brainstorm-summary": {
+    fields: { laneId: id, lane: id, teamId: id, team: id, content: str(19_999), revision: str(128) },
+    require: ["content", "revision"],
+    registry: "lane",
+  },
+  "/__vibesquad/inbox": {
+    fields: {
+      text: str(20_000),
+      ideas: { t: "array", max: 20, of: str(5000) },
+      splitDump: { t: "boolean" },
+      laneId: id,
+      lane: id,
+      teamId: id,
+      team: id,
+      defaultLaneId: id,
+    },
+    registry: "lane",
+  },
+  "/__vibesquad/inbox/triage": {
+    fields: {
+      action: oneOf("merge", "bounce", "update", "delete", "archive"),
+      cardId,
+      targetId: cardId,
+      sourceIds: { t: "array", max: 100, of: cardId },
+      sourceId: cardId,
+      laneId: id,
+      lane: id,
+      teamId: id,
+      team: id,
+      scope: INBOX_SCOPE,
+      // Server allowlist minus `title` (never remote, at any depth).
+      patch: {
+        t: "object",
+        fields: {
+          status: INBOX_STATUS,
+          text: str(20_000),
+          scope: INBOX_SCOPE,
+          summaryNote: str(4000),
+          topicTitle: str(200),
+          topicOpenedAt: isoTime,
+          handedOffAt: isoTime,
+          laneId: id,
+          teamId: id,
+          relatedCardId: cardId,
+          relatedReason: str(500),
+        },
+      },
+      archive: { t: "boolean" },
+    },
+    require: ["action"],
+    registry: "lane",
+  },
+  "/__vibesquad/inbox/park-topic": { fields: { cardId, agentId: id, summaryNote: str(4000) }, require: ["cardId"] },
+  "/__vibesquad/inbox/handoff-topic": { fields: { cardId, agentId: id, planNote: str(4000), usedTokens: tokens }, require: ["cardId"] },
+};
+export const WRITE_SCHEMAS = REMOTE_BODY_POLICY;
+
+/** Never accepted in a remote body at any depth, whatever a policy says: spawn config, DI hooks, prompt and brief text. */
 export const REMOTE_FORBIDDEN_BODY_KEYS: readonly string[] = [
   "cwd", "provider", "model", "profile", "profilesPath", "baseHome", "labels", "title", "pendingPrompt", "summaryUpdate",
   "skipDaemon", "daemonClient", "clientFactory", "forceNew", "oldAgent", "oldLead", "agents", "execSpawn", "teamsFilePath",
-  "cooldownMs", "emptyRetryMs", "backstopDelayMs", "__proto__", "constructor", "prototype",
+  "cooldownMs", "emptyRetryMs", "backstopDelayMs", "httpWaitMs", "async", "__proto__", "constructor", "prototype",
 ];
 
-/** Checks a remote write body against its endpoint's policy. GETs never forward a body, so they pass. */
-export function checkRemoteBody(method: RemoteMethod, pathname: string, body: string | undefined): { ok: true } | { ok: false; error: string } {
-  if (method === "GET") return { ok: true };
+export type BodyCheck = { ok: true; value: Record<string, unknown> } | { ok: false; status: 400 | 403; error: string };
+
+const MAX_DEPTH = 8;
+
+/** First forbidden key anywhere in the value (object keys at every depth, through arrays), or null. */
+export function findForbiddenKey(v: unknown, depth = 0): string | null {
+  if (depth > MAX_DEPTH || v === null || typeof v !== "object") return null;
+  if (Array.isArray(v)) {
+    for (const x of v) {
+      const hit = findForbiddenKey(x, depth + 1);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  for (const k of Object.keys(v)) {
+    if (REMOTE_FORBIDDEN_BODY_KEYS.includes(k)) return k;
+    const hit = findForbiddenKey((v as Record<string, unknown>)[k], depth + 1);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function checkValue(spec: FieldSpec, v: unknown, where: string, depth: number): string | null {
+  if (depth > MAX_DEPTH) return `${where}: nested too deep`;
+  switch (spec.t) {
+    case "string":
+      if (where.startsWith("body.ideas[") && v && typeof v === "object" && !Array.isArray(v)) {
+        return checkFields({ text: spec, laneId: id, lane: id, teamId: id, team: id, scope: INBOX_SCOPE }, ["text"], v as Record<string, unknown>, where, depth + 1);
+      }
+      if (typeof v !== "string") return `${where} must be a string`;
+      if (v.length > spec.max) return `${where} is ${v.length} chars, cap ${spec.max}`;
+      if (spec.oneOf && !spec.oneOf.includes(v)) return `${where} must be one of ${spec.oneOf.join(", ")}`;
+      if (spec.re && !spec.re.test(v)) return `${where} has a bad format`;
+      return null;
+    case "number":
+      if (typeof v !== "number" || !Number.isFinite(v)) return `${where} must be a number`;
+      if (spec.int && !Number.isInteger(v)) return `${where} must be an integer`;
+      if (v < spec.min || v > spec.max) return `${where} is out of range`;
+      return null;
+    case "boolean":
+      return typeof v === "boolean" ? null : `${where} must be a boolean`;
+    case "array":
+      if (!Array.isArray(v)) return `${where} must be an array`;
+      if (v.length > spec.max) return `${where} has ${v.length} items, cap ${spec.max}`;
+      for (let i = 0; i < v.length; i++) {
+        const err = checkValue(spec.of, v[i], `${where}[${i}]`, depth + 1);
+        if (err) return err;
+      }
+      return null;
+    case "object": {
+      if (!v || typeof v !== "object" || Array.isArray(v)) return `${where} must be an object`;
+      return checkFields(spec.fields, spec.require, v as Record<string, unknown>, where, depth + 1);
+    }
+  }
+}
+
+function checkFields(
+  fields: Readonly<Record<string, FieldSpec>>,
+  require: readonly string[] | undefined,
+  obj: Record<string, unknown>,
+  where: string,
+  depth: number,
+): string | null {
+  for (const k of Object.keys(obj)) {
+    if (!Object.hasOwn(fields, k)) return `key not allowed remotely: ${where}.${k}`;
+  }
+  for (const k of require ?? []) {
+    if (!Object.hasOwn(obj, k)) return `key required remotely: ${where}.${k}`;
+  }
+  for (const k of Object.keys(obj)) {
+    // undefined can't come out of JSON.parse; null is not a valid value for any remote field.
+    const err = checkValue(fields[k], obj[k], `${where}.${k}`, depth);
+    if (err) return err;
+  }
+  return null;
+}
+
+/**
+ * Checks a remote write body against its endpoint's policy: JSON object, no forbidden key at any depth,
+ * every key in the policy with the right type and within its cap. GETs never forward a body, so they pass.
+ * Status: 403 for a policy refusal (no policy, forbidden/unknown key, bad value), 400 for unparseable JSON.
+ */
+export function checkRemoteBody(method: RemoteMethod, pathname: string, body: string | undefined): BodyCheck {
+  if (method === "GET") return { ok: true, value: {} };
   const policy = Object.hasOwn(REMOTE_BODY_POLICY, pathname) ? REMOTE_BODY_POLICY[pathname] : undefined;
-  if (!policy) return { ok: false, error: `no remote body policy for ${pathname}` };
+  if (!policy) return { ok: false, status: 403, error: `no remote body policy for ${pathname}` };
   let parsed: unknown = {};
   if (body !== undefined && body.trim() !== "") {
     try {
       parsed = JSON.parse(body);
     } catch {
-      return { ok: false, error: "body must be a JSON object" };
+      return { ok: false, status: 400, error: "body must be a JSON object" };
     }
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { ok: false, error: "body must be a JSON object" };
-  const keys = Object.keys(parsed);
-  const forbidden = keys.find((k) => REMOTE_FORBIDDEN_BODY_KEYS.includes(k));
-  if (forbidden) return { ok: false, error: `body key not allowed remotely: ${forbidden}` };
-  const unknown = keys.find((k) => !policy.allow.includes(k));
-  if (unknown) return { ok: false, error: `body key not allowed remotely on ${pathname}: ${unknown}` };
-  const missing = (policy.require ?? []).find((k) => !keys.includes(k));
-  if (missing) return { ok: false, error: `body key required remotely on ${pathname}: ${missing}` };
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { ok: false, status: 400, error: "body must be a JSON object" };
+  const forbidden = findForbiddenKey(parsed);
+  if (forbidden) return { ok: false, status: 403, error: `body key not allowed remotely: ${forbidden}` };
+  const err = checkFields(policy.fields, policy.require, parsed as Record<string, unknown>, "body", 0);
+  if (err) return { ok: false, status: 403, error: `${pathname}: ${err}` };
+  if (policy.registry === "lane") {
+    const rec = parsed as Record<string, unknown>;
+    const laneId = String(rec.laneId ?? rec.lane ?? "").trim();
+    if (!laneId) {
+      return { ok: false, status: 403, error: `${pathname}: key required remotely: body.laneId (BadRequest: laneId is required)` };
+    }
+  }
+  return { ok: true, value: parsed as Record<string, unknown> };
+}
+
+// ---- registry checks (need the live teams.json, read by the proxy over loopback GET /api/teams) ----
+
+type RegLane = { id?: unknown; name?: unknown; aliases?: unknown; paths?: unknown; path?: unknown; lastProfile?: unknown; worktree?: unknown; branch?: unknown; cwd?: unknown };
+type RegTeam = { id?: unknown; name?: unknown; aliases?: unknown; lanes?: unknown; paths?: unknown; path?: unknown; vibeMode?: unknown };
+
+/** Lane and team fields that steer where and how agents spawn. A remote write can't change them. */
+export const PINNED_TEAM_KEYS = ["paths", "path", "vibeMode"] as const;
+export const PINNED_LANE_KEYS = ["paths", "path", "lastProfile", "worktree", "branch", "cwd"] as const;
+
+const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+const asArray = (v: unknown): any[] => (Array.isArray(v) ? v : []);
+const normKey = (s: unknown): string => String(s || "").trim().toLowerCase();
+
+function extractDiskTeams(current: unknown): Record<string, unknown>[] | null {
+  if (Array.isArray(current)) return current as Record<string, unknown>[];
+  if (current && typeof current === "object" && Array.isArray((current as any).teams)) {
+    return (current as any).teams as Record<string, unknown>[];
+  }
+  return null;
+}
+
+/**
+ * Pins `paths`/`path`/`vibeMode` (team) and `paths`/`path`/`lastProfile`/`worktree`/`branch`/`cwd` (lane)
+ * to the values on disk. Enforces case-insensitive matching, refuses deleting or reordering existing teams
+ * or lanes, caps new additions (<= 1 team, <= 3 lanes per save), prevents cross-registry collisions and
+ * cross-team lane moves, and merges incoming fields onto existing on-disk objects to preserve unknown keys.
+ */
+export function pinTeamsRegistry(
+  body: Record<string, unknown>,
+  current: unknown,
+  redact: (s: string) => string = (s) => s,
+): { ok: true; value: Record<string, unknown> } | { ok: false; status: 403 | 503; error: string } {
+  const curTeams = extractDiskTeams(current);
+  if (!curTeams) {
+    return { ok: false, status: 503, error: "could not read teams.json to check the write" };
+  }
+  const echoes = (sent: unknown, disk: unknown) => sameJson(sent, disk) || sameJson(sent, JSON.parse(redact(JSON.stringify(disk ?? null))));
+
+  const diskTeamsById = new Map<string, { team: Record<string, unknown>; index: number }>();
+  const diskTeamsByAnyKey = new Map<string, Record<string, unknown>>();
+  const allDiskLaneIds = new Map<string, { lane: Record<string, unknown>; teamId: string }>();
+  const allDiskLanes = new Map<string, { lane: Record<string, unknown>; teamId: string }>();
+
+  for (let i = 0; i < curTeams.length; i++) {
+    const dt = curTeams[i];
+    if (!dt || typeof dt !== "object") continue;
+    const dtId = normKey(dt.id);
+    if (!dtId) continue;
+    diskTeamsById.set(dtId, { team: dt, index: i });
+    diskTeamsByAnyKey.set(dtId, dt);
+    const dtName = normKey(dt.name);
+    if (dtName) diskTeamsByAnyKey.set(dtName, dt);
+    for (const a of asArray(dt.aliases)) {
+      const ak = normKey(a);
+      if (ak) diskTeamsByAnyKey.set(ak, dt);
+    }
+    for (const dl of asArray(dt.lanes) as Record<string, unknown>[]) {
+      if (!dl || typeof dl !== "object") continue;
+      const dlId = normKey(dl.id);
+      if (dlId) {
+        allDiskLaneIds.set(dlId, { lane: dl, teamId: dtId });
+        allDiskLanes.set(dlId, { lane: dl, teamId: dtId });
+      }
+      const dlName = normKey(dl.name);
+      if (dlName && !allDiskLaneIds.has(dlName)) allDiskLanes.set(dlName, { lane: dl, teamId: dtId });
+      for (const a of asArray(dl.aliases)) {
+        const ak = normKey(a);
+        if (ak && !allDiskLaneIds.has(ak)) allDiskLanes.set(ak, { lane: dl, teamId: dtId });
+      }
+    }
+  }
+
+  const inTeams = asArray(body.teams) as Record<string, unknown>[];
+
+  // 1. Check pinned keys on each incoming team and lane first.
+  for (const t of inTeams) {
+    const tId = normKey(t?.id);
+    const diskTeam = diskTeamsById.get(tId)?.team;
+    if (diskTeam) {
+      if (t.vibeMode !== undefined && Boolean(t.vibeMode) !== Boolean(diskTeam.vibeMode)) {
+        return { ok: false, status: 403, error: "RemoteDenied: team paths and vibeMode are pinned on host" };
+      }
+      for (const k of ["paths", "path"] as const) {
+        if (Object.hasOwn(t, k) && !echoes(t[k], diskTeam[k])) {
+          return {
+            ok: false,
+            status: 403,
+            error: `RemoteDenied: team ${String(diskTeam.id)}.${k} can't be changed remotely`,
+          };
+        }
+      }
+    } else {
+      if (Boolean(t?.vibeMode) === true) {
+        return { ok: false, status: 403, error: "RemoteDenied: new remote teams cannot enable vibeMode" };
+      }
+      for (const k of ["paths", "path"] as const) {
+        if (Object.hasOwn(t, k)) {
+          return { ok: false, status: 403, error: `RemoteDenied: team ${String(t.id)}.${k} can't be set remotely on a new entry` };
+        }
+      }
+    }
+    if (!Array.isArray(t?.lanes)) continue;
+    const diskLanes = asArray(diskTeam?.lanes) as Record<string, unknown>[];
+    for (const l of t.lanes as Record<string, unknown>[]) {
+      const lId = normKey(l?.id);
+      const diskLane = diskLanes.find((c) => normKey(c?.id) === lId);
+      for (const k of PINNED_LANE_KEYS) {
+        const has = Object.hasOwn(l, k);
+        if (!diskLane) {
+          if (has) return { ok: false, status: 403, error: `RemoteDenied: lane ${String(l.id)}.${k} can't be set remotely on a new entry` };
+          continue;
+        }
+        if (has && !echoes(l[k], diskLane[k])) {
+          return { ok: false, status: 403, error: `RemoteDenied: lane ${String(diskLane.id)}.${k} can't be changed remotely` };
+        }
+      }
+    }
+  }
+
+  // 2. Check team uniqueness across the payload and collisions with on-disk teams.
+  const seenTeamKeys = new Map<string, number>();
+  for (let ti = 0; ti < inTeams.length; ti++) {
+    const t = inTeams[ti];
+    const tId = normKey(t?.id);
+    if (!tId) return { ok: false, status: 403, error: "RemoteDenied: team id is required" };
+    const isExistingTeam = diskTeamsById.has(tId);
+    const keysToCheck = [tId];
+    const tName = normKey(t?.name);
+    if (tName && tName !== tId) keysToCheck.push(tName);
+    const seenAliases = new Set<string>();
+    for (const a of asArray(t?.aliases)) {
+      const ak = normKey(a);
+      if (!ak) continue;
+      if (seenAliases.has(ak) || ak === tId || (tName && ak === tName)) {
+        return { ok: false, status: 403, error: `RemoteDenied: duplicate team alias "${ak}"` };
+      }
+      seenAliases.add(ak);
+      keysToCheck.push(ak);
+    }
+    for (const k of keysToCheck) {
+      if (seenTeamKeys.has(k) && seenTeamKeys.get(k) !== ti) {
+        return { ok: false, status: 403, error: `RemoteDenied: duplicate team identifier "${k}"` };
+      }
+      seenTeamKeys.set(k, ti);
+      const diskOwner = diskTeamsByAnyKey.get(k);
+      if (diskOwner) {
+        if (!isExistingTeam || normKey(diskOwner.id) !== tId) {
+          return { ok: false, status: 403, error: `RemoteDenied: team identifier "${k}" collides with an existing team` };
+        }
+      }
+    }
+  }
+
+  // 3. Refuse dropping or reordering existing teams, and cap new teams at <= 1.
+  for (const [dtId] of diskTeamsById) {
+    if (!inTeams.some((t) => normKey(t?.id) === dtId)) {
+      return { ok: false, status: 403, error: "RemoteDenied: cannot delete teams remotely (set state to removed)" };
+    }
+  }
+  for (let i = 0; i < curTeams.length; i++) {
+    if (normKey(inTeams[i]?.id) !== normKey(curTeams[i]?.id)) {
+      return { ok: false, status: 403, error: "RemoteDenied: cannot reorder existing teams remotely" };
+    }
+  }
+  const newTeamsCount = inTeams.length - curTeams.length;
+  if (newTeamsCount > 1) {
+    return { ok: false, status: 403, error: "RemoteDenied: at most 1 new team per remote save" };
+  }
+
+  // 4. Validate lanes per team (uniqueness, cross-team collisions, no drops, no reorder, <= 3 new lanes) and merge onto disk.
+  let totalNewLanes = 0;
+  const seenAllLaneKeys = new Map<string, { teamId: string; laneId: string; isPreExistingOwnKey: boolean }>();
+  const mergedTeams: Record<string, unknown>[] = [];
+
+  for (const t of inTeams) {
+    const tId = normKey(t.id);
+    const diskTeam = diskTeamsById.get(tId)?.team;
+    const diskLanes = asArray(diskTeam?.lanes) as Record<string, unknown>[];
+    const diskLanesById = new Map<string, { lane: Record<string, unknown>; index: number }>();
+    for (let li = 0; li < diskLanes.length; li++) {
+      const dl = diskLanes[li];
+      const dlId = normKey(dl?.id);
+      if (dlId) diskLanesById.set(dlId, { lane: dl, index: li });
+    }
+
+    const hasInLanes = Array.isArray(t.lanes);
+    const inLanes = hasInLanes ? (t.lanes as Record<string, unknown>[]) : [];
+
+    const seenLaneKeys = new Map<string, number>();
+    for (let li = 0; li < inLanes.length; li++) {
+      const l = inLanes[li];
+      const lId = normKey(l?.id);
+      if (!lId) return { ok: false, status: 403, error: "RemoteDenied: lane id is required" };
+      const diskLaneEntry = diskLanesById.get(lId);
+      const isExistingInTeam = Boolean(diskLaneEntry);
+      const diskLane = diskLaneEntry?.lane;
+      const ownDiskKeys = new Set<string>();
+      if (diskLane) {
+        const dId = normKey(diskLane.id);
+        if (dId) ownDiskKeys.add(dId);
+        const dName = normKey(diskLane.name);
+        if (dName) ownDiskKeys.add(dName);
+        for (const a of asArray(diskLane.aliases)) {
+          const ak = normKey(a);
+          if (ak) ownDiskKeys.add(ak);
+        }
+      }
+      const keysToCheck = [lId];
+      const lName = normKey(l?.name);
+      if (lName && lName !== lId) keysToCheck.push(lName);
+      const seenAliases = new Set<string>();
+      for (const a of asArray(l?.aliases)) {
+        const ak = normKey(a);
+        if (!ak) continue;
+        if (seenAliases.has(ak) || ak === lId || (lName && ak === lName)) {
+          return { ok: false, status: 403, error: `RemoteDenied: duplicate lane alias "${ak}"` };
+        }
+        seenAliases.add(ak);
+        keysToCheck.push(ak);
+      }
+      for (const k of keysToCheck) {
+        if (seenLaneKeys.has(k) && seenLaneKeys.get(k) !== li) {
+          return { ok: false, status: 403, error: `RemoteDenied: duplicate lane identifier "${k}"` };
+        }
+        seenLaneKeys.set(k, li);
+        const isPreExistingOwnKey = isExistingInTeam && ownDiskKeys.has(k);
+        const idOwner = allDiskLaneIds.get(k);
+        if (idOwner && (idOwner.teamId !== tId || normKey(idOwner.lane.id) !== lId)) {
+          return { ok: false, status: 403, error: "RemoteDenied: lane id, name, or alias collides with an existing lane" };
+        }
+        const diskOwner = allDiskLanes.get(k);
+        if (diskOwner && (diskOwner.teamId !== tId || normKey(diskOwner.lane.id) !== lId) && !isPreExistingOwnKey) {
+          return { ok: false, status: 403, error: "RemoteDenied: lane id, name, or alias collides with an existing lane" };
+        }
+        const prevSeen = seenAllLaneKeys.get(k);
+        if (prevSeen && (prevSeen.teamId !== tId || prevSeen.laneId !== lId)) {
+          if (!isPreExistingOwnKey || !prevSeen.isPreExistingOwnKey || k === lId) {
+            return { ok: false, status: 403, error: "RemoteDenied: lane id, name, or alias collides with an existing lane" };
+          }
+        }
+        seenAllLaneKeys.set(k, { teamId: tId, laneId: lId, isPreExistingOwnKey });
+      }
+      if (!isExistingInTeam) {
+        totalNewLanes++;
+      }
+    }
+
+    if (diskLanes.length > 0) {
+      for (const [dlId] of diskLanesById) {
+        if (!inLanes.some((l) => normKey(l?.id) === dlId)) {
+          return { ok: false, status: 403, error: "RemoteDenied: cannot delete lanes remotely (set state to removed)" };
+        }
+      }
+      for (let i = 0; i < diskLanes.length; i++) {
+        if (normKey(inLanes[i]?.id) !== normKey(diskLanes[i]?.id)) {
+          return { ok: false, status: 403, error: "RemoteDenied: cannot reorder existing lanes remotely" };
+        }
+      }
+    }
+
+    if (totalNewLanes > 3) {
+      return { ok: false, status: 403, error: "RemoteDenied: at most 3 new lanes per remote save" };
+    }
+
+    const mergedLanes: Record<string, unknown>[] = [];
+    for (const l of inLanes) {
+      const diskLane = diskLanesById.get(normKey(l.id))?.lane;
+      if (diskLane) {
+        const mergedLane: Record<string, unknown> = { ...diskLane, ...l, id: diskLane.id };
+        for (const k of PINNED_LANE_KEYS) {
+          if (diskLane[k] === undefined) delete mergedLane[k];
+          else mergedLane[k] = diskLane[k];
+        }
+        mergedLanes.push(mergedLane);
+      } else {
+        const mergedLane: Record<string, unknown> = { ...l };
+        for (const k of PINNED_LANE_KEYS) delete mergedLane[k];
+        mergedLanes.push(mergedLane);
+      }
+    }
+
+    if (diskTeam) {
+      const mergedTeam: Record<string, unknown> = { ...diskTeam, ...t, id: diskTeam.id };
+      for (const k of PINNED_TEAM_KEYS) {
+        if (diskTeam[k] === undefined) delete mergedTeam[k];
+        else mergedTeam[k] = diskTeam[k];
+      }
+      if (hasInLanes || Array.isArray(diskTeam.lanes)) {
+        mergedTeam.lanes = mergedLanes;
+      }
+      mergedTeams.push(mergedTeam);
+    } else {
+      const mergedTeam: Record<string, unknown> = { ...t };
+      for (const k of PINNED_TEAM_KEYS) delete mergedTeam[k];
+      if (hasInLanes) {
+        mergedTeam.lanes = mergedLanes;
+      }
+      mergedTeams.push(mergedTeam);
+    }
+  }
+
+  return { ok: true, value: { ...body, teams: mergedTeams } };
+}
+
+function teamMatches(t: RegTeam, wantTeam: string): boolean {
+  const w = normKey(wantTeam);
+  if (!w) return false;
+  if (normKey(t?.id) === w || normKey(t?.name) === w) return true;
+  return asArray(t?.aliases).some((a) => normKey(a) === w);
+}
+
+function laneMatches(l: RegLane, wantLane: string): boolean {
+  const w = normKey(wantLane);
+  if (!w) return false;
+  if (normKey(l?.id) === w) return true;
+  return asArray(l?.aliases).some((a) => normKey(a) === w);
+}
+
+/**
+ * Verifies the body's lane (`laneId` or `lane`) and optional team (`teamId` or `team`) against `teams.json`.
+ * Fails closed: missing lane returns 400; unreadable registry returns 503; unknown team or lane not belonging
+ * to the specified team (or not in `teams.json`) returns 403.
+ */
+export function checkLaneExists(
+  body: Record<string, unknown>,
+  current: unknown,
+): { ok: true } | { ok: false; status: 400 | 403 | 503; error: string } {
+  const laneId = String(body?.laneId ?? body?.lane ?? body?.defaultLaneId ?? "").trim();
+  if (!laneId) {
+    return { ok: false, status: 400, error: "BadRequest: laneId is required" };
+  }
+  const diskTeams = extractDiskTeams(current) as RegTeam[] | null;
+  if (!diskTeams) {
+    return { ok: false, status: 503, error: "could not read teams.json to check the lane" };
+  }
+  const verifyPair = (wantTeam: string, wantLane: string): { ok: true } | { ok: false; status: 403; error: string } => {
+    if (wantTeam) {
+      const team = diskTeams.find((t) => teamMatches(t, wantTeam));
+      if (!team) {
+        return { ok: false, status: 403, error: `RemoteDenied: unknown team "${wantTeam}"` };
+      }
+      const foundInTeam = asArray(team.lanes).some((l: RegLane) => laneMatches(l, wantLane));
+      if (!foundInTeam) {
+        return { ok: false, status: 403, error: `RemoteDenied: lane "${wantLane}" does not belong to team "${wantTeam}"` };
+      }
+    } else {
+      const foundAnywhere = diskTeams.some((t) => asArray(t?.lanes).some((l: RegLane) => laneMatches(l, wantLane)));
+      if (!foundAnywhere) {
+        return { ok: false, status: 403, error: `RemoteDenied: lane ${wantLane} is not in teams.json` };
+      }
+    }
+    return { ok: true };
+  };
+
+  const teamId = String(body?.teamId ?? body?.team ?? "").trim();
+  const topCheck = verifyPair(teamId, laneId);
+  if (!topCheck.ok) return topCheck;
+
+  const defaultLaneId = String(body?.defaultLaneId ?? "").trim();
+  if (defaultLaneId) {
+    const defCheck = verifyPair(teamId, defaultLaneId);
+    if (!defCheck.ok) return defCheck;
+  }
+
+  if (Array.isArray(body?.ideas)) {
+    for (const item of body.ideas) {
+      if (item && typeof item === "object" && !Array.isArray(item)) {
+        const rec = item as Record<string, unknown>;
+        const itemTeam = String(rec.teamId ?? rec.team ?? "").trim();
+        const itemLane = String(rec.laneId ?? rec.lane ?? "").trim();
+        if (itemTeam || itemLane) {
+          const checkItem = verifyPair(itemTeam || teamId, itemLane || laneId);
+          if (!checkItem.ok) return checkItem;
+        }
+      }
+    }
+  }
+
+  if (body?.patch && typeof body.patch === "object" && !Array.isArray(body.patch)) {
+    const patch = body.patch as Record<string, unknown>;
+    const patchTeam = String(patch.teamId ?? "").trim();
+    const patchLane = String(patch.laneId ?? "").trim();
+    if (patchTeam || patchLane) {
+      const checkPatch = verifyPair(patchTeam || teamId, patchLane || laneId);
+      if (!checkPatch.ok) return checkPatch;
+    }
+  }
   return { ok: true };
+}
+
+/** Runs the policy's registry check. `current` is the parsed GET /api/teams body (null if unreadable). */
+export function checkRemoteRegistry(
+  pathname: string,
+  body: Record<string, unknown>,
+  current: unknown,
+  redact?: (s: string) => string,
+): { ok: true; value: Record<string, unknown> } | { ok: false; status: 400 | 403 | 503; error: string } {
+  const kind = Object.hasOwn(REMOTE_BODY_POLICY, pathname) ? REMOTE_BODY_POLICY[pathname].registry : undefined;
+  if (kind === "teams") return pinTeamsRegistry(body, current, redact);
+  if (kind === "lane") {
+    const r = checkLaneExists(body, current);
+    return r.ok ? { ok: true, value: body } : r;
+  }
+  return { ok: true, value: body };
+}
+
+/** True when the endpoint's policy needs teams.json before forwarding. */
+export function needsRegistry(pathname: string): boolean {
+  return Boolean(Object.hasOwn(REMOTE_BODY_POLICY, pathname) && REMOTE_BODY_POLICY[pathname].registry);
 }
 
 /** Never proxied, whatever ALLOW says. Entries ending in "*" are prefixes. */
@@ -205,7 +843,7 @@ function stripQuery(pathname: string, search: string): string {
 
 /**
  * Full decision for one request: method filter, normalisation, blocklist, allowlist, query strip.
- * `allow` is injectable so the write plumbing stays tested while REMOTE_ALLOW is GET-only.
+ * `allow` is injectable for tests; production is REMOTE_ALLOW.
  */
 export function decideProxyRequest(method: unknown, path: unknown, allow: AllowMap = REMOTE_ALLOW): ProxyDecision {
   const m = typeof method === "string" ? method.toUpperCase() : "";
@@ -223,6 +861,15 @@ export function decideProxyRequest(method: unknown, path: unknown, allow: AllowM
   return { ok: true, method: m as RemoteMethod, pathname: norm.pathname, search: stripQuery(norm.pathname, norm.search) };
 }
 
+export function isAllowedRoute(method: unknown, path: unknown, allow: AllowMap = REMOTE_ALLOW): boolean {
+  return decideProxyRequest(method, path, allow).ok;
+}
+
+/** HTTP-style status for a refused decision: 405 wrong method, 400 malformed path, 403 blocked/unlisted. */
+export function decisionStatus(code: "method" | "path" | "blocked" | "not-allowed"): 400 | 403 | 405 {
+  return code === "method" ? 405 : code === "path" ? 400 : 403;
+}
+
 export function utf8Bytes(s: string): number {
   return new TextEncoder().encode(s).byteLength;
 }
@@ -238,41 +885,101 @@ export function isTextContentType(ct: string | null | undefined): boolean {
 
 // ---- rate limits ------------------------------------------------------------------------------------
 
-export type RateKind = "read" | "write";
-export type RateLimiter = {
-  acquire(kind: RateKind): { ok: true; release: () => void } | { ok: false; error: string };
+export const ENDPOINT_WRITE_LIMITS_PER_MIN: Record<string, number> = {
+  "POST /api/teams": 5,
+  "PUT /api/teams": 5,
+  "POST /__vibesquad/teams": 5,
+  "PUT /__vibesquad/teams": 5,
+  "POST /__vibesquad/brainstorm-summary": 5,
+  "PUT /__vibesquad/brainstorm-summary": 5,
+  "POST /__vibesquad/inbox": 10,
+  "POST /__vibesquad/inbox/triage": 10,
+  "POST /__vibesquad/park-topic": 10,
+  "POST /__vibesquad/inbox/park-topic": 10,
+  "POST /__vibesquad/handoff-topic": 10,
+  "POST /__vibesquad/inbox/handoff-topic": 10,
+  "POST /__vibesquad/log": 10,
+  "POST /__vibesquad/vs-log": 10,
 };
 
-/** At most `maxInFlight` concurrent requests, plus a rolling per-minute budget per kind (read/write). */
+export type RateKind = "read" | "write";
+export type RateLimiter = {
+  acquire(kind: RateKind, endpointKey?: string): { ok: true; release: () => void } | { ok: false; status: 429; error: string };
+  check(method: string, path: string): { ok: true; status: 200; release: () => void } | { ok: false; status: 429; error: string };
+};
+
+/** At most `maxInFlight` concurrent requests, plus a rolling per-minute budget per kind (read/write) and per write endpoint. */
 export function createRateLimiter(
-  opts: { maxInFlight?: number; budget?: Record<RateKind, number>; windowMs?: number; now?: () => number } = {},
+  opts: {
+    maxInFlight?: number;
+    budget?: Record<RateKind, number>;
+    endpointLimits?: Record<string, number>;
+    windowMs?: number;
+    now?: () => number;
+  } = {},
 ): RateLimiter {
   const maxInFlight = opts.maxInFlight ?? REMOTE_MAX_IN_FLIGHT;
   const budget = opts.budget ?? REMOTE_BUDGET_PER_MIN;
+  const endpointLimits = opts.endpointLimits ?? ENDPOINT_WRITE_LIMITS_PER_MIN;
   const windowMs = opts.windowMs ?? REMOTE_WINDOW_MS;
   const now = opts.now ?? Date.now;
   const stamps: Record<RateKind, number[]> = { read: [], write: [] };
+  const endpointStamps = new Map<string, number[]>();
   let inFlight = 0;
-  return {
-    acquire(kind) {
-      const t = now();
-      const list = stamps[kind];
-      while (list.length && list[0] <= t - windowMs) list.shift();
-      if (inFlight >= maxInFlight) return { ok: false, error: `too many requests in flight (max ${maxInFlight})` };
-      if (list.length >= budget[kind]) {
-        const wait = Math.max(1, Math.ceil((list[0] + windowMs - t) / 1000));
-        return { ok: false, error: `rate limited: ${budget[kind]} ${kind}s per minute, retry in ${wait} s` };
+
+  function evaluate(kind: RateKind, endpointKey: string | undefined, trackInFlight: boolean) {
+    const t = now();
+    const list = stamps[kind];
+    while (list.length && list[0] <= t - windowMs) list.shift();
+    let epList: number[] | undefined;
+    let epCap: number | undefined;
+    if (endpointKey && Object.hasOwn(endpointLimits, endpointKey)) {
+      epCap = endpointLimits[endpointKey];
+      epList = endpointStamps.get(endpointKey);
+      if (!epList) {
+        epList = [];
+        endpointStamps.set(endpointKey, epList);
       }
-      list.push(t);
-      inFlight++;
-      let released = false;
+      while (epList.length && epList[0] <= t - windowMs) epList.shift();
+    }
+    if (inFlight >= maxInFlight) {
+      return { ok: false as const, status: 429 as const, error: `too many requests in flight (max ${maxInFlight})` };
+    }
+    if (list.length >= budget[kind]) {
+      const wait = Math.max(1, Math.ceil((list[0] + windowMs - t) / 1000));
+      return { ok: false as const, status: 429 as const, error: `rate limited: ${budget[kind]} ${kind}s per minute, retry in ${wait} s` };
+    }
+    if (epList && epCap !== undefined && epList.length >= epCap) {
+      const wait = Math.max(1, Math.ceil((epList[0] + windowMs - t) / 1000));
       return {
-        ok: true,
-        release: () => {
-          if (!released) inFlight--;
-          released = true;
-        },
+        ok: false as const,
+        status: 429 as const,
+        error: `rate limited: ${epCap} writes per minute on ${endpointKey}, retry in ${wait} s`,
       };
+    }
+    list.push(t);
+    if (epList) epList.push(t);
+    if (trackInFlight) inFlight++;
+    let released = false;
+    return {
+      ok: true as const,
+      status: 200 as const,
+      release: () => {
+        if (trackInFlight && !released) inFlight--;
+        released = true;
+      },
+    };
+  }
+
+  return {
+    acquire(kind: RateKind, endpointKey?: string) {
+      return evaluate(kind, endpointKey, true);
+    },
+    check(method: string, path: string) {
+      const m = String(method || "GET").toUpperCase();
+      const p = String(path || "").split("?")[0];
+      const kind: RateKind = m === "GET" ? "read" : "write";
+      return evaluate(kind, `${m} ${p}`, false);
     },
   };
 }
@@ -280,6 +987,26 @@ export function createRateLimiter(
 // ---- response redaction -----------------------------------------------------------------------------
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const FS_PATH_RE = /(?:[A-Za-z]:[\\/][^\s"'<>|?*]+|\/(?:Users|home|root|var|tmp|etc|opt|private|mnt|srv)\/[^\s"'<>|?*]+)/g;
+
+function scrubErrorValue(v: unknown, depth = 0): unknown {
+  if (depth > MAX_DEPTH || v === null || v === undefined) return v;
+  if (typeof v === "string") {
+    return v.replace(FS_PATH_RE, "[redacted-path]");
+  }
+  if (Array.isArray(v)) {
+    return v.map((item) => scrubErrorValue(item, depth + 1));
+  }
+  if (typeof v === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      if (k === "path" || k === "teamLogPath" || k === "cwd" || k === "worktree" || k === "stack") continue;
+      out[k] = scrubErrorValue(val, depth + 1);
+    }
+    return out;
+  }
+  return v;
+}
 
 /**
  * Replaces the owner's home directory (backslash, JSON-escaped backslash and forward-slash forms, any
@@ -300,15 +1027,42 @@ export function redactBody(body: string, homeDir: string, userName: string): str
   return out;
 }
 
-/** Drops `remote` (the proxy gate) from GET /__vibesquad/settings responses. */
-export function scrubSettingsBody(pathname: string, body: string): string {
-  if (pathname !== "/__vibesquad/settings") return body;
+/**
+ * Drops `remote` (the proxy gate) from GET /__vibesquad/settings responses, strips top-level `path`
+ * and `teamLogPath` from JSON object responses, and scrubs filesystem paths / sensitive keys on >= 400 error bodies.
+ */
+export function scrubResponseBody(pathname: string, body: string, status?: number): string {
+  const isError = status !== undefined && status >= 400;
   try {
     const parsed = JSON.parse(body);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && "remote" in parsed) {
-      delete parsed.remote;
-      return JSON.stringify(parsed);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      let mutated = false;
+      if (pathname === "/__vibesquad/settings" && "remote" in parsed) {
+        delete parsed.remote;
+        mutated = true;
+      }
+      if ("path" in parsed) {
+        delete parsed.path;
+        mutated = true;
+      }
+      if ("teamLogPath" in parsed) {
+        delete parsed.teamLogPath;
+        mutated = true;
+      }
+      if (isError) {
+        return JSON.stringify(scrubErrorValue(parsed));
+      }
+      return mutated ? JSON.stringify(parsed) : body;
     }
-  } catch {}
+    if (isError && (typeof parsed === "string" || Array.isArray(parsed))) {
+      return JSON.stringify(scrubErrorValue(parsed));
+    }
+  } catch {
+    if (isError) {
+      return body.replace(FS_PATH_RE, "[redacted-path]");
+    }
+  }
   return body;
 }
+
+export const scrubSettingsBody = scrubResponseBody;
