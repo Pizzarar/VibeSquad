@@ -3,6 +3,7 @@
 import type { PaseoAgent } from "@getpaseo/client";
 import { DEMO, archiveAgent, archiveWorkspace, detachAgent, getPaseoState, retireAgent, sendMessage, updateAgent, upsertLocalAgent } from "./paseo";
 import { parkIdeasInInbox } from "./IdeaInbox";
+import { isRemote } from "./remoteSession";
 import {
   allLaneIds,
   appendBriefLine,
@@ -84,7 +85,8 @@ async function quickStart(pin: Pin, profile: string, deps: OpenPinDeps): Promise
       teamId: squadId,
       laneId,
       laneName: pin.lane.name,
-      profile,
+      // Remotely `profile` is a forbidden body key; the server picks the lane's lastProfile from teams.json.
+      ...(isRemote() ? {} : { profile }),
     }),
   });
   const body = (await res.json().catch(() => ({}))) as {
@@ -124,7 +126,8 @@ async function quickStart(pin: Pin, profile: string, deps: OpenPinDeps): Promise
   (deps.onSpawned ?? upsertLocalAgent)(agent);
 
   const used = body.profile || profile;
-  if (used !== pin.lane.lastProfile) {
+  // lastProfile is pinned to disk for remote writes (PINNED_LANE_KEYS), so only a local session records it.
+  if (!isRemote() && used !== pin.lane.lastProfile) {
     await (deps.saveTeams ?? saveTeams)((cur) => patchLane(cur, squadId, laneId, { lastProfile: used }));
   }
   return newAgentId;

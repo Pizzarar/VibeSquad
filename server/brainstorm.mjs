@@ -588,7 +588,13 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
 
     const rawOldProvider = String(body.provider || oldAgent?.provider || "claude");
     const fallbackProfileName = rawOldProvider.startsWith("antigravity") ? "Brainstorm - Gemini" : "Brainstorm - Claude";
-    const desiredProfileKey = String(body.profile || oldLabels.profile || fallbackProfileName).trim();
+    // Remote callers can't send `profile` (REMOTE_FORBIDDEN_BODY_KEYS): the lane's lastProfile in teams.json decides.
+    const bootTeams = loadTeamsConfig(rootDir).teams ?? [];
+    const sameId = (x, y) => String(x ?? "").toLowerCase() === String(y ?? "").toLowerCase();
+    const bootTeam = bootTeams.find((t) => sameId(t.id, teamId));
+    const bootLane = bootTeam?.lanes?.find((l) => sameId(l.id, laneId));
+    const laneLastProfile = typeof bootLane?.lastProfile === "string" ? bootLane.lastProfile.trim() : "";
+    const desiredProfileKey = String(body.profile || oldLabels.profile || laneLastProfile || fallbackProfileName).trim();
     const { profiles } = loadProfiles(body.profilesPath, { autoSeed: false });
     const profile = findProfileOrFallback(desiredProfileKey, fallbackProfileName, profiles);
 
@@ -643,10 +649,6 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       liveForBoot = Array.isArray(src) ? src : null;
     }
     timer.mark("inFlight");
-    const bootTeams = loadTeamsConfig(rootDir).teams ?? [];
-    const sameId = (x, y) => String(x ?? "").toLowerCase() === String(y ?? "").toLowerCase();
-    const bootTeam = bootTeams.find((t) => sameId(t.id, teamId));
-    const bootLane = bootTeam?.lanes?.find((l) => sameId(l.id, laneId));
     const isBootHub = Boolean(bootTeam && !topic && (bootLane ? isHubLane(bootTeam, bootLane) : isHubLane(bootTeam, { id: laneId })));
     const hubTeams = isBootHub ? hubTeamsBlock({ team: bootTeam, agents: liveForBoot }) : "";
     const initialPrompt = buildBrainstormInitialPrompt({

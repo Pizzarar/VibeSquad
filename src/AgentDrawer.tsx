@@ -5,6 +5,7 @@ import type { PaseoAgent } from "@getpaseo/client";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
 import { daemonClient, DEMO, removeLocalAgent, sendMessage, upsertLocalAgent } from "./paseo";
 import { useDraft } from "./drafts";
+import { isRemote } from "./remoteSession";
 import { createSendLock, guardedSend, restoredDraft } from "./sendGuard";
 import { blobsToPaseoImages, rememberSent, useImageDraft } from "./imageDrafts";
 import {
@@ -76,8 +77,9 @@ export async function triggerBrainstormRestart(opts: {
       laneId,
       reason,
       usedTokens: ut,
-      ...(pendingPrompt ? { pendingPrompt } : {}),
-      ...(summaryUpdate ? { summaryUpdate } : {}),
+      // Prompt and brief text never cross the remote relay (REMOTE_FORBIDDEN_BODY_KEYS).
+      ...(pendingPrompt && !isRemote() ? { pendingPrompt } : {}),
+      ...(summaryUpdate && !isRemote() ? { summaryUpdate } : {}),
     }),
   });
   const body = await res.json().catch(() => ({}));
@@ -112,6 +114,10 @@ export async function triggerBrainstormRestart(opts: {
     } as unknown as PaseoAgent);
   upsertLocalAgent(createdAgent, agent.id);
   openAgentInTab(newAgentId, pane, agent.id);
+  // Remotely the server never saw pendingPrompt, so hand it to the fresh Buddy over the relay instead.
+  if (pendingPrompt && isRemote() && body.newAgentId) {
+    await sendMessage(newAgentId, pendingPrompt).catch(() => undefined);
+  }
   return { newAgentId, title };
 }
 

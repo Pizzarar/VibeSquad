@@ -155,7 +155,7 @@ export async function startLaneBrainstorm(opts: {
       teamId,
       laneId,
       laneName,
-      cwd,
+      // No cwd: the server derives it from the lane (and refuses it over the remote relay).
       reason: "start-brainstorm",
     }),
   });
