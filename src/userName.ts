@@ -70,6 +70,8 @@ export function setStaleBuild(stale: unknown): void {
   }
 }
 
+export const getStaleBuild = () => staleBuild;
+
 export function useStaleBuild() {
   return useSyncExternalStore(
     (cb) => {
@@ -80,11 +82,37 @@ export function useStaleBuild() {
   );
 }
 
+export const DISMISSED_STALE_BUILD_KEY = "vs.dismissedStaleBuild";
+
+let dismissedStaleBuildKey = typeof localStorage !== "undefined" ? localStorage.getItem(DISMISSED_STALE_BUILD_KEY) || "" : "";
+
+export function staleBuildKey(s: { built: string; head: string } | null): string {
+  return s ? `${s.built}..${s.head}` : "";
+}
+
+export function dismissStaleBuild(): void {
+  dismissedStaleBuildKey = staleBuildKey(staleBuild);
+  try {
+    localStorage.setItem(DISMISSED_STALE_BUILD_KEY, dismissedStaleBuildKey);
+  } catch {}
+  listeners.forEach((l) => l());
+}
+
+export function useStaleBuildDismissed(): boolean {
+  return useSyncExternalStore(
+    (cb) => {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+    () => Boolean(staleBuild && dismissedStaleBuildKey === staleBuildKey(staleBuild)),
+  );
+}
+
 // Loopback without the local token (a plain browser tab) is read-only; the server says so in /health.
 let localReadOnly = false;
 
 export function setLocalAccess(access: unknown): void {
-  const next = access === "read-only";
+  const next = !isRemote() && access === "read-only";
   if (next !== localReadOnly) {
     localReadOnly = next;
     listeners.forEach((l) => l());
@@ -97,7 +125,7 @@ export function useLocalReadOnly() {
       listeners.add(cb);
       return () => listeners.delete(cb);
     },
-    () => localReadOnly,
+    () => (isRemote() ? false : localReadOnly),
   );
 }
 

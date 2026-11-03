@@ -3,7 +3,7 @@ import { clearSession, isRemote } from "./remoteSession";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { ProviderQuotaView } from "./antigravity";
-import { LEGACY_NEEDS_LABEL, dismissUpdateBanner, loadUpdaterStatus, setLanExposureState, setLocalAccess, setServerConfigWarnings, setStaleBuild, triggerUpdateInstall, useLocalReadOnly, useStaleBuild, useConfigWarnings, useExposedIpsStore, useUpdaterStatus } from "./userName";
+import { LEGACY_NEEDS_LABEL, dismissStaleBuild, dismissUpdateBanner, loadUpdaterStatus, setLanExposureState, setLocalAccess, setServerConfigWarnings, setStaleBuild, triggerUpdateInstall, useLocalReadOnly, useStaleBuild, useStaleBuildDismissed, useConfigWarnings, useExposedIpsStore, useUpdaterStatus } from "./userName";
 import { DEMO, archiveAgent, detachAgent, getPaseoState, loadArchived, retireAgent, setNeedsYou, updateAgent, upsertLocalAgent, usePaseo } from "./paseo";
 import {
   AGENT_TYPE_LABEL,
@@ -561,6 +561,23 @@ const Sidebar = memo(function Sidebar(props: {
   const uiScalePct = Math.round(uiScale * 100);
   const views = props.views;
   const allCollapsed = views.length > 0 && views.every((v) => props.collapsedTeams.has(v.team.id));
+  const staleBuild = useStaleBuild();
+  const [signalsOpen, setSignalsOpen] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("vs.sidebarSignalsOpen") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggleSignals = () => {
+    setSignalsOpen((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("vs.sidebarSignalsOpen", next ? "1" : "0");
+      } catch {}
+      return next;
+    });
+  };
   return (
     <nav className={`sidebar ${props.sidebarCollapsed ? "collapsed" : ""}`} data-testid="sidebar">
       <div className="brand">
@@ -601,89 +618,152 @@ const Sidebar = memo(function Sidebar(props: {
           {allCollapsed ? "Expand all" : "Collapse all"}
         </button>
       </div>
-      {views.map((v) => (
-        <SidebarTeam
-          key={v.team.id}
-          view={v}
-          active={v.team.id === props.teamId}
-          expanded={!props.collapsedTeams.has(v.team.id)}
-          onTeamHeaderClick={props.onTeamHeaderClick}
-          onToggleExpand={props.onToggleTeamExpand}
-          onTeam={props.onTeam}
-          onAgent={props.onAgent}
-          onQuickStart={props.onQuickStart}
-        />
-      ))}
-      <button
-        type="button"
-        className="btn ghost small sidebar-new-squad-btn"
-        data-testid="sidebar-new-squad-btn"
-        title="Add a new squad (project folder or clone repo)"
-        onClick={props.onNewSquad}
-      >
-        {props.sidebarCollapsed ? "+" : "+ New squad"}
-      </button>
-      <div className="sidebar-legend">
-        <div className="legend-title">PROVIDER SIGNALS</div>
-        <div className="legend-row">
-          <span style={{ color: "#ff8573" }}>✶ Claude</span>
-          <span style={{ color: "#38f6ff" }}>◆ Gemini</span>
-          <span style={{ color: "#c28cff" }}>▲ DeepSeek</span>
-          <span style={{ color: "#e2e8f0" }}>● Codex</span>
-        </div>
-        {props.usage.map((u) => {
-          const prov = providerSpec(u.provider);
-          return (
-            <div
-              key={`${u.provider}-${u.account ?? ""}`}
-              className={`quota-pill ${quotaTone(u.usedPct)}`}
-              title={[u.account, u.resetAt && `resets ${new Date(u.resetAt).toLocaleString()}`, u.staleModelListWarning && "model list may be stale"].filter(Boolean).join(" · ")}
-            >
-              <span style={{ color: prov.color }}>{prov.symbol} {prov.name}</span>
-              <span>{u.usedPct !== undefined ? `${Math.round(u.usedPct)}% used` : u.remainingLabel}</span>
-              <span className="quota-bar"><i style={{ width: `${u.usedPct ?? 0}%` }} /></span>
-            </div>
-          );
-        })}
+      <div className="sidebar-scroll" data-testid="sidebar-scroll">
+        {views.map((v) => (
+          <SidebarTeam
+            key={v.team.id}
+            view={v}
+            active={v.team.id === props.teamId}
+            expanded={!props.collapsedTeams.has(v.team.id)}
+            onTeamHeaderClick={props.onTeamHeaderClick}
+            onToggleExpand={props.onToggleTeamExpand}
+            onTeam={props.onTeam}
+            onAgent={props.onAgent}
+            onQuickStart={props.onQuickStart}
+          />
+        ))}
+        <button
+          type="button"
+          className="btn ghost small sidebar-new-squad-btn"
+          data-testid="sidebar-new-squad-btn"
+          title="Add a new squad (project folder or clone repo)"
+          onClick={props.onNewSquad}
+        >
+          {props.sidebarCollapsed ? "+" : "+ New squad"}
+        </button>
       </div>
-      {isRemote() ? (
+      <div className="sidebar-dock" data-testid="sidebar-dock">
         <button
-          className="btn ghost small"
-          data-testid="sidebar-unpair-btn"
-          onClick={() => {
-            clearSession();
-            location.reload();
-          }}
-          title="Forget the saved pairing and password on this browser"
+          type="button"
+          className="sidebar-signals-toggle"
+          data-testid="sidebar-signals-toggle"
+          onClick={toggleSignals}
+          title="Toggle provider quota signals"
         >
-          🔌 UNPAIR DEVICE
+          <span>PROVIDER SIGNALS {signalsOpen ? "▾" : "▸"}</span>
+          <span className="sidebar-signals-dots">
+            <span style={{ color: "#ff8573" }}>✶</span>
+            <span style={{ color: "#38f6ff" }}>◆</span>
+            <span style={{ color: "#c28cff" }}>▲</span>
+            <span style={{ color: "#e2e8f0" }}>●</span>
+          </span>
         </button>
-      ) : (
-        <button className="btn ghost small" onClick={props.onPairDevice} title="Pair a phone or PC over NordVPN Meshnet HTTPS">
-          📱 PAIR DEVICE
-        </button>
-      )}
-      <button className="btn ghost small" data-testid="about-licenses-btn" onClick={props.onAbout} title="About VibeSquad and third-party licenses">
-        ℹ ABOUT &amp; LICENSES
-      </button>
-      <button className="btn ghost small" data-testid="open-help-btn" onClick={props.onHelp}>
-        ❓ Help &amp; Docs
-      </button>
-      <button className="btn ghost small" data-testid="open-diagnostics-btn" onClick={props.onDiagnostics}>
-        🩺 Diagnostics &amp; Logs
-      </button>
-      <div className="sidebar-footer-row">
-        <button className="btn ghost small" data-testid="sidebar-settings-btn" onClick={props.onSettings} title="Settings: app, chat, notifications, teams, Paseo, profiles">
-          ⚙ SETTINGS
-        </button>
-        <button
-          className={`btn ghost small ui-scale-sidebar-btn ${uiScalePct !== 100 ? "on" : ""}`}
-          onClick={() => cycleUiScalePreset(true)}
-          title="Cycle UI scale preset (Ctrl+= / Ctrl+- / Ctrl+0)"
-          data-testid="sidebar-ui-scale-btn"
-        >
-          🔍 {uiScalePct}%
-        </button>
+        {signalsOpen && (
+          <div className="sidebar-legend">
+            <div className="legend-title">PROVIDER SIGNALS</div>
+            <div className="legend-row">
+              <span style={{ color: "#ff8573" }}>✶ Claude</span>
+              <span style={{ color: "#38f6ff" }}>◆ Gemini</span>
+              <span style={{ color: "#c28cff" }}>▲ DeepSeek</span>
+              <span style={{ color: "#e2e8f0" }}>● Codex</span>
+            </div>
+            {props.usage.map((u) => {
+              const prov = providerSpec(u.provider);
+              return (
+                <div
+                  key={`${u.provider}-${u.account ?? ""}`}
+                  className={`quota-pill ${quotaTone(u.usedPct)}`}
+                  title={[u.account, u.resetAt && `resets ${new Date(u.resetAt).toLocaleString()}`, u.staleModelListWarning && "model list may be stale"].filter(Boolean).join(" · ")}
+                >
+                  <span style={{ color: prov.color }}>{prov.symbol} {prov.name}</span>
+                  <span>{u.usedPct !== undefined ? `${Math.round(u.usedPct)}% used` : u.remainingLabel}</span>
+                  <span className="quota-bar"><i style={{ width: `${u.usedPct ?? 0}%` }} /></span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <div className="sidebar-footer-row">
+          <div className="sidebar-footer-left">
+            <button
+              type="button"
+              className={`btn ghost small ui-scale-sidebar-btn ${uiScalePct !== 100 ? "on" : ""}`}
+              onClick={() => cycleUiScalePreset(true)}
+              title="Cycle UI scale preset (Ctrl+= / Ctrl+- / Ctrl+0)"
+              data-testid="sidebar-ui-scale-btn"
+            >
+              🔍 {uiScalePct}%
+            </button>
+            {isRemote() ? (
+              <button
+                type="button"
+                className="btn ghost small sidebar-icon-btn"
+                data-testid="sidebar-unpair-btn"
+                onClick={() => {
+                  clearSession();
+                  location.reload();
+                }}
+                title="Unpair Device — forget the saved pairing and password on this browser"
+                aria-label="Unpair Device"
+              >
+                🔌
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn ghost small sidebar-icon-btn"
+                onClick={props.onPairDevice}
+                title="Pair a phone or PC over LAN / Meshnet / Remote Relay"
+                aria-label="Pair Device"
+              >
+                📱
+              </button>
+            )}
+          </div>
+          <div className="sidebar-footer-right">
+            <button
+              type="button"
+              className="btn ghost small sidebar-icon-btn"
+              data-testid="open-help-btn"
+              onClick={props.onHelp}
+              title="Help & Docs"
+              aria-label="Help & Docs"
+            >
+              ❓
+            </button>
+            <button
+              type="button"
+              className="btn ghost small sidebar-icon-btn"
+              data-testid="about-licenses-btn"
+              onClick={props.onAbout}
+              title="About VibeSquad & Third-Party Licenses"
+              aria-label="About & Licenses"
+            >
+              ℹ
+            </button>
+            <button
+              type="button"
+              className="btn ghost small sidebar-icon-btn"
+              data-testid="open-diagnostics-btn"
+              onClick={props.onDiagnostics}
+              title={staleBuild ? `Diagnostics & Logs (build ${staleBuild.behind} commit(s) behind)` : "Diagnostics & Logs"}
+              aria-label="Diagnostics & Logs"
+            >
+              🩺
+              {staleBuild && !isRemote() && <span className="sidebar-stale-dot" />}
+            </button>
+            <button
+              type="button"
+              className="btn ghost small sidebar-icon-btn sidebar-cog-btn"
+              data-testid="sidebar-settings-btn"
+              onClick={props.onSettings}
+              title="Settings: app, chat, notifications, teams, Paseo, profiles"
+              aria-label="Settings"
+            >
+              ⚙
+            </button>
+          </div>
+        </div>
       </div>
       <div
         className="sidebar-resizer"
@@ -1576,6 +1656,7 @@ export function App() {
   const updaterStatus = useUpdaterStatus();
   const configWarnings = useConfigWarnings();
   const staleBuild = useStaleBuild();
+  const staleBuildDismissed = useStaleBuildDismissed();
   const localReadOnly = useLocalReadOnly();
   useEffect(() => {
     void loadUpdaterStatus();
@@ -1942,7 +2023,7 @@ export function App() {
           </button>
         </div>
       )}
-      {localReadOnly && (
+      {localReadOnly && !isRemote() && (
         <div
           className="read-only-banner"
           data-testid="read-only-banner"
@@ -1952,14 +2033,31 @@ export function App() {
           Read-only: this tab has no VibeSquad local token. Open VibeSquad from its launcher or desktop app, or run vs open.
         </div>
       )}
-      {staleBuild && (
+      {staleBuild && !isRemote() && !staleBuildDismissed && (
         <div
           className="stale-build-banner"
           data-testid="stale-build-banner"
-          role="alert"
-          style={{ gridColumn: "1 / -1", background: "#ffb000", color: "#05060d", fontWeight: 800, padding: "6px 12px", textAlign: "center" }}
+          role="status"
         >
-          {`Running an older build: ${staleBuild.behind} commit${staleBuild.behind === 1 ? "" : "s"} behind. Rebuild.`}
+          <span>
+            {`Running an older build: ${staleBuild.behind} commit${staleBuild.behind === 1 ? "" : "s"} behind (${staleBuild.built} → ${staleBuild.head}).`}
+          </span>
+          <button
+            type="button"
+            className="btn small ghost"
+            onClick={() => setModal("diagnostics")}
+          >
+            Diagnostics
+          </button>
+          <button
+            type="button"
+            className="btn small ghost"
+            data-testid="dismiss-stale-build-btn"
+            aria-label="Dismiss older build notice"
+            onClick={() => dismissStaleBuild()}
+          >
+            ✕
+          </button>
         </div>
       )}
       {configWarnings.length > 0 && (
