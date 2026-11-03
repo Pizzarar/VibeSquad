@@ -146,6 +146,8 @@ function collectCargo() {
 function build() {
   const apache = readText(join(import.meta.dirname, "licenses", "Apache-2.0.txt"));
   const mit = readText(join(import.meta.dirname, "licenses", "MIT.txt"));
+  const creditsPath = join(rootDir, "CREDITS.md");
+  const credits = existsSync(creditsPath) ? readText(creditsPath) : "";
   const npm = collectNpm();
   const cargo = collectCargo();
   const bar = "=".repeat(78);
@@ -155,6 +157,16 @@ function build() {
     "VibeSquad works with Paseo. VibeSquad is licensed under the MIT License.",
     "This file lists the open-source software bundled with or required by VibeSquad.",
     "",
+    ...(credits
+      ? [
+          bar,
+          "Community Accolades & Plugin Credits (CREDITS.md)",
+          bar,
+          "",
+          credits,
+          "",
+        ]
+      : []),
     bar,
     "Paseo (@getpaseo/client, @getpaseo/protocol) - Apache-2.0",
     "Copyright (c) 2025-present Mohamed Boudra",
