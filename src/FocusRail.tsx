@@ -15,7 +15,9 @@ import {
   toggleTreeOpen,
   useSelect,
 } from "./ui";
-import { setSheet, toggleFocus, useAgentPane } from "./panes";
+import { setFocus, setSheet, useAgentPane } from "./panes";
+import { exitSquadsHome } from "./pinFocus";
+import { setFullView } from "./PinGrid";
 import { useUserName, needsYouBadge } from "./userName";
 import { Avatar, NeonEmblem, providerSpec } from "./pixel";
 
@@ -32,11 +34,18 @@ let ac: { members: Member[] | null; list: Member[]; ids: Set<string> } = { membe
 export function railAlerts() {
   const { members } = derived();
   if (ac.members !== members) {
-    const list = members.filter((m) => m.attention && m.kind !== "old-lead" && !m.agent.archivedAt).sort(alertOrder);
+    const list = members.filter((m) => m.attention && m.attention.tone !== "finished" && m.kind !== "old-lead" && !m.agent.archivedAt).sort(alertOrder);
     ac = { members, list, ids: new Set(list.map((m) => m.agent.id)) };
   }
   return ac;
 }
+
+/** Leave Focus / FULL and land on the squad's clean grid. */
+const backToTeam = () => {
+  setFocus(false);
+  setFullView(false);
+  exitSquadsHome();
+};
 
 const isLive = (m: Member) => m.agent.status !== "idle" && m.agent.status !== "closed" && !m.agent.archivedAt;
 const name = (m: Member) => cleanTitle(m.agent.title) || m.agent.id.slice(0, 8);
@@ -60,8 +69,6 @@ const RailRow = memo(
           <span className="rname">
             {m.kind === "lead" ? "★ " : ""}
             {name(m)}
-            {!alert && m.kind === "brainstorm" && <b className="talk-here rail-role-tag"> · TALK HERE</b>}
-            {!alert && m.kind === "lead" && <span className="runs-the-work rail-role-tag"> · RUNS THE WORK</span>}
             {teamSuffix && <span className="muted"> · {teamSuffix}</span>}
           </span>
           {alert && m.attention ? (
@@ -291,7 +298,7 @@ export const FocusRail = memo(function FocusRail(props: {
         >
           {allLanesCollapsed ? "Expand all" : "Collapse all"}
         </button>
-        <button className="btn small" title="Back to the team page (Ctrl+.)" onClick={toggleFocus}>
+        <button className="btn small" title="Back to the team page (Ctrl+.)" onClick={backToTeam}>
           ◂ TEAM
         </button>
         {props.onToggleSidebarCollapse && (

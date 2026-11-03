@@ -4,6 +4,8 @@ import { getPaseoState, subscribePaseo } from "./paseo";
 import { AgentDrawer } from "./AgentDrawer";
 import { useDraft } from "./drafts";
 import { classifyAgent, leadVariant } from "./teams";
+import { exitSquadsHome } from "./pinFocus";
+import { setFullView } from "./PinGrid";
 import { StatusDot, cleanTitle } from "./ui";
 import { Avatar } from "./pixel";
 import {
@@ -14,6 +16,7 @@ import {
   reopenClosedTab,
   setActivePane,
   setSheet,
+  setFocus,
   toggleFocus,
   toggleSplit,
   useClosedTabCount,
@@ -114,6 +117,18 @@ function TabStrip(props: { pane: Pane; tabs: string[]; activeId: string | null; 
           </button>
           <button className={`btn small ${focus ? "on" : ""}`} title="Focus chat (Ctrl+.)" onClick={toggleFocus}>
             ▣ FOCUS
+          </button>
+          <button
+            className="btn small"
+            data-testid="pane-teams-home-btn"
+            title="Back to the Teams / Brainstorm grid"
+            onClick={() => {
+              setFocus(false);
+              setFullView(false);
+              exitSquadsHome();
+            }}
+          >
+            ⊞ TEAMS
           </button>
           <span className="kbd">Ctrl+.</span>
         </div>

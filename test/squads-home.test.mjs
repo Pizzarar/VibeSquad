@@ -37,11 +37,11 @@ test("H1 store wiring: opening a squad leaves Squads Home; focusPin clears it", 
   assert.match(pf, /export function exitSquadsHome\(\) \{\s*set\(\{ focus: null, home: true, squadsHome: false/);
   assert.match(pf, /home: false,\s*homeActive: null,\s*squadsHome: false,\s*\}\);\s*if \(live\)/);
   const app = src("App.tsx");
-  assert.match(app, /const onTeam = useCallback\(\(id: string\) => \{\s*exitSquadsHome\(\);/);
+  assert.match(app, /const onTeam = useCallback\(\(id: string\) => \{\s*setFullView\(false\);\s*setFocus\(false\);\s*exitSquadsHome\(\);/);
   assert.match(app, /<SquadsHome views=\{sidebarViews\} onSelectSquad=\{onTeam\} onOpenPin=\{onQuickStart\} onNewSquad=\{openNewSquad\}/);
   // Send-guard: the ⊞ button is gone; the SQUADS tab goes home when already on teams.
   assert.doesNotMatch(app, /squad-page-home-btn/);
-  assert.match(app, /props\.screen === "teams" \? enterSquadsHome\(\)/);
+  assert.match(app, /setFocus\(false\);\s*if \(props\.screen !== "teams"\) props\.onScreen\("teams"\);\s*enterSquadsHome\(\);/);
 });
 
 test("H1 Squads Home tiles: huddle portraits stop propagation, + NEW SQUAD tile, 390px single column", () => {
@@ -70,7 +70,7 @@ test("H2 only the sidebar callbacks mutate collapsedTeams", () => {
 
 test("H2 centre navigation still moves the active squad and agent", () => {
   const app = src("App.tsx");
-  assert.match(app, /const onTeam = useCallback\(\(id: string\) => \{\s*exitSquadsHome\(\);\s*setTeamId\(id\);\s*setScreen\("teams"\);/);
+  assert.match(app, /const onTeam = useCallback\(\(id: string\) => \{\s*setFullView\(false\);\s*setFocus\(false\);\s*exitSquadsHome\(\);\s*setTeamId\(id\);\s*setScreen\("teams"\);/);
 });
 
 // ── H3: a daemon disconnect shows a centered card over a scrim and never reflows the app ──
