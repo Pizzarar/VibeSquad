@@ -7,8 +7,6 @@ import { getLocalToken, lockDownVibesquadHome } from "./server/auth.mjs";
 import "./server/qr.mjs";
 import "./server/push.mjs";
 
-const paseo = readPaseo();
-
 // Dev server mounts the same middleware the production server (server/serve.mjs) uses
 // (/__vibesquad/inbox, /__vibesquad/brainstorm-summary, /__vibesquad/vs-log, /__vibesquad/brainstorm-restart, /api/teams, etc.).
 function vibesquadApi() {
@@ -23,24 +21,36 @@ function vibesquadApi() {
   };
 }
 
-export default defineConfig({
-  plugins: [react(), vibesquadApi()],
-  define: {
-    __PASEO_SERVER_ID__: JSON.stringify(paseo.serverId),
-  },
-  server: {
-    port: 5180,
-    proxy: {
-      // The daemon only accepts browser origins listed in cors.allowedOrigins.
-      "/ws": {
-        target: `ws://${paseo.listen}`,
-        ws: true,
-        configure: (proxy: any) => {
-          // Typed loosely: Vite 8's ProxyServer type omits the http-proxy event API.
-          // Origin is forwarded untouched so Paseo's cors.allowedOrigins validates it.
-          void proxy;
+export default defineConfig(({ mode }) => {
+  const isRemoteBuild = mode === "remote" || process.env.VITE_VS_REMOTE === "1";
+  if (isRemoteBuild) process.env.VITE_VS_REMOTE = "1";
+  const paseo = isRemoteBuild ? { listen: "127.0.0.1:6767", serverId: "" } : readPaseo();
+
+  return {
+    base: isRemoteBuild ? process.env.VITE_BASE_PATH || "./" : "/",
+    plugins: isRemoteBuild ? [react()] : [react(), vibesquadApi()],
+    define: {
+      __PASEO_SERVER_ID__: JSON.stringify(isRemoteBuild ? "" : paseo.serverId),
+      ...(isRemoteBuild ? { "import.meta.env.VITE_VS_REMOTE": JSON.stringify("1") } : {}),
+    },
+    build: {
+      outDir: isRemoteBuild ? "dist-remote" : "dist",
+      emptyOutDir: true,
+    },
+    server: {
+      port: 5180,
+      proxy: {
+        // The daemon only accepts browser origins listed in cors.allowedOrigins.
+        "/ws": {
+          target: `ws://${paseo.listen}`,
+          ws: true,
+          configure: (proxy: any) => {
+            // Typed loosely: Vite 8's ProxyServer type omits the http-proxy event API.
+            // Origin is forwarded untouched so Paseo's cors.allowedOrigins validates it.
+            void proxy;
+          },
         },
       },
     },
-  },
+  };
 });
