@@ -4,7 +4,7 @@
 // FULL brings back the old plumbing view (agent cards, workers, handoff, folders, retired agents).
 import { AttentionBadge } from "./AttentionList";
 import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { client, DEMO, sendMessage } from "./paseo";
+import { client, DEMO, getPaseoState, sendMessage } from "./paseo";
 import { openContextMenu } from "./CommandPalette";
 import { demoTimeline } from "./demo";
 import { hasLooksDone, gridPinsForSquad, hubPinForSquad, isHubPin, liveBuddyDupes, looksDoneFor, LOOKS_DONE_MARKER, pinsForSquad, SEND_TO_MARKER, topicOfBrainstorm, withoutSpinOffFence, type Pin } from "./pins";
@@ -327,6 +327,13 @@ export function usePreview(agentId: string | null): Line[] {
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const handle = client.agents.ref(agentId);
+    const agent = getPaseoState().agents.get(agentId);
+    if (agent?.status === "closed") {
+      const snap = (handle.timeline as any).getSnapshot?.();
+      const cached = snap?.entries ?? snap?.items;
+      if (Array.isArray(cached) && cached.length) apply(cached as TimelineEntry[]);
+      return;
+    }
     const load = async () => {
       try {
         const t = await handle.timeline.refetch({ direction: "tail", limit: 16, projection: "projected" });
@@ -427,7 +434,7 @@ function BuddyDupeWarning({ pin, onOpenAgent }: { pin: Pin; onOpenAgent: (id: st
 
 const PinTile = memo(function PinTile({ pin, onPin, onOpenAgent }: { pin: Pin; onPin: (pin: Pin) => Promise<void>; onOpenAgent: (id: string) => void }) {
   const bs = pin.brainstorm;
-  const lines = usePreview(bs?.agent.id ?? null);
+  const lines = usePreview(bs && bs.agent.status !== "closed" ? bs.agent.id : null);
   const looksDoneId = looksDoneFor(pin, useLooksDoneId(bs?.agent.id ?? null));
   const sendTo = useSendTo(bs?.agent.id ?? null);
   const spinOff = useSpinOff(bs?.agent.id ?? null);
@@ -437,7 +444,6 @@ const PinTile = memo(function PinTile({ pin, onPin, onOpenAgent }: { pin: Pin; o
   const open = async () => {
     if (busy.current) return;
     busy.current = true;
-    if (!bs) setStarting(true);
     try {
       await onPin(pin);
     } finally {
@@ -504,7 +510,7 @@ const PinTile = memo(function PinTile({ pin, onPin, onOpenAgent }: { pin: Pin; o
         </>
       ) : (
         <div className="pin-tile-empty" data-testid={`pin-quickstart-${pin.lane.id}`}>
-          {starting ? "Starting…" : "No session yet · click to start"}
+          {starting ? "Starting…" : "No session yet · select to spin up"}
         </div>
       )}
       {(pin.topicBrainstorms ?? []).length > 0 && (

@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useSyncExternalStore, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import { getPaseoState, subscribePaseo } from "./paseo";
 import { AgentDrawer } from "./AgentDrawer";
@@ -129,9 +129,16 @@ const DrawerSlot = memo(function DrawerSlot(props: {
   onSuccessor: (id: string) => void;
 }) {
   const { id, pane, shown, onSuccessor } = props;
+  const [everShown, setEverShown] = useState(shown);
+  useEffect(() => {
+    if (shown) setEverShown(true);
+  }, [shown]);
   const agent = useAgent(id);
   const close = useCallback(() => closeTab(id), [id]);
   const successor = useCallback(() => onSuccessor(id), [onSuccessor, id]);
+  if (!everShown) {
+    return <div className={`pane-slot pane-${pane}`} data-agent={id} style={{ display: "none" }} />;
+  }
   return (
     <div
       className={`pane-slot pane-${pane}`}

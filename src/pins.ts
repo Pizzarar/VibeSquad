@@ -3,7 +3,7 @@
 // This file is the shared contract for the pinned-team UI. Keep it pure (no fetch, no React):
 // steps 1 (sidebar + grid), 2 (focus rail) and 3 (resolver + quick start) all build on it.
 import type { LaneDef, Member, TeamDef, TeamView } from "./teams.ts";
-import { UNASSIGNED, brainstormUsedTokens, countsAsNeedsYou, isHubLane, isTopicBrainstorm } from "./teams.ts";
+import { UNASSIGNED, brainstormUsedTokens, countsAsNeedsYou, formerNewest, isFormerBrainstormMember, isHubLane, isTopicBrainstorm } from "./teams.ts";
 export { topicOfBrainstorm } from "./teams.ts";
 
 /** "removed" lanes stay in teams.json (brief + history kept) but are hidden everywhere. */
@@ -112,7 +112,8 @@ export function hubPinForSquad(view: TeamView | null | undefined): Pin | null {
   const newest = (a: Member, b: Member) => (b.agent.updatedAt ?? "").localeCompare(a.agent.updatedAt ?? "");
   const mainBsCands = inHub.filter((m) => m.kind === "brainstorm" && !isTopicBrainstorm(m) && !m.agent.archivedAt);
   const liveBs = mainBsCands.filter(isLive).sort(newest);
-  const brainstorm = liveBs[0] ?? mainBsCands.sort(newest)[0] ?? null;
+  const formerBs = inHub.filter(isFormerBrainstormMember).sort(formerNewest);
+  const brainstorm = liveBs[0] ?? mainBsCands.sort(newest)[0] ?? formerBs[0] ?? null;
   const lead = inHub.filter((m) => m.kind === "lead" && isLive(m)).sort(newest)[0] ?? null;
   const workers = live(inHub.filter((m) => m.kind === "worker"));
   const topicBrainstorms = inHub.filter((m) => m.kind === "brainstorm" && isTopicBrainstorm(m) && isLive(m)).sort(newest);

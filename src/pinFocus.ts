@@ -8,10 +8,10 @@ import { useSyncExternalStore } from "react";
 import { isRetiredAgent } from "./identity";
 import { closeTab, getPanes, openAgent, subscribePanes, toggleSplit } from "./panes";
 import { getPaseoState, subscribePaseo } from "./paseo";
-import { openPin } from "./pinActions";
+import { openPin } from "./PinGrid";
 import { isLiveUrlAgent, levelUp, loadSavedFocus, planRestore, reconcilePinFocus, saveFocus, startsOnGrid } from "./pinFocusLogic";
 import { getRestoreLastView } from "./prefs";
-import { pinsForSquad, type Pin } from "./pins";
+import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import { subscribeTeams } from "./teams";
 import { derived } from "./ui";
 
@@ -86,7 +86,8 @@ function liveBrainstorm(f: PinFocus): string | null {
   const view = derived().views.find((v) => v.team.id === f.squadId);
   if (!view) return null;
   const { pinned, done } = pinsForSquad(view);
-  return [...pinned, ...done].find((p) => p.lane.id === f.laneId)?.brainstorm?.agent.id ?? null;
+  const hit = [...pinned, ...done].find((p) => p.lane.id === f.laneId) ?? (hubPinForSquad(view)?.lane.id === f.laneId ? hubPinForSquad(view) : null);
+  return hit?.brainstorm?.agent.id ?? null;
 }
 
 let reconciling = false;
@@ -115,8 +116,8 @@ subscribePaseo(reconcile);
 subscribeTeams(reconcile);
 
 /**
- * Focus a pin: its live Brainstorm opens in the middle at once, or a fresh one quick-starts from the
- * brief (the middle says "Starting…" meanwhile). Resolves with the agent id; rejects if the start fails.
+ * Focus a pin: its existing Brainstorm (or past former-brainstorm) opens in the middle at once;
+ * if there is no session yet, show the empty focus view with an explicit "Spin Up" button without auto-spawning.
  */
 export async function focusPin(pin: Pin): Promise<string> {
   const mine = ++seq;
@@ -124,7 +125,7 @@ export async function focusPin(pin: Pin): Promise<string> {
   const active = getPanes().leftActiveId;
   // Set the focus before opening so the reconcile on the panes change sees the expected tab.
   set({
-    focus: { squadId: pin.squad.id, laneId: pin.lane.id, agentId: live, gone: false, held: live ? null : active, seq: mine },
+    focus: { squadId: pin.squad.id, laneId: pin.lane.id, agentId: live, gone: !live, held: live ? null : active, seq: mine },
     home: false,
     homeActive: null,
     squadsHome: false,
@@ -134,6 +135,19 @@ export async function focusPin(pin: Pin): Promise<string> {
     focusComposerSoon(live);
     return live;
   }
+  return "";
+}
+
+/** Explicitly spin up a Brainstorm / RiffBot chat for a selected pin when the user clicks Spin Up. */
+export async function spinUpPin(pin: Pin): Promise<string> {
+  const mine = ++seq;
+  const active = getPanes().leftActiveId;
+  set({
+    focus: { squadId: pin.squad.id, laneId: pin.lane.id, agentId: null, gone: false, held: active, seq: mine },
+    home: false,
+    homeActive: null,
+    squadsHome: false,
+  });
   try {
     const id = await openPin(pin);
     const f = state.focus;
@@ -141,11 +155,9 @@ export async function focusPin(pin: Pin): Promise<string> {
       set({ focus: { ...f, agentId: id, gone: false, held: null } });
       show(id);
     }
-    // The pin may already have followed the new Brainstorm through reconcile; focus it either way.
     if (state.focus?.seq === mine) focusComposerSoon(id);
     return id;
   } catch (e) {
-    // Keep the pin focused; a failed fresh start goes back to offering "Start fresh Brainstorm".
     const f = state.focus;
     if (f?.seq === mine) set({ focus: { ...f, gone: true, held: getPanes().leftActiveId } });
     throw e;
@@ -216,7 +228,8 @@ function tryRestore() {
   let pin: Pin | undefined;
   if (saved) {
     const view = derived().views.find((v) => v.team.id === saved.squadId);
-    pin = view ? pinsForSquad(view).pinned.find((p) => p.lane.id === saved.laneId) : undefined;
+    const hubPin = view ? hubPinForSquad(view) : null;
+    pin = view ? (pinsForSquad(view).pinned.find((p) => p.lane.id === saved.laneId) ?? (hubPin?.lane.id === saved.laneId ? hubPin : undefined)) : undefined;
   }
   const plan = planRestore({
     saved,

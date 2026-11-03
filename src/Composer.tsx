@@ -241,7 +241,7 @@ export function Composer({
       return;
     }
     setCmds(FALLBACK_COMMANDS);
-    if (DEMO) return;
+    if (DEMO || agent.status === "closed") return;
     (async () => {
       try {
         const res = await dc.listCommands?.(agent.id);
@@ -260,7 +260,7 @@ export function Composer({
     return () => {
       cancelled = true;
     };
-  }, [agent.id]);
+  }, [agent.id, agent.status]);
 
   const mq = mention && !isUrlMention(mention.query) ? mention.query : undefined;
   useEffect(() => {

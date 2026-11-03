@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { gridPinsForSquad, hubPinForSquad, looksDoneFor, pinsForSquad } from "../src/pins.ts";
+import { isFormerBrainstormMember } from "../src/teams.ts";
 import { shownPaneIn } from "../src/panes.ts";
 
 const agent = (id) => ({ id, status: "idle", labels: {} });
@@ -112,4 +113,57 @@ test("shownPaneIn only highlights the active visible tab, not background tabs in
 
   const noneActive = { ...s, leftActiveId: null };
   assert.equal(shownPaneIn(noneActive, "bs-2"), null);
+});
+
+test("isFormerBrainstormMember and hubPinForSquad fall back to the most recent former-brainstorm when no active brainstorm exists", () => {
+  const team = { id: "efi", name: "Escape Hatch", color: "#00f0ff", lanes: [{ id: "efi-ui", name: "UI Lab" }], paths: [] };
+  const olderFormer = {
+    kind: "retired",
+    team,
+    laneId: "efi",
+    attention: null,
+    children: [],
+    agent: {
+      id: "former-old",
+      title: "(old) ◆ Efi · Buddy",
+      status: "closed",
+      createdAt: "2026-11-01T10:00:00.000Z",
+      updatedAt: "2026-11-01T11:00:00.000Z",
+      labels: { team: "efi", lane: "efi", role: "former-brainstorm" },
+    },
+  };
+  const newerFormer = {
+    kind: "retired",
+    team,
+    laneId: "efi",
+    attention: null,
+    children: [],
+    agent: {
+      id: "former-new",
+      title: "(old) ◆ Efi · Buddy",
+      status: "closed",
+      createdAt: "2026-11-02T10:00:00.000Z",
+      updatedAt: "2026-11-02T11:00:00.000Z",
+      labels: { team: "efi", lane: "efi", role: "former-brainstorm" },
+    },
+  };
+  const archivedFormer = {
+    ...newerFormer,
+    agent: { ...newerFormer.agent, id: "former-arch", archivedAt: "2026-11-02T12:00:00.000Z" },
+  };
+  assert.equal(isFormerBrainstormMember(olderFormer), true);
+  assert.equal(isFormerBrainstormMember(newerFormer), true);
+  assert.equal(isFormerBrainstormMember(archivedFormer), false);
+
+  const v = {
+    team,
+    lanes: [{ lane: { id: "efi-ui", name: "UI Lab" }, members: [], brainstorm: null, lead: null, topicBrainstorms: [], duplicateBrainstorms: [] }],
+    members: [olderFormer, newerFormer, archivedFormer],
+    needsYou: 0,
+    running: 0,
+    unsorted: [],
+  };
+  const hub = hubPinForSquad(v);
+  assert.ok(hub);
+  assert.equal(hub.brainstorm?.agent.id, "former-new", "picks newest unarchived former-brainstorm when no active brainstorm exists");
 });

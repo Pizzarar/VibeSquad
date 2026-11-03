@@ -4,8 +4,6 @@ import { appendContext, useCtxSources } from "./contextSources";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
 import { daemonClient, DEMO, removeLocalAgent, sendMessage, upsertLocalAgent } from "./paseo";
-import { openPin } from "./pinActions";
-import type { Pin, PinLane } from "./pins";
 import { useDraft } from "./drafts";
 import { createSendLock, guardedSend, restoredDraft } from "./sendGuard";
 import { blobsToPaseoImages, rememberSent, useImageDraft } from "./imageDrafts";
@@ -138,7 +136,6 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   const [topicParking, setTopicParking] = useState(false);
   const feedbackKey = `vs.restart-feedback.${agent.id}`;
   const [feedbackDismissed, setFeedbackDismissed] = useState(() => localStorage.getItem(feedbackKey) === "1");
-  const autoRestartFired = useRef<string | null>(null);
   const [lastSteered, setLastSteered] = useState<string | null>(null);
   const [permInputs, setPermInputs] = useState<Record<string, string>>({});
   const [dockOpen, setDockOpen] = useState(() => localStorage.getItem("vs.right-dock.open") === "true");
@@ -270,15 +267,6 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
     [agent, bsUsedTokens, clearDraft, laneId, restarting, teamId],
   );
 
-  // Auto-restart without asking when an idle brainstorm crosses >= restartTokens (150k).
-  useEffect(() => {
-    if (!isBs || agent.archivedAt || agent.status === "running") return;
-    if (bsUsedTokens >= restartTokens && autoRestartFired.current !== agent.id) {
-      autoRestartFired.current = agent.id;
-      void doRestart("auto-150k");
-    }
-  }, [isBs, agent.id, agent.archivedAt, agent.status, bsUsedTokens, restartTokens, doRestart]);
-
   const sendLock = useRef(createSendLock());
   const draftRef = useRef(draft);
   draftRef.current = draft;
@@ -317,41 +305,6 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
         });
         // @git / @terminal / @chat pills expand into fenced blocks for every provider.
         const text = appendContext(expanded, sentCtx);
-        // BF-P1: Auto-restart without asking at >= restartTokens (150k) or when next turn would push it past 150k.
-        if (isBs && (bsUsedTokens >= restartTokens || bsUsedTokens + Math.ceil(text.length / 3) >= restartTokens)) {
-          autoRestartFired.current = agent.id;
-          const r = await doRestart("auto-150k", text);
-          if (!r?.retired) return undefined;
-          const laneDef = (team.lanes?.find((l) => l.id === laneId) ?? { id: laneId, name: laneId }) as PinLane;
-          const pin: Pin = {
-            squad: team,
-            lane: laneDef,
-            state: "pinned",
-            order: 0,
-            brainstorm: null,
-            lead: null,
-            workers: [],
-            needsYou: 0,
-            running: 0,
-            contextUsed: 0,
-            topicBrainstorms: [],
-          };
-          const pane = paneOfAgent(agent.id);
-          const newId = await openPin(pin);
-          openAgentInTab(newId, pane, agent.id);
-          const promptToSend = r.pendingPrompt ?? text;
-          if (imgs.images.length) {
-            await sendMessage(newId, promptToSend, await blobsToPaseoImages(imgs.images), { activeTurnBehavior: behavior });
-            rememberSent(newId, promptToSend, imgs.images);
-            imgs.clear();
-          } else {
-            await sendMessage(newId, promptToSend, undefined, { activeTurnBehavior: behavior });
-          }
-          atts.clear();
-          ctxSrc.clear();
-          return true;
-        }
-
         if (imgs.images.length) {
           await sendMessage(agent.id, text, await blobsToPaseoImages(imgs.images), { activeTurnBehavior: behavior });
           rememberSent(agent.id, text, imgs.images);

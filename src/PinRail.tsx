@@ -8,7 +8,7 @@ import { NeedsBadge, PinDot, setFullView, usePreview } from "./PinGrid";
 import { exitPinFocus, type PinFocus } from "./pinFocus";
 import { TopBreadcrumb } from "./Breadcrumb";
 import { escGoesHome } from "./pinFocusLogic";
-import { isHubPin, pinsForSquad, type Pin } from "./pins";
+import { hubPinForSquad, isHubPin, pinsForSquad, type Pin } from "./pins";
 import { SendToBar } from "./PinIdeas";
 import { openAgent } from "./panes";
 import type { TeamView } from "./teams";
@@ -28,10 +28,9 @@ const statusWord = (status: string) => (status === "running" || status === "erro
 const RailTile = memo(function RailTile(props: { pin: Pin; focused: boolean; gone: boolean; onPick: (pin: Pin) => void }) {
   const { pin, focused, gone, onPick } = props;
   const bs = pin.brainstorm;
-  // The focused tile is inert while its Brainstorm is in the middle; once that Brainstorm is gone it
-  // is the one-click fresh start.
-  const clickable = !focused || gone;
-  const lines = usePreview(bs?.agent.id ?? null);
+  // The focused tile is inert while its Brainstorm is in the middle; spin-up uses the explicit Spin Up button.
+  const clickable = !focused;
+  const lines = usePreview(bs && bs.agent.status !== "closed" ? bs.agent.id : null);
   const [draft] = useDraft(bs ? `${bs.agent.id}:draft` : "pin-rail:none");
   const last = lines[lines.length - 1];
   const ref = useRef<HTMLButtonElement>(null);
@@ -100,7 +99,8 @@ const isTyping = (t: EventTarget | null) =>
   t instanceof HTMLElement && (t.isContentEditable || t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.tagName === "SELECT");
 
 function PinFocusBar({ view, focus, onSelectSquad }: { view: TeamView; focus: PinFocus; onSelectSquad: (id: string) => void }) {
-  const pin = pinsForSquad(view).pinned.find((p) => p.lane.id === focus.laneId);
+  const hubPin = hubPinForSquad(view);
+  const pin = pinsForSquad(view).pinned.find((p) => p.lane.id === focus.laneId) ?? (hubPin?.lane.id === focus.laneId ? hubPin : undefined);
   const agentIdRef = useRef(focus.agentId);
   agentIdRef.current = focus.agentId;
 
@@ -169,7 +169,8 @@ function PinFocusBar({ view, focus, onSelectSquad }: { view: TeamView; focus: Pi
 /** Row 1 of the focused middle: the bar, plus the "Start fresh" panel when the Brainstorm is gone. */
 export function PinFocusHeader(props: { view: TeamView; focus: PinFocus; onStart: (pin: Pin) => void; onSelectSquad: (id: string) => void; /** Rendered under the bar in the same row-1 grid cell (the hub bar). */ belowBar?: ReactNode }) {
   const { view, focus, onStart, onSelectSquad, belowBar } = props;
-  const pin = pinsForSquad(view).pinned.find((p) => p.lane.id === focus.laneId);
+  const hubPin = hubPinForSquad(view);
+  const pin = pinsForSquad(view).pinned.find((p) => p.lane.id === focus.laneId) ?? (hubPin?.lane.id === focus.laneId ? hubPin : undefined);
   return (
     <>
       {belowBar ? (
@@ -184,10 +185,14 @@ export function PinFocusHeader(props: { view: TeamView; focus: PinFocus; onStart
         <div className="pin-focus-empty" data-testid="pin-focus-empty">
           {focus.gone ? (
             <>
-              <span className="muted">{pin?.lane.name ?? "This team"}'s Brainstorm has ended. The brief keeps what was decided.</span>
+              <span className="muted">
+                {pin && isHubPin(pin)
+                  ? "RiffBot has no active chat yet. Click Spin Up when you want to start a session."
+                  : `${pin?.lane.name ?? "This team"} has no active Brainstorm chat yet. Click Spin Up when you want to start a session from the brief.`}
+              </span>
               {pin && (
                 <button type="button" className="btn ok" data-testid="pin-start-fresh" onClick={() => onStart(pin)}>
-                  Start fresh Brainstorm
+                  {isHubPin(pin) ? "Spin Up RiffBot" : "Spin Up Brainstorm"}
                 </button>
               )}
             </>

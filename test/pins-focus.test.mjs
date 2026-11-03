@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 import { escGoesHome, reconcilePinFocus } from "../src/pinFocusLogic.ts";
 
@@ -48,4 +49,44 @@ test("Esc goes home only with an empty composer, outside modals, permission card
   assert.equal(escGoesHome({ ...base, inPerm: true }), false);
   assert.equal(escGoesHome({ ...base, target: "field" }), false);
   assert.equal(escGoesHome({ ...base, inModal: true }), false);
+});
+
+test("focusPin does not call openPin when pin.brainstorm is null; spinUpPin handles explicit Spin Up", () => {
+  const pf = fs.readFileSync(new URL("../src/pinFocus.ts", import.meta.url), "utf8");
+  const focusPinMatch = pf.match(/export async function focusPin\b[\s\S]*?\n\}/);
+  assert.ok(focusPinMatch, "focusPin exists");
+  assert.doesNotMatch(focusPinMatch[0], /\bopenPin\s*\(/, "focusPin must never auto-spawn via openPin");
+  assert.match(focusPinMatch[0], /gone:\s*!live/, "focusPin sets gone: !live so the Spin Up panel renders immediately");
+
+  const spinUpMatch = pf.match(/export async function spinUpPin\b[\s\S]*?\n\}/);
+  assert.ok(spinUpMatch, "spinUpPin exists");
+  assert.match(spinUpMatch[0], /\bawait openPin\(pin\)/, "spinUpPin calls openPin when user clicks Spin Up");
+});
+
+test("closed agents are never woken by usePreview, hidden panes, Composer, SubagentList, or auto-150k restart", () => {
+  const pg = fs.readFileSync(new URL("../src/PinGrid.tsx", import.meta.url), "utf8");
+  assert.match(pg, /if \(agent\?\.status === "closed"\)/, "usePreview skips refetch/subscribe when agent is closed");
+  assert.match(pg, /usePreview\(bs && bs\.agent\.status !== "closed" \? bs\.agent\.id : null\)/, "PinTile does not pass closed agentId to usePreview");
+
+  const pr = fs.readFileSync(new URL("../src/PinRail.tsx", import.meta.url), "utf8");
+  assert.match(pr, /usePreview\(bs && bs\.agent\.status !== "closed" \? bs\.agent\.id : null\)/, "RailTile does not pass closed agentId to usePreview");
+  assert.match(pr, /const clickable = !focused;/, "RailTile does not re-trigger onPick when already focused and gone");
+  assert.match(pr, /Spin Up RiffBot/, "PinFocusHeader shows Spin Up RiffBot button");
+  assert.match(pr, /Spin Up Brainstorm/, "PinFocusHeader shows Spin Up Brainstorm button");
+
+  const ap = fs.readFileSync(new URL("../src/AgentPanes.tsx", import.meta.url), "utf8");
+  assert.match(ap, /if \(!everShown\)/, "DrawerSlot defers mounting AgentDrawer until the tab is actually shown");
+
+  const comp = fs.readFileSync(new URL("../src/Composer.tsx", import.meta.url), "utf8");
+  assert.match(comp, /if \(DEMO \|\| agent\.status === "closed"\) return;/, "Composer skips listCommands on closed agents");
+
+  const sub = fs.readFileSync(new URL("../src/SubagentList.tsx", import.meta.url), "utf8");
+  assert.match(sub, /if \(parentStatus === "closed"\) return;/, "SubagentList skips listSubagents when parent is closed");
+
+  const ad = fs.readFileSync(new URL("../src/AgentDrawer.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(ad, /auto-150k/, "AgentDrawer does not auto-restart Brainstorm at 150k tokens");
+
+  const app = fs.readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  assert.match(app, /\{\(withPanes \|\| pinFocused\) && \(/, "App only mounts AgentPanes when withPanes or pinFocused");
+  assert.match(app, /onStart=\{onSpinUpPin\}/, "PinFocusHeader onStart is wired to onSpinUpPin");
 });

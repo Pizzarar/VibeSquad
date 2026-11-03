@@ -83,7 +83,7 @@ import { AttentionBadge } from "./AttentionList";
 import { FullToggle, PinGrid, SidebarPins, SquadsHome, useFullView, type PinHandler } from "./PinGrid";
 import { pinsForSquad, type Pin } from "./pins";
 import { popAction, urlAgentFor } from "./pinFocusLogic";
-import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, usePinFocus, usePinsHome, useSquadsHome } from "./pinFocus";
+import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, spinUpPin, usePinFocus, usePinsHome, useSquadsHome } from "./pinFocus";
 import { TopBreadcrumb } from "./Breadcrumb";
 import { HubBar } from "./HubBar";
 import { PinFocusHeader, PinRail } from "./PinRail";
@@ -1834,6 +1834,10 @@ export function App() {
     (pin: Pin) => void focusPin(pin).catch((e) => alert(`Could not start ${pin.lane.name}: ${e}`)),
     [],
   );
+  const onSpinUpPin = useCallback(
+    (pin: Pin) => void spinUpPin(pin).catch((e) => alert(`Could not start ${pin.lane.name}: ${e}`)),
+    [],
+  );
   // The pinned layout (focus view + rail, or the clean grid) is the default page only: FULL, focus mode
   // and the Workspaces screen show the panes as before.
   const pinFocus = usePinFocus();
@@ -2117,10 +2121,10 @@ export function App() {
           )}
         </main>
       )}
-      {(hasTabs || focus || pinFocused) && (
+      {(withPanes || pinFocused) && (
         <AgentPanes
           onSuccessor={paneSuccessor}
-          header={pinFocusView && pinFocus ? <PinFocusHeader view={pinFocusView} focus={pinFocus} onStart={onRailPick} onSelectSquad={onTeam} belowBar={<HubBar view={pinFocusView} onOpen={onQuickStart} />} /> : undefined}
+          header={pinFocusView && pinFocus ? <PinFocusHeader view={pinFocusView} focus={pinFocus} onStart={onSpinUpPin} onSelectSquad={onTeam} belowBar={<HubBar view={pinFocusView} onOpen={onQuickStart} />} /> : undefined}
         />
       )}
       {pinFocusView && pinFocus && <PinRail view={pinFocusView} focus={pinFocus} onPick={onRailPick} />}
@@ -2159,10 +2163,9 @@ export function App() {
       {modal === "new-squad" && (
         <NewSquadModal
           onClose={() => setModal(null)}
-          onCreated={(newTeamId, pin) => {
+          onCreated={(newTeamId) => {
             setModal(null);
             onTeam(newTeamId);
-            if (pin) void onQuickStart(pin);
           }}
         />
       )}

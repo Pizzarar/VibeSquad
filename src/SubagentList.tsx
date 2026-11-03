@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useState } from "react";
+import { getPaseoState } from "./paseo";
 import { listSubagents } from "./paseoSubagents";
 import { mergeSubagents, scrapedSubagents, subagentSignature, subagentStatusLabel, type ApiSubagent } from "./paseoSubagentsLogic";
 
@@ -27,6 +28,8 @@ export function SubagentList({
   }, [agentId]);
 
   useEffect(() => {
+    const parentStatus = getPaseoState().agents.get(agentId)?.status;
+    if (parentStatus === "closed") return;
     let live = true;
     void listSubagents(agentId).then((r) => {
       if (live) setApi(r);

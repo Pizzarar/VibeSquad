@@ -39,12 +39,12 @@ export function HubBar({ view, onOpen }: { view: TeamView | undefined; onOpen: (
   const hub = view ? hubPinForSquad(view) : null;
   const unsplit = useUnsplit(hub?.lane.id ?? "", hub?.brainstorm?.agent.updatedAt ?? "");
   if (!view || !hub) return null;
-  const label = hub.brainstorm ? "Talk to RiffBot" : "Start RiffBot";
+  const label = hub.brainstorm ? "Talk to RiffBot" : "Open RiffBot";
   return (
     <div className="hub-bar" data-testid="hub-bar">
       <Avatar id={hub.brainstorm?.agent.id ?? `bs-empty-${view.team.id}-${hub.lane.id}`} provider={hub.brainstorm?.agent.provider ?? "claude"} agentType="brainstorm" size={24} />
       <PinDot pin={hub} />
-      <button type="button" className="hub-bar-btn" data-testid="hub-bar-btn" title={hub.brainstorm ? "Riff on the whole Squad" : "No session yet · click to start"} onClick={() => void Promise.resolve(onOpen(hub)).catch((e) => alert(`Could not start RiffBot: ${e}`))}>
+      <button type="button" className="hub-bar-btn" data-testid="hub-bar-btn" title={hub.brainstorm ? "Riff on the whole Squad" : "Select RiffBot · click Spin Up inside to start a chat"} onClick={() => void Promise.resolve(onOpen(hub)).catch((e) => alert(`Could not start RiffBot: ${e}`))}>
         <span className="hub-bar-short">Riff</span>
         <span className="hub-bar-long">{label}</span>
       </button>

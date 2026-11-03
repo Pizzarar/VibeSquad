@@ -489,6 +489,17 @@ const sameAttention = (a: Attention, b: Attention) => a === b || (!!a && !!b && 
 
 const newest = (a: Member, b: Member) => (b.agent.updatedAt ?? "").localeCompare(a.agent.updatedAt ?? "");
 
+export function isFormerBrainstormMember(m: Member): boolean {
+  return !m.agent.archivedAt && labelsOf(m.agent).role === "former-brainstorm" && !topicOfBrainstorm(m.agent);
+}
+
+export const formerNewest = (a: Member, b: Member): number => {
+  const ta = Date.parse((a.agent as any).createdAt ?? a.agent.updatedAt ?? "");
+  const tb = Date.parse((b.agent as any).createdAt ?? b.agent.updatedAt ?? "");
+  if (Number.isFinite(ta) && Number.isFinite(tb) && tb !== ta) return tb - ta;
+  return newest(a, b);
+};
+
 /**
  * The lane's main (or topic) Buddy. Live only by default; `includeClosed` also takes a closed, unarchived
  * one (every session is closed after a daemon restart) so opening a pin reopens it instead of spawning a
@@ -507,7 +518,14 @@ export function findCrossTeamBrainstorm(members: Member[], laneId: string, topic
     return mTopic === wantTopic;
   });
   const closed = (m: Member) => (m.agent.status === "closed" ? 1 : 0);
-  return hits.sort((a, b) => closed(a) - closed(b) || newest(a, b))[0] ?? null;
+  if (hits.length > 0) return hits.sort((a, b) => closed(a) - closed(b) || newest(a, b))[0] ?? null;
+  if (!wantTopic && opts.includeClosed) {
+    const former = members
+      .filter((m) => isFormerBrainstormMember(m) && canonicalLaneKey(m.laneId || labelsOf(m.agent).lane || labelsOf(m.agent).lead) === targetLane)
+      .sort(formerNewest);
+    return former[0] ?? null;
+  }
+  return null;
 }
 
 // Pick the lane's lead/brainstorm: live (not closed) first, else the newest closed non-archived one,
@@ -958,7 +976,8 @@ export function buildTeamViews(members: Member[]): TeamView[] {
             .filter((m) => m.kind === "brainstorm" && isTopicBrainstorm(m) && !m.agent.archivedAt)
             .sort(newest);
           const lead = leads[0] ?? pickLead(allInLane.filter((m) => m.kind === "lead"));
-          const brainstorm = brainstorms[0] ?? pickLead(mainBrainstormCands);
+          const formerBs = allInLane.filter(isFormerBrainstormMember).sort(formerNewest);
+          const brainstorm = brainstorms[0] ?? pickLead(mainBrainstormCands) ?? formerBs[0] ?? null;
           return {
             lane,
             lead,
