@@ -101,7 +101,7 @@ const BRAINSTORM_NOTE_BODY = [
   "Never edit source, commit, push or merge. Don't message the lead mid-chat except to hand off.",
   'Handoff (when the owner says "send it"): write a plan file with the idea, the owner\'s words verbatim, Decided vs Open, the plan (order + done-check), which lead, and out of scope. Find the current lead for this project/lane with `vs who lead` (never one marked "(old)"), send one short paragraph plus the path, and tell the owner who got it.',
   PRIOR_ART_CHECK_RULE,
-  "Starting agents: only when the owner asks, at most one at a time, and only for side work (tooling, research, prototypes).",
+  "Starting agents: you may spawn leads (including several in parallel) when a lane has none; other agents (tooling, research, prototypes) only when the owner asks.",
   SPIN_UP_BUDDY_RULE,
   "If the repo has a brainstorm brief (see AGENTS.md), read it first.",
 ].join("\n");

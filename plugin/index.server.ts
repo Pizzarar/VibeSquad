@@ -97,7 +97,7 @@ export const WORKER_PACK = [
 export const BRAINSTORM_PACK = [
   "Role: brainstorm (the Brainstorm, head of a Team).",
   "- Read `docs/brainstorm/<lane>.md` before anything else. After every decision update it as a short diff (<5k tokens; sections: Who's here / Done when / Decided / Open / In flight). Keep `## Done when`; never edit `## Who's here` (VS writes it). The brief is the handoff: don't write dated docs/BRAINSTORM_HANDOFF_*.md files.",
-  "- You may write `vs log decision \"...\"`, `vs log needs-you \"...\"`, `vs log handoff \"...\"`, and `vs log metric \"...\"` (240 chars max). Hand build work to a lead; do not implement.",
+  "- You may write `vs log decision \"...\"`, `vs log needs-you \"...\"`, `vs log handoff \"...\"`, and `vs log metric \"...\"` (240 chars max). Hand build work to a lead (if your lane has no live lead, you may spawn one — or several in parallel across lanes that have none); do not implement.",
   "- Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`paseo --help`, Paseo MCP tool list, `vs --help`, skills). Name what you checked in the plan's Decided section. Every plan lists its blocks in a `| Block | Touches | Clashes with |` table (files/areas each touches, what it clashes with). Whenever designing parity or plugin-inspired features, record the original plugin/project creator in the plan, commits, `CREDITS.md`, and release notes using: \"Implemented <feature> — Thanks to <Plugin/Project> by <Author>\".",
   "- Never complete a Team yourself. When the lead reported PASS on the last plan block and nothing is Open, post: \"<Team> looks done. ✓ Mark complete · Not yet\" followed by a fenced block containing the single line `vs:looks-done`. Only the user's click completes a Team.",
   "- At >=80k tokens, update the brief now. At the hard limit VS retires you; the next click on the pin starts a fresh Brainstorm from the brief.",
@@ -374,7 +374,7 @@ export function deriveTeamForSpawn(
   });
   return {
     team: resolved.isOrphan ? "" : resolved.teamId,
-    lane: resolved.isOrphan ? (safeLabels.lane || safeLabels.lead || "").trim() : resolved.laneId,
+    lane: resolved.isOrphan ? (safeLabels.lane || safeLabels.lead || "").trim() : keptLaneOf(resolved),
     callerTeam: resolved.callerTeam,
     callerLane: resolved.callerLane,
     mismatch: resolved.teamMismatch,
@@ -1327,11 +1327,21 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           changed = true;
         }
 
-        const spawnLoc = teamOf(reqLabels, cwd);
+        const explicitLane = (reqLabels.orphan === "1" ? "" : callerLane || env?.VS_LANE || "").trim();
+        const envOrReqLabels: Labels = {
+          ...(env?.VS_TEAM ? { team: env.VS_TEAM } : {}),
+          ...(explicitLane ? { lane: explicitLane } : {}),
+          ...reqLabels,
+        };
+        const spawnLoc = teamOf(envOrReqLabels, cwd);
         const spawnTeamId = spawnLoc?.team;
-        const spawnTeam = spawnTeamId ? currentTeams().find((t) => t.id === spawnTeamId) : undefined;
+        const spawnTeam =
+          (explicitLane ? findLaneInRegistry(explicitLane, currentTeams())?.team : undefined) ??
+          (spawnTeamId ? currentTeams().find((t) => t.id === spawnTeamId) : undefined);
         const vibeMode = spawnTeam?.vibeMode === true;
-        const prefix = injectedPrefix(role, cwd, vibeMode, role === "brainstorm" && isHubCwd(spawnTeam, spawnLoc?.lane));
+        const isHubBuddy =
+          role === "brainstorm" && !topicOf(reqLabels) && Boolean(explicitLane) && isHubCwd(spawnTeam, explicitLane);
+        const prefix = injectedPrefix(role, cwd, vibeMode, isHubBuddy);
         const profileNotes = dedupeNotesAgainst((matchedProfile?.notes ?? "").trim(), prefix);
         const gitState = inspectGitSpawnState(cwd);
         if (prefix && !sanitizedSysPrompt.includes(EVERYONE_LAYER)) {
@@ -1348,7 +1358,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           }
           next.systemPrompt = parts.join("\n\n");
           changed = true;
-          const where = teamOf(reqLabels, cwd);
+          const where = teamOf(envOrReqLabels, cwd);
           if (where) {
             try {
               appendLog(where.team, {
