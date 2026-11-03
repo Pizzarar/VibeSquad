@@ -14,7 +14,7 @@ import { useIsShown } from "./panes";
 import { IdeaPlusTile, noteSendTo, SendToCard, SpinOffCard, useSendTo, useSpinOff } from "./PinIdeas";
 import { PinMenu } from "./PinMenu";
 import { DoneRow, DoneShelf, LooksDoneCard, useDoneShelfOpen } from "./PinDone";
-import { getBrainstormThresholds, isHubLane, saveTeams, type Member, type TeamView } from "./teams";
+import { countsAsNeedsYou, getBrainstormThresholds, isHubLane, saveTeams, type Member, type TeamView } from "./teams";
 import { ConfirmButton, StatusDot, usePaneClass } from "./ui";
 import { Avatar, NeonEmblem } from "./pixel";
 import { laneCodeOf, ordOf } from "./teams";
@@ -142,10 +142,9 @@ export function NeedsBadge({ pin }: { pin: Pin }) {
   );
 }
 
-// ── Team under a Buddy: its Lead, workers and topic Buddies (rail card + sidebar caret) ──
+// ── Team under a Buddy: its Lead, workers and topic Buddies (rail card) ──
 const memberTitle = (m: Member) => cleanTitle(m.agent.title) || m.agent.id.slice(0, 8);
 const hasTeam = (pin: Pin) => !!pin.lead || pin.workers.length > 0 || pin.topicBrainstorms.length > 0;
-const teamRunning = (pin: Pin) => [pin.lead, ...pin.workers].some((m) => m?.agent.status === "running");
 
 function TeamRow({ pin, m, glyph, depth, testId, active }: { pin: Pin; m: Member; glyph: string; depth: number; testId: string; active: boolean }) {
   const shown = useIsShown(m.agent.id);
@@ -167,19 +166,49 @@ function TeamRow({ pin, m, glyph, depth, testId, active }: { pin: Pin; m: Member
   );
 }
 
-/** Lead (with its workers indented under it) and topic Buddies; `withBuddy` adds the Buddy itself on top (rail card). */
+// Visible without opening "Completed": working, starting, erroring, or anything still asking for the owner.
+const isActiveWorker = (w: Member) =>
+  w.agent.status === "running" ||
+  w.agent.status === "initializing" ||
+  w.agent.status === "error" ||
+  countsAsNeedsYou(w) ||
+  Boolean(w.attention && w.attention.tone !== "finished");
+
+/** Buddy, Lead and running workers; finished workers and topic Buddies sit behind a collapsed "Completed" toggle. */
 export function PinTeamRows({ pin, withBuddy, prefix }: { pin: Pin; withBuddy?: boolean; prefix: string }) {
   const bs = pin.brainstorm;
+  const [showDone, setShowDone] = useState(false);
+  const running = pin.workers.filter(isActiveWorker);
+  const completed = pin.workers.filter((w) => !isActiveWorker(w));
+  const wDepth = withBuddy ? 2 : 1;
   return (
     <>
       {withBuddy && bs && <TeamRow pin={pin} m={bs} glyph="💬" depth={0} testId={`${prefix}-buddy`} active={false} />}
       {pin.lead && <TeamRow pin={pin} m={pin.lead} glyph="★" depth={withBuddy ? 1 : 0} testId={`${prefix}-lead`} active={false} />}
-      {pin.workers.map((w) => (
-        <TeamRow key={w.agent.id} pin={pin} m={w} glyph="•" depth={withBuddy ? 2 : 1} testId={`${prefix}-worker-${w.agent.id}`} active={false} />
+      {running.map((w) => (
+        <TeamRow key={w.agent.id} pin={pin} m={w} glyph="•" depth={wDepth} testId={`${prefix}-worker-${w.agent.id}`} active={false} />
       ))}
       {pin.topicBrainstorms.map((t) => (
         <TeamRow key={t.agent.id} pin={pin} m={t} glyph="💬" depth={withBuddy ? 1 : 0} testId={`${prefix}-topic-${t.agent.id}`} active={false} />
       ))}
+      {completed.length > 0 && (
+        <button
+          type="button"
+          className="pin-team-row pin-team-completed"
+          style={{ paddingLeft: 6 + wDepth * 14 }}
+          aria-expanded={showDone}
+          data-testid={`${prefix}-completed-toggle`}
+          onClick={() => setShowDone((v) => !v)}
+        >
+          <span className="muted small">
+            {showDone ? "▾" : "▸"} Completed ({completed.length})
+          </span>
+        </button>
+      )}
+      {showDone &&
+        completed.map((w) => (
+          <TeamRow key={w.agent.id} pin={pin} m={w} glyph="•" depth={wDepth} testId={`${prefix}-worker-${w.agent.id}`} active={false} />
+        ))}
     </>
   );
 }
@@ -200,25 +229,9 @@ const PinRow = memo(function PinRow({ pin, dimmed, onPin }: { pin: Pin; dimmed?:
   const paneCls = usePaneClass(pin.brainstorm?.agent.id ?? "");
   const focus = usePinFocus();
   const isSelected = focus ? focus.squadId === pin.squad.id && focus.laneId === pin.lane.id : Boolean(paneCls);
-  const team = hasTeam(pin);
-  // Expanded by default for the focused pin or one with a running Lead / worker; a click on the caret overrides that.
-  const [manual, setManual] = useState<boolean | null>(null);
-  const open = team && (manual ?? (isSelected || teamRunning(pin)));
   return (
     <>
       <div className="pin-row-wrap">
-        {team && (
-          <button
-            type="button"
-            className="pin-row-caret"
-            aria-expanded={open}
-            title={open ? "Hide Lead and workers" : "Show Lead and workers"}
-            data-testid={`sidebar-pin-caret-${pin.lane.id}`}
-            onClick={() => setManual(!open)}
-          >
-            {open ? "▾" : "▸"}
-          </button>
-        )}
         <button
           type="button"
           className={`pin-row ${isSelected ? (paneCls || "sel pane-left") : ""} ${pin.brainstorm ? "" : "no-session"} ${dimmed ? "done" : ""}`}
@@ -235,11 +248,6 @@ const PinRow = memo(function PinRow({ pin, dimmed, onPin }: { pin: Pin; dimmed?:
           <PinCtx pin={pin} />
         </button>
       </div>
-      {open && (
-        <div className="sidebar-pin-children" data-testid={`sidebar-pin-children-${pin.lane.id}`}>
-          <PinTeamRows pin={pin} prefix="sidebar-team" />
-        </div>
-      )}
     </>
   );
 });

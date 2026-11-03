@@ -4,14 +4,13 @@
 // a badge and never reorders the rail. The bar on top of the drawer is the only route to the plumbing.
 import { memo, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { getDraft, useDraft } from "./drafts";
-import { NeedsBadge, PinDot, PinTeamTree, setFullView, usePreview } from "./PinGrid";
-import { exitPinFocus, type PinFocus } from "./pinFocus";
+import { NeedsBadge, PinDot, PinTeamTree, usePreview } from "./PinGrid";
+import { exitPinFocus, openPinMember, type PinFocus } from "./pinFocus";
 import { TopBreadcrumb } from "./Breadcrumb";
 import { escGoesHome } from "./pinFocusLogic";
 import { hubPinForSquad, isHubPin, pinsForSquad, type Pin } from "./pins";
 import { SendToBar } from "./PinIdeas";
 import { slotRef } from "./pinSlots";
-import { openAgent } from "./panes";
 import type { TeamView } from "./teams";
 import { Avatar, NeonEmblem } from "./pixel";
 
@@ -148,9 +147,8 @@ function PinFocusBar({ view, focus, onSelectSquad }: { view: TeamView; focus: Pi
 
   const lead = pin?.lead ?? null;
   const workers = pin?.workers.length ?? 0;
-  const showPlumbing = () => {
-    setFullView(true);
-    if (lead) openAgent(lead.agent.id);
+  const openLead = () => {
+    if (pin && lead) openPinMember(pin, lead.agent.id);
   };
   return (
     <div className="pin-focus-bar" data-testid="pin-focus-bar">
@@ -166,8 +164,8 @@ function PinFocusBar({ view, focus, onSelectSquad }: { view: TeamView; focus: Pi
         type="button"
         className="pin-focus-plumbing small"
         data-testid="pin-focus-plumbing"
-        title="Show this team's lead, workers, handoffs and worktrees (FULL view)"
-        onClick={showPlumbing}
+        title="Open this team's Lead"
+        onClick={openLead}
       >
         Lead: {lead ? statusWord(lead.agent.status) : "none"} · {workers} {workers === 1 ? "worker" : "workers"} ▸
       </button>

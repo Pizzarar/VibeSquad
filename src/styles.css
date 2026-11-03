@@ -4133,11 +4133,9 @@ button.project-file-name:hover { text-decoration: underline; }
 }
 .pin-team-row:hover, .pin-team-row:focus-visible { color: var(--text); background: #00f0ff12; outline: none; }
 .pin-team-row.on { color: var(--text); border-left-color: var(--cyan); background: #00f0ff1f; }
+.pin-team-row.pin-team-completed { opacity: 0.8; }
 .pin-row-wrap { display: flex; align-items: stretch; min-width: 0; }
 .pin-row-wrap > .pin-row { flex: 1; min-width: 0; }
-.pin-row-caret { flex: none; width: 16px; padding: 0; background: transparent; border: 0; color: var(--muted); font-size: 10px; cursor: pointer; }
-.pin-row-caret:hover, .pin-row-caret:focus-visible { color: var(--text); outline: none; }
-.sidebar-pin-children { display: flex; flex-direction: column; margin-left: 16px; }
 .drawer-working-chip {
   flex: none; padding: 1px 8px; font-size: 11px; color: var(--cyan); background: #00f0ff14; border: 1px solid var(--cyan); cursor: pointer;
 }
