@@ -3883,3 +3883,19 @@ button.project-file-name:hover { text-decoration: underline; }
 .remote-pair-error { padding: 8px 10px; color: var(--coral); background: #ff857314; border: 1px solid var(--coral); border-radius: 4px; line-height: 1.4; }
 .remote-pair-go { align-self: stretch; padding: 10px; font-size: 15px; }
 .remote-pair-forget { align-self: stretch; }
+
+/* 0.2.0 Mermaid, Brief Preview, Sealed Secret Input & Terminal Port Pills */
+.brief-mode-tabs { display: inline-flex; align-items: center; gap: 4px; }
+.brief-editor-preview { display: flex; flex-direction: column; gap: 8px; overflow: auto; }
+.brief-mermaid-preview { display: flex; flex-direction: column; gap: 6px; }
+.mermaid-view { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+.mermaid-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mermaid-diagram-container { overflow-x: auto; }
+.mermaid-source-container { overflow-x: auto; }
+.tl-code { font-family: var(--mono); font-size: 11px; }
+.composer-menu { position: relative; display: inline-flex; align-items: center; }
+.composer-secret-btn { display: inline-flex; align-items: center; gap: 4px; }
+.secret-input-popover { z-index: 80; }
+.terminal-ports-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.terminal-port-pill { display: inline-flex; align-items: center; gap: 4px; text-decoration: none; }
+
