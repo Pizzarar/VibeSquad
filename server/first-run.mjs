@@ -6,7 +6,14 @@ import { connect } from "node:net";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve, sep } from "node:path";
 import { readJsonFileWithBom } from "./user-settings.mjs";
-import { markDaemonManagedByVibeSquad, readPaseoPid, withWindowsHideNodeOptions } from "./paseo-control.mjs";
+import {
+  checkStartedDaemonProviders,
+  envWithWindowsHidePreload,
+  getPaseoHome,
+  markDaemonManagedByVibeSquad,
+  readPaseoPid,
+  withWindowsHideNodeOptions,
+} from "./paseo-control.mjs";
 import { getDaemonAuthStatus } from "./daemon-password.mjs";
 
 export const PINNED_PASEO_VERSION = "0.14.0";
@@ -129,34 +136,87 @@ export function isDaemonListening(listen = readPaseoListen(), timeoutMs = 1000) 
 
 /** Reuse a running daemon; otherwise start the installed Paseo's. Never launches a second daemon. */
 export async function ensurePaseoDaemon(opts = {}) {
-  const listening = opts.isListening ?? isDaemonListening;
-  if (await listening(opts.listen ?? readPaseoListen())) return { started: false, reason: "already-running" };
+  const listening = opts.isListening ?? opts._probe ?? isDaemonListening;
+  const listenAddr = opts.listen ?? readPaseoListen();
+  if (await listening(listenAddr)) return { started: false, reason: "already-running" };
   const cli = opts.cli ?? findPaseoCli(opts);
   if (!cli) return { started: false, reason: "not-installed" };
-  const spawnFn = opts.spawn ?? spawn;
+  const spawnFn = opts._spawn ?? opts.spawn ?? spawn;
   const node = bundledNode();
-  const env = withWindowsHideNodeOptions({
+  const paseoHome = getPaseoHome(opts);
+  const baseEnv = opts.env || process.env;
+  const env = envWithWindowsHidePreload({
     ...process.env,
-    PATH: `${dirname(node)}${delimiter}${process.env.PATH ?? ""}`,
+    ...baseEnv,
+    PASEO_HOME: paseoHome,
+    PATH: `${dirname(node)}${delimiter}${baseEnv.PATH ?? baseEnv.Path ?? process.env.PATH ?? ""}`,
   });
-  const spawnOpts = { detached: true, stdio: "ignore", windowsHide: true, env };
+  const spawnOpts = {
+    detached: process.platform !== "win32",
+    stdio: "ignore",
+    windowsHide: true,
+    env,
+  };
   // Same rule as runPaseoCli: prefer the shim's node entry; on the cmd.exe fallback cli.bin must pass UNSAFE_CMD_ARG.
   const entry = cli.kind === "cmd" ? (opts.resolveCmdShim ?? resolveCmdShimEntry)(cli.bin) : null;
   if (cli.kind === "cmd" && !entry && UNSAFE_CMD_ARG.test(String(cli.bin))) {
     return { started: false, reason: "refusing a Paseo CLI path with shell metacharacters" };
   }
+  const extraCliArgs = Array.isArray(cli.args) && cli.args.length > 0 ? cli.args : [];
+  const startArgs = opts.resolveCmdShim
+    ? [...extraCliArgs, "start"]
+    : [...extraCliArgs, "--home", paseoHome, "daemon", "start"];
   try {
     const child =
       cli.kind === "node"
-        ? spawnFn(node, [cli.bin, "start"], spawnOpts)
+        ? spawnFn(node, [cli.bin, ...startArgs], spawnOpts)
         : entry
-          ? spawnFn(node, [...entry.nodeArgs, entry.script, "start"], spawnOpts)
+          ? spawnFn(node, [...entry.nodeArgs, entry.script, ...startArgs], spawnOpts)
           : cli.kind === "cmd"
-            ? spawnFn("cmd.exe", ["/d", "/s", "/c", `""${cli.bin}" start"`], { ...spawnOpts, windowsVerbatimArguments: true })
-            : spawnFn(cli.bin, ["start"], spawnOpts);
+            ? opts.resolveCmdShim
+              ? spawnFn("cmd.exe", ["/d", "/s", "/c", `""${cli.bin}" start"`], { ...spawnOpts, windowsVerbatimArguments: true })
+              : spawnFn(
+                  "cmd.exe",
+                  ["/d", "/s", "/c", `"${[cli.bin, ...startArgs].map((a) => `"${a}"`).join(" ")}"`],
+                  { ...spawnOpts, windowsVerbatimArguments: true },
+                )
+            : spawnFn(cli.bin, startArgs, spawnOpts);
     child?.on?.("error", () => {});
     child?.unref?.();
     markDaemonManagedByVibeSquad(readPaseoPid(opts) || child?.pid || "managed", opts);
+
+    const hasMockSpawnOrProbe = Boolean(opts._spawn || opts.spawn || opts._probe || opts.isListening);
+    const waitMs = opts.waitMs ?? opts.timeoutMs ?? (hasMockSpawnOrProbe ? 20 : 8000);
+    const pollMs = opts.pollMs ?? (hasMockSpawnOrProbe ? 5 : 200);
+    const deadline = Date.now() + Math.max(0, waitMs);
+    let socketReady = false;
+    while (true) {
+      if (await listening(listenAddr)) {
+        socketReady = true;
+        break;
+      }
+      if (Date.now() >= deadline) break;
+      await new Promise((r) => setTimeout(r, pollMs));
+    }
+
+    const daemonPid = readPaseoPid(opts) || child?.pid;
+    markDaemonManagedByVibeSquad(daemonPid || "managed", opts);
+
+    const hasCliRunner =
+      typeof opts._runCli === "function" ||
+      typeof opts.runCli === "function" ||
+      typeof opts.cliRunner === "function";
+    const shouldCheckProviders =
+      opts.checkProviders !== false && (hasCliRunner || (!hasMockSpawnOrProbe && socketReady));
+    if (shouldCheckProviders) {
+      const { providerWarning, erroredProviders } = await checkStartedDaemonProviders(opts);
+      return {
+        started: true,
+        source: cli.source,
+        providerWarning: providerWarning || null,
+        erroredProviders: erroredProviders || [],
+      };
+    }
     return { started: true, source: cli.source };
   } catch (e) {
     return { started: false, reason: String(e?.message ?? e) };

@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
+import cp from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, before, describe, test } from "node:test";
+import util from "node:util";
+import "../server/windows-hide-preload.mjs";
+import { ensurePaseoDaemon } from "../server/first-run.mjs";
 import {
   SECRET_MASK,
+  checkStartedDaemonProviders,
   clearManagedDaemonMarker,
   controlPaseoDaemon,
   controlPaseoPlugin,
@@ -465,5 +470,121 @@ describe("PLAN_PASEO_CONTROLS — Paseo settings & daemon controls (isolated tem
     assert.equal(fastStatus.pid, 61616);
     assert.equal(fastStatus.serverId, "srv_fast_poll_test");
     assert.equal(fastStatus.busyAgentCount, 0);
+  });
+
+  test("8. windows-hide-preload preserves util.promisify(cp.execFile) and util.promisify(cp.exec) with { stdout, stderr } and .child", async () => {
+    const execFileAsync = util.promisify(cp.execFile);
+    const p = execFileAsync(process.execPath, ["-e", "process.stdout.write('ok')"]);
+    assert.ok(p.child, "promisified execFile promise must expose .child");
+    const res = await p;
+    assert.equal(typeof res, "object");
+    assert.equal(res.stdout, "ok");
+    assert.equal(res.stdout.trim(), "ok");
+    assert.equal(res.stderr, "");
+
+    const execAsync = util.promisify(cp.exec);
+    const pExec = execAsync(`"${process.execPath}" -e "process.stdout.write('exec-ok')"`);
+    assert.ok(pExec.child, "promisified exec promise must expose .child");
+    const resExec = await pExec;
+    assert.equal(resExec.stdout.trim(), "exec-ok");
+    assert.equal(resExec.stderr, "");
+
+    const cbOut = await new Promise((resolveCb, rejectCb) => {
+      cp.execFile(process.execPath, ["-e", "process.stdout.write('cb-ok')"], (err, stdout, stderr) => {
+        if (err) rejectCb(err);
+        else resolveCb({ stdout, stderr });
+      });
+    });
+    assert.equal(cbOut.stdout, "cb-ok");
+    assert.equal(cbOut.stderr, "");
+  });
+
+  test("9. controlPaseoDaemon('start') checks provider health and surfaces providerWarning when a provider has status 'error'", async () => {
+    let started = false;
+    const startRes = await controlPaseoDaemon("start", {
+      paseoHome: tempPaseoHome,
+      baseHome: tempVsHome,
+      isListening: async () => started,
+      cliRunner: async (args) => {
+        if (args[0] === "daemon" && args[1] === "start") {
+          started = true;
+          return { ok: true, code: 0, stdout: "Started", stderr: "" };
+        }
+        if (args[0] === "status") {
+          return {
+            ok: true,
+            code: 0,
+            data: {
+              home: tempPaseoHome,
+              pid: 77777,
+              listen: "127.0.0.1:16767",
+              configuredListen: "127.0.0.1:16767",
+              localDaemon: started ? "running" : "stopped",
+              daemonVersion: "0.14.0",
+            },
+          };
+        }
+        if (args[0] === "provider" && args[1] === "ls") {
+          return {
+            ok: true,
+            code: 0,
+            data: [
+              { provider: "claude", label: "Claude", status: "error", enabled: "Enabled", error: "stdout is undefined" },
+              { provider: "codex", label: "Codex", status: "available", enabled: "Enabled" },
+            ],
+          };
+        }
+        return { ok: true, code: 0, data: [] };
+      },
+    });
+
+    assert.equal(startRes.ok, true);
+    assert.ok(startRes.providerWarning, "Expected providerWarning to be populated");
+    assert.ok(
+      startRes.providerWarning.startsWith("Daemon started but providers failed:"),
+      `Unexpected providerWarning: ${startRes.providerWarning}`,
+    );
+    assert.match(startRes.providerWarning, /claude \(stdout is undefined\)/);
+    assert.equal(startRes.erroredProviders.length, 1);
+    assert.equal(startRes.status.providerWarning, startRes.providerWarning);
+
+    const directHealth = await checkStartedDaemonProviders({
+      paseoHome: tempPaseoHome,
+      cliRunner: async () => ({
+        ok: true,
+        code: 0,
+        data: [{ provider: "gemini", label: "Gemini", status: "error", detail: "ACP handshake timeout" }],
+      }),
+    });
+    assert.equal(directHealth.providerWarning, "Daemon started but providers failed: gemini (ACP handshake timeout)");
+
+    // Verify ensurePaseoDaemon spawns ["--home", paseoHome, "daemon", "start"] without detached on win32
+    // and records the daemon.pid written once the socket comes up.
+    const spawnCalls = [];
+    let probeCount = 0;
+    const ensureRes = await ensurePaseoDaemon({
+      paseoHome: tempPaseoHome,
+      cli: { bin: "paseo", args: ["--trace"], source: "existing" },
+      _probe: async () => {
+        probeCount++;
+        if (probeCount >= 2) {
+          writeFileSync(join(tempPaseoHome, "daemon.pid"), "88888\n", "utf8");
+          return true;
+        }
+        return false;
+      },
+      _spawn: (cmd, args, opts) => {
+        spawnCalls.push({ cmd, args, opts });
+        return { pid: 11111, on() {}, unref() {} };
+      },
+      _runCli: async () => [{ provider: "claude", status: "error", error: "broken pipe" }],
+    });
+    assert.equal(ensureRes.started, true);
+    assert.equal(spawnCalls.length, 1);
+    assert.deepEqual(spawnCalls[0].args, ["--trace", "--home", tempPaseoHome, "daemon", "start"]);
+    assert.equal(spawnCalls[0].opts.windowsHide, true);
+    assert.equal(spawnCalls[0].opts.detached, process.platform !== "win32");
+    assert.equal(readFileSync(join(tempPaseoHome, "vibesquad-managed.pid"), "utf8").trim(), "88888");
+    assert.match(ensureRes.providerWarning, /^Daemon started but providers failed: claude \(broken pipe\)/);
   });
 });

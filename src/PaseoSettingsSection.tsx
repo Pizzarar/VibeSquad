@@ -43,6 +43,8 @@ export interface PaseoDaemonStatus {
   keepPaseoRunningOnQuit: boolean;
   startPaseoWithVibeSquad: boolean;
   backupsCount: number;
+  providerWarning?: string | null;
+  erroredProviders?: { id: string; label?: string; status: string; error?: string; detail?: string }[];
 }
 
 export interface PaseoUsageProvider {
@@ -407,6 +409,7 @@ export function PaseoSettingsSection({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
+  const [providerWarning, setProviderWarning] = useState("");
   const [confirmDaemonAction, setConfirmDaemonAction] = useState<"stop" | "restart" | null>(null);
 
   // Provider diagnostics & models state
@@ -482,24 +485,45 @@ export function PaseoSettingsSection({
     setBusy(true);
     setErrorMsg("");
     setNotice("");
+    setProviderWarning("");
     try {
       const r = await fetch("/__vibesquad/paseo/daemon", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action, confirmBusy }),
       });
-      const d = await r.json();
-      if (r.status === 409 && d.needsConfirmation && (action === "stop" || action === "restart")) {
+      const res = await r.json();
+      if (r.status === 409 && res.needsConfirmation && (action === "stop" || action === "restart")) {
         setConfirmDaemonAction(action);
-        if (d.status) setStatus(d.status);
+        if (res.status) setStatus(res.status);
         return;
       }
       setConfirmDaemonAction(null);
-      if (!r.ok || !d.ok) {
-        setErrorMsg(d.error || `Daemon ${action} failed`);
+      if (!r.ok || !res.ok) {
+        setErrorMsg(res.error || `Daemon ${action} failed`);
       } else {
-        setNotice(`Daemon ${action} complete.`);
-        if (d.status) setStatus(d.status);
+        let warning: string = res?.providerWarning || res?.status?.providerWarning || "";
+        if (!warning && (action === "start" || action === "restart")) {
+          const errored = Array.isArray(res?.erroredProviders) && res.erroredProviders.length > 0
+            ? res.erroredProviders
+            : providers.filter((p) => p.status === "error");
+          if (errored.length > 0) {
+            warning =
+              "Daemon started but providers failed: " +
+              errored
+                .map((p: { id?: string; label?: string; error?: string; detail?: string }) =>
+                  `${p.id || p.label}${p.error || p.detail ? ` (${p.error || p.detail})` : ""}`,
+                )
+                .join(", ");
+          }
+        }
+        if (warning) {
+          setProviderWarning(warning);
+          setErrorMsg(warning);
+        } else {
+          setNotice(`Daemon ${action} complete.`);
+        }
+        if (res.status) setStatus(res.status);
       }
       await loadAll();
     } catch (e) {
@@ -744,8 +768,18 @@ export function PaseoSettingsSection({
         ))}
       </div>
 
-      {errorMsg && (
-        <div className="stat-alert small" data-testid="paseo-settings-error" style={{ marginBottom: 8 }}>
+      {providerWarning && (
+        <div
+          className="stat-alert small"
+          role="alert"
+          data-testid="paseo-provider-health-warning"
+          style={{ marginBottom: 8 }}
+        >
+          ⚠ {providerWarning}
+        </div>
+      )}
+      {errorMsg && errorMsg !== providerWarning && (
+        <div className="stat-alert small" role="alert" data-testid="paseo-settings-error" style={{ marginBottom: 8 }}>
           ⚠ {errorMsg}
         </div>
       )}
