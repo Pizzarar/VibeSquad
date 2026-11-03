@@ -3,6 +3,13 @@ import type { PaseoAgent } from "@getpaseo/client";
 import type { FileExplorerDirectoryPayload } from "@getpaseo/client/internal/daemon-client";
 import { daemonClient, DEMO } from "./paseo";
 import { MarkdownRenderer } from "./Timeline";
+import {
+  FilePreview,
+  bytesToDataUrl,
+  classifyPreviewKind,
+  inferMimeType,
+  isSourceToggleable,
+} from "./FilePreview";
 import { normalizeRepoPath } from "./fileLinks";
 import { baseName, isUnder, nameTaken, parentPath, remapPath, validateEntryName } from "./fileOps";
 import { createEntry, deleteEntry, duplicateEntry, renameEntry } from "./paseoFiles";
@@ -53,9 +60,10 @@ function stripAnsiForText(bytes: Uint8Array): string {
 }
 
 const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|ico|bmp)$/i;
-const BIN_EXT = /\.(exe|dll|zip|gz|tgz|7z|rar|tar|pdf|woff2?|ttf|otf|mp[34]|mov|wav|class|jar|bin|so|dylib|o|node)$/i;
+const BIN_EXT = /\.(exe|dll|zip|gz|tgz|7z|rar|tar|woff2?|ttf|otf|class|jar|bin|so|dylib|o|node)$/i;
 const MAX_TEXT_BYTES = 1024 * 1024;
 const MAX_IMG_BYTES = 5 * 1024 * 1024;
+const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
 
 function isBinaryBytes(bytes: Uint8Array): boolean {
   const n = Math.min(bytes.length, 8192);
@@ -109,6 +117,9 @@ export function FilesPanel({
   const [sourceView, setSourceView] = useState(false);
   const [notice, setNotice] = useState("");
   const [imgUrl, setImgUrl] = useState<string | null>(null);
+  const [fileBytes, setFileBytes] = useState<Uint8Array | null>(null);
+  const [fileMime, setFileMime] = useState<string>("");
+  const [fileSize, setFileSize] = useState<number | undefined>(undefined);
   const [revealDir, setRevealDir] = useState<string | null>(null);
   const treeRef = useRef<HTMLDivElement | null>(null);
   const lineRefs = useRef<Map<number, HTMLElement>>(new Map());
@@ -239,22 +250,29 @@ export function FilesPanel({
       setNotFound(false);
       setNotice("");
       setImgUrl(null);
-      setSourceView(line !== undefined); // a line target reads in Source; otherwise .md renders
+      setFileBytes(null);
+      setFileMime("");
+      setFileSize(undefined);
+      setSourceView(line !== undefined); // a line target reads in Source; otherwise .md/.html/.svg renders
       if (normalizeRepoPath(path) === null) {
         // defense in depth: never ask the daemon for absolute / `..` paths
         setFileContent("");
         setNotFound(true);
         return;
       }
-      const isImg = IMG_EXT.test(path);
-      const cap = isImg ? MAX_IMG_BYTES : MAX_TEXT_BYTES;
+      const initialKind = classifyPreviewKind(path);
+      const isImg = IMG_EXT.test(path) || initialKind === "image";
+      const isMedia = initialKind === "pdf" || initialKind === "audio" || initialKind === "video";
+      const cap = isImg ? MAX_IMG_BYTES : isMedia ? MAX_MEDIA_BYTES : MAX_TEXT_BYTES;
       const tooBig = (kb: number) => setNotice(`File too large to preview${kb ? ` (${kb} KB)` : ""}`);
-      if (BIN_EXT.test(path) && !isImg) {
+      const known = findNode(treeRef2.current, path)?.size;
+      if (BIN_EXT.test(path) && !isImg && !isMedia) {
         setFileContent("");
-        setNotice("Binary file, not shown");
+        setFileMime(inferMimeType(path));
+        setFileSize(known);
+        setImgUrl("binary");
         return;
       }
-      const known = findNode(treeRef2.current, path)?.size;
       if (known !== undefined && known > cap) {
         setFileContent("");
         tooBig(Math.round(known / 1024));
@@ -262,6 +280,7 @@ export function FilesPanel({
       }
       if (DEMO) {
         setFileContent(`// ${path}\n// DEMO mode — live content unavailable\n`);
+        setFileMime(inferMimeType(path));
         setFileModifiedAt(new Date().toISOString());
         return;
       }
@@ -273,17 +292,30 @@ export function FilesPanel({
           tooBig(kb);
           return;
         }
+        const resolvedMime = inferMimeType(path, result.mime);
+        const kind = classifyPreviewKind(path, resolvedMime);
+        setFileBytes(result.bytes);
+        setFileMime(resolvedMime);
+        setFileSize(result.size ?? result.bytes.length);
         if (isImg) {
           const url = /\.svg$/i.test(path)
             ? `data:image/svg+xml;base64,${btoa(Array.from(result.bytes, (b) => String.fromCharCode(b)).join(""))}` // data: (not blob:) so "open in new tab" can't run embedded scripts on our origin
-            : URL.createObjectURL(new Blob([result.bytes as BlobPart], { type: result.mime || "image/*" }));
-          setImgUrl(url);
+            : bytesToDataUrl(result.bytes, resolvedMime);
+          if (!/\.svg$/i.test(path)) {
+            setImgUrl(url);
+            setFileContent("");
+            return;
+          }
+        }
+        if (kind === "pdf" || kind === "audio" || kind === "video") {
+          setImgUrl(bytesToDataUrl(result.bytes, resolvedMime));
           setFileContent("");
           return;
         }
-        if (isBinaryBytes(result.bytes)) {
+        if (result.kind === "binary" || kind === "binary" || isBinaryBytes(result.bytes)) {
+          setFileMime(resolvedMime === "text/plain" ? "application/octet-stream" : resolvedMime);
+          setImgUrl(`Binary file, ${kb} KB, not shown`);
           setFileContent("");
-          setNotice(`Binary file, ${kb} KB, not shown`);
           return;
         }
         const text = stripAnsiForText(result.bytes);
@@ -303,7 +335,7 @@ export function FilesPanel({
     [cwd],
   );
 
-  useEffect(() => () => { if (imgUrl) URL.revokeObjectURL(imgUrl); }, [imgUrl]);
+  useEffect(() => () => { if (imgUrl && imgUrl.startsWith("blob:")) URL.revokeObjectURL(imgUrl); }, [imgUrl]);
 
   useEffect(
     () => () => {
@@ -351,6 +383,9 @@ export function FilesPanel({
         return;
       }
       if (r?.modifiedAt) setFileModifiedAt(r.modifiedAt); // a second save in the same session stays fresh
+      const encoded = new TextEncoder().encode(editValue);
+      setFileBytes(encoded);
+      setFileSize(encoded.length);
       setFileContent(editValue);
       setEditMode(false);
     } catch (e) {
@@ -499,7 +534,9 @@ export function FilesPanel({
     };
   }, [menu]);
 
-  const isMd =!!openFile && /\.(md|markdown)$/i.test(openFile);
+  const isMd = !!openFile && /\.(md|markdown)$/i.test(openFile);
+  const previewKind = openFile ? classifyPreviewKind(openFile, fileMime || undefined) : "text";
+  const canTogglePreview = !!openFile && isSourceToggleable(openFile, fileMime || undefined);
 
   // Ctrl+K (rebindable, scoped to the Files editor): the selected lines → the inline edit prompt box.
   const openInlineEdit = () => {
@@ -519,7 +556,7 @@ export function FilesPanel({
       setInlineBox({ range, top: Math.max(taTop, Math.min(top, taTop + ta.clientHeight - 8)) });
       return;
     }
-    if (isMd && !sourceView) { setInlineErr("Switch to Source to select lines."); return; }
+    if ((isMd && !sourceView) || (canTogglePreview && !sourceView)) { setInlineErr("Switch to Source to select lines."); return; }
     const sel = window.getSelection();
     const code = codeRef.current;
     if (!code || !sel || sel.rangeCount === 0) { setInlineErr("Select some lines first."); return; }
@@ -647,13 +684,13 @@ export function FilesPanel({
                 <a className="btn ghost small" data-testid="files-open-ide" href={href} title="Open in your IDE at this line">IDE ↗</a>
               );
             })()}
-            {isMd && !notFound && !notice && !editMode && (
+            {(isMd || canTogglePreview) && !notFound && !notice && !imgUrl && !editMode && (
               <button
                 className="btn ghost small"
                 data-testid="files-source-btn"
                 onClick={() => setSourceView((v) => !v)}
               >
-                {sourceView ? "Rendered" : "Source"}
+                {sourceView ? "Preview" : "Source"}
               </button>
             )}
             {!editMode && !notFound && !notice && !imgUrl && (
@@ -701,15 +738,28 @@ export function FilesPanel({
             />
           ) : notFound ? (
             <div className="muted small" data-testid="files-not-found">File not found: {openFile}</div>
-          ) : imgUrl ? (
-            <div className="files-md" data-testid="files-image-view">
-              <img src={imgUrl} alt={openFile} style={{ maxWidth: "100%" }} />
-            </div>
           ) : notice ? (
             <div className="muted small" data-testid="files-notice">{notice}</div>
-          ) : isMd && !sourceView ? (
-            <div className="files-md" data-testid="files-md-view">
-              <MarkdownRenderer text={fileContent} agentId={agent.id} doc />
+          ) : imgUrl || (isMd && !sourceView) || (canTogglePreview && !sourceView) ? (
+            <div
+              className="files-md"
+              data-testid={
+                previewKind === "image"
+                  ? "files-image-view"
+                  : isMd
+                    ? "files-md-view"
+                    : "files-preview-view"
+              }
+            >
+              <FilePreview
+                filePath={openFile}
+                mime={fileMime || undefined}
+                bytes={fileBytes}
+                text={fileContent}
+                size={fileSize}
+                agentId={agent.id}
+                renderMarkdown={(md) => <MarkdownRenderer text={md} agentId={agent.id} doc />}
+              />
             </div>
           ) : (
             <div className="files-code" data-testid="files-code-view" ref={codeRef} tabIndex={0} title={inlineKeys ? `Select lines and press ${inlineKeys} to ask an agent to edit them` : undefined}>
