@@ -4,7 +4,8 @@ Multi-agent coordination system for [Claude Code](https://claude.com/claude-code
 
 VibeSquad organizes Claude Code agents into **Squads** (product-level teams) and **Feature Lanes** (parallel workstreams), each with a **Buddy** (brainstorm partner), a **Lead** (implementation coordinator), and **Workers** (task agents). A lightweight `vs` CLI records decisions, reads team logs, and generates handoff packets — with no prompt or transcript content ever written to disk.
 
-> **New here?** Install the latest release, then open `guide/` and read [START_HERE](guide/START_HERE.md).
+> **New here?** Install the latest release, then open `guide/` and read START_HERE.
+> The installer does not put `guide/` on your PC: on this page click **Code → Download ZIP**, unzip it somewhere you will find it again (or `git clone`), then follow [guide/README.md](guide/README.md). It hands you to your Buddy, who reads [START_HERE](guide/START_HERE.md) for you.
 
 ## Architecture
 

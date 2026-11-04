@@ -22,7 +22,7 @@ Treat 100k/150k as a starting point and tune them with `GUARD_SOFT` / `GUARD_HAR
 | `GUARD_SOFT` | `100000` | Soft mark, in tokens |
 | `GUARD_HARD` | `150000` | Hard mark, in tokens |
 | `GUARD_ALWAYS` | unset | `1` = warn every session that has the hook (use this at Level 1) |
-| `GUARD_NAME` | `^(?!\(old\)).*LEAD` | *(Level 2)* Regex (`re.search`) the Paseo agent name must match to be warned. The default skips names starting with `(old)` |
+| `GUARD_NAME` | `^(?!\(old\))(?:★\|.*LEAD)` | *(Level 2)* Regex (`re.search`) the Paseo agent name must match to be warned. The default skips names starting with `(old)` |
 | `PASEO_AGENT_ID` | set by Paseo | *(Level 2)* When present, the hook looks up the agent's name with `paseo inspect`. Only letters, digits, `_` and `-` are accepted |
 
 Without `GUARD_ALWAYS=1` and without `PASEO_AGENT_ID`, the hook does nothing. It never prints errors
@@ -44,7 +44,7 @@ and never blocks: if anything goes wrong it exits quietly.
      `py -I -m json.tool <path to settings.json>` (it should print the file, not an error). In PowerShell
      write the path as `"$env:USERPROFILE\.claude\settings.json"`, because `~` is not expanded for every program.
 3. Level 1: set `GUARD_ALWAYS=1` in your user environment (or in the `env` section of `settings.json`).
-   Level 2: nothing to set; name the Lead with the word `LEAD` in it.
+   Level 2: nothing to set; VibeSquad's Lead titles start with ★, so nothing to set (a name with the word `LEAD` also works).
 4. Run the test below, then restart Claude Code so it picks up the hook.
 
 ## Test it (low thresholds)

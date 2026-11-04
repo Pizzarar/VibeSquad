@@ -8,7 +8,7 @@ Marks (override with env vars):
 Which sessions are warned:
   - GUARD_ALWAYS=1: every session that has this hook. Simplest; use it with plain Claude Code.
   - otherwise only agents run under Paseo (Level 2: the PASEO_AGENT_ID variable is set) whose
-    Paseo name matches GUARD_NAME (a regex, default skips names starting with "(old)"). Naming convention: put the word LEAD in
+    Paseo name matches GUARD_NAME (a regex, default skips names starting with "(old)"). Naming convention: start the Lead's name with ★ (VibeSquad does this) or put the word LEAD in
     the Lead's name, and rename a retired Lead so it no longer matches (for example, prefix "(old)"),
     otherwise the old one keeps being warned.
 With neither, the hook does nothing.
@@ -29,7 +29,8 @@ def env_int(name, default):
 
 SOFT = env_int("GUARD_SOFT", 100_000)
 HARD = env_int("GUARD_HARD", 150_000)
-NAME_PATTERN = os.environ.get("GUARD_NAME", r"^(?!\(old\)).*LEAD")
+# v2 titles start with the star ("★ Bug1 · fix login"); v1 titles contain LEAD ("★ LEAD · BUG ord1"). Retired names start with (old).
+NAME_PATTERN = os.environ.get("GUARD_NAME", r"^(?!\(old\))(?:★|.*LEAD)")
 ALWAYS = os.environ.get("GUARD_ALWAYS") == "1"
 STATE_DIR = os.path.join(tempfile.gettempdir(), "context_guard")
 

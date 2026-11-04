@@ -17,7 +17,7 @@ In VibeSquad, click **+ New squad** at the bottom of the left column. A [Squad](
 
 ![The New Squad window: Folder path or Clone repo URL, Squad name, Start a Buddy, and a Create button](../assets/screenshots/02-new-squad-modal.png)
 
-Pick **Folder path** and type your project folder (or choose **Clone repo URL** to copy one from GitHub). Give it a **Squad name**. Leave **Start a Buddy** ticked, pick **BRAINSTORM - CLAUDE** or **BRAINSTORM - GEMINI**, and click **Create**. The Buddy's chat opens as "TALK HERE". (If you ran the setup, you are already in one.)
+Pick **Folder path** and type your project folder (or choose **Clone repo URL** to copy one from GitHub). Give it a **Squad name**. Leave **Start a Buddy** ticked, pick **BRAINSTORM - CLAUDE** or **BRAINSTORM - GEMINI**, and click **Create**. The Buddy's chat opens as "TALK HERE". Use a **new, empty project folder** for this. Leave the `guide` squad alone: it is only for the setup chat.
 
 Already have a Squad and want a new feature? Click **+ TEAM** in the Squad's header, or the **New idea** card, and a fresh Buddy starts for it. Either way, type:
 

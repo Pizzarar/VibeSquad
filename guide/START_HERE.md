@@ -233,8 +233,8 @@ has no kit instructions. So:
    user outside the repo, so nothing with a username lands in the project. Then commit now, before the handoff
    (step 5 above).
 2. Mark the first-project row `pending-user` in `progress.md` (not `verified`: the PNG doesn't exist yet).
-3. Tell the person to add `hello-agent` as a team in VibeSquad (**⚙ SETTINGS**, **+ Add team**), start a new chat there
-   (**+ TEAM**) and approve the `piskel` server if it asks. UNVERIFIED: the piskel module registers the server with
+3. Tell the person to add `hello-agent` as a squad in VibeSquad (**+ New squad** at the bottom of the left column, **Folder path**, **Start a Buddy** ticked), talk to the Buddy it starts
+   and approve the `piskel` server if it asks. UNVERIFIED: the piskel module registers the server with
    `claude mcp add`, so this pixel step works with Claude Code only until the module says otherwise.
 4. Give them this exact prompt to type: "make a 16x16 heart with piskel and export a PNG, then show me the file".
 5. When the PNG exists, they go back to the kit's Buddy chat in VibeSquad and say **read START_HERE.md**. The resume rule

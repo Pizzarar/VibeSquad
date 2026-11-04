@@ -39,7 +39,7 @@ the person the planned settings change before you make it:
 3. **Turn the hook on.** Without this it does nothing:
    - Level 1 (plain Claude Code): set `GUARD_ALWAYS=1` in the user environment or in the `env` section of
      `settings.json`.
-   - Level 2 (VibeSquad): name the Lead agent with the word `LEAD` in it (the pattern is `GUARD_NAME`).
+   - Level 2 (VibeSquad): VibeSquad Lead titles start with ★ (like `★ Bug1 · fix login`), so nothing to set; a name with the word `LEAD` also works (the pattern is `GUARD_NAME`).
 4. Thresholds can be changed with `GUARD_SOFT` and `GUARD_HARD` (defaults 100k and 150k tokens: plan the handoff, then hand off now). The README explains
    why those numbers.
 

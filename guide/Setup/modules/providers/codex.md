@@ -42,7 +42,7 @@ Expected: a version matching `^\d+\.\d+\.\d+` (a `codex` prefix is fine).
 1. Run `codex` once. Choose **Sign in with ChatGPT**. The official page recommends this for the plans listed above.
 2. An API key also works but needs extra setup (see the official page). Never paste an API key into the chat or a
    file. Enter it only in the tool's own prompt.
-3. Then in VibeSquad, make a profile for it under **⚙ SETTINGS**, **AGENT PROFILES** (**PROVIDER** and **MODEL**), and pick that profile in **PROFILE** (**+ NEW AGENT**) or **BUDDY PROFILE** (**+ TEAM**) when you start a chat. You cannot change the provider of a chat that is already running. Whether the `PROVIDER` list shows Codex under that name: UNVERIFIED.
+3. Then in VibeSquad, make a profile for it under **⚙ SETTINGS**, **AGENT PROFILES** (**PROVIDER** and **MODEL**), and pick that profile in **PROFILE** (**+ NEW AGENT**) or **BRAINSTORM PROFILE** (**+ TEAM**) when you start a chat. You cannot change the provider of a chat that is already running. Whether the `PROVIDER` list shows Codex under that name: UNVERIFIED.
 
 ## Gotchas
 - In PowerShell use `codex.cmd` if a command says "running scripts is disabled".

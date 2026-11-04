@@ -6,14 +6,15 @@ Once you have more than two or three agents, names matter. A good name tells you
 
 - **Squad:** one project, such as "Lemonade Game".
 - **Lane:** one feature inside the project, such as "Weather". Each lane has one [Buddy](Buddy.md), one [Lead](Lead.md) and its [workers](Worker.md).
-- **Buddy:** `BRAINSTORM · <lane>`
-- **Lead:** `★ LEAD · <LANE> ord1`, then `ord2` for the next one after a [handoff](Handoff.md)
-- **Retired Lead:** `(old) ★ LEAD · <LANE> ord1`
-- **Worker:** `<LANE> · <job>`
+- **Code:** a short tag of 2 to 5 letters for each lane, such as `Bug` or `ADE`.
+- **Buddy:** `<Code> Buddy`, or `<Code> Buddy · <topic>`
+- **Lead:** `★ <Code><ord> · <objective>`, such as `★ Bug1 · fix login`. The next Lead after a [handoff](Handoff.md) is `Bug2`.
+- **Retired Lead:** `(old) <Code><ord> · <objective>`
+- **Worker:** `<Code><ord> · <job>`
 
 Rules:
 
-- Put the lane first, so a sorted list groups by feature.
+- Put the lane code first, so a sorted list groups by feature.
 - Do not put the model name in the title. It changes, and the tool already shows it.
 - Only one live Lead and one live main Buddy per lane. A project can run many lanes at once.
 - Rename a retired agent to `(old)` so you never talk to the wrong one.

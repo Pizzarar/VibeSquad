@@ -2,7 +2,7 @@
 
 The guide, in order.
 
-The flow: install your provider and sign in, run the VibeSquad installer, add this folder as a team in VibeSquad, and the Brainstorm chat (the Buddy) runs [START_HERE](../START_HERE.md).
+The flow: install your provider and sign in, run the VibeSquad installer, add this folder as a squad in VibeSquad (**+ New squad**), and the Brainstorm chat (the Buddy) runs [START_HERE](../START_HERE.md).
 
 1. Read [ROLO](../ROLO.md) first. It is one page.
 2. [Everybody can vibe](../Guide/00-everybody-can-vibe.md)

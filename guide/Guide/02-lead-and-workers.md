@@ -28,9 +28,9 @@ Read the files once. You do not need to understand every line. You are checking 
 
 ## 2. Start the Lead
 
-The Lead is a second chat. Start it yourself: in the Squad's header click **+ NEW AGENT**, pick a Lead profile in **PROFILE** (role: lead), then click **Spawn agent**. Your Buddy can also start one for you through Paseo. The **✓ Handed off** button on the Buddy only marks the Buddy done; it does not start a Lead. When a Buddy has been working on one topic, **✓ Hand off plan & close topic** hands that topic's plan on and closes the chat.
+The Lead is a second chat. Start it yourself: click **FULL** at the top right of the Squad page (the default page only shows Teams), then in the header click **+ NEW AGENT**, pick a Lead profile in **PROFILE** (role: lead), then click **Spawn agent**. Your Buddy can also start one for you through Paseo. The **✓ Handed off** button on the Buddy only marks the Buddy done; it does not start a Lead. When a Buddy has been working on one topic, **✓ Hand off plan & close topic** hands that topic's plan on and closes the chat.
 
-![A Brainstorm chat: Hand off plan & close topic, Park to card, a token meter, Restart and Summary](../assets/screenshots/04-buddy-chat.png) VibeSquad shows the Lead as "RUNS THE WORK". Open the Lead's chat and type:
+![A Brainstorm chat: Hand off plan & close topic, Park to card, a token meter, Restart and Summary](../assets/screenshots/04-buddy-chat.png) VibeSquad shows the Lead as "RUNS THE WORK" (in **FULL** view, or in the Team's rail on the default page). Open the Lead's chat and type:
 
 > You are the Lead. Read AGENTS.md, then LEAD_RULES.md, then PLAN.md. Do not write code yourself. Split the plan into small jobs. For each job, give: what it is, what is out of scope, and what proof you expect. Show me the list and wait for my yes.
 

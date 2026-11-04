@@ -2,7 +2,7 @@
 
 What each area of VibeSquad's Settings window does, when to touch it, and the safe default. If a setting isn't listed here, you don't need it yet.
 
-Open it from the **⚙ SETTINGS** button in a Squad's header in VibeSquad. The window is titled **Settings**. Section names below are the labels you will see on screen. The top of the window holds the first four sections:
+Open it from the **⚙ SETTINGS** button in a Squad's header in VibeSquad. It opens a **Settings** page with a list of tabs down the left (App, Chat, Notifications, New Agent defaults, Keybindings, Team, Remote Control, Paseo, Profiles, About) and a search box. Section names below are the labels you will see on screen; if one is not where you expect, click through the tabs or search for it. The first four sections look like this:
 
 ![Settings, top: Your name, Allow other devices, Update channel and Display & 4K UI scale](../assets/screenshots/07a-settings-top.png)
 
@@ -76,9 +76,9 @@ These are looser than this kit's ladder: aim for 100k, be out by 150k, never pas
 
 ## Config warnings
 
-An amber **CONFIG JSON PARSE WARNING** box appears at the top only when a config file can't be read, usually because of a typo in the JSON. The box says which file and what went wrong. Nothing shows when all is well.
+An amber **⚠ CONFIG WARNING** box appears at the top only when a config file can't be read, usually because of a typo in the JSON. The box says which file and what went wrong. Nothing shows when all is well.
 
-- **Change it when:** it appears. Fix the file it names, or restore a backup, then reopen Settings.
+- **Change it when:** it appears. Fix the file it names, or restore a backup, then reopen Settings. (UNVERIFIED: which tab shows it; the source puts it in the Team settings.)
 - **Safe default:** nothing to set. No box means no problem.
 
 ## Paseo
