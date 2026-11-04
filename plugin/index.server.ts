@@ -42,6 +42,7 @@ import { defangPromptFences } from "@vibesquad/server/write-guards.mjs";
 import { detachLiveChildren } from "@vibesquad/server/detach-children.mjs";
 import { briefRootFor } from "@vibesquad/server/brief-path.mjs";
 import { deriveRole } from "@vibesquad/server/profiles.mjs";
+import { normalizeProviderFamily, resolveProfileWithFailover } from "@vibesquad/server/provider-failover.mjs";
 import { leanApplies, leanProviderOptions } from "@vibesquad/server/lean-tools.mjs";
 import { makeVsHttpHandler, vsHttp } from "./server/remote-proxy.ts";
 import {
@@ -605,6 +606,47 @@ export function laneBriefBlock(root: string, lane: string): string {
   ].join("\n");
 }
 
+/** The safe-slug used for `docs/lanes/<lane>/` artifact folders (SPEC.md + TASKS.json). */
+export function laneArtifactSlug(lane: string): string {
+  return String(lane ?? "").trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-|-$/g, "");
+}
+
+/**
+ * The durable lane artifact as a prompt block (SPEC.md + a TASKS.json summary), or ""
+ * when the lane has neither file. Unlike a Buddy brief, this survives provider switches
+ * and restarts, so every spawn (brainstorm/lead/worker) re-reads the same source of truth.
+ */
+export function laneArtifactBlock(root: string, lane: string): string {
+  const safeLane = laneArtifactSlug(lane);
+  if (!safeLane) return "";
+  const dir = path.join(root, "docs", "lanes", safeLane);
+  let spec = "";
+  let tasks = "";
+  try {
+    spec = fs.readFileSync(path.join(dir, "SPEC.md"), "utf8").trim();
+  } catch {
+    /* no SPEC.md */
+  }
+  try {
+    tasks = fs.readFileSync(path.join(dir, "TASKS.json"), "utf8").trim();
+  } catch {
+    /* no TASKS.json */
+  }
+  if (!spec && !tasks) return "";
+  const parts = [
+    `<!-- vibesquad:lane-artifact:begin lane=${safeLane} -->`,
+    `Lane Artifact (docs/lanes/${safeLane}/ — durable source of truth across restarts & provider switches):`,
+  ];
+  if (spec) {
+    parts.push(`\n## SPEC.md (docs/lanes/${safeLane}/SPEC.md)\n${defangPromptFences(spec.slice(0, MAX_BRIEF_CHARS))}`);
+  }
+  if (tasks) {
+    parts.push(`\n## TASKS.json (docs/lanes/${safeLane}/TASKS.json)\n${defangPromptFences(tasks.slice(0, MAX_BRIEF_CHARS))}`);
+  }
+  parts.push(`<!-- vibesquad:lane-artifact:end -->`);
+  return parts.join("\n");
+}
+
 /**
  * Append a retiring Buddy's last turn under `## In flight` when the brief has not
  * been touched since that turn. Returns what happened, for the retire metric.
@@ -763,6 +805,10 @@ export interface Deps {
   refuseAgent?(agentId: string): Promise<void>;
   /** Delay after agent.created before checking whether an idle 0-token agent needs its initial prompt redelivered. */
   firstPromptRedeliverMs?: number;
+  /** Provider usage snapshot (array or () => array) used to fail over capped providers before spawn. */
+  usageProviders?: any[] | (() => any[]);
+  /** Capped-provider map/array (tests inject this to avoid touching ~/.vibesquad/capped-providers.json). */
+  cappedProviders?: any;
 }
 
 export interface AgentSettingsPatch {
@@ -1079,6 +1125,53 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
     };
 
+    /**
+     * Normalize a capped-provider source (array of families, `{ providers: [...] }`, or a
+     * `{ family: value }` map) into `{ normalizedFamily: value }`. Unknown keys are dropped.
+     */
+    const normalizeCappedProviders = (raw: any): Record<string, any> => {
+      if (Array.isArray(raw)) {
+        const out: Record<string, any> = {};
+        for (const item of raw) {
+          const fam = normalizeProviderFamily(
+            typeof item === "string" ? item : item?.id ?? item?.provider ?? item?.name,
+          );
+          if (fam) out[fam] = item && typeof item === "object" ? item : { capped: true };
+        }
+        return out;
+      }
+      if (raw && typeof raw === "object") {
+        if (Array.isArray(raw.providers)) return normalizeCappedProviders(raw.providers);
+        const out: Record<string, any> = {};
+        for (const [k, v] of Object.entries(raw)) {
+          const fam = normalizeProviderFamily(k);
+          if (fam) out[fam] = v ?? { capped: true };
+        }
+        return out;
+      }
+      return {};
+    };
+
+    /**
+     * Capped providers keyed by normalized family. Sources, in order: deps.cappedProviders
+     * (tests), VIBESQUAD_CAPPED_PROVIDERS_PATH, then ~/.vibesquad/capped-providers.json. An
+     * empty map means no provider is capped, so spawns are left alone when nothing declares one.
+     */
+    const readCappedProviderMap = (): Record<string, any> => {
+      if (deps.cappedProviders !== undefined && deps.cappedProviders !== null) {
+        return normalizeCappedProviders(deps.cappedProviders);
+      }
+      const file = process.env.VIBESQUAD_CAPPED_PROVIDERS_PATH
+        ? path.resolve(process.env.VIBESQUAD_CAPPED_PROVIDERS_PATH)
+        : path.join(baseDir(), "capped-providers.json");
+      if (!fs.existsSync(file)) return {};
+      try {
+        return normalizeCappedProviders(JSON.parse(fs.readFileSync(file, "utf8")));
+      } catch {
+        return {};
+      }
+    };
+
     // ---- Hook 1: before agent.create ---------------------------------------
 
     stops.push(
@@ -1142,8 +1235,33 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         // VibeSquad's own spawn paths also pass env VS_PROFILE. Label-only spawns are
         // corrected in agent.created instead.
         const profileHint = config.profile || reqLabels.profile || env?.VS_PROFILE;
-        const profileMatch = matchStoredProfile(profileHint, provider, title, explicitRole || titleRole || "worker");
-        const matchedProfile = profileMatch?.profile ?? null;
+        let profileMatch = matchStoredProfile(profileHint, provider, title, explicitRole || titleRole || "worker");
+        let matchedProfile = profileMatch?.profile ?? null;
+
+        // Auto-failover: when the matched profile's provider is over quota or capped, switch
+        // to its healthy counterpart before the session is created. Only when usage/capped
+        // data is actually present (tests or on-disk), so normal spawns are unaffected.
+        const usageList: any[] = [
+          ...(typeof deps.usageProviders === "function"
+            ? deps.usageProviders()
+            : Array.isArray(deps.usageProviders)
+              ? deps.usageProviders
+              : []),
+        ];
+        for (const family of Object.keys(readCappedProviderMap())) {
+          usageList.push({ id: family, status: "exhausted", usedPct: 100 });
+        }
+        if (usageList.length > 0 && matchedProfile) {
+          const fo = resolveProfileWithFailover(matchedProfile, loadStoredProfiles(), usageList);
+          if (fo.failedOver && fo.profile) {
+            matchedProfile = fo.profile;
+            profileMatch = { profile: fo.profile, explicit: true };
+            if (nextReqLabels?.profile) nextReqLabels.profile = fo.profile.name;
+            reqLabels.profile = fo.profile.name;
+            log(`profile-failover: ${fo.fromProfile}->${fo.toProfile} reason=${fo.reason}`);
+          }
+        }
+
         if (String(profileHint ?? "").trim() && !profileMatch?.explicit) {
           log(`profile "${profileHint}" named by spawn "${title}" is not in profiles.json; caller settings kept`);
         }
@@ -1413,6 +1531,23 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
                   log(`brief metric write failed: ${err}`);
                 }
               }
+            }
+          }
+        }
+
+        // Durable lane artifacts (docs/lanes/<lane>/SPEC.md + TASKS.json) ride along on every
+        // spawn — brainstorm, lead and worker alike — so provider switches and restarts never
+        // lose the lane's source of truth.
+        const artifactLane = (reqLabels.orphan === "1" ? "" : callerLane || env?.VS_LANE || spawnLoc?.lane || "").trim();
+        if (artifactLane) {
+          const currentSys = String(next.systemPrompt ?? sanitizedSysPrompt ?? "");
+          const artMarker = "<!-- vibesquad:lane-artifact:begin lane=";
+          if (!currentSys.includes(artMarker)) {
+            const briefRoot = deps.briefRoot ?? briefRootFor(reqLabels.team || env?.VS_TEAM || spawnTeamId || "", artifactLane, REPO_ROOT);
+            const artBlock = laneArtifactBlock(briefRoot, artifactLane);
+            if (artBlock) {
+              next.systemPrompt = [currentSys.trim(), artBlock].filter(Boolean).join("\n\n");
+              changed = true;
             }
           }
         }
