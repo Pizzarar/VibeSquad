@@ -6,6 +6,7 @@ import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { effectiveAgentRole, findLaneInRegistry, formatDisplayTitle, isHubLane, isRetiredAgent, laneCodeFor, resolveWorktreeRootPath, topicOf } from "./identity.mjs";
 import { findProfileOrFallback, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
+import { readRawPaseoConfig } from "./paseo-control.mjs";
 import { briefRootFor, laneWorkingDir } from "./brief-path.mjs";
 import { defangPromptFences } from "./write-guards.mjs";
 import { detachLiveChildrenViaClient, listDaemonAgents } from "./detach-children.mjs";
@@ -31,13 +32,9 @@ export function readPaseoConfig(_rootDir = REPO_ROOT) {
   const home = process.env.PASEO_HOME || join(homedir(), ".paseo");
   let listen = "127.0.0.1:6767";
   let serverId = "";
-  const cfg = readJsonFileWithBom(join(home, "config.json"), {
-    label: "~/.paseo/config.json",
-    fallback: null,
-    recordWarning: true,
-  });
-  if (cfg.ok && cfg.data) {
-    listen = cfg.data.daemon?.listen ?? listen;
+  const { config } = readRawPaseoConfig({ paseoHome: home });
+  if (config) {
+    listen = config.daemon?.listen ?? listen;
   }
   try {
     serverId = readFileSync(join(home, "server-id"), "utf8").trim();

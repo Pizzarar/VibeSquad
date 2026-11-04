@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import cp from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, before, describe, test } from "node:test";
@@ -20,6 +20,7 @@ import {
   getPaseoPlugins,
   getPaseoProviders,
   getPaseoUsage,
+  inspectDaemonAgents,
   listPaseoConfigBackups,
   markDaemonManagedByVibeSquad,
   maskSecrets,
@@ -470,6 +471,42 @@ describe("PLAN_PASEO_CONTROLS — Paseo settings & daemon controls (isolated tem
     assert.equal(fastStatus.pid, 61616);
     assert.equal(fastStatus.serverId, "srv_fast_poll_test");
     assert.equal(fastStatus.busyAgentCount, 0);
+  });
+
+  test("7b. inspectDaemonAgents reads <paseoHome>/agents on disk without spawning the CLI", async () => {
+    const agentsDir = join(tempPaseoHome, "agents", "ws-direct");
+    mkdirSync(agentsDir, { recursive: true });
+    writeFileSync(
+      join(agentsDir, "agent_running.json"),
+      JSON.stringify({ id: "agent_running", title: "Busy Buddy", status: "running" }),
+      "utf8",
+    );
+    writeFileSync(
+      join(agentsDir, "agent_idle.json"),
+      JSON.stringify({ id: "agent_idle", name: "Idle Worker", status: "idle" }),
+      "utf8",
+    );
+    writeFileSync(join(agentsDir, "agent_closed.json"), JSON.stringify({ id: "agent_closed", status: "closed" }), "utf8");
+    writeFileSync(
+      join(agentsDir, "agent_archived.json"),
+      JSON.stringify({ id: "agent_archived", status: "idle", archivedAt: "2026-01-01T00:00:00.000Z" }),
+      "utf8",
+    );
+
+    // Fake CLI that would leave a marker if inspectDaemonAgents spawned it.
+    const marker = join(tempRoot, "spawned.marker");
+    const fakeCli = join(tempRoot, "fake-paseo.cjs");
+    writeFileSync(fakeCli, `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "spawned");\n`, "utf8");
+
+    const res = await inspectDaemonAgents({
+      paseoHome: tempPaseoHome,
+      cli: { kind: "node", bin: fakeCli, source: "existing" },
+    });
+
+    assert.equal(existsSync(marker), false, "must not spawn the paseo CLI when no runner is supplied");
+    assert.equal(res.liveCount, 2);
+    assert.equal(res.busyCount, 1);
+    assert.deepEqual(res.busyAgents, [{ id: "agent_running", name: "Busy Buddy" }]);
   });
 
   test("8. windows-hide-preload preserves util.promisify(cp.execFile) and util.promisify(cp.exec) with { stdout, stderr } and .child", async () => {
