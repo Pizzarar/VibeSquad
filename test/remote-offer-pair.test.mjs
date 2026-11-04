@@ -6,6 +6,7 @@ import { describe, test } from "node:test";
 import {
   REMOTE_PASSWORD_KEY,
   REMOTE_TAB_PASSWORD_KEY,
+  canonicalOfferUrl,
   consumeUrlOfferSession,
   detectRemote,
   hasOfferFragment,
@@ -67,13 +68,13 @@ describe("URL helpers strip the remote/pw params correctly", () => {
   });
 });
 
-describe("consumeUrlOfferSession saves the inline password", () => {
-  test("with a valid #offer= it saves the session and password (tab, not remembered); readPassword() returns it", () => {
+describe("consumeUrlOfferSession parks the inline password (never the session)", () => {
+  test("with a valid #offer= it parks the password in the tab and does NOT save the session yet", () => {
     const local = mem();
     const tab = mem();
     consumeUrlOfferSession({ search: `?remote=1&pw=${encodeURIComponent("hunter2")}`, hash: OFFER_HASH }, local, tab);
     assert.equal(readPassword(local, tab), "hunter2");
-    assert.ok(readSession(local), "offer saved alongside the password");
+    assert.equal(readSession(local), null, "offer must not be saved before a successful probe (avoids a second relay client)");
     assert.equal(local.getItem(REMOTE_PASSWORD_KEY), null, "not remembered");
     assert.equal(tab.getItem(REMOTE_TAB_PASSWORD_KEY), "hunter2");
   });
@@ -96,6 +97,33 @@ describe("consumeUrlOfferSession saves the inline password", () => {
   test("offerFromHash parses the setup fragment", () => {
     assert.equal(hasOfferFragment(OFFER_HASH), true);
     assert.equal(offerFromHash(OFFER_HASH).serverId, OFFER.serverId);
+  });
+});
+
+describe("canonical pairing link display", () => {
+  test("canonicalOfferUrl rebuilds the app.paseo.sh link from the fragment", () => {
+    assert.equal(canonicalOfferUrl(OFFER_HASH), `https://app.paseo.sh/${OFFER_HASH}`);
+  });
+
+  test("RemotePair.tsx shows the canonical link, never location.href", () => {
+    const src = read("src/RemotePair.tsx");
+    assert.match(src, /return hasOfferFragment\(location\.hash\) \? canonicalOfferUrl\(location\.hash\) : "";/);
+    assert.doesNotMatch(src, /hasOfferFragment\(location\.hash\) \? location\.href/);
+  });
+});
+
+describe("single relay client per page (no clientId collision)", () => {
+  test("probeRemote uses a unique clientId so it never fights remoteDaemonClient", () => {
+    const src = read("src/paseoRemote.ts");
+    assert.match(src, /relayConfig\(offer, password, "vibesquad-remote-probe"\)/);
+    assert.match(src, /function relayConfig\(offer: RemoteOffer, password: string, clientId = "vibesquad-remote"\)/);
+  });
+});
+
+describe("self-relay guard only fires when the local daemon is actually running", () => {
+  test("remoteBoot.ts wipes the session only when /paseo/status reports running", () => {
+    const src = read("src/remoteBoot.ts");
+    assert.match(src, /j\.running && typeof j\.serverId === "string" && j\.serverId === target\.serverId/);
   });
 });
 

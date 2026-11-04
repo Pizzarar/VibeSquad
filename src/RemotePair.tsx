@@ -6,10 +6,13 @@
 import { useEffect, useRef, useState } from "react";
 import { parseConnectionOfferFromUrl } from "@getpaseo/protocol/connection-offer";
 import { probeRemote } from "./paseoRemote";
-import { clearSession, hasOfferFragment, isAndroidUserAgent, isLocalHost, normalizeOfferInput, parseOfferInput, readPassword, readSession, saveSession, takeAuthNote, remoteError, type RemoteError } from "./remoteSession";
+import { canonicalOfferUrl, clearSession, hasOfferFragment, isAndroidUserAgent, isLocalHost, normalizeOfferInput, parseOfferInput, readPassword, readSession, saveSession, takeAuthNote, remoteError, type RemoteError } from "./remoteSession";
 
+// The pairing link is the canonical Paseo URL, never this page's own (possibly local) address: when
+// /__desktop/setup redirects the webview to `/?remote=1#offer=…` the textarea must show
+// `https://app.paseo.sh/#offer=…`, not `http://127.0.0.1:…/?remote=1#offer=…`.
 function initialLink(): string {
-  return hasOfferFragment(location.hash) ? location.href : "";
+  return hasOfferFragment(location.hash) ? canonicalOfferUrl(location.hash) : "";
 }
 
 function initialError(): RemoteError | null {
@@ -48,7 +51,7 @@ export function RemotePair() {
     const onHash = () => {
       if (!hasOfferFragment(location.hash)) return;
       setLinkNeeded(true);
-      setLink(location.href);
+      setLink(canonicalOfferUrl(location.hash));
       setError(null);
     };
     window.addEventListener("hashchange", onHash);

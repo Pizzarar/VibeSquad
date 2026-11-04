@@ -76,7 +76,7 @@ if (typeof window !== "undefined" && isRemote() && isLocalHost(location.hostname
     void nativeFetch("/__vibesquad/paseo/status")
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
-        if (j && typeof j.serverId === "string" && j.serverId === target.serverId) {
+        if (j && j.running && typeof j.serverId === "string" && j.serverId === target.serverId) {
           clearSession();
           history.replaceState(null, "", stripRemoteFromUrl(location));
           location.reload();

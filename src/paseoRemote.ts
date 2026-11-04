@@ -6,11 +6,11 @@ import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { buildRelayWebSocketUrl } from "@getpaseo/protocol/daemon-endpoints";
 import { isRemote, mapRemoteError, needsPairing, noteAuthFailure, readPassword, readSession, relayParts, remoteError, type RemoteError, type RemoteOffer } from "./remoteSession";
 
-function relayConfig(offer: RemoteOffer, password: string) {
+function relayConfig(offer: RemoteOffer, password: string, clientId = "vibesquad-remote") {
   const { endpoint, useTls, serverId } = relayParts(offer);
   return {
     url: buildRelayWebSocketUrl({ endpoint, useTls, serverId, role: "client", version: 2 }),
-    clientId: "vibesquad-remote",
+    clientId,
     clientType: "browser" as const,
     appVersion: "0.0.1",
     ...(password ? { password } : {}),
@@ -68,7 +68,7 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 export async function probeRemote(offer: RemoteOffer, password: string, timeoutMs = PROBE_TIMEOUT_MS): Promise<RemoteError | null> {
   let client: DaemonClient;
   try {
-    client = new DaemonClient({ ...relayConfig(offer, password), reconnect: { enabled: false }, connectTimeoutMs: Math.min(timeoutMs, 15_000) });
+    client = new DaemonClient({ ...relayConfig(offer, password, "vibesquad-remote-probe"), reconnect: { enabled: false }, connectTimeoutMs: Math.min(timeoutMs, 15_000) });
   } catch (e) {
     return remoteError("bad-link", `The pairing link can't be used: ${(e as Error)?.message ?? e}`);
   }

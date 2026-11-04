@@ -110,29 +110,27 @@ export function stripPwFromUrl(loc: { pathname?: string; search: string; hash?: 
   return (loc.pathname ?? "/") + (qs ? `?${qs}` : "") + (hash ? `#${hash}` : "");
 }
 
+/** The canonical Paseo pairing URL for a page carrying an `#offer=` fragment (never the local redirect URL). */
+export function canonicalOfferUrl(hash: string): string {
+  return `https://app.paseo.sh/${hash}`;
+}
+
 /**
  * Consumes a one-shot `?pw=<urlencoded>` password placed in the URL by /__desktop/setup alongside a `#offer=…`
- * pairing link. A non-empty password is saved to this tab's password storage (via saveSession when the fragment
- * is a valid offer, else directly to the tab key), then `pw` is stripped from the address bar — keeping
- * `?remote=1` and `#offer=…` so RemotePair can still complete pairing (and readPassword() pre-fills the field).
+ * pairing link. The password is parked in this tab's password storage (readPassword() pre-fills the field), then
+ * `pw` is stripped from the address bar — keeping `?remote=1` and `#offer=…` so RemotePair can still complete
+ * pairing. The offer is deliberately NOT saved here: saving it would make readSession() non-null while RemotePair
+ * is still probing, so paseo.ts's remoteDaemonClient() would open a second relay client with the same clientId
+ * and fight probeRemote over the relay session. RemotePair.doConnect saves the offer after a successful probe.
  */
 export function consumeUrlOfferSession(
   loc: { pathname?: string; search: string; hash?: string },
-  local: GetSet | null = browserStorage("localStorage"),
+  _local: GetSet | null = browserStorage("localStorage"),
   tab: GetSet | null = browserStorage("sessionStorage"),
 ): void {
   const pw = new URLSearchParams(loc.search ?? "").get("pw");
   if (!pw) return;
-  const target = offerFromHash(loc.hash ?? "");
-  if (target) {
-    try {
-      saveSession(target, pw, false, local, tab);
-    } catch {
-      safe(() => tab?.setItem(REMOTE_TAB_PASSWORD_KEY, pw), undefined);
-    }
-  } else {
-    safe(() => tab?.setItem(REMOTE_TAB_PASSWORD_KEY, pw), undefined);
-  }
+  safe(() => tab?.setItem(REMOTE_TAB_PASSWORD_KEY, pw), undefined);
   safe(() => (globalThis as any).history.replaceState(null, "", stripPwFromUrl(loc)), undefined);
 }
 
