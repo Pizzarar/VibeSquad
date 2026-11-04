@@ -685,9 +685,7 @@ export function loadProfiles(profilesPath, options = {}) {
       if (profiles.length > 0) {
         const normalizedPaseo = paseoInfo.agentProfiles.map(normalizeProfile).filter(Boolean);
         if (
-          (options.autoImportPaseo === true ||
-            options.paseoConfigPath !== undefined ||
-            options.paseoProfiles !== undefined) &&
+          options.mergePaseoIntoExisting === true &&
           normalizedPaseo.length > 0
         ) {
           let added = false;
@@ -819,7 +817,11 @@ export function saveProfiles(input, profilesPath) {
   };
 }
 
-export function syncProfilesToPaseo(profilesInput, paseoConfigPath) {
+export function syncProfilesToPaseo(profilesInput, paseoConfigPath, options = {}) {
+  if (paseoConfigPath && typeof paseoConfigPath === "object") {
+    options = paseoConfigPath;
+    paseoConfigPath = options.paseoConfigPath;
+  }
   const cfgPath = getPaseoConfigPath(paseoConfigPath);
   if (!existsSync(cfgPath)) {
     return { ok: false, skipped: true, path: cfgPath };
@@ -840,17 +842,27 @@ export function syncProfilesToPaseo(profilesInput, paseoConfigPath) {
     .filter(Boolean)
     .map(toPaseoProfileShape);
 
-  for (const shaped of incoming) {
-    const idx = existing.findIndex(
-      (e) =>
-        (shaped.id && e?.id === shaped.id) ||
-        e?.name === shaped.name ||
-        (e?.name && LEGACY_PROFILE_ALIASES[e.name] === shaped.name),
-    );
-    if (idx >= 0) {
-      existing[idx] = shaped;
-    } else {
-      existing.push(shaped);
+  const matchesExisting = (shaped, e) =>
+    (shaped.id && e?.id === shaped.id) ||
+    e?.name === shaped.name ||
+    (e?.name && LEGACY_PROFILE_ALIASES[e.name] === shaped.name);
+
+  if (options?.merge === true) {
+    for (const shaped of incoming) {
+      const idx = existing.findIndex((e) => matchesExisting(shaped, e));
+      if (idx >= 0) {
+        existing[idx] = shaped;
+      } else {
+        existing.push(shaped);
+      }
+    }
+  } else {
+    existing.length = 0;
+    for (const shaped of incoming) {
+      const prev = (Array.isArray(raw.daemon.agentProfiles) ? raw.daemon.agentProfiles : []).find((e) =>
+        matchesExisting(shaped, e),
+      );
+      existing.push(!shaped.id && prev?.id ? { ...shaped, id: prev.id } : shaped);
     }
   }
 

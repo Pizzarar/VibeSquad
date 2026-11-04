@@ -471,15 +471,45 @@ test("7. R5: loadProfiles auto-imports Paseo profiles on first run (merging miss
       "utf8",
     );
 
-    const reloaded = loadProfiles(env.profilesPath, {
+    // Default: existing profiles.json is authoritative; leftover Paseo profiles are NOT resurrected
+    const notResurrected = loadProfiles(env.profilesPath, {
       paseoConfigPath: env.paseoConfigPath,
       autoImportPaseo: true,
+    });
+    assert.equal(notResurrected.profiles.length, 20);
+    assert.equal(notResurrected.profiles.some((p) => p.name === "Second Paseo Agent"), false);
+
+    const reloaded = loadProfiles(env.profilesPath, {
+      paseoConfigPath: env.paseoConfigPath,
+      mergePaseoIntoExisting: true,
     });
     assert.equal(reloaded.source, "vibesquad");
     assert.equal(reloaded.profiles.length, 21);
     assert.ok(reloaded.profiles.some((p) => p.name === "Second Paseo Agent"));
     const onDisk = JSON.parse(readFileSync(env.profilesPath, "utf8"));
     assert.equal(onDisk.profiles.length, 21);
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("7b. syncProfilesToPaseo replaces daemon.agentProfiles by default and only merges with { merge: true }", () => {
+  const env = makeTempEnv();
+  try {
+    mkdirSync(join(env.dir, ".paseo"), { recursive: true });
+    const stale = { id: "stale_1", name: "Stale Profile", provider: "claude", model: "m", modeId: "auto" };
+    const keep = { id: "keep_1", name: "Keep Me", provider: "claude", model: "m", modeId: "auto" };
+    const write = () =>
+      writeFileSync(env.paseoConfigPath, JSON.stringify({ daemon: { agentProfiles: [stale, keep] } }), "utf8");
+    write();
+    const replaced = syncProfilesToPaseo([keep], env.paseoConfigPath);
+    assert.deepEqual(replaced.agentProfiles.map((p) => p.name), ["Keep Me"]);
+    const onDisk = JSON.parse(readFileSync(env.paseoConfigPath, "utf8"));
+    assert.equal(onDisk.daemon.agentProfiles.length, 1);
+
+    write();
+    const merged = syncProfilesToPaseo([keep], env.paseoConfigPath, { merge: true });
+    assert.deepEqual(merged.agentProfiles.map((p) => p.name).sort(), ["Keep Me", "Stale Profile"]);
   } finally {
     env.cleanup();
   }

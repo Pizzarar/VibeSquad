@@ -1187,6 +1187,7 @@ async function handleProfiles(req, res) {
     if (req.method === "POST" || req.method === "PUT") {
       const body = await readCleanBody(req);
       const saved = saveProfiles(body);
+      syncProfilesToPaseo(saved.profiles);
       return sendJson(res, 200, {
         ok: true,
         path: saved.path,
