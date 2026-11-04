@@ -148,3 +148,57 @@ describe("UI wiring (source inspection)", () => {
     assert.match(src, /qrSvg: offerQrSvg/);
   });
 });
+
+describe("Block A4: PinGrid / .pin-tile mobile wrapping & overflow CSS", () => {
+  const css = () => read("src/styles.css");
+
+  test(".pin-grid-wrap constrains width so the grid can shrink on narrow viewports", () => {
+    const src = css();
+    assert.match(src, /\.pin-grid-wrap\s*\{[^}]*margin:\s*0\s+0\s+18px;/);
+    assert.match(src, /\.pin-grid-wrap\s*\{[^}]*min-width:\s*0;/);
+    assert.match(src, /\.pin-grid-wrap\s*\{[^}]*max-width:\s*100%;/);
+  });
+
+  test(".pin-grid uses minmax(min(100%, 300px), 1fr) and a bounded width", () => {
+    const src = css();
+    assert.match(src, /\.pin-grid\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(min\(100%,\s*300px\),\s*1fr\)\);/);
+    assert.match(src, /\.pin-grid\s*\{[^}]*min-width:\s*0;/);
+    assert.match(src, /\.pin-grid\s*\{[^}]*max-width:\s*100%;/);
+  });
+
+  test(".pin-tile clips overflow and never exceeds its grid cell", () => {
+    const src = css();
+    assert.match(src, /\.pin-tile\s*\{[^}]*min-width:\s*0;/);
+    assert.match(src, /\.pin-tile\s*\{[^}]*max-width:\s*100%;/);
+    assert.match(src, /\.pin-tile\s*\{[^}]*overflow:\s*hidden;/);
+  });
+
+  test(".pin-tile-head wraps and shrinks its children cleanly", () => {
+    const src = css();
+    assert.match(src, /\.pin-tile-head\s*\{[^}]*flex-wrap:\s*wrap;/);
+    assert.match(src, /\.pin-tile-head\s*\{[^}]*min-width:\s*0;/);
+    assert.match(src, /\.pin-tile-head\s*\{[^}]*max-width:\s*100%;/);
+  });
+
+  test(".pin-tile-lines is bounded so its content never overflows the tile", () => {
+    const src = css();
+    assert.match(src, /\.pin-tile-lines\s*\{[^}]*min-width:\s*0;/);
+    assert.match(src, /\.pin-tile-lines\s*\{[^}]*max-width:\s*100%;/);
+  });
+
+  test(".pin-line wraps and clamps to two lines instead of truncating", () => {
+    const src = css();
+    assert.match(src, /\.pin-line\s*\{[^}]*white-space:\s*normal;/);
+    assert.match(src, /\.pin-line\s*\{[^}]*overflow-wrap:\s*anywhere;/);
+    assert.match(src, /\.pin-line\s*\{[^}]*word-break:\s*break-word;/);
+    assert.match(src, /\.pin-line\s*\{[^}]*display:\s*-webkit-box;/);
+    assert.match(src, /\.pin-line\s*\{[^}]*\-webkit-line-clamp:\s*2;/);
+    assert.match(src, /\.pin-line\s*\{[^}]*\-webkit-box-orient:\s*vertical;/);
+  });
+
+  test(".pin-reply stays bounded so the input and Send button never clip", () => {
+    const src = css();
+    assert.match(src, /\.pin-reply\s*\{[^}]*min-width:\s*0;/);
+    assert.match(src, /\.pin-reply\s*\{[^}]*max-width:\s*100%;/);
+  });
+});

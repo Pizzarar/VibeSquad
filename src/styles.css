@@ -3403,10 +3403,11 @@ html, body, #root { overflow-x: hidden; }
 .pin-ctx.tone-red i { background: var(--hot-pink); }
 .pin-needs { flex: none; }
 
-.pin-grid-wrap { margin: 0 0 18px; }
-.pin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.pin-grid-wrap { margin: 0 0 18px; min-width: 0; max-width: 100%; }
+.pin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 14px; min-width: 0; max-width: 100%; }
 .pin-tile {
   display: flex; flex-direction: column; gap: 10px; min-height: 190px; padding: 12px 14px;
+  min-width: 0; max-width: 100%; overflow: hidden;
   background: linear-gradient(135deg, var(--panel) 0%, #0d0f22 100%);
   border: 1px solid var(--line); border-top: 2px solid var(--violet);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5); cursor: pointer; text-align: left;
@@ -3415,17 +3416,17 @@ html, body, #root { overflow-x: hidden; }
 .pin-tile.sel { border-color: var(--cyan); box-shadow: 0 0 14px var(--cyan-dim); }
 .pin-tile.needs-you { border-top-color: var(--hot-pink); }
 .pin-tile.no-session { border-top-color: var(--slate); border-style: dashed; }
-.pin-tile-head { display: flex; align-items: center; gap: 10px; }
+.pin-tile-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; max-width: 100%; }
 .pin-tile-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .pin-tile-name { font-family: var(--display); font-size: 16px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pin-tile-sub { display: flex; align-items: center; gap: 6px; }
-.pin-tile-lines { flex: 1; display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); min-height: 0; }
-.pin-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pin-tile-lines { flex: 1; display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); min-height: 0; min-width: 0; max-width: 100%; }
+.pin-line { white-space: normal; overflow-wrap: anywhere; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .pin-line.you { color: var(--text); opacity: 0.8; }
 .pin-line.you b { color: var(--cyan); font-weight: 600; }
 .pin-tile-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--slate); font-family: var(--arcade); font-size: 11px; }
 .pin-tile.no-session:hover .pin-tile-empty { color: var(--cyan); }
-.pin-reply { display: flex; gap: 6px; flex-wrap: wrap; cursor: default; }
+.pin-reply { display: flex; gap: 6px; flex-wrap: wrap; cursor: default; min-width: 0; max-width: 100%; }
 .pin-reply input { flex: 1; min-width: 0; background: #060711; border: 1px solid var(--line); color: var(--text); padding: 5px 8px; font: inherit; font-size: 12px; }
 .pin-reply input:focus { border-color: var(--cyan); outline: none; }
 .pin-reply-err { flex-basis: 100%; }
