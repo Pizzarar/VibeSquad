@@ -349,6 +349,19 @@ function matchSinglePathString(targetPath, teams) {
 }
 
 /**
+ * Extract the repo name from a managed worktree sanctuary path:
+ * `.../VibeSquad/worktrees/<repoName>/<unit>` or `.../.vibesquad/worktrees/<repoName>/<unit>`
+ * (case-insensitive). Returns `<repoName>` (original case) or null when the path is not a
+ * managed sanctuary path.
+ */
+export function extractManagedWorktreeRepoName(targetPath) {
+  const norm = String(targetPath ?? "").replace(/\\/g, "/");
+  if (!norm) return null;
+  const m = norm.match(/(?:\/vibesquad\/worktrees\/|\/\.vibesquad\/worktrees\/)([^/]+)/i);
+  return m ? m[1] : null;
+}
+
+/**
  * Match a working directory (or its git worktree main repo root) against registered lane/team paths.
  * Returns { team, lane } or null.
  */
@@ -359,6 +372,12 @@ export function matchPathInRegistry(cwd, teams = loadTeamsRegistry()) {
   const wtRoot = resolveWorktreeRootPath(cwd);
   if (wtRoot) {
     return matchSinglePathString(wtRoot, teams);
+  }
+  // Managed sanctuary path whose `.git` file may not exist on disk (e.g. in a unit test):
+  // recover the repo name straight from the path and match that.
+  const repoName = extractManagedWorktreeRepoName(cwd);
+  if (repoName) {
+    return matchSinglePathString(repoName, teams);
   }
   return null;
 }
