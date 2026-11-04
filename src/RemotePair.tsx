@@ -148,12 +148,11 @@ export function RemotePair() {
     void doConnect();
   }
 
-  // A pairing link opened with an inline password (?pw=#offer=…, from /__desktop/setup) pairs without a click.
+  // A pairing link opened (with or without an inline password, from /__desktop/setup) pairs without a click.
   const autoConnectRef = useRef(false);
   useEffect(() => {
     if (autoConnectRef.current) return;
     if (!hasOfferFragment(location.hash)) return;
-    if (!password) return;
     autoConnectRef.current = true;
     void doConnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps

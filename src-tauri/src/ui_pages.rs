@@ -1226,7 +1226,8 @@ pub fn render_unreachable_page(cfg: &DesktopConfig, last_error: &str) -> String 
 /// provides Ctrl+Shift+S / Alt+S shortcut to Change Server / Re-pair, a 3.5s empty-#root
 /// recovery watchdog bar, and monitors upstream reachability.
 pub fn desktop_bridge_script(last_hash: &str, last_route: &str) -> String {
-    let escaped_hash = serde_json::to_string(last_hash).unwrap_or_else(|_| "\"\"".to_string());
+    let clean_hash = if last_hash.contains("offer=") { "" } else { last_hash };
+    let escaped_hash = serde_json::to_string(clean_hash).unwrap_or_else(|_| "\"\"".to_string());
     let escaped_route = serde_json::to_string(&restore_path(last_route, last_hash)).unwrap_or_else(|_| "\"/\"".to_string()).replace('<', "\\u003c");
     format!(
         r#"<script>
@@ -1246,13 +1247,15 @@ pub fn desktop_bridge_script(last_hash: &str, last_route: &str) -> String {
   function saveRoute() {{
     clearTimeout(routeTimer);
     routeTimer = setTimeout(() => {{
+      const rawHash = window.location.hash || '';
+      const cleanHash = rawHash.includes('offer=') ? '' : rawHash;
       fetch('/__desktop/hash', {{
         method: 'POST',
         headers: {{ 'Content-Type': 'application/json' }},
         keepalive: true,
         body: JSON.stringify({{
-          hash: window.location.hash || '',
-          route: window.location.pathname + window.location.search + window.location.hash
+          hash: cleanHash,
+          route: window.location.pathname + window.location.search + cleanHash
         }})
       }}).catch(() => {{}});
     }}, 250);
@@ -1350,9 +1353,13 @@ pub fn desktop_bridge_script(last_hash: &str, last_route: &str) -> String {
 /// The path + query + hash to open after a restart: the saved full route, else `/` plus the legacy saved hash.
 /// Only same-origin app routes are accepted (never `//host`, never the relay's own `/__desktop/*`).
 pub fn restore_path(last_route: &str, last_hash: &str) -> String {
-    let r = last_route.trim();
+    // A saved `#offer=` pairing link must never be restored: it re-mounts the pairing screen on reload.
+    let r = last_route.trim().split("#offer=").next().unwrap_or("");
     if r.starts_with('/') && !r.starts_with("//") && !r.starts_with("/__desktop") && !r.contains('\\') && !r.contains(['\n', '\r']) {
         return r.to_string();
+    }
+    if last_hash.contains("offer=") {
+        return "/".to_string();
     }
     let h = last_hash.trim();
     if h.starts_with('#') {
@@ -1522,5 +1529,14 @@ mod tests {
             remote_html.contains("id=\"code-field\" style=\"\""),
             "remote host should reveal the pairing-code field"
         );
+    }
+
+    #[test]
+    fn restore_path_and_bridge_strip_offer_hash() {
+        assert_eq!(
+            restore_path("/?remote=1#offer=abc", "#offer=abc"),
+            "/?remote=1"
+        );
+        assert!(!desktop_bridge_script("#offer=abc", "/?remote=1#offer=abc").contains("#offer=abc"));
     }
 }

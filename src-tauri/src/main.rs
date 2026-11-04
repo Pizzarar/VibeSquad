@@ -1144,8 +1144,10 @@ async fn handle_desktop_pair(
             let mut cfg = state.config.write().unwrap();
             cfg.server_mode = "relay".to_string();
             cfg.server_host = default_server_host();
-            cfg.last_hash = offer_hash.clone();
-            cfg.last_route = format!("/?remote=1{}", cfg.last_hash);
+            // Never persist the #offer= link in last_hash/last_route: restoring it would re-mount the
+            // pairing screen on the next reload and loop `Connecting…` forever.
+            cfg.last_hash = String::new();
+            cfg.last_route = "/?remote=1".to_string();
             let _ = save_config(&cfg);
         }
         state.setup_mode.store(false, Ordering::SeqCst);
@@ -1385,9 +1387,15 @@ async fn handle_desktop_hash(
 ) -> impl IntoResponse {
     {
         let mut cfg = state.config.write().unwrap();
-        cfg.last_hash = payload.hash;
+        // Never persist an #offer= pairing link in last_hash / last_route: restoring it re-mounts the
+        // pairing screen on the next reload and loops `Connecting…` forever.
+        cfg.last_hash = if payload.hash.contains("offer=") {
+            String::new()
+        } else {
+            payload.hash
+        };
         if let Some(route) = payload.route {
-            cfg.last_route = route;
+            cfg.last_route = route.split("#offer=").next().unwrap_or(&route).to_string();
         }
         let _ = save_config(&cfg);
     }

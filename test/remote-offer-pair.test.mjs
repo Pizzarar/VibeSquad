@@ -143,10 +143,27 @@ describe("RemotePair.tsx prefills the password and always shows the field", () =
     assert.match(src, /data-testid="remote-pair-paste"/);
   });
 
-  test("auto-connects when an offer and an inline password arrive together", () => {
+  test("auto-connects on an #offer= redirect (with or without an inline password)", () => {
     const src = read("src/RemotePair.tsx");
     assert.match(src, /autoConnectRef/);
     assert.match(src, /hasOfferFragment\(location\.hash\)/);
     assert.match(src, /void doConnect\(\)/);
+    assert.doesNotMatch(src, /if \(!password\) return;/);
+  });
+});
+
+describe("desktop never persists/restores an #offer= pairing link", () => {
+  test("src-tauri strips #offer= from last_hash / last_route", () => {
+    const main = read("src-tauri/src/main.rs");
+    assert.match(main, /cfg\.last_hash = String::new\(\);/);
+    assert.match(main, /cfg\.last_route = "\/\?remote=1"\.to_string\(\);/);
+    assert.match(main, /cfg\.last_hash = if payload\.hash\.contains\("offer="\)/);
+    assert.match(main, /cfg\.last_route = route\.split\("#offer="\)\.next\(\)\.unwrap_or\(&route\)\.to_string\(\);/);
+
+    const ui = read("src-tauri/src/ui_pages.rs");
+    assert.match(ui, /let clean_hash = if last_hash\.contains\("offer="\)/);
+    assert.match(ui, /let r = last_route\.trim\(\)\.split\("#offer="\)\.next\(\)\.unwrap_or\(""\);/);
+    assert.match(ui, /if last_hash\.contains\("offer="\) \{\s*return "\/"\.to_string\(\);\s*\}/);
+    assert.match(ui, /rawHash\.includes\('offer='\) \? '' : rawHash/);
   });
 });
