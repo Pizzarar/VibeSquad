@@ -4,7 +4,7 @@ import { TeamSettingsModal, type TeamSettingsPart } from "./TeamSettingsModal";
 import { PushNotificationControls, playAlertChime } from "./notifications";
 import { checkForUpdates, updateLabel, type UpdateCheck } from "./DiagnosticsModal";
 import { useProfiles } from "./profiles";
-import { useUpdaterStatus } from "./userName";
+import { triggerUpdateInstall, useUpdaterStatus } from "./userName";
 import { clearSession, isRemote } from "./remoteSession";
 import { KeybindingsEditor } from "./KeybindingsEditor";
 import {
@@ -331,11 +331,15 @@ function About(props: { onDiagnostics: () => void; onLicenses: () => void; onChe
           data-setting-id="check-updates"
           disabled={upd === "checking"}
           onClick={() => {
+            if (updaterStatus.updateAvailable) {
+              void triggerUpdateInstall();
+              return;
+            }
             setUpd("checking");
             void checkForUpdates().then((ok) => setUpd(ok ? "ok" : "error"));
           }}
         >
-          {updateLabel(upd, updaterStatus.currentVersion)}
+          {updateLabel(upd, updaterStatus.currentVersion, updaterStatus.updateAvailable ? updaterStatus.availableVersion : undefined)}
         </button>
         <button className="btn ghost small" data-setting-id="diagnostics" data-testid="settings-open-diagnostics" onClick={props.onDiagnostics}>
           🩺 Diagnostics &amp; Logs

@@ -289,6 +289,32 @@ export interface UpdaterStatusView {
   availableVersion: string;
   downloaded: boolean;
   dismissed: boolean;
+  downloadUrl?: string;
+}
+
+export function isSemverNewer(currentVer: string, remoteVer: string, channel: UpdateChannel = "stable"): boolean {
+  const parse = (v: string) => {
+    const clean = String(v || "").trim().replace(/^v/i, "");
+    const m = clean.match(/^(\d+)\.(\d+)\.(\d+)(?:-beta\.(\d+))?$/i);
+    if (!m) return null;
+    return {
+      major: Number(m[1]),
+      minor: Number(m[2]),
+      patch: Number(m[3]),
+      beta: m[4] !== undefined ? Number(m[4]) : null,
+    };
+  };
+  const cur = parse(currentVer);
+  const rem = parse(remoteVer);
+  if (!cur || !rem) return false;
+  if (channel !== "beta" && rem.beta !== null) return false;
+  if (rem.major !== cur.major) return rem.major > cur.major;
+  if (rem.minor !== cur.minor) return rem.minor > cur.minor;
+  if (rem.patch !== cur.patch) return rem.patch > cur.patch;
+  if (cur.beta !== null && rem.beta === null) return true;
+  if (cur.beta === null && rem.beta !== null) return false;
+  if (cur.beta !== null && rem.beta !== null) return rem.beta > cur.beta;
+  return false;
 }
 
 let updaterStatus: UpdaterStatusView = {
@@ -298,6 +324,7 @@ let updaterStatus: UpdaterStatusView = {
   availableVersion: "",
   downloaded: false,
   dismissed: false,
+  downloadUrl: "",
 };
 
 export const getUpdaterStatus = (): UpdaterStatusView => updaterStatus;
@@ -310,7 +337,8 @@ function setUpdaterStatus(patch: Partial<UpdaterStatusView>): void {
     next.updateAvailable === updaterStatus.updateAvailable &&
     next.availableVersion === updaterStatus.availableVersion &&
     next.downloaded === updaterStatus.downloaded &&
-    next.dismissed === updaterStatus.dismissed
+    next.dismissed === updaterStatus.dismissed &&
+    next.downloadUrl === updaterStatus.downloadUrl
   ) {
     return;
   }
@@ -405,12 +433,37 @@ export async function loadUpdaterStatus(): Promise<UpdaterStatusView> {
     if (r.ok) {
       const d = await r.json();
       setDesktopConfigWarning(d.configWarning);
+      const curVer = String(d.currentVersion || "0.2.0");
+      const ch: UpdateChannel = d.channel === "beta" ? "beta" : "stable";
+      let updateAvail = Boolean(d.updateAvailable);
+      let availVer = String(d.availableVersion || "");
+      const downloaded = Boolean(d.downloaded);
+      let downloadUrl = "";
+
+      // Fallback for v0.2.0/v0.2.1 desktop builds whose Rust updater hit GitHub 302 redirects:
+      // check the server's /__vibesquad/desktop/update.json for a newer build.
+      if (!updateAvail) {
+        try {
+          const srv = await fetch("/__vibesquad/desktop/update.json", { cache: "no-store" });
+          if (srv.ok) {
+            const uj = await srv.json();
+            const srvVer = String(uj?.version || "");
+            if (srvVer && isSemverNewer(curVer, srvVer, ch)) {
+              updateAvail = true;
+              availVer = srvVer;
+              downloadUrl = uj?.available ? "/VibeSquad-setup.exe" : "https://github.com/Pizzarar/VibeSquad/releases/latest/download/VibeSquad-setup.exe";
+            }
+          }
+        } catch {}
+      }
+
       setUpdaterStatus({
-        currentVersion: String(d.currentVersion || "0.2.0"),
-        channel: d.channel === "beta" ? "beta" : "stable",
-        updateAvailable: Boolean(d.updateAvailable),
-        availableVersion: String(d.availableVersion || ""),
-        downloaded: Boolean(d.downloaded),
+        currentVersion: curVer,
+        channel: ch,
+        updateAvailable: updateAvail,
+        availableVersion: availVer,
+        downloaded,
+        downloadUrl,
       });
     }
   } catch {}
@@ -436,12 +489,25 @@ export async function saveUpdateChannel(channel: UpdateChannel): Promise<Updater
         availableVersion: String(d.availableVersion || ""),
         downloaded: Boolean(d.downloaded),
       });
+      if (!d.updateAvailable) {
+        await loadUpdaterStatus();
+      }
     }
   } catch {}
   return updaterStatus;
 }
 
 export async function triggerUpdateInstall(): Promise<boolean> {
+  if (updaterStatus.downloaded) {
+    try {
+      const r = await fetch("/__desktop/updater/install", { method: "POST" });
+      if (r.ok) return true;
+    } catch {}
+  }
+  if (updaterStatus.downloadUrl && typeof window !== "undefined") {
+    window.location.assign(updaterStatus.downloadUrl);
+    return true;
+  }
   try {
     const r = await fetch("/__desktop/updater/install", { method: "POST" });
     return r.ok;

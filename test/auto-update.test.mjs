@@ -144,6 +144,10 @@ describe("desktop updater verification: channels, signature rejection, and idle 
 
     const updateServer = createServer((req, res) => {
       if (req.url === "/stable/latest.json") {
+        res.writeHead(302, { location: "/stable/latest-redirected.json" });
+        return res.end();
+      }
+      if (req.url === "/stable/latest-redirected.json") {
         res.writeHead(200, { "content-type": "application/json" });
         return res.end(JSON.stringify(stableManifest));
       }
@@ -152,6 +156,10 @@ describe("desktop updater verification: channels, signature rejection, and idle 
         return res.end(JSON.stringify(betaManifest));
       }
       if (req.url === "/download/VibeSquad-setup.exe") {
+        res.writeHead(302, { location: "/download/VibeSquad-setup-redirected.exe" });
+        return res.end();
+      }
+      if (req.url === "/download/VibeSquad-setup-redirected.exe") {
         res.writeHead(200, { "content-type": "application/octet-stream" });
         return res.end(servedInstallerBytes);
       }

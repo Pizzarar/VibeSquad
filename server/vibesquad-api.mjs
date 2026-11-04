@@ -1289,6 +1289,11 @@ function resolveDesktopInstallerPath(rootDir = REPO_ROOT) {
   if (rootDir.includes(".worktrees")) {
     candidates.push(resolve(rootDir, "../.."));
   }
+  const stamp = readBuildStamp(rootDir);
+  if (stamp?.repo) {
+    const repoRoot = stamp.repo.replace(/[\\/]\.git[\\/]?$/, "");
+    if (repoRoot && !candidates.includes(repoRoot)) candidates.push(repoRoot);
+  }
   for (const base of candidates) {
     const distInstaller = join(base, "dist-desktop", "VibeSquad-setup.exe");
     if (existsSync(distInstaller)) return distInstaller;

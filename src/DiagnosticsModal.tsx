@@ -394,22 +394,30 @@ export function HelpModal({ onClose, onTour }: { onClose: () => void; onTour: ()
 }
 
 export type UpdateCheck = { state: "idle" | "checking" | "ok" | "error" };
-export function updateLabel(state: UpdateCheck["state"], version: string): string {
+export function updateLabel(state: UpdateCheck["state"], version: string, availableVersion?: string): string {
   if (state === "checking") return "Checking…";
+  if (availableVersion) return `⬇ Update to v${availableVersion}`;
   if (state === "ok") return `✓ Up to date (v${version})`;
   if (state === "error") return "Could not check for updates";
   return "Check for updates";
 }
 export async function checkForUpdates(): Promise<boolean> {
+  let sawDesktopEndpoint = false;
   try {
     const r = await fetch("/__desktop/updater/check", { method: "POST", cache: "no-store" });
-    if (r.ok) {
-      await loadUpdaterStatus();
+    sawDesktopEndpoint = r.status !== 404;
+    const st = await loadUpdaterStatus();
+    if (r.ok || st.updateAvailable) {
       return true;
+    }
+    if (sawDesktopEndpoint) {
+      return false;
     }
   } catch {}
   try {
-    return (await fetch("/__vibesquad/health", { cache: "no-store" })).ok;
+    const ok = (await fetch("/__vibesquad/health", { cache: "no-store" })).ok;
+    await loadUpdaterStatus();
+    return ok;
   } catch {
     return false;
   }

@@ -171,13 +171,29 @@ pub fn is_any_agent_running(state: &Arc<SharedAppState>) -> bool {
     !state.tracker.lock().unwrap().running_agents.is_empty()
 }
 
+/// Dedicated HTTP client for the updater that follows GitHub Releases HTTP 302 redirects
+/// (`state.client()` uses `Policy::none()` for the reverse proxy).
+fn updater_http_client(state: &Arc<SharedAppState>) -> reqwest::Client {
+    let mut builder = reqwest::Client::builder()
+        .use_rustls_tls()
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(120));
+    for pem in crate::load_ca_pems() {
+        if let Ok(cert) = reqwest::Certificate::from_pem(&pem) {
+            builder = builder.add_root_certificate(cert);
+        }
+    }
+    builder.build().unwrap_or_else(|_| state.client())
+}
+
 pub async fn check_for_updates(state: &Arc<SharedAppState>) -> Value {
     let channel = channel_of(state);
     let endpoint = endpoint_for_channel(&channel);
     let checked_at = now_unix_secs();
+    let http_client = updater_http_client(state);
 
-    let resp = match state
-        .client()
+    let resp = match http_client
         .get(&endpoint)
         .header("User-Agent", concat!("VibeSquad-Desktop-Updater/", env!("CARGO_PKG_VERSION")))
         .timeout(Duration::from_secs(10))
@@ -306,8 +322,7 @@ pub async fn check_for_updates(state: &Arc<SharedAppState>) -> Value {
     }
 
     // Download the installer and cryptographically verify its Minisign signature before trusting it.
-    let bin_resp = match state
-        .client()
+    let bin_resp = match http_client
         .get(&download_url)
         .header("User-Agent", concat!("VibeSquad-Desktop-Updater/", env!("CARGO_PKG_VERSION")))
         .timeout(Duration::from_secs(120))
