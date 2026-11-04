@@ -38,6 +38,14 @@ const TEAMS_DOC: any = {
 
 const PROFILES: any[] = [
   {
+    name: "Brainstorm - Claude",
+    role: "brainstorm",
+    provider: "claude",
+    model: "claude-opus-5-5",
+    modeId: "auto",
+    thinkingOptionId: "medium",
+  },
+  {
     name: "Brainstorm - Gemini",
     role: "brainstorm",
     provider: "antigravity-cli",
@@ -45,6 +53,14 @@ const PROFILES: any[] = [
     modeId: "accept-edits",
     thinkingOptionId: "medium",
     featureValues: { approvalPolicy: "skip", shareMcp: "on" },
+  },
+  {
+    name: "Lead - Claude",
+    role: "lead",
+    provider: "claude",
+    model: "claude-opus-5-5",
+    modeId: "auto",
+    thinkingOptionId: "medium",
   },
   {
     name: "Lead - Gemini",
@@ -130,7 +146,12 @@ function withEnv(fn: (ctx: { vsHome: string; briefRoot: string }) => Promise<voi
 
 function harness(
   agents: Map<string, any>,
-  opts: { briefRoot: string; timelineByAgent?: Map<string, any[]> },
+  opts: {
+    briefRoot: string;
+    timelineByAgent?: Map<string, any[]>;
+    cappedProviders?: any;
+    usageProviders?: any[];
+  },
 ) {
   const before = new Map<string, (input: any) => any>();
   const on = new Map<string, (input: any, ctx: any) => any>();
@@ -158,6 +179,8 @@ function harness(
     debounceMs: 20,
     retryBaseMs: 10,
     firstPromptRedeliverMs: 60_000,
+    ...(opts.cappedProviders !== undefined ? { cappedProviders: opts.cappedProviders } : {}),
+    ...(opts.usageProviders !== undefined ? { usageProviders: opts.usageProviders } : {}),
     setLabels: async (agentId: string, labels: Record<string, string>, name?: string) => {
       setLabelsCalls.push({ agentId, labels, name });
       const a = agents.get(agentId);
@@ -689,6 +712,49 @@ test(
       });
       assert.equal(leadOverFlag.labels["handoff-flagged"], "1", "failed turn still flags lead over 150k tokens");
       assert.ok(leadOverFlag.labels["needs-you"]?.includes("150k"), "failed turn sets needs-you on lead over 150k tokens");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Stage 7 — A fuzzy profile match never clobbers a caller-specified provider/model
+// ---------------------------------------------------------------------------
+
+test(
+  "Stage 7: fuzzy role match keeps a caller-specified provider/model even when the default profile's provider is capped",
+  withEnv(async ({ briefRoot }) => {
+    // claude is capped. The fuzzy role match infers "Lead - Claude" (claude); before the
+    // fix, failover promoted that fuzzy match to "Lead - Gemini" (explicit) and overwrote
+    // the caller's provider/model. It must now leave them alone.
+    const h = harness(new Map(), { briefRoot, cappedProviders: ["claude"] });
+    try {
+      const opencode = h.beforeCreate({
+        config: {
+          cwd: CWD,
+          provider: "opencode",
+          model: "deepseek/deepseek-flash",
+          title: "★ Bug9 · mobile spawn",
+        },
+        labels: { role: "lead", lane: "bug-chaser" },
+      });
+      assert.equal(opencode.config.provider, "opencode", "opencode provider preserved on a fuzzy match");
+      assert.equal(opencode.config.model, "deepseek/deepseek-flash", "caller model preserved on a fuzzy match");
+
+      // A caller on antigravity-cli (Gemini) is also left alone: its inferred "Lead - Gemini"
+      // is healthy, so claude being capped must not redirect it anywhere.
+      const agy = h.beforeCreate({
+        config: {
+          cwd: CWD,
+          provider: "antigravity-cli",
+          model: "gemini-3.8-flash",
+          title: "★ Bug9 · mobile spawn 2",
+        },
+        labels: { role: "lead", lane: "bug-chaser" },
+      });
+      assert.equal(agy.config.provider, "antigravity-cli", "antigravity-cli provider preserved on a fuzzy match");
+      assert.equal(agy.config.model, "gemini-3.8-flash", "caller model preserved on a fuzzy match");
     } finally {
       h.stop?.();
     }

@@ -253,7 +253,7 @@ export function matchStoredProfile(
     const byTitle = list.find((p) => cleanTitle.toLowerCase().startsWith(p.name.toLowerCase()));
     if (byTitle) return fuzzy(byTitle);
   }
-  const isAgy = (provider ?? "").startsWith("antigravity-cli");
+  const isAgy = (provider ?? "").startsWith("antigravity");
   if (role === "lead") {
     const want = isAgy ? "Lead - Gemini" : "Lead - Claude";
     return fuzzy(list.find((p) => p.name === want));
@@ -1263,6 +1263,12 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         let profileMatch = matchStoredProfile(profileHint, provider, title, explicitRole || titleRole || "worker");
         let matchedProfile = profileMatch?.profile ?? null;
 
+        // Remember whether the caller explicitly named the profile BEFORE any failover, so a
+        // fuzzy (role/title/cwd) match can never be promoted to an explicit match and silently
+        // overwrite the caller's provider/model. An explicit profile owns the provider choice;
+        // a fuzzy match only infers a default and must not clobber the caller's selection.
+        const wasExplicit = Boolean(profileMatch?.explicit);
+
         // Auto-failover: when the matched profile's provider is over quota or capped, switch
         // to its healthy counterpart before the session is created. Only when usage/capped
         // data is actually present (tests or on-disk), so normal spawns are unaffected.
@@ -1277,13 +1283,25 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           usageList.push({ id: family, status: "exhausted", usedPct: 100 });
         }
         if (usageList.length > 0 && matchedProfile) {
-          const fo = resolveProfileWithFailover(matchedProfile, loadStoredProfiles(), usageList);
-          if (fo.failedOver && fo.profile) {
-            matchedProfile = fo.profile;
-            profileMatch = { profile: fo.profile, explicit: true };
-            if (nextReqLabels?.profile) nextReqLabels.profile = fo.profile.name;
-            reqLabels.profile = fo.profile.name;
-            log(`profile-failover: ${fo.fromProfile}->${fo.toProfile} reason=${fo.reason}`);
+          // Only fail over a fuzzy match when the caller is actually on the matched profile's
+          // provider (or left the provider blank). A role/title/cwd inference that picked a
+          // default profile must never drag the caller onto another provider, e.g. a fuzzy
+          // "Lead - Claude" match failing over to Gemini and overwriting a caller-chosen
+          // `codex`/`opencode` provider+model. Explicit profiles always fail over.
+          const callerPm = splitProviderModel(config.provider, config.model);
+          const matchedPm = splitProviderModel(matchedProfile.provider, matchedProfile.model);
+          const fuzzyOnCallerProvider = !callerPm.provider || callerPm.provider === matchedPm.provider;
+          if (wasExplicit || fuzzyOnCallerProvider) {
+            const fo = resolveProfileWithFailover(matchedProfile, loadStoredProfiles(), usageList);
+            if (fo.failedOver && fo.profile) {
+              matchedProfile = fo.profile;
+              // Preserve explicitness: a fuzzy match stays fuzzy so the caller's provider/model
+              // are never clobbered by the explicit-profile override below.
+              profileMatch = { profile: fo.profile, explicit: wasExplicit };
+              if (nextReqLabels?.profile) nextReqLabels.profile = fo.profile.name;
+              reqLabels.profile = fo.profile.name;
+              log(`profile-failover: ${fo.fromProfile}->${fo.toProfile} reason=${fo.reason}`);
+            }
           }
         }
 
