@@ -5,7 +5,7 @@ import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { spawnEnvFor } from "./spawn-env";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
 import { useSyncExternalStore } from "react";
-import { retiredLeadTitle } from "./teams";
+import { refreshTeams, retiredLeadTitle } from "./teams";
 import { normalizeProviderUsage, type ProviderQuotaView } from "./antigravity";
 import { LEGACY_NEEDS_LABEL, LEGACY_NEEDS_UNTIL, LEGACY_NEEDS_REASON } from "./userName";
 import { demoAgents, demoArchived, demoProviderUsage, demoWorkspaces } from "./demo";
@@ -400,6 +400,7 @@ export function start() {
         refetchAll().catch(console.error);
         refetchWorkspaces().catch(console.error);
         refetchProviderUsage();
+        void refreshTeams();
       }
       return;
     }

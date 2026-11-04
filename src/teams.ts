@@ -94,7 +94,8 @@ function loadTeams(): TeamDef[] {
     const raw = localStorage.getItem(TEAMS_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
+      // Only a revisioned { revision, teams } cache counts; a bare array predates revision tracking and may carry stale names.
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && typeof parsed.revision === "string" && parsed.revision !== "unknown" && Array.isArray(parsed.teams)) return parsed.teams;
     }
   } catch {}
   return teamsFile.teams as TeamDef[];
@@ -114,7 +115,9 @@ export const getDiskTeams = diskTeams;
 
 const cacheTeams = (next: TeamDef[]) => {
   try {
-    localStorage.setItem(TEAMS_KEY, JSON.stringify(next));
+    // Skip caching until a revision is known so an unrevisioned copy can never seed a later first paint.
+    if (teamsRevision === "unknown") localStorage.removeItem(TEAMS_KEY);
+    else localStorage.setItem(TEAMS_KEY, JSON.stringify({ revision: teamsRevision, teams: next }));
   } catch {}
 };
 
@@ -144,11 +147,12 @@ export type TeamsUpdater = (cur: TeamDef[]) => TeamDef[];
  * an older copy, e.g. a modal open across polls, which must pass that copy as `base`.
  */
 export async function saveTeams(next: TeamDef[] | TeamsUpdater, opts: { base?: TeamsSnapshot } = {}): Promise<{ disk: boolean }> {
-  if (isRemote() && teamsRevision === "unknown") {
+  if (teamsRevision === "unknown") {
     await refreshTeams();
   }
   saveSeq++;
-  const base = opts.base?.teams ?? TEAMS;
+  // Before the first GET lands TEAMS may be a stale cache or the bundled example; only trust the server's copy.
+  const base = opts.base?.teams ?? (teamsRevision !== "unknown" ? diskTeams() : TEAMS);
   const edit = typeof next === "function" ? next : (fresh: TeamDef[]) => mergeTeams(base, next, fresh);
   let teams = typeof next === "function" ? next(TEAMS) : next;
   // The revision our edit was made against: an older one makes the server answer 409 so we merge.
@@ -200,7 +204,10 @@ export async function refreshTeams(): Promise<boolean> {
     if (!Array.isArray(data?.teams) || seq !== saveSeq) return false;
     registryFile = data;
     if (typeof data.revision === "string") teamsRevision = data.revision;
-    if (JSON.stringify(data.teams) === JSON.stringify(TEAMS)) return false;
+    if (JSON.stringify(data.teams) === JSON.stringify(TEAMS)) {
+      cacheTeams(TEAMS);
+      return false;
+    }
     TEAMS = data.teams;
     cacheTeams(TEAMS);
     notifyTeams();
