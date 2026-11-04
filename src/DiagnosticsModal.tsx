@@ -54,7 +54,6 @@ export async function buildBundle(conn: string, agents: Iterable<{ id: string; s
 
 /** A blip shorter than this shows nothing: the scrim only appears once the daemon has been away this long. */
 export const DISCONNECT_DEBOUNCE_MS = 2000;
-const RETRY_SECONDS = 3;
 const RETRY_TIMEOUT_MS = 10_000;
 
 export function shouldShowDisconnectOverlay(conn: string, disconnectedSinceMs: number | null, nowMs: number, debounceMs = DISCONNECT_DEBOUNCE_MS): boolean {
@@ -73,7 +72,6 @@ export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
   const [updateChecking, setUpdateChecking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [visible, setVisible] = useState(false);
-  const [retryIn, setRetryIn] = useState(RETRY_SECONDS);
   const [pw, setPw] = useState("");
   const [unlockBusy, setUnlockBusy] = useState(false);
   const [unlockErr, setUnlockErr] = useState<string | null>(null);
@@ -117,24 +115,8 @@ export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
     }
   }, []);
 
-  useEffect(() => {
-    if (!visible || authFailureReason) {
-      setRetryIn(RETRY_SECONDS);
-      return;
-    }
-    const iv = setInterval(() => {
-      setRetryIn((n) => {
-        if (n > 1) return n - 1;
-        void retry();
-        return RETRY_SECONDS;
-      });
-    }, 1000);
-    return () => clearInterval(iv);
-  }, [visible, authFailureReason, retry]);
-
   if (!down || !visible) return null;
   const onRetryNow = () => {
-    setRetryIn(RETRY_SECONDS);
     void retry();
   };
   const onRePairClick = () => {
@@ -206,7 +188,7 @@ export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
     <div className="daemon-disconnect-scrim" data-testid="daemon-disconnect-scrim">
       <div className="daemon-disconnect-card" data-testid="daemon-down-banner" role="alert">
         <div className="daemon-disconnect-title" data-testid="daemon-disconnect-text">
-          {authFailureReason ? "PASEO DAEMON LOCKED" : <>Daemon disconnected · retrying in {retryIn}s</>}
+          {authFailureReason ? "PASEO DAEMON LOCKED" : <>Daemon disconnected · reconnecting automatically</>}
         </div>
         {authFailureReason ? (
           <>

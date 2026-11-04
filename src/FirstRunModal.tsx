@@ -17,7 +17,7 @@ export type FirstRunStatus = {
     installDurationMs: number | null;
     passwordRequired?: boolean;
     passwordConfigured?: boolean;
-    passwordSource?: "env" | "file" | "none";
+    passwordSource?: "env" | "file" | "local-credential" | "none";
   };
   claude: { installed: boolean; loggedIn: boolean; version: string | null; installUrl: string };
   gemini: { installed: boolean; loggedIn: boolean; version: string | null; installUrl: string };
@@ -53,6 +53,7 @@ export function FirstRunModal({ initial, onClose }: { initial?: FirstRunStatus |
   const [status, setStatus] = useState<FirstRunStatus | null>(initial ?? null);
   const [daemonBusy, setDaemonBusy] = useState(false);
   const [pw, setPw] = useState("");
+  const [editingPw, setEditingPw] = useState(false);
   const [pwBusy, setPwBusy] = useState(false);
   const [pwMsg, setPwMsg] = useState<string | null>(null);
   const triggered = useRef(false);
@@ -192,6 +193,14 @@ export function FirstRunModal({ initial, onClose }: { initial?: FirstRunStatus |
                     {p?.passwordRequired ? "Daemon password required" : "Daemon password optional"} ·{" "}
                     {p?.passwordConfigured ? `Configured (${p?.passwordSource ?? "file"})` : "Not configured"}
                   </div>
+                  {p?.passwordSource === "local-credential" && !editingPw ? (
+                    <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 4 }}>
+                      <span>✓ Local Paseo credential active</span>
+                      <button type="button" className="btn ghost small" onClick={() => setEditingPw(true)}>
+                        Change password
+                      </button>
+                    </div>
+                  ) : (
                   <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 4 }}>
                     <input
                       type="password"
@@ -211,6 +220,7 @@ export function FirstRunModal({ initial, onClose }: { initial?: FirstRunStatus |
                     </button>
                     {pwMsg && <span className="muted small">{pwMsg}</span>}
                   </div>
+                  )}
                 </div>
               )}
             </Row>

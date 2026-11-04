@@ -324,13 +324,7 @@ async function refetchWorkspaces() {
   set({ workspaces: next });
 }
 
-let retryTimer: ReturnType<typeof setTimeout> | null = null;
-
 async function connect(): Promise<void> {
-  if (retryTimer) {
-    clearTimeout(retryTimer);
-    retryTimer = null;
-  }
   try {
     if (!DEMO && !isRemote()) {
       const auth = await fetchLocalDaemonPassword();
@@ -359,7 +353,6 @@ async function connect(): Promise<void> {
         error: String((e as Error)?.message ?? e),
         authFailureReason: null,
       });
-      retryTimer = setTimeout(connect, 3000);
     }
   }
 }
@@ -397,57 +390,38 @@ export function start() {
     set({ workspaces });
   });
 
+  // DaemonClient reconnects on its own (exponential backoff); we mirror its state and refetch after a gap.
+  let wasConnected = false;
   (daemonClient as unknown as { subscribeConnectionStatus?: (cb: (s: { status: string; reason?: string }) => void) => () => void }).subscribeConnectionStatus?.((s) => {
     if (s.status === "connected") {
       set({ conn: "connected", status: "connected", error: undefined, authFailureReason: null });
+      if (!wasConnected) {
+        wasConnected = true;
+        refetchAll().catch(console.error);
+        refetchWorkspaces().catch(console.error);
+        refetchProviderUsage();
+      }
+      return;
+    }
+    wasConnected = false;
+    if (s.status === "connecting" || s.status === "idle") {
+      if (state.conn !== "connecting") set({ conn: "connecting", status: "connecting" });
       return;
     }
     if (s.status === "disconnected") {
       const authReason = readClientAuthFailure(daemonClient, s);
       if (authReason) {
-        if (retryTimer) {
-          clearTimeout(retryTimer);
-          retryTimer = null;
-        }
         set({
           conn: "disconnected",
           status: "error",
           error: authReason === "password_required" ? "Daemon password required" : "Daemon password rejected",
           authFailureReason: authReason,
         });
+      } else {
+        set({ conn: "disconnected", status: "disconnected" });
       }
     }
   });
-
-  // The SDK reconnects on its own; we watch the state so we can refetch after a gap.
-  let last: string | null = null;
-  setInterval(() => {
-    const s = client.getConnectionState().status;
-    const authReason = s === "connected" ? null : readClientAuthFailure(daemonClient);
-    const conn: ConnStatus = s === "connected" ? "connected" : s === "connecting" || s === "idle" ? "connecting" : "disconnected";
-    if (s === "connected") {
-      if (state.conn !== "connected" || state.authFailureReason !== null) {
-        set({ conn: "connected", status: "connected", error: undefined, authFailureReason: null });
-      }
-    } else if (authReason) {
-      if (state.authFailureReason !== authReason || state.conn !== "disconnected") {
-        set({
-          conn: "disconnected",
-          status: "error",
-          error: authReason === "password_required" ? "Daemon password required" : "Daemon password rejected",
-          authFailureReason: authReason,
-        });
-      }
-    } else if (conn !== state.conn) {
-      set({ conn, status: conn });
-    }
-    if (s === "connected" && last !== "connected") {
-      refetchAll().catch(console.error);
-      refetchWorkspaces().catch(console.error);
-      refetchProviderUsage();
-    }
-    last = s;
-  }, 1000);
 
   // Belt and braces: a full refetch every minute in case an update was dropped.
   setInterval(() => {

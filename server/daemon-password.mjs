@@ -151,7 +151,8 @@ export async function probeDaemonPassword(password, { listen, clientFactory, tim
       clientType: "cli",
       appVersion: "0.0.1",
       connectTimeoutMs: timeoutMs,
-      ...(args.password ? { password: args.password } : { localCredential: () => readPaseoLocalCredential(opts) || null }),
+      ...(args.password ? { password: args.password } : {}),
+      localCredential: () => readPaseoLocalCredential(opts) || null,
       reconnect: { enabled: false },
     });
   };
