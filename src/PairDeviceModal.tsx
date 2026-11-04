@@ -23,6 +23,8 @@ type PairStartResponse = {
   lanDesktopInstallerUrl?: string | null;
   lanPairUrl?: string | null;
   lanQrSvg?: string | null;
+  lanAndroidApkUrl?: string | null;
+  androidApkAvailable?: boolean;
   caHttpUrl: string;
   desktopSetupHttpUrl?: string;
   caFingerprint: Fingerprint;
@@ -46,6 +48,8 @@ type DevicesResponse = {
   lanHttpsUrl?: string | null;
   lanCaUrl?: string | null;
   lanDesktopInstallerUrl?: string | null;
+  lanAndroidApkUrl?: string | null;
+  androidApkAvailable?: boolean;
 };
 
 type PaseoPairOfferResponse = {
@@ -53,6 +57,8 @@ type PaseoPairOfferResponse = {
   relayEnabled?: boolean;
   url?: string | null;
   qr?: string;
+  deepLinkUrl?: string | null;
+  qrSvg?: string | null;
   error?: string;
 };
 
@@ -69,6 +75,8 @@ export function PairDeviceModal({ onClose }: { onClose: () => void }) {
     caHttpUrl: string | null;
     lanCaUrl: string | null;
     lanDesktopInstallerUrl: string | null;
+    lanAndroidApkUrl: string | null;
+    androidApkAvailable: boolean;
   } | null>(null);
   const [networkMode, setNetworkMode] = useState<"lan" | "meshnet">("lan");
   const [useIpMode, setUseIpMode] = useState(false);
@@ -95,6 +103,8 @@ export function PairDeviceModal({ onClose }: { onClose: () => void }) {
         caHttpUrl: data.caHttpUrl,
         lanCaUrl: data.lanCaUrl ?? null,
         lanDesktopInstallerUrl: data.lanDesktopInstallerUrl ?? null,
+        lanAndroidApkUrl: data.lanAndroidApkUrl ?? null,
+        androidApkAvailable: data.androidApkAvailable ?? false,
       });
       if (!data.lanIp) {
         setNetworkMode("meshnet");
@@ -433,6 +443,19 @@ export function PairDeviceModal({ onClose }: { onClose: () => void }) {
           </div>
           {paseoOffer?.url ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+              {paseoOffer.qrSvg && (
+                <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                  <div
+                    className="qr-box"
+                    data-testid="paseo-offer-qr"
+                    style={{ width: 148, height: 148, flex: "none", background: "#fff", padding: 4, border: "2px solid var(--cyan)" }}
+                    dangerouslySetInnerHTML={{ __html: paseoOffer.qrSvg }}
+                  />
+                  <div className="muted small" style={{ minWidth: 0, flex: 1 }}>
+                    Scan with your Android phone to open the VibeSquad APK and pair over Paseo Relay
+                  </div>
+                </div>
+              )}
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
                 <code className="small" style={{ wordBreak: "break-all", color: "var(--cyan)" }} data-testid="paseo-offer-url">
                   {paseoOffer.url}
@@ -446,6 +469,21 @@ export function PairDeviceModal({ onClose }: { onClose: () => void }) {
                   >
                     {copied === "paseo-link" ? "✓ Copied Paseo Link" : "Copy Paseo Link"}
                   </button>
+                  {(paseoOffer.deepLinkUrl || paseoOffer.url.includes("#offer=")) && (
+                    <button
+                      type="button"
+                      className="btn ghost small"
+                      data-testid="copy-android-deep-link"
+                      onClick={() =>
+                        copyText(
+                          "android-deep-link",
+                          paseoOffer.deepLinkUrl || ("vibesquad://pair#offer=" + paseoOffer.url!.split("#offer=")[1]),
+                        )
+                      }
+                    >
+                      {copied === "android-deep-link" ? "✓ Copied Android Deep Link" : "Copy Android Deep Link"}
+                    </button>
+                  )}
                   {paseoOffer.url.includes("#offer=") && (
                     <button
                       type="button"
@@ -467,6 +505,16 @@ export function PairDeviceModal({ onClose }: { onClose: () => void }) {
                 <div className="muted small" style={{ wordBreak: "break-all" }}>
                   VibeSquad Relay link: <code>{`${location.origin}/?remote=1#offer=${paseoOffer.url.split("#offer=")[1]}`}</code>
                 </div>
+              )}
+              {(meta?.lanAndroidApkUrl || pair?.lanAndroidApkUrl) && (
+                <a
+                  className="btn ok small"
+                  data-testid="download-android-apk"
+                  href={pair?.lanAndroidApkUrl || meta?.lanAndroidApkUrl || "/VibeSquad.apk"}
+                  download="VibeSquad.apk"
+                >
+                  ⬇ Download VibeSquad.apk (Android)
+                </a>
               )}
             </div>
           ) : (

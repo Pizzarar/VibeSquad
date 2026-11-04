@@ -6,7 +6,7 @@
 import { useEffect, useState } from "react";
 import { parseConnectionOfferFromUrl } from "@getpaseo/protocol/connection-offer";
 import { probeRemote } from "./paseoRemote";
-import { clearSession, hasOfferFragment, isLocalHost, parseOfferInput, readSession, saveSession, takeAuthNote, remoteError, type RemoteError } from "./remoteSession";
+import { clearSession, hasOfferFragment, isAndroidUserAgent, isLocalHost, normalizeOfferInput, parseOfferInput, readSession, saveSession, takeAuthNote, remoteError, type RemoteError } from "./remoteSession";
 
 function initialLink(): string {
   return hasOfferFragment(location.hash) ? location.href : "";
@@ -37,6 +37,47 @@ export function RemotePair() {
     };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  // Incoming Android deep links (`vibesquad://pair#offer=…`) and the custom window event both prefill the offer.
+  useEffect(() => {
+    const checkTauriDeepLink = () => {
+      const invoke = (window as any).__TAURI_INTERNALS__?.invoke;
+      if (typeof invoke !== "function") return;
+      try {
+        const p = invoke("plugin:deep-link|get_current");
+        if (p && typeof p.then === "function") {
+          p.then((res: unknown) => {
+            const entries = Array.isArray(res) ? res : [res];
+            for (const entry of entries) {
+              if (typeof entry === "string" && normalizeOfferInput(entry)) {
+                setLinkNeeded(true);
+                setLink(entry);
+                setError(null);
+                return;
+              }
+            }
+          }).catch(() => {});
+        }
+      } catch {}
+    };
+    const onDeepLink = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      if (typeof detail === "string" && normalizeOfferInput(detail)) {
+        setLinkNeeded(true);
+        setLink(detail);
+        setError(null);
+      }
+    };
+    checkTauriDeepLink();
+    window.addEventListener("focus", checkTauriDeepLink);
+    document.addEventListener("visibilitychange", checkTauriDeepLink);
+    window.addEventListener("vibesquad:deep-link", onDeepLink);
+    return () => {
+      window.removeEventListener("focus", checkTauriDeepLink);
+      document.removeEventListener("visibilitychange", checkTauriDeepLink);
+      window.removeEventListener("vibesquad:deep-link", onDeepLink);
+    };
   }, []);
 
   function forget() {
@@ -95,7 +136,27 @@ export function RemotePair() {
         </p>
         {linkNeeded && (
           <label className="remote-pair-field">
-            <span>Pairing link</span>
+            <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              Pairing link
+              <button
+                type="button"
+                className="btn ghost small"
+                data-testid="remote-pair-paste"
+                onClick={async () => {
+                  try {
+                    const text = await navigator.clipboard.readText();
+                    if (text && text.trim()) {
+                      setLink(text.trim());
+                      setError(null);
+                    }
+                  } catch {
+                    setError(remoteError("unknown", "Clipboard access was denied. Long-press the text box to paste."));
+                  }
+                }}
+              >
+                📋 Paste from Clipboard
+              </button>
+            </span>
             <textarea
               value={link}
               onChange={(e) => setLink(e.target.value)}
@@ -128,7 +189,7 @@ export function RemotePair() {
             Forget saved device
           </button>
         )}
-        {isLocalHost(location.hostname) && (
+        {isLocalHost(location.hostname) && !isAndroidUserAgent() && (
           <button className="btn remote-pair-forget" type="button" data-testid="remote-pair-local" onClick={useLocalDaemon}>
             ← Use Local Daemon / First-Time Setup
           </button>

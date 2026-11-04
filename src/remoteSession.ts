@@ -253,6 +253,24 @@ export function normalizeOfferInput(input: string): string | null {
   return m ? `#offer=${m[1]}` : null;
 }
 
+/**
+ * Builds the Android deep link (`vibesquad://pair#offer=…`) for a pairing offer.
+ * Accepts a full `https://…/#offer=…` or `vibesquad://pair…` link, or bare `#offer=…` / `offer=…` text.
+ * Returns null when no offer token is present.
+ */
+export function toAndroidDeepLink(offerUrlOrInput: string): string | null {
+  const normalized = normalizeOfferInput(offerUrlOrInput);
+  if (!normalized) return null;
+  return `vibesquad://pair${normalized}`;
+}
+
+/** True when `ua` is an Android browser / WebView user-agent string (defaults to `navigator.userAgent`). */
+export function isAndroidUserAgent(
+  ua: string = typeof navigator !== "undefined" ? navigator.userAgent : "",
+): boolean {
+  return /Android/i.test(ua || "");
+}
+
 export type OfferParse = { ok: true; offer: RemoteOffer } | { ok: false; error: RemoteError };
 
 /** Wraps parseConnectionOfferFromUrl (injected so this file stays import-free). Never throws. */

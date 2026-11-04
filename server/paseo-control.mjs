@@ -8,6 +8,7 @@ import { homedir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { bundledNode, findPaseoCli, isDaemonListening, parseListen, resolveCmdShimEntry, UNSAFE_CMD_ARG } from "./first-run.mjs";
+import { qrSvg } from "./qr.mjs";
 import { clearConfigWarning, loadUserSettings, parseJsonWithBom, readJsonFileWithBom, recordConfigWarning, stripBom } from "./user-settings.mjs";
 
 const IS_WIN = process.platform === "win32";
@@ -1196,11 +1197,23 @@ export async function getPaseoPairOffer(opts = {}) {
   const data = res.data && typeof res.data === "object" ? res.data : {};
   // Strip ANSI escape codes from QR text so it renders cleanly in a <pre>
   const cleanQr = String(data.qr || "").replace(/\u001b\[[0-9;]*m/g, "");
+  const urlStr = data.url ? String(data.url) : null;
+  const offerIdx = urlStr ? urlStr.indexOf("#offer=") : -1;
+  const offerFragment = offerIdx >= 0 ? urlStr.slice(offerIdx) : null;
+  const deepLinkUrl = offerFragment ? `vibesquad://pair${offerFragment}` : null;
+  let offerQrSvg = null;
+  if (deepLinkUrl) {
+    try {
+      offerQrSvg = await qrSvg(deepLinkUrl);
+    } catch {}
+  }
   return {
     ok: res.ok,
     relayEnabled: Boolean(data.relayEnabled),
-    url: data.url ? String(data.url) : null,
+    url: urlStr,
     qr: cleanQr,
+    deepLinkUrl,
+    qrSvg: offerQrSvg,
     error: !res.ok ? (res.stderr || res.stdout || "paseo pair failed").trim() : undefined,
   };
 }
