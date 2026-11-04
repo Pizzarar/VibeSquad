@@ -18,6 +18,7 @@ import { countsAsNeedsYou, getBrainstormThresholds, isHubLane, saveTeams, type M
 import { ConfirmButton, StatusDot, usePaneClass } from "./ui";
 import { Avatar, NeonEmblem } from "./pixel";
 import { laneCodeOf, ordOf } from "./teams";
+import { laneCodeFor } from "./identity";
 import { cleanTitle } from "./ui";
 import { pickLead } from "./pinFocusLogic";
 
@@ -225,6 +226,12 @@ export function PinTeamTree({ pin }: { pin: Pin }) {
 }
 
 // ── Sidebar: a squad's pins + a collapsed Done shelf ─────────────────────────
+/** The `@<code>` handle for a pin: stored `code`, else the generated one, else the id's first 3 letters. */
+function laneHandleOf(pin: Pin): string {
+  const c = (pin.lane.code || laneCodeFor(pin.lane.id, [pin.squad]) || pin.lane.id.slice(0, 3)).toLowerCase();
+  return `@${c}`;
+}
+
 const PinRow = memo(function PinRow({ pin, dimmed, onPin }: { pin: Pin; dimmed?: boolean; onPin: (pin: Pin) => void }) {
   const paneCls = usePaneClass(pin.brainstorm?.agent.id ?? "");
   const focus = usePinFocus();
@@ -244,6 +251,7 @@ const PinRow = memo(function PinRow({ pin, dimmed, onPin }: { pin: Pin; dimmed?:
         >
           <PinDot pin={pin} />
           <span className="pin-row-name">{isHubPin(pin) ? "RiffBot" : pin.lane.name}</span>
+          <span className="pin-lane-handle" data-testid={`pin-handle-${pin.lane.id}`}>{laneHandleOf(pin)}</span>
           <NeedsBadge pin={pin} />
           <PinCtx pin={pin} />
         </button>
@@ -566,6 +574,7 @@ const PinTile = memo(function PinTile({ pin, onPin, onOpenAgent }: { pin: Pin; o
         )}
         <div className="pin-tile-title">
           <span className="pin-tile-name">{pin.lane.name}</span>
+          <span className="pin-lane-handle">{laneHandleOf(pin)}</span>
           <span className="pin-tile-sub muted small">
             <PinDot pin={pin} /> {bs ? (bs.agent.status === "running" ? "Brainstorm working" : "Brainstorm") : "No session yet"}
           </span>

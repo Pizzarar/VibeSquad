@@ -210,7 +210,9 @@ export function topicOf(agentOrLabels) {
  * Returns { team, lane } or null.
  */
 export function findLaneInRegistry(laneQuery, teams = loadTeamsRegistry()) {
-  const q = String(laneQuery ?? "").trim().toLowerCase();
+  const raw = String(laneQuery ?? "").trim();
+  const hadAt = raw.startsWith("@");
+  const q = raw.replace(/^@+/, "").trim().toLowerCase();
   if (!q) return null;
   for (const team of teams) {
     for (const lane of team.lanes || []) {
@@ -229,7 +231,30 @@ export function findLaneInRegistry(laneQuery, teams = loadTeamsRegistry()) {
       }
     }
   }
+  // Lane-code handles: `@bug` / `bug` resolve to the lane whose stored or generated code matches.
+  for (const team of teams) {
+    const codes = laneCodesForTeam(team);
+    for (const lane of team.lanes || []) {
+      if (String(codes[lane.id] ?? "").toLowerCase() === q || String(lane.code ?? "").toLowerCase() === q) {
+        return { team, lane };
+      }
+    }
+  }
   return null;
+}
+
+/**
+ * The `@<lowercase-code>` handle for a lane id/alias/name/code/handle query (e.g. "@bug", "@ade", "@hub").
+ * Unknown queries fall back to their stripped, lowercased self so the `@` prefix is always preserved.
+ */
+export function formatLaneHandle(laneIdOrQuery, teams = loadTeamsRegistry()) {
+  const found = findLaneInRegistry(laneIdOrQuery, teams);
+  if (found) {
+    const code = laneCodesForTeam(found.team)[found.lane.id] ?? "";
+    return `@${String(code || found.lane.id).toLowerCase()}`;
+  }
+  const q = String(laneIdOrQuery ?? "").replace(/^@+/, "").trim().toLowerCase();
+  return `@${q}`;
 }
 
 /** Mirror of isHubLane in src/teams.ts: explicit `hub: true`, else the lane whose id is the Squad id when no lane is flagged. */
