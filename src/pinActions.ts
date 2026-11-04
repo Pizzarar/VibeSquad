@@ -310,7 +310,10 @@ export function setLastBrainstormProfile(profile: string): void {
   } catch {}
 }
 
-export type CreatePinDeps = Pick<OpenPinDeps, "fetch" | "getTeams" | "saveTeams"> & { lastProfile?: string };
+export type CreatePinDeps = Pick<OpenPinDeps, "fetch" | "getTeams" | "saveTeams" | "agents" | "onSpawned" | "profile"> & {
+  lastProfile?: string;
+  startBuddies?: boolean;
+};
 
 /** The pinned team an idea most likely belongs to in this squad, or null ("Sounds like X. Use it?"). */
 export function overlappingPin(squadId: string, text: string, teams: TeamDef[] = getTeams()): PinLane | null {
@@ -392,7 +395,18 @@ export const dismissSpinOff = (messageId: string): void => dismiss(SPIN_OFF_KEY,
 
 /**
  * Create every Team of a confirmed spin-off block as a pin in the squad (no overlap refusal: the user confirmed the
- * list; exact ids still dedupe inside createPin). No agents are spawned.
+ * list; exact ids still dedupe inside createPin) and immediately quick-start each new lane's Brainstorm Buddy in
+ * parallel (unless `deps.startBuddies === false`).
  */
 export const createSpinOffPins = (key: string, squadId: string, teams: { name: string; brief: string }[], deps: CreatePinDeps = {}) =>
-  runSpinOffOnce(key, (name, brief) => createPin(squadId, name, brief, deps), teams);
+  runSpinOffOnce(
+    key,
+    async (name, brief) => {
+      const pin = await createPin(squadId, name, brief, deps);
+      if (deps.startBuddies !== false) {
+        void openPin(pin, deps).catch(() => {});
+      }
+      return pin;
+    },
+    teams,
+  );

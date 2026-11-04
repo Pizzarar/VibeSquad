@@ -449,6 +449,7 @@ function parseArgs(argv) {
     "rule",
     "query",
     "title",
+    "note",
   ]);
   const booleans = new Set([
     "sinceMe",
@@ -674,6 +675,7 @@ Usage:
   vs inbox list [--lane <lane>]
   vs inbox triage --merge <targetId> <sourceId...> | --bounce <cardId> --lane <newLane>
   vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force]
+  vs pin merge <from-lane> <into-lane> [--note "<shared contract>"] [--team <squad>]
   vs spec [show] [--lane <lane>] [--team <team>]
   vs spec write "<markdown>" | --stdin | --file <path> [--lane <lane>] [--team <team>]
   vs task list [--lane <lane>] [--json]
@@ -1821,9 +1823,131 @@ export function installVsShim({ binDirs, targetScript, baseHome } = {}) {
 // teams.json and the brief; never spawns an agent (the first click on the pin starts its Brainstorm).
 // ---------------------------------------------------------------------------
 
+function extractBriefBullets(markdown, heading) {
+  const lines = String(markdown ?? "").replace(/\r\n/g, "\n").split("\n");
+  const headIdx = lines.findIndex((l) => new RegExp(`^##\\s+${heading}\\b`, "i").test(l.trim()));
+  if (headIdx < 0) return [];
+  const out = [];
+  for (let i = headIdx + 1; i < lines.length; i++) {
+    if (/^##\s+/.test(lines[i].trim())) break;
+    const trimmed = lines[i].trim();
+    if (!trimmed) continue;
+    if (/^[-*]\s+\((?:none|what makes|VibeSquad)/i.test(trimmed)) continue;
+    out.push(lines[i]);
+  }
+  return out;
+}
+
+function appendBulletsToSection(markdown, heading, bullets) {
+  if (!bullets.length) return markdown;
+  const lines = String(markdown ?? "").replace(/\r\n/g, "\n").split("\n");
+  const headIdx = lines.findIndex((l) => new RegExp(`^##\\s+${heading}\\b`, "i").test(l.trim()));
+  if (headIdx < 0) {
+    return [...lines, "", `## ${heading}`, ...bullets].join("\n");
+  }
+  let endIdx = headIdx + 1;
+  while (endIdx < lines.length && !/^##\s+/.test(lines[endIdx].trim())) endIdx++;
+  // Remove placeholder "(none recorded yet)" if present in this section
+  for (let i = endIdx - 1; i > headIdx; i--) {
+    if (/^[-*]\s+\(none recorded yet\)/i.test(lines[i].trim())) {
+      lines.splice(i, 1);
+      endIdx--;
+    }
+  }
+  while (endIdx > headIdx + 1 && !lines[endIdx - 1].trim()) endIdx--;
+  lines.splice(endIdx, 0, ...bullets);
+  return lines.join("\n");
+}
+
+function matchLaneRef(lanes, rawRef) {
+  const clean = String(rawRef ?? "").trim().replace(/^@+/, "").toLowerCase();
+  if (!clean) return null;
+  return (
+    lanes.find((l) => String(l.id).toLowerCase() === clean) ??
+    lanes.find((l) => String(l.name ?? "").toLowerCase() === clean) ??
+    lanes.find((l) => String(l.code ?? "").toLowerCase() === clean) ??
+    lanes.find((l) => (l.aliases ?? []).some((a) => String(a).toLowerCase() === clean)) ??
+    null
+  );
+}
+
+function commandPinMerge(flags) {
+  const fromRaw = String(flags._[0] ?? "").trim();
+  const intoRaw = String(flags._[1] ?? "").trim();
+  if (!fromRaw || !intoRaw) {
+    throw new Error('usage: vs pin merge <from-lane> <into-lane> [--note "<shared contract>"] [--team <squad>]');
+  }
+  const note = String(flags.note ?? flags.brief ?? "").trim();
+  const identity = resolveIdentity({ ...flags, lane: undefined });
+  const squadDef = findTeamDef(flags.team ? String(flags.team) : identity.team.id) ?? findTeamDef(identity.team.name);
+  if (!squadDef) throw new Error(`unknown squad "${flags.team ?? identity.team.name}". Pass --team <squad>.`);
+
+  let file = resolveTeamsFilePath();
+  if (path.basename(file) === "teams.example.json") file = path.join(BASE_DIR, "teams.json");
+  const { value: cur } = readJsonFileWithBom(file, { fallback: null, label: "teams.json" });
+  const doc = Array.isArray(cur?.teams) ? cur : { ...TEAMS_FILE };
+  const target = doc.teams.find((t) => t.id === squadDef.id);
+  if (!target) throw new Error(`squad "${squadDef.id}" is not in ${file}`);
+
+  const lanes = target.lanes ?? [];
+  const fromLane = matchLaneRef(lanes, fromRaw);
+  const intoLane = matchLaneRef(lanes, intoRaw);
+  if (!fromLane) throw new Error(`unknown source lane "${fromRaw}" in ${squadDef.name}`);
+  if (!intoLane) throw new Error(`unknown target lane "${intoRaw}" in ${squadDef.name}`);
+  if (fromLane.id === intoLane.id) throw new Error("source and target lanes must be different");
+
+  const fromBrief = readBrainstormSummary(fromLane.id).content;
+  const intoSummary = readBrainstormSummary(intoLane.id);
+  let merged = intoSummary.content.includes("## Open")
+    ? intoSummary.content
+    : newPinBrief(intoLane.id, intoLane.name || intoLane.id, "");
+
+  const tagBullet = (line) =>
+    /^\s*[-*]\s+/.test(line) ? line.replace(/^(\s*[-*]\s+)/, `$1[from ${fromLane.name || fromLane.id}] `) : line;
+
+  const decidedBullets = [
+    ...(note ? [`- [Merged ${fromLane.name || fromLane.id} -> ${intoLane.name || intoLane.id}] ${note}`] : []),
+    ...extractBriefBullets(fromBrief, "Decided").map(tagBullet),
+  ];
+  const openBullets = extractBriefBullets(fromBrief, "Open").map(tagBullet);
+
+  merged = appendBulletsToSection(merged, "Decided", decidedBullets);
+  merged = appendBulletsToSection(merged, "Open", openBullets);
+  const written = writeBrainstormSummary(intoLane.id, merged);
+
+  const nowIso = new Date().toISOString();
+  target.lanes = lanes.map((l) => (l.id === fromLane.id ? { ...l, state: "done", doneAt: nowIso } : l));
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tmp, JSON.stringify(doc, null, 2) + "\n", "utf8");
+  fs.renameSync(tmp, file);
+
+  const logEntry = {
+    ts: nowIso,
+    agent: identity.agent || "RiffBot",
+    lane: intoLane.id,
+    type: "decision",
+    text: `Merged ${fromLane.name || fromLane.id} (${fromLane.id}) -> ${intoLane.name || intoLane.id} (${intoLane.id})${note ? `: ${note}` : ""}`.slice(0, MAX_TEXT),
+    refs: [fromLane.id, intoLane.id, written.path],
+  };
+  appendLog({ ...identity, team: squadDef, lane: intoLane.id, teamDir: path.join(BASE_DIR, "teams", squadDef.id) }, logEntry);
+
+  if (flags.json) {
+    process.stdout.write(
+      JSON.stringify({ ok: true, squad: squadDef.id, from: fromLane.id, into: intoLane.id, brief: written.path }, null, 2) + "\n",
+    );
+    return 0;
+  }
+  process.stdout.write(
+    `Merged ${fromLane.name} (${fromLane.id}) into ${intoLane.name} (${intoLane.id}). Updated ${written.path} and marked ${fromLane.id} done.\n`,
+  );
+  return 0;
+}
+
 function commandPin(flags) {
   const sub = String(flags._.shift() ?? "").toLowerCase();
-  if (sub !== "new") throw new Error('usage: vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force]');
+  if (sub === "merge") return commandPinMerge(flags);
+  if (sub !== "new") throw new Error('usage: vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force] | vs pin merge <from-lane> <into-lane> [--note "<contract>"]');
   const name = flags._.join(" ").trim();
   if (!name) throw new Error('pin new needs a name: vs pin new "<name>" --brief "<idea>"');
   const brief = String(flags.brief ?? "").trim() || name;

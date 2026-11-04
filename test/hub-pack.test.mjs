@@ -122,6 +122,8 @@ test("lane Buddy started in repo root does not get HUB_BUDDY_RULES; hub Buddy do
     const sysD = String(d.config.systemPrompt ?? "");
     assert.ok(sysD.includes(HUB_BUDDY_RULES), "hub Buddy must get HUB_BUDDY_RULES");
     assert.match(sysD, /Never spawn a Lead/);
+    assert.match(sysD, /vs pin merge/);
+    assert.doesNotMatch(sysD, /thinking partner for one feature lane/, "hub Buddy must not get feature-lane BRAINSTORM_NOTE_BODY");
   } finally {
     stop?.();
     for (const [k, v] of [["VIBESQUAD_HOME", prev.h], ["VIBESQUAD_TEAMS_FILE", prev.t]]) {

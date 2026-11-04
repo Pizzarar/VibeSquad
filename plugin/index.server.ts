@@ -110,13 +110,15 @@ export const BRAINSTORM_PACK = [
 
 /** Appended to the Buddy pack only for the Squad's hub Buddy (RiffBot; isHubLane contract). Team Buddies never get it. */
 export const HUB_BUDDY_RULES = [
-  "Hub rules:",
-  "- You are this Squad's hub. You sort and split; Team Buddies design.",
+  "Hub rules (OVERRIDE feature-Buddy rules above):",
+  "- You are this Squad's hub (RiffBot). You ONLY sort, split into parallel lanes, and coordinate lane convergence; Team Buddies do all feature design and plan writing.",
+  "- Never write `docs/PLAN_*.md` files, never design implementation blocks, never mark the hub done, and never spawn a Lead.",
   "- End **every** reply with `Open threads:` listing ideas that have no Team yet (or `none`). Keep `## Unsplit threads` in the brief in sync.",
-  "- As soon as a thread can be worked on its own (its files and decisions don't overlap another thread or an in-flight Team), propose it in a `vs:spin-off` block. Don't wait for it to be fully figured out. Propose as many Teams as can run in parallel without clashing. When you merge or hold back an idea, give the reason in one line. Never spin off without the user's confirmation.",
+  "- As soon as a thread can be worked on its own (its files and decisions don't overlap another thread or an in-flight Team), say how many parallel lanes we can run and propose them in a `vs:spin-off` block. Don't wait for details to be figured out — confirming the `vs:spin-off` block spins up each lane's Brainstorm Buddy to design it in parallel. When you merge or hold back an idea, give the reason in one line. Never spin off without the user's confirmation.",
   "- Propose spin-offs as one fenced block, line 1 ```vs:spin-off, then one Team per line: `Name | 1-line brief`. The user edits in words (4 proposed, \"energy and food in one lane called Needs\" → re-post the block with 3); only the newest block gets the button.",
   "- If the user keeps riffing on a thread that already has a Team, redirect: \"That's <Team>'s. Send it there?\" plus `vs:send-to`.",
-  "- On boot, read `## Teams` and `## Unsplit threads`. Your first message is the Squad status in ≤6 lines, plus the top split you'd propose now.",
+  "- Lane convergence & merge: watch `## Teams` and `vs log --since-me` for lanes that need to work together (e.g. UI + Art touching the same screen/contract). To sync two active lanes without merging, log `vs log decision \"Sync @<laneA> + @<laneB>: <shared contract>\"` and route the contract via `vs:send-to <lane-id>`. When two lanes should combine into one, run `vs pin merge <from-lane> <into-lane>` after user confirmation to fold `<from-lane>`'s brief/decisions into `<into-lane>` and mark `<from-lane>` done.",
+  "- On boot, read `## Teams` and `## Unsplit threads`. Your first message is the Squad status in ≤6 lines, plus the top parallel split you'd propose now.",
   "- Never mark the hub done. Never spawn a Lead.",
 ].join("\n");
 
@@ -1494,7 +1496,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const isHubBuddy =
           role === "brainstorm" && !topicOf(reqLabels) && Boolean(explicitLane) && isHubCwd(spawnTeam, explicitLane);
         const prefix = injectedPrefix(role, cwd, vibeMode, isHubBuddy);
-        const profileNotes = dedupeNotesAgainst((matchedProfile?.notes ?? "").trim(), prefix);
+        const profileNotes = isHubBuddy ? "" : dedupeNotesAgainst((matchedProfile?.notes ?? "").trim(), prefix);
         const gitState = inspectGitSpawnState(cwd);
         if (prefix && !sanitizedSysPrompt.includes(EVERYONE_LAYER)) {
           const existing = sanitizedSysPrompt.trim();
