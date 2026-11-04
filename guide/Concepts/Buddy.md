@@ -13,7 +13,7 @@ It also starts the Organize part of [ROLO](../ROLO.md): while you talk, it helps
 
 What a Buddy does not do: write the product. When the plain plan is ready, it hands the plan to a [Lead](Lead.md), who turns it into jobs.
 
-**VibeSquad:** the Buddy is the Brainstorm chat. Each feature gets its own, shown as "TALK HERE", and **+ ADD BUDDY** makes another. You can have several Buddies, one per feature. Click **📥 Park in Inbox** on a message to park an idea in the Idea Inbox.
+**VibeSquad:** the Buddy is the Brainstorm chat. Each feature gets its own, shown as "TALK HERE", and **+ TEAM** makes another. You can have several Buddies, one per feature. Click **📥 Park in Inbox** on a message to park an idea in the Idea Inbox.
 
 In any other agent, say "act as my Buddy: ask questions, explain things, do not write code yet". That is enough.
 

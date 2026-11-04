@@ -46,7 +46,7 @@ Why `build` then `start`: the README's quick start lists `npm run dev` for devel
 VibeSquad server. Then open http://127.0.0.1:4180 in your browser (port from the README; it is the default
 `VIBESQUAD_PORT`).
 
-`teams.json` lists your squads and their project folders. Edit it, or add teams later in the app (**⚙ TEAM SETTINGS**,
+`teams.json` lists your squads and their project folders. Edit it, or add teams later in the app (**⚙ SETTINGS**,
 **+ Add team**, **+ path**).
 
 ## macOS line

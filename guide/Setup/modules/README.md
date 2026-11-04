@@ -1,7 +1,7 @@
 # Modules
 
-The flow: install your provider (`providers/`; `core/node` first for the npm-installed ones) and sign in, run the VibeSquad one-stop installer (`core/vibesquad`; it brings its own private Node and server), add the kit folder as a team in
-VibeSquad (**⚙ TEAM SETTINGS**, **+ Add team**), and the Brainstorm chat (the Buddy) runs `START_HERE.md`.
+The flow: install your provider (`providers/`; `core/node` first for the npm-installed ones) and sign in, run the VibeSquad one-stop installer (`core/vibesquad`; it brings its own private Node and server), add the `guide` folder as a squad in
+VibeSquad (**+ New squad**), and the Brainstorm chat (the Buddy) runs `START_HERE.md`.
 
 One short page per tool. The setup agent reads the page for each tool the person chose, installs it, and runs the
 page's Verify step.

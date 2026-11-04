@@ -39,6 +39,10 @@ Tell them: what will happen (check the PC, ask about 5 questions, show a plan, i
 project); that VibeSquad is where they will work from now on, and the provider (Claude Code, Codex, Gemini or OpenCode) is the AI inside it (the README order is: provider first, then the VibeSquad installer, so both are already there; Node too, for Gemini and OpenCode); roughly how long (30 to 60 minutes); that you ask before each install batch; that they can say "stop" or
 "skip" at any time; and that you'll show real proof after each step.
 
+## Which folder is open (check this first)
+
+This chat must run with `guide/` as its working folder (it holds this file and `AGENTS.md`). If the working folder is the whole VibeSquad repo, you are in the source code and not under these rules: tell the person to close this chat and open a new one on the `guide` folder (**+ New squad**, **Folder path** = the `guide` folder). The person's first project never goes in `guide/` or the repo: it goes in a new empty folder (Phase 5 makes `hello-agent`).
+
 ## PATH refresh (run before every Verify and every detect check)
 
 Your shell only knows the PATH from when your agent started, so a tool installed a minute ago looks "not found". You
@@ -54,7 +58,7 @@ switch to PowerShell):
 ```bash
 powershell -NoProfile -Command '$env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User"); <the Verify command>'
 ```
-Fallback: if Verify still fails after the refresh, ask the person to restart the chat: in VibeSquad click **+ ADD BUDDY** on the kit folder's team and say **read START_HERE.md**. The resume rule below picks up where you stopped.
+Fallback: if Verify still fails after the refresh, ask the person to restart the chat: in VibeSquad click **+ TEAM** on the `guide` squad and say **read START_HERE.md**. The resume rule below picks up where you stopped.
 
 ## Resume rule (check this first)
 
@@ -230,8 +234,8 @@ has no kit instructions. So:
    user outside the repo, so nothing with a username lands in the project. Then commit now, before the handoff
    (step 5 above).
 2. Mark the first-project row `pending-user` in `progress.md` (not `verified`: the PNG doesn't exist yet).
-3. Tell the person to add `hello-agent` as a team in VibeSquad (**⚙ TEAM SETTINGS**, **+ Add team**), start a new chat there
-   (**+ ADD BUDDY**) and approve the `piskel` server if it asks. UNVERIFIED: the piskel module registers the server with
+3. Tell the person to add `hello-agent` as a team in VibeSquad (**⚙ SETTINGS**, **+ Add team**), start a new chat there
+   (**+ TEAM**) and approve the `piskel` server if it asks. UNVERIFIED: the piskel module registers the server with
    `claude mcp add`, so this pixel step works with Claude Code only until the module says otherwise.
 4. Give them this exact prompt to type: "make a 16x16 heart with piskel and export a PNG, then show me the file".
 5. When the PNG exists, they go back to the kit's Buddy chat in VibeSquad and say **read START_HERE.md**. The resume rule

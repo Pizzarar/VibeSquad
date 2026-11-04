@@ -2,9 +2,9 @@
 
 What each area of VibeSquad's Settings window does, when to touch it, and the safe default. If a setting isn't listed here, you don't need it yet.
 
-Open it from the **⚙ SETTINGS** button in a Squad's header in VibeSquad. The window is titled **TEAM SETTINGS**. Section names below are the labels you will see on screen. The top of the window holds the first four sections:
+Open it from the **⚙ SETTINGS** button in a Squad's header in VibeSquad. The window is titled **Settings**. Section names below are the labels you will see on screen. The top of the window holds the first four sections:
 
-![TEAM SETTINGS, top: Your name, Allow other devices, Update channel and Display & 4K UI scale](../assets/screenshots/07a-settings-top.png)
+![Settings, top: Your name, Allow other devices, Update channel and Display & 4K UI scale](../assets/screenshots/07a-settings-top.png)
 
 ## Your name
 
@@ -39,7 +39,7 @@ The **YOUR NAME** box. This is the name VibeSquad shows on NEEDS badges, in the 
 
 ## Profiles
 
-![AGENT PROFILES and the squad editor in TEAM SETTINGS](../assets/screenshots/07e-settings-profiles.png)
+![AGENT PROFILES and the squad editor in Settings](../assets/screenshots/07e-settings-profiles.png)
 
 **AGENT PROFILES** is the list of ready-made agent setups. Every way of starting an agent (New Agent, Handoff, a Buddy restart, an Inbox topic, Digest) reads from it. Pick one in the **PROFILE** dropdown, edit it, then press **Save profile**. A profile marked "(install …)" needs its provider installed first.
 

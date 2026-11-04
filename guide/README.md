@@ -10,10 +10,11 @@ The guide is read-only. It is written for [VibeSquad](https://github.com/Pizzara
 
 ## Set up your PC first
 
-1. Get this folder: on the repo page click **Code → Download ZIP** and unzip it somewhere you will find it again. (If you already have Git, `git clone <the address you were given> quickstart-kit` works too.)
+1. Get this guide: on the VibeSquad repo page click **Code → Download ZIP** and unzip it somewhere you will find it again. (If you already have Git, `git clone` works too.) You only need the `guide` folder inside it: that is the folder you open for the setup chat. Do not open the whole repo folder; it is the VibeSquad source code and the chat would read the wrong files.
 2. Install your AI provider and sign in with your own account. Claude plan: [Claude Code](Setup/modules/providers/claude-code.md). ChatGPT plan: [Codex](Setup/modules/providers/codex.md). Google licence or API key: [Node.js](Setup/modules/core/node.md), then [Gemini](Setup/modules/providers/gemini.md). No subscription: [Node.js](Setup/modules/core/node.md), then [OpenCode](Setup/modules/providers/opencode.md) and its free models.
-3. Download `VibeSquad-setup.exe` from the [latest VibeSquad release](https://github.com/Pizzarar/VibeSquad/releases/latest) and run it. On first launch choose **💻 Run agents on this PC**. Wait for the **Setup Checklist** to finish **Paseo Daemon** (about 500 MB), then click **Continue**. (Codex and OpenCode users: the checklist does not list them, so close it with **✕** once Paseo shows a tick.) Steps and checks: [Setup/modules/core/vibesquad.md](Setup/modules/core/vibesquad.md). To run VibeSquad from source instead (advanced): [Setup/modules/advanced/vibesquad-from-source.md](Setup/modules/advanced/vibesquad-from-source.md).
-4. Add this folder (`quickstart-kit`) to VibeSquad: open **⚙ TEAM SETTINGS**, click **+ Add team**, add the folder as a path (**+ path**) and **Save**. If your provider is not Claude Code, also set up a profile in **AGENT PROFILES**. Then click **+ ADD BUDDY** to start a Brainstorm chat. That chat is your Buddy. Type: **read START_HERE.md**
+3. Download `VibeSquad-setup.exe` from the [latest VibeSquad release](https://github.com/Pizzarar/VibeSquad/releases/latest) and run it. On first launch choose **💻 Run agents on this PC**. Wait for the **Setup Checklist** to finish **1. Paseo CLI & Daemon** (about 500 MB), then click **Continue**. (Codex and OpenCode users: the checklist does not list them, so close it with **✕** once Paseo shows a tick.) Steps and checks: [Setup/modules/core/vibesquad.md](Setup/modules/core/vibesquad.md). To run VibeSquad from source instead (advanced): [Setup/modules/advanced/vibesquad-from-source.md](Setup/modules/advanced/vibesquad-from-source.md).
+4. Add the `guide` folder to VibeSquad: click **+ New squad** at the bottom of the left column, leave **Folder path** selected, type the full path of the `guide` folder, leave **Start a Buddy** ticked, pick a Brainstorm profile and click **Create**. If your provider is not Claude Code or Gemini, also set up a profile in **AGENT PROFILES** (**⚙ SETTINGS**). That chat is your Buddy. Type: **read START_HERE.md**
+5. Your first project goes in a **new, empty folder** (the setup chat makes one for you). Never use the `guide` folder or the repo folder as your project.
 
 What to expect:
 
@@ -26,7 +27,7 @@ What to expect:
 
 Good to know:
 
-- Your answers and progress are saved in a hidden folder called `.quickstart/`. It is never uploaded. If you close the window, click **+ ADD BUDDY** on this folder's team in VibeSquad and say **read START_HERE.md**. It picks up where it stopped.
+- Your answers and progress are saved in a hidden folder called `.quickstart/`. It is never uploaded. If you close the window, click **+ TEAM** on the `guide` squad in VibeSquad and say **read START_HERE.md**. It picks up where it stopped.
 - Use your own accounts. Never paste a password or key into the chat.
 - The kit is written for Windows. Mac lines are included but not tested.
 

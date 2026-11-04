@@ -23,7 +23,7 @@ irm https://claude.ai/install.ps1 | iex
 ```
 Source (official docs, fetched 2026-10-30): https://code.claude.com/docs/en/setup
 
-It shows no progress while downloading. When it finishes, run the PATH refresh (see `START_HERE.md`). If Verify still fails, close and reopen `claude` in the kit folder (or open a **new** terminal window if you are doing this by hand).
+It shows no progress while downloading. When it finishes, run the PATH refresh (see `START_HERE.md`). If Verify still fails, close and reopen `claude` in the `guide` folder (or open a **new** terminal window if you are doing this by hand).
 
 Fallback, only if the native installer fails (winget copies update by hand and can lag a few versions behind):
 ```powershell
