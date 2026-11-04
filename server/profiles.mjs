@@ -5,18 +5,26 @@ import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
 import {
   COUNTERPART_PROFILES,
   QUOTA_FAILOVER_THRESHOLD,
+  ROLE_FAILOVER_CHAINS,
   counterpartProfileName,
   isProviderOverQuota,
+  readCappedProviders,
   registerDefaultFailoverProfiles,
+  resolveCappedProvidersPath,
   resolveProfileWithFailover,
+  setProviderCapped,
 } from "./provider-failover.mjs";
 
 export {
   COUNTERPART_PROFILES,
   QUOTA_FAILOVER_THRESHOLD,
+  ROLE_FAILOVER_CHAINS,
   counterpartProfileName,
   isProviderOverQuota,
+  readCappedProviders,
+  resolveCappedProvidersPath,
   resolveProfileWithFailover,
+  setProviderCapped,
 };
 
 export const SHARED_NOTE_PREFIX = [

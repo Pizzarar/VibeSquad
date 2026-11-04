@@ -1,14 +1,19 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
-import { resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import {
   COUNTERPART_PROFILES,
   QUOTA_FAILOVER_THRESHOLD,
+  ROLE_FAILOVER_CHAINS,
   counterpartProfileName,
   isProviderOverQuota,
+  readCappedProviders,
+  resolveCappedProvidersPath,
   resolveProfileWithFailover,
+  setProviderCapped,
 } from "../server/provider-failover.mjs";
 import {
   DEFAULT_PACK_PROFILES,
@@ -128,14 +133,17 @@ test("3. resolveProfileWithFailover auto-switches Claude <-> Gemini when usage >
   assert.equal(revRev.failedOver, true);
   assert.equal(revRev.toProfile, "Review - Sonnet");
 
-  // When both are over quota, does not fail over to an exhausted counterpart
+  // When both claude and gemini are over quota, fails over to DeepSeek (multi-hop)
   const bothOver = [
     { id: "claude", status: "ok", usedPct: 99 },
     { id: "antigravity-cli", status: "ok", usedPct: 98 },
   ];
   const stuckRes = resolveProfileWithFailover("Lead - Claude", DEFAULT_PACK_PROFILES, bothOver);
-  assert.equal(stuckRes.failedOver, false);
-  assert.equal(stuckRes.profile.name, "Lead - Claude");
+  assert.equal(stuckRes.failedOver, true);
+  assert.equal(stuckRes.fromProfile, "Lead - Claude");
+  assert.equal(stuckRes.toProfile, "Senior Reasoning - DSP");
+  assert.equal(stuckRes.profile.name, "Senior Reasoning - DSP");
+  assert.equal(stuckRes.profile.provider, "opencode");
 });
 
 test("4. toPaseoSpawnConfig with usageProviders fails over automatically and preserves 19 default profiles + aliases", () => {
@@ -229,4 +237,70 @@ test("6. oppositeProviderTarget and switch buttons in DrawerHeader.tsx and Hando
   });
 
   assert.equal(mod.oppositeProviderTarget("opencode", "Mechanical - DSF"), null);
+});
+
+test("7. canonical role/tier names resolve to their primary profiles", () => {
+  assert.equal(resolveProfileWithFailover("Lead", DEFAULT_PACK_PROFILES, []).profile.name, "Lead - Claude");
+  assert.equal(resolveProfileWithFailover("Brainstorm", DEFAULT_PACK_PROFILES, []).profile.name, "Brainstorm - Claude");
+  assert.equal(resolveProfileWithFailover("Worker", DEFAULT_PACK_PROFILES, []).profile.name, "Implement - Sonnet");
+  assert.equal(resolveProfileWithFailover("Buddy", DEFAULT_PACK_PROFILES, []).profile.name, "Brainstorm - Claude");
+  assert.equal(resolveProfileWithFailover("RiffBot", DEFAULT_PACK_PROFILES, []).profile.name, "Brainstorm - Claude");
+  assert.equal(resolveProfileWithFailover("Reviewer", DEFAULT_PACK_PROFILES, []).profile.name, "Review - Gemini");
+  assert.equal(resolveProfileWithFailover("Fast", DEFAULT_PACK_PROFILES, []).profile.name, "Pre-check - Flash");
+  assert.equal(resolveProfileWithFailover("Coder", DEFAULT_PACK_PROFILES, []).profile.name, "Work Order - DSP");
+});
+
+test("8. multi-hop failover to DeepSeek when both claude and gemini are over quota", () => {
+  const bothCapped = [
+    { id: "claude", status: "ok", usedPct: 99 },
+    { id: "antigravity-cli", status: "ok", usedPct: 98 },
+  ];
+
+  const imp = resolveProfileWithFailover("Implement - Sonnet", DEFAULT_PACK_PROFILES, bothCapped);
+  assert.equal(imp.failedOver, true);
+  assert.equal(imp.fromProfile, "Implement - Sonnet");
+  assert.equal(imp.toProfile, "Work Order - DSP");
+  assert.equal(imp.profile.name, "Work Order - DSP");
+  assert.equal(imp.profile.provider, "opencode");
+
+  const lead = resolveProfileWithFailover("Lead - Claude", DEFAULT_PACK_PROFILES, bothCapped);
+  assert.equal(lead.failedOver, true);
+  assert.equal(lead.fromProfile, "Lead - Claude");
+  assert.equal(lead.toProfile, "Senior Reasoning - DSP");
+  assert.equal(lead.profile.name, "Senior Reasoning - DSP");
+  assert.equal(lead.profile.provider, "opencode");
+});
+
+test("9. setProviderCapped / readCappedProviders mark claude capped and fail over to Gemini", () => {
+  const dir = mkdtempSync(join(tmpdir(), "vs-caps-"));
+  const cappedProvidersPath = join(dir, "capped-providers.json");
+
+  const updated = setProviderCapped("claude", true, { reason: "test cap", cappedProvidersPath });
+  assert.ok(updated.claude, "claude should be in the returned cap map");
+  assert.equal(updated.claude.reason, "test cap");
+
+  const read = readCappedProviders({ cappedProvidersPath, useDiskCaps: true });
+  assert.ok(read.claude, "claude should be read back from disk");
+  assert.equal(read.claude.reason, "test cap");
+
+  // claude is capped on disk; Brainstorm - Claude should fail over to Brainstorm - Gemini
+  const res = resolveProfileWithFailover("Brainstorm - Claude", DEFAULT_PACK_PROFILES, [], {
+    cappedProvidersPath,
+    useDiskCaps: true,
+  });
+  assert.equal(res.failedOver, true);
+  assert.equal(res.fromProfile, "Brainstorm - Claude");
+  assert.equal(res.toProfile, "Brainstorm - Gemini");
+  assert.equal(res.profile.provider, "antigravity-cli");
+
+  // Uncap claude and confirm the failover no longer happens
+  setProviderCapped("claude", false, { cappedProvidersPath });
+  const res2 = resolveProfileWithFailover("Brainstorm - Claude", DEFAULT_PACK_PROFILES, [], {
+    cappedProvidersPath,
+    useDiskCaps: true,
+  });
+  assert.equal(res2.failedOver, false);
+  assert.equal(res2.profile.name, "Brainstorm - Claude");
+
+  rmSync(dir, { recursive: true, force: true });
 });

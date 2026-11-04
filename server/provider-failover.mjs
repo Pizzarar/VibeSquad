@@ -1,3 +1,7 @@
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+
 export const QUOTA_FAILOVER_THRESHOLD = 95;
 
 export const COUNTERPART_PROFILES = {
@@ -15,6 +19,10 @@ export const COUNTERPART_PROFILES = {
   "Implement - Opus": "Lead - Gemini",
   "Planner - Sonnet": "Lead - Gemini",
   "Spec - Opus": "Lead - Gemini",
+  "Work Order - DSP": "Implement - Sonnet",
+  "Mechanical - DSF": "Pre-check - Flash",
+  "Audit - DSF": "Scout - Flash",
+  "Senior Reasoning - DSP": "Lead - Gemini",
 };
 
 const BUILTIN_ALIASES = {
@@ -24,6 +32,14 @@ const BUILTIN_ALIASES = {
   "Art - Opus": "Art Painter - Opus",
   "Builder - Gemini": "Lead - Gemini",
   "Reviewer - Gemini": "Review - Gemini",
+  "Lead": "Lead - Claude",
+  "Brainstorm": "Brainstorm - Claude",
+  "Buddy": "Brainstorm - Claude",
+  "RiffBot": "Brainstorm - Claude",
+  "Worker": "Implement - Sonnet",
+  "Coder": "Work Order - DSP",
+  "Reviewer": "Review - Gemini",
+  "Fast": "Pre-check - Flash",
 };
 
 const BUILTIN_FALLBACK_PROFILES = [
@@ -81,7 +97,28 @@ const BUILTIN_FALLBACK_PROFILES = [
     featureValues: { approvalPolicy: "skip", sandbox: "off", shareMcp: "off" },
   },
   { name: "Art Painter - Opus", role: "worker", provider: "claude", model: "claude-opus-5-5", modeId: "auto", thinkingOptionId: "medium" },
+  { name: "Work Order - DSP", role: "worker", provider: "opencode", model: "deepseek/deepseek-v4-pro", modeId: "build", thinkingOptionId: "high" },
+  { name: "Mechanical - DSF", role: "worker", provider: "opencode", model: "deepseek/deepseek-v4-flash", modeId: "build", thinkingOptionId: "medium" },
+  { name: "Audit - DSF", role: "worker", provider: "opencode", model: "deepseek/deepseek-v4-flash", modeId: "plan", thinkingOptionId: "medium" },
+  { name: "Senior Reasoning - DSP", role: "worker", provider: "opencode", model: "deepseek/deepseek-v4-pro", modeId: "build", thinkingOptionId: "high" },
 ];
+
+export const ROLE_FAILOVER_CHAINS = {
+  "Lead - Claude": ["Lead - Gemini", "Senior Reasoning - DSP"],
+  "Lead - Gemini": ["Lead - Claude", "Senior Reasoning - DSP"],
+  "Brainstorm - Claude": ["Brainstorm - Gemini", "Senior Reasoning - DSP"],
+  "Brainstorm - Gemini": ["Brainstorm - Claude", "Senior Reasoning - DSP"],
+  "Implement - Sonnet": ["Lead - Gemini", "Work Order - DSP"],
+  "Implement - Opus": ["Lead - Gemini", "Work Order - DSP"],
+  "Planner - Sonnet": ["Lead - Gemini", "Senior Reasoning - DSP"],
+  "Spec - Opus": ["Lead - Gemini", "Senior Reasoning - DSP"],
+  "Work Order - DSP": ["Implement - Sonnet", "Lead - Gemini"],
+  "Mechanical - DSF": ["Pre-check - Flash", "Check - Haiku"],
+  "Review - Sonnet": ["Review - Gemini", "Senior Reasoning - DSP"],
+  "Review - Gemini": ["Review - Sonnet", "Check - Haiku"],
+  "Check - Haiku": ["Pre-check - Flash", "Audit - DSF"],
+  "Pre-check - Flash": ["Check - Haiku", "Audit - DSF"],
+};
 
 let registeredDefaultProfiles = null;
 
@@ -141,13 +178,131 @@ function matchesProvider(entry, targetFamily) {
   return false;
 }
 
-export function isProviderOverQuota(providerId, usageProviders = [], threshold = QUOTA_FAILOVER_THRESHOLD) {
+export function resolveCappedProvidersPath(opts = {}) {
+  if (opts.cappedProvidersPath) return opts.cappedProvidersPath;
+  if (process.env.VIBESQUAD_CAPPED_PROVIDERS_PATH) return process.env.VIBESQUAD_CAPPED_PROVIDERS_PATH;
+  const base = process.env.VIBESQUAD_HOME || join(homedir(), ".vibesquad");
+  return join(base, "capped-providers.json");
+}
+
+/** Read the raw `{ capped: { ... } }` object directly from disk (never merges in-memory opts). */
+function readDiskCaps(opts = {}) {
+  const path = resolveCappedProvidersPath(opts);
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    const capped = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed.capped ?? parsed) : null;
+    return capped && typeof capped === "object" && !Array.isArray(capped) ? capped : {};
+  } catch {
+    return {};
+  }
+}
+
+function isFamilyCapped(caps, targetFamily) {
+  if (!caps) return false;
+  if (Array.isArray(caps)) {
+    return caps.some((id) => normalizeProviderFamily(id) === targetFamily);
+  }
+  if (caps instanceof Set) {
+    for (const id of caps) {
+      if (normalizeProviderFamily(id) === targetFamily) return true;
+    }
+    return false;
+  }
+  if (typeof caps === "object") {
+    for (const [k, v] of Object.entries(caps)) {
+      if (normalizeProviderFamily(k) === targetFamily) {
+        return v !== false && v !== null && v !== undefined && v !== 0 && v !== "false" && v !== "";
+      }
+    }
+  }
+  return false;
+}
+
+export function readCappedProviders(opts = {}) {
+  const result = {};
+
+  // In-memory overrides (array / Set / object) take priority.
+  const overrides = opts.cappedProviders;
+  if (overrides) {
+    if (Array.isArray(overrides)) {
+      for (const id of overrides) {
+        const family = normalizeProviderFamily(id);
+        if (family) result[family] = { reason: "capped", updatedAt: null };
+      }
+    } else if (overrides instanceof Set) {
+      for (const id of overrides) {
+        const family = normalizeProviderFamily(id);
+        if (family) result[family] = { reason: "capped", updatedAt: null };
+      }
+    } else if (typeof overrides === "object") {
+      for (const [k, v] of Object.entries(overrides)) {
+        const family = normalizeProviderFamily(k);
+        if (!family) continue;
+        if (v === false || v === null || v === undefined) {
+          delete result[family];
+          continue;
+        }
+        result[family] =
+          v && typeof v === "object" ? v : { reason: String(v ?? "capped"), updatedAt: null };
+      }
+    }
+  }
+
+  // Disk caps: only read when explicitly enabled or the path env var is set,
+  // so unit tests passing mock usageProviders aren't polluted by host disk state.
+  const readDisk = (opts.useDiskCaps === true || !!process.env.VIBESQUAD_CAPPED_PROVIDERS_PATH) && opts.ignoreDiskCaps !== true;
+  if (readDisk) {
+    const disk = readDiskCaps(opts);
+    for (const [k, v] of Object.entries(disk)) {
+      const family = normalizeProviderFamily(k);
+      if (!family) continue;
+      result[family] = v && typeof v === "object" ? v : { reason: String(v ?? "capped"), updatedAt: null };
+    }
+  }
+
+  return result;
+}
+
+export function setProviderCapped(providerId, capped = true, { reason = "manual cap", ...opts } = {}) {
+  const family = normalizeProviderFamily(providerId);
+  if (!family) return readCappedProviders(opts);
+
+  const existing = readDiskCaps(opts);
+  if (capped) {
+    existing[family] = { reason, updatedAt: new Date().toISOString() };
+  } else {
+    delete existing[family];
+  }
+
+  const path = resolveCappedProvidersPath(opts);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify({ capped: existing }, null, 2) + "\n", "utf8");
+  return existing;
+}
+
+export function isProviderOverQuota(providerId, usageProviders = [], threshold = QUOTA_FAILOVER_THRESHOLD, opts = {}) {
   const targetFamily = normalizeProviderFamily(providerId);
   if (!targetFamily) {
     return { overQuota: false, reason: null, usedPct: null };
   }
+
+  // In-memory cap overrides are checked first.
+  if (opts.cappedProviders && isFamilyCapped(opts.cappedProviders, targetFamily)) {
+    return { overQuota: true, reason: `${targetFamily} is marked capped`, usedPct: 100 };
+  }
+
   const list = extractUsageList(usageProviders);
   const entry = list.find((item) => matchesProvider(item, targetFamily));
+
+  // Persistent disk caps only apply when usage data doesn't already specify the provider,
+  // and only when the path env var is set or disk caps are explicitly enabled.
+  if (!entry && opts.ignoreDiskCaps !== true) {
+    const readDisk = opts.useDiskCaps === true || !!process.env.VIBESQUAD_CAPPED_PROVIDERS_PATH;
+    if (readDisk && readCappedProviders(opts)[targetFamily]) {
+      return { overQuota: true, reason: `${targetFamily} is marked capped`, usedPct: 100 };
+    }
+  }
+
   if (!entry) {
     return { overQuota: false, reason: null, usedPct: null };
   }
@@ -252,7 +407,7 @@ export function resolveProfileWithFailover(requestedNameOrProfile, profiles = []
   }
 
   const threshold = opts?.threshold ?? QUOTA_FAILOVER_THRESHOLD;
-  const check = isProviderOverQuota(profile.provider, usageProviders, threshold);
+  const check = isProviderOverQuota(profile.provider, usageProviders, threshold, opts);
   if (!check.overQuota) {
     return {
       profile,
@@ -263,48 +418,50 @@ export function resolveProfileWithFailover(requestedNameOrProfile, profiles = []
     };
   }
 
-  const targetName = counterpartProfileName(profile.name);
-  let counterpart = targetName ? lookupProfileInList(targetName, effectiveProfiles) : null;
+  // Build the failover candidate list: counterpart first, then the role failover
+  // chain, then any same-role profiles from other provider families.
+  const seen = new Set([profile.name]);
+  const candidates = [];
+  const push = (name) => {
+    const raw = String(name ?? "").trim();
+    if (!raw || seen.has(raw)) return;
+    seen.add(raw);
+    candidates.push(raw);
+  };
 
-  if (!counterpart) {
-    const curFamily = normalizeProviderFamily(profile.provider);
-    const oppositeFamily = curFamily === "claude" ? "antigravity-cli" : curFamily === "antigravity-cli" ? "claude" : "";
-    if (oppositeFamily) {
-      counterpart =
-        effectiveProfiles.find(
-          (p) => p && p.role === profile.role && normalizeProviderFamily(p.provider) === oppositeFamily,
-        ) ||
-        effectiveProfiles.find((p) => p && normalizeProviderFamily(p.provider) === oppositeFamily) ||
-        null;
+  push(counterpartProfileName(profile.name));
+  const chain = ROLE_FAILOVER_CHAINS[profile.name] || [];
+  for (const name of chain) push(name);
+
+  const curFamily = normalizeProviderFamily(profile.provider);
+  for (const p of effectiveProfiles) {
+    if (!p || !p.name) continue;
+    if (p.role === profile.role && normalizeProviderFamily(p.provider) !== curFamily) {
+      push(p.name);
     }
   }
 
-  if (!counterpart) {
-    return {
-      profile,
-      failedOver: false,
-      fromProfile: profile.name,
-      toProfile: null,
-      reason: check.reason,
-    };
-  }
-
-  const counterpartCheck = isProviderOverQuota(counterpart.provider, usageProviders, threshold);
-  if (counterpartCheck.overQuota) {
-    return {
-      profile,
-      failedOver: false,
-      fromProfile: profile.name,
-      toProfile: null,
-      reason: check.reason,
-    };
+  for (const name of candidates) {
+    const cand = lookupProfileInList(name, effectiveProfiles);
+    if (!cand || !cand.provider) continue;
+    if (cand.name === profile.name) continue;
+    const candCheck = isProviderOverQuota(cand.provider, usageProviders, threshold, opts);
+    if (!candCheck.overQuota) {
+      return {
+        profile: cand,
+        failedOver: true,
+        fromProfile: profile.name,
+        toProfile: cand.name,
+        reason: check.reason,
+      };
+    }
   }
 
   return {
-    profile: counterpart,
-    failedOver: true,
+    profile,
+    failedOver: false,
     fromProfile: profile.name,
-    toProfile: counterpart.name,
+    toProfile: null,
     reason: check.reason,
   };
 }
