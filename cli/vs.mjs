@@ -51,6 +51,13 @@ import { loadProfiles } from "../server/profiles.mjs";
 import { staleWarning } from "../server/stale-runtime.mjs";
 import { localTokenPath, requestLocalLoginUrl } from "../server/local-token.mjs";
 import {
+  readLaneSpec,
+  writeLaneSpec,
+  readLaneTasks,
+  upsertLaneTask,
+  renderLaneArtifactBlock,
+} from "../server/lane-spec.mjs";
+import {
   LEGACY_NEEDS_LABEL,
   LEGACY_NEEDS_REASON,
   LEGACY_NEEDS_UNTIL,
@@ -85,6 +92,9 @@ const GH_TIMEOUT_MS = 2000;
 
 const BASE_DIR = path.resolve(process.env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad"));
 const PASEO_HOME = process.env.PASEO_HOME || path.join(os.homedir(), ".paseo");
+// Root dir the lane-spec artifacts resolve against. VIBESQUAD_ROOT lets tests (and the installed
+// runtime) point the durable docs/lanes/<lane>/ tree at a specific checkout.
+const LANE_SPEC_ROOT = path.resolve(process.env.VIBESQUAD_ROOT || path.resolve(import.meta.dirname, ".."));
 
 // ---------------------------------------------------------------------------
 // teams.json
@@ -418,6 +428,12 @@ function parseArgs(argv) {
     "binDir",
     "brief",
     "timeout",
+    "file",
+    "goal",
+    "files",
+    "doneCheck",
+    "branch",
+    "commit",
   ]);
   const booleans = new Set([
     "sinceMe",
@@ -432,6 +448,7 @@ function parseArgs(argv) {
     "dryRun",
     "force",
     "print",
+    "stdin",
   ]);
 
   for (let i = 0; i < argv.length; i++) {
@@ -641,6 +658,11 @@ Usage:
   vs inbox list [--lane <lane>]
   vs inbox triage --merge <targetId> <sourceId...> | --bounce <cardId> --lane <newLane>
   vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force]
+  vs spec [show] [--lane <lane>] [--team <team>]
+  vs spec write "<markdown>" | --stdin | --file <path> [--lane <lane>] [--team <team>]
+  vs task list [--lane <lane>] [--json]
+  vs task set <unit-id> [--goal <g>] [--files <f1,f2>] [--done-check <cmd>] [--status <todo|running|done|blocked>] [--branch <b>] [--commit <sha>]
+  vs cap [list | add <provider> | clear <provider>]
   vs wait <agent> [--timeout <seconds>]   block until idle (exit 0), error or blocked (1), timeout (2); no limit by default
   vs install-shim [--bin-dir <dir>]
   vs open [--print]   open the local web UI with owner access (sets the vs_local cookie); --print shows a one-time URL (60 s)
@@ -1900,6 +1922,153 @@ async function commandOpen(flags) {
 }
 
 // ---------------------------------------------------------------------------
+// vs spec / vs task / vs cap — durable lane artifacts (docs/lanes/<lane>/)
+// ---------------------------------------------------------------------------
+
+function specLine(unit) {
+  const files = Array.isArray(unit.files) ? unit.files.map(String).join(", ") : "";
+  return `- ${unit.id} [${unit.status}] goal="${unit.goal ?? ""}" files=[${files}] doneCheck="${unit.doneCheck ?? ""}"`;
+}
+
+function commandSpec(flags) {
+  const identity = resolveIdentity(flags);
+  const rootDir = LANE_SPEC_ROOT;
+  const sub = String(flags._[0] ?? "").toLowerCase();
+
+  if (sub === "" || sub === "show" || sub === "read") {
+    const spec = readLaneSpec(identity.team.id, identity.lane, rootDir);
+    const content = spec.exists ? spec.content : "(no lane spec yet)";
+    process.stdout.write(content.endsWith("\n") ? content : content + "\n");
+    return 0;
+  }
+
+  if (sub === "write") {
+    let content = "";
+    if (flags.stdin) {
+      content = fs.readFileSync(0, "utf8");
+    } else if (flags.file) {
+      content = fs.readFileSync(path.resolve(String(flags.file)), "utf8");
+    } else {
+      content = flags._.slice(1).join(" ").trim();
+      if (!content) {
+        throw new Error('spec write needs markdown: vs spec write "<markdown>" (or --stdin / --file <path>)');
+      }
+    }
+    const written = writeLaneSpec(identity.team.id, identity.lane, content, rootDir);
+    process.stdout.write(written.fullPath + "\n");
+    return 0;
+  }
+
+  throw new Error(`unknown spec subcommand "${sub}". Use: vs spec show | write`);
+}
+
+function commandTask(flags) {
+  const identity = resolveIdentity(flags);
+  const rootDir = LANE_SPEC_ROOT;
+  const sub = String(flags._[0] ?? "list").toLowerCase();
+
+  if (sub === "list" || sub === "ls") {
+    const board = readLaneTasks(identity.team.id, identity.lane, rootDir);
+    if (flags.json) {
+      process.stdout.write(JSON.stringify(board, null, 2) + "\n");
+      return 0;
+    }
+    if (!board.units.length) {
+      process.stdout.write("(no tasks)\n");
+      return 0;
+    }
+    for (const unit of board.units) process.stdout.write(specLine(unit) + "\n");
+    return 0;
+  }
+
+  if (sub === "set") {
+    const id = String(flags._[1] ?? "").trim();
+    if (!id) throw new Error("task set needs a unit id: vs task set <unit-id> [--goal <g>] [--files <f1,f2>] [--done-check <cmd>] [--status <todo|running|done|blocked>] [--branch <b>] [--commit <sha>]");
+    const status = flags.status !== undefined ? String(flags.status) : undefined;
+    if (status && !["todo", "running", "done", "blocked"].includes(status)) {
+      throw new Error(`--status must be todo|running|done|blocked (got "${status}")`);
+    }
+    const patch = { id };
+    if (flags.goal !== undefined) patch.goal = String(flags.goal);
+    if (flags.doneCheck !== undefined) patch.doneCheck = String(flags.doneCheck);
+    if (flags.files !== undefined) patch.files = String(flags.files).split(",").map((s) => s.trim()).filter(Boolean);
+    if (status !== undefined) patch.status = status;
+    if (flags.branch !== undefined) patch.branch = String(flags.branch);
+    if (flags.commit !== undefined) patch.commit = String(flags.commit);
+
+    const res = upsertLaneTask(identity.team.id, identity.lane, patch, rootDir);
+    if (flags.json) {
+      process.stdout.write(JSON.stringify(res.unit, null, 2) + "\n");
+      return 0;
+    }
+    process.stdout.write(specLine(res.unit) + "\n");
+    return 0;
+  }
+
+  throw new Error(`unknown task subcommand "${sub}". Use: vs task list | set`);
+}
+
+function cappedProvidersFile() {
+  return path.join(BASE_DIR, "capped-providers.json");
+}
+
+function readCappedProviders() {
+  const { value } = readJsonFileWithBom(cappedProvidersFile(), { fallback: null, label: "capped-providers.json" });
+  if (value && typeof value === "object" && value.capped && typeof value.capped === "object" && !Array.isArray(value.capped)) {
+    return value;
+  }
+  return { capped: {} };
+}
+
+function writeCappedProviders(doc) {
+  fs.mkdirSync(BASE_DIR, { recursive: true });
+  fs.writeFileSync(cappedProvidersFile(), JSON.stringify(doc, null, 2) + "\n", "utf8");
+}
+
+function commandCap(flags) {
+  const sub = String(flags._[0] ?? "list").toLowerCase();
+
+  if (sub === "list" || sub === "ls") {
+    const doc = readCappedProviders();
+    if (flags.json) {
+      process.stdout.write(JSON.stringify(doc, null, 2) + "\n");
+      return 0;
+    }
+    const entries = Object.entries(doc.capped);
+    if (!entries.length) {
+      process.stdout.write("(no capped providers)\n");
+      return 0;
+    }
+    for (const [provider, info] of entries) {
+      process.stdout.write(`${provider}: ${info?.reason ?? ""} (${info?.updatedAt ?? ""})\n`);
+    }
+    return 0;
+  }
+
+  if (sub === "add") {
+    const provider = String(flags._[1] ?? "").trim().toLowerCase();
+    if (!provider) throw new Error("cap add needs a provider: vs cap add <provider>");
+    const doc = readCappedProviders();
+    doc.capped[provider] = { reason: "cli cap", updatedAt: new Date().toISOString() };
+    writeCappedProviders(doc);
+    process.stdout.write(`capped ${provider}\n`);
+    return 0;
+  }
+
+  if (sub === "clear") {
+    const provider = String(flags._[1] ?? "").trim().toLowerCase();
+    if (!provider) throw new Error("cap clear needs a provider: vs cap clear <provider>");
+    const doc = readCappedProviders();
+    delete doc.capped[provider];
+    writeCappedProviders(doc);
+    process.stdout.write(`cleared ${provider}\n`);
+    return 0;
+  }
+
+  throw new Error(`unknown cap subcommand "${sub}". Use: vs cap list | add | clear`);
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -1928,6 +2097,9 @@ function main(argv) {
     if (command === "handoff") return commandHandoff(flags);
     if (command === "inbox") return commandInbox(flags);
     if (command === "pin") return commandPin(flags);
+    if (command === "spec") return commandSpec(flags);
+    if (command === "task") return commandTask(flags);
+    if (command === "cap") return commandCap(flags);
     if (command === "wait") return commandWait(flags);
     if (command === "install-shim") return commandInstallShim(flags);
     if (command === "open") return commandOpen(flags);
