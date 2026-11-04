@@ -12,6 +12,7 @@ import {
   getPaseoHome,
   markDaemonManagedByVibeSquad,
   readPaseoPid,
+  readRawPaseoConfig,
   withWindowsHideNodeOptions,
 } from "./paseo-control.mjs";
 import { getDaemonAuthStatus } from "./daemon-password.mjs";
@@ -109,9 +110,8 @@ export function parseListen(listen) {
 }
 
 export function readPaseoListen() {
-  const cfgPath = join(homedir(), ".paseo", "config.json");
-  const parsed = readJsonFileWithBom(cfgPath, { fallback: null, label: "~/.paseo/config.json" }).value;
-  const listen = parsed?.daemon?.listen ?? "127.0.0.1:6767";
+  const { config } = readRawPaseoConfig();
+  const listen = config?.daemon?.listen ?? "127.0.0.1:6767";
   return process.env.PASEO_DAEMON ?? listen;
 }
 

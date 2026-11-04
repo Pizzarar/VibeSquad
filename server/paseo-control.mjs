@@ -409,17 +409,25 @@ export async function writePaseoConfigAndReload(mutatorOrObject, opts = {}) {
  * Counts live and busy (running) agents in `<paseoHome>/agents` or via `paseo ls --json`.
  */
 export async function inspectDaemonAgents(opts = {}) {
-  const lsRes = await runPaseoCli(["ls", "--json"], { ...opts, timeoutMs: 4000 });
-  if (lsRes.ok && Array.isArray(lsRes.data)) {
-    const live = lsRes.data.filter((a) => a && a.status !== "closed" && !a.archivedAt);
-    const busy = live.filter((a) => a.status === "running");
-    return {
-      liveCount: live.length,
-      busyCount: busy.length,
-      busyAgents: busy.map((a) => ({ id: a.id, name: a.name || a.title || a.shortId || a.id })),
-    };
+  const hasCustomRunner =
+    typeof opts.cliRunner === "function" ||
+    typeof opts.runCli === "function" ||
+    typeof opts._runCli === "function";
+  // Only pay for a cold CLI spawn when a runner is injected (tests) or explicitly requested;
+  // otherwise read the agent state files below (<2ms) instead of waiting on a 4s subprocess.
+  if (hasCustomRunner || opts.probeCli === true) {
+    const lsRes = await runPaseoCli(["ls", "--json"], { ...opts, timeoutMs: 4000 });
+    if (lsRes.ok && Array.isArray(lsRes.data)) {
+      const live = lsRes.data.filter((a) => a && a.status !== "closed" && !a.archivedAt);
+      const busy = live.filter((a) => a.status === "running");
+      return {
+        liveCount: live.length,
+        busyCount: busy.length,
+        busyAgents: busy.map((a) => ({ id: a.id, name: a.name || a.title || a.shortId || a.id })),
+      };
+    }
   }
-  // Fallback to reading agent state files in <paseoHome>/agents if CLI timed out
+  // Read agent state files in <paseoHome>/agents directly.
   const agentsDir = join(getPaseoHome(opts), "agents");
   let liveCount = 0;
   let busyCount = 0;
@@ -557,7 +565,13 @@ export async function checkStartedDaemonProviders(opts = {}) {
   if (opts.checkProviders === false) {
     return { providerWarning: null, erroredProviders: [] };
   }
-  const waitMs = opts.providerWaitMs ?? 5000;
+  const hasCustomRunner =
+    typeof opts.cliRunner === "function" ||
+    typeof opts.runCli === "function" ||
+    typeof opts._runCli === "function";
+  // Without an injected runner each poll is a cold CLI spawn; default to a single check
+  // unless the caller explicitly asks to wait (unit tests pass a runner and keep polling).
+  const waitMs = opts.providerWaitMs ?? (hasCustomRunner ? 5000 : 0);
   const pollMs = opts.providerPollMs ?? 500;
   const deadline = Date.now() + Math.max(0, waitMs);
   let providers = [];
