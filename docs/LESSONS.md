@@ -370,6 +370,64 @@ compact `<!-- vibesquad:lessons:begin -->` digest into prompts.
 
 ---
 
+## 8. Owner ↔ Agent Communication & Interrupt Patterns
+
+Derived from an audit of 176 extracted owner turns (`owner-turns-extracted.json`) plus verbatim
+owner quotes in `docs/PLAN_*.md`. See `docs/audits/owner-turn-audit.md` for the full breakdown.
+Aub (the owner) talks fast, tersely, with typos, and often while an agent is already mid-turn.
+
+### 8.1 Plain Enter steered mid-turn follow-ups instead of queueing them
+- **Symptom:** ~15% of owner turns arrive within 60s of the previous one; "oh and by the way"
+  side-thoughts ("proceed, also, crate a prompt…", "sweet on a nother note…") collided with active
+  turns and displaced them. 3 Gemini turns carry `interruptedMidTurn=true`, 10 Claude turns have
+  `prevEntryType=assistant`, and 10 are `[Request interrupted by user]` markers.
+- **Root Cause (How We Got Here):** `src/paseo.ts` `sendMessage` defaults
+  `activeTurnBehavior: "steer"`, so every plain-Enter send rewrites the running turn instead of
+  queueing behind it. Aub flagged it himself: "i know i intterupt mid turn alot… more 'oh and by the
+  way'. I think you have a /btw command?" / "i like suupporting commands and queuing by default with a
+  little 'send this now' promt… if you want to steer insteaad."
+- **Rule / Fix:** Default to **queue**; only an explicit "Send this now" (or `Go:`) steers. Treat
+  `also` / `on a nother note` / `btw` / `I also need` as a **separate unit of work**, not a modifier
+  on the current turn. Never end a turn to "wait" for a queued item.
+- **Evidence:** `owner-turns-extracted.json` 2026-11-04T03:45:08Z / 03:48:42Z; `src/paseo.ts:164`;
+  `docs/audits/owner-turn-audit.md` §4(a).
+
+### 8.2 Keyboard-adjacent / phonetic shorthand must be decoded silently
+- **Symptom:** Agents stalled or misread owner typos that are one key off or phonetically garbled.
+- **Root Cause (How We Got Here):** Aub types fast and never corrects, so shorthand abounds:
+  "gold for a second" → *hold*, "paseo la" → *paseo ls*, "emini" → *gemini*, "dameon" → *daemon*,
+  "sotpped" → *stopped*, "ahvent" → *haven't*, "fo 2. do your lean btw A + B" → *for … between*.
+- **Rule / Fix:** Infer from context and act; only confirm (in one clause, while continuing) when
+  genuinely ambiguous. A misspelling is never a new concept.
+- **Evidence:** `owner-turns-extracted.json` 03:00:01Z, 03:18:04Z, 02:56:31Z, 01:49:13Z, 02:12:14Z,
+  17:04:23Z; `docs/audits/owner-turn-audit.md` §4(b).
+
+### 8.3 Mechanism-suggestions must become architectural primitives, not literal commands
+- **Symptom:** Aub names a means ("run paseo ls", "make a worktree", "we have like 20 profiles",
+  "run as many lanes as you can") and agents obeyed literally instead of building the primitive.
+- **Root Cause (How We Got Here):** The owner describes the outcome in mechanism terms he can see;
+  there was no rule forcing the agent to translate mechanism → outcome. He asked for it outright:
+  "is there any way to audit … where I'm suggesting an idea that works but there are commands or ways
+  to do it better?".
+- **Rule / Fix:** Propose the cleaner primitive and record the translation in the plan's **Decided**
+  section (`paseo ls` → `vs who`; projects-folder cleanup → worktree sanctuary; 20 profiles →
+  Role+Tier failover routing; "run as many lanes" → parallel-by-default lanes).
+- **Evidence:** `docs/PLAN_BETTER_WAY_AUDIT.md`, `docs/PLAN_VS_WHO.md`, `docs/PLAN_WORKSPACES_CLEANUP.md`,
+  `docs/PLAN_PROVIDER_CONTINUITY.md`; `owner-turns-extracted.json` 03:08:15Z, 03:10:54Z, 01:15:17Z.
+
+### 8.4 Multi-item dumps need automatic parallel split + `@lane` routing
+- **Symptom:** 3–4 distinct requests arrive in one message and got collapsed into one serial turn.
+- **Root Cause (How We Got Here):** Aub dumps numbered lists ("1. … 2. … 3. …", "fo 2. do your lean
+  btw A + B and 3. Go A", "Send all 3 to whatever relevant lanes already exist") and there was no
+  split-and-route rule.
+- **Rule / Fix:** Split multi-item messages into parallel units automatically and route each to its
+  `@lane` handle; a short approval ("send it", "go for b", "a + a", "do it") is a terminal go-signal,
+  not a request to re-summarize.
+- **Evidence:** `owner-turns-extracted.json` 17:04:23Z, 16:52:52Z, 01:53:28.729Z, 19:09:09.200Z,
+  03:48:42Z; `docs/audits/owner-turn-audit.md` §4(d), §5.
+
+---
+
 ## Standing rules (quick reference)
 
 1. Find the lead with `vs who lead` (labels `role`/`lane`/`ord`), never `paseo ls -g --json` or
@@ -385,3 +443,7 @@ compact `<!-- vibesquad:lessons:begin -->` digest into prompts.
 6. Detach live children before archiving any agent (Paseo cascades archives to the parent's children).
 7. Treat durable lane artifacts (`docs/lanes/<lane>/SPEC.md` + `docs/brainstorm/<lane>.md`) as the source
    of truth, not chat history.
+8. Queue by default (never steer mid-turn): decode the owner's shorthand (`dameon`→daemon, `paseo la`→`paseo
+   ls`, `btw`→between) silently, translate mechanisms into architectural primitives, and split multi-item
+   dumps into parallel units routed to `@lane` handles — a short "send it"/"go for b" is a go-signal, not
+   a request to re-summarize.
