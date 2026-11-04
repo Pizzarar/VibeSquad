@@ -71,6 +71,8 @@ export const SHARED_NOTE_PREFIX = [
   "- R4 (Large files): For files over ~30k chars, grep first, then read with offset/limit. Never re-read from byte 0.",
   "- R6 (Waiting): Wait on agents with `paseo wait <id> --timeout <s>` (always with a timeout). No sleep/poll loops.",
   "- R2/R7 (Git state): Git state in the spawn context is a starting point only. Re-check right before commit/push/merge, not every turn. Fetch at most once per worktree per hour unless about to merge.",
+  "- R8 (Worktrees & Lanes): Address feature lanes by their `@<code>` handle (e.g. `@bug`, `@ade`, `@uip`, `@art`). Create linked git worktrees only via `vs worktree create <unit>` (stored in the managed worktree sanctuary, never as sibling folders in the projects directory), and sweep merged worktrees with `vs worktree sweep --apply`.",
+  "- R9 (Owner shorthand & interrupts): Decode keyboard/phonetic shorthand silently (`dameon`→daemon, `emini`→gemini, `paseo la`→paseo ls, `gold`→hold, `sotpped`→stopped, `ahvent`→haven't). Translate mechanism suggestions into cleaner primitives (`vs who`, worktree sanctuary, role-tier failover) and record the translation in Decided. Treat `/btw` / `also` / `on another note` as separate queued units, split multi-item dumps into parallel `@lane` units, and treat short approvals (`send it`, `go for b`, `do it`) as terminal go-signals.",
 ].join("\n");
 
 const PRIOR_ART_CHECK_RULE =
@@ -89,6 +91,7 @@ const LEAD_NOTE_BODY = [
   "Never read sweeps, long logs or raw worker output yourself. Send them to Audit - DSF, Scout - Flash or Pre-check - Flash and read only the result.",
   "Routing: ambiguous work → Implement - Sonnet. Tier A invariant work → Implement - Opus. Clear file scope → Planner - Sonnet + Work Order - DSP. One-file or mechanical → Mechanical - DSF.",
   "Review: Claude work → Review - Gemini (Tier A waits if Gemini is capped; Tier B falls back to Review - Sonnet unless Sonnet wrote it). Gemini work → Review - Sonnet. DeepSeek work → Review - Gemini; if capped, Check - Haiku, then Review - Sonnet only on a Haiku FAIL or doubt.",
+  "Durable lane state & failover: keep `docs/lanes/<lane>/SPEC.md` and `TASKS.json` current (`vs spec @<lane>`, `vs task @<lane> list|add|done`), record root-cause lessons via `vs lesson add`, and check/set provider quota caps with `vs cap list|set|clear` (automatic failover routes Claude → Gemini → DeepSeek).",
   PRIOR_ART_CHECK_RULE,
   SPIN_UP_BUDDY_RULE,
   JSON_WRITE_RULE,
@@ -100,6 +103,7 @@ const BRAINSTORM_NOTE_BODY = [
   "Ground ideas in the real code (read only, cite file:line). Verify facts (git, gh, logs, code) before relaying them; never guess a status.",
   "Never edit source, commit, push or merge. Don't message the lead mid-chat except to hand off.",
   'Handoff (when the owner says "send it"): write a plan file with the idea, the owner\'s words verbatim, Decided vs Open, the plan (order + done-check), which lead, and out of scope. Find the current lead for this project/lane with `vs who lead` (never one marked "(old)"), send one short paragraph plus the path, and tell the owner who got it.',
+  "Durable lane specs: read and update the lane's `docs/lanes/<lane>/SPEC.md` and `TASKS.json` (`vs spec @<lane>`, `vs task @<lane>`) when framing or handing off plans, and refer to lanes by their `@<code>` handle.",
   PRIOR_ART_CHECK_RULE,
   "Starting agents: you may spawn leads (including several in parallel) when a lane has none; other agents (tooling, research, prototypes) only when the owner asks.",
   SPIN_UP_BUDDY_RULE,

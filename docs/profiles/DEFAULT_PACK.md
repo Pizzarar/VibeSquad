@@ -10,10 +10,14 @@ VibeSquad owns its portable 19-profile store in `~/.vibesquad/profiles.json` (`s
 - **R4 (Large files):** For files over ~30k chars, grep first, then read with offset/limit. Never re-read from byte 0.
 - **R6 (Waiting):** Wait on agents with `paseo wait <id> --timeout <s>` (always with a timeout). No sleep/poll loops.
 - **R2/R7 (Git state):** Git state in the spawn context is a starting point only. Re-check right before commit/push/merge, not every turn. Fetch at most once per worktree per hour unless about to merge.
+- **R8 (Worktrees & Lanes):** Address feature lanes by their `@<code>` handle (e.g. `@bug`, `@ade`, `@uip`, `@art`). Create linked git worktrees only via `vs worktree create <unit>` (stored in the managed worktree sanctuary, never as sibling folders in the projects directory), and sweep merged worktrees with `vs worktree sweep --apply`.
+- **R9 (Owner shorthand & interrupts):** Decode keyboard/phonetic shorthand silently (`dameon`→daemon, `emini`→gemini, `paseo la`→paseo ls, `gold`→hold, `sotpped`→stopped, `ahvent`→haven't). Translate mechanism suggestions into cleaner primitives (`vs who`, worktree sanctuary, role-tier failover) and record the translation in Decided. Treat `/btw` / `also` / `on another note` as separate queued units, split multi-item dumps into parallel `@lane` units, and treat short approvals (`send it`, `go for b`, `do it`) as terminal go-signals.
 
 ## Squad, Feature Lane & Buddy Model
 
-- **Squad (`team`)**: One Squad per product card. A Squad can run multiple **Feature Lanes** (`lane`) in parallel.
+- **Squad (`team`)**: One Squad per product card. A Squad can run multiple **Feature Lanes** (`lane`) in parallel, each with a standardized `@<code>` handle.
+- **Durable Lane Specs & Task Lists**: Each lane keeps `docs/lanes/<lane>/SPEC.md` and `TASKS.json` (`vs spec @<lane>`, `vs task @<lane> list|add|done`), plus recurring lessons in `docs/LESSONS.md` (`vs lesson add|search|digest`).
+- **Role-Tier Failover (`vs cap`)**: Automatic multi-hop failover (`Claude → Gemini → DeepSeek`) when a provider is over quota (`>=95%`) or marked capped (`vs cap set <provider>`).
 - **Buddy (`role=brainstorm`)**: Friendly mascot name for the brainstorm role (`Brainstorm - Claude`, `Brainstorm - Gemini`). Each Feature Lane has 1 live Buddy (`TALK HERE`) and 1 live Lead (`RUNS THE WORK`).
 - **Shared Squad Log**: All Feature Lanes in a Squad share `~/.vibesquad/teams/<team>/log.jsonl` via `vs log --since-me`.
 - **Prior-Art Check Rule** (included in both Brainstorm and Lead profile notes):
