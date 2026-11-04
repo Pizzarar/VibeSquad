@@ -233,7 +233,7 @@ export function PinFocusHeader(props: {
                   <div className="pin-profile-chips" data-testid="pin-spin-up-profile-chips">
                     {brainstormProfiles.map((name) => {
                       const active = selectedProfile === name;
-                      const shortName = name.replace(/^Brainstorm\s*-\s*/i, "") || name;
+                      const shortName = name.replace(/^(?:Brainstorm)\s*-\s*/i, "") || name;
                       return (
                         <button
                           type="button"
