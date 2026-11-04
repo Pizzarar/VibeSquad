@@ -37,7 +37,7 @@ import type { Entry } from "./Timeline";
 import { ImportSessionModal, SchedulesPanel } from "./SchedulesPanel";
 import { openAgent, openAgentInTab, usePanes } from "./panes";
 import { exportFileName, forkSummaryPrompt, forkTitle, transcriptToJson, transcriptToMarkdown } from "./sessionLifecycle";
-import { openBriefEditor } from "./pinActions";
+import { openBriefEditor, setLastBrainstormProfile } from "./pinActions";
 import { useInFocusedLane, usePinFocus } from "./pinFocus";
 import { WorkingChip } from "./WorkingBar";
 import { usePinSlot, useRailCardVisible } from "./pinSlots";
@@ -485,7 +485,7 @@ export type DrawerHeaderProps = {
   restartK: number;
   restarting: boolean;
   planHandedOff: boolean;
-  doRestart: (reason: string, pendingPrompt?: string) => Promise<unknown>;
+  doRestart: (reason: string, pendingPrompt?: string, profileName?: string) => Promise<unknown>;
   summaryOpen: boolean;
   toggleSummary: () => void;
   summaryText: string;
@@ -737,6 +737,84 @@ export function DrawerHeader({
     (!!agentLabels[LEGACY_NEEDS_LABEL] && agentLabels[LEGACY_NEEDS_LABEL] !== "cleared");
   const attachBlocked = !!auditAntigravityAgent(agent, entries).a5ReadBlocked;
 
+  // Pin-focus (single ~44px bar): the focused Brainstorm's compact controls go into PinFocusBar and its inspector
+  // into the PinRail's Active Buddy Card. Same component, same state — only where it renders changes.
+  const pinFocus = usePinFocus();
+  const barSlot = usePinSlot("bar");
+  const cardSlot = usePinSlot("card");
+  // Whichever lane drawer (Buddy, Lead, worker, topic Buddy) is the left-pane tab owns the slots, so exactly one portals.
+  // Not at <=900px where the rail hides the Active Buddy Card: there the full inline inspector comes back.
+  const shownHere = usePanes().leftActiveId === agent.id;
+  const inLane = useInFocusedLane(agent.id);
+  const railCardVisible = useRailCardVisible();
+  const compact = !!pinFocus && shownHere && inLane && railCardVisible && !!barSlot && !!cardSlot;
+
+  // Provider switch: the counterpart profile to flip to (⇄ Claude ↔ Gemini). Hoisted so the compact
+  // top bar and the full drawer share one button + handler.
+  const nextProfile = switchTarget
+    ? switchTarget.profile ??
+      (kindOf(agent) === "lead"
+        ? (switchTarget.provider === "claude" ? "Lead - Claude" : "Lead - Gemini")
+        : isBs
+          ? (switchTarget.provider === "claude" ? "Brainstorm - Claude" : "Brainstorm - Gemini")
+          : undefined)
+    : undefined;
+  const providerSwitchBtn = switchTarget && !agent.archivedAt ? (
+    <button
+      data-testid="drawer-switch-provider-btn"
+      className="btn ghost small"
+      title={`Switch this ${kindOf(agent) || "agent"} from ${agent.provider} to ${nextProfile || switchTarget.label}`}
+      disabled={switchBusy}
+      onClick={async () => {
+        setSwitchBusy(true);
+        setReloadError("");
+        try {
+          const nextLabels = {
+            ...agentLabels,
+            ...(nextProfile ? { profile: nextProfile } : {}),
+          };
+          if (DEMO) {
+            upsertLocalAgent({
+              ...agent,
+              provider: switchTarget.provider,
+              model: switchTarget.model,
+              currentModeId: switchTarget.modeId,
+              labels: nextLabels,
+            });
+            return;
+          }
+          if (isBs && nextProfile) setLastBrainstormProfile(nextProfile);
+          await updateAgent(agent.id, { labels: nextLabels });
+          if (kindOf(agent) === "lead" && onSuccessor) {
+            onSuccessor();
+          } else if (isBs) {
+            await doRestart("provider-switch", undefined, nextProfile);
+          } else {
+            const dc = daemonClient as any;
+            const snap = await dc.createAgent({
+              config: {
+                provider: switchTarget.provider,
+                model: switchTarget.model,
+                modeId: switchTarget.modeId,
+                cwd: agent.cwd,
+                title: agent.title ?? agent.id,
+              },
+              labels: nextLabels,
+            });
+            const newId = snap?.agent?.id ?? snap?.id;
+            if (newId) openAgentInTab(newId);
+          }
+        } catch (e) {
+          setReloadError(`Switch provider failed: ${e instanceof Error ? e.message : e}`);
+        } finally {
+          setSwitchBusy(false);
+        }
+      }}
+    >
+      {switchBusy ? "…" : switchTarget.label}
+    </button>
+  ) : null;
+
   useEffect(() => {
     if (!active) return;
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -914,71 +992,7 @@ export function DrawerHeader({
   );
   const extraActions = (
     <>
-          {switchTarget && (
-            <button
-              data-testid="drawer-switch-provider-btn"
-              className="btn ghost small"
-              title={`Switch provider to ${switchTarget.providerSpec}${switchTarget.profile ? ` (${switchTarget.profile})` : ""}`}
-              disabled={switchBusy}
-              onClick={async () => {
-                setSwitchBusy(true);
-                setReloadError("");
-                try {
-                  const nextProfile =
-                    switchTarget.profile ??
-                    (kindOf(agent) === "lead"
-                      ? switchTarget.provider === "claude"
-                        ? "Lead - Claude"
-                        : "Lead - Gemini"
-                      : isBs
-                        ? switchTarget.provider === "claude"
-                          ? "Brainstorm - Claude"
-                          : "Brainstorm - Gemini"
-                        : undefined);
-                  const nextLabels = {
-                    ...agentLabels,
-                    ...(nextProfile ? { profile: nextProfile } : {}),
-                  };
-                  if (DEMO) {
-                    upsertLocalAgent({
-                      ...agent,
-                      provider: switchTarget.provider,
-                      model: switchTarget.model,
-                      currentModeId: switchTarget.modeId,
-                      labels: nextLabels,
-                    });
-                    return;
-                  }
-                  await updateAgent(agent.id, { labels: nextLabels });
-                  if (kindOf(agent) === "lead" && onSuccessor) {
-                    onSuccessor();
-                  } else if (isBs) {
-                    await doRestart("provider-switch");
-                  } else {
-                    const dc = daemonClient as any;
-                    const snap = await dc.createAgent({
-                      config: {
-                        provider: switchTarget.provider,
-                        model: switchTarget.model,
-                        modeId: switchTarget.modeId,
-                        cwd: agent.cwd,
-                        title: agent.title ?? agent.id,
-                      },
-                      labels: nextLabels,
-                    });
-                    const newId = snap?.agent?.id ?? snap?.id;
-                    if (newId) openAgentInTab(newId);
-                  }
-                } catch (e) {
-                  setReloadError(`Switch provider failed: ${e instanceof Error ? e.message : e}`);
-                } finally {
-                  setSwitchBusy(false);
-                }
-              }}
-            >
-              {switchBusy ? "…" : switchTarget.label}
-            </button>
-          )}
+          {!compact && providerSwitchBtn}
           <button
             data-testid="drawer-search-btn"
             className="btn ghost small"
@@ -1012,18 +1026,6 @@ export function DrawerHeader({
           <AgentActions agent={agent} archive />
     </>
   );
-
-  // Pin-focus (single ~44px bar): the focused Brainstorm's compact controls go into PinFocusBar and its inspector
-  // into the PinRail's Active Buddy Card. Same component, same state — only where it renders changes.
-  const pinFocus = usePinFocus();
-  const barSlot = usePinSlot("bar");
-  const cardSlot = usePinSlot("card");
-  // Whichever lane drawer (Buddy, Lead, worker, topic Buddy) is the left-pane tab owns the slots, so exactly one portals.
-  // Not at <=900px where the rail hides the Active Buddy Card: there the full inline inspector comes back.
-  const shownHere = usePanes().leftActiveId === agent.id;
-  const inLane = useInFocusedLane(agent.id);
-  const railCardVisible = useRailCardVisible();
-  const compact = !!pinFocus && shownHere && inLane && railCardVisible && !!barSlot && !!cardSlot;
 
   const paseoLink = (
     <>
@@ -1356,6 +1358,7 @@ export function DrawerHeader({
         {thinkingSelect}
         <span className="muted small">{agent.provider}/</span>
         {modelControl}
+        {providerSwitchBtn}
         <WorkingChip members={working} subs={extraSubs} />
         <span className="drawer-head-compact-spacer" />
         {dockBtns}

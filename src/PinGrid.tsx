@@ -11,7 +11,7 @@ import { hasLooksDone, gridPinsForSquad, hubPinForSquad, isHubPin, liveBuddyDupe
 import { keepPinBuddy, openBriefEditor, openPin as openPinAction } from "./pinActions";
 import { openPinMember, usePinFocus } from "./pinFocus";
 import { useIsShown } from "./panes";
-import { IdeaPlusTile, noteSendTo, SendToCard, SpinOffCard, useSendTo, useSpinOff } from "./PinIdeas";
+import { IdeaBox, IdeaPlusTile, noteSendTo, SendToCard, SpinOffCard, useSendTo, useSpinOff } from "./PinIdeas";
 import { PinMenu } from "./PinMenu";
 import { DoneRow, DoneShelf, LooksDoneCard, useDoneShelfOpen } from "./PinDone";
 import { countsAsNeedsYou, getBrainstormThresholds, isHubLane, saveTeams, type Member, type TeamView } from "./teams";
@@ -291,6 +291,7 @@ export function SidebarPins({ view, onPin, onOpenAgent }: { view: TeamView; onPi
   const hub = hubPinForSquad(view);
   const { pinned, done } = gridPinsForSquad(view);
   const [doneOpen, toggleDone] = useDoneShelfOpen(view.team.id);
+  const [addingBrainstorm, setAddingBrainstorm] = useState(false);
   if (!hub && !pinned.length && !done.length) return null;
   return (
     <div className="sidebar-pins" data-testid={`sidebar-pins-${view.team.id}`}>
@@ -299,35 +300,45 @@ export function SidebarPins({ view, onPin, onOpenAgent }: { view: TeamView; onPi
           <SidebarRiffBot pin={hub} onPin={onPin} />
         </div>
       )}
-      {(pinned.length > 0 || done.length > 0) && (
-        <>
-          <div className="sidebar-teams-divider">
-            <span>TEAMS</span>
-            <i>{pinned.length}</i>
+      <div className="sidebar-teams-divider">
+        <span>TEAMS</span>
+        <i>{pinned.length}</i>
+        <button
+          type="button"
+          className="sidebar-add-brainstorm-btn"
+          data-testid={`sidebar-add-brainstorm-${view.team.id}`}
+          title="Spin up a new Brainstorm team"
+          aria-label="Spin up a new Brainstorm team"
+          onClick={(e) => {
+            e.stopPropagation();
+            setAddingBrainstorm(true);
+          }}
+        >
+          +
+        </button>
+      </div>
+      <div className="pin-list">
+        {pinned.map((p) => (
+          <div key={p.lane.id}>
+            <PinRow pin={p} onPin={onPin} />
           </div>
-          <div className="pin-list">
-            {pinned.map((p) => (
-              <div key={p.lane.id}>
-                <PinRow pin={p} onPin={onPin} />
-              </div>
-            ))}
-            {done.length > 0 && (
-              <>
-                <button
-                  type="button"
-                  className="pin-done-toggle"
-                  aria-expanded={doneOpen}
-                  data-testid={`sidebar-done-${view.team.id}`}
-                  onClick={toggleDone}
-                >
-                  {doneOpen ? "▾" : "▸"} Done ({done.length})
-                </button>
-                {doneOpen && done.map((p) => <DoneRow key={p.lane.id} pin={p} testId={`sidebar-done-pin-${p.lane.id}`} />)}
-              </>
-            )}
-          </div>
-        </>
-      )}
+        ))}
+        {done.length > 0 && (
+          <>
+            <button
+              type="button"
+              className="pin-done-toggle"
+              aria-expanded={doneOpen}
+              data-testid={`sidebar-done-${view.team.id}`}
+              onClick={toggleDone}
+            >
+              {doneOpen ? "▾" : "▸"} Done ({done.length})
+            </button>
+            {doneOpen && done.map((p) => <DoneRow key={p.lane.id} pin={p} testId={`sidebar-done-pin-${p.lane.id}`} />)}
+          </>
+        )}
+      </div>
+      {addingBrainstorm && <IdeaBox view={view} presetMode="new" onClose={() => setAddingBrainstorm(false)} onQuickStart={onPin} />}
     </div>
   );
 }

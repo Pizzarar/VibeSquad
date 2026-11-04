@@ -65,8 +65,9 @@ export async function triggerBrainstormRestart(opts: {
   usedTokens: number;
   pendingPrompt?: string;
   summaryUpdate?: string;
+  profileName?: string;
 }): Promise<{ newAgentId: string | null; title?: string; retired?: boolean; pendingPrompt?: string }> {
-  const { agent, teamId, laneId, reason, usedTokens: ut, pendingPrompt, summaryUpdate } = opts;
+  const { agent, teamId, laneId, reason, usedTokens: ut, pendingPrompt, summaryUpdate, profileName } = opts;
   const pane = paneOfAgent(agent.id);
   const res = await fetch("/__vibesquad/brainstorm-restart", {
     method: "POST",
@@ -77,6 +78,8 @@ export async function triggerBrainstormRestart(opts: {
       laneId,
       reason,
       usedTokens: ut,
+      // profileName is a whitelisted body key: safe across the remote relay.
+      ...(profileName ? { profileName } : {}),
       // Prompt and brief text never cross the remote relay (REMOTE_FORBIDDEN_BODY_KEYS).
       ...(pendingPrompt && !isRemote() ? { pendingPrompt } : {}),
       ...(summaryUpdate && !isRemote() ? { summaryUpdate } : {}),
@@ -259,7 +262,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   };
 
   const doRestart = useCallback(
-    async (reason: string, pendingPrompt?: string) => {
+    async (reason: string, pendingPrompt?: string, profileName?: string) => {
       if (restarting) return undefined;
       setRestarting(true);
       try {
@@ -270,6 +273,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
           reason,
           usedTokens: bsUsedTokens,
           pendingPrompt,
+          profileName,
         });
         if (pendingPrompt !== undefined && !r.retired) clearDraft();
         return r;
