@@ -58,6 +58,13 @@ import {
   renderLaneArtifactBlock,
 } from "../server/lane-spec.mjs";
 import {
+  createManagedWorktree,
+  sweepMergedWorktrees,
+  cleanupProjectsFolder,
+  resolveManagedWorktreeRoot,
+} from "../server/team-worktrees.mjs";
+import { appendLesson, readLessons } from "../server/lessons.mjs";
+import {
   LEGACY_NEEDS_LABEL,
   LEGACY_NEEDS_REASON,
   LEGACY_NEEDS_UNTIL,
@@ -434,6 +441,12 @@ function parseArgs(argv) {
     "doneCheck",
     "branch",
     "commit",
+    "projectsDir",
+    "category",
+    "cause",
+    "rule",
+    "query",
+    "title",
   ]);
   const booleans = new Set([
     "sinceMe",
@@ -449,6 +462,7 @@ function parseArgs(argv) {
     "force",
     "print",
     "stdin",
+    "apply",
   ]);
 
   for (let i = 0; i < argv.length; i++) {
@@ -2068,6 +2082,75 @@ function commandCap(flags) {
   throw new Error(`unknown cap subcommand "${sub}". Use: vs cap list | add | clear`);
 }
 
+function commandWorktree(flags) {
+  const sub = String(flags._[0] ?? "root").toLowerCase();
+  const repoRoot = path.resolve(import.meta.dirname, "..");
+  const apply = Boolean(flags.apply);
+
+  if (sub === "create" || sub === "add") {
+    const branch = String(flags._[1] ?? flags.branch ?? "").trim();
+    if (!branch) throw new Error("worktree create needs a branch: vs worktree create <branch>");
+    const res = createManagedWorktree(repoRoot, branch);
+    if (flags.json) {
+      process.stdout.write(JSON.stringify(res, null, 2) + "\n");
+    } else {
+      process.stdout.write(res.path + "\n");
+    }
+    return 0;
+  }
+
+  if (sub === "sweep") {
+    const res = sweepMergedWorktrees(repoRoot, { apply });
+    process.stdout.write(JSON.stringify(res, null, 2) + "\n");
+    return 0;
+  }
+
+  if (sub === "cleanup-projects") {
+    const projectsDir = flags.projectsDir ? path.resolve(String(flags.projectsDir)) : path.dirname(repoRoot);
+    const res = cleanupProjectsFolder(projectsDir, { apply });
+    process.stdout.write(JSON.stringify(res, null, 2) + "\n");
+    return 0;
+  }
+
+  if (sub === "root" || sub === "path") {
+    process.stdout.write(resolveManagedWorktreeRoot() + "\n");
+    return 0;
+  }
+
+  throw new Error(`unknown worktree subcommand "${sub}". Use: vs worktree create | sweep | cleanup-projects | root`);
+}
+
+function commandLesson(flags) {
+  const sub = String(flags._[0] ?? "list").toLowerCase();
+  if (sub === "add") {
+    const title = String(flags._[1] ?? flags.title ?? "").trim();
+    const rule = String(flags._[2] ?? flags.rule ?? "").trim();
+    const category = String(flags.category ?? "general").trim();
+    const cause = String(flags.cause ?? title).trim();
+    if (!title || !rule) {
+      throw new Error('lesson add needs title and rule: vs lesson add "<title>" "<rule>" [--category <cat>] [--cause <cause>]');
+    }
+    const saved = appendLesson({ category, title, cause, rule });
+    if (flags.json) {
+      process.stdout.write(JSON.stringify(saved, null, 2) + "\n");
+    } else {
+      process.stdout.write(`Logged lesson ${saved.id}: ${saved.title}\n`);
+    }
+    return 0;
+  }
+
+  const query = sub === "list" || sub === "ls" ? (flags._[1] ?? flags.query) : (flags._[0] ?? flags.query);
+  const items = readLessons({ category: flags.category, query });
+  if (flags.json) {
+    process.stdout.write(JSON.stringify(items, null, 2) + "\n");
+  } else if (!items.length) {
+    process.stdout.write("(no logged lessons in JSONL store; see docs/LESSONS.md)\n");
+  } else {
+    for (const l of items) process.stdout.write(`- [${l.category}] ${l.title}: ${l.rule}\n`);
+  }
+  return 0;
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -2100,6 +2183,8 @@ function main(argv) {
     if (command === "spec") return commandSpec(flags);
     if (command === "task") return commandTask(flags);
     if (command === "cap") return commandCap(flags);
+    if (command === "worktree") return commandWorktree(flags);
+    if (command === "lesson" || command === "lessons") return commandLesson(flags);
     if (command === "wait") return commandWait(flags);
     if (command === "install-shim") return commandInstallShim(flags);
     if (command === "open") return commandOpen(flags);
