@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import {
   createVibesquadMiddleware,
+  handleAndroidApk,
   handleAuthStatus,
   handleDesktopInstaller,
   handleDesktopUpdateJson,
@@ -77,6 +78,7 @@ const MIME = {
   ".woff2": "font/woff2",
   ".ttf": "font/ttf",
   ".map": "application/json",
+  ".apk": "application/vnd.android.package-archive",
   ".txt": "text/plain; charset=utf-8",
 };
 
@@ -380,6 +382,9 @@ export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().mes
     if ((path === "/VibeSquad-setup.exe" || path === "/__vibesquad/desktop/VibeSquad-setup.exe") && (req.method === "GET" || req.method === "HEAD")) {
       return handleDesktopInstaller(req, res, rootDir);
     }
+    if ((path === "/VibeSquad.apk" || path === "/__vibesquad/android/VibeSquad.apk") && (req.method === "GET" || req.method === "HEAD")) {
+      return handleAndroidApk(req, res, rootDir);
+    }
     if (path === "/__vibesquad/desktop/update.json" && (req.method === "GET" || req.method === "HEAD")) {
       return handleDesktopUpdateJson(req, res, rootDir);
     }
@@ -418,6 +423,9 @@ export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().mes
     }
     if ((path === "/VibeSquad-setup.exe" || path === "/__vibesquad/desktop/VibeSquad-setup.exe") && (req.method === "GET" || req.method === "HEAD")) {
       return handleDesktopInstaller(req, res, rootDir);
+    }
+    if ((path === "/VibeSquad.apk" || path === "/__vibesquad/android/VibeSquad.apk") && (req.method === "GET" || req.method === "HEAD")) {
+      return handleAndroidApk(req, res, rootDir);
     }
     if (path === "/__vibesquad/desktop/update.json" && (req.method === "GET" || req.method === "HEAD")) {
       return handleDesktopUpdateJson(req, res, rootDir);

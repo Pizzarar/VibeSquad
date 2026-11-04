@@ -96,6 +96,11 @@ export function hasDistIndex(rootDir = DEFAULT_ROOT_DIR) {
   return false;
 }
 
+/** True when `npm run build:android` has produced the signed APK in `dist-desktop/`. */
+function isAndroidApkBuilt(rootDir = resolve(import.meta.dirname, "..")) {
+  return existsSync(join(rootDir, "dist-desktop", "VibeSquad.apk"));
+}
+
 export function getAuthStatus(rootDir = DEFAULT_ROOT_DIR) {
   const { port, meshnetIp, meshnetHost, lanIp } = netConfig();
   const distReady = hasDistIndex(rootDir);
@@ -727,10 +732,13 @@ export async function handlePairStart(req, res) {
     lanHttpsUrl: lanIp ? `https://${lanIp}:${port}` : null,
     lanCaUrl: lanIp ? `http://${lanIp}:${port}/ca.crt` : null,
     lanDesktopInstallerUrl: lanIp ? `http://${lanIp}:${port}/VibeSquad-setup.exe` : null,
+    lanAndroidApkUrl: lanIp ? `http://${lanIp}:${port}/VibeSquad.apk` : null,
     lanPairUrl,
     lanQrSvg: lanPairUrl ? await qrSvg(lanPairUrl) : null,
     caHttpUrl: `http://${effectiveMeshnetIp}:${port}/ca.crt`,
     desktopSetupHttpUrl: `http://${effectiveMeshnetIp}:${port}/VibeSquad-setup.exe`,
+    androidApkHttpUrl: `http://${effectiveMeshnetIp}:${port}/VibeSquad.apk`,
+    androidApkAvailable: isAndroidApkBuilt(),
     caFingerprint: caFingerprint(),
     meshnetHost,
     meshnetIp: effectiveMeshnetIp,
@@ -796,9 +804,12 @@ export function handleDevices(req, res) {
     port,
     caHttpUrl: meshnetIp ? `http://${meshnetIp}:${port}/ca.crt` : null,
     desktopSetupHttpUrl: meshnetIp ? `http://${meshnetIp}:${port}/VibeSquad-setup.exe` : null,
+    androidApkHttpUrl: meshnetIp ? `http://${meshnetIp}:${port}/VibeSquad.apk` : null,
     lanHttpsUrl: lanIp ? `https://${lanIp}:${port}` : null,
     lanCaUrl: lanIp ? `http://${lanIp}:${port}/ca.crt` : null,
     lanDesktopInstallerUrl: lanIp ? `http://${lanIp}:${port}/VibeSquad-setup.exe` : null,
+    lanAndroidApkUrl: lanIp ? `http://${lanIp}:${port}/VibeSquad.apk` : null,
+    androidApkAvailable: isAndroidApkBuilt(),
   });
 }
 

@@ -234,7 +234,7 @@ export function publishRelease({
 }
 
 function parseArgs(argv) {
-  const out = { channel: "beta", version: "", stageOnly: false, skipBuild: false };
+  const out = { channel: "beta", version: "", stageOnly: false, skipBuild: false, withAndroid: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--channel" && argv[i + 1]) out.channel = argv[++i];
@@ -243,6 +243,7 @@ function parseArgs(argv) {
     else if (a.startsWith("--version=")) out.version = a.slice("--version=".length);
     else if (a === "--stage-only") out.stageOnly = true;
     else if (a === "--skip-build") out.skipBuild = true;
+    else if (a === "--with-android") out.withAndroid = true;
   }
   return out;
 }
@@ -279,6 +280,14 @@ if (isMain) {
     });
   }
 
+  if (opts.withAndroid && !opts.skipBuild) {
+    execFileSync(process.execPath, [join(rootDir, "server", "build-android.mjs")], {
+      cwd: rootDir,
+      env,
+      stdio: "inherit",
+    });
+  }
+
   const distDesktopDir = join(rootDir, "dist-desktop");
   mkdirSync(distDesktopDir, { recursive: true });
   const installerPath = join(distDesktopDir, "VibeSquad-setup.exe");
@@ -309,7 +318,8 @@ if (isMain) {
   if (!opts.stageOnly) {
     const tag = channel === "beta" ? "beta" : `v${targetVersion}`;
     const releaseTitle = channel === "beta" ? `VibeSquad Beta (${targetVersion})` : `VibeSquad v${targetVersion}`;
-    const assets = [installerPath, sigPath, latestJsonPath, join(distDesktopDir, "THIRD-PARTY-LICENSES.txt")].filter((p) => existsSync(p));
+    const apkPath = join(distDesktopDir, "VibeSquad.apk");
+    const assets = [installerPath, sigPath, latestJsonPath, apkPath, join(distDesktopDir, "THIRD-PARTY-LICENSES.txt")].filter((p) => existsSync(p));
     let tagExists = false;
     try {
       execFileSync("gh", ghReleaseArgs(["view", tag]), { cwd: rootDir, stdio: "ignore" });

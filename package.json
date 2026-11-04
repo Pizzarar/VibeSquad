@@ -12,6 +12,7 @@
     "build": "node server/generate-licenses.mjs && tsc --noEmit && vite build && node server/sync-runtime.mjs",
     "build:remote": "vite build --mode remote",
     "build:desktop": "node server/build-desktop.mjs",
+    "build:android": "node server/build-android.mjs",
     "release:beta": "node server/release.mjs --channel beta",
     "release:stable": "node server/release.mjs --channel stable",
     "desktop:dev": "tauri dev",
