@@ -184,6 +184,19 @@ describe("wiring (source inspection)", () => {
     assert.match(src, /const apkPath = join\(distDesktopDir, "VibeSquad\.apk"\)/);
   });
 
+  test("server/build-android.mjs builds aarch64 without --apk=true, uses arm64 flavor, Windows jniLibs fallback, and apksigner.jar", () => {
+    const src = read("server/build-android.mjs");
+    assert.match(src, /"--apk", "--target", "aarch64"/);
+    assert.doesNotMatch(src, /"--apk", "true"/);
+    assert.match(src, /"arm64", "release"/);
+    assert.match(src, /jniLibs/);
+    assert.match(src, /arm64-v8a/);
+    assert.match(src, /assembleArm64Release/);
+    assert.match(src, /gradlew\.bat/);
+    assert.match(src, /apksigner\.jar/);
+    assert.match(src, /"-jar", apksignerJar/);
+  });
+
   test("package.json wires npm run build:android", () => {
     const pkg = JSON.parse(read("package.json"));
     assert.equal(pkg.scripts["build:android"], "node server/build-android.mjs");

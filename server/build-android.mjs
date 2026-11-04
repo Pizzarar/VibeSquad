@@ -170,12 +170,22 @@ export function buildAndroidApk({
 
   // Step 4: build the release APK.
   console.log("[build:android] 3/6 Building release APK (tauri android build --apk)...");
-  runNode([tauriCliJs, "android", "build", "--apk", "true", "--target", "aarch64", "--ci", "--config", "src-tauri/tauri.android.conf.json"]);
+  const builtSo = join(rootDir, "src-tauri", "target", "aarch64-linux-android", "release", "libvibesquad_desktop_lib.so");
+  try {
+    runNode([tauriCliJs, "android", "build", "--apk", "--target", "aarch64", "--ci", "--config", "src-tauri/tauri.android.conf.json"]);
+  } catch (err) {
+    if (process.platform !== "win32" || !existsSync(builtSo)) throw err;
+    console.log("[build:android] Windows symlink fallback: copying libvibesquad_desktop_lib.so into jniLibs/arm64-v8a and running Gradle assembleArm64Release...");
+    const jniDir = join(genAndroidDir, "app", "src", "main", "jniLibs", "arm64-v8a");
+    mkdirSync(jniDir, { recursive: true });
+    copyFileSync(builtSo, join(jniDir, "libvibesquad_desktop_lib.so"));
+    run("cmd.exe", ["/d", "/s", "/c", ".\\gradlew.bat assembleArm64Release -x rustBuildArm64Release"], { cwd: genAndroidDir });
+  }
 
   // Step 5: locate the built APK (prefer universal, then aarch64).
   console.log("[build:android] 4/6 Locating built APK...");
   const apkOutDir = join(rootDir, "src-tauri", "gen", "android", "app", "build", "outputs", "apk");
-  const apk = findApk(join(apkOutDir, "universal", "release")) || findApk(join(apkOutDir, "aarch64", "release"));
+  const apk = findApk(join(apkOutDir, "universal", "release")) || findApk(join(apkOutDir, "arm64", "release")) || findApk(join(apkOutDir, "aarch64", "release"));
   if (!apk) throw new Error(`No built APK found under ${apkOutDir}`);
 
   // Step 6: sign (if unsigned) and stage into dist-desktop/VibeSquad.apk.
@@ -187,8 +197,11 @@ export function buildAndroidApk({
     const { keystorePath, storePass, alias } = ensureAndroidKeystore({ env: androidEnv, exec });
     const latest = latestBuildTools(androidEnv.ANDROID_HOME);
     if (!latest) throw new Error(`Android build-tools not found under ${join(androidEnv.ANDROID_HOME, "build-tools")}`);
-    const apksigner = join(androidEnv.ANDROID_HOME, "build-tools", latest, process.platform === "win32" ? "apksigner.bat" : "apksigner");
-    run(apksigner, ["sign", "--ks", keystorePath, "--ks-key-alias", alias, "--ks-pass", "pass:" + storePass, "--key-pass", "pass:" + storePass, "--out", destApk, apk]);
+    const javaExe = androidEnv.JAVA_HOME
+      ? join(androidEnv.JAVA_HOME, "bin", process.platform === "win32" ? "java.exe" : "java")
+      : "java";
+    const apksignerJar = join(androidEnv.ANDROID_HOME, "build-tools", latest, "lib", "apksigner.jar");
+    run(javaExe, ["-jar", apksignerJar, "sign", "--ks", keystorePath, "--ks-key-alias", alias, "--ks-pass", "pass:" + storePass, "--key-pass", "pass:" + storePass, "--out", destApk, apk]);
   } else {
     copyFileSync(apk, destApk);
   }
