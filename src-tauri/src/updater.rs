@@ -546,7 +546,7 @@ pub fn spawn_updater_loop(state: Arc<SharedAppState>) {
         let _ = check_for_updates(&state).await;
         let mut ticks = 0u64;
         loop {
-            tokio::time::sleep(Duration::from_secs(30)).await;
+            tokio::time::sleep(Duration::from_secs(60)).await;
             ticks += 1;
             // Every 30s, if a downloaded update is waiting for an in-flight agent turn to finish, install once idle.
             let pending = {
