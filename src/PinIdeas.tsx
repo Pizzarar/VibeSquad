@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "reac
 import { createPortal } from "react-dom";
 import { bestOverlap, DEFAULT_PIN_PROFILE, nameFromIdea, parseSendTo, pinsForSquad, describeSpinOff, isSpinOffRunning, spinOffFrom, spinOffRemaining, spinOffVersion, subscribeSpinOff, type Pin } from "./pins";
 import { createPin, createSpinOffPins, dismissSendTo, dismissSpinOff, isSpinOffDismissed, getLastBrainstormProfile, isSendToDismissed, sendIdeaToTeam, setLastBrainstormProfile } from "./pinActions";
+import { spinUpPin } from "./pinFocus";
 import { getTeams, type TeamView } from "./teams";
 import type { PinHandler } from "./PinGrid";
 import { useProfiles } from "./profiles";
@@ -294,7 +295,7 @@ export function ideaModalFieldOrder(mode: "new" | "existing"): string[] {
   return mode === "new" ? ["tabs", "name", "idea", "buddy"] : ["tabs", "idea", "team"];
 }
 
-function IdeaBox({
+export function IdeaBox({
   view,
   onClose,
   onQuickStart,
@@ -334,21 +335,22 @@ function IdeaBox({
   const targetPin = pinned.find((p) => p.lane.id === existingTargetId) ?? null;
 
   const submit = async () => {
-    const idea = text.trim();
-    if (!idea || busy) return;
+    const rawIdea = text.trim() || (mode === "new" ? name.trim() : "");
+    if (!rawIdea || busy) return;
     setBusy(true);
     setErr(null);
     try {
       if (mode === "existing" && existingTargetId) {
-        showPinToast(await sendIdeaToTeam(existingTargetId, idea));
+        showPinToast(await sendIdeaToTeam(existingTargetId, rawIdea));
         onClose();
         return;
       }
       setLastBrainstormProfile(selectedProfile);
-      const pin = await createPin(view.team.id, resolveIdeaTeamName(name, idea) || "New team", idea, { lastProfile: selectedProfile });
+      const pin = await createPin(view.team.id, resolveIdeaTeamName(name, rawIdea) || "New team", rawIdea, { lastProfile: selectedProfile });
       onClose();
       showPinToast(`Pinned ${pin.lane.name}`);
       await onQuickStart(pin);
+      await spinUpPin(pin, selectedProfile);
     } catch (e) {
       setErr(String((e as Error)?.message ?? e));
       setBusy(false);
@@ -500,7 +502,7 @@ function IdeaBox({
           <button
             type="button"
             className="btn ok"
-            disabled={busy || !text.trim() || (mode === "new" && !effectiveTeamName)}
+            disabled={busy || (mode === "existing" ? !text.trim() : !effectiveTeamName)}
             data-testid="pin-idea-submit"
             onClick={() => void submit()}
           >

@@ -3360,6 +3360,24 @@ html, body, #root { overflow-x: hidden; }
   letter-spacing: 0.8px; color: var(--slate);
 }
 .sidebar-teams-divider i { font-style: normal; opacity: 0.8; }
+.sidebar-add-brainstorm-btn {
+  margin-left: auto;
+  width: 18px; height: 18px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--slate);
+  font: inherit; font-size: 14px; line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
+}
+.sidebar-add-brainstorm-btn:hover {
+  border-color: var(--cyan);
+  color: var(--cyan);
+  background: #00f0ff14;
+}
 .sidebar.collapsed .sidebar-pins { display: none; }
 .pin-list { display: flex; flex-direction: column; padding: 2px 0 6px; }
 .pin-row {
@@ -3554,6 +3572,26 @@ html, body, #root { overflow-x: hidden; }
 .pin-idea-field label { flex: none; }
 .pin-idea-field input, .pin-idea-field select { min-width: 0; }
 .pin-profile-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.idea-box-profile-chip {
+  background: var(--panel-alt);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: border-color 0.12s, background 0.12s, color 0.12s;
+}
+.idea-box-profile-chip:hover {
+  border-color: var(--muted);
+  color: var(--text);
+}
+.idea-box-profile-chip.is-active {
+  border-color: var(--cyan);
+  background: #00f0ff18;
+  color: var(--cyan);
+  font-weight: 600;
+}
 
 /* ── Sidebar + New squad button ────────────────────────────────────────────── */
 .sidebar-new-squad-btn { margin: 2px 8px 6px; width: calc(100% - 16px); justify-content: flex-start; }
