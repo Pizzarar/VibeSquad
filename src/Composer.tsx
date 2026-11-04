@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import { daemonClient, DEMO, usePaseo } from "./paseo";
 import { workspaceIdForAgent } from "./workspaceLogic";
-import { addCtxSource, ctxGroupsFor, gitMenuItems, isCtxItem, useCtxSources, type CtxMenuItem } from "./contextSources";
+import { addCtxSource, ctxGroupsFor, gitMenuItems, isCtxItem, laneMenuItems, useCtxSources, type CtxMenuItem } from "./contextSources";
+import { getTeams, useTeams } from "./teams";
 import { fetchChatContext, fetchGitContext, fetchTerminalContext, listTerminalNames } from "./contextFetch";
 import type { DraftImageView } from "./imageDrafts";
 import { formatSize, MAX_INLINE_BYTES, fenceFile, type useAttachments } from "./attachments";
@@ -218,6 +219,7 @@ export function Composer({
   const [histIdx, setHistIdx] = useState(-1);
   const origDraft = useRef("");
   const { agents, workspaces } = usePaseo();
+  useTeams();
   const ctx = useCtxSources(agent.id);
   const [terms, setTerms] = useState<Array<{ id: string; name: string }>>([]);
   const [ctxStatus, setCtxStatus] = useState<{ tone: "busy" | "fail"; text: string } | null>(null);
@@ -234,6 +236,10 @@ export function Composer({
   const ctxGroups = mention && !urlItem ? ctxGroupsFor(mention.query) : [];
   const myLabels = (agent.labels ?? {}) as Record<string, string>;
   const lane = myLabels.lane;
+  const mySquad = getTeams().find((t) => t.id === myLabels.team);
+  const laneEntries: MentionEntry[] = mention && !urlItem && mySquad
+    ? laneMenuItems(mySquad.lanes ?? [], mention.query).slice(0, 6).map((l) => ({ path: l.handle.slice(1), kind: "file" as const }))
+    : [];
   const ctxItems: CtxMenuItem[] = [
     ...(ctxGroups.includes("git") ? gitMenuItems() : []),
     ...(ctxGroups.includes("terminal")
@@ -249,7 +255,7 @@ export function Composer({
           .map((a): CtxMenuItem => ({ ctx: true, kind: "chat", label: `@chat ${a.title || a.id.slice(0, 8)}`, hint: "last turns", arg: a.id }))
       : []),
   ];
-  const menuItems: Array<MentionEntry | CtxMenuItem> = [...ctxItems, ...mentionItems];
+  const menuItems: Array<MentionEntry | CtxMenuItem> = [...ctxItems, ...laneEntries, ...mentionItems];
   const histItems = searching ? searchHistory(history, hq) : [];
 
   useEffect(() => {
