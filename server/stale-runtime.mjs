@@ -40,13 +40,14 @@ export function computeStale({ rootDir, git = defaultGit, exists = existsSync } 
   }
 }
 
-let cached = { at: 0, value: null };
+let cached = { at: 0, value: null, stampCommit: null };
 
 /** Cached `computeStale` (60s) that also mirrors the result to stale.json for the CLI. */
 export function getStale({ rootDir, env = process.env, now = Date.now(), compute = computeStale } = {}) {
-  if (now - cached.at < CACHE_MS && cached.at) return cached.value;
+  const curStampCommit = rootDir ? (readBuildStamp(rootDir)?.commit ?? null) : null;
+  if (now - cached.at < CACHE_MS && cached.at && curStampCommit === cached.stampCommit) return cached.value;
   const value = compute({ rootDir });
-  cached = { at: now, value };
+  cached = { at: now, value, stampCommit: curStampCommit };
   try {
     const file = staleFilePath(env);
     mkdirSync(join(file, ".."), { recursive: true });
@@ -61,7 +62,7 @@ export function peekStale() {
 }
 
 export function resetStaleCache() {
-  cached = { at: 0, value: null };
+  cached = { at: 0, value: null, stampCommit: null };
 }
 
 /** One-line CLI warning from the published stale.json; null when fresh, missing, or unreadable. */

@@ -3,7 +3,7 @@ import { Modal } from "./TeamActions";
 import { daemonClient, reconnectWithDaemonPassword, usePaseo } from "./paseo";
 import { submitDaemonPassword } from "./paseoDaemonAuth";
 import { clearSession, isLocalHost, isRemote } from "./remoteSession";
-import { getStaleBuild, loadUpdaterStatus, triggerUpdateInstall, useStaleBuild, useUpdaterStatus } from "./userName";
+import { getStaleBuild, loadUpdaterStatus, setStaleBuild, triggerUpdateInstall, useStaleBuild, useUpdaterStatus } from "./userName";
 import "./ResponsiveSmallWindow.css";
 
 type AnyClient = Record<string, ((...a: unknown[]) => Promise<unknown>) | undefined>;
@@ -36,9 +36,26 @@ async function tryCall(name: string): Promise<unknown> {
   }
 }
 
+async function refreshStaleFromHealth(): Promise<void> {
+  if (typeof fetch !== "function") return;
+  try {
+    const r = await fetch("/__vibesquad/health", { cache: "no-store" });
+    if (!r.ok) return;
+    const h = await r.json();
+    if (h && typeof h === "object" && "stale" in h) {
+      setStaleBuild(h.stale);
+    }
+  } catch {}
+}
+
 export async function buildBundle(conn: string, agents: Iterable<{ id: string; status?: string; provider?: string }>): Promise<DiagnosticsBundle> {
   const list = [...agents].map((a) => ({ id: a.id, status: String(a.status ?? "unknown"), provider: a.provider }));
-  const [daemon, provider, pluginLogs] = await Promise.all([tryCall("collectDiagnostics"), tryCall("getProviderDiagnostic"), tryCall("getPluginLogs")]);
+  const [daemon, provider, pluginLogs] = await Promise.all([
+    tryCall("collectDiagnostics"),
+    tryCall("getProviderDiagnostic"),
+    tryCall("getPluginLogs"),
+    refreshStaleFromHealth(),
+  ]);
   return {
     generatedAt: new Date().toISOString(),
     connection: conn,
@@ -384,6 +401,7 @@ export function updateLabel(state: UpdateCheck["state"], version: string, availa
   return "Check for updates";
 }
 export async function checkForUpdates(): Promise<boolean> {
+  await refreshStaleFromHealth();
   let sawDesktopEndpoint = false;
   try {
     const r = await fetch("/__desktop/updater/check", { method: "POST", cache: "no-store" });
@@ -397,7 +415,12 @@ export async function checkForUpdates(): Promise<boolean> {
     }
   } catch {}
   try {
-    const ok = (await fetch("/__vibesquad/health", { cache: "no-store" })).ok;
+    const r = await fetch("/__vibesquad/health", { cache: "no-store" });
+    const ok = r.ok;
+    if (ok) {
+      const h = await r.json().catch(() => null);
+      if (h && typeof h === "object" && "stale" in h) setStaleBuild(h.stale);
+    }
     await loadUpdaterStatus();
     return ok;
   } catch {
