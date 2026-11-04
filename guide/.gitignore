@@ -1,0 +1,25 @@
+# Local setup progress and your answers (created by the setup run)
+.quickstart/
+
+# Scratch output
+scratch/
+tmp/
+*.log
+
+# Lead brief used while building this kit
+/LEAD_BRIEF.md
+__pycache__/
+
+# Secrets
+.env
+.env.*
+.piskel-data/
+
+# Obsidian local state
+.obsidian/workspace*.json
+.obsidian/cache
+.trash/
+
+# Private notebook (only its README is shared)
+Notebook/*
+!Notebook/README.md
