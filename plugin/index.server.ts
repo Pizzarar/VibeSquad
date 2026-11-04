@@ -65,7 +65,7 @@ export const DIGEST_PROFILE = "Pre-check - Flash";
 export const DIGEST_MODE_ID = "default";
 export const DIGEST_THINKING_OPTION_ID = "low";
 const WAKE_TYPES = new Set(["done", "blocker", "decision", "needs-you", "you", LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE]);
-const TRANSIENT_ERROR = /googleapis|EOF|no such host|ECONNRESET|stream idle timeout|context deadline exceeded/i;
+const TRANSIENT_ERROR = /googleapis|EOF|no such host|ECONNRESET|stream idle timeout|context deadline exceeded|stream was interrupted|temporarily unavailable/i;
 const MAX_RETRIES = 2;
 const MAX_TEXT = 240;
 const REPO_ROOT = path.resolve(process.env.VIBESQUAD_ROOT || (typeof import.meta?.dirname === "string" ? path.join(import.meta.dirname, "..") : path.join(os.homedir(), "projects", "VibeSquad")));

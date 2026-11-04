@@ -719,6 +719,39 @@ test(
 );
 
 // ---------------------------------------------------------------------------
+// Stage 6b — A mid-turn stream interruption auto-retries the failed turn
+// ---------------------------------------------------------------------------
+
+test(
+  "Stage 6b: stream was interrupted auto-retries the failed turn",
+  withEnv(async ({ briefRoot }) => {
+    const worker = {
+      id: "worker-stream",
+      title: "★ Bug10 · stream interrupt worker",
+      cwd: CWD,
+      status: "error",
+      labels: { team: "vibesquad", lane: "bug-chaser", role: "worker" },
+    };
+    const h = harness(new Map([["worker-stream", worker]]), { briefRoot });
+    try {
+      await h.onTurnEnded(worker, {
+        kind: "failed",
+        error: {
+          message: "[System Error] The stream was interrupted. Please continue the task you were working on.",
+        },
+      });
+      await wait(30);
+      assert.ok(
+        h.sent.some((s) => s.to === "worker-stream" && s.text.includes("transient network error")),
+        "stream was interrupted retries the turn",
+      );
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+// ---------------------------------------------------------------------------
 // Stage 7 — A fuzzy profile match never clobbers a caller-specified provider/model
 // ---------------------------------------------------------------------------
 
