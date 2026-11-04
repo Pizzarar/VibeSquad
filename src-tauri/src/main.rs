@@ -1679,16 +1679,14 @@ fn inspect_ws_frame(state: &Arc<SharedAppState>, text: &str) {
         if body.contains(" finished: ") {
             // Extract agent context from the notification for click-to-focus
             // The actual agent ID comes from the ws frame; re-parse to find it
-            if let Ok(parsed) = serde_json::from_str::<Value>(strip_bom(text)) {
-                let agent_id = parsed
-                    .get("agent")
-                    .or_else(|| parsed.get("payload").and_then(|p| p.get("agent")))
-                    .and_then(|a| a.get("id"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                if let Some(id) = agent_id {
-                    *state.last_notified_agent_id.write().unwrap() = Some(id);
-                }
+            let agent_id = parsed
+                .get("agent")
+                .or_else(|| parsed.get("payload").and_then(|p| p.get("agent")))
+                .and_then(|a| a.get("id"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            if let Some(id) = agent_id {
+                *state.last_notified_agent_id.write().unwrap() = Some(id);
             }
         }
     }
@@ -1730,7 +1728,17 @@ async fn proxy_websocket(
     protocols: Vec<String>,
 ) {
     let cfg = state.config.read().unwrap().clone();
-    let candidates = state.candidate_hosts();
+    let mut candidates = state.candidate_hosts();
+    let mut direct_host: Option<String> = None;
+    if cfg.server_mode == "local"
+        && std::env::var("VIBESQUAD_DESKTOP_PORT").is_err()
+        && matches!(candidates.first().map(|s| s.as_str()), Some("127.0.0.1:4180") | Some("localhost:4180"))
+    {
+        if let Some(direct) = direct_local_paseo_ws_host() {
+            direct_host = Some(direct.clone());
+            candidates.insert(0, direct);
+        }
+    }
 
     let mut upstream_stream = None;
     for host in candidates {
@@ -1779,7 +1787,9 @@ async fn proxy_websocket(
         };
 
         if let Ok(Ok((stream, _resp))) = conn_res {
-            *state.active_upstream.write().unwrap() = Some(host);
+            if direct_host.as_deref() != Some(host.as_str()) {
+                *state.active_upstream.write().unwrap() = Some(host);
+            }
             upstream_stream = Some(stream);
             break;
         }
@@ -1796,13 +1806,25 @@ async fn proxy_websocket(
     let (mut up_sink, mut up_stream) = upstream_ws.split();
     let (mut cl_sink, mut cl_stream) = client_ws.split();
 
-    let state_for_up = state.clone();
+    let (inspect_tx, mut inspect_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let state_bg = state.clone();
+    let inspect_task = tokio::spawn(async move {
+        while let Some(frame) = inspect_rx.recv().await {
+            inspect_ws_frame(&state_bg, &frame);
+        }
+    });
     let up_to_cl = async move {
         while let Some(Ok(msg)) = up_stream.next().await {
             let out = match msg {
                 TungMessage::Text(t) => {
                     let s = t.to_string();
-                    inspect_ws_frame(&state_for_up, &s);
+                    if s.contains("\"entries\"")
+                        || s.contains("\"agent\"")
+                        || s.contains("agent_permission_request")
+                        || s.contains("agent_deleted")
+                    {
+                        let _ = inspect_tx.send(s.clone());
+                    }
                     AxumWsMessage::Text(s)
                 }
                 TungMessage::Binary(b) => AxumWsMessage::Binary(b.to_vec()),
@@ -1836,6 +1858,41 @@ async fn proxy_websocket(
         _ = up_to_cl => {},
         _ = cl_to_up => {},
     }
+    inspect_task.abort();
+}
+
+/// Reads `~/.paseo/config.json` and returns the local Paseo daemon `host:port`, or `None` when
+/// the daemon uses TLS or no Paseo install is detectable.
+fn direct_local_paseo_ws_host() -> Option<String> {
+    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).ok()?;
+    let dir = PathBuf::from(home).join(".paseo");
+    let cfg_path = dir.join("config.json");
+    let parsed: Option<Value> = fs::read_to_string(&cfg_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(strip_bom(&raw)).ok());
+    if parsed.is_none() && !dir.join("daemon.pid").exists() {
+        return None;
+    }
+    let daemon = parsed.as_ref().and_then(|v| v.get("daemon"));
+    if daemon
+        .and_then(|d| d.get("tls"))
+        .and_then(|t| t.get("enabled"))
+        .and_then(|e| e.as_bool())
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let listen = daemon
+        .and_then(|d| d.get("listen"))
+        .and_then(|l| l.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("127.0.0.1:6767");
+    let addr = listen.trim_start_matches("ws://").trim_end_matches("/ws").trim_end_matches('/');
+    if addr.is_empty() || !is_local_host(addr) {
+        return None;
+    }
+    Some(addr.to_string())
 }
 
 /// Locates `(node_exe, runtime_dir)`: installed runtime first, then the per-user copy, then a dev checkout.
@@ -2182,6 +2239,46 @@ async fn proxy_http_handler(
                     .map(|ct| ct.contains("text/html"))
                     .unwrap_or(false);
 
+                let is_attachment = up_headers
+                    .get(reqwest::header::CONTENT_DISPOSITION)
+                    .and_then(|v| v.to_str().ok())
+                    .map(|v| v.to_ascii_lowercase().contains("attachment"))
+                    .unwrap_or(false);
+                let needs_html_buffer = is_root_nav
+                    || (is_app_route_nav && is_html && !is_attachment && up_status == reqwest::StatusCode::OK);
+
+                if !needs_html_buffer {
+                    let status_code =
+                        StatusCode::from_u16(up_status.as_u16()).unwrap_or(StatusCode::OK);
+                    let mut res_builder = Response::builder().status(status_code);
+                    for (k, v) in up_headers.iter() {
+                        let name_lower = k.as_str().to_lowercase();
+                        // Body is streamed untouched, so content-length / content-encoding stay valid.
+                        if name_lower == "transfer-encoding"
+                            || name_lower == "connection"
+                            || ((status_code.is_client_error() || status_code.is_server_error())
+                                && name_lower == "cache-control")
+                        {
+                            continue;
+                        }
+                        if let (Ok(hn), Ok(hv)) = (
+                            HeaderName::from_bytes(k.as_str().as_bytes()),
+                            HeaderValue::from_bytes(v.as_bytes()),
+                        ) {
+                            res_builder = res_builder.header(hn, hv);
+                        }
+                    }
+                    if status_code.is_client_error() || status_code.is_server_error() {
+                        res_builder = res_builder.header(
+                            axum::http::header::CACHE_CONTROL,
+                            "no-store, no-cache, must-revalidate",
+                        );
+                    }
+                    return res_builder
+                        .body(Body::from_stream(up_resp.bytes_stream()))
+                        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+                }
+
                 let resp_bytes = match up_resp.bytes().await {
                     Ok(b) => b,
                     Err(e) => {
@@ -2219,11 +2316,6 @@ async fn proxy_http_handler(
                     }
                 }
 
-                let is_attachment = up_headers
-                    .get(reqwest::header::CONTENT_DISPOSITION)
-                    .and_then(|v| v.to_str().ok())
-                    .map(|v| v.to_ascii_lowercase().contains("attachment"))
-                    .unwrap_or(false);
                 let final_bytes = if (is_root_nav || is_app_route_nav) && is_html && !is_attachment && up_status == reqwest::StatusCode::OK {
                     let html_str = String::from_utf8_lossy(&resp_bytes);
                     let bridge = ui_pages::desktop_bridge_script(&cfg.last_hash, &cfg.last_route);
