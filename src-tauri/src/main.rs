@@ -200,6 +200,15 @@ pub fn load_config() -> DesktopConfig {
                                 cfg.server_mode = "remote".to_string();
                             }
                         }
+                        // A config that was previously poisoned into "local" mode by a pasted
+                        // #offer= link must stop auto-starting the local Paseo daemon on launch.
+                        if cfg.server_mode == "local"
+                            && (cfg.last_hash.starts_with("#offer=")
+                                || cfg.last_route.contains("remote=1"))
+                        {
+                            cfg.server_mode = "relay".to_string();
+                            let _ = save_config(&cfg);
+                        }
                         set_config_warning(None);
                         if had_bom {
                             let _ = save_config(&cfg);
@@ -458,7 +467,10 @@ impl SharedAppState {
             return Vec::new();
         }
         let primary = normalize_host(&cfg.server_host);
-        if cfg.server_mode == "local" || (cfg.server_mode != "remote" && is_local_host(&primary)) {
+        if cfg.server_mode == "local"
+            || cfg.server_mode == "relay"
+            || (cfg.server_mode != "remote" && is_local_host(&primary))
+        {
             return vec![primary];
         }
         let fallback = if cfg.fallback_host.trim().is_empty() {
@@ -771,7 +783,9 @@ fn extract_cookie_token(headers: &reqwest::header::HeaderMap, cookie_name: &str)
 async fn handle_desktop_status(State(state): State<Arc<SharedAppState>>) -> impl IntoResponse {
     let cfg = state.config.read().unwrap().clone();
     let active = state.active_upstream.read().unwrap().clone();
-    let is_local = cfg.server_mode == "local" || (cfg.server_mode != "remote" && is_local_host(&cfg.server_host));
+    let is_local = cfg.server_mode == "local"
+        || cfg.server_mode == "relay"
+        || (cfg.server_mode != "remote" && is_local_host(&cfg.server_host));
     let paired = if cfg.server_mode.trim().is_empty() {
         false
     } else if is_local {
@@ -829,6 +843,23 @@ async fn handle_desktop_choose_mode(
         }))
         .into_response();
     }
+    if mode == "relay" {
+        {
+            let mut cfg = state.config.write().unwrap();
+            cfg.server_mode = "relay".to_string();
+            cfg.server_host = default_server_host();
+            let _ = save_config(&cfg);
+        }
+        state.setup_mode.store(false, Ordering::SeqCst);
+        ensure_local_server_running(&state).await;
+        *state.active_upstream.write().unwrap() = Some(default_server_host());
+        return Json(json!({
+            "ok": true,
+            "serverMode": "relay",
+            "redirect": "/"
+        }))
+        .into_response();
+    }
     if mode == "remote" {
         stop_managed_server(&state);
         {
@@ -856,7 +887,7 @@ async fn handle_desktop_choose_mode(
     }
     (
         StatusCode::BAD_REQUEST,
-        Json(json!({ "ok": false, "error": "mode must be 'local' or 'remote'" })),
+        Json(json!({ "ok": false, "error": "mode must be 'local', 'relay' or 'remote'" })),
     )
         .into_response()
 }
@@ -1094,13 +1125,27 @@ async fn handle_desktop_pair(
     if let Some(offer_hash) = extract_offer_hash(&submission.server_host)
         .or_else(|| extract_offer_hash(&submission.code))
     {
-        let redirect = format!("/?remote=1{}", offer_hash);
+        // Optional remote daemon password: the code field is only a password when it isn't itself the offer link.
+        let pw = if extract_offer_hash(&submission.code).is_none() && !submission.code.trim().is_empty() {
+            submission.code.trim().to_string()
+        } else {
+            String::new()
+        };
+        let redirect = if pw.is_empty() {
+            format!("/?remote=1{}", offer_hash)
+        } else {
+            format!(
+                "/?remote=1&pw={}{}",
+                url::form_urlencoded::byte_serialize(pw.as_bytes()).collect::<String>(),
+                offer_hash
+            )
+        };
         {
             let mut cfg = state.config.write().unwrap();
-            cfg.server_mode = "local".to_string();
+            cfg.server_mode = "relay".to_string();
             cfg.server_host = default_server_host();
-            cfg.last_hash = offer_hash;
-            cfg.last_route = redirect.clone();
+            cfg.last_hash = offer_hash.clone();
+            cfg.last_route = format!("/?remote=1{}", cfg.last_hash);
             let _ = save_config(&cfg);
         }
         state.setup_mode.store(false, Ordering::SeqCst);
@@ -1111,7 +1156,7 @@ async fn handle_desktop_pair(
             Json(json!({
                 "ok": true,
                 "redirect": redirect,
-                "serverMode": "local",
+                "serverMode": "relay",
                 "offer": true
             })),
         )
@@ -1937,7 +1982,7 @@ async fn ensure_local_server_running(state: &Arc<SharedAppState>) {
         let cfg = state.config.read().unwrap();
         (cfg.server_mode.clone(), cfg.server_host.clone())
     };
-    if mode != "local" || !is_local_host(&host) {
+    if (mode != "local" && mode != "relay") || !is_local_host(&host) {
         return;
     }
     if check_local_server_healthy(&state.client(), &host).await.is_ok() {
@@ -1965,6 +2010,11 @@ async fn ensure_local_server_running(state: &Arc<SharedAppState>) {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
+        if mode == "relay" {
+            // In relay mode we only serve the static bundle for a remote #offer= link;
+            // never spawn the local Paseo daemon.
+            cmd.env("VIBESQUAD_NO_DAEMON", "1");
+        }
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -2069,7 +2119,9 @@ async fn proxy_http_handler(
         .unwrap_or_else(|| "/".to_string());
 
     let cfg = state.config.read().unwrap().clone();
-    let is_local = cfg.server_mode == "local" || (cfg.server_mode != "remote" && is_local_host(&cfg.server_host));
+    let is_local = cfg.server_mode == "local"
+        || cfg.server_mode == "relay"
+        || (cfg.server_mode != "remote" && is_local_host(&cfg.server_host));
     // Any GET document navigation (root, ?team=… deep links, SPA paths) gets the root treatment:
     // broken-root guard, desktop bridge injection, and the Reconnecting page. API fetches don't match.
     let is_doc_nav = req.headers().get("sec-fetch-dest").and_then(|v| v.to_str().ok()) == Some("document")
@@ -2620,9 +2672,11 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let headless = args.iter().any(|a| a == "--headless-proxy")
         || std::env::var("VIBESQUAD_HEADLESS_PROXY").as_deref() == Ok("1");
-    // Own the server process: start the bundled one (or reuse a healthy :4180) before the window opens.
-    // Headless test mode only does this when a runtime is actually bundled next to the exe.
-    if !headless || find_bundled_runtime().is_some() {
+    // Own the server process: start the bundled one (or reuse a healthy :4180). In GUI mode we do
+    // NOT spawn it eagerly before the window opens — the proxy handler or clicking "Run agents on
+    // this PC" starts it on demand, and only starts the Paseo daemon when server_mode == "local".
+    // Headless test mode still starts it when a runtime is actually bundled next to the exe.
+    if headless && find_bundled_runtime().is_some() {
         let st = shared_state.clone();
         rt.block_on(async move { ensure_local_server_running(&st).await });
     }

@@ -641,8 +641,8 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
 
       <div class="field" id="code-field" style="{code_field_display}">
         <div class="label-row">
-          <label for="code">6-Digit Pairing Code</label>
-          <span style="font-size:11px;color:var(--muted)">From server's <b>PAIR DEVICE</b> modal</span>
+          <label for="code" id="code-label">6-Digit Pairing Code</label>
+          <span id="code-hint" style="font-size:11px;color:var(--muted)">From server's <b>PAIR DEVICE</b> modal</span>
         </div>
         <input
           type="text"
@@ -686,6 +686,8 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
     const presetMesh = document.getElementById('preset-meshnet');
     const serverPicker = document.getElementById('server-picker');
     const codeField = document.getElementById('code-field');
+    const codeLabel = document.getElementById('code-label');
+    const codeHint = document.getElementById('code-hint');
     const probeBadge = document.getElementById('probe-badge');
     const tagLan = document.getElementById('tag-lan');
     const tagMesh = document.getElementById('tag-meshnet');
@@ -739,24 +741,41 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
 
     function syncLocalState() {{
       syncPresetButtons();
-      const val = (hostInput.value || '').trim();
       const codeVal = (codeInput.value || '').trim();
-      const offerHash = extractOfferHash(val) || extractOfferHash(codeVal);
+      const offerInHost = extractOfferHash(hostInput.value);
+      const offerInCode = extractOfferHash(codeVal);
+      if (offerInCode && !offerInHost) {{
+        // #offer= link was pasted into the code field: move it into the host field and
+        // clear the code field so it can hold the optional daemon password.
+        hostInput.value = codeVal;
+        codeInput.value = '';
+      }}
+      const val = (hostInput.value || '').trim();
+      const offerHash = extractOfferHash(val);
       const lanHost = presetLan.dataset.host;
       const meshHost = presetMesh.dataset.host;
       presetLan.classList.toggle('active', Boolean(lanHost) && val.startsWith(lanHost));
       presetMesh.classList.toggle('active', Boolean(meshHost) && val.startsWith(meshHost));
-      codeField.style.display = (!val || isLocal(val) || Boolean(offerHash)) ? 'none' : 'block';
+      codeField.style.display = (!val || (isLocal(val) && !offerHash)) ? 'none' : 'block';
 
       if (offerHash) {{
-        codeInput.placeholder = 'Paseo offer link detected';
+        codeLabel.textContent = 'Daemon Password (if required)';
+        codeHint.innerHTML = 'Optional password for remote Paseo daemon';
+        codeInput.type = 'password';
+        codeInput.placeholder = 'Enter remote daemon password (optional)';
+        codeInput.required = false;
         submitBtn.textContent = 'Connect via Paseo Offer Link';
-      }} else if (isLocal(val)) {{
-        codeInput.placeholder = 'No code needed on Server PC';
-        submitBtn.textContent = 'Connect to Localhost';
       }} else {{
-        codeInput.placeholder = '000000';
-        submitBtn.textContent = 'Connect & Pair';
+        codeLabel.textContent = '6-Digit Pairing Code';
+        codeHint.innerHTML = 'From server\'s <b>PAIR DEVICE</b> modal';
+        codeInput.type = 'text';
+        if (isLocal(val)) {{
+          codeInput.placeholder = 'No code needed on Server PC';
+          submitBtn.textContent = 'Connect to Localhost';
+        }} else {{
+          codeInput.placeholder = '000000';
+          submitBtn.textContent = 'Connect & Pair';
+        }}
       }}
     }}
 
@@ -830,14 +849,36 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
       try {{
         tryExtractPairUrl(hostInput);
         tryExtractPairUrl(codeInput);
+        if (extractOfferHash(codeInput.value) && !extractOfferHash(hostInput.value)) {{
+          hostInput.value = codeInput.value;
+          codeInput.value = '';
+        }}
         const offerHash = extractOfferHash(hostInput.value) || extractOfferHash(codeInput.value);
         if (offerHash) {{
-          await fetch('/__desktop/choose-mode', {{
+          const res = await fetch('/__desktop/pair', {{
             method: 'POST',
-            headers: {{ 'Content-Type': 'application/json' }},
-            body: JSON.stringify({{ mode: 'local' }})
-          }}).catch(() => {{}});
-          window.location.replace('/?remote=1' + offerHash);
+            headers: {{
+              'Content-Type': 'application/json',
+              'Accept': 'application/json'
+            }},
+            body: JSON.stringify({{
+              serverHost: hostInput.value.trim(),
+              code: codeInput.value
+            }})
+          }});
+          const data = await res.json().catch(() => ({{}}));
+          if (!res.ok || !data.ok) {{
+            errText.textContent = data.error || ('Connection failed (HTTP ' + res.status + ')');
+            errBox.style.display = 'flex';
+            submitBtn.disabled = false;
+            submitBtn.textContent = origText;
+            return;
+          }}
+          const pw = (codeInput.value || '').trim();
+          if (pw) {{
+            sessionStorage.setItem('vs.remote.password.tab', pw);
+          }}
+          window.location.replace(data.redirect || '/');
           return;
         }}
         const res = await fetch('/__desktop/pair', {{
