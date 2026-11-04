@@ -28,6 +28,8 @@ Short notes on the words used.
 - [Proof, not prose](../Concepts/Proof-not-Prose.md)
 - [Cross-family review](../Concepts/Cross-Family-Review.md)
 - [Handoff](../Concepts/Handoff.md)
+- [Sending while it works](../Concepts/Sending-While-It-Works.md)
+- [Outcome, not mechanism](../Concepts/Outcome-not-Mechanism.md)
 - [Working with Squads](../Concepts/Squads.md)
 - [Naming](../Concepts/Naming.md)
 - [Notebook](../Concepts/Notebook.md)
