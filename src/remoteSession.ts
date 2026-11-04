@@ -85,10 +85,11 @@ export function offerFromHash(hash: string): RemoteOffer | null {
   }, null);
 }
 
-/** Removes `remote` from the query and any `#offer=` from the hash; other params survive. */
+/** Removes `remote` and `pw` from the query and any `#offer=` from the hash; other params survive. */
 export function stripRemoteFromUrl(loc: { pathname?: string; search: string; hash?: string }): string {
   const q = new URLSearchParams(loc.search ?? "");
   q.delete("remote");
+  q.delete("pw");
   const qs = q.toString();
   const hash = hasOfferFragment(loc.hash ?? "")
     ? (loc.hash ?? "")
@@ -98,6 +99,41 @@ export function stripRemoteFromUrl(loc: { pathname?: string; search: string; has
         .join("&")
     : (loc.hash ?? "").replace(/^#/, "");
   return (loc.pathname ?? "/") + (qs ? `?${qs}` : "") + (hash ? `#${hash}` : "");
+}
+
+/** Removes only `pw` from the query, leaving `?remote=1` and any `#offer=` fragment intact for RemotePair. */
+export function stripPwFromUrl(loc: { pathname?: string; search: string; hash?: string }): string {
+  const q = new URLSearchParams(loc.search ?? "");
+  q.delete("pw");
+  const qs = q.toString();
+  const hash = (loc.hash ?? "").replace(/^#/, "");
+  return (loc.pathname ?? "/") + (qs ? `?${qs}` : "") + (hash ? `#${hash}` : "");
+}
+
+/**
+ * Consumes a one-shot `?pw=<urlencoded>` password placed in the URL by /__desktop/setup alongside a `#offer=…`
+ * pairing link. A non-empty password is saved to this tab's password storage (via saveSession when the fragment
+ * is a valid offer, else directly to the tab key), then `pw` is stripped from the address bar — keeping
+ * `?remote=1` and `#offer=…` so RemotePair can still complete pairing (and readPassword() pre-fills the field).
+ */
+export function consumeUrlOfferSession(
+  loc: { pathname?: string; search: string; hash?: string },
+  local: GetSet | null = browserStorage("localStorage"),
+  tab: GetSet | null = browserStorage("sessionStorage"),
+): void {
+  const pw = new URLSearchParams(loc.search ?? "").get("pw");
+  if (!pw) return;
+  const target = offerFromHash(loc.hash ?? "");
+  if (target) {
+    try {
+      saveSession(target, pw, false, local, tab);
+    } catch {
+      safe(() => tab?.setItem(REMOTE_TAB_PASSWORD_KEY, pw), undefined);
+    }
+  } else {
+    safe(() => tab?.setItem(REMOTE_TAB_PASSWORD_KEY, pw), undefined);
+  }
+  safe(() => (globalThis as any).history.replaceState(null, "", stripPwFromUrl(loc)), undefined);
 }
 
 /**
@@ -133,6 +169,12 @@ export function isRemote(): boolean {
       storage: browserStorage("localStorage"),
       buildFlag: BUILD_REMOTE,
     });
+    if (remoteCached === true && loc) {
+      const search = loc.search ?? "";
+      if (new URLSearchParams(search).has("pw") || hasOfferFragment(loc.hash ?? "")) {
+        consumeUrlOfferSession(loc, browserStorage("localStorage"), browserStorage("sessionStorage"));
+      }
+    }
     if (
       remoteCached === false &&
       loc &&

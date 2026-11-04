@@ -30,7 +30,10 @@ export default defineConfig(({ mode }) => {
     base: isRemoteBuild ? process.env.VITE_BASE_PATH || "./" : "/",
     plugins: isRemoteBuild ? [react()] : [react(), vibesquadApi()],
     define: {
-      __PASEO_SERVER_ID__: JSON.stringify(isRemoteBuild ? "" : paseo.serverId),
+      // Never bake the build machine's ~/.paseo/server-id into dist/: a bundle built on Main PC and run on
+      // Project PC would otherwise make Project PC think target.serverId === BUILD_SERVER_ID and drop it into
+      // local mode (stripping ?remote=1#offer=…). The runtime check in remoteBoot.ts asks the local server instead.
+      __PASEO_SERVER_ID__: JSON.stringify(""),
       ...(isRemoteBuild ? { "import.meta.env.VITE_VS_REMOTE": JSON.stringify("1") } : {}),
     },
     build: {

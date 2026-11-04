@@ -3,10 +3,10 @@
 // daemon password, probes the connection, then saves and reloads into the app. Must not import paseo.ts:
 // that module builds the daemon client on load, and here there is no pairing yet.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { parseConnectionOfferFromUrl } from "@getpaseo/protocol/connection-offer";
 import { probeRemote } from "./paseoRemote";
-import { clearSession, hasOfferFragment, isAndroidUserAgent, isLocalHost, normalizeOfferInput, parseOfferInput, readSession, saveSession, takeAuthNote, remoteError, type RemoteError } from "./remoteSession";
+import { clearSession, hasOfferFragment, isAndroidUserAgent, isLocalHost, normalizeOfferInput, parseOfferInput, readPassword, readSession, saveSession, takeAuthNote, remoteError, type RemoteError } from "./remoteSession";
 
 function initialLink(): string {
   return hasOfferFragment(location.hash) ? location.href : "";
@@ -17,9 +17,25 @@ function initialError(): RemoteError | null {
   return note ? remoteError(note) : null;
 }
 
+// A password arrives pre-filled either inline (?pw= from /__desktop/setup) or from the saved session.
+// When it rides in the URL we strip it at once so it never lingers in the address bar or history.
+function initialPassword(): string {
+  const params = new URLSearchParams(location.search);
+  const pw = params.get("pw");
+  if (pw) {
+    params.delete("pw");
+    const qs = params.toString();
+    const hash = location.hash.replace(/^#/, "");
+    try {
+      history.replaceState(null, "", location.pathname + (qs ? `?${qs}` : "") + (hash ? `#${hash}` : ""));
+    } catch {}
+  }
+  return pw || readPassword();
+}
+
 export function RemotePair() {
   const [link, setLink] = useState(initialLink);
-  const [password, setPassword] = useState("");
+  const [password, setPassword] = useState(initialPassword);
   const [remember, setRemember] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<RemoteError | null>(initialError);
@@ -96,8 +112,7 @@ export function RemotePair() {
     window.location.href = (window as any).__VIBESQUAD_DESKTOP_BRIDGE__ ? "/__desktop/mode" : "/";
   }
 
-  async function connect(e: React.FormEvent) {
-    e.preventDefault();
+  async function doConnect() {
     if (busy) return;
     const stored = hasStored ? readSession() : null;
     let offer = stored?.offer;
@@ -124,6 +139,22 @@ export function RemotePair() {
     // Reload without the fragment, so the link isn't left in the address bar or history.
     location.replace(location.pathname + location.search);
   }
+
+  function connect(e: React.FormEvent) {
+    e.preventDefault();
+    void doConnect();
+  }
+
+  // A pairing link opened with an inline password (?pw=#offer=…, from /__desktop/setup) pairs without a click.
+  const autoConnectRef = useRef(false);
+  useEffect(() => {
+    if (autoConnectRef.current) return;
+    if (!hasOfferFragment(location.hash)) return;
+    if (!password) return;
+    autoConnectRef.current = true;
+    void doConnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="remote-pair">
@@ -170,7 +201,7 @@ export function RemotePair() {
         )}
         <label className="remote-pair-field">
           <span>Daemon password {linkNeeded && <em>(optional)</em>}</span>
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
+          <input type="password" data-testid="remote-pair-password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
         </label>
         <label className="remote-pair-check">
           <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
