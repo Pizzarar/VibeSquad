@@ -1308,6 +1308,21 @@ function resolveDesktopInstallerPath(rootDir = REPO_ROOT) {
   return join(rootDir, "dist-desktop", "VibeSquad-setup.exe");
 }
 
+export function resolveAndroidApkPath(rootDir = REPO_ROOT) {
+  const primary = join(rootDir, "dist-desktop", "VibeSquad.apk");
+  if (existsSync(primary)) return primary;
+  const parent = resolve(rootDir, "../..", "dist-desktop", "VibeSquad.apk");
+  if (existsSync(parent)) return parent;
+  const apkDir = join(rootDir, "src-tauri", "gen", "android", "app", "build", "outputs", "apk", "universal", "release");
+  if (existsSync(apkDir)) {
+    try {
+      const apk = readdirSync(apkDir).find((f) => f.endsWith(".apk"));
+      if (apk) return join(apkDir, apk);
+    } catch {}
+  }
+  return primary;
+}
+
 function readDesktopVersion(rootDir = REPO_ROOT) {
   const conf = readJsonFileWithBom(join(rootDir, "src-tauri", "tauri.conf.json"), {
     label: "tauri.conf.json",
@@ -1340,6 +1355,25 @@ export function handleDesktopInstaller(req, res, rootDir = REPO_ROOT) {
   res.setHeader("content-type", "application/vnd.microsoft.portable-executable");
   res.setHeader("content-length", String(stat.size));
   res.setHeader("content-disposition", 'attachment; filename="VibeSquad-setup.exe"');
+  res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
+  if (req.method === "HEAD") return res.end();
+  createReadStream(file).on("error", () => res.destroy()).pipe(res);
+}
+
+export function handleAndroidApk(req, res, rootDir = REPO_ROOT) {
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    res.statusCode = 405;
+    return res.end();
+  }
+  const file = resolveAndroidApkPath(rootDir);
+  if (!existsSync(file)) {
+    return sendJson(res, 404, { error: "Android APK not built yet (run npm run build:android)" });
+  }
+  const stat = statSync(file);
+  res.statusCode = 200;
+  res.setHeader("content-type", "application/vnd.android.package-archive");
+  res.setHeader("content-length", String(stat.size));
+  res.setHeader("content-disposition", 'attachment; filename="VibeSquad.apk"');
   res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
   if (req.method === "HEAD") return res.end();
   createReadStream(file).on("error", () => res.destroy()).pipe(res);
@@ -1550,6 +1584,9 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     if (path === "/__vibesquad/local-image") return handleLocalImage(req, res);
     if (path === "/VibeSquad-setup.exe" || path === "/__vibesquad/desktop/VibeSquad-setup.exe") {
       return handleDesktopInstaller(req, res, rootDir);
+    }
+    if (path === "/VibeSquad.apk" || path === "/__vibesquad/android/VibeSquad.apk") {
+      return handleAndroidApk(req, res, rootDir);
     }
     if (path === "/__vibesquad/desktop/update.json") {
       return handleDesktopUpdateJson(req, res, rootDir);
