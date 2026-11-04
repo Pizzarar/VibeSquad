@@ -234,7 +234,7 @@ export const REMOTE_BODY_POLICY: Readonly<Record<string, BodyPolicy>> = {
   // takes the profile from the lane's lastProfile and the cwd from the lane's paths.
   "/__vibesquad/brainstorm-restart": {
     fields: {
-      reason: oneOf("start-brainstorm", "manual", "warn-80k", "handoff"),
+      reason: oneOf("start-brainstorm", "manual", "warn-80k", "handoff", "provider-switch"),
       mode: oneOf("quick-start"),
       teamId: id,
       laneId: id,

@@ -747,7 +747,7 @@ export function DrawerHeader({
   const shownHere = usePanes().leftActiveId === agent.id;
   const inLane = useInFocusedLane(agent.id);
   const railCardVisible = useRailCardVisible();
-  const compact = !!pinFocus && shownHere && inLane && railCardVisible && !!barSlot && !!cardSlot;
+  const compact = !!pinFocus?.agentId && shownHere && inLane && railCardVisible && !!barSlot && !!cardSlot;
 
   // Provider switch: the counterpart profile to flip to (⇄ Claude ↔ Gemini). Hoisted so the compact
   // top bar and the full drawer share one button + handler.
@@ -784,7 +784,8 @@ export function DrawerHeader({
             return;
           }
           if (isBs && nextProfile) setLastBrainstormProfile(nextProfile);
-          await updateAgent(agent.id, { labels: nextLabels });
+          // A Lead's live labels.profile must stay intact: the successor is spawned, this agent isn't flipped in place.
+          if (kindOf(agent) !== "lead") await updateAgent(agent.id, { labels: nextLabels });
           if (kindOf(agent) === "lead" && onSuccessor) {
             onSuccessor();
           } else if (isBs) {

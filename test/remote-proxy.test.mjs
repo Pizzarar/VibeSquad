@@ -742,6 +742,7 @@ describe("R2-5 body policy per endpoint", () => {
     assert.equal(bodyErr("POST", "/__vibesquad/inbox/open-topic", { cardId: "idea-1" }).status, 403);
     assert.equal(bodyErr("POST", "/__vibesquad/brainstorm-restart", { reason: "start-brainstorm" }).status, 403); // no laneId
     assert.equal(bodyErr("POST", "/__vibesquad/brainstorm-restart", { reason: "auto-hard-limit", laneId: "lane1" }).status, 403);
+    assert.equal(bodyErr("POST", "/__vibesquad/brainstorm-restart", { reason: "provider-switch", laneId: "lane1" }).ok, true); // accepted
     assert.equal(bodyErr("POST", "/__vibesquad/log", { team: "sq", lane: "lane1", text: "t", type: "done" }).status, 403);
     assert.equal(bodyErr("POST", "/__vibesquad/log", { team: "../x", lane: "lane1", text: "t" }).status, 403);
     assert.equal(bodyErr("POST", "/__vibesquad/inbox/triage", { action: "merge", laneId: "lane1", sourceIds: Array(101).fill("idea-1") }).status, 403);
