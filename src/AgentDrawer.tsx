@@ -27,7 +27,7 @@ import { providerSpec } from "./pixel";
 import { openAgentInTab, paneOfAgent } from "./panes";
 import { useTimeline, Timeline, TimelineErrorBoundary } from "./Timeline";
 import { PermissionCard } from "./PermissionCard";
-import { Composer, stageFiles } from "./Composer";
+import { Composer, formatBtwPrompt, shouldQueueOnSend, stageFiles, type QueuedTurnItem } from "./Composer";
 import { composeMessage, setAgentCwd, useAttachments } from "./attachments";
 import { DrawerHeader } from "./DrawerHeader";
 import { useWorkingMembers, WorkingBar } from "./WorkingBar";
@@ -147,6 +147,8 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   const feedbackKey = `vs.restart-feedback.${agent.id}`;
   const [feedbackDismissed, setFeedbackDismissed] = useState(() => localStorage.getItem(feedbackKey) === "1");
   const [lastSteered, setLastSteered] = useState<string | null>(null);
+  const [queuedByAgent, setQueuedByAgent] = useState<Record<string, QueuedTurnItem[]>>({});
+  const queuedItems = queuedByAgent[agent.id] ?? [];
   const [permInputs, setPermInputs] = useState<Record<string, string>>({});
   const [dockOpen, setDockOpen] = useState(() => localStorage.getItem("vs.right-dock.open") === "true");
 
@@ -215,6 +217,18 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   useEffect(() => {
     localStorage.setItem("vs.right-dock.open", String(dockOpen));
   }, [dockOpen]);
+
+  useEffect(() => {
+    if (agent.status !== "running" && agent.status !== "closed" && queuedItems.length > 0) {
+      const combinedText = queuedItems.map((q) => q.text).join("\n\n");
+      setQueuedByAgent((prev) => {
+        const next = { ...prev };
+        delete next[agent.id];
+        return next;
+      });
+      void sendMessage(agent.id, combinedText, undefined, { activeTurnBehavior: "steer" });
+    }
+  }, [agent.id, agent.status, queuedItems.length]);
 
   useEffect(() => {
     const onOpenDock = () => setDockOpen(true);
@@ -293,15 +307,35 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   const [sendError, setSendError] = useState<string | null>(null);
   const lastBehavior = useRef<ActiveTurnBehavior | null>(null);
 
-  const sendWithBehavior = async (behavior: ActiveTurnBehavior) => {
-    if (!draft.trim() && !imgs.images.length && !atts.items.length && !ctxSrc.items.length) return;
+  const sendWithBehavior = async (behavior: ActiveTurnBehavior, overrideText?: string, forceImmediate = false) => {
+    if (!draft.trim() && !imgs.images.length && !atts.items.length && !ctxSrc.items.length && overrideText === undefined) return;
     if (sendLock.current.held) return;
     const sentFiles = atts.items;
     const sentCtx = ctxSrc.items;
-    const base = draft.trim() ? draft : imgs.images.length ? "(image)" : "";
+    const base = overrideText !== undefined ? overrideText : draft.trim() ? draft : imgs.images.length ? "(image)" : "";
+    const formattedBase = formatBtwPrompt(base);
     const typed = draft;
     setSendError(null);
     lastBehavior.current = behavior;
+
+    if (
+      behavior === "steer" &&
+      shouldQueueOnSend(agent.status, forceImmediate) &&
+      !imgs.images.length &&
+      !atts.items.length &&
+      !ctxSrc.items.length &&
+      overrideText === undefined
+    ) {
+      setQueuedByAgent((prev) => ({
+        ...prev,
+        [agent.id]: [
+          ...(prev[agent.id] ?? []),
+          { id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, text: formattedBase, createdAt: Date.now() },
+        ],
+      }));
+      clearDraft();
+      return;
+    }
 
     await guardedSend({
       lock: sendLock.current,
@@ -312,7 +346,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
       restore: () => setDraft(restoredDraft(typed, draftRef.current)),
       onError: (e) => setSendError(`Send failed: ${e instanceof Error ? e.message : String(e)}`),
       run: async () => {
-        const composed = await composeMessage(base, sentFiles, async ({ name, file }) => {
+        const composed = await composeMessage(formattedBase, sentFiles, async ({ name, file }) => {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const up = await (daemonClient as any).uploadFile?.({ cwd: agent.cwd, name, file });
           if (!up?.path) throw new Error(`upload of ${name} failed`);
@@ -343,6 +377,30 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
 
   const send = () => sendWithBehavior("steer");
   const sendInterrupt = () => sendWithBehavior("interrupt");
+
+  const sendQueuedNow = async () => {
+    const items = queuedByAgent[agent.id] ?? [];
+    if (!items.length) return;
+    const combinedText = items.map((q) => q.text).join("\n\n");
+    setQueuedByAgent((prev) => {
+      const next = { ...prev };
+      delete next[agent.id];
+      return next;
+    });
+    await sendMessage(agent.id, combinedText, undefined, { activeTurnBehavior: "steer" });
+    setLastSteered(combinedText);
+  };
+
+  const cancelQueued = (id?: string) => {
+    const items = queuedByAgent[agent.id] ?? [];
+    const removed = id ? items.find((q) => q.id === id) : items[0];
+    setQueuedByAgent((prev) => {
+      const list = prev[agent.id] ?? [];
+      const rest = id ? list.filter((q) => q.id !== id) : list.slice(1);
+      return { ...prev, [agent.id]: rest };
+    });
+    if (removed && !draft.trim()) setDraft(removed.text);
+  };
 
   const onFeedback = async (verdict: "good" | "lost") => {
     localStorage.setItem(feedbackKey, "1");
@@ -571,6 +629,9 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
         onInterrupt={sendInterrupt}
         onParkToInbox={parkToInbox}
         onToggleInboxPopover={() => setInboxPopoverOpen((v) => !v)}
+        queuedItems={queuedItems}
+        onSendQueuedNow={() => void sendQueuedNow()}
+        onCancelQueued={cancelQueued}
       />
     </aside>
   );

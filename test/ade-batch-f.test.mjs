@@ -4,7 +4,7 @@ import test from "node:test";
 // F: Pure logic tests for Composer upgrades (slash, @-mention, any-file attach, prompt history).
 // Helpers are mirrored from src/Composer.tsx; Node-only, no DOM.
 
-const FALLBACK_COMMANDS = ["/compact", "/clear", "/help", "/model", "/mode", "/rewind"];
+const FALLBACK_COMMANDS = ["/btw", "/compact", "/clear", "/help", "/model", "/mode", "/rewind"];
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 
 function slashToken(text, caret) {
@@ -75,7 +75,7 @@ test("F2: slash token ignores paths and mid-word slashes", () => {
 
 test("F3: slash filtering by prefix, fallback list", () => {
   assert.deepEqual(filterSlash(FALLBACK_COMMANDS, "mo"), ["/model", "/mode"]);
-  assert.equal(filterSlash(FALLBACK_COMMANDS, "").length, 6);
+  assert.equal(filterSlash(FALLBACK_COMMANDS, "").length, 7);
   assert.deepEqual(filterSlash(FALLBACK_COMMANDS, "zzz"), []);
 });
 

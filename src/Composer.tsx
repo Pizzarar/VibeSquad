@@ -24,7 +24,7 @@ import {
 
 // ── Pure helpers (mirrored in test/ade-batch-f.test.mjs) ──────────────────────
 
-export const FALLBACK_COMMANDS = ["/compact", "/clear", "/help", "/model", "/mode", "/rewind"];
+export const FALLBACK_COMMANDS = ["/btw", "/compact", "/clear", "/help", "/model", "/mode", "/rewind"];
 export const DEMO_MENTION_FILES = ["src/App.tsx", "src/Composer.tsx", "package.json", "README.md"];
 const DEMO_ENTRIES: MentionEntry[] = [
   { path: "src", kind: "directory" },
@@ -45,6 +45,21 @@ export function slashToken(text: string, caret: number): { start: number; query:
 export function filterSlash(cmds: string[], query: string): string[] {
   const q = query.toLowerCase();
   return cmds.filter((c) => c.replace(/^\//, "").toLowerCase().startsWith(q)).slice(0, 8);
+}
+
+export type QueuedTurnItem = { id: string; text: string; createdAt: number };
+
+export function shouldQueueOnSend(agentStatus: string | undefined, forceImmediate = false): boolean {
+  return agentStatus === "running" && !forceImmediate;
+}
+
+/** Rewrites a `/btw <msg>` draft into a non-derailing side-note prefix. */
+export function formatBtwPrompt(text: string): string {
+  const m = /^\s*\/btw(?:\s+([\s\S]*))?$/i.exec(text);
+  if (!m) return text;
+  const body = (m[1] ?? "").trim();
+  if (!body) return text;
+  return `[BTW side-note — answer briefly in 1-2 lines or note in SPEC.md without stopping or changing current task]: ${body}`;
 }
 
 /** Mention token: `@partial/path` at start or after whitespace, ending at the caret. */
@@ -166,6 +181,9 @@ type ComposerProps = {
   onInterrupt: () => void;
   onParkToInbox: (text: string, fromComposer: boolean) => void;
   onToggleInboxPopover: () => void;
+  queuedItems?: QueuedTurnItem[];
+  onSendQueuedNow?: () => void;
+  onCancelQueued?: (id?: string) => void;
 };
 
 export function Composer({
@@ -182,6 +200,9 @@ export function Composer({
   onInterrupt,
   onParkToInbox,
   onToggleInboxPopover,
+  queuedItems,
+  onSendQueuedNow,
+  onCancelQueued,
 }: ComposerProps) {
   const [dragOver, setDragOver] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -491,6 +512,35 @@ export function Composer({
           ))}
         </div>
       )}
+      {queuedItems && queuedItems.length > 0 && (
+        <div className="chip composer-queued-banner" data-testid="composer-queued-banner">
+          <span className="composer-queued-text">
+            Queued ({queuedItems.length}): {queuedItems[0].text.slice(0, 80)}{queuedItems[0].text.length > 80 ? "…" : ""}
+          </span>
+          {onSendQueuedNow && (
+            <button
+              type="button"
+              className="btn small ok composer-send-now-btn"
+              data-testid="composer-send-now-btn"
+              title="Steer the active turn with this message right now instead of waiting for the turn to finish"
+              onClick={onSendQueuedNow}
+            >
+              Send this now
+            </button>
+          )}
+          {onCancelQueued && (
+            <button
+              type="button"
+              className="btn ghost small composer-queued-cancel-btn"
+              data-testid="composer-queued-cancel-btn"
+              title="Remove queued message and restore to draft"
+              onClick={() => onCancelQueued(queuedItems[0].id)}
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      )}
       {lastSteered && (
         <div className="chip steered-chip" data-testid="steered-chip">
           steered
@@ -710,8 +760,8 @@ export function Composer({
             📥 Park in Inbox
           </button>
         )}
-        <button className="btn" disabled={busy || (!draft.trim() && !imgs.images.length && !atts.items.length && !ctx.items.length)} onClick={send}>
-          Send
+        <button className="btn" disabled={busy || (!draft.trim() && !imgs.images.length && !atts.items.length && !ctx.items.length)} onClick={send} title={agent.status === "running" ? "Queue for after current turn (or click Send this now to steer)" : undefined}>
+          {agent.status === "running" ? "Queue" : "Send"}
         </button>
         {agent.status === "running" && (
           <button
