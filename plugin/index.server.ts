@@ -1127,17 +1127,28 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
                 ? "worker"
                 : "";
 
+        // MCP create_agent sends no labels and no env.VS_ROLE: infer the role from the
+        // documented title convention (★ … → lead; BRAINSTORM · / <Code> Buddy / RiffBot →
+        // brainstorm). Archived/demoted "(old)" titles resolve to no title role.
+        const titleRole = /^\s*\(old\)/i.test(title)
+          ? ""
+          : /^\s*★\s/u.test(title)
+            ? "lead"
+            : /^\s*(?:brainstorm\s*·|riffbot\b|[a-z0-9_-]{2,8}\s+buddy\b)/i.test(title)
+              ? "brainstorm"
+              : "";
+
         // Paseo hands this hook only { config, env }: spawn labels never arrive here, so
         // VibeSquad's own spawn paths also pass env VS_PROFILE. Label-only spawns are
         // corrected in agent.created instead.
         const profileHint = config.profile || reqLabels.profile || env?.VS_PROFILE;
-        const profileMatch = matchStoredProfile(profileHint, provider, title, explicitRole || "worker");
+        const profileMatch = matchStoredProfile(profileHint, provider, title, explicitRole || titleRole || "worker");
         const matchedProfile = profileMatch?.profile ?? null;
         if (String(profileHint ?? "").trim() && !profileMatch?.explicit) {
           log(`profile "${profileHint}" named by spawn "${title}" is not in profiles.json; caller settings kept`);
         }
 
-        const role = explicitRole || matchedProfile?.role || "worker";
+        const role = explicitRole || matchedProfile?.role || titleRole || "worker";
 
         if (!matchedProfile && (reqLabels.team || reqLabels.lane || reqLabels.role)) {
           log(
@@ -1411,11 +1422,30 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           changed = true;
         }
 
+        // Turn-1 `vs` CLI commands need the role/lane/team in env immediately, before the
+        // agent exists (agent.created runs later). Propagate only what isn't already set.
+        const nextEnv: Record<string, string> = { ...(env ?? {}) };
+        let envChanged = false;
+        if (role && !nextEnv.VS_ROLE) {
+          nextEnv.VS_ROLE = role;
+          envChanged = true;
+        }
+        if (spawnTeamId && !nextEnv.VS_TEAM) {
+          nextEnv.VS_TEAM = spawnTeamId;
+          envChanged = true;
+        }
+        if (explicitLane && !nextEnv.VS_LANE) {
+          nextEnv.VS_LANE = explicitLane;
+          envChanged = true;
+        }
+        if (envChanged) changed = true;
+
         return changed
           ? {
               ...request,
               ...(nextReqLabels && (request as any).labels ? { labels: nextReqLabels } : {}),
               config: next,
+              ...(envChanged ? { env: nextEnv } : {}),
             }
           : undefined;
     };

@@ -113,6 +113,29 @@ test("explicit VS_ROLE beats the title convention", () => {
   }
 });
 
+test("MCP create_agent: title convention ★ → lead (Role: lead, Lead rules layer, VS_ROLE env)", () => {
+  const h = roleHarness([]);
+  try {
+    const out = h.create({ title: "★ Bug8 · daemon spawn hang P0", provider: "antigravity-cli" }, {});
+    assert.match(sys(out), /Role: lead/);
+    assert.match(sys(out), /Dispatch workers/); // Lead rules layer
+    assert.equal(out.env.VS_ROLE, "lead");
+  } finally {
+    h.done();
+  }
+});
+
+test("MCP create_agent: title convention <Code> Buddy → brainstorm (Role: brainstorm, VS_ROLE env)", () => {
+  const h = roleHarness([]);
+  try {
+    const out = h.create({ title: "VS Buddy", provider: "claude" }, {});
+    assert.match(sys(out), /Role: brainstorm/);
+    assert.equal(out.env.VS_ROLE, "brainstorm");
+  } finally {
+    h.done();
+  }
+});
+
 test("spawnEnvFor carries role and profile into env for label-only spawn paths", async () => {
   const { spawnEnvFor } = await import("../src/spawn-env.ts");
   assert.deepEqual(spawnEnvFor({ role: "brainstorm", lane: "x", profile: "Brainstorm - Claude" }), { VS_ROLE: "brainstorm", VS_PROFILE: "Brainstorm - Claude" });

@@ -621,3 +621,24 @@ test(
     }
   }),
 );
+
+// ---------------------------------------------------------------------------
+// Stage 5 — MCP create_agent title-convention role inference (no labels / VS_ROLE)
+// ---------------------------------------------------------------------------
+
+test(
+  "MCP create_agent: Lead title convention sets Role: lead + VS_ROLE in before(agent.create)",
+  withEnv(async ({ briefRoot }) => {
+    const h = harness(new Map(), { briefRoot });
+    try {
+      const out = h.beforeCreate({
+        config: { cwd: CWD, provider: "antigravity-cli", title: "★ UIP2 · polish modal" },
+        env: {},
+      });
+      assert.match(String(out.config.systemPrompt ?? ""), /Role: lead/);
+      assert.equal(out.env.VS_ROLE, "lead");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
