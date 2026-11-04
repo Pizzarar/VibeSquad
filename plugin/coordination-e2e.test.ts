@@ -156,6 +156,7 @@ function harness(
     startWatcher: false,
     briefRoot: opts.briefRoot,
     debounceMs: 20,
+    retryBaseMs: 10,
     firstPromptRedeliverMs: 60_000,
     setLabels: async (agentId: string, labels: Record<string, string>, name?: string) => {
       setLabelsCalls.push({ agentId, labels, name });
@@ -637,6 +638,57 @@ test(
       });
       assert.match(String(out.config.systemPrompt ?? ""), /Role: lead/);
       assert.equal(out.env.VS_ROLE, "lead");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Stage 6 — Failed turn recovery: stream idle timeout retry + checkLeadTokens
+// ---------------------------------------------------------------------------
+
+test(
+  "Stage 6: stream idle timeout / context deadline exceeded auto-retries and failed turns still evaluate checkLeadTokens",
+  withEnv(async ({ briefRoot }) => {
+    const leadUnder = {
+      id: "lead-under",
+      title: "★ Bug8 · daemon spawn hang P0",
+      cwd: CWD,
+      status: "error",
+      lastUsage: { contextWindowUsedTokens: 136_117 },
+      labels: { team: "vibesquad", lane: "bug-chaser", role: "lead", ord: "8" },
+    };
+    const leadOverFlag = {
+      id: "lead-over-flag",
+      title: "★ Fea2 · phase two",
+      cwd: CWD,
+      status: "error",
+      lastUsage: { contextWindowUsedTokens: 175_000 },
+      labels: { team: "vibesquad", lane: "feat-alpha", role: "lead", ord: "2" },
+    };
+    const agents = new Map<string, any>([
+      ["lead-under", leadUnder],
+      ["lead-over-flag", leadOverFlag],
+    ]);
+    const h = harness(agents, { briefRoot });
+    try {
+      await h.onTurnEnded(leadUnder, {
+        kind: "failed",
+        error: { message: "API error (attempt 1): request failed: stream idle timeout (5m0s): context deadline exceeded" },
+      });
+      await wait(30);
+      assert.ok(
+        h.sent.some((s) => s.to === "lead-under" && s.text.includes("transient network error")),
+        "stream idle timeout / context deadline exceeded retries the turn",
+      );
+
+      await h.onTurnEnded(leadOverFlag, {
+        kind: "failed",
+        error: { message: "non-transient provider error" },
+      });
+      assert.equal(leadOverFlag.labels["handoff-flagged"], "1", "failed turn still flags lead over 150k tokens");
+      assert.ok(leadOverFlag.labels["needs-you"]?.includes("150k"), "failed turn sets needs-you on lead over 150k tokens");
     } finally {
       h.stop?.();
     }

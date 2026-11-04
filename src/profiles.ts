@@ -414,6 +414,14 @@ export const LEGACY_PROFILE_ALIASES: Record<string, string> = {
   "Art - Opus": "Art Painter - Opus",
   "Builder - Gemini": "Lead - Gemini",
   "Reviewer - Gemini": "Review - Gemini",
+  Lead: "Lead - Claude",
+  Brainstorm: "Brainstorm - Claude",
+  Buddy: "Brainstorm - Claude",
+  RiffBot: "Brainstorm - Claude",
+  Worker: "Implement - Sonnet",
+  Coder: "Work Order - DSP",
+  Reviewer: "Review - Gemini",
+  Fast: "Pre-check - Flash",
 };
 
 export function deriveRole(name: string, explicitRole?: string): Role {

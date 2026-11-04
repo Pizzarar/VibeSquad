@@ -390,12 +390,15 @@ function lookupProfileInList(nameOrProfile, list) {
 }
 
 export function resolveProfileWithFailover(requestedNameOrProfile, profiles = [], usageProviders = [], opts = {}) {
+  const defaultPool = registeredDefaultProfiles || BUILTIN_FALLBACK_PROFILES;
   const effectiveProfiles =
     Array.isArray(profiles) && profiles.length > 0
       ? profiles
-      : registeredDefaultProfiles || BUILTIN_FALLBACK_PROFILES;
+      : defaultPool;
 
-  const profile = lookupProfileInList(requestedNameOrProfile, effectiveProfiles);
+  const profile =
+    lookupProfileInList(requestedNameOrProfile, effectiveProfiles) ||
+    lookupProfileInList(requestedNameOrProfile, defaultPool);
   if (!profile) {
     return {
       profile: null,
@@ -442,7 +445,9 @@ export function resolveProfileWithFailover(requestedNameOrProfile, profiles = []
   }
 
   for (const name of candidates) {
-    const cand = lookupProfileInList(name, effectiveProfiles);
+    const cand =
+      lookupProfileInList(name, effectiveProfiles) ||
+      lookupProfileInList(name, defaultPool);
     if (!cand || !cand.provider) continue;
     if (cand.name === profile.name) continue;
     const candCheck = isProviderOverQuota(cand.provider, usageProviders, threshold, opts);

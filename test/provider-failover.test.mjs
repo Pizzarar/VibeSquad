@@ -248,6 +248,18 @@ test("7. canonical role/tier names resolve to their primary profiles", () => {
   assert.equal(resolveProfileWithFailover("Reviewer", DEFAULT_PACK_PROFILES, []).profile.name, "Review - Gemini");
   assert.equal(resolveProfileWithFailover("Fast", DEFAULT_PACK_PROFILES, []).profile.name, "Pre-check - Flash");
   assert.equal(resolveProfileWithFailover("Coder", DEFAULT_PACK_PROFILES, []).profile.name, "Work Order - DSP");
+
+  // Also via findProfile in server/profiles.mjs and when stored profiles list is trimmed
+  assert.equal(findProfile("Lead", DEFAULT_PACK_PROFILES)?.name, "Lead - Claude");
+  assert.equal(findProfile("Worker", DEFAULT_PACK_PROFILES)?.name, "Implement - Sonnet");
+  assert.equal(findProfile("Reviewer", DEFAULT_PACK_PROFILES)?.name, "Review - Gemini");
+  const trimmedList = DEFAULT_PACK_PROFILES.filter((p) => p.name === "Lead - Claude");
+  const failoverFromTrimmed = resolveProfileWithFailover("Lead", trimmedList, [
+    { id: "claude", status: "ok", usedPct: 99 },
+    { id: "antigravity-cli", status: "ok", usedPct: 10 },
+  ]);
+  assert.equal(failoverFromTrimmed.failedOver, true);
+  assert.equal(failoverFromTrimmed.toProfile, "Lead - Gemini");
 });
 
 test("8. multi-hop failover to DeepSeek when both claude and gemini are over quota", () => {

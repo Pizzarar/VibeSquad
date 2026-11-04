@@ -41,7 +41,7 @@ import { writeBriefFile } from "@vibesquad/server/brief-write.mjs";
 import { defangPromptFences } from "@vibesquad/server/write-guards.mjs";
 import { detachLiveChildren } from "@vibesquad/server/detach-children.mjs";
 import { briefRootFor } from "@vibesquad/server/brief-path.mjs";
-import { deriveRole } from "@vibesquad/server/profiles.mjs";
+import { DEFAULT_PACK_PROFILES, deriveRole } from "@vibesquad/server/profiles.mjs";
 import { normalizeProviderFamily, resolveProfileWithFailover } from "@vibesquad/server/provider-failover.mjs";
 import { leanApplies, leanProviderOptions } from "@vibesquad/server/lean-tools.mjs";
 import { makeVsHttpHandler, vsHttp } from "./server/remote-proxy.ts";
@@ -65,7 +65,7 @@ export const DIGEST_PROFILE = "Pre-check - Flash";
 export const DIGEST_MODE_ID = "default";
 export const DIGEST_THINKING_OPTION_ID = "low";
 const WAKE_TYPES = new Set(["done", "blocker", "decision", "needs-you", "you", LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE]);
-const TRANSIENT_ERROR = /googleapis|EOF|no such host|ECONNRESET/i;
+const TRANSIENT_ERROR = /googleapis|EOF|no such host|ECONNRESET|stream idle timeout|context deadline exceeded/i;
 const MAX_RETRIES = 2;
 const MAX_TEXT = 240;
 const REPO_ROOT = path.resolve(process.env.VIBESQUAD_ROOT || (typeof import.meta?.dirname === "string" ? path.join(import.meta.dirname, "..") : path.join(os.homedir(), "projects", "VibeSquad")));
@@ -202,6 +202,18 @@ export function loadStoredProfiles(): StoredProfile[] {
 const LEGACY_ALIASES: Record<string, string> = {
   "Lead - Opus": "Lead - Claude",
   "Brainstorm - Opus": "Brainstorm - Claude",
+  "Art - Gemini": "Art Director - Gemini",
+  "Art - Opus": "Art Painter - Opus",
+  "Builder - Gemini": "Lead - Gemini",
+  "Reviewer - Gemini": "Review - Gemini",
+  Lead: "Lead - Claude",
+  Brainstorm: "Brainstorm - Claude",
+  Buddy: "Brainstorm - Claude",
+  RiffBot: "Brainstorm - Claude",
+  Worker: "Implement - Sonnet",
+  Coder: "Work Order - DSP",
+  Reviewer: "Review - Gemini",
+  Fast: "Pre-check - Flash",
 };
 
 export interface ProfileMatch {
@@ -215,29 +227,38 @@ export function matchStoredProfile(
   provider?: string,
   title?: string | null,
   role?: string,
-  profiles = loadStoredProfiles(),
+  profiles?: StoredProfile[],
 ): ProfileMatch | null {
-  if (!profiles.length) return null;
+  const customProfilesPassed = profiles !== undefined;
+  const list = profiles ?? loadStoredProfiles();
+  if (!list.length && customProfilesPassed) return null;
   const rawHint = (profileHint ?? "").trim();
   const mappedHint = LEGACY_ALIASES[rawHint] || rawHint;
   if (mappedHint) {
-    const exact = profiles.find((p) => p.name === mappedHint || p.name.toLowerCase() === mappedHint.toLowerCase());
+    const exact = list.find((p) => p.name === mappedHint || p.name.toLowerCase() === mappedHint.toLowerCase());
     if (exact) return { profile: exact, explicit: true };
+    if (!customProfilesPassed && !process.env.VIBESQUAD_PROFILES_PATH) {
+      const fallback = (DEFAULT_PACK_PROFILES as any[]).find(
+        (p) => p.name === mappedHint || p.name.toLowerCase() === mappedHint.toLowerCase(),
+      );
+      if (fallback) return { profile: { ...fallback, role: deriveRole(fallback.name, fallback.role) }, explicit: true };
+    }
   }
+  if (!list.length) return null;
   const fuzzy = (profile: StoredProfile | undefined) => (profile ? { profile, explicit: false } : null);
   const cleanTitle = (title ?? "").trim();
   if (cleanTitle) {
-    const byTitle = profiles.find((p) => cleanTitle.toLowerCase().startsWith(p.name.toLowerCase()));
+    const byTitle = list.find((p) => cleanTitle.toLowerCase().startsWith(p.name.toLowerCase()));
     if (byTitle) return fuzzy(byTitle);
   }
   const isAgy = (provider ?? "").startsWith("antigravity-cli");
   if (role === "lead") {
     const want = isAgy ? "Lead - Gemini" : "Lead - Claude";
-    return fuzzy(profiles.find((p) => p.name === want));
+    return fuzzy(list.find((p) => p.name === want));
   }
   if (role === "brainstorm") {
     const want = isAgy ? "Brainstorm - Gemini" : "Brainstorm - Claude";
-    return fuzzy(profiles.find((p) => p.name === want));
+    return fuzzy(list.find((p) => p.name === want));
   }
   return null;
 }
@@ -1842,7 +1863,14 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           paseoApi = paseo;
           markTurnSeen(agent?.id);
           try {
-            if (outcome.kind === "failed") return await handleFailure(paseo, agent, outcome.error.message);
+            if (outcome.kind === "failed") {
+              const { snap: me, labels } = await labelsFor(paseo, agent);
+              if (!isDigestAgent(labels) && effectiveAgentRole({ labels }) === "lead") {
+                const handoffRes = await checkLeadTokens(paseo, agent.id, me, labels);
+                if (handoffRes?.stage === "auto-250" || handoffRes?.stage === "hard-300") return;
+              }
+              return await handleFailure(paseo, agent, String(outcome.error?.message ?? ""));
+            }
             if (outcome.kind !== "completed") return;
             retries.delete(agent.id);
 
@@ -1946,7 +1974,10 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
 
     async function checkLeadTokens(_paseo: Paseo, id: string, me: AgentSnap | null, labels: Labels) {
       const leadSnap = me ? { ...me, id, labels: { ...(me.labels ?? {}), ...labels } } : { id, title: null, labels };
-      await handoffCoordinator.evaluateLead(leadSnap).catch((e: unknown) => log(`lead handoff check failed: ${e}`));
+      return await handoffCoordinator.evaluateLead(leadSnap).catch((e: unknown) => {
+        log(`lead handoff check failed: ${e}`);
+        return null;
+      });
     }
 
     // A4: transient network error retry with exponential backoff.
