@@ -142,7 +142,8 @@ function resolveTeam(value) {
 
 function findLane(value) {
   if (!value) return null;
-  const needle = String(value).toLowerCase();
+  const stripped = String(value).trim().replace(/^@+/, "");
+  const needle = stripped.toLowerCase();
   for (const team of TEAM_DEFS) {
     for (const lane of team.lanes ?? []) {
       if (String(lane.id).toLowerCase() === needle || (lane.aliases ?? []).some((a) => String(a).toLowerCase() === needle)) {
@@ -150,7 +151,8 @@ function findLane(value) {
       }
     }
   }
-  return null;
+  // `@<code>` / `<code>` handles (e.g. @bug -> bug-chaser) and name matches.
+  return findLaneInRegistry(value, TEAM_DEFS);
 }
 
 function matchTeamBySegments(targetPath) {

@@ -114,6 +114,30 @@ export function gitMenuItems(): CtxMenuItem[] {
 
 export const isCtxItem = (x: unknown): x is CtxMenuItem => !!x && typeof x === "object" && (x as CtxMenuItem).ctx === true;
 
+// ── @lane autocomplete ────────────────────────────────────────────────────────
+
+export type LaneMenuItem = { handle: string; laneId: string; name: string; hint: string };
+
+/** `@<code>` handles for the Composer `@` autocomplete: one item per lane, filtered by handle / id / name. */
+export function laneMenuItems(
+  lanes: Array<{ id: string; name: string; code?: string }>,
+  query = "",
+): LaneMenuItem[] {
+  const q = query.trim().toLowerCase();
+  return lanes
+    .map((lane) => {
+      const handle = "@" + String(lane.code || lane.id.slice(0, 3)).toLowerCase();
+      return { handle, laneId: lane.id, name: lane.name, hint: `${lane.name} (${lane.id})` };
+    })
+    .filter(
+      (item) =>
+        !q ||
+        item.handle.toLowerCase().includes(q) ||
+        item.laneId.toLowerCase().includes(q) ||
+        item.name.toLowerCase().includes(q),
+    );
+}
+
 // ── Project tab: rules discovery ────────────────────────────────────────────
 
 export const RULES_MAX_DEPTH = 4;

@@ -14,6 +14,7 @@ import { SendToBar } from "./PinIdeas";
 import { useProfiles } from "./profiles";
 import { slotRef } from "./pinSlots";
 import type { TeamView } from "./teams";
+import { laneCodeFor } from "./identity";
 import { Avatar, NeonEmblem } from "./pixel";
 
 const SWAP_MS = 150;
@@ -150,6 +151,7 @@ function PinFocusBar({ view, focus, onSelectSquad }: { view: TeamView; focus: Pi
 
   const lead = pin?.lead ?? null;
   const workers = pin?.workers.length ?? 0;
+  const handle = "@" + ((pin?.lane.code || laneCodeFor(focus.laneId, [view.team]) || focus.laneId.slice(0, 3)).toLowerCase());
   const openLead = () => {
     if (pin && lead) openPinMember(pin, lead.agent.id);
   };
@@ -162,6 +164,7 @@ function PinFocusBar({ view, focus, onSelectSquad }: { view: TeamView; focus: Pi
       {/* The focused drawer's DrawerHeader portals its compact controls here (src/pinSlots.ts). */}
       <div className="pin-focus-slot" ref={slotRef("bar")} />
       {!focus.agentId && <span className="pin-focus-name">{pin?.lane.name ?? focus.laneId}</span>}
+      <span className="pin-lane-handle" data-testid="pin-focus-handle">{handle}</span>
       <span className="pin-focus-spacer" />
       <button
         type="button"
