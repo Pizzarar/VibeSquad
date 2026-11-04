@@ -41,7 +41,7 @@ project); that VibeSquad is where they will work from now on, and the provider (
 
 ## Which folder is open (check this first)
 
-This chat must run with `guide/` as its working folder (it holds this file and `AGENTS.md`). If the working folder is the whole VibeSquad repo, you are in the source code and not under these rules: tell the person to close this chat and open a new one on the `guide` folder (**+ New squad**, **Folder path** = the `guide` folder). The person's first project never goes in `guide/` or the repo: it goes in a new empty folder (Phase 5 makes `hello-agent`).
+This chat must run with `guide/` as its working folder (it holds this file and `AGENTS.md`). If the working folder is the whole VibeSquad repo, you are in the source code and not under these rules: tell the person to close this chat and open a new one on the `guide` folder (**+ New squad**, **Folder path** = the `guide` folder). Tested on Windows: with `guide/` open, Claude Code, Codex, OpenCode and Antigravity (`agy`) all loaded these rules (Claude and Gemini through the one-line pointer files `CLAUDE.md` and `GEMINI.md`). They also read a rules file from a folder above the open one, so keep unrelated rules out of the parent folders. The person's first project never goes in `guide/` or the repo: it goes in a new empty folder (Phase 5 makes `hello-agent`).
 
 ## PATH refresh (run before every Verify and every detect check)
 
@@ -217,8 +217,7 @@ proof line in `progress.md`, replace the Windows username in any path with `<use
      way. Level 1 skips this file.
    - Run `Select-String -Path AGENTS.md -Pattern '<[A-Z_]+>'` (Level 2: `-Path AGENTS.md, LEAD_RULES.md`) and show
      that it finds nothing.
-3. Create `CLAUDE.md` in the same folder containing one line: `Read AGENTS.md`. (Claude Code reads `CLAUDE.md`, not
-   `AGENTS.md`. Whether Codex, Gemini and OpenCode read `AGENTS.md` by themselves: UNVERIFIED, so the pointer file is harmless for them.)
+3. Create `CLAUDE.md` in the same folder containing one line: `Read AGENTS.md`. (Claude Code reads `CLAUDE.md`, Gemini CLI reads `GEMINI.md`, and Codex, OpenCode and Antigravity read `AGENTS.md` by themselves, so the pointer file is harmless for them. Tested for Claude Code, Codex, OpenCode and Antigravity; Gemini CLI is not tested, because it could not sign in on the test machine. If the agent is Gemini, also create `GEMINI.md` with the same one line.)
 4. Have the agent (the provider they chose) do the one tiny task chosen in Q5 (default: laser people get the coaster, everyone else the script),
    with proof:
    - script and test (coders, apps, game makers): a small script plus a test, then run it and show the raw output;
