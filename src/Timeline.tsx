@@ -967,6 +967,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
     }
     let alive = true;
     setLoaded(false);
+    lastSeq.current = null; // other agent's seq must not judge this stream; load() sets the baseline
     let timer: ReturnType<typeof setTimeout> | null = null;
     const handle = client.agents.ref(agentId);
 
@@ -1473,11 +1474,10 @@ export function Timeline({
         .map((p) => (
           <div
             key={p.id}
-            className="tl tl-user"
+            className={p.state === "failed" ? "tl tl-user tl-user-failed" : "tl tl-user tl-user-pending"}
             data-testid={`tl-pending-${p.state}`}
-            style={{ opacity: p.state === "pending" ? 0.6 : 1, ...(p.state === "failed" ? { borderColor: "var(--red, #e5484d)" } : {}) }}
           >
-            <div className="tl-text">{stripBootPreamble(p.text)}</div>
+            <div>{stripBootPreamble(p.text)}</div>
             {p.state === "failed" ? (
               <div className="muted" role="alert">
                 Not sent{p.error ? `: ${p.error}` : ""}{" "}

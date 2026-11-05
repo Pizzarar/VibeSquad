@@ -97,3 +97,17 @@ test("pending is scoped per agent", () => {
   addPending("a2", "y");
   assert.equal(pendingFor(getPending(), "a2").length, 1);
 });
+
+test("agent switch: a stale higher seq is cleared, so the new agent's stream is unverified and refetches", () => {
+  let lastSeq = 100; // agent A
+  assert.equal(syncNeeded(lastSeq, 5), "none"); // the bug: stale baseline suppresses B's refetch
+  lastSeq = null; // reset on agentId change (Timeline.tsx useTimeline effect)
+  assert.equal(syncNeeded(lastSeq, 5), "unverified");
+});
+
+test("pending bubbles never leak to another agent's timeline after a switch", () => {
+  resetPending();
+  addPending("A", "for A");
+  assert.equal(pendingFor(getPending(), "B").length, 0);
+  assert.equal(pendingFor(getPending(), "A").length, 1);
+});
