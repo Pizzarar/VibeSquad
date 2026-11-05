@@ -1,15 +1,38 @@
 import { useEffect, useRef, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
-import { daemonClient, DEMO } from "./paseo";
+import { daemonClient, DEMO, usePaseo } from "./paseo";
+import { workspaceIdForAgent } from "./workspaceLogic";
+import { addCtxSource, ctxGroupsFor, gitMenuItems, isCtxItem, laneMenuItems, useCtxSources, type CtxMenuItem } from "./contextSources";
+import { getTeams, useTeams } from "./teams";
+import { fetchChatContext, fetchGitContext, fetchTerminalContext, listTerminalNames } from "./contextFetch";
 import type { DraftImageView } from "./imageDrafts";
+import { formatSize, MAX_INLINE_BYTES, fenceFile, type useAttachments } from "./attachments";
 import { isImeComposing, shouldComposerSubmit } from "./IdeaInbox";
+import { SecretInputPopover } from "./SecretInputPopover";
+import { composerKeyAction, usePref } from "./prefs";
+import {
+  filterListing,
+  filterMentionEntries,
+  isUrlMention,
+  LIST_TIMEOUT_MS,
+  mentionInsertText,
+  mentionLabel,
+  parentDirOf,
+  urlMentions,
+  resolveMentionEntries,
+  type MentionEntry,
+} from "./projectContext";
 
 // ── Pure helpers (mirrored in test/ade-batch-f.test.mjs) ──────────────────────
 
-export const FALLBACK_COMMANDS = ["/compact", "/clear", "/help", "/model", "/mode", "/rewind"];
+export const FALLBACK_COMMANDS = ["/btw", "/compact", "/clear", "/help", "/model", "/mode", "/rewind"];
 export const DEMO_MENTION_FILES = ["src/App.tsx", "src/Composer.tsx", "package.json", "README.md"];
+const DEMO_ENTRIES: MentionEntry[] = [
+  { path: "src", kind: "directory" },
+  ...DEMO_MENTION_FILES.map((path) => ({ path, kind: "file" as const })),
+];
 export const MAX_FILE_BYTES = 2 * 1024 * 1024;
-export const MAX_INLINE_BYTES = 100 * 1024;
+export { MAX_INLINE_BYTES, fenceFile };
 export const FILE_ACCEPT =
   "image/*,.md,.txt,.log,.json,.ts,.tsx,.js,.mjs,.py,.rs,.css,.html,.yml,.yaml,.toml,.csv";
 
@@ -23,6 +46,21 @@ export function slashToken(text: string, caret: number): { start: number; query:
 export function filterSlash(cmds: string[], query: string): string[] {
   const q = query.toLowerCase();
   return cmds.filter((c) => c.replace(/^\//, "").toLowerCase().startsWith(q)).slice(0, 8);
+}
+
+export type QueuedTurnItem = { id: string; text: string; createdAt: number };
+
+export function shouldQueueOnSend(agentStatus: string | undefined, forceImmediate = false): boolean {
+  return agentStatus === "running" && !forceImmediate;
+}
+
+/** Rewrites a `/btw <msg>` draft into a non-derailing side-note prefix. */
+export function formatBtwPrompt(text: string): string {
+  const m = /^\s*\/btw(?:\s+([\s\S]*))?$/i.exec(text);
+  if (!m) return text;
+  const body = (m[1] ?? "").trim();
+  if (!body) return text;
+  return `[BTW side-note — answer briefly in 1-2 lines or note in SPEC.md without stopping or changing current task]: ${body}`;
 }
 
 /** Mention token: `@partial/path` at start or after whitespace, ending at the caret. */
@@ -43,11 +81,6 @@ export function relativizePath(p: string, cwd: string): string {
   return base && norm.startsWith(base + "/") ? norm.slice(base.length + 1) : norm;
 }
 
-export function filterMentionFiles(files: string[], query: string): string[] {
-  const q = query.toLowerCase();
-  return files.filter((f) => f.toLowerCase().includes(q)).slice(0, 8);
-}
-
 export function isImageFile(f: { type: string }): boolean {
   return f.type.startsWith("image/");
 }
@@ -64,9 +97,16 @@ export function partitionFiles<T extends { type: string; size: number }>(files: 
   return { images, text, tooLarge };
 }
 
-export function fenceFile(name: string, content: string): string {
-  const fence = content.includes("```") ? "~~~~" : "```";
-  return `\n[file: ${name}]\n${fence}\n${content}\n${fence}\n`;
+/** Route dropped/pasted/picked files: images to thumbnails, the rest to chips. Never touches the draft. */
+export function stageFiles(
+  all: File[],
+  imgs: { add: (f: File[]) => void },
+  atts: { add: (f: File[]) => void },
+): string | null {
+  const { images, text, tooLarge } = partitionFiles(all);
+  if (images.length) imgs.add(images);
+  if (text.length) atts.add(text);
+  return tooLarge.length ? `Too large (max 2MB): ${tooLarge.map((f) => f.name).join(", ")}` : null;
 }
 
 /** Step through history. idx -1 = original draft. Returns next idx (clamped). */
@@ -106,6 +146,7 @@ function saveHistory(id: string, h: string[]) {
 }
 
 const commandCache = new Map<string, string[]>();
+const listingCache = new Map<string, Promise<MentionEntry[]>>();
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const dc = daemonClient as any;
 
@@ -119,8 +160,6 @@ const MENU_STYLE: React.CSSProperties = {
   padding: 4,
   fontSize: 13,
 };
-
-type StagedFile = { id: string; name: string; block: string };
 
 type ImgDraft = {
   images: DraftImageView[];
@@ -138,10 +177,14 @@ type ComposerProps = {
   inboxParking: boolean;
   lastSteered: string | null;
   imgs: ImgDraft;
+  atts: ReturnType<typeof useAttachments>;
   onSend: () => void;
   onInterrupt: () => void;
   onParkToInbox: (text: string, fromComposer: boolean) => void;
   onToggleInboxPopover: () => void;
+  queuedItems?: QueuedTurnItem[];
+  onSendQueuedNow?: () => void;
+  onCancelQueued?: (id?: string) => void;
 };
 
 export function Composer({
@@ -153,37 +196,71 @@ export function Composer({
   inboxParking,
   lastSteered,
   imgs,
+  atts,
   onSend,
   onInterrupt,
   onParkToInbox,
   onToggleInboxPopover,
+  queuedItems,
+  onSendQueuedNow,
+  onCancelQueued,
 }: ComposerProps) {
   const [dragOver, setDragOver] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const [caret, setCaret] = useState(0);
   const [cmds, setCmds] = useState<string[]>(FALLBACK_COMMANDS);
-  const [files, setFiles] = useState<string[]>(DEMO ? DEMO_MENTION_FILES : []);
+  const [files, setFiles] = useState<MentionEntry[]>(DEMO ? DEMO_ENTRIES : []);
+  const [listFailed, setListFailed] = useState(false);
   const [sel, setSel] = useState(0);
   const [dismissed, setDismissed] = useState(false);
-  const [staged, setStaged] = useState<StagedFile[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [history, setHistory] = useState<string[]>(() => loadHistory(agent.id));
   const [histIdx, setHistIdx] = useState(-1);
   const origDraft = useRef("");
+  const { agents, workspaces } = usePaseo();
+  useTeams();
+  const ctx = useCtxSources(agent.id);
+  const [terms, setTerms] = useState<Array<{ id: string; name: string }>>([]);
+  const [ctxStatus, setCtxStatus] = useState<{ tone: "busy" | "fail"; text: string } | null>(null);
   const [searching, setSearching] = useState(false);
   const [hq, setHq] = useState("");
+  const [secretOpen, setSecretOpen] = useState(false);
 
   const slash = dismissed ? null : slashToken(draft, caret);
   const mention = dismissed || slash ? null : mentionToken(draft, caret);
   const slashItems = slash ? filterSlash(cmds, slash.query) : [];
-  const mentionItems = mention ? filterMentionFiles(files, mention.query) : [];
+  const urlItem: MentionEntry | null = mention && isUrlMention(mention.query) ? { path: mention.query, kind: "file" } : null;
+  const mentionItems: MentionEntry[] = urlItem ? [urlItem] : mention ? filterMentionEntries(files, mention.query) : [];
+  const urlChips = urlMentions(draft);
+  const ctxGroups = mention && !urlItem ? ctxGroupsFor(mention.query) : [];
+  const myLabels = (agent.labels ?? {}) as Record<string, string>;
+  const lane = myLabels.lane;
+  const mySquad = getTeams().find((t) => t.id === myLabels.team);
+  const laneEntries: MentionEntry[] = mention && !urlItem && mySquad
+    ? laneMenuItems(mySquad.lanes ?? [], mention.query).slice(0, 6).map((l) => ({ path: l.handle.slice(1), kind: "file" as const }))
+    : [];
+  const ctxItems: CtxMenuItem[] = [
+    ...(ctxGroups.includes("git") ? gitMenuItems() : []),
+    ...(ctxGroups.includes("terminal")
+      ? terms.map((t): CtxMenuItem => ({ ctx: true, kind: "terminal", label: `@terminal ${t.name}`, hint: "last 200 lines", arg: t.id }))
+      : []),
+    ...(ctxGroups.includes("chat") && lane
+      ? [...agents.values()]
+          .filter((a) => {
+            const l = (a.labels ?? {}) as Record<string, string>;
+            return a.id !== agent.id && !a.archivedAt && l.lane === lane && l.team === myLabels.team;
+          })
+          .slice(0, 8)
+          .map((a): CtxMenuItem => ({ ctx: true, kind: "chat", label: `@chat ${a.title || a.id.slice(0, 8)}`, hint: "last turns", arg: a.id }))
+      : []),
+  ];
+  const menuItems: Array<MentionEntry | CtxMenuItem> = [...ctxItems, ...laneEntries, ...mentionItems];
   const histItems = searching ? searchHistory(history, hq) : [];
 
   useEffect(() => {
     setHistory(loadHistory(agent.id));
     setHistIdx(-1);
-    setStaged([]);
     let cancelled = false;
     const cached = commandCache.get(agent.id);
     if (cached) {
@@ -191,7 +268,7 @@ export function Composer({
       return;
     }
     setCmds(FALLBACK_COMMANDS);
-    if (DEMO) return;
+    if (DEMO || agent.status === "closed") return;
     (async () => {
       try {
         const res = await dc.listCommands?.(agent.id);
@@ -210,35 +287,78 @@ export function Composer({
     return () => {
       cancelled = true;
     };
-  }, [agent.id]);
+  }, [agent.id, agent.status]);
 
-  const mq = mention?.query;
+  const mq = mention && !isUrlMention(mention.query) ? mention.query : undefined;
   useEffect(() => {
     if (mq === undefined) return;
     if (DEMO) {
-      setFiles(DEMO_MENTION_FILES);
+      setFiles(DEMO_ENTRIES);
       return;
     }
     let cancelled = false;
+    const toEntry = (e: { path?: string; kind?: string } | string): MentionEntry =>
+      typeof e === "string"
+        ? { path: e.replace(/\/+$/, ""), kind: e.endsWith("/") ? "directory" : "file" }
+        : { path: e.path ?? "", kind: e.kind === "directory" ? "directory" : "file" };
+    const cwd = agent.cwd ?? "";
+    // Fuzzy suggestions can take 15s+ on a big repo with a busy daemon, so list the query's parent
+    // folder in parallel (cached per folder) and use it when suggestions miss the deadline.
+    const dir = parentDirOf(mq);
+    const key = `${cwd}\n${dir}`;
+    let listing = listingCache.get(key);
+    if (!listing) {
+      listing = Promise.resolve(dc.listDirectory?.(cwd, dir)).then((r: { entries?: Array<{ path: string; kind: string }> } | undefined) =>
+        (r?.entries ?? []).map(toEntry),
+      );
+      listingCache.set(key, listing);
+      listing.catch(() => listingCache.delete(key));
+      setTimeout(() => listingCache.delete(key), 30_000);
+    }
+    const suggest = (async () => {
+      const res = await dc.getDirectorySuggestions?.({ cwd: agent.cwd, query: mq, includeFiles: true, includeDirectories: true, limit: 8 });
+      let list: MentionEntry[] = (res?.entries ?? []).map(toEntry);
+      if (!list.length) list = ((res?.directories ?? []) as string[]).map((d) => ({ path: d, kind: "directory" as const }));
+      return list.filter((e) => e.path);
+    })();
     (async () => {
-      try {
-        const res = await dc.getDirectorySuggestions?.({ cwd: agent.cwd, query: mq, includeFiles: true, includeDirectories: true, limit: 8 });
-        let paths: string[] = (res?.entries ?? res?.suggestions ?? [])
-          .map((e: { path?: string } | string) => (typeof e === "string" ? e : (e.path ?? "")))
-          .filter(Boolean);
-        if (!paths.length) {
-          const dir = await dc.listDirectory?.(agent.cwd, "");
-          paths = (dir?.entries ?? []).map((e: { path: string }) => e.path);
-        }
-        if (!cancelled) setFiles(paths.map((x) => relativizePath(x, agent.cwd ?? "")));
-      } catch {
-        if (!cancelled) setFiles([]);
-      }
+      // Time-boxed: a slow or hung listing shows "couldn't list" instead of freezing the menu.
+      const r = await resolveMentionEntries(suggest, listing!, LIST_TIMEOUT_MS, () => listingCache.delete(key));
+      if (cancelled) return;
+      const value = r.fromListing ? filterListing(r.value, mq) : r.value;
+      const failed = r.failed;
+      setListFailed(failed);
+      setFiles(value.map((e) => ({ ...e, path: relativizePath(e.path, cwd) })));
     })();
     return () => {
       cancelled = true;
     };
   }, [mq, agent.cwd]);
+
+  const termsWanted = ctxGroups.includes("terminal");
+  const workspaceId = workspaceIdForAgent(agent, workspaces);
+  const agentIdRef = useRef(agent.id);
+  agentIdRef.current = agent.id;
+  // Another agent or workspace: drop the old terminal list and any status line.
+  useEffect(() => {
+    setTerms([]);
+    setCtxStatus(null);
+  }, [agent.id, workspaceId]);
+  useEffect(() => {
+    if (!termsWanted) {
+      // Leaving @terminal clears its "No terminals" / failure line (a busy fetch line belongs to pickCtx).
+      setCtxStatus((s) => (s?.tone === "fail" ? null : s));
+      return;
+    }
+    let cancelled = false;
+    listTerminalNames(agent.cwd ?? "", workspaceId).then(
+      (t) => !cancelled && (setTerms(t), setCtxStatus(t.length ? null : { tone: "fail", text: "No terminals open for this workspace" })),
+      (e) => !cancelled && setCtxStatus({ tone: "fail", text: e instanceof Error ? e.message : String(e) }),
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [termsWanted, agent.id, agent.cwd, workspaceId]);
 
   const insertAt = (start: number, replacement: string) => {
     const r = replaceToken(draft, start, caret, replacement);
@@ -251,37 +371,31 @@ export function Composer({
     });
   };
   const pickSlash = (c: string) => slash && insertAt(slash.start, `${c} `);
-  const pickMention = (f: string) => mention && insertAt(mention.start, `@${f} `);
-
-  const addFiles = async (all: File[]) => {
-    const { images, text, tooLarge } = partitionFiles(all);
-    if (images.length) imgs.add(images);
-    setNotice(tooLarge.length ? `Too large (max 2MB): ${tooLarge.map((f) => f.name).join(", ")}` : null);
-    const next: StagedFile[] = [];
-    for (const f of text) {
-      let block: string;
-      if (f.size <= MAX_INLINE_BYTES) {
-        block = fenceFile(f.name, await f.text());
-      } else {
-        try {
-          const up = await dc.uploadFile?.({ cwd: agent.cwd, name: f.name, file: f });
-          if (!up?.path) throw new Error("no upload");
-          block = `\n[attached file: ${up.path}]\n`;
-        } catch {
-          setNotice(`${f.name} is over 100KB and upload is unavailable`);
-          continue;
-        }
-      }
-      next.push({ id: `${f.name}-${Date.now()}-${next.length}`, name: f.name, block });
-    }
-    if (next.length) {
-      setStaged((p) => [...p, ...next]);
-      setDraft(draft + next.map((n) => n.block).join(""));
+  const pickMention = (e: MentionEntry) => mention && insertAt(mention.start, mentionInsertText(e));
+  const pickCtx = async (it: CtxMenuItem) => {
+    if (!mention) return;
+    insertAt(mention.start, "");
+    const forAgent = agent.id;
+    const live = () => agentIdRef.current === forAgent;
+    setCtxStatus({ tone: "busy", text: `Fetching ${it.label.replace(/^@/, "")}…` });
+    try {
+      const src =
+        it.kind === "terminal"
+          ? await fetchTerminalContext({ id: it.arg!, name: it.label.replace(/^@terminal /, "") })
+          : it.kind === "chat"
+            ? await fetchChatContext(it.arg!, it.label.replace(/^@chat /, ""))
+            : await fetchGitContext(agent.cwd ?? "", it.kind as "git" | "git-base");
+      // A slow fetch that lands after switching agents must not add a pill to the new one.
+      if (!live()) return addCtxSource(forAgent, src);
+      ctx.add(src);
+      setCtxStatus(null);
+    } catch (e) {
+      if (live()) setCtxStatus({ tone: "fail", text: `Couldn't add ${it.label}: ${e instanceof Error ? e.message : String(e)}` });
     }
   };
-  const removeStaged = (f: StagedFile) => {
-    setStaged((p) => p.filter((x) => x.id !== f.id));
-    setDraft(draft.includes(f.block) ? draft.replace(f.block, "") : draft);
+
+  const addFiles = (all: File[]) => {
+    if (all.length) setNotice(stageFiles(all, imgs, atts));
   };
 
   const send = () => {
@@ -291,7 +405,6 @@ export function Composer({
       saveHistory(agent.id, h);
     }
     setHistIdx(-1);
-    setStaged([]);
     onSend();
   };
 
@@ -302,12 +415,13 @@ export function Composer({
       .filter((f): f is File => !!f);
     if (fl.length) {
       e.preventDefault();
-      void addFiles(fl);
+      addFiles(fl);
     }
   };
 
+  const [sendKey] = usePref("chat.sendKey");
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    const menu = slash ? slashItems : mention ? mentionItems : [];
+    const menu: Array<string | MentionEntry | CtxMenuItem> = slash ? slashItems : mention ? menuItems : [];
     if (menu.length && !isImeComposing(e)) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
@@ -317,8 +431,9 @@ export function Composer({
       if (e.key === "Enter" || e.key === "Tab") {
         e.preventDefault();
         const item = menu[Math.min(sel, menu.length - 1)];
-        if (slash) pickSlash(item);
-        else pickMention(item);
+        if (slash) pickSlash(item as string);
+        else if (isCtxItem(item)) void pickCtx(item);
+        else pickMention(item as MentionEntry);
         return;
       }
       if (e.key === "Escape") {
@@ -349,6 +464,15 @@ export function Composer({
       setDraft(n < 0 ? origDraft.current : history[n]);
       return;
     }
+    if (sendKey === "ctrl-enter" && e.key === "Enter" && !isImeComposing(e)) {
+      // Settings › Chat › Send key = Ctrl+Enter: plain Enter is a new line, Ctrl+Shift+Enter interrupts.
+      const action = composerKeyAction(e, sendKey);
+      if (action === "newline") return;
+      e.preventDefault();
+      if (action === "interrupt") onInterrupt();
+      else if (!e.repeat && !busy) send();
+      return;
+    }
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && !isImeComposing(e)) {
       e.preventDefault();
       onInterrupt();
@@ -374,7 +498,7 @@ export function Composer({
       onDrop={(e) => {
         e.preventDefault();
         setDragOver(false);
-        void addFiles(Array.from(e.dataTransfer?.files ?? []));
+        addFiles(Array.from(e.dataTransfer?.files ?? []));
       }}
     >
       {imgs.images.length > 0 && (
@@ -394,6 +518,35 @@ export function Composer({
           ))}
         </div>
       )}
+      {queuedItems && queuedItems.length > 0 && (
+        <div className="chip composer-queued-banner" data-testid="composer-queued-banner">
+          <span className="composer-queued-text">
+            Queued ({queuedItems.length}): {queuedItems[0].text.slice(0, 80)}{queuedItems[0].text.length > 80 ? "…" : ""}
+          </span>
+          {onSendQueuedNow && (
+            <button
+              type="button"
+              className="btn small ok composer-send-now-btn"
+              data-testid="composer-send-now-btn"
+              title="Steer the active turn with this message right now instead of waiting for the turn to finish"
+              onClick={onSendQueuedNow}
+            >
+              Send this now
+            </button>
+          )}
+          {onCancelQueued && (
+            <button
+              type="button"
+              className="btn ghost small composer-queued-cancel-btn"
+              data-testid="composer-queued-cancel-btn"
+              title="Remove queued message and restore to draft"
+              onClick={() => onCancelQueued(queuedItems[0].id)}
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      )}
       {lastSteered && (
         <div className="chip steered-chip" data-testid="steered-chip">
           steered
@@ -404,12 +557,12 @@ export function Composer({
           {notice}
         </div>
       )}
-      {staged.length > 0 && (
+      {atts.items.length > 0 && (
         <div className="composer-files">
-          {staged.map((f) => (
-            <span key={f.id} className="chip" data-testid="composer-file-chip" title={f.name}>
-              📄 {f.name}{" "}
-              <button className="thumb-x" aria-label={`Remove ${f.name}`} onClick={() => removeStaged(f)}>
+          {atts.items.map((f) => (
+            <span key={f.id} className="chip file-chip" data-testid="composer-file-chip" title={f.name}>
+              📄 <span className="file-chip-name">{f.name}</span> <span className="file-chip-size">{formatSize(f.size)}</span>{" "}
+              <button className="thumb-x" aria-label={`Remove ${f.name}`} onClick={() => atts.remove(f.id)}>
                 ✕
               </button>
             </span>
@@ -436,24 +589,72 @@ export function Composer({
           ))}
         </div>
       )}
-      {mentionItems.length > 0 && (
+      {urlChips.length > 0 && (
+        <div className="composer-files">
+          {urlChips.map((u) => (
+            <span key={u} className="chip file-chip link-chip" data-testid="composer-url-chip" title="Sent as-is; VibeSquad doesn't fetch it">
+              🔗 <span className="file-chip-name">{u}</span>
+            </span>
+          ))}
+        </div>
+      )}
+      {ctx.items.length > 0 && (
+        <div className="composer-files">
+          {ctx.items.map((c) => (
+            <span key={c.id} className="chip file-chip link-chip" data-testid="composer-ctx-chip" title={`${c.label}, ${c.text.length} characters, appended on send`}>
+              {c.kind === "terminal" ? "⌨" : c.kind === "chat" ? "💬" : "±"} <span className="file-chip-name">{c.label}</span>{" "}
+              <button className="thumb-x" aria-label={`Remove ${c.label}`} onClick={() => ctx.remove(c.id)}>
+                ✕
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      {ctxStatus && (
+        <div className={`chip ${ctxStatus.tone === "fail" ? "warn" : ""}`} data-testid="composer-ctx-status">
+          {ctxStatus.text}
+        </div>
+      )}
+      {mention && !mentionItems.length && !ctxItems.length && listFailed && (
+        <div className="composer-menu muted small" style={MENU_STYLE} data-testid="composer-mention-failed">
+          Couldn't list files here. Type the path and it is sent as written.
+        </div>
+      )}
+      {menuItems.length > 0 && (
         <div className="composer-menu" style={MENU_STYLE} data-testid="composer-mention-menu" role="listbox">
-          {mentionItems.map((f, i) => (
+          {menuItems.map((f, i) =>
+            isCtxItem(f) ? (
+              <div
+                key={`ctx:${f.kind}:${f.arg ?? f.label}`}
+                role="option"
+                aria-selected={i === sel}
+                className={`composer-menu-item ${i === sel ? "active" : ""}`}
+                style={i === sel ? { background: "rgba(127,127,127,.25)", cursor: "pointer" } : { cursor: "pointer" }}
+                data-testid="composer-ctx-item"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  void pickCtx(f);
+                }}
+              >
+                {f.label} <span className="muted small">{f.hint}</span>
+              </div>
+            ) : (
             <div
-              key={f}
+              key={`${f.kind}:${f.path}`}
               role="option"
               aria-selected={i === sel}
               className={`composer-menu-item ${i === sel ? "active" : ""}`}
               style={i === sel ? { background: "rgba(127,127,127,.25)", cursor: "pointer" } : { cursor: "pointer" }}
-              data-testid="composer-mention-item"
+              data-testid={f.kind === "directory" ? "composer-mention-folder" : "composer-mention-item"}
               onMouseDown={(e) => {
                 e.preventDefault();
                 pickMention(f);
               }}
             >
-              @{f}
+              {f === urlItem ? `🔗 ${f.path}` : mentionLabel(f)}
             </div>
-          ))}
+            ),
+          )}
         </div>
       )}
       {searching && (
@@ -492,11 +693,29 @@ export function Composer({
           ))}
         </div>
       )}
+      {secretOpen && (
+        <SecretInputPopover
+          onClose={() => {
+            setSecretOpen(false);
+            taRef.current?.focus();
+          }}
+          onInsert={(token) => {
+            const next = draft && !/\s$/.test(draft) ? `${draft} ${token}` : `${draft}${token}`;
+            setDraft(next);
+            setCaret(next.length);
+            setSecretOpen(false);
+            requestAnimationFrame(() => {
+              taRef.current?.focus();
+              taRef.current?.setSelectionRange(next.length, next.length);
+            });
+          }}
+        />
+      )}
       <div className="composer-row">
         <textarea
           ref={taRef}
           value={draft}
-          placeholder={`Message ${agent.title ?? "agent"}… (Enter to send, Ctrl+Enter to interrupt)`}
+          placeholder={`Message ${agent.title ?? "agent"}… (${sendKey === "ctrl-enter" ? "Ctrl+Enter to send, Ctrl+Shift+Enter to interrupt" : "Enter to send, Ctrl+Enter to interrupt"})`}
           onChange={(e) => {
             setDismissed(false);
             setSel(0);
@@ -515,7 +734,7 @@ export function Composer({
           multiple
           hidden
           onChange={(e) => {
-            void addFiles(Array.from(e.target.files ?? []));
+            addFiles(Array.from(e.target.files ?? []));
             e.target.value = "";
           }}
         />
@@ -525,6 +744,16 @@ export function Composer({
           onClick={() => fileInput.current?.click()}
         >
           📎
+        </button>
+        <button
+          type="button"
+          className="btn ghost composer-secret-btn"
+          title="Insert sealed secret (written to 0600 temp file, never shown in chat)"
+          aria-label="Secure Input"
+          data-testid="composer-secret-btn"
+          onClick={() => setSecretOpen((v) => !v)}
+        >
+          🔒
         </button>
         {isBs && (
           <button
@@ -537,14 +766,14 @@ export function Composer({
             📥 Park in Inbox
           </button>
         )}
-        <button className="btn" disabled={busy || (!draft.trim() && !imgs.images.length)} onClick={send}>
-          Send
+        <button className="btn" disabled={busy || (!draft.trim() && !imgs.images.length && !atts.items.length && !ctx.items.length)} onClick={send} title={agent.status === "running" ? "Queue for after current turn (or click Send this now to steer)" : undefined}>
+          {agent.status === "running" ? "Queue" : "Send"}
         </button>
         {agent.status === "running" && (
           <button
             className="btn warn composer-interrupt-btn"
-            disabled={busy || (!draft.trim() && !imgs.images.length)}
-            title="Interrupt current turn and send (Ctrl+Enter)"
+            disabled={busy || (!draft.trim() && !imgs.images.length && !atts.items.length && !ctx.items.length)}
+            title={`Interrupt current turn and send (${sendKey === "ctrl-enter" ? "Ctrl+Shift+Enter" : "Ctrl+Enter"})`}
             data-testid="composer-interrupt-btn"
             onClick={onInterrupt}
           >

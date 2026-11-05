@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from "react";
-import { popClosed, pushClosed } from "./sessionLifecycle";
+import { popClosed, pushClosed } from "./sessionLifecycle.ts";
+import { pruneView } from "./quickwins.ts";
+import { getRestoreLastView } from "./prefs.ts";
 
 // Open agent tabs, the optional 2-pane split and focus mode, outside React state. Rows, cards and
 // tabs subscribe to the one slice they draw (`useAgentPane(id)`), so opening or switching a tab
@@ -42,6 +44,7 @@ let recent: string[] = [];
 function load(): PanesState {
   let saved: Partial<PanesState> = {};
   try {
+    if (!getRestoreLastView()) throw new Error("app.restoreLastView is off");
     saved = JSON.parse(localStorage.getItem(PANES_KEY) ?? "{}") ?? {};
   } catch {
     /* corrupt or unavailable: start empty */
@@ -57,14 +60,14 @@ function load(): PanesState {
     rightActiveId: pick(rightTabs, saved.rightActiveId),
     split: !!saved.split && rightTabs.length > 0,
     activePane: saved.activePane === "right" ? "right" : "left",
-    focus: localStorage.getItem(FOCUS_KEY) === "1",
+    focus: typeof localStorage !== "undefined" && localStorage.getItem(FOCUS_KEY) === "1",
     sheet: false,
     mounted: [],
     closedTabs: [],
   };
   if (!s.split) s = { ...s, leftTabs: [...leftTabs, ...rightTabs], rightTabs: [], rightActiveId: null, activePane: "left" };
   // Old deep links (?agent=) open as a tab.
-  const linked = new URLSearchParams(location.search).get("agent");
+  const linked = typeof location !== "undefined" ? new URLSearchParams(location.search).get("agent") : null;
   if (linked) s = place(s, linked, s.activePane, false);
   return settle(s, [s.leftActiveId, s.rightActiveId]);
 }
@@ -144,6 +147,14 @@ function commit(next: PanesState, touched: (string | null)[] = []) {
   }
   if (prev.focus !== next.focus) localStorage.setItem(FOCUS_KEY, next.focus ? "1" : "0");
   listeners.forEach((l) => l());
+}
+
+/** After a restore, drop tabs whose agent is gone or archived so no pane sits on a ghost. */
+export function pruneRestoredTabs(live: (id: string) => boolean) {
+  const { leftTabs, rightTabs, leftActiveId, rightActiveId, split, activePane } = state;
+  const p = pruneView({ leftTabs, rightTabs, leftActiveId, rightActiveId, split, activePane }, live);
+  if (sameIds(p.leftTabs, leftTabs) && sameIds(p.rightTabs, rightTabs)) return;
+  commit({ ...state, ...p }, [p.leftActiveId, p.rightActiveId]);
 }
 
 export const subscribePanes = (l: () => void) => {
@@ -283,6 +294,11 @@ export const usePanes = () => useSyncExternalStore(subscribePanes, getPanes);
 
 /** Which pane holds this agent's tab. Re-renders a row only when its own answer flips. */
 export const useAgentPane = (id: string): Pane | null => useSyncExternalStore(subscribePanes, () => paneIn(state, id));
+
+/** Which visible pane currently has this agent as its active tab. Background tabs in leftTabs/rightTabs return null. */
+export const shownPaneIn = (s: PanesState, id: string): Pane | null =>
+  !id ? null : s.leftActiveId === id ? "left" : s.split && s.rightActiveId === id ? "right" : null;
+export const useShownPane = (id: string): Pane | null => useSyncExternalStore(subscribePanes, () => shownPaneIn(state, id));
 
 /** On screen right now (the active tab of a visible pane). */
 export const isShown = (s: PanesState, id: string) => s.leftActiveId === id || (s.split && s.rightActiveId === id);

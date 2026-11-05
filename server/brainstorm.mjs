@@ -3,14 +3,18 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import os from "node:os";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
-import { effectiveAgentRole, findLaneInRegistry, isRetiredAgent, resolveWorktreeRootPath, topicOf } from "./identity.mjs";
+import { effectiveAgentRole, findLaneInRegistry, formatDisplayTitle, isHubLane, isRetiredAgent, laneCodeFor, resolveWorktreeRootPath, topicOf } from "./identity.mjs";
 import { findProfileOrFallback, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
+import { readRawPaseoConfig } from "./paseo-control.mjs";
 import { briefRootFor, laneWorkingDir } from "./brief-path.mjs";
+import { defangPromptFences } from "./write-guards.mjs";
+import { detachLiveChildrenViaClient, listDaemonAgents } from "./detach-children.mjs";
 import { BRIEF_HISTORY_KEEP, BRIEF_SHRINK_FROM, BRIEF_SHRINK_TO, backupBrief, writeBriefFile } from "./brief-write.mjs";
 import { liveInFlightBlock } from "./in-flight.mjs";
 import { refreshWhosHere } from "./whos-here.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
+import { readDaemonPassword, readPaseoLocalCredential } from "./daemon-password.mjs";
 
 // import.meta.dirname is undefined when bundled into the Paseo plugin; fall back like plugin/index.server.ts.
 const REPO_ROOT = resolve(process.env.VIBESQUAD_ROOT || (typeof import.meta.dirname === "string" ? join(import.meta.dirname, "..") : join(homedir(), "projects", "VibeSquad")));
@@ -28,13 +32,9 @@ export function readPaseoConfig(_rootDir = REPO_ROOT) {
   const home = process.env.PASEO_HOME || join(homedir(), ".paseo");
   let listen = "127.0.0.1:6767";
   let serverId = "";
-  const cfg = readJsonFileWithBom(join(home, "config.json"), {
-    label: "~/.paseo/config.json",
-    fallback: null,
-    recordWarning: true,
-  });
-  if (cfg.ok && cfg.data) {
-    listen = cfg.data.daemon?.listen ?? listen;
+  const { config } = readRawPaseoConfig({ paseoHome: home });
+  if (config) {
+    listen = config.daemon?.listen ?? listen;
   }
   try {
     serverId = readFileSync(join(home, "server-id"), "utf8").trim();
@@ -42,15 +42,35 @@ export function readPaseoConfig(_rootDir = REPO_ROOT) {
   return { listen: process.env.PASEO_DAEMON ?? listen, serverId, home };
 }
 
+/**
+ * Archive a retired Buddy without taking its lead and workers along (Paseo cascades archives to
+ * children, docs/PLAN_BUGS_BATCH1.md block 0). Live children are detached first; if any detach fails,
+ * the Buddy stays retired but unarchived rather than risk the cascade.
+ */
+export async function archiveBuddyKeepingChildren(client, agentId) {
+  if (typeof client?.archiveAgent !== "function") return { archived: false, detached: [], failed: [] };
+  const { detached, failed } = await detachLiveChildrenViaClient(client, agentId);
+  if (detached.length) console.log(`[vibesquad] detached ${detached.length} child(ren) of ${agentId} before archive: ${detached.join(", ")}`);
+  if (failed.length) {
+    console.warn(`[vibesquad] kept ${agentId} unarchived: could not detach ${failed.map((f) => f.id).join(", ")}`);
+    return { archived: false, detached, failed };
+  }
+  await client.archiveAgent(agentId).catch(() => {});
+  return { archived: true, detached, failed };
+}
+
 export function createDaemonClient(rootDir = REPO_ROOT) {
   const { listen } = readPaseoConfig(rootDir);
   const wsUrl = listen.startsWith("ws://") || listen.startsWith("wss://") ? `${listen.replace(/\/$/, "")}/ws` : `ws://${listen}/ws`;
+  const password = readDaemonPassword();
   return new DaemonClient({
     url: wsUrl,
     clientId: `vibesquad-bf-${Date.now().toString(36)}`,
     clientType: "cli",
     appVersion: "0.0.1",
     connectTimeoutMs: 5000,
+    ...(password ? { password } : {}),
+    localCredential: () => readPaseoLocalCredential() || null,
     reconnect: { enabled: false },
   });
 }
@@ -65,6 +85,19 @@ function loadTeamsConfig(rootDir = REPO_ROOT) {
   return res.data ?? { teams: [] };
 }
 
+/** Lane-code Buddy title: `<Code> Buddy[ · topic]` (docs/NAMING.md). */
+export function buddyTitle(laneId, laneName, topic, rootDir = REPO_ROOT) {
+  const teams = loadTeamsConfig(rootDir).teams;
+  const list = Array.isArray(teams) ? teams : [];
+  const code = laneCodeFor(laneId, list);
+  const found = findLaneInRegistry(laneId, list);
+  const needle = String(laneId ?? "").toLowerCase();
+  const isHub = found
+    ? isHubLane(found.team, found.lane)
+    : list.some((t) => String(t.id).toLowerCase() === needle && isHubLane(t, { id: t.id }));
+  return formatDisplayTitle({ role: "brainstorm", laneId, laneName, code, topic, hub: isHub });
+}
+
 function laneDisplayName(laneId, rootDir = REPO_ROOT) {
   const cfg = loadTeamsConfig(rootDir);
   const needle = String(laneId ?? "").toLowerCase();
@@ -73,6 +106,11 @@ function laneDisplayName(laneId, rootDir = REPO_ROOT) {
       if (String(l.id).toLowerCase() === needle || (l.aliases ?? []).some((a) => String(a).toLowerCase() === needle)) {
         return { teamId: t.id, laneId: l.id, laneName: l.name || l.id };
       }
+    }
+  }
+  for (const t of cfg.teams ?? []) {
+    if (String(t.id).toLowerCase() === needle && isHubLane(t, { id: t.id })) {
+      return { teamId: t.id, laneId: t.id, laneName: "RiffBot" };
     }
   }
   return { teamId: "", laneId: safeSegment(laneId), laneName: String(laneId || "vibesquad").replace(/-/g, " ") };
@@ -173,28 +211,67 @@ export function appendVsLogEntry({ teamId, laneId, agent = "you", type = "metric
   return { entry, path: laneLogPath, teamLogPath };
 }
 
-export function buildBrainstormInitialPrompt({ laneId, laneUpper, summaryContent, latestPlan, pendingPrompt, inFlight }) {
+/** Boot-prompt line for a successor Buddy in a Vibe mode Squad: the old Buddy's check-in heartbeat does not follow it. */
+export const VIBE_HEARTBEAT_LINE =
+  "- Vibe mode is ON: your predecessor's check-in heartbeat targets the old Buddy. Recreate it for yourself (`create_heartbeat`, same prompt, your agent id as target), then delete the old one.";
+
+/** Boot-prompt rules for the Squad's hub Buddy (RiffBot). Appended only for the hub lane; a Team Buddy's prompt is unchanged. */
+export const HUB_BOOT_RULES = [
+  `- You are this Squad's hub (RiffBot). Keep \`## Teams\` (one line per Team: state + current block) and \`## Unsplit threads\` in the brief; add them if missing. Boot from them and the live Teams below.`,
+  `- First message: the Squad status in <=6 lines, plus the top split you'd propose now (a \`vs:spin-off\` block, still confirmed by the user).`,
+  `- Never mark the hub done; never spawn a Lead. Team Buddies design; you sort and split.`,
+];
+
+const TEAM_STATES = new Set(["pinned", "done"]);
+
+const sameLane = (a, laneId) => String(a?.labels?.lane || a?.labels?.lead || "").trim().toLowerCase() === String(laneId).toLowerCase();
+
+/**
+ * Live Teams block for a hub boot prompt: one line per non-hub, non-removed lane with its state and its
+ * live lead's `job`. `agents` null means the daemon list could not be read. Pure.
+ */
+export function hubTeamsBlock({ team, agents }) {
+  const out = ["Teams in this Squad (live, generated at boot):"];
+  const lanes = (team?.lanes ?? []).filter((l) => l.id !== "_other" && !isHubLane(team, l) && (l.state ?? "pinned") !== "removed");
+  if (!lanes.length) out.push("- (no Teams besides the hub yet)");
+  const live = agents == null ? null : agents.map((a) => a?.agent ?? a).filter((a) => a && !a.archivedAt && !a.internal && a.status !== "closed" && !isRetiredAgent(a));
+  for (const l of lanes) {
+    const state = TEAM_STATES.has(l.state) ? l.state : "pinned";
+    const lead = live?.find((a) => sameLane(a, l.id) && effectiveAgentRole(a) === "lead");
+    const job = String(lead?.labels?.job ?? "").trim();
+    const who = live == null ? "lead unknown" : lead ? `lead working${job ? `: ${job}` : ""}` : "no lead running";
+    out.push(`- ${l.name || l.id} (\`${l.id}\`) · ${state} · ${who}`);
+  }
+  return out.join("\n");
+}
+
+export function buildBrainstormInitialPrompt({ laneId, laneUpper, buddyName, summaryContent, latestPlan, pendingPrompt, inFlight, vibeMode = false, hubTeams = "", autoRetire = false }) {
   const tail =
     pendingPrompt && String(pendingPrompt).trim()
-      ? `Pending message from the user to answer now:\n${String(pendingPrompt).trim()}`
-      : `Summary loaded from docs/brainstorm/${laneId}.md. Work the top Open item now: reply with your take or the next question on it, in a few short sentences. Ask the user only if you are blocked. Do not just confirm you are ready.`;
+      ? `Pending message from the user to answer now:\n${defangPromptFences(String(pendingPrompt).trim())}`
+      : autoRetire
+        ? `Summary loaded from docs/brainstorm/${laneId}.md. Keep this first turn small: read the brief above, then wait for the user.`
+        : `Summary loaded from docs/brainstorm/${laneId}.md. Work the top Open item now: reply with your take or the next question on it, in a few short sentences. Ask the user only if you are blocked. Do not just confirm you are ready.`;
 
   return [
-    `You are BRAINSTORM · ${laneUpper} (fresh start for lane \`${laneId}\`). Read the brief below before anything else.`,
+    `You are ${buddyName || `BRAINSTORM · ${laneUpper}`} (fresh start for lane \`${laneId}\`). Read the brief below before anything else.`,
     "",
     "Rules (BF-P1):",
     `- Update \`docs/brainstorm/${laneId}.md\` after every decision as a short diff (< ~5k tokens; sections: Who's here / Done when / Decided / Open / In flight). Keep \`## Done when\`. Never edit \`## Who's here\`; VibeSquad writes it. The brief is the handoff; do not write dated docs/BRAINSTORM_HANDOFF_*.md files.`,
-    `- Never complete the team yourself. When the lead reported PASS on the last plan block and nothing is Open, post "<Team> looks done. ✓ Mark complete · Not yet" with the line \`vs:looks-done\` in a code fence.`,
+    ...(hubTeams ? [] : [`- Never complete the team yourself. When the lead reported PASS on the last plan block and nothing is Open, post "<Team> looks done. ✓ Mark complete · Not yet" with the line \`vs:looks-done\` in a code fence.`]),
     `- To find your current lead for handoff: run \`vs who lead\`.`,
     `- Before handing off a plan that adds a command, rule or feature, check for an existing primitive (\`paseo --help\`, Paseo MCP tool list, \`vs --help\`, skills). Name what you checked in the plan's Decided section.`,
     `- At >=80k context tokens, update the brief now. At the hard limit VibeSquad retires you; the next click on the pin starts a fresh Brainstorm from the brief.`,
+    ...(vibeMode ? [VIBE_HEARTBEAT_LINE] : []),
+    ...(hubTeams ? HUB_BOOT_RULES : []),
     `- Latest plan file: \`${latestPlan}\``,
     "",
     `--- BEGIN docs/brainstorm/${laneId}.md ---`,
-    summaryContent.trim(),
+    defangPromptFences(summaryContent.trim()),
     `--- END docs/brainstorm/${laneId}.md ---`,
     "",
     ...(inFlight ? [inFlight, ""] : []),
+    ...(hubTeams ? [hubTeams, ""] : []),
     tail,
   ].join("\n");
 }
@@ -253,17 +330,60 @@ export function findExistingLaneBrainstorm(agents, laneId, topic = "") {
     .map((item) => item?.agent ?? item)
     .filter(Boolean)
     .filter((a) => {
-      if (isRetiredAgent(a)) return false;
+      // Closed is not retired: every agent is `closed` after a daemon restart, and a closed Buddy is
+      // reopened from its session, never replaced (docs/PLAN_BUGS_BATCH1.md block 0c). Archived or a
+      // retired role (former-brainstorm) still never counts.
+      if (a.archivedAt || isRetiredAgent({ labels: a.labels ?? {} })) return false;
       // A restarted Buddy keeps role=brainstorm on the daemon until its backgrounded retire lands.
       if (restartedAgents.has(a.id)) return false;
-      if (effectiveAgentRole(a) !== "brainstorm") return false;
+      if (effectiveAgentRole({ ...a, status: undefined }) !== "brainstorm") return false;
       const labels = a.labels ?? {};
       const aLane = String(labels.lane || labels.lead || "").trim().toLowerCase();
       if (aLane !== wantLane) return false;
       return parseBrainstormTopic(a) === wantTopic;
     });
-  matches.sort((a, b) => String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")));
+  // A running/idle Buddy beats a closed one; then newest first.
+  const closed = (a) => (a.status === "closed" ? 1 : 0);
+  matches.sort((a, b) => closed(a) - closed(b) || String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")));
   return matches[0] ?? null;
+}
+
+const retiredTitleOf = (title) => {
+  const t = String(title || "").trim() || "Buddy";
+  return t.toLowerCase().startsWith("(old)") ? t : `(old) ${t}`;
+};
+
+/**
+ * Backstop for one main Buddy per (team, lane, topic) (docs/PLAN_BUGS_BATCH2.md block 0): after a real
+ * spawn of `newId`, retire every other unarchived role=brainstorm in the lane, live or closed. Closed
+ * ones matter most: the plugin's agent.created retire skips them, so a closed old Buddy kept
+ * role=brainstorm and came back when messaged. Retire = cancel (if live), "(old)" title,
+ * former-brainstorm + vs.restarted-into, then archive with its children detached. Never throws.
+ */
+export async function retireOtherLaneBuddies(client, { newId, teamId, laneId, topic = "", exceptIds = [] }) {
+  const retired = [];
+  if (!client || !newId || !laneId) return retired;
+  const agents = await listDaemonAgents(client);
+  const wantLane = String(laneId).toLowerCase();
+  const wantTeam = String(teamId || "").toLowerCase();
+  const wantTopic = String(topic || "").trim().toLowerCase();
+  const skip = new Set([newId, ...exceptIds]);
+  for (const a of agents) {
+    if (!a?.id || skip.has(a.id) || a.archivedAt || restartedAgents.has(a.id)) continue;
+    const labels = a.labels ?? {};
+    if (effectiveAgentRole({ labels }) !== "brainstorm") continue;
+    if (String(labels.lane || labels.lead || "").trim().toLowerCase() !== wantLane) continue;
+    if (wantTeam && labels.team && String(labels.team).toLowerCase() !== wantTeam) continue;
+    if (parseBrainstormTopic(a) !== wantTopic) continue;
+    restartedAgents.set(a.id, { newAgentId: newId, ts: Date.now(), tokens: 0 });
+    if (a.status !== "closed") await client.cancelAgent?.(a.id)?.catch?.(() => {});
+    const retiredLabels = { ...labels, role: "former-brainstorm", "vs.restarted-into": newId };
+    await client.updateAgent?.(a.id, { name: retiredTitleOf(a.title), labels: retiredLabels })?.catch?.(() => {});
+    await archiveBuddyKeepingChildren(client, a.id);
+    console.log(`[vibesquad] retired duplicate Buddy ${a.id} in ${teamId}/${laneId} (into ${newId})`);
+    retired.push(a.id);
+  }
+  return retired;
 }
 
 // Pinned-team quick start (docs/PLAN_PINNED_FEATURES.md §3): concurrent "start-brainstorm" calls for the
@@ -272,7 +392,19 @@ const startInFlight = new Map();
 
 export function performBrainstormRestart(body, rootDir = REPO_ROOT) {
   const isStart = String(body?.reason || "").trim() === "start-brainstorm" || String(body?.agentId || "") === "start-brainstorm";
-  if (!isStart || body.forceNew) return performBrainstormRestartOnce(body, rootDir);
+  if (body?.forceNew) return performBrainstormRestartOnce(body, rootDir);
+  if (!isStart) {
+    // A restart click while the first one is still spawning (createAgent took ~110 s at 04:24Z) shares that
+    // spawn: two clicks made two Buddies, the second retired the first (docs/PLAN_BUGS_BATCH1.md block 0c).
+    const oldId = String(body?.agentId || "").trim();
+    if (!oldId) return performBrainstormRestartOnce(body, rootDir);
+    const rkey = `restart:${oldId}`;
+    const busy = startInFlight.get(rkey);
+    if (busy) return busy.then((r) => (r?.ok ? { ...r, reused: true, reason: "already-restarting" } : r));
+    const once = performBrainstormRestartOnce(body, rootDir).finally(() => startInFlight.delete(rkey));
+    startInFlight.set(rkey, once);
+    return once;
+  }
   const key = [body.teamId || body.team || "", body.laneId || body.lane || "", body.topic || ""].map((s) => String(s).trim().toLowerCase()).join(":");
   const pending = startInFlight.get(key);
   if (pending) return pending.then((r) => (r?.ok && r.newAgentId ? { ...r, reused: true, existingAgentId: r.newAgentId } : r));
@@ -318,6 +450,11 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
     }
 
     const oldLabels = { ...(oldAgent?.labels ?? {}) };
+    // Only known Buddies restart: a lead, worker, unlabelled or unknown id would be retired and archived
+    // (S4 mass-archive guard), so anything else fails closed.
+    if (agentId !== "start-brainstorm" && !(oldAgent && ["brainstorm", "former-brainstorm"].includes(oldLabels.role))) {
+      throw new Error(`not a brainstorm agent: ${agentId}`);
+    }
     const laneHint = body.laneId || body.lane || oldLabels.lane || oldLabels.lead || "vibesquad";
     const resolved = laneDisplayName(laneHint, rootDir);
     const laneId = safeSegment(body.laneId || body.lane || resolved.laneId || "vibesquad");
@@ -390,12 +527,16 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
           existing.labels = { ...existing.labels, team: teamId };
           await client?.updateAgent?.(existing.id, { labels: existing.labels })?.catch?.(() => {});
         }
+        // Reopen a closed Buddy (daemon restart unloads every session) from its saved session.
+        const reopened = existing.status === "closed" && connected && typeof client?.refreshAgent === "function";
+        if (reopened) await client.refreshAgent(existing.id).catch((e) => console.warn(`[vibesquad] reopen ${existing.id} failed: ${e?.message ?? e}`));
         return {
           ok: true,
           reused: true,
+          ...(reopened ? { reopened: true } : {}),
           existingAgentId: existing.id,
           newAgentId: existing.id,
-          title: existing.title,
+          title: existing.title || buddyTitle(laneId, resolved.laneName, topic, rootDir),
           laneId,
           teamId,
           message: `Open existing brainstorm (${existing.title || existing.id})`,
@@ -411,50 +552,6 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       Number(oldAgent?.lastUsage?.contextWindowUsedTokens) ||
       Number(oldAgent?.lastUsage?.inputTokens) ||
       0;
-
-    if (reason.startsWith("auto")) {
-      // Hard limit: retire, never spawn a successor. The next click on the pin quick-starts one from the brief.
-      const retiredLabels = { ...oldLabels, role: "former-brainstorm" };
-      delete retiredLabels["vs.mock-tokens"];
-      restartedAgents.set(agentId, { newAgentId: null, ts: Date.now(), tokens });
-      if (oldAgent && typeof oldAgent === "object") {
-        oldAgent.labels = retiredLabels;
-        oldAgent.archivedAt = oldAgent.archivedAt || new Date().toISOString();
-      }
-      if (connected && client) {
-        const rawOldTitle = String(oldAgent?.title || `BRAINSTORM · ${laneUpper}`).trim();
-        const retiredTitle = rawOldTitle.toLowerCase().startsWith("(old)") ? rawOldTitle : `(old) ${rawOldTitle}`;
-        await client.cancelAgent?.(agentId)?.catch?.(() => {});
-        await client.updateAgent?.(agentId, { name: retiredTitle, labels: retiredLabels })?.catch?.(() => {});
-        await client.archiveAgent?.(agentId)?.catch?.(() => {});
-      }
-      const retiredSummary = readBrainstormSummary(laneId, rootDir);
-      appendVsLogEntry({
-        teamId,
-        laneId,
-        agent: agentId,
-        type: "metric",
-        text: `brainstorm-retired (${reason}): ${tokens} tok, no successor`,
-        refs: [retiredSummary.path],
-      });
-      try {
-        const live = body.agents
-          ? body.agents instanceof Map ? [...body.agents.values()] : body.agents
-          : [];
-        refreshWhosHere({ laneId, agents: live.filter((a) => (a?.agent ?? a)?.id !== agentId), rootDir });
-      } catch {}
-      return {
-        ok: true,
-        retired: true,
-        oldAgentId: agentId,
-        newAgentId: null,
-        laneId,
-        teamId,
-        usedTokens: tokens,
-        summaryPath: retiredSummary.path,
-        pendingPrompt: pendingPrompt || undefined,
-      };
-    }
 
     if (typeof body.summaryUpdate === "string" && body.summaryUpdate.trim()) {
       writeBrainstormSummary(laneId, body.summaryUpdate, rootDir);
@@ -480,16 +577,35 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       laneId,
       agent: agentId,
       type: "metric",
-      text: `brainstorm-restart (${reason}): ${tokens} tok -> spawning fresh BRAINSTORM · ${laneUpper}`,
+      text: `brainstorm-restart (${reason}): ${tokens} tok -> spawning fresh ${buddyTitle(laneId, resolved.laneName, "", rootDir)}`,
       refs: [summary.path, latestPlan],
     });
 
-    const newTitle = topic ? `BRAINSTORM · ${laneUpper} · ${topic}` : `BRAINSTORM · ${laneUpper}`;
+    const newTitle = buddyTitle(laneId, resolved.laneName, topic, rootDir);
 
     const rawOldProvider = String(body.provider || oldAgent?.provider || "claude");
     const fallbackProfileName = rawOldProvider.startsWith("antigravity") ? "Brainstorm - Gemini" : "Brainstorm - Claude";
-    const desiredProfileKey = String(body.profile || oldLabels.profile || fallbackProfileName).trim();
+    // Remote callers can't send `profile` (REMOTE_FORBIDDEN_BODY_KEYS): the lane's lastProfile in teams.json decides.
+    const bootTeams = loadTeamsConfig(rootDir).teams ?? [];
+    const sameId = (x, y) => String(x ?? "").toLowerCase() === String(y ?? "").toLowerCase();
+    const bootTeam = bootTeams.find((t) => sameId(t.id, teamId));
+    const bootLane = bootTeam?.lanes?.find((l) => sameId(l.id, laneId));
+    const laneLastProfile = typeof bootLane?.lastProfile === "string" ? bootLane.lastProfile.trim() : "";
     const { profiles } = loadProfiles(body.profilesPath, { autoSeed: false });
+    const rawProfileName = typeof body.profileName === "string" ? body.profileName.trim() : "";
+    const validProfileName = rawProfileName
+      ? profiles.find((p) => p?.role === "brainstorm" && String(p.name).toLowerCase() === rawProfileName.toLowerCase())?.name ||
+        (rawProfileName.toLowerCase() === "brainstorm - claude"
+          ? "Brainstorm - Claude"
+          : rawProfileName.toLowerCase() === "brainstorm - gemini"
+            ? "Brainstorm - Gemini"
+            : undefined)
+      : undefined;
+    const requestedProfile =
+      typeof body.profile === "string" && body.profile.trim()
+        ? body.profile.trim()
+        : validProfileName;
+    const desiredProfileKey = String(requestedProfile || oldLabels.profile || laneLastProfile || fallbackProfileName).trim();
     const profile = findProfileOrFallback(desiredProfileKey, fallbackProfileName, profiles);
 
     const spawnCfg = profile
@@ -543,13 +659,19 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       liveForBoot = Array.isArray(src) ? src : null;
     }
     timer.mark("inFlight");
+    const isBootHub = Boolean(bootTeam && !topic && (bootLane ? isHubLane(bootTeam, bootLane) : isHubLane(bootTeam, { id: laneId })));
+    const hubTeams = isBootHub ? hubTeamsBlock({ team: bootTeam, agents: liveForBoot }) : "";
     const initialPrompt = buildBrainstormInitialPrompt({
+      hubTeams,
       inFlight: liveInFlightBlock({ agents: liveForBoot, laneId, teamId }),
       laneId,
       laneUpper,
+      buddyName: newTitle,
       summaryContent: summary.content,
       latestPlan,
       pendingPrompt,
+      vibeMode: bootTeam?.vibeMode === true,
+      autoRetire: reason.startsWith("auto"),
     });
 
     // The spawn env sets VS_BRIEF_INLINE, so the plugin won't log brief-injected; this is the live check for the lane.
@@ -558,26 +680,57 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
     } catch {}
     let created = null;
     if (connected && client && typeof client.createAgent === "function") {
-      created = await client.createAgent({
-        config: {
-          provider,
-          model,
-          cwd,
-          title: newTitle,
-          modeId,
-          thinkingOptionId,
-          ...(featureValues && Object.keys(featureValues).length ? { featureValues } : {}),
-          ...(spawnCfg.systemPrompt ? { systemPrompt: spawnCfg.systemPrompt } : {}),
-        },
-        ...(oldAgent?.workspaceId ? { workspaceId: oldAgent.workspaceId } : {}),
-        initialPrompt,
-        labels: newLabels,
-        // Labels never reach the plugin's before(agent.create); env does, so the profile is forced at spawn.
-        env: { VS_ROLE: "brainstorm", ...(newLabels.profile ? { VS_PROFILE: newLabels.profile } : {}), VS_LANE: laneId, VS_TEAM: teamId, VS_BRIEF_INLINE: "1" },
-      });
+      const spawnStartMs = Date.now();
+      try {
+        created = await client.createAgent({
+          config: {
+            provider,
+            model,
+            cwd,
+            title: newTitle,
+            modeId,
+            thinkingOptionId,
+            ...(featureValues && Object.keys(featureValues).length ? { featureValues } : {}),
+            ...(spawnCfg.systemPrompt ? { systemPrompt: spawnCfg.systemPrompt } : {}),
+          },
+          ...(oldAgent?.workspaceId ? { workspaceId: oldAgent.workspaceId } : {}),
+          initialPrompt,
+          labels: newLabels,
+          // Labels never reach the plugin's before(agent.create); env does, so the profile is forced at spawn.
+          env: { VS_ROLE: "brainstorm", ...(newLabels.profile ? { VS_PROFILE: newLabels.profile } : {}), VS_LANE: laneId, VS_TEAM: teamId, VS_BRIEF_INLINE: "1" },
+        });
+      } catch (err) {
+        try {
+          const raw =
+            typeof client.fetchAgents === "function"
+              ? await client.fetchAgents()
+              : typeof client.listAgents === "function"
+                ? await client.listAgents()
+                : null;
+          const list = Array.isArray(raw) ? raw : Array.isArray(raw?.entries) ? raw.entries : Array.isArray(raw?.agents) ? raw.agents : [];
+          for (const item of list) {
+            const a = item?.agent ?? item;
+            if (!a?.id || a.archivedAt || a.id === oldAgent?.id || a.id === agentId) continue;
+            const labels = a.labels ?? {};
+            const isLaneBs =
+              effectiveAgentRole({ labels }) === "brainstorm" &&
+              sameLane(a, laneId) &&
+              (!teamId || !labels.team || sameId(labels.team, teamId)) &&
+              parseBrainstormTopic(a) === topic.toLowerCase();
+            if (!isLaneBs && a.title !== newTitle) continue;
+            const ts = Date.parse(a.createdAt || a.updatedAt || "");
+            const isRecent = Number.isFinite(ts) && ts >= spawnStartMs - 5000;
+            if (a.status === "initializing" || a.status === "error" || isRecent) {
+              await client.archiveAgent?.(a.id)?.catch?.(() => {});
+            }
+          }
+        } catch {}
+        throw err;
+      }
     }
 
     timer.mark("createAgent");
+    const spawned = Boolean(created?.id);
     if (!created) {
       created = {
         id: `bs-${laneId}-${Date.now().toString(36)}`,
@@ -626,10 +779,56 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
         retireDone = (async () => {
           await client.cancelAgent?.(agentId)?.catch?.(() => {});
           await client.updateAgent?.(agentId, { name: retiredTitle, labels: retiredLabels })?.catch?.(() => {});
-          await client.archiveAgent?.(agentId)?.catch?.(() => {});
+          await archiveBuddyKeepingChildren(client, agentId);
           console.log(`[vibesquad] spawn-timing retire-background=${Date.now() - retireT0}ms`);
         })().catch(() => {});
+        if (reason.startsWith("auto")) {
+          await retireDone;
+          retireDone = null;
+        }
       }
+    }
+    if (reason.startsWith("auto")) {
+      appendVsLogEntry({
+        teamId,
+        laneId,
+        agent: agentId,
+        type: "metric",
+        text: `brainstorm-retired (${reason}): ${tokens} tok, successor=${created.id}`,
+        refs: [summary.path, created.id],
+      });
+      try {
+        const live = body.agents
+          ? body.agents instanceof Map ? [...body.agents.values()] : body.agents
+          : connected && client
+            ? await listDaemonAgents(client)
+            : null;
+        if (Array.isArray(live) && live.length) {
+          const withoutOld = live.filter((a) => (a?.agent ?? a)?.id !== agentId);
+          if (spawned && !withoutOld.some((a) => (a?.agent ?? a)?.id === created.id)) {
+            withoutOld.push(created);
+          }
+          refreshWhosHere({ laneId, agents: withoutOld, rootDir });
+        }
+      } catch {}
+    }
+    if (spawned) {
+      // Backstop (PLAN_BUGS_BATCH2 block 0): the start-brainstorm path above never retires anyone, and the
+      // plugin's agent.created retire skips closed Buddies. Wait a moment so the plugin retires the live ones
+      // first (with its brief snapshot); this then catches whatever is still role=brainstorm in the lane.
+      // It uses its own client so the spawn's client still closes as soon as the restart retire settles.
+      const delayMs = typeof body.backstopDelayMs === "number" ? body.backstopDelayMs : 5000;
+      const newId = created.id;
+      void (async () => {
+        await new Promise((r) => setTimeout(r, delayMs).unref?.()); // the HTTP server keeps the process up
+        const c = injectedClient || (body.clientFactory || createDaemonClient)(rootDir);
+        try {
+          if (!injectedClient) await c.connect?.();
+          await retireOtherLaneBuddies(c, { newId, teamId, laneId, topic, exceptIds: [agentId] });
+        } finally {
+          if (!injectedClient) await c.close?.()?.catch?.(() => {});
+        }
+      })().catch((e) => console.warn(`[vibesquad] duplicate-Buddy backstop failed: ${e?.message ?? e}`));
     }
     timer.flush({ teamId, laneId, agent: created.id });
 
@@ -643,6 +842,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
 
     return {
       ok: true,
+      ...(reason.startsWith("auto") ? { retired: true } : {}),
       oldAgentId: agentId,
       newAgentId: created.id,
       title: created.title || newTitle,
@@ -654,6 +854,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       spawnConfig: spawnCfg,
       profile: newLabels.profile,
       agent: created,
+      ...(pendingPrompt ? { pendingPrompt } : {}),
     };
   } finally {
     if (!injectedClient && client && typeof client.close === "function") {

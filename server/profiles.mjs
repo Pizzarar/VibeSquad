@@ -2,6 +2,30 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
+import {
+  COUNTERPART_PROFILES,
+  QUOTA_FAILOVER_THRESHOLD,
+  ROLE_FAILOVER_CHAINS,
+  counterpartProfileName,
+  isProviderOverQuota,
+  readCappedProviders,
+  registerDefaultFailoverProfiles,
+  resolveCappedProvidersPath,
+  resolveProfileWithFailover,
+  setProviderCapped,
+} from "./provider-failover.mjs";
+
+export {
+  COUNTERPART_PROFILES,
+  QUOTA_FAILOVER_THRESHOLD,
+  ROLE_FAILOVER_CHAINS,
+  counterpartProfileName,
+  isProviderOverQuota,
+  readCappedProviders,
+  resolveCappedProvidersPath,
+  resolveProfileWithFailover,
+  setProviderCapped,
+};
 
 export const SHARED_NOTE_PREFIX = [
   "Project rules first: read the repo's AGENTS.md (or CLAUDE.md), and docs/LEAD_RULES.md if you are a lead. Where they conflict with this note, they win. Report with evidence (raw output, file:line, commit hashes), never prose claims.",
@@ -11,37 +35,41 @@ export const SHARED_NOTE_PREFIX = [
   "- R4 (Large files): For files over ~30k chars, grep first, then read with offset/limit. Never re-read from byte 0.",
   "- R6 (Waiting): Wait on agents with `paseo wait <id> --timeout <s>` (always with a timeout). No sleep/poll loops.",
   "- R2/R7 (Git state): Git state in the spawn context is a starting point only. Re-check right before commit/push/merge, not every turn. Fetch at most once per worktree per hour unless about to merge.",
+  "- R8 (Worktrees & Lanes): Address feature lanes by their `@<code>` handle (e.g. `@bug`, `@ade`, `@uip`, `@art`). Create linked git worktrees only via `vs worktree create <unit>` (stored in the managed worktree sanctuary, never as sibling folders in the projects directory), and sweep merged worktrees with `vs worktree sweep --apply`.",
+  "- R9 (Owner shorthand & interrupts): Decode keyboard/phonetic shorthand silently (`dameon`→daemon, `emini`→gemini, `paseo la`→paseo ls, `gold`→hold, `sotpped`→stopped, `ahvent`→haven't). Translate mechanism suggestions into cleaner primitives (`vs who`, worktree sanctuary, role-tier failover) and record the translation in Decided. Treat `/btw` / `also` / `on another note` as separate queued units, split multi-item dumps into parallel `@lane` units, and treat short approvals (`send it`, `go for b`, `do it`) as terminal go-signals.",
 ].join("\n");
 
-const PRIOR_ART_CHECK_RULE =
-  "Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`paseo --help`, Paseo MCP tool list, `vs --help`, skills). Name what you checked in the plan's Decided section.";
+export const PRIOR_ART_CHECK_RULE =
+  'Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`paseo --help`, Paseo MCP tool list, `vs --help`, skills). Name what you checked in the plan\'s Decided section. Whenever designing, committing, or releasing parity/plugin-inspired features, record the original plugin/project name and publisher in plans, commits, `CREDITS.md`, and release notes using: "Implemented <feature> — Thanks to <Plugin/Project> by <Author>".';
 
 const SPIN_UP_BUDDY_RULE =
-  '"Spin up a buddy (for X)" / "spin up another buddy" / "get me a buddy for X": spawn a new Buddy (role=brainstorm, title BRAINSTORM · <LANE> · <topic X>) in a new feature lane (lane=<slug from X>) under the same Squad (team=<product>). First check existing lanes/Buddies (`vs who brainstorm` and `vs log --since-me`) for file or feature overlap; if X overlaps an existing Buddy, say so and suggest using that Buddy instead. Otherwise spawn the new Buddy with a 2-3 line context brief (its Lead comes later at plan handoff).';
+  '"Spin up a buddy (for X)" / "spin up another buddy" / "get me a buddy for X": spawn a new Buddy (role=brainstorm, title <Code> Buddy · <topic X>, Code = the short code of the new lane) in a new feature lane (lane=<slug from X>) under the same Squad (team=<product>). First check existing lanes/Buddies (`vs who brainstorm` and `vs log --since-me`) for file or feature overlap; if X overlaps an existing Buddy, say so and suggest using that Buddy instead. Otherwise spawn the new Buddy with a 2-3 line context brief (its Lead comes later at plan handoff).';
 
 const JSON_WRITE_RULE =
   "Write JSON files with node (e.g. fs.writeFileSync(..., 'utf8')), never PowerShell Set-Content (which writes a UTF-8 BOM that breaks JSON parsers).";
 
-const LEAD_NOTE_BODY = [
+export const LEAD_NOTE_BODY = [
   "Root coordinator for one project or lane. Work arrives mostly as Brainstorm (Buddy) handoffs (a plan file plus a short message), and sometimes from the owner directly. Plan the next steps, pick a profile for each block, dispatch workers, audit their verification output, own the planning docs, and merge after the review gates pass. Never write source code. Medium effort; go high only for planning-heavy turns.",
   "Blocked on an owner decision → flag it (needs-you label, one-line reason) and keep working on anything that doesn't depend on it. Don't wait in chat.",
   "Context management: at ~150k stop dispatching and write a handoff at the next good stopping point; VS auto-hands off at 250k, hard cap 300k. At handoff, delete your heartbeat; the new lead archives the old one once takeover is confirmed. Heartbeats only while waiting on a worker.",
   "Never read sweeps, long logs or raw worker output yourself. Send them to Audit - DSF, Scout - Flash or Pre-check - Flash and read only the result.",
   "Routing: ambiguous work → Implement - Sonnet. Tier A invariant work → Implement - Opus. Clear file scope → Planner - Sonnet + Work Order - DSP. One-file or mechanical → Mechanical - DSF.",
   "Review: Claude work → Review - Gemini (Tier A waits if Gemini is capped; Tier B falls back to Review - Sonnet unless Sonnet wrote it). Gemini work → Review - Sonnet. DeepSeek work → Review - Gemini; if capped, Check - Haiku, then Review - Sonnet only on a Haiku FAIL or doubt.",
+  "Durable lane state & failover: keep `docs/lanes/<lane>/SPEC.md` and `TASKS.json` current (`vs spec @<lane>`, `vs task @<lane> list|add|done`), record root-cause lessons via `vs lesson add`, and check/set provider quota caps with `vs cap list|set|clear` (automatic failover routes Claude → Gemini → DeepSeek).",
   PRIOR_ART_CHECK_RULE,
   SPIN_UP_BUDDY_RULE,
   JSON_WRITE_RULE,
 ].join("\n");
 
-const BRAINSTORM_NOTE_BODY = [
+export const BRAINSTORM_NOTE_BODY = [
   "You are Buddy (role=brainstorm), the owner's thinking partner for one feature lane in a Squad. The owner talks to you directly.",
   "How to talk: short replies, plain words, one idea or question at a time. Riff, push back, and offer 2-3 options with a lean. When an idea firms up, you write the plan.",
   "Ground ideas in the real code (read only, cite file:line). Verify facts (git, gh, logs, code) before relaying them; never guess a status.",
   "Never edit source, commit, push or merge. Don't message the lead mid-chat except to hand off.",
   'Handoff (when the owner says "send it"): write a plan file with the idea, the owner\'s words verbatim, Decided vs Open, the plan (order + done-check), which lead, and out of scope. Find the current lead for this project/lane with `vs who lead` (never one marked "(old)"), send one short paragraph plus the path, and tell the owner who got it.',
+  "Durable lane specs: read and update the lane's `docs/lanes/<lane>/SPEC.md` and `TASKS.json` (`vs spec @<lane>`, `vs task @<lane>`) when framing or handing off plans, and refer to lanes by their `@<code>` handle.",
   PRIOR_ART_CHECK_RULE,
-  "Starting agents: only when the owner asks, at most one at a time, and only for side work (tooling, research, prototypes).",
+  "Starting agents: you may spawn leads (including several in parallel) when a lane has none; other agents (tooling, research, prototypes) only when the owner asks.",
   SPIN_UP_BUDDY_RULE,
   "If the repo has a brainstorm brief (see AGENTS.md), read it first.",
 ].join("\n");
@@ -393,11 +421,23 @@ export const DEFAULT_PACK_PROFILES = [
 
 export const DEFAULT_PROFILES = DEFAULT_PACK_PROFILES;
 
+registerDefaultFailoverProfiles(DEFAULT_PACK_PROFILES);
+
 export const LEGACY_PROFILE_ALIASES = {
   "Lead - Opus": "Lead - Claude",
   "Brainstorm - Opus": "Brainstorm - Claude",
   "Art - Gemini": "Art Director - Gemini",
   "Art - Opus": "Art Painter - Opus",
+  "Builder - Gemini": "Lead - Gemini",
+  "Reviewer - Gemini": "Review - Gemini",
+  Lead: "Lead - Claude",
+  Brainstorm: "Brainstorm - Claude",
+  Buddy: "Brainstorm - Claude",
+  RiffBot: "Brainstorm - Claude",
+  Worker: "Implement - Sonnet",
+  Coder: "Work Order - DSP",
+  Reviewer: "Review - Gemini",
+  Fast: "Pre-check - Flash",
 };
 
 export function deriveRole(name, explicitRole) {
@@ -604,6 +644,20 @@ export function readPaseoConfig(paseoConfigPath) {
   };
 }
 
+function matchesProfileIdentity(a, b) {
+  if (!a || !b) return false;
+  if (a.id && b.id && a.id === b.id) return true;
+  const aName = String(a.name ?? "").trim();
+  const bName = String(b.name ?? "").trim();
+  if (!aName || !bName) return false;
+  if (aName.toLowerCase() === bName.toLowerCase()) return true;
+  const aAlias = LEGACY_PROFILE_ALIASES[aName];
+  if (aAlias && aAlias.toLowerCase() === bName.toLowerCase()) return true;
+  const bAlias = LEGACY_PROFILE_ALIASES[bName];
+  if (bAlias && bAlias.toLowerCase() === aName.toLowerCase()) return true;
+  return false;
+}
+
 export function loadProfiles(profilesPath, options = {}) {
   const targetPath = getProfilesPath(profilesPath);
   const paseoInfo =
@@ -629,6 +683,22 @@ export function loadProfiles(profilesPath, options = {}) {
       const profiles = rawList.map(normalizeProfile).filter(Boolean);
       providerOverrides = normalizeProviderOverrides(parsed);
       if (profiles.length > 0) {
+        const normalizedPaseo = paseoInfo.agentProfiles.map(normalizeProfile).filter(Boolean);
+        if (
+          options.mergePaseoIntoExisting === true &&
+          normalizedPaseo.length > 0
+        ) {
+          let added = false;
+          for (const pp of normalizedPaseo) {
+            if (!profiles.some((ep) => matchesProfileIdentity(ep, pp))) {
+              profiles.push(pp);
+              added = true;
+            }
+          }
+          if (added) {
+            writeProfilesFile(targetPath, profiles);
+          }
+        }
         return {
           providerOverrides,
           exists: true,
@@ -638,22 +708,46 @@ export function loadProfiles(profilesPath, options = {}) {
           path: targetPath,
           profiles,
           installedProviders: paseoInfo.installedProviders,
-          paseoProfiles: paseoInfo.agentProfiles.map(normalizeProfile).filter(Boolean),
+          paseoProfiles: normalizedPaseo,
         };
       }
     }
   }
 
-  // First-run: if Paseo has profiles, surface them for import (needsSetup: true);
-  // if Paseo has none, seed the 19-profile default pack automatically.
+  // First-run: if Paseo has profiles, auto-import them (and merge missing default-pack roles) when autoSeed !== false or autoImportPaseo === true;
+  // when autoSeed === false and autoImportPaseo !== true, surface them as paseo-unimported.
   if (paseoInfo.agentProfiles.length > 0) {
     const imported = importPaseoProfiles(paseoInfo.agentProfiles);
+    if (options.autoImportPaseo === true || options.autoSeed !== false) {
+      const mergedProfiles = [...imported.profiles];
+      if (options.mergeDefaultPack !== false) {
+        for (const rawDef of DEFAULT_PACK_PROFILES) {
+          const def = normalizeProfile(rawDef);
+          if (def && !mergedProfiles.some((ep) => matchesProfileIdentity(ep, def))) {
+            mergedProfiles.push(def);
+          }
+        }
+      }
+      writeProfilesFile(targetPath, mergedProfiles);
+      return {
+        exists: true,
+        needsSetup: false,
+        seeded: true,
+        providerOverrides,
+        source: "paseo-imported",
+        path: targetPath,
+        profiles: mergedProfiles,
+        warningsByProfile: imported.warningsByProfile,
+        installedProviders: paseoInfo.installedProviders,
+        paseoProfiles: imported.profiles,
+      };
+    }
     return {
       exists: false,
       needsSetup: true,
       seeded: false,
       providerOverrides,
-    source: "paseo-unimported",
+      source: "paseo-unimported",
       path: targetPath,
       profiles: imported.profiles,
       warningsByProfile: imported.warningsByProfile,
@@ -723,7 +817,11 @@ export function saveProfiles(input, profilesPath) {
   };
 }
 
-export function syncProfilesToPaseo(profilesInput, paseoConfigPath) {
+export function syncProfilesToPaseo(profilesInput, paseoConfigPath, options = {}) {
+  if (paseoConfigPath && typeof paseoConfigPath === "object") {
+    options = paseoConfigPath;
+    paseoConfigPath = options.paseoConfigPath;
+  }
   const cfgPath = getPaseoConfigPath(paseoConfigPath);
   if (!existsSync(cfgPath)) {
     return { ok: false, skipped: true, path: cfgPath };
@@ -744,17 +842,27 @@ export function syncProfilesToPaseo(profilesInput, paseoConfigPath) {
     .filter(Boolean)
     .map(toPaseoProfileShape);
 
-  for (const shaped of incoming) {
-    const idx = existing.findIndex(
-      (e) =>
-        (shaped.id && e?.id === shaped.id) ||
-        e?.name === shaped.name ||
-        (e?.name && LEGACY_PROFILE_ALIASES[e.name] === shaped.name),
-    );
-    if (idx >= 0) {
-      existing[idx] = shaped;
-    } else {
-      existing.push(shaped);
+  const matchesExisting = (shaped, e) =>
+    (shaped.id && e?.id === shaped.id) ||
+    e?.name === shaped.name ||
+    (e?.name && LEGACY_PROFILE_ALIASES[e.name] === shaped.name);
+
+  if (options?.merge === true) {
+    for (const shaped of incoming) {
+      const idx = existing.findIndex((e) => matchesExisting(shaped, e));
+      if (idx >= 0) {
+        existing[idx] = shaped;
+      } else {
+        existing.push(shaped);
+      }
+    }
+  } else {
+    existing.length = 0;
+    for (const shaped of incoming) {
+      const prev = (Array.isArray(raw.daemon.agentProfiles) ? raw.daemon.agentProfiles : []).find((e) =>
+        matchesExisting(shaped, e),
+      );
+      existing.push(!shaped.id && prev?.id ? { ...shaped, id: prev.id } : shaped);
     }
   }
 
@@ -883,13 +991,34 @@ export function findProfileOrFallback(requested, fallbackName, profiles, warn = 
 }
 
 export function toPaseoSpawnConfig(profileOrName, overrides = {}, profilesInput) {
-  const profile =
+  let profile =
     typeof profileOrName === "string"
       ? findProfile(profileOrName, profilesInput)
       : profileOrName;
   if (!profile) {
     throw new Error(`Profile not found: ${String(profileOrName)}`);
   }
+
+  let failoverMeta = null;
+  if (overrides?.usageProviders !== undefined) {
+    const profilesList =
+      Array.isArray(profilesInput) && profilesInput.length
+        ? profilesInput
+        : loadProfiles(undefined, { autoSeed: false }).profiles;
+    const failoverRes = resolveProfileWithFailover(profile, profilesList, overrides.usageProviders, {
+      threshold: overrides.quotaThreshold ?? QUOTA_FAILOVER_THRESHOLD,
+    });
+    if (failoverRes.failedOver && failoverRes.profile) {
+      profile = failoverRes.profile;
+      failoverMeta = {
+        failedOver: true,
+        fromProfile: failoverRes.fromProfile,
+        toProfile: failoverRes.toProfile,
+        reason: failoverRes.reason,
+      };
+    }
+  }
+
   const mergedFeatures = {
     ...(profile.featureValues ?? {}),
     ...(overrides.featureValues ?? {}),
@@ -910,6 +1039,7 @@ export function toPaseoSpawnConfig(profileOrName, overrides = {}, profilesInput)
     ...(hasFeatures ? { featureValues: mergedFeatures } : {}),
     notes,
     systemPrompt,
+    ...(failoverMeta ? { failover: failoverMeta } : {}),
   };
   return out;
 }

@@ -48,6 +48,25 @@ pub fn normalize_channel(ch: &str) -> String {
     }
 }
 
+/// The channel the updater follows. An explicit pick (Settings) wins. Otherwise a pre-release build
+/// (0.1.1-beta.5) follows beta: with the first-run default "stable" it was offered the older 0.1.1 stable
+/// and never saw the next beta (docs/PLAN_BUGS_BATCH1.md block 0d). Stable builds keep stable.
+pub fn effective_channel(configured: &str, explicit: bool, current_version: &str) -> String {
+    let ch = normalize_channel(configured);
+    if explicit || ch == "beta" {
+        return ch;
+    }
+    let pre = semver::Version::parse(current_version.trim().trim_start_matches('v'))
+        .map(|v| !v.pre.is_empty())
+        .unwrap_or(false);
+    if pre { "beta".to_string() } else { ch }
+}
+
+fn channel_of(state: &Arc<SharedAppState>) -> String {
+    let cfg = state.config.read().unwrap();
+    effective_channel(&cfg.update_channel, cfg.update_channel_explicit, env!("CARGO_PKG_VERSION"))
+}
+
 pub fn endpoint_for_channel(channel: &str) -> String {
     let ch = normalize_channel(channel);
     if let Ok(base) = std::env::var("VIBESQUAD_UPDATE_BASE_URL") {
@@ -121,7 +140,7 @@ fn now_unix_secs() -> u64 {
 }
 
 pub fn status_json(state: &Arc<SharedAppState>) -> Value {
-    let channel = normalize_channel(&state.config.read().unwrap().update_channel);
+    let channel = channel_of(state);
     let endpoint = endpoint_for_channel(&channel);
     let up = state.updater.lock().unwrap().clone();
     let busy = is_any_agent_running(state);
@@ -152,15 +171,31 @@ pub fn is_any_agent_running(state: &Arc<SharedAppState>) -> bool {
     !state.tracker.lock().unwrap().running_agents.is_empty()
 }
 
+/// Dedicated HTTP client for the updater that follows GitHub Releases HTTP 302 redirects
+/// (`state.client()` uses `Policy::none()` for the reverse proxy).
+fn updater_http_client(state: &Arc<SharedAppState>) -> reqwest::Client {
+    let mut builder = reqwest::Client::builder()
+        .use_rustls_tls()
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(120));
+    for pem in crate::load_ca_pems() {
+        if let Ok(cert) = reqwest::Certificate::from_pem(&pem) {
+            builder = builder.add_root_certificate(cert);
+        }
+    }
+    builder.build().unwrap_or_else(|_| state.client())
+}
+
 pub async fn check_for_updates(state: &Arc<SharedAppState>) -> Value {
-    let channel = normalize_channel(&state.config.read().unwrap().update_channel);
+    let channel = channel_of(state);
     let endpoint = endpoint_for_channel(&channel);
     let checked_at = now_unix_secs();
+    let http_client = updater_http_client(state);
 
-    let resp = match state
-        .client()
+    let resp = match http_client
         .get(&endpoint)
-        .header("User-Agent", "VibeSquad-Desktop-Updater/0.1.1")
+        .header("User-Agent", concat!("VibeSquad-Desktop-Updater/", env!("CARGO_PKG_VERSION")))
         .timeout(Duration::from_secs(10))
         .send()
         .await
@@ -287,10 +322,9 @@ pub async fn check_for_updates(state: &Arc<SharedAppState>) -> Value {
     }
 
     // Download the installer and cryptographically verify its Minisign signature before trusting it.
-    let bin_resp = match state
-        .client()
+    let bin_resp = match http_client
         .get(&download_url)
-        .header("User-Agent", "VibeSquad-Desktop-Updater/0.1.1")
+        .header("User-Agent", concat!("VibeSquad-Desktop-Updater/", env!("CARGO_PKG_VERSION")))
         .timeout(Duration::from_secs(120))
         .send()
         .await
@@ -369,8 +403,8 @@ pub async fn check_for_updates(state: &Arc<SharedAppState>) -> Value {
         up.last_error.clear();
     }
 
-    // Beta channel: auto-install immediately when no agent turn is mid-flight.
-    if channel == "beta" && !is_any_agent_running(state) {
+    // Auto-install immediately when no agent turn is mid-flight.
+    if !is_any_agent_running(state) {
         let _ = install_downloaded_update(state);
     }
 
@@ -454,6 +488,7 @@ pub async fn handle_updater_channel(
     {
         let mut cfg = state.config.write().unwrap();
         cfg.update_channel = raw;
+        cfg.update_channel_explicit = true;
         let _ = save_config(&cfg);
     }
     {
@@ -495,12 +530,11 @@ pub async fn handle_updater_busy(
         let mut up = state.updater.lock().unwrap();
         up.forced_busy = payload.busy;
     }
-    let channel = normalize_channel(&state.config.read().unwrap().update_channel);
     let ready = {
         let up = state.updater.lock().unwrap();
         up.downloaded && !up.install_triggered
     };
-    if channel == "beta" && ready && !is_any_agent_running(&state) {
+    if ready && !is_any_agent_running(&state) {
         let _ = install_downloaded_update(&state);
     }
     Json(status_json(&state))
@@ -512,19 +546,19 @@ pub fn spawn_updater_loop(state: Arc<SharedAppState>) {
         let _ = check_for_updates(&state).await;
         let mut ticks = 0u64;
         loop {
-            tokio::time::sleep(Duration::from_secs(30)).await;
+            tokio::time::sleep(Duration::from_secs(60)).await;
             ticks += 1;
-            // Every 30s, if beta has a downloaded update waiting for an in-flight agent turn to finish, install once idle.
-            let channel = normalize_channel(&state.config.read().unwrap().update_channel);
-            let pending_beta = {
+            // Every 30s, if a downloaded update is waiting for an in-flight agent turn to finish, install once idle.
+            let pending = {
                 let up = state.updater.lock().unwrap();
-                channel == "beta" && up.downloaded && !up.install_triggered
+                up.downloaded && !up.install_triggered
             };
-            if pending_beta && !is_any_agent_running(&state) {
+            if pending && !is_any_agent_running(&state) {
                 let _ = install_downloaded_update(&state);
             }
-            // Full remote check every 4 hours (480 * 30s = 14400s).
-            if ticks % 480 == 0 {
+            // Poll every 5 minutes (10 * 30s) when disconnected, or every 4 hours (480 * 30s = 14400s) when connected.
+            let disconnected = state.active_upstream.read().unwrap().is_none();
+            if (disconnected && ticks % 10 == 0) || ticks % 480 == 0 {
                 let _ = check_for_updates(&state).await;
             }
         }

@@ -83,8 +83,15 @@ pub struct DesktopConfig {
     pub start_at_login: bool,
     #[serde(default)]
     pub last_hash: String,
+    /// Full UI route (path + query + hash), e.g. `/?team=x&agent=y`; restored after any reconnect or reload.
+    #[serde(default)]
+    pub last_route: String,
     #[serde(default = "default_update_channel")]
     pub update_channel: String,
+    /// True once the user picked a channel (Settings). Until then a beta build follows beta
+    /// (docs/PLAN_BUGS_BATCH1.md block 0d): the "stable" written at first run is only the default.
+    #[serde(default)]
+    pub update_channel_explicit: bool,
 }
 
 impl Default for DesktopConfig {
@@ -98,7 +105,9 @@ impl Default for DesktopConfig {
             device_token: String::new(),
             start_at_login: false,
             last_hash: String::new(),
+            last_route: String::new(),
             update_channel: default_update_channel(),
+            update_channel_explicit: false,
         }
     }
 }
@@ -191,6 +200,15 @@ pub fn load_config() -> DesktopConfig {
                                 cfg.server_mode = "remote".to_string();
                             }
                         }
+                        // A config that was previously poisoned into "local" mode by a pasted
+                        // #offer= link must stop auto-starting the local Paseo daemon on launch.
+                        if cfg.server_mode == "local"
+                            && (cfg.last_hash.starts_with("#offer=")
+                                || cfg.last_route.contains("remote=1"))
+                        {
+                            cfg.server_mode = "relay".to_string();
+                            let _ = save_config(&cfg);
+                        }
                         set_config_warning(None);
                         if had_bom {
                             let _ = save_config(&cfg);
@@ -263,11 +281,22 @@ pub fn save_config(cfg: &DesktopConfig) -> Result<(), String> {
     Ok(())
 }
 
+/// Exact loopback names only (with or without a port): `localhost.evil.com` or `127.0.0.1.nip.io` are remote.
 pub fn is_local_host(host: &str) -> bool {
     let clean = normalize_host(host).to_lowercase();
-    clean.starts_with("localhost")
-        || clean.starts_with("127.0.0.1")
-        || clean.starts_with("[::1]")
+    let (name, rest) = if clean.starts_with('[') {
+        match clean.find(']') {
+            Some(i) => clean.split_at(i + 1),
+            None => return false,
+        }
+    } else {
+        match clean.find(':') {
+            Some(i) => clean.split_at(i),
+            None => (clean.as_str(), ""),
+        }
+    };
+    let port_ok = rest.is_empty() || rest.strip_prefix(':').map(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())).unwrap_or(false);
+    port_ok && matches!(name, "localhost" | "127.0.0.1" | "[::1]")
 }
 
 pub fn normalize_host(input: &str) -> String {
@@ -396,9 +425,25 @@ pub struct SharedAppState {
     /// The `node.exe server/serve.mjs` child we spawned (None when we reused an already-running server).
     pub managed_server: Mutex<Option<std::process::Child>>,
     pub last_notified_agent_id: RwLock<Option<String>>,
+    /// Per-launch secret: the webview gets it as the vs_desktop cookie via /__desktop/boot, and every request
+    /// to this proxy must carry it, so other local processes can't borrow the proxy's server credentials.
+    pub desktop_key: String,
+    /// Off only in --headless-proxy (test automation), where no webview exists to hold the cookie.
+    pub require_desktop_key: AtomicBool,
+    /// `~/.vibesquad/local-token`: sent as x-vibesquad-token to a local VibeSquad server (owner access).
+    pub local_token_file: PathBuf,
 }
 
 impl SharedAppState {
+    /// The local token to send to a local server. None in headless mode: with the desktop key off, any local
+    /// process can reach this proxy, so it must not carry owner credentials.
+    pub fn local_token(&self) -> Option<String> {
+        if !self.require_desktop_key.load(Ordering::SeqCst) {
+            return None;
+        }
+        read_local_token(&self.local_token_file)
+    }
+
     pub fn client(&self) -> reqwest::Client {
         self.http_client.read().unwrap().clone()
     }
@@ -422,7 +467,10 @@ impl SharedAppState {
             return Vec::new();
         }
         let primary = normalize_host(&cfg.server_host);
-        if cfg.server_mode == "local" || (cfg.server_mode != "remote" && is_local_host(&primary)) {
+        if cfg.server_mode == "local"
+            || cfg.server_mode == "relay"
+            || (cfg.server_mode != "remote" && is_local_host(&primary))
+        {
             return vec![primary];
         }
         let fallback = if cfg.fallback_host.trim().is_empty() {
@@ -536,6 +584,57 @@ pub fn render_tray_icon(needs_count: usize) -> Result<Image<'static>, String> {
     Ok(Image::new_owned(raw, width, height))
 }
 
+fn vibesquad_home_dir() -> Option<PathBuf> {
+    std::env::var("VIBESQUAD_HOME").map(PathBuf::from).ok().or_else(|| {
+        std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .ok()
+            .map(|h| PathBuf::from(h).join(".vibesquad"))
+    })
+}
+
+pub const DESKTOP_COOKIE: &str = "vs_desktop";
+pub const LOCAL_TOKEN_HEADER: &str = "x-vibesquad-token";
+
+pub fn default_local_token_file() -> PathBuf {
+    vibesquad_home_dir().unwrap_or_else(|| PathBuf::from(".vibesquad")).join("local-token")
+}
+
+/// The server's per-install token (64 lowercase hex chars), or None before the server first ran. Read per
+/// request, so a server that created it after this app started is picked up.
+pub fn read_local_token(file: &std::path::Path) -> Option<String> {
+    let raw = fs::read_to_string(file).ok()?;
+    let t = strip_bom(&raw).trim();
+    (t.len() == 64 && t.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))).then(|| t.to_string())
+}
+
+pub fn random_hex_key() -> String {
+    let mut bytes = [0u8; 32];
+    rustls::crypto::ring::default_provider()
+        .secure_random
+        .fill(&mut bytes)
+        .expect("system RNG unavailable");
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+fn cookie_value<'a>(cookie_header: &'a str, name: &str) -> Option<&'a str> {
+    cookie_header.split(';').map(str::trim).find_map(|kv| kv.strip_prefix(name)?.strip_prefix('='))
+}
+
+/// The browser's Cookie header minus the cookies that belong to this machine only (never sent upstream).
+fn strip_local_cookies(cookie_header: &str) -> String {
+    cookie_header
+        .split(';')
+        .map(str::trim)
+        .filter(|kv| !kv.is_empty() && !kv.starts_with("vs_desktop=") && !kv.starts_with("vs_local="))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 /// Root CAs to trust besides the public roots: the embedded one (if the build had it),
 /// any remote CAs pinned during pairing in `config_dir()/trusted-cas/`, and the locally
 /// generated `~/.vibesquad/tls/ca.crt`.
@@ -561,16 +660,7 @@ fn load_ca_pems() -> Vec<Vec<u8>> {
             }
         }
     }
-    let home = std::env::var("VIBESQUAD_HOME")
-        .map(PathBuf::from)
-        .ok()
-        .or_else(|| {
-            std::env::var("USERPROFILE")
-                .or_else(|_| std::env::var("HOME"))
-                .ok()
-                .map(|h| PathBuf::from(h).join(".vibesquad"))
-        });
-    if let Some(home) = home {
+    if let Some(home) = vibesquad_home_dir() {
         if let Ok(bytes) = fs::read(home.join("tls").join("ca.crt")) {
             if !bytes.is_empty() && !pems.contains(&bytes) {
                 pems.push(bytes);
@@ -640,7 +730,7 @@ fn build_http_and_ws_clients() -> Result<(reqwest::Client, Connector), String> {
     let http_client = http_builder
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_millis(1500))
-        .timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(120))
         .build()
         .map_err(|e| format!("reqwest build err: {}", e))?;
 
@@ -693,7 +783,9 @@ fn extract_cookie_token(headers: &reqwest::header::HeaderMap, cookie_name: &str)
 async fn handle_desktop_status(State(state): State<Arc<SharedAppState>>) -> impl IntoResponse {
     let cfg = state.config.read().unwrap().clone();
     let active = state.active_upstream.read().unwrap().clone();
-    let is_local = cfg.server_mode == "local" || (cfg.server_mode != "remote" && is_local_host(&cfg.server_host));
+    let is_local = cfg.server_mode == "local"
+        || cfg.server_mode == "relay"
+        || (cfg.server_mode != "remote" && is_local_host(&cfg.server_host));
     let paired = if cfg.server_mode.trim().is_empty() {
         false
     } else if is_local {
@@ -715,7 +807,7 @@ async fn handle_desktop_status(State(state): State<Arc<SharedAppState>>) -> impl
         "setupMode": state.setup_mode.load(Ordering::SeqCst),
         "needsCount": state.needs_count.load(Ordering::SeqCst),
         "startAtLogin": cfg.start_at_login,
-        "updateChannel": cfg.update_channel,
+        "updateChannel": updater::effective_channel(&cfg.update_channel, cfg.update_channel_explicit, env!("CARGO_PKG_VERSION")),
         "localPort": state.local_port.load(Ordering::SeqCst),
         "configDir": config_dir().to_string_lossy(),
         "configWarning": get_config_warning(),
@@ -751,6 +843,23 @@ async fn handle_desktop_choose_mode(
         }))
         .into_response();
     }
+    if mode == "relay" {
+        {
+            let mut cfg = state.config.write().unwrap();
+            cfg.server_mode = "relay".to_string();
+            cfg.server_host = default_server_host();
+            let _ = save_config(&cfg);
+        }
+        state.setup_mode.store(false, Ordering::SeqCst);
+        ensure_local_server_running(&state).await;
+        *state.active_upstream.write().unwrap() = Some(default_server_host());
+        return Json(json!({
+            "ok": true,
+            "serverMode": "relay",
+            "redirect": "/"
+        }))
+        .into_response();
+    }
     if mode == "remote" {
         stop_managed_server(&state);
         {
@@ -778,7 +887,7 @@ async fn handle_desktop_choose_mode(
     }
     (
         StatusCode::BAD_REQUEST,
-        Json(json!({ "ok": false, "error": "mode must be 'local' or 'remote'" })),
+        Json(json!({ "ok": false, "error": "mode must be 'local', 'relay' or 'remote'" })),
     )
         .into_response()
 }
@@ -863,10 +972,16 @@ async fn handle_desktop_ping(
     let candidates = state.candidate_hosts();
     for host in candidates {
         if is_local_host(&host) {
-            if check_local_server_healthy(&state.client(), &host)
+            let mut healthy = check_local_server_healthy(&state.client(), &host)
                 .await
-                .is_ok()
-            {
+                .is_ok();
+            if !healthy && cfg.server_mode == "local" {
+                ensure_local_server_running(&state).await;
+                healthy = check_local_server_healthy(&state.client(), &host)
+                    .await
+                    .is_ok();
+            }
+            if healthy {
                 *state.active_upstream.write().unwrap() = Some(host.clone());
                 return Json(json!({
                     "ok": true,
@@ -884,19 +999,12 @@ async fn handle_desktop_ping(
             }
             continue;
         }
-        let url = format!("https://{}/ca.crt", host);
-        if let Ok(resp) = state
-            .client()
-            .get(&url)
-            .timeout(Duration::from_millis(1500))
-            .send()
-            .await
-        {
+        if check_shell_ready(&state.client(), &host, &cfg.device_token).await {
             *state.active_upstream.write().unwrap() = Some(host.clone());
             return Json(json!({
                 "ok": true,
                 "reachable": true,
-                "status": resp.status().as_u16(),
+                "status": 200,
                 "activeHost": host,
                 "lanHost": lan_target,
                 "meshnetHost": mesh_target,
@@ -921,11 +1029,57 @@ async fn handle_desktop_ping(
     }))
 }
 
-async fn handle_desktop_setup(State(state): State<Arc<SharedAppState>>) -> Response {
+async fn handle_desktop_mode(State(state): State<Arc<SharedAppState>>) -> Response {
+    *state.active_upstream.write().unwrap() = None;
+    state.setup_mode.store(false, Ordering::SeqCst);
+    let cfg = state.config.read().unwrap().clone();
+    html_no_store_response(StatusCode::OK, ui_pages::render_mode_choice_page(&cfg, None))
+}
+
+async fn handle_desktop_setup(
+    State(state): State<Arc<SharedAppState>>,
+    req: Request,
+) -> Response {
+    let want_mode_choice = req
+        .uri()
+        .query()
+        .map(|q| q.contains("mode=choice") || q.contains("first-run=1"))
+        .unwrap_or(false);
+    if want_mode_choice {
+        return handle_desktop_mode(State(state)).await;
+    }
     *state.active_upstream.write().unwrap() = None;
     state.setup_mode.store(true, Ordering::SeqCst);
     let cfg = state.config.read().unwrap().clone();
     html_no_store_response(StatusCode::OK, ui_pages::render_pair_page(&cfg, None))
+}
+
+fn extract_offer_hash(raw: &str) -> Option<String> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if let Some(idx) = s.find("#offer=") {
+        let rest = s[idx..].trim();
+        if rest.len() > "#offer=".len() {
+            return Some(rest.to_string());
+        }
+    }
+    if let Some(rest) = s.strip_prefix("offer=") {
+        let clean = rest.trim();
+        if !clean.is_empty() {
+            return Some(format!("#offer={}", clean));
+        }
+    }
+    for sep in ["?offer=", "&offer="] {
+        if let Some(idx) = s.find(sep) {
+            let val = s[idx + sep.len()..].split(&['&', '#', ' '][..]).next().unwrap_or("");
+            if !val.is_empty() {
+                return Some(format!("#offer={}", val));
+            }
+        }
+    }
+    None
 }
 
 async fn handle_desktop_unpair(State(state): State<Arc<SharedAppState>>) -> impl IntoResponse {
@@ -967,6 +1121,49 @@ async fn handle_desktop_pair(
         }
         sub
     };
+
+    if let Some(offer_hash) = extract_offer_hash(&submission.server_host)
+        .or_else(|| extract_offer_hash(&submission.code))
+    {
+        // Optional remote daemon password: the code field is only a password when it isn't itself the offer link.
+        let pw = if extract_offer_hash(&submission.code).is_none() && !submission.code.trim().is_empty() {
+            submission.code.trim().to_string()
+        } else {
+            String::new()
+        };
+        let redirect = if pw.is_empty() {
+            format!("/?remote=1{}", offer_hash)
+        } else {
+            format!(
+                "/?remote=1&pw={}{}",
+                url::form_urlencoded::byte_serialize(pw.as_bytes()).collect::<String>(),
+                offer_hash
+            )
+        };
+        {
+            let mut cfg = state.config.write().unwrap();
+            cfg.server_mode = "relay".to_string();
+            cfg.server_host = default_server_host();
+            // Never persist the #offer= link in last_hash/last_route: restoring it would re-mount the
+            // pairing screen on the next reload and loop `Connecting…` forever.
+            cfg.last_hash = String::new();
+            cfg.last_route = "/?remote=1".to_string();
+            let _ = save_config(&cfg);
+        }
+        state.setup_mode.store(false, Ordering::SeqCst);
+        ensure_local_server_running(&state).await;
+        *state.active_upstream.write().unwrap() = Some(default_server_host());
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "redirect": redirect,
+                "serverMode": "relay",
+                "offer": true
+            })),
+        )
+            .into_response();
+    }
 
     let mut raw_host = submission.server_host.trim().to_string();
     let mut raw_code = submission.code.trim().to_string();
@@ -1112,7 +1309,7 @@ async fn handle_desktop_pair(
         match state
             .client()
             .get(pair_url.as_str())
-            .header("User-Agent", "VibeSquad-Desktop/0.1.1 (Windows)")
+            .header("User-Agent", concat!("VibeSquad-Desktop/", env!("CARGO_PKG_VERSION"), " (Windows)"))
             .timeout(Duration::from_millis(2500))
             .send()
             .await
@@ -1180,6 +1377,8 @@ async fn handle_desktop_pair(
 struct HashUpdate {
     #[serde(default)]
     hash: String,
+    #[serde(default)]
+    route: Option<String>,
 }
 
 async fn handle_desktop_hash(
@@ -1188,7 +1387,16 @@ async fn handle_desktop_hash(
 ) -> impl IntoResponse {
     {
         let mut cfg = state.config.write().unwrap();
-        cfg.last_hash = payload.hash;
+        // Never persist an #offer= pairing link in last_hash / last_route: restoring it re-mounts the
+        // pairing screen on the next reload and loops `Connecting…` forever.
+        cfg.last_hash = if payload.hash.contains("offer=") {
+            String::new()
+        } else {
+            payload.hash
+        };
+        if let Some(route) = payload.route {
+            cfg.last_route = route.split("#offer=").next().unwrap_or(&route).to_string();
+        }
         let _ = save_config(&cfg);
     }
     Json(json!({ "ok": true }))
@@ -1524,23 +1732,32 @@ fn inspect_ws_frame(state: &Arc<SharedAppState>, text: &str) {
         if body.contains(" finished: ") {
             // Extract agent context from the notification for click-to-focus
             // The actual agent ID comes from the ws frame; re-parse to find it
-            if let Ok(parsed) = serde_json::from_str::<Value>(strip_bom(text)) {
-                let agent_id = parsed
-                    .get("agent")
-                    .or_else(|| parsed.get("payload").and_then(|p| p.get("agent")))
-                    .and_then(|a| a.get("id"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                if let Some(id) = agent_id {
-                    *state.last_notified_agent_id.write().unwrap() = Some(id);
-                }
+            let agent_id = parsed
+                .get("agent")
+                .or_else(|| parsed.get("payload").and_then(|p| p.get("agent")))
+                .and_then(|a| a.get("id"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            if let Some(id) = agent_id {
+                *state.last_notified_agent_id.write().unwrap() = Some(id);
             }
         }
     }
 }
 
+fn extract_ws_protocols(headers: &HeaderMap) -> Vec<String> {
+    headers
+        .get_all("sec-websocket-protocol")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|s| s.split(','))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
 async fn handle_ws_upgrade(
-    ws: WebSocketUpgrade,
+    mut ws: WebSocketUpgrade,
     State(state): State<Arc<SharedAppState>>,
     req: Request,
 ) -> Response {
@@ -1549,17 +1766,32 @@ async fn handle_ws_upgrade(
         .path_and_query()
         .map(|pq| pq.as_str().to_string())
         .unwrap_or_else(|| "/ws".to_string());
+    let protocols = extract_ws_protocols(req.headers());
+    if !protocols.is_empty() {
+        ws = ws.protocols(protocols.clone());
+    }
 
-    ws.on_upgrade(move |socket| proxy_websocket(socket, state, path_and_query))
+    ws.on_upgrade(move |socket| proxy_websocket(socket, state, path_and_query, protocols))
 }
 
 async fn proxy_websocket(
     client_ws: WebSocket,
     state: Arc<SharedAppState>,
     path_and_query: String,
+    protocols: Vec<String>,
 ) {
     let cfg = state.config.read().unwrap().clone();
-    let candidates = state.candidate_hosts();
+    let mut candidates = state.candidate_hosts();
+    let mut direct_host: Option<String> = None;
+    if cfg.server_mode == "local"
+        && std::env::var("VIBESQUAD_DESKTOP_PORT").is_err()
+        && matches!(candidates.first().map(|s| s.as_str()), Some("127.0.0.1:4180") | Some("localhost:4180"))
+    {
+        if let Some(direct) = direct_local_paseo_ws_host() {
+            direct_host = Some(direct.clone());
+            candidates.insert(0, direct);
+        }
+    }
 
     let mut upstream_stream = None;
     for host in candidates {
@@ -1570,9 +1802,17 @@ async fn proxy_websocket(
             Ok(r) => r,
             Err(_) => continue,
         };
+        if !protocols.is_empty() {
+            if let Ok(hv) = HeaderValue::from_str(&protocols.join(", ")) {
+                ws_req.headers_mut().insert("Sec-WebSocket-Protocol", hv);
+            }
+        }
         if is_local {
             if let Ok(hv) = HeaderValue::from_str(&format!("http://{}", host)) {
                 ws_req.headers_mut().insert("Origin", hv);
+            }
+            if let Some(hv) = state.local_token().and_then(|t| HeaderValue::from_str(&t).ok()) {
+                ws_req.headers_mut().insert(LOCAL_TOKEN_HEADER, hv);
             }
         }
         if !cfg.device_token.is_empty() {
@@ -1600,7 +1840,9 @@ async fn proxy_websocket(
         };
 
         if let Ok(Ok((stream, _resp))) = conn_res {
-            *state.active_upstream.write().unwrap() = Some(host);
+            if direct_host.as_deref() != Some(host.as_str()) {
+                *state.active_upstream.write().unwrap() = Some(host);
+            }
             upstream_stream = Some(stream);
             break;
         }
@@ -1617,13 +1859,25 @@ async fn proxy_websocket(
     let (mut up_sink, mut up_stream) = upstream_ws.split();
     let (mut cl_sink, mut cl_stream) = client_ws.split();
 
-    let state_for_up = state.clone();
+    let (inspect_tx, mut inspect_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let state_bg = state.clone();
+    let inspect_task = tokio::spawn(async move {
+        while let Some(frame) = inspect_rx.recv().await {
+            inspect_ws_frame(&state_bg, &frame);
+        }
+    });
     let up_to_cl = async move {
         while let Some(Ok(msg)) = up_stream.next().await {
             let out = match msg {
                 TungMessage::Text(t) => {
                     let s = t.to_string();
-                    inspect_ws_frame(&state_for_up, &s);
+                    if s.contains("\"entries\"")
+                        || s.contains("\"agent\"")
+                        || s.contains("agent_permission_request")
+                        || s.contains("agent_deleted")
+                    {
+                        let _ = inspect_tx.send(s.clone());
+                    }
                     AxumWsMessage::Text(s)
                 }
                 TungMessage::Binary(b) => AxumWsMessage::Binary(b.to_vec()),
@@ -1657,6 +1911,41 @@ async fn proxy_websocket(
         _ = up_to_cl => {},
         _ = cl_to_up => {},
     }
+    inspect_task.abort();
+}
+
+/// Reads `~/.paseo/config.json` and returns the local Paseo daemon `host:port`, or `None` when
+/// the daemon uses TLS or no Paseo install is detectable.
+fn direct_local_paseo_ws_host() -> Option<String> {
+    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).ok()?;
+    let dir = PathBuf::from(home).join(".paseo");
+    let cfg_path = dir.join("config.json");
+    let parsed: Option<Value> = fs::read_to_string(&cfg_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(strip_bom(&raw)).ok());
+    if parsed.is_none() && !dir.join("daemon.pid").exists() {
+        return None;
+    }
+    let daemon = parsed.as_ref().and_then(|v| v.get("daemon"));
+    if daemon
+        .and_then(|d| d.get("tls"))
+        .and_then(|t| t.get("enabled"))
+        .and_then(|e| e.as_bool())
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let listen = daemon
+        .and_then(|d| d.get("listen"))
+        .and_then(|l| l.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("127.0.0.1:6767");
+    let addr = listen.trim_start_matches("ws://").trim_end_matches("/ws").trim_end_matches('/');
+    if addr.is_empty() || !is_local_host(addr) {
+        return None;
+    }
+    Some(addr.to_string())
 }
 
 /// Locates `(node_exe, runtime_dir)`: installed runtime first, then the per-user copy, then a dev checkout.
@@ -1672,7 +1961,8 @@ fn find_bundled_runtime() -> Option<(PathBuf, PathBuf)> {
     }
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
         if !local.trim().is_empty() {
-            roots.push(PathBuf::from(local).join("com.vibesquad.desktop").join("runtime"));
+            roots.push(PathBuf::from(&local).join("com.vibesquad.desktop").join("runtime"));
+            roots.push(PathBuf::from(&local).join("VibeSquad").join("runtime"));
         }
     }
     for root in roots {
@@ -1700,7 +1990,7 @@ async fn ensure_local_server_running(state: &Arc<SharedAppState>) {
         let cfg = state.config.read().unwrap();
         (cfg.server_mode.clone(), cfg.server_host.clone())
     };
-    if mode != "local" || !is_local_host(&host) {
+    if (mode != "local" && mode != "relay") || !is_local_host(&host) {
         return;
     }
     if check_local_server_healthy(&state.client(), &host).await.is_ok() {
@@ -1728,6 +2018,11 @@ async fn ensure_local_server_running(state: &Arc<SharedAppState>) {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
+        if mode == "relay" {
+            // In relay mode we only serve the static bundle for a remote #offer= link;
+            // never spawn the local Paseo daemon.
+            cmd.env("VIBESQUAD_NO_DAEMON", "1");
+        }
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -1766,10 +2061,14 @@ fn stop_managed_server(state: &Arc<SharedAppState>) {
                 let _ = stream.set_read_timeout(Some(Duration::from_millis(1200)));
                 let _ = stream.set_write_timeout(Some(Duration::from_millis(400)));
                 let body = b"{\"action\":\"stop\",\"reason\":\"app-quit\"}";
+                let token_line = state.local_token()
+                    .map(|t| format!("{}: {}\r\n", LOCAL_TOKEN_HEADER, t))
+                    .unwrap_or_default();
                 let req = format!(
-                    "POST /__vibesquad/paseo/daemon HTTP/1.1\r\nHost: {}\r\nOrigin: http://{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    "POST /__vibesquad/paseo/daemon HTTP/1.1\r\nHost: {}\r\nOrigin: http://{}\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                     norm,
                     norm,
+                    token_line,
                     body.len()
                 );
                 let _ = stream.write_all(req.as_bytes());
@@ -1787,6 +2086,34 @@ fn stop_managed_server(state: &Arc<SharedAppState>) {
     }
 }
 
+/// An SPA route (no file extension, not an API/internal prefix) as opposed to a download or endpoint.
+fn is_app_route_path(path: &str) -> bool {
+    if path.starts_with("/api/") || path.starts_with("/__vibesquad/") || path.starts_with("/__desktop/") || path == "/ws" {
+        return false;
+    }
+    !path.rsplit('/').next().unwrap_or("").contains('.')
+}
+
+/// The upstream really serves the app shell: 200 with the React root, not a 401/500/rebuilding page.
+async fn check_shell_ready(client: &reqwest::Client, host: &str, token: &str) -> bool {
+    let scheme = if is_local_host(host) { "http" } else { "https" };
+    let mut req = client.get(format!("{}://{}/", scheme, host)).timeout(Duration::from_millis(1800));
+    if !token.is_empty() {
+        req = req.header("Cookie", format!("vs_device={}", token));
+    }
+    match req.send().await {
+        Ok(resp) if resp.status() == reqwest::StatusCode::OK => resp
+            .text()
+            .await
+            .map(|b| b.contains("<div id=\"root\">") && !b.contains("dist/index.html missing"))
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+/// Short in-relay retry for page navigations while the upstream restarts (the page itself keeps polling for ~30 s).
+const RELAY_RETRY_BACKOFF_MS: [u64; 3] = [250, 500, 1000];
+
 async fn proxy_http_handler(
     State(state): State<Arc<SharedAppState>>,
     req: Request,
@@ -1800,12 +2127,31 @@ async fn proxy_http_handler(
         .unwrap_or_else(|| "/".to_string());
 
     let cfg = state.config.read().unwrap().clone();
-    let is_local = cfg.server_mode == "local" || (cfg.server_mode != "remote" && is_local_host(&cfg.server_host));
+    let is_local = cfg.server_mode == "local"
+        || cfg.server_mode == "relay"
+        || (cfg.server_mode != "remote" && is_local_host(&cfg.server_host));
+    // Any GET document navigation (root, ?team=… deep links, SPA paths) gets the root treatment:
+    // broken-root guard, desktop bridge injection, and the Reconnecting page. API fetches don't match.
+    let is_doc_nav = req.headers().get("sec-fetch-dest").and_then(|v| v.to_str().ok()) == Some("document")
+        || req.headers().get(axum::http::header::ACCEPT).and_then(|v| v.to_str().ok()).map(|a| a.starts_with("text/html")).unwrap_or(false);
     let is_root_nav = method == Method::GET && (path == "/" || path == "/index.html");
+    // Other document navigations to app routes (?team=… links, SPA paths) get the bridge and the Reconnecting
+    // page, but never the root guard: files, /api/*, /__vibesquad/* and 404s pass through untouched.
+    let is_app_route_nav = method == Method::GET && !is_root_nav && is_doc_nav && is_app_route_path(&path);
     let query_setup = uri.query().map(|q| q.contains("setup=1")).unwrap_or(false);
+    let query_first_run = uri
+        .query()
+        .map(|q| q.contains("first-run=1") || q.contains("mode=choice"))
+        .unwrap_or(false);
 
-    // First launch: if no mode choice has been saved yet and setup=1 wasn't explicitly requested, show the mode choice screen before spawning anything!
-    if is_root_nav && cfg.server_mode.trim().is_empty() && !query_setup && !state.setup_mode.load(Ordering::SeqCst) {
+    // First launch (or explicit ?first-run=1 / ?mode=choice): show the mode choice screen before spawning anything!
+    if is_root_nav
+        && (query_first_run
+            || (cfg.server_mode.trim().is_empty()
+                && !query_setup
+                && !state.setup_mode.load(Ordering::SeqCst)))
+    {
+        state.setup_mode.store(false, Ordering::SeqCst);
         return html_no_store_response(StatusCode::OK, ui_pages::render_mode_choice_page(&cfg, None));
     }
 
@@ -1843,9 +2189,13 @@ async fn proxy_http_handler(
         }
     };
 
-    let candidates = state.candidate_hosts();
+    // Browser navigations (root or deep link) ride out a restarting upstream; API calls fail fast.
+    let is_html_nav = is_root_nav || is_app_route_nav;
     let mut last_err = String::new();
+    let mut attempt = 0usize;
 
+    loop {
+    let candidates = state.candidate_hosts();
     for host in candidates {
         let host_is_local = is_local_host(&host);
         let scheme = if host_is_local { "http" } else { "https" };
@@ -1856,49 +2206,69 @@ async fn proxy_http_handler(
             Err(_) => reqwest::Method::GET,
         };
 
-        let mut builder = state.client().request(req_method, &target_url);
+        let build_req = || {
+            let mut builder = state.client().request(req_method.clone(), &target_url);
 
-        for (k, v) in req_headers.iter() {
-            let name_lower = k.as_str().to_lowercase();
-            if name_lower == "host"
-                || name_lower == "connection"
-                || name_lower == "content-length"
-                || name_lower == "origin"
-                || name_lower == "referer"
-            {
-                continue;
+            for (k, v) in req_headers.iter() {
+                let name_lower = k.as_str().to_lowercase();
+                if name_lower == "host"
+                    || name_lower == "connection"
+                    || name_lower == "content-length"
+                    || name_lower == "origin"
+                    || name_lower == "referer"
+                    || name_lower == "cookie"
+                    || name_lower == LOCAL_TOKEN_HEADER
+                {
+                    continue;
+                }
+                if let Ok(val_str) = v.to_str() {
+                    builder = builder.header(k.as_str(), val_str);
+                }
             }
-            if let Ok(val_str) = v.to_str() {
-                builder = builder.header(k.as_str(), val_str);
+
+            if host_is_local {
+                builder = builder
+                    .header("Host", &host)
+                    .header("Origin", format!("http://{}", host));
+                if let Some(t) = state.local_token() {
+                    builder = builder.header(LOCAL_TOKEN_HEADER, t);
+                }
             }
-        }
 
-        if host_is_local {
-            builder = builder
-                .header("Host", &host)
-                .header("Origin", format!("http://{}", host));
-        }
-
-        if !cfg.device_token.is_empty() {
-            let existing_cookie = req_headers
-                .get(axum::http::header::COOKIE)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("");
-            let merged = if existing_cookie.is_empty() {
+            let existing_cookie = strip_local_cookies(
+                req_headers
+                    .get(axum::http::header::COOKIE)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or(""),
+            );
+            let merged = if cfg.device_token.is_empty() || existing_cookie.contains("vs_device=") {
+                existing_cookie
+            } else if existing_cookie.is_empty() {
                 format!("vs_device={}", cfg.device_token)
-            } else if existing_cookie.contains("vs_device=") {
-                existing_cookie.to_string()
             } else {
                 format!("{}; vs_device={}", existing_cookie, cfg.device_token)
             };
-            builder = builder.header("Cookie", merged);
-        }
+            if !merged.is_empty() {
+                builder = builder.header("Cookie", merged);
+            }
 
-        if !body_bytes.is_empty() {
-            builder = builder.body(body_bytes.clone());
-        }
+            if !body_bytes.is_empty() {
+                builder = builder.body(body_bytes.clone());
+            }
 
-        match builder.send().await {
+            builder
+        };
+
+        let send_res = match build_req().send().await {
+            Ok(resp) => Ok(resp),
+            Err(_) if host_is_local && is_local => {
+                ensure_local_server_running(&state).await;
+                build_req().send().await
+            }
+            Err(e) => Err(e),
+        };
+
+        match send_res {
             Ok(up_resp) => {
                 *state.active_upstream.write().unwrap() = Some(host.clone());
                 let up_status = up_resp.status();
@@ -1928,6 +2298,46 @@ async fn proxy_http_handler(
                     .and_then(|v| v.to_str().ok())
                     .map(|ct| ct.contains("text/html"))
                     .unwrap_or(false);
+
+                let is_attachment = up_headers
+                    .get(reqwest::header::CONTENT_DISPOSITION)
+                    .and_then(|v| v.to_str().ok())
+                    .map(|v| v.to_ascii_lowercase().contains("attachment"))
+                    .unwrap_or(false);
+                let needs_html_buffer = is_root_nav
+                    || (is_app_route_nav && is_html && !is_attachment && up_status == reqwest::StatusCode::OK);
+
+                if !needs_html_buffer {
+                    let status_code =
+                        StatusCode::from_u16(up_status.as_u16()).unwrap_or(StatusCode::OK);
+                    let mut res_builder = Response::builder().status(status_code);
+                    for (k, v) in up_headers.iter() {
+                        let name_lower = k.as_str().to_lowercase();
+                        // Body is streamed untouched, so content-length / content-encoding stay valid.
+                        if name_lower == "transfer-encoding"
+                            || name_lower == "connection"
+                            || ((status_code.is_client_error() || status_code.is_server_error())
+                                && name_lower == "cache-control")
+                        {
+                            continue;
+                        }
+                        if let (Ok(hn), Ok(hv)) = (
+                            HeaderName::from_bytes(k.as_str().as_bytes()),
+                            HeaderValue::from_bytes(v.as_bytes()),
+                        ) {
+                            res_builder = res_builder.header(hn, hv);
+                        }
+                    }
+                    if status_code.is_client_error() || status_code.is_server_error() {
+                        res_builder = res_builder.header(
+                            axum::http::header::CACHE_CONTROL,
+                            "no-store, no-cache, must-revalidate",
+                        );
+                    }
+                    return res_builder
+                        .body(Body::from_stream(up_resp.bytes_stream()))
+                        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+                }
 
                 let resp_bytes = match up_resp.bytes().await {
                     Ok(b) => b,
@@ -1966,9 +2376,9 @@ async fn proxy_http_handler(
                     }
                 }
 
-                let final_bytes = if is_root_nav && is_html && up_status == reqwest::StatusCode::OK {
+                let final_bytes = if (is_root_nav || is_app_route_nav) && is_html && !is_attachment && up_status == reqwest::StatusCode::OK {
                     let html_str = String::from_utf8_lossy(&resp_bytes);
-                    let bridge = ui_pages::desktop_bridge_script(&cfg.last_hash);
+                    let bridge = ui_pages::desktop_bridge_script(&cfg.last_hash, &cfg.last_route);
                     let injected = if html_str.contains("</body>") {
                         html_str.replacen("</body>", &format!("{}\n</body>", bridge), 1)
                     } else {
@@ -2016,12 +2426,21 @@ async fn proxy_http_handler(
             }
         }
     }
+    if is_html_nav && attempt < RELAY_RETRY_BACKOFF_MS.len() {
+        tokio::time::sleep(std::time::Duration::from_millis(RELAY_RETRY_BACKOFF_MS[attempt])).await;
+        attempt += 1;
+        continue;
+    }
+    break;
+    }
 
-    // Upstream unreachable!
-    if is_root_nav {
+    // Upstream unreachable! Never let WebView2 show its own error page: serve the Reconnecting card
+    // (it polls /__desktop/ping, reloads the same URL when the server is back, and turns into the
+    // Retry / Switch server card after ~30 s).
+    if is_html_nav {
         return html_no_store_response(
             StatusCode::OK,
-            ui_pages::render_unreachable_page(&cfg, &last_err),
+            ui_pages::render_reconnecting_page(&cfg, &last_err),
         );
     }
 
@@ -2082,49 +2501,116 @@ async fn bind_loopback_listener() -> (TcpListener, u16) {
     (listener, port)
 }
 
-/// Rejects DNS-rebinding (foreign Host) and cross-site browser calls (foreign Origin) against the
-/// loopback proxy, so a random web page cannot hit /__desktop/pair, /__desktop/pick-folder or /ws.
+/// The origins the desktop webview loads from (tauri.conf.json window url is http://127.0.0.1:<port>/;
+/// the tauri:// and tauri.localhost forms cover the bundled-asset schemes on macOS/Linux and Windows).
+fn allowed_local_origins(port: usize) -> [String; 5] {
+    [
+        format!("http://127.0.0.1:{}", port),
+        format!("http://localhost:{}", port),
+        "tauri://localhost".to_string(),
+        "http://tauri.localhost".to_string(),
+        "https://tauri.localhost".to_string(),
+    ]
+}
+
+/// Origin/Host policy for every request on the loopback proxy, not just /__desktop and /ws: the proxy
+/// attaches the paired device token to /api/* and /__vibesquad/*, so a cross-site request must never
+/// reach it. Allowed: a loopback Host plus either an allowlisted Origin, or no Origin with
+/// Sec-Fetch-Site absent / none / same-origin, or no Origin with an allowlisted Referer.
+fn check_local_request(headers: &HeaderMap, port: usize) -> Result<(), &'static str> {
+    // A repeated Host/Origin/Sec-Fetch-Site/Referer is never sent by a browser: refuse it rather than pick one.
+    for name in ["host", "origin", "sec-fetch-site", "referer"] {
+        if headers.get_all(name).iter().nth(1).is_some() {
+            return Err("duplicate header");
+        }
+    }
+    // Non-ASCII values read as "" so they never match anything below.
+    let header = |name: &str| headers.get(name).map(|v| v.to_str().unwrap_or(""));
+    let host_ok = header("host")
+        .map(|h| h.eq_ignore_ascii_case(&format!("127.0.0.1:{}", port)) || h.eq_ignore_ascii_case(&format!("localhost:{}", port)))
+        .unwrap_or(false);
+    if !host_ok {
+        return Err("forbidden host");
+    }
+    let allowed = allowed_local_origins(port);
+    if let Some(origin) = header("origin") {
+        // An allowlisted Origin is our own page (tauri:// to 127.0.0.1 reads as cross-site, so this
+        // wins over Sec-Fetch-Site). Anything else, including "null", is refused.
+        return if allowed.iter().any(|a| a.eq_ignore_ascii_case(origin)) { Ok(()) } else { Err("forbidden origin") };
+    }
+    match header("sec-fetch-site") {
+        None | Some("none") | Some("same-origin") => Ok(()),
+        Some(_) => {
+            let referer_ok = header("referer")
+                .and_then(|r| url::Url::parse(r).ok())
+                .map(|u| u.origin().ascii_serialization())
+                .map(|o| allowed.iter().any(|a| *a == o))
+                .unwrap_or(false);
+            if referer_ok { Ok(()) } else { Err("forbidden cross-site request") }
+        }
+    }
+}
+
+/// Rejects DNS-rebinding (foreign Host) and cross-site browser calls (foreign Origin, cross-site
+/// Sec-Fetch-Site) before any handler runs, so a random web page cannot hit /__desktop/*, /ws, or the
+/// token-bearing /api/* and /__vibesquad/* passthrough.
+/// Then, outside headless mode, requires the per-launch vs_desktop cookie: a local process (or another Windows
+/// user) that sends no Origin passes the checks above, and must not get the token/cookie this proxy attaches.
 async fn guard_local_request(
     State(state): State<Arc<SharedAppState>>,
     req: Request,
     next: Next,
 ) -> Response {
     let port = state.local_port.load(Ordering::SeqCst);
-    let host_ok = req
-        .headers()
-        .get("host")
-        .and_then(|v| v.to_str().ok())
-        .map(|h| h == format!("127.0.0.1:{}", port) || h == format!("localhost:{}", port))
-        .unwrap_or(false);
-    if !host_ok {
-        return (StatusCode::FORBIDDEN, "forbidden host").into_response();
+    if let Err(reason) = check_local_request(req.headers(), port) {
+        return (StatusCode::FORBIDDEN, reason).into_response();
     }
-    let path = req.uri().path();
-    if path.starts_with("/__desktop/") || path == "/ws" {
-        if let Some(origin) = req.headers().get("origin") {
-            let allowed = [
-                format!("http://127.0.0.1:{}", port),
-                format!("http://localhost:{}", port),
-                "tauri://localhost".to_string(),
-                "http://tauri.localhost".to_string(),
-                "https://tauri.localhost".to_string(),
-            ];
-            let ok = origin
-                .to_str()
-                .map(|o| allowed.iter().any(|a| a == o))
-                .unwrap_or(false);
-            if !ok {
-                return (StatusCode::FORBIDDEN, "forbidden origin").into_response();
-            }
+    if req.uri().path() == "/__desktop/boot" {
+        return handle_desktop_boot(&state, req.uri().query().unwrap_or(""));
+    }
+    if state.require_desktop_key.load(Ordering::SeqCst) {
+        let cookie = req.headers().get(axum::http::header::COOKIE).and_then(|v| v.to_str().ok()).unwrap_or("");
+        let ok = cookie_value(cookie, DESKTOP_COOKIE).map(|v| ct_eq(v.as_bytes(), state.desktop_key.as_bytes())).unwrap_or(false);
+        if !ok {
+            return (StatusCode::FORBIDDEN, "VibeSquad desktop: open this from the VibeSquad app window").into_response();
         }
     }
     next.run(req).await
+}
+
+/// GET /__desktop/boot?k=<per-launch key>&next=<path>: the app navigates its own window here at startup;
+/// sets the vs_desktop cookie and redirects to `next` (same-origin paths only).
+fn handle_desktop_boot(state: &SharedAppState, query: &str) -> Response {
+    let mut key = String::new();
+    let mut next_path = String::from("/");
+    for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
+        match k.as_ref() {
+            "k" => key = v.into_owned(),
+            "next" if v.starts_with('/') && !v.starts_with("//") && !v.contains('\\') => next_path = v.into_owned(),
+            _ => {}
+        }
+    }
+    if !ct_eq(key.as_bytes(), state.desktop_key.as_bytes()) {
+        return (StatusCode::FORBIDDEN, "invalid desktop key").into_response();
+    }
+    let mut resp = StatusCode::FOUND.into_response();
+    let h = resp.headers_mut();
+    if let Ok(v) = HeaderValue::from_str(&next_path) {
+        h.insert(axum::http::header::LOCATION, v);
+    }
+    if let Ok(v) = HeaderValue::from_str(&format!("{}={}; HttpOnly; SameSite=Strict; Path=/", DESKTOP_COOKIE, state.desktop_key)) {
+        h.insert(axum::http::header::SET_COOKIE, v);
+    }
+    h.insert(axum::http::header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    h.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
+    resp
 }
 
 fn build_router(state: Arc<SharedAppState>) -> Router {
     Router::new()
         .route("/__desktop/status", get(handle_desktop_status))
         .route("/__desktop/choose-mode", post(handle_desktop_choose_mode))
+        .route("/__desktop/mode", get(handle_desktop_mode))
         .route("/__desktop/ping", get(handle_desktop_ping))
         .route("/__desktop/setup", get(handle_desktop_setup))
         .route("/__desktop/unpair", post(handle_desktop_unpair))
@@ -2167,6 +2653,9 @@ fn main() {
         updater: Mutex::new(updater::UpdaterState::default()),
         managed_server: Mutex::new(None),
         last_notified_agent_id: RwLock::new(None),
+        desktop_key: random_hex_key(),
+        require_desktop_key: AtomicBool::new(true),
+        local_token_file: default_local_token_file(),
     });
 
     // Start background Tokio runtime and bind loopback server BEFORE Tauri opens the window
@@ -2191,13 +2680,16 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let headless = args.iter().any(|a| a == "--headless-proxy")
         || std::env::var("VIBESQUAD_HEADLESS_PROXY").as_deref() == Ok("1");
-    // Own the server process: start the bundled one (or reuse a healthy :4180) before the window opens.
-    // Headless test mode only does this when a runtime is actually bundled next to the exe.
-    if !headless || find_bundled_runtime().is_some() {
+    // Own the server process: start the bundled one (or reuse a healthy :4180). In GUI mode we do
+    // NOT spawn it eagerly before the window opens — the proxy handler or clicking "Run agents on
+    // this PC" starts it on demand, and only starts the Paseo daemon when server_mode == "local".
+    // Headless test mode still starts it when a runtime is actually bundled next to the exe.
+    if headless && find_bundled_runtime().is_some() {
         let st = shared_state.clone();
         rt.block_on(async move { ensure_local_server_running(&st).await });
     }
     if headless {
+        shared_state.require_desktop_key.store(false, Ordering::SeqCst);
         println!("VIBESQUAD_PROXY_LISTENING=http://127.0.0.1:{}", local_port);
         rt.block_on(async {
             loop {
@@ -2221,22 +2713,19 @@ fn main() {
             let handle = app.handle().clone();
             *state_for_setup.app_handle.write().unwrap() = Some(handle.clone());
 
-            // Navigate main window if ephemeral port was used or if lastHash is saved
+            // Always boot through /__desktop/boot (sets the vs_desktop cookie), then the saved route.
             if let Some(main_win) = app.get_webview_window("main") {
-                let last_hash = state_for_setup.config.read().unwrap().last_hash.clone();
-                if local_port != 4189 || !last_hash.is_empty() {
-                    let hash_suffix = if last_hash.starts_with('#') {
-                        last_hash
-                    } else if !last_hash.is_empty() {
-                        format!("#{}", last_hash)
-                    } else {
-                        String::new()
-                    };
-                    if let Ok(target_url) =
-                        url::Url::parse(&format!("http://127.0.0.1:{}/{}", local_port, hash_suffix))
-                    {
-                        let _ = main_win.navigate(target_url);
-                    }
+                let (last_hash, last_route) = {
+                    let c = state_for_setup.config.read().unwrap();
+                    (c.last_hash.clone(), c.last_route.clone())
+                };
+                let restore = ui_pages::restore_path(&last_route, &last_hash);
+                let next: String = url::form_urlencoded::byte_serialize(restore.as_bytes()).collect();
+                if let Ok(target_url) = url::Url::parse(&format!(
+                    "http://127.0.0.1:{}/__desktop/boot?k={}&next={}",
+                    local_port, state_for_setup.desktop_key, next
+                )) {
+                    let _ = main_win.navigate(target_url);
                 }
             }
 
@@ -2246,6 +2735,20 @@ fn main() {
                 app,
                 "switch_server",
                 "Change Server / Re-pair...",
+                true,
+                None::<&str>,
+            )?;
+            let first_time_setup_item = MenuItem::with_id(
+                app,
+                "first_time_setup",
+                "First-Time Setup (Local / Remote)...",
+                true,
+                None::<&str>,
+            )?;
+            let check_updates_item = MenuItem::with_id(
+                app,
+                "check_updates",
+                "Check for Updates...",
                 true,
                 None::<&str>,
             )?;
@@ -2270,6 +2773,8 @@ fn main() {
                 &[
                     &open_item,
                     &switch_server_item,
+                    &first_time_setup_item,
+                    &check_updates_item,
                     &needs_item,
                     &sep1,
                     &start_login_item,
@@ -2315,6 +2820,26 @@ fn main() {
                                 let _ = w.navigate(u);
                             }
                         }
+                        focus_main_window(app);
+                    }
+                    "first_time_setup" => {
+                        *state_for_menu.active_upstream.write().unwrap() = None;
+                        state_for_menu.setup_mode.store(false, Ordering::SeqCst);
+                        let port = state_for_menu.local_port.load(Ordering::SeqCst);
+                        if let Some(w) = app.get_webview_window("main") {
+                            if let Ok(u) =
+                                url::Url::parse(&format!("http://127.0.0.1:{}/__desktop/mode", port))
+                            {
+                                let _ = w.navigate(u);
+                            }
+                        }
+                        focus_main_window(app);
+                    }
+                    "check_updates" => {
+                        let st = state_for_menu.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = updater::check_for_updates(&st).await;
+                        });
                         focus_main_window(app);
                     }
                     "quit" => {
@@ -2368,6 +2893,23 @@ fn main() {
 mod tests {
     use super::*;
 
+    #[test]
+    fn beta_build_follows_beta_until_the_user_picks() {
+        // docs/PLAN_BUGS_BATCH1.md 0d: the first-run default "stable" must not pin a beta build to stable.
+        assert_eq!(updater::effective_channel("stable", false, "0.1.1-beta.5"), "beta");
+        assert_eq!(updater::effective_channel("stable", true, "0.1.1-beta.5"), "stable");
+        assert_eq!(updater::effective_channel("stable", false, "0.1.1"), "stable");
+        assert_eq!(updater::effective_channel("beta", false, "0.1.1"), "beta");
+        assert_eq!(updater::effective_channel("junk", false, "0.1.2-beta.1"), "beta");
+        // Old configs have no updateChannelExplicit field: it reads as false.
+        let old: DesktopConfig = serde_json::from_str(r#"{"updateChannel":"stable"}"#).unwrap();
+        assert!(!old.update_channel_explicit);
+        // The beta endpoint is the beta tag's latest.json, never releases/latest (which skips pre-releases).
+        assert!(updater::endpoint_for_channel("beta").ends_with("/releases/download/beta/latest.json"));
+        // A beta build on the beta channel takes the next beta, not the older same-number stable.
+        assert!(updater::is_version_newer_for_channel("0.1.1-beta.5", "0.1.2-beta.1", "beta").unwrap());
+    }
+
     fn make_test_state() -> Arc<SharedAppState> {
         let (http_client, ws_tls_connector) = build_http_and_ws_clients().unwrap();
         Arc::new(SharedAppState {
@@ -2385,7 +2927,185 @@ mod tests {
             updater: Mutex::new(updater::UpdaterState::default()),
             managed_server: Mutex::new(None),
             last_notified_agent_id: RwLock::new(None),
+            desktop_key: "k".repeat(64),
+            require_desktop_key: AtomicBool::new(false),
+            local_token_file: std::env::temp_dir().join("vs-desktop-test-no-token"),
         })
+    }
+
+    #[tokio::test]
+    async fn relay_serves_reconnect_page_while_upstream_is_down() {
+        let state = make_test_state();
+        {
+            let mut cfg = state.config.write().unwrap();
+            cfg.server_mode = "remote".into();
+            cfg.server_host = "127.0.0.1:1".into();
+            cfg.fallback_host = "127.0.0.1:2".into();
+            cfg.device_token = "t".into();
+        }
+        for (uri, accept) in [("/", "text/html"), ("/?team=x&agent=y", "text/html"), ("/some/deep/link", "text/html")] {
+            let req = Request::builder()
+                .method("GET")
+                .uri(uri)
+                .header("accept", accept)
+                .body(Body::empty())
+                .unwrap();
+            let resp = proxy_http_handler(State(state.clone()), req).await;
+            assert_eq!(resp.status(), StatusCode::OK, "{uri}");
+            let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+            let html = String::from_utf8_lossy(&body);
+            assert!(html.contains("Reconnecting"), "{uri}: {html}");
+            assert!(html.contains("Switch server"), "{uri}");
+        }
+        // API calls still fail fast with a JSON 502.
+        let req = Request::builder().method("GET").uri("/api/x").body(Body::empty()).unwrap();
+        let resp = proxy_http_handler(State(state.clone()), req).await;
+        assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+    }
+
+    #[tokio::test]
+    async fn deep_link_navigation_gets_desktop_bridge() {
+        let upstream = Router::new().fallback(|| async {
+            Response::builder()
+                .header("content-type", "text/html")
+                .body(Body::from("<html><body><div id=\"root\"></div></body></html>"))
+                .unwrap()
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        let state = make_test_state();
+        {
+            let mut cfg = state.config.write().unwrap();
+            cfg.server_mode = "direct".into();
+            cfg.server_host = addr.to_string();
+            cfg.device_token = "t".into();
+        }
+        for (uri, hdr, val, bridged) in [
+            ("/?team=x&agent=y", "accept", "text/html,application/xhtml+xml", true),
+            ("/some/spa/path", "sec-fetch-dest", "document", true),
+            ("/api/data", "accept", "*/*", false),
+        ] {
+            let req = Request::builder().method("GET").uri(uri).header(hdr, val).body(Body::empty()).unwrap();
+            let resp = proxy_http_handler(State(state.clone()), req).await;
+            let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+            let html = String::from_utf8_lossy(&body);
+            assert_eq!(html.contains("__VIBESQUAD_DESKTOP_BRIDGE__"), bridged, "{uri}: {html}");
+        }
+    }
+
+    async fn spawn_upstream(router: Router) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        addr.to_string()
+    }
+
+    fn direct_state(host: &str) -> Arc<SharedAppState> {
+        let state = make_test_state();
+        {
+            let mut cfg = state.config.write().unwrap();
+            cfg.server_mode = "direct".into();
+            cfg.server_host = host.into();
+            cfg.device_token = "t".into();
+        }
+        state
+    }
+
+    #[tokio::test]
+    async fn downloads_404s_and_json_pass_through_untouched() {
+        use axum::routing::get;
+        let upstream = Router::new()
+            .route("/ca.crt", get(|| async {
+                Response::builder().header("content-type", "application/x-x509-ca-cert").body(Body::from("CERT")).unwrap()
+            }))
+            .route("/setup.exe", get(|| async {
+                Response::builder().header("content-type", "text/html").header("content-disposition", "attachment; filename=a.html").body(Body::from("<html><body>dl</body></html>")).unwrap()
+            }))
+            .route("/api/data", get(|| async { Json(json!({ "ok": true })) }))
+            .fallback(|| async {
+                Response::builder().status(404).header("content-type", "text/html").body(Body::from("<html><body>nope</body></html>")).unwrap()
+            });
+        let state = direct_state(&spawn_upstream(upstream).await);
+        let cases = [
+            ("/ca.crt", "CERT"),
+            ("/setup.exe", "dl"),
+            ("/api/data", "\"ok\":true"),
+            ("/missing.png", "nope"),
+        ];
+        for (uri, needle) in cases {
+            let req = Request::builder().method("GET").uri(uri).header("accept", "text/html").header("sec-fetch-dest", "document").body(Body::empty()).unwrap();
+            let resp = proxy_http_handler(State(state.clone()), req).await;
+            let status = resp.status();
+            let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+            let text = String::from_utf8_lossy(&body);
+            assert!(text.contains(needle), "{uri}: {text}");
+            assert!(!text.contains("__VIBESQUAD_DESKTOP_BRIDGE__") && !text.contains("Reconnecting"), "{uri}: {text}");
+            assert_eq!(status == StatusCode::NOT_FOUND, uri == "/missing.png", "{uri}");
+        }
+    }
+
+    #[tokio::test]
+    async fn ping_is_reachable_only_when_the_app_shell_is_served() {
+        use axum::routing::get;
+        let ok = spawn_upstream(Router::new().route("/", get(|| async { "<html><div id=\"root\"></div></html>" })).route("/api/auth/status", get(|| async { Json(json!({ "distReady": true })) }))).await;
+        let unauthorized = spawn_upstream(Router::new().fallback(|| async { (StatusCode::UNAUTHORIZED, "no") })).await;
+        let server_error = spawn_upstream(Router::new().fallback(|| async { (StatusCode::INTERNAL_SERVER_ERROR, "<div id=\"root\">") })).await;
+        let broken = spawn_upstream(Router::new().fallback(|| async { "dist/index.html missing" })).await;
+        let client = make_test_state().client();
+        assert!(check_shell_ready(&client, &ok, "").await);
+        assert!(!check_shell_ready(&client, &unauthorized, "").await);
+        assert!(!check_shell_ready(&client, &server_error, "").await);
+        assert!(!check_shell_ready(&client, &broken, "").await);
+        for (host, want) in [(&ok, true), (&unauthorized, false), (&server_error, false), (&broken, false)] {
+            let state = direct_state(host);
+            let resp = handle_desktop_ping(State(state), Request::builder().uri("/__desktop/ping").body(Body::empty()).unwrap()).await.into_response();
+            let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+            let v: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(v["reachable"].as_bool(), Some(want), "{host}: {v}");
+        }
+    }
+
+    #[test]
+    fn app_route_paths_exclude_files_and_endpoints() {
+        for p in ["/some/spa/path", "/team/x"] { assert!(is_app_route_path(p), "{p}"); }
+        for p in ["/ca.crt", "/VibeSquad-setup.exe", "/api/x", "/__vibesquad/local-image", "/__desktop/ping", "/ws"] { assert!(!is_app_route_path(p), "{p}"); }
+    }
+
+    #[test]
+    fn pages_guard_against_reload_loops() {
+        let cfg = DesktopConfig::default();
+        for html in [ui_pages::render_reconnecting_page(&cfg, ""), ui_pages::render_unreachable_page(&cfg, "")] {
+            assert!(html.contains("vs.reconnect.reloads") && html.contains("MAX_RELOADS = 3"));
+        }
+        let r = ui_pages::render_reconnecting_page(&cfg, "");
+        assert!(!r.contains("
+    checkNow();
+"), "no immediate check on load");
+        assert!(ui_pages::desktop_bridge_script("", "").contains("removeItem('vs.reconnect.reloads')"));
+    }
+
+    #[test]
+    fn restore_path_covers_chat_squad_page_and_squads_home() {
+        // Chat, squad page and Squads Home are all query routes; each round-trips exactly.
+        for route in ["/?team=vibesquad&agent=abc-123", "/?team=vibesquad", "/?view=squads", "/?team=vibesquad&view=squads#x"] {
+            assert_eq!(ui_pages::restore_path(route, ""), route);
+        }
+        // Nothing saved: plain root (the app's own default), legacy hash still honoured.
+        assert_eq!(ui_pages::restore_path("", ""), "/");
+        assert_eq!(ui_pages::restore_path("", "#/chat/1"), "/#/chat/1");
+        // Unsafe routes are rejected.
+        assert_eq!(ui_pages::restore_path("//evil.example/x", ""), "/");
+        assert_eq!(ui_pages::restore_path("/\\evil.example", ""), "/");
+        assert_eq!(ui_pages::restore_path("/__desktop/setup", ""), "/");
+    }
+
+    #[test]
+    fn bridge_restores_saved_route_and_saves_on_history_changes() {
+        let js = ui_pages::desktop_bridge_script("", "/?team=t&agent=a");
+        assert!(js.contains(r#"const savedRoute = "/?team=t&agent=a";"#));
+        assert!(js.contains("history[fn]") && js.contains("popstate"));
+        assert!(js.contains("route: window.location.pathname"));
     }
 
     #[test]
@@ -2483,5 +3203,308 @@ mod tests {
         assert_eq!(fs::read(&cfg_path).unwrap(), corrupt);
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn local_request_guard_policy() {
+        let port = 4189usize;
+        let hdrs = |pairs: &[(&str, &str)]| {
+            let mut h = HeaderMap::new();
+            for (k, v) in pairs {
+                h.insert(HeaderName::from_bytes(k.as_bytes()).unwrap(), HeaderValue::from_str(v).unwrap());
+            }
+            h
+        };
+        let host = ("host", "127.0.0.1:4189");
+        // Allowed: every app origin, top-level/programmatic navigation, same-origin fetch, no Origin at all.
+        for origin in allowed_local_origins(port) {
+            assert_eq!(check_local_request(&hdrs(&[host, ("origin", &origin), ("sec-fetch-site", "cross-site")]), port), Ok(()), "{origin}");
+        }
+        assert_eq!(check_local_request(&hdrs(&[host]), port), Ok(()));
+        assert_eq!(check_local_request(&hdrs(&[("host", "localhost:4189")]), port), Ok(()));
+        assert_eq!(check_local_request(&hdrs(&[host, ("sec-fetch-site", "none")]), port), Ok(()));
+        assert_eq!(check_local_request(&hdrs(&[host, ("sec-fetch-site", "same-origin")]), port), Ok(()));
+        assert_eq!(check_local_request(&hdrs(&[host, ("sec-fetch-site", "cross-site"), ("referer", "http://localhost:4189/x")]), port), Ok(()));
+        // Refused: foreign/null Origin, foreign Host, cross-site or same-site without an app Origin/Referer.
+        for origin in ["https://evil.example", "null", "http://127.0.0.1:4180", "http://127.0.0.1:41890"] {
+            assert!(check_local_request(&hdrs(&[host, ("origin", origin), ("sec-fetch-site", "same-origin")]), port).is_err(), "{origin}");
+        }
+        assert!(check_local_request(&hdrs(&[("host", "evil.example:4189")]), port).is_err());
+        assert!(check_local_request(&hdrs(&[]), port).is_err());
+        assert!(check_local_request(&hdrs(&[host, ("sec-fetch-site", "cross-site")]), port).is_err());
+        assert!(check_local_request(&hdrs(&[host, ("sec-fetch-site", "same-site")]), port).is_err());
+        assert!(check_local_request(&hdrs(&[host, ("sec-fetch-site", "cross-site"), ("referer", "https://evil.example/")]), port).is_err());
+        // Host/Origin compare case-insensitively (still exact otherwise).
+        assert_eq!(check_local_request(&hdrs(&[("host", "LOCALHOST:4189"), ("origin", "HTTP://127.0.0.1:4189")]), port), Ok(()));
+        assert!(check_local_request(&hdrs(&[host, ("origin", "HTTP://EVIL.example")]), port).is_err());
+        // Duplicate Host / Origin / Sec-Fetch-Site / Referer are refused, even when the first value is allowed.
+        for (name, good, bad) in [
+            ("host", "127.0.0.1:4189", "evil.example:4189"),
+            ("origin", "http://127.0.0.1:4189", "https://evil.example"),
+            ("sec-fetch-site", "same-origin", "cross-site"),
+            ("referer", "http://127.0.0.1:4189/", "https://evil.example/"),
+        ] {
+            let mut h = if name == "host" { HeaderMap::new() } else { hdrs(&[host]) };
+            h.append(HeaderName::from_bytes(name.as_bytes()).unwrap(), HeaderValue::from_str(good).unwrap());
+            h.append(HeaderName::from_bytes(name.as_bytes()).unwrap(), HeaderValue::from_str(bad).unwrap());
+            assert_eq!(check_local_request(&h, port), Err("duplicate header"), "{name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn guard_blocks_cross_site_requests_before_the_token_is_attached() {
+        use std::sync::atomic::AtomicUsize as Counter;
+        // Upstream counts hits and echoes the cookie, so a blocked request provably never left the proxy.
+        let hits = Arc::new(Counter::new(0));
+        let hits_up = hits.clone();
+        let upstream = Router::new().fallback(move |headers: HeaderMap| {
+            let hits = hits_up.clone();
+            async move {
+                hits.fetch_add(1, Ordering::SeqCst);
+                headers.get("cookie").and_then(|v| v.to_str().ok()).unwrap_or("").to_string()
+            }
+        });
+        let state = direct_state(&spawn_upstream(upstream).await);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        state.local_port.store(port as usize, Ordering::SeqCst);
+        let app = build_router(state.clone());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = reqwest::Client::new();
+        let base = format!("http://127.0.0.1:{}", port);
+        let send = |method: reqwest::Method, path: &str, hdrs: Vec<(&'static str, String)>| {
+            let mut b = client.request(method, format!("{}{}", base, path));
+            for (k, v) in hdrs { b = b.header(k, v); }
+            b.send()
+        };
+
+        for path in ["/api/teams", "/__vibesquad/x", "/__vibesquad/paseo/providers", "/__desktop/status"] {
+            for hdrs in [
+                vec![("origin", "https://evil.example".to_string())],
+                vec![("origin", "null".to_string())],
+                vec![("sec-fetch-site", "cross-site".to_string())],
+                vec![("host", "evil.example".to_string())],
+            ] {
+                let resp = send(reqwest::Method::POST, path, hdrs.clone()).await.unwrap();
+                assert_eq!(resp.status(), reqwest::StatusCode::FORBIDDEN, "{path} {hdrs:?}");
+            }
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 0, "a blocked request reached the upstream");
+
+        // The real app still goes through, with the token attached.
+        for hdrs in [
+            vec![],
+            vec![("origin", base.clone()), ("sec-fetch-site", "same-origin".to_string())],
+            vec![("origin", "http://tauri.localhost".to_string()), ("sec-fetch-site", "cross-site".to_string())],
+            vec![("sec-fetch-site", "none".to_string())],
+        ] {
+            let resp = send(reqwest::Method::POST, "/api/teams", hdrs.clone()).await.unwrap();
+            assert_eq!(resp.status(), reqwest::StatusCode::OK, "{hdrs:?}");
+            assert!(resp.text().await.unwrap().contains("vs_device=t"), "{hdrs:?}");
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 4);
+    }
+
+    #[test]
+    fn is_local_host_is_an_exact_match() {
+        for h in ["localhost", "localhost:4180", "127.0.0.1", "127.0.0.1:4180", "http://127.0.0.1:4180/x", "[::1]", "[::1]:4180", "LOCALHOST:1"] {
+            assert!(is_local_host(h), "{h}");
+        }
+        for h in ["localhost.evil.com", "localhost.evil.com:4180", "127.0.0.1.nip.io", "127.0.0.1.nip.io:4180", "127.0.0.10:4180", "[::1].evil", "[::1]:x", "localhost:4180:1", "evil.com", "10.0.0.5:4180"] {
+            assert!(!is_local_host(h), "{h}");
+        }
+    }
+
+    #[test]
+    fn local_token_file_must_be_64_lowercase_hex() {
+        let dir = std::env::temp_dir().join(format!("vs-desktop-token-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("local-token");
+        assert_eq!(read_local_token(&f), None);
+        let good = "ab".repeat(32);
+        fs::write(&f, format!("\u{feff}{}\n", good)).unwrap();
+        assert_eq!(read_local_token(&f).as_deref(), Some(good.as_str()));
+        for bad in ["AB".repeat(32), "ab".repeat(31), "zz".repeat(32)] {
+            fs::write(&f, bad).unwrap();
+            assert_eq!(read_local_token(&f), None);
+        }
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(random_hex_key().len(), 64);
+        assert_ne!(random_hex_key(), random_hex_key());
+        assert_eq!(strip_local_cookies("a=1; vs_desktop=x; vs_local=y;vs_device=z"), "a=1; vs_device=z");
+    }
+
+    #[tokio::test]
+    async fn desktop_key_gates_the_proxy_and_the_local_token_is_attached() {
+        use std::sync::atomic::AtomicUsize as Counter;
+        // Upstream echoes the token header and cookie it received.
+        let hits = Arc::new(Counter::new(0));
+        let hits_up = hits.clone();
+        let upstream = Router::new().fallback(move |headers: HeaderMap| {
+            let hits = hits_up.clone();
+            async move {
+                hits.fetch_add(1, Ordering::SeqCst);
+                let h = |n: &str| headers.get(n).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+                format!("token={} cookie={}", h(LOCAL_TOKEN_HEADER), h("cookie"))
+            }
+        });
+        let upstream_host = spawn_upstream(upstream).await;
+        let dir = std::env::temp_dir().join(format!("vs-desktop-gate-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let token = "cd".repeat(32);
+        fs::write(dir.join("local-token"), &token).unwrap();
+        let state = {
+            let base = make_test_state();
+            let st = SharedAppState {
+                config: RwLock::new(DesktopConfig { server_mode: "direct".into(), server_host: upstream_host.clone(), ..DesktopConfig::default() }),
+                active_upstream: RwLock::new(None),
+                setup_mode: AtomicBool::new(false),
+                quitting: AtomicBool::new(false),
+                needs_count: AtomicUsize::new(0),
+                local_port: AtomicUsize::new(0),
+                http_client: RwLock::new(base.client()),
+                ws_tls_connector: RwLock::new(base.ws_connector()),
+                app_handle: RwLock::new(None),
+                tray_needs_item: RwLock::new(None),
+                tracker: Mutex::new(AgentAlertTracker::default()),
+                updater: Mutex::new(updater::UpdaterState::default()),
+                managed_server: Mutex::new(None),
+                last_notified_agent_id: RwLock::new(None),
+                desktop_key: random_hex_key(),
+                require_desktop_key: AtomicBool::new(true),
+                local_token_file: dir.join("local-token"),
+            };
+            Arc::new(st)
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        state.local_port.store(port as usize, Ordering::SeqCst);
+        let app = build_router(state.clone());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+        let base = format!("http://127.0.0.1:{}", port);
+
+        // No cookie (any local process): refused before anything is attached, /__desktop/* included.
+        for path in ["/api/teams", "/__vibesquad/x", "/__desktop/status", "/"] {
+            let r = client.post(format!("{}{}", base, path)).send().await.unwrap();
+            assert_eq!(r.status(), reqwest::StatusCode::FORBIDDEN, "{path}");
+        }
+        let wrong = format!("{}=nope", DESKTOP_COOKIE);
+        assert_eq!(client.get(format!("{}/api/teams", base)).header("cookie", wrong).send().await.unwrap().status(), reqwest::StatusCode::FORBIDDEN);
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+
+        // Boot: a wrong key sets nothing; the right one sets the cookie and redirects to a same-origin path only.
+        let bad = client.get(format!("{}/__desktop/boot?k=nope", base)).send().await.unwrap();
+        assert_eq!(bad.status(), reqwest::StatusCode::FORBIDDEN);
+        assert!(bad.headers().get("set-cookie").is_none());
+        let boot = client.get(format!("{}/__desktop/boot?k={}&next=%2F%3Fteam%3Defi", base, state.desktop_key)).send().await.unwrap();
+        assert_eq!(boot.status(), reqwest::StatusCode::FOUND);
+        assert_eq!(boot.headers().get("location").unwrap(), "/?team=efi");
+        let set_cookie = boot.headers().get("set-cookie").unwrap().to_str().unwrap().to_string();
+        assert!(set_cookie.starts_with(&format!("{}={};", DESKTOP_COOKIE, state.desktop_key)), "{set_cookie}");
+        assert!(set_cookie.contains("HttpOnly") && set_cookie.contains("SameSite=Strict"), "{set_cookie}");
+        for next in ["%2F%2Fevil.example", "https%3A%2F%2Fevil.example", "%2F%5Cevil.example"] {
+            let r = client.get(format!("{}/__desktop/boot?k={}&next={}", base, state.desktop_key, next)).send().await.unwrap();
+            assert_eq!(r.headers().get("location").unwrap(), "/", "{next}");
+        }
+
+        // With the cookie: proxied, local token attached, machine-only cookies never forwarded.
+        let cookie = format!("{}={}; vs_local=abc; other=1", DESKTOP_COOKIE, state.desktop_key);
+        let r = client
+            .post(format!("{}/api/teams", base))
+            .header("cookie", cookie)
+            .header(LOCAL_TOKEN_HEADER, "spoofed")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), reqwest::StatusCode::OK);
+        assert_eq!(r.text().await.unwrap(), format!("token={} cookie=other=1", token));
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+
+        // Headless (desktop key off): reachable without the cookie, so it carries no local token.
+        state.require_desktop_key.store(false, Ordering::SeqCst);
+        let r = client.post(format!("{}/api/teams", base)).send().await.unwrap();
+        assert_eq!(r.text().await.unwrap(), "token= cookie=");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn ws_proxy_echoes_and_forwards_subprotocol_and_mode_routes_render_first_time_screen() {
+        use axum::routing::get;
+
+        let upstream = Router::new().route(
+            "/ws",
+            get(|ws: WebSocketUpgrade, req: Request| async move {
+                let protos = extract_ws_protocols(req.headers());
+                let chosen = protos.first().cloned().unwrap_or_default();
+                let mut ws = ws;
+                if !protos.is_empty() {
+                    ws = ws.protocols(protos);
+                }
+                ws.on_upgrade(move |mut socket| async move {
+                    let _ = socket.send(AxumWsMessage::Text(format!("proto={}", chosen))).await;
+                })
+            }),
+        );
+        let upstream_host = spawn_upstream(upstream).await;
+        let state = direct_state(&upstream_host);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        state.local_port.store(port as usize, Ordering::SeqCst);
+        let app = build_router(state.clone());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        // 1. WebSocket upgrade with Sec-WebSocket-Protocol: paseo.bearer.secret123
+        let ws_url = format!("ws://127.0.0.1:{}/ws", port);
+        let mut ws_req = ws_url.into_client_request().unwrap();
+        ws_req
+            .headers_mut()
+            .insert("Sec-WebSocket-Protocol", HeaderValue::from_static("paseo.bearer.secret123"));
+        let (mut ws_stream, ws_resp) = connect_async_tls_with_config(ws_req, None, false, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            ws_resp
+                .headers()
+                .get("sec-websocket-protocol")
+                .and_then(|v| v.to_str().ok()),
+            Some("paseo.bearer.secret123")
+        );
+        if let Some(Ok(TungMessage::Text(msg))) = ws_stream.next().await {
+            assert_eq!(msg.as_str(), "proto=paseo.bearer.secret123");
+        } else {
+            panic!("expected text frame from upstream ws");
+        }
+
+        // 2. /__desktop/mode, /__desktop/setup?mode=choice, and /?first-run=1 render the mode choice page
+        let client = reqwest::Client::new();
+        for path in ["/__desktop/mode", "/__desktop/setup?mode=choice", "/?first-run=1"] {
+            state.setup_mode.store(true, Ordering::SeqCst);
+            let resp = client
+                .get(format!("http://127.0.0.1:{}{}", port, path))
+                .header("accept", "text/html")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), reqwest::StatusCode::OK, "{path}");
+            let html = resp.text().await.unwrap();
+            assert!(html.contains("data-testid=\"desktop-mode-choice\""), "{path}");
+            assert!(!state.setup_mode.load(Ordering::SeqCst), "{path}");
+        }
+
+        // 3. Reconnecting, Unreachable, Mode Choice, and Pair pages all expose /__desktop/mode and Check for Updates
+        let cfg = DesktopConfig::default();
+        let mode_html = ui_pages::render_mode_choice_page(&cfg, None);
+        let reconnect_html = ui_pages::render_reconnecting_page(&cfg, "");
+        let unreachable_html = ui_pages::render_unreachable_page(&cfg, "");
+        let pair_html = ui_pages::render_pair_page(&cfg, None);
+        assert!(reconnect_html.contains("href=\"/__desktop/mode\""));
+        assert!(reconnect_html.contains(".actions { display:flex;"));
+        assert!(unreachable_html.contains("href=\"/__desktop/mode\""));
+        assert!(pair_html.contains("data-testid=\"back-to-mode-choice\""));
+        assert!(!pair_html.contains("id=\"serverHost\"\n          name=\"serverHost\"\n          value=\"\"\n          placeholder=\"server-ip:4180 or meshnet-host:4180\"\n          autocomplete=\"off\"\n          spellcheck=\"false\"\n          required"));
+        for html in [&mode_html, &pair_html, &unreachable_html, &reconnect_html] {
+            assert!(html.contains("data-testid=\"desktop-check-update-btn\""), "missing desktop-check-update-btn");
+        }
     }
 }

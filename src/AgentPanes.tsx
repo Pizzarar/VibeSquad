@@ -1,9 +1,11 @@
-import { memo, useCallback, useEffect, useSyncExternalStore, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import { getPaseoState, subscribePaseo } from "./paseo";
 import { AgentDrawer } from "./AgentDrawer";
 import { useDraft } from "./drafts";
 import { classifyAgent, leadVariant } from "./teams";
+import { exitSquadsHome } from "./pinFocus";
+import { setFullView } from "./PinGrid";
 import { StatusDot, cleanTitle } from "./ui";
 import { Avatar } from "./pixel";
 import {
@@ -14,6 +16,7 @@ import {
   reopenClosedTab,
   setActivePane,
   setSheet,
+  setFocus,
   toggleFocus,
   toggleSplit,
   useClosedTabCount,
@@ -115,6 +118,18 @@ function TabStrip(props: { pane: Pane; tabs: string[]; activeId: string | null; 
           <button className={`btn small ${focus ? "on" : ""}`} title="Focus chat (Ctrl+.)" onClick={toggleFocus}>
             ▣ FOCUS
           </button>
+          <button
+            className="btn small"
+            data-testid="pane-teams-home-btn"
+            title="Back to the Teams / Brainstorm grid"
+            onClick={() => {
+              setFocus(false);
+              setFullView(false);
+              exitSquadsHome();
+            }}
+          >
+            ⊞ TEAMS
+          </button>
           <span className="kbd">Ctrl+.</span>
         </div>
       )}
@@ -129,9 +144,16 @@ const DrawerSlot = memo(function DrawerSlot(props: {
   onSuccessor: (id: string) => void;
 }) {
   const { id, pane, shown, onSuccessor } = props;
+  const [everShown, setEverShown] = useState(shown);
+  useEffect(() => {
+    if (shown) setEverShown(true);
+  }, [shown]);
   const agent = useAgent(id);
   const close = useCallback(() => closeTab(id), [id]);
   const successor = useCallback(() => onSuccessor(id), [onSuccessor, id]);
+  if (!everShown) {
+    return <div className={`pane-slot pane-${pane}`} data-agent={id} style={{ display: "none" }} />;
+  }
   return (
     <div
       className={`pane-slot pane-${pane}`}

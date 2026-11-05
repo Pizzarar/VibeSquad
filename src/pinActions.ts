@@ -1,24 +1,31 @@
 // Pinned teams step 3 (docs/PLAN_PINNED_FEATURES.md §3): the side-effecting half of the pin resolver.
 // src/pins.ts stays pure; this file talks to the dev-server middleware and the teams store.
 import type { PaseoAgent } from "@getpaseo/client";
-import { DEMO, archiveAgent, getPaseoState, retireAgent, sendMessage, upsertLocalAgent } from "./paseo";
+import { DEMO, archiveAgent, archiveWorkspace, detachAgent, getPaseoState, retireAgent, sendMessage, updateAgent, upsertLocalAgent } from "./paseo";
 import { parkIdeasInInbox } from "./IdeaInbox";
+import { isRemote } from "./remoteSession";
 import {
   allLaneIds,
   appendBriefLine,
   bestOverlap,
+  keepBuddy,
   briefStamp,
   DEFAULT_PIN_PROFILE,
   newPinBrief,
   patchLane,
   resolvePin,
+  runSpinOffOnce,
   slugLaneId,
   uniqueLaneId,
   type Pin,
   type PinLane,
 } from "./pins";
+import { freezeLaneCodes, laneCodesForTeam } from "./identity";
 import { runMarkComplete } from "./pinComplete";
-import { findCrossTeamBrainstorm, getTeams, resolve, saveTeams, type TeamDef, type TeamsUpdater } from "./teams";
+import { runRemoveTeam, type RemovePlan, type RemoveResult, type WorktreeResult } from "./pinRemoveLogic";
+import { findCrossTeamBrainstorm, getTeams, resolve, saveTeams, titleFor, type TeamDef, type TeamsUpdater } from "./teams";
+
+export { DEFAULT_PIN_PROFILE } from "./pins";
 
 export type OpenPinDeps = {
   /** Agent map to re-check for a live Brainstorm before spawning (defaults to the live Paseo state). */
@@ -29,6 +36,8 @@ export type OpenPinDeps = {
   saveTeams?: (update: TeamsUpdater) => Promise<unknown>;
   /** Called with the spawned agent so the caller can show it before the daemon pushes it (defaults to upsertLocalAgent). */
   onSpawned?: (agent: PaseoAgent) => void;
+  /** Explicit Brainstorm profile chosen by the user at Spin Up. */
+  profile?: string;
 };
 
 const inFlight = new Map<string, Promise<string>>();
@@ -48,13 +57,15 @@ export function subscribePinStarts(l: () => void): () => void {
  * quick-started in (squad, lane) from the team brief and newest plan, with no dialog, and its id
  * is returned. Concurrent calls for the same lane share one spawn.
  */
-export function openPin(pin: Pin, deps: OpenPinDeps = {}): Promise<string> {
+export function openPin(pin: Pin, depsOrProfile: OpenPinDeps | string = {}): Promise<string> {
+  const deps: OpenPinDeps = typeof depsOrProfile === "string" ? { profile: depsOrProfile } : depsOrProfile;
   const r = resolvePin(pin);
   if (r.kind === "live") return Promise.resolve(r.agent.agent.id);
   const key = laneKey(r.squadId, r.laneId);
   const pending = inFlight.get(key);
   if (pending) return pending;
-  const run = quickStart(pin, r.profile ?? DEFAULT_PIN_PROFILE, deps).finally(() => {
+  const chosenProfile = deps.profile?.trim() || r.profile || pin.lane?.lastProfile || DEFAULT_PIN_PROFILE;
+  const run = quickStart(pin, chosenProfile, deps).finally(() => {
     inFlight.delete(key);
     startListeners.forEach((l) => l());
   });
@@ -67,7 +78,7 @@ async function quickStart(pin: Pin, profile: string, deps: OpenPinDeps): Promise
   const squadId = pin.squad.id;
   const laneId = pin.lane.id;
   // A live Brainstorm may have appeared since the pin was built (another tab, the lead, a slow push).
-  const live = findCrossTeamBrainstorm(resolve(deps.agents ?? getPaseoState().agents), laneId);
+  const live = findCrossTeamBrainstorm(resolve(deps.agents ?? getPaseoState().agents), laneId, "", { includeClosed: true });
   if (live) return live.agent.id;
 
   const doFetch = deps.fetch ?? fetch;
@@ -80,7 +91,8 @@ async function quickStart(pin: Pin, profile: string, deps: OpenPinDeps): Promise
       teamId: squadId,
       laneId,
       laneName: pin.lane.name,
-      profile,
+      // Send `profileName` so remote relay body policy accepts it while `profile` stays in REMOTE_FORBIDDEN_BODY_KEYS.
+      ...(profile ? { profileName: profile } : {}),
     }),
   });
   const body = (await res.json().catch(() => ({}))) as {
@@ -100,7 +112,7 @@ async function quickStart(pin: Pin, profile: string, deps: OpenPinDeps): Promise
     body.agent ??
     ({
       id: newAgentId,
-      title: `BRAINSTORM · ${pin.lane.name.toUpperCase()}`,
+      title: titleFor("brainstorm", pin.lane.name, { laneId: pin.lane.id }),
       provider: "claude",
       model: "claude-opus-5-5",
       cwd: "",
@@ -120,17 +132,24 @@ async function quickStart(pin: Pin, profile: string, deps: OpenPinDeps): Promise
   (deps.onSpawned ?? upsertLocalAgent)(agent);
 
   const used = body.profile || profile;
-  if (used !== pin.lane.lastProfile) {
+  // lastProfile is pinned to disk for remote writes (PINNED_LANE_KEYS), so only a local session records it.
+  if (!isRemote() && used !== pin.lane.lastProfile) {
     await (deps.saveTeams ?? saveTeams)((cur) => patchLane(cur, squadId, laneId, { lastProfile: used }));
   }
   return newAgentId;
+}
+
+/** Persist a code on every lane of one Squad that lacks one. */
+export function freezeSquadCodes(teams: TeamDef[], squadId: string): TeamDef[] {
+  return teams.map((t) => (t.id === squadId ? { ...t, lanes: freezeLaneCodes(t.lanes) } : t));
 }
 
 /** Rename a pinned team (display name only; the lane id and labels stay). */
 export async function renamePin(pin: Pin, name: string): Promise<void> {
   const clean = name.trim();
   if (!clean || clean === pin.lane.name) return;
-  await saveTeams((cur) => patchLane(cur, pin.squad.id, pin.lane.id, { name: clean }));
+  // Freeze codes first so the rename can never change this lane's (or a sibling's) generated code.
+  await saveTeams((cur) => patchLane(freezeSquadCodes(cur, pin.squad.id), pin.squad.id, pin.lane.id, { name: clean }));
 }
 
 // ── Brief editor bus ───────────────────────────────────────────────────────────
@@ -204,6 +223,50 @@ export async function reopenPin(pin: Pin, deps: Pick<CompleteDeps, "fetch" | "sa
   if (!DEMO) await appendToBrief(pin.lane.id, `Reopened ${briefStamp()}`, deps.fetch ?? fetch).catch(() => {});
 }
 
+// ── Duplicate Buddies (docs/PLAN_BUGS_BATCH2.md block 0) ──────────────────────
+
+const PARENT_LABEL = "paseo.parent-agent-id";
+
+/** "Keep this one": retire the pin's other live Buddies (no archive). Their live children are detached first. */
+export function keepPinBuddy(pin: Pin, keepId: string): Promise<{ retired: string[]; failed: string[] }> {
+  return keepBuddy(pin, keepId, {
+    detachChildren: async (buddyId) => {
+      for (const a of getPaseoState().agents.values()) {
+        if (a.archivedAt || a.status === "closed" || (a.labels as Record<string, string> | undefined)?.[PARENT_LABEL] !== buddyId) continue;
+        await detachAgent(a.id);
+      }
+    },
+    update: (id, updates) => updateAgent(id, updates),
+  });
+}
+
+// ── Remove team (docs/PLAN_BUGS_BATCH1.md block 1) ────────────────────────────
+// Only the Team ⋯ menu's confirm dialog calls this; there is no route or CLI to remove a team.
+
+export type RemoveDeps = Pick<CompleteDeps, "fetch" | "saveTeams" | "archive"> & { archiveWorkspace?: (id: string) => Promise<unknown> };
+
+/** Archive the team's agents, hide the lane (state removed) and, when opted in, delete its worktrees + branches. */
+export function removePin(pin: Pin, plan: RemovePlan, opts: { deleteWorktrees: boolean }, deps: RemoveDeps = {}): Promise<RemoveResult> {
+  const doFetch = deps.fetch ?? fetch;
+  return runRemoveTeam(pin, plan, opts, {
+    archive: deps.archive ?? archiveAgent,
+    saveTeams: deps.saveTeams ?? saveTeams,
+    ...(DEMO ? {} : { readBrief: (laneId: string) => readBrief(laneId, doFetch), writeBrief: (laneId: string, c: string) => writeBrief(laneId, c, doFetch) }),
+    removeWorktrees: async (worktrees) => {
+      if (DEMO) return worktrees.map((w) => ({ ...w, worktree: "removed" as const, branchResult: "deleted" }));
+      const res = await doFetch("/__vibesquad/remove-team-worktrees", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ worktrees }),
+      });
+      const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; results?: WorktreeResult[] };
+      if (!res.ok || !body.ok) throw new Error(body.error ?? `Worktree removal failed (${res.status})`);
+      return body.results ?? [];
+    },
+    archiveWorkspace: deps.archiveWorkspace ?? archiveWorkspace,
+  });
+}
+
 // ── "Looks done" card dismissals (per Brainstorm message id) ──────────────────
 const LOOKS_DONE_KEY = "vibesquad.looksDoneDismissed";
 
@@ -247,7 +310,10 @@ export function setLastBrainstormProfile(profile: string): void {
   } catch {}
 }
 
-export type CreatePinDeps = Pick<OpenPinDeps, "fetch" | "getTeams" | "saveTeams"> & { lastProfile?: string };
+export type CreatePinDeps = Pick<OpenPinDeps, "fetch" | "getTeams" | "saveTeams" | "agents" | "onSpawned" | "profile"> & {
+  lastProfile?: string;
+  startBuddies?: boolean;
+};
 
 /** The pinned team an idea most likely belongs to in this squad, or null ("Sounds like X. Use it?"). */
 export function overlappingPin(squadId: string, text: string, teams: TeamDef[] = getTeams()): PinLane | null {
@@ -262,13 +328,16 @@ export async function createPin(squadId: string, name: string, idea: string, dep
   const teams = (deps.getTeams ?? getTeams)();
   const squad = teams.find((t) => t.id === squadId);
   if (!squad) throw new Error(`Unknown squad ${squadId}`);
-  const lane: PinLane = { id: uniqueLaneId(slugLaneId(clean), allLaneIds(teams)), name: clean, state: "pinned", ...(deps.lastProfile ? { lastProfile: deps.lastProfile } : {}) };
+  const id = uniqueLaneId(slugLaneId(clean), allLaneIds(teams));
+  // Freeze the generated code on the lane so later registry changes never rename its agents.
+  const code = laneCodesForTeam({ lanes: [...squad.lanes, { id, name: clean }] })[id];
+  const lane: PinLane = { id, name: clean, ...(code ? { code } : {}), state: "pinned", ...(deps.lastProfile ? { lastProfile: deps.lastProfile } : {}) };
   // Brief first: a failed write leaves no half-made pin behind.
   if (!DEMO) await writeBrief(lane.id, newPinBrief(lane.id, clean, idea), deps.fetch ?? fetch);
   // The brief write is async, so add the lane to whatever the registry holds by then.
   let next = teams;
   await (deps.saveTeams ?? saveTeams)((cur) =>
-    (next = cur.map((t) => (t.id === squadId && !t.lanes.some((l) => l.id === lane.id) ? { ...t, lanes: [...t.lanes, lane] } : t))),
+    (next = cur.map((t) => (t.id === squadId && !t.lanes.some((l) => l.id === lane.id) ? { ...t, lanes: freezeLaneCodes([...freezeLaneCodes(t.lanes), lane]) } : t))),
   );
   return {
     squad: next.find((t) => t.id === squadId) ?? squad,
@@ -319,3 +388,25 @@ export async function sendIdeaToTeam(laneId: string, text: string, from?: string
 const SEND_TO_KEY = "vibesquad.sendToDismissed";
 export const isSendToDismissed = (messageId: string): boolean => dismissedSet(SEND_TO_KEY).has(messageId);
 export const dismissSendTo = (messageId: string): void => dismiss(SEND_TO_KEY, messageId);
+
+const SPIN_OFF_KEY = "vibesquad.spinOffDismissed";
+export const isSpinOffDismissed = (messageId: string): boolean => dismissedSet(SPIN_OFF_KEY).has(messageId);
+export const dismissSpinOff = (messageId: string): void => dismiss(SPIN_OFF_KEY, messageId);
+
+/**
+ * Create every Team of a confirmed spin-off block as a pin in the squad (no overlap refusal: the user confirmed the
+ * list; exact ids still dedupe inside createPin) and immediately quick-start each new lane's Brainstorm Buddy in
+ * parallel (unless `deps.startBuddies === false`).
+ */
+export const createSpinOffPins = (key: string, squadId: string, teams: { name: string; brief: string }[], deps: CreatePinDeps = {}) =>
+  runSpinOffOnce(
+    key,
+    async (name, brief) => {
+      const pin = await createPin(squadId, name, brief, deps);
+      if (deps.startBuddies !== false) {
+        void openPin(pin, deps).catch(() => {});
+      }
+      return pin;
+    },
+    teams,
+  );

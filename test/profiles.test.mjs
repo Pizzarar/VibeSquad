@@ -179,6 +179,7 @@ test("3. Spawning each role (lead, brainstorm, worker, restart, topic) matches P
     await performBrainstormRestart(
       {
         agentId: "old-bs-1",
+        oldAgent: { id: "old-bs-1", labels: { role: "brainstorm" } }, // S4: only a known Buddy restarts
         teamId: "vibesquad",
         laneId: "vibesquad",
         profile: "Brainstorm - Gemini",
@@ -310,6 +311,7 @@ test("5. Editing a profile in ~/.vibesquad/profiles.json changes the next spawn 
     await performBrainstormRestart(
       {
         agentId: "bs-prev",
+        oldAgent: { id: "bs-prev", labels: { role: "brainstorm" } }, // S4: only a known Buddy restarts
         teamId: "vibesquad",
         laneId: "vibesquad",
         profile: "Brainstorm - Claude",
@@ -394,4 +396,167 @@ test("6. syncProfilesToPaseo renames Art - Opus and Art - Gemini in place by id 
   } finally {
     env.cleanup();
   }
+});
+
+test("7. R5: loadProfiles auto-imports Paseo profiles on first run (merging missing default pack) and appends newly added Paseo profiles when profiles.json already exists", () => {
+  const env = makeTempEnv();
+  try {
+    mkdirSync(join(env.dir, ".paseo"), { recursive: true });
+    writeFileSync(
+      env.paseoConfigPath,
+      JSON.stringify({
+        daemon: {
+          agentProfiles: [
+            {
+              id: "custom_paseo_1",
+              name: "Custom Paseo Worker",
+              provider: "claude",
+              model: "claude-sonnet-5-5",
+              modeId: "auto",
+              notes: "Custom Paseo worker instructions",
+            },
+          ],
+        },
+      }),
+      "utf8",
+    );
+
+    // Explicit autoSeed: false without autoImportPaseo returns paseo-unimported without writing disk
+    const unimported = loadProfiles(env.profilesPath, {
+      paseoConfigPath: env.paseoConfigPath,
+      autoSeed: false,
+    });
+    assert.equal(unimported.exists, false);
+    assert.equal(unimported.needsSetup, true);
+    assert.equal(unimported.seeded, false);
+    assert.equal(unimported.source, "paseo-unimported");
+
+    // Default / autoImportPaseo: true imports Paseo profiles + merges missing 19 default pack profiles and persists
+    const imported = loadProfiles(env.profilesPath, {
+      paseoConfigPath: env.paseoConfigPath,
+      autoImportPaseo: true,
+    });
+    assert.equal(imported.exists, true);
+    assert.equal(imported.needsSetup, false);
+    assert.equal(imported.seeded, true);
+    assert.equal(imported.source, "paseo-imported");
+    assert.equal(imported.profiles.length, 20);
+    assert.equal(imported.profiles[0].name, "Custom Paseo Worker");
+
+    // When profiles.json already exists on disk and a new profile appears in Paseo config, loadProfiles appends & persists it
+    writeFileSync(
+      env.paseoConfigPath,
+      JSON.stringify({
+        daemon: {
+          agentProfiles: [
+            {
+              id: "custom_paseo_1",
+              name: "Custom Paseo Worker",
+              provider: "claude",
+              model: "claude-sonnet-5-5",
+              modeId: "auto",
+              notes: "Custom Paseo worker instructions",
+            },
+            {
+              id: "custom_paseo_2",
+              name: "Second Paseo Agent",
+              provider: "antigravity-cli",
+              model: "gemini-4-argon",
+              modeId: "accept-edits",
+              notes: "Second custom Paseo agent",
+            },
+          ],
+        },
+      }),
+      "utf8",
+    );
+
+    // Default: existing profiles.json is authoritative; leftover Paseo profiles are NOT resurrected
+    const notResurrected = loadProfiles(env.profilesPath, {
+      paseoConfigPath: env.paseoConfigPath,
+      autoImportPaseo: true,
+    });
+    assert.equal(notResurrected.profiles.length, 20);
+    assert.equal(notResurrected.profiles.some((p) => p.name === "Second Paseo Agent"), false);
+
+    const reloaded = loadProfiles(env.profilesPath, {
+      paseoConfigPath: env.paseoConfigPath,
+      mergePaseoIntoExisting: true,
+    });
+    assert.equal(reloaded.source, "vibesquad");
+    assert.equal(reloaded.profiles.length, 21);
+    assert.ok(reloaded.profiles.some((p) => p.name === "Second Paseo Agent"));
+    const onDisk = JSON.parse(readFileSync(env.profilesPath, "utf8"));
+    assert.equal(onDisk.profiles.length, 21);
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("7b. syncProfilesToPaseo replaces daemon.agentProfiles by default and only merges with { merge: true }", () => {
+  const env = makeTempEnv();
+  try {
+    mkdirSync(join(env.dir, ".paseo"), { recursive: true });
+    const stale = { id: "stale_1", name: "Stale Profile", provider: "claude", model: "m", modeId: "auto" };
+    const keep = { id: "keep_1", name: "Keep Me", provider: "claude", model: "m", modeId: "auto" };
+    const write = () =>
+      writeFileSync(env.paseoConfigPath, JSON.stringify({ daemon: { agentProfiles: [stale, keep] } }), "utf8");
+    write();
+    const replaced = syncProfilesToPaseo([keep], env.paseoConfigPath);
+    assert.deepEqual(replaced.agentProfiles.map((p) => p.name), ["Keep Me"]);
+    const onDisk = JSON.parse(readFileSync(env.paseoConfigPath, "utf8"));
+    assert.equal(onDisk.daemon.agentProfiles.length, 1);
+
+    write();
+    const merged = syncProfilesToPaseo([keep], env.paseoConfigPath, { merge: true });
+    assert.deepEqual(merged.agentProfiles.map((p) => p.name).sort(), ["Keep Me", "Stale Profile"]);
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("8. DEFAULT_PROFILES in src/profiles.ts has all 19 default pack profiles matching DEFAULT_PACK_PROFILES and TeamSettingsModal renders visible profile roster", async () => {
+  const { stripTypeScriptTypes } = await import("node:module");
+  const tsPath = resolve(import.meta.dirname, "..", "src", "profiles.ts");
+  const tsRaw = readFileSync(tsPath, "utf8");
+
+  // Extract from `const BRIEF` up to `export const LEGACY_PROFILE_ALIASES` and evaluate as pure JS
+  const startIdx = tsRaw.indexOf("const BRIEF =");
+  const endIdx = tsRaw.indexOf("export function deriveRole");
+  assert.ok(startIdx > 0 && endIdx > startIdx, "Expected DEFAULT_PROFILES block in src/profiles.ts");
+  const jsSlice = stripTypeScriptTypes(tsRaw.slice(startIdx, endIdx))
+    .replace(/^export\s+/gm, "");
+  const evaluated = new Function(`${jsSlice}\nreturn { DEFAULT_PROFILES, LEGACY_PROFILE_ALIASES };`)();
+
+  assert.equal(evaluated.DEFAULT_PROFILES.length, 19);
+  assert.equal(DEFAULT_PACK_PROFILES.length, 19);
+
+  for (let i = 0; i < DEFAULT_PACK_PROFILES.length; i++) {
+    const serverProf = DEFAULT_PACK_PROFILES[i];
+    const clientProf = evaluated.DEFAULT_PROFILES[i];
+    assert.equal(clientProf.id, serverProf.id, `Profile #${i} id mismatch`);
+    assert.equal(clientProf.name, serverProf.name, `Profile #${i} name mismatch`);
+    assert.equal(clientProf.role, serverProf.role, `Profile #${i} (${serverProf.name}) role mismatch`);
+    assert.equal(clientProf.icon, serverProf.icon, `Profile #${i} (${serverProf.name}) icon mismatch`);
+    assert.equal(clientProf.color, serverProf.color, `Profile #${i} (${serverProf.name}) color mismatch`);
+    assert.equal(clientProf.provider, serverProf.provider, `Profile #${i} (${serverProf.name}) provider mismatch`);
+    assert.equal(clientProf.model, serverProf.model, `Profile #${i} (${serverProf.name}) model mismatch`);
+    assert.equal(clientProf.modeId, serverProf.modeId, `Profile #${i} (${serverProf.name}) modeId mismatch`);
+    assert.equal(
+      clientProf.thinkingOptionId,
+      serverProf.thinkingOptionId,
+      `Profile #${i} (${serverProf.name}) thinkingOptionId mismatch`,
+    );
+    assert.deepEqual(
+      clientProf.featureValues,
+      serverProf.featureValues,
+      `Profile #${i} (${serverProf.name}) featureValues mismatch`,
+    );
+    assert.equal(clientProf.notes, serverProf.notes, `Profile #${i} (${serverProf.name}) notes mismatch`);
+  }
+
+  const modalSrc = readFileSync(resolve(import.meta.dirname, "..", "src", "TeamSettingsModal.tsx"), "utf8");
+  assert.ok(modalSrc.includes('data-testid="settings-profile-roster"'), "Missing settings-profile-roster in TeamSettingsModal.tsx");
+  assert.ok(modalSrc.includes("Seed Default Pack (19)"), "Missing Seed Default Pack (19) button in TeamSettingsModal.tsx");
+  assert.ok(modalSrc.includes("+ New Profile"), "Missing + New Profile button in TeamSettingsModal.tsx");
 });

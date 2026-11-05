@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { DEMO } from "./paseo";
 import { setProviderOverrides } from "./pixel";
+import { isRemote, needsPairing } from "./remoteSession";
 
 export type Role = "lead" | "brainstorm" | "worker";
 
@@ -70,13 +71,15 @@ export const SHARED_NOTE_PREFIX = [
   "- R4 (Large files): For files over ~30k chars, grep first, then read with offset/limit. Never re-read from byte 0.",
   "- R6 (Waiting): Wait on agents with `paseo wait <id> --timeout <s>` (always with a timeout). No sleep/poll loops.",
   "- R2/R7 (Git state): Git state in the spawn context is a starting point only. Re-check right before commit/push/merge, not every turn. Fetch at most once per worktree per hour unless about to merge.",
+  "- R8 (Worktrees & Lanes): Address feature lanes by their `@<code>` handle (e.g. `@bug`, `@ade`, `@uip`, `@art`). Create linked git worktrees only via `vs worktree create <unit>` (stored in the managed worktree sanctuary, never as sibling folders in the projects directory), and sweep merged worktrees with `vs worktree sweep --apply`.",
+  "- R9 (Owner shorthand & interrupts): Decode keyboard/phonetic shorthand silently (`dameon`→daemon, `emini`→gemini, `paseo la`→paseo ls, `gold`→hold, `sotpped`→stopped, `ahvent`→haven't). Translate mechanism suggestions into cleaner primitives (`vs who`, worktree sanctuary, role-tier failover) and record the translation in Decided. Treat `/btw` / `also` / `on another note` as separate queued units, split multi-item dumps into parallel `@lane` units, and treat short approvals (`send it`, `go for b`, `do it`) as terminal go-signals.",
 ].join("\n");
 
 const PRIOR_ART_CHECK_RULE =
-  "Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`paseo --help`, Paseo MCP tool list, `vs --help`, skills). Name what you checked in the plan's Decided section.";
+  'Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`paseo --help`, Paseo MCP tool list, `vs --help`, skills). Name what you checked in the plan\'s Decided section. Whenever designing, committing, or releasing parity/plugin-inspired features, record the original plugin/project name and publisher in plans, commits, `CREDITS.md`, and release notes using: "Implemented <feature> — Thanks to <Plugin/Project> by <Author>".';
 
 const SPIN_UP_BUDDY_RULE =
-  '"Spin up a buddy (for X)" / "spin up another buddy" / "get me a buddy for X": spawn a new Buddy (role=brainstorm, title BRAINSTORM · <LANE> · <topic X>) in a new feature lane (lane=<slug from X>) under the same Squad (team=<product>). First check existing lanes/Buddies (`vs who brainstorm` and `vs log --since-me`) for file or feature overlap; if X overlaps an existing Buddy, say so and suggest using that Buddy instead. Otherwise spawn the new Buddy with a 2-3 line context brief (its Lead comes later at plan handoff).';
+  '"Spin up a buddy (for X)" / "spin up another buddy" / "get me a buddy for X": spawn a new Buddy (role=brainstorm, title <Code> Buddy · <topic X>, Code = the short code of the new lane) in a new feature lane (lane=<slug from X>) under the same Squad (team=<product>). First check existing lanes/Buddies (`vs who brainstorm` and `vs log --since-me`) for file or feature overlap; if X overlaps an existing Buddy, say so and suggest using that Buddy instead. Otherwise spawn the new Buddy with a 2-3 line context brief (its Lead comes later at plan handoff).';
 
 const JSON_WRITE_RULE =
   "Write JSON files with node (e.g. fs.writeFileSync(..., 'utf8')), never PowerShell Set-Content (which writes a UTF-8 BOM that breaks JSON parsers).";
@@ -88,6 +91,7 @@ const LEAD_NOTE_BODY = [
   "Never read sweeps, long logs or raw worker output yourself. Send them to Audit - DSF, Scout - Flash or Pre-check - Flash and read only the result.",
   "Routing: ambiguous work → Implement - Sonnet. Tier A invariant work → Implement - Opus. Clear file scope → Planner - Sonnet + Work Order - DSP. One-file or mechanical → Mechanical - DSF.",
   "Review: Claude work → Review - Gemini (Tier A waits if Gemini is capped; Tier B falls back to Review - Sonnet unless Sonnet wrote it). Gemini work → Review - Sonnet. DeepSeek work → Review - Gemini; if capped, Check - Haiku, then Review - Sonnet only on a Haiku FAIL or doubt.",
+  "Durable lane state & failover: keep `docs/lanes/<lane>/SPEC.md` and `TASKS.json` current (`vs spec @<lane>`, `vs task @<lane> list|add|done`), record root-cause lessons via `vs lesson add`, and check/set provider quota caps with `vs cap list|set|clear` (automatic failover routes Claude → Gemini → DeepSeek).",
   PRIOR_ART_CHECK_RULE,
   SPIN_UP_BUDDY_RULE,
   JSON_WRITE_RULE,
@@ -99,8 +103,9 @@ const BRAINSTORM_NOTE_BODY = [
   "Ground ideas in the real code (read only, cite file:line). Verify facts (git, gh, logs, code) before relaying them; never guess a status.",
   "Never edit source, commit, push or merge. Don't message the lead mid-chat except to hand off.",
   'Handoff (when the owner says "send it"): write a plan file with the idea, the owner\'s words verbatim, Decided vs Open, the plan (order + done-check), which lead, and out of scope. Find the current lead for this project/lane with `vs who lead` (never one marked "(old)"), send one short paragraph plus the path, and tell the owner who got it.',
+  "Durable lane specs: read and update the lane's `docs/lanes/<lane>/SPEC.md` and `TASKS.json` (`vs spec @<lane>`, `vs task @<lane>`) when framing or handing off plans, and refer to lanes by their `@<code>` handle.",
   PRIOR_ART_CHECK_RULE,
-  "Starting agents: only when the owner asks, at most one at a time, and only for side work (tooling, research, prototypes).",
+  "Starting agents: you may spawn leads (including several in parallel) when a lane has none; other agents (tooling, research, prototypes) only when the owner asks.",
   SPIN_UP_BUDDY_RULE,
   "If the repo has a brainstorm brief (see AGENTS.md), read it first.",
 ].join("\n");
@@ -400,11 +405,23 @@ export const DEFAULT_PROFILES: Profile[] = [
   },
 ];
 
+export const DEFAULT_PACK_PROFILES: Profile[] = DEFAULT_PROFILES;
+
 export const LEGACY_PROFILE_ALIASES: Record<string, string> = {
   "Lead - Opus": "Lead - Claude",
   "Brainstorm - Opus": "Brainstorm - Claude",
   "Art - Gemini": "Art Director - Gemini",
   "Art - Opus": "Art Painter - Opus",
+  "Builder - Gemini": "Lead - Gemini",
+  "Reviewer - Gemini": "Review - Gemini",
+  Lead: "Lead - Claude",
+  Brainstorm: "Brainstorm - Claude",
+  Buddy: "Brainstorm - Claude",
+  RiffBot: "Brainstorm - Claude",
+  Worker: "Implement - Sonnet",
+  Coder: "Work Order - DSP",
+  Reviewer: "Review - Gemini",
+  Fast: "Pre-check - Flash",
 };
 
 export function deriveRole(name: string, explicitRole?: string): Role {
@@ -599,6 +616,6 @@ export function dismissSetupPrompt(): void {
 }
 
 // Kick off initial load in browser environments.
-if (typeof window !== "undefined") {
+if (typeof window !== "undefined" && !(isRemote() && needsPairing(true, location.hash))) {
   void fetchProfiles();
 }

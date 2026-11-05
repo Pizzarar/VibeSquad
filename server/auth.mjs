@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, networkInterfaces } from "node:os";
 import { join, resolve } from "node:path";
+import { ensureLocalToken, LOCAL_TOKEN_FILE, LOCAL_TOKEN_HEADER, localTokenPath } from "./local-token.mjs";
 import { qrSvg } from "./qr.mjs";
 import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
 
@@ -95,6 +96,11 @@ export function hasDistIndex(rootDir = DEFAULT_ROOT_DIR) {
   return false;
 }
 
+/** True when `npm run build:android` has produced the signed APK in `dist-desktop/`. */
+function isAndroidApkBuilt(rootDir = resolve(import.meta.dirname, "..")) {
+  return existsSync(join(rootDir, "dist-desktop", "VibeSquad.apk"));
+}
+
 export function getAuthStatus(rootDir = DEFAULT_ROOT_DIR) {
   const { port, meshnetIp, meshnetHost, lanIp } = netConfig();
   const distReady = hasDistIndex(rootDir);
@@ -139,17 +145,35 @@ function lockDown(dir) {
   execFileSync("icacls", [dir, "/inheritance:r", "/grant:r", `${user}:(OI)(CI)F`], { stdio: "pipe", windowsHide: true });
 }
 
+// Secrets that live directly in ~/.vibesquad (VAPID private key, device token hashes, push endpoints, daemon password).
+export const HOME_SECRET_FILES = ["local-token", "vapid.json", "push-subs.json", "devices.json", "daemon-password"];
+
+/**
+ * Restricts ~/.vibesquad to the current user: icacls on Windows, 0700 dir + 0600 secret files elsewhere.
+ * Runs at every startup (not only when LAN/TLS is on). `deps` lets tests stub the platform and fs/exec calls.
+ */
+export function lockDownVibesquadHome({ home = vibesquadHome(), platform = process.platform, lock = lockDown, chmod = chmodSync, exists = existsSync, mkdir = mkdirSync } = {}) {
+  mkdir(home, { recursive: true });
+  if (platform === "win32") {
+    lock(home);
+    return;
+  }
+  try { chmod(home, 0o700); } catch {}
+  for (const name of HOME_SECRET_FILES) {
+    const f = join(home, name);
+    if (exists(f)) {
+      try { chmod(f, 0o600); } catch {}
+    }
+  }
+}
+
 /** Creates (or reuses) ~/.vibesquad/tls/{ca,server}.{key,crt}. Rotates the CA if its name constraints lack private LAN ranges or host/ip. */
 export function ensureTls(cfg = netConfig()) {
   const { meshnetIp = detectMeshnetIp(), meshnetHost = DEFAULT_MESHNET_HOST, lanIp = detectLanIp() } = cfg ?? {};
   const dir = tlsDir();
-  mkdirSync(vibesquadHome(), { recursive: true });
+  lockDownVibesquadHome();
   mkdirSync(dir, { recursive: true });
-  lockDown(vibesquadHome());
   lockDown(dir);
-  if (process.platform !== "win32") {
-    try { chmodSync(vibesquadHome(), 0o700); } catch {}
-  }
   const okHost = meshnetHost && HOST_RE.test(meshnetHost) ? meshnetHost : "";
   const okMeshIp = meshnetIp && IPV4_RE.test(meshnetIp) ? meshnetIp : "";
   const okLanIp = lanIp && IPV4_RE.test(lanIp) ? lanIp : "";
@@ -303,9 +327,10 @@ export function getTls() {
   return tlsCache;
 }
 
+// Read-only: never creates the CA. Unauthenticated GETs (/ca.crt, auth/status, devices) reach this, so CA creation
+// stays with getTls(): LAN/meshnet startup and POST /__vibesquad/pair/start.
 export function caCrtPem() {
   const file = join(tlsDir(), "ca.crt");
-  if (!existsSync(file)) try { getTls(); } catch {}
   return existsSync(file) ? readFileSync(file) : null;
 }
 
@@ -333,7 +358,7 @@ function loadDevices() {
 function saveDevices() {
   mkdirSync(vibesquadHome(), { recursive: true });
   const tmp = devicesFile() + ".tmp";
-  writeFileSync(tmp, JSON.stringify({ devices: loadDevices() }, null, 2), "utf8");
+  writeFileSync(tmp, JSON.stringify({ devices: loadDevices() }, null, 2), { encoding: "utf8", mode: 0o600 });
   renameSync(tmp, devicesFile());
   clearConfigWarning(devicesFile());
   lastPersist = Date.now();
@@ -366,7 +391,8 @@ export function authenticate(req) {
   return dev;
 }
 
-// Requests on the loopback listener are the PC itself and skip the token check.
+// The loopback listener is the PC itself, but not only its owner (other apps, other Windows users):
+// owner access there needs the local token (header) or the vs_local cookie the launcher sets.
 const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 export const isLocal = (req) => LOOPBACK.has(req.socket.localAddress ?? "");
 
@@ -393,6 +419,109 @@ export function isLocalBrowserSafe(req) {
   if (site !== undefined && site !== "same-origin" && site !== "none") return false;
   if (["POST", "PUT", "DELETE", "PATCH"].includes(req.method ?? "") && isBrowserRequest(h) && origin === undefined) return false;
   return true;
+}
+
+// ---- Local token (owner trust on loopback) ----
+
+export const LOCAL_COOKIE = "vs_local";
+const localTokenCache = new Map(); // token file -> token (keyed so a test that moves VIBESQUAD_HOME gets that home's token)
+
+/** The per-install token, created on first use (server start calls this after locking the home dir). */
+export function getLocalToken() {
+  const file = localTokenPath();
+  let token = localTokenCache.get(file);
+  if (!token) localTokenCache.set(file, (token = ensureLocalToken(file)));
+  return token;
+}
+
+export function resetLocalTokenForTest() {
+  localTokenCache.clear();
+}
+
+// The cookie carries a value derived from the token, so a leaked cookie isn't the header secret too.
+const localCookieValue = (token) => sha256Hex(`vs_local-cookie:${token}`);
+
+const sameSecret = (got, want) => {
+  const a = Buffer.from(String(got ?? ""), "utf8");
+  const b = Buffer.from(want, "utf8");
+  return a.length === b.length && timingSafeEqual(a, b);
+};
+
+/** True when the request carries the local token header or the vs_local cookie. Says nothing about the listener. */
+export function hasLocalToken(req) {
+  const token = getLocalToken();
+  const header = req.headers[LOCAL_TOKEN_HEADER] ?? req.headers["x-vs-token"];
+  if (typeof header === "string" && sameSecret(header.trim(), token)) return true;
+  const cookie = parseCookies(req.headers.cookie)[LOCAL_COOKIE];
+  return Boolean(cookie) && sameSecret(cookie, localCookieValue(token));
+}
+
+/** Owner on loopback: the existing Host/Origin checks plus the local token. */
+export const isLocalOwner = (req) => isLocalBrowserSafe(req) && hasLocalToken(req);
+
+/** True only for the x-vibesquad-token header (never the cookie): the nonce endpoint is for CLI/launcher callers. */
+export function hasLocalTokenHeader(req) {
+  const header = req.headers[LOCAL_TOKEN_HEADER] ?? req.headers["x-vs-token"];
+  return typeof header === "string" && sameSecret(header.trim(), getLocalToken());
+}
+
+// Single-use login nonces: the URL a launcher puts on a command line never carries the master token.
+const LOGIN_NONCE_TTL_MS = 60_000;
+const loginNonces = new Map(); // nonce -> expiresAt
+
+/** A fresh 128-bit nonce for /__vibesquad/local-login?t=, valid once for ~60 s. In memory, so mint it in the server process. */
+export function mintLocalLoginNonce(ttlMs = LOGIN_NONCE_TTL_MS) {
+  const now = Date.now();
+  for (const [n, exp] of loginNonces) if (exp <= now) loginNonces.delete(n);
+  const nonce = randomBytes(16).toString("hex");
+  loginNonces.set(nonce, now + ttlMs);
+  return nonce;
+}
+
+function consumeLocalLoginNonce(raw) {
+  const nonce = String(raw ?? "").trim();
+  if (!/^[0-9a-f]{32}$/.test(nonce)) return false;
+  const exp = loginNonces.get(nonce);
+  loginNonces.delete(nonce);
+  return exp !== undefined && exp > Date.now();
+}
+
+export function resetLocalLoginNoncesForTest() {
+  loginNonces.clear();
+}
+
+export const READ_ONLY_ERROR = "read-only: this loopback request has no VibeSquad local token. Open VibeSquad from its launcher or desktop app (or run `vs open`), or send the x-vibesquad-token header from ~/.vibesquad/local-token.";
+
+/**
+ * GET /__vibesquad/local-login?t=<nonce>: launcher-only bootstrap. Sets the vs_local session cookie and redirects
+ * to /. Loopback only; t must be an unused, unexpired nonce (never the master token), else 403 and no cookie.
+ */
+export function handleLocalLogin(req, res) {
+  if (req.method !== "GET") {
+    res.statusCode = 405;
+    return res.end();
+  }
+  res.setHeader("referrer-policy", "no-referrer");
+  if (!isLocalBrowserSafe(req)) return sendJson(res, 403, { error: "local login is only available on the PC itself" });
+  const t = new URL(req.url ?? "/", "http://x").searchParams.get("t");
+  if (!consumeLocalLoginNonce(t)) return sendHtml(res, 403, "Local login failed", "That link is not valid, already used, or expired. Open VibeSquad from its launcher or desktop app, or run <code>vs open</code>.");
+  res.statusCode = 302;
+  // Session cookie (no Max-Age): a fresh launcher run unlocks the next browser session.
+  res.setHeader("set-cookie", `${LOCAL_COOKIE}=${localCookieValue(getLocalToken())}; HttpOnly; SameSite=Strict; Path=/`);
+  res.setHeader("location", "/");
+  res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
+  res.end();
+}
+
+/** POST /__vibesquad/local-login/nonce with the x-vibesquad-token header: { nonce, path, expiresInMs } for `vs open`. */
+export function handleLocalLoginNonce(req, res) {
+  if (req.method !== "POST") {
+    res.statusCode = 405;
+    return res.end();
+  }
+  if (!isLocalBrowserSafe(req) || !hasLocalTokenHeader(req)) return sendJson(res, 403, { error: "the x-vibesquad-token header is required" });
+  const nonce = mintLocalLoginNonce();
+  sendJson(res, 200, { nonce, path: `/__vibesquad/local-login?t=${nonce}`, expiresInMs: LOGIN_NONCE_TTL_MS });
 }
 
 /** Host header values this server answers to; anything else is not echoed into redirects. */
@@ -443,14 +572,38 @@ export function revokeDevice(id) {
 const codes = new Map(); // code -> expiresAt
 const PAIR_WINDOW_MS = 60_000;
 const PAIR_MAX_ATTEMPTS = 5;
+// Bad codes lock out only the IP that sent them (other IPs' live codes stay valid): 1 min, doubling up to 1 h.
 const PAIR_MAX_FAILURES = 5;
+const PAIR_LOCK_BASE_MS = 60_000;
+const PAIR_LOCK_MAX_MS = 60 * 60_000;
+const PAIR_FAILURE_FORGET_MS = 60 * 60_000;
 const pairAttempts = new Map(); // ip -> timestamps
-let pairFailures = 0;
+const pairFailuresByIp = new Map(); // ip -> { count, lastAt, lockedUntil }
 
 export function resetPairRateLimitForTest() {
   pairAttempts.clear();
-  pairFailures = 0;
+  pairFailuresByIp.clear();
   codes.clear();
+}
+
+function prunePairState(now) {
+  for (const [ip, ts] of pairAttempts) if (!ts.some((t) => now - t < PAIR_WINDOW_MS)) pairAttempts.delete(ip);
+  for (const [ip, f] of pairFailuresByIp) if (f.lockedUntil <= now && now - f.lastAt > PAIR_FAILURE_FORGET_MS) pairFailuresByIp.delete(ip);
+}
+
+function pairLockRemainingMs(ip, now = Date.now()) {
+  const f = pairFailuresByIp.get(ip);
+  return f && f.lockedUntil > now ? f.lockedUntil - now : 0;
+}
+
+function recordPairFailure(ip, now = Date.now()) {
+  const f = pairFailuresByIp.get(ip) ?? { count: 0, lastAt: 0, lockedUntil: 0 };
+  f.count += 1;
+  f.lastAt = now;
+  if (f.count >= PAIR_MAX_FAILURES) {
+    f.lockedUntil = now + Math.min(PAIR_LOCK_MAX_MS, PAIR_LOCK_BASE_MS * 2 ** (f.count - PAIR_MAX_FAILURES));
+  }
+  pairFailuresByIp.set(ip, f);
 }
 
 export function createPairCode(ttlMs = CODE_TTL_MS) {
@@ -463,10 +616,33 @@ export function createPairCode(ttlMs = CODE_TTL_MS) {
 
 function pairRateLimited(ip) {
   const now = Date.now();
+  prunePairState(now);
   const recent = (pairAttempts.get(ip) ?? []).filter((t) => now - t < PAIR_WINDOW_MS);
   recent.push(now);
   pairAttempts.set(ip, recent);
   return recent.length > PAIR_MAX_ATTEMPTS;
+}
+
+/** Invalidates a pair code, e.g. one that arrived over plain HTTP and may have been seen on the LAN. */
+export function discardPairCode(rawCode) {
+  const raw = String(rawCode ?? "").trim();
+  codes.delete(raw);
+  codes.delete(raw.replace(/[-\s]/g, ""));
+}
+
+/**
+ * Plain-HTTP /pair: burns the code under the same per-IP limits as /pair redeem, so a LAN host can't sweep the
+ * code space over HTTP to wipe the real one. A miss counts as a failure; a locked or throttled IP burns nothing.
+ */
+export function discardPlainHttpPairCode(rawCode, ip) {
+  const raw = String(rawCode ?? "").trim();
+  if (!raw) return false; // no code: nothing to burn, and no rate-limit attempt used up
+  const key = String(ip ?? "unknown").replace(/^::ffff:/, "");
+  if (pairLockRemainingMs(key) > 0 || pairRateLimited(key)) return false;
+  const existed = codes.has(raw) || codes.has(raw.replace(/[-\s]/g, ""));
+  discardPairCode(raw);
+  if (!existed) recordPairFailure(key);
+  return existed;
 }
 
 function sweepCodes() {
@@ -483,9 +659,17 @@ function sendJson(res, code, data) {
   res.end(JSON.stringify(data));
 }
 
+/** Anti-clickjacking for HTML responses: X-Frame-Options plus CSP frame-ancestors, merged into any CSP already set. */
+export function setNoFraming(res) {
+  res.setHeader("x-frame-options", "DENY");
+  const prev = String(res.getHeader?.("content-security-policy") ?? "").trim().replace(/;\s*$/, "");
+  res.setHeader("content-security-policy", !prev ? "frame-ancestors 'none'" : /(^|;)\s*frame-ancestors\b/i.test(prev) ? prev : `${prev}; frame-ancestors 'none'`);
+}
+
 function sendHtml(res, code, title, message) {
   res.statusCode = code;
   res.setHeader("content-type", "text/html; charset=utf-8");
+  setNoFraming(res);
   res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
   res.end(htmlPage(title, message));
 }
@@ -548,10 +732,13 @@ export async function handlePairStart(req, res) {
     lanHttpsUrl: lanIp ? `https://${lanIp}:${port}` : null,
     lanCaUrl: lanIp ? `http://${lanIp}:${port}/ca.crt` : null,
     lanDesktopInstallerUrl: lanIp ? `http://${lanIp}:${port}/VibeSquad-setup.exe` : null,
+    lanAndroidApkUrl: lanIp ? `http://${lanIp}:${port}/VibeSquad.apk` : null,
     lanPairUrl,
     lanQrSvg: lanPairUrl ? await qrSvg(lanPairUrl) : null,
     caHttpUrl: `http://${effectiveMeshnetIp}:${port}/ca.crt`,
     desktopSetupHttpUrl: `http://${effectiveMeshnetIp}:${port}/VibeSquad-setup.exe`,
+    androidApkHttpUrl: `http://${effectiveMeshnetIp}:${port}/VibeSquad.apk`,
+    androidApkAvailable: isAndroidApkBuilt(),
     caFingerprint: caFingerprint(),
     meshnetHost,
     meshnetIp: effectiveMeshnetIp,
@@ -566,26 +753,29 @@ export function handlePairRedeem(req, res) {
     res.statusCode = 405;
     return res.end();
   }
-  if (pairRateLimited(req.socket?.remoteAddress ?? "unknown")) {
+  const ip = String(req.socket?.remoteAddress ?? "unknown").replace(/^::ffff:/, "");
+  const lockedMs = pairLockRemainingMs(ip);
+  if (lockedMs > 0 || pairRateLimited(ip)) {
+    const retrySecs = Math.max(60, Math.ceil(lockedMs / 1000));
     res.statusCode = 429;
-    res.setHeader("retry-after", "60");
+    res.setHeader("retry-after", String(retrySecs));
     res.setHeader("content-type", "text/plain; charset=utf-8");
-    return res.end("Too many pairing attempts. Try again in a minute.");
+    return res.end(lockedMs > 0 ? `Too many failed pairing attempts. Try again in ${Math.ceil(retrySecs / 60)} min.` : "Too many pairing attempts. Try again in a minute.");
   }
   const q = new URL(req.url, "http://x").searchParams;
   const rawCode = (q.get("code") ?? "").trim();
+  if (!rawCode) {
+    return sendHtml(res, 400, "No pairing code", "Scan the QR code on your PC (it opens an https:// link with the code).");
+  }
   const code = /^\d{3}[-\s]?\d{3}$/.test(rawCode) ? rawCode.replace(/[-\s]/g, "") : rawCode;
   const exp = codes.get(code) ?? codes.get(rawCode);
   codes.delete(code); // one-shot, even when expired
   codes.delete(rawCode);
   if (!exp || exp <= Date.now()) {
-    if (++pairFailures >= PAIR_MAX_FAILURES) {
-      codes.clear();
-      pairFailures = 0;
-    }
+    recordPairFailure(ip);
     return sendHtml(res, 401, "Pairing failed", "This pairing code is invalid, already used, or expired. Generate a new QR code on your PC.");
   }
-  pairFailures = 0;
+  pairFailuresByIp.delete(ip);
   const token = randomBytes(32).toString("base64url");
   const now = new Date().toISOString();
   const name = (q.get("name") || deviceNameFromUa(String(req.headers["user-agent"] ?? ""))).slice(0, 40);
@@ -614,9 +804,12 @@ export function handleDevices(req, res) {
     port,
     caHttpUrl: meshnetIp ? `http://${meshnetIp}:${port}/ca.crt` : null,
     desktopSetupHttpUrl: meshnetIp ? `http://${meshnetIp}:${port}/VibeSquad-setup.exe` : null,
+    androidApkHttpUrl: meshnetIp ? `http://${meshnetIp}:${port}/VibeSquad.apk` : null,
     lanHttpsUrl: lanIp ? `https://${lanIp}:${port}` : null,
     lanCaUrl: lanIp ? `http://${lanIp}:${port}/ca.crt` : null,
     lanDesktopInstallerUrl: lanIp ? `http://${lanIp}:${port}/VibeSquad-setup.exe` : null,
+    lanAndroidApkUrl: lanIp ? `http://${lanIp}:${port}/VibeSquad.apk` : null,
+    androidApkAvailable: isAndroidApkBuilt(),
   });
 }
 

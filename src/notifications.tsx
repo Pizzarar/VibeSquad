@@ -1,4 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { DEMO } from "./paseo";
+import { getPrefs, pushEventsFromPrefs, subscribePrefs } from "./prefs";
+import { isRemote } from "./remoteSession";
 
 export function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -63,6 +66,49 @@ async function desktopAvailable(): Promise<boolean> {
   }
 }
 
+// Push filter: the server's watcher skips any event turned off in Settings › Notifications. Synced through the
+// existing /__vibesquad/settings endpoint on load and whenever a toggle changes (the last device to change wins).
+let lastPushEvents = "";
+function syncPushEvents(): void {
+  if (isRemote()) return;
+  const pushEvents = pushEventsFromPrefs(getPrefs());
+  const key = JSON.stringify(pushEvents);
+  if (key === lastPushEvents || DEMO) return;
+  lastPushEvents = key;
+  void fetch("/__vibesquad/settings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pushEvents }) }).catch(() => {
+    lastPushEvents = "";
+  });
+}
+if (typeof window !== "undefined") {
+  syncPushEvents();
+  subscribePrefs(syncPushEvents);
+}
+
+/** Short two-note chime for in-app alerts (Settings › Notifications › Alert sound). */
+export function playAlertChime(): void {
+  try {
+    const Ctx = window.AudioContext ?? (window as any).webkitAudioContext;
+    if (!Ctx) return;
+    const ctx: AudioContext = new Ctx();
+    const at = ctx.currentTime;
+    [880, 1320].forEach((hz, i) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "square";
+      o.frequency.value = hz;
+      g.gain.setValueAtTime(0.0001, at + i * 0.12);
+      g.gain.exponentialRampToValueAtTime(0.06, at + i * 0.12 + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, at + i * 0.12 + 0.11);
+      o.connect(g).connect(ctx.destination);
+      o.start(at + i * 0.12);
+      o.stop(at + i * 0.12 + 0.12);
+    });
+    setTimeout(() => void ctx.close().catch(() => {}), 500);
+  } catch {
+    /* audio unavailable */
+  }
+}
+
 export const PushNotificationControls = memo(function PushNotificationControls() {
   const [enabled, setEnabled] = useState<boolean>(() => localStorage.getItem("vs.push.enabled") === "1");
   const [busy, setBusy] = useState(false);
@@ -70,7 +116,7 @@ export const PushNotificationControls = memo(function PushNotificationControls()
   const regRef = useRef<ServiceWorkerRegistration | null>(null);
 
   useEffect(() => {
-    if (typeof window === "undefined" || !("serviceWorker" in navigator)) return;
+    if (isRemote() || typeof window === "undefined" || !("serviceWorker" in navigator)) return;
     let cancelled = false;
     navigator.serviceWorker
       .register("/sw.js", { scope: "/" })
@@ -284,6 +330,14 @@ export const PushNotificationControls = memo(function PushNotificationControls()
       setBusy(false);
     }
   }, [busy, ensureSwRegistration]);
+
+  if (isRemote()) {
+    return (
+      <span className="muted small" data-testid="push-remote-disabled">
+        Managed on host PC
+      </span>
+    );
+  }
 
   return (
     <div className="push-controls" data-testid="push-controls">

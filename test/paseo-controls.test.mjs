@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
+import cp from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, before, describe, test } from "node:test";
+import util from "node:util";
+import "../server/windows-hide-preload.mjs";
+import { ensurePaseoDaemon } from "../server/first-run.mjs";
 import {
   SECRET_MASK,
+  checkStartedDaemonProviders,
   clearManagedDaemonMarker,
   controlPaseoDaemon,
   controlPaseoPlugin,
@@ -15,6 +20,7 @@ import {
   getPaseoPlugins,
   getPaseoProviders,
   getPaseoUsage,
+  inspectDaemonAgents,
   listPaseoConfigBackups,
   markDaemonManagedByVibeSquad,
   maskSecrets,
@@ -23,10 +29,12 @@ import {
   saveCustomAcpProvider,
   togglePaseoProvider,
   updatePaseoSettingsPatch,
+  withWindowsHideNodeOptions,
   writePaseoConfigAndReload,
 } from "../server/paseo-control.mjs";
 import { saveUserSettings } from "../server/user-settings.mjs";
 import { createVibesquadMiddleware } from "../server/vibesquad-api.mjs";
+import { ownerHeaders } from "./helpers/local-owner.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
 
@@ -403,20 +411,33 @@ describe("PLAN_PASEO_CONTROLS — Paseo settings & daemon controls (isolated tem
     const port = srv.address().port;
 
     try {
-      const surfaceResp = await fetch(`http://127.0.0.1:${port}/__vibesquad/paseo/surface`);
+      const surfaceResp = await fetch(`http://127.0.0.1:${port}/__vibesquad/paseo/surface`, { headers: ownerHeaders() });
       assert.equal(surfaceResp.status, 200);
       const surfaceText = await surfaceResp.text();
       assert.ok(!surfaceText.includes("TOP_SECRET_TOKEN_VALUE_888"), "No secret value may appear in /paseo/surface response");
       assert.ok(!surfaceText.includes("sk-or-secret-value-777"), "No provider env secret may appear in /paseo/surface response");
 
+      // A non-loopback daemon.listen needs confirmExposure: 409 and no write without it
+      const unconfirmedResp = await fetch(`http://127.0.0.1:${port}/__vibesquad/paseo/surface`, {
+        method: "POST",
+        headers: ownerHeaders({ "content-type": "application/json" }),
+        body: JSON.stringify({ listen: "0.0.0.0:16767", browserToolsEnabled: true }),
+      });
+      assert.equal(unconfirmedResp.status, 409);
+      const unconfirmedJson = await unconfirmedResp.json();
+      assert.equal(unconfirmedJson.needsConfirmation, true);
+      assert.match(unconfirmedJson.warning, /not loopback/);
+      assert.equal(JSON.parse(readFileSync(join(tempPaseoHome, "config.json"), "utf8")).daemon.listen, "127.0.0.1:16767");
+
       // Changing daemon.listen flags restartRequired: true
       const listenPatchResp = await fetch(`http://127.0.0.1:${port}/__vibesquad/paseo/surface`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ listen: "0.0.0.0:16767", browserToolsEnabled: true }),
+        headers: ownerHeaders({ "content-type": "application/json" }),
+        body: JSON.stringify({ listen: "0.0.0.0:16767", browserToolsEnabled: true, confirmExposure: true }),
       });
       const listenPatchJson = await listenPatchResp.json();
       assert.equal(listenPatchJson.ok, true);
+      assert.match(listenPatchJson.warning, /not loopback/);
       assert.equal(listenPatchJson.restartRequired, true);
       assert.equal(listenPatchJson.surface.network.listen, "0.0.0.0:16767");
       assert.equal(listenPatchJson.surface.behaviour.browserToolsEnabled, true);
@@ -428,5 +449,179 @@ describe("PLAN_PASEO_CONTROLS — Paseo settings & daemon controls (isolated tem
     } finally {
       srv.close();
     }
+  });
+
+  test("7. Headless Windows preload & zero-spawn daemon status polling", async () => {
+    const winEnv = withWindowsHideNodeOptions({ FOO: "1" }, "win32");
+    assert.match(winEnv.NODE_OPTIONS, /--import .*windows-hide-preload\.mjs/);
+    const winEnvIdempotent = withWindowsHideNodeOptions(winEnv, "win32");
+    assert.equal(winEnvIdempotent.NODE_OPTIONS, winEnv.NODE_OPTIONS);
+    const posixEnv = withWindowsHideNodeOptions({ FOO: "1" }, "linux");
+    assert.equal(posixEnv.NODE_OPTIONS, undefined);
+
+    writeFileSync(join(tempPaseoHome, "daemon.pid"), "61616\n", "utf8");
+    writeFileSync(join(tempPaseoHome, "server-id"), "srv_fast_poll_test\n", "utf8");
+
+    const fastStatus = await getPaseoDaemonStatus({
+      paseoHome: tempPaseoHome,
+      baseHome: tempVsHome,
+      isListening: async () => true,
+    });
+    assert.equal(fastStatus.running, true);
+    assert.equal(fastStatus.pid, 61616);
+    assert.equal(fastStatus.serverId, "srv_fast_poll_test");
+    assert.equal(fastStatus.busyAgentCount, 0);
+  });
+
+  test("7b. inspectDaemonAgents reads <paseoHome>/agents on disk without spawning the CLI", async () => {
+    const agentsDir = join(tempPaseoHome, "agents", "ws-direct");
+    mkdirSync(agentsDir, { recursive: true });
+    writeFileSync(
+      join(agentsDir, "agent_running.json"),
+      JSON.stringify({ id: "agent_running", title: "Busy Buddy", status: "running" }),
+      "utf8",
+    );
+    writeFileSync(
+      join(agentsDir, "agent_idle.json"),
+      JSON.stringify({ id: "agent_idle", name: "Idle Worker", status: "idle" }),
+      "utf8",
+    );
+    writeFileSync(join(agentsDir, "agent_closed.json"), JSON.stringify({ id: "agent_closed", status: "closed" }), "utf8");
+    writeFileSync(
+      join(agentsDir, "agent_archived.json"),
+      JSON.stringify({ id: "agent_archived", status: "idle", archivedAt: "2026-01-01T00:00:00.000Z" }),
+      "utf8",
+    );
+
+    // Fake CLI that would leave a marker if inspectDaemonAgents spawned it.
+    const marker = join(tempRoot, "spawned.marker");
+    const fakeCli = join(tempRoot, "fake-paseo.cjs");
+    writeFileSync(fakeCli, `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "spawned");\n`, "utf8");
+
+    const res = await inspectDaemonAgents({
+      paseoHome: tempPaseoHome,
+      cli: { kind: "node", bin: fakeCli, source: "existing" },
+    });
+
+    assert.equal(existsSync(marker), false, "must not spawn the paseo CLI when no runner is supplied");
+    assert.equal(res.liveCount, 2);
+    assert.equal(res.busyCount, 1);
+    assert.deepEqual(res.busyAgents, [{ id: "agent_running", name: "Busy Buddy" }]);
+  });
+
+  test("8. windows-hide-preload preserves util.promisify(cp.execFile) and util.promisify(cp.exec) with { stdout, stderr } and .child", async () => {
+    const execFileAsync = util.promisify(cp.execFile);
+    const p = execFileAsync(process.execPath, ["-e", "process.stdout.write('ok')"]);
+    assert.ok(p.child, "promisified execFile promise must expose .child");
+    const res = await p;
+    assert.equal(typeof res, "object");
+    assert.equal(res.stdout, "ok");
+    assert.equal(res.stdout.trim(), "ok");
+    assert.equal(res.stderr, "");
+
+    const execAsync = util.promisify(cp.exec);
+    const pExec = execAsync(`"${process.execPath}" -e "process.stdout.write('exec-ok')"`);
+    assert.ok(pExec.child, "promisified exec promise must expose .child");
+    const resExec = await pExec;
+    assert.equal(resExec.stdout.trim(), "exec-ok");
+    assert.equal(resExec.stderr, "");
+
+    const cbOut = await new Promise((resolveCb, rejectCb) => {
+      cp.execFile(process.execPath, ["-e", "process.stdout.write('cb-ok')"], (err, stdout, stderr) => {
+        if (err) rejectCb(err);
+        else resolveCb({ stdout, stderr });
+      });
+    });
+    assert.equal(cbOut.stdout, "cb-ok");
+    assert.equal(cbOut.stderr, "");
+  });
+
+  test("9. controlPaseoDaemon('start') checks provider health and surfaces providerWarning when a provider has status 'error'", async () => {
+    let started = false;
+    const startRes = await controlPaseoDaemon("start", {
+      paseoHome: tempPaseoHome,
+      baseHome: tempVsHome,
+      isListening: async () => started,
+      cliRunner: async (args) => {
+        if (args[0] === "daemon" && args[1] === "start") {
+          started = true;
+          return { ok: true, code: 0, stdout: "Started", stderr: "" };
+        }
+        if (args[0] === "status") {
+          return {
+            ok: true,
+            code: 0,
+            data: {
+              home: tempPaseoHome,
+              pid: 77777,
+              listen: "127.0.0.1:16767",
+              configuredListen: "127.0.0.1:16767",
+              localDaemon: started ? "running" : "stopped",
+              daemonVersion: "0.14.0",
+            },
+          };
+        }
+        if (args[0] === "provider" && args[1] === "ls") {
+          return {
+            ok: true,
+            code: 0,
+            data: [
+              { provider: "claude", label: "Claude", status: "error", enabled: "Enabled", error: "stdout is undefined" },
+              { provider: "codex", label: "Codex", status: "available", enabled: "Enabled" },
+            ],
+          };
+        }
+        return { ok: true, code: 0, data: [] };
+      },
+    });
+
+    assert.equal(startRes.ok, true);
+    assert.ok(startRes.providerWarning, "Expected providerWarning to be populated");
+    assert.ok(
+      startRes.providerWarning.startsWith("Daemon started but providers failed:"),
+      `Unexpected providerWarning: ${startRes.providerWarning}`,
+    );
+    assert.match(startRes.providerWarning, /claude \(stdout is undefined\)/);
+    assert.equal(startRes.erroredProviders.length, 1);
+    assert.equal(startRes.status.providerWarning, startRes.providerWarning);
+
+    const directHealth = await checkStartedDaemonProviders({
+      paseoHome: tempPaseoHome,
+      cliRunner: async () => ({
+        ok: true,
+        code: 0,
+        data: [{ provider: "gemini", label: "Gemini", status: "error", detail: "ACP handshake timeout" }],
+      }),
+    });
+    assert.equal(directHealth.providerWarning, "Daemon started but providers failed: gemini (ACP handshake timeout)");
+
+    // Verify ensurePaseoDaemon spawns ["--home", paseoHome, "daemon", "start"] without detached on win32
+    // and records the daemon.pid written once the socket comes up.
+    const spawnCalls = [];
+    let probeCount = 0;
+    const ensureRes = await ensurePaseoDaemon({
+      paseoHome: tempPaseoHome,
+      cli: { bin: "paseo", args: ["--trace"], source: "existing" },
+      _probe: async () => {
+        probeCount++;
+        if (probeCount >= 2) {
+          writeFileSync(join(tempPaseoHome, "daemon.pid"), "88888\n", "utf8");
+          return true;
+        }
+        return false;
+      },
+      _spawn: (cmd, args, opts) => {
+        spawnCalls.push({ cmd, args, opts });
+        return { pid: 11111, on() {}, unref() {} };
+      },
+      _runCli: async () => [{ provider: "claude", status: "error", error: "broken pipe" }],
+    });
+    assert.equal(ensureRes.started, true);
+    assert.equal(spawnCalls.length, 1);
+    assert.deepEqual(spawnCalls[0].args, ["--trace", "--home", tempPaseoHome, "daemon", "start"]);
+    assert.equal(spawnCalls[0].opts.windowsHide, true);
+    assert.equal(spawnCalls[0].opts.detached, process.platform !== "win32");
+    assert.equal(readFileSync(join(tempPaseoHome, "vibesquad-managed.pid"), "utf8").trim(), "88888");
+    assert.match(ensureRes.providerWarning, /^Daemon started but providers failed: claude \(broken pipe\)/);
   });
 });

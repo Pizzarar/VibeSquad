@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import {
   createVibesquadMiddleware,
+  handleAndroidApk,
   handleAuthStatus,
   handleDesktopInstaller,
   handleDesktopUpdateJson,
@@ -15,21 +16,30 @@ import {
 } from "./vibesquad-api.mjs";
 import {
   authenticate,
+  discardPlainHttpPairCode,
+  getLocalToken,
   getTls,
+  mintLocalLoginNonce,
   handleCaCrt,
   handlePairRedeem,
   isAllowedHostHeader,
-  isLocalBrowserSafe,
+  isLocalOwner,
   isLoopbackOrigin,
+  lockDownVibesquadHome,
   netConfig,
   sendUnpaired,
+  setNoFraming,
   trackSocket,
 } from "./auth.mjs";
 import "./brainstorm.mjs";
 import "./inbox.mjs";
 import { installVsShim } from "../cli/vs.mjs";
+import { requestLocalLoginUrl } from "./local-token.mjs";
 import { startPushWatcher } from "./push.mjs";
 import { ensurePaseoDaemon } from "./first-run.mjs";
+import { checkDaemonListenExposure } from "./paseo-control.mjs";
+import { logServerStart } from "./server-start.mjs";
+import { getStale } from "./stale-runtime.mjs";
 import { loadUserSettings } from "./user-settings.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
@@ -68,6 +78,7 @@ const MIME = {
   ".woff2": "font/woff2",
   ".ttf": "font/ttf",
   ".map": "application/json",
+  ".apk": "application/vnd.android.package-archive",
   ".txt": "text/plain; charset=utf-8",
 };
 
@@ -106,10 +117,15 @@ function findExe(candidates) {
   return candidates.find((c) => c.includes(sep) && existsSync(c)) ?? null;
 }
 
-function launchApp(exe) {
+// The launcher's own URL: a single-use local-login nonce (never the master token, which would sit on the
+// browser's command line). The serving process mints it in memory; a second --open asks the running server.
+const servedOpenUrl = () => `${url}/__vibesquad/local-login?t=${mintLocalLoginNonce()}`;
+const runningServerOpenUrl = () => requestLocalLoginUrl({ port }).catch(() => url);
+
+function launchApp(exe, target) {
   // A bare name relies on PATH; spawn reports a missing binary via the error event.
   return new Promise((ok) => {
-    const child = spawn(exe, [`--app=${url}`], { detached: true, stdio: "ignore", windowsHide: false });
+    const child = spawn(exe, [`--app=${target}`], { detached: true, stdio: "ignore", windowsHide: false });
     child.on("error", () => ok(false));
     setTimeout(() => {
       child.unref();
@@ -118,7 +134,9 @@ function launchApp(exe) {
   });
 }
 
-async function openBrowser() {
+async function openBrowser(target) {
+  // Test hook: report the URL instead of focusing or launching a browser.
+  if (process.env.VIBESQUAD_TEST_OPEN_PRINT === "1") return void process.stdout.write(`VIBESQUAD_OPEN_URL=${target}\n`);
   if (await focusExistingWindow()) return;
   const pf = process.env["ProgramFiles"] ?? "C:\\Program Files";
   const pf86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
@@ -128,10 +146,10 @@ async function openBrowser() {
   ];
   for (const list of browsers) {
     const exe = findExe(list) ?? list[list.length - 1];
-    if (await launchApp(exe)) return;
+    if (await launchApp(exe, target)) return;
   }
   // `start` is a cmd builtin; the empty "" is the window title argument.
-  spawn("cmd.exe", ["/c", "start", "", url], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+  spawn("cmd.exe", ["/c", "start", "", target], { detached: true, stdio: "ignore", windowsHide: true }).unref();
 }
 
 function isListening() {
@@ -172,6 +190,7 @@ function findDistFile(urlPath) {
 function sendFile(res, file) {
   res.statusCode = 200;
   res.setHeader("content-type", MIME[extname(file).toLowerCase()] ?? "application/octet-stream");
+  if (extname(file).toLowerCase() === ".html") setNoFraming(res);
   if (file.includes(`${sep}assets${sep}`)) {
     res.setHeader("cache-control", "public, max-age=31536000, immutable");
   } else {
@@ -291,6 +310,7 @@ function handle(req, res) {
     if (!index) {
       res.statusCode = 500;
       res.setHeader("content-type", "text/html; charset=utf-8");
+      setNoFraming(res);
       res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
       return res.end(renderMissingDistHtml());
     }
@@ -314,9 +334,11 @@ function proxyUpgrade(req, socket, head) {
     let raw = `${req.method} ${req.url} HTTP/${req.httpVersion}\r\n`;
     for (let i = 0; i < req.rawHeaders.length; i += 2) {
       const name = req.rawHeaders[i];
-      if (name.toLowerCase() === "origin") continue;
+      const lower = name.toLowerCase();
+      if (lower === "origin" || lower === "host") continue;
       raw += `${name}: ${req.rawHeaders[i + 1]}\r\n`;
     }
+    raw += `Host: ${host || "127.0.0.1"}:${p}\r\n`;
     raw += `Origin: http://${host || "127.0.0.1"}:${p}\r\n`;
     upstream.write(raw + "\r\n");
     if (head?.length) upstream.write(head);
@@ -340,7 +362,18 @@ function isAllowedWsOrigin(origin) {
   }
 }
 
-export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().meshnetHost, tls = getTls() } = {}) {
+/**
+ * Where a plain-http request should go: the Host it used when this server answers to it, else the
+ * meshnet name, else the meshnet IP (the TLS cert always carries it), else localhost. Never an empty
+ * host: with no meshnet name configured the 426 page used to say "https://:4180" (PLAN_BUGS_BATCH1 block 5).
+ */
+export function httpsTargetHost(hostHeader, { port: p = port, meshnetHost = "", meshnetIp = "", allowed = isAllowedHostHeader } = {}) {
+  if (hostHeader && allowed(hostHeader)) return /:\d+$/.test(hostHeader) ? hostHeader : `${hostHeader}:${p}`;
+  return `${meshnetHost || meshnetIp || "localhost"}:${p}`;
+}
+
+export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().meshnetHost, meshnetIp = netConfig().meshnetIp, tls = getTls() } = {}) {
+  const target = (req) => httpsTargetHost(req.headers.host, { port: p, meshnetHost, meshnetIp });
   const handleMeshnetHttp = (req, res) => {
     const path = (req.url ?? "").split("?")[0];
     if (path === "/ca.crt" && (req.method === "GET" || req.method === "HEAD")) {
@@ -348,6 +381,9 @@ export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().mes
     }
     if ((path === "/VibeSquad-setup.exe" || path === "/__vibesquad/desktop/VibeSquad-setup.exe") && (req.method === "GET" || req.method === "HEAD")) {
       return handleDesktopInstaller(req, res, rootDir);
+    }
+    if ((path === "/VibeSquad.apk" || path === "/__vibesquad/android/VibeSquad.apk") && (req.method === "GET" || req.method === "HEAD")) {
+      return handleAndroidApk(req, res, rootDir);
     }
     if (path === "/__vibesquad/desktop/update.json" && (req.method === "GET" || req.method === "HEAD")) {
       return handleDesktopUpdateJson(req, res, rootDir);
@@ -358,10 +394,18 @@ export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().mes
     if ((path === "/api/auth/status" || path === "/__vibesquad/auth/status") && (req.method === "GET" || req.method === "HEAD")) {
       return handleAuthStatus(req, res, rootDir);
     }
-    if (path === "/pair" && req.method === "GET") {
-      const targetHost = isAllowedHostHeader(req.headers.host) ? req.headers.host : `${meshnetHost || "localhost"}:${p}`;
+    if (path === "/pair" && (req.method === "GET" || req.method === "HEAD")) {
+      // The code just crossed the LAN in cleartext: burn it and keep it out of the redirect.
+      discardPlainHttpPairCode(new URL(req.url ?? "/", "http://x").searchParams.get("code"), req.socket?.remoteAddress);
       res.statusCode = 302;
-      res.setHeader("location", `https://${targetHost}${req.url}`);
+      res.setHeader("location", `https://${target(req)}/pair`);
+      res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
+      return res.end();
+    }
+    // Phones type http://: send page loads straight to https instead of a dead-end 426.
+    if (req.method === "GET" || req.method === "HEAD") {
+      res.statusCode = 301;
+      res.setHeader("location", `https://${target(req)}${req.url}`);
       res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
       return res.end();
     }
@@ -369,7 +413,7 @@ export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().mes
     res.setHeader("Upgrade", "TLS/1.3, HTTP/1.1");
     res.setHeader("content-type", "text/plain; charset=utf-8");
     res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
-    res.end("426 Upgrade Required — use https://" + meshnetHost + ":" + p + " (or GET /VibeSquad-setup.exe or GET /ca.crt)");
+    res.end(`426 Upgrade Required — use https://${target(req)} (or GET /VibeSquad-setup.exe or GET /ca.crt)`);
   };
 
   const handleMeshnetHttps = (req, res) => {
@@ -379,6 +423,9 @@ export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().mes
     }
     if ((path === "/VibeSquad-setup.exe" || path === "/__vibesquad/desktop/VibeSquad-setup.exe") && (req.method === "GET" || req.method === "HEAD")) {
       return handleDesktopInstaller(req, res, rootDir);
+    }
+    if ((path === "/VibeSquad.apk" || path === "/__vibesquad/android/VibeSquad.apk") && (req.method === "GET" || req.method === "HEAD")) {
+      return handleAndroidApk(req, res, rootDir);
     }
     if (path === "/__vibesquad/desktop/update.json" && (req.method === "GET" || req.method === "HEAD")) {
       return handleDesktopUpdateJson(req, res, rootDir);
@@ -433,24 +480,25 @@ export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().mes
 }
 
 if (wantOpen && (await isListening())) {
-  await openBrowser();
+  await openBrowser(await runningServerOpenUrl());
   process.exit(0);
 }
 
 export const server = createServer(handle);
 server.on("upgrade", (req, socket, head) => {
   if (!req.url?.startsWith("/ws")) return socket.destroy();
-  // Cross-site WebSocket hijacking: a browser page can open ws://127.0.0.1 with any Origin.
+  // Cross-site WebSocket hijacking: a browser page can open ws://127.0.0.1 with any Origin. The daemon
+  // controls agents, so loopback also needs the local token (header) or the vs_local cookie.
   if (!authenticate(req)) {
     const origin = req.headers.origin;
-    if (!isLocalBrowserSafe(req) || origin === undefined || !isLoopbackOrigin(origin)) return rejectUpgrade(socket, "403 Forbidden");
+    if (!isLocalOwner(req) || (origin !== undefined && !isLoopbackOrigin(origin))) return rejectUpgrade(socket, "403 Forbidden");
   }
   proxyUpgrade(req, socket, head);
 });
 server.on("error", async (e) => {
   // Lost a race with another launcher: if it is ours, behave like the already-running case.
   if (e.code === "EADDRINUSE" && (await isListening())) {
-    if (wantOpen) await openBrowser();
+    if (wantOpen) await openBrowser(await runningServerOpenUrl());
     process.exit(0);
   }
   console.error(e);
@@ -458,15 +506,37 @@ server.on("error", async (e) => {
 });
 const isMain = process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename);
 
+// Whether serve.mjs should auto-start the local Paseo daemon on launch. Skipped when the caller sets
+// VIBESQUAD_NO_DAEMON=1 (e.g. desktop "relay" mode, which only serves the static bundle and must not
+// spawn a daemon that conflicts with a running service or remote relay) or the owner opted out via
+// Settings › startPaseoWithVibeSquad. Env vars arrive as strings, so accept both "1" and 1.
+export function shouldAutoStartPaseoDaemon(env = process.env, settings = loadUserSettings()) {
+  const noDaemon = env?.VIBESQUAD_NO_DAEMON;
+  if (noDaemon === 1 || noDaemon === "1") return false;
+  if (settings?.startPaseoWithVibeSquad === false) return false;
+  return true;
+}
+
 if (isMain) {
   try {
     installVsShim();
   } catch {}
-  if (loadUserSettings().startPaseoWithVibeSquad !== false) {
+  if (shouldAutoStartPaseoDaemon()) {
     void ensurePaseoDaemon({ listen: readPaseo(rootDir).listen });
   }
+  try {
+    checkDaemonListenExposure();
+  } catch {}
+  try {
+    lockDownVibesquadHome();
+  } catch (err) {
+    console.warn("Could not restrict ~/.vibesquad to the current user:", err?.message ?? err);
+  }
+  getLocalToken();
   server.listen(port, "127.0.0.1", () => {
     console.log(`VibeSquad serving ${distDir} on ${url}`);
+    logServerStart({ rootDir });
+    setImmediate(() => getStale({ rootDir }));
     let activeMuxes = [];
     const applyLanListeners = (wantLan) => {
       for (const m of activeMuxes) {
@@ -504,6 +574,6 @@ if (isMain) {
     applyLanListeners(lanEnabled);
     startPushWatcher(rootDir);
 
-    if (wantOpen) void openBrowser();
+    if (wantOpen) void openBrowser(servedOpenUrl());
   });
 }

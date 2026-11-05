@@ -1,18 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { defaultSpawnConfigFor } from "./antigravity";
 import { daemonClient, DEMO, spawnTeamAgent, usePaseo } from "./paseo";
+import { branchSuggestions, validateBranch } from "./paseoWorkspaces";
+import { branchHint } from "./workspaceLogic";
 import {
   checkBuddyOverlap,
   getTeams,
+  ordOf,
   resolve,
   saveTeams,
+  shownLanesOf,
   slugifyFeatureLane,
   titleFor,
   type BuddyOverlapLogEntry,
   type TeamDef,
   type TeamView,
 } from "./teams";
+import { freezeLaneCodes } from "./identity";
 import { useDraft } from "./drafts";
+import { rememberSent, useImageDraft } from "./imageDrafts";
+import { spawnTeamAgentWithImages } from "./paseoSpawn";
+import { defaultNewAgentProfile, getPref, reapplyDefaultProfile } from "./prefs";
 import { findProfile, getProfiles, useProfiles, type Profile, type Role } from "./profiles";
 
 export { TeamSettingsModal, ProfileImportModal, ARCHETYPES } from "./TeamSettingsModal";
@@ -32,7 +40,7 @@ export type NameInput = {
   job: string;
 };
 
-/** Naming Standard v1 (docs/NAMING.md): labels are the source of truth, the title is generated. */
+/** Naming Standard v2 (docs/NAMING.md): labels are the source of truth, the title is generated. */
 export function buildName(i: NameInput): { title: string; labels: Record<string, string> } {
   const labels: Record<string, string> = { team: i.team };
   if (i.laneId) {
@@ -48,13 +56,14 @@ export function buildName(i: NameInput): { title: string; labels: Record<string,
     if (i.topic.trim()) labels.topic = i.topic.trim();
   } else {
     labels.job = (i.job || "job").trim() || "job";
+    if (i.ord) labels.ord = i.ord; // the lead's ord, so the title is `<Code><ord> · <job>`
     if (i.task) labels.task = i.task;
   }
-  const title = titleFor(i.role === "lead" || i.role === "brainstorm" ? i.role : "worker", LANE_, { ord: i.ord, topic: i.topic, job: i.job });
+  const title = titleFor(i.role === "lead" || i.role === "brainstorm" ? i.role : "worker", LANE_, { ord: i.ord, topic: i.topic, job: i.job, laneId: i.laneId });
   return { title, labels };
 }
 
-export function Modal(props: { title: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode; wide?: boolean }) {
+export function Modal(props: { title: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode; wide?: boolean; className?: string }) {
   const { onClose } = props;
   const openerRef = useRef(document.activeElement as HTMLElement | null); // render-time: before autoFocus children run
   useEffect(() => {
@@ -72,7 +81,7 @@ export function Modal(props: { title: string; onClose: () => void; children: Rea
   }, [onClose]);
   return (
     <div className="modal-back" onMouseDown={onClose}>
-      <div className={`modal ${props.wide ? "wide" : ""}`} onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-label={props.title}>
+      <div className={`modal ${props.wide ? "wide" : ""} ${props.className ?? ""}`} onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-label={props.title}>
         <div className="modal-head">
           <span>{props.title}</span>
           <button className="btn ghost small" onClick={onClose}>
@@ -97,17 +106,34 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   const { agents, workspaces } = usePaseo();
   const { profiles, installedProviders } = useProfiles();
   const team = view.team;
-  const [profileName, setProfileName] = useState("Implement - Sonnet");
+  // Settings › New Agent defaults prefill profile and folder (empty = the built-in choice).
+  const resolveProfile = (name: string) => findProfile(name, profiles)?.name;
+  const [profileName, setProfileName] = useState(() => defaultNewAgentProfile(getPref("newAgent.profile"), resolveProfile));
   const profile = findProfile(profileName, profiles) ?? profiles[0]!;
   const [role, setRole] = useState<Role>(profile.role);
-  const [laneId, setLaneId] = useState(team.lanes[0]?.id ?? "");
+  // The modal can open before /__vibesquad/profiles loads: re-apply a custom default once they arrive,
+  // unless the user already chose a profile or role.
+  const userPickedProfile = useRef(false);
+  useEffect(() => {
+    const next = reapplyDefaultProfile(profileName, getPref("newAgent.profile"), resolveProfile, userPickedProfile.current);
+    const p = next ? findProfile(next, profiles) : undefined;
+    if (!p) return;
+    setProfileName(p.name);
+    setRole(p.role);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when the profile list changes
+  }, [profiles]);
+  const [laneId, setLaneId] = useState(shownLanesOf(team)[0]?.id ?? "");
   const [ord, setOrd] = useState("1");
   const [topic, setTopic, clearTopic] = useDraft(`new-agent:${team.id}:topic`);
   const [task, setTask] = useState("");
   const [job, setJob] = useState("");
   const [promptDraft, setPrompt, clearPrompt] = useDraft(`new-agent:${team.id}:${profileName}:prompt`);
   const prompt = promptDraft || profile.brief;
-  const [cwd, setCwd] = useState("");
+  const imgs = useImageDraft(`new-agent:${team.id}:${profileName}:images`);
+  const [dragOver, setDragOver] = useState(false);
+  const imgInput = useRef<HTMLInputElement>(null);
+  const stageImages = (fl: File[]) => imgs.add(fl.filter((f) => f.type.startsWith("image/")));
+  const [cwd, setCwd] = useState(() => getPref("newAgent.folder").trim());
   const [newWt, setNewWt] = useState(false);
   const [branch, setBranch] = useState("");
   const [busy, setBusy] = useState(false);
@@ -131,6 +157,22 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   const [existingWts, setExistingWts] = useState<WorktreeEntry[]>([]);
   const [wtMode, setWtMode] = useState<"none" | "existing" | "new">("none");
   const [selectedWt, setSelectedWt] = useState("");
+
+  // Branch hint: debounced validateBranch + suggestions for the NEW branch field.
+  const [branchCheck, setBranchCheck] = useState<Awaited<ReturnType<typeof validateBranch>> | null>(null);
+  const [branchSugs, setBranchSugs] = useState<string[]>([]);
+  useEffect(() => {
+    setBranchCheck(null);
+    setBranchSugs([]);
+    if (DEMO || !cwd || !branch.trim()) return;
+    let cancelled = false;
+    const t = setTimeout(() => {
+      validateBranch(cwd, branch.trim()).then((v) => !cancelled && setBranchCheck(v)).catch(() => !cancelled && setBranchCheck({ exists: false, isRemote: false, resolvedRef: null, error: "couldn't check (is this folder a Paseo project?)", requestId: "" }));
+      branchSuggestions(cwd, branch.trim()).then((b) => !cancelled && setBranchSugs(b.filter((x) => x !== branch.trim()).slice(0, 5))).catch(() => {});
+    }, 300);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [cwd, branch]);
+  const hint = branchHint(branch, branchCheck);
 
   const fetchSuggestions = useCallback(async (query: string) => {
     if (!query || DEMO) { setCwdSugs([]); return; }
@@ -238,19 +280,23 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   }, [dirs, cwd]);
 
   const pickProfile = (name: string) => {
+    userPickedProfile.current = true;
     const p = findProfile(name, profiles) ?? profiles[0]!;
     setProfileName(p.name);
     setRole(p.role);
   };
 
   const lane = team.lanes.find((l) => l.id === laneId);
+  // A worker is titled with its lane's live lead ord (the ORD field is lead-only).
+  const liveLead = view.lanes.find((l) => l.lane.id === laneId)?.lead;
+  const effectiveOrd = role === "lead" ? ord : liveLead ? String(ordOf(liveLead.agent)) : "";
   const { title, labels } = buildName({
     team: team.id,
     laneId,
     laneName: lane?.name ?? laneId,
     role,
     profile: profile.name,
-    ord,
+    ord: effectiveOrd,
     topic,
     task,
     job,
@@ -272,11 +318,15 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   }
 
   const finished = useRef(false);
+  // Snapshot at submit: finish() can run from the live-agents subscription before create resolves.
+  const sentFirst = useRef<{ text: string; images: Array<{ blob: Blob }> }>({ text: "", images: [] });
   const finish = (id: string) => {
     if (finished.current) return;
     finished.current = true;
+    if (sentFirst.current.images.length) rememberSent(id, sentFirst.current.text, sentFirst.current.images);
     clearTopic();
     clearPrompt();
+    imgs.clear();
     onCreated(id);
     onClose();
   };
@@ -292,10 +342,11 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
     setBusy(true);
     setErr("");
     existingIds.current = new Set(agents.keys());
+    sentFirst.current = { text: prompt, images: imgs.images.map((i) => ({ blob: i.blob })) };
     spawnedTitle.current = title;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const r = await Promise.race([spawnTeamAgent({
+      const r = await Promise.race([spawnTeamAgentWithImages({
         provider: profile.provider,
         model: profile.model,
         modeId,
@@ -310,7 +361,7 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
         prompt,
         cwd,
         worktree: newWt && branch ? { branch } : undefined,
-      }), new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error("Spawn timed out after 90s. The agent may still have been created: check the roster before retrying.")), 90000); })]);
+      }, sentFirst.current.images), new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error("Spawn timed out after 90s. The agent may still have been created: check the roster before retrying.")), 90000); })]);
       finish(r.id);
     } catch (e) {
       if (!finished.current) {
@@ -381,7 +432,13 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
           </div>
           <div className="row2">
             <Field label="ROLE">
-              <select value={role} onChange={(e) => setRole(e.target.value as Role)}>
+              <select
+                value={role}
+                onChange={(e) => {
+                  userPickedProfile.current = true;
+                  setRole(e.target.value as Role);
+                }}
+              >
                 <option value="lead">lead</option>
                 <option value="brainstorm">brainstorm</option>
                 <option value="worker">worker</option>
@@ -389,8 +446,8 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
             </Field>
             <Field label="TEAM">
               <select value={laneId} onChange={(e) => setLaneId(e.target.value)}>
-                {team.lanes.length === 0 && <option value="">(no teams)</option>}
-                {team.lanes.map((l) => (
+                {shownLanesOf(team).length === 0 && <option value="">(no teams)</option>}
+                {shownLanesOf(team).map((l) => (
                   <option key={l.id} value={l.id}>
                     {l.name}
                   </option>
@@ -547,6 +604,19 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
             {wtMode === "new" && (
               <Field label="BRANCH NAME">
                 <input value={branch} placeholder="feat/vs-step4" onChange={(e) => setBranch(e.target.value)} />
+                {hint && (
+                  <div data-testid="branch-hint" className="small" style={{ marginTop: 4, color: hint.tone === "bad" ? "var(--red, #ff5c7a)" : hint.tone === "warn" ? "var(--amber, #ffb84d)" : hint.tone === "ok" ? "var(--cyan, #4de1ff)" : undefined }}>
+                    {hint.text}
+                  </div>
+                )}
+                {branchSugs.length > 0 && (
+                  <div className="small muted" style={{ marginTop: 4, display: "flex", gap: 4, flexWrap: "wrap" }}>
+                    existing:
+                    {branchSugs.map((b) => (
+                      <span key={b} className="chip" style={{ maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis" }}>{b}</span>
+                    ))}
+                  </div>
+                )}
               </Field>
             )}
           </div>
@@ -557,8 +627,59 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
               value={prompt}
               rows={14}
               onChange={(e) => setPrompt(e.target.value)}
+              className={dragOver ? "drag-over" : ""}
+              onPaste={(e) => {
+                const fl = Array.from(e.clipboardData?.items ?? [])
+                  .filter((i) => i.kind === "file")
+                  .map((i) => i.getAsFile())
+                  .filter((f): f is File => !!f && f.type.startsWith("image/"));
+                if (fl.length) {
+                  e.preventDefault();
+                  stageImages(fl);
+                }
+              }}
+              onDragOver={(e) => {
+                if (Array.from(e.dataTransfer?.types ?? []).includes("Files")) {
+                  e.preventDefault();
+                  setDragOver(true);
+                }
+              }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragOver(false);
+                stageImages(Array.from(e.dataTransfer?.files ?? []));
+              }}
             />
           </Field>
+          <input
+            ref={imgInput}
+            type="file"
+            accept="image/*"
+            multiple
+            hidden
+            data-testid="new-agent-image-input"
+            onChange={(e) => {
+              stageImages(Array.from(e.target.files ?? []));
+              e.target.value = "";
+            }}
+          />
+          {imgs.images.length > 0 && (
+            <div className="composer-images composer-thumbs" data-testid="new-agent-thumbs">
+              {imgs.images.map((im) => (
+                <div key={im.id} className="composer-thumb" title={im.name}>
+                  <img src={im.url} alt={im.name} />
+                  <span className="thumb-name">{im.name}</span>
+                  <button className="thumb-x composer-thumb-remove" aria-label={`Remove ${im.name}`} onClick={() => imgs.remove(im.id)}>
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <button className="btn ghost small" onClick={() => imgInput.current?.click()}>
+            📎 Attach images
+          </button>
           <button
             className="btn ghost small"
             onClick={clearPrompt}
@@ -663,7 +784,7 @@ export function AddBuddyModal({
   const existingLane = team.lanes.some(
     (l) => l.id.toLowerCase() === laneId.toLowerCase() || Boolean(l.aliases?.some((a) => a.toLowerCase() === laneId.toLowerCase())),
   );
-  const title = titleFor("brainstorm", laneName, { topic: existingLane ? topic.trim() : "" });
+  const title = titleFor("brainstorm", laneName, { topic: existingLane ? topic.trim() : "", laneId });
   const brief = customBrief ?? defaultBuddyBrief(team.name, topic);
   const labels: Record<string, string> = {
     team: team.id,
@@ -691,7 +812,7 @@ export function AddBuddyModal({
       const targetTeam = getTeams().find((t) => t.id === team.id);
       if (targetTeam && !hasLane(targetTeam)) {
         await saveTeams((cur) =>
-          cur.map((t) => (t.id === team.id && !hasLane(t) ? { ...t, lanes: [...t.lanes, { id: laneId, name: laneName }] } : t)),
+          cur.map((t) => (t.id === team.id && !hasLane(t) ? { ...t, lanes: freezeLaneCodes([...freezeLaneCodes(t.lanes), { id: laneId, name: laneName }]) } : t)),
         );
       }
 

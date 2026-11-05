@@ -278,7 +278,7 @@ test("review 1+2: with the daemon down the API answers 503 {ok:false}, not 200",
     resetBrainstormRestartState();
     const r = await fetch(`http://127.0.0.1:${srv.address().port}/__vibesquad/brainstorm-restart`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: ownerHeaders({ "content-type": "application/json" }),
       body: JSON.stringify({ reason: "start-brainstorm", teamId: "sq", laneId: "down-test" }),
     });
     const body = await r.json();
@@ -337,49 +337,8 @@ test("review 3: Buddy spawn sets VS_BRIEF_INLINE and inlines the brief in the fi
   }
 });
 
-// ---- block 6 addendum: a missing brief is written from the spawn's idea text ----
-test("block 6: a Buddy spawned for a lane with no brief file gets one written from its idea; existing briefs are never overwritten", () =>
-  withBriefEnv(({ spawn, briefRoot }) => {
-    const file = join(briefRoot, "docs", "brainstorm", "fresh-idea.md");
-    assert.ok(!existsSync(file));
-    spawn({ labels: { role: "brainstorm", team: "vibesquad", lane: "fresh-idea" }, prompt: "Basic ADE: agentic development explained for beginners" });
-    const written = readFileSync(file, "utf8");
-    assert.match(written, /## Open\n- Basic ADE: agentic development explained for beginners/);
-    assert.match(written, /## Done when/);
-
-    // A second spawn with a different prompt leaves the file alone.
-    spawn({ labels: { role: "brainstorm", team: "vibesquad", lane: "fresh-idea" }, prompt: "something else entirely" });
-    assert.equal(readFileSync(file, "utf8"), written);
-
-    // An existing brief (token-checker) is untouched and is still injected.
-    const before = readFileSync(join(briefRoot, "docs", "brainstorm", "token-checker.md"), "utf8");
-    const sys = spawn({ labels: { role: "brainstorm", team: "vibesquad", lane: "token-checker" }, prompt: "hi" });
-    assert.ok(sys.includes("token-checker-marker"));
-    assert.equal(readFileSync(join(briefRoot, "docs", "brainstorm", "token-checker.md"), "utf8"), before);
-
-    // No prompt, no seed.
-    spawn({ labels: { role: "brainstorm", team: "vibesquad", lane: "no-idea" } });
-    assert.ok(!existsSync(join(briefRoot, "docs", "brainstorm", "no-idea.md")));
-  }));
-
-// ---- round 2: seed never routes to the wrong or a reserved lane ----
-import { backupBrief, seedBriefIfMissing } from "../server/brief-write.mjs";
-
-test("seed: reserved or empty-slug lanes write nothing; the slug (not a fallback) names the file", () => {
-  const root = mkdtempSync(join(tmpdir(), "vs-seed-"));
-  try {
-    for (const lane of ["unassigned", "Unknown", "---", "  ", "", "!!!"]) {
-      assert.equal(seedBriefIfMissing({ root, lane, idea: "an idea" }), null, JSON.stringify(lane));
-    }
-    assert.ok(!existsSync(join(root, "docs")), "nothing created");
-    const ok = seedBriefIfMissing({ root, lane: " my lane! ", idea: "an idea" });
-    assert.equal(ok, join(root, "docs", "brainstorm", "my-lane.md"));
-    assert.ok(!existsSync(join(root, "docs", "brainstorm", "vibesquad.md")));
-    assert.match(readFileSync(ok, "utf8"), /`my-lane`/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
+import { backupBrief } from "../server/brief-write.mjs";
+import { ownerHeaders } from "./helpers/local-owner.mjs";
 
 test("backupBrief never files an empty lane under vibesquad", () => {
   const dir = mkdtempSync(join(tmpdir(), "vs-bk-"));

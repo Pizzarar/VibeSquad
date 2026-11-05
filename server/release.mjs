@@ -8,15 +8,30 @@ import { fileURLToPath } from "node:url";
 const rootDir = resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
 
-export function computeNextBetaVersion(currentVersion) {
+/**
+ * Next beta version. `stableReleased(base)` says whether `v<base>` already shipped as stable: then the next
+ * beta moves to the next patch (0.1.1 shipped → 0.1.2-beta.1), because semver ranks 0.1.1-beta.N *below*
+ * 0.1.1 and nobody on 0.1.1 would ever be offered it (docs/PLAN_BUGS_BATCH1.md block 0d).
+ */
+export function computeNextBetaVersion(currentVersion, { stableReleased = () => false } = {}) {
   const clean = String(currentVersion || "0.1.1").trim().replace(/^v/, "");
-  const m = clean.match(/^(\d+\.\d+\.\d+)(?:-beta\.(\d+))?$/);
+  const m = clean.match(/^(\d+)\.(\d+)\.(\d+)(?:-beta\.(\d+))?$/);
   if (!m) {
     return `${clean.split("-")[0]}-beta.1`;
   }
-  const base = m[1];
-  const n = m[2] ? Number(m[2]) + 1 : 1;
+  const base = `${m[1]}.${m[2]}.${m[3]}`;
+  if (stableReleased(base)) return `${m[1]}.${m[2]}.${Number(m[3]) + 1}-beta.1`;
+  const n = m[4] ? Number(m[4]) + 1 : 1;
   return `${base}-beta.${n}`;
+}
+
+/** True when tag v<base> exists on origin (a shipped stable). */
+export function stableTagExists(base, cwd = rootDir) {
+  try {
+    return execFileSync("git", ["ls-remote", "--tags", "origin", `refs/tags/v${base}`], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim().length > 0;
+  } catch {
+    return false;
+  }
 }
 
 export function computeStableVersion(currentVersion, explicitVersion) {
@@ -43,13 +58,52 @@ export function syncVersionFiles(dir, newVersion) {
   writeFileSync(cargoPath, updatedCargo);
 }
 
-export function buildLatestJson({ version, channel, signature, repo = "Pizzarar/VibeSquad", pubDate = new Date().toISOString(), notes }) {
+export const COMMUNITY_ACCOLADES_020 = [
+  "Implemented ability to render Mermaid diagrams in Chat & Briefs — Thanks to Mermaid by dutchakdev",
+  "Implemented ability to preview images, PDFs, HTML, audio, and video in Briefs & Files — Thanks to File preview by gil-pingping, PDF viewer (PDF.js) by bendavid, and PDF and Office viewer by nkwib",
+  "Implemented Sealed Secret Input (0600 temp file injection without logging secrets in chat) — Thanks to Secure Input by dutchakdev",
+  "Implemented Workspace Listening Ports auto-detection & clickable pills — Thanks to Ports by zedobaia and Server Browser by zhjiang22",
+  "Implemented Provider Quota Failover & 1-Click Provider Switch (Claude ↔ Gemini) — Thanks to Continuity by Chechulin Serhii, Switch provider by anh-chu, Usage Auto Resume by babo-jeonguk, and Zerosub by Kapybara",
+  "Implemented CLAUDE_CODE_ENTRYPOINT=Paseo spawn environment tag — Thanks to Claude Code entrypoint by getpaseo",
+  "Implemented Session Janitor to auto-archive closed worker sessions — Thanks to session-janitor by sm1ee",
+  "Implemented Keep Host Awake while agents are running — Thanks to Keep Awake by Hicham Boushaba",
+  "Implemented Per-hunk Diff Review, Line Quote & Code Annotations — Thanks to Annotations by neunzig-zehn, Quote by Chechulin Serhii, and Codex Style Annotations by xzthemeofsss",
+  "Implemented Turn Recap & Digest Summaries — Thanks to Recap by Kingsley",
+  "Built on the Paseo Daemon, CLI, and ACP Plugin Runtime — Thanks to Paseo (`@getpaseo`) by the Paseo team (getpaseo)",
+];
+
+export function defaultReleaseNotes(version, channel = "stable") {
+  const cleanVer = String(version || "0.2.0").trim().replace(/^v/, "");
+  return [
+    `VibeSquad v${cleanVer} (${channel})`,
+    "",
+    "### Community Accolades & Credits",
+    ...COMMUNITY_ACCOLADES_020.map((line) => `- ${line}`),
+  ].join("\n");
+}
+
+export const DEFAULT_RELEASE_REPO = process.env.VIBESQUAD_RELEASE_REPO || "Pizzarar/VibeSquad";
+
+export function buildSigningEnv(baseEnv = process.env, keyPath = "") {
+  const password = baseEnv.TAURI_SIGNING_PRIVATE_KEY_PASSWORD ?? "";
+  return {
+    ...baseEnv,
+    ...(keyPath ? { TAURI_SIGNING_PRIVATE_KEY: keyPath, TAURI_SIGNING_PRIVATE_KEY_PATH: keyPath } : {}),
+    TAURI_SIGNING_PRIVATE_KEY_PASSWORD: password,
+  };
+}
+
+export function ghReleaseArgs(subcommandArgs, repo = DEFAULT_RELEASE_REPO) {
+  return ["release", ...subcommandArgs, "--repo", repo];
+}
+
+export function buildLatestJson({ version, channel, signature, repo = DEFAULT_RELEASE_REPO, pubDate = new Date().toISOString(), notes }) {
   const cleanVer = String(version).trim().replace(/^v/, "");
   const tag = channel === "beta" ? "beta" : `v${cleanVer}`;
   const downloadUrl = `https://github.com/${repo}/releases/download/${tag}/VibeSquad-setup.exe`;
   return {
     version: cleanVer,
-    notes: notes || `VibeSquad v${cleanVer} (${channel})`,
+    notes: notes || defaultReleaseNotes(cleanVer, channel),
     pub_date: pubDate,
     platforms: {
       "windows-x86_64": {
@@ -60,8 +114,127 @@ export function buildLatestJson({ version, channel, signature, repo = "Pizzarar/
   };
 }
 
+function resolveHeadCommit(exec, cwd) {
+  return String(exec("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }) || "").trim();
+}
+
+function resolveTagCommit(tag, exec, cwd) {
+  try {
+    const remoteOut = String(
+      exec("git", ["ls-remote", "--tags", "origin", `refs/tags/${tag}`, `refs/tags/${tag}^{}`], {
+        cwd,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }) || "",
+    ).trim();
+    if (remoteOut) {
+      const lines = remoteOut.split(/\r?\n/).filter(Boolean);
+      const peeled = lines.find((l) => l.endsWith(`refs/tags/${tag}^{}`));
+      const direct = lines.find((l) => l.endsWith(`refs/tags/${tag}`));
+      const chosen = peeled || direct || lines[0];
+      const sha = chosen.split(/\s+/)[0]?.trim();
+      if (sha) return sha;
+    }
+  } catch {
+    // Fall back to local tag resolution
+  }
+  try {
+    const localSha = String(
+      exec("git", ["rev-parse", `refs/tags/${tag}^{commit}`], {
+        cwd,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }) || "",
+    ).trim();
+    if (localSha) return localSha;
+  } catch {
+    // Unresolved
+  }
+  return "";
+}
+
+function repointBetaTagToHead(exec, cwd) {
+  exec("git", ["tag", "-f", "beta", "HEAD"], { cwd, stdio: "inherit" });
+  exec("git", ["push", "-f", "origin", "refs/tags/beta"], { cwd, stdio: "inherit" });
+}
+
+export function publishRelease({
+  channel,
+  targetVersion,
+  assets = [],
+  latestJsonPath,
+  latestManifest,
+  signature,
+  cwd = rootDir,
+  exec = execFileSync,
+  writeManifest = (filePath, manifest) => writeFileSync(filePath, JSON.stringify(manifest, null, 2) + "\n"),
+}) {
+  const cleanVer = String(targetVersion).trim().replace(/^v/, "");
+  const effectiveManifest = latestManifest || buildLatestJson({ version: cleanVer, channel, signature });
+  const tag = channel === "beta" ? "beta" : `v${cleanVer}`;
+  const releaseTitle = channel === "beta" ? `VibeSquad Beta (${cleanVer})` : `VibeSquad v${cleanVer}`;
+
+  let tagExists = false;
+  try {
+    exec("gh", ["release", "view", tag], { cwd, stdio: "ignore" });
+    tagExists = true;
+  } catch {
+    const createArgs = ["release", "create", tag, "--title", releaseTitle, "--notes", effectiveManifest.notes];
+    if (channel === "beta") createArgs.push("--prerelease");
+    exec("gh", createArgs, { cwd, stdio: "inherit" });
+  }
+
+  if (tagExists) {
+    if (/^v\d+\.\d+\.\d+/.test(tag)) {
+      const headSha = resolveHeadCommit(exec, cwd);
+      const tagSha = resolveTagCommit(tag, exec, cwd);
+      if (!headSha || !tagSha || tagSha !== headSha) {
+        throw new Error(
+          `Refusing to overwrite existing versioned release tag ${tag}: tag points at ${tagSha || "<unresolved>"}, which does not match HEAD (${headSha || "<unresolved>"}). Bump the version or re-tag deliberately.`,
+        );
+      }
+    } else if (tag === "beta") {
+      repointBetaTagToHead(exec, cwd);
+    }
+    exec("gh", ["release", "edit", tag, "--title", releaseTitle, "--notes", effectiveManifest.notes], { cwd, stdio: "inherit" });
+  }
+
+  exec("gh", ["release", "upload", tag, ...assets, "--clobber"], { cwd, stdio: "inherit" });
+  console.log(`[release:${channel}] Published ${tag} with ${assets.length} asset(s).`);
+
+  if (channel === "stable") {
+    const betaManifest = buildLatestJson({ version: cleanVer, channel: "beta", signature });
+    if (latestJsonPath) {
+      writeManifest(latestJsonPath, betaManifest);
+    }
+    const betaTitle = `VibeSquad Beta (${cleanVer})`;
+    let betaTagExists = false;
+    try {
+      exec("gh", ["release", "view", "beta"], { cwd, stdio: "ignore" });
+      betaTagExists = true;
+    } catch {
+      exec("gh", ["release", "create", "beta", "--prerelease", "--title", betaTitle, "--notes", betaManifest.notes], {
+        cwd,
+        stdio: "inherit",
+      });
+    }
+    if (betaTagExists) {
+      repointBetaTagToHead(exec, cwd);
+      exec("gh", ["release", "edit", "beta", "--title", betaTitle, "--notes", betaManifest.notes], {
+        cwd,
+        stdio: "inherit",
+      });
+    }
+    exec("gh", ["release", "upload", "beta", ...assets, "--clobber"], { cwd, stdio: "inherit" });
+    if (latestJsonPath) {
+      writeManifest(latestJsonPath, effectiveManifest);
+    }
+    console.log(`[release:stable] Also synced rolling beta tag to v${cleanVer}.`);
+  }
+}
+
 function parseArgs(argv) {
-  const out = { channel: "beta", version: "", stageOnly: false, skipBuild: false };
+  const out = { channel: "beta", version: "", stageOnly: false, skipBuild: false, withAndroid: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--channel" && argv[i + 1]) out.channel = argv[++i];
@@ -70,6 +243,7 @@ function parseArgs(argv) {
     else if (a.startsWith("--version=")) out.version = a.slice("--version=".length);
     else if (a === "--stage-only") out.stageOnly = true;
     else if (a === "--skip-build") out.skipBuild = true;
+    else if (a === "--with-android") out.withAndroid = true;
   }
   return out;
 }
@@ -85,7 +259,7 @@ if (isMain) {
   const targetVersion = opts.version
     ? opts.version.replace(/^v/, "")
     : channel === "beta"
-      ? computeNextBetaVersion(currentVersion)
+      ? computeNextBetaVersion(currentVersion, { stableReleased: (base) => stableTagExists(base) })
       : computeStableVersion(currentVersion);
 
   console.log(`[release:${channel}] Setting version ${currentVersion} -> ${targetVersion}`);
@@ -96,14 +270,18 @@ if (isMain) {
   if (!process.env.TAURI_SIGNING_PRIVATE_KEY && !existsSync(keyPath)) {
     throw new Error(`Signing key not found at ${keyPath}. Run 'npx tauri signer generate -w ~/.tauri/vibesquad-updater.key' first.`);
   }
-  const env = {
-    ...process.env,
-    TAURI_SIGNING_PRIVATE_KEY: keyPath,
-    TAURI_SIGNING_PRIVATE_KEY_PATH: keyPath,
-  };
+  const env = buildSigningEnv(process.env, keyPath);
 
   if (!opts.skipBuild) {
     execFileSync(process.execPath, [join(rootDir, "server", "build-desktop.mjs")], {
+      cwd: rootDir,
+      env,
+      stdio: "inherit",
+    });
+  }
+
+  if (opts.withAndroid && !opts.skipBuild) {
+    execFileSync(process.execPath, [join(rootDir, "server", "build-android.mjs")], {
       cwd: rootDir,
       env,
       stdio: "inherit",
@@ -118,11 +296,15 @@ if (isMain) {
     const tauriCliJs = require.resolve("@tauri-apps/cli/tauri.js");
     const signEnv = { ...env, TAURI_SIGNING_PRIVATE_KEY_PATH: keyPath };
     delete signEnv.TAURI_SIGNING_PRIVATE_KEY;
-    execFileSync(process.execPath, [tauriCliJs, "signer", "sign", installerPath], {
-      cwd: rootDir,
-      env: signEnv,
-      stdio: "inherit",
-    });
+    execFileSync(
+      process.execPath,
+      [tauriCliJs, "signer", "sign", "-f", keyPath, "-p", env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD, installerPath],
+      {
+        cwd: rootDir,
+        env: signEnv,
+        stdio: "inherit",
+      },
+    );
   }
   if (!existsSync(sigPath)) {
     throw new Error(`Signature file missing at ${sigPath}`);
@@ -136,20 +318,45 @@ if (isMain) {
   if (!opts.stageOnly) {
     const tag = channel === "beta" ? "beta" : `v${targetVersion}`;
     const releaseTitle = channel === "beta" ? `VibeSquad Beta (${targetVersion})` : `VibeSquad v${targetVersion}`;
-    const assets = [installerPath, sigPath, latestJsonPath, join(distDesktopDir, "THIRD-PARTY-LICENSES.txt")].filter((p) => existsSync(p));
+    const apkPath = join(distDesktopDir, "VibeSquad.apk");
+    const assets = [installerPath, sigPath, latestJsonPath, apkPath, join(distDesktopDir, "THIRD-PARTY-LICENSES.txt")].filter((p) => existsSync(p));
     let tagExists = false;
     try {
-      execFileSync("gh", ["release", "view", tag], { cwd: rootDir, stdio: "ignore" });
+      execFileSync("gh", ghReleaseArgs(["view", tag]), { cwd: rootDir, stdio: "ignore" });
       tagExists = true;
     } catch {
-      const createArgs = ["release", "create", tag, "--title", releaseTitle, "--notes", latestManifest.notes];
-      if (channel === "beta") createArgs.push("--prerelease");
+      const createArgs = ghReleaseArgs(["create", tag, "--title", releaseTitle, "--notes", latestManifest.notes, ...(channel === "beta" ? ["--prerelease"] : [])]);
       execFileSync("gh", createArgs, { cwd: rootDir, stdio: "inherit" });
     }
     if (tagExists) {
-      execFileSync("gh", ["release", "edit", tag, "--title", releaseTitle, "--notes", latestManifest.notes], { cwd: rootDir, stdio: "inherit" });
+      execFileSync("gh", ghReleaseArgs(["edit", tag, "--title", releaseTitle, "--notes", latestManifest.notes]), { cwd: rootDir, stdio: "inherit" });
     }
-    execFileSync("gh", ["release", "upload", tag, ...assets, "--clobber"], { cwd: rootDir, stdio: "inherit" });
+    execFileSync("gh", ghReleaseArgs(["upload", tag, ...assets, "--clobber"]), { cwd: rootDir, stdio: "inherit" });
     console.log(`[release:${channel}] Published ${tag} with ${assets.length} asset(s).`);
+
+    if (channel === "stable") {
+      const betaManifest = buildLatestJson({ version: targetVersion, channel: "beta", signature });
+      writeFileSync(latestJsonPath, JSON.stringify(betaManifest, null, 2) + "\n");
+      const betaTitle = `VibeSquad Beta (${targetVersion})`;
+      let betaTagExists = false;
+      try {
+        execFileSync("gh", ghReleaseArgs(["view", "beta"]), { cwd: rootDir, stdio: "ignore" });
+        betaTagExists = true;
+      } catch {
+        execFileSync("gh", ghReleaseArgs(["create", "beta", "--prerelease", "--title", betaTitle, "--notes", betaManifest.notes]), {
+          cwd: rootDir,
+          stdio: "inherit",
+        });
+      }
+      if (betaTagExists) {
+        execFileSync("gh", ghReleaseArgs(["edit", "beta", "--title", betaTitle, "--notes", betaManifest.notes]), {
+          cwd: rootDir,
+          stdio: "inherit",
+        });
+      }
+      execFileSync("gh", ghReleaseArgs(["upload", "beta", ...assets, "--clobber"]), { cwd: rootDir, stdio: "inherit" });
+      writeFileSync(latestJsonPath, JSON.stringify(latestManifest, null, 2) + "\n");
+      console.log(`[release:stable] Also synced rolling beta tag to v${targetVersion}.`);
+    }
   }
 }

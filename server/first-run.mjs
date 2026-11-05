@@ -4,11 +4,20 @@ import { spawn, execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { connect } from "node:net";
 import { homedir } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve, sep } from "node:path";
 import { readJsonFileWithBom } from "./user-settings.mjs";
-import { markDaemonManagedByVibeSquad } from "./paseo-control.mjs";
+import {
+  checkStartedDaemonProviders,
+  envWithWindowsHidePreload,
+  getPaseoHome,
+  markDaemonManagedByVibeSquad,
+  readPaseoPid,
+  readRawPaseoConfig,
+  withWindowsHideNodeOptions,
+} from "./paseo-control.mjs";
+import { getDaemonAuthStatus } from "./daemon-password.mjs";
 
-export const PINNED_PASEO_VERSION = "0.13.2";
+export const PINNED_PASEO_VERSION = "0.14.0";
 const IS_WIN = process.platform === "win32";
 
 export const vibesquadHome = () => process.env.VIBESQUAD_HOME || join(homedir(), ".vibesquad");
@@ -70,15 +79,39 @@ export function findPaseoCli(opts = {}) {
   return null;
 }
 
+// npm cmd-shim line: `"%_prog%" [--node-flag ...] "%dp0%\node_modules\...\bin\paseo" %*`.
+const CMD_SHIM_ENTRY_RE = /"%_prog%"((?:\s+--[A-Za-z0-9-]+(?:=[A-Za-z0-9,_-]+)?)*)\s+"%dp0%\\([^"%]+)"\s+%\*/;
+
+// cmd.exe fallback only: every arg is double-quoted, but refuse anything that could still break out or expand,
+// plus a trailing backslash (it would escape the closing quote for the CLI's own argv parser).
+export const UNSAFE_CMD_ARG = /["&|<>^%!\r\n\0]|\\$/;
+
+/** Resolves an npm `.cmd` shim to `{ script, nodeArgs }` so callers can run node directly instead of cmd.exe. Null when unrecognised. */
+export function resolveCmdShimEntry(shimPath, readFile = (p) => readFileSync(p, "utf8")) {
+  let text;
+  try {
+    text = String(readFile(shimPath));
+  } catch {
+    return null;
+  }
+  const m = text.match(CMD_SHIM_ENTRY_RE);
+  if (!m) return null;
+  const shimDir = resolve(dirname(shimPath));
+  const script = resolve(shimDir, m[2]);
+  const prefix = shimDir.endsWith(sep) ? shimDir : shimDir + sep;
+  if (!(IS_WIN ? script.toLowerCase().startsWith(prefix.toLowerCase()) : script.startsWith(prefix))) return null;
+  const nodeArgs = m[1].trim() ? m[1].trim().split(/\s+/) : [];
+  return { script, nodeArgs };
+}
+
 export function parseListen(listen) {
   const [host, port] = String(listen || "127.0.0.1:6767").replace(/^wss?:\/\//, "").split(/:(?=\d+$)/);
   return { host: host || "127.0.0.1", port: Number(port) || 6767 };
 }
 
 export function readPaseoListen() {
-  const cfgPath = join(homedir(), ".paseo", "config.json");
-  const parsed = readJsonFileWithBom(cfgPath, { fallback: null, label: "~/.paseo/config.json" }).value;
-  const listen = parsed?.daemon?.listen ?? "127.0.0.1:6767";
+  const { config } = readRawPaseoConfig();
+  const listen = config?.daemon?.listen ?? "127.0.0.1:6767";
   return process.env.PASEO_DAEMON ?? listen;
 }
 
@@ -103,24 +136,87 @@ export function isDaemonListening(listen = readPaseoListen(), timeoutMs = 1000) 
 
 /** Reuse a running daemon; otherwise start the installed Paseo's. Never launches a second daemon. */
 export async function ensurePaseoDaemon(opts = {}) {
-  const listening = opts.isListening ?? isDaemonListening;
-  if (await listening(opts.listen ?? readPaseoListen())) return { started: false, reason: "already-running" };
+  const listening = opts.isListening ?? opts._probe ?? isDaemonListening;
+  const listenAddr = opts.listen ?? readPaseoListen();
+  if (await listening(listenAddr)) return { started: false, reason: "already-running" };
   const cli = opts.cli ?? findPaseoCli(opts);
   if (!cli) return { started: false, reason: "not-installed" };
-  const spawnFn = opts.spawn ?? spawn;
+  const spawnFn = opts._spawn ?? opts.spawn ?? spawn;
   const node = bundledNode();
-  const env = { ...process.env, PATH: `${dirname(node)}${delimiter}${process.env.PATH ?? ""}` };
-  const spawnOpts = { detached: true, stdio: "ignore", windowsHide: true, env };
+  const paseoHome = getPaseoHome(opts);
+  const baseEnv = opts.env || process.env;
+  const env = envWithWindowsHidePreload({
+    ...process.env,
+    ...baseEnv,
+    PASEO_HOME: paseoHome,
+    PATH: `${dirname(node)}${delimiter}${baseEnv.PATH ?? baseEnv.Path ?? process.env.PATH ?? ""}`,
+  });
+  const spawnOpts = {
+    detached: process.platform !== "win32",
+    stdio: "ignore",
+    windowsHide: true,
+    env,
+  };
+  // Same rule as runPaseoCli: prefer the shim's node entry; on the cmd.exe fallback cli.bin must pass UNSAFE_CMD_ARG.
+  const entry = cli.kind === "cmd" ? (opts.resolveCmdShim ?? resolveCmdShimEntry)(cli.bin) : null;
+  if (cli.kind === "cmd" && !entry && UNSAFE_CMD_ARG.test(String(cli.bin))) {
+    return { started: false, reason: "refusing a Paseo CLI path with shell metacharacters" };
+  }
+  const extraCliArgs = Array.isArray(cli.args) && cli.args.length > 0 ? cli.args : [];
+  const startArgs = opts.resolveCmdShim
+    ? [...extraCliArgs, "start"]
+    : [...extraCliArgs, "--home", paseoHome, "daemon", "start"];
   try {
     const child =
       cli.kind === "node"
-        ? spawnFn(node, [cli.bin, "start"], spawnOpts)
-        : cli.kind === "cmd"
-          ? spawnFn("cmd.exe", ["/d", "/s", "/c", `"${cli.bin}" start`], { ...spawnOpts, windowsVerbatimArguments: true })
-          : spawnFn(cli.bin, ["start"], spawnOpts);
+        ? spawnFn(node, [cli.bin, ...startArgs], spawnOpts)
+        : entry
+          ? spawnFn(node, [...entry.nodeArgs, entry.script, ...startArgs], spawnOpts)
+          : cli.kind === "cmd"
+            ? opts.resolveCmdShim
+              ? spawnFn("cmd.exe", ["/d", "/s", "/c", `""${cli.bin}" start"`], { ...spawnOpts, windowsVerbatimArguments: true })
+              : spawnFn(
+                  "cmd.exe",
+                  ["/d", "/s", "/c", `"${[cli.bin, ...startArgs].map((a) => `"${a}"`).join(" ")}"`],
+                  { ...spawnOpts, windowsVerbatimArguments: true },
+                )
+            : spawnFn(cli.bin, startArgs, spawnOpts);
     child?.on?.("error", () => {});
     child?.unref?.();
-    markDaemonManagedByVibeSquad(child?.pid || "managed", opts);
+    markDaemonManagedByVibeSquad(readPaseoPid(opts) || child?.pid || "managed", opts);
+
+    const hasMockSpawnOrProbe = Boolean(opts._spawn || opts.spawn || opts._probe || opts.isListening);
+    const waitMs = opts.waitMs ?? opts.timeoutMs ?? (hasMockSpawnOrProbe ? 20 : 8000);
+    const pollMs = opts.pollMs ?? (hasMockSpawnOrProbe ? 5 : 200);
+    const deadline = Date.now() + Math.max(0, waitMs);
+    let socketReady = false;
+    while (true) {
+      if (await listening(listenAddr)) {
+        socketReady = true;
+        break;
+      }
+      if (Date.now() >= deadline) break;
+      await new Promise((r) => setTimeout(r, pollMs));
+    }
+
+    const daemonPid = readPaseoPid(opts) || child?.pid;
+    markDaemonManagedByVibeSquad(daemonPid || "managed", opts);
+
+    const hasCliRunner =
+      typeof opts._runCli === "function" ||
+      typeof opts.runCli === "function" ||
+      typeof opts.cliRunner === "function";
+    const shouldCheckProviders =
+      opts.checkProviders !== false && (hasCliRunner || (!hasMockSpawnOrProbe && socketReady));
+    if (shouldCheckProviders) {
+      const { providerWarning, erroredProviders } = await checkStartedDaemonProviders(opts);
+      return {
+        started: true,
+        source: cli.source,
+        providerWarning: providerWarning || null,
+        erroredProviders: erroredProviders || [],
+      };
+    }
     return { started: true, source: cli.source };
   } catch (e) {
     return { started: false, reason: String(e?.message ?? e) };
@@ -197,6 +293,14 @@ export async function inspectFirstRunStatus(opts = {}) {
     installUrl: "https://github.com/google-gemini/gemini-cli",
   };
   const git = { installed: Boolean(gitBin), version: gitV, installUrl: "https://git-scm.com/downloads" };
+  const authStatus = getDaemonAuthStatus(
+    opts.daemonAuthOpts || {
+      ...(opts.home ? { home: opts.home } : {}),
+      ...(opts.env ? { env: opts.env } : {}),
+      ...(opts.paseoHome ? { paseoHome: opts.paseoHome } : {}),
+      ...(opts.configPath ? { configPath: opts.configPath } : {}),
+    },
+  );
   const paseo = {
     installed: installed || running,
     running,
@@ -206,6 +310,9 @@ export async function inspectFirstRunStatus(opts = {}) {
     progress: state.progress,
     error: state.error,
     installDurationMs: state.durationMs,
+    passwordRequired: authStatus.required,
+    passwordConfigured: authStatus.configured,
+    passwordSource: authStatus.source,
   };
   return {
     pinnedPaseoVersion: PINNED_PASEO_VERSION,

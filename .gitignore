@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-remote/
 src-tauri/target/
 src-tauri/gen/
 .agents/
@@ -18,3 +19,4 @@ docs/BRAINSTORM_HANDOFF_*
 docs/PLAN_*
 docs/FEATURE_COMPLETE.md
 docs/UPSTREAM_ISSUES.md
+build-stamp.json

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createPlugin, matchStoredProfile, resolveStoredProfile } from "../plugin/index.server.ts";
+import { createPlugin, LEAD_FALLBACK_PACK, matchStoredProfile, resolveStoredProfile } from "../plugin/index.server.ts";
 
 const PROFILES = [
   {
@@ -364,6 +364,31 @@ test(
       assert.deepEqual(h.calls.settings, []);
       assert.deepEqual(h.calls.refused, []);
       assert.deepEqual(metrics(vsHome), []);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "Block 1: antigravity reviewer spawn with missing features still gets approvalPolicy=skip, and lead docs omit features",
+  withEnv(async () => {
+    const h = harness();
+    try {
+      const reviewer = h.create({
+        provider: "antigravity-cli",
+        model: "gemini-3.8-pro",
+        title: "Bug4 · review batch 3",
+      });
+      assert.equal(reviewer.config.provider, "antigravity-cli");
+      assert.equal(reviewer.config.featureValues?.approvalPolicy, "skip");
+      assert.equal(reviewer.config.modeId, "accept-edits");
+
+      assert.ok(LEAD_FALLBACK_PACK.includes("no `features`"));
+      assert.ok(!LEAD_FALLBACK_PACK.includes("approvalPolicy"));
+      const rolePacksDoc = readFileSync(new URL("../docs/ROLE_PACKS.md", import.meta.url), "utf8");
+      assert.ok(rolePacksDoc.includes("omit `features`"));
+      assert.ok(!rolePacksDoc.includes("approvalPolicy"));
     } finally {
       h.stop?.();
     }

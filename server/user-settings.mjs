@@ -38,7 +38,8 @@ export function parseJsonWithBom(raw) {
   return JSON.parse(stripBom(raw));
 }
 
-export function recordConfigWarning(filePath, label, error) {
+/** `kind` defaults to "parse" (JSON parse error); other kinds (e.g. "exposure") are config problems that aren't parse errors. */
+export function recordConfigWarning(filePath, label, error, { kind = "parse" } = {}) {
   const key = normalizePathKey(filePath);
   const msg = String(error?.message ?? error ?? "Invalid JSON");
   const entry = {
@@ -46,9 +47,12 @@ export function recordConfigWarning(filePath, label, error) {
     label: String(label || filePath),
     error: msg,
     ts: new Date().toISOString(),
+    ...(kind !== "parse" ? { kind } : {}),
   };
+  const prev = configWarningsByFile.get(key);
   configWarningsByFile.set(key, entry);
-  console.warn(`[vibesquad] JSON parse error in ${entry.label} (${entry.file}): ${msg}`);
+  if (kind === "parse") console.warn(`[vibesquad] JSON parse error in ${entry.label} (${entry.file}): ${msg}`);
+  else if (prev?.error !== msg) console.warn(`[vibesquad] ${entry.label}: ${msg}`);
   return entry;
 }
 
@@ -108,6 +112,16 @@ export function readJsonFileWithBom(
   }
 }
 
+// Settings › Notifications per-event toggles, mirrored here so the push watcher can honour them.
+// Only explicit booleans are kept; a missing or unknown key means "send" (the old behaviour).
+export const PUSH_EVENT_KEYS = ["permission", "needsYou", "finished", "errored"];
+export function normalizePushEvents(value) {
+  const out = {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) return out;
+  for (const k of PUSH_EVENT_KEYS) if (typeof value[k] === "boolean") out[k] = value[k];
+  return out;
+}
+
 export function normalizeUserName(value) {
   const name = typeof value === "string" ? value.trim().slice(0, MAX_NAME).trim() : "";
   return name || DEFAULT_USER_NAME;
@@ -137,6 +151,11 @@ export function loadUserSettings(baseHome) {
   if (typeof res.data.startPaseoWithVibeSquad === "boolean") {
     out.startPaseoWithVibeSquad = res.data.startPaseoWithVibeSquad;
   }
+  const pushEvents = normalizePushEvents(res.data.pushEvents);
+  if (Object.keys(pushEvents).length) out.pushEvents = pushEvents;
+  // Remote (relay) proxy gate, read by plugin/server/remote-proxy.ts. Hand-edited only: saveUserSettings
+  // carries it over but never takes it from a patch, so no HTTP caller can switch it on.
+  if (res.data.remote && typeof res.data.remote === "object") out.remote = { enabled: res.data.remote.enabled === true };
   return out;
 }
 
@@ -155,6 +174,20 @@ export function saveUserSettings(patch, baseHome) {
     next.startPaseoWithVibeSquad =
       patch && "startPaseoWithVibeSquad" in patch ? Boolean(patch.startPaseoWithVibeSquad) : Boolean(current.startPaseoWithVibeSquad);
   }
+  const pushEvents = normalizePushEvents(patch && "pushEvents" in patch ? patch.pushEvents : current.pushEvents);
+  if (Object.keys(pushEvents).length) next.pushEvents = pushEvents;
+  if (current.remote) next.remote = current.remote;
+  mkdirSync(baseHome || vibesquadHome(), { recursive: true });
+  writeFileSync(file, JSON.stringify(next, null, 2) + "\n", "utf8");
+  clearConfigWarning(file);
+  return next;
+}
+
+export function saveRemoteAccess(enabled, baseHome) {
+  const file = settingsFile(baseHome);
+  const current = loadUserSettings(baseHome);
+  const next = { ...current, remote: { enabled: Boolean(enabled) } };
+  delete next.parseError;
   mkdirSync(baseHome || vibesquadHome(), { recursive: true });
   writeFileSync(file, JSON.stringify(next, null, 2) + "\n", "utf8");
   clearConfigWarning(file);

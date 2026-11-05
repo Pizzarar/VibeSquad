@@ -14,7 +14,9 @@ import {
   appendVsLogEntry,
   createLeadHandoffCoordinator,
   getHandoffPacketPath,
+  listDaemonAgents,
   loadLeadThresholds,
+  performLeadHandoffHttp,
   seedDefaultPack,
   writeBrainstormSummary,
 } from "../server/vibesquad-api.mjs";
@@ -368,7 +370,7 @@ test("Done-when #2 (250k auto-handoff & 300k forced synthesis): successor has sa
     // 1. Successor has same profile ("Lead - Gemini") and next ordN (ord19)
     assert.equal(createdAgents.length, 1);
     const succ = createdAgents[0];
-    assert.equal(succ.title, "★ SITE POLISH ord19");
+    assert.equal(succ.title, "★ Sit19");
     assert.equal(succ.labels.profile, "Lead - Gemini");
     assert.equal(succ.labels.ord, "19");
     assert.equal(succ.labels.role, "lead");
@@ -389,7 +391,7 @@ test("Done-when #2 (250k auto-handoff & 300k forced synthesis): successor has sa
     assert.equal(closedWorker.labels["paseo.parent-agent-id"], oldLead.id);
     const workerNotice = messages.find((m) => m.id === openWorker.id);
     assert.ok(workerNotice, "Expected open worker to be notified of new lead");
-    assert.match(workerNotice.text, /Report to ★ SITE POLISH ord19 \(succ-ord19\)/i);
+    assert.match(workerNotice.text, /Report to ★ Sit19 \(succ-ord19\)/i);
 
     // 4. Old lead's heartbeat deleted and handoff logged with trigger=hard-300
     assert.deepEqual(deletedHeartbeats, [oldLead.id]);
@@ -405,7 +407,7 @@ test("Done-when #2 (250k auto-handoff & 300k forced synthesis): successor has sa
     // 6. Once successor confirms takeover, old lead retires to (old) SITE POLISH ord18 / former-lead
     const confirmed = await coordinator.confirmTakeover(succ.id);
     assert.equal(confirmed.confirmed, true);
-    assert.equal(oldLead.title, "(old) SITE POLISH ord18");
+    assert.equal(oldLead.title, "(old) Sit18");
     assert.equal(oldLead.labels.role, "former-lead");
     assert.equal(oldLead.labels.ord, "18");
     assert.equal(coordinator.hasPendingTakeover(succ.id), false);
@@ -497,7 +499,7 @@ test("Plugin integration: successor turn_ended automatically confirms takeover a
     await turnEnded({ agent: oldLead, turnId: "t1", outcome: { kind: "completed" } }, { paseo });
     const succ = store.get("lead-2");
     assert.ok(succ, "Expected successor lead-2 to be spawned");
-    assert.equal(succ.title, "★ VIBESQUAD ord2");
+    assert.equal(succ.title, "★ Hub2");
     assert.equal(oldLead.labels.role, "lead");
 
     // 2. Even when agent.created fires for lead-2, oldLead is NOT retired prematurely
@@ -508,9 +510,197 @@ test("Plugin integration: successor turn_ended automatically confirms takeover a
     // 3. When lead-2 finishes its first turn (confirming takeover), oldLead is retired to (old) VIBESQUAD ord1
     await turnEnded({ agent: succ, turnId: "t2", outcome: { kind: "completed" } }, { paseo });
     assert.equal(oldLead.labels.role, "former-lead");
-    assert.equal(oldLead.title, "(old) VIBESQUAD ord1");
+    assert.equal(oldLead.title, "(old) Hub1");
 
     plugin();
+  } finally {
+    if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
+    else process.env.VIBESQUAD_HOME = prevHome;
+    env.cleanup();
+  }
+});
+
+// docs/PLAN_BUGS_BATCH1.md block 3: the HTTP handoff used `client.listAgents`, which DaemonClient does not
+// have, so it always saw [] and never re-pointed workers. A fake with only the real methods must work.
+function fakeDaemonClient(agents, pageSize = 2) {
+  const calls = { fetchAgents: [], updateAgent: [], sendAgentPrompt: [], createAgent: [] };
+  return {
+    calls,
+    async fetchAgents(opts = {}) {
+      calls.fetchAgents.push(opts);
+      const live = [...agents.values()].filter((a) => !(opts.filter?.includeArchived === false && a.archivedAt));
+      const start = opts.page?.cursor ? Number(opts.page.cursor) : 0;
+      const slice = live.slice(start, start + pageSize);
+      const next = start + pageSize < live.length ? String(start + pageSize) : null;
+      return { entries: slice.map((agent) => ({ agent })), pageInfo: { nextCursor: next, prevCursor: null, hasMore: Boolean(next) } };
+    },
+    async fetchAgent(id) {
+      return { agent: agents.get(id) ?? null };
+    },
+    async updateAgent(id, { name, labels }) {
+      calls.updateAgent.push({ id, name, labels });
+      const a = agents.get(id);
+      if (a) {
+        a.labels = { ...(a.labels ?? {}), ...labels };
+        if (name) a.title = name;
+      }
+    },
+    async sendAgentPrompt(id, text) {
+      calls.sendAgentPrompt.push({ id, text });
+    },
+    async createAgent(payload) {
+      calls.createAgent.push(payload);
+      const created = { id: "succ-http", title: payload.config?.title, cwd: payload.config?.cwd, status: "running", labels: { ...payload.labels } };
+      agents.set(created.id, created);
+      return created;
+    },
+    async deleteHeartbeat() {},
+  };
+}
+
+test("listDaemonAgents pages through DaemonClient.fetchAgents and skips archived agents", async () => {
+  const agents = new Map(
+    ["a", "b", "c", "d", "e"].map((id) => [id, { id, labels: {}, ...(id === "c" ? { archivedAt: "2026-11-01T00:00:00Z" } : {}) }]),
+  );
+  const client = fakeDaemonClient(agents, 2);
+  const got = await listDaemonAgents(client);
+  assert.deepEqual(got.map((a) => a.id), ["a", "b", "d", "e"]);
+  assert.equal(client.calls.fetchAgents.length, 2);
+  assert.equal(client.calls.fetchAgents[1].page.cursor, "2");
+  // No fetchAgents (or a daemon error) still means "no workers", never a throw.
+  assert.deepEqual(await listDaemonAgents({ listAgents: async () => [{ id: "x" }] }), []);
+  assert.deepEqual(await listDaemonAgents({ fetchAgents: async () => { throw new Error("down"); } }), []);
+});
+
+test("HTTP handoff with a real-shaped daemon client re-points the open workers to the successor", async () => {
+  const env = makeTempEnv();
+  const prevHome = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = env.vsHome;
+  try {
+    const oldLead = {
+      id: "lead-http-1",
+      title: "★ SITE POLISH ord3",
+      provider: "claude",
+      model: "claude-opus-5-5",
+      cwd: env.dir,
+      status: "idle",
+      createdAt: "2026-11-01T00:00:00.000Z",
+      labels: { team: "site", lane: "site-polish", role: "lead", ord: "3", profile: "Lead - Claude" },
+    };
+    const worker = (id, over = {}) => ({
+      id,
+      title: `SITE POLISH · ${id}`,
+      provider: "claude",
+      model: "claude-sonnet-5-5",
+      cwd: env.dir,
+      status: "running",
+      labels: { team: "site", lane: "site-polish", role: "worker", job: id, "paseo.parent-agent-id": oldLead.id },
+      ...over,
+    });
+    const agents = new Map([oldLead, worker("w1"), worker("w2"), worker("w3", { status: "closed" })].map((a) => [a.id, a]));
+    const client = fakeDaemonClient(agents, 2);
+    const res = await performLeadHandoffHttp({ trigger: "self", daemonClient: client, oldLead, baseHome: env.vsHome, profilesPath: env.profilesPath }, env.dir);
+    assert.ok(client.calls.fetchAgents.length >= 1, "the real list call is used");
+    const succId = res?.successor?.id ?? res?.successorId ?? "succ-http";
+    for (const id of ["w1", "w2"]) {
+      assert.equal(agents.get(id).labels["paseo.parent-agent-id"], succId, `${id} re-pointed`);
+      assert.ok(client.calls.sendAgentPrompt.some((m) => m.id === id), `${id} told about the new lead`);
+    }
+    assert.equal(agents.get("w3").labels["paseo.parent-agent-id"], oldLead.id, "closed worker untouched");
+  } finally {
+    if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
+    else process.env.VIBESQUAD_HOME = prevHome;
+    env.cleanup();
+  }
+});
+
+test("HTTP self-handoff without oldLead resolves Hub8 from daemon, titles successor ★ Hub9, and dedupes retries per (team, lane, ord)", async () => {
+  const env = makeTempEnv();
+  const prevHome = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = env.vsHome;
+  try {
+    const hub8 = {
+      id: "hub-8-id",
+      title: "★ Hub8 · sec followups",
+      provider: "claude",
+      model: "claude-opus-5-5",
+      cwd: env.dir,
+      status: "idle",
+      createdAt: "2026-11-02T18:00:00.000Z",
+      labels: { team: "vibesquad", lane: "vibesquad", role: "lead", ord: "8", job: "sec followups", profile: "Lead - Claude" },
+    };
+    const agents = new Map([[hub8.id, hub8]]);
+    const client = fakeDaemonClient(agents, 10);
+
+    // Simulate HTTP body after sanitizeBody strips oldLead: only { trigger: "self", lane: "vibesquad" } or { agentId }
+    const [r1, r2] = await Promise.all([
+      performLeadHandoffHttp({ trigger: "self", lane: "vibesquad", daemonClient: client, baseHome: env.vsHome, profilesPath: env.profilesPath }, env.dir),
+      performLeadHandoffHttp({ trigger: "self", agentId: hub8.id, daemonClient: client, baseHome: env.vsHome, profilesPath: env.profilesPath }, env.dir),
+    ]);
+    const r3 = await performLeadHandoffHttp(
+      { trigger: "self", agentId: hub8.id, daemonClient: client, baseHome: env.vsHome, profilesPath: env.profilesPath },
+      env.dir,
+    );
+
+    assert.equal(client.calls.createAgent.length, 1, "must spawn only one successor across concurrent and sequential retries");
+    assert.equal(r1.oldLeadId, "hub-8-id");
+    assert.equal(r1.ord, 8);
+    assert.equal(r1.nextOrd, 9);
+    assert.equal(r1.title, "★ Hub9");
+    assert.equal(r1.oldTitle, "(old) Hub8 · sec followups");
+    assert.equal(Boolean(r1.deduped) !== Boolean(r2.deduped), true, "exactly one concurrent request spawns and the other dedupes");
+    assert.equal(r2.successorId, r1.successorId);
+    assert.equal(r3.deduped, true);
+    assert.equal(r3.successorId, r1.successorId);
+  } finally {
+    if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
+    else process.env.VIBESQUAD_HOME = prevHome;
+    env.cleanup();
+  }
+});
+
+test("HTTP self-handoff with slow createAgent returns 202 + handoffId quickly without blocking HTTP response and dedupes retries", async () => {
+  const env = makeTempEnv();
+  const prevHome = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = env.vsHome;
+  try {
+    const hub8 = {
+      id: "hub-slow-8",
+      title: "★ Hub8 · parity",
+      provider: "claude",
+      model: "claude-opus-5-5",
+      cwd: env.dir,
+      status: "idle",
+      createdAt: "2026-11-02T18:00:00.000Z",
+      labels: { team: "vibesquad", lane: "vibesquad", role: "lead", ord: "8", job: "parity", profile: "Lead - Claude" },
+    };
+    const agents = new Map([[hub8.id, hub8]]);
+    const baseClient = fakeDaemonClient(agents, 10);
+    const slowClient = {
+      ...baseClient,
+      async createAgent(payload) {
+        await new Promise((r) => setTimeout(r, 120));
+        return baseClient.createAgent(payload);
+      },
+    };
+
+    const rFast = await performLeadHandoffHttp(
+      { trigger: "self", agentId: hub8.id, httpWaitMs: 20, daemonClient: slowClient, baseHome: env.vsHome, profilesPath: env.profilesPath },
+      env.dir,
+    );
+    assert.equal(rFast.accepted, true);
+    assert.equal(rFast.status, 202);
+    assert.equal(rFast.handoffId, "vibesquad:vibesquad:ord8->ord9");
+    assert.equal(rFast.title, "★ Hub9");
+
+    // Retry after completion resolves the same successor without spawning a second one
+    const rRetry = await performLeadHandoffHttp(
+      { trigger: "self", agentId: hub8.id, daemonClient: slowClient, baseHome: env.vsHome, profilesPath: env.profilesPath },
+      env.dir,
+    );
+    assert.equal(rRetry.deduped, true);
+    assert.equal(rRetry.successorId, "succ-http");
+    assert.equal(baseClient.calls.createAgent.length, 1);
   } finally {
     if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
     else process.env.VIBESQUAD_HOME = prevHome;

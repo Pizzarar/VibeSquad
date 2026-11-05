@@ -8,10 +8,14 @@ import {
   findNewestPlanFile,
   readBrainstormSummary,
 } from "./brainstorm.mjs";
-import { effectiveAgentRole, isDigestAgent, isRetiredAgent, ordOf } from "./identity.mjs";
+import { effectiveAgentRole, formatDisplayTitle, isDigestAgent, isRetiredAgent, laneCodeFor, ordOf } from "./identity.mjs";
+import { listDaemonAgents } from "./detach-children.mjs";
+// Re-exported: the HTTP handoff used `client.listAgents`, which DaemonClient lacks, so workers were never re-pointed.
+export { listDaemonAgents };
 import { LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE, readJsonFileWithBom } from "./user-settings.mjs";
 import { findProfile, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
+import { defangPromptFences } from "./write-guards.mjs";
 
 // import.meta.dirname is undefined when bundled into the Paseo plugin; fall back like plugin/index.server.ts.
 const REPO_ROOT = resolve(process.env.VIBESQUAD_ROOT || (typeof import.meta.dirname === "string" ? join(import.meta.dirname, "..") : join(homedir(), "projects", "VibeSquad")));
@@ -77,6 +81,18 @@ export function loadLeadThresholds(teamIdOrDef, rootDir = REPO_ROOT) {
   };
 }
 
+/** Lane-code lead titles (docs/NAMING.md): the successor `★ <Code><ord>` and the retired `(old) <Code><ord>[ · objective]`. */
+export function leadTitles({ laneId, laneName, nextOrd, oldOrd, oldLead, job, rootDir = REPO_ROOT }) {
+  const teams = loadTeamsConfig(rootDir).teams;
+  const code = laneCodeFor(laneId, Array.isArray(teams) ? teams : []);
+  const base = { laneId, laneName, code };
+  const cleanJob = typeof job === "string" ? job.trim() : "";
+  return {
+    newTitle: formatDisplayTitle({ ...base, role: "lead", ord: nextOrd, ...(cleanJob ? { job: cleanJob } : {}) }),
+    oldTitle: formatDisplayTitle({ ...base, role: "former-lead", ord: oldOrd, job: oldLead?.labels?.job }),
+  };
+}
+
 export function resolveTeamAndLane(lead, rootDir = REPO_ROOT) {
   const labels = lead?.labels ?? {};
   const cfg = loadTeamsConfig(rootDir);
@@ -128,18 +144,43 @@ export function resolveTeamAndLane(lead, rootDir = REPO_ROOT) {
 
   const teamId = safeSegment(matchedTeam?.id || teamHint || "vibesquad");
   const teamName = matchedTeam?.name || teamHint || "VibeSquad";
-  const laneId = safeSegment(
-    matchedLane?.id || laneHint || matchedTeam?.lanes?.[0]?.id || teamId || "vibesquad",
-  );
+  // No lane label: only a one-lane squad names its lane; never guess lanes[0] of a multi-lane squad.
+  const onlyLane = matchedTeam?.lanes?.length === 1 ? matchedTeam.lanes[0] : null;
+  const laneId = safeSegment(matchedLane?.id || laneHint || onlyLane?.id || teamId || "vibesquad");
   const laneName =
-    matchedLane?.name ||
-    (laneHint ? laneHint.replace(/-/g, " ") : matchedTeam?.lanes?.[0]?.name || teamName);
+    matchedLane?.name || (laneHint ? laneHint.replace(/-/g, " ") : onlyLane?.name || teamName);
 
   return { teamId, teamName, laneId, laneName, teamDef: matchedTeam };
 }
 
 export function parseLeadOrd(lead) {
+  const rawLabel = String(lead?.labels?.ord ?? "").trim();
+  if (rawLabel) return ordOf(lead);
+  const title = String(lead?.title ?? lead?.name ?? "").trim();
+  const m = /(?:\bord|★\s*[A-Za-z]{2,5}|\(old\)\s*[A-Za-z]{2,5})(\d+)\b/i.exec(title);
+  if (m) {
+    const n = Number.parseInt(m[1], 10);
+    if (Number.isFinite(n) && n >= 1) return n;
+  }
   return ordOf(lead);
+}
+
+export function highestLaneLeadOrd(agents, laneId, excludeId = "") {
+  const want = String(laneId ?? "").trim().toLowerCase();
+  if (!want || !Array.isArray(agents)) return 0;
+  let max = 0;
+  for (const raw of agents) {
+    const a = raw?.agent ?? raw;
+    if (!a || (excludeId && a.id === excludeId)) continue;
+    const l = a.labels ?? {};
+    const aLane = String(l.lane || l.lead || "").trim().toLowerCase();
+    if (aLane !== want) continue;
+    const role = String(l.role ?? "").trim().toLowerCase();
+    if (role !== "lead" && role !== "former-lead" && role !== "old-lead" && role !== "retired") continue;
+    const n = parseLeadOrd(a);
+    if (Number.isFinite(n) && n > max) max = n;
+  }
+  return max;
 }
 
 export function leadUsedTokens(lead, overrideTokens) {
@@ -311,6 +352,7 @@ export function buildSuccessorPrompt({
   laneId,
   laneName,
   nextOrd,
+  newTitle,
   oldLead,
   oldTitle,
   trigger,
@@ -329,7 +371,7 @@ export function buildSuccessorPrompt({
     : ["- none"];
 
   return [
-    `You are ★ ${laneUpper} ord${nextOrd}, the successor lead for lane \`${laneId}\` (handoff trigger=${trigger} from ${oldLead?.id || oldTitle}).`,
+    `You are ${newTitle || `★ ${laneUpper} ord${nextOrd}`}, the successor lead for lane \`${laneId}\` (handoff trigger=${trigger} from ${oldLead?.id || oldTitle}).`,
     `The previous lead (${oldLead?.title || oldLead?.id}) will be retired to "${oldTitle}" once you confirm takeover.`,
     "",
     `- **Handoff packet:** \`${packetPath}\``,
@@ -340,11 +382,11 @@ export function buildSuccessorPrompt({
     ...workerLines,
     "",
     `--- BEGIN HANDOFF PACKET (${packetPath}) ---`,
-    String(packetContent ?? "").trim(),
+    defangPromptFences(String(packetContent ?? "").trim()),
     `--- END HANDOFF PACKET ---`,
     "",
     `--- BEGIN BRAINSTORM SUMMARY (${summaryPath}) ---`,
-    String(summaryContent ?? "").trim(),
+    defangPromptFences(String(summaryContent ?? "").trim()),
     `--- END BRAINSTORM SUMMARY ---`,
     "",
     TAKEOVER_CONFIRM_INSTRUCTION,
@@ -386,6 +428,14 @@ export function resolveLeadProfile(oldLead, profilesPath) {
   };
 }
 
+const sharedHttpInFlightBySlot = new Map();
+const sharedHttpCompletedBySlot = new Map();
+
+export function resetLeadHandoffState() {
+  sharedHttpInFlightBySlot.clear();
+  sharedHttpCompletedBySlot.clear();
+}
+
 export function createLeadHandoffCoordinator(deps = {}) {
   const rootDir = deps.rootDir || REPO_ROOT;
   const flagged150 = new Set();
@@ -396,6 +446,8 @@ export function createLeadHandoffCoordinator(deps = {}) {
   const pendingTakeover = new Map(); // successorId -> takeover record
   const confirmedTakeovers = new Set();
   const deletedHeartbeats = [];
+  const inFlightBySlot = deps.sharedSlots ? sharedHttpInFlightBySlot : new Map();
+  const completedBySlot = deps.sharedSlots ? sharedHttpCompletedBySlot : new Map();
 
   const getBase = () => (typeof deps.baseHome === "function" ? deps.baseHome() : deps.baseHome);
 
@@ -453,17 +505,34 @@ export function createLeadHandoffCoordinator(deps = {}) {
     trigger,
     retireImmediately = false,
     forceSynthesize = false,
+    job,
   }) {
     const { teamId, teamName, laneId, laneName } = resolveTeamAndLane(oldLead, rootDir);
-    const oldOrd = parseLeadOrd(oldLead);
-    const nextOrd = oldOrd + 1;
-    const laneUpper = (laneName || laneId).toUpperCase();
-    const newTitle = `★ ${laneUpper} ord${nextOrd}`;
-    const oldTitle = `(old) ${laneUpper} ord${oldOrd}`;
 
     const timer = createSpawnTimer("lead-handoff");
     if (typeof deps.connectMs === "number") timer.add("connect", deps.connectMs);
     const allAgents = await listAgents();
+    const rawOldOrd = parseLeadOrd(oldLead);
+    const maxOtherOrd = highestLaneLeadOrd(allAgents, laneId, oldLead?.id);
+    const hasExplicitOldOrd = Boolean(String(oldLead?.labels?.ord ?? "").trim()) || /(?:\bord|★\s*[A-Za-z]{2,5})(\d+)\b/i.test(String(oldLead?.title ?? ""));
+    const oldOrd = !hasExplicitOldOrd && maxOtherOrd > rawOldOrd ? maxOtherOrd : rawOldOrd;
+    const nextOrd = Math.max(oldOrd, maxOtherOrd) + 1;
+
+    const slotPrefix = deps.sharedSlots ? `${rootDir}:` : "";
+    const slotKey = `${slotPrefix}${teamId}:${laneId}:ord${oldOrd}`;
+    const canDedupeSlot = trigger !== "hard-300";
+    if (canDedupeSlot && completedBySlot.has(slotKey)) {
+      const prev = completedBySlot.get(slotKey);
+      return { ...prev, triggered: false, deduped: true, reason: "already-handed-off" };
+    }
+    if (canDedupeSlot && inFlightBySlot.has(slotKey)) {
+      const prev = await inFlightBySlot.get(slotKey);
+      return { ...prev, triggered: false, deduped: true, reason: "already-handed-off" };
+    }
+
+    const runSpawn = async () => {
+    const laneUpper = (laneName || laneId).toUpperCase();
+    const { newTitle, oldTitle } = leadTitles({ laneId, laneName, nextOrd, oldOrd, oldLead, job, rootDir });
     const openWorkers = findOpenWorkersForLead(allAgents, oldLead, teamId, laneId);
     timer.mark("fetchAgents");
 
@@ -509,6 +578,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
       laneId,
       laneName,
       nextOrd,
+      newTitle,
       oldLead,
       oldTitle,
       trigger,
@@ -630,8 +700,9 @@ export function createLeadHandoffCoordinator(deps = {}) {
 
     timer.mark("retire");
     timer.flush({ teamId, laneId, agent: successor.id });
-    return {
+    const result = {
       ok: true,
+      handoffId: `${teamId}:${laneId}:ord${oldOrd}->ord${nextOrd}`,
       trigger,
       oldLeadId: oldLead.id,
       successorId: successor.id,
@@ -649,6 +720,17 @@ export function createLeadHandoffCoordinator(deps = {}) {
       retiredImmediately: retireImmediately,
       pendingConfirmation: !retireImmediately,
     };
+    completedBySlot.set(slotKey, result);
+    return result;
+    };
+
+    const p = runSpawn();
+    if (canDedupeSlot) inFlightBySlot.set(slotKey, p);
+    try {
+      return await p;
+    } finally {
+      if (inFlightBySlot.get(slotKey) === p) inFlightBySlot.delete(slotKey);
+    }
   }
 
   async function confirmTakeover(successorId) {
@@ -670,7 +752,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
           rec = {
             oldLeadId: old.id,
             successorId: id,
-            oldTitle: `(old) ${(laneName || laneId).toUpperCase()} ord${oldOrd}`,
+            oldTitle: leadTitles({ laneId, laneName, nextOrd: oldOrd + 1, oldOrd, oldLead: old, rootDir }).oldTitle,
             ord: String(oldOrd),
             teamId,
             laneId,
@@ -711,8 +793,16 @@ export function createLeadHandoffCoordinator(deps = {}) {
   async function triggerSelfHandoff(leadOrId, options = {}) {
     const lead = typeof leadOrId === "string" ? await getAgent(leadOrId) : leadOrId;
     if (!lead || !lead.id) throw new Error("lead agent not found");
-    if (selfHandedOff.has(lead.id)) {
-      return { stage: "self", triggered: false, reason: "already-handed-off" };
+    const { teamId, laneId } = resolveTeamAndLane(lead, rootDir);
+    const slotPrefix = deps.sharedSlots ? `${rootDir}:` : "";
+    const slotKey = `${slotPrefix}${teamId}:${laneId}:ord${parseLeadOrd(lead)}`;
+    if (selfHandedOff.has(lead.id) || completedBySlot.has(slotKey)) {
+      const prev = completedBySlot.get(slotKey);
+      return { ...(prev ?? {}), ok: true, stage: "self", triggered: false, deduped: true, reason: "already-handed-off" };
+    }
+    if (inFlightBySlot.has(slotKey)) {
+      const prev = await inFlightBySlot.get(slotKey);
+      return { ...(prev ?? {}), ok: true, stage: "self", triggered: false, deduped: true, reason: "already-handed-off" };
     }
     selfHandedOff.add(lead.id);
     const res = await spawnSuccessor({
@@ -720,8 +810,9 @@ export function createLeadHandoffCoordinator(deps = {}) {
       trigger: "self",
       retireImmediately: Boolean(options.retireImmediately),
       forceSynthesize: Boolean(options.forceSynthesize),
+      job: options.job,
     });
-    return { stage: "self", triggered: true, ...res };
+    return { stage: "self", triggered: !res.deduped, ...res };
   }
 
   async function evaluateLead(lead, options = {}) {
@@ -873,6 +964,7 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
   let connected = Boolean(injectedClient);
   const connectT0 = Date.now();
   let connectMs;
+  let backgroundHandoff = null;
 
   try {
     if (client && !injectedClient && typeof client.connect === "function") {
@@ -881,19 +973,15 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
       connectMs = Date.now() - connectT0;
     }
 
-    const coordinator = createLeadHandoffCoordinator({
+    const deps = {
       connectMs,
       rootDir,
       baseHome: body.baseHome,
       profilesPath: body.profilesPath,
+      sharedSlots: body.sharedSlots ?? true,
       async listAgents() {
         if (Array.isArray(body.agents)) return body.agents;
-        if (connected && client && typeof client.listAgents === "function") {
-          const res = await client.listAgents().catch(() => null);
-          if (Array.isArray(res?.entries)) return res.entries.map((e) => e.agent ?? e);
-          if (Array.isArray(res)) return res;
-        }
-        return [];
+        return connected && client ? listDaemonAgents(client) : [];
       },
       async getAgent(id) {
         if (body.oldLead && body.oldLead.id === id) return body.oldLead;
@@ -933,36 +1021,102 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
           await client.deleteHeartbeat(agentId).catch(() => {});
         }
       },
-    });
+    };
+    const coordinator = createLeadHandoffCoordinator(deps);
 
     if (body.action === "confirm" || body.confirmSuccessorId) {
       return await coordinator.confirmTakeover(body.confirmSuccessorId || body.successorId || body.agentId);
     }
 
-    const lead = body.oldLead || (body.agentId ? await coordinator.getPendingTakeover(body.agentId) : null) || {
-      id: body.agentId || "lead-1",
-      title: body.title || "★ VIBESQUAD ord1",
-      provider: body.provider || "claude",
-      model: body.model || "claude-opus-5-5",
-      cwd: body.cwd || rootDir,
-      status: body.status || "idle",
-      labels: body.labels || { team: body.team || "vibesquad", lane: body.lane || "vibesquad", role: "lead", ord: String(body.ord || "1") },
-    };
+    // In-process callers may pass oldLead; HTTP callers can't (sanitizeBody strips it and `agents`), so the
+    // lead is a live role=lead agent from the daemon, by agentId or by lane. Never synthesized from the body.
+    let lead = body.oldLead || null;
+    if (!lead && body.agentId != null && !/^[A-Za-z0-9_-]{1,64}$/.test(String(body.agentId))) {
+      throw new Error("lead-handoff: bad agentId");
+    }
+    if (!lead && body.agentId) {
+      if (Array.isArray(body.agents)) {
+        lead = body.agents.find((a) => (a?.agent ?? a)?.id === body.agentId) ?? null;
+        if (lead?.agent) lead = lead.agent;
+      }
+      if (!lead && connected && client && typeof client.fetchAgent === "function") {
+        const fetched = await client.fetchAgent(body.agentId).catch(() => null);
+        lead = fetched?.agent ?? null;
+      }
+    }
+    if (!lead) {
+      const liveList = Array.isArray(body.agents)
+        ? body.agents.map((a) => a?.agent ?? a)
+        : connected && client
+          ? await listDaemonAgents(client)
+          : [];
+      if (body.agentId) {
+        lead = liveList.find((a) => a?.id === body.agentId) ?? null;
+      }
+      if (!lead) {
+        const wantLane = String(body.laneId || body.lane || body.teamId || body.team || "vibesquad").trim().toLowerCase();
+        const laneLeads = liveList.filter((a) => {
+          if (!a || a.archivedAt || a.internal || a.status === "closed") return false;
+          if (effectiveAgentRole(a) !== "lead" || isRetiredAgent(a)) return false;
+          const aLane = String(a.labels?.lane || a.labels?.lead || "").trim().toLowerCase();
+          return aLane === wantLane;
+        });
+        if (laneLeads.length) {
+          laneLeads.sort((a, b) => parseLeadOrd(b) - parseLeadOrd(a));
+          lead = laneLeads[0];
+        }
+      }
+    }
+    if (!lead || !lead.id) throw new Error(`lead agent not found: ${body.agentId || body.laneId || body.lane || "vibesquad"}`);
+    if (!body.oldLead && effectiveAgentRole(lead) !== "lead") throw new Error(`not a lead: ${lead.id}`);
 
-    if (trigger === "self") {
-      return await coordinator.triggerSelfHandoff(lead, {
-        retireImmediately: Boolean(body.retireImmediately),
-        forceSynthesize: Boolean(body.forceSynthesize),
-      });
+    const handoffPromise =
+      trigger === "self"
+        ? coordinator.triggerSelfHandoff(lead, {
+            retireImmediately: Boolean(body.retireImmediately),
+            forceSynthesize: Boolean(body.forceSynthesize),
+            job: body.job,
+          })
+        : coordinator.evaluateLead(lead, {
+            usedTokens: body.usedTokens,
+            forceSynthesize: Boolean(body.forceSynthesize),
+          });
+
+    const waitMs = body.async === true ? 0 : typeof body.httpWaitMs === "number" ? body.httpWaitMs : null;
+    if (waitMs !== null) {
+      const TIMEOUT = Symbol("timeout");
+      const raced = await Promise.race([
+        handoffPromise,
+        new Promise((r) => setTimeout(() => r(TIMEOUT), Math.max(0, waitMs))),
+      ]);
+      if (raced === TIMEOUT) {
+        backgroundHandoff = handoffPromise.catch(() => {});
+        const { teamId, laneId, laneName } = resolveTeamAndLane(lead, rootDir);
+        const oldOrd = parseLeadOrd(lead);
+        const nextOrd = oldOrd + 1;
+        const { newTitle } = leadTitles({ laneId, laneName, nextOrd, oldOrd, oldLead: lead, job: body.job, rootDir });
+        return {
+          ok: true,
+          accepted: true,
+          status: 202,
+          handoffId: `${teamId}:${laneId}:ord${oldOrd}->ord${nextOrd}`,
+          trigger,
+          oldLeadId: lead.id,
+          ord: oldOrd,
+          nextOrd,
+          title: newTitle,
+          teamId,
+          laneId,
+        };
+      }
+      return raced;
     }
 
-    return await coordinator.evaluateLead(lead, {
-      usedTokens: body.usedTokens,
-      forceSynthesize: Boolean(body.forceSynthesize),
-    });
+    return await handoffPromise;
   } finally {
     if (!injectedClient && client && typeof client.close === "function") {
-      await client.close().catch(() => {});
+      if (backgroundHandoff) backgroundHandoff.finally(() => client.close().catch(() => {}));
+      else await client.close().catch(() => {});
     }
   }
 }

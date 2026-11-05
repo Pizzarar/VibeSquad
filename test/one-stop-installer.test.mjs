@@ -13,6 +13,7 @@ import {
   resetFirstRunState,
   startManagedPaseoInstall,
 } from "../server/first-run.mjs";
+import { ownerHeaders } from "./helpers/local-owner.mjs";
 
 const ROOT = join(fileURLToPath(import.meta.url), "../../");
 const tmp = mkdtempSync(join(tmpdir(), "vs-first-run-"));
@@ -50,7 +51,7 @@ test("GET /__vibesquad/first-run/status has the full shape", async () => {
     const r = await fetch(`${base}/__vibesquad/first-run/status`);
     assert.equal(r.status, 200);
     const s = await r.json();
-    assert.equal(s.pinnedPaseoVersion, "0.13.2");
+    assert.equal(s.pinnedPaseoVersion, "0.14.0");
     for (const k of ["paseo", "claude", "gemini", "git", "ready"]) assert.ok(k in s, `missing ${k}`);
     assert.equal(s.paseo.installed, false);
     assert.equal(s.paseo.source, "none");
@@ -79,7 +80,7 @@ test("existing daemon is reused: source existing, install does not run npm", asy
   assert.equal(st.paseo.source, "existing");
   assert.equal(st.paseo.installed, true);
   await withApi(opts, async (base) => {
-    const r = await fetch(`${base}/__vibesquad/first-run/install-paseo`, { method: "POST" });
+    const r = await fetch(`${base}/__vibesquad/first-run/install-paseo`, { method: "POST", headers: ownerHeaders() });
     const body = await r.json();
     assert.equal(body.alreadyInstalled, true);
   });
@@ -106,7 +107,7 @@ test("managed install transitions installing -> installed and records duration",
     probeVersions: false,
     spawn: noDaemon,
     installRunner: async ({ prefix: p, spec, onProgress }) => {
-      assert.equal(spec, "@getpaseo/cli@0.13.2");
+      assert.equal(spec, "@getpaseo/cli@0.14.0");
       onProgress("added 509 packages");
       await gate;
       fakeManagedPaseo(p);
@@ -127,7 +128,7 @@ test("managed install transitions installing -> installed and records duration",
   assert.equal(done.paseo.installing, false);
   assert.equal(done.paseo.installed, true);
   assert.equal(done.paseo.source, "managed");
-  assert.equal(done.paseo.version, "0.13.2");
+  assert.equal(done.paseo.version, "0.14.0");
   assert.equal(typeof done.paseo.installDurationMs, "number");
 });
 
@@ -150,13 +151,13 @@ test("failed install surfaces an error and a retry succeeds", async () => {
     },
   };
   await withApi(opts, async (base) => {
-    await (await fetch(`${base}/__vibesquad/first-run/install-paseo`, { method: "POST" })).json();
+    await (await fetch(`${base}/__vibesquad/first-run/install-paseo`, { method: "POST", headers: ownerHeaders() })).json();
     const failed = await (await fetch(`${base}/__vibesquad/first-run/status`)).json();
     assert.equal(failed.paseo.installing, false);
     assert.equal(failed.paseo.installed, false);
     assert.match(failed.paseo.error, /ENOTFOUND/);
 
-    await (await fetch(`${base}/__vibesquad/first-run/install-paseo`, { method: "POST" })).json();
+    await (await fetch(`${base}/__vibesquad/first-run/install-paseo`, { method: "POST", headers: ownerHeaders() })).json();
     const ok = await (await fetch(`${base}/__vibesquad/first-run/status`)).json();
     assert.equal(ok.paseo.installed, true);
     assert.equal(ok.paseo.error, null);
@@ -168,5 +169,5 @@ test("failed install surfaces an error and a retry succeeds", async () => {
 test("third-party licenses credit Node.js and the pinned Paseo CLI", () => {
   const text = readFileSync(join(ROOT, "public", "THIRD-PARTY-LICENSES.txt"), "utf8");
   assert.match(text, /Copyright Node\.js contributors/);
-  assert.match(text, /@getpaseo\/cli@0\.13\.2/);
+  assert.match(text, /@getpaseo\/cli@0\.14\.0/);
 });

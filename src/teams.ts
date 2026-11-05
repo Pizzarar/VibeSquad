@@ -7,6 +7,8 @@ import {
   UNASSIGNED_TEAM_ID,
   UNASSIGNED_TEAM_NAME,
   findLaneInRegistry,
+  formatDisplayTitle,
+  laneCodesForTeam,
   isBrainstormAgent as identityIsBrainstormAgent,
   kindOf as identityKindOf,
   ordOf as identityOrdOf,
@@ -14,11 +16,18 @@ import {
   topicOf as identityTopicOf,
 } from "./identity.ts";
 import type { PinFields } from "./pins.ts";
+import { isRemote, needsPairing } from "./remoteSession.ts";
 import { mergeTeams } from "./teamsMerge.ts";
 
 // A lane is a pinned Team in the UI. Pin fields (state, doneAt, order, lastProfile) live in src/pins.ts
 // and round-trip through saveTeams untouched; lanes without `state` count as pinned.
-export type LaneDef = { id: string; name: string; paths?: string[]; aliases?: string[] } & PinFields;
+export type LaneDef = { id: string; name: string; code?: string; paths?: string[]; aliases?: string[]; hub?: boolean } & PinFields;
+/** The Squad's hub lane (RiffBot's). Explicit `hub: true` wins; with no flagged lane, the lane whose id is the Squad id. */
+export function isHubLane(team: Pick<TeamDef, "id" | "lanes">, lane: Pick<LaneDef, "id" | "hub">): boolean {
+  if (lane.hub === true) return true;
+  return lane.id != null && !team.lanes.some((l) => l.hub === true) && lane.id === team.id;
+}
+
 export type TeamDef = {
   id: string;
   name: string;
@@ -30,6 +39,8 @@ export type TeamDef = {
   leadFlagTokens?: number;
   leadAutoHandoffTokens?: number;
   leadHardCapTokens?: number;
+  /** Per-Squad "Vibe mode": Buddy auto-dispatches routine work. Off when absent. */
+  vibeMode?: boolean;
 };
 export type TeamConfig = TeamDef;
 
@@ -83,7 +94,8 @@ function loadTeams(): TeamDef[] {
     const raw = localStorage.getItem(TEAMS_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
+      // Only a revisioned { revision, teams } cache counts; a bare array predates revision tracking and may carry stale names.
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && typeof parsed.revision === "string" && parsed.revision !== "unknown" && Array.isArray(parsed.teams)) return parsed.teams;
     }
   } catch {}
   return teamsFile.teams as TeamDef[];
@@ -103,7 +115,9 @@ export const getDiskTeams = diskTeams;
 
 const cacheTeams = (next: TeamDef[]) => {
   try {
-    localStorage.setItem(TEAMS_KEY, JSON.stringify(next));
+    // Skip caching until a revision is known so an unrevisioned copy can never seed a later first paint.
+    if (teamsRevision === "unknown") localStorage.removeItem(TEAMS_KEY);
+    else localStorage.setItem(TEAMS_KEY, JSON.stringify({ revision: teamsRevision, teams: next }));
   } catch {}
 };
 
@@ -133,15 +147,22 @@ export type TeamsUpdater = (cur: TeamDef[]) => TeamDef[];
  * an older copy, e.g. a modal open across polls, which must pass that copy as `base`.
  */
 export async function saveTeams(next: TeamDef[] | TeamsUpdater, opts: { base?: TeamsSnapshot } = {}): Promise<{ disk: boolean }> {
+  if (teamsRevision === "unknown") {
+    await refreshTeams();
+  }
   saveSeq++;
-  const base = opts.base?.teams ?? TEAMS;
+  // Before the first GET lands TEAMS may be a stale cache or the bundled example; only trust the server's copy.
+  const base = opts.base?.teams ?? (teamsRevision !== "unknown" ? diskTeams() : TEAMS);
   const edit = typeof next === "function" ? next : (fresh: TeamDef[]) => mergeTeams(base, next, fresh);
   let teams = typeof next === "function" ? next(TEAMS) : next;
   // The revision our edit was made against: an older one makes the server answer 409 so we merge.
   let revision = opts.base?.revision ?? teamsRevision;
   applyLocal(teams);
   const headers = { "content-type": "application/json" };
-  for (const [url, method] of [["/api/teams", "PUT"], ["/__vibesquad/teams", "POST"]] as const) {
+  const endpoints = isRemote()
+    ? ([["/api/teams", "PUT"]] as const)
+    : ([["/api/teams", "PUT"], ["/__vibesquad/teams", "POST"]] as const);
+  for (const [url, method] of endpoints) {
     try {
       let conflicts = 0;
       for (;;) {
@@ -183,7 +204,10 @@ export async function refreshTeams(): Promise<boolean> {
     if (!Array.isArray(data?.teams) || seq !== saveSeq) return false;
     registryFile = data;
     if (typeof data.revision === "string") teamsRevision = data.revision;
-    if (JSON.stringify(data.teams) === JSON.stringify(TEAMS)) return false;
+    if (JSON.stringify(data.teams) === JSON.stringify(TEAMS)) {
+      cacheTeams(TEAMS);
+      return false;
+    }
     TEAMS = data.teams;
     cacheTeams(TEAMS);
     notifyTeams();
@@ -204,7 +228,7 @@ export function resetTeamsToDisk(): void {
 }
 
 // Agents edit the registry too (`vs pin new`), so re-read it on focus and every 10s while visible.
-if (typeof window !== "undefined" && typeof document !== "undefined") {
+if (typeof window !== "undefined" && typeof document !== "undefined" && !(isRemote() && needsPairing(true, location.hash))) {
   void refreshTeams();
   window.addEventListener("focus", () => void refreshTeams());
   setInterval(() => {
@@ -407,7 +431,7 @@ export function teamForAgent(a: PaseoAgent): { team: TeamDef; laneId: string } {
   if (!resolved.isOrphan) {
     const team = TEAMS.find((t) => t.id === resolved.teamId) ?? UNASSIGNED;
     if (team !== UNASSIGNED) {
-      return { team, laneId: resolved.laneId || team.lanes[0]?.id || team.id };
+      return { team, laneId: resolved.laneId };
     }
   }
   return { team: UNASSIGNED, laneId: "" };
@@ -451,25 +475,20 @@ export async function assignAgentToLane(
     throw new Error(`Unknown lane "${laneId}"`);
   }
   const existing = labelsOf(agent);
+  // Send only the keys that change. The daemon merges label patches, so resending the whole (possibly
+  // stale) snapshot would write back values changed since this render, e.g. a needs-you already cleared.
+  // The agent object is not mutated: the daemon's upsert updates the store.
   const nextLabels: Record<string, string> = {
-    ...existing,
     lane: found.lane.id,
     team: found.team.id,
     orphan: "",
-    role: existing.role || "worker",
+    ...(existing.role ? {} : { role: "worker" }),
+    ...("lead" in existing ? { lead: found.lane.id } : {}),
   };
-  if ("lead" in nextLabels) {
-    nextLabels.lead = found.lane.id;
-  }
-  if (agent.labels && typeof agent.labels === "object") {
-    Object.assign(agent.labels, nextLabels);
-  } else {
-    (agent as any).labels = { ...nextLabels };
-  }
   if (typeof updateFn === "function") {
     await updateFn(agent.id, { labels: nextLabels });
   }
-  return { laneId: found.lane.id, teamId: found.team.id, labels: nextLabels };
+  return { laneId: found.lane.id, teamId: found.team.id, labels: { ...existing, ...nextLabels } };
 }
 
 const memberCache = new WeakMap<PaseoAgent, Member>();
@@ -477,19 +496,43 @@ const sameAttention = (a: Attention, b: Attention) => a === b || (!!a && !!b && 
 
 const newest = (a: Member, b: Member) => (b.agent.updatedAt ?? "").localeCompare(a.agent.updatedAt ?? "");
 
-export function findCrossTeamBrainstorm(members: Member[], laneId: string, topic = ""): Member | null {
+export function isFormerBrainstormMember(m: Member): boolean {
+  return !m.agent.archivedAt && labelsOf(m.agent).role === "former-brainstorm" && !topicOfBrainstorm(m.agent);
+}
+
+export const formerNewest = (a: Member, b: Member): number => {
+  const ta = Date.parse((a.agent as any).createdAt ?? a.agent.updatedAt ?? "");
+  const tb = Date.parse((b.agent as any).createdAt ?? b.agent.updatedAt ?? "");
+  if (Number.isFinite(ta) && Number.isFinite(tb) && tb !== ta) return tb - ta;
+  return newest(a, b);
+};
+
+/**
+ * The lane's main (or topic) Buddy. Live only by default; `includeClosed` also takes a closed, unarchived
+ * one (every session is closed after a daemon restart) so opening a pin reopens it instead of spawning a
+ * new Buddy (docs/PLAN_BUGS_BATCH1.md block 0c). A live one always wins.
+ */
+export function findCrossTeamBrainstorm(members: Member[], laneId: string, topic = "", opts: { includeClosed?: boolean } = {}): Member | null {
   const targetLane = canonicalLaneKey(laneId);
   if (!targetLane) return null;
   const wantTopic = topic.trim().toLowerCase();
   const hits = members.filter((m) => {
-    if (m.kind !== "brainstorm" || m.agent.archivedAt || m.agent.status === "closed") return false;
+    if (m.kind !== "brainstorm" || m.agent.archivedAt || (m.agent.status === "closed" && !opts.includeClosed)) return false;
     const l = labelsOf(m.agent);
     const mLane = canonicalLaneKey(m.laneId || l.lane || l.lead);
     if (mLane !== targetLane) return false;
     const mTopic = topicOfBrainstorm(m).trim().toLowerCase();
     return mTopic === wantTopic;
   });
-  return hits.sort(newest)[0] ?? null;
+  const closed = (m: Member) => (m.agent.status === "closed" ? 1 : 0);
+  if (hits.length > 0) return hits.sort((a, b) => closed(a) - closed(b) || newest(a, b))[0] ?? null;
+  if (!wantTopic && opts.includeClosed) {
+    const former = members
+      .filter((m) => isFormerBrainstormMember(m) && canonicalLaneKey(m.laneId || labelsOf(m.agent).lane || labelsOf(m.agent).lead) === targetLane)
+      .sort(formerNewest);
+    return former[0] ?? null;
+  }
+  return null;
 }
 
 // Pick the lane's lead/brainstorm: live (not closed) first, else the newest closed non-archived one,
@@ -872,13 +915,22 @@ export function checkBuddyOverlap(
   return result;
 }
 
+/** A squad's lanes minus removed ones (Remove team): what lane pickers and counts offer. */
+export const shownLanesOf = (team: Pick<TeamDef, "lanes">): LaneDef[] => (team.lanes ?? []).filter((l) => l.state !== "removed");
+
+/** Counts toward a needs-you badge: open attention on a live (not archived, not closed) agent that is not a retired lead. */
+export const countsAsNeedsYou = (m: Member): boolean =>
+  Boolean(m.attention) && m.attention!.tone !== "finished" && m.kind !== "old-lead" && !m.agent.archivedAt && m.agent.status !== "closed";
+
 export function buildTeamViews(members: Member[]): TeamView[] {
   const all = [...TEAMS, UNASSIGNED];
   return all
     .map((team) => {
       const mine = members.filter((m) => m.team.id === team.id);
+      // Removed lanes (Remove team) are hidden. An agent still labelled with one shows up as a dynamic lane so it can be found.
+      const shownLanes = shownLanesOf(team);
       const declaredMatches = (laneId: string) =>
-        team.lanes.some(
+        shownLanes.some(
           (l) =>
             l.id.toLowerCase() === laneId.toLowerCase() ||
             Boolean(l.aliases?.some((a) => a.toLowerCase() === laneId.toLowerCase())),
@@ -898,9 +950,9 @@ export function buildTeamViews(members: Member[]): TeamView[] {
         });
       }
       const laneDefs: LaneDef[] = [
-        ...team.lanes,
+        ...shownLanes,
         ...dynamicLanes,
-        { id: "_other", name: team.lanes.length || dynamicLanes.length ? "Other" : "Agents" },
+        { id: "_other", name: shownLanes.length || dynamicLanes.length ? "Other" : "Agents" },
       ];
       const lanes = laneDefs
         .map((lane) => {
@@ -931,7 +983,8 @@ export function buildTeamViews(members: Member[]): TeamView[] {
             .filter((m) => m.kind === "brainstorm" && isTopicBrainstorm(m) && !m.agent.archivedAt)
             .sort(newest);
           const lead = leads[0] ?? pickLead(allInLane.filter((m) => m.kind === "lead"));
-          const brainstorm = brainstorms[0] ?? pickLead(mainBrainstormCands);
+          const formerBs = allInLane.filter(isFormerBrainstormMember).sort(formerNewest);
+          const brainstorm = brainstorms[0] ?? pickLead(mainBrainstormCands) ?? formerBs[0] ?? null;
           return {
             lane,
             lead,
@@ -947,7 +1000,7 @@ export function buildTeamViews(members: Member[]): TeamView[] {
         team,
         members: mine,
         lanes,
-        needsYou: mine.filter((m) => m.attention && m.attention.tone !== "finished" && m.kind !== "old-lead").length,
+        needsYou: mine.filter(countsAsNeedsYou).length,
         running: mine.filter((m) => m.agent.status === "running").length,
         unsorted: mine.filter((m) => isUnsortedMember(m.agent)),
       };
@@ -1037,32 +1090,67 @@ export function handoffPairs(members: Member[]): HandoffPair[] {
 const TITLE_MAX = 60; // create_agent rejects longer titles
 const clip = (s: string) => (s.length > TITLE_MAX ? s.slice(0, TITLE_MAX - 1) + "\u2026" : s);
 
-/** Naming Standard v1 titles. Shared by buildName (TeamActions) so both produce the same string. */
-export function titleFor(role: "lead" | "brainstorm" | "worker", lane: string, i: { ord?: string; topic?: string; job?: string }): string {
-  const LANE = lane.toUpperCase();
-  if (role === "lead") return clip(`★ ${LANE} ord${i.ord || "?"}`);
-  if (role === "brainstorm") return clip(`BRAINSTORM · ${LANE}${i.topic?.trim() ? ` · ${i.topic.trim()}` : ""}`);
-  return clip(`${LANE} · ${(i.job ?? "").trim() || "job"}`);
+/** Naming Standard v2 titles (lane code format). Shared by buildName (TeamActions) so both produce the same string. */
+export function titleFor(
+  role: "lead" | "brainstorm" | "worker",
+  lane: string,
+  i: { ord?: string; topic?: string; job?: string; code?: string; laneId?: string; hub?: boolean },
+): string {
+  return clip(
+    formatDisplayTitle({
+      role,
+      laneName: lane,
+      laneId: i.laneId,
+      code: i.code || laneCodeOf(i.laneId || lane),
+      ord: role === "lead" ? i.ord || "?" : i.ord,
+      topic: i.topic,
+      job: role === "worker" ? i.job || "job" : i.job,
+      hub: role === "brainstorm" && (i.hub ?? isHubLaneId(i.laneId || lane)),
+    }),
+  );
 }
 
-// Title generated from labels per docs/NAMING.md. Null when required labels are missing or the agent is retired.
-export function expectedTitleFor(agent: PaseoAgent): string | null {
+/** `(old) <Code><ord>[ · objective]` for a retired lead. */
+export function retiredLeadTitle(lane: string, laneId: string, ord: string | number, job?: string): string {
+  return clip(formatDisplayTitle({ role: "former-lead", laneName: lane, laneId, code: laneCodeOf(laneId || lane), ord, job }));
+}
+
+/** True when the lane (id, alias or name) is its Squad's hub lane. */
+export function isHubLaneId(laneKey: string | undefined): boolean {
+  const found = laneById(laneKey);
+  if (found) return isHubLane(found.team, found.lane);
+  const needle = (laneKey ?? "").trim().toLowerCase();
+  if (!needle) return false;
+  const team = TEAMS.find((t) => t.id.toLowerCase() === needle);
+  return team ? isHubLane(team, { id: team.id }) : false;
+}
+
+/** The lane's code: stored `code` or the generated one, deduped within its Squad. */
+export function laneCodeOf(laneKey: string | undefined): string {
+  const found = laneById(laneKey);
+  return found ? (laneCodesForTeam(found.team)[found.lane.id] ?? "") : "";
+}
+
+// v2 (lane code) title generated from labels per docs/NAMING.md. Null when required labels are missing or the agent is retired.
+// Block 4's one-time rename uses this directly (not expectedTitleFor, which tolerates v1 titles).
+export function expectedV2TitleFor(agent: PaseoAgent): string | null {
   const l = labelsOf(agent);
   if (agent.archivedAt || agent.status === "closed" || kindOf(agent) === "old-lead") return null;
   const rawTitle = agent.title ?? "";
   const laneKey = l.lane ?? l.lead;
   const lane = laneKey ? (laneById(laneKey)?.lane.name ?? laneKey) : null;
+  const code = laneCodeOf(laneKey);
   const role = l.role ?? (kindOf(agent) === "lead" ? "lead" : kindOf(agent) === "brainstorm" ? "brainstorm" : undefined);
   if (lane && role) {
     switch (role) {
       case "lead": {
         const ord = l.ord;
-        return ord ? titleFor("lead", lane, { ord }) : null;
+        return ord ? titleFor("lead", lane, { ord, job: l.job, code, laneId: laneKey }) : null;
       }
       case "brainstorm":
-        return titleFor("brainstorm", lane, { topic: l.topic });
+        return titleFor("brainstorm", lane, { topic: l.topic, code, laneId: laneKey });
       case "worker":
-        return l.job ? titleFor("worker", lane, { job: l.job }) : null;
+        return l.job ? titleFor("worker", lane, { job: l.job, ord: l.ord, code, laneId: laneKey }) : null;
     }
   }
   // DESIGN T1-4: Flag any live title still carrying legacy "(talk here...)" so Fix title cleans it.
@@ -1070,6 +1158,27 @@ export function expectedTitleFor(agent: PaseoAgent): string | null {
     return rawTitle.replace(/\s*\(talk here[^)]*\)/gi, "").trim();
   }
   return null;
+}
+
+/** The pre-lane-code (v1) title for an agent's labels, or null. Live agents still wearing it are tolerated, not flagged. */
+export function legacyTitleFor(agent: PaseoAgent): string | null {
+  const l = labelsOf(agent);
+  const laneKey = l.lane ?? l.lead;
+  if (!laneKey) return null;
+  const LANE = (laneById(laneKey)?.lane.name ?? laneKey).toUpperCase();
+  const role = l.role ?? (kindOf(agent) === "lead" ? "lead" : kindOf(agent) === "brainstorm" ? "brainstorm" : undefined);
+  if (role === "lead") return l.ord ? clip(`★ ${LANE} ord${l.ord}`) : null;
+  if (role === "former-lead") return l.ord ? clip(`(old) ${LANE} ord${l.ord}`) : null;
+  if (role === "brainstorm") return clip(`BRAINSTORM · ${LANE}${l.topic?.trim() ? ` · ${l.topic.trim()}` : ""}`);
+  if (role === "worker") return l.job ? clip(`${LANE} · ${l.job.trim() || "job"}`) : null;
+  return null;
+}
+
+/** What the title lint expects: the v2 title, except null (no lint) while the live title is still the exact v1 one. */
+export function expectedTitleFor(agent: PaseoAgent): string | null {
+  const expected = expectedV2TitleFor(agent);
+  if (expected && agent.title === legacyTitleFor(agent)) return null;
+  return expected;
 }
 
 export function lintTitle(agent: PaseoAgent): string | null {

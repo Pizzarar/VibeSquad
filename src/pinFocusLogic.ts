@@ -22,15 +22,18 @@ export type FocusDecision =
 /**
  * Reconcile the focused pin with the pin's live Brainstorm (`live`, from pinsForSquad) and the
  * panes' active tab (`active`). Runs on every Paseo, teams and panes change.
+ * `laneMemberIds`: the pin's Brainstorm, Lead, workers and topic Buddies. Opening one of them swaps the
+ * middle pane but keeps the pin focused (and the rail visible); only an unrelated agent exits.
  */
-export function reconcilePinFocus(f: FocusSnapshot, live: string | null, active: string | null): FocusDecision {
-  // A restart / successor / quick start elsewhere: the pin follows its Brainstorm.
-  if (live && live !== f.agentId) return { kind: "follow", agentId: live, open: active !== live };
+export function reconcilePinFocus(f: FocusSnapshot, live: string | null, active: string | null, laneMemberIds?: ReadonlySet<string>): FocusDecision {
+  const inLane = !!active && !!laneMemberIds?.has(active);
+  // A restart / successor / quick start elsewhere: the pin follows its Brainstorm (without pulling the user off a Lead / worker).
+  if (live && live !== f.agentId) return { kind: "follow", agentId: live, open: active !== live && !inLane };
   // Starting or gone: the middle shows no drawer, so a different tab opening means "go there".
-  if (!f.agentId) return active !== f.held ? { kind: "exit" } : { kind: "keep" };
+  if (!f.agentId) return active !== f.held && !inLane ? { kind: "exit" } : { kind: "keep" };
   if (!live) return { kind: "gone" };
   // live === f.agentId: only an unrelated tab taking the middle ends the focus.
-  return active !== f.agentId ? { kind: "exit" } : { kind: "keep" };
+  return active !== f.agentId && !inLane ? { kind: "exit" } : { kind: "keep" };
 }
 
 export type EscContext = {
@@ -139,6 +142,13 @@ export function planRestore(a: {
 }
 
 // ── Squads Home: chat → squad page → Squads Home ladder ──────────────────────
+/** What Back/Forward should show for a URL: its agent chat, Squads Home, or (no agent, no view) the squad page. */
+export function popAction(search: string): "agent" | "squads-home" | "squad-page" {
+  const p = new URLSearchParams(search);
+  if (p.get("agent")) return "agent";
+  return p.get("view") === "squads" ? "squads-home" : "squad-page";
+}
+
 export type NavLevel = { focused: boolean; home: boolean; squadsHome: boolean };
 
 /** What Esc / the ⊞ button does one level up: from chat to the squad page, from the squad page to Squads Home. */
@@ -152,10 +162,10 @@ export function levelUp(s: NavLevel): "squad-page" | "squads-home" | "none" {
 export type Crumb = { key: "squads" | "squad" | "brainstorm"; label: string; current?: boolean };
 
 /** Breadcrumb segments: Squads › Squad › BRAINSTORM · lane, trimmed to the current level. */
-export function breadcrumbOf(c: { squadsHome: boolean; squadName: string; laneName: string | null }): Crumb[] {
+export function breadcrumbOf(c: { squadsHome: boolean; squadName: string; laneName: string | null; hub?: boolean }): Crumb[] {
   const out: Crumb[] = [{ key: "squads", label: "Squads", current: c.squadsHome }];
   if (!c.squadsHome) out.push({ key: "squad", label: c.squadName, current: c.laneName === null });
-  if (c.laneName !== null) out.push({ key: "brainstorm", label: `BRAINSTORM · ${c.laneName}`, current: true });
+  if (c.laneName !== null) out.push({ key: "brainstorm", label: c.hub ? "RiffBot" : `BRAINSTORM · ${c.laneName}`, current: true });
   return out;
 }
 
@@ -163,4 +173,15 @@ export function breadcrumbOf(c: { squadsHome: boolean; squadName: string; laneNa
 export function pickLead<T extends { agent: { status: string } }>(lanes: { lead: T | null }[]): T | null {
   const leads = lanes.map((l) => l.lead).filter((m): m is T => !!m);
   return leads.find((m) => m.agent.status === "running") ?? leads[0] ?? null;
+}
+
+/**
+ * Whether the app starts on the grid. Default yes, even with tabs restored. Exceptions: a ?agent= deep link
+ * shows its drawer, and with "Reopen last view" on and a saved left tab the restored panes show. ?view=squads
+ * always starts on the grid.
+ */
+export function startsOnGrid(a: { deepLinked: boolean; viewSquads: boolean; restoreLastView: boolean; savedLeftTab: string | null }): boolean {
+  if (a.viewSquads) return true;
+  if (a.deepLinked) return false;
+  return !(a.restoreLastView && a.savedLeftTab);
 }

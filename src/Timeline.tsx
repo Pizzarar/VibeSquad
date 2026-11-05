@@ -1,11 +1,20 @@
-import { Component, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { Component, Fragment, type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { PaseoAgentTimelineEvent } from "@getpaseo/client";
 import { messageCtxItems, openContextMenu, selectionWithin } from "./CommandPalette";
 import { daemonClient, client, DEMO } from "./paseo";
 import { REWIND_MODES, buildRewindRequest, truncateAfter, type RewindMode } from "./sessionLifecycle";
 import { demoTimeline } from "./demo";
 import { sentImagesFor } from "./imageDrafts";
+import { parseSentAttachments, repoPathFor } from "./attachments";
 import { openRightDockTab } from "./RightDock";
+import { listTimelinePrompts, searchTimeline, type TimelinePrompt } from "./paseoTimeline";
+import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, matchesFilter, localPrompts, localSearch, mergeLiveItem, latestReasoningIndex, reasoningText, sortedHits, stepIndex, type SearchLocation, type TimelineFilter } from "./timelineFilter";
 import { BARE_PATH_RE, parseFileToken } from "./fileLinks";
+import { toolStartsExpanded, usePref } from "./prefs";
+import { getPanes } from "./panes";
+import { SubagentList } from "./SubagentList";
+import { Spinner, Stamp, TimelineSkeleton, useDelayedBusy } from "./QuickWinsUi";
+import { MermaidView } from "./MermaidView";
 
 export class TimelineErrorBoundary extends Component<
   { children: ReactNode; fallbackLabel?: string },
@@ -373,6 +382,9 @@ export function MarkdownRenderer({ text, agentId, doc = false }: { text: string;
         return <h3 key={i} className={cls}>{tok.text}</h3>;
       }
       case "code_block":
+        if (tok.lang.trim().toLowerCase() === "mermaid") {
+          return <MermaidView key={i} code={tok.code} />;
+        }
         return <CodeBlock key={i} lang={tok.lang} code={tok.code} />;
       case "table":
         return (
@@ -648,6 +660,7 @@ export function TimelineItem({
   onRewound,
   selected = false,
   onSelect,
+  latestReasoning = false,
 }: {
   e: Entry;
   agentId: string;
@@ -655,9 +668,14 @@ export function TimelineItem({
   onRewound?: (e: Entry) => void;
   selected?: boolean;
   onSelect?: () => void;
+  /** The most recent thought in the loaded timeline opens by default; a user toggle still wins. */
+  latestReasoning?: boolean;
 }) {
   const it = e.item;
-  const [expanded, setExpanded] = useState(false);
+  // null = not toggled yet: tool rows follow Settings › Chat › Collapse successful tool calls.
+  const [expandedState, setExpanded] = useState<boolean | null>(null);
+  const expanded = expandedState ?? false;
+  const [collapseTools] = usePref("chat.collapseToolCalls");
   if (!it || typeof it !== "object") return null;
 
   if (isCompaction(it) || (it.type === "notification" && typeof it.message === "string" && it.message.includes("compacted"))) {
@@ -673,6 +691,7 @@ export function TimelineItem({
       const urls: string[] = it.images?.length
         ? it.images.map((im: any) => (im.data ? `data:${im.mimeType ?? "image/png"};base64,${im.data}` : im.url)).filter(Boolean)
         : sentImagesFor(agentId, it.text);
+      const sent = parseSentAttachments(typeof it.text === "string" ? it.text : "");
       return (
         <div className={`tl tl-user${selected ? " tl-selected" : ""}`} data-selected={selected ? "true" : undefined} onClick={(ev) => onMessageClick(ev, onSelect)} onContextMenu={(ev) => openContextMenu(ev, messageCtxItems(it.text ?? "", agentId, onParkText, selectionWithin(ev.currentTarget)))}>
           {urls.length > 0 && (
@@ -682,7 +701,21 @@ export function TimelineItem({
               ))}
             </div>
           )}
-          {it.text}
+          {sent.chips.length ? sent.body : it.text}
+          <Stamp iso={e.timestamp} />
+          {sent.chips.length > 0 && (
+            <div className="tl-file-chips">
+              {sent.chips.map((c, i) =>
+                c.path && repoPathFor(agentId, c.path) ? (
+                  <button key={i} className="chip file-chip" data-testid="tl-file-chip" title={c.path} onClick={(ev) => { ev.stopPropagation(); openFileTarget({ path: repoPathFor(agentId, c.path!)!, line: null, isDir: false }); }}>
+                    📄 {c.name}
+                  </button>
+                ) : (
+                  <span key={i} className="chip file-chip" data-testid="tl-file-chip">📄 {c.name}</span>
+                ),
+              )}
+            </div>
+          )}
           {selected && <div className="tl-actions">
             <CopyMsgButton text={it.text ?? ""} />
             {onParkText && typeof it.text === "string" && it.text.trim() && (
@@ -700,6 +733,7 @@ export function TimelineItem({
       return (
         <div className={`tl tl-assistant${selected ? " tl-selected" : ""}`} data-selected={selected ? "true" : undefined} onClick={(ev) => onMessageClick(ev, onSelect)} onContextMenu={(ev) => openContextMenu(ev, messageCtxItems(it.text ?? "", agentId, onParkText, selectionWithin(ev.currentTarget)))}>
           {typeof it.text === "string" ? <MarkdownRenderer text={it.text} agentId={agentId} /> : it.text}
+          <Stamp iso={e.timestamp} />
           {selected && <div className="tl-actions">
             <CopyMsgButton text={it.text ?? ""} />
             {onParkText && typeof it.text === "string" && it.text.trim() && (
@@ -712,18 +746,20 @@ export function TimelineItem({
       );
 
     case "reasoning": {
-      const preview = (it.text ?? it.summary ?? "").slice(0, 80);
+      const txt = reasoningText(it);
+      const open = expandedState ?? latestReasoning;
+      const preview = txt.slice(0, 80);
       return (
         <div
           data-testid="tl-reasoning-row"
           className="tl tl-reasoning"
           style={{ cursor: "pointer", color: "#888", fontSize: "0.9em" }}
-          onClick={() => setExpanded((v) => !v)}
+          onClick={() => setExpanded(!open)}
         >
-          {expanded ? "▾" : "▸"} Thinking…{!expanded && preview ? ` ${preview}${(it.text ?? it.summary ?? "").length > 80 ? "…" : ""}` : ""}
-          {expanded && (
+          {open ? "▾" : "▸"} Thinking…{!open && preview ? ` ${preview}${txt.length > 80 ? "…" : ""}` : ""}
+          {open && (
             <div className="tl-reasoning-body" style={{ marginTop: 4, whiteSpace: "pre-wrap" }}>
-              {it.text ?? it.summary ?? ""}
+              {txt}
             </div>
           )}
         </div>
@@ -757,6 +793,7 @@ export function TimelineItem({
         );
       }
 
+      const open = expandedState ?? toolStartsExpanded(failed, collapseTools);
       const rawSummary =
         d.type === "shell" ? d.command : d.filePath ?? d.query ?? d.url ?? d.label ?? d.text ?? "";
       const summaryStr = formatToolError(rawSummary).slice(0, 160);
@@ -765,13 +802,13 @@ export function TimelineItem({
           data-testid="tl-tool-row"
           className={`tl tl-tool ${it.status ?? ""}${failed ? " failed" : ""}`}
           style={failed ? { borderLeft: "3px solid #ff4d6d" } : undefined}
-          onClick={() => setExpanded((v) => !v)}
+          onClick={() => setExpanded(!open)}
         >
-          <span style={{ cursor: "pointer" }}>{expanded ? "▾" : "▸"}</span>{" "}
+          <span style={{ cursor: "pointer" }}>{open ? "▾" : "▸"}</span>{" "}
           <span className="tool-name">{it.name}</span>{" "}
           <SummaryWithLinks text={summaryStr} />
           {failed && errText && <span style={{ color: "#ff4d6d", marginLeft: 4 }}>{errText}</span>}
-          {expanded && <ToolDetail it={it} d={d} />}
+          {open && <ToolDetail it={it} d={d} />}
         </div>
       );
     }
@@ -805,6 +842,7 @@ export function useTimeline(agentId: string, status: string, active = true) {
   const [error, setError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const earliestCursor = useRef<any>(null);
   const activeRef = useRef(active);
   activeRef.current = active;
@@ -818,6 +856,7 @@ export function useTimeline(agentId: string, status: string, active = true) {
       return;
     }
     let alive = true;
+    setLoaded(false);
     let timer: ReturnType<typeof setTimeout> | null = null;
     const handle = client.agents.ref(agentId);
 
@@ -843,6 +882,7 @@ export function useTimeline(agentId: string, status: string, active = true) {
       } catch (e) {
         if (alive) setError(String(e));
       }
+      if (alive) setLoaded(true);
     };
 
     const soon = () => {
@@ -859,7 +899,15 @@ export function useTimeline(agentId: string, status: string, active = true) {
 
     reload.current = load;
     load();
-    const sub = handle.timeline.subscribe(() => soon());
+    const sub = handle.timeline.subscribe((ev: PaseoAgentTimelineEvent) => {
+      if (ev.event.type === "timeline") {
+        const item = ev.event.item;
+        const seq = "seq" in ev ? ev.seq : undefined;
+        const ts = "timestamp" in ev ? ev.timestamp : undefined;
+        setEntries((cur) => mergeLiveItem(cur, item, ts, seq));
+      }
+      soon();
+    });
     return () => {
       alive = false;
       if (timer) clearTimeout(timer);
@@ -940,7 +988,7 @@ export function useTimeline(agentId: string, status: string, active = true) {
     }
   }, [agentId, hasMore, loadingMore]);
 
-  return { entries, error, hasMore, loadingMore, loadMore };
+  return { entries, error, hasMore, loadingMore, loadMore, loaded };
 }
 
 // ─── PinnedTodo ───────────────────────────────────────────────────────────────
@@ -954,7 +1002,7 @@ function PinnedTodo({ entry }: { entry: Entry }) {
   return (
     <div
       data-testid="tl-pinned-todo"
-      style={{ position: "sticky", top: 0, zIndex: 10, background: "var(--bg, #1e1e1e)", borderBottom: "1px solid #444", padding: "4px 8px", cursor: "pointer" }}
+      style={{ background: "var(--bg, #1e1e1e)", borderBottom: "1px solid #444", padding: "4px 8px", cursor: "pointer" }}
       onClick={() => setOpen((v) => !v)}
     >
       {open ? "▾" : "▸"} 📋 Plan / Tasks ({done}/{total})
@@ -981,6 +1029,8 @@ type TimelineProps = {
   hasMore?: boolean;
   loadMore?: () => void;
   loadingMore?: boolean;
+  /** False until the first fetch for this agent finishes (drives the delayed skeleton). */
+  loaded?: boolean;
 };
 
 export function Timeline({
@@ -991,9 +1041,11 @@ export function Timeline({
   hasMore = false,
   loadMore = () => {},
   loadingMore = false,
+  loaded = true,
 }: TimelineProps) {
   const timelineRef = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
+  const [isPinned, setIsPinned] = useState(true);
   const [cut, setCut] = useState<Entry | null>(null);
   const cutLen = useRef(0);
   // New turns after a rewind arrive past the cut; drop the cut so they show.
@@ -1004,13 +1056,153 @@ export function Timeline({
     setCut(null);
   }, [agentId]);
   const [selectedEntryKey, setSelectedEntryKey] = useState<string | null>(null);
-  const shown = cut ? truncateAfter(entries, cut) : entries;
+  const [filter, setFilter] = useState<TimelineFilter>("all");
+  const [barOpen, setBarOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [hits, setHits] = useState<SearchLocation[]>([]);
+  const [hitIdx, setHitIdx] = useState(-1);
+  const [searching, setSearching] = useState(false);
+  const [barMsg, setBarMsg] = useState("");
+  const [prompts, setPrompts] = useState<TimelinePrompt[]>([]);
+  const [promptsOpen, setPromptsOpen] = useState(false);
+  const curSeq = useRef<number | null>(null);
+  const reqId = useRef(0);
+  const [pendingJump, setPendingJump] = useState<{ seq: number; n: number } | null>(null);
+  const base = cut ? truncateAfter(entries, cut) : entries;
+  const shown = filterEntries(base, filter);
+  const slowFirstLoad = useDelayedBusy(!loaded && entries.length === 0);
+  const slowMore = useDelayedBusy(loadingMore);
+  const slowSearch = useDelayedBusy(searching);
   const pinnedTodo = findPinnedTodo(shown);
 
-  useEffect(() => {
+  const lastEntry = entries[entries.length - 1];
+  const tailSig = [
+    entries.length,
+    lastEntry?.seqStart,
+    lastEntry?.item?.type,
+    lastEntry?.item?.status,
+    reasoningText(lastEntry?.item).length || String(lastEntry?.item?.text ?? "").length,
+    JSON.stringify(lastEntry?.item?.detail ?? "").length,
+  ].join("|");
+  const stickToBottom = () => {
     const el = timelineRef.current;
     if (el && pinned.current && el.offsetParent) el.scrollTop = el.scrollHeight;
-  }, [entries.length]);
+  };
+  useLayoutEffect(stickToBottom, [tailSig]);
+  // Rows grow without the entry list changing (images, expanding thoughts, markdown): follow while pinned.
+  useEffect(() => {
+    const el = timelineRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(stickToBottom);
+    const watch = () => { for (const c of Array.from(el.children)) ro.observe(c); };
+    watch();
+    const mo = new MutationObserver(() => { ro.disconnect(); watch(); stickToBottom(); });
+    mo.observe(el, { childList: true });
+    return () => { mo.disconnect(); ro.disconnect(); };
+  }, [agentId]);
+
+  useEffect(() => {
+    setFilter("all"); setBarOpen(false); setQuery(""); setHits([]); setHitIdx(-1); setPrompts([]); setPromptsOpen(false); setBarMsg("");
+    curSeq.current = null;
+    reqId.current++;
+    setPendingJump(null); setSearching(false);
+  }, [agentId]);
+  // The drawer header's search button fires this.
+  useEffect(() => {
+    const on = (ev: Event) => {
+      if ((ev as CustomEvent).detail?.agentId === agentId) setBarOpen((o) => !o);
+    };
+    window.addEventListener("vs:timeline-search", on);
+    return () => window.removeEventListener("vs:timeline-search", on);
+  }, [agentId]);
+  // Ctrl+F opens (or refocuses) the search bar of the transcript in the active, visible pane.
+  useEffect(() => {
+    const onFind = (ev: KeyboardEvent) => {
+      if (!(ev.ctrlKey || ev.metaKey) || ev.shiftKey || ev.altKey || ev.key.toLowerCase() !== "f") return;
+      const el = timelineRef.current;
+      if (!el || !el.offsetParent) return;
+      if (document.querySelector(".modal-back, [role='dialog']")) return; // a modal or the palette owns the keyboard
+      const slot = el.closest(".pane-slot");
+      if (slot && !slot.classList.contains(`pane-${getPanes().activePane}`)) return;
+      ev.preventDefault();
+      setBarOpen(true);
+      el.querySelector<HTMLInputElement>('[data-testid="tl-search-input"]')?.select();
+    };
+    window.addEventListener("keydown", onFind);
+    return () => window.removeEventListener("keydown", onFind);
+  }, []);
+
+  const jumpToSeq = (seq: number) => {
+    curSeq.current = seq; // advance even when the target isn't loaded, so prompt stepping can't stall
+    const idx = entryIndexForSeq(base, seq);
+    if (idx < 0) { setBarMsg("Older than the loaded history - load older messages first"); return; }
+    setBarMsg("");
+    if (!matchesFilter(base[idx].item, filter)) setFilter("all");
+    setPendingJump((j) => ({ seq: base[idx].seqStart ?? seq, n: (j?.n ?? 0) + 1 }));
+  };
+  // Scroll + flash after React has committed the (possibly re-filtered) list.
+  const handledJump = useRef(0);
+  const flashTimer = useRef<{ el: HTMLElement; t: ReturnType<typeof setTimeout> } | null>(null);
+  const clearFlash = () => {
+    if (!flashTimer.current) return;
+    clearTimeout(flashTimer.current.t);
+    flashTimer.current.el.classList.remove("tl-flash");
+    flashTimer.current = null;
+  };
+  useEffect(() => clearFlash, []);
+  useEffect(() => {
+    if (!pendingJump || handledJump.current === pendingJump.n) return;
+    handledJump.current = pendingJump.n;
+    const marker = timelineRef.current?.querySelector(`[data-tl-seq="${pendingJump.seq}"]`) as HTMLElement | null;
+    const el = marker?.nextElementSibling as HTMLElement | null;
+    if (!el?.classList.contains("tl")) return; // item rendered nothing
+    clearFlash();
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    el.classList.add("tl-flash");
+    flashTimer.current = { el, t: setTimeout(clearFlash, 1800) };
+  }, [pendingJump, shown.length]);
+  const runSearch = async () => {
+    const q = query.trim();
+    if (!q) { setHits([]); setHitIdx(-1); setBarMsg(""); return; }
+    const my = ++reqId.current;
+    setSearching(true);
+    try {
+      const found = sortedHits(DEMO ? localSearch(base, q) : await searchTimeline(agentId, q));
+      if (my !== reqId.current) return;
+      setHits(found);
+      setBarMsg(found.length ? "" : "No matches");
+      setHitIdx(found.length ? found.length - 1 : -1);
+      if (found.length) jumpToSeq(found[found.length - 1].seq);
+    } catch (err) {
+      if (my === reqId.current) setBarMsg(String((err as Error)?.message ?? err));
+    } finally {
+      if (my === reqId.current) setSearching(false);
+    }
+  };
+  const stepHit = (dir: 1 | -1) => {
+    const i = stepIndex(hitIdx, dir, hits.length);
+    if (i < 0) return;
+    setHitIdx(i);
+    jumpToSeq(hits[i].seq);
+  };
+  const loadPrompts = async (): Promise<TimelinePrompt[]> => {
+    const my = reqId.current;
+    try {
+      const list = DEMO ? localPrompts(base) : await listTimelinePrompts(agentId);
+      if (my !== reqId.current) return [];
+      setPrompts(list);
+      return list;
+    } catch (err) {
+      if (my === reqId.current) setBarMsg(String((err as Error)?.message ?? err));
+      return [];
+    }
+  };
+  const stepPrompt = async (dir: 1 | -1) => {
+    const list = await loadPrompts();
+    const from = curSeq.current ?? (dir === 1 ? -1 : Infinity);
+    const p = adjacentPrompt(list, from, dir);
+    if (p) jumpToSeq(p.seq);
+  };
 
   useEffect(() => {
     if (!selectedEntryKey) return;
@@ -1046,10 +1238,61 @@ export function Timeline({
       }}
       onScroll={(e) => {
         const el = e.currentTarget;
-        pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+        const near = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+        pinned.current = near;
+        setIsPinned((p) => (p === near ? p : near));
       }}
     >
+      {(barOpen || pinnedTodo) && <div className="tl-head">
+      {barOpen && (
+        <div className="tl-bar" data-testid="tl-bar">
+          <div className="tl-bar-row">
+            <input
+              data-testid="tl-search-input"
+              autoFocus
+              placeholder="Search transcript…"
+              value={query}
+              onChange={(ev) => { setQuery(ev.target.value); setHits([]); setHitIdx(-1); }}
+              onKeyDown={(ev) => {
+                if (ev.key === "Enter") {
+                  if (hits.length) stepHit(ev.shiftKey ? -1 : 1);
+                  else void runSearch();
+                }
+                if (ev.key === "Escape") setBarOpen(false);
+              }}
+            />
+            <button className="btn ghost small" data-testid="tl-search-go" disabled={searching} onClick={() => void runSearch()}>{searching ? (slowSearch ? <Spinner /> : "…") : "Find"}</button>
+            <button className="btn ghost small" title="Previous match" disabled={!hits.length} onClick={() => stepHit(-1)}>↑</button>
+            <button className="btn ghost small" title="Next match" disabled={!hits.length} onClick={() => stepHit(1)}>↓</button>
+            <span className="tl-bar-count" data-testid="tl-search-count">{hits.length ? `${hitIdx + 1}/${hits.length}` : ""}</span>
+            <button className="btn ghost small" title="Previous prompt" data-testid="tl-prompt-prev" onClick={() => void stepPrompt(-1)}>⇡ Prompt</button>
+            <button className="btn ghost small" title="Next prompt" data-testid="tl-prompt-next" onClick={() => void stepPrompt(1)}>⇣ Prompt</button>
+            <button className="btn ghost small" title="List my prompts" data-testid="tl-prompt-list-btn" onClick={() => { const o = !promptsOpen; setPromptsOpen(o); if (o) void loadPrompts(); }}>☰</button>
+            <button className="btn ghost small" title="Close" onClick={() => setBarOpen(false)}>✕</button>
+          </div>
+          <div className="tl-bar-row tl-filters" data-testid="tl-filters">
+            {TIMELINE_FILTERS.map((f) => (
+              <button key={f} className={`chip tl-filter${filter === f ? " on" : ""}`} data-testid={`tl-filter-${f}`} onClick={() => setFilter(f)}>{f}</button>
+            ))}
+            {filter !== "all" && <span className="tl-bar-count">{shown.length}/{base.length}</span>}
+          </div>
+          {barMsg && <div className="tl-bar-msg" data-testid="tl-bar-msg">{barMsg}</div>}
+          {promptsOpen && (
+            <div className="tl-prompts" data-testid="tl-prompts">
+              {prompts.length === 0 && <div className="tl-bar-msg">No prompts</div>}
+              {prompts.map((p) => (
+                <button key={p.seq} className="tl-prompt-row" onClick={() => { jumpToSeq(p.seq); setPromptsOpen(false); }}>
+                  <span className="tl-prompt-ts">{p.timestamp ? new Date(p.timestamp).toLocaleTimeString() : `#${p.seq}`}</span> {p.preview}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      {slowFirstLoad && <TimelineSkeleton />}
       {pinnedTodo && <PinnedTodo entry={pinnedTodo} />}
+      </div>}
+      <SubagentList agentId={agentId} entries={entries} isSubAgent={isSubAgentTool} renderBody={(id) => <SubAgentBody agentId={agentId} subagentKey={id} d={{}} />} />
       {shouldShowLoadOlder(entries, hasMore) && (
         <div style={{ textAlign: "center", padding: "4px 0" }}>
           <button
@@ -1057,24 +1300,42 @@ export function Timeline({
             disabled={loadingMore}
             onClick={handleLoadMore}
           >
-            {loadingMore ? "Loading…" : "↑ Load older messages"}
+            {loadingMore ? (slowMore ? <Spinner label="Loading…" /> : "Loading…") : "↑ Load older messages"}
           </button>
         </div>
       )}
       {error && <div className="tl tl-error">{error}</div>}
       {shown.map((e, i) => (
-        <TimelineErrorBoundary key={e.seqStart ?? i} fallbackLabel={`item #${i}`}>
+        <Fragment key={e.seqStart ?? i}>
+        <i hidden data-tl-seq={e.seqStart ?? i} />
+        <TimelineErrorBoundary fallbackLabel={`item #${i}`}>
           <TimelineItem
             e={e}
             agentId={agentId}
             onParkText={onParkText}
             onRewound={(x) => { cutLen.current = entries.length; setCut(x); }}
+            latestReasoning={e === entries[latestReasoningIndex(entries)]}
             selected={selectedEntryKey === String(e.seqStart ?? i)}
             onSelect={() => setSelectedEntryKey((k) => (k === String(e.seqStart ?? i) ? null : String(e.seqStart ?? i)))}
           />
         </TimelineErrorBoundary>
+        </Fragment>
       ))}
       <div />
+      {!isPinned && (
+        <button
+          className="tl-jump-bottom"
+          data-testid="tl-jump-bottom"
+          onClick={() => {
+            const el = timelineRef.current;
+            pinned.current = true;
+            setIsPinned(true);
+            if (el) el.scrollTop = el.scrollHeight;
+          }}
+        >
+          ↓ Follow output
+        </button>
+      )}
     </div>
   );
 }

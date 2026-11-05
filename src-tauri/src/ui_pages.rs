@@ -146,6 +146,25 @@ pub fn render_mode_choice_page(_cfg: &DesktopConfig, error_msg: Option<&str>) ->
     line-height: 1.45;
     color: var(--muted);
   }}
+  .footer-actions {{
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 16px;
+  }}
+  .btn-secondary {{
+    padding: 9px 12px;
+    background: var(--panel-hi);
+    color: var(--text);
+    border: 1px solid var(--line);
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+  }}
+  .btn-secondary:hover {{
+    border-color: var(--cyan);
+    color: var(--cyan);
+  }}
 </style>
 </head>
 <body>
@@ -181,11 +200,16 @@ pub fn render_mode_choice_page(_cfg: &DesktopConfig, error_msg: Option<&str>) ->
         </div>
       </button>
     </div>
+
+    <div class="footer-actions">
+      <button type="button" class="btn-secondary" id="check-update-btn" data-testid="desktop-check-update-btn">Check for Updates</button>
+    </div>
   </div>
 
   <script>
     const localBtn = document.getElementById('choose-local-btn');
     const remoteBtn = document.getElementById('choose-remote-btn');
+    const checkUpdateBtn = document.getElementById('check-update-btn');
 
     async function pickMode(mode) {{
       localBtn.disabled = true;
@@ -206,6 +230,26 @@ pub fn render_mode_choice_page(_cfg: &DesktopConfig, error_msg: Option<&str>) ->
 
     localBtn.addEventListener('click', () => pickMode('local'));
     remoteBtn.addEventListener('click', () => pickMode('remote'));
+    if (checkUpdateBtn) {{
+      checkUpdateBtn.addEventListener('click', async () => {{
+        checkUpdateBtn.disabled = true;
+        checkUpdateBtn.textContent = 'Checking for updates…';
+        try {{
+          const res = await fetch('/__desktop/updater/check', {{ method: 'POST' }});
+          const data = await res.json().catch(() => ({{}}));
+          if (data && data.updateAvailable && data.downloaded) {{
+            checkUpdateBtn.textContent = 'Installing v' + data.availableVersion + '…';
+            await fetch('/__desktop/updater/install', {{ method: 'POST' }});
+            return;
+          }}
+          checkUpdateBtn.textContent = data && data.currentVersion ? ('Up to date (v' + data.currentVersion + ')') : 'Up to date';
+        }} catch (_) {{
+          checkUpdateBtn.textContent = 'Update check failed';
+        }} finally {{
+          checkUpdateBtn.disabled = false;
+        }}
+      }});
+    }}
   </script>
 </body>
 </html>"#,
@@ -236,25 +280,20 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
     } else {
         cfg.fallback_host.trim()
     };
-    let lan_disabled_attr = if saved_lan.is_empty() {
-        r#"disabled class="preset-btn disabled""#
+    let picker_display = if saved_lan.is_empty() && saved_mesh.is_empty() {
+        "display:none"
     } else {
-        r#"class="preset-btn""#
+        ""
     };
-    let mesh_disabled_attr = if saved_mesh.is_empty() {
-        r#"disabled class="preset-btn disabled""#
+    let lan_display = if saved_lan.is_empty() {
+        "display:none"
     } else {
-        r#"class="preset-btn""#
+        ""
     };
-    let lan_initial_tag = if saved_lan.is_empty() {
-        "Server not detected".to_string()
+    let mesh_display = if saved_mesh.is_empty() {
+        "display:none"
     } else {
-        "Recommended on Wi-Fi/LAN".to_string()
-    };
-    let mesh_initial_tag = if saved_mesh.is_empty() {
-        "Server not detected".to_string()
-    } else {
-        "Remote / VPN".to_string()
+        ""
     };
     let server_host_display = if cfg.server_mode == "remote" && crate::is_local_host(&cfg.server_host) {
         if !saved_lan.is_empty() {
@@ -266,6 +305,13 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
         }
     } else {
         cfg.server_host.clone()
+    };
+    let code_field_display = if server_host_display.is_empty()
+        || crate::is_local_host(&server_host_display)
+    {
+        "display:none"
+    } else {
+        ""
     };
 
     format!(
@@ -387,18 +433,17 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
     color: var(--ok);
     background: rgba(0, 230, 118, 0.1);
   }}
-  .preset-grid {{
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 7px;
-    margin-bottom: 10px;
+  .preset-pills {{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
   }}
   .preset-btn {{
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    justify-content: space-between;
-    width: 100%;
-    padding: 9px 12px;
+    gap: 8px;
+    width: auto;
+    padding: 7px 11px;
     background: var(--panel-hi);
     border: 1px solid var(--line);
     color: var(--text);
@@ -475,9 +520,11 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
     display: flex;
     gap: 10px;
     margin-top: 20px;
+    flex-wrap: wrap;
   }}
   .btn-primary {{
     flex: 1;
+    min-width: 160px;
     padding: 12px 16px;
     background: var(--cyan);
     color: #05060d;
@@ -493,6 +540,24 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
   .btn-primary:hover {{ filter: brightness(1.1); }}
   .btn-primary:active {{ transform: translateY(1px); }}
   .btn-primary:disabled {{ opacity: 0.5; cursor: wait; }}
+  .btn-secondary {{
+    padding: 11px 14px;
+    background: var(--panel-hi);
+    color: var(--text);
+    border: 1px solid var(--line);
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }}
+  .btn-secondary:hover {{
+    border-color: var(--cyan);
+    color: var(--cyan);
+  }}
   .footer-note {{
     margin-top: 18px;
     padding-top: 12px;
@@ -509,6 +574,18 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
     align-items: center;
     gap: 6px;
   }}
+  .footer-link {{
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--muted);
+    font-family: inherit;
+    font-size: 11px;
+    text-decoration: none;
+    cursor: pointer;
+    transition: color 0.15s;
+  }}
+  .footer-link:hover {{ color: var(--cyan); }}
 </style>
 </head>
 <body>
@@ -520,54 +597,52 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
       <span class="brand-badge">DESKTOP CLIENT</span>
     </div>
     <div class="subtitle">
-      Connect to your VibeSquad server over your <b>Home LAN</b>, <b>Meshnet</b>, or <b>Localhost</b>. The Root CA is pinned inside this app — no Windows certificate install needed.
+      Paste a pairing link or enter your server address to connect.
     </div>
 
     {err_banner}
 
     <form id="pair-form">
+      <div class="field" id="server-picker" style="{picker_display}">
+        <div class="label-row">
+          <label>Saved / Detected Servers</label>
+          <span class="probe-badge" id="probe-badge">Probing…</span>
+        </div>
+        <div class="preset-pills">
+          <button type="button" class="preset-btn" id="preset-lan" data-host="{saved_lan_host}" style="{lan_display}">
+            <span>🏠 Home LAN</span>
+            <span class="preset-tag" id="tag-lan">{saved_lan_host}</span>
+          </button>
+          <button type="button" class="preset-btn" id="preset-meshnet" data-host="{saved_meshnet_host}" style="{mesh_display}">
+            <span>🌐 Meshnet</span>
+            <span class="preset-tag" id="tag-meshnet">{saved_meshnet_host}</span>
+          </button>
+        </div>
+      </div>
+
       <div class="field">
         <div class="label-row">
-          <label>Quick Server Picker</label>
-          <span class="probe-badge" id="probe-badge">Probing LAN &amp; Meshnet…</span>
-        </div>
-        <div class="preset-grid">
-          <button type="button" id="preset-lan" data-host="{saved_lan_host}" {lan_disabled_attr}>
-            <span>🏠 Home LAN</span>
-            <span class="preset-tag" id="tag-lan">{lan_initial_tag}</span>
-          </button>
-          <button type="button" id="preset-meshnet" data-host="{saved_meshnet_host}" {mesh_disabled_attr}>
-            <span>🌐 Meshnet</span>
-            <span class="preset-tag" id="tag-meshnet">{mesh_initial_tag}</span>
-          </button>
-          <button type="button" class="preset-btn" id="use-localhost-btn" data-host="127.0.0.1:4180" title="Start or connect to local server on this PC without a pairing code">
-            <span>💻 Run agents on this PC · <b>127.0.0.1:4180</b></span>
-            <span class="preset-tag" id="tag-local">No code needed</span>
-          </button>
-        </div>
-
-        <div class="label-row" style="margin-top:10px">
-          <label for="serverHost">Server Address</label>
+          <label for="serverHost">Pairing Link or Server Address</label>
         </div>
         <input
           type="text"
           id="serverHost"
           name="serverHost"
           value="{server_host_display}"
-          placeholder="server-ip:4180 or meshnet-host:4180"
+          placeholder="Paste pairing link, or enter server-ip:4180"
           autocomplete="off"
           spellcheck="false"
-          required
+          autofocus
         />
         <div class="hint">
-          Enter the Home LAN or Meshnet address shown on your server PC's <b>Pair a device</b> screen.
+          Open VibeSquad on your server PC → click <b>📱 Pair a device</b>.
         </div>
       </div>
 
-      <div class="field" id="code-field">
+      <div class="field" id="code-field" style="{code_field_display}">
         <div class="label-row">
-          <label for="code">6-Digit Pairing Code</label>
-          <span style="font-size:11px;color:var(--muted)">From server's <b>PAIR DEVICE</b> modal</span>
+          <label for="code" id="code-label">6-Digit Pairing Code</label>
+          <span id="code-hint" style="font-size:11px;color:var(--muted)">From server's <b>PAIR DEVICE</b> modal</span>
         </div>
         <input
           type="text"
@@ -577,11 +652,7 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
           placeholder="000000"
           autocomplete="off"
           spellcheck="false"
-          autofocus
         />
-        <div class="hint">
-          Open VibeSquad on your server PC → click <b>📱 Pair a device</b> → enter the 6-digit code (works for both Home LAN and Meshnet).
-        </div>
       </div>
 
       <div id="form-error" class="alert-box" style="display:none">
@@ -597,8 +668,12 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
     </form>
 
     <div class="footer-note">
-      <span class="ca-pill">✓ Pinned Root CA (LAN + Meshnet)</span>
-      <span>Shortcut: Ctrl+Shift+S</span>
+      <a href="/__desktop/mode" class="footer-link" id="back-to-mode-choice" data-testid="back-to-mode-choice">
+        ← Switch Mode (Local / Remote)
+      </a>
+      <button type="button" class="footer-link" id="check-update-btn" data-testid="desktop-check-update-btn">
+        Check for Updates
+      </button>
     </div>
   </div>
 
@@ -609,11 +684,13 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
     const submitBtn = document.getElementById('submit-btn');
     const presetLan = document.getElementById('preset-lan');
     const presetMesh = document.getElementById('preset-meshnet');
-    const localhostBtn = document.getElementById('use-localhost-btn');
+    const serverPicker = document.getElementById('server-picker');
+    const codeField = document.getElementById('code-field');
+    const codeLabel = document.getElementById('code-label');
+    const codeHint = document.getElementById('code-hint');
     const probeBadge = document.getElementById('probe-badge');
     const tagLan = document.getElementById('tag-lan');
     const tagMesh = document.getElementById('tag-meshnet');
-    const tagLocal = document.getElementById('tag-local');
     const errBox = document.getElementById('form-error');
     const errText = document.getElementById('form-error-text');
 
@@ -631,47 +708,85 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
     function syncPresetButtons() {{
       const lanHost = (presetLan.dataset.host || '').trim();
       const meshHost = (presetMesh.dataset.host || '').trim();
-      if (!lanHost) {{
-        presetLan.disabled = true;
-        presetLan.classList.add('disabled');
-        tagLan.textContent = 'Server not detected';
-        tagLan.classList.remove('ok');
-      }} else {{
-        presetLan.disabled = false;
-        presetLan.classList.remove('disabled');
-        if (tagLan.textContent === 'Server not detected') tagLan.textContent = 'Recommended on Wi-Fi/LAN';
-      }}
-      if (!meshHost) {{
-        presetMesh.disabled = true;
-        presetMesh.classList.add('disabled');
-        tagMesh.textContent = 'Server not detected';
-        tagMesh.classList.remove('ok');
-      }} else {{
-        presetMesh.disabled = false;
-        presetMesh.classList.remove('disabled');
-        if (tagMesh.textContent === 'Server not detected') tagMesh.textContent = 'Remote / VPN';
+      presetLan.style.display = lanHost ? 'inline-flex' : 'none';
+      if (lanHost && !tagLan.textContent) tagLan.textContent = lanHost;
+      presetMesh.style.display = meshHost ? 'inline-flex' : 'none';
+      if (meshHost && !tagMesh.textContent) tagMesh.textContent = meshHost;
+      serverPicker.style.display = (lanHost || meshHost) ? 'block' : 'none';
+    }}
+
+    function extractOfferHash(raw) {{
+      const s = (raw || '').trim();
+      if (!s) return null;
+      const hashIdx = s.indexOf('#offer=');
+      if (hashIdx >= 0) return s.slice(hashIdx);
+      const m = s.match(/[?#&]offer=([^&\s]+)/i);
+      if (m && m[1]) return '#offer=' + m[1];
+      if (s.startsWith('offer=')) return '#' + s;
+      return null;
+    }}
+
+    function tryExtractPairUrl(inputEl) {{
+      const raw = (inputEl.value || '').trim();
+      if (!raw) return;
+      if (/^https?:\/\//i.test(raw) && raw.includes('code=')) {{
+        try {{
+          const u = new URL(raw);
+          const c = u.searchParams.get('code');
+          if (u.host) hostInput.value = u.port ? u.host : (u.hostname + ':4180');
+          if (c) codeInput.value = c.trim();
+        }} catch (_) {{}}
       }}
     }}
 
     function syncLocalState() {{
       syncPresetButtons();
+      const codeVal = (codeInput.value || '').trim();
+      const offerInHost = extractOfferHash(hostInput.value);
+      const offerInCode = extractOfferHash(codeVal);
+      if (offerInCode && !offerInHost) {{
+        // #offer= link was pasted into the code field: move it into the host field and
+        // clear the code field so it can hold the optional daemon password.
+        hostInput.value = codeVal;
+        codeInput.value = '';
+      }}
       const val = (hostInput.value || '').trim();
+      const offerHash = extractOfferHash(val);
       const lanHost = presetLan.dataset.host;
       const meshHost = presetMesh.dataset.host;
       presetLan.classList.toggle('active', Boolean(lanHost) && val.startsWith(lanHost));
       presetMesh.classList.toggle('active', Boolean(meshHost) && val.startsWith(meshHost));
-      localhostBtn.classList.toggle('active', isLocal(val));
+      codeField.style.display = (!val || (isLocal(val) && !offerHash)) ? 'none' : 'block';
 
-      if (isLocal(val)) {{
-        codeInput.placeholder = 'No code needed on Server PC';
-        submitBtn.textContent = 'Connect to Localhost';
+      if (offerHash) {{
+        codeLabel.textContent = 'Daemon Password (if required)';
+        codeHint.innerHTML = 'Optional password for remote Paseo daemon';
+        codeInput.type = 'password';
+        codeInput.placeholder = 'Enter remote daemon password (optional)';
+        codeInput.required = false;
+        submitBtn.textContent = 'Connect via Paseo Offer Link';
       }} else {{
-        codeInput.placeholder = '000000';
-        submitBtn.textContent = 'Connect & Pair';
+        codeLabel.textContent = '6-Digit Pairing Code';
+        codeHint.innerHTML = 'From server\'s <b>PAIR DEVICE</b> modal';
+        codeInput.type = 'text';
+        if (isLocal(val)) {{
+          codeInput.placeholder = 'No code needed on Server PC';
+          submitBtn.textContent = 'Connect to Localhost';
+        }} else {{
+          codeInput.placeholder = '000000';
+          submitBtn.textContent = 'Connect & Pair';
+        }}
       }}
     }}
 
-    hostInput.addEventListener('input', syncLocalState);
+    hostInput.addEventListener('input', () => {{
+      tryExtractPairUrl(hostInput);
+      syncLocalState();
+    }});
+    codeInput.addEventListener('input', () => {{
+      tryExtractPairUrl(codeInput);
+      syncLocalState();
+    }});
     syncLocalState();
 
     presetLan.addEventListener('click', () => {{
@@ -686,13 +801,6 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
       hostInput.value = presetMesh.dataset.host;
       syncLocalState();
       codeInput.focus();
-    }});
-
-    localhostBtn.addEventListener('click', async () => {{
-      hostInput.value = '127.0.0.1:4180';
-      codeInput.value = '';
-      syncLocalState();
-      await submitPair();
     }});
 
     async function runProbe() {{
@@ -721,19 +829,14 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
         }} else if (presetMesh.dataset.host) {{
           tagMesh.textContent = presetMesh.dataset.host;
         }}
-        if (p.local) {{
-          localhostBtn.classList.add('reachable');
-          tagLocal.textContent = '● Healthy (This PC)';
-          tagLocal.classList.add('ok');
-        }}
         if (data.reachable && data.activeHost) {{
           probeBadge.textContent = '● Reachable: ' + data.activeHost;
           probeBadge.classList.add('online');
         }} else {{
-          probeBadge.textContent = 'Server not detected yet';
+          probeBadge.textContent = '';
         }}
       }} catch (_) {{
-        probeBadge.textContent = 'Probe offline';
+        probeBadge.textContent = '';
       }}
     }}
     runProbe();
@@ -744,6 +847,40 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
       const origText = submitBtn.textContent;
       submitBtn.textContent = 'Connecting…';
       try {{
+        tryExtractPairUrl(hostInput);
+        tryExtractPairUrl(codeInput);
+        if (extractOfferHash(codeInput.value) && !extractOfferHash(hostInput.value)) {{
+          hostInput.value = codeInput.value;
+          codeInput.value = '';
+        }}
+        const offerHash = extractOfferHash(hostInput.value) || extractOfferHash(codeInput.value);
+        if (offerHash) {{
+          const res = await fetch('/__desktop/pair', {{
+            method: 'POST',
+            headers: {{
+              'Content-Type': 'application/json',
+              'Accept': 'application/json'
+            }},
+            body: JSON.stringify({{
+              serverHost: hostInput.value.trim(),
+              code: codeInput.value
+            }})
+          }});
+          const data = await res.json().catch(() => ({{}}));
+          if (!res.ok || !data.ok) {{
+            errText.textContent = data.error || ('Connection failed (HTTP ' + res.status + ')');
+            errBox.style.display = 'flex';
+            submitBtn.disabled = false;
+            submitBtn.textContent = origText;
+            return;
+          }}
+          const pw = (codeInput.value || '').trim();
+          if (pw) {{
+            sessionStorage.setItem('vs.remote.password.tab', pw);
+          }}
+          window.location.replace(data.redirect || '/');
+          return;
+        }}
         const res = await fetch('/__desktop/pair', {{
           method: 'POST',
           headers: {{
@@ -776,17 +913,38 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
       e.preventDefault();
       submitPair();
     }});
+    const checkUpdateBtn = document.getElementById('check-update-btn');
+    if (checkUpdateBtn) {{
+      checkUpdateBtn.addEventListener('click', async () => {{
+        checkUpdateBtn.disabled = true;
+        checkUpdateBtn.textContent = 'Checking for updates…';
+        try {{
+          const res = await fetch('/__desktop/updater/check', {{ method: 'POST' }});
+          const data = await res.json().catch(() => ({{}}));
+          if (data && data.updateAvailable && data.downloaded) {{
+            checkUpdateBtn.textContent = 'Installing v' + data.availableVersion + '…';
+            await fetch('/__desktop/updater/install', {{ method: 'POST' }});
+            return;
+          }}
+          checkUpdateBtn.textContent = data && data.currentVersion ? ('Up to date (v' + data.currentVersion + ')') : 'Up to date';
+        }} catch (_) {{
+          checkUpdateBtn.textContent = 'Update check failed';
+        }} finally {{
+          checkUpdateBtn.disabled = false;
+        }}
+      }});
+    }}
   </script>
 </body>
 </html>"#,
         err_banner = err_banner,
         saved_lan_host = html_escape(saved_lan),
         saved_meshnet_host = html_escape(saved_mesh),
-        lan_disabled_attr = lan_disabled_attr,
-        mesh_disabled_attr = mesh_disabled_attr,
-        lan_initial_tag = lan_initial_tag,
-        mesh_initial_tag = mesh_initial_tag,
+        picker_display = picker_display,
+        lan_display = lan_display,
+        mesh_display = mesh_display,
         server_host_display = html_escape(&server_host_display),
+        code_field_display = code_field_display,
     )
 }
 
@@ -995,14 +1153,20 @@ pub fn render_unreachable_page(cfg: &DesktopConfig, last_error: &str) -> String 
     <div class="actions">
       <button type="button" class="btn-primary" id="retry-btn">Retry Now</button>
       <a href="/__desktop/setup" class="btn-secondary" id="change-server-btn">Change Server / Re-pair</a>
-      <a href="/__desktop/setup" class="btn-secondary" id="use-lan-btn">Change Server / Re-pair</a>
+      <a href="/__desktop/mode" class="btn-secondary" id="first-time-setup-btn">First-Time Setup</a>
+      <button type="button" class="btn-secondary" id="check-update-btn" data-testid="desktop-check-update-btn">Check for Updates</button>
     </div>
   </div>
 
   <script>
     const statusEl = document.getElementById('retry-status');
     const retryBtn = document.getElementById('retry-btn');
+    const checkUpdateBtn = document.getElementById('check-update-btn');
     let checking = false;
+    const RELOAD_KEY = 'vs.reconnect.reloads';
+    const MAX_RELOADS = 3;
+    let reloads = 0;
+    try {{ reloads = Number(sessionStorage.getItem(RELOAD_KEY) || 0) || 0; }} catch (_) {{}}
 
     async function checkNow() {{
       if (checking) return;
@@ -1012,7 +1176,9 @@ pub fn render_unreachable_page(cfg: &DesktopConfig, last_error: &str) -> String 
         const res = await fetch('/__desktop/ping', {{ cache: 'no-store' }});
         const data = await res.json().catch(() => ({{}}));
         if (data.reachable) {{
+          if (reloads >= MAX_RELOADS) {{ statusEl.textContent = 'Server answers but the app is not loading · press Retry Now'; return; }}
           statusEl.textContent = 'Connected! Loading…';
+          try {{ sessionStorage.setItem(RELOAD_KEY, String(reloads + 1)); }} catch (_) {{}}
           window.location.replace('/');
           return;
         }}
@@ -1024,7 +1190,27 @@ pub fn render_unreachable_page(cfg: &DesktopConfig, last_error: &str) -> String 
       }}
     }}
 
-    retryBtn.addEventListener('click', checkNow);
+    retryBtn.addEventListener('click', () => {{ reloads = 0; try {{ sessionStorage.removeItem(RELOAD_KEY); }} catch (_) {{}} checkNow(); }});
+    if (checkUpdateBtn) {{
+      checkUpdateBtn.addEventListener('click', async () => {{
+        checkUpdateBtn.disabled = true;
+        checkUpdateBtn.textContent = 'Checking for updates…';
+        try {{
+          const res = await fetch('/__desktop/updater/check', {{ method: 'POST' }});
+          const data = await res.json().catch(() => ({{}}));
+          if (data && data.updateAvailable && data.downloaded) {{
+            checkUpdateBtn.textContent = 'Installing v' + data.availableVersion + '…';
+            await fetch('/__desktop/updater/install', {{ method: 'POST' }});
+            return;
+          }}
+          checkUpdateBtn.textContent = data && data.currentVersion ? ('Up to date (v' + data.currentVersion + ')') : 'Up to date';
+        }} catch (_) {{
+          checkUpdateBtn.textContent = 'Update check failed';
+        }} finally {{
+          checkUpdateBtn.disabled = false;
+        }}
+      }});
+    }}
     setInterval(checkNow, 3000);
   </script>
 </body>
@@ -1039,24 +1225,47 @@ pub fn render_unreachable_page(cfg: &DesktopConfig, last_error: &str) -> String 
 /// Restores/saves lastHash, forwards browser Notification calls to native Windows toasts,
 /// provides Ctrl+Shift+S / Alt+S shortcut to Change Server / Re-pair, a 3.5s empty-#root
 /// recovery watchdog bar, and monitors upstream reachability.
-pub fn desktop_bridge_script(last_hash: &str) -> String {
-    let escaped_hash = serde_json::to_string(last_hash).unwrap_or_else(|_| "\"\"".to_string());
+pub fn desktop_bridge_script(last_hash: &str, last_route: &str) -> String {
+    let clean_hash = if last_hash.contains("offer=") { "" } else { last_hash };
+    let escaped_hash = serde_json::to_string(clean_hash).unwrap_or_else(|_| "\"\"".to_string());
+    let escaped_route = serde_json::to_string(&restore_path(last_route, last_hash)).unwrap_or_else(|_| "\"/\"".to_string()).replace('<', "\\u003c");
     format!(
         r#"<script>
 (function() {{
   if (window.__VIBESQUAD_DESKTOP_BRIDGE__) return;
   window.__VIBESQUAD_DESKTOP_BRIDGE__ = true;
+  try {{ sessionStorage.removeItem('vs.reconnect.reloads'); }} catch (_) {{}} // the app shell loaded: reset the reload-loop guard
   const savedHash = {escaped_hash};
-  if (!window.location.hash && savedHash && savedHash.startsWith('#')) {{
+  const savedRoute = {escaped_route};
+  // A reload/reconnect lands on a bare "/": put the last route (path + ?team=&agent= + #hash) back before the app boots.
+  if (window.location.pathname === '/' && !window.location.search && !window.location.hash && savedRoute && savedRoute !== '/') {{
+    try {{ history.replaceState(null, '', savedRoute); }} catch (_) {{}}
+  }} else if (!window.location.hash && savedHash && savedHash.startsWith('#')) {{
     try {{ history.replaceState(null, '', savedHash); }} catch (_) {{}}
   }}
-  window.addEventListener('hashchange', () => {{
-    fetch('/__desktop/hash', {{
-      method: 'POST',
-      headers: {{ 'Content-Type': 'application/json' }},
-      body: JSON.stringify({{ hash: window.location.hash || '' }})
-    }}).catch(() => {{}});
-  }});
+  let routeTimer = 0;
+  function saveRoute() {{
+    clearTimeout(routeTimer);
+    routeTimer = setTimeout(() => {{
+      const rawHash = window.location.hash || '';
+      const cleanHash = rawHash.includes('offer=') ? '' : rawHash;
+      fetch('/__desktop/hash', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        keepalive: true,
+        body: JSON.stringify({{
+          hash: cleanHash,
+          route: window.location.pathname + window.location.search + cleanHash
+        }})
+      }}).catch(() => {{}});
+    }}, 250);
+  }}
+  window.addEventListener('hashchange', saveRoute);
+  window.addEventListener('popstate', saveRoute);
+  for (const fn of ['pushState', 'replaceState']) {{
+    const orig = history[fn];
+    history[fn] = function () {{ const r = orig.apply(this, arguments); saveRoute(); return r; }};
+  }}
 
   // Global keyboard shortcut: Ctrl+Shift+S or Alt+S -> Change Server / Re-pair
   window.addEventListener('keydown', (e) => {{
@@ -1141,6 +1350,141 @@ pub fn desktop_bridge_script(last_hash: &str) -> String {
     )
 }
 
+/// The path + query + hash to open after a restart: the saved full route, else `/` plus the legacy saved hash.
+/// Only same-origin app routes are accepted (never `//host`, never the relay's own `/__desktop/*`).
+pub fn restore_path(last_route: &str, last_hash: &str) -> String {
+    // A saved `#offer=` pairing link must never be restored: it re-mounts the pairing screen on reload.
+    let r = last_route.trim().split("#offer=").next().unwrap_or("");
+    if r.starts_with('/') && !r.starts_with("//") && !r.starts_with("/__desktop") && !r.contains('\\') && !r.contains(['\n', '\r']) {
+        return r.to_string();
+    }
+    if last_hash.contains("offer=") {
+        return "/".to_string();
+    }
+    let h = last_hash.trim();
+    if h.starts_with('#') {
+        format!("/{}", h)
+    } else if !h.is_empty() {
+        format!("/#{}", h)
+    } else {
+        "/".to_string()
+    }
+}
+
+/// "Reconnecting…" card served instead of the browser's own error page while the upstream restarts.
+/// Polls `/__desktop/ping` and reloads the same URL (route intact) once the server answers; after ~30 s
+/// it becomes the Server Unreachable card with Retry · Switch server.
+pub fn render_reconnecting_page(_cfg: &DesktopConfig, last_error: &str) -> String {
+    format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VibeSquad — Reconnecting…</title>
+<style>
+  :root {{ --bg:#0c0b14; --panel:#121120; --panel-hi:#18172b; --line:#282644; --cyan:#00f0ff; --pink:#ff2a85; --amber:#ffb800; --text:#eef2ff; --muted:#8a93b2; }}
+  * {{ box-sizing: border-box; user-select: none; }}
+  body {{ margin:0; min-height:100vh; background:radial-gradient(circle at 50% 0%, #24132c 0%, var(--bg) 65%); color:var(--text);
+    font-family:"JetBrains Mono","Cascadia Mono",Consolas,monospace; display:flex; align-items:center; justify-content:center; padding:24px; }}
+  .shell {{ width:100%; max-width:560px; background:var(--panel); border:1px solid var(--line); box-shadow:0 20px 60px rgba(0,0,0,.65),0 0 28px rgba(255,42,133,.1); padding:28px; position:relative; }}
+  .shell::before {{ content:""; position:absolute; top:0; left:0; right:0; height:3px; background:linear-gradient(90deg,var(--pink),var(--amber)); }}
+  h1 {{ margin:0 0 12px; font-size:18px; font-weight:800; color:var(--amber); letter-spacing:1.4px; text-transform:uppercase; }}
+  h1.down {{ color:var(--pink); }}
+  .status-pill {{ display:inline-flex; align-items:center; gap:7px; padding:4px 9px; font-size:11px; background:rgba(255,184,0,.12); border:1px solid var(--amber); color:var(--amber); }}
+  .pulse {{ width:7px; height:7px; border-radius:50%; background:var(--amber); animation:blink 1.2s infinite ease-in-out; }}
+  @keyframes blink {{ 0%,100% {{ opacity:1; }} 50% {{ opacity:.25; }} }}
+  p {{ font-size:12px; line-height:1.5; color:var(--muted); margin:14px 0 0; }}
+  .err-detail {{ margin-top:10px; font-size:11px; color:var(--muted); word-break:break-all; }}
+  .actions {{ display:flex; gap:10px; margin-top:20px; flex-wrap:wrap; }}
+  .actions.show {{ display:flex; }}
+  .btn-primary {{ flex:1; min-width:120px; padding:11px 16px; background:var(--cyan); color:#05060d; border:none; font-family:inherit; font-size:12px; font-weight:800; letter-spacing:1px; text-transform:uppercase; cursor:pointer; }}
+  .btn-secondary {{ padding:11px 14px; background:var(--panel-hi); color:var(--text); border:1px solid var(--line); font-family:inherit; font-size:12px; font-weight:600; text-decoration:none; display:inline-flex; align-items:center; }}
+  .btn-secondary:hover {{ border-color:var(--cyan); color:var(--cyan); }}
+</style>
+</head>
+<body>
+  <div class="shell" id="reconnect-card">
+    <h1 id="title">Reconnecting…</h1>
+    <span class="status-pill"><span class="pulse"></span><span id="retry-status">Server is restarting. You will be back where you were.</span></span>
+    <p id="body-text">Your chat, squad and drafts are kept. This page reloads on its own as soon as the server answers.</p>
+    <div class="err-detail" id="err-detail">{last_error}</div>
+    <div class="actions" id="actions">
+      <button type="button" class="btn-primary" id="retry-btn">Retry</button>
+      <a href="/__desktop/setup" class="btn-secondary" id="switch-server-btn">Switch server / Re-pair</a>
+      <a href="/__desktop/mode" class="btn-secondary" id="first-time-setup-btn">First-Time Setup</a>
+      <button type="button" class="btn-secondary" id="check-update-btn" data-testid="desktop-check-update-btn">Check for Updates</button>
+    </div>
+  </div>
+  <script>
+    const started = Date.now();
+    const GIVE_UP_MS = 30000;
+    const statusEl = document.getElementById('retry-status');
+    const checkUpdateBtn = document.getElementById('check-update-btn');
+    let checking = false;
+    // Loop guard: after 3 reloads that land back here, stop reloading and wait for a manual Retry.
+    const RELOAD_KEY = 'vs.reconnect.reloads';
+    const MAX_RELOADS = 3;
+    let reloads = 0;
+    try {{ reloads = Number(sessionStorage.getItem(RELOAD_KEY) || 0) || 0; }} catch (_) {{}}
+    let halted = reloads >= MAX_RELOADS;
+    function reloadApp() {{
+      if (reloads >= MAX_RELOADS) {{ halted = true; showDown(); statusEl.textContent = 'Server answers but the app is not loading'; return; }}
+      try {{ sessionStorage.setItem(RELOAD_KEY, String(reloads + 1)); }} catch (_) {{}}
+      window.location.replace(window.location.pathname + window.location.search + window.location.hash);
+    }}
+    function showDown() {{
+      const t = document.getElementById('title');
+      t.textContent = 'Server Unreachable';
+      t.className = 'down';
+      document.getElementById('body-text').textContent = 'The server has not come back. Retry, or switch to another server. Your place is saved.';
+      document.getElementById('actions').className = 'actions show';
+    }}
+    async function checkNow() {{
+      if (checking) return;
+      checking = true;
+      try {{
+        const res = await fetch('/__desktop/ping', {{ cache: 'no-store' }});
+        const data = await res.json().catch(() => ({{}}));
+        if (data.reachable) {{
+          statusEl.textContent = 'Connected! Loading…';
+          reloadApp();
+          return;
+        }}
+      }} catch (e) {{}}
+      finally {{ checking = false; }}
+      if (Date.now() - started > GIVE_UP_MS) {{ showDown(); statusEl.textContent = 'Unreachable · retrying…'; }}
+    }}
+    document.getElementById('retry-btn').addEventListener('click', () => {{ reloads = 0; halted = false; try {{ sessionStorage.removeItem(RELOAD_KEY); }} catch (_) {{}} checkNow(); }});
+    if (checkUpdateBtn) {{
+      checkUpdateBtn.addEventListener('click', async () => {{
+        checkUpdateBtn.disabled = true;
+        checkUpdateBtn.textContent = 'Checking for updates…';
+        try {{
+          const res = await fetch('/__desktop/updater/check', {{ method: 'POST' }});
+          const data = await res.json().catch(() => ({{}}));
+          if (data && data.updateAvailable && data.downloaded) {{
+            checkUpdateBtn.textContent = 'Installing v' + data.availableVersion + '…';
+            await fetch('/__desktop/updater/install', {{ method: 'POST' }});
+            return;
+          }}
+          checkUpdateBtn.textContent = data && data.currentVersion ? ('Up to date (v' + data.currentVersion + ')') : 'Up to date';
+        }} catch (_) {{
+          checkUpdateBtn.textContent = 'Update check failed';
+        }} finally {{
+          checkUpdateBtn.disabled = false;
+        }}
+      }});
+    }}
+    if (halted) {{ showDown(); statusEl.textContent = 'Server answers but the app is not loading'; }}
+    setInterval(() => {{ if (!halted) checkNow(); }}, 1500);
+  </script>
+</body>
+</html>"#,
+        last_error = html_escape(last_error),
+    )
+}
+
 fn html_escape(input: &str) -> String {
     input
         .replace('&', "&amp;")
@@ -1148,4 +1492,51 @@ fn html_escape(input: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::DesktopConfig;
+
+    #[test]
+    fn render_pair_page_simplifies_connect_ux_and_discloses_code_progressively() {
+        let default_html = render_pair_page(&DesktopConfig::default(), None);
+        assert!(!default_html.contains("Server not detected"));
+        assert!(!default_html.contains("Pinned Root CA"));
+        assert!(!default_html.contains("Shortcut: Ctrl+Shift+S"));
+        assert!(!default_html.contains("use-localhost-btn"));
+        assert!(
+            default_html.contains("id=\"server-picker\" style=\"display:none\""),
+            "empty config should hide the server picker"
+        );
+        assert!(
+            default_html.contains("id=\"code-field\" style=\"display:none\""),
+            "localhost config should hide the pairing-code field"
+        );
+        assert!(default_html.contains("data-testid=\"back-to-mode-choice\""));
+        assert!(default_html.contains("data-testid=\"desktop-check-update-btn\""));
+
+        let mut cfg = DesktopConfig::default();
+        cfg.server_mode = "remote".to_string();
+        cfg.last_lan_host = "192.168.1.50:4180".to_string();
+        let remote_html = render_pair_page(&cfg, None);
+        assert!(
+            remote_html.contains("id=\"server-picker\" style=\"\""),
+            "saved LAN host should reveal the server picker"
+        );
+        assert!(
+            remote_html.contains("id=\"code-field\" style=\"\""),
+            "remote host should reveal the pairing-code field"
+        );
+    }
+
+    #[test]
+    fn restore_path_and_bridge_strip_offer_hash() {
+        assert_eq!(
+            restore_path("/?remote=1#offer=abc", "#offer=abc"),
+            "/?remote=1"
+        );
+        assert!(!desktop_bridge_script("#offer=abc", "/?remote=1#offer=abc").contains("#offer=abc"));
+    }
 }

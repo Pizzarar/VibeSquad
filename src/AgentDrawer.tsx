@@ -1,10 +1,11 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { expandFolderMentions } from "./projectContext";
+import { appendContext, useCtxSources } from "./contextSources";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
-import { DEMO, removeLocalAgent, sendMessage, upsertLocalAgent } from "./paseo";
-import { openPin } from "./pinActions";
-import type { Pin, PinLane } from "./pins";
+import { daemonClient, DEMO, removeLocalAgent, sendMessage, upsertLocalAgent } from "./paseo";
 import { useDraft } from "./drafts";
+import { isRemote } from "./remoteSession";
 import { createSendLock, guardedSend, restoredDraft } from "./sendGuard";
 import { blobsToPaseoImages, rememberSent, useImageDraft } from "./imageDrafts";
 import {
@@ -20,13 +21,16 @@ import {
   usedTokens,
   useTeams,
 } from "./teams";
+import { titleFor } from "./teams";
 import { handoffTopicBrainstormClient, parkIdeasInInbox, parkTopicBrainstormClient } from "./IdeaInbox";
 import { providerSpec } from "./pixel";
 import { openAgentInTab, paneOfAgent } from "./panes";
 import { useTimeline, Timeline, TimelineErrorBoundary } from "./Timeline";
 import { PermissionCard } from "./PermissionCard";
-import { Composer } from "./Composer";
+import { Composer, formatBtwPrompt, shouldQueueOnSend, stageFiles, type QueuedTurnItem } from "./Composer";
+import { composeMessage, setAgentCwd, useAttachments } from "./attachments";
 import { DrawerHeader } from "./DrawerHeader";
+import { useWorkingMembers, WorkingBar } from "./WorkingBar";
 import { RightDock } from "./RightDock";
 
 export { localImageSrc } from "./Timeline";
@@ -61,8 +65,9 @@ export async function triggerBrainstormRestart(opts: {
   usedTokens: number;
   pendingPrompt?: string;
   summaryUpdate?: string;
+  profileName?: string;
 }): Promise<{ newAgentId: string | null; title?: string; retired?: boolean; pendingPrompt?: string }> {
-  const { agent, teamId, laneId, reason, usedTokens: ut, pendingPrompt, summaryUpdate } = opts;
+  const { agent, teamId, laneId, reason, usedTokens: ut, pendingPrompt, summaryUpdate, profileName } = opts;
   const pane = paneOfAgent(agent.id);
   const res = await fetch("/__vibesquad/brainstorm-restart", {
     method: "POST",
@@ -73,8 +78,11 @@ export async function triggerBrainstormRestart(opts: {
       laneId,
       reason,
       usedTokens: ut,
-      ...(pendingPrompt ? { pendingPrompt } : {}),
-      ...(summaryUpdate ? { summaryUpdate } : {}),
+      // profileName is a whitelisted body key: safe across the remote relay.
+      ...(profileName ? { profileName } : {}),
+      // Prompt and brief text never cross the remote relay (REMOTE_FORBIDDEN_BODY_KEYS).
+      ...(pendingPrompt && !isRemote() ? { pendingPrompt } : {}),
+      ...(summaryUpdate && !isRemote() ? { summaryUpdate } : {}),
     }),
   });
   const body = await res.json().catch(() => ({}));
@@ -86,7 +94,7 @@ export async function triggerBrainstormRestart(opts: {
     return { newAgentId: null, retired: true, pendingPrompt: body.pendingPrompt ?? pendingPrompt };
   }
   const newAgentId: string = body.newAgentId || `demo-bs-${Date.now().toString(36)}`;
-  const title: string = body.title || `BRAINSTORM · ${laneId.toUpperCase()}`;
+  const title: string = body.title || titleFor("brainstorm", laneId, { laneId });
   const createdAgent: PaseoAgent =
     body.agent ??
     ({
@@ -109,6 +117,10 @@ export async function triggerBrainstormRestart(opts: {
     } as unknown as PaseoAgent);
   upsertLocalAgent(createdAgent, agent.id);
   openAgentInTab(newAgentId, pane, agent.id);
+  // Remotely the server never saw pendingPrompt, so hand it to the fresh Buddy over the relay instead.
+  if (pendingPrompt && isRemote() && body.newAgentId) {
+    await sendMessage(newAgentId, pendingPrompt).catch(() => undefined);
+  }
   return { newAgentId, title };
 }
 
@@ -116,7 +128,7 @@ type DrawerProps = { agent: PaseoAgent; onClose: () => void; onSuccessor?: () =>
 
 export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccessor, active = true }: DrawerProps) {
   useTeams();
-  const { entries, error, hasMore, loadingMore, loadMore } = useTimeline(agent.id, agent.status, active);
+  const { entries, error, hasMore, loadingMore, loadMore, loaded } = useTimeline(agent.id, agent.status, active);
   const [draft, setDraft, clearDraft] = useDraft(`${agent.id}:draft`);
   const [busy, setBusy] = useState(false);
   const [restarting, setRestarting] = useState(false);
@@ -134,12 +146,17 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   const [topicParking, setTopicParking] = useState(false);
   const feedbackKey = `vs.restart-feedback.${agent.id}`;
   const [feedbackDismissed, setFeedbackDismissed] = useState(() => localStorage.getItem(feedbackKey) === "1");
-  const autoRestartFired = useRef<string | null>(null);
   const [lastSteered, setLastSteered] = useState<string | null>(null);
+  const [queuedByAgent, setQueuedByAgent] = useState<Record<string, QueuedTurnItem[]>>({});
+  const queuedItems = queuedByAgent[agent.id] ?? [];
   const [permInputs, setPermInputs] = useState<Record<string, string>>({});
   const [dockOpen, setDockOpen] = useState(() => localStorage.getItem("vs.right-dock.open") === "true");
 
   const imgs = useImageDraft(`${agent.id}:images`);
+  const atts = useAttachments(`${agent.id}:files`);
+  const ctxSrc = useCtxSources(agent.id);
+  const [paneDrop, setPaneDrop] = useState(false);
+  setAgentCwd(agent.id, agent.cwd);
 
   const labels = (agent.labels ?? {}) as Record<string, string>;
   const isBs = isBrainstormAgent(agent);
@@ -161,6 +178,15 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   const runningSubs = entries.filter(
     (e) => e.item?.type === "tool_call" && e.item?.detail?.type === "sub_agent" && e.item?.status === "running",
   ).length;
+
+  const working = useWorkingMembers(agent.id, isBs, team.id, laneId);
+  // A sub_agent call that names a running child agent (detail.subAgentId / agentId) is already a chip: count it once.
+  // Calls carrying no id can't be matched to a child agent, so they stay counted.
+  const workingIds = new Set(working.map((m) => m.agent.id));
+  const extraSubs = entries.filter((e) => {
+    const d = e.item?.detail;
+    return e.item?.type === "tool_call" && d?.type === "sub_agent" && e.item?.status === "running" && !workingIds.has(d.subAgentId ?? d.agentId);
+  }).length;
 
   const lastAssistantMsg = (() => {
     for (let i = entries.length - 1; i >= 0; i--) {
@@ -191,6 +217,18 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   useEffect(() => {
     localStorage.setItem("vs.right-dock.open", String(dockOpen));
   }, [dockOpen]);
+
+  useEffect(() => {
+    if (agent.status !== "running" && agent.status !== "closed" && queuedItems.length > 0) {
+      const combinedText = queuedItems.map((q) => q.text).join("\n\n");
+      setQueuedByAgent((prev) => {
+        const next = { ...prev };
+        delete next[agent.id];
+        return next;
+      });
+      void sendMessage(agent.id, combinedText, undefined, { activeTurnBehavior: "steer" });
+    }
+  }, [agent.id, agent.status, queuedItems.length]);
 
   useEffect(() => {
     const onOpenDock = () => setDockOpen(true);
@@ -238,7 +276,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   };
 
   const doRestart = useCallback(
-    async (reason: string, pendingPrompt?: string) => {
+    async (reason: string, pendingPrompt?: string, profileName?: string) => {
       if (restarting) return undefined;
       setRestarting(true);
       try {
@@ -249,6 +287,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
           reason,
           usedTokens: bsUsedTokens,
           pendingPrompt,
+          profileName,
         });
         if (pendingPrompt !== undefined && !r.retired) clearDraft();
         return r;
@@ -262,28 +301,41 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
     [agent, bsUsedTokens, clearDraft, laneId, restarting, teamId],
   );
 
-  // Auto-restart without asking when an idle brainstorm crosses >= restartTokens (150k).
-  useEffect(() => {
-    if (!isBs || agent.archivedAt || agent.status === "running") return;
-    if (bsUsedTokens >= restartTokens && autoRestartFired.current !== agent.id) {
-      autoRestartFired.current = agent.id;
-      void doRestart("auto-150k");
-    }
-  }, [isBs, agent.id, agent.archivedAt, agent.status, bsUsedTokens, restartTokens, doRestart]);
-
   const sendLock = useRef(createSendLock());
   const draftRef = useRef(draft);
   draftRef.current = draft;
   const [sendError, setSendError] = useState<string | null>(null);
   const lastBehavior = useRef<ActiveTurnBehavior | null>(null);
 
-  const sendWithBehavior = async (behavior: ActiveTurnBehavior) => {
-    if (!draft.trim() && !imgs.images.length) return;
+  const sendWithBehavior = async (behavior: ActiveTurnBehavior, overrideText?: string, forceImmediate = false) => {
+    if (!draft.trim() && !imgs.images.length && !atts.items.length && !ctxSrc.items.length && overrideText === undefined) return;
     if (sendLock.current.held) return;
-    const text = draft.trim() ? draft : "(image)";
+    const sentFiles = atts.items;
+    const sentCtx = ctxSrc.items;
+    const base = overrideText !== undefined ? overrideText : draft.trim() ? draft : imgs.images.length ? "(image)" : "";
+    const formattedBase = formatBtwPrompt(base);
     const typed = draft;
     setSendError(null);
     lastBehavior.current = behavior;
+
+    if (
+      behavior === "steer" &&
+      shouldQueueOnSend(agent.status, forceImmediate) &&
+      !imgs.images.length &&
+      !atts.items.length &&
+      !ctxSrc.items.length &&
+      overrideText === undefined
+    ) {
+      setQueuedByAgent((prev) => ({
+        ...prev,
+        [agent.id]: [
+          ...(prev[agent.id] ?? []),
+          { id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, text: formattedBase, createdAt: Date.now() },
+        ],
+      }));
+      clearDraft();
+      return;
+    }
 
     await guardedSend({
       lock: sendLock.current,
@@ -294,47 +346,29 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
       restore: () => setDraft(restoredDraft(typed, draftRef.current)),
       onError: (e) => setSendError(`Send failed: ${e instanceof Error ? e.message : String(e)}`),
       run: async () => {
-        // BF-P1: Auto-restart without asking at >= restartTokens (150k) or when next turn would push it past 150k.
-        if (isBs && (bsUsedTokens >= restartTokens || bsUsedTokens + Math.ceil(typed.length / 3) >= restartTokens)) {
-          autoRestartFired.current = agent.id;
-          const r = await doRestart("auto-150k", text);
-          if (!r?.retired) return undefined;
-          const laneDef = (team.lanes?.find((l) => l.id === laneId) ?? { id: laneId, name: laneId }) as PinLane;
-          const pin: Pin = {
-            squad: team,
-            lane: laneDef,
-            state: "pinned",
-            order: 0,
-            brainstorm: null,
-            lead: null,
-            workers: [],
-            needsYou: 0,
-            running: 0,
-            contextUsed: 0,
-            topicBrainstorms: [],
-          };
-          const pane = paneOfAgent(agent.id);
-          const newId = await openPin(pin);
-          openAgentInTab(newId, pane, agent.id);
-          const promptToSend = r.pendingPrompt ?? text;
-          if (imgs.images.length) {
-            await sendMessage(newId, promptToSend, await blobsToPaseoImages(imgs.images), { activeTurnBehavior: behavior });
-            rememberSent(newId, promptToSend, imgs.images);
-            imgs.clear();
-          } else {
-            await sendMessage(newId, promptToSend, undefined, { activeTurnBehavior: behavior });
-          }
-          return true;
-        }
-
+        const composed = await composeMessage(formattedBase, sentFiles, async ({ name, file }) => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const up = await (daemonClient as any).uploadFile?.({ cwd: agent.cwd, name, file });
+          if (!up?.path) throw new Error(`upload of ${name} failed`);
+          return up.path as string;
+        });
+        // Providers that ignore `@dir/` (Gemini) get a time-boxed "Folder: …" listing line appended.
+        const expanded = await expandFolderMentions(composed, agent.provider, async (dir) => {
+          const res = await daemonClient.listDirectory(agent.cwd ?? "", dir);
+          return res.entries.map((e) => ({ path: e.path, kind: e.kind }));
+        });
+        // @git / @terminal / @chat pills expand into fenced blocks for every provider.
+        const text = appendContext(expanded, sentCtx);
         if (imgs.images.length) {
           await sendMessage(agent.id, text, await blobsToPaseoImages(imgs.images), { activeTurnBehavior: behavior });
           rememberSent(agent.id, text, imgs.images);
           imgs.clear();
         } else {
-          await sendMessage(agent.id, typed, undefined, { activeTurnBehavior: behavior });
+          await sendMessage(agent.id, text, undefined, { activeTurnBehavior: behavior });
         }
-        if (agent.status === "running" && behavior === "steer") setLastSteered(text);
+        atts.clear();
+        ctxSrc.clear();
+        if (agent.status === "running" && behavior === "steer") setLastSteered(base || "(files)");
         return true;
       },
     });
@@ -343,6 +377,30 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
 
   const send = () => sendWithBehavior("steer");
   const sendInterrupt = () => sendWithBehavior("interrupt");
+
+  const sendQueuedNow = async () => {
+    const items = queuedByAgent[agent.id] ?? [];
+    if (!items.length) return;
+    const combinedText = items.map((q) => q.text).join("\n\n");
+    setQueuedByAgent((prev) => {
+      const next = { ...prev };
+      delete next[agent.id];
+      return next;
+    });
+    await sendMessage(agent.id, combinedText, undefined, { activeTurnBehavior: "steer" });
+    setLastSteered(combinedText);
+  };
+
+  const cancelQueued = (id?: string) => {
+    const items = queuedByAgent[agent.id] ?? [];
+    const removed = id ? items.find((q) => q.id === id) : items[0];
+    setQueuedByAgent((prev) => {
+      const list = prev[agent.id] ?? [];
+      const rest = id ? list.filter((q) => q.id !== id) : list.slice(1);
+      return { ...prev, [agent.id]: rest };
+    });
+    if (removed && !draft.trim()) setDraft(removed.text);
+  };
 
   const onFeedback = async (verdict: "good" | "lost") => {
     localStorage.setItem(feedbackKey, "1");
@@ -426,7 +484,29 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   }, [agent.id, draft, lastAssistantMsg, topicCardId, topicName, topicParking]);
 
   return (
-    <aside className="drawer">
+    <aside
+      className="drawer"
+      onDragOver={(e) => {
+        if (Array.from(e.dataTransfer?.types ?? []).includes("Files")) {
+          e.preventDefault();
+          setPaneDrop(true);
+        }
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setPaneDrop(false);
+      }}
+      onDrop={(e) => {
+        setPaneDrop(false);
+        if (e.defaultPrevented) return; // the composer already took it
+        e.preventDefault();
+        stageFiles(Array.from(e.dataTransfer?.files ?? []), imgs, atts);
+      }}
+    >
+      {paneDrop && (
+        <div className="drop-overlay" data-testid="drop-overlay">
+          Drop to attach
+        </div>
+      )}
       <DrawerHeader
         agent={agent}
         agentType={agentType}
@@ -435,6 +515,8 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
         budget={budget}
         team={team}
         runningSubs={runningSubs}
+        working={working}
+        extraSubs={extraSubs}
         laneId={laneId}
         entries={entries}
         active={active}
@@ -504,6 +586,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
             error={error}
             hasMore={hasMore}
             loadingMore={loadingMore}
+            loaded={loaded}
             loadMore={loadMore}
             onParkText={(txt) => void parkToInbox(txt, false)}
           />
@@ -530,6 +613,8 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
         </div>
       )}
 
+      <WorkingBar members={working} subs={extraSubs} />
+
       <Composer
         agent={agent}
         draft={draft}
@@ -539,10 +624,14 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
         inboxParking={inboxParking}
         lastSteered={lastSteered}
         imgs={imgs}
+        atts={atts}
         onSend={send}
         onInterrupt={sendInterrupt}
         onParkToInbox={parkToInbox}
         onToggleInboxPopover={() => setInboxPopoverOpen((v) => !v)}
+        queuedItems={queuedItems}
+        onSendQueuedNow={() => void sendQueuedNow()}
+        onCancelQueued={cancelQueued}
       />
     </aside>
   );

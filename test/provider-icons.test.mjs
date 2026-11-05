@@ -17,7 +17,14 @@ writeFileSync(
   join(dir, "cast.mjs"),
   transformSync("cast.ts", readFileSync(resolve(import.meta.dirname, "..", "src", "cast.ts"), "utf8"), { lang: "ts" }).code,
 );
-const { providerSpec, setProviderOverrides, getProviderOverrides, GENERIC_HUES } = await import(pathToFileURL(file).href);
+const {
+  providerSpec,
+  setProviderOverrides,
+  getProviderOverrides,
+  GENERIC_HUES,
+  DEDICATED_PROVIDER_KEYS,
+  listDedicatedProviders,
+} = await import(pathToFileURL(file).href);
 
 const DEDICATED = ["claude", "codex", "antigravity-cli", "opencode", "cursor", "copilot", "codewhale", "pi"];
 
@@ -32,6 +39,21 @@ test("8 dedicated providers have distinct keys, colors and symbols", () => {
     ["✶", "●", "◆", "▲", "▸", "❖", "≈", "π"],
   );
   assert.equal(providerSpec("gemini").key, "gemini");
+});
+
+test("listDedicatedProviders returns all 8 dedicated provider specs with distinct keys, hues and glyphs", () => {
+  const dedicated = listDedicatedProviders();
+  assert.equal(dedicated.length, 8);
+  assert.deepEqual(
+    dedicated.map((s) => s.key),
+    ["claude", "codex", "gemini", "opencode", "cursor", "copilot", "codewhale", "pi"],
+  );
+  assert.deepEqual(DEDICATED_PROVIDER_KEYS, ["claude", "codex", "gemini", "opencode", "cursor", "copilot", "codewhale", "pi"]);
+  assert.equal(new Set(dedicated.map((s) => s.color)).size, 8);
+  assert.deepEqual(
+    dedicated.map((s) => s.symbol),
+    ["✶", "●", "◆", "▲", "▸", "❖", "≈", "π"],
+  );
 });
 
 test("keyed by source, not model", () => {
@@ -65,7 +87,15 @@ test("setProviderOverrides changes color, dim, symbol and name", () => {
   assert.equal(s.name, "Aider!");
   setProviderOverrides({ claude: { color: "#00ff00", dim: "#003300" } });
   assert.equal(providerSpec("claude/opus").dim, "#003300");
-  assert.deepEqual(getProviderOverrides(), { claude: { color: "#00ff00", dim: "#003300" } });
+  assert.equal(providerSpec("claude-code/sonnet").dim, "#003300");
+  setProviderOverrides({ gemini: { color: "#112233", symbol: "✦", name: "AGY" } });
+  assert.equal(providerSpec("antigravity-cli/gemini-pro").color, "#112233");
+  assert.equal(providerSpec("antigravity-cli/gemini-pro").symbol, "✦");
+  assert.equal(providerSpec("antigravity-cli/gemini-pro").name, "AGY");
+  setProviderOverrides({ "antigravity-cli": { color: "#445566", symbol: "◈" } });
+  assert.equal(providerSpec("antigravity-cli/gemini-pro").color, "#445566");
+  assert.equal(providerSpec("antigravity-cli/gemini-pro").symbol, "◈");
+  assert.deepEqual(getProviderOverrides(), { "antigravity-cli": { color: "#445566", symbol: "◈" } });
   setProviderOverrides(null);
   assert.equal(providerSpec("aider").symbol, "A");
 });

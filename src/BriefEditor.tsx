@@ -3,13 +3,23 @@
 // team's live Brainstorm (if any) to re-read it.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { isImeComposing } from "./IdeaInbox";
+import { MermaidView } from "./MermaidView";
 import { sendMessage, usePaseo } from "./paseo";
-import { briefDiffSummary, briefPathFor } from "./pins";
+import { briefDiffSummary, briefPathFor, briefShrinkWarning } from "./pins";
 import { onOpenBriefEditor, type BriefTarget } from "./pinActions";
 import { Modal } from "./TeamActions";
 import { findCrossTeamBrainstorm, resolve } from "./teams";
+import { MarkdownRenderer, tokenizeMarkdown } from "./Timeline";
 
 const MAX_BRIEF_CHARS = 20_000;
+
+export function extractBriefMermaidBlocks(markdown: string): string[] {
+  return tokenizeMarkdown(markdown, true)
+    .filter((tok): tok is { type: "code_block"; lang: string; code: string } =>
+      tok.type === "code_block" && tok.lang.trim().toLowerCase() === "mermaid",
+    )
+    .map((tok) => tok.code);
+}
 
 type Props = BriefTarget & { onClose: () => void };
 
@@ -23,7 +33,9 @@ export function BriefEditor({ laneId, laneName, onClose }: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [mode, setMode] = useState<"edit" | "preview">("edit");
   const dirty = text !== original;
+  const mermaidBlocks = useMemo(() => extractBriefMermaidBlocks(text), [text]);
 
   useEffect(() => {
     let cancelled = false;
@@ -55,6 +67,12 @@ export function BriefEditor({ laneId, laneName, onClose }: Props) {
 
   const save = async () => {
     if (saving || loading || !dirty) return;
+    // Same guard as the server's brief writes (server/brief-write.mjs): explain it here instead of a bare 400.
+    const shrink = briefShrinkWarning(original, text);
+    if (shrink) {
+      setError(shrink);
+      return;
+    }
     setSaving(true);
     setError("");
     try {
@@ -106,30 +124,73 @@ export function BriefEditor({ laneId, laneName, onClose }: Props) {
       <div className="brief-editor">
         <div className="brief-editor-meta">
           <code>{path}</code>
-          <span className={over ? "stat-alert" : "muted"}>
-            {text.length.toLocaleString()} / {MAX_BRIEF_CHARS.toLocaleString()} chars
-          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div className="brief-mode-tabs" style={{ display: "inline-flex", gap: 4 }}>
+              <button
+                type="button"
+                className={`btn ghost${mode === "edit" ? " active" : ""}`}
+                data-testid="brief-edit-tab"
+                style={{ padding: "1px 6px", fontSize: 11 }}
+                onClick={() => setMode("edit")}
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                className={`btn ghost${mode === "preview" ? " active" : ""}`}
+                data-testid="brief-preview-tab"
+                style={{ padding: "1px 6px", fontSize: 11 }}
+                onClick={() => setMode("preview")}
+              >
+                Preview
+              </button>
+            </div>
+            <span className={over ? "stat-alert" : "muted"}>
+              {text.length.toLocaleString()} / {MAX_BRIEF_CHARS.toLocaleString()} chars
+            </span>
+          </div>
         </div>
         {loading ? (
           <div className="muted">Loading brief…</div>
+        ) : mode === "preview" ? (
+          <div
+            className="brief-editor-preview"
+            data-testid="brief-preview"
+            style={{ flex: 1, overflowY: "auto", padding: "10px 12px" }}
+          >
+            <MarkdownRenderer text={text} doc />
+          </div>
         ) : (
-          <textarea
-            className="brief-editor-text"
-            data-testid="brief-editor-text"
-            value={text}
-            autoFocus
-            spellCheck={false}
-            onChange={(e) => {
-              setText(e.target.value);
-              setConfirmDiscard(false);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !isImeComposing(e)) {
-                e.preventDefault();
-                void save();
-              }
-            }}
-          />
+          <>
+            <textarea
+              className="brief-editor-text"
+              data-testid="brief-editor-text"
+              value={text}
+              autoFocus
+              spellCheck={false}
+              onChange={(e) => {
+                setText(e.target.value);
+                setConfirmDiscard(false);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !isImeComposing(e)) {
+                  e.preventDefault();
+                  void save();
+                }
+              }}
+            />
+            {mermaidBlocks.length > 0 && (
+              <div
+                className="brief-mermaid-preview"
+                data-testid="brief-mermaid-preview"
+                style={{ maxHeight: 260, overflowY: "auto" }}
+              >
+                {mermaidBlocks.map((code, idx) => (
+                  <MermaidView key={idx} code={code} />
+                ))}
+              </div>
+            )}
+          </>
         )}
       </div>
     </Modal>

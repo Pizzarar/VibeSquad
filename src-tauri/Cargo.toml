@@ -1,10 +1,15 @@
 [package]
 name = "vibesquad-desktop"
-version = "0.1.1-beta.5"
+version = "0.2.5"
 description = "VibeSquad Desktop App (Tauri 2)"
 authors = ["VibeSquad"]
 edition = "2021"
 default-run = "VibeSquad"
+
+[lib]
+name = "vibesquad_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+path = "src/lib.rs"
 
 [[bin]]
 name = "VibeSquad"
@@ -14,15 +19,19 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+tauri = { version = "2", features = ["image-png"] }
+tauri-plugin-notification = "2"
+tauri-plugin-deep-link = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-png", "image-ico"] }
 tauri-plugin-single-instance = "2"
-tauri-plugin-notification = "2"
 tauri-plugin-updater = "2"
 minisign-verify = "0.3"
 semver = "1"
 base64 = "0.22"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.7", features = ["ws"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "rustls-tls-webpki-roots", "stream", "json"] }

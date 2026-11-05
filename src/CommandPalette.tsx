@@ -3,6 +3,11 @@ import { DEMO, daemonClient } from "./paseo";
 import { getPanes, openAgent, subscribePanes } from "./panes";
 import { AGENT_TYPE_LABEL, type Member, type TeamView } from "./teams";
 import { Ago, cleanTitle } from "./ui";
+import { settingsPaletteItems, useKeyBindings } from "./prefs";
+import { FIXED_SHORTCUTS, KEY_COMMANDS, bindingLabel, comboFromEvent, firesWhileTyping, resolveCommand, type Bindings, type KeyScope } from "./keymap";
+import { QuickOpen, type NavAgent } from "./QuickOpen";
+import { FindInFiles } from "./FindInFiles";
+import { bulkStopTargets, deleteGuard, getOpRequest, hardDeleteAgent, reloadAgent, requestAgentOp, runningCwds, stopAgents, subscribeOpRequest } from "./paseoAgentOps";
 
 // ---- pure helpers (mirrored in test/ade-batch-g.test.mjs) ---------------------------------
 
@@ -26,10 +31,12 @@ export function parseUrlState(search: string): UrlState {
 }
 
 /** Merges team/agent into an existing query string, keeping unrelated params (demo, dock, ...). */
-export function serializeUrlState(state: UrlState, search = ""): string {
+export function serializeUrlState(state: UrlState & { squadsHome?: boolean }, search = ""): string {
   const p = new URLSearchParams(search);
   p.delete("team");
   p.delete("agent");
+  p.delete("view");
+  if (state.squadsHome) p.set("view", "squads"); // Squads Home survives a reload/reconnect
   if (state.team) p.set("team", state.team);
   if (state.agent) p.set("agent", state.agent);
   const s = p.toString();
@@ -67,13 +74,15 @@ export function snippetAround(text: string, q: string, radius = 50): string | nu
 export type CtxItem = { label: string; run: () => void };
 export type CtxMenuState = { x: number; y: number; items: CtxItem[] } | null;
 
-export function agentCtxItems(m: { id: string; cwd?: string | null }, a: { open: () => void; split: () => void; archive: () => void }): CtxItem[] {
+export function agentCtxItems(m: { id: string; cwd?: string | null; title?: string | null; status?: string | null; archivedAt?: string | null; labels?: Record<string, string> | null }, a: { open: () => void; split: () => void; archive: () => void }): CtxItem[] {
   return [
     { label: "Open Agent", run: a.open },
     { label: "Open in Split Pane", run: a.split },
     { label: "Copy Agent ID", run: () => void navigator.clipboard?.writeText(m.id) },
     { label: "Copy Working Folder (cwd)", run: () => void navigator.clipboard?.writeText(m.cwd ?? "") },
+    ...(m.archivedAt ? [] : [{ label: "Reload Agent", run: () => void reloadAgent(m.id).catch((e) => alert(`Could not reload: ${e}`)) }]),
     { label: "Archive Agent", run: a.archive },
+    { label: "Delete Agent…", run: () => requestAgentOp({ kind: "delete", agent: m }) },
   ];
 }
 
@@ -152,29 +161,127 @@ function ContextMenuHost() {
   );
 }
 
+// ---- delete / bulk-stop confirm -----------------------------------------------------------
+
+function AgentOpConfirmHost() {
+  const req = useSyncExternalStore(subscribeOpRequest, getOpRequest);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    setBusy(false);
+    setErr("");
+  }, [req]);
+  useEffect(() => {
+    if (!req) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && requestAgentOp(null);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [req]);
+  if (!req) return null;
+  const close = () => requestAgentOp(null);
+  const isDelete = req.kind === "delete";
+  const warning = req.kind === "delete" ? deleteGuard(req.agent).warning : null;
+  const run = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      if (req.kind === "delete") await hardDeleteAgent(req.agent.id);
+      else {
+        const failed = await stopAgents(req.agents.map((a) => a.id));
+        if (failed.length) {
+          setErr(`Could not stop ${failed.length} of ${req.agents.length}.`);
+          setBusy(false);
+          return;
+        }
+      }
+      close();
+    } catch (e) {
+      setErr(String((e as Error)?.message ?? e));
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="modal-back" onMouseDown={close}>
+      <div className="shortcut-modal" data-testid={isDelete ? "agent-delete-confirm" : "bulk-stop-confirm"} role="alertdialog" aria-label={isDelete ? "Delete agent" : "Stop agents"} onMouseDown={(e) => e.stopPropagation()}>
+        {req.kind === "delete" ? (
+          <>
+            <h3>Delete agent permanently?</h3>
+            <p>
+              <b>{cleanTitle(req.agent.title) || req.agent.id.slice(0, 8)}</b> and its history will be removed from the daemon. This cannot be undone. Archive keeps it recoverable.
+            </p>
+            {warning && (
+              <p className="dup-warning" role="alert" data-testid="agent-delete-warning">
+                {warning}
+              </p>
+            )}
+          </>
+        ) : (
+          <>
+            <h3>{req.title}</h3>
+            <p>
+              Stops the current run of {req.agents.length} agent{req.agents.length === 1 ? "" : "s"}. They stay available and can be prompted again.
+            </p>
+            <ul data-testid="bulk-stop-list" style={{ maxHeight: 220, overflow: "auto", paddingLeft: 18, margin: "6px 0" }}>
+              {req.agents.map((a) => (
+                <li key={a.id}>
+                  {cleanTitle(a.title) || a.id.slice(0, 8)}
+                  {a.labels?.role === "lead" || a.labels?.role === "brainstorm" ? <span className="muted small"> · {a.labels.role === "lead" ? "Lead" : "Brainstorm"}</span> : null}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+        {err && (
+          <p className="dup-warning" role="alert">
+            {err}
+          </p>
+        )}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+          <button className="btn" onClick={close} disabled={busy}>
+            Cancel
+          </button>
+          <button className="btn bad" data-testid="agent-op-confirm" onClick={() => void run()} disabled={busy}>
+            {busy ? "Working…" : req.kind === "delete" ? "Delete permanently" : `Stop ${req.agents.length}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Team ⋯ menu entries (stop all running agents in the team, with a confirm). */
+export function teamCtxItems(view: TeamView): CtxItem[] {
+  const targets = bulkStopTargets(
+    view.members.map((m) => ({ agent: m.agent, teamId: view.team.id })),
+    { teamId: view.team.id },
+  );
+  return [
+    {
+      label: targets.length ? `Stop All Running (${targets.length})…` : "Stop All Running (none running)",
+      run: () => {
+        if (targets.length) requestAgentOp({ kind: "stop", title: `Stop all running agents in ${view.team.name}?`, agents: targets });
+      },
+    },
+  ];
+}
+
 // ---- shortcut cheat sheet -----------------------------------------------------------------
 
-const SHORTCUTS: [string, string][] = [
-  ["Ctrl+K / Ctrl+Shift+P", "Command palette"],
-  ["Ctrl+.", "Toggle Focus mode"],
-  ["Ctrl+J", "Open the top NEEDS YOU agent"],
-  ["Ctrl+1 … 9", "Switch tab in the active pane"],
-  ["Shift+Tab", "Cycle permission mode (composer)"],
-  ["Ctrl+R", "Reload the page"],
-  ["?", "This cheat sheet"],
-  ["Ctrl+= / Ctrl+- / Ctrl+0", "UI scale up / down / reset"],
-  ["Esc", "Close dialogs and menus"],
-];
+/** Effective (rebindable) bindings first, then the fixed ones, as [row key, keys, label]. Unbound commands are left out. */
+export function shortcutRows(b: Bindings): [string, string, string][] {
+  const bound = KEY_COMMANDS.flatMap<[string, string, string]>((c) => (bindingLabel(b, c.id) ? [[c.id, bindingLabel(b, c.id), c.label]] : []));
+  return [...bound, ...FIXED_SHORTCUTS.map<[string, string, string]>(([k, d]) => [`fixed:${k}`, k, d])];
+}
 
-function ShortcutSheet({ onClose }: { onClose: () => void }) {
+function ShortcutSheet({ onClose, bindings, onEdit }: { onClose: () => void; bindings: Bindings; onEdit: () => void }) {
   return (
     <div className="modal-back" onMouseDown={onClose}>
       <div className="shortcut-modal" data-testid="shortcut-cheat-sheet" role="dialog" aria-label="Keyboard shortcuts" onMouseDown={(e) => e.stopPropagation()}>
         <h3>Keyboard shortcuts</h3>
         <table>
           <tbody>
-            {SHORTCUTS.map(([k, d]) => (
-              <tr key={k}>
+            {shortcutRows(bindings).map(([id, k, d]) => (
+              <tr key={id}>
                 <td>
                   <kbd>{k}</kbd>
                 </td>
@@ -183,6 +290,9 @@ function ShortcutSheet({ onClose }: { onClose: () => void }) {
             ))}
           </tbody>
         </table>
+        <button className="btn ghost small" data-testid="shortcut-sheet-edit" onClick={onEdit}>
+          Edit keybindings…
+        </button>
       </div>
     </div>
   );
@@ -286,12 +396,28 @@ function TranscriptSearch({ members, onPick, onClose }: { members: Member[]; onP
 
 export type PaletteActions = {
   newAgent: () => void;
-  settings: () => void;
+  /** With a target: open Settings at that setting (a SettingHit id from src/prefs.ts). */
+  settings: (target?: string) => void;
   workspaces: () => void;
   toggleFocus: () => void;
+  /** Ctrl+J: open the top NEEDS YOU agent. */
+  needsYou?: () => void;
 };
 
-export const openOverlay = (which: "search" | "shortcuts") => window.dispatchEvent(new CustomEvent("vs:open-overlay", { detail: which }));
+type Overlay = "search" | "shortcuts" | "quickOpen" | "findInFiles";
+export const openOverlay = (which: Overlay) => window.dispatchEvent(new CustomEvent("vs:open-overlay", { detail: which }));
+
+/** Keymap commands this host doesn't run (focus-scoped ones such as block 4's inline edit) go out as this event. */
+export const KEY_COMMAND_EVENT = "vs:key-command";
+
+/** The agent shown in the active pane: quick open / find in files work in its cwd. */
+function activeNavAgent(all: Member[]): NavAgent | null {
+  const s = getPanes();
+  const id = s.split && s.activePane === "right" ? s.rightActiveId : s.leftActiveId;
+  const m = id ? all.find((x) => x.agent.id === id) : undefined;
+  if (!m?.agent.cwd) return null;
+  return { id: m.agent.id, cwd: m.agent.cwd, title: cleanTitle(m.agent.title) || m.agent.id.slice(0, 8) };
+}
 
 export function CommandPaletteHost(props: {
   members: Member[];
@@ -301,7 +427,9 @@ export function CommandPaletteHost(props: {
   onTeam: (id: string) => void;
   actions: PaletteActions;
 }) {
-  const [mode, setMode] = useState<"palette" | "search" | "shortcuts" | null>(null);
+  const [mode, setMode] = useState<"palette" | Overlay | null>(null);
+  const [navAgent, setNavAgent] = useState<NavAgent | null>(null);
+  const { bindings } = useKeyBindings();
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(0);
   const closed = useRef<string[]>([]);
@@ -326,6 +454,13 @@ export function CommandPaletteHost(props: {
     }, 0);
   };
 
+  const openMode = (m: Overlay) => {
+    if (m === "quickOpen" || m === "findInFiles") setNavAgent(activeNavAgent(allRef.current));
+    setMode(m);
+  };
+  const openModeRef = useRef(openMode);
+  openModeRef.current = openMode;
+
   // Remember closed tabs so "Reopen Closed Tab" has something to reopen.
   useEffect(() => {
     let prev = new Set(getPanes().leftTabs.concat(getPanes().rightTabs ?? []));
@@ -337,23 +472,24 @@ export function CommandPaletteHost(props: {
     });
   }, []);
 
+  // One keymap dispatcher (src/keymap.ts): defaults + Settings › Keybindings overrides. A focus-scoped
+  // binding (data-keyscope on an ancestor of the focused element) wins over a global one.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const mod = e.ctrlKey || e.metaKey;
+      if (e.key === "Escape") return dismissRef.current();
+      if (e.isComposing) return;
+      const combo = comboFromEvent(e);
+      if (!combo) return;
       const el = e.target as HTMLElement | null;
-      const typing = !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
-      if (mod && !e.altKey && (e.key === "k" || e.key === "K" || (e.shiftKey && (e.key === "p" || e.key === "P")))) {
-        e.preventDefault();
-        setQ("");
-        setSel(0);
-        if (modeRef.current === "palette") dismissRef.current();
-        else setMode("palette");
-      } else if (e.key === "?" && !mod && !typing) {
-        e.preventDefault();
-        setMode("shortcuts");
-      } else if (e.key === "Escape") dismissRef.current();
+      const typing = !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
+      if (typing && !firesWhileTyping(combo)) return;
+      const scope = el?.closest?.("[data-keyscope]")?.getAttribute("data-keyscope") as KeyScope | null | undefined;
+      const id = resolveCommand(combo, bindingsRef.current, scope ? [scope] : []);
+      if (!id) return;
+      e.preventDefault();
+      runCommandRef.current(id, el);
     };
-    const onOpen = (e: Event) => setMode((e as CustomEvent<string>).detail as "search" | "shortcuts");
+    const onOpen = (e: Event) => openModeRef.current((e as CustomEvent<string>).detail as Overlay);
     window.addEventListener("keydown", onKey);
     window.addEventListener("vs:open-overlay", onOpen);
     return () => {
@@ -364,11 +500,18 @@ export function CommandPaletteHost(props: {
 
   dismissRef.current = dismiss;
   modeRef.current = mode;
+  const bindingsRef = useRef(bindings);
+  bindingsRef.current = bindings;
 
   const all = useMemo(() => [...props.members, ...props.archived], [props.members, props.archived]);
+  const allRef = useRef(all);
+  allRef.current = all;
 
   const items = useMemo<PaletteItem[]>(() => {
-    const act = (id: string, label: string): PaletteItem => ({ id: `action:${id}`, kind: "action", label, hint: "" });
+    const act = (id: string, label: string): PaletteItem => {
+      const keys = bindingLabel(bindings, id);
+      return { id: `action:${id}`, kind: "action", label: keys ? `${label} (${keys})` : label, hint: "" };
+    };
     const agents = all.map<PaletteItem>((m) => ({
       id: `agent:${m.agent.id}`,
       kind: "agent",
@@ -377,18 +520,36 @@ export function CommandPaletteHost(props: {
       ts: m.agent.updatedAt,
     }));
     const teams = props.views.map<PaletteItem>((v) => ({ id: `team:${v.team.id}`, kind: "team", label: v.team.name, hint: "squad team" }));
+    const ops = all.flatMap<PaletteItem>((m) => {
+      const t = cleanTitle(m.agent.title) || m.agent.id.slice(0, 8);
+      const del: PaletteItem = { id: `action:delete:${m.agent.id}`, kind: "action", label: `Delete Agent: ${t}`, hint: "permanent" };
+      const rel: PaletteItem = { id: `action:reload:${m.agent.id}`, kind: "action", label: `Reload Agent: ${t}`, hint: "" };
+      return m.agent.archivedAt ? [del] : [del, rel];
+    });
+    const stops = runningCwds(props.members.map((m) => m.agent)).map<PaletteItem>((c) => ({
+      id: `action:stopcwd:${c.cwd}`,
+      kind: "action",
+      label: `Stop Running Agents in ${c.cwd} (${c.count})`,
+      hint: "bulk stop workspace",
+    }));
     return [
       act("new", "New Agent"),
+      act("quickOpen", "Quick Open File…"),
+      act("findInFiles", "Find in Files…"),
       act("search", "Search All Transcripts…"),
-      act("shortcuts", "Keyboard Shortcuts (?)"),
+      act("shortcuts", "Keyboard Shortcuts"),
       act("settings", "Settings"),
       act("workspaces", "Workspaces"),
-      act("focus", "Toggle Focus Mode (Ctrl+.)"),
+      act("focus", "Toggle Focus Mode"),
       act("reopen", "Reopen Closed Tab"),
+      ...stops,
       ...teams,
       ...agents,
+      ...ops,
+      // Last so an empty query still lists agents first; typing "settings" or a setting name finds them.
+      ...settingsPaletteItems().map<PaletteItem>((s) => ({ id: `action:${s.id}`, kind: "action", label: s.label, hint: "settings" })),
     ];
-  }, [all, props.views]);
+  }, [all, props.members, props.views, bindings]);
 
   const shown = useMemo(() => filterPalette(items, q).slice(0, 60), [items, q]);
 
@@ -411,22 +572,56 @@ export function CommandPaletteHost(props: {
         focusComposer(m.agent.id);
       }
     } else if (it.kind === "team") props.onTeam(id);
-    else if (id === "new") props.actions.newAgent();
+    else if (id.startsWith("delete:") || id.startsWith("reload:")) {
+      const target = all.find((x) => x.agent.id === id.slice(id.indexOf(":") + 1));
+      if (!target) return;
+      if (id.startsWith("delete:")) requestAgentOp({ kind: "delete", agent: target.agent });
+      else void reloadAgent(target.agent.id).catch((e) => alert(`Could not reload: ${e}`));
+    } else if (id.startsWith("stopcwd:")) {
+      const cwd = id.slice("stopcwd:".length);
+      const agents = bulkStopTargets(props.members.map((m) => ({ agent: m.agent, teamId: m.team.id })), { cwd });
+      if (agents.length) requestAgentOp({ kind: "stop", title: `Stop all running agents in ${cwd}?`, agents });
+    } else runAction(id);
+  };
+
+  /** Palette actions by id; the keymap runs the same ones. */
+  const runAction = (id: string) => {
+    setMode(null);
+    if (id === "new") props.actions.newAgent();
     else if (id === "search") setMode("search");
     else if (id === "shortcuts") setMode("shortcuts");
     else if (id === "settings") props.actions.settings();
+    else if (id.startsWith("setting:")) props.actions.settings(id.slice("setting:".length));
     else if (id === "workspaces") props.actions.workspaces();
     else if (id === "focus") props.actions.toggleFocus();
     else if (id === "reopen") {
       const last = closed.current.pop();
       if (last) openAgent(last);
-    }
+    } else if (id === "quickOpen" || id === "findInFiles") openMode(id);
+  };
+
+  const runCommandRef = useRef<(id: string, target: HTMLElement | null) => void>(() => {});
+  runCommandRef.current = (id, target) => {
+    if (id === "palette") {
+      setQ("");
+      setSel(0);
+      if (modeRef.current === "palette") dismissRef.current();
+      else setMode("palette");
+    } else if (id === "quickOpen" || id === "findInFiles") {
+      if (modeRef.current === id) dismissRef.current();
+      else openMode(id);
+    } else if (id === "needsYou") props.actions.needsYou?.();
+    else if (KEY_COMMANDS.some((c) => c.id === id && (c.scope ?? "global") === "global")) runAction(id);
+    else window.dispatchEvent(new CustomEvent(KEY_COMMAND_EVENT, { detail: { id, target } }));
   };
 
   return (
     <>
       <ContextMenuHost />
-      {mode === "shortcuts" && <ShortcutSheet onClose={dismiss} />}
+      <AgentOpConfirmHost />
+      {mode === "shortcuts" && <ShortcutSheet onClose={dismiss} bindings={bindings} onEdit={() => runAction("setting:keybindings")} />}
+      {mode === "quickOpen" && <QuickOpen agent={navAgent} onClose={dismiss} />}
+      {mode === "findInFiles" && <FindInFiles agent={navAgent} onClose={dismiss} />}
       {mode === "search" && (
         <TranscriptSearch
           members={all}

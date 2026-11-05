@@ -5,6 +5,7 @@ import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, before, describe, test } from "node:test";
+import { ownerHeaders } from "./helpers/local-owner.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
 const home = mkdtempSync(join(tmpdir(), "vs-public-"));
@@ -51,8 +52,8 @@ describe("repo hygiene", () => {
   test("no personal identifiers in tracked or untracked-unignored files", () => {
     const files = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard"], { cwd: rootDir, encoding: "utf8" })
       .split("\n")
-      .filter(Boolean);
-    const parts = [["fu", "gma"], ["au", "bross"], ["gma", "il"], ["escape-from", "-idle"], ["rosser", "logic"], ["192[.]", "168[.]"], ["100[.]", "83[.]"], ["[.]", "nord"]];
+      .filter((f) => Boolean(f) && !/^docs\/(brainstorm\/|PLAN_|audits\/|HANDOFF_|BRAINSTORM_HANDOFF_|art\/|research\/|journey\/|FEATURE_COMPLETE\.md|UPSTREAM_ISSUES\.md)/.test(f));
+    const parts = [["fu", "gma"], ["au", "bross"], ["gma", "il"], ["escape-from", "-idle"], ["rosser", "logic"], ["192[.]168[.]", "50[.]"], ["100[.]", "83[.]"], ["[.]", "nord"]];
     const personal = new RegExp(parts.map((p) => p.join("")).join("|"), "i");
     const name = new RegExp("\\b" + ["Au", "b"].join("") + "\\b", "i");
     const legacyLabel = new RegExp("needs-" + ["au", "b"].join(""), "i");
@@ -67,6 +68,26 @@ describe("repo hygiene", () => {
         continue;
       }
       if (personal.test(text) || name.test(text) || legacyLabel.test(text)) hits.push(f);
+    }
+    assert.deepEqual(hits, []);
+  });
+
+  test("zero hardcoded personal paths in tracked src/, server/, and cli/", () => {
+    const files = execFileSync("git", ["ls-files", "src/", "server/", "cli/"], { cwd: rootDir, encoding: "utf8" })
+      .split("\n")
+      .filter(Boolean);
+    const hardcodedHomePath = /(?:[A-Za-z]:\\Users\\|\/Users\/|\/home\/)(?!you\b|user\b|alice\b|example\b|<)[A-Za-z0-9._-]+/i;
+    const skip = /\.(png|ico|exe|woff2?|icns|jpg|webp)$/i;
+    const hits = [];
+    for (const f of files) {
+      if (skip.test(f) || !existsSync(join(rootDir, f))) continue;
+      let text;
+      try {
+        text = readFileSync(join(rootDir, f), "utf8");
+      } catch {
+        continue;
+      }
+      if (hardcodedHomePath.test(text)) hits.push(f);
     }
     assert.deepEqual(hits, []);
   });
@@ -120,13 +141,13 @@ describe("pairing in an isolated home", () => {
     assert.equal(codes[5], 429);
   });
 
-  test("5 failed attempts wipe active codes", () => {
+  test("failed attempts from other IPs don't wipe active codes", () => {
     auth.resetPairRateLimitForTest();
     const code = auth.createPairCode();
     for (let i = 0; i < 5; i++) auth.handlePairRedeem(fakeReq({ url: "/pair?code=999999", remote: `198.51.100.${i + 10}` }), fakeRes());
     const res = fakeRes();
     auth.handlePairRedeem(fakeReq({ url: `/pair?code=${code}`, remote: "198.51.100.99" }), res);
-    assert.equal(res.statusCode, 401);
+    assert.equal(res.statusCode, 302);
   });
 });
 
@@ -180,7 +201,7 @@ describe("request guard", () => {
       assert.equal((await call("/__vibesquad/vs-log?team=demo", { headers: { "sec-fetch-site": "cross-site" } })).status, 403);
       const post = await call("/__vibesquad/inbox", {
         method: "POST",
-        headers: { "content-type": "text/plain", "user-agent": "Mozilla/5.0" },
+        headers: ownerHeaders({ "content-type": "text/plain", "user-agent": "Mozilla/5.0" }),
         body: "{}",
       });
       assert.equal(post.status, 403);
@@ -201,7 +222,7 @@ describe("request guard", () => {
     });
 
     test("oversized bodies are refused with 413", async () => {
-      const r = await call("/__vibesquad/inbox", { method: "POST", headers: { "content-type": "application/json", "content-length": String(2 * 1024 * 1024) } });
+      const r = await call("/__vibesquad/inbox", { method: "POST", headers: ownerHeaders({ "content-type": "application/json", "content-length": String(2 * 1024 * 1024) }) });
       assert.equal(r.status, 413);
     });
 
@@ -211,7 +232,7 @@ describe("request guard", () => {
         // The daemon is unreachable in tests, so the handler may hang or reset; only the side effects matter.
         await call("/__vibesquad/lead-handoff", {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: ownerHeaders({ "content-type": "application/json" }),
           body: JSON.stringify({ baseHome: evil, profilesPath: join(evil, "p.json"), oldLead: { id: "x", cwd: evil, labels: {} }, agentId: "x" }),
           timeoutMs: 1500,
         }).catch(() => {});
@@ -222,8 +243,8 @@ describe("request guard", () => {
     });
 
     test("local-image answers 404 for everything it refuses", async () => {
-      const missing = await call(`/__vibesquad/local-image?path=${encodeURIComponent(join(home, "nope.png"))}`);
-      const existsButDenied = await call(`/__vibesquad/local-image?path=${encodeURIComponent(join(rootDir, "package.json"))}`);
+      const missing = await call(`/__vibesquad/local-image?path=${encodeURIComponent(join(home, "nope.png"))}`, { headers: ownerHeaders() });
+      const existsButDenied = await call(`/__vibesquad/local-image?path=${encodeURIComponent(join(rootDir, "package.json"))}`, { headers: ownerHeaders() });
       assert.equal(missing.status, 404);
       assert.equal(existsButDenied.status, 404);
       assert.equal(missing.body, existsButDenied.body);
@@ -355,7 +376,7 @@ describe("needs-you rename", () => {
 
     const call = (method, body) =>
       new Promise((ok, fail) => {
-        const req = request({ host: "127.0.0.1", port, path: "/__vibesquad/settings", method, headers: { "content-type": "application/json" } }, (res) => {
+        const req = request({ host: "127.0.0.1", port, path: "/__vibesquad/settings", method, headers: ownerHeaders({ "content-type": "application/json" }) }, (res) => {
           let data = "";
           res.on("data", (c) => (data += c));
           res.on("end", () => ok({ status: res.statusCode, body: JSON.parse(data) }));

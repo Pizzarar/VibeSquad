@@ -59,30 +59,38 @@ function makeMockEnv() {
     }) + "\n",
     "utf8",
   );
-  return {
-    dir,
-    vsHome,
-    paseoHome,
-    agentsDir,
-    writeAgent(record) {
-      writeFileSync(join(agentsDir, `${record.id}.json`), JSON.stringify(record, null, 2), "utf8");
-    },
-    runVs(args, extraEnv = {}) {
-      return spawnSync(process.execPath, [CLI_PATH, ...args], {
-        cwd: REPO_ROOT,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          VIBESQUAD_HOME: vsHome,
-          PASEO_HOME: paseoHome,
-          ...extraEnv,
-        },
-      });
-    },
-    cleanup() {
-      rmSync(dir, { recursive: true, force: true });
-    },
-  };
+    return {
+      dir,
+      vsHome,
+      paseoHome,
+      agentsDir,
+      baseEnv() {
+        return Object.fromEntries(
+          Object.entries(process.env).filter(([k]) => !/^(PASEO_(AGENT_|CLI)|VS_)/.test(k)),
+        );
+      },
+      writeAgent(record) {
+        writeFileSync(join(agentsDir, `${record.id}.json`), JSON.stringify(record, null, 2), "utf8");
+      },
+      runVs(args, extraEnv = {}) {
+        // Hermetic: drop the caller's agent identity and live paseo CLI so a run inside an agent
+        // session (PASEO_AGENT_ID, PASEO_CLI) cannot change what vs resolves or reach the daemon.
+        const base = this.baseEnv();
+        return spawnSync(process.execPath, [CLI_PATH, ...args], {
+          cwd: REPO_ROOT,
+          encoding: "utf8",
+          env: {
+            ...base,
+            VIBESQUAD_HOME: vsHome,
+            PASEO_HOME: paseoHome,
+            ...extraEnv,
+          },
+        });
+      },
+      cleanup() {
+        rmSync(dir, { recursive: true, force: true });
+      },
+    };
 }
 
 test("Done-when #1: vs who lead returns only the live lead (ignoring former-lead and (old)), and prints ★ VIBESQUAD ord1 in the live repo", () => {
@@ -137,7 +145,7 @@ test("Done-when #1: vs who lead returns only the live lead (ignoring former-lead
     if (liveRes.status === 0) {
       const liveLines = liveRes.stdout.trim().split(/\r?\n/);
       assert.equal(liveLines.length, 1);
-      assert.match(liveLines[0], /^★ VIBESQUAD ord\d+ · [0-9a-f-]+ · \w+ · \d+k$/);
+      assert.match(liveLines[0], /^★ (?:VIBESQUAD ord|[A-Za-z]{2,5})\d+(?: · .+?)? · [0-9a-f-]+ · \w+ · \d+k$/);
     }
   } finally {
     env.cleanup();
@@ -362,7 +370,7 @@ test("Audit §3B & §3C & §3D: inspectGitSpawnState injected at agent.create, v
   }
 });
 
-test("misroute-old metric: turn_ended on a former-lead or (old) agent logs a metric entry with misroute-old", async () => {
+test("misroute-old metric: turn_ended logs relay-old and turn_started agent-message on a former-lead logs misroute-old", async () => {
   const env = makeMockEnv();
   const prevHome = process.env.VIBESQUAD_HOME;
   process.env.VIBESQUAD_HOME = env.vsHome;
@@ -379,6 +387,18 @@ test("misroute-old metric: turn_ended on a former-lead or (old) agent logs a met
         ord: "0",
       },
     };
+    const liveLead = {
+      id: "live-lead-43",
+      title: "★ VIBESQUAD ord1",
+      cwd: REPO_ROOT,
+      status: "idle",
+      labels: {
+        team: "vibesquad",
+        lane: "vibesquad",
+        role: "lead",
+        ord: "1",
+      },
+    };
     const handlers = new Map();
     const server = {
       before: () => () => {},
@@ -390,11 +410,25 @@ test("misroute-old metric: turn_ended on a former-lead or (old) agent logs a met
     const paseo = {
       agents: {
         ref: (id) => ({
-          refresh: async () => ({ agent: id === retiredLead.id ? retiredLead : null }),
+          refresh: async () => ({
+            agent: id === retiredLead.id ? retiredLead : id === liveLead.id ? liveLead : null,
+          }),
+          timeline: {
+            refetch: async () => ({
+              entries: [
+                {
+                  item: {
+                    type: "user_message",
+                    text: `<paseo-system version="1" kind="agent-message" source-agent-id="worker-9" message-id="msg-42">\nReport for lead.\n</paseo-system>`,
+                  },
+                },
+              ],
+            }),
+          },
           send: async () => {},
           archive: async () => {},
         }),
-        list: async () => ({ entries: [{ agent: retiredLead }] }),
+        list: async () => ({ entries: [{ agent: retiredLead }, { agent: liveLead }] }),
       },
     };
 
@@ -406,13 +440,30 @@ test("misroute-old metric: turn_ended on a former-lead or (old) agent logs a met
         { paseo },
       );
 
+      const turnStarted = handlers.get("agent.turn_started");
+      await turnStarted({ agent: retiredLead }, { paseo });
+
       const logPath = join(env.vsHome, "teams", "vibesquad", "log.jsonl");
+      const deadline = Date.now() + 1500;
+      while (Date.now() < deadline) {
+        if (existsSync(logPath)) {
+          const raw = readFileSync(logPath, "utf8");
+          if (raw.includes("relay-old:") && raw.includes("misroute-old:")) break;
+        }
+        await new Promise((r) => setTimeout(r, 20));
+      }
+
       const lines = readFileSync(logPath, "utf8")
         .trim()
         .split(/\r?\n/)
         .map((l) => JSON.parse(l));
+      const relayEntry = lines.find((e) => e.type === "metric" && e.text.startsWith("relay-old:"));
+      assert.ok(relayEntry, "Expected relay-old metric entry in team log on turn_ended");
+      assert.match(relayEntry.text, /relay-old: date=\d{4}-\d{2}-\d{2} count=1 target=old-lead-42/);
+      assert.deepEqual(relayEntry.refs, ["old-lead-42"]);
+
       const metricEntry = lines.find((e) => e.type === "metric" && e.text.startsWith("misroute-old:"));
-      assert.ok(metricEntry, "Expected misroute-old metric entry in team log");
+      assert.ok(metricEntry, "Expected misroute-old metric entry in team log on turn_started");
       assert.match(metricEntry.text, /misroute-old: date=\d{4}-\d{2}-\d{2} count=1 target=old-lead-42/);
       assert.deepEqual(metricEntry.refs, ["old-lead-42"]);
     } finally {
@@ -538,12 +589,14 @@ test("Fix 1a: vs who lead and vs log --since-me work when cwd is outside the Vib
     ]);
     assert.equal(logRes.status, 0);
 
+    const baseEnv = env.baseEnv();
+
     // Case A: cwd is os.homedir() (outside any repo) with PASEO_AGENT_ID=site-worker-1
     const homeWho = spawnSync(process.execPath, [CLI_PATH, "who", "lead"], {
       cwd: homedir(),
       encoding: "utf8",
       env: {
-        ...process.env,
+        ...baseEnv,
         VIBESQUAD_HOME: env.vsHome,
         PASEO_HOME: env.paseoHome,
         PASEO_AGENT_ID: "site-worker-1",
@@ -556,7 +609,7 @@ test("Fix 1a: vs who lead and vs log --since-me work when cwd is outside the Vib
       cwd: homedir(),
       encoding: "utf8",
       env: {
-        ...process.env,
+        ...baseEnv,
         VIBESQUAD_HOME: env.vsHome,
         PASEO_HOME: env.paseoHome,
         PASEO_AGENT_ID: "site-worker-1",
@@ -578,7 +631,7 @@ test("Fix 1a: vs who lead and vs log --since-me work when cwd is outside the Vib
       cwd: wtDir,
       encoding: "utf8",
       env: {
-        ...process.env,
+        ...baseEnv,
         VIBESQUAD_HOME: env.vsHome,
         PASEO_HOME: env.paseoHome,
         PASEO_AGENT_ID: "",
@@ -625,7 +678,7 @@ test("Fix 1b: vs install-shim --bin-dir <tempDir> creates vs, vs.cmd, vs.ps1 + r
       encoding: "utf8",
       shell: isWin,
       env: {
-        ...process.env,
+        ...env.baseEnv(),
         VIBESQUAD_HOME: env.vsHome,
         PASEO_HOME: env.paseoHome,
       },

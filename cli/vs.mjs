@@ -41,12 +41,29 @@ import {
   findLaneInRegistry,
   findTeamInRegistry,
   isDigestAgent,
+  freezeLaneCodes,
   isRetiredRole,
   normalizeRoleLabel,
   ordStringOf,
   resolveAgentIdentity,
 } from "../server/identity.mjs";
 import { loadProfiles } from "../server/profiles.mjs";
+import { staleWarning } from "../server/stale-runtime.mjs";
+import { localTokenPath, requestLocalLoginUrl } from "../server/local-token.mjs";
+import {
+  readLaneSpec,
+  writeLaneSpec,
+  readLaneTasks,
+  upsertLaneTask,
+  renderLaneArtifactBlock,
+} from "../server/lane-spec.mjs";
+import {
+  createManagedWorktree,
+  sweepMergedWorktrees,
+  cleanupProjectsFolder,
+  resolveManagedWorktreeRoot,
+} from "../server/team-worktrees.mjs";
+import { appendLesson, readLessons } from "../server/lessons.mjs";
 import {
   LEGACY_NEEDS_LABEL,
   LEGACY_NEEDS_REASON,
@@ -82,6 +99,9 @@ const GH_TIMEOUT_MS = 2000;
 
 const BASE_DIR = path.resolve(process.env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad"));
 const PASEO_HOME = process.env.PASEO_HOME || path.join(os.homedir(), ".paseo");
+// Root dir the lane-spec artifacts resolve against. VIBESQUAD_ROOT lets tests (and the installed
+// runtime) point the durable docs/lanes/<lane>/ tree at a specific checkout.
+const LANE_SPEC_ROOT = path.resolve(process.env.VIBESQUAD_ROOT || path.resolve(import.meta.dirname, ".."));
 
 // ---------------------------------------------------------------------------
 // teams.json
@@ -122,7 +142,8 @@ function resolveTeam(value) {
 
 function findLane(value) {
   if (!value) return null;
-  const needle = String(value).toLowerCase();
+  const stripped = String(value).trim().replace(/^@+/, "");
+  const needle = stripped.toLowerCase();
   for (const team of TEAM_DEFS) {
     for (const lane of team.lanes ?? []) {
       if (String(lane.id).toLowerCase() === needle || (lane.aliases ?? []).some((a) => String(a).toLowerCase() === needle)) {
@@ -130,7 +151,8 @@ function findLane(value) {
       }
     }
   }
-  return null;
+  // `@<code>` / `<code>` handles (e.g. @bug -> bug-chaser) and name matches.
+  return findLaneInRegistry(value, TEAM_DEFS);
 }
 
 function matchTeamBySegments(targetPath) {
@@ -289,7 +311,8 @@ function runPaseo(args, timeoutMs = DAEMON_TIMEOUT_MS) {
   const idArg = args[0] === "inspect" ? args[1] : args[0] === "agent" ? args[2] : undefined;
   if ((args[0] === "inspect" || args[0] === "agent") && !AGENT_ID_RE.test(String(idArg ?? ""))) return null;
   const cli = process.env.PASEO_CLI || "paseo";
-  const result = run(cli, args, timeoutMs);
+  const effectiveTimeout = hasCustomMockCli() ? Math.max(timeoutMs, 5000) : timeoutMs;
+  const result = run(cli, args, effectiveTimeout);
   if (result.error || result.status !== 0) return null;
   return result.stdout ?? null;
 }
@@ -413,6 +436,20 @@ function parseArgs(argv) {
     "note",
     "binDir",
     "brief",
+    "timeout",
+    "file",
+    "goal",
+    "files",
+    "doneCheck",
+    "branch",
+    "commit",
+    "projectsDir",
+    "category",
+    "cause",
+    "rule",
+    "query",
+    "title",
+    "note",
   ]);
   const booleans = new Set([
     "sinceMe",
@@ -426,6 +463,9 @@ function parseArgs(argv) {
     "notes",
     "dryRun",
     "force",
+    "print",
+    "stdin",
+    "apply",
   ]);
 
   for (let i = 0; i < argv.length; i++) {
@@ -635,7 +675,15 @@ Usage:
   vs inbox list [--lane <lane>]
   vs inbox triage --merge <targetId> <sourceId...> | --bounce <cardId> --lane <newLane>
   vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force]
+  vs pin merge <from-lane> <into-lane> [--note "<shared contract>"] [--team <squad>]
+  vs spec [show] [--lane <lane>] [--team <team>]
+  vs spec write "<markdown>" | --stdin | --file <path> [--lane <lane>] [--team <team>]
+  vs task list [--lane <lane>] [--json]
+  vs task set <unit-id> [--goal <g>] [--files <f1,f2>] [--done-check <cmd>] [--status <todo|running|done|blocked>] [--branch <b>] [--commit <sha>]
+  vs cap [list | add <provider> | clear <provider>]
+  vs wait <agent> [--timeout <seconds>]   block until idle (exit 0), error or blocked (1), timeout (2); no limit by default
   vs install-shim [--bin-dir <dir>]
+  vs open [--print]   open the local web UI with owner access (sets the vs_local cookie); --print shows a one-time URL (60 s)
 
 Types: ${LOG_TYPES.join(", ")} (text 1..${MAX_TEXT} chars)
 
@@ -1167,6 +1215,8 @@ async function commandWho(flags) {
 
   const { agents } = collectAgents();
   const rawMatched = [];
+  // Removed teams (Remove team in the UI) are hidden; a leftover agent labelled with one is not listed.
+  const removedLanes = new Set((identity.team.lanes ?? []).filter((l) => l.state === "removed").map((l) => String(l.id).toLowerCase()));
 
   for (const a of agents) {
     const status = String(a.status ?? "unknown").trim();
@@ -1179,6 +1229,7 @@ async function commandWho(flags) {
     const { teamId, lane } = resolveAgentTeamAndLane(a);
     if (teamId.toLowerCase() !== wantTeamId) continue;
     if (!squadWide && lane.toLowerCase() !== wantLane) continue;
+    if (removedLanes.has(lane.toLowerCase())) continue;
 
     const role = effectiveAgentRole(a);
     if (target === "lead" && role !== "lead") continue;
@@ -1212,7 +1263,11 @@ async function commandWho(flags) {
     return { ...entry, line: formatWhoLine(entry) };
   });
 
-  if (target === "lead") {
+  // Two live main Buddies for one (lane, topic) is a conflict too (docs/PLAN_BUGS_BATCH2.md block 0).
+  // Topic Buddies are separate seats, so only same-topic pairs count.
+  const bsTopics = rawMatched.map((m) => String(m.agent.labels?.topic ?? m.agent.labels?.["vs.inbox-card-id"] ?? "").trim().toLowerCase());
+  const bsConflict = target === "brainstorm" && bsTopics.some((t, i) => bsTopics.indexOf(t) !== i);
+  if (target === "lead" || bsConflict) {
     const status = matched.length === 1 ? "ok" : matched.length === 0 ? "none" : "conflict";
     const exitCode = matched.length === 1 ? 0 : matched.length === 0 ? 1 : 2;
     if (flags.json) {
@@ -1299,11 +1354,6 @@ async function commandWhoami(flags) {
     },
   );
 
-  // A bare team label (no lane) used to fall back to the squad's first lane; show it as unassigned instead.
-  if (resolved.source === "team-fallback" && !(laneOverride || labels.lane || labels.lead)) {
-    resolved.laneId = "";
-  }
-
   let currentLead = null;
   if (!resolved.isOrphan && resolved.laneId && resolved.teamId) {
     const wantTeamId = resolved.teamId.toLowerCase();
@@ -1339,18 +1389,20 @@ async function commandWhoami(flags) {
     }
   }
 
-  const exitCode = resolved.isOrphan ? 1 : 0;
+  // Lane-less is orphan: JSON says lane: null + orphan: true, never lane: "".
+  const orphan = Boolean(resolved.isOrphan || !resolved.laneId);
+  const exitCode = orphan ? 1 : 0;
   if (flags.json) {
     const out = {
       agentId: agentId || null,
-      lane: resolved.isOrphan ? null : resolved.laneId,
+      lane: orphan ? null : resolved.laneId,
       squad: resolved.teamId,
       squadName: resolved.teamName,
       team: resolved.teamId,
       teamName: resolved.teamName,
       role: resolved.role,
       ord: resolved.ord,
-      orphan: Boolean(resolved.isOrphan),
+      orphan,
       source: resolved.source,
       currentLead,
     };
@@ -1436,11 +1488,13 @@ function commandMigrate(flags) {
   let changedCount = 0;
   let unchangedCount = 0;
   let orphanCount = 0;
+  let archivedOrphanCount = 0;
 
   for (const [id, item] of recordsById.entries()) {
     const rec = item.record;
     const currentLabels = { ...(rec.labels ?? {}) };
-    const status = rec.archivedAt || rec.archived ? "archived" : String(rec.lastStatus ?? rec.status ?? "unknown");
+    const archived = Boolean(rec.archivedAt || rec.archived);
+    const status = archived ? "archived" : String(rec.lastStatus ?? rec.status ?? "unknown");
     const title = String(rec.title ?? rec.name ?? id).trim();
 
     const resolved = resolveAgentIdentity(rec, {
@@ -1451,7 +1505,9 @@ function commandMigrate(flags) {
     });
 
     const proposedLabels = { ...currentLabels };
-    proposedLabels.role = resolved.role;
+    // Digests are spawned with role=worker (digestFor/profile mark them): don't flip that label to role=digest.
+    proposedLabels.role =
+      resolved.role === "digest" && currentLabels.role !== "digest" ? "worker" : resolved.role;
     if (resolved.role === "lead" || resolved.role === "former-lead") {
       proposedLabels.ord = resolved.ord || "1";
     }
@@ -1471,9 +1527,11 @@ function commandMigrate(flags) {
     const isOrphan = Boolean(resolved.isOrphan);
     if (changed) changedCount++;
     else unchangedCount++;
-    if (isOrphan) orphanCount++;
+    // Archived agents are history, not orphans to fix: count them apart so `orphans` lists only live ones.
+    if (isOrphan && archived) archivedOrphanCount++;
+    else if (isOrphan) orphanCount++;
 
-    const tag = isOrphan ? "ORPHAN" : changed ? "CHANGED" : "OK";
+    const tag = isOrphan ? (archived ? "ARCHIVED-ORPHAN" : "ORPHAN") : changed ? "CHANGED" : "OK";
     entries.push({
       id,
       file: item.file,
@@ -1545,6 +1603,7 @@ function commandMigrate(flags) {
     changed: changedCount,
     unchanged: unchangedCount,
     orphans: orphanCount,
+    archivedOrphans: archivedOrphanCount,
     entries: entries.map(({ file: _file, ...rest }) => rest),
   };
 
@@ -1557,7 +1616,7 @@ function commandMigrate(flags) {
     process.stdout.write(`${entry.line}\n`);
   }
   process.stdout.write(
-    `total=${summary.total} changed=${summary.changed} unchanged=${summary.unchanged} orphans=${summary.orphans}${backupDir ? ` backup=${backupDir}` : ""}\n`,
+    `total=${summary.total} changed=${summary.changed} unchanged=${summary.unchanged} orphans=${summary.orphans} archived-orphans=${summary.archivedOrphans}${backupDir ? ` backup=${backupDir}` : ""}\n`,
   );
   return 0;
 }
@@ -1633,6 +1692,7 @@ export function installVsShim({ binDirs, targetScript, baseHome } = {}) {
     "server/brainstorm.mjs",
     "server/brief-path.mjs",
     "server/whos-here.mjs",
+    "server/stale-runtime.mjs",
     "server/pin-ideas.mjs",
     "docs/profiles/DEFAULT_PACK.md",
   ];
@@ -1763,9 +1823,131 @@ export function installVsShim({ binDirs, targetScript, baseHome } = {}) {
 // teams.json and the brief; never spawns an agent (the first click on the pin starts its Brainstorm).
 // ---------------------------------------------------------------------------
 
+function extractBriefBullets(markdown, heading) {
+  const lines = String(markdown ?? "").replace(/\r\n/g, "\n").split("\n");
+  const headIdx = lines.findIndex((l) => new RegExp(`^##\\s+${heading}\\b`, "i").test(l.trim()));
+  if (headIdx < 0) return [];
+  const out = [];
+  for (let i = headIdx + 1; i < lines.length; i++) {
+    if (/^##\s+/.test(lines[i].trim())) break;
+    const trimmed = lines[i].trim();
+    if (!trimmed) continue;
+    if (/^[-*]\s+\((?:none|what makes|VibeSquad)/i.test(trimmed)) continue;
+    out.push(lines[i]);
+  }
+  return out;
+}
+
+function appendBulletsToSection(markdown, heading, bullets) {
+  if (!bullets.length) return markdown;
+  const lines = String(markdown ?? "").replace(/\r\n/g, "\n").split("\n");
+  const headIdx = lines.findIndex((l) => new RegExp(`^##\\s+${heading}\\b`, "i").test(l.trim()));
+  if (headIdx < 0) {
+    return [...lines, "", `## ${heading}`, ...bullets].join("\n");
+  }
+  let endIdx = headIdx + 1;
+  while (endIdx < lines.length && !/^##\s+/.test(lines[endIdx].trim())) endIdx++;
+  // Remove placeholder "(none recorded yet)" if present in this section
+  for (let i = endIdx - 1; i > headIdx; i--) {
+    if (/^[-*]\s+\(none recorded yet\)/i.test(lines[i].trim())) {
+      lines.splice(i, 1);
+      endIdx--;
+    }
+  }
+  while (endIdx > headIdx + 1 && !lines[endIdx - 1].trim()) endIdx--;
+  lines.splice(endIdx, 0, ...bullets);
+  return lines.join("\n");
+}
+
+function matchLaneRef(lanes, rawRef) {
+  const clean = String(rawRef ?? "").trim().replace(/^@+/, "").toLowerCase();
+  if (!clean) return null;
+  return (
+    lanes.find((l) => String(l.id).toLowerCase() === clean) ??
+    lanes.find((l) => String(l.name ?? "").toLowerCase() === clean) ??
+    lanes.find((l) => String(l.code ?? "").toLowerCase() === clean) ??
+    lanes.find((l) => (l.aliases ?? []).some((a) => String(a).toLowerCase() === clean)) ??
+    null
+  );
+}
+
+function commandPinMerge(flags) {
+  const fromRaw = String(flags._[0] ?? "").trim();
+  const intoRaw = String(flags._[1] ?? "").trim();
+  if (!fromRaw || !intoRaw) {
+    throw new Error('usage: vs pin merge <from-lane> <into-lane> [--note "<shared contract>"] [--team <squad>]');
+  }
+  const note = String(flags.note ?? flags.brief ?? "").trim();
+  const identity = resolveIdentity({ ...flags, lane: undefined });
+  const squadDef = findTeamDef(flags.team ? String(flags.team) : identity.team.id) ?? findTeamDef(identity.team.name);
+  if (!squadDef) throw new Error(`unknown squad "${flags.team ?? identity.team.name}". Pass --team <squad>.`);
+
+  let file = resolveTeamsFilePath();
+  if (path.basename(file) === "teams.example.json") file = path.join(BASE_DIR, "teams.json");
+  const { value: cur } = readJsonFileWithBom(file, { fallback: null, label: "teams.json" });
+  const doc = Array.isArray(cur?.teams) ? cur : { ...TEAMS_FILE };
+  const target = doc.teams.find((t) => t.id === squadDef.id);
+  if (!target) throw new Error(`squad "${squadDef.id}" is not in ${file}`);
+
+  const lanes = target.lanes ?? [];
+  const fromLane = matchLaneRef(lanes, fromRaw);
+  const intoLane = matchLaneRef(lanes, intoRaw);
+  if (!fromLane) throw new Error(`unknown source lane "${fromRaw}" in ${squadDef.name}`);
+  if (!intoLane) throw new Error(`unknown target lane "${intoRaw}" in ${squadDef.name}`);
+  if (fromLane.id === intoLane.id) throw new Error("source and target lanes must be different");
+
+  const fromBrief = readBrainstormSummary(fromLane.id).content;
+  const intoSummary = readBrainstormSummary(intoLane.id);
+  let merged = intoSummary.content.includes("## Open")
+    ? intoSummary.content
+    : newPinBrief(intoLane.id, intoLane.name || intoLane.id, "");
+
+  const tagBullet = (line) =>
+    /^\s*[-*]\s+/.test(line) ? line.replace(/^(\s*[-*]\s+)/, `$1[from ${fromLane.name || fromLane.id}] `) : line;
+
+  const decidedBullets = [
+    ...(note ? [`- [Merged ${fromLane.name || fromLane.id} -> ${intoLane.name || intoLane.id}] ${note}`] : []),
+    ...extractBriefBullets(fromBrief, "Decided").map(tagBullet),
+  ];
+  const openBullets = extractBriefBullets(fromBrief, "Open").map(tagBullet);
+
+  merged = appendBulletsToSection(merged, "Decided", decidedBullets);
+  merged = appendBulletsToSection(merged, "Open", openBullets);
+  const written = writeBrainstormSummary(intoLane.id, merged);
+
+  const nowIso = new Date().toISOString();
+  target.lanes = lanes.map((l) => (l.id === fromLane.id ? { ...l, state: "done", doneAt: nowIso } : l));
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tmp, JSON.stringify(doc, null, 2) + "\n", "utf8");
+  fs.renameSync(tmp, file);
+
+  const logEntry = {
+    ts: nowIso,
+    agent: identity.agent || "RiffBot",
+    lane: intoLane.id,
+    type: "decision",
+    text: `Merged ${fromLane.name || fromLane.id} (${fromLane.id}) -> ${intoLane.name || intoLane.id} (${intoLane.id})${note ? `: ${note}` : ""}`.slice(0, MAX_TEXT),
+    refs: [fromLane.id, intoLane.id, written.path],
+  };
+  appendLog({ ...identity, team: squadDef, lane: intoLane.id, teamDir: path.join(BASE_DIR, "teams", squadDef.id) }, logEntry);
+
+  if (flags.json) {
+    process.stdout.write(
+      JSON.stringify({ ok: true, squad: squadDef.id, from: fromLane.id, into: intoLane.id, brief: written.path }, null, 2) + "\n",
+    );
+    return 0;
+  }
+  process.stdout.write(
+    `Merged ${fromLane.name} (${fromLane.id}) into ${intoLane.name} (${intoLane.id}). Updated ${written.path} and marked ${fromLane.id} done.\n`,
+  );
+  return 0;
+}
+
 function commandPin(flags) {
   const sub = String(flags._.shift() ?? "").toLowerCase();
-  if (sub !== "new") throw new Error('usage: vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force]');
+  if (sub === "merge") return commandPinMerge(flags);
+  if (sub !== "new") throw new Error('usage: vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force] | vs pin merge <from-lane> <into-lane> [--note "<contract>"]');
   const name = flags._.join(" ").trim();
   if (!name) throw new Error('pin new needs a name: vs pin new "<name>" --brief "<idea>"');
   const brief = String(flags.brief ?? "").trim() || name;
@@ -1775,8 +1957,8 @@ function commandPin(flags) {
   if (!squadDef) throw new Error(`unknown squad "${flags.team ?? identity.team.name}". Pass --team <squad>.`);
   const lanes = squadDef.lanes ?? [];
 
-  // Done teams never count as a match; --force skips the refusal entirely (ids still dedupe below).
-  const live = lanes.filter((l) => l.state !== "done");
+  // Done and removed teams never count as a match; --force skips the refusal entirely (ids still dedupe below).
+  const live = lanes.filter((l) => l.state !== "done" && l.state !== "removed");
   const same = live.find((l) => String(l.name).toLowerCase() === name.toLowerCase() || l.id === slugLaneId(name));
   const hit = flags.force ? null : same ? { lane: same } : bestOverlap(`${name}
 ${brief}`, live);
@@ -1802,7 +1984,8 @@ ${brief}`, live);
   const doc = Array.isArray(cur?.teams) ? cur : { ...TEAMS_FILE };
   const target = doc.teams.find((t) => t.id === squadDef.id);
   if (!target) throw new Error(`squad "${squadDef.id}" is not in ${file}`);
-  target.lanes = [...(target.lanes ?? []), { id, name, state: "pinned" }];
+  // Freeze: persist generated codes on every lane of the Squad that lacks one, plus the new lane's.
+  target.lanes = freezeLaneCodes([...freezeLaneCodes(target.lanes ?? []), { id, name, state: "pinned" }]);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
   fs.writeFileSync(tmp, JSON.stringify(doc, null, 2) + "\n", "utf8");
@@ -1816,6 +1999,39 @@ ${brief}`, live);
   return 0;
 }
 
+/** Maps a waitForFinish result to the CLI exit code and a one-line summary. */
+export function summarizeWait(agentId, result) {
+  const status = result?.status ?? "error";
+  const code = status === "idle" ? 0 : status === "timeout" ? 2 : 1;
+  const extra = status === "error" && result?.error ? ` (${result.error})` : "";
+  return { code, line: `${agentId}: ${status}${extra}` };
+}
+
+/** vs wait <agent> [--timeout s]: waits on the daemon (waitForFinish). Injectable client for tests. */
+export async function runWait(client, agentId, timeoutSec) {
+  const timeoutMs = timeoutSec === undefined ? 0 : Math.round(timeoutSec * 1000);
+  return summarizeWait(agentId, await client.waitForFinish(agentId, timeoutMs));
+}
+
+async function commandWait(flags) {
+  const agentId = flags._[0] ?? "";
+  if (!agentId) throw new Error("usage: vs wait <agent> [--timeout <seconds>]");
+  let timeoutSec;
+  if (flags.timeout !== undefined) {
+    timeoutSec = Number(flags.timeout);
+    if (!Number.isFinite(timeoutSec) || timeoutSec <= 0) throw new Error("--timeout must be a positive number of seconds");
+  }
+  const client = createDaemonClient();
+  try {
+    await client.connect();
+    const { code, line } = await runWait(client, agentId, timeoutSec);
+    process.stdout.write(line + "\n");
+    return code;
+  } finally {
+    await Promise.resolve(client.close?.()).catch(() => {});
+  }
+}
+
 function commandInstallShim(flags) {
   const binDirs = flags.binDir ? [path.resolve(String(flags.binDir))] : undefined;
   const res = installVsShim({ binDirs, baseHome: BASE_DIR });
@@ -1825,6 +2041,238 @@ function commandInstallShim(flags) {
   }
   for (const f of res.files) {
     process.stdout.write(`${f}\n`);
+  }
+  return 0;
+}
+
+// The launcher-only bootstrap: the server hands out a single-use nonce URL (the master token never goes on a
+// command line); /__vibesquad/local-login checks it, sets the vs_local cookie and redirects to /.
+async function commandOpen(flags) {
+  const url = await requestLocalLoginUrl({ file: localTokenPath(BASE_DIR) });
+  if (flags.print) {
+    process.stdout.write(url + "\n");
+    return 0;
+  }
+  const [cmd, args] =
+    process.platform === "win32" ? ["cmd.exe", ["/c", "start", "", url]] : [process.platform === "darwin" ? "open" : "xdg-open", [url]];
+  const r = spawnSync(cmd, args, { stdio: "ignore", windowsHide: true });
+  if (r.error || r.status !== 0) throw new Error(`could not open a browser (${r.error?.message ?? `exit ${r.status}`}); run vs open --print and paste the URL`);
+  process.stdout.write("Opened VibeSquad with owner access.\n");
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
+// vs spec / vs task / vs cap — durable lane artifacts (docs/lanes/<lane>/)
+// ---------------------------------------------------------------------------
+
+function specLine(unit) {
+  const files = Array.isArray(unit.files) ? unit.files.map(String).join(", ") : "";
+  return `- ${unit.id} [${unit.status}] goal="${unit.goal ?? ""}" files=[${files}] doneCheck="${unit.doneCheck ?? ""}"`;
+}
+
+function commandSpec(flags) {
+  const identity = resolveIdentity(flags);
+  const rootDir = LANE_SPEC_ROOT;
+  const sub = String(flags._[0] ?? "").toLowerCase();
+
+  if (sub === "" || sub === "show" || sub === "read") {
+    const spec = readLaneSpec(identity.team.id, identity.lane, rootDir);
+    const content = spec.exists ? spec.content : "(no lane spec yet)";
+    process.stdout.write(content.endsWith("\n") ? content : content + "\n");
+    return 0;
+  }
+
+  if (sub === "write") {
+    let content = "";
+    if (flags.stdin) {
+      content = fs.readFileSync(0, "utf8");
+    } else if (flags.file) {
+      content = fs.readFileSync(path.resolve(String(flags.file)), "utf8");
+    } else {
+      content = flags._.slice(1).join(" ").trim();
+      if (!content) {
+        throw new Error('spec write needs markdown: vs spec write "<markdown>" (or --stdin / --file <path>)');
+      }
+    }
+    const written = writeLaneSpec(identity.team.id, identity.lane, content, rootDir);
+    process.stdout.write(written.fullPath + "\n");
+    return 0;
+  }
+
+  throw new Error(`unknown spec subcommand "${sub}". Use: vs spec show | write`);
+}
+
+function commandTask(flags) {
+  const identity = resolveIdentity(flags);
+  const rootDir = LANE_SPEC_ROOT;
+  const sub = String(flags._[0] ?? "list").toLowerCase();
+
+  if (sub === "list" || sub === "ls") {
+    const board = readLaneTasks(identity.team.id, identity.lane, rootDir);
+    if (flags.json) {
+      process.stdout.write(JSON.stringify(board, null, 2) + "\n");
+      return 0;
+    }
+    if (!board.units.length) {
+      process.stdout.write("(no tasks)\n");
+      return 0;
+    }
+    for (const unit of board.units) process.stdout.write(specLine(unit) + "\n");
+    return 0;
+  }
+
+  if (sub === "set") {
+    const id = String(flags._[1] ?? "").trim();
+    if (!id) throw new Error("task set needs a unit id: vs task set <unit-id> [--goal <g>] [--files <f1,f2>] [--done-check <cmd>] [--status <todo|running|done|blocked>] [--branch <b>] [--commit <sha>]");
+    const status = flags.status !== undefined ? String(flags.status) : undefined;
+    if (status && !["todo", "running", "done", "blocked"].includes(status)) {
+      throw new Error(`--status must be todo|running|done|blocked (got "${status}")`);
+    }
+    const patch = { id };
+    if (flags.goal !== undefined) patch.goal = String(flags.goal);
+    if (flags.doneCheck !== undefined) patch.doneCheck = String(flags.doneCheck);
+    if (flags.files !== undefined) patch.files = String(flags.files).split(",").map((s) => s.trim()).filter(Boolean);
+    if (status !== undefined) patch.status = status;
+    if (flags.branch !== undefined) patch.branch = String(flags.branch);
+    if (flags.commit !== undefined) patch.commit = String(flags.commit);
+
+    const res = upsertLaneTask(identity.team.id, identity.lane, patch, rootDir);
+    if (flags.json) {
+      process.stdout.write(JSON.stringify(res.unit, null, 2) + "\n");
+      return 0;
+    }
+    process.stdout.write(specLine(res.unit) + "\n");
+    return 0;
+  }
+
+  throw new Error(`unknown task subcommand "${sub}". Use: vs task list | set`);
+}
+
+function cappedProvidersFile() {
+  return path.join(BASE_DIR, "capped-providers.json");
+}
+
+function readCappedProviders() {
+  const { value } = readJsonFileWithBom(cappedProvidersFile(), { fallback: null, label: "capped-providers.json" });
+  if (value && typeof value === "object" && value.capped && typeof value.capped === "object" && !Array.isArray(value.capped)) {
+    return value;
+  }
+  return { capped: {} };
+}
+
+function writeCappedProviders(doc) {
+  fs.mkdirSync(BASE_DIR, { recursive: true });
+  fs.writeFileSync(cappedProvidersFile(), JSON.stringify(doc, null, 2) + "\n", "utf8");
+}
+
+function commandCap(flags) {
+  const sub = String(flags._[0] ?? "list").toLowerCase();
+
+  if (sub === "list" || sub === "ls") {
+    const doc = readCappedProviders();
+    if (flags.json) {
+      process.stdout.write(JSON.stringify(doc, null, 2) + "\n");
+      return 0;
+    }
+    const entries = Object.entries(doc.capped);
+    if (!entries.length) {
+      process.stdout.write("(no capped providers)\n");
+      return 0;
+    }
+    for (const [provider, info] of entries) {
+      process.stdout.write(`${provider}: ${info?.reason ?? ""} (${info?.updatedAt ?? ""})\n`);
+    }
+    return 0;
+  }
+
+  if (sub === "add") {
+    const provider = String(flags._[1] ?? "").trim().toLowerCase();
+    if (!provider) throw new Error("cap add needs a provider: vs cap add <provider>");
+    const doc = readCappedProviders();
+    doc.capped[provider] = { reason: "cli cap", updatedAt: new Date().toISOString() };
+    writeCappedProviders(doc);
+    process.stdout.write(`capped ${provider}\n`);
+    return 0;
+  }
+
+  if (sub === "clear") {
+    const provider = String(flags._[1] ?? "").trim().toLowerCase();
+    if (!provider) throw new Error("cap clear needs a provider: vs cap clear <provider>");
+    const doc = readCappedProviders();
+    delete doc.capped[provider];
+    writeCappedProviders(doc);
+    process.stdout.write(`cleared ${provider}\n`);
+    return 0;
+  }
+
+  throw new Error(`unknown cap subcommand "${sub}". Use: vs cap list | add | clear`);
+}
+
+function commandWorktree(flags) {
+  const sub = String(flags._[0] ?? "root").toLowerCase();
+  const repoRoot = path.resolve(import.meta.dirname, "..");
+  const apply = Boolean(flags.apply);
+
+  if (sub === "create" || sub === "add") {
+    const branch = String(flags._[1] ?? flags.branch ?? "").trim();
+    if (!branch) throw new Error("worktree create needs a branch: vs worktree create <branch>");
+    const res = createManagedWorktree(repoRoot, branch);
+    if (flags.json) {
+      process.stdout.write(JSON.stringify(res, null, 2) + "\n");
+    } else {
+      process.stdout.write(res.path + "\n");
+    }
+    return 0;
+  }
+
+  if (sub === "sweep") {
+    const res = sweepMergedWorktrees(repoRoot, { apply });
+    process.stdout.write(JSON.stringify(res, null, 2) + "\n");
+    return 0;
+  }
+
+  if (sub === "cleanup-projects") {
+    const projectsDir = flags.projectsDir ? path.resolve(String(flags.projectsDir)) : path.dirname(repoRoot);
+    const res = cleanupProjectsFolder(projectsDir, { apply });
+    process.stdout.write(JSON.stringify(res, null, 2) + "\n");
+    return 0;
+  }
+
+  if (sub === "root" || sub === "path") {
+    process.stdout.write(resolveManagedWorktreeRoot() + "\n");
+    return 0;
+  }
+
+  throw new Error(`unknown worktree subcommand "${sub}". Use: vs worktree create | sweep | cleanup-projects | root`);
+}
+
+function commandLesson(flags) {
+  const sub = String(flags._[0] ?? "list").toLowerCase();
+  if (sub === "add") {
+    const title = String(flags._[1] ?? flags.title ?? "").trim();
+    const rule = String(flags._[2] ?? flags.rule ?? "").trim();
+    const category = String(flags.category ?? "general").trim();
+    const cause = String(flags.cause ?? title).trim();
+    if (!title || !rule) {
+      throw new Error('lesson add needs title and rule: vs lesson add "<title>" "<rule>" [--category <cat>] [--cause <cause>]');
+    }
+    const saved = appendLesson({ category, title, cause, rule });
+    if (flags.json) {
+      process.stdout.write(JSON.stringify(saved, null, 2) + "\n");
+    } else {
+      process.stdout.write(`Logged lesson ${saved.id}: ${saved.title}\n`);
+    }
+    return 0;
+  }
+
+  const query = sub === "list" || sub === "ls" ? (flags._[1] ?? flags.query) : (flags._[0] ?? flags.query);
+  const items = readLessons({ category: flags.category, query });
+  if (flags.json) {
+    process.stdout.write(JSON.stringify(items, null, 2) + "\n");
+  } else if (!items.length) {
+    process.stdout.write("(no logged lessons in JSONL store; see docs/LESSONS.md)\n");
+  } else {
+    for (const l of items) process.stdout.write(`- [${l.category}] ${l.title}: ${l.rule}\n`);
   }
   return 0;
 }
@@ -1858,7 +2306,14 @@ function main(argv) {
     if (command === "handoff") return commandHandoff(flags);
     if (command === "inbox") return commandInbox(flags);
     if (command === "pin") return commandPin(flags);
+    if (command === "spec") return commandSpec(flags);
+    if (command === "task") return commandTask(flags);
+    if (command === "cap") return commandCap(flags);
+    if (command === "worktree") return commandWorktree(flags);
+    if (command === "lesson" || command === "lessons") return commandLesson(flags);
+    if (command === "wait") return commandWait(flags);
     if (command === "install-shim") return commandInstallShim(flags);
+    if (command === "open") return commandOpen(flags);
     process.stderr.write(`Error: unknown command "${command}". Try "vs --help".\n`);
     return 1;
   } catch (err) {
@@ -1871,6 +2326,9 @@ const invokedArg = process.argv[1] ? path.resolve(process.argv[1]) : "";
 const selfFile = path.resolve(import.meta.filename);
 const invokedBase = path.basename(invokedArg, path.extname(invokedArg)).toLowerCase();
 if (invokedArg === selfFile || invokedBase === "vs") {
+  const warning = staleWarning();
+  if (warning) process.stderr.write(`${warning}
+`);
   const result = main(process.argv.slice(2));
   if (result && typeof result.then === "function") {
     result.then(

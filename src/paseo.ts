@@ -5,9 +5,13 @@ import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { spawnEnvFor } from "./spawn-env";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
 import { useSyncExternalStore } from "react";
+import { refreshTeams, retiredLeadTitle } from "./teams";
 import { normalizeProviderUsage, type ProviderQuotaView } from "./antigravity";
 import { LEGACY_NEEDS_LABEL, LEGACY_NEEDS_UNTIL, LEGACY_NEEDS_REASON } from "./userName";
 import { demoAgents, demoArchived, demoProviderUsage, demoWorkspaces } from "./demo";
+import { applyDaemonClientPassword, fetchLocalDaemonPassword, readClientAuthFailure } from "./paseoDaemonAuth";
+import { remoteDaemonClient } from "./paseoRemote";
+import { isRemote } from "./remoteSession";
 
 declare const __PASEO_SERVER_ID__: string;
 export const SERVER_ID = __PASEO_SERVER_ID__;
@@ -22,7 +26,12 @@ export type ConnStatus = "connecting" | "connected" | "disconnected";
 
 type State = {
   conn: ConnStatus;
+  status: "connecting" | "connected" | "disconnected" | "error";
+  error?: string;
+  authFailureReason: "password_required" | "incorrect_password" | null;
   agents: Map<string, PaseoAgent>;
+  /** The first agent list has arrived (it may be empty). conn can be "connected" before this. */
+  rosterLoaded: boolean;
   archivedAgents: Map<string, PaseoAgent>;
   archivedStatus: "idle" | "loading" | "ready" | "error";
   workspaces: Map<string, PaseoWorkspace>;
@@ -31,7 +40,10 @@ type State = {
 
 let state: State = {
   conn: "connecting",
+  status: "connecting",
+  authFailureReason: null,
   agents: new Map(),
+  rosterLoaded: false,
   archivedAgents: new Map(),
   archivedStatus: "idle",
   workspaces: new Map(),
@@ -111,13 +123,16 @@ function queueAgent(id: string, agent: PaseoAgent | null) {
 }
 
 // Same construction as createPaseoClient, but we keep the DaemonClient for calls the SDK api lacks.
-export const daemonClient = new DaemonClient({
-  url: WS_URL,
-  clientId: "vibesquad",
-  clientType: "browser",
-  appVersion: "0.0.1",
-  reconnect: { enabled: true, baseDelayMs: 1000, maxDelayMs: 10000 },
-});
+// A paired remote page (R2-2) gets the relay + e2ee client from paseoRemote.ts instead; local boot: null.
+export const daemonClient =
+  remoteDaemonClient() ??
+  new DaemonClient({
+    url: WS_URL,
+    clientId: "vibesquad",
+    clientType: "browser",
+    appVersion: "0.0.1",
+    reconnect: { enabled: true, baseDelayMs: 1000, maxDelayMs: 10000 },
+  });
 const api = createPaseoApi(daemonClient);
 
 export const client: PaseoClient = {
@@ -289,7 +304,7 @@ async function refetchAll() {
     next.set(e.agent.id, old && sameAgent(old, e.agent) ? old : e.agent);
   }
   pendingAgents.clear(); // anything queued is older than this snapshot
-  set({ agents: next });
+  set({ agents: next, rosterLoaded: true });
 }
 
 // A9: per-provider quota for the sidebar. Best effort: older daemons lack providers.listUsage.
@@ -309,12 +324,53 @@ async function refetchWorkspaces() {
   set({ workspaces: next });
 }
 
+async function connect(): Promise<void> {
+  try {
+    if (!DEMO && !isRemote()) {
+      const auth = await fetchLocalDaemonPassword();
+      if (auth.password || auth.localCredential) {
+        applyDaemonClientPassword(daemonClient, auth.password, auth.localCredential);
+      }
+    }
+    await daemonClient.connect();
+    set({ conn: "connected", status: "connected", error: undefined, authFailureReason: null });
+    refetchAll().catch(console.error);
+    refetchWorkspaces().catch(console.error);
+    refetchProviderUsage();
+  } catch (e) {
+    const authReason = readClientAuthFailure(daemonClient, e);
+    if (authReason) {
+      set({
+        conn: "disconnected",
+        status: "error",
+        error: authReason === "password_required" ? "Daemon password required" : "Daemon password rejected",
+        authFailureReason: authReason,
+      });
+    } else {
+      set({
+        conn: "disconnected",
+        status: "error",
+        error: String((e as Error)?.message ?? e),
+        authFailureReason: null,
+      });
+    }
+  }
+}
+
+export async function reconnectWithDaemonPassword(password?: string): Promise<void> {
+  if (password !== undefined) {
+    applyDaemonClientPassword(daemonClient, password);
+  }
+  set({ authFailureReason: null, error: undefined, status: "connecting", conn: "connecting" });
+  await connect();
+}
+
 let started = false;
 export function start() {
   if (started) return;
   started = true;
   if (DEMO) {
-    set({ conn: "connected", agents: demoAgents(), workspaces: demoWorkspaces() as Map<string, PaseoWorkspace>, providerUsage: normalizeProviderUsage(demoProviderUsage()) });
+    set({ conn: "connected", status: "connected", error: undefined, authFailureReason: null, rosterLoaded: true, agents: demoAgents(), workspaces: demoWorkspaces() as Map<string, PaseoWorkspace>, providerUsage: normalizeProviderUsage(demoProviderUsage()) });
     return;
   }
 
@@ -334,19 +390,39 @@ export function start() {
     set({ workspaces });
   });
 
-  // The SDK reconnects on its own; we watch the state so we can refetch after a gap.
-  let last: string | null = null;
-  setInterval(() => {
-    const s = client.getConnectionState().status;
-    const conn: ConnStatus = s === "connected" ? "connected" : s === "connecting" || s === "idle" ? "connecting" : "disconnected";
-    if (conn !== state.conn) set({ conn });
-    if (s === "connected" && last !== "connected") {
-      refetchAll().catch(console.error);
-      refetchWorkspaces().catch(console.error);
-      refetchProviderUsage();
+  // DaemonClient reconnects on its own (exponential backoff); we mirror its state and refetch after a gap.
+  let wasConnected = false;
+  (daemonClient as unknown as { subscribeConnectionStatus?: (cb: (s: { status: string; reason?: string }) => void) => () => void }).subscribeConnectionStatus?.((s) => {
+    if (s.status === "connected") {
+      set({ conn: "connected", status: "connected", error: undefined, authFailureReason: null });
+      if (!wasConnected) {
+        wasConnected = true;
+        refetchAll().catch(console.error);
+        refetchWorkspaces().catch(console.error);
+        refetchProviderUsage();
+        void refreshTeams();
+      }
+      return;
     }
-    last = s;
-  }, 1000);
+    wasConnected = false;
+    if (s.status === "connecting" || s.status === "idle") {
+      if (state.conn !== "connecting") set({ conn: "connecting", status: "connecting" });
+      return;
+    }
+    if (s.status === "disconnected") {
+      const authReason = readClientAuthFailure(daemonClient, s);
+      if (authReason) {
+        set({
+          conn: "disconnected",
+          status: "error",
+          error: authReason === "password_required" ? "Daemon password required" : "Daemon password rejected",
+          authFailureReason: authReason,
+        });
+      } else {
+        set({ conn: "disconnected", status: "disconnected" });
+      }
+    }
+  });
 
   // Belt and braces: a full refetch every minute in case an update was dropped.
   setInterval(() => {
@@ -356,10 +432,7 @@ export function start() {
     }
   }, 60_000);
 
-  client.connect().catch((err) => {
-    console.error("connect failed", err);
-    set({ conn: "disconnected" });
-  });
+  void connect();
 }
 
 export function subscribePaseo(l: () => void): () => void {
@@ -386,24 +459,27 @@ export type SpawnRequest = {
   title: string;
   labels: Record<string, string>;
   prompt: string;
+  images?: Array<{ data: string; mimeType: string }>;
   cwd: string;
   worktree?: { branch: string };
 };
 
-/** Lane integrity: mark a lead or brainstorm as retired (role=former-*). Leads also get `(old) <LANE> ordN`. */
+/** Lane integrity: mark a lead or brainstorm as retired (role=former-*). Leads also get `(old) <Code><ord>[ · objective]`. */
+/** Patches only role (and ord); the daemon merges labels, so the rest are left as they are now, not as of `agent`. */
 export function retireAgent(agent: PaseoAgent, laneName?: string): Promise<void> {
   const l = labelsOf(agent);
   if (l.role === "brainstorm" || l.role === "buddy") {
     // Same title rule as the plugin's retirePredecessors: "(old) <title>".
     const title = (agent.title ?? "").trim();
     const name = title && !title.toLowerCase().startsWith("(old)") ? `(old) ${title}` : undefined;
-    return updateAgent(agent.id, { ...(name ? { name } : {}), labels: { ...l, role: "former-brainstorm" } });
+    return updateAgent(agent.id, { ...(name ? { name } : {}), labels: { role: "former-brainstorm" } });
   }
   const ord = l.ord;
-  const lane = (laneName ?? l.lane ?? l.lead ?? "").toUpperCase();
+  const laneId = l.lane ?? l.lead ?? "";
+  const lane = laneName ?? laneId;
   return updateAgent(agent.id, {
-    ...(lane && ord ? { name: `(old) ${lane} ord${ord}` } : {}),
-    labels: { ...l, role: "former-lead", ...(ord ? { ord } : {}) },
+    ...(lane && ord ? { name: retiredLeadTitle(lane, laneId, ord, l.job) } : {}),
+    labels: { role: "former-lead", ...(ord ? { ord } : {}) },
   });
 }
 
@@ -471,6 +547,7 @@ export async function spawnTeamAgent(req: SpawnRequest): Promise<{ id: string; c
     labels: req.labels,
     ...(spawnEnvFor(req.labels) ? { env: spawnEnvFor(req.labels) } : {}),
     prompt: req.prompt || undefined,
+    ...(req.images?.length ? { images: req.images } : {}),
     worktree: req.worktree ? { mode: "branch-off", newBranch: req.worktree.branch } : undefined,
   });
   const newId = (handle as { id: string }).id;

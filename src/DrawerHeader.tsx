@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { PaseoAgent } from "@getpaseo/client";
 import { buildAgentDeepLink } from "@getpaseo/protocol/agent-deep-link";
 import {
@@ -15,6 +16,8 @@ import {
   updateAgent,
   upsertLocalAgent,
 } from "./paseo";
+import { clearWorkspaceIfQuiet } from "./paseoAttention";
+import { listProviderModels } from "./paseoProviders";
 import {
   auditAntigravityAgent,
   CANCEL_AND_RESUME_PROMPT,
@@ -23,17 +26,23 @@ import {
   TRANSIENT_RETRY_PROMPT,
 } from "./antigravity";
 import { useDraft } from "./drafts";
+import { AgentTitleEdit } from "./QuickWinsUi";
 import { isImeComposing, shouldComposerSubmit, TOPIC_SOFT_CAP, TopicCapBanner } from "./IdeaInbox";
 import { Avatar, TokenMeter, providerSpec } from "./pixel";
 import { AgentActions, StatusDot, ago, shortPath, useTick } from "./ui";
 import { LEGACY_NEEDS_LABEL, LEGACY_NEEDS_REASON, LEGACY_NEEDS_UNTIL, needsYouBadge, useUserName } from "./userName";
 import { AGENT_TYPE_LABEL, expectedTitleFor, kindOf, leadLadderFor, leadVariant } from "./teams";
-import type { AgentType } from "./teams";
+import type { AgentType, Member } from "./teams";
 import type { Entry } from "./Timeline";
 import { ImportSessionModal, SchedulesPanel } from "./SchedulesPanel";
-import { openAgent, openAgentInTab } from "./panes";
+import { openAgent, openAgentInTab, usePanes } from "./panes";
 import { exportFileName, forkSummaryPrompt, forkTitle, transcriptToJson, transcriptToMarkdown } from "./sessionLifecycle";
-import { openBriefEditor } from "./pinActions";
+import { openBriefEditor, setLastBrainstormProfile } from "./pinActions";
+import { useInFocusedLane, usePinFocus } from "./pinFocus";
+import { WorkingChip } from "./WorkingBar";
+import { usePinSlot, useRailCardVisible } from "./pinSlots";
+import { FeaturesMenu } from "./FeaturesMenu";
+import { SandboxView } from "./SandboxView";
 
 const REQUEST_REPORT_PROMPT =
   "Your last turn produced no report. Reply now with your final report as a normal message (what you did, files changed, done-check result). Do not use SendMessage or ListAgents.";
@@ -71,13 +80,13 @@ function NeedsYouControls({ agent }: { agent: PaseoAgent }) {
             </span>
           )}
         </span>
-        <button className="btn ok" disabled={busy} onClick={() => run(() => clearNeedsYou(agent))}>
+        <button className="btn ok" disabled={busy} onClick={() => run(() => clearNeedsYou(agent).then(() => clearWorkspaceIfQuiet(agent.id)))}>
           Clear
         </button>
-        <button className="btn ghost" disabled={busy} onClick={() => run(() => snoozeNeedsYou(agent, 30 * 60_000))}>
+        <button className="btn ghost" disabled={busy} onClick={() => run(() => snoozeNeedsYou(agent, 30 * 60_000).then(() => clearWorkspaceIfQuiet(agent.id)))}>
           Snooze 30m
         </button>
-        <button className="btn ghost" disabled={busy} onClick={() => run(() => snoozeNeedsYou(agent, 2 * 3_600_000))}>
+        <button className="btn ghost" disabled={busy} onClick={() => run(() => snoozeNeedsYou(agent, 2 * 3_600_000).then(() => clearWorkspaceIfQuiet(agent.id)))}>
           Snooze 2h
         </button>
       </div>
@@ -339,11 +348,112 @@ export async function setThinkingHelper(agent: PaseoAgent, optionId: string | nu
   await daemonClient.setAgentThinkingOption(agent.id, optionId);
 }
 
-const PROVIDER_MODEL_HINTS: Record<string, string[]> = {
-  claude: ["claude-opus-5-5", "claude-sonnet-4-6", "claude-sonnet-5-5", "claude-haiku-4-5", "claude-haiku-5-5"],
-  gemini: ["gemini-4-argon", "gemini-2.5-pro", "gemini-2.5-flash"],
+export const PROVIDER_MODEL_HINTS: Record<string, string[]> = {
+  claude: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-sonnet-4-6", "claude-haiku-5-5", "claude-haiku-4-5"],
+  "antigravity-cli": ["gemini-4-argon", "gemini-3.8-flash", "gemini-2.5-pro", "gemini-2.5-flash"],
+  antigravity: ["gemini-4-argon", "gemini-3.8-flash", "gemini-2.5-pro", "gemini-2.5-flash"],
+  gemini: ["gemini-4-argon", "gemini-3.8-flash", "gemini-2.5-pro", "gemini-2.5-flash"],
+  codex: ["gpt-5.4", "gpt-5.3-codex", "gpt-4o", "gpt-4o-mini"],
   openai: ["gpt-5.4", "gpt-4o", "gpt-4o-mini"],
+  opencode: ["deepseek/deepseek-v4-pro", "deepseek/deepseek-flash"],
+  codewhale: ["claude-opus-5-5", "claude-sonnet-5-5", "gpt-5.4"],
 };
+
+export function buildProviderModelOptions(
+  provider: string,
+  currentModel?: string | null,
+  liveModels?: Array<{ id: string }>,
+): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const add = (val?: string | null) => {
+    const trimmed = typeof val === "string" ? val.trim() : "";
+    if (trimmed && !seen.has(trimmed)) {
+      seen.add(trimmed);
+      out.push(trimmed);
+    }
+  };
+  add(currentModel);
+  if (Array.isArray(liveModels)) {
+    for (const m of liveModels) {
+      add(m?.id);
+    }
+  }
+  const normProvider = String(provider ?? "").trim();
+  const hints =
+    PROVIDER_MODEL_HINTS[normProvider] ??
+    PROVIDER_MODEL_HINTS[normProvider.toLowerCase().split("/")[0]] ??
+    [];
+  for (const h of hints) {
+    add(h);
+  }
+  return out;
+}
+
+const providerModelsCache = new Map<string, Array<{ id: string }>>();
+
+const COUNTERPART_PROFILE_MAP: Record<string, string> = {
+  "Lead - Claude": "Lead - Gemini",
+  "Lead - Gemini": "Lead - Claude",
+  "Brainstorm - Claude": "Brainstorm - Gemini",
+  "Brainstorm - Gemini": "Brainstorm - Claude",
+  "Review - Sonnet": "Review - Gemini",
+  "Review - Gemini": "Review - Sonnet",
+  "Check - Haiku": "Pre-check - Flash",
+  "Pre-check - Flash": "Check - Haiku",
+  "Art Painter - Opus": "Art Director - Gemini",
+  "Art Director - Gemini": "Art Painter - Opus",
+  "Implement - Sonnet": "Lead - Gemini",
+  "Implement - Opus": "Lead - Gemini",
+  "Planner - Sonnet": "Lead - Gemini",
+  "Spec - Opus": "Lead - Gemini",
+};
+
+export type OppositeProviderTarget = {
+  provider: "claude" | "antigravity-cli";
+  model: string;
+  providerSpec: string;
+  modeId: string;
+  label: "⇄ Switch to Gemini" | "⇄ Switch to Claude";
+  profile?: string;
+};
+
+export function oppositeProviderTarget(provider: string, profileName?: string): OppositeProviderTarget | null {
+  const norm = String(provider ?? "").trim().toLowerCase().split("/")[0];
+  const rawProf = String(profileName ?? "").trim();
+  const resolveSwitchedProfile = (toGemini: boolean): string | undefined => {
+    if (!rawProf) return undefined;
+    if (COUNTERPART_PROFILE_MAP[rawProf]) return COUNTERPART_PROFILE_MAP[rawProf];
+    if (toGemini && /(?:\s*-\s*)Claude$/i.test(rawProf)) {
+      return rawProf.replace(/(-\s*)Claude$/i, "$1Gemini");
+    }
+    if (!toGemini && /(?:\s*-\s*)Gemini$/i.test(rawProf)) {
+      return rawProf.replace(/(-\s*)Gemini$/i, "$1Claude");
+    }
+    return undefined;
+  };
+  if (norm === "claude" || norm === "anthropic" || norm.startsWith("claude-")) {
+    return {
+      provider: "antigravity-cli",
+      model: "gemini-4-argon",
+      providerSpec: "antigravity-cli/gemini-4-argon",
+      modeId: "accept-edits",
+      label: "⇄ Switch to Gemini",
+      profile: resolveSwitchedProfile(true),
+    };
+  }
+  if (norm === "antigravity-cli" || norm === "antigravity" || norm === "gemini" || norm.startsWith("gemini-")) {
+    return {
+      provider: "claude",
+      model: "claude-opus-5-5",
+      providerSpec: "claude/claude-opus-5-5",
+      modeId: "auto",
+      label: "⇄ Switch to Claude",
+      profile: resolveSwitchedProfile(false),
+    };
+  }
+  return null;
+}
 
 export type DrawerHeaderProps = {
   agent: PaseoAgent;
@@ -353,6 +463,8 @@ export type DrawerHeaderProps = {
   budget: number | undefined;
   team: any;
   runningSubs: number;
+  working: Member[];
+  extraSubs: number;
   laneId: string;
   entries: Entry[];
   active: boolean;
@@ -373,7 +485,7 @@ export type DrawerHeaderProps = {
   restartK: number;
   restarting: boolean;
   planHandedOff: boolean;
-  doRestart: (reason: string, pendingPrompt?: string) => Promise<unknown>;
+  doRestart: (reason: string, pendingPrompt?: string, profileName?: string) => Promise<unknown>;
   summaryOpen: boolean;
   toggleSummary: () => void;
   summaryText: string;
@@ -508,6 +620,8 @@ export function DrawerHeader({
   budget,
   team,
   runningSubs,
+  working,
+  extraSubs,
   laneId,
   entries,
   active,
@@ -559,6 +673,10 @@ export function DrawerHeader({
 }: DrawerHeaderProps) {
   const [modeBusy, setModeBusy] = useState(false);
   const [modelValue, setModelValue] = useState(agent.model ?? "");
+  const [customModelMode, setCustomModelMode] = useState(false);
+  const [liveModels, setLiveModels] = useState<Array<{ id: string }>>(
+    () => providerModelsCache.get(agent.provider) ?? [],
+  );
   const modelSubmittedRef = useRef<string | null>(null);
   const [modelError, setModelError] = useState("");
   const submitModel = (next: string) => {
@@ -573,6 +691,7 @@ export function DrawerHeader({
   const [thinkingBusy, setThinkingBusy] = useState(false);
   const [reloadBusy, setReloadBusy] = useState(false);
   const [reloadError, setReloadError] = useState("");
+  const [switchBusy, setSwitchBusy] = useState(false);
   const [copyIdFlash, setCopyIdFlash] = useState(false);
   const [copyCwdFlash, setCopyCwdFlash] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -582,11 +701,120 @@ export function DrawerHeader({
     modelSubmittedRef.current = null;
   }, [agent.model]);
 
+  useEffect(() => {
+    const cached = providerModelsCache.get(agent.provider);
+    if (cached && cached.length > 0) {
+      setLiveModels(cached);
+      return;
+    }
+    setLiveModels([]);
+    if (DEMO || !agent.provider) return;
+    let cancelled = false;
+    listProviderModels(agent.provider)
+      .then((res) => {
+        if (cancelled) return;
+        const list = Array.isArray(res?.models)
+          ? res.models.filter((m) => typeof m?.id === "string" && m.id.trim().length > 0)
+          : [];
+        if (list.length > 0) {
+          providerModelsCache.set(agent.provider, list);
+        }
+        setLiveModels(list);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [agent.provider]);
+
+  const modelOptions = buildProviderModelOptions(agent.provider, modelValue || agent.model, liveModels);
+  const modelListId = `drawer-model-list-${agent.id}`;
+
   const agentLabels = (agent.labels ?? {}) as Record<string, string>;
+  const switchTarget = oppositeProviderTarget(agent.provider, agentLabels.profile);
   const needsYouFlagged =
     (!!agentLabels["needs-you"] && agentLabels["needs-you"] !== "cleared") ||
     (!!agentLabels[LEGACY_NEEDS_LABEL] && agentLabels[LEGACY_NEEDS_LABEL] !== "cleared");
   const attachBlocked = !!auditAntigravityAgent(agent, entries).a5ReadBlocked;
+
+  // Pin-focus (single ~44px bar): the focused Brainstorm's compact controls go into PinFocusBar and its inspector
+  // into the PinRail's Active Buddy Card. Same component, same state — only where it renders changes.
+  const pinFocus = usePinFocus();
+  const barSlot = usePinSlot("bar");
+  const cardSlot = usePinSlot("card");
+  // Whichever lane drawer (Buddy, Lead, worker, topic Buddy) is the left-pane tab owns the slots, so exactly one portals.
+  // Not at <=900px where the rail hides the Active Buddy Card: there the full inline inspector comes back.
+  const shownHere = usePanes().leftActiveId === agent.id;
+  const inLane = useInFocusedLane(agent.id);
+  const railCardVisible = useRailCardVisible();
+  const compact = !!pinFocus?.agentId && shownHere && inLane && railCardVisible && !!barSlot && !!cardSlot;
+
+  // Provider switch: the counterpart profile to flip to (⇄ Claude ↔ Gemini). Hoisted so the compact
+  // top bar and the full drawer share one button + handler.
+  const nextProfile = switchTarget
+    ? switchTarget.profile ??
+      (kindOf(agent) === "lead"
+        ? (switchTarget.provider === "claude" ? "Lead - Claude" : "Lead - Gemini")
+        : isBs
+          ? (switchTarget.provider === "claude" ? "Brainstorm - Claude" : "Brainstorm - Gemini")
+          : undefined)
+    : undefined;
+  const providerSwitchBtn = switchTarget && !agent.archivedAt ? (
+    <button
+      data-testid="drawer-switch-provider-btn"
+      className="btn ghost small"
+      title={`Switch this ${kindOf(agent) || "agent"} from ${agent.provider} to ${nextProfile || switchTarget.label}`}
+      disabled={switchBusy}
+      onClick={async () => {
+        setSwitchBusy(true);
+        setReloadError("");
+        try {
+          const nextLabels = {
+            ...agentLabels,
+            ...(nextProfile ? { profile: nextProfile } : {}),
+          };
+          if (DEMO) {
+            upsertLocalAgent({
+              ...agent,
+              provider: switchTarget.provider,
+              model: switchTarget.model,
+              currentModeId: switchTarget.modeId,
+              labels: nextLabels,
+            });
+            return;
+          }
+          if (isBs && nextProfile) setLastBrainstormProfile(nextProfile);
+          // A Lead's live labels.profile must stay intact: the successor is spawned, this agent isn't flipped in place.
+          if (kindOf(agent) !== "lead") await updateAgent(agent.id, { labels: nextLabels });
+          if (kindOf(agent) === "lead" && onSuccessor) {
+            onSuccessor();
+          } else if (isBs) {
+            await doRestart("provider-switch", undefined, nextProfile);
+          } else {
+            const dc = daemonClient as any;
+            const snap = await dc.createAgent({
+              config: {
+                provider: switchTarget.provider,
+                model: switchTarget.model,
+                modeId: switchTarget.modeId,
+                cwd: agent.cwd,
+                title: agent.title ?? agent.id,
+              },
+              labels: nextLabels,
+            });
+            const newId = snap?.agent?.id ?? snap?.id;
+            if (newId) openAgentInTab(newId);
+          }
+        } catch (e) {
+          setReloadError(`Switch provider failed: ${e instanceof Error ? e.message : e}`);
+        } finally {
+          setSwitchBusy(false);
+        }
+      }}
+    >
+      {switchBusy ? "…" : switchTarget.label}
+    </button>
+  ) : null;
 
   useEffect(() => {
     if (!active) return;
@@ -605,17 +833,7 @@ export function DrawerHeader({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [active, agent, modeBusy]);
 
-  return (
-    <>
-      <header className="drawer-head" style={{ flexWrap: "wrap", padding: "8px 12px", gap: 8, alignItems: "center" }}>
-        <Avatar id={agent.id} provider={agent.provider} agentType={agentType} variant={leadVariant(agent)} size={40} />
-        <div className="drawer-id" style={{ flex: "1 1 240px", minWidth: 0 }}>
-          <div className="drawer-role-line" style={{ flexWrap: "wrap", gap: 4 }}>
-            <span className="role-tag">{AGENT_TYPE_LABEL[agentType]}</span>
-            <span className="prov-pill" style={{ color: prov.color, borderColor: prov.color }}>
-              {prov.symbol} {prov.name}
-            </span>
-            {(() => {
+  const modeSelect = (() => {
               const modes = (!DEMO && agent.availableModes?.length) ? agent.availableModes : FALLBACK_MODES;
               return (
                 <select
@@ -636,7 +854,8 @@ export function DrawerHeader({
                   ))}
                 </select>
               );
-            })()}
+            })();
+  const thinkingSelect = (
             <select
               data-testid="drawer-thinking-select"
               className="drawer-thinking-select"
@@ -655,6 +874,11 @@ export function DrawerHeader({
                 <option value={agent.thinkingOptionId}>{agent.thinkingOptionId}</option>
               )}
             </select>
+  );
+  const featureChips = (
+    <>
+            <FeaturesMenu agent={agent} />
+            <SandboxView agent={agent} />
             {(() => {
               const cost = (agent.lastUsage as any)?.totalCostUsd ?? (agent as any)?.usage?.totalCostUsd;
               return typeof cost === "number" && cost >= 0 ? (
@@ -663,24 +887,28 @@ export function DrawerHeader({
                 </span>
               ) : null;
             })()}
-          </div>
-          <div className="drawer-title" style={{ fontSize: 15 }}>
-            <StatusDot agent={agent} /> {agent.title ?? agent.id.slice(0, 8)}
-          </div>
-          <div className="muted small drawer-meta-line" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4 }}>
-            <span>{agent.provider}/</span>
+    </>
+  );
+  const modelControl = customModelMode ? (
+    <>
             <input
-              data-testid="drawer-model-control"
+              data-testid="drawer-model-input"
               className="drawer-model-input"
+              aria-label="Model"
+              title={`Custom model (${agent.provider})`}
               style={{ background: "var(--panel-alt)", color: "var(--fg)", border: "1px solid var(--line)", fontSize: 10, padding: "1px 4px", width: 120, height: 18 }}
-              list="drawer-model-list"
+              list={modelListId}
               value={modelValue}
+              autoFocus
               onChange={(e) => setModelValue(e.target.value)}
               onBlur={(e) => {
                 const next = e.target.value.trim();
                 if (next && next !== (agent.model ?? "") && next !== modelSubmittedRef.current) {
                   submitModel(next);
+                } else if (!next) {
+                  setModelValue(agent.model ?? "");
                 }
+                setCustomModelMode(false);
               }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
@@ -688,14 +916,50 @@ export function DrawerHeader({
                   if (next && next !== (agent.model ?? "") && next !== modelSubmittedRef.current) {
                     submitModel(next);
                   }
+                  setCustomModelMode(false);
+                } else if (e.key === "Escape") {
+                  setModelValue(agent.model ?? "");
+                  setCustomModelMode(false);
                 }
               }}
             />
-            <datalist id="drawer-model-list">
-              {(PROVIDER_MODEL_HINTS[agent.provider] ?? []).map((m) => (
+            <datalist id={modelListId}>
+              {modelOptions.map((m) => (
                 <option key={m} value={m} />
               ))}
             </datalist>
+    </>
+  ) : (
+            <select
+              data-testid="drawer-model-select"
+              className="drawer-model-input"
+              aria-label="Model"
+              title={`Model (${agent.provider})`}
+              style={{ background: "var(--panel-alt)", color: "var(--fg)", border: "1px solid var(--line)", fontSize: 10, padding: "1px 4px", width: 120, height: 20 }}
+              value={modelValue || modelOptions[0] || ""}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (val === "__custom__") {
+                  setCustomModelMode(true);
+                  return;
+                }
+                const next = val.trim();
+                setModelValue(next);
+                if (next && next !== (agent.model ?? "") && next !== modelSubmittedRef.current) {
+                  submitModel(next);
+                }
+              }}
+            >
+              {modelOptions.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+              <option value="__custom__">Custom model…</option>
+            </select>
+  );
+  const metaRest = (
+    <>
             <span>· {shortPath(agent.cwd)}</span>
             <button
               data-testid="drawer-copy-cwd-btn"
@@ -725,10 +989,19 @@ export function DrawerHeader({
             >
               {copyIdFlash ? "✓ ID" : agent.id.slice(0, 8)}
             </button>
-          </div>
-          {!isBs && <TokenMeter used={used} budget={budget ?? 0} ladder={kindOf(agent) === "lead" ? leadLadderFor(team) : undefined} />}
-        </div>
-        <div className="drawer-actions" style={{ flexWrap: "wrap", gap: 4, alignItems: "center" }}>
+    </>
+  );
+  const extraActions = (
+    <>
+          {!compact && providerSwitchBtn}
+          <button
+            data-testid="drawer-search-btn"
+            className="btn ghost small"
+            title="Search transcript, jump between prompts, filter the timeline"
+            onClick={() => window.dispatchEvent(new CustomEvent("vs:timeline-search", { detail: { agentId: agent.id } }))}
+          >
+            🔍 Search
+          </button>
           <button
             data-testid="drawer-reload-agent-btn"
             className="btn ghost small"
@@ -752,6 +1025,20 @@ export function DrawerHeader({
           {modelError && <span className="small drawer-reload-error" role="alert" style={{ color: "var(--bad, #e5484d)" }}>{modelError}</span>}
           {reloadError && <span className="small muted drawer-reload-error">{reloadError}</span>}
           <AgentActions agent={agent} archive />
+    </>
+  );
+
+  const paseoLink = (
+    <>
+          {SERVER_ID && (
+            <a className="btn" href={buildAgentDeepLink({ serverId: SERVER_ID, agentId: agent.id })}>
+              Open in Paseo
+            </a>
+          )}
+    </>
+  );
+  const dockBtns = (
+    <>
           <button
             className={`btn ghost dock-toggle-btn${dockOpen ? " on" : ""}`}
             title={dockOpen ? "Close side dock" : "Open: Changes / Files / Terminal / Scripts"}
@@ -759,16 +1046,13 @@ export function DrawerHeader({
           >
             Dock {dockOpen ? "▶" : "◀"}
           </button>
-          {SERVER_ID && (
-            <a className="btn" href={buildAgentDeepLink({ serverId: SERVER_ID, agentId: agent.id })}>
-              Open in Paseo
-            </a>
-          )}
           <button className="btn ghost" onClick={onClose}>
             ✕
           </button>
-        </div>
-      </header>
+    </>
+  );
+  const inspector = (
+    <>
 
       {isBs && (
         <div className={`brainstorm-ctx-bar tone-${bsTone}`} data-testid="brainstorm-ctx-bar" style={{ padding: "4px 8px", margin: "4px 8px 0" }}>
@@ -1026,6 +1310,89 @@ export function DrawerHeader({
       )}
       <SessionActions agent={agent} entries={entries} />
       {(attachBlocked || moreOpen) ? <AttachFiles agent={agent} entries={entries} /> : null}
+    </>
+  );
+  const header = (
+    <>
+      <header className="drawer-head" style={{ flexWrap: "wrap", padding: "8px 12px", gap: 8, alignItems: "center" }}>
+        <Avatar id={agent.id} provider={agent.provider} agentType={agentType} variant={leadVariant(agent)} size={40} />
+        <div className="drawer-id" style={{ flex: "1 1 240px", minWidth: 0 }}>
+          <div className="drawer-role-line" style={{ flexWrap: "wrap", gap: 4 }}>
+            <span className="role-tag">{AGENT_TYPE_LABEL[agentType]}</span>
+            <span className="prov-pill" style={{ color: prov.color, borderColor: prov.color }}>
+              {prov.symbol} {prov.name}
+            </span>
+            {modeSelect}
+            {thinkingSelect}
+            {featureChips}
+          </div>
+          <div className="drawer-title" style={{ fontSize: 15 }}>
+            <StatusDot agent={agent} /> <AgentTitleEdit agent={agent}>{agent.title ?? agent.id.slice(0, 8)}</AgentTitleEdit>
+          </div>
+          <div className="muted small drawer-meta-line" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4 }}>
+            <span>{agent.provider}/</span>
+            {modelControl}
+            {metaRest}
+          </div>
+          {!isBs && <TokenMeter used={used} budget={budget ?? 0} ladder={kindOf(agent) === "lead" ? leadLadderFor(team) : undefined} />}
+        </div>
+        <div className="drawer-actions" style={{ flexWrap: "wrap", gap: 4, alignItems: "center" }}>
+          {extraActions}
+          {paseoLink}
+          {dockBtns}
+        </div>
+      </header>
+    </>
+  );
+
+  if (compact)
+    return (
+      <>
+        {createPortal(
+          <>
+      <div className="drawer-head-compact" data-testid="drawer-head-compact">
+        <Avatar id={agent.id} provider={agent.provider} agentType={agentType} variant={leadVariant(agent)} size={24} />
+        <span className="drawer-head-compact-title">
+          <StatusDot agent={agent} /> <AgentTitleEdit agent={agent}>{agent.title ?? agent.id.slice(0, 8)}</AgentTitleEdit>
+        </span>
+        {modeSelect}
+        {thinkingSelect}
+        <span className="muted small">{agent.provider}/</span>
+        {modelControl}
+        {providerSwitchBtn}
+        <WorkingChip members={working} subs={extraSubs} />
+        <span className="drawer-head-compact-spacer" />
+        {dockBtns}
+      </div>
+          </>,
+          barSlot!,
+        )}
+        {createPortal(
+          <>
+      <div className="drawer-actions pin-rail-buddy-tools" data-testid="pin-rail-buddy-tools" style={{ flexWrap: "wrap", gap: 4, alignItems: "center" }}>
+        <span className="role-tag">{AGENT_TYPE_LABEL[agentType]}</span>
+        <span className="prov-pill" style={{ color: prov.color, borderColor: prov.color }}>
+          {prov.symbol} {prov.name}
+        </span>
+        {featureChips}
+        {extraActions}
+        {paseoLink}
+      </div>
+      <div className="muted small drawer-meta-line" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4 }}>
+        {metaRest}
+      </div>
+      {!isBs && <TokenMeter used={used} budget={budget ?? 0} ladder={kindOf(agent) === "lead" ? leadLadderFor(team) : undefined} />}
+
+            {inspector}
+          </>,
+          cardSlot!,
+        )}
+      </>
+    );
+  return (
+    <>
+      {header}
+      {inspector}
     </>
   );
 }

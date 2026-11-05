@@ -1,19 +1,20 @@
 {
   "name": "@vibesquad/plugin",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Slim Paseo server plugin for VibeSquad: role-pack prompts, worker digest, event-driven lead wakeups, handoff triggers.",
   "files": [
     "paseo-plugin.json",
     "index.server.ts",
-    "index.ts"
+    "index.ts",
+    "server/"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@getpaseo/plugin": "0.13.2",
+    "@getpaseo/plugin": "0.14.0",
     "typescript": "^5.9.3"
   }
 }

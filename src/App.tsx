@@ -1,21 +1,19 @@
 import { FIRST_RUN_DONE_KEY, FirstRunModal, fetchFirstRunStatus, type FirstRunStatus } from "./FirstRunModal";
+import { clearSession, isRemote } from "./remoteSession";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { ProviderQuotaView } from "./antigravity";
-import { LEGACY_NEEDS_LABEL, dismissUpdateBanner, loadUpdaterStatus, setLanExposureState, setServerConfigWarnings, triggerUpdateInstall, useConfigWarnings, useExposedIpsStore, useUpdaterStatus } from "./userName";
+import { LEGACY_NEEDS_LABEL, dismissStaleBuild, dismissUpdateBanner, loadUpdaterStatus, setLanExposureState, setLocalAccess, setServerConfigWarnings, setStaleBuild, triggerUpdateInstall, useLocalReadOnly, useStaleBuild, useStaleBuildDismissed, useConfigWarnings, useExposedIpsStore, useUpdaterStatus } from "./userName";
 import { DEMO, archiveAgent, detachAgent, getPaseoState, loadArchived, retireAgent, setNeedsYou, updateAgent, upsertLocalAgent, usePaseo } from "./paseo";
 import {
   AGENT_TYPE_LABEL,
-  MAX_TREE_DEPTH,
   leadVariant,
   budgetFor,
   chainedLeads,
   findCrossTeamBrainstorm,
-  fmtTok,
   handoffPairs,
   isBrainstormAgent,
   isLanBannerDismissed,
-  isOverBudget,
   isTopicBrainstorm,
   isUnsortedMember,
   lanIpSetKey,
@@ -27,18 +25,23 @@ import {
   TEAMS,
   UNASSIGNED,
   assignAgentToLane,
+  countsAsNeedsYou,
   getLeadThresholds,
+  getTeams,
+  saveTeams,
   leadLadderFor,
   matchesSearch,
   resolve,
+  shownLanesOf,
   sortMembers,
   useTeams,
   type HandoffPair,
   type Member,
   type TeamView,
 } from "./teams";
+import { isHubLaneId, titleFor } from "./teams";
 import { AgentPanes } from "./AgentPanes";
-import { CommandPaletteHost, agentCtxItems, dateBucket, openContextMenu, openOverlay, parseUrlState, serializeUrlState, type DateBucket } from "./CommandPalette";
+import { CommandPaletteHost, agentCtxItems, dateBucket, teamCtxItems, openContextMenu, openOverlay, parseUrlState, serializeUrlState, type DateBucket } from "./CommandPalette";
 import { PaseoUsageHeaderChip } from "./PaseoSettingsSection";
 import { MobileBar, useMobileTeamView } from "./MobileBar";
 import { FocusRail, railAlerts } from "./FocusRail";
@@ -58,15 +61,12 @@ import {
   cleanTitle,
   clickable,
   derived,
-  getTreeState,
   sameList,
   sameMember,
   selectAgent,
   setTreeShowClosed,
   shortPath,
-  subscribeTree,
   usePaneClass,
-  useSelect,
   useTreeState,
   IdeaInbox,
   SidebarInboxBadge,
@@ -74,22 +74,28 @@ import {
 } from "./ui";
 import { WorkspacesView } from "./WorkspacesView";
 import { AttentionBadge } from "./AttentionList";
-import { FullToggle, PinGrid, SidebarPins, SquadsHome, useFullView, type PinHandler } from "./PinGrid";
+import { FullToggle, PinGrid, SidebarPins, SquadsHome, setFullView, useFullView, type PinHandler } from "./PinGrid";
 import { pinsForSquad, type Pin } from "./pins";
-import { urlAgentFor } from "./pinFocusLogic";
-import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, usePinFocus, usePinsHome, useSquadsHome } from "./pinFocus";
+import { popAction, urlAgentFor } from "./pinFocusLogic";
+import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, spinUpPin, usePinFocus, usePinsHome, useSquadsHome } from "./pinFocus";
 import { TopBreadcrumb } from "./Breadcrumb";
+import { HubBar } from "./HubBar";
 import { PinFocusHeader, PinRail } from "./PinRail";
 import { PinToast } from "./PinIdeas";
 import { NewSquadModal } from "./NewSquadModal";
-import { AddBuddyModal, Modal, NewAgentModal, ProfileImportModal, TeamSettingsModal, useProfiles } from "./TeamActions";
+import { AddBuddyModal, Modal, NewAgentModal, ProfileImportModal, useProfiles } from "./TeamActions";
+import { AgentTitleEdit, TeamNameEdit, useAttentionTitle, useRestorePrune } from "./QuickWinsUi";
 import { PairDeviceModal } from "./PairDeviceModal";
 import { DaemonStatusBanner, DiagnosticsModal, HelpModal, checkForUpdates, updateLabel, type UpdateCheck } from "./DiagnosticsModal";
 import { BriefEditorHost } from "./BriefEditor";
 import { TeamFeed } from "./TeamFeed";
 import { HandoffModal } from "./HandoffModal";
 import { Avatar, NeonEmblem, TokenMeter, providerSpec } from "./pixel";
-import { PushNotificationControls } from "./notifications";
+import { playAlertChime } from "./notifications";
+import { claimAlert, usePaseoAttention } from "./paseoAttention";
+import { SettingsHome, requestSettingsTarget } from "./SettingsHome";
+import { alertEnabled, getPrefs, getPref , getRestoreLastView } from "./prefs";
+import { setCloseGuard } from "./drafts";
 import {
   applyUiScaleToDom,
   cycleUiScalePreset,
@@ -137,7 +143,7 @@ export async function startLaneBrainstorm(opts: {
   agents?: Map<string, PaseoAgent>;
 }): Promise<string | null> {
   const { teamId, laneId, laneName, cwd, onPick } = opts;
-  const existing = findCrossTeamBrainstorm(resolve(opts.agents ?? getPaseoState().agents), laneId);
+  const existing = findCrossTeamBrainstorm(resolve(opts.agents ?? getPaseoState().agents), laneId, "", { includeClosed: true });
   if (existing) {
     onPick(existing.agent.id);
     return existing.agent.id;
@@ -149,7 +155,7 @@ export async function startLaneBrainstorm(opts: {
       teamId,
       laneId,
       laneName,
-      cwd,
+      // No cwd: the server derives it from the lane (and refuses it over the remote relay).
       reason: "start-brainstorm",
     }),
   });
@@ -163,7 +169,7 @@ export async function startLaneBrainstorm(opts: {
     return reusedId;
   }
   const newAgentId: string = body.newAgentId || `demo-bs-${laneId}-${Date.now().toString(36)}`;
-  const title: string = body.title || `BRAINSTORM · ${laneName.toUpperCase()}`;
+  const title: string = body.title || titleFor("brainstorm", laneName, { laneId });
   const createdAgent: PaseoAgent =
     body.agent ??
     ({
@@ -187,225 +193,32 @@ export async function startLaneBrainstorm(opts: {
   return newAgentId;
 }
 
-// Fire a desktop notification when an agent newly needs you.
+// Fire a desktop notification (and the optional chime) when an agent newly needs you. Settings ›
+// Notifications picks which events alert.
 function useAttentionAlerts(members: Member[]) {
   const seen = useRef(new Map<string, string>());
   useEffect(() => {
+    const prefs = getPrefs();
+    let chime = false;
     for (const m of members) {
-      const key = m.attention && m.attention.tone !== "finished" ? `${m.attention.tone}:${m.attention.reason}` : "";
+      const key = m.attention ? `${m.attention.tone}:${m.attention.reason}` : "";
       const prev = seen.current.get(m.agent.id);
       seen.current.set(m.agent.id, key);
       // prev === undefined means first load: don't spam for everything already waiting.
-      if (key && prev !== undefined && prev !== key && "Notification" in window && Notification.permission === "granted") {
+      if (!key || prev === undefined || prev === key || !alertEnabled(m.attention!.tone, prefs)) continue;
+      if (!claimAlert(m.agent.id, m.attention!.tone)) continue; // the daemon event already alerted
+      chime = true;
+      if ("Notification" in window && Notification.permission === "granted") {
         new Notification(`${m.team.name}: ${m.agent.title ?? "agent"}`, { body: m.attention!.reason, tag: m.agent.id });
       }
     }
+    if (chime && prefs["notify.sound"]) playAlertChime();
   }, [members]);
-}
-
-// Context tokens in use across a team's live agents, plus a flag for workers past workerBudgetTokens.
-function TeamTokens({ view }: { view: TeamView }) {
-  const live = view.members.filter((m) => m.kind !== "old-lead" && m.agent.status !== "closed");
-  const total = live.reduce((n, m) => n + usedTokens(m), 0);
-  const over = live.filter(isOverBudget);
-  if (!total) return null;
-  return (
-    <div className="team-tokens" title={over.map((m) => `${m.agent.title}: ${fmtTok(usedTokens(m))}`).join(", ")}>
-      <span className="tok-total">{fmtTok(total)} tok</span>
-      {over.length > 0 && <span className="pill diag hot">{over.length} OVER BUDGET</span>}
-    </div>
-  );
 }
 
 const quotaTone = (pct?: number) => (pct === undefined ? "" : pct >= 85 ? "hot" : pct >= 60 ? "warn" : "ok");
 
 type PickTeamAgent = (teamId: string, agentId: string) => void;
-
-// Agents already on screen inside an expanded lead/brainstorm tree carry their own alert marker; the rest
-// of the team's alerts go in the sidebar alert strip.
-function sideAlerts(v: TeamView): Member[] {
-  const { open, showClosed } = getTreeState();
-  const { tree } = derived();
-  const shownInTree = (rootId: string, out: Set<string>, depth = 0) => {
-    if (!open.has(rootId) || depth >= MAX_TREE_DEPTH) return out;
-    for (const c of tree.childrenOf(rootId, showClosed))
-      if (!out.has(c.agent.id)) shownInTree(c.agent.id, out.add(c.agent.id), depth + 1);
-    return out;
-  };
-  const shown = new Set<string>();
-  for (const l of v.lanes) {
-    if (l.brainstorm) shownInTree(l.brainstorm.agent.id, shown.add(l.brainstorm.agent.id));
-    if (l.lead) shownInTree(l.lead.agent.id, shown.add(l.lead.agent.id));
-  }
-  return v.members.filter((m) => m.attention && m.kind !== "old-lead" && !shown.has(m.agent.id)).sort(alertOrder);
-}
-
-const LaneTopics = memo(
-  function LaneTopics({ laneId, topics, pick }: { laneId: string; topics: Member[]; pick: (id: string) => void }) {
-    const [open, setOpen] = useState(false);
-    if (!topics.length) return null;
-    return (
-      <div className={`lane-topics ${open ? "open" : ""}`} data-testid={`lane-topics-${laneId}`}>
-        <button
-          className="lane-topics-toggle"
-          aria-expanded={open}
-          onClick={() => setOpen((v) => !v)}
-          data-testid={`lane-topics-toggle-${laneId}`}
-        >
-          <span>
-            {open ? "▾" : "▸"} Topics ({topics.length})
-          </span>
-        </button>
-        {open && (
-          <div className="lane-topics-list">
-            {topics.map((m) => (
-              <button
-                key={m.agent.id}
-                className="lane-topic-item"
-                onClick={() => pick(m.agent.id)}
-                title={m.agent.title ?? ""}
-                data-testid={`lane-topic-item-${m.agent.id}`}
-              >
-                <StatusDot agent={m.agent} />
-                <span className="lane-topic-name">{topicOfBrainstorm(m.agent) || cleanTitle(m.agent.title)}</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  },
-  (p, n) => p.laneId === n.laneId && p.pick === n.pick && sameList(p.topics, n.topics),
-);
-
-const LeadBlock = memo(
-  function LeadBlock({
-    teamId,
-    laneId,
-    laneName,
-    cwd,
-    brainstorm,
-    lead,
-    topics = [],
-    pick,
-  }: {
-    teamId: string;
-    laneId: string;
-    laneName: string;
-    cwd: string;
-    brainstorm: Member | null;
-    lead: Member | null;
-    topics?: Member[];
-    pick: (id: string) => void;
-  }) {
-    const bsPaneCls = usePaneClass(brainstorm?.agent.id ?? "");
-    const leadPaneCls = usePaneClass(lead?.agent.id ?? "");
-    const [startingBs, setStartingBs] = useState(false);
-    const leadNeedsYou = !!(lead?.attention && lead.attention.tone !== "finished");
-
-    const onStartBs = async (e: React.MouseEvent) => {
-      e.stopPropagation();
-      if (startingBs) return;
-      setStartingBs(true);
-      try {
-        await startLaneBrainstorm({ teamId, laneId, laneName, cwd, onPick: pick });
-      } catch (err) {
-        alert(`Start brainstorm failed: ${err}`);
-      } finally {
-        setStartingBs(false);
-      }
-    };
-
-    return (
-      <div className="lead-block" data-testid={`sidebar-lane-${laneId}`}>
-        {/* DESIGN T1-4: Primary slot is the lane's active Brainstorm ("TALK HERE") */}
-        {brainstorm ? (
-          <>
-            <div className="lead-line">
-              <button
-                className={`lead-link primary-talk ${bsPaneCls}`}
-                onClick={() => pick(brainstorm.agent.id)}
-                title={brainstorm.agent.title ?? ""}
-              >
-                <Avatar
-                  id={brainstorm.agent.id}
-                  provider={brainstorm.agent.provider}
-                  agentType={brainstorm.agentType}
-                  size={28}
-                />
-                <span className="lead-name">{laneName}</span>
-                <b className="talk-here sidebar-role-pill">TALK HERE</b>
-                <StatusDot agent={brainstorm.agent} />
-              </button>
-              <TreeCaret id={brainstorm.agent.id} />
-            </div>
-            {brainstorm.attention && (
-              <div className="lead-alert">
-                <AlertPill m={brainstorm} onOpen={pick} named={false} />
-              </div>
-            )}
-            <TreeChildren parentId={brainstorm.agent.id} onPick={pick} compact />
-          </>
-        ) : (
-          <div className="lead-line">
-            <span className="lead-link muted">{laneName}</span>
-            <button
-              type="button"
-              className="btn ok small sidebar-start-bs-btn"
-              disabled={startingBs}
-              data-testid={`sidebar-start-brainstorm-${laneId}`}
-              onClick={onStartBs}
-              title={`Spawn fresh brainstorm from docs/brainstorm/${laneId}.md`}
-            >
-              {startingBs ? "…" : "+ Brainstorm"}
-            </button>
-          </div>
-        )}
-
-        {/* DESIGN T1-4: Secondary slot is the Lead ("RUNS THE WORK"), promoted when needs-you/attention */}
-        {lead && (
-          <>
-            <div className="lead-line lead-secondary-line">
-              <button
-                className={`lead-link secondary-lead ${leadNeedsYou ? "lead-needs-you" : ""} ${leadPaneCls}`}
-                onClick={() => pick(lead.agent.id)}
-                title={lead.agent.title ?? ""}
-              >
-                <Avatar
-                  id={lead.agent.id}
-                  provider={lead.agent.provider}
-                  agentType={lead.agentType}
-                  variant={leadVariant(lead)}
-                  size={24}
-                />
-                <span className="lead-name">★ {cleanTitle(lead.agent.title) || laneName}</span>
-                <span className="runs-the-work sidebar-role-pill">RUNS WORK</span>
-                <StatusDot agent={lead.agent} />
-              </button>
-              <TreeCaret id={lead.agent.id} />
-            </div>
-            {lead.attention && (
-              <div className="lead-alert">
-                <AlertPill m={lead} onOpen={pick} named={false} />
-              </div>
-            )}
-            <TreeChildren parentId={lead.agent.id} onPick={pick} compact />
-          </>
-        )}
-        {topics.length > 0 && <LaneTopics laneId={laneId} topics={topics} pick={pick} />}
-      </div>
-    );
-  },
-  (p, n) =>
-    p.teamId === n.teamId &&
-    p.laneId === n.laneId &&
-    p.laneName === n.laneName &&
-    p.cwd === n.cwd &&
-    sameMember(p.brainstorm, n.brainstorm) &&
-    sameMember(p.lead, n.lead) &&
-    sameList(p.topics ?? [], n.topics ?? []) &&
-    p.pick === n.pick,
-);
 
 const SidebarTeam = memo(function SidebarTeam({
   view: v,
@@ -426,15 +239,13 @@ const SidebarTeam = memo(function SidebarTeam({
   onAgent: PickTeamAgent;
   onQuickStart: PinHandler;
 }) {
-  const full = useFullView();
-  const others = useSelect(subscribeTree, () => sideAlerts(v), sameList);
   const pick = useCallback((id: string) => onAgent(v.team.id, id), [onAgent, v.team.id]);
   const onPin = useCallback(
     (pin: Pin) => void Promise.resolve(onQuickStart(pin)).catch((e) => alert(`Could not start ${pin.lane.name}: ${e}`)),
     [onQuickStart],
   );
   const firstAlert = v.members
-    .filter((m) => m.attention && m.attention.tone !== "finished" && m.kind !== "old-lead")
+    .filter(countsAsNeedsYou)
     .sort(alertOrder)[0];
   return (
     <div className={`team ${active ? "active" : ""} ${expanded ? "expanded" : "collapsed"}`} data-testid={`sidebar-team-${v.team.id}`}>
@@ -456,48 +267,24 @@ const SidebarTeam = memo(function SidebarTeam({
             {expanded ? "▾" : "▸"}
           </span>
           <NeonEmblem color={v.team.color} seed={v.team.id} size={18} />
-          <span className="team-name">{v.team.name}</span>
+          <span className="team-name"><TeamNameEdit team={v.team} /></span>
           {v.running > 0 && <span className="badge">{v.running}▶</span>}
         </button>
         {firstAlert && <AttentionBadge view={v} onOpen={pick} />}
+        {v.team.id !== UNASSIGNED.id && (
+          <button
+            className="tchip"
+            style={{ alignSelf: "center" }}
+            aria-label={`${v.team.name} menu`}
+            title="Team actions"
+            data-testid={`team-menu-${v.team.id}`}
+            onClick={(e) => openContextMenu(e, teamCtxItems(v))}
+          >
+            ⋯
+          </button>
+        )}
       </div>
-      {expanded && !full && v.team.id !== UNASSIGNED.id && <SidebarPins view={v} onPin={onPin} onOpenAgent={pick} />}
-      {expanded && full && (
-        <>
-          <TeamTokens view={v} />
-          {v.lanes.map((l) => {
-            const topics = l.members.filter(
-              (m) => m.kind === "brainstorm" && isTopicBrainstorm(m.agent) && !m.agent.archivedAt,
-            );
-            if (!l.lead && !l.brainstorm && !topics.length && l.lane.id === "_other") return null;
-            return (
-              <LeadBlock
-                key={l.lane.id}
-                teamId={v.team.id}
-                laneId={l.lane.id}
-                laneName={l.lane.name}
-                cwd={l.lead?.agent.cwd || l.brainstorm?.agent.cwd || v.team.paths?.[0] || ""}
-                brainstorm={l.brainstorm}
-                lead={l.lead}
-                topics={topics}
-                pick={pick}
-              />
-            );
-          })}
-          {others.length > 0 && (
-            <div className="side-alerts">
-              {others.slice(0, 3).map((m) => (
-                <AlertPill key={m.agent.id} m={m} onOpen={pick} />
-              ))}
-              {others.length > 3 && (
-                <button className="tchip" onClick={() => onTeam(v.team.id)} title="See every alert on the team page">
-                  +{others.length - 3} more
-                </button>
-              )}
-            </div>
-          )}
-        </>
-      )}
+      {expanded && v.team.id !== UNASSIGNED.id && <SidebarPins view={v} onPin={onPin} onOpenAgent={pick} />}
     </div>
   );
 });
@@ -530,6 +317,23 @@ const Sidebar = memo(function Sidebar(props: {
   const uiScalePct = Math.round(uiScale * 100);
   const views = props.views;
   const allCollapsed = views.length > 0 && views.every((v) => props.collapsedTeams.has(v.team.id));
+  const staleBuild = useStaleBuild();
+  const [signalsOpen, setSignalsOpen] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("vs.sidebarSignalsOpen") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggleSignals = () => {
+    setSignalsOpen((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("vs.sidebarSignalsOpen", next ? "1" : "0");
+      } catch {}
+      return next;
+    });
+  };
   return (
     <nav className={`sidebar ${props.sidebarCollapsed ? "collapsed" : ""}`} data-testid="sidebar">
       <div className="brand">
@@ -570,77 +374,153 @@ const Sidebar = memo(function Sidebar(props: {
           {allCollapsed ? "Expand all" : "Collapse all"}
         </button>
       </div>
-      {views.map((v) => (
-        <SidebarTeam
-          key={v.team.id}
-          view={v}
-          active={v.team.id === props.teamId}
-          expanded={!props.collapsedTeams.has(v.team.id)}
-          onTeamHeaderClick={props.onTeamHeaderClick}
-          onToggleExpand={props.onToggleTeamExpand}
-          onTeam={props.onTeam}
-          onAgent={props.onAgent}
-          onQuickStart={props.onQuickStart}
-        />
-      ))}
-      <button
-        type="button"
-        className="btn ghost small sidebar-new-squad-btn"
-        data-testid="sidebar-new-squad-btn"
-        title="Add a new squad (project folder or clone repo)"
-        onClick={props.onNewSquad}
-      >
-        {props.sidebarCollapsed ? "+" : "+ New squad"}
-      </button>
-      <div className="sidebar-legend">
-        <div className="legend-title">PROVIDER SIGNALS</div>
-        <div className="legend-row">
-          <span style={{ color: "#ff8573" }}>✶ Claude</span>
-          <span style={{ color: "#38f6ff" }}>◆ Gemini</span>
-          <span style={{ color: "#c28cff" }}>▲ DeepSeek</span>
-          <span style={{ color: "#e2e8f0" }}>● Codex</span>
-        </div>
-        {props.usage.map((u) => {
-          const prov = providerSpec(u.provider);
-          return (
-            <div
-              key={`${u.provider}-${u.account ?? ""}`}
-              className={`quota-pill ${quotaTone(u.usedPct)}`}
-              title={[u.account, u.resetAt && `resets ${new Date(u.resetAt).toLocaleString()}`, u.staleModelListWarning && "model list may be stale"].filter(Boolean).join(" · ")}
-            >
-              <span style={{ color: prov.color }}>{prov.symbol} {prov.name}</span>
-              <span>{u.usedPct !== undefined ? `${Math.round(u.usedPct)}% used` : u.remainingLabel}</span>
-              <span className="quota-bar"><i style={{ width: `${u.usedPct ?? 0}%` }} /></span>
-            </div>
-          );
-        })}
-      </div>
-      <button className="btn ghost small" onClick={props.onPairDevice} title="Pair a phone or PC over NordVPN Meshnet HTTPS">
-        📱 PAIR DEVICE
-      </button>
-      <button className="btn ghost small" data-testid="about-licenses-btn" onClick={props.onAbout} title="About VibeSquad and third-party licenses">
-        ℹ ABOUT &amp; LICENSES
-      </button>
-      <button className="btn ghost small" data-testid="open-help-btn" onClick={props.onHelp}>
-        ❓ Help &amp; Docs
-      </button>
-      <button className="btn ghost small" data-testid="open-diagnostics-btn" onClick={props.onDiagnostics}>
-        🩺 Diagnostics &amp; Logs
-      </button>
-      <div className="sidebar-footer-row">
-        <button className="btn ghost small" onClick={props.onSettings} title="Edit squads, teams, path matchers and 4K UI scale">
-          ⚙ SQUADS
-        </button>
+      <div className="sidebar-scroll" data-testid="sidebar-scroll">
+        {views.map((v) => (
+          <SidebarTeam
+            key={v.team.id}
+            view={v}
+            active={v.team.id === props.teamId}
+            expanded={!props.collapsedTeams.has(v.team.id)}
+            onTeamHeaderClick={props.onTeamHeaderClick}
+            onToggleExpand={props.onToggleTeamExpand}
+            onTeam={props.onTeam}
+            onAgent={props.onAgent}
+            onQuickStart={props.onQuickStart}
+          />
+        ))}
         <button
-          className={`btn ghost small ui-scale-sidebar-btn ${uiScalePct !== 100 ? "on" : ""}`}
-          onClick={() => cycleUiScalePreset(true)}
-          title="Cycle UI scale preset (Ctrl+= / Ctrl+- / Ctrl+0)"
-          data-testid="sidebar-ui-scale-btn"
+          type="button"
+          className="btn ghost small sidebar-new-squad-btn"
+          data-testid="sidebar-new-squad-btn"
+          title="Add a new squad (project folder or clone repo)"
+          onClick={props.onNewSquad}
         >
-          🔍 {uiScalePct}%
+          {props.sidebarCollapsed ? "+" : "+ New squad"}
         </button>
       </div>
-      <PushNotificationControls />
+      <div className="sidebar-dock" data-testid="sidebar-dock">
+        <button
+          type="button"
+          className="sidebar-signals-toggle"
+          data-testid="sidebar-signals-toggle"
+          onClick={toggleSignals}
+          title="Toggle provider quota signals"
+        >
+          <span>PROVIDER SIGNALS {signalsOpen ? "▾" : "▸"}</span>
+          <span className="sidebar-signals-dots">
+            <span style={{ color: "#ff8573" }}>✶</span>
+            <span style={{ color: "#38f6ff" }}>◆</span>
+            <span style={{ color: "#c28cff" }}>▲</span>
+            <span style={{ color: "#e2e8f0" }}>●</span>
+          </span>
+        </button>
+        {signalsOpen && (
+          <div className="sidebar-legend">
+            <div className="legend-title">PROVIDER SIGNALS</div>
+            <div className="legend-row">
+              <span style={{ color: "#ff8573" }}>✶ Claude</span>
+              <span style={{ color: "#38f6ff" }}>◆ Gemini</span>
+              <span style={{ color: "#c28cff" }}>▲ DeepSeek</span>
+              <span style={{ color: "#e2e8f0" }}>● Codex</span>
+            </div>
+            {props.usage.map((u) => {
+              const prov = providerSpec(u.provider);
+              return (
+                <div
+                  key={`${u.provider}-${u.account ?? ""}`}
+                  className={`quota-pill ${quotaTone(u.usedPct)}`}
+                  title={[u.account, u.resetAt && `resets ${new Date(u.resetAt).toLocaleString()}`, u.staleModelListWarning && "model list may be stale"].filter(Boolean).join(" · ")}
+                >
+                  <span style={{ color: prov.color }}>{prov.symbol} {prov.name}</span>
+                  <span>{u.usedPct !== undefined ? `${Math.round(u.usedPct)}% used` : u.remainingLabel}</span>
+                  <span className="quota-bar"><i style={{ width: `${u.usedPct ?? 0}%` }} /></span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <div className="sidebar-footer-row">
+          <div className="sidebar-footer-left">
+            <button
+              type="button"
+              className={`btn ghost small ui-scale-sidebar-btn ${uiScalePct !== 100 ? "on" : ""}`}
+              onClick={() => cycleUiScalePreset(true)}
+              title="Cycle UI scale preset (Ctrl+= / Ctrl+- / Ctrl+0)"
+              data-testid="sidebar-ui-scale-btn"
+            >
+              🔍 {uiScalePct}%
+            </button>
+            {isRemote() ? (
+              <button
+                type="button"
+                className="btn ghost small sidebar-icon-btn"
+                data-testid="sidebar-unpair-btn"
+                onClick={() => {
+                  clearSession();
+                  location.reload();
+                }}
+                title="Unpair Device — forget the saved pairing and password on this browser"
+                aria-label="Unpair Device"
+              >
+                🔌
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn ghost small sidebar-icon-btn"
+                onClick={props.onPairDevice}
+                title="Pair a phone or PC over LAN / Meshnet / Remote Relay"
+                aria-label="Pair Device"
+              >
+                📱
+              </button>
+            )}
+          </div>
+          <div className="sidebar-footer-right">
+            <button
+              type="button"
+              className="btn ghost small sidebar-icon-btn"
+              data-testid="open-help-btn"
+              onClick={props.onHelp}
+              title="Help & Docs"
+              aria-label="Help & Docs"
+            >
+              ❓
+            </button>
+            <button
+              type="button"
+              className="btn ghost small sidebar-icon-btn"
+              data-testid="about-licenses-btn"
+              onClick={props.onAbout}
+              title="About VibeSquad & Third-Party Licenses"
+              aria-label="About & Licenses"
+            >
+              ℹ
+            </button>
+            <button
+              type="button"
+              className="btn ghost small sidebar-icon-btn"
+              data-testid="open-diagnostics-btn"
+              onClick={props.onDiagnostics}
+              title={staleBuild ? `Diagnostics & Logs (build ${staleBuild.behind} commit(s) behind)` : "Diagnostics & Logs"}
+              aria-label="Diagnostics & Logs"
+            >
+              🩺
+              {staleBuild && !isRemote() && <span className="sidebar-stale-dot" />}
+            </button>
+            <button
+              type="button"
+              className="btn ghost small sidebar-icon-btn sidebar-cog-btn"
+              data-testid="sidebar-settings-btn"
+              onClick={props.onSettings}
+              title="Settings: app, chat, notifications, teams, Paseo, profiles"
+              aria-label="Settings"
+            >
+              ⚙
+            </button>
+          </div>
+        </div>
+      </div>
       <div
         className="sidebar-resizer"
         data-testid="sidebar-resizer"
@@ -715,7 +595,7 @@ const Card = memo(function Card({ label, m, onPick, onSuccessor }: CardProps) {
       <Avatar id={a.id} provider={a.provider} agentType={m.agentType} variant={leadVariant(m)} size={56} />
       <div className="card-body">
         <div className="card-top-row">
-          <span className="card-label">{m.agentType === "brainstorm" ? "BRAINSTORM" : AGENT_TYPE_LABEL[m.agentType]}</span>
+          <span className="card-label">{m.agentType === "brainstorm" ? (!isTopicBrainstorm(a) && isHubLaneId(m.laneId ?? undefined) ? "RIFFBOT" : "BRAINSTORM") : AGENT_TYPE_LABEL[m.agentType]}</span>
           <span className="card-top-right">
             <AgentActions agent={a} />
             <span className="prov-pill" style={{ color: prov.color, borderColor: prov.color }}>
@@ -737,7 +617,7 @@ const Card = memo(function Card({ label, m, onPick, onSuccessor }: CardProps) {
               RUNS THE WORK ·{" "}
             </span>
           )}
-          {a.model} · {shortPath(a.cwd)} · <Ago iso={a.updatedAt} />
+          {a.model} · {shortPath(a.cwd)} · <Ago iso={a.updatedAt} /> ago
         </div>
         {isBs ? (
           <BrainstormCtxPill agent={a} team={m.team} />
@@ -801,12 +681,12 @@ function EmptyBrainstormCard({
       <Avatar id={`bs-empty-${teamId}-${laneId}`} provider="claude" agentType="brainstorm" size={56} />
       <div className="card-body">
         <div className="card-top-row">
-          <span className="card-label">BRAINSTORM</span>
+          <span className="card-label">{isHubLaneId(laneId) ? "RIFFBOT" : "BRAINSTORM"}</span>
           <b className="talk-here" data-testid="talk-here-badge">
             TALK HERE
           </b>
         </div>
-        <div className="card-title">BRAINSTORM · {laneName.toUpperCase()}</div>
+        <div className="card-title">{titleFor("brainstorm", laneName, { laneId })}</div>
         <div className="muted small">
           <b className="talk-here">TALK HERE · </b>
           Seeded from <code>docs/brainstorm/{laneId}.md</code>
@@ -961,7 +841,7 @@ function UnassignedTray({
   const allLanes = useMemo(
     () =>
       TEAMS.flatMap((team) =>
-        team.lanes.map((lane) => ({
+        shownLanesOf(team).map((lane) => ({
           teamId: team.id,
           teamName: team.name,
           laneId: lane.id,
@@ -1061,9 +941,9 @@ function SquadUnsortedGroup({ view, onPick }: { view: TeamView; onPick: (id: str
   const [assigningId, setAssigningId] = useState<string | null>(null);
   if (!unsorted.length) return null;
   const allLanes = [
-    ...view.team.lanes.map((l) => ({ teamId: view.team.id, laneId: l.id, label: `${view.team.name} / ${l.name}` })),
+    ...shownLanesOf(view.team).map((l) => ({ teamId: view.team.id, laneId: l.id, label: `${view.team.name} / ${l.name}` })),
     ...TEAMS.filter((t) => t.id !== view.team.id).flatMap((t) =>
-      t.lanes.map((l) => ({ teamId: t.id, laneId: l.id, label: `${t.name} / ${l.name}` })),
+      shownLanesOf(t).map((l) => ({ teamId: t.id, laneId: l.id, label: `${t.name} / ${l.name}` })),
     ),
   ];
   const adopt = async (a: PaseoAgent) => {
@@ -1129,7 +1009,9 @@ const TeamPage = memo(function TeamPage(props: {
 }) {
   const { view, unassignedMembers, onPick, query, showOld, archivedMembers } = props;
   const full = useFullView();
-  const alerts = view.members.filter((m) => m.attention && m.kind !== "old-lead").sort(alertOrder);
+  const [showDoneAlerts, setShowDoneAlerts] = useState(false);
+  const alerts = view.members.filter((m) => m.attention && m.attention.tone !== "finished" && m.kind !== "old-lead").sort(alertOrder);
+  const doneAlerts = view.members.filter((m) => m.attention?.tone === "finished" && m.kind !== "old-lead").sort(alertOrder);
   const worktrees = useMemo(() => {
     const map = new Map<string, number>();
     for (const m of view.members) if (m.agent.status !== "closed") map.set(m.agent.cwd, (map.get(m.agent.cwd) ?? 0) + 1);
@@ -1140,13 +1022,13 @@ const TeamPage = memo(function TeamPage(props: {
 
   // Default squad page: one tile per pinned Team. FULL brings back the plumbing view below.
   if (!full) {
-    const teamCount = view.lanes.filter((l) => l.lane.id !== "_other" && l.lane.state !== "done").length;
+    const teamCount = view.lanes.filter((l) => l.lane.id !== "_other" && l.lane.state !== "done" && l.lane.state !== "removed").length;
     return (
       <div className="team-body">
         <header className="team-header">
           <h1>
             <NeonEmblem color={view.team.color} seed={view.team.id} size={32} />
-            <span>{view.team.name}</span>
+            <TeamNameEdit team={view.team} />
             <span className="h1-stats">
               {teamCount} TEAMS · <span className={view.needsYou > 0 ? "stat-alert" : ""}>{view.needsYou} NEED YOU</span>
             </span>
@@ -1181,7 +1063,7 @@ const TeamPage = memo(function TeamPage(props: {
       <header className="team-header">
         <h1>
           <NeonEmblem color={view.team.color} seed={view.team.id} size={32} />
-          <span>{view.team.name}</span>
+          <TeamNameEdit team={view.team} />
           <span className="h1-stats">
             <span className="stat-cyan">{view.running} WORKING</span> ·{" "}
             <span className={view.needsYou > 0 ? "stat-alert" : ""}>{view.needsYou} NEED YOU</span> · {view.members.length} AGENTS
@@ -1202,11 +1084,23 @@ const TeamPage = memo(function TeamPage(props: {
         </div>
       </header>
 
-      {alerts.length > 0 && (
+      {(alerts.length > 0 || doneAlerts.length > 0) && (
         <div className="header-alerts">
           {alerts.map((m) => (
             <AlertPill key={m.agent.id} m={m} onOpen={onPick} />
           ))}
+          {doneAlerts.length > 0 && (
+            <button
+              type="button"
+              className="tchip"
+              aria-expanded={showDoneAlerts}
+              data-testid="team-completed-toggle"
+              onClick={() => setShowDoneAlerts((v) => !v)}
+            >
+              {showDoneAlerts ? "▾" : "▸"} Completed ({doneAlerts.length})
+            </button>
+          )}
+          {showDoneAlerts && doneAlerts.map((m) => <AlertPill key={m.agent.id} m={m} onOpen={onPick} />)}
         </div>
       )}
       <HandoffPanel handoff={handoff} />
@@ -1285,6 +1179,7 @@ const TeamPage = memo(function TeamPage(props: {
                 (m) => !(m.attention && m.attention.tone !== "finished") && m.agent.status !== "running" && m.agent.status !== "closed",
               )}
               onPick={onPick}
+              collapsed
               archive
             />
             <Section title="Closed" collapsed members={live.filter((m) => m.agent.status === "closed")} onPick={onPick} archive />
@@ -1333,12 +1228,19 @@ const Toolbar = memo(function Toolbar(props: {
   const uiScale = useUiScale();
   const uiScalePct = Math.round(uiScale * 100);
   const full = useFullView();
+  useTeams();
+  const vibeOn = getTeams().find((t) => t.id === props.squadId)?.vibeMode === true;
   return (
     <div className="toolbar">
       <div className="seg">
         <button
           className={props.screen === "teams" ? "on" : ""}
-          onClick={() => (props.screen === "teams" ? enterSquadsHome() : props.onScreen("teams"))}
+          onClick={() => {
+            setFullView(false);
+            setFocus(false);
+            if (props.screen !== "teams") props.onScreen("teams");
+            enterSquadsHome();
+          }}
         >
           SQUADS
         </button>
@@ -1381,6 +1283,16 @@ const Toolbar = memo(function Toolbar(props: {
           <option value="older">Older</option>
         </select>
       )}
+      {vibeOn && (
+        <button
+          className="tchip on"
+          data-testid="vibe-mode-chip"
+          title={`Vibe mode is on for ${props.squadName || "this Squad"}. Click to turn it off.`}
+          onClick={() => void saveTeams((cur) => cur.map((t) => (t.id === props.squadId ? { ...t, vibeMode: false } : t)))}
+        >
+          Vibe mode
+        </button>
+      )}
       <button className="tchip" data-testid="global-transcript-search-btn" title="Search all transcripts" onClick={() => openOverlay("search")}>
         🔍
       </button>
@@ -1402,17 +1314,19 @@ const Toolbar = memo(function Toolbar(props: {
 const useSheet = () => useSyncExternalStore(subscribePanes, () => getPanes().sheet);
 const useSplit = () => useSyncExternalStore(subscribePanes, () => getPanes().split);
 
-// Ctrl+= / Ctrl+- / Ctrl+0 UI scale, Ctrl+. focus, Ctrl+J top NEEDS YOU, Ctrl+1..9 tabs of the active pane. Esc stays the composer's.
+// Fixed keys: Ctrl+= / Ctrl+- / Ctrl+0 UI scale, Ctrl+1..9 tabs of the active pane. Esc stays the composer's.
+// Rebindable ones (palette, Ctrl+. focus, Ctrl+J top NEEDS YOU, ...) go through the keymap in CommandPalette.tsx.
 function onShortcut(e: KeyboardEvent) {
   if (handleUiScaleKeyDown(e)) return;
   if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
-  if (e.key === ".") toggleFocus();
-  else if (e.key === "j" || e.key === "J") {
-    const top = railAlerts().list[0];
-    if (top) openAgent(top.agent.id);
-  } else if (/^[1-9]$/.test(e.key)) activateNth(Number(e.key) - 1);
+  if (/^[1-9]$/.test(e.key)) activateNth(Number(e.key) - 1);
   else return;
   e.preventDefault();
+}
+
+function openTopNeedsYou() {
+  const top = railAlerts().list[0];
+  if (top) openAgent(top.agent.id);
 }
 
 const LICENSES_FALLBACK =
@@ -1432,6 +1346,8 @@ function useExposedIps(): string[] {
         if (alive && Array.isArray(h?.configWarnings)) {
           setServerConfigWarnings(h.configWarnings);
         }
+        if (alive) setStaleBuild(h?.stale);
+        if (alive) setLocalAccess(h?.localAccess);
       })
       .catch(() => {});
     return () => {
@@ -1475,7 +1391,7 @@ function AboutLicensesModal({ onClose, onChecklist }: { onClose: () => void; onC
             {updateLabel(upd, updaterStatus.currentVersion)}
           </button>
         </p>
-        <p>VibeSquad works with Paseo (pinned CLI v0.13.2).</p>
+        <p>VibeSquad works with Paseo (pinned CLI v0.14.0).</p>
         <p>Licensed under the MIT License.</p>
         <p>
           <button className="btn ghost small" data-testid="about-setup-checklist-btn" onClick={onChecklist}>
@@ -1489,7 +1405,7 @@ function AboutLicensesModal({ onClose, onChecklist }: { onClose: () => void; onC
 }
 
 export function App() {
-  const { conn, archivedAgents, workspaces, providerUsage } = usePaseo();
+  const { conn, archivedAgents, workspaces, providerUsage, agents, rosterLoaded } = usePaseo();
   const teamsVersion = useTeams();
   const { members, views } = derived();
   const full = useFullView();
@@ -1503,6 +1419,7 @@ export function App() {
   const uiScale = useUiScale();
   const uiScaleHud = useUiScaleHud();
   const [modal, setModal] = useState<"new-agent" | "add-buddy" | "settings" | "pair-device" | "about" | "help" | "diagnostics" | "first-run" | "new-squad" | null>(null);
+  const setFirstRunOpen = (open: boolean) => setModal(open ? "first-run" : null);
   const [firstRunStatus, setFirstRunStatus] = useState<FirstRunStatus | null>(null);
   const exposedIps = useExposedIps();
   const [dismissedLanKey, setDismissedLanKey] = useState<string>(() => localStorage.getItem(DISMISSED_LAN_IPS_KEY) ?? "");
@@ -1514,13 +1431,16 @@ export function App() {
   }, [exposedIps, dismissedLanKey]);
   const updaterStatus = useUpdaterStatus();
   const configWarnings = useConfigWarnings();
+  const staleBuild = useStaleBuild();
+  const staleBuildDismissed = useStaleBuildDismissed();
+  const localReadOnly = useLocalReadOnly();
   useEffect(() => {
     void loadUpdaterStatus();
     const id = setInterval(() => void loadUpdaterStatus(), 60_000);
     return () => clearInterval(id);
   }, []);
   const [successorId, setSuccessorId] = useState<string | null>(null);
-  const [teamId, setTeamId] = useState(() => parseUrlState(location.search).team ?? localStorage.getItem("vs.team") ?? views[0]?.team.id ?? "efi");
+  const [teamId, setTeamId] = useState(() => parseUrlState(location.search).team ?? (getRestoreLastView() ? localStorage.getItem("vs.team") : null) ?? views[0]?.team.id ?? "efi");
   const { needsSetup: profilesNeedSetup, setupDismissed: profilesSetupDismissed } = useProfiles();
   const [collapsedTeams, setCollapsedTeams] = useState<Set<string>>(() => readCollapsedTeams());
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1");
@@ -1532,6 +1452,16 @@ export function App() {
   const [dateGroup, setDateGroup] = useState<DateBucket | "all">("all");
   const archivedMembers = useMemo(() => resolve(archivedAgents), [archivedAgents, teamsVersion]);
   useAttentionAlerts(members);
+  usePaseoAttention(members);
+  // Settings › App › "Confirm before closing while agents run": the beforeunload hook in drafts.ts asks this.
+  const membersRef = useRef(members);
+  membersRef.current = members;
+  useEffect(() => {
+    setCloseGuard(() => getPref("app.confirmClose") && membersRef.current.some((m) => m.agent.status === "running"));
+    return () => setCloseGuard(null);
+  }, []);
+  useAttentionTitle(views);
+  useRestorePrune(agents, rosterLoaded);
 
   // A lead past its handoff budget with no needs-you flag would otherwise sit silently (only the card's
   // SPAWN SUCCESSOR button hints at it). Flag it once; "handoff-flagged" stops a cleared flag re-firing.
@@ -1552,7 +1482,7 @@ export function App() {
   }, [members]);
 
   useEffect(() => {
-    if (DEMO) return;
+    if (DEMO || isRemote()) return;
     void fetchFirstRunStatus().then((s) => {
       if (!s) return;
       setFirstRunStatus(s);
@@ -1639,7 +1569,10 @@ export function App() {
     const onPop = () => {
       const u = parseUrlState(location.search);
       if (u.team) setTeamId(u.team);
-      if (u.agent) openAgent(u.agent);
+      const act = popAction(location.search);
+      if (act === "agent" && u.agent) openAgent(u.agent);
+      else if (act === "squads-home") enterSquadsHome();
+      else exitSquadsHome(); // Back from a chat lands on the squad page, so the URL effect doesn't re-push ?agent=
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
@@ -1648,6 +1581,8 @@ export function App() {
   // Stable callbacks so the memoized sidebar and team page skip renders they do not need.
   // Switching teams never touches open tabs.
   const onTeam = useCallback((id: string) => {
+    setFullView(false);
+    setFocus(false);
     exitSquadsHome();
     setTeamId(id);
     setScreen("teams");
@@ -1664,6 +1599,8 @@ export function App() {
 
   // Clicking a squad name opens its overview (expanding it if collapsed); only the caret collapses.
   const onTeamHeaderClick = useCallback((id: string) => {
+    setFullView(false);
+    setFocus(false);
     exitSquadsHome();
     setTeamId(id);
     setScreen("teams");
@@ -1758,6 +1695,10 @@ export function App() {
     (pin: Pin) => void focusPin(pin).catch((e) => alert(`Could not start ${pin.lane.name}: ${e}`)),
     [],
   );
+  const onSpinUpPin = useCallback(
+    (pin: Pin, profile?: string) => void spinUpPin(pin, profile).catch(() => {}),
+    [],
+  );
   // The pinned layout (focus view + rail, or the clean grid) is the default page only: FULL, focus mode
   // and the Workspaces screen show the panes as before.
   const pinFocus = usePinFocus();
@@ -1770,9 +1711,9 @@ export function App() {
   const withPanes = (hasTabs || focus) && !pinFocused && !hidePanes;
   const urlAgentId = urlAgentFor({ activeAgentId, onGrid: hidePanes, startFresh: pinFocused && !pinFocus?.agentId });
   useEffect(() => {
-    const next = serializeUrlState({ team: activeTeamId || null, agent: urlAgentId }, location.search);
+    const next = serializeUrlState({ team: activeTeamId || null, agent: urlAgentId, squadsHome: pinLayout && pinsHome && squadsHome }, location.search);
     if (next !== (location.search || "")) history.pushState(null, "", `${location.pathname}${next}${location.hash}`);
-  }, [activeTeamId, urlAgentId]);
+  }, [activeTeamId, urlAgentId, pinLayout, pinsHome, squadsHome]);
   // Esc on the squad page goes up to Squads Home (chat's own Esc handler runs first and marks the event handled).
   useEffect(() => {
     if (!pinLayout) return;
@@ -1790,7 +1731,7 @@ export function App() {
   const leftPinLayout = useRef(false);
   useEffect(() => {
     if (!pinLayout) clearPinFocus();
-    else if (leftPinLayout.current) exitSquadsHome(); // back from FULL / focus mode: land on the grid
+    else if (leftPinLayout.current && !getSquadsHome()) exitSquadsHome(); // back from FULL / focus mode: land on the grid (unless SQUADS asked for Squads Home)
     leftPinLayout.current = !pinLayout;
   }, [pinLayout]);
   const dateGrouped = useMemo(() => {
@@ -1801,7 +1742,16 @@ export function App() {
       .sort((a, b) => Date.parse(b.agent.updatedAt ?? "") - Date.parse(a.agent.updatedAt ?? ""));
   }, [dateGroup, showArchived, members, archivedMembers, query]);
   const paletteActions = useMemo(
-    () => ({ newAgent: openNewAgent, settings: openSettings, workspaces: () => setScreen("workspaces"), toggleFocus }),
+    () => ({
+      newAgent: openNewAgent,
+      settings: (target?: string) => {
+        if (target) requestSettingsTarget(target);
+        openSettings();
+      },
+      workspaces: () => setScreen("workspaces"),
+      toggleFocus,
+      needsYou: openTopNeedsYou,
+    }),
     [openNewAgent, openSettings],
   );
   const onPaletteAgent = useCallback((m: Member) => onAgent(m.team.id, m.agent.id), [onAgent]);
@@ -1835,7 +1785,7 @@ export function App() {
       className={`app ${focus ? "focus" : ""} ${withPanes ? "with-panes" : ""} ${split && withPanes ? "split" : ""} ${pinFocused ? `pin-focus ${pinFocus?.agentId ? "" : "pin-no-drawer"}` : ""} ${hidePanes ? "pins-home" : ""} ${sheet ? "sheet-open" : ""} ${mobileTeamView ? "mobile-team-view" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
       style={{ "--sidebar-w": `${sidebarWidth}px` } as React.CSSProperties}
     >
-      {exposedIps.length > 0 && !isLanBannerDismissed(exposedIps, dismissedLanKey) && (
+      {exposedIps.length > 0 && !isRemote() && !isLanBannerDismissed(exposedIps, dismissedLanKey) && (
         <div className="exposed-network-banner" data-testid="exposed-network-banner" role="alert" style={{ gridColumn: "1 / -1", background: "#ff2a85", color: "#05060d", fontWeight: 800, padding: "6px 12px", textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
           <span>{`⚠ EXPOSED ON ${exposedIps.join(", ")} — LAN/meshnet access enabled`}</span>
           <button
@@ -1848,6 +1798,43 @@ export function App() {
               setDismissedLanKey(key);
               localStorage.setItem(DISMISSED_LAN_IPS_KEY, key);
             }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+      {localReadOnly && !isRemote() && (
+        <div
+          className="read-only-banner"
+          data-testid="read-only-banner"
+          role="alert"
+          style={{ gridColumn: "1 / -1", background: "#ffb000", color: "#05060d", fontWeight: 800, padding: "6px 12px", textAlign: "center" }}
+        >
+          Read-only: this tab has no VibeSquad local token. Open VibeSquad from its launcher or desktop app, or run vs open.
+        </div>
+      )}
+      {staleBuild && !isRemote() && !staleBuildDismissed && (
+        <div
+          className="stale-build-banner"
+          data-testid="stale-build-banner"
+          role="status"
+        >
+          <span>
+            {`Running an older build: ${staleBuild.behind} commit${staleBuild.behind === 1 ? "" : "s"} behind (${staleBuild.built} → ${staleBuild.head}).`}
+          </span>
+          <button
+            type="button"
+            className="btn small ghost"
+            onClick={() => setModal("diagnostics")}
+          >
+            Diagnostics
+          </button>
+          <button
+            type="button"
+            className="btn small ghost"
+            data-testid="dismiss-stale-build-btn"
+            aria-label="Dismiss older build notice"
+            onClick={() => dismissStaleBuild()}
           >
             ✕
           </button>
@@ -1867,10 +1854,10 @@ export function App() {
             textAlign: "center",
           }}
         >
-          {`⚠ Config JSON parse error (using fallback defaults without overwriting): ${configWarnings.join(" · ")}`}
+          {`⚠ Config warning: ${configWarnings.join(" · ")}`}
         </div>
       )}
-      {updaterStatus.updateAvailable && !updaterStatus.dismissed && (
+      {updaterStatus.updateAvailable && !isRemote() && !updaterStatus.dismissed && (
         <div
           className="update-available-banner"
           data-testid="update-available-banner"
@@ -1908,7 +1895,20 @@ export function App() {
           </button>
         </div>
       )}
-      <DaemonStatusBanner onOpenDiagnostics={openDiagnostics} />
+      {/* <DaemonStatusBanner onOpenDiagnostics={openDiagnostics} /> */}
+      <DaemonStatusBanner
+        onOpenDiagnostics={() => setModal("diagnostics")}
+        onOpenSetup={() => {
+          try {
+            localStorage.removeItem(FIRST_RUN_DONE_KEY);
+          } catch {}
+          setFirstRunOpen(true);
+        }}
+        onOpenPaseoSettings={() => {
+          requestSettingsTarget("paseo-daemon");
+          setModal("settings");
+        }}
+      />
       {!focus && (
         <Sidebar
           views={sidebarViews}
@@ -1931,7 +1931,7 @@ export function App() {
           onAgent={onAgent}
           onQuickStart={onQuickStart}
           onNewSquad={openNewSquad}
-          lanExposed={exposedIps.length > 0}
+          lanExposed={exposedIps.length > 0 && !isRemote()}
           lanIps={exposedIps}
         />
       )}
@@ -1965,6 +1965,7 @@ export function App() {
             squadName={view?.team.name ?? ""}
             onSelectSquad={onTeam}
           />
+          {screen === "teams" && !(pinLayout && pinsHome && squadsHome) && <HubBar view={view} onOpen={onQuickStart} />}
           {screen === "workspaces" ? (
             <WorkspacesView />
           ) : dateGrouped ? (
@@ -1998,10 +1999,10 @@ export function App() {
           )}
         </main>
       )}
-      {(hasTabs || focus || pinFocused) && (
+      {(withPanes || pinFocused) && (
         <AgentPanes
           onSuccessor={paneSuccessor}
-          header={pinFocusView && pinFocus ? <PinFocusHeader view={pinFocusView} focus={pinFocus} onStart={onRailPick} onSelectSquad={onTeam} /> : undefined}
+          header={pinFocusView && pinFocus ? <PinFocusHeader view={pinFocusView} focus={pinFocus} spinUpError={pinFocus.spinUpError} onStart={onSpinUpPin} onSelectSquad={onTeam} belowBar={pinFocus.agentId ? undefined : <HubBar view={pinFocusView} onOpen={onQuickStart} />} /> : undefined}
         />
       )}
       {pinFocusView && pinFocus && <PinRail view={pinFocusView} focus={pinFocus} onPick={onRailPick} />}
@@ -2024,7 +2025,14 @@ export function App() {
         />
       )}
       {modal === "new-agent" && view && <NewAgentModal view={view} onClose={() => setModal(null)} onCreated={selectAgent} />}
-      {modal === "settings" && <TeamSettingsModal onClose={() => setModal(null)} />}
+      {modal === "settings" && (
+        <SettingsHome
+          onClose={() => setModal(null)}
+          onDiagnostics={openDiagnostics}
+          onLicenses={openAbout}
+          onChecklist={() => setModal("first-run")}
+        />
+      )}
       {modal === "pair-device" && <PairDeviceModal onClose={() => setModal(null)} />}
       {modal === "about" && <AboutLicensesModal onClose={() => setModal(null)} onChecklist={() => setModal("first-run")} />}
       {modal === "help" && <HelpModal onClose={() => setModal(null)} onTour={() => setModal("first-run")} />}
@@ -2033,10 +2041,9 @@ export function App() {
       {modal === "new-squad" && (
         <NewSquadModal
           onClose={() => setModal(null)}
-          onCreated={(newTeamId, pin) => {
+          onCreated={(newTeamId) => {
             setModal(null);
             onTeam(newTeamId);
-            if (pin) void onQuickStart(pin);
           }}
         />
       )}

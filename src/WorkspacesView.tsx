@@ -1,62 +1,26 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { PaseoAgent, PaseoWorkspace } from "@getpaseo/client";
-import { archiveWorkspace, usePaseo } from "./paseo";
+import { DEMO, archiveAgent, archiveWorkspace, daemonClient, removeLocalAgent, usePaseo } from "./paseo";
 import { ConfirmButton, ago } from "./ui";
 import { openRightDockTab } from "./RightDock";
+import { agentsWithoutWorkspaceId, bulkLabels, buildFolders, clearLabels, isLiveAgent, normDir, type Folder, type Verdict } from "./workspaceGroups";
+import { listProjects, setWorkspacePinned, setWorkspaceTitle } from "./paseoWorkspaces";
+import { dropFromOverlay, mergeOverlay, pinnedFirst, pruneOverlay, type OverlayEntry } from "./workspaceLogic";
+import { CreateWorkspacePanel, NameEditor, ProjectsPanel, RecoverPanel, SetupChip, type ProjectRow } from "./WorkspaceTools";
+import { WorktreesPanel } from "./WorktreesPanel";
 
-type Verdict = "in-use" | "check" | "safe";
 type Filter = "all" | "safe" | "check" | "in-use";
 type Sort = "activity" | "cleanup" | "name";
-
-const STALE_DAYS = 3;
-const DAY = 86_400_000;
-
-const norm = (p?: string) => (p ?? "").replace(/[\\/]+/g, "/").replace(/\/$/, "").toLowerCase();
-
-type Row = {
-  w: PaseoWorkspace;
-  verdict: Verdict;
-  reasons: string[];
-  live: number;
-  archived: number;
-  idleDays: number;
-  owned: boolean;
-};
-
-function assess(w: PaseoWorkspace, agents: PaseoAgent[], archived: PaseoAgent[]): Row {
-  const dir = norm(w.workspaceDirectory);
-  const inDir = (a: PaseoAgent) => {
-    const c = norm(a.cwd);
-    return c === dir || c.startsWith(dir + "/");
-  };
-  const mine = agents.filter(inDir);
-  const live = mine.filter((a) => a.status !== "closed").length;
-  const arch = archived.filter(inDir).length;
-  const git = w.gitRuntime;
-  const owned = w.workspaceKind === "worktree" && !!git?.isPaseoOwnedWorktree;
-  const ahead = Math.max(git?.aheadBehind?.ahead ?? 0, git?.aheadOfOrigin ?? 0);
-  const pr = w.githubRuntime?.pullRequest;
-  const idleDays = w.activityAt ? (Date.now() - Date.parse(w.activityAt)) / DAY : Infinity;
-
-  const reasons: string[] = [];
-  if (live > 0) return { w, verdict: "in-use", reasons: [`${live} live agent${live > 1 ? "s" : ""}`], live, archived: arch, idleDays, owned };
-  if (!owned) reasons.push("not a Paseo worktree");
-  if (git?.isDirty) reasons.push("uncommitted changes");
-  if (ahead > 0) reasons.push(`${ahead} unpushed commit${ahead > 1 ? "s" : ""}`);
-  if (pr && !pr.isMerged && String(pr.state).toLowerCase() === "open") reasons.push(`open PR${pr.number ? ` #${pr.number}` : ""}`);
-  if (!reasons.length && !(idleDays >= STALE_DAYS || (arch > 0 && mine.length === 0))) reasons.push(`active < ${STALE_DAYS}d ago`);
-  return { w, verdict: reasons.length ? "check" : "safe", reasons, live, archived: arch, idleDays, owned };
-}
 
 const VERDICT_LABEL: Record<Verdict, string> = { "in-use": "IN USE", check: "CHECK FIRST", safe: "SAFE TO CLEAN" };
 const VERDICT_RANK: Record<Verdict, number> = { safe: 0, check: 1, "in-use": 2 };
 
 /** Opens the Changes tab and optionally navigates to the first live agent for the workspace. */
 function openChangesForWorkspace(w: PaseoWorkspace, agents: Map<string, PaseoAgent>) {
-  const dir = norm(w.workspaceDirectory);
+  const dir = normDir(w.workspaceDirectory);
   const liveAgents = [...agents.values()].filter((a) => {
-    const c = norm(a.cwd);
-    return a.status !== "closed" && (c === dir || c.startsWith(dir + "/"));
+    const c = normDir(a.cwd);
+    return isLiveAgent(a) && (a.workspaceId === w.id || (!a.workspaceId && (c === dir || c.startsWith(dir + "/"))));
   });
   if (liveAgents.length > 0) {
     window.dispatchEvent(new CustomEvent("vs:select-agent", { detail: { agentId: liveAgents[0].id } }));
@@ -64,25 +28,107 @@ function openChangesForWorkspace(w: PaseoWorkspace, agents: Map<string, PaseoAge
   openRightDockTab("Changes");
 }
 
+/** Archives every record of a folder (primary last, so a failure leaves the folder row visible). */
+async function archiveFolder(f: Folder, evict: (ids: string[]) => void) {
+  for (const r of [...f.records].reverse()) await archiveWorkspace(r.id);
+  evict(f.records.map((r) => r.id));
+}
+
 export function WorkspacesView() {
-  const { workspaces, agents, archivedAgents } = usePaseo();
+  const { workspaces: stored, agents, archivedAgents } = usePaseo();
+  // The store only holds the first page of workspaces and may lag: keep just-created workspaces and pending
+  // rename/pin patches here, and evict each entry as soon as the store catches up (or the workspace is archived/removed).
+  const [overlay, setOverlay] = useState<Map<string, OverlayEntry<PaseoWorkspace>>>(new Map());
+  const workspaces = useMemo(() => mergeOverlay(stored, overlay), [stored, overlay]);
+  useEffect(() => setOverlay((o) => pruneOverlay(stored, o)), [stored]);
+  const patchOverlay = (id: string, patch: Partial<PaseoWorkspace>) =>
+    setOverlay((o) => new Map(o).set(id, { ...o.get(id), patch: { ...o.get(id)?.patch, ...patch } }));
+  const evict = (ids: string[]) => setOverlay((o) => dropFromOverlay(o, ids));
   const handleChipClick = (w: PaseoWorkspace) => openChangesForWorkspace(w, agents);
   const [filter, setFilter] = useState<Filter>("all");
   const [sort, setSort] = useState<Sort>("activity");
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const [panel, setPanel] = useState<"" | "create" | "projects" | "worktrees" | "recover">("");
+  const [projects, setProjects] = useState<ProjectRow[]>([]);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [rowErr, setRowErr] = useState("");
+  const [janitorBusy, setJanitorBusy] = useState(false);
+  const [janitorStatus, setJanitorStatus] = useState("");
+  const reloadProjects = useCallback(() => void listProjects().then(setProjects).catch(() => {}), []);
+  useEffect(reloadProjects, [reloadProjects, workspaces]);
+
+  const closedWorkers = useMemo(() => {
+    const allClosedWorkers = [...agents.values()].filter(
+      (a) => !a.archivedAt && a.status === "closed" && (a.labels?.role ?? "").toLowerCase() === "worker",
+    );
+    const now = Date.now();
+    const stale = allClosedWorkers.filter((a) => {
+      const ts = Date.parse(a.updatedAt || (a as { closedAt?: string; createdAt?: string }).closedAt || (a as { createdAt?: string }).createdAt || "");
+      return Number.isFinite(ts) && now - ts >= 2 * 3600_000;
+    });
+    return stale.length > 0 ? stale : allClosedWorkers;
+  }, [agents]);
+
+  const handleRunJanitor = async () => {
+    if (janitorBusy) return;
+    setJanitorBusy(true);
+    setJanitorStatus("");
+    try {
+      let archivedCount = 0;
+      const res = await fetch("/__vibesquad/janitor/run", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ maxAgeMs: 2 * 3600_000 }),
+      }).catch(() => null);
+      if (res && res.ok) {
+        const data = await res.json().catch(() => null);
+        if (Array.isArray(data?.archived)) {
+          archivedCount += data.archived.length;
+          for (const id of data.archived) removeLocalAgent(id);
+        }
+      }
+      if (!DEMO) {
+        for (const a of closedWorkers) {
+          try {
+            await (daemonClient.archiveAgent ? daemonClient.archiveAgent(a.id) : archiveAgent(a.id));
+            removeLocalAgent(a.id);
+            archivedCount++;
+          } catch {}
+        }
+      } else {
+        for (const a of closedWorkers) {
+          removeLocalAgent(a.id);
+          archivedCount++;
+        }
+      }
+      setJanitorStatus(archivedCount > 0 ? `Cleaned up ${archivedCount} closed worker${archivedCount === 1 ? "" : "s"}.` : "No closed workers to archive.");
+    } catch (e: any) {
+      setRowErr(String(e?.message ?? e));
+    } finally {
+      setJanitorBusy(false);
+    }
+  };
+  const wsCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const w of workspaces.values()) m.set(w.projectId, (m.get(w.projectId) ?? 0) + 1);
+    return m;
+  }, [workspaces]);
 
   const rows = useMemo(() => {
     const live = [...agents.values()];
     const arch = [...archivedAgents.values()];
-    return [...workspaces.values()].map((w) => assess(w, live, arch));
+    return buildFolders([...workspaces.values()], live, arch);
   }, [workspaces, agents, archivedAgents]);
+  const noId = useMemo(() => agentsWithoutWorkspaceId([...agents.values()]), [agents]);
+  const recordCount = workspaces.size;
 
   const shown = useMemo(() => {
     const f = rows.filter((r) => filter === "all" || r.verdict === filter);
-    return f.sort((a, b) => {
+    return pinnedFirst(f.sort((a, b) => {
       if (sort === "name") return a.w.name.localeCompare(b.w.name);
       if (sort === "cleanup") return VERDICT_RANK[a.verdict] - VERDICT_RANK[b.verdict] || b.idleDays - a.idleDays;
       return a.idleDays - b.idleDays;
-    });
+    }), (r) => r.w.pinnedAt);
   }, [rows, filter, sort]);
 
   const safe = rows.filter((r) => r.verdict === "safe");
@@ -100,7 +146,7 @@ export function WorkspacesView() {
         <h1>
           <span>Workspaces &amp; Cleanup</span>
           <span className="h1-stats">
-            {rows.length} WORKSPACES · <span className="stat-cyan">{safe.length} SAFE TO CLEAN</span>
+            {rows.length} FOLDERS · {recordCount} RECORDS · <span className="stat-cyan">{safe.length} SAFE TO CLEAN</span>
           </span>
         </h1>
       </header>
@@ -122,34 +168,111 @@ export function WorkspacesView() {
           </select>
         </label>
         <span className="spacer" />
+        {noId > 0 && <span className="muted small">{noId} agent{noId > 1 ? "s" : ""} without a workspace id (matched by folder)</span>}
+        <button className={`btn small ${panel === "create" ? "ok" : "ghost"}`} onClick={() => setPanel(panel === "create" ? "" : "create")}>+ New workspace</button>
+        <button className={`btn small ${panel === "projects" ? "ok" : "ghost"}`} onClick={() => setPanel(panel === "projects" ? "" : "projects")}>Projects ({projects.length})</button>
+        <button className={`btn small ${panel === "worktrees" ? "ok" : "ghost"}`} onClick={() => setPanel(panel === "worktrees" ? "" : "worktrees")}>Worktrees</button>
+        <button className={`btn small ${panel === "recover" ? "ok" : "ghost"}`} onClick={() => setPanel(panel === "recover" ? "" : "recover")}>Recover</button>
+        <button
+          className="btn small ghost"
+          data-testid="ws-janitor-btn"
+          disabled={janitorBusy}
+          onClick={() => void handleRunJanitor()}
+        >
+          {janitorBusy ? "Cleaning up…" : `Clean up closed workers (${closedWorkers.length})`}
+        </button>
         {safe.length > 0 && (
           <ConfirmButton
-            label={`Archive ${safe.length} safe`}
-            armedLabel={`Delete ${safe.length} folders?`}
+            label={bulkLabels(safe).label}
+            armedLabel={bulkLabels(safe).armed}
             busyLabel="Archiving…"
             tone="danger"
             onConfirm={async () => {
-              for (const r of safe) await archiveWorkspace(r.w.id);
+              for (const r of safe) await archiveFolder(r, evict);
             }}
           />
         )}
       </div>
 
-      {shown.length === 0 && <div className="muted">No workspaces match.</div>}
+      {panel === "create" && <CreateWorkspacePanel projects={projects} onDone={() => setPanel("")} onCreated={(w) => setOverlay((o) => new Map(o).set(w.id, { created: w, patch: {} }))} />}
+      {panel === "recover" && <RecoverPanel />}
+      {panel === "projects" && <ProjectsPanel projects={projects} reload={reloadProjects} workspaceCounts={wsCounts} onRemoved={evict} />}
+      {panel === "worktrees" && <WorktreesPanel projects={projects} workspaces={[...workspaces.values()]} agents={[...agents.values()]} />}
+      {janitorStatus && <div className="muted small" data-testid="ws-janitor-status">{janitorStatus}</div>}
+      {rowErr && <div className="ws-reasons">{rowErr}</div>}
+      {shown.length === 0 && <div className="muted">No folders match.</div>}
       {shown.map((r) => {
         const git = r.w.gitRuntime;
         const ab = git?.aheadBehind;
+        const isOpen = open.has(r.key);
+        const toggle = () => setOpen((o) => { const n = new Set(o); n.has(r.key) ? n.delete(r.key) : n.add(r.key); return n; });
+        const lbl = clearLabels(r.deletesFolder);
         return (
-          <div key={r.w.id} className={`ws-row v-${r.verdict}`}>
+          <div key={r.key} className={`ws-row v-${r.verdict}`}>
             <span className={`verdict ${r.verdict}`}>{VERDICT_LABEL[r.verdict]}</span>
             <div className="ws-main">
               <div className="ws-name">
-                {r.w.name} <span className="muted small">{r.w.workspaceKind}</span>
+                {renaming === r.w.id ? (
+                  <NameEditor
+                    initial={r.w.title ?? ""}
+                    placeholder={`empty = reset to "${r.w.title ? "default" : r.w.name}"`}
+                    onCancel={() => setRenaming(null)}
+                    onSave={async (v) => {
+                      const res = await setWorkspaceTitle(r.w.id, v);
+                      patchOverlay(r.w.id, { title: res.title, name: res.title ?? (r.w.worktreeSlug || r.w.projectDisplayName || r.w.name) });
+                      setRenaming(null);
+                    }}
+                  />
+                ) : (
+                  <>
+                    {r.w.pinnedAt && <span title="Pinned">📌 </span>}
+                    {r.w.name} <span className="muted small">{r.w.workspaceKind}</span>
+                    <button className="btn ghost small" onClick={() => setRenaming(r.w.id)}>Rename</button>
+                    <button
+                      className="btn ghost small"
+                                            onClick={() => void setWorkspacePinned(r.w.id, !r.w.pinnedAt).then((res) => patchOverlay(r.w.id, { pinnedAt: res.pinnedAt })).catch((e) => setRowErr(String(e?.message ?? e)))}
+                    >
+                      {r.w.pinnedAt ? "Unpin" : "Pin"}
+                    </button>
+                  </>
+                )}
               </div>
               <div className="muted small ws-path" title={r.w.workspaceDirectory}>
                 {r.w.workspaceDirectory}
               </div>
               {r.reasons.length > 0 && <div className="ws-reasons">{r.reasons.join(" · ")}</div>}
+              {r.records.length > 1 && (
+                <div className="muted small">
+                  <span role="button" tabIndex={0} className="clickable" onClick={toggle} onKeyDown={(e) => e.key === "Enter" && toggle()}>
+                    {isOpen ? "▾" : "▸"} {r.records.length} records
+                  </span>
+                  {r.oldSessions.length > 0 && (
+                    <>
+                      {" · "}
+                      {r.oldSessions.length} old session{r.oldSessions.length > 1 ? "s" : ""}{" "}
+                      <ConfirmButton
+                        label="Clear"
+                        armedLabel="Clear records?"
+                        busyLabel="Clearing…"
+                        tone="warn"
+                        title="Drops Paseo's records only. No files are touched."
+                        onConfirm={async () => {
+                          for (const o of r.oldSessions) await archiveWorkspace(o.id);
+                        }}
+                      />
+                    </>
+                  )}
+                </div>
+              )}
+              {isOpen && (
+                <ul className="muted small">
+                  {r.records.map((o) => (
+                    <li key={o.id}>
+                      {o.name} · {o.workspaceKind} · {o.activityAt ? `${ago(o.activityAt)} ago` : "no activity"}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
             <div className="ws-chips" style={{ minWidth: 0, flexWrap: "wrap" }}>
               {git?.currentBranch && (
@@ -179,15 +302,16 @@ export function WorkspacesView() {
               <span className="chip">
                 {r.live} live{r.archived ? ` · ${r.archived} archived` : ""}
               </span>
+              <SetupChip id={r.w.id} status={r.w.setupStatus} />
               <span className="chip">{Number.isFinite(r.idleDays) ? `${ago(r.w.activityAt)} ago` : "no activity"}</span>
             </div>
             {r.verdict !== "in-use" && (
               <ConfirmButton
-                label="Archive"
-                armedLabel={r.owned ? "Delete folder?" : "Tap to archive"}
+                label={lbl.label}
+                armedLabel={lbl.armed}
                 busyLabel="Archiving…"
-                tone={r.owned ? "danger" : "warn"}
-                onConfirm={async () => void (await archiveWorkspace(r.w.id))}
+                tone={r.deletesFolder ? "danger" : "warn"}
+                onConfirm={() => archiveFolder(r, evict)}
               />
             )}
           </div>

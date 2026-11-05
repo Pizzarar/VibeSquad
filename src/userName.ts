@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { isRemote } from "./remoteSession.ts";
 
 // Legacy owner aliases are assembled at runtime so the old literal never appears in tracked files.
 export const LEGACY_USER_TYPE = "au" + "b";
@@ -9,16 +10,22 @@ export const LEGACY_NEEDS_UNTIL = LEGACY_NEEDS_LABEL + "-until";
 const DEFAULT_NAME = "you";
 let userName = DEFAULT_NAME;
 let lanEnabled = false;
+let remoteEnabled = false;
 let exposedIps: string[] = [];
-let serverConfigWarnings: { file: string; label?: string; error: string }[] = [];
+let serverConfigWarnings: { file: string; label?: string; error: string; kind?: string }[] = [];
 let desktopConfigWarning = "";
+let staleBuild: { built: string; head: string; behind: number } | null = null;
 const listeners = new Set<() => void>();
 
 export const getUserName = () => userName;
 export const getLanEnabled = () => lanEnabled;
+export const getRemoteEnabled = () => remoteEnabled;
 export const getExposedIps = () => exposedIps;
 export const getConfigWarnings = (): string[] => {
-  const list = serverConfigWarnings.map((w) => `${w.label || w.file}: ${w.error}`);
+  // Parse errors keep their fallback note; other kinds (e.g. "exposure") are shown as-is.
+  const list = serverConfigWarnings.map((w) =>
+    w.kind ? `${w.label || w.file}: ${w.error}` : `${w.label || w.file}: JSON parse error (using fallback defaults without overwriting): ${w.error}`,
+  );
   if (desktopConfigWarning) list.push(desktopConfigWarning);
   return list;
 };
@@ -43,6 +50,7 @@ export function setServerConfigWarnings(warnings: unknown): void {
           file: String(w.file || ""),
           label: w.label ? String(w.label) : undefined,
           error: String(w.error),
+          ...(typeof w.kind === "string" && w.kind ? { kind: w.kind } : {}),
         }))
     : [];
   const prevKey = JSON.stringify(serverConfigWarnings);
@@ -51,6 +59,74 @@ export function setServerConfigWarnings(warnings: unknown): void {
     serverConfigWarnings = next;
     listeners.forEach((l) => l());
   }
+}
+
+export function setStaleBuild(stale: unknown): void {
+  const s = stale as { built?: unknown; head?: unknown; behind?: unknown } | null;
+  const next = s && typeof s.behind === "number" && s.behind > 0 ? { built: String(s.built), head: String(s.head), behind: s.behind } : null;
+  if (JSON.stringify(next) !== JSON.stringify(staleBuild)) {
+    staleBuild = next;
+    listeners.forEach((l) => l());
+  }
+}
+
+export const getStaleBuild = () => staleBuild;
+
+export function useStaleBuild() {
+  return useSyncExternalStore(
+    (cb) => {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+    () => staleBuild,
+  );
+}
+
+export const DISMISSED_STALE_BUILD_KEY = "vs.dismissedStaleBuild";
+
+let dismissedStaleBuildKey = typeof localStorage !== "undefined" ? localStorage.getItem(DISMISSED_STALE_BUILD_KEY) || "" : "";
+
+export function staleBuildKey(s: { built: string; head: string } | null): string {
+  return s ? `${s.built}..${s.head}` : "";
+}
+
+export function dismissStaleBuild(): void {
+  dismissedStaleBuildKey = staleBuildKey(staleBuild);
+  try {
+    localStorage.setItem(DISMISSED_STALE_BUILD_KEY, dismissedStaleBuildKey);
+  } catch {}
+  listeners.forEach((l) => l());
+}
+
+export function useStaleBuildDismissed(): boolean {
+  return useSyncExternalStore(
+    (cb) => {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+    () => Boolean(staleBuild && dismissedStaleBuildKey === staleBuildKey(staleBuild)),
+  );
+}
+
+// Loopback without the local token (a plain browser tab) is read-only; the server says so in /health.
+let localReadOnly = false;
+
+export function setLocalAccess(access: unknown): void {
+  const next = !isRemote() && access === "read-only";
+  if (next !== localReadOnly) {
+    localReadOnly = next;
+    listeners.forEach((l) => l());
+  }
+}
+
+export function useLocalReadOnly() {
+  return useSyncExternalStore(
+    (cb) => {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+    () => (isRemote() ? false : localReadOnly),
+  );
 }
 
 export function setDesktopConfigWarning(warning: unknown): void {
@@ -85,6 +161,14 @@ export function setLanExposureState(nextLan: boolean, nextIps?: string[]): void 
   if (changed) listeners.forEach((l) => l());
 }
 
+export function setRemoteEnabledState(next: boolean): void {
+  const val = Boolean(next);
+  if (val !== remoteEnabled) {
+    remoteEnabled = val;
+    listeners.forEach((l) => l());
+  }
+}
+
 export function useUserName(): string {
   return useSyncExternalStore(
     (cb) => {
@@ -102,6 +186,16 @@ export function useLanEnabled(): boolean {
       return () => listeners.delete(cb);
     },
     getLanEnabled,
+  );
+}
+
+export function useRemoteEnabled(): boolean {
+  return useSyncExternalStore(
+    (cb) => {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+    getRemoteEnabled,
   );
 }
 
@@ -125,6 +219,7 @@ export async function loadUserName(): Promise<void> {
       const data = await r.json();
       setUserName(String(data.userName ?? ""));
       setLanExposureState(Boolean(data.activeLanEnabled ?? data.lanEnabled), Array.isArray(data.exposedIps) ? data.exposedIps : undefined);
+      setRemoteEnabledState(Boolean(data.remote?.enabled));
       setServerConfigWarnings(data.configWarnings);
     }
   } catch {}
@@ -166,6 +261,25 @@ export async function saveLanEnabled(enabled: boolean): Promise<{ lanEnabled: bo
   return { lanEnabled: getLanEnabled(), exposedIps: getExposedIps() };
 }
 
+export async function saveRemoteEnabled(enabled: boolean): Promise<boolean> {
+  setRemoteEnabledState(enabled);
+  try {
+    const r = await fetch("/__vibesquad/settings", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ remoteEnabled: Boolean(enabled) }),
+    });
+    if (r.ok) {
+      const data = await r.json();
+      const next = Boolean(data.remote?.enabled);
+      setRemoteEnabledState(next);
+      setServerConfigWarnings(data.configWarnings);
+      return next;
+    }
+  } catch {}
+  return getRemoteEnabled();
+}
+
 export type UpdateChannel = "stable" | "beta";
 
 export interface UpdaterStatusView {
@@ -175,15 +289,42 @@ export interface UpdaterStatusView {
   availableVersion: string;
   downloaded: boolean;
   dismissed: boolean;
+  downloadUrl?: string;
+}
+
+export function isSemverNewer(currentVer: string, remoteVer: string, channel: UpdateChannel = "stable"): boolean {
+  const parse = (v: string) => {
+    const clean = String(v || "").trim().replace(/^v/i, "");
+    const m = clean.match(/^(\d+)\.(\d+)\.(\d+)(?:-beta\.(\d+))?$/i);
+    if (!m) return null;
+    return {
+      major: Number(m[1]),
+      minor: Number(m[2]),
+      patch: Number(m[3]),
+      beta: m[4] !== undefined ? Number(m[4]) : null,
+    };
+  };
+  const cur = parse(currentVer);
+  const rem = parse(remoteVer);
+  if (!cur || !rem) return false;
+  if (channel !== "beta" && rem.beta !== null) return false;
+  if (rem.major !== cur.major) return rem.major > cur.major;
+  if (rem.minor !== cur.minor) return rem.minor > cur.minor;
+  if (rem.patch !== cur.patch) return rem.patch > cur.patch;
+  if (cur.beta !== null && rem.beta === null) return true;
+  if (cur.beta === null && rem.beta !== null) return false;
+  if (cur.beta !== null && rem.beta !== null) return rem.beta > cur.beta;
+  return false;
 }
 
 let updaterStatus: UpdaterStatusView = {
-  currentVersion: "0.1.1",
+  currentVersion: "0.2.0",
   channel: "stable",
   updateAvailable: false,
   availableVersion: "",
   downloaded: false,
   dismissed: false,
+  downloadUrl: "",
 };
 
 export const getUpdaterStatus = (): UpdaterStatusView => updaterStatus;
@@ -196,7 +337,8 @@ function setUpdaterStatus(patch: Partial<UpdaterStatusView>): void {
     next.updateAvailable === updaterStatus.updateAvailable &&
     next.availableVersion === updaterStatus.availableVersion &&
     next.downloaded === updaterStatus.downloaded &&
-    next.dismissed === updaterStatus.dismissed
+    next.dismissed === updaterStatus.dismissed &&
+    next.downloadUrl === updaterStatus.downloadUrl
   ) {
     return;
   }
@@ -241,6 +383,9 @@ export function useDesktopStatus(): DesktopStatusView {
 }
 
 export async function loadDesktopStatus(): Promise<DesktopStatusView> {
+  if (!(globalThis as any).__VIBESQUAD_DESKTOP_BRIDGE__) {
+    if (isRemote()) return desktopStatus;
+  }
   try {
     const r = await fetch("/__desktop/status", { cache: "no-store" });
     if (r.ok) {
@@ -279,18 +424,46 @@ export async function loadDesktopStatus(): Promise<DesktopStatusView> {
 }
 
 export async function loadUpdaterStatus(): Promise<UpdaterStatusView> {
+  if (!(globalThis as any).__VIBESQUAD_DESKTOP_BRIDGE__) {
+    if (isRemote()) return updaterStatus;
+  }
   void loadDesktopStatus();
   try {
     const r = await fetch("/__desktop/updater/status", { cache: "no-store" });
     if (r.ok) {
       const d = await r.json();
       setDesktopConfigWarning(d.configWarning);
+      const curVer = String(d.currentVersion || "0.2.0");
+      const ch: UpdateChannel = d.channel === "beta" ? "beta" : "stable";
+      let updateAvail = Boolean(d.updateAvailable);
+      let availVer = String(d.availableVersion || "");
+      const downloaded = Boolean(d.downloaded);
+      let downloadUrl = "";
+
+      // Fallback for v0.2.0/v0.2.1 desktop builds whose Rust updater hit GitHub 302 redirects:
+      // check the server's /__vibesquad/desktop/update.json for a newer build.
+      if (!updateAvail) {
+        try {
+          const srv = await fetch("/__vibesquad/desktop/update.json", { cache: "no-store" });
+          if (srv.ok) {
+            const uj = await srv.json();
+            const srvVer = String(uj?.version || "");
+            if (srvVer && isSemverNewer(curVer, srvVer, ch)) {
+              updateAvail = true;
+              availVer = srvVer;
+              downloadUrl = uj?.available ? "/VibeSquad-setup.exe" : "https://github.com/Pizzarar/VibeSquad/releases/latest/download/VibeSquad-setup.exe";
+            }
+          }
+        } catch {}
+      }
+
       setUpdaterStatus({
-        currentVersion: String(d.currentVersion || "0.1.1"),
-        channel: d.channel === "beta" ? "beta" : "stable",
-        updateAvailable: Boolean(d.updateAvailable),
-        availableVersion: String(d.availableVersion || ""),
-        downloaded: Boolean(d.downloaded),
+        currentVersion: curVer,
+        channel: ch,
+        updateAvailable: updateAvail,
+        availableVersion: availVer,
+        downloaded,
+        downloadUrl,
       });
     }
   } catch {}
@@ -316,12 +489,25 @@ export async function saveUpdateChannel(channel: UpdateChannel): Promise<Updater
         availableVersion: String(d.availableVersion || ""),
         downloaded: Boolean(d.downloaded),
       });
+      if (!d.updateAvailable) {
+        await loadUpdaterStatus();
+      }
     }
   } catch {}
   return updaterStatus;
 }
 
 export async function triggerUpdateInstall(): Promise<boolean> {
+  if (updaterStatus.downloaded) {
+    try {
+      const r = await fetch("/__desktop/updater/install", { method: "POST" });
+      if (r.ok) return true;
+    } catch {}
+  }
+  if (updaterStatus.downloadUrl && typeof window !== "undefined") {
+    window.location.assign(updaterStatus.downloadUrl);
+    return true;
+  }
   try {
     const r = await fetch("/__desktop/updater/install", { method: "POST" });
     return r.ok;

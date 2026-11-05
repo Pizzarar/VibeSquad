@@ -480,19 +480,6 @@ test("Done-when #3 (Fix C): Sending to an (old)/archived lead delivers to the cu
   }
 });
 
-test("Done-when #4 (Fix D): ~/.paseo/plugin-settings/roster/roster.json contains no '★ LEAD' lookup rule and uses 'vs who lead'", () => {
-  const rosterPath = join(homedir(), ".paseo", "plugin-settings", "roster", "roster.json");
-  const raw = readFileSync(rosterPath, "utf8");
-  assert.equal(raw.includes("★ LEAD"), false, "roster.json must not contain '★ LEAD'");
-  const parsed = JSON.parse(raw);
-  assert.equal(parsed.values.leadPointerPrompt, "To find a project's current lead: run `vs who lead`.");
-
-  // Also verify sanitizeLegacyRosterPrompt strips any legacy roster-injected paragraph
-  const legacy =
-    "To find a project's current lead: run `paseo ls -g --json` and pick the agent whose cwd matches the project and whose name starts with ★ LEAD (never one starting with (old)).";
-  assert.equal(sanitizeLegacyRosterPrompt(legacy), "To find a project's current lead: run `vs who lead`.");
-});
-
 test("Done-when #5 (Fix E): create_agent with labels: { role: 'lead' } gets the lead pack (never WORKER_PACK)", () => {
   const env = makeTempEnv();
   const prevHome = process.env.VIBESQUAD_HOME;
@@ -537,7 +524,7 @@ test("Done-when #5 (Fix E): create_agent with labels: { role: 'lead' } gets the 
   }
 });
 
-test("Done-when #6 (Fix F): Repeated performBrainstormRestart calls at 152000 tokens retire only ONCE (no successor) and log only ONE entry", async () => {
+test("Done-when #6 (Fix F): Repeated performBrainstormRestart calls at 152000 tokens retire and spawn successor only ONCE and log only ONE entry", async () => {
   const env = makeTempEnv();
   const prevHome = process.env.VIBESQUAD_HOME;
   const prevProfiles = process.env.VIBESQUAD_PROFILES_PATH;
@@ -603,15 +590,15 @@ test("Done-when #6 (Fix F): Repeated performBrainstormRestart calls at 152000 to
     assert.equal(results[0].ok, true);
     assert.equal(Boolean(results[0].skipped), false);
     assert.equal(results[0].retired, true);
-    assert.equal(results[0].newAgentId, null);
+    assert.equal(results[0].newAgentId, "bs-succ-1");
 
     for (let i = 1; i < 5; i++) {
       assert.equal(results[i].ok, true);
       assert.equal(results[i].skipped, true);
-      assert.equal(results[i].newAgentId, null);
+      assert.equal(results[i].newAgentId, "bs-succ-1");
     }
 
-    assert.equal(spawned.length, 0, "Hard limit retires; it never spawns a successor");
+    assert.equal(spawned.length, 1, "Hard limit retires and spawns exactly one successor");
 
     const siteLogPath = join(env.vsHome, "teams", "site", "log.jsonl");
     const logEntries = readFileSync(siteLogPath, "utf8")
@@ -621,6 +608,7 @@ test("Done-when #6 (Fix F): Repeated performBrainstormRestart calls at 152000 to
       .map((l) => JSON.parse(l));
     const restartLogs = logEntries.filter((e) => e.text.startsWith("brainstorm-retired"));
     assert.equal(restartLogs.length, 1, "Must log only 1 brainstorm-retired entry across 5 calls");
+    assert.ok(restartLogs[0].text.includes("successor=bs-succ-1"), restartLogs[0].text);
   } finally {
     resetBrainstormRestartState();
     if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;

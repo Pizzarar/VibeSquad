@@ -1,5 +1,6 @@
 import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { getStale, peekStale, readBuildStamp } from "./stale-runtime.mjs";
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -7,6 +8,11 @@ import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspectFirstRunStatus, startManagedPaseoInstall } from "./first-run.mjs";
 import { resolveTeamsFilePath, resolveTeamsWritePath } from "./teams-file.mjs";
+import { seedHubBriefs } from "./hub-seed.mjs";
+import { resolveProjectPath } from "./brief-path.mjs";
+import { contentRevision, createWindowLimiter } from "./write-guards.mjs";
+import { ADE_GATED_READ_PATHS, handleFileList, handleSearch } from "./file-search.mjs";
+import { handleSecretInputRequest } from "./secret-input.mjs";
 import {
   LEGACY_NEEDS_LABEL,
   LEGACY_USER_TYPE,
@@ -15,10 +21,11 @@ import {
   loadUserSettings,
   parseJsonWithBom,
   readJsonFileWithBom,
+  saveRemoteAccess,
   saveUserSettings,
   stripBom,
 } from "./user-settings.mjs";
-import { authenticate, getAuthStatus, handleCaCrt, handleDevices, handlePairRedeem, handlePairStart, handleRevoke, hasDistIndex, isLocal, isLocalBrowserSafe, netConfig } from "./auth.mjs";
+import { authenticate, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handlePairRedeem, handlePairStart, handleRevoke, hasDistIndex, isLocal, isLocalBrowserSafe, isLocalOwner, netConfig, READ_ONLY_ERROR } from "./auth.mjs";
 import {
   appendVsLogEntry,
   createDaemonClient,
@@ -53,14 +60,30 @@ import {
   getVapidPath,
   readPushSubscriptions,
   removePushSubscription,
+  restartPushWatcher,
   savePushSubscription,
   sendTestPush,
   sendWebPushToSubscription,
   startPushWatcher,
+  stopPushWatcher,
   toBase64Url,
   fromBase64Url,
   writePushSubscriptions,
 } from "./push.mjs";
+import {
+  DAEMON_PASSWORD_FILE,
+  PASEO_LOCAL_CREDENTIAL_FILE,
+  daemonPasswordPath,
+  daemonPasswordSource,
+  getDaemonAuthStatus,
+  isDaemonPasswordRequired,
+  probeDaemonPassword,
+  readDaemonListen,
+  readDaemonPassword,
+  readPaseoLocalCredential,
+  writeDaemonPassword,
+} from "./daemon-password.mjs";
+import { removeTeamWorktrees } from "./team-worktrees.mjs";
 import {
   DEFAULT_PACK_PROFILES,
   DEFAULT_PROFILES,
@@ -96,6 +119,7 @@ import {
   findOpenWorkersForLead,
   getHandoffPacketPath,
   leadUsedTokens,
+  listDaemonAgents,
   loadLeadThresholds,
   parseLeadOrd,
   performLeadHandoffHttp,
@@ -106,6 +130,7 @@ import {
 } from "./lead-handoff.mjs";
 import {
   SECRET_MASK,
+  checkDaemonListenExposure,
   clearManagedDaemonMarker,
   controlPaseoDaemon,
   controlPaseoHub,
@@ -162,13 +187,26 @@ export {
   getVapidPath,
   readPushSubscriptions,
   removePushSubscription,
+  restartPushWatcher,
   savePushSubscription,
   sendTestPush,
   sendWebPushToSubscription,
   startPushWatcher,
+  stopPushWatcher,
   toBase64Url,
   fromBase64Url,
   writePushSubscriptions,
+  DAEMON_PASSWORD_FILE,
+  PASEO_LOCAL_CREDENTIAL_FILE,
+  daemonPasswordPath,
+  daemonPasswordSource,
+  getDaemonAuthStatus,
+  isDaemonPasswordRequired,
+  probeDaemonPassword,
+  readDaemonListen,
+  readDaemonPassword,
+  readPaseoLocalCredential,
+  writeDaemonPassword,
   DEFAULT_PACK_PROFILES,
   DEFAULT_PROFILES,
   LEGACY_PROFILE_ALIASES,
@@ -201,6 +239,7 @@ export {
   findOpenWorkersForLead,
   getHandoffPacketPath,
   leadUsedTokens,
+  listDaemonAgents,
   loadLeadThresholds,
   parseLeadOrd,
   performLeadHandoffHttp,
@@ -209,6 +248,7 @@ export {
   resolveTeamAndLane,
   synthesizeHandoffPacket,
   SECRET_MASK,
+  checkDaemonListenExposure,
   clearManagedDaemonMarker,
   controlPaseoDaemon,
   controlPaseoHub,
@@ -264,14 +304,41 @@ const UI_LOG_TYPES = new Set(["you", "needs-you", "handoff", "metric", "decision
 
 const MAX_BODY_BYTES = 1024 * 1024;
 const AGENT_ID_STRICT = /^[A-Za-z0-9_-]{1,64}$/;
-// Test/DI hooks that must never be taken from an HTTP body.
-const INTERNAL_BODY_KEYS = ["baseHome", "profilesPath", "daemonClient", "oldAgent", "oldLead", "execSpawn", "teamsFilePath", "skipDaemon", "agents"];
+// Test/DI hooks and server-derived values that must never be taken from an HTTP body. `cwd` and `labels`
+// are derived from the lane or the daemon's own agent record; the timing knobs would skip cooldowns.
+export const INTERNAL_BODY_KEYS = [
+  "baseHome", "profilesPath", "daemonClient", "clientFactory", "oldAgent", "oldLead", "execSpawn", "teamsFilePath",
+  "skipDaemon", "agents", "cwd", "labels", "title", "forceNew", "cooldownMs", "emptyRetryMs", "backstopDelayMs",
+];
 
 export function sanitizeBody(body) {
   const out = { ...(body && typeof body === "object" ? body : {}) };
   for (const k of INTERNAL_BODY_KEYS) delete out[k];
   return out;
 }
+
+/** readBody + sanitizeBody: what every write handler that hands its body to a helper must use. */
+const readCleanBody = async (req) => sanitizeBody(await readBody(req));
+
+// Agent archives reachable over HTTP (brainstorm-restart, inbox park/handoff-topic) share one budget, so a
+// loop over agent ids can't retire every Buddy at once.
+export const ARCHIVE_BUDGET_PER_MIN = 10;
+export const archiveBudget = createWindowLimiter({ max: ARCHIVE_BUDGET_PER_MIN });
+const overArchiveBudget = (res) => {
+  if (archiveBudget.take()) return false;
+  sendJson(res, 429, { ok: false, error: `too many agent restarts/archives: ${ARCHIVE_BUDGET_PER_MIN} per minute` });
+  return true;
+};
+
+// Agent spawns reachable over HTTP (brainstorm-restart start + restart) get their own budget, so a remote
+// loop can't flood the host with Buddies even within the proxy's per-endpoint limit.
+export const SPAWN_BUDGET_PER_MIN = 10;
+export const spawnBudget = createWindowLimiter({ max: SPAWN_BUDGET_PER_MIN });
+const overSpawnBudget = (res) => {
+  if (spawnBudget.take()) return false;
+  sendJson(res, 429, { ok: false, error: `too many agent spawns: ${SPAWN_BUDGET_PER_MIN} per minute` });
+  return true;
+};
 
 function readBody(req) {
   return new Promise((ok, fail) => {
@@ -316,7 +383,67 @@ export function setExposure(lanEnabled, exposedIps, toggleHandler = exposure.tog
   };
 }
 
+// Trusted = may read. Owner = may also change things: a paired device, or a loopback caller with the local token.
 const isTrusted = (req) => isLocalBrowserSafe(req) || Boolean(authenticate(req));
+const isOwner = (req) => Boolean(authenticate(req)) || isLocalOwner(req);
+const localAccess = (req) => (isOwner(req) ? "owner" : "read-only");
+
+// GETs a read-only loopback caller still can't make: they hand out a credential, write a key, or launch provider CLIs.
+export function isGatedRead(pathOrMethod, urlOrPath = "") {
+  const path =
+    typeof urlOrPath === "string" && urlOrPath.startsWith("/") && !String(pathOrMethod ?? "").startsWith("/")
+      ? urlOrPath.split("?")[0]
+      : pathOrMethod;
+  const url =
+    typeof urlOrPath === "string" && urlOrPath.startsWith("/") && !String(pathOrMethod ?? "").startsWith("/")
+      ? urlOrPath
+      : urlOrPath;
+  if (path === "/__vibesquad/paseo/daemon-auth") return true; // daemon password status / handoff
+  if (path === "/__vibesquad/local-token") return true; // local bootstrap handoff
+  if (path === "/__vibesquad/paseo/pair") return true; // daemon pairing offer (a credential)
+  if (path === "/__vibesquad/push/vapid-public-key") return true; // creates and writes vapid.json on first call
+  if (path === "/__vibesquad/paseo/providers/diagnostic" || path === "/__vibesquad/paseo/providers/models") return true; // runs the provider's own CLI
+  if (path === "/__vibesquad/paseo/usage") return new URL(url, "http://x").searchParams.get("refresh") === "1"; // forces provider API calls
+  if (path === "/__vibesquad/paseo/surface") return true; // daemon config: listen, CORS, hub, backups
+  if (path === "/__vibesquad/local-image") return true; // file contents
+  if (ADE_GATED_READ_PATHS.includes(path)) return true; // quick open / find in files: workspace file names and contents
+  return false;
+}
+
+const READ_ONLY_CACHE_MS = 30_000;
+
+/**
+ * Ungated GETs that shell out (`--version`s, `paseo status`/`ls`): a read-only caller shares one in-flight run and
+ * reuses its result for READ_ONLY_CACHE_MS, so it can't make the server spawn more than one process per route per
+ * window. Owners always run fresh (and refresh the cache); `.clear()` drops it after an owner write.
+ */
+export function createReadOnlyCache(ttlMs = READ_ONLY_CACHE_MS, now = () => Date.now()) {
+  const entries = new Map(); // key -> { at, promise }
+  const cached = (key, owner, run) => {
+    const hit = entries.get(key);
+    if (!owner && hit && (hit.at === null || now() - hit.at < ttlMs)) return hit.promise;
+    const entry = { at: null, promise: null };
+    entry.promise = Promise.resolve()
+      .then(run)
+      .finally(() => {
+        entry.at = now();
+      });
+    entries.set(key, entry);
+    return entry.promise;
+  };
+  cached.clear = () => entries.clear();
+  return cached;
+}
+
+/** WebPush endpoints are capability URLs (whoever has one can push to that device): only the push service origin leaves. */
+export function redactPushEndpoint(endpoint) {
+  try {
+    const u = new URL(String(endpoint));
+    return u.protocol === "https:" || u.protocol === "http:" ? `${u.origin}/…` : `${u.protocol}//${u.host}`;
+  } catch {
+    return null;
+  }
+}
 
 export function handleHealth(req, res, rootDir = REPO_ROOT) {
   if (req.method !== "GET" && req.method !== "HEAD") {
@@ -328,9 +455,12 @@ export function handleHealth(req, res, rootDir = REPO_ROOT) {
   const { port } = netConfig();
   const warnings = getConfigWarnings();
   const extra = {
+    localAccess: localAccess(req),
     port,
     lanEnabled: exposure.lanEnabled,
     exposedIps: exposure.exposedIps,
+    // Read-only callers (incl. the remote proxy) get the cached value: git + stale.json stay with the owner and startup.
+    stale: isOwner(req) ? getStale({ rootDir }) : peekStale(),
     ...(warnings.length ? { configWarnings: warnings } : {}),
   };
   if (!distReady) return sendJson(res, 503, { ok: false, distReady: false, error: "dist/index.html missing", ...extra });
@@ -344,7 +474,7 @@ export function handleAuthStatus(req, res, rootDir = REPO_ROOT) {
   }
   const full = getAuthStatus(rootDir);
   if (!isTrusted(req)) return sendJson(res, 200, { ok: true, distReady: full.distReady, caFingerprint: full.caFingerprint });
-  return sendJson(res, 200, full);
+  return sendJson(res, 200, { ...full, localAccess: localAccess(req) });
 }
 
 /** Content hash of the registry file; a PUT that sends a stale one gets 409 instead of overwriting newer edits. */
@@ -459,6 +589,7 @@ function handleTeams(req, res, rootDir) {
         throw e;
       }
       clearConfigWarning(file);
+      seedHubBriefs(cur.teams, teams, rootDir);
       sendJson(res, 200, {
         ok: true,
         revision: teamsRevision(resolveTeamsFilePath(rootDir)),
@@ -491,13 +622,23 @@ async function handleSettings(req, res) {
     });
   }
   if (req.method === "POST" || req.method === "PUT") {
-    const body = await readBody(req);
+    const body = await readCleanBody(req);
     const patch = {};
     if (body && "userName" in body) patch.userName = body.userName;
     if (body && "lanEnabled" in body) patch.lanEnabled = Boolean(body.lanEnabled);
     if (body && "keepPaseoRunningOnQuit" in body) patch.keepPaseoRunningOnQuit = Boolean(body.keepPaseoRunningOnQuit);
     if (body && "startPaseoWithVibeSquad" in body) patch.startPaseoWithVibeSquad = Boolean(body.startPaseoWithVibeSquad);
-    const saved = saveUserSettings(patch);
+    if (body && "pushEvents" in body) patch.pushEvents = body.pushEvents;
+    let saved = saveUserSettings(patch);
+    if (
+      body &&
+      (typeof body.remoteEnabled === "boolean" ||
+        (body.remote && typeof body.remote === "object" && typeof body.remote.enabled === "boolean"))
+    ) {
+      const wantRemote =
+        typeof body.remoteEnabled === "boolean" ? body.remoteEnabled : Boolean(body.remote.enabled);
+      saved = saveRemoteAccess(wantRemote);
+    }
     if ("lanEnabled" in patch && typeof exposure.toggleHandler === "function") {
       try {
         const resToggle = await exposure.toggleHandler(saved.lanEnabled);
@@ -536,7 +677,7 @@ async function handleLog(req, res) {
       return sendJson(res, 200, out);
     }
     if (req.method === "POST") {
-      const { team, type = "you", text, refs, agent = loadUserSettings().userName, lane = "" } = await readBody(req);
+      const { team, type = "you", text, refs, agent = loadUserSettings().userName, lane = "" } = await readCleanBody(req);
       if (!TEAM_ID.test(String(team))) return sendJson(res, 400, { error: "bad team" });
       if (!LOG_TYPES.has(type) || !UI_LOG_TYPES.has(type)) return sendJson(res, 400, { error: `type ${type} not allowed from the UI` });
       const t = String(text ?? "").trim();
@@ -573,6 +714,16 @@ const insideDir = (child, root) => {
   return c === r || c.startsWith(r.endsWith(sep) ? r : r + sep);
 };
 
+// UNC and device paths (\\host\share, //host/share, \\?\UNC\..., \\.\pipe) make Windows contact another
+// machine (and send NTLM credentials) on a mere stat. Refuse them before any fs call.
+export const isUncLikePath = (p) => /^[\\/]{2}/.test(String(p ?? ""));
+
+/** Lexical allowlist check on the resolved path, before anything touches the disk. Roots count in both forms. */
+const lexicallyInside = (p, roots) => {
+  const r = resolve(String(p));
+  return roots.some((root) => insideDir(r, root) || insideDir(r, resolve(root)));
+};
+
 function paseoAgentCwds() {
   const out = [];
   const agentsRoot = join(process.env.PASEO_HOME || join(homedir(), ".paseo"), "agents");
@@ -595,10 +746,27 @@ function allowedAttachRoots(rootDir, opts) {
   const roots = [rootDir, ...(opts.allowedCwdRoots ?? []), ...paseoAgentCwds()];
   try {
     const teams = JSON.parse(stripBom(readFileSync(resolveTeamsFilePath(rootDir), "utf8"))).teams ?? [];
-    for (const t of teams) for (const p of t.paths ?? []) roots.push(p);
+    // Same confinement as lane working dirs: a registry path outside the project roots widens nothing.
+    for (const t of teams) {
+      for (const p of t.paths ?? []) {
+        const full = resolveProjectPath(p, rootDir);
+        if (full) roots.push(full);
+      }
+    }
   } catch {}
-  return roots.map(realOrNull).filter(Boolean);
+  return [...new Set(roots)].map(realOrNull).filter(Boolean);
 }
+
+// Quick open / find in files call per keystroke and the agent scan reads every ~/.paseo agent file:
+// reuse the roots for 30s; file-search.mjs rescans (fresh) once before it answers 403.
+const navRootsCache = new Map();
+const navRoots = (rootDir, opts) => (fresh) => {
+  const hit = navRootsCache.get(rootDir);
+  if (!fresh && hit && Date.now() - hit.at < 30_000) return hit.roots;
+  const roots = allowedAttachRoots(rootDir, opts);
+  navRootsCache.set(rootDir, { at: Date.now(), roots });
+  return roots;
+};
 
 function isSensitiveSource(real) {
   const home = homedir();
@@ -614,11 +782,16 @@ async function handleAttach(req, res, rootDir, opts = {}) {
     return res.end();
   }
   try {
+    // The one body that carries a cwd on purpose: it is confined right below (roots + UNC + realpath).
     const { cwd, files } = await readBody(req);
-    if (typeof cwd !== "string" || !existsSync(cwd) || !statSync(cwd).isDirectory()) return sendJson(res, 400, { error: "cwd is not a directory" });
+    if (typeof cwd !== "string" || isUncLikePath(cwd)) return sendJson(res, 400, { error: "cwd is not a directory" });
+    const roots = allowedAttachRoots(rootDir, opts);
+    if (!lexicallyInside(cwd, roots)) return sendJson(res, 403, { error: "cwd is not a known agent or team path" });
+    if (!existsSync(cwd) || !statSync(cwd).isDirectory()) return sendJson(res, 400, { error: "cwd is not a directory" });
     const realCwd = realpathSync(resolve(cwd));
-    if (!allowedAttachRoots(rootDir, opts).some((root) => insideDir(realCwd, root))) return sendJson(res, 403, { error: "cwd is not a known agent or team path" });
+    if (!roots.some((root) => insideDir(realCwd, root))) return sendJson(res, 403, { error: "cwd is not a known agent or team path" });
     if (!Array.isArray(files) || !files.length) return sendJson(res, 400, { error: "no files given" });
+    if (files.some((f) => isUncLikePath(f))) return sendJson(res, 403, { error: "source path is not allowed" });
     const dest = join(realCwd, "scratch", "inputs");
     mkdirSync(dest, { recursive: true });
     const copied = [];
@@ -636,16 +809,37 @@ async function handleAttach(req, res, rootDir, opts = {}) {
   }
 }
 
+// `vs handoff` runs async (it used to execFileSync for up to 60 s and stall every request), one at a time.
+// POST waits at most HANDOFF_HTTP_WAIT_MS, then answers 202 and the run finishes in the background; the UI
+// polls GET (running/exists/error). That keeps it well under the 10 s remote proxy timeout.
+export const HANDOFF_TIMEOUT_MS = 60_000;
+export const HANDOFF_HTTP_WAIT_MS = 2000;
+let handoffRunning = false;
+let lastHandoffError = null;
+const runVsHandoff = (cli, rootDir, env) =>
+  new Promise((ok, fail) => {
+    execFile(process.execPath, [cli, "handoff"], { cwd: rootDir, env, timeout: HANDOFF_TIMEOUT_MS, windowsHide: true }, (err) =>
+      err ? fail(err) : ok(),
+    );
+  });
+
 // GET ?team&lane: does the successor packet exist? POST {team,lane,agentId}: run `vs handoff` to make it.
 async function handleHandoff(req, res, rootDir) {
   try {
     const q = req.method === "GET" ? new URL(req.url, "http://x").searchParams : null;
-    const body = req.method === "POST" ? await readBody(req) : {};
+    const body = req.method === "POST" ? await readCleanBody(req) : {};
     const team = String(q?.get("team") ?? body.team ?? "");
     const lane = String(q?.get("lane") ?? body.lane ?? "");
     if (!TEAM_ID.test(team) || !TEAM_ID.test(lane)) return sendJson(res, 400, { error: "bad team/lane" });
     const packet = join(teamDir(team), `packet-${lane}.md`);
-    if (req.method === "GET") return sendJson(res, 200, { exists: existsSync(packet), path: packet });
+    if (req.method === "GET") {
+      return sendJson(res, 200, {
+        exists: existsSync(packet),
+        path: packet,
+        running: handoffRunning,
+        ...(lastHandoffError ? { error: lastHandoffError } : {}),
+      });
+    }
     if (req.method !== "POST") {
       res.statusCode = 405;
       return res.end();
@@ -653,13 +847,30 @@ async function handleHandoff(req, res, rootDir) {
     if (body.agentId !== undefined && !AGENT_ID_STRICT.test(String(body.agentId))) return sendJson(res, 400, { error: "bad agentId" });
     const cli = join(rootDir, "cli", "vs.mjs");
     if (!existsSync(cli)) return sendJson(res, 200, { exists: existsSync(packet), path: packet, ran: false, note: "cli/vs.mjs not found" });
-    execFileSync(process.execPath, [cli, "handoff"], {
-      cwd: rootDir,
-      env: { ...process.env, ...(body.agentId ? { PASEO_AGENT_ID: String(body.agentId) } : {}) },
-      timeout: 60_000,
-      stdio: "pipe",
-      windowsHide: true,
-    });
+    if (handoffRunning) return sendJson(res, 429, { error: "a handoff is already running; try again when it finishes" });
+    handoffRunning = true;
+    lastHandoffError = null;
+    const run = runVsHandoff(cli, rootDir, { ...process.env, ...(body.agentId ? { PASEO_AGENT_ID: String(body.agentId) } : {}) })
+      .then(
+        () => ({ done: true }),
+        (err) => {
+          lastHandoffError = String(err?.message ?? err);
+          return { done: true, error: lastHandoffError };
+        },
+      )
+      .finally(() => {
+        handoffRunning = false;
+      });
+    let timer;
+    const outcome = await Promise.race([
+      run,
+      new Promise((ok) => {
+        timer = setTimeout(() => ok({ done: false }), HANDOFF_HTTP_WAIT_MS);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (!outcome.done) return sendJson(res, 202, { exists: existsSync(packet), path: packet, accepted: true, running: true });
+    if (outcome.error) return sendJson(res, 500, { error: outcome.error });
     sendJson(res, 200, { exists: existsSync(packet), path: packet, ran: true });
   } catch (e) {
     sendJson(res, 500, { error: String(e) });
@@ -672,17 +883,23 @@ async function handleBrainstormSummary(req, res, rootDir) {
       const q = new URL(req.url, "http://x").searchParams;
       const lane = q.get("lane") || q.get("laneId") || "vibesquad";
       const s = readBrainstormSummary(lane, rootDir);
-      return sendJson(res, 200, { ok: true, laneId: s.laneId, path: s.path, content: s.content });
+      return sendJson(res, 200, { ok: true, laneId: s.laneId, path: s.path, content: s.content, revision: contentRevision(s.content) });
     }
     if (req.method === "POST" || req.method === "PUT") {
-      const body = await readBody(req);
+      const body = await readCleanBody(req);
       const lane = body.laneId || body.lane || "vibesquad";
       const content = String(body.content ?? "");
       if (content.length >= 20_000) {
         return sendJson(res, 400, { ok: false, error: `Summary is ${content.length} chars; must be < 20000 chars (~5k tokens)` });
       }
+      // Like teams.json: a write that sends the revision it read gets 409 if the brief changed since.
+      if (body.revision !== undefined) {
+        const cur = readBrainstormSummary(lane, rootDir);
+        const revision = contentRevision(cur.content);
+        if (body.revision !== revision) return sendJson(res, 409, { ok: false, error: "brief changed", content: cur.content, revision });
+      }
       const s = writeBrainstormSummary(lane, content, rootDir);
-      return sendJson(res, 200, { ok: true, laneId: s.laneId, path: s.path, content: s.content });
+      return sendJson(res, 200, { ok: true, laneId: s.laneId, path: s.path, content: s.content, revision: contentRevision(s.content) });
     }
     res.statusCode = 405;
     res.end();
@@ -716,7 +933,7 @@ async function handleVsLog(req, res) {
       return sendJson(res, 200, { ok: true, entries });
     }
     if (req.method === "POST") {
-      const body = await readBody(req);
+      const body = await readCleanBody(req);
       const teamId = body.teamId || body.team || "vibesquad";
       const laneId = body.laneId || body.lane || teamId;
       if (!TEAM_ID.test(String(teamId)) || !TEAM_ID.test(String(laneId))) return sendJson(res, 400, { ok: false, error: "bad team/lane" });
@@ -746,11 +963,18 @@ async function handleBrainstormRestart(req, res, rootDir) {
     return res.end();
   }
   try {
-    const body = await readBody(req);
+    const body = await readCleanBody(req);
     if (body?.agentId != null && body.agentId !== "" && !AGENT_ID_STRICT.test(String(body.agentId))) {
       return sendJson(res, 400, { ok: false, error: "bad agentId" });
     }
-    const result = await performBrainstormRestart(sanitizeBody(body), rootDir);
+    if (body.reason === "start-brainstorm" || body.agentId === "start-brainstorm") {
+      if (overSpawnBudget(res)) return;
+    } else {
+      // A restart archives the old Buddy and spawns a new one: it spends from both budgets.
+      if (overArchiveBudget(res)) return;
+      if (overSpawnBudget(res)) return;
+    }
+    const result = await performBrainstormRestart(body, rootDir);
     // ok:false (e.g. agent-list-unavailable) must not look like success to the UI.
     return sendJson(res, result?.ok === false ? 503 : 200, result);
   } catch (e) {
@@ -764,12 +988,13 @@ async function handleLeadHandoff(req, res, rootDir, actionOverride) {
     return res.end();
   }
   try {
-    const body = await readBody(req);
+    const body = await readCleanBody(req);
     const result = await performLeadHandoffHttp(
-      actionOverride ? { ...sanitizeBody(body), action: actionOverride } : sanitizeBody(body),
+      actionOverride ? { ...body, action: actionOverride } : { httpWaitMs: 2000, ...body },
       rootDir,
     );
-    return sendJson(res, 200, result);
+    const status = result?.status || (result?.accepted ? 202 : 200);
+    return sendJson(res, status, result);
   } catch (e) {
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
   }
@@ -790,7 +1015,7 @@ async function handleInbox(req, res, rootDir) {
       return sendJson(res, 200, { ok: true, cards });
     }
     if (req.method === "POST") {
-      const body = await readBody(req);
+      const body = await readCleanBody(req);
       const result = addInboxCards(body, rootDir);
       return sendJson(res, 200, result);
     }
@@ -807,7 +1032,7 @@ async function handleInboxTriage(req, res, rootDir) {
     return res.end();
   }
   try {
-    const body = await readBody(req);
+    const body = await readCleanBody(req);
     const result = triageInboxCards(body, rootDir);
     return sendJson(res, 200, result);
   } catch (e) {
@@ -821,7 +1046,7 @@ async function handleInboxOpenTopic(req, res, rootDir) {
     return res.end();
   }
   try {
-    const body = await readBody(req);
+    const body = await readCleanBody(req);
     const result = await openTopicBrainstorm(body, rootDir);
     return sendJson(res, 200, result);
   } catch (e) {
@@ -835,7 +1060,8 @@ async function handleInboxHandoffTopic(req, res, rootDir) {
     return res.end();
   }
   try {
-    const body = await readBody(req);
+    const body = await readCleanBody(req);
+    if (overArchiveBudget(res)) return;
     const result = await handoffTopicBrainstorm(body, rootDir);
     return sendJson(res, 200, result);
   } catch (e) {
@@ -849,7 +1075,8 @@ async function handleInboxParkTopic(req, res, rootDir) {
     return res.end();
   }
   try {
-    const body = await readBody(req);
+    const body = await readCleanBody(req);
+    if (overArchiveBudget(res)) return;
     const result = await parkTopicBrainstorm(body, rootDir);
     return sendJson(res, 200, result);
   } catch (e) {
@@ -877,7 +1104,7 @@ async function handlePushSubscribe(req, res) {
     return res.end();
   }
   try {
-    const body = await readBody(req);
+    const body = await readCleanBody(req);
     const result = savePushSubscription(body);
     return sendJson(res, 200, result);
   } catch (e) {
@@ -891,7 +1118,7 @@ async function handlePushUnsubscribe(req, res) {
     return res.end();
   }
   try {
-    const body = await readBody(req);
+    const body = await readCleanBody(req);
     const result = removePushSubscription(body);
     return sendJson(res, 200, result);
   } catch (e) {
@@ -913,7 +1140,7 @@ function handlePushStatus(req, res) {
     desktopCount,
     subscriptions: subs.map((s) => ({
       type: s.type || "webpush",
-      endpoint: s.endpoint,
+      endpoint: redactPushEndpoint(s.endpoint),
       deviceName: s.deviceName || null,
       updatedAt: s.updatedAt || null,
     })),
@@ -926,7 +1153,7 @@ async function handlePushTest(req, res) {
     return res.end();
   }
   try {
-    const body = await readBody(req);
+    const body = await readCleanBody(req);
     const result = await sendTestPush(body);
     return sendJson(res, 200, result);
   } catch (e) {
@@ -937,7 +1164,7 @@ async function handlePushTest(req, res) {
 async function handleProfiles(req, res) {
   try {
     if (req.method === "GET") {
-      const state = loadProfiles(undefined, { autoSeed: false });
+      const state = loadProfiles(undefined, { autoImportPaseo: true });
       const diff = diffProfiles(state.profiles, state.paseoProfiles);
       const warningsByProfile = { ...(state.warningsByProfile ?? {}) };
       for (const d of diff) {
@@ -958,8 +1185,9 @@ async function handleProfiles(req, res) {
       });
     }
     if (req.method === "POST" || req.method === "PUT") {
-      const body = await readBody(req);
+      const body = await readCleanBody(req);
       const saved = saveProfiles(body);
+      syncProfilesToPaseo(saved.profiles);
       return sendJson(res, 200, {
         ok: true,
         path: saved.path,
@@ -979,7 +1207,7 @@ async function handleProfilesImport(req, res) {
     return res.end();
   }
   try {
-    const body = await readBody(req);
+    const body = await readCleanBody(req);
     if (body.mode === "default") {
       const seeded = seedDefaultPack();
       syncProfilesToPaseo(seeded.profiles);
@@ -1062,6 +1290,11 @@ function resolveDesktopInstallerPath(rootDir = REPO_ROOT) {
   if (rootDir.includes(".worktrees")) {
     candidates.push(resolve(rootDir, "../.."));
   }
+  const stamp = readBuildStamp(rootDir);
+  if (stamp?.repo) {
+    const repoRoot = stamp.repo.replace(/[\\/]\.git[\\/]?$/, "");
+    if (repoRoot && !candidates.includes(repoRoot)) candidates.push(repoRoot);
+  }
   for (const base of candidates) {
     const distInstaller = join(base, "dist-desktop", "VibeSquad-setup.exe");
     if (existsSync(distInstaller)) return distInstaller;
@@ -1074,6 +1307,21 @@ function resolveDesktopInstallerPath(rootDir = REPO_ROOT) {
     }
   }
   return join(rootDir, "dist-desktop", "VibeSquad-setup.exe");
+}
+
+export function resolveAndroidApkPath(rootDir = REPO_ROOT) {
+  const primary = join(rootDir, "dist-desktop", "VibeSquad.apk");
+  if (existsSync(primary)) return primary;
+  const parent = resolve(rootDir, "../..", "dist-desktop", "VibeSquad.apk");
+  if (existsSync(parent)) return parent;
+  const apkDir = join(rootDir, "src-tauri", "gen", "android", "app", "build", "outputs", "apk", "universal", "release");
+  if (existsSync(apkDir)) {
+    try {
+      const apk = readdirSync(apkDir).find((f) => f.endsWith(".apk"));
+      if (apk) return join(apkDir, apk);
+    } catch {}
+  }
+  return primary;
 }
 
 function readDesktopVersion(rootDir = REPO_ROOT) {
@@ -1108,6 +1356,25 @@ export function handleDesktopInstaller(req, res, rootDir = REPO_ROOT) {
   res.setHeader("content-type", "application/vnd.microsoft.portable-executable");
   res.setHeader("content-length", String(stat.size));
   res.setHeader("content-disposition", 'attachment; filename="VibeSquad-setup.exe"');
+  res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
+  if (req.method === "HEAD") return res.end();
+  createReadStream(file).on("error", () => res.destroy()).pipe(res);
+}
+
+export function handleAndroidApk(req, res, rootDir = REPO_ROOT) {
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    res.statusCode = 405;
+    return res.end();
+  }
+  const file = resolveAndroidApkPath(rootDir);
+  if (!existsSync(file)) {
+    return sendJson(res, 404, { error: "Android APK not built yet (run npm run build:android)" });
+  }
+  const stat = statSync(file);
+  res.statusCode = 200;
+  res.setHeader("content-type", "application/vnd.android.package-archive");
+  res.setHeader("content-length", String(stat.size));
+  res.setHeader("content-disposition", 'attachment; filename="VibeSquad.apk"');
   res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
   if (req.method === "HEAD") return res.end();
   createReadStream(file).on("error", () => res.destroy()).pipe(res);
@@ -1197,9 +1464,8 @@ export function resolveAllowedImage(raw, roots = imageAllowedRoots(), extraCwd =
     let p = String(raw ?? "");
     if (!p || p.includes("\0")) return null;
     if (/^file:/i.test(p)) p = fileURLToPath(p);
+    if (isUncLikePath(p)) return null;
     if (!IMAGE_MIME[extname(p).toLowerCase()]) return null;
-    const real = realpathSync(resolve(p));
-    if (!statSync(real).isFile()) return null;
     const allRoots = Array.isArray(roots) ? [...roots] : imageAllowedRoots();
     let resolvedExtra = null;
     if (typeof extraCwd === "string" && extraCwd.trim()) {
@@ -1207,11 +1473,14 @@ export function resolveAllowedImage(raw, roots = imageAllowedRoots(), extraCwd =
     } else if (extraCwd && typeof extraCwd === "object") {
       resolvedExtra = extraCwd.extraCwd || (extraCwd.agentId ? lookupAgentCwd(extraCwd.agentId, extraCwd.paseoHome) : null);
     }
-    if (resolvedExtra) {
+    if (resolvedExtra && !isUncLikePath(resolvedExtra)) {
       try {
         allRoots.push(realpathSync(resolve(resolvedExtra)));
       } catch {}
     }
+    if (!lexicallyInside(p, allRoots.filter((r) => !isUncLikePath(r)))) return null;
+    const real = realpathSync(resolve(p));
+    if (!statSync(real).isFile()) return null;
     const norm = (x) => (process.platform === "win32" ? x.toLowerCase() : x);
     const r = norm(real);
     return allRoots.some((root) => {
@@ -1259,11 +1528,13 @@ async function handleWorkspacePackageScripts(req, res, rootDir, opts = {}) {
   }
   try {
     const cwd = new URL(req.url, "http://x").searchParams.get("cwd") ?? "";
-    if (!cwd || !existsSync(cwd) || !statSync(cwd).isDirectory()) {
+    if (!cwd || isUncLikePath(cwd)) return sendJson(res, 400, { ok: false, scripts: {} });
+    const allowed = allowedAttachRoots(rootDir, opts);
+    if (!lexicallyInside(cwd, allowed)) return sendJson(res, 403, { ok: false, error: "cwd not in allowed roots" });
+    if (!existsSync(cwd) || !statSync(cwd).isDirectory()) {
       return sendJson(res, 400, { ok: false, scripts: {} });
     }
     const realCwd = realpathSync(resolve(cwd));
-    const allowed = allowedAttachRoots(rootDir, opts);
     if (!allowed.some((root) => insideDir(realCwd, root))) {
       return sendJson(res, 403, { ok: false, error: "cwd not in allowed roots" });
     }
@@ -1285,16 +1556,27 @@ async function handleWorkspacePackageScripts(req, res, rootDir, opts = {}) {
 }
 
 // Connect-style middleware: handles /__vibesquad/* and /api/*, calls next() for everything else.
-// Everything except health, /ca.crt and /pair needs a paired device or a same-origin loopback caller.
+// Everything except health, /ca.crt, /pair and /__vibesquad/local-login needs a paired device or a same-origin loopback
+// caller; a loopback caller without the local token is read-only (GET/HEAD, minus isGatedRead).
 export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
+  const readOnlyCache = createReadOnlyCache(opts.readOnlyCacheMs);
   return (req, res, next) => {
     const path = (req.url ?? "").split("?")[0];
+    const cachedRead = (run) => readOnlyCache(path, isOwner(req), run);
+    // An owner write (install, toggle, daemon restart) can change what those reads return.
+    if (req.method !== "GET" && req.method !== "HEAD" && isOwner(req)) readOnlyCache.clear();
     if (path === "/api/health" || path === "/__vibesquad/health") return handleHealth(req, res, rootDir);
     if (path === "/ca.crt") return handleCaCrt(req, res);
     if (path === "/pair") return handlePairRedeem(req, res);
-    if ((path.startsWith("/__vibesquad/") || path.startsWith("/api/")) && !isTrusted(req)) {
+    if (path === "/__vibesquad/local-login") return handleLocalLogin(req, res);
+    if (path === "/__vibesquad/local-login/nonce") return handleLocalLoginNonce(req, res);
+    const isApi = path.startsWith("/__vibesquad/") || path.startsWith("/api/");
+    if (isApi && !isTrusted(req)) {
       if (isLocal(req)) return sendJson(res, 403, { error: "forbidden" });
       return sendJson(res, 401, { error: "unpaired device" });
+    }
+    if (isApi && !isOwner(req) && ((req.method !== "GET" && req.method !== "HEAD") || isGatedRead(path, req.url))) {
+      return sendJson(res, 403, { error: READ_ONLY_ERROR, readOnly: true });
     }
     if (Number(req.headers["content-length"] ?? 0) > MAX_BODY_BYTES) return sendJson(res, 413, { error: "payload too large" });
     if (path === "/api/auth/status" || path === "/__vibesquad/auth/status") return handleAuthStatus(req, res, rootDir);
@@ -1303,6 +1585,9 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     if (path === "/__vibesquad/local-image") return handleLocalImage(req, res);
     if (path === "/VibeSquad-setup.exe" || path === "/__vibesquad/desktop/VibeSquad-setup.exe") {
       return handleDesktopInstaller(req, res, rootDir);
+    }
+    if (path === "/VibeSquad.apk" || path === "/__vibesquad/android/VibeSquad.apk") {
+      return handleAndroidApk(req, res, rootDir);
     }
     if (path === "/__vibesquad/desktop/update.json") {
       return handleDesktopUpdateJson(req, res, rootDir);
@@ -1319,7 +1604,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return handleTeams(req, res, rootDir);
       case "/__vibesquad/first-run/status":
         if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
-        return inspectFirstRunStatus(opts.firstRun).then((st) => sendJson(res, 200, st), (e) => sendJson(res, 500, { error: String(e?.message ?? e) }));
+        return cachedRead(() => inspectFirstRunStatus(opts.firstRun)).then((st) => sendJson(res, 200, st), (e) => sendJson(res, 500, { error: String(e?.message ?? e) }));
       case "/__vibesquad/first-run/install-paseo":
         if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
         return startManagedPaseoInstall(opts.firstRun).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { error: String(e?.message ?? e) }));
@@ -1370,9 +1655,92 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return handleProfilesDiff(req, res);
       case "/__vibesquad/workspace-package-scripts":
         return handleWorkspacePackageScripts(req, res, rootDir, opts);
+      case "/__vibesquad/files":
+        return handleFileList(req, res, navRoots(rootDir, opts), sendJson);
+      case "/__vibesquad/search":
+        return handleSearch(req, res, navRoots(rootDir, opts), sendJson);
+      case "/__vibesquad/secret-input":
+        return handleSecretInputRequest(req, res, { readBody: readCleanBody, sendJson, isOwner, secretsDir: opts.secretsDir });
+      case "/__vibesquad/remove-team-worktrees":
+        if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+        return readBody(req)
+          .then((body) => sendJson(res, 200, { ok: true, results: removeTeamWorktrees(body?.worktrees) }))
+          .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
+      case "/__vibesquad/local-token": {
+        if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+        const authOpts = opts?.daemonAuthOpts || opts?.paseo || {};
+        return sendJson(res, 200, {
+          ok: true,
+          daemonPassword: readDaemonPassword(authOpts) || null,
+          localCredential: readPaseoLocalCredential(authOpts) || null,
+        });
+      }
+      case "/__vibesquad/paseo/daemon-auth": {
+        const authOpts = opts?.daemonAuthOpts || opts?.paseo || {};
+        if (req.method === "GET") {
+          const includePassword = new URL(req.url ?? "", "http://x").searchParams.get("includePassword") === "1";
+          const status = getDaemonAuthStatus(authOpts);
+          if (includePassword) {
+            return sendJson(res, 200, {
+              ...status,
+              password: readDaemonPassword(authOpts) || null,
+              localCredential: readPaseoLocalCredential(authOpts) || null,
+            });
+          }
+          return sendJson(res, 200, status);
+        }
+        if (req.method === "POST") {
+          return readBody(req)
+            .then(async (body) => {
+              if (body?.clear === true) {
+                writeDaemonPassword("", authOpts);
+                restartPushWatcher(rootDir).catch(() => {});
+                return sendJson(res, 200, { ...getDaemonAuthStatus(authOpts), cleared: true });
+              }
+              const candidate = typeof body?.password === "string" ? body.password.trim() : "";
+              if (!candidate) {
+                return sendJson(res, 400, { ok: false, error: "password required (or pass clear: true)" });
+              }
+              const probe = await (opts?.probeDaemonPassword || probeDaemonPassword)(candidate, opts?.daemonProbeOpts);
+              if (!probe?.ok) {
+                if (probe?.authFailureReason) {
+                  return sendJson(res, 401, {
+                    ...getDaemonAuthStatus(authOpts),
+                    ok: false,
+                    error: probe.error || "Invalid daemon password",
+                    authFailureReason: probe.authFailureReason,
+                  });
+                }
+                return sendJson(res, 503, {
+                  ...getDaemonAuthStatus(authOpts),
+                  ok: false,
+                  error: probe?.error || "Paseo daemon unreachable",
+                  unreachable: true,
+                });
+              }
+              writeDaemonPassword(candidate, authOpts);
+              restartPushWatcher(rootDir).catch(() => {});
+              return sendJson(res, 200, { ...getDaemonAuthStatus(authOpts), verified: true });
+            })
+            .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
+        }
+        return sendJson(res, 405, { error: "method not allowed" });
+      }
       case "/__vibesquad/paseo/status":
         if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
-        return getPaseoDaemonStatus(opts.paseo).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
+        return cachedRead(() => getPaseoDaemonStatus(opts.paseo)).then(
+          (r) => {
+            const authStatus = getDaemonAuthStatus(opts?.daemonAuthOpts || opts?.paseo || {});
+            return sendJson(res, 200, {
+              ...r,
+              passwordRequired: authStatus.required,
+              passwordConfigured: authStatus.configured,
+              passwordSource: authStatus.source,
+              auth: authStatus,
+            });
+          },
+          (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }),
+        );
       case "/__vibesquad/paseo/daemon":
         if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
         return readBody(req)
@@ -1381,11 +1749,14 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
           .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
       case "/__vibesquad/paseo/usage":
         if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
-        return getPaseoUsage({ ...(opts.paseo || {}), refresh: new URL(req.url, "http://x").searchParams.get("refresh") === "1" })
+        if (new URL(req.url, "http://x").searchParams.get("refresh") === "1") {
+          return getPaseoUsage({ ...(opts.paseo || {}), refresh: true }).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
+        }
+        return cachedRead(() => getPaseoUsage({ ...(opts.paseo || {}), refresh: false }))
           .then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
       case "/__vibesquad/paseo/providers":
         if (req.method === "GET") {
-          return getPaseoProviders(opts.paseo).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
+          return cachedRead(() => getPaseoProviders(opts.paseo)).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
         }
         if (req.method === "POST") {
           return readBody(req)
@@ -1407,7 +1778,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
           .then((r) => sendJson(res, 200, r), (e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
       case "/__vibesquad/paseo/plugins":
         if (req.method === "GET") {
-          return getPaseoPlugins(opts.paseo).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
+          return cachedRead(() => getPaseoPlugins(opts.paseo)).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
         }
         if (req.method === "POST") {
           return readBody(req)
@@ -1423,7 +1794,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         if (req.method === "POST" || req.method === "PUT") {
           return readBody(req)
             .then((body) => updatePaseoSettingsPatch(body, opts.paseo))
-            .then((r) => sendJson(res, r.ok ? 200 : 400, r))
+            .then((r) => sendJson(res, r.ok ? 200 : r.needsConfirmation ? 409 : 400, r))
             .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
         }
         return sendJson(res, 405, { error: "method not allowed" });
@@ -1446,6 +1817,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return readBody(req)
           .then((body) => {
             const restored = restoreLastPaseoConfigBackup({ ...(opts.paseo || {}), backupPath: body?.backupPath });
+            checkDaemonListenExposure(opts.paseo);
             return runPaseoCli(["reload"], opts.paseo).then(() =>
               sendJson(res, 200, {
                 ok: true,

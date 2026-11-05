@@ -1,10 +1,24 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { TerminalStreamEvent } from "@getpaseo/client/internal/daemon-client";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { daemonClient, DEMO } from "./paseo";
+import { daemonClient, DEMO, usePaseo } from "./paseo";
+import { workspaceIdForAgent } from "./workspaceLogic";
+import { NoWorkspaceBanner } from "./NoWorkspaceBanner";
+import { captureFileName, captureText } from "./fileOps";
+import { captureTerminalLines, renameTerminalTitle } from "./paseoFiles";
+import {
+  detectPortsInText,
+  dismissWorkspacePort,
+  getWorkspacePorts,
+  recordWorkspacePorts,
+  subscribeWorkspacePorts,
+  type DetectedPort,
+} from "./portsDetect";
+
+const utf8Decoder = new TextDecoder();
 
 type TerminalTab = { id: string; name: string };
 type TerminalInstance = { term: Terminal; fit: FitAddon };
@@ -44,14 +58,43 @@ function resizeTerminal(terminalId: string, cols: number, rows: number) {
 
 export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
   const cwd = agent.cwd ?? "";
+  const { workspaces } = usePaseo();
+  // Paseo 0.14 scopes terminals by workspace: listTerminals(cwd) alone comes back empty.
+  const [addedWs, setAddedWs] = useState<{ cwd: string; id: string } | null>(null);
+  const workspaceId = useMemo(() => workspaceIdForAgent(agent, workspaces) ?? (addedWs?.cwd === cwd ? addedWs.id : null), [agent, workspaces, addedWs, cwd]);
+  const scope = workspaceId ? { workspaceId } : undefined;
+  const noWorkspace = !DEMO && !workspaceId;
+  const scopeKey = `${cwd}|${workspaceId ?? ""}`;
+  const scopeKeyRef = useRef(scopeKey);
+  scopeKeyRef.current = scopeKey;
+  const portsKey = cwd || workspaceId || agent.id || "default";
+  const portsKeyRef = useRef(portsKey);
+  portsKeyRef.current = portsKey;
+  const [detectedPorts, setDetectedPorts] = useState<DetectedPort[]>(() => getWorkspacePorts(portsKey));
   const [tabs, setTabs] = useState<TerminalTab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const unsubsRef = useRef<Map<string, () => void>>(new Map());
   const termInstancesRef = useRef<Map<string, TerminalInstance>>(new Map());
   const containerRefsMap = useRef<Map<string, HTMLDivElement>>(new Map());
   const pendingOutputRef = useRef<Map<string, (Uint8Array | string)[]>>(new Map());
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const renamingRef = useRef<string | null>(null); // guards Enter + blur from committing twice
+  const [renameValue, setRenameValue] = useState("");
+  const [tabErr, setTabErr] = useState("");
+  const [capture, setCapture] = useState<{ title: string; text: string; err: string; busy: boolean; copied: boolean } | null>(null);
+
+  useEffect(() => {
+    setDetectedPorts(getWorkspacePorts(portsKey));
+    return subscribeWorkspacePorts(() => {
+      setDetectedPorts(getWorkspacePorts(portsKey));
+    });
+  }, [portsKey]);
 
   const writeToTerm = useCallback((id: string, data: Uint8Array | string) => {
+    const textChunk = typeof data === "string" ? data : utf8Decoder.decode(data);
+    if (textChunk && detectPortsInText(textChunk).length > 0) {
+      recordWorkspacePorts(portsKeyRef.current, textChunk);
+    }
     const inst = termInstancesRef.current.get(id);
     if (inst) {
       inst.term.write(data);
@@ -95,9 +138,11 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
     }
   }, []);
 
-  // Load existing terminals on mount
+  // Load the scope's terminals; a scope change (another agent / workspace) starts from a clean slate.
   useEffect(() => {
     let cancelled = false;
+    setTabs([]);
+    setActiveId(null);
 
     function subscribeToTerminal(terminalId: string) {
       const sub = daemonClient.observeTerminal(
@@ -120,26 +165,35 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
         setActiveId(id);
         return;
       }
+      if (noWorkspace) return;
       try {
-        const result = await daemonClient.listTerminals(cwd);
+        const result = await daemonClient.listTerminals(cwd, undefined, scope);
         const loaded = result.terminals.map((t) => ({
           id: t.id,
           name: (t as { title?: string; name?: string }).title ?? (t as { name?: string }).name ?? t.id.slice(-6),
         }));
         if (cancelled) return;
-        if (loaded.length > 0) {
-          setTabs(loaded);
-          setActiveId(loaded[0].id);
-          for (const t of loaded) subscribeToTerminal(t.id);
-        }
+        setTabs(loaded);
+        setActiveId(loaded[0]?.id ?? null);
+        for (const t of loaded) subscribeToTerminal(t.id);
       } catch {
         // ignore connection errors; user can create a terminal manually
       }
     }
     loadTerminals();
-    return () => { cancelled = true; };
+    // Runs on scope change and on unmount: release the old scope's streams and xterm instances.
+    return () => {
+      cancelled = true;
+      for (const unsub of unsubsRef.current.values()) unsub();
+      unsubsRef.current.clear();
+      for (const { term } of termInstancesRef.current.values()) {
+        try { term.dispose(); } catch {}
+      }
+      termInstancesRef.current.clear();
+      pendingOutputRef.current.clear();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cwd]);
+  }, [cwd, workspaceId]);
 
   // Refit + resize the daemon PTY on tab switch, container resize and window resize
   useEffect(() => {
@@ -166,17 +220,6 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
     };
   }, [activeId, tabs.length]);
 
-  // Cleanup on unmount
-  useEffect(
-    () => () => {
-      for (const unsub of unsubsRef.current.values()) unsub();
-      for (const { term } of termInstancesRef.current.values()) {
-        try { term.dispose(); } catch {}
-      }
-    },
-    [],
-  );
-
   const createTerminal = async () => {
     if (DEMO) {
       demoCounter++;
@@ -186,10 +229,12 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
       setActiveId(id);
       return;
     }
+    if (noWorkspace) return;
+    const startedIn = scopeKey;
     try {
-      const result = await daemonClient.createTerminal(cwd, `Terminal ${tabs.length + 1}`);
+      const result = await daemonClient.createTerminal(cwd, `Terminal ${tabs.length + 1}`, undefined, scope);
       const termId = (result as { terminal?: { id?: string } }).terminal?.id;
-      if (!termId) return;
+      if (!termId || scopeKeyRef.current !== startedIn) return; // scope changed mid-create: it shows up when you come back
       const newTab: TerminalTab = { id: termId, name: `Terminal ${tabs.length + 1}` };
       setTabs((prev) => [...prev, newTab]);
       setActiveId(termId);
@@ -231,6 +276,67 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
     });
   };
 
+  const startRename = (t: TerminalTab) => {
+    setTabErr("");
+    renamingRef.current = t.id;
+    setRenamingId(t.id);
+    setRenameValue(t.name);
+  };
+
+  const commitRename = async () => {
+    const id = renamingRef.current;
+    if (!id) return;
+    const title = renameValue.trim();
+    renamingRef.current = null;
+    setRenamingId(null);
+    if (!title || title === tabs.find((t) => t.id === id)?.name) return;
+    try {
+      if (!DEMO) await renameTerminalTitle(id, title);
+      setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, name: title } : t)));
+    } catch (e) {
+      setTabErr(`Rename failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  useEffect(() => {
+    if (!capture) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setCapture(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [capture]);
+
+  const captureActive = async () => {
+    const tab = tabs.find((t) => t.id === activeId);
+    if (!tab) return;
+    setCapture({ title: tab.name, text: "", err: "", busy: true, copied: false });
+    try {
+      const lines = DEMO ? ["$ npm run build", "build ok", ""] : await captureTerminalLines(tab.id);
+      setCapture((c) => c && { ...c, text: captureText(lines), busy: false });
+    } catch (e) {
+      setCapture((c) => c && { ...c, err: e instanceof Error ? e.message : String(e), busy: false });
+    }
+  };
+
+  const copyCapture = async () => {
+    if (!capture) return;
+    try {
+      await navigator.clipboard.writeText(capture.text);
+      setCapture((c) => c && { ...c, copied: true });
+    } catch {
+      setCapture((c) => c && { ...c, err: "Copy blocked by the browser" });
+    }
+  };
+
+  const saveCapture = () => {
+    if (!capture) return;
+    const url = URL.createObjectURL(new Blob([capture.text], { type: "text/plain;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = captureFileName(capture.title, new Date());
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  };
+
   return (
     <div className="terminal-panel" data-testid="terminal-panel">
       <div className="terminal-tabs">
@@ -241,8 +347,29 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
             data-testid="terminal-tab"
             title={t.name}
             onClick={() => setActiveId(t.id)}
+            onDoubleClick={() => startRename(t)}
           >
-            <span className="terminal-tab-name">{t.name}</span>
+            {renamingId === t.id ? (
+              <input
+                className="terminal-tab-input"
+                data-testid="terminal-rename-input"
+                autoFocus
+                value={renameValue}
+                maxLength={60}
+                onClick={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => e.stopPropagation()}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onFocus={(e) => e.currentTarget.select()}
+                onBlur={() => void commitRename()}
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === "Enter") void commitRename();
+                  else if (e.key === "Escape") { renamingRef.current = null; setRenamingId(null); }
+                }}
+              />
+            ) : (
+              <span className="terminal-tab-name">{t.name}</span>
+            )}
             <span
               className="terminal-tab-close"
               role="button"
@@ -259,12 +386,119 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
         <button
           className="btn ghost small"
           data-testid="terminal-new-btn"
+          disabled={noWorkspace}
+          title={noWorkspace ? "No Paseo workspace for this folder" : undefined}
           onClick={() => void createTerminal()}
         >
           + New Terminal
         </button>
+        {activeId && (
+          <>
+            <button
+              className="btn ghost small"
+              data-testid="terminal-rename-btn"
+              title="Rename this terminal (or double-click its tab)"
+              onClick={() => { const t = tabs.find((x) => x.id === activeId); if (t) startRename(t); }}
+            >
+              Rename
+            </button>
+            <button
+              className="btn ghost small"
+              data-testid="terminal-capture-btn"
+              title="Snapshot this terminal's output as text"
+              onClick={() => void captureActive()}
+            >
+              Capture output
+            </button>
+          </>
+        )}
+        {detectedPorts.length > 0 && (
+          <div
+            className="terminal-ports-bar"
+            data-testid="terminal-ports-bar"
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, marginLeft: "auto" }}
+          >
+            {detectedPorts.map((p) => (
+              <span
+                key={p.port}
+                className="terminal-port-pill"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 3,
+                  padding: "1px 6px",
+                  borderRadius: 999,
+                  background: "rgba(0, 245, 212, 0.12)",
+                  border: "1px solid rgba(0, 245, 212, 0.35)",
+                  fontSize: 11,
+                }}
+              >
+                <a
+                  href={p.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-testid={`port-pill-${p.port}`}
+                  title={`Open ${p.url}`}
+                  style={{ color: "#00f5d4", textDecoration: "none", fontFamily: "monospace" }}
+                >
+                  :{p.port}
+                </a>
+                <button
+                  type="button"
+                  data-testid={`port-pill-dismiss-${p.port}`}
+                  aria-label={`Dismiss port ${p.port}`}
+                  title={`Dismiss :${p.port}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    dismissWorkspacePort(portsKey, p.port);
+                  }}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "#94a3b8",
+                    cursor: "pointer",
+                    padding: "0 2px",
+                    fontSize: 11,
+                    lineHeight: 1,
+                  }}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
-      {tabs.length === 0 ? (
+      {tabErr && <div className="stat-alert small" data-testid="terminal-tab-error">{tabErr}</div>}
+      {capture && (
+        <div className="modal-back" onMouseDown={() => setCapture(null)}>
+          <div className="modal wide terminal-capture-modal" data-testid="terminal-capture-modal" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <span>Captured output · {capture.title}</span>
+            </div>
+            <div className="modal-body">
+              {capture.busy ? (
+                <div className="muted small">Capturing…</div>
+              ) : capture.err ? (
+                <div className="stat-alert small" data-testid="terminal-capture-error">{capture.err}</div>
+              ) : (
+                <pre className="terminal-capture-text" data-testid="terminal-capture-text">{capture.text || "(terminal is empty)"}</pre>
+              )}
+            </div>
+            <div className="modal-foot">
+              {capture.copied && <span className="muted small">Copied</span>}
+              <button className="btn ghost" data-testid="terminal-capture-copy" disabled={capture.busy || !capture.text} onClick={() => void copyCapture()}>Copy</button>
+              <button className="btn ok" data-testid="terminal-capture-save" disabled={capture.busy || !capture.text} onClick={saveCapture}>Save as .txt</button>
+              <button className="btn ghost" data-testid="terminal-capture-close" onClick={() => setCapture(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {noWorkspace ? (
+        <div data-testid="terminal-no-workspace">
+          <NoWorkspaceBanner cwd={cwd} onReady={(id) => setAddedWs({ cwd, id })} />
+        </div>
+      ) : tabs.length === 0 ? (
         <div className="muted" style={{ padding: 16 }}>
           No terminals open — click <b>+ New Terminal</b> to start one.
         </div>

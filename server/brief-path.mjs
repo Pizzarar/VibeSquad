@@ -35,15 +35,33 @@ export function laneWorkingDir(teamId, laneId, rootDir) {
   const candidates = [...(lane?.paths ?? []), ...(lane?.path ? [lane.path] : []), ...(team.paths ?? [])]
     .map((p) => String(p ?? "").trim())
     .filter(Boolean);
-  const mainRoot = resolveWorktreeRootPath(rootDir) || rootDir;
-  const bases = [...new Set([dirname(resolve(mainRoot)), dirname(resolve(rootDir)), join(homedir(), "projects")])];
   for (const p of candidates) {
-    const tries = isAbsolute(p) ? [resolve(p)] : bases.map((base) => resolve(base, p));
-    for (const full of tries) {
-      if (!isDir(full)) continue;
-      if (insideProjectRoots(full, bases)) return full;
-      console.warn(`[vibesquad] ignoring lane path outside the project folders: ${full}`);
+    const full = resolveProjectPath(p, rootDir, { warn: true });
+    if (full) return full;
+  }
+  return null;
+}
+
+const projectBases = (rootDir) => {
+  const mainRoot = resolveWorktreeRootPath(rootDir) || rootDir;
+  return [...new Set([dirname(resolve(mainRoot)), dirname(resolve(rootDir)), join(homedir(), "projects")])];
+};
+
+/**
+ * One registry path ("MyGame" or an absolute path) as an existing folder inside the project roots, or null.
+ * UNC / device paths are refused before any fs call (a stat would reach out over SMB).
+ */
+export function resolveProjectPath(p, rootDir, { warn = false } = {}) {
+  const raw = String(p ?? "").trim();
+  if (!raw || /^[\\/]{2}/.test(raw)) return null;
+  const bases = projectBases(rootDir);
+  const tries = isAbsolute(raw) ? [resolve(raw)] : bases.map((base) => resolve(base, raw));
+  for (const full of tries) {
+    if (!insideProjectRoots(full, bases)) {
+      if (warn && isDir(full)) console.warn(`[vibesquad] ignoring lane path outside the project folders: ${full}`);
+      continue;
     }
+    if (isDir(full)) return full;
   }
   return null;
 }

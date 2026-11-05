@@ -1,7 +1,7 @@
 {
   "name": "vibesquad",
   "private": true,
-  "version": "0.1.1-beta.5",
+  "version": "0.2.5",
   "type": "module",
   "bin": {
     "vs": "./cli/vs.mjs"
@@ -9,8 +9,10 @@
   "scripts": {
     "dev": "vite",
     "start": "node server/serve.mjs",
-    "build": "node server/generate-licenses.mjs && tsc --noEmit && vite build",
+    "build": "node server/generate-licenses.mjs && tsc --noEmit && vite build && node server/sync-runtime.mjs",
+    "build:remote": "vite build --mode remote",
     "build:desktop": "node server/build-desktop.mjs",
+    "build:android": "node server/build-android.mjs",
     "release:beta": "node server/release.mjs --channel beta",
     "release:stable": "node server/release.mjs --channel stable",
     "desktop:dev": "tauri dev",
@@ -20,8 +22,8 @@
     "@fontsource/jetbrains-mono": "5.3.0",
     "@fontsource/pixelify-sans": "5.3.0",
     "@fontsource/silkscreen": "5.3.0",
-    "@getpaseo/client": "0.13.2",
-    "@getpaseo/protocol": "0.13.2",
+    "@getpaseo/client": "0.14.0",
+    "@getpaseo/protocol": "0.14.0",
     "@vibesquad/server": "file:server",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",

@@ -3,8 +3,9 @@ import type { PaseoAgent } from "@getpaseo/client";
 import { DEMO, removeLocalAgent, upsertLocalAgent, usePaseo } from "./paseo";
 import { useDraft } from "./drafts";
 import { closeTab, openAgentInTab } from "./panes";
-import { getTeams, isTopicBrainstorm, topicOfBrainstorm, useTeams } from "./teams";
+import { getTeams, isTopicBrainstorm, titleFor, topicOfBrainstorm, useTeams } from "./teams";
 import { laneDisplayName } from "./pins";
+import { isRemote } from "./remoteSession";
 import type { InboxCard, InboxScope, TeamDef } from "./types";
 
 export const TOPIC_SOFT_CAP = 3;
@@ -166,10 +167,14 @@ export async function parkIdeasInInbox(opts: {
   source?: string;
   splitDump?: boolean;
 }): Promise<{ added: InboxCard[]; cards: InboxCard[]; summary: string }> {
+  const { source, ...rest } = opts;
+  const reqBody = isRemote()
+    ? { ...rest, laneId: opts.laneId || opts.defaultLaneId }
+    : { ...opts, laneId: opts.laneId || opts.defaultLaneId, ...(source !== undefined ? { source } : {}) };
   const res = await fetch("/__vibesquad/inbox", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(opts),
+    body: JSON.stringify(reqBody),
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -332,7 +337,7 @@ export function useOpenTopicBrainstorms(): {
       const cardId = l["vs.inbox-card-id"] || "";
       const matchingCard = cardId ? cards.find((c) => c.id === cardId) : cards.find((c) => c.topicAgentId === a.id);
       const topic = topicOfBrainstorm(a) || matchingCard?.title || a.title || a.id;
-      const title = a.title || matchingCard?.topicTitle || `BRAINSTORM · ${topic}`;
+      const title = a.title || matchingCard?.topicTitle || titleFor("brainstorm", l.lane ?? "", { topic, laneId: l.lane });
       const openedAt = l["vs.opened-at"] || matchingCard?.topicOpenedAt || a.updatedAt || matchingCard?.updatedAt || "";
       byAgentId.set(a.id, {
         agentId: a.id,
@@ -509,7 +514,7 @@ export const IdeaInbox = memo(function IdeaInbox({ team }: { team: TeamDef }) {
     if (!newLane) return;
     setError("");
     try {
-      await triageInbox({ action: "bounce", cardId, laneId: newLane });
+      await triageInbox({ action: "bounce", cardId, teamId: team.id, laneId: newLane });
       flashInboxNotice(`Bounced #${cardId} → ${newLane}`);
     } catch (e) {
       setError(String(e));
@@ -520,7 +525,14 @@ export const IdeaInbox = memo(function IdeaInbox({ team }: { team: TeamDef }) {
     if (!targetId || !sourceIds.length) return;
     setError("");
     try {
-      await triageInbox({ action: "merge", targetId, sourceIds });
+      const card = parkedCards.find((c) => c.id === targetId);
+      await triageInbox({
+        action: "merge",
+        targetId,
+        sourceIds,
+        teamId: team.id,
+        laneId: card?.laneId || team.lanes[0]?.id || "vibesquad",
+      });
       setSelectedIds((prev) => prev.filter((id) => !sourceIds.includes(id) && id !== targetId));
       flashInboxNotice(`Merged ${sourceIds.map((s) => `#${s}`).join(", ")} → #${targetId}`);
     } catch (e) {
@@ -531,7 +543,13 @@ export const IdeaInbox = memo(function IdeaInbox({ team }: { team: TeamDef }) {
   const handleArchive = async (cardId: string) => {
     setError("");
     try {
-      await triageInbox({ action: "archive", cardId });
+      const card = parkedCards.find((c) => c.id === cardId);
+      await triageInbox({
+        action: "archive",
+        cardId,
+        teamId: team.id,
+        laneId: card?.laneId || team.lanes[0]?.id || "vibesquad",
+      });
       setSelectedIds((prev) => prev.filter((id) => id !== cardId));
       flashInboxNotice(`Archived #${cardId}`);
     } catch (e) {
@@ -671,15 +689,17 @@ export const IdeaInbox = memo(function IdeaInbox({ team }: { team: TeamDef }) {
                         </span>
                       )}
                       <div className="inbox-card-triage">
-                        <button
-                          className="btn small ok inbox-open-topic-btn"
-                          disabled={openingId === card.id}
-                          onClick={() => void handleOpenTopic(card.id)}
-                          title="Spawn or focus a scoped topic brainstorm (BRAINSTORM · <LANE> · <topic>) seeded only with this card + team brief"
-                          data-testid={`inbox-open-topic-${card.id}`}
-                        >
-                          {openingId === card.id ? "Opening…" : "💬 Open Topic"}
-                        </button>
+                        {!isRemote() && (
+                          <button
+                            className="btn small ok inbox-open-topic-btn"
+                            disabled={openingId === card.id}
+                            onClick={() => void handleOpenTopic(card.id)}
+                            title="Spawn or focus a scoped topic brainstorm (<Code> Buddy · <topic>) seeded only with this card + team brief"
+                            data-testid={`inbox-open-topic-${card.id}`}
+                          >
+                            {openingId === card.id ? "Opening…" : "💬 Open Topic"}
+                          </button>
+                        )}
                         <select
                           className="inbox-select"
                           value=""

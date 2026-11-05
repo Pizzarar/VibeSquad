@@ -38,6 +38,10 @@ const PROVIDERS: [RegExp, ProviderSpec][] = [
 ];
 
 // Providers without a dedicated row get a stable hue from this list (none collide with the rows above).
+export const DEDICATED_PROVIDER_KEYS = PROVIDERS.map(([, s]) => s.key);
+export function listDedicatedProviders(): ProviderSpec[] {
+  return PROVIDERS.map(([, s]) => ({ ...s }));
+}
 export const GENERIC_HUES = ["#a3e635", "#2dd4bf", "#fb923c", "#e879f9", "#60a5fa", "#f43f5e", "#facc15", "#c084fc"];
 
 export type ProviderOverride = { color?: string; symbol?: string; name?: string; dim?: string };
@@ -68,7 +72,7 @@ export function providerSpec(provider: string, label?: string): ProviderSpec {
       symbol: initial,
     };
   }
-  const o = overrides[key];
+  const o = overrides[key] ?? overrides[spec.key];
   if (o) {
     const color = o.color ?? spec.color;
     spec = {

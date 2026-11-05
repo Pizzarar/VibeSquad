@@ -27,8 +27,9 @@ import {
   findLaneInRegistry,
   isDigestAgent as isDigestIdentity,
   isRetiredAgent,
+  formatDisplayTitle,
   isRetiredRole,
-  isThrowawayLane,
+  laneCodeFor,
   laneLeadMismatch,
   matchPathInRegistry,
   normalizeRoleLabel,
@@ -36,10 +37,14 @@ import {
   topicOf,
 } from "@vibesquad/server/identity.mjs";
 import { refreshWhosHere } from "@vibesquad/server/whos-here.mjs";
+import { writeBriefFile } from "@vibesquad/server/brief-write.mjs";
+import { defangPromptFences } from "@vibesquad/server/write-guards.mjs";
+import { detachLiveChildren } from "@vibesquad/server/detach-children.mjs";
 import { briefRootFor } from "@vibesquad/server/brief-path.mjs";
-import { seedBriefIfMissing } from "@vibesquad/server/brief-write.mjs";
-import { deriveRole } from "@vibesquad/server/profiles.mjs";
+import { DEFAULT_PACK_PROFILES, deriveRole } from "@vibesquad/server/profiles.mjs";
+import { normalizeProviderFamily, resolveProfileWithFailover } from "@vibesquad/server/provider-failover.mjs";
 import { leanApplies, leanProviderOptions } from "@vibesquad/server/lean-tools.mjs";
+import { makeVsHttpHandler, vsHttp } from "./server/remote-proxy.ts";
 import {
   LEGACY_NEEDS_LABEL,
   LEGACY_USER_TYPE,
@@ -60,7 +65,7 @@ export const DIGEST_PROFILE = "Pre-check - Flash";
 export const DIGEST_MODE_ID = "default";
 export const DIGEST_THINKING_OPTION_ID = "low";
 const WAKE_TYPES = new Set(["done", "blocker", "decision", "needs-you", "you", LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE]);
-const TRANSIENT_ERROR = /googleapis|EOF|no such host|ECONNRESET/i;
+const TRANSIENT_ERROR = /googleapis|EOF|no such host|ECONNRESET|stream idle timeout|context deadline exceeded|stream was interrupted|temporarily unavailable/i;
 const MAX_RETRIES = 2;
 const MAX_TEXT = 240;
 const REPO_ROOT = path.resolve(process.env.VIBESQUAD_ROOT || (typeof import.meta?.dirname === "string" ? path.join(import.meta.dirname, "..") : path.join(os.homedir(), "projects", "VibeSquad")));
@@ -80,6 +85,9 @@ export const EVERYONE_LAYER = [
   "- R4 (Large files): For files over ~30k chars, grep first, then read with offset/limit. Never re-read from byte 0.",
   "- R6 (Waiting): Wait on agents with `paseo wait <id> --timeout <s>` (always with a timeout). No sleep/poll loops.",
   "- R2/R7 (Git state): Git state in the spawn context is a starting point only. Re-check right before commit/push/merge, not every turn. Fetch at most once per worktree per hour unless about to merge.",
+  "- R8 (Worktrees & Lanes): Address feature lanes by their `@<code>` handle (e.g. `@bug`, `@ade`, `@uip`, `@art`). Create linked git worktrees only via `vs worktree create <unit>` (stored in the managed worktree sanctuary, never as sibling folders in the projects directory), and sweep merged worktrees with `vs worktree sweep --apply`.",
+  "- R9 (Owner shorthand & interrupts): Decode keyboard/phonetic shorthand silently (`dameon`→daemon, `emini`→gemini, `paseo la`→paseo ls, `gold`→hold, `sotpped`→stopped, `ahvent`→haven't). Translate mechanism suggestions into cleaner primitives (`vs who`, worktree sanctuary, role-tier failover) and record the translation in Decided. Treat `/btw` / `also` / `on another note` as separate queued units, split multi-item dumps into parallel `@lane` units, and treat short approvals (`send it`, `go for b`, `do it`) as terminal go-signals.",
+  "- Attribution (Community Accolades): Whenever designing, committing, or releasing parity/plugin-inspired features, record the original plugin/project name and publisher in plans, commits, `CREDITS.md`, and release notes using: \"Implemented <feature> — Thanks to <Plugin/Project> by <Author>\".",
 ].join("\n");
 
 export const WORKER_PACK = [
@@ -92,22 +100,46 @@ export const WORKER_PACK = [
 export const BRAINSTORM_PACK = [
   "Role: brainstorm (the Brainstorm, head of a Team).",
   "- Read `docs/brainstorm/<lane>.md` before anything else. After every decision update it as a short diff (<5k tokens; sections: Who's here / Done when / Decided / Open / In flight). Keep `## Done when`; never edit `## Who's here` (VS writes it). The brief is the handoff: don't write dated docs/BRAINSTORM_HANDOFF_*.md files.",
-  "- You may write `vs log decision \"...\"`, `vs log needs-you \"...\"`, `vs log handoff \"...\"`, and `vs log metric \"...\"` (240 chars max). Hand build work to a lead; do not implement.",
-  "- Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`paseo --help`, Paseo MCP tool list, `vs --help`, skills). Name what you checked in the plan's Decided section.",
+  "- You may write `vs log decision \"...\"`, `vs log needs-you \"...\"`, `vs log handoff \"...\"`, and `vs log metric \"...\"` (240 chars max). Hand build work to a lead (if your lane has no live lead, you may spawn one — or several in parallel across lanes that have none); do not implement.",
+  "- Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`paseo --help`, Paseo MCP tool list, `vs --help`, skills). Name what you checked in the plan's Decided section. Every plan lists its blocks in a `| Block | Touches | Clashes with |` table (files/areas each touches, what it clashes with). Whenever designing parity or plugin-inspired features, record the original plugin/project creator in the plan, commits, `CREDITS.md`, and release notes using: \"Implemented <feature> — Thanks to <Plugin/Project> by <Author>\".",
   "- Never complete a Team yourself. When the lead reported PASS on the last plan block and nothing is Open, post: \"<Team> looks done. ✓ Mark complete · Not yet\" followed by a fenced block containing the single line `vs:looks-done`. Only the user's click completes a Team.",
   "- At >=80k tokens, update the brief now. At the hard limit VS retires you; the next click on the pin starts a fresh Brainstorm from the brief.",
   "- If the user raises something that belongs to another Team, offer: \"That sounds like <Team>. Send it there?\" followed by a fenced block: line 1 `vs:send-to <lane-id>`, then the idea text (VS shows a one-click Send button). Unrelated loose ideas: `vs inbox add \"<idea>\"` (or the UI's `Park in Inbox`) and reply \"parked N ideas → Inbox\".",
   "- \"I just thought of X\" / \"spin up a Brainstorm for X\" is a new-pin request: run `vs pin new \"<short name>\" --brief \"<X in 1-3 lines>\"` (same Squad by default). It refuses when X overlaps an existing Team and names it: offer that Team instead. For work in flight that isn't a Team yet, check `vs who brainstorm` / `vs log --since-me` first. Don't spawn the Brainstorm; the first click on the new pin starts it.",
 ].join("\n");
 
+/** Appended to the Buddy pack only for the Squad's hub Buddy (RiffBot; isHubLane contract). Team Buddies never get it. */
+export const HUB_BUDDY_RULES = [
+  "Hub rules (OVERRIDE feature-Buddy rules above):",
+  "- You are this Squad's hub (RiffBot). You ONLY sort, split into parallel lanes, and coordinate lane convergence; Team Buddies do all feature design and plan writing.",
+  "- Never write `docs/PLAN_*.md` files, never design implementation blocks, never mark the hub done, and never spawn a Lead.",
+  "- End **every** reply with `Open threads:` listing ideas that have no Team yet (or `none`). Keep `## Unsplit threads` in the brief in sync.",
+  "- As soon as a thread can be worked on its own (its files and decisions don't overlap another thread or an in-flight Team), say how many parallel lanes we can run and propose them in a `vs:spin-off` block. Don't wait for details to be figured out — confirming the `vs:spin-off` block spins up each lane's Brainstorm Buddy to design it in parallel. When you merge or hold back an idea, give the reason in one line. Never spin off without the user's confirmation.",
+  "- Propose spin-offs as one fenced block, line 1 ```vs:spin-off, then one Team per line: `Name | 1-line brief`. The user edits in words (4 proposed, \"energy and food in one lane called Needs\" → re-post the block with 3); only the newest block gets the button.",
+  "- If the user keeps riffing on a thread that already has a Team, redirect: \"That's <Team>'s. Send it there?\" plus `vs:send-to`.",
+  "- Lane convergence & merge: watch `## Teams` and `vs log --since-me` for lanes that need to work together (e.g. UI + Art touching the same screen/contract). To sync two active lanes without merging, log `vs log decision \"Sync @<laneA> + @<laneB>: <shared contract>\"` and route the contract via `vs:send-to <lane-id>`. When two lanes should combine into one, run `vs pin merge <from-lane> <into-lane>` after user confirmation to fold `<from-lane>`'s brief/decisions into `<into-lane>` and mark `<from-lane>` done.",
+  "- On boot, read `## Teams` and `## Unsplit threads`. Your first message is the Squad status in ≤6 lines, plus the top parallel split you'd propose now.",
+  "- Never mark the hub done. Never spawn a Lead.",
+].join("\n");
+
+/** Appended to the Buddy pack only while the Squad's `vibeMode` is on (teams.json). Off = pack text unchanged. */
+export const VIBE_MODE_BUDDY_RULES = [
+  "Vibe mode is ON for this Squad:",
+  "- Act on your own for bug fixes, approved plan blocks and parity gaps: dispatch them without waiting. Log each auto call as `vs log decision \"(auto) ...\"`.",
+  "- New features, scope changes, public/outward actions, money and destructive actions wait for the user: collect them into ONE needs-you digest, not one ping each.",
+].join("\n");
+
 export const LEAD_FALLBACK_PACK = [
   "Role: lead.",
-  "- Dispatch workers, read their digests via `vs log --since-me` (never raw transcripts), log decisions/blockers with `vs log`.",
+  "- Dispatch workers, read their digests via `vs log --since-me` (never raw transcripts), log decisions/blockers with `vs log`. When you start a plan, set `job=<objective in a few words>` (`paseo agent update --label job=...`); refer to agents by short name (e.g. Bug1, Hub5).",
+  "- Title each worker `<your Code><your ord> · <job>` (e.g. `Hub5 · drop files`) and label it `job=<job>` and `ord=<your ord>`, so its title matches the generated one. When calling `create_agent`, pass `provider`, `model`, `mode` and the `profile` label, with no `features` (the plugin adds provider feature defaults).",
   "- When a plan block passes (PASS) or the whole plan is complete, add that line under `## In flight` in `docs/brainstorm/<lane>.md` so the Brainstorm can spot \"looks done\". Touch nothing else in the brief.",
   "- Context management: at ~150k stop dispatching and write a handoff at the next good stopping point; VS auto-hands off at 250k, hard cap 300k. Run `vs handoff` and fill the Judgment section.",
-  "- Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`paseo --help`, Paseo MCP tool list, `vs --help`, skills). Name what you checked in the plan's Decided section.",
-  "- \"Spin up a buddy (for X)\" / \"spin up another buddy\" / \"get me a buddy for X\": spawn a new Buddy (role=brainstorm, title BRAINSTORM · <LANE> · <topic X>) in a new feature lane (lane=<slug from X>) under the same Squad (team=<product>). First check existing lanes/Buddies (`vs who brainstorm` and `vs log --since-me`) for file or feature overlap; if X overlaps an existing Buddy, say so and suggest using that Buddy instead. Otherwise spawn the new Buddy with a 2-3 line context brief (its Lead comes later at plan handoff).",
+  "- Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`paseo --help`, Paseo MCP tool list, `vs --help`, skills). Name what you checked in the plan's Decided section. Whenever designing, committing, or releasing parity/plugin-inspired features, record the original plugin/project creator in plans, commits, `CREDITS.md`, and release notes using: \"Implemented <feature> — Thanks to <Plugin/Project> by <Author>\".",
+  "- \"Spin up a buddy (for X)\" / \"spin up another buddy\" / \"get me a buddy for X\": spawn a new Buddy (role=brainstorm, title <Code> Buddy · <topic X>, Code = the new lane's short code) in a new feature lane (lane=<slug from X>) under the same Squad (team=<product>). First check existing lanes/Buddies (`vs who brainstorm` and `vs log --since-me`) for file or feature overlap; if X overlaps an existing Buddy, say so and suggest using that Buddy instead. Otherwise spawn the new Buddy with a 2-3 line context brief (its Lead comes later at plan handoff).",
   "- Write JSON files with node (e.g. fs.writeFileSync(..., 'utf8')), never PowerShell Set-Content (which writes a UTF-8 BOM that breaks JSON parsers).",
+  "- Plans carry a parallel table (block | touches | clashes with); run non-clashing blocks at the same time by default; say why in one line when you don't.",
+  "- Restart the VibeSquad server only when a merged change needs it, and log it (`vs log metric \"server restart: <why>\"`).",
 ].join("\n");
 
 export const ROLE_PACKS = {
@@ -123,7 +155,8 @@ export const ROLE_PACKS = {
 interface TeamDef {
   id: string;
   name?: string;
-  lanes?: { id: string; aliases?: string[] }[];
+  vibeMode?: boolean;
+  lanes?: { id: string; hub?: boolean; aliases?: string[] }[];
   paths?: string[];
 }
 
@@ -171,6 +204,18 @@ export function loadStoredProfiles(): StoredProfile[] {
 const LEGACY_ALIASES: Record<string, string> = {
   "Lead - Opus": "Lead - Claude",
   "Brainstorm - Opus": "Brainstorm - Claude",
+  "Art - Gemini": "Art Director - Gemini",
+  "Art - Opus": "Art Painter - Opus",
+  "Builder - Gemini": "Lead - Gemini",
+  "Reviewer - Gemini": "Review - Gemini",
+  Lead: "Lead - Claude",
+  Brainstorm: "Brainstorm - Claude",
+  Buddy: "Brainstorm - Claude",
+  RiffBot: "Brainstorm - Claude",
+  Worker: "Implement - Sonnet",
+  Coder: "Work Order - DSP",
+  Reviewer: "Review - Gemini",
+  Fast: "Pre-check - Flash",
 };
 
 export interface ProfileMatch {
@@ -184,29 +229,38 @@ export function matchStoredProfile(
   provider?: string,
   title?: string | null,
   role?: string,
-  profiles = loadStoredProfiles(),
+  profiles?: StoredProfile[],
 ): ProfileMatch | null {
-  if (!profiles.length) return null;
+  const customProfilesPassed = profiles !== undefined;
+  const list = profiles ?? loadStoredProfiles();
+  if (!list.length && customProfilesPassed) return null;
   const rawHint = (profileHint ?? "").trim();
   const mappedHint = LEGACY_ALIASES[rawHint] || rawHint;
   if (mappedHint) {
-    const exact = profiles.find((p) => p.name === mappedHint || p.name.toLowerCase() === mappedHint.toLowerCase());
+    const exact = list.find((p) => p.name === mappedHint || p.name.toLowerCase() === mappedHint.toLowerCase());
     if (exact) return { profile: exact, explicit: true };
+    if (!customProfilesPassed && !process.env.VIBESQUAD_PROFILES_PATH) {
+      const fallback = (DEFAULT_PACK_PROFILES as any[]).find(
+        (p) => p.name === mappedHint || p.name.toLowerCase() === mappedHint.toLowerCase(),
+      );
+      if (fallback) return { profile: { ...fallback, role: deriveRole(fallback.name, fallback.role) }, explicit: true };
+    }
   }
+  if (!list.length) return null;
   const fuzzy = (profile: StoredProfile | undefined) => (profile ? { profile, explicit: false } : null);
   const cleanTitle = (title ?? "").trim();
   if (cleanTitle) {
-    const byTitle = profiles.find((p) => cleanTitle.toLowerCase().startsWith(p.name.toLowerCase()));
+    const byTitle = list.find((p) => cleanTitle.toLowerCase().startsWith(p.name.toLowerCase()));
     if (byTitle) return fuzzy(byTitle);
   }
-  const isAgy = (provider ?? "").startsWith("antigravity-cli");
+  const isAgy = (provider ?? "").startsWith("antigravity");
   if (role === "lead") {
     const want = isAgy ? "Lead - Gemini" : "Lead - Claude";
-    return fuzzy(profiles.find((p) => p.name === want));
+    return fuzzy(list.find((p) => p.name === want));
   }
   if (role === "brainstorm") {
     const want = isAgy ? "Brainstorm - Gemini" : "Brainstorm - Claude";
-    return fuzzy(profiles.find((p) => p.name === want));
+    return fuzzy(list.find((p) => p.name === want));
   }
   return null;
 }
@@ -298,6 +352,13 @@ function loadTeams(): TeamDef[] {
   return teams;
 }
 
+/** Plugin-side mirror of isHubLane (src/teams.ts): lane `hub: true`, else the lane whose id is the Squad id when no lane is flagged. */
+export function isHubCwd(team: TeamDef | undefined, laneId: string | undefined): boolean {
+  const lanes = team?.lanes ?? [];
+  const lane = lanes.find((l) => l.id === laneId);
+  return Boolean(team && lane && (lane.hub === true || (!lanes.some((l) => l.hub === true) && lane.id === team.id)));
+}
+
 function safeSegment(value: string): string {
   return String(value || "").replace(/[^A-Za-z0-9_-]+/g, "_");
 }
@@ -339,7 +400,7 @@ export function deriveTeamForSpawn(
   });
   return {
     team: resolved.isOrphan ? "" : resolved.teamId,
-    lane: resolved.isOrphan ? (safeLabels.lane || safeLabels.lead || "").trim() : resolved.laneId,
+    lane: resolved.isOrphan ? (safeLabels.lane || safeLabels.lead || "").trim() : keptLaneOf(resolved),
     callerTeam: resolved.callerTeam,
     callerLane: resolved.callerLane,
     mismatch: resolved.teamMismatch,
@@ -366,6 +427,39 @@ export function isRetiredLeadSnap(
   return isRetiredRole(target.labels?.role);
 }
 
+/** The live role a retired agent used to hold: a former Buddy maps to brainstorm, every other retired role to lead. */
+export function retiredHolderRole(target: { labels?: Labels } | null | undefined): "lead" | "brainstorm" {
+  return String(target?.labels?.role ?? "").trim().toLowerCase() === "former-brainstorm" ? "brainstorm" : "lead";
+}
+
+/**
+ * Paseo wraps an agent-to-agent send (MCP send_agent_prompt / paseo send) in a
+ * `<paseo-system kind="agent-message" source-agent-id=...>` envelope. Returns the sender and body,
+ * or null for anything else (the user typing, plugin wakeups, handoff prompts).
+ */
+export function parseAgentMessageEnvelope(
+  text: string | null | undefined,
+): { senderId: string; senderTitle: string; messageId: string; body: string } | null {
+  const m = /<paseo-system\b([^>]*)>([\s\S]*?)(?:<\/paseo-system>|$)/.exec(String(text ?? ""));
+  if (!m) return null;
+  const attrs: Record<string, string> = {};
+  for (const a of m[1]!.matchAll(/([\w-]+)="([^"]*)"/g)) attrs[a[1]!] = a[2]!;
+  if (attrs.kind !== "agent-message" || !attrs["source-agent-id"]) return null;
+  const decode = (s: string) =>
+    s
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&amp;/g, "&");
+  return {
+    senderId: decode(attrs["source-agent-id"]),
+    senderTitle: decode(attrs["source-agent-title"] ?? ""),
+    messageId: decode(attrs["message-id"] ?? ""),
+    body: decode(m[2]!.trim()),
+  };
+}
+
 export function extractLeadShortName(target: { id: string; title?: string | null; labels?: Labels }): string {
   const ord = target.labels?.ord;
   if (ord) return `ord${String(ord).replace(/^ord/i, "")}`;
@@ -373,13 +467,13 @@ export function extractLeadShortName(target: { id: string; title?: string | null
 }
 
 /**
- * Lane label to write after resolution: a throwaway lane (`walk-*`, `*-tmp`, ...) keeps
- * its own slug instead of being folded into the cwd lane, so it never collides with
- * that lane's real lead/Buddy.
+ * Lane label to write after resolution: an explicit lane label is never overwritten (an unknown
+ * or throwaway lane like `walk-*` / `*-tmp` keeps its own slug instead of being folded into the
+ * cwd lane, so it never collides with that lane's real lead/Buddy). The cwd lane only fills a blank.
  */
 export function keptLaneOf(resolved: { laneId: string; callerLane: string; autofixedFromCwd: boolean }): string {
   const caller = (resolved.callerLane ?? "").trim().toLowerCase();
-  if (resolved.autofixedFromCwd && caller && isThrowawayLane(caller)) return caller;
+  if (resolved.autofixedFromCwd && caller) return caller;
   return resolved.laneId;
 }
 
@@ -405,6 +499,38 @@ export function sameLaneRole(
     return aTopic === tTopic;
   }
   return true;
+}
+
+/** Throwaway workers are not worth a [done] entry: no job label, or "probe" in the title/job. */
+export function isDigestNoise(labels: Labels, title?: string | null): boolean {
+  const job = String(labels.job ?? "").trim();
+  return !job || /\bprobe/i.test(job) || /\bprobe/i.test(String(title ?? ""));
+}
+
+/** A report is loggable as [done] only if it states PASS or FAIL. */
+export function statesVerdict(text: string): boolean {
+  return /\b(PASS|FAIL)\b/.test(text);
+}
+
+/** Role label to stamp on a spawn: a digest is labelled `worker` (digestFor/profile mark it), never `digest`. */
+export function spawnRoleLabel(role: string): string {
+  return role === "digest" ? "worker" : role;
+}
+
+/** Next lead ord for a lane: one past the highest ord on any lead or former lead in it (self excluded). */
+export function nextLeadOrd(agents: Array<{ id: string; labels?: Labels }>, lane: string, selfId: string): string {
+  const want = lane.trim().toLowerCase();
+  let max = 0;
+  for (const a of agents) {
+    if (a.id === selfId || !want) continue;
+    const l = a.labels ?? {};
+    if (String(l.lane || l.lead || "").trim().toLowerCase() !== want) continue;
+    const role = String(l.role ?? "").trim().toLowerCase();
+    if (role !== "lead" && !isRetiredRole(role)) continue;
+    const n = Number(String(l.ord ?? "").replace(/^ord/i, ""));
+    if (Number.isFinite(n) && n > max) max = n;
+  }
+  return String(max + 1);
 }
 
 /** Digest/pre-check agents must never be digested again (infinite spawn loop). */
@@ -456,7 +582,7 @@ function findProjectRoot(cwd: string): string {
   return path.resolve(cwd);
 }
 
-export function rolePack(role: string, cwd: string): string {
+export function rolePack(role: string, cwd: string, vibeMode = false, isHub = false): string {
   if (role === "lead") {
     try {
       const text = fs.readFileSync(path.join(findProjectRoot(cwd), "docs", "LEAD_RULES.md"), "utf8").trim();
@@ -466,7 +592,7 @@ export function rolePack(role: string, cwd: string): string {
     }
     return LEAD_FALLBACK_PACK;
   }
-  if (role === "brainstorm") return BRAINSTORM_PACK;
+  if (role === "brainstorm") return [BRAINSTORM_PACK, vibeMode && VIBE_MODE_BUDDY_RULES, isHub && HUB_BUDDY_RULES].filter(Boolean).join("\n");
   if (role === "worker") return WORKER_PACK;
   return "";
 }
@@ -500,9 +626,50 @@ export function laneBriefBlock(root: string, lane: string): string {
   return [
     `Lane brief for \`${lane}\`: read it before anything else; it is the Buddy handoff.`,
     briefBeginMarker(lane),
-    text.slice(0, MAX_BRIEF_CHARS),
+    defangPromptFences(text.slice(0, MAX_BRIEF_CHARS)),
     `--- END docs/brainstorm/${lane}.md ---`,
   ].join("\n");
+}
+
+/** The safe-slug used for `docs/lanes/<lane>/` artifact folders (SPEC.md + TASKS.json). */
+export function laneArtifactSlug(lane: string): string {
+  return String(lane ?? "").trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-|-$/g, "");
+}
+
+/**
+ * The durable lane artifact as a prompt block (SPEC.md + a TASKS.json summary), or ""
+ * when the lane has neither file. Unlike a Buddy brief, this survives provider switches
+ * and restarts, so every spawn (brainstorm/lead/worker) re-reads the same source of truth.
+ */
+export function laneArtifactBlock(root: string, lane: string): string {
+  const safeLane = laneArtifactSlug(lane);
+  if (!safeLane) return "";
+  const dir = path.join(root, "docs", "lanes", safeLane);
+  let spec = "";
+  let tasks = "";
+  try {
+    spec = fs.readFileSync(path.join(dir, "SPEC.md"), "utf8").trim();
+  } catch {
+    /* no SPEC.md */
+  }
+  try {
+    tasks = fs.readFileSync(path.join(dir, "TASKS.json"), "utf8").trim();
+  } catch {
+    /* no TASKS.json */
+  }
+  if (!spec && !tasks) return "";
+  const parts = [
+    `<!-- vibesquad:lane-artifact:begin lane=${safeLane} -->`,
+    `Lane Artifact (docs/lanes/${safeLane}/ — durable source of truth across restarts & provider switches):`,
+  ];
+  if (spec) {
+    parts.push(`\n## SPEC.md (docs/lanes/${safeLane}/SPEC.md)\n${defangPromptFences(spec.slice(0, MAX_BRIEF_CHARS))}`);
+  }
+  if (tasks) {
+    parts.push(`\n## TASKS.json (docs/lanes/${safeLane}/TASKS.json)\n${defangPromptFences(tasks.slice(0, MAX_BRIEF_CHARS))}`);
+  }
+  parts.push(`<!-- vibesquad:lane-artifact:end -->`);
+  return parts.join("\n");
 }
 
 /**
@@ -524,6 +691,8 @@ export function snapshotIntoBrief(
   } catch {
     return "missing";
   }
+  // An empty read is a writer mid-truncate, not an empty brief: appending to it would wipe the brief.
+  if (!before.trim()) return "missing";
   const turn = String(lastTurn ?? "").replace(/\s+/g, " ").trim();
   if (!turn) return "no-turn";
   const lastActive = Date.parse(old.updatedAt ?? "");
@@ -543,7 +712,7 @@ export function snapshotIntoBrief(
   }
   const after = lines.join("\n");
   if (after.length > MAX_BRIEF_CHARS) return "too-large";
-  fs.writeFileSync(file, after, "utf8");
+  writeBriefFile(file, lane, after);
   return "snapshotted";
 }
 
@@ -582,8 +751,8 @@ export function firstDispatchMetricText(
   return "first-dispatch context: " + size + " (lead=" + parentId + ", ord=" + (ord ?? "?") + ", provider=" + (parent.provider || "?") + ", model=" + (parent.model || "?") + ")";
 }
 
-export function injectedPrefix(role: string, cwd: string): string {
-  return [EVERYONE_LAYER, rolePack(role, cwd)].filter(Boolean).join("\n\n");
+export function injectedPrefix(role: string, cwd: string, vibeMode = false, isHub = false): string {
+  return [EVERYONE_LAYER, rolePack(role, cwd, vibeMode, isHub)].filter(Boolean).join("\n\n");
 }
 
 export function inspectGitSpawnState(cwd: string): string | null {
@@ -598,10 +767,10 @@ export function inspectGitSpawnState(cwd: string): string | null {
 
   const runGit = (args: string[]) => {
     try {
-      return spawnSync("git", args, {
+      return spawnSync("git", ["--no-optional-locks", ...args], {
         cwd: resolved,
         encoding: "utf8",
-        timeout: 1000,
+        timeout: 3000,
         windowsHide: true,
       });
     } catch {
@@ -659,6 +828,12 @@ export interface Deps {
   applyAgentSettings?(agentId: string, patch: AgentSettingsPatch): Promise<void>;
   /** Stop and archive an agent that must not run (e.g. wrong provider for its explicit profile). */
   refuseAgent?(agentId: string): Promise<void>;
+  /** Delay after agent.created before checking whether an idle 0-token agent needs its initial prompt redelivered. */
+  firstPromptRedeliverMs?: number;
+  /** Provider usage snapshot (array or () => array) used to fail over capped providers before spawn. */
+  usageProviders?: any[] | (() => any[]);
+  /** Capped-provider map/array (tests inject this to avoid touching ~/.vibesquad/capped-providers.json). */
+  cappedProviders?: any;
 }
 
 export interface AgentSettingsPatch {
@@ -749,6 +924,7 @@ const DEFAULT_DEPS: Deps = {
   watchIntervalMs: 1500,
   startWatcher: true,
   brainstormArchiveGraceMs: 120_000,
+  firstPromptRedeliverMs: 30_000,
 };
 
 // ---------------------------------------------------------------------------
@@ -784,10 +960,32 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     const stops: (() => void)[] = [];
     const firstDispatchLogged = new Set<string>();
     const childCount = new Map<string, number>();
+    const pendingInitialPrompts: { id?: string; title: string; cwd: string; prompt: string; at: number }[] = [];
+    const initialPromptsById = new Map<string, string>();
+    const turnSeen = new Set<string>();
+    const firstPromptRedelivered = new Set<string>();
+    const firstPromptTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+    const markTurnSeen = (agentId: string | null | undefined) => {
+      const id = String(agentId ?? "").trim();
+      if (!id) return;
+      turnSeen.add(id);
+      const t = firstPromptTimers.get(id);
+      if (t) {
+        firstPromptTimers.delete(id);
+        clearTimeout(t);
+        timers.delete(t);
+      }
+    };
+
+    // R2-1 remote proxy RPC (vs.http). Gated off by default; see server/remote-proxy.ts.
+    if (typeof server.handle === "function") server.handle(vsHttp, makeVsHttpHandler());
     const digested = new Set<string>();
     const retries = new Map<string, number>();
     const offsets = new Map<string, number>();
     const misrouteCounts = new Map<string, number>();
+    const relayCounts = new Map<string, number>();
+    const forwardedFromRetired = new Set<string>(); // `${retiredId}:${messageId}` already redirected
     const pendingWake = new Map<string, LogEntry[]>(); // lead id -> entries awaiting a wake
     const wakeQueue: { team: string; entry: LogEntry }[] = [];
     let wakeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -952,6 +1150,53 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
     };
 
+    /**
+     * Normalize a capped-provider source (array of families, `{ providers: [...] }`, or a
+     * `{ family: value }` map) into `{ normalizedFamily: value }`. Unknown keys are dropped.
+     */
+    const normalizeCappedProviders = (raw: any): Record<string, any> => {
+      if (Array.isArray(raw)) {
+        const out: Record<string, any> = {};
+        for (const item of raw) {
+          const fam = normalizeProviderFamily(
+            typeof item === "string" ? item : item?.id ?? item?.provider ?? item?.name,
+          );
+          if (fam) out[fam] = item && typeof item === "object" ? item : { capped: true };
+        }
+        return out;
+      }
+      if (raw && typeof raw === "object") {
+        if (Array.isArray(raw.providers)) return normalizeCappedProviders(raw.providers);
+        const out: Record<string, any> = {};
+        for (const [k, v] of Object.entries(raw)) {
+          const fam = normalizeProviderFamily(k);
+          if (fam) out[fam] = v ?? { capped: true };
+        }
+        return out;
+      }
+      return {};
+    };
+
+    /**
+     * Capped providers keyed by normalized family. Sources, in order: deps.cappedProviders
+     * (tests), VIBESQUAD_CAPPED_PROVIDERS_PATH, then ~/.vibesquad/capped-providers.json. An
+     * empty map means no provider is capped, so spawns are left alone when nothing declares one.
+     */
+    const readCappedProviderMap = (): Record<string, any> => {
+      if (deps.cappedProviders !== undefined && deps.cappedProviders !== null) {
+        return normalizeCappedProviders(deps.cappedProviders);
+      }
+      const file = process.env.VIBESQUAD_CAPPED_PROVIDERS_PATH
+        ? path.resolve(process.env.VIBESQUAD_CAPPED_PROVIDERS_PATH)
+        : path.join(baseDir(), "capped-providers.json");
+      if (!fs.existsSync(file)) return {};
+      try {
+        return normalizeCappedProviders(JSON.parse(fs.readFileSync(file, "utf8")));
+      } catch {
+        return {};
+      }
+    };
+
     // ---- Hook 1: before agent.create ---------------------------------------
 
     stops.push(
@@ -974,6 +1219,19 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const title: string = config?.title ?? (request as any).title ?? (request as any).name ?? "";
         const cwd: string = config?.cwd ?? (request as any).cwd ?? "";
         const provider: string = config?.provider ?? (request as any).provider ?? "";
+        const initialPrompt = String(
+          (request as any).prompt ??
+            (request as any).initialPrompt ??
+            config?.prompt ??
+            config?.initialPrompt ??
+            "",
+        ).trim();
+        const reqAgentId = String((request as any).id ?? config?.id ?? "").trim();
+        if (initialPrompt) {
+          if (reqAgentId) initialPromptsById.set(reqAgentId, initialPrompt);
+          pendingInitialPrompts.push({ id: reqAgentId || undefined, title, cwd, prompt: initialPrompt, at: Date.now() });
+          while (pendingInitialPrompts.length > 100) pendingInitialPrompts.shift();
+        }
         let changed = false;
         const next: any = { ...config };
         let nextReqLabels: Labels | undefined = rawReqLabels ? { ...rawReqLabels } : undefined;
@@ -987,17 +1245,71 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
                 ? "worker"
                 : "";
 
+        // MCP create_agent sends no labels and no env.VS_ROLE: infer the role from the
+        // documented title convention (★ … → lead; BRAINSTORM · / <Code> Buddy / RiffBot →
+        // brainstorm). Archived/demoted "(old)" titles resolve to no title role.
+        const titleRole = /^\s*\(old\)/i.test(title)
+          ? ""
+          : /^\s*★\s/u.test(title)
+            ? "lead"
+            : /^\s*(?:brainstorm\s*·|riffbot\b|[a-z0-9_-]{2,8}\s+buddy\b)/i.test(title)
+              ? "brainstorm"
+              : "";
+
         // Paseo hands this hook only { config, env }: spawn labels never arrive here, so
         // VibeSquad's own spawn paths also pass env VS_PROFILE. Label-only spawns are
         // corrected in agent.created instead.
         const profileHint = config.profile || reqLabels.profile || env?.VS_PROFILE;
-        const profileMatch = matchStoredProfile(profileHint, provider, title, explicitRole || "worker");
-        const matchedProfile = profileMatch?.profile ?? null;
+        let profileMatch = matchStoredProfile(profileHint, provider, title, explicitRole || titleRole || "worker");
+        let matchedProfile = profileMatch?.profile ?? null;
+
+        // Remember whether the caller explicitly named the profile BEFORE any failover, so a
+        // fuzzy (role/title/cwd) match can never be promoted to an explicit match and silently
+        // overwrite the caller's provider/model. An explicit profile owns the provider choice;
+        // a fuzzy match only infers a default and must not clobber the caller's selection.
+        const wasExplicit = Boolean(profileMatch?.explicit);
+
+        // Auto-failover: when the matched profile's provider is over quota or capped, switch
+        // to its healthy counterpart before the session is created. Only when usage/capped
+        // data is actually present (tests or on-disk), so normal spawns are unaffected.
+        const usageList: any[] = [
+          ...(typeof deps.usageProviders === "function"
+            ? deps.usageProviders()
+            : Array.isArray(deps.usageProviders)
+              ? deps.usageProviders
+              : []),
+        ];
+        for (const family of Object.keys(readCappedProviderMap())) {
+          usageList.push({ id: family, status: "exhausted", usedPct: 100 });
+        }
+        if (usageList.length > 0 && matchedProfile) {
+          // Only fail over a fuzzy match when the caller is actually on the matched profile's
+          // provider (or left the provider blank). A role/title/cwd inference that picked a
+          // default profile must never drag the caller onto another provider, e.g. a fuzzy
+          // "Lead - Claude" match failing over to Gemini and overwriting a caller-chosen
+          // `codex`/`opencode` provider+model. Explicit profiles always fail over.
+          const callerPm = splitProviderModel(config.provider, config.model);
+          const matchedPm = splitProviderModel(matchedProfile.provider, matchedProfile.model);
+          const fuzzyOnCallerProvider = !callerPm.provider || callerPm.provider === matchedPm.provider;
+          if (wasExplicit || fuzzyOnCallerProvider) {
+            const fo = resolveProfileWithFailover(matchedProfile, loadStoredProfiles(), usageList);
+            if (fo.failedOver && fo.profile) {
+              matchedProfile = fo.profile;
+              // Preserve explicitness: a fuzzy match stays fuzzy so the caller's provider/model
+              // are never clobbered by the explicit-profile override below.
+              profileMatch = { profile: fo.profile, explicit: wasExplicit };
+              if (nextReqLabels?.profile) nextReqLabels.profile = fo.profile.name;
+              reqLabels.profile = fo.profile.name;
+              log(`profile-failover: ${fo.fromProfile}->${fo.toProfile} reason=${fo.reason}`);
+            }
+          }
+        }
+
         if (String(profileHint ?? "").trim() && !profileMatch?.explicit) {
           log(`profile "${profileHint}" named by spawn "${title}" is not in profiles.json; caller settings kept`);
         }
 
-        const role = explicitRole || matchedProfile?.role || "worker";
+        const role = explicitRole || matchedProfile?.role || titleRole || "worker";
 
         if (!matchedProfile && (reqLabels.team || reqLabels.lane || reqLabels.role)) {
           log(
@@ -1023,7 +1335,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               changed = true;
             }
             if (!reqLabels.role) {
-              reqLabels.role = resolved.role;
+              reqLabels.role = spawnRoleLabel(resolved.role);
               changed = true;
             }
             if (reqLabels.orphan) {
@@ -1044,7 +1356,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
                 log(`mismatch metric write failed: ${err}`);
               }
             }
-            if (resolved.autofixedFromCwd) {
+            if (resolved.autofixedFromCwd && !resolved.callerLane) {
               const autofixKey = `autofix:${resolved.callerLane}->${resolved.laneId}:${cwd}`;
               recentBeforeMismatches.set(autofixKey, Date.now());
               try {
@@ -1078,7 +1390,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               changed = true;
             }
             if (!reqLabels.role) {
-              reqLabels.role = resolved.role;
+              reqLabels.role = spawnRoleLabel(resolved.role);
               changed = true;
             }
             const orphanKey = `orphan:${resolved.callerLane}:${resolved.callerTeam}:${cwd}`;
@@ -1187,8 +1499,22 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           changed = true;
         }
 
-        const prefix = injectedPrefix(role, cwd);
-        const profileNotes = dedupeNotesAgainst((matchedProfile?.notes ?? "").trim(), prefix);
+        const explicitLane = (reqLabels.orphan === "1" ? "" : callerLane || env?.VS_LANE || "").trim();
+        const envOrReqLabels: Labels = {
+          ...(env?.VS_TEAM ? { team: env.VS_TEAM } : {}),
+          ...(explicitLane ? { lane: explicitLane } : {}),
+          ...reqLabels,
+        };
+        const spawnLoc = teamOf(envOrReqLabels, cwd);
+        const spawnTeamId = spawnLoc?.team;
+        const spawnTeam =
+          (explicitLane ? findLaneInRegistry(explicitLane, currentTeams())?.team : undefined) ??
+          (spawnTeamId ? currentTeams().find((t) => t.id === spawnTeamId) : undefined);
+        const vibeMode = spawnTeam?.vibeMode === true;
+        const isHubBuddy =
+          role === "brainstorm" && !topicOf(reqLabels) && Boolean(explicitLane) && isHubCwd(spawnTeam, explicitLane);
+        const prefix = injectedPrefix(role, cwd, vibeMode, isHubBuddy);
+        const profileNotes = isHubBuddy ? "" : dedupeNotesAgainst((matchedProfile?.notes ?? "").trim(), prefix);
         const gitState = inspectGitSpawnState(cwd);
         if (prefix && !sanitizedSysPrompt.includes(EVERYONE_LAYER)) {
           const existing = sanitizedSysPrompt.trim();
@@ -1204,7 +1530,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           }
           next.systemPrompt = parts.join("\n\n");
           changed = true;
-          const where = teamOf(reqLabels, cwd);
+          const where = teamOf(envOrReqLabels, cwd);
           if (where) {
             try {
               appendLog(where.team, {
@@ -1231,15 +1557,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           const fromVsRestart = Boolean(reqLabels["vs.restarted-from"]) || env?.VS_BRIEF_INLINE === "1";
           if (briefLane && !fromVsRestart && !currentSys.includes(marker) && !reqPrompt.includes(marker)) {
             const briefRoot = deps.briefRoot ?? briefRootFor(reqLabels.team || env?.VS_TEAM || "", briefLane, REPO_ROOT);
-            // No brief file yet: the spawn prompt is the idea. Persist it (guarded writer, never overwrites) so it
-            // survives this first prompt; the prompt already carries it, so skip injecting it back.
-            let seeded: string | null = null;
-            try {
-              seeded = seedBriefIfMissing({ root: briefRoot, lane: briefLane, idea: reqPrompt });
-            } catch (err) {
-              log(`brief seed failed for ${briefLane}: ${err}`);
-            }
-            const block = seeded ? "" : laneBriefBlock(briefRoot, briefLane);
+            const block = laneBriefBlock(briefRoot, briefLane);
             if (block) {
               next.systemPrompt = [currentSys.trim(), block].filter(Boolean).join("\n\n");
               changed = true;
@@ -1260,16 +1578,52 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           }
         }
 
+        // Durable lane artifacts (docs/lanes/<lane>/SPEC.md + TASKS.json) ride along on every
+        // spawn — brainstorm, lead and worker alike — so provider switches and restarts never
+        // lose the lane's source of truth.
+        const artifactLane = (reqLabels.orphan === "1" ? "" : callerLane || env?.VS_LANE || spawnLoc?.lane || "").trim();
+        if (artifactLane) {
+          const currentSys = String(next.systemPrompt ?? sanitizedSysPrompt ?? "");
+          const artMarker = "<!-- vibesquad:lane-artifact:begin lane=";
+          if (!currentSys.includes(artMarker)) {
+            const briefRoot = deps.briefRoot ?? briefRootFor(reqLabels.team || env?.VS_TEAM || spawnTeamId || "", artifactLane, REPO_ROOT);
+            const artBlock = laneArtifactBlock(briefRoot, artifactLane);
+            if (artBlock) {
+              next.systemPrompt = [currentSys.trim(), artBlock].filter(Boolean).join("\n\n");
+              changed = true;
+            }
+          }
+        }
+
         if (leanApplies(next.provider ?? provider, env)) {
           next.providerOptions = leanProviderOptions(next.providerOptions, role);
           changed = true;
         }
+
+        // Turn-1 `vs` CLI commands need the role/lane/team in env immediately, before the
+        // agent exists (agent.created runs later). Propagate only what isn't already set.
+        const nextEnv: Record<string, string> = { ...(env ?? {}) };
+        let envChanged = false;
+        if (role && !nextEnv.VS_ROLE) {
+          nextEnv.VS_ROLE = role;
+          envChanged = true;
+        }
+        if (spawnTeamId && !nextEnv.VS_TEAM) {
+          nextEnv.VS_TEAM = spawnTeamId;
+          envChanged = true;
+        }
+        if (explicitLane && !nextEnv.VS_LANE) {
+          nextEnv.VS_LANE = explicitLane;
+          envChanged = true;
+        }
+        if (envChanged) changed = true;
 
         return changed
           ? {
               ...request,
               ...(nextReqLabels && (request as any).labels ? { labels: nextReqLabels } : {}),
               config: next,
+              ...(envChanged ? { env: nextEnv } : {}),
             }
           : undefined;
     };
@@ -1312,7 +1666,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             team = resolved.teamId;
             if (labels.lane !== lane) want.lane = lane;
             if (labels.team !== resolved.teamId) want.team = resolved.teamId;
-            if (!labels.role) want.role = resolved.role;
+            if (!labels.role) want.role = spawnRoleLabel(resolved.role);
             if (labels.orphan) want.orphan = "";
 
             if (resolved.teamMismatch) {
@@ -1330,7 +1684,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
                 });
               }
             }
-            if (resolved.autofixedFromCwd) {
+            if (resolved.autofixedFromCwd && !resolved.callerLane) {
               const autofixKey = `autofix:${resolved.callerLane}->${resolved.laneId}:${agentCwd}`;
               const prevTs = recentBeforeMismatches.get(autofixKey);
               if (prevTs && Date.now() - prevTs < 2000) {
@@ -1362,7 +1716,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             }
           } else {
             if (labels.orphan !== "1") want.orphan = "1";
-            if (!labels.role) want.role = resolved.role;
+            if (!labels.role) want.role = spawnRoleLabel(resolved.role);
             const orphanKey = `orphan:${resolved.callerLane}:${resolved.callerTeam}:${agentCwd}`;
             const prevTs = recentBeforeMismatches.get(orphanKey);
             if (prevTs && Date.now() - prevTs < 2000) {
@@ -1378,11 +1732,33 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             }
           }
 
+          // A lead always carries an ord: one past the lane's highest lead/former-lead ord.
+          if ((labels.role || want.role) === "lead" && !String(labels.ord ?? "").trim()) {
+            const ordLane = lane || resolved.callerLane;
+            want.ord = "1";
+            if (ordLane) {
+              await Promise.resolve()
+                .then(() => paseo.agents.list({ includeBackground: true, filter: { includeBackground: true }, page: { limit: 200 } }))
+                .then((res: any) => {
+                  want.ord = nextLeadOrd((res?.entries ?? []).map((e: any) => e.agent), ordLane, agent.id);
+                })
+                .catch((e: unknown) => log(`lead ord scan failed for ${agent.id}: ${e}`));
+            }
+          }
+
           if (Object.keys(want).length > 0) {
             await deps.setLabels(agent.id, { ...labels, ...want }).catch((e) => log(`label failed: ${e}`));
           }
 
           const finalRole = labels.role || want.role || "";
+          // A lead outlives the Buddy (or old lead) that spawned it: Paseo archives children with their
+          // parent, so a chained lead and all its workers went down with every Buddy restart. Start it detached.
+          if (finalRole === "lead" && parentId) {
+            await Promise.resolve()
+              .then(() => paseo.agents.ref(agent.id).detach())
+              .then(() => log(`detached new lead ${agent.id} from parent ${parentId}`))
+              .catch((e: unknown) => log(`detach failed for lead ${agent.id}: ${e}`));
+          }
           const finalTopic = finalRole === "brainstorm" ? brainstormTopicOf({ ...labels, ...want }) : "";
           // An explicit lane label beats cwd for retirement: if the label lane was
           // overridden from cwd, the plugin is guessing, so never retire anyone on a guess.
@@ -1400,6 +1776,80 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           }
 
           if (team && lane) await refreshLaneWhosHere(paseo, lane);
+
+          // Block 2a: If a new agent had an initial prompt and stays idle with 0 tokens ~30 s after
+          // creation without ever running, redeliver the initial prompt once and log first-prompt-redelivered.
+          const aid = String(agent?.id ?? "").trim();
+          const directPrompt = String(
+            (agent as any)?.prompt ??
+              (agent as any)?.initialPrompt ??
+              (me as any)?.prompt ??
+              (me as any)?.initialPrompt ??
+              "",
+          ).trim();
+          let rememberedPrompt = directPrompt || (aid ? initialPromptsById.get(aid) ?? "" : "");
+          if (!rememberedPrompt && aid) {
+            const now = Date.now();
+            const aTitle = String(agent.title ?? me?.title ?? "");
+            let idx = pendingInitialPrompts.findIndex(
+              (p) => now - p.at < 300_000 && p.title === aTitle && (!p.cwd || !agentCwd || p.cwd === agentCwd),
+            );
+            if (idx < 0) {
+              idx = pendingInitialPrompts.findIndex(
+                (p) => now - p.at < 300_000 && (!p.cwd || !agentCwd || p.cwd === agentCwd),
+              );
+            }
+            if (idx >= 0) {
+              rememberedPrompt = pendingInitialPrompts[idx]!.prompt;
+              pendingInitialPrompts.splice(idx, 1);
+            }
+          }
+          if (rememberedPrompt && aid) {
+            initialPromptsById.set(aid, rememberedPrompt);
+            if (!firstPromptTimers.has(aid) && !firstPromptRedelivered.has(aid) && !turnSeen.has(aid)) {
+              const redeliverMs = Math.max(0, deps.firstPromptRedeliverMs ?? 30_000);
+              const fallbackTeam = team ? teamIdOf(team, currentTeams()) : "";
+              const fallbackLane = lane;
+              const t = later(async () => {
+                firstPromptTimers.delete(aid);
+                if (firstPromptRedelivered.has(aid) || turnSeen.has(aid)) return;
+                const cur: any = await snap(paseo, aid);
+                if (!cur || cur.archivedAt || cur.status !== "idle") return;
+                const usedTokens =
+                  (cur.lastUsage?.contextWindowUsedTokens ?? 0) + (cur.lastUsage?.inputTokens ?? 0);
+                if (usedTokens > 0 || cur.lastUserMessageAt || turnSeen.has(aid) || firstPromptRedelivered.has(aid)) {
+                  return;
+                }
+                const tl = await paseo.agents
+                  .ref(aid)
+                  .timeline?.refetch?.({ direction: "tail", limit: 5 })
+                  .catch(() => null);
+                if ((tl?.entries ?? []).length > 0) return;
+                if (firstPromptRedelivered.has(aid) || turnSeen.has(aid)) return;
+                firstPromptRedelivered.add(aid);
+                try {
+                  await paseo.agents.ref(aid).send(rememberedPrompt);
+                  const where =
+                    teamOf(cur.labels ?? {}, cur.cwd ?? agentCwd) ??
+                    (fallbackTeam ? { team: fallbackTeam, lane: fallbackLane || fallbackTeam } : null);
+                  const text = `first-prompt-redelivered: agent=${aid}`;
+                  log(text);
+                  if (where) {
+                    appendLog(where.team, {
+                      agent: "plugin",
+                      lane: where.lane,
+                      type: "metric",
+                      text,
+                      refs: [aid],
+                    });
+                  }
+                } catch (err) {
+                  log(`first-prompt redeliver failed for ${aid}: ${err}`);
+                }
+              }, redeliverMs);
+              firstPromptTimers.set(aid, t);
+            }
+          }
 
           // First-dispatch context metric for a lead's first spawned child.
           if (parentId && parent && pl.role === "lead" && team) {
@@ -1431,8 +1881,16 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           { paseo }: { paseo: any },
         ) => {
           paseoApi = paseo;
+          markTurnSeen(agent?.id);
           try {
-            if (outcome.kind === "failed") return await handleFailure(paseo, agent, outcome.error.message);
+            if (outcome.kind === "failed") {
+              const { snap: me, labels } = await labelsFor(paseo, agent);
+              if (!isDigestAgent(labels) && effectiveAgentRole({ labels }) === "lead") {
+                const handoffRes = await checkLeadTokens(paseo, agent.id, me, labels);
+                if (handoffRes?.stage === "auto-250" || handoffRes?.stage === "hard-300") return;
+              }
+              return await handleFailure(paseo, agent, String(outcome.error?.message ?? ""));
+            }
             if (outcome.kind !== "completed") return;
             retries.delete(agent.id);
 
@@ -1472,7 +1930,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     }
 
     async function spawnDigest(paseo: Paseo, worker: any, turnId: string | null, labels: Labels) {
-      if (isDigestAgent(labels, worker.title)) return;
+      if (isDigestAgent(labels, worker.title) || isDigestNoise(labels, worker.title)) return;
       const key = `${worker.id}:${turnId ?? ""}`;
       if (digested.has(key)) return;
       digested.add(key);
@@ -1484,11 +1942,12 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         `run \`paseo inspect ${worker.id}\` / read its last assistant message and any report it names. Do not modify files.`,
         `Then run exactly once:`,
         `vs log done "<PASS|FAIL>: <1-line summary, max 200 chars>" --digest --ref ${worker.id}`,
-        `Use FAIL if the worker reported errors, failing tests, or did not finish. Then stop.`,
+        `Use FAIL if the worker reported errors, failing tests, or did not finish. If its report states neither PASS nor FAIL, log nothing. Then stop.`,
       ].join("\n");
 
       const fallback = async (why: string) => {
         const last = await lastAssistantText(paseo, worker.id);
+        if (!statesVerdict(last)) return;
         const line = last.split(/\r?\n/).find((l) => l.trim()) ?? "no final message";
         appendLog(teamIdOf(team, currentTeams()), {
           agent: worker.id,
@@ -1535,7 +1994,10 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
 
     async function checkLeadTokens(_paseo: Paseo, id: string, me: AgentSnap | null, labels: Labels) {
       const leadSnap = me ? { ...me, id, labels: { ...(me.labels ?? {}), ...labels } } : { id, title: null, labels };
-      await handoffCoordinator.evaluateLead(leadSnap).catch((e: unknown) => log(`lead handoff check failed: ${e}`));
+      return await handoffCoordinator.evaluateLead(leadSnap).catch((e: unknown) => {
+        log(`lead handoff check failed: ${e}`);
+        return null;
+      });
     }
 
     // A4: transient network error retry with exponential backoff.
@@ -1593,15 +2055,17 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         }
       }
       if (!relay) return;
+      // A relay is routine (the old lead finishing up, or its children ending turns): its own
+      // `relay-old` counter, so `misroute-old` counts only real sends to a retired agent.
       const dateStr = new Date().toISOString().slice(0, 10);
       const countKey = `${dateStr}:${where.team}`;
-      const dailyCount = (misrouteCounts.get(countKey) ?? 0) + 1;
-      misrouteCounts.set(countKey, dailyCount);
+      const dailyCount = (relayCounts.get(countKey) ?? 0) + 1;
+      relayCounts.set(countKey, dailyCount);
       appendLog(where.team, {
         agent: String(agent.id ?? "former-lead"),
         lane: where.lane,
         type: "metric",
-        text: `misroute-old: date=${dateStr} count=${dailyCount} target=${targetId}`,
+        text: `relay-old: date=${dateStr} count=${dailyCount} target=${targetId}`,
         refs: agent.id ? [String(agent.id)] : [],
       });
       queueWake(where.team, {
@@ -1673,9 +2137,16 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const name =
           role === "lead"
             ? ord
-              ? `(old) ${laneName.toUpperCase()} ord${ord}`
+              ? formatDisplayTitle({
+                  role: "former-lead",
+                  laneId: lane,
+                  laneName,
+                  code: laneCodeFor(lane, currentTeams()),
+                  ord,
+                  job: old.labels.job,
+                })
               : `(old) ${oldTitle}`
-            : `(old) ${oldTitle || "BRAINSTORM"}`;
+            : `(old) ${oldTitle || "Buddy"}`;
         if (role === "brainstorm") {
           // The brief is the Buddy handoff: make sure it holds the predecessor's last turn
           // and the log names both Buddies before anything is relabelled or archived.
@@ -1715,6 +2186,17 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         if (!cur || cur.archivedAt || cur.status === "closed") return;
         if (cur.labels.role !== "former-brainstorm") return;
         if (cur.status === "running" && attempt < 15) return scheduleBuddyArchive(paseo, id, attempt + 1);
+        // Paseo archives children with their parent: detach the Buddy's live lead (and anything else it
+        // spawned) first, and keep the Buddy unarchived if that fails (docs/PLAN_BUGS_BATCH1.md block 0).
+        const { detached, failed } = await detachLiveChildren(id, {
+          list: async () =>
+            ((await paseo.agents.list({ includeBackground: true, filter: { includeBackground: true }, page: { limit: 200 } })).entries as any[]).map(
+              (e) => e.agent,
+            ),
+          detach: (childId: string) => paseo.agents.ref(childId).detach(),
+        });
+        if (detached.length) log(`detached ${detached.join(", ")} from retired Buddy ${id} before archive`);
+        if (failed.length) return log(`kept ${id} unarchived: could not detach ${failed.map((f) => f.id).join(", ")}`);
         await Promise.resolve()
           .then(() => paseo.agents.ref(id).archive())
           .catch(() => deps.archiveAgent(id))
@@ -1722,13 +2204,13 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }, grace);
     }
 
-    async function findLead(paseo: Paseo, team: string, lane: string): Promise<AgentSnap | null> {
+    async function findLead(paseo: Paseo, team: string, lane: string, role: "lead" | "brainstorm" = "lead"): Promise<AgentSnap | null> {
       const res = await paseo.agents.list({ includeBackground: true, filter: { includeBackground: true }, page: { limit: 200 } });
       const wantLane = (lane || "").toLowerCase();
       const leads = (res.entries as any[])
         .map((e) => ({ ...e.agent, labels: e.agent.labels ?? {} }) as AgentSnap)
         .filter((a) => !a.archivedAt && !a.internal && a.status !== "closed")
-        .filter((a) => effectiveAgentRole(a) === "lead")
+        .filter((a) => effectiveAgentRole(a) === role)
         .filter((a) => {
           const d = deriveTeamForSpawn(a.labels, a.cwd, currentTeams());
           const aTeam = teamIdOf(d.team || a.labels.team, currentTeams());
@@ -1772,6 +2254,10 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const { team: rawTeam, lane: rawLane } = deriveTeamForSpawn(target.labels, target.cwd, currentTeams());
       const team = teamIdOf(rawTeam || target.labels?.team || "", currentTeams());
       const lane = rawLane || target.labels?.lane || target.labels?.lead || team;
+      const role = retiredHolderRole(target);
+      const current = await findLead(paseo, team, rawLane || target.labels?.lane || target.labels?.lead || "", role);
+      // The successor talking to its predecessor (handoff questions) is not a misroute.
+      if (current && senderId && current.id === senderId) return undefined;
 
       const dateStr = new Date().toISOString().slice(0, 10);
       const countKey = `${dateStr}:${team}`;
@@ -1787,11 +2273,11 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         });
       }
 
-      const currentLead = await findLead(paseo, team, rawLane || target.labels?.lane || target.labels?.lead || "");
       const oldShort = extractLeadShortName(target);
-      if (!currentLead) {
-        throw new Error(`${oldShort} is retired and no live lead exists for ${team}/${lane}`);
+      if (!current) {
+        throw new Error(`${oldShort} is retired and no live ${role === "brainstorm" ? "Buddy" : "lead"} exists for ${team}/${lane}`);
       }
+      const currentLead = current;
       const newShort = extractLeadShortName(currentLead);
       const notice = `${oldShort} is retired; delivered to ${newShort}`;
       await paseo.agents.ref(currentLead.id).send(promptText);
@@ -1810,6 +2296,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       };
     }
 
+    // Paseo's before() only fires for agent.create / agent.session_open / workspace.create, so these
+    // never see an MCP send_agent_prompt (kept in case a host adds them). The live redirect is the
+    // agent.turn_started handler below, which fires on the retired agent itself.
     for (const hookName of ["send_agent_prompt", "agent.send"]) {
       try {
         stops.push(
@@ -1826,6 +2315,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       stops.push(
         server.on("agent.turn_started" as any, async ({ agent }: { agent: any }, { paseo }: { paseo: any }) => {
           paseoApi = paseo;
+          markTurnSeen(agent?.id);
           try {
             const me = await snap(paseo, agent.id);
             if (!me || !isRetiredLeadSnap(me)) return;
@@ -1833,16 +2323,30 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               .ref(agent.id)
               .timeline?.refetch?.({ direction: "tail", limit: 10 })
               .catch(() => null);
-            let lastUserText = "";
+            let lastUser: any = null;
             for (const entry of page?.entries ?? []) {
               const item = entry?.item ?? entry;
               if ((item?.type === "user_message" || item?.role === "user") && item?.text?.trim()) {
-                lastUserText = item.text.trim();
+                lastUser = item;
               }
             }
-            if (!lastUserText) return;
-            await handleSendAgentPrompt({ agentId: agent.id, prompt: lastUserText }, { paseo }).catch((e) =>
-              log(`turn_started redirect failed: ${e}`),
+            // Only another agent's send is a misroute: the user typing, plugin wakeups and handoff
+            // prompts to a retiring lead stay with it.
+            const msg = parseAgentMessageEnvelope(lastUser?.text);
+            if (!msg || msg.senderId === agent.id) return;
+            const key = `${agent.id}:${msg.messageId || lastUser.messageId || msg.body}`;
+            if (forwardedFromRetired.has(key)) return;
+            forwardedFromRetired.add(key);
+            const from = msg.senderTitle ? `${msg.senderTitle} (${msg.senderId})` : msg.senderId;
+            const prompt = `Forwarded by VibeSquad: ${from} sent this to retired ${extractLeadShortName(me)} (${me.id}).\n\n${msg.body}`;
+            // Not awaited: a send can block for up to 60 s and the hook RPC times out first.
+            void handleSendAgentPrompt({ agentId: agent.id, senderAgentId: msg.senderId, prompt }, { paseo }).catch(
+              (e: any) => {
+                log(`turn_started redirect failed: ${e}`);
+                if (/ is retired and no live /.test(String(e?.message ?? ""))) {
+                  paseo.agents.ref(msg.senderId).send(String(e.message)).catch(() => {});
+                }
+              },
             );
           } catch (err) {
             log(`turn_started handler failed: ${err}`);

@@ -5,14 +5,34 @@
 import { execFile, spawn } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
-import { bundledNode, findPaseoCli, isDaemonListening, parseListen } from "./first-run.mjs";
-import { clearConfigWarning, loadUserSettings, parseJsonWithBom, readJsonFileWithBom, stripBom } from "./user-settings.mjs";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { bundledNode, findPaseoCli, isDaemonListening, parseListen, resolveCmdShimEntry, UNSAFE_CMD_ARG } from "./first-run.mjs";
+import { qrSvg } from "./qr.mjs";
+import { clearConfigWarning, loadUserSettings, parseJsonWithBom, readJsonFileWithBom, recordConfigWarning, stripBom } from "./user-settings.mjs";
 
 const IS_WIN = process.platform === "win32";
 export const SECRET_MASK = "••••••••";
 export const SECRET_KEY_RE = /token|secret|key|password|cred|auth/i;
 export const MAX_BACKUPS = 5;
+
+export function withWindowsHideNodeOptions(env = process.env, platform = process.platform) {
+  const out = { ...(env || {}) };
+  if (platform !== "win32") return out;
+  const preloadPath = resolve(import.meta.dirname, "windows-hide-preload.mjs");
+  const preloadUrl = pathToFileURL(preloadPath).href;
+  if (/[\s"']/.test(preloadUrl)) return out;
+  const existing = String(out.NODE_OPTIONS ?? "").trim();
+  if (existing.includes(preloadUrl)) return out;
+  if (existing.includes("windows-hide-preload.mjs")) {
+    out.NODE_OPTIONS = existing.replace(/--import\s+\S*windows-hide-preload\.mjs/g, `--import ${preloadUrl}`);
+    return out;
+  }
+  out.NODE_OPTIONS = existing ? `${existing} --import ${preloadUrl}` : `--import ${preloadUrl}`;
+  return out;
+}
+
+export const envWithWindowsHidePreload = withWindowsHideNodeOptions;
 
 export function getPaseoHome(opts = {}) {
   if (opts.paseoHome) return resolve(String(opts.paseoHome));
@@ -26,6 +46,19 @@ export function getPaseoConfigPathForHome(opts = {}) {
 
 export function getManagedPaseoPidPath(opts = {}) {
   return join(getPaseoHome(opts), "vibesquad-managed.pid");
+}
+
+export function readPaseoPid(opts = {}) {
+  const home = getPaseoHome(opts);
+  for (const name of ["daemon.pid", "paseo.pid"]) {
+    const p = join(home, name);
+    if (!existsSync(p)) continue;
+    try {
+      const n = Number(readFileSync(p, "utf8").trim());
+      if (Number.isFinite(n) && n > 0) return n;
+    } catch {}
+  }
+  return null;
 }
 
 export function isSecretKeyName(key) {
@@ -120,12 +153,25 @@ export function createPaseoConfigBackup(opts = {}) {
   return backupPath;
 }
 
+const BACKUP_NAME_RE = /^config\.json\.bak-\d+(?:-\d+)?$/;
+
+/** A caller-supplied backup must be one of our own `config.json.bak-<ts>[-n]` files directly in the Paseo home. Throws otherwise. */
+function confinedBackupPath(backupPath, opts = {}) {
+  const home = resolve(getPaseoHome(opts));
+  const target = resolve(home, String(backupPath));
+  const sameDir = IS_WIN ? dirname(target).toLowerCase() === home.toLowerCase() : dirname(target) === home;
+  if (!sameDir || !BACKUP_NAME_RE.test(basename(target))) {
+    throw new Error("backupPath must be a config.json backup in the Paseo home");
+  }
+  return target;
+}
+
 /**
  * Restores the most recent `config.json.bak-<ts>` (or a specific backup path) to `config.json` without BOM.
  */
 export function restoreLastPaseoConfigBackup(opts = {}) {
   const cfgPath = getPaseoConfigPathForHome(opts);
-  const targetBackup = opts.backupPath || listPaseoConfigBackups(opts)[0]?.path;
+  const targetBackup = opts.backupPath ? confinedBackupPath(opts.backupPath, opts) : listPaseoConfigBackups(opts)[0]?.path;
   if (!targetBackup || !existsSync(targetBackup)) {
     throw new Error("No config.json backup available to restore");
   }
@@ -155,12 +201,73 @@ export function readRawPaseoConfig(opts = {}) {
   };
 }
 
+// `paseo plugin install <source>`: a directory, Git URL or npm package spec. No leading `-` (option injection).
+const PLUGIN_SOURCE_RE = /^(?!-)[A-Za-z0-9@._\/\\:+~# -]{1,512}$/;
+// Provider / plugin ids go into `paseo provider|plugin <cmd> <id>` argv: no leading `-` either.
+export const PASEO_ID_RE = /^(?!-)[A-Za-z0-9_.-]+$/;
+
+/** Validates a plugin install source; throws on anything outside the allowlist. */
+export function validatePluginSource(raw) {
+  const source = String(raw ?? "").trim();
+  if (!source) throw new Error("Plugin source (directory, Git URL, or npm package) is required");
+  if (!PLUGIN_SOURCE_RE.test(source)) throw new Error("Plugin source contains characters that aren't allowed");
+  return source;
+}
+
+/** Validates a Paseo hub origin and returns its normalized `scheme://host[:port]`; throws otherwise. */
+export function validateHubOrigin(raw) {
+  const value = String(raw ?? "").trim();
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("Hub origin must be an http(s) URL");
+  }
+  if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password || (!/^[A-Za-z0-9.-]+$/.test(url.hostname) && !/^\[[0-9a-fA-F:.]+\]$/.test(url.hostname))) {
+    throw new Error("Hub origin must be an http(s) URL");
+  }
+  if ((url.pathname !== "/" && url.pathname !== "") || url.search || url.hash) throw new Error("Hub origin must not have a path, query or fragment");
+  return url.origin;
+}
+
 /**
  * Runs a Paseo CLI command with `--home <paseoHome>` and optional `--json`, returning `{ ok, code, stdout, stderr, data }`.
  */
 export function runPaseoCli(args = [], opts = {}) {
-  if (typeof opts.cliRunner === "function") {
-    return Promise.resolve(opts.cliRunner(args, opts));
+  const customRunner = opts.cliRunner ?? opts.runCli ?? opts._runCli;
+  if (typeof customRunner === "function") {
+    return Promise.resolve(customRunner(args, opts)).then((res) => {
+      if (res && typeof res === "object" && !Array.isArray(res)) {
+        if (res.data === undefined && args.includes("--json") && typeof res.stdout === "string" && res.stdout.trim()) {
+          try {
+            return {
+              ok: res.ok ?? (res.code === undefined || res.code === 0),
+              code: res.code ?? 0,
+              stderr: "",
+              ...res,
+              data: parseJsonWithBom(res.stdout.trim()),
+            };
+          } catch {}
+        }
+        return {
+          ok: res.ok ?? (res.code === undefined || res.code === 0),
+          code: res.code ?? 0,
+          stdout: res.stdout ?? "",
+          stderr: res.stderr ?? "",
+          data: res.data ?? null,
+          ...res,
+        };
+      }
+      if (typeof res === "string" && args.includes("--json") && res.trim()) {
+        try {
+          return { ok: true, code: 0, stdout: res, stderr: "", data: parseJsonWithBom(res.trim()) };
+        } catch {}
+      }
+      if (Array.isArray(res)) {
+        return { ok: true, code: 0, stdout: JSON.stringify(res), stderr: "", data: res };
+      }
+      return res;
+    });
   }
   const paseoHome = getPaseoHome(opts);
   const cli = opts.cli ?? findPaseoCli(opts);
@@ -174,12 +281,12 @@ export function runPaseoCli(args = [], opts = {}) {
     });
   }
   const node = bundledNode();
-  const env = {
+  const env = withWindowsHideNodeOptions({
     ...process.env,
     ...(opts.env ?? {}),
     PASEO_HOME: paseoHome,
     PATH: `${dirname(node)}${delimiter}${process.env.PATH ?? ""}`,
-  };
+  });
   const fullArgs = ["--home", paseoHome, ...args];
   const timeout = opts.timeoutMs ?? 12_000;
 
@@ -203,18 +310,30 @@ export function runPaseoCli(args = [], opts = {}) {
       });
     };
 
+    const run = opts.execFile ?? execFile;
     try {
       if (cli.kind === "node") {
-        execFile(node, [cli.bin, ...fullArgs], { timeout, windowsHide: true, env, maxBuffer: 8 * 1024 * 1024 }, cb);
+        run(node, [cli.bin, ...fullArgs], { timeout, windowsHide: true, env, maxBuffer: 8 * 1024 * 1024 }, cb);
       } else if (cli.kind === "cmd") {
-        execFile(
-          "cmd.exe",
-          ["/d", "/s", "/c", `"${cli.bin}" ${fullArgs.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" ")}`],
-          { timeout, windowsHide: true, env, windowsVerbatimArguments: true, maxBuffer: 8 * 1024 * 1024 },
-          cb,
-        );
+        // Prefer the shim's node entry so request-derived args never pass through cmd.exe.
+        const entry = (opts.resolveCmdShim ?? resolveCmdShimEntry)(cli.bin);
+        if (entry) {
+          run(node, [...entry.nodeArgs, entry.script, ...fullArgs], { timeout, windowsHide: true, env, maxBuffer: 8 * 1024 * 1024 }, cb);
+        } else {
+          // cli.bin is spliced into the same command line, so it gets the same check as the args.
+          if ([cli.bin, ...fullArgs].some((a) => UNSAFE_CMD_ARG.test(String(a)))) {
+            return resolvePromise({ ok: false, code: 1, stdout: "", stderr: "refusing argument with shell metacharacters", data: null });
+          }
+          // `/s /c "<line>"`: cmd strips only the outer quotes, so every arg stays quoted.
+          run(
+            "cmd.exe",
+            ["/d", "/s", "/c", `"${[cli.bin, ...fullArgs].map((a) => `"${a}"`).join(" ")}"`],
+            { timeout, windowsHide: true, env, windowsVerbatimArguments: true, maxBuffer: 8 * 1024 * 1024 },
+            cb,
+          );
+        }
       } else {
-        execFile(cli.bin, fullArgs, { timeout, windowsHide: true, env, maxBuffer: 8 * 1024 * 1024 }, cb);
+        run(cli.bin, fullArgs, { timeout, windowsHide: true, env, maxBuffer: 8 * 1024 * 1024 }, cb);
       }
     } catch (e) {
       resolvePromise({
@@ -291,17 +410,25 @@ export async function writePaseoConfigAndReload(mutatorOrObject, opts = {}) {
  * Counts live and busy (running) agents in `<paseoHome>/agents` or via `paseo ls --json`.
  */
 export async function inspectDaemonAgents(opts = {}) {
-  const lsRes = await runPaseoCli(["ls", "--json"], { ...opts, timeoutMs: 4000 });
-  if (lsRes.ok && Array.isArray(lsRes.data)) {
-    const live = lsRes.data.filter((a) => a && a.status !== "closed" && !a.archivedAt);
-    const busy = live.filter((a) => a.status === "running");
-    return {
-      liveCount: live.length,
-      busyCount: busy.length,
-      busyAgents: busy.map((a) => ({ id: a.id, name: a.name || a.title || a.shortId || a.id })),
-    };
+  const hasCustomRunner =
+    typeof opts.cliRunner === "function" ||
+    typeof opts.runCli === "function" ||
+    typeof opts._runCli === "function";
+  // Only pay for a cold CLI spawn when a runner is injected (tests) or explicitly requested;
+  // otherwise read the agent state files below (<2ms) instead of waiting on a 4s subprocess.
+  if (hasCustomRunner || opts.probeCli === true) {
+    const lsRes = await runPaseoCli(["ls", "--json"], { ...opts, timeoutMs: 4000 });
+    if (lsRes.ok && Array.isArray(lsRes.data)) {
+      const live = lsRes.data.filter((a) => a && a.status !== "closed" && !a.archivedAt);
+      const busy = live.filter((a) => a.status === "running");
+      return {
+        liveCount: live.length,
+        busyCount: busy.length,
+        busyAgents: busy.map((a) => ({ id: a.id, name: a.name || a.title || a.shortId || a.id })),
+      };
+    }
   }
-  // Fallback to reading agent state files in <paseoHome>/agents if CLI timed out
+  // Read agent state files in <paseoHome>/agents directly.
   const agentsDir = join(getPaseoHome(opts), "agents");
   let liveCount = 0;
   let busyCount = 0;
@@ -359,16 +486,47 @@ export function clearManagedDaemonMarker(opts = {}) {
 
 /**
  * Inspects full Daemon status for Tab 1 (Daemon).
+ * When `cliRunner` / `runCli` is not supplied and `probeCli !== true`, uses fast non-blocking
+ * disk + socket reads (`daemon.pid`, `server-id`, CLI package.json) instead of spawning subprocesses.
  */
 export async function getPaseoDaemonStatus(opts = {}) {
+  const pHome = getPaseoHome(opts);
   const rawCfg = readRawPaseoConfig(opts);
   const configuredListen = rawCfg.config?.daemon?.listen || "127.0.0.1:6767";
-  const statusRes = await runPaseoCli(["status", "--json"], { ...opts, timeoutMs: 5000 });
-  const statusObj = statusRes.data && typeof statusRes.data === "object" ? statusRes.data : {};
+  const useCli =
+    typeof opts.cliRunner === "function" ||
+    typeof opts.runCli === "function" ||
+    typeof opts._runCli === "function" ||
+    opts.probeCli === true;
+
+  let statusObj = {};
+  if (useCli) {
+    const statusRes = await runPaseoCli(["status", "--json"], { ...opts, timeoutMs: 5000 });
+    statusObj = statusRes.data && typeof statusRes.data === "object" ? statusRes.data : {};
+  } else {
+    const pid = readPaseoPid(opts);
+    const serverIdPath = join(pHome, "server-id");
+    let serverId = null;
+    if (existsSync(serverIdPath)) {
+      try {
+        serverId = readFileSync(serverIdPath, "utf8").trim() || null;
+      } catch {}
+    }
+    const cli = opts.cli !== undefined ? opts.cli : findPaseoCli(opts);
+    statusObj = {
+      pid,
+      serverId,
+      daemonVersion: cli?.version ?? null,
+    };
+  }
+
   const listen = statusObj.listen || configuredListen;
-  const listening = await (opts.isListening ?? isDaemonListening)(listen, 800);
+  const listening = await (opts.isListening ?? opts._probe ?? isDaemonListening)(listen, 800);
   const running = statusObj.localDaemon === "running" || listening;
-  const { liveCount, busyCount, busyAgents } = running ? await inspectDaemonAgents(opts) : { liveCount: 0, busyCount: 0, busyAgents: [] };
+  const { liveCount, busyCount, busyAgents } =
+    running && (useCli || opts.inspectAgents === true)
+      ? await inspectDaemonAgents(opts)
+      : { liveCount: 0, busyCount: 0, busyAgents: [] };
   const managedByVibeSquad = isVibeSquadManagedDaemon(statusObj, opts);
   const startedAt = statusObj.startedAt || null;
   const uptimeMs = startedAt ? Math.max(0, Date.now() - new Date(startedAt).getTime()) : null;
@@ -376,10 +534,10 @@ export async function getPaseoDaemonStatus(opts = {}) {
 
   return {
     ok: true,
-    home: getPaseoHome(opts),
+    home: pHome,
     running,
     version: statusObj.daemonVersion || null,
-    pid: statusObj.pid || null,
+    pid: statusObj.pid || readPaseoPid(opts) || null,
     startedAt,
     uptimeMs,
     listen,
@@ -398,13 +556,60 @@ export async function getPaseoDaemonStatus(opts = {}) {
   };
 }
 
+export const getPaseoStatus = getPaseoDaemonStatus;
+
+/**
+ * Inspects provider health after daemon start/restart.
+ * Polls briefly if any enabled provider is still `refreshing` or `initializing`.
+ */
+export async function checkStartedDaemonProviders(opts = {}) {
+  if (opts.checkProviders === false) {
+    return { providerWarning: null, erroredProviders: [] };
+  }
+  const hasCustomRunner =
+    typeof opts.cliRunner === "function" ||
+    typeof opts.runCli === "function" ||
+    typeof opts._runCli === "function";
+  // Without an injected runner each poll is a cold CLI spawn; default to a single check
+  // unless the caller explicitly asks to wait (unit tests pass a runner and keep polling).
+  const waitMs = opts.providerWaitMs ?? (hasCustomRunner ? 5000 : 0);
+  const pollMs = opts.providerPollMs ?? 500;
+  const deadline = Date.now() + Math.max(0, waitMs);
+  let providers = [];
+
+  while (true) {
+    const res = await getPaseoProviders(opts);
+    providers = Array.isArray(res?.providers) ? res.providers : [];
+    const pending = providers.some(
+      (p) => p && p.enabled !== false && (p.status === "refreshing" || p.status === "initializing"),
+    );
+    if (!pending || Date.now() >= deadline) break;
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+
+  const errored = providers.filter(
+    (p) => p && p.enabled !== false && String(p.status || "").toLowerCase() === "error",
+  );
+  if (errored.length === 0) {
+    return { providerWarning: null, erroredProviders: [] };
+  }
+  const providerWarning =
+    "Daemon started but providers failed: " +
+    errored
+      .map((p) => `${p.id || p.label}${p.error || p.detail ? ` (${p.error || p.detail})` : ""}`)
+      .join(", ");
+  return { providerWarning, erroredProviders: errored };
+}
+
 /**
  * Performs Daemon lifecycle actions: `start` | `stop` | `restart` | `reload`.
  * Stop and Restart require `confirmBusy: true` when `busyAgentCount > 0`.
  * On app quit (`reason === "app-quit"`), an external daemon is NEVER stopped, and if `keepPaseoRunningOnQuit` is true, it is never stopped.
  */
 export async function controlPaseoDaemon(action, opts = {}) {
-  const status = await getPaseoDaemonStatus(opts);
+  const status = await getPaseoDaemonStatus(
+    action === "stop" || action === "restart" ? { ...opts, inspectAgents: true } : opts,
+  );
 
   if (action === "reload") {
     const res = await runPaseoCli(["reload"], opts);
@@ -416,19 +621,76 @@ export async function controlPaseoDaemon(action, opts = {}) {
 
   if (action === "start") {
     if (status.running) {
-      return { ok: true, action: "start", alreadyRunning: true, status };
+      const health =
+        opts.checkProviders === false
+          ? { providerWarning: null, erroredProviders: [] }
+          : await checkStartedDaemonProviders(opts);
+      status.providerWarning = health.providerWarning || null;
+      status.erroredProviders = health.erroredProviders || [];
+      return {
+        ok: true,
+        action: "start",
+        alreadyRunning: true,
+        providerWarning: health.providerWarning || null,
+        erroredProviders: health.erroredProviders || [],
+        status,
+      };
     }
-    const res = await runPaseoCli(["daemon", "start"], { ...opts, timeoutMs: 15_000 });
+    if (
+      typeof opts.runCli === "function" ||
+      typeof opts.cliRunner === "function" ||
+      typeof opts._runCli === "function"
+    ) {
+      const res = await runPaseoCli(["daemon", "start"], { ...opts, timeoutMs: 15_000 });
+      const after = await getPaseoDaemonStatus(opts);
+      if (after.running || res.ok) {
+        markDaemonManagedByVibeSquad(after.pid || readPaseoPid(opts) || "managed", opts);
+        after.managedByVibeSquad = true;
+        after.ownership = "vibesquad-managed";
+      }
+      const health =
+        (after.running || res.ok) && opts.checkProviders !== false
+          ? await checkStartedDaemonProviders(opts)
+          : { providerWarning: null, erroredProviders: [] };
+      after.providerWarning = health.providerWarning || null;
+      after.erroredProviders = health.erroredProviders || [];
+      return {
+        ok: after.running || res.ok,
+        action: "start",
+        error: !after.running && !res.ok ? (res.stderr || res.stdout || "Failed to start Paseo daemon").trim() : undefined,
+        providerWarning: health.providerWarning || null,
+        erroredProviders: health.erroredProviders || [],
+        status: after,
+      };
+    }
+    const { ensurePaseoDaemon } = await import("./first-run.mjs");
+    const launched = await ensurePaseoDaemon(opts);
+    const checkListening = opts.isListening ?? opts._probe ?? isDaemonListening;
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      if (await checkListening(status.configuredListen)) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
     const after = await getPaseoDaemonStatus(opts);
-    if (after.running) {
-      markDaemonManagedByVibeSquad(after.pid || "managed", opts);
+    if (after.running || launched?.started) {
+      markDaemonManagedByVibeSquad(after.pid || readPaseoPid(opts) || "managed", opts);
       after.managedByVibeSquad = true;
       after.ownership = "vibesquad-managed";
     }
+    const health =
+      launched?.providerWarning !== undefined
+        ? { providerWarning: launched.providerWarning || null, erroredProviders: launched.erroredProviders || [] }
+        : (after.running || launched?.started) && opts.checkProviders !== false
+          ? await checkStartedDaemonProviders(opts)
+          : { providerWarning: null, erroredProviders: [] };
+    after.providerWarning = health.providerWarning || null;
+    after.erroredProviders = health.erroredProviders || [];
     return {
-      ok: after.running || res.ok,
+      ok: after.running || Boolean(launched?.started),
       action: "start",
-      error: !after.running && !res.ok ? (res.stderr || res.stdout || "Failed to start Paseo daemon").trim() : undefined,
+      error: !after.running && !launched?.started ? (launched?.reason || "Failed to start Paseo daemon") : undefined,
+      providerWarning: health.providerWarning || null,
+      erroredProviders: health.erroredProviders || [],
       status: after,
     };
   }
@@ -465,6 +727,22 @@ export async function controlPaseoDaemon(action, opts = {}) {
       markDaemonManagedByVibeSquad(after.pid || "managed", opts);
       after.managedByVibeSquad = true;
       after.ownership = "vibesquad-managed";
+    }
+    if (action === "restart") {
+      const health =
+        (after.running || res.ok) && opts.checkProviders !== false
+          ? await checkStartedDaemonProviders(opts)
+          : { providerWarning: null, erroredProviders: [] };
+      after.providerWarning = health.providerWarning || null;
+      after.erroredProviders = health.erroredProviders || [];
+      return {
+        ok: res.ok,
+        action,
+        error: !res.ok ? (res.stderr || res.stdout || `paseo daemon ${action} failed`).trim() : undefined,
+        providerWarning: health.providerWarning || null,
+        erroredProviders: health.erroredProviders || [],
+        status: after,
+      };
     }
     return {
       ok: res.ok,
@@ -526,14 +804,16 @@ export async function getPaseoProviders(opts = {}) {
   const list = [];
 
   for (const row of cliList) {
-    const id = String(row.provider || "").trim();
+    const id = String(row.provider || row.id || "").trim();
     if (!id) continue;
     seen.add(id);
     const cfgEntry = cfgProviders[id] && typeof cfgProviders[id] === "object" ? cfgProviders[id] : {};
     const enabled =
       typeof cfgEntry.enabled === "boolean"
         ? cfgEntry.enabled
-        : String(row.enabled || "").toLowerCase() === "enabled" || row.enabled === true;
+        : row.enabled === undefined
+          ? true
+          : String(row.enabled || "").toLowerCase() === "enabled" || row.enabled === true;
     list.push({
       id,
       label: String(cfgEntry.label || row.label || id),
@@ -547,6 +827,8 @@ export async function getPaseoProviders(opts = {}) {
       command: Array.isArray(cfgEntry.command) ? cfgEntry.command.map(String) : [],
       envKeys: cfgEntry.env && typeof cfgEntry.env === "object" ? Object.keys(cfgEntry.env) : [],
       envMasked: maskSecrets(cfgEntry.env || {}, "env", true),
+      ...(row.error ? { error: maskSecretsInText(String(row.error)) } : {}),
+      ...(row.detail ? { detail: maskSecretsInText(String(row.detail)) } : {}),
     });
   }
 
@@ -573,7 +855,7 @@ export async function getPaseoProviders(opts = {}) {
 
 export async function togglePaseoProvider(providerId, enabled, opts = {}) {
   const id = String(providerId || "").trim();
-  if (!id || !/^[A-Za-z0-9_.-]+$/.test(id)) throw new Error("Invalid provider id");
+  if (!id || !PASEO_ID_RE.test(id)) throw new Error("Invalid provider id");
   return writePaseoConfigAndReload((cfg) => {
     cfg.agents = cfg.agents && typeof cfg.agents === "object" ? cfg.agents : {};
     cfg.agents.providers = cfg.agents.providers && typeof cfg.agents.providers === "object" ? cfg.agents.providers : {};
@@ -595,7 +877,7 @@ export async function saveCustomAcpProvider(payload, opts = {}) {
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/^-|-$/g, "");
+    .replace(/^-+|-+$/g, "");
   if (!id) throw new Error("Provider ID is required");
   const label = String(payload?.label || id).trim();
   const description = String(payload?.description || "").trim();
@@ -644,7 +926,7 @@ export async function saveCustomAcpProvider(payload, opts = {}) {
 
 export async function getPaseoProviderDiagnostic(providerId, opts = {}) {
   const id = String(providerId || "").trim();
-  if (!id || !/^[A-Za-z0-9_.-]+$/.test(id)) throw new Error("Invalid provider id");
+  if (!id || !PASEO_ID_RE.test(id)) throw new Error("Invalid provider id");
   const res = await runPaseoCli(["provider", "diagnostic", id, "--json"], opts);
   const rawDiag = res.data?.diagnostic || res.stdout || res.stderr || "";
   return {
@@ -656,7 +938,7 @@ export async function getPaseoProviderDiagnostic(providerId, opts = {}) {
 
 export async function getPaseoProviderModels(providerId, opts = {}) {
   const id = String(providerId || "").trim();
-  if (!id || !/^[A-Za-z0-9_.-]+$/.test(id)) throw new Error("Invalid provider id");
+  if (!id || !PASEO_ID_RE.test(id)) throw new Error("Invalid provider id");
   const res = await runPaseoCli(["provider", "models", id, "--json"], opts);
   return {
     ok: res.ok,
@@ -718,7 +1000,7 @@ export async function getPaseoPlugins(opts = {}) {
 export async function controlPaseoPlugin(action, payload = {}, opts = {}) {
   const id = String(payload.id || "").trim();
   if (action === "enable" || action === "disable") {
-    if (!id || !/^[A-Za-z0-9_.-]+$/.test(id)) throw new Error("Invalid plugin id");
+    if (!id || !PASEO_ID_RE.test(id)) throw new Error("Invalid plugin id");
     if (action === "disable" && id === "vibesquad" && !payload.confirmDisableVibeSquad) {
       return {
         ok: false,
@@ -741,7 +1023,7 @@ export async function controlPaseoPlugin(action, payload = {}, opts = {}) {
   }
 
   if (action === "reload" || action === "update" || action === "remove") {
-    if (!id || !/^[A-Za-z0-9_.-]+$/.test(id)) throw new Error("Invalid plugin id");
+    if (!id || !PASEO_ID_RE.test(id)) throw new Error("Invalid plugin id");
     const res = await runPaseoCli(["plugin", action, id], { ...opts, timeoutMs: 30_000 });
     return {
       ok: res.ok,
@@ -754,7 +1036,7 @@ export async function controlPaseoPlugin(action, payload = {}, opts = {}) {
   }
 
   if (action === "logs") {
-    if (!id || !/^[A-Za-z0-9_.-]+$/.test(id)) throw new Error("Invalid plugin id");
+    if (!id || !PASEO_ID_RE.test(id)) throw new Error("Invalid plugin id");
     const res = await runPaseoCli(["plugin", "logs", id], opts);
     return {
       ok: res.ok,
@@ -764,8 +1046,7 @@ export async function controlPaseoPlugin(action, payload = {}, opts = {}) {
   }
 
   if (action === "install") {
-    const source = String(payload.source || "").trim();
-    if (!source) throw new Error("Plugin source (directory, Git URL, or npm package) is required");
+    const source = validatePluginSource(payload.source);
     if (!payload.confirmUnsandboxed) {
       return {
         ok: false,
@@ -837,6 +1118,10 @@ export async function getPaseoConfigSurface(opts = {}) {
  * Changing `daemon.listen` updates `config.json` and flags `restartRequired: true` (does not force restart without confirmation).
  */
 export async function updatePaseoSettingsPatch(patch = {}, opts = {}) {
+  const wantListen = typeof patch.listen === "string" ? patch.listen.trim() : "";
+  if (wantListen && !isLoopbackListen(wantListen) && patch.confirmExposure !== true) {
+    return { ok: false, needsConfirmation: true, warning: exposureWarning(wantListen) };
+  }
   let listenChanged = false;
   const res = await writePaseoConfigAndReload((cfg) => {
     cfg.daemon = cfg.daemon && typeof cfg.daemon === "object" ? cfg.daemon : {};
@@ -873,11 +1158,38 @@ export async function updatePaseoSettingsPatch(patch = {}, opts = {}) {
     return cfg;
   }, opts);
 
+  checkDaemonListenExposure(opts);
   return {
     ...res,
     restartRequired: listenChanged,
+    ...(wantListen && !isLoopbackListen(wantListen) ? { warning: exposureWarning(wantListen) } : {}),
     surface: await getPaseoConfigSurface(opts),
   };
+}
+
+/** True for loopback hosts (127.0.0.0/8, localhost, ::1) and local IPC paths (named pipe / unix socket). */
+export function isLoopbackListen(listen) {
+  const s = String(listen ?? "").trim();
+  if (!s) return true;
+  if (/^(unix:|\\\\\.\\pipe\\|\/)/i.test(s)) return true;
+  const host = parseListen(s).host.replace(/^\[|\]$/g, "").toLowerCase();
+  return host === "localhost" || host === "::1" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+}
+
+function exposureWarning(listen) {
+  return `daemon.listen ${listen} is not loopback: any device that can reach it controls your agents with no pairing or token. VibeSquad's LAN mode already proxies the daemon with auth, so 127.0.0.1:6767 is enough.`;
+}
+
+/** Records (or clears) a config warning when `~/.paseo/config.json` daemon.listen isn't loopback. Never edits the file. */
+export function checkDaemonListenExposure(opts = {}) {
+  const cfgPath = getPaseoConfigPathForHome(opts);
+  const key = `${cfgPath}#daemon.listen`;
+  const listen = readRawPaseoConfig(opts).config?.daemon?.listen;
+  if (typeof listen === "string" && !isLoopbackListen(listen)) {
+    return recordConfigWarning(key, "~/.paseo/config.json", exposureWarning(listen), { kind: "exposure" });
+  }
+  clearConfigWarning(key);
+  return null;
 }
 
 export async function getPaseoPairOffer(opts = {}) {
@@ -885,11 +1197,23 @@ export async function getPaseoPairOffer(opts = {}) {
   const data = res.data && typeof res.data === "object" ? res.data : {};
   // Strip ANSI escape codes from QR text so it renders cleanly in a <pre>
   const cleanQr = String(data.qr || "").replace(/\u001b\[[0-9;]*m/g, "");
+  const urlStr = data.url ? String(data.url) : null;
+  const offerIdx = urlStr ? urlStr.indexOf("#offer=") : -1;
+  const offerFragment = offerIdx >= 0 ? urlStr.slice(offerIdx) : null;
+  const deepLinkUrl = offerFragment ? `vibesquad://pair${offerFragment}` : null;
+  let offerQrSvg = null;
+  if (deepLinkUrl) {
+    try {
+      offerQrSvg = await qrSvg(deepLinkUrl);
+    } catch {}
+  }
   return {
     ok: res.ok,
     relayEnabled: Boolean(data.relayEnabled),
-    url: data.url ? String(data.url) : null,
+    url: urlStr,
     qr: cleanQr,
+    deepLinkUrl,
+    qrSvg: offerQrSvg,
     error: !res.ok ? (res.stderr || res.stdout || "paseo pair failed").trim() : undefined,
   };
 }
@@ -903,7 +1227,7 @@ export async function controlPaseoHub(action, payload = {}, opts = {}) {
   if (action === "connect") {
     const args = ["hub", "connect"];
     if (payload.origin && typeof payload.origin === "string" && payload.origin.trim()) {
-      args.push(payload.origin.trim());
+      args.push(validateHubOrigin(payload.origin));
     }
     const res = await runPaseoCli(args, { ...opts, timeoutMs: 20_000 });
     return {

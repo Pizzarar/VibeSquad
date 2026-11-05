@@ -7,7 +7,7 @@ import { createServer as createNetServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, test } from "node:test";
-import { buildLatestJson, computeNextBetaVersion, computeStableVersion } from "../server/release.mjs";
+import { DEFAULT_RELEASE_REPO, buildLatestJson, buildSigningEnv, computeNextBetaVersion, computeStableVersion, ghReleaseArgs } from "../server/release.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
@@ -69,6 +69,11 @@ describe("auto-update config & release helpers", () => {
     assert.equal(computeNextBetaVersion("0.1.1"), "0.1.1-beta.1");
     assert.equal(computeNextBetaVersion("0.1.1-beta.1"), "0.1.1-beta.2");
     assert.equal(computeNextBetaVersion("0.1.1-beta.9"), "0.1.1-beta.10");
+    // 0d: once v0.1.1 shipped as stable, betas move past it (0.1.1-beta.N < 0.1.1 in semver).
+    const shipped = { stableReleased: (b) => b === "0.1.1" };
+    assert.equal(computeNextBetaVersion("0.1.1-beta.5", shipped), "0.1.2-beta.1");
+    assert.equal(computeNextBetaVersion("0.1.1", shipped), "0.1.2-beta.1");
+    assert.equal(computeNextBetaVersion("0.1.2-beta.1", shipped), "0.1.2-beta.2");
     assert.equal(computeStableVersion("0.1.1-beta.3"), "0.1.1");
   });
 
@@ -86,6 +91,29 @@ describe("auto-update config & release helpers", () => {
       stable.platforms["windows-x86_64"].url,
       "https://github.com/Pizzarar/VibeSquad/releases/download/v0.1.2/VibeSquad-setup.exe",
     );
+  });
+
+  test("buildSigningEnv defaults an empty password, preserves explicit ones, and ghReleaseArgs appends --repo", () => {
+    const unset = buildSigningEnv({}, "/tmp/key");
+    assert.equal(unset.TAURI_SIGNING_PRIVATE_KEY_PASSWORD, "");
+    assert.equal(unset.TAURI_SIGNING_PRIVATE_KEY, "/tmp/key");
+    assert.equal(unset.TAURI_SIGNING_PRIVATE_KEY_PATH, "/tmp/key");
+    const secret = buildSigningEnv({ TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "secret" }, "/tmp/key");
+    assert.equal(secret.TAURI_SIGNING_PRIVATE_KEY_PASSWORD, "secret");
+    assert.deepEqual(ghReleaseArgs(["view", "v0.2.1"]), ["release", "view", "v0.2.1", "--repo", DEFAULT_RELEASE_REPO]);
+    assert.equal(DEFAULT_RELEASE_REPO, "Pizzarar/VibeSquad");
+
+    const buildDesktopSrc = readFileSync(join(rootDir, "server", "build-desktop.mjs"), "utf8");
+    assert.match(buildDesktopSrc, /TAURI_SIGNING_PRIVATE_KEY_PASSWORD/);
+    assert.match(buildDesktopSrc, /"signer",\s*"sign",\s*"-f"/);
+    assert.match(buildDesktopSrc, /"-p"/);
+
+    const releaseSrc = readFileSync(join(rootDir, "server", "release.mjs"), "utf8");
+    const ghCalls = releaseSrc.match(/execFileSync\("gh"/g) || [];
+    const rawArrayGhCalls = releaseSrc.match(/execFileSync\("gh",\s*\[/g) || [];
+    assert.ok(ghCalls.length >= 8, "expected at least 8 gh invocations");
+    assert.equal(rawArrayGhCalls.length, 0, "every gh invocation must go through ghReleaseArgs(...)");
+    assert.ok(releaseSrc.includes("export function ghReleaseArgs"), "ghReleaseArgs must be defined");
   });
 });
 
@@ -107,7 +135,7 @@ describe("desktop updater verification: channels, signature rejection, and idle 
       return;
     }
 
-    const validInstallerBytes = Buffer.from("MZ-FAKE-SIGNED-VIBESQUAD-INSTALLER-PAYLOAD-0.1.2");
+    const validInstallerBytes = Buffer.from("MZ-FAKE-SIGNED-VIBESQUAD-INSTALLER-PAYLOAD-0.3.0");
     const validSignature = signPayloadWithTauriKey(validInstallerBytes, keyPath);
 
     let stableManifest = {};
@@ -116,6 +144,10 @@ describe("desktop updater verification: channels, signature rejection, and idle 
 
     const updateServer = createServer((req, res) => {
       if (req.url === "/stable/latest.json") {
+        res.writeHead(302, { location: "/stable/latest-redirected.json" });
+        return res.end();
+      }
+      if (req.url === "/stable/latest-redirected.json") {
         res.writeHead(200, { "content-type": "application/json" });
         return res.end(JSON.stringify(stableManifest));
       }
@@ -124,6 +156,10 @@ describe("desktop updater verification: channels, signature rejection, and idle 
         return res.end(JSON.stringify(betaManifest));
       }
       if (req.url === "/download/VibeSquad-setup.exe") {
+        res.writeHead(302, { location: "/download/VibeSquad-setup-redirected.exe" });
+        return res.end();
+      }
+      if (req.url === "/download/VibeSquad-setup-redirected.exe") {
         res.writeHead(200, { "content-type": "application/octet-stream" });
         return res.end(servedInstallerBytes);
       }
@@ -164,13 +200,23 @@ describe("desktop updater verification: channels, signature rejection, and idle 
       }
       assert.ok(ready, "Headless proxy did not start in time");
 
-      // 1. Default channel is stable
+      // 1. Default channel: stable, except a pre-release build follows beta until the user picks one
+      //    (effective_channel, docs/PLAN_BUGS_BATCH1.md block 0d). Then pick stable explicitly.
       const st0 = JSON.parse((await httpCall({ port: proxyPort, path: "/__desktop/updater/status" })).body);
-      assert.equal(st0.channel, "stable");
+      assert.equal(st0.channel, String(st0.currentVersion).includes("-") ? "beta" : "stable");
+      const pickStable = await httpCall({
+        port: proxyPort,
+        path: "/__desktop/updater/channel",
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ channel: "stable" }),
+      });
+      assert.equal(pickStable.status, 200);
+      assert.equal(JSON.parse(pickStable.body).channel, "stable");
 
-      // 2. Stable channel ignores beta pre-release versions (e.g. 0.1.2-beta.1)
+      // 2. Stable channel ignores beta pre-release versions (e.g. 0.3.0-beta.1)
       stableManifest = {
-        version: "0.1.2-beta.1",
+        version: "0.3.0-beta.1",
         notes: "Beta build",
         pub_date: "2026-11-01T18:00:00Z",
         platforms: { "windows-x86_64": { signature: validSignature, url: downloadUrl } },
@@ -182,7 +228,7 @@ describe("desktop updater verification: channels, signature rejection, and idle 
 
       // 3. Unsigned latest.json (empty signature) is rejected
       stableManifest = {
-        version: "0.1.2",
+        version: "0.3.0",
         notes: "Unsigned build",
         pub_date: "2026-11-01T18:00:00Z",
         platforms: { "windows-x86_64": { signature: "", url: downloadUrl } },
@@ -195,12 +241,12 @@ describe("desktop updater verification: channels, signature rejection, and idle 
 
       // 4. Tampered installer binary is rejected by Minisign verification
       stableManifest = {
-        version: "0.1.2",
+        version: "0.3.0",
         notes: "Tampered build",
         pub_date: "2026-11-01T18:00:00Z",
         platforms: { "windows-x86_64": { signature: validSignature, url: downloadUrl } },
       };
-      servedInstallerBytes = Buffer.from("MZ-TAMPERED-MALICIOUS-BYTES-0.1.2");
+      servedInstallerBytes = Buffer.from("MZ-TAMPERED-MALICIOUS-BYTES-0.3.0");
       const chkTampered = await httpCall({ port: proxyPort, path: "/__desktop/updater/check", method: "POST" });
       assert.equal(chkTampered.status, 400);
       const bTampered = JSON.parse(chkTampered.body);
@@ -208,17 +254,24 @@ describe("desktop updater verification: channels, signature rejection, and idle 
       assert.equal(bTampered.downloaded, false);
       assert.match(bTampered.lastError, /tampered|Signature verification failed/i);
 
-      // 5. Valid signed stable release is downloaded & verified, sets updateAvailable=true without auto-installing
+      // 5. Valid signed stable release is downloaded & verified, waits while an agent turn is mid-flight
+      await httpCall({
+        port: proxyPort,
+        path: "/__desktop/updater/busy",
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ busy: true }),
+      });
       servedInstallerBytes = validInstallerBytes;
       const chkValidStable = await httpCall({ port: proxyPort, path: "/__desktop/updater/check", method: "POST" });
       assert.equal(chkValidStable.status, 200);
       const bValidStable = JSON.parse(chkValidStable.body);
       assert.equal(bValidStable.updateAvailable, true);
-      assert.equal(bValidStable.availableVersion, "0.1.2");
+      assert.equal(bValidStable.availableVersion, "0.3.0");
       assert.equal(bValidStable.downloaded, true);
-      assert.equal(bValidStable.installTriggered, false, "Stable channel should prompt user rather than auto-installing");
+      assert.equal(bValidStable.installTriggered, false, "Stable channel should wait while an agent turn is mid-flight");
 
-      // 6. Beta channel with agent turn mid-flight downloads & verifies 0.1.2-beta.1, waits until turn finishes, then auto-installs
+      // 6. Beta channel with agent turn mid-flight downloads & verifies 0.3.0-beta.1, waits until turn finishes, then auto-installs
       await httpCall({
         port: proxyPort,
         path: "/__desktop/updater/busy",
@@ -227,7 +280,7 @@ describe("desktop updater verification: channels, signature rejection, and idle 
         body: JSON.stringify({ busy: true }),
       });
       betaManifest = {
-        version: "0.1.2-beta.1",
+        version: "0.3.0-beta.1",
         notes: "Rolling beta",
         pub_date: "2026-11-01T18:30:00Z",
         platforms: { "windows-x86_64": { signature: validSignature, url: downloadUrl } },
@@ -243,7 +296,7 @@ describe("desktop updater verification: channels, signature rejection, and idle 
       const bBetaBusy = JSON.parse(switchBeta.body);
       assert.equal(bBetaBusy.channel, "beta");
       assert.equal(bBetaBusy.updateAvailable, true);
-      assert.equal(bBetaBusy.availableVersion, "0.1.2-beta.1");
+      assert.equal(bBetaBusy.availableVersion, "0.3.0-beta.1");
       assert.equal(bBetaBusy.downloaded, true);
       assert.equal(bBetaBusy.agentTurnMidFlight, true);
       assert.equal(bBetaBusy.installTriggered, false, "Beta must wait while an agent turn is mid-flight");
@@ -259,7 +312,7 @@ describe("desktop updater verification: channels, signature rejection, and idle 
       const bBetaIdle = JSON.parse(clearBusy.body);
       assert.equal(bBetaIdle.agentTurnMidFlight, false);
       assert.equal(bBetaIdle.installTriggered, true, "Beta must auto-install as soon as no agent turn is mid-flight");
-      assert.equal(bBetaIdle.installedVersion, "0.1.2-beta.1");
+      assert.equal(bBetaIdle.installedVersion, "0.3.0-beta.1");
     } finally {
       child.kill();
       updateServer.close();

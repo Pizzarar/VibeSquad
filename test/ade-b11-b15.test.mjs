@@ -4,6 +4,7 @@ import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, before, describe, test } from "node:test";
+import { ownerHeaders } from "./helpers/local-owner.mjs";
 
 // ── B11: shouldShowLoadOlder ──────────────────────────────────────────────────
 // Fixed: hides the "Load older" button unless hasMore is explicitly true.
@@ -200,7 +201,7 @@ describe("B14: /__vibesquad/workspace-package-scripts", () => {
 
   function call(path, method = "GET") {
     return new Promise((ok, fail) => {
-      const req = request({ host: "127.0.0.1", port, path, method }, (res) => {
+      const req = request({ host: "127.0.0.1", port, path, method, headers: ownerHeaders() }, (res) => {
         let data = "";
         res.on("data", (c) => (data += c));
         res.on("end", () => ok({ status: res.statusCode, body: data }));

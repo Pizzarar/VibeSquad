@@ -4,22 +4,28 @@ import { useDraft } from "./drafts";
 import { DEMO, sendMessage, spawnTeamAgent, updateAgent } from "./paseo";
 import { buildName, Field, Modal, TITLE_LIMIT, findProfile, useProfiles } from "./TeamActions";
 import { postLog } from "./TeamFeed";
-import { fmtTok, ordOf, usedTokens, type Member, type TeamView } from "./teams";
+import { fmtTok, ordOf, retiredLeadTitle, usedTokens, type Member, type TeamView } from "./teams";
 
 const PARENT = "paseo.parent-agent-id";
 const labelsOf = (m: Member) => m.agent.labels as Record<string, string>;
 
-type Packet = { exists: boolean; path: string };
+type Packet = { exists: boolean; path: string; running?: boolean; error?: string };
+
+const HANDOFF_POLL_MS = 1000;
+const HANDOFF_POLL_LIMIT_MS = 60_000;
+// The remote proxy strips `path` from JSON responses, so fall back to the conventional packet location.
+const packetPathFor = (team: string, lane: string) => `~/.vibesquad/teams/${team}/packet-${lane}.md`;
 
 async function packetStatus(team: string, lane: string): Promise<Packet> {
-  if (DEMO) return { exists: false, path: `~/.vibesquad/teams/${team}/packet-${lane}.md` };
+  if (DEMO) return { exists: false, path: packetPathFor(team, lane) };
   const res = await fetch(`/__vibesquad/handoff?team=${encodeURIComponent(team)}&lane=${encodeURIComponent(lane)}`);
   if (!res.ok) throw new Error(`packet check failed (${res.status})`);
-  return res.json();
+  const p = (await res.json()) as Partial<Packet>;
+  return { ...p, exists: Boolean(p.exists), path: p.path ?? packetPathFor(team, lane) };
 }
 
 async function runHandoff(team: string, lane: string, agentId: string): Promise<Packet & { ran?: boolean; note?: string }> {
-  if (DEMO) return { exists: true, path: `~/.vibesquad/teams/${team}/packet-${lane}.md`, ran: true };
+  if (DEMO) return { exists: true, path: packetPathFor(team, lane), ran: true };
   const res = await fetch("/__vibesquad/handoff", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -27,7 +33,19 @@ async function runHandoff(team: string, lane: string, agentId: string): Promise<
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error ?? `vs handoff failed (${res.status})`);
-  return body;
+  // 202: `vs handoff` is still running server-side (it can take up to 60 s); poll until the packet lands.
+  if (res.status === 202 || body.accepted || body.running) {
+    const deadline = Date.now() + HANDOFF_POLL_LIMIT_MS;
+    let status: Packet = { exists: false, path: packetPathFor(team, lane), running: true };
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, HANDOFF_POLL_MS));
+      status = await packetStatus(team, lane);
+      if (status.exists || !status.running) break;
+    }
+    if (status.error && !status.exists) throw new Error(`vs handoff failed: ${status.error}`);
+    return { ...status, ran: !status.running };
+  }
+  return { ...body, path: body.path ?? packetPathFor(team, lane) };
 }
 
 /** Spawn the ord+1 lead, retitle the old lead, re-parent its live lane workers, and log the handoff. */
@@ -39,20 +57,27 @@ export function HandoffModal({ view, lead, onClose, onCreated }: { view: TeamVie
   const laneName = lane?.name ?? laneId;
   const ord = ordOf(lead.agent);
   const fallbackLeadProfile = lead.agent.provider.startsWith("antigravity-cli") ? "Lead - Gemini" : "Lead - Claude";
-  const profile = findProfile(labelsOf(lead).profile || fallbackLeadProfile, profiles) ?? findProfile(fallbackLeadProfile, profiles);
-  const defaults = defaultSpawnConfigFor(lead.agent.provider);
+  const initialLeadProfile =
+    labelsOf(lead).profile === "Lead - Gemini" || labelsOf(lead).profile === "Lead - Claude"
+      ? labelsOf(lead).profile
+      : fallbackLeadProfile;
+  const [targetProfileName, setTargetProfileName] = useState<string>(initialLeadProfile);
+  const profile = findProfile(targetProfileName, profiles) ?? findProfile(fallbackLeadProfile, profiles);
+  const targetProvider = profile?.provider ?? (targetProfileName === "Lead - Gemini" ? "antigravity-cli" : "claude");
+  const targetModel = profile?.model ?? (targetProfileName === "Lead - Gemini" ? "gemini-4-argon" : "claude-opus-5-5");
+  const defaults = defaultSpawnConfigFor(targetProvider);
   const next = buildName({
     team: team.id,
     laneId,
     laneName,
     role: "lead",
-    profile: profile?.name ?? labelsOf(lead).profile ?? fallbackLeadProfile,
+    profile: profile?.name ?? targetProfileName,
     ord: String(ord + 1),
     topic: "",
     task: "",
     job: "",
   });
-  const oldTitle = `(old) ${(laneName || laneId).toUpperCase()} ord${ord}`;
+  const oldTitle = retiredLeadTitle(laneName || laneId, laneId, ord, labelsOf(lead).job);
 
   const workers = useMemo(
     () =>
@@ -75,7 +100,7 @@ export function HandoffModal({ view, lead, onClose, onCreated }: { view: TeamVie
       .catch((e) => setErr(String(e)));
   }, [team.id, laneId]);
 
-  const packetPath = packet?.path ?? `~/.vibesquad/teams/${team.id}/packet-${laneId}.md`;
+  const packetPath = packet?.path ?? packetPathFor(team.id, laneId);
   const defaultPrompt = `You are the successor lead for the ${laneName} lane (ord${ord + 1}). Read the handoff packet at ${packetPath} first, then continue the lane. The previous lead is now "${oldTitle}"; its live workers have been re-parented to you. Reply confirming takeover so the previous lead can be retired.`;
   const prompt = promptDraft || defaultPrompt;
 
@@ -91,8 +116,8 @@ export function HandoffModal({ view, lead, onClose, onCreated }: { view: TeamVie
       }
       setStep("Spawning successor…");
       const r = await spawnTeamAgent({
-        provider: profile?.provider ?? lead.agent.provider,
-        model: profile?.model ?? lead.agent.model ?? "",
+        provider: targetProvider,
+        model: targetModel,
         modeId: profile?.modeId ?? defaults.modeId,
         thinkingOptionId: profile?.thinkingOptionId,
         featureValues: profile?.featureValues,
@@ -101,7 +126,7 @@ export function HandoffModal({ view, lead, onClose, onCreated }: { view: TeamVie
         sandbox: defaults.sandbox,
         shareMcp: defaults.shareMcp,
         title,
-        labels: { ...next.labels, profile: profile?.name ?? labelsOf(lead).profile ?? fallbackLeadProfile },
+        labels: { ...next.labels, profile: profile?.name ?? targetProfileName },
         prompt,
         cwd: lead.agent.cwd,
       });
@@ -152,10 +177,18 @@ export function HandoffModal({ view, lead, onClose, onCreated }: { view: TeamVie
       <Field label="New title">
         <input value={title} onChange={(e) => setTitle(e.target.value)} />
       </Field>
-      <div className="pills" style={{ margin: "8px 0" }}>
+      <div className="pills" style={{ margin: "8px 0", display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
         <span className="chip">
-          {lead.agent.provider}/{lead.agent.model ?? "?"}
+          {targetProvider}/{targetModel} ({profile?.name ?? targetProfileName})
         </span>
+        <button
+          type="button"
+          className="btn ghost small"
+          data-testid="handoff-switch-provider-btn"
+          onClick={() => setTargetProfileName((prev) => (prev === "Lead - Gemini" ? "Lead - Claude" : "Lead - Gemini"))}
+        >
+          ⇄ Switch Provider (Claude ↔ Gemini)
+        </button>
         <span className="chip">role=lead ord={ord + 1}</span>
         <span className="chip">old → {oldTitle} (role=former-lead)</span>
         <span className="chip">{workers.length} worker(s) re-parented</span>

@@ -10,6 +10,8 @@ import {
   effectiveAgentRole,
   formatDisplayTitle,
   isBrainstormAgent,
+  laneCodeFor,
+  laneCodesForTeam,
   isDigestAgent,
   isRetiredAgent,
   kindOf,
@@ -53,7 +55,7 @@ function makeTempEnv() {
           name: "Main Project",
           paths: ["main-project"],
           lanes: [
-            { id: "main-game", name: "Main Game" },
+            { id: "main-game", name: "Main Game", aliases: ["main-old"] },
             { id: "ui-lab", name: "UI Lab" },
           ],
         },
@@ -241,7 +243,7 @@ test("Done-when #1: Zero title/name-prefix matching for identity in plugin/serve
   assert.equal(teamsOrdOf(misleadingLeadTitleAgent), 1);
   assert.equal(
     formatDisplayTitle({ role: "lead", laneName: "Site Polish", ord: "3" }),
-    "★ SITE POLISH ord3",
+    "★ Sit3",
   );
 });
 
@@ -345,38 +347,70 @@ test("Done-when #2: Spawn validation handles no team, wrong team, unknown lane +
         "Expected team-mismatch metric in site log",
       );
 
-      // Case 2: Spawn with unknown lane ("unknown-lane-xyz") + matching cwd ("/path/to/main-project/worktree-1")
-      // -> auto-fixes lane="main-game", team="efi" and logs lane-autofix
+      // Case 2: Spawn with NO lane + cwd in a one-lane Squad ("/path/to/example-site/worktree-1")
+      // -> lane-autofix fills the blank: lane="site-polish", team="site", and logs lane-autofix
       agents.set("agent-autofix", {
         id: "agent-autofix",
-        title: "EFI · worker",
-        cwd: "/path/to/main-project/worktree-1",
+        title: "SITE · worker",
+        cwd: "/path/to/example-site/worktree-1",
         status: "running",
         labels: {
-          lane: "unknown-lane-xyz",
           role: "worker",
         },
       });
       await onCreated({ agent: agents.get("agent-autofix") }, { paseo });
       const autofixUpdate = labelUpdates.find((u) => u.agentId === "agent-autofix");
       assert.ok(autofixUpdate, "Expected setLabels on agent-autofix");
-      assert.equal(autofixUpdate.labels.lane, "main-game");
-      assert.equal(autofixUpdate.labels.team, "efi");
-
-      const efiLogPath = join(env.vsHome, "teams", "efi", "log.jsonl");
-      assert.equal(existsSync(efiLogPath), true);
-      const efiLogs = readFileSync(efiLogPath, "utf8")
+      assert.equal(autofixUpdate.labels.lane, "site-polish");
+      assert.equal(autofixUpdate.labels.team, "site");
+      const siteLogs2 = readFileSync(siteLogPath, "utf8")
         .trim()
         .split(/\r?\n/)
         .map((l) => JSON.parse(l));
       assert.equal(
-        efiLogs.some(
+        siteLogs2.some(
           (e) =>
             e.type === "metric" &&
-            e.text.includes("lane-autofix: callerLane=unknown-lane-xyz derivedLane=main-game team=efi"),
+            e.text.includes("lane-autofix: callerLane=(none) derivedLane=site-polish team=site"),
         ),
         true,
-        "Expected lane-autofix metric in efi log",
+        "Expected lane-autofix metric in site log",
+      );
+
+      // Case 2a: NO lane + team label + cwd in a multi-lane Squad -> orphan, never the Squad's first lane
+      agents.set("agent-multilane", {
+        id: "agent-multilane",
+        title: "EFI · worker",
+        cwd: "/path/to/main-project/worktree-1",
+        status: "running",
+        labels: { team: "efi", role: "worker" },
+      });
+      await onCreated({ agent: agents.get("agent-multilane") }, { paseo });
+      const multiUpdate = labelUpdates.find((u) => u.agentId === "agent-multilane");
+      assert.ok(multiUpdate, "Expected setLabels on agent-multilane");
+      assert.equal(multiUpdate.labels.orphan, "1");
+      assert.notEqual(multiUpdate.labels.lane, "main-game", "no lanes[0] guess");
+
+      // Case 2b: an explicit lane that is not in teams.json is kept (never overwritten from cwd), no lane-autofix logged
+      agents.set("agent-explicit", {
+        id: "agent-explicit",
+        title: "EFI · worker",
+        cwd: "/path/to/main-project/worktree-1",
+        status: "running",
+        labels: { lane: "zz-x", role: "worker" },
+      });
+      await onCreated({ agent: agents.get("agent-explicit") }, { paseo });
+      const explicitUpdate = labelUpdates.find((u) => u.agentId === "agent-explicit");
+      assert.notEqual(explicitUpdate?.labels.lane, "main-game", "explicit lane must not be overwritten from cwd");
+      assert.ok(!explicitUpdate || explicitUpdate.labels.lane === "zz-x", "explicit lane kept");
+      const efiLogPath = join(env.vsHome, "teams", "efi", "log.jsonl");
+      const efiLogs2 = existsSync(efiLogPath)
+        ? readFileSync(efiLogPath, "utf8").trim().split(/\r?\n/).map((l) => JSON.parse(l))
+        : [];
+      assert.equal(
+        efiLogs2.some((e) => e.type === "metric" && e.text.includes("callerLane=zz-x")),
+        false,
+        "no lane-autofix metric for an explicit lane",
       );
 
       // Case 4: Unmatched spawn (unknown lane "mystery-lane" + unmatched cwd "C:/tmp/scratch")
@@ -437,6 +471,8 @@ test("Done-when #2: Spawn validation handles no team, wrong team, unknown lane +
       assert.equal(assignPatches[0].patch.labels.team, "efi");
       assert.equal(assignPatches[0].patch.labels.orphan, "");
 
+      // The daemon merges the patch and pushes the agent back (assignAgentToLane no longer mutates it).
+      uiMap.set(uiOrphanAgent.id, { ...uiOrphanAgent, labels: { ...uiOrphanAgent.labels, ...assignPatches[0].patch.labels } });
       const viewsAfter = buildTeamViews(resolveMembers(uiMap));
       assert.equal(
         viewsAfter.some((v) => v.team.id === "_unassigned"),
@@ -621,7 +657,7 @@ test("Done-when #4: vs migrate identity --dry-run lists all agents with proposed
       cwd: "/path/to/example-site",
       labels: { role: "worker" },
     });
-    // 4. Legacy team-only fallback
+    // 4. Team label, no lane: an orphan, never the Squad's first lane
     const fTeamOnly = env.writeAgent({
       id: "ag-team-only",
       title: "PLUGINS · audit",
@@ -647,7 +683,8 @@ test("Done-when #4: vs migrate identity --dry-run lists all agents with proposed
     assert.match(dryText.stdout, /ag-alias \(idle\).*lane=main-old.*->.*lane=main-game, team=efi.*\[CHANGED\]/);
     assert.match(dryText.stdout, /ag-archived-cwd \(archived\).*\[CHANGED\]/);
     assert.match(dryText.stdout, /ag-orphan \(idle\).*\[ORPHAN\]/);
-    assert.match(dryText.stdout, /total=5 changed=4 unchanged=1 orphans=1/);
+    assert.match(dryText.stdout, /ag-team-only \(idle\).*\[ORPHAN\]/);
+    assert.match(dryText.stdout, /total=5 changed=4 unchanged=1 orphans=2 archived-orphans=0/);
 
     // Verify --dry-run did NOT modify files or create backups
     assert.equal(readFileSync(fAlias, "utf8"), snapshotBeforeDryRun);
@@ -661,7 +698,7 @@ test("Done-when #4: vs migrate identity --dry-run lists all agents with proposed
     assert.equal(out1.total, 5);
     assert.equal(out1.changed, 4);
     assert.equal(out1.unchanged, 1);
-    assert.equal(out1.orphans, 1);
+    assert.equal(out1.orphans, 2);
     assert.ok(out1.backupDir, "Expected backupDir to be created");
     assert.equal(existsSync(join(out1.backupDir, "teams.json")), true, "Expected teams.json backup");
     assert.equal(
@@ -689,9 +726,9 @@ test("Done-when #4: vs migrate identity --dry-run lists all agents with proposed
       role: "worker",
     });
     assert.deepEqual(JSON.parse(readFileSync(fTeamOnly, "utf8")).labels, {
-      lane: "plugins",
       team: "plugins",
       role: "brainstorm",
+      orphan: "1",
     });
     assert.deepEqual(JSON.parse(readFileSync(fOrphan, "utf8")).labels, {
       lane: "unknown-free-text",
@@ -709,4 +746,73 @@ test("Done-when #4: vs migrate identity --dry-run lists all agents with proposed
   } finally {
     env.cleanup();
   }
+});
+
+const CODE_SQUAD = {
+  id: "vibesquad",
+  lanes: [
+    { id: "vibesquad", name: "VibeSquad" },
+    { id: "pinned", name: "Pinned Teams" },
+    { id: "art-direction", name: "Art Direction" },
+    { id: "token-checker", name: "Token Checker" },
+    { id: "basic-ade-agentic-development-en", name: "Basic ADE (Agentic Development Enviroment)" },
+    { id: "bug-chaser", name: "Bug Chaser" },
+    { id: "quickstart", name: "Quickstart" },
+  ],
+};
+
+test("lane codes: generated rule, stable, deduped within a Squad", () => {
+  const codes = laneCodesForTeam(CODE_SQUAD);
+  assert.deepEqual(codes, {
+    vibesquad: "Hub",
+    pinned: "Pin",
+    "art-direction": "Art",
+    "token-checker": "Tok",
+    "basic-ade-agentic-development-en": "ADE",
+    "bug-chaser": "Bug",
+    quickstart: "Qui",
+  });
+  // Stable: same registry, same answer; also through the lookup helper.
+  assert.deepEqual(laneCodesForTeam(CODE_SQUAD), codes);
+  assert.equal(laneCodeFor("bug-chaser", [CODE_SQUAD]), "Bug");
+
+  // Dedupe: a clashing lane gets the next candidate; a stored code is never displaced.
+  const clash = laneCodesForTeam({
+    lanes: [
+      { id: "bug-chaser", name: "Bug Chaser" },
+      { id: "bugs-two", name: "Bugs Two" },
+      { id: "bugs-three", name: "Bugs Three" },
+    ],
+  });
+  assert.equal(clash["bug-chaser"], "Bug");
+  assert.equal(clash["bugs-two"], "Bugs");
+  assert.equal(new Set(Object.values(clash).map((c) => c.toLowerCase())).size, 3);
+  const stored = laneCodesForTeam({
+    lanes: [
+      { id: "a-lane", name: "Alpha" },
+      { id: "b-lane", name: "Bravo", code: "Alp" },
+    ],
+  });
+  assert.equal(stored["b-lane"], "Alp");
+  assert.equal(stored["a-lane"], "Alph");
+  // Invalid stored codes are ignored.
+  assert.equal(laneCodesForTeam({ lanes: [{ id: "x", name: "Xylo", code: "toolongcode" }] }).x, "Xyl");
+});
+
+test("formatDisplayTitle: every role, with and without an objective", () => {
+  const base = { laneId: "vibesquad", laneName: "VibeSquad", code: "Hub" };
+  assert.equal(formatDisplayTitle({ ...base, role: "lead", ord: 6, job: "squad view" }), "★ Hub6 · squad view");
+  assert.equal(formatDisplayTitle({ ...base, role: "lead", ord: "6" }), "★ Hub6");
+  assert.equal(formatDisplayTitle({ ...base, role: "former-lead", ord: "5", job: "drop files" }), "(old) Hub5 · drop files");
+  assert.equal(formatDisplayTitle({ ...base, role: "former-lead", ord: "5" }), "(old) Hub5");
+  assert.equal(formatDisplayTitle({ ...base, role: "brainstorm" }), "Hub Buddy");
+  assert.equal(formatDisplayTitle({ ...base, role: "brainstorm", topic: "vibesquad" }), "Hub Buddy");
+  assert.equal(formatDisplayTitle({ ...base, role: "brainstorm", topic: "naming" }), "Hub Buddy · naming");
+  assert.equal(formatDisplayTitle({ ...base, role: "worker", ord: "6", job: "drop files" }), "Hub6 · drop files");
+  assert.equal(formatDisplayTitle({ ...base, role: "worker", ord: "6" }), "Hub6 · worker");
+  // No stored code: the generated one is used.
+  assert.equal(formatDisplayTitle({ laneId: "bug-chaser", laneName: "Bug Chaser", role: "lead", ord: "4" }), "★ Bug4");
+  assert.equal(formatDisplayTitle({ laneId: "vibesquad", laneName: "VibeSquad", role: "brainstorm" }), "Hub Buddy");
+  // Retired brainstorms keep their title.
+  assert.equal(formatDisplayTitle({ ...base, role: "former-brainstorm", title: "Hub Buddy" }), "Hub Buddy");
 });

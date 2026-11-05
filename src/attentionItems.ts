@@ -47,7 +47,8 @@ const ORDER: Record<ItemKind, number> = { permission: 0, label: 1, unread: 2, er
 export function attentionItems(members: Member[]): AttentionItem[] {
   const out: AttentionItem[] = [];
   for (const m of members) {
-    if (m.kind === "old-lead") continue;
+    // Retired leads and archived/closed agents never need you (same rule as the badge counts).
+    if (m.kind === "old-lead" || m.agent.archivedAt || m.agent.status === "closed") continue;
     const kind = kindOfAttention(m);
     if (!kind) continue;
     const item: AttentionItem = { id: m.agent.id, agent: m.agent, who: whoOf(m.agent), reason: m.attention!.reason, kind };

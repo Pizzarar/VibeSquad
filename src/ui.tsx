@@ -31,7 +31,7 @@ import {
   type TeamView,
 } from "./teams";
 import { Avatar, TokenMeter, providerSpec } from "./pixel";
-import { getPanes, modeFromEvent, openAgent, subscribePanes, useAgentPane } from "./panes";
+import { getPanes, modeFromEvent, openAgent, subscribePanes, useAgentPane, useShownPane } from "./panes";
 
 export function ago(iso?: string | null, now = Date.now()): string {
   if (!iso) return "?";
@@ -239,7 +239,7 @@ const getActiveId = () => {
 export const useIsSelected = (id: string) => useAgentPane(id) !== null;
 /** Row classes for an open agent: lit edge, cyan for the left pane, violet for the right. */
 export function usePaneClass(id: string): string {
-  const pane = useAgentPane(id);
+  const pane = useShownPane(id);
   return pane ? `sel pane-${pane}` : "";
 }
 
@@ -298,6 +298,7 @@ export function sameMember(a: Member | null, b: Member | null): boolean {
         x.status === y.status &&
         x.requiresAttention === y.requiresAttention &&
         (x.pendingPermissions?.length ?? 0) === (y.pendingPermissions?.length ?? 0) &&
+        usedTokens(a) === usedTokens(b) &&
         x.lastUsage?.contextWindowUsedTokens === y.lastUsage?.contextWindowUsedTokens &&
         xl["vs.mock-tokens"] === yl["vs.mock-tokens"] &&
         xl["vs.restarted-from"] === yl["vs.restarted-from"] &&
@@ -370,7 +371,7 @@ export const AgentRow = memo(
           <span className="prov-inline" style={{ color: prov.color }}>
             {prov.symbol} {a.model ?? a.provider}
           </span>{" "}
-          · {shortPath(a.cwd)} · <Ago iso={a.updatedAt} />
+          · {shortPath(a.cwd)} · <Ago iso={a.updatedAt} /> ago
         </span>
         <span className="row-actions">
           <AgentActions agent={a} archive={archive} />
@@ -380,7 +381,7 @@ export const AgentRow = memo(
             <BrainstormCtxPill agent={a} team={m.team} />
           ) : (
             <TokenMeter
-              used={a.lastUsage?.contextWindowUsedTokens}
+              used={usedTokens(m)}
               budget={budgetFor(m)}
               ladder={m.kind === "lead" ? leadLadderFor(m.team) : undefined}
             />
@@ -548,7 +549,7 @@ const TreeRow = memo(
             <TreeCaret id={a.id} />
           </span>
           <TokenMeter
-            used={a.lastUsage?.contextWindowUsedTokens}
+            used={usedTokens(m)}
             budget={budgetFor(m)}
             ladder={m.kind === "lead" ? leadLadderFor(m.team) : undefined}
           />
