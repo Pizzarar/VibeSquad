@@ -149,18 +149,20 @@ const hasTeam = (pin: Pin) => !!pin.lead || pin.workers.length > 0 || pin.topicB
 
 function TeamRow({ pin, m, glyph, depth, testId, active }: { pin: Pin; m: Member; glyph: string; depth: number; testId: string; active: boolean }) {
   const shown = useIsShown(m.agent.id);
+  const rawTitle = memberTitle(m);
+  const cleanTitle = rawTitle.replace(/^(?:[★💬•]\s*)+/, "");
   return (
     <button
       type="button"
       className={`pin-team-row ${active || shown ? "on" : ""}`}
       style={{ paddingLeft: 6 + depth * 14 }}
       data-testid={testId}
-      title={`Open ${memberTitle(m)} (${m.agent.status})`}
+      title={`Open ${rawTitle} (${m.agent.status})`}
       onClick={() => openPinMember(pin, m.agent.id)}
     >
       <StatusDot agent={m.agent} />
       <span className="pin-row-name">
-        {glyph} {memberTitle(m)}
+        {glyph} {cleanTitle}
       </span>
       <span className="muted small">{m.agent.status === "running" ? "running" : "idle"}</span>
     </button>

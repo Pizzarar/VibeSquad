@@ -3,7 +3,7 @@
 
 import type { CSSProperties } from "react";
 import type { AgentType } from "./teams";
-import { CAST_CELL, CAST_URL, CAST_VARIANTS, castCell, castRing } from "./cast";
+import { CAST_CELL, CAST_SHOWN, CAST_URL, CAST_VARIANTS, castCell } from "./cast";
 
 function hash(s: string): number {
   let h = 2166136261;
@@ -113,16 +113,15 @@ export function Avatar({
   const tag = String((hash(id) % 90) + 10);
   const retired = agentType === "retired-lead";
   // Snap to 16 (half) or a whole multiple of 32 so the art never drops pixel rows or columns.
-  const snapped = size < 24 ? 16 : Math.max(CAST_CELL, Math.round(size / CAST_CELL) * CAST_CELL);
+  const snapped = size < 24 ? 16 : Math.max(CAST_SHOWN, Math.round(size / CAST_SHOWN) * CAST_SHOWN);
   const scale = snapped / CAST_CELL;
   const cell = snapped;
   const { x, y } = castCell(id, agentType, variant);
   const roleLabel = agentType === "brainstorm" ? "Brainstorm" : agentType;
-  const ring = castRing();
 
   return (
     <span
-      className={`avatar type-${agentType} prov-${p.key} ${retired ? "is-retired" : ""} ${ring ? "has-ring" : "no-ring"}`}
+      className={`avatar type-${agentType} prov-${p.key} ${retired ? "is-retired" : ""}`}
       style={{ width: snapped, height: snapped, "--prov": p.color, "--prov-dim": p.dim } as CSSProperties}
       title={`${roleLabel} · ${p.name} (#${tag})`}
     >

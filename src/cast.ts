@@ -1,9 +1,11 @@
-// Hand-drawn cast: public/cast.png is a 128x320 sheet of 32x32 cells. One row per role,
+// Hand-drawn cast: public/cast.png is a 256x640 sheet of 64x64 cells (shown at 32 CSS px, half scale). One row per role,
 // four variant columns. The agent id picks the column so an agent always gets the same sprite.
 
 import type { AgentType } from "./teams";
 
-export const CAST_CELL = 32;
+export const CAST_CELL = 64;
+/** Base CSS size of one avatar slot; the sheet is drawn at CAST_CELL and shown at this size. */
+export const CAST_SHOWN = 32;
 export const CAST_VARIANTS = 4;
 // Respect the Vite base (remote builds use a relative or sub-path base); plain node has no import.meta.env.
 export const CAST_URL = `${(import.meta as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/"}cast.png`;
@@ -21,17 +23,6 @@ export const CAST_ROWS: AgentType[] = [
   "art",
   "unknown",
 ];
-
-/** localStorage key for the optional neon provider ring around the sprite (default OFF). */
-export const CAST_RING_KEY = "vs-cast-ring";
-
-export function castRing(): boolean {
-  try {
-    return typeof window !== "undefined" && window.localStorage.getItem(CAST_RING_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
 
 export function castRow(agentType: string | undefined): number {
   const i = CAST_ROWS.indexOf(agentType as AgentType);

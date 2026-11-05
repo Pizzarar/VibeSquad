@@ -455,6 +455,53 @@ export function oppositeProviderTarget(provider: string, profileName?: string): 
   return null;
 }
 
+export type ProviderOption = { id: string; label: string; model: string; modeId: string };
+
+export const PROVIDER_OPTIONS: ProviderOption[] = [
+  { id: "antigravity-cli", label: "◆ Gemini", model: "gemini-4-argon", modeId: "accept-edits" },
+  { id: "claude", label: "✶ Claude", model: "claude-opus-5-5", modeId: "auto" },
+  { id: "opencode", label: "▲ OpenCode", model: "deepseek/deepseek-v4-pro", modeId: "auto" },
+  { id: "codex", label: "● Codex", model: "gpt-5.4", modeId: "auto" },
+];
+
+export function normalizeProviderId(provider: string): string {
+  const norm = String(provider ?? "").trim().toLowerCase().split("/")[0];
+  if (norm === "antigravity" || norm === "gemini" || norm === "antigravity-cli" || norm.startsWith("gemini-")) return "antigravity-cli";
+  if (norm === "claude" || norm === "anthropic" || norm.startsWith("claude-")) return "claude";
+  if (norm === "codex" || norm === "openai") return "codex";
+  return norm;
+}
+
+export type ProviderSwitchTarget = { provider: string; model: string; modeId: string; profile?: string; thinkingOptionId?: string | null };
+
+/** Where choosing `targetProviderId` in the provider dropdown lands; null when it is the current provider or unknown. */
+export function resolveProviderSwitchTarget(currentProvider: string, targetProviderId: string, profileName?: string, role?: string): ProviderSwitchTarget | null {
+  const targetId = normalizeProviderId(targetProviderId);
+  if (targetId === normalizeProviderId(currentProvider)) return null;
+  const opt = PROVIDER_OPTIONS.find((o) => o.id === targetId);
+  if (!opt) return null;
+  let profile: string | undefined;
+  if (targetId === "claude" || targetId === "antigravity-cli") {
+    if (role === "brainstorm") {
+      profile = targetId === "claude" ? "Brainstorm - Claude" : "Brainstorm - Gemini";
+    } else if (role === "lead") {
+      profile = targetId === "claude" ? "Lead - Claude" : "Lead - Gemini";
+    } else {
+      const rawProf = String(profileName ?? "").trim();
+      if (rawProf) {
+        // Only flip to the counterpart profile if `profileName` does NOT already point at the target provider,
+        // otherwise an earlier switch leaves us inverting right back to the provider we're leaving.
+        const alreadyTarget =
+          targetId === "antigravity-cli"
+            ? /(?:Gemini|Flash)$/i.test(rawProf)
+            : /(?:Claude|Sonnet|Opus|Haiku)$/i.test(rawProf);
+        profile = alreadyTarget ? rawProf : oppositeProviderTarget(currentProvider, profileName)?.profile;
+      }
+    }
+  }
+  return { provider: opt.id, model: opt.model, modeId: opt.modeId, profile };
+}
+
 export type DrawerHeaderProps = {
   agent: PaseoAgent;
   agentType: AgentType;
@@ -470,6 +517,10 @@ export type DrawerHeaderProps = {
   active: boolean;
   onClose: () => void;
   onSuccessor?: () => void;
+  /** Staged (not-yet-committed) provider switch from the top-bar dropdown; null when none is pending. */
+  stagedSwitch?: ProviderSwitchTarget | null;
+  /** Controlled setter for stagedSwitch; when omitted DrawerHeader keeps its own internal fallback state. */
+  onStageSwitch?: (target: ProviderSwitchTarget | null) => void;
   isBs: boolean;
   isTopicBs: boolean;
   topicName: string;
@@ -485,7 +536,7 @@ export type DrawerHeaderProps = {
   restartK: number;
   restarting: boolean;
   planHandedOff: boolean;
-  doRestart: (reason: string, pendingPrompt?: string, profileName?: string) => Promise<unknown>;
+  doRestart: (reason: string, pendingPrompt?: string, profileName?: string, model?: string, modeId?: string, thinkingOptionId?: string | null) => Promise<unknown>;
   summaryOpen: boolean;
   toggleSummary: () => void;
   summaryText: string;
@@ -627,6 +678,8 @@ export function DrawerHeader({
   active,
   onClose,
   onSuccessor,
+  stagedSwitch,
+  onStageSwitch,
   isBs,
   isTopicBs,
   topicName,
@@ -679,9 +732,23 @@ export function DrawerHeader({
   );
   const modelSubmittedRef = useRef<string | null>(null);
   const [modelError, setModelError] = useState("");
+  const [internalStagedSwitch, setInternalStagedSwitch] = useState<ProviderSwitchTarget | null>(null);
+  const staged = stagedSwitch !== undefined ? stagedSwitch : internalStagedSwitch;
+  const stageSwitch = (target: ProviderSwitchTarget | null) => {
+    if (onStageSwitch) onStageSwitch(target);
+    else setInternalStagedSwitch(target);
+  };
+  const effectiveProvider = staged ? staged.provider : agent.provider;
+  const effectiveProv = providerSpec(effectiveProvider);
   const submitModel = (next: string) => {
     modelSubmittedRef.current = next;
     setModelError("");
+    if (staged) {
+      // Staging: pick the model for the *target* provider without touching the old agent.
+      setModelValue(next);
+      stageSwitch({ ...staged, model: next });
+      return;
+    }
     setModelHelper(agent, next).catch((e) => {
       modelSubmittedRef.current = null;
       setModelValue(agent.model ?? "");
@@ -701,23 +768,28 @@ export function DrawerHeader({
     modelSubmittedRef.current = null;
   }, [agent.model]);
 
+  // The internal fallback staging state must not leak into the next agent when this drawer re-renders for a new id.
   useEffect(() => {
-    const cached = providerModelsCache.get(agent.provider);
+    setInternalStagedSwitch(null);
+  }, [agent.id]);
+
+  useEffect(() => {
+    const cached = providerModelsCache.get(effectiveProvider);
     if (cached && cached.length > 0) {
       setLiveModels(cached);
       return;
     }
     setLiveModels([]);
-    if (DEMO || !agent.provider) return;
+    if (DEMO || !effectiveProvider) return;
     let cancelled = false;
-    listProviderModels(agent.provider)
+    listProviderModels(effectiveProvider)
       .then((res) => {
         if (cancelled) return;
         const list = Array.isArray(res?.models)
           ? res.models.filter((m) => typeof m?.id === "string" && m.id.trim().length > 0)
           : [];
         if (list.length > 0) {
-          providerModelsCache.set(agent.provider, list);
+          providerModelsCache.set(effectiveProvider, list);
         }
         setLiveModels(list);
       })
@@ -725,9 +797,9 @@ export function DrawerHeader({
     return () => {
       cancelled = true;
     };
-  }, [agent.provider]);
+  }, [effectiveProvider]);
 
-  const modelOptions = buildProviderModelOptions(agent.provider, modelValue || agent.model, liveModels);
+  const modelOptions = buildProviderModelOptions(effectiveProvider, modelValue || staged?.model || agent.model, liveModels);
   const modelListId = `drawer-model-list-${agent.id}`;
 
   const agentLabels = (agent.labels ?? {}) as Record<string, string>;
@@ -749,72 +821,110 @@ export function DrawerHeader({
   const railCardVisible = useRailCardVisible();
   const compact = !!pinFocus?.agentId && shownHere && inLane && railCardVisible && !!barSlot && !!cardSlot;
 
-  // Provider switch: the counterpart profile to flip to (⇄ Claude ↔ Gemini). Hoisted so the compact
-  // top bar and the full drawer share one button + handler.
-  const nextProfile = switchTarget
-    ? switchTarget.profile ??
-      (kindOf(agent) === "lead"
-        ? (switchTarget.provider === "claude" ? "Lead - Claude" : "Lead - Gemini")
-        : isBs
-          ? (switchTarget.provider === "claude" ? "Brainstorm - Claude" : "Brainstorm - Gemini")
-          : undefined)
-    : undefined;
+  // Provider switch: one handler shared by the dropdown and the legacy ⇄ button (compact bar + full drawer).
+  const switchToProvider = async (targetProviderId: string) => {
+    const role = kindOf(agent);
+    const target = resolveProviderSwitchTarget(agent.provider, targetProviderId, agentLabels.profile, role === "lead" || isBs ? (role === "lead" ? "lead" : "brainstorm") : undefined);
+    if (!target) return;
+    const nextProfile = target.profile;
+    setSwitchBusy(true);
+    setReloadError("");
+    try {
+      const nextLabels = {
+        ...agentLabels,
+        ...(nextProfile ? { profile: nextProfile } : {}),
+      };
+      if (DEMO) {
+        upsertLocalAgent({
+          ...agent,
+          provider: target.provider,
+          model: target.model,
+          currentModeId: target.modeId,
+          labels: nextLabels,
+        });
+        return;
+      }
+      if (isBs && nextProfile) setLastBrainstormProfile(nextProfile);
+      // A Lead's live labels.profile must stay intact: the successor is spawned, this agent isn't flipped in place.
+      if (kindOf(agent) !== "lead") await updateAgent(agent.id, { labels: nextLabels });
+      if (kindOf(agent) === "lead" && onSuccessor) {
+        onSuccessor();
+      } else if (isBs) {
+        await doRestart("provider-switch", undefined, nextProfile);
+      } else {
+        const dc = daemonClient as any;
+        const snap = await dc.createAgent({
+          config: {
+            provider: target.provider,
+            model: target.model,
+            modeId: target.modeId,
+            cwd: agent.cwd,
+            title: agent.title ?? agent.id,
+          },
+          labels: nextLabels,
+        });
+        const newId = snap?.agent?.id ?? snap?.id;
+        if (newId) openAgentInTab(newId);
+      }
+    } catch (e) {
+      setReloadError(`Switch provider failed: ${e instanceof Error ? e.message : e}`);
+    } finally {
+      setSwitchBusy(false);
+    }
+  };
   const providerSwitchBtn = switchTarget && !agent.archivedAt ? (
     <button
       data-testid="drawer-switch-provider-btn"
       className="btn ghost small"
-      title={`Switch this ${kindOf(agent) || "agent"} from ${agent.provider} to ${nextProfile || switchTarget.label}`}
+      title={`Switch this ${kindOf(agent) || "agent"} from ${agent.provider} to ${switchTarget.label.replace("⇄ Switch to ", "")}`}
       disabled={switchBusy}
-      onClick={async () => {
-        setSwitchBusy(true);
-        setReloadError("");
-        try {
-          const nextLabels = {
-            ...agentLabels,
-            ...(nextProfile ? { profile: nextProfile } : {}),
-          };
-          if (DEMO) {
-            upsertLocalAgent({
-              ...agent,
-              provider: switchTarget.provider,
-              model: switchTarget.model,
-              currentModeId: switchTarget.modeId,
-              labels: nextLabels,
-            });
-            return;
-          }
-          if (isBs && nextProfile) setLastBrainstormProfile(nextProfile);
-          // A Lead's live labels.profile must stay intact: the successor is spawned, this agent isn't flipped in place.
-          if (kindOf(agent) !== "lead") await updateAgent(agent.id, { labels: nextLabels });
-          if (kindOf(agent) === "lead" && onSuccessor) {
-            onSuccessor();
-          } else if (isBs) {
-            await doRestart("provider-switch", undefined, nextProfile);
-          } else {
-            const dc = daemonClient as any;
-            const snap = await dc.createAgent({
-              config: {
-                provider: switchTarget.provider,
-                model: switchTarget.model,
-                modeId: switchTarget.modeId,
-                cwd: agent.cwd,
-                title: agent.title ?? agent.id,
-              },
-              labels: nextLabels,
-            });
-            const newId = snap?.agent?.id ?? snap?.id;
-            if (newId) openAgentInTab(newId);
-          }
-        } catch (e) {
-          setReloadError(`Switch provider failed: ${e instanceof Error ? e.message : e}`);
-        } finally {
-          setSwitchBusy(false);
-        }
-      }}
+      onClick={() => void switchToProvider(switchTarget.provider)}
     >
       {switchBusy ? "…" : switchTarget.label}
     </button>
   ) : null;
+  const currentProviderId = normalizeProviderId(agent.provider);
+  const providerKnown = PROVIDER_OPTIONS.some((o) => o.id === currentProviderId);
+  // A Buddy/Lead picks its provider through its profile, which only exists for Claude/Gemini.
+  const profileBound = isBs || kindOf(agent) === "lead";
+  const providerSelect = (
+    <select
+      data-testid="drawer-provider-select"
+      className="drawer-provider-select"
+      style={{ color: effectiveProv.color, borderColor: effectiveProv.color }}
+      value={providerKnown ? normalizeProviderId(effectiveProvider) : effectiveProvider}
+      disabled={switchBusy || !!agent.archivedAt}
+      title={`Provider: ${effectiveProvider}`}
+      onChange={(e) => {
+        const val = e.target.value;
+        // Choosing the current provider again just clears any pending staged switch.
+        if (normalizeProviderId(val) === normalizeProviderId(agent.provider)) {
+          stageSwitch(null);
+          setModelValue(agent.model ?? "");
+          return;
+        }
+        // Stage the switch in the top bar only; the actual restart/creation happens on the next send.
+        const role = kindOf(agent);
+        const target = resolveProviderSwitchTarget(
+          agent.provider,
+          val,
+          agentLabels.profile,
+          role === "lead" || isBs ? (role === "lead" ? "lead" : "brainstorm") : undefined,
+        );
+        if (!target) return;
+        stageSwitch(target);
+        setModelValue(target.model);
+        if (isBs && target.profile) setLastBrainstormProfile(target.profile);
+      }}
+    >
+      {!providerKnown && <option value={effectiveProvider}>{effectiveProvider}</option>}
+      {PROVIDER_OPTIONS.map((o) => (
+        <option key={o.id} value={o.id} disabled={profileBound && o.id !== "claude" && o.id !== "antigravity-cli" && o.id !== normalizeProviderId(effectiveProvider)}>
+          {o.label}
+        </option>
+      ))}
+    </select>
+  );
 
   useEffect(() => {
     if (!active) return;
@@ -822,8 +932,12 @@ export function DrawerHeader({
       if (e.shiftKey && e.key === "Tab") {
         e.preventDefault();
         const modes = !DEMO && agent.availableModes?.length ? agent.availableModes : FALLBACK_MODES;
-        const next = nextModeInCycle(modes, agent.currentModeId ?? null);
-        if (!modeBusy) {
+        const currentMode = staged ? staged.modeId ?? agent.currentModeId ?? null : agent.currentModeId ?? null;
+        const next = nextModeInCycle(modes, currentMode);
+        if (staged) {
+          // Cycle the staged switch's mode, never the old provider's daemon session.
+          stageSwitch({ ...staged, modeId: next });
+        } else if (!modeBusy) {
           setModeBusy(true);
           setModeHelper(agent, next).finally(() => setModeBusy(false));
         }
@@ -831,18 +945,23 @@ export function DrawerHeader({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [active, agent, modeBusy]);
+  }, [active, agent, modeBusy, staged]);
 
   const modeSelect = (() => {
               const modes = (!DEMO && agent.availableModes?.length) ? agent.availableModes : FALLBACK_MODES;
+              const stagedModeId = staged ? staged.modeId ?? agent.currentModeId ?? "" : agent.currentModeId ?? "";
               return (
                 <select
                   data-testid="drawer-mode-select"
                   className="drawer-mode-select"
                   style={{ background: "var(--panel-alt)", color: "var(--fg)", border: "1px solid var(--line)", fontSize: 10, padding: "1px 4px", height: 20 }}
-                  value={agent.currentModeId ?? ""}
+                  value={stagedModeId}
                   disabled={modeBusy}
                   onChange={(e) => {
+                    if (staged) {
+                      stageSwitch({ ...staged, modeId: e.target.value });
+                      return;
+                    }
                     setModeBusy(true);
                     setModeHelper(agent, e.target.value).finally(() => setModeBusy(false));
                   }}
@@ -855,14 +974,23 @@ export function DrawerHeader({
                 </select>
               );
             })();
+  const modes = (!DEMO && agent.availableModes?.length) ? agent.availableModes : FALLBACK_MODES;
+  const stagedModeId = staged ? staged.modeId ?? agent.currentModeId ?? "" : agent.currentModeId ?? "";
+  const activeModeObj = modes.find((m) => m.id === stagedModeId) ?? modes[0];
+  const activeModeLabel = activeModeObj ? ((activeModeObj as any).label || (activeModeObj as any).name || activeModeObj.id) : (stagedModeId || "default");
+  const stagedThinking = staged ? staged.thinkingOptionId ?? agent.thinkingOptionId ?? "" : agent.thinkingOptionId ?? "";
   const thinkingSelect = (
             <select
               data-testid="drawer-thinking-select"
               className="drawer-thinking-select"
               style={{ background: "var(--panel-alt)", color: "var(--fg)", border: "1px solid var(--line)", fontSize: 10, padding: "1px 4px", height: 20 }}
-              value={agent.thinkingOptionId ?? ""}
+              value={stagedThinking}
               disabled={thinkingBusy}
               onChange={(e) => {
+                if (staged) {
+                  stageSwitch({ ...staged, thinkingOptionId: e.target.value || null });
+                  return;
+                }
                 setThinkingBusy(true);
                 setThinkingHelper(agent, e.target.value || null).finally(() => setThinkingBusy(false));
               }}
@@ -870,8 +998,8 @@ export function DrawerHeader({
               {(["low", "medium", "high"] as const).map((opt) => (
                 <option key={opt} value={opt}>{opt}</option>
               ))}
-              {!["low", "medium", "high"].includes(agent.thinkingOptionId ?? "") && agent.thinkingOptionId && (
-                <option value={agent.thinkingOptionId}>{agent.thinkingOptionId}</option>
+              {!["low", "medium", "high"].includes(stagedThinking) && stagedThinking && (
+                <option value={stagedThinking}>{stagedThinking}</option>
               )}
             </select>
   );
@@ -895,7 +1023,7 @@ export function DrawerHeader({
               data-testid="drawer-model-input"
               className="drawer-model-input"
               aria-label="Model"
-              title={`Custom model (${agent.provider})`}
+              title={`Custom model (${effectiveProvider})`}
               style={{ background: "var(--panel-alt)", color: "var(--fg)", border: "1px solid var(--line)", fontSize: 10, padding: "1px 4px", width: 120, height: 18 }}
               list={modelListId}
               value={modelValue}
@@ -903,22 +1031,22 @@ export function DrawerHeader({
               onChange={(e) => setModelValue(e.target.value)}
               onBlur={(e) => {
                 const next = e.target.value.trim();
-                if (next && next !== (agent.model ?? "") && next !== modelSubmittedRef.current) {
+                if (next && (staged || (next !== (agent.model ?? "") && next !== modelSubmittedRef.current))) {
                   submitModel(next);
                 } else if (!next) {
-                  setModelValue(agent.model ?? "");
+                  setModelValue(staged ? (staged.model ?? "") : (agent.model ?? ""));
                 }
                 setCustomModelMode(false);
               }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   const next = (e.target as HTMLInputElement).value.trim();
-                  if (next && next !== (agent.model ?? "") && next !== modelSubmittedRef.current) {
+                  if (next && (staged || (next !== (agent.model ?? "") && next !== modelSubmittedRef.current))) {
                     submitModel(next);
                   }
                   setCustomModelMode(false);
                 } else if (e.key === "Escape") {
-                  setModelValue(agent.model ?? "");
+                  setModelValue(staged ? (staged.model ?? "") : (agent.model ?? ""));
                   setCustomModelMode(false);
                 }
               }}
@@ -934,7 +1062,7 @@ export function DrawerHeader({
               data-testid="drawer-model-select"
               className="drawer-model-input"
               aria-label="Model"
-              title={`Model (${agent.provider})`}
+              title={`Model (${effectiveProvider})`}
               style={{ background: "var(--panel-alt)", color: "var(--fg)", border: "1px solid var(--line)", fontSize: 10, padding: "1px 4px", width: 120, height: 20 }}
               value={modelValue || modelOptions[0] || ""}
               onChange={(e) => {
@@ -945,7 +1073,7 @@ export function DrawerHeader({
                 }
                 const next = val.trim();
                 setModelValue(next);
-                if (next && next !== (agent.model ?? "") && next !== modelSubmittedRef.current) {
+                if (staged || (next && next !== (agent.model ?? "") && next !== modelSubmittedRef.current)) {
                   submitModel(next);
                 }
               }}
@@ -960,7 +1088,7 @@ export function DrawerHeader({
   );
   const metaRest = (
     <>
-            <span>· {shortPath(agent.cwd)}</span>
+            <span>{compact ? "" : "· "}{shortPath(agent.cwd)}</span>
             <button
               data-testid="drawer-copy-cwd-btn"
               className="btn ghost small drawer-copy-btn"
@@ -991,9 +1119,8 @@ export function DrawerHeader({
             </button>
     </>
   );
-  const extraActions = (
+  const primaryUtils = (
     <>
-          {!compact && providerSwitchBtn}
           <button
             data-testid="drawer-search-btn"
             className="btn ghost small"
@@ -1024,6 +1151,12 @@ export function DrawerHeader({
           </button>
           {modelError && <span className="small drawer-reload-error" role="alert" style={{ color: "var(--bad, #e5484d)" }}>{modelError}</span>}
           {reloadError && <span className="small muted drawer-reload-error">{reloadError}</span>}
+    </>
+  );
+  const extraActions = (
+    <>
+          {!compact && providerSwitchBtn}
+          {primaryUtils}
           <AgentActions agent={agent} archive />
     </>
   );
@@ -1037,6 +1170,17 @@ export function DrawerHeader({
           )}
     </>
   );
+  const secondaryPlumbing = (
+    <>
+          <span className="role-tag">{AGENT_TYPE_LABEL[agentType]}</span>
+          <span className="prov-pill" style={{ color: prov.color, borderColor: prov.color }}>
+            {prov.symbol} {prov.name}
+          </span>
+          {featureChips}
+          <AgentActions agent={agent} archive />
+          {paseoLink}
+    </>
+  );
   const dockBtns = (
     <>
           <button
@@ -1046,9 +1190,11 @@ export function DrawerHeader({
           >
             Dock {dockOpen ? "▶" : "◀"}
           </button>
-          <button className="btn ghost" onClick={onClose}>
-            ✕
-          </button>
+          {!compact && (
+            <button className="btn ghost" onClick={onClose}>
+              ✕
+            </button>
+          )}
     </>
   );
   const inspector = (
@@ -1085,7 +1231,7 @@ export function DrawerHeader({
             </div>
           )}
           <TopicCapBanner minCount={isTopicBs ? TOPIC_SOFT_CAP : TOPIC_SOFT_CAP + 1} />
-          <div className="brainstorm-ctx-main" style={{ flexWrap: "nowrap", gap: 6 }}>
+          <div className="brainstorm-ctx-main" style={{ flexWrap: "wrap", gap: 6 }}>
             <span className="brainstorm-ctx-readout">
               {usedK}k / {restartK}k tok
             </span>
@@ -1097,7 +1243,7 @@ export function DrawerHeader({
                 title={`Warn threshold: ${warnK}k tok`}
               />
             </div>
-            <div className="brainstorm-ctx-actions" style={{ flexWrap: "nowrap", gap: 4 }}>
+            <div className="brainstorm-ctx-actions" style={{ flexWrap: "wrap", gap: 4 }}>
               <button
                 className="btn small btn-brainstorm-restart"
                 style={{ padding: "2px 6px", fontSize: 10 }}
@@ -1238,7 +1384,7 @@ export function DrawerHeader({
         </div>
       )}
 
-      {agent.labels?.["vs.fresh-session"] === "brief" && (
+      {!compact && agent.labels?.["vs.fresh-session"] === "brief" && (
         <div className="brainstorm-fresh-divider" role="separator">
           ── Fresh session · from brief
           <button className="btn ghost small" aria-label="Edit brief" onClick={() => openBriefEditor({ laneId })}>
@@ -1275,7 +1421,7 @@ export function DrawerHeader({
         </div>
       )}
       {active && <HardeningBar agent={agent} entries={entries} />}
-      {!needsYouFlagged && (
+      {!compact && !needsYouFlagged && (
         <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 10px" }}>
           <button
             className="btn ghost small drawer-more-toggle"
@@ -1308,8 +1454,8 @@ export function DrawerHeader({
           )}
         </div>
       )}
-      <SessionActions agent={agent} entries={entries} />
-      {(attachBlocked || moreOpen) ? <AttachFiles agent={agent} entries={entries} /> : null}
+      {!compact && <SessionActions agent={agent} entries={entries} />}
+      {!compact && (attachBlocked || moreOpen) ? <AttachFiles agent={agent} entries={entries} /> : null}
     </>
   );
   const header = (
@@ -1330,7 +1476,7 @@ export function DrawerHeader({
             <StatusDot agent={agent} /> <AgentTitleEdit agent={agent}>{agent.title ?? agent.id.slice(0, 8)}</AgentTitleEdit>
           </div>
           <div className="muted small drawer-meta-line" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4 }}>
-            <span>{agent.provider}/</span>
+            {providerSelect}
             {modelControl}
             {metaRest}
           </div>
@@ -1345,21 +1491,35 @@ export function DrawerHeader({
     </>
   );
 
+  const compactIdentity = isBs && !isTopicBs ? (
+    <StatusDot agent={agent} />
+  ) : (
+    <>
+      <Avatar id={agent.id} provider={agent.provider} agentType={agentType} variant={leadVariant(agent)} size={24} />
+      <span className="drawer-head-compact-title">
+        <StatusDot agent={agent} /> <AgentTitleEdit agent={agent}>{agent.title ?? agent.id.slice(0, 8)}</AgentTitleEdit>
+      </span>
+    </>
+  );
+
   if (compact)
     return (
       <>
         {createPortal(
           <>
       <div className="drawer-head-compact" data-testid="drawer-head-compact">
-        <Avatar id={agent.id} provider={agent.provider} agentType={agentType} variant={leadVariant(agent)} size={32} />
-        <span className="drawer-head-compact-title">
-          <StatusDot agent={agent} /> <AgentTitleEdit agent={agent}>{agent.title ?? agent.id.slice(0, 8)}</AgentTitleEdit>
-        </span>
-        {modeSelect}
-        {thinkingSelect}
-        <span className="muted small">{agent.provider}/</span>
+        {compactIdentity}
+        {providerSelect}
         {modelControl}
-        {providerSwitchBtn}
+        <details className="drawer-config-menu" data-testid="drawer-config-menu">
+          <summary className="btn ghost small drawer-config-summary" data-testid="drawer-config-menu-btn" title="Thinking effort & permission mode">
+            ⚙ {stagedThinking || "medium"} · {activeModeLabel} ▾
+          </summary>
+          <div className="drawer-config-popover">
+            <label className="drawer-config-row"><span className="muted small">Thinking</span>{thinkingSelect}</label>
+            <label className="drawer-config-row"><span className="muted small">Mode</span>{modeSelect}</label>
+          </div>
+        </details>
         <WorkingChip members={working} subs={extraSubs} />
         <span className="drawer-head-compact-spacer" />
         {dockBtns}
@@ -1369,21 +1529,64 @@ export function DrawerHeader({
         )}
         {createPortal(
           <>
+      {!isBs && <TokenMeter used={used} budget={budget ?? 0} ladder={kindOf(agent) === "lead" ? leadLadderFor(team) : undefined} />}
+            {inspector}
       <div className="drawer-actions pin-rail-buddy-tools" data-testid="pin-rail-buddy-tools" style={{ flexWrap: "wrap", gap: 4, alignItems: "center" }}>
-        <span className="role-tag">{AGENT_TYPE_LABEL[agentType]}</span>
-        <span className="prov-pill" style={{ color: prov.color, borderColor: prov.color }}>
-          {prov.symbol} {prov.name}
-        </span>
-        {featureChips}
-        {extraActions}
-        {paseoLink}
+        {primaryUtils}
+        {!needsYouFlagged && (
+          <button
+            className="btn ghost small drawer-more-toggle"
+            data-testid="drawer-more-toggle"
+            style={{ padding: "1px 6px", fontSize: 10 }}
+            onClick={() => setMoreOpen((v) => !v)}
+          >
+            {moreOpen ? "▾ Less" : "⋯ More"}
+          </button>
+        )}
+      </div>
+      {moreOpen && (
+        <>
+      <div className="drawer-actions pin-rail-buddy-tools" style={{ flexWrap: "wrap", gap: 4, alignItems: "center" }}>
+        {secondaryPlumbing}
       </div>
       <div className="muted small drawer-meta-line" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4 }}>
         {metaRest}
       </div>
-      {!isBs && <TokenMeter used={used} budget={budget ?? 0} ladder={kindOf(agent) === "lead" ? leadLadderFor(team) : undefined} />}
-
-            {inspector}
+      {agent.labels?.["vs.fresh-session"] === "brief" && (
+        <div className="brainstorm-fresh-divider" role="separator">
+          ── Fresh session · from brief
+          <button className="btn ghost small" aria-label="Edit brief" onClick={() => openBriefEditor({ laneId })}>
+            ⋯
+          </button>
+          ──
+        </div>
+      )}
+      <SessionActions agent={agent} entries={entries} />
+      {!needsYouFlagged && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 10px" }}>
+          <button
+            className="btn ghost small"
+            style={{ padding: "1px 6px", fontSize: 10 }}
+            title="Put this chat back in the team's needs-you list"
+            data-testid="mark-unread"
+            onClick={() => void markAgentUnread(agent)}
+          >
+            Mark unread
+          </button>
+          <div className="labels" style={{ padding: 0, border: "none" }}>
+            {Object.entries(agentLabels)
+              .filter(([k]) => !k.startsWith("paseo.open-agent-tab"))
+              .map(([k, v]) => (
+                <span key={k} className="chip">
+                  {k}={v}
+                </span>
+              ))}
+          </div>
+        </div>
+      )}
+        </>
+      )}
+      {(attachBlocked || moreOpen) ? <AttachFiles agent={agent} entries={entries} /> : null}
           </>,
           cardSlot!,
         )}

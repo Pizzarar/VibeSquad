@@ -1,5 +1,5 @@
 import { FIRST_RUN_DONE_KEY, FirstRunModal, fetchFirstRunStatus, type FirstRunStatus } from "./FirstRunModal";
-import { clearSession, isRemote } from "./remoteSession";
+import { clearSession, isAndroidUserAgent, isRemote } from "./remoteSession";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { ProviderQuotaView } from "./antigravity";
@@ -45,6 +45,7 @@ import { CommandPaletteHost, agentCtxItems, dateBucket, teamCtxItems, openContex
 import { PaseoUsageHeaderChip } from "./PaseoSettingsSection";
 import { MobileBar, useMobileTeamView } from "./MobileBar";
 import { FocusRail, railAlerts } from "./FocusRail";
+import { perfEndPainted, perfStart } from "./perf";
 import { activateNth, getPanes, openAgent, openAgentInTab, setFocus, subscribePanes, toggleFocus, useFocusMode, useHasTabs } from "./panes";
 import {
   AgentActions,
@@ -1462,6 +1463,9 @@ export function App() {
   }, []);
   useAttentionTitle(views);
   useRestorePrune(agents, rosterLoaded);
+  useEffect(() => {
+    perfEndPainted("switch-team", teamId, `agents=${agents.size}`);
+  }, [teamId, agents.size]);
 
   // A lead past its handoff budget with no needs-you flag would otherwise sit silently (only the card's
   // SPAWN SUCCESSOR button hints at it). Flag it once; "handoff-flagged" stops a cleared flag re-firing.
@@ -1586,6 +1590,7 @@ export function App() {
     exitSquadsHome();
     setTeamId(id);
     setScreen("teams");
+    perfStart("switch-team", id);
   }, []);
 
   const onToggleTeamExpand = useCallback((id: string) => {
@@ -1610,6 +1615,7 @@ export function App() {
       next.delete(id);
       return next;
     });
+    perfStart("switch-team", id);
   }, []);
 
   const onToggleAllTeams = useCallback(() => {
@@ -1857,7 +1863,7 @@ export function App() {
           {`⚠ Config warning: ${configWarnings.join(" · ")}`}
         </div>
       )}
-      {updaterStatus.updateAvailable && !isRemote() && !updaterStatus.dismissed && (
+      {updaterStatus.updateAvailable && (!isRemote() || isAndroidUserAgent()) && !updaterStatus.dismissed && (
         <div
           className="update-available-banner"
           data-testid="update-available-banner"
@@ -1874,7 +1880,7 @@ export function App() {
             gap: 12,
           }}
         >
-          <span>{`Update available (v${updaterStatus.availableVersion}) — restart?`}</span>
+          <span>{`Update available (v${updaterStatus.availableVersion}) — ${isAndroidUserAgent() ? "download APK?" : "restart?"}`}</span>
           <button
             type="button"
             className="btn small"
@@ -1882,7 +1888,7 @@ export function App() {
             style={{ background: "#05060d", color: "#00f0ff", borderColor: "#05060d" }}
             onClick={() => void triggerUpdateInstall()}
           >
-            Restart &amp; Update
+            {isAndroidUserAgent() ? "Download Update" : "Restart & Update"}
           </button>
           <button
             type="button"

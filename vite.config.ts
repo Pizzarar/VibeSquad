@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { createVibesquadMiddleware, readPaseo } from "./server/vibesquad-api.mjs";
@@ -6,6 +7,8 @@ import "./server/inbox.mjs";
 import { getLocalToken, lockDownVibesquadHome } from "./server/auth.mjs";
 import "./server/qr.mjs";
 import "./server/push.mjs";
+
+const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
 
 // Dev server mounts the same middleware the production server (server/serve.mjs) uses
 // (/__vibesquad/inbox, /__vibesquad/brainstorm-summary, /__vibesquad/vs-log, /__vibesquad/brainstorm-restart, /api/teams, etc.).
@@ -34,6 +37,7 @@ export default defineConfig(({ mode }) => {
       // Project PC would otherwise make Project PC think target.serverId === BUILD_SERVER_ID and drop it into
       // local mode (stripping ?remote=1#offer=…). The runtime check in remoteBoot.ts asks the local server instead.
       __PASEO_SERVER_ID__: JSON.stringify(""),
+      __VS_APP_VERSION__: JSON.stringify(pkg.version || "0.2.0"),
       ...(isRemoteBuild ? { "import.meta.env.VITE_VS_REMOTE": JSON.stringify("1") } : {}),
     },
     build: {

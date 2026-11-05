@@ -3,7 +3,7 @@ import { expandFolderMentions } from "./projectContext";
 import { appendContext, useCtxSources } from "./contextSources";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
-import { daemonClient, DEMO, removeLocalAgent, sendMessage, upsertLocalAgent } from "./paseo";
+import { daemonClient, DEMO, removeLocalAgent, sendMessage, updateAgent, upsertLocalAgent } from "./paseo";
 import { useDraft } from "./drafts";
 import { isRemote } from "./remoteSession";
 import { createSendLock, guardedSend, restoredDraft } from "./sendGuard";
@@ -16,6 +16,7 @@ import {
   getBrainstormThresholds,
   isBrainstormAgent,
   isTopicBrainstorm,
+  kindOf,
   teamForAgent,
   topicOfBrainstorm,
   usedTokens,
@@ -25,11 +26,12 @@ import { titleFor } from "./teams";
 import { handoffTopicBrainstormClient, parkIdeasInInbox, parkTopicBrainstormClient } from "./IdeaInbox";
 import { providerSpec } from "./pixel";
 import { openAgentInTab, paneOfAgent } from "./panes";
-import { useTimeline, Timeline, TimelineErrorBoundary } from "./Timeline";
+import { setLastBrainstormProfile } from "./pinActions";
+import { useTimeline, Timeline, TimelineErrorBoundary, stripBootPreamble } from "./Timeline";
 import { PermissionCard } from "./PermissionCard";
 import { Composer, formatBtwPrompt, shouldQueueOnSend, stageFiles, type QueuedTurnItem } from "./Composer";
 import { composeMessage, setAgentCwd, useAttachments } from "./attachments";
-import { DrawerHeader } from "./DrawerHeader";
+import { DrawerHeader, normalizeProviderId, type ProviderSwitchTarget } from "./DrawerHeader";
 import { useWorkingMembers, WorkingBar } from "./WorkingBar";
 import { RightDock } from "./RightDock";
 
@@ -66,8 +68,11 @@ export async function triggerBrainstormRestart(opts: {
   pendingPrompt?: string;
   summaryUpdate?: string;
   profileName?: string;
+  model?: string;
+  modeId?: string;
+  thinkingOptionId?: string | null;
 }): Promise<{ newAgentId: string | null; title?: string; retired?: boolean; pendingPrompt?: string }> {
-  const { agent, teamId, laneId, reason, usedTokens: ut, pendingPrompt, summaryUpdate, profileName } = opts;
+  const { agent, teamId, laneId, reason, usedTokens: ut, pendingPrompt, summaryUpdate, profileName, model, modeId, thinkingOptionId } = opts;
   const pane = paneOfAgent(agent.id);
   const res = await fetch("/__vibesquad/brainstorm-restart", {
     method: "POST",
@@ -78,8 +83,11 @@ export async function triggerBrainstormRestart(opts: {
       laneId,
       reason,
       usedTokens: ut,
-      // profileName is a whitelisted body key: safe across the remote relay.
+      // profileName / model / modeId / thinkingOptionId are whitelisted body keys: safe across the remote relay.
       ...(profileName ? { profileName } : {}),
+      ...(model ? { model } : {}),
+      ...(modeId ? { modeId } : {}),
+      ...(thinkingOptionId ? { thinkingOptionId } : {}),
       // Prompt and brief text never cross the remote relay (REMOTE_FORBIDDEN_BODY_KEYS).
       ...(pendingPrompt && !isRemote() ? { pendingPrompt } : {}),
       ...(summaryUpdate && !isRemote() ? { summaryUpdate } : {}),
@@ -128,7 +136,13 @@ type DrawerProps = { agent: PaseoAgent; onClose: () => void; onSuccessor?: () =>
 
 export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccessor, active = true }: DrawerProps) {
   useTeams();
-  const { entries, error, hasMore, loadingMore, loadMore, loaded } = useTimeline(agent.id, agent.status, active);
+  const labels = (agent.labels ?? {}) as Record<string, string>;
+  const prov = providerSpec(agent.provider);
+  const restartedFrom = labels["vs.restarted-from"] || "";
+  const predecessorId = restartedFrom && restartedFrom !== "start-brainstorm" ? restartedFrom : undefined;
+  const switchLabel = `${prov.symbol} ${prov.name}${agent.model ? ` (${agent.model})` : ""}`;
+  const { entries, error, hasMore, loadingMore, loadMore, loaded } = useTimeline(agent.id, agent.status, active, predecessorId, switchLabel);
+  const [stagedSwitch, setStagedSwitch] = useState<ProviderSwitchTarget | null>(null);
   const [draft, setDraft, clearDraft] = useDraft(`${agent.id}:draft`);
   const [busy, setBusy] = useState(false);
   const [restarting, setRestarting] = useState(false);
@@ -158,7 +172,6 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   const [paneDrop, setPaneDrop] = useState(false);
   setAgentCwd(agent.id, agent.cwd);
 
-  const labels = (agent.labels ?? {}) as Record<string, string>;
   const isBs = isBrainstormAgent(agent);
   const isTopicBs = isTopicBrainstorm(agent);
   const topicName = isTopicBs ? topicOfBrainstorm(agent) : "";
@@ -169,10 +182,8 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   const used = usedTokens(agent);
   const budget = budgetFor(agent);
   const agentType = classifyAgent(agent);
-  const prov = providerSpec(agent.provider);
   const teamId = labels.team || team.id || "vibesquad";
   const laneId = (labels.lane || labels.lead || resolvedLaneId || team.lanes?.[0]?.id || "vibesquad").toLowerCase();
-  const restartedFrom = labels["vs.restarted-from"] || "";
   const att = attentionOf(agent);
 
   const runningSubs = entries.filter(
@@ -209,6 +220,11 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   useEffect(() => {
     setFeedbackDismissed(localStorage.getItem(feedbackKey) === "1");
   }, [feedbackKey]);
+
+  // A staged (not-yet-committed) provider switch is specific to one agent: drop it when the drawer changes agent.
+  useEffect(() => {
+    setStagedSwitch(null);
+  }, [agent.id]);
 
   useEffect(() => {
     if (agent.status !== "running") setLastSteered(null);
@@ -276,7 +292,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   };
 
   const doRestart = useCallback(
-    async (reason: string, pendingPrompt?: string, profileName?: string) => {
+    async (reason: string, pendingPrompt?: string, profileName?: string, model?: string, modeId?: string, thinkingOptionId?: string | null) => {
       if (restarting) return undefined;
       setRestarting(true);
       try {
@@ -288,6 +304,9 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
           usedTokens: bsUsedTokens,
           pendingPrompt,
           profileName,
+          model,
+          modeId,
+          thinkingOptionId,
         });
         if (pendingPrompt !== undefined && !r.retired) clearDraft();
         return r;
@@ -321,6 +340,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
     if (
       behavior === "steer" &&
       shouldQueueOnSend(agent.status, forceImmediate) &&
+      !stagedSwitch &&
       !imgs.images.length &&
       !atts.items.length &&
       !ctxSrc.items.length &&
@@ -359,6 +379,60 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
         });
         // @git / @terminal / @chat pills expand into fenced blocks for every provider.
         const text = appendContext(expanded, sentCtx);
+
+        // Seamless provider switch: the user staged a new provider in the top bar, so hand the message to it now.
+        if (stagedSwitch && normalizeProviderId(stagedSwitch.provider) !== normalizeProviderId(agent.provider)) {
+          const switchTarget = stagedSwitch;
+          const turnsText = entries
+            .slice(-12)
+            .map((e) => {
+              const it = e.item;
+              if (it?.type === "user_message" && typeof it.text === "string") return `User: ${stripBootPreamble(it.text)}`;
+              if (it?.type === "assistant_message" && typeof it.text === "string") return `Assistant: ${it.text}`;
+              return null;
+            })
+            .filter((line): line is string => typeof line === "string")
+            .join("\n");
+          const recentTurnsAndMessage = turnsText
+            ? `Recent conversation before provider switch:\n\n${turnsText}\n\nUser message to answer now:\n${text}`
+            : text;
+          setStagedSwitch(null);
+          const nextLabels = {
+            ...labels,
+            ...(switchTarget.profile ? { profile: switchTarget.profile } : {}),
+          };
+          // A Lead's live labels.profile must stay intact: the successor is spawned, this agent isn't flipped in place.
+          if (kindOf(agent) !== "lead") await updateAgent(agent.id, { labels: nextLabels });
+          if (isBs) {
+            if (switchTarget.profile) setLastBrainstormProfile(switchTarget.profile);
+            await doRestart("provider-switch", recentTurnsAndMessage, switchTarget.profile, switchTarget.model, switchTarget.modeId, switchTarget.thinkingOptionId);
+          } else if (kindOf(agent) === "lead" && onSuccessor) {
+            onSuccessor();
+          } else {
+            const dc = daemonClient as any;
+            const snap = await dc.createAgent({
+              config: {
+                provider: switchTarget.provider,
+                model: switchTarget.model,
+                modeId: switchTarget.modeId,
+                ...(switchTarget.thinkingOptionId ? { thinkingOptionId: switchTarget.thinkingOptionId } : {}),
+                cwd: agent.cwd,
+                title: agent.title ?? agent.id,
+              },
+              initialPrompt: recentTurnsAndMessage,
+              labels: { ...nextLabels, "vs.restarted-from": agent.id, "vs.restart-reason": "provider-switch", "profile-override": "1" },
+              // Keep the staged model/mode/thinking against the plugin's profile enforcement.
+              env: { VS_PROFILE_OVERRIDE: "1" },
+            });
+            const newId = snap?.agent?.id ?? snap?.id;
+            if (newId) openAgentInTab(newId, paneOfAgent(agent.id), agent.id);
+          }
+          imgs.clear();
+          atts.clear();
+          ctxSrc.clear();
+          return true;
+        }
+
         if (imgs.images.length) {
           await sendMessage(agent.id, text, await blobsToPaseoImages(imgs.images), { activeTurnBehavior: behavior });
           rememberSent(agent.id, text, imgs.images);
@@ -522,6 +596,8 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
         active={active}
         onClose={onClose}
         onSuccessor={onSuccessor}
+        stagedSwitch={stagedSwitch}
+        onStageSwitch={setStagedSwitch}
         isBs={isBs}
         isTopicBs={isTopicBs}
         topicName={topicName}
@@ -582,6 +658,8 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
         <TimelineErrorBoundary fallbackLabel="timeline">
           <Timeline
             agentId={agent.id}
+            agentStatus={agent.status}
+            agentTitle={agent.title}
             entries={entries}
             error={error}
             hasMore={hasMore}

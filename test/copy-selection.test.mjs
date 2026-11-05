@@ -37,7 +37,7 @@ test("Park in Inbox parks the selection when there is one, else the whole text",
 test("hover Copy button still copies the whole message", () => {
   const tl = readFileSync(new URL("../src/Timeline.tsx", import.meta.url), "utf8");
   assert.match(tl, /function CopyMsgButton\(\{ text \}[^]*?navigator\.clipboard\.writeText\(text\)/);
-  assert.equal((tl.match(/<CopyMsgButton text=\{it\.text \?\? ""\} \/>/g) ?? []).length, 2);
+  assert.equal((tl.match(/<CopyMsgButton text=\{(?:it\.text \?\? ""|clean)\} \/>/g) ?? []).length, 2);
 });
 
 // ---- selectionWithin, compiled from the real source with a fake Selection/Range ----

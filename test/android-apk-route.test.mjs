@@ -9,7 +9,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
 import { createVibesquadMiddleware, handleAndroidApk } from "../server/vibesquad-api.mjs";
-import { ensureAndroidDeepLinkIntentFilter, resolveAndroidEnv } from "../server/build-android.mjs";
+import { ensureAndroidDeepLinkIntentFilter, ensureAndroidSystemBarFit, resolveAndroidEnv } from "../server/build-android.mjs";
+import { buildLatestJson, syncVersionFiles } from "../server/release.mjs";
+import { checkGithubAndroidRelease, parseGithubReleaseVersion } from "../src/userName.ts";
 
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
 
@@ -132,6 +134,49 @@ describe("ensureAndroidDeepLinkIntentFilter", () => {
   });
 });
 
+describe("ensureAndroidSystemBarFit", () => {
+  const MAIN_ACTIVITY_KT = `package com.vibesquad.desktop
+
+import android.os.Bundle
+import androidx.activity.enableEdgeToEdge
+
+class MainActivity : TauriActivity() {
+  override fun onCreate(savedInstanceState: Bundle?) {
+    enableEdgeToEdge()
+    super.onCreate(savedInstanceState)
+  }
+}
+`;
+
+  test("strips the edge-to-edge import and call from a realistic MainActivity.kt", () => {
+    const root = tmpRoot();
+    const kt = join(root, "MainActivity.kt");
+    writeFileSync(kt, MAIN_ACTIVITY_KT);
+
+    assert.equal(ensureAndroidSystemBarFit(kt), true);
+    const once = readFileSync(kt, "utf8");
+    assert.doesNotMatch(once, /import\s+androidx\.activity\.enableEdgeToEdge/);
+    assert.doesNotMatch(once, /enableEdgeToEdge\(\)/);
+    assert.match(once, /class MainActivity : TauriActivity\(\)/);
+    assert.match(once, /super\.onCreate\(savedInstanceState\)/);
+  });
+
+  test("is idempotent (second call returns false and leaves the file unchanged)", () => {
+    const root = tmpRoot();
+    const kt = join(root, "MainActivity.kt");
+    writeFileSync(kt, MAIN_ACTIVITY_KT);
+
+    assert.equal(ensureAndroidSystemBarFit(kt), true);
+    const once = readFileSync(kt, "utf8");
+    assert.equal(ensureAndroidSystemBarFit(kt), false);
+    assert.equal(readFileSync(kt, "utf8"), once);
+  });
+
+  test("returns false when the file does not exist", () => {
+    assert.equal(ensureAndroidSystemBarFit(join(tmpRoot(), "missing.kt")), false);
+  });
+});
+
 describe("resolveAndroidEnv", () => {
   test("sets ANDROID_HOME and NDK_HOME (and their SDK_ROOT aliases)", () => {
     const env = resolveAndroidEnv({ ANDROID_HOME: "/opt/android-sdk", NDK_HOME: "/opt/android-ndk" });
@@ -200,5 +245,149 @@ describe("wiring (source inspection)", () => {
   test("package.json wires npm run build:android", () => {
     const pkg = JSON.parse(read("package.json"));
     assert.equal(pkg.scripts["build:android"], "node server/build-android.mjs");
+  });
+
+  test("vite.config.ts defines __VS_APP_VERSION__ from package.json", () => {
+    const src = read("vite.config.ts");
+    assert.match(src, /__VS_APP_VERSION__:\s*JSON\.stringify\(pkg\.version\s*\|\|\s*"0\.2\.0"\)/);
+  });
+
+  test("src/DiagnosticsModal.tsx checks isAndroidUserAgent() in checkForUpdates", () => {
+    const src = read("src/DiagnosticsModal.tsx");
+    assert.match(src, /isAndroidUserAgent/);
+    assert.match(src, /if\s*\(isAndroidUserAgent\(\)\)\s*\{\s*await\s+loadUpdaterStatus\(\);\s*return\s+true;\s*\}/);
+  });
+
+  test("src/App.tsx allows isAndroidUserAgent() on the update banner with Download Update and download APK?", () => {
+    const src = read("src/App.tsx");
+    assert.match(src, /!isRemote\(\)\s*\|\|\s*isAndroidUserAgent\(\)/);
+    assert.match(src, /download APK\?/);
+    assert.match(src, /Download Update/);
+  });
+});
+
+describe("Block A6: release version sync & Android GitHub Release updater", () => {
+  test("syncVersionFiles syncs src-tauri/tauri.android.conf.json alongside package.json, tauri.conf.json, and Cargo.toml", () => {
+    const root = tmpRoot();
+    mkdirSync(join(root, "src-tauri"), { recursive: true });
+    writeFileSync(join(root, "package.json"), JSON.stringify({ name: "vibesquad", version: "0.2.0" }, null, 2));
+    writeFileSync(join(root, "src-tauri", "tauri.conf.json"), JSON.stringify({ version: "0.2.0" }, null, 2));
+    writeFileSync(join(root, "src-tauri", "tauri.android.conf.json"), JSON.stringify({ version: "0.2.0" }, null, 2));
+    writeFileSync(join(root, "src-tauri", "Cargo.toml"), '[package]\nname = "vibesquad"\nversion = "0.2.0"\n');
+
+    syncVersionFiles(root, "0.3.1-beta.2");
+
+    assert.equal(JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version, "0.3.1-beta.2");
+    assert.equal(JSON.parse(readFileSync(join(root, "src-tauri", "tauri.conf.json"), "utf8")).version, "0.3.1-beta.2");
+    assert.equal(JSON.parse(readFileSync(join(root, "src-tauri", "tauri.android.conf.json"), "utf8")).version, "0.3.1-beta.2");
+    assert.match(readFileSync(join(root, "src-tauri", "Cargo.toml"), "utf8"), /version = "0\.3\.1-beta\.2"/);
+  });
+
+  test("buildLatestJson includes platforms['android-aarch64'].url for stable and beta", () => {
+    const stableManifest = buildLatestJson({ version: "0.2.3", channel: "stable", signature: "sig123", repo: "Pizzarar/VibeSquad" });
+    assert.equal(
+      stableManifest.platforms["android-aarch64"]?.url,
+      "https://github.com/Pizzarar/VibeSquad/releases/download/v0.2.3/VibeSquad.apk",
+    );
+
+    const betaManifest = buildLatestJson({ version: "0.2.4-beta.1", channel: "beta", signature: "sig456", repo: "Pizzarar/VibeSquad" });
+    assert.equal(
+      betaManifest.platforms["android-aarch64"]?.url,
+      "https://github.com/Pizzarar/VibeSquad/releases/download/beta/VibeSquad.apk",
+    );
+  });
+
+  test("parseGithubReleaseVersion extracts version and downloadUrl for stable and rolling beta", () => {
+    const stableParsed = parseGithubReleaseVersion(
+      {
+        tag_name: "v0.3.0",
+        name: "VibeSquad v0.3.0",
+        assets: [{ name: "VibeSquad.apk", browser_download_url: "https://cdn.example.com/v0.3.0/VibeSquad.apk" }],
+      },
+      "stable",
+    );
+    assert.equal(stableParsed.version, "0.3.0");
+    assert.equal(stableParsed.downloadUrl, "https://cdn.example.com/v0.3.0/VibeSquad.apk");
+
+    const betaParsed = parseGithubReleaseVersion(
+      {
+        tag_name: "beta",
+        name: "VibeSquad Beta (0.3.0-beta.2)",
+        assets: [],
+      },
+      "beta",
+    );
+    assert.equal(betaParsed.version, "0.3.0-beta.2");
+    assert.equal(betaParsed.downloadUrl, "https://github.com/Pizzarar/VibeSquad/releases/download/beta/VibeSquad.apk");
+  });
+
+  test("checkGithubAndroidRelease detects updates, no-op when current, and falls back when beta tag 404s", async () => {
+    // 1. Stable update available
+    const stableRes = await checkGithubAndroidRelease("0.2.2", "stable", async (url) => {
+      assert.equal(url, "https://api.github.com/repos/Pizzarar/VibeSquad/releases/latest");
+      return {
+        ok: true,
+        json: async () => ({
+          tag_name: "v0.3.0",
+          assets: [{ name: "VibeSquad.apk", browser_download_url: "https://github.com/Pizzarar/VibeSquad/releases/download/v0.3.0/VibeSquad.apk" }],
+        }),
+      };
+    });
+    assert.deepEqual(stableRes, {
+      updateAvailable: true,
+      availableVersion: "0.3.0",
+      downloadUrl: "https://github.com/Pizzarar/VibeSquad/releases/download/v0.3.0/VibeSquad.apk",
+    });
+
+    // 2. Beta update available from rolling beta tag
+    const betaRes = await checkGithubAndroidRelease("0.3.0-beta.1", "beta", async (url) => {
+      assert.equal(url, "https://api.github.com/repos/Pizzarar/VibeSquad/releases/tags/beta");
+      return {
+        ok: true,
+        json: async () => ({
+          tag_name: "beta",
+          name: "VibeSquad Beta (0.3.0-beta.2)",
+          assets: [],
+        }),
+      };
+    });
+    assert.deepEqual(betaRes, {
+      updateAvailable: true,
+      availableVersion: "0.3.0-beta.2",
+      downloadUrl: "https://github.com/Pizzarar/VibeSquad/releases/download/beta/VibeSquad.apk",
+    });
+
+    // 3. No update available when already on latest
+    const currentRes = await checkGithubAndroidRelease("0.3.0", "stable", async () => ({
+      ok: true,
+      json: async () => ({ tag_name: "v0.3.0", assets: [] }),
+    }));
+    assert.deepEqual(currentRes, {
+      updateAvailable: false,
+      availableVersion: "",
+      downloadUrl: "",
+    });
+
+    // 4. Beta tag 404 falls back to /releases/latest
+    const calls = [];
+    const fallbackRes = await checkGithubAndroidRelease("0.2.0", "beta", async (url) => {
+      calls.push(url);
+      if (String(url).endsWith("/tags/beta")) {
+        return { ok: false, status: 404, json: async () => ({}) };
+      }
+      return {
+        ok: true,
+        json: async () => ({ tag_name: "v0.2.5", assets: [] }),
+      };
+    });
+    assert.deepEqual(calls, [
+      "https://api.github.com/repos/Pizzarar/VibeSquad/releases/tags/beta",
+      "https://api.github.com/repos/Pizzarar/VibeSquad/releases/latest",
+    ]);
+    assert.deepEqual(fallbackRes, {
+      updateAvailable: true,
+      availableVersion: "0.2.5",
+      downloadUrl: "https://github.com/Pizzarar/VibeSquad/releases/download/v0.2.5/VibeSquad.apk",
+    });
   });
 });

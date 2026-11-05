@@ -39,13 +39,13 @@ test("explicit variant ordinal wins and wraps", () => {
   assert.equal(castVariant("x", -1), 3);
 });
 
-test("cell is the top-left of the 32px cell", () => {
-  assert.deepEqual(castCell("x", "review", 3), { x: 96, y: 160 });
+test("cell is the top-left of the 64px cell", () => {
+  assert.deepEqual(castCell("x", "review", 3), { x: 192, y: 320 });
 });
 
-test("public/cast.png is a 128x320 PNG", () => {
+test("public/cast.png is a 256x640 PNG", () => {
   const b = readFileSync(join(root, "public", "cast.png"));
-  assert.equal(b.readUInt32BE(16), 128);
-  assert.equal(b.readUInt32BE(20), 320);
+  assert.equal(b.readUInt32BE(16), 256);
+  assert.equal(b.readUInt32BE(20), 640);
   assert.ok(statSync(join(root, "public", "cast.png")).size > 0);
 });

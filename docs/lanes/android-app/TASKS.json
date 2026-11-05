@@ -1,0 +1,96 @@
+{
+  "laneId": "android-app",
+  "updatedAt": "2026-11-05T04:14:44.702Z",
+  "units": [
+    {
+      "id": "unit-and-a1",
+      "goal": "Tauri 2 Mobile Split & Android Project Init",
+      "files": [
+        "src-tauri/Cargo.toml",
+        "src-tauri/src/lib.rs",
+        "src-tauri/src/main.rs",
+        "src-tauri/tauri.android.conf.json"
+      ],
+      "doneCheck": "cargo test --manifest-path src-tauri/Cargo.toml",
+      "status": "done",
+      "branch": "unit-and-a1",
+      "commit": "6e19c17"
+    },
+    {
+      "id": "unit-and-a2",
+      "goal": "Deep-Link QR Pairing & Clipboard Paste UX",
+      "files": [
+        "server/paseo-control.mjs",
+        "src/PairDeviceModal.tsx",
+        "src/RemotePair.tsx",
+        "src/remoteSession.ts",
+        "test/android-pair.test.mjs"
+      ],
+      "doneCheck": "node --test test/android-pair.test.mjs",
+      "status": "done",
+      "branch": "unit-and-a2",
+      "commit": "749c12a"
+    },
+    {
+      "id": "unit-and-a3",
+      "goal": "APK Build Script, LAN /VibeSquad.apk Route & Release Upload",
+      "files": [
+        "server/build-android.mjs",
+        "server/vibesquad-api.mjs",
+        "server/auth.mjs",
+        "server/serve.mjs",
+        "server/release.mjs",
+        "package.json",
+        "test/android-apk-route.test.mjs"
+      ],
+      "doneCheck": "node --test test/android-apk-route.test.mjs",
+      "status": "done",
+      "branch": "unit-and-a3",
+      "commit": "6364ecb"
+    },
+    {
+      "id": "unit-and-a4",
+      "goal": "Squad Lane Overview (PinGrid / .pin-tile) Wrapping & Overflow Fix",
+      "files": [
+        "src/styles.css",
+        "test/android-pair.test.mjs"
+      ],
+      "doneCheck": "node --test test/android-pair.test.mjs",
+      "status": "done",
+      "branch": "unit-and-a4",
+      "commit": "42f4d67"
+    },
+    {
+      "id": "unit-and-a5",
+      "goal": "Phone UI Pass (Top Status Bar Fit, Lead Page Wrapping & Right Sidebar Overflow Fix)",
+      "files": [
+        "index.html",
+        "server/build-android.mjs",
+        "src/DrawerHeader.tsx",
+        "src/styles.css",
+        "test/android-pair.test.mjs",
+        "test/android-apk-route.test.mjs"
+      ],
+      "doneCheck": "node --test test/android-pair.test.mjs test/android-apk-route.test.mjs",
+      "status": "done",
+      "branch": "unit-and-a5",
+      "commit": "87566ee"
+    },
+    {
+      "id": "unit-and-a6",
+      "goal": "Android GitHub Release Updater (Option 1)",
+      "files": [
+        "vite.config.ts",
+        "server/release.mjs",
+        "src/userName.ts",
+        "src/DiagnosticsModal.tsx",
+        "src/App.tsx",
+        "test/android-apk-route.test.mjs"
+      ],
+      "doneCheck": "node --test test/android-apk-route.test.mjs test/android-pair.test.mjs",
+      "status": "done",
+      "branch": "unit-and-a6",
+      "commit": "3e5f581"
+    }
+  ]
+}

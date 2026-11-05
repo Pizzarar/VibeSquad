@@ -49,16 +49,16 @@ test("resolveManagedWorktreeRoot honors VIBESQUAD_WORKTREES_DIR, LOCALAPPDATA, a
 test("resolveManagedWorktreePath slugs the repo name and branch/unit", () => {
   const env = { VIBESQUAD_WORKTREES_DIR: "/wt" };
   assert.equal(
-    resolveManagedWorktreePath("C:\\repos\\Escape-From-Idle.git", "bug-chaser/unit-1", env),
-    resolve("/wt", "Escape-From-Idle", "bug-chaser-unit-1"),
+    resolveManagedWorktreePath("C:\\repos\\main-project.git", "bug-chaser/unit-1", env),
+    resolve("/wt", "main-project", "bug-chaser-unit-1"),
   );
   assert.equal(
-    resolveManagedWorktreePath("Escape-From-Idle", "unit-1", env),
-    resolve("/wt", "Escape-From-Idle", "unit-1"),
+    resolveManagedWorktreePath("main-project", "unit-1", env),
+    resolve("/wt", "main-project", "unit-1"),
   );
   assert.equal(
-    resolveManagedWorktreePath("Escape-From-Idle", "branch with spaces//", env),
-    resolve("/wt", "Escape-From-Idle", "branch-with-spaces"),
+    resolveManagedWorktreePath("main-project", "branch with spaces//", env),
+    resolve("/wt", "main-project", "branch-with-spaces"),
   );
 });
 
@@ -198,12 +198,12 @@ test("cleanupProjectsFolder leaves a dirty linked worktree in projects/", () => 
 
 test("extractManagedWorktreeRepoName pulls the repo name out of a sanctuary path, else null", () => {
   assert.equal(
-    extractManagedWorktreeRepoName("C:\\Users\\me\\AppData\\Local\\VibeSquad\\worktrees\\Escape-From-Idle\\unit-1"),
-    "Escape-From-Idle",
+    extractManagedWorktreeRepoName("C:\\Users\\me\\AppData\\Local\\VibeSquad\\worktrees\\main-project\\unit-1"),
+    "main-project",
   );
   assert.equal(
-    extractManagedWorktreeRepoName("/home/me/.vibesquad/worktrees/Escape-From-Idle/unit-1"),
-    "Escape-From-Idle",
+    extractManagedWorktreeRepoName("/home/me/.vibesquad/worktrees/main-project/unit-1"),
+    "main-project",
   );
   assert.equal(extractManagedWorktreeRepoName("C:\\projects\\VibeSquad\\src"), null);
   assert.equal(extractManagedWorktreeRepoName(""), null);
@@ -212,11 +212,11 @@ test("extractManagedWorktreeRepoName pulls the repo name out of a sanctuary path
 
 test("matchPathInRegistry resolves a managed sanctuary path to its team", () => {
   const teams = [
-    { id: "efi", name: "Escape From Idle", paths: ["Escape-From-Idle"], lanes: [{ id: "main-game", name: "Main Game" }] },
+    { id: "efi", name: "Main Game", paths: ["main-project"], lanes: [{ id: "main-game", name: "Main Game" }] },
     { id: "vibesquad", name: "VibeSquad", paths: ["vibesquad"], lanes: [{ id: "vibesquad", name: "VibeSquad" }] },
   ];
   // The `.git` file does not exist on disk (a plain string path), so resolveWorktreeRootPath is null.
-  const m = matchPathInRegistry("C:\\Users\\me\\AppData\\Local\\VibeSquad\\worktrees\\Escape-From-Idle\\unit-1", teams);
+  const m = matchPathInRegistry("C:\\Users\\me\\AppData\\Local\\VibeSquad\\worktrees\\main-project\\unit-1", teams);
   assert.ok(m, "expected a match for the sanctuary path");
   assert.equal(m.team.id, "efi");
   assert.equal(m.lane.id, "main-game");

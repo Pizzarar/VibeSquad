@@ -1053,6 +1053,15 @@ code {
   color: var(--muted);
 }
 
+.tl-provider-switch {
+  text-align: center;
+  color: #888;
+  border-top: 1px dashed #888;
+  border-bottom: 1px dashed #888;
+  padding: 2px 0;
+  font-size: 0.85em;
+}
+
 .send-error {
   border-top: 1px solid var(--hot-pink);
   padding: 6px 10px;
@@ -1101,19 +1110,6 @@ code {
   display: block;
   background-repeat: no-repeat;
   image-rendering: pixelated;
-}
-
-/* Hand-drawn cast: the neon provider ring is opt-in (localStorage vs-cast-ring=1). */
-.avatar.has-ring {
-  background: radial-gradient(circle at 50% 35%, var(--prov-dim, #1e293b), #070812 85%);
-  border: 1px solid var(--prov, var(--cyan));
-  box-shadow: 0 0 8px rgba(0, 0, 0, 0.8), inset 0 0 6px rgba(0, 240, 255, 0.12);
-}
-
-.avatar.no-ring {
-  background: none;
-  border-color: transparent;
-  box-shadow: none;
 }
 
 /* ?cast=1 art review sheet */
@@ -1248,6 +1244,7 @@ code {
 .def-badge b { color: var(--muted); font-weight: normal; margin-right: 3px; }
 .preview { border: 1px dashed var(--line); padding: 8px 10px; margin-bottom: 10px; }
 .preview-title { color: var(--cyan); font-size: 14px; margin: 2px 0; word-break: break-word; }
+.qr-box { width: 148px; height: 148px; flex: none; background: #fff; padding: 4px; border: 2px solid var(--cyan); }
 .pills { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
 .label-pill { border: 1px solid var(--line); background: var(--panel-alt); padding: 1px 6px; font-size: 11px; }
 .check { display: flex; gap: 6px; align-items: center; margin: 4px 0 8px; }
@@ -1266,10 +1263,12 @@ code {
 .card-body > .diag-pills { margin-top: 4px; flex-wrap: wrap; }
 .card-body > .diag-pills .pill.diag:first-child { margin-left: 0; }
 
-.hard-bar { margin: 8px 12px 0; padding: 6px 10px; display: flex; align-items: center; gap: 10px; justify-content: space-between; font-size: 12px; }
+.hard-bar { margin: 8px 12px 0; padding: 6px 10px; display: flex; flex-wrap: wrap; min-width: 0; max-width: 100%; box-sizing: border-box; align-items: center; gap: 10px; justify-content: space-between; font-size: 12px; }
 .hard-bar.warn { background: #1a1405; border: 1px solid var(--amber); color: var(--amber); }
 .hard-bar.hot { background: #1a0716; border: 1px solid var(--hot-pink); color: var(--hot-pink); box-shadow: 0 0 12px var(--hot-pink-dim); }
+.hard-text { flex: 1 1 160px; min-width: 0; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; white-space: normal; }
 .hard-text .muted { color: var(--muted); }
+.hard-bar > .btn { flex: 0 0 auto; max-width: 100%; white-space: normal; }
 .btn.warn { color: var(--amber); border-color: var(--amber); }
 .btn.hot { color: #05050a; background: var(--hot-pink); border-color: var(--hot-pink); font-weight: 700; box-shadow: 0 0 10px var(--hot-pink); }
 .btn.successor { margin-top: 6px; font-family: var(--arcade); font-size: 10px; letter-spacing: 1px; width: 100%; }
@@ -3468,6 +3467,7 @@ html, body, #root { overflow-x: hidden; }
 }
 .pin-focus-home { font-size: 16px; padding: 2px 8px; }
 .pin-focus-name { font-family: var(--display); font-size: 14px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pin-focus-spinup-error { margin-top: 6px; padding: 6px 10px; color: var(--coral); background: #ff857314; border: 1px solid var(--coral); border-radius: 4px; font-size: 12px; line-height: 1.4; }
 .pin-focus-squad { white-space: nowrap; }
 .pin-focus-spacer { flex: 1; }
 .pin-focus-plumbing {
@@ -4155,14 +4155,21 @@ button.project-file-name:hover { text-decoration: underline; }
 
 
 /* ── UI polish U2: one ~44px chat bar in pin-focus; the active Buddy's inspector lives atop the rail ── */
-.pin-focus-bar { height: 44px; min-height: 44px; flex-wrap: nowrap; row-gap: 0; overflow: hidden; gap: 8px; }
+.pin-focus-bar { height: 44px; min-height: 44px; flex-wrap: nowrap; row-gap: 0; overflow: visible; gap: 8px; }
 .pin-focus-bar .pin-focus-slot { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; }
 .pin-focus-bar .pin-focus-plumbing { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; }
-.drawer-head-compact { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; height: 44px; overflow: hidden; }
+.drawer-head-compact { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; height: 44px; overflow: visible; }
+.drawer-config-menu { position: relative; }
+.drawer-config-summary { list-style: none; cursor: pointer; user-select: none; white-space: nowrap; }
+.drawer-config-summary::-webkit-details-marker { display: none; }
+.drawer-config-popover { position: absolute; top: calc(100% + 4px); left: 0; z-index: 40; background: var(--panel); border: 1px solid var(--cyan); padding: 8px; display: flex; flex-direction: column; gap: 6px; min-width: 190px; box-shadow: 0 6px 20px rgba(0,0,0,0.65); }
+.drawer-config-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .drawer-head-compact > * { flex: none; }
 .drawer-head-compact .avatar { flex: none; }
 .drawer-head-compact-title { flex: 0 1 auto; min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--display); font-size: 13px; }
 .drawer-head-compact-spacer { flex: 1 1 0; min-width: 0; }
+.drawer-provider-select { background: transparent; border: 1px solid; border-radius: 4px; font-family: var(--display); font-size: 11px; height: 24px; padding: 0 4px; cursor: pointer; }
+.drawer-provider-select option { color: var(--fg, #e6e6e6); background: #12121a; }
 .drawer-head-compact .drawer-model-input { width: 100px; }
 .drawer-head-compact .drawer-mode-select, .drawer-head-compact .drawer-thinking-select { max-width: 96px; }
 .pin-rail-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
@@ -4176,6 +4183,8 @@ button.project-file-name:hover { text-decoration: underline; }
 .pin-rail-active-inspector { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .pin-rail-active-inspector .brainstorm-ctx-bar { margin: 0 !important; }
 .pin-rail-active-inspector .brainstorm-ctx-main, .pin-rail-active-inspector .brainstorm-ctx-actions { flex-wrap: wrap !important; }
+.pin-rail-active-inspector .hard-bar { margin: 4px 0 0; padding: 6px 8px; gap: 6px; }
+.pin-rail-active-inspector .brainstorm-fresh-divider { margin: 2px 0; padding: 2px 4px; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pin-rail-section-label { flex: none; padding: 4px 10px 0; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
 @media (max-width: 900px) {
   .pin-rail-active-buddy, .pin-rail-section-label { display: none; }
@@ -4207,3 +4216,77 @@ button.project-file-name:hover { text-decoration: underline; }
   background: transparent; border: 1px solid var(--line); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .drawer-subagent-chip:hover, .drawer-subagent-chip:focus-visible { border-color: var(--cyan); outline: none; }
+
+/* ── Block A5 (PLAN_ANDROID_APP.md): phone UI pass — system-bar safe areas, Lead page wrap, right sidebar overflow ── */
+/* Issue 2.1: Lead TokenMeter ladder wraps instead of clipping on narrow Lead cards. */
+.meter.meter-ladder { flex-wrap: wrap; min-width: 0; max-width: 100%; }
+.meter.meter-ladder .meter-track { flex: 1 1 80px; min-width: 60px; }
+.meter.meter-ladder .meter-readout { white-space: normal; overflow-wrap: anywhere; word-break: break-word; min-width: 0; max-width: 100%; }
+
+/* Issue 2.3: Lead handoff bar, DrawerHeader & model input stay bounded. */
+.lint-bar,
+.successor-bar,
+.drawer-head,
+.drawer-id,
+.drawer-role-line,
+.drawer-meta-line,
+.drawer-model-input {
+  min-width: 0;
+  max-width: 100%;
+}
+.successor-bar .btn,
+.btn.successor {
+  white-space: normal;
+  max-width: 100%;
+}
+
+/* Issue 3.2: PinRail right sidebar — team row name truncates, active-buddy/inspector/tools stay bounded. */
+.pin-team-row .pin-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pin-rail-active-buddy,
+.pin-rail-active-inspector,
+.pin-rail-buddy-tools {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+/* Issue 3.1: Right Dock tabs scroll/wrap cleanly, bodies wrap and stay bounded. */
+.right-dock-tabs { overflow-x: auto; scrollbar-width: none; min-width: 0; max-width: 100%; }
+.right-dock-tab { flex: 0 0 auto; padding: 7px 9px; }
+.right-dock-body,
+.changes-head,
+.files-head,
+.terminal-toolbar,
+.scripts-row {
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Issue 1.3: safe-area inset fit + Issue 2.2: pin-focus bar & compact header wrap + Issue 3.1: stack dock under timeline. */
+.remote-pair {
+  padding-top: max(16px, env(safe-area-inset-top, 0px));
+  padding-bottom: max(16px, env(safe-area-inset-bottom, 0px));
+}
+@media (max-width: 600px) {
+  .app,
+  .app.with-panes,
+  .app.with-panes.split,
+  .app.focus {
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+  }
+  .app.sheet-open > .focus-rail {
+    top: env(safe-area-inset-top, 0px);
+    bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+  }
+  .mobile-bottom-bar {
+    height: calc(56px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .pin-focus-bar { height: auto; min-height: 44px; flex-wrap: wrap; padding: 4px 8px; row-gap: 4px; overflow: visible; }
+  .drawer-head-compact { height: auto; min-height: 36px; flex-wrap: wrap; overflow: visible; }
+  .drawer-shell { flex-direction: column; }
+  .right-dock { width: 100% !important; max-width: 100% !important; min-width: 0 !important; max-height: 55%; border-left: 0; border-top: 1px solid var(--cyan); }
+  .right-dock-resize-handle { display: none; }
+}

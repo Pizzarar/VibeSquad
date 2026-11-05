@@ -1,7 +1,7 @@
 {
   "name": "vibesquad",
   "private": true,
-  "version": "0.2.5",
+  "version": "0.2.7-beta.1",
   "type": "module",
   "bin": {
     "vs": "./cli/vs.mjs"

@@ -293,13 +293,12 @@ describe("desktop proxy: first-launch mode choice, greyed LAN/Meshnet buttons, a
       assert.equal(chooseBody.serverMode, "remote");
       assert.equal(existsSync(join(configDir, "server.pid")), false, "Remote mode must never spawn local server");
 
-      // 3. Setup screen renders Home LAN and Meshnet buttons greyed out ("Server not detected") when no host is known
+      // 3. Setup screen hides the server picker and both preset buttons when no host is known
       const setupBefore = await httpCall({ port: proxyPort, path: "/__desktop/setup" });
       assert.equal(setupBefore.status, 200);
-      assert.match(setupBefore.body, /id="preset-lan"[^>]*disabled/);
-      assert.match(setupBefore.body, /id="preset-meshnet"[^>]*disabled/);
-      assert.match(setupBefore.body, /id="tag-lan"[^>]*>Server not detected</);
-      assert.match(setupBefore.body, /id="tag-meshnet"[^>]*>Server not detected</);
+      assert.match(setupBefore.body, /id="server-picker" style="display:none"/);
+      assert.match(setupBefore.body, /id="preset-lan" data-host="" style="display:none"/);
+      assert.match(setupBefore.body, /id="preset-meshnet" data-host="" style="display:none"/);
 
       // 4. Pair with remote server over TLS: proxy auto-fetches http://<remoteHost>/ca.crt, pins it, and redeems code over HTTPS
       auth.resetPairRateLimitForTest();
@@ -325,16 +324,15 @@ describe("desktop proxy: first-launch mode choice, greyed LAN/Meshnet buttons, a
       assert.equal(proxiedHealth.status, 200);
       assert.equal(typeof JSON.parse(proxiedHealth.body).port, "number");
 
-      // 6. Setup screen now enables the saved button (LAN or Meshnet depending on interface range)
+      // 6. Setup screen now reveals the server picker and the saved host's preset button
       const setupAfter = await httpCall({ port: proxyPort, path: "/__desktop/setup" });
       const savedCfg = JSON.parse(readFileSync(join(configDir, "desktop-config.json"), "utf8"));
+      assert.match(setupAfter.body, /id="server-picker" style=""/);
       if (savedCfg.lastLanHost) {
-        assert.doesNotMatch(setupAfter.body, /id="preset-lan"[^>]*disabled/);
-        assert.match(setupAfter.body, /id="tag-lan"[^>]*>Recommended on Wi-Fi\/LAN</);
+        assert.ok(setupAfter.body.includes(`id="preset-lan" data-host="${savedCfg.lastLanHost}" style=""`));
       } else {
         assert.ok(savedCfg.lastMeshnetHost);
-        assert.doesNotMatch(setupAfter.body, /id="preset-meshnet"[^>]*disabled/);
-        assert.match(setupAfter.body, /id="tag-meshnet"[^>]*>Remote \/ VPN</);
+        assert.ok(setupAfter.body.includes(`id="preset-meshnet" data-host="${savedCfg.lastMeshnetHost}" style=""`));
       }
 
       // 7. Still zero local server spawned

@@ -103,7 +103,7 @@ test("PinRail: active Buddy card on top, other Buddies below, no inert 'Open in 
   assert.match(pr, /ref=\{slotRef\("card"\)\}/, "the card hosts the inspector slot");
   assert.match(pr, /ref=\{slotRef\("bar"\)\}/, "the single bar hosts the compact controls slot");
   assert.match(dh, /createPortal\(/, "DrawerHeader portals the compact bar + inspector in pin-focus");
-  assert.match(dh, /const compact = !!pinFocus && shownHere && inLane/, "only the shown lane drawer (Buddy, Lead, worker, topic) goes compact");
+  assert.match(dh, /const compact = !!pinFocus(?:\?\.agentId)? && shownHere && inLane && railCardVisible/, "only the shown lane drawer (Buddy, Lead, worker, topic) goes compact");
   assert.match(dh, /shownHere = usePanes\(\)\.leftActiveId === agent\.id/, "a single owner of the slots: the left active tab");
 });
 
@@ -164,8 +164,9 @@ test("U5: TeamPage collapses finished pills and the Idle section", () => {
   assert.match(app, /title="Idle"[\s\S]{0,260}?collapsed\s+archive/);
 });
 
-test("U5: PinFocusBar lead click opens the Lead in pin focus instead of FULL view", () => {
+test("U5: Lead click in PinTeamTree opens the Lead in pin focus instead of FULL view", () => {
   const pr = srcOf("PinRail.tsx");
-  assert.match(pr, /openPinMember\(pin, lead\.agent\.id\)/);
+  const pg = srcOf("PinGrid.tsx");
+  assert.match(pg, /openPinMember\(pin, m\.agent\.id\)/);
   assert.doesNotMatch(pr, /setFullView/);
 });

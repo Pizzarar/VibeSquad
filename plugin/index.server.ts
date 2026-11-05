@@ -567,6 +567,34 @@ export function appendLog(team: string, entry: Omit<LogEntry, "ts" | "refs"> & {
   fs.appendFileSync(file, JSON.stringify(full) + "\n", "utf8");
 }
 
+
+/** Per-step timer for the `hook-timing` metric (docs/research/feel-baseline-2026-11.md). Timers only; never throws. */
+export interface StepTimer {
+  /** Record the ms elapsed since the previous mark (or start) under `name`. */
+  mark(name: string): void;
+  total(): number;
+  summary(): string;
+  steps: Array<[string, number]>;
+}
+export function stepTimer(): StepTimer {
+  const t0 = Date.now();
+  let last = t0;
+  const steps: Array<[string, number]> = [];
+  return {
+    steps,
+    mark(name) {
+      const now = Date.now();
+      steps.push([name, now - last]);
+      last = now;
+    },
+    total: () => Date.now() - t0,
+    summary() {
+      // Total first and 0ms steps dropped: the team-log line is capped at MAX_TEXT chars.
+      return `total=${Date.now() - t0} ` + steps.filter(([, ms]) => ms > 0).map(([n, ms]) => `${n}=${ms}`).join(" ");
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Prompt layering
 // ---------------------------------------------------------------------------
@@ -820,6 +848,8 @@ export interface Deps {
   retryBaseMs: number;
   watchIntervalMs: number;
   startWatcher: boolean;
+  /** Min quiet window after a Lead turn during which wakeups are deferred/coalesced. */
+  leadWakeCooldownMs?: number;
   /** Root holding docs/brainstorm/<lane>.md briefs (defaults to the VibeSquad repo). */
   briefRoot?: string;
   /** Grace before a retired Buddy is archived, so an in-flight turn is not killed mid-stream. */
@@ -923,6 +953,7 @@ const DEFAULT_DEPS: Deps = {
   retryBaseMs: 5000,
   watchIntervalMs: 1500,
   startWatcher: true,
+  leadWakeCooldownMs: 3000,
   brainstormArchiveGraceMs: 120_000,
   firstPromptRedeliverMs: 30_000,
 };
@@ -987,6 +1018,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     const relayCounts = new Map<string, number>();
     const forwardedFromRetired = new Set<string>(); // `${retiredId}:${messageId}` already redirected
     const pendingWake = new Map<string, LogEntry[]>(); // lead id -> entries awaiting a wake
+    const lastWakeAt = new Map<string, number>(); // lead id -> last wake sent / turn_started timestamp (ms)
+    const deferredWakeTimers = new Map<string, ReturnType<typeof setTimeout>>(); // lead id -> pending wake re-check timer
+    const flushingLeads = new Set<string>(); // lead ids with an in-flight flushWake
     const wakeQueue: { team: string; entry: LogEntry }[] = [];
     let wakeTimer: ReturnType<typeof setTimeout> | null = null;
     let paseoApi: Paseo = null;
@@ -1202,14 +1236,24 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     stops.push(
       server.before("agent.create", (ctx: { request: any }) => {
         const t0 = Date.now();
+        const st = stepTimer() as StepTimer & { team?: string; lane?: string };
         try {
-          return beforeAgentCreate(ctx);
+          return beforeAgentCreate(ctx, st);
         } finally {
           log(`spawn-timing hook=${Date.now() - t0}ms`);
+          const text = `hook-timing hook=before.agent.create ${st.summary()}`;
+          setImmediate(() => {
+            try {
+              log(text);
+              appendLog(st.team || UNASSIGNED_TEAM_ID, { agent: "plugin", lane: st.lane || "unassigned", type: "metric", text });
+            } catch {
+              /* timers must never break a spawn */
+            }
+          });
         }
       }),
     );
-    const beforeAgentCreate = ({ request }: { request: any }) => {
+    const beforeAgentCreate = ({ request }: { request: any }, st: StepTimer & { team?: string; lane?: string }) => {
         const config: any = request.config ?? {};
         const env = (request as any).env as Record<string, string> | undefined;
         const rawReqLabels = ((request as any).labels ?? config?.labels) as Labels | undefined;
@@ -1263,6 +1307,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         let profileMatch = matchStoredProfile(profileHint, provider, title, explicitRole || titleRole || "worker");
         let matchedProfile = profileMatch?.profile ?? null;
 
+        st.mark("match-profile");
         // Remember whether the caller explicitly named the profile BEFORE any failover, so a
         // fuzzy (role/title/cwd) match can never be promoted to an explicit match and silently
         // overwrite the caller's provider/model. An explicit profile owns the provider choice;
@@ -1416,6 +1461,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           }
         }
 
+        st.mark("resolve-identity-labels");
         const keepCaller = Boolean(String(reqLabels["profile-override"] || env?.VS_PROFILE_OVERRIDE || "").trim());
         if (matchedProfile && profileMatch?.explicit && !keepCaller) {
           // An explicitly named profile wins over the caller's provider/model/mode/thinking.
@@ -1513,9 +1559,12 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const vibeMode = spawnTeam?.vibeMode === true;
         const isHubBuddy =
           role === "brainstorm" && !topicOf(reqLabels) && Boolean(explicitLane) && isHubCwd(spawnTeam, explicitLane);
+        st.team = spawnTeamId;
+        st.lane = explicitLane;
         const prefix = injectedPrefix(role, cwd, vibeMode, isHubBuddy);
         const profileNotes = isHubBuddy ? "" : dedupeNotesAgainst((matchedProfile?.notes ?? "").trim(), prefix);
         const gitState = inspectGitSpawnState(cwd);
+        st.mark("git-spawn-state");
         if (prefix && !sanitizedSysPrompt.includes(EVERYONE_LAYER)) {
           const existing = sanitizedSysPrompt.trim();
           const parts = [prefix];
@@ -1545,6 +1594,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           }
         }
 
+        st.mark("layer-prompt");
         // Every Buddy starts from its lane brief, even when spawned by Roster or the
         // legacy board (whose boot prompt never loads docs/brainstorm/<lane>.md).
         if (role === "brainstorm") {
@@ -1578,6 +1628,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           }
         }
 
+        st.mark("lane-brief");
         // Durable lane artifacts (docs/lanes/<lane>/SPEC.md + TASKS.json) ride along on every
         // spawn — brainstorm, lead and worker alike — so provider switches and restarts never
         // lose the lane's source of truth.
@@ -1595,6 +1646,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           }
         }
 
+        st.mark("lane-artifacts");
         if (leanApplies(next.provider ?? provider, env)) {
           next.providerOptions = leanProviderOptions(next.providerOptions, role);
           changed = true;
@@ -1633,12 +1685,18 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     stops.push(
       server.on("agent.created", async ({ agent }: { agent: any }, { paseo }: { paseo: any }) => {
         paseoApi = paseo;
+        const st = stepTimer();
+        let timedTeam = "";
+        let timedLane = "";
         try {
           const { snap: me, labels } = await labelsFor(paseo, agent);
+          st.mark("labels-for");
           // Never let a wrong-provider agent go on to retire a predecessor or count as a dispatch.
           if ((await enforceProfileAfterSpawn(agent, me, labels)) === "refused") return;
+          st.mark("enforce-profile");
           const parentId = agent.parentAgentId || labels["paseo.parent-agent-id"];
           const parent = parentId ? await snap(paseo, parentId) : null;
+          st.mark("parent-snap");
           const pl = parent?.labels ?? {};
           const agentCwd = agent.cwd ?? me?.cwd ?? "";
 
@@ -1732,6 +1790,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             }
           }
 
+          timedTeam = team;
+          timedLane = lane;
           // A lead always carries an ord: one past the lane's highest lead/former-lead ord.
           if ((labels.role || want.role) === "lead" && !String(labels.ord ?? "").trim()) {
             const ordLane = lane || resolved.callerLane;
@@ -1746,9 +1806,11 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             }
           }
 
+          st.mark("lead-ord-scan");
           if (Object.keys(want).length > 0) {
             await deps.setLabels(agent.id, { ...labels, ...want }).catch((e) => log(`label failed: ${e}`));
           }
+          st.mark("set-labels");
 
           const finalRole = labels.role || want.role || "";
           // A lead outlives the Buddy (or old lead) that spawned it: Paseo archives children with their
@@ -1775,7 +1837,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             );
           }
 
+          st.mark("retire-predecessors");
           if (team && lane) await refreshLaneWhosHere(paseo, lane);
+          st.mark("refresh-whos-here");
 
           // Block 2a: If a new agent had an initial prompt and stays idle with 0 tokens ~30 s after
           // creation without ever running, redeliver the initial prompt once and log first-prompt-redelivered.
@@ -1865,8 +1929,25 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               });
             }
           }
+          st.mark("first-dispatch-metric");
         } catch (err) {
           log(`agent.created handler failed: ${err}`);
+        } finally {
+          const text = `hook-timing hook=agent.created ${st.summary()}`;
+          setImmediate(() => {
+            try {
+              log(text);
+              appendLog(timedTeam ? teamIdOf(timedTeam, currentTeams()) : UNASSIGNED_TEAM_ID, {
+                agent: "plugin",
+                lane: timedLane || "unassigned",
+                type: "metric",
+                text,
+                refs: agent?.id ? [agent.id] : [],
+              });
+            } catch {
+              /* timers must never break the handler */
+            }
+          });
         }
       }),
     );
@@ -1888,10 +1969,19 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               if (!isDigestAgent(labels) && effectiveAgentRole({ labels }) === "lead") {
                 const handoffRes = await checkLeadTokens(paseo, agent.id, me, labels);
                 if (handoffRes?.stage === "auto-250" || handoffRes?.stage === "hard-300") return;
+                void flushWake(paseo, agent.id);
               }
               return await handleFailure(paseo, agent, String(outcome.error?.message ?? ""));
             }
-            if (outcome.kind !== "completed") return;
+            if (outcome.kind !== "completed") {
+              // Cancelled / other non-completed outcomes produce no digest, but a lead's
+              // held wakeups should still flush now that its turn is over.
+              const { labels } = await labelsFor(paseo, agent);
+              if (!isDigestAgent(labels) && effectiveAgentRole({ labels }) === "lead") {
+                void flushWake(paseo, agent.id);
+              }
+              return;
+            }
             retries.delete(agent.id);
 
             const { snap: me, labels } = await labelsFor(paseo, agent);
@@ -1907,7 +1997,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
                 await handoffCoordinator.confirmTakeover(agent.id).catch((e: unknown) => log(`confirmTakeover failed: ${e}`));
               }
               await checkLeadTokens(paseo, agent.id, me, labels);
-              flushWake(paseo, agent.id);
+              void flushWake(paseo, agent.id);
             }
           } catch (err) {
             log(`turn_ended handler failed: ${err}`);
@@ -2318,6 +2408,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           markTurnSeen(agent?.id);
           try {
             const me = await snap(paseo, agent.id);
+            if (me && effectiveAgentRole(me) === "lead") lastWakeAt.set(agent.id, Date.now());
             if (!me || !isRetiredLeadSnap(me)) return;
             const page = await paseo.agents
               .ref(agent.id)
@@ -2377,24 +2468,109 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           const queue = pendingWake.get(lead.id) ?? [];
           queue.push(...fresh);
           pendingWake.set(lead.id, queue);
-          if (lead.status === "idle") flushWake(paseo, lead.id);
+          if (lead.status === "idle") void flushWake(paseo, lead.id);
         } catch (err) {
           log(`wake dispatch failed: ${err}`);
         }
       }
     }
 
-    function flushWake(paseo: Paseo, leadId: string) {
-      const queue = pendingWake.get(leadId);
-      if (!queue?.length) return;
-      pendingWake.delete(leadId);
-      const last = queue[queue.length - 1]!;
-      const more = queue.length > 1 ? ` (+${queue.length - 1} more)` : "";
-      const text = `New team log event in lane ${last.lane}: [${last.type}] ${last.text}${more}. Run 'vs log --since-me' if more context is needed.`;
-      paseo.agents
-        .ref(leadId)
-        .send(text)
-        .catch((e: unknown) => log(`wakeup send failed: ${e}`));
+    /** Clear a lead's pending re-check timer (so a fresh, possibly shorter delay can be set). */
+    function clearWakeRecheck(leadId: string) {
+      const t = deferredWakeTimers.get(leadId);
+      if (t) {
+        deferredWakeTimers.delete(leadId);
+        clearTimeout(t);
+        timers.delete(t);
+      }
+    }
+
+    /** Schedule a single deferred re-check for a lead (cooldown or running-lead hold). */
+    function scheduleWakeRecheck(paseo: Paseo, leadId: string, delay: number) {
+      if (deferredWakeTimers.has(leadId)) return;
+      const t = later(() => {
+        deferredWakeTimers.delete(leadId);
+        // recheck=true: the timer only fires once and never re-schedules on a still-running lead.
+        void flushWake(paseo, leadId, true);
+      }, delay);
+      deferredWakeTimers.set(leadId, t);
+    }
+
+    async function flushWake(paseo: Paseo, leadId: string, recheck = false) {
+      if (flushingLeads.has(leadId)) return;
+      if (!pendingWake.get(leadId)?.length) return;
+      flushingLeads.add(leadId);
+      const cooldownMs = deps.leadWakeCooldownMs ?? 3000;
+      let tookQueue = false;
+      try {
+        // A fresh flushWake invalidates any pending re-check timer so a shorter delay
+        // (e.g. the lead just went idle) isn't blocked by a longer pending one.
+        clearWakeRecheck(leadId);
+
+        // Re-verify the Lead's live snapshot right before sending.
+        const liveLead = await snap(paseo, leadId);
+        // Shutting down: keep the queue, nothing more to do.
+        if (lifetime.signal.aborted) return;
+        // Vanished agent: keep the queue (never send on a null snapshot).
+        if (!liveLead) return;
+
+        // Archived/closed lead: discard its held wakeups (the lead is gone).
+        if (liveLead.archivedAt || liveLead.status === "closed") {
+          pendingWake.delete(leadId);
+          lastWakeAt.delete(leadId);
+          return;
+        }
+
+        // No longer a lead (e.g. retired): don't send to it; re-route its held wakeups
+        // through the normal queueWake/dispatchWakes path to the current lead.
+        if (effectiveAgentRole(liveLead) !== "lead") {
+          const entries = pendingWake.get(leadId) ?? [];
+          if (entries.length) {
+            pendingWake.delete(leadId);
+            lastWakeAt.delete(leadId);
+            const where = teamOf(liveLead.labels, liveLead.cwd);
+            if (where) {
+              for (const entry of entries) queueWake(where.team, entry);
+            }
+          }
+          return;
+        }
+
+        // Mid-turn: hold. At most one re-check per hold — turn_ended handles normal
+        // completion, so a lead stuck in "running" is not snap()'d every cooldown forever.
+        if (liveLead.status && liveLead.status !== "idle") {
+          if (!recheck) scheduleWakeRecheck(paseo, leadId, cooldownMs);
+          return;
+        }
+
+        // Coalesce/defer wakeups within the cooldown window of the last wake sent or
+        // turn_started (the notifyOnFinish double-wake case). A normal post-turn flush
+        // is NOT penalized: turn_ended does not update lastWakeAt.
+        const elapsed = Date.now() - (lastWakeAt.get(leadId) ?? 0);
+        if (elapsed < cooldownMs) {
+          scheduleWakeRecheck(paseo, leadId, cooldownMs - elapsed);
+          return;
+        }
+        const queue = pendingWake.get(leadId);
+        if (!queue?.length) return;
+        pendingWake.delete(leadId);
+        tookQueue = true;
+        const last = queue[queue.length - 1]!;
+        const more = queue.length > 1 ? ` (+${queue.length - 1} more)` : "";
+        const text = `New team log event in lane ${last.lane}: [${last.type}] ${last.text}${more}. Run 'vs log --since-me' if more context is needed.`;
+        try {
+          await paseo.agents.ref(leadId).send(text);
+        } catch (e) {
+          log(`wakeup send failed: ${e}`);
+        }
+        lastWakeAt.set(leadId, Date.now());
+      } finally {
+        flushingLeads.delete(leadId);
+        // Entries queued while we awaited the send: flush them next.
+        if (tookQueue && pendingWake.get(leadId)?.length) {
+          void flushWake(paseo, leadId);
+        }
+      }
     }
 
     /** Read newly appended lines in every team log; exported through the returned handle for tests. */
@@ -2462,6 +2638,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       lifetime.abort();
       if (interval) clearInterval(interval);
       for (const t of timers) clearTimeout(t);
+      for (const t of deferredWakeTimers.values()) clearTimeout(t);
+      deferredWakeTimers.clear();
       for (const stop of stops) stop();
     };
     (dispose as any).scanLogs = scanLogs;

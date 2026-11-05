@@ -151,6 +151,9 @@ function harness(
     timelineByAgent?: Map<string, any[]>;
     cappedProviders?: any;
     usageProviders?: any[];
+    leadWakeCooldownMs?: number;
+    /** Test hook for flushWake's snap(): null -> null snapshot, a string -> the agent with that status. */
+    snapStatusOverride?: (id: string) => string | null | undefined;
   },
 ) {
   const before = new Map<string, (input: any) => any>();
@@ -179,6 +182,7 @@ function harness(
     debounceMs: 20,
     retryBaseMs: 10,
     firstPromptRedeliverMs: 60_000,
+    leadWakeCooldownMs: opts.leadWakeCooldownMs ?? 40,
     ...(opts.cappedProviders !== undefined ? { cappedProviders: opts.cappedProviders } : {}),
     ...(opts.usageProviders !== undefined ? { usageProviders: opts.usageProviders } : {}),
     setLabels: async (agentId: string, labels: Record<string, string>, name?: string) => {
@@ -212,6 +216,11 @@ function harness(
         return {
           async refresh() {
             const a = agents.get(id);
+            if (opts.snapStatusOverride) {
+              const override = opts.snapStatusOverride(id);
+              if (override === null) return null;
+              if (typeof override === "string") return a ? { agent: { ...a, status: override } } : null;
+            }
             return a ? { agent: a } : null;
           },
           async send(text: string) {
@@ -788,6 +797,213 @@ test(
       });
       assert.equal(agy.config.provider, "antigravity-cli", "antigravity-cli provider preserved on a fuzzy match");
       assert.equal(agy.config.model, "gemini-3.8-flash", "caller model preserved on a fuzzy match");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Stage 8 — flushWake guards a running/vanished Lead and coalesces wakeups
+// ---------------------------------------------------------------------------
+
+test(
+  "Stage 8a: flushWake holds when snap() reports a running Lead mid-race and a single turn_ended flushes it",
+  withEnv(async ({ briefRoot }) => {
+    const lead = {
+      id: "lead-2",
+      title: "★ Fea2 · phase two",
+      cwd: CWD,
+      status: "idle",
+      labels: { team: "vibesquad", lane: "feat-alpha", role: "lead", ord: "2" },
+    };
+    const former = {
+      id: "lead-1",
+      title: "(old) Fea1 · initial setup",
+      cwd: CWD,
+      status: "idle",
+      labels: { team: "vibesquad", lane: "feat-alpha", role: "former-lead", ord: "1" },
+    };
+    // Simulate the race: dispatchWakes sees the lead idle in list(), but flushWake's
+    // snap() (refresh) reports "running" (e.g. notifyOnFinish just woke it).
+    let snapStatus: string | null | undefined = "running";
+    const h = harness(
+      new Map<string, any>([
+        ["lead-2", lead],
+        ["lead-1", former],
+      ]),
+      { briefRoot, leadWakeCooldownMs: 200, snapStatusOverride: (id) => (id === "lead-2" ? snapStatus : undefined) },
+    );
+    const wakeCount = () => h.sent.filter((s) => s.to === "lead-2" && s.text.includes("New team log event")).length;
+    try {
+      // Relay a `done` entry; dispatchWakes sees idle, but snap() reports running.
+      await h.onTurnEnded(former, { kind: "completed" });
+      await wait(40); // debounce (20) fires dispatchWakes -> flushWake sees "running" and holds
+      assert.equal(wakeCount(), 0, "no wakeup sent into a running lead");
+
+      // The lead finishes: snap is now idle and a single turn_ended flushes the held entry.
+      snapStatus = undefined;
+      await h.onTurnEnded(lead, { kind: "completed" });
+      await wait(60); // flushWake send settles
+      assert.equal(wakeCount(), 1, "a single turn_ended flushed the held entry");
+
+      // The deferred re-check timer (if any) must not double-send.
+      await wait(250);
+      assert.equal(wakeCount(), 1, "no duplicate wakeup after the re-check window");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "Stage 8b: wakeups arriving within the cooldown window are coalesced into a single send",
+  withEnv(async ({ briefRoot }) => {
+    const lead = {
+      id: "lead-2",
+      title: "★ Fea2 · phase two",
+      cwd: CWD,
+      status: "idle",
+      labels: { team: "vibesquad", lane: "feat-alpha", role: "lead", ord: "2" },
+    };
+    const former1 = {
+      id: "lead-1",
+      title: "(old) Fea1 · first",
+      cwd: CWD,
+      status: "idle",
+      labels: { team: "vibesquad", lane: "feat-alpha", role: "former-lead", ord: "1" },
+    };
+    const former2 = {
+      id: "lead-0",
+      title: "(old) Fea0 · second",
+      cwd: CWD,
+      status: "idle",
+      labels: { team: "vibesquad", lane: "feat-alpha", role: "former-lead", ord: "0" },
+    };
+    const h = harness(
+      new Map<string, any>([
+        ["lead-2", lead],
+        ["lead-1", former1],
+        ["lead-0", former2],
+      ]),
+      { briefRoot, leadWakeCooldownMs: 300 },
+    );
+    const wakeCount = () => h.sent.filter((s) => s.to === "lead-2" && s.text.includes("New team log event")).length;
+    try {
+      // The Lead starts a turn, opening the cooldown window.
+      await h.onTurnStarted(lead);
+
+      // Two relays land in separate debounce batches but within the same cooldown window.
+      await h.onTurnEnded(former1, { kind: "completed" });
+      await wait(40); // former1's dispatch already fired and deferred within the cooldown
+      await h.onTurnEnded(former2, { kind: "completed" });
+      await wait(500); // cooldown (300) + settle
+
+      assert.equal(wakeCount(), 1, "both entries coalesced into a single wakeup");
+      assert.ok(
+        h.sent.some((s) => s.to === "lead-2" && s.text.includes("(+1 more)")),
+        "the single wakeup reports the coalesced extra entry",
+      );
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "Stage 8c: flushWake holds the queue on a null snapshot and never sends into a vanished lead",
+  withEnv(async ({ briefRoot }) => {
+    const lead = {
+      id: "lead-2",
+      title: "★ Fea2 · phase two",
+      cwd: CWD,
+      status: "idle",
+      labels: { team: "vibesquad", lane: "feat-alpha", role: "lead", ord: "2" },
+    };
+    const former = {
+      id: "lead-1",
+      title: "(old) Fea1 · initial setup",
+      cwd: CWD,
+      status: "idle",
+      labels: { team: "vibesquad", lane: "feat-alpha", role: "former-lead", ord: "1" },
+    };
+    // snap() reports a vanished/archived lead (null snapshot).
+    let snapStatus: string | null | undefined = null;
+    const h = harness(
+      new Map<string, any>([
+        ["lead-2", lead],
+        ["lead-1", former],
+      ]),
+      { briefRoot, leadWakeCooldownMs: 200, snapStatusOverride: (id) => (id === "lead-2" ? snapStatus : undefined) },
+    );
+    const wakeCount = () => h.sent.filter((s) => s.to === "lead-2" && s.text.includes("New team log event")).length;
+    try {
+      await h.onTurnEnded(former, { kind: "completed" });
+      await wait(60); // dispatchWakes -> flushWake sees a null snapshot and bails (keeps the queue)
+      assert.equal(wakeCount(), 0, "never sends on a null snapshot");
+
+      // Once the lead is visible again, a single turn_ended flushes the held entry.
+      snapStatus = undefined;
+      await h.onTurnEnded(lead, { kind: "completed" });
+      await wait(60);
+      assert.equal(wakeCount(), 1, "held entry flushed once the lead reappeared");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "Stage 8d: a retired lead's held wakeups are re-routed to the current lead, never sent to the retired one",
+  withEnv(async ({ briefRoot }) => {
+    const lead2 = {
+      id: "lead-2",
+      title: "★ Fea2 · phase two",
+      cwd: CWD,
+      status: "idle",
+      labels: { team: "vibesquad", lane: "feat-alpha", role: "lead", ord: "2" },
+    };
+    const former = {
+      id: "lead-1",
+      title: "(old) Fea1 · initial setup",
+      cwd: CWD,
+      status: "idle",
+      labels: { team: "vibesquad", lane: "feat-alpha", role: "former-lead", ord: "1" },
+    };
+    const agents = new Map<string, any>([
+      ["lead-2", lead2],
+      ["lead-1", former],
+    ]);
+    // While the lead is "running" (held), it gets retired and a new lead takes over.
+    let snapStatus: string | null | undefined = "running";
+    const h = harness(agents, {
+      briefRoot,
+      leadWakeCooldownMs: 100,
+      snapStatusOverride: (id) => (id === "lead-2" ? snapStatus : undefined),
+    });
+    const wakeTo = (id: string) => h.sent.filter((s) => s.to === id && s.text.includes("New team log event")).length;
+    try {
+      // Queue a relay `done` entry into lead-2's pendingWake, held because snap reports "running".
+      await h.onTurnEnded(former, { kind: "completed" });
+      await wait(40); // dispatchWakes -> flushWake holds (running) and schedules one re-check
+      assert.equal(wakeTo("lead-2"), 0, "held entry is not yet sent");
+
+      // lead-2 is retired; a new lead-3 takes its place.
+      lead2.labels.role = "former-lead";
+      agents.set("lead-3", {
+        id: "lead-3",
+        title: "★ Fea3 · phase three",
+        cwd: CWD,
+        status: "idle",
+        labels: { team: "vibesquad", lane: "feat-alpha", role: "lead", ord: "3" },
+      });
+      snapStatus = undefined;
+
+      // The re-check fires: flushWake sees a retired lead and re-routes to lead-3.
+      await wait(300); // re-check (100) + re-dispatch debounce (20) + settle
+
+      assert.equal(wakeTo("lead-2"), 0, "never sent to the retired lead");
+      assert.equal(wakeTo("lead-3"), 1, "held entry re-routed to the current lead");
     } finally {
       h.stop?.();
     }

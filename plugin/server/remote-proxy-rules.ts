@@ -230,8 +230,9 @@ export const REMOTE_BODY_POLICY: Readonly<Record<string, BodyPolicy>> = {
   },
   "/__vibesquad/inbox/park-topic": { fields: { cardId, agentId: id, summaryNote: str(4000) }, require: ["cardId"] },
   "/__vibesquad/inbox/handoff-topic": { fields: { cardId, agentId: id, planNote: str(4000), usedTokens: tokens }, require: ["cardId"] },
-  // Block 4: no profile/cwd/provider/model/pendingPrompt/summaryUpdate (REMOTE_FORBIDDEN_BODY_KEYS); the server
-  // takes the profile from the lane's lastProfile and the cwd from the lane's paths.
+  // Block 4: no profile/cwd/provider/pendingPrompt/summaryUpdate (REMOTE_FORBIDDEN_BODY_KEYS); the server
+  // takes the profile from the lane's lastProfile and the cwd from the lane's paths. `model` / `modeId` /
+  // `thinkingOptionId` are allowlisted here so a staged provider switch can override them on the fresh Buddy.
   "/__vibesquad/brainstorm-restart": {
     fields: {
       reason: oneOf("start-brainstorm", "manual", "warn-80k", "handoff", "provider-switch"),
@@ -242,6 +243,9 @@ export const REMOTE_BODY_POLICY: Readonly<Record<string, BodyPolicy>> = {
       agentId: id,
       usedTokens: tokens,
       profileName: str(120),
+      model: str(200),
+      modeId: str(64),
+      thinkingOptionId: str(64),
     },
     require: ["laneId"],
     registry: "lane",
@@ -254,9 +258,11 @@ export const REMOTE_BODY_POLICY: Readonly<Record<string, BodyPolicy>> = {
 };
 export const WRITE_SCHEMAS = REMOTE_BODY_POLICY;
 
-/** Never accepted in a remote body at any depth, whatever a policy says: spawn config, DI hooks, prompt and brief text. */
+/** Never accepted in a remote body at any depth, whatever a policy says: spawn config, DI hooks, prompt and brief text.
+ *  `model`, `modeId` and `thinkingOptionId` are the exception: they are allowlisted on POST /__vibesquad/brainstorm-restart
+ *  (staged provider switch overrides) and remain rejected everywhere else by each endpoint's field allowlist. */
 export const REMOTE_FORBIDDEN_BODY_KEYS: readonly string[] = [
-  "cwd", "provider", "model", "profile", "profilesPath", "baseHome", "labels", "title", "pendingPrompt", "summaryUpdate",
+  "cwd", "provider", "profile", "profilesPath", "baseHome", "labels", "title", "pendingPrompt", "summaryUpdate",
   "skipDaemon", "daemonClient", "clientFactory", "forceNew", "oldAgent", "oldLead", "agents", "execSpawn", "teamsFilePath",
   "cooldownMs", "emptyRetryMs", "backstopDelayMs", "httpWaitMs", "async", "__proto__", "constructor", "prototype",
 ];

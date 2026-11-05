@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from "react";
-import { isRemote } from "./remoteSession.ts";
+import { isAndroidUserAgent, isRemote } from "./remoteSession.ts";
+
+declare const __VS_APP_VERSION__: string | undefined;
 
 // Legacy owner aliases are assembled at runtime so the old literal never appears in tracked files.
 export const LEGACY_USER_TYPE = "au" + "b";
@@ -318,14 +320,64 @@ export function isSemverNewer(currentVer: string, remoteVer: string, channel: Up
 }
 
 let updaterStatus: UpdaterStatusView = {
-  currentVersion: "0.2.0",
-  channel: "stable",
+  currentVersion: typeof __VS_APP_VERSION__ !== "undefined" && __VS_APP_VERSION__ ? __VS_APP_VERSION__ : "0.2.0",
+  channel: typeof localStorage !== "undefined" && localStorage.getItem("vs.updateChannel") === "beta" ? "beta" : "stable",
   updateAvailable: false,
   availableVersion: "",
   downloaded: false,
   dismissed: false,
   downloadUrl: "",
 };
+
+export function parseGithubReleaseVersion(release: any, channel: UpdateChannel = "stable"): { version: string; downloadUrl: string } {
+  const tagName = String(release?.tag_name || "").trim();
+  let version = "";
+  if (/^v?\d+\.\d+\.\d+/i.test(tagName)) {
+    version = tagName.replace(/^v/i, "");
+  } else {
+    const text = `${String(release?.name || "")}\n${String(release?.body || "")}`;
+    const m = text.match(/(\d+\.\d+\.\d+(?:-beta\.\d+)?)/i);
+    if (m) version = m[1];
+  }
+  let downloadUrl = "";
+  if (Array.isArray(release?.assets)) {
+    const asset = release.assets.find((a: any) => a && a.name === "VibeSquad.apk" && a.browser_download_url);
+    if (asset) downloadUrl = String(asset.browser_download_url);
+  }
+  if (!downloadUrl) {
+    const fallbackTag = tagName || (channel === "beta" ? "beta" : `v${version}`);
+    downloadUrl = `https://github.com/Pizzarar/VibeSquad/releases/download/${fallbackTag}/VibeSquad.apk`;
+  }
+  return { version, downloadUrl };
+}
+
+export async function checkGithubAndroidRelease(
+  currentVer: string,
+  channel: UpdateChannel = "stable",
+  fetchFn: typeof fetch = fetch,
+): Promise<{ updateAvailable: boolean; availableVersion: string; downloadUrl: string }> {
+  const opts: RequestInit = { headers: { Accept: "application/vnd.github+json" }, cache: "no-store" };
+  let r = await fetchFn(
+    channel === "beta"
+      ? "https://api.github.com/repos/Pizzarar/VibeSquad/releases/tags/beta"
+      : "https://api.github.com/repos/Pizzarar/VibeSquad/releases/latest",
+    opts,
+  );
+  if (!r.ok && channel === "beta") {
+    r = await fetchFn("https://api.github.com/repos/Pizzarar/VibeSquad/releases/latest", opts);
+  }
+  if (!r.ok) {
+    return { updateAvailable: false, availableVersion: "", downloadUrl: "" };
+  }
+  const data = await r.json();
+  const parsed = parseGithubReleaseVersion(data, channel);
+  const updateAvailable = Boolean(parsed.version && isSemverNewer(currentVer, parsed.version, channel));
+  return {
+    updateAvailable,
+    availableVersion: updateAvailable ? parsed.version : "",
+    downloadUrl: updateAvailable ? parsed.downloadUrl : "",
+  };
+}
 
 export const getUpdaterStatus = (): UpdaterStatusView => updaterStatus;
 
@@ -424,6 +476,18 @@ export async function loadDesktopStatus(): Promise<DesktopStatusView> {
 }
 
 export async function loadUpdaterStatus(): Promise<UpdaterStatusView> {
+  if (isAndroidUserAgent()) {
+    try {
+      const res = await checkGithubAndroidRelease(updaterStatus.currentVersion, updaterStatus.channel);
+      setUpdaterStatus({
+        updateAvailable: res.updateAvailable,
+        availableVersion: res.availableVersion,
+        downloadUrl: res.downloadUrl,
+        downloaded: false,
+      });
+    } catch {}
+    return updaterStatus;
+  }
   if (!(globalThis as any).__VIBESQUAD_DESKTOP_BRIDGE__) {
     if (isRemote()) return updaterStatus;
   }
@@ -474,6 +538,13 @@ export async function saveUpdateChannel(channel: UpdateChannel): Promise<Updater
   const ch: UpdateChannel = channel === "beta" ? "beta" : "stable";
   setUpdaterStatus({ channel: ch, dismissed: false });
   try {
+    localStorage.setItem("vs.updateChannel", ch);
+  } catch {}
+  if (isAndroidUserAgent()) {
+    await loadUpdaterStatus();
+    return updaterStatus;
+  }
+  try {
     const r = await fetch("/__desktop/updater/channel", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -505,6 +576,15 @@ export async function triggerUpdateInstall(): Promise<boolean> {
     } catch {}
   }
   if (updaterStatus.downloadUrl && typeof window !== "undefined") {
+    if (isAndroidUserAgent()) {
+      try {
+        const w = window.open(updaterStatus.downloadUrl, "_blank");
+        if (!w) window.location.assign(updaterStatus.downloadUrl);
+      } catch {
+        window.location.assign(updaterStatus.downloadUrl);
+      }
+      return true;
+    }
     window.location.assign(updaterStatus.downloadUrl);
     return true;
   }

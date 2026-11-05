@@ -4,6 +4,7 @@ import { App } from "./App";
 import { daemonClient, start } from "./paseo";
 import { needsRemotePairing } from "./paseoRemote";
 import { RemotePair } from "./RemotePair";
+import "./perfBoot";
 import { loadUserName } from "./userName";
 import { FiveLeads, SpriteSheet } from "./demo";
 import "./styles.css";

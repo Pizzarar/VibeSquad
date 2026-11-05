@@ -13,7 +13,7 @@ export function matchesFilter(it: any, f: TimelineFilter): boolean {
   const t = String(it.type ?? "");
   switch (f) {
     case "text":
-      return t === "user_message" || t === "assistant_message" || t === "reasoning";
+      return t === "user_message" || t === "assistant_message" || t === "reasoning" || t === "provider_switch";
     case "tools":
       return t === "tool_call";
     case "errors":
