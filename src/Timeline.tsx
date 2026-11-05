@@ -16,6 +16,10 @@ import { getPanes } from "./panes";
 import { SubagentList } from "./SubagentList";
 import { Spinner, Stamp, TimelineSkeleton, useDelayedBusy } from "./QuickWinsUi";
 import { MermaidView } from "./MermaidView";
+import { noteTimelineOffers, useLooksDoneId } from "./PinGrid";
+import { SpinOffCard, SendToCard, findPinForAgent, useSendTo, useSpinOff } from "./PinIdeas";
+import { LooksDoneCard } from "./PinDone";
+import { hasLooksDone, isHubPin, parseSendTo, parseSpinOff } from "./pins";
 
 export class TimelineErrorBoundary extends Component<
   { children: ReactNode; fallbackLabel?: string },
@@ -155,7 +159,7 @@ export function tokenizeMarkdown(text: string, doc = false): Token[] {
   while (i < lines.length) {
     const line = lines[i];
     // Fenced code block
-    const fenceMatch = line.match(/^```(\w*)\s*$/);
+    const fenceMatch = line.match(/^```([^`]*?)\s*$/);
     if (fenceMatch) {
       const lang = fenceMatch[1] ?? "";
       const codeLines: string[] = [];
@@ -360,6 +364,9 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 
 export function MarkdownRenderer({ text, agentId, doc = false }: { text: string; agentId?: string; doc?: boolean }) {
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const liveSpinOff = useSpinOff(agentId ?? null);
+  const liveSendTo = useSendTo(agentId ?? null);
+  const liveLooksDoneId = useLooksDoneId(agentId ?? null);
   const tokens = tokenizeMarkdown(text, doc);
 
   const renderInlineWithImages = (t: string) => {
@@ -400,11 +407,48 @@ export function MarkdownRenderer({ text, agentId, doc = false }: { text: string;
         if (lvl === 2) return <h2 key={i} className={cls}>{tok.text}</h2>;
         return <h3 key={i} className={cls}>{tok.text}</h3>;
       }
-      case "code_block":
-        if (tok.lang.trim().toLowerCase() === "mermaid") {
+      case "code_block": {
+        const lang = tok.lang.trim().toLowerCase();
+        if (lang === "mermaid") {
           return <MermaidView key={i} code={tok.code} />;
         }
+        if (lang === "vs:spin-off" || /^\s*vs:spin-off\s*(\n|$)/i.test(tok.code)) {
+          const teams = parseSpinOff(`\`\`\`vs:spin-off\n${tok.code.replace(/^\s*vs:spin-off\s*\n?/i, "")}\n\`\`\``);
+          const pin = findPinForAgent(agentId);
+          if (teams?.length && pin) {
+            return (
+              <div key={i} className="tl-spinoff-block" data-testid="tl-spinoff-block">
+                <CodeBlock lang={tok.lang || "vs:spin-off"} code={tok.code} />
+                <SpinOffCard pin={pin} offer={{ id: liveSpinOff?.id ?? `${agentId ?? "inline"}:inline:${i}`, teams }} variant="bar" />
+              </div>
+            );
+          }
+        }
+        if (lang.startsWith("vs:send-to") || /^\s*vs:send-to\s+[A-Za-z0-9_-]+/m.test(tok.code)) {
+          const parsedSendTo = parseSendTo(lang.startsWith("vs:send-to") ? `${tok.lang}\n${tok.code}` : tok.code);
+          const pin = findPinForAgent(agentId);
+          if (parsedSendTo && pin) {
+            return (
+              <div key={i} className="tl-sendto-block" data-testid="tl-sendto-block">
+                <CodeBlock lang={tok.lang || "vs:send-to"} code={tok.code} />
+                <SendToCard pin={pin} offer={{ ...parsedSendTo, id: liveSendTo?.id ?? `${agentId ?? "inline"}:inline:${i}` }} variant="bar" />
+              </div>
+            );
+          }
+        }
+        if (lang === "vs:looks-done" || hasLooksDone(tok.code)) {
+          const pin = findPinForAgent(agentId);
+          if (pin && !isHubPin(pin)) {
+            return (
+              <div key={i} className="tl-looksdone-block" data-testid="tl-looksdone-block">
+                <CodeBlock lang={tok.lang || "vs:looks-done"} code={tok.code} />
+                <LooksDoneCard pin={pin} messageId={liveLooksDoneId ?? `${agentId ?? "inline"}:inline:${i}`} />
+              </div>
+            );
+          }
+        }
         return <CodeBlock key={i} lang={tok.lang} code={tok.code} />;
+      }
       case "table":
         return (
           <table key={i} className="tl-table">
@@ -908,6 +952,10 @@ export function useTimeline(agentId: string, status: string, active = true, pred
     const divider: Entry = { item: { type: "provider_switch", label: predecessor.label }, seqStart: -1 };
     return [...predecessor.entries, divider, ...entries];
   }, [predecessor, entries]);
+
+  useEffect(() => {
+    if (agentId && entries.length) noteTimelineOffers(agentId, entries);
+  }, [agentId, entries]);
 
   useEffect(() => {
     if (DEMO) {

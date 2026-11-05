@@ -14,12 +14,12 @@ test("valid block parses one Team per line", () => {
   ]);
 });
 
-test("malformed and blank lines are skipped, rows capped at 6", () => {
+test("malformed and blank lines are skipped, rows capped at 10", () => {
   assert.deepEqual(parseSpinOff(fence("\nno bar here\n | no name\nName |\nGood | ok | with | bars")), [{ name: "Good", brief: "ok | with | bars" }]);
   assert.equal(parseSpinOff(fence("junk")), null);
   assert.equal(parseSpinOff("no fence\nA | b"), null);
-  const many = Array.from({ length: 9 }, (_, i) => `T${i} | b`).join("\n");
-  assert.equal(parseSpinOff(fence(many)).length, 6);
+  const many = Array.from({ length: 12 }, (_, i) => `T${i} | b`).join("\n");
+  assert.equal(parseSpinOff(fence(many)).length, 10);
 });
 
 test("only the newest assistant message counts; a revised block replaces the offer", () => {

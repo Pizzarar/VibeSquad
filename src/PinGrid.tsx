@@ -405,6 +405,11 @@ export function useLooksDoneId(agentId: string | null): string | null {
   );
 }
 
+export function noteTimelineOffers(agentId: string, entries: TimelineEntry[]) {
+  setLooksDoneId(agentId, looksDoneIdFrom(agentId, entries));
+  noteSendTo(agentId, entries);
+}
+
 // Tail of the Brainstorm's timeline. Light version of the drawer's loader: small tail, debounced refetch.
 export function usePreview(agentId: string | null): Line[] {
   const [lines, setLines] = useState<Line[]>([]);
@@ -413,8 +418,7 @@ export function usePreview(agentId: string | null): Line[] {
     if (!agentId) return;
     const apply = (entries: TimelineEntry[]) => {
       setLines(linesFrom(entries));
-      setLooksDoneId(agentId, looksDoneIdFrom(agentId, entries));
-      noteSendTo(agentId, entries);
+      noteTimelineOffers(agentId, entries);
     };
     if (DEMO) {
       apply(demoTimeline(agentId));

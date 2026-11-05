@@ -141,7 +141,7 @@ export function parseSendTo(text) {
 }
 
 export const SPIN_OFF_MARKER = "vs:spin-off";
-export const SPIN_OFF_MAX = 6;
+export const SPIN_OFF_MAX = 10;
 
 /**
  * Parse a spin-off proposal: a fence opened by ```vs:spin-off, one Team per line as `Name | 1-line brief`.
@@ -151,7 +151,7 @@ export const SPIN_OFF_MAX = 6;
  */
 export function parseSpinOff(text) {
   const lines = String(text ?? "").replace(/\r\n/g, "\n").split("\n");
-  let outer = null; // { ch, len } of an open non-spin-off fence
+  let outer = null; // { ch, len, bareFirstLine } of an open non-spin-off fence
   let block = null; // rows of the open spin-off fence
   let last = null;
   for (const line of lines) {
@@ -162,16 +162,30 @@ export function parseSpinOff(text) {
         block = null;
         continue;
       }
+      if (!block.length && /^\s*vs:spin-off\s*$/i.test(line)) continue;
       const bar = line.indexOf("|");
       if (bar < 0 || block.length >= SPIN_OFF_MAX) continue;
-      const name = line.slice(0, bar).replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").trim();
+      const name = line
+        .slice(0, bar)
+        .replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "")
+        .trim()
+        .replace(/^(?:\*\*|`)+|(?:\*\*|`)+$/g, "")
+        .trim();
       const brief = line.slice(bar + 1).trim();
       if (name && brief) block.push({ name, brief });
     } else if (outer) {
-      if (f && f[1][0] === outer.ch && f[1].length >= outer.len && !f[2]) outer = null;
+      if (f && f[1][0] === outer.ch && f[1].length >= outer.len && !f[2]) {
+        outer = null;
+      } else if (outer.bareFirstLine && line.trim()) {
+        outer.bareFirstLine = false;
+        if (/^\s*vs:spin-off\s*$/i.test(line)) {
+          block = [];
+          outer = null;
+        }
+      }
     } else if (f) {
-      if (f[1] === "```" && f[2] === "vs:spin-off") block = [];
-      else outer = { ch: f[1][0], len: f[1].length };
+      if (f[1] === "```" && f[2].toLowerCase() === "vs:spin-off") block = [];
+      else outer = { ch: f[1][0], len: f[1].length, bareFirstLine: f[1] === "```" && !f[2] };
     }
   }
   if (block) last = block; // unterminated fence (message cut off)
