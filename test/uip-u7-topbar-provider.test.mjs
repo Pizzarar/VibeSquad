@@ -10,19 +10,18 @@ test("provider dropdown offers the four canonical providers", () => {
   assert.match(src, /data-testid="drawer-provider-select"/);
 });
 
-test("resolveProviderSwitchTarget resolves provider/model/mode and skips the current provider", async () => {
-  const a = src.indexOf("export type ProviderOption");
-  const b = src.indexOf("export type DrawerHeaderProps");
-  // Fall back to a regex-light TS strip via node's built-in when available.
-  let mod;
-  try {
-    const { stripTypeScriptTypes } = await import("node:module");
-    const full = stripTypeScriptTypes(src.slice(a, b).replace(/export type OppositeProviderTarget[\s\S]*?\n};\n/, ""), { mode: "strip" });
-    const COUNTER = src.match(/const COUNTERPART_PROFILE_MAP[\s\S]*?\n};\n/)[0];
-    mod = await import("data:text/javascript," + encodeURIComponent(stripTypeScriptTypes(COUNTER, { mode: "strip" }) + full.replace(/export /g, "export ")));
-  } catch {
-    return; // no TS stripper on this Node; the source-shape tests still cover the wiring
-  }
+test("resolveProviderSwitchTarget resolves provider/model/mode and skips the current provider", async (t) => {
+  const { stripTypeScriptTypes } = await import("node:module");
+  if (typeof stripTypeScriptTypes !== "function") return t.skip("node:module.stripTypeScriptTypes is unavailable on this Node");
+  const grab = (re, what) => {
+    const m = src.match(re);
+    assert.ok(m, `could not locate ${what} in DrawerHeader.tsx`);
+    return m[0];
+  };
+  const counter = grab(/const COUNTERPART_PROFILE_MAP[\s\S]*?\r?\n};\r?\n/, "COUNTERPART_PROFILE_MAP");
+  const opposite = grab(/export type OppositeProviderTarget[\s\S]*?(?=export type DrawerHeaderProps)/, "oppositeProviderTarget");
+  const js = stripTypeScriptTypes(counter + opposite, { mode: "strip" });
+  const mod = await import("data:text/javascript," + encodeURIComponent(js));
   assert.equal(mod.normalizeProviderId("gemini"), "antigravity-cli");
   assert.equal(mod.normalizeProviderId("anthropic"), "claude");
   assert.equal(mod.normalizeProviderId("openai"), "codex");
