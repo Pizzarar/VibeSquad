@@ -151,6 +151,7 @@ function harness(
     timelineByAgent?: Map<string, any[]>;
     cappedProviders?: any;
     usageProviders?: any[];
+    leadWakeCooldownMs?: number;
   },
 ) {
   const before = new Map<string, (input: any) => any>();
@@ -181,6 +182,7 @@ function harness(
     firstPromptRedeliverMs: 60_000,
     ...(opts.cappedProviders !== undefined ? { cappedProviders: opts.cappedProviders } : {}),
     ...(opts.usageProviders !== undefined ? { usageProviders: opts.usageProviders } : {}),
+    ...(opts.leadWakeCooldownMs !== undefined ? { leadWakeCooldownMs: opts.leadWakeCooldownMs } : {}),
     setLabels: async (agentId: string, labels: Record<string, string>, name?: string) => {
       setLabelsCalls.push({ agentId, labels, name });
       const a = agents.get(agentId);
@@ -788,6 +790,111 @@ test(
       });
       assert.equal(agy.config.provider, "antigravity-cli", "antigravity-cli provider preserved on a fuzzy match");
       assert.equal(agy.config.model, "gemini-3.8-flash", "caller model preserved on a fuzzy match");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Stage 8 — flushWake guards a running Lead and coalesces wakeups in a cooldown
+// ---------------------------------------------------------------------------
+
+test(
+  "Stage 8a: flushWake holds queued log entries while a Lead is running and flushes them once idle",
+  withEnv(async ({ briefRoot }) => {
+    const lead = {
+      id: "lead-2",
+      title: "★ Fea2 · phase two",
+      cwd: CWD,
+      status: "running",
+      labels: { team: "vibesquad", lane: "feat-alpha", role: "lead", ord: "2" },
+    };
+    const former = {
+      id: "lead-1",
+      title: "(old) Fea1 · initial setup",
+      cwd: CWD,
+      status: "idle",
+      labels: { team: "vibesquad", lane: "feat-alpha", role: "former-lead", ord: "1" },
+    };
+    const h = harness(
+      new Map<string, any>([
+        ["lead-2", lead],
+        ["lead-1", former],
+      ]),
+      { briefRoot, leadWakeCooldownMs: 80 },
+    );
+    const wakeCount = () => h.sent.filter((s) => s.to === "lead-2" && s.text.includes("New team log event")).length;
+    try {
+      // A former lead's turn end relays a `done` entry to the current lead.
+      await h.onTurnEnded(former, { kind: "completed" });
+      await wait(40); // debounce (20) fires dispatchWakes; the lead is "running", so the entry is held
+      assert.equal(wakeCount(), 0, "no wakeup sent into a running lead");
+
+      // A Lead turn ends while still "running": flushWake re-verifies and holds.
+      await h.onTurnEnded(lead, { kind: "completed" });
+      await wait(10);
+      assert.equal(wakeCount(), 0, "flushWake re-check keeps the entry queued");
+
+      // Once the Lead is idle and its turn ends, the entry flushes exactly once.
+      lead.status = "idle";
+      await h.onTurnEnded(lead, { kind: "completed" });
+      await wait(160); // cooldown (80) + settle
+      assert.equal(wakeCount(), 1, "wakeup flushed once the lead returned to idle");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "Stage 8b: wakeups arriving within the cooldown window are coalesced into a single send",
+  withEnv(async ({ briefRoot }) => {
+    const lead = {
+      id: "lead-2",
+      title: "★ Fea2 · phase two",
+      cwd: CWD,
+      status: "idle",
+      labels: { team: "vibesquad", lane: "feat-alpha", role: "lead", ord: "2" },
+    };
+    const former1 = {
+      id: "lead-1",
+      title: "(old) Fea1 · first",
+      cwd: CWD,
+      status: "idle",
+      labels: { team: "vibesquad", lane: "feat-alpha", role: "former-lead", ord: "1" },
+    };
+    const former2 = {
+      id: "lead-0",
+      title: "(old) Fea0 · second",
+      cwd: CWD,
+      status: "idle",
+      labels: { team: "vibesquad", lane: "feat-alpha", role: "former-lead", ord: "0" },
+    };
+    const h = harness(
+      new Map<string, any>([
+        ["lead-2", lead],
+        ["lead-1", former1],
+        ["lead-0", former2],
+      ]),
+      { briefRoot, leadWakeCooldownMs: 300 },
+    );
+    const wakeCount = () => h.sent.filter((s) => s.to === "lead-2" && s.text.includes("New team log event")).length;
+    try {
+      // The Lead starts a turn, opening the cooldown window.
+      await h.onTurnStarted(lead);
+
+      // Two relays land in separate debounce batches but within the same cooldown window.
+      await h.onTurnEnded(former1, { kind: "completed" });
+      await wait(40); // former1's dispatch already fired and deferred within the cooldown
+      await h.onTurnEnded(former2, { kind: "completed" });
+      await wait(500); // cooldown (300) + settle
+
+      assert.equal(wakeCount(), 1, "both entries coalesced into a single wakeup");
+      assert.ok(
+        h.sent.some((s) => s.to === "lead-2" && s.text.includes("(+1 more)")),
+        "the single wakeup reports the coalesced extra entry",
+      );
     } finally {
       h.stop?.();
     }

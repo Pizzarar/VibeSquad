@@ -820,6 +820,8 @@ export interface Deps {
   retryBaseMs: number;
   watchIntervalMs: number;
   startWatcher: boolean;
+  /** Min quiet window after a Lead turn during which wakeups are deferred/coalesced. */
+  leadWakeCooldownMs?: number;
   /** Root holding docs/brainstorm/<lane>.md briefs (defaults to the VibeSquad repo). */
   briefRoot?: string;
   /** Grace before a retired Buddy is archived, so an in-flight turn is not killed mid-stream. */
@@ -987,6 +989,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     const relayCounts = new Map<string, number>();
     const forwardedFromRetired = new Set<string>(); // `${retiredId}:${messageId}` already redirected
     const pendingWake = new Map<string, LogEntry[]>(); // lead id -> entries awaiting a wake
+    const lastLeadTurnAt = new Map<string, number>(); // lead id -> last turn start/end timestamp (ms)
+    const deferredWakeTimers = new Map<string, ReturnType<typeof setTimeout>>(); // lead id -> pending wake timer
     const wakeQueue: { team: string; entry: LogEntry }[] = [];
     let wakeTimer: ReturnType<typeof setTimeout> | null = null;
     let paseoApi: Paseo = null;
@@ -1907,7 +1911,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
                 await handoffCoordinator.confirmTakeover(agent.id).catch((e: unknown) => log(`confirmTakeover failed: ${e}`));
               }
               await checkLeadTokens(paseo, agent.id, me, labels);
-              flushWake(paseo, agent.id);
+              lastLeadTurnAt.set(agent.id, Date.now());
+              void flushWake(paseo, agent.id);
             }
           } catch (err) {
             log(`turn_ended handler failed: ${err}`);
@@ -2318,6 +2323,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           markTurnSeen(agent?.id);
           try {
             const me = await snap(paseo, agent.id);
+            if (me && effectiveAgentRole(me) === "lead") lastLeadTurnAt.set(agent.id, Date.now());
             if (!me || !isRetiredLeadSnap(me)) return;
             const page = await paseo.agents
               .ref(agent.id)
@@ -2377,14 +2383,39 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           const queue = pendingWake.get(lead.id) ?? [];
           queue.push(...fresh);
           pendingWake.set(lead.id, queue);
-          if (lead.status === "idle") flushWake(paseo, lead.id);
+          if (lead.status === "idle") void flushWake(paseo, lead.id);
         } catch (err) {
           log(`wake dispatch failed: ${err}`);
         }
       }
     }
 
-    function flushWake(paseo: Paseo, leadId: string) {
+    async function flushWake(paseo: Paseo, leadId: string) {
+      if (!pendingWake.get(leadId)?.length) return;
+      // Re-verify the Lead's live snapshot right before sending: if it is mid-turn
+      // (status not idle), leave the entries queued so they flush once it goes idle.
+      const liveLead = await snap(paseo, leadId);
+      if (liveLead && liveLead.status && liveLead.status !== "idle") {
+        return;
+      }
+      // Coalesce/defer wakeups within the cooldown window of a Lead turn. If
+      // notifyOnFinish just woke the Lead (or its turn just ended <cooldown ago), a
+      // `done` digest wakeup arriving right after is deferred until the window passes
+      // and is only sent once the Lead is idle.
+      const cooldownMs = deps.leadWakeCooldownMs ?? (deps.debounceMs ? Math.min(3000, deps.debounceMs * 2) : 3000);
+      const elapsed = Date.now() - (lastLeadTurnAt.get(leadId) ?? 0);
+      if (elapsed < cooldownMs) {
+        if (!deferredWakeTimers.has(leadId)) {
+          const t = setTimeout(() => {
+            deferredWakeTimers.delete(leadId);
+            timers.delete(t);
+            void flushWake(paseo, leadId);
+          }, cooldownMs - elapsed);
+          deferredWakeTimers.set(leadId, t);
+          timers.add(t);
+        }
+        return;
+      }
       const queue = pendingWake.get(leadId);
       if (!queue?.length) return;
       pendingWake.delete(leadId);
@@ -2395,6 +2426,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         .ref(leadId)
         .send(text)
         .catch((e: unknown) => log(`wakeup send failed: ${e}`));
+      lastLeadTurnAt.set(leadId, Date.now());
     }
 
     /** Read newly appended lines in every team log; exported through the returned handle for tests. */
@@ -2462,6 +2494,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       lifetime.abort();
       if (interval) clearInterval(interval);
       for (const t of timers) clearTimeout(t);
+      for (const t of deferredWakeTimers.values()) clearTimeout(t);
+      deferredWakeTimers.clear();
       for (const stop of stops) stop();
     };
     (dispose as any).scanLogs = scanLogs;
