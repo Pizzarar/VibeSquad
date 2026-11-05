@@ -30,6 +30,14 @@ const GOGGLES_UP = [L(R(16, 14, 47, 16), "k"), L(U(E(26, 14.5, 5, 4.5), E(38, 14
 
 // v2: cap on backwards + single NV tube flipped down over the right eye, mic boom.
 const BACKCAP = [L(CAP_S(22, 1.5), "h", { ol: 2, sh: [["H", 3, 0]] }), L(I(CAP_S(22, 1.5), R(0, 19, 63, 22)), "H"), L(D(E(14, 21, 6, 3), R(14, 0, 63, 63)), "h", { ol: 2 }), L(E(32, 12, 1.5), "H")];
+// Dual-tube binocular NV strapped down over both eyes: two big round lenses on a bridge.
+const BINOS = [
+  L(R(16, 27, 47, 29), "k"),
+  L(U(E(26, 30.5, 6, 6), E(38, 30.5, 6, 6), R(26, 27, 38, 33)), "x", { ol: 2, sh: [["k", 1, 1]] }),
+  L(U(E(26, 30.5, 4, 4), E(38, 30.5, 4, 4)), "v", { ol: 1 }),
+  L(U(R(24, 28, 25, 29), R(36, 28, 37, 29)), "V"),
+  L(R(30, 22, 33, 26), "x", { ol: 1 }),
+];
 const MONOCULAR = [
   L(PL(3, [41, 18], [41, 24]), "x", { ol: 1 }),
   L(R(33, 25, 44, 35), "x", { ol: 2, sh: [["k", 1, 1]] }),
@@ -63,7 +71,7 @@ export const variants = [
     m: "#2a1a10", M: "#14101e" },
     grid: make([EYES.round(), L(M(R(23, 34, 28, 34)), "v"), BROWS("m"), NOSE, MOUTH, BEARD, BEANIE, GOGGLES_UP]) },
   { name: "backcap", pal: { ...SKIN.brown, h: "#ffc857", H: "#c98a2a", c: "#1f5c5a", C: "#123a38", d: "#18403f", D: "#0f2a29", v: "#4df7a6", V: "#d4ffe9", x: "#2a2c3a", z: "#3fa09a" },
-    grid: make([EYES.dot(), BROWS("e"), NOSE, L(PL(2, [28, 40], [34, 40], [36, 38]), "o"), BACKCAP, MONOCULAR, MIC]) },
+    grid: make([EYES.dot(), BROWS("e"), NOSE, L(PL(2, [28, 40], [34, 40], [36, 38]), "o"), BACKCAP, BINOS, MIC]) },
   { name: "helmet", pal: { ...SKIN.deep, h: "#5a6a3a", H: "#3a4626", c: "#4a5530", C: "#30381f", d: "#3a4426", D: "#262d18", v: "#4df7a6", V: "#d4ffe9", x: "#24252f", z: "#8a9a5a" },
     grid: make([NOSE, L(PL(2, [28, 39], [35, 39]), "o"), L(M(Ln(19, 30, 22, 44, 2)), "k"), HELMET, QUAD]) },
 ];
