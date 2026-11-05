@@ -5,7 +5,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getDraft, useDraft } from "./drafts";
 import { NeedsBadge, PinDot, PinTeamTree, usePreview } from "./PinGrid";
-import { exitPinFocus, openPinMember, type PinFocus } from "./pinFocus";
+import { exitPinFocus, type PinFocus } from "./pinFocus";
 import { TopBreadcrumb } from "./Breadcrumb";
 import { escGoesHome } from "./pinFocusLogic";
 import { DEFAULT_PIN_PROFILE, getLastBrainstormProfile, setLastBrainstormProfile } from "./pinActions";
@@ -24,8 +24,6 @@ function animate(el: Element | null | undefined, frames: Keyframe[]) {
   if (!el || reducedMotion() || typeof (el as HTMLElement).animate !== "function") return;
   (el as HTMLElement).animate(frames, { duration: SWAP_MS, easing: "ease-out" });
 }
-
-const statusWord = (status: string) => (status === "running" || status === "error" ? status : "idle");
 
 // ── Rail tile ────────────────────────────────────────────────────────────────
 // Only the *other* Buddies are tiles; the focused one is the Active Buddy Card above them.
@@ -149,12 +147,7 @@ function PinFocusBar({ view, focus, onSelectSquad }: { view: TeamView; focus: Pi
     ]);
   }, [focus.agentId, focus.seq]);
 
-  const lead = pin?.lead ?? null;
-  const workers = pin?.workers.length ?? 0;
   const handle = "@" + ((pin?.lane.code || laneCodeFor(focus.laneId, [view.team]) || focus.laneId.slice(0, 3)).toLowerCase());
-  const openLead = () => {
-    if (pin && lead) openPinMember(pin, lead.agent.id);
-  };
   return (
     <div className="pin-focus-bar" data-testid="pin-focus-bar">
       <button type="button" className="btn ghost small pin-focus-home" data-testid="pin-focus-home" title="Back to all teams (Esc)" onClick={exitPinFocus}>
@@ -165,16 +158,6 @@ function PinFocusBar({ view, focus, onSelectSquad }: { view: TeamView; focus: Pi
       {/* The focused drawer's DrawerHeader portals its compact controls here (src/pinSlots.ts). */}
       <div className="pin-focus-slot" ref={slotRef("bar")} />
       {!focus.agentId && <span className="pin-focus-name">{pin?.lane.name ?? focus.laneId}</span>}
-      <span className="pin-focus-spacer" />
-      <button
-        type="button"
-        className="pin-focus-plumbing small"
-        data-testid="pin-focus-plumbing"
-        title="Open this team's Lead"
-        onClick={openLead}
-      >
-        Lead: {lead ? statusWord(lead.agent.status) : "none"} · {workers} {workers === 1 ? "worker" : "workers"} ▸
-      </button>
     </div>
   );
 }

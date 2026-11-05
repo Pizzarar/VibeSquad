@@ -974,6 +974,10 @@ export function DrawerHeader({
                 </select>
               );
             })();
+  const modes = (!DEMO && agent.availableModes?.length) ? agent.availableModes : FALLBACK_MODES;
+  const stagedModeId = staged ? staged.modeId ?? agent.currentModeId ?? "" : agent.currentModeId ?? "";
+  const activeModeObj = modes.find((m) => m.id === stagedModeId) ?? modes[0];
+  const activeModeLabel = activeModeObj ? ((activeModeObj as any).label || (activeModeObj as any).name || activeModeObj.id) : (stagedModeId || "default");
   const stagedThinking = staged ? staged.thinkingOptionId ?? agent.thinkingOptionId ?? "" : agent.thinkingOptionId ?? "";
   const thinkingSelect = (
             <select
@@ -1186,9 +1190,11 @@ export function DrawerHeader({
           >
             Dock {dockOpen ? "▶" : "◀"}
           </button>
-          <button className="btn ghost" onClick={onClose}>
-            ✕
-          </button>
+          {!compact && (
+            <button className="btn ghost" onClick={onClose}>
+              ✕
+            </button>
+          )}
     </>
   );
   const inspector = (
@@ -1485,20 +1491,35 @@ export function DrawerHeader({
     </>
   );
 
+  const compactIdentity = isBs && !isTopicBs ? (
+    <StatusDot agent={agent} />
+  ) : (
+    <>
+      <Avatar id={agent.id} provider={agent.provider} agentType={agentType} variant={leadVariant(agent)} size={24} />
+      <span className="drawer-head-compact-title">
+        <StatusDot agent={agent} /> <AgentTitleEdit agent={agent}>{agent.title ?? agent.id.slice(0, 8)}</AgentTitleEdit>
+      </span>
+    </>
+  );
+
   if (compact)
     return (
       <>
         {createPortal(
           <>
       <div className="drawer-head-compact" data-testid="drawer-head-compact">
-        <Avatar id={agent.id} provider={agent.provider} agentType={agentType} variant={leadVariant(agent)} size={24} />
-        <span className="drawer-head-compact-title">
-          <StatusDot agent={agent} /> <AgentTitleEdit agent={agent}>{agent.title ?? agent.id.slice(0, 8)}</AgentTitleEdit>
-        </span>
+        {compactIdentity}
         {providerSelect}
         {modelControl}
-        {thinkingSelect}
-        {modeSelect}
+        <details className="drawer-config-menu" data-testid="drawer-config-menu">
+          <summary className="btn ghost small drawer-config-summary" data-testid="drawer-config-menu-btn" title="Thinking effort & permission mode">
+            ⚙ {stagedThinking || "medium"} · {activeModeLabel} ▾
+          </summary>
+          <div className="drawer-config-popover">
+            <label className="drawer-config-row"><span className="muted small">Thinking</span>{thinkingSelect}</label>
+            <label className="drawer-config-row"><span className="muted small">Mode</span>{modeSelect}</label>
+          </div>
+        </details>
         <WorkingChip members={working} subs={extraSubs} />
         <span className="drawer-head-compact-spacer" />
         {dockBtns}

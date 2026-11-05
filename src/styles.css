@@ -4153,10 +4153,15 @@ button.project-file-name:hover { text-decoration: underline; }
 
 
 /* ── UI polish U2: one ~44px chat bar in pin-focus; the active Buddy's inspector lives atop the rail ── */
-.pin-focus-bar { height: 44px; min-height: 44px; flex-wrap: nowrap; row-gap: 0; overflow: hidden; gap: 8px; }
+.pin-focus-bar { height: 44px; min-height: 44px; flex-wrap: nowrap; row-gap: 0; overflow: visible; gap: 8px; }
 .pin-focus-bar .pin-focus-slot { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; }
 .pin-focus-bar .pin-focus-plumbing { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; }
-.drawer-head-compact { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; height: 44px; overflow: hidden; }
+.drawer-head-compact { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; height: 44px; overflow: visible; }
+.drawer-config-menu { position: relative; }
+.drawer-config-summary { list-style: none; cursor: pointer; user-select: none; white-space: nowrap; }
+.drawer-config-summary::-webkit-details-marker { display: none; }
+.drawer-config-popover { position: absolute; top: calc(100% + 4px); left: 0; z-index: 40; background: var(--panel); border: 1px solid var(--cyan); padding: 8px; display: flex; flex-direction: column; gap: 6px; min-width: 190px; box-shadow: 0 6px 20px rgba(0,0,0,0.65); }
+.drawer-config-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .drawer-head-compact > * { flex: none; }
 .drawer-head-compact .avatar { flex: none; }
 .drawer-head-compact-title { flex: 0 1 auto; min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--display); font-size: 13px; }
