@@ -3454,6 +3454,7 @@ html, body, #root { overflow-x: hidden; }
 }
 .pin-focus-home { font-size: 16px; padding: 2px 8px; }
 .pin-focus-name { font-family: var(--display); font-size: 14px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pin-focus-spinup-error { margin-top: 6px; padding: 6px 10px; color: var(--coral); background: #ff857314; border: 1px solid var(--coral); border-radius: 4px; font-size: 12px; line-height: 1.4; }
 .pin-focus-squad { white-space: nowrap; }
 .pin-focus-spacer { flex: 1; }
 .pin-focus-plumbing {
