@@ -455,6 +455,40 @@ export function oppositeProviderTarget(provider: string, profileName?: string): 
   return null;
 }
 
+export type ProviderOption = { id: string; label: string; model: string; modeId: string };
+
+export const PROVIDER_OPTIONS: ProviderOption[] = [
+  { id: "antigravity-cli", label: "◆ Gemini", model: "gemini-4-argon", modeId: "accept-edits" },
+  { id: "claude", label: "✶ Claude", model: "claude-opus-5-5", modeId: "auto" },
+  { id: "opencode", label: "▲ OpenCode", model: "deepseek/deepseek-v4-pro", modeId: "auto" },
+  { id: "codex", label: "● Codex", model: "gpt-5.4", modeId: "auto" },
+];
+
+export function normalizeProviderId(provider: string): string {
+  const norm = String(provider ?? "").trim().toLowerCase().split("/")[0];
+  if (norm === "antigravity" || norm === "gemini" || norm === "antigravity-cli" || norm.startsWith("gemini-")) return "antigravity-cli";
+  if (norm === "claude" || norm === "anthropic" || norm.startsWith("claude-")) return "claude";
+  if (norm === "codex" || norm === "openai") return "codex";
+  return norm;
+}
+
+export type ProviderSwitchTarget = { provider: string; model: string; modeId: string; profile?: string };
+
+/** Where choosing `targetProviderId` in the provider dropdown lands; null when it is the current provider or unknown. */
+export function resolveProviderSwitchTarget(currentProvider: string, targetProviderId: string, profileName?: string, role?: string): ProviderSwitchTarget | null {
+  const targetId = normalizeProviderId(targetProviderId);
+  if (targetId === normalizeProviderId(currentProvider)) return null;
+  const opt = PROVIDER_OPTIONS.find((o) => o.id === targetId);
+  if (!opt) return null;
+  let profile = oppositeProviderTarget(currentProvider, profileName)?.profile;
+  if (targetId !== "claude" && targetId !== "antigravity-cli") profile = undefined;
+  else if (!profile && (role === "lead" || role === "brainstorm")) {
+    const who = targetId === "claude" ? "Claude" : "Gemini";
+    profile = `${role === "lead" ? "Lead" : "Brainstorm"} - ${who}`;
+  }
+  return { provider: opt.id, model: opt.model, modeId: opt.modeId, profile };
+}
+
 export type DrawerHeaderProps = {
   agent: PaseoAgent;
   agentType: AgentType;
@@ -749,72 +783,90 @@ export function DrawerHeader({
   const railCardVisible = useRailCardVisible();
   const compact = !!pinFocus?.agentId && shownHere && inLane && railCardVisible && !!barSlot && !!cardSlot;
 
-  // Provider switch: the counterpart profile to flip to (⇄ Claude ↔ Gemini). Hoisted so the compact
-  // top bar and the full drawer share one button + handler.
-  const nextProfile = switchTarget
-    ? switchTarget.profile ??
-      (kindOf(agent) === "lead"
-        ? (switchTarget.provider === "claude" ? "Lead - Claude" : "Lead - Gemini")
-        : isBs
-          ? (switchTarget.provider === "claude" ? "Brainstorm - Claude" : "Brainstorm - Gemini")
-          : undefined)
-    : undefined;
+  // Provider switch: one handler shared by the dropdown and the legacy ⇄ button (compact bar + full drawer).
+  const switchToProvider = async (targetProviderId: string) => {
+    const role = kindOf(agent);
+    const target = resolveProviderSwitchTarget(agent.provider, targetProviderId, agentLabels.profile, role === "lead" || isBs ? (role === "lead" ? "lead" : "brainstorm") : undefined);
+    if (!target) return;
+    const nextProfile = target.profile;
+    setSwitchBusy(true);
+    setReloadError("");
+    try {
+      const nextLabels = {
+        ...agentLabels,
+        ...(nextProfile ? { profile: nextProfile } : {}),
+      };
+      if (DEMO) {
+        upsertLocalAgent({
+          ...agent,
+          provider: target.provider,
+          model: target.model,
+          currentModeId: target.modeId,
+          labels: nextLabels,
+        });
+        return;
+      }
+      if (isBs && nextProfile) setLastBrainstormProfile(nextProfile);
+      // A Lead's live labels.profile must stay intact: the successor is spawned, this agent isn't flipped in place.
+      if (kindOf(agent) !== "lead") await updateAgent(agent.id, { labels: nextLabels });
+      if (kindOf(agent) === "lead" && onSuccessor) {
+        onSuccessor();
+      } else if (isBs) {
+        await doRestart("provider-switch", undefined, nextProfile);
+      } else {
+        const dc = daemonClient as any;
+        const snap = await dc.createAgent({
+          config: {
+            provider: target.provider,
+            model: target.model,
+            modeId: target.modeId,
+            cwd: agent.cwd,
+            title: agent.title ?? agent.id,
+          },
+          labels: nextLabels,
+        });
+        const newId = snap?.agent?.id ?? snap?.id;
+        if (newId) openAgentInTab(newId);
+      }
+    } catch (e) {
+      setReloadError(`Switch provider failed: ${e instanceof Error ? e.message : e}`);
+    } finally {
+      setSwitchBusy(false);
+    }
+  };
   const providerSwitchBtn = switchTarget && !agent.archivedAt ? (
     <button
       data-testid="drawer-switch-provider-btn"
       className="btn ghost small"
-      title={`Switch this ${kindOf(agent) || "agent"} from ${agent.provider} to ${nextProfile || switchTarget.label}`}
+      title={`Switch this ${kindOf(agent) || "agent"} from ${agent.provider} to ${switchTarget.label.replace("⇄ Switch to ", "")}`}
       disabled={switchBusy}
-      onClick={async () => {
-        setSwitchBusy(true);
-        setReloadError("");
-        try {
-          const nextLabels = {
-            ...agentLabels,
-            ...(nextProfile ? { profile: nextProfile } : {}),
-          };
-          if (DEMO) {
-            upsertLocalAgent({
-              ...agent,
-              provider: switchTarget.provider,
-              model: switchTarget.model,
-              currentModeId: switchTarget.modeId,
-              labels: nextLabels,
-            });
-            return;
-          }
-          if (isBs && nextProfile) setLastBrainstormProfile(nextProfile);
-          // A Lead's live labels.profile must stay intact: the successor is spawned, this agent isn't flipped in place.
-          if (kindOf(agent) !== "lead") await updateAgent(agent.id, { labels: nextLabels });
-          if (kindOf(agent) === "lead" && onSuccessor) {
-            onSuccessor();
-          } else if (isBs) {
-            await doRestart("provider-switch", undefined, nextProfile);
-          } else {
-            const dc = daemonClient as any;
-            const snap = await dc.createAgent({
-              config: {
-                provider: switchTarget.provider,
-                model: switchTarget.model,
-                modeId: switchTarget.modeId,
-                cwd: agent.cwd,
-                title: agent.title ?? agent.id,
-              },
-              labels: nextLabels,
-            });
-            const newId = snap?.agent?.id ?? snap?.id;
-            if (newId) openAgentInTab(newId);
-          }
-        } catch (e) {
-          setReloadError(`Switch provider failed: ${e instanceof Error ? e.message : e}`);
-        } finally {
-          setSwitchBusy(false);
-        }
-      }}
+      onClick={() => void switchToProvider(switchTarget.provider)}
     >
       {switchBusy ? "…" : switchTarget.label}
     </button>
   ) : null;
+  const currentProviderId = normalizeProviderId(agent.provider);
+  const providerKnown = PROVIDER_OPTIONS.some((o) => o.id === currentProviderId);
+  // A Buddy/Lead picks its provider through its profile, which only exists for Claude/Gemini.
+  const profileBound = isBs || kindOf(agent) === "lead";
+  const providerSelect = (
+    <select
+      data-testid="drawer-provider-select"
+      className="drawer-provider-select"
+      style={{ color: prov.color, borderColor: prov.color }}
+      value={providerKnown ? currentProviderId : agent.provider}
+      disabled={switchBusy || !!agent.archivedAt}
+      title={`Provider: ${agent.provider}`}
+      onChange={(e) => void switchToProvider(e.target.value)}
+    >
+      {!providerKnown && <option value={agent.provider}>{agent.provider}</option>}
+      {PROVIDER_OPTIONS.map((o) => (
+        <option key={o.id} value={o.id} disabled={profileBound && o.id !== "claude" && o.id !== "antigravity-cli" && o.id !== currentProviderId}>
+          {o.label}
+        </option>
+      ))}
+    </select>
+  );
 
   useEffect(() => {
     if (!active) return;
@@ -1330,7 +1382,7 @@ export function DrawerHeader({
             <StatusDot agent={agent} /> <AgentTitleEdit agent={agent}>{agent.title ?? agent.id.slice(0, 8)}</AgentTitleEdit>
           </div>
           <div className="muted small drawer-meta-line" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4 }}>
-            <span>{agent.provider}/</span>
+            {providerSelect}
             {modelControl}
             {metaRest}
           </div>
@@ -1355,11 +1407,10 @@ export function DrawerHeader({
         <span className="drawer-head-compact-title">
           <StatusDot agent={agent} /> <AgentTitleEdit agent={agent}>{agent.title ?? agent.id.slice(0, 8)}</AgentTitleEdit>
         </span>
-        {modeSelect}
-        {thinkingSelect}
-        <span className="muted small">{agent.provider}/</span>
+        {providerSelect}
         {modelControl}
-        {providerSwitchBtn}
+        {thinkingSelect}
+        {modeSelect}
         <WorkingChip members={working} subs={extraSubs} />
         <span className="drawer-head-compact-spacer" />
         {dockBtns}

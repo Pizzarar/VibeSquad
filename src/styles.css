@@ -3454,6 +3454,7 @@ html, body, #root { overflow-x: hidden; }
 }
 .pin-focus-home { font-size: 16px; padding: 2px 8px; }
 .pin-focus-name { font-family: var(--display); font-size: 14px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pin-focus-spinup-error { margin-top: 6px; padding: 6px 10px; color: var(--coral); background: #ff857314; border: 1px solid var(--coral); border-radius: 4px; font-size: 12px; line-height: 1.4; }
 .pin-focus-squad { white-space: nowrap; }
 .pin-focus-spacer { flex: 1; }
 .pin-focus-plumbing {
@@ -4149,6 +4150,8 @@ button.project-file-name:hover { text-decoration: underline; }
 .drawer-head-compact .avatar { flex: none; }
 .drawer-head-compact-title { flex: 0 1 auto; min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--display); font-size: 13px; }
 .drawer-head-compact-spacer { flex: 1 1 0; min-width: 0; }
+.drawer-provider-select { background: transparent; border: 1px solid; border-radius: 4px; font-family: var(--display); font-size: 11px; height: 24px; padding: 0 4px; cursor: pointer; }
+.drawer-provider-select option { color: var(--fg, #e6e6e6); background: #12121a; }
 .drawer-head-compact .drawer-model-input { width: 100px; }
 .drawer-head-compact .drawer-mode-select, .drawer-head-compact .drawer-thinking-select { max-width: 96px; }
 .pin-rail-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
