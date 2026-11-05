@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
 import { createVibesquadMiddleware, handleAndroidApk } from "../server/vibesquad-api.mjs";
-import { ensureAndroidDeepLinkIntentFilter, resolveAndroidEnv } from "../server/build-android.mjs";
+import { ensureAndroidDeepLinkIntentFilter, ensureAndroidSystemBarFit, resolveAndroidEnv } from "../server/build-android.mjs";
 
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
 
@@ -129,6 +129,49 @@ describe("ensureAndroidDeepLinkIntentFilter", () => {
 
   test("returns false when the manifest does not exist", () => {
     assert.equal(ensureAndroidDeepLinkIntentFilter(join(tmpRoot(), "missing.xml")), false);
+  });
+});
+
+describe("ensureAndroidSystemBarFit", () => {
+  const MAIN_ACTIVITY_KT = `package com.vibesquad.desktop
+
+import android.os.Bundle
+import androidx.activity.enableEdgeToEdge
+
+class MainActivity : TauriActivity() {
+  override fun onCreate(savedInstanceState: Bundle?) {
+    enableEdgeToEdge()
+    super.onCreate(savedInstanceState)
+  }
+}
+`;
+
+  test("strips the edge-to-edge import and call from a realistic MainActivity.kt", () => {
+    const root = tmpRoot();
+    const kt = join(root, "MainActivity.kt");
+    writeFileSync(kt, MAIN_ACTIVITY_KT);
+
+    assert.equal(ensureAndroidSystemBarFit(kt), true);
+    const once = readFileSync(kt, "utf8");
+    assert.doesNotMatch(once, /import\s+androidx\.activity\.enableEdgeToEdge/);
+    assert.doesNotMatch(once, /enableEdgeToEdge\(\)/);
+    assert.match(once, /class MainActivity : TauriActivity\(\)/);
+    assert.match(once, /super\.onCreate\(savedInstanceState\)/);
+  });
+
+  test("is idempotent (second call returns false and leaves the file unchanged)", () => {
+    const root = tmpRoot();
+    const kt = join(root, "MainActivity.kt");
+    writeFileSync(kt, MAIN_ACTIVITY_KT);
+
+    assert.equal(ensureAndroidSystemBarFit(kt), true);
+    const once = readFileSync(kt, "utf8");
+    assert.equal(ensureAndroidSystemBarFit(kt), false);
+    assert.equal(readFileSync(kt, "utf8"), once);
+  });
+
+  test("returns false when the file does not exist", () => {
+    assert.equal(ensureAndroidSystemBarFit(join(tmpRoot(), "missing.kt")), false);
   });
 });
 

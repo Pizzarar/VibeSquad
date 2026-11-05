@@ -202,3 +202,109 @@ describe("Block A4: PinGrid / .pin-tile mobile wrapping & overflow CSS", () => {
     assert.match(src, /\.pin-reply\s*\{[^}]*max-width:\s*100%;/);
   });
 });
+
+describe("Block A5: Phone UI pass (status bar fit, Lead page wrap, right sidebar overflow)", () => {
+  const css = () => read("src/styles.css");
+
+  test("index.html sets viewport-fit=cover", () => {
+    assert.match(read("index.html"), /viewport-fit=cover/);
+  });
+
+  test("DrawerHeader uses flexWrap wrap on brainstorm-ctx-main/actions (no nowrap)", () => {
+    const src = read("src/DrawerHeader.tsx");
+    assert.match(src, /className="brainstorm-ctx-main" style=\{\{ flexWrap: "wrap"/);
+    assert.match(src, /className="brainstorm-ctx-actions" style=\{\{ flexWrap: "wrap"/);
+    assert.doesNotMatch(src, /brainstorm-ctx-(?:main|actions)" style=\{\{ flexWrap: "nowrap"/);
+  });
+
+  test("safe-area insets: .remote-pair, mobile .app padding, .focus-rail, .mobile-bottom-bar", () => {
+    const src = css();
+    assert.match(src, /\.remote-pair\s*\{[^}]*padding-top:\s*max\(16px,\s*env\(safe-area-inset-top,\s*0px\)\)/);
+    assert.match(src, /\.remote-pair\s*\{[^}]*padding-bottom:\s*max\(16px,\s*env\(safe-area-inset-bottom,\s*0px\)\)/);
+    assert.match(src, /padding-top:\s*env\(safe-area-inset-top,\s*0px\);/);
+    assert.match(src, /padding-bottom:\s*calc\(56px \+ env\(safe-area-inset-bottom,\s*0px\)\);/);
+    assert.match(src, /\.app\.sheet-open > \.focus-rail\s*\{[^}]*top:\s*env\(safe-area-inset-top,\s*0px\);/);
+    assert.match(src, /\.app\.sheet-open > \.focus-rail\s*\{[^}]*bottom:\s*calc\(56px \+ env\(safe-area-inset-bottom,\s*0px\)\);/);
+    assert.match(src, /\.mobile-bottom-bar\s*\{[^}]*height:\s*calc\(56px \+ env\(safe-area-inset-bottom,\s*0px\)\);/);
+    assert.match(src, /\.mobile-bottom-bar\s*\{[^}]*padding-bottom:\s*env\(safe-area-inset-bottom,\s*0px\);/);
+  });
+
+  test(".meter.meter-ladder / .meter-readout wrap on narrow Lead cards", () => {
+    const src = css();
+    assert.match(src, /\.meter\.meter-ladder\s*\{[^}]*flex-wrap:\s*wrap;/);
+    assert.match(src, /\.meter\.meter-ladder\s*\{[^}]*min-width:\s*0;/);
+    assert.match(src, /\.meter\.meter-ladder\s*\{[^}]*max-width:\s*100%;/);
+    assert.match(src, /\.meter\.meter-ladder \.meter-track\s*\{[^}]*flex:\s*1 1 80px;/);
+    assert.match(src, /\.meter\.meter-ladder \.meter-track\s*\{[^}]*min-width:\s*60px;/);
+    assert.match(src, /\.meter\.meter-ladder \.meter-readout\s*\{[^}]*white-space:\s*normal;/);
+    assert.match(src, /\.meter\.meter-ladder \.meter-readout\s*\{[^}]*overflow-wrap:\s*anywhere;/);
+    assert.match(src, /\.meter\.meter-ladder \.meter-readout\s*\{[^}]*word-break:\s*break-word;/);
+  });
+
+  test("mobile .pin-focus-bar / .drawer-head-compact wrap instead of clipping", () => {
+    const src = css();
+    assert.match(src, /\.pin-focus-bar\s*\{[^}]*height:\s*auto;[^}]*min-height:\s*44px;[^}]*flex-wrap:\s*wrap;/);
+    assert.match(src, /\.pin-focus-bar\s*\{[^}]*padding:\s*4px 8px;/);
+    assert.match(src, /\.pin-focus-bar\s*\{[^}]*row-gap:\s*4px;/);
+    assert.match(src, /\.pin-focus-bar\s*\{[^}]*overflow:\s*visible;/);
+    assert.match(src, /\.drawer-head-compact\s*\{[^}]*height:\s*auto;[^}]*min-height:\s*36px;[^}]*flex-wrap:\s*wrap;/);
+    assert.match(src, /\.drawer-head-compact\s*\{[^}]*overflow:\s*visible;/);
+  });
+
+  test(".lint-bar / .successor-bar / .drawer-head / .drawer-id / .drawer-role-line / .drawer-meta-line / .drawer-model-input are width-bounded", () => {
+    const src = css();
+    const block = src.match(/\.lint-bar,\s*\.successor-bar,[\s\S]*?\n\}/)?.[0] ?? "";
+    assert.ok(block.length > 0, "width-bounds rule block found");
+    for (const sel of [".drawer-head", ".drawer-id", ".drawer-role-line", ".drawer-meta-line"]) {
+      assert.match(block, new RegExp(sel.replace(/\./g, "\\.") + ","), `${sel} in width-bounds block`);
+    }
+    assert.match(block, /\.drawer-model-input\s*\{/);
+    assert.match(block, /min-width:\s*0;\s*max-width:\s*100%;/);
+  });
+
+  test(".successor-bar .btn / .btn.successor wrap instead of clipping", () => {
+    const src = css();
+    const block = src.match(/\.successor-bar \.btn,\s*\.btn\.successor\s*\{[\s\S]*?\n\}/)?.[0] ?? "";
+    assert.ok(block.length > 0, "successor btn wrap block found");
+    assert.match(block, /white-space:\s*normal;\s*max-width:\s*100%;/);
+  });
+
+  test(".pin-team-row .pin-row-name truncates cleanly", () => {
+    const src = css();
+    assert.match(src, /\.pin-team-row \.pin-row-name\s*\{[^}]*flex:\s*1;/);
+    assert.match(src, /\.pin-team-row \.pin-row-name\s*\{[^}]*min-width:\s*0;/);
+    assert.match(src, /\.pin-team-row \.pin-row-name\s*\{[^}]*overflow:\s*hidden;/);
+    assert.match(src, /\.pin-team-row \.pin-row-name\s*\{[^}]*text-overflow:\s*ellipsis;/);
+    assert.match(src, /\.pin-team-row \.pin-row-name\s*\{[^}]*white-space:\s*nowrap;/);
+  });
+
+  test(".pin-rail-active-buddy / .pin-rail-active-inspector / .pin-rail-buddy-tools stay bounded", () => {
+    const src = css();
+    const block = src.match(/\.pin-rail-active-buddy,\s*\.pin-rail-active-inspector,[\s\S]*?\n\}/)?.[0] ?? "";
+    assert.ok(block.length > 0, "pin-rail overflow block found");
+    assert.match(block, /\.pin-rail-buddy-tools\s*\{/);
+    assert.match(block, /min-width:\s*0;\s*max-width:\s*100%;\s*overflow:\s*hidden;/);
+  });
+
+  test(".right-dock-tabs / .right-dock-tab scroll and stay compact", () => {
+    const src = css();
+    assert.match(src, /\.right-dock-tabs\s*\{[^}]*overflow-x:\s*auto;/);
+    assert.match(src, /\.right-dock-tabs\s*\{[^}]*scrollbar-width:\s*none;/);
+    assert.match(src, /\.right-dock-tabs\s*\{[^}]*min-width:\s*0;/);
+    assert.match(src, /\.right-dock-tabs\s*\{[^}]*max-width:\s*100%;/);
+    assert.match(src, /\.right-dock-tab\s*\{[^}]*flex:\s*0 0 auto;/);
+    assert.match(src, /\.right-dock-tab\s*\{[^}]*padding:\s*7px 9px;/);
+  });
+
+  test("mobile .drawer-shell / .right-dock stack instead of crushing", () => {
+    const src = css();
+    assert.match(src, /\.drawer-shell\s*\{[^}]*flex-direction:\s*column;/);
+    assert.match(src, /\.right-dock\s*\{[^}]*width:\s*100% !important;/);
+    assert.match(src, /\.right-dock\s*\{[^}]*max-width:\s*100% !important;/);
+    assert.match(src, /\.right-dock\s*\{[^}]*min-width:\s*0 !important;/);
+    assert.match(src, /\.right-dock\s*\{[^}]*max-height:\s*55%;/);
+    assert.match(src, /\.right-dock\s*\{[^}]*border-left:\s*0;/);
+    assert.match(src, /\.right-dock\s*\{[^}]*border-top:\s*1px solid var\(--cyan\);/);
+    assert.match(src, /\.right-dock-resize-handle\s*\{[^}]*display:\s*none;/);
+  });
+});

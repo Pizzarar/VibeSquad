@@ -7,4 +7,4 @@ See `docs/PLAN_ANDROID_APP.md` for full details.
 - `unit-and-a2` (done, `749c12a`): Deep-Link QR Pairing & Clipboard Paste UX
 - `unit-and-a3` (done, `6364ecb`): APK Build Script, LAN `/VibeSquad.apk` Route & Release Upload
 - `unit-and-a4` (done, `42f4d67`): Squad Lane Overview (`PinGrid` / `.pin-tile`) Wrapping & Overflow Fix
-- `unit-and-a5` (todo): Phone UI Pass — Top Status Bar Fit, Lead Page Wrapping & Right Sidebar Overflow Fix (`index.html`, `server/build-android.mjs`, `src/DrawerHeader.tsx`, `src/styles.css`, `test/android-pair.test.mjs`, `test/android-apk-route.test.mjs`)
+- `unit-and-a5` (done, `87566ee` / `1509f9f`): Phone UI Pass — Top Status Bar Fit, Lead Page Wrapping & Right Sidebar Overflow Fix (`index.html`, `server/build-android.mjs`, `src/DrawerHeader.tsx`, `src/styles.css`, `test/android-pair.test.mjs`, `test/android-apk-route.test.mjs`)
