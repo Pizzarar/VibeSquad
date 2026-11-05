@@ -1053,6 +1053,15 @@ code {
   color: var(--muted);
 }
 
+.tl-provider-switch {
+  text-align: center;
+  color: #888;
+  border-top: 1px dashed #888;
+  border-bottom: 1px dashed #888;
+  padding: 2px 0;
+  font-size: 0.85em;
+}
+
 .send-error {
   border-top: 1px solid var(--hot-pink);
   padding: 6px 10px;

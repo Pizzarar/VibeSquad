@@ -17,12 +17,13 @@
 //
 // The test is self-contained: it resolves Playwright (local, `PLAYWRIGHT_DIR`, or the global
 // `@playwright/mcp` bundle), launches the system Edge/Chrome with `playwright-core` (no browser
-// download required), and spawns its own Vite dev server on a free port.
+// download required), and serves the prebuilt `dist/` bundle over a loopback static server.
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
+import { createServer } from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -73,8 +74,8 @@ function resolvePlaywright() {
     candidates.push(require2.resolve("playwright"));
   } catch {}
   candidates.push(
-    "C:/Users/Fugma/AppData/Roaming/npm/node_modules/@playwright/mcp/node_modules/playwright-core",
-    "C:/Users/Fugma/AppData/Roaming/npm/node_modules/@playwright/mcp/node_modules/playwright",
+    process.env.APPDATA && path.join(process.env.APPDATA, "npm/node_modules/@playwright/mcp/node_modules/playwright-core"),
+    process.env.APPDATA && path.join(process.env.APPDATA, "npm/node_modules/@playwright/mcp/node_modules/playwright"),
   );
   for (const c of candidates) {
     try {
@@ -133,6 +134,26 @@ function resetErrors() {
   consoleErrors.length = 0;
 }
 
+/** Build `dist/` once (only when `dist/index.html` is absent) so the smoke test has a static bundle. */
+async function ensureDist() {
+  const distIndex = path.join(REPO_ROOT, "dist", "index.html");
+  if (fs.existsSync(distIndex)) return;
+  const viteBin = path.join(REPO_ROOT, "node_modules", "vite", "bin", "vite.js");
+  await new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(process.execPath, [viteBin, "build"], {
+      cwd: REPO_ROOT,
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let buildErr = "";
+    child.stderr?.on("data", (d) => (buildErr += String(d)));
+    child.on("error", rejectPromise);
+    child.on("exit", (code) => {
+      if (code === 0) resolvePromise();
+      else rejectPromise(new Error(`vite build failed:\n${buildErr.slice(0, 4000)}`));
+    });
+  });
+}
+
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 before(async () => {
   pw = resolvePlaywright();
@@ -152,33 +173,43 @@ before(async () => {
     return;
   }
 
-  // Spawn the Vite dev server (bundled middleware serves /__vibesquad/* and /api/teams; we mock
-  // them in Playwright anyway so the smoke test never touches the real daemon/registry).
-  const viteBin = path.join(REPO_ROOT, "node_modules", "vite", "bin", "vite.js");
-  const port = 5211;
-  baseUrl = `http://localhost:${port}`;
-  server = spawn(process.execPath, [viteBin, "--port", String(port), "--strictPort"], {
-    cwd: REPO_ROOT,
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  let viteErr = "";
-  server.stderr?.on("data", (d) => (viteErr += String(d)));
-
-  // Wait for the server to answer.
-  const up = await (async () => {
-    const deadline = Date.now() + 45000;
-    while (Date.now() < deadline) {
-      try {
-        const r = await fetch(`${baseUrl}/`, { method: "GET" });
-        if (r.ok) return true;
-      } catch {}
-      await sleep(400);
+  // Serve the prebuilt `dist/` bundle with a tiny node:http static server on an ephemeral
+  // 127.0.0.1 port. This sidesteps Vite's slow optimizeDeps pre-bundle (which stalled
+  // domcontentloaded) and is immune to port 5211 collisions. We build `dist/` once only if
+  // `dist/index.html` is missing. Playwright still mocks /api/teams and /__vibesquad/*.
+  await ensureDist();
+  const distDir = path.join(REPO_ROOT, "dist");
+  const MIME = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript",
+    ".css": "text/css",
+    ".json": "application/json",
+    ".png": "image/png",
+    ".ico": "image/x-icon",
+    ".svg": "image/svg+xml",
+    ".webmanifest": "application/manifest+json",
+    ".txt": "text/plain",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+  };
+  server = createServer((req, res) => {
+    const pathname = decodeURIComponent(new URL(req.url ?? "/", "http://127.0.0.1").pathname);
+    let filePath = path.join(distDir, pathname === "/" ? "index.html" : pathname);
+    // SPA fallback: unknown routes (and directories) serve index.html.
+    if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+      filePath = path.join(distDir, "index.html");
     }
-    return false;
-  })();
-  if (!up) {
-    throw new Error(`Vite dev server failed to boot:\n${viteErr.slice(0, 4000)}`);
-  }
+    const ext = path.extname(filePath).toLowerCase();
+    res.setHeader("content-type", MIME[ext] ?? "application/octet-stream");
+    fs.createReadStream(filePath)
+      .on("error", () => {
+        res.statusCode = 404;
+        res.end("Not found");
+      })
+      .pipe(res);
+  });
+  await new Promise((resolvePromise) => server.listen(0, "127.0.0.1", resolvePromise));
+  baseUrl = `http://127.0.0.1:${server.address().port}`;
 
   // Launch headless Chromium (system Edge) and install route mocks.
   browser = await pw.mod.chromium.launch({ executablePath, headless: true });
@@ -228,7 +259,7 @@ after(async () => {
   try {
     await browser?.close();
   } catch {}
-  if (server && !server.killed) server.kill();
+  if (server) server.close();
 });
 
 // ── The 5 core flows ─────────────────────────────────────────────────────────
@@ -312,6 +343,11 @@ test("U11: live click-through of the 5 core UI flows", { timeout: 180000 }, asyn
       body.pendingPrompt.includes(msg),
       `pendingPrompt should contain the typed message; got: ${JSON.stringify(body.pendingPrompt)}`,
     );
+
+    // The mock returns no `agent`, so the synthetic successor (`demo-bs-restart`) swaps into the
+    // drawer asynchronously right after the request is intercepted. Give it a beat to settle so
+    // flow 3 stages its provider switch on the settled agent instead of the outgoing one.
+    await sleep(400);
     assertNoErrors();
   });
 

@@ -78,7 +78,7 @@ test("4. DrawerHeader renders drawer-model-select, fetches listProviderModels, a
 
   assert.match(drawerSrc, /data-testid="drawer-model-select"/, "Should render <select data-testid=\"drawer-model-select\">");
   assert.match(drawerSrc, /data-testid="drawer-model-input"/, "Should support custom model input mode");
-  assert.match(drawerSrc, /listProviderModels\(agent\.provider\)/, "Should fetch live provider models for agent.provider");
+  assert.match(drawerSrc, /listProviderModels\((?:agent\.provider|effectiveProvider)\)/, "Should fetch live provider models for agent.provider");
   assert.match(drawerSrc, /aria-label="Model"/, "Model control should include aria-label=\"Model\"");
   assert.doesNotMatch(drawerSrc, /id="drawer-model-list"/, "Must not use static global datalist id=\"drawer-model-list\"");
   assert.doesNotMatch(drawerSrc, /list="drawer-model-list"/, "Must not bind input to static global list=\"drawer-model-list\"");

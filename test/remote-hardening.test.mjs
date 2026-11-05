@@ -113,7 +113,7 @@ describe("R2-4 remote UI & module-load guards", () => {
     const app = read("src/App.tsx");
     assert.match(app, /if \(DEMO \|\| isRemote\(\)\) return;\s*void fetchFirstRunStatus\(\)/);
     assert.match(app, /exposedIps\.length > 0 && !isRemote\(\)/);
-    assert.match(app, /updaterStatus\.updateAvailable && !isRemote\(\)/);
+    assert.match(app, /updaterStatus\.updateAvailable && \(!isRemote\(\) \|\| isAndroidUserAgent\(\)\)/);
     assert.match(app, /data-testid="sidebar-unpair-btn"/);
 
     const settings = read("src/SettingsHome.tsx");

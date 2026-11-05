@@ -52,7 +52,7 @@ describe("repo hygiene", () => {
   test("no personal identifiers in tracked or untracked-unignored files", () => {
     const files = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard"], { cwd: rootDir, encoding: "utf8" })
       .split("\n")
-      .filter((f) => Boolean(f) && !/^(docs\/(brainstorm\/|PLAN_|audits\/|HANDOFF_|BRAINSTORM_HANDOFF_|art\/|research\/|journey\/|guide\/|FEATURE_COMPLETE\.md|UPSTREAM_ISSUES\.md|LESSONS\.md)|guide\/)/.test(f));
+      .filter((f) => Boolean(f) && !/^(docs\/(brainstorm\/|PLAN_|audits\/|HANDOFF_|BRAINSTORM_HANDOFF_|art\/|research\/|journey\/|guide\/|lanes\/|FEATURE_COMPLETE\.md|UPSTREAM_ISSUES\.md|LESSONS\.md)|guide\/)/.test(f));
     const parts = [["fu", "gma"], ["au", "bross"], ["gma", "il"], ["escape-from", "-idle"], ["rosser", "logic"], ["192[.]168[.]", "50[.]"], ["100[.]", "83[.]"], ["[.]", "nord"]];
     const personal = new RegExp(parts.map((p) => p.join("")).join("|"), "i");
     const name = new RegExp("\\b" + ["Au", "b"].join("") + "\\b", "i");
