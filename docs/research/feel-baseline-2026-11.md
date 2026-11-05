@@ -92,3 +92,46 @@ Not time sinks (measured): switch team 62 ms; roster flush 0 to 30 ms; roster fe
 - Plugin: `grep hook-timing ~/.vibesquad/teams/*/log.jsonl` (total first, 0 ms steps dropped, line capped at 240 chars).
 - UI: open `http://localhost:<port>/?perf=1` (overlay bottom-right, "copy" puts all marks on the clipboard). Marks: `cold-load`, `roster-fetch` (agents + payload KB), `roster-flush`, `open-agent`, `switch-team`, `send→first-token` (rpc / first-event / token rendered), `longtask`. With `?perf=1` the send run also posts a `send-timing` metric to the agent's team log.
 - Harness gotchas for Playwright: the page needs the `vs_local` cookie (sha256 of `vs_local-cookie:<token>`), and the app's `beforeunload` dialog must be suppressed with an init script, or navigation stalls.
+
+## 8. Re-measure 2026-11-05 (after Block 2 + Block 4)
+
+Window: daemon restarted clean 21:34:42Z, plugin reloaded 21:25Z; numbers are post-21:35Z (to ~21:54Z). Master `cf646cb`.
+
+**Scope gap (stated plainly):** the VS UI rows (send-to-first-token, open agent, switch team, cold load) were **not re-run**. They need the `vs_local` cookie, derived from `~/.vibesquad/local-token`, and the sandbox denied reading that file. The dev server from this worktree is up on :5180 but unused. The UI rows below keep their §1 baseline and are marked "not re-measured". The fix-C optimistic bubble therefore has no new number here. Native/CLI rows and plugin/daemon numbers are fresh.
+
+### Before/after
+
+| Action | Baseline (§1/§3) | Re-measure | Verdict |
+|---|---|---|---|
+| Spawn (native CLI `agent run --no-wait`, Haiku, n=3) | 112 to 150 s to idle | create request 44.6 s, 13.4 s, 10.2 s (median 13.4 s); all 3 answered "ok", CLI returned immediately, no >60 s timeout | Improved ~9×. Remaining time is daemon `agent.create.request`. Plugin hooks are no longer the main part (see hooks). The 44.6 s first probe ran while another worker's create took 66.2 s (21:50:40Z), so the daemon was busy. VS-side spawn (MCP `create_agent`) not re-run; it goes through the same daemon request and the same hooks. |
+| Send RPC resolved (`paseo send --no-wait`, n=3) | 2.3, 5.0, 6.1 s (median 5.0 s) | 1.8, 3.3, 2.4 s (median 2.4 s); daemon `send_agent_message_request` n=5 slow, median 1.0 s, max 3.5 s (baseline median 1.9 s, max 6.2 s) | Better; native and VS share this RPC, so the remainder is daemon-side. |
+| Open agent (native `agent logs`, n=3) | 2.5 s | 2.6, 1.2, 0.75 s (median 1.2 s) | Native improved. VS open-agent not re-measured (baseline 4.3 s). Daemon `fetch_agent_timeline_request` still slow: n=9, median 31.4 s, max 51.6 s (baseline median 29.7 s, max 260 s), so any VS gap is daemon-side. |
+| Send to first token (VS) | 8.2 s | not re-measured | Unknown. |
+| Switch team | 62 ms | not re-measured | Was not a problem. |
+| Cold load | 3.83 s (dev server) | not re-measured | Unknown. |
+
+### Hook timers (n is small: 6 real spawns since 21:35Z)
+
+| Hook | Baseline | Now (n=6 each) |
+|---|---|---|
+| `before("agent.create")` | p50 6 ms, p90 767 ms, max 4,285 ms | p50 ~590 ms, p90 1,028 ms, max 1,028 ms (139, 545, 550, 595, 620, 1028) |
+| `agent.created` | p50 4 ms, p90 848 ms, max 11,383 ms | p50 ~120 ms, p90 2,006 ms, max 2,006 ms (53, 65, 93, 147, 519, 2006) |
+| `set-labels` | median 3,958 ms, max 9,082 ms | median ~40 ms, max 1,055 ms (n=4: 8, 24, 53, 1055) |
+
+Reading: the max tails are gone (before-hook 4.3 s to 1.0 s, created 11.4 s to 2.0 s, set-labels 9.1 s to 1.1 s). The before-hook p50 looks higher than baseline, but the baseline median was dominated by 262 no-op calls from test bursts that skipped git. Real spawns before were 721 ms (16:28:05), so ~550 ms of `git-spawn-state` per real spawn is unchanged. It is now async, so it no longer blocks the daemon event loop (that was the fix). The sample is too small for a p90 claim.
+
+### Daemon log, 21:35:30Z to 21:53:15Z
+
+| Pattern | Count |
+|---|---|
+| `spawn git ENOENT` | 0 |
+| "Project config unavailable" | 0 |
+| gh `Expected NAME` | 127 (not fixed, still spamming) |
+| "Timed out refreshing" | 0 |
+
+Block 4 worked (ENOENT and config spam at zero). The gh `Expected NAME` loop is still active. Still slow daemon-side: `agent.create.request` n=5, median 22.7 s, max 66.2 s; `fetch_agent_timeline_request` median 31.4 s; `list_commands`/`provider_subagents`/`list_provider_models` ~40 s each (probably ~2,000 un-pruned agents; agent prune was not done).
+
+### Open items
+- Re-run the four VS UI rows once the local token is readable for the harness, or have the owner run `?perf=1` and copy the marks.
+- `Expected NAME` gh error.
+- Agent prune (daemon `agent.create` and timeline fetch remain the dominant cost).
