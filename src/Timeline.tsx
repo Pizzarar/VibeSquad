@@ -1,7 +1,8 @@
-import { Component, Fragment, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Component, Fragment, type ReactNode, useCallback, useSyncExternalStore, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PaseoAgentTimelineEvent } from "@getpaseo/client";
 import { messageCtxItems, openContextMenu, selectionWithin } from "./CommandPalette";
-import { daemonClient, client, DEMO } from "./paseo";
+import { daemonClient, client, DEMO, retrySend } from "./paseo";
+import { dismissPending, dropReconciled, getPending, pendingFor, reconciledIds, subscribePending } from "./pendingSend";
 import { REWIND_MODES, buildRewindRequest, truncateAfter, type RewindMode } from "./sessionLifecycle";
 import { demoTimeline } from "./demo";
 import { sentImagesFor } from "./imageDrafts";
@@ -9,7 +10,7 @@ import { parseSentAttachments, repoPathFor } from "./attachments";
 import { openRightDockTab } from "./RightDock";
 import { listTimelinePrompts, searchTimeline, type TimelinePrompt } from "./paseoTimeline";
 import { perfEndPainted, perfSendEvent } from "./perf";
-import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, matchesFilter, localPrompts, localSearch, mergeLiveItem, latestReasoningIndex, reasoningText, sortedHits, stepIndex, type SearchLocation, type TimelineFilter } from "./timelineFilter";
+import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, matchesFilter, localPrompts, localSearch, mergeLiveItem, maxEntrySeq, syncNeeded, latestReasoningIndex, reasoningText, sortedHits, stepIndex, type SearchLocation, type TimelineFilter } from "./timelineFilter";
 import { BARE_PATH_RE, parseFileToken } from "./fileLinks";
 import { toolStartsExpanded, usePref } from "./prefs";
 import { getPanes } from "./panes";
@@ -919,6 +920,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
   const activeRef = useRef(active);
   activeRef.current = active;
   const stale = useRef(false);
+  const lastSeq = useRef<number | null>(null);
   const reload = useRef<() => void>(() => {});
   // Feel pass: click → transcript painted for a freshly opened agent (no-op unless perfStart ran).
   useEffect(() => {
@@ -977,6 +979,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
           setError(null);
           const newEntries = t.entries as Entry[];
           setEntries(newEntries);
+          lastSeq.current = maxEntrySeq(newEntries);
           const tAny = t as any;
           setHasMore(tAny.hasOlder ?? newEntries.length >= 60);
           const startCur = tAny.startCursor;
@@ -993,16 +996,22 @@ export function useTimeline(agentId: string, status: string, active = true, pred
       if (alive) setLoaded(true);
     };
 
-    const soon = () => {
+    // The live stream already folds into `entries` (mergeLiveItem), so a refetch per event only re-reads 60
+    // entries the client has. soon() now runs for a seq gap (lost rows) or, debounced to a quiet stream, for
+    // events that can't be verified; turn end refetches via the [agentId, status] effect below.
+    const soon = (delay: number, debounce: boolean) => {
       if (!activeRef.current) {
         stale.current = true;
         return;
       }
-      if (timer) return;
+      if (timer) {
+        if (!debounce) return;
+        clearTimeout(timer);
+      }
       timer = setTimeout(() => {
         timer = null;
         load();
-      }, 600);
+      }, delay);
     };
 
     reload.current = load;
@@ -1014,8 +1023,13 @@ export function useTimeline(agentId: string, status: string, active = true, pred
         const ts = "timestamp" in ev ? ev.timestamp : undefined;
         perfSendEvent(agentId, (item as any)?.type === "assistant_message");
         setEntries((cur) => mergeLiveItem(cur, item, ts, seq));
+        const need = syncNeeded(lastSeq.current, seq);
+        if (seq != null && (lastSeq.current == null || seq > lastSeq.current)) lastSeq.current = seq;
+        if (need === "gap") soon(600, false);
+        else if (need === "unverified") soon(2500, true);
+      } else {
+        soon(2500, true);
       }
-      soon();
     });
     return () => {
       alive = false;
@@ -1040,6 +1054,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
         if (!t.error) {
           const newEntries = t.entries as Entry[];
           setEntries(newEntries);
+          lastSeq.current = maxEntrySeq(newEntries);
           const tAny = t as any;
           setHasMore(tAny.hasOlder ?? newEntries.length >= 60);
           const startCur = tAny.startCursor;
@@ -1188,6 +1203,13 @@ export function Timeline({
   const slowSearch = useDelayedBusy(searching);
   const pinnedTodo = findPinnedTodo(shown);
 
+  const allPending = useSyncExternalStore(subscribePending, getPending);
+  const pendingHere = pendingFor(allPending, agentId);
+  // Drop optimistic bubbles once the daemon's own user_message entry has arrived (no duplicate).
+  const covered = reconciledIds(pendingHere, entries);
+  useEffect(() => {
+    dropReconciled(covered);
+  }, [covered.join(",")]);
   const lastEntry = entries[entries.length - 1];
   const tailSig = [
     entries.length,
@@ -1196,6 +1218,7 @@ export function Timeline({
     lastEntry?.item?.status,
     reasoningText(lastEntry?.item).length || String(lastEntry?.item?.text ?? "").length,
     JSON.stringify(lastEntry?.item?.detail ?? "").length,
+    pendingHere.length,
   ].join("|");
   const stickToBottom = () => {
     const el = timelineRef.current;
@@ -1445,6 +1468,27 @@ export function Timeline({
         </TimelineErrorBoundary>
         </Fragment>
       ))}
+      {pendingHere
+        .filter((p) => !covered.includes(p.id))
+        .map((p) => (
+          <div
+            key={p.id}
+            className="tl tl-user"
+            data-testid={`tl-pending-${p.state}`}
+            style={{ opacity: p.state === "pending" ? 0.6 : 1, ...(p.state === "failed" ? { borderColor: "var(--red, #e5484d)" } : {}) }}
+          >
+            <div className="tl-text">{stripBootPreamble(p.text)}</div>
+            {p.state === "failed" ? (
+              <div className="muted" role="alert">
+                Not sent{p.error ? `: ${p.error}` : ""}{" "}
+                <button onClick={() => void retrySend(p.id)}>Retry</button>{" "}
+                <button onClick={() => dismissPending(p.id)}>Dismiss</button>
+              </div>
+            ) : (
+              <div className="muted">Sending…</div>
+            )}
+          </div>
+        ))}
       <div />
       {!isPinned && (
         <button
