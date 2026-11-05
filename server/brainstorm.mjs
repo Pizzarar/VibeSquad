@@ -605,7 +605,12 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       typeof body.profile === "string" && body.profile.trim()
         ? body.profile.trim()
         : validProfileName;
-    const desiredProfileKey = String(requestedProfile || oldLabels.profile || laneLastProfile || fallbackProfileName).trim();
+    // On a provider switch an explicit requested profile is authoritative: never fall back to the old
+    // labels.profile, which may still point at the opposite provider from an earlier (inverted) switch attempt.
+    const desiredProfileKey =
+      reason === "provider-switch" && requestedProfile
+        ? requestedProfile
+        : String(requestedProfile || oldLabels.profile || laneLastProfile || fallbackProfileName).trim();
     const profile = findProfileOrFallback(desiredProfileKey, fallbackProfileName, profiles);
 
     const spawnCfg = profile

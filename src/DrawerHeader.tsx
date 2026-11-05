@@ -480,11 +480,24 @@ export function resolveProviderSwitchTarget(currentProvider: string, targetProvi
   if (targetId === normalizeProviderId(currentProvider)) return null;
   const opt = PROVIDER_OPTIONS.find((o) => o.id === targetId);
   if (!opt) return null;
-  let profile = oppositeProviderTarget(currentProvider, profileName)?.profile;
-  if (targetId !== "claude" && targetId !== "antigravity-cli") profile = undefined;
-  else if (!profile && (role === "lead" || role === "brainstorm")) {
-    const who = targetId === "claude" ? "Claude" : "Gemini";
-    profile = `${role === "lead" ? "Lead" : "Brainstorm"} - ${who}`;
+  let profile: string | undefined;
+  if (targetId === "claude" || targetId === "antigravity-cli") {
+    if (role === "brainstorm") {
+      profile = targetId === "claude" ? "Brainstorm - Claude" : "Brainstorm - Gemini";
+    } else if (role === "lead") {
+      profile = targetId === "claude" ? "Lead - Claude" : "Lead - Gemini";
+    } else {
+      const rawProf = String(profileName ?? "").trim();
+      if (rawProf) {
+        // Only flip to the counterpart profile if `profileName` does NOT already point at the target provider,
+        // otherwise an earlier switch leaves us inverting right back to the provider we're leaving.
+        const alreadyTarget =
+          targetId === "antigravity-cli"
+            ? /(?:Gemini|Flash)$/i.test(rawProf)
+            : /(?:Claude|Sonnet|Opus|Haiku)$/i.test(rawProf);
+        profile = alreadyTarget ? rawProf : oppositeProviderTarget(currentProvider, profileName)?.profile;
+      }
+    }
   }
   return { provider: opt.id, model: opt.model, modeId: opt.modeId, profile };
 }
@@ -504,6 +517,10 @@ export type DrawerHeaderProps = {
   active: boolean;
   onClose: () => void;
   onSuccessor?: () => void;
+  /** Staged (not-yet-committed) provider switch from the top-bar dropdown; null when none is pending. */
+  stagedSwitch?: ProviderSwitchTarget | null;
+  /** Controlled setter for stagedSwitch; when omitted DrawerHeader keeps its own internal fallback state. */
+  onStageSwitch?: (target: ProviderSwitchTarget | null) => void;
   isBs: boolean;
   isTopicBs: boolean;
   topicName: string;
@@ -661,6 +678,8 @@ export function DrawerHeader({
   active,
   onClose,
   onSuccessor,
+  stagedSwitch,
+  onStageSwitch,
   isBs,
   isTopicBs,
   topicName,
@@ -713,9 +732,23 @@ export function DrawerHeader({
   );
   const modelSubmittedRef = useRef<string | null>(null);
   const [modelError, setModelError] = useState("");
+  const [internalStagedSwitch, setInternalStagedSwitch] = useState<ProviderSwitchTarget | null>(null);
+  const staged = stagedSwitch !== undefined ? stagedSwitch : internalStagedSwitch;
+  const stageSwitch = (target: ProviderSwitchTarget | null) => {
+    if (onStageSwitch) onStageSwitch(target);
+    else setInternalStagedSwitch(target);
+  };
+  const effectiveProvider = staged ? staged.provider : agent.provider;
+  const effectiveProv = providerSpec(effectiveProvider);
   const submitModel = (next: string) => {
     modelSubmittedRef.current = next;
     setModelError("");
+    if (staged) {
+      // Staging: pick the model for the *target* provider without touching the old agent.
+      setModelValue(next);
+      stageSwitch({ ...staged, model: next });
+      return;
+    }
     setModelHelper(agent, next).catch((e) => {
       modelSubmittedRef.current = null;
       setModelValue(agent.model ?? "");
@@ -735,23 +768,28 @@ export function DrawerHeader({
     modelSubmittedRef.current = null;
   }, [agent.model]);
 
+  // The internal fallback staging state must not leak into the next agent when this drawer re-renders for a new id.
   useEffect(() => {
-    const cached = providerModelsCache.get(agent.provider);
+    setInternalStagedSwitch(null);
+  }, [agent.id]);
+
+  useEffect(() => {
+    const cached = providerModelsCache.get(effectiveProvider);
     if (cached && cached.length > 0) {
       setLiveModels(cached);
       return;
     }
     setLiveModels([]);
-    if (DEMO || !agent.provider) return;
+    if (DEMO || !effectiveProvider) return;
     let cancelled = false;
-    listProviderModels(agent.provider)
+    listProviderModels(effectiveProvider)
       .then((res) => {
         if (cancelled) return;
         const list = Array.isArray(res?.models)
           ? res.models.filter((m) => typeof m?.id === "string" && m.id.trim().length > 0)
           : [];
         if (list.length > 0) {
-          providerModelsCache.set(agent.provider, list);
+          providerModelsCache.set(effectiveProvider, list);
         }
         setLiveModels(list);
       })
@@ -759,9 +797,9 @@ export function DrawerHeader({
     return () => {
       cancelled = true;
     };
-  }, [agent.provider]);
+  }, [effectiveProvider]);
 
-  const modelOptions = buildProviderModelOptions(agent.provider, modelValue || agent.model, liveModels);
+  const modelOptions = buildProviderModelOptions(effectiveProvider, modelValue || staged?.model || agent.model, liveModels);
   const modelListId = `drawer-model-list-${agent.id}`;
 
   const agentLabels = (agent.labels ?? {}) as Record<string, string>;
@@ -853,15 +891,35 @@ export function DrawerHeader({
     <select
       data-testid="drawer-provider-select"
       className="drawer-provider-select"
-      style={{ color: prov.color, borderColor: prov.color }}
-      value={providerKnown ? currentProviderId : agent.provider}
+      style={{ color: effectiveProv.color, borderColor: effectiveProv.color }}
+      value={providerKnown ? normalizeProviderId(effectiveProvider) : effectiveProvider}
       disabled={switchBusy || !!agent.archivedAt}
-      title={`Provider: ${agent.provider}`}
-      onChange={(e) => void switchToProvider(e.target.value)}
+      title={`Provider: ${effectiveProvider}`}
+      onChange={(e) => {
+        const val = e.target.value;
+        // Choosing the current provider again just clears any pending staged switch.
+        if (normalizeProviderId(val) === normalizeProviderId(agent.provider)) {
+          stageSwitch(null);
+          setModelValue(agent.model ?? "");
+          return;
+        }
+        // Stage the switch in the top bar only; the actual restart/creation happens on the next send.
+        const role = kindOf(agent);
+        const target = resolveProviderSwitchTarget(
+          agent.provider,
+          val,
+          agentLabels.profile,
+          role === "lead" || isBs ? (role === "lead" ? "lead" : "brainstorm") : undefined,
+        );
+        if (!target) return;
+        stageSwitch(target);
+        setModelValue(target.model);
+        if (isBs && target.profile) setLastBrainstormProfile(target.profile);
+      }}
     >
-      {!providerKnown && <option value={agent.provider}>{agent.provider}</option>}
+      {!providerKnown && <option value={effectiveProvider}>{effectiveProvider}</option>}
       {PROVIDER_OPTIONS.map((o) => (
-        <option key={o.id} value={o.id} disabled={profileBound && o.id !== "claude" && o.id !== "antigravity-cli" && o.id !== currentProviderId}>
+        <option key={o.id} value={o.id} disabled={profileBound && o.id !== "claude" && o.id !== "antigravity-cli" && o.id !== normalizeProviderId(effectiveProvider)}>
           {o.label}
         </option>
       ))}
@@ -947,7 +1005,7 @@ export function DrawerHeader({
               data-testid="drawer-model-input"
               className="drawer-model-input"
               aria-label="Model"
-              title={`Custom model (${agent.provider})`}
+              title={`Custom model (${effectiveProvider})`}
               style={{ background: "var(--panel-alt)", color: "var(--fg)", border: "1px solid var(--line)", fontSize: 10, padding: "1px 4px", width: 120, height: 18 }}
               list={modelListId}
               value={modelValue}
@@ -955,22 +1013,22 @@ export function DrawerHeader({
               onChange={(e) => setModelValue(e.target.value)}
               onBlur={(e) => {
                 const next = e.target.value.trim();
-                if (next && next !== (agent.model ?? "") && next !== modelSubmittedRef.current) {
+                if (next && (staged || (next !== (agent.model ?? "") && next !== modelSubmittedRef.current))) {
                   submitModel(next);
                 } else if (!next) {
-                  setModelValue(agent.model ?? "");
+                  setModelValue(staged ? (staged.model ?? "") : (agent.model ?? ""));
                 }
                 setCustomModelMode(false);
               }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   const next = (e.target as HTMLInputElement).value.trim();
-                  if (next && next !== (agent.model ?? "") && next !== modelSubmittedRef.current) {
+                  if (next && (staged || (next !== (agent.model ?? "") && next !== modelSubmittedRef.current))) {
                     submitModel(next);
                   }
                   setCustomModelMode(false);
                 } else if (e.key === "Escape") {
-                  setModelValue(agent.model ?? "");
+                  setModelValue(staged ? (staged.model ?? "") : (agent.model ?? ""));
                   setCustomModelMode(false);
                 }
               }}
@@ -986,7 +1044,7 @@ export function DrawerHeader({
               data-testid="drawer-model-select"
               className="drawer-model-input"
               aria-label="Model"
-              title={`Model (${agent.provider})`}
+              title={`Model (${effectiveProvider})`}
               style={{ background: "var(--panel-alt)", color: "var(--fg)", border: "1px solid var(--line)", fontSize: 10, padding: "1px 4px", width: 120, height: 20 }}
               value={modelValue || modelOptions[0] || ""}
               onChange={(e) => {
@@ -997,7 +1055,7 @@ export function DrawerHeader({
                 }
                 const next = val.trim();
                 setModelValue(next);
-                if (next && next !== (agent.model ?? "") && next !== modelSubmittedRef.current) {
+                if (staged || (next && next !== (agent.model ?? "") && next !== modelSubmittedRef.current)) {
                   submitModel(next);
                 }
               }}

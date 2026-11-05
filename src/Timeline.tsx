@@ -1,4 +1,4 @@
-import { Component, Fragment, type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Component, Fragment, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PaseoAgentTimelineEvent } from "@getpaseo/client";
 import { messageCtxItems, openContextMenu, selectionWithin } from "./CommandPalette";
 import { daemonClient, client, DEMO } from "./paseo";
@@ -77,6 +77,24 @@ export function formatToolError(err: any): string {
 
 export function isFailedTool(it: any, d: any): boolean {
   return it.status === "failed" || it.status === "error" || !!it.error || (d.exitCode != null && d.exitCode !== 0);
+}
+
+/**
+ * Strip a provider-switch boot preamble off a user message so the timeline shows only the user's actual words.
+ * The server embeds "Pending message from the user to answer now:\n"; the seamless-switch flow embeds
+ * "User message to answer now:\n". Either way, only the text after the last such marker is the real message.
+ */
+export function stripBootPreamble(text: string): string {
+  if (typeof text !== "string") return text;
+  const userMarker = "User message to answer now:\n";
+  const pendingMarker = "Pending message from the user to answer now:\n";
+  if (text.includes(userMarker)) {
+    return text.slice(text.lastIndexOf(userMarker) + userMarker.length);
+  }
+  if (text.includes(pendingMarker)) {
+    return text.slice(text.lastIndexOf(pendingMarker) + pendingMarker.length);
+  }
+  return text;
 }
 
 export function isSubAgentTool(it: any, d: any): boolean {
@@ -688,12 +706,13 @@ export function TimelineItem({
 
   switch (it.type) {
     case "user_message": {
+      const clean = stripBootPreamble(typeof it.text === "string" ? it.text : "");
       const urls: string[] = it.images?.length
         ? it.images.map((im: any) => (im.data ? `data:${im.mimeType ?? "image/png"};base64,${im.data}` : im.url)).filter(Boolean)
         : sentImagesFor(agentId, it.text);
-      const sent = parseSentAttachments(typeof it.text === "string" ? it.text : "");
+      const sent = parseSentAttachments(clean);
       return (
-        <div className={`tl tl-user${selected ? " tl-selected" : ""}`} data-selected={selected ? "true" : undefined} onClick={(ev) => onMessageClick(ev, onSelect)} onContextMenu={(ev) => openContextMenu(ev, messageCtxItems(it.text ?? "", agentId, onParkText, selectionWithin(ev.currentTarget)))}>
+        <div className={`tl tl-user${selected ? " tl-selected" : ""}`} data-selected={selected ? "true" : undefined} onClick={(ev) => onMessageClick(ev, onSelect)} onContextMenu={(ev) => openContextMenu(ev, messageCtxItems(clean, agentId, onParkText, selectionWithin(ev.currentTarget)))}>
           {urls.length > 0 && (
             <div className="tl-images">
               {urls.map((u, i) => (
@@ -701,7 +720,7 @@ export function TimelineItem({
               ))}
             </div>
           )}
-          {sent.chips.length ? sent.body : it.text}
+          {sent.chips.length ? sent.body : clean}
           <Stamp iso={e.timestamp} />
           {sent.chips.length > 0 && (
             <div className="tl-file-chips">
@@ -717,9 +736,9 @@ export function TimelineItem({
             </div>
           )}
           {selected && <div className="tl-actions">
-            <CopyMsgButton text={it.text ?? ""} />
-            {onParkText && typeof it.text === "string" && it.text.trim() && (
-              <button className="tl-park-btn" title="Park message lines in Idea Inbox (0 tokens)" onClick={() => onParkText(it.text)}>
+            <CopyMsgButton text={clean} />
+            {onParkText && clean.trim() && (
+              <button className="tl-park-btn" title="Park message lines in Idea Inbox (0 tokens)" onClick={() => onParkText(clean)}>
                 📥 Park in Inbox
               </button>
             )}
@@ -830,6 +849,13 @@ export function TimelineItem({
     case "notification":
       return <div className={`tl tl-note ${it.level}`}>{formatToolError(it.message)}</div>;
 
+    case "provider_switch":
+      return (
+        <div data-testid="tl-provider-switch-row" className="tl tl-compaction tl-provider-switch" style={{ textAlign: "center", color: "#888", borderTop: "1px dashed #888", borderBottom: "1px dashed #888", padding: "2px 0", fontSize: "0.85em" }}>
+          ── Switched to {it.label || "new provider"} ──
+        </div>
+      );
+
     default:
       return null;
   }
@@ -837,8 +863,9 @@ export function TimelineItem({
 
 // ─── useTimeline ──────────────────────────────────────────────────────────────
 
-export function useTimeline(agentId: string, status: string, active = true) {
+export function useTimeline(agentId: string, status: string, active = true, predecessorId?: string, switchLabel?: string) {
   const [entries, setEntries] = useState<Entry[]>([]);
+  const [predecessor, setPredecessor] = useState<{ entries: Entry[]; label: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -848,6 +875,34 @@ export function useTimeline(agentId: string, status: string, active = true) {
   activeRef.current = active;
   const stale = useRef(false);
   const reload = useRef<() => void>(() => {});
+
+  // Stitch the predecessor's tail timeline ahead of this (fresh) agent's own entries so the conversation
+  // stays continuously visible across a provider switch. Fetched once; never touched by load()/soon()/mergeLiveItem.
+  useEffect(() => {
+    if (DEMO || !predecessorId || predecessorId === "start-brainstorm") {
+      setPredecessor(null);
+      return;
+    }
+    let alive = true;
+    client.agents
+      .ref(predecessorId)
+      .timeline.refetch({ direction: "tail", limit: 40, projection: "projected" })
+      .then((t) => {
+        if (!alive) return;
+        const predEntries = (t.entries ?? []) as Entry[];
+        setPredecessor({ entries: predEntries, label: switchLabel || "new provider" });
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [predecessorId, switchLabel]);
+
+  const combinedEntries = useMemo<Entry[]>(() => {
+    if (!predecessor) return entries;
+    const divider: Entry = { item: { type: "provider_switch", label: predecessor.label }, seqStart: -1 };
+    return [...predecessor.entries, divider, ...entries];
+  }, [predecessor, entries]);
 
   useEffect(() => {
     if (DEMO) {
@@ -988,7 +1043,7 @@ export function useTimeline(agentId: string, status: string, active = true) {
     }
   }, [agentId, hasMore, loadingMore]);
 
-  return { entries, error, hasMore, loadingMore, loadMore, loaded };
+  return { entries: combinedEntries, error, hasMore, loadingMore, loadMore, loaded };
 }
 
 // ─── PinnedTodo ───────────────────────────────────────────────────────────────
