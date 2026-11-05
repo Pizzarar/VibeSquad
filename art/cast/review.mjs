@@ -1,133 +1,51 @@
-// review: fedora investigator. Wide low brim shades the eyes, collar up, trench coat; magnifier / notepad / monocle.
-import { compose, dots, flip, run, sym, SKIN } from "./lib.mjs";
-import { EARS, FACE_SHADE, HEAD } from "./parts.mjs";
+// review: the investigator. Fedora, trench coat with popped collar, shirt + tie, sharp eyes. Face always visible.
+import { D, E, I, L, Ln, M, P, PL, R, U, compose, SKIN } from "./lib.mjs";
+import { EYES, HOLD, NOSE, bust } from "./parts.mjs";
 
-// Pinched crown, wide brim that dips at the front over the brows.
-const FEDORA = {
-  x: 4,
-  y: 1,
-  ol: true,
-  g: sym([
-    ".......hhhh.",
-    "......hhhhhh",
-    ".....hhhhhhh",
-    "....hhhhhhhh",
-    "....hhhhhhhh",
-    "....hhhhhhhh",
-    "....bbbbbbbb",
-    "hhhhhhhhhhhh",
-    ".HHHHHHHHHHH",
-    "....HHHHHHHH",
-  ]),
-};
-
-// Trench coat: c coat, C lapel, w shirt, t tie.
-const COAT = {
-  x: 2,
-  y: 21,
-  ol: true,
-  g: sym([
-    "..........wwwt",
-    ".......cCCwwwt",
-    "....ccccCCwwwt",
-    "..ccccccCCCwwt",
-    ".cccccccCCCCwt",
-    "ccccccccccCCwt",
-    "cccccccccccCCt",
-    "cccccccccccCCt",
-    "ccccccccccccCC",
-    "ccccccccccccCC",
-    "cccccccccccccC",
-  ]),
-};
-// Popped collar flaring up past the jaw.
-const COLLAR_L = ["C....", "CC...", "CCC..", "CCCC.", "CCCCC"];
-const COLLAR = [
-  { x: 4, y: 17, ol: true, g: COLLAR_L },
-  { x: 23, y: 17, ol: true, g: flip(COLLAR_L) },
+// Trench: popped collar flaps up the neck, white shirt V and tie.
+const COAT = [
+  L(P([25, 47], [39, 47], [32, 60]), "w"),
+  L(P([30, 48], [34, 48], [35, 59], [32, 62], [29, 59]), "t", { ol: 1 }),
+  L(U(P([18, 46], [26, 42], [31, 60], [24, 63]), P([46, 46], [38, 42], [33, 60], [40, 63])), "c", { ol: 2, sh: [["C", 1, 1]] }),
 ];
 
-const BRIM_SHADE = dots(["S", ...run(7, 24, 11), ...run(8, 23, 12)]);
-// Narrow, level stare.
-const stare = (glint) => [
-  ["e", ...run(10, 13, 13), ...run(18, 21, 13), [11, 14], [12, 14], [19, 14], [20, 14]],
-  [glint, [12, 14], [19, 14]],
+const FEDORA = [
+  L(U(P([19, 22], [45, 22], [43, 10], [37, 7], [32, 10], [27, 7], [21, 10]), E(32, 22.5, 22, 3.5)), "h", { ol: 2, sh: [["H", 3, 0], ["H", 0, 1]] }),
+  L(I(P([19, 22], [45, 22], [43, 10], [37, 7], [32, 10], [27, 7], [21, 10]), R(0, 17, 63, 20)), "b"),
+  L(R(31, 10, 32, 16), "H"),
 ];
-const NOSE = ["S", [16, 15], [16, 16], [15, 17]];
+const UNDER = L(I(D(E(32, 27, 13.5, 14), R(0, 0, 63, 24)), R(0, 0, 63, 26)), "S");
 
-const MAGNIFIER = { x: 22, y: 14, ol: true, g: [
-  ".gggg.",
-  "gLLllg",
-  "gLlllg",
-  "gllllg",
-  "gllllg",
-  ".gggg.",
-  "...jj.",
-  "..sss.",
-  ".sSsss",
-  ".ssss.",
-] };
-// Spiral flip-pad with ruled lines, held up in the right hand.
-const NOTEPAD = { x: 21, y: 15, ol: true, g: [
-  "qwqwqwq",
-  "wwwwwww",
-  "wkkkkkw",
-  "wwwwwww",
-  "wkkkkww",
-  "wwwwwww",
-  "wkkkkkw",
-  "sssswww",
-  "sSsssww",
-  "sssss..",
-] };
+const MOUTHS = {
+  flat: L(R(28, 39, 35, 40), "o"),
+  smirk: L(PL(2, [28, 40], [34, 40], [37, 38]), "o"),
+  frown: L(PL(2, [28, 40], [30, 39], [34, 39], [36, 40]), "o"),
+};
 
-const base = (extra, collar = true) => [COAT, ...EARS, HEAD, dots(FACE_SHADE), BRIM_SHADE, ...extra, FEDORA, ...(collar ? COLLAR : [])];
+// Hand on the chin, thinking.
+// Fist propped under the chin, forearm running down to the bottom edge; outlined so it separates from the jaw.
+const CHIN_HAND = [
+  L(P([33, 49], [42, 49], [48, 64], [37, 64]), "C", { ol: 2 }),
+  L(U(E(34, 47.5, 5, 4), E(39, 47.5, 4, 4)), "s", { ol: 2, sh: [["S", 2, 1]] }),
+  L(U(R(33, 46, 41, 46), R(33, 49, 41, 49)), "S"),
+];
+// Notepad + pencil held in the right hand.
+const NOTEPAD = [L(R(43, 34, 56, 54), "w", { ol: 2, sh: [["g", 2, 0]] }), L(U(R(48, 38, 54, 38), R(48, 41, 54, 41), R(50, 44, 54, 44)), "l"), L(R(43, 34, 56, 35), "r")];
+const PAD_HOLD = HOLD(49, 57, [[42, 50], [56, 50]]);
+const STACHE = L(U(PL(2, [26, 39], [28, 37], [36, 37], [38, 39]), E(32, 44, 3, 2)), "m");
+
+const SQUINT = [L(M(R(23, 30, 28, 32)), "w", { ol: 1 }), L(M(R(25, 30, 26, 32)), "e"), L(M(Ln(22, 27, 29, 28, 2)), "e")];
+const ARCHED = [EYES.round(-1), L(Ln(22, 27, 29, 27, 2), "e"), L(Ln(35, 26, 41, 23, 2), "e")];
+
+const make = (layers) => () => compose([bust(COAT), UNDER, ...layers]);
 
 export const variants = [
-  {
-    // Stubbled jaw, hard stare, cyan glint; magnifying glass.
-    name: "magnifier",
-    pal: { ...SKIN.light, h: "#2b3a6b", H: "#18213f", b: "#38f6ff", c: "#c9a26b", C: "#8e6b3c", t: "#ff4fd8",
-      g: "#ffc857", l: "#38f6ff", L: "#e6feff", j: "#6b3b1e", x: "#b08a78" },
-    grid: () => compose(base([
-      dots(...stare("l"), NOSE, ["k", ...run(14, 17, 19)], ["x", [11, 19], [13, 20], [17, 20], [19, 19], [15, 21], [10, 18], [21, 18]]),
-      MAGNIFIER,
-    ]), "review/magnifier"),
-  },
-  {
-    // Ginger mustache, raised brow, open lapels (no popped collar); flip-pad.
-    name: "notepad",
-    pal: { ...SKIN.tan, h: "#8a5a34", H: "#5a3820", b: "#ffc857", c: "#6b7394", C: "#454b66", t: "#38f6ff",
-      m: "#ff8a3d", M: "#c25a1e", q: "#8f8aa8" },
-    grid: () => compose(base([
-      dots(["e", ...run(10, 13, 14), [11, 15], [12, 15], ...run(18, 21, 13), [19, 14], [20, 14]], ["w", [12, 15], [19, 14]], NOSE,
-        ["m", ...run(12, 19, 18), [11, 19], [12, 19], [19, 19], [20, 19]], ["M", ...run(13, 18, 19)]),
-      NOTEPAD,
-    ], false), "review/notepad"),
-  },
-  {
-    // Glowing monocle, scar, flat mouth; collar up.
-    name: "monocle",
-    pal: { ...SKIN.deep, h: "#5a2a72", H: "#36184a", b: "#ff4fd8", c: "#2a2440", C: "#4a3f6e", t: "#ff4fd8",
-      g: "#ff4fd8", l: "#ff9ef0", x: "#c9889a" },
-    grid: () => compose(base([
-      dots(...stare("w"), NOSE, ["k", ...run(13, 17, 19), [18, 18]], ["x", [10, 16], [11, 17], [12, 18]],
-        // monocle over the right eye, chain to the collar
-        ["g", ...run(18, 21, 12), [17, 13], [22, 13], [17, 14], [22, 14], ...run(18, 21, 15), [22, 16], [23, 17]],
-        ["l", [19, 13], [20, 13], [21, 13], [20, 14], [21, 14]], ["e", [19, 14]]),
-    ]), "review/monocle"),
-  },
-  {
-    // Scarf over the lower face, glowing green eyes; gold badge.
-    name: "masked",
-    pal: { ...SKIN.light, h: "#3a3f4f", H: "#22252f", b: "#4df7a6", c: "#1f4f5a", C: "#2f7480", t: "#4df7a6",
-      m: "#3c4a6e", M: "#283250", l: "#4df7a6", g: "#ffc857" },
-    grid: () => compose([
-      ...base([dots(...stare("l"), ["l", [11, 14], [20, 14]])]),
-      { x: 7, y: 16, ol: true, g: sym(["mmmmmmmmm", "mmmmmmmmm", ".Mmmmmmmm", ".MMmmmMmm", "..MMmmmmm", "....MMMMM"]) },
-      { x: 22, y: 19, ol: true, g: ["gggggg", "gwwwwg", "gggggg", "ssssg.", "sSsss.", "ssss.."] },
-    ], "review/masked"),
-  },
+  { name: "thinker", pal: { ...SKIN.light, h: "#2a4ea0", H: "#1a3070", b: "#38f6ff", c: "#c9a46a", C: "#8f6f3e", t: "#ff4fd8" },
+    grid: make([ARCHED, NOSE, MOUTHS.flat, FEDORA, CHIN_HAND]) },
+  { name: "notepad", pal: { ...SKIN.tan, h: "#8a5a34", H: "#5e3a1e", b: "#ff8573", c: "#5a6a8a", C: "#3a4660", t: "#38f6ff", l: "#2e325c", r: "#ff4f6e" },
+    grid: make([EYES.dot(), L(M(Ln(22, 26, 29, 26, 2)), "e"), NOSE, MOUTHS.smirk, FEDORA, PAD_HOLD.back, NOTEPAD, PAD_HOLD.tips]) },
+  { name: "suspicious", pal: { ...SKIN.deep, h: "#8a55d0", H: "#5a3296", b: "#ffc857", c: "#5a4a9a", C: "#3c3070", t: "#ffc857" },
+    grid: make([SQUINT, NOSE, MOUTHS.frown, FEDORA]) },
+  { name: "veteran", pal: { ...SKIN.brown, h: "#3a3c4a", H: "#24252f", b: "#4df7a6", c: "#1f5c5a", C: "#123a38", t: "#4df7a6", m: "#9a96aa" },
+    grid: make([EYES.sleepy(), L(M(Ln(22, 27, 29, 27, 2)), "m"), NOSE, MOUTHS.smirk, STACHE, FEDORA]) },
 ];
-
-export const ring = "#38f6ff";

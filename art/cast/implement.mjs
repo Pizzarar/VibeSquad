@@ -1,136 +1,52 @@
-// implement: the brawler who gets it built. Bandana on every variant (headband with knot tails, or a full do-rag),
-// tank top over big shoulders; taped fist, mohawk + grin, hammer on the shoulder, boxing guard.
-import { compose, dots, paint, run, sym, SKIN } from "./lib.mjs";
-import { BODY, EARS, FACE_SHADE, HEAD } from "./parts.mjs";
+// implement: the builder/brawler. Bandana, tank top over bare shoulders, taped fists.
+import { D, E, I, L, Ln, M, P, PL, R, U, compose, SKIN } from "./lib.mjs";
+import { BROWS, CAP_S, EARS, EYES, HEAD, NECK, NOSE, SMILE, TORSO_S } from "./parts.mjs";
 
-// Tank top t over bare shoulders: scoop neck, straps, arm creases.
-const inTank = (x, y) => (y === 24 ? [10, 11, 20, 21].includes(x) : y === 25 ? x <= 12 || x >= 19 : y >= 26) && x >= 10 && x <= 21;
-const TANK = [BODY, paint(BODY, (x, y, ch) => (inTank(x, y) ? "t" : (x === 6 || x === 25) && y >= 27 ? "S" : ch === "c" || ch === "C" ? "s" : null))];
+// Bare shoulders (skin) with a tank top over the chest.
+const BODY = [
+  L(TORSO_S(), "s", { ol: 2, sh: [["S", 4, 0]] }),
+  L(I(TORSO_S(), D(R(19, 47, 44, 63), E(32, 46, 7, 6))), "c", { ol: 1, sh: [["C", 3, 0]] }),
+  L(M(PL(1, [14, 56], [15, 63])), "S"),
+];
 
-// Headband across the forehead (b, d = print dots) and the knot + tails flaring off the viewer's right.
-const BAND = { x: 7, y: 9, ol: true, g: [
-  "..bbbbbbbbbbbbbb..",
-  ".bbbbbbbbbbbbbbbb.",
-  "bbbbbbbbbbbbbbbbbb",
-] };
-const TAILS = { x: 24, y: 6, ol: true, g: [
-  ".....bb",
-  "...bbbb",
-  "..bbbB.",
-  "bbbBB..",
-  "bBbb...",
-  ".bbbbb.",
-  "...bbbb",
-  ".....bb",
-] };
-const BAND_DOTS = ["d", [10, 10], [14, 11], [17, 10], [21, 11], [12, 9], [19, 9], [26, 9], [28, 12]];
-// Full do-rag over the scalp, same knot + tails.
-const DORAG = { x: 7, y: 3, ol: true, g: sym([
-  "....bbbbb",
-  "..bbbbbbb",
-  ".bbbbbbbb",
-  "bbbbbbbbb",
-  "bbbbbbbbb",
-  "bbbbbbbbb",
-  "bbbbbbbbb",
-  "bbbbbbbbb",
-  "BBBBBBBBB",
-]) };
-const DORAG_DOTS = ["d", [11, 5], [16, 4], [20, 6], [9, 8], [14, 8], [19, 9], [23, 8], [26, 9], [28, 12]];
+const BANDANA = (knot = true) => [
+  L(I(CAP_S(25, 1), R(0, 19, 63, 25)), "b", { ol: 2, sh: [["B", 0, 1]] }),
+  L(I(CAP_S(25, 1), R(0, 19, 63, 25), (x, y) => (x + y) % 6 === 0), "d"),
+  knot && L(U(P([44, 20], [54, 16], [52, 22]), P([44, 23], [55, 26], [50, 28])), "b", { ol: 2, sh: [["B", 1, 1]] }),
+];
 
 const HAIR = {
-  spiky: { x: 8, y: 2, ol: true, g: [
-    "..a....a....a...",
-    "..aa..aa...aa.a.",
-    ".aaa.aaaa.aaaaa.",
-    "aaaaaaaaaaaaaaaa",
-    "aaaaaaaaaaaaaaaa",
-    "aaaaaaaaaaaaaaaa",
-    "aaaaaaaaaaaaaaaa",
-    "aaaaaaaaaaaaaaaa",
-  ] },
-  mohawk: { x: 13, y: 0, ol: true, g: ["..aa..", ".aaaa.", ".aaaa.", "aaaaaa", "aaaaaa", "aaaaaa", "aaaaaa", "AAaaAA", "AAAAAA", "AAAAAA"] },
-  buzz: { x: 7, y: 6, ol: true, g: sym(["...aaaaaa", ".aaaaaaaa", "aaaaaaaaa"]) },
+  spikes: L(U(CAP_S(20), P([19, 16], [21, 6], [25, 12], [29, 3], [33, 10], [37, 4], [40, 11], [44, 7], [45, 17])), "a", { ol: 2, sh: [["A", 2, 1]] }),
+  mohawk: L(U(CAP_S(20, 0.5), P([29, 15], [29, 3], [32, 0], [35, 3], [35, 15])), "a", { ol: 2, sh: [["A", 2, 0]] }),
+  bald: null,
+  flat: L(U(CAP_S(20), R(21, 11, 42, 18)), "a", { ol: 2, sh: [["A", 0, 1]] }),
 };
 
-// Heavy flat brows low over the eyes.
-const BROWS = ["e", ...run(10, 13, 12), ...run(18, 21, 12)];
-const EYES = ["e", [11, 13], [12, 13], [11, 14], [12, 14], [19, 13], [20, 13], [19, 14], [20, 14]];
-const NOSE = ["S", [16, 15], [16, 16], [15, 17], [16, 17]];
-const STUBBLE = ["x", [10, 18], [21, 18], [11, 19], [20, 19], [12, 20], [19, 20], [13, 21], [15, 21], [17, 21], [18, 21]];
-const SMIRK = ["k", ...run(13, 18, 19), [19, 18]];
-const GRIN = [
-  ["k", ...run(12, 19, 18), [11, 19], [20, 19], [12, 20], [19, 20], ...run(13, 18, 21)],
-  ["w", ...run(12, 19, 19), ...run(13, 18, 20)],
-  ["k", [15, 19]],
-];
-const GRIT = [
-  ["k", ...run(12, 19, 18), [11, 19], [11, 20], [20, 19], [20, 20], ...run(12, 19, 21)],
-  ["w", ...run(12, 19, 19), ...run(12, 19, 20)],
-  ["k", [14, 19], [14, 20], [17, 19], [17, 20]],
-];
+// Taped brawler fist, knuckles up: forearm angled down to the bottom edge (lean `dir`), diagonal wrist
+// wraps, knuckle bumps + creases, thumb folded across the front.
+const FIST = (cx, cy, dir = 1) => {
+  const arm = P([cx - 4, cy + 2], [cx + 4, cy + 2], [cx + 5 + dir * 5, 64], [cx - 5 + dir * 5, 64]);
+  return [
+    L(arm, "s", { ol: 2, sh: [["S", 2, 0]] }),
+    L(I(arm, R(0, cy + 5, 63, cy + 10)), (x, y) => ((x + dir * y) % 4 + 4) % 4 < 2 ? "t" : "T"),
+    L(U(R(cx - 6, cy - 3, cx + 6, cy + 4), ...[-4, -1.3, 1.3, 4].map((d, i) => E(cx + d + 0.5, cy - (i === 0 || i === 3 ? 3 : 4), 2.2, 2))), "s", { ol: 2, sh: [["S", 2, 1]] }),
+    L(U(R(cx - 3, cy - 4, cx - 3, cy - 1), R(cx, cy - 5, cx, cy - 1), R(cx + 3, cy - 4, cx + 3, cy - 1)), "S"),
+    L(R(cx - 5, cy + 1, cx + 1, cy + 3), "s", { ol: 1 }),
+    L(I(R(cx - 6, cy - 4, cx + 6, cy - 2), U(R(cx - 6, cy - 3, cx + 6, cy + 4), ...[-4, -1.3, 1.3, 4].map((d) => E(cx + d + 0.5, cy - 4, 2.2, 2)))), "t"),
+  ];
+};
+const HAMMER = [L(Ln(45, 62, 55, 31, 4), "u", { ol: 2, sh: [["U", 1, 0]] }), L(P([47, 26], [63, 31], [61, 39], [45, 34]), "g", { ol: 2, sh: [["G", 0, 2]] })];
+const BEARD = L(I(D(E(32, 32, 14, 13), E(32, 30, 11, 9)), R(0, 34, 63, 63)), "a", { ol: 0, sh: [["A", 0, 1]] });
 
-// Fists: knuckles, finger creases, tape wrap w.
-const FIST = { x: 22, y: 19, ol: true, g: [
-  ".ssssss",
-  "sSsSsSs",
-  "sssssss",
-  "wwwwwws",
-  "wwwwwww",
-  ".kkkkk.",
-  ".sssss.",
-] };
-const FIST_L = { ...FIST, x: 3, g: FIST.g.map((r) => [...r].reverse().join("")) };
-// Sledgehammer resting on the viewer's left shoulder (tails fly off the right).
-const HAMMER = { x: 0, y: 7, ol: true, g: [
-  "mmmmmmmm..",
-  "mWWmmmmm..",
-  "mWmmmmmm..",
-  "mmmmmmmm..",
-  "MMMMMMMM..",
-  "...jJ.....",
-  "...jJ.....",
-  "....jJ....",
-  "....jJ....",
-  ".....jJ...",
-  ".....jJ...",
-  "...sssss..",
-  "..ssssSs..",
-  "....ssss..",
-] };
-const BEARD = { x: 9, y: 17, ol: true, g: sym(["a......", "aa.....", "aaa....", ".aaaaaa", "..aaaaa", "...aaaa", ".....aa"], true) };
-
-const base = (hair, head, face, extra = []) => [...TANK, ...EARS, HEAD, dots(FACE_SHADE), ...face, ...(hair ? [hair] : []), ...head, ...extra];
-const band = [BAND, TAILS, dots(BAND_DOTS)];
+const base = (layers) => () => compose([BODY, NECK, ...EARS, HEAD, ...layers]);
 
 export const variants = [
-  {
-    // Spiky black hair, red polka-dot headband, stubble smirk; taped fist up.
-    name: "fist",
-    pal: { ...SKIN.tan, a: "#2a2440", A: "#14101e", b: "#ff3d6e", B: "#b8203f", d: "#f6f3ff", t: "#f6f3ff", x: "#b07a52" },
-    grid: () => compose(base(HAIR.spiky, band, [dots(BROWS, EYES, ["w", [11, 13], [19, 13]], NOSE, STUBBLE, SMIRK)], [FIST]), "implement/fist"),
-  },
-  {
-    // Hot-pink mohawk, cyan headband, brow scar, gap-tooth grin, violet tank; taped fist.
-    name: "mohawk",
-    pal: { ...SKIN.light, a: "#ff4fd8", A: "#b52a95", b: "#38f6ff", B: "#1fa3c8", d: "#14101e", t: "#8f5cff", x: "#c99a80" },
-    grid: () => compose(base(HAIR.mohawk, band,
-      [dots(BROWS, EYES, ["w", [11, 13], [19, 13]], NOSE, ...GRIN, ["x", [20, 11], [20, 12], [21, 13]], ["r", [9, 16], [22, 16]])], [FIST]), "implement/mohawk"),
-  },
-  {
-    // Violet do-rag with gold dots, full black beard, cyan tank; sledgehammer on the shoulder.
-    name: "hammer",
-    pal: { ...SKIN.deep, a: "#1d1830", b: "#8f5cff", B: "#5a34b8", d: "#ffc857", t: "#38c8ff", m: "#e6e9f2", M: "#9aa0b8", W: "#ffffff", j: "#f0b870", J: "#c0803c" },
-    grid: () => compose(base(null, [DORAG, TAILS, dots(DORAG_DOTS)],
-      [dots(BROWS, EYES, ["w", [11, 13], [19, 13]], NOSE)], [BEARD, dots(["w", ...run(13, 18, 19)], ["k", ...run(13, 18, 20)]), HAMMER]), "implement/hammer"),
-  },
-  {
-    // Buzz cut, yellow headband, nose plaster + gritted teeth, orange tank; both fists up.
-    name: "guard",
-    pal: { ...SKIN.brown, a: "#1d1830", b: "#ffe14d", B: "#c9a020", d: "#ff3d6e", t: "#ff8a3d", x: "#7e4a2c", p: "#f6f3ff" },
-    grid: () => compose(base(HAIR.buzz, band,
-      [dots(BROWS, EYES, ["w", [11, 13], [19, 13]], NOSE, ...GRIT, ["p", [14, 16], [15, 16], [16, 16], [17, 16], [15, 15], [15, 17]])], [FIST, FIST_L]), "implement/guard"),
-  },
+  { name: "fist", pal: { ...SKIN.tan, a: "#2a2440", A: "#14101e", b: "#ff4f6e", B: "#b52a45", d: "#f6f3ff", c: "#f6f3ff", C: "#b9b2d6", t: "#f6f3ff", T: "#b9b2d6" },
+    grid: base([EYES.dot(), BROWS("a", -1), NOSE, L(PL(2, [27, 39], [37, 39]), "o"), HAIR.spikes, BANDANA(), FIST(50, 49)]) },
+  { name: "mohawk", pal: { ...SKIN.light, a: "#ff4fd8", A: "#b52a95", b: "#38f6ff", B: "#1f9eb0", d: "#14101e", c: "#8f5cff", C: "#5a34b8", t: "#f6f3ff", T: "#b9b2d6" },
+    grid: base([EYES.round(), BROWS("A", -1), NOSE, SMILE(6, 4), HAIR.mohawk, BANDANA(false), FIST(51, 36, 1)]) },
+  { name: "hammer", pal: { ...SKIN.deep, a: "#1c1a2e", A: "#14101e", b: "#8f5cff", B: "#5a34b8", d: "#ffe14d", c: "#2fb8e8", C: "#1a6f9a", t: "#f6f3ff", T: "#b9b2d6", u: "#d08a4a", U: "#9a5a2a", g: "#e6e2f4", G: "#8a84a6" },
+    grid: base([EYES.dot(), BROWS("a", -1), NOSE, BEARD, SMILE(5, 3, 38), BANDANA(false), HAMMER, FIST(47, 55)]) },
+  { name: "guard", pal: { ...SKIN.brown, a: "#1c1a2e", A: "#14101e", b: "#ffc857", B: "#c98a2a", d: "#ff4fd8", c: "#ff8a3d", C: "#b8551a", t: "#f6f3ff", T: "#b9b2d6" },
+    grid: base([EYES.dot(), BROWS("a", -2), NOSE, L(R(27, 38, 36, 40), "w", { ol: 1 }), L(R(29, 38, 29, 40), "k"), L(R(34, 38, 34, 40), "k"), HAIR.flat, BANDANA(), FIST(17, 39, -1), FIST(47, 39, 1)]) },
 ];
-
-export const ring = "#ff3d6e";

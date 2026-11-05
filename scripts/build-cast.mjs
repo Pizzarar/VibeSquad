@@ -1,12 +1,14 @@
-// Build the cast sprite sheet + review galleries from the palette-indexed grids in art/cast/.
-// Usage: node scripts/build-cast.mjs [--block a3] [--shots <dir>]
-//   public/cast.png               128x320 sheet, 32x32 cells, row = role (fixed order), col = variant 0-3
-//   <shots>/cast-<block>-4x.png   gallery at 4x, the block's roles: plain on the left, neon ring on the right
-//   <shots>/cast-<block>-1x.png   same at 1x
-//   <shots>/cast-full-4x.png      all authored roles at 4x
-//   art/cast/piskel/<role>.piskel one frame per variant, for hand tweaks in Piskel
+// Build the cast sprite sheet + review galleries from the layered shape sources in art/cast/.
+// Usage: node scripts/build-cast.mjs [--shots <dir>] [--zoom <role>] [--no-dpr]
+//   public/cast.png               256x640 sheet, 64x64 cells, row = role (fixed order), col = variant 0-3
+//   art/cast/piskel/<role>.piskel one 64x64 frame per variant, for hand tweaks in Piskel
+//   <shots>/cast64-4x.png         labelled gallery, every sprite at 4x
+//   <shots>/cast64-dpr{2,1}.png   every sprite at 32 CSS px (as the app shows it), rendered by Playwright
+//                                 at deviceScaleFactor 2 and 1, on the app's --bg (left) and --panel (right)
+//   <shots>/cast64-zoom-<role>.png  (--zoom) roles at 3x, for close inspection
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { deflateSync } from "node:zlib";
@@ -18,27 +20,20 @@ const opt = (k, d) => {
   const i = args.indexOf(k);
   return i >= 0 ? args[i + 1] : d;
 };
-const BLOCK = opt("--block", "a3");
 // scratch/ lives in the main checkout, also when building from a linked worktree.
 const mainRoot = dirname(execSync("git rev-parse --path-format=absolute --git-common-dir", { cwd: root }).toString().trim());
 const SHOTS = resolve(opt("--shots", join(mainRoot, "scratch", "shots")));
 
 export const ROLES = ["lead", "retired-lead", "brainstorm", "implement", "mechanical", "review", "audit", "spec", "art", "unknown"];
 const VARIANTS = 4;
-const BLOCKS = {
-  a2: ["retired-lead", "review", "spec", "art"],
-  a3: ["lead", "brainstorm", "implement", "mechanical", "audit", "unknown"],
-};
+const SHOW = 32; // CSS px the app shows a cell at
 
 const cast = {};
 for (const role of ROLES) {
   const f = join(root, "art", "cast", `${role}.mjs`);
   if (!existsSync(f)) continue;
   const mod = await import(pathToFileURL(f).href);
-  cast[role] = {
-    ring: mod.ring,
-    sprites: mod.variants.map((v) => ({ name: v.name, px: rasterize(v.grid(), v.pal, `${role}/${v.name}`) })),
-  };
+  cast[role] = { sprites: mod.variants.map((v) => ({ name: v.name, px: rasterize(v.grid(), v.pal, `${role}/${v.name}`) })) };
   if (cast[role].sprites.length !== VARIANTS) throw new Error(`${role}: ${cast[role].sprites.length} variants, expected ${VARIANTS}`);
 }
 
@@ -76,6 +71,7 @@ function save(file, W, H, img) {
 }
 
 // Sprite sheet: all 10 rows reserved, unauthored roles stay transparent.
+const sheetFile = join(root, "public", "cast.png");
 {
   const W = S * VARIANTS, H = S * ROLES.length;
   const img = new Uint8Array(W * H * 4);
@@ -84,10 +80,10 @@ function save(file, W, H, img) {
       for (let y = 0; y < S; y++) img.set(px.subarray(y * S * 4, (y + 1) * S * 4), ((row * S + y) * W + col * S) * 4);
     }),
   );
-  save(join(root, "public", "cast.png"), W, H, img);
+  save(sheetFile, W, H, img);
 }
 
-// Piskel files: one layer, one frame per variant, stored as a single 128x32 horizontal strip chunk.
+// Piskel files: one layer, one frame per variant, stored as a single horizontal strip chunk.
 for (const role of ROLES.filter((r) => cast[r])) {
   const W = S * VARIANTS;
   const img = new Uint8Array(W * S * 4);
@@ -124,13 +120,14 @@ const FONT = {
 
 const BG = hex("#111326"); // app --panel
 const LABEL = hex("#b4aee0");
-const DISC = hex("#070710");
 
+// Labelled gallery at `scale` (sprite pixels -> image pixels): role on the left, variant names under each cell.
 function gallery(scale, file, only) {
   const roles = (only ?? ROLES).filter((r) => cast[r]);
-  const CELL = S * scale, GAP = 4 * scale, LABEL_W = 52 * scale, SPLIT = 10 * scale, HEAD = 10 * scale;
-  const W = GAP + LABEL_W + 2 * VARIANTS * (CELL + GAP) + SPLIT;
-  const H = HEAD + roles.length * (CELL + GAP) + GAP;
+  const T = 2 * Math.max(1, scale / 2); // label pixel size
+  const CELL = S * scale, GAP = 8 * T, LABEL_W = 56 * T, SUB = 9 * T;
+  const W = GAP + LABEL_W + VARIANTS * (CELL + GAP);
+  const H = GAP + roles.length * (CELL + SUB + GAP);
   const img = new Uint8Array(W * H * 4);
   for (let i = 0; i < W * H; i++) img.set([...BG, 255], i * 4);
   const put = (x, y, rgb) => {
@@ -140,45 +137,78 @@ function gallery(scale, file, only) {
     let cx = 0;
     for (const ch of str.toUpperCase()) {
       const g = FONT[ch] ?? FONT[" "];
-      for (let i = 0; i < 15; i++) if (g[i] === "1") for (let j = 0; j < scale; j++) for (let k = 0; k < scale; k++)
-        put(ox + (cx + (i % 3)) * scale + k, oy + Math.floor(i / 3) * scale + j, ink);
+      for (let i = 0; i < 15; i++) if (g[i] === "1") for (let j = 0; j < T; j++) for (let k = 0; k < T; k++)
+        put(ox + (cx + (i % 3)) * T + k, oy + Math.floor(i / 3) * T + j, ink);
       cx += 4;
     }
   };
-  const sprite = (px, ox, oy, ring) => {
-    if (ring) {
-      // Dark disc + 1px neon ring (radius 15.5) behind the sprite, in sprite pixels.
-      const rgb = hex(ring);
-      for (let y = 0; y < S; y++)
-        for (let x = 0; x < S; x++) {
-          const d = Math.hypot(x + 0.5 - 16, y + 0.5 - 16);
-          if (d <= 15.5) for (let j = 0; j < scale; j++) for (let i = 0; i < scale; i++) put(ox + x * scale + i, oy + y * scale + j, d > 14.5 ? rgb : DISC);
-        }
-    }
+  const sprite = (px, ox, oy) => {
     for (let y = 0; y < S; y++)
       for (let x = 0; x < S; x++) {
-        const a = px[(y * S + x) * 4 + 3];
-        if (!a) continue;
+        if (!px[(y * S + x) * 4 + 3]) continue;
         const rgb = [...px.subarray((y * S + x) * 4, (y * S + x) * 4 + 3)];
         for (let j = 0; j < scale; j++) for (let i = 0; i < scale; i++) put(ox + x * scale + i, oy + y * scale + j, rgb);
       }
   };
   const x0 = GAP + LABEL_W;
-  text("PLAIN", x0, 3 * scale, LABEL);
-  text("NEON RING", x0 + VARIANTS * (CELL + GAP) + SPLIT, 3 * scale, LABEL);
   roles.forEach((role, r) => {
-    const oy = HEAD + r * (CELL + GAP);
-    text(role, GAP, oy + CELL / 2 - 2 * scale, LABEL);
-    cast[role].sprites.forEach(({ px }, v) => {
-      sprite(px, x0 + v * (CELL + GAP), oy, null);
-      sprite(px, x0 + VARIANTS * (CELL + GAP) + SPLIT + v * (CELL + GAP), oy, cast[role].ring);
+    const oy = GAP + r * (CELL + SUB + GAP);
+    text(role, GAP, oy + CELL / 2 - 2 * T, LABEL);
+    cast[role].sprites.forEach(({ px, name }, v) => {
+      sprite(px, x0 + v * (CELL + GAP), oy);
+      text(name, x0 + v * (CELL + GAP), oy + CELL + 3 * T, LABEL);
     });
   });
   save(file, W, H, img);
 }
 
-gallery(4, join(SHOTS, `cast-${BLOCK}-4x.png`), BLOCKS[BLOCK]);
-gallery(1, join(SHOTS, `cast-${BLOCK}-1x.png`), BLOCKS[BLOCK]);
-gallery(4, join(SHOTS, "cast-full-4x.png"));
-// Dev: --zoom <role> writes a 10x single-row gallery for close inspection.
-if (opt("--zoom")) gallery(10, join(SHOTS, `cast-zoom-${opt("--zoom")}.png`), [opt("--zoom")]);
+if (opt("--zoom")) gallery(3, join(SHOTS, `cast64-zoom-${opt("--zoom")}.png`), opt("--zoom").split(","));
+else gallery(4, join(SHOTS, "cast64-4x.png"));
+
+// DPR galleries: the sheet at half scale in 32 CSS px cells, same CSS as the app's .cast-sprite.
+async function loadPlaywright() {
+  try {
+    return await import("playwright");
+  } catch {
+    const groot = execSync("npm root -g").toString().trim();
+    // absolute paths skip package "exports" checks (the MCP server bundles its own playwright)
+    for (const p of [join(groot, "playwright"), join(groot, "@playwright", "mcp", "node_modules", "playwright")]) {
+      try {
+        return createRequire(join(groot, "noop.js"))(p);
+      } catch {}
+    }
+  }
+  return null;
+}
+if (!args.includes("--no-dpr") && !opt("--zoom")) {
+  const pw = await loadPlaywright();
+  if (!pw) console.log("playwright not found: skipped cast64-dpr{1,2}.png");
+  else {
+    const sheet = `data:image/png;base64,${png(S * VARIANTS, S * ROLES.length, (() => {
+      const W = S * VARIANTS, img = new Uint8Array(W * S * ROLES.length * 4);
+      ROLES.forEach((role, row) => cast[role]?.sprites.forEach(({ px }, col) => {
+        for (let y = 0; y < S; y++) img.set(px.subarray(y * S * 4, (y + 1) * S * 4), ((row * S + y) * W + col * S) * 4);
+      }));
+      return img;
+    })()).toString("base64")}`;
+    const cell = (row, col) =>
+      `<i style="background-image:url(${sheet});background-size:${SHOW * VARIANTS}px ${SHOW * ROLES.length}px;background-position:-${col * SHOW}px -${row * SHOW}px"></i>`;
+    const block = (bg) => `<div class="b" style="background:${bg}">${ROLES.map((role, row) =>
+      `<div class="r"><span>${role}</span>${[0, 1, 2, 3].map((c) => cell(row, c)).join("")}</div>`).join("")}</div>`;
+    const html = `<!doctype html><html><body><style>
+      body{margin:0;background:#070710;font:11px system-ui,sans-serif;color:#b4aee0;display:inline-flex;gap:0}
+      .b{padding:10px 12px}.r{display:flex;align-items:center;gap:10px;height:40px}
+      span{width:78px}i{display:block;width:${SHOW}px;height:${SHOW}px;background-repeat:no-repeat;image-rendering:pixelated}
+    </style>${block("#070710")}${block("#111326")}</body></html>`;
+    const browser = await pw.chromium.launch({ channel: "msedge" }).catch(() => pw.chromium.launch());
+    for (const dpr of [2, 1]) {
+      const page = await browser.newPage({ deviceScaleFactor: dpr, viewport: { width: 800, height: 600 } });
+      await page.setContent(html);
+      const file = join(SHOTS, `cast64-dpr${dpr}.png`);
+      await page.locator("body").screenshot({ path: file });
+      console.log(file);
+      await page.close();
+    }
+    await browser.close();
+  }
+}
