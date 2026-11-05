@@ -245,8 +245,8 @@ function harness(
 
   return {
     stop,
-    beforeCreate(req: any) {
-      return before.get("agent.create")!({ request: req }) ?? req;
+    async beforeCreate(req: any) {
+      return (await before.get("agent.create")!({ request: req })) ?? req;
     },
     onCreated(agent: any) {
       return on.get("agent.created")!({ agent }, { paseo });
@@ -283,7 +283,7 @@ test(
     const h = harness(new Map(), { briefRoot });
     try {
       // RiffBot: the Squad hub Buddy (lane vibesquad, hub: true)
-      const riff = h.beforeCreate({
+      const riff = await h.beforeCreate({
         config: { cwd: CWD, provider: "antigravity-cli", model: "gemini-4-argon", title: "RiffBot" },
         labels: { role: "brainstorm", lane: "vibesquad" },
       });
@@ -294,7 +294,7 @@ test(
       assert.ok(riffSys.includes("--- BEGIN docs/brainstorm/vibesquad.md ---"), "hub brief injected");
 
       // Feature Lane Buddy: lane feat-alpha (not the hub)
-      const fea = h.beforeCreate({
+      const fea = await h.beforeCreate({
         config: { cwd: CWD, provider: "antigravity-cli", model: "gemini-4-argon", title: "Fea Buddy" },
         labels: { role: "brainstorm", lane: "feat-alpha" },
       });
@@ -410,7 +410,7 @@ test(
       );
       assert.deepEqual(diffs.map((d) => d.field).sort(), ["mode", "model", "thinking"]);
 
-      const out = h.beforeCreate({
+      const out = await h.beforeCreate({
         config: {
           provider: "opencode",
           model: "wrong-model",
@@ -427,7 +427,7 @@ test(
       assert.equal(out.config.featureValues.auto_accept, true);
 
       // 3b: antigravity-cli permission guard when no featureValues/modeId are supplied
-      const agy = h.beforeCreate({
+      const agy = await h.beforeCreate({
         config: { provider: "antigravity-cli", model: "gemini-4-argon", cwd: CWD, title: "Fea2 · review" },
         labels: { team: "vibesquad", lane: "feat-alpha", role: "worker" },
       });
@@ -664,7 +664,7 @@ test(
   withEnv(async ({ briefRoot }) => {
     const h = harness(new Map(), { briefRoot });
     try {
-      const out = h.beforeCreate({
+      const out = await h.beforeCreate({
         config: { cwd: CWD, provider: "antigravity-cli", title: "★ UIP2 · polish modal" },
         env: {},
       });
@@ -772,7 +772,7 @@ test(
     // the caller's provider/model. It must now leave them alone.
     const h = harness(new Map(), { briefRoot, cappedProviders: ["claude"] });
     try {
-      const opencode = h.beforeCreate({
+      const opencode = await h.beforeCreate({
         config: {
           cwd: CWD,
           provider: "opencode",
@@ -786,7 +786,7 @@ test(
 
       // A caller on antigravity-cli (Gemini) is also left alone: its inferred "Lead - Gemini"
       // is healthy, so claude being capped must not redirect it anywhere.
-      const agy = h.beforeCreate({
+      const agy = await h.beforeCreate({
         config: {
           cwd: CWD,
           provider: "antigravity-cli",
