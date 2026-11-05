@@ -12,6 +12,7 @@ import { demoAgents, demoArchived, demoProviderUsage, demoWorkspaces } from "./d
 import { applyDaemonClientPassword, fetchLocalDaemonPassword, readClientAuthFailure } from "./paseoDaemonAuth";
 import { remoteDaemonClient } from "./paseoRemote";
 import { isRemote } from "./remoteSession";
+import { perfRecord, perfSendBegin, perfSendResolved } from "./perf";
 
 declare const __PASEO_SERVER_ID__: string;
 export const SERVER_ID = __PASEO_SERVER_ID__;
@@ -59,6 +60,8 @@ let flushQueued = false;
 function flush() {
   if (!flushQueued) return;
   flushQueued = false;
+  const f0 = performance.now();
+  const queued = pendingAgents.size;
   if (pendingAgents.size) {
     const agents = new Map(state.agents);
     for (const [id, a] of pendingAgents) {
@@ -69,6 +72,7 @@ function flush() {
     state = { ...state, agents };
   }
   listeners.forEach((l) => l());
+  perfRecord("roster-flush", performance.now() - f0, `queued=${queued} agents=${state.agents.size}`);
 }
 
 function schedule() {
@@ -162,11 +166,15 @@ export async function sendMessage(
 ): Promise<void> {
   if (DEMO) return;
   const sendOpts = { activeTurnBehavior: "steer" as ActiveTurnBehavior, ...opts };
+  const lb = (state.agents.get(agentId)?.labels ?? {}) as Record<string, string>;
+  perfSendBegin(agentId, lb.team, lb.lane);
   if (images?.length) {
     await daemonClient.sendAgentMessage(agentId, text, { ...sendOpts, images });
+    perfSendResolved(agentId);
     return;
   }
   await daemonClient.sendAgentMessage(agentId, text, sendOpts);
+  perfSendResolved(agentId);
 }
 
 export async function archiveAgent(agentId: string): Promise<{ archivedAt: string }> {
@@ -294,8 +302,10 @@ export async function archiveWorkspace(workspaceId: string) {
 }
 
 async function refetchAll() {
+  const r0 = performance.now();
   // includeArchived:false keeps it to what the Paseo sidebar would show, plus closed ones.
   const res = await client.agents.list({ subscribe: {}, filter: { includeArchived: false } });
+  const r1 = performance.now();
   // Keep the old object for agents that did not change so their rows stay memoized.
   // Always publish a new Map: time-based state (needs-you snooze expiry) is re-derived from it.
   const next = new Map<string, PaseoAgent>();
@@ -304,7 +314,17 @@ async function refetchAll() {
     next.set(e.agent.id, old && sameAgent(old, e.agent) ? old : e.agent);
   }
   pendingAgents.clear(); // anything queued is older than this snapshot
+  const firstRoster = !state.rosterLoaded;
   set({ agents: next, rosterLoaded: true });
+  let bytes = 0;
+  try {
+    bytes = JSON.stringify(res.entries).length;
+  } catch {
+    /* ignore */
+  }
+  perfRecord("roster-fetch", r1 - r0, `agents=${res.entries.length} payloadKB=${Math.round(bytes / 1024)} diff+set=${Math.round(performance.now() - r1)}ms`);
+  // Cold load: navigation start → first roster usable (performance.now() is relative to navigation start).
+  if (firstRoster) perfRecord("cold-load", performance.now(), `agents=${res.entries.length}`);
 }
 
 // A9: per-provider quota for the sidebar. Best effort: older daemons lack providers.listUsage.

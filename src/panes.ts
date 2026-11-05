@@ -2,6 +2,7 @@ import { useSyncExternalStore } from "react";
 import { popClosed, pushClosed } from "./sessionLifecycle.ts";
 import { pruneView } from "./quickwins.ts";
 import { getRestoreLastView } from "./prefs.ts";
+import { perfStart } from "./perf.ts";
 
 // Open agent tabs, the optional 2-pane split and focus mode, outside React state. Rows, cards and
 // tabs subscribe to the one slice they draw (`useAgentPane(id)`), so opening or switching a tab
@@ -170,6 +171,7 @@ export const getPanes = () => state;
  * "other": open in the other pane (opens the split). "background": add a tab without switching.
  */
 export function openAgent(id: string, mode: OpenMode = "active") {
+  perfStart("open-agent", id);
   const s = { ...state, sheet: false };
   const at = paneIn(s, id);
   if (mode === "background") return commit(at ? s : place(s, id, s.activePane, false));

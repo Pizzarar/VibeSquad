@@ -567,6 +567,34 @@ export function appendLog(team: string, entry: Omit<LogEntry, "ts" | "refs"> & {
   fs.appendFileSync(file, JSON.stringify(full) + "\n", "utf8");
 }
 
+
+/** Per-step timer for the `hook-timing` metric (docs/research/feel-baseline-2026-11.md). Timers only; never throws. */
+export interface StepTimer {
+  /** Record the ms elapsed since the previous mark (or start) under `name`. */
+  mark(name: string): void;
+  total(): number;
+  summary(): string;
+  steps: Array<[string, number]>;
+}
+export function stepTimer(): StepTimer {
+  const t0 = Date.now();
+  let last = t0;
+  const steps: Array<[string, number]> = [];
+  return {
+    steps,
+    mark(name) {
+      const now = Date.now();
+      steps.push([name, now - last]);
+      last = now;
+    },
+    total: () => Date.now() - t0,
+    summary() {
+      // Total first and 0ms steps dropped: the team-log line is capped at MAX_TEXT chars.
+      return `total=${Date.now() - t0} ` + steps.filter(([, ms]) => ms > 0).map(([n, ms]) => `${n}=${ms}`).join(" ");
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Prompt layering
 // ---------------------------------------------------------------------------
@@ -1208,14 +1236,24 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     stops.push(
       server.before("agent.create", (ctx: { request: any }) => {
         const t0 = Date.now();
+        const st = stepTimer() as StepTimer & { team?: string; lane?: string };
         try {
-          return beforeAgentCreate(ctx);
+          return beforeAgentCreate(ctx, st);
         } finally {
           log(`spawn-timing hook=${Date.now() - t0}ms`);
+          const text = `hook-timing hook=before.agent.create ${st.summary()}`;
+          setImmediate(() => {
+            try {
+              log(text);
+              appendLog(st.team || UNASSIGNED_TEAM_ID, { agent: "plugin", lane: st.lane || "unassigned", type: "metric", text });
+            } catch {
+              /* timers must never break a spawn */
+            }
+          });
         }
       }),
     );
-    const beforeAgentCreate = ({ request }: { request: any }) => {
+    const beforeAgentCreate = ({ request }: { request: any }, st: StepTimer & { team?: string; lane?: string }) => {
         const config: any = request.config ?? {};
         const env = (request as any).env as Record<string, string> | undefined;
         const rawReqLabels = ((request as any).labels ?? config?.labels) as Labels | undefined;
@@ -1269,6 +1307,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         let profileMatch = matchStoredProfile(profileHint, provider, title, explicitRole || titleRole || "worker");
         let matchedProfile = profileMatch?.profile ?? null;
 
+        st.mark("match-profile");
         // Remember whether the caller explicitly named the profile BEFORE any failover, so a
         // fuzzy (role/title/cwd) match can never be promoted to an explicit match and silently
         // overwrite the caller's provider/model. An explicit profile owns the provider choice;
@@ -1422,6 +1461,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           }
         }
 
+        st.mark("resolve-identity-labels");
         const keepCaller = Boolean(String(reqLabels["profile-override"] || env?.VS_PROFILE_OVERRIDE || "").trim());
         if (matchedProfile && profileMatch?.explicit && !keepCaller) {
           // An explicitly named profile wins over the caller's provider/model/mode/thinking.
@@ -1519,9 +1559,12 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const vibeMode = spawnTeam?.vibeMode === true;
         const isHubBuddy =
           role === "brainstorm" && !topicOf(reqLabels) && Boolean(explicitLane) && isHubCwd(spawnTeam, explicitLane);
+        st.team = spawnTeamId;
+        st.lane = explicitLane;
         const prefix = injectedPrefix(role, cwd, vibeMode, isHubBuddy);
         const profileNotes = isHubBuddy ? "" : dedupeNotesAgainst((matchedProfile?.notes ?? "").trim(), prefix);
         const gitState = inspectGitSpawnState(cwd);
+        st.mark("git-spawn-state");
         if (prefix && !sanitizedSysPrompt.includes(EVERYONE_LAYER)) {
           const existing = sanitizedSysPrompt.trim();
           const parts = [prefix];
@@ -1551,6 +1594,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           }
         }
 
+        st.mark("layer-prompt");
         // Every Buddy starts from its lane brief, even when spawned by Roster or the
         // legacy board (whose boot prompt never loads docs/brainstorm/<lane>.md).
         if (role === "brainstorm") {
@@ -1584,6 +1628,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           }
         }
 
+        st.mark("lane-brief");
         // Durable lane artifacts (docs/lanes/<lane>/SPEC.md + TASKS.json) ride along on every
         // spawn — brainstorm, lead and worker alike — so provider switches and restarts never
         // lose the lane's source of truth.
@@ -1601,6 +1646,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           }
         }
 
+        st.mark("lane-artifacts");
         if (leanApplies(next.provider ?? provider, env)) {
           next.providerOptions = leanProviderOptions(next.providerOptions, role);
           changed = true;
@@ -1639,12 +1685,18 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     stops.push(
       server.on("agent.created", async ({ agent }: { agent: any }, { paseo }: { paseo: any }) => {
         paseoApi = paseo;
+        const st = stepTimer();
+        let timedTeam = "";
+        let timedLane = "";
         try {
           const { snap: me, labels } = await labelsFor(paseo, agent);
+          st.mark("labels-for");
           // Never let a wrong-provider agent go on to retire a predecessor or count as a dispatch.
           if ((await enforceProfileAfterSpawn(agent, me, labels)) === "refused") return;
+          st.mark("enforce-profile");
           const parentId = agent.parentAgentId || labels["paseo.parent-agent-id"];
           const parent = parentId ? await snap(paseo, parentId) : null;
+          st.mark("parent-snap");
           const pl = parent?.labels ?? {};
           const agentCwd = agent.cwd ?? me?.cwd ?? "";
 
@@ -1738,6 +1790,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             }
           }
 
+          timedTeam = team;
+          timedLane = lane;
           // A lead always carries an ord: one past the lane's highest lead/former-lead ord.
           if ((labels.role || want.role) === "lead" && !String(labels.ord ?? "").trim()) {
             const ordLane = lane || resolved.callerLane;
@@ -1752,9 +1806,11 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             }
           }
 
+          st.mark("lead-ord-scan");
           if (Object.keys(want).length > 0) {
             await deps.setLabels(agent.id, { ...labels, ...want }).catch((e) => log(`label failed: ${e}`));
           }
+          st.mark("set-labels");
 
           const finalRole = labels.role || want.role || "";
           // A lead outlives the Buddy (or old lead) that spawned it: Paseo archives children with their
@@ -1781,7 +1837,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             );
           }
 
+          st.mark("retire-predecessors");
           if (team && lane) await refreshLaneWhosHere(paseo, lane);
+          st.mark("refresh-whos-here");
 
           // Block 2a: If a new agent had an initial prompt and stays idle with 0 tokens ~30 s after
           // creation without ever running, redeliver the initial prompt once and log first-prompt-redelivered.
@@ -1871,8 +1929,25 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               });
             }
           }
+          st.mark("first-dispatch-metric");
         } catch (err) {
           log(`agent.created handler failed: ${err}`);
+        } finally {
+          const text = `hook-timing hook=agent.created ${st.summary()}`;
+          setImmediate(() => {
+            try {
+              log(text);
+              appendLog(timedTeam ? teamIdOf(timedTeam, currentTeams()) : UNASSIGNED_TEAM_ID, {
+                agent: "plugin",
+                lane: timedLane || "unassigned",
+                type: "metric",
+                text,
+                refs: agent?.id ? [agent.id] : [],
+              });
+            } catch {
+              /* timers must never break the handler */
+            }
+          });
         }
       }),
     );

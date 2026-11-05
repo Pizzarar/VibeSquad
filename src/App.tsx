@@ -45,6 +45,7 @@ import { CommandPaletteHost, agentCtxItems, dateBucket, teamCtxItems, openContex
 import { PaseoUsageHeaderChip } from "./PaseoSettingsSection";
 import { MobileBar, useMobileTeamView } from "./MobileBar";
 import { FocusRail, railAlerts } from "./FocusRail";
+import { perfEndPainted, perfStart } from "./perf";
 import { activateNth, getPanes, openAgent, openAgentInTab, setFocus, subscribePanes, toggleFocus, useFocusMode, useHasTabs } from "./panes";
 import {
   AgentActions,
@@ -1462,6 +1463,9 @@ export function App() {
   }, []);
   useAttentionTitle(views);
   useRestorePrune(agents, rosterLoaded);
+  useEffect(() => {
+    perfEndPainted("switch-team", teamId, `agents=${agents.size}`);
+  }, [teamId, agents.size]);
 
   // A lead past its handoff budget with no needs-you flag would otherwise sit silently (only the card's
   // SPAWN SUCCESSOR button hints at it). Flag it once; "handoff-flagged" stops a cleared flag re-firing.
@@ -1586,6 +1590,7 @@ export function App() {
     exitSquadsHome();
     setTeamId(id);
     setScreen("teams");
+    perfStart("switch-team", id);
   }, []);
 
   const onToggleTeamExpand = useCallback((id: string) => {
@@ -1610,6 +1615,7 @@ export function App() {
       next.delete(id);
       return next;
     });
+    perfStart("switch-team", id);
   }, []);
 
   const onToggleAllTeams = useCallback(() => {

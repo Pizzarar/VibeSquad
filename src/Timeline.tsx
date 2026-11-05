@@ -8,6 +8,7 @@ import { sentImagesFor } from "./imageDrafts";
 import { parseSentAttachments, repoPathFor } from "./attachments";
 import { openRightDockTab } from "./RightDock";
 import { listTimelinePrompts, searchTimeline, type TimelinePrompt } from "./paseoTimeline";
+import { perfEndPainted, perfSendEvent } from "./perf";
 import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, matchesFilter, localPrompts, localSearch, mergeLiveItem, latestReasoningIndex, reasoningText, sortedHits, stepIndex, type SearchLocation, type TimelineFilter } from "./timelineFilter";
 import { BARE_PATH_RE, parseFileToken } from "./fileLinks";
 import { toolStartsExpanded, usePref } from "./prefs";
@@ -875,6 +876,10 @@ export function useTimeline(agentId: string, status: string, active = true, pred
   activeRef.current = active;
   const stale = useRef(false);
   const reload = useRef<() => void>(() => {});
+  // Feel pass: click → transcript painted for a freshly opened agent (no-op unless perfStart ran).
+  useEffect(() => {
+    if (loaded && active) perfEndPainted("open-agent", agentId);
+  }, [loaded, active, agentId]);
 
   // Stitch the predecessor's tail timeline ahead of this (fresh) agent's own entries so the conversation
   // stays continuously visible across a provider switch. Fetched once; never touched by load()/soon()/mergeLiveItem.
@@ -959,6 +964,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
         const item = ev.event.item;
         const seq = "seq" in ev ? ev.seq : undefined;
         const ts = "timestamp" in ev ? ev.timestamp : undefined;
+        perfSendEvent(agentId, (item as any)?.type === "assistant_message");
         setEntries((cur) => mergeLiveItem(cur, item, ts, seq));
       }
       soon();
