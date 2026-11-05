@@ -68,8 +68,11 @@ export async function triggerBrainstormRestart(opts: {
   pendingPrompt?: string;
   summaryUpdate?: string;
   profileName?: string;
+  model?: string;
+  modeId?: string;
+  thinkingOptionId?: string | null;
 }): Promise<{ newAgentId: string | null; title?: string; retired?: boolean; pendingPrompt?: string }> {
-  const { agent, teamId, laneId, reason, usedTokens: ut, pendingPrompt, summaryUpdate, profileName } = opts;
+  const { agent, teamId, laneId, reason, usedTokens: ut, pendingPrompt, summaryUpdate, profileName, model, modeId, thinkingOptionId } = opts;
   const pane = paneOfAgent(agent.id);
   const res = await fetch("/__vibesquad/brainstorm-restart", {
     method: "POST",
@@ -80,8 +83,11 @@ export async function triggerBrainstormRestart(opts: {
       laneId,
       reason,
       usedTokens: ut,
-      // profileName is a whitelisted body key: safe across the remote relay.
+      // profileName / model / modeId / thinkingOptionId are whitelisted body keys: safe across the remote relay.
       ...(profileName ? { profileName } : {}),
+      ...(model ? { model } : {}),
+      ...(modeId ? { modeId } : {}),
+      ...(thinkingOptionId ? { thinkingOptionId } : {}),
       // Prompt and brief text never cross the remote relay (REMOTE_FORBIDDEN_BODY_KEYS).
       ...(pendingPrompt && !isRemote() ? { pendingPrompt } : {}),
       ...(summaryUpdate && !isRemote() ? { summaryUpdate } : {}),
@@ -286,7 +292,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   };
 
   const doRestart = useCallback(
-    async (reason: string, pendingPrompt?: string, profileName?: string) => {
+    async (reason: string, pendingPrompt?: string, profileName?: string, model?: string, modeId?: string, thinkingOptionId?: string | null) => {
       if (restarting) return undefined;
       setRestarting(true);
       try {
@@ -298,6 +304,9 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
           usedTokens: bsUsedTokens,
           pendingPrompt,
           profileName,
+          model,
+          modeId,
+          thinkingOptionId,
         });
         if (pendingPrompt !== undefined && !r.retired) clearDraft();
         return r;
@@ -396,7 +405,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
           if (kindOf(agent) !== "lead") await updateAgent(agent.id, { labels: nextLabels });
           if (isBs) {
             if (switchTarget.profile) setLastBrainstormProfile(switchTarget.profile);
-            await doRestart("provider-switch", recentTurnsAndMessage, switchTarget.profile);
+            await doRestart("provider-switch", recentTurnsAndMessage, switchTarget.profile, switchTarget.model, switchTarget.modeId, switchTarget.thinkingOptionId);
           } else if (kindOf(agent) === "lead" && onSuccessor) {
             onSuccessor();
           } else {
@@ -406,6 +415,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
                 provider: switchTarget.provider,
                 model: switchTarget.model,
                 modeId: switchTarget.modeId,
+                ...(switchTarget.thinkingOptionId ? { thinkingOptionId: switchTarget.thinkingOptionId } : {}),
                 cwd: agent.cwd,
                 title: agent.title ?? agent.id,
               },

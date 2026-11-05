@@ -182,7 +182,7 @@ test("sendWithBehavior switches and sends on the staged provider", () => {
   assert.match(agentSrc, /Recent conversation before provider switch:\\n\\n/);
   assert.match(agentSrc, /User message to answer now:\\n/);
   assert.match(agentSrc, /stripBootPreamble\(it\.text\)/);
-  assert.match(agentSrc, /await doRestart\("provider-switch", recentTurnsAndMessage, switchTarget\.profile\)/);
+  assert.match(agentSrc, /await doRestart\("provider-switch", recentTurnsAndMessage, switchTarget\.profile, switchTarget\.model, switchTarget\.modeId, switchTarget\.thinkingOptionId\)/);
   assert.match(agentSrc, /"vs\.restart-reason": "provider-switch"/);
   assert.match(agentSrc, /openAgentInTab\(newId, paneOfAgent\(agent\.id\), agent\.id\)/);
 });

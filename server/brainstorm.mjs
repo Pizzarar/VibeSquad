@@ -632,9 +632,11 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
         };
 
     const provider = spawnCfg.provider;
-    const model = spawnCfg.model;
-    const modeId = spawnCfg.modeId;
-    const thinkingOptionId = spawnCfg.thinkingOptionId;
+    // A staged provider switch can override the profile's default model / mode / thinking with the values the
+    // user picked in the top bar. Empty strings fall back to the profile's defaults so a bare profileName still works.
+    const model = (typeof body.model === "string" && body.model.trim()) ? body.model.trim() : spawnCfg.model;
+    const modeId = (typeof body.modeId === "string" && body.modeId.trim()) ? body.modeId.trim() : spawnCfg.modeId;
+    const thinkingOptionId = (typeof body.thinkingOptionId === "string" && body.thinkingOptionId.trim()) ? body.thinkingOptionId.trim() : spawnCfg.thinkingOptionId;
     const featureValues = spawnCfg.featureValues ? { ...spawnCfg.featureValues } : undefined;
 
     const newLabels = {

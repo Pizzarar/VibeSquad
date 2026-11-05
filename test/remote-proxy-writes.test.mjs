@@ -69,13 +69,26 @@ describe("1. Spawn endpoints: open-topic stays closed; Buddy start/restart and h
 
   test("spawn config, prompt text, bad enums and unknown lanes are refused", () => {
     for (const [p, body] of OK_BODIES) {
-      for (const k of ["profile", "cwd", "provider", "model", "pendingPrompt", "summaryUpdate"]) {
+      for (const k of ["profile", "cwd", "provider", "pendingPrompt", "summaryUpdate"]) {
         const r = checkRemoteBody("POST", p, JSON.stringify({ ...body, [k]: "x" }));
         assert.equal(r.status, 403, `${p} ${k}`);
         assert.match(r.error, new RegExp(`body key not allowed remotely: ${k}`));
       }
     }
+    // `model` / `modeId` / `thinkingOptionId` are the one carve-out: allowlisted on brainstorm-restart for a
+    // staged provider switch, but still refused on handoff (which does not list them).
     const BR = "/__vibesquad/brainstorm-restart";
+    for (const body of OK_BODIES.filter(([p]) => p === BR).map(([, b]) => b)) {
+      assert.deepEqual(
+        checkRemoteBody("POST", BR, JSON.stringify({ ...body, model: "gemini-3.8-flash", modeId: "auto", thinkingOptionId: "high" })),
+        { ok: true, value: { ...body, model: "gemini-3.8-flash", modeId: "auto", thinkingOptionId: "high" } },
+      );
+    }
+    for (const k of ["model", "modeId", "thinkingOptionId"]) {
+      const r = checkRemoteBody("POST", "/__vibesquad/handoff", JSON.stringify({ team: "sq", lane: "lane1", agentId: "lead-1", [k]: "x" }));
+      assert.equal(r.status, 403, `handoff ${k}`);
+      assert.match(r.error, new RegExp(`key not allowed remotely: body.${k}`));
+    }
     assert.equal(checkRemoteBody("POST", BR, JSON.stringify({ reason: "auto-hard-limit", laneId: "lane1" })).status, 403);
     assert.equal(checkRemoteBody("POST", BR, JSON.stringify({ reason: "manual", mode: "full", laneId: "lane1" })).status, 403);
     assert.equal(checkRemoteBody("POST", BR, JSON.stringify({ reason: "start-brainstorm" })).status, 403);
