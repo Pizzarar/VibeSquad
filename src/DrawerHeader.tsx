@@ -1085,7 +1085,7 @@ export function DrawerHeader({
             </div>
           )}
           <TopicCapBanner minCount={isTopicBs ? TOPIC_SOFT_CAP : TOPIC_SOFT_CAP + 1} />
-          <div className="brainstorm-ctx-main" style={{ flexWrap: "nowrap", gap: 6 }}>
+          <div className="brainstorm-ctx-main" style={{ flexWrap: "wrap", gap: 6 }}>
             <span className="brainstorm-ctx-readout">
               {usedK}k / {restartK}k tok
             </span>
@@ -1097,7 +1097,7 @@ export function DrawerHeader({
                 title={`Warn threshold: ${warnK}k tok`}
               />
             </div>
-            <div className="brainstorm-ctx-actions" style={{ flexWrap: "nowrap", gap: 4 }}>
+            <div className="brainstorm-ctx-actions" style={{ flexWrap: "wrap", gap: 4 }}>
               <button
                 className="btn small btn-brainstorm-restart"
                 style={{ padding: "2px 6px", fontSize: 10 }}

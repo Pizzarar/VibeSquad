@@ -4193,3 +4193,77 @@ button.project-file-name:hover { text-decoration: underline; }
   background: transparent; border: 1px solid var(--line); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .drawer-subagent-chip:hover, .drawer-subagent-chip:focus-visible { border-color: var(--cyan); outline: none; }
+
+/* ── Block A5 (PLAN_ANDROID_APP.md): phone UI pass — system-bar safe areas, Lead page wrap, right sidebar overflow ── */
+/* Issue 2.1: Lead TokenMeter ladder wraps instead of clipping on narrow Lead cards. */
+.meter.meter-ladder { flex-wrap: wrap; min-width: 0; max-width: 100%; }
+.meter.meter-ladder .meter-track { flex: 1 1 80px; min-width: 60px; }
+.meter.meter-ladder .meter-readout { white-space: normal; overflow-wrap: anywhere; word-break: break-word; min-width: 0; max-width: 100%; }
+
+/* Issue 2.3: Lead handoff bar, DrawerHeader & model input stay bounded. */
+.lint-bar,
+.successor-bar,
+.drawer-head,
+.drawer-id,
+.drawer-role-line,
+.drawer-meta-line,
+.drawer-model-input {
+  min-width: 0;
+  max-width: 100%;
+}
+.successor-bar .btn,
+.btn.successor {
+  white-space: normal;
+  max-width: 100%;
+}
+
+/* Issue 3.2: PinRail right sidebar — team row name truncates, active-buddy/inspector/tools stay bounded. */
+.pin-team-row .pin-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pin-rail-active-buddy,
+.pin-rail-active-inspector,
+.pin-rail-buddy-tools {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+/* Issue 3.1: Right Dock tabs scroll/wrap cleanly, bodies wrap and stay bounded. */
+.right-dock-tabs { overflow-x: auto; scrollbar-width: none; min-width: 0; max-width: 100%; }
+.right-dock-tab { flex: 0 0 auto; padding: 7px 9px; }
+.right-dock-body,
+.changes-head,
+.files-head,
+.terminal-toolbar,
+.scripts-row {
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Issue 1.3: safe-area inset fit + Issue 2.2: pin-focus bar & compact header wrap + Issue 3.1: stack dock under timeline. */
+.remote-pair {
+  padding-top: max(16px, env(safe-area-inset-top, 0px));
+  padding-bottom: max(16px, env(safe-area-inset-bottom, 0px));
+}
+@media (max-width: 600px) {
+  .app,
+  .app.with-panes,
+  .app.with-panes.split,
+  .app.focus {
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+  }
+  .app.sheet-open > .focus-rail {
+    top: env(safe-area-inset-top, 0px);
+    bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+  }
+  .mobile-bottom-bar {
+    height: calc(56px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .pin-focus-bar { height: auto; min-height: 44px; flex-wrap: wrap; padding: 4px 8px; row-gap: 4px; overflow: visible; }
+  .drawer-head-compact { height: auto; min-height: 36px; flex-wrap: wrap; overflow: visible; }
+  .drawer-shell { flex-direction: column; }
+  .right-dock { width: 100% !important; max-width: 100% !important; min-width: 0 !important; max-height: 55%; border-left: 0; border-top: 1px solid var(--cyan); }
+  .right-dock-resize-handle { display: none; }
+}

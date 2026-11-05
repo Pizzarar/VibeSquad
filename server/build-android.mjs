@@ -79,6 +79,23 @@ export function ensureAndroidDeepLinkIntentFilter(manifestPath) {
 }
 
 /**
+ * Removes edge-to-edge rendering from a generated MainActivity.kt so Android fits the
+ * WebView inside the system status/navigation bars natively (no overlap with the clock/battery).
+ * Idempotent: returns false when the file already lacks enableEdgeToEdge or is missing.
+ */
+export function ensureAndroidSystemBarFit(mainActivityPath) {
+  if (!existsSync(mainActivityPath)) return false;
+  const src = readFileSync(mainActivityPath, "utf8");
+  if (!src.includes("enableEdgeToEdge")) return false;
+  const out = src
+    .replace(/[ \t]*import\s+androidx\.activity\.enableEdgeToEdge[^\r\n]*\r?\n/g, "")
+    .replace(/[ \t]*enableEdgeToEdge\(\)[^\r\n]*\r?\n/g, "");
+  if (out === src) return false;
+  writeFileSync(mainActivityPath, out, "utf8");
+  return true;
+}
+
+/**
  * Creates (or reuses) the persistent Android release keystore used to sign the APK.
  */
 export function ensureAndroidKeystore({
@@ -164,9 +181,10 @@ export function buildAndroidApk({
     console.log("[build:android] 2/6 Android project already initialized.");
   }
 
-  // Step 3: register the vibesquad://pair deep link.
+  // Step 3: register the vibesquad://pair deep link and fit the WebView inside the system bars.
   const manifest = join(rootDir, "src-tauri", "gen", "android", "app", "src", "main", "AndroidManifest.xml");
   ensureAndroidDeepLinkIntentFilter(manifest);
+  ensureAndroidSystemBarFit(join(rootDir, "src-tauri", "gen", "android", "app", "src", "main", "java", "com", "vibesquad", "desktop", "MainActivity.kt"));
 
   // Step 4: build the release APK.
   console.log("[build:android] 3/6 Building release APK (tauri android build --apk)...");
