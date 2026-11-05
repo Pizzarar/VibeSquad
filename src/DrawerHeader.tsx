@@ -472,7 +472,7 @@ export function normalizeProviderId(provider: string): string {
   return norm;
 }
 
-export type ProviderSwitchTarget = { provider: string; model: string; modeId: string; profile?: string };
+export type ProviderSwitchTarget = { provider: string; model: string; modeId: string; profile?: string; thinkingOptionId?: string | null };
 
 /** Where choosing `targetProviderId` in the provider dropdown lands; null when it is the current provider or unknown. */
 export function resolveProviderSwitchTarget(currentProvider: string, targetProviderId: string, profileName?: string, role?: string): ProviderSwitchTarget | null {
@@ -536,7 +536,7 @@ export type DrawerHeaderProps = {
   restartK: number;
   restarting: boolean;
   planHandedOff: boolean;
-  doRestart: (reason: string, pendingPrompt?: string, profileName?: string) => Promise<unknown>;
+  doRestart: (reason: string, pendingPrompt?: string, profileName?: string, model?: string, modeId?: string, thinkingOptionId?: string | null) => Promise<unknown>;
   summaryOpen: boolean;
   toggleSummary: () => void;
   summaryText: string;
@@ -932,8 +932,12 @@ export function DrawerHeader({
       if (e.shiftKey && e.key === "Tab") {
         e.preventDefault();
         const modes = !DEMO && agent.availableModes?.length ? agent.availableModes : FALLBACK_MODES;
-        const next = nextModeInCycle(modes, agent.currentModeId ?? null);
-        if (!modeBusy) {
+        const currentMode = staged ? staged.modeId ?? agent.currentModeId ?? null : agent.currentModeId ?? null;
+        const next = nextModeInCycle(modes, currentMode);
+        if (staged) {
+          // Cycle the staged switch's mode, never the old provider's daemon session.
+          stageSwitch({ ...staged, modeId: next });
+        } else if (!modeBusy) {
           setModeBusy(true);
           setModeHelper(agent, next).finally(() => setModeBusy(false));
         }
@@ -941,18 +945,23 @@ export function DrawerHeader({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [active, agent, modeBusy]);
+  }, [active, agent, modeBusy, staged]);
 
   const modeSelect = (() => {
               const modes = (!DEMO && agent.availableModes?.length) ? agent.availableModes : FALLBACK_MODES;
+              const stagedModeId = staged ? staged.modeId ?? agent.currentModeId ?? "" : agent.currentModeId ?? "";
               return (
                 <select
                   data-testid="drawer-mode-select"
                   className="drawer-mode-select"
                   style={{ background: "var(--panel-alt)", color: "var(--fg)", border: "1px solid var(--line)", fontSize: 10, padding: "1px 4px", height: 20 }}
-                  value={agent.currentModeId ?? ""}
+                  value={stagedModeId}
                   disabled={modeBusy}
                   onChange={(e) => {
+                    if (staged) {
+                      stageSwitch({ ...staged, modeId: e.target.value });
+                      return;
+                    }
                     setModeBusy(true);
                     setModeHelper(agent, e.target.value).finally(() => setModeBusy(false));
                   }}
@@ -965,14 +974,19 @@ export function DrawerHeader({
                 </select>
               );
             })();
+  const stagedThinking = staged ? staged.thinkingOptionId ?? agent.thinkingOptionId ?? "" : agent.thinkingOptionId ?? "";
   const thinkingSelect = (
             <select
               data-testid="drawer-thinking-select"
               className="drawer-thinking-select"
               style={{ background: "var(--panel-alt)", color: "var(--fg)", border: "1px solid var(--line)", fontSize: 10, padding: "1px 4px", height: 20 }}
-              value={agent.thinkingOptionId ?? ""}
+              value={stagedThinking}
               disabled={thinkingBusy}
               onChange={(e) => {
+                if (staged) {
+                  stageSwitch({ ...staged, thinkingOptionId: e.target.value || null });
+                  return;
+                }
                 setThinkingBusy(true);
                 setThinkingHelper(agent, e.target.value || null).finally(() => setThinkingBusy(false));
               }}
@@ -980,8 +994,8 @@ export function DrawerHeader({
               {(["low", "medium", "high"] as const).map((opt) => (
                 <option key={opt} value={opt}>{opt}</option>
               ))}
-              {!["low", "medium", "high"].includes(agent.thinkingOptionId ?? "") && agent.thinkingOptionId && (
-                <option value={agent.thinkingOptionId}>{agent.thinkingOptionId}</option>
+              {!["low", "medium", "high"].includes(stagedThinking) && stagedThinking && (
+                <option value={stagedThinking}>{stagedThinking}</option>
               )}
             </select>
   );
