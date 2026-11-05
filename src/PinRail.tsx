@@ -161,10 +161,10 @@ function PinFocusBar({ view, focus, onSelectSquad }: { view: TeamView; focus: Pi
         ⊞
       </button>
       <TopBreadcrumb squadsHome={false} squadId={view.team.id} squadName={view.team.name} laneName={pin?.lane.name ?? focus.laneId} hub={pin ? isHubPin(pin) : false} onSelectSquad={onSelectSquad} />
+      <span className="pin-lane-handle" data-testid="pin-focus-handle">{handle}</span>
       {/* The focused drawer's DrawerHeader portals its compact controls here (src/pinSlots.ts). */}
       <div className="pin-focus-slot" ref={slotRef("bar")} />
       {!focus.agentId && <span className="pin-focus-name">{pin?.lane.name ?? focus.laneId}</span>}
-      <span className="pin-lane-handle" data-testid="pin-focus-handle">{handle}</span>
       <span className="pin-focus-spacer" />
       <button
         type="button"
