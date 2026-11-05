@@ -16,6 +16,7 @@ import { slotRef } from "./pinSlots";
 import type { TeamView } from "./teams";
 import { laneCodeFor } from "./identity";
 import { Avatar, NeonEmblem } from "./pixel";
+import { Spinner } from "./QuickWinsUi";
 
 const SWAP_MS = 150;
 const reducedMotion = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -247,7 +248,15 @@ export function PinFocusHeader(props: {
               )}
             </>
           ) : (
-            <span className="muted">Starting a fresh Brainstorm from the brief…</span>
+            <div className="pin-focus-spinning" data-testid="pin-focus-spinning">
+              <Spinner
+                label={
+                  pin && isHubPin(pin)
+                    ? `Spinning up RiffBot (${selectedProfile.replace(/^Brainstorm\s*-\s*/i, "")}) — booting session from brief…`
+                    : `Spinning up ${pin?.lane.name ?? "Brainstorm"} (${selectedProfile.replace(/^Brainstorm\s*-\s*/i, "")}) from the brief…`
+                }
+              />
+            </div>
           )}
         </div>
       )}
