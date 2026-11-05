@@ -152,6 +152,8 @@ function harness(
     cappedProviders?: any;
     usageProviders?: any[];
     leadWakeCooldownMs?: number;
+    /** Test hook for flushWake's snap(): null -> null snapshot, a string -> the agent with that status. */
+    snapStatusOverride?: (id: string) => string | null | undefined;
   },
 ) {
   const before = new Map<string, (input: any) => any>();
@@ -180,9 +182,9 @@ function harness(
     debounceMs: 20,
     retryBaseMs: 10,
     firstPromptRedeliverMs: 60_000,
+    leadWakeCooldownMs: opts.leadWakeCooldownMs ?? 40,
     ...(opts.cappedProviders !== undefined ? { cappedProviders: opts.cappedProviders } : {}),
     ...(opts.usageProviders !== undefined ? { usageProviders: opts.usageProviders } : {}),
-    ...(opts.leadWakeCooldownMs !== undefined ? { leadWakeCooldownMs: opts.leadWakeCooldownMs } : {}),
     setLabels: async (agentId: string, labels: Record<string, string>, name?: string) => {
       setLabelsCalls.push({ agentId, labels, name });
       const a = agents.get(agentId);
@@ -214,6 +216,11 @@ function harness(
         return {
           async refresh() {
             const a = agents.get(id);
+            if (opts.snapStatusOverride) {
+              const override = opts.snapStatusOverride(id);
+              if (override === null) return null;
+              if (typeof override === "string") return a ? { agent: { ...a, status: override } } : null;
+            }
             return a ? { agent: a } : null;
           },
           async send(text: string) {
@@ -797,17 +804,17 @@ test(
 );
 
 // ---------------------------------------------------------------------------
-// Stage 8 — flushWake guards a running Lead and coalesces wakeups in a cooldown
+// Stage 8 — flushWake guards a running/vanished Lead and coalesces wakeups
 // ---------------------------------------------------------------------------
 
 test(
-  "Stage 8a: flushWake holds queued log entries while a Lead is running and flushes them once idle",
+  "Stage 8a: flushWake holds when snap() reports a running Lead mid-race and a single turn_ended flushes it",
   withEnv(async ({ briefRoot }) => {
     const lead = {
       id: "lead-2",
       title: "★ Fea2 · phase two",
       cwd: CWD,
-      status: "running",
+      status: "idle",
       labels: { team: "vibesquad", lane: "feat-alpha", role: "lead", ord: "2" },
     };
     const former = {
@@ -817,30 +824,32 @@ test(
       status: "idle",
       labels: { team: "vibesquad", lane: "feat-alpha", role: "former-lead", ord: "1" },
     };
+    // Simulate the race: dispatchWakes sees the lead idle in list(), but flushWake's
+    // snap() (refresh) reports "running" (e.g. notifyOnFinish just woke it).
+    let snapStatus: string | null | undefined = "running";
     const h = harness(
       new Map<string, any>([
         ["lead-2", lead],
         ["lead-1", former],
       ]),
-      { briefRoot, leadWakeCooldownMs: 80 },
+      { briefRoot, leadWakeCooldownMs: 200, snapStatusOverride: (id) => (id === "lead-2" ? snapStatus : undefined) },
     );
     const wakeCount = () => h.sent.filter((s) => s.to === "lead-2" && s.text.includes("New team log event")).length;
     try {
-      // A former lead's turn end relays a `done` entry to the current lead.
+      // Relay a `done` entry; dispatchWakes sees idle, but snap() reports running.
       await h.onTurnEnded(former, { kind: "completed" });
-      await wait(40); // debounce (20) fires dispatchWakes; the lead is "running", so the entry is held
+      await wait(40); // debounce (20) fires dispatchWakes -> flushWake sees "running" and holds
       assert.equal(wakeCount(), 0, "no wakeup sent into a running lead");
 
-      // A Lead turn ends while still "running": flushWake re-verifies and holds.
+      // The lead finishes: snap is now idle and a single turn_ended flushes the held entry.
+      snapStatus = undefined;
       await h.onTurnEnded(lead, { kind: "completed" });
-      await wait(10);
-      assert.equal(wakeCount(), 0, "flushWake re-check keeps the entry queued");
+      await wait(60); // flushWake send settles
+      assert.equal(wakeCount(), 1, "a single turn_ended flushed the held entry");
 
-      // Once the Lead is idle and its turn ends, the entry flushes exactly once.
-      lead.status = "idle";
-      await h.onTurnEnded(lead, { kind: "completed" });
-      await wait(160); // cooldown (80) + settle
-      assert.equal(wakeCount(), 1, "wakeup flushed once the lead returned to idle");
+      // The deferred re-check timer (if any) must not double-send.
+      await wait(250);
+      assert.equal(wakeCount(), 1, "no duplicate wakeup after the re-check window");
     } finally {
       h.stop?.();
     }
@@ -895,6 +904,49 @@ test(
         h.sent.some((s) => s.to === "lead-2" && s.text.includes("(+1 more)")),
         "the single wakeup reports the coalesced extra entry",
       );
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "Stage 8c: flushWake holds the queue on a null snapshot and never sends into a vanished lead",
+  withEnv(async ({ briefRoot }) => {
+    const lead = {
+      id: "lead-2",
+      title: "★ Fea2 · phase two",
+      cwd: CWD,
+      status: "idle",
+      labels: { team: "vibesquad", lane: "feat-alpha", role: "lead", ord: "2" },
+    };
+    const former = {
+      id: "lead-1",
+      title: "(old) Fea1 · initial setup",
+      cwd: CWD,
+      status: "idle",
+      labels: { team: "vibesquad", lane: "feat-alpha", role: "former-lead", ord: "1" },
+    };
+    // snap() reports a vanished/archived lead (null snapshot).
+    let snapStatus: string | null | undefined = null;
+    const h = harness(
+      new Map<string, any>([
+        ["lead-2", lead],
+        ["lead-1", former],
+      ]),
+      { briefRoot, leadWakeCooldownMs: 200, snapStatusOverride: (id) => (id === "lead-2" ? snapStatus : undefined) },
+    );
+    const wakeCount = () => h.sent.filter((s) => s.to === "lead-2" && s.text.includes("New team log event")).length;
+    try {
+      await h.onTurnEnded(former, { kind: "completed" });
+      await wait(60); // dispatchWakes -> flushWake sees a null snapshot and bails (keeps the queue)
+      assert.equal(wakeCount(), 0, "never sends on a null snapshot");
+
+      // Once the lead is visible again, a single turn_ended flushes the held entry.
+      snapStatus = undefined;
+      await h.onTurnEnded(lead, { kind: "completed" });
+      await wait(60);
+      assert.equal(wakeCount(), 1, "held entry flushed once the lead reappeared");
     } finally {
       h.stop?.();
     }

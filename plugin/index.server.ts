@@ -925,6 +925,7 @@ const DEFAULT_DEPS: Deps = {
   retryBaseMs: 5000,
   watchIntervalMs: 1500,
   startWatcher: true,
+  leadWakeCooldownMs: 3000,
   brainstormArchiveGraceMs: 120_000,
   firstPromptRedeliverMs: 30_000,
 };
@@ -989,8 +990,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     const relayCounts = new Map<string, number>();
     const forwardedFromRetired = new Set<string>(); // `${retiredId}:${messageId}` already redirected
     const pendingWake = new Map<string, LogEntry[]>(); // lead id -> entries awaiting a wake
-    const lastLeadTurnAt = new Map<string, number>(); // lead id -> last turn start/end timestamp (ms)
-    const deferredWakeTimers = new Map<string, ReturnType<typeof setTimeout>>(); // lead id -> pending wake timer
+    const lastWakeAt = new Map<string, number>(); // lead id -> last wake sent / turn_started timestamp (ms)
+    const deferredWakeTimers = new Map<string, ReturnType<typeof setTimeout>>(); // lead id -> pending wake re-check timer
+    const flushingLeads = new Set<string>(); // lead ids with an in-flight flushWake
     const wakeQueue: { team: string; entry: LogEntry }[] = [];
     let wakeTimer: ReturnType<typeof setTimeout> | null = null;
     let paseoApi: Paseo = null;
@@ -1892,10 +1894,19 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               if (!isDigestAgent(labels) && effectiveAgentRole({ labels }) === "lead") {
                 const handoffRes = await checkLeadTokens(paseo, agent.id, me, labels);
                 if (handoffRes?.stage === "auto-250" || handoffRes?.stage === "hard-300") return;
+                void flushWake(paseo, agent.id);
               }
               return await handleFailure(paseo, agent, String(outcome.error?.message ?? ""));
             }
-            if (outcome.kind !== "completed") return;
+            if (outcome.kind !== "completed") {
+              // Cancelled / other non-completed outcomes produce no digest, but a lead's
+              // held wakeups should still flush now that its turn is over.
+              const { labels } = await labelsFor(paseo, agent);
+              if (!isDigestAgent(labels) && effectiveAgentRole({ labels }) === "lead") {
+                void flushWake(paseo, agent.id);
+              }
+              return;
+            }
             retries.delete(agent.id);
 
             const { snap: me, labels } = await labelsFor(paseo, agent);
@@ -1911,7 +1922,6 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
                 await handoffCoordinator.confirmTakeover(agent.id).catch((e: unknown) => log(`confirmTakeover failed: ${e}`));
               }
               await checkLeadTokens(paseo, agent.id, me, labels);
-              lastLeadTurnAt.set(agent.id, Date.now());
               void flushWake(paseo, agent.id);
             }
           } catch (err) {
@@ -2323,7 +2333,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           markTurnSeen(agent?.id);
           try {
             const me = await snap(paseo, agent.id);
-            if (me && effectiveAgentRole(me) === "lead") lastLeadTurnAt.set(agent.id, Date.now());
+            if (me && effectiveAgentRole(me) === "lead") lastWakeAt.set(agent.id, Date.now());
             if (!me || !isRetiredLeadSnap(me)) return;
             const page = await paseo.agents
               .ref(agent.id)
@@ -2390,43 +2400,64 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
     }
 
+    /** Schedule a single deferred re-check for a lead (cooldown or running-lead hold). */
+    function scheduleWakeRecheck(paseo: Paseo, leadId: string, delay: number) {
+      if (deferredWakeTimers.has(leadId)) return;
+      const t = later(() => {
+        deferredWakeTimers.delete(leadId);
+        void flushWake(paseo, leadId);
+      }, delay);
+      deferredWakeTimers.set(leadId, t);
+    }
+
     async function flushWake(paseo: Paseo, leadId: string) {
+      if (flushingLeads.has(leadId)) return;
       if (!pendingWake.get(leadId)?.length) return;
-      // Re-verify the Lead's live snapshot right before sending: if it is mid-turn
-      // (status not idle), leave the entries queued so they flush once it goes idle.
-      const liveLead = await snap(paseo, leadId);
-      if (liveLead && liveLead.status && liveLead.status !== "idle") {
-        return;
-      }
-      // Coalesce/defer wakeups within the cooldown window of a Lead turn. If
-      // notifyOnFinish just woke the Lead (or its turn just ended <cooldown ago), a
-      // `done` digest wakeup arriving right after is deferred until the window passes
-      // and is only sent once the Lead is idle.
-      const cooldownMs = deps.leadWakeCooldownMs ?? (deps.debounceMs ? Math.min(3000, deps.debounceMs * 2) : 3000);
-      const elapsed = Date.now() - (lastLeadTurnAt.get(leadId) ?? 0);
-      if (elapsed < cooldownMs) {
-        if (!deferredWakeTimers.has(leadId)) {
-          const t = setTimeout(() => {
-            deferredWakeTimers.delete(leadId);
-            timers.delete(t);
-            void flushWake(paseo, leadId);
-          }, cooldownMs - elapsed);
-          deferredWakeTimers.set(leadId, t);
-          timers.add(t);
+      flushingLeads.add(leadId);
+      const cooldownMs = deps.leadWakeCooldownMs ?? 3000;
+      let tookQueue = false;
+      try {
+        // Re-verify the Lead's live snapshot right before sending.
+        const liveLead = await snap(paseo, leadId);
+        // Bail (keep the queue) when the plugin is shutting down or the Lead is gone
+        // (null snapshot / archived / closed): never send into a vanished agent.
+        if (lifetime.signal.aborted || !liveLead || liveLead.archivedAt || liveLead.status === "closed") {
+          return;
         }
-        return;
+        // Mid-turn: hold and re-check once the cooldown window passes, so entries never
+        // strand if turn_ended already fired before this re-check saw "running".
+        if (liveLead.status && liveLead.status !== "idle") {
+          scheduleWakeRecheck(paseo, leadId, cooldownMs);
+          return;
+        }
+        // Coalesce/defer wakeups within the cooldown window of the last wake sent or
+        // turn_started (the notifyOnFinish double-wake case). A normal post-turn flush
+        // is NOT penalized: turn_ended does not update lastWakeAt.
+        const elapsed = Date.now() - (lastWakeAt.get(leadId) ?? 0);
+        if (elapsed < cooldownMs) {
+          scheduleWakeRecheck(paseo, leadId, cooldownMs - elapsed);
+          return;
+        }
+        const queue = pendingWake.get(leadId);
+        if (!queue?.length) return;
+        pendingWake.delete(leadId);
+        tookQueue = true;
+        const last = queue[queue.length - 1]!;
+        const more = queue.length > 1 ? ` (+${queue.length - 1} more)` : "";
+        const text = `New team log event in lane ${last.lane}: [${last.type}] ${last.text}${more}. Run 'vs log --since-me' if more context is needed.`;
+        try {
+          await paseo.agents.ref(leadId).send(text);
+        } catch (e) {
+          log(`wakeup send failed: ${e}`);
+        }
+        lastWakeAt.set(leadId, Date.now());
+      } finally {
+        flushingLeads.delete(leadId);
+        // Entries queued while we awaited the send: flush them next.
+        if (tookQueue && pendingWake.get(leadId)?.length) {
+          void flushWake(paseo, leadId);
+        }
       }
-      const queue = pendingWake.get(leadId);
-      if (!queue?.length) return;
-      pendingWake.delete(leadId);
-      const last = queue[queue.length - 1]!;
-      const more = queue.length > 1 ? ` (+${queue.length - 1} more)` : "";
-      const text = `New team log event in lane ${last.lane}: [${last.type}] ${last.text}${more}. Run 'vs log --since-me' if more context is needed.`;
-      paseo.agents
-        .ref(leadId)
-        .send(text)
-        .catch((e: unknown) => log(`wakeup send failed: ${e}`));
-      lastLeadTurnAt.set(leadId, Date.now());
     }
 
     /** Read newly appended lines in every team log; exported through the returned handle for tests. */
