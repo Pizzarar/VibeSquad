@@ -13,7 +13,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import {
   LEAD_AUTO_HANDOFF_DEFAULT,
@@ -909,55 +909,25 @@ function daemonRefuseAgent(agentId: string): Promise<void> {
   });
 }
 
-/** cmd.exe splits on whitespace and treats `&|<>^` as syntax; quote such args for the shell. */
-export function quoteArg(value: string): string {
-  if (process.platform !== "win32" || !/[\s"&|<>^]/.test(value)) return value;
-  return `"${value.replace(/"/g, '\\"')}"`;
-}
-
 const AGENT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
-// cmd.exe still expands %VAR% and breaks out of quotes on `"`, so refuse those outright.
-const UNSAFE_SHELL_ARG = /[\r\n\0"%]/;
 
-function assertSafeCliArgs(agentId: string, args: string[]): void {
-  if (!AGENT_ID_RE.test(agentId)) throw new Error("invalid agent id");
-  if (process.platform === "win32" && args.some((a) => UNSAFE_SHELL_ARG.test(a))) throw new Error("refusing argument with shell metacharacters");
+// In-process daemon client (a websocket call, same updateAgent the `paseo agent update` CLI makes) instead of a
+// whole CLI process per label write (median 4 s, max 9 s).
+export function daemonSetLabels(agentId: string, labels: Labels, name?: string): Promise<void> {
+  if (!AGENT_ID_RE.test(agentId)) return Promise.reject(new Error("invalid agent id"));
+  return withDaemonClient((client) => client.updateAgent(agentId, { ...(name ? { name } : {}), labels }));
 }
 
-function cliSetLabels(agentId: string, labels: Labels, name?: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const args = ["agent", "update", agentId];
-    if (name) args.push("--name", name);
-    for (const [k, v] of Object.entries(labels)) args.push("--label", `${k}=${v}`);
-    try {
-      assertSafeCliArgs(agentId, args);
-    } catch (e) {
-      return reject(e);
-    }
-    const cli = process.env.PASEO_CLI || "paseo";
-    const child = spawn(cli, args.map(quoteArg), { stdio: "ignore", windowsHide: true, shell: process.platform === "win32" });
-    child.on("error", reject);
-    child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`paseo agent update exited ${code}`))));
-  });
-}
-
-function cliArchive(agentId: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    try {
-      assertSafeCliArgs(agentId, [agentId]);
-    } catch (e) {
-      return reject(e);
-    }
-    const cli = process.env.PASEO_CLI || "paseo";
-    const child = spawn(cli, ["agent", "archive", agentId].map(quoteArg), { stdio: "ignore", windowsHide: true, shell: process.platform === "win32" });
-    child.on("error", reject);
-    child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`paseo agent archive exited ${code}`))));
+export function daemonArchive(agentId: string): Promise<void> {
+  if (!AGENT_ID_RE.test(agentId)) return Promise.reject(new Error("invalid agent id"));
+  return withDaemonClient(async (client) => {
+    await client.archiveAgent(agentId);
   });
 }
 
 const DEFAULT_DEPS: Deps = {
-  setLabels: cliSetLabels,
-  archiveAgent: cliArchive,
+  setLabels: daemonSetLabels,
+  archiveAgent: daemonArchive,
   applyAgentSettings: daemonApplyAgentSettings,
   refuseAgent: daemonRefuseAgent,
   debounceMs: 3000,

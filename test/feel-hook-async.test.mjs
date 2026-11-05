@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { inspectGitSpawnState } from "../plugin/index.server.ts";
 
@@ -34,4 +35,14 @@ test("inspectGitSpawnState matches plain git for branch and dirty count", async 
   const state = await inspectGitSpawnState(REPO_ROOT);
   assert.ok(state.includes(`branch=${branch},`), state);
   assert.ok(state.endsWith(`dirty=${dirty} files.`), state);
+});
+
+test("label writes and archive use the daemon client, not a CLI process", async () => {
+  const { daemonSetLabels, daemonArchive } = await import("../plugin/index.server.ts");
+  await assert.rejects(daemonSetLabels("bad id; rm", { a: "b" }), /invalid agent id/);
+  await assert.rejects(daemonArchive("bad id"), /invalid agent id/);
+  const src = readFileSync(new URL("../plugin/index.server.ts", import.meta.url), "utf8");
+  assert.ok(!/spawn\(cli,/.test(src), "plugin must not spawn the paseo CLI for label/archive writes");
+  assert.match(src, /setLabels: daemonSetLabels,/);
+  assert.match(src, /archiveAgent: daemonArchive,/);
 });
