@@ -637,6 +637,12 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
     const model = (typeof body.model === "string" && body.model.trim()) ? body.model.trim() : spawnCfg.model;
     const modeId = (typeof body.modeId === "string" && body.modeId.trim()) ? body.modeId.trim() : spawnCfg.modeId;
     const thinkingOptionId = (typeof body.thinkingOptionId === "string" && body.thinkingOptionId.trim()) ? body.thinkingOptionId.trim() : spawnCfg.thinkingOptionId;
+    // When the caller staged an explicit model/mode/thinking override, the plugin's before("agent.create") and
+    // enforceProfileAfterSpawn must keep those values instead of rewriting them back to the matched profile's defaults.
+    const hasCallerOverride =
+      (typeof body.model === "string" && body.model.trim()) ||
+      (typeof body.modeId === "string" && body.modeId.trim()) ||
+      (typeof body.thinkingOptionId === "string" && body.thinkingOptionId.trim());
     const featureValues = spawnCfg.featureValues ? { ...spawnCfg.featureValues } : undefined;
 
     const newLabels = {
@@ -647,6 +653,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       ...(topic ? { topic } : {}),
       ...(oldLabels["vs.inbox-card-id"] ? { "vs.inbox-card-id": oldLabels["vs.inbox-card-id"] } : {}),
       profile: profile?.name || oldLabels.profile || fallbackProfileName,
+      ...(hasCallerOverride ? { "profile-override": "1" } : {}),
       "vs.restarted-from": agentId,
       "vs.restart-tokens": String(tokens),
       "vs.restart-reason": reason,
@@ -704,7 +711,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
           initialPrompt,
           labels: newLabels,
           // Labels never reach the plugin's before(agent.create); env does, so the profile is forced at spawn.
-          env: { VS_ROLE: "brainstorm", ...(newLabels.profile ? { VS_PROFILE: newLabels.profile } : {}), VS_LANE: laneId, VS_TEAM: teamId, VS_BRIEF_INLINE: "1" },
+          env: { VS_ROLE: "brainstorm", ...(newLabels.profile ? { VS_PROFILE: newLabels.profile } : {}), ...(hasCallerOverride ? { VS_PROFILE_OVERRIDE: "1" } : {}), VS_LANE: laneId, VS_TEAM: teamId, VS_BRIEF_INLINE: "1" },
         });
       } catch (err) {
         try {

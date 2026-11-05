@@ -420,7 +420,9 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
                 title: agent.title ?? agent.id,
               },
               initialPrompt: recentTurnsAndMessage,
-              labels: { ...nextLabels, "vs.restarted-from": agent.id, "vs.restart-reason": "provider-switch" },
+              labels: { ...nextLabels, "vs.restarted-from": agent.id, "vs.restart-reason": "provider-switch", "profile-override": "1" },
+              // Keep the staged model/mode/thinking against the plugin's profile enforcement.
+              env: { VS_PROFILE_OVERRIDE: "1" },
             });
             const newId = snap?.agent?.id ?? snap?.id;
             if (newId) openAgentInTab(newId, paneOfAgent(agent.id), agent.id);

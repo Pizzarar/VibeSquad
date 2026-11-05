@@ -932,8 +932,12 @@ export function DrawerHeader({
       if (e.shiftKey && e.key === "Tab") {
         e.preventDefault();
         const modes = !DEMO && agent.availableModes?.length ? agent.availableModes : FALLBACK_MODES;
-        const next = nextModeInCycle(modes, agent.currentModeId ?? null);
-        if (!modeBusy) {
+        const currentMode = staged ? staged.modeId ?? agent.currentModeId ?? null : agent.currentModeId ?? null;
+        const next = nextModeInCycle(modes, currentMode);
+        if (staged) {
+          // Cycle the staged switch's mode, never the old provider's daemon session.
+          stageSwitch({ ...staged, modeId: next });
+        } else if (!modeBusy) {
           setModeBusy(true);
           setModeHelper(agent, next).finally(() => setModeBusy(false));
         }
@@ -941,7 +945,7 @@ export function DrawerHeader({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [active, agent, modeBusy]);
+  }, [active, agent, modeBusy, staged]);
 
   const modeSelect = (() => {
               const modes = (!DEMO && agent.availableModes?.length) ? agent.availableModes : FALLBACK_MODES;

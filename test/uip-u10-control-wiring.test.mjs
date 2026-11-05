@@ -115,6 +115,9 @@ test("quick-start spawns gemini-4-argon for 'Brainstorm - Gemini' even with a co
     assert.equal(created[0].config.provider, "antigravity-cli");
     assert.equal(created[0].config.model, "gemini-4-argon");
     assert.equal(created[0].labels.profile, "Brainstorm - Gemini");
+    // No caller model/mode/thinking override → the profile stays authoritative (no profile-override flag).
+    assert.equal(created[0].labels["profile-override"], undefined);
+    assert.equal(created[0].env.VS_PROFILE_OVERRIDE, undefined);
   } finally {
     env.cleanup();
   }
@@ -207,6 +210,9 @@ test("performBrainstormRestart spawns the staged model/modeId/thinkingOptionId i
     assert.equal(created[0].config.model, "gemini-3.8-flash");
     assert.equal(created[0].config.modeId, "default");
     assert.equal(created[0].config.thinkingOptionId, "high");
+    // The plugin's profile enforcement must preserve the caller's staged values (not rewrite them back).
+    assert.equal(created[0].labels["profile-override"], "1");
+    assert.equal(created[0].env.VS_PROFILE_OVERRIDE, "1");
   } finally {
     env.cleanup();
   }
@@ -274,6 +280,8 @@ test("DrawerHeader modeSelect/thinkingSelect update stagedSwitch in place withou
   // The non-staged fallback still exists for a live agent (helpers are reached only after the staged early-return).
   assert.match(drawerSrc, /setModeHelper\(agent, e\.target\.value\)/);
   assert.match(drawerSrc, /setThinkingHelper\(agent, e\.target\.value \|\| null\)/);
+  // Shift+Tab mode-cycle also routes through stageSwitch (never setModeHelper) while a switch is staged.
+  assert.match(drawerSrc, /stageSwitch\(\{ \.\.\.staged, modeId: next \}\);/);
 });
 
 test("AgentDrawer forwards stagedSwitch.model/modeId/thinkingOptionId through doRestart → triggerBrainstormRestart", () => {
@@ -283,6 +291,9 @@ test("AgentDrawer forwards stagedSwitch.model/modeId/thinkingOptionId through do
   assert.match(agentSrc, /profileName,\s*model,\s*modeId,\s*thinkingOptionId,\s*\}\);/s);
   // Worker/standalone createAgent includes thinkingOptionId alongside provider/model/modeId.
   assert.match(agentSrc, /\.\.\.\(switchTarget\.thinkingOptionId \? \{ thinkingOptionId: switchTarget\.thinkingOptionId \} : \{\}\)\s*,/);
+  // Worker/standalone spawn flags profile-override so the plugin keeps the staged values.
+  assert.match(agentSrc, /"profile-override": "1"/);
+  assert.match(agentSrc, /env: \{ VS_PROFILE_OVERRIDE: "1" \}/);
 });
 
 // ─── 3. Right-Rail Active Buddy Card controls vs the remote proxy policy ───
