@@ -1018,9 +1018,17 @@ code {
   background: #060711;
 }
 
-.avatar img {
+.cast-sprite {
   display: block;
-  filter: drop-shadow(0 0 3px rgba(0, 240, 255, 0.22));
+  background-repeat: no-repeat;
+  image-rendering: pixelated;
+}
+
+/* Hand-drawn cast: the neon provider ring is opt-in (localStorage vs-cast-ring=1). */
+.avatar.no-ring {
+  background: none;
+  border-color: transparent;
+  box-shadow: none;
 }
 
 /* ?cast=1 art review sheet */
