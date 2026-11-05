@@ -17,7 +17,7 @@ const assistantEvents = (text) => [
 
 test("detectPromisedRunIdle does not flag completed summary sentences containing running/checking", () => {
   const s1 =
-    'Updated [flushWake](file:///C:/Users/Fugma/projects/VibeSquad/plugin/index.server.ts) to re-check lead.status === "idle" before sending, coalesce wakeups within a 3s cooldown window, cap running re-checks.';
+    'Updated [flushWake](file:///C:/Users/you/projects/VibeSquad/plugin/index.server.ts) to re-check lead.status === "idle" before sending, coalesce wakeups within a 3s cooldown window, cap running re-checks.';
   assert.equal(detectPromisedRunIdle(idleAgyAgent(), assistantEvents(s1)), null);
 
   const s2 = "Finished running non-daemon background commands and checking logs.";
@@ -33,7 +33,7 @@ test("detectPromisedRunIdle flags genuine in-progress promises and strips markdo
 
   const r3 = detectPromisedRunIdle(
     idleAgyAgent(),
-    assistantEvents("Running [the build](file:///C:/Users/Fugma/projects/VibeSquad/package.json) to verify"),
+    assistantEvents("Running [the build](file:///C:/Users/you/projects/VibeSquad/package.json) to verify"),
   );
   assert.deepEqual(r3, { flagged: true, excerpt: "Running the build to verify" });
   assert.equal(r3.excerpt.includes("file://"), false);
