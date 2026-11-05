@@ -1084,7 +1084,7 @@ export function DrawerHeader({
   );
   const metaRest = (
     <>
-            <span>· {shortPath(agent.cwd)}</span>
+            <span>{compact ? "" : "· "}{shortPath(agent.cwd)}</span>
             <button
               data-testid="drawer-copy-cwd-btn"
               className="btn ghost small drawer-copy-btn"
@@ -1115,9 +1115,8 @@ export function DrawerHeader({
             </button>
     </>
   );
-  const extraActions = (
+  const primaryUtils = (
     <>
-          {!compact && providerSwitchBtn}
           <button
             data-testid="drawer-search-btn"
             className="btn ghost small"
@@ -1148,6 +1147,12 @@ export function DrawerHeader({
           </button>
           {modelError && <span className="small drawer-reload-error" role="alert" style={{ color: "var(--bad, #e5484d)" }}>{modelError}</span>}
           {reloadError && <span className="small muted drawer-reload-error">{reloadError}</span>}
+    </>
+  );
+  const extraActions = (
+    <>
+          {!compact && providerSwitchBtn}
+          {primaryUtils}
           <AgentActions agent={agent} archive />
     </>
   );
@@ -1159,6 +1164,17 @@ export function DrawerHeader({
               Open in Paseo
             </a>
           )}
+    </>
+  );
+  const secondaryPlumbing = (
+    <>
+          <span className="role-tag">{AGENT_TYPE_LABEL[agentType]}</span>
+          <span className="prov-pill" style={{ color: prov.color, borderColor: prov.color }}>
+            {prov.symbol} {prov.name}
+          </span>
+          {featureChips}
+          <AgentActions agent={agent} archive />
+          {paseoLink}
     </>
   );
   const dockBtns = (
@@ -1362,7 +1378,7 @@ export function DrawerHeader({
         </div>
       )}
 
-      {agent.labels?.["vs.fresh-session"] === "brief" && (
+      {!compact && agent.labels?.["vs.fresh-session"] === "brief" && (
         <div className="brainstorm-fresh-divider" role="separator">
           ── Fresh session · from brief
           <button className="btn ghost small" aria-label="Edit brief" onClick={() => openBriefEditor({ laneId })}>
@@ -1399,7 +1415,7 @@ export function DrawerHeader({
         </div>
       )}
       {active && <HardeningBar agent={agent} entries={entries} />}
-      {!needsYouFlagged && (
+      {!compact && !needsYouFlagged && (
         <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 10px" }}>
           <button
             className="btn ghost small drawer-more-toggle"
@@ -1432,8 +1448,8 @@ export function DrawerHeader({
           )}
         </div>
       )}
-      <SessionActions agent={agent} entries={entries} />
-      {(attachBlocked || moreOpen) ? <AttachFiles agent={agent} entries={entries} /> : null}
+      {!compact && <SessionActions agent={agent} entries={entries} />}
+      {!compact && (attachBlocked || moreOpen) ? <AttachFiles agent={agent} entries={entries} /> : null}
     </>
   );
   const header = (
@@ -1492,21 +1508,64 @@ export function DrawerHeader({
         )}
         {createPortal(
           <>
+      {!isBs && <TokenMeter used={used} budget={budget ?? 0} ladder={kindOf(agent) === "lead" ? leadLadderFor(team) : undefined} />}
+            {inspector}
       <div className="drawer-actions pin-rail-buddy-tools" data-testid="pin-rail-buddy-tools" style={{ flexWrap: "wrap", gap: 4, alignItems: "center" }}>
-        <span className="role-tag">{AGENT_TYPE_LABEL[agentType]}</span>
-        <span className="prov-pill" style={{ color: prov.color, borderColor: prov.color }}>
-          {prov.symbol} {prov.name}
-        </span>
-        {featureChips}
-        {extraActions}
-        {paseoLink}
+        {primaryUtils}
+        {!needsYouFlagged && (
+          <button
+            className="btn ghost small drawer-more-toggle"
+            data-testid="drawer-more-toggle"
+            style={{ padding: "1px 6px", fontSize: 10 }}
+            onClick={() => setMoreOpen((v) => !v)}
+          >
+            {moreOpen ? "▾ Less" : "⋯ More"}
+          </button>
+        )}
+      </div>
+      {moreOpen && (
+        <>
+      <div className="drawer-actions pin-rail-buddy-tools" style={{ flexWrap: "wrap", gap: 4, alignItems: "center" }}>
+        {secondaryPlumbing}
       </div>
       <div className="muted small drawer-meta-line" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4 }}>
         {metaRest}
       </div>
-      {!isBs && <TokenMeter used={used} budget={budget ?? 0} ladder={kindOf(agent) === "lead" ? leadLadderFor(team) : undefined} />}
-
-            {inspector}
+      {agent.labels?.["vs.fresh-session"] === "brief" && (
+        <div className="brainstorm-fresh-divider" role="separator">
+          ── Fresh session · from brief
+          <button className="btn ghost small" aria-label="Edit brief" onClick={() => openBriefEditor({ laneId })}>
+            ⋯
+          </button>
+          ──
+        </div>
+      )}
+      <SessionActions agent={agent} entries={entries} />
+      {!needsYouFlagged && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 10px" }}>
+          <button
+            className="btn ghost small"
+            style={{ padding: "1px 6px", fontSize: 10 }}
+            title="Put this chat back in the team's needs-you list"
+            data-testid="mark-unread"
+            onClick={() => void markAgentUnread(agent)}
+          >
+            Mark unread
+          </button>
+          <div className="labels" style={{ padding: 0, border: "none" }}>
+            {Object.entries(agentLabels)
+              .filter(([k]) => !k.startsWith("paseo.open-agent-tab"))
+              .map(([k, v]) => (
+                <span key={k} className="chip">
+                  {k}={v}
+                </span>
+              ))}
+          </div>
+        </div>
+      )}
+        </>
+      )}
+      {(attachBlocked || moreOpen) ? <AttachFiles agent={agent} entries={entries} /> : null}
           </>,
           cardSlot!,
         )}

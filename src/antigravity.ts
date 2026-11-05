@@ -67,7 +67,7 @@ export const PROMISED_RUN_SYSTEM_GUARD =
 export const PROMISED_RUN_NUDGE_PROMPT =
   "Your turn ended while a promised action or background check appeared incomplete. Please check status and continue, or report final completion.";
 
-const PROMISE_RE = /\b(let me|i will|i'll|going to|running|checking|starting|dispatching|now i'll)\b/i;
+const PROMISE_RE = /\b(let me|i will|i'll|i am going to|i'm going to|i am running|i'm running|i am checking|i'm checking|i am starting|i'm starting|i am dispatching|i'm dispatching|now i'll|now i will)\b/i;
 const DONE_RE = /\b(done|complete[d]?|finished|all set|summary|in summary|final report)\b/i;
 
 function lastSentence(text: string): string {
@@ -93,7 +93,8 @@ export function detectPromisedRunIdle(
     return it?.type === "tool_call" && it.detail?.type === "shell" && it.status === "running";
   });
   if (!promised && !bgShell) return null;
-  return { flagged: true, excerpt: tail.slice(0, 200) };
+  const excerpt = tail.length > 110 ? `${tail.slice(0, 107)}…` : tail;
+  return { flagged: true, excerpt };
 }
 
 // ---- A3: hung tool call watchdog ----
