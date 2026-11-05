@@ -4,7 +4,7 @@
 // FULL brings back the old plumbing view (agent cards, workers, handoff, folders, retired agents).
 import { AttentionBadge } from "./AttentionList";
 import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { client, DEMO, getPaseoState, sendMessage } from "./paseo";
+import { client, DEMO, getPaseoState, markAgentRead, sendMessage } from "./paseo";
 import { openContextMenu } from "./CommandPalette";
 import { demoTimeline } from "./demo";
 import { hasLooksDone, gridPinsForSquad, hubPinForSquad, isHubPin, liveBuddyDupes, looksDoneFor, LOOKS_DONE_MARKER, pinsForSquad, SEND_TO_MARKER, topicOfBrainstorm, withoutSpinOffFence, type Pin } from "./pins";
@@ -134,12 +134,30 @@ export function PinDot({ pin }: { pin: Pin }) {
   return <span className="signal closed" title="No session yet" />;
 }
 
+export async function markPinRead(pin: Pin): Promise<void> {
+  const members =
+    (pin.lane as { members?: Member[] }).members ??
+    ([pin.brainstorm, pin.lead, ...(pin.workers ?? []), ...(pin.topicBrainstorms ?? []), ...(pin.duplicateBrainstorms ?? [])].filter(
+      Boolean,
+    ) as Member[]);
+  await Promise.all(members.filter(countsAsNeedsYou).map((m) => markAgentRead(m.agent)));
+}
+
 export function NeedsBadge({ pin }: { pin: Pin }) {
   if (!pin.needsYou) return null;
   return (
-    <span className="badge alert pin-needs" title={`${pin.needsYou} need you`}>
+    <button
+      type="button"
+      className="badge alert pin-needs"
+      data-testid={`pin-needs-${pin.lane.id}`}
+      title={`${pin.needsYou} need you — click to mark read`}
+      onClick={(e) => {
+        e.stopPropagation();
+        void markPinRead(pin);
+      }}
+    >
       {pin.needsYou}
-    </span>
+    </button>
   );
 }
 

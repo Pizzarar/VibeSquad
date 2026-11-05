@@ -1,6 +1,7 @@
 import { createPaseoApi, type PaseoAgent, type PaseoClient, type PaseoWorkspace } from "@getpaseo/client";
 import { applyLabelsOptimistic } from "./attentionItems";
-import { markUnreadLocal, subscribeAttentionLocal } from "./attentionLocal";
+import { clearUnreadLocal, dismissLocal, markUnreadLocal, subscribeAttentionLocal } from "./attentionLocal";
+import { clearWorkspaceIfQuiet } from "./paseoAttention";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { spawnEnvFor } from "./spawn-env";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
@@ -273,6 +274,22 @@ export async function markAgentUnread(agent: PaseoAgent): Promise<void> {
   } catch (err) {
     console.warn("markWorkspaceUnread failed", err);
   }
+}
+
+/** Mark a chat read: clears local unread, dismisses error/attention locally, clears needs-you label, and clears daemon/workspace attention. */
+export async function markAgentRead(agent: PaseoAgent): Promise<void> {
+  clearUnreadLocal(agent.id);
+  if (agent.status === "error" || agent.requiresAttention) {
+    dismissLocal(agent.id, agent.status === "error" ? (agent.lastError ?? "error") : (agent.attentionReason ?? "attention"));
+  }
+  if (
+    (agent.labels?.["needs-you"] && agent.labels["needs-you"] !== "cleared") ||
+    (agent.labels?.[LEGACY_NEEDS_LABEL] && agent.labels[LEGACY_NEEDS_LABEL] !== "cleared")
+  ) {
+    await clearNeedsYou(agent, { optimistic: true });
+  }
+  await clearAgentAttention(agent.id);
+  await clearWorkspaceIfQuiet(agent.id);
 }
 
 const labelsOf = (a: PaseoAgent) => (a.labels ?? {}) as Record<string, string>;

@@ -1205,12 +1205,12 @@ code {
 .status-pill.running { color: var(--cyan); border-color: var(--cyan); }
 .status-pill.error { color: var(--hot-pink); border-color: var(--hot-pink); }
 
-.you-bar, .you-flag, .lint-bar { display: flex; align-items: center; gap: 8px; margin: 8px 12px 0; padding: 6px 10px; font-size: 12px; }
+.you-bar, .you-flag, .lint-bar { display: flex; flex-wrap: wrap; min-width: 0; max-width: 100%; box-sizing: border-box; align-items: center; gap: 8px; margin: 8px 12px 0; padding: 6px 10px; font-size: 12px; }
 .you-bar { background: #1a0716; border: 1px solid var(--hot-pink); box-shadow: 0 0 12px var(--hot-pink-dim); }
 .you-tag { font-family: var(--arcade); font-size: 10px; color: #070710; background: var(--hot-pink); padding: 1px 6px; }
 .you-reason { flex: 1; color: var(--hot-pink); font-family: var(--display); font-size: 14px; }
 .you-flag { border: 1px dashed var(--line); }
-.you-flag input { flex: 1; padding: 3px 8px; }
+.you-flag input { flex: 1 1 110px; min-width: 0; max-width: 100%; padding: 3px 8px; }
 .lint-bar { border: 1px solid var(--amber); color: var(--amber); background: #1a1405; justify-content: space-between; font-size: 11px; }
 .lint-bar b { color: var(--text); }
 
@@ -1737,6 +1737,10 @@ code {
 }
 .brainstorm-warn-banner {
   display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
@@ -1748,6 +1752,10 @@ code {
 }
 .brainstorm-handoff-banner {
   display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
@@ -1757,6 +1765,8 @@ code {
   color: var(--cyan);
   font-size: 12px;
 }
+.brainstorm-warn-banner > span, .brainstorm-handoff-banner > span { flex: 1 1 130px; min-width: 0; overflow-wrap: anywhere; }
+.brainstorm-warn-banner .btn, .brainstorm-handoff-banner .btn { white-space: normal; max-width: 100%; }
 .brainstorm-feedback-bar {
   margin: 8px 12px 0;
   padding: 6px 10px;
@@ -1768,9 +1778,15 @@ code {
   gap: 10px;
   font-size: 12px;
   flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 .brainstorm-feedback-actions {
   display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
   gap: 6px;
   align-items: center;
 }
@@ -4196,6 +4212,9 @@ button.project-file-name:hover { text-decoration: underline; }
 .pin-rail-active-inspector .brainstorm-ctx-bar { margin: 0 !important; }
 .pin-rail-active-inspector .brainstorm-ctx-main, .pin-rail-active-inspector .brainstorm-ctx-actions { flex-wrap: wrap !important; }
 .pin-rail-active-inspector .hard-bar { margin: 4px 0 0; padding: 6px 8px; gap: 6px; }
+.pin-rail-active-inspector .brainstorm-feedback-bar { margin: 4px 0 0; padding: 6px 8px; gap: 6px; }
+.pin-rail-active-inspector .you-bar, .pin-rail-active-inspector .you-flag, .pin-rail-active-inspector .lint-bar { margin: 4px 0 0; padding: 6px 8px; gap: 6px; }
+.drawer-labels-list .chip { max-width: 100%; overflow-wrap: anywhere; word-break: break-all; white-space: normal; }
 .pin-rail-active-inspector .brainstorm-fresh-divider { margin: 2px 0; padding: 2px 4px; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pin-rail-section-label { flex: none; padding: 4px 10px 0; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
 @media (max-width: 900px) {

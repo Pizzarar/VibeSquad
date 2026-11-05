@@ -4,7 +4,7 @@
 // a badge and never reorders the rail. The bar on top of the drawer is the only route to the plumbing.
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getDraft, useDraft } from "./drafts";
-import { NeedsBadge, PinDot, PinTeamTree, usePreview } from "./PinGrid";
+import { markPinRead, NeedsBadge, PinDot, PinTeamTree, usePreview } from "./PinGrid";
 import { exitPinFocus, type PinFocus } from "./pinFocus";
 import { TopBreadcrumb } from "./Breadcrumb";
 import { escGoesHome } from "./pinFocusLogic";
@@ -82,6 +82,17 @@ export function PinRail({ view, focus, onPick }: { view: TeamView; focus: PinFoc
             {active && <PinDot pin={active} />}
             <span className="pin-rail-name">{active?.lane.name ?? focus.laneId}</span>
             {active && <NeedsBadge pin={active} />}
+            {active && active.needsYou > 0 && (
+              <button
+                type="button"
+                className="btn ghost small pin-rail-mark-read"
+                data-testid="pin-rail-mark-read"
+                title="Mark all in this team read"
+                onClick={() => void markPinRead(active)}
+              >
+                ✓ Mark read
+              </button>
+            )}
           </div>
           {active && focus.agentId && <SendToBar pin={active} />}
           {!focus.agentId && (

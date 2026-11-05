@@ -5,6 +5,7 @@ import { buildAgentDeepLink } from "@getpaseo/protocol/agent-deep-link";
 import {
   attachFiles,
   clearNeedsYou,
+  markAgentRead,
   markAgentUnread,
   daemonClient,
   DEMO,
@@ -16,6 +17,7 @@ import {
   updateAgent,
   upsertLocalAgent,
 } from "./paseo";
+import { isLocallyHidden, isMarkedUnread } from "./attentionLocal";
 import { clearWorkspaceIfQuiet } from "./paseoAttention";
 import { listProviderModels } from "./paseoProviders";
 import {
@@ -53,9 +55,11 @@ function NeedsYouControls({ agent }: { agent: PaseoAgent }) {
   const labels = (agent.labels ?? {}) as Record<string, string>;
   const userName = useUserName();
   const needsValue = labels["needs-you"] || labels[LEGACY_NEEDS_LABEL];
-  const flagged = !!needsValue && needsValue !== "cleared";
+  const unread = isMarkedUnread(agent.id);
+  const hasNeedsLabel = !!needsValue && needsValue !== "cleared";
+  const flagged = hasNeedsLabel || unread;
   const until = Date.parse(labels["needs-you-until"] || labels[LEGACY_NEEDS_UNTIL] || "");
-  const snoozed = flagged && !Number.isNaN(until) && until > Date.now();
+  const snoozed = hasNeedsLabel && !Number.isNaN(until) && until > Date.now();
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
     try {
@@ -70,9 +74,9 @@ function NeedsYouControls({ agent }: { agent: PaseoAgent }) {
   if (flagged)
     return (
       <div className="you-bar">
-        <span className="you-tag">{snoozed ? "SNOOZED" : needsYouBadge(userName)}</span>
+        <span className="you-tag">{snoozed ? "SNOOZED" : unread && !hasNeedsLabel ? "UNREAD" : needsYouBadge(userName)}</span>
         <span className="you-reason">
-          {labels["needs-you-reason"] || labels[LEGACY_NEEDS_REASON] || needsValue}
+          {labels["needs-you-reason"] || labels[LEGACY_NEEDS_REASON] || (hasNeedsLabel ? needsValue : "marked unread")}
           {snoozed && (
             <span className="muted">
               {" "}
@@ -80,7 +84,7 @@ function NeedsYouControls({ agent }: { agent: PaseoAgent }) {
             </span>
           )}
         </span>
-        <button className="btn ok" disabled={busy} onClick={() => run(() => clearNeedsYou(agent).then(() => clearWorkspaceIfQuiet(agent.id)))}>
+        <button className="btn ok" disabled={busy} onClick={() => run(() => markAgentRead(agent))}>
           Clear
         </button>
         <button className="btn ghost" disabled={busy} onClick={() => run(() => snoozeNeedsYou(agent, 30 * 60_000).then(() => clearWorkspaceIfQuiet(agent.id)))}>
@@ -807,6 +811,11 @@ export function DrawerHeader({
   const needsYouFlagged =
     (!!agentLabels["needs-you"] && agentLabels["needs-you"] !== "cleared") ||
     (!!agentLabels[LEGACY_NEEDS_LABEL] && agentLabels[LEGACY_NEEDS_LABEL] !== "cleared");
+  const isUnreadOrAttention =
+    isMarkedUnread(agent.id) ||
+    needsYouFlagged ||
+    Boolean(att && att.tone !== "finished") ||
+    Boolean(agent.requiresAttention && !isLocallyHidden(agent.id, agent.attentionReason ?? "attention"));
   const attachBlocked = !!auditAntigravityAgent(agent, entries).a5ReadBlocked;
 
   // Pin-focus (single ~44px bar): the focused Brainstorm's compact controls go into PinFocusBar and its inspector
@@ -1149,6 +1158,27 @@ export function DrawerHeader({
           >
             {reloadBusy ? "…" : "↻ Reload"}
           </button>
+          {isUnreadOrAttention ? (
+            <button
+              data-testid="mark-read"
+              className="btn ok small"
+              style={{ padding: "1px 6px", fontSize: 10 }}
+              title="Mark this chat read and clear attention"
+              onClick={() => void markAgentRead(agent)}
+            >
+              ✓ Mark read
+            </button>
+          ) : (
+            <button
+              data-testid="mark-unread"
+              className="btn ghost small"
+              style={{ padding: "1px 6px", fontSize: 10 }}
+              title="Put this chat back in the team's needs-you list"
+              onClick={() => void markAgentUnread(agent)}
+            >
+              Mark unread
+            </button>
+          )}
           {modelError && <span className="small drawer-reload-error" role="alert" style={{ color: "var(--bad, #e5484d)" }}>{modelError}</span>}
           {reloadError && <span className="small muted drawer-reload-error">{reloadError}</span>}
     </>
@@ -1410,7 +1440,7 @@ export function DrawerHeader({
       )}
 
       {att && att.tone !== "needs-you" && att.tone !== "finished" && <div className={`banner ${att.tone}`}>{att.reason}</div>}
-      {(needsYouFlagged || moreOpen) ? <NeedsYouControls agent={agent} /> : null}
+      {(needsYouFlagged || isMarkedUnread(agent.id) || moreOpen) ? <NeedsYouControls agent={agent} /> : null}
       <TitleLint agent={agent} />
       {kindOf(agent) === "lead" && onSuccessor && !agent.archivedAt && (
         <div className="lint-bar successor-bar">
@@ -1421,8 +1451,8 @@ export function DrawerHeader({
         </div>
       )}
       {active && <HardeningBar agent={agent} entries={entries} />}
-      {!compact && !needsYouFlagged && (
-        <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 10px" }}>
+      {!compact && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 10px", flexWrap: "wrap" }}>
           <button
             className="btn ghost small drawer-more-toggle"
             style={{ padding: "1px 6px", fontSize: 10 }}
@@ -1431,18 +1461,7 @@ export function DrawerHeader({
             {moreOpen ? "▾ Less" : "⋯ More"}
           </button>
           {moreOpen && (
-            <button
-              className="btn ghost small"
-              style={{ padding: "1px 6px", fontSize: 10 }}
-              title="Put this chat back in the team's needs-you list"
-              data-testid="mark-unread"
-              onClick={() => void markAgentUnread(agent)}
-            >
-              Mark unread
-            </button>
-          )}
-          {moreOpen && (
-            <div className="labels" style={{ padding: 0, border: "none" }}>
+            <div className="labels drawer-labels-list" style={{ display: "flex", flexWrap: "wrap", gap: 4, padding: "2px 4px", border: "none", minWidth: 0, maxWidth: "100%" }}>
               {Object.entries(agentLabels)
                 .filter(([k]) => !k.startsWith("paseo.open-agent-tab"))
                 .map(([k, v]) => (
@@ -1533,16 +1552,14 @@ export function DrawerHeader({
             {inspector}
       <div className="drawer-actions pin-rail-buddy-tools" data-testid="pin-rail-buddy-tools" style={{ flexWrap: "wrap", gap: 4, alignItems: "center" }}>
         {primaryUtils}
-        {!needsYouFlagged && (
-          <button
-            className="btn ghost small drawer-more-toggle"
-            data-testid="drawer-more-toggle"
-            style={{ padding: "1px 6px", fontSize: 10 }}
-            onClick={() => setMoreOpen((v) => !v)}
-          >
-            {moreOpen ? "▾ Less" : "⋯ More"}
-          </button>
-        )}
+        <button
+          className="btn ghost small drawer-more-toggle"
+          data-testid="drawer-more-toggle"
+          style={{ padding: "1px 6px", fontSize: 10 }}
+          onClick={() => setMoreOpen((v) => !v)}
+        >
+          {moreOpen ? "▾ Less" : "⋯ More"}
+        </button>
       </div>
       {moreOpen && (
         <>
@@ -1562,28 +1579,15 @@ export function DrawerHeader({
         </div>
       )}
       <SessionActions agent={agent} entries={entries} />
-      {!needsYouFlagged && (
-        <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 10px" }}>
-          <button
-            className="btn ghost small"
-            style={{ padding: "1px 6px", fontSize: 10 }}
-            title="Put this chat back in the team's needs-you list"
-            data-testid="mark-unread"
-            onClick={() => void markAgentUnread(agent)}
-          >
-            Mark unread
-          </button>
-          <div className="labels" style={{ padding: 0, border: "none" }}>
-            {Object.entries(agentLabels)
-              .filter(([k]) => !k.startsWith("paseo.open-agent-tab"))
-              .map(([k, v]) => (
-                <span key={k} className="chip">
-                  {k}={v}
-                </span>
-              ))}
-          </div>
-        </div>
-      )}
+      <div className="labels drawer-labels-list" style={{ display: "flex", flexWrap: "wrap", gap: 4, padding: "2px 4px", border: "none", minWidth: 0, maxWidth: "100%" }}>
+        {Object.entries(agentLabels)
+          .filter(([k]) => !k.startsWith("paseo.open-agent-tab"))
+          .map(([k, v]) => (
+            <span key={k} className="chip">
+              {k}={v}
+            </span>
+          ))}
+      </div>
         </>
       )}
       {(attachBlocked || moreOpen) ? <AttachFiles agent={agent} entries={entries} /> : null}
