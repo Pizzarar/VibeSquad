@@ -1,8 +1,9 @@
 // Block 4 of docs/PLAN_HUB_BUDDY.md: the RiffBot bar under the title bar. One button opens the Squad's
 // hub Buddy (or starts a fresh one from its brief), same as a pin click.
 import "./HubBar.css";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { hubPinForSquad, type Pin } from "./pins";
+import { isPinStarting, subscribePinStarts } from "./pinActions";
 import type { TeamView } from "./teams";
 import { Avatar } from "./pixel";
 import { PinDot } from "./PinGrid";
@@ -37,14 +38,15 @@ function useUnsplit(laneId: string, refreshKey: string): number | null {
 
 export function HubBar({ view, onOpen }: { view: TeamView | undefined; onOpen: (pin: Pin) => void | Promise<unknown> }) {
   const hub = view ? hubPinForSquad(view) : null;
+  const starting = useSyncExternalStore(subscribePinStarts, () => (hub ? isPinStarting(hub) : false));
   const unsplit = useUnsplit(hub?.lane.id ?? "", hub?.brainstorm?.agent.updatedAt ?? "");
   if (!view || !hub) return null;
-  const label = hub.brainstorm ? "Talk to RiffBot" : "Open RiffBot";
+  const label = starting ? "Starting RiffBot…" : hub.brainstorm ? "Talk to RiffBot" : "Open RiffBot";
   return (
     <div className="hub-bar" data-testid="hub-bar">
       <Avatar id={hub.brainstorm?.agent.id ?? `bs-empty-${view.team.id}-${hub.lane.id}`} provider={hub.brainstorm?.agent.provider ?? "claude"} agentType="brainstorm" size={24} />
       <PinDot pin={hub} />
-      <button type="button" className="hub-bar-btn" data-testid="hub-bar-btn" title={hub.brainstorm ? "Riff on the whole Squad" : "Select RiffBot · click Spin Up inside to start a chat"} onClick={() => void Promise.resolve(onOpen(hub)).catch((e) => alert(`Could not start RiffBot: ${e}`))}>
+      <button type="button" className="hub-bar-btn" data-testid="hub-bar-btn" disabled={starting} title={hub.brainstorm ? "Riff on the whole Squad" : "Select RiffBot · click Spin Up inside to start a chat"} onClick={() => void Promise.resolve(onOpen(hub)).catch((e) => alert(`Could not start RiffBot: ${e}`))}>
         <span className="hub-bar-short">Riff</span>
         <span className="hub-bar-long">{label}</span>
       </button>

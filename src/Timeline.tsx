@@ -1086,6 +1086,8 @@ type TimelineProps = {
   loadingMore?: boolean;
   /** False until the first fetch for this agent finishes (drives the delayed skeleton). */
   loaded?: boolean;
+  agentStatus?: string;
+  agentTitle?: string | null;
 };
 
 export function Timeline({
@@ -1097,6 +1099,8 @@ export function Timeline({
   loadMore = () => {},
   loadingMore = false,
   loaded = true,
+  agentStatus,
+  agentTitle,
 }: TimelineProps) {
   const timelineRef = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
@@ -1344,9 +1348,9 @@ export function Timeline({
           )}
         </div>
       )}
-      {slowFirstLoad && <TimelineSkeleton />}
       {pinnedTodo && <PinnedTodo entry={pinnedTodo} />}
       </div>}
+      {slowFirstLoad && <TimelineSkeleton />}
       <SubagentList agentId={agentId} entries={entries} isSubAgent={isSubAgentTool} renderBody={(id) => <SubAgentBody agentId={agentId} subagentKey={id} d={{}} />} />
       {shouldShowLoadOlder(entries, hasMore) && (
         <div style={{ textAlign: "center", padding: "4px 0" }}>
@@ -1360,6 +1364,17 @@ export function Timeline({
         </div>
       )}
       {error && <div className="tl tl-error">{error}</div>}
+      {loaded && !error && shown.length === 0 && (
+        agentStatus === "running" || agentStatus === "initializing" ? (
+          <div className="tl tl-note info" data-testid="tl-booting-indicator">
+            <Spinner label={`${agentTitle || "Agent"} is thinking — booting session from brief…`} />
+          </div>
+        ) : (
+          <div className="tl tl-note muted" data-testid="tl-empty-indicator">
+            No messages in this session yet. Send a message below to start.
+          </div>
+        )
+      )}
       {shown.map((e, i) => (
         <Fragment key={e.seqStart ?? i}>
         <i hidden data-tl-seq={e.seqStart ?? i} />

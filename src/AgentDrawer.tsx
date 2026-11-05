@@ -658,6 +658,8 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
         <TimelineErrorBoundary fallbackLabel="timeline">
           <Timeline
             agentId={agent.id}
+            agentStatus={agent.status}
+            agentTitle={agent.title}
             entries={entries}
             error={error}
             hasMore={hasMore}
