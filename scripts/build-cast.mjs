@@ -1,8 +1,11 @@
 // Build the cast sprite sheet + review galleries from the palette-indexed grids in art/cast/.
-// Usage: node scripts/build-cast.mjs [--block a2] [--shots <dir>]
+// Usage: node scripts/build-cast.mjs [--block a3] [--shots <dir>]
 //   public/cast.png               128x320 sheet, 32x32 cells, row = role (fixed order), col = variant 0-3
-//   <shots>/cast-<block>-4x.png   gallery at 4x, every authored role: plain on the left, neon ring on the right
+//   <shots>/cast-<block>-4x.png   gallery at 4x, the block's roles: plain on the left, neon ring on the right
 //   <shots>/cast-<block>-1x.png   same at 1x
+//   <shots>/cast-full-4x.png      all authored roles at 4x
+//   art/cast/piskel/<role>.piskel one frame per variant, for hand tweaks in Piskel
+import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -15,11 +18,17 @@ const opt = (k, d) => {
   const i = args.indexOf(k);
   return i >= 0 ? args[i + 1] : d;
 };
-const BLOCK = opt("--block", "a2");
-const SHOTS = resolve(opt("--shots", join(root, "scratch", "shots")));
+const BLOCK = opt("--block", "a3");
+// scratch/ lives in the main checkout, also when building from a linked worktree.
+const mainRoot = dirname(execSync("git rev-parse --path-format=absolute --git-common-dir", { cwd: root }).toString().trim());
+const SHOTS = resolve(opt("--shots", join(mainRoot, "scratch", "shots")));
 
 export const ROLES = ["lead", "retired-lead", "brainstorm", "implement", "mechanical", "review", "audit", "spec", "art", "unknown"];
 const VARIANTS = 4;
+const BLOCKS = {
+  a2: ["retired-lead", "review", "spec", "art"],
+  a3: ["lead", "brainstorm", "implement", "mechanical", "audit", "unknown"],
+};
 
 const cast = {};
 for (const role of ROLES) {
@@ -78,6 +87,29 @@ function save(file, W, H, img) {
   save(join(root, "public", "cast.png"), W, H, img);
 }
 
+// Piskel files: one layer, one frame per variant, stored as a single 128x32 horizontal strip chunk.
+for (const role of ROLES.filter((r) => cast[r])) {
+  const W = S * VARIANTS;
+  const img = new Uint8Array(W * S * 4);
+  cast[role].sprites.forEach(({ px }, col) => {
+    for (let y = 0; y < S; y++) img.set(px.subarray(y * S * 4, (y + 1) * S * 4), (y * W + col * S) * 4);
+  });
+  const layer = {
+    name: "Layer 1",
+    opacity: 1,
+    frameCount: VARIANTS,
+    chunks: [{ layout: Array.from({ length: VARIANTS }, (_, i) => [i]), base64PNG: `data:image/png;base64,${png(W, S, img).toString("base64")}` }],
+  };
+  const doc = {
+    modelVersion: 2,
+    piskel: { name: role, description: cast[role].sprites.map((s) => s.name).join(", "), fps: 2, height: S, width: S, layers: [JSON.stringify(layer)], hiddenFrames: [] },
+  };
+  const file = join(root, "art", "cast", "piskel", `${role}.piskel`);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify(doc));
+  console.log(`${file} (${VARIANTS} frames)`);
+}
+
 // 3x5 pixel font for labels.
 const FONT = {
   A: "010101111101101", B: "110101110101110", C: "011100100100011", D: "110101101101110", E: "111100110100111",
@@ -95,7 +127,7 @@ const LABEL = hex("#b4aee0");
 const DISC = hex("#070710");
 
 function gallery(scale, file, only) {
-  const roles = only ? [only] : ROLES.filter((r) => cast[r]);
+  const roles = (only ?? ROLES).filter((r) => cast[r]);
   const CELL = S * scale, GAP = 4 * scale, LABEL_W = 52 * scale, SPLIT = 10 * scale, HEAD = 10 * scale;
   const W = GAP + LABEL_W + 2 * VARIANTS * (CELL + GAP) + SPLIT;
   const H = HEAD + roles.length * (CELL + GAP) + GAP;
@@ -145,7 +177,8 @@ function gallery(scale, file, only) {
   save(file, W, H, img);
 }
 
-gallery(4, join(SHOTS, `cast-${BLOCK}-4x.png`));
-gallery(1, join(SHOTS, `cast-${BLOCK}-1x.png`));
+gallery(4, join(SHOTS, `cast-${BLOCK}-4x.png`), BLOCKS[BLOCK]);
+gallery(1, join(SHOTS, `cast-${BLOCK}-1x.png`), BLOCKS[BLOCK]);
+gallery(4, join(SHOTS, "cast-full-4x.png"));
 // Dev: --zoom <role> writes a 10x single-row gallery for close inspection.
-if (opt("--zoom")) gallery(10, join(SHOTS, `cast-zoom-${opt("--zoom")}.png`), opt("--zoom"));
+if (opt("--zoom")) gallery(10, join(SHOTS, `cast-zoom-${opt("--zoom")}.png`), [opt("--zoom")]);

@@ -85,3 +85,25 @@ export const run = (x0, x1, y) => Array.from({ length: x1 - x0 + 1 }, (_, i) => 
 
 // Left-right mirror of a whole layer grid.
 export const flip = (rows) => rows.map((r) => [...r].reverse().join(""));
+
+// Full-frame ellipse layer (centre/radii in pixels): ellipse(15.5, 15, 9, 8, "s").
+export function ellipse(cx, cy, rx, ry, ch) {
+  const g = Array.from({ length: S }, (_, y) =>
+    Array.from({ length: S }, (_, x) => (((x + 0.5 - cx) / rx) ** 2 + ((y + 0.5 - cy) / ry) ** 2 <= 1 ? ch : ".")).join(""),
+  );
+  return { g, x: 0, y: 0 };
+}
+
+// Repaint a layer's own pixels: fn(X, Y, ch) -> new char or falsy to keep. Returns a no-outline layer.
+export function paint({ g, x = 0, y = 0 }, fn) {
+  const c = Array.from({ length: S }, () => Array(S).fill("."));
+  g.forEach((r, j) =>
+    [...r].forEach((ch, i) => {
+      const X = x + i, Y = y + j;
+      if (ch === "." || X < 0 || X >= S || Y < 0 || Y >= S) return;
+      const out = fn(X, Y, ch);
+      if (out) c[Y][X] = out;
+    }),
+  );
+  return { g: c.map((r) => r.join("")), x: 0, y: 0 };
+}
