@@ -1,6 +1,6 @@
 {
   "laneId": "android-app",
-  "updatedAt": "2026-11-05T02:42:14.267Z",
+  "updatedAt": "2026-11-05T03:58:00.000Z",
   "units": [
     {
       "id": "unit-and-a1",
@@ -75,6 +75,20 @@
       "status": "done",
       "branch": "unit-and-a5",
       "commit": "87566ee"
+    },
+    {
+      "id": "unit-and-a6",
+      "goal": "Android GitHub Release Updater (Option 1)",
+      "files": [
+        "vite.config.ts",
+        "server/release.mjs",
+        "src/userName.ts",
+        "src/DiagnosticsModal.tsx",
+        "src/App.tsx",
+        "test/android-apk-route.test.mjs"
+      ],
+      "doneCheck": "node --test test/android-apk-route.test.mjs test/android-pair.test.mjs",
+      "status": "todo"
     }
   ]
 }
