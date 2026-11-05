@@ -1262,11 +1262,12 @@ code {
 .card-body > .diag-pills { margin-top: 4px; flex-wrap: wrap; }
 .card-body > .diag-pills .pill.diag:first-child { margin-left: 0; }
 
-.hard-bar { margin: 8px 12px 0; padding: 6px 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; justify-content: space-between; font-size: 12px; min-width: 0; max-width: 100%; box-sizing: border-box; }
-.hard-text { min-width: 0; flex: 1 1 150px; overflow-wrap: anywhere; }
+.hard-bar { margin: 8px 12px 0; padding: 6px 10px; display: flex; flex-wrap: wrap; min-width: 0; max-width: 100%; box-sizing: border-box; align-items: center; gap: 10px; justify-content: space-between; font-size: 12px; }
 .hard-bar.warn { background: #1a1405; border: 1px solid var(--amber); color: var(--amber); }
 .hard-bar.hot { background: #1a0716; border: 1px solid var(--hot-pink); color: var(--hot-pink); box-shadow: 0 0 12px var(--hot-pink-dim); }
+.hard-text { flex: 1 1 160px; min-width: 0; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; white-space: normal; }
 .hard-text .muted { color: var(--muted); }
+.hard-bar > .btn { flex: 0 0 auto; max-width: 100%; white-space: normal; }
 .btn.warn { color: var(--amber); border-color: var(--amber); }
 .btn.hot { color: #05050a; background: var(--hot-pink); border-color: var(--hot-pink); font-weight: 700; box-shadow: 0 0 10px var(--hot-pink); }
 .btn.successor { margin-top: 6px; font-family: var(--arcade); font-size: 10px; letter-spacing: 1px; width: 100%; }
