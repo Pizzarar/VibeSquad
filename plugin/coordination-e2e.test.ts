@@ -1009,3 +1009,89 @@ test(
     }
   }),
 );
+
+// ---------------------------------------------------------------------------
+// Stage 9 — vs cap { capped: ... } unwrap + turn-1 enforceProfileAfterSpawn guard
+// ---------------------------------------------------------------------------
+
+test(
+  "Stage 9a: normalizeCappedProviders unwraps { capped: { claude: ... } } and fails over Brainstorm - Claude to Brainstorm - Gemini",
+  withEnv(async ({ briefRoot }) => {
+    const h = harness(new Map(), {
+      briefRoot,
+      cappedProviders: { capped: { claude: { reason: "cli cap", updatedAt: "2026-11-05T00:00:00Z" } } },
+    });
+    try {
+      const out = await h.beforeCreate({
+        config: {
+          cwd: CWD,
+          provider: "claude",
+          model: "claude-opus-5-5",
+          title: "RiffBot",
+        },
+        labels: { role: "brainstorm", lane: "vibesquad", profile: "Brainstorm - Claude" },
+        env: { VS_PROFILE: "Brainstorm - Claude" },
+      });
+      assert.equal(out.config.provider, "antigravity-cli", "provider failed over to antigravity-cli");
+      assert.equal(out.config.model, "gemini-4-argon", "model failed over to gemini-4-argon");
+      assert.equal(out.labels?.profile, "Brainstorm - Gemini", "profile label updated to Brainstorm - Gemini");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "Stage 9b: enforceProfileAfterSpawn does not call applyAgentSettings when before(agent.create) already configured the spawn or when status is running on turn 1",
+  withEnv(async ({ briefRoot }) => {
+    const agents = new Map<string, any>();
+    const h = harness(agents, { briefRoot });
+    try {
+      // Case 1: before(agent.create) matched an explicit profile; onCreated sees thinkingOptionId: null
+      const req = await h.beforeCreate({
+        config: {
+          cwd: CWD,
+          provider: "antigravity-cli",
+          model: "gemini-4-argon",
+          title: "RiffBot",
+        },
+        labels: { team: "vibesquad", lane: "vibesquad", role: "brainstorm", profile: "Brainstorm - Gemini" },
+        env: { VS_PROFILE: "Brainstorm - Gemini" },
+      });
+      assert.equal(req.config.thinkingOptionId, "medium");
+
+      const spawned1 = {
+        id: "riff-1",
+        title: "RiffBot",
+        cwd: CWD,
+        status: "idle",
+        provider: "antigravity-cli",
+        model: "gemini-4-argon",
+        modeId: "accept-edits",
+        thinkingOptionId: null,
+        labels: { team: "vibesquad", lane: "vibesquad", role: "brainstorm", profile: "Brainstorm - Gemini" },
+      };
+      agents.set("riff-1", spawned1);
+      await h.onCreated(spawned1);
+      assert.deepEqual(h.appliedSettings, [], "applyAgentSettings skipped when before(agent.create) already configured the spawn");
+
+      // Case 2: label-only spawn (no beforeCreate call), but status === "running" with thinkingOptionId: null on initial snapshot
+      const spawnedRunning = {
+        id: "riff-running",
+        title: "Fea Buddy",
+        cwd: CWD,
+        status: "running",
+        provider: "antigravity-cli",
+        model: "gemini-4-argon",
+        modeId: "accept-edits",
+        thinkingOptionId: null,
+        labels: { team: "vibesquad", lane: "feat-alpha", role: "brainstorm", profile: "Brainstorm - Gemini" },
+      };
+      agents.set("riff-running", spawnedRunning);
+      await h.onCreated(spawnedRunning);
+      assert.deepEqual(h.appliedSettings, [], "applyAgentSettings skipped while status === running on initial snapshot");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);

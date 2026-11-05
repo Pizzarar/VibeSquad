@@ -1090,6 +1090,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     };
 
     const recentBeforeMismatches = new Map<string, number>();
+    const beforeConfiguredSpawns = new Map<string, number>();
 
     const logProfileMetric = (labels: Labels, cwd: string, text: string, refs: string[] = []) => {
       const where = teamOf(labels, cwd);
@@ -1115,10 +1116,10 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const profile = match.profile;
       const s: any = me ?? {};
       const actual = {
-        provider: s.provider ?? agent.provider,
-        model: s.model ?? null,
-        modeId: s.currentModeId ?? s.modeId ?? null,
-        thinkingOptionId: s.thinkingOptionId ?? null,
+        provider: s.provider ?? agent.provider ?? s.config?.provider,
+        model: s.model ?? agent.model ?? s.config?.model ?? null,
+        modeId: s.currentModeId ?? s.modeId ?? agent.currentModeId ?? agent.modeId ?? s.config?.modeId ?? null,
+        thinkingOptionId: s.thinkingOptionId ?? agent.thinkingOptionId ?? s.config?.thinkingOptionId ?? null,
       };
       const diffs = profileFieldDiffs(actual, profile);
       if (!diffs.length) return;
@@ -1146,6 +1147,19 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         log(`refusing ${agent.id}: profile ${profile.name} wants provider ${providerDiff.profile}, agent runs ${providerDiff.caller}`);
         await (deps.refuseAgent ?? deps.archiveAgent)(agent.id).catch((e) => log(`refuse failed for ${agent.id}: ${e}`));
         return "refused";
+      }
+      const now = Date.now();
+      for (const [k, ts] of beforeConfiguredSpawns) {
+        if (now - ts >= 30_000) beforeConfiguredSpawns.delete(k);
+      }
+      const spawnKey = `${agent.title ?? ""}::${cwd}`;
+      const configuredByBefore =
+        (agent.id && beforeConfiguredSpawns.has(agent.id)) || beforeConfiguredSpawns.has(spawnKey);
+      if (agent.id) beforeConfiguredSpawns.delete(agent.id);
+      beforeConfiguredSpawns.delete(spawnKey);
+      const isRunning = (s.status ?? agent.status) === "running" || (s.status ?? agent.status) === "initializing";
+      if (configuredByBefore || isRunning) {
+        return;
       }
       const patch: AgentSettingsPatch = {};
       for (const d of diffs) {
@@ -1182,6 +1196,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
       if (raw && typeof raw === "object") {
         if (Array.isArray(raw.providers)) return normalizeCappedProviders(raw.providers);
+        if (raw.capped && typeof raw.capped === "object" && !Array.isArray(raw.capped)) {
+          return normalizeCappedProviders(raw.capped);
+        }
         const out: Record<string, any> = {};
         for (const [k, v] of Object.entries(raw)) {
           const fam = normalizeProviderFamily(k);
@@ -1445,6 +1462,12 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         st.mark("resolve-identity-labels");
         const keepCaller = Boolean(String(reqLabels["profile-override"] || env?.VS_PROFILE_OVERRIDE || "").trim());
         if (matchedProfile && profileMatch?.explicit && !keepCaller) {
+          const now = Date.now();
+          for (const [k, ts] of beforeConfiguredSpawns) {
+            if (now - ts >= 30_000) beforeConfiguredSpawns.delete(k);
+          }
+          beforeConfiguredSpawns.set(`${title}::${cwd}`, now);
+          if (reqAgentId) beforeConfiguredSpawns.set(reqAgentId, now);
           // An explicitly named profile wins over the caller's provider/model/mode/thinking.
           const diffs = profileFieldDiffs(config, matchedProfile);
           const want = splitProviderModel(matchedProfile.provider, matchedProfile.model);

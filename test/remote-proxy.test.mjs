@@ -15,6 +15,7 @@ import {
   REMOTE_BUDGET_PER_MIN,
   REMOTE_MAX_BODY_BYTES,
   REMOTE_MAX_IN_FLIGHT,
+  REMOTE_SPAWN_TIMEOUT_MS,
   REMOTE_TIMEOUT_MS,
   REMOTE_BODY_POLICY,
   REMOTE_FORBIDDEN_BODY_KEYS,
@@ -25,6 +26,7 @@ import {
   decideProxyRequest,
   isAllowedRoute,
   pinTeamsRegistry,
+  proxyTimeoutFor,
   normalizeProxyPath,
   redactBody,
   scrubResponseBody,
@@ -1061,5 +1063,12 @@ describe("R2-5 handler: reopened writes against a fake loopback server", () => {
     await assert.rejects(h({ method: "POST", path: "/__vibesquad/handoff", body: '{"team":"sq","lane":"lane1","cwd":"C:/"}' }), /body key not allowed remotely: cwd \[403\]/);
     await assert.rejects(h({ method: "POST", path: "/__vibesquad/handoff", body: '{"team":"sq"}' }), /key required remotely: body\.lane \[403\]/);
     assert.equal(seen.length, n);
+  });
+
+  test("proxyTimeoutFor extends timeout to 45000ms for spawn endpoints and keeps 10000ms default otherwise", () => {
+    assert.equal(REMOTE_SPAWN_TIMEOUT_MS, 45_000);
+    assert.equal(proxyTimeoutFor("/__vibesquad/brainstorm-restart"), 45_000);
+    assert.equal(proxyTimeoutFor("/__vibesquad/inbox/triage"), 45_000);
+    assert.equal(proxyTimeoutFor("/api/health"), 10_000);
   });
 });

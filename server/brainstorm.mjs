@@ -4,7 +4,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import os from "node:os";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { effectiveAgentRole, findLaneInRegistry, formatDisplayTitle, isHubLane, isRetiredAgent, laneCodeFor, resolveWorktreeRootPath, topicOf } from "./identity.mjs";
-import { findProfileOrFallback, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
+import { findProfileOrFallback, loadProfiles, readCappedProviders, resolveProfileWithFailover, toPaseoSpawnConfig } from "./profiles.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
 import { readRawPaseoConfig } from "./paseo-control.mjs";
 import { briefRootFor, laneWorkingDir } from "./brief-path.mjs";
@@ -611,7 +611,27 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       reason === "provider-switch" && requestedProfile
         ? requestedProfile
         : String(requestedProfile || oldLabels.profile || laneLastProfile || fallbackProfileName).trim();
-    const profile = findProfileOrFallback(desiredProfileKey, fallbackProfileName, profiles);
+    let profile = findProfileOrFallback(desiredProfileKey, fallbackProfileName, profiles);
+    if (profile && !body.forceProvider) {
+      const cappedMap = readCappedProviders({
+        useDiskCaps: true,
+        ...(body.cappedProviders !== undefined ? { cappedProviders: body.cappedProviders } : {}),
+        ...(body.cappedProvidersPath ? { cappedProvidersPath: body.cappedProvidersPath } : {}),
+      });
+      const usageList = [
+        ...(Array.isArray(body.usageProviders) ? body.usageProviders : []),
+        ...Object.keys(cappedMap).map((id) => ({ id, status: "exhausted", usedPct: 100 })),
+      ];
+      if (usageList.length > 0) {
+        const fo = resolveProfileWithFailover(profile, profiles, usageList, {
+          useDiskCaps: true,
+          ...(body.cappedProviders !== undefined ? { cappedProviders: body.cappedProviders } : {}),
+        });
+        if (fo.failedOver && fo.profile) {
+          profile = fo.profile;
+        }
+      }
+    }
 
     const spawnCfg = profile
       ? toPaseoSpawnConfig(profile)
