@@ -164,8 +164,9 @@ test("U5: TeamPage collapses finished pills and the Idle section", () => {
   assert.match(app, /title="Idle"[\s\S]{0,260}?collapsed\s+archive/);
 });
 
-test("U5: PinFocusBar lead click opens the Lead in pin focus instead of FULL view", () => {
+test("U5: Lead click in PinTeamTree opens the Lead in pin focus instead of FULL view", () => {
   const pr = srcOf("PinRail.tsx");
-  assert.match(pr, /openPinMember\(pin, lead\.agent\.id\)/);
+  const pg = srcOf("PinGrid.tsx");
+  assert.match(pg, /openPinMember\(pin, m\.agent\.id\)/);
   assert.doesNotMatch(pr, /setFullView/);
 });
