@@ -301,9 +301,9 @@ test("Done-when #3 & Audit §2 + §3A: 0 hits for paseo ls -g, prior-art check r
   }
 });
 
-test("Audit §3B & §3C & §3D: inspectGitSpawnState injected at agent.create, vs profiles compact output, and audit-delta log subtype", () => {
+test("Audit §3B & §3C & §3D: inspectGitSpawnState injected at agent.create, vs profiles compact output, and audit-delta log subtype", async () => {
   // 1. inspectGitSpawnState on the current git repo
-  const gitState = inspectGitSpawnState(REPO_ROOT);
+  const gitState = await inspectGitSpawnState(REPO_ROOT);
   assert.ok(gitState, "Expected non-null git state in git worktree");
   assert.match(gitState, /^Starting git state \(snapshot at spawn — re-check before commit\/push\/merge\): branch=\S+, origin=\d+ behind \/ \d+ ahead, dirty=\d+ files\.$/);
 
@@ -319,7 +319,7 @@ test("Audit §3B & §3C & §3D: inspectGitSpawnState injected at agent.create, v
   const dispose = createPlugin({ startWatcher: false })(server);
   try {
     assert.ok(beforeHook, "Expected before('agent.create') hook");
-    const mutated = beforeHook({
+    const mutated = await beforeHook({
       request: {
         config: {
           title: "VIBESQUAD · test-worker",

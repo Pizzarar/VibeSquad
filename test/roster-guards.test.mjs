@@ -147,7 +147,7 @@ test("Done-when #1 (Fix A): Spawning with a wrong team label (team=site-polish, 
           role: "brainstorm",
         },
       };
-      const modified = beforeCreate({ request: req });
+      const modified = await beforeCreate({ request: req });
       assert.ok(modified);
       assert.equal(modified.labels.team, "site");
       assert.equal(req.labels.team, "site");
@@ -480,7 +480,7 @@ test("Done-when #3 (Fix C): Sending to an (old)/archived lead delivers to the cu
   }
 });
 
-test("Done-when #5 (Fix E): create_agent with labels: { role: 'lead' } gets the lead pack (never WORKER_PACK)", () => {
+test("Done-when #5 (Fix E): create_agent with labels: { role: 'lead' } gets the lead pack (never WORKER_PACK)", async () => {
   const env = makeTempEnv();
   const prevHome = process.env.VIBESQUAD_HOME;
   const prevProfiles = process.env.VIBESQUAD_PROFILES_PATH;
@@ -503,7 +503,7 @@ test("Done-when #5 (Fix E): create_agent with labels: { role: 'lead' } gets the 
           role: "lead",
         },
       };
-      const out = beforeCreate({ request: req });
+      const out = await beforeCreate({ request: req });
       assert.ok(out);
       const sysPrompt = out.config.systemPrompt;
       assert.equal(sysPrompt.includes(WORKER_PACK), false, "Lead must never receive WORKER_PACK");

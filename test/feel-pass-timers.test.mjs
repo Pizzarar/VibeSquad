@@ -57,7 +57,7 @@ test("before(agent.create) and agent.created each log one hook-timing metric", a
     };
     createPlugin({ startWatcher: false, setLabels: async () => {}, archiveAgent: async () => {} })(server);
     const cwd = "/projects/VibeSquad";
-    before.get("agent.create")({ request: { config: { cwd, provider: "claude", title: "w" }, labels: { team: "vibesquad", lane: "feel", role: "worker" } } });
+    await before.get("agent.create")({ request: { config: { cwd, provider: "claude", title: "w" }, labels: { team: "vibesquad", lane: "feel", role: "worker" } } });
     const agent = { id: "a1", cwd, title: "w", labels: { team: "vibesquad", lane: "feel", role: "worker" } };
     const paseo = {
       agents: {
