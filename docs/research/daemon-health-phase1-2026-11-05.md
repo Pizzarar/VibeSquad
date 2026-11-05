@@ -39,3 +39,107 @@ Note: `~/.paseo/daemon.log` only holds the current run (rotated logs `2026*-daem
 - D2. Missing cwd is reported as `spawn git ENOENT` with no cwd check; 73 warnings from workspaces whose dirs were deleted. Archive or skip workspaces with missing directories.
 - D3. `Project config unavailable` is logged as "Failed to parse paseo.json" even when the file is absent or the cause is a queue timeout.
 - D4. Possible orphaned `claude --version` child after the 5 s exec timeout on Windows (item 5 hypothesis).
+
+
+## Phase 2 (b): stale workspaces (dir missing, not archived)
+Backup: ~/.paseo/projects.bak-20261105. Removal via `paseo workspace archive <id>` (supported CLI). 91 workspaces, 0 pinned; 4 hold unarchived agents, all status `closed` (dirs gone). All paths confirmed absent with fs.existsSync.
+
+| workspace id | project id | path | exists | enoent-logged | open agents |
+|---|---|---|---|---|---|
+| wks_ee0baf949cc1b86e | prj_38915ba4896214c2 | C:\Users\Fugma\projects\efi-uilab | no | true | 4 |
+| wks_867c18be54855f9f | prj_68efcd9ae325b68e | C:\Users\Fugma\projects\efi-uilab-h6 | no | true | 0 |
+| wks_c011124d29dff3ec | prj_2633cdbc8cef3585 | C:\Users\Fugma\projects\efi-uilab-h7 | no | true | 0 |
+| wks_ec2d1664b26727f9 | prj_80e3a5ad89da3c8a | C:\Users\Fugma\projects\efi-gemini-pass | no | false | 0 |
+| wks_cfca77e0f6dc285e | prj_4b7b5fecaa772d7f | C:\Users\Fugma\projects\efi-uilab-rx3 | no | true | 1 |
+| wks_94f9b20b50fc6a22 | prj_243af2e161a33779 | C:\Users\Fugma\projects\efi-uilab-k1 | no | true | 0 |
+| wks_a69e1d43809e4e5f | prj_fec6394ea71a8e15 | C:\Users\Fugma\projects\efi-uilab-rx3-rv | no | false | 0 |
+| wks_4950a69e82c4221f | prj_579e1c81852e6c30 | C:\Users\Fugma\projects\efi-uilab-artb1 | no | true | 0 |
+| wks_02cdf987a454cbf9 | prj_38915ba4896214c2 | C:\Users\Fugma\projects\efi-uilab | no | true | 1 |
+| wks_386a39c283d9ea55 | prj_38915ba4896214c2 | C:\Users\Fugma\projects\efi-uilab | no | true | 1 |
+| wks_bf386731d4ac758b | prj_aaf55cf62b9a9e35 | C:\users\fugma\projects\VibeSquad\.worktrees\unit-identity-v2 | no | true | 0 |
+| wks_881d826ad6808a96 | prj_aaf55cf62b9a9e35 | C:\users\fugma\projects\VibeSquad\.worktrees\unit-identity-v2 | no | true | 0 |
+| wks_4bd890c1be9ed3ae | prj_0f275fb9a0984c71 | C:\users\fugma\projects\VibeSquad\.worktrees\unit-quickstart-lane | no | true | 0 |
+| wks_feb9c1f44952fdd9 | prj_0f275fb9a0984c71 | C:\users\fugma\projects\VibeSquad\.worktrees\unit-quickstart-lane | no | true | 0 |
+| wks_885dff67fa10f941 | prj_0f275fb9a0984c71 | C:\users\fugma\projects\VibeSquad\.worktrees\unit-quickstart-lane | no | true | 0 |
+| wks_99904686bc41e309 | prj_0f275fb9a0984c71 | C:\users\fugma\projects\VibeSquad\.worktrees\unit-quickstart-lane | no | true | 0 |
+| wks_f9f7a322feb564ea | prj_0f275fb9a0984c71 | C:\users\fugma\projects\VibeSquad\.worktrees\unit-quickstart-lane | no | true | 0 |
+| wks_a0c0e72d2171798f | prj_0f275fb9a0984c71 | C:\users\fugma\projects\VibeSquad\.worktrees\unit-quickstart-lane | no | true | 0 |
+| wks_eb541717278e5fdc | prj_0f275fb9a0984c71 | C:\users\fugma\projects\VibeSquad\.worktrees\unit-quickstart-lane | no | true | 0 |
+| wks_d662125cf87210eb | prj_5f97b66ca2ff25c5 | C:\users\fugma\projects\VibeSquad\.worktrees\unit-public-ac | no | true | 0 |
+| wks_5cf0038be8d3766a | prj_5f97b66ca2ff25c5 | C:\users\fugma\projects\VibeSquad\.worktrees\unit-public-ac | no | true | 0 |
+| wks_3e301b9c55087081 | prj_5f97b66ca2ff25c5 | C:\users\fugma\projects\VibeSquad\.worktrees\unit-public-ac | no | true | 0 |
+| wks_8893bb757a64167b | prj_5f97b66ca2ff25c5 | C:\users\fugma\projects\VibeSquad\.worktrees\unit-public-ac | no | true | 0 |
+| wks_ad9c04541406e654 | prj_44ffe39ae5eb353b | C:\users\fugma\projects\VibeSquad\.worktrees\unit-pins-grid | no | true | 0 |
+| wks_d6c12c54d38a9c85 | prj_a2bbfc2d41a76485 | C:\users\fugma\projects\VibeSquad\.worktrees\unit-pins-resolver | no | true | 0 |
+| wks_3e96d26d9a8e5a34 | prj_1cdde32a27ef7b6e | C:\users\fugma\projects\VibeSquad\.worktrees\unit-pins-pack | no | true | 0 |
+| wks_8f8fbada760fba35 | prj_a2bbfc2d41a76485 | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-pins-resolver | no | true | 0 |
+| wks_de4d1bf421a1e12c | prj_a2bbfc2d41a76485 | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-pins-resolver | no | true | 0 |
+| wks_194e91ae9216d687 | prj_1cdde32a27ef7b6e | C:\users\fugma\projects\VibeSquad\.worktrees\unit-pins-pack | no | true | 0 |
+| wks_b54b7e90616895fe | prj_44ffe39ae5eb353b | C:\users\fugma\projects\VibeSquad\.worktrees\unit-pins-grid | no | true | 0 |
+| wks_a295a5e581a0919f | prj_a2bbfc2d41a76485 | C:\users\fugma\projects\VibeSquad\.worktrees\unit-pins-resolver | no | true | 0 |
+| wks_dfee841da8536a14 | prj_a2bbfc2d41a76485 | C:\users\fugma\projects\VibeSquad\.worktrees\unit-pins-resolver | no | true | 0 |
+| wks_33ae364151a15275 | prj_44ffe39ae5eb353b | C:\users\fugma\projects\VibeSquad\.worktrees\unit-pins-grid | no | true | 0 |
+| wks_3507f2877fafd7f4 | prj_44ffe39ae5eb353b | C:\users\fugma\projects\VibeSquad\.worktrees\unit-pins-grid | no | true | 0 |
+| wks_32146be9358fa851 | prj_358312fc082e5f73 | C:\users\fugma\projects\VibeSquad\.worktrees\unit-pins-rail | no | true | 0 |
+| wks_3610a08b10abfe27 | prj_c41dc073d8ff2beb | C:\users\fugma\projects\VibeSquad\.worktrees\unit-pins-done | no | true | 0 |
+| wks_620e68bdf386df5d | prj_1cdde32a27ef7b6e | C:\users\fugma\projects\VibeSquad\.worktrees\unit-pins-pack | no | true | 0 |
+| wks_ac5cff874335f4c2 | prj_c41dc073d8ff2beb | C:\users\fugma\projects\VibeSquad\.worktrees\unit-pins-done | no | true | 0 |
+| wks_924b9efb6789dc9f | prj_c41dc073d8ff2beb | C:\users\fugma\projects\VibeSquad\.worktrees\unit-pins-done | no | true | 0 |
+| wks_709c3516d370011d | prj_358312fc082e5f73 | C:\users\fugma\projects\VibeSquad\.worktrees\unit-pins-rail | no | true | 0 |
+| wks_fc2066eec8beb5c2 | prj_a4d93e6487d58d84 | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-art-painter-director | no | true | 0 |
+| wks_4c195d6488e68f99 | prj_2f709ea7f3f17c9e | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-ade-a | no | true | 0 |
+| wks_dfc6c9073a7cfe0d | prj_f0be6714cf115a80 | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-ade-b | no | true | 0 |
+| wks_bf06c25c0b34622d | prj_c41dc073d8ff2beb | C:\users\fugma\projects\VibeSquad\.worktrees\unit-pins-done | no | true | 0 |
+| wks_f076d06f02f62f11 | prj_25e187b6709659a7 | C:\users\fugma\projects\VibeSquad\.worktrees\unit-pins-ideas | no | true | 0 |
+| wks_bb741ce788280b65 | prj_850751a504038bd1 | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-ade-c | no | true | 0 |
+| wks_1a52cb83f323515d | prj_f0be6714cf115a80 | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-ade-b | no | true | 0 |
+| wks_a74b5d45df384be6 | prj_1be6c1ee58dfb156 | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-ade-e | no | true | 0 |
+| wks_718c45ccc5f3dc92 | prj_2d27994f81ef7173 | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-ade-d | no | true | 0 |
+| wks_4bad58de2f33495f | prj_a4d93e6487d58d84 | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-art-painter-director | no | true | 0 |
+| wks_ef1099dbe2a426a7 | prj_a4d93e6487d58d84 | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-art-painter-director | no | true | 0 |
+| wks_8f293662fb940693 | prj_358312fc082e5f73 | C:\users\fugma\projects\VibeSquad\.worktrees\unit-pins-rail | no | true | 0 |
+| wks_e89225ac69e5d472 | prj_a4d93e6487d58d84 | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-art-painter-director | no | true | 0 |
+| wks_f6e1a8258a0b54ab | prj_c41dc073d8ff2beb | C:\users\fugma\projects\VibeSquad\.worktrees\unit-pins-done | no | true | 0 |
+| wks_e4d3442cd5c1f11e | prj_ccdf72ff5062d5e7 | C:\users\fugma\projects\VibeSquad\.worktrees\pins-walk | no | true | 0 |
+| wks_81bb1f422fdfd88d | prj_ccdf72ff5062d5e7 | C:\Users\Fugma\projects\VibeSquad\.worktrees\pins-walk | no | true | 0 |
+| wks_79c375d7673ce64f | prj_25e187b6709659a7 | C:\users\fugma\projects\VibeSquad\.worktrees\unit-pins-ideas | no | true | 0 |
+| wks_bd666a45dd84124f | prj_ccdf72ff5062d5e7 | C:\users\fugma\projects\VibeSquad\.worktrees\pins-walk | no | true | 0 |
+| wks_27de3e3f38a0ddc9 | prj_25e187b6709659a7 | C:\users\fugma\projects\VibeSquad\.worktrees\unit-pins-ideas | no | true | 0 |
+| wks_daa3dbc149d3a505 | prj_a4d93e6487d58d84 | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-art-painter-director | no | true | 0 |
+| wks_d8def8273a411f43 | prj_1f216fbd98f05a4a | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-ade-i | no | true | 0 |
+| wks_35e29989a963a5cf | prj_bece16e91dde686c | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-ade-f | no | true | 0 |
+| wks_10b22407113da9ae | prj_67d8dc98e0726c28 | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-ade-g | no | true | 0 |
+| wks_5c9871f5a5449a72 | prj_5bb9e842d3a00cd7 | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-ade-h | no | true | 0 |
+| wks_d54e0b34e7d1b4dc | prj_cfb9a927cd0c5008 | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-buddy-retire | no | true | 0 |
+| wks_d3b3fac464e9f2e9 | prj_a4d93e6487d58d84 | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-art-painter-director | no | true | 0 |
+| wks_2eea0ef190253ac0 | prj_a4d93e6487d58d84 | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-art-painter-director | no | true | 0 |
+| wks_e0df4dbd41887724 | prj_a4d93e6487d58d84 | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-art-painter-director | no | true | 0 |
+| wks_249f486a2d3149b4 | prj_0a15e94aabd9f389 | C:\Users\Fugma\projects\VibeSquad-spawn-speed | no | true | 0 |
+| wks_f0204f713293078d | prj_0a15e94aabd9f389 | C:\Users\Fugma\projects\VibeSquad-spawn-speed | no | true | 0 |
+| wks_8982839050fd0b62 | prj_0a15e94aabd9f389 | C:\Users\Fugma\projects\VibeSquad-spawn-speed | no | true | 0 |
+| wks_3c798551207c869d | prj_0a15e94aabd9f389 | C:\Users\Fugma\projects\VibeSquad-spawn-speed | no | true | 0 |
+| wks_1931a7eac8a5216e | prj_0a15e94aabd9f389 | C:\Users\Fugma\projects\VibeSquad-spawn-speed | no | true | 0 |
+| wks_da244c4a69c4fc98 | prj_0a15e94aabd9f389 | C:\Users\Fugma\projects\VibeSquad-spawn-speed | no | true | 0 |
+| wks_0d0edc026c935064 | prj_75215015f1461521 | C:\Users\Fugma\projects\zz-timing-sandbox | no | false | 0 |
+| wks_923fe4249cd8fc6c | prj_75215015f1461521 | C:\Users\Fugma\projects\zz-timing-sandbox | no | false | 0 |
+| wks_7a5fecaf91746bc7 | prj_75215015f1461521 | C:\Users\Fugma\projects\zz-timing-sandbox | no | false | 0 |
+| wks_71c356ef386c1862 | prj_75215015f1461521 | C:\Users\Fugma\projects\zz-timing-sandbox | no | false | 0 |
+| wks_e181e12c8efe7783 | prj_75215015f1461521 | C:\Users\Fugma\projects\zz-timing-sandbox | no | false | 0 |
+| wks_01948aca40f6f862 | prj_75215015f1461521 | C:\Users\Fugma\projects\zz-timing-sandbox | no | false | 0 |
+| wks_7a2b7f472bb73385 | prj_e415f160251cef69 | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-parity-b2 | no | true | 0 |
+| wks_3fa4c069cf36ca60 | prj_e415f160251cef69 | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-parity-b2 | no | true | 0 |
+| wks_f164055dc4404e64 | prj_c8a4649481cce019 | C:\Users\Fugma\AppData\Local\Temp\zz-auto-buddy-525Woz | no | false | 0 |
+| wks_6b9567c1f1c97790 | prj_be14960aa05e4a9a | C:\Users\Fugma\AppData\Local\Temp\zz-auto-buddy-v0NOlr | no | false | 0 |
+| wks_9c016df580b05e53 | prj_66e13f4195e84471 | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-bug-buddy-hub | no | true | 0 |
+| wks_5a73174c9f2f749c | prj_66e13f4195e84471 | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-bug-buddy-hub | no | true | 0 |
+| wks_4fffeb9c4288218a | prj_07f19aeb7600b0c5 | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-bug5-coord-e2e | no | true | 0 |
+| wks_300eed78ad6d8a4f | prj_07f19aeb7600b0c5 | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-bug5-coord-e2e | no | true | 0 |
+| wks_8fb37b45e0a636ea | prj_70cf333d6c26dc89 | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-bug6-token-meter | no | true | 0 |
+| wks_645867fdc2c8f66b | prj_70cf333d6c26dc89 | C:\Users\Fugma\projects\VibeSquad\.worktrees\unit-bug6-token-meter | no | true | 0 |
+| wks_d8f63d90bc20ec32 | prj_734dccda8cd0a9d3 | C:\Users\Fugma\AppData\Local\VibeSquad\worktrees\VibeSquad\unit-uip-u16b-reconcile | no | true | 0 |
+
+## Phase 2 result
+- Archived all 91 stale workspaces with `paseo workspace archive` (88 on the first pass; 3 timed out: wks_ee0baf949cc1b86e, wks_867c18be54855f9f, wks_c011124d29dff3ec; the session was cut by the 21:34:42Z daemon restart and re-check at 21:48Z showed 0 un-archived workspaces with a missing directory). Backup: `~/.paseo/projects.bak-20261105`.
+- `spawn git ENOENT`: 29 in the 10 min before the change (daemon.log, ~21:2x Z). After the change and restart: 0 between 21:35Z and 21:48Z (last one logged 21:33:37Z).
+- Agent prune (a): NOT done, per Buddy; dry-run list kept.
+- Upstream entries D1-D4 are in the main checkout `docs/UPSTREAM_ISSUES.md` (gitignored).
