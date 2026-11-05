@@ -68,6 +68,8 @@ export const PROMISED_RUN_NUDGE_PROMPT =
   "Your turn ended while a promised action or background check appeared incomplete. Please check status and continue, or report final completion.";
 
 const PROMISE_RE = /\b(let me|i will|i'll|going to|now i'll|(?:i'm|i am|now|currently)\s+(?:running|checking|starting|dispatching))\b|^(?:running|checking|starting|dispatching)\b/i;
+const GERUND_START_RE = /^(?:running|checking|starting|dispatching)\b/i;
+const DESCRIPTIVE_VERB_RE = /\b(?:updates|shows|happens|publishes|syncs|is|was|are|were|does|makes|means|allows|prevents|causes|returns|produces)\b/i;
 const DONE_RE = /\b(done|complete[d]?|finished|all set|summary|in summary|final report)\b/i;
 
 function lastSentence(text: string): string {
@@ -90,14 +92,17 @@ export function detectPromisedRunIdle(
   if (!text) return null;
   const tail = lastSentence(text);
   const trailing = /(:|\.\.\.|…)$/.test(text);
-  const promised = PROMISE_RE.test(tail) || (trailing && !DONE_RE.test(tail));
+  const gerundDescriptive = GERUND_START_RE.test(tail) && DESCRIPTIVE_VERB_RE.test(tail);
+  const promised = (PROMISE_RE.test(tail) && !gerundDescriptive) || (trailing && !DONE_RE.test(tail));
   // A shell started after the last assistant text with no later synthesis also counts.
   const bgShell = events.slice(ai + 1).some((e) => {
     const it = itemOf(e);
     return it?.type === "tool_call" && it.detail?.type === "shell" && it.status === "running";
   });
   if (!promised && !bgShell) return null;
-  return { flagged: true, excerpt: cleanExcerpt(tail).slice(0, 200) };
+  const cleaned = cleanExcerpt(tail);
+  const excerpt = cleaned.length > 110 ? `${cleaned.slice(0, 107)}…` : cleaned;
+  return { flagged: true, excerpt };
 }
 
 // ---- A3: hung tool call watchdog ----

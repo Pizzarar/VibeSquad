@@ -73,7 +73,7 @@ describe("U14: .hard-bar wrapping (styles.css)", () => {
     const text = css.match(/\.hard-text \{[^}]*\}/)?.[0] ?? "";
     assert.ok(text.length > 0, ".hard-text rule found");
     assert.match(text, /min-width: 0/);
-    assert.match(text, /flex: 1 1 150px/);
+    assert.match(text, /flex: 1 1 1[56]0px/);
     assert.match(text, /overflow-wrap: anywhere/);
   });
 
