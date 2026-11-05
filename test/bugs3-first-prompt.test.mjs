@@ -112,8 +112,8 @@ function makeFakeDaemon(agents, { firstPromptRedeliverMs = 40, timelineEntries =
     stop,
     sent,
     paseo,
-    beforeCreate(req) {
-      return before.get("agent.create")({ request: req }) ?? req;
+    async beforeCreate(req) {
+      return (await before.get("agent.create")({ request: req })) ?? req;
     },
     onCreated(agent) {
       return on.get("agent.created")({ agent }, { paseo });
@@ -142,7 +142,7 @@ test(
     const agents = new Map([[agent.id, agent]]);
     const d = makeFakeDaemon(agents, { firstPromptRedeliverMs: 40 });
     try {
-      d.beforeCreate({
+      await d.beforeCreate({
         config: { cwd: CWD, provider: "claude", title: agent.title },
         prompt: "Fix the bug and report PASS.",
       });
@@ -187,14 +187,14 @@ test(
     ]);
     const d = makeFakeDaemon(agents, { firstPromptRedeliverMs: 40 });
     try {
-      d.beforeCreate({
+      await d.beforeCreate({
         config: { cwd: CWD, provider: "claude", title: aStarted.title },
         prompt: "Task 1",
       });
       await d.onCreated({ id: aStarted.id, title: aStarted.title, cwd: CWD, provider: "claude" });
       await d.onTurnStarted({ id: aStarted.id });
 
-      d.beforeCreate({
+      await d.beforeCreate({
         config: { cwd: CWD, provider: "claude", title: aTokens.title },
         prompt: "Task 2",
       });

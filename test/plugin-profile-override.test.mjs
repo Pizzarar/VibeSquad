@@ -111,9 +111,9 @@ function harness(agents = new Map()) {
       },
     },
   };
-  const create = (config, env) => {
+  const create = async (config, env) => {
     const req = { config: { cwd: CWD, ...config }, ...(env ? { env } : {}) };
-    return before.get("agent.create")({ request: req }) ?? req;
+    return (await before.get("agent.create")({ request: req })) ?? req;
   };
   return { stop, create, onCreated: on.get("agent.created"), calls, paseo };
 }
@@ -131,7 +131,7 @@ test(
   withEnv(async ({ vsHome }) => {
     const h = harness();
     try {
-      const out = h.create(
+      const out = await h.create(
         { provider: "claude", model: "claude-sonnet-5-5", modeId: "default", thinkingOptionId: "low", title: "some worker" },
         { VS_PROFILE: "Worker - Codex" },
       );
@@ -155,7 +155,7 @@ test(
   withEnv(async () => {
     const h = harness();
     try {
-      const out = h.create({ provider: "claude/claude-opus-5-5", title: "x" }, { VS_PROFILE: "Worker - Opus" });
+      const out = await h.create({ provider: "claude/claude-opus-5-5", title: "x" }, { VS_PROFILE: "Worker - Opus" });
       assert.equal(out.config.provider, "claude");
       assert.equal(out.config.model, "claude-opus-5-5");
     } finally {
@@ -169,7 +169,7 @@ test(
   withEnv(async ({ vsHome }) => {
     const h = harness();
     try {
-      const byTitle = h.create({
+      const byTitle = await h.create({
         provider: "claude",
         model: "claude-sonnet-5-5",
         modeId: "default",
@@ -180,7 +180,7 @@ test(
       assert.equal(byTitle.config.modeId, "default");
       assert.equal(byTitle.config.thinkingOptionId, "low");
 
-      const byRole = h.create(
+      const byRole = await h.create(
         { provider: "claude", model: "claude-haiku-5-5", modeId: "plan", title: "anything" },
         { VS_ROLE: "lead" },
       );
@@ -199,7 +199,7 @@ test(
   withEnv(async () => {
     const h = harness();
     try {
-      const out = h.create(
+      const out = await h.create(
         { provider: "claude", model: "claude-opus-5-5", featureValues: { fast: true, shared: "caller", mine: 1 }, title: "x" },
         { VS_PROFILE: "Worker - Opus" },
       );
@@ -215,12 +215,12 @@ test(
   withEnv(async () => {
     const h = harness();
     try {
-      const toAgy = h.create({ provider: "claude", model: "claude-opus-5-5", modeId: "bypassPermissions", title: "x" }, { VS_PROFILE: "Worker - Gemini" });
+      const toAgy = await h.create({ provider: "claude", model: "claude-opus-5-5", modeId: "bypassPermissions", title: "x" }, { VS_PROFILE: "Worker - Gemini" });
       assert.equal(toAgy.config.provider, "antigravity-cli");
       assert.equal(toAgy.config.featureValues?.approvalPolicy, "skip");
       assert.equal(toAgy.config.modeId, "accept-edits", "caller's claude mode is dropped on a provider swap");
 
-      const fromAgy = h.create({ provider: "antigravity-cli", model: "gemini-3.8-pro", title: "x" }, { VS_PROFILE: "Worker - Codex" });
+      const fromAgy = await h.create({ provider: "antigravity-cli", model: "gemini-3.8-pro", title: "x" }, { VS_PROFILE: "Worker - Codex" });
       assert.equal(fromAgy.config.provider, "codex");
       assert.equal(fromAgy.config.featureValues?.approvalPolicy, undefined);
       assert.equal(fromAgy.config.modeId, "full-access");
@@ -235,7 +235,7 @@ test(
   withEnv(async ({ vsHome }) => {
     const h = harness();
     try {
-      const out = h.create(
+      const out = await h.create(
         { provider: "claude", model: "claude-sonnet-5-5", modeId: "default", title: "one-off" },
         { VS_PROFILE: "Worker - Opus", VS_PROFILE_OVERRIDE: "1" },
       );
@@ -375,7 +375,7 @@ test(
   withEnv(async () => {
     const h = harness();
     try {
-      const reviewer = h.create({
+      const reviewer = await h.create({
         provider: "antigravity-cli",
         model: "gemini-3.8-pro",
         title: "Bug4 · review batch 3",

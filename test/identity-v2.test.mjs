@@ -312,7 +312,7 @@ test("Done-when #2: Spawn validation handles no team, wrong team, unknown lane +
           role: "worker",
         },
       };
-      beforeCreate({ request: reqNoTeam });
+      await beforeCreate({ request: reqNoTeam });
       assert.equal(reqNoTeam.labels.team, "site");
       assert.equal(reqNoTeam.labels.lane, "site-polish");
       assert.equal(reqNoTeam.labels.role, "worker");
@@ -331,7 +331,7 @@ test("Done-when #2: Spawn validation handles no team, wrong team, unknown lane +
           role: "worker",
         },
       };
-      beforeCreate({ request: reqWrongTeam });
+      await beforeCreate({ request: reqWrongTeam });
       assert.equal(reqWrongTeam.labels.team, "site");
       assert.equal(reqWrongTeam.labels.lane, "site-polish");
 

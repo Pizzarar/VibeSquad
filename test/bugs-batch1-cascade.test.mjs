@@ -236,7 +236,7 @@ test("0b: start-brainstorm for bug-chaser from the VibeSquad folder embeds bug-c
       on: () => () => {},
     });
     const request = { config: { ...(req.config ?? {}), cwd: briefRoot.replace(/repo$/, "VibeSquad") }, env: req.env, initialPrompt: req.initialPrompt, prompt: req.initialPrompt };
-    const out = before.get("agent.create")({ request }) ?? request;
+    const out = (await before.get("agent.create")({ request })) ?? request;
     const everything = `${out.config.systemPrompt ?? ""}\n${req.initialPrompt ?? ""}`;
     // VS inlines the lane brief (read from the VibeSquad repo's docs/brainstorm) and the hook adds no second one.
     assert.match(everything, /--- BEGIN docs\/brainstorm\/bug-chaser\.md ---/);

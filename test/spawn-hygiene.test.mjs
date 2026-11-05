@@ -15,7 +15,7 @@ test("block 1: R1-R7 rules appear once when profile notes repeat them", () => {
   assert.ok(!/Roster:/.test(composed));
 });
 
-test("block 1: bold-style rules in notes are deduped too", () => {
+test("block 1: bold-style rules in notes are deduped too", async () => {
   const out = dedupeNotesAgainst("- **R1 (Search/Read):** x\nkeep me", EVERYONE_LAYER);
   assert.equal(out, "keep me");
 });
@@ -47,9 +47,9 @@ async function withBriefEnv(fn) {
     const before = new Map();
     const server = { before: (n, f) => (before.set(n, f), () => {}), on: () => () => {} };
     createPlugin({ startWatcher: false, briefRoot, setLabels: async () => {}, archiveAgent: async () => {} })(server);
-    const spawn = (req) => {
+    const spawn = async (req) => {
       const r = { config: { cwd: "/projects/VibeSquad/.worktrees/x", ...req.config }, ...req };
-      const out = before.get("agent.create")({ request: r }) ?? r;
+      const out = (await before.get("agent.create")({ request: r })) ?? r;
       return String(out.config.systemPrompt ?? "");
     };
     const log = () => {
@@ -64,15 +64,15 @@ async function withBriefEnv(fn) {
 }
 
 test("block 2: lane label (or VS_LANE env) picks the brief; cwd never does", () =>
-  withBriefEnv(({ spawn, log }) => {
-    const byLabel = spawn({ labels: { role: "brainstorm", team: "vibesquad", lane: "token-checker" } });
+  withBriefEnv(async ({ spawn, log }) => {
+    const byLabel = await spawn({ labels: { role: "brainstorm", team: "vibesquad", lane: "token-checker" } });
     assert.ok(byLabel.includes("token-checker-marker") && !byLabel.includes("vibesquad-marker"));
     assert.match(log(), /brief-injected: lane=token-checker/);
 
-    const byEnv = spawn({ env: { VS_ROLE: "brainstorm", VS_LANE: "token-checker" } });
+    const byEnv = await spawn({ env: { VS_ROLE: "brainstorm", VS_LANE: "token-checker" } });
     assert.ok(byEnv.includes("token-checker-marker"));
 
-    const unknown = spawn({ labels: { role: "brainstorm" } });
+    const unknown = await spawn({ labels: { role: "brainstorm" } });
     assert.ok(!unknown.includes("--- BEGIN docs/brainstorm/"), "no lane -> no brief, even from a vibesquad worktree cwd");
   }));
 
@@ -312,10 +312,10 @@ test("review 2: connect() rejecting fails closed (nothing spawned)", async () =>
 });
 
 test("review 3: a VS-inlined brief (VS_BRIEF_INLINE) is not injected again by the hook; others still get it", () =>
-  withBriefEnv(({ spawn }) => {
-    const inlined = spawn({ env: { VS_ROLE: "brainstorm", VS_LANE: "token-checker", VS_TEAM: "vibesquad", VS_BRIEF_INLINE: "1" } });
+  withBriefEnv(async ({ spawn }) => {
+    const inlined = await spawn({ env: { VS_ROLE: "brainstorm", VS_LANE: "token-checker", VS_TEAM: "vibesquad", VS_BRIEF_INLINE: "1" } });
     assert.ok(!inlined.includes("--- BEGIN docs/brainstorm/"), "no double brief");
-    const other = spawn({ env: { VS_ROLE: "brainstorm", VS_LANE: "token-checker", VS_TEAM: "vibesquad" } });
+    const other = await spawn({ env: { VS_ROLE: "brainstorm", VS_LANE: "token-checker", VS_TEAM: "vibesquad" } });
     assert.ok(other.includes("token-checker-marker"));
   }));
 
