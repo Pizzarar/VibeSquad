@@ -2400,36 +2400,74 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
     }
 
+    /** Clear a lead's pending re-check timer (so a fresh, possibly shorter delay can be set). */
+    function clearWakeRecheck(leadId: string) {
+      const t = deferredWakeTimers.get(leadId);
+      if (t) {
+        deferredWakeTimers.delete(leadId);
+        clearTimeout(t);
+        timers.delete(t);
+      }
+    }
+
     /** Schedule a single deferred re-check for a lead (cooldown or running-lead hold). */
     function scheduleWakeRecheck(paseo: Paseo, leadId: string, delay: number) {
       if (deferredWakeTimers.has(leadId)) return;
       const t = later(() => {
         deferredWakeTimers.delete(leadId);
-        void flushWake(paseo, leadId);
+        // recheck=true: the timer only fires once and never re-schedules on a still-running lead.
+        void flushWake(paseo, leadId, true);
       }, delay);
       deferredWakeTimers.set(leadId, t);
     }
 
-    async function flushWake(paseo: Paseo, leadId: string) {
+    async function flushWake(paseo: Paseo, leadId: string, recheck = false) {
       if (flushingLeads.has(leadId)) return;
       if (!pendingWake.get(leadId)?.length) return;
       flushingLeads.add(leadId);
       const cooldownMs = deps.leadWakeCooldownMs ?? 3000;
       let tookQueue = false;
       try {
+        // A fresh flushWake invalidates any pending re-check timer so a shorter delay
+        // (e.g. the lead just went idle) isn't blocked by a longer pending one.
+        clearWakeRecheck(leadId);
+
         // Re-verify the Lead's live snapshot right before sending.
         const liveLead = await snap(paseo, leadId);
-        // Bail (keep the queue) when the plugin is shutting down or the Lead is gone
-        // (null snapshot / archived / closed): never send into a vanished agent.
-        if (lifetime.signal.aborted || !liveLead || liveLead.archivedAt || liveLead.status === "closed") {
+        // Shutting down: keep the queue, nothing more to do.
+        if (lifetime.signal.aborted) return;
+        // Vanished agent: keep the queue (never send on a null snapshot).
+        if (!liveLead) return;
+
+        // Archived/closed lead: discard its held wakeups (the lead is gone).
+        if (liveLead.archivedAt || liveLead.status === "closed") {
+          pendingWake.delete(leadId);
+          lastWakeAt.delete(leadId);
           return;
         }
-        // Mid-turn: hold and re-check once the cooldown window passes, so entries never
-        // strand if turn_ended already fired before this re-check saw "running".
+
+        // No longer a lead (e.g. retired): don't send to it; re-route its held wakeups
+        // through the normal queueWake/dispatchWakes path to the current lead.
+        if (effectiveAgentRole(liveLead) !== "lead") {
+          const entries = pendingWake.get(leadId) ?? [];
+          if (entries.length) {
+            pendingWake.delete(leadId);
+            lastWakeAt.delete(leadId);
+            const where = teamOf(liveLead.labels, liveLead.cwd);
+            if (where) {
+              for (const entry of entries) queueWake(where.team, entry);
+            }
+          }
+          return;
+        }
+
+        // Mid-turn: hold. At most one re-check per hold — turn_ended handles normal
+        // completion, so a lead stuck in "running" is not snap()'d every cooldown forever.
         if (liveLead.status && liveLead.status !== "idle") {
-          scheduleWakeRecheck(paseo, leadId, cooldownMs);
+          if (!recheck) scheduleWakeRecheck(paseo, leadId, cooldownMs);
           return;
         }
+
         // Coalesce/defer wakeups within the cooldown window of the last wake sent or
         // turn_started (the notifyOnFinish double-wake case). A normal post-turn flush
         // is NOT penalized: turn_ended does not update lastWakeAt.

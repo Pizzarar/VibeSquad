@@ -952,3 +952,60 @@ test(
     }
   }),
 );
+
+test(
+  "Stage 8d: a retired lead's held wakeups are re-routed to the current lead, never sent to the retired one",
+  withEnv(async ({ briefRoot }) => {
+    const lead2 = {
+      id: "lead-2",
+      title: "★ Fea2 · phase two",
+      cwd: CWD,
+      status: "idle",
+      labels: { team: "vibesquad", lane: "feat-alpha", role: "lead", ord: "2" },
+    };
+    const former = {
+      id: "lead-1",
+      title: "(old) Fea1 · initial setup",
+      cwd: CWD,
+      status: "idle",
+      labels: { team: "vibesquad", lane: "feat-alpha", role: "former-lead", ord: "1" },
+    };
+    const agents = new Map<string, any>([
+      ["lead-2", lead2],
+      ["lead-1", former],
+    ]);
+    // While the lead is "running" (held), it gets retired and a new lead takes over.
+    let snapStatus: string | null | undefined = "running";
+    const h = harness(agents, {
+      briefRoot,
+      leadWakeCooldownMs: 100,
+      snapStatusOverride: (id) => (id === "lead-2" ? snapStatus : undefined),
+    });
+    const wakeTo = (id: string) => h.sent.filter((s) => s.to === id && s.text.includes("New team log event")).length;
+    try {
+      // Queue a relay `done` entry into lead-2's pendingWake, held because snap reports "running".
+      await h.onTurnEnded(former, { kind: "completed" });
+      await wait(40); // dispatchWakes -> flushWake holds (running) and schedules one re-check
+      assert.equal(wakeTo("lead-2"), 0, "held entry is not yet sent");
+
+      // lead-2 is retired; a new lead-3 takes its place.
+      lead2.labels.role = "former-lead";
+      agents.set("lead-3", {
+        id: "lead-3",
+        title: "★ Fea3 · phase three",
+        cwd: CWD,
+        status: "idle",
+        labels: { team: "vibesquad", lane: "feat-alpha", role: "lead", ord: "3" },
+      });
+      snapStatus = undefined;
+
+      // The re-check fires: flushWake sees a retired lead and re-routes to lead-3.
+      await wait(300); // re-check (100) + re-dispatch debounce (20) + settle
+
+      assert.equal(wakeTo("lead-2"), 0, "never sent to the retired lead");
+      assert.equal(wakeTo("lead-3"), 1, "held entry re-routed to the current lead");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
