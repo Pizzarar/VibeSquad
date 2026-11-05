@@ -64,7 +64,7 @@ const RailRow = memo(
         title={`${a.title ?? a.id}${m.attention ? ` · ${m.attention.reason}` : ""}`}
         {...clickable(() => selectAgent(a.id))}
       >
-        <Avatar id={a.id} provider={a.provider} agentType={m.agentType} variant={leadVariant(m)} size={28} />
+        <Avatar id={a.id} provider={a.provider} agentType={m.agentType} variant={leadVariant(m)} size={32} />
         <span className="rcol">
           <span className="rname">
             {m.kind === "lead" ? "★ " : ""}

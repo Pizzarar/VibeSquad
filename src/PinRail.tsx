@@ -43,7 +43,7 @@ const RailTile = memo(function RailTile(props: { pin: Pin; onPick: (pin: Pin) =>
       title={bs ? `Open ${pin.lane.name}` : `${pin.lane.name}: no session · click to start a fresh Brainstorm`}
       onClick={() => onPick(pin)}
     >
-      <Avatar id={bs ? bs.agent.id : `bs-empty-${pin.squad.id}-${pin.lane.id}`} provider={bs?.agent.provider ?? "claude"} agentType="brainstorm" size={28} />
+      <Avatar id={bs ? bs.agent.id : `bs-empty-${pin.squad.id}-${pin.lane.id}`} provider={bs?.agent.provider ?? "claude"} agentType="brainstorm" size={32} />
       <span className="pin-rail-col">
         <span className="pin-rail-name">
           <PinDot pin={pin} />

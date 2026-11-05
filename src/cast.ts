@@ -5,7 +5,8 @@ import type { AgentType } from "./teams";
 
 export const CAST_CELL = 32;
 export const CAST_VARIANTS = 4;
-export const CAST_URL = "/cast.png";
+// Respect the Vite base (remote builds use a relative or sub-path base); plain node has no import.meta.env.
+export const CAST_URL = `${(import.meta as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/"}cast.png`;
 
 /** Sheet row order, top to bottom. */
 export const CAST_ROWS: AgentType[] = [

@@ -1351,7 +1351,7 @@ export function DrawerHeader({
         {createPortal(
           <>
       <div className="drawer-head-compact" data-testid="drawer-head-compact">
-        <Avatar id={agent.id} provider={agent.provider} agentType={agentType} variant={leadVariant(agent)} size={24} />
+        <Avatar id={agent.id} provider={agent.provider} agentType={agentType} variant={leadVariant(agent)} size={32} />
         <span className="drawer-head-compact-title">
           <StatusDot agent={agent} /> <AgentTitleEdit agent={agent}>{agent.title ?? agent.id.slice(0, 8)}</AgentTitleEdit>
         </span>

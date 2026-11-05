@@ -263,13 +263,13 @@ export function FiveLeads() {
     <main className="sheet five-leads">
       <div className="five-row">
         {FIVE_LEADS.map((l, i) => (
-          <Avatar key={l.id} id={l.id} provider={l.provider} agentType="lead" variant={i} size={28} />
+          <Avatar key={l.id} id={l.id} provider={l.provider} agentType="lead" variant={i} size={32} />
         ))}
       </div>
       <div className="five-row labelled">
         {FIVE_LEADS.map((l, i) => (
           <div key={l.id} className="five-cell">
-            <Avatar id={l.id} provider={l.provider} agentType="lead" variant={i} size={28} />
+            <Avatar id={l.id} provider={l.provider} agentType="lead" variant={i} size={32} />
             <span>{l.lane}</span>
           </div>
         ))}

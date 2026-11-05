@@ -709,7 +709,7 @@ function ArchRow({ m }: { m: Member }) {
   const paneCls = usePaneClass(m.agent.id);
   return (
     <div className={`arch-row ${paneCls}`}>
-      <Avatar id={m.agent.id} provider={m.agent.provider} agentType={m.agentType} variant={leadVariant(m)} size={24} />
+      <Avatar id={m.agent.id} provider={m.agent.provider} agentType={m.agentType} variant={leadVariant(m)} size={32} />
       <span className="row-name">{cleanTitle(m.agent.title) || m.agent.id.slice(0, 8)}</span>
       <span className="role-tag">{AGENT_TYPE_LABEL[m.agentType]}</span>
       <span className={`status-pill ${m.agent.status}`}>{m.agent.status}</span>

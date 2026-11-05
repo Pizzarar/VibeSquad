@@ -112,8 +112,10 @@ export function Avatar({
   const p = providerSpec(provider, providerLabel);
   const tag = String((hash(id) % 90) + 10);
   const retired = agentType === "retired-lead";
-  const scale = size >= CAST_CELL ? Math.floor(size / CAST_CELL) : size / CAST_CELL;
-  const cell = CAST_CELL * scale;
+  // Snap to 16 (half) or a whole multiple of 32 so the art never drops pixel rows or columns.
+  const snapped = size < 24 ? 16 : Math.max(CAST_CELL, Math.round(size / CAST_CELL) * CAST_CELL);
+  const scale = snapped / CAST_CELL;
+  const cell = snapped;
   const { x, y } = castCell(id, agentType, variant);
   const roleLabel = agentType === "brainstorm" ? "Brainstorm" : agentType;
   const ring = castRing();
@@ -121,7 +123,7 @@ export function Avatar({
   return (
     <span
       className={`avatar type-${agentType} prov-${p.key} ${retired ? "is-retired" : ""} ${ring ? "has-ring" : "no-ring"}`}
-      style={{ width: size, height: size, "--prov": p.color, "--prov-dim": p.dim } as CSSProperties}
+      style={{ width: snapped, height: snapped, "--prov": p.color, "--prov-dim": p.dim } as CSSProperties}
       title={`${roleLabel} · ${p.name} (#${tag})`}
     >
       <span
