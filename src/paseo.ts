@@ -13,6 +13,7 @@ import { applyDaemonClientPassword, fetchLocalDaemonPassword, readClientAuthFail
 import { remoteDaemonClient } from "./paseoRemote";
 import { isRemote } from "./remoteSession";
 import { perfRecord, perfSendBegin, perfSendResolved } from "./perf";
+import { addPending, failPending, retryPending } from "./pendingSend";
 
 declare const __PASEO_SERVER_ID__: string;
 export const SERVER_ID = __PASEO_SERVER_ID__;
@@ -158,6 +159,19 @@ export async function stopAgent(agentId: string): Promise<void> {
   await daemonClient.cancelAgent(agentId);
 }
 
+type SendArgs = { images?: Array<{ data: string; mimeType: string }>; opts?: { activeTurnBehavior?: ActiveTurnBehavior } };
+const sendArgs = new Map<string, SendArgs>();
+
+async function deliver(agentId: string, text: string, args: SendArgs): Promise<void> {
+  const sendOpts = { activeTurnBehavior: "steer" as ActiveTurnBehavior, ...args.opts };
+  const lb = (state.agents.get(agentId)?.labels ?? {}) as Record<string, string>;
+  perfSendBegin(agentId, lb.team, lb.lane);
+  if (args.images?.length) await daemonClient.sendAgentMessage(agentId, text, { ...sendOpts, images: args.images });
+  else await daemonClient.sendAgentMessage(agentId, text, sendOpts);
+  perfSendResolved(agentId);
+}
+
+/** Send with an optimistic "pending" bubble (src/pendingSend.ts); a rejected send keeps the text as a failed bubble and rethrows. */
 export async function sendMessage(
   agentId: string,
   text: string,
@@ -165,16 +179,25 @@ export async function sendMessage(
   opts?: { activeTurnBehavior?: ActiveTurnBehavior },
 ): Promise<void> {
   if (DEMO) return;
-  const sendOpts = { activeTurnBehavior: "steer" as ActiveTurnBehavior, ...opts };
-  const lb = (state.agents.get(agentId)?.labels ?? {}) as Record<string, string>;
-  perfSendBegin(agentId, lb.team, lb.lane);
-  if (images?.length) {
-    await daemonClient.sendAgentMessage(agentId, text, { ...sendOpts, images });
-    perfSendResolved(agentId);
-    return;
+  const id = addPending(agentId, text);
+  const args = { images, opts };
+  sendArgs.set(id, args);
+  try {
+    await deliver(agentId, text, args);
+  } catch (e) {
+    failPending(id, e instanceof Error ? e.message : String(e));
+    throw e;
   }
-  await daemonClient.sendAgentMessage(agentId, text, sendOpts);
-  perfSendResolved(agentId);
+}
+
+export async function retrySend(id: string): Promise<void> {
+  const p = retryPending(id);
+  if (!p) return;
+  try {
+    await deliver(p.agentId, p.text, sendArgs.get(id) ?? {});
+  } catch (e) {
+    failPending(id, e instanceof Error ? e.message : String(e));
+  }
 }
 
 export async function archiveAgent(agentId: string): Promise<{ archivedAt: string }> {

@@ -1004,6 +1004,19 @@ code {
   max-width: 88%;
 }
 
+/* Optimistic send bubbles (src/pendingSend.ts) */
+.tl-user-pending {
+  opacity: 0.6;
+}
+
+.tl-user-failed {
+  border-color: var(--hot-pink);
+}
+
+.tl-user-failed [role="alert"] {
+  color: var(--hot-pink);
+}
+
 .tl-assistant {
   padding: 2px 0;
 }
