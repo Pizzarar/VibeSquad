@@ -1234,6 +1234,7 @@ code {
 .def-badge b { color: var(--muted); font-weight: normal; margin-right: 3px; }
 .preview { border: 1px dashed var(--line); padding: 8px 10px; margin-bottom: 10px; }
 .preview-title { color: var(--cyan); font-size: 14px; margin: 2px 0; word-break: break-word; }
+.qr-box { width: 148px; height: 148px; flex: none; background: #fff; padding: 4px; border: 2px solid var(--cyan); }
 .pills { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
 .label-pill { border: 1px solid var(--line); background: var(--panel-alt); padding: 1px 6px; font-size: 11px; }
 .check { display: flex; gap: 6px; align-items: center; margin: 4px 0 8px; }

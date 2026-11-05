@@ -448,7 +448,6 @@ export function PairDeviceModal({ onClose }: { onClose: () => void }) {
                   <div
                     className="qr-box"
                     data-testid="paseo-offer-qr"
-                    style={{ width: 148, height: 148, flex: "none", background: "#fff", padding: 4, border: "2px solid var(--cyan)" }}
                     dangerouslySetInnerHTML={{ __html: paseoOffer.qrSvg }}
                   />
                   <div className="muted small" style={{ minWidth: 0, flex: 1 }}>

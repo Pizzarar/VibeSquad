@@ -1312,6 +1312,10 @@ async function commandWho(flags) {
 
 async function commandWhoami(flags) {
   const agentId = String(flags.agent ?? process.env.PASEO_AGENT_ID ?? "").trim();
+  // `--agent` names a specific target: resolve it strictly from that agent's own record.
+  // The caller's VS_LANE / VS_TEAM / VS_ROLE / VS_ORD env describe the *caller*, and must not
+  // leak onto a different agent's identity (e.g. a worker's VS_ROLE=worker overriding a lead).
+  const explicitTarget = typeof flags.agent === "string" && flags.agent.trim() !== "";
   let record = agentId ? readAgentRecord(agentId) : null;
   if (!record && agentId) record = inspectAgentViaDaemon(agentId);
 
@@ -1319,7 +1323,7 @@ async function commandWhoami(flags) {
   const cwd = record?.cwd || process.cwd();
 
   const pick = (flagName, envName) => {
-    const value = flags[flagName] ?? process.env[envName];
+    const value = flags[flagName] ?? (explicitTarget ? "" : process.env[envName]);
     return typeof value === "string" && value.trim() ? value.trim() : "";
   };
 

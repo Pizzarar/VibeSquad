@@ -110,7 +110,7 @@ export function resolveManagedWorktreeRoot(env = process.env) {
 
 /**
  * The managed sanctuary path for a repo + branch/unit, e.g.
- * `%LOCALAPPDATA%\VibeSquad\worktrees\Escape-From-Idle\bug-chaser-unit-1`.
+ * `%LOCALAPPDATA%\VibeSquad\worktrees\main-project\bug-chaser-unit-1`.
  */
 export function resolveManagedWorktreePath(repoRootOrName, branchOrUnit, env = process.env) {
   const repoName = safeSlug(basename(String(repoRootOrName)));
