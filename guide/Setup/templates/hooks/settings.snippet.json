@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<PYTHON> -I \"<HOME>/.claude/hooks/context_guard.py\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}
