@@ -1,14 +1,8 @@
 // unknown: a shadow silhouette with glowing eyes. Same bust skeleton as everyone else, filled with shadow and lit by a
 // cool rim on the upper left so it separates from a dark background. Hood + grin, spiky hair, floating "?", tall collar.
-import { compose, dots, ellipse, paint, run, sym } from "./lib.mjs";
+import { compose, dots, ellipse, rim, run, sym } from "./lib.mjs";
 import { BODY, EARS, HEAD } from "./parts.mjs";
 
-// Rim light i on the top/left edge pixels of a layer.
-const rim = (layer) => {
-  const on = (i, j) => j >= 0 && j < layer.g.length && i >= 0 && i < layer.g[0].length && layer.g[j][i] !== ".";
-  const lx = layer.x ?? 0, ly = layer.y ?? 0;
-  return paint(layer, (X, Y) => (!on(X - lx - 1, Y - ly) || !on(X - lx, Y - ly - 1) ? "i" : null));
-};
 const SHADOW = { s: "#352b60", S: "#241d44", n: "#241d44", c: "#2a2250", C: "#1a1530", i: "#5a4a9a", I: "#3e3270" };
 
 const HOOD = { ...ellipse(16, 13.5, 12.5, 11.5, "c"), ol: true };
@@ -28,8 +22,8 @@ const COLLAR = [
   { x: 3, y: 15, ol: true, g: COLLAR_L },
   { x: 24, y: 15, ol: true, g: COLLAR_L.map((r) => [...r].reverse().join("")) },
 ];
-// Floating question mark, glowing.
-const QMARK = { x: 24, y: 1, ol: true, g: [".lll.", "l...l", "....l", "..ll.", "..l..", ".....", "..l.."] };
+// Floating question mark, glowing; kept inside the neon ring.
+const QMARK = { x: 21, y: 3, ol: true, g: [".ll.", "l..l", "..l.", ".l..", "....", ".l.."] };
 
 // Glowing eyes: l glow, L hot core.
 const EYES = {
@@ -68,7 +62,7 @@ export const variants = [
     // Tall cape collar, narrow green eyes, faint smile.
     name: "collar",
     pal: { ...SHADOW, l: "#4df7a6", L: "#e0fff0" },
-    grid: () => compose([...body, ...head, ...COLLAR, ...COLLAR.map(rim), dots(...EYES.narrow, SMILE)], "unknown/collar"),
+    grid: () => compose([...body, ...head, ...COLLAR, ...COLLAR.map((l) => rim(l)), dots(...EYES.narrow, SMILE)], "unknown/collar"),
   },
 ];
 

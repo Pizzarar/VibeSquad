@@ -107,3 +107,10 @@ export function paint({ g, x = 0, y = 0 }, fn) {
   );
   return { g: c.map((r) => r.join("")), x: 0, y: 0 };
 }
+
+// Rim light: repaint the top/left edge pixels of a layer with `ch` (light from the upper left).
+export function rim(layer, ch = "i") {
+  const on = (i, j) => j >= 0 && j < layer.g.length && i >= 0 && i < layer.g[0].length && layer.g[j][i] !== ".";
+  const lx = layer.x ?? 0, ly = layer.y ?? 0;
+  return paint(layer, (X, Y) => (!on(X - lx - 1, Y - ly) || !on(X - lx, Y - ly - 1) ? ch : null));
+}

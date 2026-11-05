@@ -1,5 +1,5 @@
 // mechanical: shop mechanic. Ball cap (bill dips over the brows) + big mustache on every variant, zip coveralls with a
-// name patch; wrench, goggles on the cap + grease smudge, trucker cap + screwdriver, oil can.
+// name patch; wrench, goggles on the cap + grease smudge, trucker cap + screwdriver, blowtorch.
 import { compose, dots, run, sym, SKIN } from "./lib.mjs";
 import { BODY, EARS, FACE_SHADE, HEAD } from "./parts.mjs";
 
@@ -43,44 +43,48 @@ const ZIP = ["z", ...[24, 25, 26, 27, 28, 29, 30, 31].map((y) => [16, y])];
 const PATCH = ["w", ...run(6, 11, 26), ...run(6, 11, 27), ...run(6, 11, 28)];
 const PATCH_TEXT = ["t", [7, 27], [8, 27], [10, 27]];
 
+// Steel tools use v / V so they never pick up a variant's mustache colour.
 const WRENCH = { x: 23, y: 11, ol: true, g: [
-  "m...m.",
-  "mm.mm.",
-  ".mmm..",
-  "..m...",
-  "..mM..",
-  "..mM..",
-  "..mM..",
-  "..mM..",
+  "v...v.",
+  "vv.vv.",
+  ".vvv..",
+  "..v...",
+  "..vV..",
+  "..vV..",
+  "..vV..",
+  "..vV..",
   "sssss.",
   "sSssss",
   "ssss..",
 ] };
-const SCREWDRIVER = { x: 23, y: 10, ol: true, g: [
-  "..m...",
-  "..m...",
-  "..m...",
-  "..m...",
-  ".qqq..",
-  ".qQq..",
-  ".qQq..",
-  ".qqq..",
+const SCREWDRIVER = { x: 24, y: 13, ol: true, g: [
+  "..v...",
+  "..v...",
+  "..vV..",
+  "..vV..",
+  ".qqqq.",
+  ".qQqq.",
+  ".qQqq.",
+  ".qqqq.",
   "sssss.",
   "sSssss",
   "ssss..",
 ] };
-const OILCAN = { x: 21, y: 14, ol: true, g: [
-  "m.......",
-  ".m......",
-  "..m.....",
-  "...qqq..",
-  "..qqqqq.",
-  "..qQqqq.",
-  "..qqqqq.",
-  "..qqqqq.",
-  "..sssss.",
-  "..sSssss",
-  "..ssss..",
+// Blowtorch: cyan flame f with white core F, steel nozzle, red tank.
+const TORCH = { x: 23, y: 9, ol: true, g: [
+  "..f...",
+  ".fFf..",
+  ".fFf..",
+  "..f...",
+  "..vv..",
+  "..vV..",
+  ".qqqq.",
+  ".qQqq.",
+  ".qQqq.",
+  ".qqqq.",
+  "sssss.",
+  "sSssss",
+  "ssss..",
 ] };
 
 const base = (face, stache, cap, extra = []) => [
@@ -91,14 +95,14 @@ export const variants = [
   {
     // Teal cap with gear logo, brown walrus mustache, orange coveralls; wrench.
     name: "wrench",
-    pal: { ...SKIN.light, h: "#2fd3c0", H: "#16877b", b: "#2fd3c0", B: "#16877b", l: "#ffe14d", m: "#6b3b1e", M: "#4a2812",
+    pal: { v: "#e6e9f2", V: "#9aa0b8", ...SKIN.light, h: "#2fd3c0", H: "#16877b", b: "#2fd3c0", B: "#16877b", l: "#ffe14d", m: "#6b3b1e", M: "#4a2812",
       c: "#ff8a3d", C: "#b8551a", z: "#fff3c8", t: "#ff3d6e" },
     grid: () => compose(base([BROWS("m"), ...EYES(), NOSE, ["k", ...run(14, 17, 20)]], STACHE.walrus, [SEAMS, LOGO.gear], [WRENCH]), "mechanical/wrench"),
   },
   {
     // Yellow cap with goggles up, curly black handlebar, grease smudge, violet coveralls.
     name: "goggles",
-    pal: { ...SKIN.tan, h: "#ffc857", H: "#c98a2a", b: "#ffc857", B: "#c98a2a", g: "#5b6078", l: "#38f6ff", L: "#e6feff", j: "#2a2440",
+    pal: { v: "#e6e9f2", V: "#9aa0b8", ...SKIN.tan, h: "#ffc857", H: "#c98a2a", b: "#ffc857", B: "#c98a2a", g: "#5b6078", l: "#38f6ff", L: "#e6feff", j: "#2a2440",
       m: "#1d1830", M: "#0d0a18", c: "#8f5cff", C: "#5a34b8", z: "#d0c0ff", t: "#ff4fd8", x: "#5a4038" },
     grid: () => compose(base([BROWS("m"), ...EYES(), NOSE, ["k", [14, 19], [15, 20], [16, 20], [17, 19]], ["x", [21, 16], [22, 16], [22, 17], [10, 18]]],
       STACHE.handlebar, [SEAMS], [GOGGLES]), "mechanical/goggles"),
@@ -106,17 +110,17 @@ export const variants = [
   {
     // Trucker cap (white front, pink bill) with wrench logo, grey walrus, mint coveralls; screwdriver.
     name: "trucker",
-    pal: { ...SKIN.deep, h: "#ff4fd8", H: "#b52a95", b: "#ff4fd8", B: "#b52a95", l: "#f6f3ff", L: "#ff4fd8", m: "#c9c6d4", M: "#8a8798",
+    pal: { v: "#e6e9f2", V: "#9aa0b8", ...SKIN.deep, h: "#ff4fd8", H: "#b52a95", b: "#ff4fd8", B: "#b52a95", l: "#f6f3ff", L: "#ff4fd8", m: "#c9c6d4", M: "#8a8798",
       c: "#4df7a6", C: "#22a86b", z: "#f6f3ff", t: "#1f4f5a", q: "#ffc857", Q: "#c98a2a" },
     grid: () => compose(base([BROWS("m"), ...EYES(), NOSE, ["k", ...run(14, 17, 20)]], STACHE.walrus,
       [MESH, TRUCKER, LOGO.wrench], [SCREWDRIVER]), "mechanical/trucker"),
   },
   {
-    // Cyan cap with star, bushy ginger mustache, gold coveralls; oil can.
-    name: "oilcan",
-    pal: { ...SKIN.brown, h: "#38c8ff", H: "#1f7fb0", b: "#38c8ff", B: "#1f7fb0", l: "#f6f3ff", m: "#ff8a3d", M: "#c25a1e",
-      c: "#ffc857", C: "#c98a2a", z: "#fff3c8", t: "#1f7fb0", q: "#ff3d6e", Q: "#ffb0c0" },
-    grid: () => compose(base([BROWS("m"), ...EYES(), NOSE, ["k", [14, 20], [15, 21], [16, 21], [17, 20]]], STACHE.bushy, [SEAMS, LOGO.star], [OILCAN]), "mechanical/oilcan"),
+    // Cyan cap with star, bushy ginger mustache, gold coveralls; blowtorch with a cyan flame.
+    name: "torch",
+    pal: { v: "#e6e9f2", V: "#9aa0b8", ...SKIN.brown, h: "#38c8ff", H: "#1f7fb0", b: "#38c8ff", B: "#1f7fb0", l: "#f6f3ff", m: "#ff8a3d", M: "#c25a1e",
+      c: "#ffc857", C: "#c98a2a", z: "#fff3c8", t: "#1f7fb0", q: "#ff3d6e", Q: "#ffb0c0", f: "#38f6ff", F: "#e6feff" },
+    grid: () => compose(base([BROWS("m"), ...EYES(), NOSE, ["k", [14, 20], [15, 21], [16, 21], [17, 20]]], STACHE.bushy, [SEAMS, LOGO.star], [TORCH]), "mechanical/torch"),
   },
 ];
 

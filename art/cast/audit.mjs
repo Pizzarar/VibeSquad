@@ -1,11 +1,11 @@
 // audit: stealth operative. Big glowing green goggles on every variant (bright lens + pale glint + green glow spill),
 // dark tactical gear with a chest strap; hood + mask, balaclava + visor, headset + slick hair, hood + scarf.
-import { compose, dots, ellipse, run, sym, SKIN } from "./lib.mjs";
+import { compose, dots, ellipse, rim, run, sym, SKIN } from "./lib.mjs";
 import { BODY, EARS, FACE_SHADE, HEAD } from "./parts.mjs";
 
 const HOOD = { ...ellipse(16, 13.5, 12.5, 11.5, "h"), ol: true };
-// Hood rim i catching light on the viewer's left.
-const HOOD_RIM = ["i", [6, 6], [5, 7], [4, 8], [4, 9], [3, 10], [3, 11], [3, 12], [3, 13], [3, 14], [8, 4], [7, 5], [10, 3], [11, 3]];
+// Slate rim i catching light on the hood's top/left edge (same treatment as unknown).
+const HOOD_RIM = rim(HOOD);
 // Hood front edge framing the face (drawn over the head).
 const HOOD_FRONT = { x: 7, y: 7, ol: true, g: sym(["hhhhhhhhh", "hhhhhhhhh", "Hhhhhhhhh", "HH.......", "H........", "H........"]) };
 
@@ -28,24 +28,23 @@ const STRAP_BODY = ["j", [21, 23], [20, 24], [19, 25], [18, 26], [17, 27], [16, 
 const BUCKLE = ["y", [17, 26], [18, 26], [17, 27], [18, 28]];
 
 const base = (inside, front, extra = []) => [
-  BODY, dots(STRAP_BODY, BUCKLE), HOOD, dots(HOOD_RIM), ...EARS, HEAD, dots(FACE_SHADE), ...inside, HOOD_FRONT, ...front, ...extra,
+  BODY, dots(STRAP_BODY, BUCKLE), HOOD, HOOD_RIM, ...EARS, HEAD, dots(FACE_SHADE), ...inside, HOOD_FRONT, ...front, ...extra,
 ];
 
 export const variants = [
   {
     // Indigo hood, charcoal mask, twin round green goggles.
     name: "hood",
-    pal: { ...SKIN.light, h: "#2f3a6a", H: "#1d2448", i: "#4f63a8", g: "#3a3e52", l: "#4df7a6", L: "#e0fff0", G: "#2a8a5e", j: "#5b6078",
+    pal: { ...SKIN.light, h: "#2f3a6a", H: "#1d2448", i: "#5a70b8", g: "#3a3e52", l: "#4df7a6", L: "#e0fff0", G: "#2a8a5e", j: "#5b6078",
       m: "#2a2838", M: "#1a1824", c: "#26304f", C: "#3a4870", y: "#ffc857" },
     grid: () => compose(base([MASK, dots(MASK_FOLD)], [STRAP, GOGGLES]), "audit/hood"),
   },
   {
-    // Full black balaclava, single wraparound green visor.
+    // Full black balaclava hood, single wraparound green visor.
     name: "visor",
-    pal: { s: "#36344c", S: "#24223a", n: "#24223a", h: "#36344c", H: "#1a1824", i: "#4a4766", g: "#3a3e52", l: "#4df7a6", L: "#e0fff0",
+    pal: { s: "#36344c", S: "#24223a", n: "#24223a", h: "#36344c", H: "#1a1824", i: "#5a6a9a", g: "#3a3e52", l: "#4df7a6", L: "#e0fff0",
       G: "#2a8a5e", j: "#5b6078", c: "#2a2440", C: "#4a3f6e", y: "#4df7a6" },
-    grid: () => compose([BODY, dots(STRAP_BODY, BUCKLE), ...EARS, HEAD, dots(FACE_SHADE), VISOR, dots(["G", [9, 15], [10, 15], [13, 15], [18, 15], [21, 15], [22, 15]]),
-      dots(["S", ...run(13, 18, 19)], ["i", [9, 9], [10, 8], [11, 8]])], "audit/visor"),
+    grid: () => compose(base([dots(["S", ...run(13, 18, 19)])], [VISOR, dots(["G", [9, 15], [10, 15], [13, 15], [18, 15], [21, 15], [22, 15]])]), "audit/visor"),
   },
   {
     // Slick dark hair, bare face with a smirk, goggles + headset mic.

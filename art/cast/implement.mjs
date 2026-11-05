@@ -77,24 +77,27 @@ const FIST = { x: 22, y: 19, ol: true, g: [
   "sssssss",
   "wwwwwws",
   "wwwwwww",
-  ".sssss.",
+  ".kkkkk.",
   ".sssss.",
 ] };
 const FIST_L = { ...FIST, x: 3, g: FIST.g.map((r) => [...r].reverse().join("")) };
 // Sledgehammer resting on the viewer's left shoulder (tails fly off the right).
-const HAMMER = { x: 1, y: 11, ol: true, g: [
-  "...mmmmmmm",
-  "...mmmmmmm",
-  "...MMMMMMM",
-  "......jj..",
-  "......jj..",
-  ".....jj...",
-  ".....jj...",
-  "....jj....",
-  "..sssss...",
-  "..sSssss..",
-  "..ssss....",
-].map((r) => [...r].reverse().join("")) };
+const HAMMER = { x: 0, y: 7, ol: true, g: [
+  "mmmmmmmm..",
+  "mWWmmmmm..",
+  "mWmmmmmm..",
+  "mmmmmmmm..",
+  "MMMMMMMM..",
+  "...jJ.....",
+  "...jJ.....",
+  "....jJ....",
+  "....jJ....",
+  ".....jJ...",
+  ".....jJ...",
+  "...sssss..",
+  "..ssssSs..",
+  "....ssss..",
+] };
 const BEARD = { x: 9, y: 17, ol: true, g: sym(["a......", "aa.....", "aaa....", ".aaaaaa", "..aaaaa", "...aaaa", ".....aa"], true) };
 
 const base = (hair, head, face, extra = []) => [...TANK, ...EARS, HEAD, dots(FACE_SHADE), ...face, ...(hair ? [hair] : []), ...head, ...extra];
@@ -117,7 +120,7 @@ export const variants = [
   {
     // Violet do-rag with gold dots, full black beard, cyan tank; sledgehammer on the shoulder.
     name: "hammer",
-    pal: { ...SKIN.deep, a: "#1d1830", b: "#8f5cff", B: "#5a34b8", d: "#ffc857", t: "#38c8ff", m: "#c9ccd8", M: "#8a8ea4", j: "#8a5a34" },
+    pal: { ...SKIN.deep, a: "#1d1830", b: "#8f5cff", B: "#5a34b8", d: "#ffc857", t: "#38c8ff", m: "#e6e9f2", M: "#9aa0b8", W: "#ffffff", j: "#f0b870", J: "#c0803c" },
     grid: () => compose(base(null, [DORAG, TAILS, dots(DORAG_DOTS)],
       [dots(BROWS, EYES, ["w", [11, 13], [19, 13]], NOSE)], [BEARD, dots(["w", ...run(13, 18, 19)], ["k", ...run(13, 18, 20)]), HAMMER]), "implement/hammer"),
   },
