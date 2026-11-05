@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Modal } from "./TeamActions";
 import { daemonClient, reconnectWithDaemonPassword, usePaseo } from "./paseo";
 import { submitDaemonPassword } from "./paseoDaemonAuth";
-import { clearSession, isLocalHost, isRemote } from "./remoteSession";
+import { clearSession, isAndroidUserAgent, isLocalHost, isRemote } from "./remoteSession";
 import { getStaleBuild, loadUpdaterStatus, setStaleBuild, triggerUpdateInstall, useStaleBuild, useUpdaterStatus } from "./userName";
 import "./ResponsiveSmallWindow.css";
 
@@ -402,6 +402,10 @@ export function updateLabel(state: UpdateCheck["state"], version: string, availa
 }
 export async function checkForUpdates(): Promise<boolean> {
   await refreshStaleFromHealth();
+  if (isAndroidUserAgent()) {
+    await loadUpdaterStatus();
+    return true;
+  }
   let sawDesktopEndpoint = false;
   try {
     const r = await fetch("/__desktop/updater/check", { method: "POST", cache: "no-store" });

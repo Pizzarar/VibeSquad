@@ -1,6 +1,6 @@
 {
   "laneId": "android-app",
-  "updatedAt": "2026-11-05T03:58:00.000Z",
+  "updatedAt": "2026-11-05T04:14:44.702Z",
   "units": [
     {
       "id": "unit-and-a1",
@@ -88,7 +88,9 @@
         "test/android-apk-route.test.mjs"
       ],
       "doneCheck": "node --test test/android-apk-route.test.mjs test/android-pair.test.mjs",
-      "status": "todo"
+      "status": "done",
+      "branch": "unit-and-a6",
+      "commit": "3e5f581"
     }
   ]
 }

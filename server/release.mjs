@@ -52,6 +52,13 @@ export function syncVersionFiles(dir, newVersion) {
   tauriConf.version = newVersion;
   writeFileSync(tauriConfPath, JSON.stringify(tauriConf, null, 2) + "\n");
 
+  const tauriAndroidConfPath = join(dir, "src-tauri", "tauri.android.conf.json");
+  if (existsSync(tauriAndroidConfPath)) {
+    const tauriAndroidConf = JSON.parse(readFileSync(tauriAndroidConfPath, "utf8"));
+    tauriAndroidConf.version = newVersion;
+    writeFileSync(tauriAndroidConfPath, JSON.stringify(tauriAndroidConf, null, 2) + "\n");
+  }
+
   const cargoPath = join(dir, "src-tauri", "Cargo.toml");
   const cargoRaw = readFileSync(cargoPath, "utf8");
   const updatedCargo = cargoRaw.replace(/^(version\s*=\s*")[^"]+(")/m, `$1${newVersion}$2`);
@@ -109,6 +116,9 @@ export function buildLatestJson({ version, channel, signature, repo = DEFAULT_RE
       "windows-x86_64": {
         signature: String(signature || "").trim(),
         url: downloadUrl,
+      },
+      "android-aarch64": {
+        url: `https://github.com/${repo}/releases/download/${tag}/VibeSquad.apk`,
       },
     },
   };

@@ -1,5 +1,5 @@
 import { FIRST_RUN_DONE_KEY, FirstRunModal, fetchFirstRunStatus, type FirstRunStatus } from "./FirstRunModal";
-import { clearSession, isRemote } from "./remoteSession";
+import { clearSession, isAndroidUserAgent, isRemote } from "./remoteSession";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { ProviderQuotaView } from "./antigravity";
@@ -1857,7 +1857,7 @@ export function App() {
           {`⚠ Config warning: ${configWarnings.join(" · ")}`}
         </div>
       )}
-      {updaterStatus.updateAvailable && !isRemote() && !updaterStatus.dismissed && (
+      {updaterStatus.updateAvailable && (!isRemote() || isAndroidUserAgent()) && !updaterStatus.dismissed && (
         <div
           className="update-available-banner"
           data-testid="update-available-banner"
@@ -1874,7 +1874,7 @@ export function App() {
             gap: 12,
           }}
         >
-          <span>{`Update available (v${updaterStatus.availableVersion}) — restart?`}</span>
+          <span>{`Update available (v${updaterStatus.availableVersion}) — ${isAndroidUserAgent() ? "download APK?" : "restart?"}`}</span>
           <button
             type="button"
             className="btn small"
@@ -1882,7 +1882,7 @@ export function App() {
             style={{ background: "#05060d", color: "#00f0ff", borderColor: "#05060d" }}
             onClick={() => void triggerUpdateInstall()}
           >
-            Restart &amp; Update
+            {isAndroidUserAgent() ? "Download Update" : "Restart & Update"}
           </button>
           <button
             type="button"
