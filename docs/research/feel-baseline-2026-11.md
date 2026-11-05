@@ -97,7 +97,7 @@ Not time sinks (measured): switch team 62 ms; roster flush 0 to 30 ms; roster fe
 
 Window: daemon restarted clean 21:34:42Z, plugin reloaded 21:25Z; numbers are post-21:35Z (to ~21:54Z). Master `cf646cb`.
 
-**Scope gap (stated plainly):** the VS UI rows (send-to-first-token, open agent, switch team, cold load) were **not re-run**. They need the `vs_local` cookie, derived from `~/.vibesquad/local-token`, and the sandbox denied reading that file. The dev server from this worktree is up on :5180 but unused. The UI rows below keep their §1 baseline and are marked "not re-measured". The fix-C optimistic bubble therefore has no new number here. Native/CLI rows and plugin/daemon numbers are fresh.
+**Scope gap (stated plainly):** the VS UI rows (send-to-first-token, open agent, switch team, cold load) were **not re-run**. They need the `vs_local` cookie, derived from `~/.vibesquad/local-token`, and the sandbox denied reading that file. The UI rows below keep their §1 baseline and are marked "not measured: lane closed" (Aub closed the ADE lane on 2026-11-05; daemon work moved to the Own Daemon pin). To measure later: the `?perf=1` overlay ships in the normal build (`src/PerfOverlay.tsx`), so open VS with `?perf=1`, do each action 3 times and use the overlay's "copy" button. The fix-C optimistic bubble therefore has no new number here. Native/CLI rows and plugin/daemon numbers are fresh.
 
 ### Before/after
 
@@ -105,10 +105,10 @@ Window: daemon restarted clean 21:34:42Z, plugin reloaded 21:25Z; numbers are po
 |---|---|---|---|
 | Spawn (native CLI `agent run --no-wait`, Haiku, n=3) | 112 to 150 s to idle | create request 44.6 s, 13.4 s, 10.2 s (median 13.4 s); all 3 answered "ok", CLI returned immediately, no >60 s timeout | Improved ~9×. Remaining time is daemon `agent.create.request`. Plugin hooks are no longer the main part (see hooks). The 44.6 s first probe ran while another worker's create took 66.2 s (21:50:40Z), so the daemon was busy. VS-side spawn (MCP `create_agent`) not re-run; it goes through the same daemon request and the same hooks. |
 | Send RPC resolved (`paseo send --no-wait`, n=3) | 2.3, 5.0, 6.1 s (median 5.0 s) | 1.8, 3.3, 2.4 s (median 2.4 s); daemon `send_agent_message_request` n=5 slow, median 1.0 s, max 3.5 s (baseline median 1.9 s, max 6.2 s) | Better; native and VS share this RPC, so the remainder is daemon-side. |
-| Open agent (native `agent logs`, n=3) | 2.5 s | 2.6, 1.2, 0.75 s (median 1.2 s) | Native improved. VS open-agent not re-measured (baseline 4.3 s). Daemon `fetch_agent_timeline_request` still slow: n=9, median 31.4 s, max 51.6 s (baseline median 29.7 s, max 260 s), so any VS gap is daemon-side. |
-| Send to first token (VS) | 8.2 s | not re-measured | Unknown. |
-| Switch team | 62 ms | not re-measured | Was not a problem. |
-| Cold load | 3.83 s (dev server) | not re-measured | Unknown. |
+| Open agent (native `agent logs`, n=3) | 2.5 s | 2.6, 1.2, 0.75 s (median 1.2 s) | Native improved. VS open-agent not measured: lane closed (baseline 4.3 s). Daemon `fetch_agent_timeline_request` still slow: n=9, median 31.4 s, max 51.6 s (baseline median 29.7 s, max 260 s), so any VS gap is daemon-side. |
+| Send to first token (VS) | 8.2 s | not measured: lane closed | Unknown. |
+| Switch team | 62 ms | not measured: lane closed | Was not a problem. |
+| Cold load | 3.83 s (dev server) | not measured: lane closed | Unknown. |
 
 ### Hook timers (n is small: 6 real spawns since 21:35Z)
 
