@@ -108,10 +108,11 @@ export async function handleJanitorRun(
   const method = String(req?.method || "GET").toUpperCase();
   const ownedClient = !injectedClient && typeof createClient === "function" ? createClient() : null;
   const client = injectedClient ?? ownedClient;
+  const ownedBackend = getBackend(ownedClient);
 
   try {
-    if (ownedClient && typeof ownedClient.connect === "function") {
-      await ownedClient.connect().catch(() => {});
+    if (ownedClient && typeof ownedBackend.connect === "function") {
+      await ownedBackend.connect().catch(() => {});
     }
     const now = typeof injectedNow === "function" ? injectedNow() : (injectedNow ?? Date.now());
 
@@ -153,8 +154,8 @@ export async function handleJanitorRun(
     sendJson(res, 500, { ok: false, error: String(e?.message ?? e) });
     return true;
   } finally {
-    if (ownedClient && typeof ownedClient.close === "function") {
-      await ownedClient.close().catch(() => {});
+    if (ownedClient && typeof ownedBackend.close === "function") {
+      await ownedBackend.close().catch(() => {});
     }
   }
 }

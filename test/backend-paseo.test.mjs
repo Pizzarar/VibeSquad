@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BACKEND_METHODS, PaseoBackend, getBackend, getCliBackend } from "../server/backend/index.mjs";
+import { BACKEND_METHODS, PaseoBackend, getBackend, getCliBackend, hasCustomMockCli } from "../server/backend/index.mjs";
 
 function fakeClient() {
   const calls = [];
@@ -75,4 +75,45 @@ test("CLI backend returns null for an unsafe agent id without spawning", () => {
   const cli = getCliBackend();
   assert.equal(cli.runCli("/nonexistent-home", ["inspect", "bad id!", "--json"]), null);
   assert.equal(cli.runCli("/nonexistent-home", ["agent", "reload", "../x"]), null);
+});
+
+test("hasCustomMockCli: real Windows Paseo install paths are not a custom mock", () => {
+  const prev = process.env.PASEO_CLI;
+  const bs = String.fromCharCode(92); // backslash
+  const win = (...parts) => parts.join(bs);
+  try {
+    for (const p of [
+      win("C:", "Users", "x", "AppData", "Local", "Programs", "Paseo", "resources", "bin", "paseo.cmd"),
+      win("C:", "Users", "x", "AppData", "Local", "Programs", "Paseo", "resources", "bin", "paseo"),
+      "/home/x/Programs/Paseo/resources/bin/paseo",
+    ]) {
+      process.env.PASEO_CLI = p;
+      assert.equal(hasCustomMockCli(), false, p);
+    }
+    process.env.PASEO_CLI = win("C:", "tmp", "mock-paseo.cmd");
+    assert.equal(hasCustomMockCli(), true);
+  } finally {
+    if (prev === undefined) delete process.env.PASEO_CLI;
+    else process.env.PASEO_CLI = prev;
+  }
+});
+
+test("runWait goes through the backend without throwing", async () => {
+  const { runWait } = await import("../cli/vs.mjs");
+  const calls = [];
+  const out = await runWait({ waitForFinish: async (id, ms) => (calls.push([id, ms]), { status: "idle" }) }, "agent1", 2);
+  assert.deepEqual(calls, [["agent1", 2000]]);
+  assert.deepEqual(out, { code: 0, line: "agent1: idle" });
+});
+
+test("commandWait and enrichZeroTokenAgents use no stale `client` identifier", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../cli/vs.mjs", import.meta.url), "utf8");
+  for (const fn of ["async function commandWait(", "async function enrichZeroTokenAgents("]) {
+    const start = src.indexOf(fn);
+    assert.ok(start >= 0, fn);
+    const end = src.indexOf("\n}\n", start);
+    const body = src.slice(start, end);
+    assert.ok(!/\bclient\b/.test(body.replace(/\/\/.*$/gm, "")), `${fn} references client`);
+  }
 });
