@@ -439,6 +439,10 @@ code {
   letter-spacing: 0;
   -webkit-font-smoothing: antialiased;
   text-rendering: geometricPrecision;
+  text-shadow: none;
+  text-transform: none;
+  font-style: normal;
+  -webkit-text-stroke: 0;
   overflow: hidden;
   user-select: none;
 }
