@@ -1840,9 +1840,9 @@ function appendBulletsToSection(markdown, heading, bullets) {
   }
   let endIdx = headIdx + 1;
   while (endIdx < lines.length && !/^##\s+/.test(lines[endIdx].trim())) endIdx++;
-  // Remove placeholder "(none recorded yet)" if present in this section
+  // Remove placeholder "(none recorded yet)" or "None." if present in this section
   for (let i = endIdx - 1; i > headIdx; i--) {
-    if (/^[-*]\s+\(none recorded yet\)/i.test(lines[i].trim())) {
+    if (/^[-*]\s+\(?(?:none|nothing)(?: recorded)?(?: yet)?\)?\.?$/i.test(lines[i].trim())) {
       lines.splice(i, 1);
       endIdx--;
     }
@@ -1909,7 +1909,35 @@ function commandPinMerge(flags) {
   const written = writeBrainstormSummary(intoLane.id, merged);
 
   const nowIso = new Date().toISOString();
-  target.lanes = lanes.map((l) => (l.id === fromLane.id ? { ...l, state: "done", doneAt: nowIso } : l));
+  const existingAliases = Array.isArray(intoLane.aliases) ? intoLane.aliases.map((a) => String(a).trim()).filter(Boolean) : [];
+  const seenAliases = new Set([
+    String(intoLane.id ?? "").toLowerCase(),
+    ...(intoLane.code ? [String(intoLane.code).toLowerCase()] : []),
+    ...existingAliases.map((a) => a.toLowerCase()),
+  ]);
+  const mergedAliases = [...existingAliases];
+  for (const rawAlias of [
+    fromLane.id,
+    fromLane.code ? String(fromLane.code).toLowerCase() : null,
+    ...(fromLane.aliases ?? []),
+  ]) {
+    const cleanAlias = String(rawAlias ?? "").trim();
+    if (!cleanAlias) continue;
+    const key = cleanAlias.toLowerCase();
+    if (seenAliases.has(key)) continue;
+    seenAliases.add(key);
+    mergedAliases.push(cleanAlias);
+  }
+  target.lanes = lanes.map((l) => {
+    if (l.id === fromLane.id) {
+      const { doneAt, ...rest } = l;
+      return { ...rest, state: "removed", removedAt: nowIso };
+    }
+    if (l.id === intoLane.id && mergedAliases.length > 0) {
+      return { ...l, aliases: mergedAliases };
+    }
+    return l;
+  });
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
   fs.writeFileSync(tmp, JSON.stringify(doc, null, 2) + "\n", "utf8");
@@ -1932,7 +1960,7 @@ function commandPinMerge(flags) {
     return 0;
   }
   process.stdout.write(
-    `Merged ${fromLane.name} (${fromLane.id}) into ${intoLane.name} (${intoLane.id}). Updated ${written.path} and marked ${fromLane.id} done.\n`,
+    `Merged ${fromLane.name} (${fromLane.id}) into ${intoLane.name} (${intoLane.id}). Updated ${written.path} and marked ${fromLane.id} removed.\n`,
   );
   return 0;
 }
@@ -1958,6 +1986,48 @@ ${brief}`, live);
   if (hit) {
     process.stderr.write(`Sounds like ${hit.lane.name} (${hit.lane.id}) in ${squadDef.name}. Use that Team${same ? "" : ", or re-run with --force to pin a new one"}.\n`);
     return 1;
+  }
+
+  const slug = slugLaneId(name);
+  const reopenTarget = lanes.find(
+    (l) =>
+      (l.state === "done" || l.state === "removed") &&
+      (String(l.name ?? "").toLowerCase() === name.toLowerCase() || String(l.id).toLowerCase() === slug),
+  );
+  if (reopenTarget) {
+    const curSummary = readBrainstormSummary(reopenTarget.id);
+    const updatedBrief = curSummary.content.includes("## Open")
+      ? appendBulletsToSection(curSummary.content, "Open", [`- ${brief.replace(/\r?\n/g, "\n  ")}`])
+      : newPinBrief(reopenTarget.id, name, brief);
+    const written = writeBrainstormSummary(reopenTarget.id, updatedBrief);
+    let file = resolveTeamsFilePath();
+    if (path.basename(file) === "teams.example.json") file = path.join(BASE_DIR, "teams.json");
+    const { value: cur } = readJsonFileWithBom(file, { fallback: null, label: "teams.json" });
+    const doc = Array.isArray(cur?.teams) ? cur : { ...TEAMS_FILE };
+    const target = doc.teams.find((t) => t.id === squadDef.id);
+    if (!target) throw new Error(`squad "${squadDef.id}" is not in ${file}`);
+    target.lanes = freezeLaneCodes(
+      (target.lanes ?? []).map((l) => {
+        if (l.id !== reopenTarget.id) return l;
+        const { doneAt, removedAt, ...rest } = l;
+        return { ...rest, name, state: "pinned" };
+      }),
+    );
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+    fs.writeFileSync(tmp, JSON.stringify(doc, null, 2) + "\n", "utf8");
+    fs.renameSync(tmp, file);
+
+    if (flags.json) {
+      process.stdout.write(
+        JSON.stringify({ ok: true, squad: squadDef.id, laneId: reopenTarget.id, name, brief: written.path, teamsFile: file }, null, 2) + "\n",
+      );
+      return 0;
+    }
+    process.stdout.write(
+      `Pinned ${name} (${reopenTarget.id}) in ${squadDef.name}. Brief: ${written.path}. No agent started; the first click on the pin starts its Brainstorm.\n`,
+    );
+    return 0;
   }
 
   const taken = new Set(takenLaneIds(TEAM_DEFS.flatMap((t) => t.lanes ?? [])));

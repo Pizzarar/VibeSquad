@@ -8,6 +8,7 @@ import {
   allLaneIds,
   appendBriefLine,
   bestOverlap,
+  isContentLine,
   keepBuddy,
   briefStamp,
   DEFAULT_PIN_PROFILE,
@@ -334,6 +335,28 @@ export function overlappingPin(squadId: string, text: string, teams: TeamDef[] =
   return squad ? (bestOverlap(text, squad.lanes as PinLane[])?.lane ?? null) : null;
 }
 
+/** Append an idea bullet to the `## Open` section of an existing brief, or return null when the brief has no `## Open`. */
+export function appendIdeaToOpenSection(markdown: string, idea: string): string | null {
+  const cleanIdea = idea.trim();
+  const lines = String(markdown ?? "").replace(/\r\n/g, "\n").split("\n");
+  const headIdx = lines.findIndex((l) => /^##\s+Open\b/i.test(l.trim()));
+  if (headIdx < 0) return null;
+  if (!cleanIdea) return lines.join("\n");
+  const bullet = `- ${cleanIdea.replace(/\r?\n/g, "\n  ")}`;
+  let endIdx = headIdx + 1;
+  while (endIdx < lines.length && !/^##\s+/.test(lines[endIdx].trim())) endIdx++;
+  for (let i = endIdx - 1; i > headIdx; i--) {
+    const trimmed = lines[i].trim();
+    if (trimmed && !isContentLine(trimmed)) {
+      lines.splice(i, 1);
+      endIdx--;
+    }
+  }
+  while (endIdx > headIdx + 1 && !lines[endIdx - 1].trim()) endIdx--;
+  lines.splice(endIdx, 0, bullet);
+  return lines.join("\n");
+}
+
 /** Add a pinned team to a squad and write its brief with the idea under Open. Returns the (session-less) pin. */
 export async function createPin(squadId: string, name: string, idea: string, deps: CreatePinDeps = {}): Promise<Pin> {
   const clean = name.trim();
@@ -341,12 +364,65 @@ export async function createPin(squadId: string, name: string, idea: string, dep
   const teams = (deps.getTeams ?? getTeams)();
   const squad = teams.find((t) => t.id === squadId);
   if (!squad) throw new Error(`Unknown squad ${squadId}`);
-  const id = uniqueLaneId(slugLaneId(clean), allLaneIds(teams));
+  const slug = slugLaneId(clean);
+  const reopenTarget = (squad.lanes as PinLane[]).find(
+    (l) =>
+      (l.state === "done" || l.state === "removed") &&
+      (l.id.toLowerCase() === slug || (l.name ?? "").toLowerCase() === clean.toLowerCase()),
+  );
+  const doFetch = deps.fetch ?? fetch;
+  if (reopenTarget) {
+    const code = reopenTarget.code || laneCodesForTeam({ lanes: squad.lanes })[reopenTarget.id];
+    const reopenedLane: PinLane = {
+      ...reopenTarget,
+      id: reopenTarget.id,
+      name: clean,
+      ...(code ? { code } : {}),
+      state: "pinned",
+      doneAt: undefined,
+      removedAt: undefined,
+      ...(deps.lastProfile ? { lastProfile: deps.lastProfile } : {}),
+    };
+    if (!DEMO) {
+      let updated: string | null = null;
+      try {
+        const existingBrief = await readBrief(reopenTarget.id, doFetch);
+        updated = appendIdeaToOpenSection(existingBrief, idea);
+      } catch {
+        updated = null;
+      }
+      await writeBrief(reopenTarget.id, updated ?? newPinBrief(reopenTarget.id, clean, idea), doFetch);
+    }
+    let next = teams;
+    await (deps.saveTeams ?? saveTeams)((cur) =>
+      (next = cur.map((t) =>
+        t.id === squadId
+          ? { ...t, lanes: freezeLaneCodes(t.lanes.map((l) => (l.id === reopenTarget.id ? reopenedLane : l))) }
+          : t,
+      )),
+    );
+    const updatedSquad = next.find((t) => t.id === squadId) ?? squad;
+    const idx = updatedSquad.lanes.findIndex((l) => l.id === reopenTarget.id);
+    return {
+      squad: updatedSquad,
+      lane: reopenedLane,
+      state: "pinned",
+      order: reopenTarget.order ?? (idx >= 0 ? idx : 0),
+      brainstorm: null,
+      lead: null,
+      workers: [],
+      needsYou: 0,
+      running: 0,
+      contextUsed: 0,
+      topicBrainstorms: [],
+    };
+  }
+  const id = uniqueLaneId(slug, allLaneIds(teams));
   // Freeze the generated code on the lane so later registry changes never rename its agents.
   const code = laneCodesForTeam({ lanes: [...squad.lanes, { id, name: clean }] })[id];
   const lane: PinLane = { id, name: clean, ...(code ? { code } : {}), state: "pinned", ...(deps.lastProfile ? { lastProfile: deps.lastProfile } : {}) };
   // Brief first: a failed write leaves no half-made pin behind.
-  if (!DEMO) await writeBrief(lane.id, newPinBrief(lane.id, clean, idea), deps.fetch ?? fetch);
+  if (!DEMO) await writeBrief(lane.id, newPinBrief(lane.id, clean, idea), doFetch);
   // The brief write is async, so add the lane to whatever the registry holds by then.
   let next = teams;
   await (deps.saveTeams ?? saveTeams)((cur) =>
@@ -367,32 +443,61 @@ export async function createPin(squadId: string, name: string, idea: string, dep
   };
 }
 
-export type SendIdeaDeps = {
-  agents?: Map<string, PaseoAgent>;
-  getTeams?: () => TeamDef[];
+export type SendIdeaDeps = OpenPinDeps & {
   send?: (agentId: string, text: string) => Promise<unknown>;
   park?: typeof parkIdeasInInbox;
+  openPin?: typeof openPin;
 };
 
 /**
  * Hand an idea to another team: its live Brainstorm gets it as a message (Paseo queues it if busy),
- * otherwise it is parked in that team's inbox. An unknown lane parks unassigned. Returns the toast text.
+ * a sleeping pinned team wakes its Buddy via `openPin` and gets the message, and only an unknown or
+ * done/removed lane (or failed wake) parks in the inbox. Returns the toast text.
  */
 export async function sendIdeaToTeam(laneId: string, text: string, from?: string, deps: SendIdeaDeps = {}): Promise<string> {
   const idea = text.trim();
   if (!idea) throw new Error("Nothing to send");
+  const needle = laneId.trim().toLowerCase();
   const teams = (deps.getTeams ?? getTeams)();
-  const squad = teams.find((t) => t.lanes.some((l) => l.id.toLowerCase() === laneId.toLowerCase()));
-  const lane = squad?.lanes.find((l) => l.id.toLowerCase() === laneId.toLowerCase());
+  const matchesLane = (l: { id: string; aliases?: string[] }) =>
+    l.id.toLowerCase() === needle || (l.aliases ?? []).some((a) => a.toLowerCase() === needle);
+  const squad = teams.find((t) => t.lanes.some(matchesLane));
+  const lane = squad?.lanes.find(matchesLane);
   const park = deps.park ?? parkIdeasInInbox;
   if (!squad || !lane) {
     await park({ ideas: [idea], source: "misroute" });
     return "Parked in the inbox";
   }
-  const live = findCrossTeamBrainstorm(resolve(deps.agents ?? getPaseoState().agents), lane.id);
+  const live = findCrossTeamBrainstorm(resolve(deps.agents ?? getPaseoState().agents), lane.id, "", { includeClosed: true });
+  const msg = from ? `Idea sent over from ${from}:\n\n${idea}` : idea;
   if (live) {
-    await (deps.send ?? sendMessage)(live.agent.id, from ? `Idea sent over from ${from}:\n\n${idea}` : idea);
+    await (deps.send ?? sendMessage)(live.agent.id, msg);
     return `Sent to ${lane.name}`;
+  }
+  const laneState = (lane as PinLane).state;
+  if (laneState !== "done" && laneState !== "removed") {
+    const targetPin: Pin = {
+      squad,
+      lane: lane as PinLane,
+      state: "pinned",
+      order: 0,
+      brainstorm: null,
+      lead: null,
+      workers: [],
+      needsYou: 0,
+      running: 0,
+      contextUsed: 0,
+      topicBrainstorms: [],
+    };
+    try {
+      const agentId = await (deps.openPin ?? openPin)(targetPin, deps);
+      if (agentId) {
+        await (deps.send ?? sendMessage)(agentId, msg);
+        return `Sent to ${lane.name}`;
+      }
+    } catch {
+      // fall through to park in inbox
+    }
   }
   await park({ ideas: [idea], laneId: lane.id, teamId: squad.id, source: "misroute" });
   return `Parked in ${lane.name}${/s$/i.test(lane.name) ? "'" : "'s"} inbox`;

@@ -147,7 +147,10 @@ export function SpinOffCard({ pin, offer, variant = "tile" }: { pin: Pin; offer:
 }
 
 const laneName = (laneId: string): string | null => {
-  for (const t of getTeams()) for (const l of t.lanes) if (l.id.toLowerCase() === laneId.toLowerCase()) return l.name;
+  const needle = laneId.trim().toLowerCase();
+  for (const t of getTeams())
+    for (const l of t.lanes)
+      if (l.id.toLowerCase() === needle || (l.aliases ?? []).some((a) => a.toLowerCase() === needle)) return l.name;
   return null;
 };
 
@@ -305,7 +308,10 @@ export function describeIdeaAction(opts: {
   if (opts.targetPin?.brainstorm) {
     return `Goes to ${opts.targetPin.lane.name}'s Buddy.`;
   }
-  return `Goes to ${opts.targetPin?.lane.name ?? "team"}'s inbox (no Buddy live).`;
+  if (opts.targetPin) {
+    return `Wakes ${opts.targetPin.lane.name}'s Buddy and sends your idea.`;
+  }
+  return `Goes to team's inbox (no Buddy live).`;
 }
 
 export function submitButtonLabel(opts: {
