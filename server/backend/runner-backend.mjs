@@ -188,6 +188,41 @@ async function injectedPrefix(role, cwd) {
   }
 }
 
+/**
+ * Advance one agent's turn state by one runner log event (pure, no I/O); returns the lifecycle event it caused, if any.
+ * A prompt (`input`) marks a turn live even before the adapter's first `running` (an ACP adapter failing in initialize /
+ * session-new errors in that window while its log status is still unknown), and an error/exit there is a failed turn.
+ */
+export function reduceTurn(t, e) {
+  const inTurn = t.status === "running" || t.status === "initializing" || !!t.awaiting;
+  if (e.type === "input") { t.awaiting = true; return null; }
+  if (e.type === "error") { if (inTurn) { t.errored = true; t.error = e.message; } return null; }
+  if (e.type === "cancel") { if (inTurn) t.cancelled = true; return null; }
+  if (e.type === "status" && e.status) {
+    const wasRunning = t.status === "running";
+    t.status = STATUS[e.status] ?? e.status;
+    if (t.status === "running") {
+      t.errored = false; // next turn began
+      t.error = undefined;
+      t.cancelled = false;
+      return wasRunning ? null : { kind: "turn_started" };
+    }
+    if (inTurn && t.status === "idle") {
+      t.awaiting = false;
+      const outcome = t.errored ? { kind: "failed", error: { message: String(t.error ?? "turn failed") } } : t.cancelled ? { kind: "cancelled" } : { kind: "completed" };
+      return { kind: "turn_ended", turnId: String(e.seq), outcome };
+    }
+    return null;
+  }
+  if (e.type === "exit") {
+    t.status = "closed";
+    t.awaiting = false;
+    if (inTurn && (e.error || (e.code ?? 0) !== 0)) t.errored = true; // died mid-turn
+    return inTurn ? { kind: "turn_ended", turnId: String(e.seq), outcome: { kind: "failed", error: { message: String(e.error ?? `agent exited (code ${e.code ?? "?"})`) } } } : null;
+  }
+  return null;
+}
+
 /** Shown status of a tracked agent: "error" while an errored turn has not been followed by a new one. */
 const viewStatus = (t) => (t.errored && t.status !== "running" ? "error" : t.status);
 
@@ -540,55 +575,74 @@ export class RunnerBackend {
     try { agents = await this.listAgents(); } catch { agents = null; }
     if (gen !== this.live.gen) return;
     if (!agents) return this.emitEvent({ kind: "disconnected" });
-    const next = new Map();
-    for (const a of agents) {
-      const prev = this.live.turn.get(a.id);
-      next.set(a.id, { status: a.status, errored: !!prev?.errored && a.status !== "running" });
+    // Lifecycle mode keeps turn state purely from the events it has consumed (baseline scan + replay): never re-seeded from tail-of-log status.
+    if (!this.live.hwm) {
+      const next = new Map();
+      for (const a of agents) {
+        const prev = this.live.turn.get(a.id);
+        next.set(a.id, { status: a.status, errored: !!prev?.errored && a.status !== "running" });
+      }
+      this.live.turn = next;
     }
-    this.live.turn = next;
     this.emitEvent({ kind: "roster", agents: agents.map((a) => this.overlay(a)) });
     this.emitEvent({ kind: "connected" });
     await this.catchUp(gen);
   }
 
   /**
-   * Lifecycle catch-up (server process only). Records, per agent, the last log seq already in the runner's logs; from then on an event
-   * is handled once (live or replayed), and every (re)connect of the event stream replays what was appended while it was not connected
-   * (the cold-start race: the runner boots and the first agent's created / input / status events land before /events connects).
-   * History before this call is never replayed, so a server restart does not re-fire digests, handoffs or wakeups.
+   * Lifecycle catch-up (server process only). One scan of every agent's log builds its turn state and high-water mark (history is
+   * never replayed, so a server restart does not re-fire digests, handoffs or wakeups); from then on each event is handled once
+   * (live or replayed) and every (re)connect of the event stream replays what was appended while it was not connected (the
+   * cold-start race: the runner boots and the first agent's created / input / status events land before /events connects).
+   * Turn state survives reconnects: it only ever advances by consuming events.
    */
   enableCatchUp() {
     const hwm = new Map();
+    const turn = new Map();
     const dir = path.join(this.rc.home, "agents");
     try {
       for (const f of fs.readdirSync(dir)) {
         if (!f.endsWith(".jsonl")) continue;
-        const lines = fs.readFileSync(path.join(dir, f), "utf8").split("\n").filter(Boolean);
+        const id = f.slice(0, -6);
+        let t = null;
         let seq = -1;
-        for (let i = lines.length - 1; i >= 0 && seq < 0; i--) {
-          try { seq = JSON.parse(lines[i]).seq ?? -1; } catch { /* partial last line */ }
+        let archived = false;
+        for (const line of fs.readFileSync(path.join(dir, f), "utf8").split("\n")) {
+          if (!line) continue;
+          let e;
+          try { e = JSON.parse(line); } catch { continue; } // partial last line
+          seq = e.seq ?? seq;
+          if (e.type === "created") t = { status: "initializing", errored: false };
+          else if (e.type === "archive") archived = true;
+          if (t) reduceTurn(t, e);
         }
-        hwm.set(f.slice(0, -6), seq);
+        hwm.set(id, seq);
+        if (t && !archived) turn.set(id, t);
       }
     } catch { /* no runner dir yet: every agent is new */ }
     this.live.hwm = hwm;
+    this.live.turn = turn;
   }
 
-  /** Replay events newer than the high-water mark for agents that have any (new agents replay from seq 0). */
+  /** Replay events newer than the high-water mark, agents in creation order (new agents replay from seq 0). */
   async catchUp(gen) {
     const hwm = this.live.hwm;
     if (!hwm) return;
     let ids;
     try { ({ ids } = await this.rc.request("GET", "/agents")); } catch { return; }
+    const recs = [];
     for (const id of ids) {
       if (gen !== this.live.gen) return;
+      try { recs.push(await this.rc.request("GET", `/agents/${encodeURIComponent(id)}`)); } catch { /* gone */ }
+    }
+    recs.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0) || (a.id < b.id ? -1 : 1));
+    for (const rec of recs) {
+      if (gen !== this.live.gen) return;
+      const id = rec.id;
       const seen = hwm.get(id) ?? -1;
-      let rec;
-      try { rec = await this.rc.request("GET", `/agents/${encodeURIComponent(id)}`); } catch { continue; }
       if (!(rec.lastSeq > seen)) continue;
       let events;
       try { ({ events } = await this.rc.request("GET", `/agents/${encodeURIComponent(id)}/timeline?after=${seen + 1}`)); } catch { continue; }
-      this.live.turn.delete(id); // rebuilt from the replayed events, not from the already-final status
       for (const event of events) await this.handleLogEvent({ id, event }, gen);
     }
   }
@@ -607,51 +661,36 @@ export class RunnerBackend {
     this.emitEvent({ kind: "timeline", agentId: id, seq: e.seq, type: e.type });
     const t0 = this.live.turn.get(id);
     const from = t0 && viewStatus(t0);
-    // An error during a turn sticks as the agent's status until the next turn starts (what push pages on, once).
-    // A prompt was written (an "input" event) and no turn end has been seen: the turn is live even before the adapter's first
-    // "running" (an ACP adapter failing in initialize / session-new errors in that window, and its log status is still "unknown").
-    if (e.type === "input" && t0) t0.awaiting = true;
-    const inTurn = t0?.status === "running" || t0?.status === "initializing" || !!t0?.awaiting;
-    if (e.type === "error") { if (inTurn) { t0.errored = true; t0.error = e.message; } return; }
-    if (e.type === "cancel") { if (inTurn) t0.cancelled = true; return; }
-    if (!ROSTER_EVENTS.has(e.type)) return;
+    if (!ROSTER_EVENTS.has(e.type)) {
+      if (t0) reduceTurn(t0, e); // input / error / cancel only move turn state
+      return;
+    }
     if (e.type === "archive") {
       this.live.turn.delete(id);
       this.emitEvent({ kind: "remove", agentId: id });
       return;
     }
+    // A new agent is seeded from its own "created" event, never from a fetch (which already shows later log state), so its
+    // first status event is seen as the transition it is. Turn state advances before the fetch so a failed fetch loses nothing.
+    let t = e.type === "created" ? { status: "initializing", errored: false } : t0;
+    let lifecycle = null;
+    if (t) {
+      lifecycle = reduceTurn(t, e);
+      this.live.turn.set(id, t);
+    }
     let agent;
     try { agent = (await this.fetchAgent(id)).agent; } catch { return; } // runner restarting: the next event resyncs
     if (gen !== this.live.gen) return;
-    // A new agent is seeded from its own "created" event (the fetch below already shows later log state, e.g. the first turn
-    // running), so its first status event is seen as the transition it is.
-    const t = t0 ?? { status: e.type === "created" ? "initializing" : agent.status, errored: false };
-    const wasRunning = t0?.status === "running";
-    let lifecycle = null; // turn_started | turn_ended, emitted after the roster events below
-    if (e.type === "status" && e.status) {
-      t.status = STATUS[e.status] ?? e.status;
-      if (t.status === "running") {
-        t.errored = false; // next turn began
-        t.error = undefined;
-        t.cancelled = false;
-        if (!wasRunning) lifecycle = { kind: "turn_started", agentId: id, agent };
-      } else if (inTurn && t.status === "idle") {
-        t.awaiting = false;
-        const outcome = t.errored ? { kind: "failed", error: { message: String(t.error ?? "turn failed") } } : t.cancelled ? { kind: "cancelled" } : { kind: "completed" };
-        lifecycle = { kind: "turn_ended", agentId: id, agent, turnId: String(e.seq), outcome };
-      }
-    } else if (e.type === "exit") {
-      t.status = "closed";
-      t.awaiting = false;
-      if (inTurn && (e.error || (e.code ?? 0) !== 0)) t.errored = true; // died mid-turn
-      if (inTurn) lifecycle = { kind: "turn_ended", agentId: id, agent, turnId: String(e.seq), outcome: { kind: "failed", error: { message: String(e.error ?? `agent exited (code ${e.code ?? "?"})`) } } };
+    if (!t) {
+      t = { status: agent.status, errored: false };
+      lifecycle = reduceTurn(t, e);
+      this.live.turn.set(id, t);
     }
-    this.live.turn.set(id, t);
     const to = viewStatus(t);
     const shown = { ...agent, status: to };
     this.emitEvent({ kind: "agent", agent: shown });
     if (e.type === "created") this.emitEvent({ kind: "created", agentId: id, agent: shown });
-    if (lifecycle) this.emitEvent({ ...lifecycle, agent: shown });
+    if (lifecycle) this.emitEvent({ ...lifecycle, agentId: id, agent: shown });
     if (from !== undefined && from !== to) this.emitEvent({ kind: "status", agentId: id, from, to, agent: shown });
     if (e.type === "permission" && e.phase === "request") this.emitEvent({ kind: "permission", agentId: id, request: { id: e.id, toolName: e.toolName } });
     if (e.type === "exit") await this.refreshLaneWhosHere(agent.labels?.lane);

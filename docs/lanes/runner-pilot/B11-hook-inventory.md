@@ -75,3 +75,13 @@ the log: `created` event → created; `status running` → turn_started; `status
   Updated "no replay" note: events appended while the stream is down are now replayed *within a server process*; events while the VS server itself is down are still not.
 * **Shim closure** follows `@vibesquad/server/*` specifiers to `server/*`.
 * **Duplicate metrics**: `agent.created` skips the mismatch / autofix / fallback / orphan / profile-override metric lines when `vs.spawn-configured=1`.
+
+## Review r3 fixes
+
+* **Turn state is event-only** (`reduceTurn`, pure): `enableCatchUp` scans each agent's log once for its high-water mark *and* turn state;
+  `seedRoster` no longer overwrites it and `catchUp` no longer deletes it, so a turn spanning a disconnect, a failure before `running`, or
+  `meta` before `running` replay correctly. Turn state advances before the roster fetch, so a failed fetch loses nothing.
+* **Ordering**: `startRunnerLifecycle` baselines and subscribes synchronously and is called before `startPushWatcher` in `serve.mjs`;
+  events seen while the plugin loads are buffered and drained in order.
+* **Serialized emits**: hooks run one at a time through a single queue; `catchUp` walks agents in `createdAt` order. The plugin's
+  `retirePredecessors` only retires agents created *before* the new one, so a replayed `created` cannot retire a later sibling.

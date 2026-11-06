@@ -243,6 +243,7 @@ test('no double fire: the bus ignores non-rn ids, and the plugin run for Paseo i
     b.backend.emitEvent({ kind: 'turn_ended', agentId: '0b6f3e7a-uuid', agent: { id: '0b6f3e7a-uuid' }, turnId: '1', outcome: { kind: 'completed' } });
     assert.deepEqual(seen, []);
     b.backend.emitEvent({ kind: 'turn_started', agentId: 'rn-abc', agent: { id: 'rn-abc' } });
+    await settle(50); // emits are serialized through the bus queue
     assert.deepEqual(seen, [['agent.turn_started', 'rn-abc']]);
     // the plugin itself still builds for a Paseo-style server with the original signature
     const handlers = [];
@@ -410,3 +411,131 @@ function teamLogAll() {
   }
   return out;
 }
+
+// ── catch-up state (review r3) ───────────────────────────────────────────────────────────────────────────
+// A controllable runner: the event stream is connected / dropped by the test, and one prompt can be held mid-turn.
+async function bootCtl({ delayStream = 0 } = {}) {
+  const ctl = { held: null, runner: null };
+  const adapter = {
+    start({ emit, id }) {
+      return {
+        send(text) {
+          if (text.startsWith('ERR:')) { emit('error', { message: 'init failed' }); return; } // fails before any "running"
+          if (text.startsWith('META:')) ctl.runner.updateMeta(id, { title: 'renamed' }); // a meta event lands between input and running
+          emit('status', { status: 'running' });
+          if (text.startsWith('HOLD:')) { ctl.held = () => { emit('output', { text: 'done' }); emit('turn_done', {}); emit('status', { status: 'idle' }); }; return; }
+          emit('output', { text: `echo:${text}` });
+          emit('turn_done', {});
+          emit('status', { status: 'idle' });
+        },
+        cancel() {},
+        kill() {},
+      };
+    },
+  };
+  const home = tmp();
+  const runner = new Runner({ dir: path.join(home, 'agents'), adapters: { claude: adapter } });
+  ctl.runner = runner;
+  const server = createServer(runner, { token: 't' });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  writeDiscovery(home, { port: server.address().port, token: 't' });
+  const rc = new RunnerClient({ home });
+  const realStream = rc.stream.bind(rc);
+  rc.stream = (opts) => {
+    ctl.opts = opts;
+    ctl.connect = () => { ctl.h?.close(); ctl.h = realStream(opts); };
+    ctl.drop = () => { ctl.h?.close(); ctl.h = null; opts.onClose?.(); };
+    const t = setTimeout(ctl.connect, delayStream || 1);
+    return { close() { clearTimeout(t); ctl.h?.close(); } };
+  };
+  const backend = new RunnerBackend({ client: rc, rootDir: ROOT, lanes: () => new Set(['bug-chaser']) });
+  const seen = [];
+  const tap = (lc) => { const real = lc.host.emit.bind(lc.host); lc.host.emit = async (hook, payload) => { seen.push([hook, payload.agent?.id, payload.outcome?.kind]); return real(hook, payload); }; };
+  return {
+    ctl, backend, seen, tap, runner,
+    count: (hook, id) => seen.filter(([h, i]) => h === hook && i === id).length,
+    async close() { await stopRunnerLifecycle(); server.close(); server.closeAllConnections?.(); },
+  };
+}
+
+test('catch-up: a turn that started before a disconnect and ended during it yields one turn_ended', async () => {
+  const b = await bootCtl();
+  try {
+    const lc = await startRunnerLifecycle({ runner: b.backend, startWatcher: false });
+    b.tap(lc);
+    const a = await b.backend.createAgent(req({ lane: 'bug-chaser', role: 'worker' }, { initialPrompt: 'HOLD: go' }));
+    await until(() => b.count('agent.turn_started', a.id) === 1, 6000, 'turn_started');
+    b.ctl.drop();
+    b.ctl.held(); // the turn ends while the stream is down
+    await settle(200);
+    b.ctl.connect();
+    await until(() => b.count('agent.turn_ended', a.id) === 1, 6000, 'turn_ended after reconnect');
+    await settle(400);
+    assert.equal(b.count('agent.turn_ended', a.id), 1);
+    assert.equal(b.count('agent.turn_started', a.id), 1);
+  } finally { await b.close(); }
+});
+
+test('catch-up: a failure before the first "running" while disconnected yields one failed turn_ended', async () => {
+  const b = await bootCtl();
+  try {
+    const lc = await startRunnerLifecycle({ runner: b.backend, startWatcher: false });
+    b.tap(lc);
+    const a = await b.backend.createAgent(req({ lane: 'bug-chaser', role: 'worker' }));
+    await until(() => b.count('agent.turn_ended', a.id) === 1, 6000, 'first turn_ended');
+    b.ctl.drop();
+    await b.backend.sendAgentPrompt(a.id, 'ERR: boom');
+    b.runner.store.append(a.id, 'exit', { code: 1, error: 'init failed' });
+    b.ctl.connect();
+    await until(() => b.count('agent.turn_ended', a.id) === 2, 6000, 'failed turn_ended');
+    assert.equal(b.seen.filter(([h, i, o]) => h === 'agent.turn_ended' && i === a.id && o === 'failed').length, 1);
+  } finally { await b.close(); }
+});
+
+test('catch-up: meta between input and status:running still yields exactly one turn_started', async () => {
+  const b = await bootCtl();
+  try {
+    const lc = await startRunnerLifecycle({ runner: b.backend, startWatcher: false });
+    b.tap(lc);
+    const a = await b.backend.createAgent(req({ lane: 'bug-chaser', role: 'worker' }));
+    await until(() => b.count('agent.turn_ended', a.id) === 1, 6000, 'first turn');
+    b.ctl.drop();
+    await b.backend.sendAgentPrompt(a.id, 'META: go');
+    b.ctl.connect();
+    await until(() => b.count('agent.turn_ended', a.id) === 2, 6000, 'second turn_ended');
+    await settle(300);
+    assert.equal(b.count('agent.turn_started', a.id), 2, 'one per turn');
+  } finally { await b.close(); }
+});
+
+test('ordering: lifecycle subscribes before another listener opens the stream; slow hook attach loses nothing', async () => {
+  const b = await bootCtl();
+  try {
+    const realAttach = b.backend.attachHooks.bind(b.backend);
+    b.backend.attachHooks = async (o) => { await settle(700); return realAttach(o); }; // cold plugin import
+    const ready = startRunnerLifecycle({ runner: b.backend, startWatcher: false }); // not awaited, like serve.mjs
+    b.backend.subscribeEvents(() => {}); // the push watcher opens the shared stream right after
+    const a = await b.backend.createAgent(req({ lane: 'bug-chaser', role: 'lead' }));
+    const lc = await ready;
+    b.tap(lc);
+    await until(async () => (await b.backend.getAgent(a.id)).labels.ord === '1', 8000, 'created hook ran after the slow attach');
+    await until(() => teamLogAll().some((e) => e.text.startsWith('hook-timing hook=agent.created') && (e.refs ?? []).includes(a.id)), 6000, 'created timing');
+    assert.equal(teamLogAll().filter((e) => e.text.startsWith('hook-timing hook=agent.created') && (e.refs ?? []).includes(a.id)).length, 1);
+  } finally { await b.close(); }
+});
+
+test('catch-up: leads created before the stream connects are processed in createdAt order (ord 1, 2, 3)', async () => {
+  const b = await bootCtl({ delayStream: 900 });
+  try {
+    await startRunnerLifecycle({ runner: b.backend, startWatcher: false });
+    const ids = [];
+    for (let i = 0; i < 3; i++) {
+      ids.push((await b.backend.createAgent(req({ lane: 'bug-chaser', role: 'lead' }))).id);
+      await settle(5);
+    }
+    await until(async () => (await b.backend.getAgent(ids[2])).labels.ord, 10000, 'third lead labelled');
+    const ords = [];
+    for (const id of ids) ords.push((await b.backend.getAgent(id)).labels.ord);
+    assert.deepEqual(ords, ['1', '2', '3']);
+  } finally { await b.close(); }
+});

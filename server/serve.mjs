@@ -576,11 +576,12 @@ if (isMain) {
       }
     };
     applyLanListeners(lanEnabled);
-    startPushWatcher(rootDir);
     // Plugin-hook parity for runner agents (prompt layering lives in createAgent; this feeds created / turn events + lead wakeups).
+    // First, so its baseline + subscription exist before the push watcher opens the shared runner event stream.
     if (process.env.VS_RUNNER_HOOKS !== "0" && runnerLanes().size) {
       startRunnerLifecycle().catch((err) => console.warn("runner lifecycle hooks not started:", err?.message ?? err));
     }
+    startPushWatcher(rootDir);
 
     if (wantOpen) void openBrowser(servedOpenUrl());
   });
