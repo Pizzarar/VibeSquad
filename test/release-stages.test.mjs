@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
 import {
   assertFrozenCommit,
+  DEFAULT_RELEASE_REPO,
   parseArgs,
+  resolveTagCommit,
   publishRelease,
   buildLatestJson,
   runRelease,
@@ -16,7 +18,7 @@ import {
   writeReleaseRecord,
 } from "../server/release.mjs";
 
-const HEAD = "abc1234def5678";
+const HEAD = "abc1234def5678abc1234def5678abc1234def56";
 
 function fakeExec({ head = HEAD, dirty = "", existingReleases = new Set(), tagShas = {} } = {}) {
   const calls = [];
@@ -24,14 +26,17 @@ function fakeExec({ head = HEAD, dirty = "", existingReleases = new Set(), tagSh
     calls.push([cmd, ...args]);
     if (cmd === "git" && args[0] === "rev-parse" && args[1] === "HEAD") return `${head}\n`;
     if (cmd === "git" && args[0] === "status") return dirty;
-    if (cmd === "git" && args[0] === "ls-remote") {
-      for (const ref of args.slice(3)) {
-        const t = ref.replace(/^refs\/tags\//, "").replace(/\^\{\}$/, "");
-        if (tagShas[t]) return `${tagShas[t]}\trefs/tags/${t}\n`;
-      }
-      return "";
+    if (cmd === "gh" && args[0] === "api") {
+      const m = args[1].match(/git\/ref\/tags\/(.+)$/);
+      if (m && tagShas[m[1]]) return JSON.stringify({ object: { type: "commit", sha: tagShas[m[1]] } });
+      throw new Error("HTTP 404: Not Found");
     }
-    if (cmd === "git" && args[0] === "rev-parse") throw new Error("unknown revision");
+    if (cmd === "git" && args[0] === "rev-parse" && args[1] === "--verify") {
+      const rev = args[2].replace(/\^\{commit\}$/, "");
+      if (head.startsWith(rev)) return `${head}
+`;
+      throw new Error("unknown revision");
+    }
     if (cmd === "gh" && args[1] === "view") {
       if (!existingReleases.has(args[2])) throw new Error("not found");
       return "";
@@ -115,16 +120,16 @@ describe("subcommand parsing", () => {
 describe("frozen commit gate", () => {
   test("commit mismatch refused", () => {
     const { exec } = fakeExec();
-    assert.throws(() => assertFrozenCommit({ commit: "deadbeef", requireClean: true, exec }), /HEAD is abc1234/);
+    assert.throws(() => assertFrozenCommit({ commit: "d".repeat(40), requireClean: true, exec }), /HEAD is abc1234/);
   });
   test("missing --commit refused", () => {
     const { exec } = fakeExec();
     assert.throws(() => assertFrozenCommit({ commit: "", requireClean: true, exec }), /--commit/);
   });
-  test("dirty tracked tree refused; untracked ignored via porcelain flag", () => {
+  test("dirty tree refused, untracked files included (plain porcelain)", () => {
     const { exec, calls } = fakeExec({ dirty: " M server/release.mjs\n" });
     assert.throws(() => assertFrozenCommit({ commit: HEAD, requireClean: true, exec }), /dirty tree/);
-    assert.ok(calls.some((c) => c[0] === "git" && c[1] === "status" && c.includes("--untracked-files=no")));
+    assert.ok(calls.some((c) => c[0] === "git" && c[1] === "status" && !c.includes("--untracked-files=no")));
   });
   test("clean tree at commit passes; abbreviated sha accepted", () => {
     const { exec } = fakeExec();
@@ -133,7 +138,7 @@ describe("frozen commit gate", () => {
   test("publish stage refuses on mismatch before any gh call", () => {
     const root = makeRoot();
     const { exec, calls } = fakeExec();
-    assert.throws(() => runRelease(["publish", "--channel", "stable", "--commit", "bad"], { rootDir: root, exec, env: {}, log: () => {} }), /HEAD is/);
+    assert.throws(() => runRelease(["publish", "--channel", "stable", "--commit", "b".repeat(40)], { rootDir: root, exec, env: {}, log: () => {} }), /HEAD is/);
     assert.ok(!calls.some((c) => c[0] === "gh"));
   });
 });
@@ -221,5 +226,87 @@ describe("stage", () => {
     const p = writeReleaseRecord({ dir: root, project: "Roster", repo: "Pizzarar/Roster", version: "1.0.0", channel: "stable", commit: "c0ffee" });
     assert.match(p, /Roster-1\.0\.0\.md$/);
     assert.match(readFileSync(p, "utf8"), /# Roster 1\.0\.0 release record/);
+  });
+});
+
+describe("review fixes", () => {
+  const SHA = HEAD;
+
+  test("--commit is canonicalized to the full sha via rev-parse --verify", () => {
+    const root = makeRoot();
+    const { exec, calls } = fakeExec();
+    runRelease(["publish", "--channel", "stable", "--commit", "abc1234"], { rootDir: root, exec, env: {}, log: () => {} });
+    assert.ok(calls.some((c) => c[0] === "git" && c[1] === "rev-parse" && c[2] === "--verify" && c[3] === "abc1234^{commit}"));
+    const create = calls.find((c) => c[0] === "gh" && c[2] === "create" && c[3] === "v0.3.0");
+    assert.equal(create[create.indexOf("--target") + 1], SHA);
+  });
+
+  test("unresolvable --commit is refused", () => {
+    const { exec } = fakeExec();
+    assert.throws(() => assertFrozenCommit({ commit: "zzzz", requireClean: false, exec }), /Cannot resolve commit/);
+  });
+
+  test("publishRelease normalizes a directly-passed short targetCommit", () => {
+    const { exec, calls } = fakeExec();
+    publishRelease({ channel: "stable", targetVersion: "0.3.0", assets: [], latestManifest: buildLatestJson({ version: "0.3.0", channel: "stable", signature: "S" }), exec, targetCommit: "abc1234", writeManifest: () => {} });
+    const create = calls.find((c) => c[0] === "gh" && c[2] === "create" && c[3] === "v0.3.0");
+    assert.equal(create[create.indexOf("--target") + 1], SHA);
+  });
+
+  test("rolling beta tag is pinned to the frozen sha, never HEAD", () => {
+    const { exec, calls } = fakeExec({ head: "f".repeat(40), existingReleases: new Set(["beta"]) });
+    publishRelease({ channel: "beta", targetVersion: "0.3.0-beta.1", assets: [], latestManifest: buildLatestJson({ version: "0.3.0-beta.1", channel: "beta", signature: "S" }), exec, targetCommit: SHA, writeManifest: () => {} });
+    const tag = calls.find((c) => c[0] === "git" && c[1] === "tag");
+    assert.deepEqual(tag.slice(1), ["tag", "-f", "beta", SHA]);
+    assert.ok(!calls.some((c) => c.includes("HEAD") && c[0] === "git" && c[1] === "tag"));
+  });
+
+  test("tag lookup uses gh api for the configured repo and peels annotated tags", () => {
+    const calls = [];
+    const exec = (cmd, args) => {
+      calls.push([cmd, ...args]);
+      if (args[1] === "repos/o/r/git/ref/tags/v1.0.0") return JSON.stringify({ object: { type: "tag", sha: "t1" } });
+      if (args[1] === "repos/o/r/git/tags/t1") return JSON.stringify({ object: { type: "commit", sha: "c1" } });
+      throw new Error("HTTP 404");
+    };
+    assert.equal(resolveTagCommit("v1.0.0", exec, ".", "o/r"), "c1");
+    assert.equal(resolveTagCommit("v9", exec, ".", "o/r"), "");
+    assert.ok(calls.every((c) => c[0] === "gh" && c[1] === "api"));
+  });
+
+  test("tag lookup fails closed on non-404 errors", () => {
+    const exec = () => { throw new Error("network down"); };
+    assert.throws(() => resolveTagCommit("v1.0.0", exec, ".", "o/r"), /Could not look up tag/);
+  });
+
+  test("publishRelease defaults --repo to DEFAULT_RELEASE_REPO", () => {
+    const { exec, calls } = fakeExec();
+    publishRelease({ channel: "stable", targetVersion: "0.3.0", assets: [], latestManifest: buildLatestJson({ version: "0.3.0", channel: "stable", signature: "S" }), exec, writeManifest: () => {} });
+    const upload = calls.find((c) => c[0] === "gh" && c[2] === "upload");
+    assert.deepEqual(upload.slice(-2), ["--repo", DEFAULT_RELEASE_REPO]);
+  });
+
+  test("record update preserves requester, approval, changelog and audit", () => {
+    const root = makeRoot();
+    const base = { dir: root, project: "Demo", repo: "o/r", version: "0.3.0", channel: "stable", commit: "c1" };
+    const p = writeReleaseRecord({ ...base, requester: "Requester One", approval: "OK by lead", changelog: "- fixed things" });
+    writeFileSync(p, readFileSync(p, "utf8").replace("| Tests | _pending_ |", "| Tests | PASS |"));
+    writeReleaseRecord({ ...base, commit: "c2", releaseUrl: "https://x/y", artifacts: [{ name: "a.exe", sha256: "ab".repeat(32) }] });
+    const rec = readFileSync(p, "utf8");
+    assert.match(rec, /\| Requester \| Requester One \|/);
+    assert.match(rec, /\| Approval \| OK by lead \|/);
+    assert.match(rec, /- fixed things/);
+    assert.match(rec, /\| Tests \| PASS \|/);
+    assert.match(rec, /\| Commit \| c2 \|/);
+    assert.match(rec, /\| Release URL \| https:\/\/x\/y \|/);
+    assert.match(rec, /`a\.exe`: `abab/);
+    assert.match(rec, /## Signature verification/);
+  });
+
+  test("legacy no-subcommand run writes no release record", () => {
+    const root = makeRoot();
+    const { exec } = fakeExec();
+    runRelease(["--channel", "stable", "--skip-build"], { rootDir: root, exec, env: { TAURI_SIGNING_PRIVATE_KEY: "k" }, log: () => {}, resolveTauriCli: () => "t.js" });
+    assert.equal(existsSync(join(root, "docs", "releases", "VibeSquad-0.3.0.md")), false);
   });
 });

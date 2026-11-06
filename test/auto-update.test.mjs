@@ -109,7 +109,7 @@ describe("auto-update config & release helpers", () => {
     assert.match(buildDesktopSrc, /"-p"/);
 
     const releaseSrc = readFileSync(join(rootDir, "server", "release.mjs"), "utf8");
-    const rawArrayGhCalls = releaseSrc.match(/exec(?:FileSync)?\("gh",\s*\[(?!\.\.\.)/g) || [];
+    const rawArrayGhCalls = releaseSrc.match(/exec(?:FileSync)?\("gh",\s*\[(?!\.\.\.|"api")/g) || [];
     assert.equal(rawArrayGhCalls.length, 0, "every gh invocation must go through gh(...)/ghReleaseArgs(...)");
     assert.ok(!/"-p"/.test(releaseSrc), "release.mjs must not pass the signing password on argv");
     assert.ok(releaseSrc.includes("export function ghReleaseArgs"), "ghReleaseArgs must be defined");

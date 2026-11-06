@@ -154,43 +154,48 @@ function resolveHeadCommit(exec, cwd) {
   return String(exec("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }) || "").trim();
 }
 
-function resolveTagCommit(tag, exec, cwd) {
+const FULL_SHA = /^[0-9a-f]{40}$/i;
+
+/** Resolve any rev to the full commit sha (`git rev-parse --verify <c>^{commit}`). */
+export function canonicalizeCommit(commit, exec = execFileSync, cwd = rootDir) {
+  const c = String(commit || "").trim();
+  if (FULL_SHA.test(c)) return c.toLowerCase();
+  let out = "";
   try {
-    const remoteOut = String(
-      exec("git", ["ls-remote", "--tags", "origin", `refs/tags/${tag}`, `refs/tags/${tag}^{}`], {
-        cwd,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }) || "",
-    ).trim();
-    if (remoteOut) {
-      const lines = remoteOut.split(/\r?\n/).filter(Boolean);
-      const peeled = lines.find((l) => l.endsWith(`refs/tags/${tag}^{}`));
-      const direct = lines.find((l) => l.endsWith(`refs/tags/${tag}`));
-      const chosen = peeled || direct || lines[0];
-      const sha = chosen.split(/\s+/)[0]?.trim();
-      if (sha) return sha;
-    }
+    out = String(exec("git", ["rev-parse", "--verify", `${c}^{commit}`], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }) || "").trim();
   } catch {
-    // Fall back to local tag resolution
+    // handled below
   }
-  try {
-    const localSha = String(
-      exec("git", ["rev-parse", `refs/tags/${tag}^{commit}`], {
-        cwd,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }) || "",
-    ).trim();
-    if (localSha) return localSha;
-  } catch {
-    // Unresolved
-  }
-  return "";
+  if (!out) throw new Error(`Cannot resolve commit "${c}" to a full sha.`);
+  return out.toLowerCase();
 }
 
-function repointBetaTagToHead(exec, cwd) {
-  exec("git", ["tag", "-f", "beta", "HEAD"], { cwd, stdio: "inherit" });
+function ghApiJson(path, exec, cwd) {
+  return JSON.parse(String(exec("gh", ["api", path], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }) || "null"));
+}
+
+/**
+ * Commit the remote `repo` tag points at (annotated tags peeled), or "" when the tag does not exist (404).
+ * Any other failure throws: the tag guard fails closed.
+ */
+export function resolveTagCommit(tag, exec, cwd, repo = DEFAULT_RELEASE_REPO) {
+  let ref;
+  try {
+    ref = ghApiJson(`repos/${repo}/git/ref/tags/${tag}`, exec, cwd);
+  } catch (err) {
+    const text = `${err?.message ?? ""} ${err?.stderr ?? ""}`;
+    if (/404|not found/i.test(text)) return "";
+    throw new Error(`Could not look up tag ${tag} on ${repo}: ${err?.message ?? err}`);
+  }
+  let obj = ref?.object;
+  for (let depth = 0; obj && obj.type === "tag" && depth < 5; depth++) {
+    obj = ghApiJson(`repos/${repo}/git/tags/${obj.sha}`, exec, cwd)?.object;
+  }
+  return String(obj?.sha || "").trim();
+}
+
+function repointBetaTag(exec, cwd, sha) {
+  exec("git", ["tag", "-f", "beta", sha], { cwd, stdio: "inherit" });
   exec("git", ["push", "-f", "origin", "refs/tags/beta"], { cwd, stdio: "inherit" });
 }
 
@@ -204,7 +209,7 @@ export function publishRelease({
   cwd = rootDir,
   exec = execFileSync,
   targetCommit = "",
-  repo = "",
+  repo = DEFAULT_RELEASE_REPO,
   writeManifest = (filePath, manifest) => writeFileSync(filePath, JSON.stringify(manifest, null, 2) + "\n"),
 }) {
   const cleanVer = String(targetVersion).trim().replace(/^v/, "");
@@ -212,9 +217,9 @@ export function publishRelease({
   const tag = channel === "beta" ? "beta" : `v${cleanVer}`;
   const releaseTitle = channel === "beta" ? `VibeSquad Beta (${cleanVer})` : `VibeSquad v${cleanVer}`;
 
-  const gh = (sub) => ["release", ...sub, ...(repo ? ["--repo", repo] : [])];
+  const gh = (sub) => ghReleaseArgs(sub, repo);
   const headSha = resolveHeadCommit(exec, cwd);
-  const expectedSha = targetCommit || headSha;
+  const expectedSha = targetCommit ? canonicalizeCommit(targetCommit, exec, cwd) : headSha;
   const versioned = /^v\d+\.\d+\.\d+/.test(tag);
 
   let tagExists = false;
@@ -227,7 +232,7 @@ export function publishRelease({
 
   if (versioned) {
     // R7: never move or overwrite an existing version tag, whether or not a release object exists.
-    const tagSha = resolveTagCommit(tag, exec, cwd);
+    const tagSha = resolveTagCommit(tag, exec, cwd, repo);
     if ((tagExists || tagSha) && (!expectedSha || !tagSha || tagSha !== expectedSha)) {
       throw new Error(
         `Refusing to overwrite existing versioned release tag ${tag}: tag points at ${tagSha || "<unresolved>"}, which does not match HEAD (${expectedSha || "<unresolved>"}). Bump the version or re-tag deliberately.`,
@@ -244,7 +249,7 @@ export function publishRelease({
 
   if (tagExists) {
     if (tag === "beta") {
-      repointBetaTagToHead(exec, cwd);
+      repointBetaTag(exec, cwd, expectedSha);
     }
     exec("gh", gh(["edit", tag, "--title", releaseTitle, "--notes", effectiveManifest.notes]), { cwd, stdio: "inherit" });
   }
@@ -269,7 +274,7 @@ export function publishRelease({
       });
     }
     if (betaTagExists) {
-      repointBetaTagToHead(exec, cwd);
+      repointBetaTag(exec, cwd, expectedSha);
       exec("gh", gh(["edit", "beta", "--title", betaTitle, "--notes", betaManifest.notes]), {
         cwd,
         stdio: "inherit",
@@ -321,13 +326,15 @@ const sha256 = (path) => createHash("sha256").update(readFileSync(path)).digest(
 /** Refuse unless HEAD is the frozen commit and (optionally) no tracked file is modified. */
 export function assertFrozenCommit({ commit, requireClean, exec = execFileSync, cwd = rootDir }) {
   if (!commit) throw new Error("--commit <sha> is required for this stage.");
-  const head = resolveHeadCommit(exec, cwd);
-  if (!head || !(head === commit || head.startsWith(commit))) {
-    throw new Error(`Refusing to release: HEAD is ${head || "<unresolved>"} but --commit is ${commit}. Check out the frozen commit first.`);
+  const want = canonicalizeCommit(commit, exec, cwd);
+  const head = resolveHeadCommit(exec, cwd).toLowerCase();
+  if (!head || head !== want) {
+    throw new Error(`Refusing to release: HEAD is ${head || "<unresolved>"} but --commit is ${want}. Check out the frozen commit first.`);
   }
   if (requireClean) {
-    const dirty = String(exec("git", ["status", "--porcelain", "--untracked-files=no"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }) || "").trim();
-    if (dirty) throw new Error(`Refusing to release from a dirty tree (tracked changes):\n${dirty}`);
+    // Untracked files count too (the desk builds from clean worktrees); .gitignore'd outputs such as dist-desktop do not show up.
+    const dirty = String(exec("git", ["status", "--porcelain"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }) || "").trim();
+    if (dirty) throw new Error(`Refusing to release from a dirty tree:\n${dirty}`);
   }
   return head;
 }
@@ -351,30 +358,64 @@ export function renderReleaseRecord(template, fields) {
   return template.replace(/\{\{(\w+)\}\}/g, (_, key) => String(fields[key] ?? "_pending_"));
 }
 
-export function writeReleaseRecord({ dir = rootDir, project, repo, version, channel, commit, requester, approval, changelog, releaseUrl, artifacts = [], signature, templatePath, outDir }) {
-  const template = readFileSync(templatePath || join(dir, "docs", "releases", "TEMPLATE.md"), "utf8");
-  const artifactLines = artifacts.length ? artifacts.map((a) => `- \`${a.name}\`: \`${a.sha256}\``).join("\n") : "_pending (filled at publish)_";
-  const body = renderReleaseRecord(template, {
-    project,
-    repo,
-    version,
-    channel,
-    commit,
-    requester: requester || "_unknown_",
-    approval: approval || "_pending_",
-    changelog: changelog || "_none provided_",
-    releaseUrl: releaseUrl || "_pending_",
-    artifacts: artifactLines,
-    signature: signature || "_pending_",
-  });
+const TABLE_ROWS = { version: "Version", channel: "Channel", commit: "Commit", requester: "Requester", approval: "Approval", releaseUrl: "Release URL" };
+const SECTIONS = { changelog: "## Changelog", artifacts: "## Artifacts (SHA-256)", signature: "## Signature verification" };
+
+function setSection(text, heading, body) {
+  const start = text.indexOf(`${heading}\n`);
+  if (start < 0) return text;
+  const bodyStart = start + heading.length + 1;
+  const next = text.indexOf("\n## ", bodyStart);
+  const tail = next < 0 ? "" : `\n${text.slice(next + 1)}`;
+  return `${text.slice(0, bodyStart)}\n${body}\n${tail}`;
+}
+
+/**
+ * Create docs/releases/<project>-<version>.md from the template, or, when it already exists, update only the
+ * fields the caller passed. Requester/Approval/Changelog and the Audit table survive later stages.
+ */
+export function writeReleaseRecord({ dir = rootDir, project, repo, version, channel, commit, requester, approval, changelog, releaseUrl, artifacts, signature, templatePath, outDir }) {
   const target = join(outDir || join(dir, "docs", "releases"), `${project}-${version}.md`);
+  const artifactLines = artifacts?.length ? artifacts.map((a) => `- \`${a.name}\`: \`${a.sha256}\``).join("\n") : "";
   mkdirSync(resolve(target, ".."), { recursive: true });
-  writeFileSync(target, body);
+
+  if (existsSync(target)) {
+    let text = readFileSync(target, "utf8");
+    const passed = { version, channel, commit, requester, approval, releaseUrl };
+    for (const [key, value] of Object.entries(passed)) {
+      if (!value) continue;
+      text = text.replace(new RegExp(`^\\| ${TABLE_ROWS[key]} \\| .* \\|$`, "m"), () => `| ${TABLE_ROWS[key]} | ${value} |`);
+    }
+    if (changelog) text = setSection(text, SECTIONS.changelog, changelog);
+    if (artifactLines) text = setSection(text, SECTIONS.artifacts, artifactLines);
+    if (signature) text = setSection(text, SECTIONS.signature, signature);
+    writeFileSync(target, text);
+    return target;
+  }
+
+  const template = readFileSync(templatePath || join(dir, "docs", "releases", "TEMPLATE.md"), "utf8");
+  writeFileSync(
+    target,
+    renderReleaseRecord(template, {
+      project,
+      repo,
+      version,
+      channel,
+      commit,
+      requester: requester || "_unknown_",
+      approval: approval || "_pending_",
+      changelog: changelog || "_none provided_",
+      releaseUrl: releaseUrl || "_pending_",
+      artifacts: artifactLines || "_pending (filled at publish)_",
+      signature: signature || "_pending_",
+    }),
+  );
   return target;
 }
 
 export function runRelease(argv, { rootDir: root = rootDir, exec = execFileSync, env = process.env, log = console.log, resolveTauriCli = () => require.resolve("@tauri-apps/cli/tauri.js") } = {}) {
   const opts = parseArgs(argv);
+  if (opts.commit) opts.commit = canonicalizeCommit(opts.commit, exec, root);
   const channel = opts.channel === "stable" ? "stable" : "beta";
   const repo = opts.repo || DEFAULT_RELEASE_REPO;
   const subcommand = Boolean(opts.stage);
@@ -396,9 +437,11 @@ export function runRelease(argv, { rootDir: root = rootDir, exec = execFileSync,
     log(`[release:${channel}] Setting version ${currentVersion} -> ${target}`);
     syncVersionFiles(root, target);
     opts.version = target;
-    const recordCommit = commit || resolveHeadCommit(exec, root);
-    const record = writeReleaseRecord({ dir: root, project: opts.project, repo, version: target, channel, commit: recordCommit, requester: opts.requester, approval: opts.approval, changelog: opts.changelog });
-    log(`[release:${channel}] Wrote release record ${record}`);
+    if (subcommand) {
+      const recordCommit = commit || canonicalizeCommit(resolveHeadCommit(exec, root), exec, root);
+      const record = writeReleaseRecord({ dir: root, project: opts.project, repo, version: target, channel, commit: recordCommit, requester: opts.requester, approval: opts.approval, changelog: opts.changelog });
+      log(`[release:${channel}] Wrote release record ${record}`);
+    }
   }
 
   if (!stages.some((s) => s !== "stage")) return { version: opts.version, channel };
@@ -407,7 +450,7 @@ export function runRelease(argv, { rootDir: root = rootDir, exec = execFileSync,
   if (subcommand || commit) {
     commit = assertFrozenCommit({ commit, requireClean: subcommand, exec, cwd: root });
   } else {
-    commit = resolveHeadCommit(exec, root);
+    commit = canonicalizeCommit(resolveHeadCommit(exec, root), exec, root);
   }
   const targetVersion = readConf().version;
   if (opts.version && opts.version !== targetVersion) {
@@ -453,6 +496,7 @@ export function runRelease(argv, { rootDir: root = rootDir, exec = execFileSync,
     const assets = [installerPath, sigPath, latestJsonPath, apk, licenses].filter((p) => p && existsSync(p));
     publishRelease({ channel, targetVersion, assets, latestJsonPath, latestManifest, signature, cwd: root, exec, targetCommit: commit, repo });
     const tag = channel === "beta" ? "beta" : `v${targetVersion}`;
+    if (subcommand) {
     const record = writeReleaseRecord({
       dir: root,
       project: opts.project,
@@ -468,6 +512,7 @@ export function runRelease(argv, { rootDir: root = rootDir, exec = execFileSync,
       signature: "Signature file `VibeSquad-setup.exe.sig` present and embedded in latest.json (not cryptographically re-verified by this script).",
     });
     log(`[release:${channel}] Updated release record ${record}`);
+    }
   }
   return { version: targetVersion, channel, commit };
 }
