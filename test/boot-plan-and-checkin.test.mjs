@@ -1,13 +1,17 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 import { findLanePlanFile } from "../server/brainstorm.mjs";
-import { runCheckin } from "../src/railCheckin.ts";
+import { checkinAction, runCheckin } from "../src/railCheckin.ts";
+
+const dirs = [];
+after(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
 
 function repo() {
   const dir = mkdtempSync(join(tmpdir(), "vs-lane-plan-"));
+  dirs.push(dir);
   mkdirSync(join(dir, "docs", "lanes", "bugc"), { recursive: true });
   writeFileSync(join(dir, "docs", "PLAN_OTHER_LANE.md"), "# other\n");
   writeFileSync(join(dir, "docs", "PLAN_BUGC.md"), "# mine\n");
@@ -34,6 +38,7 @@ test("double-click Check in sends once", async () => {
   const gate = new Promise((r) => (release = r));
   const deps = { open: () => {}, send: async (id) => (sent.push(id), gate) };
   const first = runCheckin(pin, deps);
+  assert.equal(checkinAction(pin), "busy", "the button shows busy while the send is in flight");
   const second = await runCheckin(pin, deps);
   assert.equal(second, "busy");
   release();

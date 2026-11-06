@@ -12,7 +12,7 @@ function makeEnv() {
   const profilesPath = join(vsHome, "profiles.json");
   mkdirSync(join(dir, "docs", "brainstorm"), { recursive: true });
   writeFileSync(join(dir, "docs", "PLAN_PINS_TEST.md"), "# Plan\n", "utf8");
-  writeFileSync(join(dir, "docs", "brainstorm", "pin-test.md"), "# Brief\n\n## Decided\n- We chose blue.\n", "utf8");
+  writeFileSync(join(dir, "docs", "brainstorm", "pin-test.md"), "# Brief\n\n## Decided\n- We chose blue. Plan: docs/PLAN_PINS_TEST.md\n", "utf8");
   writeFileSync(
     join(dir, "teams.json"),
     JSON.stringify({ teams: [{ id: "sq", name: "Squad", lanes: [{ id: "pin-test", name: "Pin Test" }], paths: ["sq"] }] }),

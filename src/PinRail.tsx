@@ -35,6 +35,11 @@ function animate(el: Element | null | undefined, frames: Keyframe[]) {
 function CheckinButton({ pin, testId }: { pin: Pin; testId: string }) {
   const [busy, setBusy] = useState(false);
   const timer = useRef<number | undefined>(undefined);
+  const showBusy = () => {
+    setBusy(true);
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setBusy(false), CHECKIN_BUSY_MS);
+  };
   useEffect(() => () => window.clearTimeout(timer.current), []);
   const none = checkinAction(pin) === "none";
   return (
@@ -47,13 +52,10 @@ function CheckinButton({ pin, testId }: { pin: Pin; testId: string }) {
         title={none ? "No lead running" : "Ask the lead for a 3-line status"}
         onClick={(e) => {
           e.stopPropagation();
-          if (checkinAction(pin) === "busy") {
-            setBusy(true);
-            window.clearTimeout(timer.current);
-            timer.current = window.setTimeout(() => setBusy(false), CHECKIN_BUSY_MS);
-            return;
-          }
-          void runCheckin(pin, { open: (id) => openPinMember(pin, id), send: (id, text) => sendMessage(id, text) }).catch(() => {});
+          // runCheckin answers "busy" for a running lead and for a check-in still in flight (a rapid second click).
+          void runCheckin(pin, { open: (id) => openPinMember(pin, id), send: (id, text) => sendMessage(id, text) })
+            .then((action) => action === "busy" && showBusy())
+            .catch(() => {});
         }}
       >
         {none ? "No lead" : "Check in"}
