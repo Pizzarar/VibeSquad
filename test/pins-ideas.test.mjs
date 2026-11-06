@@ -83,15 +83,20 @@ test("vs pin new writes the lane and brief, refuses overlaps", () => {
     assert.equal(forced.status, 0, forced.stderr);
     assert.equal(JSON.parse(readFileSync(join(home, "teams.json"), "utf8")).teams[0].lanes.at(-1).id, "sound-2");
 
-    // done teams never match, even on an exact name, with or without --force
+    // done teams never block as an overlap refusal, and re-pinning the same name in the same squad reopens the lane in place instead of minting -2
     const cur = JSON.parse(readFileSync(join(home, "teams.json"), "utf8"));
-    cur.teams[0].lanes.push({ id: "fishing", name: "Fishing", state: "done" });
+    cur.teams[0].lanes.push({ id: "fishing", name: "Fishing", state: "done", doneAt: "2026-11-01T00:00:00.000Z" });
     writeFileSync(join(home, "teams.json"), JSON.stringify(cur));
     const reborn = vs("Fishing", "--brief", "again", "--team", "efi");
     assert.equal(reborn.status, 0, reborn.stderr);
-    assert.equal(JSON.parse(readFileSync(join(home, "teams.json"), "utf8")).teams[0].lanes.at(-1).id, "fishing-2");
+    const afterReborn = JSON.parse(readFileSync(join(home, "teams.json"), "utf8")).teams[0].lanes;
+    assert.equal(afterReborn.some((l) => l.id === "fishing-2"), false);
+    const fishingLane = afterReborn.find((l) => l.id === "fishing");
+    assert.equal(fishingLane.state, "pinned");
+    assert.equal("doneAt" in fishingLane, false);
+    assert.match(readFileSync(join(root, "docs", "brainstorm", "fishing.md"), "utf8"), /## Open\n- again/);
 
-    // vs pin merge folds source lane's Decided + Open into target lane, marks source done, and logs decision
+    // vs pin merge folds source lane's Decided + Open into target lane, marks source removed, adds aliases, and logs decision
     const vsMerge = (...args) => spawnSync(process.execPath, ["cli/vs.mjs", "pin", "merge", ...args], { env, encoding: "utf8" });
     const merged = vsMerge("sound-2", "crafting-tree", "--note", "unify crafting SFX with tier unlocks", "--team", "efi");
     assert.equal(merged.status, 0, merged.stderr);
@@ -99,7 +104,9 @@ test("vs pin new writes the lane and brief, refuses overlaps", () => {
     assert.match(mergedBrief, /\[Merged Sound -> Crafting tree\] unify crafting SFX with tier unlocks/);
     assert.match(mergedBrief, /\[from Sound\] x/);
     const afterMergeTeams = JSON.parse(readFileSync(join(home, "teams.json"), "utf8"));
-    assert.equal(afterMergeTeams.teams[0].lanes.find((l) => l.id === "sound-2").state, "done");
+    assert.equal(afterMergeTeams.teams[0].lanes.find((l) => l.id === "sound-2").state, "removed");
+    const craftingAfterMerge = afterMergeTeams.teams[0].lanes.find((l) => l.id === "crafting-tree");
+    assert.ok(craftingAfterMerge.aliases.includes("sound-2"));
     const logLines = readFileSync(join(home, "teams", "efi", "log.jsonl"), "utf8").trim().split(/\r?\n/).map((l) => JSON.parse(l));
     assert.ok(logLines.some((e) => e.type === "decision" && e.text.includes("Merged Sound (sound-2) -> Crafting tree (crafting-tree)")));
   } finally {
