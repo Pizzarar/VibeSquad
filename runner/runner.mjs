@@ -19,6 +19,17 @@ export function validateCreate({ model, cwd, meta = {} }) {
   if (!st.isDirectory()) throw new Error(`cwd is not a directory: ${cwd}`);
 }
 
+// Env a child gets: the runner's own env is stale for identity (it carries whichever lead started the runner),
+// so every agent id/team/lane/role is overwritten from its own meta.
+export function agentEnv(id, meta = {}, base = process.env) {
+  const env = { ...base, VS_AGENT_ID: id, PASEO_AGENT_ID: id };
+  for (const [k, v] of [['VS_TEAM', meta.team], ['VS_LANE', meta.lane], ['VS_ROLE', meta.role], ['VS_ORD', meta.ord]]) {
+    if (v !== undefined && v !== null && v !== '') env[k] = String(v);
+    else delete env[k];
+  }
+  return env;
+}
+
 export function defaultAdapters(opts = {}) {
   return { claude: createClaudeAdapter(opts), opencode: createAcpAdapter(opts) };
 }
@@ -45,7 +56,7 @@ export class Runner {
     };
     try {
       entry.handle = adapter.start({
-        model, cwd, meta, systemPrompt, emit,
+        id, env: agentEnv(id, meta), model, cwd, meta, systemPrompt, emit,
         onExit: (info) => {
           entry.status = 'exited';
           this.store.append(id, 'exit', info);

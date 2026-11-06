@@ -23,6 +23,6 @@ export function getCliBackend() {
 }
 
 export { PaseoBackend, BACKEND_METHODS } from "./paseo-backend.mjs";
-export { RunnerBackend, isRunnerId } from "./runner-backend.mjs";
+export { RunnerBackend, isRunnerId, readRunnerAgentSync, listRunnerAgentsSync } from "./runner-backend.mjs";
 export { RoutingBackend, runnerLanes } from "./lane-routing.mjs";
 export { hasCustomMockCli, hasCustomOfflineStore, run } from "./paseo-cli.mjs";

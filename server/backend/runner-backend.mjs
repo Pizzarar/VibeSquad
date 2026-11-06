@@ -1,7 +1,9 @@
 // RunnerBackend: the AgentBackend seam over the VS agent runner's HTTP API (docs/PLAN_OWN_DAEMON.md Block 3).
 // squad/team/lane/role/ord/profile are first-class fields on the runner record; this class maps them (and the
 // runner's event log) back into the shapes callers already read from PaseoBackend/DaemonClient.
-import { RunnerClient } from "./runner-client.mjs";
+import fs from "node:fs";
+import path from "node:path";
+import { RunnerClient, runnerHome } from "./runner-client.mjs";
 
 const FIRST_CLASS = ["squad", "team", "lane", "role", "ord", "profile"];
 const ENV_FOR = { lane: "VS_LANE", team: "VS_TEAM", role: "VS_ROLE", profile: "VS_PROFILE" };
@@ -26,7 +28,7 @@ export function toAgent(rec) {
     title: meta.title || rec.id,
     status: STATUS[rec.status] ?? "idle",
     labels,
-    modeId: meta.permissionMode ?? null,
+    modeId: meta.permissionMode ?? (rec.provider === "claude" ? "auto" : null),
     thinkingOptionId: null,
     requiresAttention: false,
     createdAt: iso(rec.createdAt),
@@ -36,6 +38,53 @@ export function toAgent(rec) {
     workspaceId: null,
     backend: "runner",
   };
+}
+
+/**
+ * Synchronous, read-only view of a runner agent straight from its JSONL log (<runner home>/agents/<id>.jsonl).
+ * For callers that cannot await the HTTP API (vs log identity, vs who). Returns the toAgent() snapshot or null.
+ */
+export function readRunnerAgentSync(id, { env = process.env } = {}) {
+  if (!isRunnerId(id) || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) return null;
+  let text;
+  try {
+    text = fs.readFileSync(path.join(runnerHome(env), "agents", `${id}.jsonl`), "utf8");
+  } catch {
+    return null;
+  }
+  let created = null;
+  let status = "unknown";
+  let exited = false;
+  let archivedAt = null;
+  let last = null;
+  const meta = {};
+  for (const line of text.split("\n")) {
+    if (!line) continue;
+    let e;
+    try { e = JSON.parse(line); } catch { continue; }
+    last = e;
+    if (e.type === "created") { created = e; Object.assign(meta, e.meta); }
+    else if (e.type === "meta") Object.assign(meta, e.patch, e.patch?.labels ? { labels: { ...meta.labels, ...e.patch.labels } } : {});
+    else if (e.type === "status") status = e.status;
+    else if (e.type === "exit") exited = true;
+    else if (e.type === "archive") archivedAt = e.ts;
+  }
+  if (!created) return null;
+  return toAgent({
+    id, provider: created.provider, model: created.model, cwd: created.cwd, meta,
+    status: exited ? "exited" : status, createdAt: created.ts, updatedAt: last?.ts, archivedAt,
+  });
+}
+
+/** Every runner agent on this machine (sync, log-derived). Empty when no runner dir exists. */
+export function listRunnerAgentsSync({ env = process.env } = {}) {
+  let names;
+  try {
+    names = fs.readdirSync(path.join(runnerHome(env), "agents"));
+  } catch {
+    return [];
+  }
+  return names.filter((f) => f.endsWith(".jsonl")).map((f) => readRunnerAgentSync(f.slice(0, -6), { env })).filter(Boolean);
 }
 
 /** Runner JSONL events -> timeline entries ({ item, timestamp, seqStart, seqEnd }) as the timeline UI expects. */
