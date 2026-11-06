@@ -6,6 +6,11 @@ import test from "node:test";
 import { performBrainstormRestart, resetBrainstormRestartState, seedDefaultPack } from "../server/vibesquad-api.mjs";
 import { briefDiffSummary, patchLane } from "../src/pins.ts";
 
+// These tests drive a mock Paseo daemon. The runner has a single owner (the VS server) and is never lazily started, so pin
+// every lane to Paseo (VS_DEFAULT_BACKEND=paseo is the documented rollback default) instead of expecting a runner.
+process.env.VS_DEFAULT_BACKEND = "paseo";
+delete process.env.VS_BACKEND;
+
 function makeEnv() {
   const dir = mkdtempSync(join(tmpdir(), "vs-pins-resolver-test-"));
   const vsHome = join(dir, ".vibesquad");
