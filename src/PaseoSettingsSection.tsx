@@ -1014,7 +1014,7 @@ export function PaseoSettingsSection({
             />
             <span>
               <b>Start Paseo with VibeSquad</b>{" "}
-              <span className="muted small">(automatically starts local daemon on launch if not already running)</span>
+              <span className="muted small">(off by default: VibeSquad runs agents on its own runner. Turn on to start the local Paseo daemon on launch for Paseo-hosted agents)</span>
             </span>
           </label>
         </div>

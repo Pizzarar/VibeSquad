@@ -551,7 +551,7 @@ export async function getPaseoDaemonStatus(opts = {}) {
     busyAgentCount: busyCount,
     busyAgents,
     keepPaseoRunningOnQuit: userSettings.keepPaseoRunningOnQuit !== false,
-    startPaseoWithVibeSquad: userSettings.startPaseoWithVibeSquad !== false,
+    startPaseoWithVibeSquad: userSettings.startPaseoWithVibeSquad === true,
     backupsCount: listPaseoConfigBackups(opts).length,
   };
 }

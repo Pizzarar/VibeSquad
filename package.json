@@ -16,7 +16,8 @@
     "release:beta": "node server/release.mjs --channel beta",
     "release:stable": "node server/release.mjs --channel stable",
     "desktop:dev": "tauri dev",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --import ./test/setup/hermetic.mjs \"test/*.test.mjs\""
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "5.3.0",

@@ -10,7 +10,7 @@ import { readRawPaseoConfig } from "./paseo-control.mjs";
 import { briefRootFor, laneWorkingDir } from "./brief-path.mjs";
 import { defangPromptFences } from "./write-guards.mjs";
 import { detachLiveChildrenViaClient, listDaemonAgents } from "./detach-children.mjs";
-import { getBackend } from "./backend/index.mjs";
+import { getBackend, runnerLanes } from "./backend/index.mjs";
 import { BRIEF_HISTORY_KEEP, BRIEF_SHRINK_FROM, BRIEF_SHRINK_TO, backupBrief, writeBriefFile } from "./brief-write.mjs";
 import { liveInFlightBlock } from "./in-flight.mjs";
 import { refreshWhosHere } from "./whos-here.mjs";
@@ -465,6 +465,10 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
     if (agentId !== "start-brainstorm" && !(oldAgent && ["brainstorm", "former-brainstorm"].includes(oldLabels.role))) {
       throw new Error(`not a brainstorm agent: ${agentId}`);
     }
+    // A Paseo-hosted Buddy cannot be retired while Paseo is down: spawning its successor would leave two live Buddies.
+    if (agentId !== "start-brainstorm" && !String(agentId).startsWith("rn-") && backend?.paseoUnavailable) {
+      throw Object.assign(new Error("Paseo is not running, so this Paseo-hosted Buddy cannot be restarted yet. Start Paseo (Settings) and retry."), { code: "PASEO_UNAVAILABLE" });
+    }
     const laneHint = body.laneId || body.lane || oldLabels.lane || oldLabels.lead || "vibesquad";
     const resolved = laneDisplayName(laneHint, rootDir);
     const laneId = safeSegment(body.laneId || body.lane || resolved.laneId || "vibesquad");
@@ -517,7 +521,15 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
         if (body.agents) return body.agents instanceof Map ? [...body.agents.values()] : Array.isArray(body.agents) ? body.agents : [];
         // A daemon client was expected but never connected (daemon restarting): unknown, not empty.
         if (client && !connected) return null;
-        if (connected && client && typeof backend.fetchAgents === "function") return asList(await backend.fetchAgents().catch(() => null));
+        if (connected && client && typeof backend.fetchAgents === "function") {
+          // An owner-initiated start: a cold runner must be booted, not read as "no agents" (or as an unreadable list).
+          await backend.ensureRunner?.();
+          const res = await backend.fetchAgents().catch(() => null);
+          // Runner-only list because Paseo is down or died mid-call: fine for a runner lane, unknown for any lane Paseo
+          // would serve (pinned, or every lane under the rollback default), where its Buddy may live.
+          if (res?.paseoUnavailable && !runnerLanes({ teamsFile: resolveTeamsFilePath(rootDir) }).has(String(laneId).toLowerCase())) return null;
+          return asList(res);
+        }
         if (connected && client && typeof backend.listAgents === "function") return asList(await backend.listAgents().catch(() => null));
         return [];
       };

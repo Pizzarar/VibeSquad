@@ -110,6 +110,8 @@ Install the server plugin in the Paseo daemon to enable prompt layering and agen
 | `VIBESQUAD_PORT` | `4180` | HTTP/HTTPS listen port |
 | `VIBESQUAD_LAN_IP` | auto-detected | Bind to a specific LAN IP for HTTPS |
 | `VIBESQUAD_MESHNET_HOST` | — | Meshnet hostname for HTTPS (e.g. a VPN host) |
+| `VS_PASEO_LANES` | — | Comma-separated lanes pinned to Paseo (also `"backend": "paseo"` on a lane in `teams.json`). Every other lane runs on the VS runner |
+| `VS_DEFAULT_BACKEND` | `runner` | Set to `paseo` to roll back to pre-cutover routing: only `VS_RUNNER_LANES` / `"backend": "runner"` lanes use the runner |
 | `VIBESQUAD_MESHNET_IP` | auto-detected | Meshnet IPv4 |
 | `PASEO_HOME` | `~/.paseo` | Paseo daemon home directory |
 | `PASEO_DAEMON` | `127.0.0.1:6767` | Paseo daemon address |

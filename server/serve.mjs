@@ -509,13 +509,12 @@ const isMain = process.argv[1] && resolve(process.argv[1]) === resolve(import.me
 
 // Whether serve.mjs should auto-start the local Paseo daemon on launch. Skipped when the caller sets
 // VIBESQUAD_NO_DAEMON=1 (e.g. desktop "relay" mode, which only serves the static bundle and must not
-// spawn a daemon that conflicts with a running service or remote relay) or the owner opted out via
-// Settings › startPaseoWithVibeSquad. Env vars arrive as strings, so accept both "1" and 1.
+// spawn a daemon that conflicts with a running service or remote relay). Since the runner cutover Paseo is opt-in:
+// it starts only when Settings › startPaseoWithVibeSquad is explicitly on. Env vars arrive as strings, so accept both "1" and 1.
 export function shouldAutoStartPaseoDaemon(env = process.env, settings = loadUserSettings()) {
   const noDaemon = env?.VIBESQUAD_NO_DAEMON;
   if (noDaemon === 1 || noDaemon === "1") return false;
-  if (settings?.startPaseoWithVibeSquad === false) return false;
-  return true;
+  return settings?.startPaseoWithVibeSquad === true;
 }
 
 if (isMain) {

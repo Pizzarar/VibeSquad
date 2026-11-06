@@ -1,5 +1,6 @@
 import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { handleRunnerApi } from "./runner-api.mjs";
+import { resetPaseoProbe } from "./backend/lane-routing.mjs";
 import { handleSchedulesApi } from "./schedules.mjs";
 import { sharedRunnerBackend } from "./backend/index.mjs";
 import { handleTerminalsApi, isTerminalsPath } from "./terminals-api.mjs";
@@ -603,7 +604,7 @@ function handleTeams(req, res, rootDir) {
       }
       clearConfigWarning(file);
       seedHubBriefs(cur.teams, teams, rootDir);
-      syncRunnerPushWatch(rootDir).catch(() => {}); // a lane flipped to/from the runner changes what the watcher must subscribe to
+      syncRunnerPushWatch().catch(() => {}); // a lane pinned to / released from Paseo changes what the watcher must subscribe to
       sendJson(res, 200, {
         ok: true,
         revision: teamsRevision(resolveTeamsFilePath(rootDir)),
@@ -645,6 +646,7 @@ async function handleSettings(req, res) {
     if (body && "startPaseoWithVibeSquad" in body) patch.startPaseoWithVibeSquad = Boolean(body.startPaseoWithVibeSquad);
     if (body && "pushEvents" in body) patch.pushEvents = body.pushEvents;
     let saved = saveUserSettings(patch);
+    if ("startPaseoWithVibeSquad" in patch) syncRunnerPushWatch().catch(() => {});
     if (
       body &&
       (typeof body.remoteEnabled === "boolean" ||
@@ -1632,7 +1634,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
       return handleDesktopUpdateJson(req, res, rootDir);
     }
     if (!path.startsWith("/__vibesquad/")) return next?.();
-    if (path.startsWith("/__vibesquad/runner/")) return handleRunnerApi(req, res, { readBody: (r) => readBody(r, bodyLimit), sendJson });
+    if (path.startsWith("/__vibesquad/runner/")) return handleRunnerApi(req, res, { readBody: (r) => readBody(r, bodyLimit), sendJson, ensureRunner: isOwner(req) });
     if (path === "/__vibesquad/schedules" || path.startsWith("/__vibesquad/schedules/")) return handleSchedulesApi(req, res, { readBody, sendJson });
     if (isTerminalsPath(path)) return handleTerminalsApi(req, res, { readBody, sendJson, resolveCwd: (cwd) => resolveShellCwd(cwd, rootDir, opts) });
     if (path === "/__vibesquad/providers" || path.startsWith("/__vibesquad/providers/")) return handleProvidersApi(req, res, { sendJson, readBody: readCleanBody });
@@ -1650,7 +1652,11 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return cachedRead(() => inspectFirstRunStatus(opts.firstRun)).then((st) => sendJson(res, 200, st), (e) => sendJson(res, 500, { error: String(e?.message ?? e) }));
       case "/__vibesquad/first-run/install-paseo":
         if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
-        return startManagedPaseoInstall(opts.firstRun).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { error: String(e?.message ?? e) }));
+        return startManagedPaseoInstall(opts.firstRun).then((r) => {
+          resetPaseoProbe();
+          syncRunnerPushWatch().catch(() => {});
+          return sendJson(res, 200, r);
+        }, (e) => sendJson(res, 500, { error: String(e?.message ?? e) }));
       case "/__vibesquad/settings":
         return handleSettings(req, res).catch((e) => {
           if (!res.headersSent) sendJson(res, 500, { ok: false, error: String(e?.message ?? e) });
@@ -1790,7 +1796,14 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
         return readBody(req)
           .then((body) => controlPaseoDaemon(String(body?.action || ""), { ...(opts.paseo || {}), confirmBusy: Boolean(body?.confirmBusy), reason: body?.reason }))
-          .then((r) => sendJson(res, r.ok ? 200 : r.needsConfirmation ? 409 : 400, r))
+          .then((r) => {
+            if (r.ok) {
+              resetPaseoProbe();
+              syncRunnerPushWatch().catch(() => {});
+            }
+            // a daemon that just started (or stopped) changes what the watcher should attach to
+            return sendJson(res, r.ok ? 200 : r.needsConfirmation ? 409 : 400, r);
+          })
           .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
       case "/__vibesquad/paseo/usage":
         if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });

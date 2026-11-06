@@ -87,6 +87,14 @@ test("existing daemon is reused: source existing, install does not run npm", asy
   assert.equal(ran, 0);
 });
 
+test("first run is ready without Paseo: only an agent CLI is required", async () => {
+  resetFirstRunState();
+  const base = { env: cleanEnv, prefix: join(tmp, "p-none"), isListening: notListening, probeVersions: false, cli: null, spawn: noDaemon };
+  const st = await inspectFirstRunStatus(base);
+  assert.equal(st.paseo.installed, false);
+  assert.equal(st.ready, Boolean(st.claude.installed || st.gemini.installed), "ready ignores Paseo");
+});
+
 test("ensurePaseoDaemon never spawns a second daemon", async () => {
   let spawned = 0;
   const res = await ensurePaseoDaemon({ isListening: listening, spawn: () => { spawned++; } });

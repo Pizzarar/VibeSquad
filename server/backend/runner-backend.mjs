@@ -186,6 +186,8 @@ async function injectedPrefix(role, cwd) {
 /** Shown status of a tracked agent: "error" while an errored turn has not been followed by a new one. */
 const viewStatus = (t) => (t.errored && t.status !== "running" ? "error" : t.status);
 
+const ENSURE_COOLDOWN_MS = 30_000;
+
 export class RunnerBackend {
   constructor({ client = new RunnerClient(), buildPrefix = injectedPrefix, whosHere = refreshWhosHere, rootDir = REPO_ROOT, lanes = runnerLanes } = {}) {
     Object.defineProperty(this, "rc", { value: client });
@@ -276,6 +278,28 @@ export class RunnerBackend {
 
   async getAgent(id) {
     return (await this.fetchAgent(id)).agent;
+  }
+
+  /**
+   * Start the runner if it is down: single-flight, and not again for a while after a failed start. For owner-initiated
+   * server paths (start-brainstorm, MCP spawn/list) where "no runner yet" must mean "boot it", never "no agents".
+   * Plain list/read calls do not start it, so a read-only visitor cannot.
+   */
+  ensureRunningOnce() {
+    if (this.ensuring) return this.ensuring;
+    if (Date.now() - (this.ensureFailedAt ?? 0) < ENSURE_COOLDOWN_MS) return Promise.resolve();
+    this.ensuring = Promise.resolve()
+      .then(() => this.rc.ensureRunning())
+      .then(
+        () => undefined,
+        () => {
+          this.ensureFailedAt = Date.now();
+        },
+      )
+      .finally(() => {
+        this.ensuring = null;
+      });
+    return this.ensuring;
   }
 
   async fetchAgents(opts = {}) {

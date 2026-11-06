@@ -31,6 +31,18 @@ describe("no-auto-daemon · VIBESQUAD_NO_DAEMON gate", () => {
     assert.equal(shouldAutoStartPaseoDaemon({}, { startPaseoWithVibeSquad: true }), true);
   });
 
+  test("shouldAutoStartPaseoDaemon is opt-in: unset setting means the daemon is not started", () => {
+    assert.equal(shouldAutoStartPaseoDaemon({}, {}), false);
+    assert.equal(shouldAutoStartPaseoDaemon({}, { startPaseoWithVibeSquad: undefined }), false);
+  });
+
+  test("push watcher builds its DaemonClient only when Paseo is enabled or already listening", () => {
+    const s = src("server/push.mjs");
+    assert.match(s, /const attachPaseo = \(\) => \{[\s\S]*?client = \(createClient \?\? \(\(cfg\) => new DaemonClient\(cfg\)\)\)\(/);
+    assert.match(s, /shouldWatchPaseo\(\) \|\| \(await paseoDaemonAlive\(\)\)/);
+    assert.equal((s.match(/new DaemonClient\(/g) || []).length, 1);
+  });
+
   test("shouldAutoStartPaseoDaemon treats the env string \"1\" the same as the number 1", () => {
     assert.equal(shouldAutoStartPaseoDaemon({ VIBESQUAD_NO_DAEMON: "1" }, { startPaseoWithVibeSquad: true }), false);
   });
