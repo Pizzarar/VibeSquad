@@ -201,6 +201,8 @@ for (const name of ["fetchAgents", "listAgents"]) {
               return null;
             });
         const [p, r] = await Promise.all([paseoList, this.runner[name](...args).catch(() => null)]);
+        // An unreadable Paseo answer (null / junk) is unknown, not empty: a runner list must not paper over it.
+        if (listOf(p) == null) paseoFailed = true;
         const merged = p == null && r != null ? r : mergeLists(p, r);
         return paseoFailed ? markPaseoUnavailable(merged) : merged;
       };

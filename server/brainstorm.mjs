@@ -521,6 +521,8 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
         if (body.agents) return body.agents instanceof Map ? [...body.agents.values()] : Array.isArray(body.agents) ? body.agents : [];
         // A daemon client was expected but never connected (daemon restarting): unknown, not empty.
         if (client && !connected) return null;
+        // connect() no longer throws for a down Paseo: for a lane Paseo would serve, its Buddy list is unknown.
+        if (backend.paseoUnavailable && !runnerLanes({ teamsFile: resolveTeamsFilePath(rootDir) }).has(String(laneId).toLowerCase())) return null;
         if (connected && client && typeof backend.fetchAgents === "function") {
           // An owner-initiated start: a cold runner must be booted, not read as "no agents" (or as an unreadable list).
           await backend.ensureRunner?.();
