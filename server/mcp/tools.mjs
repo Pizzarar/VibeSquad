@@ -3,10 +3,13 @@
 // rn- ids -> RunnerBackend, other ids -> Paseo, creates by lane (every lane runs on the runner unless pinned to Paseo).
 import { isRunnerId } from "../backend/runner-backend.mjs";
 import { coalesceReplies } from "../reply-coalesce.mjs";
+import { loadTeamsRegistry, whoCandidate } from "../identity.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
 export const REPORT_TYPES = ["done", "decision", "blocker"];
 const WORKER_ROLE = "worker";
+const LEAD_ROLE = "lead";
+const LEAD_PROFILE_PREFIX = "Lead - ";
 const clean = (v) => String(v ?? "").trim();
 /** A runner agent is calling: its id is the spawn parent / message sender the runner hook host needs (Paseo supplies both natively). */
 const isRunnerCaller = (ctx) => String(ctx.identity?.agentId ?? "").startsWith("rn-");
@@ -66,6 +69,15 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
       } finally {
         await Promise.resolve(backend.close?.()).catch(() => {});
       }
+    },
+    // Live leads in (team, lane): the exact `vs who lead` filter (whoCandidate), over the merged agent list.
+    async findLiveLeads({ team, lane }) {
+      const res = await ctx.withBackend({ lane }, (b) => (b.fetchAgents ?? b.listAgents).call(b, {}));
+      const teams = ctx.teams ?? loadTeamsRegistry();
+      const wantTeamId = team;
+      return entriesOf(res)
+        .map((e) => e?.agent ?? e)
+        .filter((a) => a && whoCandidate(a, { teams, wantTeamId, wantLane: lane })?.role === "lead");
     },
     ...overrides,
   };
@@ -129,15 +141,28 @@ async function spawnWorker(ctx, args = {}) {
   const { team, lane } = ctx.identity;
   const title = clean(args.title) || `Worker ${new Date().toISOString().slice(11, 19)}`;
   const labels = { ...(args.labels ?? {}) };
+  // A Buddy may start the lane's lead; nobody else, and no other role. Any failed condition is an error, never a downgrade.
+  const asLead = clean(labels.role).toLowerCase() === LEAD_ROLE;
+  if (asLead) {
+    const callerRole = clean(ctx.identity.role).toLowerCase();
+    if (callerRole !== "brainstorm") throw new Error(`cannot spawn a lead: caller role is "${callerRole || "none"}", only a brainstorm (Buddy) may`);
+    if (!team || !lane) throw new Error("cannot spawn a lead: caller has no team and lane");
+    if (clean(labels.lane) && clean(labels.lane).toLowerCase() !== lane.toLowerCase()) throw new Error(`cannot spawn a lead: target lane "${clean(labels.lane)}" is not the caller's lane "${lane}"`);
+    if (!clean(profile?.name).startsWith(LEAD_PROFILE_PREFIX)) throw new Error(`cannot spawn a lead: profile "${clean(profile?.name) || profileName || "none"}" is not a "${LEAD_PROFILE_PREFIX}" profile`);
+    const live = await ctx.findLiveLeads({ team, lane });
+    if (live.length) throw new Error(`cannot spawn a lead: lane "${lane}" already has a live lead (${live.map((a) => a.id).join(", ")})`);
+    labels.lead = lane;
+  }
   if (team || labels.team) labels.team = team || labels.team;
   if (lane || labels.lane) labels.lane = lane || labels.lane;
-  labels.role = WORKER_ROLE;
+  const role = asLead ? LEAD_ROLE : WORKER_ROLE;
+  labels.role = role;
   if (profile) labels.profile = profile.name || profile.id; // by name: the plugin, failover and digest identity all match names
   else if (labels.profile === undefined) delete labels.profile;
   if (isRunnerCaller(ctx)) labels["vs.parent"] = ctx.identity.agentId;
   delete labels.ord; // ordinals are assigned by the squad, never by a spawn arg
   labels.job = clean(labels.job) || title;
-  const env = { VS_ROLE: WORKER_ROLE, ...(labels.profile ? { VS_PROFILE: labels.profile } : {}), ...(labels.lane ? { VS_LANE: labels.lane } : {}), ...(labels.team ? { VS_TEAM: labels.team } : {}) };
+  const env = { VS_ROLE: role, ...(labels.profile ? { VS_PROFILE: labels.profile } : {}), ...(labels.lane ? { VS_LANE: labels.lane } : {}), ...(labels.team ? { VS_TEAM: labels.team } : {}) };
   const created = await ctx.withBackend({ lane: labels.lane, requireRunner: true }, (b) =>
     b.createAgent({
       config: {

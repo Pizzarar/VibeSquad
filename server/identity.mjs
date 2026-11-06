@@ -742,3 +742,21 @@ export function formatDisplayTitle({
   }
   return `${c}${ordRaw} · ${cleanJob || "worker"}`;
 }
+
+/**
+ * The `vs who` per-agent filter, shared with the MCP lead-spawn check so both agree on "live in this lane":
+ * skips archived/internal/closed, retired (former-*, (old)), other teams/lanes (unless squadWide) and removed lanes.
+ * Returns {role, teamId, lane} (role is the effective role) or null.
+ */
+export function whoCandidate(a, { teams, wantTeamId, wantLane, squadWide = false, removedLanes = new Set() } = {}) {
+  const status = String(a.status ?? "unknown").trim();
+  if (a.archivedAt || a.archived || a.internal || status.toLowerCase() === "closed") return null;
+  if (isRetiredRole(a.labels?.role)) return null;
+  const resolved = resolveAgentIdentity(a, { teams, cwd: a.cwd });
+  const teamId = resolved.isOrphan ? "" : resolved.teamId;
+  const lane = resolved.isOrphan ? "" : resolved.laneId;
+  if (teamId.toLowerCase() !== String(wantTeamId).toLowerCase()) return null;
+  if (!squadWide && lane.toLowerCase() !== String(wantLane).toLowerCase()) return null;
+  if (removedLanes.has(lane.toLowerCase())) return null;
+  return { role: effectiveAgentRole(a), teamId, lane };
+}

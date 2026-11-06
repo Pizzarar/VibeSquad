@@ -12,7 +12,7 @@ import { Runner, agentEnv } from '../runner/runner.mjs';
 import { createClaudeAdapter } from '../runner/adapters/claude.mjs';
 import { createAcpAdapter } from '../runner/adapters/acp.mjs';
 import { toAgent, readRunnerAgentSync } from '../server/backend/runner-backend.mjs';
-import { ALIASES, callTool, VS_TOOLS } from '../server/mcp/tools.mjs';
+import { ALIASES, callTool, createContext, VS_TOOLS } from '../server/mcp/tools.mjs';
 import { handleMessage, toolList } from '../server/mcp/server.mjs';
 import { runAgentVerb } from '../cli/vs.mjs';
 
@@ -125,7 +125,8 @@ test('runner passes the per-agent env to the child process', () => {
 function fakeCtx({ identity = { agentId: 'rn-caller', team: 'efi', lane: 'own', role: 'lead' }, runnerBackend, paseoBackend } = {}) {
   const logs = [];
   const used = [];
-  const profiles = [{ id: 'agent_profile_x', name: 'Implement - Sonnet', role: 'worker', provider: 'claude', model: 'claude-sonnet-5-5', modeId: 'auto', notes: 'be good' }];
+  const profiles = [{ id: 'agent_profile_x', name: 'Implement - Sonnet', role: 'worker', provider: 'claude', model: 'claude-sonnet-5-5', modeId: 'auto', notes: 'be good' },
+    { id: 'agent_profile_l', name: 'Lead - Opus', role: 'lead', provider: 'claude', model: 'claude-opus-5-5', modeId: 'auto', notes: 'lead it' }];
   return {
     logs, used, identity, cwd: '/work',
     loadProfiles: async () => profiles,
@@ -204,7 +205,7 @@ test('MCP: handleMessage ignores notifications and lists every tool', async () =
 test('spawn_worker: profile -> provider/model/mode, inherits team+lane, role=worker, routes to the runner lane', async () => {
   const runnerBackend = fakeBackend('rn');
   const ctx = fakeCtx({ runnerBackend, paseoBackend: fakeBackend('ps') });
-  const out = await callTool(ctx, 'spawn_worker', { title: 'Do it', profile: 'Implement - Sonnet', prompt: 'go', labels: { role: 'lead', lane: 'evil' } });
+  const out = await callTool(ctx, 'spawn_worker', { title: 'Do it', profile: 'Implement - Sonnet', prompt: 'go', labels: { role: 'brainstorm', lane: 'evil' } });
   assert.deepEqual(out, { id: 'rn-new', title: 'Do it' });
   const [, req] = runnerBackend.calls[0];
   assert.deepEqual([req.config.provider, req.config.model, req.config.modeId, req.config.cwd], ['claude', 'claude-sonnet-5-5', 'auto', '/work']);
@@ -216,6 +217,48 @@ test('spawn_worker: profile -> provider/model/mode, inherits team+lane, role=wor
   assert.equal(req.labels.job, 'Do it');
   assert.equal(req.env.VS_ROLE, 'worker');
   await assert.rejects(callTool(ctx, 'spawn_worker', { title: 't', profile: 'Nope', prompt: 'p' }), /unknown profile/);
+});
+
+const LEAD_TEAMS = [{ id: 'efi', name: 'EFI', paths: ['efi'], lanes: [{ id: 'own', name: 'Own' }, { id: 'ui', name: 'UI' }] }];
+const leadAgent = (id, over = {}) => ({ id, title: id, status: 'idle', labels: { team: 'efi', lane: 'own', role: 'lead', ...over } });
+
+// The real findLiveLeads (vs who filter) over a stubbed backend list; no runner needed.
+function leadCtx({ role = 'brainstorm', lane = 'own', agents = [] } = {}) {
+  const runnerBackend = { ...fakeBackend('rn'), fetchAgents: async () => ({ entries: agents.map((agent) => ({ agent })) }) };
+  const ctx = fakeCtx({ identity: { agentId: 'rn-buddy', team: 'efi', lane, role }, runnerBackend, paseoBackend: fakeBackend('ps') });
+  ctx.teams = LEAD_TEAMS;
+  ctx.findLiveLeads = createContext({ env: {}, identity: ctx.identity, withBackend: ctx.withBackend, teams: LEAD_TEAMS }).findLiveLeads;
+  return { ctx, runnerBackend };
+}
+const askLead = (ctx, extra = {}) => callTool(ctx, 'spawn_worker', { title: 'L', profile: 'Lead - Opus', prompt: 'lead', labels: { role: 'lead' }, ...extra });
+
+test('spawn_worker: a Buddy starts the lane lead when none is live (lead labels + VS_ROLE=lead)', async () => {
+  const { ctx, runnerBackend } = leadCtx({ agents: [leadAgent('rn-old', { role: 'former-lead' }), { ...leadAgent('rn-closed'), status: 'closed' }, leadAgent('rn-otherlane', { lane: 'ui' })] });
+  assert.equal((await askLead(ctx)).id, 'rn-new');
+  const req = runnerBackend.calls[0][1];
+  assert.deepEqual([req.labels.role, req.labels.lane, req.labels.team, req.labels.lead, req.labels.profile], ['lead', 'own', 'efi', 'own', 'Lead - Opus']);
+  assert.deepEqual([req.env.VS_ROLE, req.env.VS_LANE, req.env.VS_TEAM, req.env.VS_PROFILE], ['lead', 'own', 'efi', 'Lead - Opus']);
+});
+
+test('spawn_worker: lead request is an error (no downgrade) unless Buddy + own lane + Lead profile + no live lead', async () => {
+  for (const role of ['worker', 'lead', '']) {
+    const { ctx, runnerBackend } = leadCtx({ role });
+    await assert.rejects(askLead(ctx), /only a brainstorm/, role);
+    assert.equal(runnerBackend.calls.length, 0);
+  }
+  const live = leadCtx({ agents: [leadAgent('rn-live')] });
+  await assert.rejects(askLead(live.ctx), /already has a live lead \(rn-live\)/);
+  const plain = leadCtx();
+  await assert.rejects(askLead(plain.ctx, { profile: 'Implement - Sonnet' }), /not a "Lead - " profile/);
+  await assert.rejects(askLead(plain.ctx, { labels: { role: 'lead', lane: 'ui' } }), /not the caller's lane/);
+  assert.equal(plain.runnerBackend.calls.length, 0);
+});
+
+test('spawn_worker: a Buddy without a lead request still gets a worker; role smuggling is ignored', async () => {
+  const { ctx, runnerBackend } = leadCtx();
+  await callTool(ctx, 'spawn_worker', { title: 'W', profile: 'Implement - Sonnet', prompt: 'p', labels: { role: 'brainstorm' } });
+  await callTool(ctx, 'spawn_worker', { title: 'W2', profile: 'Lead - Opus', prompt: 'p' });
+  for (const [, req] of runnerBackend.calls) assert.deepEqual([req.labels.role, req.env.VS_ROLE], ['worker', 'worker']);
 });
 
 test('send / wait / status / cancel / list route by id and lane; status caps lastMessage', async () => {
