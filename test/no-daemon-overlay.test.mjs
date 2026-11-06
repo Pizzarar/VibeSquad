@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const { decideOverlay, usesPaseoBackend, showsPaseoDot, statusDot, pillText } = await import('../src/daemonOverlay.ts');
+const { decideOverlay, usesPaseoBackend, paseoIsDown, showsPaseoDot, statusDot, pillText } = await import('../src/daemonOverlay.ts');
 
 const base = { remote: false, runnerConn: 'up', paseoDown: true, authFailureReason: null, usesPaseo: false };
 const runnerOn = { enabled: true, defaultBackend: 'runner', lanes: [], paseoLanes: [] };
@@ -23,7 +23,8 @@ test('locally nothing ever returns the scrim', () => {
 test('Paseo down while in use, runner down, or Paseo locked: a header pill', () => {
   assert.equal(decideOverlay({ ...base, usesPaseo: true }), 'pill');
   assert.equal(decideOverlay({ ...base, runnerConn: 'down' }), 'pill');
-  assert.equal(decideOverlay({ ...base, authFailureReason: 'password_required' }), 'pill');
+  assert.equal(decideOverlay({ ...base, authFailureReason: 'password_required', usesPaseo: true }), 'pill');
+  assert.equal(decideOverlay({ ...base, authFailureReason: 'password_required' }), 'none'); // auth failure alone, Paseo unused
   assert.equal(decideOverlay({ ...base, paseoDown: false, usesPaseo: true }), 'none');
   assert.equal(usesPaseoBackend(runnerOn, ['rn-1', 'rn-2']), false);
 });
@@ -89,4 +90,17 @@ test('a /status change notifies listeners (so usePaseo subscribers re-render); a
   }
   const src = readFileSync(new URL('../src/paseo.ts', import.meta.url), 'utf8');
   assert.match(src, /onRunnerStatusChange\(\(\) => set\(\{\}\)\)/);
+});
+
+test('locally Paseo state is the Paseo socket alone, not the combined runner+Paseo conn; remote keeps the combined conn', () => {
+  // runner up makes the combined conn/status "connected" while Paseo is down or locked
+  assert.equal(paseoIsDown({ remote: false, conn: 'connected', status: 'connected', paseoConn: false }), true);
+  assert.equal(paseoIsDown({ remote: false, conn: 'connected', status: 'connected', paseoConn: true }), false);
+  assert.equal(paseoIsDown({ remote: true, conn: 'connected', status: 'connected', paseoConn: false }), false);
+  assert.equal(paseoIsDown({ remote: true, conn: 'disconnected', status: 'error', paseoConn: true }), true);
+  assert.equal(decideOverlay({ ...base, usesPaseo: true, paseoDown: paseoIsDown({ remote: false, conn: 'connected', status: 'connected', paseoConn: false }) }), 'pill');
+  const src = readFileSync(new URL('../src/paseo.ts', import.meta.url), 'utf8');
+  assert.match(src, /set\(\{ paseoConn: link\.paseoConn \}\)/);
+  const modal = readFileSync(new URL('../src/DiagnosticsModal.tsx', import.meta.url), 'utf8');
+  assert.equal((modal.match(/paseoIsDown\(/g) ?? []).length >= 2, true); // banner + PaseoConnectionSection
 });

@@ -33,7 +33,12 @@ export type OverlayInput = {
 export function decideOverlay(i: OverlayInput): OverlayKind {
   if (i.remote) return i.paseoDown ? "scrim" : "none";
   if (i.runnerConn === "down") return "pill";
-  return i.paseoDown && (i.usesPaseo || i.authFailureReason) ? "pill" : "none";
+  return i.paseoDown && i.usesPaseo ? "pill" : "none";
+}
+
+/** Paseo's own down state: remote relay has no runner, so there the combined conn is Paseo; locally it is the Paseo socket alone. */
+export function paseoIsDown(i: { remote: boolean; conn: string; status: string; paseoConn: boolean }): boolean {
+  return i.remote ? i.conn !== "connected" && i.status !== "connected" : !i.paseoConn;
 }
 
 /** Header pill text for a local connection problem. */

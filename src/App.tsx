@@ -1409,8 +1409,8 @@ function AboutLicensesModal({ onClose, onChecklist }: { onClose: () => void; onC
 }
 
 export function App() {
-  const { conn, runnerConn, archivedAgents, workspaces, providerUsage, agents, rosterLoaded } = usePaseo();
-  const dot = statusDot({ remote: isRemote(), usesPaseo: showsPaseoDot(getRunnerStatus(), agents.keys()), paseoConn: conn, runnerConn });
+  const { conn, runnerConn, paseoConn, archivedAgents, workspaces, providerUsage, agents, rosterLoaded } = usePaseo();
+  const dot = statusDot({ remote: isRemote(), usesPaseo: showsPaseoDot(getRunnerStatus(), agents.keys()), paseoConn: isRemote() ? conn : paseoConn ? "connected" : "disconnected", runnerConn });
   const teamsVersion = useTeams();
   const { members, views } = derived();
   const full = useFullView();
