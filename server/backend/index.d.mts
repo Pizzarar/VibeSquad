@@ -36,6 +36,7 @@ export class RoutingBackend implements AgentBackend {
   readonly runner: RunnerBackend;
   runCli(paseoHome: string, args: string[], timeoutMs?: number): string | null;
 }
+export function sharedRunnerBackend(): RunnerBackend;
 export function isRunnerId(id: unknown): boolean;
 export function runnerLanes(opts?: { env?: Record<string, string | undefined>; teamsFile?: string }): Set<string>;
 export function getBackend<T>(client: T, opts?: { lanes?: () => Set<string>; runner?: RunnerBackend; force?: boolean }): T extends null | undefined ? T : any;

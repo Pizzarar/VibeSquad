@@ -2,6 +2,7 @@ import { createPaseoApi, type PaseoAgent, type PaseoClient, type PaseoWorkspace 
 import { applyLabelsOptimistic } from "./attentionItems";
 import { clearUnreadLocal, dismissLocal, markUnreadLocal, subscribeAttentionLocal } from "./attentionLocal";
 import { clearWorkspaceIfQuiet } from "./paseoAttention";
+import { isRunnerId, isRunnerLane, runnerArchive, runnerCancel, runnerSend, runnerSpawn, runnerUpdate, startRunnerBridge } from "./runnerBridge";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { spawnEnvFor } from "./spawn-env";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
@@ -157,6 +158,7 @@ export const client: PaseoClient = {
 
 export async function stopAgent(agentId: string): Promise<void> {
   if (DEMO) return;
+  if (isRunnerId(agentId)) return runnerCancel(agentId);
   await daemonClient.cancelAgent(agentId);
 }
 
@@ -167,6 +169,11 @@ async function deliver(agentId: string, text: string, args: SendArgs): Promise<v
   const sendOpts = { activeTurnBehavior: "steer" as ActiveTurnBehavior, ...args.opts };
   const lb = (state.agents.get(agentId)?.labels ?? {}) as Record<string, string>;
   perfSendBegin(agentId, lb.team, lb.lane);
+  if (isRunnerId(agentId)) {
+    await runnerSend(agentId, text);
+    perfSendResolved(agentId);
+    return;
+  }
   if (args.images?.length) await daemonClient.sendAgentMessage(agentId, text, { ...sendOpts, images: args.images });
   else await daemonClient.sendAgentMessage(agentId, text, sendOpts);
   perfSendResolved(agentId);
@@ -203,7 +210,7 @@ export async function retrySend(id: string): Promise<void> {
 
 export async function archiveAgent(agentId: string): Promise<{ archivedAt: string }> {
   if (DEMO) return { archivedAt: new Date().toISOString() };
-  const res = await client.agents.ref(agentId).archive();
+  const res = isRunnerId(agentId) ? await runnerArchive(agentId) : await client.agents.ref(agentId).archive();
   pendingAgents.delete(agentId);
   const agents = new Map(state.agents);
   agents.delete(agentId);
@@ -232,6 +239,7 @@ export async function updateAgent(
     }
     return;
   }
+  if (isRunnerId(agentId)) return runnerUpdate(agentId, updates);
   if (opts.optimistic && updates.labels) return updateLabelsOptimistic(agentId, updates.labels);
   await daemonClient.updateAgent(agentId, updates);
 }
@@ -353,6 +361,7 @@ async function refetchAll() {
     const old = state.agents.get(e.agent.id);
     next.set(e.agent.id, old && sameAgent(old, e.agent) ? old : e.agent);
   }
+  for (const [id, a] of state.agents) if (isRunnerId(id)) next.set(id, a); // runner agents are not in the Paseo snapshot
   pendingAgents.clear(); // anything queued is older than this snapshot
   const firstRoster = !state.rosterLoaded;
   set({ agents: next, rosterLoaded: true });
@@ -584,6 +593,17 @@ export async function spawnTeamAgent(req: SpawnRequest): Promise<{ id: string; c
     return { id, cwd };
   }
 
+  if (isRunnerLane(req.labels.lane)) {
+    const agent = await runnerSpawn({
+      config: { provider: req.provider, model: req.model, cwd: req.cwd, title: req.title, modeId: req.modeId, ...(req.systemPrompt ? { systemPrompt: req.systemPrompt } : {}) },
+      initialPrompt: req.prompt || undefined,
+      labels: req.labels,
+    });
+    upsertLocalAgent(agent);
+    await retirePredecessors(req, agent.id);
+    return { id: agent.id, cwd: req.cwd };
+  }
+
   // approvalPolicy/sandbox/shareMcp and profile featureValues (e.g. auto_accept) travel in `featureValues`.
   const featureValues: Record<string, unknown> = { ...(req.featureValues ?? {}) };
   if (req.approvalPolicy && featureValues.approvalPolicy === undefined) featureValues.approvalPolicy = req.approvalPolicy;
@@ -626,4 +646,13 @@ export async function attachFiles(cwd: string, files: string[]): Promise<string[
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error ?? `attach failed (${res.status})`);
   return body.copied as string[];
+}
+
+// Runner-backed lanes (inert unless one is switched): mirror the runner roster into the store.
+if (!DEMO && typeof window !== "undefined") {
+  startRunnerBridge((agents) => {
+    const live = new Set(agents.map((a) => a.id));
+    for (const a of agents) if (!sameAgent(state.agents.get(a.id), a)) upsertLocalAgent(a);
+    for (const id of state.agents.keys()) if (isRunnerId(id) && !live.has(id)) removeLocalAgent(id);
+  });
 }

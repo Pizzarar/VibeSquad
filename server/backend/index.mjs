@@ -6,6 +6,7 @@ import { RunnerBackend } from "./runner-backend.mjs";
 
 let sharedRunner;
 const runnerBackend = () => (sharedRunner ??= new RunnerBackend());
+export const sharedRunnerBackend = runnerBackend;
 
 /** Wraps a DaemonClient (or test fake) as an AgentBackend. Idempotent; null/undefined pass through. */
 export function getBackend(client, opts = {}) {
