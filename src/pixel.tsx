@@ -183,7 +183,7 @@ export function TeamEmblem({ name, color, size = 20 }: { name: string; color: st
         fontSize: Math.max(8, Math.round(size * 0.65)),
       }}
     >
-      {initials(name)}
+      <span className="team-emblem-glyph">{initials(name)}</span>
     </span>
   );
 }

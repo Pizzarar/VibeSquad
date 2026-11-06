@@ -433,12 +433,27 @@ code {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-family: inherit;
-  font-weight: 700;
+  font-family: system-ui, "Segoe UI", Inter, sans-serif;
+  font-weight: 800;
   line-height: 1;
   letter-spacing: 0;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
   overflow: hidden;
   user-select: none;
+}
+
+/* Centre the cap height, not the line box (capitals sit high in their line box). */
+@supports (text-box: trim-both cap alphabetic) {
+  .team-emblem-glyph {
+    text-box: trim-both cap alphabetic;
+  }
+}
+
+@supports not (text-box: trim-both cap alphabetic) {
+  .team-emblem-glyph {
+    transform: translateY(0.04em);
+  }
 }
 
 /* Raw-Token Context Meter */
