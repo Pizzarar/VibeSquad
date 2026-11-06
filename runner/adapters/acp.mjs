@@ -88,18 +88,37 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
         await request('initialize', { protocolVersion: 1, clientCapabilities: {} });
         const s = await request('session/new', { cwd, mcpServers: mcp ? [acpMcpServer(mcpServerSpec({ env, path: mcpPath }))] : [] });
         sessionId = s.sessionId;
-        let current = s.models?.currentModelId;
+        // Model lists come either as `models` (opencode, agy: session/set_model) or as a `model` configOption
+        // (codex-acp: session/set_config_option).
+        const opt = (s.configOptions ?? []).find((o) => o.id === 'model' || o.category === 'model');
+        const viaConfig = !s.models && !!opt;
+        let current = s.models?.currentModelId ?? opt?.currentValue;
         if (model) {
-          const id = pickModel(model, s.models?.availableModels);
+          const advertised = s.models?.availableModels ?? (opt?.options ?? []).map((o) => ({ modelId: o.value }));
+          const id = (advertised.length ? pickModel(model, advertised) : null) ?? (viaConfig ? model : null); // codex-acp's bundled list lags the account's real models: trust the profile
           if (!id) emit('stderr', { line: `model "${model}" not offered by ${name}; using ${current ?? 'its default'}` });
           else if (id !== current) {
-            try { await request('session/set_model', { sessionId, modelId: id }); current = id; }
-            catch (e) { emit('stderr', { line: `set_model ${id} failed: ${e.message}` }); }
+            try {
+              if (viaConfig) await request('session/set_config_option', { sessionId, configId: opt.id, value: id });
+              else await request('session/set_model', { sessionId, modelId: id });
+              current = id;
+            } catch (e) { emit('stderr', { line: `set model ${id} failed: ${e.message}` }); }
           }
+        }
+        // The profile mode is this provider's own ACP mode (meta.acpMode); apply it only if the agent advertises it.
+        if (meta.acpMode && (s.modes?.availableModes ?? []).some((m) => m.id === meta.acpMode) && meta.acpMode !== s.modes?.currentModeId) {
+          try { await request('session/set_mode', { sessionId, modeId: meta.acpMode }); }
+          catch (e) { emit('stderr', { line: `set_mode ${meta.acpMode} failed: ${e.message}` }); }
         }
         emit('session', { sessionId, model: current });
       })();
-      ready.catch((e) => emit('error', { message: e.message }));
+      let failed = null;
+      ready.catch((e) => {
+        // A session that never came up is dead: surface it and end the process so the agent reads as exited, not "starting".
+        failed = e;
+        emit('error', { message: e.message });
+        killTree(child);
+      });
 
       async function pump() {
         if (promptInFlight || !queue.length) return;
@@ -116,8 +135,16 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
         pump();
       }
       return {
-        send(text) { queue.push(text); ready.then(pump, () => {}); },
-        cancel() { if (sessionId) write({ method: 'session/cancel', params: { sessionId } }); },
+        send(text) {
+          if (failed) throw new Error(`agent session failed to start: ${failed.message}`);
+          queue.push(text);
+          ready.then(pump, () => {});
+        },
+        // Cancel ends the current turn AND drops prompts queued behind it (a cancelled lane must not resume on stale asks).
+        cancel() {
+          queue.length = 0;
+          if (sessionId) write({ method: 'session/cancel', params: { sessionId } });
+        },
         kill() { killTree(child); },
       };
     },
@@ -129,8 +156,10 @@ function acpMcpServer(spec) {
   return { name: spec.name, command: spec.command, args: spec.args, env: Object.entries(spec.env).map(([name, value]) => ({ name, value })) };
 }
 
+// Auto-approve unless the lane explicitly asks to deny (meta.permissionMode === 'deny'); a profile's own mode
+// (e.g. "default") never denies, it is the provider's ACP mode.
 function permissionOutcome(params, mode) {
-  if (mode === 'default') return { outcome: { outcome: 'cancelled' } };
+  if (mode === 'deny') return { outcome: { outcome: 'cancelled' } };
   const opt = (params?.options ?? []).find((o) => o.kind === 'allow_once') ?? (params?.options ?? []).find((o) => String(o.kind).startsWith('allow'));
   return opt ? { outcome: { outcome: 'selected', optionId: opt.optionId } } : { outcome: { outcome: 'cancelled' } };
 }

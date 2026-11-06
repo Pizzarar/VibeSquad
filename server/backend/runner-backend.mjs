@@ -170,7 +170,11 @@ export class RunnerBackend {
       if (v !== undefined && v !== "") meta[k] = v;
     }
     for (const [k, v] of Object.entries(labels)) if (!FIRST_CLASS.includes(k) && v !== undefined) meta.labels[k] = String(v);
-    if (config.modeId && CLAUDE_PERMISSION_MODES.has(config.modeId)) meta.permissionMode = config.modeId;
+    // Claude permission modes only mean something to claude; for ACP providers modeId is the agent's own ACP mode.
+    if (config.modeId) {
+      if (config.provider === "claude") { if (CLAUDE_PERMISSION_MODES.has(config.modeId)) meta.permissionMode = config.modeId; }
+      else meta.acpMode = config.modeId;
+    }
     const prefix = await this.buildPrefix(meta.role || "", config.cwd);
     const systemPrompt = [prefix, config.systemPrompt].filter(Boolean).join("\n\n") || undefined;
     const { id } = await this.rc.request("POST", "/agents", {

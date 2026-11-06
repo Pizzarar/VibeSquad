@@ -6,6 +6,7 @@ import { mkdtempSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Runner, defaultAdapters } from '../runner/runner.mjs';
+import { RunnerBackend } from '../server/backend/runner-backend.mjs';
 import { ACP_PROVIDERS, createAcpAdapter, pickModel } from '../runner/adapters/acp.mjs';
 import { resolveExecutable } from '../runner/spawn.mjs';
 
@@ -79,16 +80,80 @@ for (const [provider, def] of Object.entries(ACP_PROVIDERS)) {
   });
 }
 
-test('acp adapter: permissionMode default denies permission requests', async () => {
+test('acp adapter: explicit permissionMode deny denies permission requests', async () => {
   const spawnImpl = fakeSpawn((m, child) => {
     if (m.method === 'initialize') child.push({ jsonrpc: '2.0', id: m.id, result: {} });
     if (m.method === 'session/new') child.push({ jsonrpc: '2.0', id: m.id, result: { sessionId: 'S' } });
     if (m.method === 'session/prompt') child.push({ jsonrpc: '2.0', id: 7, method: 'session/request_permission', params: { options: [{ optionId: 'yes', kind: 'allow_once' }] } });
   });
   const runner = new Runner({ dir: tmp(), adapters: { opencode: fakeAdapter(spawnImpl, 'opencode') } });
-  runner.create({ provider: 'opencode', cwd: '.', prompt: 'x', meta: { permissionMode: 'default' } });
+  runner.create({ provider: 'opencode', cwd: '.', prompt: 'x', meta: { permissionMode: 'deny' } });
   await tick(); await tick(); await tick();
   assert.deepEqual(spawnImpl.last.written.at(-1).result, { outcome: { outcome: 'cancelled' } });
+});
+
+test('antigravity-cli spawn with profile modeId "default" gets approvals and set_mode, via RunnerBackend', async () => {
+  const spawnImpl = fakeSpawn((m, child) => {
+    if (m.method === 'initialize') child.push({ jsonrpc: '2.0', id: m.id, result: {} });
+    if (m.method === 'session/new') child.push({ jsonrpc: '2.0', id: m.id, result: { sessionId: 'S', modes: { currentModeId: 'auto', availableModes: [{ id: 'default' }, { id: 'auto' }] } } });
+    if (m.method === 'session/set_mode') child.push({ jsonrpc: '2.0', id: m.id, result: {} });
+    if (m.method === 'session/prompt') child.push({ jsonrpc: '2.0', id: 7, method: 'session/request_permission', params: { options: [{ optionId: 'yes', kind: 'allow_once' }] } });
+  });
+  const runner = new Runner({ dir: tmp(), adapters: { 'antigravity-cli': fakeAdapter(spawnImpl, 'antigravity-cli') } });
+  const calls = [];
+  const rc = { ensureRunning: async () => {}, request: async (method, route, body) => { if (method === 'POST') { calls.push(body); return { id: runner.create(body) }; } return runner.status(route.split('/')[2]); } };
+  const backend = new RunnerBackend({ client: rc, buildPrefix: async () => '' });
+  await backend.createAgent({ config: { provider: 'antigravity-cli', model: 'gemini-4-argon', modeId: 'default', cwd: '.' }, prompt: 'x', labels: { role: 'worker' } });
+  await tick(); await tick(); await tick();
+  assert.equal(calls[0].meta.permissionMode, undefined);
+  assert.equal(calls[0].meta.acpMode, 'default');
+  const w = spawnImpl.last.written;
+  assert.ok(w.some((m) => m.method === 'session/set_mode' && m.params.modeId === 'default'));
+  assert.deepEqual(w.at(-1).result, { outcome: { outcome: 'selected', optionId: 'yes' } });
+});
+
+test('acp session that fails to start ends as exited and later sends throw', async () => {
+  const spawnImpl = fakeSpawn((m, child) => {
+    if (m.method === 'initialize') child.push({ jsonrpc: '2.0', id: m.id, error: { message: 'auth required' } });
+  });
+  const runner = new Runner({ dir: tmp(), adapters: { opencode: fakeAdapter(spawnImpl, 'opencode') } });
+  const id = runner.create({ provider: 'opencode', cwd: '.', prompt: 'x' });
+  await tick(); await tick(); await tick();
+  assert.ok(runner.timeline(id).some((e) => e.type === 'error' && /auth required/.test(e.message)));
+  assert.equal(runner.status(id).status, 'exited');
+  assert.throws(() => runner.send(id, 'again'), /not running|failed to start/);
+});
+
+test('acp cancel drops prompts queued behind the cancelled one', async () => {
+  let prompts = 0;
+  const spawnImpl = fakeSpawn((m, child) => {
+    if (m.method === 'initialize') child.push({ jsonrpc: '2.0', id: m.id, result: {} });
+    if (m.method === 'session/new') child.push({ jsonrpc: '2.0', id: m.id, result: { sessionId: 'S' } });
+    if (m.method === 'session/prompt') { prompts++; child.pending = m.id; }
+    if (m.method === 'session/cancel') child.push({ jsonrpc: '2.0', id: child.pending, result: { stopReason: 'cancelled' } });
+  });
+  const runner = new Runner({ dir: tmp(), adapters: { opencode: fakeAdapter(spawnImpl, 'opencode') } });
+  const id = runner.create({ provider: 'opencode', cwd: '.', prompt: 'one' });
+  await tick(); await tick();
+  runner.send(id, 'two'); runner.send(id, 'three');
+  runner.cancel(id);
+  await tick(); await tick(); await tick();
+  assert.equal(prompts, 1);
+  assert.equal(runner.status(id).status, 'idle');
+});
+
+test('codex-style agent (model as a configOption): model set via session/set_config_option, unlisted ids trusted', async () => {
+  const spawnImpl = fakeSpawn((m, child) => {
+    if (m.method === 'initialize') child.push({ jsonrpc: '2.0', id: m.id, result: {} });
+    if (m.method === 'session/new') child.push({ jsonrpc: '2.0', id: m.id, result: { sessionId: 'S', configOptions: [{ id: 'model', category: 'model', currentValue: 'gpt-5.5', options: [{ value: 'gpt-5.5' }, { value: 'gpt-5.4' }] }] } });
+    if (m.method === 'session/set_config_option') child.push({ jsonrpc: '2.0', id: m.id, result: {} });
+  });
+  const runner = new Runner({ dir: tmp(), adapters: { codex: fakeAdapter(spawnImpl, 'codex') } });
+  const id = runner.create({ provider: 'codex', model: 'gpt-5.6-sol', cwd: '.' });
+  await tick(); await tick(); await tick();
+  const set = spawnImpl.last.written.find((m) => m.method === 'session/set_config_option');
+  assert.deepEqual(set.params, { sessionId: 'S', configId: 'model', value: 'gpt-5.6-sol' });
+  assert.equal(runner.timeline(id).find((e) => e.type === 'session').model, 'gpt-5.6-sol');
 });
 
 test('unknown ACP provider without an explicit command throws', () => {
