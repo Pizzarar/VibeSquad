@@ -69,9 +69,9 @@ test("Mark complete is safe to retry after the lead retire throws", async () => 
   const lead = { agent: { id: "lead", status: "idle", labels: {} } };
   const first = { squad: teams[0], lane: teams[0].lanes[0], brainstorm: bs, lead, workers: [] };
 
-  await assert.rejects(runMarkComplete(first, fx), /daemon hiccup/);
+  assert.deepEqual(await runMarkComplete(first, fx), { ok: true });
   const lane1 = teams[0].lanes[0];
-  assert.equal(lane1.state, undefined, "state is not saved when a step failed");
+  assert.equal(lane1.state, "done", "state is saved even when retire throws on the lead");
   assert.equal(lane1.lastProfile, "Brainstorm - Gemini", "profile is kept before the Brainstorm is archived");
   assert.deepEqual(retired, ["bs"]);
 

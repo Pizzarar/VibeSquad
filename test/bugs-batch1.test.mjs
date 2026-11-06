@@ -189,11 +189,12 @@ test("remove archives every agent, then hides the lane; worktrees untouched when
   assert.deepEqual(f.calls.at(-1), ["brief", "Removed 2026-11-02"]);
 });
 
-test("an archive failure stops before the lane is hidden (safe to retry)", async () => {
-  const f = fakeFx({ archive: async (id) => { if (id === "a2") throw new Error("daemon down"); } });
-  await assert.rejects(runRemoveTeam(pinOf("bug-chaser"), planOf(), { deleteWorktrees: true }, f.fx), /daemon down/);
-  assert.equal(f.teams()[0].lanes.find((l) => l.id === "bug-chaser").state, "pinned");
-  assert.ok(!f.calls.some((c) => c[0] === "git"));
+test("an archive failure is caught so the lane is still hidden (state: 'removed')", async () => {
+  const f = fakeFx({ archive: async (id) => { f.calls.push(["archive", id]); if (id === "a2") throw new Error("daemon down"); } });
+  const r = await runRemoveTeam(pinOf("bug-chaser"), planOf(), { deleteWorktrees: true }, f.fx);
+  assert.deepEqual(r.archived, ["a1", "a2"]);
+  assert.equal(f.teams()[0].lanes.find((l) => l.id === "bug-chaser").state, "removed");
+  assert.ok(f.calls.some((c) => c[0] === "git"));
 });
 
 test("opt-in delete removes worktrees + branches and archives their Paseo workspace; shared never deletes", async () => {

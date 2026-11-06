@@ -33,7 +33,7 @@ import { isImeComposing, shouldComposerSubmit, TOPIC_SOFT_CAP, TopicCapBanner } 
 import { Avatar, TokenMeter, providerSpec } from "./pixel";
 import { AgentActions, StatusDot, ago, shortPath, useTick } from "./ui";
 import { LEGACY_NEEDS_LABEL, LEGACY_NEEDS_REASON, LEGACY_NEEDS_UNTIL, needsYouBadge, useUserName } from "./userName";
-import { AGENT_TYPE_LABEL, expectedTitleFor, kindOf, leadLadderFor, leadVariant } from "./teams";
+import { AGENT_TYPE_LABEL, kindOf, leadLadderFor, leadVariant } from "./teams";
 import type { AgentType, Member } from "./teams";
 import type { Entry } from "./Timeline";
 import { ImportSessionModal, SchedulesPanel } from "./SchedulesPanel";
@@ -284,35 +284,6 @@ function AttachFiles({ agent, entries }: { agent: PaseoAgent; entries: Entry[] }
           {msg && <div className="small muted">{msg}</div>}
         </div>
       )}
-    </div>
-  );
-}
-
-function TitleLint({ agent }: { agent: PaseoAgent }) {
-  const [busy, setBusy] = useState(false);
-  const expected = agent.archivedAt ? null : expectedTitleFor(agent);
-  if (!expected || expected === agent.title) return null;
-  return (
-    <div className="lint-bar">
-      <span>
-        Title mismatch · expected "<b>{expected}</b>"
-      </span>
-      <button
-        className="btn ghost"
-        disabled={busy}
-        onClick={async () => {
-          setBusy(true);
-          try {
-            await updateAgent(agent.id, { name: expected });
-          } catch (e) {
-            alert(`Rename failed: ${e}`);
-          } finally {
-            setBusy(false);
-          }
-        }}
-      >
-        Fix title
-      </button>
     </div>
   );
 }
@@ -1441,7 +1412,6 @@ export function DrawerHeader({
 
       {att && att.tone !== "needs-you" && att.tone !== "finished" && <div className={`banner ${att.tone}`}>{att.reason}</div>}
       {(needsYouFlagged || isMarkedUnread(agent.id) || moreOpen) ? <NeedsYouControls agent={agent} /> : null}
-      <TitleLint agent={agent} />
       {kindOf(agent) === "lead" && onSuccessor && !agent.archivedAt && (
         <div className="lint-bar successor-bar">
           <span>Lead handoff</span>

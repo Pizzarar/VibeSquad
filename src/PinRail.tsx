@@ -113,13 +113,13 @@ export function PinRail({ view, focus, onPick }: { view: TeamView; focus: PinFoc
           <div className="pin-rail-active-inspector" ref={slotRef("card")} />
         </section>
         <div className="pin-rail-section-label" data-testid="pin-rail-others-label">
-          Other Buddies
+          Other Teams
         </div>
         <div className="pin-rail-list">
           {others.map((p) => (
             <RailTile key={p.lane.id} pin={p} onPick={onPick} />
           ))}
-          {others.length === 0 && <span className="muted small">No other Buddies pinned</span>}
+          {others.length === 0 && <span className="muted small">No other Teams pinned</span>}
         </div>
       </div>
     </aside>

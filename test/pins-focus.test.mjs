@@ -96,7 +96,7 @@ test("PinRail: active Buddy card on top, other Buddies below, no inert 'Open in 
   const dh = fs.readFileSync(new URL("../src/DrawerHeader.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(pr, /Open in the middle/);
   const card = pr.indexOf('className={`pin-rail-active-buddy');
-  const label = pr.indexOf("Other Buddies");
+  const label = pr.indexOf("Other Teams");
   const list = pr.indexOf("others.map(");
   assert.ok(card > 0 && card < label && label < list, "active card, then 'Other Buddies' label, then the remaining pins");
   assert.match(pr, /pinned\.filter\(\(p\) => p\.lane\.id !== focus\.laneId\)/, "the focused pin is excluded from the tile list");
@@ -168,5 +168,8 @@ test("U5: Lead click in PinTeamTree opens the Lead in pin focus instead of FULL 
   const pr = srcOf("PinRail.tsx");
   const pg = srcOf("PinGrid.tsx");
   assert.match(pg, /openPinMember\(pin, m\.agent\.id\)/);
-  assert.doesNotMatch(pr, /setFullView/);
+  const treeFn = pg.slice(pg.indexOf("export function PinTeamRows"), pg.indexOf("// ── Sidebar"));
+  assert.doesNotMatch(treeFn, /setFullView/);
+  assert.deepEqual(pr.match(/setFullView/g), ["setFullView", "setFullView"], "PinRail only uses setFullView for PinMenu onShowPlumbing");
+  assert.match(pr, /onShowPlumbing=\{\(\) => \{\s*exitPinFocus\(\);\s*setFullView\(true\);\s*\}\}/);
 });

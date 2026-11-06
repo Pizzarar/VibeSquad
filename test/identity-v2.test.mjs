@@ -805,14 +805,14 @@ test("formatDisplayTitle: every role, with and without an objective", () => {
   assert.equal(formatDisplayTitle({ ...base, role: "lead", ord: "6" }), "★ Hub6");
   assert.equal(formatDisplayTitle({ ...base, role: "former-lead", ord: "5", job: "drop files" }), "(old) Hub5 · drop files");
   assert.equal(formatDisplayTitle({ ...base, role: "former-lead", ord: "5" }), "(old) Hub5");
-  assert.equal(formatDisplayTitle({ ...base, role: "brainstorm" }), "Hub Buddy");
-  assert.equal(formatDisplayTitle({ ...base, role: "brainstorm", topic: "vibesquad" }), "Hub Buddy");
-  assert.equal(formatDisplayTitle({ ...base, role: "brainstorm", topic: "naming" }), "Hub Buddy · naming");
+  assert.equal(formatDisplayTitle({ ...base, role: "brainstorm" }), "VibeSquad");
+  assert.equal(formatDisplayTitle({ ...base, role: "brainstorm", topic: "vibesquad" }), "VibeSquad");
+  assert.equal(formatDisplayTitle({ ...base, role: "brainstorm", topic: "naming" }), "VibeSquad · naming");
   assert.equal(formatDisplayTitle({ ...base, role: "worker", ord: "6", job: "drop files" }), "Hub6 · drop files");
   assert.equal(formatDisplayTitle({ ...base, role: "worker", ord: "6" }), "Hub6 · worker");
   // No stored code: the generated one is used.
   assert.equal(formatDisplayTitle({ laneId: "bug-chaser", laneName: "Bug Chaser", role: "lead", ord: "4" }), "★ Bug4");
-  assert.equal(formatDisplayTitle({ laneId: "vibesquad", laneName: "VibeSquad", role: "brainstorm" }), "Hub Buddy");
+  assert.equal(formatDisplayTitle({ laneId: "vibesquad", laneName: "VibeSquad", role: "brainstorm" }), "VibeSquad");
   // Retired brainstorms keep their title.
   assert.equal(formatDisplayTitle({ ...base, role: "former-brainstorm", title: "Hub Buddy" }), "Hub Buddy");
 });

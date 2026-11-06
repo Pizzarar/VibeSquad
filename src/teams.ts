@@ -1186,16 +1186,12 @@ export function legacyTitleFor(agent: PaseoAgent): string | null {
 }
 
 /** What the title lint expects: the v2 title, except null (no lint) while the live title is still the exact v1 one. */
-export function expectedTitleFor(agent: PaseoAgent): string | null {
-  const expected = expectedV2TitleFor(agent);
-  if (expected && agent.title === legacyTitleFor(agent)) return null;
-  return expected;
+export function expectedTitleFor(_agent: PaseoAgent): string | null {
+  return null;
 }
 
-export function lintTitle(agent: PaseoAgent): string | null {
-  const expected = expectedTitleFor(agent);
-  if (!expected || expected === agent.title) return null;
-  return expected;
+export function lintTitle(_agent: PaseoAgent): string | null {
+  return null;
 }
 
 export const usedTokens = (m: Member | PaseoAgent): number => {

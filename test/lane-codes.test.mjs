@@ -6,26 +6,26 @@ import { expectedTitleFor, expectedV2TitleFor, legacyTitleFor, lintTitle, titleF
 
 const agent = (title, labels, extra = {}) => ({ id: "a1", title, status: "idle", labels, ...extra });
 
-test("title lint: v1-titled live agents are not flagged; wrong titles still are", () => {
+test("title lint: expectedTitleFor and lintTitle always return null; expectedV2TitleFor and legacyTitleFor still compute", () => {
   const lead = (title) => agent(title, { team: "vibesquad", lane: "vibesquad", role: "lead", ord: "5" });
   assert.equal(lintTitle(lead("★ VIBESQUAD ord5")), null);
   assert.equal(expectedV2TitleFor(lead("★ VIBESQUAD ord5")), "★ Hub5");
   assert.equal(legacyTitleFor(lead("x")), "★ VIBESQUAD ord5");
   assert.equal(lintTitle(lead("★ Hub5")), null);
-  assert.equal(lintTitle(lead("Some random title")), "★ Hub5");
-  assert.equal(lintTitle(lead("★ VIBESQUAD ord4")), "★ Hub5");
+  assert.equal(lintTitle(lead("Some random title")), null);
+  assert.equal(lintTitle(lead("★ VIBESQUAD ord4")), null);
 
   const bs = (title, topic) => agent(title, { team: "vibesquad", lane: "vibesquad", role: "brainstorm", ...(topic ? { topic } : {}) });
   assert.equal(lintTitle(bs("BRAINSTORM · VIBESQUAD")), null);
   assert.equal(lintTitle(bs("BRAINSTORM · VIBESQUAD · naming", "naming")), null);
-  assert.equal(lintTitle(bs("BRAINSTORM · VIBESQUAD · wrong", "naming")), "Hub Buddy · naming");
-  assert.equal(lintTitle(bs("whatever")), "RiffBot");
+  assert.equal(lintTitle(bs("BRAINSTORM · VIBESQUAD · wrong", "naming")), null);
+  assert.equal(lintTitle(bs("whatever")), null);
 
   const worker = (title) => agent(title, { team: "vibesquad", lane: "vibesquad", role: "worker", job: "drop files" });
   assert.equal(lintTitle(worker("VIBESQUAD · drop files")), null);
-  assert.equal(lintTitle(worker("nope")), "Hub · drop files");
-  // Block 4 path: the v2 title is still available for a v1-titled agent.
+  assert.equal(lintTitle(worker("nope")), null);
   assert.equal(expectedTitleFor(worker("VIBESQUAD · drop files")), null);
+  assert.equal(expectedTitleFor(worker("nope")), null);
   assert.equal(expectedV2TitleFor(worker("VIBESQUAD · drop files")), "Hub · drop files");
 });
 
@@ -84,8 +84,8 @@ test("spawn paths: lead handoff and Buddy titles use the lane code (sandbox regi
       assert.equal(t.oldTitle, "(old) Hub1 · squad view");
       const noJob = leadTitles({ laneId: "bug-chaser", laneName: "Bug Chaser", nextOrd: 5, oldOrd: 4, oldLead: { labels: {} }, rootDir: root });
       assert.deepEqual(noJob, { newTitle: "★ Bug5", oldTitle: "(old) Bug4" });
-      assert.equal(buddyTitle("bug-chaser", "Bug Chaser", "", root), "Bug Buddy");
-      assert.equal(buddyTitle("bug-chaser", "Bug Chaser", "flaky tests", root), "Bug Buddy · flaky tests");
+      assert.equal(buddyTitle("bug-chaser", "Bug Chaser", "", root), "Bug Chaser");
+      assert.equal(buddyTitle("bug-chaser", "Bug Chaser", "flaky tests", root), "Bug Chaser · flaky tests");
     } finally {
       if (prev === undefined) delete process.env.VIBESQUAD_HOME;
       else process.env.VIBESQUAD_HOME = prev;

@@ -7,11 +7,11 @@ import { breadcrumbOf } from "../src/pinFocusLogic.ts";
 import { expectedV2TitleFor, lintTitle, titleFor } from "../src/teams.ts";
 
 for (const [name, fmt] of [["identity.ts", tsTitle], ["identity.mjs", mjsTitle]]) {
-  test(`formatDisplayTitle (${name}): hub Buddy is RiffBot, Team Buddy and topic Buddy unchanged`, () => {
+  test(`formatDisplayTitle (${name}): hub Buddy is RiffBot, Team Brainstorm uses lane display name`, () => {
     const base = { role: "brainstorm", laneId: "alpha", laneName: "Alpha", code: "Alp" };
     assert.equal(fmt({ ...base, hub: true }), "RiffBot");
-    assert.equal(fmt(base), "Alp Buddy");
-    assert.equal(fmt({ ...base, hub: true, topic: "naming" }), "Alp Buddy · naming");
+    assert.equal(fmt(base), "Alpha");
+    assert.equal(fmt({ ...base, hub: true, topic: "naming" }), "Alpha · naming");
     assert.equal(fmt({ role: "lead", laneId: "alpha", code: "Alp", ord: "2", hub: true }), "★ Alp2");
   });
 }

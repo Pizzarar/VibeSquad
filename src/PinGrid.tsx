@@ -239,7 +239,7 @@ export function PinTeamTree({ pin }: { pin: Pin }) {
   if (!pin.brainstorm && !hasTeam(pin)) return null;
   return (
     <div className="pin-rail-team-tree" data-testid="pin-rail-team-tree">
-      <div className="pin-rail-section-label">Team under this Buddy</div>
+      <div className="pin-rail-section-label">Team in this Lane</div>
       <PinTeamRows pin={pin} withBuddy prefix="pin-team" />
     </div>
   );

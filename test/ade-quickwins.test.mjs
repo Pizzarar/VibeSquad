@@ -69,35 +69,29 @@ test("62: rename keys and outcome", () => {
   assert.equal(renameOutcome("   ", "Old"), null);
 });
 
-test("62: lane-coded agents rename the job/topic and keep the code in the title; others take the typed name", () => {
+test("62: free-form rename starts with the agent title and returns { name } without overwriting", () => {
   const mk = (title, labels) => ({ id: "a1", title, status: "idle", labels });
   const worker = mk("Hub · drop files", { team: "vibesquad", lane: "vibesquad", role: "worker", job: "drop files" });
-  assert.equal(renameDraftFor(worker), "drop files");
+  assert.equal(renameDraftFor(worker), "Hub · drop files");
   const plan = planAgentRename(worker, "paste files");
-  assert.equal(plan.name, "Hub · paste files");
-  assert.equal(plan.labels.job, "paste files");
-  assert.equal(expectedV2TitleFor({ ...worker, title: plan.name, labels: plan.labels }), plan.name);
-  const bs = mk("Hub Buddy", { team: "vibesquad", lane: "vibesquad", role: "brainstorm" });
-  assert.equal(planAgentRename(bs, "naming").name, "Hub Buddy · naming");
+  assert.deepEqual(plan, { name: "paste files" });
+  const bs = mk("Release Desk", { team: "vibesquad", lane: "vibesquad", role: "brainstorm" });
+  assert.equal(renameDraftFor(bs), "Release Desk");
+  assert.deepEqual(planAgentRename(bs, "naming"), { name: "naming" });
   const plain = mk("scratch", {});
   assert.equal(renameDraftFor(plain), "scratch");
   assert.deepEqual(planAgentRename(plain, "throwaway"), { name: "throwaway" });
 });
 
-test("62: plain vs lane-coded is decided from labels, not from whether a title can be computed", () => {
+test("62: free-form rename trims input and falls back to existing title when blank", () => {
   const mk = (title, labels) => ({ id: "a1", title, status: "idle", labels });
-  // (a) no lane/role labels + legacy "(talk here" title: plain rename, no label edit.
   const talk = mk("EFI lead (talk here, runs the work)", {});
   assert.equal(renameDraftFor(talk), "EFI lead (talk here, runs the work)");
-  assert.deepEqual(planAgentRename(talk, "fresh name"), { name: "fresh name" });
-  // (b) lane-coded worker with no / empty job still gets labels.job and the coded title.
-  for (const labels of [{ team: "vibesquad", lane: "vibesquad", role: "worker" }, { team: "vibesquad", lane: "vibesquad", role: "worker", job: "" }]) {
-    const w = mk("whatever", labels);
-    assert.equal(renameDraftFor(w), "");
-    const plan = planAgentRename(w, "do it");
-    assert.equal(plan.labels.job, "do it");
-    assert.equal(plan.name, "Hub · do it");
-  }
+  assert.deepEqual(planAgentRename(talk, "  fresh name  "), { name: "fresh name" });
+  assert.deepEqual(planAgentRename(talk, "   "), { name: "EFI lead (talk here, runs the work)" });
+  assert.match(read("src/PinGrid.tsx"), /Team in this Lane/);
+  assert.match(read("src/PinRail.tsx"), /Other Teams/);
+  assert.match(read("src/PinRail.tsx"), /No other Teams pinned/);
 });
 
 test("62: wired into the drawer title, both team headers, and the existing updateAgent / saveTeams paths", () => {
