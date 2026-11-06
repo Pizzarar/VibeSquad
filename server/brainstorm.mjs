@@ -553,8 +553,22 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
         }
         // Reopen a closed Buddy (daemon restart unloads every session) from its saved session.
         const reopened = existing.status === "closed" && connected && typeof backend?.refreshAgent === "function";
-        if (reopened) await backend.refreshAgent(existing.id).catch((e) => console.warn(`[vibesquad] reopen ${existing.id} failed: ${e?.message ?? e}`));
-        return {
+        let reopenedAgent = null;
+        let reopenFailed = existing.status === "closed" && !reopened; // nothing here can reopen it
+        if (reopened) {
+          const refreshed = await backend.refreshAgent(existing.id).catch((e) => {
+            reopenFailed = true;
+            console.warn(`[vibesquad] reopen ${existing.id} failed: ${e?.message ?? e}; spawning a replacement`);
+            return null;
+          });
+          // A backend may hand back the agent still closed without throwing.
+          const fresh = refreshed?.agent ?? refreshed;
+          if (!reopenFailed && fresh?.status === "closed") reopenFailed = true;
+          // A backend that returns nothing gives no status; the reload succeeded, so show it as idle.
+          reopenedAgent = fresh?.id ? fresh : { ...existing, status: "idle", archivedAt: null };
+        }
+        // A Buddy that won't reopen is replaced (the post-spawn backstop retires it), never silently "reused".
+        if (!reopenFailed) return {
           ok: true,
           reused: true,
           ...(reopened ? { reopened: true } : {}),
@@ -564,7 +578,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
           laneId,
           teamId,
           message: `Open existing brainstorm (${existing.title || existing.id})`,
-          agent: existing,
+          agent: reopenedAgent ?? existing,
         };
       }
     }

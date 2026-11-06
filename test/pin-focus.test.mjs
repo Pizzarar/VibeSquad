@@ -13,7 +13,7 @@ const SRC_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "src");
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier.startsWith("./") && context.parentURL?.startsWith(pathToFileURL(SRC_DIR).href)) {
-      if (specifier === "./paseo" || specifier === "./PinGrid" || specifier === "./ui" || specifier === "./IdeaInbox") {
+      if (specifier === "./paseo" || specifier === "./demoFlag" || specifier === "./PinGrid" || specifier === "./ui" || specifier === "./IdeaInbox") {
         return { url: `data:text/javascript,${encodeURIComponent(stubFor(specifier))}`, shortCircuit: true };
       }
       const parentDir = dirname(fileURLToPath(context.parentURL));
@@ -45,6 +45,7 @@ function stubFor(specifier) {
       "export const upsertLocalAgent = () => {};",
     ].join("\n");
   }
+  if (specifier === "./demoFlag") return "export const DEMO = false;";
   if (specifier === "./PinGrid") {
     return `export async function openPin(pin, profile) { return globalThis.__testOpenPin(pin, profile); }`;
   }
@@ -75,6 +76,49 @@ function makePin(laneId = "bug-chaser", lastProfile = undefined) {
     topicBrainstorms: [],
   };
 }
+
+const livePin = (laneId, status) => ({
+  ...makePin(laneId),
+  brainstorm: { agent: { id: `bs-${laneId}`, status, labels: { team: "vibesquad", lane: laneId, role: "brainstorm" } }, kind: "brainstorm", agentType: "brainstorm" },
+});
+
+test("focusPin on a new pin (no Buddy) spawns through openPin and focuses the new Buddy on the first click", async () => {
+  const calls = [];
+  globalThis.__testOpenPin = async (p) => {
+    calls.push(p.lane.id);
+    const m = { agent: { id: "bs-new-first", status: "idle", labels: { team: p.squad.id, lane: p.lane.id, role: "brainstorm" } }, kind: "brainstorm", agentType: "brainstorm", team: p.squad, laneId: p.lane.id };
+    globalThis.__testViews = [{ team: p.squad, lanes: [{ lane: p.lane, brainstorm: m, lead: null, members: [m], topicBrainstorms: [], duplicateBrainstorms: [] }], members: [m], needsYou: 0 }];
+    return "bs-new-first";
+  };
+  const id = await pinFocusMod.focusPin(makePin("lane-first-click"));
+  assert.equal(id, "bs-new-first");
+  assert.deepEqual(calls, ["lane-first-click"]);
+  assert.equal(pinFocusMod.getPinFocus()?.agentId, "bs-new-first");
+  assert.equal(pinFocusMod.getPinFocus()?.gone, false);
+});
+
+test("focusPin on a pin whose Buddy is closed goes through openPin (reopen/replace), not the closed id", async () => {
+  const calls = [];
+  globalThis.__testOpenPin = async (p) => (calls.push(p.lane.id), "bs-reopened");
+  assert.equal(await pinFocusMod.focusPin(livePin("lane-closed", "closed")), "bs-reopened");
+  assert.deepEqual(calls, ["lane-closed"]);
+  calls.length = 0;
+  assert.equal(await pinFocusMod.focusPin(livePin("lane-live", "idle")), "bs-lane-live");
+  assert.deepEqual(calls, [], "a live Buddy is focused without a start");
+});
+
+test("openPin posts brainstorm-restart for a closed Buddy instead of returning its id", async () => {
+  let posted = 0;
+  const pin = livePin("lane-closed-open", "closed");
+  const id = await pinActionsMod.openPin(pin, {
+    agents: new Map(),
+    fetch: async () => (posted++, { ok: true, json: async () => ({ ok: true, newAgentId: "bs-fresh", agent: { id: "bs-fresh", status: "idle" } }) }),
+    onSpawned: () => {},
+    saveTeams: async () => {},
+  });
+  assert.equal(id, "bs-fresh");
+  assert.equal(posted, 1);
+});
 
 test("spinUpPin(pin, profile) forwards profile to openPin and clears spinUpError on success", async () => {
   const calls = [];
@@ -122,8 +166,8 @@ test("spinUpPin sets spinUpError on failure and clears it when changing pins or 
   assert.equal(focusAfterErr?.spinUpError, "Timed out refreshing Claude after 120000ms; pending: version");
   assert.equal(pinFocusMod.getSpinUpError(), "Timed out refreshing Claude after 120000ms; pending: version");
 
-  // Switching to another pin clears spinUpError.
-  await pinFocusMod.focusPin(makePin("lane-other"));
+  // Switching to another pin clears spinUpError (a pin with a live Buddy just focuses it).
+  await pinFocusMod.focusPin(livePin("lane-other", "idle"));
   assert.equal(pinFocusMod.getPinFocus()?.spinUpError, null);
   assert.equal(pinFocusMod.getSpinUpError(), null);
 });

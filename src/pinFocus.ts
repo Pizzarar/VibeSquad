@@ -139,23 +139,21 @@ subscribeTeams(reconcile);
  * if there is no session yet, show the empty focus view with an explicit "Spin Up" button without auto-spawning.
  */
 export async function focusPin(pin: Pin): Promise<string> {
+  // No Buddy yet (a `vs pin new` pin) or only a closed one: the first click spawns or reopens it and focuses its chat.
+  if (!pin.brainstorm || pin.brainstorm.agent.status === "closed") return spinUpPin(pin);
   const mine = ++seq;
-  const live = pin.brainstorm?.agent.id ?? null;
-  const active = getPanes().leftActiveId;
+  const live = pin.brainstorm.agent.id;
   // Set the focus before opening so the reconcile on the panes change sees the expected tab.
   set({
-    focus: { squadId: pin.squad.id, laneId: pin.lane.id, agentId: live, gone: !live, held: live ? null : active, seq: mine, spinUpError: null },
+    focus: { squadId: pin.squad.id, laneId: pin.lane.id, agentId: live, gone: false, held: null, seq: mine, spinUpError: null },
     home: false,
     homeActive: null,
     squadsHome: false,
     spinUpError: null,
   });
-  if (live) {
-    show(live);
-    focusComposerSoon(live);
-    return live;
-  }
-  return "";
+  show(live);
+  focusComposerSoon(live);
+  return live;
 }
 
 /** Is this agent the focused pin's Buddy, Lead, worker or topic Buddy? */

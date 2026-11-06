@@ -80,7 +80,7 @@ async function quickStart(pin: Pin, profile: string, deps: OpenPinDeps): Promise
   const squadId = pin.squad.id;
   const laneId = pin.lane.id;
   // A live Brainstorm may have appeared since the pin was built (another tab, the lead, a slow push).
-  const live = findCrossTeamBrainstorm(resolve(deps.agents ?? getPaseoState().agents), laneId, "", { includeClosed: true });
+  const live = findCrossTeamBrainstorm(resolve(deps.agents ?? getPaseoState().agents), laneId, "");
   if (live) return live.agent.id;
 
   const doFetch = deps.fetch ?? fetch;
@@ -107,7 +107,12 @@ async function quickStart(pin: Pin, profile: string, deps: OpenPinDeps): Promise
     agent?: PaseoAgent;
   };
   if ((!res.ok || body.ok === false) && !DEMO) throw new Error(body.error ?? `Quick start failed (${res.status})`);
-  if (body.reused && (body.existingAgentId || body.newAgentId)) return String(body.existingAgentId || body.newAgentId);
+  if (body.reused && (body.existingAgentId || body.newAgentId)) {
+    const reusedId = String(body.existingAgentId || body.newAgentId);
+    // Show it: a reopened or just-spawned Buddy may not be in local state yet, so the pick would land on nothing.
+    if (body.agent?.id === reusedId) (deps.onSpawned ?? upsertLocalAgent)(body.agent);
+    return reusedId;
+  }
 
   const newAgentId = body.newAgentId || `demo-bs-${laneId}-${Date.now().toString(36)}`;
   const agent =

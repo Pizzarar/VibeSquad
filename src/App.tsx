@@ -147,7 +147,7 @@ export async function startLaneBrainstorm(opts: {
   agents?: Map<string, PaseoAgent>;
 }): Promise<string | null> {
   const { teamId, laneId, laneName, cwd, onPick } = opts;
-  const existing = findCrossTeamBrainstorm(resolve(opts.agents ?? getPaseoState().agents), laneId, "", { includeClosed: true });
+  const existing = findCrossTeamBrainstorm(resolve(opts.agents ?? getPaseoState().agents), laneId, "");
   if (existing) {
     onPick(existing.agent.id);
     return existing.agent.id;
@@ -169,6 +169,8 @@ export async function startLaneBrainstorm(opts: {
   }
   if (body.reused && (body.existingAgentId || body.newAgentId)) {
     const reusedId = String(body.existingAgentId || body.newAgentId);
+    // Show it: a reopened or just-spawned Buddy may not be in local state yet, so the pick would land on nothing.
+    if (body.agent?.id === reusedId) upsertLocalAgent(body.agent as PaseoAgent);
     onPick(reusedId);
     return reusedId;
   }

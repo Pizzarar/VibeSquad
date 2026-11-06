@@ -189,7 +189,8 @@ export async function keepBuddy(pin: Pin, keepId: string, deps: KeepBuddyDeps): 
 
 /** Decide what clicking a pin does: open the live Brainstorm, or quick-start one from the brief. */
 export function resolvePin(pin: Pin): PinResolution {
-  if (pin.brainstorm) return { kind: "live", agent: pin.brainstorm };
+  // A closed Buddy (daemon restart) is not live: it goes through the server's reopen-or-replace start.
+  if (pin.brainstorm && pin.brainstorm.agent.status !== "closed") return { kind: "live", agent: pin.brainstorm };
   return {
     kind: "quick-start",
     squadId: pin.squad.id,

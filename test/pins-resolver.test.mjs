@@ -130,3 +130,86 @@ test("patchLane renames a lane and records lastProfile", () => {
   assert.equal(next[0].lanes[0].lastProfile, "Brainstorm - Gemini");
   assert.equal(teams[0].lanes[0].name, "X");
 });
+
+// ---- Block 4: first pin click yields a visible live Buddy; a closed match is reopened or replaced ----
+const withEnv = async (fn) => {
+  const env = makeEnv();
+  const prevHome = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = env.vsHome;
+  resetBrainstormRestartState();
+  try {
+    await fn(env);
+  } finally {
+    if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
+    else process.env.VIBESQUAD_HOME = prevHome;
+    env.cleanup();
+  }
+};
+
+test("new pin first click: spawns a live Buddy carrying the brief, with the agent in the reply", () =>
+  withEnv(async (env) => {
+    const daemon = mockDaemon([]);
+    const res = await performBrainstormRestart(
+      { reason: "start-brainstorm", mode: "quick-start", teamId: "sq", laneId: "pin-test", daemonClient: daemon, profilesPath: env.profilesPath },
+      env.dir,
+    );
+    assert.equal(res.ok, true);
+    assert.equal(daemon.created.length, 1);
+    assert.match(daemon.created[0].initialPrompt, /We chose blue\./);
+    assert.equal(res.newAgentId, "new-1");
+  }));
+
+test("closed match: reopened and returned as an idle agent so the UI can show it", () =>
+  withEnv(async (env) => {
+    const daemon = mockDaemon([{ id: "bs-closed", status: "closed", labels: { team: "sq", lane: "pin-test", role: "brainstorm" } }]);
+    const refreshed = [];
+    daemon.refreshAgent = async (id) => void refreshed.push(id);
+    const res = await performBrainstormRestart(
+      { reason: "start-brainstorm", teamId: "sq", laneId: "pin-test", daemonClient: daemon, profilesPath: env.profilesPath },
+      env.dir,
+    );
+    assert.equal(res.reopened, true);
+    assert.deepEqual(refreshed, ["bs-closed"]);
+    assert.equal(res.agent.id, "bs-closed");
+    assert.equal(res.agent.status, "idle");
+    assert.equal(daemon.created.length, 0);
+  }));
+
+test("closed match that will not reopen is replaced by a fresh spawn, not silently reused", () =>
+  withEnv(async (env) => {
+    const daemon = mockDaemon([{ id: "bs-closed", status: "closed", labels: { team: "sq", lane: "pin-test", role: "brainstorm" } }]);
+    daemon.refreshAgent = async () => {
+      throw new Error("session gone");
+    };
+    const res = await performBrainstormRestart(
+      { reason: "start-brainstorm", teamId: "sq", laneId: "pin-test", daemonClient: daemon, profilesPath: env.profilesPath, backstopDelayMs: 0 },
+      env.dir,
+    );
+    assert.equal(res.ok, true);
+    assert.notEqual(res.reused, true);
+    assert.equal(res.newAgentId, "new-1");
+    assert.equal(daemon.created.length, 1);
+  }));
+
+test("closed match whose refresh returns it still closed is replaced, not reused", () =>
+  withEnv(async (env) => {
+    const daemon = mockDaemon([{ id: "bs-closed", status: "closed", labels: { team: "sq", lane: "pin-test", role: "brainstorm" } }]);
+    daemon.refreshAgent = async (id) => ({ id, status: "closed" });
+    const res = await performBrainstormRestart(
+      { reason: "start-brainstorm", teamId: "sq", laneId: "pin-test", daemonClient: daemon, profilesPath: env.profilesPath, backstopDelayMs: 0 },
+      env.dir,
+    );
+    assert.notEqual(res.reused, true);
+    assert.equal(res.newAgentId, "new-1");
+  }));
+
+test("closed match on a backend that cannot reopen is replaced, not reused", () =>
+  withEnv(async (env) => {
+    const daemon = mockDaemon([{ id: "bs-closed", status: "closed", labels: { team: "sq", lane: "pin-test", role: "brainstorm" } }]);
+    const res = await performBrainstormRestart(
+      { reason: "start-brainstorm", teamId: "sq", laneId: "pin-test", daemonClient: daemon, profilesPath: env.profilesPath, backstopDelayMs: 0 },
+      env.dir,
+    );
+    assert.notEqual(res.reused, true);
+    assert.equal(daemon.created.length, 1);
+  }));
