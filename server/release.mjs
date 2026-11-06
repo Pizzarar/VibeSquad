@@ -365,9 +365,9 @@ export function renderReleaseRecord(template, fields) {
 }
 
 const TABLE_ROWS = { version: "Version", channel: "Channel", commit: "Commit", requester: "Requester", approval: "Approval", releaseUrl: "Release URL" };
-const SECTIONS = { changelog: "## Changelog", artifacts: "## Artifacts (SHA-256)", signature: "## Signature verification" };
+export const SECTIONS = { changelog: "## Changelog", audit: "## Audit", artifacts: "## Artifacts (SHA-256)", signature: "## Signature verification" };
 
-function setSection(text, heading, body) {
+export function setSection(text, heading, body) {
   const start = text.indexOf(`${heading}\n`);
   if (start < 0) return text;
   const bodyStart = start + heading.length + 1;
