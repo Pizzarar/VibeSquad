@@ -3,13 +3,13 @@
 // Critical/High FAIL. Missing external tools are SKIP (never PASS). Matched secret/personal text is never
 // printed: evidence carries file + line + pattern id only. Project-agnostic: everything comes from args.
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, createPublicKey, verify } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { inflateRawSync } from "node:zlib";
-import { SECTIONS, setSection } from "../server/release.mjs";
+import { SECTIONS, canonicalizeCommit, setSection } from "../server/release.mjs";
 
 // Built by concatenation so this file never matches its own sweep.
 const SECRET_PATTERNS = [
@@ -54,6 +54,27 @@ export function sweepText(text, file, patterns) {
     for (const p of patterns) if (p.re.test(line)) hits.push({ file, line: i + 1, id: p.id });
   }
   return hits;
+}
+
+/** Verify a Tauri/minisign signature (Ed25519; "ED" = BLAKE2b-512 prehashed) incl. the trusted-comment global signature. */
+export function verifyMinisign({ pubkeyB64, sigB64, data }) {
+  try {
+    const b64Line = (s) => Buffer.from(s.trim(), "base64");
+    const pk = b64Line(Buffer.from(String(pubkeyB64), "base64").toString("utf8").split(/\r?\n/)[1]);
+    const lines = Buffer.from(String(sigB64).trim(), "base64").toString("utf8").split(/\r?\n/);
+    const sig = b64Line(lines[1]);
+    if (pk.length !== 42 || sig.length !== 74) return { ok: false, reason: "malformed key or signature" };
+    if (!pk.subarray(2, 10).equals(sig.subarray(2, 10))) return { ok: false, reason: "key id mismatch" };
+    const key = createPublicKey({ key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), pk.subarray(10)]), format: "der", type: "spki" });
+    const algo = sig.subarray(0, 2).toString();
+    const msg = algo === "ED" ? createHash("blake2b512").update(data).digest() : data;
+    if (!verify(null, msg, key, sig.subarray(10))) return { ok: false, reason: "signature invalid" };
+    const comment = (lines[2] || "").replace(/^trusted comment: ?/, "");
+    if (lines[3] && !verify(null, Buffer.concat([sig.subarray(10), Buffer.from(comment)]), key, b64Line(lines[3]))) return { ok: false, reason: "trusted comment signature invalid" };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: `unparseable (${String(e.message).slice(0, 40)})` };
+  }
 }
 
 /** Minimal zip reader (central directory + inflateRaw) so APKs can be swept without unzip/7z. */
@@ -133,10 +154,12 @@ export function runAudit(opts, deps = {}) {
   const env = deps.env || process.env;
   const repoRoot = resolve(opts.repoRoot || ".");
   const { from } = opts;
-  const commit = opts.commit || "HEAD";
+  let commit = opts.commit || "HEAD";
   const artDir = opts.artifacts ? resolve(opts.artifacts) : null;
   const run = (cmd, args) => String(execRaw(cmd, args, { cwd: repoRoot }));
   const git = (...args) => run("git", args);
+  let commitError = null;
+  try { commit = canonicalizeCommit(commit, (c, a, o) => execRaw(c, a, o), repoRoot); } catch (e) { commitError = e.message; }
   const hasTool = (cmd, args = ["--version"]) => { try { execRaw(cmd, args, { cwd: repoRoot }); return true; } catch { return false; } };
   const checks = [];
   const range = from ? `${from}..${commit}` : null;
@@ -242,7 +265,8 @@ export function runAudit(opts, deps = {}) {
       notes.push(`npm audit: critical ${critical}, high ${high}, moderate ${moderate}, low ${low}`);
       if (critical || high) { result = "FAIL"; sev = critical ? "Critical" : "High"; }
     } catch (e) { result = "SKIP"; notes.push(`npm audit unavailable (${String(e.message).split("\n")[0].slice(0, 80)}; offline?)`); }
-    if (!hasTool("cargo", ["audit", "--version"])) { if (result === "PASS") result = "SKIP"; notes.push("cargo audit not installed (cargo install cargo-audit)"); }
+    if (!fs.existsSync(join(repoRoot, "src-tauri", "Cargo.lock"))) notes.push("cargo audit SKIP: no src-tauri/Cargo.lock");
+    else if (!hasTool("cargo", ["audit", "--version"])) { if (result === "PASS") result = "SKIP"; notes.push("cargo audit not installed (cargo install cargo-audit)"); }
     else { try { run("cargo", ["audit", "--file", "src-tauri/Cargo.lock"]); notes.push("cargo audit clean"); } catch { result = "FAIL"; sev = "High"; notes.push("cargo audit reported advisories"); } }
     notes.push("Gradle deps + license allowlist: manual");
     checks.push(row("B5", "Dependencies", result, sev, notes.join("; ")));
@@ -301,7 +325,16 @@ export function runAudit(opts, deps = {}) {
         }
         if (!fail) notes.push("latest.json signature(s) equal .sig; urls https on updater repo");
       }
-      notes.push("minisign verify not implemented (manual: tauri signer / minisign -V)");
+      const verified = [];
+      for (const sigName of fs.readdirSync(artDir || ".").filter((n) => n.endsWith(".sig"))) {
+        const target = join(artDir, sigName.slice(0, -4));
+        if (!fs.existsSync(target)) continue;
+        const v = verifyMinisign({ pubkeyB64: upd.pubkey, sigB64: fs.readFileSync(join(artDir, sigName), "utf8"), data: fs.readFileSync(target) });
+        if (v.ok) verified.push(sigName.slice(0, -4));
+        else fail ||= `${sigName.slice(0, -4)} signature does not verify against updater pubkey (${v.reason})`;
+      }
+      if (verified.length) notes.push(`minisign Ed25519 verified against pubkey: ${verified.join(", ")}`);
+      else if (!fail) { review = true; notes.push("no installer + .sig pair to verify cryptographically"); }
       checks.push(fail ? row("B7", "Update + signing integrity", "FAIL", "Critical", `${fail}; ${notes.join("; ")}`) : row("B7", "Update + signing integrity", skip ? "SKIP" : review ? "REVIEW" : "PASS", review ? "Medium" : "-", `${notes.join("; ")}${skip ? "; partial" : ""}`));
     }
   }
@@ -312,11 +345,18 @@ export function runAudit(opts, deps = {}) {
     let fail = null;
     let skip = false;
     const stampPath = join(repoRoot, "src-tauri", "runtime", "build-stamp.json");
-    if (fs.existsSync(stampPath) && opts.commit) {
-      const stamp = JSON.parse(fs.readFileSync(stampPath, "utf8")).commit || "";
-      if (stamp && (stamp.startsWith(opts.commit) || opts.commit.startsWith(stamp))) notes.push(`build-stamp ${stamp.slice(0, 10)} == commit`);
-      else fail = `build-stamp commit ${stamp.slice(0, 10) || "(empty)"} != ${opts.commit.slice(0, 10)}`;
-    } else { skip = true; notes.push("build-stamp or --commit missing"); }
+    if (commitError) fail = `cannot resolve --commit: ${commitError}`;
+    if (opts.commit && !commitError) {
+      try {
+        const head = git("rev-parse", "HEAD").trim().toLowerCase();
+        if (head === commit) notes.push("HEAD == commit"); else fail ||= `HEAD ${head.slice(0, 10)} != --commit ${commit.slice(0, 10)}`;
+      } catch (e) { skip = true; notes.push(`git rev-parse HEAD failed: ${String(e.message).split("\n")[0]}`); }
+    }
+    if (fs.existsSync(stampPath) && opts.commit && !commitError) {
+      const stamp = String(JSON.parse(fs.readFileSync(stampPath, "utf8")).commit || "").toLowerCase();
+      if (/^[0-9a-f]{7,40}$/.test(stamp) && commit.startsWith(stamp)) notes.push(`build-stamp ${stamp.slice(0, 10)} == commit`);
+      else fail ||= `build-stamp commit ${stamp.slice(0, 10) || "(empty)"} != ${commit.slice(0, 10)} (needs >= 7 hex chars)`;
+    } else if (!commitError) { skip = true; notes.push("build-stamp or --commit missing"); }
     try {
       const dirty = git("status", "--porcelain").trim();
       if (dirty) fail ||= `tree not clean (${dirty.split("\n").length} entries)`; else notes.push("tree clean");
@@ -325,7 +365,7 @@ export function runAudit(opts, deps = {}) {
     const readVer = (p, label) => { try { if (fs.existsSync(p)) versions[label] = JSON.parse(fs.readFileSync(p, "utf8")).version; } catch { /* ignore */ } };
     readVer(join(repoRoot, "package.json"), "package.json");
     if (opts.pubkeyConfig) readVer(resolve(repoRoot, opts.pubkeyConfig), "tauri.conf");
-    if (artDir) readVer(join(artDir, "latest.json"), "latest.json");
+    if (artDir) { readVer(join(artDir, "latest.json"), "latest.json"); readVer(join(artDir, "android-build.json"), "android-build.json"); }
     const distinct = new Set(Object.values(versions));
     if (distinct.size > 1) fail ||= `version mismatch ${JSON.stringify(versions)}`;
     else if (distinct.size === 1) notes.push(`version ${[...distinct][0]} in ${Object.keys(versions).join("/")}`);
@@ -348,7 +388,7 @@ export function formatTable(checks) {
 
 /** Write the table into the `## Audit` section of a release record, leaving the rest untouched. */
 export function recordAudit(recordPath, table, fs = { existsSync, readFileSync, writeFileSync }) {
-  const text = fs.readFileSync(recordPath, "utf8");
+  const text = fs.readFileSync(recordPath, "utf8").replace(/\r\n/g, "\n");
   const next = text.includes(`${SECTIONS.audit}\n`) ? setSection(text, SECTIONS.audit, table) : `${text.replace(/\s*$/, "\n")}\n${SECTIONS.audit}\n\n${table}\n`;
   fs.writeFileSync(recordPath, next);
 }

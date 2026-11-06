@@ -3,7 +3,9 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { deflateRawSync } from "node:zlib";
+import { setSection } from "../server/release.mjs";
 import { formatTable, parseAddedLines, parseArgs, readZipEntries, recordAudit, runAudit, sweepText } from "../scripts/release-audit.mjs";
 
 // Secret-shaped fixtures are assembled at runtime so this file never trips the repo's own sweep.
@@ -22,7 +24,7 @@ function memFs(files) {
 }
 
 const ROOT = "/repo";
-function gitExec({ tracked = {}, diff = "", names = "", dirty = "" } = {}) {
+function gitExec({ tracked = {}, diff = "", names = "", dirty = "", head = "", pubkey = "PK" } = {}) {
   return (cmd, args) => {
     if (cmd !== "git") { const e = new Error("not found"); e.code = "ENOENT"; throw e; }
     if (args[0] === "ls-files") return Object.keys(tracked).join("\0");
@@ -30,7 +32,8 @@ function gitExec({ tracked = {}, diff = "", names = "", dirty = "" } = {}) {
     if (args[0] === "diff") return diff;
     if (args[0] === "status") return dirty;
     if (args[0] === "grep") return "";
-    if (args[0] === "show") return JSON.stringify({ plugins: { updater: { pubkey: "PK", endpoints: ["https://github.com/o/r/releases/latest/download/latest.json"] } } });
+    if (args[0] === "rev-parse") return args[1] === "HEAD" ? head : args[2].replace(/\^\{commit\}$/, "").padEnd(40, "0");
+    if (args[0] === "show") return JSON.stringify({ plugins: { updater: { pubkey, endpoints: ["https://github.com/o/r/releases/latest/download/latest.json"] } } });
     throw new Error(`unexpected git ${args.join(" ")}`);
   };
 }
@@ -53,7 +56,7 @@ describe("release-audit", () => {
     assert.match(row(checks, "B2").evidence, /7z not installed/);
     assert.match(row(checks, "B2").evidence, /no pattern file/);
     assert.equal(row(checks, "B5").result, "SKIP");
-    assert.match(row(checks, "B5").evidence, /cargo audit not installed/);
+    assert.match(row(checks, "B5").evidence, /npm audit unavailable/);
     assert.equal(row(checks, "B3").result, "SKIP");
   });
 
@@ -106,7 +109,7 @@ describe("release-audit", () => {
       "/art/latest.json": JSON.stringify({ version: "1.0.0", platforms: { "windows-x86_64": { signature: "WRONG", url: "https://github.com/o/r/releases/download/v1/s.exe" } } }),
       "/art/s.exe.sig": "RIGHT\n",
     };
-    const { checks, exitCode } = runAudit({ repoRoot: ROOT, from: "v0", commit: "2222222", artifacts: "/art", pubkeyConfig: "src-tauri/tauri.conf.json" }, { fs: memFs(files), exec: gitExec({ tracked: {} }), env: {} });
+    const { checks, exitCode } = runAudit({ repoRoot: ROOT, from: "v0", commit: "2222222", artifacts: "/art", pubkeyConfig: "src-tauri/tauri.conf.json" }, { fs: memFs(files), exec: gitExec({ tracked: {}, head: "2222222".padEnd(40, "0") }), env: {} });
     assert.equal(row(checks, "B7").result, "FAIL");
     assert.equal(row(checks, "B7").severity, "Critical");
     assert.equal(row(checks, "B8").result, "FAIL");
@@ -133,5 +136,87 @@ describe("release-audit", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+  describe("review fixes", () => {
+    const URL_OK = "https://github.com/o/r/releases/latest/download/latest.json";
+    const C = "2222222".padEnd(40, "0");
+    function minisign(data, { tamper = false } = {}) {
+      const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+      const raw = publicKey.export({ format: "der", type: "spki" }).subarray(12);
+      const keyId = Buffer.from("0102030405060708", "hex");
+      const pub = Buffer.concat([Buffer.from("Ed"), keyId, raw]);
+      const pubkey = Buffer.from(`untrusted comment: minisign public key
+${pub.toString("base64")}
+`).toString("base64");
+      const sig = sign(null, createHash("blake2b512").update(data).digest(), privateKey);
+      const comment = "timestamp:1";
+      const global = sign(null, Buffer.concat([sig, Buffer.from(comment)]), privateKey);
+      const sigText = `untrusted comment: sig
+${Buffer.concat([Buffer.from("ED"), keyId, sig]).toString("base64")}
+trusted comment: ${comment}
+${global.toString("base64")}
+`;
+      return { pubkey, sigB64: Buffer.from(sigText).toString("base64"), data: tamper ? Buffer.from("other") : data };
+    }
+    function scenario({ tamper = false, stamp = C, head = C, androidVersion = "1.0.0", noExe = false, cargoLock = false, crlf = false } = {}) {
+      const data = Buffer.from("installer-bytes");
+      const m = minisign(data, { tamper });
+      const conf = JSON.stringify({ version: "1.0.0", plugins: { updater: { pubkey: m.pubkey, endpoints: [URL_OK] } } });
+      const files = {
+        [`${ROOT}/src-tauri/tauri.conf.json`]: conf,
+        [`${ROOT}/package.json`]: JSON.stringify({ version: "1.0.0" }),
+        [`${ROOT}/src-tauri/runtime/build-stamp.json`]: JSON.stringify({ commit: stamp }),
+        "/art/latest.json": JSON.stringify({ version: "1.0.0", platforms: { w: { signature: m.sigB64, url: "https://github.com/o/r/releases/download/v1/s.exe" } } }),
+        "/art/s.exe.sig": m.sigB64,
+        "/art/android-build.json": JSON.stringify({ version: androidVersion, commit: C }),
+      };
+      if (!noExe) files["/art/s.exe"] = m.data;
+      if (cargoLock) files[`${ROOT}/src-tauri/Cargo.lock`] = "x";
+      return runAudit({ repoRoot: ROOT, from: "v0", commit: C, artifacts: "/art", pubkeyConfig: "src-tauri/tauri.conf.json" }, { fs: memFs(files), exec: gitExec({ tracked: {}, head, pubkey: m.pubkey }), env: {} });
+    }
+
+    test("B7 PASSes only after a real minisign verify; tamper FAILs; no pair is REVIEW", () => {
+      const ok = scenario();
+      assert.equal(row(ok.checks, "B7").result, "PASS");
+      assert.match(row(ok.checks, "B7").evidence, /minisign Ed25519 verified/);
+      const bad = scenario({ tamper: true });
+      assert.equal(row(bad.checks, "B7").result, "FAIL");
+      assert.equal(bad.exitCode, 1);
+      const none = scenario({ noExe: true });
+      assert.equal(row(none.checks, "B7").result, "REVIEW");
+    });
+
+    test("B5 runs cargo audit only when src-tauri/Cargo.lock exists", () => {
+      assert.match(row(scenario().checks, "B5").evidence, /cargo audit SKIP: no src-tauri\/Cargo\.lock/);
+      assert.match(row(scenario({ cargoLock: true }).checks, "B5").evidence, /cargo audit not installed/);
+    });
+
+    test("B8 requires HEAD == commit, a >=7 hex stamp, and android-build.json version agreement", () => {
+      assert.equal(row(scenario().checks, "B8").result, "PASS");
+      const h = row(scenario({ head: "3".repeat(40) }).checks, "B8");
+      assert.equal(h.result, "FAIL");
+      assert.match(h.evidence, /HEAD/);
+      assert.equal(row(scenario({ stamp: "222" }).checks, "B8").result, "FAIL");
+      const v = row(scenario({ androidVersion: "0.9.0" }).checks, "B8");
+      assert.equal(v.result, "FAIL");
+      assert.match(v.evidence, /android-build.json/);
+    });
+
+    test("setSection / recordAudit tolerate CRLF without duplicating ## Audit", () => {
+      const crlf = ["# T", "", "## Audit", "", "old", "", "## Artifacts (SHA-256)", "", "x", ""].join(String.fromCharCode(13, 10));
+      assert.equal((setSection(crlf, "## Audit", "NEW").match(/## Audit/g) || []).length, 1);
+      assert.ok(setSection(crlf, "## Audit", "NEW").includes("NEW"));
+      const dir = mkdtempSync(join(tmpdir(), "audit-crlf-"));
+      try {
+        const p = join(dir, "r.md");
+        writeFileSync(p, crlf);
+        recordAudit(p, "TABLE");
+        const after = readFileSync(p, "utf8");
+        assert.equal((after.match(/## Audit/g) || []).length, 1);
+        assert.ok(after.includes("TABLE") && after.includes("## Artifacts"));
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 });
