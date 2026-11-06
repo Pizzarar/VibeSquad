@@ -213,3 +213,15 @@ test("closed match on a backend that cannot reopen is replaced, not reused", () 
     assert.notEqual(res.reused, true);
     assert.equal(daemon.created.length, 1);
   }));
+
+test("a fresh lane (brief names no plan) boots with '(none yet)' even if docs/ holds other plans", () =>
+  withEnv(async (env) => {
+    writeFileSync(join(env.dir, "docs", "brainstorm", "fresh.md"), "# Brief\n\n## Open\n- nothing yet\n", "utf8");
+    const daemon = mockDaemon([]);
+    await performBrainstormRestart(
+      { reason: "start-brainstorm", mode: "quick-start", teamId: "sq", laneId: "fresh", laneName: "Fresh", daemonClient: daemon, profilesPath: env.profilesPath },
+      env.dir,
+    );
+    assert.match(daemon.created[0].initialPrompt, /Latest plan file: `\(none yet\)`/);
+    assert.doesNotMatch(daemon.created[0].initialPrompt, /PLAN_PINS_TEST/);
+  }));
