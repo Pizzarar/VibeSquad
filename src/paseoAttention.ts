@@ -1,7 +1,8 @@
 // Bridge between Paseo's attention events/flags and VS's own attention model (additive: the snapshot
 // path in useAttentionAlerts and attentionItems stay the source of truth).
 import { useEffect, useRef } from "react";
-import { daemonClient, DEMO, getPaseoState } from "./paseo";
+import { daemonClient, getPaseoState } from "./paseo";
+import { DEMO } from "./demoFlag";
 import { alertEnabled, getPrefs } from "./prefs";
 import { playAlertChime } from "./notifications";
 import { attentionOf, kindOf, type Member } from "./teams";

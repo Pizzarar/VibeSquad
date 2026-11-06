@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { DEMO } from "./paseo";
+import { DEMO } from "./demoFlag";
 import { setProviderOverrides } from "./pixel";
 import { isRemote, needsPairing } from "./remoteSession";
 

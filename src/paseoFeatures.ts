@@ -1,7 +1,8 @@
 // Live provider-feature changes for a running agent: wrappers over daemonClient.
 // Pure logic lives in paseoFeaturesLogic.ts. The drawer re-reads the agent snapshot after each change.
 import type { PaseoAgent } from "@getpaseo/client";
-import { DEMO, daemonClient, upsertLocalAgent } from "./paseo";
+import { daemonClient, upsertLocalAgent } from "./paseo";
+import { DEMO } from "./demoFlag";
 
 export { describeError, featureChange, featureRows, turnNote } from "./paseoFeaturesLogic";
 export type { FeatureRow } from "./paseoFeaturesLogic";

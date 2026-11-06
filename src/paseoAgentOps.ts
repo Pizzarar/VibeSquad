@@ -1,6 +1,7 @@
 // Agent ops parity with Paseo: hard delete, bulk stop, reload. Wrappers over daemonClient plus
 // the pure logic (targets, guards) the UI and tests share. Labels, never titles, decide roles.
-import { DEMO, daemonClient, getPaseoState, loadArchived, removeLocalAgent } from "./paseo";
+import { daemonClient, getPaseoState, loadArchived, removeLocalAgent } from "./paseo";
+import { DEMO } from "./demoFlag";
 import { closeTab } from "./panes";
 import type { OpAgent } from "./paseoAgentOpsLogic.ts";
 

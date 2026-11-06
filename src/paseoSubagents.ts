@@ -1,4 +1,5 @@
-import { daemonClient, DEMO } from "./paseo";
+import { daemonClient } from "./paseo";
+import { DEMO } from "./demoFlag";
 import type { ApiSubagent } from "./paseoSubagentsLogic";
 
 const TIMEOUT_MS = 8000;

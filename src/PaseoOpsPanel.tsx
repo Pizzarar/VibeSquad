@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { DEMO, usePaseo } from "./paseo";
+import { usePaseo } from "./paseo";
+import { DEMO } from "./demoFlag";
 import { fetchDaemonConfig, fetchUsageReports, measureRtt, patchAndReloadDaemonConfig, reloadDaemonConfig, type DaemonReloadResult } from "./paseoOps";
 import { EDITABLE_CONFIG_FIELDS, LOCKED_CONFIG_SECTIONS, LOCKED_NOTE, buildConfigDiff, buildConfigPatch, configChangeWarnings, formatDiffValue, readConfigPath, validateFieldValue, formatConfigJson, formatLatency, formatMaskedJson, latencyTone, summarizeUsageReport, type UsageReportLike } from "./paseoOpsLogic";
 

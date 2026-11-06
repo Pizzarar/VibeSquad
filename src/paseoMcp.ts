@@ -1,4 +1,5 @@
-import { daemonClient, DEMO } from "./paseo";
+import { daemonClient } from "./paseo";
+import { DEMO } from "./demoFlag";
 import { MCP_FILE } from "./paseoMcpLogic";
 
 export interface McpFileState {

@@ -1,4 +1,5 @@
-import { daemonClient, DEMO } from "./paseo";
+import { daemonClient } from "./paseo";
+import { DEMO } from "./demoFlag";
 import { type UsageReportLike } from "./paseoOpsLogic";
 
 export interface DaemonReloadResult {

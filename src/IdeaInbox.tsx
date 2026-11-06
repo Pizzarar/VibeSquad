@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
-import { DEMO, removeLocalAgent, upsertLocalAgent, usePaseo } from "./paseo";
+import { removeLocalAgent, upsertLocalAgent, usePaseo } from "./paseo";
+import { DEMO } from "./demoFlag";
 import { useDraft } from "./drafts";
 import { closeTab, openAgentInTab } from "./panes";
 import { getTeams, isTopicBrainstorm, titleFor, topicOfBrainstorm, useTeams } from "./teams";

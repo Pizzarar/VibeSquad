@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { PaseoAgent, PaseoWorkspace } from "@getpaseo/client";
-import { DEMO, archiveAgent, archiveWorkspace, daemonClient, removeLocalAgent, usePaseo } from "./paseo";
+import { archiveAgent, archiveWorkspace, daemonClient, removeLocalAgent, usePaseo } from "./paseo";
+import { DEMO } from "./demoFlag";
 import { ConfirmButton, ago } from "./ui";
 import { openRightDockTab } from "./RightDock";
 import { agentsWithoutWorkspaceId, bulkLabels, buildFolders, clearLabels, isLiveAgent, normDir, type Folder, type Verdict } from "./workspaceGroups";

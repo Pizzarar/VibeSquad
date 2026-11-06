@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { DEMO } from "./paseo";
+import { DEMO } from "./demoFlag";
 import { getPrefs, pushEventsFromPrefs, subscribePrefs } from "./prefs";
 import { isRemote } from "./remoteSession";
 

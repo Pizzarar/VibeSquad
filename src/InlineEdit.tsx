@@ -9,7 +9,8 @@
 // late write still shows up.
 
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { daemonClient, DEMO, getPaseoState, sendMessage, subscribePaseo, usePaseo } from "./paseo";
+import { daemonClient, getPaseoState, sendMessage, subscribePaseo, usePaseo } from "./paseo";
+import { DEMO } from "./demoFlag";
 import { getPanes } from "./panes";
 import { cleanTitle } from "./ui";
 import { openRightDockTab } from "./RightDock";

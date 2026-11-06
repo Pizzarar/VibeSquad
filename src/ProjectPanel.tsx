@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
-import { daemonClient, DEMO } from "./paseo";
+import { daemonClient } from "./paseo";
+import { DEMO } from "./demoFlag";
 import { openRightDockTab } from "./RightDock";
 import {
   AGENTS_TEMPLATE,

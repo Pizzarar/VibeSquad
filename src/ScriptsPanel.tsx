@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
-import { daemonClient, DEMO, usePaseo } from "./paseo";
+import { daemonClient, usePaseo } from "./paseo";
+import { DEMO } from "./demoFlag";
 import { workspaceIdForAgent } from "./workspaceLogic";
 import { NoWorkspaceBanner } from "./NoWorkspaceBanner";
 import { usesVsShells, vsListScripts, vsScriptLogsUrl, vsStartScript, vsStopScript, vsStream } from "./vsShells";

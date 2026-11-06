@@ -1,7 +1,8 @@
 // Pinned teams step 3 (docs/PLAN_PINNED_FEATURES.md §3): the side-effecting half of the pin resolver.
 // src/pins.ts stays pure; this file talks to the dev-server middleware and the teams store.
 import type { PaseoAgent } from "@getpaseo/client";
-import { DEMO, archiveAgent, archiveWorkspace, detachAgent, getPaseoState, retireAgent, sendMessage, updateAgent, upsertLocalAgent } from "./paseo";
+import { archiveAgent, archiveWorkspace, detachAgent, getPaseoState, retireAgent, sendMessage, updateAgent, upsertLocalAgent } from "./paseo";
+import { DEMO } from "./demoFlag";
 import { parkIdeasInInbox } from "./IdeaInbox";
 import { isRemote } from "./remoteSession";
 import {

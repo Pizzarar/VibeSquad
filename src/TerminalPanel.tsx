@@ -4,7 +4,8 @@ import type { TerminalStreamEvent } from "@getpaseo/client/internal/daemon-clien
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { daemonClient, DEMO, usePaseo } from "./paseo";
+import { daemonClient, usePaseo } from "./paseo";
+import { DEMO } from "./demoFlag";
 import { workspaceIdForAgent } from "./workspaceLogic";
 import { NoWorkspaceBanner } from "./NoWorkspaceBanner";
 import { captureFileName, captureText } from "./fileOps";

@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { DEMO } from "./paseo";
+import { DEMO } from "./demoFlag";
 import { demoLog, type FeedEntry } from "./demo";
 import type { TeamDef } from "./teams";
 import { Ago } from "./ui";

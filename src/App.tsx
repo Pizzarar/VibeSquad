@@ -6,7 +6,8 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExterna
 import type { PaseoAgent } from "@getpaseo/client";
 import type { ProviderQuotaView } from "./antigravity";
 import { LEGACY_NEEDS_LABEL, dismissStaleBuild, dismissUpdateBanner, loadUpdaterStatus, setLanExposureState, setLocalAccess, setServerConfigWarnings, setStaleBuild, triggerUpdateInstall, useLocalReadOnly, useStaleBuild, useStaleBuildDismissed, useConfigWarnings, useExposedIpsStore, useUpdaterStatus } from "./userName";
-import { DEMO, archiveAgent, detachAgent, getPaseoState, loadArchived, retireAgent, setNeedsYou, updateAgent, upsertLocalAgent, usePaseo } from "./paseo";
+import { archiveAgent, detachAgent, getPaseoState, loadArchived, retireAgent, setNeedsYou, updateAgent, upsertLocalAgent, usePaseo } from "./paseo";
+import { DEMO } from "./demoFlag";
 import {
   AGENT_TYPE_LABEL,
   leadVariant,

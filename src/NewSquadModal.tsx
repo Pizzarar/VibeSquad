@@ -1,6 +1,7 @@
 // New squad creation modal: add a local folder or clone a repo, auto-fill name, optionally start a Buddy.
 import { useEffect, useMemo, useState } from "react";
-import { daemonClient, DEMO } from "./paseo";
+import { daemonClient } from "./paseo";
+import { DEMO } from "./demoFlag";
 import {
   getTeams,
   saveTeams,
