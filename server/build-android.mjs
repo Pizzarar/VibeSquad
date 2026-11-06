@@ -3,6 +3,9 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSyn
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
+import { resolveSecret } from "./secrets.mjs";
+
+const KS_SECRET = { envVar: "VS_KS_PASS", target: "vibesquad/android-keystore", required: true };
 
 const DEFAULT_ANDROID_HOME = join(process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local"), "Android", "Sdk");
 
@@ -100,11 +103,13 @@ export function ensureAndroidSystemBarFit(mainActivityPath) {
  */
 export function ensureAndroidKeystore({
   keystorePath = join(homedir(), ".tauri", "vibesquad-android.keystore"),
-  storePass = "vibesquad-android",
   alias = "vibesquad",
   env = process.env,
   exec = execFileSync,
+  resolve: resolveKsSecret = resolveSecret,
 } = {}) {
+  const storePass = resolveKsSecret(KS_SECRET, { env });
+  const secretEnv = { ...env, VS_KS_PASS: storePass };
   if (!existsSync(keystorePath)) {
     mkdirSync(dirname(keystorePath), { recursive: true });
     const keytool = env.JAVA_HOME
@@ -123,15 +128,15 @@ export function ensureAndroidKeystore({
       "2048",
       "-validity",
       "10000",
-      "-storepass",
-      storePass,
-      "-keypass",
-      storePass,
+      "-storepass:env",
+      "VS_KS_PASS",
+      "-keypass:env",
+      "VS_KS_PASS",
       "-dname",
       "CN=VibeSquad, O=VibeSquad, C=US",
-    ]);
+    ], { env: secretEnv });
   }
-  return { keystorePath, storePass, alias };
+  return { keystorePath, secretEnv, alias };
 }
 
 function findApk(dir) {
@@ -212,14 +217,14 @@ export function buildAndroidApk({
   const destApk = join(distDesktopDir, "VibeSquad.apk");
   if (apk.endsWith("-unsigned.apk")) {
     console.log("[build:android] 5/6 Signing APK...");
-    const { keystorePath, storePass, alias } = ensureAndroidKeystore({ env: androidEnv, exec });
+    const { keystorePath, secretEnv, alias } = ensureAndroidKeystore({ env: androidEnv, exec });
     const latest = latestBuildTools(androidEnv.ANDROID_HOME);
     if (!latest) throw new Error(`Android build-tools not found under ${join(androidEnv.ANDROID_HOME, "build-tools")}`);
     const javaExe = androidEnv.JAVA_HOME
       ? join(androidEnv.JAVA_HOME, "bin", process.platform === "win32" ? "java.exe" : "java")
       : "java";
     const apksignerJar = join(androidEnv.ANDROID_HOME, "build-tools", latest, "lib", "apksigner.jar");
-    run(javaExe, ["-jar", apksignerJar, "sign", "--ks", keystorePath, "--ks-key-alias", alias, "--ks-pass", "pass:" + storePass, "--key-pass", "pass:" + storePass, "--out", destApk, apk]);
+    run(javaExe, ["-jar", apksignerJar, "sign", "--ks", keystorePath, "--ks-key-alias", alias, "--ks-pass", "env:VS_KS_PASS", "--key-pass", "env:VS_KS_PASS", "--out", destApk, apk], { env: secretEnv });
   } else {
     copyFileSync(apk, destApk);
   }
