@@ -20,7 +20,7 @@ test("running lead -> busy, no open, no send", async () => {
 test("idle lead -> open then send exact prompt", async () => {
   const calls = [];
   await runCheckin(pinWith("idle"), { open: (i) => calls.push(["open", i]), send: async (i, t) => calls.push(["send", i, t]) });
-  assert.deepEqual(calls, [["open", "L1"], ["send", "L1", "Check-in from Aub: status in 3 lines: done / doing / blocked."]]);
+  assert.deepEqual(calls, [["open", "L1"], ["send", "L1", "Check-in from the owner: status in 3 lines: done / doing / blocked."]]);
   assert.equal(CHECKIN_PROMPT, calls[1][2]);
 });
 
