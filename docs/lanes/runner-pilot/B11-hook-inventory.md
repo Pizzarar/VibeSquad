@@ -94,3 +94,12 @@ the log: `created` event → created; `status running` → turn_started; `status
   metric), stops buffering and resets, so a later start retries.
 * Startup cost: the baseline reads each log from the tail to its last turn boundary (not every line); archived agents are skipped;
   `seedRoster` fetches the raw records once and hands them to `catchUp`.
+
+## Review r5 fixes
+
+* **Fallback snapshots**: `snapshotFor` = last known -> fresh fetch -> the runner log (`readRunnerAgentSync`) -> built from the `created`
+  event (cached in `live.known`). The plugin's `labelsFor` falls back to the event payload's labels when its refresh fails, and
+  `agent.created` skips all label writes when neither source has labels, so a lead is never downgraded to a worker by a hiccup.
+* **Archive is terminal**: the archive event marks the agent archived; the killed child's trailing exit / error / idle never resurrect the
+  roster row but close an open turn once; the baseline finds `archive` anywhere in the scanned tail; `catchUp` replays archived agents
+  (turn_ended + remove) when the archive landed while the stream was down.

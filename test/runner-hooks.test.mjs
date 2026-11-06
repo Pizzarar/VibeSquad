@@ -572,3 +572,86 @@ test('lifecycle: a failing attachHooks is loud, stops buffering and lets a later
     assert.ok(lc.host, 'second start succeeds');
   } finally { await b.close(); }
 });
+
+test('fetch failures during created / turn_ended keep a lead a lead and still digest a worker (no label downgrade)', async () => {
+  const b = await bootCtl();
+  try {
+    const lc = await startRunnerLifecycle({ runner: b.backend, startWatcher: false });
+    b.tap(lc);
+    b.ctl.connect();
+    await until(() => b.backend.live.stream, 3000, 'stream');
+    await settle(300);
+    // The runner is reachable for writes but every roster read fails (getAgent / fetchAgent / list), as in a restart hiccup.
+    const realFetch = b.backend.fetchAgent.bind(b.backend);
+    const realList = b.backend.listAgents.bind(b.backend);
+    b.backend.fetchAgent = async () => { throw new Error('runner restarting'); };
+    b.backend.listAgents = async () => { throw new Error('runner restarting'); };
+    const base = { provider: 'claude', model: null, cwd: CWD, prompt: 'go' };
+    const leadId = b.ctl.runner.create({ ...base, meta: { title: 'L', role: 'lead', lane: 'bug-chaser', team: 'vibesquad' } });
+    const workerId = b.ctl.runner.create({ ...base, prompt: 'PASS: built', meta: { title: 'W', role: 'worker', lane: 'bug-chaser', team: 'vibesquad', labels: { job: 'build thing' } } });
+    await until(() => b.count('agent.turn_ended', leadId) === 1 && b.count('agent.turn_ended', workerId) === 1, 8000, 'both turns ended');
+    await settle(1500); // hooks finish while reads still fail
+    b.backend.fetchAgent = realFetch;
+    b.backend.listAgents = realList;
+    const lead = await b.backend.getAgent(leadId);
+    assert.equal(lead.labels.role, 'lead', 'role not downgraded to worker');
+    assert.ok(lead.labels.ord, 'ord assigned from the payload labels');
+    const worker = await b.backend.getAgent(workerId);
+    assert.equal(worker.labels.role, 'worker');
+    const all = await b.backend.listAgents({ filter: { includeArchived: true } });
+    assert.ok(all.some((a) => a.labels.digestFor === workerId) || teamLogAll().some((e) => e.type === 'done' && e.agent === workerId), 'digest agent spawned (or direct-write fallback)');
+  } finally { await b.close(); }
+});
+
+test('archive is terminal: trailing exit never resurrects the row, and an open turn closes once', async () => {
+  const rec = { id: 'rn-arch00000001', provider: 'claude', cwd: CWD, meta: { role: 'worker' }, status: 'exited', pendingPermissions: [], createdAt: 1, updatedAt: 1, lastSeq: 9 };
+  const backend = new RunnerBackend({ client: { request: async () => rec }, rootDir: ROOT, hooks: false });
+  backend.live.hwm = new Map();
+  const got = [];
+  backend.listeners.add((e) => { if (['agent', 'remove', 'turn_ended', 'status'].includes(e.kind)) got.push(e.kind + (e.outcome ? ':' + e.outcome.kind : '')); });
+  const ev = (seq, type, o) => ({ id: rec.id, event: { seq, ts: 1000 + seq, type, ...o } });
+  await backend.handleLogEvent(ev(0, 'created', { provider: 'claude', cwd: CWD, meta: rec.meta }));
+  await backend.handleLogEvent(ev(1, 'input', { text: 'x' }));
+  await backend.handleLogEvent(ev(2, 'status', { status: 'running' }));
+  got.length = 0;
+  await backend.handleLogEvent(ev(3, 'archive', {}));
+  await backend.handleLogEvent(ev(4, 'exit', { code: 1 }));
+  await backend.handleLogEvent(ev(5, 'status', { status: 'idle' }));
+  assert.deepEqual(got, ['remove', 'turn_ended:failed'], 'one remove, one closing turn_ended, no agent_update after remove');
+});
+
+test('baseline sees an archive that is followed by exit / error / idle', async () => {
+  const home = tmp();
+  const dir = path.join(home, 'agents');
+  mkdirSync(dir, { recursive: true });
+  const line = (seq, type, o) => JSON.stringify({ seq, ts: seq, type, ...o }) + '\n';
+  writeFileSync(path.join(dir, 'rn-a1.jsonl'), line(0, 'created', { provider: 'claude', meta: {} }) + line(1, 'archive', {}) + line(2, 'exit', { code: 0 }));
+  writeFileSync(path.join(dir, 'rn-a2.jsonl'), line(0, 'created', { provider: 'claude', meta: {} }) + line(1, 'status', { status: 'running' }) + line(2, 'archive', {}) + line(3, 'error', { message: 'x' }) + line(4, 'status', { status: 'idle' }));
+  writeFileSync(path.join(dir, 'rn-live.jsonl'), line(0, 'created', { provider: 'claude', meta: {} }) + line(1, 'status', { status: 'idle' }));
+  const backend = new RunnerBackend({ client: new RunnerClient({ home }), rootDir: ROOT, hooks: false });
+  backend.enableCatchUp();
+  assert.ok(backend.live.archived.has('rn-a1') && backend.live.archived.has('rn-a2'));
+  assert.ok(!backend.live.archived.has('rn-live'));
+  assert.equal(backend.live.hwm.get('rn-a2'), 4);
+});
+
+test('catch-up: a worker that finished and was archived while the stream was down still gets turn_ended and remove', async () => {
+  const b = await bootCtl();
+  try {
+    const lc = await startRunnerLifecycle({ runner: b.backend, startWatcher: false });
+    b.tap(lc);
+    const removed = [];
+    b.backend.listeners.add((e) => { if (e.kind === 'remove') removed.push(e.agentId); });
+    const a = await b.backend.createAgent(req({ lane: 'bug-chaser', role: 'worker', job: 'j' }, { initialPrompt: 'HOLD: go' }));
+    await until(() => b.count('agent.turn_started', a.id) === 1, 6000, 'turn_started');
+    b.ctl.drop();
+    b.ctl.held(); // turn ends...
+    b.runner.archive(a.id); // ...and the worker is auto-archived, all while the stream is down
+    await settle(200);
+    b.ctl.connect();
+    await until(() => b.count('agent.turn_ended', a.id) === 1, 6000, 'turn_ended replayed for the archived agent');
+    await until(() => removed.includes(a.id), 6000, 'remove replayed');
+    await settle(300);
+    assert.equal(b.count('agent.turn_ended', a.id), 1);
+  } finally { await b.close(); }
+});

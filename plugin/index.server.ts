@@ -1079,9 +1079,13 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
     };
 
-    const labelsFor = async (paseo: Paseo, agent: { id: string; title: string | null }) => {
+    const labelsFor = async (paseo: Paseo, agent: { id: string; title: string | null; labels?: Labels }) => {
       const s = await snap(paseo, agent.id);
-      return { snap: s, labels: s?.labels ?? {} };
+      if (s) return { snap: s, labels: s.labels ?? {}, fromPayload: false };
+      // The refresh failed (daemon / runner hiccup): the event payload still carries the agent's own labels. Using {} here would
+      // read a lead as a worker and let the label writes below downgrade it.
+      const p = agent as any;
+      return { snap: p?.labels ? ({ ...p, labels: p.labels } as AgentSnap) : null, labels: (p?.labels ?? {}) as Labels, fromPayload: true };
     };
 
     const teamOf = (labels: Labels, cwd?: string): { team: string; lane: string } | null => {
@@ -1696,8 +1700,12 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         let timedTeam = "";
         let timedLane = "";
         try {
-          const { snap: me, labels } = await labelsFor(paseo, agent);
+          const { snap: me, labels, fromPayload } = await labelsFor(paseo, agent);
           st.mark("labels-for");
+          if (fromPayload && Object.keys(labels).length === 0) {
+            log(`agent.created for ${agent?.id}: no labels from the refresh or the payload; skipping label writes`);
+            return;
+          }
           // Runner spawns: before(agent.create) already logged these metrics in the caller's process (the dedupe maps are not shared).
           const beforeRan = labels["vs.spawn-configured"] === "1";
           // Never let a wrong-provider agent go on to retire a predecessor or count as a dispatch.

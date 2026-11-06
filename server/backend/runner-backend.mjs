@@ -75,11 +75,11 @@ export function toAgent(rec) {
  * Synchronous, read-only view of a runner agent straight from its JSONL log (<runner home>/agents/<id>.jsonl).
  * For callers that cannot await the HTTP API (vs log identity, vs who). Returns the toAgent() snapshot or null.
  */
-export function readRunnerAgentSync(id, { env = process.env } = {}) {
+export function readRunnerAgentSync(id, { env = process.env, home } = {}) {
   if (!isRunnerId(id) || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) return null;
   let text;
   try {
-    text = fs.readFileSync(path.join(runnerHome(env), "agents", `${id}.jsonl`), "utf8");
+    text = fs.readFileSync(path.join(home ?? runnerHome(env), "agents", `${id}.jsonl`), "utf8");
   } catch {
     return null;
   }
@@ -260,10 +260,11 @@ function scanTail(file) {
         const e = evs[i];
         if (e.type === "created" || e.type === "exit" || (e.type === "status" && e.status === "idle")) { b = i; break; }
       }
-      if (b < 0 && len < size) continue; // boundary not in this window: read more
+      if ((b < 0 || b < 8) && len < size) continue; // boundary (and the few events before it, where an archive may sit) not in this window: read more
       const last = evs[evs.length - 1];
       const seq = last?.seq ?? -1;
-      const archived = last?.type === "archive";
+      // Runner.archive appends `archive` and then the killed child's exit / error / idle, so it is rarely the last event.
+      const archived = evs.some((e) => e.type === "archive");
       if (b < 0) return { seq, t: null, archived };
       const e0 = evs[b];
       const t = { status: e0.type === "created" ? "initializing" : e0.type === "exit" ? "closed" : "idle", errored: false };
@@ -683,7 +684,6 @@ export class RunnerBackend {
     for (const rec of todo) {
       if (gen !== this.live.gen) return;
       const id = rec.id;
-      if (rec.archivedAt) { hwm.set(id, rec.lastSeq); this.live.archived.add(id); this.live.turn.delete(id); continue; } // archived while disconnected: nothing to fire
       let events;
       try { ({ events } = await this.rc.request("GET", `/agents/${encodeURIComponent(id)}/timeline?after=${(hwm.get(id) ?? -1) + 1}`)); } catch { continue; }
       for (const event of events) await this.handleLogEvent({ id, event }, gen);
@@ -704,12 +704,23 @@ export class RunnerBackend {
     this.emitEvent({ kind: "timeline", agentId: id, seq: e.seq, type: e.type });
     const t0 = this.live.turn.get(id);
     const from = t0 && viewStatus(t0);
+    // Archive is terminal. The killed child's exit / error / idle land AFTER the archive event: they must not resurrect the roster
+    // row, but they may still close a turn that was open when the agent was archived (once).
+    if (this.live.archived.has(id) && e.type !== "archive") {
+      const closing = t0 ? reduceTurn(t0, e) : null;
+      if (closing) {
+        this.live.turn.delete(id);
+        this.emitEvent({ ...closing, agentId: id, agent: await this.snapshotFor(id, e) });
+      }
+      return;
+    }
     if (!ROSTER_EVENTS.has(e.type)) {
       if (t0) reduceTurn(t0, e); // input / error / cancel only move turn state
       return;
     }
     if (e.type === "archive") {
-      this.live.turn.delete(id);
+      this.live.archived.add(id);
+      if (t0 && !(t0.status === "running" || t0.status === "initializing" || t0.awaiting)) this.live.turn.delete(id); // an open turn is kept until its exit closes it
       this.emitEvent({ kind: "remove", agentId: id });
       return;
     }
@@ -726,12 +737,10 @@ export class RunnerBackend {
       agent = (await this.fetchAgent(id)).agent;
       if (hwm) this.live.known.set(id, agent);
     } catch {
-      // Runner hiccup. In lifecycle mode this event's seq is already consumed, so the transition must still be emitted: use the
-      // last known snapshot (or one built from the created event) rather than dropping it. Elsewhere the next event resyncs.
+      // Runner hiccup. In lifecycle mode this event's seq is already consumed, so the transition must still be emitted: with the
+      // best snapshot we have (never a label-less one if any source knows the labels). Elsewhere the next event resyncs.
       if (!hwm) return;
-      agent = this.live.known.get(id) ?? (e.type === "created"
-        ? toAgent({ id, provider: e.provider, model: e.model, cwd: e.cwd, meta: e.meta, status: "starting", createdAt: e.ts, updatedAt: e.ts })
-        : { id, title: id, labels: { backend: "runner" }, status: "idle", backend: "runner" });
+      agent = await this.snapshotFor(id, e);
     }
     if (gen !== this.live.gen) return;
     if (!t) {
@@ -747,6 +756,21 @@ export class RunnerBackend {
     if (from !== undefined && from !== to) this.emitEvent({ kind: "status", agentId: id, from, to, agent: shown });
     if (e.type === "permission" && e.phase === "request") this.emitEvent({ kind: "permission", agentId: id, request: { id: e.id, toolName: e.toolName } });
     if (e.type === "exit") await this.refreshLaneWhosHere(agent.labels?.lane);
+  }
+
+  /** Best available snapshot when the roster fetch failed: last known, else the log itself, else one built from the created event (cached). */
+  async snapshotFor(id, e) {
+    const known = this.live.known.get(id);
+    if (known) return known;
+    try {
+      const fresh = (await this.fetchAgent(id)).agent;
+      this.live.known.set(id, fresh);
+      return fresh;
+    } catch { /* fall through */ }
+    let agent = readRunnerAgentSync(id, { home: this.rc.home });
+    if (!agent && e?.type === "created") agent = toAgent({ id, provider: e.provider, model: e.model, cwd: e.cwd, meta: e.meta, status: "starting", createdAt: e.ts, updatedAt: e.ts });
+    if (agent) this.live.known.set(id, agent);
+    return agent ?? { id, title: id, labels: { backend: "runner" }, status: "idle", backend: "runner" };
   }
 
   /** AgentBackend.subscribe shape (what server/push.mjs reads): agent_update / agent_permission_request / agent_deleted. */
