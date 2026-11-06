@@ -23,7 +23,7 @@ export function validateCreate({ model, cwd, meta = {} }) {
 // so every agent id/team/lane/role is overwritten from its own meta.
 export function agentEnv(id, meta = {}, base = process.env) {
   const env = { ...base, VS_AGENT_ID: id, PASEO_AGENT_ID: id };
-  for (const [k, v] of [['VS_TEAM', meta.team], ['VS_LANE', meta.lane], ['VS_ROLE', meta.role], ['VS_ORD', meta.ord]]) {
+  for (const [k, v] of [['VS_TEAM', meta.team], ['VS_LANE', meta.lane], ['VS_ROLE', meta.role], ['VS_ORD', meta.ord], ['VS_PROFILE', meta.profile]]) {
     if (v !== undefined && v !== null && v !== '') env[k] = String(v);
     else delete env[k];
   }

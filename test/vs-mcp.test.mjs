@@ -317,3 +317,41 @@ test('rn- agents resolve through the runner log: vs log as a runner lead, vs who
   assert.deepEqual(ids, ['rn-lead1:lead', 'rn-work1:worker']);
   assert.equal(readRunnerAgentSync('rn-lead1', { env })?.labels.role, 'lead');
 });
+
+test('aliases expose Paseo-shaped schemas and every alias result carries agentId', async () => {
+  const tools = Object.fromEntries(toolList().map((t) => [t.name, t]));
+  assert.ok(tools.create_agent.inputSchema.properties.initialPrompt);
+  assert.deepEqual(tools.create_agent.inputSchema.required, []);
+  for (const n of ['send_agent_prompt', 'get_agent_status', 'cancel_agent', 'wait_for_agent']) assert.ok(tools[n].inputSchema.properties.agentId, n);
+  assert.ok(tools.spawn_worker.inputSchema.required.includes('profile'), 'canonical schema untouched');
+  const ctx = fakeCtx({ runnerBackend: fakeBackend('rn'), paseoBackend: fakeBackend('ps') });
+  for (const [name, args] of [['send_agent_prompt', { agentId: 'rn-1', prompt: 'x' }], ['cancel_agent', { agentId: 'rn-1' }], ['wait_for_agent', { agentId: 'rn-1' }]]) {
+    assert.equal((await callTool(ctx, name, args)).agentId, 'rn-1', name);
+  }
+});
+
+test('agentEnv clears a stale VS_PROFILE; spawn_worker drops labels.ord', async () => {
+  assert.equal(agentEnv('rn-1', {}, { VS_PROFILE: 'old' }).VS_PROFILE, undefined);
+  assert.equal(agentEnv('rn-1', { profile: 'p' }, {}).VS_PROFILE, 'p');
+  const runnerBackend = fakeBackend('rn');
+  await callTool(fakeCtx({ runnerBackend, paseoBackend: fakeBackend('ps') }), 'spawn_worker', { title: 't', profile: 'Implement - Sonnet', prompt: 'p', labels: { ord: '9' } });
+  assert.equal(runnerBackend.calls[0][1].labels.ord, undefined);
+});
+
+test('whoami reads rn- agents from the runner log; installVsShim ships server/mcp and server/backend (isolated HOME)', async () => {
+  const env = isolatedEnv();
+  mkdirSync(env.VIBESQUAD_HOME, { recursive: true });
+  writeFileSync(path.join(env.VIBESQUAD_HOME, 'teams.json'), JSON.stringify({ teams: [{ id: 'efi', name: 'EFI', paths: ['efi'], lanes: [{ id: 'own', name: 'Own' }, { id: 'ui', name: 'UI' }] }] }));
+  writeRunnerAgent(env.VIBESQUAD_HOME, 'rn-lead2', { team: 'efi', lane: 'ui', role: 'lead', title: 'L2' });
+  const out = spawnSync(process.execPath, [CLI, 'whoami', '--agent', 'rn-lead2', '--json'], { env, encoding: 'utf8' });
+  assert.equal(out.status, 0, out.stderr);
+  assert.match(out.stdout, /"lead"/);
+  assert.match(out.stdout, /"ui"/);
+  const { installVsShim } = await import('../cli/vs.mjs');
+  const binDir = path.join(env.HOME, 'bin');
+  mkdirSync(binDir, { recursive: true });
+  installVsShim({ binDirs: [binDir], baseHome: path.join(env.HOME, 'base') });
+  for (const rel of ['server/mcp/server.mjs', 'server/mcp/tools.mjs', 'server/backend/index.mjs', 'server/backend/runner-backend.mjs']) {
+    assert.ok(existsSync(path.join(env.HOME, 'base', 'runtime', rel)), rel);
+  }
+});

@@ -784,7 +784,7 @@ function collectAgents() {
 }
 
 function resolveCallerUsage(identity) {
-  if (!identity.agentId) return null;
+  if (!identity.agentId || isRunnerId(identity.agentId)) return null;
   const out = runPaseo(["inspect", identity.agentId, "--json"]);
   if (!out) return null;
   try {
@@ -1111,7 +1111,7 @@ function formatWhoLine(entry) {
 }
 
 async function enrichZeroTokenAgents(candidates) {
-  const needInspect = candidates.filter((a) => extractAgentTokens(a).tokens === 0);
+  const needInspect = candidates.filter((a) => !isRunnerId(a.id) && extractAgentTokens(a).tokens === 0);
   if (!needInspect.length) return;
 
   if (!hasCustomOfflineStore() && !hasCustomMockCli()) {
@@ -1297,13 +1297,13 @@ async function commandWho(flags) {
 }
 
 async function commandWhoami(flags) {
-  const agentId = String(flags.agent ?? process.env.PASEO_AGENT_ID ?? "").trim();
+  const agentId = String(flags.agent ?? process.env.PASEO_AGENT_ID ?? process.env.VS_AGENT_ID ?? "").trim();
   // `--agent` names a specific target: resolve it strictly from that agent's own record.
   // The caller's VS_LANE / VS_TEAM / VS_ROLE / VS_ORD env describe the *caller*, and must not
   // leak onto a different agent's identity (e.g. a worker's VS_ROLE=worker overriding a lead).
   const explicitTarget = typeof flags.agent === "string" && flags.agent.trim() !== "";
-  let record = agentId ? readAgentRecord(agentId) : null;
-  if (!record && agentId) record = inspectAgentViaDaemon(agentId);
+  let record = isRunnerId(agentId) ? readRunnerAgentSync(agentId) : agentId ? readAgentRecord(agentId) : null;
+  if (!record && agentId && !isRunnerId(agentId)) record = inspectAgentViaDaemon(agentId);
 
   const labels = record?.labels ?? {};
   const cwd = record?.cwd || process.cwd();
@@ -1685,6 +1685,7 @@ export function installVsShim({ binDirs, targetScript, baseHome } = {}) {
     "server/stale-runtime.mjs",
     "server/pin-ideas.mjs",
     "docs/profiles/DEFAULT_PACK.md",
+    ...vsImportClosure(repoRoot),
   ];
 
   if (path.resolve(repoRoot) !== path.resolve(runtimeDir)) {
@@ -2061,6 +2062,24 @@ async function commandAgentVerb(verb, flags) {
   const result = await runAgentVerb(verb, flags, ctx);
   process.stdout.write(JSON.stringify(result, null, 2) + "\n");
   return 0;
+}
+
+// Every repo file cli/vs.mjs can reach through relative imports (static or dynamic), so the runtime copy stays complete.
+function vsImportClosure(repoRoot) {
+  const seen = new Set();
+  const walk = (rel) => {
+    if (seen.has(rel)) return;
+    let text;
+    try { text = fs.readFileSync(path.join(repoRoot, rel), "utf8"); } catch { return; }
+    seen.add(rel);
+    for (const m of text.matchAll(/(?:from\s+|import\(\s*)["'](\.{1,2}\/[^"']+\.(?:mjs|js|cjs))["']/g)) {
+      walk(path.posix.normalize(path.posix.join(path.posix.dirname(rel), m[1])));
+    }
+  };
+  walk("cli/vs.mjs");
+  // The MCP server is spawned by path (not imported) and loads these lazily.
+  for (const entry of ["server/mcp/server.mjs", "server/backend/index.mjs"]) walk(entry);
+  return [...seen];
 }
 
 function commandInstallShim(flags) {

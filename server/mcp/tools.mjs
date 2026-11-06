@@ -122,6 +122,7 @@ async function spawnWorker(ctx, args = {}) {
   labels.role = WORKER_ROLE;
   if (profile) labels.profile = profile.id || profile.name;
   else if (labels.profile === undefined) delete labels.profile;
+  delete labels.ord; // ordinals are assigned by the squad, never by a spawn arg
   labels.job = clean(labels.job) || title;
   const env = { VS_ROLE: WORKER_ROLE, ...(labels.profile ? { VS_PROFILE: labels.profile } : {}), ...(labels.lane ? { VS_LANE: labels.lane } : {}), ...(labels.team ? { VS_TEAM: labels.team } : {}) };
   const created = await ctx.withBackend({ lane: labels.lane }, (b) =>
@@ -219,11 +220,21 @@ export const ALIASES = {
   wait_for_agent: "wait",
 };
 
+// Every alias result carries agentId next to id, so prompts written against Paseo's result shape keep working.
 const aliasResult = (name, r) => {
-  if (name === "create_agent") return { ...r, agentId: r.id };
-  if (name === "get_agent_status") return { ...r, agentId: r.id };
   if (name === "list_agents") return { agents: r.map((a) => ({ ...a, agentId: a.id })) };
-  return r;
+  return r?.id !== undefined ? { ...r, agentId: r.id } : r;
+};
+
+// Paseo-shaped inputs per alias (agentId, prompt/initialPrompt, mode/modeId); the canonical schemas stay VS-shaped.
+const AGENT_ID = { agentId: S, id: S };
+const ALIAS_SCHEMAS = {
+  create_agent: obj({ title: S, provider: S, model: S, modeId: S, mode: S, initialPrompt: S, prompt: S, cwd: S, labels: { type: "object" }, profile: S }),
+  send_agent_prompt: obj({ ...AGENT_ID, prompt: S, text: S }),
+  get_agent_status: obj(AGENT_ID),
+  list_agents: obj({}),
+  cancel_agent: obj(AGENT_ID),
+  wait_for_agent: obj({ ...AGENT_ID, timeout: { type: "number" }, timeoutSec: { type: "number" } }),
 };
 
 export const ALL_TOOLS = Object.fromEntries([
@@ -231,6 +242,7 @@ export const ALL_TOOLS = Object.fromEntries([
   ...Object.entries(ALIASES).map(([alias, target]) => [alias, {
     ...VS_TOOLS[target],
     description: `Paseo-compatible alias of ${target}. ${VS_TOOLS[target].description}`,
+    inputSchema: ALIAS_SCHEMAS[alias],
     alias: true,
   }]),
 ]);

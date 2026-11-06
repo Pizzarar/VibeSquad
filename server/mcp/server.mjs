@@ -15,7 +15,7 @@ export function toolList() {
 /** Handles one JSON-RPC message; resolves to the response object, or null for notifications. */
 export async function handleMessage(ctx, msg) {
   const { id, method, params } = msg ?? {};
-  const isNotification = id === undefined || id === null;
+  const isNotification = id === undefined;
   const ok = (result) => (isNotification ? null : { jsonrpc: "2.0", id, result });
   const fail = (code, message) => (isNotification ? null : { jsonrpc: "2.0", id, error: { code, message } });
   switch (method) {
