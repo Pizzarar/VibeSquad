@@ -14,18 +14,18 @@ writeFileSync(join(dir, "pixel.mjs"), code);
 writeFileSync(join(dir, "cast.mjs"), transformSync("cast.ts", readFileSync(join(srcDir, "cast.ts"), "utf8"), { lang: "ts" }).code);
 const { initials, inkFor } = await import(pathToFileURL(join(dir, "pixel.mjs")).href);
 
-test("initials: multi-word, camelCase and separators", () => {
-  assert.equal(initials("Escape From Idle"), "EF");
-  assert.equal(initials("VibeSquad"), "VS");
-  assert.equal(initials("paseo-agent-board"), "PA");
-  assert.equal(initials("snake_case_name"), "SC");
+test("initials: one letter from the first part", () => {
+  assert.equal(initials("Escape From Idle"), "E");
+  assert.equal(initials("VibeSquad"), "V");
+  assert.equal(initials("paseo-agent-board"), "P");
+  assert.equal(initials("--foo"), "F");
+  assert.equal(initials("Pillbille"), "P");
 });
 
-test("initials: single word, empty, small size", () => {
-  assert.equal(initials("Pillbille"), "P");
+test("initials: empty or separator-only gives ?", () => {
   assert.equal(initials(""), "?");
-  assert.equal(initials("  - "), "?");
-  assert.equal(initials("Escape From Idle", 14), "E");
+  assert.equal(initials("  "), "?");
+  assert.equal(initials(" - "), "?");
 });
 
 test("NeonEmblem is gone", () => {

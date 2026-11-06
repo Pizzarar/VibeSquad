@@ -145,15 +145,13 @@ export function Avatar({
   );
 }
 
-// Up to two initials for a team name: split on spaces, -, _ and camelCase; "?" when empty.
-export function initials(name: string, size = 20): string {
-  const parts = (name ?? "")
+// Single initial for a team name: first part after splitting on spaces, -, _ and camelCase; "?" when empty.
+export function initials(name: string): string {
+  const first = (name ?? "")
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
     .split(/[\s\-_]+/)
-    .filter(Boolean);
-  const letters = parts.slice(0, 2).map((p) => Array.from(p)[0].toUpperCase());
-  if (!letters.length) return "?";
-  return size < 16 ? letters[0] : letters.join("");
+    .find(Boolean);
+  return first ? Array.from(first)[0].toUpperCase() : "?";
 }
 
 // Black or white text, whichever contrasts better with a #rrggbb fill.
@@ -182,10 +180,10 @@ export function TeamEmblem({ name, color, size = 20 }: { name: string; color: st
         borderRadius: Math.round(size * 0.22),
         background: color,
         color: inkFor(color),
-        fontSize: Math.max(7, Math.round(size * (size < 16 ? 0.6 : 0.42))),
+        fontSize: Math.max(8, Math.round(size * 0.65)),
       }}
     >
-      {initials(name, size)}
+      {initials(name)}
     </span>
   );
 }
