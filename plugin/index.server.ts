@@ -238,11 +238,11 @@ export function matchStoredProfile(
   const rawHint = (profileHint ?? "").trim();
   const mappedHint = LEGACY_ALIASES[rawHint] || rawHint;
   if (mappedHint) {
-    const exact = list.find((p) => p.name === mappedHint || p.name.toLowerCase() === mappedHint.toLowerCase());
+    const exact = list.find((p) => p.name === mappedHint || p.name.toLowerCase() === mappedHint.toLowerCase() || (p.id && p.id === mappedHint));
     if (exact) return { profile: exact, explicit: true };
     if (!customProfilesPassed && !process.env.VIBESQUAD_PROFILES_PATH) {
       const fallback = (DEFAULT_PACK_PROFILES as any[]).find(
-        (p) => p.name === mappedHint || p.name.toLowerCase() === mappedHint.toLowerCase(),
+        (p) => p.name === mappedHint || p.name.toLowerCase() === mappedHint.toLowerCase() || (p.id && p.id === mappedHint),
       );
       if (fallback) return { profile: { ...fallback, role: deriveRole(fallback.name, fallback.role) }, explicit: true };
     }
@@ -1156,6 +1156,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
       const spawnKey = `${agent.title ?? ""}::${cwd}`;
       const configuredByBefore =
+        labels["vs.spawn-configured"] === "1" || // runner spawns: before() ran in the caller's process, so the maps below are empty here
         (agent.id && beforeConfiguredSpawns.has(agent.id)) || beforeConfiguredSpawns.has(spawnKey);
       if (agent.id) beforeConfiguredSpawns.delete(agent.id);
       beforeConfiguredSpawns.delete(spawnKey);
@@ -2035,12 +2036,32 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const { team, lane } = where;
       const prompt = [
         `You are a digest agent. Inspect the final result of worker agent ${worker.id} ("${worker.title ?? ""}"):`,
-        `run \`paseo inspect ${worker.id}\` / read its last assistant message and any report it names. Do not modify files.`,
+        String(worker.id).startsWith("rn-")
+          ? `run \`vs status ${worker.id}\` (its last assistant message) and read any report it names. Do not modify files.`
+          : `run \`paseo inspect ${worker.id}\` / read its last assistant message and any report it names. Do not modify files.`,
         `Then run exactly once:`,
         `vs log done "<PASS|FAIL>: <1-line summary, max 200 chars>" --digest --ref ${worker.id}`,
         `Use FAIL if the worker reported errors, failing tests, or did not finish. If its report states neither PASS nor FAIL, log nothing. Then stop.`,
       ].join("\n");
 
+      const startedAt = Date.now();
+      /** A [done] entry for this worker written since the digest started (by the digest agent). */
+      const verdictLogged = () => {
+        try {
+          const lines = fs.readFileSync(logPath(teamIdOf(team, currentTeams())), "utf8").split(/\r?\n/).slice(-200);
+          return lines.some((l) => {
+            if (!l.trim()) return false;
+            try {
+              const e = JSON.parse(l) as LogEntry;
+              return e.type === "done" && (e.refs ?? []).includes(worker.id) && Date.parse(e.ts) >= startedAt - 1000;
+            } catch {
+              return false;
+            }
+          });
+        } catch {
+          return false;
+        }
+      };
       const fallback = async (why: string) => {
         const last = await lastAssistantText(paseo, worker.id);
         if (!statesVerdict(last)) return;
@@ -2080,6 +2101,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             if (res && res.status && res.status !== "idle" && res.status !== "completed" && res.status !== "finished") {
               return fallback("failed");
             }
+            // The digest ended its turn without logging a verdict (it errored in-turn or skipped the command).
+            if (!verdictLogged()) return fallback("logged nothing");
           })
           .catch(() => fallback("errored"));
       } catch (err) {

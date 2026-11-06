@@ -49,3 +49,20 @@ the log: `created` event → created; `status running` → turn_started; `status
 * `applyAgentSettings` (post-spawn model/mode switch) has no runner equivalent; the `before` hook already applies an explicit
   profile, so post-spawn fixes are not needed. A provider mismatch is still refused (cancel + archive).
 * A lane split across Paseo and runner (a Paseo-pinned lane) is woken by the Paseo plugin; the runner host only sees `rn-*`.
+
+## Review r1 fixes (Gemini)
+
+* **Digest**: runner workers are inspected with `vs status <id>` (not `paseo inspect`). After the digest agent goes idle, the
+  plugin checks the team log for a `done` entry naming the worker; none = direct-write fallback (`UNVERIFIED (digest logged nothing)`).
+* **Profile identity**: `spawn_worker`/`vs spawn` label the profile by *name*; `matchStoredProfile` also accepts a profile id.
+* **First `turn_started`**: turn state is driven by the event stream (a prompt `input` event marks a live turn); `created` no
+  longer seeds from a status fetch. An error/exit before the adapter's first `running` (ACP init failure) now ends the turn as failed.
+* **Cross-process spawn state**: `before(agent.create)` runs in the caller's process, `agent.created` in the VS server, so the
+  plugin's in-memory maps are not shared. The runner create persists `thinkingOptionId`, `featureValues` and a
+  `vs.spawn-configured=1` label, which `enforceProfileAfterSpawn` honours. `agy`/`antigravity` are canonicalised to `antigravity-cli` before the hook.
+* **Handoff**: `spawnSuccessor` re-points runner workers with `vs.parent`; `vs` caller usage reads `lastUsage` for `rn-` ids.
+* **Installed runtime**: the plugin is a `.ts` file loaded by Node's built-in type stripping (no flags; Node >= 22.18 / 23.6). The desktop
+  build copies the building `node.exe` (`server/build-desktop.mjs:77`), which is v24 here. The `vs` shim closure now includes `plugin/`.
+  If the import still fails, `RunnerBackend.hookHost` logs to stderr and writes a `runner hooks unavailable` metric to the `_unassigned` team log (never silent).
+* **No replay (accepted)**: the runner event stream does not replay; a turn that ends while the VS server is down fires no hook
+  and the wake watcher baselines at end-of-log on start.

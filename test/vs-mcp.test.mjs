@@ -212,7 +212,7 @@ test('spawn_worker: profile -> provider/model/mode, inherits team+lane, role=wor
   assert.equal(req.labels.team, 'efi');
   assert.equal(req.labels.lane, 'own');
   assert.equal(req.labels.role, 'worker');
-  assert.equal(req.labels.profile, 'agent_profile_x');
+  assert.equal(req.labels.profile, 'Implement - Sonnet'); // by name: the plugin, failover and digest identity match names
   assert.equal(req.labels.job, 'Do it');
   assert.equal(req.env.VS_ROLE, 'worker');
   await assert.rejects(callTool(ctx, 'spawn_worker', { title: 't', profile: 'Nope', prompt: 'p' }), /unknown profile/);
@@ -253,7 +253,7 @@ test('every Paseo-name alias maps to its VS tool and logs a metric with caller +
   assert.equal(created.id, 'rn-new');
   const [, req] = runnerBackend.calls[0];
   assert.deepEqual([req.config.provider, req.config.model, req.config.modeId, req.config.cwd, req.initialPrompt], ['claude', 'claude-haiku-5-5', 'plan', '/x', 'hello']);
-  assert.equal(req.labels.profile, 'agent_profile_x');
+  assert.equal(req.labels.profile, 'Implement - Sonnet'); // by name: the plugin, failover and digest identity match names
 
   await callTool(ctx, 'send_agent_prompt', { agentId: 'rn-1', prompt: 'next' });
   assert.deepEqual(runnerBackend.calls.at(-1), ['send', 'rn-1', 'next']);

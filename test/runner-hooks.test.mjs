@@ -269,9 +269,80 @@ test('runner events: turn_started / turn_ended (completed, failed) are derived f
     assert.equal(ended[1].outcome.kind, 'failed');
     assert.match(ended[1].outcome.error.message, /stream idle timeout/);
     assert.ok(evs.some((e) => e.kind === 'created' && e.agentId === a.id));
-    assert.ok(evs.filter((e) => e.kind === 'turn_started').length >= 1);
+    assert.equal(evs.filter((e) => e.kind === 'turn_started').length, 2, 'exactly one turn_started per turn, including the first');
     off();
   } finally {
     await b.close();
+  }
+});
+
+test('ACP-style failure before the first "running" still ends the turn as failed (status error, not closed)', async () => {
+  const starts = [];
+  const bad = { start({ emit }) { starts.push(1); return { send() { emit('error', { message: 'init failed' }); }, cancel() {}, kill() {} }; } };
+  const runner = new Runner({ dir: tmp(), adapters: { claude: bad } });
+  const server = createServer(runner, { token: 't' });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const home = tmp();
+  writeDiscovery(home, { port: server.address().port, token: 't' });
+  const backend = new RunnerBackend({ client: new RunnerClient({ home }), rootDir: ROOT, hooks: false });
+  const evs = [];
+  const off = backend.subscribeEvents((e) => { if (e.kind === 'turn_ended') evs.push(e); });
+  try {
+    const a = await backend.createAgent(req({ lane: 'bug-chaser', role: 'worker' }));
+    runner.store.append(a.id, 'exit', { code: 1, error: 'init failed' });
+    await until(() => evs.length === 1, 6000, 'turn_ended on exit');
+    assert.equal(evs[0].outcome.kind, 'failed');
+    assert.equal(evs[0].agent.status, 'error');
+  } finally {
+    off();
+    server.close();
+    server.closeAllConnections?.();
+  }
+});
+
+test('profile ids and names both resolve explicitly; spawn_worker labels carry the name', async () => {
+  const { matchStoredProfile, loadStoredProfiles } = await import('../plugin/index.server.ts');
+  const p = loadStoredProfiles().find((x) => x.id);
+  assert.ok(p, 'a stored/default profile with an id exists');
+  assert.equal(matchStoredProfile(p.name)?.explicit, true);
+  assert.equal(matchStoredProfile(p.id)?.explicit, true);
+  assert.equal(matchStoredProfile(p.id)?.profile.name, p.name);
+});
+
+test('digest: an idle digest that logged nothing triggers the direct-write fallback; rn- prompt uses vs status', async () => {
+  const b = await boot({ agy: true });
+  try {
+    const w = await b.backend.createAgent(req({ lane: 'bug-chaser', role: 'worker', job: 'build thing' }, { initialPrompt: 'PASS: built' }));
+    const digest = await until(async () => (await b.backend.listAgents({ filter: { includeArchived: true } })).find((a) => a.labels.digestFor === w.id), 8000, 'digest agent');
+    const prompt = (await inputs(b, digest.id)).find((t) => t.includes('digest agent'));
+    assert.match(prompt, new RegExp('vs status ' + w.id));
+    assert.doesNotMatch(prompt, /paseo inspect/);
+    // the fake digest never runs `vs log done`; once it is idle the plugin writes the verdict itself
+    const done = await until(() => teamLog().find((e) => e.type === 'done' && e.agent === w.id), 15000, 'fallback after idle');
+    assert.match(done.text, /^UNVERIFIED \(digest logged nothing\)/);
+  } finally {
+    await b.close();
+  }
+});
+
+test('created agents carry thinkingOptionId/featureValues and a spawn-configured marker; agy alias is canonicalised', async () => {
+  const b = await boot({ agy: true });
+  try {
+    const a = await b.backend.createAgent(req({ lane: 'bug-chaser', role: 'worker' }, { config: { provider: 'agy', cwd: CWD, title: 'T', thinkingOptionId: 'low', featureValues: { approvalPolicy: 'skip' } } }));
+    assert.equal(a.provider, 'antigravity-cli');
+    assert.equal(a.thinkingOptionId, 'low');
+    assert.deepEqual(a.featureValues, { approvalPolicy: 'skip' });
+    assert.equal(a.labels['vs.spawn-configured'], '1');
+  } finally {
+    await b.close();
+  }
+});
+
+test('vs shim runtime closure carries the plugin (.ts), its package.json and the runner alias table', async () => {
+  const { installVsShim } = await import('../cli/vs.mjs');
+  const base = tmp();
+  installVsShim({ binDirs: [path.join(base, 'bin')], baseHome: base });
+  for (const rel of ['plugin/index.server.ts', 'plugin/package.json', 'plugin/server/remote-proxy.ts', 'runner/adapters/acp.mjs', 'server/backend/runner-hooks.mjs']) {
+    assert.ok(existsSync(path.join(base, 'runtime', rel)), `${rel} copied into the runtime`);
   }
 });

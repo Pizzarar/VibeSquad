@@ -649,6 +649,8 @@ export function createLeadHandoffCoordinator(deps = {}) {
       const updatedWorkerLabels = {
         ...(w.labels ?? {}),
         "paseo.parent-agent-id": successor.id,
+        // runner agents read their parent from this label (RunnerBackend.toAgent)
+        ...(String(w.id).startsWith("rn-") ? { "vs.parent": successor.id } : {}),
       };
       await setLabels(w.id, updatedWorkerLabels);
       await sendMessage(w.id, `Report to ${successor.title} (${successor.id}).`);

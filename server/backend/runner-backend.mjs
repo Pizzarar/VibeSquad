@@ -2,6 +2,7 @@
 // squad/team/lane/role/ord/profile are first-class fields on the runner record; this class maps them (and the
 // runner's event log) back into the shapes callers already read from PaseoBackend/DaemonClient.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { RunnerClient, runnerHome } from "./runner-client.mjs";
@@ -9,6 +10,7 @@ import { joinTarget, joinInto, canExtendThought } from "../reply-coalesce.mjs";
 import { refreshWhosHere } from "../whos-here.mjs";
 import { runnerLanes } from "./lane-routing.mjs";
 import { createRunnerHookHost } from "./runner-hooks.mjs";
+import { PROVIDER_ALIASES } from "../../runner/adapters/acp.mjs";
 
 const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 // Log event types that change the roster row (everything else is timeline-only).
@@ -55,7 +57,8 @@ export function toAgent(rec) {
     labels,
     ...(labels["vs.parent"] ? { parentAgentId: labels["vs.parent"] } : {}),
     modeId: meta.permissionMode ?? meta.acpMode ?? (rec.provider === "claude" ? "auto" : null),
-    thinkingOptionId: null,
+    thinkingOptionId: meta.thinkingOptionId ?? null,
+    ...(meta.featureValues ? { featureValues: meta.featureValues } : {}),
     requiresAttention: (rec.pendingPermissions ?? []).length > 0,
     pendingPermissions: (rec.pendingPermissions ?? []).map((p) => ({ id: p.id, toolName: p.toolName ?? null })),
     ...usageFields(rec.usage),
@@ -233,6 +236,8 @@ export class RunnerBackend {
   async createAgent({ config = {}, initialPrompt, prompt, labels = {}, env = {} } = {}) {
     await this.rc.ensureRunning();
     // before("agent.create"): the plugin's prompt layering + spawn guard, in-process so every spawn path (UI, MCP, vs CLI) gets it.
+    config = { ...config };
+    if (PROVIDER_ALIASES[config.provider]) config.provider = PROVIDER_ALIASES[config.provider]; // the plugin's antigravity-cli guard keys on the canonical id
     const host = await this.hookHost();
     if (host) {
       const request = {
@@ -241,7 +246,9 @@ export class RunnerBackend {
         prompt: initialPrompt || prompt || undefined,
         ...(Object.keys(labels).length ? { labels: { ...labels } } : {}),
       };
+      let hookFailed = false;
       const out = await host.before("agent.create", { request }).catch((err) => {
+        hookFailed = true;
         console.warn(`[vibesquad] runner spawn hook failed: ${err}`);
         return undefined;
       });
@@ -249,8 +256,12 @@ export class RunnerBackend {
       config = next.config ?? config;
       env = next.env ?? env;
       labels = next.labels ?? labels;
+      // Tell agent.created (another process: the VS server) that this spawn already had its profile enforced here.
+      if (!hookFailed) labels = { ...labels, "vs.spawn-configured": "1" };
     }
     const meta = { title: config.title, labels: {} };
+    if (config.thinkingOptionId) meta.thinkingOptionId = String(config.thinkingOptionId);
+    if (config.featureValues && typeof config.featureValues === "object") meta.featureValues = config.featureValues;
     for (const k of FIRST_CLASS) {
       const v = labels[k] ?? (ENV_FOR[k] ? env[ENV_FOR[k]] : undefined);
       if (v !== undefined && v !== "") meta[k] = v;
@@ -283,7 +294,16 @@ export class RunnerBackend {
     st.pending ??= createRunnerHookHost(this).then(
       (host) => (st.host = host),
       (err) => {
-        console.warn(`[vibesquad] runner hooks unavailable: ${err}`);
+        // Never silent: runner spawns are now unlayered / hooks are dead. Say so on stderr and in the team log.
+        const msg = `runner hooks unavailable (${process.version}): ${err?.message ?? err}`;
+        console.error(`[vibesquad] ${msg}`);
+        try {
+          const base = path.resolve(process.env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad"), "teams", "_unassigned");
+          fs.mkdirSync(base, { recursive: true });
+          fs.appendFileSync(path.join(base, "log.jsonl"), JSON.stringify({ ts: new Date().toISOString(), agent: "runner", lane: "unassigned", type: "metric", text: msg.slice(0, 240), refs: [] }) + "\n");
+        } catch {
+          /* the stderr line above is the fallback */
+        }
         st.off = true;
         return null;
       },
@@ -540,8 +560,12 @@ export class RunnerBackend {
     const t0 = this.live.turn.get(id);
     const from = t0 && viewStatus(t0);
     // An error during a turn sticks as the agent's status until the next turn starts (what push pages on, once).
-    if (e.type === "error") { if (t0?.status === "running") { t0.errored = true; t0.error = e.message; } return; }
-    if (e.type === "cancel") { if (t0?.status === "running") t0.cancelled = true; return; }
+    // A prompt was written (an "input" event) and no turn end has been seen: the turn is live even before the adapter's first
+    // "running" (an ACP adapter failing in initialize / session-new errors in that window, and its log status is still "unknown").
+    if (e.type === "input" && t0) t0.awaiting = true;
+    const inTurn = t0?.status === "running" || t0?.status === "initializing" || !!t0?.awaiting;
+    if (e.type === "error") { if (inTurn) { t0.errored = true; t0.error = e.message; } return; }
+    if (e.type === "cancel") { if (inTurn) t0.cancelled = true; return; }
     if (!ROSTER_EVENTS.has(e.type)) return;
     if (e.type === "archive") {
       this.live.turn.delete(id);
@@ -551,7 +575,9 @@ export class RunnerBackend {
     let agent;
     try { agent = (await this.fetchAgent(id)).agent; } catch { return; } // runner restarting: the next event resyncs
     if (gen !== this.live.gen) return;
-    const t = t0 ?? { status: agent.status, errored: false };
+    // A new agent is seeded from its own "created" event (the fetch below already shows later log state, e.g. the first turn
+    // running), so its first status event is seen as the transition it is.
+    const t = t0 ?? { status: e.type === "created" ? "initializing" : agent.status, errored: false };
     const wasRunning = t0?.status === "running";
     let lifecycle = null; // turn_started | turn_ended, emitted after the roster events below
     if (e.type === "status" && e.status) {
@@ -561,14 +587,16 @@ export class RunnerBackend {
         t.error = undefined;
         t.cancelled = false;
         if (!wasRunning) lifecycle = { kind: "turn_started", agentId: id, agent };
-      } else if (wasRunning && t.status === "idle") {
+      } else if (inTurn && t.status === "idle") {
+        t.awaiting = false;
         const outcome = t.errored ? { kind: "failed", error: { message: String(t.error ?? "turn failed") } } : t.cancelled ? { kind: "cancelled" } : { kind: "completed" };
         lifecycle = { kind: "turn_ended", agentId: id, agent, turnId: String(e.seq), outcome };
       }
     } else if (e.type === "exit") {
       t.status = "closed";
-      if (from === "running" && (e.error || (e.code ?? 0) !== 0)) t.errored = true; // died mid-turn
-      if (wasRunning) lifecycle = { kind: "turn_ended", agentId: id, agent, turnId: String(e.seq), outcome: { kind: "failed", error: { message: String(e.error ?? `agent exited (code ${e.code ?? "?"})`) } } };
+      t.awaiting = false;
+      if (inTurn && (e.error || (e.code ?? 0) !== 0)) t.errored = true; // died mid-turn
+      if (inTurn) lifecycle = { kind: "turn_ended", agentId: id, agent, turnId: String(e.seq), outcome: { kind: "failed", error: { message: String(e.error ?? `agent exited (code ${e.code ?? "?"})`) } } };
     }
     this.live.turn.set(id, t);
     const to = viewStatus(t);

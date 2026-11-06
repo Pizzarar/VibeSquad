@@ -130,7 +130,7 @@ async function spawnWorker(ctx, args = {}) {
   if (team || labels.team) labels.team = team || labels.team;
   if (lane || labels.lane) labels.lane = lane || labels.lane;
   labels.role = WORKER_ROLE;
-  if (profile) labels.profile = profile.id || profile.name;
+  if (profile) labels.profile = profile.name || profile.id; // by name: the plugin, failover and digest identity all match names
   else if (labels.profile === undefined) delete labels.profile;
   if (isRunnerCaller(ctx)) labels["vs.parent"] = ctx.identity.agentId;
   delete labels.ord; // ordinals are assigned by the squad, never by a spawn arg
