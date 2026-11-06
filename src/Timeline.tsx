@@ -2,7 +2,7 @@ import { Component, Fragment, type ReactNode, useCallback, useSyncExternalStore,
 import type { PaseoAgentTimelineEvent } from "@getpaseo/client";
 import { messageCtxItems, openContextMenu, selectionWithin } from "./CommandPalette";
 import { daemonClient, client, DEMO, retrySend } from "./paseo";
-import { isRunnerId, runnerHandle } from "./runnerBridge";
+import { isRunnerId, runnerFetchTimeline, runnerHandle } from "./runnerBridge";
 
 /** client.agents.ref(id), except runner-owned agents (rn- ids) go over the VS runner routes. */
 const agentRef = (id: string): ReturnType<typeof client.agents.ref> => (isRunnerId(id) ? (runnerHandle(id) as any) : client.agents.ref(id));
@@ -14,7 +14,7 @@ import { parseSentAttachments, repoPathFor } from "./attachments";
 import { openRightDockTab } from "./RightDock";
 import { listTimelinePrompts, searchTimeline, type TimelinePrompt } from "./paseoTimeline";
 import { perfEndPainted, perfSendEvent } from "./perf";
-import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, matchesFilter, localPrompts, localSearch, mergeLiveItem, maxEntrySeq, syncNeeded, latestReasoningIndex, reasoningText, sortedHits, stepIndex, type SearchLocation, type TimelineFilter } from "./timelineFilter";
+import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, coalesceReplies, hasMoreOf, joinPages, markTurnBoundary, matchesFilter, localPrompts, localSearch, mergeLiveItem, maxEntrySeq, syncNeeded, latestReasoningIndex, reasoningText, sortedHits, stepIndex, type SearchLocation, type TimelineFilter } from "./timelineFilter";
 import { BARE_PATH_RE, parseFileToken } from "./fileLinks";
 import { toolStartsExpanded, usePref } from "./prefs";
 import { getPanes } from "./panes";
@@ -944,7 +944,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
       .timeline.refetch({ direction: "tail", limit: 40, projection: "projected" })
       .then((t) => {
         if (!alive) return;
-        const predEntries = (t.entries ?? []) as Entry[];
+        const predEntries = coalesceReplies((t.entries ?? []) as Entry[]);
         setPredecessor({ entries: predEntries, label: switchLabel || "new provider" });
       })
       .catch(() => {});
@@ -982,11 +982,11 @@ export function useTimeline(agentId: string, status: string, active = true, pred
         if (t.error) setError(String(t.error));
         else {
           setError(null);
-          const newEntries = t.entries as Entry[];
+          const newEntries = coalesceReplies(t.entries as Entry[]);
           setEntries(newEntries);
           lastSeq.current = maxEntrySeq(newEntries);
           const tAny = t as any;
-          setHasMore(tAny.hasOlder ?? newEntries.length >= 60);
+          setHasMore(hasMoreOf(tAny));
           const startCur = tAny.startCursor;
           if (startCur && typeof startCur.epoch === "string" && typeof startCur.seq === "number") {
             earliestCursor.current = startCur;
@@ -1027,12 +1027,14 @@ export function useTimeline(agentId: string, status: string, active = true, pred
         const seq = "seq" in ev ? ev.seq : undefined;
         const ts = "timestamp" in ev ? ev.timestamp : undefined;
         perfSendEvent(agentId, (item as any)?.type === "assistant_message");
-        setEntries((cur) => mergeLiveItem(cur, item, ts, seq));
+        setEntries((cur) => mergeLiveItem(cur, item, ts, seq, (ev.event as any).turnId));
         const need = syncNeeded(lastSeq.current, seq);
         if (seq != null && (lastSeq.current == null || seq > lastSeq.current)) lastSeq.current = seq;
         if (need === "gap") soon(600, false);
         else if (need === "unverified") soon(2500, true);
       } else {
+        // A turn lifecycle event is a real turn boundary: the next turn's text never rejoins this turn's reply.
+        if (/^turn_(started|completed|failed|canceled)$/.test(String(ev.event.type))) setEntries((cur) => markTurnBoundary(cur));
         soon(2500, true);
       }
     });
@@ -1056,11 +1058,11 @@ export function useTimeline(agentId: string, status: string, active = true, pred
       .then((t) => {
         if (!alive) return;
         if (!t.error) {
-          const newEntries = t.entries as Entry[];
+          const newEntries = coalesceReplies(t.entries as Entry[]);
           setEntries(newEntries);
           lastSeq.current = maxEntrySeq(newEntries);
           const tAny = t as any;
-          setHasMore(tAny.hasOlder ?? newEntries.length >= 60);
+          setHasMore(hasMoreOf(tAny));
           const startCur = tAny.startCursor;
           if (startCur && typeof startCur.epoch === "string" && typeof startCur.seq === "number") {
             earliestCursor.current = startCur;
@@ -1088,7 +1090,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
     setLoadingMore(true);
     try {
       const cursor = earliestCursor.current;
-      const t = isRunnerId(agentId) ? ({ entries: [], hasOlder: false } as any) : await daemonClient.fetchAgentTimeline(agentId, {
+      const t = isRunnerId(agentId) ? await runnerFetchTimeline(agentId, { direction: "before", cursor: cursor ?? undefined, limit: 60 }) : await daemonClient.fetchAgentTimeline(agentId, {
         direction: "before" as any,
         cursor,
         limit: 60,
@@ -1097,7 +1099,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
       const tAny = t as any;
       const older = (tAny.entries ?? tAny.payload?.entries ?? []) as Entry[];
       if (older.length > 0) {
-        setEntries((prev) => [...older, ...prev]);
+        setEntries((prev) => joinPages(coalesceReplies(older), prev));
         const startCur = tAny.startCursor ?? tAny.payload?.startCursor;
         if (startCur && typeof startCur.epoch === "string" && typeof startCur.seq === "number") {
           earliestCursor.current = startCur;
@@ -1215,7 +1217,12 @@ export function Timeline({
     dropReconciled(covered);
   }, [covered.join(",")]);
   const lastEntry = entries[entries.length - 1];
+  // A reply that grows behind a trailing thought row must still re-pin the scroll: include the last assistant message.
+  let lastReply: any;
+  for (let i = entries.length - 1; i >= 0 && i >= entries.length - 50; i--) if (entries[i].item?.type === "assistant_message") { lastReply = entries[i]; break; }
   const tailSig = [
+    String(lastReply?.item?.text ?? "").length,
+    lastReply?.seqEnd,
     entries.length,
     lastEntry?.seqStart,
     lastEntry?.item?.type,

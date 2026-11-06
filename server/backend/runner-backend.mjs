@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { RunnerClient, runnerHome } from "./runner-client.mjs";
+import { joinTarget, joinInto, canExtendThought } from "../reply-coalesce.mjs";
 import { refreshWhosHere } from "../whos-here.mjs";
 import { runnerLanes } from "./lane-routing.mjs";
 
@@ -128,14 +129,17 @@ export function toTimeline(events) {
       case "input":
         entries.push({ ...base, item: { type: "user_message", text: e.text, ...(e.images ? { images: e.images } : {}) } });
         break;
-      case "output":
-        if (last?.item.type === "assistant_message" && last.seqEnd === e.seq - 1) {
-          last.item.text += e.text;
-          last.seqEnd = e.seq;
-        } else entries.push({ ...base, item: { type: "assistant_message", text: e.text } });
+      case "output": {
+        // The log is walked in order and input / tool / error / turn_done are the separators, so no seq arithmetic:
+        // stderr / raw / meta lines mid-reply must not split it. Text after a thought rejoins the message before it.
+        const next = { ...base, item: { type: "assistant_message", text: e.text } };
+        const i = joinTarget(entries, next);
+        if (i >= 0) entries[i] = joinInto(entries[i], next, { trailing: entries.slice(i + 1) });
+        else entries.push(next);
         break;
+      }
       case "thought":
-        if (last?.item.type === "reasoning" && last.seqEnd === e.seq - 1) {
+        if (canExtendThought(entries)) {
           last.item.text += e.text;
           last.seqEnd = e.seq;
         } else entries.push({ ...base, item: { type: "reasoning", text: e.text } });
@@ -153,6 +157,9 @@ export function toTimeline(events) {
             t.seqEnd = e.seq;
           }
         }
+        break;
+      case "turn_done":
+        if (last) last.turnEnd = true; // a real turn boundary: the next turn's text never rejoins this reply
         break;
       case "error":
         entries.push({ ...base, item: { type: "error", message: e.message } });
@@ -299,10 +306,13 @@ export class RunnerBackend {
     let entries = toTimeline(events);
     if (opts.direction === "before" && opts.cursor) entries = entries.filter((e) => e.seqStart < opts.cursor.seq);
     const limit = Number(opts.limit) > 0 ? Number(opts.limit) : entries.length;
+    // The newest row can be a thought while the reply it belongs to grew in an earlier row, so change-detection
+    // (runnerBridge poll) reads the highest seq across all rows, not the last row's.
+    const lastSeq = entries.reduce((m, e) => Math.max(m, e.seqEnd ?? -1), -1);
     const hasOlder = entries.length > limit;
     entries = entries.slice(-limit);
     const first = entries[0];
-    return { entries, hasOlder, startCursor: first ? { epoch: "runner", seq: first.seqStart } : null };
+    return { entries, hasOlder, lastSeq, startCursor: first ? { epoch: "runner", seq: first.seqStart } : null };
   }
 
   async getAgentTimeline(id) {
