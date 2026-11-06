@@ -3510,9 +3510,25 @@ html, body, #root { overflow-x: hidden; }
 .pin-rail-tile {
   display: flex; align-items: center; gap: 8px; width: 100%; min-height: 54px; flex: none; padding: 7px 8px;
   background: linear-gradient(135deg, var(--panel) 0%, #0d0f22 100%); border: 1px solid var(--line);
-  border-left: 2px solid var(--violet); color: var(--text); font: inherit; text-align: left; cursor: pointer;
+  border-left: 2px solid var(--violet); color: var(--text); font: inherit; text-align: left;
 }
-.pin-rail-tile:hover, .pin-rail-tile:focus-visible { border-color: var(--cyan); outline: none; }
+.pin-rail-open {
+  display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; padding: 0; background: none; border: 0;
+  color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.pin-rail-open:focus-visible { outline: 1px solid var(--cyan); }
+.pin-rail-tile:hover, .pin-rail-tile:focus-within { border-color: var(--cyan); }
+.pin-rail-checkin-wrap { position: relative; flex: none; }
+.pin-rail-checkin { padding: 1px 6px; font-size: 10px; white-space: nowrap; }
+.pin-rail-checkin-pop {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; width: 190px; padding: 6px 8px;
+  background: var(--panel); border: 1px solid var(--cyan); color: var(--text); font-size: 11px; line-height: 1.3;
+  pointer-events: none; animation: pin-rail-pop-fade 2.5s ease-in-out forwards;
+}
+@keyframes pin-rail-pop-fade { 0% { opacity: 0; transform: translateY(4px); } 12%, 80% { opacity: 1; transform: none; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .pin-rail-checkin-pop { animation: none; } }
+.pin-rail-active-checkin { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.pin-rail-active-checkin .pin-rail-line { flex: 1; min-width: 0; }
 .pin-rail-tile.on { border-color: var(--cyan); box-shadow: inset 3px 0 0 var(--cyan); background: #00f0ff12; }
 .pin-rail-tile.inert { cursor: default; }
 .pin-rail-tile.needs-you { border-left-color: var(--hot-pink); }
@@ -3524,7 +3540,7 @@ html, body, #root { overflow-x: hidden; }
 
 @media (max-width: 900px) {
   .app.pin-focus { grid-template-columns: var(--sidebar-w, 265px) minmax(0, 1fr) 64px; }
-  .pin-rail-col, .pin-rail-head .muted, .pin-rail-squad { display: none; }
+  .pin-rail-col, .pin-rail-head .muted, .pin-rail-squad, .pin-rail-checkin-wrap { display: none; }
   .pin-rail-tile { justify-content: center; padding: 6px 4px; }
 }
 @media (max-width: 600px) {

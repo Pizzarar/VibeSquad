@@ -69,7 +69,7 @@ test("closed agents are never woken by usePreview, hidden panes, Composer, Subag
   assert.match(pg, /usePreview\(bs && bs\.agent\.status !== "closed" \? bs\.agent\.id : null\)/, "PinTile does not pass closed agentId to usePreview");
 
   const pr = fs.readFileSync(new URL("../src/PinRail.tsx", import.meta.url), "utf8");
-  assert.match(pr, /usePreview\(bs && bs\.agent\.status !== "closed" \? bs\.agent\.id : null\)/, "RailTile does not pass closed agentId to usePreview");
+  assert.match(pr, /usePreview\(lead && lead\.agent\.status !== "closed" \? lead\.agent\.id : null\)/, "RailTile does not pass a closed lead id to usePreview");
   assert.doesNotMatch(pr, /const clickable = !focused;/, "RailTile is only for the other Buddies now (no inert focused tile)");
   assert.match(pr, /Spin Up RiffBot/, "PinFocusHeader shows Spin Up RiffBot button");
   assert.match(pr, /Spin Up Brainstorm/, "PinFocusHeader shows Spin Up Brainstorm button");

@@ -18,6 +18,9 @@ import type { TeamView } from "./teams";
 import { laneCodeFor } from "./identity";
 import { Avatar, NeonEmblem } from "./pixel";
 import { Spinner } from "./QuickWinsUi";
+import { openPinMember } from "./pinFocus";
+import { sendMessage } from "./paseo";
+import { CHECKIN_BUSY_MS, CHECKIN_BUSY_NOTE, checkinAction, leadLine, runCheckin } from "./railCheckin";
 
 const SWAP_MS = 150;
 const reducedMotion = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -27,41 +30,96 @@ function animate(el: Element | null | undefined, frames: Keyframe[]) {
   (el as HTMLElement).animate(frames, { duration: SWAP_MS, easing: "ease-out" });
 }
 
+// ── Check-in button ──────────────────────────────────────────────────────────
+// Asks the lead directly. A running lead is left alone: a short fade popover says so instead.
+function CheckinButton({ pin, testId }: { pin: Pin; testId: string }) {
+  const [busy, setBusy] = useState(false);
+  const timer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const none = checkinAction(pin) === "none";
+  return (
+    <span className="pin-rail-checkin-wrap">
+      <button
+        type="button"
+        className="btn ghost small pin-rail-checkin"
+        data-testid={testId}
+        disabled={none}
+        title={none ? "No lead running" : "Ask the lead for a 3-line status"}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (checkinAction(pin) === "busy") {
+            setBusy(true);
+            window.clearTimeout(timer.current);
+            timer.current = window.setTimeout(() => setBusy(false), CHECKIN_BUSY_MS);
+            return;
+          }
+          void runCheckin(pin, { open: (id) => openPinMember(pin, id), send: (id, text) => sendMessage(id, text) }).catch(() => {});
+        }}
+      >
+        {none ? "No lead" : "Check in"}
+      </button>
+      {busy && (
+        <span className="pin-rail-checkin-pop" role="status" data-testid={`${testId}-busy`}>
+          {CHECKIN_BUSY_NOTE}
+        </span>
+      )}
+    </span>
+  );
+}
+
+function useLeadLine(pin: Pin): string {
+  const lead = pin.lead;
+  const lines = usePreview(lead && lead.agent.status !== "closed" ? lead.agent.id : null);
+  return leadLine(pin, lines[lines.length - 1]);
+}
+
 // ── Rail tile ────────────────────────────────────────────────────────────────
 // Only the *other* Buddies are tiles; the focused one is the Active Buddy Card above them.
 const RailTile = memo(function RailTile(props: { pin: Pin; onPick: (pin: Pin) => void }) {
   const { pin, onPick } = props;
   const bs = pin.brainstorm;
-  const lines = usePreview(bs && bs.agent.status !== "closed" ? bs.agent.id : null);
   const [draft] = useDraft(bs ? `${bs.agent.id}:draft` : "pin-rail:none");
-  const last = lines[lines.length - 1];
+  const line = useLeadLine(pin);
   return (
-    <button
-      type="button"
-      className={`pin-rail-tile ${bs ? "" : "no-session"} ${pin.needsYou ? "needs-you" : ""}`}
-      data-testid={`pin-rail-${pin.lane.id}`}
-      title={bs ? `Open ${pin.lane.name}` : `${pin.lane.name}: no session · click to start a fresh Brainstorm`}
-      onClick={() => onPick(pin)}
-    >
-      <Avatar id={bs ? bs.agent.id : `bs-empty-${pin.squad.id}-${pin.lane.id}`} provider={bs?.agent.provider ?? "claude"} agentType="brainstorm" size={32} />
-      <span className="pin-rail-col">
-        <span className="pin-rail-name">
-          <PinDot pin={pin} />
-          {pin.lane.name}
-          {draft.trim() && (
-            <span className="tab-draft" title="Unsent draft">
-              ✎
-            </span>
-          )}
+    <div className={`pin-rail-tile ${bs ? "" : "no-session"} ${pin.needsYou ? "needs-you" : ""}`}>
+      <button
+        type="button"
+        className="pin-rail-open"
+        data-testid={`pin-rail-${pin.lane.id}`}
+        title={bs ? `Open ${pin.lane.name}` : `${pin.lane.name}: no session · click to start a fresh Brainstorm`}
+        onClick={() => onPick(pin)}
+      >
+        <Avatar id={bs ? bs.agent.id : `bs-empty-${pin.squad.id}-${pin.lane.id}`} provider={bs?.agent.provider ?? "claude"} agentType="brainstorm" size={32} />
+        <span className="pin-rail-col">
+          <span className="pin-rail-name">
+            <PinDot pin={pin} />
+            {pin.lane.name}
+            {draft.trim() && (
+              <span className="tab-draft" title="Unsent draft">
+                ✎
+              </span>
+            )}
+          </span>
+          <span className="pin-rail-line muted small">{line}</span>
         </span>
-        <span className="pin-rail-line muted small">
-          {!bs ? "No session yet" : last ? `${last.who === "you" ? "you: " : ""}${last.text}` : "No messages yet"}
-        </span>
-      </span>
-      <NeedsBadge pin={pin} />
-    </button>
+        <NeedsBadge pin={pin} />
+      </button>
+      <CheckinButton pin={pin} testId={`pin-rail-checkin-${pin.lane.id}`} />
+    </div>
   );
 });
+
+function ActiveCheckin({ pin }: { pin: Pin }) {
+  const line = useLeadLine(pin);
+  return (
+    <div className="pin-rail-active-checkin" data-testid="pin-rail-active-checkin">
+      <span className="pin-rail-line muted small" title={line}>
+        {line}
+      </span>
+      <CheckinButton pin={pin} testId="pin-rail-active-checkin-btn" />
+    </div>
+  );
+}
 
 export function PinRail({ view, focus, onPick }: { view: TeamView; focus: PinFocus; onPick: (pin: Pin) => void }) {
   const allPins = pinsForSquad(view);
@@ -104,6 +162,7 @@ export function PinRail({ view, focus, onPick }: { view: TeamView; focus: PinFoc
               />
             )}
           </div>
+          {active && !isHubPin(active) && <ActiveCheckin pin={active} />}
           {active && focus.agentId && <SendToBar pin={active} />}
           {!focus.agentId && (
             <span className="muted small">{focus.gone ? "No active chat" : bs ? "Starting…" : "Starting a fresh Brainstorm…"}</span>
