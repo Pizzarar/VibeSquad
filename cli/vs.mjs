@@ -48,6 +48,7 @@ import {
   normalizeRoleLabel,
   ordStringOf,
   resolveAgentIdentity,
+  whoCandidate,
 } from "../server/identity.mjs";
 import { loadProfiles } from "../server/profiles.mjs";
 import { staleWarning } from "../server/stale-runtime.mjs";
@@ -1213,19 +1214,12 @@ async function commandWho(flags) {
   const removedLanes = new Set((identity.team.lanes ?? []).filter((l) => l.state === "removed").map((l) => String(l.id).toLowerCase()));
 
   for (const a of agents) {
+    const hit = whoCandidate(a, { teams: TEAM_DEFS, wantTeamId, wantLane, squadWide, removedLanes });
+    if (!hit) continue;
+    const { teamId, lane, role } = hit;
     const status = String(a.status ?? "unknown").trim();
-    if (a.archivedAt || a.archived || a.internal || status.toLowerCase() === "closed") continue;
-
     const title = String(a.title ?? a.name ?? "").trim();
-    const labels = a.labels ?? {};
-    if (isRetiredAgent(labels)) continue;
 
-    const { teamId, lane } = resolveAgentTeamAndLane(a);
-    if (teamId.toLowerCase() !== wantTeamId) continue;
-    if (!squadWide && lane.toLowerCase() !== wantLane) continue;
-    if (removedLanes.has(lane.toLowerCase())) continue;
-
-    const role = effectiveAgentRole(a);
     if (target === "lead" && role !== "lead") continue;
     if (target === "brainstorm" && role !== "brainstorm") continue;
     if (target === "workers" && role !== "worker") continue;
