@@ -394,6 +394,9 @@ async function refetchAll() {
   if (firstRoster) perfRecord("cold-load", performance.now(), `agents=${res.entries.length}`);
 }
 
+/** Floor for our own fetch_agents + provider.usage.list polling (docs/research/spawn-hang-2026-11-06.md). */
+export const PASEO_REFETCH_MS = 60_000;
+
 // A9: per-provider quota for the sidebar. Best effort: older daemons lack providers.listUsage.
 async function refetchProviderUsage() {
   try {
@@ -559,13 +562,14 @@ export function start() {
     }
   });
 
-  // Belt and braces: a full refetch every minute in case an update was dropped.
+  // Belt and braces: a full refetch every minute (never faster, a saturated daemon pays 500-700 ms per fetch_agents) in case an
+  // update was dropped.
   setInterval(() => {
     if (link.paseoConn) {
       refetchAll().catch(console.error);
       refetchProviderUsage();
     }
-  }, 60_000);
+  }, PASEO_REFETCH_MS);
 
   void connect();
 }

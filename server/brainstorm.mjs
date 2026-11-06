@@ -319,11 +319,80 @@ export function buildBrainstormInitialPrompt({ laneId, laneUpper, buddyName, sum
   ].join("\n");
 }
 
+const SPAWN_LAG_TICK_MS = 50;
+
+/** True for the errors a caller-side abort or daemon wait deadline produces (the daemon usually finishes the create anyway). */
+export function isCreateTimeoutError(err) {
+  // The daemon's own provider-refresh deadline is a definitive failure (nothing is being built), so it is not recoverable.
+  if (/Timed out refreshing/i.test(String(err?.message ?? err ?? ""))) return false;
+  return /time(d)?[ -]?out|timeout|abort/i.test(`${err?.name ?? ""} ${err?.message ?? err ?? ""}`);
+}
+
+function agentListOf(raw) {
+  return Array.isArray(raw) ? raw : Array.isArray(raw?.entries) ? raw.entries : Array.isArray(raw?.agents) ? raw.agents : [];
+}
+
+/**
+ * createAgent timed out but Paseo keeps building the agent (docs/research/spawn-hang-2026-11-06.md: 4/4 slow Bugc spawns landed
+ * without their initial prompt). Poll the agent list for the label-matched agent; once it is idle with no activity send the
+ * initial prompt exactly once, and if it already has activity adopt it untouched. Returns the agent, or null when it never showed.
+ */
+export async function recoverTimedOutCreate({ backend, labels, title, initialPrompt, startedMs, waitMs = 120_000, pollMs = 5_000, now = Date.now, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
+  const list = backend.listAgents ?? backend.fetchAgents;
+  if (typeof list !== "function") return null;
+  const deadline = now() + waitMs;
+  for (;;) {
+    let found = null;
+    try {
+      for (const item of agentListOf(await list.call(backend))) {
+        const a = item?.agent ?? item;
+        if (!a?.id || a.archivedAt) continue;
+        const l = a.labels ?? {};
+        const sameRestart = labels["vs.restarted-from"] && l["vs.restarted-from"] === labels["vs.restarted-from"];
+        const matches = a.title === title || (l.role === labels.role && l.lane === labels.lane && l.team === labels.team && sameRestart);
+        const ts = Date.parse(a.createdAt || a.updatedAt || "");
+        if (matches && Number.isFinite(ts) && ts >= startedMs - 5000) {
+          found = a;
+          break;
+        }
+      }
+    } catch {}
+    if (found && found.status !== "initializing") {
+      if (found.status === "error" || found.status === "closed") return null;
+      const hasActivity = found.status !== "idle" || Boolean(found.lastUserMessageAt) || Boolean(found.lastActivityAt);
+      if (!hasActivity && initialPrompt && typeof backend.sendAgentPrompt === "function") {
+        await backend.sendAgentPrompt(found.id, initialPrompt);
+      }
+      return found;
+    }
+    if (now() >= deadline) return null;
+    await sleep(pollMs);
+  }
+}
+
 // Per-step spawn timing (docs/PLAN_SPAWN_SPEED.md): marks are ms since start, flushed as one log line + one `spawn-timing` metric.
 export function createSpawnTimer(kind) {
   const t0 = Date.now();
   const marks = [];
   let last = t0;
+  // Event-loop lag (docs/PLAN_VS_SHIM_AND_SPAWN_HANG.md B2): worst timer drift of this process while the spawn ran. Rides on
+  // the same `spawn-timing` metric; a large value means our own loop was blocked, not just Paseo.
+  let lagMax = 0;
+  let lagLast = Date.now();
+  const lagTimer = setInterval(() => {
+    const now = Date.now();
+    lagMax = Math.max(lagMax, now - lagLast - SPAWN_LAG_TICK_MS);
+    lagLast = now;
+    if (now - t0 > 600_000) clearInterval(lagTimer);
+  }, SPAWN_LAG_TICK_MS);
+  lagTimer.unref?.();
+  let lagStopped = false;
+  const stopLag = () => {
+    if (lagStopped) return;
+    lagStopped = true;
+    clearInterval(lagTimer);
+    lagMax = Math.max(lagMax, Date.now() - lagLast - SPAWN_LAG_TICK_MS);
+  };
   return {
     add(step, ms) {
       marks.push([step, ms]);
@@ -334,7 +403,8 @@ export function createSpawnTimer(kind) {
       last = now;
     },
     summary() {
-      return `${kind}: ${marks.map(([k, v]) => `${k}=${v}ms`).join(" ")} total=${Date.now() - t0}ms`;
+      stopLag();
+      return `${kind}: ${marks.map(([k, v]) => `${k}=${v}ms`).join(" ")} total=${Date.now() - t0}ms loopLagMax=${Math.max(0, lagMax)}ms`;
     },
     flush({ teamId, laneId, agent }) {
       const text = `spawn-timing ${this.summary()}`;
@@ -807,7 +877,18 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
           env: { VS_ROLE: "brainstorm", ...(newLabels.profile ? { VS_PROFILE: newLabels.profile } : {}), ...(hasCallerOverride ? { VS_PROFILE_OVERRIDE: "1" } : {}), VS_LANE: laneId, VS_TEAM: teamId, VS_BRIEF_INLINE: "1" },
         });
       } catch (err) {
-        try {
+        if (isCreateTimeoutError(err)) {
+          const recovered = await recoverTimedOutCreate({
+            backend,
+            labels: newLabels,
+            title: newTitle,
+            initialPrompt,
+            startedMs: spawnStartMs,
+            ...(body.createRecovery ?? {}),
+          }).catch(() => null);
+          if (recovered) created = recovered;
+        }
+        if (!created) try {
           const raw =
             typeof backend.fetchAgents === "function"
               ? await backend.fetchAgents()
@@ -832,7 +913,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
             }
           }
         } catch {}
-        throw err;
+        if (!created) throw err;
       }
     }
 

@@ -9,7 +9,7 @@ test("spawn timer lists each marked step and a total", () => {
   const t = createSpawnTimer("new-buddy");
   t.mark("connect");
   t.mark("createAgent");
-  assert.match(t.summary(), /^new-buddy: connect=\d+ms createAgent=\d+ms total=\d+ms$/);
+  assert.match(t.summary(), /^new-buddy: connect=\d+ms createAgent=\d+ms total=\d+ms loopLagMax=\d+ms$/);
 });
 
 test("a Buddy restart writes one spawn-timing metric with every step", async () => {
@@ -136,4 +136,14 @@ test("start-brainstorm during a pending retire returns the new Buddy, not the re
   } finally {
     sb.done();
   }
+});
+
+test("spawn timer reports the worst event-loop stall as loopLagMax on the same metric", async () => {
+  const t = createSpawnTimer("new-buddy");
+  await new Promise((r) => setTimeout(r, 10));
+  const end = Date.now() + 250;
+  while (Date.now() < end); // block our own loop
+  await new Promise((r) => setTimeout(r, 120));
+  const lag = Number(/loopLagMax=(\d+)ms/.exec(t.summary())?.[1]);
+  assert.ok(lag >= 150, `loopLagMax=${lag}`);
 });
