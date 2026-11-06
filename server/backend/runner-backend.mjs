@@ -3,8 +3,15 @@
 // runner's event log) back into the shapes callers already read from PaseoBackend/DaemonClient.
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { RunnerClient, runnerHome } from "./runner-client.mjs";
 import { joinTarget, joinInto, canExtendThought } from "../reply-coalesce.mjs";
+import { refreshWhosHere } from "../whos-here.mjs";
+import { runnerLanes } from "./lane-routing.mjs";
+
+const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+// Log event types that change the roster row (everything else is timeline-only).
+const ROSTER_EVENTS = new Set(["created", "status", "meta", "exit", "archive", "usage", "permission", "session"]);
 
 const FIRST_CLASS = ["squad", "team", "lane", "role", "ord", "profile"];
 const ENV_FOR = { lane: "VS_LANE", team: "VS_TEAM", role: "VS_ROLE", profile: "VS_PROFILE" };
@@ -14,6 +21,22 @@ const STATUS = { starting: "initializing", running: "running", idle: "idle", exi
 export const isRunnerId = (id) => typeof id === "string" && id.startsWith("rn-");
 
 const iso = (ms) => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
+
+/**
+ * Adapter usage events -> the usage shapes callers read: lastUsage (what lead-handoff / the UI context meter use)
+ * and tokenUsage (same numbers, plain). Empty until the adapter has reported one.
+ */
+function usageFields(u) {
+  if (!u || !Number.isFinite(u.contextTokens)) return {};
+  const lastUsage = {
+    contextWindowUsedTokens: u.contextTokens,
+    ...(Number.isFinite(u.contextMax) ? { contextWindowMaxTokens: u.contextMax } : {}),
+    inputTokens: u.inputTokens ?? u.contextTokens,
+    ...(Number.isFinite(u.outputTokens) ? { outputTokens: u.outputTokens } : {}),
+    ...(Number.isFinite(u.costUsd) ? { costUsd: u.costUsd } : {}),
+  };
+  return { lastUsage, tokenUsage: { ...lastUsage, usedTokens: u.contextTokens } };
+}
 
 /** Runner status record -> the agent snapshot shape (PaseoAgent) the callers and UI read. */
 export function toAgent(rec) {
@@ -31,7 +54,9 @@ export function toAgent(rec) {
     labels,
     modeId: meta.permissionMode ?? meta.acpMode ?? (rec.provider === "claude" ? "auto" : null),
     thinkingOptionId: null,
-    requiresAttention: false,
+    requiresAttention: (rec.pendingPermissions ?? []).length > 0,
+    pendingPermissions: (rec.pendingPermissions ?? []).map((p) => ({ id: p.id, toolName: p.toolName ?? null })),
+    ...usageFields(rec.usage),
     createdAt: iso(rec.createdAt),
     updatedAt: iso(rec.updatedAt ?? rec.createdAt),
     lastActivityAt: iso(rec.updatedAt ?? rec.createdAt),
@@ -58,6 +83,8 @@ export function readRunnerAgentSync(id, { env = process.env } = {}) {
   let exited = false;
   let archivedAt = null;
   let last = null;
+  let usage = null;
+  const perms = new Map();
   const meta = {};
   for (const line of text.split("\n")) {
     if (!line) continue;
@@ -69,11 +96,14 @@ export function readRunnerAgentSync(id, { env = process.env } = {}) {
     else if (e.type === "status") status = e.status;
     else if (e.type === "exit") exited = true;
     else if (e.type === "archive") archivedAt = e.ts;
+    else if (e.type === "usage") usage = e;
+    else if (e.type === "permission") { if (e.phase === "request") perms.set(e.id, { id: e.id, toolName: e.toolName }); else perms.delete(e.id); }
   }
   if (!created) return null;
   return toAgent({
     id, provider: created.provider, model: created.model, cwd: created.cwd, meta,
     status: exited ? "exited" : status, createdAt: created.ts, updatedAt: last?.ts, archivedAt,
+    usage, pendingPermissions: [...perms.values()],
   });
 }
 
@@ -97,7 +127,7 @@ export function toTimeline(events) {
     const last = entries[entries.length - 1];
     switch (e.type) {
       case "input":
-        entries.push({ ...base, item: { type: "user_message", text: e.text } });
+        entries.push({ ...base, item: { type: "user_message", text: e.text, ...(e.images ? { images: e.images } : {}) } });
         break;
       case "output": {
         // The log is walked in order and input / tool / error / turn_done are the separators, so no seq arithmetic:
@@ -153,10 +183,30 @@ async function injectedPrefix(role, cwd) {
   }
 }
 
+/** Shown status of a tracked agent: "error" while an errored turn has not been followed by a new one. */
+const viewStatus = (t) => (t.errored && t.status !== "running" ? "error" : t.status);
+
 export class RunnerBackend {
-  constructor({ client = new RunnerClient(), buildPrefix = injectedPrefix } = {}) {
+  constructor({ client = new RunnerClient(), buildPrefix = injectedPrefix, whosHere = refreshWhosHere, rootDir = REPO_ROOT, lanes = runnerLanes } = {}) {
     Object.defineProperty(this, "rc", { value: client });
     Object.defineProperty(this, "buildPrefix", { value: buildPrefix });
+    Object.defineProperty(this, "whosHere", { value: whosHere });
+    Object.defineProperty(this, "rootDir", { value: rootDir });
+    Object.defineProperty(this, "listeners", { value: new Set() });
+    Object.defineProperty(this, "live", { value: { stream: null, chain: Promise.resolve(), turn: new Map(), gen: 0 } });
+    // Paseo-side agents of the same lanes, set by the RoutingBackend so a Who's here refresh sees the whole lane.
+    Object.defineProperty(this, "siblings", { value: { list: null } });
+    Object.defineProperty(this, "lanes", { value: lanes });
+  }
+
+  /** `fn()` resolves the non-runner agents (Paseo) so a lane brief lists everyone, not just runner agents. */
+  useSiblingAgents(fn) {
+    this.siblings.list = fn;
+  }
+
+  /** Detach `fn` (only if it is still the active provider: a newer owner keeps its own). */
+  dropSiblingAgents(fn) {
+    if (this.siblings.list === fn) this.siblings.list = null;
   }
 
   runCli() {
@@ -192,7 +242,31 @@ export class RunnerBackend {
       systemPrompt,
       meta,
     });
-    return (await this.fetchAgent(id)).agent;
+    const agent = (await this.fetchAgent(id)).agent;
+    await this.refreshLaneWhosHere(agent.labels?.lane);
+    return agent;
+  }
+
+  /** Keep the lane brief's "Who's here" current, like the Paseo plugin does on spawn. Best effort. */
+  async refreshLaneWhosHere(lane) {
+    if (!lane) return;
+    try {
+      const mine = await this.listAgents();
+      let agents;
+      let others = null;
+      if (this.siblings.list) others = await this.siblings.list().catch(() => null); // Paseo down/closed: not an error
+      if (others) {
+        const seen = new Set(mine.map((a) => a.id));
+        agents = [...mine, ...others.filter((a) => !seen.has(a.id))];
+      } else if (this.lanes().has(String(lane).toLowerCase())) {
+        agents = mine; // lane lives wholly on the runner (and Paseo cannot be asked)
+      } else {
+        return; // cannot see the whole lane (Paseo agents may share it): leave the brief alone rather than wipe them
+      }
+      this.whosHere({ laneId: lane, agents, rootDir: this.rootDir });
+    } catch {
+      /* the brief is cosmetic: never fail a spawn over it */
+    }
   }
 
   async fetchAgent(id) {
@@ -219,8 +293,12 @@ export class RunnerBackend {
     return (await this.fetchAgents(opts)).entries.map((e) => e.agent);
   }
 
-  async sendAgentPrompt(id, text) {
-    await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/input`, { text });
+  /** opts: { images: [{ data (base64), mimeType }], activeTurnBehavior: 'steer' (default) | 'interrupt' }. */
+  async sendAgentPrompt(id, text, opts = {}) {
+    const body = { text };
+    if (opts.images?.length) body.images = opts.images;
+    if (opts.activeTurnBehavior) body.activeTurnBehavior = opts.activeTurnBehavior;
+    await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/input`, body);
   }
 
   async fetchAgentTimeline(id, opts = {}) {
@@ -246,7 +324,10 @@ export class RunnerBackend {
   }
 
   async archiveAgent(id) {
+    const lane = (await this.fetchAgent(id).catch(() => null))?.agent.labels?.lane;
     await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/archive`, {});
+    await this.deleteHeartbeat(id).catch(() => {}); // an archived agent's self-heartbeats would otherwise fire at it forever
+    await this.refreshLaneWhosHere(lane);
     return { archivedAt: new Date().toISOString() };
   }
 
@@ -261,6 +342,10 @@ export class RunnerBackend {
       }
     }
     await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/meta`, patch);
+    // role / lane changes (a Lead or Buddy retiring to former-*) change who is listed
+    if (patch.role !== undefined || patch.lane !== undefined || patch.labels?.role !== undefined) {
+      await this.refreshLaneWhosHere((await this.fetchAgent(id).catch(() => null))?.agent.labels?.lane);
+    }
   }
 
   async refreshAgent(id) {
@@ -268,12 +353,142 @@ export class RunnerBackend {
   }
 
   async detachAgent() {}
-  async deleteHeartbeat() {}
-  subscribe() {
-    return () => {};
+  /** Heartbeats are VS schedules with a self target; the runner has no daemon-side store, so drop them from schedules.json. */
+  async deleteHeartbeat(agentId) {
+    const { sharedSchedules } = await import("../schedules.mjs");
+    (await sharedSchedules()).deleteHeartbeat(agentId);
   }
-  subscribeConnectionStatus() {
-    return () => {};
+
+  /**
+   * Live runner events (one shared SSE stream, opened on the first listener and closed with the last):
+   *   { kind: 'connected' | 'disconnected' }
+   *   { kind: 'roster', agents }                      full roster, on every (re)connect
+   *   { kind: 'agent', agent }                        roster upsert
+   *   { kind: 'remove', agentId }                     archived
+   *   { kind: 'status', agentId, from, to, agent }    e.g. running -> idle | error
+   *   { kind: 'permission', agentId, request }
+   *   { kind: 'timeline', agentId, seq, type }        a timeline entry was appended
+   * Returns the unsubscribe.
+   */
+  subscribeEvents(listener) {
+    this.listeners.add(listener);
+    if (!this.live.stream) {
+      this.live.stream = this.rc.stream({
+        onOpen: () => this.enqueue((gen) => this.seedRoster(gen)),
+        onClose: () => this.emitEvent({ kind: "disconnected" }),
+        onMessage: (m) => this.enqueue((gen) => this.handleLogEvent(m, gen)),
+      });
+    }
+    // The first roster a listener sees comes through the same chain as live events, so a slow listAgents() can never
+    // land after a newer agent event. Runner unreachable = "disconnected", never an empty roster (clients keep their agents).
+    this.enqueue((gen) => this.seedListener(listener, gen));
+    return () => {
+      this.listeners.delete(listener);
+      if (!this.listeners.size && this.live.stream) {
+        this.live.stream.close();
+        this.live.stream = null;
+        this.live.gen++; // work already queued on the chain belongs to the closed stream: drop its results
+        this.live.turn.clear();
+      }
+    };
+  }
+
+  enqueue(fn) {
+    const gen = this.live.gen;
+    this.live.chain = this.live.chain.then(() => (gen === this.live.gen ? fn(gen) : undefined)).catch(() => {});
+  }
+
+  emitEvent(ev) {
+    for (const fn of [...this.listeners]) {
+      try { fn(ev); } catch { /* a bad listener must not stop the others */ }
+    }
+  }
+
+  /** A listed agent with the in-memory "error" overlay (the runner log itself only knows running/idle). */
+  overlay(agent) {
+    return this.live.turn.get(agent.id)?.errored && agent.status !== "running" ? { ...agent, status: "error" } : agent;
+  }
+
+  /** Initial roster for one new listener (the stream's shared status map is seeded by seedRoster on open). */
+  async seedListener(listener, gen) {
+    let agents;
+    try { agents = await this.listAgents(); } catch { agents = null; }
+    if (gen !== this.live.gen || !this.listeners.has(listener)) return;
+    try {
+      if (agents) {
+        listener({ kind: "roster", agents: agents.map((a) => this.overlay(a)) });
+        listener({ kind: "connected" });
+      } else listener({ kind: "disconnected" });
+    } catch { /* a bad listener must not stop the chain */ }
+  }
+
+  /** On (re)connect: remember every agent's status (so the first transition after it is detected) and publish the full roster. */
+  async seedRoster(gen) {
+    let agents;
+    try { agents = await this.listAgents(); } catch { agents = null; }
+    if (gen !== this.live.gen) return;
+    if (!agents) return this.emitEvent({ kind: "disconnected" });
+    const next = new Map();
+    for (const a of agents) {
+      const prev = this.live.turn.get(a.id);
+      next.set(a.id, { status: a.status, errored: !!prev?.errored && a.status !== "running" });
+    }
+    this.live.turn = next;
+    this.emitEvent({ kind: "roster", agents: agents.map((a) => this.overlay(a)) });
+    this.emitEvent({ kind: "connected" });
+  }
+
+  /**
+   * The shown status comes from the log events themselves, applied in log order on the serialized chain, never from
+   * fetchAgent's tail-of-log status (which may already include events still queued behind this one).
+   */
+  async handleLogEvent({ id, event: e }, gen = this.live.gen) {
+    if (!id || !e) return;
+    this.emitEvent({ kind: "timeline", agentId: id, seq: e.seq, type: e.type });
+    const t0 = this.live.turn.get(id);
+    const from = t0 && viewStatus(t0);
+    // An error during a turn sticks as the agent's status until the next turn starts (what push pages on, once).
+    if (e.type === "error") { if (t0?.status === "running") t0.errored = true; return; }
+    if (!ROSTER_EVENTS.has(e.type)) return;
+    if (e.type === "archive") {
+      this.live.turn.delete(id);
+      this.emitEvent({ kind: "remove", agentId: id });
+      return;
+    }
+    let agent;
+    try { agent = (await this.fetchAgent(id)).agent; } catch { return; } // runner restarting: the next event resyncs
+    if (gen !== this.live.gen) return;
+    const t = t0 ?? { status: agent.status, errored: false };
+    if (e.type === "status" && e.status) {
+      t.status = STATUS[e.status] ?? e.status;
+      if (t.status === "running") t.errored = false; // next turn began
+    } else if (e.type === "exit") {
+      t.status = "closed";
+      if (from === "running" && (e.error || (e.code ?? 0) !== 0)) t.errored = true; // died mid-turn
+    }
+    this.live.turn.set(id, t);
+    const to = viewStatus(t);
+    const shown = { ...agent, status: to };
+    this.emitEvent({ kind: "agent", agent: shown });
+    if (from !== undefined && from !== to) this.emitEvent({ kind: "status", agentId: id, from, to, agent: shown });
+    if (e.type === "permission" && e.phase === "request") this.emitEvent({ kind: "permission", agentId: id, request: { id: e.id, toolName: e.toolName } });
+    if (e.type === "exit") await this.refreshLaneWhosHere(agent.labels?.lane);
+  }
+
+  /** AgentBackend.subscribe shape (what server/push.mjs reads): agent_update / agent_permission_request / agent_deleted. */
+  subscribe(cb) {
+    return this.subscribeEvents((ev) => {
+      if (ev.kind === "agent") cb({ type: "agent_update", agentId: ev.agent.id, payload: { agent: ev.agent } });
+      else if (ev.kind === "permission") cb({ type: "agent_permission_request", agentId: ev.agentId, request: ev.request });
+      else if (ev.kind === "remove") cb({ type: "agent_deleted", agentId: ev.agentId });
+    });
+  }
+
+  subscribeConnectionStatus(cb) {
+    return this.subscribeEvents((ev) => {
+      if (ev.kind === "connected") cb({ status: "connected" });
+      else if (ev.kind === "disconnected") cb({ status: "disconnected" });
+    });
   }
 
   /** Polls the log-derived status; resolves like DaemonClient.waitForFinish (status idle | timeout | error). */

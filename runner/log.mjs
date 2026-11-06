@@ -8,6 +8,7 @@ export class LogStore {
   constructor(dir) {
     this.dir = dir;
     this.seqs = new Map(); // id -> next seq; filled lazily, per agent
+    this.listeners = new Set(); // fn(id, ev) per append; see onAppend
     mkdirSync(dir, { recursive: true });
   }
 
@@ -29,7 +30,14 @@ export class LogStore {
     const ev = { seq, ts: Date.now(), type, ...data };
     appendFileSync(this.file(id), JSON.stringify(ev) + '\n');
     this.seqs.set(id, seq + 1);
+    for (const fn of [...this.listeners]) { try { fn(id, ev); } catch { /* a bad listener must not break logging */ } }
     return ev;
+  }
+
+  // Live tail of every append (the SSE stream). Returns the unsubscribe.
+  onAppend(fn) {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
   }
 
   // Events with seq >= after (callers tail by passing last seq + 1).

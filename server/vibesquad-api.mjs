@@ -1,5 +1,9 @@
 import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { handleRunnerApi } from "./runner-api.mjs";
+import { handleSchedulesApi } from "./schedules.mjs";
+import { sharedRunnerBackend } from "./backend/index.mjs";
+import { handleTerminalsApi, isTerminalsPath } from "./terminals-api.mjs";
+import { handleProvidersApi } from "./providers-catalog.mjs";
 import { getStale, peekStale, readBuildStamp } from "./stale-runtime.mjs";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -67,6 +71,7 @@ import {
   sendWebPushToSubscription,
   startPushWatcher,
   stopPushWatcher,
+  syncRunnerPushWatch,
   toBase64Url,
   fromBase64Url,
   writePushSubscriptions,
@@ -304,6 +309,8 @@ const LOG_TYPES = new Set(["done", "decision", "blocker", "needs-you", "handoff"
 const UI_LOG_TYPES = new Set(["you", "needs-you", "handoff", "metric", "decision", LEGACY_USER_TYPE, LEGACY_NEEDS_LABEL]);
 
 const MAX_BODY_BYTES = 1024 * 1024;
+const RUNNER_INPUT_RE = /^\/__vibesquad\/runner\/agents\/[^/]+\/input$/;
+const MAX_RUNNER_INPUT_BYTES = 24 * 1024 * 1024; // composer image attachments (base64) ride this one route
 const AGENT_ID_STRICT = /^[A-Za-z0-9_-]{1,64}$/;
 // Test/DI hooks and server-derived values that must never be taken from an HTTP body. `cwd` and `labels`
 // are derived from the lane or the daemon's own agent record; the timing knobs would skip cooldowns.
@@ -341,7 +348,7 @@ const overSpawnBudget = (res) => {
   return true;
 };
 
-function readBody(req) {
+function readBody(req, limit = MAX_BODY_BYTES) {
   return new Promise((ok, fail) => {
     let body = "";
     let size = 0;
@@ -349,7 +356,7 @@ function readBody(req) {
     req.on("data", (c) => {
       if (done) return;
       size += c.length;
-      if (size > MAX_BODY_BYTES) {
+      if (size > limit) {
         done = true;
         fail(Object.assign(new Error("payload too large"), { status: 413 }));
         return;
@@ -405,8 +412,13 @@ export function isGatedRead(pathOrMethod, urlOrPath = "") {
   if (path === "/__vibesquad/push/vapid-public-key") return true; // creates and writes vapid.json on first call
   if (path === "/__vibesquad/paseo/providers/diagnostic" || path === "/__vibesquad/paseo/providers/models") return true; // runs the provider's own CLI
   if (path === "/__vibesquad/paseo/usage") return new URL(url, "http://x").searchParams.get("refresh") === "1"; // forces provider API calls
+  if (path === "/__vibesquad/providers" || String(path).startsWith("/__vibesquad/providers/")) {
+    return new URL(url, "http://x").searchParams.get("refresh") === "1"; // bypasses the probe TTL: spawns the provider CLIs
+  }
   if (path === "/__vibesquad/paseo/surface") return true; // daemon config: listen, CORS, hub, backups
   if (path === "/__vibesquad/local-image") return true; // file contents
+  if (path === "/__vibesquad/schedules" || path.startsWith("/__vibesquad/schedules/")) return true; // prompts, target configs, run logs
+  if (isTerminalsPath(path)) return true; // live shells and script logs
   if (ADE_GATED_READ_PATHS.includes(path)) return true; // quick open / find in files: workspace file names and contents
   return false;
 }
@@ -591,6 +603,7 @@ function handleTeams(req, res, rootDir) {
       }
       clearConfigWarning(file);
       seedHubBriefs(cur.teams, teams, rootDir);
+      syncRunnerPushWatch(rootDir).catch(() => {}); // a lane flipped to/from the runner changes what the watcher must subscribe to
       sendJson(res, 200, {
         ok: true,
         revision: teamsRevision(resolveTeamsFilePath(rootDir)),
@@ -623,6 +636,7 @@ async function handleSettings(req, res) {
     });
   }
   if (req.method === "POST" || req.method === "PUT") {
+   try {
     const body = await readCleanBody(req);
     const patch = {};
     if (body && "userName" in body) patch.userName = body.userName;
@@ -657,6 +671,11 @@ async function handleSettings(req, res) {
       exposedIps: exposure.exposedIps,
       ...(warnings.length ? { configWarnings: warnings } : {}),
     });
+   } catch (e) {
+    // A refused save (unreadable settings.json) is a conflict the owner must fix; anything else is a server fault.
+    const status = e?.code === "SETTINGS_UNREADABLE" ? 409 : e?.status === 413 ? 413 : 500;
+    return sendJson(res, status, { ok: false, error: String(e?.message ?? e) });
+   }
   }
   return sendJson(res, 405, { error: "method not allowed" });
 }
@@ -756,6 +775,24 @@ function allowedAttachRoots(rootDir, opts) {
     }
   } catch {}
   return [...new Set(roots)].map(realOrNull).filter(Boolean);
+}
+
+/** A terminal / script cwd must sit inside a team path or a Paseo or runner agent cwd (never an arbitrary path). Returns its real path or null. */
+async function resolveShellCwd(cwd, rootDir, opts) {
+  if (!cwd || isUncLikePath(cwd)) return null;
+  let roots = allowedAttachRoots(rootDir, opts);
+  try {
+    const agents = await sharedRunnerBackend().listAgents();
+    roots = [...new Set([...roots, ...agents.map((a) => realOrNull(a.cwd)).filter(Boolean)])];
+  } catch {}
+  if (!lexicallyInside(cwd, roots)) return null;
+  const real = realOrNull(cwd);
+  try {
+    if (!real || !statSync(real).isDirectory()) return null;
+  } catch {
+    return null;
+  }
+  return roots.some((r) => insideDir(real, r)) ? real : null;
 }
 
 // Quick open / find in files call per keystroke and the agent scan reads every ~/.paseo agent file:
@@ -1579,7 +1616,8 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     if (isApi && !isOwner(req) && ((req.method !== "GET" && req.method !== "HEAD") || isGatedRead(path, req.url))) {
       return sendJson(res, 403, { error: READ_ONLY_ERROR, readOnly: true });
     }
-    if (Number(req.headers["content-length"] ?? 0) > MAX_BODY_BYTES) return sendJson(res, 413, { error: "payload too large" });
+    const bodyLimit = RUNNER_INPUT_RE.test(path) ? MAX_RUNNER_INPUT_BYTES : MAX_BODY_BYTES;
+    if (Number(req.headers["content-length"] ?? 0) > bodyLimit) return sendJson(res, 413, { error: "payload too large" });
     if (path === "/api/auth/status" || path === "/__vibesquad/auth/status") return handleAuthStatus(req, res, rootDir);
     if (path === "/api/teams") return handleTeams(req, res, rootDir);
     if (path === "/api/profiles") return handleProfiles(req, res);
@@ -1594,7 +1632,10 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
       return handleDesktopUpdateJson(req, res, rootDir);
     }
     if (!path.startsWith("/__vibesquad/")) return next?.();
-    if (path.startsWith("/__vibesquad/runner/")) return handleRunnerApi(req, res, { readBody, sendJson });
+    if (path.startsWith("/__vibesquad/runner/")) return handleRunnerApi(req, res, { readBody: (r) => readBody(r, bodyLimit), sendJson });
+    if (path === "/__vibesquad/schedules" || path.startsWith("/__vibesquad/schedules/")) return handleSchedulesApi(req, res, { readBody, sendJson });
+    if (isTerminalsPath(path)) return handleTerminalsApi(req, res, { readBody, sendJson, resolveCwd: (cwd) => resolveShellCwd(cwd, rootDir, opts) });
+    if (path === "/__vibesquad/providers" || path.startsWith("/__vibesquad/providers/")) return handleProvidersApi(req, res, { sendJson, readBody: readCleanBody });
     switch (path) {
       case "/__vibesquad/pair/start":
         return handlePairStart(req, res);
@@ -1611,7 +1652,9 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
         return startManagedPaseoInstall(opts.firstRun).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { error: String(e?.message ?? e) }));
       case "/__vibesquad/settings":
-        return handleSettings(req, res);
+        return handleSettings(req, res).catch((e) => {
+          if (!res.headersSent) sendJson(res, 500, { ok: false, error: String(e?.message ?? e) });
+        });
       case "/__vibesquad/log":
         return handleLog(req, res);
       case "/__vibesquad/attach":

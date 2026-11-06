@@ -1,9 +1,9 @@
 // Owner display settings (~/.vibesquad/settings.json) plus the legacy owner-label aliases
 // and BOM-tolerant JSON readers with visible parse-error warnings.
 // The legacy names are assembled at runtime so the old literal never appears in tracked files.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 export const LEGACY_USER_TYPE = "au" + "b";
 export const LEGACY_NEEDS_LABEL = "needs-" + LEGACY_USER_TYPE;
@@ -127,6 +127,59 @@ export function normalizeUserName(value) {
   return name || DEFAULT_USER_NAME;
 }
 
+const RETRY_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
+let tmpSeq = 0;
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+/**
+ * Temp file + rename so a crash or concurrent read never sees a truncated settings.json. The tmp name is unique per
+ * call; on Windows the rename can hit EPERM/EACCES/EBUSY while a reader holds the file, so it is retried with a short
+ * backoff, and the tmp is removed if the write finally fails. `renameImpl`/`sleepImpl` are injectable for tests.
+ */
+export function writeSettingsAtomic(file, data, { renameImpl = renameSync, sleepImpl = sleepSync, retries = 5 } = {}) {
+  mkdirSync(dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.${Date.now()}.${++tmpSeq}.tmp`;
+  try {
+    writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n", "utf8");
+    for (let attempt = 0; ; attempt++) {
+      try {
+        renameImpl(tmp, file);
+        return;
+      } catch (err) {
+        if (attempt >= retries || !RETRY_CODES.has(err?.code)) throw err;
+        sleepImpl(10 * 2 ** attempt);
+      }
+    }
+  } catch (err) {
+    try { rmSync(tmp, { force: true }); } catch { /* best effort */ }
+    throw err;
+  }
+}
+
+/** The normalised, UI-facing view of a settings.json object. Unknown keys are not exposed. */
+function viewOf(data) {
+  const out = {
+    userName: normalizeUserName(data?.userName),
+    lanEnabled: Boolean(data?.lanEnabled),
+  };
+  if (typeof data.keepPaseoRunningOnQuit === "boolean") {
+    out.keepPaseoRunningOnQuit = data.keepPaseoRunningOnQuit;
+  }
+  if (typeof data.startPaseoWithVibeSquad === "boolean") {
+    out.startPaseoWithVibeSquad = data.startPaseoWithVibeSquad;
+  }
+  const pushEvents = normalizePushEvents(data.pushEvents);
+  if (Object.keys(pushEvents).length) out.pushEvents = pushEvents;
+  // Runner & Providers block: owned by providers-catalog.mjs, carried through here so saves do not drop it.
+  if (data.runner && typeof data.runner === "object" && !Array.isArray(data.runner)) out.runner = data.runner;
+  // Remote (relay) proxy gate, read by plugin/server/remote-proxy.ts. Hand-edited only: saveUserSettings
+  // carries it over but never takes it from a patch, so no HTTP caller can switch it on.
+  if (data.remote && typeof data.remote === "object") out.remote = { enabled: data.remote.enabled === true };
+  return out;
+}
+
+const isPlainObject = (v) => Boolean(v) && typeof v === "object" && !Array.isArray(v);
+
 export function loadUserSettings(baseHome) {
   const file = settingsFile(baseHome);
   const res = readJsonFileWithBom(file, {
@@ -134,62 +187,58 @@ export function loadUserSettings(baseHome) {
     fallback: null,
     recordWarning: true,
   });
-  if (!res.ok || !res.data || typeof res.data !== "object") {
+  if (res.ok && res.exists && !isPlainObject(res.data)) {
+    return { userName: DEFAULT_USER_NAME, lanEnabled: false, parseError: "settings.json must contain a JSON object" };
+  }
+  if (!res.ok || !res.data) {
     return {
       userName: DEFAULT_USER_NAME,
       lanEnabled: false,
       ...(res.error ? { parseError: res.error } : {}),
     };
   }
-  const out = {
-    userName: normalizeUserName(res.data?.userName),
-    lanEnabled: Boolean(res.data?.lanEnabled),
-  };
-  if (typeof res.data.keepPaseoRunningOnQuit === "boolean") {
-    out.keepPaseoRunningOnQuit = res.data.keepPaseoRunningOnQuit;
+  return viewOf(res.data);
+}
+
+/** The raw on-disk object to merge a save into ({} when absent). Throws (code SETTINGS_UNREADABLE) when it exists but is not a JSON object. */
+function readRawForSave(baseHome) {
+  const res = readJsonFileWithBom(settingsFile(baseHome), { label: "~/.vibesquad/settings.json", fallback: {}, recordWarning: true, rewriteBom: false });
+  let why = "";
+  if (res.exists && !res.ok) why = `not valid JSON (${res.error})`;
+  else if (res.exists && !isPlainObject(res.data)) why = "not a JSON object";
+  if (why) {
+    const err = new Error(`refusing to save: settings.json exists but is ${why}. Fix or remove it first.`);
+    err.code = "SETTINGS_UNREADABLE";
+    throw err;
   }
-  if (typeof res.data.startPaseoWithVibeSquad === "boolean") {
-    out.startPaseoWithVibeSquad = res.data.startPaseoWithVibeSquad;
-  }
-  const pushEvents = normalizePushEvents(res.data.pushEvents);
-  if (Object.keys(pushEvents).length) out.pushEvents = pushEvents;
-  // Remote (relay) proxy gate, read by plugin/server/remote-proxy.ts. Hand-edited only: saveUserSettings
-  // carries it over but never takes it from a patch, so no HTTP caller can switch it on.
-  if (res.data.remote && typeof res.data.remote === "object") out.remote = { enabled: res.data.remote.enabled === true };
-  return out;
+  return res.exists ? res.data : {};
 }
 
 export function saveUserSettings(patch, baseHome) {
   const file = settingsFile(baseHome);
-  const current = loadUserSettings(baseHome);
+  const raw = readRawForSave(baseHome);
+  const current = viewOf(raw);
+  // Merge into the raw object so unknown top-level keys (runner, remote, hand-added ones) survive.
   const next = {
+    ...raw,
     userName: normalizeUserName(patch && "userName" in patch ? patch.userName : current.userName),
     lanEnabled: patch && "lanEnabled" in patch ? Boolean(patch.lanEnabled) : current.lanEnabled,
   };
-  if ((patch && "keepPaseoRunningOnQuit" in patch) || "keepPaseoRunningOnQuit" in current) {
-    next.keepPaseoRunningOnQuit =
-      patch && "keepPaseoRunningOnQuit" in patch ? Boolean(patch.keepPaseoRunningOnQuit) : Boolean(current.keepPaseoRunningOnQuit);
-  }
-  if ((patch && "startPaseoWithVibeSquad" in patch) || "startPaseoWithVibeSquad" in current) {
-    next.startPaseoWithVibeSquad =
-      patch && "startPaseoWithVibeSquad" in patch ? Boolean(patch.startPaseoWithVibeSquad) : Boolean(current.startPaseoWithVibeSquad);
-  }
+  if (patch && "keepPaseoRunningOnQuit" in patch) next.keepPaseoRunningOnQuit = Boolean(patch.keepPaseoRunningOnQuit);
+  if (patch && "startPaseoWithVibeSquad" in patch) next.startPaseoWithVibeSquad = Boolean(patch.startPaseoWithVibeSquad);
   const pushEvents = normalizePushEvents(patch && "pushEvents" in patch ? patch.pushEvents : current.pushEvents);
   if (Object.keys(pushEvents).length) next.pushEvents = pushEvents;
-  if (current.remote) next.remote = current.remote;
-  mkdirSync(baseHome || vibesquadHome(), { recursive: true });
-  writeFileSync(file, JSON.stringify(next, null, 2) + "\n", "utf8");
+  else delete next.pushEvents;
+  writeSettingsAtomic(file, next);
   clearConfigWarning(file);
-  return next;
+  return viewOf(next);
 }
 
 export function saveRemoteAccess(enabled, baseHome) {
   const file = settingsFile(baseHome);
-  const current = loadUserSettings(baseHome);
-  const next = { ...current, remote: { enabled: Boolean(enabled) } };
-  delete next.parseError;
-  mkdirSync(baseHome || vibesquadHome(), { recursive: true });
-  writeFileSync(file, JSON.stringify(next, null, 2) + "\n", "utf8");
+  const raw = readRawForSave(baseHome);
+  const next = { ...raw, remote: { enabled: Boolean(enabled) } };
+  writeSettingsAtomic(file, next);
   clearConfigWarning(file);
-  return next;
+  return viewOf(next);
 }

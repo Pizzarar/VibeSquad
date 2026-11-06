@@ -3,6 +3,7 @@ import { createServer as createHttpsServer } from "node:https";
 import { connect, createServer as createTcpServer } from "node:net";
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { sharedSchedules } from "./schedules.mjs";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import {
   createVibesquadMiddleware,
@@ -536,6 +537,8 @@ if (isMain) {
   server.listen(port, "127.0.0.1", () => {
     console.log(`VibeSquad serving ${distDir} on ${url}`);
     logServerStart({ rootDir });
+    void sharedSchedules().then((st) => st.start()).catch(() => {});
+    server.once("close", () => void sharedSchedules().then((st) => st.stop()).catch(() => {}));
     setImmediate(() => getStale({ rootDir }));
     let activeMuxes = [];
     const applyLanListeners = (wantLan) => {

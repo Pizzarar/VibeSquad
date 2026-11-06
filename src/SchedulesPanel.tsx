@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { daemonClient, DEMO, updateAgent, usePaseo } from "./paseo";
-import { createSchedule, deleteSchedule, inspectSchedule, updateSchedule } from "./paseoSchedules";
+import { createSchedule, deleteSchedule, inspectSchedule, listSchedules, scheduleAction, scheduleLogs, updateSchedule } from "./paseoSchedules";
 import {
   EMPTY_FORM, cadenceLabel, formFromSchedule, isHeartbeat, toCreateRequest, toUpdateRequest, validateForm,
   type IntervalUnit, type ScheduleForm,
@@ -47,7 +47,7 @@ export function SchedulesPanel({ onClose }: { onClose: () => void }) {
   const refresh = useCallback(async () => {
     if (DEMO) return;
     try {
-      const r = await call("scheduleList");
+      const r = await listSchedules();
       setRows(r.schedules ?? []);
       setErr(r.error ? String(r.error) : null);
     } catch (e) {
@@ -67,8 +67,7 @@ export function SchedulesPanel({ onClose }: { onClose: () => void }) {
         setRows((rs) => rs.map((r) => (r.id === row.id ? { ...r, status: nextScheduleStatus(r.status, action) } : r)));
         return;
       }
-      const method = action === "pause" ? "schedulePause" : action === "resume" ? "scheduleResume" : "scheduleRunOnce";
-      await call(method, { id: row.id });
+      await scheduleAction(row, action);
       await refresh();
     } catch (e) {
       setErr(String((e as Error).message ?? e));
@@ -77,7 +76,7 @@ export function SchedulesPanel({ onClose }: { onClose: () => void }) {
 
   const showLogs = async (row: any) => {
     try {
-      const r = DEMO ? { logs: [{ message: "demo run ok" }] } : await call("scheduleLogs", { id: row.id });
+      const r = DEMO ? { logs: [{ message: "demo run ok" }] } : await scheduleLogs(row);
       const lines = (r.logs ?? r.runs ?? []).map((l: any) => (typeof l === "string" ? l : (l.message ?? JSON.stringify(l))));
       setLogs({ id: row.id, text: lines.join("\n") || "(no runs yet)" });
     } catch (e) {
@@ -88,7 +87,7 @@ export function SchedulesPanel({ onClose }: { onClose: () => void }) {
   const inspect = async (row: any) => {
     setErr(null);
     try {
-      const full = DEMO ? row : await inspectSchedule(row.id);
+      const full = DEMO ? row : await inspectSchedule(row.id, row);
       setInspected(full ?? row);
     } catch (e) {
       setErr(String((e as Error).message ?? e));
@@ -100,7 +99,7 @@ export function SchedulesPanel({ onClose }: { onClose: () => void }) {
     try {
       if (DEMO) setRows((rs) => rs.filter((r) => r.id !== row.id));
       else {
-        await deleteSchedule(row.id);
+        await deleteSchedule(row.id, row);
         await refresh();
       }
       if (inspected?.id === row.id) setInspected(null);
@@ -252,7 +251,7 @@ function ScheduleFormModal({
         onDemoSaved({ ...(schedule ?? {}), ...req, id: schedule?.id ?? `demo-${Date.now()}`, status: schedule?.status ?? "active" });
         return;
       }
-      if (edit) await updateSchedule(toUpdateRequest(schedule.id, form));
+      if (edit) await updateSchedule(toUpdateRequest(schedule.id, form), schedule);
       else await createSchedule(toCreateRequest(form));
       onSaved();
     } catch (e) {
