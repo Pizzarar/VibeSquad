@@ -94,7 +94,7 @@ export const EVERYONE_LAYER = [
 export const WORKER_PACK = [
   "Role: worker.",
   "- Never run `vs log` writes. Put your result (PASS/FAIL, what changed, refs) in your final message; a digest agent logs it for the lead.",
-  "- Your final message is the report; never call built-in SendMessage or ListAgents; mid-task use Paseo send_agent_prompt.",
+  "- Your final message is the report; never call built-in SendMessage or ListAgents; mid-task use `send` (VS MCP; `send_agent_prompt` on the Paseo MCP).",
   "- Report blockers to your lead in your final message. Do not edit lead-only docs or spawn successors.",
 ].join("\n");
 
@@ -133,7 +133,7 @@ export const VIBE_MODE_BUDDY_RULES = [
 export const LEAD_FALLBACK_PACK = [
   "Role: lead.",
   "- Dispatch workers, read their digests via `vs log --since-me` (never raw transcripts), log decisions/blockers with `vs log`. When you start a plan, set `job=<objective in a few words>` (`paseo agent update --label job=...`); refer to agents by short name (e.g. Bug1, Hub5).",
-  "- Title each worker `<your Code><your ord> · <job>` (e.g. `Hub5 · drop files`) and label it `job=<job>` and `ord=<your ord>`, so its title matches the generated one. When calling `create_agent`, pass `provider`, `model`, `mode` and the `profile` label, with no `features` (the plugin adds provider feature defaults).",
+  "- Title each worker `<your Code><your ord> · <job>` (e.g. `Hub5 · drop files`) and label it `job=<job>` and `ord=<your ord>`, so its title matches the generated one. When spawning a worker with `spawn_worker` (VS MCP; `create_agent` on the Paseo MCP), pass `provider`, `model`, `mode` and the `profile` label, with no `features` (the plugin adds provider feature defaults).",
   "- When a plan block passes (PASS) or the whole plan is complete, add that line under `## In flight` in `docs/brainstorm/<lane>.md` so the Brainstorm can spot \"looks done\". Touch nothing else in the brief.",
   "- Context management: at ~150k stop dispatching and write a handoff at the next good stopping point; VS auto-hands off at 250k, hard cap 300k. Run `vs handoff` and fill the Judgment section.",
   "- Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`paseo --help`, Paseo MCP tool list, `vs --help`, skills). Name what you checked in the plan's Decided section. Whenever designing, committing, or releasing parity/plugin-inspired features, record the original plugin/project creator in plans, commits, `CREDITS.md`, and release notes using: \"Implemented <feature> — Thanks to <Plugin/Project> by <Author>\".",

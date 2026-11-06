@@ -24,11 +24,11 @@ The `before("agent.create")` request carries no labels, so the plugin uses env `
 
 ## Antigravity (Gemini)
 
-`antigravity-cli*` providers ignore `systemPrompt`, so after creation the plugin steers the same prefix in as a first message. When leads spawn via `create_agent`, they pass `provider`/`model`/`mode` plus the `profile` label and omit `features` — the plugin adds the required provider feature defaults (overriding any inherited `agy`, which stalls silently, A1) and `modeId: accept-edits`.
+`antigravity-cli*` providers ignore `systemPrompt`, so after creation the plugin steers the same prefix in as a first message. When leads spawn via `spawn_worker` (`create_agent` on the Paseo MCP), they pass `provider`/`model`/`mode` plus the `profile` label and omit `features` — the plugin adds the required provider feature defaults (overriding any inherited `agy`, which stalls silently, A1) and `modeId: accept-edits`.
 
 ### Worker report routing (A11)
 
-A worker's final message is its report. The worker pack says: "Your final message is the report; never call built-in SendMessage or ListAgents; mid-task use Paseo send_agent_prompt." Workers never address a lead directly; the digest routes by `team`/`lane` labels to the current lead. `src/antigravity.ts` exports `WORKER_REPORT_ROUTING_GUARD` and `detectMisroutedReport` (surfaced as `a11MisroutedReport` on `AntigravityAudit`) to flag turns that used Claude Code's built-in `SendMessage` or `ListAgents` instead.
+A worker's final message is its report. The worker pack says: "Your final message is the report; never call built-in SendMessage or ListAgents; mid-task use `send` (VS MCP; `send_agent_prompt` on the Paseo MCP)." Workers never address a lead directly; the digest routes by `team`/`lane` labels to the current lead. `src/antigravity.ts` exports `WORKER_REPORT_ROUTING_GUARD` and `detectMisroutedReport` (surfaced as `a11MisroutedReport` on `AntigravityAudit`) to flag turns that used Claude Code's built-in `SendMessage` or `ListAgents` instead.
 
 ## Measuring
 
