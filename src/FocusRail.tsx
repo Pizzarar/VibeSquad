@@ -19,7 +19,7 @@ import { setFocus, setSheet, useAgentPane } from "./panes";
 import { exitSquadsHome } from "./pinFocus";
 import { setFullView } from "./PinGrid";
 import { useUserName, needsYouBadge } from "./userName";
-import { Avatar, NeonEmblem, providerSpec } from "./pixel";
+import { Avatar, TeamEmblem, providerSpec } from "./pixel";
 
 // Focus rail (docs/design/FOCUS_CHAT.md): an interrupt queue and a switchboard, not a roster.
 // NEEDS YOU across all teams, the current team's lanes one level deep, one line per other team.
@@ -232,7 +232,7 @@ function LaneBlock({
 const OtherTeam = memo(function OtherTeam({ v, onTeam }: { v: TeamView; onTeam: (id: string) => void }) {
   return (
     <button className="oteam" onClick={() => onTeam(v.team.id)} title={`Show ${v.team.name} in the rail (tabs stay open)`}>
-      <NeonEmblem color={v.team.color} seed={v.team.id} size={14} />
+      <TeamEmblem name={v.team.name} color={v.team.color} size={14} />
       <span className="oteam-name">{v.team.name}</span>
       {v.needsYou > 0 && <span className="badge alert">{v.needsYou}</span>}
       <span className="muted">{v.running ? `${v.running}▶` : "idle"}</span>
@@ -278,7 +278,7 @@ export const FocusRail = memo(function FocusRail(props: {
   return (
     <nav className={`focus-rail ${props.sidebarCollapsed ? "collapsed" : ""}`}>
       <div className="rhead">
-        {view && <NeonEmblem color={view.team.color} seed={view.team.id} size={18} />}
+        {view && <TeamEmblem name={view.team.name} color={view.team.color} size={18} />}
         <button
           type="button"
           className="rhead-name rhead-toggle"

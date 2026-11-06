@@ -428,10 +428,36 @@ code {
   border: 1px solid var(--line);
 }
 
-.neon-emblem {
+.team-emblem {
   flex: none;
-  border: 1px solid var(--emblem-color, var(--cyan));
-  box-shadow: 0 0 6px rgba(0, 240, 255, 0.2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: system-ui, "Segoe UI", Inter, sans-serif;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
+  text-shadow: none;
+  text-transform: none;
+  font-style: normal;
+  -webkit-text-stroke: 0;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* Centre the cap height, not the line box (capitals sit high in their line box). */
+@supports (text-box: trim-both cap alphabetic) {
+  .team-emblem-glyph {
+    text-box: trim-both cap alphabetic;
+  }
+}
+
+@supports not (text-box: trim-both cap alphabetic) {
+  .team-emblem-glyph {
+    transform: translateY(0.04em);
+  }
 }
 
 /* Raw-Token Context Meter */

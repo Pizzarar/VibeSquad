@@ -145,33 +145,46 @@ export function Avatar({
   );
 }
 
-// Synthwave horizon / neon grid emblem for teams and worktrees.
-export function NeonEmblem({ color, seed = color, size = 20 }: { color: string; seed?: string; size?: number }) {
-  const h = hash(seed);
-  const variant = h % 3;
+// Single initial for a team name: first part after splitting on spaces, -, _ and camelCase; "?" when empty.
+export function initials(name: string): string {
+  const first = (name ?? "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/[\s\-_]+/)
+    .find(Boolean);
+  return first ? Array.from(first)[0].toUpperCase() : "?";
+}
+
+// Black or white text, whichever contrasts better with a #rrggbb fill.
+export function inkFor(color: string): string {
+  const m = /^#?([0-9a-f]{6}|[0-9a-f]{3})$/i.exec(color.trim());
+  if (!m) return "#fff";
+  const hex = m[1].length === 3 ? m[1].replace(/./g, "$&$&") : m[1];
+  const lin = (i: number) => {
+    const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  const L = 0.2126 * lin(0) + 0.7152 * lin(2) + 0.0722 * lin(4);
+  // contrast vs #080814 (L~0.007) compared with contrast vs white
+  return (L + 0.05) / 0.057 >= 1.05 / (L + 0.05) ? "#080814" : "#fff";
+}
+
+// Monogram tile for teams and worktrees. `icon` is a seam for a later icon picker (unused).
+export function TeamEmblem({ name, color, size = 20 }: { name: string; color: string; size?: number; icon?: string }) {
   return (
-    <svg
-      className="neon-emblem"
-      width={size}
-      height={size}
-      viewBox="0 0 12 12"
-      shapeRendering="crispEdges"
-      style={{ "--emblem-color": color } as CSSProperties}
+    <span
+      className="team-emblem"
+      aria-hidden="true"
+      style={{
+        width: size,
+        height: size,
+        borderRadius: Math.round(size * 0.22),
+        background: color,
+        color: inkFor(color),
+        fontSize: Math.max(8, Math.round(size * 0.65)),
+      }}
     >
-      <rect x={0} y={0} width={12} height={12} fill="#080814" />
-      {/* Synthwave sun */}
-      <rect x={3} y={2} width={6} height={4} fill={color} />
-      <rect x={2} y={3} width={8} height={2} fill={color} />
-      {/* Scanline cuts through sun */}
-      <rect x={2} y={4} width={8} height={1} fill="#080814" />
-      {/* Horizon line */}
-      <rect x={0} y={7} width={12} height={1} fill="#00f0ff" />
-      {/* Perspective grid lines */}
-      <rect x={1 + variant} y={8} width={2} height={1} fill={color} opacity={0.75} />
-      <rect x={5} y={8} width={2} height={4} fill={color} opacity={0.85} />
-      <rect x={8 - variant} y={9} width={2} height={1} fill={color} opacity={0.75} />
-      <rect x={0} y={10} width={12} height={1} fill="#b86bff" opacity={0.55} />
-    </svg>
+      <span className="team-emblem-glyph">{initials(name)}</span>
+    </span>
   );
 }
 

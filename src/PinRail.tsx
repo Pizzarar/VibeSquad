@@ -16,7 +16,7 @@ import { useProfiles } from "./profiles";
 import { slotRef } from "./pinSlots";
 import type { TeamView } from "./teams";
 import { laneCodeFor } from "./identity";
-import { Avatar, NeonEmblem } from "./pixel";
+import { Avatar, TeamEmblem } from "./pixel";
 import { Spinner } from "./QuickWinsUi";
 import { openPinMember } from "./pinFocus";
 import { sendMessage } from "./paseo";
@@ -131,7 +131,7 @@ export function PinRail({ view, focus, onPick }: { view: TeamView; focus: PinFoc
   return (
     <aside className="pin-rail" data-testid="pin-rail" aria-label={`${view.team.name} teams`}>
       <div className="pin-rail-head">
-        <NeonEmblem color={view.team.color} seed={view.team.id} size={16} />
+        <TeamEmblem name={view.team.name} color={view.team.color} size={16} />
         <span className="pin-rail-squad">{view.team.name}</span>
         <span className="muted small">{pinned.length} teams</span>
       </div>
