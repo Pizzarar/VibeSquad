@@ -1,0 +1,53 @@
+name: Mirror guide/ to the wiki
+
+# guide/ is the single source. The wiki is a read-only published copy, refreshed on release.
+# Needs the wiki to exist once: create any first page by hand in the repo's Wiki tab.
+on:
+  release:
+    types: [published]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wiki-mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build wiki tree
+        env:
+          TAG: ${{ github.event.release.tag_name || github.ref_name }}
+        run: node scripts/guide-to-wiki.mjs --src guide --out "$RUNNER_TEMP/wiki-out" --tag "$TAG"
+      - name: Push to the wiki
+        env:
+          # GITHUB_TOKEN with contents: write can push to <repo>.wiki.git. WIKI_TOKEN (a PAT) is an optional override.
+          TOKEN: ${{ secrets.WIKI_TOKEN || secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name || github.ref_name }}
+        run: |
+          set -euo pipefail
+          wiki="$RUNNER_TEMP/wiki-repo"
+          if ! git clone "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git" "$wiki"; then
+            echo "::error::Could not clone the wiki. Create the first wiki page by hand (Wiki tab > Create the first page), then re-run."
+            exit 1
+          fi
+          cd "$wiki"
+          # replace contents, keep .git
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -a "$RUNNER_TEMP/wiki-out/." .
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Wiki already up to date."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "mirror guide@${TAG}"
+          git push origin HEAD:master
