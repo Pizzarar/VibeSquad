@@ -629,7 +629,8 @@ export function formatDisplayTitle({
       cleanTopic.toLowerCase() === String(laneName || "").trim().toLowerCase() ||
       cleanTopic.toLowerCase() === String(laneId || "").trim().toLowerCase();
     if (hub && topicMatchesLane) return "RiffBot";
-    return topicMatchesLane ? `${c} Buddy` : `${c} Buddy · ${cleanTopic}`;
+    const displayLane = String(laneName || laneId || c).trim();
+    return topicMatchesLane ? displayLane : `${displayLane} · ${cleanTopic}`;
   }
   if (r === "former-brainstorm" || r === "digest") {
     return String(title || "").trim() || `${laneUpper} · ${r}`;
