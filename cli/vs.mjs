@@ -33,7 +33,8 @@ import {
   triageInboxCards,
 } from "../server/inbox.mjs";
 import { createDaemonClient, readBrainstormSummary, writeBrainstormSummary } from "../server/brainstorm.mjs";
-import { getBackend, getCliBackend, hasCustomMockCli, hasCustomOfflineStore as hasCustomOfflineStoreAt, run } from "../server/backend/index.mjs";
+import { getBackend, getCliBackend, hasCustomMockCli, hasCustomOfflineStore as hasCustomOfflineStoreAt, isRunnerId, listRunnerAgentsSync, readRunnerAgentSync, run, sharedRunnerBackend } from "../server/backend/index.mjs";
+import { callTool, createContext } from "../server/mcp/tools.mjs";
 import { bestOverlap, newPinBrief, slugLaneId, takenLaneIds, uniqueLaneId } from "../server/pin-ideas.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "../server/teams-file.mjs";
 import {
@@ -406,6 +407,9 @@ function parseArgs(argv) {
     "cause",
     "rule",
     "query",
+    "profile",
+    "cwd",
+    "prompt",
     "title",
     "note",
   ]);
@@ -461,10 +465,11 @@ function parseArgs(argv) {
 const UNASSIGNED_LANE = "unassigned";
 
 function resolveIdentity(flags) {
-  const agentId = String(flags.agent ?? process.env.PASEO_AGENT_ID ?? "").trim();
+  const agentId = String(flags.agent ?? process.env.PASEO_AGENT_ID ?? process.env.VS_AGENT_ID ?? "").trim();
 
-  let record = agentId ? readAgentRecord(agentId) : null;
-  if (!record && agentId) record = inspectAgentViaDaemon(agentId);
+  // rn- ids belong to the runner: read its log (labels/role/lane) instead of asking Paseo.
+  let record = isRunnerId(agentId) ? readRunnerAgentSync(agentId) : agentId ? readAgentRecord(agentId) : null;
+  if (!record && agentId && !isRunnerId(agentId)) record = inspectAgentViaDaemon(agentId);
 
   const labels = record?.labels ?? {};
   const title = record?.title ?? "";
@@ -639,6 +644,9 @@ Usage:
   vs task list [--lane <lane>] [--json]
   vs task set <unit-id> [--goal <g>] [--files <f1,f2>] [--done-check <cmd>] [--status <todo|running|done|blocked>] [--branch <b>] [--commit <sha>]
   vs cap [list | add <provider> | clear <provider>]
+  vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" [--cwd <dir>]   start a worker in your lane (runner or Paseo)
+  vs send <agent> "<text>"   message an agent
+  vs status <agent>   status + last assistant message
   vs wait <agent> [--timeout <seconds>]   block until idle (exit 0), error or blocked (1), timeout (2); no limit by default
   vs install-shim [--bin-dir <dir>]
   vs open [--print]   open the local web UI with owner access (sets the vs_local cookie); --print shows a one-time URL (60 s)
@@ -749,14 +757,34 @@ function laneMembers(agents, team) {
   });
 }
 
+// Runner agents live in the runner's own logs, not in Paseo's store: shape them like the Paseo rows.
+function listAgentsViaRunner() {
+  return listRunnerAgentsSync().map((a) => ({
+    id: a.id,
+    name: a.title,
+    title: a.title,
+    status: a.status,
+    cwd: a.cwd ?? "",
+    archivedAt: a.archivedAt ?? null,
+    archived: Boolean(a.archivedAt),
+    internal: false,
+    labels: a.labels ?? {},
+    requiresAttention: false,
+    attentionReason: null,
+    pendingPermissions: [],
+    usage: null,
+  }));
+}
+
 function collectAgents() {
   const live = listAgentsViaDaemon();
-  if (live && live.length) return { agents: live, source: "daemon" };
-  return { agents: listAgentsOffline(), source: "offline" };
+  const runnerAgents = listAgentsViaRunner();
+  if (live && live.length) return { agents: [...live, ...runnerAgents], source: "daemon" };
+  return { agents: [...listAgentsOffline(), ...runnerAgents], source: "offline" };
 }
 
 function resolveCallerUsage(identity) {
-  if (!identity.agentId) return null;
+  if (!identity.agentId || isRunnerId(identity.agentId)) return null;
   const out = runPaseo(["inspect", identity.agentId, "--json"]);
   if (!out) return null;
   try {
@@ -1083,7 +1111,7 @@ function formatWhoLine(entry) {
 }
 
 async function enrichZeroTokenAgents(candidates) {
-  const needInspect = candidates.filter((a) => extractAgentTokens(a).tokens === 0);
+  const needInspect = candidates.filter((a) => !isRunnerId(a.id) && extractAgentTokens(a).tokens === 0);
   if (!needInspect.length) return;
 
   if (!hasCustomOfflineStore() && !hasCustomMockCli()) {
@@ -1269,13 +1297,13 @@ async function commandWho(flags) {
 }
 
 async function commandWhoami(flags) {
-  const agentId = String(flags.agent ?? process.env.PASEO_AGENT_ID ?? "").trim();
+  const agentId = String(flags.agent ?? process.env.PASEO_AGENT_ID ?? process.env.VS_AGENT_ID ?? "").trim();
   // `--agent` names a specific target: resolve it strictly from that agent's own record.
   // The caller's VS_LANE / VS_TEAM / VS_ROLE / VS_ORD env describe the *caller*, and must not
   // leak onto a different agent's identity (e.g. a worker's VS_ROLE=worker overriding a lead).
   const explicitTarget = typeof flags.agent === "string" && flags.agent.trim() !== "";
-  let record = agentId ? readAgentRecord(agentId) : null;
-  if (!record && agentId) record = inspectAgentViaDaemon(agentId);
+  let record = isRunnerId(agentId) ? readRunnerAgentSync(agentId) : agentId ? readAgentRecord(agentId) : null;
+  if (!record && agentId && !isRunnerId(agentId)) record = inspectAgentViaDaemon(agentId);
 
   const labels = record?.labels ?? {};
   const cwd = record?.cwd || process.cwd();
@@ -1657,6 +1685,7 @@ export function installVsShim({ binDirs, targetScript, baseHome } = {}) {
     "server/stale-runtime.mjs",
     "server/pin-ideas.mjs",
     "docs/profiles/DEFAULT_PACK.md",
+    ...vsImportClosure(repoRoot),
   ];
 
   if (path.resolve(repoRoot) !== path.resolve(runtimeDir)) {
@@ -1984,6 +2013,11 @@ async function commandWait(flags) {
     timeoutSec = Number(flags.timeout);
     if (!Number.isFinite(timeoutSec) || timeoutSec <= 0) throw new Error("--timeout must be a positive number of seconds");
   }
+  if (isRunnerId(agentId)) {
+    const { code, line } = await runWait(sharedRunnerBackend(), agentId, timeoutSec);
+    process.stdout.write(line + "\n");
+    return code;
+  }
   const backend = getBackend(createDaemonClient());
   try {
     await backend.connect();
@@ -1993,6 +2027,59 @@ async function commandWait(flags) {
   } finally {
     await Promise.resolve(backend.close?.()).catch(() => {});
   }
+}
+
+// vs spawn / send / status share server/mcp/tools.mjs with the VS MCP server. Injectable ctx for tests.
+export async function runAgentVerb(verb, flags, ctx) {
+  const id = String(flags._[0] ?? "");
+  let args;
+  if (verb === "spawn") {
+    args = {
+      title: flags.title,
+      profile: flags.profile,
+      prompt: flags.prompt ?? flags._.join(" "),
+      ...(flags.cwd ? { cwd: path.resolve(String(flags.cwd)) } : {}),
+    };
+  } else if (verb === "send") {
+    args = { id, text: flags._.slice(1).join(" ") };
+  } else {
+    args = { id };
+  }
+  const tool = verb === "spawn" ? "spawn_worker" : verb;
+  return callTool(ctx, tool, args);
+}
+
+async function commandAgentVerb(verb, flags) {
+  if (verb === "spawn" && (!flags.profile || !(flags.prompt ?? flags._.length))) {
+    throw new Error('usage: vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" [--cwd <dir>]');
+  }
+  if (verb === "send" && (!flags._[0] || flags._.length < 2)) throw new Error('usage: vs send <agent> "<text>"');
+  if (verb === "status" && !flags._[0]) throw new Error("usage: vs status <agent>");
+  const identity = resolveIdentity(flags);
+  const ctx = createContext({
+    identity: { agentId: identity.agentId, team: identity.team.id, lane: identity.lane, role: identity.role },
+  });
+  const result = await runAgentVerb(verb, flags, ctx);
+  process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+  return 0;
+}
+
+// Every repo file cli/vs.mjs can reach through relative imports (static or dynamic), so the runtime copy stays complete.
+function vsImportClosure(repoRoot) {
+  const seen = new Set();
+  const walk = (rel) => {
+    if (seen.has(rel)) return;
+    let text;
+    try { text = fs.readFileSync(path.join(repoRoot, rel), "utf8"); } catch { return; }
+    seen.add(rel);
+    for (const m of text.matchAll(/(?:from\s+|import\(\s*)["'](\.{1,2}\/[^"']+\.(?:mjs|js|cjs))["']/g)) {
+      walk(path.posix.normalize(path.posix.join(path.posix.dirname(rel), m[1])));
+    }
+  };
+  walk("cli/vs.mjs");
+  // The MCP server is spawned by path (not imported) and loads these lazily.
+  for (const entry of ["server/mcp/server.mjs", "server/backend/index.mjs"]) walk(entry);
+  return [...seen];
 }
 
 function commandInstallShim(flags) {
@@ -2275,6 +2362,7 @@ function main(argv) {
     if (command === "worktree") return commandWorktree(flags);
     if (command === "lesson" || command === "lessons") return commandLesson(flags);
     if (command === "wait") return commandWait(flags);
+    if (command === "spawn" || command === "send" || command === "status") return commandAgentVerb(command, flags);
     if (command === "install-shim") return commandInstallShim(flags);
     if (command === "open") return commandOpen(flags);
     process.stderr.write(`Error: unknown command "${command}". Try "vs --help".\n`);

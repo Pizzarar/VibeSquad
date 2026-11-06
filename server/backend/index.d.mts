@@ -44,3 +44,5 @@ export function getCliBackend(): AgentBackend;
 export function hasCustomMockCli(): boolean;
 export function hasCustomOfflineStore(paseoHome: string): boolean;
 export function run(command: string, args: string[], timeoutMs: number): any;
+export function readRunnerAgentSync(id: string, opts?: { env?: Record<string, string | undefined> }): any | null;
+export function listRunnerAgentsSync(opts?: { env?: Record<string, string | undefined> }): any[];

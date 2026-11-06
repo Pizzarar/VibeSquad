@@ -2,12 +2,13 @@
 // Generic on purpose: Codex/AGY ACP agents differ only in command + args.
 import { killTree, spawnNoShell } from '../spawn.mjs';
 import { lineReader } from './lines.mjs';
+import { mcpServerSpec, mcpServerPath } from './mcp.mjs';
 
-export function createAcpAdapter({ spawnImpl, name = 'opencode', command = 'opencode', args = ['acp'] } = {}) {
+export function createAcpAdapter({ spawnImpl, name = 'opencode', command = 'opencode', args = ['acp'], mcp = true, mcpPath = mcpServerPath() } = {}) {
   return {
     name,
-    start({ cwd, systemPrompt, emit, onExit }) {
-      const child = spawnNoShell(command, args, { cwd }, spawnImpl);
+    start({ cwd, systemPrompt, env, emit, onExit }) {
+      const child = spawnNoShell(command, args, { cwd, ...(env ? { env } : {}) }, spawnImpl);
       let nextId = 1;
       const pending = new Map();
       const write = (o) => child.stdin.write(JSON.stringify({ jsonrpc: '2.0', ...o }) + '\n');
@@ -51,7 +52,7 @@ export function createAcpAdapter({ spawnImpl, name = 'opencode', command = 'open
 
       const ready = (async () => {
         await request('initialize', { protocolVersion: 1, clientCapabilities: {} });
-        const s = await request('session/new', { cwd, mcpServers: [] });
+        const s = await request('session/new', { cwd, mcpServers: mcp ? [acpMcpServer(mcpServerSpec({ env, path: mcpPath }))] : [] });
         sessionId = s.sessionId;
         emit('session', { sessionId, model: s.models?.currentModelId });
       })();
@@ -78,4 +79,9 @@ export function createAcpAdapter({ spawnImpl, name = 'opencode', command = 'open
       };
     },
   };
+}
+
+// ACP wants env as a [{name, value}] list.
+function acpMcpServer(spec) {
+  return { name: spec.name, command: spec.command, args: spec.args, env: Object.entries(spec.env).map(([name, value]) => ({ name, value })) };
 }

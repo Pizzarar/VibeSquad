@@ -3,16 +3,25 @@
 // dependency here and the CLI already gives exactly one child per agent.
 import { killTree, spawnNoShell } from '../spawn.mjs';
 import { lineReader } from './lines.mjs';
+import { mcpServerSpec, mcpServerPath } from './mcp.mjs';
 
-export function createClaudeAdapter({ spawnImpl, command = 'claude' } = {}) {
+export const DEFAULT_PERMISSION_MODE = 'auto';
+export const effectivePermissionMode = (meta = {}) => meta.permissionMode || DEFAULT_PERMISSION_MODE;
+
+export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true, mcpPath = mcpServerPath() } = {}) {
   return {
     name: 'claude',
-    start({ model, cwd, meta = {}, systemPrompt, emit, onExit }) {
+    start({ model, cwd, meta = {}, systemPrompt, env, emit, onExit }) {
       const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'];
       if (model) args.push('--model', model);
-      if (meta.permissionMode) args.push('--permission-mode', meta.permissionMode);
+      args.push('--permission-mode', effectivePermissionMode(meta));
+      if (mcp) {
+        const spec = mcpServerSpec({ env, path: mcpPath });
+        args.push('--mcp-config', JSON.stringify({ mcpServers: { [spec.name]: { command: spec.command, args: spec.args, env: spec.env } } }));
+        args.push('--allowedTools', `mcp__${spec.name}`);
+      }
       if (systemPrompt) args.push('--append-system-prompt', systemPrompt);
-      const child = spawnNoShell(command, args, { cwd }, spawnImpl);
+      const child = spawnNoShell(command, args, { cwd, ...(env ? { env } : {}) }, spawnImpl);
       let turnOpen = false;
       const stdin = (o) => child.stdin.write(JSON.stringify(o) + '\n');
       lineReader(child.stdout, (line) => {
