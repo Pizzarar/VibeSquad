@@ -325,3 +325,13 @@ test('toTimeline: a thought mid-reply does not split the assistant message', () 
   assert.equal(said[0].item.text, 'Hello world');
   assert.equal(e.filter((x) => x.item.type === 'reasoning').length, 1);
 });
+
+test('toTimeline: no rejoin across a user message or seq gap; thought moves ahead of the reply', () => {
+  const ev = (seq, type, o) => ({ seq, ts: 1000 + seq, type, ...o });
+  const a = toTimeline([ev(0, 'output', { text: 'A' }), ev(1, 'thought', { text: 't' }), ev(2, 'input', { text: 'q' }), ev(3, 'output', { text: 'B' })]);
+  assert.deepEqual(a.map((x) => x.item.type), ['assistant_message', 'reasoning', 'user_message', 'assistant_message']);
+  const g = toTimeline([ev(0, 'output', { text: 'A' }), ev(1, 'thought', { text: 't' }), ev(5, 'output', { text: 'B' })]);
+  assert.equal(g.filter((x) => x.item.type === 'assistant_message').length, 2);
+  const o = toTimeline([ev(0, 'output', { text: 'A' }), ev(1, 'thought', { text: 't' }), ev(2, 'output', { text: 'B' })]);
+  assert.deepEqual(o.map((x) => x.item.type + ':' + x.item.text), ['reasoning:t', 'assistant_message:AB']);
+});

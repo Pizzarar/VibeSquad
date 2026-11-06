@@ -99,12 +99,17 @@ export function toTimeline(events) {
         entries.push({ ...base, item: { type: "user_message", text: e.text } });
         break;
       case "output":
-        // A late thought chunk must not split one reply in two: text after a trailing thought rejoins the message before it.
+        // A late thought chunk must not split one reply in two: text right after a trailing thought (no gap in seq,
+        // no user message or tool between) rejoins the message before it, and the thought moves ahead of the reply.
+        // AGY output chunks are raw deltas, so they join without a separator.
         const msg = last?.item.type === "reasoning" ? entries[entries.length - 2] : last;
         if (msg?.item.type === "assistant_message" && last.seqEnd === e.seq - 1) {
           msg.item.text += e.text;
           msg.seqEnd = e.seq;
-          if (msg !== last) last.seqEnd = e.seq;
+          if (msg !== last) {
+            entries[entries.length - 2] = last;
+            entries[entries.length - 1] = msg;
+          }
         } else entries.push({ ...base, item: { type: "assistant_message", text: e.text } });
         break;
       case "thought":

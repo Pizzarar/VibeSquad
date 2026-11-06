@@ -2,7 +2,7 @@
 export type TimelineFilter = "all" | "text" | "tools" | "errors";
 export const TIMELINE_FILTERS: TimelineFilter[] = ["all", "text", "tools", "errors"];
 
-type Ent = { item: any; timestamp?: string; seqStart?: number; seqEnd?: number; sourceSeqRanges?: { startSeq: number; endSeq: number }[]; liveSeqs?: number[] };
+type Ent = { item: any; timestamp?: string; seqStart?: number; seqEnd?: number; sourceSeqRanges?: { startSeq: number; endSeq: number }[]; liveSeqs?: number[]; segStart?: number };
 
 const isFailed = (it: any) =>
   it.status === "failed" || it.status === "error" || !!it.error || (it.detail?.exitCode != null && it.detail.exitCode !== 0);
@@ -104,6 +104,19 @@ const coversSeq = (e: Ent, seq: number) =>
   e.liveSeqs?.includes(seq) ||
   (e.sourceSeqRanges ? e.sourceSeqRanges.some((r) => seq >= r.startSeq && seq <= r.endSeq) : e.seqStart != null && seq >= e.seqStart && seq <= (e.seqEnd ?? e.seqStart));
 
+/** Two assistant items are one message unless both carry a message id and the ids differ. */
+const sameMessage = (a: any, b: any) => {
+  const x = a.messageId ?? a.id;
+  const y = b.messageId ?? b.id;
+  return x == null || y == null || x === y;
+};
+/** True when `seq` directly follows the entry's last known seq (or either side has no seq to compare). */
+const contiguous = (e: Ent, seq?: number) => {
+  if (seq == null) return true;
+  const known = [...(e.liveSeqs ?? []), ...(e.seqEnd != null ? [e.seqEnd] : [])];
+  return known.length === 0 || seq === Math.max(...known) + 1;
+};
+
 /**
  * `seq` is the canonical row number of the stream event: a seq already folded into (or loaded in) an entry is
  * ignored, so redelivered events can't append their text twice. Chunk text is treated as a delta (each seq is one
@@ -114,14 +127,15 @@ export function mergeLiveItem<T extends Ent>(entries: T[], item: any, timestamp?
   if (seq != null && entries.some((e) => coversSeq(e, seq))) return entries;
   const type = String(item.type ?? "");
   const last = entries[entries.length - 1];
-  // A thought chunk landing mid-reply must not split the message: text after a trailing reasoning row rejoins the one before it.
-  if (type === "assistant_message" && last?.item?.type === "reasoning" && entries[entries.length - 2]?.item?.type === "assistant_message") {
-    const i = entries.length - 2;
-    const prev = String(entries[i].item.text ?? "");
-    const add = String(item.text ?? "");
-    const next = entries.slice();
-    next[i] = { ...entries[i], item: { ...entries[i].item, text: add.length > prev.length && add.startsWith(prev) ? add : prev + add }, liveSeqs: seq != null ? [...(entries[i].liveSeqs ?? []), seq] : entries[i].liveSeqs };
-    return next;
+  // A thought chunk landing mid-reply must not split the message: text right after a trailing reasoning row rejoins the
+  // assistant message before it (same message id if the provider gives one, no seq gap) and the thought moves ahead of
+  // the reply. Raw concat, no separator: AGY output chunks are deltas. `segStart` marks where the post-thought segment
+  // begins so snapshot-vs-delta is judged against that segment alone.
+  const prevMsg = entries[entries.length - 2];
+  if (type === "assistant_message" && last?.item?.type === "reasoning" && prevMsg?.item?.type === "assistant_message" && sameMessage(prevMsg.item, item) && contiguous(last, seq)) {
+    const prev = String(prevMsg.item.text ?? "");
+    const joined = { ...prevMsg, item: { ...prevMsg.item, text: prev + String(item.text ?? "") }, segStart: prev.length, liveSeqs: seq != null ? [...(prevMsg.liveSeqs ?? []), ...(last.liveSeqs ?? []), seq] : prevMsg.liveSeqs };
+    return [...entries.slice(0, -2), last, joined] as T[];
   }
   if (last && last.item && last.item.type === type) {
     if (STREAMED.has(type)) {
@@ -130,8 +144,12 @@ export function mergeLiveItem<T extends Ent>(entries: T[], item: any, timestamp?
       const add = type === "reasoning" ? reasoningText(item) : String(item.text ?? "");
       // Snapshot providers resend the whole text; delta providers send only the new part. A strictly longer text
       // that extends the tail is a snapshot (replace), everything else is a delta (append). The message id can't
-      // tell them apart: claude deltas reuse one messageId (claude/agent.js:943).
-      const text = add.length > prev.length && add.startsWith(prev) ? add : prev + add;
+      // tell them apart: claude deltas reuse one messageId (claude/agent.js:943). After a rejoined thought only the
+      // current segment (from segStart) takes part in that comparison.
+      const seg = type === "assistant_message" ? last.segStart ?? 0 : 0;
+      const head = prev.slice(0, seg);
+      const segPrev = prev.slice(seg);
+      const text = head + (add.length > segPrev.length && add.startsWith(segPrev) ? add : segPrev + add);
       const merged = { ...last.item, [field]: text };
       return [...entries.slice(0, -1), { ...last, item: merged, liveSeqs: seq != null ? [...(last.liveSeqs ?? []), seq] : last.liveSeqs }];
     }

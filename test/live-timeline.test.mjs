@@ -93,3 +93,42 @@ test("live text -> thought -> text stays one assistant message", () => {
   assert.equal(said[0].item.text, "Hello world");
   assert.equal(filterEntries(e, "all").length, e.length);
 });
+
+test("rejoined segment judges snapshots against its own text only", () => {
+  // cumulative snapshots after a thought: no duplication
+  let e = apply(base, ev({ type: "assistant_message", text: "Hello " }, 1));
+  e = apply(e, ev({ type: "reasoning", text: "hmm" }, 2));
+  for (const [t, s] of [["wor", 3], ["world", 4], ["world!", 5]]) e = apply(e, ev({ type: "assistant_message", text: t }, s));
+  assert.equal(e.at(-1).item.text, "Hello world!");
+  // a segment that starts with the first segment's text must not truncate it
+  let f = apply(base, ev({ type: "assistant_message", text: "Yes" }, 1));
+  f = apply(f, ev({ type: "reasoning", text: "hmm" }, 2));
+  f = apply(f, ev({ type: "assistant_message", text: "Yes, I checked" }, 3));
+  f = apply(f, ev({ type: "assistant_message", text: "Yes, I checked it" }, 4));
+  assert.equal(f.at(-1).item.text, "YesYes, I checked it");
+});
+
+test("no rejoin across a user message, a seq gap, or a different message id", () => {
+  let e = apply(base, ev({ type: "assistant_message", text: "A" }, 1));
+  e = apply(e, ev({ type: "reasoning", text: "t" }, 2));
+  e = apply(e, ev({ type: "user_message", text: "next" }, 3));
+  e = apply(e, ev({ type: "assistant_message", text: "B" }, 4));
+  assert.deepEqual(e.slice(1).map((x) => x.item.type + ":" + x.item.text), ["assistant_message:A", "reasoning:t", "user_message:next", "assistant_message:B"]);
+  let g = apply(base, ev({ type: "assistant_message", text: "A" }, 1));
+  g = apply(g, ev({ type: "reasoning", text: "t" }, 2));
+  g = apply(g, ev({ type: "assistant_message", text: "B" }, 9));
+  assert.equal(g.filter((x) => x.item.type === "assistant_message").length, 2);
+  let h = apply(base, ev({ type: "assistant_message", text: "A", messageId: "m1" }, 1));
+  h = apply(h, ev({ type: "reasoning", text: "t" }, 2));
+  h = apply(h, ev({ type: "assistant_message", text: "B", messageId: "m2" }, 3));
+  assert.equal(h.filter((x) => x.item.type === "assistant_message").length, 2);
+});
+
+test("rejoined reply ends the list with the thought moved ahead of it", () => {
+  let e = apply(base, ev({ type: "reasoning", text: "T1" }, 1));
+  e = apply(e, ev({ type: "assistant_message", text: "A" }, 2));
+  e = apply(e, ev({ type: "reasoning", text: "T2" }, 3));
+  e = apply(e, ev({ type: "assistant_message", text: "B" }, 4));
+  assert.deepEqual(e.slice(1).map((x) => x.item.type + ":" + x.item.text), ["reasoning:T1", "reasoning:T2", "assistant_message:AB"]);
+  assert.equal(latestReasoningIndex(e), 2); // the finished reply is last, so no thought sits under it
+});
