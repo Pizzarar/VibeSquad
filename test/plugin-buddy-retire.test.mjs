@@ -264,7 +264,7 @@ test(
         labels: { role: "brainstorm", lead: "vibesquad" },
         config: { cwd: CWD, title: "BRAINSTORM · VIBESQUAD", provider: "claude" },
       };
-      const out = h.beforeCreate({ request: legacy });
+      const out = await h.beforeCreate({ request: legacy });
       assert.ok(out, "request rewritten");
       const sys = out.config.systemPrompt;
       assert.ok(sys.includes("--- BEGIN docs/brainstorm/vibesquad.md ---"), "brief marker injected");
@@ -279,14 +279,14 @@ test(
         labels: { role: "brainstorm", lane: "vibesquad", team: "vibesquad" },
         config: { cwd: CWD, title: "BRAINSTORM · VIBESQUAD", provider: "claude" },
       };
-      const out2 = h.beforeCreate({ request: briefed });
+      const out2 = await h.beforeCreate({ request: briefed });
       assert.ok(!(out2?.config?.systemPrompt ?? "").includes("--- BEGIN docs/brainstorm/"), "no second copy of the brief");
 
       const worker = {
         labels: { role: "worker", lane: "vibesquad", team: "vibesquad" },
         config: { cwd: CWD, title: "worker", provider: "claude" },
       };
-      const out3 = h.beforeCreate({ request: worker });
+      const out3 = await h.beforeCreate({ request: worker });
       assert.ok(!(out3?.config?.systemPrompt ?? "").includes("--- BEGIN docs/brainstorm/"), "workers never get the brief");
     } finally {
       h.stop?.();

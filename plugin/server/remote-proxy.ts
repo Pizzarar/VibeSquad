@@ -21,6 +21,7 @@ import {
   decisionStatus,
   isTextContentType,
   needsRegistry,
+  proxyTimeoutFor,
   redactBody,
   scrubResponseBody,
   utf8Bytes,
@@ -176,8 +177,9 @@ export function makeVsHttpHandler(deps: VsHttpDeps = {}) {
     const port = deps.port ?? Number(process.env.VIBESQUAD_PORT || 4180);
     // Host is fixed: the caller only ever supplies an allowlisted pathname + query.
     const url = `http://127.0.0.1:${port}${d.pathname}${d.search}`;
+    const timeoutMs = deps.timeoutMs ?? proxyTimeoutFor(d.pathname);
     const abort = new AbortController();
-    const timer = setTimeout(() => abort.abort(), deps.timeoutMs ?? REMOTE_TIMEOUT_MS);
+    const timer = setTimeout(() => abort.abort(), timeoutMs);
     try {
       if (write && needsRegistry(d.pathname)) {
         const reg = checkRemoteRegistry(d.pathname, bodyCheck.value, await readRegistry(port, deps.fetch ?? fetch, abort.signal), (s) =>
@@ -207,7 +209,7 @@ export function makeVsHttpHandler(deps: VsHttpDeps = {}) {
       }
       return { status: res.status, headers, body };
     } catch (e: any) {
-      if (abort.signal.aborted) throw new Error(`vs.http: timed out after ${deps.timeoutMs ?? REMOTE_TIMEOUT_MS} ms`);
+      if (abort.signal.aborted) throw new Error(`vs.http: timed out after ${timeoutMs} ms`);
       if (String(e?.message ?? "").startsWith("vs.http:")) throw e;
       throw new Error(`vs.http: VibeSquad server unreachable on 127.0.0.1:${port}`);
     } finally {

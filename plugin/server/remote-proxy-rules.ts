@@ -17,6 +17,14 @@
 
 export const REMOTE_MAX_BODY_BYTES = 512 * 1024; // request and response bodies; relay frames allow 32 MiB
 export const REMOTE_TIMEOUT_MS = 10_000;
+export const REMOTE_SPAWN_TIMEOUT_MS = 45_000;
+
+export function proxyTimeoutFor(pathname: string, defaultMs: number = REMOTE_TIMEOUT_MS): number {
+  if (pathname === "/__vibesquad/brainstorm-restart" || pathname === "/__vibesquad/inbox/triage") {
+    return Math.max(defaultMs, REMOTE_SPAWN_TIMEOUT_MS);
+  }
+  return defaultMs;
+}
 export const REMOTE_MAX_PATH_CHARS = 2048;
 export const REMOTE_MAX_IN_FLIGHT = 4;
 export const REMOTE_WINDOW_MS = 60_000;

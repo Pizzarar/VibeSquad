@@ -37,8 +37,8 @@ test("PinRail.tsx renders Spinner with Spinning up RiffBot / Spinning up in PinF
   const src = fs.readFileSync(path.join(root, "src/PinRail.tsx"), "utf8");
   assert.match(src, /import\s*\{\s*Spinner\s*\}\s*from\s*"\.\/QuickWinsUi"/);
   assert.match(src, /data-testid="pin-focus-spinning"/);
-  assert.match(src, /Spinning up RiffBot \(\$\{selectedProfile\.replace\(\/\^Brainstorm\\s\*-\\s\*\/i, ""\)\}\) — booting session from brief…/);
-  assert.match(src, /Spinning up \$\{pin\?\.lane\.name \?\? "Brainstorm"\} \(\$\{selectedProfile\.replace\(\/\^Brainstorm\\s\*-\\s\*\/i, ""\)\}\) from the brief…/);
+  assert.match(src, /Spinning up RiffBot \(\$\{stripProfilePrefix\(selectedProfile\)\}\) — booting session from brief…/);
+  assert.match(src, /Spinning up \$\{pin\?\.lane\.name \?\? "Brainstorm"\} \(\$\{stripProfilePrefix\(selectedProfile\)\}\) from the brief…/);
 });
 
 test("HubBar.tsx subscribes to pin starts, disables .hub-bar-btn, and shows Starting RiffBot… while starting", () => {

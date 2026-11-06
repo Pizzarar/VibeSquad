@@ -145,3 +145,29 @@ export function latestReasoningIndex(entries: Ent[]): number {
   for (let i = entries.length - 1; i >= 0; i--) if (entries[i].item?.type === "reasoning") return i;
   return -1;
 }
+
+/** Highest canonical seq covered by the loaded entries (null when none carry a seq). */
+export function maxEntrySeq(entries: Ent[]): number | null {
+  let max: number | null = null;
+  const bump = (n: number | undefined) => {
+    if (n != null && (max === null || n > max)) max = n;
+  };
+  for (const e of entries) {
+    bump(e.seqEnd ?? e.seqStart);
+    e.liveSeqs?.forEach(bump);
+    e.sourceSeqRanges?.forEach((r) => bump(r.endSeq));
+  }
+  return max;
+}
+
+/**
+ * Whether a live stream event needs a healing refetch. Live events already fold into the entries
+ * (mergeLiveItem), so the per-event refetch only guards against lost events:
+ *  - "gap": seq jumped past lastSeq+1, rows are missing, refetch soon.
+ *  - "unverified": no seq or no baseline to compare, refetch once the stream goes quiet.
+ *  - "none": contiguous or redelivered, nothing to heal.
+ */
+export function syncNeeded(lastSeq: number | null, seq: number | undefined): "none" | "gap" | "unverified" {
+  if (seq == null || lastSeq == null) return "unverified";
+  return seq > lastSeq + 1 ? "gap" : "none";
+}

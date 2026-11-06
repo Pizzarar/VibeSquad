@@ -46,7 +46,7 @@ test("boot prompt omits vs:looks-done for the hub only", () => {
   assert.match(hub, /Never mark the hub done/);
 });
 
-test("lane Buddy started in repo root does not get HUB_BUDDY_RULES; hub Buddy does", () => {
+test("lane Buddy started in repo root does not get HUB_BUDDY_RULES; hub Buddy does", async () => {
   const dir = mkdtempSync(join(tmpdir(), "vs-hub-pack-"));
   const prev = { h: process.env.VIBESQUAD_HOME, t: process.env.VIBESQUAD_TEAMS_FILE };
   const home = join(dir, "h");
@@ -78,14 +78,14 @@ test("lane Buddy started in repo root does not get HUB_BUDDY_RULES; hub Buddy do
     on: () => () => {},
   });
   const ROOT = "/work/VibeSquad";
-  const create = (config, env, labels) => {
+  const create = async (config, env, labels) => {
     const req = { config: { cwd: ROOT, ...config }, ...(env ? { env } : {}), ...(labels ? { labels } : {}) };
-    return before.get("agent.create")({ request: req }) ?? req;
+    return (await before.get("agent.create")({ request: req })) ?? req;
   };
 
   try {
     // Case A: pin spawn in repo root; lane comes from env.VS_LANE, not cwd.
-    const a = create(
+    const a = await create(
       { provider: "claude", model: "claude-opus-5-5", title: "Rel Buddy" },
       { VS_ROLE: "brainstorm", VS_LANE: "release-0-2-0", VS_TEAM: "vibesquad", VS_BRIEF_INLINE: "1" },
     );
@@ -96,7 +96,7 @@ test("lane Buddy started in repo root does not get HUB_BUDDY_RULES; hub Buddy do
     assert.doesNotMatch(sysA, /Open threads:/);
 
     // Case B: label-only spawn; no lane anywhere, cwd fallback must not mark it hub.
-    const b = create(
+    const b = await create(
       { provider: "claude", model: "claude-opus-5-5", title: "Rel Buddy" },
       { VS_ROLE: "brainstorm" },
     );
@@ -105,7 +105,7 @@ test("lane Buddy started in repo root does not get HUB_BUDDY_RULES; hub Buddy do
     assert.doesNotMatch(sysB, /Never spawn a Lead/);
 
     // Case C: explicit labels for an unregistered lane in repo root.
-    const c = create(
+    const c = await create(
       { provider: "claude", model: "claude-opus-5-5", title: "Rel Buddy" },
       undefined,
       { role: "brainstorm", lane: "release-0-2-0", team: "vibesquad" },
@@ -115,7 +115,7 @@ test("lane Buddy started in repo root does not get HUB_BUDDY_RULES; hub Buddy do
     assert.doesNotMatch(sysC, /Never spawn a Lead/);
 
     // Case D: hub Buddy pin spawn in repo root (env.VS_LANE is the hub lane).
-    const d = create(
+    const d = await create(
       { provider: "claude", model: "claude-opus-5-5", title: "RiffBot" },
       { VS_ROLE: "brainstorm", VS_LANE: "vibesquad", VS_TEAM: "vibesquad", VS_BRIEF_INLINE: "1" },
     );

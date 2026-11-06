@@ -94,9 +94,9 @@ function harness(overrides = {}) {
     archiveAgent: async () => {},
     ...overrides,
   })(server);
-  const spawn = (config = {}, extra = {}) => {
+  const spawn = async (config = {}, extra = {}) => {
     const req = { config: { cwd: CWD, ...config }, ...extra };
-    return before.get("agent.create")({ request: req }) ?? req;
+    return (await before.get("agent.create")({ request: req })) ?? req;
   };
   return { stop, spawn, onCreated: on.get("agent.created") };
 }
@@ -111,7 +111,7 @@ test(
       ],
     });
     try {
-      const out = h.spawn(
+      const out = await h.spawn(
         { provider: "claude", model: "claude-opus-5-5" },
         { labels: { profile: "Lead - Claude", team: "vibesquad", lane: "vibesquad", role: "lead" } },
       );
@@ -134,7 +134,7 @@ test(
       ],
     });
     try {
-      const out = h.spawn(
+      const out = await h.spawn(
         { provider: "claude", model: "claude-opus-5-5" },
         { labels: { profile: "Brainstorm - Claude", team: "vibesquad", lane: "vibesquad", role: "brainstorm" } },
       );
@@ -152,7 +152,7 @@ test(
   withEnv(async () => {
     const h = harness({ cappedProviders: { claude: { capped: true } } });
     try {
-      const out = h.spawn(
+      const out = await h.spawn(
         { provider: "claude", model: "claude-opus-5-5" },
         { labels: { profile: "Lead - Claude", team: "vibesquad", lane: "vibesquad", role: "lead" } },
       );
@@ -170,7 +170,7 @@ test(
     writeFileSync(join(vsHome, "capped-providers.json"), JSON.stringify({ claude: { capped: true } }), "utf8");
     const h = harness();
     try {
-      const out = h.spawn(
+      const out = await h.spawn(
         { provider: "claude", model: "claude-opus-5-5" },
         { labels: { profile: "Lead - Claude", team: "vibesquad", lane: "vibesquad", role: "lead" } },
       );
@@ -187,7 +187,7 @@ test(
   withEnv(async () => {
     const h = harness();
     try {
-      const out = h.spawn(
+      const out = await h.spawn(
         { provider: "claude", model: "claude-opus-5-5" },
         { labels: { profile: "Lead - Claude", team: "vibesquad", lane: "vibesquad", role: "lead" } },
       );
@@ -205,7 +205,7 @@ test(
     const h = harness({ briefRoot });
     try {
       for (const role of ["brainstorm", "lead", "worker"]) {
-        const out = h.spawn(
+        const out = await h.spawn(
           { provider: "claude" },
           { labels: { role, team: "vibesquad", lane: "artifact-lane" } },
         );
@@ -226,7 +226,7 @@ test(
   withEnv(async ({ briefRoot }) => {
     const h = harness({ briefRoot });
     try {
-      const out = h.spawn(
+      const out = await h.spawn(
         { provider: "claude" },
         { labels: { role: "worker", team: "vibesquad", lane: "vibesquad" } },
       );

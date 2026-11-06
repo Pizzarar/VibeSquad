@@ -4,8 +4,9 @@
 // a badge and never reorders the rail. The bar on top of the drawer is the only route to the plumbing.
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getDraft, useDraft } from "./drafts";
-import { NeedsBadge, PinDot, PinTeamTree, usePreview } from "./PinGrid";
+import { markPinRead, NeedsBadge, PinDot, PinTeamTree, setFullView, usePreview } from "./PinGrid";
 import { exitPinFocus, type PinFocus } from "./pinFocus";
+import { PinMenu } from "./PinMenu";
 import { TopBreadcrumb } from "./Breadcrumb";
 import { escGoesHome } from "./pinFocusLogic";
 import { DEFAULT_PIN_PROFILE, getLastBrainstormProfile, setLastBrainstormProfile } from "./pinActions";
@@ -82,6 +83,26 @@ export function PinRail({ view, focus, onPick }: { view: TeamView; focus: PinFoc
             {active && <PinDot pin={active} />}
             <span className="pin-rail-name">{active?.lane.name ?? focus.laneId}</span>
             {active && <NeedsBadge pin={active} />}
+            {active && active.needsYou > 0 && (
+              <button
+                type="button"
+                className="btn ghost small pin-rail-mark-read"
+                data-testid="pin-rail-mark-read"
+                title="Mark all in this team read"
+                onClick={() => void markPinRead(active)}
+              >
+                ✓ Mark read
+              </button>
+            )}
+            {active && !isHubPin(active) && (
+              <PinMenu
+                pin={active}
+                onShowPlumbing={() => {
+                  exitPinFocus();
+                  setFullView(true);
+                }}
+              />
+            )}
           </div>
           {active && focus.agentId && <SendToBar pin={active} />}
           {!focus.agentId && (
@@ -163,6 +184,10 @@ function PinFocusBar({ view, focus, onSelectSquad }: { view: TeamView; focus: Pi
   );
 }
 
+function stripProfilePrefix(name: string): string {
+  return name.includes(" - ") ? name.slice(name.indexOf(" - ") + 3).trim() || name : name;
+}
+
 /** Row 1 of the focused middle: the bar, plus the "Start fresh" panel when the Brainstorm is gone. */
 export function PinFocusHeader(props: {
   view: TeamView;
@@ -222,7 +247,7 @@ export function PinFocusHeader(props: {
                   <div className="pin-profile-chips" data-testid="pin-spin-up-profile-chips">
                     {brainstormProfiles.map((name) => {
                       const active = selectedProfile === name;
-                      const shortName = name.replace(/^(?:Brainstorm)\s*-\s*/i, "") || name;
+                      const shortName = stripProfilePrefix(name);
                       return (
                         <button
                           type="button"
@@ -252,8 +277,8 @@ export function PinFocusHeader(props: {
               <Spinner
                 label={
                   pin && isHubPin(pin)
-                    ? `Spinning up RiffBot (${selectedProfile.replace(/^Brainstorm\s*-\s*/i, "")}) — booting session from brief…`
-                    : `Spinning up ${pin?.lane.name ?? "Brainstorm"} (${selectedProfile.replace(/^Brainstorm\s*-\s*/i, "")}) from the brief…`
+                    ? `Spinning up RiffBot (${stripProfilePrefix(selectedProfile)}) — booting session from brief…`
+                    : `Spinning up ${pin?.lane.name ?? "Brainstorm"} (${stripProfilePrefix(selectedProfile)}) from the brief…`
                 }
               />
             </div>

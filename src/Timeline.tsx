@@ -1,7 +1,8 @@
-import { Component, Fragment, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Component, Fragment, type ReactNode, useCallback, useSyncExternalStore, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PaseoAgentTimelineEvent } from "@getpaseo/client";
 import { messageCtxItems, openContextMenu, selectionWithin } from "./CommandPalette";
-import { daemonClient, client, DEMO } from "./paseo";
+import { daemonClient, client, DEMO, retrySend } from "./paseo";
+import { dismissPending, dropReconciled, getPending, pendingFor, reconciledIds, subscribePending } from "./pendingSend";
 import { REWIND_MODES, buildRewindRequest, truncateAfter, type RewindMode } from "./sessionLifecycle";
 import { demoTimeline } from "./demo";
 import { sentImagesFor } from "./imageDrafts";
@@ -9,13 +10,17 @@ import { parseSentAttachments, repoPathFor } from "./attachments";
 import { openRightDockTab } from "./RightDock";
 import { listTimelinePrompts, searchTimeline, type TimelinePrompt } from "./paseoTimeline";
 import { perfEndPainted, perfSendEvent } from "./perf";
-import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, matchesFilter, localPrompts, localSearch, mergeLiveItem, latestReasoningIndex, reasoningText, sortedHits, stepIndex, type SearchLocation, type TimelineFilter } from "./timelineFilter";
+import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, matchesFilter, localPrompts, localSearch, mergeLiveItem, maxEntrySeq, syncNeeded, latestReasoningIndex, reasoningText, sortedHits, stepIndex, type SearchLocation, type TimelineFilter } from "./timelineFilter";
 import { BARE_PATH_RE, parseFileToken } from "./fileLinks";
 import { toolStartsExpanded, usePref } from "./prefs";
 import { getPanes } from "./panes";
 import { SubagentList } from "./SubagentList";
 import { Spinner, Stamp, TimelineSkeleton, useDelayedBusy } from "./QuickWinsUi";
 import { MermaidView } from "./MermaidView";
+import { noteTimelineOffers, useLooksDoneId } from "./PinGrid";
+import { SpinOffCard, SendToCard, findPinForAgent, useSendTo, useSpinOff } from "./PinIdeas";
+import { LooksDoneCard } from "./PinDone";
+import { hasLooksDone, isHubPin, parseSendTo, parseSpinOff } from "./pins";
 
 export class TimelineErrorBoundary extends Component<
   { children: ReactNode; fallbackLabel?: string },
@@ -155,7 +160,7 @@ export function tokenizeMarkdown(text: string, doc = false): Token[] {
   while (i < lines.length) {
     const line = lines[i];
     // Fenced code block
-    const fenceMatch = line.match(/^```(\w*)\s*$/);
+    const fenceMatch = line.match(/^```([^`]*?)\s*$/);
     if (fenceMatch) {
       const lang = fenceMatch[1] ?? "";
       const codeLines: string[] = [];
@@ -360,6 +365,9 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 
 export function MarkdownRenderer({ text, agentId, doc = false }: { text: string; agentId?: string; doc?: boolean }) {
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const liveSpinOff = useSpinOff(agentId ?? null);
+  const liveSendTo = useSendTo(agentId ?? null);
+  const liveLooksDoneId = useLooksDoneId(agentId ?? null);
   const tokens = tokenizeMarkdown(text, doc);
 
   const renderInlineWithImages = (t: string) => {
@@ -400,11 +408,48 @@ export function MarkdownRenderer({ text, agentId, doc = false }: { text: string;
         if (lvl === 2) return <h2 key={i} className={cls}>{tok.text}</h2>;
         return <h3 key={i} className={cls}>{tok.text}</h3>;
       }
-      case "code_block":
+      case "code_block": {
         if (tok.lang.trim().toLowerCase() === "mermaid") {
           return <MermaidView key={i} code={tok.code} />;
         }
+        const lang = tok.lang.trim().toLowerCase();
+        if (lang === "vs:spin-off" || /^\s*vs:spin-off\s*(\n|$)/i.test(tok.code)) {
+          const teams = parseSpinOff(`\`\`\`vs:spin-off\n${tok.code.replace(/^\s*vs:spin-off\s*\n?/i, "")}\n\`\`\``);
+          const pin = findPinForAgent(agentId);
+          if (teams?.length && pin) {
+            return (
+              <div key={i} className="tl-spinoff-block" data-testid="tl-spinoff-block">
+                <CodeBlock lang={tok.lang || "vs:spin-off"} code={tok.code} />
+                <SpinOffCard pin={pin} offer={{ id: liveSpinOff?.id ?? `${agentId ?? "inline"}:inline:${i}`, teams }} variant="bar" />
+              </div>
+            );
+          }
+        }
+        if (lang.startsWith("vs:send-to") || /^\s*vs:send-to\s+[A-Za-z0-9_-]+/m.test(tok.code)) {
+          const parsedSendTo = parseSendTo(lang.startsWith("vs:send-to") ? `${tok.lang}\n${tok.code}` : tok.code);
+          const pin = findPinForAgent(agentId);
+          if (parsedSendTo && pin) {
+            return (
+              <div key={i} className="tl-sendto-block" data-testid="tl-sendto-block">
+                <CodeBlock lang={tok.lang || "vs:send-to"} code={tok.code} />
+                <SendToCard pin={pin} offer={{ ...parsedSendTo, id: liveSendTo?.id ?? `${agentId ?? "inline"}:inline:${i}` }} variant="bar" />
+              </div>
+            );
+          }
+        }
+        if (lang === "vs:looks-done" || hasLooksDone(tok.code)) {
+          const pin = findPinForAgent(agentId);
+          if (pin && !isHubPin(pin)) {
+            return (
+              <div key={i} className="tl-looksdone-block" data-testid="tl-looksdone-block">
+                <CodeBlock lang={tok.lang || "vs:looks-done"} code={tok.code} />
+                <LooksDoneCard pin={pin} messageId={liveLooksDoneId ?? `${agentId ?? "inline"}:inline:${i}`} />
+              </div>
+            );
+          }
+        }
         return <CodeBlock key={i} lang={tok.lang} code={tok.code} />;
+      }
       case "table":
         return (
           <table key={i} className="tl-table">
@@ -875,6 +920,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
   const activeRef = useRef(active);
   activeRef.current = active;
   const stale = useRef(false);
+  const lastSeq = useRef<number | null>(null);
   const reload = useRef<() => void>(() => {});
   // Feel pass: click → transcript painted for a freshly opened agent (no-op unless perfStart ran).
   useEffect(() => {
@@ -910,6 +956,10 @@ export function useTimeline(agentId: string, status: string, active = true, pred
   }, [predecessor, entries]);
 
   useEffect(() => {
+    if (agentId && entries.length) noteTimelineOffers(agentId, entries);
+  }, [agentId, entries]);
+
+  useEffect(() => {
     if (DEMO) {
       setEntries(demoTimeline(agentId) as Entry[]);
       setHasMore(false);
@@ -917,6 +967,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
     }
     let alive = true;
     setLoaded(false);
+    lastSeq.current = null; // other agent's seq must not judge this stream; load() sets the baseline
     let timer: ReturnType<typeof setTimeout> | null = null;
     const handle = client.agents.ref(agentId);
 
@@ -929,6 +980,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
           setError(null);
           const newEntries = t.entries as Entry[];
           setEntries(newEntries);
+          lastSeq.current = maxEntrySeq(newEntries);
           const tAny = t as any;
           setHasMore(tAny.hasOlder ?? newEntries.length >= 60);
           const startCur = tAny.startCursor;
@@ -945,16 +997,22 @@ export function useTimeline(agentId: string, status: string, active = true, pred
       if (alive) setLoaded(true);
     };
 
-    const soon = () => {
+    // The live stream already folds into `entries` (mergeLiveItem), so a refetch per event only re-reads 60
+    // entries the client has. soon() now runs for a seq gap (lost rows) or, debounced to a quiet stream, for
+    // events that can't be verified; turn end refetches via the [agentId, status] effect below.
+    const soon = (delay: number, debounce: boolean) => {
       if (!activeRef.current) {
         stale.current = true;
         return;
       }
-      if (timer) return;
+      if (timer) {
+        if (!debounce) return;
+        clearTimeout(timer);
+      }
       timer = setTimeout(() => {
         timer = null;
         load();
-      }, 600);
+      }, delay);
     };
 
     reload.current = load;
@@ -966,8 +1024,13 @@ export function useTimeline(agentId: string, status: string, active = true, pred
         const ts = "timestamp" in ev ? ev.timestamp : undefined;
         perfSendEvent(agentId, (item as any)?.type === "assistant_message");
         setEntries((cur) => mergeLiveItem(cur, item, ts, seq));
+        const need = syncNeeded(lastSeq.current, seq);
+        if (seq != null && (lastSeq.current == null || seq > lastSeq.current)) lastSeq.current = seq;
+        if (need === "gap") soon(600, false);
+        else if (need === "unverified") soon(2500, true);
+      } else {
+        soon(2500, true);
       }
-      soon();
     });
     return () => {
       alive = false;
@@ -992,6 +1055,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
         if (!t.error) {
           const newEntries = t.entries as Entry[];
           setEntries(newEntries);
+          lastSeq.current = maxEntrySeq(newEntries);
           const tAny = t as any;
           setHasMore(tAny.hasOlder ?? newEntries.length >= 60);
           const startCur = tAny.startCursor;
@@ -1140,6 +1204,13 @@ export function Timeline({
   const slowSearch = useDelayedBusy(searching);
   const pinnedTodo = findPinnedTodo(shown);
 
+  const allPending = useSyncExternalStore(subscribePending, getPending);
+  const pendingHere = pendingFor(allPending, agentId);
+  // Drop optimistic bubbles once the daemon's own user_message entry has arrived (no duplicate).
+  const covered = reconciledIds(pendingHere, entries);
+  useEffect(() => {
+    dropReconciled(covered);
+  }, [covered.join(",")]);
   const lastEntry = entries[entries.length - 1];
   const tailSig = [
     entries.length,
@@ -1148,6 +1219,7 @@ export function Timeline({
     lastEntry?.item?.status,
     reasoningText(lastEntry?.item).length || String(lastEntry?.item?.text ?? "").length,
     JSON.stringify(lastEntry?.item?.detail ?? "").length,
+    pendingHere.length,
   ].join("|");
   const stickToBottom = () => {
     const el = timelineRef.current;
@@ -1397,6 +1469,26 @@ export function Timeline({
         </TimelineErrorBoundary>
         </Fragment>
       ))}
+      {pendingHere
+        .filter((p) => !covered.includes(p.id))
+        .map((p) => (
+          <div
+            key={p.id}
+            className={p.state === "failed" ? "tl tl-user tl-user-failed" : "tl tl-user tl-user-pending"}
+            data-testid={`tl-pending-${p.state}`}
+          >
+            <div>{stripBootPreamble(p.text)}</div>
+            {p.state === "failed" ? (
+              <div className="muted" role="alert">
+                Not sent{p.error ? `: ${p.error}` : ""}{" "}
+                <button onClick={() => void retrySend(p.id)}>Retry</button>{" "}
+                <button onClick={() => dismissPending(p.id)}>Dismiss</button>
+              </div>
+            ) : (
+              <div className="muted">Sending…</div>
+            )}
+          </div>
+        ))}
       <div />
       {!isPinned && (
         <button

@@ -3,11 +3,13 @@
 // and the toast both report to. Side effects live in src/pinActions.ts.
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { bestOverlap, DEFAULT_PIN_PROFILE, nameFromIdea, parseSendTo, pinsForSquad, describeSpinOff, isSpinOffRunning, spinOffFrom, spinOffRemaining, spinOffVersion, subscribeSpinOff, type Pin } from "./pins";
+import { bestOverlap, DEFAULT_PIN_PROFILE, hubPinForSquad, looksDoneFor, nameFromIdea, parseSendTo, pinsForSquad, describeSpinOff, isSpinOffRunning, spinOffFrom, spinOffRemaining, spinOffVersion, subscribeSpinOff, type Pin } from "./pins";
 import { createPin, createSpinOffPins, dismissSendTo, dismissSpinOff, isSpinOffDismissed, getLastBrainstormProfile, isSendToDismissed, sendIdeaToTeam, setLastBrainstormProfile } from "./pinActions";
 import { spinUpPin } from "./pinFocus";
 import { getTeams, type TeamView } from "./teams";
-import type { PinHandler } from "./PinGrid";
+import { useLooksDoneId, type PinHandler } from "./PinGrid";
+import { LooksDoneCard } from "./PinDone";
+import { derived } from "./ui";
 import { useProfiles } from "./profiles";
 
 // ── Toast ──────────────────────────────────────────────────────────────────
@@ -248,12 +250,41 @@ export function SendToCard({ pin, offer, variant = "tile" }: { pin: Pin; offer: 
   );
 }
 
+export function findPinForAgent(agentId?: string | null): Pin | null {
+  if (!agentId) return null;
+  for (const v of derived().views) {
+    const hub = hubPinForSquad(v);
+    const { pinned, done } = pinsForSquad(v);
+    const all = [...(hub ? [hub] : []), ...pinned, ...done];
+    for (const p of all) {
+      if (
+        p.brainstorm?.agent.id === agentId ||
+        p.lead?.agent.id === agentId ||
+        p.workers.some((w) => w.agent.id === agentId) ||
+        (p.topicBrainstorms ?? []).some((tb) => tb.agent.id === agentId)
+      ) {
+        return p;
+      }
+    }
+    const m = v.members.find((mem) => mem.agent.id === agentId);
+    const mLane = m?.laneId ?? (m as any)?.lane;
+    if (mLane) {
+      const hit = all.find((p) => p.lane.id === mLane);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
 /** The card above the focused drawer (rendered in PinFocusHeader). */
 export function SendToBar({ pin }: { pin: Pin }) {
-  const offer = useSendTo(pin.brainstorm?.agent.id ?? null);
-  const spin = useSpinOff(pin.brainstorm?.agent.id ?? null);
+  const bsId = pin.brainstorm?.agent.id ?? null;
+  const offer = useSendTo(bsId);
+  const spin = useSpinOff(bsId);
+  const looksDoneId = looksDoneFor(pin, useLooksDoneId(bsId));
   return (
     <>
+      {looksDoneId && <LooksDoneCard pin={pin} messageId={looksDoneId} />}
       {offer && <SendToCard pin={pin} offer={offer} variant="bar" />}
       {spin && <SpinOffCard pin={pin} offer={spin} variant="bar" />}
     </>

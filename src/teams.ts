@@ -451,7 +451,10 @@ export function resolve(agents: Map<string, PaseoAgent>): Member[] {
     const team = resolved.isOrphan
       ? UNASSIGNED
       : (TEAMS.find((t) => t.id === resolved.teamId) ?? UNASSIGNED);
-    const laneId = team === UNASSIGNED ? null : (resolved.laneId || null);
+    const keptLane = resolved.autofixedFromCwd && resolved.callerLane
+      ? resolved.callerLane.trim().toLowerCase()
+      : resolved.laneId;
+    const laneId = team === UNASSIGNED ? null : (keptLane || null);
     const attention = attentionOf(agent);
     const prev = memberCache.get(agent);
     if (prev && prev.team === team && prev.laneId === laneId && sameAttention(prev.attention, attention)) return prev;
@@ -519,6 +522,8 @@ export function findCrossTeamBrainstorm(members: Member[], laneId: string, topic
   const hits = members.filter((m) => {
     if (m.kind !== "brainstorm" || m.agent.archivedAt || (m.agent.status === "closed" && !opts.includeClosed)) return false;
     const l = labelsOf(m.agent);
+    const explicitLane = String(l.lane || "").trim();
+    if (explicitLane && canonicalLaneKey(explicitLane) !== targetLane) return false;
     const mLane = canonicalLaneKey(m.laneId || l.lane || l.lead);
     if (mLane !== targetLane) return false;
     const mTopic = topicOfBrainstorm(m).trim().toLowerCase();
@@ -528,7 +533,13 @@ export function findCrossTeamBrainstorm(members: Member[], laneId: string, topic
   if (hits.length > 0) return hits.sort((a, b) => closed(a) - closed(b) || newest(a, b))[0] ?? null;
   if (!wantTopic && opts.includeClosed) {
     const former = members
-      .filter((m) => isFormerBrainstormMember(m) && canonicalLaneKey(m.laneId || labelsOf(m.agent).lane || labelsOf(m.agent).lead) === targetLane)
+      .filter((m) => {
+        if (!isFormerBrainstormMember(m)) return false;
+        const fl = labelsOf(m.agent);
+        const fExplicit = String(fl.lane || "").trim();
+        if (fExplicit && canonicalLaneKey(fExplicit) !== targetLane) return false;
+        return canonicalLaneKey(m.laneId || fl.lane || fl.lead) === targetLane;
+      })
       .sort(formerNewest);
     return former[0] ?? null;
   }

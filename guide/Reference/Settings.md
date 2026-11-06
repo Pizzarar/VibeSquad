@@ -2,7 +2,7 @@
 
 What each area of VibeSquad's Settings window does, when to touch it, and the safe default. If a setting isn't listed here, you don't need it yet.
 
-Open it from the **⚙ SETTINGS** button in a Squad's header in VibeSquad. It opens a **Settings** page with a list of tabs down the left (App, Chat, Notifications, New Agent defaults, Keybindings, Team, Remote Control, Paseo, Profiles, About) and a search box. Section names below are the labels you will see on screen; if one is not where you expect, click through the tabs or search for it. The first four sections look like this:
+Open it from the **⚙ SETTINGS** button in a Squad's header in VibeSquad. It opens a **Settings** page with a list of tabs down the left (App, Chat, Notifications, New Agent defaults, Keybindings, Team, Remote Control, Paseo, Profiles, About) and a search box. Section names below are the labels you will see on screen; if one is not where you expect, click through the tabs or search for it. Where things live: **YOUR NAME** and **ALLOW OTHER DEVICES** are on the **Team** tab, **DISPLAY & 4K UI SCALE** is on **App**, and **UPDATE CHANNEL** is on **About**. (The screenshot below was taken before they were split across tabs, so it shows them stacked on one page.)
 
 ![Settings, top: Your name, Allow other devices, Update channel and Display & 4K UI scale](../assets/screenshots/07a-settings-top.png)
 
@@ -29,10 +29,12 @@ The **YOUR NAME** box. This is the name VibeSquad shows on NEEDS badges, in the 
 
 ## Update channel
 
-**UPDATE CHANNEL** shows your version and two buttons:
+On the **About** tab, **UPDATE CHANNEL** shows your version and two buttons:
 
 - **Stable**: new releases ask before VibeSquad restarts.
 - **Beta**: rolling pre-releases install on their own, when no agent is in the middle of a turn.
+
+How you update on Stable: a bar across the top of the window says **Update available (v…) — restart?** with **Restart & Update** and **Later**. **Restart & Update** installs it and restarts VibeSquad. **Later** hides the bar for now. You can also open **About** and click **Check for updates** there. It shows **Checking…**, then **✓ Up to date (v…)**, or **⬇ Update to v…** when a newer version is found (click that to install). The first-launch and "Server Unreachable" screens have a **Check for Updates** button too. (Read from the v0.2.6 source, not run on a real update. On the Android app the same bar reads **Update available (v…) — download APK?** with a **Download Update** button, which opens the new APK download instead.)
 
 - **Change it when:** you want the newest fixes early and can live with the odd rough edge. Switch back to Stable if it gets annoying.
 - **Safe default:** Stable.
@@ -59,7 +61,7 @@ The fields:
 
 ## Token thresholds (squad editor)
 
-Below the profiles, each Squad has its own editor: ID, NAME, COLOR, then five token fields. They decide when VibeSquad warns you about a long chat and when it steps in. The defaults come from VibeSquad's source:
+On the **Team** tab, each Squad has its own editor: ID, NAME, COLOR, then five token fields. They decide when VibeSquad warns you about a long chat and when it steps in. The defaults come from VibeSquad's source:
 
 | Field | Default | What happens |
 | --- | --- | --- |
@@ -78,7 +80,7 @@ These are looser than this kit's ladder: aim for 100k, be out by 150k, never pas
 
 An amber **⚠ CONFIG WARNING** box appears at the top only when a config file can't be read, usually because of a typo in the JSON. The box says which file and what went wrong. Nothing shows when all is well.
 
-- **Change it when:** it appears. Fix the file it names, or restore a backup, then reopen Settings. (UNVERIFIED: which tab shows it; the source puts it in the Team settings.)
+- **Change it when:** it appears. Fix the file it names, or restore a backup, then reopen Settings. It appears on the **Team** tab (read from the source; UNVERIFIED on a real broken config).
 - **Safe default:** nothing to set. No box means no problem.
 
 ## Paseo

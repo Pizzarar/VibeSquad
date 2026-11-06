@@ -125,7 +125,7 @@ export async function runRemoveTeam(
   fx: RemoveEffects,
 ): Promise<RemoveResult> {
   const now = fx.now?.() ?? new Date();
-  for (const a of plan.agents) await fx.archive(a.id);
+  for (const a of plan.agents) await fx.archive(a.id).catch(() => {});
   await fx.saveTeams((cur) => patchLane(cur, pin.squad.id, pin.lane.id, { state: "removed", removedAt: now.toISOString() }));
 
   if (fx.readBrief && fx.writeBrief) {

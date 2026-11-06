@@ -4,7 +4,7 @@
 // FULL brings back the old plumbing view (agent cards, workers, handoff, folders, retired agents).
 import { AttentionBadge } from "./AttentionList";
 import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { client, DEMO, getPaseoState, sendMessage } from "./paseo";
+import { client, DEMO, getPaseoState, markAgentRead, sendMessage } from "./paseo";
 import { openContextMenu } from "./CommandPalette";
 import { demoTimeline } from "./demo";
 import { hasLooksDone, gridPinsForSquad, hubPinForSquad, isHubPin, liveBuddyDupes, looksDoneFor, LOOKS_DONE_MARKER, pinsForSquad, SEND_TO_MARKER, topicOfBrainstorm, withoutSpinOffFence, type Pin } from "./pins";
@@ -134,12 +134,30 @@ export function PinDot({ pin }: { pin: Pin }) {
   return <span className="signal closed" title="No session yet" />;
 }
 
+export async function markPinRead(pin: Pin): Promise<void> {
+  const members =
+    (pin.lane as { members?: Member[] }).members ??
+    ([pin.brainstorm, pin.lead, ...(pin.workers ?? []), ...(pin.topicBrainstorms ?? []), ...(pin.duplicateBrainstorms ?? [])].filter(
+      Boolean,
+    ) as Member[]);
+  await Promise.all(members.filter(countsAsNeedsYou).map((m) => markAgentRead(m.agent)));
+}
+
 export function NeedsBadge({ pin }: { pin: Pin }) {
   if (!pin.needsYou) return null;
   return (
-    <span className="badge alert pin-needs" title={`${pin.needsYou} need you`}>
+    <button
+      type="button"
+      className="badge alert pin-needs"
+      data-testid={`pin-needs-${pin.lane.id}`}
+      title={`${pin.needsYou} need you — click to mark read`}
+      onClick={(e) => {
+        e.stopPropagation();
+        void markPinRead(pin);
+      }}
+    >
       {pin.needsYou}
-    </span>
+    </button>
   );
 }
 
@@ -257,6 +275,7 @@ const PinRow = memo(function PinRow({ pin, dimmed, onPin }: { pin: Pin; dimmed?:
           <NeedsBadge pin={pin} />
           <PinCtx pin={pin} />
         </button>
+        {!isHubPin(pin) && <PinMenu pin={pin} onShowPlumbing={() => setFullView(true)} />}
       </div>
     </>
   );
@@ -405,6 +424,11 @@ export function useLooksDoneId(agentId: string | null): string | null {
   );
 }
 
+export function noteTimelineOffers(agentId: string, entries: TimelineEntry[]) {
+  setLooksDoneId(agentId, looksDoneIdFrom(agentId, entries));
+  noteSendTo(agentId, entries);
+}
+
 // Tail of the Brainstorm's timeline. Light version of the drawer's loader: small tail, debounced refetch.
 export function usePreview(agentId: string | null): Line[] {
   const [lines, setLines] = useState<Line[]>([]);
@@ -413,8 +437,7 @@ export function usePreview(agentId: string | null): Line[] {
     if (!agentId) return;
     const apply = (entries: TimelineEntry[]) => {
       setLines(linesFrom(entries));
-      setLooksDoneId(agentId, looksDoneIdFrom(agentId, entries));
-      noteSendTo(agentId, entries);
+      noteTimelineOffers(agentId, entries);
     };
     if (DEMO) {
       apply(demoTimeline(agentId));

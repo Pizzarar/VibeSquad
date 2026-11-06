@@ -13,7 +13,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import {
   LEAD_AUTO_HANDOFF_DEFAULT,
@@ -783,7 +783,8 @@ export function injectedPrefix(role: string, cwd: string, vibeMode = false, isHu
   return [EVERYONE_LAYER, rolePack(role, cwd, vibeMode, isHub)].filter(Boolean).join("\n\n");
 }
 
-export function inspectGitSpawnState(cwd: string): string | null {
+/** Async so the daemon event loop is never blocked: git runs in child processes, the common case needs one. */
+export async function inspectGitSpawnState(cwd: string): Promise<string | null> {
   if (!cwd) return null;
   let resolved = "";
   try {
@@ -793,45 +794,55 @@ export function inspectGitSpawnState(cwd: string): string | null {
     return null;
   }
 
-  const runGit = (args: string[]) => {
-    try {
-      return spawnSync("git", ["--no-optional-locks", ...args], {
-        cwd: resolved,
-        encoding: "utf8",
-        timeout: 3000,
-        windowsHide: true,
-      });
-    } catch {
-      return null;
+  const runGit = (args: string[]): Promise<string | null> =>
+    new Promise((resolve) => {
+      try {
+        execFile(
+          "git",
+          ["--no-optional-locks", ...args],
+          { cwd: resolved, encoding: "utf8", timeout: 3000, windowsHide: true },
+          (err, stdout) => resolve(err ? null : String(stdout ?? "")),
+        );
+      } catch {
+        resolve(null);
+      }
+    });
+
+  // One process in the common case: --branch carries head + upstream ahead/behind, the entries are the dirty count.
+  // (Windows pays ~250 ms of synchronous CreateProcess per spawn, so one spawn beats four parallel ones.)
+  const statusOut = await runGit(["status", "--porcelain=v2", "--branch", "-uno"]);
+  if (statusOut === null) return null;
+  let branch = "HEAD";
+  let upstreamAb: string | null = null;
+  let dirty = 0;
+  for (const line of statusOut.split(/\r?\n/)) {
+    if (line.startsWith("# branch.head ")) {
+      const head = line.slice("# branch.head ".length).trim();
+      branch = head && head !== "(detached)" ? head : "HEAD";
+    } else if (line.startsWith("# branch.ab ")) {
+      const m = /^# branch.ab \+(\d+) -(\d+)\s*$/.exec(line);
+      if (m) upstreamAb = `${m[2]} ${m[1]}`;
+    } else if (line.trim().length > 0 && !line.startsWith("#")) {
+      dirty++;
     }
-  };
+  }
 
-  const branchRes = runGit(["rev-parse", "--abbrev-ref", "HEAD"]);
-  if (!branchRes || branchRes.status !== 0) return null;
-  const branch = String(branchRes.stdout ?? "").trim() || "HEAD";
-
+  // No upstream: same fallback chain as before (origin/<branch>, then origin/HEAD), tried in parallel, first win kept.
+  let revOut = upstreamAb;
+  if (revOut === null) {
+    const [byBranch, byHead] = await Promise.all([
+      runGit(["rev-list", "--left-right", "--count", `origin/${branch}...HEAD`]),
+      runGit(["rev-list", "--left-right", "--count", "origin/HEAD...HEAD"]),
+    ]);
+    revOut = byBranch ?? byHead;
+  }
   let behind = 0;
   let ahead = 0;
-  let revRes = runGit(["rev-list", "--left-right", "--count", "@{u}...HEAD"]);
-  if (!revRes || revRes.status !== 0) {
-    revRes = runGit(["rev-list", "--left-right", "--count", `origin/${branch}...HEAD`]);
-  }
-  if (!revRes || revRes.status !== 0) {
-    revRes = runGit(["rev-list", "--left-right", "--count", "origin/HEAD...HEAD"]);
-  }
-  if (revRes && revRes.status === 0 && revRes.stdout) {
-    const [bRaw, aRaw] = String(revRes.stdout).trim().split(/\s+/);
+  if (revOut) {
+    const [bRaw, aRaw] = revOut.trim().split(/\s+/);
     behind = Number.isFinite(Number(bRaw)) ? Number(bRaw) : 0;
     ahead = Number.isFinite(Number(aRaw)) ? Number(aRaw) : 0;
   }
-
-  const statusRes = runGit(["status", "--porcelain", "-uno"]);
-  const dirty =
-    statusRes && statusRes.status === 0 && statusRes.stdout
-      ? String(statusRes.stdout)
-          .split(/\r?\n/)
-          .filter((l) => l.trim().length > 0).length
-      : 0;
 
   return `Starting git state (snapshot at spawn — re-check before commit/push/merge): branch=${branch}, origin=${behind} behind / ${ahead} ahead, dirty=${dirty} files.`;
 }
@@ -898,55 +909,25 @@ function daemonRefuseAgent(agentId: string): Promise<void> {
   });
 }
 
-/** cmd.exe splits on whitespace and treats `&|<>^` as syntax; quote such args for the shell. */
-export function quoteArg(value: string): string {
-  if (process.platform !== "win32" || !/[\s"&|<>^]/.test(value)) return value;
-  return `"${value.replace(/"/g, '\\"')}"`;
-}
-
 const AGENT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
-// cmd.exe still expands %VAR% and breaks out of quotes on `"`, so refuse those outright.
-const UNSAFE_SHELL_ARG = /[\r\n\0"%]/;
 
-function assertSafeCliArgs(agentId: string, args: string[]): void {
-  if (!AGENT_ID_RE.test(agentId)) throw new Error("invalid agent id");
-  if (process.platform === "win32" && args.some((a) => UNSAFE_SHELL_ARG.test(a))) throw new Error("refusing argument with shell metacharacters");
+// In-process daemon client (a websocket call, same updateAgent the `paseo agent update` CLI makes) instead of a
+// whole CLI process per label write (median 4 s, max 9 s).
+export function daemonSetLabels(agentId: string, labels: Labels, name?: string): Promise<void> {
+  if (!AGENT_ID_RE.test(agentId)) return Promise.reject(new Error("invalid agent id"));
+  return withDaemonClient((client) => client.updateAgent(agentId, { ...(name ? { name } : {}), labels }));
 }
 
-function cliSetLabels(agentId: string, labels: Labels, name?: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const args = ["agent", "update", agentId];
-    if (name) args.push("--name", name);
-    for (const [k, v] of Object.entries(labels)) args.push("--label", `${k}=${v}`);
-    try {
-      assertSafeCliArgs(agentId, args);
-    } catch (e) {
-      return reject(e);
-    }
-    const cli = process.env.PASEO_CLI || "paseo";
-    const child = spawn(cli, args.map(quoteArg), { stdio: "ignore", windowsHide: true, shell: process.platform === "win32" });
-    child.on("error", reject);
-    child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`paseo agent update exited ${code}`))));
-  });
-}
-
-function cliArchive(agentId: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    try {
-      assertSafeCliArgs(agentId, [agentId]);
-    } catch (e) {
-      return reject(e);
-    }
-    const cli = process.env.PASEO_CLI || "paseo";
-    const child = spawn(cli, ["agent", "archive", agentId].map(quoteArg), { stdio: "ignore", windowsHide: true, shell: process.platform === "win32" });
-    child.on("error", reject);
-    child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`paseo agent archive exited ${code}`))));
+export function daemonArchive(agentId: string): Promise<void> {
+  if (!AGENT_ID_RE.test(agentId)) return Promise.reject(new Error("invalid agent id"));
+  return withDaemonClient(async (client) => {
+    await client.archiveAgent(agentId);
   });
 }
 
 const DEFAULT_DEPS: Deps = {
-  setLabels: cliSetLabels,
-  archiveAgent: cliArchive,
+  setLabels: daemonSetLabels,
+  archiveAgent: daemonArchive,
   applyAgentSettings: daemonApplyAgentSettings,
   refuseAgent: daemonRefuseAgent,
   debounceMs: 3000,
@@ -1109,6 +1090,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     };
 
     const recentBeforeMismatches = new Map<string, number>();
+    const beforeConfiguredSpawns = new Map<string, number>();
 
     const logProfileMetric = (labels: Labels, cwd: string, text: string, refs: string[] = []) => {
       const where = teamOf(labels, cwd);
@@ -1134,10 +1116,10 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const profile = match.profile;
       const s: any = me ?? {};
       const actual = {
-        provider: s.provider ?? agent.provider,
-        model: s.model ?? null,
-        modeId: s.currentModeId ?? s.modeId ?? null,
-        thinkingOptionId: s.thinkingOptionId ?? null,
+        provider: s.provider ?? agent.provider ?? s.config?.provider,
+        model: s.model ?? agent.model ?? s.config?.model ?? null,
+        modeId: s.currentModeId ?? s.modeId ?? agent.currentModeId ?? agent.modeId ?? s.config?.modeId ?? null,
+        thinkingOptionId: s.thinkingOptionId ?? agent.thinkingOptionId ?? s.config?.thinkingOptionId ?? null,
       };
       const diffs = profileFieldDiffs(actual, profile);
       if (!diffs.length) return;
@@ -1165,6 +1147,19 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         log(`refusing ${agent.id}: profile ${profile.name} wants provider ${providerDiff.profile}, agent runs ${providerDiff.caller}`);
         await (deps.refuseAgent ?? deps.archiveAgent)(agent.id).catch((e) => log(`refuse failed for ${agent.id}: ${e}`));
         return "refused";
+      }
+      const now = Date.now();
+      for (const [k, ts] of beforeConfiguredSpawns) {
+        if (now - ts >= 30_000) beforeConfiguredSpawns.delete(k);
+      }
+      const spawnKey = `${agent.title ?? ""}::${cwd}`;
+      const configuredByBefore =
+        (agent.id && beforeConfiguredSpawns.has(agent.id)) || beforeConfiguredSpawns.has(spawnKey);
+      if (agent.id) beforeConfiguredSpawns.delete(agent.id);
+      beforeConfiguredSpawns.delete(spawnKey);
+      const isRunning = (s.status ?? agent.status) === "running" || (s.status ?? agent.status) === "initializing";
+      if (configuredByBefore || isRunning) {
+        return;
       }
       const patch: AgentSettingsPatch = {};
       for (const d of diffs) {
@@ -1201,6 +1196,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
       if (raw && typeof raw === "object") {
         if (Array.isArray(raw.providers)) return normalizeCappedProviders(raw.providers);
+        if (raw.capped && typeof raw.capped === "object" && !Array.isArray(raw.capped)) {
+          return normalizeCappedProviders(raw.capped);
+        }
         const out: Record<string, any> = {};
         for (const [k, v] of Object.entries(raw)) {
           const fam = normalizeProviderFamily(k);
@@ -1234,11 +1232,11 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     // ---- Hook 1: before agent.create ---------------------------------------
 
     stops.push(
-      server.before("agent.create", (ctx: { request: any }) => {
+      server.before("agent.create", async (ctx: { request: any }) => {
         const t0 = Date.now();
         const st = stepTimer() as StepTimer & { team?: string; lane?: string };
         try {
-          return beforeAgentCreate(ctx, st);
+          return await beforeAgentCreate(ctx, st);
         } finally {
           log(`spawn-timing hook=${Date.now() - t0}ms`);
           const text = `hook-timing hook=before.agent.create ${st.summary()}`;
@@ -1253,7 +1251,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         }
       }),
     );
-    const beforeAgentCreate = ({ request }: { request: any }, st: StepTimer & { team?: string; lane?: string }) => {
+    const beforeAgentCreate = async ({ request }: { request: any }, st: StepTimer & { team?: string; lane?: string }) => {
         const config: any = request.config ?? {};
         const env = (request as any).env as Record<string, string> | undefined;
         const rawReqLabels = ((request as any).labels ?? config?.labels) as Labels | undefined;
@@ -1464,6 +1462,12 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         st.mark("resolve-identity-labels");
         const keepCaller = Boolean(String(reqLabels["profile-override"] || env?.VS_PROFILE_OVERRIDE || "").trim());
         if (matchedProfile && profileMatch?.explicit && !keepCaller) {
+          const now = Date.now();
+          for (const [k, ts] of beforeConfiguredSpawns) {
+            if (now - ts >= 30_000) beforeConfiguredSpawns.delete(k);
+          }
+          beforeConfiguredSpawns.set(`${title}::${cwd}`, now);
+          if (reqAgentId) beforeConfiguredSpawns.set(reqAgentId, now);
           // An explicitly named profile wins over the caller's provider/model/mode/thinking.
           const diffs = profileFieldDiffs(config, matchedProfile);
           const want = splitProviderModel(matchedProfile.provider, matchedProfile.model);
@@ -1563,7 +1567,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         st.lane = explicitLane;
         const prefix = injectedPrefix(role, cwd, vibeMode, isHubBuddy);
         const profileNotes = isHubBuddy ? "" : dedupeNotesAgainst((matchedProfile?.notes ?? "").trim(), prefix);
-        const gitState = inspectGitSpawnState(cwd);
+        const gitState = await inspectGitSpawnState(cwd);
         st.mark("git-spawn-state");
         if (prefix && !sanitizedSysPrompt.includes(EVERYONE_LAYER)) {
           const existing = sanitizedSysPrompt.trim();
