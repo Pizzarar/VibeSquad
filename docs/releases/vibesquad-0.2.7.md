@@ -21,7 +21,7 @@ Android `gen/` was missing tauri's generated `TauriActivity.kt` in the fresh wor
 | VibeSquad.apk | `d8e9480d7f42827b78b4b30e7a84657f0d4d3981569451308564c091be07044e` |
 
 Updater `.sig` matches the signature in `latest.json` (windows-x86_64 + android-aarch64, version 0.2.7).
-Not checked: `apksigner verify --print-certs` (apksigner isn't on the SDK path here); Authenticode (not set up until D5).
+Installer signature verified cryptographically against the updater pubkey (minisign Ed25519, `scripts/release-audit.mjs` B7). Not checked: `apksigner verify --print-certs` (apksigner isn't on the SDK path here); Authenticode (not set up until D5).
 
 ## Audit (first run of `scripts/release-audit.mjs`, read-only, after the build)
 v0.2.7 goes out on the old flow (owner decision), so this is informational and not a gate.
@@ -43,7 +43,7 @@ v0.2.7 goes out on the old flow (owner decision), so this is informational and n
 - 64 px hand-drawn cast art
 
 ## Approval
-The owner approved shipping once green. Publishing from an agent was blocked by the permission classifier, so **the owner runs the publish**.
+The owner approved shipping once green. Publishing from an agent was blocked by the permission classifier; the owner ran the publish at 2026-11-06 04:23 UTC.
 
 ## Publish (owner)
 From the pinned worktree, so the right artifacts upload and the tag lands on the frozen commit (the old script creates the tag at the remote branch tip, which has moved):
@@ -57,4 +57,4 @@ node server\release.mjs --channel stable --skip-build
 The second command finds the release, sets its notes, uploads the 5 assets and syncs the rolling beta release.
 
 ## Release URL
-_pending_
+https://github.com/Pizzarar/VibeSquad/releases/tag/v0.2.7 (tag `v0.2.7` -> `66d01b5`; 5 assets, published installer and APK SHA-256s match the table above; published `latest.json` is version 0.2.7. Rolling beta synced to 0.2.7.)
