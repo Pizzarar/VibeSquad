@@ -16,7 +16,7 @@ import { PinMenu } from "./PinMenu";
 import { DoneRow, DoneShelf, LooksDoneCard, useDoneShelfOpen } from "./PinDone";
 import { countsAsNeedsYou, getBrainstormThresholds, isHubLane, saveTeams, type Member, type TeamView } from "./teams";
 import { ConfirmButton, StatusDot, usePaneClass } from "./ui";
-import { Avatar, NeonEmblem } from "./pixel";
+import { Avatar, TeamEmblem } from "./pixel";
 import { laneCodeOf, ordOf } from "./teams";
 import { laneCodeFor } from "./identity";
 import { cleanTitle } from "./ui";
@@ -708,7 +708,7 @@ function SquadTile({ v, onSelectSquad, onOpenPin, onOpenAgent }: { v: TeamView; 
       }}
     >
       <div className="squad-home-tile-head">
-        <NeonEmblem color={v.team.color} seed={v.team.id} size={28} />
+        <TeamEmblem name={v.team.name} color={v.team.color} size={28} />
         <span className="squad-home-tile-name">{v.team.name}</span>
         {v.needsYou > 0 && onOpenAgent ? (
           <AttentionBadge view={v} onOpen={(id) => onOpenAgent(v.team.id, id)} testId={`squad-home-needs-${v.team.id}`}>

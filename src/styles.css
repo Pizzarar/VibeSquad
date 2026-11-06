@@ -428,10 +428,17 @@ code {
   border: 1px solid var(--line);
 }
 
-.neon-emblem {
+.team-emblem {
   flex: none;
-  border: 1px solid var(--emblem-color, var(--cyan));
-  box-shadow: 0 0 6px rgba(0, 240, 255, 0.2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: inherit;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+  overflow: hidden;
+  user-select: none;
 }
 
 /* Raw-Token Context Meter */

@@ -91,7 +91,7 @@ import { DaemonStatusBanner, DiagnosticsModal, HelpModal, checkForUpdates, updat
 import { BriefEditorHost } from "./BriefEditor";
 import { TeamFeed } from "./TeamFeed";
 import { HandoffModal } from "./HandoffModal";
-import { Avatar, NeonEmblem, TokenMeter, providerSpec } from "./pixel";
+import { Avatar, TeamEmblem, TokenMeter, providerSpec } from "./pixel";
 import { playAlertChime } from "./notifications";
 import { claimAlert, usePaseoAttention } from "./paseoAttention";
 import { SettingsHome, requestSettingsTarget } from "./SettingsHome";
@@ -267,7 +267,7 @@ const SidebarTeam = memo(function SidebarTeam({
           >
             {expanded ? "▾" : "▸"}
           </span>
-          <NeonEmblem color={v.team.color} seed={v.team.id} size={18} />
+          <TeamEmblem name={v.team.name} color={v.team.color} size={18} />
           <span className="team-name"><TeamNameEdit team={v.team} /></span>
           {v.running > 0 && <span className="badge">{v.running}▶</span>}
         </button>
@@ -338,7 +338,7 @@ const Sidebar = memo(function Sidebar(props: {
   return (
     <nav className={`sidebar ${props.sidebarCollapsed ? "collapsed" : ""}`} data-testid="sidebar">
       <div className="brand">
-        <NeonEmblem color="#00f0ff" seed="vibesquad-brand" size={22} />
+        <img src="/vibesquad-192.png" width={22} height={22} alt="" style={{ borderRadius: 5, flex: "none" }} />
         <div className="brand-text">
           <span>VIBESQUAD</span>
           <span className="brand-sub">NEON-NOIR // 198X</span>
@@ -822,7 +822,7 @@ const LiveFolders = memo(
         <h2>Live folders</h2>
         {worktrees.map(([cwd, n]) => (
           <div key={cwd} className="wt" title={cwd}>
-            <NeonEmblem color="#64748b" seed={cwd} size={14} /> <code>{shortPath(cwd)}</code>{" "}
+            <TeamEmblem name={shortPath(cwd)} color="#64748b" size={14} /> <code>{shortPath(cwd)}</code>{" "}
             <span className="muted small">{cwd}</span> <span className="badge">{n}</span>
           </div>
         ))}
@@ -1028,7 +1028,7 @@ const TeamPage = memo(function TeamPage(props: {
       <div className="team-body">
         <header className="team-header">
           <h1>
-            <NeonEmblem color={view.team.color} seed={view.team.id} size={32} />
+            <TeamEmblem name={view.team.name} color={view.team.color} size={32} />
             <TeamNameEdit team={view.team} />
             <span className="h1-stats">
               {teamCount} TEAMS · <span className={view.needsYou > 0 ? "stat-alert" : ""}>{view.needsYou} NEED YOU</span>
@@ -1063,7 +1063,7 @@ const TeamPage = memo(function TeamPage(props: {
     <div className="team-body">
       <header className="team-header">
         <h1>
-          <NeonEmblem color={view.team.color} seed={view.team.id} size={32} />
+          <TeamEmblem name={view.team.name} color={view.team.color} size={32} />
           <TeamNameEdit team={view.team} />
           <span className="h1-stats">
             <span className="stat-cyan">{view.running} WORKING</span> ·{" "}
