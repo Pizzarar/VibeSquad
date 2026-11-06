@@ -6,7 +6,7 @@ import { createAcpAdapter, acpProviderIds, PROVIDER_ALIASES } from './adapters/a
 import { LogStore } from './log.mjs';
 
 // squad/team/lane/role/ord/profile are plain meta fields, first-class on the agent record.
-const META_FIELDS = ['squad', 'team', 'lane', 'role', 'ord', 'profile', 'title', 'permissionMode', 'acpMode', 'labels'];
+const META_FIELDS = ['squad', 'team', 'lane', 'role', 'ord', 'profile', 'title', 'permissionMode', 'acpMode', 'thinkingOptionId', 'featureValues', 'labels'];
 
 // Values that reach a CLI as an argument must never look like a flag.
 export function validateCreate({ model, cwd, meta = {} }) {

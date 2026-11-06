@@ -2,12 +2,15 @@
 // squad/team/lane/role/ord/profile are first-class fields on the runner record; this class maps them (and the
 // runner's event log) back into the shapes callers already read from PaseoBackend/DaemonClient.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { RunnerClient, runnerHome } from "./runner-client.mjs";
 import { joinTarget, joinInto, canExtendThought } from "../reply-coalesce.mjs";
 import { refreshWhosHere } from "../whos-here.mjs";
 import { runnerLanes } from "./lane-routing.mjs";
+import { createRunnerHookHost } from "./runner-hooks.mjs";
+import { PROVIDER_ALIASES } from "../../runner/adapters/acp.mjs";
 
 const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 // Log event types that change the roster row (everything else is timeline-only).
@@ -52,8 +55,10 @@ export function toAgent(rec) {
     title: meta.title || rec.id,
     status: STATUS[rec.status] ?? "idle",
     labels,
+    ...(labels["vs.parent"] ? { parentAgentId: labels["vs.parent"] } : {}),
     modeId: meta.permissionMode ?? meta.acpMode ?? (rec.provider === "claude" ? "auto" : null),
-    thinkingOptionId: null,
+    thinkingOptionId: meta.thinkingOptionId ?? null,
+    ...(meta.featureValues ? { featureValues: meta.featureValues } : {}),
     requiresAttention: (rec.pendingPermissions ?? []).length > 0,
     pendingPermissions: (rec.pendingPermissions ?? []).map((p) => ({ id: p.id, toolName: p.toolName ?? null })),
     ...usageFields(rec.usage),
@@ -70,11 +75,11 @@ export function toAgent(rec) {
  * Synchronous, read-only view of a runner agent straight from its JSONL log (<runner home>/agents/<id>.jsonl).
  * For callers that cannot await the HTTP API (vs log identity, vs who). Returns the toAgent() snapshot or null.
  */
-export function readRunnerAgentSync(id, { env = process.env } = {}) {
+export function readRunnerAgentSync(id, { env = process.env, home } = {}) {
   if (!isRunnerId(id) || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) return null;
   let text;
   try {
-    text = fs.readFileSync(path.join(runnerHome(env), "agents", `${id}.jsonl`), "utf8");
+    text = fs.readFileSync(path.join(home ?? runnerHome(env), "agents", `${id}.jsonl`), "utf8");
   } catch {
     return null;
   }
@@ -183,19 +188,114 @@ async function injectedPrefix(role, cwd) {
   }
 }
 
+/**
+ * Advance one agent's turn state by one runner log event (pure, no I/O); returns the lifecycle event it caused, if any.
+ * A prompt (`input`) marks a turn live even before the adapter's first `running` (an ACP adapter failing in initialize /
+ * session-new errors in that window while its log status is still unknown), and an error/exit there is a failed turn.
+ */
+export function reduceTurn(t, e) {
+  const inTurn = t.status === "running" || t.status === "initializing" || !!t.awaiting;
+  if (e.type === "input") { t.awaiting = true; return null; }
+  if (e.type === "error") { if (inTurn) { t.errored = true; t.error = e.message; } return null; }
+  if (e.type === "cancel") { if (inTurn) t.cancelled = true; return null; }
+  if (e.type === "status" && e.status) {
+    const wasRunning = t.status === "running";
+    t.status = STATUS[e.status] ?? e.status;
+    if (t.status === "running") {
+      t.errored = false; // next turn began
+      t.error = undefined;
+      t.cancelled = false;
+      return wasRunning ? null : { kind: "turn_started" };
+    }
+    if (inTurn && t.status === "idle") {
+      t.awaiting = false;
+      const outcome = t.errored ? { kind: "failed", error: { message: String(t.error ?? "turn failed") } } : t.cancelled ? { kind: "cancelled" } : { kind: "completed" };
+      return { kind: "turn_ended", turnId: String(e.seq), outcome };
+    }
+    return null;
+  }
+  if (e.type === "exit") {
+    t.status = "closed";
+    t.awaiting = false;
+    if (inTurn && (e.error || (e.code ?? 0) !== 0)) t.errored = true; // died mid-turn
+    return inTurn ? { kind: "turn_ended", turnId: String(e.seq), outcome: { kind: "failed", error: { message: String(e.error ?? `agent exited (code ${e.code ?? "?"})`) } } } : null;
+  }
+  return null;
+}
+
+/** Never silent: hooks that cannot load mean unlayered runner spawns / dead lifecycle. Say so on stderr and in the team log. */
+export function logHooksUnavailable(err) {
+  const msg = `runner hooks unavailable (${process.version}): ${err?.message ?? err}`;
+  console.error(`[vibesquad] ${msg}`);
+  try {
+    const base = path.resolve(process.env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad"), "teams", "_unassigned");
+    fs.mkdirSync(base, { recursive: true });
+    fs.appendFileSync(path.join(base, "log.jsonl"), JSON.stringify({ ts: new Date().toISOString(), agent: "runner", lane: "unassigned", type: "metric", text: msg.slice(0, 240), refs: [] }) + "\n");
+  } catch {
+    /* the stderr line above is the fallback */
+  }
+}
+
+/**
+ * Baseline for one agent log without parsing the whole file: read from the tail until a turn boundary (created / status idle / exit),
+ * then fold the events after it. Returns { seq, t, archived }.
+ */
+function scanTail(file) {
+  const fd = fs.openSync(file, "r");
+  try {
+    const size = fs.fstatSync(fd).size;
+    for (let want = 64 * 1024; ; want *= 4) {
+      const len = Math.min(size, want);
+      const buf = Buffer.alloc(len);
+      fs.readSync(fd, buf, 0, len, size - len);
+      let lines = buf.toString("utf8").split("\n");
+      if (len < size) lines = lines.slice(1); // first line is cut
+      const evs = [];
+      for (const line of lines) {
+        if (!line) continue;
+        try { evs.push(JSON.parse(line)); } catch { /* partial last line */ }
+      }
+      let b = -1;
+      for (let i = evs.length - 1; i >= 0; i--) {
+        const e = evs[i];
+        if (e.type === "created" || e.type === "exit" || (e.type === "status" && e.status === "idle")) { b = i; break; }
+      }
+      if ((b < 0 || b < 8) && len < size) continue; // boundary (and the few events before it, where an archive may sit) not in this window: read more
+      const last = evs[evs.length - 1];
+      const seq = last?.seq ?? -1;
+      // Runner.archive appends `archive` and then the killed child's exit / error / idle, so it is rarely the last event.
+      const archived = evs.some((e) => e.type === "archive");
+      if (b < 0) return { seq, t: null, archived };
+      const e0 = evs[b];
+      const t = { status: e0.type === "created" ? "initializing" : e0.type === "exit" ? "closed" : "idle", errored: false };
+      for (let i = b + 1; i < evs.length; i++) reduceTurn(t, evs[i]);
+      return { seq, t, archived };
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 /** Shown status of a tracked agent: "error" while an errored turn has not been followed by a new one. */
 const viewStatus = (t) => (t.errored && t.status !== "running" ? "error" : t.status);
 
 const ENSURE_COOLDOWN_MS = 30_000;
 
 export class RunnerBackend {
-  constructor({ client = new RunnerClient(), buildPrefix = injectedPrefix, whosHere = refreshWhosHere, rootDir = REPO_ROOT, lanes = runnerLanes } = {}) {
+  /**
+   * `hooks`: the lifecycle hook host (server/backend/runner-hooks.mjs). Default: built lazily on the first createAgent (no
+   * watcher), unless the caller injected its own `buildPrefix` (tests) or passed `hooks: false`. startRunnerLifecycle() attaches
+   * the server's watcher-enabled host with attachHooks().
+   */
+  constructor({ client = new RunnerClient(), buildPrefix = injectedPrefix, whosHere = refreshWhosHere, rootDir = REPO_ROOT, lanes = runnerLanes, hooks } = {}) {
+    const hooksOff = hooks === false || (hooks === undefined && buildPrefix !== injectedPrefix);
+    Object.defineProperty(this, "hooksState", { value: { host: hooks && hooks !== true ? hooks : null, pending: null, off: hooksOff } });
     Object.defineProperty(this, "rc", { value: client });
     Object.defineProperty(this, "buildPrefix", { value: buildPrefix });
     Object.defineProperty(this, "whosHere", { value: whosHere });
     Object.defineProperty(this, "rootDir", { value: rootDir });
     Object.defineProperty(this, "listeners", { value: new Set() });
-    Object.defineProperty(this, "live", { value: { stream: null, chain: Promise.resolve(), turn: new Map(), gen: 0 } });
+    Object.defineProperty(this, "live", { value: { stream: null, chain: Promise.resolve(), turn: new Map(), gen: 0, hwm: null, known: new Map(), archived: new Set() } });
     // Paseo-side agents of the same lanes, set by the RoutingBackend so a Who's here refresh sees the whole lane.
     Object.defineProperty(this, "siblings", { value: { list: null } });
     Object.defineProperty(this, "lanes", { value: lanes });
@@ -223,7 +323,33 @@ export class RunnerBackend {
 
   async createAgent({ config = {}, initialPrompt, prompt, labels = {}, env = {} } = {}) {
     await this.rc.ensureRunning();
+    // before("agent.create"): the plugin's prompt layering + spawn guard, in-process so every spawn path (UI, MCP, vs CLI) gets it.
+    config = { ...config };
+    if (PROVIDER_ALIASES[config.provider]) config.provider = PROVIDER_ALIASES[config.provider]; // the plugin's antigravity-cli guard keys on the canonical id
+    const host = await this.hookHost();
+    if (host) {
+      const request = {
+        config: { ...config },
+        env: { ...env },
+        prompt: initialPrompt || prompt || undefined,
+        ...(Object.keys(labels).length ? { labels: { ...labels } } : {}),
+      };
+      let hookFailed = false;
+      const out = await host.before("agent.create", { request }).catch((err) => {
+        hookFailed = true;
+        console.warn(`[vibesquad] runner spawn hook failed: ${err}`);
+        return undefined;
+      });
+      const next = out ?? request;
+      config = next.config ?? config;
+      env = next.env ?? env;
+      labels = next.labels ?? labels;
+      // Tell agent.created (another process: the VS server) that this spawn already had its profile enforced here.
+      if (!hookFailed) labels = { ...labels, "vs.spawn-configured": "1" };
+    }
     const meta = { title: config.title, labels: {} };
+    if (config.thinkingOptionId) meta.thinkingOptionId = String(config.thinkingOptionId);
+    if (config.featureValues && typeof config.featureValues === "object") meta.featureValues = config.featureValues;
     for (const k of FIRST_CLASS) {
       const v = labels[k] ?? (ENV_FOR[k] ? env[ENV_FOR[k]] : undefined);
       if (v !== undefined && v !== "") meta[k] = v;
@@ -234,7 +360,7 @@ export class RunnerBackend {
       if (config.provider === "claude") { if (CLAUDE_PERMISSION_MODES.has(config.modeId)) meta.permissionMode = config.modeId; }
       else meta.acpMode = config.modeId;
     }
-    const prefix = await this.buildPrefix(meta.role || "", config.cwd);
+    const prefix = host ? "" : await this.buildPrefix(meta.role || "", config.cwd);
     const systemPrompt = [prefix, config.systemPrompt].filter(Boolean).join("\n\n") || undefined;
     const { id } = await this.rc.request("POST", "/agents", {
       provider: config.provider,
@@ -247,6 +373,39 @@ export class RunnerBackend {
     const agent = (await this.fetchAgent(id)).agent;
     await this.refreshLaneWhosHere(agent.labels?.lane);
     return agent;
+  }
+
+  /** The lifecycle host for this backend, or null when hooks are off. Built once, lazily (no wakeup watcher). */
+  hookHost() {
+    const st = this.hooksState;
+    if (st.host || st.off) return Promise.resolve(st.host);
+    st.pending ??= createRunnerHookHost(this).then(
+      (host) => (st.host = host),
+      (err) => {
+        logHooksUnavailable(err);
+        st.off = true;
+        return null;
+      },
+    );
+    return st.pending;
+  }
+
+  /** Install the (watcher-enabled) host the VS server runs; replaces a lazily built one. Returns it. */
+  async attachHooks({ startWatcher = true, deps } = {}) {
+    const st = this.hooksState;
+    const old = st.host ?? (await st.pending?.catch(() => null));
+    old?.dispose?.();
+    st.off = false;
+    st.pending = null;
+    st.host = await createRunnerHookHost(this, { startWatcher, deps });
+    return st.host;
+  }
+
+  detachHooks() {
+    const st = this.hooksState;
+    st.host?.dispose?.();
+    st.host = null;
+    st.pending = null;
   }
 
   /** Keep the lane brief's "Who's here" current, like the Paseo plugin does on spawn. Best effort. */
@@ -317,8 +476,14 @@ export class RunnerBackend {
     return (await this.fetchAgents(opts)).entries.map((e) => e.agent);
   }
 
-  /** opts: { images: [{ data (base64), mimeType }], activeTurnBehavior: 'steer' (default) | 'interrupt' }. */
+  /** opts: { senderId (calling agent, for the retired-lead redirect), images: [{ data (base64), mimeType }], activeTurnBehavior: 'steer' (default) | 'interrupt' }. */
   async sendAgentPrompt(id, text, opts = {}) {
+    // An agent (opts.senderId) writing to a retired Lead/Buddy is redirected to the live one (plugin handleSendAgentPrompt).
+    if (opts.senderId) {
+      const host = await this.hookHost();
+      const res = host ? await host.before("send_agent_prompt", { agentId: id, senderAgentId: opts.senderId, prompt: text }).catch(() => undefined) : undefined;
+      if (res?.redirected) return;
+    }
     const body = { text };
     if (opts.images?.length) body.images = opts.images;
     if (opts.activeTurnBehavior) body.activeTurnBehavior = opts.activeTurnBehavior;
@@ -392,6 +557,8 @@ export class RunnerBackend {
    *   { kind: 'status', agentId, from, to, agent }    e.g. running -> idle | error
    *   { kind: 'permission', agentId, request }
    *   { kind: 'timeline', agentId, seq, type }        a timeline entry was appended
+   *   { kind: 'created' | 'turn_started', agentId, agent }
+   *   { kind: 'turn_ended', agentId, agent, turnId, outcome }   outcome: { kind: 'completed' | 'cancelled' } | { kind: 'failed', error: { message } }
    * Returns the unsubscribe.
    */
   subscribeEvents(listener) {
@@ -449,17 +616,78 @@ export class RunnerBackend {
   /** On (re)connect: remember every agent's status (so the first transition after it is detected) and publish the full roster. */
   async seedRoster(gen) {
     let agents;
-    try { agents = await this.listAgents(); } catch { agents = null; }
+    let recs = null;
+    try {
+      if (this.live.hwm) {
+        recs = await this.fetchRecs();
+        agents = recs.filter((r) => !r.archivedAt).map((r) => toAgent(r));
+      } else agents = await this.listAgents();
+    } catch { agents = null; }
     if (gen !== this.live.gen) return;
     if (!agents) return this.emitEvent({ kind: "disconnected" });
-    const next = new Map();
-    for (const a of agents) {
-      const prev = this.live.turn.get(a.id);
-      next.set(a.id, { status: a.status, errored: !!prev?.errored && a.status !== "running" });
-    }
-    this.live.turn = next;
+    // Lifecycle mode keeps turn state purely from the events it has consumed (baseline scan + replay): never re-seeded from tail-of-log status.
+    if (!this.live.hwm) {
+      const next = new Map();
+      for (const a of agents) {
+        const prev = this.live.turn.get(a.id);
+        next.set(a.id, { status: a.status, errored: !!prev?.errored && a.status !== "running" });
+      }
+      this.live.turn = next;
+    } else for (const a of agents) this.live.known.set(a.id, a);
     this.emitEvent({ kind: "roster", agents: agents.map((a) => this.overlay(a)) });
     this.emitEvent({ kind: "connected" });
+    if (recs) await this.catchUp(gen, recs);
+  }
+
+  /** Raw runner records, skipping agents the baseline saw archived (their logs are never read again). */
+  async fetchRecs() {
+    const { ids } = await this.rc.request("GET", "/agents");
+    const skip = this.live.archived;
+    const recs = await Promise.all(ids.filter((id) => !skip.has(id)).map((id) => this.rc.request("GET", `/agents/${encodeURIComponent(id)}`).catch(() => null)));
+    return recs.filter(Boolean);
+  }
+
+  /**
+   * Lifecycle catch-up (server process only). A tail scan of every agent's log gives its turn state and high-water mark (history is
+   * never replayed, so a server restart does not re-fire digests, handoffs or wakeups); from then on each event is handled once
+   * (live or replayed) and every (re)connect of the event stream replays what was appended while it was not connected (the
+   * cold-start race: the runner boots and the first agent's created / input / status events land before /events connects).
+   * Turn state survives reconnects: it only ever advances by consuming events.
+   */
+  enableCatchUp() {
+    const hwm = new Map();
+    const turn = new Map();
+    const archived = new Set();
+    const dir = path.join(this.rc.home, "agents");
+    try {
+      for (const f of fs.readdirSync(dir)) {
+        if (!f.endsWith(".jsonl")) continue;
+        const id = f.slice(0, -6);
+        let r;
+        try { r = scanTail(path.join(dir, f)); } catch { continue; }
+        hwm.set(id, r.seq);
+        if (r.archived) archived.add(id);
+        else if (r.t) turn.set(id, r.t);
+      }
+    } catch { /* no runner dir yet: every agent is new */ }
+    this.live.hwm = hwm;
+    this.live.turn = turn;
+    this.live.archived = archived;
+    this.live.known = new Map();
+  }
+
+  /** Replay events newer than the high-water mark, agents in creation order (new agents replay from seq 0). */
+  async catchUp(gen, recs) {
+    const hwm = this.live.hwm;
+    if (!hwm) return;
+    const todo = recs.filter((r) => r.lastSeq > (hwm.get(r.id) ?? -1)).sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0) || (a.id < b.id ? -1 : 1));
+    for (const rec of todo) {
+      if (gen !== this.live.gen) return;
+      const id = rec.id;
+      let events;
+      try { ({ events } = await this.rc.request("GET", `/agents/${encodeURIComponent(id)}/timeline?after=${(hwm.get(id) ?? -1) + 1}`)); } catch { continue; }
+      for (const event of events) await this.handleLogEvent({ id, event }, gen);
+    }
   }
 
   /**
@@ -468,35 +696,81 @@ export class RunnerBackend {
    */
   async handleLogEvent({ id, event: e }, gen = this.live.gen) {
     if (!id || !e) return;
+    const hwm = this.live.hwm;
+    if (hwm) {
+      if (e.seq <= (hwm.get(id) ?? -1)) return; // already handled (replayed at connect, or history before startup)
+      hwm.set(id, e.seq);
+    }
     this.emitEvent({ kind: "timeline", agentId: id, seq: e.seq, type: e.type });
     const t0 = this.live.turn.get(id);
     const from = t0 && viewStatus(t0);
-    // An error during a turn sticks as the agent's status until the next turn starts (what push pages on, once).
-    if (e.type === "error") { if (t0?.status === "running") t0.errored = true; return; }
-    if (!ROSTER_EVENTS.has(e.type)) return;
+    // Archive is terminal. The killed child's exit / error / idle land AFTER the archive event: they must not resurrect the roster
+    // row, but they may still close a turn that was open when the agent was archived (once).
+    if (this.live.archived.has(id) && e.type !== "archive") {
+      const closing = t0 ? reduceTurn(t0, e) : null;
+      if (closing) {
+        this.live.turn.delete(id);
+        this.emitEvent({ ...closing, agentId: id, agent: await this.snapshotFor(id, e) });
+      }
+      return;
+    }
+    if (!ROSTER_EVENTS.has(e.type)) {
+      if (t0) reduceTurn(t0, e); // input / error / cancel only move turn state
+      return;
+    }
     if (e.type === "archive") {
-      this.live.turn.delete(id);
+      this.live.archived.add(id);
+      if (t0 && !(t0.status === "running" || t0.status === "initializing" || t0.awaiting)) this.live.turn.delete(id); // an open turn is kept until its exit closes it
       this.emitEvent({ kind: "remove", agentId: id });
       return;
     }
-    let agent;
-    try { agent = (await this.fetchAgent(id)).agent; } catch { return; } // runner restarting: the next event resyncs
-    if (gen !== this.live.gen) return;
-    const t = t0 ?? { status: agent.status, errored: false };
-    if (e.type === "status" && e.status) {
-      t.status = STATUS[e.status] ?? e.status;
-      if (t.status === "running") t.errored = false; // next turn began
-    } else if (e.type === "exit") {
-      t.status = "closed";
-      if (from === "running" && (e.error || (e.code ?? 0) !== 0)) t.errored = true; // died mid-turn
+    // A new agent is seeded from its own "created" event, never from a fetch (which already shows later log state), so its
+    // first status event is seen as the transition it is. Turn state advances before the fetch so a failed fetch loses nothing.
+    let t = e.type === "created" ? { status: "initializing", errored: false } : t0;
+    let lifecycle = null;
+    if (t) {
+      lifecycle = reduceTurn(t, e);
+      this.live.turn.set(id, t);
     }
-    this.live.turn.set(id, t);
+    let agent;
+    try {
+      agent = (await this.fetchAgent(id)).agent;
+      if (hwm) this.live.known.set(id, agent);
+    } catch {
+      // Runner hiccup. In lifecycle mode this event's seq is already consumed, so the transition must still be emitted: with the
+      // best snapshot we have (never a label-less one if any source knows the labels). Elsewhere the next event resyncs.
+      if (!hwm) return;
+      agent = await this.snapshotFor(id, e);
+    }
+    if (gen !== this.live.gen) return;
+    if (!t) {
+      t = { status: agent.status, errored: false };
+      lifecycle = reduceTurn(t, e);
+      this.live.turn.set(id, t);
+    }
     const to = viewStatus(t);
     const shown = { ...agent, status: to };
     this.emitEvent({ kind: "agent", agent: shown });
+    if (e.type === "created") this.emitEvent({ kind: "created", agentId: id, agent: shown });
+    if (lifecycle) this.emitEvent({ ...lifecycle, agentId: id, agent: shown });
     if (from !== undefined && from !== to) this.emitEvent({ kind: "status", agentId: id, from, to, agent: shown });
     if (e.type === "permission" && e.phase === "request") this.emitEvent({ kind: "permission", agentId: id, request: { id: e.id, toolName: e.toolName } });
     if (e.type === "exit") await this.refreshLaneWhosHere(agent.labels?.lane);
+  }
+
+  /** Best available snapshot when the roster fetch failed: last known, else the log itself, else one built from the created event (cached). */
+  async snapshotFor(id, e) {
+    const known = this.live.known.get(id);
+    if (known) return known;
+    try {
+      const fresh = (await this.fetchAgent(id)).agent;
+      this.live.known.set(id, fresh);
+      return fresh;
+    } catch { /* fall through */ }
+    let agent = readRunnerAgentSync(id, { home: this.rc.home });
+    if (!agent && e?.type === "created") agent = toAgent({ id, provider: e.provider, model: e.model, cwd: e.cwd, meta: e.meta, status: "starting", createdAt: e.ts, updatedAt: e.ts });
+    if (agent) this.live.known.set(id, agent);
+    return agent ?? { id, title: id, labels: { backend: "runner" }, status: "idle", backend: "runner" };
   }
 
   /** AgentBackend.subscribe shape (what server/push.mjs reads): agent_update / agent_permission_request / agent_deleted. */

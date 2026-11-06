@@ -238,11 +238,11 @@ export function matchStoredProfile(
   const rawHint = (profileHint ?? "").trim();
   const mappedHint = LEGACY_ALIASES[rawHint] || rawHint;
   if (mappedHint) {
-    const exact = list.find((p) => p.name === mappedHint || p.name.toLowerCase() === mappedHint.toLowerCase());
+    const exact = list.find((p) => p.name === mappedHint || p.name.toLowerCase() === mappedHint.toLowerCase() || (p.id && p.id === mappedHint));
     if (exact) return { profile: exact, explicit: true };
     if (!customProfilesPassed && !process.env.VIBESQUAD_PROFILES_PATH) {
       const fallback = (DEFAULT_PACK_PROFILES as any[]).find(
-        (p) => p.name === mappedHint || p.name.toLowerCase() === mappedHint.toLowerCase(),
+        (p) => p.name === mappedHint || p.name.toLowerCase() === mappedHint.toLowerCase() || (p.id && p.id === mappedHint),
       );
       if (fallback) return { profile: { ...fallback, role: deriveRole(fallback.name, fallback.role) }, explicit: true };
     }
@@ -959,7 +959,8 @@ interface AgentSnap {
 }
 
 function log(message: string) {
-  console.log(`[vibesquad] ${message}`);
+  // The runner hook host (server/backend/runner-hooks.mjs) runs inside MCP stdio servers, where stdout is the protocol channel.
+  (process.env.VS_PLUGIN_LOG === "stderr" ? console.error : console.log)(`[vibesquad] ${message}`);
 }
 
 export function createPlugin(overrides: Partial<Deps> = {}) {
@@ -1078,9 +1079,13 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
     };
 
-    const labelsFor = async (paseo: Paseo, agent: { id: string; title: string | null }) => {
+    const labelsFor = async (paseo: Paseo, agent: { id: string; title: string | null; labels?: Labels }) => {
       const s = await snap(paseo, agent.id);
-      return { snap: s, labels: s?.labels ?? {} };
+      if (s) return { snap: s, labels: s.labels ?? {}, fromPayload: false };
+      // The refresh failed (daemon / runner hiccup): the event payload still carries the agent's own labels. Using {} here would
+      // read a lead as a worker and let the label writes below downgrade it.
+      const p = agent as any;
+      return { snap: p?.labels ? ({ ...p, labels: p.labels } as AgentSnap) : null, labels: (p?.labels ?? {}) as Labels, fromPayload: true };
     };
 
     const teamOf = (labels: Labels, cwd?: string): { team: string; lane: string } | null => {
@@ -1137,7 +1142,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         return true;
       };
       if (String(labels["profile-override"] ?? "").trim()) {
-        for (const d of diffs.filter((x) => x.caller && fresh(x))) {
+        for (const d of diffs.filter((x) => x.caller && fresh(x) && labels["vs.spawn-configured"] !== "1")) {
           logProfileMetric(labels, cwd, profileOverrideMetric(name, profile.name, d, "kept=caller"), refs);
         }
         return;
@@ -1155,6 +1160,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
       const spawnKey = `${agent.title ?? ""}::${cwd}`;
       const configuredByBefore =
+        labels["vs.spawn-configured"] === "1" || // runner spawns: before() ran in the caller's process, so the maps below are empty here
         (agent.id && beforeConfiguredSpawns.has(agent.id)) || beforeConfiguredSpawns.has(spawnKey);
       if (agent.id) beforeConfiguredSpawns.delete(agent.id);
       beforeConfiguredSpawns.delete(spawnKey);
@@ -1694,8 +1700,14 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         let timedTeam = "";
         let timedLane = "";
         try {
-          const { snap: me, labels } = await labelsFor(paseo, agent);
+          const { snap: me, labels, fromPayload } = await labelsFor(paseo, agent);
           st.mark("labels-for");
+          if (fromPayload && Object.keys(labels).length === 0) {
+            log(`agent.created for ${agent?.id}: no labels from the refresh or the payload; skipping label writes`);
+            return;
+          }
+          // Runner spawns: before(agent.create) already logged these metrics in the caller's process (the dedupe maps are not shared).
+          const beforeRan = labels["vs.spawn-configured"] === "1";
           // Never let a wrong-provider agent go on to retire a predecessor or count as a dispatch.
           if ((await enforceProfileAfterSpawn(agent, me, labels)) === "refused") return;
           st.mark("enforce-profile");
@@ -1735,7 +1747,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             if (resolved.teamMismatch) {
               const mismatchKey = `mismatch:${resolved.callerTeam}->${resolved.teamId}:${resolved.laneId}`;
               const prevTs = recentBeforeMismatches.get(mismatchKey);
-              if (prevTs && Date.now() - prevTs < 2000) {
+              if (beforeRan || (prevTs && Date.now() - prevTs < 2000)) {
                 recentBeforeMismatches.delete(mismatchKey);
               } else {
                 appendLog(resolved.teamId, {
@@ -1750,7 +1762,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             if (resolved.autofixedFromCwd && !resolved.callerLane) {
               const autofixKey = `autofix:${resolved.callerLane}->${resolved.laneId}:${agentCwd}`;
               const prevTs = recentBeforeMismatches.get(autofixKey);
-              if (prevTs && Date.now() - prevTs < 2000) {
+              if (beforeRan || (prevTs && Date.now() - prevTs < 2000)) {
                 recentBeforeMismatches.delete(autofixKey);
               } else {
                 appendLog(resolved.teamId, {
@@ -1765,7 +1777,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             if (resolved.usedTeamFallback) {
               const fbKey = `fallback:${resolved.teamId}:${resolved.laneId}`;
               const prevTs = recentBeforeMismatches.get(fbKey);
-              if (prevTs && Date.now() - prevTs < 2000) {
+              if (beforeRan || (prevTs && Date.now() - prevTs < 2000)) {
                 recentBeforeMismatches.delete(fbKey);
               } else {
                 appendLog(resolved.teamId, {
@@ -1782,7 +1794,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             if (!labels.role) want.role = spawnRoleLabel(resolved.role);
             const orphanKey = `orphan:${resolved.callerLane}:${resolved.callerTeam}:${agentCwd}`;
             const prevTs = recentBeforeMismatches.get(orphanKey);
-            if (prevTs && Date.now() - prevTs < 2000) {
+            if (beforeRan || (prevTs && Date.now() - prevTs < 2000)) {
               recentBeforeMismatches.delete(orphanKey);
             } else {
               appendLog(UNASSIGNED_TEAM_ID, {
@@ -2034,12 +2046,32 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const { team, lane } = where;
       const prompt = [
         `You are a digest agent. Inspect the final result of worker agent ${worker.id} ("${worker.title ?? ""}"):`,
-        `run \`paseo inspect ${worker.id}\` / read its last assistant message and any report it names. Do not modify files.`,
+        String(worker.id).startsWith("rn-")
+          ? `run \`vs status ${worker.id}\` (its last assistant message) and read any report it names. Do not modify files.`
+          : `run \`paseo inspect ${worker.id}\` / read its last assistant message and any report it names. Do not modify files.`,
         `Then run exactly once:`,
         `vs log done "<PASS|FAIL>: <1-line summary, max 200 chars>" --digest --ref ${worker.id}`,
         `Use FAIL if the worker reported errors, failing tests, or did not finish. If its report states neither PASS nor FAIL, log nothing. Then stop.`,
       ].join("\n");
 
+      const startedAt = Date.now();
+      /** A [done] entry for this worker written since the digest started (by the digest agent). */
+      const verdictLogged = () => {
+        try {
+          const lines = fs.readFileSync(logPath(teamIdOf(team, currentTeams())), "utf8").split(/\r?\n/).slice(-200);
+          return lines.some((l) => {
+            if (!l.trim()) return false;
+            try {
+              const e = JSON.parse(l) as LogEntry;
+              return e.type === "done" && (e.refs ?? []).includes(worker.id) && Date.parse(e.ts) >= startedAt - 1000;
+            } catch {
+              return false;
+            }
+          });
+        } catch {
+          return false;
+        }
+      };
       const fallback = async (why: string) => {
         const last = await lastAssistantText(paseo, worker.id);
         if (!statesVerdict(last)) return;
@@ -2079,6 +2111,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             if (res && res.status && res.status !== "idle" && res.status !== "completed" && res.status !== "finished") {
               return fallback("failed");
             }
+            // The digest ended its turn without logging a verdict (it errored in-turn or skipped the command).
+            if (!verdictLogged()) return fallback("logged nothing");
           })
           .catch(() => fallback("errored"));
       } catch (err) {
@@ -2207,6 +2241,12 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         .map((e) => ({ ...e.agent, labels: e.agent.labels ?? {} }) as AgentSnap)
         .filter((a) => a.id !== newId && !a.archivedAt && !a.internal && a.status !== "closed")
         .filter((a) => !isRetiredAgent(a))
+        // Only agents created before the new one are its predecessors (a replayed `created` must not retire a later sibling).
+        .filter((a) => {
+          const mine = Date.parse((newSnap as any)?.createdAt ?? "");
+          const theirs = Date.parse((a as any).createdAt ?? "");
+          return !Number.isFinite(mine) || !Number.isFinite(theirs) || theirs <= mine;
+        })
         .filter((a) => sameLaneRole(a, { role, team, lane, topic }, currentTeams()));
       for (const old of others) {
         if (role === "lead" && (old.id === handoffFrom || handoffCoordinator.hasPendingTakeover(newId))) {

@@ -38,6 +38,8 @@ import { installVsShim } from "../cli/vs.mjs";
 import { requestLocalLoginUrl } from "./local-token.mjs";
 import { startPushWatcher } from "./push.mjs";
 import { sharedRunnerBackend } from "./backend/index.mjs";
+import { runnerLanes } from "./backend/lane-routing.mjs";
+import { startRunnerLifecycle } from "./backend/runner-lifecycle.mjs";
 import { ensurePaseoDaemon } from "./first-run.mjs";
 import { checkDaemonListenExposure } from "./paseo-control.mjs";
 import { logServerStart } from "./server-start.mjs";
@@ -583,6 +585,11 @@ if (isMain) {
       }
     };
     applyLanListeners(lanEnabled);
+    // Plugin-hook parity for runner agents (prompt layering lives in createAgent; this feeds created / turn events + lead wakeups).
+    // First, so its baseline + subscription exist before the push watcher opens the shared runner event stream.
+    if (process.env.VS_RUNNER_HOOKS !== "0" && runnerLanes().size) {
+      startRunnerLifecycle().catch((err) => console.warn("runner lifecycle hooks not started:", err?.message ?? err));
+    }
     startPushWatcher(rootDir);
 
     if (wantOpen) void openBrowser(servedOpenUrl());

@@ -786,7 +786,12 @@ function collectAgents() {
 }
 
 function resolveCallerUsage(identity) {
-  if (!identity.agentId || isRunnerId(identity.agentId)) return null;
+  if (!identity.agentId) return null;
+  if (isRunnerId(identity.agentId)) {
+    const u = readRunnerAgentSync(identity.agentId)?.lastUsage;
+    if (!u) return null;
+    return { input: Number(u.inputTokens ?? 0), output: Number(u.outputTokens ?? 0), cached: 0 };
+  }
   const out = runPaseo(["inspect", identity.agentId, "--json"]);
   if (!out) return null;
   try {
@@ -2144,13 +2149,17 @@ function vsImportClosure(repoRoot) {
     let text;
     try { text = fs.readFileSync(path.join(repoRoot, rel), "utf8"); } catch { return; }
     seen.add(rel);
-    for (const m of text.matchAll(/(?:from\s+|import\(\s*)["'](\.{1,2}\/[^"']+\.(?:mjs|js|cjs))["']/g)) {
+    for (const m of text.matchAll(/(?:from\s+|import\(\s*)["'](\.{1,2}\/[^"']+\.(?:mjs|js|cjs|ts))["']/g)) {
       walk(path.posix.normalize(path.posix.join(path.posix.dirname(rel), m[1])));
     }
+    // The plugin imports the server package by name: @vibesquad/server/x.mjs -> server/x.mjs.
+    for (const m of text.matchAll(/(?:from\s+|import\(\s*)["']@vibesquad\/server\/([^"']+\.(?:mjs|js|cjs|ts))["']/g)) walk(path.posix.join("server", m[1]));
   };
   walk("cli/vs.mjs");
   // The MCP server is spawned by path (not imported) and loads these lazily.
   for (const entry of ["server/mcp/server.mjs", "server/backend/index.mjs"]) walk(entry);
+  // server/backend/runner-hooks.mjs imports the plugin (a .ts file, run by Node's built-in type stripping) lazily.
+  if (seen.has("plugin/index.server.ts")) seen.add("plugin/package.json");
   return [...seen];
 }
 
