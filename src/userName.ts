@@ -227,6 +227,18 @@ export async function loadUserName(): Promise<void> {
   } catch {}
 }
 
+/** Surface a refused/failed POST /__vibesquad/settings in the config-warnings banner (replaced by the next successful response). */
+async function reportSettingsSaveFailure(r: Response | null, err?: unknown): Promise<void> {
+  let msg = err ? String((err as any)?.message ?? err) : `HTTP ${r?.status}`;
+  if (r) {
+    try {
+      const data = await r.json();
+      if (data && typeof data.error === "string") msg = data.error;
+    } catch {}
+  }
+  setServerConfigWarnings([{ file: "settings.json", label: "Settings not saved", error: msg, kind: "save" }]);
+}
+
 /** Update live, then persist. */
 export async function saveUserName(name: string): Promise<void> {
   setUserName(name);
@@ -239,11 +251,14 @@ export async function saveUserName(name: string): Promise<void> {
     if (r.ok) {
       const data = await r.json();
       setServerConfigWarnings(data.configWarnings);
-    }
-  } catch {}
+    } else await reportSettingsSaveFailure(r);
+  } catch (e) {
+    await reportSettingsSaveFailure(null, e);
+  }
 }
 
 export async function saveLanEnabled(enabled: boolean): Promise<{ lanEnabled: boolean; exposedIps: string[] }> {
+  const prevLan = getLanEnabled();
   setLanExposureState(enabled);
   try {
     const r = await fetch("/__vibesquad/settings", {
@@ -259,11 +274,17 @@ export async function saveLanEnabled(enabled: boolean): Promise<{ lanEnabled: bo
       setServerConfigWarnings(data.configWarnings);
       return { lanEnabled: nextLan, exposedIps: nextIps };
     }
-  } catch {}
+    setLanExposureState(prevLan, getExposedIps());
+    await reportSettingsSaveFailure(r);
+  } catch (e) {
+    setLanExposureState(prevLan, getExposedIps());
+    await reportSettingsSaveFailure(null, e);
+  }
   return { lanEnabled: getLanEnabled(), exposedIps: getExposedIps() };
 }
 
 export async function saveRemoteEnabled(enabled: boolean): Promise<boolean> {
+  const prevRemote = getRemoteEnabled();
   setRemoteEnabledState(enabled);
   try {
     const r = await fetch("/__vibesquad/settings", {
@@ -278,7 +299,12 @@ export async function saveRemoteEnabled(enabled: boolean): Promise<boolean> {
       setServerConfigWarnings(data.configWarnings);
       return next;
     }
-  } catch {}
+    setRemoteEnabledState(prevRemote);
+    await reportSettingsSaveFailure(r);
+  } catch (e) {
+    setRemoteEnabledState(prevRemote);
+    await reportSettingsSaveFailure(null, e);
+  }
   return getRemoteEnabled();
 }
 

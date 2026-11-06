@@ -627,6 +627,7 @@ async function handleSettings(req, res) {
     });
   }
   if (req.method === "POST" || req.method === "PUT") {
+   try {
     const body = await readCleanBody(req);
     const patch = {};
     if (body && "userName" in body) patch.userName = body.userName;
@@ -661,6 +662,11 @@ async function handleSettings(req, res) {
       exposedIps: exposure.exposedIps,
       ...(warnings.length ? { configWarnings: warnings } : {}),
     });
+   } catch (e) {
+    // A refused save (unreadable settings.json) is a conflict the owner must fix; anything else is a server fault.
+    const status = e?.code === "SETTINGS_UNREADABLE" ? 409 : e?.status === 413 ? 413 : 500;
+    return sendJson(res, status, { ok: false, error: String(e?.message ?? e) });
+   }
   }
   return sendJson(res, 405, { error: "method not allowed" });
 }
@@ -1616,7 +1622,9 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
         return startManagedPaseoInstall(opts.firstRun).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { error: String(e?.message ?? e) }));
       case "/__vibesquad/settings":
-        return handleSettings(req, res);
+        return handleSettings(req, res).catch((e) => {
+          if (!res.headersSent) sendJson(res, 500, { ok: false, error: String(e?.message ?? e) });
+        });
       case "/__vibesquad/log":
         return handleLog(req, res);
       case "/__vibesquad/attach":

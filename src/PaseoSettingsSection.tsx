@@ -642,11 +642,20 @@ export function PaseoSettingsSection({
 
   const toggleSettingFlag = async (field: "keepPaseoRunningOnQuit" | "startPaseoWithVibeSquad", value: boolean) => {
     try {
-      await fetch("/__vibesquad/settings", {
+      const r = await fetch("/__vibesquad/settings", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ [field]: value }),
       });
+      if (!r.ok) {
+        let msg = `HTTP ${r.status}`;
+        try {
+          const data = await r.json();
+          if (data && typeof data.error === "string") msg = data.error;
+        } catch {}
+        setErrorMsg(msg);
+        return;
+      }
       setStatus((prev) => (prev ? { ...prev, [field]: value } : prev));
     } catch (e) {
       setErrorMsg(String(e));

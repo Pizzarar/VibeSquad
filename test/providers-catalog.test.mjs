@@ -196,3 +196,59 @@ test('isGatedRead gates providers ?refresh=1 for non-owners', async () => {
   assert.equal(isGatedRead('/__vibesquad/providers/models', '/__vibesquad/providers/models?provider=claude&refresh=1'), true);
   assert.equal(isGatedRead('/__vibesquad/providers', '/__vibesquad/providers'), false);
 });
+
+test('writeSettingsAtomic: unique tmp per call, retries EPERM/EACCES/EBUSY, cleans tmp on final failure', async () => {
+  const { writeSettingsAtomic } = await import('../server/user-settings.mjs');
+  const home = tmp();
+  const file = path.join(home, 'settings.json');
+  const seen = [];
+  const spy = (a, b) => { seen.push(a); fs.renameSync(a, b); };
+  writeSettingsAtomic(file, { n: 1 }, { renameImpl: spy });
+  writeSettingsAtomic(file, { n: 2 }, { renameImpl: spy });
+  assert.equal(seen.length, 2);
+  assert.notEqual(seen[0], seen[1], 'tmp names differ even within the same millisecond');
+  // transient EPERM then success
+  let calls = 0;
+  const naps = [];
+  const flaky = (a, b) => { if (++calls < 3) throw Object.assign(new Error('busy'), { code: calls === 1 ? 'EPERM' : 'EBUSY' }); fs.renameSync(a, b); };
+  writeSettingsAtomic(file, { n: 3 }, { renameImpl: flaky, sleepImpl: (ms) => naps.push(ms) });
+  assert.equal(calls, 3);
+  assert.equal(naps.length, 2);
+  assert.ok(naps[1] > naps[0], 'backoff grows');
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).n, 3);
+  // persistent failure: gives up, no tmp left, original intact
+  const always = () => { throw Object.assign(new Error('locked'), { code: 'EACCES' }); };
+  assert.throws(() => writeSettingsAtomic(file, { n: 4 }, { renameImpl: always, sleepImpl: () => {}, retries: 2 }), /locked/);
+  assert.deepEqual(fs.readdirSync(home), ['settings.json']);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).n, 3);
+  // non-retryable code throws immediately
+  let n2 = 0;
+  assert.throws(() => writeSettingsAtomic(file, {}, { renameImpl: () => { n2++; throw Object.assign(new Error('x'), { code: 'ENOENT' }); }, sleepImpl: () => {} }));
+  assert.equal(n2, 1);
+});
+
+test('settings: non-object JSON counts as unreadable; saves merge into the raw object', () => {
+  const home = tmp();
+  const file = path.join(home, 'settings.json');
+  for (const body of ['[]', 'null', '123', '"s"']) {
+    fs.writeFileSync(file, body);
+    assert.ok(loadUserSettings(home).parseError, `${body} reports parseError`);
+    assert.throws(() => saveUserSettings({ userName: 'Q' }, home), (e) => e.code === 'SETTINGS_UNREADABLE');
+    assert.throws(() => saveRemoteAccess(true, home), /refusing to save/);
+    assert.equal(fs.readFileSync(file, 'utf8'), body, 'file untouched');
+  }
+  fs.writeFileSync(file, JSON.stringify({ custom: { keep: 1 }, runner: { providers: { claude: { models: ['a'] } } }, remote: { enabled: true, extra: 1 }, pushEvents: { finished: false } }));
+  const saved = saveUserSettings({ userName: 'Zed', lanEnabled: true }, home);
+  assert.equal(saved.userName, 'Zed');
+  assert.equal(saved.custom, undefined, 'unknown keys are not exposed in the returned view');
+  let raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(raw.custom, { keep: 1 });
+  assert.deepEqual(raw.runner.providers.claude.models, ['a']);
+  assert.deepEqual(raw.remote, { enabled: true, extra: 1 });
+  assert.deepEqual(raw.pushEvents, { finished: false });
+  saveRemoteAccess(false, home);
+  raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(raw.custom, { keep: 1 });
+  assert.equal(raw.userName, 'Zed');
+  assert.deepEqual(raw.remote, { enabled: false });
+});
