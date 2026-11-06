@@ -19,7 +19,7 @@ function openStream(req, res) {
   res.setHeader("x-accel-buffering", "no");
   res.flushHeaders?.();
   const send = (event, data) => res.write(`${event ? `event: ${event}\n` : ""}data: ${JSON.stringify(data)}\n\n`);
-  const ping = setInterval(() => res.write(": ping\n\n"), 20_000);
+  const ping = setInterval(() => { if (!res.writableEnded) res.write(": ping\n\n"); }, 20_000);
   ping.unref?.();
   return { send, close: () => clearInterval(ping) };
 }
@@ -40,13 +40,16 @@ export async function handleTerminalsApi(req, res, { readBody, sendJson, resolve
       return real;
     };
     const stream = (subscribe) => {
-      const s = openStream(req, res);
+      // The 200 + ping timer only start once subscribe() has accepted the id, so an unknown id is a plain 404.
+      let s;
       let off = () => {};
-      const end = () => { off(); s.close(); };
+      const open = () => (s ??= openStream(req, res));
+      const end = () => { off(); s?.close(); };
       off = subscribe({
-        onData: (d) => s.send("", { d }),
-        onExit: (e) => { s.send("exit", e); end(); res.end(); },
+        onData: (d) => open().send("", { d }),
+        onExit: (e) => { open().send("exit", e); end(); res.end(); },
       });
+      open();
       req.on("close", end);
     };
 

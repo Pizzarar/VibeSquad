@@ -7,7 +7,7 @@ export function killTree(pid, { sync = false } = {}) {
   if (process.platform === "win32") {
     const args = ["/PID", String(pid), "/T", "/F"];
     if (sync) {
-      try { spawnSync("taskkill", args, { windowsHide: true, stdio: "ignore" }); } catch {}
+      try { spawnSync("taskkill", args, { windowsHide: true, stdio: "ignore", timeout: 5000 }); } catch {}
     } else {
       try { spawn("taskkill", args, { windowsHide: true, stdio: "ignore" }).on("error", () => {}).unref(); } catch {}
     }

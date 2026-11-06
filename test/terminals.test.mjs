@@ -269,3 +269,17 @@ test("terminal: piped fallback treats CRLF as one newline", async () => {
     assert.ok(!m.output(t.id).includes("got:\r") && !/got:\s*\n/.test(m.output(t.id).replace(/got:(one|two)/g, "")));
   } finally { m.killAll(); rmq(dir); }
 });
+
+test("api: streaming an unknown terminal or script is a real 404 and leaves no ping timer", async () => {
+  await withApi(async ({ base, root }) => {
+    const timers = () => process.getActiveResourcesInfo().filter((r) => r === "Timeout").length;
+    const before = timers();
+    const r1 = await fetch(`${base}/terminals/tm-000000000000/stream`);
+    assert.equal(r1.status, 404);
+    assert.match(r1.headers.get("content-type"), /json/);
+    const r2 = await fetch(`${base}/workspace-scripts/logs?stream=1&cwd=${encodeURIComponent(root)}&name=nope`);
+    assert.equal(r2.status, 404);
+    await r2.text();
+    assert.ok(timers() <= before, "no leaked interval");
+  });
+});
