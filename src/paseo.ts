@@ -2,7 +2,7 @@ import { createPaseoApi, type PaseoAgent, type PaseoClient, type PaseoWorkspace 
 import { applyLabelsOptimistic } from "./attentionItems";
 import { clearUnreadLocal, dismissLocal, markUnreadLocal, subscribeAttentionLocal } from "./attentionLocal";
 import { clearWorkspaceIfQuiet } from "./paseoAttention";
-import { fetchRunnerStatus, getRunnerStatus, isRunnerId, isRunnerLane, runnerArchive, runnerCancel, runnerSend, runnerSpawn, runnerUpdate, runnerStatusLoaded, startRunnerBridge } from "./runnerBridge";
+import { fetchRunnerStatus, getRunnerStatus, isRunnerId, isRunnerLane, runnerArchive, runnerCancel, runnerSend, runnerSpawn, runnerUpdate, runnerStatusLoaded, startRunnerBridge, onRunnerStatusChange } from "./runnerBridge";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { spawnEnvFor } from "./spawn-env";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
@@ -31,6 +31,8 @@ export type ConnStatus = "connecting" | "connected" | "disconnected";
 
 type State = {
   conn: ConnStatus;
+  /** The VS runner's event stream (what blocking UI keys off); Paseo's own conn never blocks. */
+  runnerConn: "unknown" | "up" | "down";
   status: "connecting" | "connected" | "disconnected" | "error";
   error?: string;
   authFailureReason: "password_required" | "incorrect_password" | null;
@@ -45,6 +47,7 @@ type State = {
 
 let state: State = {
   conn: "connecting",
+  runnerConn: "unknown",
   status: "connecting",
   authFailureReason: null,
   agents: new Map(),
@@ -702,6 +705,7 @@ export async function attachFiles(cwd: string, files: string[]): Promise<string[
 
 // Runner-backed lanes (inert unless one is switched): mirror the runner roster into the store.
 if (!DEMO && typeof window !== "undefined") {
+  onRunnerStatusChange(() => set({}));
   startRunnerBridge(
     (agents, archivedIds) => {
       const live = new Set(agents.map((a) => a.id));
@@ -715,6 +719,7 @@ if (!DEMO && typeof window !== "undefined") {
     (up) => {
       // The VS server's own stream is a connection: with the Paseo websocket down (or absent) the UI is still live.
       if (up && state.conn !== "connected") set({ rosterLoaded: true });
+      set({ runnerConn: up ? "up" : "down" });
       link.onRunnerConnection(up);
     },
   );

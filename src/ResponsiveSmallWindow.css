@@ -35,3 +35,4 @@
   html { font-size: 125%; }
   .drawer, .panes-area { min-width: 0; width: 100%; max-width: none; }
 }
+.daemon-status-pill { position: fixed; top: 6px; left: 50%; transform: translateX(-50%); z-index: 9400; padding: 2px 10px; font-size: 11px; border-radius: 999px; background: var(--panel); color: inherit; border: 1px solid #ff4d6a; cursor: pointer; }
