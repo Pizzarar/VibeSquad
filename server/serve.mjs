@@ -1,4 +1,5 @@
 import { createServer, get } from "node:http";
+import { guardHandler, installUncaughtGuard } from "./safe-handler.mjs";
 import { createServer as createHttpsServer } from "node:https";
 import { connect, createServer as createTcpServer } from "node:net";
 import { createReadStream, existsSync, statSync } from "node:fs";
@@ -295,7 +296,8 @@ function renderMissingDistHtml() {
 const api = createVibesquadMiddleware(rootDir);
 
 function handle(req, res) {
-  api(req, res, () => {
+  // Return the promise so guardHandler sees async rejections and answers 500.
+  return api(req, res, () => {
     if (req.method !== "GET" && req.method !== "HEAD") {
       res.statusCode = 405;
       res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
@@ -448,8 +450,8 @@ export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().mes
     return handle(req, res);
   };
 
-  const meshHttpServer = createServer(handleMeshnetHttp);
-  const httpsServer = createHttpsServer(tls, handleMeshnetHttps);
+  const meshHttpServer = createServer(guardHandler(handleMeshnetHttp));
+  const httpsServer = createHttpsServer(tls, guardHandler(handleMeshnetHttps));
   httpsServer.on("upgrade", (req, socket, head) => {
     if (!req.url?.startsWith("/ws")) {
       socket.destroy();
@@ -488,7 +490,7 @@ if (wantOpen && (await isListening())) {
   process.exit(0);
 }
 
-export const server = createServer(handle);
+export const server = createServer(guardHandler(handle));
 server.on("upgrade", (req, socket, head) => {
   if (!req.url?.startsWith("/ws")) return socket.destroy();
   // Cross-site WebSocket hijacking: a browser page can open ws://127.0.0.1 with any Origin. The daemon
@@ -543,6 +545,7 @@ if (isMain) {
     console.warn("Could not restrict ~/.vibesquad to the current user:", err?.message ?? err);
   }
   getLocalToken();
+  installUncaughtGuard();
   server.listen(port, "127.0.0.1", () => {
     console.log(`VibeSquad serving ${distDir} on ${url}`);
     logServerStart({ rootDir });
