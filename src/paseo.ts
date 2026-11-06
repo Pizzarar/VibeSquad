@@ -31,6 +31,8 @@ export type ConnStatus = "connecting" | "connected" | "disconnected";
 
 type State = {
   conn: ConnStatus;
+  /** The VS runner's event stream (what blocking UI keys off); Paseo's own conn never blocks. */
+  runnerConn: "unknown" | "up" | "down";
   status: "connecting" | "connected" | "disconnected" | "error";
   error?: string;
   authFailureReason: "password_required" | "incorrect_password" | null;
@@ -45,6 +47,7 @@ type State = {
 
 let state: State = {
   conn: "connecting",
+  runnerConn: "unknown",
   status: "connecting",
   authFailureReason: null,
   agents: new Map(),
@@ -715,6 +718,7 @@ if (!DEMO && typeof window !== "undefined") {
     (up) => {
       // The VS server's own stream is a connection: with the Paseo websocket down (or absent) the UI is still live.
       if (up && state.conn !== "connected") set({ rosterLoaded: true });
+      set({ runnerConn: up ? "up" : "down" });
       link.onRunnerConnection(up);
     },
   );

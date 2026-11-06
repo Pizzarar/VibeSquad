@@ -2,6 +2,8 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Modal } from "./TeamActions";
 import { daemonClient, reconnectWithDaemonPassword, usePaseo } from "./paseo";
 import { submitDaemonPassword } from "./paseoDaemonAuth";
+import { decideOverlay, usesPaseoBackend } from "./daemonOverlay";
+import { getRunnerStatus } from "./runnerBridge";
 import { clearSession, isAndroidUserAgent, isLocalHost, isRemote } from "./remoteSession";
 import { getStaleBuild, loadUpdaterStatus, setStaleBuild, triggerUpdateInstall, useStaleBuild, useUpdaterStatus } from "./userName";
 import "./ResponsiveSmallWindow.css";
@@ -84,7 +86,7 @@ export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
   onOpenPaseoSettings?: () => void;
   onRePair?: () => void;
 }) {
-  const { conn, status, error, authFailureReason } = usePaseo();
+  const { conn, status, error, authFailureReason, runnerConn, agents } = usePaseo();
   const updaterStatus = useUpdaterStatus();
   const [updateChecking, setUpdateChecking] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -92,14 +94,22 @@ export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
   const [pw, setPw] = useState("");
   const [unlockBusy, setUnlockBusy] = useState(false);
   const [unlockErr, setUnlockErr] = useState<string | null>(null);
-  const down = conn !== "connected" && status !== "connected";
+  const paseoDown = conn !== "connected" && status !== "connected";
+  const kind = decideOverlay({
+    remote: isRemote(),
+    runnerConn,
+    paseoDown,
+    authFailureReason,
+    usesPaseo: usesPaseoBackend(getRunnerStatus(), agents.keys()),
+  });
+  const down = kind !== "none";
 
   useEffect(() => {
     if (!down) {
       setVisible(false);
       return;
     }
-    if (authFailureReason) {
+    if (authFailureReason && kind === "scrim") {
       setVisible(true);
       return;
     }
@@ -108,7 +118,7 @@ export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
       if (shouldShowDisconnectOverlay("disconnected", since, Date.now())) setVisible(true);
     }, DISCONNECT_DEBOUNCE_MS);
     return () => clearTimeout(t);
-  }, [down, authFailureReason]);
+  }, [down, kind, authFailureReason]);
 
   const inFlight = useRef(false);
   const retry = useCallback(async () => {
@@ -133,6 +143,14 @@ export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
   }, []);
 
   if (!down || !visible) return null;
+  if (kind === "runner-notice") {
+    // Non-blocking: a corner pill, no scrim, nothing underneath is covered or disabled.
+    return (
+      <div className="runner-disconnect-notice" data-testid="runner-disconnect-notice" role="status">
+        VS runner disconnected · reconnecting
+      </div>
+    );
+  }
   const onRetryNow = () => {
     void retry();
   };

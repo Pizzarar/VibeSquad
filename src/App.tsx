@@ -1,5 +1,7 @@
 import { FIRST_RUN_DONE_KEY, FirstRunModal, fetchFirstRunStatus, type FirstRunStatus } from "./FirstRunModal";
 import { clearSession, isAndroidUserAgent, isRemote } from "./remoteSession";
+import { statusDot, usesPaseoBackend } from "./daemonOverlay";
+import { getRunnerStatus } from "./runnerBridge";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { ProviderQuotaView } from "./antigravity";
@@ -294,6 +296,7 @@ const Sidebar = memo(function Sidebar(props: {
   views: TeamView[];
   teamId: string;
   conn: string;
+  connTitle: string;
   collapsedTeams: Set<string>;
   onTeamHeaderClick: (id: string) => void;
   onToggleTeamExpand: (id: string) => void;
@@ -343,7 +346,7 @@ const Sidebar = memo(function Sidebar(props: {
           <span>VIBESQUAD</span>
           <span className="brand-sub">NEON-NOIR // 198X</span>
         </div>
-        <span className={`conn ${props.conn}`} title={`daemon: ${props.conn}`} />
+        <span className={`conn ${props.conn}`} title={props.connTitle} />
         {props.lanExposed && (
           <span className="lan-status-dot badge warn" data-testid="lan-status-dot" title={`Exposed on LAN: ${(props.lanIps ?? []).join(", ")}`}>LAN</span>
         )}
@@ -1406,7 +1409,8 @@ function AboutLicensesModal({ onClose, onChecklist }: { onClose: () => void; onC
 }
 
 export function App() {
-  const { conn, archivedAgents, workspaces, providerUsage, agents, rosterLoaded } = usePaseo();
+  const { conn, runnerConn, archivedAgents, workspaces, providerUsage, agents, rosterLoaded } = usePaseo();
+  const dot = statusDot({ remote: isRemote(), usesPaseo: usesPaseoBackend(getRunnerStatus(), agents.keys()), paseoConn: conn, runnerConn });
   const teamsVersion = useTeams();
   const { members, views } = derived();
   const full = useFullView();
@@ -1919,7 +1923,8 @@ export function App() {
         <Sidebar
           views={sidebarViews}
           teamId={view?.team.id ?? ""}
-          conn={conn}
+          conn={dot.conn}
+          connTitle={dot.title}
           collapsedTeams={collapsedTeams}
           onTeamHeaderClick={onTeamHeaderClick}
           onToggleTeamExpand={onToggleTeamExpand}
