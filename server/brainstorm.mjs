@@ -663,7 +663,10 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
           await backend?.updateAgent?.(existing.id, { labels: existing.labels })?.catch?.(() => {});
         }
         // Reopen a closed Buddy (daemon restart unloads every session) from its saved session.
-        const reopened = existing.status === "closed" && connected && typeof backend?.refreshAgent === "function";
+        // RoutingBackend exposes every per-id method and silently no-ops a Paseo id the client can't serve, so ask the side
+        // that actually owns this id (Paseo for uuids, the runner for rn- ids) whether it can refresh.
+        const refreshOwner = backend?.paseo && backend?.runner ? (String(existing.id).startsWith("rn-") ? backend.runner : backend.paseo) : backend;
+        const reopened = existing.status === "closed" && connected && typeof refreshOwner?.refreshAgent === "function";
         let reopenedAgent = null;
         let reopenFailed = existing.status === "closed" && !reopened; // nothing here can reopen it
         if (reopened) {
