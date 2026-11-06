@@ -10,7 +10,8 @@ import {
 } from "./brainstorm.mjs";
 import { effectiveAgentRole, formatDisplayTitle, isDigestAgent, isRetiredAgent, laneCodeFor, ordOf } from "./identity.mjs";
 import { listDaemonAgents } from "./detach-children.mjs";
-import { getBackend } from "./backend/index.mjs";
+import { getBackend, isRunnerId } from "./backend/index.mjs";
+import { sharedSchedules } from "./schedules.mjs";
 // Re-exported: the HTTP handoff used `backend.listAgents`, which DaemonClient lacks, so workers were never re-pointed.
 export { listDaemonAgents };
 import { LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE, readJsonFileWithBom } from "./user-settings.mjs";
@@ -1019,6 +1020,10 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
         return null;
       },
       async deleteHeartbeat(agentId) {
+        if (isRunnerId(agentId)) {
+          try { (await sharedSchedules()).deleteHeartbeat(agentId); } catch {} // runner lanes: heartbeats live in the VS store
+          return;
+        }
         if (connected && client && typeof backend.deleteHeartbeat === "function") {
           await backend.deleteHeartbeat(agentId).catch(() => {});
         }
