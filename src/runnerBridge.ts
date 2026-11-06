@@ -63,6 +63,10 @@ export function runnerHandle(id: string) {
 
 export const runnerFetchTimeline = (id: string, opts: { limit?: number; cursor?: { seq: number }; direction?: string }) => {
   const q = new URLSearchParams({ limit: String(opts.limit ?? 60) });
+  if (opts.direction === "before" && opts.cursor) {
+    q.set("direction", "before");
+    q.set("cursor", String(opts.cursor.seq));
+  }
   return call<TimelineResult>(`/agents/${id}/timeline?${q}`);
 };
 

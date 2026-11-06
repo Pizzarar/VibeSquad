@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { defaultSpawnConfigFor } from "../src/antigravity.ts";
-import { filterEntries, latestReasoningIndex, mergeLiveItem, reasoningText } from "../src/timelineFilter.ts";
+import { coalesceReplies, filterEntries, joinPages, latestReasoningIndex, markTurnBoundary, mergeLiveItem, reasoningText } from "../src/timelineFilter.ts";
 
 const base = [{ item: { type: "user_message", text: "hi" }, seqStart: 0 }];
 
@@ -84,130 +84,93 @@ test("deltas append, with or without a (shared) messageId", () => {
   assert.equal(c[1].item.text, "abcdab");
 });
 
-test("live text -> thought -> text stays one assistant message", () => {
-  let e = apply(base, ev({ type: "assistant_message", text: "Hello " }, 1));
-  e = apply(e, ev({ type: "reasoning", text: "hmm" }, 2));
-  e = apply(e, ev({ type: "assistant_message", text: "world" }, 3));
-  const said = e.filter((x) => x.item.type === "assistant_message");
-  assert.equal(said.length, 1);
-  assert.equal(said[0].item.text, "Hello world");
-  assert.equal(filterEntries(e, "all").length, e.length);
+const summary = (e) => e.map((x) => `${x.item.type}:${x.item.text ?? ""}`);
+const strictlyIncreasing = (e) => e.every((x, i) => i === 0 || x.seqStart > e[i - 1].seqStart);
+
+test("live text -> thought -> text is one reply; rows never move and seqStart stays unique", () => {
+  const loaded = [{ item: { type: "user_message", text: "hi" }, seqStart: 0 }, { item: { type: "assistant_message", text: "Hello " }, seqStart: 10, seqEnd: 10 }];
+  let e = apply(loaded, ev({ type: "reasoning", text: "hmm" }, 11));
+  e = apply(e, ev({ type: "assistant_message", text: "world" }, 12));
+  assert.deepEqual(summary(e), ["user_message:hi", "assistant_message:Hello world", "reasoning:hmm"]);
+  assert.deepEqual([e[1].seqStart, e[1].seqEnd], [10, 12]);
+  assert.equal(e[2].seqStart, undefined); // the live thought row keeps its own identity (no seqStart tie, no move)
+  const input = structuredClone(e);
+  apply(e, ev({ type: "assistant_message", text: "!" }, 13));
+  assert.deepEqual(e, input, "mergeLiveItem must not mutate its input");
 });
 
-test("rejoined segment judges snapshots against its own text only", () => {
-  // cumulative snapshots after a thought: no duplication
+test("refetched rows keep strictly increasing seqStart after coalescing", () => {
+  const row = (type, text, a, b = a) => ({ item: { type, text }, seqStart: a, seqEnd: b });
+  const out = coalesceReplies([row("user_message", "q", 9), row("assistant_message", "A", 10), row("reasoning", "T1", 11), row("assistant_message", "B", 12), row("reasoning", "T2", 13), row("assistant_message", "C", 14), row("tool_call", "x", 15)]);
+  assert.deepEqual(summary(out), ["user_message:q", "assistant_message:ABC", "reasoning:T1", "reasoning:T2", "tool_call:x"]);
+  assert.ok(strictlyIncreasing(out));
+  assert.deepEqual([out[1].seqStart, out[1].seqEnd], [10, 14]);
+});
+
+test("cumulative snapshots after a thought are judged against their own segment", () => {
   let e = apply(base, ev({ type: "assistant_message", text: "Hello " }, 1));
   e = apply(e, ev({ type: "reasoning", text: "hmm" }, 2));
   for (const [t, s] of [["wor", 3], ["world", 4], ["world!", 5]]) e = apply(e, ev({ type: "assistant_message", text: t }, s));
-  assert.equal(e.at(-1).item.text, "Hello world!");
-  // a segment that starts with the first segment's text must not truncate it
+  assert.equal(e[1].item.text, "Hello world!");
   let f = apply(base, ev({ type: "assistant_message", text: "Yes" }, 1));
   f = apply(f, ev({ type: "reasoning", text: "hmm" }, 2));
   f = apply(f, ev({ type: "assistant_message", text: "Yes, I checked" }, 3));
   f = apply(f, ev({ type: "assistant_message", text: "Yes, I checked it" }, 4));
-  assert.equal(f.at(-1).item.text, "YesYes, I checked it");
+  assert.equal(f[1].item.text, "YesYes, I checked it");
 });
 
-test("no rejoin across a user message, a seq gap, or a different message id", () => {
-  let e = apply(base, ev({ type: "assistant_message", text: "A" }, 1));
-  e = apply(e, ev({ type: "reasoning", text: "t" }, 2));
-  e = apply(e, ev({ type: "user_message", text: "next" }, 3));
-  e = apply(e, ev({ type: "assistant_message", text: "B" }, 4));
-  assert.deepEqual(e.slice(1).map((x) => x.item.type + ":" + x.item.text), ["assistant_message:A", "reasoning:t", "user_message:next", "assistant_message:B"]);
-  let g = apply(base, ev({ type: "assistant_message", text: "A" }, 1));
-  g = apply(g, ev({ type: "reasoning", text: "t" }, 2));
-  g = apply(g, ev({ type: "assistant_message", text: "B" }, 9));
-  assert.equal(g.filter((x) => x.item.type === "assistant_message").length, 2);
+test("no rejoin across a user message, a tool call, a different message id or turn id", () => {
+  const sep = (item) => {
+    let e = apply(base, ev({ type: "assistant_message", text: "A" }, 1));
+    e = apply(e, ev({ type: "reasoning", text: "t" }, 2));
+    e = apply(e, ev(item, 3));
+    return apply(e, ev({ type: "assistant_message", text: "B" }, 4));
+  };
+  assert.equal(sep({ type: "user_message", text: "q" }).filter((x) => x.item.type === "assistant_message").length, 2);
+  assert.equal(sep({ type: "tool_call", callId: "c", status: "running" }).filter((x) => x.item.type === "assistant_message").length, 2);
   let h = apply(base, ev({ type: "assistant_message", text: "A", messageId: "m1" }, 1));
   h = apply(h, ev({ type: "reasoning", text: "t" }, 2));
   h = apply(h, ev({ type: "assistant_message", text: "B", messageId: "m2" }, 3));
   assert.equal(h.filter((x) => x.item.type === "assistant_message").length, 2);
+  let t = mergeLiveItem(base, { type: "assistant_message", text: "t1" }, "t", 1, "t1");
+  t = mergeLiveItem(t, { type: "assistant_message", text: "t2" }, "t", 2, "t2");
+  assert.equal(t.filter((x) => x.item.type === "assistant_message").length, 2);
 });
 
-test("rejoined reply ends the list with the thought moved ahead of it", () => {
-  let e = apply(base, ev({ type: "reasoning", text: "T1" }, 1));
-  e = apply(e, ev({ type: "assistant_message", text: "A" }, 2));
-  e = apply(e, ev({ type: "reasoning", text: "T2" }, 3));
-  e = apply(e, ev({ type: "assistant_message", text: "B" }, 4));
-  assert.deepEqual(e.slice(1).map((x) => x.item.type + ":" + x.item.text), ["reasoning:T1", "reasoning:T2", "assistant_message:AB"]);
-  assert.equal(latestReasoningIndex(e), 2); // the finished reply is last, so no thought sits under it
+test("back-to-back turns with no user row: a turn boundary stops the tail merge and never overwrites the old segment", () => {
+  let e = apply(base, ev({ type: "assistant_message", text: "Yes" }, 1));
+  e = apply(e, ev({ type: "reasoning", text: "r" }, 2));
+  e = apply(e, ev({ type: "assistant_message", text: "ok" }, 3));
+  e = markTurnBoundary(e);
+  e = apply(e, ev({ type: "assistant_message", text: "ok, next turn" }, 4));
+  assert.deepEqual(summary(e.filter((x) => x.item.type === "assistant_message")), ["assistant_message:Yesok", "assistant_message:ok, next turn"]);
+  // and a turn boundary on a trailing thought blocks the rejoin too
+  let f = apply(base, ev({ type: "assistant_message", text: "A" }, 1));
+  f = markTurnBoundary(apply(f, ev({ type: "reasoning", text: "r" }, 2)));
+  f = apply(f, ev({ type: "assistant_message", text: "B" }, 3));
+  assert.equal(f.filter((x) => x.item.type === "assistant_message").length, 2);
 });
 
-test("a projected refetch of text -> thought -> text yields one reply, with the same guards", async () => {
-  const { coalesceReplies } = await import("../src/timelineFilter.ts");
-  const row = (type, text, a, b = a, extra = {}) => ({ item: { type, text, ...extra }, seqStart: a, seqEnd: b });
-  const out = coalesceReplies([row("user_message", "hi", 0), row("assistant_message", "Hello ", 1), row("reasoning", "hmm", 2), row("assistant_message", "world", 3, 5)]);
-  assert.deepEqual(out.map((x) => x.item.type + ":" + x.item.text), ["user_message:hi", "reasoning:hmm", "assistant_message:Hello world"]);
-  assert.equal(out[2].seqStart, 1);
-  assert.equal(out[2].seqEnd, 5);
-  const types = (l) => l.map((x) => x.item.type);
-  // user message between, seq gap, different message id: left as separate rows
-  assert.deepEqual(types(coalesceReplies([row("assistant_message", "A", 1), row("reasoning", "t", 2), row("user_message", "q", 3), row("assistant_message", "B", 4)])), ["assistant_message", "reasoning", "user_message", "assistant_message"]);
-  assert.equal(coalesceReplies([row("assistant_message", "A", 1), row("reasoning", "t", 2), row("assistant_message", "B", 9)]).length, 3);
-  assert.equal(coalesceReplies([row("assistant_message", "A", 1, 1, { messageId: "m1" }), row("reasoning", "t", 2), row("assistant_message", "B", 3, 3, { messageId: "m2" })]).length, 3);
-});
-
-test("rejoin keeps entries sorted by seqStart and entryIndexForSeq finds the reply", async () => {
-  const { entryIndexForSeq } = await import("../src/timelineFilter.ts");
-  let e = apply(base, ev({ type: "assistant_message", text: "A" }, 10));
-  e = apply(e, ev({ type: "reasoning", text: "t" }, 11));
-  e = apply(e, ev({ type: "assistant_message", text: "B" }, 12));
-  const starts = e.map((x) => x.seqStart).filter((s) => s != null);
-  assert.deepEqual(starts, [...starts].sort((a, b) => a - b));
-  assert.deepEqual(e.slice(1).map((x) => [x.item.type, x.seqStart, x.seqEnd]), [["reasoning", 10, 10], ["assistant_message", 10, 12]]);
-  assert.equal(e.at(-1).item.text, "AB");
-  assert.equal(entryIndexForSeq(e, 10), 2);
-  assert.equal(entryIndexForSeq(e, 11), 2);
-  // a redelivered thought seq is still recognised as covered
-  assert.equal(apply(e, ev({ type: "reasoning", text: "t" }, 11)), e);
-});
-
-test("joinPages rejoins a reply cut by a page boundary, including two thoughts", async () => {
-  const { coalesceReplies, joinPages } = await import("../src/timelineFilter.ts");
+test("joinPages rejoins a reply cut by a page boundary at every position, keeping segStart", () => {
   const row = (type, text, a, b = a) => ({ item: { type, text }, seqStart: a, seqEnd: b });
   const flat = [row("assistant_message", "A", 10), row("reasoning", "T1", 11), row("assistant_message", "B", 12), row("reasoning", "T2", 13), row("assistant_message", "C", 14), row("tool_call", "x", 15)];
   const whole = coalesceReplies(flat);
   for (const cutAt of [1, 2, 3, 4, 5]) {
     const joined = joinPages(coalesceReplies(flat.slice(0, cutAt)), coalesceReplies(flat.slice(cutAt)));
-    assert.deepEqual(joined.map((x) => [x.item.type, x.item.text, x.seqStart]), whole.map((x) => [x.item.type, x.item.text, x.seqStart]), `cut at ${cutAt}`);
+    assert.deepEqual(joined.map((x) => [x.item.type, x.item.text, x.seqStart, x.seqEnd, x.segStart]), whole.map((x) => [x.item.type, x.item.text, x.seqStart, x.seqEnd, x.segStart]), `cut at ${cutAt}`);
+    assert.ok(strictlyIncreasing(joined));
   }
-  assert.deepEqual(whole.map((x) => x.item.text), ["T1", "T2", "ABC", "x"]);
-  const starts = whole.map((x) => x.seqStart);
-  assert.deepEqual(starts, [...starts].sort((a, b) => a - b));
+  assert.equal(whole[0].segStart, 2); // the latest segment ("C") starts after "AB"
 });
 
-test("a turn boundary (turn id, turnEnd, lifecycle event) blocks a rejoin", async () => {
-  const { coalesceReplies, markTurnBoundary } = await import("../src/timelineFilter.ts");
-  const row = (type, text, a, extra = {}) => ({ item: { type, text }, seqStart: a, seqEnd: a, ...extra });
-  assert.equal(coalesceReplies([row("assistant_message", "A", 1, { turnId: "t1" }), row("reasoning", "r", 2, { turnId: "t1" }), row("assistant_message", "B", 3, { turnId: "t2" })]).length, 3);
-  assert.equal(coalesceReplies([row("assistant_message", "A", 1, { turnId: "t1" }), row("reasoning", "r", 2, { turnId: "t1" }), row("assistant_message", "B", 3, { turnId: "t1" })]).length, 2);
-  assert.equal(coalesceReplies([row("assistant_message", "A", 1), row("reasoning", "r", 2, { turnEnd: true }), row("assistant_message", "B", 3)]).length, 3);
-  // live: turn_completed marks the tail; the next turn's first text stays its own message
-  let e = apply(base, ev({ type: "assistant_message", text: "A" }, 1));
-  e = apply(e, ev({ type: "reasoning", text: "r" }, 2));
-  e = markTurnBoundary(e);
-  e = apply(e, ev({ type: "assistant_message", text: "B" }, 3));
-  assert.equal(e.filter((x) => x.item.type === "assistant_message").length, 2);
-});
-
-test("live seq tracking: refetched msg + live thought + seq-less text, and missing seqs never join", () => {
-  const loaded = [{ item: { type: "assistant_message", text: "A" }, seqStart: 10, seqEnd: 10 }];
-  let e = apply(loaded, ev({ type: "reasoning", text: "t" }, 11));
+test("a settled thought is not the latest-reasoning row; tailSig-relevant reply length is on the message", () => {
+  let e = apply(base, ev({ type: "assistant_message", text: "A" }, 10));
+  e = apply(e, ev({ type: "reasoning", text: "t" }, 11));
+  assert.equal(latestReasoningIndex(e), 2); // still thinking: the thought is the live tail
   e = apply(e, ev({ type: "assistant_message", text: "B" }, 12));
-  assert.equal(e.at(-1).item.text, "AB");
-  assert.equal(e.at(-1).seqEnd, 12);
-  e = apply(e, ev({ type: "assistant_message", text: "Bc" }, 13)); // snapshot of the post-thought segment
-  assert.equal(e.at(-1).item.text, "ABc");
-  // live-only entries get a real seqStart/seqEnd on join
-  let f = apply(base, ev({ type: "assistant_message", text: "A" }, 5));
-  f = apply(f, ev({ type: "reasoning", text: "t" }, 6));
-  f = apply(f, ev({ type: "assistant_message", text: "B" }, 7));
-  assert.deepEqual([f.at(-1).seqStart, f.at(-1).seqEnd], [5, 7]);
-  // a gap across the thought, or a text with no seq at all, is never joined
-  let g = apply(base, ev({ type: "assistant_message", text: "A" }, 5));
-  g = apply(g, ev({ type: "reasoning", text: "t" }, 6));
-  g = mergeLiveItem(g, { type: "assistant_message", text: "B" });
-  assert.equal(g.filter((x) => x.item.type === "assistant_message").length, 2);
+  assert.equal(latestReasoningIndex(e), -1); // reply carried on past it
+  assert.equal(e[1].item.text, "AB");
+  assert.deepEqual([e[1].seqStart, e[1].seqEnd], [undefined, 12]);
 });
 
 test("lastAssistantText returns the whole reply from a split Paseo projection", async () => {

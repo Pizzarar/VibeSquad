@@ -2,7 +2,7 @@ import { Component, Fragment, type ReactNode, useCallback, useSyncExternalStore,
 import type { PaseoAgentTimelineEvent } from "@getpaseo/client";
 import { messageCtxItems, openContextMenu, selectionWithin } from "./CommandPalette";
 import { daemonClient, client, DEMO, retrySend } from "./paseo";
-import { isRunnerId, runnerHandle } from "./runnerBridge";
+import { isRunnerId, runnerFetchTimeline, runnerHandle } from "./runnerBridge";
 
 /** client.agents.ref(id), except runner-owned agents (rn- ids) go over the VS runner routes. */
 const agentRef = (id: string): ReturnType<typeof client.agents.ref> => (isRunnerId(id) ? (runnerHandle(id) as any) : client.agents.ref(id));
@@ -1090,7 +1090,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
     setLoadingMore(true);
     try {
       const cursor = earliestCursor.current;
-      const t = isRunnerId(agentId) ? ({ entries: [], hasOlder: false } as any) : await daemonClient.fetchAgentTimeline(agentId, {
+      const t = isRunnerId(agentId) ? await runnerFetchTimeline(agentId, { direction: "before", cursor: cursor ?? undefined, limit: 60 }) : await daemonClient.fetchAgentTimeline(agentId, {
         direction: "before" as any,
         cursor,
         limit: 60,
@@ -1217,7 +1217,12 @@ export function Timeline({
     dropReconciled(covered);
   }, [covered.join(",")]);
   const lastEntry = entries[entries.length - 1];
+  // A reply that grows behind a trailing thought row must still re-pin the scroll: include the last assistant message.
+  let lastReply: any;
+  for (let i = entries.length - 1; i >= 0 && i >= entries.length - 50; i--) if (entries[i].item?.type === "assistant_message") { lastReply = entries[i]; break; }
   const tailSig = [
+    String(lastReply?.item?.text ?? "").length,
+    lastReply?.seqEnd,
     entries.length,
     lastEntry?.seqStart,
     lastEntry?.item?.type,

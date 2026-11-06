@@ -28,7 +28,9 @@ export async function handleRunnerApi(req, res, { readBody, sendJson, backend = 
       const action = parts[2];
       if (req.method === "GET" && action === "timeline") {
         const limit = Number(url.searchParams.get("limit") ?? 0) || undefined;
-        return sendJson(res, 200, await backend.fetchAgentTimeline(id, { limit }));
+        const before = url.searchParams.get("direction") === "before" ? Number(url.searchParams.get("cursor")) : NaN;
+        const opts = Number.isFinite(before) ? { limit, direction: "before", cursor: { epoch: "runner", seq: before } } : { limit };
+        return sendJson(res, 200, await backend.fetchAgentTimeline(id, opts));
       }
       if (req.method === "GET" && !action) return sendJson(res, 200, await backend.fetchAgent(id));
       if (req.method === "POST") {

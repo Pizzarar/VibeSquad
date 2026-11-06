@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { RunnerClient, runnerHome } from "./runner-client.mjs";
-import { rejoinTail } from "../reply-coalesce.mjs";
+import { joinTarget, joinInto } from "../reply-coalesce.mjs";
 
 const FIRST_CLASS = ["squad", "team", "lane", "role", "ord", "profile"];
 const ENV_FOR = { lane: "VS_LANE", team: "VS_TEAM", role: "VS_ROLE", profile: "VS_PROFILE" };
@@ -99,20 +99,17 @@ export function toTimeline(events) {
       case "input":
         entries.push({ ...base, item: { type: "user_message", text: e.text } });
         break;
-      case "output":
-        // A late thought chunk must not split one reply in two (see reply-coalesce.mjs).
-        if (last?.item.type === "assistant_message" && last.seqEnd === e.seq - 1) {
-          last.item.text += e.text;
-          last.seqEnd = e.seq;
-        } else {
-          const next = { ...base, item: { type: "assistant_message", text: e.text } };
-          const hit = rejoinTail(entries, next);
-          if (hit) entries.splice(hit.from, entries.length - hit.from, ...hit.items);
-          else entries.push(next);
-        }
+      case "output": {
+        // The log is walked in order and input / tool / error / turn_done are the separators, so no seq arithmetic:
+        // stderr / raw / meta lines mid-reply must not split it. Text after a thought rejoins the message before it.
+        const next = { ...base, item: { type: "assistant_message", text: e.text } };
+        const i = joinTarget(entries, next);
+        if (i >= 0) entries[i] = joinInto(entries[i], next, { trailing: entries.slice(i + 1) });
+        else entries.push(next);
         break;
+      }
       case "thought":
-        if (last?.item.type === "reasoning" && last.seqEnd === e.seq - 1) {
+        if (last?.item.type === "reasoning" && !last.turnEnd) {
           last.item.text += e.text;
           last.seqEnd = e.seq;
         } else entries.push({ ...base, item: { type: "reasoning", text: e.text } });
@@ -231,11 +228,8 @@ export class RunnerBackend {
     let entries = toTimeline(events);
     if (opts.direction === "before" && opts.cursor) entries = entries.filter((e) => e.seqStart < opts.cursor.seq);
     const limit = Number(opts.limit) > 0 ? Number(opts.limit) : entries.length;
-    // Rows sharing a seqStart (thoughts moved ahead of a rejoined reply) are one group: never cut inside it.
-    let cut = Math.max(0, entries.length - limit);
-    while (cut > 0 && entries[cut - 1].seqStart === entries[cut].seqStart) cut--;
-    const hasOlder = cut > 0;
-    entries = entries.slice(cut);
+    const hasOlder = entries.length > limit;
+    entries = entries.slice(-limit);
     const first = entries[0];
     return { entries, hasOlder, startCursor: first ? { epoch: "runner", seq: first.seqStart } : null };
   }
