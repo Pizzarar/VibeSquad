@@ -234,6 +234,7 @@ export function ProfileImportModal({ onClose }: { onClose: () => void }) {
 /** Desktop-only: the Windows login entry that starts the server + runner with no window. Default on; this is the off-switch. */
 function StartAtLoginRow() {
   const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [error, setError] = useState("");
   useEffect(() => {
     let alive = true;
     void fetch("/__desktop/start-at-login", { cache: "no-store" })
@@ -246,10 +247,11 @@ function StartAtLoginRow() {
   }, []);
   if (enabled === null) return null; // not the desktop app (browser / phone): nothing to toggle
   return (
-    <label className="ts-scale-head" data-testid="start-at-login-row" style={{ cursor: "pointer" }}>
+    <label className="ts-scale-head" data-testid="start-at-login-row" data-setting-id="start-at-login" style={{ cursor: "pointer" }}>
       <div>
         <div className="field-label">START AT LOGIN</div>
         <div className="muted small">Start VibeSquad agents at login (no window). Your agents keep running without opening the app.</div>
+        {error && <div className="small" role="alert" data-testid="start-at-login-error" style={{ color: "var(--danger, #e5484d)" }}>{error}</div>}
       </div>
       <input
         type="checkbox"
@@ -258,11 +260,23 @@ function StartAtLoginRow() {
         onChange={(e) => {
           const next = e.target.checked;
           setEnabled(next);
+          setError("");
           void fetch("/__desktop/start-at-login", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ enabled: next }),
-          }).catch(() => setEnabled(!next));
+          })
+            .then(async (r) => {
+              const d = await r.json().catch(() => ({}));
+              if (!r.ok || d.ok === false) {
+                setEnabled(!next);
+                setError(String(d.error || "Could not change the login entry."));
+              }
+            })
+            .catch(() => {
+              setEnabled(!next);
+              setError("Could not reach the desktop app.");
+            });
         }}
       />
     </label>

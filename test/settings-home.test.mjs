@@ -350,3 +350,11 @@ test("Remote Control section in Settings: saveRemoteAccess persists remote.enabl
   assert.match(modalSrc, /data-testid="settings-open-pair-device-btn"/);
   assert.match(modalSrc, /<PairDeviceModal/);
 });
+
+test("Settings search finds the start-at-login toggle, which surfaces failures", () => {
+  assert.ok(P.searchSettings("login").some((h) => h.id === "start-at-login"));
+  assert.ok(P.searchSettings("start at login").some((h) => h.id === "start-at-login"));
+  const modalSrc = src("TeamSettingsModal.tsx");
+  assert.match(modalSrc, /data-testid="start-at-login-error"/);
+  assert.match(modalSrc, /d\.ok === false/);
+});

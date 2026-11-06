@@ -434,6 +434,10 @@ fn port_of_host(host: &str) -> u16 {
 /// The server is spawned detached (own process group, broken away from this process's job when allowed) so it
 /// outlives this launcher and a later app quit never reaches it. A healthy server is reused, never duplicated.
 fn run_background(cfg: &DesktopConfig) -> i32 {
+    // The off-switch always wins, even if a stale Run value survived.
+    if !cfg.start_at_login {
+        return 0;
+    }
     let mode = cfg.server_mode.as_str();
     // Paired to someone else's server: nothing to run locally. Unset (fresh install) counts as local.
     if (!mode.is_empty() && mode != "local" && mode != "relay") || !is_local_host(&cfg.server_host) {
@@ -491,6 +495,7 @@ pub struct SharedAppState {
     pub ws_tls_connector: RwLock<Connector>,
     pub app_handle: RwLock<Option<AppHandle>>,
     pub tray_needs_item: RwLock<Option<MenuItem<tauri::Wry>>>,
+    pub tray_login_item: RwLock<Option<CheckMenuItem<tauri::Wry>>>,
     pub tracker: Mutex<AgentAlertTracker>,
     pub updater: Mutex<updater::UpdaterState>,
     /// The `node.exe server/serve.mjs` child we spawned (None when we reused an already-running server).
@@ -968,6 +973,18 @@ struct StartAtLoginPayload {
     enabled: bool,
 }
 
+/// One message for whichever of the registry write / config save failed (None when both worked).
+fn start_at_login_error(reg: &Result<(), String>, saved: &Result<(), String>) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Err(e) = reg {
+        parts.push(format!("login entry: {}", e));
+    }
+    if let Err(e) = saved {
+        parts.push(format!("saving settings: {}", e));
+    }
+    if parts.is_empty() { None } else { Some(parts.join("; ")) }
+}
+
 async fn handle_start_at_login_get(State(state): State<Arc<SharedAppState>>) -> Response {
     let enabled = state.config.read().unwrap().start_at_login;
     Json(json!({ "ok": true, "enabled": enabled })).into_response()
@@ -977,13 +994,23 @@ async fn handle_start_at_login_set(
     State(state): State<Arc<SharedAppState>>,
     Json(payload): Json<StartAtLoginPayload>,
 ) -> Response {
-    let _ = set_start_at_login_registry(payload.enabled);
-    {
+    let reg = set_start_at_login_registry(payload.enabled);
+    let saved = {
         let mut cfg = state.config.write().unwrap();
         cfg.start_at_login = payload.enabled;
-        let _ = save_config(&cfg);
+        save_config(&cfg)
+    };
+    if let Some(item) = state.tray_login_item.read().unwrap().as_ref() {
+        let _ = item.set_checked(payload.enabled);
     }
-    Json(json!({ "ok": true, "enabled": payload.enabled })).into_response()
+    match start_at_login_error(&reg, &saved) {
+        Some(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "enabled": payload.enabled, "error": error })),
+        )
+            .into_response(),
+        None => Json(json!({ "ok": true, "enabled": payload.enabled })).into_response(),
+    }
 }
 
 async fn handle_desktop_ping(
@@ -2157,7 +2184,7 @@ async fn ensure_local_server_running(state: &Arc<SharedAppState>) {
         let Some((node, runtime_dir)) = find_bundled_runtime() else {
             return;
         };
-        match spawn_server_process(&node, &runtime_dir, &mode, None, false) {
+        match spawn_server_process(&node, &runtime_dir, &mode, Some(port_of_host(&host)), false) {
             Ok(child) => {
                 let _ = fs::create_dir_all(config_dir());
                 let _ = fs::write(server_pid_path(), child.id().to_string());
@@ -2764,9 +2791,8 @@ fn main() {
     if is_background_arg(&std::env::args().collect::<Vec<_>>()) {
         std::process::exit(run_background(&initial_cfg));
     }
-    if initial_cfg.start_at_login {
-        let _ = set_start_at_login_registry(true);
-    }
+    // Keep the Run value in step with the config both ways: an explicit off removes a stale entry.
+    let _ = set_start_at_login_registry(initial_cfg.start_at_login);
 
     let (http_client, ws_tls_connector) =
         build_http_and_ws_clients().expect("Failed to initialize TLS clients with pinned CA");
@@ -2782,6 +2808,7 @@ fn main() {
         ws_tls_connector: RwLock::new(ws_tls_connector),
         app_handle: RwLock::new(None),
         tray_needs_item: RwLock::new(None),
+        tray_login_item: RwLock::new(None),
         tracker: Mutex::new(AgentAlertTracker::default()),
         updater: Mutex::new(updater::UpdaterState::default()),
         managed_server: Mutex::new(None),
@@ -2900,6 +2927,7 @@ fn main() {
             let quit_item = MenuItem::with_id(app, "quit", "Quit VibeSquad", true, None::<&str>)?;
 
             *state_for_setup.tray_needs_item.write().unwrap() = Some(needs_item.clone());
+            *state_for_setup.tray_login_item.write().unwrap() = Some(start_login_item.clone());
 
             let menu = Menu::with_items(
                 app,
@@ -3038,6 +3066,23 @@ mod tests {
     }
 
     #[test]
+    fn background_does_nothing_when_start_at_login_is_off() {
+        let mut cfg = DesktopConfig::default();
+        cfg.start_at_login = false;
+        cfg.server_mode = "local".to_string();
+        assert_eq!(run_background(&cfg), 0, "off-switch wins before any server lookup or spawn");
+    }
+
+    #[test]
+    fn start_at_login_errors_are_surfaced() {
+        assert_eq!(start_at_login_error(&Ok(()), &Ok(())), None);
+        let e = start_at_login_error(&Err("denied".into()), &Ok(())).unwrap();
+        assert!(e.contains("login entry") && e.contains("denied"));
+        let e = start_at_login_error(&Err("a".into()), &Err("b".into())).unwrap();
+        assert!(e.contains("a") && e.contains("saving settings: b"));
+    }
+
+    #[test]
     fn background_flag_parsing() {
         let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert!(is_background_arg(&a(&["vibesquad.exe", "--background"])));
@@ -3094,6 +3139,7 @@ mod tests {
             ws_tls_connector: RwLock::new(ws_tls_connector),
             app_handle: RwLock::new(None),
             tray_needs_item: RwLock::new(None),
+        tray_login_item: RwLock::new(None),
             tracker: Mutex::new(AgentAlertTracker::default()),
             updater: Mutex::new(updater::UpdaterState::default()),
             managed_server: Mutex::new(None),
@@ -3537,6 +3583,7 @@ mod tests {
                 ws_tls_connector: RwLock::new(base.ws_connector()),
                 app_handle: RwLock::new(None),
                 tray_needs_item: RwLock::new(None),
+        tray_login_item: RwLock::new(None),
                 tracker: Mutex::new(AgentAlertTracker::default()),
                 updater: Mutex::new(updater::UpdaterState::default()),
                 managed_server: Mutex::new(None),
