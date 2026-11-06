@@ -335,3 +335,24 @@ test('toTimeline: no rejoin across a user message or seq gap; thought moves ahea
   const o = toTimeline([ev(0, 'output', { text: 'A' }), ev(1, 'thought', { text: 't' }), ev(2, 'output', { text: 'B' })]);
   assert.deepEqual(o.map((x) => x.item.type + ':' + x.item.text), ['reasoning:t', 'assistant_message:AB']);
 });
+
+test('toTimeline: turn_done is a join blocker; fetchAgentTimeline paging never cuts inside a rejoined group', async () => {
+  const ev = (seq, type, o) => ({ seq, ts: 1000 + seq, type, ...o });
+  const t = toTimeline([ev(0, 'output', { text: 'A' }), ev(1, 'thought', { text: 't' }), ev(2, 'turn_done'), ev(3, 'output', { text: 'B' })]);
+  assert.deepEqual(t.map((x) => x.item.type), ['assistant_message', 'reasoning', 'assistant_message']);
+
+  const events = [ev(0, 'input', { text: 'q' }), ev(1, 'output', { text: 'A' }), ev(2, 'thought', { text: 't' }), ev(3, 'output', { text: 'B' }), ev(4, 'tool', { phase: 'call', id: 'x', name: 'Bash' })];
+  const b = new RunnerBackend({ client: { request: async () => ({ events }) } });
+  const all = (await b.fetchAgentTimeline('rn-x')).entries;
+  const starts = all.map((e) => e.seqStart);
+  assert.deepEqual(starts, [...starts].sort((p, q) => p - q));
+  const seen = [];
+  let cursor;
+  for (let guard = 0; guard < 10; guard++) {
+    const page = await b.fetchAgentTimeline('rn-x', { limit: 2, ...(cursor ? { direction: 'before', cursor } : {}) });
+    seen.unshift(...page.entries.map((e) => `${e.item.type}:${e.item.text ?? ''}`));
+    if (!page.hasOlder) break;
+    cursor = page.startCursor;
+  }
+  assert.deepEqual(seen, all.map((e) => `${e.item.type}:${e.item.text ?? ''}`));
+});

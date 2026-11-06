@@ -146,3 +146,72 @@ test("a projected refetch of text -> thought -> text yields one reply, with the 
   assert.equal(coalesceReplies([row("assistant_message", "A", 1), row("reasoning", "t", 2), row("assistant_message", "B", 9)]).length, 3);
   assert.equal(coalesceReplies([row("assistant_message", "A", 1, 1, { messageId: "m1" }), row("reasoning", "t", 2), row("assistant_message", "B", 3, 3, { messageId: "m2" })]).length, 3);
 });
+
+test("rejoin keeps entries sorted by seqStart and entryIndexForSeq finds the reply", async () => {
+  const { entryIndexForSeq } = await import("../src/timelineFilter.ts");
+  let e = apply(base, ev({ type: "assistant_message", text: "A" }, 10));
+  e = apply(e, ev({ type: "reasoning", text: "t" }, 11));
+  e = apply(e, ev({ type: "assistant_message", text: "B" }, 12));
+  const starts = e.map((x) => x.seqStart).filter((s) => s != null);
+  assert.deepEqual(starts, [...starts].sort((a, b) => a - b));
+  assert.deepEqual(e.slice(1).map((x) => [x.item.type, x.seqStart, x.seqEnd]), [["reasoning", 10, 10], ["assistant_message", 10, 12]]);
+  assert.equal(e.at(-1).item.text, "AB");
+  assert.equal(entryIndexForSeq(e, 10), 2);
+  assert.equal(entryIndexForSeq(e, 11), 2);
+  // a redelivered thought seq is still recognised as covered
+  assert.equal(apply(e, ev({ type: "reasoning", text: "t" }, 11)), e);
+});
+
+test("joinPages rejoins a reply cut by a page boundary, including two thoughts", async () => {
+  const { coalesceReplies, joinPages } = await import("../src/timelineFilter.ts");
+  const row = (type, text, a, b = a) => ({ item: { type, text }, seqStart: a, seqEnd: b });
+  const flat = [row("assistant_message", "A", 10), row("reasoning", "T1", 11), row("assistant_message", "B", 12), row("reasoning", "T2", 13), row("assistant_message", "C", 14), row("tool_call", "x", 15)];
+  const whole = coalesceReplies(flat);
+  for (const cutAt of [1, 2, 3, 4, 5]) {
+    const joined = joinPages(coalesceReplies(flat.slice(0, cutAt)), coalesceReplies(flat.slice(cutAt)));
+    assert.deepEqual(joined.map((x) => [x.item.type, x.item.text, x.seqStart]), whole.map((x) => [x.item.type, x.item.text, x.seqStart]), `cut at ${cutAt}`);
+  }
+  assert.deepEqual(whole.map((x) => x.item.text), ["T1", "T2", "ABC", "x"]);
+  const starts = whole.map((x) => x.seqStart);
+  assert.deepEqual(starts, [...starts].sort((a, b) => a - b));
+});
+
+test("a turn boundary (turn id, turnEnd, lifecycle event) blocks a rejoin", async () => {
+  const { coalesceReplies, markTurnBoundary } = await import("../src/timelineFilter.ts");
+  const row = (type, text, a, extra = {}) => ({ item: { type, text }, seqStart: a, seqEnd: a, ...extra });
+  assert.equal(coalesceReplies([row("assistant_message", "A", 1, { turnId: "t1" }), row("reasoning", "r", 2, { turnId: "t1" }), row("assistant_message", "B", 3, { turnId: "t2" })]).length, 3);
+  assert.equal(coalesceReplies([row("assistant_message", "A", 1, { turnId: "t1" }), row("reasoning", "r", 2, { turnId: "t1" }), row("assistant_message", "B", 3, { turnId: "t1" })]).length, 2);
+  assert.equal(coalesceReplies([row("assistant_message", "A", 1), row("reasoning", "r", 2, { turnEnd: true }), row("assistant_message", "B", 3)]).length, 3);
+  // live: turn_completed marks the tail; the next turn's first text stays its own message
+  let e = apply(base, ev({ type: "assistant_message", text: "A" }, 1));
+  e = apply(e, ev({ type: "reasoning", text: "r" }, 2));
+  e = markTurnBoundary(e);
+  e = apply(e, ev({ type: "assistant_message", text: "B" }, 3));
+  assert.equal(e.filter((x) => x.item.type === "assistant_message").length, 2);
+});
+
+test("live seq tracking: refetched msg + live thought + seq-less text, and missing seqs never join", () => {
+  const loaded = [{ item: { type: "assistant_message", text: "A" }, seqStart: 10, seqEnd: 10 }];
+  let e = apply(loaded, ev({ type: "reasoning", text: "t" }, 11));
+  e = apply(e, ev({ type: "assistant_message", text: "B" }, 12));
+  assert.equal(e.at(-1).item.text, "AB");
+  assert.equal(e.at(-1).seqEnd, 12);
+  e = apply(e, ev({ type: "assistant_message", text: "Bc" }, 13)); // snapshot of the post-thought segment
+  assert.equal(e.at(-1).item.text, "ABc");
+  // live-only entries get a real seqStart/seqEnd on join
+  let f = apply(base, ev({ type: "assistant_message", text: "A" }, 5));
+  f = apply(f, ev({ type: "reasoning", text: "t" }, 6));
+  f = apply(f, ev({ type: "assistant_message", text: "B" }, 7));
+  assert.deepEqual([f.at(-1).seqStart, f.at(-1).seqEnd], [5, 7]);
+  // a gap across the thought, or a text with no seq at all, is never joined
+  let g = apply(base, ev({ type: "assistant_message", text: "A" }, 5));
+  g = apply(g, ev({ type: "reasoning", text: "t" }, 6));
+  g = mergeLiveItem(g, { type: "assistant_message", text: "B" });
+  assert.equal(g.filter((x) => x.item.type === "assistant_message").length, 2);
+});
+
+test("lastAssistantText returns the whole reply from a split Paseo projection", async () => {
+  const { lastAssistantText } = await import("../server/mcp/tools.mjs");
+  const row = (type, text, a) => ({ item: { type, text }, seqStart: a, seqEnd: a });
+  assert.equal(lastAssistantText({ entries: [row("assistant_message", "Hello ", 1), row("reasoning", "hmm", 2), row("assistant_message", "world", 3)] }), "Hello world");
+});

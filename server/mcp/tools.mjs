@@ -2,6 +2,7 @@
 // Every tool takes plain args and a context, and returns a plain object. Backend routing goes through the existing seam:
 // ids starting rn- and runner lanes (VS_RUNNER_LANES / teams.json) -> RunnerBackend, everything else -> Paseo.
 import { isRunnerId } from "../backend/runner-backend.mjs";
+import { coalesceReplies } from "../reply-coalesce.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
 export const REPORT_TYPES = ["done", "decision", "blocker"];
@@ -64,7 +65,7 @@ const entriesOf = (res) => (Array.isArray(res) ? res : Array.isArray(res?.entrie
 
 /** Last assistant text from a timeline, tail-capped (conclusions sit at the end). */
 export function lastAssistantText(timeline, cap = MAX_LAST_MESSAGE) {
-  const entries = entriesOf(timeline);
+  const entries = coalesceReplies(entriesOf(timeline)); // Paseo projections can split one reply around a thought
   for (let i = entries.length - 1; i >= 0; i--) {
     const item = entries[i]?.item ?? entries[i];
     if (item?.type === "assistant_message" && item.text) {

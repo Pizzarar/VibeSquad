@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { RunnerClient, runnerHome } from "./runner-client.mjs";
-import { rejoinReply } from "../reply-coalesce.mjs";
+import { rejoinTail } from "../reply-coalesce.mjs";
 
 const FIRST_CLASS = ["squad", "team", "lane", "role", "ord", "profile"];
 const ENV_FOR = { lane: "VS_LANE", team: "VS_TEAM", role: "VS_ROLE", profile: "VS_PROFILE" };
@@ -106,8 +106,8 @@ export function toTimeline(events) {
           last.seqEnd = e.seq;
         } else {
           const next = { ...base, item: { type: "assistant_message", text: e.text } };
-          const pair = entries.length >= 2 ? rejoinReply(entries[entries.length - 2], last, next) : null;
-          if (pair) entries.splice(-2, 2, ...pair);
+          const hit = rejoinTail(entries, next);
+          if (hit) entries.splice(hit.from, entries.length - hit.from, ...hit.items);
           else entries.push(next);
         }
         break;
@@ -130,6 +130,9 @@ export function toTimeline(events) {
             t.seqEnd = e.seq;
           }
         }
+        break;
+      case "turn_done":
+        if (last) last.turnEnd = true; // a real turn boundary: the next turn's text never rejoins this reply
         break;
       case "error":
         entries.push({ ...base, item: { type: "error", message: e.message } });
@@ -228,8 +231,11 @@ export class RunnerBackend {
     let entries = toTimeline(events);
     if (opts.direction === "before" && opts.cursor) entries = entries.filter((e) => e.seqStart < opts.cursor.seq);
     const limit = Number(opts.limit) > 0 ? Number(opts.limit) : entries.length;
-    const hasOlder = entries.length > limit;
-    entries = entries.slice(-limit);
+    // Rows sharing a seqStart (thoughts moved ahead of a rejoined reply) are one group: never cut inside it.
+    let cut = Math.max(0, entries.length - limit);
+    while (cut > 0 && entries[cut - 1].seqStart === entries[cut].seqStart) cut--;
+    const hasOlder = cut > 0;
+    entries = entries.slice(cut);
     const first = entries[0];
     return { entries, hasOlder, startCursor: first ? { epoch: "runner", seq: first.seqStart } : null };
   }

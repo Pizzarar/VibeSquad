@@ -1,10 +1,10 @@
 // Pure helpers for timeline filters, search hits and prompt jumps (no daemon imports, node --test friendly).
-import { rejoinReply, coalesceReplies } from "../server/reply-coalesce.mjs";
-export { coalesceReplies };
+import { rejoinTail, coalesceReplies, joinPages, markTurnBoundary } from "../server/reply-coalesce.mjs";
+export { coalesceReplies, joinPages, markTurnBoundary };
 export type TimelineFilter = "all" | "text" | "tools" | "errors";
 export const TIMELINE_FILTERS: TimelineFilter[] = ["all", "text", "tools", "errors"];
 
-type Ent = { item: any; timestamp?: string; seqStart?: number; seqEnd?: number; sourceSeqRanges?: { startSeq: number; endSeq: number }[]; liveSeqs?: number[]; segStart?: number };
+type Ent = { item: any; timestamp?: string; seqStart?: number; seqEnd?: number; sourceSeqRanges?: { startSeq: number; endSeq: number }[]; liveSeqs?: number[]; segStart?: number; turnId?: string; turnEnd?: boolean; fromSeq?: number; toSeq?: number };
 
 const isFailed = (it: any) =>
   it.status === "failed" || it.status === "error" || !!it.error || (it.detail?.exitCode != null && it.detail.exitCode !== 0);
@@ -111,15 +111,15 @@ const coversSeq = (e: Ent, seq: number) =>
  * ignored, so redelivered events can't append their text twice. Chunk text is treated as a delta (each seq is one
  * canonical row and the projection concatenates rows via "assistant_merge"/"reasoning_merge").
  */
-export function mergeLiveItem<T extends Ent>(entries: T[], item: any, timestamp?: string, seq?: number): T[] {
+export function mergeLiveItem<T extends Ent>(entries: T[], item: any, timestamp?: string, seq?: number, turnId?: string): T[] {
   if (!item || typeof item !== "object") return entries;
   if (seq != null && entries.some((e) => coversSeq(e, seq))) return entries;
   const type = String(item.type ?? "");
   const last = entries[entries.length - 1];
   // A thought chunk landing mid-reply must not split the message (shared with toTimeline and the projected refetch).
-  if (type === "assistant_message" && entries.length >= 2) {
-    const pair = rejoinReply(entries[entries.length - 2], last, { item, seqStart: seq, seqEnd: seq, liveSeqs: seq != null ? [seq] : undefined } as T);
-    if (pair) return [...entries.slice(0, -2), ...pair];
+  if (type === "assistant_message") {
+    const hit = rejoinTail(entries, { item, liveSeqs: seq != null ? [seq] : undefined, ...(turnId != null ? { turnId } : {}) } as T);
+    if (hit) return [...entries.slice(0, hit.from), ...hit.items];
   }
   if (last && last.item && last.item.type === type) {
     if (STREAMED.has(type)) {
@@ -148,7 +148,7 @@ export function mergeLiveItem<T extends Ent>(entries: T[], item: any, timestamp?
       }
     }
   }
-  return [...entries, { item, timestamp, liveSeqs: seq != null ? [seq] : undefined } as T];
+  return [...entries, { item, timestamp, liveSeqs: seq != null ? [seq] : undefined, ...(turnId != null ? { turnId } : {}) } as T];
 }
 
 /** Index of the most recent reasoning entry, or -1. */

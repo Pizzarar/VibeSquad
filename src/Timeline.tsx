@@ -14,7 +14,7 @@ import { parseSentAttachments, repoPathFor } from "./attachments";
 import { openRightDockTab } from "./RightDock";
 import { listTimelinePrompts, searchTimeline, type TimelinePrompt } from "./paseoTimeline";
 import { perfEndPainted, perfSendEvent } from "./perf";
-import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, coalesceReplies, matchesFilter, localPrompts, localSearch, mergeLiveItem, maxEntrySeq, syncNeeded, latestReasoningIndex, reasoningText, sortedHits, stepIndex, type SearchLocation, type TimelineFilter } from "./timelineFilter";
+import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, coalesceReplies, joinPages, markTurnBoundary, matchesFilter, localPrompts, localSearch, mergeLiveItem, maxEntrySeq, syncNeeded, latestReasoningIndex, reasoningText, sortedHits, stepIndex, type SearchLocation, type TimelineFilter } from "./timelineFilter";
 import { BARE_PATH_RE, parseFileToken } from "./fileLinks";
 import { toolStartsExpanded, usePref } from "./prefs";
 import { getPanes } from "./panes";
@@ -1027,12 +1027,14 @@ export function useTimeline(agentId: string, status: string, active = true, pred
         const seq = "seq" in ev ? ev.seq : undefined;
         const ts = "timestamp" in ev ? ev.timestamp : undefined;
         perfSendEvent(agentId, (item as any)?.type === "assistant_message");
-        setEntries((cur) => mergeLiveItem(cur, item, ts, seq));
+        setEntries((cur) => mergeLiveItem(cur, item, ts, seq, (ev.event as any).turnId));
         const need = syncNeeded(lastSeq.current, seq);
         if (seq != null && (lastSeq.current == null || seq > lastSeq.current)) lastSeq.current = seq;
         if (need === "gap") soon(600, false);
         else if (need === "unverified") soon(2500, true);
       } else {
+        // A turn lifecycle event is a real turn boundary: the next turn's text never rejoins this turn's reply.
+        if (/^turn_(started|completed|failed|canceled)$/.test(String(ev.event.type))) setEntries((cur) => markTurnBoundary(cur));
         soon(2500, true);
       }
     });
@@ -1056,7 +1058,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
       .then((t) => {
         if (!alive) return;
         if (!t.error) {
-          const newEntries = t.entries as Entry[];
+          const newEntries = coalesceReplies(t.entries as Entry[]);
           setEntries(newEntries);
           lastSeq.current = maxEntrySeq(newEntries);
           const tAny = t as any;
@@ -1097,7 +1099,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
       const tAny = t as any;
       const older = (tAny.entries ?? tAny.payload?.entries ?? []) as Entry[];
       if (older.length > 0) {
-        setEntries((prev) => coalesceReplies([...older, ...prev]));
+        setEntries((prev) => joinPages(coalesceReplies(older), prev));
         const startCur = tAny.startCursor ?? tAny.payload?.startCursor;
         if (startCur && typeof startCur.epoch === "string" && typeof startCur.seq === "number") {
           earliestCursor.current = startCur;
