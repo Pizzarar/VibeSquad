@@ -2,7 +2,7 @@
 // instead of making the Buddy relay the question.
 import type { Pin } from "./pins";
 
-export const CHECKIN_PROMPT = "Check-in from Aub: status in 3 lines: done / doing / blocked.";
+export const CHECKIN_PROMPT = "Check-in from the owner: status in 3 lines: done / doing / blocked.";
 export const CHECKIN_BUSY_NOTE = "Lead's heads-down, working away. Check back later.";
 export const CHECKIN_BUSY_MS = 2500;
 
