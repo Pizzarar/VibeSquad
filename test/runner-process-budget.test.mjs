@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import { Runner, maxLiveFromEnv, DEFAULT_MAX_LIVE } from '../runner/runner.mjs';
+import { Runner, maxLiveFromEnv, DEFAULT_MAX_LIVE, queueMsFromEnv, DEFAULT_QUEUE_MS } from '../runner/runner.mjs';
 import { createClaudeAdapter } from '../runner/adapters/claude.mjs';
 import { killTree, spawnNoShell } from '../runner/spawn.mjs';
 
@@ -52,12 +52,14 @@ function setup(maxLive) {
 }
 const mk = (runner, extra = {}) => runner.create({ provider: 'claude', cwd: os.tmpdir(), ...extra });
 
-test('default cap is 6 and VS_RUNNER_MAX_LIVE overrides it', () => {
-  assert.equal(DEFAULT_MAX_LIVE, 6);
-  assert.equal(maxLiveFromEnv({}), 6);
+test('default cap is 16 and VS_RUNNER_MAX_LIVE overrides it', () => {
+  assert.equal(DEFAULT_MAX_LIVE, 16);
+  assert.equal(maxLiveFromEnv({}), 16);
+  assert.equal(queueMsFromEnv({}), DEFAULT_QUEUE_MS);
+  assert.equal(queueMsFromEnv({ VS_RUNNER_QUEUE_MS: '0' }), 0);
   assert.equal(maxLiveFromEnv({ VS_RUNNER_MAX_LIVE: '3' }), 3);
-  assert.equal(maxLiveFromEnv({ VS_RUNNER_MAX_LIVE: 'nope' }), 6);
-  assert.equal(maxLiveFromEnv({ VS_RUNNER_MAX_LIVE: '0' }), 6);
+  assert.equal(maxLiveFromEnv({ VS_RUNNER_MAX_LIVE: 'nope' }), 16);
+  assert.equal(maxLiveFromEnv({ VS_RUNNER_MAX_LIVE: '0' }), 16);
 });
 
 test('claude adapter passes --resume only when resuming', () => {
@@ -144,6 +146,25 @@ test('refuses with a clear error only when no agent is idle; a refused spawn lea
   await tick();
   assert.doesNotThrow(() => mk(runner), 'once a turn ends there is an idle agent to park');
   assert.ok(b);
+  runner.shutdown();
+});
+
+test('at the cap a queued spawn waits for a turn to end instead of failing', async () => {
+  const { runner } = setup(2);
+  mk(runner, { prompt: 'work' }); mk(runner, { prompt: 'work' });
+  assert.throws(() => mk(runner), (err) => err.code === 'AGENT_CAP' && err.status === 503);
+  const before = runner.list().length;
+  const id = await runner.createQueued({ provider: 'claude', cwd: os.tmpdir() }, { queueMs: 5000 });
+  assert.match(id, /^rn-/);
+  assert.equal(runner.list().length, before + 1, 'exactly one agent created after waiting');
+  assert.equal(runner.live.size, 2, 'still within the cap: an idle agent was parked');
+  runner.shutdown();
+});
+
+test('a queued spawn still fails with AGENT_CAP once its wait runs out', async () => {
+  const { runner } = setup(1);
+  mk(runner, { prompt: 'work' });
+  await assert.rejects(runner.createQueued({ provider: 'claude', cwd: os.tmpdir() }, { queueMs: 0 }), (err) => err.code === 'AGENT_CAP');
   runner.shutdown();
 });
 

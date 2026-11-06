@@ -37,18 +37,35 @@ export function defaultAdapters(opts = {}) {
   return adapters;
 }
 
-// Concurrent live agent processes. Each claude brings ~9 child processes and ~0.7 GB, so idle ones are parked past this.
-export const DEFAULT_MAX_LIVE = 6;
+// Concurrent live agent processes. Each claude is ~0.4 GB with its MCP sidecars (godot-ai is project-scoped now),
+// so 16 fits a normal dev box with room to spare; idle ones are parked past this.
+export const DEFAULT_MAX_LIVE = 16;
+// How long a spawn or resume waits for a free slot when every live agent is mid-turn.
+export const DEFAULT_QUEUE_MS = 10 * 60_000;
+export function queueMsFromEnv(env = process.env) {
+  const n = Number(env.VS_RUNNER_QUEUE_MS);
+  return Number.isInteger(n) && n >= 0 ? n : DEFAULT_QUEUE_MS;
+}
+
+export class AgentCapError extends Error {
+  constructor(maxLive) {
+    super(`agent cap reached (${maxLive} live) and none are idle to park; wait for one to finish, or raise VS_RUNNER_MAX_LIVE`);
+    this.code = 'AGENT_CAP';
+    this.status = 503; // runner HTTP API: a busy machine, not a bad request
+  }
+}
 export function maxLiveFromEnv(env = process.env) {
   const n = Number(env.VS_RUNNER_MAX_LIVE);
   return Number.isInteger(n) && n >= 1 ? n : DEFAULT_MAX_LIVE;
 }
 
 export class Runner {
-  constructor({ dir, adapters = defaultAdapters(), maxLive = maxLiveFromEnv() }) {
+  constructor({ dir, adapters = defaultAdapters(), maxLive = maxLiveFromEnv(), queueMs = queueMsFromEnv() }) {
     this.store = new LogStore(dir);
     this.adapters = adapters;
     this.maxLive = maxLive;
+    this.queueMs = queueMs;
+    this._slotWaiters = new Set(); // resolvers woken when an agent goes idle or exits (a slot may have opened)
     this.live = new Map(); // id -> { handle, status, ... } for agents running in THIS process only
   }
 
@@ -71,6 +88,7 @@ export class Runner {
       if (type === 'status') {
         entry.status = data.status;
         if (data.status === 'idle' || data.status === 'running') entry.lastActive = Date.now();
+        if (data.status === 'idle') this._wakeSlotWaiters();
       } else if (type === 'session' && data.sessionId) entry.sessionId = data.sessionId;
       this.store.append(id, type === 'status' ? 'status' : type, data);
     };
@@ -82,6 +100,7 @@ export class Runner {
           entry.status = 'exited';
           this.store.append(id, 'exit', info);
           if (this.live.get(id) === entry) this.live.delete(id);
+          this._wakeSlotWaiters();
         },
       });
     } catch (err) {
@@ -98,10 +117,39 @@ export class Runner {
       const idle = [...this.live.entries()]
         .filter(([k, e]) => k !== except && e.status === 'idle' && e.handle && e.sessionId && this.adapters[e.provider]?.canPark)
         .sort((a, b) => a[1].lastActive - b[1].lastActive)[0];
-      if (!idle) throw new Error(`agent cap reached (${this.maxLive} live) and none are idle to park; wait for one to finish, or raise VS_RUNNER_MAX_LIVE`);
+      if (!idle) throw new AgentCapError(this.maxLive);
       this.park(idle[0]);
     }
   }
+
+  _wakeSlotWaiters() {
+    const waiters = [...this._slotWaiters];
+    this._slotWaiters.clear();
+    for (const wake of waiters) wake();
+  }
+
+  // Retries fn() while it fails only because the cap is full, waking on every idle/exit, for up to queueMs.
+  // Leads dispatching several workers at once queue behind busy agents instead of getting spawn errors.
+  async _whenSlot(fn, queueMs = this.queueMs) {
+    const deadline = Date.now() + queueMs;
+    for (;;) {
+      try {
+        return fn();
+      } catch (err) {
+        if (err?.code !== 'AGENT_CAP' || Date.now() >= deadline) throw err;
+      }
+      await new Promise((resolve) => {
+        const wake = () => { clearTimeout(t); this._slotWaiters.delete(wake); resolve(); };
+        const t = setTimeout(wake, Math.max(0, Math.min(deadline - Date.now(), 30_000))); // periodic recheck too
+        t.unref?.();
+        this._slotWaiters.add(wake);
+      });
+    }
+  }
+
+  createQueued(spec, opts = {}) { return this._whenSlot(() => this.create(spec), opts.queueMs); }
+
+  sendQueued(id, text, sendOpts = {}, opts = {}) { return this._whenSlot(() => this.send(id, text, sendOpts), opts.queueMs); }
 
   // Stops an idle agent's process tree but keeps its transcript; the next send() resumes it with --resume.
   park(id) {
