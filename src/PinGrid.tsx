@@ -8,7 +8,7 @@ import { client, getPaseoState, markAgentRead, sendMessage } from "./paseo";
 import { DEMO } from "./demoFlag";
 import { openContextMenu } from "./CommandPalette";
 import { demoTimeline } from "./demo";
-import { hasLooksDone, gridPinsForSquad, hubPinForSquad, isHubPin, liveBuddyDupes, looksDoneFor, LOOKS_DONE_MARKER, pinsForSquad, SEND_TO_MARKER, topicOfBrainstorm, withoutSpinOffFence, type Pin } from "./pins";
+import { hasLooksDone, gridPinsForSquad, hubPinForSquad, isHubPin, liveBuddyDupes, liveBuddyId, looksDoneFor, LOOKS_DONE_MARKER, pinsForSquad, SEND_TO_MARKER, topicOfBrainstorm, withoutSpinOffFence, type Pin } from "./pins";
 import { keepPinBuddy, openBriefEditor, openPin as openPinAction } from "./pinActions";
 import { openPinMember, usePinFocus } from "./pinFocus";
 import { useIsShown } from "./panes";
@@ -102,9 +102,10 @@ export async function openPin(pin: Pin, profile?: string): Promise<string> {
   return openPinAction(pin, profile ? { profile } : undefined);
 }
 
-/** Opens the live Brainstorm, or hands the pin to onQuickStart when there is none. */
+/** Opens the live Brainstorm, or hands the pin to onQuickStart (the Spin Up picker) when there is none or it is closed. */
 export function openPinOr(pin: Pin, onOpenAgent: (id: string) => void, onQuickStart: PinHandler) {
-  if (pin.brainstorm) onOpenAgent(pin.brainstorm.agent.id);
+  const live = liveBuddyId(pin);
+  if (live) onOpenAgent(live);
   else {
     void ensureHubLaneRegistered(pin);
     return onQuickStart(pin);

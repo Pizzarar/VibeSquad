@@ -62,7 +62,7 @@ export const pinStateOf = (lane: LaneDef): PinState => {
 /** True for a lane removed with Remove team. Removed lanes never show as pins, Done entries or squad counts. */
 export const isRemovedLane = (lane: LaneDef | null | undefined): boolean => (lane as PinLane | undefined)?.state === "removed";
 
-const isLive = (m: Member | null | undefined): m is Member =>
+export const isLive = (m: Member | null | undefined): m is Member =>
   Boolean(m) && !m!.agent.archivedAt && m!.agent.status !== "closed";
 
 const live = (ms: Member[]) => ms.filter(isLive);
@@ -418,3 +418,6 @@ export function briefShrinkWarning(before: string, after: string): string {
   }
   return "";
 }
+
+/** The pin's Buddy id only while it is live; a closed (or archived) Buddy is dormant and goes through the Spin Up picker. */
+export const liveBuddyId = (pin: Pin): string | null => (isLive(pin.brainstorm) ? pin.brainstorm.agent.id : null);

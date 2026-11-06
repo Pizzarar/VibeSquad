@@ -59,6 +59,8 @@ function stubFor(specifier) {
 }
 
 const pinFocusMod = await import("../src/pinFocus.ts");
+globalThis.localStorage ??= { getItem: () => null, setItem() {}, removeItem() {} };
+const panesMod = await import("../src/panes.ts");
 const pinActionsMod = await import("../src/pinActions.ts");
 
 function makePin(laneId = "bug-chaser", lastProfile = undefined) {
@@ -82,27 +84,34 @@ const livePin = (laneId, status) => ({
   brainstorm: { agent: { id: `bs-${laneId}`, status, labels: { team: "vibesquad", lane: laneId, role: "brainstorm" } }, kind: "brainstorm", agentType: "brainstorm" },
 });
 
-test("focusPin on a new pin (no Buddy) spawns through openPin and focuses the new Buddy on the first click", async () => {
+test("focusPin on a dormant pin (no Buddy) does not spawn; it shows the Spin Up picker (gone:true)", async () => {
   const calls = [];
-  globalThis.__testOpenPin = async (p) => {
-    calls.push(p.lane.id);
-    const m = { agent: { id: "bs-new-first", status: "idle", labels: { team: p.squad.id, lane: p.lane.id, role: "brainstorm" } }, kind: "brainstorm", agentType: "brainstorm", team: p.squad, laneId: p.lane.id };
-    globalThis.__testViews = [{ team: p.squad, lanes: [{ lane: p.lane, brainstorm: m, lead: null, members: [m], topicBrainstorms: [], duplicateBrainstorms: [] }], members: [m], needsYou: 0 }];
-    return "bs-new-first";
-  };
-  const id = await pinFocusMod.focusPin(makePin("lane-first-click"));
-  assert.equal(id, "bs-new-first");
-  assert.deepEqual(calls, ["lane-first-click"]);
-  assert.equal(pinFocusMod.getPinFocus()?.agentId, "bs-new-first");
-  assert.equal(pinFocusMod.getPinFocus()?.gone, false);
+  globalThis.__testOpenPin = async (p) => (calls.push(p.lane.id), "bs-never");
+  assert.equal(await pinFocusMod.focusPin(makePin("lane-first-click")), null);
+  assert.deepEqual(calls, [], "no spawn on click");
+  const f = pinFocusMod.getPinFocus();
+  assert.equal(f?.agentId, null);
+  assert.equal(f?.gone, true);
+  assert.equal(f?.laneId, "lane-first-click");
 });
 
-test("focusPin on a pin whose Buddy is closed goes through openPin (reopen/replace), not the closed id", async () => {
+const viewOf = (pin) => ({ team: pin.squad, lanes: [{ lane: pin.lane, brainstorm: pin.brainstorm, lead: null, members: pin.brainstorm ? [pin.brainstorm] : [], topicBrainstorms: [], duplicateBrainstorms: [] }], members: pin.brainstorm ? [pin.brainstorm] : [], needsYou: 0 });
+
+test("focusPin on a closed Buddy does not spawn or reuse the closed id, and reconcile keeps gone:true; a live Buddy still opens", async () => {
   const calls = [];
   globalThis.__testOpenPin = async (p) => (calls.push(p.lane.id), "bs-reopened");
-  assert.equal(await pinFocusMod.focusPin(livePin("lane-closed", "closed")), "bs-reopened");
-  assert.deepEqual(calls, ["lane-closed"]);
-  calls.length = 0;
+  const closed = livePin("lane-closed", "closed");
+  globalThis.__testViews = [viewOf(closed)];
+  assert.equal(await pinFocusMod.focusPin(closed), null);
+  assert.deepEqual(calls, []);
+  // A panes change runs reconcile() against the views that still carry the closed Buddy.
+  panesMod.toggleFocus();
+  panesMod.toggleFocus();
+  const f = pinFocusMod.getPinFocus();
+  assert.equal(f?.laneId, "lane-closed", "pin stays focused");
+  assert.equal(f?.agentId, null, "reconcile must not follow the closed Buddy");
+  assert.equal(f?.gone, true);
+  globalThis.__testViews = [];
   assert.equal(await pinFocusMod.focusPin(livePin("lane-live", "idle")), "bs-lane-live");
   assert.deepEqual(calls, [], "a live Buddy is focused without a start");
 });

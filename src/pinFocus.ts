@@ -11,7 +11,7 @@ import { getPaseoState, subscribePaseo } from "./paseo";
 import { openPin } from "./PinGrid";
 import { isLiveUrlAgent, levelUp, loadSavedFocus, planRestore, reconcilePinFocus, saveFocus, startsOnGrid } from "./pinFocusLogic";
 import { getRestoreLastView } from "./prefs";
-import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
+import { hubPinForSquad, liveBuddyId, pinsForSquad, type Pin } from "./pins";
 import { subscribeTeams } from "./teams";
 import { derived, subscribeTree } from "./ui";
 
@@ -115,7 +115,7 @@ function reconcile() {
   const f = state.focus;
   if (!f || reconciling) return;
   const pin = focusedPin(f);
-  const d = reconcilePinFocus(f, pin?.brainstorm?.agent.id ?? null, active, laneMemberIdsOf(pin));
+  const d = reconcilePinFocus(f, pin ? liveBuddyId(pin) : null, active, laneMemberIdsOf(pin));
   if (d.kind === "keep") return;
   reconciling = true;
   try {
@@ -138,11 +138,20 @@ subscribeTeams(reconcile);
  * Focus a pin: its existing Brainstorm (or past former-brainstorm) opens in the middle at once;
  * if there is no session yet, show the empty focus view with an explicit "Spin Up" button without auto-spawning.
  */
-export async function focusPin(pin: Pin): Promise<string> {
-  // No Buddy yet (a `vs pin new` pin) or only a closed one: the first click spawns or reopens it and focuses its chat.
-  if (!pin.brainstorm || pin.brainstorm.agent.status === "closed") return spinUpPin(pin);
+export async function focusPin(pin: Pin): Promise<string | null> {
+  // Dormant pin (no Buddy, or only a closed one): never auto-spawn. Show the Spin Up profile picker instead.
+  const live = liveBuddyId(pin);
+  if (!live) {
+    set({
+      focus: { squadId: pin.squad.id, laneId: pin.lane.id, agentId: null, gone: true, held: getPanes().leftActiveId, seq: ++seq, spinUpError: null },
+      home: false,
+      homeActive: null,
+      squadsHome: false,
+      spinUpError: null,
+    });
+    return null;
+  }
   const mine = ++seq;
-  const live = pin.brainstorm.agent.id;
   // Set the focus before opening so the reconcile on the panes change sees the expected tab.
   set({
     focus: { squadId: pin.squad.id, laneId: pin.lane.id, agentId: live, gone: false, held: null, seq: mine, spinUpError: null },
@@ -273,7 +282,7 @@ function tryRestore() {
     saved,
     urlAgent,
     urlAgentLive: urlLive,
-    pinBrainstorm: pin ? (pin.brainstorm?.agent.id ?? null) : undefined,
+    pinBrainstorm: pin ? liveBuddyId(pin) : undefined,
   });
   if (plan.kind === "none") return;
   if (plan.closeStale) closeTab(plan.closeStale);
