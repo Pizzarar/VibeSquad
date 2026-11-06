@@ -564,7 +564,7 @@ function shouldWatchPaseo() {
  * and dispatches Web Push notifications on permission requests, needs-you transitions,
  * and lead/worker turn completions or errors.
  */
-export function startPushWatcher(rootDir = REPO_ROOT, { runner = runnerLanes().size ? sharedRunnerBackend() : null, paseo } = {}) {
+export function startPushWatcher(rootDir = REPO_ROOT, { runner = runnerLanes().size ? sharedRunnerBackend() : null, paseo, createClient } = {}) {
   lastRootDir = rootDir;
   if (activeWatcher) return activeWatcher;
   watcherStarted = true;
@@ -576,12 +576,17 @@ export function startPushWatcher(rootDir = REPO_ROOT, { runner = runnerLanes().s
   let client = null;
   let backend = null;
   let siblingAgents = null;
+  // Each attach gets a generation; callbacks and in-flight seeds from an older attach drop out once it is detached.
+  let attachGen = 0;
+  let disposers = [];
   const attachPaseo = () => {
   if (client) return;
+  const gen = ++attachGen;
+  const isCurrent = () => !stopped && gen === attachGen;
   const { listen } = readPaseoConfig(rootDir);
   const wsUrl = listen.startsWith("ws://") || listen.startsWith("wss://") ? `${listen.replace(/\/$/, "")}/ws` : `ws://${listen}/ws`;
   const password = readDaemonPassword();
-  client = new DaemonClient({
+  client = (createClient ?? ((cfg) => new DaemonClient(cfg)))({
     url: wsUrl,
     clientId: `vibesquad-push-watcher-${ process.pid }`,
     clientType: "cli",
@@ -618,8 +623,11 @@ export function startPushWatcher(rootDir = REPO_ROOT, { runner = runnerLanes().s
     }
   };
 
-  backend.subscribe((event) => {
-    if (stopped) return;
+  const keep = (off) => {
+    if (typeof off === "function") disposers.push(off);
+  };
+  keep(backend.subscribe((event) => {
+    if (!isCurrent()) return;
     if (event.type === "agent_update" && event.payload?.agent) {
       handleAgentSnapshot(event.payload.agent, false);
     } else if (event.type === "agent_permission_request" && event.agentId) {
@@ -640,11 +648,12 @@ export function startPushWatcher(rootDir = REPO_ROOT, { runner = runnerLanes().s
     } else if (event.type === "agent_deleted" && event.agentId) {
       agentsById.delete(event.agentId);
     }
-  });
+  }));
 
   const seedAgents = async () => {
     try {
       const res = await backend.fetchAgents({ subscribe: {}, filter: { includeArchived: false } });
+      if (!isCurrent()) return; // detached while the list was in flight: do not repopulate state
       for (const entry of res?.entries ?? []) {
         if (entry?.agent) handleAgentSnapshot(entry.agent, true);
       }
@@ -653,12 +662,13 @@ export function startPushWatcher(rootDir = REPO_ROOT, { runner = runnerLanes().s
     }
   };
 
-  backend.subscribeConnectionStatus((st) => {
+  keep(backend.subscribeConnectionStatus((st) => {
+    if (!isCurrent()) return;
     queueMicrotask(() => unrefClientTimers(client));
-    if (!stopped && st.status === "connected") {
+    if (st.status === "connected") {
       void seedAgents();
     }
-  });
+  }));
 
   // The watcher owns the one long-lived Paseo client, so it is the Who's here view of Paseo agents for runner lanes
   // (a failing list = Paseo down: the runner falls back to its runner-only-lane path).
@@ -668,7 +678,7 @@ export function startPushWatcher(rootDir = REPO_ROOT, { runner = runnerLanes().s
   };
   runner?.useSiblingAgents?.(siblingAgents);
 
-  backend.connect().then(() => seedAgents()).catch(() => {});
+  backend.connect().then(() => (isCurrent() ? seedAgents() : undefined)).catch(() => {});
   unrefClientTimers(client);
   queueMicrotask(() => unrefClientTimers(client));
   };
@@ -676,6 +686,14 @@ export function startPushWatcher(rootDir = REPO_ROOT, { runner = runnerLanes().s
   const detachPaseo = () => {
     if (!client) return;
     const old = backend;
+    attachGen += 1; // invalidates every callback and in-flight seed of the attach being torn down
+    for (const off of disposers.splice(0)) {
+      try {
+        off();
+      } catch {
+        /* already gone */
+      }
+    }
     if (siblingAgents) runner?.dropSiblingAgents?.(siblingAgents);
     if (watcherClient === client) watcherClient = null;
     client = null;
@@ -693,15 +711,34 @@ export function startPushWatcher(rootDir = REPO_ROOT, { runner = runnerLanes().s
   // The decision is re-run on a cheap timer (reuses the cached TCP probe) and on demand (syncRunnerPushWatch): attach when
   // the setting flips, a lane is pinned or a daemon starts listening; detach once none of those hold, so a stopped Paseo is
   // not reconnected to forever.
-  const recheck = async () => {
+  const recheckOnce = async () => {
     try {
-      const wanted = paseo ?? (shouldWatchPaseo() || (await paseoDaemonAlive()));
+      const wanted = paseo !== undefined ? await (typeof paseo === "function" ? paseo() : paseo) : shouldWatchPaseo() || (await paseoDaemonAlive());
       if (stopped) return;
       if (wanted) attachPaseo();
       else detachPaseo();
     } catch {
       /* Paseo is optional */
     }
+  };
+  // Single flight: a request that arrives mid-probe queues exactly one more pass (which sees a reset probe), so an older
+  // answer can never be applied after a newer one.
+  let rechecking = null;
+  let rerun = false;
+  const recheck = () => {
+    if (rechecking) {
+      rerun = true;
+      return rechecking;
+    }
+    rechecking = (async () => {
+      do {
+        rerun = false;
+        await recheckOnce();
+      } while (rerun && !stopped);
+    })().finally(() => {
+      rechecking = null;
+    });
+    return rechecking;
   };
   void recheck();
   const recheckTimer = setInterval(() => void recheck(), PASEO_RECHECK_MS);
@@ -710,6 +747,9 @@ export function startPushWatcher(rootDir = REPO_ROOT, { runner = runnerLanes().s
   activeWatcher = {
     watchingRunner,
     recheck,
+    get paseoAttached() {
+      return client !== null;
+    },
     stop() {
       stopped = true;
       clearInterval(recheckTimer);

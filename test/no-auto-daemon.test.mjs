@@ -38,8 +38,8 @@ describe("no-auto-daemon · VIBESQUAD_NO_DAEMON gate", () => {
 
   test("push watcher builds its DaemonClient only when Paseo is enabled or already listening", () => {
     const s = src("server/push.mjs");
-    assert.match(s, /const attachPaseo = \(\) => \{[\s\S]*?client = new DaemonClient\(/);
-    assert.match(s, /paseo \?\? \(shouldWatchPaseo\(\) \|\| \(await paseoDaemonAlive\(\)\)\)/);
+    assert.match(s, /const attachPaseo = \(\) => \{[\s\S]*?client = \(createClient \?\? \(\(cfg\) => new DaemonClient\(cfg\)\)\)\(/);
+    assert.match(s, /shouldWatchPaseo\(\) \|\| \(await paseoDaemonAlive\(\)\)/);
     assert.equal((s.match(/new DaemonClient\(/g) || []).length, 1);
   });
 

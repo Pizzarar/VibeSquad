@@ -14,7 +14,7 @@ export function getBackend(client, opts = {}) {
   const paseo = new PaseoBackend(client);
   const lanes = opts.lanes ?? runnerLanes;
   if (!(opts.force || lanes().size)) return paseo;
-  return new RoutingBackend(paseo, opts.runner ?? runnerBackend(), { lanes, paseoAlive: opts.paseoAlive === undefined ? paseoDaemonAlive : opts.paseoAlive, expected: opts.expected ?? (() => paseoExpected({ lanes })) });
+  return new RoutingBackend(paseo, opts.runner ?? runnerBackend(), { lanes, paseoAlive: opts.paseoAlive === undefined ? paseoDaemonAlive : opts.paseoAlive });
 }
 
 /** Backend with no daemon client, for the CLI shell-outs only. */

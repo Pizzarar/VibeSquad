@@ -10,7 +10,7 @@ import { readRawPaseoConfig } from "./paseo-control.mjs";
 import { briefRootFor, laneWorkingDir } from "./brief-path.mjs";
 import { defangPromptFences } from "./write-guards.mjs";
 import { detachLiveChildrenViaClient, listDaemonAgents } from "./detach-children.mjs";
-import { getBackend } from "./backend/index.mjs";
+import { getBackend, runnerLanes } from "./backend/index.mjs";
 import { BRIEF_HISTORY_KEEP, BRIEF_SHRINK_FROM, BRIEF_SHRINK_TO, backupBrief, writeBriefFile } from "./brief-write.mjs";
 import { liveInFlightBlock } from "./in-flight.mjs";
 import { refreshWhosHere } from "./whos-here.mjs";
@@ -521,7 +521,12 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
         if (body.agents) return body.agents instanceof Map ? [...body.agents.values()] : Array.isArray(body.agents) ? body.agents : [];
         // A daemon client was expected but never connected (daemon restarting): unknown, not empty.
         if (client && !connected) return null;
-        if (connected && client && typeof backend.fetchAgents === "function") return asList(await backend.fetchAgents().catch(() => null));
+        if (connected && client && typeof backend.fetchAgents === "function") {
+          const res = await backend.fetchAgents().catch(() => null);
+          // Runner-only list because Paseo is down: fine for a runner lane, unknown for a lane pinned to Paseo (its Buddy may live there).
+          if (res?.paseoUnavailable && runnerLanes().paseoLanes?.has(String(laneId).toLowerCase())) return null;
+          return asList(res);
+        }
         if (connected && client && typeof backend.listAgents === "function") return asList(await backend.listAgents().catch(() => null));
         return [];
       };

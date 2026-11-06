@@ -31,7 +31,7 @@ export class RunnerBackend implements AgentBackend {
   runCli(): null;
 }
 export class RoutingBackend implements AgentBackend {
-  constructor(paseo: PaseoBackend, runner: RunnerBackend, opts?: { lanes?: () => Set<string>; paseoAlive?: (() => Promise<boolean>) | null; expected?: () => boolean });
+  constructor(paseo: PaseoBackend, runner: RunnerBackend, opts?: { lanes?: () => Set<string>; paseoAlive?: (() => Promise<boolean>) | null});
   readonly paseoUnavailable: boolean;
   readonly paseo: PaseoBackend;
   readonly runner: RunnerBackend;

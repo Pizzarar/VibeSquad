@@ -413,17 +413,32 @@ let paseoConn = false;
 const PASEO_RETRY_MS = 20_000;
 let paseoParked = false;
 let paseoRetryTimer: ReturnType<typeof setTimeout> | null = null;
+// The runner side is "on" once its status says so, even before its stream opens (a cold runner start takes seconds).
+const runnerOn = (): boolean => runnerConn || !!getRunnerStatus()?.enabled;
+
+/** Paseo agents we can no longer reach: drop them rather than show dead rows that fail on click. Runner agents stay. */
+function dropPaseoAgents(): void {
+  if (![...state.agents.keys()].some((id) => !isRunnerId(id))) return;
+  const agents = new Map<string, PaseoAgent>();
+  for (const [id, a] of state.agents) if (isRunnerId(id)) agents.set(id, a);
+  set({ agents });
+}
+
+// Pause, never dispose: DaemonClient.close() is terminal ("disposed"), so a later Paseo start could never reconnect. Reconnect
+// is switched off (which also cancels the pending retry timer) and switched back on when the status poll sees Paseo again.
 function parkPaseo(): void {
   if (isRemote()) return;
   paseoParked = true;
   paseoConn = false;
-  void Promise.resolve(daemonClient.close()).catch(() => {});
+  daemonClient.setReconnectEnabled?.(false);
+  dropPaseoAgents();
   if (paseoRetryTimer) return;
   const tick = () => {
     paseoRetryTimer = null;
     void fetchRunnerStatus().then((s) => {
       if (s?.paseo?.reachable) {
         paseoParked = false;
+        daemonClient.setReconnectEnabled?.(true);
         void connect();
       } else paseoRetryTimer = setTimeout(tick, PASEO_RETRY_MS);
     });
@@ -441,6 +456,7 @@ async function connect(): Promise<void> {
         return;
       }
       paseoParked = false;
+      daemonClient.setReconnectEnabled?.(true);
     }
     if (!DEMO && !isRemote()) {
       const auth = await fetchLocalDaemonPassword();
@@ -457,8 +473,8 @@ async function connect(): Promise<void> {
   } catch (e) {
     paseoConn = false;
     const authReason = readClientAuthFailure(daemonClient, e);
-    if (!authReason && runnerConn) {
-      parkPaseo(); // Paseo is down but the runner stream is up: stay connected, stop hammering /ws
+    if (!authReason && runnerOn()) {
+      parkPaseo(); // Paseo is down but the runner is up: stay connected, stop hammering /ws
       return;
     }
     if (authReason) {
@@ -529,8 +545,8 @@ export function start() {
       return;
     }
     wasConnected = false;
-    if (runnerConn && !readClientAuthFailure(daemonClient, s)) {
-      if (s.status === "disconnected") parkPaseo(); // runner stream keeps the UI live; no endless /ws retries
+    if (runnerOn() && !readClientAuthFailure(daemonClient, s)) {
+      if (s.status === "disconnected") parkPaseo(); // runner keeps the UI live; no endless /ws retries, no dead Paseo rows
       return;
     }
     if (s.status === "connecting" || s.status === "idle") {
@@ -653,6 +669,10 @@ export async function spawnTeamAgent(req: SpawnRequest): Promise<{ id: string; c
   }
 
   await Promise.race([runnerStatusLoaded, new Promise((r) => setTimeout(r, 3000))]); // the first click must not race the status probe
+  if (!isRunnerLane(req.labels.lane) && getRunnerStatus()?.enabled && !paseoConn) {
+    // A Paseo-pinned lane with no Paseo: say so now instead of hanging on a dead websocket ("Transport not connected").
+    throw Object.assign(new Error("Paseo is not running. Start it in Settings (Start Paseo with VibeSquad) or move this lane to the runner."), { code: "PASEO_UNAVAILABLE" });
+  }
   if (isRunnerLane(req.labels.lane)) {
     const agent = await runnerSpawn({
       config: { provider: req.provider, model: req.model, cwd: req.cwd, title: req.title, modeId: req.modeId, ...(req.systemPrompt ? { systemPrompt: req.systemPrompt } : {}) },

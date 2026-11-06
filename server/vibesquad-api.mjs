@@ -1634,7 +1634,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
       return handleDesktopUpdateJson(req, res, rootDir);
     }
     if (!path.startsWith("/__vibesquad/")) return next?.();
-    if (path.startsWith("/__vibesquad/runner/")) return handleRunnerApi(req, res, { readBody: (r) => readBody(r, bodyLimit), sendJson, ensureRunner: true });
+    if (path.startsWith("/__vibesquad/runner/")) return handleRunnerApi(req, res, { readBody: (r) => readBody(r, bodyLimit), sendJson, ensureRunner: isOwner(req) });
     if (path === "/__vibesquad/schedules" || path.startsWith("/__vibesquad/schedules/")) return handleSchedulesApi(req, res, { readBody, sendJson });
     if (isTerminalsPath(path)) return handleTerminalsApi(req, res, { readBody, sendJson, resolveCwd: (cwd) => resolveShellCwd(cwd, rootDir, opts) });
     if (path === "/__vibesquad/providers" || path.startsWith("/__vibesquad/providers/")) return handleProvidersApi(req, res, { sendJson, readBody: readCleanBody });
@@ -1652,7 +1652,11 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return cachedRead(() => inspectFirstRunStatus(opts.firstRun)).then((st) => sendJson(res, 200, st), (e) => sendJson(res, 500, { error: String(e?.message ?? e) }));
       case "/__vibesquad/first-run/install-paseo":
         if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
-        return startManagedPaseoInstall(opts.firstRun).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { error: String(e?.message ?? e) }));
+        return startManagedPaseoInstall(opts.firstRun).then((r) => {
+          resetPaseoProbe();
+          syncRunnerPushWatch().catch(() => {});
+          return sendJson(res, 200, r);
+        }, (e) => sendJson(res, 500, { error: String(e?.message ?? e) }));
       case "/__vibesquad/settings":
         return handleSettings(req, res).catch((e) => {
           if (!res.headersSent) sendJson(res, 500, { ok: false, error: String(e?.message ?? e) });

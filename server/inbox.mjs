@@ -699,6 +699,13 @@ export function buildTopicBrainstormPrompt({ card, topic, laneId, laneUpper, sum
   ].join("\n");
 }
 
+/** A Paseo-hosted agent id (anything but rn-) cannot be cancelled or archived while Paseo is down; refuse before any state changes. */
+function assertPaseoReachable(backend, agentId) {
+  if (agentId && !String(agentId).startsWith("rn-") && backend?.paseoUnavailable) {
+    throw Object.assign(new Error("Paseo is not running, so this Paseo-hosted topic Buddy cannot be handed off or parked yet. Start Paseo (Settings) and retry."), { code: "PASEO_UNAVAILABLE" });
+  }
+}
+
 export async function openTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
   const baseHome = body.baseHome;
   const cardId = String(body.cardId || body.id || "").trim();
@@ -972,6 +979,7 @@ export async function handoffTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
         await backend.connect();
         connected = true;
       }
+      assertPaseoReachable(backend, targetAgentId);
       archivedAgentId = connected ? await topicArchiveTarget(client, card, targetAgentId) : null;
       if (archivedAgentId) {
         if (!usedTokens && typeof backend.fetchAgent === "function") {
@@ -988,8 +996,10 @@ export async function handoffTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
         }
         await archiveBuddyKeepingChildren(client, archivedAgentId);
       }
-    } catch {
-      // daemon offline is non-fatal
+    } catch (err) {
+      // A Paseo-hosted topic Buddy we cannot reach must stay attached to its card: surface the error, change nothing.
+      if (err?.code === "PASEO_UNAVAILABLE") throw err;
+      // any other daemon failure is non-fatal
     } finally {
       if (!injectedClient && typeof backend.close === "function") {
         await backend.close().catch(() => {});
@@ -1073,6 +1083,7 @@ export async function parkTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
         await backend.connect();
         connected = true;
       }
+      assertPaseoReachable(backend, targetAgentId);
       archivedAgentId = connected ? await topicArchiveTarget(client, card, targetAgentId) : null;
       if (archivedAgentId) {
         if (isDefaultPlaceholder) {
@@ -1105,8 +1116,10 @@ export async function parkTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
         }
         await archiveBuddyKeepingChildren(client, archivedAgentId);
       }
-    } catch {
-      // daemon offline is non-fatal
+    } catch (err) {
+      // A Paseo-hosted topic Buddy we cannot reach must stay attached to its card: surface the error, change nothing.
+      if (err?.code === "PASEO_UNAVAILABLE") throw err;
+      // any other daemon failure is non-fatal
     } finally {
       if (!injectedClient && typeof backend.close === "function") {
         await backend.close().catch(() => {});

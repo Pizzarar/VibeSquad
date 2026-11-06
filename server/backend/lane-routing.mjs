@@ -78,10 +78,16 @@ function mergeLists(paseoRes, runnerRes) {
   return { ...paseoRes, [Array.isArray(paseoRes.entries) ? "entries" : "agents"]: merged };
 }
 
+/** Flags a runner-only list result (array or {entries}/{agents}) with a non-enumerable `paseoUnavailable: true`. */
+function markPaseoUnavailable(res) {
+  if (res && typeof res === "object") Object.defineProperty(res, "paseoUnavailable", { value: true, enumerable: false, configurable: true });
+  return res;
+}
+
 const paseoDownError = () =>
   Object.assign(new Error("Paseo is not running. Start it in Settings (Start Paseo with VibeSquad) or move this lane to the runner."), { code: "PASEO_UNAVAILABLE" });
 
-/** Paseo is wanted on purpose: the autostart setting is on, or a lane is pinned to Paseo. Then a missing daemon is an error, not "no agents". */
+/** Paseo is wanted on purpose: the autostart setting is on, or a lane is pinned to Paseo. (Status only: it no longer blocks runner-only operations.) */
 export function paseoExpected({ settings, lanes = runnerLanes } = {}) {
   try {
     return (settings ?? loadUserSettings()).startPaseoWithVibeSquad === true || lanes().paseoLanes.size > 0;
@@ -96,9 +102,8 @@ export function paseoExpected({ settings, lanes = runnerLanes } = {}) {
  * every Paseo-bound call after that rejects with code PASEO_UNAVAILABLE so callers cannot mistake it for a connected daemon.
  */
 export class RoutingBackend {
-  constructor(paseo, runner, { lanes = runnerLanes, paseoAlive = null, expected = () => false } = {}) {
+  constructor(paseo, runner, { lanes = runnerLanes, paseoAlive = null } = {}) {
     Object.defineProperty(this, "paseoAlive", { value: paseoAlive });
-    Object.defineProperty(this, "expected", { value: expected });
     Object.defineProperty(this, "paseo", { value: paseo });
     Object.defineProperty(this, "runner", { value: runner });
     Object.defineProperty(this, "lanes", { value: lanes });
@@ -170,15 +175,12 @@ for (const name of ["fetchAgents", "listAgents"]) {
       return async (...args) => {
         // Runner agents join the first page only; a later page (cursor) would repeat them.
         if (args[0]?.page?.cursor) return paseoFn(...args);
-        // Paseo down and not wanted: runner-only. Paseo down but wanted (setting on / lane pinned): fail closed so the
-        // duplicate-Buddy guard sees "list unavailable" rather than "no agents".
-        const paseoList = this.state.down
-          ? this.expected()
-            ? Promise.reject(paseoDownError())
-            : Promise.resolve(null)
-          : paseoFn(...args).catch((e) => (this.paseoAlive && !this.expected() ? null : Promise.reject(e)));
+        // Paseo down: runner agents only, flagged `paseoUnavailable` so callers that care (a Paseo-pinned lane's duplicate-Buddy
+        // guard) can fail closed on their own. A runner-only operation must never be blocked by a Paseo that is not in use.
+        const paseoList = this.state.down ? Promise.resolve(null) : paseoFn(...args).catch((e) => (this.paseoAlive ? null : Promise.reject(e)));
         const [p, r] = await Promise.all([paseoList, this.runner[name](...args).catch(() => null)]);
-        return p == null && r != null ? r : mergeLists(p, r);
+        const merged = p == null && r != null ? r : mergeLists(p, r);
+        return this.state.down ? markPaseoUnavailable(merged) : merged;
       };
     },
   });

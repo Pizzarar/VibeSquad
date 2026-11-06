@@ -49,6 +49,28 @@ export async function runnerStatus(laneSet, { alive = paseoDaemonAlive, expected
   };
 }
 
+let ensuring = null;
+let ensureFailedAt = 0;
+const ENSURE_COOLDOWN_MS = 30_000;
+
+/** Start the runner at most once at a time, and not again for a while after a failed start (EventSource reconnects must not respawn it). */
+function ensureRunnerOnce(backend) {
+  if (ensuring) return ensuring;
+  if (Date.now() - ensureFailedAt < ENSURE_COOLDOWN_MS) return Promise.resolve();
+  ensuring = Promise.resolve()
+    .then(() => backend.rc?.ensureRunning?.())
+    .then(
+      () => undefined,
+      () => {
+        ensureFailedAt = Date.now();
+      },
+    )
+    .finally(() => {
+      ensuring = null;
+    });
+  return ensuring;
+}
+
 export async function handleRunnerApi(req, res, { readBody, sendJson, backend = sharedRunnerBackend(), lanes = runnerLanes, status = runnerStatus, ensureRunner = false }) {
   try {
     const parts = (req.url ?? "").split("?")[0].slice(PREFIX.length).split("/").filter(Boolean);
@@ -57,9 +79,9 @@ export async function handleRunnerApi(req, res, { readBody, sendJson, backend = 
     if (parts[0] === "status") return sendJson(res, 200, await status(laneSet));
     if (!laneSet.size) return sendJson(res, 200, { enabled: false, agents: [] });
     if (parts[0] === "events" && parts.length === 1 && req.method === "GET") {
-      // The runner is VibeSquad's own daemon now: an open UI starts it (detached, once) instead of showing "disconnected"
-      // until the first spawn. Best effort; a failing start still yields the stream's { kind: "disconnected" }.
-      if (ensureRunner) await Promise.resolve(backend.rc?.ensureRunning?.()).catch(() => {});
+      // The runner is VibeSquad's own daemon now: an owner's open UI starts it (detached, single-flight, cooled down after a failure)
+      // instead of showing "disconnected" until the first spawn. Non-owners just get the stream.
+      if (ensureRunner) await ensureRunnerOnce(backend);
       return streamEvents(req, res, backend);
     }
     if (parts[0] === "agents" && parts.length === 1 && req.method === "GET") {

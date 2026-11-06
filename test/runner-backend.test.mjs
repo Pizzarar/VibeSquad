@@ -346,18 +346,17 @@ test('a Paseo-bound call after a dead-daemon connect rejects with PASEO_UNAVAILA
   const c = fakePaseoClient('p');
   const r = fakeRunnerBackend();
   const lanes = () => new Set(['own']); // 'pinned' is not a runner lane here
-  const b = new RoutingBackend(new PaseoBackend(c), r, { lanes, paseoAlive: async () => false, expected: () => false });
+  const b = new RoutingBackend(new PaseoBackend(c), r, { lanes, paseoAlive: async () => false });
   await b.connect();
   assert.equal(b.paseoUnavailable, true);
   await assert.rejects(b.createAgent({ labels: { lane: 'pinned' }, config: {} }), { code: 'PASEO_UNAVAILABLE' });
   await assert.rejects(b.cancelAgent('11111111-uuid'), { code: 'PASEO_UNAVAILABLE' });
   assert.equal((await b.createAgent({ labels: { lane: 'own' }, config: {} })).id, 'rn-aaa');
   assert.equal((await b.cancelAgent('rn-aaa'), true), true);
-  // Lists: runner-only while Paseo is not wanted, fail closed while it is (setting on / lane pinned).
-  assert.deepEqual((await b.fetchAgents({})).entries.map((e) => e.agent.id), ['rn-aaa']);
-  const wanted = new RoutingBackend(new PaseoBackend(c), r, { lanes, paseoAlive: async () => false, expected: () => true });
-  await wanted.connect();
-  await assert.rejects(wanted.fetchAgents({}), { code: 'PASEO_UNAVAILABLE' });
+  // Lists: runner agents plus a paseoUnavailable marker, whether or not Paseo is wanted (never a rejection).
+  const list = await b.fetchAgents({});
+  assert.deepEqual(list.entries.map((e) => e.agent.id), ['rn-aaa']);
+  assert.equal(list.paseoUnavailable, true);
 });
 
 test('createPaseoProbe: custom options never touch the shared probe, reset() discards an in-flight result', async () => {
