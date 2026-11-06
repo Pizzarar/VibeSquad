@@ -14,7 +14,7 @@ import { parseSentAttachments, repoPathFor } from "./attachments";
 import { openRightDockTab } from "./RightDock";
 import { listTimelinePrompts, searchTimeline, type TimelinePrompt } from "./paseoTimeline";
 import { perfEndPainted, perfSendEvent } from "./perf";
-import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, matchesFilter, localPrompts, localSearch, mergeLiveItem, maxEntrySeq, syncNeeded, latestReasoningIndex, reasoningText, sortedHits, stepIndex, type SearchLocation, type TimelineFilter } from "./timelineFilter";
+import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, coalesceReplies, matchesFilter, localPrompts, localSearch, mergeLiveItem, maxEntrySeq, syncNeeded, latestReasoningIndex, reasoningText, sortedHits, stepIndex, type SearchLocation, type TimelineFilter } from "./timelineFilter";
 import { BARE_PATH_RE, parseFileToken } from "./fileLinks";
 import { toolStartsExpanded, usePref } from "./prefs";
 import { getPanes } from "./panes";
@@ -944,7 +944,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
       .timeline.refetch({ direction: "tail", limit: 40, projection: "projected" })
       .then((t) => {
         if (!alive) return;
-        const predEntries = (t.entries ?? []) as Entry[];
+        const predEntries = coalesceReplies((t.entries ?? []) as Entry[]);
         setPredecessor({ entries: predEntries, label: switchLabel || "new provider" });
       })
       .catch(() => {});
@@ -982,7 +982,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
         if (t.error) setError(String(t.error));
         else {
           setError(null);
-          const newEntries = t.entries as Entry[];
+          const newEntries = coalesceReplies(t.entries as Entry[]);
           setEntries(newEntries);
           lastSeq.current = maxEntrySeq(newEntries);
           const tAny = t as any;
@@ -1097,7 +1097,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
       const tAny = t as any;
       const older = (tAny.entries ?? tAny.payload?.entries ?? []) as Entry[];
       if (older.length > 0) {
-        setEntries((prev) => [...older, ...prev]);
+        setEntries((prev) => coalesceReplies([...older, ...prev]));
         const startCur = tAny.startCursor ?? tAny.payload?.startCursor;
         if (startCur && typeof startCur.epoch === "string" && typeof startCur.seq === "number") {
           earliestCursor.current = startCur;

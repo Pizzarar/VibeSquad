@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { RunnerClient, runnerHome } from "./runner-client.mjs";
+import { rejoinReply } from "../reply-coalesce.mjs";
 
 const FIRST_CLASS = ["squad", "team", "lane", "role", "ord", "profile"];
 const ENV_FOR = { lane: "VS_LANE", team: "VS_TEAM", role: "VS_ROLE", profile: "VS_PROFILE" };
@@ -99,18 +100,16 @@ export function toTimeline(events) {
         entries.push({ ...base, item: { type: "user_message", text: e.text } });
         break;
       case "output":
-        // A late thought chunk must not split one reply in two: text right after a trailing thought (no gap in seq,
-        // no user message or tool between) rejoins the message before it, and the thought moves ahead of the reply.
-        // AGY output chunks are raw deltas, so they join without a separator.
-        const msg = last?.item.type === "reasoning" ? entries[entries.length - 2] : last;
-        if (msg?.item.type === "assistant_message" && last.seqEnd === e.seq - 1) {
-          msg.item.text += e.text;
-          msg.seqEnd = e.seq;
-          if (msg !== last) {
-            entries[entries.length - 2] = last;
-            entries[entries.length - 1] = msg;
-          }
-        } else entries.push({ ...base, item: { type: "assistant_message", text: e.text } });
+        // A late thought chunk must not split one reply in two (see reply-coalesce.mjs).
+        if (last?.item.type === "assistant_message" && last.seqEnd === e.seq - 1) {
+          last.item.text += e.text;
+          last.seqEnd = e.seq;
+        } else {
+          const next = { ...base, item: { type: "assistant_message", text: e.text } };
+          const pair = entries.length >= 2 ? rejoinReply(entries[entries.length - 2], last, next) : null;
+          if (pair) entries.splice(-2, 2, ...pair);
+          else entries.push(next);
+        }
         break;
       case "thought":
         if (last?.item.type === "reasoning" && last.seqEnd === e.seq - 1) {

@@ -132,3 +132,17 @@ test("rejoined reply ends the list with the thought moved ahead of it", () => {
   assert.deepEqual(e.slice(1).map((x) => x.item.type + ":" + x.item.text), ["reasoning:T1", "reasoning:T2", "assistant_message:AB"]);
   assert.equal(latestReasoningIndex(e), 2); // the finished reply is last, so no thought sits under it
 });
+
+test("a projected refetch of text -> thought -> text yields one reply, with the same guards", async () => {
+  const { coalesceReplies } = await import("../src/timelineFilter.ts");
+  const row = (type, text, a, b = a, extra = {}) => ({ item: { type, text, ...extra }, seqStart: a, seqEnd: b });
+  const out = coalesceReplies([row("user_message", "hi", 0), row("assistant_message", "Hello ", 1), row("reasoning", "hmm", 2), row("assistant_message", "world", 3, 5)]);
+  assert.deepEqual(out.map((x) => x.item.type + ":" + x.item.text), ["user_message:hi", "reasoning:hmm", "assistant_message:Hello world"]);
+  assert.equal(out[2].seqStart, 1);
+  assert.equal(out[2].seqEnd, 5);
+  const types = (l) => l.map((x) => x.item.type);
+  // user message between, seq gap, different message id: left as separate rows
+  assert.deepEqual(types(coalesceReplies([row("assistant_message", "A", 1), row("reasoning", "t", 2), row("user_message", "q", 3), row("assistant_message", "B", 4)])), ["assistant_message", "reasoning", "user_message", "assistant_message"]);
+  assert.equal(coalesceReplies([row("assistant_message", "A", 1), row("reasoning", "t", 2), row("assistant_message", "B", 9)]).length, 3);
+  assert.equal(coalesceReplies([row("assistant_message", "A", 1, 1, { messageId: "m1" }), row("reasoning", "t", 2), row("assistant_message", "B", 3, 3, { messageId: "m2" })]).length, 3);
+});
