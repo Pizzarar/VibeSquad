@@ -20,6 +20,7 @@ import {
 import { isLocallyHidden, isMarkedUnread } from "./attentionLocal";
 import { clearWorkspaceIfQuiet } from "./paseoAttention";
 import { listProviderModels } from "./paseoProviders";
+import { isRunnerId } from "./runnerBridge";
 import {
   auditAntigravityAgent,
   CANCEL_AND_RESUME_PROMPT,
@@ -703,7 +704,7 @@ export function DrawerHeader({
   const [modelValue, setModelValue] = useState(agent.model ?? "");
   const [customModelMode, setCustomModelMode] = useState(false);
   const [liveModels, setLiveModels] = useState<Array<{ id: string }>>(
-    () => providerModelsCache.get(agent.provider) ?? [],
+    () => providerModelsCache.get((isRunnerId(agent.id) ? "rn:" : "") + agent.provider) ?? [],
   );
   const modelSubmittedRef = useRef<string | null>(null);
   const [modelError, setModelError] = useState("");
@@ -749,7 +750,8 @@ export function DrawerHeader({
   }, [agent.id]);
 
   useEffect(() => {
-    const cached = providerModelsCache.get(effectiveProvider);
+    const cacheKey = (isRunnerId(agent.id) ? "rn:" : "") + effectiveProvider;
+    const cached = providerModelsCache.get(cacheKey);
     if (cached && cached.length > 0) {
       setLiveModels(cached);
       return;
@@ -757,14 +759,14 @@ export function DrawerHeader({
     setLiveModels([]);
     if (DEMO || !effectiveProvider) return;
     let cancelled = false;
-    listProviderModels(effectiveProvider)
+    listProviderModels(effectiveProvider, isRunnerId(agent.id))
       .then((res) => {
         if (cancelled) return;
         const list = Array.isArray(res?.models)
           ? res.models.filter((m) => typeof m?.id === "string" && m.id.trim().length > 0)
           : [];
         if (list.length > 0) {
-          providerModelsCache.set(effectiveProvider, list);
+          providerModelsCache.set(cacheKey, list);
         }
         setLiveModels(list);
       })
@@ -772,7 +774,7 @@ export function DrawerHeader({
     return () => {
       cancelled = true;
     };
-  }, [effectiveProvider]);
+  }, [effectiveProvider, agent.id]);
 
   const modelOptions = buildProviderModelOptions(effectiveProvider, modelValue || staged?.model || agent.model, liveModels);
   const modelListId = `drawer-model-list-${agent.id}`;

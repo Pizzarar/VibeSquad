@@ -1,5 +1,6 @@
 import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { handleRunnerApi } from "./runner-api.mjs";
+import { handleProvidersApi } from "./providers-catalog.mjs";
 import { getStale, peekStale, readBuildStamp } from "./stale-runtime.mjs";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -1595,6 +1596,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     }
     if (!path.startsWith("/__vibesquad/")) return next?.();
     if (path.startsWith("/__vibesquad/runner/")) return handleRunnerApi(req, res, { readBody, sendJson });
+    if (path === "/__vibesquad/providers" || path.startsWith("/__vibesquad/providers/")) return handleProvidersApi(req, res, { sendJson, readBody: readCleanBody });
     switch (path) {
       case "/__vibesquad/pair/start":
         return handlePairStart(req, res);
