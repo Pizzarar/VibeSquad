@@ -23,6 +23,16 @@ Android `gen/` was missing tauri's generated `TauriActivity.kt` in the fresh wor
 Updater `.sig` matches the signature in `latest.json` (windows-x86_64 + android-aarch64, version 0.2.7).
 Not checked: `apksigner verify --print-certs` (apksigner isn't on the SDK path here); Authenticode (not set up until D5).
 
+## Audit (first run of `scripts/release-audit.mjs`, read-only, after the build)
+v0.2.7 goes out on the old flow (owner decision), so this is informational and not a gate.
+| # | Result | Notes |
+|---|---|---|
+| B1/B2 | FAIL (High) | F2: the old hardcoded Android keystore password in `server/build-android.mjs` also ships in the installer's `runtime/`. v0.2.6 shipped it too, and it's already in git history. Fixed on master (b0bc825); the keystore rotation (D6) retires it. The rest are likely false positives (`sk-`/`pass:` text matches) for triage. |
+| B3/B4/B6 | PASS | No new hosts, binds, routes, capabilities or permissions. |
+| B5 | SKIP | `npm audit --omit=dev`: 0 vulnerabilities. cargo audit not installed. |
+| B7 | REVIEW | Pubkey unchanged vs v0.2.6; Windows signature equals `.sig`. `android-aarch64` in `latest.json` has no signature (same as v0.2.6). |
+| B8 | PASS | build stamp = `66d01b5`, tree clean, version 0.2.7 everywhere. |
+
 ## Changes since v0.2.6
 - Lane display names for Brainstorm titles, free-form rename (identity)
 - GitHub wiki mirrors `guide/` on release
