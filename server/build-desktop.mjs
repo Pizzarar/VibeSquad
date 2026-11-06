@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { ensureTls, tlsDir } from "./auth.mjs";
+import { resolveSecret } from "./secrets.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
@@ -97,7 +98,7 @@ console.log(`[build:desktop] staged runtime with ${closure.length} production pa
 const licenseFile = join(rootDir, "public", "THIRD-PARTY-LICENSES.txt");
 const defaultKeyPath = join(homedir(), ".tauri", "vibesquad-updater.key");
 const signingKeyPath = env.TAURI_SIGNING_PRIVATE_KEY_PATH || (existsSync(defaultKeyPath) ? defaultKeyPath : "");
-const signingKeyPassword = env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD ?? "";
+const signingKeyPassword = resolveSecret({ envVar: "TAURI_SIGNING_PRIVATE_KEY_PASSWORD", target: "vibesquad/updater-key", required: false }, { env }) ?? "";
 if (signingKeyPath && existsSync(signingKeyPath)) {
   env.TAURI_SIGNING_PRIVATE_KEY = signingKeyPath;
   env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD = signingKeyPassword;
@@ -141,7 +142,7 @@ if (existsSync(srcSig)) {
     TAURI_SIGNING_PRIVATE_KEY_PASSWORD: signingKeyPassword,
   };
   delete signEnv.TAURI_SIGNING_PRIVATE_KEY;
-  execFileSync(process.execPath, [tauriCliJs, "signer", "sign", "-f", signingKeyPath, "-p", signingKeyPassword, destInstaller], {
+  execFileSync(process.execPath, [tauriCliJs, "signer", "sign", "-f", signingKeyPath, destInstaller], {
     cwd: rootDir,
     env: signEnv,
     stdio: "inherit",
