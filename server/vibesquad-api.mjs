@@ -67,6 +67,7 @@ import {
   sendWebPushToSubscription,
   startPushWatcher,
   stopPushWatcher,
+  syncRunnerPushWatch,
   toBase64Url,
   fromBase64Url,
   writePushSubscriptions,
@@ -593,6 +594,7 @@ function handleTeams(req, res, rootDir) {
       }
       clearConfigWarning(file);
       seedHubBriefs(cur.teams, teams, rootDir);
+      syncRunnerPushWatch(rootDir).catch(() => {}); // a lane flipped to/from the runner changes what the watcher must subscribe to
       sendJson(res, 200, {
         ok: true,
         revision: teamsRevision(resolveTeamsFilePath(rootDir)),

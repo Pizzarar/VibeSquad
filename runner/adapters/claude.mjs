@@ -46,6 +46,10 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
           }
         } else if (m.type === 'result') {
           turnOpen = false;
+          // A failed turn must read as an error (push "Agent Error", UI status), not a normal completion.
+          if (m.is_error || String(m.subtype ?? '').startsWith('error')) {
+            emit('error', { message: (typeof m.result === 'string' && m.result) || m.subtype || 'turn failed' });
+          }
           emit('turn_done', { stopReason: m.stop_reason ?? m.subtype, costUsd: m.total_cost_usd });
           emit('status', { status: 'idle' });
         }

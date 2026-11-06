@@ -48,7 +48,7 @@ async function boot(adapter = fakeAdapter()) {
   writeDiscovery(home, { port, token: TOKEN });
   const rc = new RunnerClient({ home });
   const whos = [];
-  const backend = new RunnerBackend({ client: rc, buildPrefix: async () => '', whosHere: (a) => whos.push(a), rootDir: '/root' });
+  const backend = new RunnerBackend({ client: rc, buildPrefix: async () => '', whosHere: (a) => whos.push(a), rootDir: '/root', lanes: () => new Set(['own']) });
   return { runner, server, port, adapter, rc, backend, whos, close: () => { server.close(); server.closeAllConnections?.(); } };
 }
 
@@ -125,8 +125,7 @@ test('RunnerBackend.subscribeEvents with no runner: no throw, retries quietly, c
 test('GET /__vibesquad/runner/events: starts with the roster, releases the listener on disconnect', async () => {
   const listeners = new Set();
   const backend = {
-    subscribeEvents(fn) { listeners.add(fn); return () => listeners.delete(fn); },
-    listAgents: async () => [{ id: 'rn-1' }],
+    subscribeEvents(fn) { listeners.add(fn); fn({ kind: 'roster', agents: [{ id: 'rn-1' }] }); return () => listeners.delete(fn); },
   };
   const req = new EventEmitter();
   req.url = '/__vibesquad/runner/events';
@@ -165,8 +164,10 @@ test('push: runner running->idle/error and needs-you fire notifications; roster 
   fire({ kind: 'agent', agent: { ...base, status: 'running' } });
   fire({ kind: 'agent', agent: { ...base, status: 'error', updatedAt: 't2' } });
   assert.equal(notes.at(-1).kind, 'error');
-  fire({ kind: 'permission', agentId: 'rn-a', request: { id: 'p1', toolName: 'Bash' } });
-  fire({ kind: 'permission', agentId: 'rn-a', request: { id: 'p1', toolName: 'Bash' } });
+  const withPerm = { ...base, status: 'running', pendingPermissions: [{ id: 'p1', toolName: 'Bash' }] };
+  fire({ kind: 'agent', agent: withPerm });
+  fire({ kind: 'permission', agentId: 'rn-a', request: { id: 'p1', toolName: 'Bash' } }); // the duplicate path is gone
+  fire({ kind: 'agent', agent: withPerm });
   assert.equal(notes.filter((n) => n.kind === 'permission').length, 1);
   off();
   assert.ok(unsubbed);
@@ -306,5 +307,126 @@ test('runner status carries usage + pendingPermissions from the log; createAgent
     // a brief refresh failure never fails the spawn
     const flaky = new RunnerBackend({ client: b.rc, buildPrefix: async () => '', whosHere: () => { throw new Error('disk'); } });
     assert.ok((await flaky.createAgent(spawnReq('own'))).id);
+  } finally { b.close(); }
+});
+
+test('runner unreachable: the events stream says disconnected, never an empty roster', async () => {
+  const backend = new RunnerBackend({ client: new RunnerClient({ home: tmp() }) });
+  const evs = [];
+  const off = backend.subscribeEvents((e) => evs.push(e));
+  await until(() => evs.length > 0);
+  off();
+  assert.deepEqual(evs.map((e) => e.kind), ['disconnected']);
+  // and over HTTP: no roster frame at all
+  const req = new EventEmitter();
+  req.url = '/__vibesquad/runner/events';
+  req.method = 'GET';
+  const res = new EventEmitter();
+  res.chunks = [];
+  res.writeHead = () => {};
+  res.write = (c) => { res.chunks.push(c); return true; };
+  await handleRunnerApi(req, res, { readBody: async () => ({}), sendJson: () => {}, backend, lanes: () => new Set(['own']) });
+  await until(() => res.chunks.join('').includes('"disconnected"'));
+  assert.ok(!res.chunks.join('').includes('"roster"'));
+  req.emit('close');
+  res.emit('close');
+});
+
+test('initial roster goes through the event chain: a slow roster never lands after a newer agent event; stale work is dropped after unsubscribe', async () => {
+  const backend = new RunnerBackend({ client: { stream: () => ({ close() {} }) } });
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  backend.listAgents = async () => { await gate; return [{ id: 'rn-1', status: 'idle' }]; };
+  backend.fetchAgent = async () => ({ agent: { id: 'rn-1', status: 'running' } });
+  const evs = [];
+  const off = backend.subscribeEvents((e) => evs.push(e.kind === 'agent' ? `agent:${e.agent.status}` : e.kind));
+  backend.enqueue((gen) => backend.handleLogEvent({ id: 'rn-1', event: { type: 'status', seq: 1 } }, gen));
+  release();
+  await until(() => evs.includes('agent:running'));
+  assert.deepEqual(evs.filter((k) => k !== 'timeline' && k !== 'status'), ['roster', 'connected', 'agent:running']);
+  // work queued for a closed stream is dropped (generation bump), even if its fetch resolves later
+  const seen = [];
+  const off2 = backend.subscribeEvents((e) => seen.push(e.kind));
+  await until(() => seen.includes('connected'));
+  let late;
+  backend.fetchAgent = () => new Promise((r) => { late = r; });
+  backend.enqueue((gen) => backend.handleLogEvent({ id: 'rn-1', event: { type: 'status', seq: 2 } }, gen));
+  await until(() => late);
+  off(); off2();
+  const after = [];
+  const off3 = backend.subscribeEvents((e) => after.push(e.kind));
+  late({ agent: { id: 'rn-1', status: 'idle' } });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.ok(!after.includes('agent'), 'a stale in-flight event must not reach the new subscriber');
+  off3();
+});
+
+test('error turns: one "error" transition + push, status stays error until the next turn; no "Turn Complete"', async () => {
+  const b = await boot();
+  try {
+    const evs = [];
+    const notes = [];
+    const stopPush = watchRunnerTransitions(b.backend, { notify: (n) => notes.push(n) });
+    const off = b.backend.subscribeEvents((e) => evs.push(e));
+    await until(() => evs.some((e) => e.kind === 'connected'));
+    const agent = await b.backend.createAgent(spawnReq());
+    await b.backend.sendAgentPrompt(agent.id, 'go');
+    await until(() => evs.some((e) => e.kind === 'status' && e.to === 'running'));
+    b.adapter.emit('error', { message: 'boom' });
+    b.adapter.emit('status', { status: 'idle' });
+    await until(() => evs.some((e) => e.kind === 'status' && e.to === 'error'));
+    // later roster events while idle (usage, meta) must not flip the shown status back
+    b.adapter.emit('usage', { contextTokens: 10, inputTokens: 10, outputTokens: 0 });
+    await b.backend.updateAgent(agent.id, { name: 'renamed' });
+    await until(() => evs.some((e) => e.kind === 'timeline' && e.type === 'meta'));
+    await new Promise((r) => setTimeout(r, 80));
+    const shown = evs.filter((e) => e.kind === 'agent' && e.agent.id === agent.id).map((e) => e.agent.status);
+    assert.ok(shown.length >= 3);
+    assert.ok(!shown.slice(shown.indexOf('error')).includes('idle'), shown.join());
+    assert.equal(shown.at(-1), 'error');
+    assert.deepEqual(notes.map((n) => n.kind), ['error']);
+    assert.equal(notes[0].title, 'VibeSquad · Agent Error');
+    assert.equal(evs.filter((e) => e.kind === 'status' && e.to === 'error').length, 1);
+    // next turn starts: error clears
+    await b.backend.sendAgentPrompt(agent.id, 'retry');
+    await until(() => evs.some((e) => e.kind === 'status' && e.from === 'error' && e.to === 'running'));
+    stopPush();
+    off();
+  } finally { b.close(); }
+});
+
+test('claude adapter: a failed result (is_error / error_* subtype) emits an error event before turn_done', async () => {
+  for (const result of [{ is_error: true, subtype: 'success', result: 'API Error' }, { subtype: 'error_during_execution' }]) {
+    const spawnImpl = fakeSpawn();
+    const events = [];
+    createClaudeAdapter({ spawnImpl, mcp: false }).start({ cwd: '.', emit: (t) => events.push(t), onExit() {} });
+    spawnImpl.last.push({ type: 'result', ...result });
+    await tick();
+    assert.deepEqual(events, ['error', 'turn_done', 'status']);
+  }
+  const spawnImpl = fakeSpawn();
+  const events = [];
+  createClaudeAdapter({ spawnImpl, mcp: false }).start({ cwd: '.', emit: (t) => events.push(t), onExit() {} });
+  spawnImpl.last.push({ type: 'result', subtype: 'success' });
+  await tick();
+  assert.deepEqual(events, ['turn_done', 'status']);
+});
+
+test('Whos here: skipped when the lane is not wholly on the runner; merges Paseo siblings; refreshes on archive', async () => {
+  const b = await boot();
+  try {
+    const agent = await b.backend.createAgent(spawnReq('own'));
+    assert.equal(b.whos.length, 1);
+    const mixed = new RunnerBackend({ client: b.rc, buildPrefix: async () => '', whosHere: (a) => b.whos.push(a), lanes: () => new Set() });
+    await mixed.refreshLaneWhosHere('own'); // lane not wholly on the runner and no Paseo view: no overwrite
+    assert.equal(b.whos.length, 1);
+    const wholly = b.backend;
+    wholly.useSiblingAgents(async () => [{ id: 'p-1', labels: { lane: 'own', role: 'lead' } }]);
+    await wholly.archiveAgent(agent.id);
+    assert.deepEqual(b.whos.at(-1).agents.map((x) => x.id), ['p-1']); // archived runner agent gone, Paseo Lead kept
+    wholly.useSiblingAgents(async () => { throw new Error('daemon down'); });
+    const n = b.whos.length;
+    await wholly.refreshLaneWhosHere('own');
+    assert.equal(b.whos.length, n);
   } finally { b.close(); }
 });

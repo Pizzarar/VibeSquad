@@ -495,20 +495,8 @@ export function watchRunnerTransitions(runner, { dedupeSet = new Set(), notify =
       const prev = agentsById.get(ev.agent.id);
       agentsById.set(ev.agent.id, ev.agent);
       for (const note of evaluateAgentTransition(prev, ev.agent, dedupeSet)) notify(note);
-    } else if (ev.kind === "permission") {
-      const agent = agentsById.get(ev.agentId) ?? { id: ev.agentId, title: ev.agentId.slice(0, 8) };
-      const key = `${ev.agentId}::perm:${String(ev.request?.id ?? ev.request?.toolName ?? "perm")}`;
-      if (dedupeSet.has(key)) return;
-      dedupeSet.add(key);
-      notify({
-        title: "VibeSquad · Permission Needed",
-        body: `${agent.title || ev.agentId}: approval requested`,
-        url: `/?agent=${encodeURIComponent(ev.agentId)}&focus=needs-you`,
-        tag: `vs-perm-${ev.agentId}`,
-        agentId: ev.agentId,
-        kind: "permission",
-      });
     } else if (ev.kind === "remove") {
+      // Permission pages come from the "agent" upsert (pendingPermissions), the single path for runner agents.
       agentsById.delete(ev.agentId);
     }
   });
@@ -548,6 +536,13 @@ export async function restartPushWatcher(rootDir) {
     return startPushWatcher(targetRoot);
   }
   return null;
+}
+
+/** teams.json can flip a lane to/from the runner while the server runs: restart a live watcher whose runner coverage went stale. */
+export async function syncRunnerPushWatch(rootDir) {
+  if (!activeWatcher) return null;
+  if (activeWatcher.watchingRunner === (runnerLanes().size > 0)) return activeWatcher;
+  return restartPushWatcher(rootDir);
 }
 
 /**
@@ -647,12 +642,14 @@ export function startPushWatcher(rootDir = REPO_ROOT, { runner = runnerLanes().s
   });
 
   const stopRunnerWatch = runner ? watchRunnerTransitions(runner, { dedupeSet }) : null;
+  const watchingRunner = !!runner;
 
   backend.connect().then(() => seedAgents()).catch(() => {});
   unrefClientTimers(client);
   queueMicrotask(() => unrefClientTimers(client));
 
   activeWatcher = {
+    watchingRunner,
     stop() {
       stopped = true;
       stopRunnerWatch?.();

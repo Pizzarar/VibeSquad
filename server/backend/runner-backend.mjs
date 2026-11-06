@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { RunnerClient, runnerHome } from "./runner-client.mjs";
 import { refreshWhosHere } from "../whos-here.mjs";
+import { runnerLanes } from "./lane-routing.mjs";
 
 const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 // Log event types that change the roster row (everything else is timeline-only).
@@ -175,14 +176,27 @@ async function injectedPrefix(role, cwd) {
   }
 }
 
+/** "error" while an errored turn has not been followed by a new one; otherwise the runner's own status. */
+function effectiveStatus(agent, live) {
+  return live.errored.has(agent.id) && agent.status !== "running" ? "error" : agent.status;
+}
+
 export class RunnerBackend {
-  constructor({ client = new RunnerClient(), buildPrefix = injectedPrefix, whosHere = refreshWhosHere, rootDir = REPO_ROOT } = {}) {
+  constructor({ client = new RunnerClient(), buildPrefix = injectedPrefix, whosHere = refreshWhosHere, rootDir = REPO_ROOT, lanes = runnerLanes } = {}) {
     Object.defineProperty(this, "rc", { value: client });
     Object.defineProperty(this, "buildPrefix", { value: buildPrefix });
     Object.defineProperty(this, "whosHere", { value: whosHere });
     Object.defineProperty(this, "rootDir", { value: rootDir });
     Object.defineProperty(this, "listeners", { value: new Set() });
-    Object.defineProperty(this, "live", { value: { stream: null, chain: Promise.resolve(), status: new Map(), errored: new Set() } });
+    Object.defineProperty(this, "live", { value: { stream: null, chain: Promise.resolve(), status: new Map(), errored: new Set(), gen: 0 } });
+    // Paseo-side agents of the same lanes, set by the RoutingBackend so a Who's here refresh sees the whole lane.
+    Object.defineProperty(this, "siblings", { value: { list: null } });
+    Object.defineProperty(this, "lanes", { value: lanes });
+  }
+
+  /** `fn()` resolves the non-runner agents (Paseo) so a lane brief lists everyone, not just runner agents. */
+  useSiblingAgents(fn) {
+    this.siblings.list = fn;
   }
 
   runCli() {
@@ -227,7 +241,18 @@ export class RunnerBackend {
   async refreshLaneWhosHere(lane) {
     if (!lane) return;
     try {
-      this.whosHere({ laneId: lane, agents: await this.listAgents(), rootDir: this.rootDir });
+      const mine = await this.listAgents();
+      let agents;
+      if (this.siblings.list) {
+        const others = await this.siblings.list();
+        const seen = new Set(mine.map((a) => a.id));
+        agents = [...mine, ...others.filter((a) => !seen.has(a.id))];
+      } else if (this.lanes().has(String(lane).toLowerCase())) {
+        agents = mine; // lane lives wholly on the runner
+      } else {
+        return; // cannot see the whole lane (Paseo agents may share it): leave the brief alone rather than wipe them
+      }
+      this.whosHere({ laneId: lane, agents, rootDir: this.rootDir });
     } catch {
       /* the brief is cosmetic: never fail a spawn over it */
     }
@@ -285,7 +310,9 @@ export class RunnerBackend {
   }
 
   async archiveAgent(id) {
+    const lane = (await this.fetchAgent(id).catch(() => null))?.agent.labels?.lane;
     await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/archive`, {});
+    await this.refreshLaneWhosHere(lane);
     return { archivedAt: new Date().toISOString() };
   }
 
@@ -300,6 +327,10 @@ export class RunnerBackend {
       }
     }
     await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/meta`, patch);
+    // role / lane changes (a Lead or Buddy retiring to former-*) change who is listed
+    if (patch.role !== undefined || patch.lane !== undefined || patch.labels?.role !== undefined) {
+      await this.refreshLaneWhosHere((await this.fetchAgent(id).catch(() => null))?.agent.labels?.lane);
+    }
   }
 
   async refreshAgent(id) {
@@ -324,20 +355,29 @@ export class RunnerBackend {
     this.listeners.add(listener);
     if (!this.live.stream) {
       this.live.stream = this.rc.stream({
-        onOpen: () => { this.live.chain = this.live.chain.then(() => this.seedRoster()).catch(() => {}); },
+        onOpen: () => this.enqueue((gen) => this.seedRoster(gen)),
         onClose: () => this.emitEvent({ kind: "disconnected" }),
-        onMessage: (m) => { this.live.chain = this.live.chain.then(() => this.handleLogEvent(m)).catch(() => {}); },
+        onMessage: (m) => this.enqueue((gen) => this.handleLogEvent(m, gen)),
       });
     }
+    // The first roster a listener sees comes through the same chain as live events, so a slow listAgents() can never
+    // land after a newer agent event. Runner unreachable = "disconnected", never an empty roster (clients keep their agents).
+    this.enqueue((gen) => this.seedListener(listener, gen));
     return () => {
       this.listeners.delete(listener);
       if (!this.listeners.size && this.live.stream) {
         this.live.stream.close();
         this.live.stream = null;
+        this.live.gen++; // work already queued on the chain belongs to the closed stream: drop its results
         this.live.status.clear();
         this.live.errored.clear();
       }
     };
+  }
+
+  enqueue(fn) {
+    const gen = this.live.gen;
+    this.live.chain = this.live.chain.then(() => (gen === this.live.gen ? fn(gen) : undefined)).catch(() => {});
   }
 
   emitEvent(ev) {
@@ -346,33 +386,56 @@ export class RunnerBackend {
     }
   }
 
+  /** Initial roster for one new listener (the stream's shared status map is seeded by seedRoster on open). */
+  async seedListener(listener, gen) {
+    let agents;
+    try { agents = await this.listAgents(); } catch { agents = null; }
+    if (gen !== this.live.gen || !this.listeners.has(listener)) return;
+    try {
+      if (agents) {
+        listener({ kind: "roster", agents });
+        listener({ kind: "connected" });
+      } else listener({ kind: "disconnected" });
+    } catch { /* a bad listener must not stop the chain */ }
+  }
+
   /** On (re)connect: remember every agent's status (so the first transition after it is detected) and publish the full roster. */
-  async seedRoster() {
-    const agents = await this.listAgents().catch(() => []);
+  async seedRoster(gen) {
+    let agents;
+    try { agents = await this.listAgents(); } catch { agents = null; }
+    if (gen !== this.live.gen) return;
+    if (!agents) return this.emitEvent({ kind: "disconnected" });
     this.live.status.clear();
-    for (const a of agents) this.live.status.set(a.id, a.status);
+    for (const a of agents) this.live.status.set(a.id, effectiveStatus(a, this.live));
     this.emitEvent({ kind: "roster", agents });
     this.emitEvent({ kind: "connected" });
   }
 
-  async handleLogEvent({ id, event: e }) {
+  async handleLogEvent({ id, event: e }, gen = this.live.gen) {
     if (!id || !e) return;
     this.emitEvent({ kind: "timeline", agentId: id, seq: e.seq, type: e.type });
-    if (e.type === "error") { this.live.errored.add(id); return; }
+    const from = this.live.status.get(id);
+    // An error during a turn sticks as the agent's status until the next turn starts (what push pages on, once).
+    if (e.type === "error") { if (from === "running") this.live.errored.add(id); return; }
     if (!ROSTER_EVENTS.has(e.type)) return;
-    if (e.type === "archive") { this.live.status.delete(id); this.emitEvent({ kind: "remove", agentId: id }); return; }
+    if (e.type === "archive") {
+      this.live.status.delete(id);
+      this.live.errored.delete(id);
+      this.emitEvent({ kind: "remove", agentId: id });
+      return;
+    }
+    if (e.type === "exit" && from === "running" && (e.error || (e.code ?? 0) !== 0)) this.live.errored.add(id); // died mid-turn
     let agent;
     try { agent = (await this.fetchAgent(id)).agent; } catch { return; } // runner restarting: the next event resyncs
-    const from = this.live.status.get(id);
-    let to = agent.status;
-    // A turn that ended after an error event, or a process that died mid-turn, is "error" (what push pages on).
-    if (from === "running" && ((to === "idle" && this.live.errored.has(id)) || (e.type === "exit" && (e.error || (e.code ?? 0) !== 0)))) to = "error";
-    if (to !== "running") this.live.errored.delete(id);
-    this.live.status.set(id, agent.status);
+    if (gen !== this.live.gen) return;
+    if (agent.status === "running") this.live.errored.delete(id); // next turn began
+    const to = effectiveStatus(agent, this.live);
+    this.live.status.set(id, to);
     const shown = to === "error" ? { ...agent, status: "error" } : agent;
     this.emitEvent({ kind: "agent", agent: shown });
     if (from !== undefined && from !== to) this.emitEvent({ kind: "status", agentId: id, from, to, agent: shown });
     if (e.type === "permission" && e.phase === "request") this.emitEvent({ kind: "permission", agentId: id, request: { id: e.id, toolName: e.toolName } });
+    if (e.type === "exit") await this.refreshLaneWhosHere(agent.labels?.lane);
   }
 
   /** AgentBackend.subscribe shape (what server/push.mjs reads): agent_update / agent_permission_request / agent_deleted. */

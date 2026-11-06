@@ -10,9 +10,9 @@ const HEARTBEAT_MS = 15000;
 
 /**
  * GET /__vibesquad/runner/events: SSE of roster upserts, timeline appends and status transitions (RunnerBackend.subscribeEvents).
- * Starts with the full roster; the listener, heartbeat and runner stream are released when the client goes away.
+ * The backend starts it with the full roster; the listener, heartbeat and runner stream are released when the client goes away.
  */
-async function streamEvents(req, res, backend, heartbeatMs = HEARTBEAT_MS) {
+function streamEvents(req, res, backend, heartbeatMs = HEARTBEAT_MS) {
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no" });
   res.write(": ok\n\n");
   const send = (ev) => { if (!res.writableEnded && !res.destroyed) res.write(`data: ${JSON.stringify(ev)}\n\n`); };
@@ -28,10 +28,10 @@ async function streamEvents(req, res, backend, heartbeatMs = HEARTBEAT_MS) {
   };
   req.on("close", cleanup);
   res.on("close", cleanup);
+  // The backend delivers the initial roster itself, in order with live events. A runner that is down yields
+  // { kind: "disconnected" } (never an empty roster), so the browser keeps the agents it has.
   off = backend.subscribeEvents(send);
-  if (closed) return off();
-  const agents = await backend.listAgents().catch(() => []); // runner not started yet = empty roster; the stream retries
-  send({ kind: "roster", agents });
+  if (closed) off();
 }
 
 export async function handleRunnerApi(req, res, { readBody, sendJson, backend = sharedRunnerBackend(), lanes = runnerLanes }) {

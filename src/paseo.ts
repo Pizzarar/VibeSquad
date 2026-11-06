@@ -120,6 +120,16 @@ export function removeLocalAgent(agentId: string) {
   listeners.forEach((l) => l());
 }
 
+/** Forget an agent without archiving it (it vanished from a roster; only a real archive event archives). */
+function dropLocalAgent(agentId: string) {
+  if (!state.agents.has(agentId) && !pendingAgents.has(agentId)) return;
+  const agents = new Map(state.agents);
+  pendingAgents.delete(agentId);
+  agents.delete(agentId);
+  state = { ...state, agents };
+  listeners.forEach((l) => l());
+}
+
 const sameAgent = (a: PaseoAgent | undefined, b: PaseoAgent) => !!a && JSON.stringify(a) === JSON.stringify(b);
 
 function queueAgent(id: string, agent: PaseoAgent | null) {
@@ -660,10 +670,14 @@ export async function attachFiles(cwd: string, files: string[]): Promise<string[
 // Runner-backed lanes (inert unless one is switched): mirror the runner roster into the store.
 if (!DEMO && typeof window !== "undefined") {
   startRunnerBridge(
-    (agents) => {
+    (agents, archivedIds) => {
       const live = new Set(agents.map((a) => a.id));
       for (const a of agents) if (!sameAgent(state.agents.get(a.id), a)) upsertLocalAgent(a);
-      for (const id of state.agents.keys()) if (isRunnerId(id) && !live.has(id)) removeLocalAgent(id);
+      for (const id of [...state.agents.keys()]) {
+        if (!isRunnerId(id) || live.has(id)) continue;
+        if (archivedIds.includes(id)) removeLocalAgent(id);
+        else dropLocalAgent(id);
+      }
     },
     (up) => {
       runnerConn = up;
