@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
 import { readCredential, resolveSecret, withSecretEnv } from "../server/secrets.mjs";
-import { ensureAndroidKeystore } from "../server/build-android.mjs";
+import { ensureAndroidKeystore, signAndVerifyApk } from "../server/build-android.mjs";
 
 const SECRET = "s3cr3t-VALUE-xyz";
 
@@ -62,6 +62,19 @@ describe("build-android keystore secrets", () => {
     assert.ok(calls[0].args.includes("-storepass:env"));
     assert.equal(calls[0].opts.env.VS_KS_PASS, SECRET);
     assert.ok(!JSON.stringify(Object.keys(r)).includes(SECRET));
+  });
+  test("apksigner sign gets VS_KS_PASS in env only, then verify --print-certs runs", () => {
+    const calls = [];
+    signAndVerifyApk({
+      javaExe: "java", apksignerJar: "a.jar", keystorePath: "k", alias: "al", inputApk: "in.apk", outApk: "out.apk", cwd: ".",
+      secretEnv: { VS_KS_PASS: SECRET },
+      exec: (cmd, args, opts) => (calls.push({ cmd, args, opts }), "Signer #1 certificate DN: CN=x"),
+    });
+    assert.equal(calls.length, 2);
+    assert.ok(calls[0].args.includes("sign"));
+    assert.equal(calls[0].opts.env.VS_KS_PASS, SECRET);
+    assert.ok(calls.every((c) => !c.args.some((a) => a.includes(SECRET))));
+    assert.deepEqual(calls[1].args.slice(2), ["verify", "--print-certs", "out.apk"]);
   });
   test("missing secret throws without a value", () => {
     assert.throws(

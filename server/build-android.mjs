@@ -139,6 +139,17 @@ export function ensureAndroidKeystore({
   return { keystorePath, secretEnv, alias };
 }
 
+/** Signs with apksigner (password via env only), then prints `apksigner verify --print-certs`. */
+export function signAndVerifyApk({ javaExe, apksignerJar, keystorePath, alias, secretEnv, inputApk, outApk, cwd, exec = execFileSync }) {
+  exec(
+    javaExe,
+    ["-jar", apksignerJar, "sign", "--ks", keystorePath, "--ks-key-alias", alias, "--ks-pass", "env:VS_KS_PASS", "--key-pass", "env:VS_KS_PASS", "--out", outApk, inputApk],
+    { cwd, env: secretEnv, stdio: "inherit" },
+  );
+  const out = exec(javaExe, ["-jar", apksignerJar, "verify", "--print-certs", outApk], { cwd, env: secretEnv, encoding: "utf8" });
+  if (out) console.log(String(out).trimEnd());
+}
+
 function findApk(dir) {
   if (!existsSync(dir)) return null;
   const files = readdirSync(dir).filter((f) => f.endsWith(".apk"));
@@ -224,7 +235,7 @@ export function buildAndroidApk({
       ? join(androidEnv.JAVA_HOME, "bin", process.platform === "win32" ? "java.exe" : "java")
       : "java";
     const apksignerJar = join(androidEnv.ANDROID_HOME, "build-tools", latest, "lib", "apksigner.jar");
-    run(javaExe, ["-jar", apksignerJar, "sign", "--ks", keystorePath, "--ks-key-alias", alias, "--ks-pass", "env:VS_KS_PASS", "--key-pass", "env:VS_KS_PASS", "--out", destApk, apk], { env: secretEnv });
+    signAndVerifyApk({ javaExe, apksignerJar, keystorePath, alias, secretEnv, inputApk: apk, outApk: destApk, cwd: rootDir, exec });
   } else {
     copyFileSync(apk, destApk);
   }

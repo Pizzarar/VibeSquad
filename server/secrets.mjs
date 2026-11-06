@@ -34,7 +34,7 @@ public static class VsCred {
 '@
 $v = [VsCred]::Read($env:VS_CRED_TARGET)
 if ($null -eq $v) { exit 3 }
-[Console]::Out.Write($v)
+[Console]::Out.Write($v.TrimEnd([char]0))
 `;
 
 /** Reads a Windows generic credential; returns null when missing, unsupported, or on any error. */
