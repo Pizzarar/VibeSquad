@@ -1,14 +1,47 @@
-// Agent Client Protocol adapter (JSON-RPC 2.0 over stdio). Used with `opencode acp`.
-// Generic on purpose: Codex/AGY ACP agents differ only in command + args.
+// Agent Client Protocol adapter (JSON-RPC 2.0 over stdio). Generic on purpose: every ACP agent differs only in
+// command + args (ACP_PROVIDERS) and in how its model ids are spelled (pickModel).
+import path from 'node:path';
+import { existsSync } from 'node:fs';
 import { killTree, spawnNoShell } from '../spawn.mjs';
 import { lineReader } from './lines.mjs';
 import { mcpServerSpec, mcpServerPath } from './mcp.mjs';
 
-export function createAcpAdapter({ spawnImpl, name = 'opencode', command = 'opencode', args = ['acp'], mcp = true, mcpPath = mcpServerPath() } = {}) {
+// Provider ids are the ones profiles use (server/profiles.mjs). Codex has no ACP mode of its own: Zed's
+// codex-acp wraps it (Paseo drives `codex app-server` natively instead; we stay on ACP until it measurably fails).
+export const ACP_PROVIDERS = {
+  opencode: { command: 'opencode', args: ['acp'] },
+  'antigravity-cli': { command: 'agy', args: ['acp'] },
+  codex: { command: 'npx', args: ['-y', '@zed-industries/codex-acp'], resolve: resolveNpx },
+};
+
+// npx is a .cmd shim that cannot be spawned without a shell; run npm's own npx-cli.js with the current node instead.
+function resolveNpx() {
+  const cli = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npx-cli.js');
+  return existsSync(cli) ? { file: process.execPath, args: [cli] } : undefined;
+}
+export const PROVIDER_ALIASES = { agy: 'antigravity-cli', antigravity: 'antigravity-cli' };
+export const acpProviderIds = () => Object.keys(ACP_PROVIDERS);
+
+// Profiles name models loosely ("gemini-4-argon", "deepseek/deepseek-flash"); ACP agents advertise exact ids
+// ("gemini-4-argon-medium"). Exact id wins, else the first advertised id that extends it with a variant suffix.
+export function pickModel(want, available = []) {
+  const ids = available.map((m) => m?.modelId ?? m?.id).filter(Boolean);
+  if (ids.includes(want)) return want;
+  const variants = ids.filter((i) => i.startsWith(`${want}-`) || i.startsWith(`${want}/`));
+  return variants.find((i) => /medium$/.test(i)) ?? variants[0] ?? null;
+}
+
+export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, command, args, mcp = true, mcpPath = mcpServerPath(), resolved } = {}) {
+  const def = ACP_PROVIDERS[PROVIDER_ALIASES[provider] ?? provider];
+  if (!def && !command) throw new Error(`no ACP definition for provider "${provider}"`);
+  command ??= def.command;
+  args ??= def.args;
+  name ??= provider;
+  resolved ??= def?.resolve?.();
   return {
     name,
-    start({ cwd, systemPrompt, env, emit, onExit }) {
-      const child = spawnNoShell(command, args, { cwd, ...(env ? { env } : {}) }, spawnImpl);
+    start({ cwd, model, meta = {}, systemPrompt, env, emit, onExit }) {
+      const child = spawnNoShell(command, args, { cwd, ...(resolved ? { resolved } : {}), ...(env ? { env } : {}) }, spawnImpl);
       let nextId = 1;
       const pending = new Map();
       const write = (o) => child.stdin.write(JSON.stringify({ jsonrpc: '2.0', ...o }) + '\n');
@@ -40,7 +73,8 @@ export function createAcpAdapter({ spawnImpl, name = 'opencode', command = 'open
           }
         } else if (m.method && m.id !== undefined) {
           // Agent -> client request. The spike grants no permissions and no fs/terminal capabilities.
-          write({ id: m.id, result: m.method === 'session/request_permission' ? { outcome: { outcome: 'cancelled' } } : null });
+          // Same default as the claude adapter: permissionMode 'auto' unless the lane asked for 'default' (then deny).
+          write({ id: m.id, result: m.method === 'session/request_permission' ? permissionOutcome(m.params, meta.permissionMode) : null });
         }
       });
       lineReader(child.stderr, (line) => emit('stderr', { line }));
@@ -54,7 +88,16 @@ export function createAcpAdapter({ spawnImpl, name = 'opencode', command = 'open
         await request('initialize', { protocolVersion: 1, clientCapabilities: {} });
         const s = await request('session/new', { cwd, mcpServers: mcp ? [acpMcpServer(mcpServerSpec({ env, path: mcpPath }))] : [] });
         sessionId = s.sessionId;
-        emit('session', { sessionId, model: s.models?.currentModelId });
+        let current = s.models?.currentModelId;
+        if (model) {
+          const id = pickModel(model, s.models?.availableModels);
+          if (!id) emit('stderr', { line: `model "${model}" not offered by ${name}; using ${current ?? 'its default'}` });
+          else if (id !== current) {
+            try { await request('session/set_model', { sessionId, modelId: id }); current = id; }
+            catch (e) { emit('stderr', { line: `set_model ${id} failed: ${e.message}` }); }
+          }
+        }
+        emit('session', { sessionId, model: current });
       })();
       ready.catch((e) => emit('error', { message: e.message }));
 
@@ -84,4 +127,10 @@ export function createAcpAdapter({ spawnImpl, name = 'opencode', command = 'open
 // ACP wants env as a [{name, value}] list.
 function acpMcpServer(spec) {
   return { name: spec.name, command: spec.command, args: spec.args, env: Object.entries(spec.env).map(([name, value]) => ({ name, value })) };
+}
+
+function permissionOutcome(params, mode) {
+  if (mode === 'default') return { outcome: { outcome: 'cancelled' } };
+  const opt = (params?.options ?? []).find((o) => o.kind === 'allow_once') ?? (params?.options ?? []).find((o) => String(o.kind).startsWith('allow'));
+  return opt ? { outcome: { outcome: 'selected', optionId: opt.optionId } } : { outcome: { outcome: 'cancelled' } };
 }

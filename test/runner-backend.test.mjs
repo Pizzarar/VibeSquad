@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, statSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Runner } from '../runner/runner.mjs';
@@ -297,4 +297,20 @@ test('runtime sync and desktop build ship runner/ (RUNNER_ENTRY)', () => {
     const src = readFileSync(path.join(import.meta.dirname, '..', rel), 'utf8');
     assert.match(src, entryList, `${rel} should ship runner/`);
   }
+});
+
+test('ensureRunning starts the runner detached, hidden, unref-ed, with stdio in runner.log', async () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), 'vs-detach-'));
+  const calls = [];
+  const spawnImpl = (cmd, args, opts) => { calls.push({ cmd, args, opts }); return { unref() { calls.at(-1).unref = true; } }; };
+  const rc = new RunnerClient({ home, spawnImpl, startTimeoutMs: 150 });
+  await assert.rejects(rc.ensureRunning(), /did not start/);
+  const { opts, unref } = calls[0];
+  assert.equal(opts.detached, true);
+  assert.equal(opts.windowsHide, true);
+  assert.equal(opts.shell, false);
+  assert.equal(opts.stdio[0], 'ignore');
+  assert.ok(Number.isInteger(opts.stdio[1]) && opts.stdio[1] === opts.stdio[2]);
+  assert.equal(unref, true);
+  assert.ok(existsSync(path.join(home, 'runner.log')));
 });
