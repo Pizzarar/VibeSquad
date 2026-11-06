@@ -452,7 +452,7 @@ async function bootCtl({ delayStream = 0 } = {}) {
   const seen = [];
   const tap = (lc) => { const real = lc.host.emit.bind(lc.host); lc.host.emit = async (hook, payload) => { seen.push([hook, payload.agent?.id, payload.outcome?.kind]); return real(hook, payload); }; };
   return {
-    ctl, backend, seen, tap, runner,
+    ctl, backend, seen, tap, runner, home,
     count: (hook, id) => seen.filter(([h, i]) => h === hook && i === id).length,
     async close() { await stopRunnerLifecycle(); server.close(); server.closeAllConnections?.(); },
   };
@@ -524,18 +524,51 @@ test('ordering: lifecycle subscribes before another listener opens the stream; s
   } finally { await b.close(); }
 });
 
-test('catch-up: leads created before the stream connects are processed in createdAt order (ord 1, 2, 3)', async () => {
+test('catch-up: leads created before the stream connects are processed in createdAt order, not id order', async () => {
   const b = await bootCtl({ delayStream: 900 });
   try {
     await startRunnerLifecycle({ runner: b.backend, startWatcher: false });
-    const ids = [];
-    for (let i = 0; i < 3; i++) {
-      ids.push((await b.backend.createAgent(req({ lane: 'bug-chaser', role: 'lead' }))).id);
-      await settle(5);
-    }
-    await until(async () => (await b.backend.getAgent(ids[2])).labels.ord, 10000, 'third lead labelled');
+    // Fixed ids whose alphabetical order is the reverse of their creation order.
+    const mk = (id, ts) => {
+      const dir = path.join(b.home, 'agents');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, id + '.jsonl'), JSON.stringify({ seq: 0, ts, type: 'created', provider: 'claude', model: null, cwd: CWD, meta: { title: id, role: 'lead', lane: 'bug-chaser', team: 'vibesquad' } }) + '\n');
+    };
+    mk('rn-ccc000000001', Date.now() - 3000);
+    mk('rn-bbb000000001', Date.now() - 2000);
+    mk('rn-aaa000000001', Date.now() - 1000);
+    await until(async () => (await b.backend.getAgent('rn-aaa000000001')).labels.ord, 10000, 'last lead labelled');
     const ords = [];
-    for (const id of ids) ords.push((await b.backend.getAgent(id)).labels.ord);
-    assert.deepEqual(ords, ['1', '2', '3']);
+    for (const id of ['rn-ccc000000001', 'rn-bbb000000001', 'rn-aaa000000001']) ords.push((await b.backend.getAgent(id)).labels.ord);
+    assert.deepEqual(ords, ['1', '2', '3'], 'oldest created gets ord 1 even though its id sorts last');
+  } finally { await b.close(); }
+});
+
+test('a roster fetch failure on created and on idle still emits exactly one created and one turn_ended', async () => {
+  const rec = { id: 'rn-fail00000001', provider: 'claude', model: null, cwd: CWD, meta: { title: 'F', role: 'worker', lane: 'bug-chaser' }, status: 'idle', pendingPermissions: [], createdAt: 1, updatedAt: 1, lastSeq: 9 };
+  let failures = 2;
+  const client = { request: async () => { if (failures-- > 0) throw new Error('runner restarting'); return rec; } };
+  const backend = new RunnerBackend({ client, rootDir: ROOT, hooks: false });
+  backend.live.hwm = new Map();
+  const got = [];
+  backend.listeners.add((e) => { if (['created', 'turn_started', 'turn_ended'].includes(e.kind)) got.push(e.kind); });
+  const ev = (seq, type, o) => ({ id: rec.id, event: { seq, ts: 1000 + seq, type, ...o } });
+  await backend.handleLogEvent(ev(0, 'created', { provider: 'claude', model: null, cwd: CWD, meta: rec.meta })); // fetch #1 throws
+  await backend.handleLogEvent(ev(1, 'input', { text: 'hi' }));
+  await backend.handleLogEvent(ev(2, 'status', { status: 'running' })); // fetch #2 throws
+  await backend.handleLogEvent(ev(3, 'status', { status: 'idle' }));
+  assert.deepEqual(got, ['created', 'turn_started', 'turn_ended']);
+});
+
+test('lifecycle: a failing attachHooks is loud, stops buffering and lets a later start retry', async () => {
+  const b = await bootCtl();
+  try {
+    const real = b.backend.attachHooks.bind(b.backend);
+    let calls = 0;
+    b.backend.attachHooks = async (o) => { if (++calls === 1) throw new Error('plugin import failed'); return real(o); };
+    await assert.rejects(startRunnerLifecycle({ runner: b.backend, startWatcher: false }), /plugin import failed/);
+    assert.ok(teamLogAll().some((e) => /runner hooks unavailable.*plugin import failed/.test(e.text)), 'metric written');
+    const lc = await startRunnerLifecycle({ runner: b.backend, startWatcher: false });
+    assert.ok(lc.host, 'second start succeeds');
   } finally { await b.close(); }
 });

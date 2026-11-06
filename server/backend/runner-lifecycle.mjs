@@ -3,7 +3,7 @@
 // agent.created / agent.turn_started / agent.turn_ended behaviour (labels, digest, handoff, A4 retry, lead wakeups) Paseo agents get
 // from the Paseo daemon. Runs once, in the VS server process; Paseo agents never reach it (their events are not runner events).
 import { sharedRunnerBackend } from "./index.mjs";
-import { isRunnerId } from "./runner-backend.mjs";
+import { isRunnerId, logHooksUnavailable } from "./runner-backend.mjs";
 
 const HOOK_FOR = { created: "agent.created", turn_started: "agent.turn_started", turn_ended: "agent.turn_ended" };
 
@@ -19,7 +19,8 @@ let active = null;
  */
 export async function startRunnerLifecycle({ runner = sharedRunnerBackend(), startWatcher = true, deps } = {}) {
   if (active?.runner === runner) return active.ready;
-  await stopRunnerLifecycle();
+  active?.stop(); // sync: nothing may yield before the baseline and subscription below
+  active = null;
   runner.enableCatchUp();
   let host = null;
   let stopped = false;
@@ -39,7 +40,16 @@ export async function startRunnerLifecycle({ runner = sharedRunnerBackend(), sta
   const cur = { runner, host: null, stop: () => { stopped = true; off(); runner.detachHooks(); }, ready: null };
   active = cur;
   cur.ready = (async () => {
-    host = await runner.attachHooks({ startWatcher, deps });
+    try {
+      host = await runner.attachHooks({ startWatcher, deps });
+    } catch (err) {
+      // Loud, stop buffering, and let a later start retry from scratch.
+      logHooksUnavailable(err);
+      buffer.length = 0;
+      cur.stop();
+      if (active === cur) active = null;
+      throw err;
+    }
     cur.host = host;
     for (const item of buffer.splice(0)) dispatch(item);
     return cur;

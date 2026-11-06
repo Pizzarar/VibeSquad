@@ -85,3 +85,12 @@ the log: `created` event → created; `status running` → turn_started; `status
   events seen while the plugin loads are buffered and drained in order.
 * **Serialized emits**: hooks run one at a time through a single queue; `catchUp` walks agents in `createdAt` order. The plugin's
   `retirePredecessors` only retires agents created *before* the new one, so a replayed `created` cannot retire a later sibling.
+
+## Review r4 fixes
+
+* A roster fetch failure no longer drops a transition whose seq was consumed: the lifecycle event is emitted with the last known
+  snapshot (or one built from the `created` event).
+* `startRunnerLifecycle` stops any previous instance synchronously; a failing `attachHooks` is logged loudly (stderr + `_unassigned`
+  metric), stops buffering and resets, so a later start retries.
+* Startup cost: the baseline reads each log from the tail to its last turn boundary (not every line); archived agents are skipped;
+  `seedRoster` fetches the raw records once and hands them to `catchUp`.
