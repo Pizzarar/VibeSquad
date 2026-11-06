@@ -174,6 +174,10 @@ function PinFocusBar({ view, focus, onSelectSquad }: { view: TeamView; focus: Pi
   );
 }
 
+function stripProfilePrefix(name: string): string {
+  return name.includes(" - ") ? name.slice(name.indexOf(" - ") + 3).trim() || name : name;
+}
+
 /** Row 1 of the focused middle: the bar, plus the "Start fresh" panel when the Brainstorm is gone. */
 export function PinFocusHeader(props: {
   view: TeamView;
@@ -233,7 +237,7 @@ export function PinFocusHeader(props: {
                   <div className="pin-profile-chips" data-testid="pin-spin-up-profile-chips">
                     {brainstormProfiles.map((name) => {
                       const active = selectedProfile === name;
-                      const shortName = name.replace(/^(?:Brainstorm)\s*-\s*/i, "") || name;
+                      const shortName = stripProfilePrefix(name);
                       return (
                         <button
                           type="button"
@@ -263,8 +267,8 @@ export function PinFocusHeader(props: {
               <Spinner
                 label={
                   pin && isHubPin(pin)
-                    ? `Spinning up RiffBot (${selectedProfile.replace(/^Brainstorm\s*-\s*/i, "")}) — booting session from brief…`
-                    : `Spinning up ${pin?.lane.name ?? "Brainstorm"} (${selectedProfile.replace(/^Brainstorm\s*-\s*/i, "")}) from the brief…`
+                    ? `Spinning up RiffBot (${stripProfilePrefix(selectedProfile)}) — booting session from brief…`
+                    : `Spinning up ${pin?.lane.name ?? "Brainstorm"} (${stripProfilePrefix(selectedProfile)}) from the brief…`
                 }
               />
             </div>

@@ -28,7 +28,7 @@ describe("teams keptLane & findCrossTeamBrainstorm", () => {
     id: "b50a67e8-0bb5-4b47-911d-08f2841c6a54",
     title: "BRAINSTORM · PLUGINS",
     labels: { team: "plugins", lane: "plugins", lead: "plugins", role: "brainstorm" },
-    cwd: "C:\\Users\\Fugma\\AppData\\Local\\VibeSquad\\runtime",
+    cwd: "C:\\Users\\you\\AppData\\Local\\VibeSquad\\runtime",
     status: "idle",
   });
 
@@ -59,7 +59,7 @@ describe("teams keptLane & findCrossTeamBrainstorm", () => {
       id: "former-plugins-bs",
       title: "(old) BRAINSTORM · PLUGINS",
       labels: { team: "plugins", lane: "plugins", lead: "plugins", role: "former-brainstorm" },
-      cwd: "C:\\Users\\Fugma\\AppData\\Local\\VibeSquad\\runtime",
+      cwd: "C:\\Users\\you\\AppData\\Local\\VibeSquad\\runtime",
       status: "closed",
     });
     const formerMembers = resolveAgents([formerPluginsAgent]);

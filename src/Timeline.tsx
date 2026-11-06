@@ -409,10 +409,10 @@ export function MarkdownRenderer({ text, agentId, doc = false }: { text: string;
         return <h3 key={i} className={cls}>{tok.text}</h3>;
       }
       case "code_block": {
-        const lang = tok.lang.trim().toLowerCase();
-        if (lang === "mermaid") {
+        if (tok.lang.trim().toLowerCase() === "mermaid") {
           return <MermaidView key={i} code={tok.code} />;
         }
+        const lang = tok.lang.trim().toLowerCase();
         if (lang === "vs:spin-off" || /^\s*vs:spin-off\s*(\n|$)/i.test(tok.code)) {
           const teams = parseSpinOff(`\`\`\`vs:spin-off\n${tok.code.replace(/^\s*vs:spin-off\s*\n?/i, "")}\n\`\`\``);
           const pin = findPinForAgent(agentId);
