@@ -66,7 +66,7 @@ const MobileTabRow = memo(function MobileTabRow({
       onClick={() => onSelect(pane, id)}
     >
       {a ? (
-        <Avatar id={id} provider={a.provider} agentType={classifyAgent(a)} variant={leadVariant(a)} size={28} />
+        <Avatar id={id} provider={a.provider} agentType={classifyAgent(a)} variant={leadVariant(a)} size={32} />
       ) : (
         <span className="tab-ghost" />
       )}

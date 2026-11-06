@@ -396,19 +396,10 @@ code {
   align-items: center;
   justify-content: center;
   flex: none;
-  background: radial-gradient(circle at 50% 35%, var(--prov-dim, #1e293b), #070812 85%);
-  border: 1px solid var(--prov, var(--cyan));
-  box-shadow: 0 0 8px rgba(0, 0, 0, 0.8), inset 0 0 6px rgba(0, 240, 255, 0.12);
 }
 
 .avatar.is-retired {
-  border-color: #475569;
   filter: saturate(0.55);
-}
-
-.avatar svg {
-  display: block;
-  filter: drop-shadow(0 0 3px rgba(0, 240, 255, 0.28));
 }
 
 .prov-badge {
@@ -1119,9 +1110,10 @@ code {
   background: #060711;
 }
 
-.avatar img {
+.cast-sprite {
   display: block;
-  filter: drop-shadow(0 0 3px rgba(0, 240, 255, 0.22));
+  background-repeat: no-repeat;
+  image-rendering: pixelated;
 }
 
 /* ?cast=1 art review sheet */

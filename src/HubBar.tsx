@@ -44,7 +44,7 @@ export function HubBar({ view, onOpen }: { view: TeamView | undefined; onOpen: (
   const label = starting ? "Starting RiffBot…" : hub.brainstorm ? "Talk to RiffBot" : "Open RiffBot";
   return (
     <div className="hub-bar" data-testid="hub-bar">
-      <Avatar id={hub.brainstorm?.agent.id ?? `bs-empty-${view.team.id}-${hub.lane.id}`} provider={hub.brainstorm?.agent.provider ?? "claude"} agentType="brainstorm" size={24} />
+      <Avatar id={hub.brainstorm?.agent.id ?? `bs-empty-${view.team.id}-${hub.lane.id}`} provider={hub.brainstorm?.agent.provider ?? "claude"} agentType="brainstorm" size={32} />
       <PinDot pin={hub} />
       <button type="button" className="hub-bar-btn" data-testid="hub-bar-btn" disabled={starting} title={hub.brainstorm ? "Riff on the whole Squad" : "Select RiffBot · click Spin Up inside to start a chat"} onClick={() => void Promise.resolve(onOpen(hub)).catch((e) => alert(`Could not start RiffBot: ${e}`))}>
         <span className="hub-bar-short">Riff</span>

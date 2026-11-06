@@ -540,7 +540,7 @@ const TreeRow = memo(
         title={a.title ?? ""}
       >
         <span className="tree-elbow" style={{ left: depth * 16 - 10 }} />
-        <Avatar id={a.id} provider={a.provider} agentType={m.agentType} variant={leadVariant(m)} size={28} />
+        <Avatar id={a.id} provider={a.provider} agentType={m.agentType} variant={leadVariant(m)} size={32} />
         <span className="tree-main">
           <span className="tree-name-line">
             <StatusDot agent={a} />

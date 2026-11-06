@@ -46,16 +46,16 @@ const slug = (s: string) =>
     .replace(/^-|-$/g, "");
 
 export const ARCHETYPES: { type: AgentType; desc: string; sampleProv: string }[] = [
-  { type: "lead", desc: "Shades, pompadour & power blazer", sampleProv: "gemini" },
-  { type: "retired-lead", desc: "Shades up & a warm mug", sampleProv: "claude" },
-  { type: "brainstorm", desc: "Studio cans & a lightbulb", sampleProv: "claude" },
-  { type: "implement", desc: "Cap, goggles & wrench", sampleProv: "claude" },
-  { type: "mechanical", desc: "Hard hat & hi-vis vest", sampleProv: "codex" },
-  { type: "review", desc: "Fedora, trench & loupe", sampleProv: "gemini" },
-  { type: "audit", desc: "Hood up & recon visor", sampleProv: "deepseek" },
-  { type: "spec", desc: "Big frames & blueprint", sampleProv: "gemini" },
-  { type: "art", desc: "Beret, brush & paint", sampleProv: "gemini" },
-  { type: "unknown", desc: "Sweatband & synth hoodie", sampleProv: "codex" },
+  { type: "lead", desc: "Big round grinning head, goofy mismatched eyes", sampleProv: "gemini" },
+  { type: "retired-lead", desc: "Bucket hat, shades up, hawaiian shirt & a drink", sampleProv: "claude" },
+  { type: "brainstorm", desc: "Big headphones & starry eyes", sampleProv: "claude" },
+  { type: "implement", desc: "Bandana, tank top & taped fists", sampleProv: "claude" },
+  { type: "mechanical", desc: "Ball cap, big mustache & coveralls with a tool", sampleProv: "codex" },
+  { type: "review", desc: "Fedora investigator in a trench coat & tie", sampleProv: "gemini" },
+  { type: "audit", desc: "Night-vision scouts: hood, goggles, backwards cap, helmet", sampleProv: "deepseek" },
+  { type: "spec", desc: "CRT monitor head, suit & brick phone", sampleProv: "gemini" },
+  { type: "art", desc: "Beret artists & people drenched in paint", sampleProv: "gemini" },
+  { type: "unknown", desc: "Shadow silhouette, violet rim light & glowing eyes", sampleProv: "codex" },
 ];
 
 export function ProfileImportModal({ onClose }: { onClose: () => void }) {

@@ -9,10 +9,14 @@ import { loadProfiles, saveProfiles } from "../server/vibesquad-api.mjs";
 
 // pixel.tsx is TypeScript + JSX: transpile it once to a temp .mjs and import that.
 const src = readFileSync(resolve(import.meta.dirname, "..", "src", "pixel.tsx"), "utf8");
-const code = transformSync("pixel.tsx", src, { lang: "tsx", jsx: { runtime: "classic" } }).code;
+const code = transformSync("pixel.tsx", src, { lang: "tsx", jsx: { runtime: "classic" } }).code.replace('"./cast"', '"./cast.mjs"');
 const dir = mkdtempSync(join(tmpdir(), "vs-provider-icons-"));
 const file = join(dir, "pixel.mjs");
 writeFileSync(file, code);
+writeFileSync(
+  join(dir, "cast.mjs"),
+  transformSync("cast.ts", readFileSync(resolve(import.meta.dirname, "..", "src", "cast.ts"), "utf8"), { lang: "ts" }).code,
+);
 const {
   providerSpec,
   setProviderOverrides,
