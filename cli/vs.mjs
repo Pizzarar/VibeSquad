@@ -394,6 +394,7 @@ function parseArgs(argv) {
     "card",
     "note",
     "binDir",
+    "base",
     "brief",
     "timeout",
     "file",
@@ -650,7 +651,7 @@ Usage:
   vs status <agent>   status + last assistant message
   vs wait <agent> [--timeout <seconds>]   block until idle (exit 0), error or blocked (1), timeout (2); no limit by default
   vs mcp alias-report [--since <30m|12h|7d>] [--json]   Paseo-name alias hits per alias + caller
-  vs install-shim [--bin-dir <dir>]
+  vs install-shim [--bin-dir <dir>] [--force]
   vs open [--print]   open the local web UI with owner access (sets the vs_local cookie); --print shows a one-time URL (60 s)
 
 Types: ${LOG_TYPES.join(", ")} (text 1..${MAX_TEXT} chars)
@@ -1670,12 +1671,43 @@ function commandProfiles(flags) {
   return 0;
 }
 
-export function installVsShim({ binDirs, targetScript, baseHome } = {}) {
+/**
+ * Main checkout for `dir`: parent of `git rev-parse --git-common-dir`. For a linked worktree this is the
+ * primary checkout, not the worktree itself. Falls back to `dir` when git fails or `dir` is not a repo.
+ */
+export function resolveMainCheckout(dir) {
+  const start = path.resolve(dir);
+  try {
+    const r = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: start, encoding: "utf8" });
+    const out = r.status === 0 ? String(r.stdout || "").trim() : "";
+    if (out && path.basename(out) === ".git") return path.dirname(path.resolve(out));
+  } catch {
+    // fall through
+  }
+  return start;
+}
+
+export function installVsShim({ binDirs, targetScript, baseHome, force = false } = {}) {
   const resolvedBaseHome = path.resolve(
     baseHome || process.env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad"),
   );
-  const repoRoot = path.resolve(import.meta.dirname, "..");
+  const ownRoot = path.resolve(import.meta.dirname, "..");
+  // A linked worktree must never be pinned into a shim: point at the main checkout instead (--force opts out).
+  const mainRoot = resolveMainCheckout(ownRoot);
+  const inLinkedWorktree = path.resolve(mainRoot) !== ownRoot;
+  const repoRoot = inLinkedWorktree && !force ? mainRoot : ownRoot;
   const runtimeDir = path.join(resolvedBaseHome, "runtime");
+  // The default global shim is the machine's `vs`: a linked worktree (a unit branch) must not rewrite it.
+  if (inLinkedWorktree && !force && !(Array.isArray(binDirs) && binDirs.length)) {
+    throw new Error(`refusing to write the default global shim from a linked worktree (${ownRoot}); run install-shim from the main checkout (${mainRoot}), or pass --bin-dir <dir> or --force`);
+  }
+  // Default global bin dirs must not get a fallback runtime that lives under the temp dir (test HOME leak).
+  if (!(Array.isArray(binDirs) && binDirs.length) && !force) {
+    const rel = path.relative(path.resolve(os.tmpdir()), runtimeDir);
+    if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
+      throw new Error(`refusing to write the default global shim with a runtime under the temp dir (${runtimeDir}); pass --bin-dir <dir> or --force`);
+    }
+  }
 
   const runtimeFiles = [
     "cli/vs.mjs",
@@ -1717,9 +1749,7 @@ export function installVsShim({ binDirs, targetScript, baseHome } = {}) {
   }
 
   const primaryScript = path.resolve(targetScript || path.join(repoRoot, "cli", "vs.mjs"));
-  const mainRepoScript = repoRoot.includes(".worktrees")
-    ? path.resolve(repoRoot, "..", "..", "cli", "vs.mjs")
-    : primaryScript;
+  const mainRepoScript = path.join(mainRoot, "cli", "vs.mjs");
   const fallbackScript = path.join(runtimeDir, "cli", "vs.mjs");
 
   const primaryPosix = primaryScript.replace(/\\/g, "/");
@@ -2165,7 +2195,7 @@ function vsImportClosure(repoRoot) {
 
 function commandInstallShim(flags) {
   const binDirs = flags.binDir ? [path.resolve(String(flags.binDir))] : undefined;
-  const res = installVsShim({ binDirs, baseHome: BASE_DIR });
+  const res = installVsShim({ binDirs, baseHome: BASE_DIR, force: Boolean(flags.force) });
   if (flags.json) {
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
     return 0;
@@ -2425,15 +2455,30 @@ function commandCap(flags) {
   throw new Error(`unknown cap subcommand "${sub}". Use: vs cap list | add | clear`);
 }
 
+function defaultBaseRef(repoRoot) {
+  for (const ref of ["master", "main"]) {
+    const r = spawnSync("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${ref}`], { cwd: repoRoot, encoding: "utf8" });
+    if (r.status === 0) return ref;
+  }
+  return "HEAD";
+}
+
 function commandWorktree(flags) {
   const sub = String(flags._[0] ?? "root").toLowerCase();
-  const repoRoot = path.resolve(import.meta.dirname, "..");
+  // Main checkout of the caller's cwd (so a worktree-pinned script still targets the real repo); outside a
+  // repo, fall back to the main checkout of this script.
+  const scriptRoot = path.resolve(import.meta.dirname, "..");
+  const cwdRoot = resolveMainCheckout(process.cwd());
+  const cwdIsRepo = spawnSync("git", ["rev-parse", "--git-common-dir"], { cwd: process.cwd(), encoding: "utf8" }).status === 0;
+  const repoRoot = cwdIsRepo ? cwdRoot : resolveMainCheckout(scriptRoot);
   const apply = Boolean(flags.apply);
 
   if (sub === "create" || sub === "add") {
     const branch = String(flags._[1] ?? flags.branch ?? "").trim();
     if (!branch) throw new Error("worktree create needs a branch: vs worktree create <branch>");
-    const res = createManagedWorktree(repoRoot, branch);
+    // Base on master (or explicit --base), never the caller's HEAD.
+    const baseRef = String(flags.base ?? "").trim() || defaultBaseRef(repoRoot);
+    const res = createManagedWorktree(repoRoot, branch, { baseRef });
     if (flags.json) {
       process.stdout.write(JSON.stringify(res, null, 2) + "\n");
     } else {
