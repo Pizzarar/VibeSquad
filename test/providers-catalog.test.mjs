@@ -7,7 +7,7 @@ import {
   buildCatalog, clearProbeCache, clearUsageCache, getModels, getProviders, getUsage, handleProvidersApi,
   loadRunnerSettings, probeProviders, probeStats, saveRunnerSettings, usageStats,
 } from '../server/providers-catalog.mjs';
-import { saveUserSettings, loadUserSettings } from '../server/user-settings.mjs';
+import { saveUserSettings, loadUserSettings, saveRemoteAccess } from '../server/user-settings.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'vs-catalog-'));
 const okExec = (file, args, o, cb) => cb(null, `${path.basename(file)} 1.2.3\n`);
@@ -52,7 +52,7 @@ test('settings merge-save keeps other keys and normalises', () => {
   const home = tmp();
   const file = path.join(home, 'settings.json');
   fs.writeFileSync(file, JSON.stringify({ userName: 'Zed', custom: { keep: 1 }, runner: { other: true, providers: { claude: { models: ['a'] } } } }));
-  const saved = saveRunnerSettings({ providers: { claude: { enabled: false }, agy: { models: ['m1', 'm1', ' m2 '], defaultModel: 'm2' } } }, home);
+  const saved = saveRunnerSettings({ providers: { claude: { enabled: false, models: ['a'] }, agy: { models: ['m1', 'm1', ' m2 '], defaultModel: 'm2' } } }, home);
   assert.deepEqual(saved.providers.claude, { enabled: false, models: ['a'] });
   assert.deepEqual(saved.providers['antigravity-cli'], { models: ['m1', 'm2'], defaultModel: 'm2' });
   const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -131,4 +131,68 @@ test('HTTP handler routes', async () => {
   assert.deepEqual(saved.data.runner.providers.opencode.models, ['z']);
   assert.equal((await call('GET', '/__vibesquad/providers/nope')).code, 404);
   assert.equal((await call('DELETE', '/__vibesquad/providers')).code, 405);
+});
+
+test('settings save: atomic, no temp leftovers, refuses to clobber unparseable settings.json', () => {
+  const home = tmp();
+  const file = path.join(home, 'settings.json');
+  saveRunnerSettings({ providers: { claude: { models: ['a'] } } }, home);
+  assert.deepEqual(fs.readdirSync(home).filter((n) => n.endsWith('.tmp')), []);
+  const bad = '{"userName": "Zed", "custom": {';
+  fs.writeFileSync(file, bad);
+  assert.throws(() => saveRunnerSettings({ providers: { claude: { models: ['b'] } } }, home), /refusing to save/);
+  assert.throws(() => saveUserSettings({ userName: 'Q' }, home), /refusing to save/);
+  assert.throws(() => saveRemoteAccess(true, home), /refusing to save/);
+  assert.equal(fs.readFileSync(file, 'utf8'), bad, 'unparseable file left untouched');
+  assert.deepEqual(fs.readdirSync(home).filter((n) => n.endsWith('.tmp')), []);
+});
+
+test('settings save: clearing a field clears it (replace per provider)', () => {
+  const home = tmp();
+  saveRunnerSettings({ providers: { claude: { enabled: false, models: ['a', 'b'], modes: ['m'], defaultModel: 'a', defaultMode: 'm' } } }, home);
+  let s = saveRunnerSettings({ providers: { claude: { enabled: false, models: [], modes: [], defaultModel: '  ', defaultMode: '' } } }, home);
+  assert.deepEqual(s.providers.claude, { enabled: false });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, 'settings.json'), 'utf8')).runner.providers.claude, { enabled: false });
+  saveRunnerSettings({ providers: { codex: { models: ['x'] }, claude: { models: ['q'] } } }, home);
+  s = saveRunnerSettings({ providers: { claude: { models: [] } } }, home);
+  assert.equal(s.providers.claude, undefined, 'fully emptied provider is removed');
+  assert.deepEqual(s.providers.codex, { models: ['x'] }, 'providers absent from the patch are untouched');
+});
+
+test('usage rollup: invalid ts skips the event but offsets advance; lane from meta patch; tokens from usage events', () => {
+  const home = tmp();
+  const dir = path.join(home, 'runner', 'agents');
+  fs.mkdirSync(dir, { recursive: true });
+  const d1 = Date.UTC(2026, 10, 1, 12);
+  const a = path.join(dir, 'rn-a.jsonl');
+  const body =
+    ev({ seq: 0, ts: d1, type: 'created', provider: 'claude', model: 'm-1', meta: {} }) +
+    ev({ seq: 1, ts: d1, type: 'meta', patch: { lane: 'lane-a' } }) +
+    ev({ seq: 2, ts: 'garbage', type: 'turn_done', costUsd: 1 }) +
+    ev({ seq: 3, ts: 1e20, type: 'usage', inputTokens: 5, outputTokens: 1 }) +
+    ev({ seq: 4, ts: d1, type: 'usage', inputTokens: 100, outputTokens: 20 }) +
+    ev({ seq: 5, ts: d1, type: 'usage', contextTokens: 999, contextMax: 1000 }) +
+    ev({ seq: 6, ts: d1, type: 'turn_done', costUsd: 3 });
+  fs.writeFileSync(a, body);
+  clearUsageCache();
+  let u = getUsage({ home });
+  assert.equal(u.totals.turns, 1, 'bad-ts turn skipped, good one counted');
+  assert.equal(u.byLane.find((r) => r.lane === 'lane-a').turns, 1);
+  assert.equal(u.totals.inputTokens, 100);
+  assert.equal(u.totals.outputTokens, 20);
+  assert.ok(Math.abs(u.totals.costUsd - 2) < 1e-9, 'cost delta from the skipped turn is not double counted');
+  const read = usageStats().readBytes;
+  getUsage({ home });
+  assert.equal(usageStats().readBytes, read, 'offset advanced past the bad line; nothing re-read');
+  fs.appendFileSync(a, ev({ seq: 7, ts: d1, type: 'meta', patch: { labels: { lane: 'lane-b' } } }) + ev({ seq: 8, ts: d1, type: 'turn_done', costUsd: 4 }));
+  u = getUsage({ home });
+  assert.equal(u.totals.turns, 2);
+  assert.equal(u.byLane.find((r) => r.lane === 'lane-b').turns, 1);
+});
+
+test('isGatedRead gates providers ?refresh=1 for non-owners', async () => {
+  const { isGatedRead } = await import('../server/vibesquad-api.mjs');
+  assert.equal(isGatedRead('/__vibesquad/providers', '/__vibesquad/providers?refresh=1'), true);
+  assert.equal(isGatedRead('/__vibesquad/providers/models', '/__vibesquad/providers/models?provider=claude&refresh=1'), true);
+  assert.equal(isGatedRead('/__vibesquad/providers', '/__vibesquad/providers'), false);
 });

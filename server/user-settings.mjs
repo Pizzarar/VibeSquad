@@ -1,9 +1,9 @@
 // Owner display settings (~/.vibesquad/settings.json) plus the legacy owner-label aliases
 // and BOM-tolerant JSON readers with visible parse-error warnings.
 // The legacy names are assembled at runtime so the old literal never appears in tracked files.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 export const LEGACY_USER_TYPE = "au" + "b";
 export const LEGACY_NEEDS_LABEL = "needs-" + LEGACY_USER_TYPE;
@@ -161,9 +161,27 @@ export function loadUserSettings(baseHome) {
   return out;
 }
 
+/** Temp file + rename so a crash or concurrent read never sees a truncated settings.json. */
+export function writeSettingsAtomic(file, data) {
+  mkdirSync(dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n", "utf8");
+    renameSync(tmp, file);
+  } catch (err) {
+    try { rmSync(tmp, { force: true }); } catch { /* best effort */ }
+    throw err;
+  }
+}
+
+function assertSettingsWritable(current) {
+  if (current.parseError) throw new Error(`refusing to save: settings.json exists but is not valid JSON (${current.parseError}). Fix or remove it first.`);
+}
+
 export function saveUserSettings(patch, baseHome) {
   const file = settingsFile(baseHome);
   const current = loadUserSettings(baseHome);
+  assertSettingsWritable(current);
   const next = {
     userName: normalizeUserName(patch && "userName" in patch ? patch.userName : current.userName),
     lanEnabled: patch && "lanEnabled" in patch ? Boolean(patch.lanEnabled) : current.lanEnabled,
@@ -180,8 +198,7 @@ export function saveUserSettings(patch, baseHome) {
   if (Object.keys(pushEvents).length) next.pushEvents = pushEvents;
   if (current.remote) next.remote = current.remote;
   if (current.runner) next.runner = current.runner;
-  mkdirSync(baseHome || vibesquadHome(), { recursive: true });
-  writeFileSync(file, JSON.stringify(next, null, 2) + "\n", "utf8");
+  writeSettingsAtomic(file, next);
   clearConfigWarning(file);
   return next;
 }
@@ -189,10 +206,10 @@ export function saveUserSettings(patch, baseHome) {
 export function saveRemoteAccess(enabled, baseHome) {
   const file = settingsFile(baseHome);
   const current = loadUserSettings(baseHome);
+  assertSettingsWritable(current);
   const next = { ...current, remote: { enabled: Boolean(enabled) } };
   delete next.parseError;
-  mkdirSync(baseHome || vibesquadHome(), { recursive: true });
-  writeFileSync(file, JSON.stringify(next, null, 2) + "\n", "utf8");
+  writeSettingsAtomic(file, next);
   clearConfigWarning(file);
   return next;
 }

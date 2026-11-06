@@ -3,12 +3,12 @@
 // Paseo daemon ({providers:[{provider,available,error}]}, {models:[{id,label,...}]}, {modes:[...]}).
 // Probing: `<cli> --version` on the resolved executable, no shell, cached with a TTL. No background timers.
 import { execFile } from "node:child_process";
-import { mkdirSync, openSync, closeSync, readSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { openSync, closeSync, readSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { ACP_PROVIDERS, PROVIDER_ALIASES } from "../runner/adapters/acp.mjs";
 import { resolveExecutable } from "../runner/spawn.mjs";
 import { DEFAULT_PACK_PROFILES, getProfilesPath, normalizeProfile } from "./profiles.mjs";
-import { readJsonFileWithBom, vibesquadHome } from "./user-settings.mjs";
+import { readJsonFileWithBom, vibesquadHome, writeSettingsAtomic } from "./user-settings.mjs";
 
 const PROBE_TTL_MS = 10 * 60_000;
 const PROBE_TIMEOUT_MS = 4000;
@@ -101,6 +101,14 @@ function readRawSettings(home) {
   return res.ok && res.data && typeof res.data === "object" && !Array.isArray(res.data) ? res.data : {};
 }
 
+/** Like readRawSettings but refuses (throws) when the file exists and is unreadable, so a save never clobbers it. */
+function readRawSettingsForSave(home) {
+  const res = readJsonFileWithBom(settingsPath(home), { label: "~/.vibesquad/settings.json", fallback: {}, recordWarning: false, rewriteBom: false });
+  if (res.exists && !res.ok) throw new Error(`refusing to save: settings.json exists but is not valid JSON (${res.error}). Fix or remove it first.`);
+  if (res.exists && !(res.data && typeof res.data === "object" && !Array.isArray(res.data))) throw new Error("refusing to save: settings.json is not a JSON object");
+  return res.data && typeof res.data === "object" ? res.data : {};
+}
+
 const strList = (v) => (Array.isArray(v) ? [...new Set(v.map((x) => String(x).trim()).filter(Boolean))] : []);
 
 /** Normalise the editable runner block. Unknown keys are dropped; shapes are forced. */
@@ -128,20 +136,26 @@ export function loadRunnerSettings(home) {
   return normalizeRunnerSettings(readRawSettings(home).runner);
 }
 
-/** Merge a patch into settings.json's `runner` key; every other top-level key is preserved untouched. */
+/**
+ * Merge a patch into settings.json's `runner` key; every other top-level key is preserved untouched.
+ * A provider present in the patch REPLACES the saved one (so empty models/modes or blank defaults clear them);
+ * `null` resets the provider; providers absent from the patch are untouched.
+ */
 export function saveRunnerSettings(patch, home) {
-  const raw = readRawSettings(home);
+  const raw = readRawSettingsForSave(home);
   const current = normalizeRunnerSettings(raw.runner);
   const incoming = normalizeRunnerSettings(patch);
   const providers = { ...current.providers };
   for (const id of Object.keys(patch?.providers ?? {})) {
     const cid = canon(id);
     if (patch.providers[id] === null) delete providers[cid]; // explicit reset
-    else if (incoming.providers[cid]) providers[cid] = { ...(providers[cid] ?? {}), ...incoming.providers[cid] };
+    else if (patch.providers[id] && typeof patch.providers[id] === "object") {
+      if (incoming.providers[cid]) providers[cid] = incoming.providers[cid];
+      else delete providers[cid]; // everything cleared
+    }
   }
   const next = { ...raw, runner: { ...(raw.runner && typeof raw.runner === "object" ? raw.runner : {}), providers } };
-  mkdirSync(home || vibesquadHome(), { recursive: true });
-  writeFileSync(settingsPath(home), JSON.stringify(next, null, 2) + "\n", "utf8");
+  writeSettingsAtomic(settingsPath(home), next);
   return normalizeRunnerSettings(next.runner);
 }
 
@@ -213,17 +227,44 @@ export const clearUsageCache = () => usageFiles.clear();
 let usageReadBytes = 0;
 export const usageStats = () => ({ files: usageFiles.size, readBytes: usageReadBytes });
 
-const dayOf = (ts) => new Date(ts).toISOString().slice(0, 10);
+/** YYYY-MM-DD for a ts, or null when it is not a valid date (never throws). */
+const dayOf = (ts) => {
+  const d = new Date(ts);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+};
+const tokenCount = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : 0);
+
+function bucketFor(st, day) {
+  const key = `${st.provider}|${st.model}|${st.lane}|${day}`;
+  let b = st.buckets.get(key);
+  if (!b) {
+    b = { provider: st.provider, model: st.model, lane: st.lane, day, turns: 0, costUsd: 0, inputTokens: 0, outputTokens: 0 };
+    st.buckets.set(key, b);
+  }
+  return b;
+}
 
 function foldEvent(st, ev) {
   if (ev.type === "created") {
     st.provider = ev.provider ?? st.provider;
     st.model = ev.model ?? st.model;
-    st.lane = ev.meta?.lane ?? st.lane;
+    st.lane = ev.meta?.lane ?? ev.meta?.labels?.lane ?? st.lane;
   } else if (ev.type === "session" && ev.model) {
     st.model = ev.model;
-  } else if (ev.type === "meta" && ev.labels?.lane) {
-    st.lane = ev.labels.lane;
+  } else if (ev.type === "meta") {
+    // Runner.updateMeta appends { type: "meta", patch: { lane?, labels? } }.
+    const lane = ev.patch?.lane ?? ev.patch?.labels?.lane;
+    if (typeof lane === "string" && lane) st.lane = lane;
+  } else if (ev.type === "usage") {
+    // Adapter usage events (claude: per-call input/output tokens). ACP's contextTokens is a running size, not a delta: ignored.
+    const inT = tokenCount(ev.inputTokens);
+    const outT = tokenCount(ev.outputTokens);
+    const day = dayOf(ev.ts ?? Date.now());
+    if (day && (inT || outT)) {
+      const b = bucketFor(st, day);
+      b.inputTokens += inT;
+      b.outputTokens += outT;
+    }
   } else if (ev.type === "turn_done") {
     // claude reports a session-cumulative total_cost_usd; a lower value means a fresh process, so count it whole.
     const c = Number(ev.costUsd);
@@ -232,11 +273,11 @@ function foldEvent(st, ev) {
       delta = c >= st.prevCost ? c - st.prevCost : c;
       st.prevCost = c;
     }
-    const key = `${st.provider}|${st.model}|${st.lane}|${dayOf(ev.ts ?? Date.now())}`;
-    const b = st.buckets.get(key) ?? { provider: st.provider, model: st.model, lane: st.lane, day: dayOf(ev.ts ?? Date.now()), turns: 0, costUsd: 0 };
+    const day = dayOf(ev.ts ?? Date.now());
+    if (!day) return; // invalid ts: skip the event (prevCost already advanced so later deltas stay right)
+    const b = bucketFor(st, day);
     b.turns += 1;
     b.costUsd += delta;
-    st.buckets.set(key, b);
   }
 }
 
@@ -290,9 +331,11 @@ export function getUsage({ home, since, until } = {}) {
     for (const b of st.buckets.values()) {
       if ((since && b.day < since) || (until && b.day > until)) continue;
       const key = `${b.provider}|${b.model}|${b.lane}|${b.day}`;
-      const a = agg.get(key) ?? { provider: b.provider, model: b.model, lane: b.lane, day: b.day, turns: 0, costUsd: 0, agents: 0 };
+      const a = agg.get(key) ?? { provider: b.provider, model: b.model, lane: b.lane, day: b.day, turns: 0, costUsd: 0, inputTokens: 0, outputTokens: 0, agents: 0 };
       a.turns += b.turns;
       a.costUsd += b.costUsd;
+      a.inputTokens += b.inputTokens;
+      a.outputTokens += b.outputTokens;
       a.agents += 1;
       agg.set(key, a);
     }
@@ -302,17 +345,24 @@ export function getUsage({ home, since, until } = {}) {
   const by = (k) => {
     const m = new Map();
     for (const r of rows) {
-      const t = m.get(r[k]) ?? { [k]: r[k], turns: 0, costUsd: 0 };
+      const t = m.get(r[k]) ?? { [k]: r[k], turns: 0, costUsd: 0, inputTokens: 0, outputTokens: 0 };
       t.turns += r.turns;
       t.costUsd += r.costUsd;
+      t.inputTokens += r.inputTokens;
+      t.outputTokens += r.outputTokens;
       m.set(r[k], t);
     }
     return [...m.values()].sort((a, b) => b.costUsd - a.costUsd);
   };
   return {
-    note: "Token counts are not recorded in runner logs; cost is summed from turn_done.costUsd.",
+    note: "Cost is summed from turn_done.costUsd; token counts come from adapter usage events and are 0 for logs that have none.",
     files: seen.size,
-    totals: { turns: rows.reduce((s, r) => s + r.turns, 0), costUsd: rows.reduce((s, r) => s + r.costUsd, 0) },
+    totals: {
+      turns: rows.reduce((s, r) => s + r.turns, 0),
+      costUsd: rows.reduce((s, r) => s + r.costUsd, 0),
+      inputTokens: rows.reduce((s, r) => s + r.inputTokens, 0),
+      outputTokens: rows.reduce((s, r) => s + r.outputTokens, 0),
+    },
     byProvider: by("provider"),
     byModel: by("model"),
     byLane: by("lane"),
