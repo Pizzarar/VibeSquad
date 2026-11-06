@@ -1,0 +1,319 @@
+// Block 3/4: runner auto mode + child env, VS MCP server (stdio round trip + Paseo-name aliases), vs spawn/send/status,
+// and rn- identity through the backend seam. Every filesystem touch is under a temp HOME/VIBESQUAD_HOME.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import { spawn, spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { Runner, agentEnv } from '../runner/runner.mjs';
+import { createClaudeAdapter } from '../runner/adapters/claude.mjs';
+import { createAcpAdapter } from '../runner/adapters/acp.mjs';
+import { toAgent, readRunnerAgentSync } from '../server/backend/runner-backend.mjs';
+import { ALIASES, callTool, VS_TOOLS } from '../server/mcp/tools.mjs';
+import { handleMessage, toolList } from '../server/mcp/server.mjs';
+import { runAgentVerb } from '../cli/vs.mjs';
+
+const ROOT = path.resolve(import.meta.dirname, '..');
+const MCP_SERVER = path.join(ROOT, 'server', 'mcp', 'server.mjs');
+const CLI = path.join(ROOT, 'cli', 'vs.mjs');
+const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'vs-mcp-'));
+const tick = () => new Promise((r) => setTimeout(r, 15));
+
+function isolatedEnv(extra = {}) {
+  const home = tmp();
+  return {
+    ...process.env, HOME: home, USERPROFILE: home, VIBESQUAD_HOME: path.join(home, '.vibesquad'), PASEO_HOME: path.join(home, '.paseo'),
+    PASEO_AGENT_ID: '', VS_AGENT_ID: '', VS_TEAM: '', VS_LANE: '', VS_ROLE: '', VS_ORD: '', VS_RUNNER_LANES: '', ...extra,
+  };
+}
+
+function fakeSpawn() {
+  const calls = [];
+  const impl = (file, args, opts) => {
+    const child = new EventEmitter();
+    child.stdin = new PassThrough();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.written = [];
+    child.stdin.on('data', (d) => { for (const l of String(d).split('\n').filter(Boolean)) child.written.push(JSON.parse(l)); });
+    child.kill = () => child.emit('exit', null, 'SIGTERM');
+    calls.push({ file, args, opts, child });
+    return child;
+  };
+  impl.calls = calls;
+  return impl;
+}
+
+const flagValue = (args, name) => args[args.indexOf(name) + 1];
+
+// ---------- runner: permission mode, MCP wiring, child env ----------
+
+test('claude adapter: permission mode defaults to auto, explicit mode wins', () => {
+  const spawnImpl = fakeSpawn();
+  const adapter = createClaudeAdapter({ spawnImpl, command: process.execPath });
+  adapter.start({ cwd: process.cwd(), meta: {}, emit() {}, onExit() {} });
+  adapter.start({ cwd: process.cwd(), meta: { permissionMode: 'plan' }, emit() {}, onExit() {} });
+  assert.equal(flagValue(spawnImpl.calls[0].args, '--permission-mode'), 'auto');
+  assert.equal(flagValue(spawnImpl.calls[1].args, '--permission-mode'), 'plan');
+});
+
+test('toAgent: modeId reflects the effective claude mode', () => {
+  assert.equal(toAgent({ id: 'rn-1', provider: 'claude', meta: {} }).modeId, 'auto');
+  assert.equal(toAgent({ id: 'rn-1', provider: 'claude', meta: { permissionMode: 'plan' } }).modeId, 'plan');
+  assert.equal(toAgent({ id: 'rn-1', provider: 'opencode', meta: {} }).modeId, null);
+});
+
+test('claude adapter: --mcp-config names the vibesquad server and tools are pre-allowed', () => {
+  const spawnImpl = fakeSpawn();
+  const adapter = createClaudeAdapter({ spawnImpl, command: process.execPath });
+  const env = { VS_AGENT_ID: 'rn-a1', VS_LANE: 'own', SECRET_THING: 'nope' };
+  adapter.start({ cwd: process.cwd(), meta: {}, env, emit() {}, onExit() {} });
+  const { args } = spawnImpl.calls[0];
+  const cfg = JSON.parse(flagValue(args, '--mcp-config'));
+  assert.equal(cfg.mcpServers.vibesquad.command, process.execPath);
+  assert.deepEqual(cfg.mcpServers.vibesquad.args, [MCP_SERVER]);
+  assert.equal(cfg.mcpServers.vibesquad.env.VS_AGENT_ID, 'rn-a1');
+  assert.equal(cfg.mcpServers.vibesquad.env.SECRET_THING, undefined);
+  assert.equal(flagValue(args, '--allowedTools'), 'mcp__vibesquad');
+  assert.ok(existsSync(cfg.mcpServers.vibesquad.args[0]));
+});
+
+test('acp adapter: session/new carries the vibesquad MCP server', async () => {
+  const spawnImpl = fakeSpawn();
+  const adapter = createAcpAdapter({ spawnImpl, command: process.execPath });
+  adapter.start({ cwd: process.cwd(), env: { VS_AGENT_ID: 'rn-b2' }, emit() {}, onExit() {} });
+  const child = spawnImpl.calls[0].child;
+  await tick();
+  child.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} }) + '\n');
+  await tick();
+  const sessionNew = child.written.find((m) => m.method === 'session/new');
+  assert.equal(sessionNew.params.mcpServers.length, 1);
+  const srv = sessionNew.params.mcpServers[0];
+  assert.equal(srv.name, 'vibesquad');
+  assert.equal(srv.command, process.execPath);
+  assert.deepEqual(srv.args, [MCP_SERVER]);
+  assert.deepEqual(srv.env, [{ name: 'VS_AGENT_ID', value: 'rn-b2' }]);
+});
+
+test('agentEnv: stale runner identity is replaced by the agent\'s own', () => {
+  const base = { PASEO_AGENT_ID: 'lead-that-started-runner', VS_AGENT_ID: 'stale', VS_TEAM: 'old', VS_LANE: 'old', VS_ROLE: 'lead', VS_ORD: '9', KEEP: '1' };
+  const env = agentEnv('rn-abc', { team: 'efi', lane: 'own', role: 'worker', ord: 3 }, base);
+  assert.equal(env.VS_AGENT_ID, 'rn-abc');
+  assert.equal(env.PASEO_AGENT_ID, 'rn-abc');
+  assert.deepEqual([env.VS_TEAM, env.VS_LANE, env.VS_ROLE, env.VS_ORD], ['efi', 'own', 'worker', '3']);
+  assert.equal(env.KEEP, '1');
+  const bare = agentEnv('rn-abc', {}, base);
+  assert.equal(bare.VS_TEAM, undefined, 'no stale team leaks into an agent without one');
+});
+
+test('runner passes the per-agent env to the child process', () => {
+  const spawnImpl = fakeSpawn();
+  const runner = new Runner({ dir: tmp(), adapters: { claude: createClaudeAdapter({ spawnImpl, command: process.execPath }) } });
+  const id = runner.create({ provider: 'claude', cwd: process.cwd(), meta: { team: 'efi', lane: 'own', role: 'worker' } });
+  const { env } = spawnImpl.calls[0].opts;
+  assert.equal(env.VS_AGENT_ID, id);
+  assert.equal(env.PASEO_AGENT_ID, id);
+  assert.equal(env.VS_LANE, 'own');
+  assert.equal(env.VS_ROLE, 'worker');
+});
+
+// ---------- MCP server ----------
+
+function fakeCtx({ identity = { agentId: 'rn-caller', team: 'efi', lane: 'own', role: 'lead' }, runnerBackend, paseoBackend } = {}) {
+  const logs = [];
+  const used = [];
+  const profiles = [{ id: 'agent_profile_x', name: 'Implement - Sonnet', role: 'worker', provider: 'claude', model: 'claude-sonnet-5-5', modeId: 'auto', notes: 'be good' }];
+  return {
+    logs, used, identity, cwd: '/work',
+    loadProfiles: async () => profiles,
+    resolveProfile: async (name) => {
+      const p = profiles.find((x) => x.name === name || x.id === name);
+      return p ? { profile: p, spawn: { provider: p.provider, model: p.model, modeId: p.modeId, systemPrompt: p.notes } } : null;
+    },
+    writeLog: async (e) => { logs.push(e); },
+    withBackend: async (target, fn) => {
+      const onRunner = String(target.id ?? '').startsWith('rn-') || (!target.id && target.lane === 'own');
+      used.push(onRunner ? 'runner' : 'paseo');
+      return fn(onRunner ? runnerBackend : paseoBackend);
+    },
+  };
+}
+
+function fakeBackend(tag) {
+  const calls = [];
+  return {
+    calls,
+    createAgent: async (req) => { calls.push(['createAgent', req]); return { id: `${tag}-new`, title: req.config.title }; },
+    sendAgentPrompt: async (id, text) => { calls.push(['send', id, text]); },
+    waitForFinish: async (id, ms) => { calls.push(['wait', id, ms]); return { status: 'idle' }; },
+    fetchAgent: async (id) => ({ agent: { id, status: 'idle', title: 'T' } }),
+    fetchAgentTimeline: async () => ({ entries: [{ item: { type: 'assistant_message', text: 'x'.repeat(5000) } }] }),
+    fetchAgents: async () => ({ entries: [
+      { agent: { id: `${tag}-1`, title: 'a', status: 'idle', labels: { lane: 'own', team: 'efi', role: 'worker' } } },
+      { agent: { id: `${tag}-2`, title: 'b', status: 'idle', labels: { lane: 'other' } } },
+    ] }),
+    cancelAgent: async (id) => { calls.push(['cancel', id]); },
+  };
+}
+
+test('MCP: initialize / tools/list / tools/call round trip over stdio', async () => {
+  const env = isolatedEnv({ VS_AGENT_ID: 'rn-w1', VS_TEAM: 'efi', VS_LANE: 'own', VS_ROLE: 'worker' });
+  const child = spawn(process.execPath, [MCP_SERVER], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+  const lines = [];
+  let buf = '';
+  child.stdout.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { lines.push(JSON.parse(buf.slice(0, i))); buf = buf.slice(i + 1); } });
+  const rpc = async (msg) => {
+    child.stdin.write(JSON.stringify(msg) + '\n');
+    for (let n = 0; n < 200; n++) { const hit = lines.find((l) => l.id === msg.id); if (hit) return hit; await tick(); }
+    throw new Error('no response');
+  };
+  try {
+    const init = await rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 't', version: '0' } } });
+    assert.equal(init.result.serverInfo.name, 'vibesquad');
+    assert.ok(init.result.capabilities.tools);
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+    const list = await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
+    const names = list.result.tools.map((t) => t.name);
+    for (const n of [...Object.keys(VS_TOOLS), ...Object.keys(ALIASES)]) assert.ok(names.includes(n), `tool ${n} listed`);
+    const call = await rpc({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'report', arguments: { type: 'done', text: 'finished the thing' } } });
+    assert.ok(!call.result.isError, JSON.stringify(call));
+    assert.deepEqual(JSON.parse(call.result.content[0].text), { logged: true, type: 'done' });
+    const logPath = path.join(env.VIBESQUAD_HOME, 'teams', 'efi', 'log.jsonl');
+    const entry = JSON.parse(readFileSync(logPath, 'utf8').trim().split('\n').pop());
+    assert.equal(entry.agent, 'rn-w1');
+    assert.equal(entry.lane, 'own');
+    assert.equal(entry.type, 'done');
+    const bad = await rpc({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'report', arguments: { type: 'nope', text: 'x' } } });
+    assert.equal(bad.result.isError, true);
+    const unknown = await rpc({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'zzz', arguments: {} } });
+    assert.ok(unknown.error);
+  } finally {
+    child.stdin.end();
+    child.kill();
+  }
+});
+
+test('MCP: handleMessage ignores notifications and lists every tool', async () => {
+  assert.equal(await handleMessage({}, { jsonrpc: '2.0', method: 'notifications/initialized' }), null);
+  assert.equal(toolList().length, Object.keys(VS_TOOLS).length + Object.keys(ALIASES).length);
+});
+
+test('spawn_worker: profile -> provider/model/mode, inherits team+lane, role=worker, routes to the runner lane', async () => {
+  const runnerBackend = fakeBackend('rn');
+  const ctx = fakeCtx({ runnerBackend, paseoBackend: fakeBackend('ps') });
+  const out = await callTool(ctx, 'spawn_worker', { title: 'Do it', profile: 'Implement - Sonnet', prompt: 'go', labels: { role: 'lead', lane: 'evil' } });
+  assert.deepEqual(out, { id: 'rn-new', title: 'Do it' });
+  const [, req] = runnerBackend.calls[0];
+  assert.deepEqual([req.config.provider, req.config.model, req.config.modeId, req.config.cwd], ['claude', 'claude-sonnet-5-5', 'auto', '/work']);
+  assert.equal(req.initialPrompt, 'go');
+  assert.equal(req.labels.team, 'efi');
+  assert.equal(req.labels.lane, 'own');
+  assert.equal(req.labels.role, 'worker');
+  assert.equal(req.labels.profile, 'agent_profile_x');
+  assert.equal(req.labels.job, 'Do it');
+  assert.equal(req.env.VS_ROLE, 'worker');
+  await assert.rejects(callTool(ctx, 'spawn_worker', { title: 't', profile: 'Nope', prompt: 'p' }), /unknown profile/);
+});
+
+test('send / wait / status / cancel / list route by id and lane; status caps lastMessage', async () => {
+  const runnerBackend = fakeBackend('rn');
+  const paseoBackend = fakeBackend('ps');
+  const ctx = fakeCtx({ runnerBackend, paseoBackend });
+  await callTool(ctx, 'send', { id: 'rn-1', text: 'hi' });
+  await callTool(ctx, 'send', { id: 'uuid-1', text: 'yo' });
+  assert.deepEqual(runnerBackend.calls[0], ['send', 'rn-1', 'hi']);
+  assert.deepEqual(paseoBackend.calls[0], ['send', 'uuid-1', 'yo']);
+  const w = await callTool(ctx, 'wait', { id: 'rn-1', timeoutSec: 7 });
+  assert.equal(w.status, 'idle');
+  assert.equal(w.lastMessage.length, 2000);
+  assert.deepEqual(runnerBackend.calls[1], ['wait', 'rn-1', 7000]);
+  const s = await callTool(ctx, 'status', { id: 'rn-1' });
+  assert.deepEqual([s.status, s.title, s.lastMessage.length], ['idle', 'T', 2000]);
+  await callTool(ctx, 'cancel', { id: 'rn-1' });
+  assert.deepEqual(runnerBackend.calls.at(-1), ['cancel', 'rn-1']);
+  const l = await callTool(ctx, 'list', {});
+  assert.deepEqual(l.map((a) => a.id), ['rn-1'], 'lane-scoped');
+});
+
+test('report writes as the caller; types are restricted', async () => {
+  const ctx = fakeCtx({ runnerBackend: fakeBackend('rn'), paseoBackend: fakeBackend('ps') });
+  await callTool(ctx, 'report', { type: 'blocker', text: 'stuck' });
+  assert.deepEqual(ctx.logs, [{ type: 'blocker', text: 'stuck', refs: undefined }]);
+  await assert.rejects(callTool(ctx, 'report', { type: 'metric', text: 'x' }), /type must be/);
+});
+
+test('every Paseo-name alias maps to its VS tool and logs a metric with caller + lane', async () => {
+  const runnerBackend = fakeBackend('rn');
+  const ctx = fakeCtx({ runnerBackend, paseoBackend: fakeBackend('ps') });
+  const created = await callTool(ctx, 'create_agent', { title: 'W', provider: 'claude', model: 'claude-haiku-5-5', mode: 'plan', initialPrompt: 'hello', cwd: '/x', labels: { profile: 'Implement - Sonnet' } });
+  assert.equal(created.agentId, 'rn-new');
+  assert.equal(created.id, 'rn-new');
+  const [, req] = runnerBackend.calls[0];
+  assert.deepEqual([req.config.provider, req.config.model, req.config.modeId, req.config.cwd, req.initialPrompt], ['claude', 'claude-haiku-5-5', 'plan', '/x', 'hello']);
+  assert.equal(req.labels.profile, 'agent_profile_x');
+
+  await callTool(ctx, 'send_agent_prompt', { agentId: 'rn-1', prompt: 'next' });
+  assert.deepEqual(runnerBackend.calls.at(-1), ['send', 'rn-1', 'next']);
+  const st = await callTool(ctx, 'get_agent_status', { agentId: 'rn-1' });
+  assert.equal(st.agentId, 'rn-1');
+  assert.equal(st.status, 'idle');
+  const la = await callTool(ctx, 'list_agents', {});
+  assert.equal(la.agents[0].agentId, 'rn-1');
+  await callTool(ctx, 'cancel_agent', { agentId: 'rn-1' });
+  assert.deepEqual(runnerBackend.calls.at(-1), ['cancel', 'rn-1']);
+  await callTool(ctx, 'wait_for_agent', { agentId: 'rn-1', timeout: 3 });
+  assert.deepEqual(runnerBackend.calls.at(-1), ['wait', 'rn-1', 3000]);
+
+  const metrics = ctx.logs.filter((l) => l.type === 'metric').map((l) => l.text);
+  for (const name of Object.keys(ALIASES)) assert.ok(metrics.includes(`mcp-alias: tool=${name} caller=rn-caller lane=own`), `metric for ${name}`);
+  assert.equal(metrics.length, Object.keys(ALIASES).length);
+  await callTool(ctx, 'send', { id: 'rn-1', text: 'canonical' });
+  assert.equal(ctx.logs.filter((l) => l.type === 'metric').length, Object.keys(ALIASES).length, 'canonical tools log no alias metric');
+});
+
+// ---------- vs CLI parity ----------
+
+test('vs spawn / send / status run the shared tools against a fake backend', async () => {
+  const runnerBackend = fakeBackend('rn');
+  const ctx = fakeCtx({ runnerBackend, paseoBackend: fakeBackend('ps') });
+  const spawned = await runAgentVerb('spawn', { _: [], title: 'CLI job', profile: 'Implement - Sonnet', prompt: 'do x' }, ctx);
+  assert.deepEqual(spawned, { id: 'rn-new', title: 'CLI job' });
+  assert.equal(runnerBackend.calls[0][1].labels.role, 'worker');
+  assert.deepEqual(await runAgentVerb('send', { _: ['rn-1', 'hello', 'there'] }, ctx), { id: 'rn-1', sent: true });
+  assert.deepEqual(runnerBackend.calls.at(-1), ['send', 'rn-1', 'hello there']);
+  const st = await runAgentVerb('status', { _: ['rn-1'] }, ctx);
+  assert.equal(st.status, 'idle');
+  assert.equal(st.lastMessage.length, 2000);
+});
+
+function writeRunnerAgent(home, id, meta) {
+  const dir = path.join(home, 'runner', 'agents');
+  mkdirSync(dir, { recursive: true });
+  const ev = (seq, type, data) => JSON.stringify({ seq, ts: Date.now(), type, ...data });
+  writeFileSync(path.join(dir, `${id}.jsonl`), [
+    ev(0, 'created', { provider: 'claude', model: 'm', cwd: process.cwd(), meta }),
+    ev(1, 'status', { status: 'idle' }),
+  ].join('\n') + '\n');
+}
+
+test('rn- agents resolve through the runner log: vs log as a runner lead, vs who lists runner agents', () => {
+  const env = isolatedEnv();
+  mkdirSync(env.VIBESQUAD_HOME, { recursive: true });
+  writeFileSync(path.join(env.VIBESQUAD_HOME, 'teams.json'), JSON.stringify({ teams: [{ id: 'efi', name: 'EFI', paths: ['efi'], lanes: [{ id: 'own', name: 'Own' }, { id: 'ui', name: 'UI' }] }] }));
+  writeRunnerAgent(env.VIBESQUAD_HOME, 'rn-lead1', { team: 'efi', lane: 'own', role: 'lead', title: 'Lead One' });
+  writeRunnerAgent(env.VIBESQUAD_HOME, 'rn-work1', { team: 'efi', lane: 'own', role: 'worker', title: 'Worker One' });
+  Object.assign(env, { VIBESQUAD_ROOT: env.VIBESQUAD_HOME });
+  const asLead = spawnSync(process.execPath, [CLI, 'log', 'decision', 'runner lead can log'], { env: { ...env, PASEO_AGENT_ID: 'rn-lead1' }, encoding: 'utf8' });
+  assert.equal(asLead.status, 0, asLead.stderr);
+  assert.equal(JSON.parse(asLead.stdout).agent, 'rn-lead1');
+  const asWorker = spawnSync(process.execPath, [CLI, 'log', 'decision', 'worker may not'], { env: { ...env, PASEO_AGENT_ID: 'rn-work1' }, encoding: 'utf8' });
+  assert.notEqual(asWorker.status, 0);
+  assert.match(asWorker.stderr, /role=worker cannot write/);
+  const who = spawnSync(process.execPath, [CLI, 'who', 'all', '--lane', 'own', '--json'], { env: { ...env, VS_TEAM: 'efi' }, encoding: 'utf8' });
+  const ids = JSON.parse(who.stdout).entries.map((e) => `${e.id}:${e.role}`).sort();
+  assert.deepEqual(ids, ['rn-lead1:lead', 'rn-work1:worker']);
+  assert.equal(readRunnerAgentSync('rn-lead1', { env })?.labels.role, 'lead');
+});
