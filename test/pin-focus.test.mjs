@@ -82,27 +82,24 @@ const livePin = (laneId, status) => ({
   brainstorm: { agent: { id: `bs-${laneId}`, status, labels: { team: "vibesquad", lane: laneId, role: "brainstorm" } }, kind: "brainstorm", agentType: "brainstorm" },
 });
 
-test("focusPin on a new pin (no Buddy) spawns through openPin and focuses the new Buddy on the first click", async () => {
+test("focusPin on a dormant pin (no Buddy) does not spawn; it shows the Spin Up picker (gone:true)", async () => {
   const calls = [];
-  globalThis.__testOpenPin = async (p) => {
-    calls.push(p.lane.id);
-    const m = { agent: { id: "bs-new-first", status: "idle", labels: { team: p.squad.id, lane: p.lane.id, role: "brainstorm" } }, kind: "brainstorm", agentType: "brainstorm", team: p.squad, laneId: p.lane.id };
-    globalThis.__testViews = [{ team: p.squad, lanes: [{ lane: p.lane, brainstorm: m, lead: null, members: [m], topicBrainstorms: [], duplicateBrainstorms: [] }], members: [m], needsYou: 0 }];
-    return "bs-new-first";
-  };
-  const id = await pinFocusMod.focusPin(makePin("lane-first-click"));
-  assert.equal(id, "bs-new-first");
-  assert.deepEqual(calls, ["lane-first-click"]);
-  assert.equal(pinFocusMod.getPinFocus()?.agentId, "bs-new-first");
-  assert.equal(pinFocusMod.getPinFocus()?.gone, false);
+  globalThis.__testOpenPin = async (p) => (calls.push(p.lane.id), "bs-never");
+  assert.equal(await pinFocusMod.focusPin(makePin("lane-first-click")), null);
+  assert.deepEqual(calls, [], "no spawn on click");
+  const f = pinFocusMod.getPinFocus();
+  assert.equal(f?.agentId, null);
+  assert.equal(f?.gone, true);
+  assert.equal(f?.laneId, "lane-first-click");
 });
 
-test("focusPin on a pin whose Buddy is closed goes through openPin (reopen/replace), not the closed id", async () => {
+test("focusPin on a closed Buddy does not spawn or reuse the closed id; a live Buddy still opens", async () => {
   const calls = [];
   globalThis.__testOpenPin = async (p) => (calls.push(p.lane.id), "bs-reopened");
-  assert.equal(await pinFocusMod.focusPin(livePin("lane-closed", "closed")), "bs-reopened");
-  assert.deepEqual(calls, ["lane-closed"]);
-  calls.length = 0;
+  assert.equal(await pinFocusMod.focusPin(livePin("lane-closed", "closed")), null);
+  assert.deepEqual(calls, []);
+  assert.equal(pinFocusMod.getPinFocus()?.agentId, null);
+  assert.equal(pinFocusMod.getPinFocus()?.gone, true);
   assert.equal(await pinFocusMod.focusPin(livePin("lane-live", "idle")), "bs-lane-live");
   assert.deepEqual(calls, [], "a live Buddy is focused without a start");
 });

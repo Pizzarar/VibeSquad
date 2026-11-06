@@ -55,7 +55,9 @@ test("focusPin hands a Buddy-less or closed pin to spinUpPin; spinUpPin calls op
   const pf = fs.readFileSync(new URL("../src/pinFocus.ts", import.meta.url), "utf8");
   const focusPinMatch = pf.match(/export async function focusPin\b[\s\S]*?\n\}/);
   assert.ok(focusPinMatch, "focusPin exists");
-  assert.match(focusPinMatch[0], /!pin\.brainstorm \|\| pin\.brainstorm\.agent\.status === "closed"\) return spinUpPin\(pin\)/, "first click spawns or reopens via spinUpPin");
+  assert.match(focusPinMatch[0], /!pin\.brainstorm \|\| pin\.brainstorm\.agent\.status === "closed"\)/, "dormant pin handled");
+  assert.doesNotMatch(focusPinMatch[0], /return spinUpPin\(pin\)/, "click never auto-spawns");
+  assert.match(focusPinMatch[0], /gone: true/, "dormant pin shows the Spin Up picker");
 
   const spinUpMatch = pf.match(/export async function spinUpPin\b[\s\S]*?\n\}/);
   assert.ok(spinUpMatch, "spinUpPin exists");

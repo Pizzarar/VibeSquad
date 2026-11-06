@@ -138,9 +138,18 @@ subscribeTeams(reconcile);
  * Focus a pin: its existing Brainstorm (or past former-brainstorm) opens in the middle at once;
  * if there is no session yet, show the empty focus view with an explicit "Spin Up" button without auto-spawning.
  */
-export async function focusPin(pin: Pin): Promise<string> {
-  // No Buddy yet (a `vs pin new` pin) or only a closed one: the first click spawns or reopens it and focuses its chat.
-  if (!pin.brainstorm || pin.brainstorm.agent.status === "closed") return spinUpPin(pin);
+export async function focusPin(pin: Pin): Promise<string | null> {
+  // Dormant pin (no Buddy, or only a closed one): never auto-spawn. Show the Spin Up profile picker instead.
+  if (!pin.brainstorm || pin.brainstorm.agent.status === "closed") {
+    set({
+      focus: { squadId: pin.squad.id, laneId: pin.lane.id, agentId: null, gone: true, held: getPanes().leftActiveId, seq: ++seq, spinUpError: null },
+      home: false,
+      homeActive: null,
+      squadsHome: false,
+      spinUpError: null,
+    });
+    return null;
+  }
   const mine = ++seq;
   const live = pin.brainstorm.agent.id;
   // Set the focus before opening so the reconcile on the panes change sees the expected tab.
