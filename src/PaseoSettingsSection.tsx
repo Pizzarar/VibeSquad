@@ -3,7 +3,7 @@ import { Field } from "./TeamActions";
 import { PaseoOpsPanel } from "./PaseoOpsPanel";
 import { McpPanel } from "./McpPanel";
 import { SkillsPanel } from "./SkillsPanel";
-import { listAvailableProviders, listProviderModels, listProviderModes } from "./paseoProviders";
+import { listAvailableProviders, listProviderModels, listProviderModes, loadRunnerSettings, saveRunnerSettings, loadRunnerUsage, type RunnerProviderSettings, type RunnerUsage } from "./paseoProviders";
 import { sortProviders, providerState, describeModel, type CatalogProvider, type CatalogModel, type CatalogMode } from "./paseoProvidersLogic";
 import { previewPluginUpdates, applyPluginUpdates, type PluginUpdatePreviewRow, type PluginUpdateResultRow } from "./paseoPluginUpdates";
 import { isTakeable, toggleSelection, selectedProposals, describeTarget, outcomeLabel, resultNote, summarizeResults } from "./paseoPluginUpdatesLogic";
@@ -20,7 +20,8 @@ export type PaseoSettingsTab =
   | "ops"
   | "mcp"
   | "skills"
-  | "catalog";
+  | "catalog"
+  | "runner";
 
 export interface PaseoDaemonStatus {
   ok: boolean;
@@ -190,6 +191,7 @@ export function PaseoUsageHeaderChip({ onOpenSettings }: { onOpenSettings?: () =
 
 /** Read-only catalog: what the daemon reports for each provider (availability, models, modes). */
 function ProviderCatalogPanel() {
+  const [useRunner, setUseRunner] = useState(false);
   const [rows, setRows] = useState<CatalogProvider[]>([]);
   const [sel, setSel] = useState("");
   const [models, setModels] = useState<CatalogModel[]>([]);
@@ -201,7 +203,7 @@ function ProviderCatalogPanel() {
     setLoading(true);
     setErr("");
     try {
-      const r = await listAvailableProviders();
+      const r = await listAvailableProviders(useRunner);
       setRows(sortProviders((r.providers ?? []) as CatalogProvider[]));
       if (r.error) setErr(r.error);
     } catch (e) {
@@ -209,8 +211,9 @@ function ProviderCatalogPanel() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [useRunner]);
   useEffect(() => {
+    setSel("");
     void load();
   }, [load]);
 
@@ -222,7 +225,7 @@ function ProviderCatalogPanel() {
     setModes([]);
     setErr("");
     try {
-      const [mo, md] = await Promise.all([listProviderModels(provider), listProviderModes(provider)]);
+      const [mo, md] = await Promise.all([listProviderModels(provider, useRunner), listProviderModes(provider, useRunner)]);
       if (my !== seq.current) return;
       setModels((mo.models ?? []) as CatalogModel[]);
       setModes((md.modes ?? []) as CatalogMode[]);
@@ -237,7 +240,10 @@ function ProviderCatalogPanel() {
   return (
     <div data-testid="paseo-panel-catalog" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span className="muted small">Read-only view of the providers the daemon reports.</span>
+        <span className="muted small">Read-only view of the providers the {useRunner ? "VS runner" : "daemon"} reports.</span>
+        <label className="small" style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <input type="checkbox" data-testid="paseo-catalog-runner-toggle" checked={useRunner} onChange={(e) => setUseRunner(e.target.checked)} /> Runner
+        </label>
         <button type="button" className="btn ghost small" data-testid="paseo-catalog-refresh" disabled={loading} onClick={() => void load()}>
           {loading ? "Loading…" : "Refresh"}
         </button>
@@ -279,6 +285,107 @@ function ProviderCatalogPanel() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Runner & Providers: edits the `runner` block of ~/.vibesquad/settings.json (merged server-side, other keys untouched) and shows usage rollups. */
+const csv = (v?: string[]) => (v ?? []).join(", ");
+const splitCsv = (v: string) => v.split(",").map((x) => x.trim()).filter(Boolean);
+function RunnerProvidersPanel() {
+  const [rows, setRows] = useState<(CatalogProvider & { version?: string })[]>([]);
+  const [draft, setDraft] = useState<Record<string, RunnerProviderSettings>>({});
+  const [path, setPath] = useState("");
+  const [usage, setUsage] = useState<RunnerUsage | null>(null);
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    setErr("");
+    try {
+      const [prov, set, use] = await Promise.all([listAvailableProviders(true), loadRunnerSettings(), loadRunnerUsage()]);
+      setRows(sortProviders((prov.providers ?? []) as (CatalogProvider & { version?: string })[]));
+      setDraft(set.runner.providers);
+      setPath(set.path);
+      setUsage(use);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const patch = (id: string, p: RunnerProviderSettings) => setDraft((d) => ({ ...d, [id]: { ...d[id], ...p } }));
+  const save = async () => {
+    setBusy(true);
+    setErr("");
+    setMsg("");
+    try {
+      const saved = await saveRunnerSettings({ providers: draft });
+      setDraft(saved.providers);
+      setMsg("Saved runner settings.");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div data-testid="paseo-panel-runner" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div className="muted small">
+        Providers the VS runner can start, found by probing the installed CLIs. Extra models and modes are saved to <code>{path || "~/.vibesquad/settings.json"}</code> (other keys are kept).
+      </div>
+      {err && <div className="stat-alert small" data-testid="runner-settings-error">{err}</div>}
+      {msg && <div className="small" data-testid="runner-settings-notice" style={{ color: "#00f0ff" }}>✓ {msg}</div>}
+      {rows.map((p) => {
+        const st = providerState(p);
+        const d = draft[p.provider] ?? {};
+        return (
+          <div key={p.provider} className="ts-team" data-testid={`runner-provider-${p.provider}`} style={{ padding: "8px 10px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <b>{p.provider}</b>
+              <span className={`pill diag ${st.tone}`} title={p.error ?? ""}>{st.label}</span>
+              {p.version && <span className="muted small">{p.version}</span>}
+              <label style={{ display: "flex", alignItems: "center", gap: 4, marginLeft: "auto" }}>
+                <input type="checkbox" data-testid={`runner-enabled-${p.provider}`} checked={d.enabled !== false} onChange={(e) => patch(p.provider, { enabled: e.target.checked })} />
+                <span className="small">Enabled</span>
+              </label>
+            </div>
+            <div className="row2" style={{ marginTop: 6 }}>
+              <Field label="EXTRA MODELS (comma-separated)">
+                <input data-testid={`runner-models-${p.provider}`} value={csv(d.models)} onChange={(e) => patch(p.provider, { models: splitCsv(e.target.value) })} />
+              </Field>
+              <Field label="EXTRA MODES (comma-separated)">
+                <input data-testid={`runner-modes-${p.provider}`} value={csv(d.modes)} onChange={(e) => patch(p.provider, { modes: splitCsv(e.target.value) })} />
+              </Field>
+              <Field label="DEFAULT MODEL">
+                <input data-testid={`runner-default-model-${p.provider}`} value={d.defaultModel ?? ""} onChange={(e) => patch(p.provider, { defaultModel: e.target.value })} />
+              </Field>
+            </div>
+          </div>
+        );
+      })}
+      <div style={{ display: "flex", gap: 8 }}>
+        <button type="button" className="btn ok small" data-testid="runner-settings-save" disabled={busy} onClick={() => void save()}>
+          {busy ? "Saving…" : "Save runner settings"}
+        </button>
+        <button type="button" className="btn ghost small" onClick={() => void load()}>Reload</button>
+      </div>
+      <div className="ts-team" data-testid="runner-usage" style={{ padding: "8px 10px" }}>
+        <div className="field-label">RUNNER USAGE ({usage?.files ?? 0} agent logs · {usage?.totals.turns ?? 0} turns · ${(usage?.totals.costUsd ?? 0).toFixed(2)})</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+          {(usage?.byModel ?? []).map((m) => (
+            <span key={m.model} className="def-badge"><b>{m.model}</b> {m.turns} turns · ${m.costUsd.toFixed(2)}</span>
+          ))}
+          {(usage?.byLane ?? []).map((l) => (
+            <span key={"l" + l.lane} className="def-badge"><b>{l.lane || "(no lane)"}</b> ${l.costUsd.toFixed(2)}</span>
+          ))}
+        </div>
+        {usage && <div className="muted small" style={{ marginTop: 4 }}>{usage.note}</div>}
+      </div>
     </div>
   );
 }
@@ -535,11 +642,20 @@ export function PaseoSettingsSection({
 
   const toggleSettingFlag = async (field: "keepPaseoRunningOnQuit" | "startPaseoWithVibeSquad", value: boolean) => {
     try {
-      await fetch("/__vibesquad/settings", {
+      const r = await fetch("/__vibesquad/settings", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ [field]: value }),
       });
+      if (!r.ok) {
+        let msg = `HTTP ${r.status}`;
+        try {
+          const data = await r.json();
+          if (data && typeof data.error === "string") msg = data.error;
+        } catch {}
+        setErrorMsg(msg);
+        return;
+      }
       setStatus((prev) => (prev ? { ...prev, [field]: value } : prev));
     } catch (e) {
       setErrorMsg(String(e));
@@ -727,6 +843,7 @@ export function PaseoSettingsSection({
     { id: "mcp", label: "10. MCP" },
     { id: "skills", label: "11. Skills" },
     { id: "catalog", label: "12. Providers catalog" },
+    { id: "runner", label: "13. Runner & Providers" },
   ];
 
   const defaultLanListen = lanIpHint ? `${lanIpHint}:6767` : "0.0.0.0:6767";
@@ -1531,6 +1648,7 @@ export function PaseoSettingsSection({
       {tab === "mcp" && <McpPanel />}
       {tab === "skills" && <SkillsPanel />}
       {tab === "catalog" && <ProviderCatalogPanel />}
+      {tab === "runner" && <RunnerProvidersPanel />}
 
       {tab === "raw" && surface && (
         <div data-testid="paseo-panel-raw" style={{ display: "flex", flexDirection: "column", gap: 10 }}>

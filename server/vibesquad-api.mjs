@@ -3,6 +3,7 @@ import { handleRunnerApi } from "./runner-api.mjs";
 import { handleSchedulesApi } from "./schedules.mjs";
 import { sharedRunnerBackend } from "./backend/index.mjs";
 import { handleTerminalsApi, isTerminalsPath } from "./terminals-api.mjs";
+import { handleProvidersApi } from "./providers-catalog.mjs";
 import { getStale, peekStale, readBuildStamp } from "./stale-runtime.mjs";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -411,6 +412,9 @@ export function isGatedRead(pathOrMethod, urlOrPath = "") {
   if (path === "/__vibesquad/push/vapid-public-key") return true; // creates and writes vapid.json on first call
   if (path === "/__vibesquad/paseo/providers/diagnostic" || path === "/__vibesquad/paseo/providers/models") return true; // runs the provider's own CLI
   if (path === "/__vibesquad/paseo/usage") return new URL(url, "http://x").searchParams.get("refresh") === "1"; // forces provider API calls
+  if (path === "/__vibesquad/providers" || String(path).startsWith("/__vibesquad/providers/")) {
+    return new URL(url, "http://x").searchParams.get("refresh") === "1"; // bypasses the probe TTL: spawns the provider CLIs
+  }
   if (path === "/__vibesquad/paseo/surface") return true; // daemon config: listen, CORS, hub, backups
   if (path === "/__vibesquad/local-image") return true; // file contents
   if (path === "/__vibesquad/schedules" || path.startsWith("/__vibesquad/schedules/")) return true; // prompts, target configs, run logs
@@ -632,6 +636,7 @@ async function handleSettings(req, res) {
     });
   }
   if (req.method === "POST" || req.method === "PUT") {
+   try {
     const body = await readCleanBody(req);
     const patch = {};
     if (body && "userName" in body) patch.userName = body.userName;
@@ -666,6 +671,11 @@ async function handleSettings(req, res) {
       exposedIps: exposure.exposedIps,
       ...(warnings.length ? { configWarnings: warnings } : {}),
     });
+   } catch (e) {
+    // A refused save (unreadable settings.json) is a conflict the owner must fix; anything else is a server fault.
+    const status = e?.code === "SETTINGS_UNREADABLE" ? 409 : e?.status === 413 ? 413 : 500;
+    return sendJson(res, status, { ok: false, error: String(e?.message ?? e) });
+   }
   }
   return sendJson(res, 405, { error: "method not allowed" });
 }
@@ -1625,6 +1635,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     if (path.startsWith("/__vibesquad/runner/")) return handleRunnerApi(req, res, { readBody: (r) => readBody(r, bodyLimit), sendJson });
     if (path === "/__vibesquad/schedules" || path.startsWith("/__vibesquad/schedules/")) return handleSchedulesApi(req, res, { readBody, sendJson });
     if (isTerminalsPath(path)) return handleTerminalsApi(req, res, { readBody, sendJson, resolveCwd: (cwd) => resolveShellCwd(cwd, rootDir, opts) });
+    if (path === "/__vibesquad/providers" || path.startsWith("/__vibesquad/providers/")) return handleProvidersApi(req, res, { sendJson, readBody: readCleanBody });
     switch (path) {
       case "/__vibesquad/pair/start":
         return handlePairStart(req, res);
@@ -1641,7 +1652,9 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
         return startManagedPaseoInstall(opts.firstRun).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { error: String(e?.message ?? e) }));
       case "/__vibesquad/settings":
-        return handleSettings(req, res);
+        return handleSettings(req, res).catch((e) => {
+          if (!res.headersSent) sendJson(res, 500, { ok: false, error: String(e?.message ?? e) });
+        });
       case "/__vibesquad/log":
         return handleLog(req, res);
       case "/__vibesquad/attach":
