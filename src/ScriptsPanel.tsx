@@ -3,6 +3,7 @@ import type { PaseoAgent } from "@getpaseo/client";
 import { daemonClient, DEMO, usePaseo } from "./paseo";
 import { workspaceIdForAgent } from "./workspaceLogic";
 import { NoWorkspaceBanner } from "./NoWorkspaceBanner";
+import { usesVsShells, vsListScripts, vsScriptLogs, vsStartScript, vsStopScript } from "./vsShells";
 
 type PkgScript = { scriptName: string; command: string; source: "package.json" };
 
@@ -32,6 +33,8 @@ export function ScriptsPanel({ agent }: { agent: PaseoAgent }) {
 
   const [addedWs, setAddedWs] = useState<{ cwd: string; id: string } | null>(null);
   const agentCwd = agent.cwd ?? "";
+  const vs = !DEMO && usesVsShells(agent.id); // runner agents: scripts over /__vibesquad/workspace-scripts, keyed by folder
+  const [logs, setLogs] = useState<{ name: string; text: string } | null>(null);
   const workspaceId = useMemo(() => workspaceIdForAgent(agent, workspaces) ?? (addedWs?.cwd === agentCwd ? addedWs.id : null), [agent, workspaces, addedWs, agentCwd]);
 
   useEffect(() => {
@@ -41,18 +44,17 @@ export function ScriptsPanel({ agent }: { agent: PaseoAgent }) {
         setScripts(DEMO_SCRIPTS);
         return;
       }
-      if (!workspaceId) {
+      if (!vs && !workspaceId) {
         setScripts([]);
         return;
       }
       setLoading(true);
       setErr("");
       try {
-        const result = await daemonClient.listWorkspaceScripts(workspaceId);
-        if (!cancelled) {
-          const list = (result.scripts ?? []) as ScriptInfo[];
-          setScripts(list);
-        }
+        const list = vs
+          ? ((await vsListScripts(agentCwd)) as ScriptInfo[])
+          : (((await daemonClient.listWorkspaceScripts(workspaceId!)).scripts ?? []) as ScriptInfo[]);
+        if (!cancelled) setScripts(list);
       } catch (e) {
         if (!cancelled) setErr(String(e));
       } finally {
@@ -78,11 +80,13 @@ export function ScriptsPanel({ agent }: { agent: PaseoAgent }) {
       }
     }
     load();
-    loadPkgScripts();
+    if (!vs) loadPkgScripts(); // the VS route already lists package.json scripts
+    const poll = vs ? setInterval(() => { vsListScripts(agentCwd).then((l) => { if (!cancelled) setScripts(l as ScriptInfo[]); }).catch(() => {}); }, 2500) : undefined;
     return () => {
       cancelled = true;
+      if (poll) clearInterval(poll);
     };
-  }, [workspaceId, agent.cwd]);
+  }, [workspaceId, agent.cwd, vs, agentCwd]);
 
   const startScript = async (scriptName: string) => {
     if (DEMO) {
@@ -91,10 +95,11 @@ export function ScriptsPanel({ agent }: { agent: PaseoAgent }) {
       );
       return;
     }
-    if (!workspaceId) return;
+    if (!vs && !workspaceId) return;
     setBusy((prev) => new Set([...prev, scriptName]));
     try {
-      await daemonClient.startWorkspaceScriptWithStatus(workspaceId, scriptName);
+      if (vs) await vsStartScript(agentCwd, scriptName);
+      else await daemonClient.startWorkspaceScriptWithStatus(workspaceId!, scriptName);
       setScripts((prev) =>
         prev.map((s) => (s.scriptName === scriptName ? { ...s, lifecycle: "running" } : s)),
       );
@@ -150,10 +155,11 @@ export function ScriptsPanel({ agent }: { agent: PaseoAgent }) {
       );
       return;
     }
-    if (!workspaceId) return;
+    if (!vs && !workspaceId) return;
     setBusy((prev) => new Set([...prev, scriptName]));
     try {
-      await daemonClient.stopWorkspaceScript(workspaceId, scriptName);
+      if (vs) await vsStopScript(agentCwd, scriptName);
+      else await daemonClient.stopWorkspaceScript(workspaceId!, scriptName);
       setScripts((prev) =>
         prev.map((s) => (s.scriptName === scriptName ? { ...s, lifecycle: "stopped" } : s)),
       );
@@ -172,10 +178,10 @@ export function ScriptsPanel({ agent }: { agent: PaseoAgent }) {
     <div className="scripts-panel" data-testid="scripts-panel">
       {err && <div className="stat-alert small">{err}</div>}
       {loading && <div className="muted small">Loading scripts…</div>}
-      {!loading && !workspaceId && !DEMO && (
+      {!loading && !vs && !workspaceId && !DEMO && (
         <NoWorkspaceBanner cwd={agentCwd} onReady={(id) => setAddedWs({ cwd: agentCwd, id })} />
       )}
-      {scripts.length === 0 && !loading && (workspaceId || DEMO) && !err && (
+      {scripts.length === 0 && !loading && (vs || workspaceId || DEMO) && !err && (
         <div className="muted small">No scripts configured.</div>
       )}
       {scripts.map((s) => {
@@ -184,6 +190,15 @@ export function ScriptsPanel({ agent }: { agent: PaseoAgent }) {
         return (
           <div key={s.scriptName} className="script-row" data-testid="script-row">
             <span className="script-name">{s.scriptName}</span>
+            {vs && (
+              <button
+                className="btn ghost small"
+                data-testid="script-logs-btn"
+                onClick={() => void vsScriptLogs(agentCwd, s.scriptName).then((text) => setLogs({ name: s.scriptName, text })).catch((e) => setErr(String(e?.message ?? e)))}
+              >
+                Logs
+              </button>
+            )}
             {s.type === "service" && s.port && (
               <span className="script-port muted small">:{s.port}</span>
             )}
@@ -222,6 +237,14 @@ export function ScriptsPanel({ agent }: { agent: PaseoAgent }) {
           </div>
         );
       })}
+      {logs && (
+        <div data-testid="script-logs">
+          <div className="muted small">
+            Logs · {logs.name} <button className="btn ghost small" onClick={() => setLogs(null)}>Close</button>
+          </div>
+          <pre className="terminal-capture-text">{logs.text || "(no output yet)"}</pre>
+        </div>
+      )}
       {pkgScripts
         .filter((ps) => !scripts.some((s) => s.scriptName === ps.scriptName))
         .map((ps) => {

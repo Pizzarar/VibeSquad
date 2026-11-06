@@ -21,3 +21,4 @@ Attribution format used across plans, commits, `CREDITS.md`, and release notes:
 - Implemented VS MCP Paseo-name aliases — Thanks to **Paseo** by `getpaseo`
 - Implemented ACP adapters — Thanks to **Agent Client Protocol** by `Zed Industries`
 - Built on the Paseo Daemon, CLI, and ACP Plugin Runtime — Thanks to **Paseo (`@getpaseo`)** by the Paseo team (`getpaseo`)
+- Implemented runner-agent terminals (PTY shells) — Thanks to **node-pty** by `Microsoft` and **xterm.js** by `the xterm.js authors`

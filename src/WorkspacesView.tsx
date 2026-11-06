@@ -168,7 +168,7 @@ export function WorkspacesView() {
           </select>
         </label>
         <span className="spacer" />
-        {noId > 0 && <span className="muted small">{noId} agent{noId > 1 ? "s" : ""} without a workspace id (matched by folder)</span>}
+        {noId > 0 && <span className="muted small">{noId} agent{noId > 1 ? "s" : ""} without a workspace id (matched by folder; runner agents still get terminals and scripts by folder)</span>}
         <button className={`btn small ${panel === "create" ? "ok" : "ghost"}`} onClick={() => setPanel(panel === "create" ? "" : "create")}>+ New workspace</button>
         <button className={`btn small ${panel === "projects" ? "ok" : "ghost"}`} onClick={() => setPanel(panel === "projects" ? "" : "projects")}>Projects ({projects.length})</button>
         <button className={`btn small ${panel === "worktrees" ? "ok" : "ghost"}`} onClick={() => setPanel(panel === "worktrees" ? "" : "worktrees")}>Worktrees</button>
