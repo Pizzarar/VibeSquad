@@ -251,6 +251,17 @@ test('routing: create goes by lane, per-id calls go to the owner, lists merge, n
   assert.equal(b.listAgents, undefined);
 });
 
+test('routing: a Paseo id for a method the raw client lacks is a silent no-op, like the typeof guard it replaces', async () => {
+  const c = fakePaseoClient('p');
+  delete c.sendAgentPrompt;
+  const r = fakeRunnerBackend();
+  const b = getBackend(c, { lanes: () => new Set(['own']), runner: r });
+  assert.equal(await b.sendAgentPrompt('11111111-uuid', 'x'), undefined);
+  assert.equal(r.calls.length, 0);
+  await b.sendAgentPrompt('rn-aaa', 'x');
+  assert.equal(r.calls.length, 1);
+});
+
 test('routing: a dead runner never breaks Paseo lists', async () => {
   const c = fakePaseoClient('p');
   const r = { fetchAgents: () => Promise.reject(new Error('down')) };

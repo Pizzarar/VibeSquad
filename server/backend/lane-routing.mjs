@@ -78,8 +78,9 @@ for (const name of PER_ID) {
       const paseoFn = this.paseo[name];
       return (...args) => {
         if (isRunnerId(args[0])) return this.runner[name](...args);
-        if (!paseoFn) throw new TypeError(`${name} is not available`);
-        return paseoFn(...args);
+        // The raw DaemonClient lacks some seam methods (e.g. sendAgentPrompt): callers guard on typeof and skip, so a
+        // Paseo id stays a silent no-op here instead of throwing.
+        return paseoFn ? paseoFn(...args) : Promise.resolve(undefined);
       };
     },
   });
@@ -91,8 +92,7 @@ Object.defineProperty(RoutingBackend.prototype, "createAgent", {
       const lane = laneOfCreate(req);
       if (lane && this.lanes().has(lane)) return this.runner.createAgent(req, ...rest);
       const fn = this.paseo.createAgent;
-      if (!fn) throw new TypeError("createAgent is not available");
-      return fn(req, ...rest);
+      return fn ? fn(req, ...rest) : Promise.resolve(undefined);
     };
   },
 });
