@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { acquireStartLock, releaseLock } from "../../runner/lock.mjs";
 
 const RUNNER_ENTRY = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "runner", "server.mjs");
 
@@ -117,27 +118,41 @@ export class RunnerClient {
     this.starting ??= (async () => {
       if (await this.healthy()) return;
       fs.mkdirSync(this.home, { recursive: true });
-      // Detached + own log + unref: a short-lived CLI one-liner must be able to exit without taking the runner
-      // (and every agent under it) with it. stdio goes to a file, never a pipe the parent has to keep open.
-      const log = fs.openSync(path.join(this.home, "runner.log"), "a");
-      let child;
-      try {
-        child = this.spawn(process.execPath, [RUNNER_ENTRY, "--home", this.home], {
-          detached: true,
-          stdio: ["ignore", log, log],
-          windowsHide: true,
-          shell: false,
-        });
-      } finally {
-        fs.closeSync(log);
-      }
-      child.unref?.();
+      // Cross-process start lock: concurrent callers (other VS processes, CLI one-liners) wait for the one that holds it
+      // instead of each spawning a runner. A crashed holder's lock goes stale after STALE_START_LOCK_MS.
+      const lockFile = path.join(this.home, "starting.lock");
       const deadline = Date.now() + this.startTimeoutMs;
-      while (Date.now() < deadline) {
+      while (!acquireStartLock(lockFile)) {
         if (await this.healthy()) return;
+        if (Date.now() >= deadline) throw new Error("runner did not start");
         await new Promise((r) => setTimeout(r, 100));
       }
-      throw new Error("runner did not start");
+      try {
+        if (await this.healthy()) return; // someone finished starting it while we waited
+        // Detached + own log + unref: a short-lived CLI one-liner must be able to exit without taking the runner
+        // (and every agent under it) with it. stdio goes to a file, never a pipe the parent has to keep open.
+        const log = fs.openSync(path.join(this.home, "runner.log"), "a");
+        let child;
+        try {
+          child = this.spawn(process.execPath, [RUNNER_ENTRY, "--home", this.home], {
+            detached: true,
+            stdio: ["ignore", log, log],
+            windowsHide: true,
+            shell: false,
+          });
+        } finally {
+          fs.closeSync(log);
+        }
+        child.unref?.();
+        const startDeadline = Date.now() + this.startTimeoutMs;
+        while (Date.now() < startDeadline) {
+          if (await this.healthy()) return;
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        throw new Error("runner did not start");
+      } finally {
+        releaseLock(lockFile);
+      }
     })().finally(() => {
       this.starting = null;
     });
