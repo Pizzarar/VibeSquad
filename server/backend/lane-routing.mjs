@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveTeamsFilePath } from "../teams-file.mjs";
+import { loadUserSettings } from "../user-settings.mjs";
 import { isRunnerId } from "./runner-backend.mjs";
 
 const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -14,24 +15,22 @@ const norm = (v) => String(v ?? "").trim().toLowerCase();
  * Set-like view of "which lanes live on the runner": every lane (including none) except the ones pinned to Paseo.
  * `has` answers the routing question; `size` is always >= 1 (the runner is always on); iteration yields the lanes
  * explicitly marked runner (teams.json `backend: "runner"` / VS_RUNNER_LANES), which stay valid but are now redundant.
+ * Consumers that need the full picture (the browser) read `defaultRunner` + `paseoLanes`, never the iteration.
  */
 export class RunnerLaneSet extends Set {
-  constructor(explicitRunner = [], paseoLanes = []) {
+  constructor(explicitRunner = [], paseoLanes = [], defaultRunner = true) {
     super(explicitRunner);
     Object.defineProperty(this, "paseoLanes", { value: new Set(paseoLanes) });
+    Object.defineProperty(this, "defaultRunner", { value: defaultRunner });
   }
 
   has(lane) {
+    if (!this.defaultRunner) return super.has(norm(lane));
     return !this.paseoLanes.has(norm(lane));
   }
 
-  /** The pre-cutover view: only lanes explicitly switched to the runner. */
-  explicit() {
-    return new Set(this);
-  }
-
   get size() {
-    return Math.max(1, super.size);
+    return this.defaultRunner ? Math.max(1, super.size) : super.size;
   }
 }
 
@@ -55,7 +54,8 @@ export function runnerLanes({ env = process.env, teamsFile } = {}) {
     // no readable teams.json: env only
   }
   for (const l of paseo) explicit.delete(l);
-  return new RunnerLaneSet(explicit, paseo);
+  // VS_DEFAULT_BACKEND=paseo is the global rollback (and the test-suite default): only explicit runner lanes use the runner.
+  return new RunnerLaneSet(explicit, paseo, norm(env.VS_DEFAULT_BACKEND) !== "paseo");
 }
 
 export const laneOfCreate = (req) => norm(req?.labels?.lane || req?.env?.VS_LANE);
@@ -78,13 +78,36 @@ function mergeLists(paseoRes, runnerRes) {
   return { ...paseoRes, [Array.isArray(paseoRes.entries) ? "entries" : "agents"]: merged };
 }
 
-/** Routes by agent id (rn- = runner) and, for createAgent, by lane. Merges list calls. Used only when a lane is switched. */
+const paseoDownError = () =>
+  Object.assign(new Error("Paseo is not running. Start it in Settings (Start Paseo with VibeSquad) or move this lane to the runner."), { code: "PASEO_UNAVAILABLE" });
+
+/** Paseo is wanted on purpose: the autostart setting is on, or a lane is pinned to Paseo. Then a missing daemon is an error, not "no agents". */
+export function paseoExpected({ settings, lanes = runnerLanes } = {}) {
+  try {
+    return (settings ?? loadUserSettings()).startPaseoWithVibeSquad === true || lanes().paseoLanes.size > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Routes by agent id (rn- = runner) and, for createAgent, by lane. Merges list calls.
+ * `connect()` never throws for a closed Paseo port (the runner needs no Paseo); it records `paseoUnavailable` instead, and
+ * every Paseo-bound call after that rejects with code PASEO_UNAVAILABLE so callers cannot mistake it for a connected daemon.
+ */
 export class RoutingBackend {
-  constructor(paseo, runner, { lanes = runnerLanes, paseoAlive = null } = {}) {
+  constructor(paseo, runner, { lanes = runnerLanes, paseoAlive = null, expected = () => false } = {}) {
     Object.defineProperty(this, "paseoAlive", { value: paseoAlive });
+    Object.defineProperty(this, "expected", { value: expected });
     Object.defineProperty(this, "paseo", { value: paseo });
     Object.defineProperty(this, "runner", { value: runner });
     Object.defineProperty(this, "lanes", { value: lanes });
+    Object.defineProperty(this, "state", { value: { down: false } });
+  }
+
+  /** True once connect() found no Paseo daemon listening. */
+  get paseoUnavailable() {
+    return this.state.down;
   }
 
   runCli(...args) {
@@ -98,9 +121,12 @@ Object.defineProperty(RoutingBackend.prototype, "connect", {
     const p = this.paseo.connect;
     if (!p) return undefined;
     // Paseo is optional after the cutover: a closed daemon port must not cost the 5s connect timeout on every call.
-    // Skipping connect leaves the client unconnected, so Paseo calls reject at once and list calls fall back to the runner.
     return async () => {
-      if (this.paseoAlive && !(await this.paseoAlive())) return undefined;
+      if (this.paseoAlive && !(await this.paseoAlive())) {
+        this.state.down = true;
+        return undefined;
+      }
+      this.state.down = false;
       return p.call(this.paseo);
     };
   },
@@ -115,6 +141,7 @@ for (const name of PER_ID) {
       const paseoFn = this.paseo[name];
       return (...args) => {
         if (isRunnerId(args[0])) return this.runner[name](...args);
+        if (this.state.down && paseoFn) return Promise.reject(paseoDownError());
         // The raw DaemonClient lacks some seam methods (e.g. sendAgentPrompt): callers guard on typeof and skip, so a
         // Paseo id stays a silent no-op here instead of throwing.
         return paseoFn ? paseoFn(...args) : Promise.resolve(undefined);
@@ -129,6 +156,7 @@ Object.defineProperty(RoutingBackend.prototype, "createAgent", {
       const lane = laneOfCreate(req);
       if (this.lanes().has(lane)) return this.runner.createAgent(req, ...rest);
       const fn = this.paseo.createAgent;
+      if (this.state.down && fn) return Promise.reject(paseoDownError());
       return fn ? fn(req, ...rest) : Promise.resolve(undefined);
     };
   },
@@ -142,20 +170,27 @@ for (const name of ["fetchAgents", "listAgents"]) {
       return async (...args) => {
         // Runner agents join the first page only; a later page (cursor) would repeat them.
         if (args[0]?.page?.cursor) return paseoFn(...args);
-        const [p, r] = await Promise.all([paseoFn(...args).catch((e) => (this.paseoAlive ? null : Promise.reject(e))), this.runner[name](...args).catch(() => null)]);
+        // Paseo down and not wanted: runner-only. Paseo down but wanted (setting on / lane pinned): fail closed so the
+        // duplicate-Buddy guard sees "list unavailable" rather than "no agents".
+        const paseoList = this.state.down
+          ? this.expected()
+            ? Promise.reject(paseoDownError())
+            : Promise.resolve(null)
+          : paseoFn(...args).catch((e) => (this.paseoAlive && !this.expected() ? null : Promise.reject(e)));
+        const [p, r] = await Promise.all([paseoList, this.runner[name](...args).catch(() => null)]);
         return p == null && r != null ? r : mergeLists(p, r);
       };
     },
   });
 }
 
-let probe = { at: 0, value: false, pending: null };
-
-/** Cheap, cached "is a Paseo daemon accepting connections" check (TCP only, 400ms budget, 3s cache). */
-export function paseoDaemonAlive({ ttlMs = 3000, now = Date.now, check } = {}) {
-  if (probe.pending) return probe.pending;
-  if (now() - probe.at < ttlMs) return Promise.resolve(probe.value);
-  probe.pending = (async () => {
+/** Cached "is a Paseo daemon accepting connections" check (TCP only, 400ms budget). Custom check/now: own instance, no shared state. */
+export function createPaseoProbe({ ttlMs = 3000, now = Date.now, check } = {}) {
+  let at = 0;
+  let value = false;
+  let pending = null;
+  let generation = 0;
+  const run = async () => {
     try {
       if (check) return await check();
       const { isDaemonListening, readPaseoListen } = await import("../first-run.mjs");
@@ -163,13 +198,37 @@ export function paseoDaemonAlive({ ttlMs = 3000, now = Date.now, check } = {}) {
     } catch {
       return false;
     }
-  })().then((v) => {
-    probe = { at: now(), value: v, pending: null };
-    return v;
-  });
-  return probe.pending;
+  };
+  const alive = () => {
+    if (pending) return pending;
+    if (now() - at < ttlMs) return Promise.resolve(value);
+    const gen = generation;
+    const mine = run().then((v) => {
+      if (gen === generation) {
+        at = now();
+        value = v;
+      }
+      if (pending === mine) pending = null;
+      return v;
+    });
+    pending = mine;
+    return mine;
+  };
+  alive.reset = () => {
+    generation += 1; // a probe still in flight settles into nothing
+    at = 0;
+    value = false;
+    pending = null;
+  };
+  return alive;
+}
+
+const sharedProbe = createPaseoProbe();
+
+export function paseoDaemonAlive(opts) {
+  return opts ? createPaseoProbe(opts)() : sharedProbe();
 }
 
 export function resetPaseoProbe() {
-  probe = { at: 0, value: false, pending: null };
+  sharedProbe.reset();
 }

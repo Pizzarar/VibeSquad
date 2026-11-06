@@ -2,7 +2,7 @@ import { createPaseoApi, type PaseoAgent, type PaseoClient, type PaseoWorkspace 
 import { applyLabelsOptimistic } from "./attentionItems";
 import { clearUnreadLocal, dismissLocal, markUnreadLocal, subscribeAttentionLocal } from "./attentionLocal";
 import { clearWorkspaceIfQuiet } from "./paseoAttention";
-import { isRunnerId, isRunnerLane, runnerArchive, runnerCancel, runnerSend, runnerSpawn, runnerUpdate, startRunnerBridge } from "./runnerBridge";
+import { fetchRunnerStatus, getRunnerStatus, isRunnerId, isRunnerLane, runnerArchive, runnerCancel, runnerSend, runnerSpawn, runnerUpdate, runnerStatusLoaded, startRunnerBridge } from "./runnerBridge";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { spawnEnvFor } from "./spawn-env";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
@@ -407,8 +407,41 @@ async function refetchWorkspaces() {
 let runnerConn = false;
 let paseoConn = false;
 
+// Paseo is optional after the cutover. When the server says no Paseo daemon is wanted or reachable (or a connect failed
+// while the runner stream is up) we close the websocket instead of letting DaemonClient retry forever in the console,
+// and re-ask the server every PASEO_RETRY_MS whether a daemon showed up.
+const PASEO_RETRY_MS = 20_000;
+let paseoParked = false;
+let paseoRetryTimer: ReturnType<typeof setTimeout> | null = null;
+function parkPaseo(): void {
+  if (isRemote()) return;
+  paseoParked = true;
+  paseoConn = false;
+  void Promise.resolve(daemonClient.close()).catch(() => {});
+  if (paseoRetryTimer) return;
+  const tick = () => {
+    paseoRetryTimer = null;
+    void fetchRunnerStatus().then((s) => {
+      if (s?.paseo?.reachable) {
+        paseoParked = false;
+        void connect();
+      } else paseoRetryTimer = setTimeout(tick, PASEO_RETRY_MS);
+    });
+  };
+  paseoRetryTimer = setTimeout(tick, PASEO_RETRY_MS);
+}
+
 async function connect(): Promise<void> {
   try {
+    if (!DEMO && !isRemote()) {
+      await Promise.race([runnerStatusLoaded, new Promise((r) => setTimeout(r, 1500))]);
+      const rs = paseoParked ? await fetchRunnerStatus() : getRunnerStatus();
+      if (rs?.enabled && rs.defaultBackend === "runner" && !rs.paseo?.reachable && !rs.paseo?.expected) {
+        parkPaseo(); // runner-only: no Paseo to connect to
+        return;
+      }
+      paseoParked = false;
+    }
     if (!DEMO && !isRemote()) {
       const auth = await fetchLocalDaemonPassword();
       if (auth.password || auth.localCredential) {
@@ -424,7 +457,10 @@ async function connect(): Promise<void> {
   } catch (e) {
     paseoConn = false;
     const authReason = readClientAuthFailure(daemonClient, e);
-    if (!authReason && runnerConn) return; // Paseo is down but the runner stream is up: stay connected
+    if (!authReason && runnerConn) {
+      parkPaseo(); // Paseo is down but the runner stream is up: stay connected, stop hammering /ws
+      return;
+    }
     if (authReason) {
       set({
         conn: "disconnected",
@@ -479,6 +515,7 @@ export function start() {
   // DaemonClient reconnects on its own (exponential backoff); we mirror its state and refetch after a gap.
   let wasConnected = false;
   (daemonClient as unknown as { subscribeConnectionStatus?: (cb: (s: { status: string; reason?: string }) => void) => () => void }).subscribeConnectionStatus?.((s) => {
+    if (paseoParked && s.status !== "connected") return; // we closed it on purpose
     paseoConn = s.status === "connected";
     if (s.status === "connected") {
       set({ conn: "connected", status: "connected", error: undefined, authFailureReason: null });
@@ -492,7 +529,10 @@ export function start() {
       return;
     }
     wasConnected = false;
-    if (runnerConn && !readClientAuthFailure(daemonClient, s)) return; // runner stream keeps the UI live
+    if (runnerConn && !readClientAuthFailure(daemonClient, s)) {
+      if (s.status === "disconnected") parkPaseo(); // runner stream keeps the UI live; no endless /ws retries
+      return;
+    }
     if (s.status === "connecting" || s.status === "idle") {
       if (state.conn !== "connecting") set({ conn: "connecting", status: "connecting" });
       return;
@@ -514,7 +554,7 @@ export function start() {
 
   // Belt and braces: a full refetch every minute in case an update was dropped.
   setInterval(() => {
-    if (state.conn === "connected") {
+    if (paseoConn) {
       refetchAll().catch(console.error);
       refetchProviderUsage();
     }
@@ -612,6 +652,7 @@ export async function spawnTeamAgent(req: SpawnRequest): Promise<{ id: string; c
     return { id, cwd };
   }
 
+  await Promise.race([runnerStatusLoaded, new Promise((r) => setTimeout(r, 3000))]); // the first click must not race the status probe
   if (isRunnerLane(req.labels.lane)) {
     const agent = await runnerSpawn({
       config: { provider: req.provider, model: req.model, cwd: req.cwd, title: req.title, modeId: req.modeId, ...(req.systemPrompt ? { systemPrompt: req.systemPrompt } : {}) },

@@ -465,6 +465,10 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
     if (agentId !== "start-brainstorm" && !(oldAgent && ["brainstorm", "former-brainstorm"].includes(oldLabels.role))) {
       throw new Error(`not a brainstorm agent: ${agentId}`);
     }
+    // A Paseo-hosted Buddy cannot be retired while Paseo is down: spawning its successor would leave two live Buddies.
+    if (agentId !== "start-brainstorm" && !String(agentId).startsWith("rn-") && backend?.paseoUnavailable) {
+      throw Object.assign(new Error("Paseo is not running, so this Paseo-hosted Buddy cannot be restarted yet. Start Paseo (Settings) and retry."), { code: "PASEO_UNAVAILABLE" });
+    }
     const laneHint = body.laneId || body.lane || oldLabels.lane || oldLabels.lead || "vibesquad";
     const resolved = laneDisplayName(laneHint, rootDir);
     const laneId = safeSegment(body.laneId || body.lane || resolved.laneId || "vibesquad");

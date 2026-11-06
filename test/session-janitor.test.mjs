@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import { describe, it } from "node:test";
-import { withIsolatedLanes } from "./helpers/isolate-lanes.mjs";
 import { PARENT_LABEL } from "../server/detach-children.mjs";
 import {
   JANITOR_MAX_AGE_MS,
@@ -141,7 +140,7 @@ describe("session-janitor · runSessionJanitor", () => {
       },
     };
 
-    const res = await withIsolatedLanes(() => runSessionJanitor(fakeClient, { now: BASE_NOW, maxAgeMs: JANITOR_MAX_AGE_MS }));
+    const res = await runSessionJanitor(fakeClient, { now: BASE_NOW, maxAgeMs: JANITOR_MAX_AGE_MS });
     assert.equal(res.ok, true);
     assert.equal(res.scanned, 4);
     assert.equal(res.candidates, 1);

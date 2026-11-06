@@ -848,7 +848,9 @@ export async function openTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
           env: { VS_ROLE: "brainstorm", ...(newLabels.profile ? { VS_PROFILE: newLabels.profile } : {}) },
         });
       }
-    } catch {
+    } catch (err) {
+      // A Paseo-pinned lane with Paseo down is an error to show, not a reason to fabricate an offline topic agent.
+      if (err?.code === "PASEO_UNAVAILABLE") throw err;
       created = null;
     } finally {
       if (!injectedClient && typeof backend.close === "function") {

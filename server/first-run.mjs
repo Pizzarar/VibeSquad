@@ -120,6 +120,7 @@ export function isDaemonListening(listen = readPaseoListen(), timeoutMs = 1000) 
   const { host, port } = parseListen(listen);
   return new Promise((ok) => {
     const sock = connect(port, host);
+    sock.unref();
     let settled = false;
     const done = (v) => {
       if (settled) return;

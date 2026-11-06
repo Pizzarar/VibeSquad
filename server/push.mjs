@@ -538,12 +538,17 @@ export async function restartPushWatcher(rootDir) {
   return null;
 }
 
-/** teams.json can flip a lane to/from the runner while the server runs: restart a live watcher whose runner coverage went stale. */
-export async function syncRunnerPushWatch(rootDir) {
+/**
+ * Settings, teams.json (a lane pinned to / released from Paseo) and the Paseo daemon controls can all change whether Paseo
+ * should be watched: re-run the watcher's attach decision now instead of waiting for its periodic re-check.
+ */
+export async function syncRunnerPushWatch() {
   if (!activeWatcher) return null;
-  if (activeWatcher.watchingRunner === (runnerLanes().size > 0)) return activeWatcher;
-  return restartPushWatcher(rootDir);
+  await activeWatcher.recheck();
+  return activeWatcher;
 }
+
+const PASEO_RECHECK_MS = 30_000;
 
 /** Paseo watching is explicit: the autostart setting is on, or a lane is pinned to Paseo in teams.json / VS_PASEO_LANES. */
 function shouldWatchPaseo() {
@@ -572,6 +577,7 @@ export function startPushWatcher(rootDir = REPO_ROOT, { runner = runnerLanes().s
   let backend = null;
   let siblingAgents = null;
   const attachPaseo = () => {
+  if (client) return;
   const { listen } = readPaseoConfig(rootDir);
   const wsUrl = listen.startsWith("ws://") || listen.startsWith("wss://") ? `${listen.replace(/\/$/, "")}/ws` : `ws://${listen}/ws`;
   const password = readDaemonPassword();
@@ -667,24 +673,46 @@ export function startPushWatcher(rootDir = REPO_ROOT, { runner = runnerLanes().s
   queueMicrotask(() => unrefClientTimers(client));
   };
 
+  const detachPaseo = () => {
+    if (!client) return;
+    const old = backend;
+    if (siblingAgents) runner?.dropSiblingAgents?.(siblingAgents);
+    if (watcherClient === client) watcherClient = null;
+    client = null;
+    backend = null;
+    siblingAgents = null;
+    agentsById.clear();
+    old?.close?.().catch?.(() => {});
+  };
+
   const stopRunnerWatch = runner ? watchRunnerTransitions(runner, { dedupeSet }) : null;
   const watchingRunner = !!runner;
   // Paseo is opt-in after the cutover. Without the setting or a Paseo-pinned lane we only attach when a daemon is
   // already listening (existing Paseo-hosted agents keep notifying); otherwise no DaemonClient is built, so a
   // closed port never costs the 5s connect timeout on every Who's here refresh.
-  void (async () => {
+  // The decision is re-run on a cheap timer (reuses the cached TCP probe) and on demand (syncRunnerPushWatch): attach when
+  // the setting flips, a lane is pinned or a daemon starts listening; detach once none of those hold, so a stopped Paseo is
+  // not reconnected to forever.
+  const recheck = async () => {
     try {
       const wanted = paseo ?? (shouldWatchPaseo() || (await paseoDaemonAlive()));
-      if (wanted && !stopped) attachPaseo();
+      if (stopped) return;
+      if (wanted) attachPaseo();
+      else detachPaseo();
     } catch {
       /* Paseo is optional */
     }
-  })();
+  };
+  void recheck();
+  const recheckTimer = setInterval(() => void recheck(), PASEO_RECHECK_MS);
+  recheckTimer.unref?.();
 
   activeWatcher = {
     watchingRunner,
+    recheck,
     stop() {
       stopped = true;
+      clearInterval(recheckTimer);
       stopRunnerWatch?.();
       if (siblingAgents) runner?.dropSiblingAgents?.(siblingAgents);
       watcherStarted = false;

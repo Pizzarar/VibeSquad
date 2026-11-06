@@ -1,6 +1,6 @@
 // VS agent tools, shared by the VS MCP server (server/mcp/server.mjs) and the vs CLI (spawn/send/status/wait).
 // Every tool takes plain args and a context, and returns a plain object. Backend routing goes through the existing seam:
-// ids starting rn- and runner lanes (VS_RUNNER_LANES / teams.json) -> RunnerBackend, everything else -> Paseo.
+// rn- ids -> RunnerBackend, other ids -> Paseo, creates by lane (every lane runs on the runner unless pinned to Paseo).
 import { isRunnerId } from "../backend/runner-backend.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
@@ -41,13 +41,14 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
       const { appendVsLogEntry } = await import("../brainstorm.mjs");
       appendVsLogEntry({ teamId: ctx.identity.team, laneId: ctx.identity.lane, agent: ctx.identity.agentId || "you", type, text, refs });
     },
-    // fn(backend) runs against the owning backend; Paseo is connected for the call and closed after.
-    async withBackend({ id, lane } = {}, fn) {
-      const { sharedRunnerBackend, runnerLanes } = await import("../backend/index.mjs");
-      const onRunner = isRunnerId(id) || (!id && (isRunnerId(ctx.identity.agentId) || (lane && runnerLanes({ env }).has(clean(lane).toLowerCase()))));
-      if (onRunner) return fn(sharedRunnerBackend());
-      const [{ createDaemonClient }, { getBackend }] = await Promise.all([import("../brainstorm.mjs"), import("../backend/index.mjs")]);
-      const backend = getBackend(createDaemonClient());
+    // fn(backend) runs against the owning backend. A runner id never needs Paseo; everything else goes through the
+    // RoutingBackend (rn- ids -> runner, other ids -> Paseo, creates by lane, lists merged), with Paseo connected only if it
+    // is listening and closed after the call.
+    async withBackend({ id } = {}, fn) {
+      const { sharedRunnerBackend, getBackend, runnerLanes } = await import("../backend/index.mjs");
+      if (isRunnerId(id)) return fn(sharedRunnerBackend());
+      const { createDaemonClient } = await import("../brainstorm.mjs");
+      const backend = getBackend(createDaemonClient(), { lanes: () => runnerLanes({ env }) });
       await backend.connect?.();
       try {
         return await fn(backend);

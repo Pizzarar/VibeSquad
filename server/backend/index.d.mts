@@ -31,7 +31,8 @@ export class RunnerBackend implements AgentBackend {
   runCli(): null;
 }
 export class RoutingBackend implements AgentBackend {
-  constructor(paseo: PaseoBackend, runner: RunnerBackend, opts?: { lanes?: () => Set<string>; paseoAlive?: (() => Promise<boolean>) | null });
+  constructor(paseo: PaseoBackend, runner: RunnerBackend, opts?: { lanes?: () => Set<string>; paseoAlive?: (() => Promise<boolean>) | null; expected?: () => boolean });
+  readonly paseoUnavailable: boolean;
   readonly paseo: PaseoBackend;
   readonly runner: RunnerBackend;
   runCli(paseoHome: string, args: string[], timeoutMs?: number): string | null;
@@ -39,10 +40,11 @@ export class RoutingBackend implements AgentBackend {
 export function sharedRunnerBackend(): RunnerBackend;
 export function isRunnerId(id: unknown): boolean;
 export class RunnerLaneSet extends Set<string> {
-  constructor(explicitRunner?: Iterable<string>, paseoLanes?: Iterable<string>);
+  constructor(explicitRunner?: Iterable<string>, paseoLanes?: Iterable<string>, defaultRunner?: boolean);
   readonly paseoLanes: Set<string>;
-  explicit(): Set<string>;
+  readonly defaultRunner: boolean;
 }
+export function paseoExpected(opts?: { settings?: { startPaseoWithVibeSquad?: boolean }; lanes?: () => Set<string> }): boolean;
 export function paseoDaemonAlive(opts?: { ttlMs?: number; now?: () => number; check?: () => Promise<boolean> }): Promise<boolean>;
 export function runnerLanes(opts?: { env?: Record<string, string | undefined>; teamsFile?: string }): Set<string>;
 export function getBackend<T>(client: T, opts?: { lanes?: () => Set<string>; runner?: RunnerBackend; force?: boolean; paseoAlive?: (() => Promise<boolean>) | null }): T extends null | undefined ? T : any;

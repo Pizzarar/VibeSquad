@@ -31,9 +31,33 @@ export const runnerCancel = (id: string) => post(id, "cancel").then(() => undefi
 export const runnerArchive = (id: string) => post(id, "archive").then(() => ({ archivedAt: new Date().toISOString() }));
 export const runnerUpdate = (id: string, updates: { name?: string; labels?: Record<string, string> }) => post(id, "meta", updates).then(() => undefined);
 
-let enabledLanes: Set<string> | null = null;
-/** True when `lane` runs on the runner (known after the first bridge probe). */
-export const isRunnerLane = (lane: string | undefined): boolean => !!lane && !!enabledLanes?.has(lane.toLowerCase());
+export type RunnerStatus = {
+  enabled: boolean;
+  defaultBackend?: "runner" | "paseo";
+  /** Lanes explicitly switched to the runner (only meaningful when defaultBackend is "paseo"). */
+  lanes: string[];
+  /** Lanes pinned to Paseo; every other lane (including none) runs on the runner when defaultBackend is "runner". */
+  paseoLanes?: string[];
+  paseo?: { expected: boolean; reachable: boolean };
+};
+
+let status: RunnerStatus | null = null;
+let resolveStatusLoaded: () => void = () => {};
+/** Settles once the first /status probe finished (or failed): spawn waits on it so the first click is not misrouted. */
+export const runnerStatusLoaded: Promise<void> = new Promise((r) => (resolveStatusLoaded = r));
+/** Latest runner status, or null before the first probe / when the probe failed. */
+export const getRunnerStatus = (): RunnerStatus | null => status;
+
+/** True when `lane` runs on the runner (known after the first bridge probe). With the cutover default that is every lane not pinned to Paseo, including none. */
+export const isRunnerLane = (lane: string | undefined): boolean => {
+  if (!status?.enabled) return false;
+  const l = (lane ?? "").trim().toLowerCase();
+  if (status.defaultBackend === "runner") return !(status.paseoLanes ?? []).includes(l);
+  return !!l && status.lanes.includes(l);
+};
+
+/** Fetches /status once more (e.g. to learn whether a Paseo daemon came up). Null when the server is unreachable. */
+export const fetchRunnerStatus = (): Promise<RunnerStatus | null> => call<RunnerStatus>("/status").then((s) => (status = s), () => null);
 
 export async function runnerSpawn(payload: unknown): Promise<PaseoAgent> {
   return (await call<{ agent: PaseoAgent }>("/spawn", { method: "POST", body: JSON.stringify(payload) })).agent;
@@ -99,10 +123,10 @@ export function reduceRunnerRoster(roster: Map<string, PaseoAgent>, ev: RunnerSt
  * every reconnect starts with a fresh roster, which also tells open timelines to refetch.
  */
 export function startRunnerBridge(apply: (agents: PaseoAgent[], archivedIds: string[]) => void, onConnection?: (connected: boolean) => void): void {
-  call<{ enabled: boolean; lanes: string[] }>("/status")
+  fetchRunnerStatus()
     .then((s) => {
-      if (!s.enabled || typeof EventSource === "undefined") return; // nothing switched: stay inert for this page load
-      enabledLanes = new Set(s.lanes);
+      resolveStatusLoaded();
+      if (!s || !s.enabled || typeof EventSource === "undefined") return; // runner off: stay inert for this page load
       let roster = new Map<string, PaseoAgent>();
       const es = new EventSource(`${BASE}/events`);
       es.onopen = () => onConnection?.(true);
@@ -125,5 +149,5 @@ export function startRunnerBridge(apply: (agents: PaseoAgent[], archivedIds: str
         if (ev.kind === "roster") notifyTimeline();
       };
     })
-    .catch(() => {});
+    .catch(() => resolveStatusLoaded());
 }
