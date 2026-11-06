@@ -55,7 +55,9 @@ export function runnerLanes({ env = process.env, teamsFile } = {}) {
   }
   for (const l of paseo) explicit.delete(l);
   // VS_DEFAULT_BACKEND=paseo is the global rollback (and the test-suite default): only explicit runner lanes use the runner.
-  return new RunnerLaneSet(explicit, paseo, norm(env.VS_DEFAULT_BACKEND) !== "paseo");
+  // VS_BACKEND=paseo is the plan's original name for the same escape hatch.
+  const rollback = norm(env.VS_DEFAULT_BACKEND) === "paseo" || norm(env.VS_BACKEND) === "paseo";
+  return new RunnerLaneSet(explicit, paseo, !rollback);
 }
 
 export const laneOfCreate = (req) => norm(req?.labels?.lane || req?.env?.VS_LANE);
@@ -118,6 +120,11 @@ export class RoutingBackend {
   runCli(...args) {
     return this.paseo.runCli(...args);
   }
+
+  /** Boot the runner if it is down (owner-initiated server paths only; see RunnerBackend.ensureRunningOnce). */
+  ensureRunner() {
+    return Promise.resolve(this.runner.ensureRunningOnce?.());
+  }
 }
 
 Object.defineProperty(RoutingBackend.prototype, "connect", {
@@ -132,7 +139,15 @@ Object.defineProperty(RoutingBackend.prototype, "connect", {
         return undefined;
       }
       this.state.down = false;
-      return p.call(this.paseo);
+      try {
+        return await p.call(this.paseo);
+      } catch (e) {
+        // The probe said alive (3s cache) but the daemon died or refused: runner lanes must still proceed. Without the
+        // production probe wrapper (tests / injected clients) the failure propagates as before.
+        if (!this.paseoAlive) throw e;
+        this.state.down = true;
+        return undefined;
+      }
     };
   },
 });
@@ -177,10 +192,17 @@ for (const name of ["fetchAgents", "listAgents"]) {
         if (args[0]?.page?.cursor) return paseoFn(...args);
         // Paseo down: runner agents only, flagged `paseoUnavailable` so callers that care (a Paseo-pinned lane's duplicate-Buddy
         // guard) can fail closed on their own. A runner-only operation must never be blocked by a Paseo that is not in use.
-        const paseoList = this.state.down ? Promise.resolve(null) : paseoFn(...args).catch((e) => (this.paseoAlive ? null : Promise.reject(e)));
+        let paseoFailed = this.state.down;
+        const paseoList = this.state.down
+          ? Promise.resolve(null)
+          : paseoFn(...args).catch((e) => {
+              if (!this.paseoAlive) return Promise.reject(e);
+              paseoFailed = true; // died mid-flight: same as down, the caller must be able to tell
+              return null;
+            });
         const [p, r] = await Promise.all([paseoList, this.runner[name](...args).catch(() => null)]);
         const merged = p == null && r != null ? r : mergeLists(p, r);
-        return this.state.down ? markPaseoUnavailable(merged) : merged;
+        return paseoFailed ? markPaseoUnavailable(merged) : merged;
       };
     },
   });

@@ -50,6 +50,7 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
       const { createDaemonClient } = await import("../brainstorm.mjs");
       const backend = getBackend(createDaemonClient(), { lanes: () => runnerLanes({ env }) });
       await backend.connect?.();
+      await backend.ensureRunner?.(); // a trusted agent's spawn/list on a cold runner boots it
       try {
         return await fn(backend);
       } finally {

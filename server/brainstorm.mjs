@@ -522,9 +522,12 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
         // A daemon client was expected but never connected (daemon restarting): unknown, not empty.
         if (client && !connected) return null;
         if (connected && client && typeof backend.fetchAgents === "function") {
+          // An owner-initiated start: a cold runner must be booted, not read as "no agents" (or as an unreadable list).
+          await backend.ensureRunner?.();
           const res = await backend.fetchAgents().catch(() => null);
-          // Runner-only list because Paseo is down: fine for a runner lane, unknown for a lane pinned to Paseo (its Buddy may live there).
-          if (res?.paseoUnavailable && runnerLanes().paseoLanes?.has(String(laneId).toLowerCase())) return null;
+          // Runner-only list because Paseo is down or died mid-call: fine for a runner lane, unknown for any lane Paseo
+          // would serve (pinned, or every lane under the rollback default), where its Buddy may live.
+          if (res?.paseoUnavailable && !runnerLanes({ teamsFile: resolveTeamsFilePath(rootDir) }).has(String(laneId).toLowerCase())) return null;
           return asList(res);
         }
         if (connected && client && typeof backend.listAgents === "function") return asList(await backend.listAgents().catch(() => null));

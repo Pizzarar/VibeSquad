@@ -12,6 +12,7 @@ import { normalizeProviderUsage, type ProviderQuotaView } from "./antigravity";
 import { LEGACY_NEEDS_LABEL, LEGACY_NEEDS_UNTIL, LEGACY_NEEDS_REASON } from "./userName";
 import { demoAgents, demoArchived, demoProviderUsage, demoWorkspaces } from "./demo";
 import { applyDaemonClientPassword, fetchLocalDaemonPassword, readClientAuthFailure } from "./paseoDaemonAuth";
+import { createPaseoLink } from "./paseoLink";
 import { remoteDaemonClient } from "./paseoRemote";
 import { isRemote } from "./remoteSession";
 import { perfRecord, perfSendBegin, perfSendResolved } from "./perf";
@@ -404,18 +405,7 @@ async function refetchWorkspaces() {
 }
 
 // Which transports are up: state.conn is "connected" when either the Paseo websocket or the runner event stream is.
-let runnerConn = false;
-let paseoConn = false;
-
-// Paseo is optional after the cutover. When the server says no Paseo daemon is wanted or reachable (or a connect failed
-// while the runner stream is up) we close the websocket instead of letting DaemonClient retry forever in the console,
-// and re-ask the server every PASEO_RETRY_MS whether a daemon showed up.
-const PASEO_RETRY_MS = 20_000;
-let paseoParked = false;
-let paseoRetryTimer: ReturnType<typeof setTimeout> | null = null;
-// The runner side is "on" once its status says so, even before its stream opens (a cold runner start takes seconds).
-const runnerOn = (): boolean => runnerConn || !!getRunnerStatus()?.enabled;
-
+// The state machine (park / resume / conn transitions / pinned-spawn gate) lives in paseoLink.ts so it can be unit-tested.
 /** Paseo agents we can no longer reach: drop them rather than show dead rows that fail on click. Runner agents stay. */
 function dropPaseoAgents(): void {
   if (![...state.agents.keys()].some((id) => !isRunnerId(id))) return;
@@ -424,39 +414,23 @@ function dropPaseoAgents(): void {
   set({ agents });
 }
 
-// Pause, never dispose: DaemonClient.close() is terminal ("disposed"), so a later Paseo start could never reconnect. Reconnect
-// is switched off (which also cancels the pending retry timer) and switched back on when the status poll sees Paseo again.
-function parkPaseo(): void {
-  if (isRemote()) return;
-  paseoParked = true;
-  paseoConn = false;
-  daemonClient.setReconnectEnabled?.(false);
-  dropPaseoAgents();
-  if (paseoRetryTimer) return;
-  const tick = () => {
-    paseoRetryTimer = null;
-    void fetchRunnerStatus().then((s) => {
-      if (s?.paseo?.reachable) {
-        paseoParked = false;
-        daemonClient.setReconnectEnabled?.(true);
-        void connect();
-      } else paseoRetryTimer = setTimeout(tick, PASEO_RETRY_MS);
-    });
-  };
-  paseoRetryTimer = setTimeout(tick, PASEO_RETRY_MS);
-}
+const link = createPaseoLink({
+  daemonClient,
+  getRunnerStatus,
+  fetchRunnerStatus,
+  isRemote,
+  getConn: () => state.conn,
+  setConn: (patch) => set(patch),
+  dropPaseoAgents,
+  reconnect: () => void connect(),
+});
+const parkPaseo = link.park;
 
 async function connect(): Promise<void> {
   try {
     if (!DEMO && !isRemote()) {
       await Promise.race([runnerStatusLoaded, new Promise((r) => setTimeout(r, 1500))]);
-      const rs = paseoParked ? await fetchRunnerStatus() : getRunnerStatus();
-      if (rs?.enabled && rs.defaultBackend === "runner" && !rs.paseo?.reachable && !rs.paseo?.expected) {
-        parkPaseo(); // runner-only: no Paseo to connect to
-        return;
-      }
-      paseoParked = false;
-      daemonClient.setReconnectEnabled?.(true);
+      if (!(await link.shouldConnectPaseo())) return; // runner-only: no Paseo to connect to
     }
     if (!DEMO && !isRemote()) {
       const auth = await fetchLocalDaemonPassword();
@@ -465,15 +439,15 @@ async function connect(): Promise<void> {
       }
     }
     await daemonClient.connect();
-    paseoConn = true;
+    link.setPaseoConn(true);
     set({ conn: "connected", status: "connected", error: undefined, authFailureReason: null });
     refetchAll().catch(console.error);
     refetchWorkspaces().catch(console.error);
     refetchProviderUsage();
   } catch (e) {
-    paseoConn = false;
+    link.setPaseoConn(false);
     const authReason = readClientAuthFailure(daemonClient, e);
-    if (!authReason && runnerOn()) {
+    if (!authReason && link.runnerOn()) {
       parkPaseo(); // Paseo is down but the runner is up: stay connected, stop hammering /ws
       return;
     }
@@ -531,8 +505,8 @@ export function start() {
   // DaemonClient reconnects on its own (exponential backoff); we mirror its state and refetch after a gap.
   let wasConnected = false;
   (daemonClient as unknown as { subscribeConnectionStatus?: (cb: (s: { status: string; reason?: string }) => void) => () => void }).subscribeConnectionStatus?.((s) => {
-    if (paseoParked && s.status !== "connected") return; // we closed it on purpose
-    paseoConn = s.status === "connected";
+    if (link.parked && s.status !== "connected") return; // paused on purpose
+    link.setPaseoConn(s.status === "connected");
     if (s.status === "connected") {
       set({ conn: "connected", status: "connected", error: undefined, authFailureReason: null });
       if (!wasConnected) {
@@ -545,7 +519,7 @@ export function start() {
       return;
     }
     wasConnected = false;
-    if (runnerOn() && !readClientAuthFailure(daemonClient, s)) {
+    if (link.runnerOn() && !readClientAuthFailure(daemonClient, s)) {
       if (s.status === "disconnected") parkPaseo(); // runner keeps the UI live; no endless /ws retries, no dead Paseo rows
       return;
     }
@@ -570,7 +544,7 @@ export function start() {
 
   // Belt and braces: a full refetch every minute in case an update was dropped.
   setInterval(() => {
-    if (paseoConn) {
+    if (link.paseoConn) {
       refetchAll().catch(console.error);
       refetchProviderUsage();
     }
@@ -669,10 +643,8 @@ export async function spawnTeamAgent(req: SpawnRequest): Promise<{ id: string; c
   }
 
   await Promise.race([runnerStatusLoaded, new Promise((r) => setTimeout(r, 3000))]); // the first click must not race the status probe
-  if (!isRunnerLane(req.labels.lane) && getRunnerStatus()?.enabled && !paseoConn) {
-    // A Paseo-pinned lane with no Paseo: say so now instead of hanging on a dead websocket ("Transport not connected").
-    throw Object.assign(new Error("Paseo is not running. Start it in Settings (Start Paseo with VibeSquad) or move this lane to the runner."), { code: "PASEO_UNAVAILABLE" });
-  }
+  // A Paseo-pinned lane with no Paseo: say so now instead of hanging on a dead websocket ("Transport not connected").
+  if (!isRunnerLane(req.labels.lane)) link.assertCanSpawnOnPaseo();
   if (isRunnerLane(req.labels.lane)) {
     const agent = await runnerSpawn({
       config: { provider: req.provider, model: req.model, cwd: req.cwd, title: req.title, modeId: req.modeId, ...(req.systemPrompt ? { systemPrompt: req.systemPrompt } : {}) },
@@ -741,10 +713,9 @@ if (!DEMO && typeof window !== "undefined") {
       }
     },
     (up) => {
-      runnerConn = up;
       // The VS server's own stream is a connection: with the Paseo websocket down (or absent) the UI is still live.
-      if (up && state.conn !== "connected") set({ conn: "connected", status: "connected", error: undefined, authFailureReason: null, rosterLoaded: true });
-      else if (!up && !paseoConn && state.conn === "connected") set({ conn: "disconnected", status: "disconnected" });
+      if (up && state.conn !== "connected") set({ rosterLoaded: true });
+      link.onRunnerConnection(up);
     },
   );
 }

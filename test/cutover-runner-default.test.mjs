@@ -138,12 +138,116 @@ test('push watcher: attach, single-flight recheck and detach (disposers run, cli
   }
 });
 
-test('the browser Paseo lifecycle pauses instead of disposing the DaemonClient (source guard)', () => {
-  const src = readFileSync(new URL('../src/paseo.ts', import.meta.url), 'utf8');
-  const park = src.slice(src.indexOf('function parkPaseo'), src.indexOf('async function connect'));
-  assert.match(park, /setReconnectEnabled\?\.\(false\)/);
-  assert.doesNotMatch(park, /daemonClient\.close\(/, 'close() is terminal: the client could never reconnect');
-  assert.match(src, /setReconnectEnabled\?\.\(true\)/);
-  assert.match(src, /dropPaseoAgents\(\)/);
-  assert.match(src, /code: "PASEO_UNAVAILABLE"/);
+// ---- browser Paseo link (src/paseoLink.ts): the state machine behind src/paseo.ts, driven with stubs ----
+const { createPaseoLink, PASEO_UNAVAILABLE_MESSAGE } = await import('../src/paseoLink.ts');
+const { fetchRunnerStatus, isRunnerLane } = await import('../src/runnerBridge.ts');
+
+function makeLink({ status, fetched, remote = false, conn = 'connecting' } = {}) {
+  const log = { reconnect: 0, enabled: [], dropped: 0, conns: [], timers: [] };
+  const world = { status: status ?? null, fetched: fetched ?? status ?? null, conn };
+  const link = createPaseoLink({
+    daemonClient: { setReconnectEnabled: (v) => log.enabled.push(v), close: () => { throw new Error('close() is terminal and must never be called'); } },
+    getRunnerStatus: () => world.status,
+    fetchRunnerStatus: async () => world.fetched,
+    isRemote: () => remote,
+    getConn: () => world.conn,
+    setConn: (p) => { world.conn = p.conn; log.conns.push(p.conn); },
+    dropPaseoAgents: () => { log.dropped += 1; },
+    reconnect: () => { log.reconnect += 1; },
+    setTimer: (fn) => { log.timers.push(fn); },
+  });
+  return { link, log, world };
+}
+
+const runnerDefault = (paseo) => ({ enabled: true, defaultBackend: 'runner', lanes: [], paseoLanes: ['old'], paseo });
+
+test('Paseo link: park pauses (setReconnectEnabled(false), never close), evicts Paseo agents, and resumes when Paseo is reachable', async () => {
+  const { link, log, world } = makeLink({ status: runnerDefault({ expected: true, reachable: false }) });
+  link.park();
+  assert.deepEqual(log.enabled, [false]);
+  assert.equal(log.dropped, 1);
+  assert.equal(link.parked, true);
+  assert.equal(link.paseoConn, false);
+  assert.equal(log.timers.length, 1, 'one status poll is scheduled');
+  link.park(); // a second park does not stack timers
+  assert.equal(log.timers.length, 1);
+
+  world.fetched = runnerDefault({ expected: true, reachable: false });
+  log.timers.shift()(); // poll fires: still down -> reschedules
+  await new Promise((r) => setImmediate(r));
+  assert.equal(log.reconnect, 0);
+  assert.equal(log.timers.length, 1);
+
+  world.fetched = runnerDefault({ expected: true, reachable: true });
+  log.timers.shift()(); // Paseo is back
+  await new Promise((r) => setImmediate(r));
+  assert.equal(log.reconnect, 1);
+  assert.deepEqual(log.enabled, [false, false, true]); // park twice (idempotent), then resume
+  assert.equal(link.parked, false);
+});
+
+test('Paseo link: with startPaseoWithVibeSquad on (expected) but Paseo unreachable there is no doomed /ws attempt', async () => {
+  const { link, log } = makeLink({ status: runnerDefault({ expected: true, reachable: false }) });
+  assert.equal(await link.shouldConnectPaseo(), false);
+  assert.equal(link.parked, true);
+  assert.equal(log.dropped, 1);
+
+  const up = makeLink({ status: runnerDefault({ expected: false, reachable: true }) });
+  assert.equal(await up.link.shouldConnectPaseo(), true);
+  assert.deepEqual(up.log.enabled, [true]);
+
+  const remote = makeLink({ status: runnerDefault({ expected: false, reachable: false }), remote: true });
+  assert.equal(await remote.link.shouldConnectPaseo(), true, 'a relay-paired page always connects its own client');
+  remote.link.park();
+  assert.deepEqual(remote.log.enabled, [], 'remote clients are never paused');
+});
+
+test('Paseo link: spawn routing and fail-fast (unpinned lane -> runner, pinned lane with no Paseo -> PASEO_UNAVAILABLE)', async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => runnerDefault({ expected: true, reachable: false }) });
+  try {
+    await fetchRunnerStatus();
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  const { link } = makeLink({ status: runnerDefault({ expected: true, reachable: false }) });
+  // what spawnTeamAgent does: runner lanes go to runnerSpawn, everything else needs a connected Paseo
+  assert.equal(isRunnerLane('bug-chaser'), true);
+  assert.equal(isRunnerLane(undefined), true);
+  assert.equal(isRunnerLane('old'), false);
+  assert.throws(() => link.assertCanSpawnOnPaseo(), (e) => e.code === 'PASEO_UNAVAILABLE' && e.message === PASEO_UNAVAILABLE_MESSAGE);
+  link.setPaseoConn(true);
+  assert.doesNotThrow(() => link.assertCanSpawnOnPaseo());
+  const inert = makeLink({ status: { enabled: false, lanes: [] } });
+  assert.doesNotThrow(() => inert.link.assertCanSpawnOnPaseo(), 'runner off: the old Paseo-only behaviour');
+});
+
+test('Paseo link: conn transitions across runner stream and Paseo websocket states', () => {
+  // runner stream up -> connected, even with Paseo parked
+  let t = makeLink({ status: runnerDefault({ expected: false, reachable: false }) });
+  t.link.park();
+  t.link.onRunnerConnection(true);
+  assert.equal(t.world.conn, 'connected');
+  assert.equal(t.link.runnerConn, true);
+  // stream drops while Paseo is down: connected -> disconnected
+  t.link.onRunnerConnection(false);
+  assert.equal(t.world.conn, 'disconnected');
+
+  // parked while still "connecting" and the stream never opens: connecting -> disconnected (not stuck)
+  t = makeLink({ status: runnerDefault({ expected: false, reachable: false }), conn: 'connecting' });
+  t.link.park();
+  t.link.onRunnerConnection(false);
+  assert.equal(t.world.conn, 'disconnected');
+  assert.deepEqual(t.log.conns, ['disconnected']);
+
+  // Paseo websocket is up: a runner stream failure does not flip the UI
+  t = makeLink({ status: runnerDefault({ expected: false, reachable: true }), conn: 'connected' });
+  t.link.setPaseoConn(true);
+  t.link.onRunnerConnection(false);
+  assert.equal(t.world.conn, 'connected');
+  assert.deepEqual(t.log.conns, []);
+
+  // runnerOn: the runner counts as on once its status says so, before the stream opens
+  assert.equal(makeLink({ status: runnerDefault({}) }).link.runnerOn(), true);
+  assert.equal(makeLink({ status: { enabled: false, lanes: [] } }).link.runnerOn(), false);
 });
