@@ -6,7 +6,8 @@ import { mkdtempSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Runner, defaultAdapters } from '../runner/runner.mjs';
-import { RunnerBackend } from '../server/backend/runner-backend.mjs';
+import { createClaudeAdapter } from '../runner/adapters/claude.mjs';
+import { RunnerBackend, toAgent } from '../server/backend/runner-backend.mjs';
 import { ACP_PROVIDERS, createAcpAdapter, pickModel } from '../runner/adapters/acp.mjs';
 import { resolveExecutable } from '../runner/spawn.mjs';
 
@@ -154,6 +155,25 @@ test('codex-style agent (model as a configOption): model set via session/set_con
   const set = spawnImpl.last.written.find((m) => m.method === 'session/set_config_option');
   assert.deepEqual(set.params, { sessionId: 'S', configId: 'model', value: 'gpt-5.6-sol' });
   assert.equal(runner.timeline(id).find((e) => e.type === 'session').model, 'gpt-5.6-sol');
+});
+
+test('AGY spawned with modeId "default" reports modeId default (acpMode fallback)', () => {
+  const a = toAgent({ id: 'rn-1', provider: 'antigravity-cli', cwd: '.', meta: { acpMode: 'default' }, status: 'idle' });
+  assert.equal(a.modeId, 'default');
+  assert.equal(toAgent({ id: 'rn-2', provider: 'claude', cwd: '.', meta: {}, status: 'idle' }).modeId, 'auto');
+});
+
+test('a write racing child exit (EPIPE on stdin) does not crash the process, ACP and claude', async () => {
+  const fake = { file: '/bin/fake', args: [] };
+  for (const make of [(spawnImpl) => createAcpAdapter({ spawnImpl, provider: 'opencode', mcp: false, resolved: fake }), (spawnImpl) => createClaudeAdapter({ spawnImpl, mcp: false })]) {
+    const spawnImpl = fakeSpawn((m, child) => { if (m.method === 'initialize') child.push({ jsonrpc: '2.0', id: m.id, result: {} }); });
+    const adapter = make(spawnImpl);
+    const runner = new Runner({ dir: tmp(), adapters: { x: adapter } });
+    const id = runner.create({ provider: 'x', cwd: '.' });
+    spawnImpl.last.stdin.destroy(new Error('EPIPE')); // child gone: the pipe errors on its next write
+    try { runner.send(id, 'hi'); } catch { /* sync throw is fine; an unhandled 'error' event is not */ }
+    await tick(); await tick();
+  }
 });
 
 test('unknown ACP provider without an explicit command throws', () => {

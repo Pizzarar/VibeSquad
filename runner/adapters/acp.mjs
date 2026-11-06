@@ -44,6 +44,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
       const child = spawnNoShell(command, args, { cwd, ...(resolved ? { resolved } : {}), ...(env ? { env } : {}) }, spawnImpl);
       let nextId = 1;
       const pending = new Map();
+      child.stdin.on('error', () => {}); // EPIPE from a write racing child exit: the 'exit' handler already reports it
       const write = (o) => child.stdin.write(JSON.stringify({ jsonrpc: '2.0', ...o }) + '\n');
       const request = (method, params) => new Promise((resolve, reject) => {
         const id = nextId++;
@@ -73,7 +74,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
           }
         } else if (m.method && m.id !== undefined) {
           // Agent -> client request. The spike grants no permissions and no fs/terminal capabilities.
-          // Same default as the claude adapter: permissionMode 'auto' unless the lane asked for 'default' (then deny).
+          // Approve by default (like the claude adapter's 'auto'); only an explicit lane permissionMode 'deny' denies.
           write({ id: m.id, result: m.method === 'session/request_permission' ? permissionOutcome(m.params, meta.permissionMode) : null });
         }
       });
@@ -141,6 +142,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
           ready.then(pump, () => {});
         },
         // Cancel ends the current turn AND drops prompts queued behind it (a cancelled lane must not resume on stale asks).
+        // Differs from the claude adapter, whose cancel only interrupts the current turn and lets later prompts run.
         cancel() {
           queue.length = 0;
           if (sessionId) write({ method: 'session/cancel', params: { sessionId } });

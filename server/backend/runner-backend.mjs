@@ -28,7 +28,7 @@ export function toAgent(rec) {
     title: meta.title || rec.id,
     status: STATUS[rec.status] ?? "idle",
     labels,
-    modeId: meta.permissionMode ?? (rec.provider === "claude" ? "auto" : null),
+    modeId: meta.permissionMode ?? meta.acpMode ?? (rec.provider === "claude" ? "auto" : null),
     thinkingOptionId: null,
     requiresAttention: false,
     createdAt: iso(rec.createdAt),
