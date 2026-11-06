@@ -8,6 +8,8 @@ export const MAX_LAST_MESSAGE = 2000;
 export const REPORT_TYPES = ["done", "decision", "blocker"];
 const WORKER_ROLE = "worker";
 const clean = (v) => String(v ?? "").trim();
+/** A runner agent is calling: its id is the spawn parent / message sender the runner hook host needs (Paseo supplies both natively). */
+const isRunnerCaller = (ctx) => String(ctx.identity?.agentId ?? "").startsWith("rn-");
 
 /** Caller identity from env: VS_AGENT_ID (fallback PASEO_AGENT_ID), VS_TEAM, VS_LANE, VS_ROLE. */
 export function identityFromEnv(env = process.env) {
@@ -130,6 +132,7 @@ async function spawnWorker(ctx, args = {}) {
   labels.role = WORKER_ROLE;
   if (profile) labels.profile = profile.id || profile.name;
   else if (labels.profile === undefined) delete labels.profile;
+  if (isRunnerCaller(ctx)) labels["vs.parent"] = ctx.identity.agentId;
   delete labels.ord; // ordinals are assigned by the squad, never by a spawn arg
   labels.job = clean(labels.job) || title;
   const env = { VS_ROLE: WORKER_ROLE, ...(labels.profile ? { VS_PROFILE: labels.profile } : {}), ...(labels.lane ? { VS_LANE: labels.lane } : {}), ...(labels.team ? { VS_TEAM: labels.team } : {}) };
@@ -152,7 +155,7 @@ async function spawnWorker(ctx, args = {}) {
 async function sendTool(ctx, args = {}) {
   const id = need(args, "id", "agentId");
   const text = need(args, "text", "prompt", "message");
-  await ctx.withBackend({ id }, (b) => b.sendAgentPrompt(id, text));
+  await ctx.withBackend({ id }, (b) => b.sendAgentPrompt(id, text, isRunnerCaller(ctx) && id.startsWith("rn-") ? { senderId: ctx.identity.agentId } : undefined));
   return { id, sent: true };
 }
 

@@ -8,6 +8,7 @@ import { RunnerClient, runnerHome } from "./runner-client.mjs";
 import { joinTarget, joinInto, canExtendThought } from "../reply-coalesce.mjs";
 import { refreshWhosHere } from "../whos-here.mjs";
 import { runnerLanes } from "./lane-routing.mjs";
+import { createRunnerHookHost } from "./runner-hooks.mjs";
 
 const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 // Log event types that change the roster row (everything else is timeline-only).
@@ -52,6 +53,7 @@ export function toAgent(rec) {
     title: meta.title || rec.id,
     status: STATUS[rec.status] ?? "idle",
     labels,
+    ...(labels["vs.parent"] ? { parentAgentId: labels["vs.parent"] } : {}),
     modeId: meta.permissionMode ?? meta.acpMode ?? (rec.provider === "claude" ? "auto" : null),
     thinkingOptionId: null,
     requiresAttention: (rec.pendingPermissions ?? []).length > 0,
@@ -189,7 +191,14 @@ const viewStatus = (t) => (t.errored && t.status !== "running" ? "error" : t.sta
 const ENSURE_COOLDOWN_MS = 30_000;
 
 export class RunnerBackend {
-  constructor({ client = new RunnerClient(), buildPrefix = injectedPrefix, whosHere = refreshWhosHere, rootDir = REPO_ROOT, lanes = runnerLanes } = {}) {
+  /**
+   * `hooks`: the lifecycle hook host (server/backend/runner-hooks.mjs). Default: built lazily on the first createAgent (no
+   * watcher), unless the caller injected its own `buildPrefix` (tests) or passed `hooks: false`. startRunnerLifecycle() attaches
+   * the server's watcher-enabled host with attachHooks().
+   */
+  constructor({ client = new RunnerClient(), buildPrefix = injectedPrefix, whosHere = refreshWhosHere, rootDir = REPO_ROOT, lanes = runnerLanes, hooks } = {}) {
+    const hooksOff = hooks === false || (hooks === undefined && buildPrefix !== injectedPrefix);
+    Object.defineProperty(this, "hooksState", { value: { host: hooks && hooks !== true ? hooks : null, pending: null, off: hooksOff } });
     Object.defineProperty(this, "rc", { value: client });
     Object.defineProperty(this, "buildPrefix", { value: buildPrefix });
     Object.defineProperty(this, "whosHere", { value: whosHere });
@@ -223,6 +232,24 @@ export class RunnerBackend {
 
   async createAgent({ config = {}, initialPrompt, prompt, labels = {}, env = {} } = {}) {
     await this.rc.ensureRunning();
+    // before("agent.create"): the plugin's prompt layering + spawn guard, in-process so every spawn path (UI, MCP, vs CLI) gets it.
+    const host = await this.hookHost();
+    if (host) {
+      const request = {
+        config: { ...config },
+        env: { ...env },
+        prompt: initialPrompt || prompt || undefined,
+        ...(Object.keys(labels).length ? { labels: { ...labels } } : {}),
+      };
+      const out = await host.before("agent.create", { request }).catch((err) => {
+        console.warn(`[vibesquad] runner spawn hook failed: ${err}`);
+        return undefined;
+      });
+      const next = out ?? request;
+      config = next.config ?? config;
+      env = next.env ?? env;
+      labels = next.labels ?? labels;
+    }
     const meta = { title: config.title, labels: {} };
     for (const k of FIRST_CLASS) {
       const v = labels[k] ?? (ENV_FOR[k] ? env[ENV_FOR[k]] : undefined);
@@ -234,7 +261,7 @@ export class RunnerBackend {
       if (config.provider === "claude") { if (CLAUDE_PERMISSION_MODES.has(config.modeId)) meta.permissionMode = config.modeId; }
       else meta.acpMode = config.modeId;
     }
-    const prefix = await this.buildPrefix(meta.role || "", config.cwd);
+    const prefix = host ? "" : await this.buildPrefix(meta.role || "", config.cwd);
     const systemPrompt = [prefix, config.systemPrompt].filter(Boolean).join("\n\n") || undefined;
     const { id } = await this.rc.request("POST", "/agents", {
       provider: config.provider,
@@ -247,6 +274,39 @@ export class RunnerBackend {
     const agent = (await this.fetchAgent(id)).agent;
     await this.refreshLaneWhosHere(agent.labels?.lane);
     return agent;
+  }
+
+  /** The lifecycle host for this backend, or null when hooks are off. Built once, lazily (no wakeup watcher). */
+  hookHost() {
+    const st = this.hooksState;
+    if (st.host || st.off) return Promise.resolve(st.host);
+    st.pending ??= createRunnerHookHost(this).then(
+      (host) => (st.host = host),
+      (err) => {
+        console.warn(`[vibesquad] runner hooks unavailable: ${err}`);
+        st.off = true;
+        return null;
+      },
+    );
+    return st.pending;
+  }
+
+  /** Install the (watcher-enabled) host the VS server runs; replaces a lazily built one. Returns it. */
+  async attachHooks({ startWatcher = true, deps } = {}) {
+    const st = this.hooksState;
+    const old = st.host ?? (await st.pending?.catch(() => null));
+    old?.dispose?.();
+    st.off = false;
+    st.pending = null;
+    st.host = await createRunnerHookHost(this, { startWatcher, deps });
+    return st.host;
+  }
+
+  detachHooks() {
+    const st = this.hooksState;
+    st.host?.dispose?.();
+    st.host = null;
+    st.pending = null;
   }
 
   /** Keep the lane brief's "Who's here" current, like the Paseo plugin does on spawn. Best effort. */
@@ -317,8 +377,14 @@ export class RunnerBackend {
     return (await this.fetchAgents(opts)).entries.map((e) => e.agent);
   }
 
-  /** opts: { images: [{ data (base64), mimeType }], activeTurnBehavior: 'steer' (default) | 'interrupt' }. */
+  /** opts: { senderId (calling agent, for the retired-lead redirect), images: [{ data (base64), mimeType }], activeTurnBehavior: 'steer' (default) | 'interrupt' }. */
   async sendAgentPrompt(id, text, opts = {}) {
+    // An agent (opts.senderId) writing to a retired Lead/Buddy is redirected to the live one (plugin handleSendAgentPrompt).
+    if (opts.senderId) {
+      const host = await this.hookHost();
+      const res = host ? await host.before("send_agent_prompt", { agentId: id, senderAgentId: opts.senderId, prompt: text }).catch(() => undefined) : undefined;
+      if (res?.redirected) return;
+    }
     const body = { text };
     if (opts.images?.length) body.images = opts.images;
     if (opts.activeTurnBehavior) body.activeTurnBehavior = opts.activeTurnBehavior;
@@ -392,6 +458,8 @@ export class RunnerBackend {
    *   { kind: 'status', agentId, from, to, agent }    e.g. running -> idle | error
    *   { kind: 'permission', agentId, request }
    *   { kind: 'timeline', agentId, seq, type }        a timeline entry was appended
+   *   { kind: 'created' | 'turn_started', agentId, agent }
+   *   { kind: 'turn_ended', agentId, agent, turnId, outcome }   outcome: { kind: 'completed' | 'cancelled' } | { kind: 'failed', error: { message } }
    * Returns the unsubscribe.
    */
   subscribeEvents(listener) {
@@ -472,7 +540,8 @@ export class RunnerBackend {
     const t0 = this.live.turn.get(id);
     const from = t0 && viewStatus(t0);
     // An error during a turn sticks as the agent's status until the next turn starts (what push pages on, once).
-    if (e.type === "error") { if (t0?.status === "running") t0.errored = true; return; }
+    if (e.type === "error") { if (t0?.status === "running") { t0.errored = true; t0.error = e.message; } return; }
+    if (e.type === "cancel") { if (t0?.status === "running") t0.cancelled = true; return; }
     if (!ROSTER_EVENTS.has(e.type)) return;
     if (e.type === "archive") {
       this.live.turn.delete(id);
@@ -483,17 +552,30 @@ export class RunnerBackend {
     try { agent = (await this.fetchAgent(id)).agent; } catch { return; } // runner restarting: the next event resyncs
     if (gen !== this.live.gen) return;
     const t = t0 ?? { status: agent.status, errored: false };
+    const wasRunning = t0?.status === "running";
+    let lifecycle = null; // turn_started | turn_ended, emitted after the roster events below
     if (e.type === "status" && e.status) {
       t.status = STATUS[e.status] ?? e.status;
-      if (t.status === "running") t.errored = false; // next turn began
+      if (t.status === "running") {
+        t.errored = false; // next turn began
+        t.error = undefined;
+        t.cancelled = false;
+        if (!wasRunning) lifecycle = { kind: "turn_started", agentId: id, agent };
+      } else if (wasRunning && t.status === "idle") {
+        const outcome = t.errored ? { kind: "failed", error: { message: String(t.error ?? "turn failed") } } : t.cancelled ? { kind: "cancelled" } : { kind: "completed" };
+        lifecycle = { kind: "turn_ended", agentId: id, agent, turnId: String(e.seq), outcome };
+      }
     } else if (e.type === "exit") {
       t.status = "closed";
       if (from === "running" && (e.error || (e.code ?? 0) !== 0)) t.errored = true; // died mid-turn
+      if (wasRunning) lifecycle = { kind: "turn_ended", agentId: id, agent, turnId: String(e.seq), outcome: { kind: "failed", error: { message: String(e.error ?? `agent exited (code ${e.code ?? "?"})`) } } };
     }
     this.live.turn.set(id, t);
     const to = viewStatus(t);
     const shown = { ...agent, status: to };
     this.emitEvent({ kind: "agent", agent: shown });
+    if (e.type === "created") this.emitEvent({ kind: "created", agentId: id, agent: shown });
+    if (lifecycle) this.emitEvent({ ...lifecycle, agent: shown });
     if (from !== undefined && from !== to) this.emitEvent({ kind: "status", agentId: id, from, to, agent: shown });
     if (e.type === "permission" && e.phase === "request") this.emitEvent({ kind: "permission", agentId: id, request: { id: e.id, toolName: e.toolName } });
     if (e.type === "exit") await this.refreshLaneWhosHere(agent.labels?.lane);

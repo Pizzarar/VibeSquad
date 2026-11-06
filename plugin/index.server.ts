@@ -959,7 +959,8 @@ interface AgentSnap {
 }
 
 function log(message: string) {
-  console.log(`[vibesquad] ${message}`);
+  // The runner hook host (server/backend/runner-hooks.mjs) runs inside MCP stdio servers, where stdout is the protocol channel.
+  (process.env.VS_PLUGIN_LOG === "stderr" ? console.error : console.log)(`[vibesquad] ${message}`);
 }
 
 export function createPlugin(overrides: Partial<Deps> = {}) {
