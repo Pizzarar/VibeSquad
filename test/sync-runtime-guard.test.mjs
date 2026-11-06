@@ -30,6 +30,8 @@ test("sync allowed on clean master in the main checkout", () => {
 test("sync skipped on a unit branch, dirty tree, and linked worktree; force overrides", () => {
   const dir = repo();
   writeFileSync(join(dir, "b.txt"), "b");
+  assert.equal(syncSkipReason(dir), null, "untracked files (other lanes' docs) don't block the sync");
+  writeFileSync(join(dir, "a.txt"), "changed");
   assert.match(syncSkipReason(dir), /not clean/);
   assert.equal(syncSkipReason(dir, { force: true }), null);
   git(dir, "add", ".");

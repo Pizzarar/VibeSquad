@@ -16,7 +16,7 @@ export function syncSkipReason(repoRoot = rootDir, { force = false, git = defaul
     if (gitDir.toLowerCase() !== common.toLowerCase()) return "linked worktree, not the main checkout";
     const branch = git(repoRoot, "rev-parse", "--abbrev-ref", "HEAD");
     if (branch !== "master") return `on branch ${branch}, not master`;
-    if (git(repoRoot, "status", "--porcelain")) return "working tree not clean";
+    if (git(repoRoot, "status", "--porcelain", "--untracked-files=no")) return "working tree not clean";
   } catch (err) {
     return `cannot verify git state (${String(err?.message ?? err).split("\n")[0]})`;
   }
