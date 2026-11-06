@@ -136,16 +136,13 @@ test("Done-when #1: vs who lead returns only the live lead (ignoring former-lead
     assert.equal(lines[0], "★ VIBESQUAD ord1 · lead-live-1 · idle · 115k");
 
     // Also verify running vs who lead against the live repo prints ★ VIBESQUAD ord1 only
-    const liveRes = spawnSync(
-      process.execPath,
-      [CLI_PATH, "who", "lead", "--team", "vibesquad", "--lane", "vibesquad"],
-      { cwd: REPO_ROOT, encoding: "utf8" },
-    );
+    // Runs in the repo cwd but against the mock agent homes: the real ~/.vibesquad runner agents must not leak in.
+    const liveRes = env.runVs(["who", "lead", "--team", "vibesquad", "--lane", "vibesquad"]);
     assert.notEqual(liveRes.status, 2, "live repo must not have CONFLICT on vibesquad lead");
     if (liveRes.status === 0) {
       const liveLines = liveRes.stdout.trim().split(/\r?\n/);
       assert.equal(liveLines.length, 1);
-      assert.match(liveLines[0], /^★ (?:VIBESQUAD ord|[A-Za-z]{2,5})\d+(?: · .+?)? · [0-9a-f-]+ · \w+ · \d+k$/);
+      assert.equal(liveLines[0], "★ VIBESQUAD ord1 · lead-live-1 · idle · 115k");
     }
   } finally {
     env.cleanup();

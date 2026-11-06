@@ -217,12 +217,36 @@ test('getBackend with no switched lane returns the plain PaseoBackend (default =
   assert.equal(getBackend(b), b);
 });
 
-test('lanes come from VS_RUNNER_LANES and teams.json backend:"runner"', () => {
+test('every lane defaults to the runner; teams.json backend:"paseo" / VS_PASEO_LANES pin a lane to Paseo', () => {
   const file = path.join(tmp(), 'teams.json');
-  writeFileSync(file, JSON.stringify({ teams: [{ id: 't', lanes: [{ id: 'Alpha', aliases: ['al'], backend: 'runner' }, { id: 'beta' }] }] }));
-  const set = runnerLanes({ env: { VS_RUNNER_LANES: ' Gamma , delta' }, teamsFile: file });
-  assert.deepEqual([...set].sort(), ['al', 'alpha', 'delta', 'gamma']);
-  assert.equal(runnerLanes({ env: {}, teamsFile: path.join(tmp(), 'missing.json') }).size, 0);
+  writeFileSync(file, JSON.stringify({ teams: [{ id: 't', lanes: [{ id: 'Alpha', aliases: ['al'], backend: 'runner' }, { id: 'beta' }, { id: 'Legacy', aliases: ['lg'], backend: 'paseo' }] }] }));
+  const set = runnerLanes({ env: { VS_RUNNER_LANES: ' Gamma , delta', VS_PASEO_LANES: 'pinned' }, teamsFile: file });
+  assert.deepEqual([...set].sort(), ['al', 'alpha', 'delta', 'gamma']); // explicit runner lanes stay iterable
+  assert.deepEqual([...set.explicit()].sort(), ['al', 'alpha', 'delta', 'gamma']);
+  for (const lane of ['alpha', 'beta', 'unlisted', '', 'gamma']) assert.equal(set.has(lane), true, `lane "${lane}" -> runner`);
+  for (const lane of ['legacy', 'lg', 'pinned']) assert.equal(set.has(lane), false, `lane "${lane}" -> paseo`);
+  assert.deepEqual([...set.paseoLanes].sort(), ['legacy', 'lg', 'pinned']);
+  const none = runnerLanes({ env: {}, teamsFile: path.join(tmp(), 'missing.json') });
+  assert.ok(none.size >= 1, 'size is always truthy so callers treat the runner as on');
+  assert.equal(none.has('anything'), true);
+  assert.equal(none.explicit().size, 0);
+});
+
+test('default lanes create on the runner, Paseo ids still reach Paseo, and a dead daemon is not connected to', async () => {
+  const c = fakePaseoClient('p');
+  const r = fakeRunnerBackend();
+  const lanes = () => runnerLanes({ env: {}, teamsFile: path.join(tmp(), 'missing.json') });
+  const dead = new RoutingBackend(new PaseoBackend(c), r, { lanes, paseoAlive: async () => false });
+  assert.equal((await dead.createAgent({ labels: { lane: 'never-configured' }, config: {} })).id, 'rn-aaa');
+  assert.equal((await dead.createAgent({ labels: {}, config: {} })).id, 'rn-aaa');
+  assert.equal(c.calls.some((x) => x[0] === 'createAgent'), false);
+  await dead.connect();
+  assert.equal(c.calls.filter((x) => x[0] === 'connect').length, 0, 'dead Paseo: connect is skipped (no 5s timeout)');
+  const alive = new RoutingBackend(new PaseoBackend(c), r, { lanes, paseoAlive: async () => true });
+  await alive.connect();
+  assert.equal(c.calls.filter((x) => x[0] === 'connect').length, 1);
+  await alive.sendAgentPrompt('11111111-uuid', 'yo');
+  assert.equal(c.calls.filter((x) => x[0] === 'sendAgentPrompt').length, 1);
 });
 
 test('routing: create goes by lane, per-id calls go to the owner, lists merge, no cross-talk', async () => {

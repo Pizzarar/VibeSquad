@@ -1,7 +1,8 @@
-// The single accessor for agent operations. Paseo is the default for every lane; lanes switched to the
-// runner (VS_RUNNER_LANES or teams.json `backend: "runner"`) get a RoutingBackend that sends each call to the owner.
+// The single accessor for agent operations. Every lane defaults to the runner (cutover); a RoutingBackend sends each call to
+// the owner (rn- ids = runner, other ids = Paseo). Lanes pinned with teams.json `backend: "paseo"` / VS_PASEO_LANES create on Paseo.
+import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { PaseoBackend } from "./paseo-backend.mjs";
-import { RoutingBackend, runnerLanes } from "./lane-routing.mjs";
+import { RoutingBackend, paseoDaemonAlive, runnerLanes } from "./lane-routing.mjs";
 import { RunnerBackend } from "./runner-backend.mjs";
 
 let sharedRunner;
@@ -12,9 +13,11 @@ export const sharedRunnerBackend = runnerBackend;
 export function getBackend(client, opts = {}) {
   if (!client || client instanceof PaseoBackend || client instanceof RoutingBackend) return client;
   const paseo = new PaseoBackend(client);
-  const lanes = opts.lanes ?? runnerLanes;
-  if (!(opts.force || lanes().size)) return paseo; // nothing switched: byte-identical to the pre-Block-3 path
-  return new RoutingBackend(paseo, opts.runner ?? runnerBackend(), { lanes });
+  // The cutover default (every lane on the runner) applies to the real DaemonClient only. A test fake or other injected
+  // client keeps the explicit-lanes-only behaviour so its createAgent never reaches a live runner.
+  const lanes = opts.lanes ?? (client instanceof DaemonClient ? runnerLanes : () => runnerLanes().explicit());
+  if (!(opts.force || lanes().size)) return paseo;
+  return new RoutingBackend(paseo, opts.runner ?? runnerBackend(), { lanes, paseoAlive: opts.paseoAlive === undefined ? paseoDaemonAlive : opts.paseoAlive });
 }
 
 /** Backend with no daemon client, for the CLI shell-outs only. */
@@ -24,5 +27,5 @@ export function getCliBackend() {
 
 export { PaseoBackend, BACKEND_METHODS } from "./paseo-backend.mjs";
 export { RunnerBackend, isRunnerId, readRunnerAgentSync, listRunnerAgentsSync } from "./runner-backend.mjs";
-export { RoutingBackend, runnerLanes } from "./lane-routing.mjs";
+export { RoutingBackend, RunnerLaneSet, runnerLanes, paseoDaemonAlive } from "./lane-routing.mjs";
 export { hasCustomMockCli, hasCustomOfflineStore, run } from "./paseo-cli.mjs";

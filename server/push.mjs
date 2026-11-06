@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
-import { getBackend, runnerLanes, sharedRunnerBackend } from "./backend/index.mjs";
+import { getBackend, paseoDaemonAlive, runnerLanes, sharedRunnerBackend } from "./backend/index.mjs";
 import { readPaseoConfig } from "./brainstorm.mjs";
 import { readDaemonPassword, readPaseoLocalCredential } from "./daemon-password.mjs";
 import { LEGACY_NEEDS_LABEL, clearConfigWarning, loadUserSettings, readJsonFileWithBom } from "./user-settings.mjs";
@@ -545,12 +545,21 @@ export async function syncRunnerPushWatch(rootDir) {
   return restartPushWatcher(rootDir);
 }
 
+/** Paseo watching is explicit: the autostart setting is on, or a lane is pinned to Paseo in teams.json / VS_PASEO_LANES. */
+function shouldWatchPaseo() {
+  try {
+    return loadUserSettings().startPaseoWithVibeSquad === true || runnerLanes().paseoLanes.size > 0;
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Connects to the Paseo daemon via DaemonClient, seeds initial agent state,
+ * Connects to the Paseo daemon (when enabled) via DaemonClient, seeds initial agent state,
  * and dispatches Web Push notifications on permission requests, needs-you transitions,
  * and lead/worker turn completions or errors.
  */
-export function startPushWatcher(rootDir = REPO_ROOT, { runner = runnerLanes().size ? sharedRunnerBackend() : null } = {}) {
+export function startPushWatcher(rootDir = REPO_ROOT, { runner = runnerLanes().size ? sharedRunnerBackend() : null, paseo } = {}) {
   lastRootDir = rootDir;
   if (activeWatcher) return activeWatcher;
   watcherStarted = true;
@@ -559,10 +568,14 @@ export function startPushWatcher(rootDir = REPO_ROOT, { runner = runnerLanes().s
   const dedupeSet = new Set();
   let stopped = false;
 
+  let client = null;
+  let backend = null;
+  let siblingAgents = null;
+  const attachPaseo = () => {
   const { listen } = readPaseoConfig(rootDir);
   const wsUrl = listen.startsWith("ws://") || listen.startsWith("wss://") ? `${listen.replace(/\/$/, "")}/ws` : `ws://${listen}/ws`;
   const password = readDaemonPassword();
-  const client = new DaemonClient({
+  client = new DaemonClient({
     url: wsUrl,
     clientId: `vibesquad-push-watcher-${ process.pid }`,
     clientType: "cli",
@@ -573,7 +586,7 @@ export function startPushWatcher(rootDir = REPO_ROOT, { runner = runnerLanes().s
     reconnect: { enabled: true, baseDelayMs: 1500, maxDelayMs: 15000 },
   });
   watcherClient = client;
-  const backend = getBackend(client);
+  backend = getBackend(client, { paseoAlive: null });
 
   const handleAgentSnapshot = (agent, isInitialSeed = false) => {
     if (!agent || !agent.id) return;
@@ -641,11 +654,9 @@ export function startPushWatcher(rootDir = REPO_ROOT, { runner = runnerLanes().s
     }
   });
 
-  const stopRunnerWatch = runner ? watchRunnerTransitions(runner, { dedupeSet }) : null;
-  const watchingRunner = !!runner;
   // The watcher owns the one long-lived Paseo client, so it is the Who's here view of Paseo agents for runner lanes
   // (a failing list = Paseo down: the runner falls back to its runner-only-lane path).
-  const siblingAgents = async () => {
+  siblingAgents = async () => {
     const res = await backend.fetchAgents({ filter: { includeArchived: false } });
     return (res?.entries ?? []).map((e) => e.agent).filter(Boolean);
   };
@@ -654,17 +665,32 @@ export function startPushWatcher(rootDir = REPO_ROOT, { runner = runnerLanes().s
   backend.connect().then(() => seedAgents()).catch(() => {});
   unrefClientTimers(client);
   queueMicrotask(() => unrefClientTimers(client));
+  };
+
+  const stopRunnerWatch = runner ? watchRunnerTransitions(runner, { dedupeSet }) : null;
+  const watchingRunner = !!runner;
+  // Paseo is opt-in after the cutover. Without the setting or a Paseo-pinned lane we only attach when a daemon is
+  // already listening (existing Paseo-hosted agents keep notifying); otherwise no DaemonClient is built, so a
+  // closed port never costs the 5s connect timeout on every Who's here refresh.
+  void (async () => {
+    try {
+      const wanted = paseo ?? (shouldWatchPaseo() || (await paseoDaemonAlive()));
+      if (wanted && !stopped) attachPaseo();
+    } catch {
+      /* Paseo is optional */
+    }
+  })();
 
   activeWatcher = {
     watchingRunner,
     stop() {
       stopped = true;
       stopRunnerWatch?.();
-      runner?.dropSiblingAgents?.(siblingAgents);
+      if (siblingAgents) runner?.dropSiblingAgents?.(siblingAgents);
       watcherStarted = false;
       activeWatcher = null;
-      if (watcherClient === client) watcherClient = null;
-      return backend.close().catch(() => {});
+      if (client && watcherClient === client) watcherClient = null;
+      return backend ? backend.close().catch(() => {}) : Promise.resolve();
     },
   };
   return activeWatcher;

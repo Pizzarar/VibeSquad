@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { BACKEND_METHODS, PaseoBackend, getBackend, getCliBackend, hasCustomMockCli } from "../server/backend/index.mjs";
+
+// Hermetic: never read the real ~/.vibesquad/teams.json (its runner lanes would wrap these fakes in a RoutingBackend).
+{
+  const dir = mkdtempSync(join(tmpdir(), "vs-bp-"));
+  writeFileSync(join(dir, "teams.json"), JSON.stringify({ teams: [] }));
+  process.env.VIBESQUAD_TEAMS_FILE = join(dir, "teams.json");
+  delete process.env.VS_RUNNER_LANES;
+}
 
 function fakeClient() {
   const calls = [];

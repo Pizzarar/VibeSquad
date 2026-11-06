@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
+import { withIsolatedLanes } from "./helpers/isolate-lanes.mjs";
 import { createPlugin } from "../plugin/index.server.ts";
 import {
   LEAD_AUTO_HANDOFF_DEFAULT,
@@ -559,6 +560,7 @@ function fakeDaemonClient(agents, pageSize = 2) {
 }
 
 test("listDaemonAgents pages through DaemonClient.fetchAgents and skips archived agents", async () => {
+  await withIsolatedLanes(async () => {
   const agents = new Map(
     ["a", "b", "c", "d", "e"].map((id) => [id, { id, labels: {}, ...(id === "c" ? { archivedAt: "2026-11-01T00:00:00Z" } : {}) }]),
   );
@@ -570,6 +572,7 @@ test("listDaemonAgents pages through DaemonClient.fetchAgents and skips archived
   // No fetchAgents (or a daemon error) still means "no workers", never a throw.
   assert.deepEqual(await listDaemonAgents({ listAgents: async () => [{ id: "x" }] }), []);
   assert.deepEqual(await listDaemonAgents({ fetchAgents: async () => { throw new Error("down"); } }), []);
+  });
 });
 
 test("HTTP handoff with a real-shaped daemon client re-points the open workers to the successor", async () => {

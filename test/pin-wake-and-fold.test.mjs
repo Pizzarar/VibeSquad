@@ -368,7 +368,10 @@ test("(6) vs pin merge adds fromLane.id + code to intoLane.aliases and sets from
 });
 
 test("(7) teams.json (and ~/.vibesquad/teams.json if present) has valid JSON (no BOM), folded aliases, and standing flags", () => {
-  const paths = [resolve(ROOT_DIR, "teams.json")];
+  // Both files are gitignored per-machine config: check whichever exist (a fresh worktree has neither).
+  const paths = [];
+  const repoTeams = resolve(ROOT_DIR, "teams.json");
+  if (fs.existsSync(repoTeams)) paths.push(repoTeams);
   const homeTeams = join(homedir(), ".vibesquad", "teams.json");
   if (fs.existsSync(homeTeams)) paths.push(homeTeams);
 

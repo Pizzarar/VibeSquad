@@ -320,7 +320,8 @@ export async function inspectFirstRunStatus(opts = {}) {
     claude,
     gemini,
     git,
-    ready: Boolean(paseo.installed && (claude.installed || gemini.installed)),
+    // Paseo is optional after the runner cutover: only an agent CLI is required.
+    ready: Boolean(claude.installed || gemini.installed),
   };
 }
 

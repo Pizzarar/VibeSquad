@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Modal } from "./TeamActions";
 import { reconnectWithDaemonPassword } from "./paseo";
 import { submitDaemonPassword } from "./paseoDaemonAuth";
@@ -56,7 +56,6 @@ export function FirstRunModal({ initial, onClose }: { initial?: FirstRunStatus |
   const [editingPw, setEditingPw] = useState(false);
   const [pwBusy, setPwBusy] = useState(false);
   const [pwMsg, setPwMsg] = useState<string | null>(null);
-  const triggered = useRef(false);
 
   const refresh = useCallback(async () => {
     const s = await fetchFirstRunStatus();
@@ -113,15 +112,6 @@ export function FirstRunModal({ initial, onClose }: { initial?: FirstRunStatus |
     void refresh();
   }, [refresh]);
 
-  useEffect(() => {
-    if (!status || triggered.current) return;
-    const p = status.paseo;
-    if (!p.installed && !p.installing && !p.error) {
-      triggered.current = true;
-      void install();
-    }
-  }, [status, install]);
-
   const installing = status?.paseo.installing ?? false;
   useEffect(() => {
     if (!installing) return;
@@ -129,7 +119,7 @@ export function FirstRunModal({ initial, onClose }: { initial?: FirstRunStatus |
     return () => clearInterval(t);
   }, [installing, refresh]);
 
-  const canContinue = Boolean(status?.paseo.installed && (status.claude.installed || status.gemini.installed));
+  const canContinue = Boolean(status && (status.claude.installed || status.gemini.installed));
   const done = () => {
     localStorage.setItem(FIRST_RUN_DONE_KEY, "1");
     onClose();
@@ -155,7 +145,7 @@ export function FirstRunModal({ initial, onClose }: { initial?: FirstRunStatus |
           <p>Checking your machine…</p>
         ) : (
           <>
-            <Row id="paseo" name="1. Paseo CLI & Daemon">
+            <Row id="paseo" name="1. Paseo CLI & Daemon (optional)">
               <div>
                 {status.paseo.installed ? (
                   <span>
@@ -175,7 +165,12 @@ export function FirstRunModal({ initial, onClose }: { initial?: FirstRunStatus |
                     </button>{" "}
                   </span>
                 ) : (
-                  <span>Starting install… </span>
+                  <span>
+                    Not installed. VibeSquad runs agents on its own runner; Paseo is only needed for Paseo-hosted agents.{" "}
+                    <button className="btn small" data-testid="paseo-install-btn" onClick={() => void install()}>
+                      Install Paseo
+                    </button>{" "}
+                  </span>
                 )}
                 <button
                   type="button"
@@ -251,7 +246,7 @@ export function FirstRunModal({ initial, onClose }: { initial?: FirstRunStatus |
                 </span>
               )}
             </Row>
-            <p style={{ fontSize: 11, opacity: 0.7 }}>You need Paseo plus at least one of Claude Code or Gemini to continue.</p>
+            <p style={{ fontSize: 11, opacity: 0.7 }}>You need at least one of Claude Code or Gemini to continue. Paseo is optional.</p>
           </>
         )}
       </div>
