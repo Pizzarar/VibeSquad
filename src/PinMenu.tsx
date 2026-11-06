@@ -1,10 +1,17 @@
 // Pinned teams step 3: the pin's ⋯ menu (docs/PLAN_PINNED_FEATURES.md §3).
 // Edit brief · Rename · Show plumbing · Mark complete (step 5, src/PinDone.tsx) · Remove team… (src/PinRemove.tsx).
 import { useEffect, useRef, useState } from "react";
-import type { Pin } from "./pins";
+import { patchLane, type Pin } from "./pins";
+import { saveTeams, type TeamsUpdater } from "./teams";
 import { openBriefEditor, renamePin } from "./pinActions";
 import { MarkCompleteButton } from "./PinDone";
 import { RemoveTeamDialog } from "./PinRemove";
+
+/** Flip a pin between disposable (`standing: false`) and permanent standing (`standing: true`) in teams.json. */
+export async function togglePinStanding(pin: Pin, save: (update: TeamsUpdater) => Promise<unknown> = saveTeams): Promise<void> {
+  const next = !pin.lane.standing;
+  await save((cur) => patchLane(cur, pin.squad.id, pin.lane.id, { standing: next }));
+}
 
 type Props = {
   pin: Pin;
@@ -115,6 +122,16 @@ export function PinMenu({ pin, onShowPlumbing, onEditBrief }: Props) {
                 }}
               >
                 Show plumbing
+              </button>
+              <button
+                role="menuitem"
+                data-testid={`pin-standing-toggle-${pin.lane.id}`}
+                onClick={() => {
+                  close();
+                  void togglePinStanding(pin);
+                }}
+              >
+                {pin.lane.standing ? "Make disposable team" : "Make standing team"}
               </button>
               <MarkCompleteButton pin={pin} role="menuitem" />
               <button

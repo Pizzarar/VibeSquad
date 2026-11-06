@@ -12,6 +12,8 @@ export type PinState = "pinned" | "done" | "removed";
 /** Extra lane fields stored in teams.json. Lanes without `state` count as pinned. */
 export type PinFields = {
   state?: PinState;
+  /** True for permanent standing teams that log "Shipped <date>: <goal>" and sleep in place instead of moving to the Done shelf. */
+  standing?: boolean;
   /** ISO time the team was marked complete. */
   doneAt?: string;
   /** ISO time the team was removed (Team ⋯ → Remove team). */
@@ -95,6 +97,9 @@ export function pinsForSquad(view: TeamView): { pinned: Pin[]; done: Pin[] } {
 
 /** True for the Squad's hub pin (RiffBot's lane). It lives in the hub bar, not the Team grid or Done shelf. */
 export const isHubPin = (pin: Pin): boolean => isHubLane(pin.squad, pin.lane);
+
+/** True when the pin is a permanent standing team (`lane.standing === true`). */
+export const isStandingPin = (pin: Pin): boolean => Boolean(pin.lane.standing);
 
 /** Every non-unassigned Squad has a ready-to-go RiffBot hub pin, even if teams.json has no explicit hub lane yet. */
 export function hubPinForSquad(view: TeamView | null | undefined): Pin | null {

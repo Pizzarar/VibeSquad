@@ -43,19 +43,29 @@ export function useMarkComplete(pin: Pin) {
     }
     setState({ kind: "idle" });
   };
+  const standing = Boolean(pin.lane.standing);
   const label =
     state.kind === "busy"
-      ? "Completing…"
+      ? standing
+        ? "Shipping…"
+        : "Completing…"
       : state.kind === "armed"
-        ? "Tap again to complete"
+        ? standing
+          ? "Tap again to ship goal"
+          : "Tap again to complete"
         : state.kind === "blocked"
           ? `⏳ ${state.why}`
           : null;
   return { state, click, label };
 }
 
-export function MarkCompleteButton({ pin, idleLabel = "Mark complete", className = "", role }: { pin: Pin; idleLabel?: string; className?: string; role?: string }) {
+export function MarkCompleteButton({ pin, idleLabel, className = "", role }: { pin: Pin; idleLabel?: string; className?: string; role?: string }) {
   const { state, click, label } = useMarkComplete(pin);
+  const standing = Boolean(pin.lane.standing);
+  const resolvedIdle = idleLabel ?? (standing ? "✓ Goal shipped" : "Mark complete");
+  const title = standing
+    ? "Log this goal as shipped in the brief and put the team to sleep until the next idea."
+    : "Move this team to the Done shelf. Its Brainstorm and Lead retire; Reopen brings it back.";
   return (
     <button
       type="button"
@@ -63,13 +73,13 @@ export function MarkCompleteButton({ pin, idleLabel = "Mark complete", className
       className={`pin-complete ${state.kind} ${className}`}
       disabled={state.kind === "busy"}
       data-testid={`pin-complete-${pin.lane.id}`}
-      title="Move this team to the Done shelf. Its Brainstorm and Lead retire; Reopen brings it back."
+      title={title}
       onClick={(e) => {
         e.stopPropagation();
         void click();
       }}
     >
-      {label ?? idleLabel}
+      {label ?? resolvedIdle}
     </button>
   );
 }
@@ -153,7 +163,7 @@ export function LooksDoneCard({ pin, messageId }: { pin: Pin; messageId: string 
   return (
     <div className="pin-looks-done" data-testid={`pin-looks-done-${pin.lane.id}`} onClick={(e) => e.stopPropagation()}>
       <span className="pin-looks-done-text">{pin.lane.name} looks done.</span>
-      <MarkCompleteButton pin={pin} idleLabel="✓ Mark complete" className="btn ok small" />
+      <MarkCompleteButton pin={pin} idleLabel={pin.lane.standing ? "✓ Goal shipped" : "✓ Mark complete"} className="btn ok small" />
       <button
         type="button"
         className="btn ghost small"
