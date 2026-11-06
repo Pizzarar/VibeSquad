@@ -55,13 +55,24 @@ test("focusPin hands a Buddy-less or closed pin to spinUpPin; spinUpPin calls op
   const pf = fs.readFileSync(new URL("../src/pinFocus.ts", import.meta.url), "utf8");
   const focusPinMatch = pf.match(/export async function focusPin\b[\s\S]*?\n\}/);
   assert.ok(focusPinMatch, "focusPin exists");
-  assert.match(focusPinMatch[0], /!pin\.brainstorm \|\| pin\.brainstorm\.agent\.status === "closed"\)/, "dormant pin handled");
+  assert.ok(focusPinMatch[0].includes("liveBuddyId(pin)"), "dormant pin = no live Buddy");
   assert.doesNotMatch(focusPinMatch[0], /return spinUpPin\(pin\)/, "click never auto-spawns");
   assert.match(focusPinMatch[0], /gone: true/, "dormant pin shows the Spin Up picker");
 
   const spinUpMatch = pf.match(/export async function spinUpPin\b[\s\S]*?\n\}/);
   assert.ok(spinUpMatch, "spinUpPin exists");
   assert.match(spinUpMatch[0], /\bawait openPin\(pin\)/, "spinUpPin calls openPin when user clicks Spin Up");
+});
+
+test("closed Buddy is dormant everywhere a pin is opened: reconcile, restore, grid click", () => {
+  const pf = fs.readFileSync(new URL("../src/pinFocus.ts", import.meta.url), "utf8");
+  assert.ok(pf.includes("reconcilePinFocus(f, pin ? liveBuddyId(pin) : null"), "reconcile ignores a closed Buddy");
+  assert.ok(pf.includes("pinBrainstorm: pin ? liveBuddyId(pin) : undefined"), "tryRestore ignores a closed Buddy");
+  const grid = fs.readFileSync(new URL("../src/PinGrid.tsx", import.meta.url), "utf8");
+  const m = grid.slice(grid.indexOf("export function openPinOr"), grid.indexOf("// ── Context meter"));
+  assert.ok(m.includes("const live = liveBuddyId(pin);"), "openPinOr asks for the live Buddy only");
+  assert.ok(m.includes("if (live) onOpenAgent(live);"), "grid opens only a live Buddy");
+  assert.ok(!m.includes("pin.brainstorm.agent.id"), "a closed Buddy never bypasses the picker");
 });
 
 test("closed agents are never woken by usePreview, hidden panes, Composer, SubagentList, or auto-150k restart", () => {

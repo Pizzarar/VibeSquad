@@ -59,6 +59,8 @@ function stubFor(specifier) {
 }
 
 const pinFocusMod = await import("../src/pinFocus.ts");
+globalThis.localStorage ??= { getItem: () => null, setItem() {}, removeItem() {} };
+const panesMod = await import("../src/panes.ts");
 const pinActionsMod = await import("../src/pinActions.ts");
 
 function makePin(laneId = "bug-chaser", lastProfile = undefined) {
@@ -93,13 +95,23 @@ test("focusPin on a dormant pin (no Buddy) does not spawn; it shows the Spin Up 
   assert.equal(f?.laneId, "lane-first-click");
 });
 
-test("focusPin on a closed Buddy does not spawn or reuse the closed id; a live Buddy still opens", async () => {
+const viewOf = (pin) => ({ team: pin.squad, lanes: [{ lane: pin.lane, brainstorm: pin.brainstorm, lead: null, members: pin.brainstorm ? [pin.brainstorm] : [], topicBrainstorms: [], duplicateBrainstorms: [] }], members: pin.brainstorm ? [pin.brainstorm] : [], needsYou: 0 });
+
+test("focusPin on a closed Buddy does not spawn or reuse the closed id, and reconcile keeps gone:true; a live Buddy still opens", async () => {
   const calls = [];
   globalThis.__testOpenPin = async (p) => (calls.push(p.lane.id), "bs-reopened");
-  assert.equal(await pinFocusMod.focusPin(livePin("lane-closed", "closed")), null);
+  const closed = livePin("lane-closed", "closed");
+  globalThis.__testViews = [viewOf(closed)];
+  assert.equal(await pinFocusMod.focusPin(closed), null);
   assert.deepEqual(calls, []);
-  assert.equal(pinFocusMod.getPinFocus()?.agentId, null);
-  assert.equal(pinFocusMod.getPinFocus()?.gone, true);
+  // A panes change runs reconcile() against the views that still carry the closed Buddy.
+  panesMod.toggleFocus();
+  panesMod.toggleFocus();
+  const f = pinFocusMod.getPinFocus();
+  assert.equal(f?.laneId, "lane-closed", "pin stays focused");
+  assert.equal(f?.agentId, null, "reconcile must not follow the closed Buddy");
+  assert.equal(f?.gone, true);
+  globalThis.__testViews = [];
   assert.equal(await pinFocusMod.focusPin(livePin("lane-live", "idle")), "bs-lane-live");
   assert.deepEqual(calls, [], "a live Buddy is focused without a start");
 });
