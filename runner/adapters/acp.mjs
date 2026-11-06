@@ -53,6 +53,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
       });
       let sessionId = null;
       let promptInFlight = false;
+      let imageCapable = false;
       const queue = [];
       let pendingSystem = systemPrompt || '';
 
@@ -69,13 +70,22 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
             case 'agent_message_chunk': if (u.content?.type === 'text') emit('output', { text: u.content.text }); break;
             case 'agent_thought_chunk': if (u.content?.type === 'text') emit('thought', { text: u.content.text }); break;
             case 'tool_call': emit('tool', { phase: 'call', id: u.toolCallId, name: u.title, kind: u.kind }); break;
+            case 'usage_update': if (Number.isFinite(u.used)) emit('usage', { contextTokens: u.used, contextMax: u.size }); break;
             case 'tool_call_update': emit('tool', { phase: 'update', id: u.toolCallId, status: u.status }); break;
             default: break;
           }
         } else if (m.method && m.id !== undefined) {
           // Agent -> client request. The spike grants no permissions and no fs/terminal capabilities.
           // Approve by default (like the claude adapter's 'auto'); only an explicit lane permissionMode 'deny' denies.
-          write({ id: m.id, result: m.method === 'session/request_permission' ? permissionOutcome(m.params, meta.permissionMode) : null });
+          let result = null;
+          if (m.method === 'session/request_permission') {
+            // Logged as request + resolved so pendingPermissions (derived from the log) is accurate for any future non-auto policy.
+            const permId = String(m.params?.toolCall?.toolCallId ?? m.id);
+            emit('permission', { phase: 'request', id: permId, toolName: m.params?.toolCall?.title });
+            result = permissionOutcome(m.params, meta.permissionMode);
+            emit('permission', { phase: 'resolved', id: permId, outcome: result.outcome?.outcome });
+          }
+          write({ id: m.id, result });
         }
       });
       lineReader(child.stderr, (line) => emit('stderr', { line }));
@@ -86,7 +96,8 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
       });
 
       const ready = (async () => {
-        await request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+        const init = await request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+        imageCapable = !!init?.agentCapabilities?.promptCapabilities?.image;
         const s = await request('session/new', { cwd, mcpServers: mcp ? [acpMcpServer(mcpServerSpec({ env, path: mcpPath }))] : [] });
         sessionId = s.sessionId;
         // Model lists come either as `models` (opencode, agy: session/set_model) or as a `model` configOption
@@ -124,11 +135,19 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
       async function pump() {
         if (promptInFlight || !queue.length) return;
         promptInFlight = true;
-        let text = queue.shift();
+        const next = queue.shift();
+        let text = next.text;
         if (pendingSystem) { text = `${pendingSystem}\n\n${text}`; pendingSystem = ''; } // ACP has no system slot: lead the first turn with it
         emit('status', { status: 'running' });
+        // ACP image content blocks need the agent's promptCapabilities.image; without it say so instead of dropping silently.
+        const images = next.images ?? [];
+        if (images.length && !imageCapable) {
+          text += `\n\n[${images.length} image attachment(s) omitted: this agent does not accept image input]`;
+          emit('stderr', { line: 'agent does not advertise promptCapabilities.image; images dropped' });
+        }
+        const prompt = [{ type: 'text', text }, ...(imageCapable ? images.map((i) => ({ type: 'image', data: i.data, mimeType: i.mimeType })) : [])];
         try {
-          const r = await request('session/prompt', { sessionId, prompt: [{ type: 'text', text }] });
+          const r = await request('session/prompt', { sessionId, prompt });
           emit('turn_done', { stopReason: r?.stopReason });
         } catch (e) { emit('error', { message: e.message }); }
         promptInFlight = false;
@@ -136,9 +155,9 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
         pump();
       }
       return {
-        send(text) {
+        send(text, { images = [] } = {}) {
           if (failed) throw new Error(`agent session failed to start: ${failed.message}`);
-          queue.push(text);
+          queue.push({ text, images });
           ready.then(pump, () => {});
         },
         // Cancel ends the current turn AND drops prompts queued behind it (a cancelled lane must not resume on stale asks).

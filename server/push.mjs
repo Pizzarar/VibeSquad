@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
-import { getBackend } from "./backend/index.mjs";
+import { getBackend, runnerLanes, sharedRunnerBackend } from "./backend/index.mjs";
 import { readPaseoConfig } from "./brainstorm.mjs";
 import { readDaemonPassword, readPaseoLocalCredential } from "./daemon-password.mjs";
 import { LEGACY_NEEDS_LABEL, clearConfigWarning, loadUserSettings, readJsonFileWithBom } from "./user-settings.mjs";
@@ -475,6 +475,49 @@ export function evaluateAgentTransition(prev, next, dedupeSet) {
   return notifications;
 }
 
+/**
+ * Web Push for runner-owned agents (no Paseo daemon involved): the runner's event stream feeds the same
+ * transition detector (running -> idle/error, needs-you, permission) the Paseo path uses. A (re)connect roster
+ * only seeds dedupe keys, so a server restart never re-pages. Returns the unsubscribe.
+ */
+export function watchRunnerTransitions(runner, { dedupeSet = new Set(), notify = defaultNotify } = {}) {
+  const agentsById = new Map();
+  const seed = (agent) => {
+    agentsById.set(agent.id, agent);
+    for (const p of Array.isArray(agent.pendingPermissions) ? agent.pendingPermissions : []) dedupeSet.add(`${agent.id}::perm:${String(p?.id ?? p?.toolName ?? "perm")}`);
+    const needsYou = String(agent.labels?.["needs-you"] ?? agent.labels?.[LEGACY_NEEDS_LABEL] ?? "").trim();
+    if (needsYou && needsYou !== "cleared") dedupeSet.add(`${agent.id}::needs-you:${needsYou}`);
+  };
+  return runner.subscribeEvents((ev) => {
+    if (ev.kind === "roster") {
+      for (const a of ev.agents ?? []) seed(a);
+    } else if (ev.kind === "agent" && ev.agent?.id) {
+      const prev = agentsById.get(ev.agent.id);
+      agentsById.set(ev.agent.id, ev.agent);
+      for (const note of evaluateAgentTransition(prev, ev.agent, dedupeSet)) notify(note);
+    } else if (ev.kind === "permission") {
+      const agent = agentsById.get(ev.agentId) ?? { id: ev.agentId, title: ev.agentId.slice(0, 8) };
+      const key = `${ev.agentId}::perm:${String(ev.request?.id ?? ev.request?.toolName ?? "perm")}`;
+      if (dedupeSet.has(key)) return;
+      dedupeSet.add(key);
+      notify({
+        title: "VibeSquad · Permission Needed",
+        body: `${agent.title || ev.agentId}: approval requested`,
+        url: `/?agent=${encodeURIComponent(ev.agentId)}&focus=needs-you`,
+        tag: `vs-perm-${ev.agentId}`,
+        agentId: ev.agentId,
+        kind: "permission",
+      });
+    } else if (ev.kind === "remove") {
+      agentsById.delete(ev.agentId);
+    }
+  });
+}
+
+function defaultNotify(note) {
+  if (pushKindEnabled(note.kind)) broadcastWebPush(note).catch(() => {});
+}
+
 let activeWatcher = null;
 let watcherClient = null;
 let watcherStarted = false;
@@ -512,7 +555,7 @@ export async function restartPushWatcher(rootDir) {
  * and dispatches Web Push notifications on permission requests, needs-you transitions,
  * and lead/worker turn completions or errors.
  */
-export function startPushWatcher(rootDir = REPO_ROOT) {
+export function startPushWatcher(rootDir = REPO_ROOT, { runner = runnerLanes().size ? sharedRunnerBackend() : null } = {}) {
   lastRootDir = rootDir;
   if (activeWatcher) return activeWatcher;
   watcherStarted = true;
@@ -603,6 +646,8 @@ export function startPushWatcher(rootDir = REPO_ROOT) {
     }
   });
 
+  const stopRunnerWatch = runner ? watchRunnerTransitions(runner, { dedupeSet }) : null;
+
   backend.connect().then(() => seedAgents()).catch(() => {});
   unrefClientTimers(client);
   queueMicrotask(() => unrefClientTimers(client));
@@ -610,6 +655,7 @@ export function startPushWatcher(rootDir = REPO_ROOT) {
   activeWatcher = {
     stop() {
       stopped = true;
+      stopRunnerWatch?.();
       watcherStarted = false;
       activeWatcher = null;
       if (watcherClient === client) watcherClient = null;

@@ -304,6 +304,8 @@ const LOG_TYPES = new Set(["done", "decision", "blocker", "needs-you", "handoff"
 const UI_LOG_TYPES = new Set(["you", "needs-you", "handoff", "metric", "decision", LEGACY_USER_TYPE, LEGACY_NEEDS_LABEL]);
 
 const MAX_BODY_BYTES = 1024 * 1024;
+const RUNNER_INPUT_RE = /^\/__vibesquad\/runner\/agents\/[^/]+\/input$/;
+const MAX_RUNNER_INPUT_BYTES = 24 * 1024 * 1024; // composer image attachments (base64) ride this one route
 const AGENT_ID_STRICT = /^[A-Za-z0-9_-]{1,64}$/;
 // Test/DI hooks and server-derived values that must never be taken from an HTTP body. `cwd` and `labels`
 // are derived from the lane or the daemon's own agent record; the timing knobs would skip cooldowns.
@@ -341,7 +343,7 @@ const overSpawnBudget = (res) => {
   return true;
 };
 
-function readBody(req) {
+function readBody(req, limit = MAX_BODY_BYTES) {
   return new Promise((ok, fail) => {
     let body = "";
     let size = 0;
@@ -349,7 +351,7 @@ function readBody(req) {
     req.on("data", (c) => {
       if (done) return;
       size += c.length;
-      if (size > MAX_BODY_BYTES) {
+      if (size > limit) {
         done = true;
         fail(Object.assign(new Error("payload too large"), { status: 413 }));
         return;
@@ -1579,7 +1581,8 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     if (isApi && !isOwner(req) && ((req.method !== "GET" && req.method !== "HEAD") || isGatedRead(path, req.url))) {
       return sendJson(res, 403, { error: READ_ONLY_ERROR, readOnly: true });
     }
-    if (Number(req.headers["content-length"] ?? 0) > MAX_BODY_BYTES) return sendJson(res, 413, { error: "payload too large" });
+    const bodyLimit = RUNNER_INPUT_RE.test(path) ? MAX_RUNNER_INPUT_BYTES : MAX_BODY_BYTES;
+    if (Number(req.headers["content-length"] ?? 0) > bodyLimit) return sendJson(res, 413, { error: "payload too large" });
     if (path === "/api/auth/status" || path === "/__vibesquad/auth/status") return handleAuthStatus(req, res, rootDir);
     if (path === "/api/teams") return handleTeams(req, res, rootDir);
     if (path === "/api/profiles") return handleProfiles(req, res);
@@ -1594,7 +1597,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
       return handleDesktopUpdateJson(req, res, rootDir);
     }
     if (!path.startsWith("/__vibesquad/")) return next?.();
-    if (path.startsWith("/__vibesquad/runner/")) return handleRunnerApi(req, res, { readBody, sendJson });
+    if (path.startsWith("/__vibesquad/runner/")) return handleRunnerApi(req, res, { readBody: (r) => readBody(r, bodyLimit), sendJson });
     switch (path) {
       case "/__vibesquad/pair/start":
         return handlePairStart(req, res);

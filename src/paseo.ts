@@ -170,7 +170,7 @@ async function deliver(agentId: string, text: string, args: SendArgs): Promise<v
   const lb = (state.agents.get(agentId)?.labels ?? {}) as Record<string, string>;
   perfSendBegin(agentId, lb.team, lb.lane);
   if (isRunnerId(agentId)) {
-    await runnerSend(agentId, text);
+    await runnerSend(agentId, text, { images: args.images, activeTurnBehavior: sendOpts.activeTurnBehavior });
     perfSendResolved(agentId);
     return;
   }
@@ -393,6 +393,10 @@ async function refetchWorkspaces() {
   set({ workspaces: next });
 }
 
+// Which transports are up: state.conn is "connected" when either the Paseo websocket or the runner event stream is.
+let runnerConn = false;
+let paseoConn = false;
+
 async function connect(): Promise<void> {
   try {
     if (!DEMO && !isRemote()) {
@@ -402,12 +406,15 @@ async function connect(): Promise<void> {
       }
     }
     await daemonClient.connect();
+    paseoConn = true;
     set({ conn: "connected", status: "connected", error: undefined, authFailureReason: null });
     refetchAll().catch(console.error);
     refetchWorkspaces().catch(console.error);
     refetchProviderUsage();
   } catch (e) {
+    paseoConn = false;
     const authReason = readClientAuthFailure(daemonClient, e);
+    if (!authReason && runnerConn) return; // Paseo is down but the runner stream is up: stay connected
     if (authReason) {
       set({
         conn: "disconnected",
@@ -462,6 +469,7 @@ export function start() {
   // DaemonClient reconnects on its own (exponential backoff); we mirror its state and refetch after a gap.
   let wasConnected = false;
   (daemonClient as unknown as { subscribeConnectionStatus?: (cb: (s: { status: string; reason?: string }) => void) => () => void }).subscribeConnectionStatus?.((s) => {
+    paseoConn = s.status === "connected";
     if (s.status === "connected") {
       set({ conn: "connected", status: "connected", error: undefined, authFailureReason: null });
       if (!wasConnected) {
@@ -474,6 +482,7 @@ export function start() {
       return;
     }
     wasConnected = false;
+    if (runnerConn && !readClientAuthFailure(daemonClient, s)) return; // runner stream keeps the UI live
     if (s.status === "connecting" || s.status === "idle") {
       if (state.conn !== "connecting") set({ conn: "connecting", status: "connecting" });
       return;
@@ -650,9 +659,17 @@ export async function attachFiles(cwd: string, files: string[]): Promise<string[
 
 // Runner-backed lanes (inert unless one is switched): mirror the runner roster into the store.
 if (!DEMO && typeof window !== "undefined") {
-  startRunnerBridge((agents) => {
-    const live = new Set(agents.map((a) => a.id));
-    for (const a of agents) if (!sameAgent(state.agents.get(a.id), a)) upsertLocalAgent(a);
-    for (const id of state.agents.keys()) if (isRunnerId(id) && !live.has(id)) removeLocalAgent(id);
-  });
+  startRunnerBridge(
+    (agents) => {
+      const live = new Set(agents.map((a) => a.id));
+      for (const a of agents) if (!sameAgent(state.agents.get(a.id), a)) upsertLocalAgent(a);
+      for (const id of state.agents.keys()) if (isRunnerId(id) && !live.has(id)) removeLocalAgent(id);
+    },
+    (up) => {
+      runnerConn = up;
+      // The VS server's own stream is a connection: with the Paseo websocket down (or absent) the UI is still live.
+      if (up && state.conn !== "connected") set({ conn: "connected", status: "connected", error: undefined, authFailureReason: null, rosterLoaded: true });
+      else if (!up && !paseoConn && state.conn === "connected") set({ conn: "disconnected", status: "disconnected" });
+    },
+  );
 }

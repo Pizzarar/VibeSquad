@@ -50,6 +50,56 @@ export class RunnerClient {
     return data;
   }
 
+  /**
+   * Tail the runner's /events SSE stream. Reconnects (retryMs) until close(); onOpen/onClose bracket each connection,
+   * onMessage gets each parsed { id, event }. close() aborts the request and clears the retry timer: nothing lingers.
+   */
+  stream({ onMessage, onOpen, onClose, retryMs = 2000 } = {}) {
+    let closed = false;
+    let ac = null;
+    let timer = null;
+    const run = async () => {
+      let opened = false;
+      try {
+        this.conn = readDiscovery(this.home) ?? this.conn;
+        if (!this.conn) throw new Error("runner is not running");
+        ac = new AbortController();
+        const res = await this.fetch(`http://127.0.0.1:${this.conn.port}/events`, { headers: { authorization: `Bearer ${this.conn.token}` }, signal: ac.signal });
+        if (!res.ok || !res.body) throw new Error(`runner events ${res.status}`);
+        opened = true;
+        if (!closed) onOpen?.();
+        const dec = new TextDecoder();
+        let buf = "";
+        for await (const chunk of res.body) {
+          buf += dec.decode(chunk, { stream: true });
+          let i;
+          while ((i = buf.indexOf("\n\n")) >= 0) {
+            const frame = buf.slice(0, i);
+            buf = buf.slice(i + 2);
+            const data = frame.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trimStart()).join("\n");
+            if (!data) continue;
+            try { onMessage?.(JSON.parse(data)); } catch { /* malformed frame: skip */ }
+          }
+        }
+      } catch {
+        this.conn = null; // stale discovery (runner restarted on a new port): re-read next time
+      }
+      if (opened && !closed) onClose?.();
+      if (!closed) {
+        timer = setTimeout(run, retryMs);
+        timer.unref?.();
+      }
+    };
+    run();
+    return {
+      close() {
+        closed = true;
+        clearTimeout(timer);
+        ac?.abort();
+      },
+    };
+  }
+
   async healthy() {
     this.conn = readDiscovery(this.home);
     if (!this.conn) return false;

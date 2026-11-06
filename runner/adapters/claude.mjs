@@ -30,6 +30,12 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
         try { m = JSON.parse(line); } catch { emit('raw', { line }); return; }
         if (m.type === 'system' && m.subtype === 'init') emit('session', { sessionId: m.session_id, model: m.model });
         else if (m.type === 'assistant') {
+          const u = m.message?.usage;
+          if (u) {
+            // Context size = everything the last call read (fresh + cached input); outputs add on top for the next call.
+            const input = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+            emit('usage', { contextTokens: input + (u.output_tokens ?? 0), inputTokens: input, outputTokens: u.output_tokens ?? 0 });
+          }
           for (const b of m.message?.content ?? []) {
             if (b.type === 'text' && b.text) emit('output', { text: b.text });
             else if (b.type === 'tool_use') emit('tool', { phase: 'call', id: b.id, name: b.name, input: b.input });
@@ -48,10 +54,14 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
       child.on('error', (err) => onExit({ code: null, error: String(err.message) }));
       child.on('exit', (code, signal) => onExit({ code, signal }));
       return {
-        send(text) {
+        send(text, { images = [] } = {}) {
           turnOpen = true;
           emit('status', { status: 'running' });
-          stdin({ type: 'user', message: { role: 'user', content: text } });
+          // stream-json accepts Anthropic content blocks: images go as base64 sources ahead of the text.
+          const content = images.length
+            ? [...images.map((i) => ({ type: 'image', source: { type: 'base64', media_type: i.mimeType, data: i.data } })), { type: 'text', text }]
+            : text;
+          stdin({ type: 'user', message: { role: 'user', content } });
         },
         // Interrupts the current turn only; prompts already written to stdin still run (the ACP adapter drops its queue).
         cancel() {

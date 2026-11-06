@@ -63,5 +63,6 @@ export function evaluateAgentTransition(prev: any, next: any, dedupeSet: Set<str
   agentId: string;
   kind: string;
 }>;
-export function startPushWatcher(rootDir?: string): { stop(): Promise<void> };
+export function startPushWatcher(rootDir?: string, opts?: { runner?: unknown }): { stop(): Promise<void> };
+export function watchRunnerTransitions(runner: { subscribeEvents(l: (ev: any) => void): () => void }, opts?: { dedupeSet?: Set<string>; notify?: (note: any) => void }): () => void;
 export function pushKindEnabled(kind: string, pushEvents?: Partial<Record<"permission" | "needsYou" | "finished" | "errored", boolean>>): boolean;
