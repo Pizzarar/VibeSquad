@@ -77,6 +77,13 @@ describe("signing env (F1)", () => {
     assert.ok(!argv.join(" ").includes("hunter2"));
   });
 
+  test("password falls back to the credential store via the injected reader; env wins", () => {
+    const read = (target) => (target === "vibesquad/updater-key" ? "from-store" : null);
+    assert.equal(updaterSigningEnv({}, "/k", { read }).TAURI_SIGNING_PRIVATE_KEY_PASSWORD, "from-store");
+    assert.equal(updaterSigningEnv({ TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "env-pw" }, "/k", { read }).TAURI_SIGNING_PRIVATE_KEY_PASSWORD, "env-pw");
+    assert.equal(updaterSigningEnv({}, "/k", { read: () => null }).TAURI_SIGNING_PRIVATE_KEY_PASSWORD, "");
+  });
+
   test("sign stage passes no password in any exec argv", () => {
     const root = makeRoot();
     rmSync(join(root, "dist-desktop", "VibeSquad-setup.exe.sig"));

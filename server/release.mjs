@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveSecret } from "./secrets.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
@@ -115,7 +116,12 @@ export function buildSigningEnv(baseEnv = process.env, keyPath = "") {
  * (never argv, where it would show in process listings). Single seam: a later secrets resolver swaps the
  * `password` source here.
  */
-export function updaterSigningEnv(baseEnv = process.env, keyPath = "", password = baseEnv.TAURI_SIGNING_PRIVATE_KEY_PASSWORD ?? "") {
+export function updaterSigningEnv(
+  baseEnv = process.env,
+  keyPath = "",
+  deps = {},
+  password = resolveSecret({ envVar: "TAURI_SIGNING_PRIVATE_KEY_PASSWORD", target: "vibesquad/updater-key", required: false }, { env: baseEnv, ...deps }) ?? "",
+) {
   const env = buildSigningEnv({ ...baseEnv, TAURI_SIGNING_PRIVATE_KEY_PASSWORD: password }, keyPath);
   delete env.TAURI_SIGNING_PRIVATE_KEY;
   return env;
