@@ -5,7 +5,7 @@ import {
   appendVsLogEntry,
   createDaemonClient,
   createSpawnTimer,
-  findNewestPlanFile,
+  findLanePlanFile,
   readBrainstormSummary,
 } from "./brainstorm.mjs";
 import { effectiveAgentRole, formatDisplayTitle, isDigestAgent, isRetiredAgent, laneCodeFor, ordOf } from "./identity.mjs";
@@ -573,7 +573,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
 
     const summary = readBrainstormSummary(laneId, rootDir);
     const cwd = oldLead?.cwd || rootDir;
-    const latestPlan = findNewestPlanFile(cwd, rootDir);
+    const latestPlan = findLanePlanFile(cwd, rootDir, laneId, summary.content);
     const { profileName, spawnCfg } = resolveLeadProfile(oldLead, deps.profilesPath);
 
     const prompt = buildSuccessorPrompt({

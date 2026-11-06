@@ -20,6 +20,9 @@ export function leadLine(pin: Pick<Pin, "lead">, last?: { who: string; text: str
   return `Lead · ${last ? last.text : "No messages yet"}`;
 }
 
+// A double-click must send one check-in: the lead's status only flips to running once the first lands.
+const sending = new Set<string>();
+
 export async function runCheckin(
   pin: Pick<Pin, "lead">,
   deps: { open: (agentId: string) => void; send: (agentId: string, text: string) => Promise<void> },
@@ -27,7 +30,13 @@ export async function runCheckin(
   const action = checkinAction(pin);
   if (action !== "send" || !pin.lead) return action;
   const id = pin.lead.agent.id;
-  deps.open(id);
-  await deps.send(id, CHECKIN_PROMPT);
+  if (sending.has(id)) return "busy";
+  sending.add(id);
+  try {
+    deps.open(id);
+    await deps.send(id, CHECKIN_PROMPT);
+  } finally {
+    sending.delete(id);
+  }
   return action;
 }
