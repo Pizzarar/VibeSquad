@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import test from 'node:test';
 
 // src/runnerBridge.ts is plain TypeScript with no DOM imports at load: node strips the types. fetch is stubbed per case.
@@ -42,6 +43,12 @@ test('MCP withBackend: a non-runner id goes through the RoutingBackend and recor
     const seen = await ctx.withBackend({ lane: 'x' }, async (b) => ({ routing: b instanceof RoutingBackend, down: b.paseoUnavailable }));
     assert.deepEqual(seen, { routing: true, down: true });
   } finally {
+    // withBackend boots the runner for a trusted caller (ensureRunner): stop the one this test started, by its own pid file.
+    try {
+      const { readFileSync } = await import('node:fs');
+      const pid = JSON.parse(readFileSync(path.join(process.env.VIBESQUAD_HOME, 'runner', 'runner.json'), 'utf8')).pid;
+      if (pid) process.kill(pid);
+    } catch {}
     if (prev === undefined) delete process.env.PASEO_DAEMON;
     else process.env.PASEO_DAEMON = prev;
   }
