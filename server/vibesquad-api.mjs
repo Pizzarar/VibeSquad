@@ -1,6 +1,8 @@
 import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { handleRunnerApi } from "./runner-api.mjs";
 import { handleSchedulesApi } from "./schedules.mjs";
+import { sharedRunnerBackend } from "./backend/index.mjs";
+import { handleTerminalsApi, isTerminalsPath } from "./terminals-api.mjs";
 import { getStale, peekStale, readBuildStamp } from "./stale-runtime.mjs";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -409,6 +411,7 @@ export function isGatedRead(pathOrMethod, urlOrPath = "") {
   if (path === "/__vibesquad/paseo/surface") return true; // daemon config: listen, CORS, hub, backups
   if (path === "/__vibesquad/local-image") return true; // file contents
   if (path === "/__vibesquad/schedules" || path.startsWith("/__vibesquad/schedules/")) return true; // prompts, target configs, run logs
+  if (isTerminalsPath(path)) return true; // live shells and script logs
   if (ADE_GATED_READ_PATHS.includes(path)) return true; // quick open / find in files: workspace file names and contents
   return false;
 }
@@ -758,6 +761,24 @@ function allowedAttachRoots(rootDir, opts) {
     }
   } catch {}
   return [...new Set(roots)].map(realOrNull).filter(Boolean);
+}
+
+/** A terminal / script cwd must sit inside a team path or a Paseo or runner agent cwd (never an arbitrary path). Returns its real path or null. */
+async function resolveShellCwd(cwd, rootDir, opts) {
+  if (!cwd || isUncLikePath(cwd)) return null;
+  let roots = allowedAttachRoots(rootDir, opts);
+  try {
+    const agents = await sharedRunnerBackend().listAgents();
+    roots = [...new Set([...roots, ...agents.map((a) => realOrNull(a.cwd)).filter(Boolean)])];
+  } catch {}
+  if (!lexicallyInside(cwd, roots)) return null;
+  const real = realOrNull(cwd);
+  try {
+    if (!real || !statSync(real).isDirectory()) return null;
+  } catch {
+    return null;
+  }
+  return roots.some((r) => insideDir(real, r)) ? real : null;
 }
 
 // Quick open / find in files call per keystroke and the agent scan reads every ~/.paseo agent file:
@@ -1598,6 +1619,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     if (!path.startsWith("/__vibesquad/")) return next?.();
     if (path.startsWith("/__vibesquad/runner/")) return handleRunnerApi(req, res, { readBody, sendJson });
     if (path === "/__vibesquad/schedules" || path.startsWith("/__vibesquad/schedules/")) return handleSchedulesApi(req, res, { readBody, sendJson });
+    if (isTerminalsPath(path)) return handleTerminalsApi(req, res, { readBody, sendJson, resolveCwd: (cwd) => resolveShellCwd(cwd, rootDir, opts) });
     switch (path) {
       case "/__vibesquad/pair/start":
         return handlePairStart(req, res);
