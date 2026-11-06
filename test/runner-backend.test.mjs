@@ -268,3 +268,25 @@ test('routing: a dead runner never breaks Paseo lists', async () => {
   const b = getBackend(c, { lanes: () => new Set(['own']), runner: r });
   assert.deepEqual((await b.fetchAgents()).entries.map((e) => e.agent.id), ['p-1']);
 });
+
+test('lead-handoff list path (listDaemonAgents) sees runner leads when a lane is switched, and pages do not repeat them', async () => {
+  const { listDaemonAgents } = await import('../server/detach-children.mjs');
+  const pages = [];
+  const c = {
+    fetchAgents: async (o) => {
+      pages.push(o.page?.cursor ?? null);
+      return o.page?.cursor
+        ? { entries: [{ agent: { id: 'p-2' } }], pageInfo: { hasMore: false } }
+        : { entries: [{ agent: { id: 'p-1' } }], pageInfo: { hasMore: true, nextCursor: 'c1' } };
+    },
+  };
+  const runnerLead = { id: 'rn-lead', labels: { role: 'lead', lane: 'own' } };
+  const r = { fetchAgents: async () => ({ entries: [{ agent: runnerLead }] }) };
+  const routed = getBackend(c, { lanes: () => new Set(['own']), runner: r });
+  const got = await listDaemonAgents(routed);
+  assert.deepEqual(got.map((a) => a.id), ['p-1', 'rn-lead', 'p-2']);
+  assert.deepEqual(pages, [null, 'c1']);
+  // Paseo-only: no switched lane -> plain PaseoBackend, list is exactly Paseo's
+  const plain = await listDaemonAgents(getBackend(c, { lanes: () => new Set() }));
+  assert.deepEqual(plain.map((a) => a.id), ['p-1', 'p-2']);
+});

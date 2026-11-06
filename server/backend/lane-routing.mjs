@@ -103,6 +103,8 @@ for (const name of ["fetchAgents", "listAgents"]) {
       const paseoFn = this.paseo[name];
       if (!paseoFn) return undefined;
       return async (...args) => {
+        // Runner agents join the first page only; a later page (cursor) would repeat them.
+        if (args[0]?.page?.cursor) return paseoFn(...args);
         const [p, r] = await Promise.all([paseoFn(...args), this.runner[name](...args).catch(() => null)]);
         return mergeLists(p, r);
       };

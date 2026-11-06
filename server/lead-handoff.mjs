@@ -983,7 +983,7 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
       sharedSlots: body.sharedSlots ?? true,
       async listAgents() {
         if (Array.isArray(body.agents)) return body.agents;
-        return connected && client ? listDaemonAgents(client) : [];
+        return connected && client ? listDaemonAgents(backend) : [];
       },
       async getAgent(id) {
         if (body.oldLead && body.oldLead.id === id) return body.oldLead;
@@ -1050,7 +1050,7 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
       const liveList = Array.isArray(body.agents)
         ? body.agents.map((a) => a?.agent ?? a)
         : connected && client
-          ? await listDaemonAgents(client)
+          ? await listDaemonAgents(backend)
           : [];
       if (body.agentId) {
         lead = liveList.find((a) => a?.id === body.agentId) ?? null;
