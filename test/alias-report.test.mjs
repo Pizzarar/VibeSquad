@@ -62,7 +62,7 @@ test('vs mcp alias-report reads team logs under VIBESQUAD_HOME (text + --json)',
 
 test('shared prompt text leads with VS MCP names and keeps the Paseo names as the fallback', () => {
   assert.match(WORKER_PACK, /use `send` \(VS MCP; `send_agent_prompt` on the Paseo MCP\)/);
-  assert.match(LEAD_FALLBACK_PACK, /`spawn_worker` \(VS MCP; `create_agent` on the Paseo MCP\)/);
+  assert.match(LEAD_FALLBACK_PACK, /`spawn_worker` \(VS MCP: `title`, `profile`, `prompt`, `cwd`, `labels` `\{job, ord\}`; the profile supplies provider\/model\/mode\)\. On the Paseo MCP use `create_agent` and pass `provider`, `model`, `mode`/);
   assert.match(ART_PAINTER_NOTE_BODY, /via `send` \(VS MCP; `send_agent_prompt` on the Paseo MCP\)/);
   for (const text of [WORKER_PACK, LEAD_FALLBACK_PACK, ART_PAINTER_NOTE_BODY]) assert.ok(!/(?<![`(]|Paseo MCP; )\b(?:Paseo send_agent_prompt|calling `create_agent`)/.test(text));
 });
