@@ -435,6 +435,7 @@ export const EXTRA_SETTINGS: { id: string; section: HomeSection; label: string }
   { id: "profiles", section: "profiles", label: "Agent profiles" },
   { id: "profile-import", section: "profiles", label: "Import profiles" },
   { id: "update-channel", section: "about", label: "Update channel" },
+  { id: "start-at-login", section: "about", label: "Start at login (agents run without a window)" },
   { id: "check-updates", section: "about", label: "Check for updates" },
   { id: "diagnostics", section: "about", label: "Diagnostics & logs" },
   { id: "licenses", section: "about", label: "Licenses" },

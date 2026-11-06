@@ -60,6 +60,10 @@ fn default_fallback_host() -> String {
     DEFAULT_MESHNET_HOST.to_string()
 }
 
+fn default_start_at_login() -> bool {
+    true
+}
+
 fn default_update_channel() -> String {
     "stable".to_string()
 }
@@ -79,7 +83,9 @@ pub struct DesktopConfig {
     pub last_meshnet_host: String,
     #[serde(default)]
     pub device_token: String,
-    #[serde(default)]
+    /// Defaults ON (a config with no value counts as on; an explicit `false` stays off): the login entry starts the
+    /// server + runner with no window (`--background`), so agents are reachable without opening the app.
+    #[serde(default = "default_start_at_login")]
     pub start_at_login: bool,
     #[serde(default)]
     pub last_hash: String,
@@ -103,7 +109,7 @@ impl Default for DesktopConfig {
             last_lan_host: String::new(),
             last_meshnet_host: String::new(),
             device_token: String::new(),
-            start_at_login: false,
+            start_at_login: default_start_at_login(),
             last_hash: String::new(),
             last_route: String::new(),
             update_channel: default_update_channel(),
@@ -373,29 +379,98 @@ async fn check_local_server_healthy(client: &reqwest::Client, host: &str) -> Res
     Ok(())
 }
 
+/// CLI flag the login entry passes: start the server + runner, open no window, exit.
+pub const BACKGROUND_FLAG: &str = "--background";
+
+pub fn is_background_arg(args: &[String]) -> bool {
+    args.iter().skip(1).any(|a| a == BACKGROUND_FLAG)
+}
+
+/// The exact value stored in the Run key: the quoted exe plus the headless flag.
+pub fn login_command_line(exe: &std::path::Path) -> String {
+    format!("\"{}\" {}", exe.display(), BACKGROUND_FLAG)
+}
+
+const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+const RUN_VALUE_NAME: &str = "VibeSquad";
+
+/// Writes/removes the per-user Run entry under `subkey` (injectable so tests never touch the real Run key).
 #[cfg(windows)]
-fn set_start_at_login_registry(enabled: bool) -> Result<(), String> {
+fn write_run_entry(subkey: &str, enabled: bool, exe: &std::path::Path) -> Result<(), String> {
     use winreg::enums::*;
     use winreg::RegKey;
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let (run_key, _) = hkcu
-        .create_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Run")
-        .map_err(|e| e.to_string())?;
+    let (run_key, _) = hkcu.create_subkey(subkey).map_err(|e| e.to_string())?;
     if enabled {
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let val = format!("\"{}\"", exe.display());
         run_key
-            .set_value("VibeSquad", &val)
+            .set_value(RUN_VALUE_NAME, &login_command_line(exe))
             .map_err(|e| e.to_string())?;
     } else {
-        let _ = run_key.delete_value("VibeSquad");
+        let _ = run_key.delete_value(RUN_VALUE_NAME);
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn set_start_at_login_registry(enabled: bool) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    write_run_entry(RUN_KEY, enabled, &exe)
 }
 
 #[cfg(not(windows))]
 fn set_start_at_login_registry(_enabled: bool) -> Result<(), String> {
     Ok(())
+}
+
+fn port_of_host(host: &str) -> u16 {
+    normalize_host(host)
+        .rsplit(':')
+        .next()
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(4180)
+}
+
+/// `--background`: make sure the VibeSquad server (which boots the runner) is up, with no window, then exit.
+/// The server is spawned detached (own process group, broken away from this process's job when allowed) so it
+/// outlives this launcher and a later app quit never reaches it. A healthy server is reused, never duplicated.
+fn run_background(cfg: &DesktopConfig) -> i32 {
+    // The off-switch always wins, even if a stale Run value survived.
+    if !cfg.start_at_login {
+        return 0;
+    }
+    let mode = cfg.server_mode.as_str();
+    // Paired to someone else's server: nothing to run locally. Unset (fresh install) counts as local.
+    if (!mode.is_empty() && mode != "local" && mode != "relay") || !is_local_host(&cfg.server_host) {
+        return 0;
+    }
+    let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
+        return 1;
+    };
+    let Ok((client, _)) = build_http_and_ws_clients() else {
+        return 1;
+    };
+    if rt.block_on(check_local_server_healthy(&client, &cfg.server_host)).is_ok() {
+        return 0;
+    }
+    let _ = fs::remove_file(server_pid_path());
+    let Some((node, runtime_dir)) = find_bundled_runtime() else {
+        return 1;
+    };
+    let port = port_of_host(&cfg.server_host);
+    let child = match spawn_server_process(&node, &runtime_dir, mode, Some(port), true) {
+        Ok(c) => c,
+        Err(_) => return 1,
+    };
+    let _ = fs::create_dir_all(config_dir());
+    let _ = fs::write(server_pid_path(), child.id().to_string());
+    // Dropping `child` does not kill it; wait briefly for health so a failed boot shows in the exit code.
+    for _ in 0..50 {
+        if rt.block_on(check_local_server_healthy(&client, &cfg.server_host)).is_ok() {
+            return 0;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    1
 }
 
 #[derive(Debug, Clone, Default)]
@@ -420,6 +495,7 @@ pub struct SharedAppState {
     pub ws_tls_connector: RwLock<Connector>,
     pub app_handle: RwLock<Option<AppHandle>>,
     pub tray_needs_item: RwLock<Option<MenuItem<tauri::Wry>>>,
+    pub tray_login_item: RwLock<Option<CheckMenuItem<tauri::Wry>>>,
     pub tracker: Mutex<AgentAlertTracker>,
     pub updater: Mutex<updater::UpdaterState>,
     /// The `node.exe server/serve.mjs` child we spawned (None when we reused an already-running server).
@@ -890,6 +966,51 @@ async fn handle_desktop_choose_mode(
         Json(json!({ "ok": false, "error": "mode must be 'local', 'relay' or 'remote'" })),
     )
         .into_response()
+}
+
+#[derive(Deserialize)]
+struct StartAtLoginPayload {
+    enabled: bool,
+}
+
+/// One message for whichever of the registry write / config save failed (None when both worked).
+fn start_at_login_error(reg: &Result<(), String>, saved: &Result<(), String>) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Err(e) = reg {
+        parts.push(format!("login entry: {}", e));
+    }
+    if let Err(e) = saved {
+        parts.push(format!("saving settings: {}", e));
+    }
+    if parts.is_empty() { None } else { Some(parts.join("; ")) }
+}
+
+async fn handle_start_at_login_get(State(state): State<Arc<SharedAppState>>) -> Response {
+    let enabled = state.config.read().unwrap().start_at_login;
+    Json(json!({ "ok": true, "enabled": enabled })).into_response()
+}
+
+async fn handle_start_at_login_set(
+    State(state): State<Arc<SharedAppState>>,
+    Json(payload): Json<StartAtLoginPayload>,
+) -> Response {
+    let reg = set_start_at_login_registry(payload.enabled);
+    let saved = {
+        let mut cfg = state.config.write().unwrap();
+        cfg.start_at_login = payload.enabled;
+        save_config(&cfg)
+    };
+    if let Some(item) = state.tray_login_item.read().unwrap().as_ref() {
+        let _ = item.set_checked(payload.enabled);
+    }
+    match start_at_login_error(&reg, &saved) {
+        Some(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "enabled": payload.enabled, "error": error })),
+        )
+            .into_response(),
+        None => Json(json!({ "ok": true, "enabled": payload.enabled })).into_response(),
+    }
 }
 
 async fn handle_desktop_ping(
@@ -1984,6 +2105,59 @@ fn server_pid_path() -> PathBuf {
     config_dir().join("server.pid")
 }
 
+/// Spawns `node server/serve.mjs` without a window. `background` (login entry) additionally asks the server to boot
+/// the runner and detaches it from this process (new process group, job breakaway when the job allows it).
+fn spawn_server_process(
+    node: &std::path::Path,
+    runtime_dir: &std::path::Path,
+    mode: &str,
+    port: Option<u16>,
+    background: bool,
+) -> Result<std::process::Child, String> {
+    let build = |breakaway: bool| {
+        let mut cmd = std::process::Command::new(node);
+        cmd.arg("server/serve.mjs")
+            .current_dir(runtime_dir)
+            .env("VIBESQUAD_RUNTIME_DIR", runtime_dir)
+            .env("VIBESQUAD_BUNDLED_NODE", node)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        if mode == "relay" {
+            // In relay mode we only serve the static bundle for a remote #offer= link;
+            // never spawn the local Paseo daemon.
+            cmd.env("VIBESQUAD_NO_DAEMON", "1");
+        }
+        if background {
+            cmd.env("VIBESQUAD_START_RUNNER", "1");
+        }
+        if let Some(p) = port {
+            cmd.env("VIBESQUAD_PORT", p.to_string());
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let mut flags: u32 = 0x0800_0000; // CREATE_NO_WINDOW
+            if background {
+                flags |= 0x0000_0200; // CREATE_NEW_PROCESS_GROUP
+                if breakaway {
+                    flags |= 0x0100_0000; // CREATE_BREAKAWAY_FROM_JOB
+                }
+            }
+            cmd.creation_flags(flags);
+        }
+        #[cfg(not(windows))]
+        let _ = breakaway;
+        cmd
+    };
+    match build(true).spawn() {
+        Ok(c) => Ok(c),
+        // A job without breakaway rights rejects CREATE_BREAKAWAY_FROM_JOB (access denied): retry plainly.
+        Err(_) if background => build(false).spawn().map_err(|e| e.to_string()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Starts the bundled VibeSquad server when the configured local host is not healthy. Reuses a healthy one.
 async fn ensure_local_server_running(state: &Arc<SharedAppState>) {
     let (mode, host) = {
@@ -2010,25 +2184,7 @@ async fn ensure_local_server_running(state: &Arc<SharedAppState>) {
         let Some((node, runtime_dir)) = find_bundled_runtime() else {
             return;
         };
-        let mut cmd = std::process::Command::new(&node);
-        cmd.arg("server/serve.mjs")
-            .current_dir(&runtime_dir)
-            .env("VIBESQUAD_RUNTIME_DIR", &runtime_dir)
-            .env("VIBESQUAD_BUNDLED_NODE", &node)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        if mode == "relay" {
-            // In relay mode we only serve the static bundle for a remote #offer= link;
-            // never spawn the local Paseo daemon.
-            cmd.env("VIBESQUAD_NO_DAEMON", "1");
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-        }
-        match cmd.spawn() {
+        match spawn_server_process(&node, &runtime_dir, &mode, Some(port_of_host(&host)), false) {
             Ok(child) => {
                 let _ = fs::create_dir_all(config_dir());
                 let _ = fs::write(server_pid_path(), child.id().to_string());
@@ -2616,6 +2772,7 @@ fn build_router(state: Arc<SharedAppState>) -> Router {
         .route("/__desktop/unpair", post(handle_desktop_unpair))
         .route("/__desktop/pair", post(handle_desktop_pair))
         .route("/__desktop/hash", post(handle_desktop_hash))
+        .route("/__desktop/start-at-login", get(handle_start_at_login_get).post(handle_start_at_login_set))
         .route("/__desktop/badge", post(handle_desktop_badge))
         .route("/__desktop/notify", post(handle_desktop_notify))
         .route("/__desktop/updater/status", get(updater::handle_updater_status))
@@ -2631,9 +2788,11 @@ fn build_router(state: Arc<SharedAppState>) -> Router {
 
 fn main() {
     let initial_cfg = load_config();
-    if initial_cfg.start_at_login {
-        let _ = set_start_at_login_registry(true);
+    if is_background_arg(&std::env::args().collect::<Vec<_>>()) {
+        std::process::exit(run_background(&initial_cfg));
     }
+    // Keep the Run value in step with the config both ways: an explicit off removes a stale entry.
+    let _ = set_start_at_login_registry(initial_cfg.start_at_login);
 
     let (http_client, ws_tls_connector) =
         build_http_and_ws_clients().expect("Failed to initialize TLS clients with pinned CA");
@@ -2649,6 +2808,7 @@ fn main() {
         ws_tls_connector: RwLock::new(ws_tls_connector),
         app_handle: RwLock::new(None),
         tray_needs_item: RwLock::new(None),
+        tray_login_item: RwLock::new(None),
         tracker: Mutex::new(AgentAlertTracker::default()),
         updater: Mutex::new(updater::UpdaterState::default()),
         managed_server: Mutex::new(None),
@@ -2767,6 +2927,7 @@ fn main() {
             let quit_item = MenuItem::with_id(app, "quit", "Quit VibeSquad", true, None::<&str>)?;
 
             *state_for_setup.tray_needs_item.write().unwrap() = Some(needs_item.clone());
+            *state_for_setup.tray_login_item.write().unwrap() = Some(start_login_item.clone());
 
             let menu = Menu::with_items(
                 app,
@@ -2894,6 +3055,61 @@ mod tests {
     use super::*;
 
     #[test]
+    fn start_at_login_defaults_on_unless_explicitly_false() {
+        assert!(DesktopConfig::default().start_at_login);
+        let missing: DesktopConfig = serde_json::from_str(r#"{"serverMode":"local"}"#).unwrap();
+        assert!(missing.start_at_login, "an existing config with no value becomes on");
+        let off: DesktopConfig = serde_json::from_str(r#"{"startAtLogin":false}"#).unwrap();
+        assert!(!off.start_at_login, "an explicit false stays off");
+        let on: DesktopConfig = serde_json::from_str(r#"{"startAtLogin":true}"#).unwrap();
+        assert!(on.start_at_login);
+    }
+
+    #[test]
+    fn background_does_nothing_when_start_at_login_is_off() {
+        let mut cfg = DesktopConfig::default();
+        cfg.start_at_login = false;
+        cfg.server_mode = "local".to_string();
+        assert_eq!(run_background(&cfg), 0, "off-switch wins before any server lookup or spawn");
+    }
+
+    #[test]
+    fn start_at_login_errors_are_surfaced() {
+        assert_eq!(start_at_login_error(&Ok(()), &Ok(())), None);
+        let e = start_at_login_error(&Err("denied".into()), &Ok(())).unwrap();
+        assert!(e.contains("login entry") && e.contains("denied"));
+        let e = start_at_login_error(&Err("a".into()), &Err("b".into())).unwrap();
+        assert!(e.contains("a") && e.contains("saving settings: b"));
+    }
+
+    #[test]
+    fn background_flag_parsing() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(is_background_arg(&a(&["vibesquad.exe", "--background"])));
+        assert!(!is_background_arg(&a(&["vibesquad.exe"])));
+        assert!(!is_background_arg(&a(&["--background"])), "argv[0] is never a flag");
+        assert!(!is_background_arg(&a(&["vibesquad.exe", "--headless-proxy"])));
+        assert_eq!(port_of_host("127.0.0.1:4391"), 4391);
+        assert_eq!(port_of_host("localhost"), 4180);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn run_entry_writes_the_background_command_to_an_injected_key() {
+        use winreg::enums::*;
+        use winreg::RegKey;
+        let sub = format!("Software\\VibeSquadTest\\Run{}", std::process::id());
+        let exe = std::path::Path::new("C:\\Apps\\VibeSquad\\VibeSquad.exe");
+        write_run_entry(&sub, true, exe).unwrap();
+        let key = RegKey::predef(HKEY_CURRENT_USER).open_subkey(&sub).unwrap();
+        let v: String = key.get_value("VibeSquad").unwrap();
+        assert_eq!(v, "\"C:\\Apps\\VibeSquad\\VibeSquad.exe\" --background");
+        write_run_entry(&sub, false, exe).unwrap();
+        assert!(key.get_value::<String, _>("VibeSquad").is_err());
+        let _ = RegKey::predef(HKEY_CURRENT_USER).delete_subkey_all("Software\\VibeSquadTest");
+    }
+
+    #[test]
     fn beta_build_follows_beta_until_the_user_picks() {
         // docs/PLAN_BUGS_BATCH1.md 0d: the first-run default "stable" must not pin a beta build to stable.
         assert_eq!(updater::effective_channel("stable", false, "0.1.1-beta.5"), "beta");
@@ -2923,6 +3139,7 @@ mod tests {
             ws_tls_connector: RwLock::new(ws_tls_connector),
             app_handle: RwLock::new(None),
             tray_needs_item: RwLock::new(None),
+        tray_login_item: RwLock::new(None),
             tracker: Mutex::new(AgentAlertTracker::default()),
             updater: Mutex::new(updater::UpdaterState::default()),
             managed_server: Mutex::new(None),
@@ -3366,6 +3583,7 @@ mod tests {
                 ws_tls_connector: RwLock::new(base.ws_connector()),
                 app_handle: RwLock::new(None),
                 tray_needs_item: RwLock::new(None),
+        tray_login_item: RwLock::new(None),
                 tracker: Mutex::new(AgentAlertTracker::default()),
                 updater: Mutex::new(updater::UpdaterState::default()),
                 managed_server: Mutex::new(None),
