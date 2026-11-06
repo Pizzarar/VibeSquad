@@ -47,7 +47,7 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
     // fn(backend) runs against the owning backend. A runner id never needs Paseo; everything else goes through the
     // RoutingBackend (rn- ids -> runner, other ids -> Paseo, creates by lane, lists merged), with Paseo connected only if it
     // is listening and closed after the call.
-    async withBackend({ id } = {}, fn) {
+    async withBackend({ id, lane, requireRunner } = {}, fn) {
       const { sharedRunnerBackend, getBackend, runnerLanes } = await import("../backend/index.mjs");
       if (isRunnerId(id)) {
         // Connect-only: with the runner down this is RUNNER_DOWN. The VS server owns starting it.
@@ -59,7 +59,9 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
       const backend = getBackend(createDaemonClient(), { lanes: () => runnerLanes({ env }) });
       await backend.connect?.();
       try {
-        if (!id) await backend.ensureRunner?.(); // spawn/list touch the runner: RUNNER_DOWN when it is down (never starts it). A Paseo id does not need it.
+        // A spawn into a runner lane is RUNNER_DOWN when the runner is down (never started here). A Paseo-pinned lane, a Paseo id
+        // and a list (the routing list tolerates a down runner and returns the Paseo agents) do not need it.
+        if (requireRunner && !id) await backend.ensureRunner?.(lane || "");
         return await fn(backend);
       } finally {
         await Promise.resolve(backend.close?.()).catch(() => {});
@@ -136,7 +138,7 @@ async function spawnWorker(ctx, args = {}) {
   delete labels.ord; // ordinals are assigned by the squad, never by a spawn arg
   labels.job = clean(labels.job) || title;
   const env = { VS_ROLE: WORKER_ROLE, ...(labels.profile ? { VS_PROFILE: labels.profile } : {}), ...(labels.lane ? { VS_LANE: labels.lane } : {}), ...(labels.team ? { VS_TEAM: labels.team } : {}) };
-  const created = await ctx.withBackend({ lane: labels.lane }, (b) =>
+  const created = await ctx.withBackend({ lane: labels.lane, requireRunner: true }, (b) =>
     b.createAgent({
       config: {
         provider, model, cwd: clean(args.cwd) || ctx.cwd, title,

@@ -121,9 +121,12 @@ export class RoutingBackend {
     return this.paseo.runCli(...args);
   }
 
-  /** Fail with RUNNER_DOWN if the runner is down. Never starts it: only the VS server's supervisor does. */
-  ensureRunner() {
-    if (!this.lanes().size) return Promise.resolve(); // runner disabled (Paseo rollback): nothing to require
+  /**
+   * Fail with RUNNER_DOWN if the runner is down and `lane` routes to it (no lane: any runner lane enabled). Never starts it:
+   * only the VS server's supervisor does. A Paseo-pinned lane does not need the runner.
+   */
+  ensureRunner(lane) {
+    if (lane ? !this.lanes().has(norm(lane)) : !this.lanes().size) return Promise.resolve();
     return Promise.resolve(this.runner.requireRunning?.());
   }
 }

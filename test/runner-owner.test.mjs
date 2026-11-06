@@ -128,3 +128,35 @@ test("grep: startOwned is reachable only from the supervisor, the backend/client
   for (const d of ["server", "cli", "plugin", "runner", "src"]) walk(path.join(ROOT, d));
   assert.deepEqual(hits.sort(), ["server/backend/runner-backend.mjs", "server/backend/runner-client.mjs", "server/runner-supervisor.mjs"]);
 });
+
+test("runner down + Paseo-pinned lane: spawn and list still work through Paseo; a runner lane spawn is RUNNER_DOWN", async () => {
+  const { sharedRunnerBackend } = await import("../server/backend/index.mjs");
+  const shared = sharedRunnerBackend();
+  const { backend } = downBackend();
+  const saved = { require: shared.requireRunning, list: shared.fetchAgents };
+  shared.requireRunning = () => backend.requireRunning();
+  shared.fetchAgents = async () => { throw new Error("runner down"); };
+  const paseoCalls = [];
+  const paseo = {
+    async connect() {},
+    async createAgent(req) { paseoCalls.push("create"); return { id: "p-1", labels: req.labels }; },
+    async fetchAgents() { paseoCalls.push("list"); return { entries: [{ agent: { id: "p-1", labels: { lane: "pinned" } } }] }; },
+  };
+  const { getBackend } = await import("../server/backend/index.mjs");
+  try {
+    const lanes = () => { const l = new Set(["own"]); l.has = (x) => x === "own"; return l; };
+    const routed = () => getBackend(paseo, { lanes, runner: shared });
+    // Paseo-pinned lane: no runner requirement, create + list reach Paseo
+    const b = routed();
+    await b.ensureRunner("pinned");
+    assert.equal((await b.createAgent({ labels: { lane: "pinned" } })).id, "p-1");
+    assert.equal((await b.fetchAgents({})).entries.some((e) => e.agent.id === "p-1"), true);
+    // Runner lane: RUNNER_DOWN
+    await assert.rejects(b.ensureRunner("own"), { code: "RUNNER_DOWN" });
+  } finally {
+    shared.requireRunning = saved.require;
+    delete shared.fetchAgents;
+    if (saved.list) shared.fetchAgents = saved.list;
+    if (!saved.require) delete shared.requireRunning;
+  }
+});
