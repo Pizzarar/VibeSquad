@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Modal } from "./TeamActions";
 import { daemonClient, reconnectWithDaemonPassword, usePaseo } from "./paseo";
 import { submitDaemonPassword } from "./paseoDaemonAuth";
-import { decideOverlay, usesPaseoBackend } from "./daemonOverlay";
+import { decideOverlay, pillText, usesPaseoBackend } from "./daemonOverlay";
 import { getRunnerStatus } from "./runnerBridge";
 import { clearSession, isAndroidUserAgent, isLocalHost, isRemote } from "./remoteSession";
 import { getStaleBuild, loadUpdaterStatus, setStaleBuild, triggerUpdateInstall, useStaleBuild, useUpdaterStatus } from "./userName";
@@ -79,7 +79,10 @@ export function shouldShowDisconnectOverlay(conn: string, disconnectedSinceMs: n
   return conn !== "connected" && disconnectedSinceMs !== null && nowMs - disconnectedSinceMs >= debounceMs;
 }
 
-/** Centered card over a dimmed scrim. position: fixed and not a role="alert" child of .app, so the layout underneath never changes. */
+/**
+ * Local: a non-blocking header pill that opens Diagnostics. Remote relay only: a centered card over a dimmed scrim
+ * (position: fixed and not a role="alert" child of .app, so the layout underneath never changes).
+ */
 export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
   onOpenDiagnostics?: () => void;
   onOpenSetup?: () => void;
@@ -143,12 +146,12 @@ export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
   }, []);
 
   if (!down || !visible) return null;
-  if (kind === "runner-notice") {
-    // Non-blocking: a corner pill, no scrim, nothing underneath is covered or disabled.
+  if (kind === "pill") {
+    // Non-blocking: a small header pill, no scrim; nothing underneath is covered or disabled.
     return (
-      <div className="runner-disconnect-notice" data-testid="runner-disconnect-notice" role="status">
-        VS runner disconnected · reconnecting
-      </div>
+      <button type="button" className="daemon-status-pill" data-testid="daemon-status-pill" role="status" onClick={props.onOpenDiagnostics} title="Open Diagnostics">
+        {pillText({ runnerConn, authFailureReason })}
+      </button>
     );
   }
   const onRetryNow = () => {
@@ -308,6 +311,63 @@ export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
   );
 });
 
+/** Paseo connection controls in Diagnostics: the header pill links here, so the unlock form stays reachable without a scrim. */
+function PaseoConnectionSection() {
+  const { conn, status, authFailureReason } = usePaseo();
+  const [pw, setPw] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  if (conn === "connected" || status === "connected") return null;
+  const run = async (fn: () => Promise<void>) => {
+    if (busy) return;
+    setBusy(true);
+    setErr(null);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([fn(), new Promise((r) => { timer = setTimeout(r, RETRY_TIMEOUT_MS); })]);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      clearTimeout(timer);
+      setBusy(false);
+    }
+  };
+  const onUnlock = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = pw.trim();
+    if (!trimmed) return;
+    void run(async () => {
+      const res = await submitDaemonPassword(trimmed);
+      if (!res.ok) throw new Error(res.error || "Failed to verify password");
+      setPw("");
+      await reconnectWithDaemonPassword(trimmed);
+    });
+  };
+  return (
+    <div className="diag-build-status stale" data-testid="diagnostics-paseo-section">
+      <div>
+        {authFailureReason === "password_required"
+          ? "Paseo daemon locked: it requires a password (daemon.auth.password in ~/.paseo/config.json)."
+          : authFailureReason
+            ? "Paseo daemon locked: the stored password was rejected."
+            : "Paseo daemon disconnected · reconnecting automatically. VibeSquad keeps working on its own runner."}
+      </div>
+      {authFailureReason && (
+        <form className="daemon-banner-auth-form" data-testid="diagnostics-unlock-form" onSubmit={onUnlock}>
+          <input type="password" data-testid="diagnostics-unlock-input" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="Enter Paseo daemon password…" />
+          <button type="submit" className="btn small" data-testid="diagnostics-unlock-btn" disabled={busy || !pw.trim()}>
+            {busy ? "VERIFYING…" : "UNLOCK & SAVE"}
+          </button>
+        </form>
+      )}
+      <button type="button" className="btn ok small" data-testid="diagnostics-paseo-retry" disabled={busy} onClick={() => void run(async () => { await reconnectWithDaemonPassword(); await dc.getDaemonStatus?.(); })}>
+        RETRY NOW
+      </button>
+      {err && <div className="daemon-disconnect-error" data-testid="diagnostics-unlock-error">{err}</div>}
+    </div>
+  );
+}
+
 export function DiagnosticsModal({ onClose }: { onClose: () => void }) {
   const { conn, agents } = usePaseo();
   const connRef = useRef(conn);
@@ -375,6 +435,7 @@ export function DiagnosticsModal({ onClose }: { onClose: () => void }) {
             </span>
           )}
         </div>
+        <PaseoConnectionSection />
         <div className="diag-actions">
           <button className="btn small" data-testid="diagnostics-copy-btn" onClick={() => void copy()}>{copied ? "✓ Copied" : "📋 Copy Diagnostics Bundle"}</button>
           <button className="btn small" data-testid="diagnostics-download-btn" onClick={download}>⬇ Download .json</button>

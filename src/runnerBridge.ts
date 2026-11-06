@@ -57,7 +57,17 @@ export const isRunnerLane = (lane: string | undefined): boolean => {
 };
 
 /** Fetches /status once more (e.g. to learn whether a Paseo daemon came up). Null when the server is unreachable. */
-export const fetchRunnerStatus = (): Promise<RunnerStatus | null> => call<RunnerStatus>("/status").then((s) => (status = s), () => null);
+export const fetchRunnerStatus = (): Promise<RunnerStatus | null> =>
+  call<RunnerStatus>("/status").then((s) => {
+    const changed = JSON.stringify(s) !== JSON.stringify(status);
+    status = s;
+    if (changed) for (const l of statusListeners) l();
+    return s;
+  }, () => null);
+
+const statusListeners = new Set<() => void>();
+/** Fires when a /status probe changed the runner status, so stores that derive UI from getRunnerStatus() can re-render. */
+export const onRunnerStatusChange = (l: () => void): void => void statusListeners.add(l);
 
 export async function runnerSpawn(payload: unknown): Promise<PaseoAgent> {
   return (await call<{ agent: PaseoAgent }>("/spawn", { method: "POST", body: JSON.stringify(payload) })).agent;

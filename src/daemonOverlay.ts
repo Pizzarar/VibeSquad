@@ -3,8 +3,8 @@ import type { RunnerStatus } from "./runnerBridge";
 /** The VS runner's own event stream: "unknown" until it has opened once (or when the runner is off). */
 export type RunnerConn = "unknown" | "up" | "down";
 
-/** What the connection banner renders: nothing, the blocking scrim, or a non-blocking runner notice. */
-export type OverlayKind = "none" | "scrim" | "runner-notice";
+/** What the connection banner renders: nothing, the blocking scrim (remote relay only), or a non-blocking header pill. */
+export type OverlayKind = "none" | "scrim" | "pill";
 
 /**
  * True when Paseo is actually in play: the runner is off (Paseo is the transport), the user enabled/pinned Paseo,
@@ -12,7 +12,7 @@ export type OverlayKind = "none" | "scrim" | "runner-notice";
  */
 export function usesPaseoBackend(runner: RunnerStatus | null, agentIds: Iterable<string>): boolean {
   if (runner && !runner.enabled) return true;
-  if (runner?.paseo?.expected || (runner?.paseoLanes ?? []).length > 0) return true;
+  if (runner?.defaultBackend === "paseo" || (runner?.paseoLanes ?? []).length > 0) return true;
   for (const id of agentIds) if (!id.startsWith("rn-")) return true;
   return false;
 }
@@ -27,13 +27,25 @@ export type OverlayInput = {
 };
 
 /**
- * Only the VS runner (or, in a remote relay session, Paseo as the transport) can block the UI.
- * A Paseo-only failure never does, except the daemon-password LOCKED form when Paseo is in use.
+ * Locally nothing blocks the UI: a runner or Paseo problem is a header pill that opens Diagnostics (where the
+ * unlock form lives). Only a remote relay session, where Paseo is the transport, keeps the scrim and its re-pair actions.
  */
 export function decideOverlay(i: OverlayInput): OverlayKind {
   if (i.remote) return i.paseoDown ? "scrim" : "none";
-  if (i.paseoDown && i.authFailureReason && i.usesPaseo) return "scrim";
-  return i.runnerConn === "down" ? "runner-notice" : "none";
+  if (i.runnerConn === "down") return "pill";
+  return i.paseoDown && (i.usesPaseo || i.authFailureReason) ? "pill" : "none";
+}
+
+/** Header pill text for a local connection problem. */
+export function pillText(i: Pick<OverlayInput, "runnerConn" | "authFailureReason">): string {
+  if (i.runnerConn === "down") return "Runner disconnected · reconnecting";
+  if (i.authFailureReason) return "Paseo locked · unlock in Diagnostics";
+  return "Paseo disconnected · reconnecting";
+}
+
+/** The quiet header dot also shows for the legacy "daemon expected" flag, which alone never counts as using Paseo. */
+export function showsPaseoDot(runner: RunnerStatus | null, agentIds: Iterable<string>): boolean {
+  return usesPaseoBackend(runner, agentIds) || !!runner?.paseo?.expected;
 }
 
 /** Header dot: Paseo's state only when Paseo is in use, otherwise the runner's. */

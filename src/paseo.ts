@@ -2,7 +2,7 @@ import { createPaseoApi, type PaseoAgent, type PaseoClient, type PaseoWorkspace 
 import { applyLabelsOptimistic } from "./attentionItems";
 import { clearUnreadLocal, dismissLocal, markUnreadLocal, subscribeAttentionLocal } from "./attentionLocal";
 import { clearWorkspaceIfQuiet } from "./paseoAttention";
-import { fetchRunnerStatus, getRunnerStatus, isRunnerId, isRunnerLane, runnerArchive, runnerCancel, runnerSend, runnerSpawn, runnerUpdate, runnerStatusLoaded, startRunnerBridge } from "./runnerBridge";
+import { fetchRunnerStatus, getRunnerStatus, isRunnerId, isRunnerLane, runnerArchive, runnerCancel, runnerSend, runnerSpawn, runnerUpdate, runnerStatusLoaded, startRunnerBridge, onRunnerStatusChange } from "./runnerBridge";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { spawnEnvFor } from "./spawn-env";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
@@ -705,6 +705,7 @@ export async function attachFiles(cwd: string, files: string[]): Promise<string[
 
 // Runner-backed lanes (inert unless one is switched): mirror the runner roster into the store.
 if (!DEMO && typeof window !== "undefined") {
+  onRunnerStatusChange(() => set({}));
   startRunnerBridge(
     (agents, archivedIds) => {
       const live = new Set(agents.map((a) => a.id));

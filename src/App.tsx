@@ -1,6 +1,6 @@
 import { FIRST_RUN_DONE_KEY, FirstRunModal, fetchFirstRunStatus, type FirstRunStatus } from "./FirstRunModal";
 import { clearSession, isAndroidUserAgent, isRemote } from "./remoteSession";
-import { statusDot, usesPaseoBackend } from "./daemonOverlay";
+import { showsPaseoDot, statusDot } from "./daemonOverlay";
 import { getRunnerStatus } from "./runnerBridge";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
@@ -1410,7 +1410,7 @@ function AboutLicensesModal({ onClose, onChecklist }: { onClose: () => void; onC
 
 export function App() {
   const { conn, runnerConn, archivedAgents, workspaces, providerUsage, agents, rosterLoaded } = usePaseo();
-  const dot = statusDot({ remote: isRemote(), usesPaseo: usesPaseoBackend(getRunnerStatus(), agents.keys()), paseoConn: conn, runnerConn });
+  const dot = statusDot({ remote: isRemote(), usesPaseo: showsPaseoDot(getRunnerStatus(), agents.keys()), paseoConn: conn, runnerConn });
   const teamsVersion = useTeams();
   const { members, views } = derived();
   const full = useFullView();
