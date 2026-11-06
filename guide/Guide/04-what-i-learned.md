@@ -28,6 +28,12 @@ Type fast. "sotpped", "dameon", "go for b" and "send it" are all understood. If 
 
 If you dump four things in one message, they can blur together. Number them, or send them as separate asks. Then each can go to the right place and run side by side. Your Buddy can sort the pile for you if you want: "split this into separate jobs."
 
+### Ask the Lead for status
+
+The Buddy is for ideas and plans. The Lead is for "where are we?" It already knows, so ask it directly.
+
+> **Aub:** I used to ask the Buddy for status. It had to dig through the logs to find out what the Lead already knew, and that burned tokens. I should have gone straight to the Lead.
+
 ### Proof, not prose
 
 "It works" is a claim. Ask for the output: the test results, the change summary, a screenshot. If it cannot show you, it should say "unchecked" instead of guessing. See [Proof, not prose](../Concepts/Proof-not-Prose.md).
