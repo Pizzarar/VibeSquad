@@ -117,6 +117,7 @@ test('a parked agent resumes lazily from the log in a fresh Runner (after a runn
   const r1 = new Runner({ dir, adapters: { claude: createClaudeAdapter({ spawnImpl: s1, mcp: false }) }, maxLive: 6 });
   const id = mk(r1); await tick();
   r1.send(id, 'x'); await tick();
+  r1.updateMeta(id, { labels: { job: 'renamed' } });
   r1.park(id);
   r1.shutdown();
   const s2 = fakeSpawn();
@@ -124,6 +125,7 @@ test('a parked agent resumes lazily from the log in a fresh Runner (after a runn
   assert.equal(r2.live.size, 0, 'nothing is resumed on boot');
   assert.equal(s2.calls.length, 0);
   assert.equal(r2.status(id).status, 'parked');
+  assert.equal(r2._parkedSpec(id).meta.labels?.job, 'renamed', 'resume uses meta patched after creation');
   r2.send(id, 'back'); await tick();
   assert.equal(s2.calls.length, 1);
   assert.ok(s2.calls[0].args.includes('--resume'));

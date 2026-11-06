@@ -121,14 +121,17 @@ export class Runner {
     if (!this.store.exists(id)) return null;
     const events = this.store.read(id);
     let parked = null;
+    // Fold later meta patches (labels, permissionMode, ...) the same way the summary does, so a resume uses the current meta.
+    const meta = { ...(events[0]?.meta ?? {}) };
     for (const e of events) {
+      if (e.type === 'meta') Object.assign(meta, e.patch, e.patch?.labels ? { labels: { ...meta.labels, ...e.patch.labels } } : {});
       if (e.type === 'parked') parked = e;
       else if (e.type === 'exit' || e.type === 'archive') return null;
       else if (e.type === 'status' && e.status !== 'parked') parked = null;
     }
     if (!parked || typeof parked.sessionId !== 'string' || !parked.sessionId || parked.sessionId.startsWith('-')) return null;
     const c = events[0];
-    return { provider: c.provider, model: c.model ?? undefined, cwd: c.cwd, meta: c.meta ?? {}, systemPrompt: parked.systemPrompt ?? undefined, resume: parked.sessionId };
+    return { provider: c.provider, model: c.model ?? undefined, cwd: c.cwd, meta, systemPrompt: parked.systemPrompt ?? undefined, resume: parked.sessionId };
   }
 
   _resume(id) {
