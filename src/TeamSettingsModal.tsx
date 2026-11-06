@@ -231,6 +231,44 @@ export function ProfileImportModal({ onClose }: { onClose: () => void }) {
 }
 
 /** The groups of this editor. The Settings home renders them in separate sections; the modal shows all. */
+/** Desktop-only: the Windows login entry that starts the server + runner with no window. Default on; this is the off-switch. */
+function StartAtLoginRow() {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void fetch("/__desktop/start-at-login", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => alive && d && setEnabled(Boolean(d.enabled)))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+  if (enabled === null) return null; // not the desktop app (browser / phone): nothing to toggle
+  return (
+    <label className="ts-scale-head" data-testid="start-at-login-row" style={{ cursor: "pointer" }}>
+      <div>
+        <div className="field-label">START AT LOGIN</div>
+        <div className="muted small">Start VibeSquad agents at login (no window). Your agents keep running without opening the app.</div>
+      </div>
+      <input
+        type="checkbox"
+        data-testid="start-at-login-toggle"
+        checked={enabled}
+        onChange={(e) => {
+          const next = e.target.checked;
+          setEnabled(next);
+          void fetch("/__desktop/start-at-login", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ enabled: next }),
+          }).catch(() => setEnabled(!next));
+        }}
+      />
+    </label>
+  );
+}
+
 export type TeamSettingsPart = "account" | "remote" | "update" | "scale" | "paseo" | "profiles" | "teams";
 
 export function TeamSettingsModal({
@@ -559,6 +597,7 @@ export function TeamSettingsModal({
             </button>
           </div>
         </div>
+        <StartAtLoginRow />
       </section>}
       {show("scale") && <section className="ts-team ts-scale-section" data-testid="ui-scale-section">
         <div className="ts-scale-head">
