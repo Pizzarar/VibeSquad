@@ -12,6 +12,9 @@ import { fileURLToPath } from 'node:url';
 import { Runner } from './runner.mjs';
 
 export const MAX_BODY_BYTES = 1024 * 1024;
+export const MAX_INPUT_BYTES = 24 * 1024 * 1024; // /input carries base64 image attachments
+const SSE_SKIP = new Set(['stderr', 'raw']); // noisy, never rendered
+const SSE_HEARTBEAT_MS = 15000;
 
 export function tokenMatches(header, token) {
   const m = /^Bearer (.+)$/.exec(String(header ?? ''));
@@ -21,19 +24,19 @@ export function tokenMatches(header, token) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES } = {}) {
+export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, maxInputBytes = MAX_INPUT_BYTES, heartbeatMs = SSE_HEARTBEAT_MS } = {}) {
   const json = (res, code, body) => {
     res.writeHead(code, { 'content-type': 'application/json' });
     res.end(JSON.stringify(body));
   };
-  const readBody = (req) => new Promise((resolve, reject) => {
+  const readBody = (req, limit = maxBodyBytes) => new Promise((resolve, reject) => {
     let s = '';
     let size = 0;
     let dead = false;
     req.on('data', (c) => {
       if (dead) return;
       size += c.length;
-      if (size > maxBodyBytes) {
+      if (size > limit) {
         dead = true;
         const err = new Error('request body too large');
         err.status = 413;
@@ -50,10 +53,25 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES } = 
     try {
       if (token && !tokenMatches(req.headers.authorization, token)) return json(res, 401, { error: 'unauthorized' });
       const declared = Number(req.headers['content-length'] ?? 0);
-      if (declared > maxBodyBytes) { res.setHeader('connection', 'close'); return json(res, 413, { error: 'request body too large' }); }
+      const isInput = req.method === 'POST' && /^\/agents\/[^/]+\/input$/.test(req.url.split('?')[0]);
+      if (declared > (isInput ? maxInputBytes : maxBodyBytes)) { res.setHeader('connection', 'close'); return json(res, 413, { error: 'request body too large' }); }
       const url = new URL(req.url, 'http://x');
       const parts = url.pathname.split('/').filter(Boolean); // agents, :id, action
       if (req.method === 'GET' && parts[0] === 'health') return json(res, 200, { ok: true, live: runner.live.size, pid: process.pid });
+      if (req.method === 'GET' && parts[0] === 'events' && parts.length === 1) {
+        // SSE tail of every log append. Cleaned up on client disconnect; nothing buffers per client.
+        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
+        res.write(': ok\n\n');
+        const off = runner.subscribe((id, ev) => {
+          if (!SSE_SKIP.has(ev.type)) res.write(`data: ${JSON.stringify({ id, event: ev })}\n\n`);
+        });
+        const beat = setInterval(() => res.write(': hb\n\n'), heartbeatMs);
+        beat.unref?.();
+        const done = () => { off(); clearInterval(beat); };
+        req.on('close', done);
+        res.on('close', done);
+        return;
+      }
       if (parts[0] !== 'agents') return json(res, 404, { error: 'not found' });
       if (parts.length === 1) {
         if (req.method === 'POST') return json(res, 201, { id: runner.create(await readBody(req)) });
@@ -72,7 +90,8 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES } = 
         return json(res, 200, { events, next: events.length ? events[events.length - 1].seq + 1 : after });
       }
       if (parts[2] === 'input' && req.method === 'POST') {
-        runner.send(id, (await readBody(req)).text);
+        const b = await readBody(req, maxInputBytes);
+        runner.send(id, b.text, { images: b.images, activeTurnBehavior: b.activeTurnBehavior });
         return json(res, 202, { ok: true });
       }
       if (parts[2] === 'cancel' && req.method === 'POST') {

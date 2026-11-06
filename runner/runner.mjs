@@ -75,12 +75,19 @@ export class Runner {
     return id;
   }
 
-  send(id, text) {
+  // opts.images: [{ data (base64), mimeType }]; opts.activeTurnBehavior: 'steer' (default, queue behind/into the turn)
+  // or 'interrupt' (cancel the active turn first). The log keeps the image count, never the base64 payload.
+  send(id, text, opts = {}) {
     const entry = this.live.get(id);
     if (!entry?.handle) throw new Error(`agent ${id} is not running`);
-    this.store.append(id, 'input', { text });
-    entry.handle.send(text);
+    const images = (Array.isArray(opts.images) ? opts.images : []).filter((i) => i && typeof i.data === 'string' && typeof i.mimeType === 'string');
+    if (opts.activeTurnBehavior === 'interrupt' && entry.status === 'running') this.cancel(id);
+    this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}) });
+    entry.handle.send(text, images.length ? { images } : undefined);
   }
+
+  // Live tail of every log append: fn(id, event). Returns the unsubscribe.
+  subscribe(fn) { return this.store.onAppend(fn); }
 
   cancel(id) {
     const entry = this.live.get(id);
@@ -110,7 +117,13 @@ export class Runner {
     const created = events[0];
     const last = events[events.length - 1];
     let status = 'unknown';
-    for (const e of events) if (e.type === 'status') status = e.status;
+    let usage = null;
+    const perms = new Map();
+    for (const e of events) {
+      if (e.type === 'status') status = e.status;
+      else if (e.type === 'usage') usage = { contextTokens: e.contextTokens, contextMax: e.contextMax, inputTokens: e.inputTokens, outputTokens: e.outputTokens, costUsd: e.costUsd };
+      else if (e.type === 'permission') { if (e.phase === 'request') perms.set(e.id, { id: e.id, toolName: e.toolName }); else perms.delete(e.id); }
+    }
     const meta = { ...created.meta };
     let archivedAt = null;
     for (const e of events) {
@@ -122,7 +135,7 @@ export class Runner {
     else if (!this.live.has(id)) status = 'lost'; // log says running but no child in this process
     return {
       id, provider: created.provider, model: created.model, cwd: created.cwd, meta,
-      status, lastSeq: last.seq, createdAt: created.ts, updatedAt: last.ts, archivedAt, exit: exit ?? null,
+      status, usage, pendingPermissions: [...perms.values()], lastSeq: last.seq, createdAt: created.ts, updatedAt: last.ts, archivedAt, exit: exit ?? null,
     };
   }
 
