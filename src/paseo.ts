@@ -33,6 +33,8 @@ type State = {
   conn: ConnStatus;
   /** The VS runner's event stream (what blocking UI keys off); Paseo's own conn never blocks. */
   runnerConn: "unknown" | "up" | "down";
+  /** Paseo's own websocket (conn/status above are the combined runner+Paseo state). */
+  paseoConn: boolean;
   status: "connecting" | "connected" | "disconnected" | "error";
   error?: string;
   authFailureReason: "password_required" | "incorrect_password" | null;
@@ -48,6 +50,7 @@ type State = {
 let state: State = {
   conn: "connecting",
   runnerConn: "unknown",
+  paseoConn: false,
   status: "connecting",
   authFailureReason: null,
   agents: new Map(),
@@ -427,7 +430,17 @@ const link = createPaseoLink({
   dropPaseoAgents,
   reconnect: () => void connect(),
 });
-const parkPaseo = link.park;
+const mirrorPaseoConn = () => {
+  if (state.paseoConn !== link.paseoConn) set({ paseoConn: link.paseoConn });
+};
+const setPaseoConn = (v: boolean) => {
+  link.setPaseoConn(v);
+  mirrorPaseoConn();
+};
+const parkPaseo = () => {
+  link.park();
+  mirrorPaseoConn();
+};
 
 async function connect(): Promise<void> {
   try {
@@ -442,13 +455,13 @@ async function connect(): Promise<void> {
       }
     }
     await daemonClient.connect();
-    link.setPaseoConn(true);
+    setPaseoConn(true);
     set({ conn: "connected", status: "connected", error: undefined, authFailureReason: null });
     refetchAll().catch(console.error);
     refetchWorkspaces().catch(console.error);
     refetchProviderUsage();
   } catch (e) {
-    link.setPaseoConn(false);
+    setPaseoConn(false);
     const authReason = readClientAuthFailure(daemonClient, e);
     if (!authReason && link.runnerOn()) {
       parkPaseo(); // Paseo is down but the runner is up: stay connected, stop hammering /ws
@@ -509,7 +522,7 @@ export function start() {
   let wasConnected = false;
   (daemonClient as unknown as { subscribeConnectionStatus?: (cb: (s: { status: string; reason?: string }) => void) => () => void }).subscribeConnectionStatus?.((s) => {
     if (link.parked && s.status !== "connected") return; // paused on purpose
-    link.setPaseoConn(s.status === "connected");
+    setPaseoConn(s.status === "connected");
     if (s.status === "connected") {
       set({ conn: "connected", status: "connected", error: undefined, authFailureReason: null });
       if (!wasConnected) {

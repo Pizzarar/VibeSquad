@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Modal } from "./TeamActions";
 import { daemonClient, reconnectWithDaemonPassword, usePaseo } from "./paseo";
 import { submitDaemonPassword } from "./paseoDaemonAuth";
-import { decideOverlay, pillText, usesPaseoBackend } from "./daemonOverlay";
+import { decideOverlay, paseoIsDown, pillText, usesPaseoBackend } from "./daemonOverlay";
 import { getRunnerStatus } from "./runnerBridge";
 import { clearSession, isAndroidUserAgent, isLocalHost, isRemote } from "./remoteSession";
 import { getStaleBuild, loadUpdaterStatus, setStaleBuild, triggerUpdateInstall, useStaleBuild, useUpdaterStatus } from "./userName";
@@ -89,7 +89,7 @@ export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
   onOpenPaseoSettings?: () => void;
   onRePair?: () => void;
 }) {
-  const { conn, status, error, authFailureReason, runnerConn, agents } = usePaseo();
+  const { conn, status, error, authFailureReason, runnerConn, agents, paseoConn } = usePaseo();
   const updaterStatus = useUpdaterStatus();
   const [updateChecking, setUpdateChecking] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -97,7 +97,7 @@ export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
   const [pw, setPw] = useState("");
   const [unlockBusy, setUnlockBusy] = useState(false);
   const [unlockErr, setUnlockErr] = useState<string | null>(null);
-  const paseoDown = conn !== "connected" && status !== "connected";
+  const paseoDown = paseoIsDown({ remote: isRemote(), conn, status, paseoConn });
   const kind = decideOverlay({
     remote: isRemote(),
     runnerConn,
@@ -313,11 +313,13 @@ export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
 
 /** Paseo connection controls in Diagnostics: the header pill links here, so the unlock form stays reachable without a scrim. */
 function PaseoConnectionSection() {
-  const { conn, status, authFailureReason } = usePaseo();
+  const { conn, status, authFailureReason, paseoConn, agents } = usePaseo();
   const [pw, setPw] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  if (conn === "connected" || status === "connected") return null;
+  const remote = isRemote();
+  if (!paseoIsDown({ remote, conn, status, paseoConn })) return null;
+  if (!remote && !usesPaseoBackend(getRunnerStatus(), agents.keys())) return null;
   const run = async (fn: () => Promise<void>) => {
     if (busy) return;
     setBusy(true);
