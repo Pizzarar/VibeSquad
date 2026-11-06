@@ -63,7 +63,7 @@ export async function runnerSpawn(payload: unknown): Promise<PaseoAgent> {
   return (await call<{ agent: PaseoAgent }>("/spawn", { method: "POST", body: JSON.stringify(payload) })).agent;
 }
 
-type TimelineResult = { entries: unknown[]; hasOlder?: boolean; startCursor?: unknown };
+type TimelineResult = { entries: unknown[]; hasOlder?: boolean; startCursor?: unknown; lastSeq?: number };
 
 const timelineListeners = new Map<string, Set<() => void>>();
 const notifyTimeline = (id?: string) => {
@@ -92,6 +92,10 @@ export function runnerHandle(id: string) {
 
 export const runnerFetchTimeline = (id: string, opts: { limit?: number; cursor?: { seq: number }; direction?: string }) => {
   const q = new URLSearchParams({ limit: String(opts.limit ?? 60) });
+  if (opts.direction === "before" && opts.cursor) {
+    q.set("direction", "before");
+    q.set("cursor", String(opts.cursor.seq));
+  }
   return call<TimelineResult>(`/agents/${id}/timeline?${q}`);
 };
 

@@ -402,3 +402,67 @@ test('runner status tells the browser the default is the runner; a UI spawn on a
   assert.equal((await run({ labels: { lane: 'old' }, config: {} }, pinnedSet)).code, 400, 'a Paseo-pinned lane is not a runner create');
   assert.equal(spawned.length, 2);
 });
+
+const rev = (seq, type, o) => ({ seq, ts: 1000 + seq, type, ...o });
+const rsum = (e) => e.map((x) => `${x.item.type}:${x.item.text ?? ''}`);
+
+test('toTimeline: a thought mid-reply does not split it; rows stay in place with unique, increasing seqStart', () => {
+  const e = toTimeline([rev(0, 'input', { text: 'q' }), rev(1, 'output', { text: 'Hello ' }), rev(2, 'thought', { text: 'hmm' }), rev(3, 'output', { text: 'world' })]);
+  assert.deepEqual(rsum(e), ['user_message:q', 'assistant_message:Hello world', 'reasoning:hmm']);
+  assert.deepEqual([e[1].seqStart, e[1].seqEnd, e[2].seqStart], [1, 3, 2]);
+  assert.ok(e.every((x, i) => i === 0 || x.seqStart > e[i - 1].seqStart));
+});
+
+test('toTimeline: stderr / raw / meta lines mid-reply do not split it', () => {
+  const e = toTimeline([rev(0, 'output', { text: 'A' }), rev(1, 'stderr', { line: 'warn' }), rev(2, 'thought', { text: 't' }), rev(3, 'meta', { patch: {} }), rev(4, 'output', { text: 'B' }), rev(5, 'raw', { line: '?' }), rev(6, 'output', { text: 'C' })]);
+  assert.deepEqual(rsum(e), ['assistant_message:ABC', 'reasoning:t']);
+});
+
+test('toTimeline: user message, tool call, error and turn_done are the separators', () => {
+  for (const sep of [rev(2, 'input', { text: 'q' }), rev(2, 'tool', { phase: 'call', id: 'x', name: 'Bash' }), rev(2, 'error', { message: 'boom' }), rev(2, 'turn_done')]) {
+    const e = toTimeline([rev(0, 'output', { text: 'A' }), rev(1, 'thought', { text: 't' }), sep, rev(3, 'output', { text: 'B' })]);
+    assert.equal(e.filter((x) => x.item.type === 'assistant_message').length, 2, sep.type);
+  }
+  // back-to-back turns with no user row: turn_done on the reply itself blocks the tail merge
+  const t = toTimeline([rev(0, 'output', { text: 'A' }), rev(1, 'turn_done'), rev(2, 'output', { text: 'B' })]);
+  assert.deepEqual(rsum(t), ['assistant_message:A', 'assistant_message:B']);
+});
+
+test('RunnerBackend.fetchAgentTimeline: before-cursor paging walks the whole log with no duplicates or gaps', async () => {
+  const events = [rev(0, 'input', { text: 'q' }), rev(1, 'output', { text: 'A' }), rev(2, 'thought', { text: 't' }), rev(3, 'output', { text: 'B' }), rev(4, 'tool', { phase: 'call', id: 'x', name: 'Bash' }), rev(5, 'output', { text: 'C' }), rev(6, 'stderr', { line: 'x' }), rev(7, 'input', { text: 'q2' })];
+  const b = new RunnerBackend({ client: { request: async () => ({ events }) } });
+  const all = (await b.fetchAgentTimeline('rn-x')).entries;
+  const seen = [];
+  let cursor;
+  for (let guard = 0; guard < 10; guard++) {
+    const page = await b.fetchAgentTimeline('rn-x', { limit: 2, ...(cursor ? { direction: 'before', cursor } : {}) });
+    seen.unshift(...rsum(page.entries));
+    if (!page.hasOlder) break;
+    cursor = page.startCursor;
+  }
+  assert.deepEqual(seen, rsum(all));
+});
+
+test('runner API: the timeline route forwards direction + cursor to fetchAgentTimeline', async () => {
+  const { handleRunnerApi } = await import('../server/runner-api.mjs');
+  const calls = [];
+  const backend = { fetchAgentTimeline: async (id, opts) => { calls.push(opts); return { entries: [], hasOlder: false }; } };
+  const run = (url) => handleRunnerApi({ url, method: 'GET' }, {}, { readBody: async () => ({}), sendJson: () => {}, backend, lanes: () => new Set(['x']) });
+  await run('/__vibesquad/runner/agents/rn-abc/timeline?limit=60');
+  await run('/__vibesquad/runner/agents/rn-abc/timeline?limit=60&direction=before&cursor=42');
+  assert.deepEqual(calls[0], { limit: 60 });
+  assert.deepEqual(calls[1], { limit: 60, direction: 'before', cursor: { epoch: 'runner', seq: 42 } });
+});
+
+test('fetchAgentTimeline lastSeq advances with absorbed post-thought text while the newest row (a thought) does not', async () => {
+  const mk = (n) => [rev(1, 'output', { text: 'Hello ' }), rev(2, 'thought', { text: 'hmm' }), ...Array.from({ length: n }, (_, i) => rev(3 + i, 'output', { text: 'x' }))];
+  const seqs = [];
+  for (const n of [1, 2, 3]) {
+    const b = new RunnerBackend({ client: { request: async () => ({ events: mk(n) }) } });
+    const r = await b.fetchAgentTimeline('rn-x', { limit: 1 });
+    assert.equal(r.entries.at(-1).item.type, 'reasoning');
+    assert.equal(r.entries.at(-1).seqEnd, 2); // the old change signal: stuck
+    seqs.push(r.lastSeq);
+  }
+  assert.deepEqual(seqs, [3, 4, 5]);
+});

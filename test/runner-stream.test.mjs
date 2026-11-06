@@ -474,3 +474,17 @@ test('shown status follows the log order, not fetchAgent tail: usage, error, idl
   await until(() => evs.some((e) => e.kind === 'status' && e.from === 'error' && e.to === 'running'));
   off(); off2();
 });
+
+test('every log event emits a timeline event, including post-thought text that the timeline absorbs into an earlier row', async () => {
+  const backend = new RunnerBackend({ client: { stream: (h) => { queueMicrotask(() => h.onOpen()); return { close() {} }; } } });
+  backend.listAgents = async () => [{ id: 'rn-1', status: 'running' }];
+  backend.fetchAgent = async () => ({ agent: { id: 'rn-1', status: 'running' } });
+  const evs = [];
+  const off = backend.subscribeEvents((e) => evs.push(e));
+  await until(() => evs.some((e) => e.kind === 'connected'));
+  const seqs = [[1, 'output'], [2, 'thought'], [3, 'output'], [4, 'output'], [5, 'stderr']];
+  for (const [seq, type] of seqs) backend.enqueue((gen) => backend.handleLogEvent({ id: 'rn-1', event: { type, seq } }, gen));
+  await until(() => evs.filter((e) => e.kind === 'timeline').length === seqs.length);
+  assert.deepEqual(evs.filter((e) => e.kind === 'timeline').map((e) => e.seq), [1, 2, 3, 4, 5]);
+  off();
+});

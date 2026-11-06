@@ -1,8 +1,10 @@
 // Pure helpers for timeline filters, search hits and prompt jumps (no daemon imports, node --test friendly).
+import { joinTarget, joinInto, canExtendThought, coalesceReplies, joinPages, markTurnBoundary, firstSeqOf, lastSeqOf } from "../server/reply-coalesce.mjs";
+export { coalesceReplies, joinPages, markTurnBoundary };
 export type TimelineFilter = "all" | "text" | "tools" | "errors";
 export const TIMELINE_FILTERS: TimelineFilter[] = ["all", "text", "tools", "errors"];
 
-type Ent = { item: any; timestamp?: string; seqStart?: number; seqEnd?: number; sourceSeqRanges?: { startSeq: number; endSeq: number }[]; liveSeqs?: number[] };
+type Ent = { item: any; timestamp?: string; seqStart?: number; seqEnd?: number; sourceSeqRanges?: { startSeq: number; endSeq: number }[]; liveSeqs?: number[]; segStart?: number; turnId?: string; turnEnd?: boolean };
 
 const isFailed = (it: any) =>
   it.status === "failed" || it.status === "error" || !!it.error || (it.detail?.exitCode != null && it.detail.exitCode !== 0);
@@ -35,6 +37,9 @@ export function sortedHits(locations: SearchLocation[]): SearchLocation[] {
 
 /** Index of the entry a seq falls in: the last entry whose seqStart <= seq. -1 when none is loaded. */
 export function entryIndexForSeq(entries: Ent[], seq: number): number {
+  // A reply that absorbed later text spans past the thought row after it: prefer the row whose range holds the seq.
+  const holds = entries.findIndex((e) => typeof e.seqStart === "number" && e.seqStart <= seq && seq <= (e.seqEnd ?? e.seqStart));
+  if (holds >= 0) return holds;
   let idx = -1;
   for (let i = 0; i < entries.length; i++) {
     const s = entries[i].seqStart;
@@ -109,23 +114,25 @@ const coversSeq = (e: Ent, seq: number) =>
  * ignored, so redelivered events can't append their text twice. Chunk text is treated as a delta (each seq is one
  * canonical row and the projection concatenates rows via "assistant_merge"/"reasoning_merge").
  */
-export function mergeLiveItem<T extends Ent>(entries: T[], item: any, timestamp?: string, seq?: number): T[] {
+export function mergeLiveItem<T extends Ent>(entries: T[], item: any, timestamp?: string, seq?: number, turnId?: string): T[] {
   if (!item || typeof item !== "object") return entries;
   if (seq != null && entries.some((e) => coversSeq(e, seq))) return entries;
   const type = String(item.type ?? "");
   const last = entries[entries.length - 1];
-  if (last && last.item && last.item.type === type) {
-    if (STREAMED.has(type)) {
-      const field = type === "reasoning" && last.item.text == null && last.item.summary != null ? "summary" : "text";
-      const prev = String(last.item[field] ?? "");
-      const add = type === "reasoning" ? reasoningText(item) : String(item.text ?? "");
-      // Snapshot providers resend the whole text; delta providers send only the new part. A strictly longer text
-      // that extends the tail is a snapshot (replace), everything else is a delta (append). The message id can't
-      // tell them apart: claude deltas reuse one messageId (claude/agent.js:943).
-      const text = add.length > prev.length && add.startsWith(prev) ? add : prev + add;
-      const merged = { ...last.item, [field]: text };
-      return [...entries.slice(0, -1), { ...last, item: merged, liveSeqs: seq != null ? [...(last.liveSeqs ?? []), seq] : last.liveSeqs }];
-    }
+  // Assistant text continues the last non-thought row when it is an assistant message of the same turn / message:
+  // a thought in between does not split the reply (shared with toTimeline, the projected refetch and page joins).
+  if (type === "assistant_message") {
+    const next = { item, liveSeqs: seq != null ? [seq] : undefined, ...(turnId != null ? { turnId } : {}) } as T;
+    const i = joinTarget(entries, next);
+    if (i >= 0) return [...entries.slice(0, i), joinInto(entries[i], next, { trailing: entries.slice(i + 1), snapshot: true }), ...entries.slice(i + 1)];
+  } else if (type === "reasoning" && canExtendThought(entries)) {
+    const field = last.item.text == null && last.item.summary != null ? "summary" : "text";
+    const prev = String(last.item[field] ?? "");
+    const add = reasoningText(item);
+    // Snapshot providers resend the whole text; delta providers send only the new part. A strictly longer text
+    // that extends the tail is a snapshot (replace), everything else is a delta (append).
+    const text = add.length > prev.length && add.startsWith(prev) ? add : prev + add;
+    return [...entries.slice(0, -1), { ...last, item: { ...last.item, [field]: text }, liveSeqs: seq != null ? [...(last.liveSeqs ?? []), seq] : last.liveSeqs }];
   }
   if (type === "tool_call" && item.callId != null) {
     for (let i = entries.length - 1; i >= 0 && i >= entries.length - 20; i--) {
@@ -137,12 +144,27 @@ export function mergeLiveItem<T extends Ent>(entries: T[], item: any, timestamp?
       }
     }
   }
-  return [...entries, { item, timestamp, liveSeqs: seq != null ? [seq] : undefined } as T];
+  return [...entries, { item, timestamp, liveSeqs: seq != null ? [seq] : undefined, ...(turnId != null ? { turnId } : {}) } as T];
 }
 
-/** Index of the most recent reasoning entry, or -1. */
+/**
+ * Index of the most recent reasoning entry, or -1. A thought the reply carried on past (the nearest assistant message
+ * before it spans beyond the thought's seqs) is settled: it stays collapsed instead of being expanded under a finished reply.
+ */
 export function latestReasoningIndex(entries: Ent[]): number {
-  for (let i = entries.length - 1; i >= 0; i--) if (entries[i].item?.type === "reasoning") return i;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    if (entries[i].item?.type !== "reasoning") continue;
+    for (let j = i - 1; j >= 0; j--) {
+      if (entries[j].item?.type !== "assistant_message") continue;
+      const mFirst = firstSeqOf(entries[j]);
+      const mLast = lastSeqOf(entries[j]);
+      const rFirst = firstSeqOf(entries[i]);
+      const rLast = lastSeqOf(entries[i]);
+      if (mFirst != null && mLast != null && rFirst != null && rLast != null && mFirst <= rFirst && mLast > rLast) return -1;
+      break;
+    }
+    return i;
+  }
   return -1;
 }
 
@@ -170,4 +192,9 @@ export function maxEntrySeq(entries: Ent[]): number | null {
 export function syncNeeded(lastSeq: number | null, seq: number | undefined): "none" | "gap" | "unverified" {
   if (seq == null || lastSeq == null) return "unverified";
   return seq > lastSeq + 1 ? "gap" : "none";
+}
+
+/** "Load older" stays available when the daemon says so, else when the raw (pre-coalesce) page was full. */
+export function hasMoreOf(t: { hasOlder?: boolean; entries?: unknown[] }, limit = 60): boolean {
+  return t.hasOlder ?? (t.entries?.length ?? 0) >= limit;
 }
