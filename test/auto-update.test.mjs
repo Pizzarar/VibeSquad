@@ -106,7 +106,7 @@ describe("auto-update config & release helpers", () => {
     const buildDesktopSrc = readFileSync(join(rootDir, "server", "build-desktop.mjs"), "utf8");
     assert.match(buildDesktopSrc, /TAURI_SIGNING_PRIVATE_KEY_PASSWORD/);
     assert.match(buildDesktopSrc, /"signer",\s*"sign",\s*"-f"/);
-    assert.match(buildDesktopSrc, /"-p"/);
+    assert.doesNotMatch(buildDesktopSrc, /"-p"/);
 
     const releaseSrc = readFileSync(join(rootDir, "server", "release.mjs"), "utf8");
     const rawArrayGhCalls = releaseSrc.match(/exec(?:FileSync)?\("gh",\s*\[(?!\.\.\.|"api")/g) || [];
