@@ -10,6 +10,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Runner } from './runner.mjs';
+import { createChildLedger, sweepOrphans } from './children.mjs';
+import { setChildLedger } from './spawn.mjs';
 import { acquireRunnerLock, releaseLock } from './lock.mjs';
 
 export const MAX_BODY_BYTES = 1024 * 1024;
@@ -145,6 +147,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.log(JSON.stringify({ alreadyRunning: lock.holder, home }));
     process.exit(0);
   }
+  // Kill what a previous, hard-killed runner left behind (image name + start time must match), then start a fresh ledger.
+  try {
+    const swept = sweepOrphans(home);
+    if (swept.killed.length || swept.skipped.length) console.log(JSON.stringify({ orphanSweep: swept }));
+  } catch (err) { console.error('orphan sweep failed', err); }
+  setChildLedger(createChildLedger(home));
   const token = randomBytes(32).toString('hex');
   const runner = new Runner({ dir });
   const server = createServer(runner, { token });
