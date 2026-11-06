@@ -56,7 +56,7 @@ test("1) CREDITS.md exists at repo root and includes all 11 community accolades 
     .split(/\r?\n/)
     .filter((l) => l.startsWith("- Implemented ") || l.startsWith("- Built on the Paseo Daemon"));
   // 11 v0.2.0 accolades + 2 runner entries (VS agent runner adapters, ACP adapters) added with Own Daemon B2.
-  assert.equal(bullets.length, 13, "Expected 11 community accolades + 2 runner credits in CREDITS.md");
+  assert.equal(bullets.length, 14, "Expected 11 community accolades + 3 runner credits (incl. VS MCP aliases) in CREDITS.md");
 });
 
 test("2) server/profiles.mjs and plugin/index.server.ts require attribution format in plans, commits, CREDITS.md, and release notes", () => {
