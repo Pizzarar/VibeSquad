@@ -78,7 +78,7 @@ copyFileSync(process.execPath, join(runtimeDir, process.platform === "win32" ? "
 const npmSrc = join(dirname(process.execPath), "node_modules", "npm");
 if (!existsSync(join(npmSrc, "bin", "npm-cli.js"))) throw new Error(`Node's bundled npm not found at ${npmSrc}`);
 cpSync(npmSrc, join(runtimeDir, "node_modules", "npm"), { recursive: true });
-for (const entry of ["dist", "public", "server", "cli", "plugin"]) cpSync(join(rootDir, entry), join(runtimeDir, entry), { recursive: true });
+for (const entry of ["dist", "public", "server", "cli", "plugin", "runner"]) cpSync(join(rootDir, entry), join(runtimeDir, entry), { recursive: true });
 mkdirSync(join(runtimeDir, "docs", "profiles"), { recursive: true });
 copyFileSync(join(rootDir, "docs", "profiles", "DEFAULT_PACK.md"), join(runtimeDir, "docs", "profiles", "DEFAULT_PACK.md"));
 copyFileSync(join(rootDir, "package.json"), join(runtimeDir, "package.json"));

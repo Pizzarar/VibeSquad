@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Runner } from '../runner/runner.mjs';
@@ -289,4 +289,12 @@ test('lead-handoff list path (listDaemonAgents) sees runner leads when a lane is
   // Paseo-only: no switched lane -> plain PaseoBackend, list is exactly Paseo's
   const plain = await listDaemonAgents(getBackend(c, { lanes: () => new Set() }));
   assert.deepEqual(plain.map((a) => a.id), ['p-1', 'p-2']);
+});
+
+test('runtime sync and desktop build ship runner/ (RUNNER_ENTRY)', () => {
+  const entryList = /\["dist", "public", "server", "cli", "plugin", "runner"\]/;
+  for (const rel of ['server/sync-runtime.mjs', 'server/build-desktop.mjs']) {
+    const src = readFileSync(path.join(import.meta.dirname, '..', rel), 'utf8');
+    assert.match(src, entryList, `${rel} should ship runner/`);
+  }
 });
