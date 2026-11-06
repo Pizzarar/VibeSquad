@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
-import { daemonClient, DEMO, usePaseo } from "./paseo";
+import { daemonClient, DEMO, stopAgent, usePaseo } from "./paseo";
 import { workspaceIdForAgent } from "./workspaceLogic";
 import { addCtxSource, ctxGroupsFor, gitMenuItems, isCtxItem, laneMenuItems, useCtxSources, type CtxMenuItem } from "./contextSources";
 import { getTeams, useTeams } from "./teams";
@@ -769,6 +769,16 @@ export function Composer({
         <button className="btn" disabled={busy || (!draft.trim() && !imgs.images.length && !atts.items.length && !ctx.items.length)} onClick={send} title={agent.status === "running" ? "Queue for after current turn (or click Send this now to steer)" : undefined}>
           {agent.status === "running" ? "Queue" : "Send"}
         </button>
+        {agent.status === "running" && (
+          <button
+            className="btn ghost composer-stop-btn"
+            title="Stop the current turn (keeps the agent)"
+            data-testid="composer-stop-btn"
+            onClick={() => stopAgent(agent.id).catch((e) => setNotice(`Couldn't stop: ${e instanceof Error ? e.message : String(e)}`))}
+          >
+            ■ Stop
+          </button>
+        )}
         {agent.status === "running" && (
           <button
             className="btn warn composer-interrupt-btn"
