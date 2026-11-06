@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
+import { getBackend } from "./backend/index.mjs";
 import { readPaseoConfig } from "./brainstorm.mjs";
 import { readDaemonPassword, readPaseoLocalCredential } from "./daemon-password.mjs";
 import { LEGACY_NEEDS_LABEL, clearConfigWarning, loadUserSettings, readJsonFileWithBom } from "./user-settings.mjs";
@@ -534,6 +535,7 @@ export function startPushWatcher(rootDir = REPO_ROOT) {
     reconnect: { enabled: true, baseDelayMs: 1500, maxDelayMs: 15000 },
   });
   watcherClient = client;
+  const backend = getBackend(client);
 
   const handleAgentSnapshot = (agent, isInitialSeed = false) => {
     if (!agent || !agent.id) return;
@@ -559,7 +561,7 @@ export function startPushWatcher(rootDir = REPO_ROOT) {
     }
   };
 
-  client.subscribe((event) => {
+  backend.subscribe((event) => {
     if (stopped) return;
     if (event.type === "agent_update" && event.payload?.agent) {
       handleAgentSnapshot(event.payload.agent, false);
@@ -585,7 +587,7 @@ export function startPushWatcher(rootDir = REPO_ROOT) {
 
   const seedAgents = async () => {
     try {
-      const res = await client.fetchAgents({ subscribe: {}, filter: { includeArchived: false } });
+      const res = await backend.fetchAgents({ subscribe: {}, filter: { includeArchived: false } });
       for (const entry of res?.entries ?? []) {
         if (entry?.agent) handleAgentSnapshot(entry.agent, true);
       }
@@ -594,14 +596,14 @@ export function startPushWatcher(rootDir = REPO_ROOT) {
     }
   };
 
-  client.subscribeConnectionStatus((st) => {
+  backend.subscribeConnectionStatus((st) => {
     queueMicrotask(() => unrefClientTimers(client));
     if (!stopped && st.status === "connected") {
       void seedAgents();
     }
   });
 
-  client.connect().then(() => seedAgents()).catch(() => {});
+  backend.connect().then(() => seedAgents()).catch(() => {});
   unrefClientTimers(client);
   queueMicrotask(() => unrefClientTimers(client));
 
@@ -611,7 +613,7 @@ export function startPushWatcher(rootDir = REPO_ROOT) {
       watcherStarted = false;
       activeWatcher = null;
       if (watcherClient === client) watcherClient = null;
-      return client.close().catch(() => {});
+      return backend.close().catch(() => {});
     },
   };
   return activeWatcher;

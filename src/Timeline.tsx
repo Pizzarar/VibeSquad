@@ -2,6 +2,10 @@ import { Component, Fragment, type ReactNode, useCallback, useSyncExternalStore,
 import type { PaseoAgentTimelineEvent } from "@getpaseo/client";
 import { messageCtxItems, openContextMenu, selectionWithin } from "./CommandPalette";
 import { daemonClient, client, DEMO, retrySend } from "./paseo";
+import { isRunnerId, runnerHandle } from "./runnerBridge";
+
+/** client.agents.ref(id), except runner-owned agents (rn- ids) go over the VS runner routes. */
+const agentRef = (id: string): ReturnType<typeof client.agents.ref> => (isRunnerId(id) ? (runnerHandle(id) as any) : client.agents.ref(id));
 import { dismissPending, dropReconciled, getPending, pendingFor, reconciledIds, subscribePending } from "./pendingSend";
 import { REWIND_MODES, buildRewindRequest, truncateAfter, type RewindMode } from "./sessionLifecycle";
 import { demoTimeline } from "./demo";
@@ -969,7 +973,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
     setLoaded(false);
     lastSeq.current = null; // other agent's seq must not judge this stream; load() sets the baseline
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const handle = client.agents.ref(agentId);
+    const handle = agentRef(agentId);
 
     const load = async () => {
       try {
@@ -1047,8 +1051,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
       return;
     }
     let alive = true;
-    client.agents
-      .ref(agentId)
+    agentRef(agentId)
       .timeline.refetch({ direction: "tail", limit: 60, projection: "projected" })
       .then((t) => {
         if (!alive) return;
@@ -1085,7 +1088,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
     setLoadingMore(true);
     try {
       const cursor = earliestCursor.current;
-      const t = await daemonClient.fetchAgentTimeline(agentId, {
+      const t = isRunnerId(agentId) ? ({ entries: [], hasOlder: false } as any) : await daemonClient.fetchAgentTimeline(agentId, {
         direction: "before" as any,
         cursor,
         limit: 60,

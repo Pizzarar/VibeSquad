@@ -10,7 +10,8 @@ import {
 } from "./brainstorm.mjs";
 import { effectiveAgentRole, formatDisplayTitle, isDigestAgent, isRetiredAgent, laneCodeFor, ordOf } from "./identity.mjs";
 import { listDaemonAgents } from "./detach-children.mjs";
-// Re-exported: the HTTP handoff used `client.listAgents`, which DaemonClient lacks, so workers were never re-pointed.
+import { getBackend } from "./backend/index.mjs";
+// Re-exported: the HTTP handoff used `backend.listAgents`, which DaemonClient lacks, so workers were never re-pointed.
 export { listDaemonAgents };
 import { LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE, readJsonFileWithBom } from "./user-settings.mjs";
 import { findProfile, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
@@ -961,14 +962,15 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
   const trigger = String(body.trigger || "self").trim();
   const injectedClient = body.daemonClient || null;
   const client = injectedClient || (body.skipDaemon ? null : createDaemonClient(rootDir));
+  const backend = getBackend(client);
   let connected = Boolean(injectedClient);
   const connectT0 = Date.now();
   let connectMs;
   let backgroundHandoff = null;
 
   try {
-    if (client && !injectedClient && typeof client.connect === "function") {
-      await client.connect().catch(() => {});
+    if (client && !injectedClient && typeof backend.connect === "function") {
+      await backend.connect().catch(() => {});
       connected = true;
       connectMs = Date.now() - connectT0;
     }
@@ -981,7 +983,7 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
       sharedSlots: body.sharedSlots ?? true,
       async listAgents() {
         if (Array.isArray(body.agents)) return body.agents;
-        return connected && client ? listDaemonAgents(client) : [];
+        return connected && client ? listDaemonAgents(backend) : [];
       },
       async getAgent(id) {
         if (body.oldLead && body.oldLead.id === id) return body.oldLead;
@@ -989,25 +991,25 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
           const found = body.agents.find((a) => a.id === id);
           if (found) return found;
         }
-        if (connected && client && typeof client.fetchAgent === "function") {
-          const r = await client.fetchAgent(id).catch(() => null);
+        if (connected && client && typeof backend.fetchAgent === "function") {
+          const r = await backend.fetchAgent(id).catch(() => null);
           return r?.agent ?? null;
         }
         return null;
       },
       async setLabels(agentId, labels, name) {
-        if (connected && client && typeof client.updateAgent === "function") {
-          await client.updateAgent(agentId, { ...(name ? { name } : {}), labels }).catch(() => {});
+        if (connected && client && typeof backend.updateAgent === "function") {
+          await backend.updateAgent(agentId, { ...(name ? { name } : {}), labels }).catch(() => {});
         }
       },
       async sendMessage(agentId, text) {
-        if (connected && client && typeof client.sendAgentPrompt === "function") {
-          await client.sendAgentPrompt(agentId, text).catch(() => {});
+        if (connected && client && typeof backend.sendAgentPrompt === "function") {
+          await backend.sendAgentPrompt(agentId, text).catch(() => {});
         }
       },
       async createAgent(payload) {
-        if (connected && client && typeof client.createAgent === "function") {
-          return await client.createAgent({
+        if (connected && client && typeof backend.createAgent === "function") {
+          return await backend.createAgent({
             config: payload.config,
             initialPrompt: payload.initialPrompt || payload.prompt,
             labels: payload.labels,
@@ -1017,8 +1019,8 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
         return null;
       },
       async deleteHeartbeat(agentId) {
-        if (connected && client && typeof client.deleteHeartbeat === "function") {
-          await client.deleteHeartbeat(agentId).catch(() => {});
+        if (connected && client && typeof backend.deleteHeartbeat === "function") {
+          await backend.deleteHeartbeat(agentId).catch(() => {});
         }
       },
     };
@@ -1039,8 +1041,8 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
         lead = body.agents.find((a) => (a?.agent ?? a)?.id === body.agentId) ?? null;
         if (lead?.agent) lead = lead.agent;
       }
-      if (!lead && connected && client && typeof client.fetchAgent === "function") {
-        const fetched = await client.fetchAgent(body.agentId).catch(() => null);
+      if (!lead && connected && client && typeof backend.fetchAgent === "function") {
+        const fetched = await backend.fetchAgent(body.agentId).catch(() => null);
         lead = fetched?.agent ?? null;
       }
     }
@@ -1048,7 +1050,7 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
       const liveList = Array.isArray(body.agents)
         ? body.agents.map((a) => a?.agent ?? a)
         : connected && client
-          ? await listDaemonAgents(client)
+          ? await listDaemonAgents(backend)
           : [];
       if (body.agentId) {
         lead = liveList.find((a) => a?.id === body.agentId) ?? null;
@@ -1114,9 +1116,9 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
 
     return await handoffPromise;
   } finally {
-    if (!injectedClient && client && typeof client.close === "function") {
-      if (backgroundHandoff) backgroundHandoff.finally(() => client.close().catch(() => {}));
-      else await client.close().catch(() => {});
+    if (!injectedClient && client && typeof backend.close === "function") {
+      if (backgroundHandoff) backgroundHandoff.finally(() => backend.close().catch(() => {}));
+      else await backend.close().catch(() => {});
     }
   }
 }

@@ -269,8 +269,8 @@ test(
   }),
 );
 
-test("vs refuses only the chars that escape a double-quoted cmd.exe arg", () => {
-  const src = readFileSync("cli/vs.mjs", "utf8");
+test("paseo-cli (moved from vs) refuses only the chars that escape a double-quoted cmd.exe arg", () => {
+  const src = readFileSync("server/backend/paseo-cli.mjs", "utf8");
   const m = src.match(/const UNSAFE_SHELL_ARG = (\/.*\/);/);
   assert.ok(m);
   const re = eval(m[1]);
