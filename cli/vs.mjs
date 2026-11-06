@@ -2152,6 +2152,8 @@ function vsImportClosure(repoRoot) {
     for (const m of text.matchAll(/(?:from\s+|import\(\s*)["'](\.{1,2}\/[^"']+\.(?:mjs|js|cjs|ts))["']/g)) {
       walk(path.posix.normalize(path.posix.join(path.posix.dirname(rel), m[1])));
     }
+    // The plugin imports the server package by name: @vibesquad/server/x.mjs -> server/x.mjs.
+    for (const m of text.matchAll(/(?:from\s+|import\(\s*)["']@vibesquad\/server\/([^"']+\.(?:mjs|js|cjs|ts))["']/g)) walk(path.posix.join("server", m[1]));
   };
   walk("cli/vs.mjs");
   // The MCP server is spawned by path (not imported) and loads these lazily.

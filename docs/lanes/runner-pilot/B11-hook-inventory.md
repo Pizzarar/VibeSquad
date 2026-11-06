@@ -66,3 +66,12 @@ the log: `created` event → created; `status running` → turn_started; `status
   If the import still fails, `RunnerBackend.hookHost` logs to stderr and writes a `runner hooks unavailable` metric to the `_unassigned` team log (never silent).
 * **No replay (accepted)**: the runner event stream does not replay; a turn that ends while the VS server is down fires no hook
   and the wake watcher baselines at end-of-log on start.
+
+## Review r2 fixes
+
+* **Cold-start race**: `RunnerBackend.enableCatchUp()` (called by `startRunnerLifecycle`) records each agent's last log seq at startup
+  (in memory; history is never replayed, so a server restart fires nothing old). Every event-stream (re)connect then replays, per agent,
+  the events after that high-water mark (`seedRoster` -> `catchUp`), and `handleLogEvent` handles each seq once (live or replayed).
+  Updated "no replay" note: events appended while the stream is down are now replayed *within a server process*; events while the VS server itself is down are still not.
+* **Shim closure** follows `@vibesquad/server/*` specifiers to `server/*`.
+* **Duplicate metrics**: `agent.created` skips the mismatch / autofix / fallback / orphan / profile-override metric lines when `vs.spawn-configured=1`.

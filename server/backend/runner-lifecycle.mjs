@@ -16,6 +16,7 @@ let active = null;
 export async function startRunnerLifecycle({ runner = sharedRunnerBackend(), startWatcher = true, deps } = {}) {
   if (active?.runner === runner) return active;
   await stopRunnerLifecycle();
+  runner.enableCatchUp();
   const host = await runner.attachHooks({ startWatcher, deps });
   const off = runner.subscribeEvents((ev) => {
     const hook = HOOK_FOR[ev.kind];

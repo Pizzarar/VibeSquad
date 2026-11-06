@@ -207,7 +207,7 @@ export class RunnerBackend {
     Object.defineProperty(this, "whosHere", { value: whosHere });
     Object.defineProperty(this, "rootDir", { value: rootDir });
     Object.defineProperty(this, "listeners", { value: new Set() });
-    Object.defineProperty(this, "live", { value: { stream: null, chain: Promise.resolve(), turn: new Map(), gen: 0 } });
+    Object.defineProperty(this, "live", { value: { stream: null, chain: Promise.resolve(), turn: new Map(), gen: 0, hwm: null } });
     // Paseo-side agents of the same lanes, set by the RoutingBackend so a Who's here refresh sees the whole lane.
     Object.defineProperty(this, "siblings", { value: { list: null } });
     Object.defineProperty(this, "lanes", { value: lanes });
@@ -548,6 +548,49 @@ export class RunnerBackend {
     this.live.turn = next;
     this.emitEvent({ kind: "roster", agents: agents.map((a) => this.overlay(a)) });
     this.emitEvent({ kind: "connected" });
+    await this.catchUp(gen);
+  }
+
+  /**
+   * Lifecycle catch-up (server process only). Records, per agent, the last log seq already in the runner's logs; from then on an event
+   * is handled once (live or replayed), and every (re)connect of the event stream replays what was appended while it was not connected
+   * (the cold-start race: the runner boots and the first agent's created / input / status events land before /events connects).
+   * History before this call is never replayed, so a server restart does not re-fire digests, handoffs or wakeups.
+   */
+  enableCatchUp() {
+    const hwm = new Map();
+    const dir = path.join(this.rc.home, "agents");
+    try {
+      for (const f of fs.readdirSync(dir)) {
+        if (!f.endsWith(".jsonl")) continue;
+        const lines = fs.readFileSync(path.join(dir, f), "utf8").split("\n").filter(Boolean);
+        let seq = -1;
+        for (let i = lines.length - 1; i >= 0 && seq < 0; i--) {
+          try { seq = JSON.parse(lines[i]).seq ?? -1; } catch { /* partial last line */ }
+        }
+        hwm.set(f.slice(0, -6), seq);
+      }
+    } catch { /* no runner dir yet: every agent is new */ }
+    this.live.hwm = hwm;
+  }
+
+  /** Replay events newer than the high-water mark for agents that have any (new agents replay from seq 0). */
+  async catchUp(gen) {
+    const hwm = this.live.hwm;
+    if (!hwm) return;
+    let ids;
+    try { ({ ids } = await this.rc.request("GET", "/agents")); } catch { return; }
+    for (const id of ids) {
+      if (gen !== this.live.gen) return;
+      const seen = hwm.get(id) ?? -1;
+      let rec;
+      try { rec = await this.rc.request("GET", `/agents/${encodeURIComponent(id)}`); } catch { continue; }
+      if (!(rec.lastSeq > seen)) continue;
+      let events;
+      try { ({ events } = await this.rc.request("GET", `/agents/${encodeURIComponent(id)}/timeline?after=${seen + 1}`)); } catch { continue; }
+      this.live.turn.delete(id); // rebuilt from the replayed events, not from the already-final status
+      for (const event of events) await this.handleLogEvent({ id, event }, gen);
+    }
   }
 
   /**
@@ -556,6 +599,11 @@ export class RunnerBackend {
    */
   async handleLogEvent({ id, event: e }, gen = this.live.gen) {
     if (!id || !e) return;
+    const hwm = this.live.hwm;
+    if (hwm) {
+      if (e.seq <= (hwm.get(id) ?? -1)) return; // already handled (replayed at connect, or history before startup)
+      hwm.set(id, e.seq);
+    }
     this.emitEvent({ kind: "timeline", agentId: id, seq: e.seq, type: e.type });
     const t0 = this.live.turn.get(id);
     const from = t0 && viewStatus(t0);

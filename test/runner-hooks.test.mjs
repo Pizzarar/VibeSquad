@@ -342,7 +342,71 @@ test('vs shim runtime closure carries the plugin (.ts), its package.json and the
   const { installVsShim } = await import('../cli/vs.mjs');
   const base = tmp();
   installVsShim({ binDirs: [path.join(base, 'bin')], baseHome: base });
-  for (const rel of ['plugin/index.server.ts', 'plugin/package.json', 'plugin/server/remote-proxy.ts', 'runner/adapters/acp.mjs', 'server/backend/runner-hooks.mjs']) {
+  for (const rel of ['plugin/index.server.ts', 'plugin/package.json', 'plugin/server/remote-proxy.ts', 'runner/adapters/acp.mjs', 'server/backend/runner-hooks.mjs', 'server/lead-handoff.mjs', 'server/lean-tools.mjs']) {
     assert.ok(existsSync(path.join(base, 'runtime', rel)), `${rel} copied into the runtime`);
   }
 });
+
+test('cold start: agent spawned before the event stream connects still gets exactly one created and one turn_started; a restart replays nothing', async () => {
+  const starts = [];
+  const home = tmp();
+  const runner = new Runner({ dir: path.join(home, 'agents'), adapters: { claude: fakeAdapter(starts) } }); // the layout the real runner uses
+  const server = createServer(runner, { token: 't' });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  writeDiscovery(home, { port: server.address().port, token: 't' });
+  const rc = new RunnerClient({ home });
+  const realStream = rc.stream.bind(rc);
+  rc.stream = (opts) => { // the stream connects only after the agent's first events are already in the log
+    let h;
+    const t = setTimeout(() => { h = realStream(opts); }, 700);
+    return { close() { clearTimeout(t); h?.close(); } };
+  };
+  const backend = new RunnerBackend({ client: rc, rootDir: ROOT, lanes: () => new Set(['bug-chaser']) });
+  try {
+    const lc = await startRunnerLifecycle({ runner: backend, startWatcher: false });
+    const seen = [];
+    const realEmit = lc.host.emit.bind(lc.host);
+    lc.host.emit = async (hook, payload) => { seen.push([hook, payload.agent?.id]); return realEmit(hook, payload); };
+    const a = await backend.createAgent(req({ lane: 'bug-chaser', role: 'lead' }));
+    await until(() => seen.some(([h]) => h === 'agent.turn_ended'), 8000, 'replayed turn_ended');
+    await settle(400);
+    const mine = seen.filter(([, id]) => id === a.id).map(([h]) => h);
+    assert.equal(mine.filter((h) => h === 'agent.created').length, 1);
+    assert.equal(mine.filter((h) => h === 'agent.turn_started').length, 1);
+    assert.equal(mine.filter((h) => h === 'agent.turn_ended').length, 1);
+    await until(async () => (await backend.getAgent(a.id)).labels.ord, 6000, 'lead ord from the replayed created');
+
+    // restart the lifecycle (serve.mjs restart): history is not replayed
+    await stopRunnerLifecycle();
+    const lc2 = await startRunnerLifecycle({ runner: backend, startWatcher: false });
+    const seen2 = [];
+    lc2.host.emit = async (hook, payload) => { seen2.push([hook, payload.agent?.id]); };
+    await settle(3500); // stream reconnect + catch-up
+    assert.deepEqual(seen2, []);
+  } finally {
+    await stopRunnerLifecycle();
+    server.close();
+    server.closeAllConnections?.();
+  }
+});
+
+test('MCP/CLI spawns do not log orphan / fallback metrics twice (before and created)', async () => {
+  const b = await boot();
+  try {
+    const a = await b.backend.createAgent(req({ role: 'worker', job: 'j' }, { config: { provider: 'claude', cwd: os.tmpdir(), title: 'O', modeId: 'default' } }));
+    await until(() => teamLogAll().some((e) => e.text.startsWith('hook-timing hook=agent.created') && (e.refs ?? []).includes(a.id)), 6000, 'created hook ran');
+    await settle(300);
+    const orphans = teamLogAll().filter((e) => e.text.startsWith('orphan:'));
+    assert.equal(orphans.length, 1, 'one orphan metric for the spawn, not two');
+  } finally {
+    await b.close();
+  }
+});
+function teamLogAll() {
+  const out = [];
+  for (const t of ['vibesquad', '_unassigned']) {
+    const f = path.join(VS_HOME, 'teams', t, 'log.jsonl');
+    if (existsSync(f)) out.push(...readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)));
+  }
+  return out;
+}

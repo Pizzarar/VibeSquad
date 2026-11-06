@@ -1138,7 +1138,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         return true;
       };
       if (String(labels["profile-override"] ?? "").trim()) {
-        for (const d of diffs.filter((x) => x.caller && fresh(x))) {
+        for (const d of diffs.filter((x) => x.caller && fresh(x) && labels["vs.spawn-configured"] !== "1")) {
           logProfileMetric(labels, cwd, profileOverrideMetric(name, profile.name, d, "kept=caller"), refs);
         }
         return;
@@ -1698,6 +1698,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         try {
           const { snap: me, labels } = await labelsFor(paseo, agent);
           st.mark("labels-for");
+          // Runner spawns: before(agent.create) already logged these metrics in the caller's process (the dedupe maps are not shared).
+          const beforeRan = labels["vs.spawn-configured"] === "1";
           // Never let a wrong-provider agent go on to retire a predecessor or count as a dispatch.
           if ((await enforceProfileAfterSpawn(agent, me, labels)) === "refused") return;
           st.mark("enforce-profile");
@@ -1737,7 +1739,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             if (resolved.teamMismatch) {
               const mismatchKey = `mismatch:${resolved.callerTeam}->${resolved.teamId}:${resolved.laneId}`;
               const prevTs = recentBeforeMismatches.get(mismatchKey);
-              if (prevTs && Date.now() - prevTs < 2000) {
+              if (beforeRan || (prevTs && Date.now() - prevTs < 2000)) {
                 recentBeforeMismatches.delete(mismatchKey);
               } else {
                 appendLog(resolved.teamId, {
@@ -1752,7 +1754,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             if (resolved.autofixedFromCwd && !resolved.callerLane) {
               const autofixKey = `autofix:${resolved.callerLane}->${resolved.laneId}:${agentCwd}`;
               const prevTs = recentBeforeMismatches.get(autofixKey);
-              if (prevTs && Date.now() - prevTs < 2000) {
+              if (beforeRan || (prevTs && Date.now() - prevTs < 2000)) {
                 recentBeforeMismatches.delete(autofixKey);
               } else {
                 appendLog(resolved.teamId, {
@@ -1767,7 +1769,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             if (resolved.usedTeamFallback) {
               const fbKey = `fallback:${resolved.teamId}:${resolved.laneId}`;
               const prevTs = recentBeforeMismatches.get(fbKey);
-              if (prevTs && Date.now() - prevTs < 2000) {
+              if (beforeRan || (prevTs && Date.now() - prevTs < 2000)) {
                 recentBeforeMismatches.delete(fbKey);
               } else {
                 appendLog(resolved.teamId, {
@@ -1784,7 +1786,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             if (!labels.role) want.role = spawnRoleLabel(resolved.role);
             const orphanKey = `orphan:${resolved.callerLane}:${resolved.callerTeam}:${agentCwd}`;
             const prevTs = recentBeforeMismatches.get(orphanKey);
-            if (prevTs && Date.now() - prevTs < 2000) {
+            if (beforeRan || (prevTs && Date.now() - prevTs < 2000)) {
               recentBeforeMismatches.delete(orphanKey);
             } else {
               appendLog(UNASSIGNED_TEAM_ID, {
