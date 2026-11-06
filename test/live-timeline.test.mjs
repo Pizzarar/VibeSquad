@@ -178,3 +178,49 @@ test("lastAssistantText returns the whole reply from a split Paseo projection", 
   const row = (type, text, a) => ({ item: { type, text }, seqStart: a, seqEnd: a });
   assert.equal(lastAssistantText({ entries: [row("assistant_message", "Hello ", 1), row("reasoning", "hmm", 2), row("assistant_message", "world", 3)] }), "Hello world");
 });
+
+test("A,T1,B,T2,C: toTimeline, mergeLiveItem and coalesceReplies agree (a second thought is a new row)", async () => {
+  const { toTimeline } = await import("../server/backend/runner-backend.mjs");
+  const want = ["assistant_message:ABC", "reasoning:T1", "reasoning:T2"];
+  const ev1 = (seq, type, text) => ({ seq, ts: 1000 + seq, type, text });
+  const fromRunner = toTimeline([ev1(1, "output", "A"), ev1(2, "thought", "T1"), ev1(3, "output", "B"), ev1(4, "thought", "T2"), ev1(5, "output", "C")]);
+  assert.deepEqual(summary(fromRunner), want);
+  let live = [];
+  for (const [t, x, s] of [["assistant_message", "A", 1], ["reasoning", "T1", 2], ["assistant_message", "B", 3], ["reasoning", "T2", 4], ["assistant_message", "C", 5]]) live = apply(live, ev({ type: t, text: x }, s));
+  assert.deepEqual(summary(live), want);
+  const row = (type, text, a) => ({ item: { type, text }, seqStart: a, seqEnd: a });
+  const projected = coalesceReplies([row("assistant_message", "A", 1), row("reasoning", "T1", 2), row("assistant_message", "B", 3), row("reasoning", "T2", 4), row("assistant_message", "C", 5)]);
+  assert.deepEqual(summary(projected), want);
+  // a T2 that starts with T1 must not overwrite it either
+  let snap = apply(apply(apply([], ev({ type: "assistant_message", text: "A" }, 1)), ev({ type: "reasoning", text: "T" }, 2)), ev({ type: "assistant_message", text: "B" }, 3));
+  snap = apply(snap, ev({ type: "reasoning", text: "T and more" }, 4));
+  assert.deepEqual(summary(snap), ["assistant_message:AB", "reasoning:T", "reasoning:T and more"]);
+});
+
+test("coalesce only merges when a thought separates the pieces; segStart only moves on a new segment", async () => {
+  const row = (type, text, a) => ({ item: { type, text }, seqStart: a, seqEnd: a });
+  // (a) B and C are adjacent with no thought between them: they stay two messages
+  assert.deepEqual(summary(coalesceReplies([row("assistant_message", "A", 10), row("reasoning", "T", 11), row("assistant_message", "B", 12), row("assistant_message", "C", 13)])), ["assistant_message:AB", "reasoning:T", "assistant_message:C"]);
+  // (b) joinPages never joins two plain assistant messages
+  assert.deepEqual(summary(joinPages([row("assistant_message", "A", 10)], [row("assistant_message", "B", 11)])), ["assistant_message:A", "assistant_message:B"]);
+  assert.deepEqual(summary(joinPages([row("assistant_message", "A", 10), row("reasoning", "T", 11)], [row("assistant_message", "B", 12)])), ["assistant_message:AB", "reasoning:T"]);
+  // (c) Hello / T / wor / ld through the runner, then a live cumulative snapshot of the post-thought segment
+  const { toTimeline } = await import("../server/backend/runner-backend.mjs");
+  const ev1 = (seq, type, text) => ({ seq, ts: 1000 + seq, type, text });
+  const built = toTimeline([ev1(10, "output", "Hello "), ev1(11, "thought", "T"), ev1(12, "output", "wor"), ev1(13, "output", "ld")]);
+  assert.equal(built[0].item.text, "Hello world");
+  assert.equal(built[0].segStart, 6);
+  const live = apply(built, ev({ type: "assistant_message", text: "world!" }, 14));
+  assert.equal(live[0].item.text, "Hello world!");
+});
+
+test("entryIndexForSeq prefers the row whose range holds the seq; hasMoreOf uses the raw page", async () => {
+  const { entryIndexForSeq, hasMoreOf } = await import("../src/timelineFilter.ts");
+  const e = [{ item: { type: "assistant_message" }, seqStart: 10, seqEnd: 12 }, { item: { type: "reasoning" }, seqStart: 11, seqEnd: 11 }];
+  assert.equal(entryIndexForSeq(e, 12), 0);
+  assert.equal(entryIndexForSeq(e, 11), 0);
+  assert.equal(entryIndexForSeq(e, 99), 1); // beyond every range: the old "last row at or before" rule
+  assert.equal(hasMoreOf({ entries: new Array(60).fill({}) }), true);
+  assert.equal(hasMoreOf({ entries: new Array(10).fill({}) }), false);
+  assert.equal(hasMoreOf({ hasOlder: false, entries: new Array(60).fill({}) }), false);
+});

@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { RunnerClient, runnerHome } from "./runner-client.mjs";
-import { joinTarget, joinInto } from "../reply-coalesce.mjs";
+import { joinTarget, joinInto, canExtendThought } from "../reply-coalesce.mjs";
 
 const FIRST_CLASS = ["squad", "team", "lane", "role", "ord", "profile"];
 const ENV_FOR = { lane: "VS_LANE", team: "VS_TEAM", role: "VS_ROLE", profile: "VS_PROFILE" };
@@ -109,7 +109,7 @@ export function toTimeline(events) {
         break;
       }
       case "thought":
-        if (last?.item.type === "reasoning" && !last.turnEnd) {
+        if (canExtendThought(entries)) {
           last.item.text += e.text;
           last.seqEnd = e.seq;
         } else entries.push({ ...base, item: { type: "reasoning", text: e.text } });
@@ -228,10 +228,13 @@ export class RunnerBackend {
     let entries = toTimeline(events);
     if (opts.direction === "before" && opts.cursor) entries = entries.filter((e) => e.seqStart < opts.cursor.seq);
     const limit = Number(opts.limit) > 0 ? Number(opts.limit) : entries.length;
+    // The newest row can be a thought while the reply it belongs to grew in an earlier row, so change-detection
+    // (runnerBridge poll) reads the highest seq across all rows, not the last row's.
+    const lastSeq = entries.reduce((m, e) => Math.max(m, e.seqEnd ?? -1), -1);
     const hasOlder = entries.length > limit;
     entries = entries.slice(-limit);
     const first = entries[0];
-    return { entries, hasOlder, startCursor: first ? { epoch: "runner", seq: first.seqStart } : null };
+    return { entries, hasOlder, lastSeq, startCursor: first ? { epoch: "runner", seq: first.seqStart } : null };
   }
 
   async getAgentTimeline(id) {

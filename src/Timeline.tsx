@@ -14,7 +14,7 @@ import { parseSentAttachments, repoPathFor } from "./attachments";
 import { openRightDockTab } from "./RightDock";
 import { listTimelinePrompts, searchTimeline, type TimelinePrompt } from "./paseoTimeline";
 import { perfEndPainted, perfSendEvent } from "./perf";
-import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, coalesceReplies, joinPages, markTurnBoundary, matchesFilter, localPrompts, localSearch, mergeLiveItem, maxEntrySeq, syncNeeded, latestReasoningIndex, reasoningText, sortedHits, stepIndex, type SearchLocation, type TimelineFilter } from "./timelineFilter";
+import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, coalesceReplies, hasMoreOf, joinPages, markTurnBoundary, matchesFilter, localPrompts, localSearch, mergeLiveItem, maxEntrySeq, syncNeeded, latestReasoningIndex, reasoningText, sortedHits, stepIndex, type SearchLocation, type TimelineFilter } from "./timelineFilter";
 import { BARE_PATH_RE, parseFileToken } from "./fileLinks";
 import { toolStartsExpanded, usePref } from "./prefs";
 import { getPanes } from "./panes";
@@ -986,7 +986,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
           setEntries(newEntries);
           lastSeq.current = maxEntrySeq(newEntries);
           const tAny = t as any;
-          setHasMore(tAny.hasOlder ?? newEntries.length >= 60);
+          setHasMore(hasMoreOf(tAny));
           const startCur = tAny.startCursor;
           if (startCur && typeof startCur.epoch === "string" && typeof startCur.seq === "number") {
             earliestCursor.current = startCur;
@@ -1062,7 +1062,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
           setEntries(newEntries);
           lastSeq.current = maxEntrySeq(newEntries);
           const tAny = t as any;
-          setHasMore(tAny.hasOlder ?? newEntries.length >= 60);
+          setHasMore(hasMoreOf(tAny));
           const startCur = tAny.startCursor;
           if (startCur && typeof startCur.epoch === "string" && typeof startCur.seq === "number") {
             earliestCursor.current = startCur;

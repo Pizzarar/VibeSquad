@@ -1,5 +1,5 @@
 // Pure helpers for timeline filters, search hits and prompt jumps (no daemon imports, node --test friendly).
-import { joinTarget, joinInto, coalesceReplies, joinPages, markTurnBoundary, firstSeqOf, lastSeqOf } from "../server/reply-coalesce.mjs";
+import { joinTarget, joinInto, canExtendThought, coalesceReplies, joinPages, markTurnBoundary, firstSeqOf, lastSeqOf } from "../server/reply-coalesce.mjs";
 export { coalesceReplies, joinPages, markTurnBoundary };
 export type TimelineFilter = "all" | "text" | "tools" | "errors";
 export const TIMELINE_FILTERS: TimelineFilter[] = ["all", "text", "tools", "errors"];
@@ -37,6 +37,9 @@ export function sortedHits(locations: SearchLocation[]): SearchLocation[] {
 
 /** Index of the entry a seq falls in: the last entry whose seqStart <= seq. -1 when none is loaded. */
 export function entryIndexForSeq(entries: Ent[], seq: number): number {
+  // A reply that absorbed later text spans past the thought row after it: prefer the row whose range holds the seq.
+  const holds = entries.findIndex((e) => typeof e.seqStart === "number" && e.seqStart <= seq && seq <= (e.seqEnd ?? e.seqStart));
+  if (holds >= 0) return holds;
   let idx = -1;
   for (let i = 0; i < entries.length; i++) {
     const s = entries[i].seqStart;
@@ -122,7 +125,7 @@ export function mergeLiveItem<T extends Ent>(entries: T[], item: any, timestamp?
     const next = { item, liveSeqs: seq != null ? [seq] : undefined, ...(turnId != null ? { turnId } : {}) } as T;
     const i = joinTarget(entries, next);
     if (i >= 0) return [...entries.slice(0, i), joinInto(entries[i], next, { trailing: entries.slice(i + 1), snapshot: true }), ...entries.slice(i + 1)];
-  } else if (last && last.item && last.item.type === type && type === "reasoning" && !last.turnEnd) {
+  } else if (type === "reasoning" && canExtendThought(entries)) {
     const field = last.item.text == null && last.item.summary != null ? "summary" : "text";
     const prev = String(last.item[field] ?? "");
     const add = reasoningText(item);
@@ -189,4 +192,9 @@ export function maxEntrySeq(entries: Ent[]): number | null {
 export function syncNeeded(lastSeq: number | null, seq: number | undefined): "none" | "gap" | "unverified" {
   if (seq == null || lastSeq == null) return "unverified";
   return seq > lastSeq + 1 ? "gap" : "none";
+}
+
+/** "Load older" stays available when the daemon says so, else when the raw (pre-coalesce) page was full. */
+export function hasMoreOf(t: { hasOlder?: boolean; entries?: unknown[] }, limit = 60): boolean {
+  return t.hasOlder ?? (t.entries?.length ?? 0) >= limit;
 }

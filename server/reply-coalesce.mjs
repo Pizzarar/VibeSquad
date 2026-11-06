@@ -52,11 +52,46 @@ function canJoin(msg, thoughts, next) {
  * non-thought row, provided it is an assistant message of the same turn / message. `entries.length - 1 - index` is the
  * number of thought rows in between (0 for a plain tail extension).
  */
-export function joinTarget(entries, next) {
+export function joinTarget(entries, next, { strict = false } = {}) {
   let i = entries.length - 1;
   while (i >= 0 && isThought(entries[i])) i--;
   if (i < 0 || entries[i]?.item?.type !== "assistant_message") return -1;
-  return canJoin(entries[i], entries.slice(i + 1), next) ? i : -1;
+  const trailing = entries.slice(i + 1);
+  if (!canJoin(entries[i], trailing, next)) return -1;
+  if (strict && !hasSeparatingThought(entries[i], trailing, next)) return -1;
+  return i;
+}
+
+/**
+ * Static lists (a loaded projection or a page join) are authoritative about message boundaries, so two assistant rows
+ * only count as one split reply when a thought really sits between them in seq order: after the message's current end
+ * and before the next row. Without that, adjacent messages stay separate.
+ */
+function hasSeparatingThought(msg, thoughts, next) {
+  const end = lastSeqOf(msg);
+  const nextStart = firstSeqOf(next);
+  if (end == null) return false;
+  return thoughts.some((t) => {
+    const a = firstSeqOf(t);
+    const b = lastSeqOf(t);
+    return a != null && b != null && a > end && (nextStart == null || b < nextStart);
+  });
+}
+
+/**
+ * Whether a new thought chunk may extend the tail reasoning row. Not when text was absorbed into the message before it
+ * since that thought: the next thought is then a new row, so the streaming paths and coalesceReplies agree.
+ */
+export function canExtendThought(entries) {
+  const last = entries[entries.length - 1];
+  if (!isThought(last) || last.turnEnd) return false;
+  let i = entries.length - 2;
+  while (i >= 0 && isThought(entries[i])) i--;
+  const msg = entries[i];
+  if (msg?.item?.type !== "assistant_message") return true;
+  const m = lastSeqOf(msg);
+  const t = lastSeqOf(last);
+  return m == null || t == null || m <= t;
 }
 
 /**
@@ -76,7 +111,7 @@ export function joinInto(target, next, { trailing = [], snapshot = false } = {})
   let segStart = target.segStart;
   if (!snapshot || newSegment) {
     text = prev + add;
-    if (trailing.length) segStart = prev.length + own;
+    if (newSegment) segStart = prev.length + own; // only a thought-separated piece starts a new segment
   } else {
     const seg = target.segStart ?? 0;
     const head = prev.slice(0, seg);
@@ -98,8 +133,8 @@ export function joinInto(target, next, { trailing = [], snapshot = false } = {})
 export function coalesceReplies(entries) {
   const out = [];
   for (const e of entries) {
-    const i = e?.item?.type === "assistant_message" ? joinTarget(out, e) : -1;
-    if (i >= 0 && i < out.length - 1) out[i] = joinInto(out[i], e, { trailing: out.slice(i + 1) });
+    const i = e?.item?.type === "assistant_message" ? joinTarget(out, e, { strict: true }) : -1;
+    if (i >= 0) out[i] = joinInto(out[i], e, { trailing: out.slice(i + 1) });
     else out.push(e);
   }
   return out;
@@ -119,7 +154,7 @@ export function joinPages(older, newer) {
   while (t > 0 && isThought(older[t - 1])) t--;
   const at = t - 1;
   const trailing = [...older.slice(t), ...lead];
-  if (at < 0 || older[at].item?.type !== "assistant_message" || !canJoin(older[at], trailing, first)) return [...older, ...newer];
+  if (at < 0 || older[at].item?.type !== "assistant_message" || !canJoin(older[at], trailing, first) || !hasSeparatingThought(older[at], trailing, first)) return [...older, ...newer];
   return [...older.slice(0, at), joinInto(older[at], first, { trailing }), ...trailing, ...newer.slice(j + 1)];
 }
 

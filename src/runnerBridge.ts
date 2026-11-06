@@ -33,7 +33,7 @@ export async function runnerSpawn(payload: unknown): Promise<PaseoAgent> {
   return (await call<{ agent: PaseoAgent }>("/spawn", { method: "POST", body: JSON.stringify(payload) })).agent;
 }
 
-type TimelineResult = { entries: unknown[]; hasOlder?: boolean; startCursor?: unknown };
+type TimelineResult = { entries: unknown[]; hasOlder?: boolean; startCursor?: unknown; lastSeq?: number };
 
 /** Stands in for client.agents.ref(id) in Timeline.tsx: refetch over HTTP, subscribe by polling the seq. */
 export function runnerHandle(id: string) {
@@ -46,7 +46,7 @@ export function runnerHandle(id: string) {
         const t = setInterval(async () => {
           try {
             const r = await refetch({ limit: 1 });
-            const seq = (r.entries.at(-1) as { seqEnd?: number } | undefined)?.seqEnd ?? -1;
+            const seq = r.lastSeq ?? (r.entries.at(-1) as { seqEnd?: number } | undefined)?.seqEnd ?? -1;
             if (seq !== last) {
               if (last !== -1) cb({ event: { type: "runner-changed" } });
               last = seq;

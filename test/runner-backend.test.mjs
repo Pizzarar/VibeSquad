@@ -365,3 +365,16 @@ test('runner API: the timeline route forwards direction + cursor to fetchAgentTi
   assert.deepEqual(calls[0], { limit: 60 });
   assert.deepEqual(calls[1], { limit: 60, direction: 'before', cursor: { epoch: 'runner', seq: 42 } });
 });
+
+test('fetchAgentTimeline lastSeq advances with absorbed post-thought text while the newest row (a thought) does not', async () => {
+  const mk = (n) => [rev(1, 'output', { text: 'Hello ' }), rev(2, 'thought', { text: 'hmm' }), ...Array.from({ length: n }, (_, i) => rev(3 + i, 'output', { text: 'x' }))];
+  const seqs = [];
+  for (const n of [1, 2, 3]) {
+    const b = new RunnerBackend({ client: { request: async () => ({ events: mk(n) }) } });
+    const r = await b.fetchAgentTimeline('rn-x', { limit: 1 });
+    assert.equal(r.entries.at(-1).item.type, 'reasoning');
+    assert.equal(r.entries.at(-1).seqEnd, 2); // the old change signal: stuck
+    seqs.push(r.lastSeq);
+  }
+  assert.deepEqual(seqs, [3, 4, 5]);
+});
