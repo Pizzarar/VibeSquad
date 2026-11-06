@@ -51,12 +51,11 @@ test("Esc goes home only with an empty composer, outside modals, permission card
   assert.equal(escGoesHome({ ...base, inModal: true }), false);
 });
 
-test("focusPin does not call openPin when pin.brainstorm is null; spinUpPin handles explicit Spin Up", () => {
+test("focusPin hands a Buddy-less or closed pin to spinUpPin; spinUpPin calls openPin", () => {
   const pf = fs.readFileSync(new URL("../src/pinFocus.ts", import.meta.url), "utf8");
   const focusPinMatch = pf.match(/export async function focusPin\b[\s\S]*?\n\}/);
   assert.ok(focusPinMatch, "focusPin exists");
-  assert.doesNotMatch(focusPinMatch[0], /\bopenPin\s*\(/, "focusPin must never auto-spawn via openPin");
-  assert.match(focusPinMatch[0], /gone:\s*!live/, "focusPin sets gone: !live so the Spin Up panel renders immediately");
+  assert.match(focusPinMatch[0], /!pin\.brainstorm \|\| pin\.brainstorm\.agent\.status === "closed"\) return spinUpPin\(pin\)/, "first click spawns or reopens via spinUpPin");
 
   const spinUpMatch = pf.match(/export async function spinUpPin\b[\s\S]*?\n\}/);
   assert.ok(spinUpMatch, "spinUpPin exists");

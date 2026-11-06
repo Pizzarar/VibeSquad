@@ -190,3 +190,26 @@ test("closed match that will not reopen is replaced by a fresh spawn, not silent
     assert.equal(res.newAgentId, "new-1");
     assert.equal(daemon.created.length, 1);
   }));
+
+test("closed match whose refresh returns it still closed is replaced, not reused", () =>
+  withEnv(async (env) => {
+    const daemon = mockDaemon([{ id: "bs-closed", status: "closed", labels: { team: "sq", lane: "pin-test", role: "brainstorm" } }]);
+    daemon.refreshAgent = async (id) => ({ id, status: "closed" });
+    const res = await performBrainstormRestart(
+      { reason: "start-brainstorm", teamId: "sq", laneId: "pin-test", daemonClient: daemon, profilesPath: env.profilesPath, backstopDelayMs: 0 },
+      env.dir,
+    );
+    assert.notEqual(res.reused, true);
+    assert.equal(res.newAgentId, "new-1");
+  }));
+
+test("closed match on a backend that cannot reopen is replaced, not reused", () =>
+  withEnv(async (env) => {
+    const daemon = mockDaemon([{ id: "bs-closed", status: "closed", labels: { team: "sq", lane: "pin-test", role: "brainstorm" } }]);
+    const res = await performBrainstormRestart(
+      { reason: "start-brainstorm", teamId: "sq", laneId: "pin-test", daemonClient: daemon, profilesPath: env.profilesPath, backstopDelayMs: 0 },
+      env.dir,
+    );
+    assert.notEqual(res.reused, true);
+    assert.equal(daemon.created.length, 1);
+  }));

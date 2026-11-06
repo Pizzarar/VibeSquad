@@ -35,7 +35,7 @@ test("H1 store wiring: opening a squad leaves Squads Home; focusPin clears it", 
   const pf = src("pinFocus.ts");
   assert.match(pf, /export function enterSquadsHome/);
   assert.match(pf, /export function exitSquadsHome\(\) \{\s*set\(\{ focus: null, home: true, squadsHome: false/);
-  assert.match(pf, /home: false,\s*homeActive: null,\s*squadsHome: false,\s*spinUpError: null,\s*\}\);\s*if \(live\) \{/);
+  assert.match(pf, /home: false,\s*homeActive: null,\s*squadsHome: false,\s*spinUpError: null,\s*\}\);\s*show\(live\);/);
   const app = src("App.tsx");
   assert.match(app, /const onTeam = useCallback\(\(id: string\) => \{\s*setFullView\(false\);\s*setFocus\(false\);\s*exitSquadsHome\(\);/);
   assert.match(app, /<SquadsHome views=\{sidebarViews\} onSelectSquad=\{onTeam\} onOpenPin=\{onQuickStart\} onNewSquad=\{openNewSquad\}/);

@@ -147,7 +147,7 @@ export async function startLaneBrainstorm(opts: {
   agents?: Map<string, PaseoAgent>;
 }): Promise<string | null> {
   const { teamId, laneId, laneName, cwd, onPick } = opts;
-  const existing = findCrossTeamBrainstorm(resolve(opts.agents ?? getPaseoState().agents), laneId, "", { includeClosed: true });
+  const existing = findCrossTeamBrainstorm(resolve(opts.agents ?? getPaseoState().agents), laneId, "");
   if (existing) {
     onPick(existing.agent.id);
     return existing.agent.id;

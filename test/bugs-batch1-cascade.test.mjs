@@ -309,7 +309,7 @@ test("0c server: a second Restart click while the first is still spawning shares
     assert.equal(b.reused, true);
   }));
 
-test("0c client: a closed Buddy stays the pin's Buddy, so clicking the pin opens the same agent id", () => {
+test("0c client: a closed Buddy stays the pin's Buddy, but resolves to quick-start so the server reopens or replaces it", () => {
   const agents = new Map(
     [
       { id: "bs-c", title: "BRAINSTORM · VIBESQUAD", status: "closed", updatedAt: "2026-11-02T04:00:00Z", cwd: "/p/VibeSquad", labels: { team: "vibesquad", lane: "vibesquad", role: "brainstorm" } },
@@ -319,7 +319,7 @@ test("0c client: a closed Buddy stays the pin's Buddy, so clicking the pin opens
   const view = buildTeamViews(members).find((v) => v.team.id === "vibesquad");
   const pin = pinsForSquad(view).pinned.find((p) => p.lane.id === "vibesquad");
   assert.equal(pin.brainstorm?.agent.id, "bs-c");
-  assert.deepEqual(resolvePin(pin), { kind: "live", agent: pin.brainstorm });
+  assert.equal(resolvePin(pin).kind, "quick-start", "a closed Buddy is not live");
   assert.equal(findCrossTeamBrainstorm(members, "vibesquad"), null, "live-only by default (messages don't wake it)");
   assert.equal(findCrossTeamBrainstorm(members, "vibesquad", "", { includeClosed: true })?.agent.id, "bs-c");
 });
