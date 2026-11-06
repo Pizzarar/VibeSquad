@@ -21,6 +21,12 @@ import {
   writeBrainstormSummary,
 } from "../server/vibesquad-api.mjs";
 
+// Mock-daemon tests: the runner has a single owner and is never lazily started, so pin every lane to Paseo.
+process.env.VS_DEFAULT_BACKEND = "paseo";
+delete process.env.VS_BACKEND;
+// Never read the developer's real teams.json: a runner-pinned lane there would merge live runner agents into mock lists.
+process.env.VIBESQUAD_IGNORE_HOME_TEAMS = "1";
+
 function makeTempEnv() {
   const dir = mkdtempSync(join(tmpdir(), "vs-lead-handoff-test-"));
   const vsHome = join(dir, ".vibesquad");

@@ -12,6 +12,10 @@ import {
 } from "../server/brainstorm.mjs";
 import { applyWhosHere, refreshWhosHere, whosHereBody } from "../server/whos-here.mjs";
 
+// Mock-Paseo-daemon tests: the runner has a single owner and is never lazily started, so pin every lane to Paseo.
+process.env.VS_DEFAULT_BACKEND = "paseo";
+delete process.env.VS_BACKEND;
+
 test("(a) packs carry the new rules", () => {
   for (const needle of [
     "Read `docs/brainstorm/<lane>.md` before anything else",
