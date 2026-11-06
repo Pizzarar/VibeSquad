@@ -20,4 +20,5 @@ Attribution format used across plans, commits, `CREDITS.md`, and release notes:
 - Implemented VS agent runner adapters — Thanks to **Paseo** by `getpaseo`
 - Implemented VS MCP Paseo-name aliases — Thanks to **Paseo** by `getpaseo`
 - Implemented ACP adapters — Thanks to **Agent Client Protocol** by `Zed Industries`
+- Implemented VS native schedules & heartbeats — Thanks to **Paseo** by `getpaseo`
 - Built on the Paseo Daemon, CLI, and ACP Plugin Runtime — Thanks to **Paseo (`@getpaseo`)** by the Paseo team (`getpaseo`)

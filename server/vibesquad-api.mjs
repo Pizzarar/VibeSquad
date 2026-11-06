@@ -1,5 +1,6 @@
 import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { handleRunnerApi } from "./runner-api.mjs";
+import { handleSchedulesApi } from "./schedules.mjs";
 import { getStale, peekStale, readBuildStamp } from "./stale-runtime.mjs";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -407,6 +408,7 @@ export function isGatedRead(pathOrMethod, urlOrPath = "") {
   if (path === "/__vibesquad/paseo/usage") return new URL(url, "http://x").searchParams.get("refresh") === "1"; // forces provider API calls
   if (path === "/__vibesquad/paseo/surface") return true; // daemon config: listen, CORS, hub, backups
   if (path === "/__vibesquad/local-image") return true; // file contents
+  if (path === "/__vibesquad/schedules" || path.startsWith("/__vibesquad/schedules/")) return true; // prompts, target configs, run logs
   if (ADE_GATED_READ_PATHS.includes(path)) return true; // quick open / find in files: workspace file names and contents
   return false;
 }
@@ -1595,6 +1597,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     }
     if (!path.startsWith("/__vibesquad/")) return next?.();
     if (path.startsWith("/__vibesquad/runner/")) return handleRunnerApi(req, res, { readBody, sendJson });
+    if (path === "/__vibesquad/schedules" || path.startsWith("/__vibesquad/schedules/")) return handleSchedulesApi(req, res, { readBody, sendJson });
     switch (path) {
       case "/__vibesquad/pair/start":
         return handlePairStart(req, res);
