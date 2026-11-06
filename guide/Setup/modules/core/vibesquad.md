@@ -96,7 +96,10 @@ Expected: the `vs` command prints its usage text without an error (`cli/vs.mjs:2
 5. In the Buddy's chat ("TALK HERE"), type: **read START_HERE.md**. To start another feature later, click **+ TEAM**
    in the Squad's header or the **New idea** card. Squads and teams are explained in
    [Working with Squads](../../../Concepts/Squads.md).
-6. Official docs for the daemon: UNVERIFIED (no page was fetched for this module).
+6. Later, to update VibeSquad: when a **Restart & Update** bar appears at the top, click it (or **Later**). You can also
+   check by hand in **⚙ SETTINGS**, **About** tab. Details: [Settings](../../../Reference/Settings.md), "Update channel".
+   (Read from the source; UNVERIFIED on a real update.)
+7. Official docs for the daemon: UNVERIFIED (no page was fetched for this module).
 
 ## Name agents with labels, from day one
 VibeSquad sets labels for the agents it starts. If you start agents by hand with `paseo`, give each one labels when
