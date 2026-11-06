@@ -67,12 +67,20 @@ export class RunnerClient {
     this.starting ??= (async () => {
       if (await this.healthy()) return;
       fs.mkdirSync(this.home, { recursive: true });
-      const child = this.spawn(process.execPath, [RUNNER_ENTRY, "--home", this.home], {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true,
-        shell: false,
-      });
+      // Detached + own log + unref: a short-lived CLI one-liner must be able to exit without taking the runner
+      // (and every agent under it) with it. stdio goes to a file, never a pipe the parent has to keep open.
+      const log = fs.openSync(path.join(this.home, "runner.log"), "a");
+      let child;
+      try {
+        child = this.spawn(process.execPath, [RUNNER_ENTRY, "--home", this.home], {
+          detached: true,
+          stdio: ["ignore", log, log],
+          windowsHide: true,
+          shell: false,
+        });
+      } finally {
+        fs.closeSync(log);
+      }
       child.unref?.();
       const deadline = Date.now() + this.startTimeoutMs;
       while (Date.now() < deadline) {

@@ -23,6 +23,7 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
       if (systemPrompt) args.push('--append-system-prompt', systemPrompt);
       const child = spawnNoShell(command, args, { cwd, ...(env ? { env } : {}) }, spawnImpl);
       let turnOpen = false;
+      child.stdin.on('error', () => {}); // EPIPE from a write racing child exit: the 'exit' handler already reports it
       const stdin = (o) => child.stdin.write(JSON.stringify(o) + '\n');
       lineReader(child.stdout, (line) => {
         let m;
@@ -52,6 +53,7 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
           emit('status', { status: 'running' });
           stdin({ type: 'user', message: { role: 'user', content: text } });
         },
+        // Interrupts the current turn only; prompts already written to stdin still run (the ACP adapter drops its queue).
         cancel() {
           if (turnOpen) stdin({ type: 'control_request', request_id: `int-${Date.now()}`, request: { subtype: 'interrupt' } });
         },

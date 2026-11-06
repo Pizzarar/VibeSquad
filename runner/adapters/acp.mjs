@@ -1,16 +1,50 @@
-// Agent Client Protocol adapter (JSON-RPC 2.0 over stdio). Used with `opencode acp`.
-// Generic on purpose: Codex/AGY ACP agents differ only in command + args.
+// Agent Client Protocol adapter (JSON-RPC 2.0 over stdio). Generic on purpose: every ACP agent differs only in
+// command + args (ACP_PROVIDERS) and in how its model ids are spelled (pickModel).
+import path from 'node:path';
+import { existsSync } from 'node:fs';
 import { killTree, spawnNoShell } from '../spawn.mjs';
 import { lineReader } from './lines.mjs';
 import { mcpServerSpec, mcpServerPath } from './mcp.mjs';
 
-export function createAcpAdapter({ spawnImpl, name = 'opencode', command = 'opencode', args = ['acp'], mcp = true, mcpPath = mcpServerPath() } = {}) {
+// Provider ids are the ones profiles use (server/profiles.mjs). Codex has no ACP mode of its own: Zed's
+// codex-acp wraps it (Paseo drives `codex app-server` natively instead; we stay on ACP until it measurably fails).
+export const ACP_PROVIDERS = {
+  opencode: { command: 'opencode', args: ['acp'] },
+  'antigravity-cli': { command: 'agy', args: ['acp'] },
+  codex: { command: 'npx', args: ['-y', '@zed-industries/codex-acp'], resolve: resolveNpx },
+};
+
+// npx is a .cmd shim that cannot be spawned without a shell; run npm's own npx-cli.js with the current node instead.
+function resolveNpx() {
+  const cli = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npx-cli.js');
+  return existsSync(cli) ? { file: process.execPath, args: [cli] } : undefined;
+}
+export const PROVIDER_ALIASES = { agy: 'antigravity-cli', antigravity: 'antigravity-cli' };
+export const acpProviderIds = () => Object.keys(ACP_PROVIDERS);
+
+// Profiles name models loosely ("gemini-4-argon", "deepseek/deepseek-flash"); ACP agents advertise exact ids
+// ("gemini-4-argon-medium"). Exact id wins, else the first advertised id that extends it with a variant suffix.
+export function pickModel(want, available = []) {
+  const ids = available.map((m) => m?.modelId ?? m?.id).filter(Boolean);
+  if (ids.includes(want)) return want;
+  const variants = ids.filter((i) => i.startsWith(`${want}-`) || i.startsWith(`${want}/`));
+  return variants.find((i) => /medium$/.test(i)) ?? variants[0] ?? null;
+}
+
+export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, command, args, mcp = true, mcpPath = mcpServerPath(), resolved } = {}) {
+  const def = ACP_PROVIDERS[PROVIDER_ALIASES[provider] ?? provider];
+  if (!def && !command) throw new Error(`no ACP definition for provider "${provider}"`);
+  command ??= def.command;
+  args ??= def.args;
+  name ??= provider;
+  resolved ??= def?.resolve?.();
   return {
     name,
-    start({ cwd, systemPrompt, env, emit, onExit }) {
-      const child = spawnNoShell(command, args, { cwd, ...(env ? { env } : {}) }, spawnImpl);
+    start({ cwd, model, meta = {}, systemPrompt, env, emit, onExit }) {
+      const child = spawnNoShell(command, args, { cwd, ...(resolved ? { resolved } : {}), ...(env ? { env } : {}) }, spawnImpl);
       let nextId = 1;
       const pending = new Map();
+      child.stdin.on('error', () => {}); // EPIPE from a write racing child exit: the 'exit' handler already reports it
       const write = (o) => child.stdin.write(JSON.stringify({ jsonrpc: '2.0', ...o }) + '\n');
       const request = (method, params) => new Promise((resolve, reject) => {
         const id = nextId++;
@@ -40,7 +74,8 @@ export function createAcpAdapter({ spawnImpl, name = 'opencode', command = 'open
           }
         } else if (m.method && m.id !== undefined) {
           // Agent -> client request. The spike grants no permissions and no fs/terminal capabilities.
-          write({ id: m.id, result: m.method === 'session/request_permission' ? { outcome: { outcome: 'cancelled' } } : null });
+          // Approve by default (like the claude adapter's 'auto'); only an explicit lane permissionMode 'deny' denies.
+          write({ id: m.id, result: m.method === 'session/request_permission' ? permissionOutcome(m.params, meta.permissionMode) : null });
         }
       });
       lineReader(child.stderr, (line) => emit('stderr', { line }));
@@ -54,9 +89,37 @@ export function createAcpAdapter({ spawnImpl, name = 'opencode', command = 'open
         await request('initialize', { protocolVersion: 1, clientCapabilities: {} });
         const s = await request('session/new', { cwd, mcpServers: mcp ? [acpMcpServer(mcpServerSpec({ env, path: mcpPath }))] : [] });
         sessionId = s.sessionId;
-        emit('session', { sessionId, model: s.models?.currentModelId });
+        // Model lists come either as `models` (opencode, agy: session/set_model) or as a `model` configOption
+        // (codex-acp: session/set_config_option).
+        const opt = (s.configOptions ?? []).find((o) => o.id === 'model' || o.category === 'model');
+        const viaConfig = !s.models && !!opt;
+        let current = s.models?.currentModelId ?? opt?.currentValue;
+        if (model) {
+          const advertised = s.models?.availableModels ?? (opt?.options ?? []).map((o) => ({ modelId: o.value }));
+          const id = (advertised.length ? pickModel(model, advertised) : null) ?? (viaConfig ? model : null); // codex-acp's bundled list lags the account's real models: trust the profile
+          if (!id) emit('stderr', { line: `model "${model}" not offered by ${name}; using ${current ?? 'its default'}` });
+          else if (id !== current) {
+            try {
+              if (viaConfig) await request('session/set_config_option', { sessionId, configId: opt.id, value: id });
+              else await request('session/set_model', { sessionId, modelId: id });
+              current = id;
+            } catch (e) { emit('stderr', { line: `set model ${id} failed: ${e.message}` }); }
+          }
+        }
+        // The profile mode is this provider's own ACP mode (meta.acpMode); apply it only if the agent advertises it.
+        if (meta.acpMode && (s.modes?.availableModes ?? []).some((m) => m.id === meta.acpMode) && meta.acpMode !== s.modes?.currentModeId) {
+          try { await request('session/set_mode', { sessionId, modeId: meta.acpMode }); }
+          catch (e) { emit('stderr', { line: `set_mode ${meta.acpMode} failed: ${e.message}` }); }
+        }
+        emit('session', { sessionId, model: current });
       })();
-      ready.catch((e) => emit('error', { message: e.message }));
+      let failed = null;
+      ready.catch((e) => {
+        // A session that never came up is dead: surface it and end the process so the agent reads as exited, not "starting".
+        failed = e;
+        emit('error', { message: e.message });
+        killTree(child);
+      });
 
       async function pump() {
         if (promptInFlight || !queue.length) return;
@@ -73,8 +136,17 @@ export function createAcpAdapter({ spawnImpl, name = 'opencode', command = 'open
         pump();
       }
       return {
-        send(text) { queue.push(text); ready.then(pump, () => {}); },
-        cancel() { if (sessionId) write({ method: 'session/cancel', params: { sessionId } }); },
+        send(text) {
+          if (failed) throw new Error(`agent session failed to start: ${failed.message}`);
+          queue.push(text);
+          ready.then(pump, () => {});
+        },
+        // Cancel ends the current turn AND drops prompts queued behind it (a cancelled lane must not resume on stale asks).
+        // Differs from the claude adapter, whose cancel only interrupts the current turn and lets later prompts run.
+        cancel() {
+          queue.length = 0;
+          if (sessionId) write({ method: 'session/cancel', params: { sessionId } });
+        },
         kill() { killTree(child); },
       };
     },
@@ -84,4 +156,12 @@ export function createAcpAdapter({ spawnImpl, name = 'opencode', command = 'open
 // ACP wants env as a [{name, value}] list.
 function acpMcpServer(spec) {
   return { name: spec.name, command: spec.command, args: spec.args, env: Object.entries(spec.env).map(([name, value]) => ({ name, value })) };
+}
+
+// Auto-approve unless the lane explicitly asks to deny (meta.permissionMode === 'deny'); a profile's own mode
+// (e.g. "default") never denies, it is the provider's ACP mode.
+function permissionOutcome(params, mode) {
+  if (mode === 'deny') return { outcome: { outcome: 'cancelled' } };
+  const opt = (params?.options ?? []).find((o) => o.kind === 'allow_once') ?? (params?.options ?? []).find((o) => String(o.kind).startsWith('allow'));
+  return opt ? { outcome: { outcome: 'selected', optionId: opt.optionId } } : { outcome: { outcome: 'cancelled' } };
 }

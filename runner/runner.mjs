@@ -2,11 +2,11 @@
 import { randomBytes } from 'node:crypto';
 import { statSync } from 'node:fs';
 import { createClaudeAdapter } from './adapters/claude.mjs';
-import { createAcpAdapter } from './adapters/acp.mjs';
+import { createAcpAdapter, acpProviderIds, PROVIDER_ALIASES } from './adapters/acp.mjs';
 import { LogStore } from './log.mjs';
 
 // squad/team/lane/role/ord/profile are plain meta fields, first-class on the agent record.
-const META_FIELDS = ['squad', 'team', 'lane', 'role', 'ord', 'profile', 'title', 'permissionMode', 'labels'];
+const META_FIELDS = ['squad', 'team', 'lane', 'role', 'ord', 'profile', 'title', 'permissionMode', 'acpMode', 'labels'];
 
 // Values that reach a CLI as an argument must never look like a flag.
 export function validateCreate({ model, cwd, meta = {} }) {
@@ -31,7 +31,10 @@ export function agentEnv(id, meta = {}, base = process.env) {
 }
 
 export function defaultAdapters(opts = {}) {
-  return { claude: createClaudeAdapter(opts), opencode: createAcpAdapter(opts) };
+  const adapters = { claude: createClaudeAdapter(opts) };
+  for (const provider of acpProviderIds()) adapters[provider] = createAcpAdapter({ ...opts, provider });
+  for (const [alias, target] of Object.entries(PROVIDER_ALIASES)) adapters[alias] = adapters[target];
+  return adapters;
 }
 
 export class Runner {
