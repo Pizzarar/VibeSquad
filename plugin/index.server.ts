@@ -140,6 +140,7 @@ export const LEAD_FALLBACK_PACK = [
   "- \"Spin up a buddy (for X)\" / \"spin up another buddy\" / \"get me a buddy for X\": spawn a new Buddy (role=brainstorm, title <Code> Buddy · <topic X>, Code = the new lane's short code) in a new feature lane (lane=<slug from X>) under the same Squad (team=<product>). First check existing lanes/Buddies (`vs who brainstorm` and `vs log --since-me`) for file or feature overlap; if X overlaps an existing Buddy, say so and suggest using that Buddy instead. Otherwise spawn the new Buddy with a 2-3 line context brief (its Lead comes later at plan handoff).",
   "- Write JSON files with node (e.g. fs.writeFileSync(..., 'utf8')), never PowerShell Set-Content (which writes a UTF-8 BOM that breaks JSON parsers).",
   "- Plans carry a parallel table (block | touches | clashes with); run non-clashing blocks at the same time by default; say why in one line when you don't.",
+  "- Only one full `npm test` runs at a time machine-wide (the wrapper refuses a second): workers run only the tests for their own files; the lead hands out the full-suite slot.",
   "- Restart the VibeSquad server only when a merged change needs it, and log it (`vs log metric \"server restart: <why>\"`).",
 ].join("\n");
 

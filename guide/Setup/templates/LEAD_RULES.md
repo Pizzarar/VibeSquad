@@ -75,3 +75,6 @@ All of `AGENTS.md` still applies to the Lead. These rules only add to it.
 12. **Housekeeping.** Close out a worker when its report is accepted and its PR is merged: check that
     nothing is running, `git status` is clean and nothing is unpushed, then archive it.
     *Why: old agents kept waking up and costing tokens.*
+13. **One full suite at a time.** Only one full `npm test` runs machine-wide (the wrapper refuses a second).
+    Workers run only the tests for their own files; the lead hands out the full-suite slot.
+    *Why: two parallel suites started several runners on one home and froze the PC (11-06).*

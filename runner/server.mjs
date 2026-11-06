@@ -5,11 +5,12 @@
 // Discovery for VS: <home>/runner.json = { port, pid, startedAt }.
 import http from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Runner } from './runner.mjs';
+import { acquireRunnerLock, releaseLock } from './lock.mjs';
 
 export const MAX_BODY_BYTES = 1024 * 1024;
 export const MAX_INPUT_BYTES = 24 * 1024 * 1024; // /input carries base64 image attachments
@@ -113,6 +114,17 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
   });
 }
 
+async function holderHealthy(home) {
+  try {
+    const { port } = JSON.parse(readFileSync(path.join(home, 'runner.json'), 'utf8'));
+    const token = readFileSync(path.join(home, 'token'), 'utf8').trim();
+    const res = await fetch(`http://127.0.0.1:${port}/health`, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(2000) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export function writeDiscovery(home, { port, token }) {
   mkdirSync(home, { recursive: true });
   const tokenFile = path.join(home, 'token');
@@ -125,6 +137,14 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const arg = (n, d) => { const i = process.argv.indexOf(`--${n}`); return i > 0 ? process.argv[i + 1] : d; };
   const home = arg('home', path.join(os.homedir(), '.vibesquad', 'runner'));
   const dir = arg('dir', path.join(home, 'agents'));
+  mkdirSync(home, { recursive: true });
+  const lockFile = path.join(home, 'runner.lock');
+  // One runner per home: if a live runner already owns the lock, leave its discovery files alone and exit 0.
+  const lock = await acquireRunnerLock(home, { isHealthy: () => holderHealthy(home) });
+  if (!lock.owned) {
+    console.log(JSON.stringify({ alreadyRunning: lock.holder, home }));
+    process.exit(0);
+  }
   const token = randomBytes(32).toString('hex');
   const runner = new Runner({ dir });
   const server = createServer(runner, { token });
@@ -139,9 +159,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     stopping = true;
     runner.shutdown();
     try { rmSync(path.join(home, 'runner.json'), { force: true }); } catch { /* ignore */ }
+    try { releaseLock(lockFile); } catch { /* ignore */ }
     server.close();
     setTimeout(() => process.exit(0), 300).unref();
   };
+  process.on('exit', () => { try { releaseLock(lockFile); } catch { /* ignore */ } });
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
 }
