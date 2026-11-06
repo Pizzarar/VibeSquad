@@ -109,3 +109,59 @@ test("a non-timeout createAgent error still throws and nothing is sent", async (
 test("the daemon's provider-refresh deadline is not treated as a recoverable create timeout", () => {
   assert.ok(!isCreateTimeoutError(new Error("Timed out refreshing Claude after 120000ms; pending: version")));
 });
+
+test("recovery matches on role+lane+team+restart origin, not on title alone, and never adopts the predecessor", async () => {
+  const decoys = [
+    mk({ id: "other-lane", labels: { ...labels, lane: "other" } }), // same title, other lane
+    mk({ id: "other-team", labels: { ...labels, team: "elsewhere" } }),
+    mk({ id: "other-role", labels: { ...labels, role: "worker" } }),
+    mk({ id: "older", labels: { ...labels, "vs.restarted-from": "something-else" } }),
+    mk({ id: "start-brainstorm" }), // the predecessor itself
+  ];
+  const b = fakeBackend([decoys]);
+  assert.equal(await recoverTimedOutCreate({ backend: b, labels, title: "BUDDY", initialPrompt: "BOOT", startedMs: Date.now() - 1000, ...fast }), null);
+  assert.deepEqual(b.sent, []);
+  const good = fakeBackend([[...decoys, mk({ id: "real", title: "DIFFERENT TITLE" })]]);
+  const a = await recoverTimedOutCreate({ backend: good, labels, title: "BUDDY", initialPrompt: "BOOT", startedMs: Date.now() - 1000, ...fast });
+  assert.equal(a.id, "real");
+});
+
+test("lastActivityAt alone (stamped at creation) is not activity: the prompt is still sent; used tokens are activity", async () => {
+  const stamped = fakeBackend([[mk({ lastActivityAt: new Date().toISOString() })]]);
+  await recoverTimedOutCreate({ backend: stamped, labels, title: "BUDDY", initialPrompt: "BOOT", startedMs: Date.now() - 1000, ...fast });
+  assert.deepEqual(stamped.sent, [["a1", "BOOT"]]);
+  const used = fakeBackend([[mk({ lastUsage: { contextWindowUsedTokens: 500 } })]]);
+  await recoverTimedOutCreate({ backend: used, labels, title: "BUDDY", initialPrompt: "BOOT", startedMs: Date.now() - 1000, ...fast });
+  assert.deepEqual(used.sent, []);
+});
+
+test("the spawn lag sampler is stopped on a throwing spawn path (no 50ms interval leaks)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vs-lag-leak-"));
+  const prev = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = join(dir, ".vibesquad");
+  resetBrainstormRestartState();
+  const started = new Set();
+  const realSet = globalThis.setInterval;
+  const realClear = globalThis.clearInterval;
+  globalThis.setInterval = (fn, ms, ...r) => { const h = realSet(fn, ms, ...r); if (ms === 50) started.add(h); return h; };
+  globalThis.clearInterval = (h) => { started.delete(h); return realClear(h); };
+  try {
+    mkdirSync(join(dir, "docs", "brainstorm"), { recursive: true });
+    const b = fakeBackend([[mk()]], { createErr: new Error("provider exploded") });
+    await assert.rejects(
+      performBrainstormRestart(
+        { agentId: "bs-1", teamId: "site", laneId: "pinned", reason: "manual", oldAgent: { id: "bs-1", title: "B", cwd: dir, labels: { team: "site", lane: "pinned", role: "brainstorm" } }, daemonClient: b, createRecovery: fast },
+        dir,
+      ),
+      /provider exploded/,
+    );
+    assert.equal(started.size, 0, "every 50ms sampler was cleared");
+  } finally {
+    globalThis.setInterval = realSet;
+    globalThis.clearInterval = realClear;
+    for (const h of started) realClear(h);
+    if (prev === undefined) delete process.env.VIBESQUAD_HOME;
+    else process.env.VIBESQUAD_HOME = prev;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

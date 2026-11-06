@@ -346,10 +346,11 @@ export async function recoverTimedOutCreate({ backend, labels, title, initialPro
     try {
       for (const item of agentListOf(await list.call(backend))) {
         const a = item?.agent ?? item;
-        if (!a?.id || a.archivedAt) continue;
+        if (!a?.id || a.archivedAt || a.id === labels["vs.restarted-from"]) continue; // never adopt the predecessor
         const l = a.labels ?? {};
-        const sameRestart = labels["vs.restarted-from"] && l["vs.restarted-from"] === labels["vs.restarted-from"];
-        const matches = a.title === title || (l.role === labels.role && l.lane === labels.lane && l.team === labels.team && sameRestart);
+        // Labels only (a title alone can match another lane's or an older Buddy): role, lane, team and the restart origin must all agree.
+        const sameRestart = Boolean(labels["vs.restarted-from"]) && l["vs.restarted-from"] === labels["vs.restarted-from"];
+        const matches = Boolean(labels.role) && l.role === labels.role && l.lane === labels.lane && l.team === labels.team && sameRestart;
         const ts = Date.parse(a.createdAt || a.updatedAt || "");
         if (matches && Number.isFinite(ts) && ts >= startedMs - 5000) {
           found = a;
@@ -359,7 +360,10 @@ export async function recoverTimedOutCreate({ backend, labels, title, initialPro
     } catch {}
     if (found && found.status !== "initializing") {
       if (found.status === "error" || found.status === "closed") return null;
-      const hasActivity = found.status !== "idle" || Boolean(found.lastUserMessageAt) || Boolean(found.lastActivityAt);
+      // lastActivityAt is stamped at creation by RunnerBackend.toAgent, so it proves nothing; real activity is a non-idle status,
+      // a user message or used tokens (as plugin/index.server.ts does).
+      const usedTokens = (found.lastUsage?.contextWindowUsedTokens ?? 0) + (found.lastUsage?.inputTokens ?? 0);
+      const hasActivity = found.status !== "idle" || Boolean(found.lastUserMessageAt) || usedTokens > 0;
       if (!hasActivity && initialPrompt && typeof backend.sendAgentPrompt === "function") {
         await backend.sendAgentPrompt(found.id, initialPrompt);
       }
@@ -394,6 +398,8 @@ export function createSpawnTimer(kind) {
     lagMax = Math.max(lagMax, Date.now() - lagLast - SPAWN_LAG_TICK_MS);
   };
   return {
+    /** Stop the lag sampler without reporting (early returns and throws of the spawn path). Idempotent. */
+    stop: stopLag,
     add(step, ms) {
       marks.push([step, ms]);
     },
@@ -1045,6 +1051,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       ...(pendingPrompt ? { pendingPrompt } : {}),
     };
   } finally {
+    timer.stop(); // every return/throw path: the 50ms lag sampler must not outlive the spawn
     if (!injectedClient && client && typeof backend.close === "function") {
       if (retireDone) retireDone.finally(() => backend.close().catch(() => {}));
       else await backend.close().catch(() => {});
