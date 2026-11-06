@@ -3,7 +3,7 @@
 // rn- ids -> RunnerBackend, other ids -> Paseo, creates by lane (every lane runs on the runner unless pinned to Paseo).
 import { isRunnerId } from "../backend/runner-backend.mjs";
 import { coalesceReplies } from "../reply-coalesce.mjs";
-import { loadTeamsRegistry, whoCandidate } from "../identity.mjs";
+import { findLaneInRegistry, findTeamInRegistry, loadTeamsRegistry, whoCandidate } from "../identity.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
 export const REPORT_TYPES = ["done", "decision", "blocker"];
@@ -70,14 +70,18 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
         await Promise.resolve(backend.close?.()).catch(() => {});
       }
     },
-    // Live leads in (team, lane): the exact `vs who lead` filter (whoCandidate), over the merged agent list.
+    // Live leads in (team, lane): the exact `vs who lead` filter (whoCandidate), over the merged agent list. Fails closed:
+    // an unreadable or partial list (runner down, Paseo down for a lane Paseo would serve) throws instead of reading as "none".
     async findLiveLeads({ team, lane }) {
-      const res = await ctx.withBackend({ lane }, (b) => (b.fetchAgents ?? b.listAgents).call(b, {}));
+      const res = await ctx.withBackend({ lane, requireRunner: true }, (b) => (b.fetchAgents ?? b.listAgents).call(b, {}));
+      const list = Array.isArray(res) ? res : Array.isArray(res?.entries) ? res.entries : Array.isArray(res?.agents) ? res.agents : null;
+      if (!list) throw new Error(`can't verify the lane has no live lead: agent list unreadable`);
+      if (res.paseoUnavailable) {
+        const { runnerLanes } = await import("../backend/index.mjs");
+        if (!runnerLanes({ env }).has(lane.toLowerCase())) throw new Error(`can't verify the lane has no live lead: Paseo is unavailable`);
+      }
       const teams = ctx.teams ?? loadTeamsRegistry();
-      const wantTeamId = team;
-      return entriesOf(res)
-        .map((e) => e?.agent ?? e)
-        .filter((a) => a && whoCandidate(a, { teams, wantTeamId, wantLane: lane })?.role === "lead");
+      return list.map((e) => e?.agent ?? e).filter((a) => a && whoCandidate(a, { teams, wantTeamId: team, wantLane: lane })?.role === "lead");
     },
     ...overrides,
   };
@@ -141,24 +145,46 @@ async function spawnWorker(ctx, args = {}) {
   const { team, lane } = ctx.identity;
   const title = clean(args.title) || `Worker ${new Date().toISOString().slice(11, 19)}`;
   const labels = { ...(args.labels ?? {}) };
+  const requestedRole = clean(labels.role).toLowerCase();
+  const requestedTeam = clean(labels.team);
+  const requestedLane = clean(labels.lane);
+  // Identity-affecting labels (everything effectiveAgentRole / resolveAgentIdentity read) are never caller-supplied.
+  for (const k of ["role", "digestFor", "lead", "orphan", "topic", "ord"]) delete labels[k];
   // A Buddy may start the lane's lead; nobody else, and no other role. Any failed condition is an error, never a downgrade.
-  const asLead = clean(labels.role).toLowerCase() === LEAD_ROLE;
+  const asLead = requestedRole === LEAD_ROLE;
   if (asLead) {
     const callerRole = clean(ctx.identity.role).toLowerCase();
     if (callerRole !== "brainstorm") throw new Error(`cannot spawn a lead: caller role is "${callerRole || "none"}", only a brainstorm (Buddy) may`);
     if (!team || !lane) throw new Error("cannot spawn a lead: caller has no team and lane");
-    if (clean(labels.lane) && clean(labels.lane).toLowerCase() !== lane.toLowerCase()) throw new Error(`cannot spawn a lead: target lane "${clean(labels.lane)}" is not the caller's lane "${lane}"`);
+    // Canonical ids from the registry, the same resolution `vs who` applies; an unregistered team/lane cannot be verified.
+    const teams = ctx.teams ?? loadTeamsRegistry();
+    const callerLane = findLaneInRegistry(lane, teams);
+    const callerTeam = findTeamInRegistry(team, teams);
+    if (!callerLane || !callerTeam || callerLane.team.id !== callerTeam.id) throw new Error(`cannot spawn a lead: caller team "${team}" / lane "${lane}" is not in the team registry`);
+    const canonTeam = callerTeam.id;
+    const canonLane = callerLane.lane.id;
+    const sameLane = (q) => findLaneInRegistry(q, teams)?.lane.id === canonLane;
+    if (requestedLane && !sameLane(requestedLane)) throw new Error(`cannot spawn a lead: target lane "${requestedLane}" is not the caller's lane "${canonLane}"`);
+    if (requestedTeam && findTeamInRegistry(requestedTeam, teams)?.id !== canonTeam) throw new Error(`cannot spawn a lead: target team "${requestedTeam}" is not the caller's team "${canonTeam}"`);
     if (!clean(profile?.name).startsWith(LEAD_PROFILE_PREFIX)) throw new Error(`cannot spawn a lead: profile "${clean(profile?.name) || profileName || "none"}" is not a "${LEAD_PROFILE_PREFIX}" profile`);
-    const live = await ctx.findLiveLeads({ team, lane });
-    if (live.length) throw new Error(`cannot spawn a lead: lane "${lane}" already has a live lead (${live.map((a) => a.id).join(", ")})`);
-    labels.lead = lane;
+    let live;
+    try {
+      live = await ctx.findLiveLeads({ team: canonTeam, lane: canonLane });
+    } catch (e) {
+      throw new Error(e?.message?.startsWith("can't verify") ? e.message : `can't verify the lane has no live lead: ${e?.message ?? e}`);
+    }
+    if (live.length) throw new Error(`cannot spawn a lead: lane "${canonLane}" already has a live lead (${live.map((a) => a.id).join(", ")})`);
+    labels.lead = canonLane;
+    labels.team = canonTeam;
+    labels.lane = canonLane;
+  } else {
+    if (team || labels.team) labels.team = team || labels.team;
+    if (lane || labels.lane) labels.lane = lane || labels.lane;
   }
-  if (team || labels.team) labels.team = team || labels.team;
-  if (lane || labels.lane) labels.lane = lane || labels.lane;
   const role = asLead ? LEAD_ROLE : WORKER_ROLE;
   labels.role = role;
   if (profile) labels.profile = profile.name || profile.id; // by name: the plugin, failover and digest identity all match names
-  else if (labels.profile === undefined) delete labels.profile;
+  else delete labels.profile; // a caller-supplied profile label can make the agent read as a digest
   if (isRunnerCaller(ctx)) labels["vs.parent"] = ctx.identity.agentId;
   delete labels.ord; // ordinals are assigned by the squad, never by a spawn arg
   labels.job = clean(labels.job) || title;

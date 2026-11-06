@@ -219,15 +219,15 @@ test('spawn_worker: profile -> provider/model/mode, inherits team+lane, role=wor
   await assert.rejects(callTool(ctx, 'spawn_worker', { title: 't', profile: 'Nope', prompt: 'p' }), /unknown profile/);
 });
 
-const LEAD_TEAMS = [{ id: 'efi', name: 'EFI', paths: ['efi'], lanes: [{ id: 'own', name: 'Own' }, { id: 'ui', name: 'UI' }] }];
+const LEAD_TEAMS = [{ id: 'efi', name: 'EFI', paths: ['efi'], lanes: [{ id: 'own', name: 'Own', aliases: ['mine'] }, { id: 'ui', name: 'UI' }] }];
 const leadAgent = (id, over = {}) => ({ id, title: id, status: 'idle', labels: { team: 'efi', lane: 'own', role: 'lead', ...over } });
 
 // The real findLiveLeads (vs who filter) over a stubbed backend list; no runner needed.
-function leadCtx({ role = 'brainstorm', lane = 'own', agents = [] } = {}) {
-  const runnerBackend = { ...fakeBackend('rn'), fetchAgents: async () => ({ entries: agents.map((agent) => ({ agent })) }) };
-  const ctx = fakeCtx({ identity: { agentId: 'rn-buddy', team: 'efi', lane, role }, runnerBackend, paseoBackend: fakeBackend('ps') });
+function leadCtx({ role = 'brainstorm', lane = 'own', team = 'efi', agents = [], list, env = {} } = {}) {
+  const runnerBackend = { ...fakeBackend('rn'), fetchAgents: list ?? (async () => ({ entries: agents.map((agent) => ({ agent })) })) };
+  const ctx = fakeCtx({ identity: { agentId: 'rn-buddy', team, lane, role }, runnerBackend, paseoBackend: fakeBackend('ps') });
   ctx.teams = LEAD_TEAMS;
-  ctx.findLiveLeads = createContext({ env: {}, identity: ctx.identity, withBackend: ctx.withBackend, teams: LEAD_TEAMS }).findLiveLeads;
+  ctx.findLiveLeads = createContext({ env, identity: ctx.identity, withBackend: ctx.withBackend, teams: LEAD_TEAMS }).findLiveLeads;
   return { ctx, runnerBackend };
 }
 const askLead = (ctx, extra = {}) => callTool(ctx, 'spawn_worker', { title: 'L', profile: 'Lead - Opus', prompt: 'lead', labels: { role: 'lead' }, ...extra });
@@ -252,6 +252,41 @@ test('spawn_worker: lead request is an error (no downgrade) unless Buddy + own l
   await assert.rejects(askLead(plain.ctx, { profile: 'Implement - Sonnet' }), /not a "Lead - " profile/);
   await assert.rejects(askLead(plain.ctx, { labels: { role: 'lead', lane: 'ui' } }), /not the caller's lane/);
   assert.equal(plain.runnerBackend.calls.length, 0);
+});
+
+test('spawn_worker: lead spawn refuses when the lane list cannot be verified (fail closed)', async () => {
+  const down = leadCtx({ list: async () => null });
+  await assert.rejects(askLead(down.ctx), /can't verify the lane has no live lead/);
+  const thrown = leadCtx({ list: async () => { throw new Error('boom'); } });
+  await assert.rejects(askLead(thrown.ctx), /can't verify the lane has no live lead: boom/);
+  const partial = leadCtx({ env: { VS_PASEO_LANES: 'own' }, list: async () => ({ entries: [], paseoUnavailable: true }) });
+  await assert.rejects(askLead(partial.ctx), /can't verify the lane has no live lead: Paseo is unavailable/);
+  for (const c of [down, thrown, partial]) assert.equal(c.runnerBackend.calls.length, 0);
+  // Paseo down is fine for a runner lane (default): the runner list is complete.
+  const runnerOnly = leadCtx({ list: async () => ({ entries: [], paseoUnavailable: true }) });
+  assert.equal((await askLead(runnerOnly.ctx)).id, 'rn-new');
+});
+
+test('spawn_worker: lead spawn normalizes team/lane through the registry; a mismatched label is rejected', async () => {
+  const alias = leadCtx({ lane: 'mine', team: 'EFI', agents: [leadAgent('rn-live')] });
+  await assert.rejects(askLead(alias.ctx), /already has a live lead \(rn-live\)/); // alias caller still sees the canonical lane's lead
+  const ok = leadCtx({ lane: 'mine', team: 'EFI' });
+  await askLead(ok.ctx, { labels: { role: 'lead', lane: 'own', team: 'efi' } });
+  assert.deepEqual([ok.runnerBackend.calls[0][1].labels.lane, ok.runnerBackend.calls[0][1].labels.team], ['own', 'efi']);
+  await assert.rejects(askLead(leadCtx().ctx, { labels: { role: 'lead', team: 'other' } }), /not the caller's team/);
+  await assert.rejects(askLead(leadCtx({ lane: 'ghost' }).ctx), /not in the team registry/);
+});
+
+test('spawn_worker: identity-affecting labels are stripped on the lead and worker paths', async () => {
+  const smuggle = { digestFor: 'x', lead: 'ui', orphan: '1', topic: 't', ord: '9' };
+  const lead = leadCtx();
+  await askLead(lead.ctx, { labels: { role: 'lead', ...smuggle } });
+  const l = lead.runnerBackend.calls[0][1].labels;
+  assert.deepEqual([l.digestFor, l.orphan, l.topic, l.ord, l.lead, l.role], [undefined, undefined, undefined, undefined, 'own', 'lead']);
+  const worker = leadCtx();
+  await callTool(worker.ctx, 'spawn_worker', { title: 'W', provider: 'claude', model: 'm', prompt: 'p', labels: { role: 'worker', ...smuggle } });
+  const w = worker.runnerBackend.calls[0][1].labels;
+  assert.deepEqual([w.digestFor, w.lead, w.orphan, w.topic, w.ord, w.role], [undefined, undefined, undefined, undefined, undefined, 'worker']);
 });
 
 test('spawn_worker: a Buddy without a lead request still gets a worker; role smuggling is ignored', async () => {
