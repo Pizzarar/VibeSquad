@@ -238,7 +238,7 @@ export function detectSilentTurn(
 // ---- A10/A11: report routing (workers must report in their final message) ----
 
 export const WORKER_REPORT_ROUTING_GUARD =
-  "Your final message is the report; never call built-in SendMessage or ListAgents; mid-task use Paseo send_agent_prompt.";
+  "Your final message is the report; never call built-in SendMessage or ListAgents; mid-task use `send` (VS MCP; `send_agent_prompt` on the Paseo MCP).";
 
 // Claude Code's built-in agent messaging, which cannot reach a Paseo lead.
 const MISROUTED_TOOLS = new Set(["sendmessage", "listagents"]);

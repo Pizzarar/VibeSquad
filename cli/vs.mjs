@@ -412,6 +412,7 @@ function parseArgs(argv) {
     "prompt",
     "title",
     "note",
+    "since",
   ]);
   const booleans = new Set([
     "sinceMe",
@@ -648,6 +649,7 @@ Usage:
   vs send <agent> "<text>"   message an agent
   vs status <agent>   status + last assistant message
   vs wait <agent> [--timeout <seconds>]   block until idle (exit 0), error or blocked (1), timeout (2); no limit by default
+  vs mcp alias-report [--since <30m|12h|7d>] [--json]   Paseo-name alias hits per alias + caller
   vs install-shim [--bin-dir <dir>]
   vs open [--print]   open the local web UI with owner access (sets the vs_local cookie); --print shows a one-time URL (60 s)
 
@@ -2215,6 +2217,92 @@ function writeCappedProviders(doc) {
   fs.writeFileSync(cappedProvidersFile(), JSON.stringify(doc, null, 2) + "\n", "utf8");
 }
 
+// ---------------------------------------------------------------------------
+// vs mcp alias-report: the VS MCP logs every Paseo-name alias hit as a metric
+// ("mcp-alias: tool=<name> caller=<id> lane=<lane>"). Group them so the 7-day zero-hit removal check is one command.
+// ---------------------------------------------------------------------------
+
+const ALIAS_HIT_RE = /^mcp-alias:\s+tool=(\S+)\s+caller=(\S+)(?:\s+lane=(\S+))?/;
+
+export function parseDuration(text) {
+  const m = /^(\d+(?:\.\d+)?)\s*([smhdw])$/i.exec(String(text).trim());
+  if (!m) throw new Error(`--since must look like 30m, 12h or 7d (got "${text}")`);
+  return Number(m[1]) * { s: 1e3, m: 6e4, h: 36e5, d: 864e5, w: 6048e5 }[m[2].toLowerCase()];
+}
+
+/** Groups alias-hit metric entries by alias + caller. An entry is mirrored into a lane log and a team log; identical ts+agent+text counts once. */
+export function aliasReport(entries, { sinceMs, now = Date.now() } = {}) {
+  const seen = new Set();
+  const groups = new Map();
+  for (const e of entries) {
+    if (e?.type !== "metric") continue;
+    const m = ALIAS_HIT_RE.exec(String(e.text ?? ""));
+    if (!m) continue;
+    const t = Date.parse(e.ts);
+    if (sinceMs !== undefined && !(t >= now - sinceMs)) continue;
+    const dedupe = `${e.ts}|${e.agent}|${e.text}`;
+    if (seen.has(dedupe)) continue;
+    seen.add(dedupe);
+    const [, alias, caller, lane] = m;
+    const key = `${alias}\u0000${caller}`;
+    const g = groups.get(key) ?? { alias, caller, lane: lane ?? "unknown", hits: 0, lastSeen: e.ts };
+    g.hits += 1;
+    if (t > Date.parse(g.lastSeen)) {
+      g.lastSeen = e.ts;
+      g.lane = lane ?? g.lane;
+    }
+    groups.set(key, g);
+  }
+  return [...groups.values()].sort((a, b) => b.hits - a.hits || a.alias.localeCompare(b.alias) || a.caller.localeCompare(b.caller));
+}
+
+function readAllTeamLogs() {
+  const out = [];
+  const teamsDir = path.join(BASE_DIR, "teams");
+  let dirs = [];
+  try {
+    dirs = fs.readdirSync(teamsDir);
+  } catch {
+    return out;
+  }
+  for (const d of dirs) {
+    let raw = "";
+    try {
+      raw = stripBom(fs.readFileSync(path.join(teamsDir, d, "log.jsonl"), "utf8"));
+    } catch {
+      continue;
+    }
+    for (const line of raw.split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      try {
+        out.push(JSON.parse(stripBom(line)));
+      } catch {
+        // skip malformed lines
+      }
+    }
+  }
+  return out;
+}
+
+function commandMcp(flags) {
+  if (String(flags._[0] ?? "") !== "alias-report") throw new Error("usage: vs mcp alias-report [--since <dur>] [--json]");
+  const sinceMs = flags.since !== undefined ? parseDuration(flags.since) : undefined;
+  const rows = aliasReport(readAllTeamLogs(), { sinceMs });
+  const total = rows.reduce((n, r) => n + r.hits, 0);
+  if (flags.json) {
+    process.stdout.write(JSON.stringify({ since: flags.since ?? null, total, groups: rows }, null, 2) + "\n");
+    return 0;
+  }
+  const window = flags.since ? `last ${flags.since}` : "all time";
+  if (!rows.length) {
+    process.stdout.write(`No Paseo-name alias hits (${window}).\n`);
+    return 0;
+  }
+  process.stdout.write(`Paseo-name alias hits (${window}): ${total}\n`);
+  for (const r of rows) process.stdout.write(`${String(r.hits).padStart(5)}  ${r.alias.padEnd(18)} ${r.caller}  lane=${r.lane}  last=${r.lastSeen}\n`);
+  return 0;
+}
+
 function commandCap(flags) {
   const sub = String(flags._[0] ?? "list").toLowerCase();
 
@@ -2363,6 +2451,7 @@ function main(argv) {
     if (command === "lesson" || command === "lessons") return commandLesson(flags);
     if (command === "wait") return commandWait(flags);
     if (command === "spawn" || command === "send" || command === "status") return commandAgentVerb(command, flags);
+    if (command === "mcp") return commandMcp(flags);
     if (command === "install-shim") return commandInstallShim(flags);
     if (command === "open") return commandOpen(flags);
     process.stderr.write(`Error: unknown command "${command}". Try "vs --help".\n`);
