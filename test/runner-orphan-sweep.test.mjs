@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { CHILDREN_FILE, createChildLedger, inspectProcess, matchesRecord, readChildren, sweepOrphans } from '../runner/children.mjs';
+import { CHILDREN_FILE, createChildLedger, inspectProcess, inspectProcesses, matchesRecord, readChildren, sweepOrphans } from '../runner/children.mjs';
 import { setChildLedger, spawnNoShell } from '../runner/spawn.mjs';
 
 const dirs = [];
@@ -69,12 +69,21 @@ test('sweep kills a real orphan, spares a start-time decoy, then clears the ledg
   ]));
   const info = inspectProcess(real.pid);
   assert.ok(info, 'process inspection unavailable on this machine');
-  const r = sweepOrphans(home);
+  const batch = inspectProcesses([real.pid, decoy.pid]);
+  assert.deepEqual(batch.get(real.pid), info, 'one batched lookup returns the same info as the per-pid lookup');
+  assert.ok(batch.has(decoy.pid));
+  const r = sweepOrphans(home); // default path: batched lookup
   assert.deepEqual(r.killed, [real.pid]);
   assert.deepEqual(r.skipped, [decoy.pid]);
   assert.equal(await gone(real.pid), true, 'orphan must die');
   assert.equal(alive(decoy.pid), true, 'decoy must survive');
   assert.deepEqual(readChildren(home), []);
+});
+
+test('batched lookup with a lookup failure returns an empty map (kill nothing)', () => {
+  const m = inspectProcesses([123, 456], { platform: 'win32', run: () => { throw new Error('no powershell'); } });
+  assert.equal(m.size, 0);
+  assert.equal(inspectProcesses([], { platform: 'win32', run: () => { throw new Error('not called'); } }).size, 0);
 });
 
 test('sweep spares a live pid whose image name differs', async () => {

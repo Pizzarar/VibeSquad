@@ -31,6 +31,28 @@ export function inspectProcess(pid, { platform = process.platform, run = spawnSy
   }
 }
 
+// Batched inspectProcess: one PowerShell call for every pid on Windows (~0.7 s each otherwise, before listen).
+// Returns Map<pid, info>; a pid missing from the map means gone or unknown, i.e. "do not kill".
+export function inspectProcesses(pids, { platform = process.platform, run = spawnSync } = {}) {
+  const ok = [...new Set(pids)].filter((pid) => Number.isInteger(pid) && pid > 0);
+  const out = new Map();
+  if (!ok.length) return out;
+  if (platform !== 'win32') {
+    for (const pid of ok) { const info = inspectProcess(pid, { platform, run }); if (info) out.set(pid, info); }
+    return out;
+  }
+  try {
+    const filter = ok.map((pid) => `ProcessId=${pid}`).join(' OR ');
+    const script = `Get-CimInstance Win32_Process -Filter '${filter}' | ForEach-Object { [string]$_.ProcessId + '|' + $_.Name + '|' + [DateTimeOffset]::new($_.CreationDate).ToUnixTimeMilliseconds() }`;
+    const r = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+    for (const line of String(r.stdout ?? '').split(/\r?\n/)) {
+      const m = /^(\d+)\|(.+)\|(\d+)\s*$/.exec(line);
+      if (m && ok.includes(Number(m[1]))) out.set(Number(m[1]), { name: m[2].trim().toLowerCase(), createdMs: Number(m[3]) });
+    }
+  } catch { /* unknown: kill nothing */ }
+  return out;
+}
+
 // True only when the live process is provably the one we recorded.
 export function matchesRecord(rec, info) {
   if (!rec || !info || typeof rec.name !== 'string' || !Number.isFinite(rec.startedAt)) return false;
@@ -60,12 +82,14 @@ function writeChildren(home, list) {
 }
 
 // Runs once at boot, before listening. Returns { killed: [pid], skipped: [pid] }.
-export function sweepOrphans(home, { inspect = inspectProcess, kill = (pid) => killTree({ pid, exitCode: null, kill: () => process.kill(pid) }), alive = pidAlive } = {}) {
+// Pass inspect (per pid) or inspectMany (batched, the default) to override the process lookup.
+export function sweepOrphans(home, { inspect, inspectMany = inspectProcesses, kill = (pid) => killTree({ pid, exitCode: null, kill: () => process.kill(pid) }), alive = pidAlive } = {}) {
   const killed = [];
   const skipped = [];
-  for (const rec of readChildren(home)) {
-    if (rec.pid === process.pid || !alive(rec.pid)) continue;
-    if (!matchesRecord(rec, inspect(rec.pid))) { skipped.push(rec.pid); continue; }
+  const live = readChildren(home).filter((rec) => rec.pid !== process.pid && alive(rec.pid));
+  const infos = inspect ? null : inspectMany(live.map((rec) => rec.pid));
+  for (const rec of live) {
+    if (!matchesRecord(rec, inspect ? inspect(rec.pid) : infos.get(rec.pid) ?? null)) { skipped.push(rec.pid); continue; }
     try { kill(rec.pid); killed.push(rec.pid); } catch { skipped.push(rec.pid); }
   }
   writeChildren(home, []);
