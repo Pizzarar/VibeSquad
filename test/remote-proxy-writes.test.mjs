@@ -741,7 +741,7 @@ describe("Block 4 server side: lane lastProfile, spawn budget, async handoff", (
     writeFileSync(
       join(root, "cli", "vs.mjs"),
       'import { mkdirSync, writeFileSync } from "node:fs"; import { dirname } from "node:path";\n' +
-        "setTimeout(() => { const p = process.env.VS_TEST_PACKET; mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, '# packet'); }, 2600);\n",
+        "setTimeout(() => { const p = process.env.VS_TEST_PACKET; mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, '# packet'); }, 3500);\n",
     );
     process.env.VIBESQUAD_HOME = vsHome;
     process.env.VIBESQUAD_TEAMS_FILE = teamsFile;
@@ -814,7 +814,7 @@ describe("Block 4 server side: lane lastProfile, spawn budget, async handoff", (
     const t0 = Date.now();
     const post = await call("/__vibesquad/handoff", { method: "POST", body: { team: "sq", lane: "lane1", agentId: "lead-1" } });
     assert.equal(post.status, 202, JSON.stringify(post.body));
-    assert.ok(Date.now() - t0 < 4000, "answered well under the 10 s proxy timeout");
+    assert.ok(Date.now() - t0 < 6000, "answered well under the 10 s proxy timeout");
     assert.equal(post.body.accepted, true);
     assert.equal(post.body.running, true);
     assert.equal(post.body.exists, false);

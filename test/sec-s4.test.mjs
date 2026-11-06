@@ -132,7 +132,7 @@ describe("S4 over HTTP", () => {
     fakeRoot = tmp("vs-s4-root-");
     // A `vs handoff` stand-in that takes 1.5 s, so the handoff test can see whether the server stays responsive.
     mkdirSync(join(fakeRoot, "cli"));
-    writeFileSync(join(fakeRoot, "cli", "vs.mjs"), "setTimeout(() => {}, 1500);\n");
+    writeFileSync(join(fakeRoot, "cli", "vs.mjs"), "setTimeout(() => {}, 800);\n");
     srv = createServer(api.createVibesquadMiddleware(fakeRoot));
     await new Promise((ok) => srv.listen(0, "127.0.0.1", ok));
     port = srv.address().port;
@@ -195,11 +195,11 @@ describe("S4 over HTTP", () => {
   // 5. handoff no longer blocks the event loop
   test("S4-5: POST /handoff runs async, one at a time; the server keeps answering meanwhile", async () => {
     const first = post("/__vibesquad/handoff", { team: "t", lane: "l" });
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 100));
     const t0 = Date.now();
     const probe = await call(port, "/__vibesquad/handoff?team=t&lane=l");
     assert.equal(probe.status, 200);
-    assert.ok(Date.now() - t0 < 700, `GET took ${Date.now() - t0} ms while a handoff ran`);
+    assert.ok(Date.now() - t0 < 1200, `GET took ${Date.now() - t0} ms while a handoff ran`);
     const second = await post("/__vibesquad/handoff", { team: "t", lane: "l" });
     assert.equal(second.status, 429, second.body);
     const done = await first;

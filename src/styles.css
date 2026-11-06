@@ -4321,3 +4321,8 @@ button.project-file-name:hover { text-decoration: underline; }
   .right-dock { width: 100% !important; max-width: 100% !important; min-width: 0 !important; max-height: 55%; border-left: 0; border-top: 1px solid var(--cyan); }
   .right-dock-resize-handle { display: none; }
 }
+
+.pin-focus-spinning { display: flex; align-items: center; gap: 8px; padding: 8px 0; }
+.pin-rail-mark-read { padding: 1px 6px; font-size: 10px; flex-shrink: 0; }
+.tl-note.info, .info { color: var(--cyan); }
+.tl-spinoff-block, .tl-sendto-block, .tl-looksdone-block { display: flex; flex-direction: column; gap: 6px; margin: 4px 0; }
