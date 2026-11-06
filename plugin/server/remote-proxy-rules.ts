@@ -127,6 +127,8 @@ const LANE: FieldSpec = {
     branch: str(200),
     aliases: { t: "array", max: 32, of: str(200) },
     hub: { t: "boolean" },
+    standing: { t: "boolean" },
+    backend: oneOf("paseo", "runner"),
     state: oneOf("pinned", "done", "removed"),
     doneAt: isoTime,
     removedAt: isoTime,
@@ -386,12 +388,12 @@ export function checkRemoteBody(method: RemoteMethod, pathname: string, body: st
 
 // ---- registry checks (need the live teams.json, read by the proxy over loopback GET /api/teams) ----
 
-type RegLane = { id?: unknown; name?: unknown; aliases?: unknown; paths?: unknown; path?: unknown; lastProfile?: unknown; worktree?: unknown; branch?: unknown; cwd?: unknown };
+type RegLane = { id?: unknown; name?: unknown; aliases?: unknown; paths?: unknown; path?: unknown; lastProfile?: unknown; worktree?: unknown; branch?: unknown; cwd?: unknown; backend?: unknown; standing?: unknown };
 type RegTeam = { id?: unknown; name?: unknown; aliases?: unknown; lanes?: unknown; paths?: unknown; path?: unknown; vibeMode?: unknown };
 
 /** Lane and team fields that steer where and how agents spawn. A remote write can't change them. */
 export const PINNED_TEAM_KEYS = ["paths", "path", "vibeMode"] as const;
-export const PINNED_LANE_KEYS = ["paths", "path", "lastProfile", "worktree", "branch", "cwd"] as const;
+export const PINNED_LANE_KEYS = ["paths", "path", "lastProfile", "worktree", "branch", "cwd", "backend"] as const;
 
 const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const asArray = (v: unknown): any[] => (Array.isArray(v) ? v : []);

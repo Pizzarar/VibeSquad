@@ -247,7 +247,7 @@ export function hubTeamsBlock({ team, agents }) {
   return out.join("\n");
 }
 
-export function buildBrainstormInitialPrompt({ laneId, laneUpper, buddyName, summaryContent, latestPlan, pendingPrompt, inFlight, vibeMode = false, hubTeams = "", autoRetire = false }) {
+export function buildBrainstormInitialPrompt({ laneId, laneUpper, buddyName, summaryContent, latestPlan, pendingPrompt, inFlight, vibeMode = false, hubTeams = "", autoRetire = false, standing = false }) {
   const tail =
     pendingPrompt && String(pendingPrompt).trim()
       ? `Pending message from the user to answer now:\n${defangPromptFences(String(pendingPrompt).trim())}`
@@ -260,7 +260,13 @@ export function buildBrainstormInitialPrompt({ laneId, laneUpper, buddyName, sum
     "",
     "Rules (BF-P1):",
     `- Update \`docs/brainstorm/${laneId}.md\` after every decision as a short diff (< ~5k tokens; sections: Who's here / Done when / Decided / Open / In flight). Keep \`## Done when\`. Never edit \`## Who's here\`; VibeSquad writes it. The brief is the handoff; do not write dated docs/BRAINSTORM_HANDOFF_*.md files.`,
-    ...(hubTeams ? [] : [`- Never complete the team yourself. When the lead reported PASS on the last plan block and nothing is Open, post "<Team> looks done. ✓ Mark complete · Not yet" with the line \`vs:looks-done\` in a code fence.`]),
+    ...(hubTeams
+      ? []
+      : [
+          standing
+            ? `- Never complete the team yourself. When the lead reported PASS on the last plan block and nothing is Open, post "<Team> looks done. ✓ Goal shipped · Not yet" with the line \`vs:looks-done\` in a code fence (offers \`✓ Goal shipped\` on standing teams and \`✓ Mark complete\` on disposable teams).`
+            : `- Never complete the team yourself. When the lead reported PASS on the last plan block and nothing is Open, post "<Team> looks done. ✓ Mark complete · Not yet" with the line \`vs:looks-done\` in a code fence.`,
+        ]),
     `- To find your current lead for handoff: run \`vs who lead\`.`,
     `- Before handing off a plan that adds a command, rule or feature, check for an existing primitive (\`paseo --help\`, Paseo MCP tool list, \`vs --help\`, skills). Name what you checked in the plan's Decided section.`,
     `- At >=80k context tokens, update the brief now. At the hard limit VibeSquad retires you; the next click on the pin starts a fresh Brainstorm from the brief.`,
