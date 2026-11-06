@@ -25,7 +25,7 @@ describe("vs install-shim / worktree create from a linked worktree", () => {
     git(main, ["init", "-q", "-b", "master"]);
     git(main, ["config", "user.email", "t@example.com"]);
     git(main, ["config", "user.name", "t"]);
-    for (const d of ["cli", "server", "docs/profiles"]) cpSync(join(REPO_ROOT, d), join(main, d), { recursive: true });
+    for (const d of ["cli", "server", "runner", "docs/profiles"]) cpSync(join(REPO_ROOT, d), join(main, d), { recursive: true });
     cpSync(join(REPO_ROOT, "package.json"), join(main, "package.json"));
     git(main, ["add", "-A"]);
     git(main, ["commit", "-q", "-m", "base"]);
@@ -68,6 +68,23 @@ describe("vs install-shim / worktree create from a linked worktree", () => {
       assert.ok(!body.includes(wt.toLowerCase()) && !body.includes(posix(wt).toLowerCase()), `${f} must not pin the worktree`);
     }
     for (const d of realBin) assert.equal(existsSync(join(d, "vs")), false, `${d} must stay untouched`);
+  });
+
+  it("install-shim with no --bin-dir refuses from a linked worktree even when the home is not under the temp dir", () => {
+    // Point os.tmpdir() elsewhere so the temp-dir guard cannot be what refuses; the home stays sandboxed in tmp.
+    const fakeTmp = join(tmp, "os-tmp");
+    mkdirSync(fakeTmp, { recursive: true });
+    const saved = env;
+    env = { ...env, TMPDIR: fakeTmp, TEMP: fakeTmp, TMP: fakeTmp };
+    try {
+      const r = runVs(join(wt, "cli", "vs.mjs"), ["install-shim"], wt);
+      assert.notEqual(r.status, 0);
+      assert.match(r.stderr, /from a linked worktree/);
+      assert.doesNotMatch(r.stderr, /under the temp dir/);
+      for (const d of realBin) assert.equal(existsSync(join(d, "vs")), false, `${d} must stay untouched`);
+    } finally {
+      env = saved;
+    }
   });
 
   it("install-shim with no --bin-dir refuses when the runtime home is under the temp dir", () => {

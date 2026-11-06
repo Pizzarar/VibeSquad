@@ -1697,6 +1697,10 @@ export function installVsShim({ binDirs, targetScript, baseHome, force = false }
   const inLinkedWorktree = path.resolve(mainRoot) !== ownRoot;
   const repoRoot = inLinkedWorktree && !force ? mainRoot : ownRoot;
   const runtimeDir = path.join(resolvedBaseHome, "runtime");
+  // The default global shim is the machine's `vs`: a linked worktree (a unit branch) must not rewrite it.
+  if (inLinkedWorktree && !force && !(Array.isArray(binDirs) && binDirs.length)) {
+    throw new Error(`refusing to write the default global shim from a linked worktree (${ownRoot}); run install-shim from the main checkout (${mainRoot}), or pass --bin-dir <dir> or --force`);
+  }
   // Default global bin dirs must not get a fallback runtime that lives under the temp dir (test HOME leak).
   if (!(Array.isArray(binDirs) && binDirs.length) && !force) {
     const rel = path.relative(path.resolve(os.tmpdir()), runtimeDir);
