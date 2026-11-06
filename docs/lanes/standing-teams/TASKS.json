@@ -1,0 +1,36 @@
+{
+  "lane": "standing-teams",
+  "code": "Sta",
+  "plan": "docs/PLAN_STANDING_TEAMS.md",
+  "units": [
+    {
+      "id": "unit-sta-standing-goal-shipped",
+      "goal": "Add standing?: boolean to PinFields, 1-click toggle in PinMenu, Goal shipped flow in runMarkComplete/PinDone, and remote proxy LANE schema support",
+      "files": [
+        "src/pins.ts",
+        "src/pinComplete.ts",
+        "src/PinDone.tsx",
+        "src/PinMenu.tsx",
+        "plugin/server/remote-proxy-rules.ts",
+        "plugin/index.server.ts",
+        "test/standing-teams.test.mjs"
+      ],
+      "doneCheck": "node --test test/standing-teams.test.mjs test/pin-complete.test.mjs test/pins-done.test.mjs && npx tsc --noEmit",
+      "status": "done"
+    },
+    {
+      "id": "unit-sta-wake-and-fold",
+      "goal": "Auto-wake sleeping pinned lanes in sendIdeaToTeam, reopen same-squad done/removed lanes in createPin and vs pin new, add aliases + state=removed in vs pin merge, and fold bug-chaser-2/quickstart-2 + mark standing lanes in teams.json",
+      "files": [
+        "src/pinActions.ts",
+        "src/PinIdeas.tsx",
+        "cli/vs.mjs",
+        "docs/brainstorm/bug-chaser.md",
+        "docs/brainstorm/quickstart.md",
+        "test/pin-wake-and-fold.test.mjs"
+      ],
+      "doneCheck": "node --test test/pin-wake-and-fold.test.mjs test/pins-ideas.test.mjs && npx tsc --noEmit",
+      "status": "done"
+    }
+  ]
+}
