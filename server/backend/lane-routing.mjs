@@ -121,9 +121,10 @@ export class RoutingBackend {
     return this.paseo.runCli(...args);
   }
 
-  /** Boot the runner if it is down (owner-initiated server paths only; see RunnerBackend.ensureRunningOnce). */
+  /** Fail with RUNNER_DOWN if the runner is down. Never starts it: only the VS server's supervisor does. */
   ensureRunner() {
-    return Promise.resolve(this.runner.ensureRunningOnce?.());
+    if (!this.lanes().size) return Promise.resolve(); // runner disabled (Paseo rollback): nothing to require
+    return Promise.resolve(this.runner.requireRunning?.());
   }
 }
 

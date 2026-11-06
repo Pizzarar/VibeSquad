@@ -316,13 +316,13 @@ export class RunnerBackend {
   }
 
   async connect() {
-    await this.rc.ensureRunning();
+    await this.rc.requireRunning();
   }
 
   async close() {}
 
   async createAgent({ config = {}, initialPrompt, prompt, labels = {}, env = {} } = {}) {
-    await this.rc.ensureRunning();
+    await this.rc.requireRunning();
     // before("agent.create"): the plugin's prompt layering + spawn guard, in-process so every spawn path (UI, MCP, vs CLI) gets it.
     config = { ...config };
     if (PROVIDER_ALIASES[config.provider]) config.provider = PROVIDER_ALIASES[config.provider]; // the plugin's antigravity-cli guard keys on the canonical id
@@ -439,20 +439,25 @@ export class RunnerBackend {
     return (await this.fetchAgent(id)).agent;
   }
 
+  /** Connect-only gate for MCP/CLI/API callers: throws RUNNER_DOWN when the runner is not up, never starts it. */
+  requireRunning() {
+    return this.rc.requireRunning();
+  }
+
   /**
-   * Start the runner if it is down: single-flight, and not again for a while after a failed start. For owner-initiated
-   * server paths (start-brainstorm, MCP spawn/list) where "no runner yet" must mean "boot it", never "no agents".
-   * Plain list/read calls do not start it, so a read-only visitor cannot.
+   * OWNER ONLY (the VS server's runner supervisor): start the runner if it is down. Single-flight, and not again for a while
+   * after a failed start. Resolves true when a runner is up afterwards.
    */
-  ensureRunningOnce() {
+  startOwned() {
     if (this.ensuring) return this.ensuring;
-    if (Date.now() - (this.ensureFailedAt ?? 0) < ENSURE_COOLDOWN_MS) return Promise.resolve();
+    if (Date.now() - (this.ensureFailedAt ?? 0) < ENSURE_COOLDOWN_MS) return Promise.resolve(false);
     this.ensuring = Promise.resolve()
-      .then(() => this.rc.ensureRunning())
+      .then(() => this.rc.startOwned())
       .then(
-        () => undefined,
+        () => true,
         () => {
           this.ensureFailedAt = Date.now();
+          return false;
         },
       )
       .finally(() => {

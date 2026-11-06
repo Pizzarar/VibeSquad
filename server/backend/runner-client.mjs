@@ -28,6 +28,14 @@ export class RunnerHttpError extends Error {
   }
 }
 
+/** Thrown by every non-owner path when the runner is not up: they connect, they never start it. */
+export class RunnerDownError extends RunnerHttpError {
+  constructor(message = "RUNNER_DOWN: the VibeSquad runner is not running. The VibeSquad server starts it (and restarts it if it dies); start or restart VibeSquad.") {
+    super(503, message);
+    this.code = "RUNNER_DOWN";
+  }
+}
+
 export class RunnerClient {
   constructor({ home = runnerHome(), fetchImpl = fetch, spawnImpl = spawn, startTimeoutMs = 8000 } = {}) {
     this.home = home;
@@ -113,8 +121,16 @@ export class RunnerClient {
     }
   }
 
-  /** Attach to a live runner, else start one detached (so a VS restart never kills agents). */
-  ensureRunning() {
+  /** Connect-only: resolves when a live runner answers, else throws RUNNER_DOWN. Never spawns. */
+  async requireRunning() {
+    if (!(await this.healthy())) throw new RunnerDownError();
+  }
+
+  /**
+   * OWNER ONLY (the VS server's runner supervisor, server/runner-supervisor.mjs): attach to a live runner, else start one
+   * detached (so a VS restart never kills agents). Every other caller uses requireRunning().
+   */
+  startOwned() {
     this.starting ??= (async () => {
       if (await this.healthy()) return;
       fs.mkdirSync(this.home, { recursive: true });

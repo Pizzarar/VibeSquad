@@ -102,7 +102,7 @@ test('antigravity-cli spawn with profile modeId "default" gets approvals and set
   });
   const runner = new Runner({ dir: tmp(), adapters: { 'antigravity-cli': fakeAdapter(spawnImpl, 'antigravity-cli') } });
   const calls = [];
-  const rc = { ensureRunning: async () => {}, request: async (method, route, body) => { if (method === 'POST') { calls.push(body); return { id: runner.create(body) }; } return runner.status(route.split('/')[2]); } };
+  const rc = { requireRunning: async () => {}, request: async (method, route, body) => { if (method === 'POST') { calls.push(body); return { id: runner.create(body) }; } return runner.status(route.split('/')[2]); } };
   const backend = new RunnerBackend({ client: rc, buildPrefix: async () => '' });
   await backend.createAgent({ config: { provider: 'antigravity-cli', model: 'gemini-4-argon', modeId: 'default', cwd: '.' }, prompt: 'x', labels: { role: 'worker' } });
   await tick(); await tick(); await tick();

@@ -50,16 +50,16 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
     async withBackend({ id } = {}, fn) {
       const { sharedRunnerBackend, getBackend, runnerLanes } = await import("../backend/index.mjs");
       if (isRunnerId(id)) {
-        // status/send/wait/cancel on a runner agent revive a dead runner too (single-flight, cooled down after a failed start).
+        // Connect-only: with the runner down this is RUNNER_DOWN. The VS server owns starting it.
         const runner = sharedRunnerBackend();
-        await runner.ensureRunningOnce?.();
+        await runner.requireRunning?.();
         return fn(runner);
       }
       const { createDaemonClient } = await import("../brainstorm.mjs");
       const backend = getBackend(createDaemonClient(), { lanes: () => runnerLanes({ env }) });
       await backend.connect?.();
-      await backend.ensureRunner?.(); // a trusted agent's spawn/list on a cold runner boots it
       try {
+        if (!id) await backend.ensureRunner?.(); // spawn/list touch the runner: RUNNER_DOWN when it is down (never starts it). A Paseo id does not need it.
         return await fn(backend);
       } finally {
         await Promise.resolve(backend.close?.()).catch(() => {});
