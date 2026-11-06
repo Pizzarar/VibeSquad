@@ -34,7 +34,7 @@ export function run(command, args, timeoutMs) {
 export function hasCustomMockCli() {
   const cli = String(process.env.PASEO_CLI ?? "").trim();
   if (!cli || cli === "paseo" || cli === "paseo.cmd") return false;
-  if (/[\/]Programs[\/]Paseo[\/]resources[\/]bin[\/]paseo(?:\.cmd|\.exe)?$/i.test(cli)) return false;
+  if (/[\\/]Programs[\\/]Paseo[\\/]resources[\\/]bin[\\/]paseo(?:\.cmd|\.exe)?$/i.test(cli)) return false;
   return true;
 }
 

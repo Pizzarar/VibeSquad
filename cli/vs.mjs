@@ -1987,7 +1987,7 @@ async function commandWait(flags) {
   const backend = getBackend(createDaemonClient());
   try {
     await backend.connect();
-    const { code, line } = await runWait(client, agentId, timeoutSec);
+    const { code, line } = await runWait(backend, agentId, timeoutSec);
     process.stdout.write(line + "\n");
     return code;
   } finally {
