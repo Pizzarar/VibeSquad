@@ -5,6 +5,28 @@ import { join, resolve } from "node:path";
 
 const rootDir = resolve(import.meta.dirname, "..");
 
+// Only the main checkout, on master and clean, may overwrite the live runtime. A linked worktree or a
+// unit branch would copy unmerged code into it (11-06 crash). --force / VIBESQUAD_SYNC_FORCE=1 overrides.
+export function syncSkipReason(repoRoot = rootDir, { force = false, git = defaultGit } = {}) {
+  if (force) return null;
+  try {
+    const abs = (p) => resolve(repoRoot, p);
+    const gitDir = abs(git(repoRoot, "rev-parse", "--git-dir"));
+    const common = abs(git(repoRoot, "rev-parse", "--git-common-dir"));
+    if (gitDir.toLowerCase() !== common.toLowerCase()) return "linked worktree, not the main checkout";
+    const branch = git(repoRoot, "rev-parse", "--abbrev-ref", "HEAD");
+    if (branch !== "master") return `on branch ${branch}, not master`;
+    if (git(repoRoot, "status", "--porcelain")) return "working tree not clean";
+  } catch (err) {
+    return `cannot verify git state (${String(err?.message ?? err).split("\n")[0]})`;
+  }
+  return null;
+}
+
+function defaultGit(cwd, ...args) {
+  return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "ignore"] }).trim();
+}
+
 export function syncRuntimeDir(repoRoot = rootDir) {
   const localAppData = process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local");
   const runtimeDir = join(localAppData, "VibeSquad", "runtime");
@@ -45,7 +67,10 @@ export function syncRuntimeDir(repoRoot = rootDir) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename)) {
-  const res = syncRuntimeDir();
+  const force = process.argv.includes("--force") || process.env.VIBESQUAD_SYNC_FORCE === "1";
+  const skip = syncSkipReason(rootDir, { force });
+  const res = skip ? { synced: false } : syncRuntimeDir();
+  if (skip) console.log(`[sync-runtime] skipped: ${skip} (use --force or VIBESQUAD_SYNC_FORCE=1)`);
   if (res.synced) {
     console.log(`[sync-runtime] synced ${res.runtimeDir} (${res.commit ? res.commit.slice(0, 7) : "no-git"})`);
   }
