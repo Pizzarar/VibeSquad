@@ -99,9 +99,12 @@ export function toTimeline(events) {
         entries.push({ ...base, item: { type: "user_message", text: e.text } });
         break;
       case "output":
-        if (last?.item.type === "assistant_message" && last.seqEnd === e.seq - 1) {
-          last.item.text += e.text;
-          last.seqEnd = e.seq;
+        // A late thought chunk must not split one reply in two: text after a trailing thought rejoins the message before it.
+        const msg = last?.item.type === "reasoning" ? entries[entries.length - 2] : last;
+        if (msg?.item.type === "assistant_message" && last.seqEnd === e.seq - 1) {
+          msg.item.text += e.text;
+          msg.seqEnd = e.seq;
+          if (msg !== last) last.seqEnd = e.seq;
         } else entries.push({ ...base, item: { type: "assistant_message", text: e.text } });
         break;
       case "thought":

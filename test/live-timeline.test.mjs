@@ -83,3 +83,13 @@ test("deltas append, with or without a (shared) messageId", () => {
   c = apply(c, ev({ type: "assistant_message", messageId: "m", text: "ab" }, 3)); // repeated delta text, new seq
   assert.equal(c[1].item.text, "abcdab");
 });
+
+test("live text -> thought -> text stays one assistant message", () => {
+  let e = apply(base, ev({ type: "assistant_message", text: "Hello " }, 1));
+  e = apply(e, ev({ type: "reasoning", text: "hmm" }, 2));
+  e = apply(e, ev({ type: "assistant_message", text: "world" }, 3));
+  const said = e.filter((x) => x.item.type === "assistant_message");
+  assert.equal(said.length, 1);
+  assert.equal(said[0].item.text, "Hello world");
+  assert.equal(filterEntries(e, "all").length, e.length);
+});

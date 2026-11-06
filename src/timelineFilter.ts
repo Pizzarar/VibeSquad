@@ -114,6 +114,15 @@ export function mergeLiveItem<T extends Ent>(entries: T[], item: any, timestamp?
   if (seq != null && entries.some((e) => coversSeq(e, seq))) return entries;
   const type = String(item.type ?? "");
   const last = entries[entries.length - 1];
+  // A thought chunk landing mid-reply must not split the message: text after a trailing reasoning row rejoins the one before it.
+  if (type === "assistant_message" && last?.item?.type === "reasoning" && entries[entries.length - 2]?.item?.type === "assistant_message") {
+    const i = entries.length - 2;
+    const prev = String(entries[i].item.text ?? "");
+    const add = String(item.text ?? "");
+    const next = entries.slice();
+    next[i] = { ...entries[i], item: { ...entries[i].item, text: add.length > prev.length && add.startsWith(prev) ? add : prev + add }, liveSeqs: seq != null ? [...(entries[i].liveSeqs ?? []), seq] : entries[i].liveSeqs };
+    return next;
+  }
   if (last && last.item && last.item.type === type) {
     if (STREAMED.has(type)) {
       const field = type === "reasoning" && last.item.text == null && last.item.summary != null ? "summary" : "text";

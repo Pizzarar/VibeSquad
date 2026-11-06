@@ -314,3 +314,14 @@ test('ensureRunning starts the runner detached, hidden, unref-ed, with stdio in 
   assert.equal(unref, true);
   assert.ok(existsSync(path.join(home, 'runner.log')));
 });
+
+test('toTimeline: a thought mid-reply does not split the assistant message', () => {
+  const ev = (seq, type, o) => ({ seq, ts: 1000 + seq, type, ...o });
+  const e = toTimeline([
+    ev(0, 'output', { text: 'Hello ' }), ev(1, 'thought', { text: 'hmm' }), ev(2, 'output', { text: 'world' }),
+  ]);
+  const said = e.filter((x) => x.item.type === 'assistant_message');
+  assert.equal(said.length, 1);
+  assert.equal(said[0].item.text, 'Hello world');
+  assert.equal(e.filter((x) => x.item.type === 'reasoning').length, 1);
+});
