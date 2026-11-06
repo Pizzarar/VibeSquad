@@ -538,6 +538,7 @@ if (isMain) {
     console.log(`VibeSquad serving ${distDir} on ${url}`);
     logServerStart({ rootDir });
     void sharedSchedules().then((st) => st.start()).catch(() => {});
+    server.once("close", () => void sharedSchedules().then((st) => st.stop()).catch(() => {}));
     setImmediate(() => getStale({ rootDir }));
     let activeMuxes = [];
     const applyLanListeners = (wantLan) => {

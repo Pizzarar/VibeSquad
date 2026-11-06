@@ -59,6 +59,16 @@ function localParts(ms, tz) {
   return { minute: Number(p.minute), hour: Number(p.hour) % 24, dom: Number(p.day), month: Number(p.month), dow: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(p.weekday) };
 }
 
+/** Start of the next local calendar day after `t` (ms). A DST day is 23h/25h, so a fixed 24h step can land an hour past/short of midnight. */
+function nextLocalMidnight(t, p, tz) {
+  const n = t + (24 * 60 - p.hour * 60 - p.minute) * 60_000;
+  const q = localParts(n, tz);
+  const sinceMidnight = q.hour * 60 + q.minute;
+  // Overshot (23h day: landed at ~01:00 of the day after): step back to local 00:00. Undershot (25h day) lands at 23:xx
+  // of the same day, so the caller's next pass skips the remaining minutes. Never move to or before `t`.
+  return sinceMidnight > 0 && sinceMidnight < 12 * 60 ? Math.max(n - sinceMidnight * 60_000, t + 60_000) : n;
+}
+
 /** Next fire time (ms) strictly after `from` for a cron expression in `tz` (default UTC); null if none within ~2 years. */
 export function nextCronRun(expr, from, tz) {
   const c = parseCron(expr);
@@ -68,7 +78,7 @@ export function nextCronRun(expr, from, tz) {
     const p = localParts(t, tz);
     const dayOk = c.domAny || c.dowAny ? c.dom.has(p.dom) && c.dow.has(p.dow) : c.dom.has(p.dom) || c.dow.has(p.dow);
     if (!c.month.has(p.month) || !dayOk) {
-      t += (24 * 60 - p.hour * 60 - p.minute) * 60_000; // skip to the next local midnight
+      t = nextLocalMidnight(t, p, tz);
       continue;
     }
     if (!c.hour.has(p.hour)) {
@@ -86,7 +96,7 @@ export function nextRunFor(cadence, from) {
   return nextCronRun(cadence?.expression, from, cadence?.timezone);
 }
 
-function validateCadence(c) {
+function validateCadence(c, from = Date.now()) {
   if (c?.type === "every") {
     const ms = Number(c.everyMs);
     if (!Number.isSafeInteger(ms) || ms < MIN_EVERY_MS) throw new Error("interval must be at least 10 seconds");
@@ -97,6 +107,7 @@ function validateCadence(c) {
     if (c.timezone) {
       try { new Intl.DateTimeFormat("en-US", { timeZone: c.timezone }); } catch { throw new Error(`unknown timezone "${c.timezone}"`); }
     }
+    if (nextCronRun(c.expression, from, c.timezone) === null) throw new Error("cron expression never fires");
     return { type: "cron", expression: String(c.expression).trim().replace(/\s+/g, " "), ...(c.timezone ? { timezone: String(c.timezone) } : {}) };
   }
   throw new Error("cadence must be { type: 'cron' | 'every' }");
@@ -111,14 +122,31 @@ function validateTarget(t) {
   throw new Error("target must be new-agent {config} or agent/self {agentId}");
 }
 
+/** undefined/null = no limit; otherwise a positive integer. */
+function validateMaxRuns(v) {
+  if (v === undefined || v === null || v === "") return undefined;
+  const n = Number(v);
+  if (!Number.isSafeInteger(n) || n < 1) throw new Error("maxRuns must be a positive integer");
+  return n;
+}
+
+function validateExpiresAt(v) {
+  if (v === undefined || v === null || v === "") return undefined;
+  const ms = new Date(v).getTime();
+  if (Number.isNaN(ms)) throw new Error("expiresAt is not a valid date");
+  return new Date(ms).toISOString();
+}
+
 const iso = (ms) => (ms == null ? null : new Date(ms).toISOString());
 const fail = (status, message) => Object.assign(new Error(message), { status });
 
-export function createSchedulesStore({ home = vsHome(), backend = null, now = () => Date.now(), tickMs = 15_000 } = {}) {
+export function createSchedulesStore({ home = vsHome(), backend = null, now = () => Date.now(), tickMs = 15_000, resolveIdentity = null, pruneEveryMs = 60_000 } = {}) {
   const file = path.join(home, "schedules.json");
   const logDir = path.join(home, "schedule-logs");
   let timer = null;
   const running = new Set();
+  const pendingCadence = new Set(); // due ticks that hit an in-flight run: that run counts as the due one
+  let lastPrune = 0;
 
   const load = () => {
     try {
@@ -164,10 +192,19 @@ export function createSchedulesStore({ home = vsHome(), backend = null, now = ()
     if (!backend) throw new Error("no agent backend configured");
     const tg = s.target;
     if (tg.type === "new-agent") {
+      // Same identity the Paseo agent.created hook derives: team/lane from the cwd, role worker.
+      let where = null;
+      try { where = (await resolveIdentity?.(tg.config.cwd)) ?? null; } catch {}
       const agent = await backend.createAgent({
         config: { ...tg.config },
         initialPrompt: s.prompt,
-        labels: { schedule: s.id, ...(s.name ? { scheduleName: s.name } : {}) },
+        labels: {
+          schedule: s.id,
+          ...(s.name ? { scheduleName: s.name } : {}),
+          role: "worker",
+          ...(where?.team ? { team: where.team } : {}),
+          ...(where?.lane ? { lane: where.lane } : {}),
+        },
       });
       return { agentId: agent?.id ?? null, message: `${trigger}: started agent ${agent?.id ?? "?"}` };
     }
@@ -177,25 +214,30 @@ export function createSchedulesStore({ home = vsHome(), backend = null, now = ()
 
   /** Fire a schedule. cadence=true advances runCount/nextRunAt; run-once leaves them alone. */
   async function fire(id, { trigger, cadence }) {
-    if (running.has(id)) return { skipped: true };
+    if (running.has(id)) {
+      if (cadence) pendingCadence.add(id);
+      return { skipped: true };
+    }
     running.add(id);
     try {
-      const list = load();
-      const s = getRaw(list, id);
+      const s = getRaw(load(), id);
       let result;
+      let entry;
       try {
         result = await execute(s, trigger);
-        log(id, { ok: true, trigger, ...result });
+        entry = { ok: true, trigger, ...result };
       } catch (e) {
         result = { error: String(e?.message ?? e) };
-        log(id, { ok: false, trigger, message: `${trigger}: failed: ${result.error}`, error: result.error });
+        entry = { ok: false, trigger, message: `${trigger}: failed: ${result.error}`, error: result.error };
       }
+      const advance = cadence || pendingCadence.has(id);
       const fresh = load();
       const cur = fresh.find((x) => x.id === id);
-      if (cur) {
+      if (cur) { // deleted while running: no log file, no write
+        log(id, entry);
         const t = now();
         cur.lastRunAt = t;
-        if (cadence) {
+        if (advance) {
           cur.runCount = (cur.runCount ?? 0) + 1;
           cur.nextRunAt = cur.status === "active" ? nextRunFor(cur.cadence, t) : cur.nextRunAt;
           finishIfDone(cur, t);
@@ -205,6 +247,7 @@ export function createSchedulesStore({ home = vsHome(), backend = null, now = ()
       return result;
     } finally {
       running.delete(id);
+      pendingCadence.delete(id);
     }
   }
 
@@ -219,9 +262,13 @@ export function createSchedulesStore({ home = vsHome(), backend = null, now = ()
       if (!prompt) throw fail(400, "prompt is required");
       let cadence;
       let target;
+      let maxRuns;
+      let expiresAt;
       try {
         cadence = validateCadence(req.cadence);
         target = validateTarget(req.target);
+        maxRuns = validateMaxRuns(req.maxRuns);
+        expiresAt = validateExpiresAt(req.expiresAt);
       } catch (e) {
         throw fail(400, e.message);
       }
@@ -238,12 +285,13 @@ export function createSchedulesStore({ home = vsHome(), backend = null, now = ()
         nextRunAt: nextRunFor(cadence, t),
         lastRunAt: null,
         runCount: 0,
-        ...(req.maxRuns ? { maxRuns: Number(req.maxRuns) } : {}),
-        ...(req.expiresAt ? { expiresAt: new Date(req.expiresAt).toISOString() } : {}),
+        ...(maxRuns ? { maxRuns } : {}),
+        ...(expiresAt ? { expiresAt } : {}),
       };
       list.push(s);
       save(list);
-      if (req.runOnCreate) void fire(s.id, { trigger: "run-on-create", cadence: false });
+      // The immediate run is the first counted run, so maxRuns: 1 means exactly one.
+      if (req.runOnCreate) void fire(s.id, { trigger: "run-on-create", cadence: true }).catch(() => {});
       return view(s);
     },
 
@@ -260,10 +308,26 @@ export function createSchedulesStore({ home = vsHome(), backend = null, now = ()
           s.cadence = validateCadence(req.cadence);
           if (s.status === "active") s.nextRunAt = nextRunFor(s.cadence, now());
         }
-        if (req.maxRuns !== undefined) req.maxRuns ? (s.maxRuns = Number(req.maxRuns)) : delete s.maxRuns;
-        if (req.expiresAt !== undefined) req.expiresAt ? (s.expiresAt = new Date(req.expiresAt).toISOString()) : delete s.expiresAt;
+        if (req.maxRuns !== undefined) {
+          const n = validateMaxRuns(req.maxRuns);
+          n === undefined ? delete s.maxRuns : (s.maxRuns = n);
+        }
+        if (req.expiresAt !== undefined) {
+          const e = validateExpiresAt(req.expiresAt);
+          e === undefined ? delete s.expiresAt : (s.expiresAt = e);
+        }
       } catch (e) {
         throw fail(400, e.message);
+      }
+      if (req.maxRuns !== undefined || req.expiresAt !== undefined) {
+        const t = now();
+        if (s.status === "completed") {
+          const done = (s.expiresAt && Date.parse(s.expiresAt) <= t) || (s.maxRuns && s.runCount >= s.maxRuns);
+          if (!done) { // limits were extended or cleared: back to work
+            s.status = "active";
+            s.nextRunAt = nextRunFor(s.cadence, t);
+          }
+        } else finishIfDone(s, t);
       }
       save(list);
       return view(s);
@@ -333,6 +397,22 @@ export function createSchedulesStore({ home = vsHome(), backend = null, now = ()
       return ids;
     },
 
+    /** Periodic sweep: drop heartbeats aimed at runner agents that are gone, archived or exited. Skipped when the live list can't be read. */
+    async pruneDead(t = now()) {
+      if (typeof backend?.listAgents !== "function" || t - lastPrune < pruneEveryMs) return [];
+      if (!load().some((s) => s.target?.type === "self" && String(s.target.agentId).startsWith("rn-"))) return [];
+      lastPrune = t;
+      const agents = await backend.listAgents();
+      if (!Array.isArray(agents)) return [];
+      const live = new Set(agents.filter((a) => a.status !== "closed" && !a.archivedAt).map((a) => a.id));
+      const gone = new Set();
+      for (const s of load()) {
+        const id = s.target?.type === "self" ? String(s.target.agentId) : "";
+        if (id.startsWith("rn-") && !live.has(id)) gone.add(id);
+      }
+      return [...gone].flatMap((id) => store.deleteHeartbeat(id));
+    },
+
     /** Restart recovery: recompute every active schedule's next run from now; missed runs are dropped, not replayed. */
     recover() {
       const list = load();
@@ -360,6 +440,7 @@ export function createSchedulesStore({ home = vsHome(), backend = null, now = ()
         } else if (s.nextRunAt != null && s.nextRunAt <= t) due.push(s.id);
       }
       if (dirty) save(list);
+      await store.pruneDead(t).catch(() => {});
       await Promise.all(due.map((id) => fire(id, { trigger: "schedule", cadence: true }).catch(() => {})));
       return due;
     },
@@ -383,7 +464,10 @@ let shared;
 export async function sharedSchedules() {
   if (!shared) {
     const { sharedRunnerBackend } = await import("./backend/index.mjs");
-    shared = createSchedulesStore({ backend: sharedRunnerBackend() });
+    shared = createSchedulesStore({
+      backend: sharedRunnerBackend(),
+      resolveIdentity: async (cwd) => (await import("../plugin/index.server.ts")).resolveByCwd(cwd),
+    });
   }
   return shared;
 }

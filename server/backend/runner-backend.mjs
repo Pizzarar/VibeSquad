@@ -237,6 +237,7 @@ export class RunnerBackend {
 
   async archiveAgent(id) {
     await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/archive`, {});
+    await this.deleteHeartbeat(id).catch(() => {}); // an archived agent's self-heartbeats would otherwise fire at it forever
     return { archivedAt: new Date().toISOString() };
   }
 
@@ -258,7 +259,11 @@ export class RunnerBackend {
   }
 
   async detachAgent() {}
-  async deleteHeartbeat() {}
+  /** Heartbeats are VS schedules with a self target; the runner has no daemon-side store, so drop them from schedules.json. */
+  async deleteHeartbeat(agentId) {
+    const { sharedSchedules } = await import("../schedules.mjs");
+    (await sharedSchedules()).deleteHeartbeat(agentId);
+  }
   subscribe() {
     return () => {};
   }

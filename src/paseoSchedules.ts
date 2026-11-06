@@ -30,12 +30,23 @@ const vsPost = (path: string, body: unknown = {}) => vs(path, { method: "POST", 
 
 export const isVsSchedule = (s: any): boolean => s?.backend === "vs";
 
+// Only a successful probe is cached; a failed one is retried after a short backoff instead of pinning "off" for the page's life.
 let runnerOn: Promise<boolean> | null = null;
-const runnerEnabled = (): Promise<boolean> =>
-  (runnerOn ??= fetch("/__vibesquad/runner/status")
-    .then((r) => r.json())
+let runnerFailedAt = 0;
+const runnerEnabled = (): Promise<boolean> => {
+  if (runnerOn && (!runnerFailedAt || Date.now() - runnerFailedAt < 10_000)) return runnerOn;
+  runnerFailedAt = 0;
+  return (runnerOn = fetch("/__vibesquad/runner/status")
+    .then((r) => {
+      if (!r.ok) throw new Error(`runner status ${r.status}`);
+      return r.json();
+    })
     .then((b) => !!b?.enabled)
-    .catch(() => false));
+    .catch(() => {
+      runnerFailedAt = Date.now();
+      return false;
+    }));
+};
 
 async function wantsVs(req: any): Promise<boolean> {
   const t = req?.target;
