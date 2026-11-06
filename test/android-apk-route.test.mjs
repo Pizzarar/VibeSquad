@@ -226,7 +226,8 @@ describe("wiring (source inspection)", () => {
     assert.match(src, /--with-android/);
     assert.match(src, /out\.withAndroid = true/);
     assert.match(src, /build-android\.mjs/);
-    assert.match(src, /const apkPath = join\(distDesktopDir, "VibeSquad\.apk"\)/);
+    assert.match(src, /selectApk/);
+    assert.match(src, /"VibeSquad\.apk"/);
   });
 
   test("server/build-android.mjs builds aarch64 without --apk=true, uses arm64 flavor, Windows jniLibs fallback, and apksigner.jar", () => {

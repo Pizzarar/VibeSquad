@@ -16,21 +16,10 @@ function createMockExec({ existingReleases = new Set(), headSha = "3d68b1f", tag
     if (cmd === "git" && args[0] === "rev-parse" && args[1] === "HEAD") {
       return `${headSha}\n`;
     }
-    if (cmd === "git" && args[0] === "ls-remote" && args[1] === "--tags") {
-      for (const ref of args.slice(3)) {
-        const cleanTag = ref.replace(/^refs\/tags\//, "").replace(/\^\{\}$/, "");
-        if (tagShas[cleanTag]) {
-          return `${tagShas[cleanTag]}\trefs/tags/${cleanTag}\n`;
-        }
-      }
-      return "";
-    }
-    if (cmd === "git" && args[0] === "rev-parse" && args[1]?.startsWith("refs/tags/")) {
-      const cleanTag = args[1].replace(/^refs\/tags\//, "").replace(/\^\{commit\}$/, "");
-      if (tagShas[cleanTag]) {
-        return `${tagShas[cleanTag]}\n`;
-      }
-      throw new Error(`unknown revision ${args[1]}`);
+    if (cmd === "gh" && args[0] === "api") {
+      const m = args[1].match(/git\/ref\/tags\/(.+)$/);
+      if (m && tagShas[m[1]]) return JSON.stringify({ object: { type: "commit", sha: tagShas[m[1]] } });
+      throw new Error("HTTP 404: Not Found");
     }
     return "";
   };
@@ -101,7 +90,7 @@ describe("publishRelease tag guard and rolling beta sync", () => {
       "Should upload assets to v0.2.0 release",
     );
 
-    const betaRetagIdx = calls.findIndex((c) => c[0] === "git" && c[1] === "tag" && c[2] === "-f" && c[3] === "beta" && c[4] === "HEAD");
+    const betaRetagIdx = calls.findIndex((c) => c[0] === "git" && c[1] === "tag" && c[2] === "-f" && c[3] === "beta" && c[4] === "3d68b1f");
     const betaPushIdx = calls.findIndex((c) => c[0] === "git" && c[1] === "push" && c[2] === "-f" && c[3] === "origin" && c[4] === "refs/tags/beta");
     const betaUploadIdx = calls.findIndex((c) => c[0] === "gh" && c[1] === "release" && c[2] === "upload" && c[3] === "beta");
 
@@ -129,7 +118,7 @@ describe("publishRelease tag guard and rolling beta sync", () => {
       writeManifest: () => {},
     });
 
-    const betaRetagIdx = calls.findIndex((c) => c[0] === "git" && c[1] === "tag" && c[2] === "-f" && c[3] === "beta" && c[4] === "HEAD");
+    const betaRetagIdx = calls.findIndex((c) => c[0] === "git" && c[1] === "tag" && c[2] === "-f" && c[3] === "beta" && c[4] === "3d68b1f");
     const betaPushIdx = calls.findIndex((c) => c[0] === "git" && c[1] === "push" && c[2] === "-f" && c[3] === "origin" && c[4] === "refs/tags/beta");
     const betaEditIdx = calls.findIndex((c) => c[0] === "gh" && c[1] === "release" && c[2] === "edit" && c[3] === "beta");
     const betaUploadIdx = calls.findIndex((c) => c[0] === "gh" && c[1] === "release" && c[2] === "upload" && c[3] === "beta");
