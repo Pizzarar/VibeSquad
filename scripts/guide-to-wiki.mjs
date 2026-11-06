@@ -7,7 +7,8 @@
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, posix, relative, resolve } from "node:path";
 
-const SKIP_NAMES = new Set(["AGENTS.md", "CLAUDE.md", "GEMINI.md", "LEAD_BRIEF.md", ".gitignore"]);
+// Root-only skips (matched on the path relative to guide/, so Setup/templates/AGENTS.md stays mirrored).
+const SKIP_ROOT = new Set(["AGENTS.md", "CLAUDE.md", "GEMINI.md", "LEAD_BRIEF.md"]);
 const SKIP_DIRS = new Set(["source", "node_modules"]);
 const SKIP_EXT = new Set([".py", ".json"]);
 const IMAGE_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"]);
@@ -28,6 +29,10 @@ const isAncestorOrSame = (a, b) => {
   const r = relative(a, b);
   return r === "" || (!r.startsWith("..") && !isAbsolute(r));
 };
+if (isAncestorOrSame(srcDir, outDir)) {
+  console.error(`refusing --out ${outDir}: it is inside the source ${srcDir}`);
+  process.exit(2);
+}
 for (const keep of [process.cwd(), srcDir, resolve(srcDir, "..")]) {
   if (isAncestorOrSame(outDir, keep)) {
     console.error(`refusing --out ${outDir}: it is or contains ${keep}`);
@@ -61,7 +66,7 @@ function walk(dir) {
     const ext = extname(entry.name).toLowerCase();
     // Notebook/ is private; only its README is shared (matches guide/.gitignore).
     const privateNote = rel.startsWith("Notebook/") && rel !== "Notebook/README.md";
-    if (entry.name.startsWith(".") || SKIP_NAMES.has(entry.name) || SKIP_EXT.has(ext) || privateNote) {
+    if (entry.name.startsWith(".") || SKIP_ROOT.has(rel) || SKIP_EXT.has(ext) || privateNote) {
       skipped.add(rel);
     } else if (ext === ".md") {
       pages.set(rel, pageName(rel));
@@ -205,7 +210,7 @@ function rewriteMarkdown(text, fromRel) {
 // ---- emit ----
 const titleOf = (rel) => {
   const h1 = readFileSync(join(srcDir, rel), "utf8").match(/^#\s+(.+?)\s*$/m);
-  return (h1 ? h1[1] : basename(rel, ".md")).replace(/[\[\]]/g, "");
+  return (h1 ? h1[1] : basename(rel, ".md")).replace(/[\[\]]/g, "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 };
 
 mkdirSync(outDir, { recursive: true });

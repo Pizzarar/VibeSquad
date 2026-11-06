@@ -32,3 +32,11 @@ test("guide-to-wiki refuses an --out that contains the source", () => {
   assert.equal(r.status, 2);
   assert.ok(existsSync(join(REPO_ROOT, "guide", "README.md")));
 });
+
+test("guide-to-wiki refuses an --out inside the source", () => {
+  const r = spawnSync(process.execPath, [join(REPO_ROOT, "scripts", "guide-to-wiki.mjs"), "--src", join(REPO_ROOT, "guide"), "--out", join(REPO_ROOT, "guide", "wiki-out")], {
+    encoding: "utf8",
+  });
+  assert.equal(r.status, 2);
+  assert.ok(!existsSync(join(REPO_ROOT, "guide", "wiki-out")));
+});
