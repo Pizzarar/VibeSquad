@@ -43,7 +43,7 @@ test("sync skipped on a unit branch, dirty tree, and linked worktree; force over
 });
 
 test("CLI prints a one-line skip and exits 0 for a non-master checkout", () => {
-  const out = execFileSync(process.execPath, ["server/sync-runtime.mjs"], { encoding: "utf8", env: { ...process.env, VIBESQUAD_SYNC_FORCE: "" } });
+  const out = execFileSync(process.execPath, ["server/sync-runtime.mjs"], { encoding: "utf8", env: { ...process.env, VIBESQUAD_SYNC_FORCE: "", LOCALAPPDATA: mkdtempSync(join(tmpdir(), "vs-sync-lad-")) } });
   assert.ok(out.split("\n").filter(Boolean).length <= 1);
 });
 

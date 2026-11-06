@@ -296,7 +296,8 @@ function renderMissingDistHtml() {
 const api = createVibesquadMiddleware(rootDir);
 
 function handle(req, res) {
-  api(req, res, () => {
+  // Return the promise so guardHandler sees async rejections and answers 500.
+  return api(req, res, () => {
     if (req.method !== "GET" && req.method !== "HEAD") {
       res.statusCode = 405;
       res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
