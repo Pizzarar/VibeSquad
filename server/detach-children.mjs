@@ -5,6 +5,8 @@
 // (docs/PLAN_BUGS_BATCH1.md block 0: Basic ADE ord1 + 5 workers, 2026-11-02 04:25Z).
 // Detach first, archive second.
 
+import { getBackend } from "./backend/index.mjs";
+
 export const PARENT_LABEL = "paseo.parent-agent-id";
 
 /** The parent id an agent is chained to, or "". */
@@ -15,11 +17,12 @@ export const parentOf = (a) => String(a?.labels?.[PARENT_LABEL] || a?.parentAgen
  * not `listAgents`. Returns [] when the daemon can't be read.
  */
 export async function listDaemonAgents(client, { maxPages = 10 } = {}) {
-  if (!client || typeof client.fetchAgents !== "function") return [];
+  const backend = getBackend(client);
+  if (!backend || typeof backend.fetchAgents !== "function") return [];
   const out = [];
   let cursor;
   for (let page = 0; page < maxPages; page++) {
-    const res = await client
+    const res = await backend
       .fetchAgents({ filter: { includeArchived: false }, page: { limit: 200, ...(cursor ? { cursor } : {}) } })
       .catch(() => null);
     if (!res) break;
@@ -56,5 +59,7 @@ export async function detachLiveChildren(parentId, { list, detach }) {
 }
 
 /** detachLiveChildren wired to a DaemonClient (server/brainstorm.mjs retire paths). */
-export const detachLiveChildrenViaClient = (client, parentId) =>
-  detachLiveChildren(parentId, { list: () => listDaemonAgents(client), detach: (id) => client.detachAgent(id) });
+export const detachLiveChildrenViaClient = (client, parentId) => {
+  const backend = getBackend(client);
+  return detachLiveChildren(parentId, { list: () => listDaemonAgents(backend), detach: (id) => backend.detachAgent(id) });
+};

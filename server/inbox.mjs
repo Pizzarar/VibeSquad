@@ -10,6 +10,7 @@ import {
   writeBrainstormSummary,
 } from "./brainstorm.mjs";
 import { laneWorkingDir } from "./brief-path.mjs";
+import { getBackend } from "./backend/index.mjs";
 import { findLaneInRegistry, formatDisplayTitle, laneCodeFor } from "./identity.mjs";
 import { findProfile, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
@@ -779,20 +780,21 @@ export async function openTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
   let created = null;
   const injectedClient = body.daemonClient || null;
   const client = injectedClient || (body.skipDaemon ? null : createDaemonClient(rootDir));
+  const backend = getBackend(client);
   if (client) {
     let connected = Boolean(injectedClient);
     try {
-      if (!injectedClient && typeof client.connect === "function") {
-        await client.connect();
+      if (!injectedClient && typeof backend.connect === "function") {
+        await backend.connect();
         connected = true;
       }
       if (connected && card.topicAgentId) {
         let existingAgent = null;
-        if (typeof client.fetchAgent === "function") {
-          const fetched = await client.fetchAgent(card.topicAgentId).catch(() => null);
+        if (typeof backend.fetchAgent === "function") {
+          const fetched = await backend.fetchAgent(card.topicAgentId).catch(() => null);
           existingAgent = fetched?.agent ?? (fetched?.id ? fetched : null);
-        } else if (typeof client.getAgent === "function") {
-          const fetched = await client.getAgent(card.topicAgentId).catch(() => null);
+        } else if (typeof backend.getAgent === "function") {
+          const fetched = await backend.getAgent(card.topicAgentId).catch(() => null);
           existingAgent = fetched?.agent ?? (fetched?.id ? fetched : null);
         }
         if (existingAgent && !existingAgent.archivedAt && existingAgent.status !== "archived") {
@@ -828,8 +830,8 @@ export async function openTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
           };
         }
       }
-      if (connected && typeof client.createAgent === "function") {
-        created = await client.createAgent({
+      if (connected && typeof backend.createAgent === "function") {
+        created = await backend.createAgent({
           config: {
             provider,
             model,
@@ -849,8 +851,8 @@ export async function openTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
     } catch {
       created = null;
     } finally {
-      if (!injectedClient && typeof client.close === "function") {
-        await client.close().catch(() => {});
+      if (!injectedClient && typeof backend.close === "function") {
+        await backend.close().catch(() => {});
       }
     }
   }
@@ -923,10 +925,11 @@ export async function openTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
  * (role=brainstorm carrying this card's vs.inbox-card-id). Any other agentId archives nothing.
  */
 async function topicArchiveTarget(client, card, reqAgentId) {
+  const backend = getBackend(client);
   const own = String(card.topicAgentId || "").trim();
   if (!reqAgentId || reqAgentId === own) return own || null;
-  if (typeof client?.fetchAgent !== "function") return null;
-  const fetched = await client.fetchAgent(reqAgentId).catch(() => null);
+  if (typeof backend?.fetchAgent !== "function") return null;
+  const fetched = await backend.fetchAgent(reqAgentId).catch(() => null);
   const labels = (fetched?.agent ?? fetched)?.labels ?? {};
   return labels.role === "brainstorm" && labels["vs.inbox-card-id"] === card.id ? reqAgentId : null;
 }
@@ -959,17 +962,18 @@ export async function handoffTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
   let archivedAgentId = null;
   const injectedClient = body.daemonClient || null;
   const client = injectedClient || (body.skipDaemon ? null : createDaemonClient(rootDir));
+  const backend = getBackend(client);
   if (client && targetAgentId) {
     let connected = Boolean(injectedClient);
     try {
-      if (!injectedClient && typeof client.connect === "function") {
-        await client.connect();
+      if (!injectedClient && typeof backend.connect === "function") {
+        await backend.connect();
         connected = true;
       }
       archivedAgentId = connected ? await topicArchiveTarget(client, card, targetAgentId) : null;
       if (archivedAgentId) {
-        if (!usedTokens && typeof client.fetchAgent === "function") {
-          const fetched = await client.fetchAgent(archivedAgentId).catch(() => null);
+        if (!usedTokens && typeof backend.fetchAgent === "function") {
+          const fetched = await backend.fetchAgent(archivedAgentId).catch(() => null);
           const ag = fetched?.agent;
           usedTokens =
             Number(ag?.contextUsage?.usedTokens) ||
@@ -977,16 +981,16 @@ export async function handoffTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
             Number(ag?.lastUsage?.inputTokens) ||
             0;
         }
-        if (typeof client.cancelAgent === "function") {
-          await client.cancelAgent(archivedAgentId).catch(() => {});
+        if (typeof backend.cancelAgent === "function") {
+          await backend.cancelAgent(archivedAgentId).catch(() => {});
         }
         await archiveBuddyKeepingChildren(client, archivedAgentId);
       }
     } catch {
       // daemon offline is non-fatal
     } finally {
-      if (!injectedClient && typeof client.close === "function") {
-        await client.close().catch(() => {});
+      if (!injectedClient && typeof backend.close === "function") {
+        await backend.close().catch(() => {});
       }
     }
   }
@@ -1059,23 +1063,24 @@ export async function parkTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
 
   const injectedClient = body.daemonClient || null;
   const client = injectedClient || (body.skipDaemon ? null : createDaemonClient(rootDir));
+  const backend = getBackend(client);
   if (client && targetAgentId) {
     let connected = Boolean(injectedClient);
     try {
-      if (!injectedClient && typeof client.connect === "function") {
-        await client.connect();
+      if (!injectedClient && typeof backend.connect === "function") {
+        await backend.connect();
         connected = true;
       }
       archivedAgentId = connected ? await topicArchiveTarget(client, card, targetAgentId) : null;
       if (archivedAgentId) {
         if (isDefaultPlaceholder) {
           let timeline = null;
-          if (typeof client.fetchAgentTimeline === "function") {
-            timeline = await client
+          if (typeof backend.fetchAgentTimeline === "function") {
+            timeline = await backend
               .fetchAgentTimeline(archivedAgentId, { direction: "tail", limit: 20, projection: "projected" })
               .catch(() => null);
-          } else if (typeof client.getAgentTimeline === "function") {
-            timeline = await client.getAgentTimeline(archivedAgentId).catch(() => null);
+          } else if (typeof backend.getAgentTimeline === "function") {
+            timeline = await backend.getAgentTimeline(archivedAgentId).catch(() => null);
           }
           const entries = Array.isArray(timeline?.entries)
             ? timeline.entries
@@ -1093,16 +1098,16 @@ export async function parkTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
             }
           }
         }
-        if (typeof client.cancelAgent === "function") {
-          await client.cancelAgent(archivedAgentId).catch(() => {});
+        if (typeof backend.cancelAgent === "function") {
+          await backend.cancelAgent(archivedAgentId).catch(() => {});
         }
         await archiveBuddyKeepingChildren(client, archivedAgentId);
       }
     } catch {
       // daemon offline is non-fatal
     } finally {
-      if (!injectedClient && typeof client.close === "function") {
-        await client.close().catch(() => {});
+      if (!injectedClient && typeof backend.close === "function") {
+        await backend.close().catch(() => {});
       }
     }
   }

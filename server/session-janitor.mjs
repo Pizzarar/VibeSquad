@@ -1,3 +1,4 @@
+import { getBackend } from "./backend/index.mjs";
 import { detachLiveChildrenViaClient, listDaemonAgents } from "./detach-children.mjs";
 
 export const JANITOR_MAX_AGE_MS = 2 * 60 * 60 * 1000;
@@ -29,7 +30,8 @@ export function findJanitorCandidates(agents, opts = {}) {
  * (so live children are never cascade-archived), and archives eligible closed workers.
  */
 export async function runSessionJanitor(client, { now = Date.now(), maxAgeMs = JANITOR_MAX_AGE_MS, agents } = {}) {
-  const rawList = agents ?? (await listDaemonAgents(client));
+  const backend = getBackend(client);
+  const rawList = agents ?? (await listDaemonAgents(backend));
   const list = Array.isArray(rawList) ? rawList.map((a) => a?.agent ?? a) : [];
   const candidates = findJanitorCandidates(list, { now, maxAgeMs });
   const archived = [];
@@ -38,7 +40,7 @@ export async function runSessionJanitor(client, { now = Date.now(), maxAgeMs = J
   const errors = [];
 
   for (const a of candidates) {
-    const detached = await detachLiveChildrenViaClient(client, a.id);
+    const detached = await detachLiveChildrenViaClient(backend, a.id);
     if (detached.detached.length > 0) {
       detachedChildren.push(...detached.detached);
     }
@@ -47,7 +49,7 @@ export async function runSessionJanitor(client, { now = Date.now(), maxAgeMs = J
       continue;
     }
     try {
-      await client.archiveAgent(a.id);
+      await backend.archiveAgent(a.id);
       archived.push(a.id);
     } catch (e) {
       errors.push({ id: a.id, error: String(e?.message ?? e) });

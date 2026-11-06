@@ -10,6 +10,7 @@ import { readRawPaseoConfig } from "./paseo-control.mjs";
 import { briefRootFor, laneWorkingDir } from "./brief-path.mjs";
 import { defangPromptFences } from "./write-guards.mjs";
 import { detachLiveChildrenViaClient, listDaemonAgents } from "./detach-children.mjs";
+import { getBackend } from "./backend/index.mjs";
 import { BRIEF_HISTORY_KEEP, BRIEF_SHRINK_FROM, BRIEF_SHRINK_TO, backupBrief, writeBriefFile } from "./brief-write.mjs";
 import { liveInFlightBlock } from "./in-flight.mjs";
 import { refreshWhosHere } from "./whos-here.mjs";
@@ -48,14 +49,15 @@ export function readPaseoConfig(_rootDir = REPO_ROOT) {
  * the Buddy stays retired but unarchived rather than risk the cascade.
  */
 export async function archiveBuddyKeepingChildren(client, agentId) {
-  if (typeof client?.archiveAgent !== "function") return { archived: false, detached: [], failed: [] };
+  const backend = getBackend(client);
+  if (typeof backend?.archiveAgent !== "function") return { archived: false, detached: [], failed: [] };
   const { detached, failed } = await detachLiveChildrenViaClient(client, agentId);
   if (detached.length) console.log(`[vibesquad] detached ${detached.length} child(ren) of ${agentId} before archive: ${detached.join(", ")}`);
   if (failed.length) {
     console.warn(`[vibesquad] kept ${agentId} unarchived: could not detach ${failed.map((f) => f.id).join(", ")}`);
     return { archived: false, detached, failed };
   }
-  await client.archiveAgent(agentId).catch(() => {});
+  await backend.archiveAgent(agentId).catch(() => {});
   return { archived: true, detached, failed };
 }
 
@@ -363,6 +365,7 @@ const retiredTitleOf = (title) => {
 export async function retireOtherLaneBuddies(client, { newId, teamId, laneId, topic = "", exceptIds = [] }) {
   const retired = [];
   if (!client || !newId || !laneId) return retired;
+  const backend = getBackend(client);
   const agents = await listDaemonAgents(client);
   const wantLane = String(laneId).toLowerCase();
   const wantTeam = String(teamId || "").toLowerCase();
@@ -376,9 +379,9 @@ export async function retireOtherLaneBuddies(client, { newId, teamId, laneId, to
     if (wantTeam && labels.team && String(labels.team).toLowerCase() !== wantTeam) continue;
     if (parseBrainstormTopic(a) !== wantTopic) continue;
     restartedAgents.set(a.id, { newAgentId: newId, ts: Date.now(), tokens: 0 });
-    if (a.status !== "closed") await client.cancelAgent?.(a.id)?.catch?.(() => {});
+    if (a.status !== "closed") await backend.cancelAgent?.(a.id)?.catch?.(() => {});
     const retiredLabels = { ...labels, role: "former-brainstorm", "vs.restarted-into": newId };
-    await client.updateAgent?.(a.id, { name: retiredTitleOf(a.title), labels: retiredLabels })?.catch?.(() => {});
+    await backend.updateAgent?.(a.id, { name: retiredTitleOf(a.title), labels: retiredLabels })?.catch?.(() => {});
     await archiveBuddyKeepingChildren(client, a.id);
     console.log(`[vibesquad] retired duplicate Buddy ${a.id} in ${teamId}/${laneId} (into ${newId})`);
     retired.push(a.id);
@@ -423,6 +426,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
 
   const injectedClient = body.daemonClient || null;
   const client = injectedClient || (body.skipDaemon ? null : (body.clientFactory || createDaemonClient)(rootDir));
+  const backend = getBackend(client);
   let oldAgent = body.oldAgent || null;
   let connected = Boolean(injectedClient);
   // Retiring the predecessor (cancel -> update -> archive, ~4-6 s) runs after the reply is sent; the client closes once it settles.
@@ -430,13 +434,13 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
   try {
     if (client) {
       try {
-        if (!injectedClient && typeof client.connect === "function") {
-          await client.connect();
+        if (!injectedClient && typeof backend.connect === "function") {
+          await backend.connect();
           connected = true;
           timer.mark("connect");
         }
-        if (!oldAgent && agentId !== "start-brainstorm" && connected && typeof client.fetchAgent === "function") {
-          const fetched = await client.fetchAgent(agentId).catch(() => null);
+        if (!oldAgent && agentId !== "start-brainstorm" && connected && typeof backend.fetchAgent === "function") {
+          const fetched = await backend.fetchAgent(agentId).catch(() => null);
           oldAgent = fetched?.agent ?? null;
           timer.mark("fetchAgent");
         }
@@ -507,8 +511,8 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
         if (body.agents) return body.agents instanceof Map ? [...body.agents.values()] : Array.isArray(body.agents) ? body.agents : [];
         // A daemon client was expected but never connected (daemon restarting): unknown, not empty.
         if (client && !connected) return null;
-        if (connected && client && typeof client.fetchAgents === "function") return asList(await client.fetchAgents().catch(() => null));
-        if (connected && client && typeof client.listAgents === "function") return asList(await client.listAgents().catch(() => null));
+        if (connected && client && typeof backend.fetchAgents === "function") return asList(await backend.fetchAgents().catch(() => null));
+        if (connected && client && typeof backend.listAgents === "function") return asList(await backend.listAgents().catch(() => null));
         return [];
       };
       let liveAgents = await readLive();
@@ -525,11 +529,11 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       if (existing) {
         if (existing.labels && existing.labels.team !== teamId) {
           existing.labels = { ...existing.labels, team: teamId };
-          await client?.updateAgent?.(existing.id, { labels: existing.labels })?.catch?.(() => {});
+          await backend?.updateAgent?.(existing.id, { labels: existing.labels })?.catch?.(() => {});
         }
         // Reopen a closed Buddy (daemon restart unloads every session) from its saved session.
-        const reopened = existing.status === "closed" && connected && typeof client?.refreshAgent === "function";
-        if (reopened) await client.refreshAgent(existing.id).catch((e) => console.warn(`[vibesquad] reopen ${existing.id} failed: ${e?.message ?? e}`));
+        const reopened = existing.status === "closed" && connected && typeof backend?.refreshAgent === "function";
+        if (reopened) await backend.refreshAgent(existing.id).catch((e) => console.warn(`[vibesquad] reopen ${existing.id} failed: ${e?.message ?? e}`));
         return {
           ok: true,
           reused: true,
@@ -684,9 +688,9 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
     if (liveForBoot === undefined) {
       const src = body.agents
         ? (body.agents instanceof Map ? [...body.agents.values()] : body.agents)
-        : connected && client && typeof client.fetchAgents === "function"
+        : connected && client && typeof backend.fetchAgents === "function"
           ? await Promise.race([
-              client.fetchAgents().then((r) => (Array.isArray(r) ? r : Array.isArray(r?.entries) ? r.entries : Array.isArray(r?.agents) ? r.agents : null)),
+              backend.fetchAgents().then((r) => (Array.isArray(r) ? r : Array.isArray(r?.entries) ? r.entries : Array.isArray(r?.agents) ? r.agents : null)),
               new Promise((r) => setTimeout(() => r(null), 1500)),
             ]).catch(() => null)
           : null;
@@ -713,10 +717,10 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       appendVsLogEntry({ teamId, laneId, agent: agentId, type: "metric", text: `brief-inlined: lane=${laneId} chars=${summary.content.length}` });
     } catch {}
     let created = null;
-    if (connected && client && typeof client.createAgent === "function") {
+    if (connected && client && typeof backend.createAgent === "function") {
       const spawnStartMs = Date.now();
       try {
-        created = await client.createAgent({
+        created = await backend.createAgent({
           config: {
             provider,
             model,
@@ -736,10 +740,10 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       } catch (err) {
         try {
           const raw =
-            typeof client.fetchAgents === "function"
-              ? await client.fetchAgents()
-              : typeof client.listAgents === "function"
-                ? await client.listAgents()
+            typeof backend.fetchAgents === "function"
+              ? await backend.fetchAgents()
+              : typeof backend.listAgents === "function"
+                ? await backend.listAgents()
                 : null;
           const list = Array.isArray(raw) ? raw : Array.isArray(raw?.entries) ? raw.entries : Array.isArray(raw?.agents) ? raw.agents : [];
           for (const item of list) {
@@ -755,7 +759,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
             const ts = Date.parse(a.createdAt || a.updatedAt || "");
             const isRecent = Number.isFinite(ts) && ts >= spawnStartMs - 5000;
             if (a.status === "initializing" || a.status === "error" || isRecent) {
-              await client.archiveAgent?.(a.id)?.catch?.(() => {});
+              await backend.archiveAgent?.(a.id)?.catch?.(() => {});
             }
           }
         } catch {}
@@ -811,8 +815,8 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
         const retiredTitle = rawOldTitle.toLowerCase().startsWith("(old)") ? rawOldTitle : `(old) ${rawOldTitle}`;
         const retireT0 = Date.now();
         retireDone = (async () => {
-          await client.cancelAgent?.(agentId)?.catch?.(() => {});
-          await client.updateAgent?.(agentId, { name: retiredTitle, labels: retiredLabels })?.catch?.(() => {});
+          await backend.cancelAgent?.(agentId)?.catch?.(() => {});
+          await backend.updateAgent?.(agentId, { name: retiredTitle, labels: retiredLabels })?.catch?.(() => {});
           await archiveBuddyKeepingChildren(client, agentId);
           console.log(`[vibesquad] spawn-timing retire-background=${Date.now() - retireT0}ms`);
         })().catch(() => {});
@@ -855,7 +859,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       const newId = created.id;
       void (async () => {
         await new Promise((r) => setTimeout(r, delayMs).unref?.()); // the HTTP server keeps the process up
-        const c = injectedClient || (body.clientFactory || createDaemonClient)(rootDir);
+        const c = getBackend(injectedClient || (body.clientFactory || createDaemonClient)(rootDir));
         try {
           if (!injectedClient) await c.connect?.();
           await retireOtherLaneBuddies(c, { newId, teamId, laneId, topic, exceptIds: [agentId] });
@@ -891,9 +895,9 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       ...(pendingPrompt ? { pendingPrompt } : {}),
     };
   } finally {
-    if (!injectedClient && client && typeof client.close === "function") {
-      if (retireDone) retireDone.finally(() => client.close().catch(() => {}));
-      else await client.close().catch(() => {});
+    if (!injectedClient && client && typeof backend.close === "function") {
+      if (retireDone) retireDone.finally(() => backend.close().catch(() => {}));
+      else await backend.close().catch(() => {});
     }
   }
 }

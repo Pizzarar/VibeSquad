@@ -33,6 +33,7 @@ import {
   triageInboxCards,
 } from "../server/inbox.mjs";
 import { createDaemonClient, readBrainstormSummary, writeBrainstormSummary } from "../server/brainstorm.mjs";
+import { getBackend, getCliBackend, hasCustomMockCli, hasCustomOfflineStore as hasCustomOfflineStoreAt, run } from "../server/backend/index.mjs";
 import { bestOverlap, newPinBrief, slugLaneId, takenLaneIds, uniqueLaneId } from "../server/pin-ideas.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "../server/teams-file.mjs";
 import {
@@ -267,54 +268,11 @@ function readAgentRecord(agentId) {
   }
 }
 
-function shellQuote(value) {
-  return `"${String(value).replace(/"/g, '\\"')}"`;
-}
-
-const AGENT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
-// shellQuote wraps every arg in double quotes and cmd.exe runs without delayed expansion (/V:OFF), so
-// ^ & | < > ! are literal there. Only `"` (ends the quote), %VAR% expansion and line breaks / NUL can escape.
-const UNSAFE_SHELL_ARG = /[\r\n\0"%]/;
-
-function run(command, args, timeoutMs) {
-  try {
-    if (process.platform === "win32" && (command === "paseo" || /\.(cmd|bat)$/i.test(command))) {
-      if (args.some((a) => UNSAFE_SHELL_ARG.test(String(a)))) {
-        return { status: null, stdout: "", stderr: "refusing argument with shell metacharacters", error: new Error("unsafe argument") };
-      }
-      const line = [command, ...args].map(shellQuote).join(" ");
-      return spawnSync(line, { encoding: "utf8", timeout: timeoutMs, windowsHide: true, shell: true });
-    }
-    return spawnSync(command, args, { encoding: "utf8", timeout: timeoutMs, windowsHide: true });
-  } catch (err) {
-    return { status: null, stdout: "", stderr: String(err?.message ?? err), error: err };
-  }
-}
-
-function hasCustomMockCli() {
-  const cli = String(process.env.PASEO_CLI ?? "").trim();
-  if (!cli || cli === "paseo" || cli === "paseo.cmd") return false;
-  if (/[\\/]Programs[\\/]Paseo[\\/]resources[\\/]bin[\\/]paseo(?:\.cmd|\.exe)?$/i.test(cli)) return false;
-  return true;
-}
-
-function hasCustomOfflineStore() {
-  if (hasCustomMockCli()) return false;
-  if (!process.env.PASEO_HOME) return false;
-  const defaultHome = path.resolve(path.join(os.homedir(), ".paseo"));
-  if (path.resolve(PASEO_HOME) === defaultHome) return false;
-  return !fs.existsSync(path.join(PASEO_HOME, "server-id"));
-}
+const cliBackend = getCliBackend();
+const hasCustomOfflineStore = () => hasCustomOfflineStoreAt(PASEO_HOME);
 
 function runPaseo(args, timeoutMs = DAEMON_TIMEOUT_MS) {
-  if (hasCustomOfflineStore()) return null;
-  const idArg = args[0] === "inspect" ? args[1] : args[0] === "agent" ? args[2] : undefined;
-  if ((args[0] === "inspect" || args[0] === "agent") && !AGENT_ID_RE.test(String(idArg ?? ""))) return null;
-  const cli = process.env.PASEO_CLI || "paseo";
-  const effectiveTimeout = hasCustomMockCli() ? Math.max(timeoutMs, 5000) : timeoutMs;
-  const result = run(cli, args, effectiveTimeout);
-  if (result.error || result.status !== 0) return null;
-  return result.stdout ?? null;
+  return cliBackend.runCli(PASEO_HOME, args, timeoutMs);
 }
 
 // Live daemon lookup by id. The local store already has labels, so the CLI
@@ -1129,15 +1087,15 @@ async function enrichZeroTokenAgents(candidates) {
   if (!needInspect.length) return;
 
   if (!hasCustomOfflineStore() && !hasCustomMockCli()) {
-    const client = createDaemonClient();
+    const backend = getBackend(createDaemonClient());
     let timer = null;
     try {
       await Promise.race([
         (async () => {
-          if (typeof client.connect === "function") await client.connect();
+          if (typeof backend.connect === "function") await backend.connect();
           const liveMap = new Map();
-          if (typeof client.fetchAgents === "function") {
-            const res = await client.fetchAgents({ filter: { includeArchived: false } }).catch(() => null);
+          if (typeof backend.fetchAgents === "function") {
+            const res = await backend.fetchAgents({ filter: { includeArchived: false } }).catch(() => null);
             const list = Array.isArray(res)
               ? res
               : Array.isArray(res?.agents)
@@ -1151,8 +1109,8 @@ async function enrichZeroTokenAgents(candidates) {
           }
           for (const a of needInspect) {
             let live = liveMap.get(a.id) ?? null;
-            if (!live && typeof client.fetchAgent === "function") {
-              const fetched = await client.fetchAgent(a.id).catch(() => null);
+            if (!live && typeof backend.fetchAgent === "function") {
+              const fetched = await backend.fetchAgent(a.id).catch(() => null);
               live = fetched?.agent ?? (fetched?.id ? fetched : null);
             }
             if (live) {
@@ -1176,8 +1134,8 @@ async function enrichZeroTokenAgents(candidates) {
       // ignore daemon errors
     } finally {
       if (timer) clearTimeout(timer);
-      if (typeof client?.close === "function") {
-        await Promise.resolve(client.close()).catch(() => {});
+      if (typeof backend?.close === "function") {
+        await Promise.resolve(backend.close()).catch(() => {});
       }
     }
   }
@@ -2013,8 +1971,9 @@ export function summarizeWait(agentId, result) {
 
 /** vs wait <agent> [--timeout s]: waits on the daemon (waitForFinish). Injectable client for tests. */
 export async function runWait(client, agentId, timeoutSec) {
+  const backend = getBackend(client);
   const timeoutMs = timeoutSec === undefined ? 0 : Math.round(timeoutSec * 1000);
-  return summarizeWait(agentId, await client.waitForFinish(agentId, timeoutMs));
+  return summarizeWait(agentId, await backend.waitForFinish(agentId, timeoutMs));
 }
 
 async function commandWait(flags) {
@@ -2025,14 +1984,14 @@ async function commandWait(flags) {
     timeoutSec = Number(flags.timeout);
     if (!Number.isFinite(timeoutSec) || timeoutSec <= 0) throw new Error("--timeout must be a positive number of seconds");
   }
-  const client = createDaemonClient();
+  const backend = getBackend(createDaemonClient());
   try {
-    await client.connect();
+    await backend.connect();
     const { code, line } = await runWait(client, agentId, timeoutSec);
     process.stdout.write(line + "\n");
     return code;
   } finally {
-    await Promise.resolve(client.close?.()).catch(() => {});
+    await Promise.resolve(backend.close?.()).catch(() => {});
   }
 }
 
