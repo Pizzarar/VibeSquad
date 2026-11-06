@@ -11,8 +11,10 @@ export const effectivePermissionMode = (meta = {}) => meta.permissionMode || DEF
 export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true, mcpPath = mcpServerPath() } = {}) {
   return {
     name: 'claude',
-    start({ model, cwd, meta = {}, systemPrompt, env, emit, onExit }) {
+    canPark: true, // the CLI keeps its transcript on disk, so a killed idle agent can be resumed with --resume <sessionId>
+    start({ model, cwd, meta = {}, systemPrompt, env, emit, onExit, resume }) {
       const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'];
+      if (resume) args.push('--resume', String(resume));
       if (model) args.push('--model', model);
       args.push('--permission-mode', effectivePermissionMode(meta));
       if (mcp) {

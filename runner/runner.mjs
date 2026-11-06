@@ -37,48 +37,112 @@ export function defaultAdapters(opts = {}) {
   return adapters;
 }
 
+// Concurrent live agent processes. Each claude brings ~9 child processes and ~0.7 GB, so idle ones are parked past this.
+export const DEFAULT_MAX_LIVE = 6;
+export function maxLiveFromEnv(env = process.env) {
+  const n = Number(env.VS_RUNNER_MAX_LIVE);
+  return Number.isInteger(n) && n >= 1 ? n : DEFAULT_MAX_LIVE;
+}
+
 export class Runner {
-  constructor({ dir, adapters = defaultAdapters() }) {
+  constructor({ dir, adapters = defaultAdapters(), maxLive = maxLiveFromEnv() }) {
     this.store = new LogStore(dir);
     this.adapters = adapters;
-    this.live = new Map(); // id -> { handle, status } for agents running in THIS process only
+    this.maxLive = maxLive;
+    this.live = new Map(); // id -> { handle, status, ... } for agents running in THIS process only
   }
 
   create({ provider, model, cwd, prompt, systemPrompt, meta = {} }) {
-    const adapter = this.adapters[provider];
-    if (!adapter) throw new Error(`unknown provider "${provider}"`);
+    if (!this.adapters[provider]) throw new Error(`unknown provider "${provider}"`);
     validateCreate({ model, cwd, meta });
+    this._ensureSlot(); // before anything is logged: a refused spawn leaves no agent behind
     const id = `rn-${randomBytes(6).toString('hex')}`; // rn- prefix: the VS router tells runner ids from Paseo uuids without a lookup
-    const record = { provider, model: model ?? null, cwd, meta: pickMeta(meta) };
-    this.store.append(id, 'created', record);
-    const entry = { status: 'starting', handle: null };
+    this.store.append(id, 'created', { provider, model: model ?? null, cwd, meta: pickMeta(meta) });
+    this._start(id, { provider, model, cwd, meta, systemPrompt });
+    if (prompt) this.send(id, prompt);
+    return id;
+  }
+
+  // The only place an agent process is started (create and resume-from-park).
+  _start(id, { provider, model, cwd, meta, systemPrompt, resume }) {
+    const entry = { status: 'starting', handle: null, provider, systemPrompt, sessionId: resume ?? null, parked: false, lastActive: Date.now() };
     this.live.set(id, entry);
     const emit = (type, data) => {
-      if (type === 'status') entry.status = data.status;
+      if (type === 'status') {
+        entry.status = data.status;
+        if (data.status === 'idle' || data.status === 'running') entry.lastActive = Date.now();
+      } else if (type === 'session' && data.sessionId) entry.sessionId = data.sessionId;
       this.store.append(id, type === 'status' ? 'status' : type, data);
     };
     try {
-      entry.handle = adapter.start({
-        id, env: agentEnv(id, meta), model, cwd, meta, systemPrompt, emit,
+      entry.handle = this.adapters[provider].start({
+        id, env: agentEnv(id, meta), model, cwd, meta, systemPrompt, emit, resume,
         onExit: (info) => {
+          if (entry.parked) return; // stopped on purpose; the log already says parked
           entry.status = 'exited';
           this.store.append(id, 'exit', info);
-          this.live.delete(id);
+          if (this.live.get(id) === entry) this.live.delete(id);
         },
       });
     } catch (err) {
-      this.live.delete(id);
+      if (this.live.get(id) === entry) this.live.delete(id);
       this.store.append(id, 'exit', { code: null, error: err.message });
       throw err;
     }
-    if (prompt) this.send(id, prompt);
-    return id;
+    return entry;
+  }
+
+  // Makes room for one more live process: parks the oldest idle agent, or refuses if none can be parked.
+  _ensureSlot(except) {
+    while ([...this.live.keys()].filter((k) => k !== except).length >= this.maxLive) {
+      const idle = [...this.live.entries()]
+        .filter(([k, e]) => k !== except && e.status === 'idle' && e.handle && e.sessionId && this.adapters[e.provider]?.canPark)
+        .sort((a, b) => a[1].lastActive - b[1].lastActive)[0];
+      if (!idle) throw new Error(`agent cap reached (${this.maxLive} live) and none are idle to park; wait for one to finish, or raise VS_RUNNER_MAX_LIVE`);
+      this.park(idle[0]);
+    }
+  }
+
+  // Stops an idle agent's process tree but keeps its transcript; the next send() resumes it with --resume.
+  park(id) {
+    const entry = this.live.get(id);
+    if (!entry?.handle) throw new Error(`agent ${id} is not running`);
+    if (entry.status !== 'idle') throw new Error(`agent ${id} is ${entry.status}, only idle agents can be parked`);
+    if (!entry.sessionId || !this.adapters[entry.provider]?.canPark) throw new Error(`agent ${id} cannot be parked`);
+    entry.parked = true;
+    this.store.append(id, 'parked', { sessionId: entry.sessionId, systemPrompt: entry.systemPrompt ?? null });
+    this.store.append(id, 'status', { status: 'parked' });
+    this.live.delete(id);
+    entry.handle.kill();
+  }
+
+  // Resume spec for a parked agent, read from its log so it survives a runner restart. Null if not parked.
+  _parkedSpec(id) {
+    if (!this.store.exists(id)) return null;
+    const events = this.store.read(id);
+    let parked = null;
+    for (const e of events) {
+      if (e.type === 'parked') parked = e;
+      else if (e.type === 'exit' || e.type === 'archive') return null;
+      else if (e.type === 'status' && e.status !== 'parked') parked = null;
+    }
+    if (!parked || typeof parked.sessionId !== 'string' || !parked.sessionId || parked.sessionId.startsWith('-')) return null;
+    const c = events[0];
+    return { provider: c.provider, model: c.model ?? undefined, cwd: c.cwd, meta: c.meta ?? {}, systemPrompt: parked.systemPrompt ?? undefined, resume: parked.sessionId };
+  }
+
+  _resume(id) {
+    const spec = this._parkedSpec(id);
+    if (!spec) return null;
+    this._ensureSlot(id);
+    this.store.append(id, 'status', { status: 'starting' });
+    return this._start(id, spec);
   }
 
   // opts.images: [{ data (base64), mimeType }]; opts.activeTurnBehavior: 'steer' (default, queue behind/into the turn)
   // or 'interrupt' (cancel the active turn first). The log keeps the image count, never the base64 payload.
   send(id, text, opts = {}) {
-    const entry = this.live.get(id);
+    const entry = this.live.get(id) ?? this._resume(id);
     if (!entry?.handle) throw new Error(`agent ${id} is not running`);
     const images = (Array.isArray(opts.images) ? opts.images : []).filter((i) => i && typeof i.data === 'string' && typeof i.mimeType === 'string');
     if (opts.activeTurnBehavior === 'interrupt' && entry.status === 'running') this.cancel(id);
@@ -132,7 +196,7 @@ export class Runner {
     }
     const exit = events.find((e) => e.type === 'exit');
     if (exit) status = 'exited';
-    else if (!this.live.has(id)) status = 'lost'; // log says running but no child in this process
+    else if (!this.live.has(id) && status !== 'parked') status = 'lost'; // log says running but no child in this process
     return {
       id, provider: created.provider, model: created.model, cwd: created.cwd, meta,
       status, usage, pendingPermissions: [...perms.values()], lastSeq: last.seq, createdAt: created.ts, updatedAt: last.ts, archivedAt, exit: exit ?? null,

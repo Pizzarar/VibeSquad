@@ -163,7 +163,15 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     server.close();
     setTimeout(() => process.exit(0), 300).unref();
   };
-  process.on('exit', () => { try { releaseLock(lockFile); } catch { /* ignore */ } });
+  // Every way out kills the agents' process trees (claude.exe + its MCP sidecars). 'exit' covers process.exit and
+  // a crash; shutdown() is idempotent. A hard kill (taskkill /F, power loss) cannot run any of this.
+  process.on('exit', () => {
+    try { runner.shutdown(); } catch { /* ignore */ }
+    try { releaseLock(lockFile); } catch { /* ignore */ }
+  });
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
+  process.on('SIGBREAK', stop);
+  process.on('SIGHUP', stop);
+  process.on('uncaughtException', (err) => { console.error(err); process.exitCode = 1; stop(); });
 }
