@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
-import { daemonClient, DEMO, stopAgent, usePaseo } from "./paseo";
+import { daemonClient, stopAgent, usePaseo } from "./paseo";
+import { DEMO } from "./demoFlag";
 import { workspaceIdForAgent } from "./workspaceLogic";
 import { addCtxSource, ctxGroupsFor, gitMenuItems, isCtxItem, laneMenuItems, useCtxSources, type CtxMenuItem } from "./contextSources";
 import { getTeams, useTeams } from "./teams";

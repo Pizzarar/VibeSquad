@@ -10,6 +10,7 @@ import { useSyncExternalStore } from "react";
 import { refreshTeams, retiredLeadTitle } from "./teams";
 import { normalizeProviderUsage, type ProviderQuotaView } from "./antigravity";
 import { LEGACY_NEEDS_LABEL, LEGACY_NEEDS_UNTIL, LEGACY_NEEDS_REASON } from "./userName";
+import { DEMO } from "./demoFlag";
 import { demoAgents, demoArchived, demoProviderUsage, demoWorkspaces } from "./demo";
 import { applyDaemonClientPassword, fetchLocalDaemonPassword, readClientAuthFailure } from "./paseoDaemonAuth";
 import { createPaseoLink } from "./paseoLink";
@@ -24,8 +25,8 @@ export const SERVER_ID = __PASEO_SERVER_ID__;
 // Same-origin URL; Vite proxies /ws to the daemon (see vite.config.ts).
 const WS_URL = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
 
-// ?demo swaps the daemon for a fixed cast so the art can be reviewed without live agents.
-export const DEMO = new URLSearchParams(location.search).has("demo");
+// DEMO lives in a leaf module (see demoFlag.ts); re-exported for existing importers.
+export { DEMO };
 
 export type ConnStatus = "connecting" | "connected" | "disconnected";
 

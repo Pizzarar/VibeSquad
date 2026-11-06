@@ -2,21 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { PaseoAgent } from "@getpaseo/client";
 import { buildAgentDeepLink } from "@getpaseo/protocol/agent-deep-link";
-import {
-  attachFiles,
-  clearNeedsYou,
-  markAgentRead,
-  markAgentUnread,
-  daemonClient,
-  DEMO,
-  SERVER_ID,
-  sendMessage,
-  setNeedsYou,
-  snoozeNeedsYou,
-  stopAgent,
-  updateAgent,
-  upsertLocalAgent,
-} from "./paseo";
+import { attachFiles, clearNeedsYou, markAgentRead, markAgentUnread, daemonClient, SERVER_ID, sendMessage, setNeedsYou, snoozeNeedsYou, stopAgent, updateAgent, upsertLocalAgent } from "./paseo";
+import { DEMO } from "./demoFlag";
 import { isLocallyHidden, isMarkedUnread } from "./attentionLocal";
 import { clearWorkspaceIfQuiet } from "./paseoAttention";
 import { listProviderModels } from "./paseoProviders";

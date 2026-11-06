@@ -1,4 +1,5 @@
-import { DEMO, daemonClient } from "./paseo";
+import { daemonClient } from "./paseo";
+import { DEMO } from "./demoFlag";
 import type { SearchLocation } from "./timelineFilter";
 
 export type TimelinePrompt = { seq: number; timestamp: string; preview: string };

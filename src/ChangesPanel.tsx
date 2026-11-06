@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
-import { daemonClient, DEMO, spawnTeamAgent, usePaseo } from "./paseo";
+import { daemonClient, spawnTeamAgent, usePaseo } from "./paseo";
+import { DEMO } from "./demoFlag";
 import { workspaceIdForAgent } from "./workspaceLogic";
 import { NoWorkspaceBanner } from "./NoWorkspaceBanner";
 import { openAgent } from "./panes";

@@ -1,7 +1,8 @@
 import { Component, Fragment, type ReactNode, useCallback, useSyncExternalStore, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PaseoAgentTimelineEvent } from "@getpaseo/client";
 import { messageCtxItems, openContextMenu, selectionWithin } from "./CommandPalette";
-import { daemonClient, client, DEMO, retrySend } from "./paseo";
+import { daemonClient, client, retrySend } from "./paseo";
+import { DEMO } from "./demoFlag";
 import { isRunnerId, runnerFetchTimeline, runnerHandle } from "./runnerBridge";
 
 /** client.agents.ref(id), except runner-owned agents (rn- ids) go over the VS runner routes. */

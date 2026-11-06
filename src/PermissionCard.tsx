@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { client, DEMO } from "./paseo";
+import { client } from "./paseo";
+import { DEMO } from "./demoFlag";
 import { isImeComposing } from "./IdeaInbox";
 import { MarkdownRenderer } from "./Timeline";
 import { AllowRulesModal } from "./AllowRulesModal";

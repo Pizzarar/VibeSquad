@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { DEMO } from "./paseo";
+import { DEMO } from "./demoFlag";
 import { isShown, getPanes, openAgent } from "./panes";
 import { openRightDockTab } from "./RightDock";
 import { positionRanges, rankFiles, splitMarked } from "./navigateLogic";

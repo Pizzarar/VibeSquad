@@ -1,6 +1,7 @@
 // Daemon fetches behind the Composer's @git / @terminal / @chat. Each is time-boxed (CTX_TIMEOUT_MS) and
 // throws a short readable Error on failure, so the menu shows a failure state instead of freezing.
-import { daemonClient, DEMO } from "./paseo";
+import { daemonClient } from "./paseo";
+import { DEMO } from "./demoFlag";
 import { DEMO_DIFF } from "./ChangesPanel";
 import { captureTerminalLines } from "./paseoFiles";
 import {

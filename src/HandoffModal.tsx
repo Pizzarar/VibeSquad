@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { defaultSpawnConfigFor } from "./antigravity";
 import { useDraft } from "./drafts";
-import { DEMO, sendMessage, spawnTeamAgent, updateAgent } from "./paseo";
+import { sendMessage, spawnTeamAgent, updateAgent } from "./paseo";
+import { DEMO } from "./demoFlag";
 import { buildName, Field, Modal, TITLE_LIMIT, findProfile, useProfiles } from "./TeamActions";
 import { postLog } from "./TeamFeed";
 import { fmtTok, ordOf, retiredLeadTitle, usedTokens, type Member, type TeamView } from "./teams";

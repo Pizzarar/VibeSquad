@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { DEMO } from "./paseo";
+import { DEMO } from "./demoFlag";
 import { openInFiles, type NavAgent } from "./QuickOpen";
 import { groupMatches, matchRanges, splitMarked, type SearchMatch } from "./navigateLogic";
 

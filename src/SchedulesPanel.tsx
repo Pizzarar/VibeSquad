@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { daemonClient, DEMO, updateAgent, usePaseo } from "./paseo";
+import { daemonClient, updateAgent, usePaseo } from "./paseo";
+import { DEMO } from "./demoFlag";
 import { createSchedule, deleteSchedule, inspectSchedule, listSchedules, scheduleAction, scheduleLogs, updateSchedule } from "./paseoSchedules";
 import {
   EMPTY_FORM, cadenceLabel, formFromSchedule, isHeartbeat, toCreateRequest, toUpdateRequest, validateForm,

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { defaultSpawnConfigFor } from "./antigravity";
-import { daemonClient, DEMO, spawnTeamAgent, usePaseo } from "./paseo";
+import { daemonClient, spawnTeamAgent, usePaseo } from "./paseo";
+import { DEMO } from "./demoFlag";
 import { branchSuggestions, validateBranch } from "./paseoWorkspaces";
 import { branchHint } from "./workspaceLogic";
 import {
