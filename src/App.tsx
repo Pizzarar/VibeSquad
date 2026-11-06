@@ -78,8 +78,9 @@ import {
 } from "./ui";
 import { WorkspacesView } from "./WorkspacesView";
 import { AttentionBadge } from "./AttentionList";
+import { SquadQueue } from "./SquadQueue";
 import { FullToggle, PinGrid, SidebarPins, SquadsHome, setFullView, useFullView, type PinHandler } from "./PinGrid";
-import { pinsForSquad, type Pin } from "./pins";
+import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import { popAction, urlAgentFor } from "./pinFocusLogic";
 import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, spinUpPin, usePinFocus, usePinsHome, useSquadsHome } from "./pinFocus";
 import { TopBreadcrumb } from "./Breadcrumb";
@@ -276,7 +277,7 @@ const SidebarTeam = memo(function SidebarTeam({
           <span className="team-name"><TeamNameEdit team={v.team} /></span>
           {v.running > 0 && <span className="badge">{v.running}▶</span>}
         </button>
-        {firstAlert && <AttentionBadge view={v} onOpen={pick} />}
+        {firstAlert && <AttentionBadge view={v} onOpen={pick} hubQueueInstead />}
         {v.team.id !== UNASSIGNED.id && (
           <button
             className="tchip"
@@ -1720,6 +1721,8 @@ export function App() {
   const pinLayout = !full && !focus && screen === "teams";
   const pinFocusView = pinLayout && pinFocus ? views.find((v) => v.team.id === pinFocus.squadId) : undefined;
   const pinFocused = !!pinFocusView;
+  const hubPinNow = pinFocusView ? hubPinForSquad(pinFocusView) : null;
+  const hubFocused = !!pinFocus && !!hubPinNow && hubPinNow.lane.id === pinFocus.laneId;
   const hidePanes = pinLayout && pinsHome && !pinFocused;
   const withPanes = (hasTabs || focus) && !pinFocused && !hidePanes;
   const urlAgentId = urlAgentFor({ activeAgentId, onGrid: hidePanes, startFresh: pinFocused && !pinFocus?.agentId });
@@ -1795,7 +1798,7 @@ export function App() {
 
   return (
     <div
-      className={`app ${focus ? "focus" : ""} ${withPanes ? "with-panes" : ""} ${split && withPanes ? "split" : ""} ${pinFocused ? `pin-focus ${pinFocus?.agentId ? "" : "pin-no-drawer"}` : ""} ${hidePanes ? "pins-home" : ""} ${sheet ? "sheet-open" : ""} ${mobileTeamView ? "mobile-team-view" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
+      className={`app ${focus ? "focus" : ""} ${withPanes ? "with-panes" : ""} ${split && withPanes ? "split" : ""} ${pinFocused ? `pin-focus ${pinFocus?.agentId ? "" : "pin-no-drawer"} ${hubFocused ? "hub-focus" : ""}` : ""} ${hidePanes ? "pins-home" : ""} ${sheet ? "sheet-open" : ""} ${mobileTeamView ? "mobile-team-view" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
       style={{ "--sidebar-w": `${sidebarWidth}px` } as React.CSSProperties}
     >
       {exposedIps.length > 0 && !isRemote() && !isLanBannerDismissed(exposedIps, dismissedLanKey) && (
@@ -2019,6 +2022,7 @@ export function App() {
           header={pinFocusView && pinFocus ? <PinFocusHeader view={pinFocusView} focus={pinFocus} spinUpError={pinFocus.spinUpError} onStart={onSpinUpPin} onSelectSquad={onTeam} belowBar={pinFocus.agentId ? undefined : <HubBar view={pinFocusView} onOpen={onQuickStart} />} /> : undefined}
         />
       )}
+      {pinFocusView && pinFocus && hubFocused && <SquadQueue view={pinFocusView} />}
       {pinFocusView && pinFocus && <PinRail view={pinFocusView} focus={pinFocus} onPick={onRailPick} />}
       <PinToast />
       <MobileBar />
