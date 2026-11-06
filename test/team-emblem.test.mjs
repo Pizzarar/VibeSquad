@@ -12,7 +12,7 @@ const code = transformSync("pixel.tsx", readFileSync(join(srcDir, "pixel.tsx"), 
 const dir = mkdtempSync(join(tmpdir(), "vs-team-emblem-"));
 writeFileSync(join(dir, "pixel.mjs"), code);
 writeFileSync(join(dir, "cast.mjs"), transformSync("cast.ts", readFileSync(join(srcDir, "cast.ts"), "utf8"), { lang: "ts" }).code);
-const { initials } = await import(pathToFileURL(join(dir, "pixel.mjs")).href);
+const { initials, inkFor } = await import(pathToFileURL(join(dir, "pixel.mjs")).href);
 
 test("initials: multi-word, camelCase and separators", () => {
   assert.equal(initials("Escape From Idle"), "EF");
@@ -30,4 +30,11 @@ test("initials: single word, empty, small size", () => {
 
 test("NeonEmblem is gone", () => {
   assert.ok(!/NeonEmblem|neon-emblem/.test(readFileSync(join(srcDir, "pixel.tsx"), "utf8")));
+});
+
+test("inkFor picks the higher-contrast text colour, incl. #rgb", () => {
+  assert.equal(inkFor("#777"), "#fff"); // 4.49:1 vs white, 4.07:1 vs #080814
+  assert.equal(inkFor("#fff"), "#080814");
+  assert.equal(inkFor("#080814"), "#fff");
+  assert.equal(inkFor("#e8a33d"), "#080814");
 });

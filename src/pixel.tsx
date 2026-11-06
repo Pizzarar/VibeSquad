@@ -157,11 +157,12 @@ export function initials(name: string, size = 20): string {
 }
 
 // Black or white text, whichever contrasts better with a #rrggbb fill.
-function inkFor(color: string): string {
-  const m = /^#?([0-9a-f]{6})$/i.exec(color.trim());
+export function inkFor(color: string): string {
+  const m = /^#?([0-9a-f]{6}|[0-9a-f]{3})$/i.exec(color.trim());
   if (!m) return "#fff";
+  const hex = m[1].length === 3 ? m[1].replace(/./g, "$&$&") : m[1];
   const lin = (i: number) => {
-    const c = parseInt(m[1].slice(i, i + 2), 16) / 255;
+    const c = parseInt(hex.slice(i, i + 2), 16) / 255;
     return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
   };
   const L = 0.2126 * lin(0) + 0.7152 * lin(2) + 0.0722 * lin(4);
