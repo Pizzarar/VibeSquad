@@ -40,11 +40,17 @@ export function parseCmdShim(shimPath) {
   return { file: process.execPath, args: [target] };
 }
 
+// Set by the runner entry point; every spawned child is recorded so a hard-killed runner's orphans can be swept at next boot.
+let childLedger = null;
+export function setChildLedger(ledger) { childLedger = ledger; }
+
 // The only place the runner starts a child. shell is pinned to false.
 export function spawnNoShell(cmd, args, opts = {}, spawnImpl = spawn) {
   const { resolved, ...rest } = opts;
   const r = resolved ?? resolveExecutable(cmd, { env: opts.env ?? process.env });
-  return spawnImpl(r.file, [...r.args, ...args], { ...rest, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawnImpl(r.file, [...r.args, ...args], { ...rest, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  try { childLedger?.add(child, r.file); } catch { /* the ledger is best effort */ }
+  return child;
 }
 
 // Kill a child and its descendants. child.kill() on win32 only ends the direct child, so a claude/opencode
