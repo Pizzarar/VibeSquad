@@ -342,67 +342,6 @@ test('ensureRunning starts the runner detached, hidden, unref-ed, with stdio in 
   assert.ok(existsSync(path.join(home, 'runner.log')));
 });
 
-test('a Paseo-bound call after a dead-daemon connect rejects with PASEO_UNAVAILABLE instead of looking connected', async () => {
-  const c = fakePaseoClient('p');
-  const r = fakeRunnerBackend();
-  const lanes = () => new Set(['own']); // 'pinned' is not a runner lane here
-  const b = new RoutingBackend(new PaseoBackend(c), r, { lanes, paseoAlive: async () => false });
-  await b.connect();
-  assert.equal(b.paseoUnavailable, true);
-  await assert.rejects(b.createAgent({ labels: { lane: 'pinned' }, config: {} }), { code: 'PASEO_UNAVAILABLE' });
-  await assert.rejects(b.cancelAgent('11111111-uuid'), { code: 'PASEO_UNAVAILABLE' });
-  assert.equal((await b.createAgent({ labels: { lane: 'own' }, config: {} })).id, 'rn-aaa');
-  assert.equal((await b.cancelAgent('rn-aaa'), true), true);
-  // Lists: runner agents plus a paseoUnavailable marker, whether or not Paseo is wanted (never a rejection).
-  const list = await b.fetchAgents({});
-  assert.deepEqual(list.entries.map((e) => e.agent.id), ['rn-aaa']);
-  assert.equal(list.paseoUnavailable, true);
-});
-
-test('createPaseoProbe: custom options never touch the shared probe, reset() discards an in-flight result', async () => {
-  const { createPaseoProbe, paseoDaemonAlive, resetPaseoProbe } = await import('../server/backend/lane-routing.mjs');
-  let release;
-  const gate = new Promise((ok) => (release = ok));
-  const probe = createPaseoProbe({ check: async () => { await gate; return true; } });
-  const first = probe();
-  probe.reset();
-  release();
-  assert.equal(await first, true);
-  let calls = 0;
-  const again = createPaseoProbe({ check: async () => { calls += 1; return false; } });
-  assert.equal(await again(), false);
-  assert.equal(calls, 1);
-  assert.equal(await createPaseoProbe({ check: async () => true })(), true);
-  resetPaseoProbe();
-  assert.equal(await paseoDaemonAlive({ check: async () => true }), true, 'custom options use their own instance');
-});
-
-test('runner status tells the browser the default is the runner; a UI spawn on an unlisted or empty lane hits the runner', async () => {
-  const { handleRunnerApi, runnerStatus } = await import('../server/runner-api.mjs');
-  const laneSet = runnerLanes({ env: {}, teamsFile: path.join(tmp(), 'missing.json') });
-  const st = await runnerStatus(laneSet, { alive: async () => false, expected: () => false });
-  assert.equal(st.enabled, true);
-  assert.equal(st.defaultBackend, 'runner');
-  assert.deepEqual(st.paseoLanes, []);
-  assert.deepEqual(st.paseo, { expected: false, reachable: false });
-  const pinned = await runnerStatus(runnerLanes({ env: { VS_PASEO_LANES: 'Old' }, teamsFile: path.join(tmp(), 'missing.json') }), { alive: async () => true, expected: () => true });
-  assert.deepEqual(pinned.paseoLanes, ['old']);
-  assert.equal(pinned.paseo.reachable, true);
-
-  const spawned = [];
-  const backend = { createAgent: async (req) => { spawned.push(req); return { id: 'rn-ui1' }; } };
-  const run = async (body, lanes = laneSet) => {
-    const out = {};
-    await handleRunnerApi({ url: '/__vibesquad/runner/spawn', method: 'POST', on() {} }, {}, { readBody: async () => body, sendJson: (_r, code, json) => Object.assign(out, { code, json }), backend, lanes: () => lanes });
-    return out;
-  };
-  assert.equal((await run({ labels: { lane: 'never-listed' }, config: {} })).code, 201);
-  assert.equal((await run({ labels: {}, config: {} })).code, 201, 'a create with no lane is a runner create too');
-  const pinnedSet = runnerLanes({ env: { VS_PASEO_LANES: 'old' }, teamsFile: path.join(tmp(), 'missing.json') });
-  assert.equal((await run({ labels: { lane: 'old' }, config: {} }, pinnedSet)).code, 400, 'a Paseo-pinned lane is not a runner create');
-  assert.equal(spawned.length, 2);
-});
-
 const rev = (seq, type, o) => ({ seq, ts: 1000 + seq, type, ...o });
 const rsum = (e) => e.map((x) => `${x.item.type}:${x.item.text ?? ''}`);
 
@@ -465,4 +404,65 @@ test('fetchAgentTimeline lastSeq advances with absorbed post-thought text while 
     seqs.push(r.lastSeq);
   }
   assert.deepEqual(seqs, [3, 4, 5]);
+});
+
+test('a Paseo-bound call after a dead-daemon connect rejects with PASEO_UNAVAILABLE instead of looking connected', async () => {
+  const c = fakePaseoClient('p');
+  const r = fakeRunnerBackend();
+  const lanes = () => new Set(['own']); // 'pinned' is not a runner lane here
+  const b = new RoutingBackend(new PaseoBackend(c), r, { lanes, paseoAlive: async () => false });
+  await b.connect();
+  assert.equal(b.paseoUnavailable, true);
+  await assert.rejects(b.createAgent({ labels: { lane: 'pinned' }, config: {} }), { code: 'PASEO_UNAVAILABLE' });
+  await assert.rejects(b.cancelAgent('11111111-uuid'), { code: 'PASEO_UNAVAILABLE' });
+  assert.equal((await b.createAgent({ labels: { lane: 'own' }, config: {} })).id, 'rn-aaa');
+  assert.equal((await b.cancelAgent('rn-aaa'), true), true);
+  // Lists: runner agents plus a paseoUnavailable marker, whether or not Paseo is wanted (never a rejection).
+  const list = await b.fetchAgents({});
+  assert.deepEqual(list.entries.map((e) => e.agent.id), ['rn-aaa']);
+  assert.equal(list.paseoUnavailable, true);
+});
+
+test('createPaseoProbe: custom options never touch the shared probe, reset() discards an in-flight result', async () => {
+  const { createPaseoProbe, paseoDaemonAlive, resetPaseoProbe } = await import('../server/backend/lane-routing.mjs');
+  let release;
+  const gate = new Promise((ok) => (release = ok));
+  const probe = createPaseoProbe({ check: async () => { await gate; return true; } });
+  const first = probe();
+  probe.reset();
+  release();
+  assert.equal(await first, true);
+  let calls = 0;
+  const again = createPaseoProbe({ check: async () => { calls += 1; return false; } });
+  assert.equal(await again(), false);
+  assert.equal(calls, 1);
+  assert.equal(await createPaseoProbe({ check: async () => true })(), true);
+  resetPaseoProbe();
+  assert.equal(await paseoDaemonAlive({ check: async () => true }), true, 'custom options use their own instance');
+});
+
+test('runner status tells the browser the default is the runner; a UI spawn on an unlisted or empty lane hits the runner', async () => {
+  const { handleRunnerApi, runnerStatus } = await import('../server/runner-api.mjs');
+  const laneSet = runnerLanes({ env: {}, teamsFile: path.join(tmp(), 'missing.json') });
+  const st = await runnerStatus(laneSet, { alive: async () => false, expected: () => false });
+  assert.equal(st.enabled, true);
+  assert.equal(st.defaultBackend, 'runner');
+  assert.deepEqual(st.paseoLanes, []);
+  assert.deepEqual(st.paseo, { expected: false, reachable: false });
+  const pinned = await runnerStatus(runnerLanes({ env: { VS_PASEO_LANES: 'Old' }, teamsFile: path.join(tmp(), 'missing.json') }), { alive: async () => true, expected: () => true });
+  assert.deepEqual(pinned.paseoLanes, ['old']);
+  assert.equal(pinned.paseo.reachable, true);
+
+  const spawned = [];
+  const backend = { createAgent: async (req) => { spawned.push(req); return { id: 'rn-ui1' }; } };
+  const run = async (body, lanes = laneSet) => {
+    const out = {};
+    await handleRunnerApi({ url: '/__vibesquad/runner/spawn', method: 'POST', on() {} }, {}, { readBody: async () => body, sendJson: (_r, code, json) => Object.assign(out, { code, json }), backend, lanes: () => lanes });
+    return out;
+  };
+  assert.equal((await run({ labels: { lane: 'never-listed' }, config: {} })).code, 201);
+  assert.equal((await run({ labels: {}, config: {} })).code, 201, 'a create with no lane is a runner create too');
+  const pinnedSet = runnerLanes({ env: { VS_PASEO_LANES: 'old' }, teamsFile: path.join(tmp(), 'missing.json') });
+  assert.equal((await run({ labels: { lane: 'old' }, config: {} }, pinnedSet)).code, 400, 'a Paseo-pinned lane is not a runner create');
+  assert.equal(spawned.length, 2);
 });

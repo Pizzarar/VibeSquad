@@ -53,3 +53,21 @@ test('MCP withBackend: a non-runner id goes through the RoutingBackend and recor
     else process.env.PASEO_DAEMON = prev;
   }
 });
+
+test('MCP withBackend: an rn- id boots a dead runner before the call (single-flight ensure), a non-owner path is unaffected', async () => {
+  const { sharedRunnerBackend } = await import('../server/backend/index.mjs');
+  const { createContext } = await import('../server/mcp/tools.mjs');
+  const runner = sharedRunnerBackend();
+  const calls = [];
+  const had = Object.getOwnPropertyDescriptor(runner, 'ensureRunningOnce');
+  runner.ensureRunningOnce = async () => { calls.push('ensure'); };
+  try {
+    const ctx = createContext({ env: { ...process.env }, identity: { agentId: 'rn-caller', team: '', lane: '', role: '' } });
+    const seen = await ctx.withBackend({ id: 'rn-abc123' }, async (b) => { calls.push('fn'); return b === runner; });
+    assert.equal(seen, true, 'the shared runner backend is used');
+    assert.deepEqual(calls, ['ensure', 'fn'], 'the runner is ensured before the call runs');
+  } finally {
+    if (had) Object.defineProperty(runner, 'ensureRunningOnce', had);
+    else delete runner.ensureRunningOnce;
+  }
+});

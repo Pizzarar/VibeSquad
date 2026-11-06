@@ -47,7 +47,12 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
     // is listening and closed after the call.
     async withBackend({ id } = {}, fn) {
       const { sharedRunnerBackend, getBackend, runnerLanes } = await import("../backend/index.mjs");
-      if (isRunnerId(id)) return fn(sharedRunnerBackend());
+      if (isRunnerId(id)) {
+        // status/send/wait/cancel on a runner agent revive a dead runner too (single-flight, cooled down after a failed start).
+        const runner = sharedRunnerBackend();
+        await runner.ensureRunningOnce?.();
+        return fn(runner);
+      }
       const { createDaemonClient } = await import("../brainstorm.mjs");
       const backend = getBackend(createDaemonClient(), { lanes: () => runnerLanes({ env }) });
       await backend.connect?.();
