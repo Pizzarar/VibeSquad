@@ -122,7 +122,7 @@ export function Avatar({
   return (
     <span
       className={`avatar type-${agentType} prov-${p.key} ${retired ? "is-retired" : ""}`}
-      style={{ width: snapped, height: snapped, "--prov": p.color, "--prov-dim": p.dim } as CSSProperties}
+      style={{ width: snapped, height: snapped }}
       title={`${roleLabel} · ${p.name} (#${tag})`}
     >
       <span
