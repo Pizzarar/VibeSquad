@@ -121,9 +121,13 @@ export class RoutingBackend {
     return this.paseo.runCli(...args);
   }
 
-  /** Boot the runner if it is down (owner-initiated server paths only; see RunnerBackend.ensureRunningOnce). */
-  ensureRunner() {
-    return Promise.resolve(this.runner.ensureRunningOnce?.());
+  /**
+   * Fail with RUNNER_DOWN if the runner is down and `lane` routes to it (no lane: any runner lane enabled). Never starts it:
+   * only the VS server's supervisor does. A Paseo-pinned lane does not need the runner.
+   */
+  ensureRunner(lane) {
+    if (lane ? !this.lanes().has(norm(lane)) : !this.lanes().size) return Promise.resolve();
+    return Promise.resolve(this.runner.requireRunning?.());
   }
 }
 

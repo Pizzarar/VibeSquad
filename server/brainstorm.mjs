@@ -559,8 +559,8 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
         // connect() no longer throws for a down Paseo: for a lane Paseo would serve, its Buddy list is unknown.
         if (backend.paseoUnavailable && !runnerLanes({ teamsFile: resolveTeamsFilePath(rootDir) }).has(String(laneId).toLowerCase())) return null;
         if (connected && client && typeof backend.fetchAgents === "function") {
-          // An owner-initiated start: a cold runner must be booted, not read as "no agents" (or as an unreadable list).
-          await backend.ensureRunner?.();
+          // Runner down (the supervisor is restarting it): unreadable list, not "no agents". fetchAgents below then fails closed.
+          await backend.ensureRunner?.().catch(() => {});
           const res = await backend.fetchAgents().catch(() => null);
           // Runner-only list because Paseo is down or died mid-call: fine for a runner lane, unknown for any lane Paseo
           // would serve (pinned, or every lane under the rollback default), where its Buddy may live.

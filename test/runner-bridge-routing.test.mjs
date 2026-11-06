@@ -39,11 +39,14 @@ test('MCP withBackend: a non-runner id goes through the RoutingBackend and recor
     const { resetPaseoProbe, RoutingBackend } = await import('../server/backend/lane-routing.mjs');
     resetPaseoProbe();
     const { createContext } = await import('../server/mcp/tools.mjs');
+    const { sharedRunnerBackend } = await import('../server/backend/index.mjs');
+    sharedRunnerBackend().requireRunning = async () => {}; // the runner is not under test here (and is never started by this path)
     const ctx = createContext({ env: { ...process.env, VS_DEFAULT_BACKEND: 'runner' }, identity: { agentId: 'rn-caller', team: '', lane: 'x', role: '' } });
     const seen = await ctx.withBackend({ lane: 'x' }, async (b) => ({ routing: b instanceof RoutingBackend, down: b.paseoUnavailable }));
     assert.deepEqual(seen, { routing: true, down: true });
   } finally {
-    // withBackend boots the runner for a trusted caller (ensureRunner): stop the one this test started, by its own pid file.
+    delete (await import('../server/backend/index.mjs')).sharedRunnerBackend().requireRunning;
+    // defensive: stop any runner that appeared under this test's home.
     try {
       const { readFileSync } = await import('node:fs');
       const pid = JSON.parse(readFileSync(path.join(process.env.VIBESQUAD_HOME, 'runner', 'runner.json'), 'utf8')).pid;
@@ -54,20 +57,25 @@ test('MCP withBackend: a non-runner id goes through the RoutingBackend and recor
   }
 });
 
-test('MCP withBackend: an rn- id boots a dead runner before the call (single-flight ensure), a non-owner path is unaffected', async () => {
+test('MCP withBackend: an rn- id with the runner down is RUNNER_DOWN and never spawns; with it up the call runs', async () => {
   const { sharedRunnerBackend } = await import('../server/backend/index.mjs');
   const { createContext } = await import('../server/mcp/tools.mjs');
   const runner = sharedRunnerBackend();
   const calls = [];
-  const had = Object.getOwnPropertyDescriptor(runner, 'ensureRunningOnce');
-  runner.ensureRunningOnce = async () => { calls.push('ensure'); };
+  const had = Object.getOwnPropertyDescriptor(runner, 'requireRunning');
+  let up = false;
+  runner.requireRunning = async () => { calls.push('require'); if (!up) { const e = new Error('RUNNER_DOWN: x'); e.code = 'RUNNER_DOWN'; throw e; } };
+  runner.startOwned = () => { calls.push('SPAWN'); return Promise.resolve(true); };
   try {
     const ctx = createContext({ env: { ...process.env }, identity: { agentId: 'rn-caller', team: '', lane: '', role: '' } });
+    await assert.rejects(ctx.withBackend({ id: 'rn-abc123' }, async () => { calls.push('fn'); }), { code: 'RUNNER_DOWN' });
+    up = true;
     const seen = await ctx.withBackend({ id: 'rn-abc123' }, async (b) => { calls.push('fn'); return b === runner; });
     assert.equal(seen, true, 'the shared runner backend is used');
-    assert.deepEqual(calls, ['ensure', 'fn'], 'the runner is ensured before the call runs');
+    assert.deepEqual(calls, ['require', 'require', 'fn'], 'only connect checks, never a spawn');
   } finally {
-    if (had) Object.defineProperty(runner, 'ensureRunningOnce', had);
-    else delete runner.ensureRunningOnce;
+    if (had) Object.defineProperty(runner, 'requireRunning', had);
+    else delete runner.requireRunning;
+    delete runner.startOwned;
   }
 });

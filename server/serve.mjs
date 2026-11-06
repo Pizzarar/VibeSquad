@@ -39,6 +39,7 @@ import { installVsShim } from "../cli/vs.mjs";
 import { requestLocalLoginUrl } from "./local-token.mjs";
 import { startPushWatcher } from "./push.mjs";
 import { sharedRunnerBackend } from "./backend/index.mjs";
+import { shouldSuperviseRunner, superviseRunner } from "./runner-supervisor.mjs";
 import { runnerLanes } from "./backend/lane-routing.mjs";
 import { startRunnerLifecycle } from "./backend/runner-lifecycle.mjs";
 import { ensurePaseoDaemon } from "./first-run.mjs";
@@ -512,13 +513,6 @@ server.on("error", async (e) => {
 });
 const isMain = process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename);
 
-// Login entry (desktop `--background`, Startup VBS): also boot the VS runner so agents are reachable with no window open.
-// A normal launch leaves it to the owner's first UI/MCP call (RunnerBackend.ensureRunningOnce).
-export function shouldStartRunnerAtBoot(env = process.env, argv = process.argv) {
-  const v = String(env?.VIBESQUAD_START_RUNNER ?? "").trim().toLowerCase();
-  return argv.slice(2).includes("--background") || v === "1" || v === "true";
-}
-
 // Whether serve.mjs should auto-start the local Paseo daemon on launch. Skipped when the caller sets
 // VIBESQUAD_NO_DAEMON=1 (e.g. desktop "relay" mode, which only serves the static bundle and must not
 // spawn a daemon that conflicts with a running service or remote relay). Since the runner cutover Paseo is opt-in:
@@ -549,7 +543,11 @@ if (isMain) {
   server.listen(port, "127.0.0.1", () => {
     console.log(`VibeSquad serving ${distDir} on ${url}`);
     logServerStart({ rootDir });
-    if (shouldStartRunnerAtBoot()) void sharedRunnerBackend().ensureRunningOnce?.();
+    // This server is the runner's only owner: start it now and keep it up (backoff). All other callers only connect.
+    if (shouldSuperviseRunner()) {
+      const sup = superviseRunner(sharedRunnerBackend());
+      server.once("close", () => sup.stop());
+    }
     void sharedSchedules().then((st) => st.start()).catch(() => {});
     server.once("close", () => void sharedSchedules().then((st) => st.stop()).catch(() => {}));
     setImmediate(() => getStale({ rootDir }));

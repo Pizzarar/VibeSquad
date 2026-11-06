@@ -1,4 +1,4 @@
-// One runner per home: 8 separate processes call ensureRunning at once -> exactly 1 runner. Temp home only, never ~/.vibesquad.
+// One runner per home: 8 separate processes call startOwned at once -> exactly 1 runner. Temp home only, never ~/.vibesquad.
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, execFile } from "node:child_process";
@@ -29,7 +29,7 @@ after(async () => {
   for (const h of homes) rmSync(h, { recursive: true, force: true });
 });
 
-test("8 concurrent ensureRunning calls from separate processes end with exactly 1 runner", { timeout: 60000 }, async () => {
+test("8 concurrent startOwned calls from separate processes end with exactly 1 runner", { timeout: 60000 }, async () => {
   const home = mkHome();
   const results = await Promise.all(Array.from({ length: 8 }, () => run(CHILD, [home])));
   for (const r of results) assert.equal(r.code, 0, r.stderr);

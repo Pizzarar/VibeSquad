@@ -49,7 +49,7 @@ export async function runnerStatus(laneSet, { alive = paseoDaemonAlive, expected
   };
 }
 
-export async function handleRunnerApi(req, res, { readBody, sendJson, backend = sharedRunnerBackend(), lanes = runnerLanes, status = runnerStatus, ensureRunner = false }) {
+export async function handleRunnerApi(req, res, { readBody, sendJson, backend = sharedRunnerBackend(), lanes = runnerLanes, status = runnerStatus }) {
   try {
     const parts = (req.url ?? "").split("?")[0].slice(PREFIX.length).split("/").filter(Boolean);
     const url = new URL(req.url, "http://x");
@@ -57,9 +57,7 @@ export async function handleRunnerApi(req, res, { readBody, sendJson, backend = 
     if (parts[0] === "status") return sendJson(res, 200, await status(laneSet));
     if (!laneSet.size) return sendJson(res, 200, { enabled: false, agents: [] });
     if (parts[0] === "events" && parts.length === 1 && req.method === "GET") {
-      // The runner is VibeSquad's own daemon now: an owner's open UI starts it (detached, single-flight, cooled down after a failure)
-      // instead of showing "disconnected" until the first spawn. Non-owners just get the stream.
-      if (ensureRunner) await backend.ensureRunningOnce?.();
+      // Connect-only: the VS server's supervisor owns the runner; the stream retries until it is up.
       return streamEvents(req, res, backend);
     }
     if (parts[0] === "agents" && parts.length === 1 && req.method === "GET") {

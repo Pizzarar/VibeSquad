@@ -230,7 +230,7 @@ test("RunnerBackend.archiveAgent drops the agent self-heartbeats via the shared 
     const st = await sharedSchedules();
     const hb = st.create({ prompt: "b", cadence: every, target: { type: "self", agentId: "rn-z" } });
     const keep = st.create({ prompt: "b", cadence: every, target: { type: "self", agentId: "rn-y" } });
-    const b = new RunnerBackend({ client: { async request() { return {}; }, async ensureRunning() {} } });
+    const b = new RunnerBackend({ client: { async request() { return {}; }, async startOwned() {}, async requireRunning() {} } });
     await b.archiveAgent("rn-z");
     const ids = st.list().map((s) => s.id);
     assert.ok(!ids.includes(hb.id));

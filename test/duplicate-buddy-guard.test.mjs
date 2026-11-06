@@ -45,7 +45,7 @@ function fakeRunner({ existing = [], cold = false } = {}) {
   return {
     created,
     get ensured() { return ensured; },
-    async ensureRunningOnce() { ensured += 1; up = true; },
+    async requireRunning() { ensured += 1; if (!up) throw new Error("RUNNER_DOWN"); },
     async fetchAgents() {
       if (!up) throw new Error("runner not running");
       return { entries: existing.map((agent) => ({ agent })) };
@@ -154,12 +154,11 @@ test("runner lane + Paseo down + a live runner Buddy: no second Buddy is spawned
   assert.equal(res.newAgentId ?? res.agentId, "rn-existing");
 });
 
-test("runner lane + Paseo down + cold runner: the runner is booted and exactly one rn- Buddy is spawned", async () => {
+test("runner lane + Paseo down + cold runner: nothing is spawned (the VS server owns starting the runner)", async () => {
   const paseo = fakePaseo();
   const runner = fakeRunner({ cold: true });
   const { res } = await run({ vars: { VS_DEFAULT_BACKEND: "runner", VS_BACKEND: undefined }, paseo, runner });
-  assert.equal(runner.ensured >= 1, true, "ensureRunningOnce was called");
-  assert.equal(runner.created.length, 1, JSON.stringify(res));
-  assert.match(res.newAgentId, /^rn-new-/);
+  assert.equal(runner.ensured >= 1, true, "requireRunning was consulted");
+  assert.equal(runner.created.length, 0, JSON.stringify(res));
   assert.equal(paseo.calls.includes("createAgent"), false);
 });

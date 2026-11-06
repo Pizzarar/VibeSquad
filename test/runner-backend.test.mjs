@@ -326,12 +326,12 @@ test('runtime sync and desktop build ship runner/ (RUNNER_ENTRY)', () => {
   }
 });
 
-test('ensureRunning starts the runner detached, hidden, unref-ed, with stdio in runner.log', async () => {
+test('startOwned starts the runner detached, hidden, unref-ed, with stdio in runner.log', async () => {
   const home = mkdtempSync(path.join(os.tmpdir(), 'vs-detach-'));
   const calls = [];
   const spawnImpl = (cmd, args, opts) => { calls.push({ cmd, args, opts }); return { unref() { calls.at(-1).unref = true; } }; };
   const rc = new RunnerClient({ home, spawnImpl, startTimeoutMs: 150 });
-  await assert.rejects(rc.ensureRunning(), /did not start/);
+  await assert.rejects(rc.startOwned(), /did not start/);
   const { opts, unref } = calls[0];
   assert.equal(opts.detached, true);
   assert.equal(opts.windowsHide, true);
