@@ -225,3 +225,47 @@ test("api: create, stream output over SSE, input, kill, scripts start/stop/list"
     assert.equal((await post("/workspace-scripts/stop", { cwd: root, name: "go" })).status, 200);
   });
 });
+
+// ---- review fixes ----
+test("terminal: an exited shell is evicted after the grace period and stops counting toward the limit", async () => {
+  const dir = tmp();
+  const m = new TerminalManager({ pty: null, shell: fakeShell, max: 1, evictMs: 100 });
+  try {
+    const t = await m.create({ cwd: dir });
+    await assert.rejects(m.create({ cwd: dir }), /too many/);
+    m.input(t.id, "quit\n");
+    assert.ok(await until(() => m.list(dir)[0]?.exited), "reports exited first");
+    assert.ok(m.output(t.id).length >= 0, "still readable during the grace period");
+    assert.ok(await until(() => m.list(dir).length === 0), "then evicted");
+    const t2 = await m.create({ cwd: dir });
+    assert.ok(t2.id);
+  } finally { m.killAll(); rmq(dir); }
+});
+
+test("scripts: the server's local tokens are not passed to scripts", async () => {
+  const dir = pkgDir({ dev: "x" });
+  const saved = { a: process.env.VS_LOCAL_TOKEN, b: process.env.VIBESQUAD_TOKEN };
+  process.env.VS_LOCAL_TOKEN = "secret-a"; process.env.VIBESQUAD_TOKEN = "secret-b";
+  const m = new ScriptManager({ runner: nodeRunner('console.log("T:" + [process.env.VS_LOCAL_TOKEN, process.env.VIBESQUAD_TOKEN, process.env.PATH ? "path" : "nopath"].join(","))') });
+  try {
+    m.start(dir, "dev");
+    assert.ok(await until(() => /T:/.test(m.logs(dir, "dev"))));
+    assert.match(m.logs(dir, "dev"), /T:,,path/);
+  } finally {
+    for (const [k, v] of [["VS_LOCAL_TOKEN", saved.a], ["VIBESQUAD_TOKEN", saved.b]]) v === undefined ? delete process.env[k] : (process.env[k] = v);
+    m.stopAll(); rmq(dir);
+  }
+});
+
+test("terminal: piped fallback treats CRLF as one newline", async () => {
+  const dir = tmp();
+  const m = new TerminalManager({ pty: null, shell: fakeShell });
+  try {
+    const t = await m.create({ cwd: dir });
+    m.input(t.id, "one\r\ntwo\r\n");
+    assert.ok(await until(() => m.output(t.id).includes("got:two")));
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal((m.output(t.id).match(/got:/g) ?? []).length, 2, "no extra empty command from the \n of CRLF");
+    assert.ok(!m.output(t.id).includes("got:\r") && !/got:\s*\n/.test(m.output(t.id).replace(/got:(one|two)/g, "")));
+  } finally { m.killAll(); rmq(dir); }
+});

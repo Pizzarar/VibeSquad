@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import { daemonClient, DEMO, usePaseo } from "./paseo";
 import { workspaceIdForAgent } from "./workspaceLogic";
 import { NoWorkspaceBanner } from "./NoWorkspaceBanner";
-import { usesVsShells, vsListScripts, vsScriptLogs, vsStartScript, vsStopScript } from "./vsShells";
+import { usesVsShells, vsListScripts, vsScriptLogsUrl, vsStartScript, vsStopScript, vsStream } from "./vsShells";
 
 type PkgScript = { scriptName: string; command: string; source: "package.json" };
 
@@ -35,6 +35,15 @@ export function ScriptsPanel({ agent }: { agent: PaseoAgent }) {
   const agentCwd = agent.cwd ?? "";
   const vs = !DEMO && usesVsShells(agent.id); // runner agents: scripts over /__vibesquad/workspace-scripts, keyed by folder
   const [logs, setLogs] = useState<{ name: string; text: string } | null>(null);
+  const [stopping, setStopping] = useState<Set<string>>(new Set()); // stop requested, process not yet confirmed exited
+  const stopLogs = useRef<(() => void) | null>(null);
+  const closeLogs = () => { stopLogs.current?.(); stopLogs.current = null; setLogs(null); };
+  const openLogs = (name: string) => {
+    stopLogs.current?.();
+    setLogs({ name, text: "" });
+    stopLogs.current = vsStream(vsScriptLogsUrl(agentCwd, name), (d) => setLogs((l) => (l && l.name === name ? { ...l, text: l.text + d } : l)));
+  };
+  useEffect(() => closeLogs, [agent.id, agentCwd]); // eslint-disable-line react-hooks/exhaustive-deps
   const workspaceId = useMemo(() => workspaceIdForAgent(agent, workspaces) ?? (addedWs?.cwd === agentCwd ? addedWs.id : null), [agent, workspaces, addedWs, agentCwd]);
 
   useEffect(() => {
@@ -81,7 +90,7 @@ export function ScriptsPanel({ agent }: { agent: PaseoAgent }) {
     }
     load();
     if (!vs) loadPkgScripts(); // the VS route already lists package.json scripts
-    const poll = vs ? setInterval(() => { vsListScripts(agentCwd).then((l) => { if (!cancelled) setScripts(l as ScriptInfo[]); }).catch(() => {}); }, 2500) : undefined;
+    const poll = vs ? setInterval(() => { vsListScripts(agentCwd).then((l) => { if (!cancelled) { setScripts(l as ScriptInfo[]); setStopping((prev) => (prev.size ? new Set([...prev].filter((n) => l.some((s) => s.scriptName === n && s.lifecycle === "running"))) : prev)); } }).catch(() => {}); }, 2500) : undefined;
     return () => {
       cancelled = true;
       if (poll) clearInterval(poll);
@@ -158,13 +167,19 @@ export function ScriptsPanel({ agent }: { agent: PaseoAgent }) {
     if (!vs && !workspaceId) return;
     setBusy((prev) => new Set([...prev, scriptName]));
     try {
-      if (vs) await vsStopScript(agentCwd, scriptName);
-      else await daemonClient.stopWorkspaceScript(workspaceId!, scriptName);
+      if (vs) {
+        setStopping((prev) => new Set([...prev, scriptName]));
+        // The server waits for the process to exit; if it hasn't yet, keep showing "stopping" until the poll reports it stopped.
+        const r = (await vsStopScript(agentCwd, scriptName)) as { lifecycle?: string };
+        if (r?.lifecycle === "stopping") return;
+      } else await daemonClient.stopWorkspaceScript(workspaceId!, scriptName);
       setScripts((prev) =>
         prev.map((s) => (s.scriptName === scriptName ? { ...s, lifecycle: "stopped" } : s)),
       );
+      setStopping((prev) => { const next = new Set(prev); next.delete(scriptName); return next; });
     } catch (e) {
       setErr(String(e));
+      setStopping((prev) => { const next = new Set(prev); next.delete(scriptName); return next; });
     } finally {
       setBusy((prev) => {
         const next = new Set(prev);
@@ -186,7 +201,8 @@ export function ScriptsPanel({ agent }: { agent: PaseoAgent }) {
       )}
       {scripts.map((s) => {
         const isRunning = s.lifecycle === "running";
-        const isBusy = busy.has(s.scriptName);
+        const isStopping = stopping.has(s.scriptName);
+        const isBusy = busy.has(s.scriptName) || isStopping;
         return (
           <div key={s.scriptName} className="script-row" data-testid="script-row">
             <span className="script-name">{s.scriptName}</span>
@@ -194,7 +210,7 @@ export function ScriptsPanel({ agent }: { agent: PaseoAgent }) {
               <button
                 className="btn ghost small"
                 data-testid="script-logs-btn"
-                onClick={() => void vsScriptLogs(agentCwd, s.scriptName).then((text) => setLogs({ name: s.scriptName, text })).catch((e) => setErr(String(e?.message ?? e)))}
+                onClick={() => openLogs(s.scriptName)}
               >
                 Logs
               </button>
@@ -212,8 +228,8 @@ export function ScriptsPanel({ agent }: { agent: PaseoAgent }) {
                 Open
               </a>
             )}
-            <span className={`script-status small ${isRunning ? "ok" : "muted"}`}>
-              {isRunning ? "● running" : "○ stopped"}
+            <span className={`script-status small ${isRunning && !isStopping ? "ok" : "muted"}`}>
+              {isStopping ? "◌ stopping…" : isRunning ? "● running" : "○ stopped"}
             </span>
             {isRunning ? (
               <button
@@ -240,7 +256,7 @@ export function ScriptsPanel({ agent }: { agent: PaseoAgent }) {
       {logs && (
         <div data-testid="script-logs">
           <div className="muted small">
-            Logs · {logs.name} <button className="btn ghost small" onClick={() => setLogs(null)}>Close</button>
+            Logs · {logs.name} <button className="btn ghost small" onClick={closeLogs}>Close</button>
           </div>
           <pre className="terminal-capture-text">{logs.text || "(no output yet)"}</pre>
         </div>

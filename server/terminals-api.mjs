@@ -87,7 +87,7 @@ export async function handleTerminalsApi(req, res, { readBody, sendJson, resolve
       const body = await readBody(req);
       const cwd = await cwdOf(body?.cwd);
       const name = String(body?.name ?? "");
-      return sendJson(res, 200, path.endsWith("/start") ? scripts.start(cwd, name) : scripts.stop(cwd, name));
+      return sendJson(res, 200, path.endsWith("/start") ? scripts.start(cwd, name) : await scripts.stop(cwd, name));
     }
     return sendJson(res, 404, { error: "not found" });
   } catch (err) {

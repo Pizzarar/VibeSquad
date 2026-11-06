@@ -5,6 +5,7 @@ import { EventEmitter } from "node:events";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { killTree, onServerExit } from "./proc-tree.mjs";
+import { withoutTokens } from "./terminals.mjs";
 
 const LOG_CHARS = 200_000;
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9:_.\-/@]{0,100}$/;
@@ -59,7 +60,7 @@ export class ScriptManager {
     };
     const child = spawn(file, args, {
       cwd, shell: Boolean(shell), windowsHide: true, detached: process.platform !== "win32",
-      env: { ...process.env, FORCE_COLOR: "0" }, stdio: ["ignore", "pipe", "pipe"],
+      env: withoutTokens({ ...process.env, FORCE_COLOR: "0" }), stdio: ["ignore", "pipe", "pipe"],
     });
     run.pid = child.pid;
     child.stdout.on("data", (d) => emit(d.toString("utf8")));
@@ -75,11 +76,16 @@ export class ScriptManager {
     return { scriptName: name, lifecycle: "running", pid: run.pid };
   }
 
-  stop(cwd, name) {
+  /** Kills the script's tree and waits (up to `waitMs`) for it to exit, so a following start() doesn't hit "already running". */
+  async stop(cwd, name, { waitMs = 5000 } = {}) {
     const r = this.runs.get(this.key(cwd, name));
     if (!r || r.exited) return { scriptName: name, lifecycle: "stopped" };
+    const gone = new Promise((ok) => r.events.once("exit", ok));
     killTree(r.pid);
-    return { scriptName: name, lifecycle: "stopping" };
+    let timer;
+    await Promise.race([gone, new Promise((ok) => { timer = setTimeout(ok, waitMs); })]);
+    clearTimeout(timer);
+    return { scriptName: name, lifecycle: r.exited ? "stopped" : "stopping" };
   }
 
   logs(cwd, name) {

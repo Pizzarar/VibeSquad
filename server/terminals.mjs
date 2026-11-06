@@ -8,6 +8,7 @@ import { killTree, onServerExit } from "./proc-tree.mjs";
 
 const SCROLLBACK_CHARS = 200_000;
 export const MAX_TERMINALS = 16;
+const EXITED_GRACE_MS = 30_000; // how long an exited terminal stays listed so clients can read its final output
 
 let ptyPromise;
 /** node-pty if present (optional dependency, or VS_NODE_PTY pointing at an installed copy); null otherwise. */
@@ -30,20 +31,23 @@ export function defaultShell() {
   return { file: process.env.VS_SHELL || process.env.SHELL || "/bin/bash", args: [] };
 }
 
-const shellEnv = () => {
-  const env = { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" };
-  for (const k of Object.keys(env)) if (/^(VS_LOCAL_TOKEN|VIBESQUAD_TOKEN)$/i.test(k)) delete env[k];
-  return env;
+/** Copy of `env` without the server's local owner tokens, for anything that runs user code. */
+export const withoutTokens = (env) => {
+  const out = { ...env };
+  for (const k of Object.keys(out)) if (/^(VS_LOCAL_TOKEN|VIBESQUAD_TOKEN)$/i.test(k)) delete out[k];
+  return out;
 };
+const shellEnv = () => withoutTokens({ ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" });
 
 const clampDim = (v, lo, hi, dflt) => Math.min(hi, Math.max(lo, Number(v) || dflt));
 
 export class TerminalManager {
-  /** @param {{ pty?: any | null, shell?: {file:string,args:string[]}, max?: number }} [opts] pty: undefined = autodetect, null = force the piped fallback */
+  /** @param {{ pty?: any | null, shell?: {file:string,args:string[]}, max?: number, evictMs?: number }} [opts] pty: undefined = autodetect, null = force the piped fallback */
   constructor(opts = {}) {
     this.ptyOpt = opts.pty;
     this.shell = opts.shell ?? defaultShell();
     this.max = opts.max ?? MAX_TERMINALS;
+    this.evictMs = opts.evictMs ?? EXITED_GRACE_MS;
     this.terms = new Map();
     onServerExit(() => this.killAll({ sync: true }));
   }
@@ -70,6 +74,7 @@ export class TerminalManager {
       if (t.exited) return;
       t.exited = { code: code ?? null };
       t.events.emit("exit", t.exited);
+      setTimeout(() => { if (this.terms.get(id) === t) this.terms.delete(id); }, this.evictMs).unref();
     };
     if (pty) {
       const p = pty.spawn(this.shell.file, this.shell.args, { name: "xterm-256color", cwd, cols, rows, env: shellEnv() });
@@ -78,8 +83,9 @@ export class TerminalManager {
       p.onExit((e) => finish(e?.exitCode));
       t.write = (d) => p.write(d);
       t.resize = (c, r) => { try { p.resize(c, r); } catch {} };
-      t.kill = () => { try { p.kill(); } catch {} killTree(p.pid); };
-      t.killSync = () => { try { p.kill(); } catch {} killTree(p.pid, { sync: true }); };
+      // Tree first: once the root shell is gone, taskkill /PID can no longer find its children.
+      t.kill = () => { killTree(p.pid, { sync: true }); try { p.kill(); } catch {} };
+      t.killSync = t.kill;
     } else {
       const child = spawn(this.shell.file, this.shell.args, {
         cwd, env: shellEnv(), stdio: ["pipe", "pipe", "pipe"], windowsHide: true, detached: process.platform !== "win32",
@@ -92,8 +98,12 @@ export class TerminalManager {
       child.stdin.on("error", () => {});
       // No TTY: the shell won't echo, so echo what is typed (CR becomes CRLF) and send complete lines.
       let line = "";
+      let prev = "";
       t.write = (d) => {
         for (const ch of d) {
+          const was = prev;
+          prev = ch;
+          if (ch === "\n" && was === "\r") continue; // CRLF is one newline
           if (ch === "\r" || ch === "\n") { emit("\r\n"); child.stdin.write(line + "\n"); line = ""; }
           else if (ch === "\x7f" || ch === "\b") { if (line) { line = line.slice(0, -1); emit("\b \b"); } }
           else if (ch === "\x03") { emit("^C\r\n"); line = ""; }
