@@ -176,10 +176,8 @@ async function injectedPrefix(role, cwd) {
   }
 }
 
-/** "error" while an errored turn has not been followed by a new one; otherwise the runner's own status. */
-function effectiveStatus(agent, live) {
-  return live.errored.has(agent.id) && agent.status !== "running" ? "error" : agent.status;
-}
+/** Shown status of a tracked agent: "error" while an errored turn has not been followed by a new one. */
+const viewStatus = (t) => (t.errored && t.status !== "running" ? "error" : t.status);
 
 export class RunnerBackend {
   constructor({ client = new RunnerClient(), buildPrefix = injectedPrefix, whosHere = refreshWhosHere, rootDir = REPO_ROOT, lanes = runnerLanes } = {}) {
@@ -188,7 +186,7 @@ export class RunnerBackend {
     Object.defineProperty(this, "whosHere", { value: whosHere });
     Object.defineProperty(this, "rootDir", { value: rootDir });
     Object.defineProperty(this, "listeners", { value: new Set() });
-    Object.defineProperty(this, "live", { value: { stream: null, chain: Promise.resolve(), status: new Map(), errored: new Set(), gen: 0 } });
+    Object.defineProperty(this, "live", { value: { stream: null, chain: Promise.resolve(), turn: new Map(), gen: 0 } });
     // Paseo-side agents of the same lanes, set by the RoutingBackend so a Who's here refresh sees the whole lane.
     Object.defineProperty(this, "siblings", { value: { list: null } });
     Object.defineProperty(this, "lanes", { value: lanes });
@@ -197,6 +195,11 @@ export class RunnerBackend {
   /** `fn()` resolves the non-runner agents (Paseo) so a lane brief lists everyone, not just runner agents. */
   useSiblingAgents(fn) {
     this.siblings.list = fn;
+  }
+
+  /** Detach `fn` (only if it is still the active provider: a newer owner keeps its own). */
+  dropSiblingAgents(fn) {
+    if (this.siblings.list === fn) this.siblings.list = null;
   }
 
   runCli() {
@@ -243,12 +246,13 @@ export class RunnerBackend {
     try {
       const mine = await this.listAgents();
       let agents;
-      if (this.siblings.list) {
-        const others = await this.siblings.list();
+      let others = null;
+      if (this.siblings.list) others = await this.siblings.list().catch(() => null); // Paseo down/closed: not an error
+      if (others) {
         const seen = new Set(mine.map((a) => a.id));
         agents = [...mine, ...others.filter((a) => !seen.has(a.id))];
       } else if (this.lanes().has(String(lane).toLowerCase())) {
-        agents = mine; // lane lives wholly on the runner
+        agents = mine; // lane lives wholly on the runner (and Paseo cannot be asked)
       } else {
         return; // cannot see the whole lane (Paseo agents may share it): leave the brief alone rather than wipe them
       }
@@ -369,8 +373,7 @@ export class RunnerBackend {
         this.live.stream.close();
         this.live.stream = null;
         this.live.gen++; // work already queued on the chain belongs to the closed stream: drop its results
-        this.live.status.clear();
-        this.live.errored.clear();
+        this.live.turn.clear();
       }
     };
   }
@@ -386,6 +389,11 @@ export class RunnerBackend {
     }
   }
 
+  /** A listed agent with the in-memory "error" overlay (the runner log itself only knows running/idle). */
+  overlay(agent) {
+    return this.live.turn.get(agent.id)?.errored && agent.status !== "running" ? { ...agent, status: "error" } : agent;
+  }
+
   /** Initial roster for one new listener (the stream's shared status map is seeded by seedRoster on open). */
   async seedListener(listener, gen) {
     let agents;
@@ -393,7 +401,7 @@ export class RunnerBackend {
     if (gen !== this.live.gen || !this.listeners.has(listener)) return;
     try {
       if (agents) {
-        listener({ kind: "roster", agents });
+        listener({ kind: "roster", agents: agents.map((a) => this.overlay(a)) });
         listener({ kind: "connected" });
       } else listener({ kind: "disconnected" });
     } catch { /* a bad listener must not stop the chain */ }
@@ -405,33 +413,47 @@ export class RunnerBackend {
     try { agents = await this.listAgents(); } catch { agents = null; }
     if (gen !== this.live.gen) return;
     if (!agents) return this.emitEvent({ kind: "disconnected" });
-    this.live.status.clear();
-    for (const a of agents) this.live.status.set(a.id, effectiveStatus(a, this.live));
-    this.emitEvent({ kind: "roster", agents });
+    const next = new Map();
+    for (const a of agents) {
+      const prev = this.live.turn.get(a.id);
+      next.set(a.id, { status: a.status, errored: !!prev?.errored && a.status !== "running" });
+    }
+    this.live.turn = next;
+    this.emitEvent({ kind: "roster", agents: agents.map((a) => this.overlay(a)) });
     this.emitEvent({ kind: "connected" });
   }
 
+  /**
+   * The shown status comes from the log events themselves, applied in log order on the serialized chain, never from
+   * fetchAgent's tail-of-log status (which may already include events still queued behind this one).
+   */
   async handleLogEvent({ id, event: e }, gen = this.live.gen) {
     if (!id || !e) return;
     this.emitEvent({ kind: "timeline", agentId: id, seq: e.seq, type: e.type });
-    const from = this.live.status.get(id);
+    const t0 = this.live.turn.get(id);
+    const from = t0 && viewStatus(t0);
     // An error during a turn sticks as the agent's status until the next turn starts (what push pages on, once).
-    if (e.type === "error") { if (from === "running") this.live.errored.add(id); return; }
+    if (e.type === "error") { if (t0?.status === "running") t0.errored = true; return; }
     if (!ROSTER_EVENTS.has(e.type)) return;
     if (e.type === "archive") {
-      this.live.status.delete(id);
-      this.live.errored.delete(id);
+      this.live.turn.delete(id);
       this.emitEvent({ kind: "remove", agentId: id });
       return;
     }
-    if (e.type === "exit" && from === "running" && (e.error || (e.code ?? 0) !== 0)) this.live.errored.add(id); // died mid-turn
     let agent;
     try { agent = (await this.fetchAgent(id)).agent; } catch { return; } // runner restarting: the next event resyncs
     if (gen !== this.live.gen) return;
-    if (agent.status === "running") this.live.errored.delete(id); // next turn began
-    const to = effectiveStatus(agent, this.live);
-    this.live.status.set(id, to);
-    const shown = to === "error" ? { ...agent, status: "error" } : agent;
+    const t = t0 ?? { status: agent.status, errored: false };
+    if (e.type === "status" && e.status) {
+      t.status = STATUS[e.status] ?? e.status;
+      if (t.status === "running") t.errored = false; // next turn began
+    } else if (e.type === "exit") {
+      t.status = "closed";
+      if (from === "running" && (e.error || (e.code ?? 0) !== 0)) t.errored = true; // died mid-turn
+    }
+    this.live.turn.set(id, t);
+    const to = viewStatus(t);
+    const shown = { ...agent, status: to };
     this.emitEvent({ kind: "agent", agent: shown });
     if (from !== undefined && from !== to) this.emitEvent({ kind: "status", agentId: id, from, to, agent: shown });
     if (e.type === "permission" && e.phase === "request") this.emitEvent({ kind: "permission", agentId: id, request: { id: e.id, toolName: e.toolName } });

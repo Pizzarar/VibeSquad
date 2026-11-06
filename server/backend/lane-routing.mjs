@@ -54,12 +54,6 @@ export class RoutingBackend {
     Object.defineProperty(this, "paseo", { value: paseo });
     Object.defineProperty(this, "runner", { value: runner });
     Object.defineProperty(this, "lanes", { value: lanes });
-    // Lets the runner's Who's here refresh see Paseo agents sharing a lane (instead of overwriting the brief without them).
-    runner?.useSiblingAgents?.(async () => {
-      const fn = paseo.fetchAgents ?? paseo.listAgents;
-      if (!fn) throw new Error("paseo cannot list agents"); // refresh then no-ops instead of writing a partial roster
-      return (listOf(await fn()) ?? []).map((e) => e?.agent ?? e);
-    });
   }
 
   runCli(...args) {

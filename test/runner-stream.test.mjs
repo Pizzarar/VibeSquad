@@ -424,9 +424,53 @@ test('Whos here: skipped when the lane is not wholly on the runner; merges Paseo
     wholly.useSiblingAgents(async () => [{ id: 'p-1', labels: { lane: 'own', role: 'lead' } }]);
     await wholly.archiveAgent(agent.id);
     assert.deepEqual(b.whos.at(-1).agents.map((x) => x.id), ['p-1']); // archived runner agent gone, Paseo Lead kept
+    // Paseo down: the sibling list throws, a runner-only lane still refreshes (B10: Paseo is not started by default)
     wholly.useSiblingAgents(async () => { throw new Error('daemon down'); });
     const n = b.whos.length;
     await wholly.refreshLaneWhosHere('own');
-    assert.equal(b.whos.length, n);
+    assert.equal(b.whos.length, n + 1);
+    assert.deepEqual(b.whos.at(-1).agents.map((x) => x.id), []);
+    // ...but a mixed lane (not runner-only) is left alone when Paseo cannot be asked
+    await mixed.refreshLaneWhosHere('own');
+    mixed.useSiblingAgents(async () => { throw new Error('daemon down'); });
+    await mixed.refreshLaneWhosHere('own');
+    assert.equal(b.whos.length, n + 1);
+    // a provider is only dropped by its owner
+    const mine = async () => [];
+    wholly.useSiblingAgents(mine);
+    wholly.dropSiblingAgents(async () => []);
+    assert.equal(wholly.siblings.list, mine);
+    wholly.dropSiblingAgents(mine);
+    assert.equal(wholly.siblings.list, null);
   } finally { b.close(); }
+});
+
+test('shown status follows the log order, not fetchAgent tail: usage, error, idle logged back-to-back still reads as one error; seeds overlay error', async () => {
+  const backend = new RunnerBackend({ client: { stream: (h) => { queueMicrotask(() => h.onOpen()); return { close() {} }; } } });
+  let listed = 'running';
+  backend.listAgents = async () => [{ id: 'rn-1', status: listed }];
+  backend.fetchAgent = async () => ({ agent: { id: 'rn-1', status: 'idle' } }); // already at the end of the log
+  const evs = [];
+  const off = backend.subscribeEvents((e) => evs.push(e));
+  await until(() => evs.some((e) => e.kind === 'connected'));
+  const feed = (event) => backend.enqueue((gen) => backend.handleLogEvent({ id: 'rn-1', event }, gen));
+  feed({ type: 'usage', seq: 1 });
+  feed({ type: 'error', seq: 2 });
+  feed({ type: 'status', seq: 3, status: 'idle' });
+  feed({ type: 'usage', seq: 4 });
+  await until(() => evs.filter((e) => e.kind === 'timeline').length === 4);
+  await new Promise((r) => setTimeout(r, 30));
+  const trans = evs.filter((e) => e.kind === 'status').map((e) => `${e.from}>${e.to}`);
+  assert.deepEqual(trans, ['running>error']);
+  assert.equal(evs.filter((e) => e.kind === 'agent').at(-1).agent.status, 'error');
+  // a new listener / reconnect roster of an idle-but-errored agent still says error
+  listed = 'idle';
+  const late = [];
+  const off2 = backend.subscribeEvents((e) => late.push(e));
+  await until(() => late.some((e) => e.kind === 'roster'));
+  assert.equal(late.find((e) => e.kind === 'roster').agents[0].status, 'error');
+  // next turn clears it
+  feed({ type: 'status', seq: 5, status: 'running' });
+  await until(() => evs.some((e) => e.kind === 'status' && e.from === 'error' && e.to === 'running'));
+  off(); off2();
 });

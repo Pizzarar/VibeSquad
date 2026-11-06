@@ -643,6 +643,13 @@ export function startPushWatcher(rootDir = REPO_ROOT, { runner = runnerLanes().s
 
   const stopRunnerWatch = runner ? watchRunnerTransitions(runner, { dedupeSet }) : null;
   const watchingRunner = !!runner;
+  // The watcher owns the one long-lived Paseo client, so it is the Who's here view of Paseo agents for runner lanes
+  // (a failing list = Paseo down: the runner falls back to its runner-only-lane path).
+  const siblingAgents = async () => {
+    const res = await backend.fetchAgents({ filter: { includeArchived: false } });
+    return (res?.entries ?? []).map((e) => e.agent).filter(Boolean);
+  };
+  runner?.useSiblingAgents?.(siblingAgents);
 
   backend.connect().then(() => seedAgents()).catch(() => {});
   unrefClientTimers(client);
@@ -653,6 +660,7 @@ export function startPushWatcher(rootDir = REPO_ROOT, { runner = runnerLanes().s
     stop() {
       stopped = true;
       stopRunnerWatch?.();
+      runner?.dropSiblingAgents?.(siblingAgents);
       watcherStarted = false;
       activeWatcher = null;
       if (watcherClient === client) watcherClient = null;
