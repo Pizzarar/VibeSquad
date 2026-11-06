@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -63,6 +64,15 @@ export function syncVersionFiles(dir, newVersion) {
   const cargoRaw = readFileSync(cargoPath, "utf8");
   const updatedCargo = cargoRaw.replace(/^(version\s*=\s*")[^"]+(")/m, `$1${newVersion}$2`);
   writeFileSync(cargoPath, updatedCargo);
+
+  const crateName = cargoRaw.match(/^\[package\][^[]*?^name\s*=\s*"([^"]+)"/ms)?.[1];
+  const lockPath = join(dir, "src-tauri", "Cargo.lock");
+  if (crateName && existsSync(lockPath)) {
+    const lockRaw = readFileSync(lockPath, "utf8");
+    const escaped = crateName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const entry = new RegExp(String.raw`(\[\[package\]\]\r?\nname = "${escaped}"\r?\nversion = ")[^"]+(")`);
+    writeFileSync(lockPath, lockRaw.replace(entry, `$1${newVersion}$2`));
+  }
 }
 
 export const COMMUNITY_ACCOLADES_020 = [
@@ -98,6 +108,22 @@ export function buildSigningEnv(baseEnv = process.env, keyPath = "") {
     ...(keyPath ? { TAURI_SIGNING_PRIVATE_KEY: keyPath, TAURI_SIGNING_PRIVATE_KEY_PATH: keyPath } : {}),
     TAURI_SIGNING_PRIVATE_KEY_PASSWORD: password,
   };
+}
+
+/**
+ * Child env for `tauri signer sign`. The key password travels ONLY as TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+ * (never argv, where it would show in process listings). Single seam: a later secrets resolver swaps the
+ * `password` source here.
+ */
+export function updaterSigningEnv(baseEnv = process.env, keyPath = "", password = baseEnv.TAURI_SIGNING_PRIVATE_KEY_PASSWORD ?? "") {
+  const env = buildSigningEnv({ ...baseEnv, TAURI_SIGNING_PRIVATE_KEY_PASSWORD: password }, keyPath);
+  delete env.TAURI_SIGNING_PRIVATE_KEY;
+  return env;
+}
+
+/** argv for `tauri signer sign` (no password, see updaterSigningEnv). */
+export function signerSignArgs(tauriCliJs, keyPath, installerPath) {
+  return [tauriCliJs, "signer", "sign", "-f", keyPath, installerPath];
 }
 
 export function ghReleaseArgs(subcommandArgs, repo = DEFAULT_RELEASE_REPO) {
@@ -177,6 +203,8 @@ export function publishRelease({
   signature,
   cwd = rootDir,
   exec = execFileSync,
+  targetCommit = "",
+  repo = "",
   writeManifest = (filePath, manifest) => writeFileSync(filePath, JSON.stringify(manifest, null, 2) + "\n"),
 }) {
   const cleanVer = String(targetVersion).trim().replace(/^v/, "");
@@ -184,32 +212,44 @@ export function publishRelease({
   const tag = channel === "beta" ? "beta" : `v${cleanVer}`;
   const releaseTitle = channel === "beta" ? `VibeSquad Beta (${cleanVer})` : `VibeSquad v${cleanVer}`;
 
+  const gh = (sub) => ["release", ...sub, ...(repo ? ["--repo", repo] : [])];
+  const headSha = resolveHeadCommit(exec, cwd);
+  const expectedSha = targetCommit || headSha;
+  const versioned = /^v\d+\.\d+\.\d+/.test(tag);
+
   let tagExists = false;
   try {
-    exec("gh", ["release", "view", tag], { cwd, stdio: "ignore" });
+    exec("gh", gh(["view", tag]), { cwd, stdio: "ignore" });
     tagExists = true;
   } catch {
-    const createArgs = ["release", "create", tag, "--title", releaseTitle, "--notes", effectiveManifest.notes];
+    // no release yet
+  }
+
+  if (versioned) {
+    // R7: never move or overwrite an existing version tag, whether or not a release object exists.
+    const tagSha = resolveTagCommit(tag, exec, cwd);
+    if ((tagExists || tagSha) && (!expectedSha || !tagSha || tagSha !== expectedSha)) {
+      throw new Error(
+        `Refusing to overwrite existing versioned release tag ${tag}: tag points at ${tagSha || "<unresolved>"}, which does not match HEAD (${expectedSha || "<unresolved>"}). Bump the version or re-tag deliberately.`,
+      );
+    }
+  }
+
+  if (!tagExists) {
+    const createArgs = gh(["create", tag, "--title", releaseTitle, "--notes", effectiveManifest.notes]);
     if (channel === "beta") createArgs.push("--prerelease");
+    if (expectedSha) createArgs.push("--target", expectedSha);
     exec("gh", createArgs, { cwd, stdio: "inherit" });
   }
 
   if (tagExists) {
-    if (/^v\d+\.\d+\.\d+/.test(tag)) {
-      const headSha = resolveHeadCommit(exec, cwd);
-      const tagSha = resolveTagCommit(tag, exec, cwd);
-      if (!headSha || !tagSha || tagSha !== headSha) {
-        throw new Error(
-          `Refusing to overwrite existing versioned release tag ${tag}: tag points at ${tagSha || "<unresolved>"}, which does not match HEAD (${headSha || "<unresolved>"}). Bump the version or re-tag deliberately.`,
-        );
-      }
-    } else if (tag === "beta") {
+    if (tag === "beta") {
       repointBetaTagToHead(exec, cwd);
     }
-    exec("gh", ["release", "edit", tag, "--title", releaseTitle, "--notes", effectiveManifest.notes], { cwd, stdio: "inherit" });
+    exec("gh", gh(["edit", tag, "--title", releaseTitle, "--notes", effectiveManifest.notes]), { cwd, stdio: "inherit" });
   }
 
-  exec("gh", ["release", "upload", tag, ...assets, "--clobber"], { cwd, stdio: "inherit" });
+  exec("gh", gh(["upload", tag, ...assets, "--clobber"]), { cwd, stdio: "inherit" });
   console.log(`[release:${channel}] Published ${tag} with ${assets.length} asset(s).`);
 
   if (channel === "stable") {
@@ -220,22 +260,22 @@ export function publishRelease({
     const betaTitle = `VibeSquad Beta (${cleanVer})`;
     let betaTagExists = false;
     try {
-      exec("gh", ["release", "view", "beta"], { cwd, stdio: "ignore" });
+      exec("gh", gh(["view", "beta"]), { cwd, stdio: "ignore" });
       betaTagExists = true;
     } catch {
-      exec("gh", ["release", "create", "beta", "--prerelease", "--title", betaTitle, "--notes", betaManifest.notes], {
+      exec("gh", [...gh(["create", "beta", "--prerelease", "--title", betaTitle, "--notes", betaManifest.notes]), ...(expectedSha ? ["--target", expectedSha] : [])], {
         cwd,
         stdio: "inherit",
       });
     }
     if (betaTagExists) {
       repointBetaTagToHead(exec, cwd);
-      exec("gh", ["release", "edit", "beta", "--title", betaTitle, "--notes", betaManifest.notes], {
+      exec("gh", gh(["edit", "beta", "--title", betaTitle, "--notes", betaManifest.notes]), {
         cwd,
         stdio: "inherit",
       });
     }
-    exec("gh", ["release", "upload", "beta", ...assets, "--clobber"], { cwd, stdio: "inherit" });
+    exec("gh", gh(["upload", "beta", ...assets, "--clobber"]), { cwd, stdio: "inherit" });
     if (latestJsonPath) {
       writeManifest(latestJsonPath, effectiveManifest);
     }
@@ -243,130 +283,197 @@ export function publishRelease({
   }
 }
 
-function parseArgs(argv) {
-  const out = { channel: "beta", version: "", stageOnly: false, skipBuild: false, withAndroid: false };
+
+export const RELEASE_STAGES = ["stage", "build", "sign", "publish"];
+
+export function parseArgs(argv) {
+  const out = {
+    stage: "",
+    channel: "beta",
+    version: "",
+    commit: "",
+    project: "VibeSquad",
+    repo: "",
+    requester: "",
+    approval: "",
+    changelog: "",
+    stageOnly: false,
+    skipBuild: false,
+    withAndroid: false,
+  };
+  const valued = { "--channel": "channel", "--version": "version", "--commit": "commit", "--project": "project", "--repo": "repo", "--requester": "requester", "--approval": "approval", "--changelog": "changelog" };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--channel" && argv[i + 1]) out.channel = argv[++i];
-    else if (a.startsWith("--channel=")) out.channel = a.slice("--channel=".length);
-    else if (a === "--version" && argv[i + 1]) out.version = argv[++i];
-    else if (a.startsWith("--version=")) out.version = a.slice("--version=".length);
+    const eq = a.indexOf("=");
+    const flag = eq > 0 ? a.slice(0, eq) : a;
+    if (i === 0 && RELEASE_STAGES.includes(a)) out.stage = a;
+    else if (valued[flag]) out[valued[flag]] = eq > 0 ? a.slice(eq + 1) : (argv[++i] ?? "");
     else if (a === "--stage-only") out.stageOnly = true;
     else if (a === "--skip-build") out.skipBuild = true;
     else if (a === "--with-android") out.withAndroid = true;
   }
+  out.version = out.version.replace(/^v/, "");
   return out;
+}
+
+const sha256 = (path) => createHash("sha256").update(readFileSync(path)).digest("hex");
+
+/** Refuse unless HEAD is the frozen commit and (optionally) no tracked file is modified. */
+export function assertFrozenCommit({ commit, requireClean, exec = execFileSync, cwd = rootDir }) {
+  if (!commit) throw new Error("--commit <sha> is required for this stage.");
+  const head = resolveHeadCommit(exec, cwd);
+  if (!head || !(head === commit || head.startsWith(commit))) {
+    throw new Error(`Refusing to release: HEAD is ${head || "<unresolved>"} but --commit is ${commit}. Check out the frozen commit first.`);
+  }
+  if (requireClean) {
+    const dirty = String(exec("git", ["status", "--porcelain", "--untracked-files=no"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }) || "").trim();
+    if (dirty) throw new Error(`Refusing to release from a dirty tree (tracked changes):\n${dirty}`);
+  }
+  return head;
+}
+
+const ANDROID_MARKER = "android-build.json";
+
+/** The APK ships only when this version+commit built it (marker written by the build stage). */
+export function selectApk({ distDir, version, commit, exists = existsSync, read = (p) => readFileSync(p, "utf8") }) {
+  const apk = join(distDir, "VibeSquad.apk");
+  const markerPath = join(distDir, ANDROID_MARKER);
+  if (!exists(apk) || !exists(markerPath)) return null;
+  try {
+    const marker = JSON.parse(read(markerPath));
+    return marker.version === version && marker.commit === commit ? apk : null;
+  } catch {
+    return null;
+  }
+}
+
+export function renderReleaseRecord(template, fields) {
+  return template.replace(/\{\{(\w+)\}\}/g, (_, key) => String(fields[key] ?? "_pending_"));
+}
+
+export function writeReleaseRecord({ dir = rootDir, project, repo, version, channel, commit, requester, approval, changelog, releaseUrl, artifacts = [], signature, templatePath, outDir }) {
+  const template = readFileSync(templatePath || join(dir, "docs", "releases", "TEMPLATE.md"), "utf8");
+  const artifactLines = artifacts.length ? artifacts.map((a) => `- \`${a.name}\`: \`${a.sha256}\``).join("\n") : "_pending (filled at publish)_";
+  const body = renderReleaseRecord(template, {
+    project,
+    repo,
+    version,
+    channel,
+    commit,
+    requester: requester || "_unknown_",
+    approval: approval || "_pending_",
+    changelog: changelog || "_none provided_",
+    releaseUrl: releaseUrl || "_pending_",
+    artifacts: artifactLines,
+    signature: signature || "_pending_",
+  });
+  const target = join(outDir || join(dir, "docs", "releases"), `${project}-${version}.md`);
+  mkdirSync(resolve(target, ".."), { recursive: true });
+  writeFileSync(target, body);
+  return target;
+}
+
+export function runRelease(argv, { rootDir: root = rootDir, exec = execFileSync, env = process.env, log = console.log, resolveTauriCli = () => require.resolve("@tauri-apps/cli/tauri.js") } = {}) {
+  const opts = parseArgs(argv);
+  const channel = opts.channel === "stable" ? "stable" : "beta";
+  const repo = opts.repo || DEFAULT_RELEASE_REPO;
+  const subcommand = Boolean(opts.stage);
+  const stages = subcommand ? [opts.stage] : opts.stageOnly ? ["stage", "build", "sign"] : [...RELEASE_STAGES];
+  const readConf = () => JSON.parse(readFileSync(join(root, "src-tauri", "tauri.conf.json"), "utf8"));
+  const distDir = join(root, "dist-desktop");
+  const installerPath = join(distDir, "VibeSquad-setup.exe");
+  const sigPath = `${installerPath}.sig`;
+  const latestJsonPath = join(distDir, "latest.json");
+  let commit = opts.commit;
+
+  if (stages.includes("stage")) {
+    const currentVersion = readConf().version || "0.1.1";
+    const target = opts.version
+      ? opts.version
+      : channel === "beta"
+        ? computeNextBetaVersion(currentVersion, { stableReleased: (base) => stableTagExists(base, root) })
+        : computeStableVersion(currentVersion);
+    log(`[release:${channel}] Setting version ${currentVersion} -> ${target}`);
+    syncVersionFiles(root, target);
+    opts.version = target;
+    const recordCommit = commit || resolveHeadCommit(exec, root);
+    const record = writeReleaseRecord({ dir: root, project: opts.project, repo, version: target, channel, commit: recordCommit, requester: opts.requester, approval: opts.approval, changelog: opts.changelog });
+    log(`[release:${channel}] Wrote release record ${record}`);
+  }
+
+  if (!stages.some((s) => s !== "stage")) return { version: opts.version, channel };
+  // Explicit build/sign/publish demand a frozen, clean commit. The legacy all-in-one run just bumped
+  // version files itself, so its tree is dirty by design; it still pins to HEAD (or --commit if given).
+  if (subcommand || commit) {
+    commit = assertFrozenCommit({ commit, requireClean: subcommand, exec, cwd: root });
+  } else {
+    commit = resolveHeadCommit(exec, root);
+  }
+  const targetVersion = readConf().version;
+  if (opts.version && opts.version !== targetVersion) {
+    throw new Error(`--version ${opts.version} does not match the staged version ${targetVersion}.`);
+  }
+
+  const defaultKeyPath = join(homedir(), ".tauri", "vibesquad-updater.key");
+  const keyPath = env.TAURI_SIGNING_PRIVATE_KEY_PATH || defaultKeyPath;
+
+  if (stages.includes("build") && !opts.skipBuild) {
+    rmSync(join(distDir, ANDROID_MARKER), { force: true });
+    const buildEnv = buildSigningEnv(env, keyPath);
+    exec(process.execPath, [join(root, "server", "build-desktop.mjs")], { cwd: root, env: buildEnv, stdio: "inherit" });
+    if (opts.withAndroid) {
+      exec(process.execPath, [join(root, "server", "build-android.mjs")], { cwd: root, env: buildEnv, stdio: "inherit" });
+      mkdirSync(distDir, { recursive: true });
+      writeFileSync(join(distDir, ANDROID_MARKER), JSON.stringify({ version: targetVersion, commit }, null, 2) + "\n");
+    }
+  }
+
+  if (stages.includes("sign")) {
+    if (!env.TAURI_SIGNING_PRIVATE_KEY && !existsSync(keyPath)) {
+      throw new Error(`Signing key not found at ${keyPath}. Run 'npx tauri signer generate -w ~/.tauri/vibesquad-updater.key' first.`);
+    }
+    mkdirSync(distDir, { recursive: true });
+    if (!existsSync(sigPath) && existsSync(installerPath)) {
+      const tauriCliJs = resolveTauriCli();
+      exec(process.execPath, signerSignArgs(tauriCliJs, keyPath, installerPath), { cwd: root, env: updaterSigningEnv(env, keyPath), stdio: "inherit" });
+    }
+    if (!existsSync(sigPath)) throw new Error(`Signature file missing at ${sigPath}`);
+    const manifest = buildLatestJson({ version: targetVersion, channel, signature: readFileSync(sigPath, "utf8").trim() });
+    writeFileSync(latestJsonPath, JSON.stringify(manifest, null, 2) + "\n");
+    log(`[release:${channel}] Wrote signed ${latestJsonPath} for v${targetVersion}`);
+  }
+
+  if (stages.includes("publish")) {
+    if (!existsSync(sigPath) || !existsSync(latestJsonPath)) throw new Error("Nothing to publish: run the sign stage first.");
+    const signature = readFileSync(sigPath, "utf8").trim();
+    const latestManifest = buildLatestJson({ version: targetVersion, channel, signature });
+    const apk = selectApk({ distDir, version: targetVersion, commit });
+    if (!apk && existsSync(join(distDir, "VibeSquad.apk"))) log(`[release:${channel}] Skipping VibeSquad.apk: not built for ${targetVersion}@${commit.slice(0, 7)}.`);
+    const licenses = join(distDir, "THIRD-PARTY-LICENSES.txt");
+    const assets = [installerPath, sigPath, latestJsonPath, apk, licenses].filter((p) => p && existsSync(p));
+    publishRelease({ channel, targetVersion, assets, latestJsonPath, latestManifest, signature, cwd: root, exec, targetCommit: commit, repo });
+    const tag = channel === "beta" ? "beta" : `v${targetVersion}`;
+    const record = writeReleaseRecord({
+      dir: root,
+      project: opts.project,
+      repo,
+      version: targetVersion,
+      channel,
+      commit,
+      requester: opts.requester,
+      approval: opts.approval,
+      changelog: opts.changelog,
+      releaseUrl: `https://github.com/${repo}/releases/tag/${tag}`,
+      artifacts: assets.filter((p) => !p.endsWith("latest.json")).map((p) => ({ name: p.split(/[\\/]/).pop(), sha256: sha256(p) })),
+      signature: "Signature file `VibeSquad-setup.exe.sig` present and embedded in latest.json (not cryptographically re-verified by this script).",
+    });
+    log(`[release:${channel}] Updated release record ${record}`);
+  }
+  return { version: targetVersion, channel, commit };
 }
 
 const isMain = process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
 
 if (isMain) {
-  const opts = parseArgs(process.argv.slice(2));
-  const channel = opts.channel === "stable" ? "stable" : "beta";
-  const tauriConf = JSON.parse(readFileSync(join(rootDir, "src-tauri", "tauri.conf.json"), "utf8"));
-  const currentVersion = tauriConf.version || "0.1.1";
-
-  const targetVersion = opts.version
-    ? opts.version.replace(/^v/, "")
-    : channel === "beta"
-      ? computeNextBetaVersion(currentVersion, { stableReleased: (base) => stableTagExists(base) })
-      : computeStableVersion(currentVersion);
-
-  console.log(`[release:${channel}] Setting version ${currentVersion} -> ${targetVersion}`);
-  syncVersionFiles(rootDir, targetVersion);
-
-  const defaultKeyPath = join(homedir(), ".tauri", "vibesquad-updater.key");
-  const keyPath = process.env.TAURI_SIGNING_PRIVATE_KEY_PATH || defaultKeyPath;
-  if (!process.env.TAURI_SIGNING_PRIVATE_KEY && !existsSync(keyPath)) {
-    throw new Error(`Signing key not found at ${keyPath}. Run 'npx tauri signer generate -w ~/.tauri/vibesquad-updater.key' first.`);
-  }
-  const env = buildSigningEnv(process.env, keyPath);
-
-  if (!opts.skipBuild) {
-    execFileSync(process.execPath, [join(rootDir, "server", "build-desktop.mjs")], {
-      cwd: rootDir,
-      env,
-      stdio: "inherit",
-    });
-  }
-
-  if (opts.withAndroid && !opts.skipBuild) {
-    execFileSync(process.execPath, [join(rootDir, "server", "build-android.mjs")], {
-      cwd: rootDir,
-      env,
-      stdio: "inherit",
-    });
-  }
-
-  const distDesktopDir = join(rootDir, "dist-desktop");
-  mkdirSync(distDesktopDir, { recursive: true });
-  const installerPath = join(distDesktopDir, "VibeSquad-setup.exe");
-  const sigPath = `${installerPath}.sig`;
-  if (!existsSync(sigPath) && existsSync(installerPath)) {
-    const tauriCliJs = require.resolve("@tauri-apps/cli/tauri.js");
-    const signEnv = { ...env, TAURI_SIGNING_PRIVATE_KEY_PATH: keyPath };
-    delete signEnv.TAURI_SIGNING_PRIVATE_KEY;
-    execFileSync(
-      process.execPath,
-      [tauriCliJs, "signer", "sign", "-f", keyPath, "-p", env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD, installerPath],
-      {
-        cwd: rootDir,
-        env: signEnv,
-        stdio: "inherit",
-      },
-    );
-  }
-  if (!existsSync(sigPath)) {
-    throw new Error(`Signature file missing at ${sigPath}`);
-  }
-  const signature = readFileSync(sigPath, "utf8").trim();
-  const latestManifest = buildLatestJson({ version: targetVersion, channel, signature });
-  const latestJsonPath = join(distDesktopDir, "latest.json");
-  writeFileSync(latestJsonPath, JSON.stringify(latestManifest, null, 2) + "\n");
-  console.log(`[release:${channel}] Wrote signed ${latestJsonPath} for v${targetVersion}`);
-
-  if (!opts.stageOnly) {
-    const tag = channel === "beta" ? "beta" : `v${targetVersion}`;
-    const releaseTitle = channel === "beta" ? `VibeSquad Beta (${targetVersion})` : `VibeSquad v${targetVersion}`;
-    const apkPath = join(distDesktopDir, "VibeSquad.apk");
-    const assets = [installerPath, sigPath, latestJsonPath, apkPath, join(distDesktopDir, "THIRD-PARTY-LICENSES.txt")].filter((p) => existsSync(p));
-    let tagExists = false;
-    try {
-      execFileSync("gh", ghReleaseArgs(["view", tag]), { cwd: rootDir, stdio: "ignore" });
-      tagExists = true;
-    } catch {
-      const createArgs = ghReleaseArgs(["create", tag, "--title", releaseTitle, "--notes", latestManifest.notes, ...(channel === "beta" ? ["--prerelease"] : [])]);
-      execFileSync("gh", createArgs, { cwd: rootDir, stdio: "inherit" });
-    }
-    if (tagExists) {
-      execFileSync("gh", ghReleaseArgs(["edit", tag, "--title", releaseTitle, "--notes", latestManifest.notes]), { cwd: rootDir, stdio: "inherit" });
-    }
-    execFileSync("gh", ghReleaseArgs(["upload", tag, ...assets, "--clobber"]), { cwd: rootDir, stdio: "inherit" });
-    console.log(`[release:${channel}] Published ${tag} with ${assets.length} asset(s).`);
-
-    if (channel === "stable") {
-      const betaManifest = buildLatestJson({ version: targetVersion, channel: "beta", signature });
-      writeFileSync(latestJsonPath, JSON.stringify(betaManifest, null, 2) + "\n");
-      const betaTitle = `VibeSquad Beta (${targetVersion})`;
-      let betaTagExists = false;
-      try {
-        execFileSync("gh", ghReleaseArgs(["view", "beta"]), { cwd: rootDir, stdio: "ignore" });
-        betaTagExists = true;
-      } catch {
-        execFileSync("gh", ghReleaseArgs(["create", "beta", "--prerelease", "--title", betaTitle, "--notes", betaManifest.notes]), {
-          cwd: rootDir,
-          stdio: "inherit",
-        });
-      }
-      if (betaTagExists) {
-        execFileSync("gh", ghReleaseArgs(["edit", "beta", "--title", betaTitle, "--notes", betaManifest.notes]), {
-          cwd: rootDir,
-          stdio: "inherit",
-        });
-      }
-      execFileSync("gh", ghReleaseArgs(["upload", "beta", ...assets, "--clobber"]), { cwd: rootDir, stdio: "inherit" });
-      writeFileSync(latestJsonPath, JSON.stringify(latestManifest, null, 2) + "\n");
-      console.log(`[release:stable] Also synced rolling beta tag to v${targetVersion}.`);
-    }
-  }
+  runRelease(process.argv.slice(2));
 }
