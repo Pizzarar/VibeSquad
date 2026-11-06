@@ -12,7 +12,7 @@ function makeEnv() {
   const profilesPath = join(vsHome, "profiles.json");
   mkdirSync(join(dir, "docs", "brainstorm"), { recursive: true });
   writeFileSync(join(dir, "docs", "PLAN_PINS_TEST.md"), "# Plan\n", "utf8");
-  writeFileSync(join(dir, "docs", "brainstorm", "pin-test.md"), "# Brief\n\n## Decided\n- We chose blue.\n", "utf8");
+  writeFileSync(join(dir, "docs", "brainstorm", "pin-test.md"), "# Brief\n\n## Decided\n- We chose blue. Plan: docs/PLAN_PINS_TEST.md\n", "utf8");
   writeFileSync(
     join(dir, "teams.json"),
     JSON.stringify({ teams: [{ id: "sq", name: "Squad", lanes: [{ id: "pin-test", name: "Pin Test" }], paths: ["sq"] }] }),
@@ -212,4 +212,16 @@ test("closed match on a backend that cannot reopen is replaced, not reused", () 
     );
     assert.notEqual(res.reused, true);
     assert.equal(daemon.created.length, 1);
+  }));
+
+test("a fresh lane (brief names no plan) boots with '(none yet)' even if docs/ holds other plans", () =>
+  withEnv(async (env) => {
+    writeFileSync(join(env.dir, "docs", "brainstorm", "fresh.md"), "# Brief\n\n## Open\n- nothing yet\n", "utf8");
+    const daemon = mockDaemon([]);
+    await performBrainstormRestart(
+      { reason: "start-brainstorm", mode: "quick-start", teamId: "sq", laneId: "fresh", laneName: "Fresh", daemonClient: daemon, profilesPath: env.profilesPath },
+      env.dir,
+    );
+    assert.match(daemon.created[0].initialPrompt, /Latest plan file: `\(none yet\)`/);
+    assert.doesNotMatch(daemon.created[0].initialPrompt, /PLAN_PINS_TEST/);
   }));

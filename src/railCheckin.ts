@@ -8,10 +8,13 @@ export const CHECKIN_BUSY_MS = 2500;
 
 export type CheckinAction = "send" | "busy" | "none";
 
+// A double-click must send one check-in: the lead's status only flips to running once the first lands.
+const sending = new Set<string>();
+
 export function checkinAction(pin: Pick<Pin, "lead">): CheckinAction {
   const lead = pin.lead;
   if (!lead || lead.agent.status === "closed") return "none";
-  return lead.agent.status === "running" ? "busy" : "send";
+  return lead.agent.status === "running" || sending.has(lead.agent.id) ? "busy" : "send";
 }
 
 /** Status line for a tile / the Active card: the lead's last line, or why there is none. */
@@ -27,7 +30,12 @@ export async function runCheckin(
   const action = checkinAction(pin);
   if (action !== "send" || !pin.lead) return action;
   const id = pin.lead.agent.id;
-  deps.open(id);
-  await deps.send(id, CHECKIN_PROMPT);
+  sending.add(id);
+  try {
+    deps.open(id);
+    await deps.send(id, CHECKIN_PROMPT);
+  } finally {
+    sending.delete(id);
+  }
   return action;
 }

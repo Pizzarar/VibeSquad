@@ -183,6 +183,41 @@ export function findNewestPlanFile(cwd, rootDir = REPO_ROOT) {
   return "docs/PLAN_BRAINSTORM_FLOW.md";
 }
 
+/**
+ * The newest plan file this lane names: a `docs/PLAN_*.md` mentioned in its brief or in
+ * `docs/lanes/<lane>/TASKS.json` (read from the lane's cwd, then the repo root), newest mtime first.
+ * A fresh lane names none and gets "(none yet)", never another lane's plan from a shared docs/ folder.
+ */
+export function findLanePlanFile(cwd, rootDir = REPO_ROOT, laneId = "", briefText = "") {
+  const texts = [String(briefText ?? "")];
+  const safeLane = laneId ? safeSegment(laneId) : "";
+  if (safeLane) {
+    for (const base of [cwd, rootDir]) {
+      if (!base) continue;
+      try {
+        const f = join(base, "docs", "lanes", safeLane, "TASKS.json");
+        if (existsSync(f)) texts.push(readFileSync(f, "utf8"));
+      } catch {}
+    }
+  }
+  const named = new Set();
+  for (const t of texts) for (const m of t.matchAll(/docs\/(PLAN_[\w.-]*\.md)/gi)) named.add(m[1]);
+  let best = null;
+  for (const name of named) {
+    for (const base of [cwd, rootDir]) {
+      if (!base) continue;
+      try {
+        const full = join(base, "docs", name);
+        if (!existsSync(full)) continue;
+        const mtime = statSync(full).mtimeMs;
+        if (!best || mtime > best.mtime) best = { rel: `docs/${name}`, mtime };
+        break;
+      } catch {}
+    }
+  }
+  return best ? best.rel : "(none yet)";
+}
+
 export function appendVsLogEntry({ teamId, laneId, agent = "you", type = "metric", text, refs = [] }) {
   const baseHome = process.env.VIBESQUAD_HOME || join(homedir(), ".vibesquad");
   const safeTeam = safeSegment(teamId || "vibesquad");
@@ -597,7 +632,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
     const summary = readBrainstormSummary(laneId, rootDir);
     // A never-spawned Team (e.g. an EFI pin) starts in its own repo, not wherever VibeSquad runs.
     const cwd = oldAgent?.cwd || laneWorkingDir(teamId, laneId, rootDir) || rootDir;
-    const latestPlan = findNewestPlanFile(cwd, rootDir);
+    const latestPlan = findLanePlanFile(cwd, rootDir, laneId, summary.content);
 
     if (reason === "handoff") {
       appendVsLogEntry({
