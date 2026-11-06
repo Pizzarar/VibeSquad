@@ -26,7 +26,19 @@ export class PaseoBackend implements AgentBackend {
   runCli(paseoHome: string, args: string[], timeoutMs?: number): string | null;
 }
 export const BACKEND_METHODS: string[];
-export function getBackend<T>(client: T): T extends null | undefined ? T : any;
+export class RunnerBackend implements AgentBackend {
+  constructor(opts?: { client?: any; buildPrefix?: (role: string, cwd: string) => Promise<string> });
+  runCli(): null;
+}
+export class RoutingBackend implements AgentBackend {
+  constructor(paseo: PaseoBackend, runner: RunnerBackend, opts?: { lanes?: () => Set<string> });
+  readonly paseo: PaseoBackend;
+  readonly runner: RunnerBackend;
+  runCli(paseoHome: string, args: string[], timeoutMs?: number): string | null;
+}
+export function isRunnerId(id: unknown): boolean;
+export function runnerLanes(opts?: { env?: Record<string, string | undefined>; teamsFile?: string }): Set<string>;
+export function getBackend<T>(client: T, opts?: { lanes?: () => Set<string>; runner?: RunnerBackend; force?: boolean }): T extends null | undefined ? T : any;
 export function getCliBackend(): AgentBackend;
 export function hasCustomMockCli(): boolean;
 export function hasCustomOfflineStore(paseoHome: string): boolean;

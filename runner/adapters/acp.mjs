@@ -1,12 +1,12 @@
 // Agent Client Protocol adapter (JSON-RPC 2.0 over stdio). Used with `opencode acp`.
 // Generic on purpose: Codex/AGY ACP agents differ only in command + args.
-import { spawnNoShell } from '../spawn.mjs';
+import { killTree, spawnNoShell } from '../spawn.mjs';
 import { lineReader } from './lines.mjs';
 
 export function createAcpAdapter({ spawnImpl, name = 'opencode', command = 'opencode', args = ['acp'] } = {}) {
   return {
     name,
-    start({ cwd, emit, onExit }) {
+    start({ cwd, systemPrompt, emit, onExit }) {
       const child = spawnNoShell(command, args, { cwd }, spawnImpl);
       let nextId = 1;
       const pending = new Map();
@@ -19,6 +19,7 @@ export function createAcpAdapter({ spawnImpl, name = 'opencode', command = 'open
       let sessionId = null;
       let promptInFlight = false;
       const queue = [];
+      let pendingSystem = systemPrompt || '';
 
       lineReader(child.stdout, (line) => {
         let m;
@@ -59,7 +60,8 @@ export function createAcpAdapter({ spawnImpl, name = 'opencode', command = 'open
       async function pump() {
         if (promptInFlight || !queue.length) return;
         promptInFlight = true;
-        const text = queue.shift();
+        let text = queue.shift();
+        if (pendingSystem) { text = `${pendingSystem}\n\n${text}`; pendingSystem = ''; } // ACP has no system slot: lead the first turn with it
         emit('status', { status: 'running' });
         try {
           const r = await request('session/prompt', { sessionId, prompt: [{ type: 'text', text }] });
@@ -72,7 +74,7 @@ export function createAcpAdapter({ spawnImpl, name = 'opencode', command = 'open
       return {
         send(text) { queue.push(text); ready.then(pump, () => {}); },
         cancel() { if (sessionId) write({ method: 'session/cancel', params: { sessionId } }); },
-        kill() { child.kill(); },
+        kill() { killTree(child); },
       };
     },
   };

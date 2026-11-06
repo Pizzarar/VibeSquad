@@ -1,0 +1,227 @@
+// RunnerBackend: the AgentBackend seam over the VS agent runner's HTTP API (docs/PLAN_OWN_DAEMON.md Block 3).
+// squad/team/lane/role/ord/profile are first-class fields on the runner record; this class maps them (and the
+// runner's event log) back into the shapes callers already read from PaseoBackend/DaemonClient.
+import { RunnerClient } from "./runner-client.mjs";
+
+const FIRST_CLASS = ["squad", "team", "lane", "role", "ord", "profile"];
+const ENV_FOR = { lane: "VS_LANE", team: "VS_TEAM", role: "VS_ROLE", profile: "VS_PROFILE" };
+const CLAUDE_PERMISSION_MODES = new Set(["default", "acceptEdits", "plan", "bypassPermissions", "dontAsk", "auto"]);
+const STATUS = { starting: "initializing", running: "running", idle: "idle", exited: "closed", lost: "closed", unknown: "idle" };
+
+export const isRunnerId = (id) => typeof id === "string" && id.startsWith("rn-");
+
+const iso = (ms) => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
+
+/** Runner status record -> the agent snapshot shape (PaseoAgent) the callers and UI read. */
+export function toAgent(rec) {
+  const meta = rec.meta ?? {};
+  const labels = { ...(meta.labels ?? {}) };
+  for (const k of FIRST_CLASS) if (meta[k] !== undefined && meta[k] !== null && meta[k] !== "") labels[k] = String(meta[k]);
+  labels.backend = "runner";
+  return {
+    id: rec.id,
+    provider: rec.provider,
+    model: rec.model ?? null,
+    cwd: rec.cwd,
+    title: meta.title || rec.id,
+    status: STATUS[rec.status] ?? "idle",
+    labels,
+    modeId: meta.permissionMode ?? null,
+    thinkingOptionId: null,
+    requiresAttention: false,
+    createdAt: iso(rec.createdAt),
+    updatedAt: iso(rec.updatedAt ?? rec.createdAt),
+    lastActivityAt: iso(rec.updatedAt ?? rec.createdAt),
+    archivedAt: iso(rec.archivedAt),
+    workspaceId: null,
+    backend: "runner",
+  };
+}
+
+/** Runner JSONL events -> timeline entries ({ item, timestamp, seqStart, seqEnd }) as the timeline UI expects. */
+export function toTimeline(events) {
+  const entries = [];
+  const toolIdx = new Map();
+  for (const e of events) {
+    const base = { timestamp: iso(e.ts), seqStart: e.seq, seqEnd: e.seq };
+    const last = entries[entries.length - 1];
+    switch (e.type) {
+      case "input":
+        entries.push({ ...base, item: { type: "user_message", text: e.text } });
+        break;
+      case "output":
+        if (last?.item.type === "assistant_message" && last.seqEnd === e.seq - 1) {
+          last.item.text += e.text;
+          last.seqEnd = e.seq;
+        } else entries.push({ ...base, item: { type: "assistant_message", text: e.text } });
+        break;
+      case "thought":
+        if (last?.item.type === "reasoning" && last.seqEnd === e.seq - 1) {
+          last.item.text += e.text;
+          last.seqEnd = e.seq;
+        } else entries.push({ ...base, item: { type: "reasoning", text: e.text } });
+        break;
+      case "tool":
+        if (e.phase === "call") {
+          toolIdx.set(e.id, entries.length);
+          entries.push({ ...base, item: { type: "tool_call", callId: e.id, name: e.name ?? "tool", status: "running", detail: { input: e.input, kind: e.kind } } });
+        } else {
+          const t = entries[toolIdx.get(e.id)];
+          if (t) {
+            const failed = e.isError || e.status === "failed";
+            t.item.status = failed ? "failed" : e.status === "completed" || e.phase === "result" ? "completed" : t.item.status;
+            if (failed) t.item.error = "tool failed";
+            t.seqEnd = e.seq;
+          }
+        }
+        break;
+      case "error":
+        entries.push({ ...base, item: { type: "error", message: e.message } });
+        break;
+      default:
+        break;
+    }
+  }
+  return entries;
+}
+
+let promptModule;
+/** The Paseo plugin's own pure prompt builder (EVERYONE_LAYER + role pack), so both backends layer identically. */
+async function injectedPrefix(role, cwd) {
+  if (!["lead", "brainstorm", "worker"].includes(role)) return "";
+  try {
+    promptModule ??= await import("../../plugin/index.server.ts");
+    return promptModule.injectedPrefix(role, cwd) || "";
+  } catch {
+    return ""; // prompt layering is best effort: an agent without it is still usable
+  }
+}
+
+export class RunnerBackend {
+  constructor({ client = new RunnerClient(), buildPrefix = injectedPrefix } = {}) {
+    Object.defineProperty(this, "rc", { value: client });
+    Object.defineProperty(this, "buildPrefix", { value: buildPrefix });
+  }
+
+  runCli() {
+    return null;
+  }
+
+  async connect() {
+    await this.rc.ensureRunning();
+  }
+
+  async close() {}
+
+  async createAgent({ config = {}, initialPrompt, prompt, labels = {}, env = {} } = {}) {
+    await this.rc.ensureRunning();
+    const meta = { title: config.title, labels: {} };
+    for (const k of FIRST_CLASS) {
+      const v = labels[k] ?? (ENV_FOR[k] ? env[ENV_FOR[k]] : undefined);
+      if (v !== undefined && v !== "") meta[k] = v;
+    }
+    for (const [k, v] of Object.entries(labels)) if (!FIRST_CLASS.includes(k) && v !== undefined) meta.labels[k] = String(v);
+    if (config.modeId && CLAUDE_PERMISSION_MODES.has(config.modeId)) meta.permissionMode = config.modeId;
+    const prefix = await this.buildPrefix(meta.role || "", config.cwd);
+    const systemPrompt = [prefix, config.systemPrompt].filter(Boolean).join("\n\n") || undefined;
+    const { id } = await this.rc.request("POST", "/agents", {
+      provider: config.provider,
+      model: config.model,
+      cwd: config.cwd,
+      prompt: initialPrompt || prompt || undefined,
+      systemPrompt,
+      meta,
+    });
+    return (await this.fetchAgent(id)).agent;
+  }
+
+  async fetchAgent(id) {
+    const rec = await this.rc.request("GET", `/agents/${encodeURIComponent(id)}`);
+    return { agent: toAgent(rec), project: null };
+  }
+
+  async getAgent(id) {
+    return (await this.fetchAgent(id)).agent;
+  }
+
+  async fetchAgents(opts = {}) {
+    const { ids } = await this.rc.request("GET", "/agents");
+    const recs = await Promise.all(ids.map((id) => this.rc.request("GET", `/agents/${id}`).catch(() => null)));
+    const includeArchived = opts?.filter?.includeArchived;
+    const entries = recs
+      .filter(Boolean)
+      .map((r) => ({ agent: toAgent(r), project: null }))
+      .filter((e) => includeArchived || !e.agent.archivedAt);
+    return { entries };
+  }
+
+  async listAgents(opts) {
+    return (await this.fetchAgents(opts)).entries.map((e) => e.agent);
+  }
+
+  async sendAgentPrompt(id, text) {
+    await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/input`, { text });
+  }
+
+  async fetchAgentTimeline(id, opts = {}) {
+    const { events } = await this.rc.request("GET", `/agents/${encodeURIComponent(id)}/timeline`);
+    let entries = toTimeline(events);
+    if (opts.direction === "before" && opts.cursor) entries = entries.filter((e) => e.seqStart < opts.cursor.seq);
+    const limit = Number(opts.limit) > 0 ? Number(opts.limit) : entries.length;
+    const hasOlder = entries.length > limit;
+    entries = entries.slice(-limit);
+    const first = entries[0];
+    return { entries, hasOlder, startCursor: first ? { epoch: "runner", seq: first.seqStart } : null };
+  }
+
+  async getAgentTimeline(id) {
+    return (await this.fetchAgentTimeline(id)).entries;
+  }
+
+  async cancelAgent(id) {
+    await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/cancel`, {});
+  }
+
+  async archiveAgent(id) {
+    await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/archive`, {});
+    return { archivedAt: new Date().toISOString() };
+  }
+
+  async updateAgent(id, { name, labels } = {}) {
+    const patch = {};
+    if (name) patch.title = name;
+    if (labels) {
+      patch.labels = {};
+      for (const [k, v] of Object.entries(labels)) {
+        if (FIRST_CLASS.includes(k)) patch[k] = v;
+        else patch.labels[k] = String(v);
+      }
+    }
+    await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/meta`, patch);
+  }
+
+  async refreshAgent(id) {
+    return (await this.fetchAgent(id)).agent;
+  }
+
+  async detachAgent() {}
+  async deleteHeartbeat() {}
+  subscribe() {
+    return () => {};
+  }
+  subscribeConnectionStatus() {
+    return () => {};
+  }
+
+  /** Polls the log-derived status; resolves like DaemonClient.waitForFinish (status idle | timeout | error). */
+  async waitForFinish(id, timeoutMs = 0) {
+    const deadline = timeoutMs > 0 ? Date.now() + timeoutMs : Infinity;
+    for (;;) {
+      const { agent } = await this.fetchAgent(id);
+      if (agent.status === "idle") return { status: "idle", agent };
+      if (agent.status === "closed") return { status: "error", error: "agent exited", agent };
+      if (Date.now() >= deadline) return { status: "timeout", agent };
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+}

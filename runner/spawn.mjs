@@ -46,3 +46,19 @@ export function spawnNoShell(cmd, args, opts = {}, spawnImpl = spawn) {
   const r = resolved ?? resolveExecutable(cmd, { env: opts.env ?? process.env });
   return spawnImpl(r.file, [...r.args, ...args], { ...rest, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
 }
+
+// Kill a child and its descendants. child.kill() on win32 only ends the direct child, so a claude/opencode
+// that spawned tools would leak them. taskkill /T /F runs without a shell (args are a fixed list).
+export function killTree(child, { platform = process.platform, spawnImpl = spawn } = {}) {
+  if (!child || (child.exitCode !== null && child.exitCode !== undefined)) return false;
+  if (platform === 'win32' && child.pid) {
+    try {
+      const k = spawnImpl('taskkill', ['/pid', String(child.pid), '/T', '/F'], { shell: false, windowsHide: true, stdio: 'ignore' });
+      k.on?.('error', () => child.kill());
+      k.unref?.();
+      return true;
+    } catch { /* fall through */ }
+  }
+  try { child.kill(); } catch { /* already gone */ }
+  return true;
+}

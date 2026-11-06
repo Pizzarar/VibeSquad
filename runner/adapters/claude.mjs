@@ -1,16 +1,17 @@
 // Claude NATIVE adapter: one `claude` CLI child per agent in stream-json mode, stdin kept open
 // for multi-turn. Chosen over @anthropic-ai/claude-agent-sdk because the SDK is not a
 // dependency here and the CLI already gives exactly one child per agent.
-import { spawnNoShell } from '../spawn.mjs';
+import { killTree, spawnNoShell } from '../spawn.mjs';
 import { lineReader } from './lines.mjs';
 
 export function createClaudeAdapter({ spawnImpl, command = 'claude' } = {}) {
   return {
     name: 'claude',
-    start({ model, cwd, meta = {}, emit, onExit }) {
+    start({ model, cwd, meta = {}, systemPrompt, emit, onExit }) {
       const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'];
       if (model) args.push('--model', model);
       if (meta.permissionMode) args.push('--permission-mode', meta.permissionMode);
+      if (systemPrompt) args.push('--append-system-prompt', systemPrompt);
       const child = spawnNoShell(command, args, { cwd }, spawnImpl);
       let turnOpen = false;
       const stdin = (o) => child.stdin.write(JSON.stringify(o) + '\n');
@@ -45,7 +46,7 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude' } = {}) {
         cancel() {
           if (turnOpen) stdin({ type: 'control_request', request_id: `int-${Date.now()}`, request: { subtype: 'interrupt' } });
         },
-        kill() { child.kill(); },
+        kill() { killTree(child); },
       };
     },
   };
