@@ -46,7 +46,13 @@ export function PinMenu({ pin, onShowPlumbing, onEditBrief }: Props) {
   };
 
   return (
-    <div className="pin-menu" ref={root} onClick={(e) => e.stopPropagation()}>
+    <div
+      className="pin-menu"
+      ref={root}
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.stopPropagation()}
+    >
       <button
         className="btn ghost small pin-menu-btn"
         aria-label={`${pin.lane.name} options`}

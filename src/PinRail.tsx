@@ -4,8 +4,9 @@
 // a badge and never reorders the rail. The bar on top of the drawer is the only route to the plumbing.
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getDraft, useDraft } from "./drafts";
-import { markPinRead, NeedsBadge, PinDot, PinTeamTree, usePreview } from "./PinGrid";
+import { markPinRead, NeedsBadge, PinDot, PinTeamTree, setFullView, usePreview } from "./PinGrid";
 import { exitPinFocus, type PinFocus } from "./pinFocus";
+import { PinMenu } from "./PinMenu";
 import { TopBreadcrumb } from "./Breadcrumb";
 import { escGoesHome } from "./pinFocusLogic";
 import { DEFAULT_PIN_PROFILE, getLastBrainstormProfile, setLastBrainstormProfile } from "./pinActions";
@@ -92,6 +93,15 @@ export function PinRail({ view, focus, onPick }: { view: TeamView; focus: PinFoc
               >
                 ✓ Mark read
               </button>
+            )}
+            {active && !isHubPin(active) && (
+              <PinMenu
+                pin={active}
+                onShowPlumbing={() => {
+                  exitPinFocus();
+                  setFullView(true);
+                }}
+              />
             )}
           </div>
           {active && focus.agentId && <SendToBar pin={active} />}

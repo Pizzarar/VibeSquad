@@ -275,6 +275,7 @@ const PinRow = memo(function PinRow({ pin, dimmed, onPin }: { pin: Pin; dimmed?:
           <NeedsBadge pin={pin} />
           <PinCtx pin={pin} />
         </button>
+        {!isHubPin(pin) && <PinMenu pin={pin} onShowPlumbing={() => setFullView(true)} />}
       </div>
     </>
   );

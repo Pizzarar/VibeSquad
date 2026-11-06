@@ -172,21 +172,34 @@ export function onOpenBriefEditor(fn: (t: BriefTarget) => void): () => void {
 // ── Step 5: Mark complete / Reopen (docs/PLAN_PINNED_FEATURES.md §4) ──────────
 // Only a click in the UI calls these. Agents never complete a team: there is no route or CLI for it.
 
+const lastBriefRevision = new Map<string, string>();
+
+export function capBriefForSave(content: string, maxChars = 19_500): string {
+  if (content.length <= maxChars) return content;
+  const sep = "\n\n… [trimmed for length] …\n\n";
+  const headLen = Math.floor(maxChars * 0.6);
+  const tailLen = Math.max(0, maxChars - headLen - 32);
+  return content.slice(0, headLen) + sep + content.slice(content.length - tailLen);
+}
+
 async function readBrief(laneId: string, doFetch: typeof fetch): Promise<string> {
   const url = `/__vibesquad/brainstorm-summary?lane=${encodeURIComponent(laneId)}`;
-  const cur = (await (await doFetch(url)).json().catch(() => ({}))) as { ok?: boolean; content?: string; error?: string };
+  const cur = (await (await doFetch(url)).json().catch(() => ({}))) as { ok?: boolean; content?: string; revision?: string; error?: string };
   if (!cur.ok) throw new Error(cur.error ?? "Could not read the brief");
+  if (typeof cur.revision === "string") lastBriefRevision.set(laneId, cur.revision);
   return String(cur.content ?? "");
 }
 
-async function writeBrief(laneId: string, content: string, doFetch: typeof fetch): Promise<void> {
+async function writeBrief(laneId: string, content: string, doFetch: typeof fetch, revision = lastBriefRevision.get(laneId)): Promise<void> {
+  const capped = content.length >= 20_000 || content.length > 19_500 ? capBriefForSave(content) : content;
   const res = await doFetch("/__vibesquad/brainstorm-summary", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ laneId, content }),
+    body: JSON.stringify({ laneId, content: capped, ...(revision ? { revision } : {}) }),
   });
-  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; revision?: string; error?: string };
   if (!res.ok || !body.ok) throw new Error(body.error ?? `Brief save failed (${res.status})`);
+  if (typeof body.revision === "string") lastBriefRevision.set(laneId, body.revision);
 }
 
 async function appendToBrief(laneId: string, line: string, doFetch: typeof fetch): Promise<void> {

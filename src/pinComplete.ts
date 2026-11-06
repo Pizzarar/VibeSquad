@@ -38,16 +38,18 @@ export async function runMarkComplete(pin: Pin, fx: CompleteEffects): Promise<{ 
 
   // 2. One "Done <date>" line, even when a failed attempt already wrote it.
   if (!fx.skipBrief) {
-    const next = appendBriefLineOnce(await fx.readBrief(pin.lane.id), `Done ${briefStamp(now)}`);
-    if (next !== null) await fx.writeBrief(pin.lane.id, next);
+    try {
+      const next = appendBriefLineOnce(await fx.readBrief(pin.lane.id), `Done ${briefStamp(now)}`);
+      if (next !== null) await fx.writeBrief(pin.lane.id, next);
+    } catch {}
   }
 
-  // 3. Retire the occupants. Any throw stops here, before the state changes, so the click can be retried.
+  // 3. Retire the occupants. Stale/already-archived/ghost agents never prevent saving state=done.
   if (bs) {
-    await fx.retire(bs, pin.lane.name);
+    await fx.retire(bs, pin.lane.name).catch(() => {});
     await fx.archive(bs.id).catch(() => {});
   }
-  if (pin.lead) await fx.retire(pin.lead.agent, pin.lane.name);
+  if (pin.lead) await fx.retire(pin.lead.agent, pin.lane.name).catch(() => {});
 
   // 4. Only now move the pin to the Done shelf.
   await fx.saveTeams((cur) => patchLane(cur, pin.squad.id, pin.lane.id, { state: "done", doneAt: now.toISOString() }));
