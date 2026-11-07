@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
-import { daemonClient, spawnTeamAgent } from "./paseo";
+import { spawnTeamAgent } from "./paseo";
+import { VsFilesError, vsDeleteEntry, vsReadFile, vsWriteFile } from "./vsFiles";
 import { DEMO } from "./demoFlag";
 import { openAgent } from "./panes";
 import { findProfile } from "./profiles";
@@ -226,7 +227,7 @@ function FileDiffView({ file, actions }: { file: DiffFile; actions?: HunkActions
 // Kept hunks stay hidden for the session (across tab switches): (cwd, path) → hunk keys (text + position).
 const keptHunks = new Map<string, Set<string>>();
 const keptFor = (cwd: string, path: string) => JSON.stringify([cwd, path]);
-const MAX_UNDO_BYTES = 2 * 1024 * 1024;
+const MAX_UNDO_BYTES = 900 * 1024; // the fs/write route rejects bodies over FS_WRITE_MAX (900 KiB)
 const DIFF_POLL_MS = 5_000;
 const STATUS_EVERY_TICKS = 6;
 const REVIEW_PROFILE = "Review - Sonnet";
@@ -434,8 +435,11 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
     if (f.isDeleted) { flash("The file was deleted: use Discard to restore it", false); return; }
     setUndoBusy(true);
     try {
-      const read = await daemonClient.readFile(cwd, f.path, undefined, MAX_UNDO_BYTES + 1);
-      if (read.bytes.length > MAX_UNDO_BYTES) { flash("File too large to undo hunks here", false); return; }
+      const read = await vsReadFile(cwd, f.path, MAX_UNDO_BYTES).catch((e) => {
+        if (e instanceof VsFilesError && e.tooLarge) return null;
+        throw e;
+      });
+      if (!read || read.bytes.length > MAX_UNDO_BYTES) { flash("File too large to undo hunks here", false); return; }
       let content: string;
       try { content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(read.bytes); }
       catch { flash("Not UTF-8 text: can't undo hunks in this file", false); return; }
@@ -448,12 +452,10 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
         next = r.content;
       }
       if (next === "" && f.isNew) {
-        const del = await daemonClient.deleteFileEntry({ cwd, path: f.path });
-        if (!del.success) { flash(`Not undone: ${del.error ?? "delete failed"}`, false); return; }
+        await vsDeleteEntry(cwd, f.path);
       } else {
-        const res = await daemonClient.writeFile({ cwd, path: f.path, content: next, expectedModifiedAt: read.modifiedAt });
-        // writeFile resolves (doesn't throw) on a stale or failed write, so check the status.
-        const w = res as { status?: string; error?: string };
+        // vsWriteFile resolves (doesn't throw) on a stale or failed write, so check the status.
+        const w = await vsWriteFile(cwd, f.path, next, read.modifiedAt);
         if (w?.status === "conflict") { flash("Not undone: the file changed on disk while undoing. Try again.", false); return; }
         if (w?.status === "error") { flash(`Not undone: ${w.error ?? "write failed"}`, false); return; }
       }
