@@ -756,6 +756,8 @@ function SquadTile({ v, onSelectSquad, onOpenPin, onOpenAgent }: { v: TeamView; 
   );
 }
 
+const SQUAD_ROWS = 2;
+
 export function SquadsHome({
   views,
   onSelectSquad,
@@ -769,16 +771,71 @@ export function SquadsHome({
   onNewSquad: () => void;
   onOpenAgent?: (teamId: string, agentId: string) => void;
 }) {
+  const gridRef = useRef<HTMLDivElement>(null);
+  const [cols, setCols] = useState(4);
+  const [rowOffset, setRowOffset] = useState(0);
+  useEffect(() => {
+    const el = gridRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const measure = () => {
+      const n = getComputedStyle(el).gridTemplateColumns.split(" ").filter(Boolean).length;
+      if (n > 0) setCols(n);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const total = views.length + 1; // squads + the NEW SQUAD tile
+  const totalRows = Math.ceil(total / cols);
+  const maxOffset = Math.max(0, totalRows - SQUAD_ROWS);
+  const offset = Math.min(rowOffset, maxOffset);
+  const paged = totalRows > SQUAD_ROWS;
+  useEffect(() => {
+    if (rowOffset > maxOffset) setRowOffset(maxOffset);
+  }, [rowOffset, maxOffset]);
+  const step = (d: number) => setRowOffset(Math.max(0, Math.min(maxOffset, offset + d)));
+  const first = offset * cols;
+  const slice = views.slice(first, first + SQUAD_ROWS * cols);
+  const showNew = views.length >= first && views.length < first + SQUAD_ROWS * cols;
   return (
     <section className="squads-home" data-testid="squads-home">
-      <div className="squads-home-grid">
-        {views.map((v) => (
-          <SquadTile key={v.team.id} v={v} onSelectSquad={onSelectSquad} onOpenPin={onOpenPin} onOpenAgent={onOpenAgent} />
-        ))}
-        <button type="button" className="squad-home-tile pin-plus" data-testid="squad-home-new-tile" onClick={onNewSquad}>
-          <span className="pin-plus-icon">+</span>
-          <span>+ NEW SQUAD</span>
-        </button>
+      <div
+        className={`squads-home-pager-wrap ${paged ? "paged" : ""}`}
+        onKeyDown={(e) => {
+          if (!paged || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
+          if (e.target instanceof HTMLElement && e.target.closest(".squad-home-tile")) return;
+          e.preventDefault();
+          step(e.key === "ArrowUp" ? -1 : 1);
+        }}
+      >
+        <div className="squads-home-grid" ref={gridRef} data-testid="squads-home-grid">
+          {slice.map((v) => (
+            <SquadTile key={v.team.id} v={v} onSelectSquad={onSelectSquad} onOpenPin={onOpenPin} onOpenAgent={onOpenAgent} />
+          ))}
+          {showNew && (
+            <button type="button" className="squad-home-tile pin-plus" data-testid="squad-home-new-tile" onClick={onNewSquad}>
+              <span className="pin-plus-icon">+</span>
+              <span>+ NEW SQUAD</span>
+            </button>
+          )}
+        </div>
+        {paged && (
+          <div className="squads-home-pager" data-testid="squads-home-pager" role="group" aria-label="Squad rows">
+            <button type="button" className="squads-pager-btn" data-testid="squads-pager-up" aria-label="Previous squad row" aria-disabled={offset <= 0} onClick={() => step(-1)}>
+              ▲
+            </button>
+            <span className="squads-pager-pos muted small" data-testid="squads-pager-pos">
+              {offset + 1}–{Math.min(totalRows, offset + SQUAD_ROWS)} / {totalRows}
+            </span>
+            <button type="button" className="squads-pager-btn" data-testid="squads-pager-down" aria-label="Next squad row" aria-disabled={offset >= maxOffset} onClick={() => step(1)}>
+              ▼
+            </button>
+          </div>
+        )}
+      </div>
+      <div className="squads-dashboard" data-testid="squads-dashboard">
+        <div className="squads-dashboard-empty muted small">Usage dashboard: limit cards and lane stats land here.</div>
       </div>
     </section>
   );
