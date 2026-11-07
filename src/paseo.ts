@@ -325,12 +325,12 @@ const latestLabels = (a: PaseoAgent) => labelsOf(state.agents.get(a.id) ?? a);
 /** Legacy-labelled agents keep working: when the old label is set, clear/snooze it alongside the canonical one. */
 const hasLegacy = (a: PaseoAgent) => !!labelsOf(a)[LEGACY_NEEDS_LABEL];
 
-export function setNeedsYou(agent: PaseoAgent, reason: string): Promise<void> {
+export function setNeedsYou(agent: PaseoAgent, reason: string, extra?: Record<string, string>): Promise<void> {
   const legacy = hasLegacy(agent)
     ? { [LEGACY_NEEDS_LABEL]: reason, [LEGACY_NEEDS_REASON]: reason, [LEGACY_NEEDS_UNTIL]: "" }
     : {};
   return updateAgent(agent.id, {
-    labels: { ...latestLabels(agent), ...legacy, "needs-you": reason, "needs-you-reason": reason, "needs-you-until": "", "needs-you-at": new Date().toISOString() },
+    labels: { ...latestLabels(agent), ...extra, ...legacy, "needs-you": reason, "needs-you-reason": reason, "needs-you-until": "", "needs-you-at": new Date().toISOString() },
   });
 }
 
