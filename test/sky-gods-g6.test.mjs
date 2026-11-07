@@ -93,3 +93,17 @@ test("wiring: the face is a zone background, the thumbnail is gone, Riff gets th
   assert.ok(/prefers-reduced-motion: reduce\) \{\s*\.sky-zones,[^}]*transition: none/.test(css));
   assert.ok(/--sky-cols/.test(css));
 });
+
+test("a11y: squeezed Riff is tabbable, labelled, and Enter/Space/focus hand the sky back (riffFocused → 50/50)", () => {
+  // The pure side: once Riff is focused, even a talking Overlord no longer expands.
+  assert.equal(skyLayout({ ...base, overlordFocused: true }).expanded, true);
+  assert.equal(skyLayout({ ...base, overlordTalking: true, riffFocused: true }).expanded, false);
+  const sky = src("SkyZones.tsx");
+  assert.ok(sky.includes("tabIndex={onReclaim ? (squeezed ? 0 : -1) : undefined}"));
+  assert.ok(sky.includes("press to expand"));
+  assert.ok(sky.includes("squeezed && e.target === e.currentTarget && onReclaim?.()")); // focus
+  assert.ok(sky.includes('e.key === "Enter" || e.key === " "')); // Enter / Space
+  assert.ok(sky.includes('setFocus("riffbot")'));
+  assert.ok(sky.includes("squeezed={layout.expanded} onReclaim={reclaimRiff}"));
+  assert.ok(!sky.includes("onReclaim={reclaimRiff}") || !/<Zone zone=\{zones\.overlord\}[^>]*onReclaim/.test(sky)); // Overlord never gets it
+});

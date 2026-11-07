@@ -50,10 +50,16 @@ function Zone({
   faces,
   frameStyle,
   force = null,
+  squeezed = false,
+  onReclaim,
   onSuccessor,
   onSpinUp,
 }: {
   zone: SkyZone;
+  /** Riff while the Overlord is expanded: its chat is hidden, so the strip itself is the keyboard way back (a11y). */
+  squeezed?: boolean;
+  /** Hand the sky back to this zone (50/50) and move focus into its composer. */
+  onReclaim?: () => void;
   faces: ReturnType<typeof useFacesModel>;
   /** Forced face mode (Riff scared while the Overlord is expanded). */
   force?: FaceMode | null;
@@ -72,7 +78,16 @@ function Zone({
       data-testid={`sky-zone-${zone.bot}`}
       data-sky-bot={zone.bot}
       data-agent={zone.agentId ?? ""}
-      aria-label={`${label} chat`}
+      aria-label={squeezed ? `${label} chat, press to expand` : `${label} chat`}
+      // Squeezed: tabbable (0). Otherwise -1, not absent, so the focused strip doesn't lose focus the moment it un-squeezes.
+      tabIndex={onReclaim ? (squeezed ? 0 : -1) : undefined}
+      onFocus={(e) => squeezed && e.target === e.currentTarget && onReclaim?.()}
+      onKeyDown={(e) => {
+        if (squeezed && e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          onReclaim?.();
+        }
+      }}
     >
       {!off && <ZoneFace zone={zone} faces={faces} force={force} />}
       <span className="sky-crt-name">{label}</span>
@@ -160,6 +175,11 @@ export function SkyZones({
       document.removeEventListener("keydown", key, true);
     };
   }, []);
+  // Riff's chat is hidden while squeezed; this is the keyboard path back: 50/50 (riffFocused), then into its composer.
+  const reclaimRiff = () => {
+    setFocus("riffbot");
+    requestAnimationFrame(() => root.current?.querySelector<HTMLElement>('[data-sky-bot="riffbot"] textarea')?.focus());
+  };
   const cols = `minmax(0, ${layout.widths.riffbot}fr) minmax(0, ${layout.widths.overlord}fr)`;
   return (
     <div
@@ -171,7 +191,7 @@ export function SkyZones({
       onFocus={onFocusIn}
       onBlur={onFocusOut}
     >
-      <Zone zone={zones.riffbot} faces={faces} frameStyle={frameStyle} force={layout.riffMode} onSuccessor={onSuccessor} onSpinUp={hub && onSpinUp ? () => onSpinUp(hub) : undefined} />
+      <Zone zone={zones.riffbot} faces={faces} frameStyle={frameStyle} force={layout.riffMode} squeezed={layout.expanded} onReclaim={reclaimRiff} onSuccessor={onSuccessor} onSpinUp={hub && onSpinUp ? () => onSpinUp(hub) : undefined} />
       <Zone zone={zones.overlord} faces={faces} frameStyle={frameStyle} onSuccessor={onSuccessor} />
     </div>
   );
