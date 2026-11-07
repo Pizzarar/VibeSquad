@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  buildCatalog, clearProbeCache, clearUsageCache, getModels, getProviders, getUsage, handleProvidersApi,
+  buildCatalog, clearProbeCache, clearUsageCache, getModels, getProviders, getUsage, handleProvidersApi, LOOP_TURN_THRESHOLD,
   loadRunnerSettings, probeProviders, probeStats, saveRunnerSettings, usageStats,
 } from '../server/providers-catalog.mjs';
 import { saveUserSettings, loadUserSettings, saveRemoteAccess } from '../server/user-settings.mjs';
@@ -251,4 +251,105 @@ test('settings: non-object JSON counts as unreadable; saves merge into the raw o
   assert.deepEqual(raw.custom, { keep: 1 });
   assert.equal(raw.userName, 'Zed');
   assert.deepEqual(raw.remote, { enabled: false });
+});
+
+// ---------------------------------------------------------------- usage dashboard API (usa-2)
+const fixtureAgents = (home) => {
+  const dir = path.join(home, 'runner', 'agents');
+  fs.mkdirSync(dir, { recursive: true });
+  const d = Date.UTC(2026, 10, 3, 12);
+  const mk = (id, meta, evs) => fs.writeFileSync(path.join(dir, `${id}.jsonl`),
+    ev({ seq: 0, ts: d, type: 'created', provider: 'claude', model: 'm', meta }) + evs.map((e, i) => ev({ seq: i + 1, ts: d, ...e })).join(''));
+  const turn = (cost) => [{ type: 'usage', inputTokens: 900, outputTokens: 100 }, { type: 'turn_done', costUsd: cost }];
+  mk('rn-bs1', { lane: 'usage', role: 'brainstorm' }, turn(1));
+  mk('rn-ld1', { lane: 'usage', role: 'lead' }, turn(1));
+  mk('rn-ld2', { lane: 'usage', role: 'lead', labels: { 'vs.handoff-from': 'rn-ld1' } }, turn(2));
+  mk('rn-w1', { lane: 'usage', role: 'worker' }, [...turn(1), ...turn(2), { type: 'output', text: 'PASS: done' }]);
+  const loopy = [];
+  for (let i = 0; i < LOOP_TURN_THRESHOLD + 1; i++) loopy.push({ type: 'turn_done' });
+  mk('rn-w2', { lane: 'other', role: 'worker', title: 'spinner' }, loopy);
+  // role arriving later via meta patch
+  mk('rn-w3', { lane: 'other' }, [{ type: 'meta', patch: { role: 'worker' } }, ...turn(1)]);
+};
+const fakeGit = (args) => {
+  if (args[1] === '--merges') {
+    return [
+      'm1\x1fa1 b1\x1f1793000000\x1fMerge branch \'unit-usage-api\' (@usa)',
+      'm2\x1fa2 b2\x1f1793000100\x1fMerge branch \'unit-x\'',
+      'm3\x1fa3\x1f1793000200\x1fnot a merge',
+    ].join('\n');
+  }
+  if (args[2] === 'a1..b1') return 'fix: thing\nfix(x): review r2 - more\nfix(x): review r1 - first\n';
+  if (args[2] === 'a2..b2') return 'feat: y (@oth)\nfix: review r1 - a\n';
+  return '';
+};
+
+test('usage: per lane/role stats, coordination split, restarts, loop flag', () => {
+  const home = tmp();
+  fixtureAgents(home);
+  clearUsageCache();
+  const u = getUsage({ home, git: fakeGit, laneCodes: { usa: 'usage', oth: 'other' } });
+  const lane = (id) => u.lanes.find((l) => l.lane === id);
+  assert.equal(lane('usage').agents, 4);
+  assert.equal(lane('usage').restarts, 1, 'second lead = one restart');
+  assert.equal(lane('usage').handoffs, 1);
+  assert.equal(lane('usage').turns, 5);
+  assert.equal(lane('usage').byRole.worker.turns, 2);
+  assert.equal(lane('usage').byRole.worker.avgTokensPerTurn, 1000);
+  assert.equal(lane('usage').coordinationTokens, 3000);
+  assert.equal(lane('usage').executionTokens, 2000);
+  assert.equal(lane('usage').coordinationShare, 0.6);
+  assert.deepEqual(u.byRole.map((r) => r.role), ['brainstorm', 'lead', 'worker']);
+  assert.equal(u.byRole.find((r) => r.role === 'worker').turns, 2 + 41 + 1, 'late meta role counts for later events');
+  assert.equal(u.coordination.coordinationTokens, 3000);
+  assert.equal(u.loops.threshold, LOOP_TURN_THRESHOLD);
+  assert.deepEqual(u.loops.flagged.map((l) => [l.agentId, l.turns, l.title]), [['rn-w2', 41, 'spinner']]);
+  assert.ok(u.totals.turns > 0 && Array.isArray(u.rows), 'old fields intact');
+});
+
+test('usage: merged units, review rounds, cost per merged unit', () => {
+  const home = tmp();
+  fixtureAgents(home);
+  clearUsageCache();
+  const u = getUsage({ home, git: fakeGit, laneCodes: { usa: 'usage', oth: 'other' } });
+  assert.equal(u.merged.units.length, 2, 'non-merge lines skipped');
+  const m1 = u.merged.units.find((m) => m.sha === 'm1');
+  assert.deepEqual([m1.unit, m1.lane, m1.reviewRounds], ['unit-usage-api', 'usage', 2]);
+  const m2 = u.merged.units.find((m) => m.sha === 'm2');
+  assert.deepEqual([m2.lane, m2.reviewRounds], ['other', 1], 'lane from a branch commit tag when the merge has none');
+  const pl = u.merged.perLane.find((l) => l.lane === 'usage');
+  assert.equal(pl.mergedUnits, 1);
+  assert.ok(Math.abs(pl.costPerMergedUnit - 6) < 1e-9);
+  assert.equal(getUsage({ home, git: () => { throw new Error('no git'); } }).merged.units.length, 0);
+});
+
+test('usage: limits from limits.jsonl with burn rate and ETA', () => {
+  const home = tmp();
+  assert.deepEqual(getUsage({ home, git: () => '' }).limits, [], 'missing file -> empty');
+  const dir = path.join(home, 'runner');
+  fs.mkdirSync(dir, { recursive: true });
+  const t0 = Date.UTC(2026, 10, 6, 10);
+  const reset = new Date(t0 + 5 * 3600_000).toISOString();
+  const line = (o) => JSON.stringify({ provider: 'antigravity-cli', window: '5h', source: 'provider', agentId: 'rn-1', resetsAt: reset, ...o }) + '\n';
+  fs.writeFileSync(path.join(dir, 'limits.jsonl'),
+    line({ at: t0 - 4 * 3600_000, usedPct: 90, resetsAt: new Date(t0 - 3600_000).toISOString() }) + // previous window
+    line({ at: new Date(t0).toISOString(), usedPct: 20 }) +
+    'garbage\n' +
+    line({ at: new Date(t0 + 3600_000).toISOString(), usedPct: 30 }) +
+    JSON.stringify({ at: t0 + 3600_000, provider: 'claude', window: 'weekly', usedPct: 50, resetsAt: reset, source: 'estimate' }) + '\n' +
+    JSON.stringify({ at: t0 + 7200_000, provider: 'claude', window: 'weekly', usedPct: 51, resetsAt: reset, source: 'estimate' }) + '\n');
+  const lim = getUsage({ home, git: () => '' }).limits;
+  const g = lim.find((l) => l.provider === 'antigravity-cli');
+  assert.equal(g.usedPct, 30);
+  assert.equal(g.burnPctPerHour, 10);
+  assert.equal(g.etaToCap, null, '7h to cap lands after the reset at +5h');
+  const c = lim.find((l) => l.provider === 'claude');
+  assert.equal(c.source, 'estimate');
+  assert.equal(c.burnPctPerHour, 1);
+  assert.equal(c.etaToCap, null);
+  // faster burn -> ETA before reset
+  fs.appendFileSync(path.join(dir, 'limits.jsonl'), line({ at: t0 + 2 * 3600_000, usedPct: 70 }));
+  const g2 = getUsage({ home, git: () => '' }).limits.find((l) => l.provider === 'antigravity-cli');
+  assert.equal(g2.burnPctPerHour, 25);
+  assert.equal(g2.etaToCap, new Date(t0 + 2 * 3600_000 + 1.2 * 3600_000).toISOString());
 });
