@@ -64,7 +64,7 @@ describe("build-android keystore secrets", () => {
     const dir = mkdtempSync(join(tmpdir(), "vs-pin-"));
     signAndVerifyApk({
       javaExe: "java", apksignerJar: "a.jar", keystorePath: "k", alias: "al", inputApk: "in.apk", outApk: "out.apk", cwd: ".",
-      secretEnv: { VS_KS_PASS: SECRET }, pinPath: join(dir, "pin"), log: () => {},
+      secretEnv: { VS_KS_PASS: SECRET }, pinPath: join(dir, "pin"), pinFirst: true, log: () => {},
       exec: (cmd, args, opts) => (calls.push({ cmd, args, opts }), "Signer #1 certificate SHA-256 digest: " + "ab".repeat(32)),
     });
     assert.equal(calls.length, 2);

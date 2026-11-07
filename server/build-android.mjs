@@ -105,11 +105,12 @@ export const ANDROID_KEY_ALIAS = "vibesquad";
 export { KS_SECRET };
 
 /**
- * Cert pin: a non-secret file next to the keystore. Kept outside the repo on purpose: the
- * fingerprint belongs to this machine's keystore (rotating the keystore re-pins it), and a repo
- * file would need a commit per rotation. VS_ANDROID_CERT_PIN_FILE or `pinPath` overrides it (tests).
+ * Cert pin: public data (a SHA-256 fingerprint), committed to the repo like the updater pubkey so
+ * a pin change is a reviewed diff and can't be reset silently on one machine. Missing pin = build
+ * FAILS unless `pinFirst` (--pin-first) is given, which writes it and asks you to commit it.
+ * VS_ANDROID_CERT_PIN_FILE or `pinPath` overrides the location (tests).
  */
-export const DEFAULT_PIN_PATH = join(SIGNING_DIR, "android-cert.sha256");
+export const DEFAULT_PIN_PATH = resolve(import.meta.dirname, "..", "src-tauri", "android-cert.sha256");
 
 /**
  * Resolves the release keystore + signing env. Never creates a keystore: a missing one is a
@@ -129,24 +130,33 @@ export function ensureAndroidKeystore({
   return { keystorePath, secretEnv, alias };
 }
 
-/** Extracts the first signer's SHA-256 from `apksigner verify --print-certs` output, as lowercase hex. */
+/**
+ * Extracts the signer SHA-256 from `apksigner verify --print-certs` output, as lowercase hex.
+ * Fails closed (null) unless there is exactly one signer digest and it is 64 hex chars.
+ */
 export function parseSignerSha256(text) {
-  const m = /certificate SHA-256 digest:\s*([0-9a-fA-F:]{64,95})/.exec(String(text || ""));
-  return m ? m[1].replace(/:/g, "").toLowerCase() : null;
+  const all = [...String(text || "").matchAll(/certificate SHA-256 digest:[ \t]*([^\r\n]*)/g)];
+  if (all.length !== 1) return null;
+  const hex = all[0][1].trim().replace(/:/g, "").toLowerCase();
+  return /^[0-9a-f]{64}$/.test(hex) ? hex : null;
 }
 
 /**
- * Compares the signer fingerprint to the pin. First release (no pin): writes it and reports so.
- * A mismatch throws with both fingerprints.
+ * Compares the signer fingerprint to the committed pin. A mismatch or malformed pin throws; a
+ * missing pin throws unless `pinFirst`, which writes it and tells the caller to commit it.
  */
-export function checkCertPin(fingerprint, { pinPath = process.env.VS_ANDROID_CERT_PIN_FILE || DEFAULT_PIN_PATH, log = console.log } = {}) {
+export function checkCertPin(fingerprint, { pinPath = process.env.VS_ANDROID_CERT_PIN_FILE || DEFAULT_PIN_PATH, pinFirst = false, log = console.log } = {}) {
   if (!existsSync(pinPath)) {
+    if (!pinFirst) {
+      throw new Error(`No Android cert pin at ${pinPath}. First release: re-run with --pin-first to pin signer SHA-256 ${fingerprint}, then commit the file.`);
+    }
     mkdirSync(dirname(pinPath), { recursive: true });
     writeFileSync(pinPath, fingerprint + "\n", "utf8");
-    log(`[build:android] No cert pin yet (first release): pinned signer SHA-256 ${fingerprint} to ${pinPath}`);
+    log(`[build:android] Pinned signer SHA-256 ${fingerprint}: commit ${pinPath}`);
     return { pinned: true, created: true };
   }
   const expected = readFileSync(pinPath, "utf8").trim().replace(/:/g, "").toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(expected)) throw new Error(`Android cert pin ${pinPath} is malformed (want one 64-hex SHA-256 line)`);
   if (expected !== fingerprint) {
     throw new Error(`Android signing cert mismatch: pinned ${expected} (${pinPath}) but the APK is signed by ${fingerprint}`);
   }
@@ -154,22 +164,25 @@ export function checkCertPin(fingerprint, { pinPath = process.env.VS_ANDROID_CER
   return { pinned: true, created: false };
 }
 
-/**
- * Signs with apksigner (password via env only), verifies with `--print-certs`, and checks the
- * signer cert against the pin. Returns the signer SHA-256 for the release record.
- */
-export function signAndVerifyApk({ javaExe, apksignerJar, keystorePath, alias, secretEnv, inputApk, outApk, cwd, exec = execFileSync, pinPath, log = console.log }) {
+/** `apksigner verify --print-certs` (no keystore password in its env) + pin check. Returns the signer SHA-256. */
+export function verifyApkCert({ javaExe, apksignerJar, apk, cwd, env = process.env, exec = execFileSync, pinPath, pinFirst, log = console.log }) {
+  const { VS_KS_PASS: _omit, ...plainEnv } = env;
+  const out = exec(javaExe, ["-jar", apksignerJar, "verify", "--print-certs", apk], { cwd, env: plainEnv, encoding: "utf8" });
+  if (out) log(String(out).trimEnd());
+  const certSha256 = parseSignerSha256(out);
+  if (!certSha256) throw new Error("Could not read exactly one valid signer certificate SHA-256 from apksigner verify --print-certs output");
+  checkCertPin(certSha256, { pinPath, pinFirst, log });
+  return { certSha256 };
+}
+
+/** Signs with apksigner (password via env only), then verifies and pins. Returns the signer SHA-256. */
+export function signAndVerifyApk({ javaExe, apksignerJar, keystorePath, alias, secretEnv, inputApk, outApk, cwd, exec = execFileSync, pinPath, pinFirst, log = console.log }) {
   exec(
     javaExe,
     ["-jar", apksignerJar, "sign", "--ks", keystorePath, "--ks-key-alias", alias, "--ks-pass", "env:VS_KS_PASS", "--key-pass", "env:VS_KS_PASS", "--out", outApk, inputApk],
     { cwd, env: secretEnv, stdio: "inherit" },
   );
-  const out = exec(javaExe, ["-jar", apksignerJar, "verify", "--print-certs", outApk], { cwd, env: secretEnv, encoding: "utf8" });
-  if (out) log(String(out).trimEnd());
-  const certSha256 = parseSignerSha256(out);
-  if (!certSha256) throw new Error("Could not read the signer certificate SHA-256 from apksigner verify --print-certs output");
-  checkCertPin(certSha256, { pinPath, log });
-  return { certSha256 };
+  return verifyApkCert({ javaExe, apksignerJar, apk: outApk, cwd, env: secretEnv, exec, pinPath, pinFirst, log });
 }
 
 function findApk(dir) {
@@ -199,6 +212,7 @@ export function buildAndroidApk({
   rootDir = resolve(import.meta.dirname, ".."),
   env = process.env,
   exec = execFileSync,
+  pinFirst = false,
 } = {}) {
   const require = createRequire(import.meta.url);
   const tauriCliJs = require.resolve("@tauri-apps/cli/tauri.js");
@@ -248,19 +262,22 @@ export function buildAndroidApk({
   const distDesktopDir = join(rootDir, "dist-desktop");
   mkdirSync(distDesktopDir, { recursive: true });
   const destApk = join(distDesktopDir, "VibeSquad.apk");
-  let certSha256 = null;
+  const latest = latestBuildTools(androidEnv.ANDROID_HOME);
+  if (!latest) throw new Error(`Android build-tools not found under ${join(androidEnv.ANDROID_HOME, "build-tools")}`);
+  const javaExe = androidEnv.JAVA_HOME
+    ? join(androidEnv.JAVA_HOME, "bin", process.platform === "win32" ? "java.exe" : "java")
+    : "java";
+  const apksignerJar = join(androidEnv.ANDROID_HOME, "build-tools", latest, "lib", "apksigner.jar");
+  let certSha256;
   if (apk.endsWith("-unsigned.apk")) {
     console.log("[build:android] 5/6 Signing APK...");
     const { keystorePath, secretEnv, alias } = ensureAndroidKeystore({ env: androidEnv });
-    const latest = latestBuildTools(androidEnv.ANDROID_HOME);
-    if (!latest) throw new Error(`Android build-tools not found under ${join(androidEnv.ANDROID_HOME, "build-tools")}`);
-    const javaExe = androidEnv.JAVA_HOME
-      ? join(androidEnv.JAVA_HOME, "bin", process.platform === "win32" ? "java.exe" : "java")
-      : "java";
-    const apksignerJar = join(androidEnv.ANDROID_HOME, "build-tools", latest, "lib", "apksigner.jar");
-    ({ certSha256 } = signAndVerifyApk({ javaExe, apksignerJar, keystorePath, alias, secretEnv, inputApk: apk, outApk: destApk, cwd: rootDir, exec }));
+    ({ certSha256 } = signAndVerifyApk({ javaExe, apksignerJar, keystorePath, alias, secretEnv, inputApk: apk, outApk: destApk, cwd: rootDir, exec, pinFirst }));
   } else {
+    // Already signed (e.g. by Gradle): still must verify and match the pin before it ships.
+    console.log("[build:android] 5/6 Verifying pre-signed APK...");
     copyFileSync(apk, destApk);
+    ({ certSha256 } = verifyApkCert({ javaExe, apksignerJar, apk: destApk, cwd: rootDir, env: androidEnv, exec, pinFirst }));
   }
   console.log(`[build:android] 6/6 Staged ${destApk}`);
   return { apkPath: destApk, certSha256 };
@@ -268,5 +285,5 @@ export function buildAndroidApk({
 
 const isMain = process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename);
 if (isMain) {
-  buildAndroidApk();
+  buildAndroidApk({ pinFirst: process.argv.includes("--pin-first") });
 }

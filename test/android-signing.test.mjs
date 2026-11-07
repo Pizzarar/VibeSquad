@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
-import { checkCertPin, parseSignerSha256, signAndVerifyApk } from "../server/build-android.mjs";
+import { checkCertPin, parseSignerSha256, signAndVerifyApk, verifyApkCert } from "../server/build-android.mjs";
 import { parseKeytoolSha256, rotateAndroidKeystore } from "../scripts/rotate-android-keystore.mjs";
 
 const SECRET = "s3cr3t-Pa55-xyz";
@@ -63,6 +63,21 @@ describe("rotate-android-keystore", () => {
     assert.match(out, /BACKUP NOW/);
     assert.match(out, /vibesquad-updater\.key/);
   });
+  test("throws when keytool output has no SHA-256", () => {
+    const t = rotate({ exec: () => "nothing" });
+    assert.throws(t.run, /could not read its SHA-256/);
+  });
+  test("default exists check refuses a dangling symlink", () => {
+    const dir = tmp();
+    const link = join(dir, "k.jks");
+    try { symlinkSync(join(dir, "nope"), link); } catch { return; }
+    const calls = [];
+    assert.throws(
+      () => rotateAndroidKeystore({ keystorePath: link, env: {}, read: () => SECRET, exec: () => calls.push(1), log: () => {} }),
+      /Refusing to overwrite/,
+    );
+    assert.equal(calls.length, 0);
+  });
   test("parseKeytoolSha256", () => {
     assert.equal(parseKeytoolSha256("x\n\t SHA256: ab:cd:" + "00:".repeat(29) + "ff"), "AB:CD:" + "00:".repeat(29) + "FF");
     assert.equal(parseKeytoolSha256("nothing"), null);
@@ -78,13 +93,35 @@ describe("build-android cert pin", () => {
     assert.equal(parseSignerSha256(certs(FP.toUpperCase())), FP);
     assert.equal(parseSignerSha256("no digest"), null);
   });
-  test("first run writes the pin and says so", () => {
+  test("parseSignerSha256 fails closed: multi-signer, malformed, short", () => {
+    assert.equal(parseSignerSha256(certs(FP) + certs(FP2)), null);
+    assert.equal(parseSignerSha256(certs("zz".repeat(32))), null);
+    assert.equal(parseSignerSha256(certs("ab".repeat(16))), null);
+    assert.equal(parseSignerSha256(certs(FP + "00")), null);
+  });
+  test("missing pin fails unless pinFirst; pinFirst writes it and says commit", () => {
     const pinPath = join(tmp(), "d", "pin");
+    assert.throws(() => checkCertPin(FP, { pinPath, log: () => {} }), /--pin-first/);
+    assert.equal(existsSync(pinPath), false);
     const logs = [];
-    const r = checkCertPin(FP, { pinPath, log: (m) => logs.push(m) });
+    const r = checkCertPin(FP, { pinPath, pinFirst: true, log: (m) => logs.push(m) });
     assert.equal(r.created, true);
     assert.equal(readFileSync(pinPath, "utf8").trim(), FP);
-    assert.match(logs.join(" "), /first release/);
+    assert.match(logs.join(" "), /commit .*pin/);
+  });
+  test("default pin is the repo file src-tauri/android-cert.sha256", () => {
+    const src = readFileSync(new URL("../server/build-android.mjs", import.meta.url), "utf8");
+    assert.match(src, /"src-tauri", "android-cert\.sha256"/);
+  });
+  test("verifyApkCert (pre-signed path) checks the pin and strips VS_KS_PASS from env", () => {
+    const pinPath = join(tmp(), "pin");
+    writeFileSync(pinPath, FP);
+    const seen = [];
+    const base = { javaExe: "java", apksignerJar: "a.jar", apk: "x.apk", cwd: ".", env: { VS_KS_PASS: SECRET, A: "1" }, pinPath, log: () => {} };
+    verifyApkCert({ ...base, exec: (c, a, o) => (seen.push(o.env), certs(FP)) });
+    assert.equal(seen[0].VS_KS_PASS, undefined);
+    assert.equal(seen[0].A, "1");
+    assert.throws(() => verifyApkCert({ ...base, exec: () => certs(FP2) }), /mismatch/);
   });
   test("matching pin passes", () => {
     const pinPath = join(tmp(), "pin");
@@ -99,13 +136,17 @@ describe("build-android cert pin", () => {
   });
   test("signAndVerifyApk returns the fingerprint, no password in argv or logs; mismatch fails", () => {
     const pinPath = join(tmp(), "pin");
+    writeFileSync(pinPath, FP);
     const logs = [];
     const calls = [];
+    const envs = [];
     const base = {
       javaExe: "java", apksignerJar: "a.jar", keystorePath: "k", alias: "al", inputApk: "in.apk", outApk: "out.apk", cwd: ".",
       secretEnv: { VS_KS_PASS: SECRET }, pinPath, log: (m) => logs.push(m),
     };
-    const r = signAndVerifyApk({ ...base, exec: (c, a, o) => (calls.push(a), certs(FP)) });
+    const r = signAndVerifyApk({ ...base, exec: (c, a, o) => (calls.push(a), envs.push(o.env), certs(FP)) });
+    assert.equal(envs[0].VS_KS_PASS, SECRET);
+    assert.equal(envs[1].VS_KS_PASS, undefined);
     assert.equal(r.certSha256, FP);
     assert.ok(existsSync(pinPath));
     assert.ok(!JSON.stringify(calls).includes(SECRET) && !logs.join("\n").includes(SECRET));

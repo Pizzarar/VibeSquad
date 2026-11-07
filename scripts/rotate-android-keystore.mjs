@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { lstatSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { ANDROID_KEY_ALIAS, DEFAULT_KEYSTORE_PATH, KS_SECRET } from "../server/build-android.mjs";
 import { readCredential } from "../server/secrets.mjs";
@@ -12,6 +12,17 @@ export function parseKeytoolSha256(text) {
   return m ? m[1].toUpperCase() : null;
 }
 
+/** True if anything (file, dir, dangling symlink) occupies the path. */
+function pathExists(p) {
+  try {
+    lstatSync(p);
+    return true;
+  } catch (err) {
+    if (err.code === "ENOENT") return false;
+    throw err;
+  }
+}
+
 /**
  * Creates the NEW release keystore. The password is read from Credential Manager only (no env
  * fallback, no prompt) and handed to keytool through the child env (`-storepass:env`), never argv.
@@ -22,7 +33,7 @@ export function rotateAndroidKeystore({
   alias = ANDROID_KEY_ALIAS,
   env = process.env,
   exec = execFileSync,
-  exists = existsSync,
+  exists = pathExists,
   mkdir = mkdirSync,
   read = readCredential,
   log = console.log,
@@ -57,8 +68,9 @@ export function rotateAndroidKeystore({
     "-storepass:env", "VS_KS_PASS",
   ], { env: childEnv, encoding: "utf8" });
   const sha256 = parseKeytoolSha256(listing);
+  if (!sha256) throw new Error(`Created ${keystorePath} but could not read its SHA-256 from keytool -list output; verify it manually before use.`);
   log(`Created ${keystorePath} (alias "${alias}", RSA 4096).`);
-  log(`Cert SHA-256: ${sha256 || "(could not parse keytool output)"}`);
+  log(`Cert SHA-256: ${sha256}`);
   log("BACKUP NOW: copy this .jks and ~/.tauri/vibesquad-updater.key to encrypted offline backup (encrypted USB or a password-manager attachment). Losing either strands installed clients.");
   return { keystorePath, alias, sha256 };
 }
