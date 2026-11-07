@@ -2,7 +2,7 @@
 // the Overlord is the hub lead (right). No React here so it is unit-testable under node.
 import { dormantBuddyId, hubPinForSquad, type Pin } from "./pins.ts";
 import { poseFor, type FaceBot, type FaceMode, type FacesModel, type Pose } from "./squadFloorLogic.ts";
-import type { Member, TeamView } from "./teams.ts";
+import { ordOf, type Member, type TeamView } from "./teams.ts";
 
 export type SkyZone = {
   bot: FaceBot;
@@ -25,13 +25,129 @@ const zoneOf = (bot: FaceBot, member: Member | null, dormant = false): SkyZone =
   pose: member && !dormant ? poseFor(member) : null,
 });
 
+/** The hub's closed-but-unarchived lead (newest first), shown read-only with Resume Overlord while no live Overlord exists. */
+export function dormantOverlordMember(view: TeamView | null | undefined, hub: Pin | null): Member | null {
+  if (!view || !hub || hub.lead) return null;
+  const lane = hub.lane.id.toLowerCase();
+  const closed = (view.members ?? []).filter(
+    (m) => m.kind === "lead" && (m.laneId ?? "").toLowerCase() === lane && !m.agent.archivedAt && m.agent.status === "closed",
+  );
+  closed.sort((a, b) => (b.agent.updatedAt ?? "").localeCompare(a.agent.updatedAt ?? ""));
+  return closed[0] ?? null;
+}
+
 /** Left zone = hub Buddy (RiffBot), right zone = hub lead (Overlord). Never the same agent twice. */
 export function skyZonesFor(view: TeamView | null | undefined): SkyZones {
   const hub = hubPinForSquad(view);
   const riffbot = hub?.brainstorm ?? null;
   const overlord = hub?.lead && hub.lead.agent.id !== riffbot?.agent.id ? hub.lead : null;
   const dormant = !!hub && !!riffbot && dormantBuddyId(hub) === riffbot.agent.id;
-  return { hub, riffbot: zoneOf("riffbot", riffbot, dormant), overlord: zoneOf("overlord", overlord) };
+  // A live Overlord wins; otherwise a closed one keeps its history in the zone (member stays null: nobody is on duty).
+  const closedLead = overlord ? null : dormantOverlordMember(view, hub);
+  const overlordZone: SkyZone = closedLead ? { bot: "overlord", member: null, agentId: closedLead.agent.id, dormant: true, pose: null } : zoneOf("overlord", overlord);
+  return { hub, riffbot: zoneOf("riffbot", riffbot, dormant), overlord: overlordZone };
+}
+
+/** The slice of a profile the Overlord spawn needs (src/profiles.ts Profile satisfies it). */
+export type OverlordProfile = {
+  name: string;
+  provider: string;
+  model: string;
+  modeId?: string;
+  thinkingOptionId?: string;
+  featureValues?: Record<string, unknown>;
+  notes?: string;
+};
+export type OverlordSpawnReq = {
+  provider: string;
+  model: string;
+  modeId?: string;
+  thinkingOptionId?: string;
+  featureValues?: Record<string, unknown>;
+  notes?: string;
+  approvalPolicy?: string;
+  sandbox?: string;
+  shareMcp?: boolean;
+  title: string;
+  labels: Record<string, string>;
+  prompt: string;
+  cwd: string;
+};
+export const OVERLORD_PROFILES = ["Lead - Claude", "Lead - Gemini"] as const;
+export const OVERLORD_TITLE = "Overlord";
+
+/** The Lead profile name for the Squad's Overlord: the previous Overlord's own Lead profile, else by provider like HandoffModal (antigravity-cli → Gemini, else Claude). */
+export function overlordProfileName(view: TeamView | null | undefined): string {
+  const prev = dormantOverlordMember(view, hubPinForSquad(view));
+  const p = (prev?.agent.labels as Record<string, string> | undefined)?.profile;
+  if (p === "Lead - Gemini" || p === "Lead - Claude") return p;
+  return prev?.agent.provider?.startsWith("antigravity-cli") ? "Lead - Gemini" : "Lead - Claude";
+}
+
+const spinning = new Map<string, Promise<string>>();
+/** True while a Spin Up / Resume Overlord spawn is running for this Squad. */
+export const overlordStarting = (squadId: string): boolean => spinning.has(squadId.toLowerCase());
+
+/**
+ * Spawn the hub lead (role=lead on the Squad's hub lane) through the same primitive a lead handoff uses.
+ * A live Overlord is returned as is, concurrent calls for one Squad share one spawn, and any closed unarchived
+ * hub lead is retired once the successor spawned, so it cannot resurface as a dormant "(old) Overlord". The sky zone shows the new
+ * agent as soon as it lands in the store.
+ */
+export function spinUpOverlord(
+  view: TeamView,
+  deps: {
+    spawn: (req: OverlordSpawnReq) => Promise<{ id: string }>;
+    /** Retire a closed predecessor (App passes retireAgent). */
+    retire?: (m: Member) => Promise<unknown>;
+    profile: OverlordProfile | undefined;
+    profileName: string;
+    defaults?: { modeId?: string; approvalPolicy?: string; sandbox?: string; shareMcp?: boolean };
+  },
+): Promise<string> {
+  const hub = hubPinForSquad(view);
+  if (!hub) return Promise.reject(new Error("No hub lane for this Squad"));
+  if (hub.lead) return Promise.resolve(hub.lead.agent.id);
+  const key = view.team.id.toLowerCase();
+  const pending = spinning.get(key);
+  if (pending) return pending;
+  const run = doSpinUp(view, hub, deps).finally(() => spinning.delete(key));
+  spinning.set(key, run);
+  return run;
+}
+
+async function doSpinUp(view: TeamView, hub: Pin, deps: Parameters<typeof spinUpOverlord>[1]): Promise<string> {
+  const lane = hub.lane.id;
+  const inHub = (view.members ?? []).filter((m) => (m.laneId ?? "").toLowerCase() === lane.toLowerCase());
+  const cwd = hub.brainstorm?.agent.cwd || inHub.find((m) => m.agent.cwd)?.agent.cwd;
+  if (!cwd) throw new Error("No working directory known for the hub; start RiffBot first");
+  const ord = Math.max(0, ...inHub.filter((m) => m.kind === "lead" || m.kind === "old-lead").map((m) => ordOf(m.agent))) + 1;
+  const p = deps.profile;
+  const gemini = deps.profileName === "Lead - Gemini";
+  const profileName = p?.name ?? deps.profileName;
+  const squad = view.team.id;
+  const labels = { team: squad, lane, lead: lane, role: "lead", profile: profileName, ord: String(ord) };
+  const prompt = `You are the Overlord (hub lead) of the ${view.team.name ?? squad} Squad. Read AGENTS.md and your role pack, then run \`vs log --since-me\` and \`vs who all\` to catch up on every lane.`;
+  const r = await deps.spawn({
+    provider: p?.provider ?? (gemini ? "antigravity-cli" : "claude"),
+    model: p?.model ?? (gemini ? "gemini-4-argon" : "claude-opus-5-5"),
+    modeId: p?.modeId ?? deps.defaults?.modeId,
+    thinkingOptionId: p?.thinkingOptionId,
+    featureValues: p?.featureValues,
+    notes: p?.notes,
+    approvalPolicy: deps.defaults?.approvalPolicy,
+    sandbox: deps.defaults?.sandbox,
+    shareMcp: deps.defaults?.shareMcp,
+    title: OVERLORD_TITLE,
+    labels,
+    prompt,
+    cwd,
+  });
+  // Only after the successor exists: a failed spawn leaves the dormant Overlord (history + Resume) untouched.
+  for (const m of inHub) {
+    if (m.kind === "lead" && !m.agent.archivedAt && m.agent.status === "closed") await deps.retire?.(m)?.catch?.(() => {});
+  }
+  return r.id;
 }
 
 /** Agent ids the sky zones own; the hub page shows the normal focus view for any other agent. */

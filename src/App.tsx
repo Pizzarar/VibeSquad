@@ -5,7 +5,9 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExterna
 import type { PaseoAgent } from "./agentTypes";
 import type { ProviderQuotaView } from "./antigravity";
 import { dismissStaleBuild, dismissUpdateBanner, loadUpdaterStatus, setLanExposureState, setLocalAccess, setServerConfigWarnings, setStaleBuild, triggerUpdateInstall, useLocalReadOnly, useStaleBuild, useStaleBuildDismissed, useConfigWarnings, useExposedIpsStore, useUpdaterStatus } from "./userName";
-import { archiveAgent, detachAgent, getPaseoState, loadArchived, retireAgent, updateAgent, upsertLocalAgent, usePaseo } from "./paseo";
+import { archiveAgent, detachAgent, getPaseoState, loadArchived, retireAgent, spawnTeamAgent, updateAgent, upsertLocalAgent, usePaseo } from "./paseo";
+import { defaultSpawnConfigFor } from "./antigravity";
+import { findProfile, getProfiles } from "./profiles";
 import { DEMO } from "./demoFlag";
 import {
   AGENT_TYPE_LABEL,
@@ -78,7 +80,7 @@ import { AttentionBadge } from "./AttentionList";
 import { SquadQueue } from "./SquadQueue";
 import { SquadFloor } from "./SquadFloor";
 import { SkyZones } from "./SkyZones";
-import { skyZoneIds, skyZonesFor } from "./skyZonesLogic";
+import { overlordProfileName, skyZoneIds, skyZonesFor, spinUpOverlord } from "./skyZonesLogic";
 import { FullToggle, PinGrid, SidebarPins, SquadsHome, setFullView, useFullView, type PinHandler } from "./PinGrid";
 import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import { popAction, urlAgentFor } from "./pinFocusLogic";
@@ -1694,6 +1696,22 @@ export function App() {
     (pin: Pin, profile?: string) => void spinUpPin(pin, profile).catch(() => {}),
     [],
   );
+  // Spin Up / Resume Overlord (sky-CRT): spawn the hub lead with the Squad's Lead profile; the right zone picks it up from the store.
+  const [overlordBusy, setOverlordBusy] = useState(false);
+  const onSpinUpOverlord = useCallback((view: TeamView) => {
+    setOverlordBusy(true);
+    const profileName = overlordProfileName(view);
+    const profile = findProfile(profileName, getProfiles());
+    void spinUpOverlord(view, {
+      spawn: spawnTeamAgent,
+      retire: (m) => retireAgent(m.agent),
+      profile,
+      profileName,
+      defaults: defaultSpawnConfigFor(profile?.provider ?? (profileName === "Lead - Gemini" ? "antigravity-cli" : "claude")),
+    })
+      .catch((e) => alert(`Could not start the Overlord: ${e?.message ?? e}`))
+      .finally(() => setOverlordBusy(false));
+  }, []);
   // The pinned layout (focus view + rail, or the clean grid) is the default page only: FULL, focus mode
   // and the Workspaces screen show the panes as before.
   const pinFocus = usePinFocus();
@@ -1995,7 +2013,7 @@ export function App() {
       {hubFocused ? (
         <div className={`hub-body${hubAgentOpen ? " hub-agent-open" : ""}`} data-testid="hub-body">
           {panesNode}
-          {pinFocusView && !hubAgentOpen && <SkyZones view={pinFocusView} onSuccessor={paneSuccessor} onSpinUp={onSpinUpPin} />}
+          {pinFocusView && !hubAgentOpen && <SkyZones view={pinFocusView} onSuccessor={paneSuccessor} onSpinUp={onSpinUpPin} onSpinUpOverlord={onSpinUpOverlord} overlordBusy={overlordBusy} />}
           {pinFocusView && <SquadQueue view={pinFocusView} variant="strip" />}
           {pinFocusView && <SquadFloor view={pinFocusView} />}
         </div>
