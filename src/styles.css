@@ -4867,6 +4867,78 @@ button.project-file-name:hover { text-decoration: underline; }
 }
 .sq-floor-mark:hover,
 .sq-floor-mark:focus-visible { background: var(--text); color: var(--hot-pink); }
+/* F4b: the wall stats TV. Blips are 3px squares in 2x2 clusters inside the screen glass (floor px; the band is scaled). */
+.sq-floor-tv {
+  position: absolute;
+  display: block;
+  box-sizing: border-box;
+  overflow: hidden;
+  /* The art's glass is ink in both themes: no fill of our own, so the painted glass shows, and every colour below is a bright fixed one. */
+  background: transparent;
+}
+.sq-floor-tv::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(to bottom, transparent 0 1px, rgba(0, 0, 0, 0.22) 1px 2px);
+}
+.sq-floor-tv.is-idle::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 40%;
+  height: 1px;
+  background: #4fd6cf;
+  opacity: 0.25;
+}
+.sq-floor-blip {
+  position: absolute;
+  z-index: 1;
+  width: 3px;
+  height: 3px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  cursor: pointer;
+  background: #4fd6cf;
+}
+.sq-floor-blip.is-needs { background: #ff68a8; }
+.sq-floor-blip.is-pulse { animation: sq-floor-blip-pulse 1s ease-in-out infinite; }
+.sq-floor-blip.is-blink { animation: sq-floor-blip-blink 0.4s steps(2, jump-none) infinite; }
+/* The 3px dot is a tiny hit target at 1x: grow it with an invisible halo, and ring it on hover/focus. */
+.sq-floor-blip::before { content: ""; position: absolute; inset: -1px; }
+.sq-floor-blip:hover,
+.sq-floor-blip:focus-visible { outline: 1px solid #fff; outline-offset: 1px; z-index: 2; }
+.sq-floor-tv-beat {
+  position: absolute;
+  left: 2px;
+  bottom: 1px;
+  width: 24px;
+  height: 2px;
+  background: repeating-linear-gradient(to right, #4fd6cf 0 1px, transparent 1px 3px);
+  opacity: 0.55;
+  animation: sq-floor-beat 1.2s steps(3) infinite;
+}
+.sq-floor-tv.is-reduced .sq-floor-tv-beat { animation: none; }
+.sq-floor-tv-count {
+  position: absolute;
+  right: 2px;
+  bottom: 0;
+  font-family: var(--arcade);
+  font-size: 6px;
+  line-height: 6px;
+  color: #4fd6cf;
+}
+.sq-floor-box-tv { background: #1d2a36; border-color: #4fd6cf; }
+@keyframes sq-floor-blip-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@keyframes sq-floor-blip-blink { 0% { opacity: 1; } 100% { opacity: 0.15; } }
+@keyframes sq-floor-beat { to { background-position: 3px 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .sq-floor-blip.is-pulse, .sq-floor-blip.is-blink, .sq-floor-tv-beat { animation: none; }
+}
 .sq-floor-rider { position: absolute; transform: translate(-50%, -100%); line-height: 0; animation: sq-floor-ride linear forwards; }
 .sq-floor-rider .sq-floor-sprite-fallback { width: 16px; height: 16px; }
 @keyframes sq-floor-ride {
