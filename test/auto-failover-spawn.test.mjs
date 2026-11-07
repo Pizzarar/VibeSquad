@@ -31,7 +31,7 @@ const PROFILES = [
 const CWD = "/projects/VibeSquad/.worktrees/failover-test";
 
 const SPEC = "# Artifact Lane Spec\n\n## Done when\n- the durable spec survives restarts & provider switches\n";
-const TASKS = JSON.stringify({ tasks: [{ id: "t1", title: "write the thing", status: "todo" }] });
+const TASKS = JSON.stringify({ units: [{ id: "t1", goal: "write the thing", status: "todo" }] });
 
 function withEnv(fn) {
   return async () => {

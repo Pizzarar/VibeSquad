@@ -693,29 +693,20 @@ export function laneArtifactBlock(root: string, lane: string): string {
   } catch {
     /* no SPEC.md */
   }
-  try {
-    tasks = fs.readFileSync(path.join(dir, "TASKS.json"), "utf8").trim();
-  } catch {
-    /* no TASKS.json */
-  }
-  if (!spec && !tasks) return "";
   let doneNote = "";
-  if (tasks) {
-    try {
-      const doc = JSON.parse(tasks);
-      if (doc && typeof doc === "object" && Array.isArray(doc.units)) {
-        const open = doc.units.filter((u: { status?: unknown }) => u?.status !== "done");
-        const doneCount = doc.units.length - open.length;
-        if (doneCount > 0) {
-          tasks = JSON.stringify({ ...doc, units: open }, null, 2);
-          doneNote = `
-${doneCount} done units (full list: docs/lanes/${safeLane}/TASKS.json)`;
-        }
-      }
-    } catch {
-      /* malformed TASKS.json: inject raw */
+  const tasksRes = readJsonFileWithBom(path.join(dir, "TASKS.json"), { label: "TASKS.json", fallback: null, recordWarning: false, rewriteBom: false });
+  if (tasksRes.exists) {
+    const doc = tasksRes.ok ? tasksRes.data : null;
+    if (doc && typeof doc === "object" && Array.isArray(doc.units)) {
+      const open = doc.units.filter((u: { status?: unknown }) => String(u?.status ?? "").trim().toLowerCase() !== "done");
+      const doneCount = doc.units.length - open.length;
+      tasks = JSON.stringify({ ...doc, units: open }, null, 2);
+      if (doneCount > 0) doneNote = `\n${doneCount} done units (full list: docs/lanes/${safeLane}/TASKS.json)`;
+    } else {
+      tasks = `TASKS.json unreadable (see docs/lanes/${safeLane}/TASKS.json)`;
     }
   }
+  if (!spec && !tasks) return "";
   const parts = [
     `<!-- vibesquad:lane-artifact:begin lane=${safeLane} -->`,
     `Lane Artifact (docs/lanes/${safeLane}/ — durable source of truth across restarts & provider switches):`,

@@ -33,7 +33,7 @@ export function readLaneTasks(
   teamId: string,
   laneId: string,
   rootDir?: string,
-): { laneId: string; path: string; fullPath: string; exists: boolean; units: LaneUnit[]; updatedAt: string };
+): { laneId: string; path: string; fullPath: string; exists: boolean; units: LaneUnit[]; updatedAt: string; unreadable: boolean };
 
 export function upsertLaneTask(
   teamId: string,
