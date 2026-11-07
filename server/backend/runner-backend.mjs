@@ -34,6 +34,10 @@ const bounded =(p, ms = ROSTER_FETCH_MS) => {
 
 export const isRunnerId =(id) => typeof id === "string" && id.startsWith("rn-");
 
+// Non-enumerable key on a created agent carrying per-await createAgent timing (ms, in order) so the caller's
+// `spawn-timing` metric can print createAgent sub-parts (docs/PLAN_WORKAROUND_FOLLOWUPS.md F1b). Object spread drops it.
+export const SPAWN_TIMING = Symbol("spawn-timing");
+
 const iso = (ms) => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
 
 /**
@@ -365,57 +369,86 @@ export class RunnerBackend {
   async close() {}
 
   async createAgent({ config = {}, initialPrompt, prompt, labels = {}, env = {} } = {}) {
-    await this.rc.requireRunning();
-    // before("agent.create"): the plugin's prompt layering + spawn guard, in-process so every spawn path (UI, MCP, vs CLI) gets it.
-    config = { ...config };
-    if (PROVIDER_ALIASES[config.provider]) config.provider = PROVIDER_ALIASES[config.provider]; // the plugin's antigravity-cli guard keys on the canonical id
-    const host = await this.hookHost();
-    if (host) {
-      const request = {
-        config: { ...config },
-        env: { ...env },
-        prompt: initialPrompt || prompt || undefined,
-        ...(Object.keys(labels).length ? { labels: { ...labels } } : {}),
-      };
-      let hookFailed = false;
-      const out = await host.before("agent.create", { request }).catch((err) => {
-        hookFailed = true;
-        console.warn(`[vibesquad] runner spawn hook failed: ${err}`);
-        return undefined;
-      });
-      const next = out ?? request;
-      config = next.config ?? config;
-      env = next.env ?? env;
-      labels = next.labels ?? labels;
-      // Tell agent.created (another process: the VS server) that this spawn already had its profile enforced here.
-      if (!hookFailed) labels = { ...labels, "vs.spawn-configured": "1" };
+    // Per-await spawn timing (docs/PLAN_WORKAROUND_FOLLOWUPS.md F1b): ms since the previous await, so a slow step
+    // shows up in the caller's `spawn-timing` metric as createAgent sub-parts. Each mark runs in a finally so a
+    // throw mid-spawn keeps the partial timing; it is attached to the returned agent under SPAWN_TIMING (non-
+    // enumerable, so the later {...created} merge drops it) and to a thrown error as err[SPAWN_TIMING].
+    const timing = { last: Date.now(), parts: {} };
+    const mark = (name) => {
+      const now = Date.now();
+      timing.parts[name] = now - timing.last;
+      timing.last = now;
+    };
+    try {
+      try { await this.rc.requireRunning(); } finally { mark("req"); }
+      // before("agent.create"): the plugin's prompt layering + spawn guard, in-process so every spawn path (UI, MCP, vs CLI) gets it.
+      config = { ...config };
+      if (PROVIDER_ALIASES[config.provider]) config.provider = PROVIDER_ALIASES[config.provider]; // the plugin's antigravity-cli guard keys on the canonical id
+      let host;
+      try { host = await this.hookHost(); } finally { mark("hh"); }
+      if (host) {
+        const request = {
+          config: { ...config },
+          env: { ...env },
+          prompt: initialPrompt || prompt || undefined,
+          ...(Object.keys(labels).length ? { labels: { ...labels } } : {}),
+        };
+        let hookFailed = false;
+        let out;
+        try {
+          out = await host.before("agent.create", { request }).catch((err) => {
+            hookFailed = true;
+            console.warn(`[vibesquad] runner spawn hook failed: ${err}`);
+            return undefined;
+          });
+        } finally { mark("hk"); }
+        const next = out ?? request;
+        config = next.config ?? config;
+        env = next.env ?? env;
+        labels = next.labels ?? labels;
+        // Tell agent.created (another process: the VS server) that this spawn already had its profile enforced here.
+        if (!hookFailed) labels = { ...labels, "vs.spawn-configured": "1" };
+      }
+      const meta = { title: config.title, labels: {} };
+      if (config.thinkingOptionId) meta.thinkingOptionId = String(config.thinkingOptionId);
+      if (config.featureValues && typeof config.featureValues === "object") meta.featureValues = config.featureValues;
+      for (const k of FIRST_CLASS) {
+        const v = labels[k] ?? (ENV_FOR[k] ? env[ENV_FOR[k]] : undefined);
+        if (v !== undefined && v !== "") meta[k] = v;
+      }
+      for (const [k, v] of Object.entries(labels)) if (!FIRST_CLASS.includes(k) && v !== undefined) meta.labels[k] = String(v);
+      // Claude permission modes only mean something to claude; for ACP providers modeId is the agent's own ACP mode.
+      if (config.modeId) {
+        if (config.provider === "claude") { if (CLAUDE_PERMISSION_MODES.has(config.modeId)) meta.permissionMode = config.modeId; }
+        else meta.acpMode = config.modeId;
+      }
+      let prefix;
+      try { prefix = host ? "" : await this.buildPrefix(meta.role || "", config.cwd); } finally { mark("pfx"); }
+      const systemPrompt = [prefix, config.systemPrompt].filter(Boolean).join("\n\n") || undefined;
+      let id;
+      try {
+        id = (await this.rc.request("POST", "/agents", {
+          provider: config.provider,
+          model: config.model,
+          cwd: config.cwd,
+          prompt: initialPrompt || prompt || undefined,
+          systemPrompt,
+          meta,
+        })).id;
+      } finally { mark("post"); }
+      let agent;
+      try { agent = (await this.fetchAgent(id)).agent; } finally { mark("get"); }
+      try { await this.refreshLaneWhosHere(agent.labels?.lane); } finally { mark("whos"); }
+      Object.defineProperty(agent, SPAWN_TIMING, { value: timing.parts, enumerable: false, configurable: true });
+      return agent;
+    } catch (err) {
+      try {
+        if (err && (typeof err === "object" || typeof err === "function")) {
+          Object.defineProperty(err, SPAWN_TIMING, { value: timing.parts, enumerable: false, configurable: true });
+        }
+      } catch { /* a frozen/non-extensible error: keep the original throw intact */ }
+      throw err;
     }
-    const meta = { title: config.title, labels: {} };
-    if (config.thinkingOptionId) meta.thinkingOptionId = String(config.thinkingOptionId);
-    if (config.featureValues && typeof config.featureValues === "object") meta.featureValues = config.featureValues;
-    for (const k of FIRST_CLASS) {
-      const v = labels[k] ?? (ENV_FOR[k] ? env[ENV_FOR[k]] : undefined);
-      if (v !== undefined && v !== "") meta[k] = v;
-    }
-    for (const [k, v] of Object.entries(labels)) if (!FIRST_CLASS.includes(k) && v !== undefined) meta.labels[k] = String(v);
-    // Claude permission modes only mean something to claude; for ACP providers modeId is the agent's own ACP mode.
-    if (config.modeId) {
-      if (config.provider === "claude") { if (CLAUDE_PERMISSION_MODES.has(config.modeId)) meta.permissionMode = config.modeId; }
-      else meta.acpMode = config.modeId;
-    }
-    const prefix = host ? "" : await this.buildPrefix(meta.role || "", config.cwd);
-    const systemPrompt = [prefix, config.systemPrompt].filter(Boolean).join("\n\n") || undefined;
-    const { id } = await this.rc.request("POST", "/agents", {
-      provider: config.provider,
-      model: config.model,
-      cwd: config.cwd,
-      prompt: initialPrompt || prompt || undefined,
-      systemPrompt,
-      meta,
-    });
-    const agent = (await this.fetchAgent(id)).agent;
-    await this.refreshLaneWhosHere(agent.labels?.lane);
-    return agent;
   }
 
   /** The lifecycle host for this backend, or null when hooks are off. Built once, lazily (no wakeup watcher). */

@@ -11,6 +11,7 @@ import { briefRootFor, laneWorkingDir } from "./brief-path.mjs";
 import { defangPromptFences } from "./write-guards.mjs";
 import { detachLiveChildrenViaClient, listDaemonAgents } from "./detach-children.mjs";
 import { getBackend, runnerLanes } from "./backend/index.mjs";
+import { SPAWN_TIMING } from "./backend/runner-backend.mjs";
 import { BRIEF_HISTORY_KEEP, BRIEF_SHRINK_FROM, BRIEF_SHRINK_TO, backupBrief, writeBriefFile } from "./brief-write.mjs";
 import { liveInFlightBlock } from "./in-flight.mjs";
 import { refreshWhosHere } from "./whos-here.mjs";
@@ -403,14 +404,14 @@ export function createSpawnTimer(kind) {
     add(step, ms) {
       marks.push([step, ms]);
     },
-    mark(step) {
+    mark(step, sub) {
       const now = Date.now();
-      marks.push([step, now - last]);
+      marks.push(sub ? [step, now - last, sub] : [step, now - last]);
       last = now;
     },
     summary() {
       stopLag();
-      return `${kind}: ${marks.map(([k, v]) => `${k}=${v}ms`).join(" ")} total=${Date.now() - t0}ms loopLagMax=${Math.max(0, lagMax)}ms`;
+      return `${kind}: ${marks.map(([k, v, sub]) => `${k}=${v}ms${sub ? `(${sub})` : ""}`).join(" ")} total=${Date.now() - t0}ms loopLagMax=${Math.max(0, lagMax)}ms`;
     },
     flush({ teamId, laneId, agent }) {
       const text = `spawn-timing ${this.summary()}`;
@@ -420,6 +421,11 @@ export function createSpawnTimer(kind) {
       } catch {}
     },
   };
+}
+
+/** The createAgent sub-parts object (SPAWN_TIMING) rendered as `k=v,k=v`, or undefined when absent. */
+function formatSpawnSubParts(parts) {
+  return parts ? Object.entries(parts).map(([k, v]) => `${k}=${v}`).join(",") : undefined;
 }
 
 const restartedAgents = new Map();
@@ -875,6 +881,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       appendVsLogEntry({ teamId, laneId, agent: agentId, type: "metric", text: `brief-inlined: lane=${laneId} chars=${summary.content.length}` });
     } catch {}
     let created = null;
+    let spawnErrParts = null;
     if (connected && client && typeof backend.createAgent === "function") {
       const spawnStartMs = Date.now();
       try {
@@ -896,6 +903,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
           env: { VS_ROLE: "brainstorm", ...(newLabels.profile ? { VS_PROFILE: newLabels.profile } : {}), ...(hasCallerOverride ? { VS_PROFILE_OVERRIDE: "1" } : {}), VS_LANE: laneId, VS_TEAM: teamId, VS_BRIEF_INLINE: "1" },
         });
       } catch (err) {
+        spawnErrParts = err?.[SPAWN_TIMING] ?? null;
         if (isCreateTimeoutError(err)) {
           const recovered = await recoverTimedOutCreate({
             backend,
@@ -932,11 +940,17 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
             }
           }
         } catch {}
-        if (!created) throw err;
+        if (!created) {
+          // The 252s stall lives on the timeout/throw path: report the partial per-await timing before failing.
+          timer.mark("createAgent", formatSpawnSubParts(spawnErrParts));
+          timer.flush({ teamId, laneId, agent: agentId });
+          throw err;
+        }
       }
     }
 
-    timer.mark("createAgent");
+    const createParts = created?.[SPAWN_TIMING] ?? spawnErrParts;
+    timer.mark("createAgent", formatSpawnSubParts(createParts));
     const spawned = Boolean(created?.id);
     if (!created) {
       created = {

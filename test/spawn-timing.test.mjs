@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createSpawnTimer, performBrainstormRestart, resetBrainstormRestartState } from "../server/brainstorm.mjs";
+import { RunnerBackend, SPAWN_TIMING } from "../server/backend/runner-backend.mjs";
 
 // Mock-Paseo-daemon tests: the runner has a single owner and is never lazily started, so pin every lane to Paseo.
 process.env.VS_DEFAULT_BACKEND = "paseo";
@@ -14,6 +15,50 @@ test("spawn timer lists each marked step and a total", () => {
   t.mark("connect");
   t.mark("createAgent");
   assert.match(t.summary(), /^new-buddy: connect=\d+ms createAgent=\d+ms total=\d+ms loopLagMax=\d+ms$/);
+});
+
+test("spawn timer prints createAgent sub-parts from a marked sub-string", () => {
+  const t = createSpawnTimer("buddy-restart");
+  t.mark("connect");
+  t.mark("createAgent", "req=0,hh=1,hk=120,pfx=3,post=251000,get=4,whos=2");
+  assert.match(t.summary(), /createAgent=\d+ms\(req=0,hh=1,hk=120,pfx=3,post=251000,get=4,whos=2\)/);
+});
+
+test("worst-case createAgent sub-parts (6-digit ms in every part) keep the metric under the 240-char limit", () => {
+  const t = createSpawnTimer("buddy-restart");
+  t.mark("connect");
+  t.mark("fetchAgent");
+  t.mark("prep");
+  t.mark("inFlight");
+  t.mark("createAgent", "req=999999,hh=999999,hk=999999,pfx=999999,post=999999,get=999999,whos=999999");
+  const line = `spawn-timing ${t.summary()}`;
+  assert.ok(line.length <= 240, `metric line is ${line.length} chars (must be <= 240): ${line}`);
+  // Absolute worst case: 6-digit ms for every outer step AND total/loopLagMax, built literally.
+  const worst = "spawn-timing buddy-restart: connect=999999ms fetchAgent=999999ms prep=999999ms inFlight=999999ms createAgent=999999ms(req=999999,hh=999999,hk=999999,pfx=999999,post=999999,get=999999,whos=999999) total=999999ms loopLagMax=999999ms";
+  assert.ok(worst.length <= 240, `worst-case metric length ${worst.length} (must be <= 240)`);
+});
+
+test("a RunnerBackend.createAgent with a slow hook/post shows the parts in the metric line", async () => {
+  const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+  const backend = new RunnerBackend({
+    client: {
+      async requireRunning() {},
+      async request(method, route) {
+        if (method === "POST" && route === "/agents") { await delay(30); return { id: "rn-x" }; }
+        if (method === "GET" && route === "/agents/rn-x") return { id: "rn-x", provider: "claude", cwd: ".", status: "idle", meta: { title: "T" } };
+        throw new Error(`unexpected ${method} ${route}`);
+      },
+    },
+    buildPrefix: async () => "",
+    whosHere: async () => {},
+    lanes: () => new Set(),
+    hooks: { before: async () => { await delay(15); return undefined; } },
+  });
+  const created = await backend.createAgent({ config: { provider: "claude", cwd: "." }, labels: {}, env: {} });
+  const t = createSpawnTimer("buddy-restart");
+  t.mark("connect");
+  t.mark("createAgent", Object.entries(created[SPAWN_TIMING]).map(([k, v]) => `${k}=${v}`).join(","));
+  assert.match(t.summary(), /createAgent=\d+ms\(req=\d+,hh=\d+,hk=\d+,pfx=\d+,post=\d+,get=\d+,whos=\d+\)/);
 });
 
 test("a Buddy restart writes one spawn-timing metric with every step", async () => {
