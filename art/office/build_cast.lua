@@ -8,6 +8,9 @@
 --   needs: chair spun round, looking up at the camera, lap from above, hand up (frame 2 waves 1px)
 --   idle : standing, looking up, short foreshortened legs, dithered floor shadow
 --   ride : idle + lift-music note
+-- Contract v2: 4 variants per role (art/cast/hypno/variants.lua). Sheet cols = variant*6 + pose col,
+-- rows = roles (+ the bubble row). v0 = the approved S1 drawing; the plain pose keys in cast.json = v0.
+-- riffbot/overlord desk roles are dropped (they are CRT faces now).
 -- Run: Aseprite.exe -b --script-param root=<repo> --script art/office/build_cast.lua
 local root = app.params.root
 local hyp = root.."/art/cast/hypno/"
@@ -15,11 +18,13 @@ local L = dofile(hyp.."lib.lua")
 local P = dofile(hyp.."floor.lua")
 local F = dofile(hyp.."front.lua")
 local X = dofile(hyp.."extra.lua")(L, P, F)
+local VAR = dofile(hyp.."variants.lua")
+local NV = 4
 local pal = { dark = Palette{ fromFile = root.."/art/palette/pc98-dark.gpl" },
               light = Palette{ fromFile = root.."/art/palette/pc98-light.gpl" } }
 local CELL = 32
 local ROLES = { "lead", "buddy", "implement", "review" }
-for _, r in ipairs(X.roles) do ROLES[#ROLES+1] = r end
+for _, r in ipairs(X.roles) do if r ~= "riffbot" and r ~= "overlord" then ROLES[#ROLES+1] = r end end
 
 -- per role: shirt, hand, trouser, chair (slots)
 local LOOK = {
@@ -36,6 +41,22 @@ local LOOK = {
   riffbot        = { L.PINK,   L.MARBLE, L.VIOLET, L.VIOLET },
   overlord       = { L.VIOLET, L.MARBLE, L.VIOLET, L.PINK },
 }
+
+-- current variant spec (nil = v0) and its derived maps
+local SV, ROLE_NOW, VNOW
+local function setVariant(role, v)
+  ROLE_NOW, VNOW = role, v
+  SV = v > 0 and VAR.roles[role][v] or nil
+end
+local function headMap() return SV and SV.head end
+local function bodyMap() return SV and VAR.handMap(ROLE_NOW, VNOW, SV.body) end
+local function propMap()
+  if not SV then return nil end
+  local m = VAR.handMap(ROLE_NOW, VNOW, SV.body)
+  for k, v in pairs(SV.prop or {}) do m[k] = v end
+  return m
+end
+local function slot(map, c) return map and map[c] or c end
 
 local tmp = Sprite(CELL, CELL, ColorMode.INDEXED); tmp:setPalette(pal.dark); tmp.transparentColor = 0
 local function canvas() return L.canvas(tmp, tmp.layers[1], tmp.frames[1]) end
@@ -65,6 +86,8 @@ local function rowCount(img, y)
   return n
 end
 local function st(C, part, dx, dy) if part then C.stamp(part[1] + (dx or 0), part[2] + (dy or 0), part[3]) end end
+-- recolour a finished head canvas for the current variant
+local function vHead(img) if SV then VAR.hair(img, SV.hair); VAR.remap(img, SV.head) end end
 -- a filled part with a 1px INK outline drawn outside it
 local function blob(out, fill)
   local C = canvas(); fill(C); C.outline(L.INK); over(out, C.img)
@@ -111,9 +134,14 @@ end
 local function backHead(role)
   local C = canvas()
   st(C, PB.head[role]); st(C, PB.ears[role]); st(C, PB.earsR[role])
-  if role == "buddy" then for _, p in ipairs(P.phonesBack) do st(C, p) end end
   if X.backExtra[role] then for _, p in ipairs(X.backExtra[role]) do st(C, p) end end
-  st(C, PB.prop[role])
+  vHead(C.img)
+  local hb = VAR.anchor(C.img, SV and SV.acc.fdrop)
+  local Q = canvas()
+  if role == "buddy" then for _, p in ipairs(P.phonesBack) do st(Q, p) end end
+  st(Q, PB.prop[role])
+  if SV then VAR.remap(Q.img, propMap()) end
+  over(C.img, Q.img)
   local y0, y1 = bbox(C.img)
   for _=1,3 do
     if rowCount(C.img, y1) <= 9 then
@@ -122,26 +150,50 @@ local function backHead(role)
     end
   end
   if RIM[role] then rim(C, role) end
-  return C.img, y0, y1
+  return C.img, y0, y1, hb
 end
 local function frontHead(role)
   local C = canvas()
   for _, p in ipairs(FB.head[role]) do st(C, p) end
+  vHead(C.img)
   if RIM[role] then rim(C, role) end
   local y0, y1 = bbox(C.img)
-  return C.img, y0, y1
+  return C.img, y0, y1, VAR.anchor(C.img, SV and SV.acc.fdrop)
 end
 -- place a head so its bottom lands on `bottom`, never cropping the top
 local function putHead(out, img, y0, y1, bottom)
   local dy = bottom - y1
   if y0 + dy < 0 then dy = -y0 end
   over(out, img, 0, dy)
+  return dy
+end
+-- the current variant's accessory, anchored on the head bbox hb (cell coords after dy).
+-- view: "front" or "back" (back = pre-flip work pose); part: "head" (top/side) or "neck"
+local function acc(out, hb, dy, view, part)
+  if not SV or not SV.acc then return end
+  local a = VAR.ACC[SV.acc[1]]
+  if (a.kind == "neck") ~= (part == "neck") then return end
+  local map = (view == "back" and a.fb) or a.f
+  local w, h = VAR.size(map)
+  local x0, y0, x1, y1 = hb[1], hb[2] + dy, hb[3], hb[4] + dy
+  local n = (view == "back" and SV.acc.fb) or SV.acc.f or {0, 0}
+  local x, y
+  if a.kind == "top" then
+    x = math.floor((x0 + x1 + 1)/2 - w/2 + 0.5); y = math.max(1, y0 - h + (a.sink or 0))
+  elseif a.kind == "side" then
+    x = hb.sx - w//2; y = hb.sy + dy - h//2
+  else
+    x = math.floor((x0 + x1 + 1)/2 - w/2 + 0.5); y = view == "back" and y1 - 3 or y1
+  end
+  local C = canvas()
+  VAR.drawAcc(L, C, map, x + n[1], math.max(1, y + n[2]), SV.acc)
+  over(out, C.img)
 end
 
 -- ---------- work: seen from above + behind ----------
 local function work(role, f)
   local lk = LOOK[role]
-  local shirt, hand, chair = lk[1], lk[2], lk[4]
+  local shirt, hand, chair = slot(bodyMap(), lk[1]), slot(headMap(), lk[2]), lk[4]
   local out = blank()
   chairBase(out)
   -- seat (wider than the back; only its corners show)
@@ -163,8 +215,12 @@ local function work(role, f)
       C.rect(side == 0 and bx+3 or bx-4, 10 + up, 2, 2, hand)
     end)
   end
-  local hi, y0, y1 = backHead(role)
+  local hi, y0, y1, hb = backHead(role)
+  local hy = 21 - y1
+  if y0 + hy < 0 then hy = -y0 end
+  acc(out, hb, hy, "back", "neck")
   putHead(out, hi, y0, y1, 21)
+  acc(out, hb, hy, "back", "head")
   -- chair back from above: cap on top, padded back below, covers the lower back
   if role == "overlord" then
     blob(out, function(C)
@@ -186,7 +242,7 @@ end
 local function torsoMap(role) return FB.body[role][1], pickRows(FB.body[role][3], {0,1,2,3,4,5,6,9}) end
 local function needs(role, wave)
   local lk = LOOK[role]
-  local trouser, chair = lk[3], lk[4]
+  local trouser, chair = slot(bodyMap(), lk[3]), lk[4]
   local out = blank()
   -- chair back behind the sitter
   if role == "overlord" then
@@ -212,10 +268,12 @@ local function needs(role, wave)
     C.rect(10, 28, 5, 2, L.INK); C.rect(17, 28, 5, 2, L.INK); C.px(11, 28, L.MARBLE); C.px(18, 28, L.MARBLE)
     over(out, C.img) end
   local bx, map = torsoMap(role)
-  local C = canvas(); C.stamp(bx, 17, map); over(out, C.img)
-  local hi, y0, y1 = frontHead(role)
-  putHead(out, hi, y0, y1, 18)
+  local C = canvas(); C.stamp(bx, 17, map); if SV then VAR.remap(C.img, bodyMap()) end; over(out, C.img)
+  local hi, y0, y1, hb = frontHead(role)
+  local dy = putHead(out, hi, y0, y1, 18)
+  acc(out, hb, dy, "front", "neck"); acc(out, hb, dy, "front", "head")
   C = canvas(); for i, p in ipairs(FB.fx[role]) do if i > 1 then st(C, p, 0, -3) end end
+  if SV then VAR.remap(C.img, propMap()) end
   over(out, C.img, wave, 0)
   return out
 end
@@ -231,7 +289,7 @@ local NOTE = [[
 ]]
 local function stand(role, ride)
   local lk = LOOK[role]
-  local trouser = lk[3]
+  local trouser = slot(bodyMap(), lk[3])
   local out = blank()
   shadow(out, 16, 29.5, 10, 2.5)
   blob(out, function(C) C.rect(11, 24, 4, 3, trouser); C.rect(17, 24, 4, 3, trouser) end)
@@ -239,9 +297,10 @@ local function stand(role, ride)
     C.rect(10, 28, 5, 2, L.INK); C.rect(17, 28, 5, 2, L.INK); C.px(11, 28, L.MARBLE); C.px(18, 28, L.MARBLE)
     over(out, C.img) end
   local bx, map = torsoMap(role)
-  local C = canvas(); C.stamp(bx, 17, map); over(out, C.img)
-  local hi, y0, y1 = frontHead(role)
-  putHead(out, hi, y0, y1, 18)
+  local C = canvas(); C.stamp(bx, 17, map); if SV then VAR.remap(C.img, bodyMap()) end; over(out, C.img)
+  local hi, y0, y1, hb = frontHead(role)
+  local dy = putHead(out, hi, y0, y1, 18)
+  acc(out, hb, dy, "front", "neck"); acc(out, hb, dy, "front", "head")
   if ride then C = canvas(); C.stamp(26, 2, NOTE); over(out, C.img) end
   return out
 end
@@ -264,14 +323,20 @@ local BUBBLE = [[
 ]]
 local BW, BH = 13, 13
 
-local SW, SH = CELL*6, CELL*(#ROLES + 1)
+local SW, SH = CELL*6*NV, CELL*(#ROLES + 1)
 local sheet = Image(SW, SH, ColorMode.INDEXED); sheet:clear(0)
 local cells = {}
 for r, role in ipairs(ROLES) do
   local y = (r-1)*CELL
-  local frames = { work(role, 0), work(role, 1), needs(role, 0), needs(role, 1), stand(role, false), stand(role, true) }
-  for c, img in ipairs(frames) do sheet:drawImage(img, Point((c-1)*CELL, y)) end
-  cells[role] = { work = {{0,y},{CELL,y}}, needs = {{CELL*2,y},{CELL*3,y}}, idle = {{CELL*4,y}}, ride = {{CELL*5,y}} }
+  cells[role] = {}
+  for v=0,NV-1 do
+    setVariant(role, v)
+    local x = v*6*CELL
+    local frames = { work(role, 0), work(role, 1), needs(role, 0), needs(role, 1), stand(role, false), stand(role, true) }
+    for c, img in ipairs(frames) do sheet:drawImage(img, Point(x + (c-1)*CELL, y)) end
+    cells[role][v+1] = { work = {{x,y},{x+CELL,y}}, needs = {{x+CELL*2,y},{x+CELL*3,y}}, idle = {{x+CELL*4,y}}, ride = {{x+CELL*5,y}} }
+  end
+  setVariant(role, 0)
 end
 local BX, BY = 0, CELL*#ROLES
 do
@@ -294,12 +359,15 @@ tmp:close()
 
 local function xy(t) local s = {} for _, p in ipairs(t) do s[#s+1] = '{"x":'..p[1]..',"y":'..p[2]..'}' end return "["..table.concat(s, ",").."]" end
 local parts = {}
+local function poses(c) return '"work":'..xy(c.work)..',"needs":'..xy(c.needs)..',"idle":'..xy(c.idle)..',"ride":'..xy(c.ride) end
 for _, role in ipairs(ROLES) do
-  local c = cells[role]
-  parts[#parts+1] = '    "'..role..'":{"work":'..xy(c.work)..',"needs":'..xy(c.needs)..',"idle":'..xy(c.idle)..',"ride":'..xy(c.ride)..'}'
+  local vs = {}
+  -- each variant also carries x,y (= its work[0] cell) so v1 readers that treat "variants" as a pose still validate
+  for _, c in ipairs(cells[role]) do vs[#vs+1] = '\n      {"x":'..c.work[1][1]..',"y":'..c.work[1][2]..','..poses(c)..'}' end
+  parts[#parts+1] = '    "'..role..'":{"variants":['..table.concat(vs, ",")..'\n     ],\n     '..poses(cells[role][1])..'}'
 end
 -- bubble offset = bubble top-left relative to the sprite anchor (cell bottom-centre)
-local json = '{\n  "version":1,\n  "cell":32,\n  "anchor":"bottom-centre",\n  "roles":{\n'..table.concat(parts, ",\n")..
+local json = '{\n  "version":2,\n  "cell":32,\n  "anchor":"bottom-centre",\n  "roles":{\n'..table.concat(parts, ",\n")..
   '\n  },\n  "bubble":{"x":'..BX..',"y":'..BY..',"w":'..BW..',"h":'..BH..',"offset":{"x":-18,"y":-40}},\n'..
   '  "fallback":{}\n}\n'
 local f = io.open(root.."/public/office/cast.json", "wb"); f:write(json); f:close()
