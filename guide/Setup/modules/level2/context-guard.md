@@ -39,7 +39,7 @@ the person the planned settings change before you make it:
 3. **Turn the hook on.** Without this it does nothing:
    - Level 1 (plain Claude Code): set `GUARD_ALWAYS=1` in the user environment or in the `env` section of
      `settings.json`.
-   - Level 2 (VibeSquad): set `GUARD_ALWAYS=1` here too. The name match (`GUARD_NAME`, Lead titles start with ★ or contain `LEAD`) looks the agent up with `paseo inspect`, and the built-in runner has no Paseo CLI, so without `GUARD_ALWAYS=1` the hook stays quiet (`Setup/templates/hooks/context_guard.py:62-64`). It then warns every session that has the hook, workers included.
+   - Level 2 (VibeSquad): nothing to set. The runner gives every agent a `VS_ROLE` (`runner/runner.mjs:27-28`) and the hook warns roles listed in `GUARD_ROLES` (default `lead`; use `lead,brainstorm` to include Buddies). No Paseo CLI is needed. This hook is optional here: the VibeSquad server has its own token watcher for leads and Buddies (`server/token-watch.mjs:1`).
 4. Thresholds can be changed with `GUARD_SOFT` and `GUARD_HARD` (defaults 100k and 150k tokens: plan the handoff, then hand off now). The README explains
    why those numbers.
 

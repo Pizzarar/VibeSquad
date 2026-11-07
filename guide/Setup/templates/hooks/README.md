@@ -22,11 +22,12 @@ Treat 100k/150k as a starting point and tune them with `GUARD_SOFT` / `GUARD_HAR
 | `GUARD_SOFT` | `100000` | Soft mark, in tokens |
 | `GUARD_HARD` | `150000` | Hard mark, in tokens |
 | `GUARD_ALWAYS` | unset | `1` = warn every session that has the hook (use this at Level 1) |
-| `GUARD_NAME` | `^(?!\(old\))(?:★\|.*LEAD)` | *(Level 2)* Regex (`re.search`) the agent name must match to be warned. The name lookup needs a Paseo CLI on PATH (`PASEO_CLI`); VibeSquad's built-in runner does not ship one, so without it a Level 2 session is never matched. Use `GUARD_ALWAYS=1` instead. The default skips names starting with `(old)` |
-| `PASEO_AGENT_ID` | set by the runner (also as `VS_AGENT_ID`) | *(Level 2)* When present, the hook looks up the agent's name with `paseo inspect` (needs the Paseo CLI). Only letters, digits, `_` and `-` are accepted |
+| `GUARD_ROLES` | `lead` | *(Level 2)* Comma list of `VS_ROLE` values to warn. The runner sets `VS_ROLE` on every agent it starts (`runner/runner.mjs:27-28`). A Buddy's role is `brainstorm`, so use `lead,brainstorm` to warn Buddies too. A retired agent's role label becomes `former-...` (`server/identity.mjs:70`), so it stops matching |
 
-Without `GUARD_ALWAYS=1` and without `PASEO_AGENT_ID`, the hook does nothing. It never prints errors
-and never blocks: if anything goes wrong it exits quietly.
+Without `GUARD_ALWAYS=1` and without a matching `VS_ROLE`, the hook does nothing. It never prints errors
+and never blocks: if anything goes wrong it exits quietly. No Paseo CLI is needed.
+
+VibeSquad's server also watches lead and Buddy context on its own (`server/token-watch.mjs:1`, started at `server/serve.mjs:598`), so at Level 2 this hook is optional.
 
 ## Install
 
@@ -44,7 +45,7 @@ and never blocks: if anything goes wrong it exits quietly.
      `py -I -m json.tool <path to settings.json>` (it should print the file, not an error). In PowerShell
      write the path as `"$env:USERPROFILE\.claude\settings.json"`, because `~` is not expanded for every program.
 3. Level 1: set `GUARD_ALWAYS=1` in your user environment (or in the `env` section of `settings.json`).
-   Level 2: nothing to set; VibeSquad's Lead titles start with ★, so nothing to set (a name with the word `LEAD` also works).
+   Level 2: nothing to set; Leads are matched by their `VS_ROLE` (add Buddies with `GUARD_ROLES=lead,brainstorm`).
 4. Run the test below, then restart Claude Code so it picks up the hook.
 
 ## Test it (low thresholds)
@@ -60,7 +61,7 @@ New-Item -ItemType Directory -Force guard-test | Out-Null; Set-Location guard-te
 Set-Content -Encoding ascii t.jsonl '{"message":{"usage":{"input_tokens":2000,"cache_read_input_tokens":500,"cache_creation_input_tokens":0}}}'
 Set-Content -Encoding ascii hook.json '{"transcript_path":"t.jsonl","session_id":"test1"}'
 
-Remove-Item Env:PASEO_AGENT_ID -ErrorAction SilentlyContinue   # else the state file is keyed by it and repeat runs print nothing
+Remove-Item Env:VS_AGENT_ID -ErrorAction SilentlyContinue   # else the state file is keyed by it and repeat runs print nothing
 $env:GUARD_ALWAYS = '1'; $env:GUARD_SOFT = '1000'; $env:GUARD_HARD = '3000'
 Get-Content hook.json | py -I $guard   # 2500 >= soft: prints the soft warning
 Get-Content hook.json | py -I $guard   # same session again: prints nothing
@@ -78,7 +79,7 @@ mkdir guard-test && cd guard-test
 echo '{"message":{"usage":{"input_tokens":2000,"cache_read_input_tokens":500,"cache_creation_input_tokens":0}}}' > t.jsonl
 echo '{"transcript_path":"t.jsonl","session_id":"test1"}' > hook.json
 
-unset PASEO_AGENT_ID   # else the state file is keyed by it and repeat runs print nothing
+unset VS_AGENT_ID   # else the state file is keyed by it and repeat runs print nothing
 export GUARD_ALWAYS=1 GUARD_SOFT=1000 GUARD_HARD=3000
 python -I context_guard.py < hook.json   # 2500 >= soft: prints the soft warning
 python -I context_guard.py < hook.json   # same session again: prints nothing (soft is once only)
