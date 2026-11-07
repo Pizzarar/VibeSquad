@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
   buildCatalog, clearProbeCache, clearUsageCache, getModels, getProviders, getUsage, handleProvidersApi, intervalMs, LOOP_TURN_THRESHOLD,
-  loadRunnerSettings, normalizeRunnerSettings, probeProviders, probeStats, readUsageReviews, runUsageReview, saveRunnerSettings, usageStats,
+  loadRunnerSettings, normalizeRunnerSettings, oneShotReviewRun, probeProviders, probeStats, readUsageReviews, runUsageReview, saveRunnerSettings, usageStats,
 } from '../server/providers-catalog.mjs';
 import { saveUserSettings, loadUserSettings, saveRemoteAccess } from '../server/user-settings.mjs';
 
@@ -856,4 +857,82 @@ test('usage review: non-owner POST to /usage-review is rejected like other owner
     if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
     else process.env.VIBESQUAD_HOME = prevHome;
   }
+});
+
+// A spawnImpl that returns a child whose stdout/stderr/exit are driven by `emit(child)` on the next tick.
+const reviewSpawn = (emit) => (file, args, opts) => {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.pid = 4242;
+  child.exitCode = null;
+  process.nextTick(() => emit(child));
+  return child;
+};
+
+test('usage review: oneShotReviewRun resolves ok:false with stderr tail on a nonzero exit', async () => {
+  const res = await oneShotReviewRun('claude', ['-p'])({
+    prompt: 'hi',
+    spawnImpl: reviewSpawn((c) => { c.stderr.emit('data', 'boom: quota exceeded'); c.emit('exit', 1); }),
+  });
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'boom: quota exceeded');
+});
+
+test('usage review: oneShotReviewRun resolves text on exit 0', async () => {
+  const res = await oneShotReviewRun('agy', ['-p'])({
+    prompt: 'hi',
+    spawnImpl: reviewSpawn((c) => { c.stdout.emit('data', 'route via gemini'); c.emit('exit', 0); }),
+  });
+  assert.equal(res.ok, true);
+  assert.equal(res.text, 'route via gemini');
+});
+
+test('usage review: oneShotReviewRun nonzero exit with no stderr -> "exit <code>"', async () => {
+  const res = await oneShotReviewRun('agy', ['-p'])({ prompt: 'hi', spawnImpl: reviewSpawn((c) => c.emit('exit', 2)) });
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'exit 2');
+});
+
+test('usage review: POST runNow only accepts exactly true', async () => {
+  const home = tmp();
+  const call = async (method, url, body, opts = {}) => {
+    let out;
+    await handleProvidersApi({ method, url }, {}, { home, ...probeOpts, ...opts, readBody: async () => body, sendJson: (_r, code, data) => { out = { code, data }; } });
+    return out;
+  };
+  let calls = 0;
+  const runOpus = async () => { calls++; return { ok: true, text: 'o', ms: 1 }; };
+  const runGemini = async () => ({ ok: true, text: 'g', ms: 1 });
+  const res = await call('POST', '/__vibesquad/providers/usage-review', { runNow: 'yes' }, { usageReview: { runOpus, runGemini, now: () => Date.UTC(2026, 10, 9, 12) } });
+  assert.equal(res.code, 200);
+  assert.equal(res.data.usageReview.inFlight, false);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(calls, 0, 'runNow:"yes" is not true: no review started');
+  assert.deepEqual(readUsageReviews(home), []);
+});
+
+test('usage review: manual Run-now is recorded as "manual" even when a scheduled run is also due', async () => {
+  const home = tmp();
+  const dir = path.join(home, 'runner', 'agents');
+  fs.mkdirSync(dir, { recursive: true });
+  const d = Date.UTC(2026, 10, 10, 12);
+  fs.writeFileSync(path.join(dir, 'rn-a.jsonl'),
+    ev({ seq: 0, ts: d, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'x', role: 'worker' } }) +
+    ev({ seq: 1, ts: d, type: 'turn_done', costUsd: 1 }));
+  clearUsageCache();
+  const call = async (method, url, body, opts = {}) => {
+    let out;
+    await handleProvidersApi({ method, url }, {}, { home, ...probeOpts, ...opts, readBody: async () => body, sendJson: (_r, code, data) => { out = { code, data }; } });
+    return out;
+  };
+  const runOpus = async () => ({ ok: true, text: 'o', ms: 1 });
+  const runGemini = async () => ({ ok: true, text: 'g', ms: 1 });
+  const res = await call('POST', '/__vibesquad/providers/usage-review', { runNow: true }, { usageReview: { runOpus, runGemini, now: () => d } });
+  assert.equal(res.code, 200);
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setImmediate(r));
+  const recs = readUsageReviews(home);
+  assert.equal(recs.length, 1, 'exactly one review, not a scheduled one plus a manual one');
+  assert.equal(recs[0].trigger, 'manual');
 });

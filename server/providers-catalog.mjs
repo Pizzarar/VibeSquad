@@ -752,7 +752,7 @@ function buildUsageReviewPrompt(usage) {
 }
 
 /** One-shot CLI run: prompt as the trailing arg (as runAgyUsage does), stdin not used, stdout captured, 60s killTree timeout. */
-function oneShotReviewRun(cmd, args) {
+export function oneShotReviewRun(cmd, args) {
   return ({ prompt, spawnImpl, timeoutMs = 60_000 }) =>
     new Promise((resolve) => {
       if (!spawnImpl && underTestRunner()) return resolve({ ok: false, error: `refusing to spawn the real ${cmd} under a test runner`, ms: 0 });
@@ -764,14 +764,15 @@ function oneShotReviewRun(cmd, args) {
         return resolve({ ok: false, error: String(e?.message ?? e), ms: Date.now() - started });
       }
       let out = "";
+      let err = "";
       let done = false;
       const finish = (r) => { if (done) return; done = true; clearTimeout(timer); resolve({ ...r, ms: Date.now() - started }); };
       const timer = setTimeout(() => { killTree(child); finish({ ok: false, error: `timed out after ${timeoutMs}ms` }); }, timeoutMs);
       timer.unref?.();
       child.stdout?.on("data", (d) => { out += d; });
-      child.stderr?.on("data", () => {}); // drain: an unread stderr pipe can stall the child
+      child.stderr?.on("data", (d) => { err = (err + d).slice(-2000); }); // bounded tail: an unread stderr pipe can stall the child
       child.on("error", (e) => finish({ ok: false, error: String(e?.message ?? e) }));
-      child.on("exit", () => finish({ ok: true, text: out.trim() }));
+      child.on("exit", (code) => finish(code === 0 ? { ok: true, text: out.trim() } : { ok: false, error: err || `exit ${code}` }));
     });
 }
 const defaultRunOpus = oneShotReviewRun("claude", ["-p", "--model", "claude-opus-5-5"]);
@@ -848,6 +849,7 @@ function usageReviewState(home, usage, { now = Date.now } = {}) {
 /** Fire-and-forget scheduled check called from getUsage(); never throws into getUsage(). */
 function maybeScheduleUsageReview(usage, home, opts = {}) {
   try {
+    if (opts.suppressSchedule) return;
     const interval = loadRunnerSettings(home).usageReview.interval;
     if (interval === "off") return;
     const ms = intervalMs(interval);
@@ -1092,8 +1094,9 @@ export async function handleProvidersApi(req, res, { sendJson, readBody, home, u
         }
         if (body?.interval !== undefined) saveRunnerSettings({ usageReview: { interval: body.interval } }, home);
         let usage;
-        if (body?.runNow && !usageReviewInFlight) {
-          usage = getUsage({ home, git: probeOpts.git, usageReview });
+        if (body?.runNow === true && !usageReviewInFlight) {
+          // Compute the usage snapshot with the scheduled check suppressed, so a manual Run-now is always recorded as manual.
+          usage = getUsage({ home, git: probeOpts.git, usageReview: { ...usageReview, suppressSchedule: true } });
           runUsageReview({ home, trigger: "manual", usage, runOpus: usageReview?.runOpus, runGemini: usageReview?.runGemini, now: usageReview?.now }).catch(() => {});
         }
         return sendJson(res, 200, { ok: true, usageReview: usageReviewState(home, usage, usageReview ?? {}) });
