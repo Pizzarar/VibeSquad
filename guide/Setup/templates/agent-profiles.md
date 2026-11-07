@@ -1,6 +1,6 @@
 # Starter agent profiles (Level 2)
 
-Role notes to paste into the "notes" / instructions box of each agent profile (in Paseo or any tool
+Role notes to paste into the "notes" / instructions box of each agent profile (in VibeSquad's **AGENT PROFILES** or any tool
 that lets you save a named agent setup). *(Level 2: with a single Claude Code session you do not need
 profiles; just tell the session which role to play.)*
 
