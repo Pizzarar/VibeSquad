@@ -43,3 +43,17 @@ test("PinMenu portals the list to body, treats it as inside for outside-click, c
   assert.match(rule, /position: fixed/);
   assert.doesNotMatch(rule, /position: absolute/);
 });
+
+test("PinMenu Esc is consumed in the capture phase (before the focus bar's bubble listener) and the list re-places on resize", () => {
+  const src = fs.readFileSync(resolve(ROOT, "src/PinMenu.tsx"), "utf8");
+  assert.match(src, /addEventListener\("keydown", esc, true\)/);
+  assert.match(src, /removeEventListener\("keydown", esc, true\)/);
+  const esc = src.match(/const esc = \(e: KeyboardEvent\) => \{[\s\S]*?\n    \};/)[0];
+  assert.match(esc, /renaming/);
+  assert.match(esc, /preventDefault\(\)/);
+  assert.match(esc, /stopPropagation\(\)/);
+  const rail = fs.readFileSync(resolve(ROOT, "src/PinRail.tsx"), "utf8");
+  assert.match(rail, /window\.addEventListener\("keydown", onKey\)/, "focus bar Esc stays a bubble-phase window listener");
+  assert.match(src, /new ResizeObserver\(/);
+  assert.match(src, /ro\.disconnect\(\)/);
+});

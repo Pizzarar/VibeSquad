@@ -41,15 +41,26 @@ export function PinMenu({ pin, onShowPlumbing, onEditBrief }: Props) {
   // The list is portaled to <body> (the rail's overflow:hidden clipped it); place it from the ⋯ button, re-place after content changes (rename form).
   useLayoutEffect(() => {
     if (!open || !btn.current || !list.current) return;
-    const a = btn.current.getBoundingClientRect();
-    const l = list.current.getBoundingClientRect();
-    setPos(
-      placePinMenu(
+    const el = list.current;
+    const place = () => {
+      if (!btn.current) return;
+      const a = btn.current.getBoundingClientRect();
+      const l = el.getBoundingClientRect();
+      const next = placePinMenu(
         a,
         { w: l.width, h: l.height },
         { w: window.innerWidth, h: window.innerHeight },
-      ),
-    );
+      );
+      setPos((cur) =>
+        cur && cur.top === next.top && cur.left === next.left ? cur : next,
+      );
+    };
+    place();
+    // The list can change size while open (rename form, Mark complete idle -> armed/blocked).
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(place);
+    ro.observe(el);
+    return () => ro.disconnect();
   }, [open, renaming]);
 
   useEffect(() => {
@@ -72,18 +83,25 @@ export function PinMenu({ pin, onShowPlumbing, onEditBrief }: Props) {
         return; // scrolling inside the list itself
       close();
     };
-    const esc = (e: KeyboardEvent) => e.key === "Escape" && close();
+    // Capture phase: the focus bar's Esc (PinRail.tsx) is a bubble-phase window listener that sends you home; an open menu eats the Esc first.
+    // While renaming, the input's own Esc handler cancels the rename and stops the event, so leave it alone here.
+    const esc = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || renaming) return;
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+    };
     window.addEventListener("mousedown", away);
-    window.addEventListener("keydown", esc);
+    window.addEventListener("keydown", esc, true);
     window.addEventListener("resize", away2);
     window.addEventListener("scroll", away2, true);
     return () => {
       window.removeEventListener("resize", away2);
       window.removeEventListener("scroll", away2, true);
       window.removeEventListener("mousedown", away);
-      window.removeEventListener("keydown", esc);
+      window.removeEventListener("keydown", esc, true);
     };
-  }, [open]);
+  }, [open, renaming]);
 
   const close = () => {
     setOpen(false);
