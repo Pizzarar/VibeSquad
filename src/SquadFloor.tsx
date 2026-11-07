@@ -346,7 +346,15 @@ export function SquadFloor({ view, onOpenRiffBot }: SquadFloorProps) {
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  const scale = integerScale(panelWidth);
+  // Device-pixel integer scale: re-measure on zoom / monitor change (both fire `resize`).
+  const [dpr, setDpr] = useState(() => (typeof window === "undefined" ? 1 : window.devicePixelRatio || 1));
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onResize = () => setDpr(window.devicePixelRatio || 1);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const scale = integerScale(panelWidth, dpr);
 
   // Work/needs frames play at POSE_FPS; reduced motion freezes on frame 0.
   const [tick, setTick] = useState(0);

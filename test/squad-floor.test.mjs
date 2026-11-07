@@ -258,3 +258,19 @@ test("P3b floor.json `front` flags: floor and penthouse, absent → undefined", 
   assert.equal(validateFloor({ ...base, penthouse: pent }).value.penthouse.front, undefined);
   assert.equal(validateFloor({ ...base, penthouse: { ...pent, front: true } }).value.penthouse.front, true);
 });
+
+test("P3f 4K: scale is floor(w*dpr/640)/dpr, so the floor fills the column at the largest crisp device scale", () => {
+  assert.equal(integerScale(1355, 2), 2); // 4x device px
+  assert.equal(integerScale(1275, 2), 1.5); // was 1 (half the column empty)
+  assert.equal(integerScale(1995, 1.5), 8 / 3); // 4x device px; was a blurry 3 css (4.5 device)
+  assert.equal(integerScale(3275, 1), 5);
+  assert.equal(integerScale(1000, 2), 1.5);
+  assert.equal(integerScale(639, 2), 0);
+  assert.equal(integerScale(700, 0.5), 1); // bogus dpr below 1 is treated as 1
+  // device-pixel integer: scale*dpr is a whole number
+  for (const dpr of [1, 1.25, 1.5, 2, 3]) {
+    const sc = integerScale(2300, dpr);
+    assert.ok(Math.abs(sc * dpr - Math.round(sc * dpr)) < 1e-9);
+    assert.ok(sc * 640 <= 2300);
+  }
+});

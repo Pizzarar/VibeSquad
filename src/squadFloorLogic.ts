@@ -376,10 +376,16 @@ export function needsYouFloors(floors: readonly Floor[]): number[] {
 
 // ── 8. Integer render scale ───────────────────────────────────────────────────
 
-/** Largest integer scale for the 640-wide native floor that fits `panelWidth` (min 1); 0 when narrower than 1x. */
-export function integerScale(panelWidth: number): number {
+/**
+ * The CSS-px scale for the 640-wide native floor: the largest whole *device*-pixel multiple that fits `panelWidth`,
+ * `floor(panelWidth * dpr / 640) / dpr` (crisp at any devicePixelRatio, and it fills the column at 4K where whole
+ * CSS-px steps leave up to half the width empty). 0 when that is under 1 CSS px (narrower than the native floor).
+ */
+export function integerScale(panelWidth: number, dpr = 1): number {
+  const ratio = Number.isFinite(dpr) && dpr >= 1 ? dpr : 1;
   if (!Number.isFinite(panelWidth) || panelWidth < FLOOR_NATIVE_WIDTH) return 0;
-  return Math.floor(panelWidth / FLOOR_NATIVE_WIDTH);
+  const scale = Math.floor((panelWidth * ratio) / FLOOR_NATIVE_WIDTH) / ratio;
+  return scale >= 1 ? scale : 0;
 }
 
 /** Band draw order (3/4 top-down, docs/PLAN_NEON_OFFICE.md "Camera"): plate, y-sorted sprites, front overlay (only when floor.json says so), bubbles. */
