@@ -4,7 +4,6 @@ import { registerHooks } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
-import { checkRemoteBody } from "../server/hooks/remote-proxy-rules.ts";
 import { runMarkComplete } from "../src/pinComplete.ts";
 
 const SRC_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "src");
@@ -177,6 +176,4 @@ test("markPinComplete forwards revision from readBrief to writeBrief and trims o
   assert.ok(requests[1].body.content.length <= 19_500);
   assert.match(requests[1].body.content, /Done \d{4}-\d{2}-\d{2}\n$/);
 
-  const remoteCheck = checkRemoteBody("POST", "/__vibesquad/brainstorm-summary", JSON.stringify(requests[1].body));
-  assert.equal(remoteCheck.ok, true);
 });

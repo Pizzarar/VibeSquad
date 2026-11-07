@@ -67,7 +67,7 @@ test("quick start spawns one Brainstorm from the brief, labelled for lane integr
       laneId: "pin-test",
       laneName: "Pin Test",
       profile: "Brainstorm - Claude",
-      daemonClient: daemon,
+      agentClient: daemon,
       profilesPath: env.profilesPath,
     };
     const [a, b] = await Promise.all([performBrainstormRestart(body, env.dir), performBrainstormRestart(body, env.dir)]);
@@ -105,7 +105,7 @@ test("quick start opens a live Brainstorm instead of spawning", async () => {
   try {
     const daemon = mockDaemon([{ id: "live-bs", status: "idle", labels: { team: "sq", lane: "pin-test", role: "brainstorm" } }]);
     const res = await performBrainstormRestart(
-      { reason: "start-brainstorm", mode: "quick-start", teamId: "sq", laneId: "pin-test", daemonClient: daemon, profilesPath: env.profilesPath },
+      { reason: "start-brainstorm", mode: "quick-start", teamId: "sq", laneId: "pin-test", agentClient: daemon, profilesPath: env.profilesPath },
       env.dir,
     );
     assert.equal(res.reused, true);
@@ -155,7 +155,7 @@ test("new pin first click: spawns a live Buddy carrying the brief, with the agen
   withEnv(async (env) => {
     const daemon = mockDaemon([]);
     const res = await performBrainstormRestart(
-      { reason: "start-brainstorm", mode: "quick-start", teamId: "sq", laneId: "pin-test", daemonClient: daemon, profilesPath: env.profilesPath },
+      { reason: "start-brainstorm", mode: "quick-start", teamId: "sq", laneId: "pin-test", agentClient: daemon, profilesPath: env.profilesPath },
       env.dir,
     );
     assert.equal(res.ok, true);
@@ -170,7 +170,7 @@ test("closed match: reopened and returned as an idle agent so the UI can show it
     const refreshed = [];
     daemon.refreshAgent = async (id) => void refreshed.push(id);
     const res = await performBrainstormRestart(
-      { reason: "start-brainstorm", teamId: "sq", laneId: "pin-test", daemonClient: daemon, profilesPath: env.profilesPath },
+      { reason: "start-brainstorm", teamId: "sq", laneId: "pin-test", agentClient: daemon, profilesPath: env.profilesPath },
       env.dir,
     );
     assert.equal(res.reopened, true);
@@ -187,7 +187,7 @@ test("closed match that will not reopen is replaced by a fresh spawn, not silent
       throw new Error("session gone");
     };
     const res = await performBrainstormRestart(
-      { reason: "start-brainstorm", teamId: "sq", laneId: "pin-test", daemonClient: daemon, profilesPath: env.profilesPath, backstopDelayMs: 0 },
+      { reason: "start-brainstorm", teamId: "sq", laneId: "pin-test", agentClient: daemon, profilesPath: env.profilesPath, backstopDelayMs: 0 },
       env.dir,
     );
     assert.equal(res.ok, true);
@@ -201,7 +201,7 @@ test("closed match whose refresh returns it still closed is replaced, not reused
     const daemon = mockDaemon([{ id: "bs-closed", status: "closed", labels: { team: "sq", lane: "pin-test", role: "brainstorm" } }]);
     daemon.refreshAgent = async (id) => ({ id, status: "closed" });
     const res = await performBrainstormRestart(
-      { reason: "start-brainstorm", teamId: "sq", laneId: "pin-test", daemonClient: daemon, profilesPath: env.profilesPath, backstopDelayMs: 0 },
+      { reason: "start-brainstorm", teamId: "sq", laneId: "pin-test", agentClient: daemon, profilesPath: env.profilesPath, backstopDelayMs: 0 },
       env.dir,
     );
     assert.notEqual(res.reused, true);
@@ -212,7 +212,7 @@ test("closed match on a backend that cannot reopen is replaced, not reused", () 
   withEnv(async (env) => {
     const daemon = mockDaemon([{ id: "bs-closed", status: "closed", labels: { team: "sq", lane: "pin-test", role: "brainstorm" } }]);
     const res = await performBrainstormRestart(
-      { reason: "start-brainstorm", teamId: "sq", laneId: "pin-test", daemonClient: daemon, profilesPath: env.profilesPath, backstopDelayMs: 0 },
+      { reason: "start-brainstorm", teamId: "sq", laneId: "pin-test", agentClient: daemon, profilesPath: env.profilesPath, backstopDelayMs: 0 },
       env.dir,
     );
     assert.notEqual(res.reused, true);
@@ -224,7 +224,7 @@ test("a fresh lane (brief names no plan) boots with '(none yet)' even if docs/ h
     writeFileSync(join(env.dir, "docs", "brainstorm", "fresh.md"), "# Brief\n\n## Open\n- nothing yet\n", "utf8");
     const daemon = mockDaemon([]);
     await performBrainstormRestart(
-      { reason: "start-brainstorm", mode: "quick-start", teamId: "sq", laneId: "fresh", laneName: "Fresh", daemonClient: daemon, profilesPath: env.profilesPath },
+      { reason: "start-brainstorm", mode: "quick-start", teamId: "sq", laneId: "fresh", laneName: "Fresh", agentClient: daemon, profilesPath: env.profilesPath },
       env.dir,
     );
     assert.match(daemon.created[0].initialPrompt, /Latest plan file: `\(none yet\)`/);

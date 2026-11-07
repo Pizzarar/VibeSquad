@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { client } from "./paseo";
 import { DEMO } from "./demoFlag";
 import { isImeComposing } from "./IdeaInbox";
 import { MarkdownRenderer } from "./Timeline";
@@ -16,7 +15,8 @@ type PermissionCardProps = {
 
 export function respondToPermission(agentId: string, requestId: string, response: Record<string, unknown>): Promise<void> {
   if (DEMO) return Promise.resolve();
-  return client.agents.ref(agentId).respondToPermission({ requestId, response: response as any });
+  // Runner agents never raise permission prompts (their approval policy is set at spawn), so there is nothing to answer.
+  return Promise.reject(new Error(`no permission prompt to answer for ${agentId} (${requestId}, ${Object.keys(response).length} fields)`));
 }
 
 function extractCommandPreview(input: Record<string, unknown>, detail?: Record<string, unknown>): string | null {

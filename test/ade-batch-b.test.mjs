@@ -117,7 +117,7 @@ test("B-4: setModeHelper DEMO path upserts currentModeId on local agent", () => 
   assert.equal(upserted[0].id, "agent-1");
 });
 
-test("B-4: setModeHelper live path calls daemonClient.setAgentMode", async () => {
+test("B-4: setModeHelper live path calls agentClient.setAgentMode", async () => {
   const calls = [];
   const fakeDaemon = { setAgentMode: async (id, modeId) => { calls.push({ id, modeId }); } };
 
@@ -137,7 +137,7 @@ test("B-5: setModelHelper DEMO path upserts model on local agent", () => {
   assert.equal(upserted[0].model, "claude-opus-5-5");
 });
 
-test("B-5: setModelHelper live path calls daemonClient.setAgentModel", async () => {
+test("B-5: setModelHelper live path calls agentClient.setAgentModel", async () => {
   const calls = [];
   const fakeDaemon = { setAgentModel: async (id, modelId) => { calls.push({ id, modelId }); } };
 
@@ -163,7 +163,7 @@ test("B-6: setThinkingHelper DEMO path accepts null to clear", () => {
   assert.equal(upserted[0].thinkingOptionId, null);
 });
 
-test("B-6: setThinkingHelper live path calls daemonClient.setAgentThinkingOption", async () => {
+test("B-6: setThinkingHelper live path calls agentClient.setAgentThinkingOption", async () => {
   const calls = [];
   const fakeDaemon = { setAgentThinkingOption: async (id, optId) => { calls.push({ id, optId }); } };
 
@@ -173,7 +173,7 @@ test("B-6: setThinkingHelper live path calls daemonClient.setAgentThinkingOption
 
 // ── refreshAgent ─────────────────────────────────────────────────────────────
 
-test("B-7: refreshAgent live path calls daemonClient.refreshAgent", async () => {
+test("B-7: refreshAgent live path calls agentClient.refreshAgent", async () => {
   const calls = [];
   const fakeDaemon = { refreshAgent: async (id) => { calls.push(id); return {}; } };
 

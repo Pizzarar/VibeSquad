@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { PaseoAgent } from "@getpaseo/client";
+import type { PaseoAgent } from "./agentTypes";
 import { ChangesPanel } from "./ChangesPanel";
 import { FilesPanel } from "./FilesPanel";
 import { TerminalPanel } from "./TerminalPanel";

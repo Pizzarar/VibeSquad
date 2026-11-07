@@ -78,7 +78,7 @@ test("a Buddy restart writes one spawn-timing metric with every step", async () 
       {
         agentId: "bs-1", teamId: "site", laneId: "pinned", reason: "manual",
         oldAgent: { id: "bs-1", title: "BRAINSTORM · PINNED", cwd: dir, labels: { team: "site", lane: "pinned", role: "brainstorm" } },
-        daemonClient: daemon,
+        agentClient: daemon,
       },
       dir,
     );
@@ -177,7 +177,7 @@ test("start-brainstorm during a pending retire returns the new Buddy, not the re
     // The daemon still lists the old Buddy as a live brainstorm (retire pending) and it looks newer.
     const newBuddy = { id: "new-2", title: "BRAINSTORM · PINNED", cwd: sb.dir, updatedAt: "2026-11-02T02:00:00Z", labels: { team: "site", lane: "pinned", role: "brainstorm" } };
     const r = await performBrainstormRestart(
-      { agentId: "start-brainstorm", reason: "start-brainstorm", teamId: "site", laneId: "pinned", agents: [oldBuddy, newBuddy], skipDaemon: true },
+      { agentId: "start-brainstorm", reason: "start-brainstorm", teamId: "site", laneId: "pinned", agents: [oldBuddy, newBuddy], skipBackend: true },
       sb.dir,
     );
     assert.equal(r.reused, true);

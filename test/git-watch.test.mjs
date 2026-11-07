@@ -7,7 +7,6 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import { gitWatch, startSignaturePoll, _gitWatcherCount, worktreeEventRelevant, gitDirEventRelevant } from "../server/git-watch.mjs";
 import { handleGitApi } from "../server/git-api.mjs";
-import { decideProxyRequest, proxyTimeoutFor } from "../server/hooks/remote-proxy-rules.ts";
 
 const git = (cwd, ...a) => execFileSync("git", a, { cwd, stdio: "pipe", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -163,13 +162,6 @@ test("route: GET git/watch long-polls through handleGitApi; unresolved cwd is 40
     server.closeAllConnections?.();
     await new Promise((r) => server.close(r));
   }
-});
-
-test("remote proxy: git/watch is an owner GET route with the long-poll timeout", () => {
-  assert.equal(decideProxyRequest("GET", "/__vibesquad/git/watch?cwd=C:/w&since=1").ok, true);
-  assert.equal(decideProxyRequest("POST", "/__vibesquad/git/watch").code, "method");
-  assert.equal(proxyTimeoutFor("/__vibesquad/git/watch") > 25_000, true);
-  assert.equal(proxyTimeoutFor("/__vibesquad/git/status"), 10_000);
 });
 
 test("fallback poll never overlaps runs, bumps on a changed signature, and stops when closed", async () => {

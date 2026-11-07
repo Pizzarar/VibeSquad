@@ -2,21 +2,18 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statS
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import os from "node:os";
-import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { effectiveAgentRole, findLaneInRegistry, formatDisplayTitle, isHubLane, isRetiredAgent, laneCodeFor, resolveWorktreeRootPath, topicOf } from "./identity.mjs";
 import { findProfileOrFallback, loadProfiles, readCappedProviders, resolveProfileWithFailover, toPaseoSpawnConfig } from "./profiles.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
-import { readRawPaseoConfig } from "./paseo-control.mjs";
 import { briefRootFor, laneWorkingDir } from "./brief-path.mjs";
 import { defangPromptFences } from "./write-guards.mjs";
 import { detachLiveChildrenViaClient, listDaemonAgents } from "./detach-children.mjs";
-import { getBackend, runnerLanes } from "./backend/index.mjs";
+import { getBackend, sharedRunnerBackend } from "./backend/index.mjs";
 import { SPAWN_TIMING } from "./backend/runner-backend.mjs";
 import { BRIEF_HISTORY_KEEP, BRIEF_SHRINK_FROM, BRIEF_SHRINK_TO, backupBrief, writeBriefFile } from "./brief-write.mjs";
 import { liveInFlightBlock } from "./in-flight.mjs";
 import { refreshWhosHere } from "./whos-here.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
-import { readDaemonPassword, readPaseoLocalCredential } from "./daemon-password.mjs";
 
 // import.meta.dirname is undefined when bundled into the Paseo plugin; fall back like server/hooks/agent-duties.ts.
 const REPO_ROOT = resolve(process.env.VIBESQUAD_ROOT || (typeof import.meta.dirname === "string" ? join(import.meta.dirname, "..") : join(homedir(), "projects", "VibeSquad")));
@@ -28,20 +25,6 @@ function safeSegment(value) {
     .trim()
     .replace(/[^A-Za-z0-9_-]+/g, "-")
     .replace(/^-|-$/g, "") || "vibesquad";
-}
-
-export function readPaseoConfig(_rootDir = REPO_ROOT) {
-  const home = process.env.PASEO_HOME || join(homedir(), ".paseo");
-  let listen = "127.0.0.1:6767";
-  let serverId = "";
-  const { config } = readRawPaseoConfig({ paseoHome: home });
-  if (config) {
-    listen = config.daemon?.listen ?? listen;
-  }
-  try {
-    serverId = readFileSync(join(home, "server-id"), "utf8").trim();
-  } catch {}
-  return { listen: process.env.PASEO_DAEMON ?? listen, serverId, home };
 }
 
 /**
@@ -62,20 +45,9 @@ export async function archiveBuddyKeepingChildren(client, agentId) {
   return { archived: true, detached, failed };
 }
 
-export function createDaemonClient(rootDir = REPO_ROOT) {
-  const { listen } = readPaseoConfig(rootDir);
-  const wsUrl = listen.startsWith("ws://") || listen.startsWith("wss://") ? `${listen.replace(/\/$/, "")}/ws` : `ws://${listen}/ws`;
-  const password = readDaemonPassword();
-  return new DaemonClient({
-    url: wsUrl,
-    clientId: `vibesquad-bf-${Date.now().toString(36)}`,
-    clientType: "cli",
-    appVersion: "0.0.1",
-    connectTimeoutMs: 5000,
-    ...(password ? { password } : {}),
-    localCredential: () => readPaseoLocalCredential() || null,
-    reconnect: { enabled: false },
-  });
+/** The agent backend a server-side caller works through: the runner. */
+export function createAgentClient(_rootDir = REPO_ROOT) {
+  return sharedRunnerBackend();
 }
 
 function resolveTeamsFilePath(rootDir = REPO_ROOT) {
@@ -117,22 +89,6 @@ function laneDisplayName(laneId, rootDir = REPO_ROOT) {
     }
   }
   return { teamId: "", laneId: safeSegment(laneId), laneName: String(laneId || "vibesquad").replace(/-/g, " ") };
-}
-
-function readLocalAgentRecord(agentId, rootDir = REPO_ROOT) {
-  if (!agentId) return null;
-  const { home } = readPaseoConfig(rootDir);
-  const agentsRoot = join(home, "agents");
-  try {
-    for (const dir of readdirSync(agentsRoot, { withFileTypes: true })) {
-      if (!dir.isDirectory()) continue;
-      const candidate = join(agentsRoot, dir.name, `${agentId}.json`);
-      if (existsSync(candidate)) {
-        return readJsonFileWithBom(candidate, { recordWarning: false, rewriteBom: false }).data;
-      }
-    }
-  } catch {}
-  return null;
 }
 
 export { briefRootFor, laneWorkingDir };
@@ -547,8 +503,8 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
   const pendingPrompt = typeof body.pendingPrompt === "string" ? body.pendingPrompt : "";
   const timer = createSpawnTimer(agentId === "start-brainstorm" ? "new-buddy" : "buddy-restart");
 
-  const injectedClient = body.daemonClient || null;
-  const client = injectedClient || (body.skipDaemon ? null : (body.clientFactory || createDaemonClient)(rootDir));
+  const injectedClient = body.agentClient || null;
+  const client = injectedClient || (body.skipBackend ? null : (body.clientFactory || createAgentClient)(rootDir));
   const backend = getBackend(client);
   let oldAgent = body.oldAgent || null;
   let connected = Boolean(injectedClient);
@@ -572,19 +528,11 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       }
     }
 
-    if (!oldAgent && agentId !== "start-brainstorm") {
-      oldAgent = readLocalAgentRecord(agentId, rootDir);
-    }
-
     const oldLabels = { ...(oldAgent?.labels ?? {}) };
     // Only known Buddies restart: a lead, worker, unlabelled or unknown id would be retired and archived
     // (S4 mass-archive guard), so anything else fails closed.
     if (agentId !== "start-brainstorm" && !(oldAgent && ["brainstorm", "former-brainstorm"].includes(oldLabels.role))) {
       throw new Error(`not a brainstorm agent: ${agentId}`);
-    }
-    // A Paseo-hosted Buddy cannot be retired while Paseo is down: spawning its successor would leave two live Buddies.
-    if (agentId !== "start-brainstorm" && !String(agentId).startsWith("rn-") && backend?.paseoUnavailable) {
-      throw Object.assign(new Error("Paseo is not running, so this Paseo-hosted Buddy cannot be restarted yet. Start Paseo (Settings) and retry."), { code: "PASEO_UNAVAILABLE" });
     }
     const laneHint = body.laneId || body.lane || oldLabels.lane || oldLabels.lead || "vibesquad";
     const resolved = laneDisplayName(laneHint, rootDir);
@@ -636,17 +584,12 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       const asList = (res) => (Array.isArray(res) ? res : Array.isArray(res?.entries) ? res.entries : Array.isArray(res?.agents) ? res.agents : null);
       const readLive = async () => {
         if (body.agents) return body.agents instanceof Map ? [...body.agents.values()] : Array.isArray(body.agents) ? body.agents : [];
-        // A daemon client was expected but never connected (daemon restarting): unknown, not empty.
+        // A client was expected but never connected (runner restarting): unknown, not empty.
         if (client && !connected) return null;
-        // connect() no longer throws for a down Paseo: for a lane Paseo would serve, its Buddy list is unknown.
-        if (backend.paseoUnavailable && !runnerLanes({ teamsFile: resolveTeamsFilePath(rootDir) }).has(String(laneId).toLowerCase())) return null;
         if (connected && client && typeof backend.fetchAgents === "function") {
           // Runner down (the supervisor is restarting it): unreadable list, not "no agents". fetchAgents below then fails closed.
-          await backend.ensureRunner?.().catch(() => {});
+          await backend.requireRunning?.().catch(() => {});
           const res = await backend.fetchAgents().catch(() => null);
-          // Runner-only list because Paseo is down or died mid-call: fine for a runner lane, unknown for any lane Paseo
-          // would serve (pinned, or every lane under the rollback default), where its Buddy may live.
-          if (res?.paseoUnavailable && !runnerLanes({ teamsFile: resolveTeamsFilePath(rootDir) }).has(String(laneId).toLowerCase())) return null;
           return asList(res);
         }
         if (connected && client && typeof backend.listAgents === "function") return asList(await backend.listAgents().catch(() => null));
@@ -669,10 +612,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
           await backend?.updateAgent?.(existing.id, { labels: existing.labels })?.catch?.(() => {});
         }
         // Reopen a closed Buddy (daemon restart unloads every session) from its saved session.
-        // RoutingBackend exposes every per-id method and silently no-ops a Paseo id the client can't serve, so ask the side
-        // that actually owns this id (Paseo for uuids, the runner for rn- ids) whether it can refresh.
-        const refreshOwner = backend?.paseo && backend?.runner ? (String(existing.id).startsWith("rn-") ? backend.runner : backend.paseo) : backend;
-        const reopened = existing.status === "closed" && connected && typeof refreshOwner?.refreshAgent === "function";
+        const reopened = existing.status === "closed" && connected && typeof backend?.refreshAgent === "function";
         let reopenedAgent = null;
         let reopenFailed = existing.status === "closed" && !reopened; // nothing here can reopen it
         if (reopened) {
@@ -1042,7 +982,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       const newId = created.id;
       void (async () => {
         await new Promise((r) => setTimeout(r, delayMs).unref?.()); // the HTTP server keeps the process up
-        const c = getBackend(injectedClient || (body.clientFactory || createDaemonClient)(rootDir));
+        const c = getBackend(injectedClient || (body.clientFactory || createAgentClient)(rootDir));
         try {
           if (!injectedClient) await c.connect?.();
           await retireOtherLaneBuddies(c, { newId, teamId, laneId, topic, exceptIds: [agentId] });

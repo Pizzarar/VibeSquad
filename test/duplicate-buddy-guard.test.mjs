@@ -1,12 +1,9 @@
-// start-brainstorm's duplicate-Buddy guard through a real RoutingBackend (fake Paseo + fake runner), under the shipping
-// cutover default and under the rollback. Each test sets the env it needs; none relies on the suite preload.
+// start-brainstorm's duplicate-Buddy guard against a fake runner backend.
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { PaseoBackend } from "../server/backend/paseo-backend.mjs";
-import { RoutingBackend, runnerLanes } from "../server/backend/lane-routing.mjs";
 import { performBrainstormRestart, resetBrainstormRestartState, seedDefaultPack } from "../server/vibesquad-api.mjs";
 
 function makeEnv(laneExtra = {}) {
@@ -20,24 +17,6 @@ function makeEnv(laneExtra = {}) {
   return { dir, vsHome, profilesPath, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-function fakePaseo({ failList = false } = {}) {
-  const calls = [];
-  return {
-    calls,
-    connect: async () => { calls.push("connect"); },
-    close: async () => {},
-    fetchAgents: async () => {
-      calls.push("fetchAgents");
-      if (failList) throw new Error("socket closed");
-      return { entries: [] };
-    },
-    createAgent: async (req) => { calls.push("createAgent"); return { id: "paseo-new", labels: req.labels }; },
-    updateAgent: async () => {},
-    cancelAgent: async () => {},
-    archiveAgent: async () => {},
-  };
-}
-
 function fakeRunner({ existing = [], cold = false } = {}) {
   const created = [];
   let up = !cold;
@@ -45,6 +24,8 @@ function fakeRunner({ existing = [], cold = false } = {}) {
   return {
     created,
     get ensured() { return ensured; },
+    async connect() {},
+    async close() {},
     async requireRunning() { ensured += 1; if (!up) throw new Error("RUNNER_DOWN"); },
     async fetchAgents() {
       if (!up) throw new Error("runner not running");
@@ -88,24 +69,20 @@ function startBody(env, backend) {
     laneId: "pin-test",
     laneName: "Pin Test",
     profile: "Brainstorm - Claude",
-    clientFactory: () => backend, // not injected: connect() runs, so the Paseo probe decides `down`
+    clientFactory: () => backend, 
     profilesPath: env.profilesPath,
   };
 }
 
-const rnBuddy = { id: "rn-existing", status: "idle", labels: { team: "sq", lane: "pin-test", role: "brainstorm" }, title: "Buddy" };
-
-async function run({ laneExtra, vars, paseo, runner, alive = async () => false }) {
+async function run({ laneExtra, vars = {}, runner }) {
   const env = makeEnv(laneExtra);
   const prevHome = process.env.VIBESQUAD_HOME;
   process.env.VIBESQUAD_HOME = env.vsHome;
   resetBrainstormRestartState();
   try {
     return await withEnv(vars, async () => {
-      const lanes = () => runnerLanes({ teamsFile: join(env.dir, "teams.json") });
-      const backend = new RoutingBackend(new PaseoBackend(paseo), runner, { lanes, paseoAlive: alive });
-      const res = await performBrainstormRestart(startBody(env, backend), env.dir);
-      return { res, backend };
+      const res = await performBrainstormRestart(startBody(env, runner), env.dir);
+      return { res, backend: runner };
     });
   } finally {
     if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
@@ -114,51 +91,20 @@ async function run({ laneExtra, vars, paseo, runner, alive = async () => false }
   }
 }
 
-test("Paseo-pinned lane + Paseo down: fail closed, nothing spawned (probe says down)", async () => {
-  const paseo = fakePaseo();
-  const runner = fakeRunner();
-  const { res } = await run({ laneExtra: { backend: "paseo" }, vars: { VS_DEFAULT_BACKEND: "runner", VS_BACKEND: undefined }, paseo, runner });
-  assert.equal(res.ok, false);
-  assert.equal(res.spawned, false);
-  assert.equal(res.reason, "agent-list-unavailable");
-  assert.equal(runner.created.length, 0);
-  assert.equal(paseo.calls.includes("createAgent"), false);
-});
+const rnBuddy = { id: "rn-existing", status: "idle", labels: { team: "sq", lane: "pin-test", role: "brainstorm" }, title: "Buddy" };
 
-test("Paseo-pinned lane + Paseo dies mid-flight (probe cache still says alive): same fail-closed answer", async () => {
-  const paseo = fakePaseo({ failList: true });
-  const runner = fakeRunner();
-  const { res } = await run({ laneExtra: { backend: "paseo" }, vars: { VS_DEFAULT_BACKEND: "runner", VS_BACKEND: undefined }, paseo, runner, alive: async () => true });
-  assert.equal(res.reason, "agent-list-unavailable");
-  assert.equal(runner.created.length, 0);
-});
-
-test("rollback (VS_DEFAULT_BACKEND=paseo or VS_BACKEND=paseo) + Paseo down: every lane fails closed", async () => {
-  for (const vars of [{ VS_DEFAULT_BACKEND: "paseo", VS_BACKEND: undefined }, { VS_DEFAULT_BACKEND: undefined, VS_BACKEND: "paseo" }]) {
-    const paseo = fakePaseo();
-    const runner = fakeRunner();
-    const { res } = await run({ vars, paseo, runner });
-    assert.equal(res.reason, "agent-list-unavailable", JSON.stringify(vars));
-    assert.equal(runner.created.length, 0);
-    assert.equal(paseo.calls.includes("createAgent"), false);
-  }
-});
-
-test("runner lane + Paseo down + a live runner Buddy: no second Buddy is spawned", async () => {
-  const paseo = fakePaseo();
+test("a live runner Buddy exists: no second Buddy is spawned", async () => {
   const runner = fakeRunner({ existing: [rnBuddy] });
-  const { res } = await run({ vars: { VS_DEFAULT_BACKEND: "runner", VS_BACKEND: undefined }, paseo, runner });
+  const { res } = await run({ runner });
   assert.equal(runner.created.length, 0, JSON.stringify(res));
   assert.equal(res.ok, true);
   assert.equal(res.reused, true);
   assert.equal(res.newAgentId ?? res.agentId, "rn-existing");
 });
 
-test("runner lane + Paseo down + cold runner: nothing is spawned (the VS server owns starting the runner)", async () => {
-  const paseo = fakePaseo();
+test("cold runner: nothing is spawned (the VS server owns starting the runner)", async () => {
   const runner = fakeRunner({ cold: true });
-  const { res } = await run({ vars: { VS_DEFAULT_BACKEND: "runner", VS_BACKEND: undefined }, paseo, runner });
+  const { res } = await run({ runner });
   assert.equal(runner.ensured >= 1, true, "requireRunning was consulted");
   assert.equal(runner.created.length, 0, JSON.stringify(res));
-  assert.equal(paseo.calls.includes("createAgent"), false);
 });

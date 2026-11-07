@@ -1,6 +1,6 @@
 // Live provider-feature changes for a running agent: no runner route exists, so a live change always fails.
 // Pure logic lives in paseoFeaturesLogic.ts. The drawer re-reads the agent snapshot after each change.
-import type { PaseoAgent } from "@getpaseo/client";
+import type { PaseoAgent } from "./agentTypes";
 import { upsertLocalAgent } from "./paseo";
 import { DEMO } from "./demoFlag";
 

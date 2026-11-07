@@ -8,8 +8,7 @@ import { createServer, writeDiscovery } from '../runner/server.mjs';
 import { killTree } from '../runner/spawn.mjs';
 import { RunnerClient } from '../server/backend/runner-client.mjs';
 import { RunnerBackend, SPAWN_TIMING, toTimeline } from '../server/backend/runner-backend.mjs';
-import { RoutingBackend, runnerLanes } from '../server/backend/lane-routing.mjs';
-import { getBackend, PaseoBackend } from '../server/backend/index.mjs';
+import { getBackend } from '../server/backend/index.mjs';
 
 const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'vs-rb-'));
 const TOKEN = 'test-token';
@@ -261,117 +260,30 @@ function fakeRunnerBackend() {
   };
 }
 
-test('getBackend with no switched lane returns the plain PaseoBackend (default = paseo)', () => {
-  const c = fakePaseoClient('p');
-  const b = getBackend(c, { lanes: () => new Set() });
-  assert.ok(b instanceof PaseoBackend);
+test('getBackend passes an injected client through and leaves null alone', () => {
+  const fake = { listAgents: async () => [] };
+  assert.equal(getBackend(fake), fake);
   assert.equal(getBackend(null), null);
-  assert.equal(getBackend(b), b);
+  assert.equal(getBackend(undefined), undefined);
 });
-
-test('every lane defaults to the runner; teams.json backend:"paseo" / VS_PASEO_LANES pin a lane to Paseo', () => {
-  const file = path.join(tmp(), 'teams.json');
-  writeFileSync(file, JSON.stringify({ teams: [{ id: 't', lanes: [{ id: 'Alpha', aliases: ['al'], backend: 'runner' }, { id: 'beta' }, { id: 'Legacy', aliases: ['lg'], backend: 'paseo' }] }] }));
-  const set = runnerLanes({ env: { VS_RUNNER_LANES: ' Gamma , delta', VS_PASEO_LANES: 'pinned' }, teamsFile: file });
-  assert.deepEqual([...set].sort(), ['al', 'alpha', 'delta', 'gamma']); // explicit runner lanes stay iterable
-  assert.equal(set.defaultRunner, true);
-  for (const lane of ['alpha', 'beta', 'unlisted', '', 'gamma']) assert.equal(set.has(lane), true, `lane "${lane}" -> runner`);
-  for (const lane of ['legacy', 'lg', 'pinned']) assert.equal(set.has(lane), false, `lane "${lane}" -> paseo`);
-  assert.deepEqual([...set.paseoLanes].sort(), ['legacy', 'lg', 'pinned']);
-  const none = runnerLanes({ env: {}, teamsFile: path.join(tmp(), 'missing.json') });
-  assert.ok(none.size >= 1, 'size is always truthy so callers treat the runner as on');
-  assert.equal(none.has('anything'), true);
-  const legacy = runnerLanes({ env: { VS_DEFAULT_BACKEND: 'paseo', VS_RUNNER_LANES: 'only' }, teamsFile: path.join(tmp(), 'missing.json') });
-  assert.equal(legacy.has('only'), true);
-  assert.equal(legacy.has('other'), false, 'VS_DEFAULT_BACKEND=paseo is the global rollback');
-  assert.equal(runnerLanes({ env: { VS_DEFAULT_BACKEND: 'paseo' }, teamsFile: path.join(tmp(), 'missing.json') }).size, 0);
-});
-
-test('default lanes create on the runner, Paseo ids still reach Paseo, and a dead daemon is not connected to', async () => {
-  const c = fakePaseoClient('p');
-  const r = fakeRunnerBackend();
-  const lanes = () => runnerLanes({ env: {}, teamsFile: path.join(tmp(), 'missing.json') });
-  const dead = new RoutingBackend(new PaseoBackend(c), r, { lanes, paseoAlive: async () => false });
-  assert.equal((await dead.createAgent({ labels: { lane: 'never-configured' }, config: {} })).id, 'rn-aaa');
-  assert.equal((await dead.createAgent({ labels: {}, config: {} })).id, 'rn-aaa');
-  assert.equal(c.calls.some((x) => x[0] === 'createAgent'), false);
-  await dead.connect();
-  assert.equal(c.calls.filter((x) => x[0] === 'connect').length, 0, 'dead Paseo: connect is skipped (no 5s timeout)');
-  const alive = new RoutingBackend(new PaseoBackend(c), r, { lanes, paseoAlive: async () => true });
-  await alive.connect();
-  assert.equal(c.calls.filter((x) => x[0] === 'connect').length, 1);
-  await alive.sendAgentPrompt('11111111-uuid', 'yo');
-  assert.equal(c.calls.filter((x) => x[0] === 'sendAgentPrompt').length, 1);
-});
-
-test('routing: create goes by lane, per-id calls go to the owner, lists merge, no cross-talk', async () => {
-  const c = fakePaseoClient('p');
-  const r = fakeRunnerBackend();
-  const b = getBackend(c, { lanes: () => new Set(['own']), runner: r });
-  assert.ok(b instanceof RoutingBackend);
-
-  assert.equal((await b.createAgent({ labels: { lane: 'own' }, config: {} })).id, 'rn-aaa');
-  assert.equal((await b.createAgent({ labels: {}, env: { VS_LANE: 'OWN' }, config: {} })).id, 'rn-aaa');
-  assert.equal((await b.createAgent({ labels: { lane: 'other' }, config: {} })).id, 'p-uuid');
-  assert.equal(r.calls.filter((x) => x[0] === 'createAgent').length, 2);
-  assert.equal(c.calls.filter((x) => x[0] === 'createAgent').length, 1);
-
-  await b.sendAgentPrompt('rn-aaa', 'hi');
-  await b.sendAgentPrompt('11111111-uuid', 'yo');
-  assert.deepEqual(r.calls.filter((x) => x[0] === 'sendAgentPrompt'), [['sendAgentPrompt', 'rn-aaa', 'hi']]);
-  assert.deepEqual(c.calls.filter((x) => x[0] === 'sendAgentPrompt'), [['sendAgentPrompt', '11111111-uuid', 'yo']]);
-  await b.cancelAgent('rn-aaa');
-  assert.equal(c.calls.some((x) => x[0] === 'cancelAgent'), false);
-
-  const merged = await b.fetchAgents();
-  assert.deepEqual(merged.entries.map((e) => e.agent.id), ['p-1', 'rn-aaa']);
-  // paseo-only methods stay paseo; absent methods stay undefined (typeof guards)
-  assert.equal(typeof b.connect, 'function');
-  assert.equal(b.listAgents, undefined);
-});
-
-test('routing: a Paseo id for a method the raw client lacks is a silent no-op, like the typeof guard it replaces', async () => {
-  const c = fakePaseoClient('p');
-  delete c.sendAgentPrompt;
-  const r = fakeRunnerBackend();
-  const b = getBackend(c, { lanes: () => new Set(['own']), runner: r });
-  assert.equal(await b.sendAgentPrompt('11111111-uuid', 'x'), undefined);
-  assert.equal(r.calls.length, 0);
-  await b.sendAgentPrompt('rn-aaa', 'x');
-  assert.equal(r.calls.length, 1);
-});
-
-test('routing: a dead runner never breaks Paseo lists', async () => {
-  const c = fakePaseoClient('p');
-  const r = { fetchAgents: () => Promise.reject(new Error('down')) };
-  const b = getBackend(c, { lanes: () => new Set(['own']), runner: r });
-  assert.deepEqual((await b.fetchAgents()).entries.map((e) => e.agent.id), ['p-1']);
-});
-
-test('lead-handoff list path (listDaemonAgents) sees runner leads when a lane is switched, and pages do not repeat them', async () => {
+test('lead-handoff list path (listDaemonAgents) pages through the backend list without repeating entries', async () => {
   const { listDaemonAgents } = await import('../server/detach-children.mjs');
   const pages = [];
   const c = {
     fetchAgents: async (o) => {
       pages.push(o.page?.cursor ?? null);
       return o.page?.cursor
-        ? { entries: [{ agent: { id: 'p-2' } }], pageInfo: { hasMore: false } }
-        : { entries: [{ agent: { id: 'p-1' } }], pageInfo: { hasMore: true, nextCursor: 'c1' } };
+        ? { entries: [{ agent: { id: 'rn-2' } }], pageInfo: { hasMore: false } }
+        : { entries: [{ agent: { id: 'rn-1' } }], pageInfo: { hasMore: true, nextCursor: 'c1' } };
     },
   };
-  const runnerLead = { id: 'rn-lead', labels: { role: 'lead', lane: 'own' } };
-  const r = { fetchAgents: async () => ({ entries: [{ agent: runnerLead }] }) };
-  const routed = getBackend(c, { lanes: () => new Set(['own']), runner: r });
-  const got = await listDaemonAgents(routed);
-  assert.deepEqual(got.map((a) => a.id), ['p-1', 'rn-lead', 'p-2']);
+  const got = await listDaemonAgents(getBackend(c));
+  assert.deepEqual(got.map((a) => a.id), ['rn-1', 'rn-2']);
   assert.deepEqual(pages, [null, 'c1']);
-  // Paseo-only: no switched lane -> plain PaseoBackend, list is exactly Paseo's
-  const plain = await listDaemonAgents(getBackend(c, { lanes: () => new Set() }));
-  assert.deepEqual(plain.map((a) => a.id), ['p-1', 'p-2']);
 });
 
 test('runtime sync and desktop build ship runner/ (RUNNER_ENTRY)', () => {
-  const entryList = /\["dist", "public", "server", "cli", "plugin", "runner"\]/;
+  const entryList = /\["dist", "public", "server", "cli", "runner"\]/;
   for (const rel of ['server/sync-runtime.mjs', 'server/build-desktop.mjs']) {
     const src = readFileSync(path.join(import.meta.dirname, '..', rel), 'utf8');
     assert.match(src, entryList, `${rel} should ship runner/`);
@@ -438,7 +350,7 @@ test('runner API: the timeline route forwards direction + cursor to fetchAgentTi
   const { handleRunnerApi } = await import('../server/runner-api.mjs');
   const calls = [];
   const backend = { fetchAgentTimeline: async (id, opts) => { calls.push(opts); return { entries: [], hasOlder: false }; } };
-  const run = (url) => handleRunnerApi({ url, method: 'GET' }, {}, { readBody: async () => ({}), sendJson: () => {}, backend, lanes: () => new Set(['x']) });
+  const run = (url) => handleRunnerApi({ url, method: 'GET' }, {}, { readBody: async () => ({}), sendJson: () => {}, backend });
   await run('/__vibesquad/runner/agents/rn-abc/timeline?limit=60');
   await run('/__vibesquad/runner/agents/rn-abc/timeline?limit=60&direction=before&cursor=42');
   assert.deepEqual(calls[0], { limit: 60 });
@@ -458,63 +370,17 @@ test('fetchAgentTimeline lastSeq advances with absorbed post-thought text while 
   assert.deepEqual(seqs, [3, 4, 5]);
 });
 
-test('a Paseo-bound call after a dead-daemon connect rejects with PASEO_UNAVAILABLE instead of looking connected', async () => {
-  const c = fakePaseoClient('p');
-  const r = fakeRunnerBackend();
-  const lanes = () => new Set(['own']); // 'pinned' is not a runner lane here
-  const b = new RoutingBackend(new PaseoBackend(c), r, { lanes, paseoAlive: async () => false });
-  await b.connect();
-  assert.equal(b.paseoUnavailable, true);
-  await assert.rejects(b.createAgent({ labels: { lane: 'pinned' }, config: {} }), { code: 'PASEO_UNAVAILABLE' });
-  await assert.rejects(b.cancelAgent('11111111-uuid'), { code: 'PASEO_UNAVAILABLE' });
-  assert.equal((await b.createAgent({ labels: { lane: 'own' }, config: {} })).id, 'rn-aaa');
-  assert.equal((await b.cancelAgent('rn-aaa'), true), true);
-  // Lists: runner agents plus a paseoUnavailable marker, whether or not Paseo is wanted (never a rejection).
-  const list = await b.fetchAgents({});
-  assert.deepEqual(list.entries.map((e) => e.agent.id), ['rn-aaa']);
-  assert.equal(list.paseoUnavailable, true);
-});
-
-test('createPaseoProbe: custom options never touch the shared probe, reset() discards an in-flight result', async () => {
-  const { createPaseoProbe, paseoDaemonAlive, resetPaseoProbe } = await import('../server/backend/lane-routing.mjs');
-  let release;
-  const gate = new Promise((ok) => (release = ok));
-  const probe = createPaseoProbe({ check: async () => { await gate; return true; } });
-  const first = probe();
-  probe.reset();
-  release();
-  assert.equal(await first, true);
-  let calls = 0;
-  const again = createPaseoProbe({ check: async () => { calls += 1; return false; } });
-  assert.equal(await again(), false);
-  assert.equal(calls, 1);
-  assert.equal(await createPaseoProbe({ check: async () => true })(), true);
-  resetPaseoProbe();
-  assert.equal(await paseoDaemonAlive({ check: async () => true }), true, 'custom options use their own instance');
-});
-
-test('runner status tells the browser the default is the runner; a UI spawn on an unlisted or empty lane hits the runner', async () => {
+test('runner status says the runner is on; a UI spawn on any lane (or none) hits the runner', async () => {
   const { handleRunnerApi, runnerStatus } = await import('../server/runner-api.mjs');
-  const laneSet = runnerLanes({ env: {}, teamsFile: path.join(tmp(), 'missing.json') });
-  const st = await runnerStatus(laneSet, { alive: async () => false, expected: () => false });
-  assert.equal(st.enabled, true);
-  assert.equal(st.defaultBackend, 'runner');
-  assert.deepEqual(st.paseoLanes, []);
-  assert.deepEqual(st.paseo, { expected: false, reachable: false });
-  const pinned = await runnerStatus(runnerLanes({ env: { VS_PASEO_LANES: 'Old' }, teamsFile: path.join(tmp(), 'missing.json') }), { alive: async () => true, expected: () => true });
-  assert.deepEqual(pinned.paseoLanes, ['old']);
-  assert.equal(pinned.paseo.reachable, true);
-
+  assert.deepEqual(await runnerStatus(), { enabled: true });
   const spawned = [];
   const backend = { createAgent: async (req) => { spawned.push(req); return { id: 'rn-ui1' }; } };
-  const run = async (body, lanes = laneSet) => {
+  const run = async (body) => {
     const out = {};
-    await handleRunnerApi({ url: '/__vibesquad/runner/spawn', method: 'POST', on() {} }, {}, { readBody: async () => body, sendJson: (_r, code, json) => Object.assign(out, { code, json }), backend, lanes: () => lanes });
+    await handleRunnerApi({ url: '/__vibesquad/runner/spawn', method: 'POST', on() {} }, {}, { readBody: async () => body, sendJson: (_r, code, json) => Object.assign(out, { code, json }), backend });
     return out;
   };
   assert.equal((await run({ labels: { lane: 'never-listed' }, config: {} })).code, 201);
   assert.equal((await run({ labels: {}, config: {} })).code, 201, 'a create with no lane is a runner create too');
-  const pinnedSet = runnerLanes({ env: { VS_PASEO_LANES: 'old' }, teamsFile: path.join(tmp(), 'missing.json') });
-  assert.equal((await run({ labels: { lane: 'old' }, config: {} }, pinnedSet)).code, 400, 'a Paseo-pinned lane is not a runner create');
   assert.equal(spawned.length, 2);
 });

@@ -1,4 +1,4 @@
-import type { PaseoAgent } from "@getpaseo/client";
+import type { PaseoAgent } from "./agentTypes";
 
 export type RenamePlan = { name: string; labels?: Record<string, string> };
 

@@ -57,7 +57,7 @@ test("(b) a brainstorm over the hard limit is retired and spawns a successor rig
         agentId: "bs-1", teamId: "site", laneId: "pinned", reason: "auto-150k", usedTokens: 160000,
         pendingPrompt: "keep this message",
         oldAgent: { id: "bs-1", title: "BRAINSTORM · PINNED", cwd: dir, labels: { team: "site", lane: "pinned", role: "brainstorm" } },
-        daemonClient: daemon,
+        agentClient: daemon,
         backstopDelayMs: 60000,
       },
       dir,

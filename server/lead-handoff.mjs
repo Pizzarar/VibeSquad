@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
   appendVsLogEntry,
-  createDaemonClient,
+  createAgentClient,
   createSpawnTimer,
   findLanePlanFile,
   readBrainstormSummary,
@@ -967,8 +967,8 @@ export function createLeadHandoffCoordinator(deps = {}) {
 
 export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
   const trigger = String(body.trigger || "self").trim();
-  const injectedClient = body.daemonClient || null;
-  const client = injectedClient || (body.skipDaemon ? null : createDaemonClient(rootDir));
+  const injectedClient = body.agentClient || null;
+  const client = injectedClient || (body.skipBackend ? null : createAgentClient(rootDir));
   const backend = getBackend(client);
   let connected = Boolean(injectedClient);
   const connectT0 = Date.now();

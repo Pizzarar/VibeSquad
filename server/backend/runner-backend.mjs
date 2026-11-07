@@ -1,6 +1,6 @@
 // RunnerBackend: the AgentBackend seam over the VS agent runner's HTTP API (docs/PLAN_OWN_DAEMON.md Block 3).
 // squad/team/lane/role/ord/profile are first-class fields on the runner record; this class maps them (and the
-// runner's event log) back into the shapes callers already read from PaseoBackend/DaemonClient.
+// runner's event log) back into the agent shapes callers read.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,7 +10,7 @@ import { isForbiddenRealHome } from "../test-guard.mjs";
 import { joinTarget, joinInto, canExtendThought } from "../reply-coalesce.mjs";
 import { pidAlive } from "../../runner/lock.mjs";
 import { refreshWhosHere } from "../whos-here.mjs";
-import { runnerLanes } from "./lane-routing.mjs";
+
 import { createRunnerHookHost } from "./runner-hooks.mjs";
 import { PROVIDER_ALIASES } from "../../runner/adapters/acp.mjs";
 import { CLAUDE_PERMISSION_MODES as CLAUDE_MODE_IDS, CLAUDE_EFFORTS } from "../../runner/adapters/claude.mjs";
@@ -348,7 +348,7 @@ export class RunnerBackend {
    * watcher), unless the caller injected its own `buildPrefix` (tests) or passed `hooks: false`. startRunnerLifecycle() attaches
    * the server's watcher-enabled host with attachHooks().
    */
-  constructor({ client = new RunnerClient(), buildPrefix = injectedPrefix, whosHere = refreshWhosHere, rootDir = REPO_ROOT, lanes = runnerLanes, hooks } = {}) {
+  constructor({ client = new RunnerClient(), buildPrefix = injectedPrefix, whosHere = refreshWhosHere, rootDir = REPO_ROOT, hooks } = {}) {
     const hooksOff = hooks === false || (hooks === undefined && buildPrefix !== injectedPrefix);
     Object.defineProperty(this, "hooksState", { value: { host: hooks && hooks !== true ? hooks : null, pending: null, off: hooksOff } });
     Object.defineProperty(this, "rc", { value: client });
@@ -357,23 +357,6 @@ export class RunnerBackend {
     Object.defineProperty(this, "rootDir", { value: rootDir });
     Object.defineProperty(this, "listeners", { value: new Set() });
     Object.defineProperty(this, "live", { value: { stream: null, chain: Promise.resolve(), turn: new Map(), gen: 0, retry: { timer: null, n: 0 }, seedTimers: new Map(), seeded: new Set(), hwm: null, known: new Map(), archived: new Set(), emitted: new WeakSet() } });
-    // Paseo-side agents of the same lanes, set by the RoutingBackend so a Who's here refresh sees the whole lane.
-    Object.defineProperty(this, "siblings", { value: { list: null } });
-    Object.defineProperty(this, "lanes", { value: lanes });
-  }
-
-  /** `fn()` resolves the non-runner agents (Paseo) so a lane brief lists everyone, not just runner agents. */
-  useSiblingAgents(fn) {
-    this.siblings.list = fn;
-  }
-
-  /** Detach `fn` (only if it is still the active provider: a newer owner keeps its own). */
-  dropSiblingAgents(fn) {
-    if (this.siblings.list === fn) this.siblings.list = null;
-  }
-
-  runCli() {
-    return null;
   }
 
   async connect() {
@@ -498,22 +481,11 @@ export class RunnerBackend {
     st.pending = null;
   }
 
-  /** Keep the lane brief's "Who's here" current, like the Paseo plugin does on spawn. Best effort. */
+  /** Keep the lane brief's "Who's here" current, on spawn. Best effort. */
   async refreshLaneWhosHere(lane) {
     if (!lane) return;
     try {
-      const mine = await this.listAgents();
-      let agents;
-      let others = null;
-      if (this.siblings.list) others = await this.siblings.list().catch(() => null); // Paseo down/closed: not an error
-      if (others) {
-        const seen = new Set(mine.map((a) => a.id));
-        agents = [...mine, ...others.filter((a) => !seen.has(a.id))];
-      } else if (this.lanes().has(String(lane).toLowerCase())) {
-        agents = mine; // lane lives wholly on the runner (and Paseo cannot be asked)
-      } else {
-        return; // cannot see the whole lane (Paseo agents may share it): leave the brief alone rather than wipe them
-      }
+      const agents = await this.listAgents();
       this.whosHere({ laneId: lane, agents, rootDir: this.rootDir });
     } catch {
       /* the brief is cosmetic: never fail a spawn over it */

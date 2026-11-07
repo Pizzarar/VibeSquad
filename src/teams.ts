@@ -1,4 +1,4 @@
-import type { PaseoAgent } from "@getpaseo/client";
+import type { PaseoAgent } from "./agentTypes";
 import { useSyncExternalStore } from "react";
 import { isLocallyHidden, isMarkedUnread } from "./attentionLocal.ts";
 import { LEGACY_NEEDS_LABEL, LEGACY_NEEDS_REASON, LEGACY_NEEDS_UNTIL, getUserName, needsYouBadge } from "./userName.ts";

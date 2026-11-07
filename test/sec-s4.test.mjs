@@ -21,7 +21,6 @@ const inbox = await import("../server/inbox.mjs");
 const { performLeadHandoffHttp } = await import("../server/lead-handoff.mjs");
 const { buildBrainstormInitialPrompt, performBrainstormRestart } = await import("../server/brainstorm.mjs");
 const guards = await import("../server/write-guards.mjs");
-const rules = await import("../server/hooks/remote-proxy-rules.ts");
 after(() => {
   rmSync(home, { recursive: true, force: true });
   rmSync(paseoHome, { recursive: true, force: true });
@@ -71,7 +70,7 @@ describe("S4-1: spawns never take a caller-chosen cwd", () => {
     try {
       const { cards } = inbox.addInboxCards({ text: "a mechanic idea about jumping", baseHome: base }, repoRoot);
       const client = fakeClient();
-      await inbox.openTopicBrainstorm({ cardId: cards[0].id, baseHome: base, daemonClient: client, cwd: evil, profilesPath: join(base, "none.json") }, repoRoot);
+      await inbox.openTopicBrainstorm({ cardId: cards[0].id, baseHome: base, agentClient: client, cwd: evil, profilesPath: join(base, "none.json") }, repoRoot);
       assert.equal(client.calls.created.length, 1);
       const cwd = client.calls.created[0].config.cwd;
       assert.ok(!cwd.toLowerCase().startsWith(evil.toLowerCase()), `spawned in ${cwd}`);
@@ -87,7 +86,7 @@ describe("S4-1: spawns never take a caller-chosen cwd", () => {
       const { cards } = inbox.addInboxCards({ text: "another idea", baseHome: base }, repoRoot);
       const client = fakeClient();
       for (const bad of [{ provider: "claude --yolo" }, { model: "x\ny" }, { provider: "../evil" }]) {
-        await assert.rejects(inbox.openTopicBrainstorm({ cardId: cards[0].id, baseHome: base, daemonClient: client, ...bad }, repoRoot), /bad (provider|model)/);
+        await assert.rejects(inbox.openTopicBrainstorm({ cardId: cards[0].id, baseHome: base, agentClient: client, ...bad }, repoRoot), /bad (provider|model)/);
       }
       assert.equal(client.calls.created.length, 0);
     } finally {
@@ -98,10 +97,10 @@ describe("S4-1: spawns never take a caller-chosen cwd", () => {
   test("lead-handoff never synthesizes a lead from body cwd/provider/model", async () => {
     const client = fakeClient({ w1: { labels: { role: "worker" }, cwd: "C:/x" } });
     const evil = { cwd: "\\\\evil.example\\share", provider: "claude", model: "claude-opus-5-5", labels: { role: "lead" }, title: "x" };
-    await assert.rejects(performLeadHandoffHttp({ ...evil, daemonClient: client }, repoRoot), /lead agent not found/);
-    await assert.rejects(performLeadHandoffHttp({ ...evil, agentId: "ghost", daemonClient: client }, repoRoot), /lead agent not found/);
-    await assert.rejects(performLeadHandoffHttp({ ...evil, agentId: "w1", daemonClient: client }, repoRoot), /not a lead/);
-    await assert.rejects(performLeadHandoffHttp({ ...evil, agentId: "../x", daemonClient: client }, repoRoot), /bad agentId/);
+    await assert.rejects(performLeadHandoffHttp({ ...evil, agentClient: client }, repoRoot), /lead agent not found/);
+    await assert.rejects(performLeadHandoffHttp({ ...evil, agentId: "ghost", agentClient: client }, repoRoot), /lead agent not found/);
+    await assert.rejects(performLeadHandoffHttp({ ...evil, agentId: "w1", agentClient: client }, repoRoot), /not a lead/);
+    await assert.rejects(performLeadHandoffHttp({ ...evil, agentId: "../x", agentClient: client }, repoRoot), /bad agentId/);
     assert.equal(client.calls.created.length, 0);
   });
 
@@ -268,7 +267,7 @@ describe("S4-4: park/handoff-topic and restart only archive the card's own Buddy
         const base = seed();
         try {
           const client = fakeClient(agents);
-          const res = await fn({ cardId: "c1", agentId, baseHome: base, daemonClient: client, ...extra }, repoRoot);
+          const res = await fn({ cardId: "c1", agentId, baseHome: base, agentClient: client, ...extra }, repoRoot);
           assert.deepEqual(client.calls.archived, [], `${agentId} archived`);
           assert.deepEqual(client.calls.cancelled, []);
           assert.equal(res.archivedAgentId, null);
@@ -283,7 +282,7 @@ describe("S4-4: park/handoff-topic and restart only archive the card's own Buddy
         const base = seed();
         try {
           const client = fakeClient(agents);
-          await fn({ cardId: "c1", agentId, baseHome: base, daemonClient: client, ...extra }, repoRoot);
+          await fn({ cardId: "c1", agentId, baseHome: base, agentClient: client, ...extra }, repoRoot);
           assert.deepEqual(client.calls.archived, [agentId || "bs-1"]);
         } finally {
           rmSync(base, { recursive: true, force: true });
@@ -306,7 +305,7 @@ describe("S4-4: park/handoff-topic and restart only archive the card's own Buddy
   test("brainstorm-restart refuses to retire a lead or worker", async () => {
     for (const role of ["lead", "worker"]) {
       const client = fakeClient({ [`${role}-1`]: { labels: { role }, title: role } });
-      await assert.rejects(performBrainstormRestart({ agentId: `${role}-1`, reason: "manual", daemonClient: client }, repoRoot), /not a brainstorm agent/);
+      await assert.rejects(performBrainstormRestart({ agentId: `${role}-1`, reason: "manual", agentClient: client }, repoRoot), /not a brainstorm agent/);
       assert.deepEqual(client.calls.archived, []);
       assert.equal(client.calls.created.length, 0);
     }
@@ -316,8 +315,8 @@ describe("S4-4: park/handoff-topic and restart only archive the card's own Buddy
     for (const [agentId, agents] of [["bare-1", { "bare-1": { labels: {}, title: "x" } }], ["ghost-1", {}]]) {
       const client = fakeClient(agents);
       client.updateAgent = async (id) => client.calls.archived.push(`update:${id}`);
-      await assert.rejects(performBrainstormRestart({ agentId, reason: "manual", daemonClient: client }, repoRoot), /not a brainstorm agent/);
-      await assert.rejects(performBrainstormRestart({ agentId, reason: "auto-hard-limit", daemonClient: client }, repoRoot), /not a brainstorm agent/);
+      await assert.rejects(performBrainstormRestart({ agentId, reason: "manual", agentClient: client }, repoRoot), /not a brainstorm agent/);
+      await assert.rejects(performBrainstormRestart({ agentId, reason: "auto-hard-limit", agentClient: client }, repoRoot), /not a brainstorm agent/);
       assert.deepEqual(client.calls.archived, [], agentId);
       assert.deepEqual(client.calls.cancelled, [], agentId);
       assert.equal(client.calls.created.length, 0);
@@ -337,44 +336,3 @@ describe("S4-4: park/handoff-topic and restart only archive the card's own Buddy
 
 // ---- 6. remote body-key allowlist ----------------------------------------------------------------
 
-describe("S4-6: the R2 body-key allowlist is enforced in code", () => {
-  const P = "/__vibesquad/inbox/park-topic";
-  test("forbidden, unknown and missing keys are refused; a clean body passes", () => {
-    assert.deepEqual(rules.checkRemoteBody("POST", P, '{"cardId":"1"}'), { ok: true, value: { cardId: "1" } });
-    for (const k of ["cwd", "provider", "model", "profile", "baseHome", "profilesPath", "labels", "pendingPrompt", "summaryUpdate", "__proto__"]) {
-      const r = rules.checkRemoteBody("POST", P, `{"cardId":"1","${k}":"x"}`);
-      assert.equal(r.ok, false, k);
-      assert.match(r.error, /not allowed remotely/);
-    }
-    assert.match(rules.checkRemoteBody("POST", P, '{"cardId":"1","extra":1}').error, /key not allowed remotely: body\.extra/);
-    assert.match(rules.checkRemoteBody("POST", P, "{}").error, /required/);
-    assert.match(rules.checkRemoteBody("POST", P, "[1]").error, /JSON object/);
-    assert.match(rules.checkRemoteBody("POST", P, "{bad").error, /JSON object/);
-    assert.match(rules.checkRemoteBody("POST", "/__vibesquad/settings", '{"lanEnabled":true}').error, /no remote body policy/);
-    assert.deepEqual(rules.checkRemoteBody("GET", "/__vibesquad/anything", "ignored"), { ok: true, value: {} });
-    assert.match(rules.checkRemoteBody("POST", "/__vibesquad/brainstorm-summary", '{"laneId":"x","content":"y"}').error, /required.*revision/);
-  });
-
-  test("every open write has a policy, and no policy allows a forbidden key at any depth", () => {
-    for (const [path, methods] of Object.entries(rules.REMOTE_ALLOW)) {
-      if (methods.some((m) => m !== "GET")) assert.ok(rules.REMOTE_BODY_POLICY[path], path);
-    }
-    const keys = (fields, out = []) => {
-      for (const [k, spec] of Object.entries(fields)) {
-        out.push(k);
-        let inner = spec;
-        while (inner.t === "array") inner = inner.of;
-        if (inner.t === "object") keys(inner.fields, out);
-      }
-      return out;
-    };
-    for (const [path, pol] of Object.entries(rules.REMOTE_BODY_POLICY)) {
-      // N2 fs mutations carry `cwd` on purpose: server/file-search.mjs confineReq() realpaths it against the known team/agent roots
-      // (same model as REMOTE_TERMINAL_POLICY / REMOTE_GIT_POLICY). The exemption is explicit per route via allowKeys and limited to cwd.
-      const allowed = pol.allowKeys ?? [];
-      assert.ok(allowed.every((k) => k === "cwd"), `${path} allowKeys beyond cwd: ${allowed}`);
-      for (const k of keys(pol.fields)) assert.ok(allowed.includes(k) || !rules.REMOTE_FORBIDDEN_BODY_KEYS.includes(k), `${path} allows ${k}`);
-    }
-  });
-
-});

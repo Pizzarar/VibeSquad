@@ -91,14 +91,10 @@ test("H3 shouldShowDisconnectOverlay debounces blips under 2s", async () => {
   assert.equal(fn("connecting", 1_000, 2_500, 1_000), true);
 });
 
-test("H3 scrim is fixed, does not use role=alert on the outer element, and .app rows ignore it", () => {
+test("H3 runner-down is a non-blocking header pill that opens Diagnostics (no scrim over the app)", () => {
   const dm = src("DiagnosticsModal.tsx");
-  assert.match(dm, /<div className="daemon-disconnect-scrim" data-testid="daemon-disconnect-scrim">/);
-  assert.match(dm, /className="daemon-disconnect-card" data-testid="daemon-down-banner" role="alert"/);
-  assert.match(dm, /Daemon disconnected · reconnecting automatically/);
-  const css = src("ResponsiveSmallWindow.css");
-  assert.match(css, /\.daemon-disconnect-scrim \{ position: fixed; inset: 0; z-index: 9500; background: rgba\(5, 6, 13, 0\.72\);/);
-  assert.match(css, /\.modal-back:has\(\[data-testid="diagnostics-modal"\]\) \{ z-index: 9600; \}/);
-  assert.match(src("styles.css"), /\.app:has\(> \[role="alert"\]:not\(\.daemon-disconnect-scrim\)\)/);
-  assert.match(src("App.tsx"), /<DaemonStatusBanner onOpenDiagnostics=\{openDiagnostics\} \/>/);
+  assert.match(dm, /className="daemon-status-pill" data-testid="daemon-status-pill" role="status" onClick=\{props\.onOpenDiagnostics\}/);
+  assert.doesNotMatch(dm, /daemon-disconnect-scrim/);
+  assert.match(dm, /Runner disconnected · reconnecting automatically/);
+  assert.match(src("App.tsx"), /<DaemonStatusBanner onOpenDiagnostics=\{\(\) => setModal\("diagnostics"\)\} \/>/);
 });

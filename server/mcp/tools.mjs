@@ -47,39 +47,19 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
       const { appendVsLogEntry } = await import("../brainstorm.mjs");
       appendVsLogEntry({ teamId: ctx.identity.team, laneId: ctx.identity.lane, agent: ctx.identity.agentId || "you", type, text, refs });
     },
-    // fn(backend) runs against the owning backend. A runner id never needs Paseo; everything else goes through the
-    // RoutingBackend (rn- ids -> runner, other ids -> Paseo, creates by lane, lists merged), with Paseo connected only if it
-    // is listening and closed after the call.
-    async withBackend({ id, lane, requireRunner } = {}, fn) {
-      const { sharedRunnerBackend, getBackend, runnerLanes } = await import("../backend/index.mjs");
-      if (isRunnerId(id)) {
-        // Connect-only: with the runner down this is RUNNER_DOWN. The VS server owns starting it.
-        const runner = sharedRunnerBackend();
-        await runner.requireRunning?.();
-        return fn(runner);
-      }
-      const { createDaemonClient } = await import("../brainstorm.mjs");
-      const backend = getBackend(createDaemonClient(), { lanes: () => runnerLanes({ env }) });
-      await backend.connect?.();
-      try {
-        // A spawn into a runner lane is RUNNER_DOWN when the runner is down (never started here). A Paseo-pinned lane, a Paseo id
-        // and a list (the routing list tolerates a down runner and returns the Paseo agents) do not need it.
-        if (requireRunner && !id) await backend.ensureRunner?.(lane || "");
-        return await fn(backend);
-      } finally {
-        await Promise.resolve(backend.close?.()).catch(() => {});
-      }
+    // fn(backend) runs against the runner. Connect-only: with the runner down this is RUNNER_DOWN. The VS server owns starting it.
+    async withBackend(_opts, fn) {
+      const { sharedRunnerBackend } = await import("../backend/index.mjs");
+      const runner = sharedRunnerBackend();
+      await runner.requireRunning?.();
+      return fn(runner);
     },
-    // Live leads in (team, lane): the exact `vs who lead` filter (whoCandidate), over the merged agent list. Fails closed:
-    // an unreadable or partial list (runner down, Paseo down for a lane Paseo would serve) throws instead of reading as "none".
+    // Live leads in (team, lane): the exact `vs who lead` filter (whoCandidate), over the agent list. Fails closed:
+    // an unreadable list (runner down) throws instead of reading as "none".
     async findLiveLeads({ team, lane }) {
       const res = await ctx.withBackend({ lane, requireRunner: true }, (b) => (b.fetchAgents ?? b.listAgents).call(b, {}));
       const list = Array.isArray(res) ? res : Array.isArray(res?.entries) ? res.entries : Array.isArray(res?.agents) ? res.agents : null;
       if (!list) throw new Error(`can't verify the lane has no live lead: agent list unreadable`);
-      if (res.paseoUnavailable) {
-        const { runnerLanes } = await import("../backend/index.mjs");
-        if (!runnerLanes({ env }).has(lane.toLowerCase())) throw new Error(`can't verify the lane has no live lead: Paseo is unavailable`);
-      }
       const teams = ctx.teams ?? loadTeamsRegistry();
       return list.map((e) => e?.agent ?? e).filter((a) => a && whoCandidate(a, { teams, wantTeamId: team, wantLane: lane })?.role === "lead");
     },

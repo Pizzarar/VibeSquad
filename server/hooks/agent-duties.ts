@@ -54,7 +54,7 @@ type Labels = Record<string, string>;
 
 /**
  * The hook surface this module is written against. server/backend/runner-hooks.mjs provides it (backed by a
- * RunnerBackend); the Paseo daemon plugin host is gone, so this replaces the old @getpaseo/plugin/server type.
+ * RunnerBackend); the Paseo daemon plugin host is gone, so this is the in-repo server type.
  */
 export interface PluginServerContext {
   before(event: string, handler: (input: any) => any): () => void;
@@ -884,9 +884,9 @@ export interface AgentSettingsPatch {
   thinkingOptionId?: string;
 }
 
-async function withDaemonClient<T>(fn: (client: any) => Promise<T>): Promise<T> {
-  const { createDaemonClient } = await import("../brainstorm.mjs");
-  const client: any = createDaemonClient();
+async function withAgentClient<T>(fn: (client: any) => Promise<T>): Promise<T> {
+  const { createAgentClient } = await import("../brainstorm.mjs");
+  const client: any = createAgentClient();
   await client.connect();
   try {
     return await fn(client);
@@ -896,7 +896,7 @@ async function withDaemonClient<T>(fn: (client: any) => Promise<T>): Promise<T> 
 }
 
 function daemonApplyAgentSettings(agentId: string, patch: AgentSettingsPatch): Promise<void> {
-  return withDaemonClient(async (client) => {
+  return withAgentClient(async (client) => {
     if (patch.model) await client.setAgentModel(agentId, patch.model);
     if (patch.modeId) await client.setAgentMode(agentId, patch.modeId);
     if (patch.thinkingOptionId) await client.setAgentThinkingOption(agentId, patch.thinkingOptionId);
@@ -904,7 +904,7 @@ function daemonApplyAgentSettings(agentId: string, patch: AgentSettingsPatch): P
 }
 
 function daemonRefuseAgent(agentId: string): Promise<void> {
-  return withDaemonClient(async (client) => {
+  return withAgentClient(async (client) => {
     await client.cancelAgent(agentId).catch(() => {});
     await client.archiveAgent(agentId);
   });
@@ -916,12 +916,12 @@ const AGENT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 // whole CLI process per label write (median 4 s, max 9 s).
 export function daemonSetLabels(agentId: string, labels: Labels, name?: string): Promise<void> {
   if (!AGENT_ID_RE.test(agentId)) return Promise.reject(new Error("invalid agent id"));
-  return withDaemonClient((client) => client.updateAgent(agentId, { ...(name ? { name } : {}), labels }));
+  return withAgentClient((client) => client.updateAgent(agentId, { ...(name ? { name } : {}), labels }));
 }
 
 export function daemonArchive(agentId: string): Promise<void> {
   if (!AGENT_ID_RE.test(agentId)) return Promise.reject(new Error("invalid agent id"));
-  return withDaemonClient(async (client) => {
+  return withAgentClient(async (client) => {
     await client.archiveAgent(agentId);
   });
 }

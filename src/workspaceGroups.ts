@@ -1,7 +1,7 @@
 // Workspaces page model (docs/PLAN_WORKSPACES_CLEANUP.md): one row per real folder, a true "in use".
 // Paseo makes a workspace record for nearly every agent started in a folder, so records are grouped by
 // normalized directory and agents are matched by workspace id (cwd only when an agent has none).
-import type { PaseoAgent, PaseoWorkspace } from "@getpaseo/client";
+import type { PaseoAgent, PaseoWorkspace } from "./agentTypes";
 
 export type Verdict = "in-use" | "check" | "safe";
 

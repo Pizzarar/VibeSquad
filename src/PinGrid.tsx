@@ -4,7 +4,7 @@
 // FULL brings back the old plumbing view (agent cards, workers, handoff, folders, retired agents).
 import { AttentionBadge } from "./AttentionList";
 import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { client, getPaseoState, markAgentRead, sendMessage } from "./paseo";
+import { getPaseoState, markAgentRead, sendMessage } from "./paseo";
 import { isRunnerId, runnerHandle } from "./runnerBridge";
 import { DEMO } from "./demoFlag";
 import { openContextMenu } from "./CommandPalette";
@@ -449,7 +449,7 @@ export function usePreview(agentId: string | null): Line[] {
     }
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const handle = isRunnerId(agentId) ? (runnerHandle(agentId) as any) : client.agents.ref(agentId);
+    const handle = runnerHandle(agentId) as any;
     const agent = getPaseoState().agents.get(agentId);
     if (agent?.status === "closed") {
       const snap = (handle.timeline as any).getSnapshot?.();

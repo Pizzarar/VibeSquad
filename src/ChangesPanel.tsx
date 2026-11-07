@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import type { PaseoAgent } from "@getpaseo/client";
+import type { PaseoAgent } from "./agentTypes";
 import { spawnTeamAgent } from "./paseo";
 import { VsFilesError, vsDeleteEntry, vsReadFile, vsWriteFile } from "./vsFiles";
 import { DEMO } from "./demoFlag";
@@ -96,10 +96,10 @@ export const DEMO_DIFF: DiffPayload = {
         oldStart: 1, oldCount: 8, newStart: 1, newCount: 120,
         lines: [
           { type: "header", content: "@@ -1,8 +1,120 @@" },
-          { type: "context", content: " import type { PaseoAgent } from '@getpaseo/client';" },
+          { type: "context", content: " import type { PaseoAgent } from './agentTypes';" },
           { type: "remove", content: "-// placeholder stub" },
           { type: "add", content: "+import { useState, useEffect } from 'react';" },
-          { type: "add", content: "+import { daemonClient, client, DEMO } from './paseo';" },
+          { type: "add", content: "+import { usePaseo, DEMO } from './paseo';" },
         ],
       }],
     },

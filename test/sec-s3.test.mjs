@@ -120,12 +120,12 @@ describe("loopback API: owner vs read-only", () => {
   });
 
   test("gated GETs need the token too", async () => {
-    for (const path of ["/__vibesquad/push/vapid-public-key", "/__vibesquad/paseo/providers/diagnostic?provider=x", "/__vibesquad/paseo/providers/models?provider=x", "/__vibesquad/paseo/usage?refresh=1", "/__vibesquad/paseo/surface", "/__vibesquad/local-image?path=x.png"]) {
+    for (const path of ["/__vibesquad/push/vapid-public-key", "/__vibesquad/local-image?path=x.png"]) {
       const r = await call(port, path);
       assert.equal(r.status, 403, path);
       assert.equal(json(r).readOnly, true, path);
     }
-    assert.equal(api.isGatedRead("/__vibesquad/paseo/usage", "/__vibesquad/paseo/usage"), false);
+    for (const gone of ["/__vibesquad/paseo/usage?refresh=1", "/__vibesquad/paseo/surface", "/__vibesquad/local-token"]) assert.equal(api.isGatedRead(gone.split("?")[0], gone), false, `${gone} is not a route any more`);
     assert.equal(api.isGatedRead("/__vibesquad/teams"), false);
     const vapid = await call(port, "/__vibesquad/push/vapid-public-key", { headers: { "x-vibesquad-token": token } });
     assert.equal(vapid.status, 200);
@@ -210,30 +210,19 @@ describe("loopback API: owner vs read-only", () => {
   });
 });
 
-describe("loopback /ws upgrade", () => {
-  let upstream;
-  let upstreamHits = 0;
+describe("loopback /ws upgrade (none)", () => {
   const sockets = new Set();
   let port;
   let token;
   before(async () => {
     token = auth.getLocalToken();
-    upstream = createTcpServer((s) => {
-      upstreamHits++;
-      sockets.add(s);
-      s.end("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
-    });
-    await new Promise((ok) => upstream.listen(0, "127.0.0.1", ok));
-    process.env.PASEO_DAEMON = `127.0.0.1:${upstream.address().port}`;
     await new Promise((ok) => loopbackServer.listen(0, "127.0.0.1", ok));
     port = loopbackServer.address().port;
   });
   after(async () => {
-    delete process.env.PASEO_DAEMON;
     for (const s of sockets) s.destroy();
     loopbackServer.closeAllConnections();
     await new Promise((ok) => loopbackServer.close(ok));
-    await new Promise((ok) => upstream.close(ok));
   });
 
   const upgrade = (headers) =>
@@ -245,26 +234,18 @@ describe("loopback /ws upgrade", () => {
         s.write(raw + "\r\n");
       });
       let data = "";
-      s.on("data", (c) => (data += c));
+      s.on("data", (c) => {
+        data += c;
+        if (data.includes("\r\n")) s.destroy(); // a plain HTTP answer keeps the connection open: the status line is enough
+      });
       s.on("close", () => ok(data.split("\r\n")[0]));
       s.on("error", fail);
     });
 
-  test("no token: refused, even with a loopback Origin", async () => {
-    assert.match(await upgrade({}), /403/);
-    assert.match(await upgrade({ Origin: `http://127.0.0.1:${port}` }), /403/);
-    assert.match(await upgrade({ "x-vibesquad-token": "0".repeat(64) }), /403/);
-    assert.equal(upstreamHits, 0);
-  });
-
-  test("token header or vs_local cookie reaches the daemon; a foreign Origin never does", async () => {
-    assert.match(await upgrade({ Origin: "http://evil.example", "x-vibesquad-token": token }), /403/);
-    assert.equal(upstreamHits, 0);
-    assert.match(await upgrade({ "x-vibesquad-token": token }), /101/);
-    const r = await call(port, `/__vibesquad/local-login?t=${auth.mintLocalLoginNonce()}`);
-    const cookie = String(r.headers["set-cookie"]).split(";")[0];
-    assert.match(await upgrade({ Origin: `http://127.0.0.1:${port}`, Cookie: cookie }), /101/);
-    assert.equal(upstreamHits, 2);
+  test("no /ws upgrade is ever accepted: the Paseo daemon proxy is gone, token or not", async () => {
+    for (const headers of [{}, { Origin: `http://127.0.0.1:${port}` }, { "x-vibesquad-token": token }, { Origin: "http://evil.example", "x-vibesquad-token": token }]) {
+      assert.doesNotMatch(await upgrade(headers), /101/);
+    }
   });
 
   test("a second `serve.mjs --open` while the server runs gets a nonce URL from it (no TDZ crash, no token on argv)", async (t) => {

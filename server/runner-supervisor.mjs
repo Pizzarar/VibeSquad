@@ -1,4 +1,4 @@
-// The VS server is the runner's only owner (like Paseo's daemon): it starts the runner at boot and restarts it, with backoff,
+// The VS server is the runner's only owner : it starts the runner at boot and restarts it, with backoff,
 // if it dies. Everyone else (MCP sidecars, the vs CLI, runner-api) only connects and gets RUNNER_DOWN when it is not up.
 //
 // It also keeps the runner's code live: the runner reports a content hash of its own runner/*.mjs files on /health, and this
@@ -6,7 +6,6 @@
 // it restarts the runner, so a build -> sync-runtime actually goes live without quitting VibeSquad (RR1).
 import { rmSync } from "node:fs";
 import path from "node:path";
-import { runnerLanes } from "./backend/index.mjs";
 import { logRunnerMetric } from "./backend/runner-backend.mjs";
 import { readDiscovery } from "./backend/runner-client.mjs";
 import { pidAlive, readLock } from "../runner/lock.mjs";
@@ -16,15 +15,10 @@ import { hashRunnerFiles } from "../runner/server.mjs";
 /** The runtime runner/ dir the live runner was started from (same repo root as this server). */
 export const runtimeRunnerDir = () => path.resolve(import.meta.dirname, "..", "runner");
 
-/** Start the runner at boot unless it is disabled: no runner lanes (Paseo rollback) or VIBESQUAD_START_RUNNER=0. */
-export function shouldSuperviseRunner(env = process.env, lanes = () => runnerLanes({ env })) {
+/** Start the runner at boot unless VIBESQUAD_START_RUNNER=0. */
+export function shouldSuperviseRunner(env = process.env) {
   const v = String(env?.VIBESQUAD_START_RUNNER ?? "").trim().toLowerCase();
-  if (v === "0" || v === "false") return false;
-  try {
-    return lanes().size > 0;
-  } catch {
-    return false;
-  }
+  return !(v === "0" || v === "false");
 }
 
 /** Owner-confirmed forced restart (Unstick, after it killed the old runner tree and cleared runner.lock): the start still goes through the owner. */

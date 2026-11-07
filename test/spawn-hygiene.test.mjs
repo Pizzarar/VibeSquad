@@ -107,7 +107,7 @@ test("block 3: fetchAgents rejecting (or returning junk) spawns nothing", async 
       resetBrainstormRestartState();
       const daemon = brainstormDaemon(fetchAgents);
       const r = await performBrainstormRestart(
-        { reason: "start-brainstorm", teamId: "sq", laneId: "dup-test", daemonClient: daemon, emptyRetryMs: 1 },
+        { reason: "start-brainstorm", teamId: "sq", laneId: "dup-test", agentClient: daemon, emptyRetryMs: 1 },
         dir,
       );
       assert.equal(r.ok, false);
@@ -130,7 +130,7 @@ test("block 3: an empty list is retried once; a readable list reuses the live Bu
     const live = { id: "bs1", status: "idle", title: "BRAINSTORM", labels: { team: "sq", lane: "dup-test", role: "brainstorm" } };
     const daemon = brainstormDaemon(async () => (++calls === 1 ? [] : [live]));
     const r = await performBrainstormRestart(
-      { reason: "start-brainstorm", teamId: "sq", laneId: "dup-test", daemonClient: daemon, emptyRetryMs: 1 },
+      { reason: "start-brainstorm", teamId: "sq", laneId: "dup-test", agentClient: daemon, emptyRetryMs: 1 },
       dir,
     );
     assert.equal(calls, 2);
@@ -185,7 +185,7 @@ test("block 5: boot prompt lists the lane's running lead, workers and latest log
       updateAgent: async () => {},
       cancelAgent: async () => {},
     };
-    await performBrainstormRestart({ reason: "start-brainstorm", teamId: "sq", laneId: "lane-a", daemonClient: daemon, emptyRetryMs: 1 }, dir);
+    await performBrainstormRestart({ reason: "start-brainstorm", teamId: "sq", laneId: "lane-a", agentClient: daemon, emptyRetryMs: 1 }, dir);
     const p = created[0].initialPrompt;
     assert.match(p, /In flight \(live/);
     assert.match(p, /Lead: ★ LANE ord3 \[running/);
@@ -331,7 +331,7 @@ test("review 3: Buddy spawn sets VS_BRIEF_INLINE and inlines the brief in the fi
     resetBrainstormRestartState();
     const created = [];
     const daemon = { fetchAgents: async () => [{ id: "z", status: "idle", labels: { lane: "other" } }], createAgent: async (r) => (created.push(r), { id: "n", labels: {} }), archiveAgent: async () => {}, updateAgent: async () => {}, cancelAgent: async () => {} };
-    await performBrainstormRestart({ reason: "start-brainstorm", teamId: "sq", laneId: "inl-test", daemonClient: daemon }, dir);
+    await performBrainstormRestart({ reason: "start-brainstorm", teamId: "sq", laneId: "inl-test", agentClient: daemon }, dir);
     assert.equal(created[0].env.VS_BRIEF_INLINE, "1");
     assert.equal(created[0].env.VS_LANE, "inl-test");
     assert.match(created[0].initialPrompt, /BEGIN docs\/brainstorm\/inl-test\.md/);
@@ -366,7 +366,7 @@ test("pin spawn logs brief-inlined: lane=X", async () => {
   try {
     resetBrainstormRestartState();
     const daemon = { fetchAgents: async () => [{ id: "z", labels: { lane: "other" } }], createAgent: async () => ({ id: "n", labels: {} }), archiveAgent: async () => {}, updateAgent: async () => {}, cancelAgent: async () => {} };
-    await performBrainstormRestart({ reason: "start-brainstorm", teamId: "sq", laneId: "inl-log", daemonClient: daemon }, dir);
+    await performBrainstormRestart({ reason: "start-brainstorm", teamId: "sq", laneId: "inl-log", agentClient: daemon }, dir);
     assert.match(readFileSync(join(dir, ".vibesquad", "teams", "sq", "log.jsonl"), "utf8"), /brief-inlined: lane=inl-log/);
   } finally {
     prev === undefined ? delete process.env.VIBESQUAD_HOME : (process.env.VIBESQUAD_HOME = prev);

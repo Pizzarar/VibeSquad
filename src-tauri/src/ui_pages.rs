@@ -186,7 +186,7 @@ pub fn render_mode_choice_page(_cfg: &DesktopConfig, error_msg: Option<&str>) ->
           <span>→</span>
         </div>
         <div class="choice-desc">
-          Starts the local VibeSquad server (127.0.0.1:4180) and Paseo daemon on this machine.
+          Starts the local VibeSquad server (127.0.0.1:4180) and agent runner on this machine.
         </div>
       </button>
 
@@ -196,7 +196,7 @@ pub fn render_mode_choice_page(_cfg: &DesktopConfig, error_msg: Option<&str>) ->
           <span>→</span>
         </div>
         <div class="choice-desc">
-          Pair with a VibeSquad server over Home LAN or Meshnet using a 6-digit code. Spawns zero local server or daemon processes on this PC.
+          Pair with a VibeSquad server over Home LAN or Meshnet using a 6-digit code. Spawns zero local server or runner processes on this PC.
         </div>
       </button>
     </div>

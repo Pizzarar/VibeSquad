@@ -1,4 +1,4 @@
-import type { PaseoAgent } from "@getpaseo/client";
+import type { PaseoAgent } from "./agentTypes";
 
 // Pure detectors and guards for the Antigravity issues A1-A9 (docs/PLAN_STEP5_AGY_HARDENING.md).
 // No React, no daemon calls: Unit 5B feeds these the agent snapshot and projected timeline tail.

@@ -2,7 +2,7 @@
 // (state "removed", the teams.json row and brief stay) and its agents are archived. Worktrees + branches
 // are deleted only when the confirm dialog's opt-in box is ticked, and never when another live team
 // shares the folders. Pure plan + injected effects, like src/pinComplete.ts; src/pinActions.ts wires them, src/PinRemove.tsx is the dialog.
-import type { PaseoAgent } from "@getpaseo/client";
+import type { PaseoAgent } from "./agentTypes";
 import type { LaneDef, Member, TeamDef, TeamsUpdater } from "./teams.ts";
 import { appendBriefLine, briefStamp, patchLane, type Pin } from "./pins.ts";
 

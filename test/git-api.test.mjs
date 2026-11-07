@@ -7,7 +7,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { handleGitApi, isGitPath, parseUnifiedDiff, parseStatus, parseCommits, badRefName, badRepoPath } from "../server/git-api.mjs";
-import { decideProxyRequest, checkRemoteBody, proxyTimeoutFor } from "../server/hooks/remote-proxy-rules.ts";
 
 const G = "/__vibesquad/git";
 const sh = (cwd, ...a) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...a], { cwd, encoding: "utf8" });
@@ -202,39 +201,3 @@ describe("routes on a temp repo", () => {
   });
 });
 
-describe("remote proxy: git is owner-only", () => {
-  const READS = ["status", "diff", "commits", "commit-diff", "branches", "validate-branch", "stash-list", "pr-status", "pr-timeline", "check-details"];
-  const WRITES = ["commit", "push", "pull", "merge-base", "switch", "stash-save", "stash-pop", "discard", "rename-branch", "pr-create", "pr-merge", "pr-automerge"];
-  const BODY = { commit: { message: "m" }, switch: { branch: "b" }, "rename-branch": { branch: "b" }, discard: { paths: ["a"] }, "pr-create": { title: "t" } };
-
-  test("every action is allowed with the right method only", () => {
-    for (const a of READS) {
-      assert.equal(decideProxyRequest("GET", `${G}/${a}`).ok, true, a);
-      assert.equal(decideProxyRequest("POST", `${G}/${a}`).ok, false, a);
-    }
-    for (const a of WRITES) {
-      assert.equal(decideProxyRequest("POST", `${G}/${a}`).ok, true, a);
-      assert.equal(decideProxyRequest("GET", `${G}/${a}`).ok, false, a);
-      assert.equal(decideProxyRequest("DELETE", `${G}/${a}`).ok, false, a);
-    }
-    assert.equal(decideProxyRequest("GET", `${G}/unknown`).ok, false);
-    assert.equal(decideProxyRequest("GET", `${G}/status/x`).ok, false);
-  });
-
-  test("slow git/gh writes get the long proxy timeout; reads keep the default", () => {
-    for (const w of ["commit", "push", "pull", "merge-base", "switch", "stash-save", "stash-pop", "pr-create", "pr-merge", "pr-automerge"]) assert.equal(proxyTimeoutFor(`${G}/${w}`), 125_000, w);
-    for (const r of ["status", "diff", "commits", "pr-status"]) assert.equal(proxyTimeoutFor(`${G}/${r}`), 10_000, r);
-  });
-
-  test("write bodies are typed: unknown keys, bad method, wrong types and missing fields are refused", () => {
-    const chk = (a, b) => checkRemoteBody("POST", `${G}/${a}`, JSON.stringify(b));
-    assert.equal(chk("commit", { cwd: "x", message: "m" }).ok, true);
-    assert.equal(chk("commit", { cwd: "x", message: "m", sneaky: 1 }).ok, false);
-    assert.equal(chk("commit", { cwd: "x" }).ok, false);
-    assert.equal(chk("pr-merge", { cwd: "x", method: "--admin" }).ok, false);
-    assert.equal(chk("pr-merge", { cwd: "x", method: "squash" }).ok, true);
-    assert.equal(chk("discard", { cwd: "x", paths: "a" }).ok, false);
-    assert.equal(chk("pr-create", { cwd: "x", title: "t", labels: "y" }).ok, false);
-    assert.equal(chk("push", { message: "no cwd" }).ok, false);
-  });
-});

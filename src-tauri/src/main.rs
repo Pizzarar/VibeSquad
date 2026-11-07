@@ -1478,7 +1478,7 @@ async fn handle_desktop_notify(
     Json(json!({ "ok": res.is_ok(), "shown": res.is_ok(), "error": res.err() }))
 }
 
-/// Inspects Paseo `/ws` JSON frames flowing from upstream to track agents needing attention,
+/// Inspects agent JSON frames flowing from upstream to track agents needing attention,
 /// update the System Tray badge count, and trigger native Windows notifications.
 fn inspect_ws_frame(state: &Arc<SharedAppState>, text: &str) {
     let parsed: Value = match serde_json::from_str(strip_bom(text)) {
@@ -1822,17 +1822,7 @@ async fn proxy_websocket(
     protocols: Vec<String>,
 ) {
     let cfg = state.config.read().unwrap().clone();
-    let mut candidates = state.candidate_hosts();
-    let mut direct_host: Option<String> = None;
-    if cfg.server_mode == "local"
-        && std::env::var("VIBESQUAD_DESKTOP_PORT").is_err()
-        && matches!(candidates.first().map(|s| s.as_str()), Some("127.0.0.1:4180") | Some("localhost:4180"))
-    {
-        if let Some(direct) = direct_local_paseo_ws_host() {
-            direct_host = Some(direct.clone());
-            candidates.insert(0, direct);
-        }
-    }
+    let candidates = state.candidate_hosts();
 
     let mut upstream_stream = None;
     for host in candidates {
@@ -1881,9 +1871,7 @@ async fn proxy_websocket(
         };
 
         if let Ok(Ok((stream, _resp))) = conn_res {
-            if direct_host.as_deref() != Some(host.as_str()) {
-                *state.active_upstream.write().unwrap() = Some(host);
-            }
+            *state.active_upstream.write().unwrap() = Some(host);
             upstream_stream = Some(stream);
             break;
         }
@@ -1953,40 +1941,6 @@ async fn proxy_websocket(
         _ = cl_to_up => {},
     }
     inspect_task.abort();
-}
-
-/// Reads `~/.paseo/config.json` and returns the local Paseo daemon `host:port`, or `None` when
-/// the daemon uses TLS or no Paseo install is detectable.
-fn direct_local_paseo_ws_host() -> Option<String> {
-    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).ok()?;
-    let dir = PathBuf::from(home).join(".paseo");
-    let cfg_path = dir.join("config.json");
-    let parsed: Option<Value> = fs::read_to_string(&cfg_path)
-        .ok()
-        .and_then(|raw| serde_json::from_str(strip_bom(&raw)).ok());
-    if parsed.is_none() && !dir.join("daemon.pid").exists() {
-        return None;
-    }
-    let daemon = parsed.as_ref().and_then(|v| v.get("daemon"));
-    if daemon
-        .and_then(|d| d.get("tls"))
-        .and_then(|t| t.get("enabled"))
-        .and_then(|e| e.as_bool())
-        .unwrap_or(false)
-    {
-        return None;
-    }
-    let listen = daemon
-        .and_then(|d| d.get("listen"))
-        .and_then(|l| l.as_str())
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .unwrap_or("127.0.0.1:6767");
-    let addr = listen.trim_start_matches("ws://").trim_end_matches("/ws").trim_end_matches('/');
-    if addr.is_empty() || !is_local_host(addr) {
-        return None;
-    }
-    Some(addr.to_string())
 }
 
 /// Locates `(node_exe, runtime_dir)`: installed runtime first, then the per-user copy, then a dev checkout.
@@ -2117,37 +2071,6 @@ async fn ensure_local_server_running(state: &Arc<SharedAppState>) {
 
 /// Kills the server we spawned (never one we merely reused) so quitting leaves no orphan node.exe.
 fn stop_managed_server(state: &Arc<SharedAppState>) {
-    // Before stopping the local VibeSquad server, ask it to evaluate the Paseo daemon quit policy
-    // (stops the daemon only if keepPaseoRunningOnQuit is false, daemon is VibeSquad-managed, and 0 busy agents).
-    let (mode, host) = {
-        let cfg = state.config.read().unwrap();
-        (cfg.server_mode.clone(), cfg.server_host.clone())
-    };
-    if mode == "local" && is_local_host(&host) {
-        let norm = normalize_host(&host);
-        if let Ok(addr) = norm.parse::<SocketAddr>() {
-            if let Ok(mut stream) = std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(400)) {
-                use std::io::{Read, Write};
-                let _ = stream.set_read_timeout(Some(Duration::from_millis(1200)));
-                let _ = stream.set_write_timeout(Some(Duration::from_millis(400)));
-                let body = b"{\"action\":\"stop\",\"reason\":\"app-quit\"}";
-                let token_line = state.local_token()
-                    .map(|t| format!("{}: {}\r\n", LOCAL_TOKEN_HEADER, t))
-                    .unwrap_or_default();
-                let req = format!(
-                    "POST /__vibesquad/paseo/daemon HTTP/1.1\r\nHost: {}\r\nOrigin: http://{}\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    norm,
-                    norm,
-                    token_line,
-                    body.len()
-                );
-                let _ = stream.write_all(req.as_bytes());
-                let _ = stream.write_all(body);
-                let mut buf = [0u8; 512];
-                let _ = stream.read(&mut buf);
-            }
-        }
-    }
     let child = state.managed_server.lock().unwrap().take();
     if let Some(mut child) = child {
         let _ = child.kill();
@@ -2755,7 +2678,7 @@ fn main() {
         || std::env::var("VIBESQUAD_HEADLESS_PROXY").as_deref() == Ok("1");
     // Own the server process: start the bundled one (or reuse a healthy :4180). In GUI mode we do
     // NOT spawn it eagerly before the window opens — the proxy handler or clicking "Run agents on
-    // this PC" starts it on demand, and only starts the Paseo daemon when server_mode == "local".
+    // this PC" starts it on demand, and only when server_mode == "local".
     // Headless test mode still starts it when a runtime is actually bundled next to the exe.
     if headless && find_bundled_runtime().is_some() {
         let st = shared_state.clone();
@@ -3436,7 +3359,7 @@ mod tests {
             b.send()
         };
 
-        for path in ["/api/teams", "/__vibesquad/x", "/__vibesquad/paseo/providers", "/__desktop/status"] {
+        for path in ["/api/teams", "/__vibesquad/x", "/__vibesquad/providers", "/__desktop/status"] {
             for hdrs in [
                 vec![("origin", "https://evil.example".to_string())],
                 vec![("origin", "null".to_string())],
@@ -3613,12 +3536,12 @@ mod tests {
         let app = build_router(state.clone());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
-        // 1. WebSocket upgrade with Sec-WebSocket-Protocol: paseo.bearer.secret123
+        // 1. WebSocket upgrade with Sec-WebSocket-Protocol: vs.bearer.secret123
         let ws_url = format!("ws://127.0.0.1:{}/ws", port);
         let mut ws_req = ws_url.into_client_request().unwrap();
         ws_req
             .headers_mut()
-            .insert("Sec-WebSocket-Protocol", HeaderValue::from_static("paseo.bearer.secret123"));
+            .insert("Sec-WebSocket-Protocol", HeaderValue::from_static("vs.bearer.secret123"));
         let (mut ws_stream, ws_resp) = connect_async_tls_with_config(ws_req, None, false, None)
             .await
             .unwrap();
@@ -3627,10 +3550,10 @@ mod tests {
                 .headers()
                 .get("sec-websocket-protocol")
                 .and_then(|v| v.to_str().ok()),
-            Some("paseo.bearer.secret123")
+            Some("vs.bearer.secret123")
         );
         if let Some(Ok(TungMessage::Text(msg))) = ws_stream.next().await {
-            assert_eq!(msg.as_str(), "proto=paseo.bearer.secret123");
+            assert_eq!(msg.as_str(), "proto=vs.bearer.secret123");
         } else {
             panic!("expected text frame from upstream ws");
         }

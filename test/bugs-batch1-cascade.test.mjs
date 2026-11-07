@@ -134,7 +134,7 @@ test("Buddy restart (server/brainstorm.mjs) leaves the old Buddy's lead and work
   withHome(async (dir) => {
     resetBrainstormRestartState();
     const d = cascadingDaemon(fleet());
-    const r = await performBrainstormRestart({ agentId: "bs-old", reason: "manual", teamId: "sq", laneId: "ade", daemonClient: d }, dir);
+    const r = await performBrainstormRestart({ agentId: "bs-old", reason: "manual", teamId: "sq", laneId: "ade", agentClient: d }, dir);
     assert.ok(r.ok !== false, JSON.stringify(r));
     assert.ok(await waitFor(() => d.calls.archive.includes("bs-old")), "old Buddy archived (background retire)");
     for (const id of ["lead1", "w1", "w2"]) assert.equal(d.agents.get(id).archivedAt, undefined, `${id} survived the restart`);
@@ -145,7 +145,7 @@ test("Buddy hard-limit retire (auto, no successor) also leaves the lead running"
   withHome(async (dir) => {
     resetBrainstormRestartState();
     const d = cascadingDaemon(fleet());
-    await performBrainstormRestart({ agentId: "bs-old", reason: "auto-hard-limit", teamId: "sq", laneId: "ade", daemonClient: d, usedTokens: 200000 }, dir);
+    await performBrainstormRestart({ agentId: "bs-old", reason: "auto-hard-limit", teamId: "sq", laneId: "ade", agentClient: d, usedTokens: 200000 }, dir);
     assert.ok(d.agents.get("bs-old").archivedAt);
     assert.equal(d.agents.get("lead1").archivedAt, undefined);
     assert.equal(d.agents.get("w1").archivedAt, undefined);
@@ -230,7 +230,7 @@ test("0b: start-brainstorm for bug-chaser from the VibeSquad folder embeds bug-c
     const reqs = [];
     const d = cascadingDaemon([]);
     d.createAgent = async (req) => (reqs.push(req), { id: "bc-bs", labels: { ...req.labels } });
-    await performBrainstormRestart({ reason: "start-brainstorm", teamId: "vibesquad", laneId: "bug-chaser", laneName: "Bug Chaser", daemonClient: d }, briefRoot);
+    await performBrainstormRestart({ reason: "start-brainstorm", teamId: "vibesquad", laneId: "bug-chaser", laneName: "Bug Chaser", agentClient: d }, briefRoot);
     assert.equal(reqs.length, 1);
     const req = reqs[0];
 
@@ -271,7 +271,7 @@ test("0c server: a pin click on a lane whose Buddy is closed reuses and reopens 
     d.refreshAgent = async (id) => void refreshed.push(id);
     let created = 0;
     d.createAgent = async () => (created++, { id: "nope", labels: {} });
-    const r = await performBrainstormRestart({ reason: "start-brainstorm", teamId: "sq", laneId: "ade", daemonClient: d }, dir);
+    const r = await performBrainstormRestart({ reason: "start-brainstorm", teamId: "sq", laneId: "ade", agentClient: d }, dir);
     assert.equal(r.reused, true);
     assert.equal(r.reopened, true);
     assert.equal(r.existingAgentId, "bs-closed");
@@ -304,7 +304,7 @@ test("0c server: a second Restart click while the first is still spawning shares
       d.agents.set(id, { id, status: "idle", labels: { ...req.labels } });
       return { id, labels: { ...req.labels } };
     };
-    const body = { agentId: "bs-old", reason: "handoff", teamId: "sq", laneId: "ade", daemonClient: d };
+    const body = { agentId: "bs-old", reason: "handoff", teamId: "sq", laneId: "ade", agentClient: d };
     const first = performBrainstormRestart(body, dir);
     const second = performBrainstormRestart({ ...body }, dir);
     release();

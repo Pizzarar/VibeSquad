@@ -1,6 +1,4 @@
-// /__vibesquad/runner/* : the UI's window onto runner-backed lanes (the browser only speaks the Paseo websocket,
-// so runner agents reach it through these routes). Writes are owner-gated by the caller (vibesquad-api.mjs).
-import { paseoDaemonAlive, paseoExpected, runnerLanes } from "./backend/lane-routing.mjs";
+// /__vibesquad/runner/* : the UI's window onto the agent runner (the browser reaches agents only through these routes). Writes are owner-gated by the caller (vibesquad-api.mjs).
 import { sharedRunnerBackend } from "./backend/index.mjs";
 
 const PREFIX = "/__vibesquad/runner/";
@@ -34,28 +32,16 @@ function streamEvents(req, res, backend, heartbeatMs = HEARTBEAT_MS) {
   if (closed) off();
 }
 
-/**
- * What the browser needs to route a lane: `defaultRunner` (every lane not pinned to Paseo runs on the runner), the pinned
- * `paseoLanes`, the explicit runner `lanes` (legacy list), and `paseo` = whether it is wanted / reachable right now.
- */
-export async function runnerStatus(laneSet, { alive = paseoDaemonAlive, expected = () => paseoExpected({ lanes: () => laneSet }) } = {}) {
-  const defaultRunner = laneSet.defaultRunner !== false;
-  return {
-    enabled: laneSet.size > 0,
-    defaultBackend: defaultRunner ? "runner" : "paseo",
-    lanes: [...laneSet],
-    paseoLanes: [...(laneSet.paseoLanes ?? [])],
-    paseo: { expected: expected(), reachable: await alive().catch(() => false) },
-  };
+/** What the browser reads on boot: the runner is always on (every lane runs on it). */
+export async function runnerStatus() {
+  return { enabled: true };
 }
 
-export async function handleRunnerApi(req, res, { readBody, sendJson, backend = sharedRunnerBackend(), lanes = runnerLanes, status = runnerStatus }) {
+export async function handleRunnerApi(req, res, { readBody, sendJson, backend = sharedRunnerBackend(), status = runnerStatus }) {
   try {
     const parts = (req.url ?? "").split("?")[0].slice(PREFIX.length).split("/").filter(Boolean);
     const url = new URL(req.url, "http://x");
-    const laneSet = lanes();
-    if (parts[0] === "status") return sendJson(res, 200, await status(laneSet));
-    if (!laneSet.size) return sendJson(res, 200, { enabled: false, agents: [] });
+    if (parts[0] === "status") return sendJson(res, 200, await status());
     if (parts[0] === "events" && parts.length === 1 && req.method === "GET") {
       // Connect-only: the VS server's supervisor owns the runner; the stream retries until it is up.
       return streamEvents(req, res, backend);
@@ -70,8 +56,6 @@ export async function handleRunnerApi(req, res, { readBody, sendJson, backend = 
     }
     if (parts[0] === "spawn" && req.method === "POST") {
       const body = await readBody(req);
-      const lane = String(body?.labels?.lane || body?.env?.VS_LANE || "").trim().toLowerCase();
-      if (!laneSet.has(lane)) return sendJson(res, 400, { error: `lane "${lane}" is not switched to the runner` });
       return sendJson(res, 201, { agent: await backend.createAgent(body) });
     }
     if (parts[0] === "agents" && ID_RE.test(parts[1] ?? "")) {

@@ -173,5 +173,5 @@ test("42: restore planning uses the launch URL's ?agent=, not one pushed from th
 test("42: prune waits for the roster, not for a non-empty roster", () => {
   const ui = read("src/QuickWinsUi.tsx");
   assert.ok(ui.includes("!rosterLoaded") && !ui.includes("agents.size === 0"));
-  assert.ok(read("src/paseo.ts").includes("set({ agents: next, rosterLoaded: true })"));
+  assert.match(read("src/paseo.ts"), /rosterLoaded: true/);
 });

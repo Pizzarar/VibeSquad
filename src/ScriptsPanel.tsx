@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { PaseoAgent } from "@getpaseo/client";
+import type { PaseoAgent } from "./agentTypes";
 import { DEMO } from "./demoFlag";
 import { vsListScripts, vsScriptLogsUrl, vsStartScript, vsStopScript, vsStream } from "./vsShells";
 

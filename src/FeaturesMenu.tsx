@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { PaseoAgent } from "@getpaseo/client";
+import type { PaseoAgent } from "./agentTypes";
 import { describeError, featureChange, featureRows, setFeature, turnNote } from "./paseoFeatures";
 
 const CTRL = { background: "var(--panel-alt)", color: "var(--fg)", border: "1px solid var(--line)", fontSize: 10, padding: "1px 4px" } as const;

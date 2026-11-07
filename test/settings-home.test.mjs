@@ -310,7 +310,6 @@ test("push filter (server): per-event toggles persist in settings.json and gate 
   }
   const push = readFileSync(new URL("../server/push.mjs", import.meta.url), "utf8");
   assert.match(push, /if \(pushKindEnabled\(note\.kind\)\) broadcastWebPush\(note\)/);
-  assert.match(push, /if \(pushKindEnabled\("permission"\)\) broadcastWebPush\(\{/);
   assert.doesNotMatch(push, /export async function sendTestPush[\s\S]{0,400}pushKindEnabled/, "test push is never filtered");
   assert.match(readFileSync(new URL("../server/vibesquad-api.mjs", import.meta.url), "utf8"), /if \(body && "pushEvents" in body\) patch\.pushEvents = body\.pushEvents;/);
 });

@@ -412,39 +412,6 @@ test('claude adapter: a failed result (is_error / error_* subtype) emits an erro
   assert.deepEqual(events, ['turn_done', 'status']);
 });
 
-test('Whos here: skipped when the lane is not wholly on the runner; merges Paseo siblings; refreshes on archive', async () => {
-  const b = await boot();
-  try {
-    const agent = await b.backend.createAgent(spawnReq('own'));
-    assert.equal(b.whos.length, 1);
-    const mixed = new RunnerBackend({ client: b.rc, buildPrefix: async () => '', whosHere: (a) => b.whos.push(a), lanes: () => new Set() });
-    await mixed.refreshLaneWhosHere('own'); // lane not wholly on the runner and no Paseo view: no overwrite
-    assert.equal(b.whos.length, 1);
-    const wholly = b.backend;
-    wholly.useSiblingAgents(async () => [{ id: 'p-1', labels: { lane: 'own', role: 'lead' } }]);
-    await wholly.archiveAgent(agent.id);
-    assert.deepEqual(b.whos.at(-1).agents.map((x) => x.id), ['p-1']); // archived runner agent gone, Paseo Lead kept
-    // Paseo down: the sibling list throws, a runner-only lane still refreshes (B10: Paseo is not started by default)
-    wholly.useSiblingAgents(async () => { throw new Error('daemon down'); });
-    const n = b.whos.length;
-    await wholly.refreshLaneWhosHere('own');
-    assert.equal(b.whos.length, n + 1);
-    assert.deepEqual(b.whos.at(-1).agents.map((x) => x.id), []);
-    // ...but a mixed lane (not runner-only) is left alone when Paseo cannot be asked
-    await mixed.refreshLaneWhosHere('own');
-    mixed.useSiblingAgents(async () => { throw new Error('daemon down'); });
-    await mixed.refreshLaneWhosHere('own');
-    assert.equal(b.whos.length, n + 1);
-    // a provider is only dropped by its owner
-    const mine = async () => [];
-    wholly.useSiblingAgents(mine);
-    wholly.dropSiblingAgents(async () => []);
-    assert.equal(wholly.siblings.list, mine);
-    wholly.dropSiblingAgents(mine);
-    assert.equal(wholly.siblings.list, null);
-  } finally { b.close(); }
-});
-
 test('shown status follows the log order, not fetchAgent tail: usage, error, idle logged back-to-back still reads as one error; seeds overlay error', async () => {
   const backend = new RunnerBackend({ client: { stream: (h) => { queueMicrotask(() => h.onOpen()); return { close() {} }; } } });
   let listed = 'running';

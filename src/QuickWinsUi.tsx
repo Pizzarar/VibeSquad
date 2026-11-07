@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import type { PaseoAgent } from "@getpaseo/client";
+import type { PaseoAgent } from "./agentTypes";
 import { updateAgent } from "./paseo";
 import { getPanes, pruneRestoredTabs } from "./panes";
 import { exitSquadsHome, getPinFocus } from "./pinFocus";

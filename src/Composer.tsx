@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { PaseoAgent } from "@getpaseo/client";
+import type { PaseoAgent } from "./agentTypes";
 import { stopAgent, usePaseo } from "./paseo";
 import { vsListDirectory } from "./vsFiles";
 import { DEMO } from "./demoFlag";

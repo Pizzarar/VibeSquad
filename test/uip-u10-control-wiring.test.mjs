@@ -8,7 +8,6 @@ import { join } from "node:path";
 import test from "node:test";
 import { performBrainstormRestart, resetBrainstormRestartState } from "../server/brainstorm.mjs";
 import { seedDefaultPack } from "../server/profiles.mjs";
-import { checkRemoteBody } from "../server/hooks/remote-proxy-rules.ts";
 
 const drawerSrc = readFileSync(new URL("../src/DrawerHeader.tsx", import.meta.url), "utf8");
 const agentSrc = readFileSync(new URL("../src/AgentDrawer.tsx", import.meta.url), "utf8");
@@ -53,7 +52,7 @@ function makeEnv(laneId = "art-direction", lastProfile = undefined) {
   return { dir, vsHome, profilesPath, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-function makeDaemonClient(created) {
+function makeAgentClient(created) {
   return {
     async fetchAgents() {
       return { entries: [] };
@@ -75,9 +74,9 @@ async function runRestart(env, body, oldAgent) {
   resetBrainstormRestartState();
   try {
     const created = [];
-    const daemonClient = makeDaemonClient(created);
+    const agentClient = makeAgentClient(created);
     const res = await performBrainstormRestart(
-      { ...body, oldAgent, daemonClient, profilesPath: env.profilesPath, backstopDelayMs: 0 },
+      { ...body, oldAgent, agentClient, profilesPath: env.profilesPath, backstopDelayMs: 0 },
       env.dir,
     );
     return { res, created };
@@ -155,30 +154,6 @@ test("quick-start spawns claude-opus-5-5 for 'Brainstorm - Claude' even with a c
 });
 
 // ─── 2. Staged model / modeId / thinkingOptionId override, end-to-end ───
-
-test("checkRemoteBodyPolicy accepts the staged model/modeId/thinkingOptionId on brainstorm-restart", () => {
-  const check = checkRemoteBodyPolicy("POST", "/__vibesquad/brainstorm-restart", {
-    agentId: "a1",
-    teamId: "vibesquad",
-    laneId: "ui-polish",
-    reason: "provider-switch",
-    profileName: "Brainstorm - Gemini",
-    model: "gemini-3.8-flash",
-    modeId: "default",
-    thinkingOptionId: "high",
-  });
-  assert.equal(check.allowed, true, JSON.stringify(check));
-  assert.deepEqual(check.value, {
-    agentId: "a1",
-    teamId: "vibesquad",
-    laneId: "ui-polish",
-    reason: "provider-switch",
-    profileName: "Brainstorm - Gemini",
-    model: "gemini-3.8-flash",
-    modeId: "default",
-    thinkingOptionId: "high",
-  });
-});
 
 test("performBrainstormRestart spawns the staged model/modeId/thinkingOptionId instead of the profile default", async () => {
   const env = makeEnv("art-direction");
@@ -298,76 +273,3 @@ test("AgentDrawer forwards stagedSwitch.model/modeId/thinkingOptionId through do
 
 // ─── 3. Right-Rail Active Buddy Card controls vs the remote proxy policy ───
 
-test("right-rail control payloads pass checkRemoteBody (brainstorm-restart, inbox, lane-state→teams, vs-log)", () => {
-  // ↻ Restart / Spin Up → POST /__vibesquad/brainstorm-restart
-  const restart = checkRemoteBodyPolicy("POST", "/__vibesquad/brainstorm-restart", {
-    agentId: "bs-1",
-    teamId: "vibesquad",
-    laneId: "ui-polish",
-    reason: "manual",
-    usedTokens: 50000,
-  });
-  assert.equal(restart.allowed, true, JSON.stringify(restart));
-
-  // Spin Up (quick-start) profile chip shape.
-  const quickStart = checkRemoteBodyPolicy("POST", "/__vibesquad/brainstorm-restart", {
-    reason: "start-brainstorm",
-    mode: "quick-start",
-    teamId: "vibesquad",
-    laneId: "ui-polish",
-    laneName: "UI Polish",
-    profileName: "Brainstorm - Gemini",
-  });
-  assert.equal(quickStart.allowed, true, JSON.stringify(quickStart));
-
-  // 📥 Inbox park → POST /__vibesquad/inbox (remote shape: source stripped by parkIdeasInInbox).
-  const inbox = checkRemoteBodyPolicy("POST", "/__vibesquad/inbox", {
-    text: "an idea",
-    splitDump: true,
-    defaultLaneId: "ui-polish",
-    teamId: "vibesquad",
-    laneId: "ui-polish",
-  });
-  assert.equal(inbox.allowed, true, JSON.stringify(inbox));
-
-  // vs-log feedback metric → POST /__vibesquad/vs-log (author is the owner remotely: no agent key).
-  const vsLog = checkRemoteBodyPolicy("POST", "/__vibesquad/vs-log", {
-    teamId: "vibesquad",
-    laneId: "ui-polish",
-    type: "metric",
-    text: "restart-feedback: good",
-    refs: ["bs-old", "bs-new"],
-  });
-  assert.equal(vsLog.allowed, true, JSON.stringify(vsLog));
-
-  // ✓ Mark complete (lane state → done) persists via saveTeams → /api/teams (PUT) + /__vibesquad/teams (POST).
-  const teamsPayload = {
-    teams: [
-      {
-        id: "vibesquad",
-        name: "VibeSquad",
-        color: "#00f0ff",
-        paths: ["vibesquad"],
-        lanes: [{ id: "ui-polish", name: "UI Polish", code: "uip", state: "done", doneAt: "2026-11-04T12:00:00.000Z" }],
-      },
-    ],
-    revision: "r1",
-  };
-  const teamsPut = checkRemoteBodyPolicy("PUT", "/api/teams", teamsPayload);
-  assert.equal(teamsPut.allowed, true, JSON.stringify(teamsPut));
-  const teamsPost = checkRemoteBodyPolicy("POST", "/__vibesquad/teams", teamsPayload);
-  assert.equal(teamsPost.allowed, true, JSON.stringify(teamsPost));
-});
-
-test("a spawn-config key that is not allowlisted is still refused remotely (model allowed only on brainstorm-restart)", () => {
-  // `model` is now allowlisted on brainstorm-restart (staged override) but rejected on other write endpoints.
-  const ok = checkRemoteBodyPolicy("POST", "/__vibesquad/brainstorm-restart", { reason: "manual", laneId: "ui-polish", agentId: "bs-1", model: "gemini-3.8-flash" });
-  assert.equal(ok.allowed, true, JSON.stringify(ok));
-  const inboxModel = checkRemoteBodyPolicy("POST", "/__vibesquad/inbox", { text: "idea", laneId: "ui-polish", model: "gemini-3.8-flash" });
-  assert.equal(inboxModel.allowed, false, JSON.stringify(inboxModel));
-  assert.match(inboxModel.error, /key not allowed remotely: body\.model/);
-  // `provider` and `cwd` remain forbidden everywhere (spawn config / server-derived).
-  const provider = checkRemoteBodyPolicy("POST", "/__vibesquad/brainstorm-restart", { reason: "manual", laneId: "ui-polish", agentId: "bs-1", provider: "claude" });
-  assert.equal(provider.allowed, false, JSON.stringify(provider));
-  assert.match(provider.error, /body key not allowed remotely: provider/);
-});

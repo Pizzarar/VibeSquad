@@ -2,10 +2,7 @@ import crypto from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
-import { getBackend, paseoDaemonAlive, runnerLanes, sharedRunnerBackend } from "./backend/index.mjs";
-import { readPaseoConfig } from "./brainstorm.mjs";
-import { readDaemonPassword, readPaseoLocalCredential } from "./daemon-password.mjs";
+import { sharedRunnerBackend } from "./backend/index.mjs";
 import { LEGACY_NEEDS_LABEL, clearConfigWarning, loadUserSettings, readJsonFileWithBom } from "./user-settings.mjs";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
@@ -507,22 +504,13 @@ function defaultNotify(note) {
 }
 
 let activeWatcher = null;
-let watcherClient = null;
 let watcherStarted = false;
 let lastRootDir = null;
-
-function unrefClientTimers(client) {
-  if (!client || typeof client !== "object") return;
-  for (const key of ["connectTimeout", "reconnectTimeout", "livenessHeartbeatTimer", "pendingGenericTransportErrorTimeout"]) {
-    client[key]?.unref?.();
-  }
-}
 
 export async function stopPushWatcher() {
   watcherStarted = false;
   const current = activeWatcher;
   activeWatcher = null;
-  watcherClient = null;
   if (current) {
     await current.stop();
   }
@@ -539,226 +527,25 @@ export async function restartPushWatcher(rootDir) {
 }
 
 /**
- * Settings, teams.json (a lane pinned to / released from Paseo) and the Paseo daemon controls can all change whether Paseo
- * should be watched: re-run the watcher's attach decision now instead of waiting for its periodic re-check.
- */
-export async function syncRunnerPushWatch() {
-  if (!activeWatcher) return null;
-  await activeWatcher.recheck();
-  return activeWatcher;
-}
-
-const PASEO_RECHECK_MS = 30_000;
-
-/** Paseo watching is explicit: the autostart setting is on, or a lane is pinned to Paseo in teams.json / VS_PASEO_LANES. */
-function shouldWatchPaseo() {
-  try {
-    return loadUserSettings().startPaseoWithVibeSquad === true || runnerLanes().paseoLanes.size > 0;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Connects to the Paseo daemon (when enabled) via DaemonClient, seeds initial agent state,
- * and dispatches Web Push notifications on permission requests, needs-you transitions,
+ * Watches the runner's event stream and dispatches Web Push notifications on permission requests, needs-you transitions,
  * and lead/worker turn completions or errors.
  */
-export function startPushWatcher(rootDir = REPO_ROOT, { runner = runnerLanes().size ? sharedRunnerBackend() : null, paseo, createClient } = {}) {
+export function startPushWatcher(rootDir = REPO_ROOT, { runner = sharedRunnerBackend() } = {}) {
   lastRootDir = rootDir;
   if (activeWatcher) return activeWatcher;
   watcherStarted = true;
 
-  const agentsById = new Map();
   const dedupeSet = new Set();
-  let stopped = false;
-
-  let client = null;
-  let backend = null;
-  let siblingAgents = null;
-  // Each attach gets a generation; callbacks and in-flight seeds from an older attach drop out once it is detached.
-  let attachGen = 0;
-  let disposers = [];
-  const attachPaseo = () => {
-  if (client) return;
-  const gen = ++attachGen;
-  const isCurrent = () => !stopped && gen === attachGen;
-  const { listen } = readPaseoConfig(rootDir);
-  const wsUrl = listen.startsWith("ws://") || listen.startsWith("wss://") ? `${listen.replace(/\/$/, "")}/ws` : `ws://${listen}/ws`;
-  const password = readDaemonPassword();
-  client = (createClient ?? ((cfg) => new DaemonClient(cfg)))({
-    url: wsUrl,
-    clientId: `vibesquad-push-watcher-${ process.pid }`,
-    clientType: "cli",
-    appVersion: "0.0.1",
-    connectTimeoutMs: 5000,
-    ...(password ? { password } : {}),
-    localCredential: () => readPaseoLocalCredential() || null,
-    reconnect: { enabled: true, baseDelayMs: 1500, maxDelayMs: 15000 },
-  });
-  watcherClient = client;
-  backend = getBackend(client, { paseoAlive: null });
-
-  const handleAgentSnapshot = (agent, isInitialSeed = false) => {
-    if (!agent || !agent.id) return;
-    const prev = agentsById.get(agent.id);
-    agentsById.set(agent.id, agent);
-
-    if (isInitialSeed) {
-      // Seed dedupe keys for already-existing permissions and needs-you so startup doesn't re-page.
-      for (const p of Array.isArray(agent.pendingPermissions) ? agent.pendingPermissions : []) {
-        const pid = String(p?.id ?? p?.requestId ?? p?.toolName ?? "perm");
-        dedupeSet.add(`${agent.id}::perm:${pid}`);
-      }
-      const needsYou = String(agent.labels?.["needs-you"] ?? agent.labels?.[LEGACY_NEEDS_LABEL] ?? "").trim();
-      if (needsYou && needsYou !== "cleared") {
-        dedupeSet.add(`${agent.id}::needs-you:${needsYou}`);
-      }
-      return;
-    }
-
-    const notes = evaluateAgentTransition(prev, agent, dedupeSet);
-    for (const note of notes) {
-      if (pushKindEnabled(note.kind)) broadcastWebPush(note).catch(() => {});
-    }
-  };
-
-  const keep = (off) => {
-    if (typeof off === "function") disposers.push(off);
-  };
-  keep(backend.subscribe((event) => {
-    if (!isCurrent()) return;
-    if (event.type === "agent_update" && event.payload?.agent) {
-      handleAgentSnapshot(event.payload.agent, false);
-    } else if (event.type === "agent_permission_request" && event.agentId) {
-      const agent = agentsById.get(event.agentId) ?? { id: event.agentId, title: event.agentId.slice(0, 8) };
-      const pid = String(event.request?.id ?? event.request?. toolName ?? "perm");
-      const fullKey = `${event.agentId}::perm:${pid}`;
-      if (!dedupeSet.has(fullKey)) {
-        dedupeSet.add(fullKey);
-        if (pushKindEnabled("permission")) broadcastWebPush({
-          title: "VibeSquad · Permission Needed",
-          body: `${agent.title || event.agentId}: approval requested`,
-          url: `/?agent=${encodeURIComponent(event.agentId)}&focus=needs-you`,
-          tag: `vs-perm-${event.agentId}`,
-          agentId: event.agentId,
-          kind: "permission",
-        }).catch(() => {});
-      }
-    } else if (event.type === "agent_deleted" && event.agentId) {
-      agentsById.delete(event.agentId);
-    }
-  }));
-
-  const seedAgents = async () => {
-    try {
-      const res = await backend.fetchAgents({ subscribe: {}, filter: { includeArchived: false } });
-      if (!isCurrent()) return; // detached while the list was in flight: do not repopulate state
-      for (const entry of res?.entries ?? []) {
-        if (entry?.agent) handleAgentSnapshot(entry.agent, true);
-      }
-    } catch {
-      // Daemon may not be running yet; reconnect listener will retry.
-    }
-  };
-
-  keep(backend.subscribeConnectionStatus((st) => {
-    if (!isCurrent()) return;
-    queueMicrotask(() => unrefClientTimers(client));
-    if (st.status === "connected") {
-      void seedAgents();
-    }
-  }));
-
-  // The watcher owns the one long-lived Paseo client, so it is the Who's here view of Paseo agents for runner lanes
-  // (a failing list = Paseo down: the runner falls back to its runner-only-lane path).
-  siblingAgents = async () => {
-    const res = await backend.fetchAgents({ filter: { includeArchived: false } });
-    return (res?.entries ?? []).map((e) => e.agent).filter(Boolean);
-  };
-  runner?.useSiblingAgents?.(siblingAgents);
-
-  backend.connect().then(() => (isCurrent() ? seedAgents() : undefined)).catch(() => {});
-  unrefClientTimers(client);
-  queueMicrotask(() => unrefClientTimers(client));
-  };
-
-  const detachPaseo = () => {
-    if (!client) return;
-    const old = backend;
-    attachGen += 1; // invalidates every callback and in-flight seed of the attach being torn down
-    for (const off of disposers.splice(0)) {
-      try {
-        off();
-      } catch {
-        /* already gone */
-      }
-    }
-    if (siblingAgents) runner?.dropSiblingAgents?.(siblingAgents);
-    if (watcherClient === client) watcherClient = null;
-    client = null;
-    backend = null;
-    siblingAgents = null;
-    agentsById.clear();
-    old?.close?.().catch?.(() => {});
-  };
-
   const stopRunnerWatch = runner ? watchRunnerTransitions(runner, { dedupeSet }) : null;
   const watchingRunner = !!runner;
-  // Paseo is opt-in after the cutover. Without the setting or a Paseo-pinned lane we only attach when a daemon is
-  // already listening (existing Paseo-hosted agents keep notifying); otherwise no DaemonClient is built, so a
-  // closed port never costs the 5s connect timeout on every Who's here refresh.
-  // The decision is re-run on a cheap timer (reuses the cached TCP probe) and on demand (syncRunnerPushWatch): attach when
-  // the setting flips, a lane is pinned or a daemon starts listening; detach once none of those hold, so a stopped Paseo is
-  // not reconnected to forever.
-  const recheckOnce = async () => {
-    try {
-      const wanted = paseo !== undefined ? await (typeof paseo === "function" ? paseo() : paseo) : shouldWatchPaseo() || (await paseoDaemonAlive());
-      if (stopped) return;
-      if (wanted) attachPaseo();
-      else detachPaseo();
-    } catch {
-      /* Paseo is optional */
-    }
-  };
-  // Single flight: a request that arrives mid-probe queues exactly one more pass (which sees a reset probe), so an older
-  // answer can never be applied after a newer one.
-  let rechecking = null;
-  let rerun = false;
-  const recheck = () => {
-    if (rechecking) {
-      rerun = true;
-      return rechecking;
-    }
-    rechecking = (async () => {
-      do {
-        rerun = false;
-        await recheckOnce();
-      } while (rerun && !stopped);
-    })().finally(() => {
-      rechecking = null;
-    });
-    return rechecking;
-  };
-  void recheck();
-  const recheckTimer = setInterval(() => void recheck(), PASEO_RECHECK_MS);
-  recheckTimer.unref?.();
 
   activeWatcher = {
     watchingRunner,
-    recheck,
-    get paseoAttached() {
-      return client !== null;
-    },
     stop() {
-      stopped = true;
-      clearInterval(recheckTimer);
       stopRunnerWatch?.();
-      if (siblingAgents) runner?.dropSiblingAgents?.(siblingAgents);
       watcherStarted = false;
       activeWatcher = null;
-      if (client && watcherClient === client) watcherClient = null;
-      return backend ? backend.close().catch(() => {}) : Promise.resolve();
+      return Promise.resolve();
     },
   };
   return activeWatcher;

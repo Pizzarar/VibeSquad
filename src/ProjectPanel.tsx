@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { PaseoAgent } from "@getpaseo/client";
+import type { PaseoAgent } from "./agentTypes";
 import { vsCreateEntry, vsListDirectory, vsReadFile, vsWriteFile } from "./vsFiles";
 import { DEMO } from "./demoFlag";
 import { openRightDockTab } from "./RightDock";

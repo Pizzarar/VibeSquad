@@ -23,11 +23,8 @@ const ALLOWED = new Set([
   "Unlicense", "MPL-2.0", "Unicode-3.0", "Unicode-DFS-2016", "Zlib", "CC-BY-4.0", "OFL-1.1", "Python-2.0",
 ]);
 
-// Packages that ship no license metadata of their own but are Apache-2.0 upstream (Paseo).
-const EXPLICIT = {
-  "@getpaseo/client": { license: "Apache-2.0", copyright: "Copyright (c) 2025-present Mohamed Boudra" },
-  "@getpaseo/protocol": { license: "Apache-2.0", copyright: "Copyright (c) 2025-present Mohamed Boudra" },
-};
+// Packages that ship no license metadata of their own (none today).
+const EXPLICIT = {};
 
 const readText = (file) =>
   readFileSync(file, "utf8")
@@ -95,7 +92,7 @@ function collectNpm() {
   }
   const out = [];
   for (const { dir, pkg } of seen.values()) {
-    const explicit = EXPLICIT[pkg.name] ?? (pkg.name.startsWith("@getpaseo/") ? EXPLICIT["@getpaseo/client"] : undefined);
+    const explicit = EXPLICIT[pkg.name];
     const license = explicit?.license ?? licenseOf(pkg);
     if (!isAllowed(license)) throw new Error(`generate-licenses: ${pkg.name}@${pkg.version} has unapproved license "${license || "none"}"`);
     const files = readdirSync(dir);
@@ -168,20 +165,15 @@ function build() {
         ]
       : []),
     bar,
-    "Paseo (@getpaseo/client, @getpaseo/protocol) - Apache-2.0",
+    "Paseo (the project VibeSquad's agent orchestration was originally built on) - Apache-2.0",
     "Copyright (c) 2025-present Mohamed Boudra",
+    "No Paseo package is bundled in this release; the credit stays.",
     bar,
     "",
     bar,
     "Node.js LTS runtime (node.exe and npm) - MIT",
     "Copyright Node.js contributors. All rights reserved.",
     "Bundled in the VibeSquad desktop installer (runtime/). npm and its dependencies carry their own permissive licenses.",
-    bar,
-    "",
-    bar,
-    "Paseo CLI (@getpaseo/cli@0.14.0) - Apache-2.0",
-    "Copyright (c) 2025-present Mohamed Boudra",
-    "Not bundled: reused if already installed, otherwise downloaded from npm on first launch into a VibeSquad-managed folder.",
     bar,
     "",
     "Production npm packages",

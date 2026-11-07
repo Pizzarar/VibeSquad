@@ -203,14 +203,14 @@ test("buddy: the default performBrainstormRestart wiring restarts once (reason a
   r.agents.set("rn-bud", buddy("rn-bud"));
   const creates = [];
   const updates = [];
-  const daemonClient = {
+  const agentClient = {
     async fetchAgents() { return []; },
     async createAgent(req) { creates.push(req); return { id: `bs-${creates.length}`, labels: req.labels }; },
     async updateAgent(id, patch) { updates.push({ id, patch }); if (id === "rn-bud" && patch.labels) r.agents.get(id).labels = { ...patch.labels }; },
     async archiveAgent() {},
     async cancelAgent() {},
   };
-  const w = startTokenWatcher({ runner: r, rootDir, restartExtra: { daemonClient, profilesPath, backstopDelayMs: 60_000 } });
+  const w = startTokenWatcher({ runner: r, rootDir, restartExtra: { agentClient, profilesPath, backstopDelayMs: 60_000 } });
   r.usage("rn-bud", 150_000);
   r.usage("rn-bud", 151_000);
   await new Promise((res) => setTimeout(res, 300));

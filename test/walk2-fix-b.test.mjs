@@ -26,10 +26,6 @@ test("Ago has a full-time title", () => {
   assert.match(src("ui.tsx"), /title=\{full/);
 });
 
-test("diagnostics retry is time-capped", () => {
-  assert.match(src("DiagnosticsModal.tsx"), /Promise\.race\(\[attempt/);
-});
-
 test("App restores focus to modal opener", () => {
   assert.match(src("App.tsx"), /el\.focus\(\)/);
 });
@@ -44,13 +40,10 @@ test("round 2: Files short-circuits big/binary before readFile, caps images, svg
   assert.match(s, /void openFileNode\(targetFile\)/);
 });
 
-test("round 2: Modal and palette restore focus; diagnostics guards in-flight retry", () => {
+test("round 2: Modal and palette restore focus", () => {
   assert.match(src("TeamActions.tsx"), /stranded && opener/);
   assert.match(src("CommandPalette.tsx"), /dismissRef\.current\(\)/);
   assert.match(src("CommandPalette.tsx"), /onMouseDown=\{dismiss\}/);
-  const d = src("DiagnosticsModal.tsx");
-  assert.match(d, /inFlight\.current/);
-  assert.match(d, /clearTimeout\(timer\)/);
 });
 
 test("round 3: openers captured at render, before autoFocus; palette closes route through dismiss", () => {

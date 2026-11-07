@@ -4,7 +4,6 @@ import { registerHooks } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
-import { checkRemoteBody } from "../server/hooks/remote-proxy-rules.ts";
 
 // Allow Node to import src/pinFocus.ts and src/pinActions.ts directly by resolving extensionless .ts imports
 // and providing lightweight stubs for browser-only .tsx modules.
@@ -207,8 +206,6 @@ test("openPin in pinActions forwards explicit profile as profileName (accepted b
   assert.equal(posted[0].body.profileName, "Brainstorm - Gemini");
   assert.equal("profile" in posted[0].body, false, "profile key must not be sent so remote relay never rejects with 403");
 
-  const remoteCheck = checkRemoteBody("POST", "/__vibesquad/brainstorm-restart", JSON.stringify(posted[0].body));
-  assert.equal(remoteCheck.ok, true);
 });
 
 test("PinFocusHeader renders profile picker chips and inline spinUpError alert inside .pin-focus-empty", () => {

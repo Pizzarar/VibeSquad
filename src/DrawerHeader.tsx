@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { PaseoAgent } from "@getpaseo/client";
+import type { PaseoAgent } from "./agentTypes";
 import { attachFiles, clearNeedsYou, markAgentRead, markAgentUnread, sendMessage, setNeedsYou, snoozeNeedsYou, stopAgent, updateAgent, upsertLocalAgent } from "./paseo";
 import { DEMO } from "./demoFlag";
 import { isLocallyHidden, isMarkedUnread } from "./attentionLocal";

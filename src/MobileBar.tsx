@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useState, useSyncExternalStore } from "react";
-import type { PaseoAgent } from "@getpaseo/client";
+import type { PaseoAgent } from "./agentTypes";
 import { getPaseoState, subscribePaseo } from "./paseo";
 import { useDraft } from "./drafts";
 import { railAlerts } from "./FocusRail";

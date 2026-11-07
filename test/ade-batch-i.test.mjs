@@ -51,7 +51,7 @@ test("I4: responsive CSS covers small window, wrapping and 4K", () => {
 test("I5: components are wired with the required test ids", () => {
   const d = read("src/DiagnosticsModal.tsx");
   const a = read("src/App.tsx");
-  for (const id of ["daemon-down-banner", "diagnostics-log-viewer", "diagnostics-copy-btn", "help-docs-modal"]) assert.ok(d.includes(id), id);
+  for (const id of ["daemon-status-pill", "diagnostics-log-viewer", "diagnostics-copy-btn", "help-docs-modal"]) assert.ok(d.includes(id), id);
   for (const id of ["open-diagnostics-btn", "open-help-btn", "about-check-updates-btn"]) assert.ok(a.includes(id), id);
-  assert.ok(a.includes("<DaemonStatusBanner onOpenDiagnostics={openDiagnostics} />"));
+  assert.ok(a.includes("<DaemonStatusBanner onOpenDiagnostics={() => setModal(\"diagnostics\")} />"));
 });

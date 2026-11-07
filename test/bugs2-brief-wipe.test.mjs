@@ -140,7 +140,7 @@ test("(e) a Buddy hard-limit retire over HTTP (no body.agents) reads the daemon 
         if (a) Object.assign(a, name ? { title: name } : {}, { labels: { ...a.labels, ...labels } });
       },
     };
-    const r = await performBrainstormRestart({ agentId: "bs-old", reason: "auto-hard-limit", teamId: "vibesquad", laneId: "vibesquad", daemonClient: d, usedTokens: 200000 }, dir);
+    const r = await performBrainstormRestart({ agentId: "bs-old", reason: "auto-hard-limit", teamId: "vibesquad", laneId: "vibesquad", agentClient: d, usedTokens: 200000 }, dir);
     assert.equal(r.retired, true, JSON.stringify(r));
     const out = readFileSync(f, "utf8");
     assert.match(out, /## Who's here\n- Brainstorm: Hub Buddy\n- Lead: ★ Hub6 · handoff\n- Workers: 1\n/);
