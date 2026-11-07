@@ -15,6 +15,8 @@ import {
   REMOTE_BUDGET_PER_MIN,
   REMOTE_MAX_BODY_BYTES,
   REMOTE_MAX_IN_FLIGHT,
+  REMOTE_MAX_TERMINALS,
+  REMOTE_TERMINAL_POLL_CHARS,
   REMOTE_OWNER_READS,
   REMOTE_SPAWN_TIMEOUT_MS,
   REMOTE_TIMEOUT_MS,
@@ -235,7 +237,7 @@ describe("contract", () => {
     assert.equal(REMOTE_MAX_BODY_BYTES, 512 * 1024);
     assert.equal(REMOTE_TIMEOUT_MS, 10_000);
     assert.equal(REMOTE_MAX_IN_FLIGHT, 4);
-    assert.deepEqual(REMOTE_BUDGET_PER_MIN, { read: 120, write: 20 });
+    assert.deepEqual(REMOTE_BUDGET_PER_MIN, { read: 120, write: 20, term: 1200 });
   });
 });
 
@@ -1209,5 +1211,186 @@ describe("B8: fs/* over the proxy reach the real handlers, owner-gated, confined
     await assert.rejects(call("/__vibesquad/files" + q({ cwd: ws })), /blocked remotely.*\[403\]/);
     await assert.rejects(call("/__vibesquad/search" + q({ cwd: ws, q: "hi" })), /blocked remotely.*\[403\]/);
     assert.equal(seenTokens.length, n);
+  });
+});
+
+describe("B8 part 2b: remote terminals are owner-only, long-polled, byte-exact and bounded", () => {
+  let server;
+  let port;
+  let ws;
+  let mgr;
+  const seen = [];
+  const OWNER_HOME = mkdtempSync(join(tmpdir(), "vs-b8t-owner-"));
+  const NO_TOKEN_HOME = mkdtempSync(join(tmpdir(), "vs-b8t-none-"));
+  const WRONG_HOME = mkdtempSync(join(tmpdir(), "vs-b8t-wrong-"));
+  const fakeShell = {
+    file: process.execPath,
+    args: ["-e", `process.stdin.setEncoding("utf8");let b="";process.stdin.on("data",d=>{b+=d;let i;while((i=b.indexOf("\\n"))>=0){const l=b.slice(0,i);b=b.slice(i+1);if(l==="quit")process.exit(3);console.log("got:"+l)}});setInterval(()=>{},1000);`],
+  };
+  before(async () => {
+    const { TerminalManager } = await import("../server/terminals.mjs");
+    const { handleTerminalsApi, isTerminalsPath } = await import("../server/terminals-api.mjs");
+    ws = mkdtempSync(join(tmpdir(), "vs-b8t-ws-"));
+    mgr = new TerminalManager({ pty: null, shell: fakeShell });
+    for (const [h, tok] of [[OWNER_HOME, TOKEN], [WRONG_HOME, "b".repeat(64)]]) {
+      writeFileSync(join(h, "local-token"), tok);
+    }
+    for (const h of [OWNER_HOME, NO_TOKEN_HOME, WRONG_HOME]) writeFileSync(join(h, "settings.json"), JSON.stringify({ remote: { enabled: true } }));
+    const sendJson = (res, status, obj) => {
+      res.statusCode = status;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify(obj));
+    };
+    const readBody = (req) => new Promise((ok) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => ok(b ? JSON.parse(b) : {})); });
+    server = createServer((req, res) => {
+      const path = req.url.split("?")[0];
+      seen.push({ method: req.method, url: req.url, token: req.headers["x-vibesquad-token"] });
+      // Mirrors the middleware: terminals + scripts are isGatedRead and owner-only for writes, so no token = 403.
+      if (!isTerminalsPath(path)) return sendJson(res, 404, {});
+      if (req.headers["x-vibesquad-token"] !== TOKEN) return sendJson(res, 403, { error: "read-only", readOnly: true });
+      return handleTerminalsApi(req, res, { readBody, sendJson, resolveCwd: async (c) => (c === ws ? ws : null), terminals: mgr });
+    });
+    await new Promise((r) => server.listen(0, "127.0.0.1", r));
+    port = server.address().port;
+  });
+  after(() => {
+    mgr.killAll();
+    server.closeAllConnections?.();
+    server.close();
+    for (const d of [ws, OWNER_HOME, NO_TOKEN_HOME, WRONG_HOME]) {
+      try { rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch {} // a killed shell may still hold its cwd on Windows
+    }
+  });
+  const mk = (h, extra = {}) => makeVsHttpHandler({ port, home: h, ...extra });
+  const T = "/__vibesquad/terminals";
+  const post = (h, path, body) => h({ method: "POST", path, body: JSON.stringify(body) });
+  const until = async (fn, ms = 8000) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end) { const v = await fn(); if (v) return v; await new Promise((r) => setTimeout(r, 40)); }
+    return null;
+  };
+
+  test("an owner can create, send input, read output (byte-exact, unredacted) and kill a terminal", async () => {
+    const h = mk(OWNER_HOME, { homeDir: homedir(), userName: userInfo().username });
+    const made = await post(h, T, { cwd: ws, name: "t", cols: 90, rows: 20 });
+    assert.equal(made.status, 201);
+    const id = JSON.parse(made.body).terminal.id;
+    assert.equal(seen.at(-1).token, TOKEN, "owner token injected");
+    const secret = `${homedir()} ${userInfo().username}`;
+    assert.equal((await post(h, `${T}/${id}/input`, { data: `${secret}\r` })).status, 200);
+    assert.equal((await post(h, `${T}/${id}/resize`, { cols: 100, rows: 30 })).status, 200);
+    assert.equal((await post(h, `${T}/${id}/rename`, { name: "renamed" })).status, 200);
+    let cursor;
+    let text = "";
+    const got = await until(async () => {
+      const r = await h({ method: "GET", path: `${T}/${id}/poll?${cursor === undefined ? "" : `since=${cursor}&`}wait=500` });
+      assert.equal(r.status, 200);
+      const j = JSON.parse(r.body);
+      text += j.text;
+      cursor = j.next;
+      return text.includes(`got:${secret}`);
+    });
+    assert.ok(got, `polled output: ${JSON.stringify(text)}`);
+    const out = JSON.parse((await h({ method: "GET", path: `${T}/${id}/output?max=20` })).body);
+    assert.ok(out.text.length <= 20);
+    const list = JSON.parse((await h({ method: "GET", path: `${T}?cwd=${encodeURIComponent(ws)}` })).body);
+    assert.equal(list.terminals.length >= 1, true);
+    assert.equal((await post(h, `${T}/${id}/kill`, {})).status, 200);
+    const gone = await post(h, `${T}/${id}/input`, { data: "x" });
+    assert.equal(gone.status, 404);
+  });
+
+  const ROUTES = () => {
+    const id = "tm-0123456789ab";
+    return [
+      ["GET", T], ["POST", T, { cwd: ws }], ["GET", `${T}/${id}/poll`], ["GET", `${T}/${id}/output`],
+      ["POST", `${T}/${id}/input`, { data: "x" }], ["POST", `${T}/${id}/resize`, { cols: 80, rows: 24 }],
+      ["POST", `${T}/${id}/rename`, { name: "n" }], ["POST", `${T}/${id}/kill`, {}],
+      ["GET", "/__vibesquad/workspace-scripts"], ["GET", "/__vibesquad/workspace-scripts/logs?cwd=a&name=b"],
+      ["POST", "/__vibesquad/workspace-scripts/start", { cwd: ws, name: "x" }], ["POST", "/__vibesquad/workspace-scripts/stop", { cwd: ws, name: "x" }],
+    ];
+  };
+  test("a non-owner is refused on EVERY terminal and script route: no token file -> refused before any fetch", async () => {
+    const h = mk(NO_TOKEN_HOME);
+    const n = seen.length;
+    for (const [method, path, body] of ROUTES()) {
+      await assert.rejects(h({ method, path, ...(body ? { body: JSON.stringify(body) } : {}) }), /owner-only.*\[403\]/, `${method} ${path}`);
+    }
+    assert.equal(seen.length, n);
+  });
+  test("a paired client holding the wrong token gets the server's 403 on every route and nothing is created", async () => {
+    const h = mk(WRONG_HOME);
+    const before = mgr.list().length;
+    for (const [method, path, body] of ROUTES()) {
+      const r = await h({ method, path, ...(body ? { body: JSON.stringify(body) } : {}) });
+      assert.equal(r.status, 403, `${method} ${path}`);
+    }
+    assert.equal(mgr.list().length, before);
+  });
+  test("no stream route, no stream=1 on script logs, wrong methods/ids and non-terminal lookalikes stay refused", async () => {
+    const h = mk(OWNER_HOME);
+    const id = "tm-0123456789ab";
+    const n = seen.length;
+    await assert.rejects(h({ method: "GET", path: `${T}/${id}/stream` }), /not available remotely.*\[403\]/);
+    await assert.rejects(h({ method: "GET", path: "/__vibesquad/workspace-scripts/logs?stream=1&cwd=a&name=b" }), /not available remotely.*\[403\]/);
+    await assert.rejects(h({ method: "GET", path: `${T}/${id}/input` }), /not available remotely on.*\[405\]/);
+    await assert.rejects(h({ method: "DELETE", path: `${T}/${id}/kill` }), /\[405\]/);
+    await assert.rejects(h({ method: "GET", path: `${T}/not-an-id/poll` }), /not available remotely.*\[403\]/);
+    await assert.rejects(h({ method: "GET", path: `${T}-x` }), /not available remotely.*\[403\]/);
+    await assert.rejects(h({ method: "GET", path: "/__vibesquad/workspace-scripts/other" }), /not available remotely.*\[403\]/);
+    assert.equal(seen.length, n);
+  });
+  test("bodies are typed: unknown keys, oversize input, missing cwd and a bad cwd are refused", async () => {
+    const h = mk(OWNER_HOME);
+    const id = "tm-0123456789ab";
+    const n = seen.length;
+    await assert.rejects(post(h, T, { name: "x" }), /\[403\]/);
+    await assert.rejects(post(h, T, { cwd: ws, shell: "cmd.exe" }), /\[403\]/);
+    await assert.rejects(post(h, `${T}/${id}/input`, { data: "x".repeat(65_537) }), /\[403\]/);
+    await assert.rejects(post(h, `${T}/${id}/input`, { data: "x", extra: 1 }), /\[403\]/);
+    assert.equal(seen.length, n);
+    const outside = await post(h, T, { cwd: tmpdir() });
+    assert.equal(outside.status, 403, "server resolveCwd still decides which folders get a shell");
+  });
+  test("per-caller cap: the 5th open remote terminal is refused; killing one frees a slot; responses stay under the text cap", async () => {
+    const h = mk(OWNER_HOME);
+    const ids = [];
+    for (let i = 0; i < REMOTE_MAX_TERMINALS; i++) ids.push(JSON.parse((await post(h, T, { cwd: ws })).body).terminal.id);
+    await assert.rejects(post(h, T, { cwd: ws }), /too many remote terminals.*\[429\]/);
+    assert.equal((await post(h, `${T}/${ids[0]}/kill`, {})).status, 200);
+    const again = await post(h, T, { cwd: ws });
+    assert.equal(again.status, 201);
+    ids.push(JSON.parse(again.body).terminal.id);
+    // A big burst: each poll body is capped by the server, so no response exceeds the proxy's text cap.
+    const big = ids[1];
+    mgr.get(big).write("x".repeat(100));
+    for (let i = 0; i < 3; i++) mgr.get(big).events.emit("data", "y".repeat(50_000)), (mgr.get(big).buf += "y".repeat(50_000)), (mgr.get(big).total += 50_000);
+    const r = await h({ method: "GET", path: `${T}/${big}/poll?since=0` });
+    assert.equal(r.status, 200);
+    assert.ok(JSON.parse(r.body).text.length <= REMOTE_TERMINAL_POLL_CHARS);
+    assert.ok(Buffer.byteLength(r.body) < REMOTE_MAX_BODY_BYTES);
+    for (const id of ids.slice(1)) await post(h, `${T}/${id}/kill`, {});
+  });
+  test("terminal calls use their own rate bucket, not the 20/min write budget", async () => {
+    const h = mk(OWNER_HOME);
+    const made = JSON.parse((await post(h, T, { cwd: ws })).body).terminal.id;
+    for (let i = 0; i < 40; i++) assert.equal((await post(h, `${T}/${made}/input`, { data: "k" })).status, 200);
+    await post(h, `${T}/${made}/kill`, {});
+    await assert.rejects(
+      (async () => {
+        const lim = createRateLimiter({ budget: { read: 120, write: 20, term: 2 } });
+        const hh = mk(OWNER_HOME, { limiter: lim });
+        for (let i = 0; i < 3; i++) await hh({ method: "GET", path: `${T}?cwd=${encodeURIComponent(ws)}` });
+      })(),
+      /rate limited: 2 terms per minute.*\[429\]/,
+    );
+  });
+  test("non-terminal routes are unchanged by the owner-route patterns", () => {
+    for (const p of ["/__vibesquad/terminals/tm-0123456789ab/poll/x", "/__vibesquad/workspace-scripts/logs/x", "/__vibesquad/terminal"]) {
+      assert.equal(decideProxyRequest("GET", p).ok, false, p);
+    }
+    assert.equal(decideProxyRequest("GET", "/api/teams").ok, true);
+    assert.equal(decideProxyRequest("POST", "/__vibesquad/settings").code, "method");
+    assert.equal(decideProxyRequest("GET", "/__vibesquad/files").code, "blocked");
   });
 });

@@ -12,6 +12,7 @@ import { localTokenHeaders, localTokenPath } from "@vibesquad/server/local-token
 import {
   REMOTE_ALLOW,
   REMOTE_MAX_BODY_BYTES,
+  REMOTE_MAX_TERMINALS,
   REMOTE_OWNER_READS,
   REMOTE_RESPONSE_HEADERS,
   REMOTE_TIMEOUT_MS,
@@ -20,6 +21,8 @@ import {
   createRateLimiter,
   decideProxyRequest,
   decisionStatus,
+  isOwnerRoute,
+  isTerminalRoute,
   isTextContentType,
   needsRegistry,
   proxyTimeoutFor,
@@ -189,7 +192,24 @@ export type VsHttpDeps = {
 
 export function makeVsHttpHandler(deps: VsHttpDeps = {}) {
   const limiter = deps.limiter ?? createRateLimiter();
+  // Terminals this handler (one paired PC session) created and has not seen die: the per-caller cap.
+  const remoteTerms = new Set<string>();
   const owner = { ...ownerIdentity(), ...(deps.homeDir !== undefined ? { homeDir: deps.homeDir } : {}), ...(deps.userName !== undefined ? { userName: deps.userName } : {}) };
+  const trackTerminal = (method: string, pathname: string, status: number, text: string) => {
+    const id = /^\/__vibesquad\/terminals\/(tm-[a-f0-9]{12})\//.exec(pathname)?.[1];
+    if (method === "POST" && pathname === "/__vibesquad/terminals" && status === 201) {
+      try {
+        const made = JSON.parse(text)?.terminal?.id;
+        if (typeof made === "string") remoteTerms.add(made);
+      } catch {}
+    } else if (id && (pathname.endsWith("/kill") || status === 404 || status === 409)) {
+      remoteTerms.delete(id);
+    } else if (id && pathname.endsWith("/poll") && status === 200) {
+      try {
+        if (JSON.parse(text)?.exited) remoteTerms.delete(id);
+      } catch {}
+    }
+  };
   return async (input: VsHttpInput): Promise<VsHttpOutput> => {
     const home = deps.home ?? vsHome();
     if (!remoteEnabled(home)) {
@@ -201,10 +221,19 @@ export function makeVsHttpHandler(deps: VsHttpDeps = {}) {
       throw new RemoteDenied(413, `request body too large (cap ${REMOTE_MAX_BODY_BYTES} bytes)`);
     }
     const write = d.method !== "GET";
+    // Terminal + script routes are a shell on the host: owner token or nothing (never forwarded tokenless).
+    const ownerRoute = isOwnerRoute(d.pathname);
+    const termRoute = isTerminalRoute(d.pathname);
+    if (ownerRoute && Object.keys(vsTokenHeaders(home)).length === 0) {
+      throw new RemoteDenied(403, "terminals and scripts are owner-only (no owner token on the host)");
+    }
+    if (termRoute && d.method === "POST" && d.pathname === "/__vibesquad/terminals" && remoteTerms.size >= REMOTE_MAX_TERMINALS) {
+      throw new RemoteDenied(429, `too many remote terminals (max ${REMOTE_MAX_TERMINALS}); close one first`);
+    }
     // Per-endpoint typed body allowlist (R2-5): checked before a rate-limit slot is spent.
     const bodyCheck = checkRemoteBody(d.method, d.pathname, input.body);
     if (!bodyCheck.ok) throw new RemoteDenied(bodyCheck.status, bodyCheck.error);
-    const slot = limiter.acquire(write ? "write" : "read", `${d.method} ${d.pathname}`);
+    const slot = limiter.acquire(termRoute ? "term" : write ? "write" : "read", `${d.method} ${d.pathname}`);
     if (!slot.ok) throw new RemoteDenied(429, slot.error);
     const hasBody = input.body !== undefined && write;
     // What was checked is what is sent: the parsed body, re-serialised (after any registry pinning).
@@ -226,7 +255,7 @@ export function makeVsHttpHandler(deps: VsHttpDeps = {}) {
       const res = await (deps.fetch ?? fetch)(url, {
         method: d.method,
         // No caller headers are forwarded: just our content type and the loopback token.
-        headers: { ...(hasBody ? { "content-type": "application/json" } : {}), ...(write || REMOTE_OWNER_READS.includes(d.pathname) ? vsTokenHeaders(home) : {}) },
+        headers: { ...(hasBody ? { "content-type": "application/json" } : {}), ...(write || ownerRoute || REMOTE_OWNER_READS.includes(d.pathname) ? vsTokenHeaders(home) : {}) },
         ...(hasBody ? { body: sendBody } : {}),
         redirect: "manual",
         signal: abort.signal,
@@ -234,7 +263,10 @@ export function makeVsHttpHandler(deps: VsHttpDeps = {}) {
       const ct = res.headers.get("content-type");
       // Every 200 on GET fs/read is file content: no scrub/redact (it would rewrite the owner's name inside the
       // file), x-vs-size/x-vs-modified kept. Text is capped at the text cap, binary at 8 MB raw and sent as base64.
-      if (d.method === "GET" && d.pathname === FS_READ_PATH && res.status === 200) {
+      // Terminal bodies (poll / output / create) are the same: raw, byte-exact, 413 over the text cap.
+      const rawFs = d.method === "GET" && d.pathname === FS_READ_PATH && res.status === 200;
+      const rawTerm = termRoute && res.status >= 200 && res.status < 300 && isTextContentType(ct);
+      if (rawFs || rawTerm) {
         const isText = isTextContentType(ct);
         const cap = isText ? REMOTE_MAX_BODY_BYTES : REMOTE_MAX_BINARY_BYTES;
         const size = Number(res.headers.get("x-vs-size") ?? res.headers.get("content-length") ?? NaN);
@@ -245,13 +277,18 @@ export function makeVsHttpHandler(deps: VsHttpDeps = {}) {
           return {
             status: 413,
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ ok: false, error: `file too large to preview remotely (over ${lim})`, ...(Number.isFinite(size) ? { size } : {}) }),
+            body: JSON.stringify({ ok: false, error: `${rawTerm ? "terminal output" : "file"} too large to preview remotely (over ${lim})`, ...(Number.isFinite(size) ? { size } : {}) }),
           };
         }
         const headers: Record<string, string> = {};
         for (const h of [...REMOTE_RESPONSE_HEADERS, ...FS_READ_HEADERS]) {
           const v = res.headers.get(h);
           if (v !== null) headers[h] = v;
+        }
+        if (rawTerm) {
+          const text = new TextDecoder().decode(bytes);
+          trackTerminal(d.method, d.pathname, res.status, text);
+          return { status: res.status, headers, body: text };
         }
         return isText
           ? { status: 200, headers, body: new TextDecoder().decode(bytes) }
@@ -261,6 +298,7 @@ export function makeVsHttpHandler(deps: VsHttpDeps = {}) {
         res.body?.cancel().catch(() => {});
         throw new Error(`vs.http: non-text response (${ct}) is not proxied`);
       }
+      if (termRoute && res.status >= 400) trackTerminal(d.method, d.pathname, res.status, "");
       const body = redactBody(scrubResponseBody(d.pathname, await readCapped(res, abort.signal), res.status), owner.homeDir, owner.userName);
       const headers: Record<string, string> = {};
       for (const h of REMOTE_RESPONSE_HEADERS) {

@@ -10,6 +10,7 @@ export const isTerminalsPath = (path) =>
   path === TERMINALS_PREFIX || path.startsWith(`${TERMINALS_PREFIX}/`) || path === SCRIPTS_PREFIX || path.startsWith(`${SCRIPTS_PREFIX}/`);
 
 const ID_RE = /^tm-[a-f0-9]{12}$/;
+export const POLL_MAX_CHARS = 32_768; // keep in step with REMOTE_TERMINAL_POLL_CHARS
 
 /** Server-sent events over a plain response: `data:` lines carry JSON; an `exit` event ends the stream. */
 function openStream(req, res) {
@@ -65,7 +66,20 @@ export async function handleTerminalsApi(req, res, { readBody, sendJson, resolve
       const [id, action] = path.slice(TERMINALS_PREFIX.length + 1).split("/");
       if (!ID_RE.test(id ?? "")) return sendJson(res, 404, { error: "not found" });
       if (method === "GET" && action === "stream") return stream((h) => terminals.subscribe(id, h));
-      if (method === "GET" && action === "output") return sendJson(res, 200, { text: terminals.output(id) });
+      if (method === "GET" && action === "output") return sendJson(res, 200, { text: terminals.output(id, Number(url.searchParams.get("max"))) });
+      if (method === "GET" && action === "poll") {
+        // Long-poll for clients without a stream (remote proxy): GET ?since=<cursor>&wait=<ms, <= 1500>.
+        const since = url.searchParams.has("since") ? Number(url.searchParams.get("since")) : NaN;
+        const wait = Math.min(1500, Math.max(0, Number(url.searchParams.get("wait")) || 0));
+        let r = terminals.poll(id, since, { maxChars: POLL_MAX_CHARS });
+        if (!r.text && !r.exited && wait) {
+          const ac = new AbortController();
+          res.on("close", () => ac.abort());
+          await terminals.waitForData(id, r.next, wait, ac.signal);
+          r = terminals.poll(id, r.next, { maxChars: POLL_MAX_CHARS });
+        }
+        return sendJson(res, 200, r);
+      }
       if (method === "POST") {
         const body = await readBody(req);
         if (action === "input") terminals.input(id, body?.data);

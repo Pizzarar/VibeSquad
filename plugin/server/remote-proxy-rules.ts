@@ -28,7 +28,8 @@ export function proxyTimeoutFor(pathname: string, defaultMs: number = REMOTE_TIM
 export const REMOTE_MAX_PATH_CHARS = 2048;
 export const REMOTE_MAX_IN_FLIGHT = 4;
 export const REMOTE_WINDOW_MS = 60_000;
-export const REMOTE_BUDGET_PER_MIN = { read: 120, write: 20 } as const;
+// term: terminal poll (~1/s per open tab) + keystrokes, kept apart so a shell never starves or is starved by the other budgets.
+export const REMOTE_BUDGET_PER_MIN = { read: 120, write: 20, term: 1200 } as const;
 export const REMOTE_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const;
 export type RemoteMethod = (typeof REMOTE_METHODS)[number];
 export type AllowMap = Readonly<Record<string, readonly RemoteMethod[]>>;
@@ -80,6 +81,30 @@ export const REMOTE_ALLOW: AllowMap = {
 /** Allowlisted GETs the server owner-gates (isGatedRead): the proxy sends the loopback token on these, like a write. */
 export const REMOTE_OWNER_READS: readonly string[] = ["/__vibesquad/fs/list", "/__vibesquad/fs/resolve", "/__vibesquad/fs/read"];
 
+// ---- owner-only terminal + script routes (B8 part 2b) -------------------------------------------------------
+// A full shell on the host, so every route here (reads and writes) carries the loopback owner token and the proxy
+// refuses locally when it has none. Terminal ids vary, so these are patterns, not REMOTE_ALLOW keys. There is no
+// `stream` route: output is fetched by cursor long-poll (GET .../poll?since=N) because vs.http is request/response.
+export const REMOTE_TERMINAL_INPUT_CHARS = 65_536; // = terminals.mjs input slice
+export const REMOTE_TERMINAL_POLL_CHARS = 32_768; // server caps each poll body; keeps the JSON under the 512 KB text cap
+export const REMOTE_MAX_TERMINALS = 4; // terminals a single proxy handler (one paired PC session) may hold open
+const TID = "tm-[a-f0-9]{12}";
+export const REMOTE_OWNER_ROUTES: readonly { re: RegExp; methods: readonly RemoteMethod[] }[] = [
+  { re: /^\/__vibesquad\/terminals$/, methods: ["GET", "POST"] },
+  { re: new RegExp(`^/__vibesquad/terminals/${TID}/(?:poll|output)$`), methods: ["GET"] },
+  { re: new RegExp(`^/__vibesquad/terminals/${TID}/(?:input|resize|rename|kill)$`), methods: ["POST"] },
+  { re: /^\/__vibesquad\/workspace-scripts$/, methods: ["GET"] },
+  { re: /^\/__vibesquad\/workspace-scripts\/logs$/, methods: ["GET"] }, // `stream=1` is refused in decideProxyRequest
+  { re: /^\/__vibesquad\/workspace-scripts\/(?:start|stop)$/, methods: ["POST"] },
+];
+const ownerRouteMethods = (pathname: string) => REMOTE_OWNER_ROUTES.find((r) => r.re.test(pathname))?.methods;
+/** True for any owner-only terminal / script route: the proxy injects the token and refuses without one. */
+export const isOwnerRoute = (pathname: string): boolean => ownerRouteMethods(pathname) !== undefined;
+/** Terminal output / control routes (not scripts): own rate bucket, raw (unscrubbed) 2xx bodies. */
+export const isTerminalRoute = (pathname: string): boolean => pathname === "/__vibesquad/terminals" || pathname.startsWith("/__vibesquad/terminals/");
+/** Body-policy key: a terminal id becomes `:id`. */
+export const terminalPolicyKey = (pathname: string): string => pathname.replace(new RegExp(`^(/__vibesquad/terminals/)${TID}(/)`), "$1:id$2");
+
 /** Writes that stay closed remotely, and why. Reopening one needs the server change named here first. */
 export const REMOTE_WRITES_CLOSED: Readonly<Record<string, string>> = {
   "/__vibesquad/lead-handoff":
@@ -108,6 +133,8 @@ export type BodyPolicy = {
   fields: Readonly<Record<string, FieldSpec>>;
   require?: readonly string[];
   registry?: "teams" | "lane";
+  /** REMOTE_FORBIDDEN_BODY_KEYS this endpoint may take anyway (the server validates the value itself). */
+  allowKeys?: readonly string[];
 };
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/; // TEAM_ID / AGENT_ID_STRICT on the server
@@ -274,6 +301,19 @@ export const REMOTE_BODY_POLICY: Readonly<Record<string, BodyPolicy>> = {
     registry: "lane",
   },
 };
+
+// B8 part 2b: owner-only terminal + script writes. Keyed by terminalPolicyKey() (terminal id -> `:id`). `cwd` is exempt
+// from the forbidden-key list here because resolveCwd (terminals-api.mjs) refuses anything outside a known team/agent path.
+const dim = (min: number, max: number): FieldSpec => ({ t: "number", min, max, int: true });
+export const REMOTE_TERMINAL_POLICY: Readonly<Record<string, BodyPolicy>> = {
+  "/__vibesquad/terminals": { fields: { cwd: str(1024), name: str(60), cols: dim(2, 500), rows: dim(2, 200) }, require: ["cwd"], allowKeys: ["cwd"] },
+  "/__vibesquad/terminals/:id/input": { fields: { data: str(REMOTE_TERMINAL_INPUT_CHARS) }, require: ["data"] },
+  "/__vibesquad/terminals/:id/resize": { fields: { cols: dim(2, 500), rows: dim(2, 200) } },
+  "/__vibesquad/terminals/:id/rename": { fields: { name: str(60) }, require: ["name"] },
+  "/__vibesquad/terminals/:id/kill": { fields: {} },
+  "/__vibesquad/workspace-scripts/start": { fields: { cwd: str(1024), name: str(120) }, require: ["cwd", "name"], allowKeys: ["cwd"] },
+  "/__vibesquad/workspace-scripts/stop": { fields: { cwd: str(1024), name: str(120) }, require: ["cwd", "name"], allowKeys: ["cwd"] },
+};
 export const WRITE_SCHEMAS = REMOTE_BODY_POLICY;
 
 /** Never accepted in a remote body at any depth, whatever a policy says: spawn config, DI hooks, prompt and brief text.
@@ -290,18 +330,18 @@ export type BodyCheck = { ok: true; value: Record<string, unknown> } | { ok: fal
 const MAX_DEPTH = 8;
 
 /** First forbidden key anywhere in the value (object keys at every depth, through arrays), or null. */
-export function findForbiddenKey(v: unknown, depth = 0): string | null {
+export function findForbiddenKey(v: unknown, depth = 0, allow: readonly string[] = []): string | null {
   if (depth > MAX_DEPTH || v === null || typeof v !== "object") return null;
   if (Array.isArray(v)) {
     for (const x of v) {
-      const hit = findForbiddenKey(x, depth + 1);
+      const hit = findForbiddenKey(x, depth + 1, allow);
       if (hit) return hit;
     }
     return null;
   }
   for (const k of Object.keys(v)) {
-    if (REMOTE_FORBIDDEN_BODY_KEYS.includes(k)) return k;
-    const hit = findForbiddenKey((v as Record<string, unknown>)[k], depth + 1);
+    if (REMOTE_FORBIDDEN_BODY_KEYS.includes(k) && !allow.includes(k)) return k;
+    const hit = findForbiddenKey((v as Record<string, unknown>)[k], depth + 1, allow);
     if (hit) return hit;
   }
   return null;
@@ -369,7 +409,12 @@ function checkFields(
  */
 export function checkRemoteBody(method: RemoteMethod, pathname: string, body: string | undefined): BodyCheck {
   if (method === "GET") return { ok: true, value: {} };
-  const policy = Object.hasOwn(REMOTE_BODY_POLICY, pathname) ? REMOTE_BODY_POLICY[pathname] : undefined;
+  const tkey = terminalPolicyKey(pathname);
+  const policy = Object.hasOwn(REMOTE_BODY_POLICY, pathname)
+    ? REMOTE_BODY_POLICY[pathname]
+    : Object.hasOwn(REMOTE_TERMINAL_POLICY, tkey) && isOwnerRoute(pathname)
+      ? REMOTE_TERMINAL_POLICY[tkey]
+      : undefined;
   if (!policy) return { ok: false, status: 403, error: `no remote body policy for ${pathname}` };
   let parsed: unknown = {};
   if (body !== undefined && body.trim() !== "") {
@@ -380,7 +425,7 @@ export function checkRemoteBody(method: RemoteMethod, pathname: string, body: st
     }
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { ok: false, status: 400, error: "body must be a JSON object" };
-  const forbidden = findForbiddenKey(parsed);
+  const forbidden = findForbiddenKey(parsed, 0, policy.allowKeys);
   if (forbidden) return { ok: false, status: 403, error: `body key not allowed remotely: ${forbidden}` };
   const err = checkFields(policy.fields, policy.require, parsed as Record<string, unknown>, "body", 0);
   if (err) return { ok: false, status: 403, error: `${pathname}: ${err}` };
@@ -900,7 +945,10 @@ export function decideProxyRequest(method: unknown, path: unknown, allow: AllowM
   const norm = normalizeProxyPath(path);
   if (!norm.ok) return { ok: false, code: "path", error: norm.error };
   if (isBlockedPath(norm.pathname)) return { ok: false, code: "blocked", error: `blocked remotely: ${norm.pathname}` };
-  const allowed = Object.hasOwn(allow, norm.pathname) ? allow[norm.pathname] : undefined;
+  const allowed = Object.hasOwn(allow, norm.pathname) ? allow[norm.pathname] : ownerRouteMethods(norm.pathname);
+  if (allowed && norm.pathname === "/__vibesquad/workspace-scripts/logs" && /(?:^|&)stream=/.test(norm.search.slice(1))) {
+    return { ok: false, code: "not-allowed", error: `not available remotely: ${norm.pathname}?stream (use the non-stream form)` };
+  }
   if (!allowed) return { ok: false, code: "not-allowed", error: `not available remotely: ${norm.pathname}` };
   if (!allowed.includes(m as RemoteMethod)) {
     return { ok: false, code: "method", error: `${m} not available remotely on ${norm.pathname}` };
@@ -951,7 +999,7 @@ export const ENDPOINT_WRITE_LIMITS_PER_MIN: Record<string, number> = {
   "POST /__vibesquad/handoff": 5,
 };
 
-export type RateKind = "read" | "write";
+export type RateKind = "read" | "write" | "term";
 export type RateLimiter = {
   acquire(kind: RateKind, endpointKey?: string): { ok: true; release: () => void } | { ok: false; status: 429; error: string };
   check(method: string, path: string): { ok: true; status: 200; release: () => void } | { ok: false; status: 429; error: string };
@@ -972,7 +1020,7 @@ export function createRateLimiter(
   const endpointLimits = opts.endpointLimits ?? ENDPOINT_WRITE_LIMITS_PER_MIN;
   const windowMs = opts.windowMs ?? REMOTE_WINDOW_MS;
   const now = opts.now ?? Date.now;
-  const stamps: Record<RateKind, number[]> = { read: [], write: [] };
+  const stamps: Record<RateKind, number[]> = { read: [], write: [], term: [] };
   const endpointStamps = new Map<string, number[]>();
   let inFlight = 0;
 
