@@ -4987,3 +4987,29 @@ button.project-file-name:hover { text-decoration: underline; }
 .pin-rail-active-head .pin-rail-name { flex: 1; min-width: 0; color: var(--on-pastel); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pin-rail-active-head .btn, .pin-rail-active-head .pin-menu-btn { height: 16px; padding: 0 var(--sp-1); line-height: 1; font-size: 10px; background: var(--face-hi); color: var(--text); border: 1px solid var(--shadow-hard); box-shadow: var(--bevel); }
 .pin-rail-active-head .pin-menu { display: inline-flex; align-items: center; }
+
+/* ---- U2 item 6: Usage Dashboard (src/UsageDashboard.tsx). Chart fills keep the P0 accents, no glow. ---- */
+.squads-dashboard, .usage-limit, .usage-roles, .usage-loops, .usage-storms, .usage-review, .usage-review-card {
+  background-color: var(--panel);
+  background-image: var(--cap-imgs);
+  background-size: var(--cap-size);
+  background-repeat: var(--cap-rep);
+  background-position: var(--cap-pos);
+  box-shadow: var(--bevel), var(--hard);
+  padding-top: var(--cap-pad);
+}
+.usage-review-run {
+  background: var(--cyan-fill);
+  color: var(--on-cyan-fill);
+  border: 1px solid var(--shadow-hard);
+  box-shadow: var(--bevel);
+  font-weight: 700;
+}
+.usage-review-run:hover:not(:disabled) { background: color-mix(in srgb, var(--cyan-fill) 86%, var(--marble)); border-color: var(--shadow-hard); color: var(--on-cyan-fill); }
+.usage-review-run:active:not(:disabled) { box-shadow: var(--bevel-in); transform: translate(1px, 1px); }
+.usage-estimate, .usage-flag { background: var(--pastel-pink); color: var(--text); border: 1px solid var(--hot-pink); box-shadow: var(--bevel); }
+.usage-estimate { background: var(--pastel-amber); border-color: var(--amber); }
+.usage-flag-storm { background: var(--pastel-amber); color: var(--text); border-color: var(--amber); }
+.usage-bar, .usage-review-select { box-shadow: var(--bevel-in); }
+.usage-limit.usage-warn .usage-limit-pct { color: var(--amber-t); }
+.usage-limit.usage-hot .usage-limit-pct { color: var(--pink-t); }
