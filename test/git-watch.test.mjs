@@ -1,11 +1,11 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
-import { gitWatch, _gitWatcherCount, worktreeEventRelevant, gitDirEventRelevant } from "../server/git-watch.mjs";
+import { gitWatch, startSignaturePoll, _gitWatcherCount, worktreeEventRelevant, gitDirEventRelevant } from "../server/git-watch.mjs";
 import { handleGitApi } from "../server/git-api.mjs";
 import { decideProxyRequest, proxyTimeoutFor } from "../plugin/server/remote-proxy-rules.ts";
 
@@ -170,4 +170,77 @@ test("remote proxy: git/watch is an owner GET route with the long-poll timeout",
   assert.equal(decideProxyRequest("POST", "/__vibesquad/git/watch").code, "method");
   assert.equal(proxyTimeoutFor("/__vibesquad/git/watch") > 25_000, true);
   assert.equal(proxyTimeoutFor("/__vibesquad/git/status"), 10_000);
+});
+
+test("fallback poll never overlaps runs, bumps on a changed signature, and stops when closed", async () => {
+  let active = 0, maxActive = 0, calls = 0, value = "a", closed = false, bumps = 0;
+  const sig = async () => { calls++; active++; maxActive = Math.max(maxActive, active); await sleep(60); active--; return value; };
+  const poll = startSignaturePoll(sig, () => bumps++, 10, () => closed);
+  await poll.baseline;
+  assert.equal(bumps, 0, "the first signature is the baseline");
+  await sleep(250);
+  assert.equal(maxActive, 1, "runs are chained, not overlapped");
+  value = "b";
+  await sleep(250);
+  assert.equal(bumps, 1);
+  closed = true;
+  await sleep(150); // a run in flight finishes, then nothing reschedules
+  const after = calls;
+  await sleep(250);
+  assert.equal(calls, after, "no runs after close");
+  assert.equal(bumps, 1);
+});
+
+test("a signature that throws keeps the poll alive without a false bump", async () => {
+  let n = 0, bumps = 0;
+  const poll = startSignaturePoll(async () => { if (++n === 2) throw new Error("git failed"); return "same"; }, () => bumps++, 10, () => false);
+  await poll.baseline;
+  await sleep(150);
+  poll.stop();
+  assert.ok(n >= 3);
+  assert.equal(bumps, 0);
+});
+
+test("vsGitWatch stops on 400/403 (Retry restarts it), keeps going on a change, coalesceRuns never overlaps", async () => {
+  const { vsGitWatch, coalesceRuns } = await import("../src/vsGit.ts");
+  const realFetch = globalThis.fetch;
+  try {
+    for (const status of [400, 403]) {
+      let calls = 0;
+      globalThis.fetch = async () => { calls++; return new Response("{}", { status }); };
+      const stop = vsGitWatch("/r", () => assert.fail("no change"));
+      await sleep(150);
+      assert.equal(calls, 1, `${status}: one request, no retry loop`);
+      stop();
+    }
+    const seen = [];
+    let n = 0;
+    globalThis.fetch = async (url) => {
+      seen.push(String(url));
+      n++;
+      if (n === 1) return new Response(JSON.stringify({ seq: "e:0", changed: false }));
+      if (n === 2) return new Response(JSON.stringify({ seq: "e:1", changed: true }));
+      await sleep(5000);
+      return new Response(JSON.stringify({ seq: "e:1", changed: false }));
+    };
+    let changes = 0;
+    const stop = vsGitWatch("/r", () => changes++);
+    await sleep(200);
+    stop();
+    assert.equal(changes, 1);
+    assert.match(seen[1], /since=e%3A0/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  let active = 0, max = 0, runs = 0;
+  const run = coalesceRuns(async () => { runs++; active++; max = Math.max(max, active); await sleep(40); active--; });
+  run(); run(); run(); run();
+  await sleep(250);
+  assert.equal(max, 1);
+  assert.equal(runs, 2, "a burst costs one run plus one trailing run");
+});
+
+test("ChangesPanel reloads through the coalescer", () => {
+  const c = readFileSync(new URL("../src/ChangesPanel.tsx", import.meta.url), "utf8");
+  assert.match(c, /vsgit\.coalesceRuns\(\(\) => Promise\.all\(\[loadDiff\(false\), loadStatus\(\)\]\)\)/);
 });

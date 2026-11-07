@@ -72,6 +72,8 @@ export function vsGitWatch(cwd: string, onChange: () => void, onRecover?: () => 
     while (!ac.signal.aborted) {
       try {
         const r = await fetch(url(since), { signal: ac.signal });
+        // 400/403 (cwd not allowed, no owner token) will not fix itself: stop; the panel's Retry restarts the watch.
+        if (r.status === 400 || r.status === 403) return;
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const j = (await r.json()) as { seq?: string; changed?: boolean };
         if (ac.signal.aborted) return;
@@ -87,4 +89,16 @@ export function vsGitWatch(cwd: string, onChange: () => void, onRecover?: () => 
     }
   })();
   return () => ac.abort();
+}
+
+/** Runs `fn` now, or once more after the current run if called meanwhile (a burst of calls costs at most one extra run). */
+export function coalesceRuns(fn: () => Promise<unknown>): () => void {
+  let running = false;
+  let again = false;
+  const run = (): void => {
+    if (running) { again = true; return; }
+    running = true;
+    void fn().catch(() => {}).finally(() => { running = false; if (again) { again = false; run(); } });
+  };
+  return run;
 }

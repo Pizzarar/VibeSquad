@@ -51,10 +51,31 @@ async function fallbackSignature(cwd) {
   return createHash("sha1").update(`${status}\0${numstat}\0${head}`).digest("hex");
 }
 
+/**
+ * Chained setTimeout (never overlapping runs, unlike setInterval): calls `onChange` when `sig()` differs from its last value.
+ * Stops once `isClosed()` is true, including a run that finishes after the close. Returns { stop(), baseline }.
+ */
+export function startSignaturePoll(sig, onChange, intervalMs, isClosed) {
+  let timer = null;
+  let stopped = false;
+  let last;
+  const tick = async () => {
+    if (stopped || isClosed()) return;
+    let s;
+    try { s = await sig(); } catch { s = last; }
+    if (stopped || isClosed()) return;
+    if (last === undefined) last = s; else if (s !== last) { last = s; onChange(); }
+    timer = setTimeout(tick, intervalMs);
+    timer.unref?.();
+  };
+  const baseline = tick(); // resolves once the first signature is taken, so callers can wait for a baseline
+  return { stop: () => { stopped = true; clearTimeout(timer); }, baseline };
+}
+
 let epochCounter = 0;
 
 function createEntry(cwd, recursive) {
-  const e = { n: 0, epoch: `${Date.now().toString(36)}${++epochCounter}`, waiters: new Set(), watchers: [], timer: null, linger: null, poll: null, ready: null, closed: false };
+  const e = { n: 0, epoch: `${Date.now().toString(36)}${++epochCounter}`, waiters: new Set(), watchers: [], timer: null, linger: null, stopPoll: null, ready: null, closed: false };
   const bump = () => {
     if (e.closed) return;
     clearTimeout(e.timer);
@@ -79,9 +100,9 @@ function createEntry(cwd, recursive) {
     }
     if (!ok) {
       // Fallback: signature poll (also covers a non-recursive platform).
-      let last = await fallbackSignature(cwd);
-      e.poll = setInterval(async () => { const s = await fallbackSignature(cwd); if (s !== last) { last = s; bump(); } }, FALLBACK_POLL_MS);
-      e.poll.unref?.();
+      const poll = startSignaturePoll(() => fallbackSignature(cwd), bump, FALLBACK_POLL_MS, () => e.closed);
+      e.stopPoll = poll.stop;
+      await poll.baseline;
     }
   })();
   return e;
@@ -91,7 +112,7 @@ function closeEntry(key, e) {
   e.closed = true;
   clearTimeout(e.timer);
   clearTimeout(e.linger);
-  clearInterval(e.poll);
+  e.stopPoll?.();
   for (const w of e.watchers) { try { w.close(); } catch { /* already closed */ } }
   if (entries.get(key) === e) entries.delete(key);
 }

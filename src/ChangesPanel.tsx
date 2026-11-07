@@ -348,7 +348,8 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
     void loadDiff(true);
     // A change while the tab is hidden is applied when it becomes visible again.
     let stale = false;
-    const refresh = () => { if (document.hidden) { stale = true; return; } void loadDiff(false); void loadStatus(); };
+    const reload = vsgit.coalesceRuns(() => Promise.all([loadDiff(false), loadStatus()]));
+    const refresh = () => { if (document.hidden) { stale = true; return; } if (alive) reload(); };
     const onVisible = () => { if (!document.hidden && stale) { stale = false; refresh(); } };
     document.addEventListener("visibilitychange", onVisible);
     const stopWatch = vsgit.vsGitWatch(cwd, refresh, refresh);
