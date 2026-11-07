@@ -61,12 +61,13 @@ export class TerminalManager {
     const id = `tm-${randomBytes(6).toString("hex")}`;
     const t = {
       id, cwd, name: String(name || `Terminal ${this.listFor(cwd).length + 1}`).slice(0, 60),
-      createdAt: Date.now(), exited: null, buf: "", events: new EventEmitter(), usesPty: Boolean(pty),
+      createdAt: Date.now(), exited: null, buf: "", total: 0, events: new EventEmitter(), usesPty: Boolean(pty),
     };
     t.events.setMaxListeners(50);
     const emit = (data) => {
       if (!data) return;
       t.buf += data;
+      t.total += data.length; // monotonic output cursor (chars ever emitted): buf only keeps the last SCROLLBACK_CHARS
       if (t.buf.length > SCROLLBACK_CHARS) t.buf = t.buf.slice(-SCROLLBACK_CHARS);
       t.events.emit("data", data);
     };
@@ -154,8 +155,37 @@ export class TerminalManager {
     t.events.on("exit", onExit);
     return () => { t.events.off("data", onData); t.events.off("exit", onExit); };
   }
-  output(id) {
-    return this.get(id).buf;
+  /** The retained scrollback; `max` keeps only its last `max` chars. */
+  output(id, max) {
+    const buf = this.get(id).buf;
+    return Number.isFinite(max) && max > 0 && buf.length > max ? buf.slice(-max) : buf;
+  }
+  /**
+   * Cursor read for clients that can't hold a stream (the remote proxy is request/response): output from char `since`
+   * (absent / negative = start of the retained scrollback), at most `maxChars`. `next` is the cursor for the following
+   * call, `dropped` says `since` had already scrolled out, and `exited` only shows once everything has been read.
+   */
+  poll(id, since, { maxChars = 32_768 } = {}) {
+    const t = this.get(id);
+    const base = t.total - t.buf.length;
+    let from = Number.isFinite(since) && since >= 0 ? Math.min(since, t.total) : base;
+    const dropped = from < base;
+    if (dropped) from = base;
+    const text = t.buf.slice(from - base, from - base + maxChars);
+    const next = from + text.length;
+    return { text, next, dropped, exited: t.exited && next >= t.total ? t.exited : null };
+  }
+  /** Resolves once output past `cursor` exists, the shell exited, or `ms` passed (a long-poll hold). */
+  waitForData(id, cursor, ms, signal) {
+    const t = this.get(id);
+    return new Promise((done) => {
+      if (t.exited || t.total > cursor) return done();
+      const finish = () => { clearTimeout(timer); t.events.off("data", finish); t.events.off("exit", finish); signal?.removeEventListener("abort", finish); done(); };
+      const timer = setTimeout(finish, ms);
+      t.events.on("data", finish);
+      t.events.on("exit", finish);
+      signal?.addEventListener("abort", finish, { once: true });
+    });
   }
   kill(id) {
     const t = this.get(id);

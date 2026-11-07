@@ -283,3 +283,34 @@ test("api: streaming an unknown terminal or script is a real 404 and leaves no p
     assert.ok(timers() <= before, "no leaked interval");
   });
 });
+
+test("terminal: poll is a cursor read (retained start, no gaps, dropped, exit only when drained, long-poll wake)", async () => {
+  const dir = tmp();
+  const m = new TerminalManager({ pty: null, shell: fakeShell });
+  try {
+    const t = await m.create({ cwd: dir });
+    assert.deepEqual(m.poll(t.id), { text: "", next: 0, dropped: false, exited: null });
+    m.input(t.id, "one\r");
+    assert.ok(await until(() => m.output(t.id).includes("got:one")));
+    const a = m.poll(t.id, 0, { maxChars: 4 });
+    assert.equal(a.text.length, 4);
+    assert.equal(a.next, 4);
+    const b = m.poll(t.id, a.next);
+    assert.equal(a.text + b.text, m.output(t.id), "chunks join to the exact output");
+    assert.equal(m.poll(t.id, b.next).text, "");
+    assert.equal(m.output(t.id, 5), m.output(t.id).slice(-5));
+    const held = m.waitForData(t.id, b.next, 3000);
+    m.input(t.id, "two\r");
+    await held;
+    assert.ok(await until(() => /got:two/.test(m.poll(t.id, b.next).text)));
+    const t0 = Date.now();
+    await m.waitForData(t.id, m.poll(t.id).next, 120);
+    assert.ok(Date.now() - t0 >= 100, "an idle terminal holds the poll");
+    m.input(t.id, "quit\r");
+    assert.ok(await until(() => m.get(t.id).exited));
+    const last = m.poll(t.id, 0, { maxChars: 3 });
+    assert.equal(last.exited, null, "exit is withheld until the output is drained");
+    const rest = m.poll(t.id, last.next);
+    assert.deepEqual(rest.exited, { code: 3 });
+  } finally { m.killAll(); rmq(dir); }
+});
