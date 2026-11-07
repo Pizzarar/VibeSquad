@@ -1142,7 +1142,10 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
         const leadTeam = findTeamInRegistry(String(lead.labels?.team || ""), teams);
         if (trigger === "overlord") {
           if (!callerLane || !leadLane || !callerTeam || !leadTeam || callerTeam.id !== leadTeam.id) throw forbid("caller is not in the lead's Squad");
+          const inSquad = (a, lane) => findLaneInRegistry(String(a.labels?.lane || a.labels?.lead || ""), teams)?.team.id === callerTeam.id && (callerTeam.lanes || []).some((l) => l.id === lane.id);
+          if (!inSquad(caller, callerLane) || !inSquad(lead, leadLane)) throw forbid("caller or target lane is not in the caller's Squad");
           if (!isHubLane(callerTeam, callerLane)) throw forbid("caller is not the Squad's hub lead (Overlord)");
+          if (callerId === lead.id || callerLane.id === leadLane.id) throw forbid("the Overlord may not use the overlord trigger on itself or its own lane");
         } else if (!callerLane || !leadLane || callerLane.id !== leadLane.id || !callerTeam || !leadTeam || callerTeam.id !== leadTeam.id) {
           throw forbid("caller is not a Buddy of the lead's lane");
         }

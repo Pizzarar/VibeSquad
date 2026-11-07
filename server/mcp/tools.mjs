@@ -351,11 +351,11 @@ async function handoffLead(ctx, args = {}) {
     if (!caller || effectiveAgentRole(caller) !== LEAD_ROLE || isRetiredAgent(caller) || caller.archivedAt || caller.status === "closed") {
       throw new Error(`cannot hand off a lead: ${callerId} is not a live lead`);
     }
-    const { team, lane } = ctx.identity;
+    // Lane and Squad come from the caller's own record, never from env (VS_LANE/VS_TEAM are spoofable).
     const teams = ctx.teams ?? loadTeamsRegistry();
-    const callerLane = findLaneInRegistry(lane, teams);
-    const callerTeam = findTeamInRegistry(team, teams);
-    if (!callerLane || !callerTeam || callerLane.team.id !== callerTeam.id) throw new Error(`cannot hand off a lead: caller team "${team}" / lane "${lane}" is not in the team registry`);
+    const callerLane = findLaneInRegistry(clean(caller.labels?.lane || caller.labels?.lead), teams);
+    const callerTeam = findTeamInRegistry(clean(caller.labels?.team), teams);
+    if (!callerLane || !callerTeam || callerLane.team.id !== callerTeam.id) throw new Error(`cannot hand off a lead: caller record team "${caller.labels?.team ?? ""}" / lane "${caller.labels?.lane ?? ""}" is not in the team registry`);
     if (!isHubLane(callerTeam, callerLane.lane)) throw new Error("cannot hand off a lead: a lead may only hand off itself unless it is the Squad's hub lead (Overlord)");
     if (!askedLane) throw new Error("cannot hand off a lead: the Overlord must name the target lane");
     const targetLane = findLaneInRegistry(askedLane, teams);
@@ -365,7 +365,12 @@ async function handoffLead(ctx, args = {}) {
     const ord = (a) => Number(a.labels?.ord) || 0;
     target = [...live].sort((a, b) => ord(b) - ord(a))[0];
     if (askedId && askedId !== target.id) throw new Error(`cannot hand off a lead: ${askedId} is not the live lead of lane "${targetLane.lane.id}" (${target.id})`);
+    if (target.id === callerId || targetLane.lane.id === callerLane.lane.id) throw new Error("cannot hand off a lead: the Overlord hands off other lanes' leads; use a plain handoff_lead for itself");
     trigger = "overlord";
+    const age = Date.now() - Date.parse(target.createdAt ?? "");
+    if (!askedId && target.labels?.["vs.handoff-from"] && age >= 0 && age < HANDOFF_DEDUPE_MS) {
+      return handoffView({ successorId: target.id, title: target.title, oldLeadId: target.labels["vs.handoff-from"], deduped: true }, { trigger });
+    }
   } else if (callerRole === LEAD_ROLE) {
     if (!callerId) throw new Error("cannot hand off a lead: caller has no agent id");
     // The lane is canonicalised through the registry like the Buddy branch; an empty or unknown lane is refused.

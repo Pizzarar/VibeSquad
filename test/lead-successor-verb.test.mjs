@@ -417,3 +417,40 @@ test("a non-hub lead cannot spawn a lead; hub Buddy may spawn only the hub's own
     assert.deepEqual([req.labels.role, req.labels.lane, req.labels.team], ["lead", "site-hub", "site"]);
   } finally { b.cleanup(); }
 });
+
+// O2 review fixes: caller lane/team come from the record, no self/own-lane overlord, double-call dedupe.
+test("env spoof: a non-hub lead or another Squad's hub lead claiming the hub via VS_LANE/VS_TEAM cannot hand off another lane", async () => {
+  const t = setup({ callerRole: "lead", callerId: "rn-lead", lane: "site-hub" }); // record lane = site-polish
+  try {
+    await assert.rejects(callTool(t.ctx, "handoff_lead", { lane: "other" }), /only hand off itself/);
+    assert.equal(t.calls.createAgent.length, 0);
+  } finally { t.cleanup(); }
+  const o = setup({ callerRole: "lead", callerId: "rn-oth-hub-lead", lane: "site-hub" }); // record: team oth / oth-hub
+  o.ctx.identity.team = "site";
+  try {
+    await assert.rejects(callTool(o.ctx, "handoff_lead", { lane: "other" }), /not in the caller's Squad/);
+    assert.equal(o.calls.createAgent.length, 0);
+  } finally { o.cleanup(); }
+});
+
+test("overlord trigger refuses itself and its own lane (tool and server), and a target lane outside the caller's Squad", async () => {
+  const t = overlord();
+  try {
+    await assert.rejects(callTool(t.ctx, "handoff_lead", { lane: "site-hub", id: "rn-lead" }), /not the live lead|other lanes/);
+    const run = (extra) => performLeadHandoffHttp({ retireImmediately: true, trigger: "overlord", callerId: "rn-hub-lead", ...t.deps, ...extra }, t.dir);
+    await assert.rejects(run({ agentId: "rn-hub-lead" }), (e) => e.status === 403);
+    await assert.rejects(run({ agentId: "rn-oth-lead" }), (e) => e.status === 403);
+    assert.equal(t.calls.createAgent.length, 0);
+  } finally { t.cleanup(); }
+});
+
+test("a double Overlord handoff returns the fresh successor instead of handing off again", async () => {
+  const t = overlord();
+  try {
+    const a = await callTool(t.ctx, "handoff_lead", { lane: "other" });
+    const b = await callTool(t.ctx, "handoff_lead", { lane: "other" });
+    assert.equal(b.id, a.id);
+    assert.equal(b.deduped, true);
+    assert.equal(t.calls.createAgent.length, 1);
+  } finally { t.cleanup(); }
+});
