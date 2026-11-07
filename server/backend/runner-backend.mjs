@@ -22,7 +22,14 @@ const ENV_FOR = { lane: "VS_LANE", team: "VS_TEAM", role: "VS_ROLE", profile: "V
 const CLAUDE_PERMISSION_MODES = new Set(["default", "acceptEdits", "plan", "bypassPermissions", "dontAsk", "auto"]);
 const STATUS = { starting: "initializing", running: "running", idle: "idle", parked: "idle", exited: "closed", lost: "closed", unknown: "idle" };
 
-export const isRunnerId = (id) => typeof id === "string" && id.startsWith("rn-");
+/** Roster work on the serialized live chain waits at most this long on the runner; a timeout takes the same path as a failed fetch. */
+const ROSTER_FETCH_MS = 8000;
+const bounded = (p, ms = ROSTER_FETCH_MS) => {
+  let t;
+  return Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Error("runner request timed out")), ms); t.unref?.(); })]).finally(() => clearTimeout(t));
+};
+
+export const isRunnerId =(id) => typeof id === "string" && id.startsWith("rn-");
 
 const iso = (ms) => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
 
@@ -321,7 +328,7 @@ export class RunnerBackend {
     Object.defineProperty(this, "whosHere", { value: whosHere });
     Object.defineProperty(this, "rootDir", { value: rootDir });
     Object.defineProperty(this, "listeners", { value: new Set() });
-    Object.defineProperty(this, "live", { value: { stream: null, chain: Promise.resolve(), turn: new Map(), gen: 0, hwm: null, known: new Map(), archived: new Set() } });
+    Object.defineProperty(this, "live", { value: { stream: null, chain: Promise.resolve(), turn: new Map(), gen: 0, hwm: null, known: new Map(), archived: new Set(), emitted: new WeakSet() } });
     // Paseo-side agents of the same lanes, set by the RoutingBackend so a Who's here refresh sees the whole lane.
     Object.defineProperty(this, "siblings", { value: { list: null } });
     Object.defineProperty(this, "lanes", { value: lanes });
@@ -614,7 +621,11 @@ export class RunnerBackend {
       this.live.stream = this.rc.stream({
         onOpen: () => this.enqueue((gen) => this.seedRoster(gen)),
         onClose: () => this.emitEvent({ kind: "disconnected" }),
-        onMessage: (m) => this.enqueue((gen) => this.handleLogEvent(m, gen)),
+        // The timeline emit never waits behind roster fetches on the chain: the browser refetches on it, so it goes out at once.
+        onMessage: (m) => {
+          this.emitTimeline(m);
+          this.enqueue((gen) => this.handleLogEvent(m, gen));
+        },
       });
     }
     // The first roster a listener sees comes through the same chain as live events, so a slow listAgents() can never
@@ -636,6 +647,13 @@ export class RunnerBackend {
     this.live.chain = this.live.chain.then(() => (gen === this.live.gen ? fn(gen) : undefined)).catch(() => {});
   }
 
+  /** Emits the { kind: 'timeline' } event for a log message once (live path emits it ahead of the chain; handleLogEvent then skips it). */
+  emitTimeline({ id, event: e }) {
+    if (!id || !e || this.live.emitted.has(e)) return;
+    this.live.emitted.add(e);
+    this.emitEvent({ kind: "timeline", agentId: id, seq: e.seq, type: e.type });
+  }
+
   emitEvent(ev) {
     for (const fn of [...this.listeners]) {
       try { fn(ev); } catch { /* a bad listener must not stop the others */ }
@@ -650,7 +668,7 @@ export class RunnerBackend {
   /** Initial roster for one new listener (the stream's shared status map is seeded by seedRoster on open). */
   async seedListener(listener, gen) {
     let agents;
-    try { agents = await this.listAgents(); } catch { agents = null; }
+    try { agents = await bounded(this.listAgents()); } catch { agents = null; }
     if (gen !== this.live.gen || !this.listeners.has(listener)) return;
     try {
       if (agents) {
@@ -666,9 +684,9 @@ export class RunnerBackend {
     let recs = null;
     try {
       if (this.live.hwm) {
-        recs = await this.fetchRecs();
+        recs = await bounded(this.fetchRecs());
         agents = recs.filter((r) => !r.archivedAt).map((r) => toAgent(r));
-      } else agents = await this.listAgents();
+      } else agents = await bounded(this.listAgents());
     } catch { agents = null; }
     if (gen !== this.live.gen) return;
     if (!agents) return this.emitEvent({ kind: "disconnected" });
@@ -732,7 +750,7 @@ export class RunnerBackend {
       if (gen !== this.live.gen) return;
       const id = rec.id;
       let events;
-      try { ({ events } = await this.rc.request("GET", `/agents/${encodeURIComponent(id)}/timeline?after=${(hwm.get(id) ?? -1) + 1}`)); } catch { continue; }
+      try { ({ events } = await bounded(this.rc.request("GET", `/agents/${encodeURIComponent(id)}/timeline?after=${(hwm.get(id) ?? -1) + 1}`))); } catch { continue; }
       for (const event of events) await this.handleLogEvent({ id, event }, gen);
     }
   }
@@ -748,7 +766,7 @@ export class RunnerBackend {
       if (e.seq <= (hwm.get(id) ?? -1)) return; // already handled (replayed at connect, or history before startup)
       hwm.set(id, e.seq);
     }
-    this.emitEvent({ kind: "timeline", agentId: id, seq: e.seq, type: e.type });
+    this.emitTimeline({ id, event: e });
     const t0 = this.live.turn.get(id);
     const from = t0 && viewStatus(t0);
     // Archive is terminal. The killed child's exit / error / idle land AFTER the archive event: they must not resurrect the roster
@@ -767,7 +785,7 @@ export class RunnerBackend {
     }
     if (e.type === "unarchive") {
       this.live.archived.delete(id);
-      const agent = (await this.fetchAgent(id).catch(() => null))?.agent;
+      const agent = (await bounded(this.fetchAgent(id)).catch(() => null))?.agent;
       if (agent) {
         this.live.known.set(id, agent);
         this.emitEvent({ kind: "agent", agent: this.overlay(agent) });
@@ -790,7 +808,7 @@ export class RunnerBackend {
     }
     let agent;
     try {
-      agent = (await this.fetchAgent(id)).agent;
+      agent = (await bounded(this.fetchAgent(id))).agent;
       if (hwm) this.live.known.set(id, agent);
     } catch {
       // Runner hiccup. In lifecycle mode this event's seq is already consumed, so the transition must still be emitted: with the
@@ -819,7 +837,7 @@ export class RunnerBackend {
     const known = this.live.known.get(id);
     if (known) return known;
     try {
-      const fresh = (await this.fetchAgent(id)).agent;
+      const fresh = (await bounded(this.fetchAgent(id))).agent;
       this.live.known.set(id, fresh);
       return fresh;
     } catch { /* fall through */ }
