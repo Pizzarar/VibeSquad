@@ -1706,7 +1706,7 @@ export async function runAgentVerb(verb, flags, ctx) {
   return callTool(ctx, tool, args);
 }
 
-async function commandAgentVerb(verb, flags) {
+export async function commandAgentVerb(verb, flags, makeContext = createContext, out = (s) => process.stdout.write(s)) {
   if (verb === "lead") {
     if (flags._.shift() !== "handoff") throw new Error("usage: vs lead handoff [--lane <code>]");
     verb = "handoff_lead";
@@ -1716,12 +1716,15 @@ async function commandAgentVerb(verb, flags) {
   }
   if (verb === "send" && (!flags._[0] || flags._.length < 2)) throw new Error('usage: vs send <agent> "<text>"');
   if (verb === "status" && !flags._[0]) throw new Error("usage: vs status <agent>");
-  const identity = resolveIdentity(flags);
-  const ctx = createContext({
+  // handoff_lead: --lane names only the TARGET lane (runAgentVerb reads it); the caller's identity comes from
+  // VS_AGENT_ID -> its record labels / VS_* env, never from --agent/--role/--team/--lane/--ord.
+  const { agent: _a, role: _r, team: _t, lane: _l, ord: _o, ...callerFlags } = flags;
+  const identity = resolveIdentity(verb === "handoff_lead" ? callerFlags : flags);
+  const ctx = makeContext({
     identity: { agentId: identity.agentId, team: identity.team.id, lane: identity.lane, role: identity.role },
   });
   const result = await runAgentVerb(verb, flags, ctx);
-  process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+  out(JSON.stringify(result, null, 2) + "\n");
   return 0;
 }
 

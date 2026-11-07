@@ -628,7 +628,9 @@ export function createLeadHandoffCoordinator(deps = {}) {
     }
 
     timer.mark("createAgent");
-    const successorId = created?.id || `lead-${laneId}-ord${nextOrd}-${Date.now().toString(36)}`;
+    // No real successor id -> nothing was spawned: fail before re-parenting workers or touching the old lead.
+    const successorId = String(created?.id ?? "").trim();
+    if (!successorId) throw new Error(`lead-handoff: successor spawn for lane "${laneId}" returned no agent id; old lead ${oldLead.id} left in place`);
     const successor = {
       id: successorId,
       title: created?.title || newTitle,
@@ -809,13 +811,20 @@ export function createLeadHandoffCoordinator(deps = {}) {
       return { ...(prev ?? {}), ok: true, stage: "self", triggered: false, deduped: true, reason: "already-handed-off" };
     }
     selfHandedOff.add(lead.id);
-    const res = await spawnSuccessor({
-      oldLead: lead,
-      trigger: options.trigger === "buddy" ? "buddy" : "self",
-      retireImmediately: Boolean(options.retireImmediately),
-      forceSynthesize: Boolean(options.forceSynthesize),
-      job: options.job,
-    });
+    let res;
+    try {
+      res = await spawnSuccessor({
+        oldLead: lead,
+        trigger: options.trigger === "buddy" ? "buddy" : "self",
+        retireImmediately: Boolean(options.retireImmediately),
+        forceSynthesize: Boolean(options.forceSynthesize),
+        job: options.job,
+      });
+    } catch (err) {
+      selfHandedOff.delete(lead.id); // a failed spawn must stay retryable
+      throw err;
+    }
+    if (res?.ok === false) selfHandedOff.delete(lead.id);
     return { stage: "self", triggered: !res.deduped, ...res };
   }
 
@@ -1082,8 +1091,8 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
     }
     if (!lead || !lead.id) throw new Error(`lead agent not found: ${body.agentId || body.laneId || body.lane || "vibesquad"}`);
     if (!body.oldLead && effectiveAgentRole(lead) !== "lead") throw new Error(`not a lead: ${lead.id}`);
-    // A Buddy hands off a lane's live lead: the target must be one (not archived, closed or already retired).
-    if (trigger === "buddy" && (lead.archivedAt || lead.status === "closed" || isRetiredAgent(lead))) {
+    // A Buddy or lead hands off a live lead: the target must be one (not archived, closed or already retired).
+    if ((trigger === "buddy" || trigger === "self") && (lead.archivedAt || lead.status === "closed" || isRetiredAgent(lead))) {
       throw new Error(`lead-handoff: ${lead.id} is not a live lead`);
     }
 

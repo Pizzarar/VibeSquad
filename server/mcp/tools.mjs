@@ -305,28 +305,74 @@ async function handoffLead(ctx, args = {}) {
     target = [...live].sort((a, b) => ord(b) - ord(a))[0];
     if (askedId && askedId !== target.id) throw new Error(`cannot hand off a lead: ${askedId} is not the live lead of lane "${callerLane.lane.id}" (${target.id})`);
     trigger = "buddy";
-    // The live lead is already a fresh handoff successor: a repeated call returns it instead of handing off again.
+    // The live lead is already a fresh handoff successor: a repeated call (no explicit target id) returns it instead of
+    // handing off again. An explicit id means "hand off that agent", so it never takes this short-circuit.
     const age = Date.now() - Date.parse(target.createdAt ?? "");
-    if (target.labels?.["vs.handoff-from"] && age >= 0 && age < HANDOFF_DEDUPE_MS) {
+    if (!askedId && target.labels?.["vs.handoff-from"] && age >= 0 && age < HANDOFF_DEDUPE_MS) {
       return handoffView({ successorId: target.id, title: target.title, oldLeadId: target.labels["vs.handoff-from"], deduped: true }, { trigger });
     }
   } else if (callerRole === LEAD_ROLE) {
     if (!callerId) throw new Error("cannot hand off a lead: caller has no agent id");
-    if ((askedId && askedId !== callerId) || (askedLane && clean(ctx.identity.lane) && askedLane.toLowerCase() !== clean(ctx.identity.lane).toLowerCase())) {
+    // The lane is canonicalised through the registry like the Buddy branch; an empty or unknown lane is refused.
+    const rawLane = clean(ctx.identity.lane);
+    if (!rawLane) throw new Error("cannot hand off a lead: caller has no lane");
+    const callerLane = findLaneInRegistry(rawLane, ctx.teams ?? loadTeamsRegistry());
+    if (!callerLane) throw new Error(`cannot hand off a lead: caller lane "${rawLane}" is not in the team registry`);
+    if ((askedId && askedId !== callerId) || (askedLane && findLaneInRegistry(askedLane, ctx.teams ?? loadTeamsRegistry())?.lane.id !== callerLane.lane.id)) {
       throw new Error("cannot hand off a lead: a lead may only hand off itself");
     }
     target = await fetchAgent(callerId);
     if (!target) target = { id: callerId };
     trigger = "self";
     const successor = clean(target.labels?.["handoff-successor"]);
-    if (successor) return handoffView({ successorId: successor, oldLeadId: callerId, deduped: true }, { trigger });
+    if (successor) {
+      const s = await fetchAgent(successor);
+      return handoffView({ successorId: successor, title: s?.title ?? "", oldLeadId: callerId, deduped: true }, { trigger });
+    }
+    if (target.archivedAt || target.status === "closed" || ["former-lead", "retired"].includes(clean(target.labels?.role).toLowerCase())) {
+      throw new Error(`cannot hand off a lead: ${callerId} is not a live lead`);
+    }
   } else {
     throw new Error(`cannot hand off a lead: caller role is "${callerRole || "none"}", only a brainstorm (Buddy) or a lead may`);
   }
-  const run = ctx.performHandoff ?? (async (body) => (await import("../lead-handoff.mjs")).performLeadHandoffHttp(body));
-  const res = await run({ trigger, agentId: target.id, retireImmediately: true });
+  const body = { trigger, agentId: target.id, retireImmediately: true, httpWaitMs: 180_000 };
+  let res;
+  let via = "server";
+  if (ctx.performHandoff) {
+    res = await ctx.performHandoff(body);
+    via = "injected";
+  } else {
+    // One process owns the dedupe slots: route through the VS server, in-process only when it is unreachable.
+    try {
+      res = await postLeadHandoffToServer(body, ctx);
+    } catch (e) {
+      if (!e?.unreachable) throw e;
+      via = "in-process (VS server unreachable)";
+      res = await (await import("../lead-handoff.mjs")).performLeadHandoffHttp(body);
+    }
+  }
   if (res?.ok === false || res?.error) throw new Error(`handoff failed: ${res.error ?? "unknown"}`);
-  return handoffView(res, { trigger });
+  return handoffView(res, { trigger, via });
+}
+
+/** POST the handoff to the running VS server's single /__vibesquad/lead-handoff endpoint. Connection failures carry `unreachable`. */
+async function postLeadHandoffToServer(body, ctx) {
+  const { localTokenHeaders } = await import("../local-token.mjs");
+  const port = Number(process.env.VIBESQUAD_PORT || 4180);
+  let r;
+  try {
+    r = await (ctx.fetch ?? fetch)(`http://127.0.0.1:${port}/__vibesquad/lead-handoff`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...localTokenHeaders() },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(200_000),
+    });
+  } catch (e) {
+    throw Object.assign(new Error(`VS server unreachable: ${e?.message ?? e}`), { unreachable: true });
+  }
+  const json = await r.json().catch(() => ({}));
+  if (!r.ok && !json?.error) json.error = `server answered ${r.status}`;
+  return json;
 }
 
 const obj = (properties, required = []) => ({ type: "object", properties, required, additionalProperties: true });
