@@ -153,6 +153,7 @@ export class Runner {
           entry.status = 'exited';
           entry.inflight = 0;
           clearTimeout(entry.parkTimer);
+          this._clearArchive(entry);
           this.store.append(id, 'exit', info);
           if (this.live.get(id) === entry) this.live.delete(id);
           this._pump();
@@ -292,17 +293,26 @@ export class Runner {
     if (!entry.sessionId || !this.adapters[entry.provider]?.canPark) throw new Error(`agent ${id} cannot be parked`);
     entry.parked = true;
     clearTimeout(entry.parkTimer);
+    this._clearArchive(entry);
     this.store.append(id, 'parked', { sessionId: entry.sessionId, systemPrompt: entry.systemPrompt ?? null });
     this.store.append(id, 'status', { status: 'parked' });
     this.live.delete(id);
     entry.handle.kill();
   }
 
+  // Drops a pending archive-stop (flag + kill timer): unarchive, park and exit all end that window.
+  _clearArchive(entry) {
+    if (!entry) return;
+    entry.archiveWhenIdle = false;
+    clearTimeout(entry.archiveTimer);
+    entry.archiveTimer = null;
+  }
+
   // Ends an agent's process for good measure but leaves it resumable: with a session it is logged as parked (so unarchive + send
   // resumes it) even when mid-turn or still starting; without one the kill logs a plain exit. Frees its live and turn slots.
   _stopKeepingSession(id, entry) {
     clearTimeout(entry.parkTimer);
-    clearTimeout(entry.archiveTimer);
+    this._clearArchive(entry);
     if (!entry.handle || this.live.get(id) !== entry) return;
     if (entry.sessionId && this.adapters[entry.provider]?.canPark) {
       entry.parked = true;
@@ -440,6 +450,7 @@ export class Runner {
   // Undoes archive (an agent archived by mistake): the log keeps the archive event, `unarchive` supersedes it. Never resumes anything.
   unarchive(id) {
     if (!this.store.exists(id)) throw new Error(`no such agent ${id}`);
+    this._clearArchive(this.live.get(id));
     this.store.append(id, 'unarchive', {});
   }
 
@@ -501,7 +512,7 @@ export class Runner {
   shutdown() {
     this._pollAgy?.shutdown();
     this.queue.length = 0;
-    for (const e of this.live.values()) { clearTimeout(e.parkTimer); clearTimeout(e.archiveTimer); }
+    for (const e of this.live.values()) { clearTimeout(e.parkTimer); this._clearArchive(e); }
     for (const id of [...this.live.keys()]) {
       try { this.store.append(id, 'exit', { code: null, reason: 'runner-shutdown' }); } catch { /* best effort */ }
       this.kill(id);

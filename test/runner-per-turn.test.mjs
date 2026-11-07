@@ -347,3 +347,20 @@ test('archive (c): with 2 prompts queued in the child, the first turn ending sto
   assert.ok(runner.timeline(a).some((e) => e.type === 'parked'));
   runner.shutdown();
 });
+
+test('unarchive within the kill window cancels the archive-stop: turn ends, a new send runs, no kill', async () => {
+  const { runner, spawnImpl } = setup({ parkGraceMs: 60_000, archiveKillMs: 80 });
+  const a = mk(runner, { prompt: 'long' });
+  await tick();
+  runner.archive(a);
+  runner.unarchive(a);
+  spawnImpl.calls[0].child.finish();
+  await tick();
+  assert.equal(runner.live.has(a), true, 'turn end did not stop it');
+  runner.send(a, 'next'); await tick(150); // past the old kill window
+  assert.equal(spawnImpl.calls[0].child.killed, false, 'timer was cleared');
+  assert.equal(runner.live.get(a).inflight, 1, 'new prompt running normally');
+  assert.ok(!runner.timeline(a).some((e) => e.type === 'parked' || e.type === 'exit'));
+  finishAll(spawnImpl);
+  runner.shutdown();
+});
