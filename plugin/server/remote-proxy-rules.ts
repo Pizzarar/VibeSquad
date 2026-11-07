@@ -96,6 +96,10 @@ export const REMOTE_OWNER_ROUTES: readonly { re: RegExp; methods: readonly Remot
   { re: /^\/__vibesquad\/workspace-scripts$/, methods: ["GET"] },
   { re: /^\/__vibesquad\/workspace-scripts\/logs$/, methods: ["GET"] }, // `stream=1` is refused in decideProxyRequest
   { re: /^\/__vibesquad\/workspace-scripts\/(?:start|stop)$/, methods: ["POST"] },
+  // N1 git: diffs are file contents and writes change the repo, so reads and writes are both owner-token routes.
+  // Actions mirror server/git-api.mjs (GIT_READ_ACTIONS / GIT_WRITE_ACTIONS); cwd is confined server-side by resolveShellCwd.
+  { re: /^\/__vibesquad\/git\/(?:status|diff|commits|commit-diff|branches|validate-branch|stash-list|pr-status|pr-timeline|check-details)$/, methods: ["GET"] },
+  { re: /^\/__vibesquad\/git\/(?:commit|push|pull|merge-base|switch|stash-save|stash-pop|discard|rename-branch|pr-create|pr-merge|pr-automerge)$/, methods: ["POST"] },
 ];
 const ownerRouteMethods = (pathname: string) => REMOTE_OWNER_ROUTES.find((r) => r.re.test(pathname))?.methods;
 /** True for any owner-only terminal / script route: the proxy injects the token and refuses without one. */
@@ -314,6 +318,24 @@ export const REMOTE_TERMINAL_POLICY: Readonly<Record<string, BodyPolicy>> = {
   "/__vibesquad/workspace-scripts/start": { fields: { cwd: str(1024), name: str(120) }, require: ["cwd", "name"], allowKeys: ["cwd"] },
   "/__vibesquad/workspace-scripts/stop": { fields: { cwd: str(1024), name: str(120) }, require: ["cwd", "name"], allowKeys: ["cwd"] },
 };
+// N1 git writes (owner-only). `cwd` is allowed through the forbidden list like the terminal routes (resolveShellCwd confines it);
+// branch / path values are re-validated on the server (no leading '-', no '..').
+const gitMethod = oneOf("merge", "squash", "rebase");
+const GIT_FIELDS = { cwd: str(1024) };
+export const REMOTE_GIT_POLICY: Readonly<Record<string, BodyPolicy>> = {
+  "/__vibesquad/git/commit": { fields: { ...GIT_FIELDS, message: str(10_000), addAll: { t: "boolean" } }, require: ["cwd", "message"], allowKeys: ["cwd"] },
+  "/__vibesquad/git/push": { fields: GIT_FIELDS, require: ["cwd"], allowKeys: ["cwd"] },
+  "/__vibesquad/git/pull": { fields: GIT_FIELDS, require: ["cwd"], allowKeys: ["cwd"] },
+  "/__vibesquad/git/merge-base": { fields: GIT_FIELDS, require: ["cwd"], allowKeys: ["cwd"] },
+  "/__vibesquad/git/switch": { fields: { ...GIT_FIELDS, branch: str(200) }, require: ["cwd", "branch"], allowKeys: ["cwd"] },
+  "/__vibesquad/git/stash-save": { fields: GIT_FIELDS, require: ["cwd"], allowKeys: ["cwd"] },
+  "/__vibesquad/git/stash-pop": { fields: { ...GIT_FIELDS, index: { t: "number", min: 0, max: 1000, int: true } }, require: ["cwd"], allowKeys: ["cwd"] },
+  "/__vibesquad/git/discard": { fields: { ...GIT_FIELDS, paths: { t: "array", max: 500, of: str(1024) } }, require: ["cwd", "paths"], allowKeys: ["cwd"] },
+  "/__vibesquad/git/rename-branch": { fields: { ...GIT_FIELDS, branch: str(200) }, require: ["cwd", "branch"], allowKeys: ["cwd"] },
+  "/__vibesquad/git/pr-create": { fields: { ...GIT_FIELDS, title: str(300), body: str(20_000), baseRef: str(200) }, require: ["cwd", "title"], allowKeys: ["cwd", "title"] },
+  "/__vibesquad/git/pr-merge": { fields: { ...GIT_FIELDS, method: gitMethod }, require: ["cwd"], allowKeys: ["cwd"] },
+  "/__vibesquad/git/pr-automerge": { fields: { ...GIT_FIELDS, enabled: { t: "boolean" }, method: gitMethod }, require: ["cwd"], allowKeys: ["cwd"] },
+};
 export const WRITE_SCHEMAS = REMOTE_BODY_POLICY;
 
 /** Never accepted in a remote body at any depth, whatever a policy says: spawn config, DI hooks, prompt and brief text.
@@ -414,7 +436,9 @@ export function checkRemoteBody(method: RemoteMethod, pathname: string, body: st
     ? REMOTE_BODY_POLICY[pathname]
     : Object.hasOwn(REMOTE_TERMINAL_POLICY, tkey) && isOwnerRoute(pathname)
       ? REMOTE_TERMINAL_POLICY[tkey]
-      : undefined;
+      : Object.hasOwn(REMOTE_GIT_POLICY, pathname) && isOwnerRoute(pathname)
+        ? REMOTE_GIT_POLICY[pathname]
+        : undefined;
   if (!policy) return { ok: false, status: 403, error: `no remote body policy for ${pathname}` };
   let parsed: unknown = {};
   if (body !== undefined && body.trim() !== "") {
