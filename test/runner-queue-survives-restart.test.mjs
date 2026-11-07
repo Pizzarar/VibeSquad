@@ -224,3 +224,55 @@ test('R1#4 owner inputs take free slots before older non-owner ones on boot', as
   assert.equal(r2.status(old).status, 'queued');
   r2.shutdown();
 });
+
+test('R2 successor exited / retired / archived before boot: the old queued lead is still superseded', async () => {
+  for (const fate of ['exit', 'former-lead', 'archive']) {
+    const { dir, r1, q } = queuedAgent({ role: 'lead', lane: 'bug', team: 't' });
+    await tick();
+    await tick(5);
+    const succ = r1.create({ provider: 'claude', cwd: process.cwd(), meta: { role: 'lead', lane: 'bug', team: 't' } });
+    r1.shutdown(); // logs exit for the live successor
+    const r2 = boot(dir, fakeSpawn());
+    if (fate === 'former-lead') r2.updateMeta(succ, { role: 'former-lead' });
+    if (fate === 'archive') r2.archive(succ);
+    assert.ok(r2.status(succ), fate);
+    assert.deepEqual(r2.recoverQueued(), [], fate);
+    r2.shutdown();
+    void q;
+  }
+});
+
+test('R2 a Buddy is superseded only by a newer Buddy with the same topic; role is read from labels.role too', async () => {
+  const { dir, r1, q } = queuedAgent({ role: 'brainstorm', lane: 'bug', team: 't', labels: { topic: 'a' } });
+  await tick();
+  await tick(5);
+  r1.create({ provider: 'claude', cwd: process.cwd(), meta: { role: 'brainstorm', lane: 'bug', team: 't', labels: { topic: 'b' } } });
+  r1.shutdown();
+  const r2 = boot(dir, fakeSpawn());
+  assert.deepEqual(r2.recoverQueued(), [q]); // different topic: not a successor
+  r2.shutdown();
+  const lab = queuedAgent({ labels: { role: 'lead' }, lane: 'bug', team: 't' });
+  await tick();
+  await tick(5);
+  lab.r1.create({ provider: 'claude', cwd: process.cwd(), meta: { labels: { role: 'lead' }, lane: 'bug', team: 't' } });
+  lab.r1.shutdown();
+  assert.deepEqual(boot(lab.dir, fakeSpawn()).recoverQueued(), []);
+});
+
+test('R2 send to a superseded agent names the successor; send to a stale one does not smuggle the old input', async () => {
+  const { dir, r1, q } = queuedAgent({ role: 'lead', lane: 'bug', team: 't' });
+  await tick();
+  await tick(5);
+  const succ = r1.create({ provider: 'claude', cwd: process.cwd(), meta: { role: 'lead', lane: 'bug', team: 't' } });
+  r1.shutdown();
+  const r2 = boot(dir, fakeSpawn());
+  assert.throws(() => r2.send(q, 'hello'), (e) => e.message.includes(`superseded by ${succ}`) && !/retired/.test(e.message));
+  r2.shutdown();
+  const st = queuedAgent();
+  await tick();
+  st.r1.shutdown();
+  await tick(30);
+  const r3 = boot(st.dir, fakeSpawn(), { queueMaxAgeMs: 10 });
+  assert.throws(() => r3.send(st.q, 'late'), /not running/); // stale input is not revived by a send either
+  r3.shutdown();
+});

@@ -431,36 +431,42 @@ export class Runner {
     const inputs = events.filter((e, i) => e.type === 'input' && i > cut && typeof e.text === 'string');
     if (!inputs.length) return null;
     if (isRetiredMeta(meta)) return null; // retirePredecessors / confirmTakeover only relabel the role (never archive): a former-lead stays dead
+    if (this.queueMaxAgeMs > 0 && Date.now() - statusTs > this.queueMaxAgeMs) return null; // stale: a days-old input must not run on a whim
+    const supersededBy = this._successorOf(id, meta);
     const resumable = sessionId && !sessionId.startsWith('-') && this.adapters[c.provider]?.canPark;
     return {
       spec: { provider: c.provider, model: c.model ?? undefined, cwd: c.cwd, meta, systemPrompt: c.systemPrompt ?? undefined, ...(resumable ? { resume: sessionId } : {}) },
       text: inputs.map((e) => e.text).join('\n\n'),
       owner: inputs.some((e) => e.owner === true),
       ts: inputs[0].ts ?? 0,
-      queuedAt: statusTs,
-      meta,
+      supersededBy,
     };
   }
 
-  // A lead/Buddy that was lost while queued reads as `closed`, so its replacement never retired it (retirePredecessors skips closed
-  // agents) and it still says role=lead. If a newer live agent holds the same team/lane/role, the old one is superseded: reviving it
-  // would make `vs who lead` CONFLICT. Only the singleton roles (lead, brainstorm) are checked; workers have no successor.
-  _hasSuccessor(id, plan) {
-    const role = String(plan.meta?.role ?? '').toLowerCase();
-    if (role !== 'lead' && role !== 'brainstorm') return false;
-    const lane = plan.meta?.lane;
-    const team = plan.meta?.team;
-    if (!lane) return false;
+  // A lead/Buddy whose replacement was spawned while it sat queued is superseded, whatever became of the replacement (it may have
+  // exited, been archived or itself retired by the time of a restart). Reviving the old one would make `vs who lead` CONFLICT.
+  // Superseded = any NEWER agent (created later; id breaks a tie) in the same team + lane + role family (lead/former-lead,
+  // brainstorm/former-brainstorm; Buddies also the same topic). Workers and lane-less agents have no successor. Returns its id or null.
+  _successorOf(id, meta) {
+    const family = roleFamily(meta);
+    const lane = meta?.lane;
+    if ((family !== 'lead' && family !== 'brainstorm') || !lane) return null;
+    const team = meta.team ?? null;
+    const topic = family === 'brainstorm' ? (meta.labels?.topic ?? meta.topic ?? null) : null;
     const mine = this._fold(id)?.created?.ts ?? 0;
     for (const other of this.store.ids()) {
       if (other === id) continue;
       let f = null;
       try { f = this._fold(other); } catch { continue; }
-      if (!f?.created || f.exit || f.archivedAt || (f.created.ts ?? 0) <= mine) continue;
+      if (!f?.created) continue;
+      const ts = f.created.ts ?? 0;
+      if (ts < mine || (ts === mine && other < id)) continue;
       const m = f.meta ?? {};
-      if (String(m.role ?? '').toLowerCase() === role && m.lane === lane && (m.team ?? null) === (team ?? null)) return true;
+      if (roleFamily(m) !== family || m.lane !== lane || (m.team ?? null) !== team) continue;
+      if (family === 'brainstorm' && (m.labels?.topic ?? m.topic ?? null) !== topic) continue;
+      return other;
     }
-    return false;
+    return null;
   }
 
   // Runner boot: re-enqueues every agent that was queued (turn cap) when the previous runner went away, in their original
@@ -472,8 +478,7 @@ export class Runner {
       let plan = null;
       try { plan = this._unstartedPlan(id); } catch { /* unreadable log: skip */ }
       if (!plan) continue;
-      if (this.queueMaxAgeMs > 0 && Date.now() - plan.queuedAt > this.queueMaxAgeMs) continue; // stale: a days-old input must not run on a whim
-      if (this._hasSuccessor(id, plan)) continue;
+      if (plan.supersededBy) continue;
       plans.push({ id, plan });
     }
     // Owner inputs take the free slots first (they would have jumped the queue), then oldest first.
@@ -525,6 +530,7 @@ export class Runner {
     let pending = null; // inputs queued before a runner restart that this send must carry along (they never ran)
     if (!live && !queued) {
       pending = this._unstartedPlan(id); // checked even when the agent has a session: those inputs are not in the session yet
+      if (pending?.supersededBy) throw new Error(`agent ${id} is superseded by ${pending.supersededBy}; send to the successor`);
       spec = this._parkedSpec(id) ?? this._lostSpec(id) ?? pending?.spec ?? null;
     }
     if (!live?.handle && !spec && !queued) throw new Error(`agent ${id} is not running`);
@@ -702,6 +708,8 @@ function queueMaxAgeFromEnv(env = process.env) {
 }
 
 // Same rule as server/identity.mjs isRetiredRole (former-*, old-lead, retired, old), applied to a log's folded meta (role + labels.role).
+function roleOf(meta) { return String(meta?.role ?? meta?.labels?.role ?? '').trim().toLowerCase(); }
+function roleFamily(meta) { return roleOf(meta).replace(/^former-/, ''); }
 function isRetiredMeta(meta) {
   return [meta?.role, meta?.labels?.role].some((r) => { const v = String(r ?? '').trim().toLowerCase(); return v.startsWith('former-') || v === 'old-lead' || v === 'retired' || v === 'old'; });
 }
