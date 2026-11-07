@@ -140,7 +140,7 @@ test("wiring: Project tab in RightDock, Composer time-boxes the @ listing, Agent
   assert.match(dock, /<ProjectPanel agent=\{agent\} \/>/);
   const comp = src("Composer.tsx");
   assert.match(comp, /resolveMentionEntries\(/);
-  assert.match(comp, /includeDirectories: true/);
+  assert.match(comp, /vsListDirectory\(cwd, dir\)/); // listing via the VS fs route, no daemon suggest
   assert.match(comp, /composer-mention-failed/);
   assert.match(src("AgentDrawer.tsx"), /expandFolderMentions\(composed, agent\.provider/);
   const panel = src("ProjectPanel.tsx");

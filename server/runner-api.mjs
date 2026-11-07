@@ -61,6 +61,10 @@ export async function handleRunnerApi(req, res, { readBody, sendJson, backend = 
       return streamEvents(req, res, backend);
     }
     if (parts[0] === "agents" && parts.length === 1 && req.method === "GET") {
+      if (url.searchParams.get("archived") === "1") {
+        const all = await backend.listAgents({ filter: { includeArchived: true } }).catch(() => []);
+        return sendJson(res, 200, { enabled: true, agents: all.filter((a) => a.archivedAt) });
+      }
       const agents = await backend.listAgents().catch(() => []); // runner not started yet = no agents
       return sendJson(res, 200, { enabled: true, agents });
     }
@@ -92,6 +96,10 @@ export async function handleRunnerApi(req, res, { readBody, sendJson, backend = 
         else if (action === "cancel") await backend.cancelAgent(id);
         else if (action === "archive") await backend.archiveAgent(id);
         else if (action === "unarchive") await backend.unarchiveAgent(id);
+        else if (action === "resume") {
+          // Reopens a lost/parked agent in place (same id and history); status stays "closed" when it is not resumable.
+          return sendJson(res, 200, { ok: true, agent: await backend.refreshAgent(id) });
+        }
         else if (action === "meta") await backend.updateAgent(id, body);
         else return sendJson(res, 404, { error: "not found" });
         return sendJson(res, 200, { ok: true });

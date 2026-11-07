@@ -1,4 +1,4 @@
-// Block C wrappers: workspace/project CRUD + branch validation. Kept out of paseo.ts on purpose.
+// ensureWorkspace for ChangesPanel (daemon git needs a workspace). The Workspaces screen and its CRUD wrappers were cut in P4.
 import { daemonClient, getPaseoState } from "./paseo";
 import { createInflight, findWorkspaceForCwd, unsafeWorkspaceCwdReason, workspaceKey } from "./ensureWorkspaceLogic";
 import type { PaseoWorkspace } from "@getpaseo/client";
@@ -11,9 +11,6 @@ const withTimeout = <T,>(p: Promise<T>, ms: number, what: string): Promise<T> =>
   return Promise.race([p, timeout]).finally(() => clearTimeout(t));
 };
 
-export const setWorkspaceTitle = (id: string, title: string | null) => daemonClient.setWorkspaceTitle(id, title);
-export const setWorkspacePinned = (id: string, pinned: boolean) => daemonClient.setWorkspacePinned(id, pinned);
-
 /**
  * Creates a standalone workspace. Paseo 0.14 sends the final response (0.13 clients only saw the "accepted" update).
  * Our timeout only stops waiting: createWorkspace takes no AbortSignal in 0.14, so the SDK's own waiter outlives it.
@@ -24,33 +21,6 @@ export async function createStandaloneWorkspace(source: CreateSource, title?: st
   });
   if (res.error) throw new Error(res.error);
   return { workspace: res.workspace, workspaceId: res.workspace?.id ?? null };
-}
-
-export const inspectWorkspaceRecovery = (id: string) => daemonClient.inspectWorkspaceRecovery(id);
-export const restoreWorkspace = (id: string) => daemonClient.restoreWorkspace(id);
-
-export async function runWorkspaceSetup(id: string) {
-  const res = await daemonClient.runWorkspaceSetup(id);
-  if (res.error) throw new Error(res.error);
-  return res;
-}
-export const fetchWorkspaceSetupStatus = (id: string) => daemonClient.fetchWorkspaceSetupStatus(id);
-
-export async function listProjects() {
-  return (await daemonClient.listProjects()).projects;
-}
-export async function openProject(cwd: string) {
-  const res = await daemonClient.openProject(cwd);
-  if (res.error) throw new Error(res.error);
-  return res.workspace;
-}
-export const renameProject = (id: string, name: string | null) => daemonClient.renameProject(id, name);
-export const removeProject = (id: string) => daemonClient.removeProject(id);
-
-export const validateBranch = (cwd: string, branchName: string) => withTimeout(daemonClient.validateBranch({ cwd, branchName }), 6000, "validateBranch");
-export async function branchSuggestions(cwd: string, query: string) {
-  const res = await withTimeout(daemonClient.getBranchSuggestions({ cwd, query, limit: 8 }), 6000, "getBranchSuggestions");
-  return res.error ? [] : res.branches;
 }
 
 const ENSURE_TIMEOUT_MS = 15000;

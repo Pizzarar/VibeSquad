@@ -1,6 +1,5 @@
 // New squad creation modal: add a local folder or clone a repo, auto-fill name, optionally start a Buddy.
 import { useEffect, useMemo, useState } from "react";
-import { daemonClient } from "./paseo";
 import { DEMO } from "./demoFlag";
 import {
   getTeams,
@@ -72,14 +71,8 @@ export function NewSquadModal({
       if (!remote) {
         if (source === "clone") {
           const dest = cloneDest.trim() || cloneRepo.trim().split("/").pop()!.replace(/\.git$/, "");
-          if (!DEMO) {
-            const res = await (daemonClient as any).cloneGithubProject({ repo: cloneRepo.trim(), targetDirectory: dest });
-            finalPath = (res as { path?: string }).path ?? dest;
-          } else {
-            finalPath = dest;
-          }
-        } else {
-          if (!DEMO) await (daemonClient as any).addProject(finalPath);
+          if (!DEMO) throw new Error("Cloning from GitHub isn't available yet. Clone it in a terminal, then add the folder.");
+          finalPath = dest;
         }
       }
 

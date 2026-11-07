@@ -131,12 +131,6 @@
     "tl-tool-output",
     "tl-ul"
   ],
-  "WorkspacesView.tsx": [
-    "clickable",
-    "team-body",
-    "ws-main",
-    "ws-view"
-  ],
   "demo.tsx": [
     "big"
   ],

@@ -1,6 +1,5 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { getPaseoState } from "./paseo";
-import { listSubagents } from "./paseoSubagents";
 import { mergeSubagents, scrapedSubagents, subagentSignature, subagentStatusLabel, type ApiSubagent } from "./paseoSubagentsLogic";
 
 // "Subagents (N)" strip for the open agent. Loads on open and refetches when a sub_agent
@@ -31,9 +30,8 @@ export function SubagentList({
     const parentStatus = getPaseoState().agents.get(agentId)?.status;
     if (parentStatus === "closed") return;
     let live = true;
-    void listSubagents(agentId).then((r) => {
-      if (live) setApi(r);
-    });
+    // No runner sub-agent listing route: [] = "supported, none yet", so the rows come from the scraped tool calls.
+    if (live) setApi([]);
     return () => {
       live = false;
     };

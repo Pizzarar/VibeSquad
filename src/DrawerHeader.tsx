@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { PaseoAgent } from "@getpaseo/client";
-import { attachFiles, clearNeedsYou, markAgentRead, markAgentUnread, daemonClient, sendMessage, setNeedsYou, snoozeNeedsYou, stopAgent, updateAgent, upsertLocalAgent } from "./paseo";
+import { attachFiles, clearNeedsYou, markAgentRead, markAgentUnread, sendMessage, setNeedsYou, snoozeNeedsYou, stopAgent, updateAgent, upsertLocalAgent } from "./paseo";
 import { DEMO } from "./demoFlag";
 import { isLocallyHidden, isMarkedUnread } from "./attentionLocal";
-import { clearWorkspaceIfQuiet } from "./paseoAttention";
 import { listProviderModels } from "./paseoProviders";
-import { isRunnerId } from "./runnerBridge";
+import { runnerReloadTimeline, runnerResume, runnerSpawn, runnerUnarchive } from "./runnerBridge";
 import {
   auditAntigravityAgent,
   CANCEL_AND_RESUME_PROMPT,
@@ -23,7 +22,6 @@ import { LEGACY_NEEDS_LABEL, LEGACY_NEEDS_REASON, LEGACY_NEEDS_UNTIL, needsYouBa
 import { AGENT_TYPE_LABEL, kindOf, leadLadderFor, leadVariant } from "./teams";
 import type { AgentType, Member } from "./teams";
 import type { Entry } from "./Timeline";
-import { ImportSessionModal, SchedulesPanel } from "./SchedulesPanel";
 import { openAgent, openAgentInTab, usePanes } from "./panes";
 import { exportFileName, forkSummaryPrompt, forkTitle, transcriptToJson, transcriptToMarkdown } from "./sessionLifecycle";
 import { openBriefEditor, setLastBrainstormProfile } from "./pinActions";
@@ -74,10 +72,10 @@ function NeedsYouControls({ agent }: { agent: PaseoAgent }) {
         <button className="btn ok" disabled={busy} onClick={() => run(() => markAgentRead(agent))}>
           Clear
         </button>
-        <button className="btn ghost" disabled={busy} onClick={() => run(() => snoozeNeedsYou(agent, 30 * 60_000).then(() => clearWorkspaceIfQuiet(agent.id)))}>
+        <button className="btn ghost" disabled={busy} onClick={() => run(() => snoozeNeedsYou(agent, 30 * 60_000))}>
           Snooze 30m
         </button>
-        <button className="btn ghost" disabled={busy} onClick={() => run(() => snoozeNeedsYou(agent, 2 * 3_600_000).then(() => clearWorkspaceIfQuiet(agent.id)))}>
+        <button className="btn ghost" disabled={busy} onClick={() => run(() => snoozeNeedsYou(agent, 2 * 3_600_000))}>
           Snooze 2h
         </button>
       </div>
@@ -295,19 +293,22 @@ export function formatCostUsd(usd: number): string {
   return `$${usd.toFixed(2)}`;
 }
 
+// The runner has no live set-mode/model/thinking route yet (P4 blocker): switch provider/profile to restart with new settings.
+const LIVE_CHANGE_UNSUPPORTED = "Live mode/model changes are not supported on runner agents yet; use Switch provider to restart with new settings.";
+
 export async function setModeHelper(agent: PaseoAgent, modeId: string): Promise<void> {
   if (DEMO) { upsertLocalAgent({ ...agent, currentModeId: modeId }); return; }
-  await daemonClient.setAgentMode(agent.id, modeId);
+  throw new Error(LIVE_CHANGE_UNSUPPORTED);
 }
 
 export async function setModelHelper(agent: PaseoAgent, modelId: string): Promise<void> {
   if (DEMO) { upsertLocalAgent({ ...agent, model: modelId }); return; }
-  await daemonClient.setAgentModel(agent.id, modelId);
+  throw new Error(LIVE_CHANGE_UNSUPPORTED);
 }
 
 export async function setThinkingHelper(agent: PaseoAgent, optionId: string | null): Promise<void> {
   if (DEMO) { upsertLocalAgent({ ...agent, thinkingOptionId: optionId }); return; }
-  await daemonClient.setAgentThinkingOption(agent.id, optionId);
+  throw new Error(LIVE_CHANGE_UNSUPPORTED);
 }
 
 export const PROVIDER_MODEL_HINTS: Record<string, string[]> = {
@@ -540,10 +541,8 @@ function download(name: string, mime: string, body: string) {
 
 function SessionActions({ agent, entries }: { agent: PaseoAgent; entries: Entry[] }) {
   const [exportOpen, setExportOpen] = useState(false);
-  const [modal, setModal] = useState<"schedules" | "import" | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
-  const dc = daemonClient as any;
   const title = agent.title ?? agent.id;
 
   const fork = async () => {
@@ -551,15 +550,15 @@ function SessionActions({ agent, entries }: { agent: PaseoAgent; entries: Entry[
     setMsg("");
     try {
       if (DEMO) return setMsg("Fork (demo): would open a new agent with this context.");
-      let prompt = forkSummaryPrompt(title, entries);
-      const ctx = await dc.buildAgentForkContext?.(agent.id).catch(() => null);
-      if (ctx?.attachment?.text) prompt = `Forked from "${title}".\n\n${ctx.attachment.text}`;
-      const snap = await dc.createAgent({
+      const prompt = forkSummaryPrompt(title, entries);
+      const lb = (agent.labels ?? {}) as Record<string, string>;
+      const forked = await runnerSpawn({
         config: { provider: agent.provider, model: agent.model ?? undefined, cwd: agent.cwd, title: forkTitle(title) },
         initialPrompt: prompt,
-        labels: {},
+        labels: { ...(lb.lane ? { lane: lb.lane } : {}), ...(lb.team ? { team: lb.team } : {}) },
       });
-      const id = snap?.agent?.id ?? snap?.id;
+      const id = forked?.id;
+      if (forked) upsertLocalAgent(forked);
       if (id) openAgentInTab(id);
     } catch (e) {
       setMsg(`Fork failed: ${(e as Error).message ?? e}`);
@@ -573,8 +572,11 @@ function SessionActions({ agent, entries }: { agent: PaseoAgent; entries: Entry[
     setMsg("");
     try {
       if (DEMO) return setMsg("Resume (demo)");
-      if (agent.archivedAt && dc.unarchiveAgent) await dc.unarchiveAgent(agent.id);
-      else await dc.resumeAgent?.((agent as any).persistence ?? { provider: agent.provider, sessionId: agent.id });
+      if (agent.archivedAt) await runnerUnarchive(agent.id);
+      // Unarchive only restores the record; a closed (lost/parked) agent needs the resume route to actually reopen.
+      const after = await runnerResume(agent.id);
+      if (after?.status === "closed" && !agent.archivedAt) throw new Error("it can't be resumed; use Spin Up to start a new one");
+      if (after) upsertLocalAgent(after);
       openAgent(agent.id);
     } catch (e) {
       setMsg(`Resume failed: ${(e as Error).message ?? e}`);
@@ -612,15 +614,7 @@ function SessionActions({ agent, entries }: { agent: PaseoAgent; entries: Entry[
           ▶ Resume / Un-archive
         </button>
       )}
-      <button className="btn ghost small" data-testid="drawer-schedules-btn" onClick={() => setModal("schedules")}>
-        📅 Schedules
-      </button>
-      <button className="btn ghost small" data-testid="drawer-import-btn" onClick={() => setModal("import")}>
-        📥 Import CLI
-      </button>
       {msg && <span className="chip">{msg}</span>}
-      {modal === "schedules" && <SchedulesPanel onClose={() => setModal(null)} />}
-      {modal === "import" && <ImportSessionModal onClose={() => setModal(null)} />}
     </div>
   );
 }
@@ -690,7 +684,7 @@ export function DrawerHeader({
   const [modelValue, setModelValue] = useState(agent.model ?? "");
   const [customModelMode, setCustomModelMode] = useState(false);
   const [liveModels, setLiveModels] = useState<Array<{ id: string }>>(
-    () => providerModelsCache.get((isRunnerId(agent.id) ? "rn:" : "") + agent.provider) ?? [],
+    () => providerModelsCache.get(agent.provider) ?? [],
   );
   const modelSubmittedRef = useRef<string | null>(null);
   const [modelError, setModelError] = useState("");
@@ -736,7 +730,7 @@ export function DrawerHeader({
   }, [agent.id]);
 
   useEffect(() => {
-    const cacheKey = (isRunnerId(agent.id) ? "rn:" : "") + effectiveProvider;
+    const cacheKey = effectiveProvider;
     const cached = providerModelsCache.get(cacheKey);
     if (cached && cached.length > 0) {
       setLiveModels(cached);
@@ -745,7 +739,7 @@ export function DrawerHeader({
     setLiveModels([]);
     if (DEMO || !effectiveProvider) return;
     let cancelled = false;
-    listProviderModels(effectiveProvider, isRunnerId(agent.id))
+    listProviderModels(effectiveProvider)
       .then((res) => {
         if (cancelled) return;
         const list = Array.isArray(res?.models)
@@ -820,8 +814,7 @@ export function DrawerHeader({
       } else if (isBs) {
         await doRestart("provider-switch", undefined, nextProfile);
       } else {
-        const dc = daemonClient as any;
-        const snap = await dc.createAgent({
+        const spawned = await runnerSpawn({
           config: {
             provider: target.provider,
             model: target.model,
@@ -831,7 +824,8 @@ export function DrawerHeader({
           },
           labels: nextLabels,
         });
-        const newId = snap?.agent?.id ?? snap?.id;
+        const newId = spawned?.id;
+        if (spawned) upsertLocalAgent(spawned);
         if (newId) openAgentInTab(newId);
       }
     } catch (e) {
@@ -907,7 +901,7 @@ export function DrawerHeader({
           stageSwitch({ ...staged, modeId: next });
         } else if (!modeBusy) {
           setModeBusy(true);
-          setModeHelper(agent, next).finally(() => setModeBusy(false));
+          setModeHelper(agent, next).catch((e) => setReloadError(String(e instanceof Error ? e.message : e))).finally(() => setModeBusy(false));
         }
       }
     };
@@ -931,7 +925,7 @@ export function DrawerHeader({
                       return;
                     }
                     setModeBusy(true);
-                    setModeHelper(agent, e.target.value).finally(() => setModeBusy(false));
+                    setModeHelper(agent, e.target.value).catch((e2) => setReloadError(String(e2 instanceof Error ? e2.message : e2))).finally(() => setModeBusy(false));
                   }}
                 >
                   {modes.map((m) => (
@@ -960,7 +954,7 @@ export function DrawerHeader({
                   return;
                 }
                 setThinkingBusy(true);
-                setThinkingHelper(agent, e.target.value || null).finally(() => setThinkingBusy(false));
+                setThinkingHelper(agent, e.target.value || null).catch((e2) => setReloadError(String(e2 instanceof Error ? e2.message : e2))).finally(() => setThinkingBusy(false));
               }}
             >
               {(["low", "medium", "high"] as const).map((opt) => (
@@ -1107,7 +1101,7 @@ export function DrawerHeader({
               setReloadBusy(true);
               setReloadError("");
               try {
-                await daemonClient.refreshAgent(agent.id);
+                runnerReloadTimeline(agent.id);
               } catch (e) {
                 setReloadError(String(e));
               } finally {

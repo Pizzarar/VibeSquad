@@ -1,6 +1,7 @@
-// Agent ops parity with Paseo: hard delete, bulk stop, reload. Wrappers over daemonClient plus
+// Agent ops parity with Paseo: hard delete, bulk stop, reload. Runner-backed wrappers plus
 // the pure logic (targets, guards) the UI and tests share. Labels, never titles, decide roles.
-import { daemonClient, getPaseoState, loadArchived, removeLocalAgent } from "./paseo";
+import { archiveAgent, getPaseoState, loadArchived, removeLocalAgent, stopAgent } from "./paseo";
+import { runnerReloadTimeline } from "./runnerBridge";
 import { DEMO } from "./demoFlag";
 import { closeTab } from "./panes";
 import type { OpAgent } from "./paseoAgentOpsLogic.ts";
@@ -9,7 +10,7 @@ export { bulkStopTargets, deleteGuard, runningCwds } from "./paseoAgentOpsLogic.
 export type { OpAgent, StopCandidate, StopScope } from "./paseoAgentOpsLogic.ts";
 
 export async function hardDeleteAgent(id: string): Promise<void> {
-  if (!DEMO) await daemonClient.deleteAgent(id);
+  if (!DEMO) await archiveAgent(id); // the runner has no hard-delete route: archive is as far as it goes
   removeLocalAgent(id); // archives locally; evict that entry right away (same tick, before React re-reads state)
   getPaseoState().archivedAgents.delete(id);
   closeTab(id);
@@ -19,14 +20,14 @@ export async function hardDeleteAgent(id: string): Promise<void> {
 /** Cancels each agent's current run. Returns the ids that failed. */
 export async function stopAgents(ids: string[]): Promise<string[]> {
   if (DEMO) return [];
-  const res = await Promise.allSettled(ids.map((id) => daemonClient.cancelAgent(id)));
+  const res = await Promise.allSettled(ids.map((id) => stopAgent(id)));
   return ids.filter((_, i) => res[i].status === "rejected");
 }
 
-/** `paseo agent reload` is the daemon's refresh_agent_request, exposed as client.refreshAgent. */
+/** Reload = every mounted timeline for the agent refetches (the runner has no session-refresh route). */
 export async function reloadAgent(id: string): Promise<void> {
   if (DEMO) return;
-  await daemonClient.refreshAgent(id);
+  runnerReloadTimeline(id);
 }
 
 // ---- pending confirm (rendered by the host in CommandPalette.tsx) ----------------------------

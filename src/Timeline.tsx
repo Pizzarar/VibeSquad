@@ -1,7 +1,7 @@
 import { Component, Fragment, type ReactNode, useCallback, useSyncExternalStore, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PaseoAgentTimelineEvent } from "@getpaseo/client";
 import { messageCtxItems, openContextMenu, selectionWithin } from "./CommandPalette";
-import { daemonClient, client, retrySend } from "./paseo";
+import { client, retrySend } from "./paseo";
 import { DEMO } from "./demoFlag";
 import { isRunnerId, runnerFetchTimeline, runnerHandle } from "./runnerBridge";
 import { createRefreshScheduler } from "./timelineRefresh";
@@ -9,14 +9,13 @@ import { createRefreshScheduler } from "./timelineRefresh";
 /** client.agents.ref(id), except runner-owned agents (rn- ids) go over the VS runner routes. */
 const agentRef = (id: string): ReturnType<typeof client.agents.ref> => (isRunnerId(id) ? (runnerHandle(id) as any) : client.agents.ref(id));
 import { dismissPending, dropMatched, getPending, noteAgentSeq, pendingFor, reconcile, subscribePending } from "./pendingSend";
-import { REWIND_MODES, buildRewindRequest, truncateAfter, type RewindMode } from "./sessionLifecycle";
+import { truncateAfter } from "./sessionLifecycle";
 import { demoTimeline } from "./demo";
 import { sentImagesFor } from "./imageDrafts";
 import { parseSentAttachments, repoPathFor } from "./attachments";
 import { openRightDockTab } from "./RightDock";
-import { listTimelinePrompts, searchTimeline, type TimelinePrompt } from "./paseoTimeline";
 import { perfEndPainted, perfSendEvent } from "./perf";
-import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, coalesceReplies, hasMoreOf, joinPages, markTurnBoundary, matchesFilter, localPrompts, localSearch, mergeLiveItem, maxEntrySeq, syncNeeded, latestReasoningIndex, reasoningText, sortedHits, stepIndex, type SearchLocation, type TimelineFilter } from "./timelineFilter";
+import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, coalesceReplies, hasMoreOf, joinPages, markTurnBoundary, matchesFilter, localPrompts, localSearch, mergeLiveItem, maxEntrySeq, syncNeeded, latestReasoningIndex, reasoningText, sortedHits, stepIndex, type SearchLocation, type TimelineFilter, type TimelinePrompt } from "./timelineFilter";
 import { BARE_NAME_RE, BARE_PATH_RE, bareNamesVersion, lookupBareName, parseFileToken, subscribeBareNames } from "./fileLinks";
 import { toolStartsExpanded, usePref } from "./prefs";
 import { getPanes } from "./panes";
@@ -605,15 +604,9 @@ function SubAgentBody({ agentId, subagentKey, d }: { agentId: string; subagentKe
       setLoading(false);
       return;
     }
-    daemonClient
-      .fetchProviderSubagentTimeline(agentId, subagentKey)
-      .then((r: any) => {
-        setEntries((r.entries ?? []) as Entry[]);
-      })
-      .catch(() => {
-        setEntries([]);
-      })
-      .finally(() => setLoading(false));
+    // The runner has no sub-agent timeline route: the tool call's own output (below) is all there is.
+    setEntries([]);
+    setLoading(false);
   }, [agentId, subagentKey]);
 
   const previewText = d.output ?? d.prompt ?? d.result;
@@ -670,54 +663,6 @@ function SummaryWithLinks({ text }: { text: string }) {
   }
   if (last < text.length) parts.push(<span key={ki++} className="muted">{text.slice(last)}</span>);
   return <>{parts}</>;
-}
-
-function RewindButton({ agentId, e, onRewound }: { agentId: string; e: Entry; onRewound?: (e: Entry) => void }) {
-  const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [text, setText] = useState<string>(e.item?.text ?? "");
-  const go = async (mode: RewindMode) => {
-    const req = buildRewindRequest(agentId, e, mode, text);
-    setBusy(true);
-    setErr(null);
-    try {
-      if (DEMO) {
-        onRewound?.(e);
-      } else {
-        if (!req) throw new Error("this message has no rewind id");
-        await (daemonClient as any).rewindAgent(req.agentId, req.messageId, req.mode);
-        if (req.resend) await (daemonClient as any).sendMessage(agentId, req.resend);
-        else onRewound?.(e);
-      }
-      setOpen(false);
-    } catch (x) {
-      setErr(String((x as Error)?.message ?? x));
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <span style={{ position: "relative" }}>
-      <button className="tl-park-btn" data-testid="tl-rewind-btn" title="Rewind to this message" onClick={() => setOpen((v) => !v)}>
-        ↺ Rewind
-      </button>
-      {open && (
-        <div className="tl-rewind-popover" data-testid="tl-rewind-popover" style={{ display: "flex", flexDirection: "column", gap: 4, padding: 6, marginTop: 4 }}>
-          {REWIND_MODES.map((m) => (
-            <button key={m.mode} className="btn small" disabled={busy} data-testid={`tl-rewind-${m.mode}`} onClick={() => void go(m.mode)}>
-              {m.label}
-            </button>
-          ))}
-          <label style={{ fontSize: 11 }}>
-            Edit &amp; Resend (optional)
-            <textarea data-testid="tl-rewind-edit" rows={2} value={text} onChange={(ev) => setText(ev.target.value)} style={{ width: "100%" }} />
-          </label>
-          {err && <div className="tl tl-error">{err}</div>}
-        </div>
-      )}
-    </span>
-  );
 }
 
 // ─── TimelineItem ─────────────────────────────────────────────────────────────
@@ -811,7 +756,6 @@ export function TimelineItem({
                 📥 Park in Inbox
               </button>
             )}
-            <RewindButton agentId={agentId} e={e} onRewound={onRewound} />
           </div>}
         </div>
       );
@@ -959,8 +903,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
       return;
     }
     let alive = true;
-    client.agents
-      .ref(predecessorId)
+    agentRef(predecessorId)
       .timeline.refetch({ direction: "tail", limit: 40, projection: "projected" })
       .then((t) => {
         if (!alive) return;
@@ -1123,12 +1066,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
     setLoadingMore(true);
     try {
       const cursor = earliestCursor.current;
-      const t = isRunnerId(agentId) ? await runnerFetchTimeline(agentId, { direction: "before", cursor: cursor ?? undefined, limit: 60 }) : await daemonClient.fetchAgentTimeline(agentId, {
-        direction: "before" as any,
-        cursor,
-        limit: 60,
-        projection: "projected" as any,
-      });
+      const t = await runnerFetchTimeline(agentId, { direction: "before", cursor: cursor ?? undefined, limit: 60 });
       const tAny = t as any;
       const older = (tAny.entries ?? tAny.payload?.entries ?? []) as Entry[];
       if (older.length > 0) {
@@ -1351,7 +1289,7 @@ export function Timeline({
     const my = ++reqId.current;
     setSearching(true);
     try {
-      const found = sortedHits(DEMO ? localSearch(base, q) : await searchTimeline(agentId, q));
+      const found = sortedHits(localSearch(base, q));
       if (my !== reqId.current) return;
       setHits(found);
       setBarMsg(found.length ? "" : "No matches");
@@ -1372,7 +1310,7 @@ export function Timeline({
   const loadPrompts = async (): Promise<TimelinePrompt[]> => {
     const my = reqId.current;
     try {
-      const list = DEMO ? localPrompts(base) : await listTimelinePrompts(agentId);
+      const list = localPrompts(base);
       if (my !== reqId.current) return [];
       setPrompts(list);
       return list;

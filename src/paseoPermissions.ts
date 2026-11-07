@@ -1,5 +1,7 @@
-// Daemon wrappers for the saved allow-rules view (parity block H). Kept out of paseo.ts on purpose.
-import { daemonClient } from "./paseo";
+// Reads go through the VS fs route; writes still ride the daemon until the VS server grows a file-write route (P4 blocker).
+// Wrappers for the saved allow-rules view (parity block H). Kept out of paseo.ts on purpose.
+import { daemonClient, getPaseoState } from "./paseo";
+import { vsReadFile } from "./vsFiles";
 import { createEntry } from "./paseoFiles";
 import {
   addRule, DEFAULT_SETTINGS_FILE, isSettingsFile, parseRules, removeRule, SETTINGS_FILES,
@@ -16,8 +18,7 @@ function assertSettingsPath(path: string): asserts path is SettingsFile {
 }
 
 export async function agentCwd(agentId: string): Promise<string> {
-  const r = await daemonClient.fetchAgent(agentId);
-  const cwd = r?.agent?.cwd;
+  const cwd = getPaseoState().agents.get(agentId)?.cwd;
   if (!cwd) throw new Error("Agent working directory unknown");
   return cwd;
 }
@@ -29,12 +30,12 @@ async function readText(cwd: string, path: SettingsFile): Promise<{ text: string
   assertSettingsPath(path);
   let r;
   try {
-    r = await daemonClient.readFile(cwd, path, undefined, MAX_BYTES + 1);
+    r = await vsReadFile(cwd, path, MAX_BYTES + 1);
   } catch (e) {
     if (isMissing(e)) return null;
     throw e;
   }
-  if (r.bytes.length > MAX_BYTES) throw new Error(`${path} is too large to edit here`);
+  if (r.size > MAX_BYTES) throw new Error(`${path} is too large to edit here`);
   return { text: new TextDecoder().decode(r.bytes), modifiedAt: r.modifiedAt };
 }
 

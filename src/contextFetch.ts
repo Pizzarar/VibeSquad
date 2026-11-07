@@ -1,9 +1,10 @@
 // Daemon fetches behind the Composer's @git / @terminal / @chat. Each is time-boxed (CTX_TIMEOUT_MS) and
 // throws a short readable Error on failure, so the menu shows a failure state instead of freezing.
 import { daemonClient } from "./paseo";
+import { runnerFetchTimeline } from "./runnerBridge";
 import { DEMO } from "./demoFlag";
 import { DEMO_DIFF } from "./ChangesPanel";
-import { captureTerminalLines } from "./paseoFiles";
+import { vsListTerminals, vsTerminalOutput } from "./vsShells";
 import {
   chatExcerpt,
   chatLabel,
@@ -36,12 +37,12 @@ export async function fetchGitContext(cwd: string, kind: "git" | "git-base"): Pr
 
 export async function listTerminalNames(cwd: string, workspaceId: string | null): Promise<Array<{ id: string; name: string }>> {
   if (DEMO) return [{ id: "demo-term-1", name: "Terminal 1" }];
-  const r: any = await boxed(daemonClient.listTerminals(cwd, undefined, workspaceId ? { workspaceId } : undefined), "terminal list");
-  return (r?.terminals ?? []).map((t: any) => ({ id: t.id, name: t.title ?? t.name ?? String(t.id).slice(-6) }));
+  const terminals = await boxed(vsListTerminals(cwd), "terminal list");
+  return terminals.map((t: any) => ({ id: t.id, name: t.title ?? t.name ?? String(t.id).slice(-6) }));
 }
 
 export async function fetchTerminalContext(t: { id: string; name: string }): Promise<Picked> {
-  const lines = DEMO ? ["\u001b[32m$ npm run build\u001b[0m", "vite v5 building…", "✓ built in 1.2s"] : await boxed(captureTerminalLines(t.id), "terminal capture");
+  const lines = DEMO ? ["\u001b[32m$ npm run build\u001b[0m", "vite v5 building…", "✓ built in 1.2s"] : await boxed(vsTerminalOutput(t.id).then((x) => x.split(/\r?\n/)), "terminal capture");
   const text = terminalTail(lines);
   if (!text) throw new Error("that terminal has no output yet");
   return { kind: "terminal", label: terminalLabel(t.name, TERMINAL_LINES), text };
@@ -51,7 +52,7 @@ export async function fetchChatContext(agentId: string, title: string): Promise<
   const t: any = DEMO
     ? { entries: [{ item: { type: "user_message", text: "Plan the sidebar." } }, { item: { type: "assistant_message", text: "Sidebar plan: three sections." } }] }
     : await boxed(
-    daemonClient.fetchAgentTimeline(agentId, { direction: "tail" as any, limit: 60, projection: "projected" as any }),
+    runnerFetchTimeline(agentId, { limit: 60 }),
     "chat history",
   );
   const text = chatExcerpt(t?.entries ?? t?.payload?.entries ?? []);

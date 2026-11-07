@@ -3,7 +3,9 @@ import { expandFolderMentions } from "./projectContext";
 import { appendContext, useCtxSources } from "./contextSources";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
-import { daemonClient, removeLocalAgent, sendMessage, updateAgent, upsertLocalAgent } from "./paseo";
+import { removeLocalAgent, sendMessage, updateAgent, upsertLocalAgent } from "./paseo";
+import { runnerSpawn } from "./runnerBridge";
+import { vsListDirectory } from "./vsFiles";
 import { DEMO } from "./demoFlag";
 import { useDraft } from "./drafts";
 import { isRemote } from "./remoteSession";
@@ -367,15 +369,13 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
       restore: () => setDraft(restoredDraft(typed, draftRef.current)),
       onError: (e) => setSendError(`Send failed: ${e instanceof Error ? e.message : String(e)}`),
       run: async () => {
-        const composed = await composeMessage(formattedBase, sentFiles, async ({ name, file }) => {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const up = await (daemonClient as any).uploadFile?.({ cwd: agent.cwd, name, file });
-          if (!up?.path) throw new Error(`upload of ${name} failed`);
-          return up.path as string;
+        // Large or binary browser files need an upload route the VS server doesn't have yet (P4 blocker); small text inlines.
+        const composed = await composeMessage(formattedBase, sentFiles, async ({ name }) => {
+          throw new Error(`${name} is too big or binary to inline, and there is no upload route yet`);
         });
         // Providers that ignore `@dir/` (Gemini) get a time-boxed "Folder: …" listing line appended.
         const expanded = await expandFolderMentions(composed, agent.provider, async (dir) => {
-          const res = await daemonClient.listDirectory(agent.cwd ?? "", dir);
+          const res = await vsListDirectory(agent.cwd ?? "", dir);
           return res.entries.map((e) => ({ path: e.path, kind: e.kind }));
         });
         // @git / @terminal / @chat pills expand into fenced blocks for every provider.
@@ -410,8 +410,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
           } else if (kindOf(agent) === "lead" && onSuccessor) {
             onSuccessor();
           } else {
-            const dc = daemonClient as any;
-            const snap = await dc.createAgent({
+            const spawned = await runnerSpawn({
               config: {
                 provider: switchTarget.provider,
                 model: switchTarget.model,
@@ -425,7 +424,8 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
               // Keep the staged model/mode/thinking against the plugin's profile enforcement.
               env: { VS_PROFILE_OVERRIDE: "1" },
             });
-            const newId = snap?.agent?.id ?? snap?.id;
+            const newId = spawned.id;
+            if (spawned) upsertLocalAgent(spawned);
             if (newId) openAgentInTab(newId, paneOfAgent(agent.id), agent.id);
           }
           imgs.clear();

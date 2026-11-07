@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
-import { daemonClient, stopAgent, usePaseo } from "./paseo";
+import { stopAgent, usePaseo } from "./paseo";
+import { vsListDirectory } from "./vsFiles";
 import { DEMO } from "./demoFlag";
 import { workspaceIdForAgent } from "./workspaceLogic";
 import { addCtxSource, ctxGroupsFor, gitMenuItems, isCtxItem, laneMenuItems, useCtxSources, type CtxMenuItem } from "./contextSources";
@@ -146,10 +147,8 @@ function saveHistory(id: string, h: string[]) {
   }
 }
 
-const commandCache = new Map<string, string[]>();
 const listingCache = new Map<string, Promise<MentionEntry[]>>();
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const dc = daemonClient as any;
 
 const MENU_STYLE: React.CSSProperties = {
   display: "flex",
@@ -262,32 +261,7 @@ export function Composer({
   useEffect(() => {
     setHistory(loadHistory(agent.id));
     setHistIdx(-1);
-    let cancelled = false;
-    const cached = commandCache.get(agent.id);
-    if (cached) {
-      setCmds(cached);
-      return;
-    }
-    setCmds(FALLBACK_COMMANDS);
-    if (DEMO || agent.status === "closed") return;
-    (async () => {
-      try {
-        const res = await dc.listCommands?.(agent.id);
-        const raw: unknown[] = Array.isArray(res) ? res : (res?.commands ?? []);
-        const names = raw
-          .map((c) => (typeof c === "string" ? c : ((c as { name?: string })?.name ?? "")))
-          .filter(Boolean)
-          .map((n) => (n.startsWith("/") ? n : `/${n}`));
-        const list = names.length ? names : FALLBACK_COMMANDS;
-        commandCache.set(agent.id, list);
-        if (!cancelled) setCmds(list);
-      } catch {
-        if (!cancelled) setCmds(FALLBACK_COMMANDS);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    setCmds(FALLBACK_COMMANDS); // the runner has no slash-command listing route; the static list is the menu
   }, [agent.id, agent.status]);
 
   const mq = mention && !isUrlMention(mention.query) ? mention.query : undefined;
@@ -309,19 +283,13 @@ export function Composer({
     const key = `${cwd}\n${dir}`;
     let listing = listingCache.get(key);
     if (!listing) {
-      listing = Promise.resolve(dc.listDirectory?.(cwd, dir)).then((r: { entries?: Array<{ path: string; kind: string }> } | undefined) =>
-        (r?.entries ?? []).map(toEntry),
-      );
+      listing = vsListDirectory(cwd, dir).then((r) => r.entries.map(toEntry));
       listingCache.set(key, listing);
       listing.catch(() => listingCache.delete(key));
       setTimeout(() => listingCache.delete(key), 30_000);
     }
-    const suggest = (async () => {
-      const res = await dc.getDirectorySuggestions?.({ cwd: agent.cwd, query: mq, includeFiles: true, includeDirectories: true, limit: 8 });
-      let list: MentionEntry[] = (res?.entries ?? []).map(toEntry);
-      if (!list.length) list = ((res?.directories ?? []) as string[]).map((d) => ({ path: d, kind: "directory" as const }));
-      return list.filter((e) => e.path);
-    })();
+    // No fuzzy-suggest route on the VS server: the parent folder listing (filtered by the query) is the whole menu.
+    const suggest = Promise.resolve([] as MentionEntry[]);
     (async () => {
       // Time-boxed: a slow or hung listing shows "couldn't list" instead of freezing the menu.
       const r = await resolveMentionEntries(suggest, listing!, LIST_TIMEOUT_MS, () => listingCache.delete(key));

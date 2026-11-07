@@ -1,29 +1,7 @@
-// Pure helpers for Batch H (session lifecycle): rewind, fork, export, schedules, closed-tab stack.
+// Pure helpers for Batch H (session lifecycle): fork, export, schedules, closed-tab stack.
 // No React, DOM or daemon imports, so node --test can load this file directly.
 
-export type RewindMode = "conversation" | "files" | "both";
-export const REWIND_MODES: Array<{ mode: RewindMode; label: string }> = [
-  { mode: "conversation", label: "Conversation only" },
-  { mode: "files", label: "Files only" },
-  { mode: "both", label: "Both conversation & files" },
-];
-
 type EntryLike = { item?: any; timestamp?: string; seqStart?: number };
-
-/** The id the daemon rewinds to: the message's own id when it has one, else its timeline seq. */
-export function rewindMessageId(e: EntryLike): string | null {
-  const it = e.item ?? {};
-  const id = it.messageId ?? it.id ?? e.seqStart;
-  return id === undefined || id === null || id === "" ? null : String(id);
-}
-
-export function buildRewindRequest(agentId: string, e: EntryLike, mode: RewindMode, edited?: string) {
-  const messageId = rewindMessageId(e);
-  if (!messageId) return null;
-  const original = typeof e.item?.text === "string" ? e.item.text : "";
-  const resend = edited !== undefined && edited.trim() && edited !== original ? edited : null;
-  return { agentId, messageId, mode, resend };
-}
 
 /** Demo fallback: drop everything after the rewound message (the message itself stays unless edited resend). */
 export function truncateAfter<T extends EntryLike>(entries: T[], e: EntryLike): T[] {

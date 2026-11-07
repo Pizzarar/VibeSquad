@@ -154,7 +154,7 @@ test("FilesPanel / InlineEdit wiring: keyscope, key-command event, existing send
   const ie = src("InlineEdit.tsx");
   assert.match(ie, /sendMessage\(/, "uses the composer's send path");
   assert.doesNotMatch(ie, /spawnTeamAgent|createAgent|SpawnRequest/, "no new spawn paths");
-  assert.match(ie, /subscribeFile\(/);
+  assert.match(ie, /vsReadFile\(cwd, path, MAX_BYTES \+ 1\)/); // 1.5s poll of the VS fs route (no file-watch route)
   assert.match(ie, /expectedModifiedAt/);
   assert.match(ie, /openRightDockTab\("Changes"\)/);
 });

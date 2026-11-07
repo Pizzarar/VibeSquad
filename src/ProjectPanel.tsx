@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import { daemonClient } from "./paseo";
+import { vsListDirectory, vsReadFile } from "./vsFiles";
 import { DEMO } from "./demoFlag";
 import { openRightDockTab } from "./RightDock";
 import {
@@ -26,7 +27,7 @@ const DEMO_RULES: RuleFile[] = [
 
 /** File names in `dir` (relative to cwd), time-boxed. A missing folder lists as empty; null = couldn't list. */
 async function listNames(cwd: string, dir: string): Promise<string[] | null> {
-  const run = daemonClient.listDirectory(cwd, dir).then(
+  const run = vsListDirectory(cwd, dir).then(
     (r) => r.entries.filter((e) => e.kind === "file").map((e) => (dir ? `${dir}/${e.name}` : e.name)),
     (e) => (/not found|ENOENT|no such|does not exist|missing/i.test(String(e)) ? [] : Promise.reject(e)),
   );
@@ -53,7 +54,7 @@ async function discoverRules(cwd: string): Promise<{ files: RuleFile[]; capped: 
           return;
         }
         const left = Math.max(500, deadline - Date.now());
-        const { value, timedOut } = await withTimeout(daemonClient.listDirectory(cwd, dir).then((r) => r.entries, () => []), left, []);
+        const { value, timedOut } = await withTimeout(vsListDirectory(cwd, dir).then((r) => r.entries, () => []), left, []);
         if (timedOut) walkCapped = true;
         for (const e of value) {
           const rel = dir ? `${dir}/${e.name}` : e.name;
@@ -112,7 +113,7 @@ export function ProjectPanel({ agent }: { agent: PaseoAgent }) {
       const made = await daemonClient.createFileEntry({ cwd, parentPath: "", name, kind: "file" });
       const err = (made as { error?: string | null })?.error;
       if (err) throw new Error(err);
-      const cur = await daemonClient.readFile(cwd, name);
+      const cur = await vsReadFile(cwd, name, 1);
       const res = await daemonClient.writeFile({ cwd, path: name, content: template, expectedModifiedAt: cur.modifiedAt });
       const status = (res as { status?: string; error?: string })?.status;
       if (status === "conflict" || status === "error") throw new Error((res as { error?: string }).error || `write ${status}`);

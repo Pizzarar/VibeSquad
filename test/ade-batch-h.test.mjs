@@ -1,14 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  buildRewindRequest,
   exportFileName,
   forkSummaryPrompt,
   forkTitle,
   nextScheduleStatus,
   popClosed,
   pushClosed,
-  rewindMessageId,
   scheduleActionsFor,
   transcriptToJson,
   transcriptToMarkdown,
@@ -23,21 +21,7 @@ const entries = [
   { seqStart: 4, item: { type: "user_message", text: "again", messageId: "m4" } },
 ];
 
-test("H1: rewind id prefers messageId, falls back to seq", () => {
-  assert.equal(rewindMessageId(entries[3]), "m4");
-  assert.equal(rewindMessageId(entries[0]), "1");
-  assert.equal(rewindMessageId({ item: {} }), null);
-});
-
-test("H2: rewind request carries mode and only resends edited text", () => {
-  const same = buildRewindRequest("a1", entries[0], "both", "hello");
-  assert.deepEqual(same, { agentId: "a1", messageId: "1", mode: "both", resend: null });
-  const edited = buildRewindRequest("a1", entries[0], "conversation", "hello world");
-  assert.equal(edited.resend, "hello world");
-  assert.equal(buildRewindRequest("a1", { item: {} }, "files"), null);
-});
-
-test("H3: demo rewind truncates entries after the message", () => {
+test("H3: truncateAfter drops entries after the message entries after the message", () => {
   assert.equal(truncateAfter(entries, entries[1]).length, 2);
   assert.equal(truncateAfter(entries, { seqStart: 99 }).length, entries.length);
 });

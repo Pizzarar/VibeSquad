@@ -9,8 +9,6 @@ const S = "/__vibesquad/workspace-scripts";
 export type VsTerminal = { id: string; cwd: string; name: string; pty: boolean; exited: { code: number | null } | null };
 export type VsScript = { scriptName: string; command: string; type: "script"; lifecycle: "running" | "stopped"; port: null; exitCode: number | null };
 
-/** Runner agents use the VS routes (they have no Paseo workspace); Paseo-backed agents keep the daemon RPCs. */
-export const usesVsShells = (agentId: string | undefined): boolean => isRunnerId(agentId);
 
 async function call<T>(url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, body === undefined ? undefined : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });

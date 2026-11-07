@@ -1,7 +1,7 @@
-// Live provider-feature changes for a running agent: wrappers over daemonClient.
+// Live provider-feature changes for a running agent: no runner route exists, so a live change always fails.
 // Pure logic lives in paseoFeaturesLogic.ts. The drawer re-reads the agent snapshot after each change.
 import type { PaseoAgent } from "@getpaseo/client";
-import { daemonClient, upsertLocalAgent } from "./paseo";
+import { upsertLocalAgent } from "./paseo";
 import { DEMO } from "./demoFlag";
 
 export { describeError, featureChange, featureRows, turnNote } from "./paseoFeaturesLogic";
@@ -13,5 +13,5 @@ export async function setFeature(agent: PaseoAgent, featureId: string, value: bo
     upsertLocalAgent({ ...agent, features } as PaseoAgent);
     return;
   }
-  await daemonClient.setAgentFeature(agent.id, featureId, value);
+  throw new Error("Live feature changes are not supported on runner agents yet.");
 }

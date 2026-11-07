@@ -5,23 +5,19 @@ import { answerItem, clearItem, formatAge, itemSince, laterItem, squadQueue, typ
 import { clearUnreadLocal, dismissLocal, snoozeLocal } from "./attentionLocal";
 import { respondToPermission } from "./PermissionCard";
 import { bumpAgents, clearAgentAttention, clearNeedsYou, snoozeNeedsYou } from "./paseo";
-import { clearWorkspaceIfQuiet } from "./paseoAttention";
 import { openPinMember } from "./pinFocus";
 import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import { Avatar } from "./pixel";
 import type { Member, TeamView } from "./teams";
 
 const deps: AttentionDeps = {
-  clearNeedsYou: (a) => clearNeedsYou(a, { optimistic: true }).then(() => clearWorkspaceIfQuiet(a.id)),
-  snoozeNeedsYou: (a, ms) => snoozeNeedsYou(a, ms, { optimistic: true }).then(() => clearWorkspaceIfQuiet(a.id)),
-  clearAgentAttention: (id) => clearAgentAttention(id).then(() => clearWorkspaceIfQuiet(id)),
+  clearNeedsYou: (a) => clearNeedsYou(a, { optimistic: true }),
+  snoozeNeedsYou: (a, ms) => snoozeNeedsYou(a, ms, { optimistic: true }),
+  clearAgentAttention: (id) => clearAgentAttention(id),
   respondToPermission,
   snoozeLocal,
   dismissLocal,
-  clearUnreadLocal: (id) => {
-    clearUnreadLocal(id);
-    void clearWorkspaceIfQuiet(id);
-  },
+  clearUnreadLocal: (id) => clearUnreadLocal(id),
   now: () => Date.now(),
   after: (ms, fn) => void setTimeout(fn, Math.min(ms, 2 ** 31 - 1)),
   refresh: bumpAgents,

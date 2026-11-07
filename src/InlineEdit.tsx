@@ -2,7 +2,7 @@
 // its inline Keep/Undo review. Pure parts are in src/inlineEditLogic.ts.
 //
 // Result detection: the file is read fresh at send time (the snapshot) and watched with
-// daemonClient.subscribeFile. Every new modifiedAt re-reads it and diffs snapshot → current into
+// a 1.5s poll of the VS fs route (no file-watch route yet). Every new modifiedAt re-reads it and diffs snapshot → current into
 // hunks, so the review fills in while the agent works. The agent's status is watched too: when it
 // stops running, one last read settles it, and if the file still equals the snapshot the session says
 // the agent finished without touching it. The watch stays on until the session is dismissed, so a
@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { daemonClient, getPaseoState, sendMessage, subscribePaseo, usePaseo } from "./paseo";
 import { DEMO } from "./demoFlag";
+import { vsReadFile } from "./vsFiles";
 import { getPanes } from "./panes";
 import { cleanTitle } from "./ui";
 import { openRightDockTab } from "./RightDock";
@@ -75,8 +76,8 @@ export function dismissInlineEdit(cwd: string, path: string) {
 }
 
 async function readText(cwd: string, path: string): Promise<{ text: string; mtime: string }> {
-  const r = await daemonClient.readFile(cwd, path, undefined, MAX_BYTES + 1);
-  if (r.bytes.length > MAX_BYTES) throw new Error("File too large for inline edit");
+  const r = await vsReadFile(cwd, path, MAX_BYTES + 1);
+  if (r.size > MAX_BYTES) throw new Error("File too large for inline edit");
   let text: string;
   try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(r.bytes); }
   catch { throw new Error("Not UTF-8 text: inline edit can't diff this file"); }
@@ -128,16 +129,19 @@ export async function startInlineEdit(opts: { cwd: string; path: string; agentId
   teardowns.set(key, () => offs.forEach((f) => f()));
   let released = false;
   offs.push(() => { released = true; });
-  daemonClient
-    .subscribeFile({ cwd, path }, (v) => {
-      if (v.status === "ready" && v.modifiedAt !== sessions.get(key)?.currentMtime) void refresh(key, id);
-      else if (v.status === "missing") patch(key, id, { phase: "error", error: "The file was deleted." });
-    })
-    .then((sub) => {
-      if (released) void sub.unsubscribe().catch(() => {});
-      else offs.push(() => void sub.unsubscribe().catch(() => {}));
-    })
-    .catch(() => {}); // the idle check below still settles the session
+  let reading = false;
+  const poll = setInterval(() => {
+    // A dismissed, replaced or failed session stops its own poll; one read at a time.
+    const cur = sessions.get(key);
+    if (released || !cur || cur.id !== id || cur.phase === "error") { clearInterval(poll); return; }
+    if (reading) return;
+    reading = true;
+    vsReadFile(cwd, path, MAX_BYTES + 1).then(
+      (v) => { if (!released && v.modifiedAt !== sessions.get(key)?.currentMtime) void refresh(key, id); },
+      (e) => { if (!released && e?.notFound) patch(key, id, { phase: "error", error: "The file was deleted." }); },
+    ).finally(() => { reading = false; });
+  }, 1500);
+  offs.push(() => clearInterval(poll));
 
   // The agent stopping is the other signal: settle once it has run and stopped.
   let sawRunning = false;
@@ -160,6 +164,7 @@ export async function startInlineEdit(opts: { cwd: string; path: string; agentId
     // A timeout only means the daemon didn't confirm in time; a busy daemon often still delivers, so keep watching.
     if (!/timeout/i.test(msg)) {
       patch(key, id, { phase: "error", error: `Not sent: ${msg}` });
+      offs.forEach((f) => f()); // nothing is coming: stop the poll and the agent watch
       return null;
     }
     patch(key, id, { error: "The daemon was slow to confirm the send; still watching the file." });
