@@ -36,6 +36,8 @@ export type TeamSlices = {
   desks: Rect[];
   /** 72x32 overflow queue by the team's door (S1); optional. */
   lobby?: Rect;
+  /** F4b: the wall stats TV's screen glass (about 40x28 floor px); optional. When valid, overflow workers show as blips on it instead of in the lobby. */
+  statsTv?: Rect;
 };
 
 export type PenthouseModel = {
@@ -102,7 +104,10 @@ function teamSlicesOf(v: unknown): TeamSlices | null {
     desks.push(r);
   }
   const lobby = v.lobby === undefined ? undefined : rectOf(v.lobby) ?? undefined;
-  return { lead, buddyOffice, desks, ...(lobby ? { lobby } : {}) };
+  // A statsTv with a non-positive size can't hold a blip: drop it so the team falls back to the lobby.
+  const tv = v.statsTv === undefined ? null : rectOf(v.statsTv);
+  const statsTv = tv && tv.w > 0 && tv.h > 0 ? tv : undefined;
+  return { lead, buddyOffice, desks, ...(lobby ? { lobby } : {}), ...(statsTv ? { statsTv } : {}) };
 }
 
 function penthouseOf(v: unknown): PenthouseModel | undefined {
@@ -287,7 +292,7 @@ export const RIDE_MS = 2000;
 /** Work/needs frames play at about 2 fps. */
 export const POSE_FPS = 2;
 
-export type SeatKind = "lead" | "buddyOffice" | "desk" | "lobby" | "riffbot" | "overlord";
+export type SeatKind = "lead" | "buddyOffice" | "desk" | "lobby" | "tv" | "riffbot" | "overlord";
 
 export type SeatedAgent = {
   agentId: string;
@@ -307,8 +312,10 @@ export type TeamFloorPlacement = {
   name: string;
   lead: SeatedAgent | null;
   buddy: SeatedAgent | null;
-  /** At most DESK_COUNT, in stable (oldest-spawn-first) order. */
+  /** At most DESK_COUNT (or the floor's desk count when buildTower gets a floor), in stable (oldest-spawn-first) order. */
   desks: SeatedAgent[];
+  /** F4b: every overflow worker, oldest first, when the floor has a valid `statsTv` (drawn as blips; the lobby is then empty). */
+  tv: SeatedAgent[];
   /** At most LOBBY_MAX_SHOWN overflow workers. */
   lobby: SeatedAgent[];
   /** How many more overflow workers than the lobby shows ("+N"). */
@@ -602,7 +609,7 @@ export function spreadNeighbours<T>(items: readonly T[], keyOf: (item: T) => str
   return out;
 }
 
-function placeTeam(t: TowerTeam): TeamFloorPlacement {
+function placeTeam(t: TowerTeam, slices?: TeamSlices): TeamFloorPlacement {
   const lead = t.lead && isLiveMember(t.lead) && !isRetiredLead(t.lead) ? seat(t.lead, "lead") : null;
   const buddy = t.buddy && isLiveMember(t.buddy) && !isRetiredLead(t.buddy) ? seat(t.buddy, "buddyOffice") : null;
   // Done workers go home: only running (work) and needs-you workers are seated; an idle worker with
@@ -610,18 +617,23 @@ function placeTeam(t: TowerTeam): TeamFloorPlacement {
   const workers = [...(t.workers ?? [])]
     .filter((w): w is Member => isLiveMember(w) && !isRetiredLead(w) && isSeatedWorkerPose(poseFor(w)))
     .sort(spawnOrder);
-  const desks = spreadNeighbours(workers.slice(0, DESK_COUNT).map((w) => seat(w, "desk")), (a) => `${a.role}:${a.variant}`).map((a, i) => ({ ...a, desk: i }));
-  const overflow = workers.slice(DESK_COUNT);
+  const deskCount = slices ? slices.desks.length : DESK_COUNT;
+  const desks = spreadNeighbours(workers.slice(0, deskCount).map((w) => seat(w, "desk")), (a) => `${a.role}:${a.variant}`).map((a, i) => ({ ...a, desk: i }));
+  const overflow = workers.slice(deskCount);
+  // F4b: with a statsTv every overflow worker is a blip on the wall TV; without one, the old lobby + "+N".
+  if (slices?.statsTv) {
+    return { laneId: t.laneId, name: t.name, lead, buddy, desks, tv: overflow.map((w) => seat(w, "tv")), lobby: [], lobbyOverflow: 0 };
+  }
   const lobby = overflow.slice(0, LOBBY_MAX_SHOWN).map((w) => seat(w, "lobby"));
   const lobbyOverflow = Math.max(0, overflow.length - LOBBY_MAX_SHOWN);
-  return { laneId: t.laneId, name: t.name, lead, buddy, desks, lobby, lobbyOverflow };
+  return { laneId: t.laneId, name: t.name, lead, buddy, desks, tv: [], lobby, lobbyOverflow };
 }
 
 const needsYouOn = (p: TeamFloorPlacement | null): boolean =>
-  p !== null && [p.lead, p.buddy, ...p.desks, ...p.lobby].some((s) => s && s.pose === "needs");
+  p !== null && [p.lead, p.buddy, ...p.desks, ...p.tv, ...p.lobby].some((s) => s && s.pose === "needs");
 
-/** Penthouse first, then floors top-down in squad pin order, 2 teams per floor. */
-export function buildTower(input: TowerInput): Tower {
+/** Penthouse first, then floors top-down in squad pin order, 2 teams per floor. With a `floor`, each team's desk count and statsTv come from its slices. */
+export function buildTower(input: TowerInput, floor?: FloorModel): Tower {
   const penthouse = {
     riffbot:
       input.hubBuddy && isLiveMember(input.hubBuddy)
@@ -634,9 +646,56 @@ export function buildTower(input: TowerInput): Tower {
   };
   const floors: Floor[] = [];
   for (let i = 0; i < input.teams.length; i += 2) {
-    const teamA = placeTeam(input.teams[i]);
-    const teamB = i + 1 < input.teams.length ? placeTeam(input.teams[i + 1]) : null;
+    const teamA = placeTeam(input.teams[i], floor?.teamA);
+    const teamB = i + 1 < input.teams.length ? placeTeam(input.teams[i + 1], floor?.teamB) : null;
     floors.push({ index: floors.length, teamA, teamB, needsYou: needsYouOn(teamA) || needsYouOn(teamB) });
   }
   return { penthouse, floors };
 }
+
+// ── Stats TV blips (F4b) ──────────────────────────────────────────────────────
+
+/** A blip is a BLIP_PX square; four make a 2x2 cluster, clusters sit on a BLIP_CLUSTER_PITCH grid inside the glass. */
+export const BLIP_PX = 3;
+export const BLIP_GAP = 1;
+export const BLIP_CLUSTER = 2 * BLIP_PX + BLIP_GAP; // 7
+export const BLIP_CLUSTER_PITCH = BLIP_CLUSTER + 1; // 8
+/** Glass margin, and the bottom strip kept for the heartbeat line + count. */
+export const TV_PAD = 2;
+export const TV_FOOTER = 6;
+
+export type TvBlip = { agent: SeatedAgent; x: number; y: number; tone: "work" | "needs" };
+
+/** How many blips fit a statsTv glass (clusters of 4, row-major). */
+export function tvCapacity(tv: Rect): number {
+  const cols = Math.max(0, Math.floor((tv.w - 2 * TV_PAD + 1) / BLIP_CLUSTER_PITCH));
+  const rows = Math.max(0, Math.floor((tv.h - TV_PAD - TV_FOOTER + 1) / BLIP_CLUSTER_PITCH));
+  return cols * rows * 4;
+}
+
+/**
+ * Blip positions (TV-local px) for the overflow workers, in the given (spawn) order: fill a 2x2 cluster, then the next
+ * cluster along the row, then the next row. Blips past `tvCapacity` are not drawn (the count in the corner stays true).
+ */
+export function tvBlips(tv: Rect, agents: readonly SeatedAgent[]): TvBlip[] {
+  const cols = Math.max(1, Math.floor((tv.w - 2 * TV_PAD + 1) / BLIP_CLUSTER_PITCH));
+  return agents.slice(0, tvCapacity(tv)).map((agent, i) => {
+    const cluster = Math.floor(i / 4);
+    const slot = i % 4;
+    return {
+      agent,
+      x: TV_PAD + (cluster % cols) * BLIP_CLUSTER_PITCH + (slot % 2) * (BLIP_PX + BLIP_GAP),
+      y: TV_PAD + Math.floor(cluster / cols) * BLIP_CLUSTER_PITCH + Math.floor(slot / 2) * (BLIP_PX + BLIP_GAP),
+      tone: agent.pose === "needs" ? "needs" : "work",
+    };
+  });
+}
+
+/** Blip motion: working pulses (~1Hz, staggered), needs-you blinks pink; reduced motion is a static dot (needs stays pink). */
+export function blipMotion(tone: "work" | "needs", reduced: boolean): "none" | "pulse" | "blink" {
+  if (reduced) return "none";
+  return tone === "needs" ? "blink" : "pulse";
+}
+
+/** The 2-digit corner count, capped at 99. */
+export const tvCountText = (n: number): string => String(Math.min(99, Math.max(0, Math.trunc(n)))).padStart(2, "0");
