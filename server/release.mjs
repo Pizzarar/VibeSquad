@@ -476,7 +476,6 @@ export function runRelease(argv, { rootDir: root = rootDir, exec = execFileSync,
 
   if (stages.includes("build") && !opts.skipBuild) {
     rmSync(join(distDir, ANDROID_MARKER), { force: true });
-    rmSync(join(distDir, UNSIGNED_MARKER), { force: true });
     const buildEnv = buildSigningEnv(env, keyPath);
     const signArgs = [];
     if (!opts.unsigned) {
@@ -489,9 +488,12 @@ export function runRelease(argv, { rootDir: root = rootDir, exec = execFileSync,
       signArgs.push("--config", join(root, "src-tauri", "tauri.release-sign.conf.json"));
     }
     exec(process.execPath, [join(root, "server", "build-desktop.mjs"), ...signArgs], { cwd: root, env: buildEnv, stdio: "inherit" });
+    // Only a successful signed build clears the marker; a failed one leaves any earlier --unsigned artifacts marked.
     if (opts.unsigned) {
       mkdirSync(distDir, { recursive: true });
       writeFileSync(join(distDir, UNSIGNED_MARKER), "build --unsigned: not Authenticode-signed; never publish\n");
+    } else {
+      rmSync(join(distDir, UNSIGNED_MARKER), { force: true });
     }
     if (opts.withAndroid) {
       exec(process.execPath, [join(root, "server", "build-android.mjs")], { cwd: root, env: buildEnv, stdio: "inherit" });
