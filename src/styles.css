@@ -5216,3 +5216,336 @@ button.project-file-name:hover { text-decoration: underline; }
 .usage-bar, .usage-review-select { box-shadow: var(--bevel-in); }
 .usage-limit.usage-warn .usage-limit-pct { color: var(--amber-t); }
 .usage-limit.usage-hot .usage-limit-pct { color: var(--pink-t); }
+
+/* ======================================================================
+   U3c: painted airbrush kit (public/ui/u3/README.md) over the U2 skin. Each rule keeps its U2
+   colours/borders underneath, so a missing PNG falls back to the U2 look. Theme swap = the --u3-* URLs.
+   ====================================================================== */
+:root {
+  --u3-window-frame: url("/ui/u3/window-frame-dark.png");
+  --u3-panel-frame: url("/ui/u3/panel-frame-dark.png");
+  --u3-panel-frame-pink: url("/ui/u3/panel-frame-pink-dark.png");
+  --u3-panel-frame-amber: url("/ui/u3/panel-frame-amber-dark.png");
+  --u3-well-frame: url("/ui/u3/well-frame-dark.png");
+  --u3-bg-page: url("/ui/u3/bg-page-dark.png");
+  --u3-bg-sidebar: url("/ui/u3/bg-sidebar-dark.png");
+  --u3-bg-panel: url("/ui/u3/bg-panel-dark.png");
+  --u3-bg-well: url("/ui/u3/bg-well-dark.png");
+  --u3-stars: url("/ui/u3/stars-dark.png");
+  --u3-tb-shade: url("/ui/u3/tb-shade-dark.png");
+  --u3-cloud-corner: url("/ui/u3/cloud-corner-dark.png");
+  --u3-cloud-foot: url("/ui/u3/cloud-foot-dark.png");
+  --u3-header-halo: url("/ui/u3/header-halo-dark.png");
+  --u3-sel-teal: url("/ui/u3/sel-teal-dark.png");
+  --u3-sel-violet: url("/ui/u3/sel-violet-dark.png");
+  --u3-sunset-plate: url("/ui/u3/sunset-plate-dark.png");
+  --u3-rule-pink: url("/ui/u3/rule-pink-dark.png");
+  --u3-rule-violet: url("/ui/u3/rule-violet-dark.png");
+  --u3-meter-teal: url("/ui/u3/meter-teal-dark.png");
+  --u3-meter-amber: url("/ui/u3/meter-amber-dark.png");
+  --u3-meter-pink: url("/ui/u3/meter-pink-dark.png");
+  --u3-meter-mint: url("/ui/u3/meter-mint-dark.png");
+  --u3-edge-sidebar: url("/ui/u3/edge-sidebar-dark.png");
+  --u3-tb-ramp: url("/ui/u3/tb-ramp-dark.png");
+  --u3-tb-peach: url("/ui/u3/tb-peach-dark.png");
+  --u3-tb-violet: url("/ui/u3/tb-violet-dark.png");
+  --u3-tb-pink: url("/ui/u3/tb-pink-dark.png");
+  --u3-tb-teal: url("/ui/u3/tb-teal-dark.png");
+  --u3-brand-vibesquad: url("/ui/u3/brand-vibesquad-dark.png");
+  --u3-font-chrome-big: url("/ui/u3/font-chrome-big-dark.png");
+  --u3-font-chrome-small: url("/ui/u3/font-chrome-small-dark.png");
+  --u3-sprites: url("/ui/u3/sprites-dark.png");
+  --u3-chip-teal: url("/ui/u3/chip-teal-dark.png");
+  --u3-chip-pink: url("/ui/u3/chip-pink-dark.png");
+  --u3-chip-mint: url("/ui/u3/chip-mint-dark.png");
+  --u3-chip-amber: url("/ui/u3/chip-amber-dark.png");
+  --u3-chip-violet: url("/ui/u3/chip-violet-dark.png");
+  --u3-chip-neutral: url("/ui/u3/chip-neutral-dark.png");
+  --u3-chip-marble: url("/ui/u3/chip-marble-dark.png");
+  --u3-chip-ring-teal: url("/ui/u3/chip-ring-teal-dark.png");
+  --u3-btn-ghost-normal: url("/ui/u3/btn-ghost-normal-dark.png");
+  --u3-btn-ghost-hover: url("/ui/u3/btn-ghost-hover-dark.png");
+  --u3-btn-ghost-active: url("/ui/u3/btn-ghost-active-dark.png");
+  --u3-btn-primary-normal: url("/ui/u3/btn-primary-normal-dark.png");
+  --u3-btn-primary-hover: url("/ui/u3/btn-primary-hover-dark.png");
+  --u3-btn-primary-active: url("/ui/u3/btn-primary-active-dark.png");
+  --u3-btn-hot-normal: url("/ui/u3/btn-hot-normal-dark.png");
+  --u3-btn-hot-hover: url("/ui/u3/btn-hot-hover-dark.png");
+  --u3-btn-hot-active: url("/ui/u3/btn-hot-active-dark.png");
+  --u3-btn-on-normal: url("/ui/u3/btn-on-normal-dark.png");
+  --u3-btn-on-hover: url("/ui/u3/btn-on-hover-dark.png");
+  --u3-btn-on-active: url("/ui/u3/btn-on-active-dark.png");
+  --u3-btn-warn-normal: url("/ui/u3/btn-warn-normal-dark.png");
+  --u3-btn-warn-hover: url("/ui/u3/btn-warn-hover-dark.png");
+  --u3-btn-warn-active: url("/ui/u3/btn-warn-active-dark.png");
+  --u3-btn-marble-normal: url("/ui/u3/btn-marble-normal-dark.png");
+  --u3-btn-marble-hover: url("/ui/u3/btn-marble-hover-dark.png");
+  --u3-btn-marble-active: url("/ui/u3/btn-marble-active-dark.png");
+}
+:root[data-theme="light"] {
+  --u3-window-frame: url("/ui/u3/window-frame-light.png");
+  --u3-panel-frame: url("/ui/u3/panel-frame-light.png");
+  --u3-panel-frame-pink: url("/ui/u3/panel-frame-pink-light.png");
+  --u3-panel-frame-amber: url("/ui/u3/panel-frame-amber-light.png");
+  --u3-well-frame: url("/ui/u3/well-frame-light.png");
+  --u3-bg-page: url("/ui/u3/bg-page-light.png");
+  --u3-bg-sidebar: url("/ui/u3/bg-sidebar-light.png");
+  --u3-bg-panel: url("/ui/u3/bg-panel-light.png");
+  --u3-bg-well: url("/ui/u3/bg-well-light.png");
+  --u3-stars: url("/ui/u3/stars-light.png");
+  --u3-tb-shade: url("/ui/u3/tb-shade-light.png");
+  --u3-cloud-corner: url("/ui/u3/cloud-corner-light.png");
+  --u3-cloud-foot: url("/ui/u3/cloud-foot-light.png");
+  --u3-header-halo: url("/ui/u3/header-halo-light.png");
+  --u3-sel-teal: url("/ui/u3/sel-teal-light.png");
+  --u3-sel-violet: url("/ui/u3/sel-violet-light.png");
+  --u3-sunset-plate: url("/ui/u3/sunset-plate-light.png");
+  --u3-rule-pink: url("/ui/u3/rule-pink-light.png");
+  --u3-rule-violet: url("/ui/u3/rule-violet-light.png");
+  --u3-meter-teal: url("/ui/u3/meter-teal-light.png");
+  --u3-meter-amber: url("/ui/u3/meter-amber-light.png");
+  --u3-meter-pink: url("/ui/u3/meter-pink-light.png");
+  --u3-meter-mint: url("/ui/u3/meter-mint-light.png");
+  --u3-edge-sidebar: url("/ui/u3/edge-sidebar-light.png");
+  --u3-tb-ramp: url("/ui/u3/tb-ramp-light.png");
+  --u3-tb-peach: url("/ui/u3/tb-peach-light.png");
+  --u3-tb-violet: url("/ui/u3/tb-violet-light.png");
+  --u3-tb-pink: url("/ui/u3/tb-pink-light.png");
+  --u3-tb-teal: url("/ui/u3/tb-teal-light.png");
+  --u3-brand-vibesquad: url("/ui/u3/brand-vibesquad-light.png");
+  --u3-font-chrome-big: url("/ui/u3/font-chrome-big-light.png");
+  --u3-font-chrome-small: url("/ui/u3/font-chrome-small-light.png");
+  --u3-sprites: url("/ui/u3/sprites-light.png");
+  --u3-chip-teal: url("/ui/u3/chip-teal-light.png");
+  --u3-chip-pink: url("/ui/u3/chip-pink-light.png");
+  --u3-chip-mint: url("/ui/u3/chip-mint-light.png");
+  --u3-chip-amber: url("/ui/u3/chip-amber-light.png");
+  --u3-chip-violet: url("/ui/u3/chip-violet-light.png");
+  --u3-chip-neutral: url("/ui/u3/chip-neutral-light.png");
+  --u3-chip-marble: url("/ui/u3/chip-marble-light.png");
+  --u3-chip-ring-teal: url("/ui/u3/chip-ring-teal-light.png");
+  --u3-btn-ghost-normal: url("/ui/u3/btn-ghost-normal-light.png");
+  --u3-btn-ghost-hover: url("/ui/u3/btn-ghost-hover-light.png");
+  --u3-btn-ghost-active: url("/ui/u3/btn-ghost-active-light.png");
+  --u3-btn-primary-normal: url("/ui/u3/btn-primary-normal-light.png");
+  --u3-btn-primary-hover: url("/ui/u3/btn-primary-hover-light.png");
+  --u3-btn-primary-active: url("/ui/u3/btn-primary-active-light.png");
+  --u3-btn-hot-normal: url("/ui/u3/btn-hot-normal-light.png");
+  --u3-btn-hot-hover: url("/ui/u3/btn-hot-hover-light.png");
+  --u3-btn-hot-active: url("/ui/u3/btn-hot-active-light.png");
+  --u3-btn-on-normal: url("/ui/u3/btn-on-normal-light.png");
+  --u3-btn-on-hover: url("/ui/u3/btn-on-hover-light.png");
+  --u3-btn-on-active: url("/ui/u3/btn-on-active-light.png");
+  --u3-btn-warn-normal: url("/ui/u3/btn-warn-normal-light.png");
+  --u3-btn-warn-hover: url("/ui/u3/btn-warn-hover-light.png");
+  --u3-btn-warn-active: url("/ui/u3/btn-warn-active-light.png");
+  --u3-btn-marble-normal: url("/ui/u3/btn-marble-normal-light.png");
+  --u3-btn-marble-hover: url("/ui/u3/btn-marble-hover-light.png");
+  --u3-btn-marble-active: url("/ui/u3/btn-marble-active-light.png");
+}
+:root { --u3-ink: #07040f; --u3-ink-text: #160b24; --u3-lt-text: #f6eef8; --u3-ghost-text: #f6eef8; --u3-px: 2px; }
+:root[data-theme="light"] { --u3-ink: #35204c; --u3-ghost-text: #160b24; }
+
+/* U3d: every kit length is written as N kit pixels = calc(var(--u3-px) * N). --u3-px is set from JS
+   (uiScale.ts, applyKitPixelToDom) so one kit pixel is a WHOLE number of device pixels at any app zoom x OS scale. */
+
+/* ---- backgrounds: sprayed ramps over the U2 colours (a missing PNG leaves the U2 colours below) ---- */
+:root[data-theme="light"] body, body {
+  background-color: var(--panel);
+  background-image: var(--u3-stars), var(--u3-bg-page);
+  background-size: calc(var(--u3-px) * 128) calc(var(--u3-px) * 128), calc(var(--u3-px) * 16) calc(var(--u3-px) * 256);
+  background-repeat: repeat, repeat-x;
+  background-position: 0 0, 0 0;
+  image-rendering: pixelated;
+}
+.sidebar {
+  background-color: var(--panel-hi);
+  background-image: var(--u3-bg-sidebar);
+  background-size: calc(var(--u3-px) * 16) calc(var(--u3-px) * 512);
+  background-repeat: repeat-x;
+  background-position: 0 0;
+  box-shadow: 2px 0 0 var(--shadow-hard);
+  image-rendering: pixelated;
+}
+.timeline, .team-head { background-color: var(--panel-hi); background-image: var(--u3-bg-well); background-size: calc(var(--u3-px) * 16) calc(var(--u3-px) * 48); background-repeat: repeat-x; background-position: 0 0; }
+.team.active .team-head {
+  background-image: linear-gradient(90deg, transparent 0 calc(var(--u3-px) * 28), var(--panel-hi) calc(var(--u3-px) * 28)), var(--u3-sel-teal);
+  background-size: 100% 100%, calc(var(--u3-px) * 80) calc(var(--u3-px) * 18); background-repeat: no-repeat; background-position: 0 0, left center;
+}
+.pin-row:hover, .pin-row.sel, .cmd-item.on, .cmd-item:hover, .ctx-menu button:hover {
+  background-image: linear-gradient(90deg, transparent 0 calc(var(--u3-px) * 14), color-mix(in srgb, var(--violet) 24%, var(--panel)) calc(var(--u3-px) * 14)), var(--u3-sel-violet);
+  background-size: 100% 100%, calc(var(--u3-px) * 85) calc(var(--u3-px) * 9); background-repeat: no-repeat; background-position: 0 0, left center;
+}
+
+/* ---- window / panel bodies: painted title strip cap (bar rows 8-13) over the spray panel wash ---- */
+:root {
+  --bar-h: calc(var(--u3-px) * 14);
+  --cap-imgs: var(--u3-tb-ramp), var(--u3-tb-peach), var(--u3-bg-panel);
+  --cap-size: calc(var(--u3-px) * 192) calc(var(--u3-px) * 14), calc(var(--u3-px) * 16) calc(var(--u3-px) * 14), calc(var(--u3-px) * 16) calc(var(--u3-px) * 128);
+  --cap-pos: 0 calc(var(--u3-px) * -8), 0 calc(var(--u3-px) * -8), 0 0;
+  --cap-rep: no-repeat, repeat-x, repeat-x;
+}
+.modal, .idea-inbox, .ts-team, .ws-row, .pin-menu-list, .ctx-menu, .cmd-palette, .shortcut-modal, .daemon-disconnect-card,
+.drawer-features-menu, .drawer-sandbox-panel, .drawer-config-popover, .card, .drawer-head, .sidebar-legend, .pin-rail-tile,
+.brainstorm-ctx-bar, .squads-dashboard, .usage-limit, .usage-roles, .usage-loops, .usage-storms, .usage-review, .usage-review-card {
+  background-color: var(--panel-hi); image-rendering: pixelated;
+}
+.handoff-panel, .pin-tile, .pin-rail-active-buddy {
+  background-color: var(--panel-hi);
+  background-image: var(--u3-bg-panel);
+  background-size: calc(var(--u3-px) * 16) calc(var(--u3-px) * 128);
+  background-repeat: repeat-x;
+  background-position: 0 0;
+  image-rendering: pixelated;
+}
+
+/* ---- 9-slice frames: slice 8 drawn at 8 kit px; repeat (never stretch); the U2 1px border stays the fallback ---- */
+.modal, .idea-inbox, .cmd-palette, .shortcut-modal, .daemon-disconnect-card, .pin-tile:not(.pin-plus) {
+  border-image: var(--u3-window-frame) 8 / calc(var(--u3-px) * 8) / 0 repeat; box-shadow: none; image-rendering: pixelated;
+}
+.ts-team, .ws-row, .handoff-panel, .pin-menu-list, .ctx-menu, .drawer-features-menu, .drawer-sandbox-panel,
+.drawer-config-popover, .pin-rail-active-buddy, .pin-rail-tile, .team-head, .card, .squads-dashboard,
+.usage-limit, .usage-roles, .usage-loops, .usage-storms, .usage-review, .usage-review-card {
+  border-image: var(--u3-panel-frame) 8 / calc(var(--u3-px) * 8) / 0 repeat; box-shadow: none; image-rendering: pixelated;
+}
+.card.card-lead, .card.card-secondary-lead.card-lead-needs-you { border-image-source: var(--u3-panel-frame-pink); }
+.toolbar .search, .you-flag input, .ws-controls select, .modal input, .modal select, .modal textarea, .attach-body textarea,
+.composer textarea, .seg, .usage-bar, .usage-review-select {
+  border-image: var(--u3-well-frame) 8 / calc(var(--u3-px) * 8) / 0 repeat; box-shadow: none; image-rendering: pixelated;
+}
+.meter-fill, .usage-bar-fill, .brainstorm-ctx-fill { background-image: var(--u3-meter-teal); background-size: calc(var(--u3-px) * 16) calc(var(--u3-px) * 5); background-repeat: repeat-x; image-rendering: pixelated; box-shadow: none; }
+.meter.warn .meter-fill { background-image: var(--u3-meter-amber); }
+.meter.alert .meter-fill { background-image: var(--u3-meter-pink); }
+
+/* ---- title bars: painted strips (window / panel title bars only) ---- */
+.pin-tile-bar, .modal-head, .handoff-panel h2, .pin-rail-active-head {
+  background: var(--u3-tb-ramp) 0 0 / calc(var(--u3-px) * 192) calc(var(--u3-px) * 14) no-repeat, var(--u3-tb-peach) 0 0 / calc(var(--u3-px) * 16) calc(var(--u3-px) * 14) repeat-x, var(--titlebar);
+  box-shadow: none; border-bottom: 0; image-rendering: pixelated;
+}
+.modal-head { min-height: var(--bar-h); }
+.exposed-network-banner { background: var(--u3-tb-pink) 0 calc(var(--u3-px) * -3) / calc(var(--u3-px) * 16) calc(var(--u3-px) * 14) repeat-x, linear-gradient(90deg, var(--tb-2), var(--tb-3)) !important; }
+.read-only-banner, .config-warning-banner { background: var(--u3-tb-peach) 0 calc(var(--u3-px) * -3) / calc(var(--u3-px) * 16) calc(var(--u3-px) * 14) repeat-x, linear-gradient(90deg, var(--tb-3), var(--tb-3)) !important; }
+.update-available-banner { background: var(--u3-tb-violet) 0 calc(var(--u3-px) * -3) / calc(var(--u3-px) * 16) calc(var(--u3-px) * 14) repeat-x, linear-gradient(90deg, var(--tb-1), var(--tb-1)) !important; }
+.exposed-network-banner, .read-only-banner, .config-warning-banner, .update-available-banner { box-shadow: none !important; image-rendering: pixelated; }
+/* Squads grid tiles (@ui-bois layout) keep the U2 20px bar: show bar rows 4-13 of the strip (face, shade, INK floor) */
+.pin-tile-bar { --bar-h: calc(var(--u3-px) * 10); background-position: 0 calc(var(--u3-px) * -4), 0 calc(var(--u3-px) * -4), 0 0; }
+
+/* ---- buttons: 9-slice 24x14 (slice 4 drawn at 4 kit px); label sits in the flat rows 3-9 ---- */
+.btn, .squads-pager-btn, .sidebar-cog-btn, .tl-jump-bottom, .seg button, .tchip, .sidebar-icon-btn,
+.drawer-working-chip, .drawer-subagent-chip, .usage-review-run, .bad-btn, .pin-tile-bar .pin-menu-btn {
+  border: calc(var(--u3-px) * 2) solid transparent; border-image: var(--u3-btn-primary-normal) 4 fill / calc(var(--u3-px) * 4) / 0 repeat; image-rendering: pixelated;
+  background: none; box-shadow: none; min-height: calc(var(--u3-px) * 14);
+  color: var(--u3-ink-text); text-shadow: 0 1px 0 rgba(255, 255, 255, 0.35); font-weight: 700;
+}
+.btn:hover, .btn:hover:not(:disabled), .usage-review-run:hover:not(:disabled) { background: none; border-image-source: var(--u3-btn-primary-hover); box-shadow: none; }
+.btn:active, .usage-review-run:active:not(:disabled) { border-image-source: var(--u3-btn-primary-active); box-shadow: none; }
+.btn.ghost, .squads-pager-btn, .sidebar-cog-btn, .tl-jump-bottom, .seg button, .tchip, .sidebar-icon-btn {
+  border-image-source: var(--u3-btn-ghost-normal); background: none; color: var(--u3-ghost-text); text-shadow: none; font-weight: 700;
+}
+.btn.ghost:hover, .squads-pager-btn:hover, .sidebar-cog-btn:hover, .tl-jump-bottom:hover, .seg button:hover, .tchip:hover { border-image-source: var(--u3-btn-ghost-hover); background: none; }
+.btn.ghost:active, .squads-pager-btn:active, .sidebar-cog-btn:active, .tl-jump-bottom:active, .seg button:active, .tchip:active { border-image-source: var(--u3-btn-ghost-active); box-shadow: none; }
+.btn.hot, .btn.bad, .btn.confirm.danger:not(.armed), .bad-btn { border-image-source: var(--u3-btn-hot-normal); background: none; color: var(--u3-lt-text); text-shadow: 0 2px 0 var(--u3-ink-text); }
+.btn.hot:hover, .btn.bad:hover, .bad-btn:hover { border-image-source: var(--u3-btn-hot-hover); }
+.btn.hot:active, .btn.bad:active, .bad-btn:active { border-image-source: var(--u3-btn-hot-active); }
+.seg button.on, .tchip.on { border-image-source: var(--u3-btn-on-normal); background: none; color: var(--u3-lt-text); text-shadow: 0 2px 0 var(--u3-ink-text); }
+.btn.warn, .btn.confirm.warn:not(.armed), .btn.successor.warn { border-image-source: var(--u3-btn-warn-normal); background: none; color: var(--u3-ink-text); text-shadow: none; }
+.btn.warn:hover { border-image-source: var(--u3-btn-warn-hover); }
+.btn.warn:active { border-image-source: var(--u3-btn-warn-active); }
+.btn.confirm.armed { border-image-source: var(--u3-btn-hot-active); }
+.pin-tile-bar .pin-menu-btn, .modal-head .btn, .pin-rail-active-head .btn, .pin-rail-active-head .pin-menu-btn {
+  border-image: var(--u3-btn-marble-normal) 4 fill / calc(var(--u3-px) * 4) / 0 repeat; background: none; color: var(--u3-ink-text); text-shadow: none; min-height: 0; height: calc(var(--u3-px) * 10);
+}
+.seg { background: none; }
+.btn:disabled { opacity: 0.55; }
+.update-available-banner .btn:not(.ghost) { background: none !important; }
+.btn.ok:not(.confirm), .btn.confirm.cool:not(.armed), .usage-review-run, .usage-review-run:hover:not(:disabled) { color: var(--u3-ink-text); }
+
+/* ---- chips: 9-slice 16x10 (slice 3/4 drawn at 3/4 kit px), text in the flat rows ---- */
+.badge, .unit-tag, .chip, .label-pill, .def-badge, .status-pill, .lane-tag, .warn-badge, .verdict, .changes-file-badge,
+.inbox-scope-badge, .inbox-id-badge, .inbox-lane-pill, .inbox-merged-badge, .inbox-related-chip, .brainstorm-topic-badge,
+.project-badge, .alert-pill, .pill, .pill.diag, .brainstorm-ctx-pill, .sidebar-inbox-badge, .quota-pill, .sidebar-role-pill,
+.rail-role-tag, .role-tag, .pin-lane-handle, .idea-box-profile-chip {
+  border: solid transparent; border-width: calc(var(--u3-px) * 1) calc(var(--u3-px) * 2); background: none; box-shadow: none; image-rendering: pixelated;
+  border-image: var(--u3-chip-violet) 3 4 fill / calc(var(--u3-px) * 3) calc(var(--u3-px) * 4) / 0 repeat;
+}
+.badge, .unit-tag, .chip, .status-pill, .project-badge, .lane-tag, .quota-pill { border-image-source: var(--u3-chip-teal); }
+.chip.dirty, .warn-badge, .status-pill.error, .changes-file-badge.del, .pill, .alert-pill.tone-error, .quota-pill.hot, .pill.diag.hot, .brainstorm-ctx-pill.tone-red, .badge.alert, .sidebar-inbox-badge { border-image-source: var(--u3-chip-pink); }
+.badge.alert, .sidebar-inbox-badge { color: var(--bg) !important; }
+.chip.clean, .status-pill.running, .verdict.safe, .alert-pill.tone-finished, .changes-file-badge.new { border-image-source: var(--u3-chip-mint); }
+.verdict.check, .alert-pill.tone-permission, .changes-file-badge.mod, .pill.diag.warn, .brainstorm-ctx-pill.tone-amber, .quota-pill.warn { border-image-source: var(--u3-chip-amber); }
+.label-pill, .pin-lane-handle, .pin-tile-bar .pin-lane-handle {
+  border: calc(var(--u3-px) * 1) solid var(--line); border-image: none; background: var(--well); box-shadow: inset 1px 1px 0 var(--bevel-lo); padding: 0 var(--sp-1);
+}
+.pin-tile-bar .pin-lane-handle { background: var(--face-hi); border-color: var(--u3-ink); }
+.sidebar-riffbot-badge { border: solid transparent; border-width: calc(var(--u3-px) * 1) calc(var(--u3-px) * 2); border-image: var(--u3-chip-ring-teal) 3 4 fill / calc(var(--u3-px) * 3) calc(var(--u3-px) * 4) / 0 repeat; background: none; box-shadow: none; image-rendering: pixelated; }
+
+/* ---- status pips (4x4 sprites) ---- */
+.signal, .conn, .sidebar-stale-dot {
+  border: 0; box-shadow: none; width: calc(var(--u3-px) * 4); height: calc(var(--u3-px) * 4);
+  background: var(--u3-sprites) calc(var(--u3-px) * -105) 0 / calc(var(--u3-px) * 128) calc(var(--u3-px) * 46) no-repeat; image-rendering: pixelated;
+}
+.signal.running, .conn.connected { background-position: calc(var(--u3-px) * -100) 0; }
+.signal.idle, .signal.closed { background-position: calc(var(--u3-px) * -110) 0; }
+.signal.error, .signal.attn-error, .signal.attn-permission, .signal.attn-needs-you, .conn.disconnected { background-position: calc(var(--u3-px) * -115) 0; }
+.signal.running, .conn.disconnected { animation: none; }
+
+/* ---- chrome lettering ---- */
+.brand-text > span:first-child {
+  display: block; width: calc(var(--u3-px) * 80); height: calc(var(--u3-px) * 16); font-size: 0; color: transparent; text-shadow: none;
+  background: var(--u3-brand-vibesquad) 0 0 / calc(var(--u3-px) * 80) calc(var(--u3-px) * 16) no-repeat; image-rendering: pixelated;
+}
+.sidebar.collapsed .brand-text > span:first-child { display: none; }
+.team-header h1 { position: relative; }
+.team-header h1::before, .team-header h1::after { content: ""; position: absolute; image-rendering: pixelated; pointer-events: none; }
+.team-header h1::before { left: 48px; top: -4px; width: calc(var(--u3-px) * 11); height: calc(var(--u3-px) * 11); background: var(--u3-sprites) calc(var(--u3-px) * -24) 0 / calc(var(--u3-px) * 128) calc(var(--u3-px) * 46) no-repeat; }
+.team-header h1::after { right: 25%; top: 2px; width: calc(var(--u3-px) * 7); height: calc(var(--u3-px) * 7); background: var(--u3-sprites) calc(var(--u3-px) * -6) 0 / calc(var(--u3-px) * 128) calc(var(--u3-px) * 46) no-repeat; }
+@media (prefers-reduced-motion: no-preference) {
+  .team-header h1::after { animation: u3-twinkle 0.72s steps(1) infinite; }
+}
+@keyframes u3-twinkle { 0% { opacity: 1; } 50% { opacity: 0.4; } }
+.chrome-glyphs { display: none; }
+.team-header h1 .team-name-chrome { display: inline-flex; align-items: center; min-height: calc(var(--u3-px) * 18); }
+.team-header h1 .chrome-glyphs { display: inline-flex; align-items: flex-start; margin-left: calc(var(--u3-px) * -1); font-size: 0; line-height: 0; }
+.team-header h1 .chrome-glyph { flex: none; background: var(--u3-font-chrome-big) 0 0 / calc(var(--u3-px) * 208) calc(var(--u3-px) * 53) no-repeat; image-rendering: pixelated; }
+.team-header h1 .chrome-glyph-gap { width: calc(var(--u3-px) * 6); flex: none; }
+.team-header h1 .chrome-real { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.team-head .team-name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---- airbrush clouds (clipped to their box by background-clip), painted team-view pane ---- */
+.card, .idea-inbox {
+  background-image: var(--u3-cloud-corner), var(--cap-imgs);
+  background-size: calc(var(--u3-px) * 160) calc(var(--u3-px) * 72), var(--cap-size);
+  background-repeat: no-repeat, var(--cap-rep);
+  background-position: right bottom, var(--cap-pos);
+}
+.card:hover, .card.sel, .card.card-lead, .card.card-secondary-lead, .card.card-secondary-lead.card-lead-needs-you { background-image: var(--u3-cloud-corner), var(--cap-imgs); }
+.app.pin-focus > .agent-panes {
+  background-color: var(--panel-hi);
+  background-image: var(--u3-cloud-corner), var(--u3-bg-panel);
+  background-size: calc(var(--u3-px) * 160) calc(var(--u3-px) * 72), calc(var(--u3-px) * 16) calc(var(--u3-px) * 128);
+  background-position: right bottom, 0 0;
+  background-repeat: no-repeat, repeat-x;
+  background-clip: padding-box;
+  image-rendering: pixelated;
+}
+/* team-view centre pane = a painted window; its existing breadcrumb bar is the title bar (hub's sky-zone pane keeps its own look) */
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) { border: 1px solid transparent; border-image: var(--u3-window-frame) 8 / calc(var(--u3-px) * 8) / 0 repeat; }
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) .pin-focus-bar {
+  height: calc(var(--u3-px) * 22); min-height: calc(var(--u3-px) * 22); padding: 0 var(--sp-2); border-bottom: 0; color: var(--u3-ink-text); background-color: var(--tb-3);
+  background-image: var(--u3-tb-ramp), var(--u3-tb-peach); /* strip centred in the 44px chat bar: 4 kit px of flat peach above and below */
+  background-size: calc(var(--u3-px) * 192) calc(var(--u3-px) * 14), calc(var(--u3-px) * 16) calc(var(--u3-px) * 14); background-position: 0 calc(var(--u3-px) * 4), 0 calc(var(--u3-px) * 4); background-repeat: no-repeat, repeat-x;
+  image-rendering: pixelated;
+}
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) .pin-focus-bar :is(.breadcrumb-seg, .breadcrumb-sep, .pin-focus-name, .muted) { color: var(--u3-ink-text); opacity: 1; text-shadow: none; }
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) .pin-focus-bar .pin-focus-home { min-height: 0; height: 24px; padding: 0 var(--sp-1); }
+
+.team-head { gap: var(--sp-1); padding-left: 6px; padding-right: 4px; }
+.team-head-line { gap: 2px; }
+/* title-bar contents: air between the @code chip and the caption button, and off the bar's right edge */
+.pin-tile-bar { gap: calc(var(--u3-px) * 4); padding-right: calc(var(--u3-px) * 3); }
+
+/* U3d: backgrounds (clouds, washes) stay inside the frame; the sidebar footer row clears the viewport edge and its buttons keep their frame */
+.card, .idea-inbox, .team-head, .pin-tile, .handoff-panel, .pin-rail-active-buddy { background-clip: padding-box; background-origin: padding-box; }
+.sidebar-footer-row { padding-bottom: calc(var(--u3-px) * 3); flex-shrink: 0; }
+.sidebar-footer-row .btn, .sidebar-footer-row .sidebar-icon-btn, .sidebar-footer-row .sidebar-cog-btn { min-height: calc(var(--u3-px) * 14); flex-shrink: 0; }
+.team-head .team-emblem { flex-shrink: 0; }

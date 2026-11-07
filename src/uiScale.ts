@@ -51,6 +51,26 @@ function notify() {
   }
 }
 
+/**
+ * U3 painted kit: one kit pixel is drawn as a whole number of DEVICE pixels (never fractional), so 9-slice frames,
+ * buttons and grain stay crisp at any app zoom x OS scale. The nominal size is 2 CSS px per kit pixel; we pick the
+ * nearest whole device-px count n = round(2 * zoom * dpr) and expose its CSS length as --u3-px (= n / (zoom * dpr)).
+ */
+export function kitPixel(dpr: number, zoom: number): { device: number; css: number } {
+  const eff = Math.max(0.1, (Number.isFinite(dpr) && dpr > 0 ? dpr : 1) * (Number.isFinite(zoom) && zoom > 0 ? zoom : 1));
+  const device = Math.max(1, Math.round(2 * eff));
+  return { device, css: device / eff };
+}
+
+export function applyKitPixelToDom(scale: number = currentScale): void {
+  if (typeof document === "undefined" || typeof window === "undefined") return;
+  const { device, css } = kitPixel(window.devicePixelRatio || 1, clampUiScale(scale));
+  const root = document.documentElement;
+  // +0.0001px keeps float error from rounding a device px down in border/background sizing.
+  root.style.setProperty("--u3-px", `${(css + 0.0001).toFixed(4)}px`);
+  root.dataset.u3Px = String(device);
+}
+
 export function applyUiScaleToDom(scale: number = currentScale): void {
   if (typeof document === "undefined") return;
   const s = clampUiScale(scale);
@@ -58,6 +78,21 @@ export function applyUiScaleToDom(scale: number = currentScale): void {
   root.style.setProperty("--vs-ui-scale", String(s));
   root.style.zoom = String(s);
   root.dataset.uiScale = String(Math.round(s * 100));
+  applyKitPixelToDom(s);
+}
+
+// devicePixelRatio changes (window moved between monitors, OS scale change, browser zoom) re-snap the kit pixel.
+if (typeof window !== "undefined") {
+  window.addEventListener("resize", () => applyKitPixelToDom());
+  try {
+    const watch = () => {
+      const mq = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+      mq.addEventListener("change", () => { applyKitPixelToDom(); watch(); }, { once: true });
+    };
+    watch();
+  } catch {
+    // matchMedia resolution queries unsupported: the resize listener still covers browser zoom
+  }
 }
 
 export function getUiScale(): number {

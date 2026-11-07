@@ -1,0 +1,564 @@
+{
+  "files": "<piece>-{dark,light}.png",
+  "pieces": {
+    "bg-page": {
+      "below": "PANEL",
+      "h": 256,
+      "kind": "bg",
+      "repeat": "repeat-x",
+      "w": 16
+    },
+    "bg-panel": {
+      "below": "PHI",
+      "h": 128,
+      "kind": "bg",
+      "repeat": "repeat-x",
+      "w": 16
+    },
+    "bg-sidebar": {
+      "below": "PHI",
+      "h": 512,
+      "kind": "bg",
+      "repeat": "repeat-x",
+      "w": 16
+    },
+    "bg-well": {
+      "below": "PHI",
+      "h": 48,
+      "kind": "bg",
+      "repeat": "repeat-x",
+      "w": 16
+    },
+    "brand-vibesquad": {
+      "h": 16,
+      "kind": "strip",
+      "w": 80
+    },
+    "btn-ghost-active": {
+      "h": 14,
+      "kind": "button",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 4,
+        "left": 4,
+        "right": 4,
+        "top": 4
+      },
+      "w": 24
+    },
+    "btn-ghost-hover": {
+      "h": 14,
+      "kind": "button",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 4,
+        "left": 4,
+        "right": 4,
+        "top": 4
+      },
+      "w": 24
+    },
+    "btn-ghost-normal": {
+      "h": 14,
+      "kind": "button",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 4,
+        "left": 4,
+        "right": 4,
+        "top": 4
+      },
+      "w": 24
+    },
+    "btn-hot-active": {
+      "h": 14,
+      "kind": "button",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 4,
+        "left": 4,
+        "right": 4,
+        "top": 4
+      },
+      "w": 24
+    },
+    "btn-hot-hover": {
+      "h": 14,
+      "kind": "button",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 4,
+        "left": 4,
+        "right": 4,
+        "top": 4
+      },
+      "w": 24
+    },
+    "btn-hot-normal": {
+      "h": 14,
+      "kind": "button",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 4,
+        "left": 4,
+        "right": 4,
+        "top": 4
+      },
+      "w": 24
+    },
+    "btn-marble-active": {
+      "h": 14,
+      "kind": "button",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 4,
+        "left": 4,
+        "right": 4,
+        "top": 4
+      },
+      "w": 24
+    },
+    "btn-marble-hover": {
+      "h": 14,
+      "kind": "button",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 4,
+        "left": 4,
+        "right": 4,
+        "top": 4
+      },
+      "w": 24
+    },
+    "btn-marble-normal": {
+      "h": 14,
+      "kind": "button",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 4,
+        "left": 4,
+        "right": 4,
+        "top": 4
+      },
+      "w": 24
+    },
+    "btn-on-active": {
+      "h": 14,
+      "kind": "button",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 4,
+        "left": 4,
+        "right": 4,
+        "top": 4
+      },
+      "w": 24
+    },
+    "btn-on-hover": {
+      "h": 14,
+      "kind": "button",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 4,
+        "left": 4,
+        "right": 4,
+        "top": 4
+      },
+      "w": 24
+    },
+    "btn-on-normal": {
+      "h": 14,
+      "kind": "button",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 4,
+        "left": 4,
+        "right": 4,
+        "top": 4
+      },
+      "w": 24
+    },
+    "btn-primary-active": {
+      "h": 14,
+      "kind": "button",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 4,
+        "left": 4,
+        "right": 4,
+        "top": 4
+      },
+      "w": 24
+    },
+    "btn-primary-hover": {
+      "h": 14,
+      "kind": "button",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 4,
+        "left": 4,
+        "right": 4,
+        "top": 4
+      },
+      "w": 24
+    },
+    "btn-primary-normal": {
+      "h": 14,
+      "kind": "button",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 4,
+        "left": 4,
+        "right": 4,
+        "top": 4
+      },
+      "w": 24
+    },
+    "btn-warn-active": {
+      "h": 14,
+      "kind": "button",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 4,
+        "left": 4,
+        "right": 4,
+        "top": 4
+      },
+      "w": 24
+    },
+    "btn-warn-hover": {
+      "h": 14,
+      "kind": "button",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 4,
+        "left": 4,
+        "right": 4,
+        "top": 4
+      },
+      "w": 24
+    },
+    "btn-warn-normal": {
+      "h": 14,
+      "kind": "button",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 4,
+        "left": 4,
+        "right": 4,
+        "top": 4
+      },
+      "w": 24
+    },
+    "chip-amber": {
+      "h": 10,
+      "kind": "chip",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 3,
+        "left": 4,
+        "right": 4,
+        "top": 3
+      },
+      "w": 16
+    },
+    "chip-marble": {
+      "h": 10,
+      "kind": "chip",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 3,
+        "left": 4,
+        "right": 4,
+        "top": 3
+      },
+      "w": 16
+    },
+    "chip-mint": {
+      "h": 10,
+      "kind": "chip",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 3,
+        "left": 4,
+        "right": 4,
+        "top": 3
+      },
+      "w": 16
+    },
+    "chip-neutral": {
+      "h": 10,
+      "kind": "chip",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 3,
+        "left": 4,
+        "right": 4,
+        "top": 3
+      },
+      "w": 16
+    },
+    "chip-pink": {
+      "h": 10,
+      "kind": "chip",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 3,
+        "left": 4,
+        "right": 4,
+        "top": 3
+      },
+      "w": 16
+    },
+    "chip-ring-teal": {
+      "h": 10,
+      "kind": "chip",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 3,
+        "left": 4,
+        "right": 4,
+        "top": 3
+      },
+      "w": 16
+    },
+    "chip-teal": {
+      "h": 10,
+      "kind": "chip",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 3,
+        "left": 4,
+        "right": 4,
+        "top": 3
+      },
+      "w": 16
+    },
+    "chip-violet": {
+      "h": 10,
+      "kind": "chip",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 3,
+        "left": 4,
+        "right": 4,
+        "top": 3
+      },
+      "w": 16
+    },
+    "cloud-corner": {
+      "anchor": "right bottom",
+      "h": 72,
+      "kind": "bg",
+      "repeat": "no-repeat",
+      "w": 160
+    },
+    "cloud-foot": {
+      "anchor": "left bottom",
+      "h": 48,
+      "kind": "bg",
+      "repeat": "no-repeat",
+      "w": 112
+    },
+    "edge-sidebar": {
+      "h": 8,
+      "kind": "bg",
+      "repeat": "repeat-y",
+      "w": 2
+    },
+    "font-chrome-big": {
+      "h": 53,
+      "kind": "font",
+      "w": 208
+    },
+    "font-chrome-small": {
+      "h": 41,
+      "kind": "font",
+      "w": 208
+    },
+    "header-halo": {
+      "anchor": "left center",
+      "h": 32,
+      "kind": "bg",
+      "repeat": "no-repeat",
+      "w": 232
+    },
+    "meter-amber": {
+      "h": 5,
+      "kind": "bg",
+      "repeat": "repeat-x",
+      "w": 16
+    },
+    "meter-mint": {
+      "h": 5,
+      "kind": "bg",
+      "repeat": "repeat-x",
+      "w": 16
+    },
+    "meter-pink": {
+      "h": 5,
+      "kind": "bg",
+      "repeat": "repeat-x",
+      "w": 16
+    },
+    "meter-teal": {
+      "h": 5,
+      "kind": "bg",
+      "repeat": "repeat-x",
+      "w": 16
+    },
+    "panel-frame": {
+      "h": 32,
+      "kind": "frame",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 8,
+        "left": 8,
+        "right": 8,
+        "top": 8
+      },
+      "w": 32
+    },
+    "panel-frame-amber": {
+      "h": 32,
+      "kind": "frame",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 8,
+        "left": 8,
+        "right": 8,
+        "top": 8
+      },
+      "w": 32
+    },
+    "panel-frame-pink": {
+      "h": 32,
+      "kind": "frame",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 8,
+        "left": 8,
+        "right": 8,
+        "top": 8
+      },
+      "w": 32
+    },
+    "rule-pink": {
+      "h": 5,
+      "kind": "bg",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 0,
+        "left": 16,
+        "right": 16,
+        "top": 0
+      },
+      "w": 48
+    },
+    "rule-violet": {
+      "h": 5,
+      "kind": "bg",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 0,
+        "left": 16,
+        "right": 16,
+        "top": 0
+      },
+      "w": 48
+    },
+    "sel-teal": {
+      "anchor": "left center",
+      "h": 18,
+      "kind": "bg",
+      "repeat": "no-repeat",
+      "w": 80
+    },
+    "sel-violet": {
+      "anchor": "left center",
+      "h": 9,
+      "kind": "bg",
+      "repeat": "no-repeat",
+      "w": 85
+    },
+    "sprites": {
+      "h": 46,
+      "kind": "sheet",
+      "w": 128
+    },
+    "stars": {
+      "h": 128,
+      "kind": "bg",
+      "repeat": "repeat",
+      "w": 128
+    },
+    "sunset-plate": {
+      "h": 68,
+      "kind": "bg",
+      "repeat": "no-repeat",
+      "w": 68
+    },
+    "tb-peach": {
+      "h": 14,
+      "kind": "bar",
+      "repeat": "repeat-x",
+      "w": 16
+    },
+    "tb-pink": {
+      "h": 14,
+      "kind": "bar",
+      "repeat": "repeat-x",
+      "w": 16
+    },
+    "tb-ramp": {
+      "h": 14,
+      "kind": "bar",
+      "next": "tb-peach",
+      "repeat": "no-repeat",
+      "w": 192
+    },
+    "tb-shade": {
+      "h": 4,
+      "kind": "bg",
+      "repeat": "repeat-x",
+      "w": 16
+    },
+    "tb-teal": {
+      "h": 14,
+      "kind": "bar",
+      "repeat": "repeat-x",
+      "w": 16
+    },
+    "tb-violet": {
+      "h": 14,
+      "kind": "bar",
+      "repeat": "repeat-x",
+      "w": 16
+    },
+    "well-frame": {
+      "h": 32,
+      "kind": "frame",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 8,
+        "left": 8,
+        "right": 8,
+        "top": 8
+      },
+      "w": 32
+    },
+    "window-frame": {
+      "h": 32,
+      "kind": "frame",
+      "repeat": "repeat",
+      "slice": {
+        "bottom": 8,
+        "left": 8,
+        "right": 8,
+        "top": 8
+      },
+      "w": 32
+    }
+  },
+  "scale": 2
+}
