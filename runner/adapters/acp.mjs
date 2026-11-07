@@ -140,11 +140,13 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
           }
         }
         // The profile mode is this provider's own ACP mode (meta.acpMode); apply it only if the agent advertises it.
+        if (meta.acpMode && s.modes && !(s.modes.availableModes ?? []).some((m) => m.id === meta.acpMode)) emit('stderr', { line: `mode "${meta.acpMode}" not offered by ${name}; using ${s.modes.currentModeId ?? 'its default'}` });
         if (meta.acpMode && (s.modes?.availableModes ?? []).some((m) => m.id === meta.acpMode) && meta.acpMode !== s.modes?.currentModeId) {
           try { await request('session/set_mode', { sessionId, modeId: meta.acpMode }); }
           catch (e) { emit('stderr', { line: `set_mode ${meta.acpMode} failed: ${e.message}` }); }
         }
-        emit('session', { sessionId, model: current });
+        // modes/models the agent really offers, so the UI lists only those and a live change to anything else is refused up front
+        emit('session', { sessionId, model: current, mode: s.modes?.currentModeId, modes: (s.modes?.availableModes ?? []).map((m) => m.id), models: (s.models?.availableModels ?? (opt?.options ?? []).map((o) => ({ modelId: o.value }))).map((m) => m.modelId ?? m.id).filter(Boolean) });
       })();
       let failed = null;
       ready.catch((e) => {

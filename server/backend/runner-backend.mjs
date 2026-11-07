@@ -13,6 +13,7 @@ import { refreshWhosHere } from "../whos-here.mjs";
 import { runnerLanes } from "./lane-routing.mjs";
 import { createRunnerHookHost } from "./runner-hooks.mjs";
 import { PROVIDER_ALIASES } from "../../runner/adapters/acp.mjs";
+import { CLAUDE_PERMISSION_MODES as CLAUDE_MODE_IDS, CLAUDE_EFFORTS } from "../../runner/adapters/claude.mjs";
 
 const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 // Log event types that change the roster row (everything else is timeline-only).
@@ -56,6 +57,13 @@ function usageFields(u) {
   return { lastUsage, tokenUsage: { ...lastUsage, usedTokens: u.contextTokens } };
 }
 
+const MODE_LABELS = { default: "Default", plan: "Plan", acceptEdits: "Accept Edits", auto: "Auto", bypassPermissions: "Bypass Perms", dontAsk: "Don't Ask" };
+/** The modes a runner agent really has: claude's permission modes, or what its ACP agent advertised (none until its first session). */
+function modesFor(rec) {
+  const ids = rec.provider === "claude" ? CLAUDE_MODE_IDS : (rec.offered?.modes ?? []);
+  return ids.map((id) => ({ id, label: MODE_LABELS[id] ?? id }));
+}
+
 /** Runner status record -> the agent snapshot shape (PaseoAgent) the callers and UI read. */
 export function toAgent(rec) {
   const meta = rec.meta ?? {};
@@ -72,7 +80,11 @@ export function toAgent(rec) {
     labels,
     ...(labels["vs.parent"] ? { parentAgentId: labels["vs.parent"] } : {}),
     modeId: meta.permissionMode ?? meta.acpMode ?? (rec.provider === "claude" ? "auto" : null),
+    currentModeId: meta.permissionMode ?? meta.acpMode ?? (rec.provider === "claude" ? "auto" : null),
     thinkingOptionId: meta.thinkingOptionId ?? null,
+    availableModes: modesFor(rec),
+    // Only claude has a thinking/effort knob (--effort); ACP providers get none, so the UI offers none.
+    thinkingOptions: rec.provider === "claude" ? CLAUDE_EFFORTS.map((id) => ({ id, label: id })) : [],
     ...(meta.featureValues ? { featureValues: meta.featureValues } : {}),
     ...(rec.queued ? { queued: { ahead: rec.queued.ahead } } : {}),
     requiresAttention: (rec.pendingPermissions ?? []).length > 0,
@@ -122,6 +134,7 @@ export function readRunnerAgentSync(id, { env = process.env, home, liveness } = 
   let usage = null;
   const perms = new Map();
   const meta = {};
+  let offered = null;
   for (const line of text.split("\n")) {
     if (!line) continue;
     let e;
@@ -130,6 +143,7 @@ export function readRunnerAgentSync(id, { env = process.env, home, liveness } = 
     if (e.type !== "meta" && e.type !== "archive") lastLive = e;
     if (e.type === "created") { created = e; Object.assign(meta, e.meta); }
     else if (e.type === "meta") Object.assign(meta, e.patch, e.patch?.labels ? { labels: { ...meta.labels, ...e.patch.labels } } : {});
+    else if (e.type === "session" && Array.isArray(e.modes)) offered = { modes: e.modes, models: e.models ?? [] };
     else if (e.type === "status") status = e.status;
     else if (e.type === "exit") exited = true;
     else if (e.type === "archive") archivedAt = e.ts;
@@ -145,7 +159,7 @@ export function readRunnerAgentSync(id, { env = process.env, home, liveness } = 
     if (rl && (!rl.alive || (lastLive?.ts ?? 0) < rl.startedAt)) status = "lost";
   }
   return toAgent({
-    id, provider: created.provider, model: created.model, cwd: created.cwd, meta,
+    id, provider: created.provider, model: meta.model ?? created.model, cwd: created.cwd, meta, ...(offered ? { offered } : {}),
     status: exited ? "exited" : status, createdAt: created.ts, updatedAt: last?.ts, archivedAt,
     usage, pendingPermissions: [...perms.values()],
   });
@@ -650,6 +664,20 @@ export class RunnerBackend {
     if (patch.role !== undefined || patch.lane !== undefined || patch.labels?.role !== undefined) {
       await this.refreshLaneWhosHere((await this.fetchAgent(id).catch(() => null))?.agent.labels?.lane);
     }
+  }
+
+  /**
+   * Live model / mode / thinking change: a meta patch the runner folds into the NEXT turn's process args (process per turn).
+   * Resolves { appliesFrom: "next-turn", busy } (busy = a turn is running now and keeps its old settings); the runner
+   * rejects values the provider cannot take (400 -> thrown here with its message).
+   */
+  async setAgentConfig(id, { model, modeId, thinkingOptionId } = {}) {
+    const body = {};
+    if (model !== undefined) body.model = model;
+    if (modeId !== undefined) body.modeId = modeId;
+    if (thinkingOptionId !== undefined) body.thinkingOptionId = thinkingOptionId;
+    const r = await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/config`, body);
+    return { appliesFrom: r?.appliesFrom ?? "next-turn", busy: !!r?.busy };
   }
 
   /** Reopens a closed agent in place when the runner can resume it (lost or parked with a saved session): same id, same history. */

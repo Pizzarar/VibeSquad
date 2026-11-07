@@ -1,14 +1,14 @@
 // Agent supervisor: one child per agent, one JSONL log per agent, no pollers.
 import { randomBytes } from 'node:crypto';
 import { statSync } from 'node:fs';
-import { createClaudeAdapter } from './adapters/claude.mjs';
-import { createAcpAdapter, acpProviderIds, PROVIDER_ALIASES } from './adapters/acp.mjs';
+import { createClaudeAdapter, CLAUDE_PERMISSION_MODES, CLAUDE_EFFORTS } from './adapters/claude.mjs';
+import { createAcpAdapter, acpProviderIds, PROVIDER_ALIASES, pickModel } from './adapters/acp.mjs';
 import { LogStore } from './log.mjs';
 import { LimitStore, createAgyUsagePoller } from './limits.mjs';
 import path from 'node:path';
 
 // squad/team/lane/role/ord/profile are plain meta fields, first-class on the agent record.
-const META_FIELDS = ['squad', 'team', 'lane', 'role', 'ord', 'profile', 'title', 'permissionMode', 'acpMode', 'thinkingOptionId', 'featureValues', 'labels'];
+const META_FIELDS = ['squad', 'team', 'lane', 'role', 'ord', 'profile', 'title', 'permissionMode', 'acpMode', 'thinkingOptionId', 'featureValues', 'labels', 'model'];
 
 // Values that reach a CLI as an argument must never look like a flag.
 export function validateCreate({ model, cwd, meta = {} }) {
@@ -112,7 +112,8 @@ export class Runner {
       id, family: providerFamily(provider), needsTurn: !!prompt, kind: 'create', text: prompt, images: [],
       run: () => {
         this._makeRoom(id);
-        const entry = this._start(id, { provider, model, cwd, meta, systemPrompt });
+        const cur = this._fold(id)?.meta ?? meta; // a config change while this create sat queued must apply
+        const entry = this._start(id, { provider, model: cur.model ?? model, cwd, meta: cur, systemPrompt });
         if (job.text) { this._noteOwnerOverCap(job, entry); this._deliver(entry, job.text, job.images ?? []); } // job.text: a send may have coalesced into the queued create
       },
     };
@@ -322,7 +323,7 @@ export class Runner {
       if (this.live.get(id) !== entry || entry.perms.size > 0 || !this._parkable(entry)) return;
       this.park(id);
       this._pump();
-    }, this.parkGraceMs);
+    }, entry.configStale ? 0 : this.parkGraceMs); // a pending config change must not be served by the old process
     entry.parkTimer.unref?.();
   }
 
@@ -383,7 +384,7 @@ export class Runner {
     }
     if (archived || !parked || typeof parked.sessionId !== 'string' || !parked.sessionId || parked.sessionId.startsWith('-')) return null;
     const c = events[0];
-    return { provider: c.provider, model: c.model ?? undefined, cwd: c.cwd, meta, systemPrompt: parked.systemPrompt ?? undefined, resume: parked.sessionId };
+    return { provider: c.provider, model: effModel(c, meta), cwd: c.cwd, meta, systemPrompt: parked.systemPrompt ?? undefined, resume: parked.sessionId };
   }
 
   // Resume spec for a lost agent (runner restarted while it was idle/running): the log's last session id, if no exit/archive.
@@ -402,7 +403,7 @@ export class Runner {
     }
     const c = events[0];
     if (archived || !sessionId || typeof sessionId !== 'string' || sessionId.startsWith('-') || !this.adapters[c?.provider]?.canPark) return null;
-    return { provider: c.provider, model: c.model ?? undefined, cwd: c.cwd, meta, systemPrompt: c.systemPrompt ?? undefined, resume: sessionId };
+    return { provider: c.provider, model: effModel(c, meta), cwd: c.cwd, meta, systemPrompt: c.systemPrompt ?? undefined, resume: sessionId };
   }
 
   // An agent whose log ends in a `queued` status never got its turn: nothing was delivered after the queued events. The runner's
@@ -435,7 +436,7 @@ export class Runner {
     const supersededBy = this._successorOf(id, meta);
     const resumable = sessionId && !sessionId.startsWith('-') && this.adapters[c.provider]?.canPark;
     return {
-      spec: { provider: c.provider, model: c.model ?? undefined, cwd: c.cwd, meta, systemPrompt: c.systemPrompt ?? undefined, ...(resumable ? { resume: sessionId } : {}) },
+      spec: { provider: c.provider, model: effModel(c, meta), cwd: c.cwd, meta, systemPrompt: c.systemPrompt ?? undefined, ...(resumable ? { resume: sessionId } : {}) },
       text: inputs.map((e) => e.text).join('\n\n'),
       owner: inputs.some((e) => e.owner === true),
       ts: inputs[0].ts ?? 0,
@@ -502,7 +503,7 @@ export class Runner {
 
   // Starts the parked/lost agent's process in place. Callers have checked the room (_fits); false if there is no spec.
   _resume(id, fallbackSpec = null) {
-    const spec = this._parkedSpec(id) ?? fallbackSpec;
+    const spec = this._parkedSpec(id) ?? this._lostSpec(id) ?? this._unstartedPlan(id)?.spec ?? fallbackSpec; // fresh from the log: picks up a config change made while the job waited
     if (!spec) return null;
     if (!this._makeRoom(id)) throw new Error('no live process slot free');
     this.store.append(id, 'status', { status: 'starting' });
@@ -522,7 +523,8 @@ export class Runner {
   // queue and may run over the turn cap (see _fits). The log keeps the image count, never the base64 payload.
   // Returns { queued, ahead? }: over the family's turn cap the prompt is logged now and delivered FIFO when a slot frees.
   send(id, text, opts = {}) {
-    const live = this.live.get(id);
+    let live = this.live.get(id);
+    if (live?.configStale && live.inflight === 0 && this._parkable(live)) { this.park(id); live = undefined; } // new model/mode/thinking: the next turn runs in a fresh process
     // A lost agent (its process died in a runner restart) resumes in place on the next send, same id + session.
     // Coalesce into a job still waiting in this process's queue first (a queued create or send): one entry, one turn.
     const queued = this.queue.find((j) => j.id === id && (j.kind === 'send' || j.kind === 'create'));
@@ -605,6 +607,30 @@ export class Runner {
     this.store.append(id, 'meta', { patch: pickMeta(patch) });
   }
 
+  // Live model / mode / thinking change. The process is per turn, so this is a meta patch the next process start reads;
+  // a turn that is running keeps the settings it started with. Returns { appliesFrom: 'next-turn', busy }.
+  // Unsupported values for the agent's provider are rejected (never silently ignored).
+  setConfig(id, { model, modeId, thinkingOptionId } = {}) {
+    if (!this.store.exists(id)) throw new Error(`no such agent ${id}`);
+    const f = this._fold(id);
+    const provider = f.created.provider;
+    const patch = configPatch(PROVIDER_ALIASES[provider] ?? provider, { model, modeId, thinkingOptionId });
+    // An ACP agent that has told us what it offers: anything else is refused here (HTTP 400), not skipped at the next start.
+    const offered = f.offered;
+    if (offered && patch.acpMode !== undefined && offered.modes.length && !offered.modes.includes(patch.acpMode)) throw new Error(`${provider}: mode "${patch.acpMode}" is not offered (one of ${offered.modes.join(', ')})`);
+    if (offered && patch.model !== undefined && offered.models.length && pickModel(patch.model, offered.models.map((m) => ({ modelId: m }))) === null && (PROVIDER_ALIASES[provider] ?? provider) !== 'codex') throw new Error(`${provider}: model "${patch.model}" is not offered (one of ${offered.models.join(', ')})`);
+    if (!Object.keys(patch).length) throw new Error('nothing to change');
+    this.store.append(id, 'meta', { patch });
+    const e = this.live.get(id);
+    let busy = false;
+    if (e?.handle) {
+      e.configStale = true;
+      busy = e.inflight > 0 || e.status === 'running';
+      if (!busy && this._parkable(e)) { this.park(id); this._pump(); } // idle process (park grace window): drop it so the next send resumes with the new args
+    }
+    return { appliesFrom: 'next-turn', busy };
+  }
+
   // Archive keeps the agent revivable (unarchive + send): an idle parkable agent is parked first, a running one gets a
   // cancel and parks as soon as its turn ends. kill() (which logs an exit) is only for agents that can't park.
   archive(id) {
@@ -670,6 +696,7 @@ export class Runner {
       else if (e.type === 'usage') st.usage = { contextTokens: e.contextTokens, contextMax: e.contextMax, inputTokens: e.inputTokens, outputTokens: e.outputTokens, costUsd: e.costUsd };
       else if (e.type === 'permission') { if (e.phase === 'request') st.perms.set(e.id, { id: e.id, toolName: e.toolName }); else st.perms.delete(e.id); }
       else if (e.type === 'meta') Object.assign(st.meta, e.patch, e.patch?.labels ? { labels: { ...st.meta.labels, ...e.patch.labels } } : {});
+      else if (e.type === 'session' && Array.isArray(e.modes)) st.offered = { modes: e.modes, models: Array.isArray(e.models) ? e.models : [] };
       else if (e.type === 'archive') st.archivedAt = e.ts;
       else if (e.type === 'unarchive') st.archivedAt = null;
       else if (e.type === 'exit' && !st.exit) st.exit = e;
@@ -678,7 +705,7 @@ export class Runner {
     st.stamp = stamp;
     if (!st.created) { this.folds.delete(id); return null; }
     this.folds.set(id, st);
-    st.rec = { id, provider: st.created.provider, model: st.created.model, cwd: st.created.cwd, meta: { ...st.meta }, usage: st.usage, lastSeq: st.last.seq, createdAt: st.created.ts, updatedAt: st.last.ts, archivedAt: st.archivedAt, exit: st.exit, ...(st.status === 'queued' ? { queued: { ahead: st.ahead ?? 0 } } : {}) };
+    st.rec = { id, provider: st.created.provider, model: st.meta.model ?? st.created.model, cwd: st.created.cwd, meta: { ...st.meta }, usage: st.usage, lastSeq: st.last.seq, createdAt: st.created.ts, updatedAt: st.last.ts, ...(st.offered ? { offered: st.offered } : {}), archivedAt: st.archivedAt, exit: st.exit, ...(st.status === 'queued' ? { queued: { ahead: st.ahead ?? 0 } } : {}) };
     return st;
   }
 
@@ -712,6 +739,36 @@ function roleOf(meta) { return String(meta?.role ?? meta?.labels?.role ?? '').tr
 function roleFamily(meta) { return roleOf(meta).replace(/^former-/, ''); }
 function isRetiredMeta(meta) {
   return [meta?.role, meta?.labels?.role].some((r) => { const v = String(r ?? '').trim().toLowerCase(); return v.startsWith('former-') || v === 'old-lead' || v === 'retired' || v === 'old'; });
+}
+
+const effModel = (created, meta) => meta?.model ?? created.model ?? undefined;
+
+// Validates a live config change against what the provider's CLI can actually take at process start.
+// claude: --model, --permission-mode, --effort. ACP agents (antigravity-cli, opencode, codex): session/set_model and
+// session/set_mode on (re)start; ACP has no thinking/effort knob, so a thinking value is refused.
+export { CLAUDE_PERMISSION_MODES, CLAUDE_EFFORTS };
+export function configPatch(provider, { model, modeId, thinkingOptionId } = {}) {
+  const patch = {};
+  const bad = (what, v) => new Error(`${provider}: unsupported ${what} "${v}"`);
+  if (model !== undefined) {
+    if (typeof model !== 'string' || !model.trim() || model.startsWith('-')) throw bad('model', model);
+    patch.model = model.trim();
+  }
+  if (modeId !== undefined) {
+    if (typeof modeId !== 'string' || !modeId || modeId.startsWith('-')) throw bad('mode', modeId);
+    if (provider === 'claude') {
+      if (!CLAUDE_PERMISSION_MODES.includes(modeId)) throw new Error(`claude: unsupported mode "${modeId}" (one of ${CLAUDE_PERMISSION_MODES.join(', ')})`);
+      patch.permissionMode = modeId;
+    } else patch.acpMode = modeId;
+  }
+  if (thinkingOptionId !== undefined) {
+    if (provider === 'claude') {
+      if (thinkingOptionId !== null && !CLAUDE_EFFORTS.includes(thinkingOptionId)) throw new Error(`claude: unsupported thinking "${thinkingOptionId}" (one of ${CLAUDE_EFFORTS.join(', ')})`);
+      patch.thinkingOptionId = thinkingOptionId;
+    } else if (thinkingOptionId === null) patch.thinkingOptionId = null;
+    else throw new Error(`${provider}: thinking level is not supported by this provider`);
+  }
+  return patch;
 }
 
 function pickMeta(meta) {

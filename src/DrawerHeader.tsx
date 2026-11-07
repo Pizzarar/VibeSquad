@@ -5,7 +5,7 @@ import { attachFiles, clearNeedsYou, markAgentRead, markAgentUnread, sendMessage
 import { DEMO } from "./demoFlag";
 import { isLocallyHidden, isMarkedUnread } from "./attentionLocal";
 import { listProviderModels } from "./paseoProviders";
-import { runnerReloadTimeline, runnerResume, runnerSpawn, runnerUnarchive } from "./runnerBridge";
+import { runnerReloadTimeline, runnerResume, runnerSetConfig, runnerSpawn, runnerUnarchive } from "./runnerBridge";
 import {
   auditAntigravityAgent,
   CANCEL_AND_RESUME_PROMPT,
@@ -281,6 +281,17 @@ export const FALLBACK_MODES = [
   { id: "bypassPermissions", label: "Bypass Perms" },
 ];
 
+// Runner agents carry their provider's real modes (toAgent.availableModes); the Claude-flavoured FALLBACK_MODES are only for DEMO
+// and for a staged provider switch (the target is not running yet). A live agent with none known yet offers no mode picker.
+export function modesFor(agent: { availableModes?: ReadonlyArray<{ id: string }> | null }, useFallback: boolean) {
+  return useFallback ? FALLBACK_MODES : ((agent.availableModes ?? []) as Array<{ id: string; label?: string }>);
+}
+
+/** Thinking levels the agent's provider accepts (toAgent.thinkingOptions); empty = no thinking picker. */
+export function thinkingLevelsFor(agent: { thinkingOptions?: ReadonlyArray<{ id: string }> | null }, useFallback: boolean): string[] {
+  return useFallback ? ["low", "medium", "high"] : (agent.thinkingOptions ?? []).map((o) => o.id);
+}
+
 export function nextModeInCycle(modes: Array<{ id: string }>, currentId: string | null): string {
   if (!modes.length) return "default";
   const idx = modes.findIndex((m) => m.id === currentId);
@@ -293,22 +304,24 @@ export function formatCostUsd(usd: number): string {
   return `$${usd.toFixed(2)}`;
 }
 
-// The runner has no live set-mode/model/thinking route yet (P4 blocker): switch provider/profile to restart with new settings.
-const LIVE_CHANGE_UNSUPPORTED = "Live mode/model changes are not supported on runner agents yet; use Switch provider to restart with new settings.";
+// Live model / mode / thinking change on a runner agent: stored as a meta patch the NEXT turn's process reads.
+// `busy` = a turn is running now and keeps its old settings; the header says so (CONFIG_NEXT_TURN).
+export const CONFIG_NEXT_TURN = "Applies from the next turn.";
+export const configNote = (r: { busy: boolean } | void): string => (r && r.busy ? CONFIG_NEXT_TURN : "");
 
-export async function setModeHelper(agent: PaseoAgent, modeId: string): Promise<void> {
+export async function setModeHelper(agent: PaseoAgent, modeId: string): Promise<{ busy: boolean } | void> {
   if (DEMO) { upsertLocalAgent({ ...agent, currentModeId: modeId }); return; }
-  throw new Error(LIVE_CHANGE_UNSUPPORTED);
+  return runnerSetConfig(agent.id, { modeId });
 }
 
-export async function setModelHelper(agent: PaseoAgent, modelId: string): Promise<void> {
+export async function setModelHelper(agent: PaseoAgent, modelId: string): Promise<{ busy: boolean } | void> {
   if (DEMO) { upsertLocalAgent({ ...agent, model: modelId }); return; }
-  throw new Error(LIVE_CHANGE_UNSUPPORTED);
+  return runnerSetConfig(agent.id, { model: modelId });
 }
 
-export async function setThinkingHelper(agent: PaseoAgent, optionId: string | null): Promise<void> {
+export async function setThinkingHelper(agent: PaseoAgent, optionId: string | null): Promise<{ busy: boolean } | void> {
   if (DEMO) { upsertLocalAgent({ ...agent, thinkingOptionId: optionId }); return; }
-  throw new Error(LIVE_CHANGE_UNSUPPORTED);
+  return runnerSetConfig(agent.id, { thinkingOptionId: optionId });
 }
 
 export const PROVIDER_MODEL_HINTS: Record<string, string[]> = {
@@ -705,7 +718,7 @@ export function DrawerHeader({
       stageSwitch({ ...staged, model: next });
       return;
     }
-    setModelHelper(agent, next).catch((e) => {
+    setModelHelper(agent, next).then((r) => setReloadError(configNote(r))).catch((e) => {
       modelSubmittedRef.current = null;
       setModelValue(agent.model ?? "");
       setModelError(`Model change failed: ${e instanceof Error ? e.message : e}`);
@@ -893,7 +906,8 @@ export function DrawerHeader({
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.shiftKey && e.key === "Tab") {
         e.preventDefault();
-        const modes = !DEMO && agent.availableModes?.length ? agent.availableModes : FALLBACK_MODES;
+        const modes = modesFor(agent, DEMO || !!staged);
+        if (!modes.length) return;
         const currentMode = staged ? staged.modeId ?? agent.currentModeId ?? null : agent.currentModeId ?? null;
         const next = nextModeInCycle(modes, currentMode);
         if (staged) {
@@ -901,7 +915,7 @@ export function DrawerHeader({
           stageSwitch({ ...staged, modeId: next });
         } else if (!modeBusy) {
           setModeBusy(true);
-          setModeHelper(agent, next).catch((e) => setReloadError(String(e instanceof Error ? e.message : e))).finally(() => setModeBusy(false));
+          setModeHelper(agent, next).then((r) => setReloadError(configNote(r))).catch((e) => setReloadError(String(e instanceof Error ? e.message : e))).finally(() => setModeBusy(false));
         }
       }
     };
@@ -910,8 +924,9 @@ export function DrawerHeader({
   }, [active, agent, modeBusy, staged]);
 
   const modeSelect = (() => {
-              const modes = (!DEMO && agent.availableModes?.length) ? agent.availableModes : FALLBACK_MODES;
+              const modes = modesFor(agent, DEMO || !!staged);
               const stagedModeId = staged ? staged.modeId ?? agent.currentModeId ?? "" : agent.currentModeId ?? "";
+              if (!modes.length) return null;
               return (
                 <select
                   data-testid="drawer-mode-select"
@@ -925,7 +940,7 @@ export function DrawerHeader({
                       return;
                     }
                     setModeBusy(true);
-                    setModeHelper(agent, e.target.value).catch((e2) => setReloadError(String(e2 instanceof Error ? e2.message : e2))).finally(() => setModeBusy(false));
+                    setModeHelper(agent, e.target.value).then((r) => setReloadError(configNote(r))).catch((e2) => setReloadError(String(e2 instanceof Error ? e2.message : e2))).finally(() => setModeBusy(false));
                   }}
                 >
                   {modes.map((m) => (
@@ -936,12 +951,13 @@ export function DrawerHeader({
                 </select>
               );
             })();
-  const modes = (!DEMO && agent.availableModes?.length) ? agent.availableModes : FALLBACK_MODES;
+  const modes = modesFor(agent, DEMO || !!staged);
   const stagedModeId = staged ? staged.modeId ?? agent.currentModeId ?? "" : agent.currentModeId ?? "";
   const activeModeObj = modes.find((m) => m.id === stagedModeId) ?? modes[0];
   const activeModeLabel = activeModeObj ? ((activeModeObj as any).label || (activeModeObj as any).name || activeModeObj.id) : (stagedModeId || "default");
   const stagedThinking = staged ? staged.thinkingOptionId ?? agent.thinkingOptionId ?? "" : agent.thinkingOptionId ?? "";
-  const thinkingSelect = (
+  const thinkingLevels = thinkingLevelsFor(agent as any, DEMO || !!staged);
+  const thinkingSelect = !thinkingLevels.length ? null : (
             <select
               data-testid="drawer-thinking-select"
               className="drawer-thinking-select"
@@ -954,13 +970,13 @@ export function DrawerHeader({
                   return;
                 }
                 setThinkingBusy(true);
-                setThinkingHelper(agent, e.target.value || null).catch((e2) => setReloadError(String(e2 instanceof Error ? e2.message : e2))).finally(() => setThinkingBusy(false));
+                setThinkingHelper(agent, e.target.value || null).then((r) => setReloadError(configNote(r))).catch((e2) => setReloadError(String(e2 instanceof Error ? e2.message : e2))).finally(() => setThinkingBusy(false));
               }}
             >
-              {(["low", "medium", "high"] as const).map((opt) => (
+              {thinkingLevels.map((opt) => (
                 <option key={opt} value={opt}>{opt}</option>
               ))}
-              {!["low", "medium", "high"].includes(stagedThinking) && stagedThinking && (
+              {!thinkingLevels.includes(stagedThinking) && stagedThinking && (
                 <option value={stagedThinking}>{stagedThinking}</option>
               )}
             </select>
@@ -1475,7 +1491,7 @@ export function DrawerHeader({
             ⚙ {stagedThinking || "medium"} · {activeModeLabel} ▾
           </summary>
           <div className="drawer-config-popover">
-            <label className="drawer-config-row"><span className="muted small">Thinking</span>{thinkingSelect}</label>
+            {thinkingSelect && <label className="drawer-config-row"><span className="muted small">Thinking</span>{thinkingSelect}</label>}
             <label className="drawer-config-row"><span className="muted small">Mode</span>{modeSelect}</label>
           </div>
         </details>

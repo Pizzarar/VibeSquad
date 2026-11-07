@@ -101,6 +101,7 @@ export async function handleRunnerApi(req, res, { readBody, sendJson, backend = 
           return sendJson(res, 200, { ok: true, agent: await backend.refreshAgent(id) });
         }
         else if (action === "meta") await backend.updateAgent(id, body);
+        else if (action === "config") return sendJson(res, 200, { ok: true, ...(await backend.setAgentConfig(id, body ?? {})) }); // model / mode / thinking: applies from the next turn
         else return sendJson(res, 404, { error: "not found" });
         return sendJson(res, 200, { ok: true });
       }
