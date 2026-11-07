@@ -7,6 +7,15 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="theme-color" content="#090714" />
     <link rel="apple-touch-icon" href="/vibesquad-192.png" />
+    <script>
+      // U1: set data-theme before first paint (mirrors theme.ts themeFromPrefsBlob; test/ui-theme.test.mjs keeps them in sync).
+      (function () {
+        var p = "system";
+        try { p = JSON.parse(localStorage.getItem("vs.prefs.v1"))["app.theme"]; } catch (e) {}
+        var dark = !window.matchMedia || matchMedia("(prefers-color-scheme: dark)").matches;
+        document.documentElement.dataset.theme = p === "dark" || p === "light" ? p : dark ? "dark" : "light";
+      })();
+    </script>
     <title>VibeSquad</title>
   </head>
   <body>

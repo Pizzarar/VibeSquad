@@ -20,7 +20,7 @@ export async function fetchFirstRunStatus(): Promise<FirstRunStatus | null> {
 }
 
 const Row = ({ id, name, children }: { id: string; name: string; children: React.ReactNode }) => (
-  <div data-testid={`checklist-row-${id}`} style={{ padding: "8px 0", borderBottom: "1px solid #282644" }}>
+  <div data-testid={`checklist-row-${id}`} style={{ padding: "8px 0", borderBottom: "1px solid var(--line)" }}>
     <strong>{name}</strong>
     <div style={{ marginTop: 4, fontSize: 12 }}>{children}</div>
   </div>

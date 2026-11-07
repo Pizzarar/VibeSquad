@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { effectiveBindings, parseOverrides, serializeOverrides, type Bindings, type KeyOverrides } from "./keymap.ts";
+import { parseThemePref, resolveTheme, type ThemePref } from "./theme.ts";
 
 // App-level preferences, per device. One typed registry (PREF_DEFS) drives the store, the Settings home,
 // search, the command palette, reset and import/export. Stored as one JSON blob under vs.prefs.v1.
@@ -20,6 +21,7 @@ export type OpenInIde = "none" | "vscode" | "jetbrains";
 
 export type Prefs = {
   "app.density": Density;
+  "app.theme": ThemePref;
   "app.accent": Accent;
   "app.confirmClose": boolean;
   "app.restoreLastView": boolean;
@@ -70,6 +72,7 @@ const boolTF: Legacy["read"] = (raw) => (raw === "true" ? true : raw === "false"
 
 export const PREF_DEFAULTS: Prefs = {
   "app.density": "comfortable",
+  "app.theme": "system",
   "app.accent": "cyan",
   "app.confirmClose": true,
   "app.restoreLastView": true,
@@ -96,6 +99,14 @@ export const PREF_DEFAULTS: Prefs = {
 
 export const PREF_DEFS: PrefDef[] = [
   { key: "app.density", section: "app", label: "UI density", hint: "Compact tightens padding and gaps.", kind: "enum", options: [{ value: "comfortable", label: "Comfortable" }, { value: "compact", label: "Compact" }] },
+  {
+    key: "app.theme",
+    section: "app",
+    label: "Theme",
+    hint: "Midnight Mall (dark) or Pastel Morning (light). System follows your OS.",
+    kind: "enum",
+    options: [{ value: "system", label: "System" }, { value: "dark", label: "Dark" }, { value: "light", label: "Light" }],
+  },
   {
     key: "app.accent",
     section: "app",
@@ -552,12 +563,15 @@ export function formatTimestamp(iso: string | null | undefined, fmt: TimestampFo
   return fmt === "relative" ? rel : fmt === "absolute" ? abs : `${abs} · ${rel}`;
 }
 
+const systemPrefersDark = (): boolean => typeof matchMedia === "undefined" || matchMedia("(prefers-color-scheme: dark)").matches;
+
 /** Applies the App/Chat look prefs to <html> (data attributes + CSS vars). */
 export function applyPrefsToDom(): void {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
   root.dataset.density = getPref("app.density");
   root.dataset.accent = getPref("app.accent");
+  root.dataset.theme = resolveTheme(parseThemePref(getPref("app.theme")), systemPrefersDark());
   root.style.setProperty("--chat-font-size", `${getPref("chat.fontSize")}px`);
   root.style.setProperty("--mono", MONO_STACK[getPref("chat.monoFont")]);
   const w = getPref("chat.maxWidth");
@@ -567,4 +581,5 @@ export function applyPrefsToDom(): void {
 if (typeof document !== "undefined") {
   applyPrefsToDom();
   subscribePrefs(applyPrefsToDom);
+  if (typeof matchMedia !== "undefined") matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyPrefsToDom);
 }

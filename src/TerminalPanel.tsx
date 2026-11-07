@@ -414,7 +414,7 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
                   rel="noopener noreferrer"
                   data-testid={`port-pill-${p.port}`}
                   title={`Open ${p.url}`}
-                  style={{ color: "#00f5d4", textDecoration: "none", fontFamily: "monospace" }}
+                  style={{ color: "var(--cyan-t)", textDecoration: "none", fontFamily: "monospace" }}
                 >
                   :{p.port}
                 </a>

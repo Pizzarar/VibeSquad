@@ -347,7 +347,7 @@ export function TeamSettingsModal({
     <>
       {show("account") && configWarnings.length > 0 && (
         <section className="ts-team" data-testid="settings-config-warnings" style={{ borderLeftColor: "#ffb000" }}>
-          <div className="field-label" style={{ color: "#ffb000" }}>⚠ CONFIG WARNING</div>
+          <div className="field-label" style={{ color: "var(--amber-t)" }}>⚠ CONFIG WARNING</div>
           {configWarnings.map((w, idx) => (
             <div key={idx} className="stat-alert small">
               {w}
@@ -889,7 +889,7 @@ export function TeamSettingsModal({
             {
               id: `team-${teams.length + 1}`,
               name: "New Team",
-              color: "#00f0ff",
+              color: "var(--cyan-t)",
               brainstormWarnTokens: BRAINSTORM_WARN_DEFAULT,
               brainstormRestartTokens: BRAINSTORM_RESTART_DEFAULT,
               leadFlagTokens: LEAD_FLAG_DEFAULT,

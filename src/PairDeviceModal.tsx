@@ -332,7 +332,7 @@ export function PairDeviceModal({ onClose }: { onClose: () => void }) {
                       justifyContent: "space-between",
                       gap: 12,
                       padding: "8px 12px",
-                      background: "#070710",
+                      background: "var(--well)",
                       border: "1px solid var(--cyan)",
                     }}
                   >
