@@ -345,3 +345,20 @@ test("vs cap add / list / clear manage capped-providers.json", () => {
     env.cleanup();
   }
 });
+
+test("renderLaneArtifactBlock lists only non-done units and a done count line", () => {
+  const { root } = setupLib();
+  writeLaneSpec("squad", "lane-b", "# Goal", root);
+  upsertLaneTask("squad", "lane-b", { id: "d1", goal: "old", status: "done" }, root);
+  upsertLaneTask("squad", "lane-b", { id: "d2", goal: "old2", status: "done" }, root);
+  upsertLaneTask("squad", "lane-b", { id: "r1", goal: "live", status: "running" }, root);
+  const out = renderLaneArtifactBlock("squad", "lane-b", root);
+  assert.ok(!out.includes("- d1 ") && !out.includes("- d2 "));
+  assert.ok(out.includes('- r1 [running] goal="live"'));
+  assert.ok(out.includes("2 done units (full list: docs/lanes/lane-b/TASKS.json)"));
+
+  // N = 0 omits the line.
+  writeLaneSpec("squad", "lane-c", "# Goal", root);
+  upsertLaneTask("squad", "lane-c", { id: "t1", goal: "g" }, root);
+  assert.ok(!renderLaneArtifactBlock("squad", "lane-c", root).includes("done units"));
+});

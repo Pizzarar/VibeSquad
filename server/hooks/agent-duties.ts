@@ -699,6 +699,23 @@ export function laneArtifactBlock(root: string, lane: string): string {
     /* no TASKS.json */
   }
   if (!spec && !tasks) return "";
+  let doneNote = "";
+  if (tasks) {
+    try {
+      const doc = JSON.parse(tasks);
+      if (doc && typeof doc === "object" && Array.isArray(doc.units)) {
+        const open = doc.units.filter((u: { status?: unknown }) => u?.status !== "done");
+        const doneCount = doc.units.length - open.length;
+        if (doneCount > 0) {
+          tasks = JSON.stringify({ ...doc, units: open }, null, 2);
+          doneNote = `
+${doneCount} done units (full list: docs/lanes/${safeLane}/TASKS.json)`;
+        }
+      }
+    } catch {
+      /* malformed TASKS.json: inject raw */
+    }
+  }
   const parts = [
     `<!-- vibesquad:lane-artifact:begin lane=${safeLane} -->`,
     `Lane Artifact (docs/lanes/${safeLane}/ — durable source of truth across restarts & provider switches):`,
@@ -707,7 +724,7 @@ export function laneArtifactBlock(root: string, lane: string): string {
     parts.push(`\n## SPEC.md (docs/lanes/${safeLane}/SPEC.md)\n${defangPromptFences(spec.slice(0, MAX_BRIEF_CHARS))}`);
   }
   if (tasks) {
-    parts.push(`\n## TASKS.json (docs/lanes/${safeLane}/TASKS.json)\n${defangPromptFences(tasks.slice(0, MAX_BRIEF_CHARS))}`);
+    parts.push(`\n## TASKS.json (docs/lanes/${safeLane}/TASKS.json)\n${defangPromptFences(tasks.slice(0, MAX_BRIEF_CHARS))}${doneNote}`);
   }
   parts.push(`<!-- vibesquad:lane-artifact:end -->`);
   return parts.join("\n");

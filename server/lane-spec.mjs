@@ -131,14 +131,17 @@ export function renderLaneArtifactBlock(teamId, laneId, rootDir) {
   lines.push(`[SPEC.md]`);
   lines.push(spec.exists ? spec.content : "(none)");
   lines.push(`[TASKS.json]`);
-  if (!tasks.units.length) {
+  const open = tasks.units.filter((u) => u?.status !== "done");
+  const doneCount = tasks.units.length - open.length;
+  if (!open.length) {
     lines.push("(none)");
   } else {
-    for (const u of tasks.units) {
+    for (const u of open) {
       const files = Array.isArray(u.files) ? u.files.map(String).join(", ") : "";
       lines.push(`- ${u.id} [${u.status}] goal="${u.goal ?? ""}" files=[${files}] doneCheck="${u.doneCheck ?? ""}"`);
     }
   }
+  if (doneCount > 0) lines.push(`${doneCount} done units (full list: docs/lanes/${safeLane}/TASKS.json)`);
   lines.push(`<!-- vibesquad:lane-artifact:end -->`);
   return lines.join("\n");
 }

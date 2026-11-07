@@ -66,6 +66,13 @@ function withEnv(fn) {
     writeFileSync(join(briefRoot, "docs", "lanes", "artifact-lane", "SPEC.md"), SPEC, "utf8");
     writeFileSync(join(briefRoot, "docs", "lanes", "artifact-lane", "TASKS.json"), TASKS, "utf8");
 
+    mkdirSync(join(briefRoot, "docs", "lanes", "units-lane"), { recursive: true });
+    writeFileSync(
+      join(briefRoot, "docs", "lanes", "units-lane", "TASKS.json"),
+      JSON.stringify({ laneId: "units-lane", updatedAt: "x", units: [{ id: "old-unit", status: "done" }, { id: "live-unit", status: "running" }] }),
+      "utf8",
+    );
+
     const keys = ["VIBESQUAD_HOME", "VIBESQUAD_TEAMS_FILE", "VIBESQUAD_PROFILES_PATH", "VIBESQUAD_CAPPED_PROVIDERS_PATH"];
     const prev = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
     process.env.VIBESQUAD_HOME = vsHome;
@@ -232,6 +239,22 @@ test(
       );
       const sys = String(out.config.systemPrompt ?? "");
       assert.ok(!sys.includes("<!-- vibesquad:lane-artifact:begin"), "no artifact block for a lane without SPEC/TASKS");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "lane artifacts: TASKS.json injection omits done units and appends a done count",
+  withEnv(async ({ briefRoot }) => {
+    const h = harness({ briefRoot });
+    try {
+      const out = await h.spawn({ provider: "claude" }, { labels: { role: "worker", team: "vibesquad", lane: "units-lane" } });
+      const sys = String(out.config.systemPrompt ?? "");
+      assert.ok(sys.includes("live-unit"));
+      assert.ok(!sys.includes("old-unit"));
+      assert.ok(sys.includes("1 done units (full list: docs/lanes/units-lane/TASKS.json)"));
     } finally {
       h.stop?.();
     }
