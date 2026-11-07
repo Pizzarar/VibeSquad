@@ -1,7 +1,7 @@
 // Reads go through the VS fs route; writes still ride the daemon until the VS server grows a file-write route (P4 blocker).
 // Wrappers for the saved allow-rules view (parity block H). Kept out of paseo.ts on purpose.
-import { daemonClient, getPaseoState } from "./paseo";
-import { vsReadFile } from "./vsFiles";
+import { getPaseoState } from "./paseo";
+import { vsReadFile, vsWriteFile } from "./vsFiles";
 import { createEntry } from "./paseoFiles";
 import {
   addRule, DEFAULT_SETTINGS_FILE, isSettingsFile, parseRules, removeRule, SETTINGS_FILES,
@@ -82,7 +82,7 @@ async function save(cwd: string, path: SettingsFile, next: (text: string) => str
 }
 
 async function write(cwd: string, path: SettingsFile, content: string, expectedModifiedAt: string): Promise<void> {
-  const res = (await daemonClient.writeFile({ cwd, path, content, expectedModifiedAt })) as { status?: string; error?: string };
+  const res = await vsWriteFile(cwd, path, content, expectedModifiedAt);
   if (res?.status === "conflict") throw new Error("The settings file changed on disk. Reload and try again.");
   if (res?.status === "error") throw new Error(res.error ?? "write failed");
 }

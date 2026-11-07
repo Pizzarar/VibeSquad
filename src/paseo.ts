@@ -148,9 +148,9 @@ function queueAgent(id: string, agent: PaseoAgent | null) {
 
 // Same construction as createPaseoClient, but we keep the DaemonClient for calls the SDK api lacks.
 // SHIM (PLAN_PASEO_CUT P4, removed in P5): the Paseo websocket survives only for calls the VS server has no route for yet.
-// daemonClient: file writes (FilesPanel save+observeFile, InlineEdit undo, ChangesPanel hunk undo, ProjectPanel create,
-// paseoFiles create/rename/duplicate/delete, paseoPermissions write). Git is native since N1: ChangesPanel, paseoGit and
-// contextFetch @git use /__vibesquad/git/* (src/vsGit.ts); workspace registration is gone (a cwd is enough).
+// daemonClient: only ChangesPanel hunk undo (readFile/writeFile/deleteFileEntry) is left; moving it to src/vsFiles.ts (N2 routes) is the
+// last step. File save/create/rename/delete/duplicate/watch are on the VS fs routes since N2 (FilesPanel, InlineEdit, ProjectPanel,
+// paseoFiles, paseoPermissions). Git is native since N1 (src/vsGit.ts); workspace registration is gone (a cwd is enough).
 // client.agents / client.workspaces (same socket): the Paseo roster + subscribe + workspaces in this file, agents.create in
 // spawn (non-runner lanes), PermissionCard respondToPermission, and the non-runner fallbacks in Timeline.agentRef / PinGrid.usePreview.
 // Everything else in src/ talks to the runner or /__vibesquad/*.

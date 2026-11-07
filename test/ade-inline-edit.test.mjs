@@ -154,8 +154,10 @@ test("FilesPanel / InlineEdit wiring: keyscope, key-command event, existing send
   const ie = src("InlineEdit.tsx");
   assert.match(ie, /sendMessage\(/, "uses the composer's send path");
   assert.doesNotMatch(ie, /spawnTeamAgent|createAgent|SpawnRequest/, "no new spawn paths");
-  assert.match(ie, /vsReadFile\(cwd, path, MAX_BYTES \+ 1\)/); // 1.5s poll of the VS fs route (no file-watch route)
-  assert.match(ie, /expectedModifiedAt/);
+  assert.match(ie, /vsReadFile\(cwd, path, MAX_BYTES \+ 1\)/);
+  assert.match(ie, /vsWatchFile\(cwd, path,/, "N2: the VS fs/watch long-poll replaced the 1.5 s read poll");
+  assert.doesNotMatch(ie, /setInterval|daemonClient/);
+  assert.match(ie, /vsWriteFile\(s\.cwd, s\.path, r\.content, mtime\)/, "undo is mtime-checked through the VS write route");
   assert.match(ie, /openRightDockTab\("Changes"\)/);
 });
 

@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { FileExplorerDirectoryPayload } from "@getpaseo/client/internal/daemon-client";
-import { daemonClient } from "./paseo";
-import { VsFilesError, vsListDirectory, vsReadFile } from "./vsFiles";
+import { VsFilesError, vsListDirectory, vsReadFile, vsWatchFile, vsWriteFile } from "./vsFiles";
 import { DEMO } from "./demoFlag";
 import { MarkdownRenderer } from "./Timeline";
 import {
@@ -111,6 +110,8 @@ export function FilesPanel({
   const [fileContent, setFileContent] = useState<string>("");
   const [fileModifiedAt, setFileModifiedAt] = useState<string>("");
   const [editMode, setEditMode] = useState(false);
+  const editModeRef = useRef(false);
+  editModeRef.current = editMode;
   const [editValue, setEditValue] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState("");
@@ -329,11 +330,19 @@ export function FilesPanel({
         setEditValue(text);
         setFileModifiedAt(result.modifiedAt);
 
-        // Live updates are best effort: they need the Paseo daemon, which may not be running.
-        try {
-          const sub = daemonClient.observeFile({ cwd, path });
-          unsubscribeRef.current = () => { sub.release().catch(() => {}); };
-        } catch { /* no daemon: file stays static */ }
+        // Live updates: the VS server's fs/watch long-poll. Not while editing (that would clobber the draft).
+        unsubscribeRef.current = vsWatchFile(cwd, path, () => {
+          if (editModeRef.current) return;
+          vsReadFile(cwd, path, cap).then((r) => {
+            if (editModeRef.current || r.bytes.length > cap || isBinaryBytes(r.bytes)) return;
+            const next = stripAnsiForText(r.bytes);
+            setFileBytes(r.bytes);
+            setFileSize(r.size ?? r.bytes.length);
+            setFileContent(next);
+            setEditValue(next);
+            setFileModifiedAt(r.modifiedAt);
+          }, () => { /* gone or unreadable: keep what is shown */ });
+        });
       } catch (e) {
         setFileContent("");
         if (e instanceof VsFilesError && e.tooLarge) tooBig(e.size ? Math.round(e.size / 1024) : 0);
@@ -375,14 +384,8 @@ export function FilesPanel({
     setSaving(true);
     setSaveErr("");
     try {
-      const res = await daemonClient.writeFile({
-        cwd,
-        path: openFile,
-        content: editValue,
-        expectedModifiedAt: fileModifiedAt,
-      });
-      // writeFile resolves (doesn't throw) on a stale or failed write, so check the status.
-      const r = res as { status?: string; error?: string; modifiedAt?: string };
+      // vsWriteFile resolves (doesn't throw) on a stale or failed write, so check the status.
+      const r = await vsWriteFile(cwd, openFile, editValue, fileModifiedAt);
       if (r?.status === "conflict") {
         setSaveErr("Not saved: the file changed on disk since you opened it. Copy your edit, reopen the file and try again.");
         return;

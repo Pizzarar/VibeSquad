@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
-import { daemonClient } from "./paseo";
-import { vsListDirectory, vsReadFile } from "./vsFiles";
+import { vsCreateEntry, vsListDirectory, vsReadFile, vsWriteFile } from "./vsFiles";
 import { DEMO } from "./demoFlag";
 import { openRightDockTab } from "./RightDock";
 import {
@@ -109,14 +108,11 @@ export function ProjectPanel({ agent }: { agent: PaseoAgent }) {
     setCreating(name);
     setCreateErr("");
     try {
-      // writeFile only updates existing files, so make the empty file first, then fill it.
-      const made = await daemonClient.createFileEntry({ cwd, parentPath: "", name, kind: "file" });
-      const err = (made as { error?: string | null })?.error;
-      if (err) throw new Error(err);
+      // fs/write only updates existing files, so make the empty file first, then fill it.
+      await vsCreateEntry(cwd, "", name, "file"); // throws if it already exists
       const cur = await vsReadFile(cwd, name, 1);
-      const res = await daemonClient.writeFile({ cwd, path: name, content: template, expectedModifiedAt: cur.modifiedAt });
-      const status = (res as { status?: string; error?: string })?.status;
-      if (status === "conflict" || status === "error") throw new Error((res as { error?: string }).error || `write ${status}`);
+      const res = await vsWriteFile(cwd, name, template, cur.modifiedAt);
+      if (res.status !== "ok") throw new Error(res.error || `write ${res.status}`);
       setNonce((n) => n + 1);
       openRightDockTab("Files", { filePath: name });
     } catch (e) {

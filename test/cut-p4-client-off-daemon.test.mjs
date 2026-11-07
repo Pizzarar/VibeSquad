@@ -103,12 +103,12 @@ test("pin previews, predecessor stitch and archived list work without the Paseo 
   assert.match(p, /link\.paseoConn \? client\.agents\.list/);
 });
 
-test("spawned agents are upserted before their tab opens; InlineEdit poll stops itself; dead helpers gone", () => {
+test("spawned agents are upserted before their tab opens; InlineEdit watch stops itself; dead helpers gone", () => {
   assert.match(src("DrawerHeader.tsx"), /if \(forked\) upsertLocalAgent\(forked\);\n\s*if \(id\) openAgentInTab\(id\)/);
   assert.match(src("DrawerHeader.tsx"), /if \(spawned\) upsertLocalAgent\(spawned\);\n\s*if \(newId\) openAgentInTab\(newId\)/);
   assert.match(src("AgentDrawer.tsx"), /if \(spawned\) upsertLocalAgent\(spawned\);\n\s*if \(newId\) openAgentInTab/);
   const ie = src("InlineEdit.tsx");
-  assert.match(ie, /clearInterval\(poll\); return;/);
+  assert.match(ie, /cur\.id !== id \|\| cur\.phase === "error"\) return;/); // a dismissed / failed session ignores the watch
   assert.match(ie, /offs\.forEach\(\(f\) => f\(\)\); \/\/ nothing is coming/);
   assert.doesNotMatch(src("TerminalPanel.tsx"), /usesVsShells|vsRef/);
   assert.doesNotMatch(src("sessionLifecycle.ts"), /buildRewindRequest|REWIND_MODES|rewindMessageId/);
