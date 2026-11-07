@@ -68,7 +68,7 @@ const mkRes = () => {
 };
 const sendJson = (res, code, data) => { res.statusCode = code; res.body = JSON.stringify(data); };
 
-test("HTTP handlers serve confined reads and resolve a bare name end to end", () => {
+test("HTTP handlers serve confined reads and resolve a bare name end to end", async () => {
   const url = (p, q) => ({ method: "GET", url: `${p}?${new URLSearchParams(q)}` });
   let res = mkRes();
   handleFsRead(url("/x", { cwd: root, path: "docs/art/pingrid-menu-500.png" }), res, [root], sendJson);
@@ -85,7 +85,7 @@ test("HTTP handlers serve confined reads and resolve a bare name end to end", ()
   handleFsList(url("/x", { cwd: root, path: "" }), res, [root], sendJson);
   assert.equal(JSON.parse(res.body).ok, true);
   res = mkRes();
-  handleFsResolve(url("/x", { agentId: "a1", name: "README.md" }), res, () => root, sendJson);
+  await handleFsResolve(url("/x", { agentId: "a1", name: "README.md" }), res, () => root, sendJson);
   assert.equal(JSON.parse(res.body).path, "README.md");
 });
 
@@ -124,4 +124,59 @@ test("wiring: Files dock uses the VS server, file links don't select the message
   assert.match(fp, /data-testid="files-read-error"/);
   assert.match(fp, /data-testid="files-tree-error"/);
   assert.match(src("src/Timeline.tsx"), /classList\?\.contains\("tl-file-link"\)\) names\.push\("\.tl-actions"\)/);
+});
+
+// ── runner (rn-) agents + junction escape + gate ─────────────────────────────────────────────
+import { agentCwdFor, isGatedRead } from "../server/vibesquad-api.mjs";
+import { mkdtempSync as mk } from "node:fs";
+
+test("agentCwdFor: rn- id resolves via the runner record (API first, then its on-disk log), then root", async () => {
+  const repoRoot = join(root, "repo-root");
+  const wt = join(root, "wt-lane");
+  // 1. live runner API wins
+  const fake = { fetchAgent: async (id) => ({ agent: { id, cwd: wt } }) };
+  assert.equal(await agentCwdFor("rn-abc123", repoRoot, { runner: fake }), wt);
+  // 2. runner API down → on-disk runner log (VIBESQUAD_HOME/runner/agents/<id>.jsonl)
+  const home = mk(join(tmpdir(), "vs-home-"));
+  mkdirSync(join(home, "runner/agents"), { recursive: true });
+  writeFileSync(join(home, "runner/agents/rn-disk1.jsonl"), JSON.stringify({ type: "created", ts: 1, provider: "p", model: "m", cwd: wt, meta: {} }) + "\n");
+  const prev = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = home;
+  try {
+    const down = { fetchAgent: async () => { throw new Error("RUNNER_DOWN"); } };
+    assert.equal(await agentCwdFor("rn-disk1", repoRoot, { runner: down }), wt);
+    // 3. unknown rn- id and malformed ids fall back to the repo root
+    assert.equal(await agentCwdFor("rn-nope", repoRoot, { runner: down }), repoRoot);
+    assert.equal(await agentCwdFor("../evil", repoRoot, { runner: down }), repoRoot);
+  } finally {
+    if (prev === undefined) delete process.env.VIBESQUAD_HOME; else process.env.VIBESQUAD_HOME = prev;
+  }
+});
+
+test("fs/resolve uses the runner agent's worktree, not the repo root", async () => {
+  const wt = realpathSync(mkdtempSync(join(tmpdir(), "vs-wt-")));
+  writeFileSync(join(wt, "only-in-worktree.png"), PNG);
+  const res = mkRes();
+  await handleFsResolve({ method: "GET", url: "/x?agentId=rn-abc123&name=only-in-worktree.png" }, res, (id) => agentCwdFor(id, root, { runner: { fetchAgent: async () => ({ agent: { cwd: wt } }) } }), sendJson);
+  assert.equal(JSON.parse(res.body).path, "only-in-worktree.png");
+});
+
+test("junction/symlink escape (worktree node_modules) is blocked for read, list and nested paths", () => {
+  const wt = realpathSync(mkdtempSync(join(tmpdir(), "vs-wt2-")));
+  writeFileSync(join(outside, "stolen.txt"), "x");
+  mkdirSync(join(outside, "pkg"), { recursive: true });
+  writeFileSync(join(outside, "pkg/a.js"), "x");
+  let ok = true;
+  try { symlinkSync(outside, join(wt, "node_modules"), "junction"); } catch { ok = false; }
+  if (!ok) return;
+  assert.equal(fsRead(wt, "node_modules/stolen.txt").status, 403);
+  assert.equal(fsRead(wt, "node_modules/pkg/a.js").status, 403);
+  assert.equal(fsList(wt, "node_modules").status, 403);
+  assert.equal(fsList(wt, "node_modules/pkg").status, 403);
+});
+
+test("new routes sit behind the same owner gate as the other /__vibesquad file reads", () => {
+  for (const p of ["/__vibesquad/fs/list", "/__vibesquad/fs/read", "/__vibesquad/fs/resolve", "/__vibesquad/files"]) {
+    assert.equal(isGatedRead(p, p), true, p);
+  }
 });

@@ -2,7 +2,7 @@ import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, 
 import { handleRunnerApi } from "./runner-api.mjs";
 import { resetPaseoProbe } from "./backend/lane-routing.mjs";
 import { handleSchedulesApi } from "./schedules.mjs";
-import { sharedRunnerBackend } from "./backend/index.mjs";
+import { sharedRunnerBackend, isRunnerId, listRunnerAgentsSync, readRunnerAgentSync } from "./backend/index.mjs";
 import { handleTerminalsApi, isTerminalsPath } from "./terminals-api.mjs";
 import { handleProvidersApi } from "./providers-catalog.mjs";
 import { getStale, peekStale, readBuildStamp } from "./stale-runtime.mjs";
@@ -803,10 +803,27 @@ const navRootsCache = new Map();
 const navRoots = (rootDir, opts) => (fresh) => {
   const hit = navRootsCache.get(rootDir);
   if (!fresh && hit && Date.now() - hit.at < 30_000) return hit.roots;
-  const roots = allowedAttachRoots(rootDir, opts);
+  // Runner (rn-) agents are the default and often sit in worktrees outside the project roots.
+  let runnerCwds = [];
+  try { runnerCwds = listRunnerAgentsSync().map((a) => realOrNull(a.cwd)).filter(Boolean); } catch {}
+  const roots = [...new Set([...allowedAttachRoots(rootDir, opts), ...runnerCwds])];
   navRootsCache.set(rootDir, { at: Date.now(), roots });
   return roots;
 };
+
+/** Agent id -> cwd, server-side only: runner record (live API, then its on-disk log), then ~/.paseo agents, then the repo root. */
+export async function agentCwdFor(agentId, rootDir, { runner } = {}) {
+  const id = String(agentId ?? "");
+  if (!AGENT_ID_STRICT.test(id)) return rootDir;
+  if (isRunnerId(id)) {
+    try {
+      const cwd = (await (runner ?? sharedRunnerBackend()).fetchAgent(id)).agent?.cwd;
+      if (cwd) return cwd;
+    } catch {}
+    try { const rec = readRunnerAgentSync(id); if (rec?.cwd) return rec.cwd; } catch {}
+  }
+  return lookupAgentCwd(id) || rootDir;
+}
 
 function isSensitiveSource(real) {
   const home = homedir();
@@ -1711,7 +1728,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
       case "/__vibesquad/fs/list":
         return handleFsList(req, res, navRoots(rootDir, opts), sendJson);
       case "/__vibesquad/fs/resolve":
-        return handleFsResolve(req, res, (id) => (AGENT_ID_STRICT.test(String(id)) && lookupAgentCwd(id)) || rootDir, sendJson);
+        return handleFsResolve(req, res, (id) => agentCwdFor(id, rootDir), sendJson);
       case "/__vibesquad/fs/read":
         return handleFsRead(req, res, navRoots(rootDir, opts), sendJson);
       case "/__vibesquad/search":

@@ -396,12 +396,12 @@ export function resolveBareName(files, name) {
 }
 
 /** GET ?agentId=&name= → { ok, path|null, count }. `cwdFor(agentId)` is the server-side agent cwd lookup. */
-export function handleFsResolve(req, res, cwdFor, sendJson) {
+export async function handleFsResolve(req, res, cwdFor, sendJson) {
   if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
   const params = new URL(req.url, "http://x").searchParams;
-  const cwd = cwdFor(params.get("agentId") ?? "");
-  if (!cwd) return sendJson(res, 404, { ok: false, error: "unknown agent" });
   try {
+    const cwd = await cwdFor(params.get("agentId") ?? "");
+    if (!cwd) return sendJson(res, 404, { ok: false, error: "unknown agent" });
     return sendJson(res, 200, { ok: true, ...resolveBareName(listFiles(cwd).files, params.get("name") ?? "") });
   } catch (e) {
     return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) });
