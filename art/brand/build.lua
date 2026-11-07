@@ -45,7 +45,7 @@ local function paint(n)
 
   C = L.canvas(spr, lay.title, f)
   for _, t in ipairs(s.titleMark or {}) do C.rect(t[1], t[2], t[3], t[4], L.MARBLE) end
-  if s.titleText then L.text(C, s.titleText[1], s.titleText[2], s.titleText[3], L.MARBLE) end
+  if s.caption then C.stamp(s.caption[1], s.caption[2], s.caption[3], M.KEY) end
   C.commit()
 
   -- glyphs, then their INK drop shadow (body only, never on the bevel)
@@ -141,6 +141,7 @@ local p192, p512 = plate(192, 2), plate(512, 4)
 p192:saveAs(root.."/public/vibesquad-192.png")
 p512:saveAs(root.."/public/vibesquad-512.png")
 
+local maskChk
 -- maskable check shot: 512 with the 80% safe circle drawn in MINT
 do
   local chk = p512:clone()
@@ -150,6 +151,7 @@ do
     chk:drawPixel(math.floor(256 + 204.8*math.cos(t)), math.floor(256 + 204.8*math.sin(t)), mint)
   end
   chk:saveAs(shots.."/brand-s4-maskable.png")
+  maskChk = chk
 end
 
 -- ------------------------------------------------------------------ review sheet
@@ -163,8 +165,8 @@ local UI = {
 local ROWS = {
   { n=16, k=1, label="16 ICO" },
   { n=22, k=1, label="22 SIDEBAR" },
-  { n=24, k=2, label="48 ICO (24X2)" },
   { n=32, k=1, label="32 ICO" },
+  { n=24, k=2, label="48 ICO (24X2)" },
   { n=64, k=1, label="64 MASTER" },
 }
 local PW = 24 + 176 + 64*4 + 24          -- panel width
@@ -172,7 +174,8 @@ local rowH = {}
 local H = 40
 for i, r in ipairs(ROWS) do rowH[i] = math.max(r.n*r.k*4, 40) + 30; H = H + rowH[i] end
 local strip = 80
-H = H + strip + 20
+local apps = 512 + 50
+H = H + strip + 20 + apps
 local W = PW*3
 local sheet = Image(W, H, ColorMode.RGB)
 for pi, u in ipairs(UI) do
@@ -182,7 +185,8 @@ for pi, u in ipairs(UI) do
   local y = 40
   for i, r in ipairs(ROWS) do
     text(sheet, px0+12, y, r.label, u.ink, 2)
-    text(sheet, px0+12, y+16, "1X        4X", u.ink, 1)
+    text(sheet, px0+24, y+18, "1X BG + PANEL", u.ink, 1)
+    text(sheet, px0+200, y+18, "4X", u.ink, 1)
     local one = toRGB(flat[r.n], u.p, r.k)
     blit(sheet, one, px0+24, y+28)
     -- a 1x copy on PANEL too, next to the BG one
@@ -194,9 +198,9 @@ for pi, u in ipairs(UI) do
 end
 -- 16px at 1x on assorted surfaces (P0 BG/PANEL both modes, browser-tab grey, white, black)
 do
-  local y = H - strip - 10
+  local y = H - apps - strip - 10
   fill(sheet, 0, y, W, strip, col(pal.dark, 15))
-  text(sheet, 12, y+8, "16PX AT 1X  (ICO TAB / TITLE BAR)", col(pal.dark, 5), 2)
+  text(sheet, 12, y+8, "16PX AT 1X: ICO DARK, THEN 22 SIDEBAR (LIGHT VARIANT ON LIGHT SURFACES)", col(pal.dark, 5), 2)
   local surf = { col(pal.dark,0), col(pal.dark,1), col(pal.dark,2), col(pal.light,0), col(pal.light,1),
                  hexc("#dee1e6"), hexc("#ffffff"), hexc("#202124"), hexc("#000000") }
   local m16 = toRGB(flat[16], pal.dark, 1)
@@ -206,6 +210,14 @@ do
     blit(sheet, m16, x+4, y+42)
     blit(sheet, toRGB(flat[22], (i>=4 and i<=7) and pal.light or pal.dark, 1), x+22, y+39)
   end
+end
+-- app icons at 1x: 192 ("any") and 512 ("any maskable") with the 80% safe circle
+do
+  local y = H - apps
+  fill(sheet, 0, y, W, apps, col(pal.dark, 15))
+  text(sheet, 12, y+12, "APP ICONS 1X: 192 ANY / 512 ANY MASKABLE - MINT RING IS 80 PCT SAFE ZONE", col(pal.dark, 5), 2)
+  blit(sheet, p192, 24, y+40)
+  blit(sheet, maskChk, 24+192+40, y+40)
 end
 sheet:saveAs(shots.."/brand-s4-sheet.png")
 print("brand: ok")
