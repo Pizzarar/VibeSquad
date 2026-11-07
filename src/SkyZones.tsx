@@ -4,7 +4,7 @@
 // zone owns its own agent, drawer and composer; nothing is shared between them.
 import { DrawerSlot } from "./AgentPanes";
 import type { Pin } from "./pins";
-import { NO_OVERLORD_TEXT, SKY_FRAME_URL, SKY_URL, skyAssets, skyZonesFor, type SkyZone } from "./skyZonesLogic";
+import { NO_OVERLORD_TEXT, SKY_FRAME_URL, SKY_URL, faceScale, skyAssets, skyZonesFor, type SkyZone } from "./skyZonesLogic";
 import type { FaceBot } from "./squadFloorLogic";
 import type { TeamView } from "./teams";
 import { useBotFace, useFacesModel, useImageOk, usePrefersReducedMotion, useTheme } from "./useBotFace";
@@ -15,15 +15,19 @@ function ZoneFace({ zone, faces }: { zone: SkyZone; faces: ReturnType<typeof use
   const theme = useTheme();
   const reduced = usePrefersReducedMotion();
   const face = useBotFace(zone.bot, zone.pose ? { pose: zone.pose } : null, faces, { theme, reduced });
-  const cell = faces?.cell ?? { w: 128, h: 96 };
+  // Cell size comes from faces.json (never hardcoded); until it loads, a blank placeholder box.
+  const cell = faces?.cell ?? { w: 48, h: 48 };
+  const k = faceScale(cell);
   return (
-    <span
-      className={`sky-face${face.frame ? "" : " is-blank"}`}
-      data-testid={`sky-face-${zone.bot}`}
-      data-face-mode={face.mode}
-      aria-hidden="true"
-      style={{ width: cell.w, height: cell.h, ...face.style }}
-    />
+    <span className="sky-face-box" style={{ width: cell.w * k, height: cell.h * k }}>
+      <span
+        className={`sky-face${face.frame ? "" : " is-blank"}`}
+        data-testid={`sky-face-${zone.bot}`}
+        data-face-mode={face.mode}
+        aria-hidden="true"
+        style={{ width: cell.w, height: cell.h, transform: `scale(${k})`, ...face.style }}
+      />
+    </span>
   );
 }
 
@@ -32,14 +36,15 @@ function Zone({
   faces,
   frameUrl,
   onSuccessor,
-  onStart,
+  onSpinUp,
 }: {
   zone: SkyZone;
   faces: ReturnType<typeof useFacesModel>;
   /** The @art sky-CRT bezel when it exists; null → the CSS bezel. */
   frameUrl: string | null;
   onSuccessor: (id: string) => void;
-  onStart?: () => void;
+  /** Start (no Buddy) or resume (dormant) RiffBot: App's onSpinUpPin, the same path as the Spin Up button. */
+  onSpinUp?: () => void;
 }) {
   const label = LABEL[zone.bot];
   const off = zone.bot === "overlord" && !zone.member;
@@ -56,7 +61,17 @@ function Zone({
       </header>
       <div className="sky-crt-body">
         {zone.agentId ? (
-          <DrawerSlot id={zone.agentId} pane="left" shown onSuccessor={onSuccessor} />
+          <>
+            {zone.dormant && onSpinUp && (
+              <div className="sky-resume" data-testid="sky-resume-riffbot">
+                <span className="muted small">This chat is closed (history below).</span>
+                <button type="button" className="btn ok small" data-testid="sky-resume-btn" onClick={onSpinUp}>
+                  Resume RiffBot
+                </button>
+              </div>
+            )}
+            <DrawerSlot id={zone.agentId} pane="left" shown onSuccessor={onSuccessor} />
+          </>
         ) : off ? (
           <div className="sky-static" data-testid="sky-static-overlord" role="status">
             <span className="sky-static-text">{NO_OVERLORD_TEXT}</span>
@@ -64,9 +79,9 @@ function Zone({
         ) : (
           <div className="sky-static" data-testid="sky-idle-riffbot" role="status">
             <span className="sky-static-text">RiffBot is not running</span>
-            {onStart && (
-              <button type="button" className="btn small" data-testid="sky-start-riffbot" onClick={onStart}>
-                Start RiffBot
+            {onSpinUp && (
+              <button type="button" className="btn small" data-testid="sky-start-riffbot" onClick={onSpinUp}>
+                Spin Up RiffBot
               </button>
             )}
           </div>
@@ -80,12 +95,12 @@ function Zone({
 export function SkyZones({
   view,
   onSuccessor,
-  onStartRiffBot,
+  onSpinUp,
 }: {
   view: TeamView;
   onSuccessor: (id: string) => void;
-  /** Same handler HubBar uses to quick-start RiffBot (App onQuickStart). */
-  onStartRiffBot?: (pin: Pin) => void | Promise<unknown>;
+  /** App's onSpinUpPin (the Spin Up button's path): starts a fresh RiffBot session or resumes a dormant one. */
+  onSpinUp?: (pin: Pin) => void;
 }) {
   const zones = skyZonesFor(view);
   const faces = useFacesModel();
@@ -95,7 +110,7 @@ export function SkyZones({
   const { hub } = zones;
   return (
     <div className={`sky-zones${skyUrl ? " has-sky-art" : ""}`} data-testid="sky-zones" style={skyUrl ? { backgroundImage: `url(${skyUrl})` } : undefined}>
-      <Zone zone={zones.riffbot} faces={faces} frameUrl={frameUrl} onSuccessor={onSuccessor} onStart={hub && onStartRiffBot ? () => void Promise.resolve(onStartRiffBot(hub)).catch(() => {}) : undefined} />
+      <Zone zone={zones.riffbot} faces={faces} frameUrl={frameUrl} onSuccessor={onSuccessor} onSpinUp={hub && onSpinUp ? () => onSpinUp(hub) : undefined} />
       <Zone zone={zones.overlord} faces={faces} frameUrl={frameUrl} onSuccessor={onSuccessor} />
     </div>
   );

@@ -257,7 +257,7 @@ export function clearPinFocus() {
 export function focusComposerSoon(agentId: string) {
   if (typeof document === "undefined") return;
   const started = Date.now();
-  const sel = `.agent-panes .pane-slot[data-agent="${CSS.escape(agentId)}"] .composer textarea`;
+  const sel = `:is(.agent-panes, .sky-zone) .pane-slot[data-agent="${CSS.escape(agentId)}"] .composer textarea`;
   const tick = () => {
     if (state.focus?.agentId !== agentId) return;
     const ta0 = document.querySelector<HTMLTextAreaElement>(sel);

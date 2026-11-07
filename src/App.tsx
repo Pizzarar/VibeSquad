@@ -1707,6 +1707,8 @@ export function App() {
   const hubFocused = !!pinFocus && !!hubPinNow && hubPinNow.lane.id === pinFocus.laneId;
   // Sky-gods hub: the two bots chat in the sky zones; any other agent opened on the hub lane takes the normal focus view.
   const hubAgentOpen = hubFocused && !!pinFocus?.agentId && !!pinFocusView && !skyZoneIds(skyZonesFor(pinFocusView)).includes(pinFocus.agentId);
+  // Agents the sky zones own are not mounted in the panes (one mount each); only while the zones are actually shown.
+  const skyOwned = useMemo(() => (hubFocused && !hubAgentOpen && pinFocusView ? skyZoneIds(skyZonesFor(pinFocusView)) : undefined), [hubFocused, hubAgentOpen, pinFocusView]);
   const hidePanes = pinLayout && pinsHome && !pinFocused;
   const withPanes = (hasTabs || focus) && !pinFocused && !hidePanes;
   const urlAgentId = urlAgentFor({ activeAgentId, onGrid: hidePanes, startFresh: pinFocused && !pinFocus?.agentId });
@@ -1782,6 +1784,7 @@ export function App() {
   const panesNode = (withPanes || pinFocused) ? (
     <AgentPanes
       onSuccessor={paneSuccessor}
+      excludeIds={skyOwned}
       header={pinFocusView && pinFocus ? <PinFocusHeader view={pinFocusView} focus={pinFocus} spinUpError={pinFocus.spinUpError} onStart={onSpinUpPin} onSelectSquad={onTeam} belowBar={pinFocus.agentId ? undefined : <HubBar view={pinFocusView} onOpen={onQuickStart} />} /> : undefined}
     />
   ) : null;
@@ -2002,7 +2005,7 @@ export function App() {
       {hubFocused ? (
         <div className={`hub-body${hubAgentOpen ? " hub-agent-open" : ""}`} data-testid="hub-body">
           {panesNode}
-          {pinFocusView && !hubAgentOpen && <SkyZones view={pinFocusView} onSuccessor={paneSuccessor} onStartRiffBot={onQuickStart} />}
+          {pinFocusView && !hubAgentOpen && <SkyZones view={pinFocusView} onSuccessor={paneSuccessor} onSpinUp={onSpinUpPin} />}
           {pinFocusView && <SquadQueue view={pinFocusView} variant="strip" />}
           {pinFocusView && <SquadFloor view={pinFocusView} />}
         </div>

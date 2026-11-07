@@ -52,7 +52,7 @@ test("no-Overlord zone renders static + the text and mounts no chat (so no compo
   assert.ok(sky.includes("NO_OVERLORD_TEXT"));
   assert.ok(sky.includes('data-testid="sky-static-overlord"'));
   // A DrawerSlot (which owns the composer) is only rendered behind `zone.agentId ? ... : static`.
-  assert.ok(/zone\.agentId \? \(\s*<DrawerSlot/.test(sky));
+  assert.ok(/zone\.agentId \? \(\s*<>[\s\S]*?<DrawerSlot/.test(sky));
   assert.equal((sky.match(/<DrawerSlot/g) || []).length, 1);
 });
 
@@ -74,7 +74,7 @@ test("hub wiring: sky zones in hub-body; other agents take the normal focus view
   assert.ok(app.includes("<SkyZones view={pinFocusView}"));
   assert.ok(app.includes("hub-agent-open"));
   const css = src("styles.css");
-  assert.ok(css.includes(".hub-body:not(.hub-agent-open) .agent-panes .pane-slot"));
+  assert.ok(css.includes(".hub-body:not(.hub-agent-open) .agent-panes .pin-focus-empty"));
 });
 
 test("sky look: CSS gradient sky, CSS bezel, both themes, reduced motion freezes static + faces", () => {
@@ -160,4 +160,70 @@ test("SkyZones probes each asset and draws the frame/sky only when it loaded", (
   assert.ok(sky.includes("skyAssets(theme, { sky: useImageOk(SKY_URL(theme)), frame: useImageOk(SKY_FRAME_URL(theme)) })"));
   assert.ok(sky.includes("{frameUrl && <img"));
   assert.ok(sky.includes('skyUrl ? " has-sky-art" : ""'));
+});
+
+// ── G1-fix ───────────────────────────────────────────────────────────────────
+import { faceScale } from "../src/skyZonesLogic.ts";
+
+test("G1-fix: a sky bot is mounted exactly once — AgentPanes excludes it, no CSS hiding", () => {
+  const panes = src("AgentPanes.tsx");
+  assert.ok(panes.includes("excludeIds"));
+  assert.ok(panes.includes("s.mounted.filter((id) => !excludeIds.includes(id))"));
+  assert.ok(panes.includes("{mountedIds.map((id) =>"));
+  assert.ok(!panes.includes("{s.mounted.map("));
+  const app = src("App.tsx");
+  assert.ok(app.includes("excludeIds={skyOwned}"));
+  // The exclusion list is exactly the zone ids, and only while the sky is shown (not for hubAgentOpen).
+  assert.ok(app.includes("hubFocused && !hubAgentOpen && pinFocusView ? skyZoneIds(skyZonesFor(pinFocusView)) : undefined"));
+  // The sky mounts each bot's DrawerSlot once; the display:none hack is gone.
+  assert.equal((src("SkyZones.tsx").match(/<DrawerSlot/g) || []).length, 1);
+  assert.ok(!/\.agent-panes \.pane-slot,?\s*\{?[^}]*display: none !important/.test(src("styles.css").split(".hub-body")[1] ?? ""));
+  assert.ok(!src("styles.css").includes(".hub-body:not(.hub-agent-open) .agent-panes .pane-slot"));
+  // Zone ids are distinct and each appears once.
+  const z = skyZonesFor(view([member("buddy", "brainstorm"), member("boss", "lead")]));
+  const ids = skyZoneIds(z);
+  assert.equal(new Set(ids).size, ids.length);
+});
+
+test("G1-fix: sky composer wraps so the textarea owns the full row", () => {
+  const css = src("styles.css");
+  assert.ok(/\.sky-zone \.composer-row \{ flex-wrap: wrap; \}/.test(css));
+  assert.ok(/\.sky-zone \.composer-row textarea \{ flex: 1 1 100%;/.test(css));
+});
+
+test("G1-fix: focusComposerSoon also finds a sky-zone composer", () => {
+  assert.ok(src("pinFocus.ts").includes(":is(.agent-panes, .sky-zone) .pane-slot[data-agent="));
+});
+
+test("G1-fix: dormant RiffBot (closed, with history) keeps the sky layout and offers a working Resume", () => {
+  const z = skyZonesFor(view([member("buddy", "brainstorm", { status: "closed" })]));
+  assert.equal(z.riffbot.agentId, "buddy");
+  assert.equal(z.riffbot.dormant, true);
+  assert.equal(z.riffbot.pose, null);
+  assert.deepEqual(skyZoneIds(z), ["buddy"]); // still a sky-owned id → hub stays in the sky layout
+  assert.equal(skyZonesFor(view([member("buddy", "brainstorm")])).riffbot.dormant, false);
+  assert.equal(skyZonesFor(view([member("boss", "lead")])).riffbot.dormant, false); // no Buddy at all: Spin Up, not Resume
+  const sky = src("SkyZones.tsx");
+  assert.ok(sky.includes('data-testid="sky-resume-btn"'));
+  assert.ok(sky.includes("zone.dormant && onSpinUp"));
+  // Resume and Spin Up both go through App's onSpinUpPin (spinUpPin → openPin), the existing path.
+  assert.ok(src("App.tsx").includes("onSpinUp={onSpinUpPin}"));
+  assert.ok(src("pinFocus.ts").includes("export async function spinUpPin"));
+});
+
+test("G1-fix: face cell size + fps come from faces.json (48x48 @ 3fps), scaled by an integer to fill the CRT", () => {
+  const v = validateFaces(fixture("faces-48.json"));
+  assert.equal(v.ok, true);
+  assert.deepEqual(v.value.cell, { w: 48, h: 48 });
+  assert.equal(v.value.fps, 3);
+  assert.equal(idleFaceMode(v.value, "riffbot"), "lookDown");
+  assert.equal(idleFaceMode(v.value, "overlord"), "lookDown");
+  assert.deepEqual(faceFrame(v.value, "overlord", "lookDown", 1), { x: 48, y: 0 });
+  assert.equal(faceScale({ w: 48, h: 48 }), 3);
+  assert.equal(faceScale({ w: 128, h: 96 }), 1);
+  assert.equal(faceScale({ w: 500, h: 500 }), 1);
+  const sky = src("SkyZones.tsx");
+  assert.ok(sky.includes("faces?.cell"));
+  assert.ok(!/\b(128|96)\b/.test(sky));
+  assert.ok(src("useBotFace.ts").includes("1000 / faces.fps"));
 });
