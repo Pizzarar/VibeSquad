@@ -304,7 +304,7 @@ do
 ]], K)
   -- potted plants against the wall
   for _, px in ipairs({178}) do
-    c.stamp(px, 70, [[
+    c.stamp(px, 88, [[
 |...kk..kk...|
 |..kggkkggk..|
 |.kgggggggk..|
@@ -375,6 +375,82 @@ do
 |...kkkkkkkkkkkkkkk....|
 |...kmmmmmmmmmmmmmk....|
 |..kkkkkkkkkkkkkkkkk...|
+]], K)
+  -- break nook by the window wall: pink couch (back + arms + cushions from above), coffee table
+  c.stamp(116, 98, [[
+|.kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk.|
+|kppppppppppppppppppppppppppppppppppppppppk|
+|kpccccccccccccccccccccccccccccccccccccccpk|
+|kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk|
+|kppkmmccccccccccccckcccccccccccccccccckppk|
+|kppkmccccccccccccccckccccccccccccccccckppk|
+|kppkccccccccccccccccckcccccccccccccccckppk|
+|kppkccccccccccccccccckcccccccccccccccckppk|
+|kppkccccccccccccccccckcccccccccccccccckppk|
+|kppkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkppk|
+|kppkppppppppppppppppppppppppppppppppppkppk|
+|kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk|
+|.kk..................................kk...|
+]], K)
+  c.ellipse(137, 106, 5, 3, L.INK); c.ellipse(137, 106, 4, 2, L.AMBER) -- throw cushion
+  c.ellipse(141, 133, 15, 6, L.INK); c.ellipse(141, 133, 14, 5, L.TEAL); c.hline(130, 130, 18, L.MARBLE)
+  c.rect(134, 131, 7, 4, L.MARBLE); c.hline(135, 132, 5, L.LINE); c.hline(135, 133, 4, L.LINE) -- magazine
+  c.stamp(145, 130, "|.kkk.|\n|kmpmk|\n|.kkk.|", K)                                                 -- mug
+  c.vline(141, 139, 3, L.INK); c.hline(138, 141, 7, L.INK)
+  -- arcade cabinet against the wall: screen faces the camera, marquee + top face
+  c.stamp(206, 80, [[
+|.kkkkkkkkkkkk.|
+|kmmmmmmmmmmmmk|
+|kkkkkkkkkkkkkk|
+|kppppppppppppk|
+|kpkkkkkkkkkkpk|
+|kpkyyyyyyyykpk|
+|kpkytyygyyykpk|
+|kpkyyyyyyyykpk|
+|kpkyyyayyyykpk|
+|kpkyyyyyypykpk|
+|kpkkkkkkkkkkpk|
+|kkkkkkkkkkkkkk|
+|kvvvvkvvkvvvvk|
+|kvvvkakvvkpkvk|
+|kvvvvkvvvvvvvk|
+|kkkkkkkkkkkkkk|
+|kpppppppppppkk|
+|kpppvvvvpppppk|
+|kpppvavvpppppk|
+|kpppvvvvpppppk|
+|kpppppppppppkk|
+|kppppppppppppk|
+|kkkkkkkkkkkkkk|
+]], K)
+  -- floor lamp by the couch
+  c.ellipse(108, 104, 5, 3, L.INK); c.ellipse(108, 104, 4, 2, L.AMBER); c.hline(105, 103, 6, L.MARBLE)
+  c.vline(108, 107, 12, L.INK); c.hline(105, 119, 7, L.INK)
+  -- booth: bookcase against the wall + a little potted fern
+  c.stamp(38, 88, [[
+|kkkkkkkkkkkkkkkkkkkk|
+|kmmmmmmmmmmmmmmmmmmk|
+|kkkkkkkkkkkkkkkkkkkk|
+|kakptvkapkgtkvpakmmk|
+|kakptvkapkgtkvpakmmk|
+|kakptvkapkgtkvpakmmk|
+|kkkkkkkkkkkkkkkkkkkk|
+|kpkkvtakmmkpgtkakvak|
+|kpkkvtakmmkpgtkakvak|
+|kpkkvtakmmkpgtkakvak|
+|kkkkkkkkkkkkkkkkkkkk|
+|kkkkkkkkkkkkkkkkkkkk|
+|.kk..............kk.|
+]], K)
+  c.stamp(14, 94, [[
+|..kk.kk...|
+|.kggkggk..|
+|kgggggggk.|
+|.kgkggkgk.|
+|..kpppk...|
+|.kpaaapk..|
+|.kpppppk..|
+|..kkkkk...|
 ]], K)
   -- lobby mat under the queue (feet line = lobby bottom), arrow to the door
   c.rect(212, 296, 72, 10, L.PINK); c.edge(L.PINK, L.INK)
