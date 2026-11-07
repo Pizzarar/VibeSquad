@@ -37,7 +37,7 @@ test("real public/office/cast.json validates", () => {
   assert.ok(realCast.value.roles.lead && realCast.value.roles.buddy);
   assert.equal(realCast.value.roles.lead.work.length, 2);
   assert.equal(realCast.value.roles.lead.idle.length, 1);
-  assert.equal(realCast.value.bubble.offset.x, -16);
+  assert.equal(realCast.value.bubble.offset.x, -18);
 });
 
 test("two teams per floor, in squad pin order, odd team leaves teamB null", () => {
@@ -120,14 +120,33 @@ test("pose mapping: running → work, needs → needs, idle → idle, closed/arc
   assert.equal(poseFor(member("f", { attention: { tone: "finished", reason: "done" } })), "idle");
 });
 
-test("role → sprite fallback lookup follows cast.fallback", () => {
+test("every real role resolves to its own frames (cast.fallback is empty)", () => {
   if (!realCast.ok) return;
   const cast = realCast.value;
-  assert.deepEqual(roleFrames(cast, "spec", "work"), cast.roles.review.work);
-  assert.deepEqual(roleFrames(cast, "unknown", "idle"), cast.roles.buddy.idle);
-  assert.deepEqual(roleFrames(cast, "mechanical", "ride"), cast.roles.implement.ride);
-  assert.equal(roleFrames(cast, "no-such-role", "work"), null);
+  assert.deepEqual(cast.fallback, {});
+  for (const role of Object.keys(cast.roles)) {
+    for (const pose of ["work", "idle", "needs", "ride"]) {
+      if (cast.roles[role][pose]) assert.deepEqual(roleFrames(cast, role, pose), cast.roles[role][pose]);
+    }
+  }
+  assert.deepEqual(roleFrames(cast, "spec", "work"), cast.roles.spec.work);
+  assert.deepEqual(roleFrames(cast, "unknown", "idle"), cast.roles.unknown.idle);
+  assert.deepEqual(roleFrames(cast, "mechanical", "ride"), cast.roles.mechanical.ride);
+  assert.equal(roleFrames(cast, "zzz", "work"), null);
   assert.equal(spriteFrame(cast, "lead", "work", 0).x, cast.roles.lead.work[0].x);
+});
+
+test("role → sprite fallback lookup follows cast.fallback (synthetic cast)", () => {
+  const f = (x) => [{ x, y: 0, w: 32, h: 32 }];
+  const cast = {
+    cell: 32,
+    roles: { lead: { work: f(0), idle: f(32) }, buddy: { work: f(64), idle: f(96) }, loopA: {}, loopB: {} },
+    fallback: { zzz: "buddy", spec: "lead", loopA: "loopB", loopB: "loopA" },
+  };
+  assert.deepEqual(roleFrames(cast, "zzz", "work"), cast.roles.buddy.work);
+  assert.deepEqual(roleFrames(cast, "spec", "idle"), cast.roles.lead.idle);
+  assert.equal(roleFrames(cast, "loopA", "work"), null);
+  assert.equal(roleFrames(cast, "no-such-role", "work"), null);
 });
 
 test("missing or invalid floor.json → placeholder (640x360 floors + 640x200 penthouse + lobbies)", () => {
