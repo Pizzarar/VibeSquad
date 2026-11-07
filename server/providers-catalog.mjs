@@ -3,14 +3,14 @@
 // Paseo daemon ({providers:[{provider,available,error}]}, {models:[{id,label,...}]}, {modes:[...]}).
 // Probing: `<cli> --version` on the resolved executable, no shell, cached with a TTL. No background timers.
 import { execFile, execFileSync } from "node:child_process";
-import { openSync, closeSync, readSync, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ACP_PROVIDERS, PROVIDER_ALIASES } from "../runner/adapters/acp.mjs";
-import { resolveExecutable } from "../runner/spawn.mjs";
+import { killTree, resolveExecutable, spawnNoShell } from "../runner/spawn.mjs";
 import { DEFAULT_PACK_PROFILES, getProfilesPath, normalizeProfile } from "./profiles.mjs";
 import { resolveTeamsFilePath } from "./teams-file.mjs";
-import { isForbiddenRealHome } from "./test-guard.mjs";
+import { isForbiddenRealHome, underTestRunner } from "./test-guard.mjs";
 import { readJsonFileWithBom, vibesquadHome, writeSettingsAtomic } from "./user-settings.mjs";
 
 const PROBE_TTL_MS = 10 * 60_000;
@@ -114,6 +114,24 @@ function readRawSettingsForSave(home) {
 
 const strList = (v) => (Array.isArray(v) ? [...new Set(v.map((x) => String(x).trim()).filter(Boolean))] : []);
 
+// Periodic Opus + Gemini usage review cadence (usa-7). Off means "never auto-run"; manual Run now still works.
+export const USAGE_REVIEW_INTERVALS = ["off", "6h", "12h", "1d", "3d", "5d", "2w"];
+const USAGE_REVIEW_DEFAULT_INTERVAL = "1d";
+const USAGE_REVIEW_INTERVAL_MS = {
+  "6h": 6 * 3600_000,
+  "12h": 12 * 3600_000,
+  "1d": 24 * 3600_000,
+  "3d": 3 * 24 * 3600_000,
+  "5d": 5 * 24 * 3600_000,
+  "2w": 14 * 24 * 3600_000,
+};
+/** Interval label -> milliseconds; "off" (and anything unknown) -> null. */
+export function intervalMs(interval) {
+  return typeof interval === "string" && Object.prototype.hasOwnProperty.call(USAGE_REVIEW_INTERVAL_MS, interval)
+    ? USAGE_REVIEW_INTERVAL_MS[interval]
+    : null;
+}
+
 /** Normalise the editable runner block. Unknown keys are dropped; shapes are forced. */
 export function normalizeRunnerSettings(raw) {
   const r = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
@@ -132,7 +150,8 @@ export function normalizeRunnerSettings(raw) {
     if (typeof v.defaultMode === "string" && v.defaultMode.trim()) entry.defaultMode = v.defaultMode.trim();
     if (Object.keys(entry).length) providers[id] = entry;
   }
-  return { providers };
+  const interval = USAGE_REVIEW_INTERVALS.includes(r.usageReview?.interval) ? r.usageReview.interval : USAGE_REVIEW_DEFAULT_INTERVAL;
+  return { providers, usageReview: { interval } };
 }
 
 export function loadRunnerSettings(home) {
@@ -157,7 +176,10 @@ export function saveRunnerSettings(patch, home) {
       else delete providers[cid]; // everything cleared
     }
   }
-  const next = { ...raw, runner: { ...(raw.runner && typeof raw.runner === "object" ? raw.runner : {}), providers } };
+  const usageReview = patch && patch.usageReview && typeof patch.usageReview === "object"
+    ? incoming.usageReview
+    : current.usageReview;
+  const next = { ...raw, runner: { ...(raw.runner && typeof raw.runner === "object" ? raw.runner : {}), providers, usageReview } };
   writeSettingsAtomic(settingsPath(home), next);
   return normalizeRunnerSettings(next.runner);
 }
@@ -672,7 +694,176 @@ function computeSpawnStorms(agents) {
   return merged;
 }
 
-export function getUsage({ home, since, until, git, laneCodes } = {}) {
+// ---------------------------------------------------------------- periodic Opus + Gemini usage review (usa-7)
+// One-shot `claude -p --model claude-opus-5-5` and `agy -p` run in parallel (no MCP sidecars), 60s timeout each, and
+// append one record to <runner home>/usage-reviews.jsonl. Scheduled runs fire from getUsage() (fire-and-forget) and
+// refuse to spawn under a test runner unless the review runners are injected.
+let usageReviewInFlight = null; // the in-flight runUsageReview promise, else null
+
+const usageReviewsPath = (home) => join(home || vibesquadHome(), "runner", "usage-reviews.jsonl");
+
+/** usage-reviews.jsonl -> records, newest last. Missing file / bad lines tolerated. */
+export function readUsageReviews(home) {
+  const dir = home || vibesquadHome();
+  if (isForbiddenRealHome(dir)) return [];
+  let text = "";
+  try { text = readFileSync(join(dir, "runner", "usage-reviews.jsonl"), "utf8"); } catch { return []; }
+  const out = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try { out.push(JSON.parse(line)); } catch { /* bad line */ }
+  }
+  return out;
+}
+
+/** Latest review record, else null. */
+const latestUsageReview = (home) => {
+  const history = readUsageReviews(home);
+  return history.length ? history[history.length - 1] : null;
+};
+
+const round2 = (n) => Math.round(Number(n) * 100) / 100;
+
+/** Compact prompt from the usage payload: totals, limits, loops, spawn storms, by-profile and per-lane review rounds. No raw logs. */
+function buildUsageReviewPrompt(usage) {
+  const u = usage ?? {};
+  const totals = u.totals ?? {};
+  const out = [];
+  out.push(`Usage snapshot: ${totals.turns ?? 0} turns, $${round2(totals.costUsd ?? 0)} cost, ${totals.inputTokens ?? 0} in / ${totals.outputTokens ?? 0} out tokens.`);
+  const limits = u.limits ?? [];
+  if (limits.length) out.push(`Limits: ${limits.map((l) => `${l.provider} ${l.window} ${l.usedPct}% (resets ${l.resetsAt ?? "?"})`).join("; ")}.`);
+  const loops = u.loops?.flagged ?? [];
+  if (loops.length) out.push(`Loops flagged: ${loops.map((l) => `${l.agentId} (${l.lane}/${l.role}) ${l.turns}t`).join("; ")}.`);
+  const storms = u.spawnStorms ?? [];
+  if (storms.length) out.push(`Spawn storms: ${storms.map((s) => `${s.lane}/${s.role} x${s.count}`).join("; ")}.`);
+  const bp = u.byProfile ?? [];
+  out.push("By provider/profile/role (runs | turns | costUsd | passRate | costPerMergedUnit | avgReviewRounds | fixAfterMergeRate):");
+  for (const g of bp.slice(0, 30)) out.push(`- ${g.provider} | ${g.profile} | ${g.role} | ${g.runs} | ${g.turns} | ${round2(g.costUsd)} | ${g.passRate} | ${g.costPerMergedUnit ?? "-"} | ${g.avgReviewRounds} | ${g.fixAfterMergeRate}`);
+  const perLane = u.merged?.perLane ?? [];
+  const lanes = u.lanes ?? [];
+  const handoffByLane = new Map(lanes.map((l) => [l.lane, l.handoffs ?? 0]));
+  out.push("Per-lane (mergedUnits | reviewRounds | costPerMergedUnit | handoffs | workPct | fixAfterMergeRate):");
+  for (const l of perLane.slice(0, 30)) {
+    const la = lanes.find((x) => x.lane === l.lane);
+    out.push(`- ${l.lane} | ${l.mergedUnits} | ${l.reviewRounds} | ${round2(l.costPerMergedUnit)} | ${handoffByLane.get(l.lane) ?? 0} | ${la?.workPct ?? "-"} | ${l.fixAfterMergeRate}`);
+  }
+  out.push("Give 3-5 concise, actionable bullets covering (1) Profile/Provider routing, (2) Loops/Tool friction, and (3) Handoffs/Review rounds. One line per bullet, no preamble.");
+  return out.join("\n");
+}
+
+/** One-shot CLI run: prompt as the trailing arg (as runAgyUsage does), stdin not used, stdout captured, 60s killTree timeout. */
+function oneShotReviewRun(cmd, args) {
+  return ({ prompt, spawnImpl, timeoutMs = 60_000 }) =>
+    new Promise((resolve) => {
+      if (!spawnImpl && underTestRunner()) return resolve({ ok: false, error: `refusing to spawn the real ${cmd} under a test runner`, ms: 0 });
+      const started = Date.now();
+      let child;
+      try {
+        child = spawnNoShell(cmd, [...args, prompt], { env: process.env, ...(spawnImpl ? { resolved: { file: cmd, args: [] } } : {}) }, spawnImpl);
+      } catch (e) {
+        return resolve({ ok: false, error: String(e?.message ?? e), ms: Date.now() - started });
+      }
+      let out = "";
+      let done = false;
+      const finish = (r) => { if (done) return; done = true; clearTimeout(timer); resolve({ ...r, ms: Date.now() - started }); };
+      const timer = setTimeout(() => { killTree(child); finish({ ok: false, error: `timed out after ${timeoutMs}ms` }); }, timeoutMs);
+      timer.unref?.();
+      child.stdout?.on("data", (d) => { out += d; });
+      child.stderr?.on("data", () => {}); // drain: an unread stderr pipe can stall the child
+      child.on("error", (e) => finish({ ok: false, error: String(e?.message ?? e) }));
+      child.on("exit", () => finish({ ok: true, text: out.trim() }));
+    });
+}
+const defaultRunOpus = oneShotReviewRun("claude", ["-p", "--model", "claude-opus-5-5"]);
+const defaultRunGemini = oneShotReviewRun("agy", ["-p"]);
+
+/**
+ * Run one Opus + Gemini usage review (parallel, one-shot). `runOpus`/`runGemini` default to the real CLIs and refuse
+ * under a test runner; inject fakes in tests. One provider failing never loses the other. Appends one record to
+ * usage-reviews.jsonl. A second call while one is running returns the in-flight promise (never a second spawn).
+ */
+export function runUsageReview({ home, trigger = "manual", usage, runOpus, runGemini, now = Date.now } = {}) {
+  if (usageReviewInFlight) return usageReviewInFlight;
+  usageReviewInFlight = (async () => {
+    try {
+      const interval = loadRunnerSettings(home).usageReview.interval;
+      const prompt = buildUsageReviewPrompt(usage);
+      const opusRun = runOpus ?? defaultRunOpus;
+      const geminiRun = runGemini ?? defaultRunGemini;
+      const results = await Promise.all([
+        opusRun({ prompt }).catch((e) => ({ ok: false, error: String(e?.message ?? e), ms: 0 })),
+        geminiRun({ prompt }).catch((e) => ({ ok: false, error: String(e?.message ?? e), ms: 0 })),
+      ]);
+      const record = {
+        at: new Date(now()).toISOString(),
+        trigger,
+        interval,
+        turnsAtRun: usage?.totals?.turns ?? 0,
+        opus: results[0],
+        gemini: results[1],
+      };
+      const dir = home || vibesquadHome();
+      try {
+        if (!isForbiddenRealHome(dir)) {
+          mkdirSync(join(dir, "runner"), { recursive: true });
+          appendFileSync(usageReviewsPath(dir), JSON.stringify(record) + "\n");
+        }
+      } catch { /* best-effort: a failed append must not lose the review */ }
+      return record;
+    } finally {
+      usageReviewInFlight = null;
+    }
+  })();
+  return usageReviewInFlight;
+}
+
+/** UI-facing review state (no run is triggered). `usage` (optional) supplies turns for waitingForTurns/nextAt. */
+function usageReviewState(home, usage, { now = Date.now } = {}) {
+  const interval = loadRunnerSettings(home).usageReview.interval;
+  const history = readUsageReviews(home);
+  const last = history.length ? history[history.length - 1] : null;
+  const ms = intervalMs(interval);
+  const turns = usage?.totals?.turns;
+  const lastAt = last ? toMs(last.at) : null;
+  let nextAt = null;
+  let waitingForTurns = false;
+  if (ms !== null) {
+    if (lastAt === null) {
+      waitingForTurns = (turns ?? 0) <= 0; // first run needs at least one turn
+    } else {
+      nextAt = new Date(lastAt + ms).toISOString();
+      waitingForTurns = now() >= lastAt + ms && (turns ?? 0) <= (last?.turnsAtRun ?? 0);
+    }
+  }
+  return {
+    interval,
+    inFlight: Boolean(usageReviewInFlight),
+    last,
+    nextAt,
+    waitingForTurns,
+    history: history.slice(-5),
+  };
+}
+
+/** Fire-and-forget scheduled check called from getUsage(); never throws into getUsage(). */
+function maybeScheduleUsageReview(usage, home, opts = {}) {
+  try {
+    const interval = loadRunnerSettings(home).usageReview.interval;
+    if (interval === "off") return;
+    const ms = intervalMs(interval);
+    if (ms === null) return;
+    if (usageReviewInFlight) return;
+    if (underTestRunner() && !opts.runOpus && !opts.runGemini) return; // never a real spawn under test
+    const last = latestUsageReview(home);
+    const lastAt = last ? toMs(last.at) : null;
+    const nowMs = opts.now ? opts.now() : Date.now();
+    if (lastAt !== null && nowMs - lastAt < ms) return; // not due
+    if (!(usage.totals.turns > (last?.turnsAtRun ?? 0))) return; // no new turns
+    runUsageReview({ home, trigger: "scheduled", usage, runOpus: opts.runOpus, runGemini: opts.runGemini, now: opts.now }).catch(() => {});
+  } catch { /* best-effort */ }
+}
+
+export function getUsage({ home, since, until, git, laneCodes, usageReview } = {}) {
   const homeDir = home || vibesquadHome();
   const dir = join(homeDir, "runner", "agents");
   const seen = new Set();
@@ -852,7 +1043,7 @@ export function getUsage({ home, since, until, git, laneCodes } = {}) {
     return { lane, mergedUnits: us.length, reviewRounds: rounds, avgReviewRounds: Math.round((rounds / us.length) * 100) / 100, costUsd: cost, costPerMergedUnit: cost / us.length, avgUnitCycleMs: cyc.count ? Math.round(cyc.sum / cyc.count) : null, fixAfterMergeCount: cyc.fixCount, fixAfterMergeRate: cyc.mergedCount ? Math.round((cyc.fixCount / cyc.mergedCount) * 1000) / 1000 : 0 };
   }).sort((a, b) => b.mergedUnits - a.mergedUnits);
 
-  return {
+  const result = {
     note: "Cost is summed from turn_done.costUsd; token counts come from adapter usage events and are 0 for logs that have none.",
     files: seen.size,
     totals,
@@ -871,11 +1062,13 @@ export function getUsage({ home, since, until, git, laneCodes } = {}) {
     byProfile,
     spawnStorms: computeSpawnStorms(agents),
   };
+  maybeScheduleUsageReview(result, home, usageReview ?? {});
+  return { ...result, usageReview: usageReviewState(home, result, usageReview ?? {}) };
 }
 
 // ---------------------------------------------------------------- HTTP
-/** Handles /__vibesquad/providers*. Writes (settings POST) are owner-gated by the caller (vibesquad-api.mjs). */
-export async function handleProvidersApi(req, res, { sendJson, readBody, home, ...probeOpts }) {
+/** Handles /__vibesquad/providers*. Writes (settings/usage-review POST) are owner-gated by the caller (vibesquad-api.mjs). */
+export async function handleProvidersApi(req, res, { sendJson, readBody, home, usageReview, ...probeOpts }) {
   try {
     const url = new URL(req.url, "http://x");
     const sub = url.pathname.slice("/__vibesquad/providers".length).replace(/^\/+|\/+$/g, "");
@@ -888,11 +1081,30 @@ export async function handleProvidersApi(req, res, { sendJson, readBody, home, .
       }
       return sendJson(res, 405, { error: "method not allowed" });
     }
+    if (sub === "usage-review") {
+      if (req.method === "GET") {
+        return sendJson(res, 200, { ok: true, usageReview: usageReviewState(home, undefined, usageReview ?? {}) });
+      }
+      if (req.method === "POST" || req.method === "PUT") {
+        const body = await readBody(req);
+        if (body?.interval !== undefined && !USAGE_REVIEW_INTERVALS.includes(body.interval)) {
+          return sendJson(res, 400, { ok: false, error: `bad interval "${body.interval}"` });
+        }
+        if (body?.interval !== undefined) saveRunnerSettings({ usageReview: { interval: body.interval } }, home);
+        let usage;
+        if (body?.runNow && !usageReviewInFlight) {
+          usage = getUsage({ home, git: probeOpts.git, usageReview });
+          runUsageReview({ home, trigger: "manual", usage, runOpus: usageReview?.runOpus, runGemini: usageReview?.runGemini, now: usageReview?.now }).catch(() => {});
+        }
+        return sendJson(res, 200, { ok: true, usageReview: usageReviewState(home, usage, usageReview ?? {}) });
+      }
+      return sendJson(res, 405, { error: "method not allowed" });
+    }
     if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
     if (sub === "") return sendJson(res, 200, await getProviders(opts));
     if (sub === "models") return sendJson(res, 200, await getModels(url.searchParams.get("provider") ?? "", opts));
     if (sub === "modes") return sendJson(res, 200, await getModes(url.searchParams.get("provider") ?? "", opts));
-    if (sub === "usage") return sendJson(res, 200, getUsage({ home, since: url.searchParams.get("since") || undefined, until: url.searchParams.get("until") || undefined, git: probeOpts.git }));
+    if (sub === "usage") return sendJson(res, 200, getUsage({ home, since: url.searchParams.get("since") || undefined, until: url.searchParams.get("until") || undefined, git: probeOpts.git, usageReview }));
     return sendJson(res, 404, { error: "not found" });
   } catch (err) {
     return sendJson(res, 500, { error: String(err?.message ?? err) });

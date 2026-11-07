@@ -4,8 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  buildCatalog, clearProbeCache, clearUsageCache, getModels, getProviders, getUsage, handleProvidersApi, LOOP_TURN_THRESHOLD,
-  loadRunnerSettings, probeProviders, probeStats, saveRunnerSettings, usageStats,
+  buildCatalog, clearProbeCache, clearUsageCache, getModels, getProviders, getUsage, handleProvidersApi, intervalMs, LOOP_TURN_THRESHOLD,
+  loadRunnerSettings, normalizeRunnerSettings, probeProviders, probeStats, readUsageReviews, runUsageReview, saveRunnerSettings, usageStats,
 } from '../server/providers-catalog.mjs';
 import { saveUserSettings, loadUserSettings, saveRemoteAccess } from '../server/user-settings.mjs';
 
@@ -612,4 +612,248 @@ test('usage v2: spawn storms detect spawn bursts and zero-turn exits, skip non-s
   assert.equal(zero.count, 3);
   assert.equal(zero.zeroTurnExits, 3);
   assert.ok(!storms.some((s) => s.lane === 'other'), 'non-storm lane has no entry');
+});
+
+// ---------------------------------------------------------------- usage review API (usa-7)
+test('usage review: intervalMs + settings normalize/persist (invalid -> default "1d")', () => {
+  assert.equal(intervalMs('off'), null);
+  assert.equal(intervalMs('6h'), 6 * 3600_000);
+  assert.equal(intervalMs('12h'), 12 * 3600_000);
+  assert.equal(intervalMs('1d'), 24 * 3600_000);
+  assert.equal(intervalMs('3d'), 3 * 24 * 3600_000);
+  assert.equal(intervalMs('5d'), 5 * 24 * 3600_000);
+  assert.equal(intervalMs('2w'), 14 * 24 * 3600_000);
+  assert.equal(intervalMs('bogus'), null);
+  assert.equal(normalizeRunnerSettings({}).usageReview.interval, '1d');
+  assert.equal(normalizeRunnerSettings({ usageReview: { interval: 'bogus' } }).usageReview.interval, '1d');
+  assert.equal(normalizeRunnerSettings({ usageReview: { interval: '2w' } }).usageReview.interval, '2w');
+
+  const home = tmp();
+  saveRunnerSettings({ usageReview: { interval: '6h' } }, home);
+  assert.equal(loadRunnerSettings(home).usageReview.interval, '6h');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'settings.json'), 'utf8')).runner.usageReview.interval, '6h');
+  const saved = saveRunnerSettings({ usageReview: { interval: 'nope' } }, home);
+  assert.equal(saved.usageReview.interval, '1d');
+  assert.equal(loadRunnerSettings(home).usageReview.interval, '1d');
+});
+
+test('usage review: readUsageReviews reads newest last, tolerates missing file and bad lines', () => {
+  const home = tmp();
+  assert.deepEqual(readUsageReviews(home), [], 'missing file -> []');
+  const file = path.join(home, 'runner', 'usage-reviews.jsonl');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ at: 'a', trigger: 'manual' }) + '\nnot json\n' + JSON.stringify({ at: 'b', trigger: 'scheduled' }) + '\n');
+  const out = readUsageReviews(home);
+  assert.equal(out.length, 2);
+  assert.equal(out[0].at, 'a');
+  assert.equal(out[1].at, 'b', 'newest last');
+});
+
+test('usage review: runUsageReview runs both providers in parallel, survives one failing, appends one line', async () => {
+  const home = tmp();
+  const calls = [];
+  const runOpus = async ({ prompt }) => { calls.push(['opus', prompt]); return { ok: true, text: 'routing tip', ms: 5 }; };
+  const runGemini = async ({ prompt }) => { calls.push(['gemini', prompt]); throw new Error('gemini boom'); };
+  const rec = await runUsageReview({ home, trigger: 'manual', usage: { totals: { turns: 7, costUsd: 2.5 } }, runOpus, runGemini });
+  assert.equal(rec.trigger, 'manual');
+  assert.equal(rec.turnsAtRun, 7);
+  assert.equal(rec.interval, '1d', 'default interval from settings');
+  assert.deepEqual(rec.opus, { ok: true, text: 'routing tip', ms: 5 });
+  assert.equal(rec.gemini.ok, false);
+  assert.match(rec.gemini.error, /gemini boom/);
+  assert.equal(calls.length, 2, 'both providers invoked in parallel');
+  const lines = fs.readFileSync(path.join(home, 'runner', 'usage-reviews.jsonl'), 'utf8').trim().split('\n');
+  assert.equal(lines.length, 1);
+  assert.deepEqual(JSON.parse(lines[0]), rec);
+});
+
+test('usage review: a second call while one runs returns the in-flight promise (no second spawn)', async () => {
+  const home = tmp();
+  let resolveOpus;
+  let opusCalls = 0;
+  const runOpus = () => { opusCalls++; return new Promise((r) => { resolveOpus = r; }); };
+  const runGemini = async () => ({ ok: true, text: 'g', ms: 1 });
+  const p1 = runUsageReview({ home, trigger: 'manual', usage: { totals: { turns: 1 } }, runOpus, runGemini });
+  const p2 = runUsageReview({ home, trigger: 'manual', usage: { totals: { turns: 2 } }, runOpus, runGemini });
+  assert.equal(p2, p1, 'same in-flight promise returned');
+  assert.equal(opusCalls, 1, 'opus spawned once');
+  resolveOpus({ ok: true, text: 'o', ms: 1 });
+  const rec = await p1;
+  assert.equal(rec.turnsAtRun, 1);
+  assert.equal(fs.readFileSync(path.join(home, 'runner', 'usage-reviews.jsonl'), 'utf8').trim().split('\n').length, 1);
+});
+
+test('usage review: scheduled check fires when due + new turns, skips off / not-due / no-new-turns', async () => {
+  const home = tmp();
+  const dir = path.join(home, 'runner', 'agents');
+  fs.mkdirSync(dir, { recursive: true });
+  const d = Date.UTC(2026, 10, 9, 12);
+  const agentFile = path.join(dir, 'rn-a.jsonl');
+  let seq = 0;
+  const turn = (ts) => fs.appendFileSync(agentFile, ev({ seq: ++seq, ts, type: 'turn_done', costUsd: 1 }));
+  fs.writeFileSync(agentFile, ev({ seq: ++seq, ts: d, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'x', role: 'worker' } }));
+  turn(d);
+  clearUsageCache();
+  let now = d;
+  let opusCalls = 0;
+  const runOpus = async () => { opusCalls++; return { ok: true, text: 'o', ms: 1 }; };
+  const runGemini = async () => ({ ok: true, text: 'g', ms: 1 });
+  const opts = { runOpus, runGemini, now: () => now };
+  const settle = async () => { await new Promise((r) => setImmediate(r)); await new Promise((r) => setImmediate(r)); };
+
+  // 1) no last review + turns > 0 -> fires
+  getUsage({ home, git: noGit, usageReview: opts });
+  await settle();
+  assert.equal(opusCalls, 1);
+  let recs = readUsageReviews(home);
+  assert.equal(recs.length, 1);
+  assert.equal(recs[0].trigger, 'scheduled');
+  assert.equal(recs[0].turnsAtRun, 1);
+
+  // 2) not due (+1h) -> skips
+  now = d + 3600_000;
+  getUsage({ home, git: noGit, usageReview: opts });
+  await settle();
+  assert.equal(opusCalls, 1, 'not due: no new spawn');
+
+  // 3) due (+2d) but no new turns -> skips
+  now = d + 2 * 24 * 3600_000;
+  getUsage({ home, git: noGit, usageReview: opts });
+  await settle();
+  assert.equal(opusCalls, 1, 'no new turns since last review: skip');
+  assert.equal(readUsageReviews(home).length, 1);
+
+  // 4) due + new turns -> fires again
+  turn(d + 2 * 24 * 3600_000);
+  getUsage({ home, git: noGit, usageReview: opts });
+  await settle();
+  assert.equal(opusCalls, 2);
+  recs = readUsageReviews(home);
+  assert.equal(recs.length, 2);
+  assert.equal(recs[1].turnsAtRun, 2);
+});
+
+test('usage review: scheduled check skips when interval is off', async () => {
+  const home = tmp();
+  const dir = path.join(home, 'runner', 'agents');
+  fs.mkdirSync(dir, { recursive: true });
+  const d = Date.UTC(2026, 10, 9, 12);
+  fs.writeFileSync(path.join(dir, 'rn-a.jsonl'),
+    ev({ seq: 0, ts: d, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'x', role: 'worker' } }) +
+    ev({ seq: 1, ts: d, type: 'turn_done', costUsd: 1 }));
+  clearUsageCache();
+  saveRunnerSettings({ usageReview: { interval: 'off' } }, home);
+  let opusCalls = 0;
+  const runOpus = async () => { opusCalls++; return { ok: true, text: 'o', ms: 1 }; };
+  const runGemini = async () => ({ ok: true, text: 'g', ms: 1 });
+  const u = getUsage({ home, git: noGit, usageReview: { runOpus, runGemini, now: () => d } });
+  assert.equal(u.usageReview.interval, 'off');
+  assert.equal(u.usageReview.inFlight, false);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(opusCalls, 0);
+  assert.deepEqual(readUsageReviews(home), []);
+});
+
+test('usage review: scheduled check does not fire while a review is in flight', async () => {
+  const home = tmp();
+  const dir = path.join(home, 'runner', 'agents');
+  fs.mkdirSync(dir, { recursive: true });
+  const d = Date.UTC(2026, 10, 9, 12);
+  fs.writeFileSync(path.join(dir, 'rn-a.jsonl'),
+    ev({ seq: 0, ts: d, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'x', role: 'worker' } }) +
+    ev({ seq: 1, ts: d, type: 'turn_done', costUsd: 1 }));
+  clearUsageCache();
+  let resolveOpus;
+  let opusCalls = 0;
+  const runOpus = () => { opusCalls++; return new Promise((r) => { resolveOpus = r; }); };
+  const runGemini = async () => ({ ok: true, text: 'g', ms: 1 });
+  const opts = { runOpus, runGemini, now: () => d };
+  getUsage({ home, git: noGit, usageReview: opts });
+  assert.equal(opusCalls, 1);
+  const second = getUsage({ home, git: noGit, usageReview: opts });
+  assert.equal(second.usageReview.inFlight, true);
+  assert.equal(opusCalls, 1, 'in flight: no second spawn');
+  resolveOpus({ ok: true, text: 'o', ms: 1 });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(readUsageReviews(home).length, 1);
+});
+
+test('usage review: GET /usage-review returns the review state shape', async () => {
+  const home = tmp();
+  const call = async (method, url, body, opts = {}) => {
+    let out;
+    await handleProvidersApi({ method, url }, {}, { home, ...probeOpts, ...opts, readBody: async () => body, sendJson: (_r, code, data) => { out = { code, data }; } });
+    return out;
+  };
+  const res = await call('GET', '/__vibesquad/providers/usage-review');
+  assert.equal(res.code, 200);
+  const ur = res.data.usageReview;
+  assert.equal(ur.interval, '1d');
+  assert.equal(ur.inFlight, false);
+  assert.equal(ur.last, null);
+  assert.equal(ur.nextAt, null);
+  assert.deepEqual(ur.history, []);
+  assert.equal(typeof ur.waitingForTurns, 'boolean');
+});
+
+test('usage review: POST /usage-review validates interval, persists it, and runNow triggers a manual review', async () => {
+  const home = tmp();
+  const call = async (method, url, body, opts = {}) => {
+    let out;
+    await handleProvidersApi({ method, url }, {}, { home, ...probeOpts, ...opts, readBody: async () => body, sendJson: (_r, code, data) => { out = { code, data }; } });
+    return out;
+  };
+  const bad = await call('POST', '/__vibesquad/providers/usage-review', { interval: 'bogus' });
+  assert.equal(bad.code, 400);
+  assert.match(bad.data.error, /bad interval/);
+
+  const ok = await call('POST', '/__vibesquad/providers/usage-review', { interval: '6h' });
+  assert.equal(ok.code, 200);
+  assert.equal(ok.data.usageReview.interval, '6h');
+  assert.equal(loadRunnerSettings(home).usageReview.interval, '6h');
+
+  const calls = [];
+  const runOpus = async ({ prompt }) => { calls.push(['opus', prompt]); return { ok: true, text: 'route', ms: 1 }; };
+  const runGemini = async ({ prompt }) => { calls.push(['gemini', prompt]); return { ok: true, text: 'tool', ms: 2 }; };
+  const run = await call('POST', '/__vibesquad/providers/usage-review', { runNow: true }, { usageReview: { runOpus, runGemini, now: () => Date.UTC(2026, 10, 9, 12) } });
+  assert.equal(run.code, 200);
+  assert.equal(run.data.usageReview.inFlight, true, 'manual run started');
+  await new Promise((r) => setImmediate(r));
+  const recs = readUsageReviews(home);
+  assert.equal(recs.length, 1);
+  assert.equal(recs[0].trigger, 'manual');
+  assert.deepEqual(recs[0].opus, { ok: true, text: 'route', ms: 1 });
+  assert.deepEqual(recs[0].gemini, { ok: true, text: 'tool', ms: 2 });
+});
+
+test('usage review: non-owner POST to /usage-review is rejected like other owner writes', async () => {
+  const prevHome = process.env.VIBESQUAD_HOME;
+  const home = tmp();
+  process.env.VIBESQUAD_HOME = home;
+  const { createVibesquadMiddleware } = await import('../server/vibesquad-api.mjs');
+  const { createServer, request } = await import('node:http');
+  const rootDir = path.resolve(import.meta.dirname, '..');
+  const srv = createServer(createVibesquadMiddleware(rootDir));
+  await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
+  const port = srv.address().port;
+  const post = () => new Promise((ok, fail) => {
+    const req = request({ host: '127.0.0.1', port, path: '/__vibesquad/providers/usage-review', method: 'POST', headers: { 'content-type': 'application/json' } }, (res) => {
+      let data = '';
+      res.on('data', (c) => (data += c));
+      res.on('end', () => ok({ status: res.statusCode, body: JSON.parse(data || '{}') }));
+    });
+    req.on('error', fail);
+    req.end(JSON.stringify({ interval: '2w' }));
+  });
+  try {
+    const res = await post();
+    assert.equal(res.status, 403);
+    assert.equal(res.body.readOnly, true);
+    assert.match(res.body.error, /read-only/);
+    assert.equal(loadRunnerSettings(home).usageReview.interval, '1d', 'rejected before the handler: interval not persisted');
+  } finally {
+    await new Promise((ok) => srv.close(ok));
+    if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
+    else process.env.VIBESQUAD_HOME = prevHome;
+  }
 });
