@@ -1058,8 +1058,10 @@ export function useTimeline(agentId: string, status: string, active = true, pred
       } else {
         // A turn lifecycle event is a real turn boundary: the next turn's text never rejoins this turn's reply.
         if (/^turn_(started|completed|failed|canceled)$/.test(String(ev.event.type))) setEntries((cur) => markTurnBoundary(cur));
-        if (runnerRefresh) runnerRefresh.request();
-        else soon(2500, true);
+        if (runnerRefresh) {
+          if (String(ev.event.type) === "runner-catchup") runnerRefresh.catchUp();
+          else runnerRefresh.request();
+        } else soon(2500, true);
       }
     });
     return () => {
