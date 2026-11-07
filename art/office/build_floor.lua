@@ -1,12 +1,16 @@
 -- S1v2 floor plate, 3/4 top-down camera (above + behind, ~45deg): art/office/floor.aseprite,
 -- 640x360 INDEXED (P0), hand-placed shapes only.
--- v3 layout: [Buddy booth | lead U-desk | Team A x6] [slim marble lift core] [Team B x6 | lead | Buddy]
+-- F4 layout (docs/PLAN_FLOOR_RELAYOUT_F4.md): per team, a small glass Buddy office in the outer top
+-- corner; a row of 5 PC-98 cubicles (low beige partitions, chunky beige CRTs) along the windows; one
+-- open bench of two short staggered rows (3 + 3) with the lead's U-desk at its head; a wall-mounted
+-- PC-98 system-monitor CRT (the stats TV) by the lift. Every seat faces the same way (back to the camera).
 -- The back wall is foreshortened (cut top cap 0..3, face 4..95); the carpet runs 96..331, so desks,
 -- keyboards and CRT tops are seen from above. Floor slab + the floor below's ceiling from 332.
 -- Layers (bottom->top): bg (sky through the windows), building, furniture, signs, light, front.
--- "front" = the overlay that must cover sprites (glass booth fronts, lead U-desk lip, lift car front +
+-- "front" = the overlay that must cover sprites (glass office fronts, lead U-desk lip, lift car front +
 -- door jambs); it is also part of the plate, and export_floor.lua writes it on its own as floor-front-*.png.
--- Anchor slices: teamA/teamB.{lead,buddyOffice,desk0..5,lobby}, elevator.{doorA,doorB,car}.
+-- Anchor slices: teamA/teamB.{lead,buddyOffice,desk0..10,lobby,statsTv}, elevator.{doorA,doorB,car}.
+-- desk0..2 = bench row 1, desk3..5 = bench row 2, desk6..10 = cubicles. statsTv = the CRT glass rect.
 -- Index 0 is never painted on the plate (fully opaque).
 -- Run: Aseprite.exe -b --script-param root=<repo> --script art/office/build_floor.lua
 local root = app.params.root
@@ -34,14 +38,20 @@ end
 local function mx(x, w) return W - x - (w or 1) end
 local function mirR(r) return { mx(r[1], r[3]), r[2], r[3], r[4] } end
 
--- ======================= anchors (Team A; Team B mirrored) — unchanged from S1 =======================
+-- ======================= anchors (Team A; Team B mirrored) =======================
+local CUBE0, CUBEP = 76, 41     -- cubicle cells: x = CUBE0 + i*CUBEP, partition rails 4 wide at each cell edge
 local A = {
-  buddyOffice = {20, 262, 32, 32},
-  lead        = {78, 204, 32, 32},
-  desks = { {124,172,32,32}, {172,172,32,32}, {220,172,32,32},
-            {124,234,32,32}, {172,234,32,32}, {220,234,32,32} },
+  buddyOffice = {22, 120, 32, 32},
+  lead        = {34, 196, 32, 32},
+  bench1 = { {96,184,32,32}, {144,184,32,32}, {192,184,32,32} },
+  bench2 = { {120,232,32,32}, {168,232,32,32}, {216,232,32,32} },   -- staggered half a seat
+  cubes = {},
   lobby       = {212, 272, 72, 32},
+  statsTv     = {240, 26, 40, 28},                                  -- CRT glass (the UI draws the blips)
 }
+for i=0,4 do A.cubes[#A.cubes+1] = {CUBE0 + i*CUBEP + 5, 112, 32, 32} end
+A.desks = {}
+for _, k in ipairs({"bench1", "bench2", "cubes"}) do for _, d in ipairs(A[k]) do A.desks[#A.desks+1] = d end end
 local EL = { doorA = {290, 256, 11, 48}, car = {304, 270, 32, 32} }
 EL.doorB = mirR(EL.doorA)
 
@@ -72,7 +82,8 @@ do
   -- skyline: INK blocks with AMBER windows {x, w, top}
   local blocks = { {79,12,52},{92,8,47},{101,14,55},{116,9,45},{126,16,51},{143,10,57},
                    {154,13,49},{168,6,59},{218,8,59},{227,14,50},{242,9,54},{252,15,46},
-                   {268,8,52},
+                   {268,8,52},{14,9,50},{24,12,44},{37,8,56},{46,13,48},
+                   {617,9,50},{604,12,44},{595,8,56},{581,13,48},
                    {363,10,54},{374,14,46},{389,8,51},{398,16,57},{415,9,48},{425,13,52},
                    {439,7,59},{447,15,45},{463,10,55},{474,12,50},{487,8,58},{496,14,47},
                    {511,10,53},{522,15,49},{538,8,57},{547,12,46} }
@@ -122,19 +133,22 @@ do
   c.hline(0, 72, 288, L.MARBLE); c.hline(0, 73, 288, L.LINE)
   c.hline(0, 89, 288, L.INK); c.rect(0, 90, 288, 5, L.LINE); c.hline(0, 90, 288, L.MARBLE)
   c.hline(0, 95, 288, L.INK)
-  -- window (sky shows through)
-  local wx0, wx1 = 76, 276
-  c.rect(wx0, WIN0, wx1-wx0+1, WIN1-WIN0+1, L.INK)
-  c.rect(wx0+1, WIN0+1, wx1-wx0-1, WIN1-WIN0-1, L.MARBLE)
-  c.hline(wx0+1, WIN1-1, wx1-wx0-1, L.LINE); c.vline(wx1-1, WIN0+1, WIN1-WIN0-1, L.LINE)
-  c.rect(wx0+3, WIN0+3, wx1-wx0-5, WIN1-WIN0-5, L.INK)
-  for x=wx0+4, wx1-4 do for y=WIN0+4, WIN1-3 do c.px(x, y, 0) end end
-  for _, mxx in ipairs({126, 175, 224}) do
-    c.vline(mxx-1, WIN0+3, WIN1-WIN0-4, L.INK); c.vline(mxx, WIN0+3, WIN1-WIN0-4, L.MARBLE)
-    c.vline(mxx+1, WIN0+3, WIN1-WIN0-4, L.INK)
+  -- windows (sky shows through): the bullpen run (stops short of the stats TV) + the corner office's own
+  local function window(wx0, wx1, w0, mull)
+    c.rect(wx0, w0, wx1-wx0+1, WIN1-w0+1, L.INK)
+    c.rect(wx0+1, w0+1, wx1-wx0-1, WIN1-w0-1, L.MARBLE)
+    c.hline(wx0+1, WIN1-1, wx1-wx0-1, L.LINE); c.vline(wx1-1, w0+1, WIN1-w0-1, L.LINE)
+    c.rect(wx0+3, w0+3, wx1-wx0-5, WIN1-w0-5, L.INK)
+    for x=wx0+4, wx1-4 do for y=w0+4, WIN1-3 do c.px(x, y, 0) end end
+    for _, mxx in ipairs(mull) do
+      c.vline(mxx-1, w0+3, WIN1-w0-4, L.INK); c.vline(mxx, w0+3, WIN1-w0-4, L.MARBLE)
+      c.vline(mxx+1, w0+3, WIN1-w0-4, L.INK)
+    end
+    -- window sill: a ledge seen from above
+    c.rect(wx0-2, WIN1+1, wx1-wx0+5, 2, L.MARBLE); c.hline(wx0-2, WIN1+3, wx1-wx0+5, L.INK)
   end
-  -- window sill: a ledge seen from above
-  c.rect(wx0-2, WIN1+1, wx1-wx0+5, 2, L.MARBLE); c.hline(wx0-2, WIN1+3, wx1-wx0+5, L.INK)
+  window(76, 230, WIN0, {115, 153, 192})
+  window(9, 63, 18, {36})
   -- carpet: PANEL with a foreshortened dotted LINE diamond lattice (diamonds 24 wide x 12 deep)
   c.rect(0, FLOOR0, 288, FLOOR1-FLOOR0+1, L.PANEL)
   for y=FLOOR0,FLOOR1 do for x=0,287 do
@@ -150,19 +164,33 @@ do
   for _, lx in ipairs({30, 110, 190, 250}) do
     c.rect(lx, SLAB+17, 26, 6, L.INK); c.rect(lx+1, SLAB+18, 24, 4, L.MARBLE); c.hline(lx+1, SLAB+21, 24, L.LINE)
   end
-  -- IDEA LAB booth floor: PHI tiles, foreshortened LINE grid (6 wide x 4 deep)
-  c.rect(8, FLOOR0, 55, 202, L.PHI)
-  for y=FLOOR0,FLOOR0+201 do for x=8,62 do
-    if (x - 8) % 6 == 0 or (y - FLOOR0) % 4 == 0 then c.px(x, y, L.LINE) end
+  -- IDEA LAB corner office floor: PHI tiles, foreshortened LINE grid (6 wide x 4 deep)
+  c.rect(4, FLOOR0, 66, 61, L.PHI)
+  for y=FLOOR0,FLOOR0+60 do for x=4,69 do
+    if (x - 4) % 6 == 0 or (y - FLOOR0) % 4 == 0 then c.px(x, y, L.LINE) end
   end end
   -- pilaster between the booth and the window
   c.rect(68, 4, 6, 91, L.MARBLE); c.vline(68, 4, 91, L.INK); c.vline(73, 4, 91, L.LINE); c.vline(74, 4, 91, L.INK)
   for y=10,90,12 do c.hline(69, y, 4, L.LINE) end
   -- outer building wall: cut top seen from above, full height
   c.rect(0, 0, 3, H, L.INK); c.vline(1, 0, SLAB, L.MARBLE); c.vline(3, 4, SLAB-4, L.LINE)
-  -- booth partition (glass wall seen from above: a capped rail on the floor)
-  c.vline(63, FLOOR0, 199, L.INK); c.vline(64, FLOOR0, 199, L.MARBLE); c.vline(65, FLOOR0, 199, L.TEAL)
-  c.vline(66, FLOOR0, 199, L.LINE); c.vline(67, FLOOR0, 199, L.INK)
+  -- office side wall (glass seen from above: a capped rail on the floor, ends at the front kick plate)
+  c.vline(70, FLOOR0, 61, L.INK); c.vline(71, FLOOR0, 61, L.MARBLE); c.vline(72, FLOOR0, 61, L.TEAL)
+  c.vline(73, FLOOR0, 61, L.LINE); c.vline(74, FLOOR0, 61, L.INK)
+  -- PC-98 cubicles: low beige partitions. Back panel along the windows (its fabric face toward the
+  -- camera), then a capped rail at every cell edge with its end face showing at the aisle.
+  local x0, x1 = CUBE0, CUBE0 + 5*CUBEP + 3
+  c.hline(x0, 96, x1-x0+1, L.INK); c.hline(x0, 97, x1-x0+1, L.MARBLE)
+  c.rect(x0, 98, x1-x0+1, 7, L.SKIN)
+  for y=99,103,2 do for x=x0 + (y//2 % 2)*2, x1, 4 do c.px(x, y, L.CORAL) end end
+  c.hline(x0, 105, x1-x0+1, L.INK)
+  for i=0,5 do
+    local px = CUBE0 + i*CUBEP
+    c.rect(px, 96, 4, 48, L.INK)
+    c.vline(px+1, 97, 37, L.MARBLE); c.vline(px+2, 97, 37, L.MARBLE)
+    c.hline(px+1, 134, 2, L.INK)
+    c.vline(px+1, 135, 8, L.SKIN); c.vline(px+2, 135, 8, L.CORAL)
+  end
   mirror(c)
 
   -- elevator core x 288..351 (marble column, glass shaft); the core's cut top at y 0..3
@@ -208,6 +236,49 @@ local function deskAt(c, x, y)
   c.rect(x+36, y+6, 6, 12, L.INK); c.rect(x+37, y+7, 4, 3, L.MARBLE); c.rect(x+37, y+11, 4, 6, L.MARBLE)
   c.hline(x+37, y+10, 4, L.LINE); c.px(x+38, y+13, L.MINT); c.hline(x+37, y+15, 4, L.LINE)
 end
+-- chunky beige PC-98 CRT on its flat system box, from above + behind (screen faces the sitter):
+-- screen-glow lip on the far edge, box top with floppy slots, boxy rear with vents. x,y = top-left of the case top; 18 wide.
+local function beigeCrt(c, x, y, sticker)
+  c.rect(x-1, y+2, 20, 7, L.INK); c.rect(x, y+3, 18, 5, L.SKIN)                -- system box under the monitor
+  c.hline(x, y+3, 18, L.MARBLE); c.hline(x, y+7, 18, L.CORAL)
+  c.hline(x+1, y-2, 16, L.TEAL); c.hline(x, y-1, 18, L.INK)                    -- screen light spilling over
+  c.rect(x, y, 18, 8, L.INK); c.rect(x+1, y, 16, 7, L.SKIN)
+  c.hline(x+1, y, 16, L.MARBLE); c.vline(x+16, y+1, 6, L.CORAL)
+  c.rect(x+2, y+7, 14, 9, L.INK); c.rect(x+3, y+7, 12, 8, L.SKIN)              -- boxy rear
+  c.vline(x+14, y+7, 8, L.CORAL); c.hline(x+3, y+7, 12, L.MARBLE)
+  for vy=y+9, y+13, 2 do c.hline(x+5, vy, 6, L.CORAL) end                      -- vents
+  c.px(x-1, y+5, L.MINT)                                                        -- power LED
+  if sticker then c.stamp(x+12, y+1, sticker, K) end
+end
+-- cubicle desk inside its partitions: narrower slab, beige CRT right of the head, a memo pinned on the back panel
+local function cubeDesk(c, x, y)
+  deskN = deskN + 1
+  KIT.slab(c, x, y+2, 32, 11, L.AMBER, L.CORAL, 3)
+  KIT.keys(c, x+5, y+7)
+  c.stamp(x+1, y+3, CLUTTER[(deskN*3-1) % #CLUTTER + 1], K)
+  beigeCrt(c, x+13, y-8, STK[(deskN-1) % 3 + 1])
+  local memo = ({L.MARBLE, L.AMBER, L.PINK, L.MINT})[deskN % 4 + 1]
+  c.rect(x+1, y-12, 5, 4, L.INK); c.rect(x+2, y-11, 3, 2, memo); c.px(x+3, y-12, L.PINK)
+  if deskN % 2 == 1 then c.rect(x+8, y-11, 3, 3, L.AMBER); c.px(x+8, y-11, L.MARBLE) end
+end
+-- open bench row: one long shared slab, a CRT per seat, shared clutter between seats, a tower at the far end
+local function benchRow(c, row)
+  local xs, xe = 1e9, -1e9
+  for _, r in ipairs(row) do xs = math.min(xs, r[1]); xe = math.max(xe, r[1]) end
+  local y = row[1][2]
+  KIT.slab(c, xs-3, y+2, xe-xs+38, 11, L.AMBER, L.VIOLET, 3)
+  for _, r in ipairs(row) do
+    deskN = deskN + 1
+    KIT.keys(c, r[1]+5, r[2]+7)
+    KIT.crt(c, r[1]+17, r[2]-8, STK[(deskN-1) % 3 + 1])
+    if deskN % 2 == 0 then c.rect(r[1]+19, r[2]-6, 3, 3, L.AMBER); c.px(r[1]+19, r[2]-6, L.MARBLE) end
+    if r[1] ~= xe then c.stamp(r[1]+36, r[2]+3, CLUTTER[(deskN*3-1) % #CLUTTER + 1], K) end
+  end
+  c.stamp(xs-2, y+3, CLUTTER[deskN % #CLUTTER + 1], K)
+  local x = xe
+  c.rect(x+36, y+6, 6, 12, L.INK); c.rect(x+37, y+7, 4, 3, L.MARBLE); c.rect(x+37, y+11, 4, 6, L.MARBLE)
+  c.hline(x+37, y+10, 4, L.LINE); c.px(x+38, y+13, L.MINT); c.hline(x+37, y+15, 4, L.LINE)
+end
 -- lead U-desk: back run with two CRTs, side wings, front returns (the returns are the "front lip")
 local function leadDesk(c, x, y)
   KIT.slab(c, x-9, y+2, 50, 11, L.AMBER, L.CORAL, 3)
@@ -235,33 +306,15 @@ end
 
 do
   local c = C.furniture
-  -- booth back wall: IDEA LAB whiteboard of doodles
-  L.plate(c, 12, 14, 48, 38, L.MARBLE, L.MARBLE, L.LINE)
-  c.stamp(16, 22, [[
-|.ppp......t.t.......a.......|
-|p...p....t.t.t.....aaa......|
-|...p......t...t...aaaaa.....|
-|..p..............kaaaaak....|
-|..p...ggg..........aaa......|
-|.....g...g.........kkk......|
-|..p..g.k.g..ttt....kkk......|
-|.....g...g.t...t.....kk...pp|
-|......ggg..t.k.t.........p..|
-|...........t...t.ppp....p...|
-|............ttt.p...p....p..|
-|................p...p.....pp|
-|.................ppp........|
-]], K)
-  c.rect(14, 47, 44, 3, L.LINE); c.rect(20, 47, 4, 2, L.PINK); c.rect(26, 47, 4, 2, L.TEAL) -- marker tray
-  -- booth rug under the Buddy seat (seen from above)
-  c.rect(10, 252, 52, 26, L.VIOLET)
-  for x=10,61,4 do for y=254,276,6 do c.px(x+1, y, L.AMBER); c.px(x+3, y+3, L.AMBER) end end
+  -- office rug under the Buddy seat (seen from above; the glass front covers its near edge)
+  c.rect(14, 130, 48, 14, L.VIOLET)
+  for x=14,61,4 do for y=132,142,6 do c.px(x+1, y, L.AMBER); c.px(x+3, y+3, L.AMBER) end end
   c.edge(L.VIOLET, L.INK)
-  -- beanbag in the booth corner
-  c.ellipse(20, 120, 9, 6, L.INK); c.ellipse(20, 120, 8, 5, L.PINK); c.ellipse(18, 118, 3, 2, L.CORAL)
+  -- beanbag in the office corner
+  c.ellipse(12, 124, 6, 4, L.INK); c.ellipse(12, 124, 5, 3, L.PINK); c.ellipse(11, 123, 2, 1, L.CORAL)
 
-  -- water cooler against the wall, standing on the carpet
-  c.stamp(98, 74, [[
+  -- water cooler in the break nook
+  c.stamp(56, 290, [[
 |....kkkkkk....|
 |...kyyyyyyk...|
 |...kymyyyyk...|
@@ -286,25 +339,9 @@ do
 |..kkkkkkkkkk..|
 |...kkkkkkkk...|
 ]], K)
-  -- filing cabinet + fax, against the wall by the lift (top face shows)
-  c.rect(258, 82, 24, 4, L.INK); c.rect(259, 83, 22, 2, L.MARBLE)
-  L.plate(c, 259, 87, 22, 22, L.LINE, L.MARBLE, L.INK)
-  for _, dy in ipairs({94, 101}) do c.hline(261, dy, 18, L.INK); c.rect(268, dy-4, 4, 2, L.MARBLE) end
-  c.stamp(260, 72, [[
-|..kkkkkkkk......|
-|..kmmmmmmk......|
-|.kkkkkkkkkkkkkk.|
-|kaaaaaaaaaaaaaak|
-|kaakkkkkaagapak.|
-|kaakyyykaaaaaak.|
-|kaaaaaaaaaaaaaak|
-|.kkkkkkkkkkkkkk.|
-|..kmmmmmmk......|
-|...kmmmmk.......|
-]], K)
-  -- potted plants against the wall
-  for _, px in ipairs({178}) do
-    c.stamp(px, 88, [[
+  -- potted plant by the lobby mat
+  for _, px in ipairs({196}) do
+    c.stamp(px, 290, [[
 |...kk..kk...|
 |..kggkkggk..|
 |.kgggggggk..|
@@ -376,8 +413,8 @@ do
 |...kmmmmmmmmmmmmmk....|
 |..kkkkkkkkkkkkkkkkk...|
 ]], K)
-  -- break nook by the window wall: pink couch (back + arms + cushions from above), coffee table
-  c.stamp(116, 98, [[
+  -- break nook below the lead's desk: pink couch (back + arms + cushions from above), coffee table
+  c.stamp(10, 250, [[
 |.kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk.|
 |kppppppppppppppppppppppppppppppppppppppppk|
 |kpccccccccccccccccccccccccccccccccccccccpk|
@@ -392,13 +429,13 @@ do
 |kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk|
 |.kk..................................kk...|
 ]], K)
-  c.ellipse(137, 106, 5, 3, L.INK); c.ellipse(137, 106, 4, 2, L.AMBER) -- throw cushion
-  c.ellipse(141, 133, 15, 6, L.INK); c.ellipse(141, 133, 14, 5, L.TEAL); c.hline(130, 130, 18, L.MARBLE)
-  c.rect(134, 131, 7, 4, L.MARBLE); c.hline(135, 132, 5, L.LINE); c.hline(135, 133, 4, L.LINE) -- magazine
-  c.stamp(145, 130, "|.kkk.|\n|kmpmk|\n|.kkk.|", K)                                                 -- mug
-  c.vline(141, 139, 3, L.INK); c.hline(138, 141, 7, L.INK)
-  -- arcade cabinet against the wall: screen faces the camera, marquee + top face
-  c.stamp(206, 80, [[
+  c.ellipse(31, 258, 5, 3, L.INK); c.ellipse(31, 258, 4, 2, L.AMBER) -- throw cushion
+  c.ellipse(35, 285, 15, 6, L.INK); c.ellipse(35, 285, 14, 5, L.TEAL); c.hline(24, 282, 18, L.MARBLE)
+  c.rect(28, 283, 7, 4, L.MARBLE); c.hline(29, 284, 5, L.LINE); c.hline(29, 285, 4, L.LINE) -- magazine
+  c.stamp(39, 282, "|.kkk.|\n|kmpmk|\n|.kkk.|", K)                                                 -- mug
+  c.vline(35, 291, 3, L.INK); c.hline(32, 293, 7, L.INK)
+  -- arcade cabinet against the outer wall: screen faces the camera, marquee + top face
+  c.stamp(4, 160, [[
 |.kkkkkkkkkkkk.|
 |kmmmmmmmmmmmmk|
 |kkkkkkkkkkkkkk|
@@ -424,25 +461,10 @@ do
 |kkkkkkkkkkkkkk|
 ]], K)
   -- floor lamp by the couch
-  c.ellipse(108, 104, 5, 3, L.INK); c.ellipse(108, 104, 4, 2, L.AMBER); c.hline(105, 103, 6, L.MARBLE)
-  c.vline(108, 107, 12, L.INK); c.hline(105, 119, 7, L.INK)
-  -- booth: bookcase against the wall + a little potted fern
-  c.stamp(38, 88, [[
-|kkkkkkkkkkkkkkkkkkkk|
-|kmmmmmmmmmmmmmmmmmmk|
-|kkkkkkkkkkkkkkkkkkkk|
-|kakptvkapkgtkvpakmmk|
-|kakptvkapkgtkvpakmmk|
-|kakptvkapkgtkvpakmmk|
-|kkkkkkkkkkkkkkkkkkkk|
-|kpkkvtakmmkpgtkakvak|
-|kpkkvtakmmkpgtkakvak|
-|kpkkvtakmmkpgtkakvak|
-|kkkkkkkkkkkkkkkkkkkk|
-|kkkkkkkkkkkkkkkkkkkk|
-|.kk..............kk.|
-]], K)
-  c.stamp(14, 94, [[
+  c.ellipse(60, 252, 5, 3, L.INK); c.ellipse(60, 252, 4, 2, L.AMBER); c.hline(57, 251, 6, L.MARBLE)
+  c.vline(60, 255, 12, L.INK); c.hline(57, 267, 7, L.INK)
+  -- office: a little potted fern in the back corner
+  c.stamp(5, 99, [[
 |..kk.kk...|
 |.kggkggk..|
 |kgggggggk.|
@@ -461,7 +483,12 @@ do
   for _, m in ipairs({ function(r) return r end, mirR }) do
     local r = m(A.buddyOffice); deskAt(c, r[1], r[2])
     r = m(A.lead); leadDesk(c, r[1], r[2])
-    for _, d in ipairs(A.desks) do r = m(d); deskAt(c, r[1], r[2]) end
+    for _, k in ipairs({"bench1", "bench2"}) do
+      local row = {}
+      for _, d in ipairs(A[k]) do row[#row+1] = m(d) end
+      benchRow(c, row)
+    end
+    for _, d in ipairs(A.cubes) do r = m(d); cubeDesk(c, r[1], r[2]) end
   end
 
   -- lift car (seen from above: back wall face, then the car floor) + doors + call panels
@@ -522,13 +549,35 @@ do
   end
   sign(176, "VIBESQUAD", L.AMBER)
   sign(W-176, "HYPERDESK", L.AMBER)
-  -- booth labels + OUT signs
-  L.text(c, 20, 6, "IDEA LAB", L.INK)
-  L.text(c, W-20-L.textW("IDEA LAB"), 6, "IDEA LAB", L.INK)
-  for _, x in ipairs({22, W-22-26}) do
-    L.plate(c, x, 58, 26, 9, L.MINT, L.MARBLE, L.LINE)
-    L.text(c, x+3, 60, "OUT", L.INK)
+  -- corner office: IDEA LAB plate over its window, OUT light hung on the glass
+  for _, x in ipairs({9, W-9-36}) do
+    L.plate(c, x, 6, 36, 9, L.VIOLET, L.MARBLE, L.LINE)
+    L.text(c, x+3, 8, "IDEA LAB", L.MARBLE)
   end
+  for _, x in ipairs({48, W-48-17}) do
+    L.plate(c, x, 7, 17, 7, L.MINT, L.MARBLE, L.LINE)
+    L.text(c, x+3, 8, "OUT", L.INK)
+  end
+  -- stats TV: a PC-98 system-monitor CRT bolted to the back wall by the lift. Beige case with its top face
+  -- showing (3/4 camera), bevelled bezel, flat dark glass (the UI draws the blips + idle scanline on it),
+  -- a chin with knobs + power LED, and the cable dropping to the baseboard.
+  local function statsTv(g)
+    local gx, gy = g[1], g[2]
+    c.rect(gx+1, gy-8, 38, 5, L.INK); c.rect(gx+2, gy-7, 36, 3, L.SKIN); c.hline(gx+2, gy-7, 36, L.MARBLE)
+    for vx=gx+8, gx+30, 4 do c.hline(vx, gy-6, 2, L.CORAL) end
+    L.plate(c, gx-4, gy-4, 48, 40, L.SKIN, L.MARBLE, L.CORAL)
+    c.rect(gx-1, gy-1, 42, 30, L.LINE)                                -- recess lip
+    c.rect(gx, gy, 40, 28, L.INK)                                     -- glass: INK stays dark in both palettes
+    c.px(gx-1, gy-1, L.INK); c.px(gx+40, gy-1, L.INK); c.px(gx-1, gy+28, L.INK); c.px(gx+40, gy+28, L.INK)
+    c.hline(gx-3, gy+30, 46, L.CORAL)
+    for i=0,2 do c.rect(gx+1+i*5, gy+32, 3, 2, L.LINE); c.px(gx+2+i*5, gy+32, L.MARBLE) end
+    c.hline(gx+22, gy+32, 8, L.INK); c.hline(gx+22, gy+33, 8, L.CORAL)
+    c.px(gx+36, gy+32, L.MINT); c.px(gx+37, gy+32, L.MINT)
+    c.vline(gx+34, gy+36, 4, L.INK)
+    for y=gy+40, 88 do c.px(gx+34 + ((y//3) % 2), y, L.INK) end
+  end
+  statsTv(A.statsTv)
+  statsTv(mirR(A.statsTv))
   local function poster(x, y, label, face)
     L.plate(c, x, y, 22, 22, face, L.MARBLE, L.LINE)
     c.stamp(x+6, y+2, [[
@@ -543,8 +592,8 @@ do
 ]], K)
     L.text(c, x + (22 - L.textW(label))//2, y+14, label, L.INK)
   end
-  poster(232, 70, "GO!", L.PINK)
-  poster(W-232-22, 70, "WOW", L.TEAL)
+  poster(84, 72, "GO!", L.PINK)
+  poster(W-84-22, 72, "WOW", L.TEAL)
   for _, x in ipairs({148, W-148-13}) do
     c.ellipse(x+6, 81, 6, 6, L.INK); c.ellipse(x+6, 81, 5, 5, L.MARBLE)
     c.vline(x+6, 77, 4, L.INK); c.hline(x+6, 81, 3, L.INK); c.px(x+6, 81, L.PINK)
@@ -561,8 +610,8 @@ end
 -- ======================= front overlay (covers sprites; also part of the plate) =======================
 do
   local c = C.front
-  -- Buddy glass booth front wall (door gap on the lift side), kick plate hides the chair casters
-  KIT.glassFront(c, 4, 52, 283, {5, 28, 51})
+  -- Buddy corner office glass front (door gap on the bullpen side), kick plate hides the chair casters
+  KIT.glassFront(c, 4, 58, A.buddyOffice[2] + A.buddyOffice[4] - 11, {5, 31, 57})
   -- lead U-desk front lip
   leadFront(c, A.lead[1], A.lead[2])
   mirror(c)
@@ -591,18 +640,20 @@ do
   local function pool(cx, cy, rx, ry, col, maxT)
     for y=cy-ry, cy+ry do for x=cx-rx, cx+rx do
       local d = math.sqrt(((x-cx)/rx)^2 + ((y-cy)/ry)^2)
-      if d < 1 and y >= FLOOR0+1 and y <= FLOOR1 and x > 67 and x < 288 and free(x, y) then
+      if d < 1 and y >= FLOOR0+1 and y <= FLOOR1 and (x > 74 and x < 288 or x > 351 and x < W-75) and free(x, y) then
         if (L.BAYER[y%4+1][x%4+1] + 0.5) < maxT*(1-d)*16 then c.px(x, y, col) end
       end
     end end
   end
   -- warm sunset spill on the carpet under the window, soft pools around the desk rows
-  for _, cx in ipairs({126, 226}) do pool(cx, FLOOR0+6, 60, 14, L.CORAL, 0.5) end
-  for _, lx in ipairs({140, 205}) do pool(lx, 215, 36, 40, L.PHI, 0.45) end
-  L.twinkle(c, 58, 104, L.MARBLE, L.MARBLE, 2)
   L.twinkle(c, 118, 300, L.PINK, L.MARBLE, 1)
-  L.twinkle(c, 190, 286, L.AMBER, L.MARBLE, 1)
+  L.twinkle(c, 186, 282, L.AMBER, L.MARBLE, 1)
   mirror(c)
+  -- pools per side (not mirrored: the desks are not mirrored, so free() must test each side's own furniture)
+  for _, m in ipairs({ function(x) return x end, function(x) return W-1-x end }) do
+    for _, cx in ipairs({126, 196}) do pool(m(cx), 150, 56, 10, L.CORAL, 0.3) end
+    for _, lx in ipairs({140, 205}) do pool(m(lx), 224, 40, 44, L.PHI, 0.45) end
+  end
   for _, g in ipairs({{302,90,14},{304,180,10}}) do
     for i=0,g[3]-1 do c.px(g[1]+i, g[2]-i, L.MARBLE) end
   end
@@ -621,7 +672,7 @@ for _, side in ipairs({"A", "B"}) do
   local p = "team"..side.."."
   slice(p.."lead", m(A.lead)); slice(p.."buddyOffice", m(A.buddyOffice))
   for i, d in ipairs(A.desks) do slice(p.."desk"..(i-1), m(d)) end
-  slice(p.."lobby", m(A.lobby))
+  slice(p.."lobby", m(A.lobby)); slice(p.."statsTv", m(A.statsTv))
 end
 slice("elevator.doorA", EL.doorA); slice("elevator.doorB", EL.doorB); slice("elevator.car", EL.car)
 
