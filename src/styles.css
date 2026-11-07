@@ -5260,17 +5260,19 @@ button.project-file-name:hover { text-decoration: underline; }
   --u3-btn-marble-hover: url("/ui/u3/btn-marble-hover-light.png");
   --u3-btn-marble-active: url("/ui/u3/btn-marble-active-light.png");
 }
-:root { --u3-ink: #07040f; --u3-key: 1px 1px 0 var(--u3-ink); }
-:root[data-theme="light"] { --u3-ink: #35204c; }
+:root { --u3-ink: #07040f; --u3-ink-text: #160b24; --u3-lt-text: #f6eef8; --u3-ghost-text: #f6eef8; }
+:root[data-theme="light"] { --u3-ink: #35204c; --u3-ghost-text: #160b24; }
 
 /* ---- backgrounds: sprayed ramps over the U2 colours (a missing PNG leaves the U2 gradient + Bayer below) ---- */
-body {
-  background-image: var(--u3-stars), var(--u3-bg-page), var(--bayer), var(--page-grad);
-  background-size: 256px 256px, 32px 512px, auto, auto;
-  background-repeat: repeat, repeat-x, repeat, no-repeat;
-  background-position: 0 0, 0 0, 0 0, 0 0;
+/* page: solid colour, spray ramp (repeat-x, 2x) and hand-placed stars; the last row of the ramp is the solid colour */
+:root[data-theme="light"] body, body {
+  background-color: var(--panel);
+  background-image: var(--u3-stars), var(--u3-bg-page);
+  background-size: 256px 256px, 32px 512px;
+  background-repeat: repeat, repeat-x;
+  background-position: 0 0, 0 0;
+  image-rendering: pixelated;
 }
-:root[data-theme="light"] body, body { image-rendering: pixelated; }
 .sidebar {
   background-image: var(--u3-cloud-foot), var(--u3-bg-sidebar), var(--bayer), linear-gradient(180deg, var(--well) 0%, var(--bg) 100%);
   background-size: 224px 96px, 32px 1024px, auto, auto;
@@ -5280,11 +5282,12 @@ body {
 }
 .timeline, .team-head { background-image: var(--u3-bg-well), var(--bayer); background-size: 32px 96px, auto; background-repeat: repeat-x, repeat; }
 .team.active .team-head {
-  background-image: var(--u3-sel-teal), var(--bayer), linear-gradient(90deg, var(--pastel-violet), var(--pastel-pink));
-  background-size: 160px 36px, auto, auto; background-repeat: no-repeat, repeat, no-repeat; background-position: left center, 0 0, 0 0;
+  background-image: linear-gradient(90deg, transparent 0 56px, var(--panel-hi) 56px), var(--u3-sel-teal), var(--bayer), linear-gradient(90deg, var(--pastel-violet), var(--pastel-pink));
+  background-size: 100% 100%, 160px 36px, auto, auto; background-repeat: no-repeat, no-repeat, repeat, no-repeat; background-position: 0 0, left center, 0 0, 0 0;
 }
 .pin-row:hover, .pin-row.sel, .cmd-item.on, .cmd-item:hover, .ctx-menu button:hover {
-  background-image: var(--u3-sel-violet); background-size: 170px 18px; background-repeat: no-repeat; background-position: left center;
+  background-image: linear-gradient(90deg, transparent 0 28px, color-mix(in srgb, var(--violet) 24%, var(--panel)) 28px), var(--u3-sel-violet);
+  background-size: 100% 100%, 170px 18px; background-repeat: no-repeat; background-position: 0 0, left center;
 }
 
 /* ---- window / panel bodies: painted title strip cap (bar rows 8-13) over the spray panel wash ---- */
@@ -5336,25 +5339,25 @@ body {
 .drawer-working-chip, .drawer-subagent-chip, .usage-review-run, .bad-btn, .pin-tile-bar .pin-menu-btn {
   border: 4px solid transparent; border-image: var(--u3-btn-primary-normal) 4 fill / 8px / 0 repeat; image-rendering: pixelated;
   background: none; box-shadow: none; min-height: 28px;
-  color: #fffdfa; text-shadow: var(--u3-key);
+  color: var(--u3-ink-text); text-shadow: 0 1px 0 rgba(255, 255, 255, 0.35); font-weight: 700;
 }
 .btn:hover, .btn:hover:not(:disabled), .usage-review-run:hover:not(:disabled) { background: none; border-image-source: var(--u3-btn-primary-hover); box-shadow: none; }
 .btn:active, .usage-review-run:active:not(:disabled) { border-image-source: var(--u3-btn-primary-active); box-shadow: none; }
 .btn.ghost, .squads-pager-btn, .sidebar-cog-btn, .tl-jump-bottom, .seg button, .tchip, .sidebar-icon-btn {
-  border-image-source: var(--u3-btn-ghost-normal); background: none; color: var(--text); text-shadow: none;
+  border-image-source: var(--u3-btn-ghost-normal); background: none; color: var(--u3-ghost-text); text-shadow: none; font-weight: 700;
 }
 .btn.ghost:hover, .squads-pager-btn:hover, .sidebar-cog-btn:hover, .tl-jump-bottom:hover, .seg button:hover, .tchip:hover { border-image-source: var(--u3-btn-ghost-hover); background: none; }
 .btn.ghost:active, .squads-pager-btn:active, .sidebar-cog-btn:active, .tl-jump-bottom:active, .seg button:active, .tchip:active { border-image-source: var(--u3-btn-ghost-active); box-shadow: none; }
-.btn.hot, .btn.bad, .btn.confirm.danger:not(.armed), .bad-btn { border-image-source: var(--u3-btn-hot-normal); background: none; color: #fffdfa; text-shadow: var(--u3-key); }
+.btn.hot, .btn.bad, .btn.confirm.danger:not(.armed), .bad-btn { border-image-source: var(--u3-btn-hot-normal); background: none; color: var(--u3-lt-text); text-shadow: 0 2px 0 var(--u3-ink-text); }
 .btn.hot:hover, .btn.bad:hover, .bad-btn:hover { border-image-source: var(--u3-btn-hot-hover); }
 .btn.hot:active, .btn.bad:active, .bad-btn:active { border-image-source: var(--u3-btn-hot-active); }
-.seg button.on, .tchip.on { border-image-source: var(--u3-btn-on-normal); background: none; color: #fffdfa; text-shadow: var(--u3-key); }
-.btn.warn, .btn.confirm.warn:not(.armed), .btn.successor.warn { border-image-source: var(--u3-btn-warn-normal); background: none; color: var(--u3-ink); text-shadow: none; }
+.seg button.on, .tchip.on { border-image-source: var(--u3-btn-on-normal); background: none; color: var(--u3-lt-text); text-shadow: 0 2px 0 var(--u3-ink-text); }
+.btn.warn, .btn.confirm.warn:not(.armed), .btn.successor.warn { border-image-source: var(--u3-btn-warn-normal); background: none; color: var(--u3-ink-text); text-shadow: none; }
 .btn.warn:hover { border-image-source: var(--u3-btn-warn-hover); }
 .btn.warn:active { border-image-source: var(--u3-btn-warn-active); }
 .btn.confirm.armed { border-image-source: var(--u3-btn-hot-active); }
 .pin-tile-bar .pin-menu-btn, .modal-head .btn, .pin-rail-active-head .btn, .pin-rail-active-head .pin-menu-btn {
-  border-image: var(--u3-btn-marble-normal) 4 fill / 8px / 0 repeat; background: none; color: var(--u3-ink); text-shadow: none; min-height: 0; height: 20px;
+  border-image: var(--u3-btn-marble-normal) 4 fill / 8px / 0 repeat; background: none; color: var(--u3-ink-text); text-shadow: none; min-height: 0; height: 20px;
 }
 .seg { background: none; }
 .btn:disabled { opacity: 0.55; }
@@ -5373,8 +5376,10 @@ body {
 .badge.alert, .sidebar-inbox-badge { color: var(--bg) !important; }
 .chip.clean, .status-pill.running, .verdict.safe, .alert-pill.tone-finished, .changes-file-badge.new { border-image-source: var(--u3-chip-mint); }
 .verdict.check, .alert-pill.tone-permission, .changes-file-badge.mod, .pill.diag.warn, .brainstorm-ctx-pill.tone-amber, .quota-pill.warn { border-image-source: var(--u3-chip-amber); }
-.label-pill, .pin-lane-handle { border-image-source: var(--u3-chip-neutral); }
-.pin-tile-bar .pin-lane-handle { border-image-source: var(--u3-chip-marble); }
+.label-pill, .pin-lane-handle, .pin-tile-bar .pin-lane-handle {
+  border: 2px solid var(--line); border-image: none; background: var(--well); box-shadow: inset 1px 1px 0 var(--bevel-lo); padding: 0 var(--sp-1);
+}
+.pin-tile-bar .pin-lane-handle { background: var(--face-hi); border-color: var(--u3-ink); }
 .sidebar-riffbot-badge { border: 3px solid transparent; border-width: 3px 4px; border-image: var(--u3-chip-ring-teal) 3 4 fill / 6px 8px / 0 repeat; background: none; box-shadow: none; image-rendering: pixelated; }
 
 /* ---- status pips (4x4 sprites at 2x) ---- */
@@ -5403,3 +5408,37 @@ body {
 @keyframes u3-twinkle { 0% { opacity: 1; } 50% { opacity: 0.4; } }
 /* Squads grid tiles (@ui-bois layout) keep the U2 20px bar: show bar rows 4-13 of the strip (face, shade, INK floor) */
 .pin-tile-bar { --bar-h: 20px; background-position: 0 -8px, 0 -8px, 0 0; }
+
+/* ---- airbrush clouds in the panels, painted team-view pane, chrome team/squad name ---- */
+.card, .idea-inbox {
+  background-image: var(--u3-cloud-corner), var(--cap-imgs);
+  background-size: 320px 144px, var(--cap-size);
+  background-repeat: no-repeat, var(--cap-rep);
+  background-position: right bottom, var(--cap-pos);
+}
+.card:hover, .card.sel, .card.card-lead, .card.card-secondary-lead, .card.card-secondary-lead.card-lead-needs-you { background-image: var(--u3-cloud-corner), var(--cap-imgs); }
+.app.pin-focus > .agent-panes {
+  background-color: var(--panel);
+  background-image: var(--u3-cloud-corner), var(--u3-tb-ramp), var(--u3-tb-peach), var(--u3-bg-panel);
+  background-size: 320px 144px, 384px 28px, 32px 28px, 32px 256px;
+  background-position: right bottom, 0 -16px, 0 -16px, 0 0;
+  background-repeat: no-repeat, no-repeat, repeat-x, repeat-x;
+  image-rendering: pixelated;
+}
+.team-header h1 { background: var(--u3-header-halo) 44px center / 464px 64px no-repeat; }
+.team-header h1 .team-name-chrome {
+  font-family: var(--display); font-size: 30px; letter-spacing: 2px; text-transform: uppercase; text-shadow: none;
+  color: transparent;
+  background: linear-gradient(180deg, var(--marble) 0 44%, var(--pastel-violet) 45% 62%, var(--hot-pink) 63% 100%);
+  -webkit-background-clip: text; background-clip: text;
+  filter: drop-shadow(1px 0 0 var(--u3-ink)) drop-shadow(-1px 0 0 var(--u3-ink)) drop-shadow(0 1px 0 var(--u3-ink)) drop-shadow(0 -1px 0 var(--u3-ink)) drop-shadow(2px 2px 0 var(--u3-ink));
+}
+.team-head .team-name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.btn.ok:not(.confirm), .btn.confirm.cool:not(.armed), .usage-review-run, .usage-review-run:hover:not(:disabled) { color: var(--u3-ink-text); }
+/* team-view centre pane = a painted window (frame + 28px title strip); the hub's sky-zone pane keeps its own look */
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) {
+  border: 1px solid transparent; border-image: var(--u3-window-frame) 8 / 16px / 0 repeat; padding-top: var(--bar-h);
+  background-image: var(--u3-cloud-corner), var(--u3-tb-ramp), var(--u3-tb-peach), var(--u3-bg-panel);
+  background-position: right bottom, 0 0, 0 0, 0 0;
+}
+.app.pin-focus > .agent-panes { background-color: var(--panel-hi); }

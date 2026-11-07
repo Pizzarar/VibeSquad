@@ -194,6 +194,7 @@ export function TeamNameEdit({ team }: { team: Pick<TeamDef, "id" | "name"> }) {
       onSave={async (name) => {
         await saveTeams((cur) => cur.map((t) => (t.id === team.id ? { ...t, name } : t)));
       }}
+      className="team-name-chrome"
     >
       {team.name}
     </InlineRename>
