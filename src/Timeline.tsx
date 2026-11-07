@@ -12,7 +12,9 @@ import { dismissPending, dropMatched, getPending, noteAgentSeq, pendingFor, reco
 import { truncateAfter } from "./sessionLifecycle";
 import { demoTimeline } from "./demo";
 import { sentImagesFor } from "./imageDrafts";
-import { parseSentAttachments, repoPathFor } from "./attachments";
+import { getAgentCwd, parseSentAttachments, repoPathFor } from "./attachments";
+import { openCommit } from "./changesNav";
+import { parseCommitToken } from "./commitLinks";
 import { openRightDockTab } from "./RightDock";
 import { perfEndPainted, perfSendEvent } from "./perf";
 import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, coalesceReplies, hasMoreOf, joinPages, markTurnBoundary, matchesFilter, localPrompts, localSearch, mergeLiveItem, maxEntrySeq, syncNeeded, latestReasoningIndex, reasoningText, sortedHits, stepIndex, type SearchLocation, type TimelineFilter, type TimelinePrompt } from "./timelineFilter";
@@ -302,11 +304,17 @@ function renderInline(text: string, agentId?: string): React.ReactNode[] {
         const hit = lookupBareName(agentId, tgt.path);
         tgt = hit ? { ...tgt, path: hit } : null;
       }
+      const sha = tgt ? null : parseCommitToken(m[7]);
+      const commitCwd = sha && agentId ? getAgentCwd(agentId) : undefined;
       nodes.push(
         tgt ? (
           <code key={keyIdx++} className="tl-icode tl-file-link" role="button" tabIndex={0}
             data-testid="tl-file-link" onClick={() => openFileTarget(tgt)}
             onKeyDown={(e) => { if (e.key === "Enter") openFileTarget(tgt); }}>{m[7]}</code>
+        ) : sha && commitCwd ? (
+          <code key={keyIdx++} className="tl-icode tl-file-link" role="button" tabIndex={0}
+            data-testid="tl-commit-link" title="Open this commit in Changes" onClick={() => openCommit(commitCwd, sha)}
+            onKeyDown={(e) => { if (e.key === "Enter") openCommit(commitCwd, sha); }}>{m[7]}</code>
         ) : (
           <code key={keyIdx++} className="tl-icode">{m[7]}</code>
         ),

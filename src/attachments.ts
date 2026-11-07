@@ -130,6 +130,9 @@ const cwds = new Map<string, string>();
 export function setAgentCwd(id: string, cwd: string | undefined) {
   if (cwd) cwds.set(id, cwd);
 }
+export function getAgentCwd(id: string): string | undefined {
+  return cwds.get(id);
+}
 export function repoPathFor(agentId: string, p: string): string | null {
   const norm = p.split("\\").join("/");
   const base = (cwds.get(agentId) ?? "").split("\\").join("/").replace(/\/$/, "");
