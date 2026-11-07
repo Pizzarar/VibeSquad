@@ -4604,20 +4604,154 @@ button.project-file-name:hover { text-decoration: underline; }
 .hub-body {
   grid-column: 2 / 4;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
   min-height: 0;
   overflow: hidden;
 }
-.hub-body .agent-panes { grid-column: 1; grid-row: 1; min-height: 0; overflow: hidden; }
-.hub-body .sq-panel { grid-column: 2; grid-row: 1; }
+.hub-body .agent-panes { grid-column: 1; grid-row: 1; min-height: 0; overflow: hidden; height: auto; }
+/* Sky-gods hub: the two bots chat in the sky zones, so the panes keep only their header here; any other
+   agent opened on the hub lane (.hub-agent-open) takes the normal focus view and the sky steps aside. */
+.hub-body:not(.hub-agent-open) .agent-panes .pin-focus-empty { display: none !important; }
+.hub-body.hub-agent-open .agent-panes { grid-row: 1 / span 2; height: 100%; }
+.hub-body .sq-panel { grid-column: 1; grid-row: 3; max-height: 22vh; overflow: auto; }
+/* Queue strip (G3): a row of chips in the clouds above the roof; empty = a thin cloud-height line. */
+.hub-body .sq-strip {
+  position: relative;
+  max-height: 26vh;
+  padding: 8px 18px 10px;
+  border: 0;
+  border-top: 2px solid var(--hot-pink);
+  background: linear-gradient(180deg, var(--sky-low, #3b3278), var(--navy));
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+}
+:root[data-theme="light"] .hub-body .sq-strip { background: linear-gradient(180deg, #eef8ff, var(--navy)); }
+.hub-body .sq-strip.is-empty {
+  height: 14px;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  border-top: 0;
+  background:
+    radial-gradient(ellipse 12% 100% at 18% 0, var(--sky-cloud, rgba(190, 200, 255, 0.22)), transparent 80%),
+    radial-gradient(ellipse 16% 100% at 52% 0, var(--sky-cloud, rgba(190, 200, 255, 0.22)), transparent 80%),
+    radial-gradient(ellipse 12% 100% at 84% 0, var(--sky-cloud, rgba(190, 200, 255, 0.22)), transparent 80%),
+    var(--sky-low, #3b3278);
+}
+:root[data-theme="light"] .hub-body .sq-strip.is-empty { --sky-cloud: rgba(255, 255, 255, 0.85); --sky-low: #eef8ff; }
+.hub-body .sq-strip .sq-head { flex: none; margin: 0; align-self: center; flex-direction: column; align-items: center; gap: 2px; }
+.hub-body .sq-strip .sq-rows { flex-direction: row; overflow-x: auto; flex: 1; min-width: 0; }
+.hub-body .sq-strip .sq-row { flex: none; width: 300px; background: var(--navy); }
+.hub-body .sq-strip .attn-err { flex: none; align-self: center; }
 .hub-body .sq-floor {
   grid-column: 1 / -1;
-  grid-row: 2;
+  grid-row: 4;
   min-height: 0;
-  max-height: 46vh;
+  max-height: 38vh;
   overflow: auto;
 }
+
+/* ── Sky zones (src/SkyZones.tsx, docs/PLAN_SKY_GODS_C2B.md G1): two sky-CRT chats above the tower ── */
+.sky-zones {
+  --sky-top: #070a22;
+  --sky-mid: #18225e;
+  --sky-low: #3b3278;
+  --sky-cloud: rgba(190, 200, 255, 0.22);
+  grid-column: 1;
+  grid-row: 2;
+  display: grid;
+  grid-template-columns: var(--sky-cols, minmax(0, 1fr) minmax(0, 1fr));
+  transition: grid-template-columns 0.35s ease; /* G6: Overlord widens over Riff */
+  gap: 18px;
+  min-height: clamp(380px, 46vh, 560px);
+  padding: 12px 18px 22px;
+  overflow: hidden;
+  position: relative;
+  /* CSS placeholder until @art ships the sky pngs (G4 swaps them in). */
+  background:
+    radial-gradient(ellipse 22% 9% at 14% 100%, var(--sky-cloud), transparent 70%),
+    radial-gradient(ellipse 28% 11% at 48% 104%, var(--sky-cloud), transparent 70%),
+    radial-gradient(ellipse 24% 9% at 84% 100%, var(--sky-cloud), transparent 70%),
+    linear-gradient(180deg, var(--sky-top), var(--sky-mid) 62%, var(--sky-low));
+  background-size: auto;
+}
+:root[data-theme="light"] .sky-zones {
+  --sky-top: #7fc4f5;
+  --sky-mid: #bfe3fb;
+  --sky-low: #eef8ff;
+  --sky-cloud: rgba(255, 255, 255, 0.85);
+}
+.sky-zones.has-sky-art { background-size: auto 100%; background-position: left bottom; background-repeat: repeat-x; image-rendering: pixelated; } /* @art: horizontally tileable band */
+.sky-zone {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border: 7px solid #272a3c;
+  border-radius: 18px;
+  background: var(--bg);
+  box-shadow: inset 0 0 0 2px #05060c, 0 0 0 2px var(--cyan), 0 10px 26px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+:root[data-theme="light"] .sky-zone { border-color: #8d93ad; box-shadow: inset 0 0 0 2px #4b5068, 0 0 0 2px var(--cyan), 0 10px 22px rgba(40, 60, 110, 0.35); }
+.sky-zone { position: relative; }
+.sky-zone.has-frame { border-radius: 0; box-shadow: none; } /* border-image bezel: width/slice/source come inline from sky-crt.json */
+.sky-zone-overlord { box-shadow: inset 0 0 0 2px #05060c, 0 0 0 2px var(--violet), 0 10px 26px rgba(0, 0, 0, 0.55); }
+:root .sky-zone.has-frame, :root[data-theme="light"] .sky-zone.has-frame { box-shadow: none; } /* the bezel art is the frame: no CSS ring on top, any theme/zone */
+.sky-zone .composer-row { flex-wrap: wrap; }
+.sky-zone .composer-row textarea { flex: 1 1 100%; min-width: 0; min-height: 56px; }
+/* G6: the face is the zone's background (integer scale, centred, crisp); the chat overlays its lower part. */
+.sky-face-stage { position: absolute; inset: 0; overflow: hidden; background: #05060c; z-index: 0; }
+:root[data-theme="light"] .sky-face-stage { background: #cfd3e2; }
+.sky-face { position: absolute; transform-origin: top left; display: block; background-repeat: no-repeat; image-rendering: pixelated; }
+.sky-face.is-blank { background-color: transparent; }
+.sky-zone.is-off .sky-face-stage { display: none; }
+.sky-crt-name { position: absolute; top: 8px; left: 12px; z-index: 2; font-family: var(--arcade); font-size: 13px; color: var(--cyan-t); letter-spacing: 0.04em; padding: 2px 8px; background: color-mix(in srgb, var(--bg) 70%, transparent); border: 1px solid var(--line); }
+.sky-zone-overlord .sky-crt-name { color: var(--violet-t); }
+.sky-resume { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 10px; background: var(--well); border-bottom: 1px solid var(--line); }
+.sky-crt-body {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 58%;
+  min-height: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  backdrop-filter: blur(1px);
+  border-top: 1px solid var(--line);
+  transition: opacity 0.25s ease, visibility 0s linear 0s;
+}
+.sky-zone.is-off .sky-crt-body { top: 0; height: auto; background: none; backdrop-filter: none; border-top: 0; }
+/* Squeezed Riff: its chat steps aside (still mounted, composer state kept) so the scared face shows. */
+.sky-zones.is-expanded .sky-zone-riffbot .sky-crt-body { opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 0.2s ease, visibility 0s linear 0.2s; }
+.sky-crt-body .pane-slot { flex: 1; grid-row: auto; grid-column: auto; border-left: 0; background: transparent; }
+@media (prefers-reduced-motion: reduce) {
+  .sky-zones, .sky-crt-body, .sky-zones.is-expanded .sky-zone-riffbot .sky-crt-body { transition: none; }
+}
+.sky-static {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text);
+  text-align: center;
+  background:
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.06) 0 2px, rgba(0, 0, 0, 0.18) 2px 4px),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.05) 0 3px, rgba(0, 0, 0, 0.12) 3px 7px),
+    #11131f;
+  animation: sky-static-roll 0.5s steps(4) infinite;
+}
+:root[data-theme="light"] .sky-static { background-color: #cfd3e2; color: #222; }
+.sky-static-text { font-family: var(--arcade); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; background: var(--bg); padding: 4px 8px; border: 1px solid var(--line); }
+@keyframes sky-static-roll { to { background-position: 0 4px, 7px 0, 0 0; } }
+@media (prefers-reduced-motion: reduce) { .sky-static { animation: none; } }
 .sq-floor-tower {
   display: flex;
   flex-direction: column;
@@ -4695,23 +4829,6 @@ button.project-file-name:hover { text-decoration: underline; }
 }
 .sq-floor-mark:hover,
 .sq-floor-mark:focus-visible { background: var(--text); color: var(--hot-pink); }
-.sq-floor-crt {
-  position: absolute;
-  padding: 0;
-  margin: 0;
-  border: 0;
-  background-color: transparent;
-  background-repeat: no-repeat;
-  image-rendering: pixelated;
-  cursor: pointer;
-}
-.sq-floor-crt:disabled { cursor: default; }
-.sq-floor-crt.is-off { filter: brightness(0.35) saturate(0.4); }
-.sq-floor-crt:hover:not(:disabled),
-.sq-floor-crt:focus-visible { outline: 1px solid var(--cyan); outline-offset: -1px; }
-.sq-floor-lounge { position: absolute; border: 0; background: transparent; cursor: pointer; padding: 0; }
-.sq-floor-lounge:hover,
-.sq-floor-lounge:focus-visible { outline: 1px dashed var(--cyan); outline-offset: -1px; }
 .sq-floor-rider { position: absolute; transform: translate(-50%, -100%); line-height: 0; animation: sq-floor-ride linear forwards; }
 .sq-floor-rider .sq-floor-sprite-fallback { width: 16px; height: 16px; }
 @keyframes sq-floor-ride {
@@ -4722,14 +4839,15 @@ button.project-file-name:hover { text-decoration: underline; }
 
 @media (max-width: 900px) {
   .app.pin-focus.hub-focus { grid-template-columns: var(--sidebar-w, 265px) minmax(0, 1fr) 240px 64px; }
-  .hub-body { grid-template-columns: minmax(0, 1fr) 240px; }
+}
+@media (max-width: 700px) {
+  .sky-zones, .sky-zones.is-expanded { grid-template-columns: minmax(0, 1fr); overflow: auto; }
+  .sky-zone { min-height: 280px; }
 }
 @media (max-width: 600px) {
   .app.pin-focus.hub-focus { grid-template-columns: minmax(0, 1fr); }
-  .hub-body { grid-column: 1; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
-  .hub-body .sq-panel { grid-column: 1; grid-row: 1; max-height: 38vh; border-left: 0; }
-  .hub-body .agent-panes { grid-column: 1; grid-row: 2; }
-  .hub-body .sq-floor { grid-column: 1; grid-row: 3; max-height: 40vh; }
+  .hub-body { grid-column: 1; }
+  .hub-body .sq-floor { max-height: 40vh; }
 }
 
 :root[data-theme="light"] .feed-type.you { background: var(--pink-fill); }

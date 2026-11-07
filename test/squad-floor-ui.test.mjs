@@ -15,8 +15,7 @@ test("App imports SquadFloor and renders it only on the hub page", () => {
   // Rendered exactly once, inside the hubFocused .hub-body branch (next to the Needs-you queue).
   assert.equal((app.match(/<SquadFloor /g) || []).length, 1);
   assert.match(app, /hubFocused \? \(/);
-  assert.match(app, /onOpenRiffBot=\{onQuickStart\}/);
-  assert.match(app, /<SquadQueue view=\{pinFocusView\} \/>/);
+  assert.ok(app.includes('<SquadQueue view={pinFocusView} variant="strip" />'));
 });
 
 test("SquadFloor opens a character's chat with openPinMember", () => {
@@ -34,8 +33,8 @@ test("SquadFloor reads frames from cast.json, not hardcoded constants", () => {
 });
 
 test("SquadFloor has a reduced-motion branch (freeze on frame 0, no ride)", () => {
-  assert.match(floor, /prefers-reduced-motion: reduce/);
-  assert.match(floor, /matchMedia\("\(prefers-reduced-motion: reduce\)"\)/);
+  assert.match(floor + src("useBotFace.ts"), /prefers-reduced-motion: reduce/);
+  assert.match(floor + src("useBotFace.ts"), /matchMedia\("\(prefers-reduced-motion: reduce\)"\)/);
   assert.match(floor, /reduced \? 0 : tick/);
   assert.match(floor, /reduced\s*\?\s*\[\]/);
 });
@@ -45,7 +44,7 @@ test("SquadFloor falls back to the F1 placeholder when art fetch fails", () => {
   assert.match(floor, /placeholderFloor/);
   assert.match(floor, /\.catch\(\(\) => undefined\)/);
   assert.match(floor, /r\.ok \? r\.json\(\) : undefined/);
-  assert.match(floor, /new Image\(\)/);
+  assert.match(floor + src("useBotFace.ts"), /new Image\(\)/);
 });
 
 test("SquadFloor reuses the F1 tower model, not a duplicate", () => {
@@ -58,7 +57,6 @@ test("SquadFloor reuses the F1 tower model, not a duplicate", () => {
 test("scoped sq-floor-* styles live in styles.css with pixelated rendering", () => {
   assert.match(css, /\.sq-floor \{/);
   assert.match(css, /\.sq-floor-mark \{/);
-  assert.match(css, /\.sq-floor-lounge \{/);
   assert.match(css, /image-rendering: pixelated/);
 });
 
@@ -87,4 +85,14 @@ test("sprite frames for the shipped cast.json resolve from the json (no constant
   assert.deepEqual(needs, c.roles.lead.needs[0]);
   assert.ok(needs.x % c.cell === 0);
   assert.ok(c.bubble.offset.x < 0);
+});
+
+test("C2b G2: tower has no top band / CRT screens; faces live in the shared useBotFace hook", () => {
+  for (const gone of ["floor.screens", "topBand", "ROOF_", "<Crt", "sq-floor-crt", "sq-floor-" + "lounge", "faces.json", "onOpenRiffBot"]) {
+    assert.ok(!floor.includes(gone), gone);
+  }
+  const hook = src("useBotFace.ts");
+  assert.ok(hook.includes("export function useBotFace("));
+  assert.ok(hook.includes("faces.json"));
+  assert.ok(hook.includes("reduced"));
 });

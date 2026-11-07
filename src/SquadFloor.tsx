@@ -4,32 +4,25 @@
 // bubble all come from cast.json.
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { openPinMember } from "./pinFocus";
+import { useImageOk, usePrefersReducedMotion, useTheme, type Theme } from "./useBotFace";
 import { gridPinsForSquad, hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import {
   bandLayers,
-  BLINK_MS,
   buildTower,
-  faceFrame,
-  faceMode,
   FLOOR_NATIVE_HEIGHT,
   FLOOR_NATIVE_WIDTH,
   floorOrPlaceholder,
   integerScale,
   LOBBY_MAX_SHOWN,
-  nextBlinkDelay,
   placeholderFloor,
   POSE_FPS,
   RIDE_MS,
   sliceAnchor,
   sortByAnchorY,
   spriteFrame,
-  topBand,
   transitionRiders,
   validateCast,
-  validateFaces,
   type CastModel,
-  type FaceBot,
-  type FacesModel,
   type FloorModel,
   type Frame,
   type Rect,
@@ -42,70 +35,14 @@ import type { TeamView } from "./teams";
 
 export type SquadFloorProps = {
   view: TeamView;
-  /** The same handler HubBar uses to open RiffBot (src/HubBar.tsx onOpen). */
-  onOpenRiffBot: (pin: Pin) => void | Promise<unknown>;
 };
 
-// ── Theme (U1 `[data-theme]`, dark when absent) ────────────────────────────────
-const readTheme = (): "dark" | "light" =>
-  typeof document !== "undefined" && document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
-
-function useTheme(): "dark" | "light" {
-  const [theme, setTheme] = useState<"dark" | "light">(() => readTheme());
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-    const el = document.documentElement;
-    const update = () => setTheme(readTheme());
-    update();
-    const mo = new MutationObserver(update);
-    mo.observe(el, { attributes: true, attributeFilter: ["data-theme"] });
-    return () => mo.disconnect();
-  }, []);
-  return theme;
-}
+// Theme, reduced-motion, image probing and the CRT faces live in src/useBotFace.ts (the sky zones draw the faces).
 
 // ── Art URLs (the @art contract; hardcode nothing about the sheet itself) ──────
-const CAST_URL = (theme: "dark" | "light") => `/office/cast-${theme}.png`;
-const FLOOR_URL = (theme: "dark" | "light") => `/office/floor-${theme}.png`;
-const ROOF_URL = (theme: "dark" | "light") => `/office/roof-${theme}.png`;
-const FACE_URL = (bot: FaceBot, theme: "dark" | "light") => `/office/face-${bot}-${theme}.png`;
-const FLOOR_FRONT_URL = (theme: "dark" | "light") => `/office/floor-front-${theme}.png`;
-const ROOF_FRONT_URL = (theme: "dark" | "light") => `/office/roof-front-${theme}.png`;
-
-/** True once an image at `url` loads (per theme); resets to false on error so the caller falls back to boxes. */
-function useImageOk(url: string | null): boolean {
-  const [ok, setOk] = useState(false);
-  useEffect(() => {
-    if (!url) {
-      setOk(false);
-      return;
-    }
-    let alive = true;
-    const img = new Image();
-    img.onload = () => alive && setOk(true);
-    img.onerror = () => alive && setOk(false);
-    img.src = url;
-    return () => {
-      alive = false;
-    };
-  }, [url]);
-  return ok;
-}
-
-function usePrefersReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(
-    () => typeof window !== "undefined" && !!window.matchMedia("(prefers-reduced-motion: reduce)").matches,
-  );
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const onChange = () => setReduced(mq.matches);
-    setReduced(mq.matches);
-    mq.addEventListener?.("change", onChange);
-    return () => mq.removeEventListener?.("change", onChange);
-  }, []);
-  return reduced;
-}
+const CAST_URL = (theme: Theme) => `/office/cast-${theme}.png`;
+const FLOOR_URL = (theme: Theme) => `/office/floor-${theme}.png`;
+const FLOOR_FRONT_URL = (theme: Theme) => `/office/floor-front-${theme}.png`;
 
 // ── Pin → tower mapping (the F1 buildTower is the model; we only supply inputs) ─
 function towerTeamOf(pin: Pin): TowerTeam {
@@ -123,11 +60,11 @@ export function towerForView(view: TeamView): Tower {
   });
 }
 
-/** `floor` is the tower floor index the member sat on (-1 = the penthouse), so its ride starts at that floor's elevator. */
+/** `floor` is the tower floor index the member sat on (the penthouse bots no longer ride; they live in the sky zones), so its ride starts at that floor's elevator. */
 type FlatMember = { agentId: string; title: string; role: string; variant: number; floor: number };
 function towerMembers(tower: Tower): FlatMember[] {
   const out: FlatMember[] = [];
-  let floor = -1;
+  let floor = 0;
   const push = (s: SeatedAgent | null) => s && out.push({ agentId: s.agentId, title: s.title, role: s.role, variant: s.variant, floor });
   const team = (p: TeamFloorPlacement) => {
     push(p.lead);
@@ -135,8 +72,6 @@ function towerMembers(tower: Tower): FlatMember[] {
     p.desks.forEach(push);
     p.lobby.forEach(push);
   };
-  push(tower.penthouse.riffbot);
-  push(tower.penthouse.overlord);
   for (const f of tower.floors) {
     floor = f.index;
     team(f.teamA);
@@ -292,53 +227,6 @@ function LobbyPlus({ placement, lobby }: { placement: TeamFloorPlacement; lobby?
   );
 }
 
-/** One CRT: the bot's face cell on the glass, clickable (opens that bot's chat). A null `onOpen` disables it. */
-function Crt({
-  bot,
-  rect,
-  faces,
-  sheetOk,
-  theme,
-  mode,
-  tick,
-  off,
-  title,
-  testid,
-  onOpen,
-}: {
-  bot: FaceBot;
-  rect: Rect;
-  faces: FacesModel | null;
-  sheetOk: boolean;
-  theme: "dark" | "light";
-  mode: ReturnType<typeof faceMode>;
-  tick: number;
-  off: boolean;
-  title: string;
-  testid: string;
-  onOpen: (() => void) | null;
-}) {
-  const frame = faces && sheetOk ? faceFrame(faces, bot, mode, tick) : null;
-  return (
-    <button
-      type="button"
-      className={`sq-floor-crt${off ? " is-off" : ""}`}
-      data-testid={testid}
-      data-face-mode={mode}
-      title={title}
-      disabled={!onOpen}
-      style={{
-        left: rect.x,
-        top: rect.y,
-        width: rect.w,
-        height: rect.h,
-        ...(frame ? { backgroundImage: `url(${FACE_URL(bot, theme)})`, backgroundPosition: `-${frame.x}px -${frame.y}px` } : {}),
-      }}
-      onClick={() => onOpen?.()}
-    />
-  );
-}
-
 function PlateBoxes({ rects, className }: { rects: Rect[]; className?: string }) {
   return (
     <>
@@ -351,7 +239,7 @@ function PlateBoxes({ rects, className }: { rects: Rect[]; className?: string })
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export function SquadFloor({ view, onOpenRiffBot }: SquadFloorProps) {
+export function SquadFloor({ view }: SquadFloorProps) {
   const tower = useMemo(() => towerForView(view), [view]);
   const hub = useMemo(() => hubPinForSquad(view), [view]);
   const pinsByLane = useMemo(() => {
@@ -369,15 +257,9 @@ export function SquadFloor({ view, onOpenRiffBot }: SquadFloorProps) {
   const [cast, setCast] = useState<CastModel | null>(null);
 
   const floorImgOk = useImageOk(FLOOR_URL(theme));
-  const roofImgOk = useImageOk(ROOF_URL(theme));
   const castImgOk = useImageOk(CAST_URL(theme));
   // Front overlays are opt-in per floor.json (`"front": true`); absent → skip.
   const floorFrontOk = useImageOk(floor.front ? FLOOR_FRONT_URL(theme) : null);
-  const top = useMemo(() => topBand(floor), [floor]);
-  const roofFrontOk = useImageOk(top.front ? ROOF_FRONT_URL(theme) : null);
-  const [faces, setFaces] = useState<FacesModel | null>(null);
-  const riffFaceOk = useImageOk(faces?.bots.riffbot ? FACE_URL("riffbot", theme) : null);
-  const overlordFaceOk = useImageOk(faces?.bots.overlord ? FACE_URL("overlord", theme) : null);
   const sheet = cast && castImgOk ? CAST_URL(theme) : null;
 
   // Load the art JSON; missing/invalid → F1 placeholder layout (and no sprites when cast.json is absent).
@@ -390,16 +272,11 @@ export function SquadFloor({ view, onOpenRiffBot }: SquadFloorProps) {
       fetch("/office/cast.json")
         .then((r) => (r.ok ? r.json() : undefined))
         .catch(() => undefined),
-      fetch("/office/faces.json")
-        .then((r) => (r.ok ? r.json() : undefined))
-        .catch(() => undefined),
-    ]).then(([floorJson, castJson, facesJson]) => {
+    ]).then(([floorJson, castJson]) => {
       if (cancelled) return;
       setFloor(floorOrPlaceholder(floorJson));
       const v = validateCast(castJson);
       setCast(v.ok ? v.value : null);
-      const f = validateFaces(facesJson);
-      setFaces(f.ok ? f.value : null);
     });
     return () => {
       cancelled = true;
@@ -436,42 +313,6 @@ export function SquadFloor({ view, onOpenRiffBot }: SquadFloorProps) {
     return () => clearInterval(t);
   }, [reduced]);
   const frameIndex = reduced ? 0 : tick;
-
-  // CRT faces tick at faces.json fps; each bot blinks at random every few seconds. Reduced motion: frozen, no blinking.
-  const hasScreens = !!floor.screens;
-  const [faceTick, setFaceTick] = useState(0);
-  useEffect(() => {
-    if (reduced || !faces || !hasScreens) return;
-    const t = setInterval(() => setFaceTick((n) => n + 1), Math.round(1000 / faces.fps));
-    return () => clearInterval(t);
-  }, [reduced, faces, hasScreens]);
-  const [blinking, setBlinking] = useState<Record<FaceBot, boolean>>({ riffbot: false, overlord: false });
-  useEffect(() => {
-    if (reduced || !hasScreens) {
-      setBlinking({ riffbot: false, overlord: false });
-      return;
-    }
-    let alive = true;
-    const timers: Partial<Record<FaceBot, ReturnType<typeof setTimeout>>> = {};
-    const loop = (bot: FaceBot) => {
-      timers[bot] = setTimeout(() => {
-        if (!alive) return;
-        setBlinking((b) => ({ ...b, [bot]: true }));
-        timers[bot] = setTimeout(() => {
-          if (!alive) return;
-          setBlinking((b) => ({ ...b, [bot]: false }));
-          loop(bot);
-        }, BLINK_MS);
-      }, nextBlinkDelay(Math.random()));
-    };
-    loop("riffbot");
-    loop("overlord");
-    return () => {
-      alive = false;
-      clearTimeout(timers.riffbot);
-      clearTimeout(timers.overlord);
-    };
-  }, [reduced, hasScreens]);
 
   // Closed/archived agents ride the elevator for RIDE_MS on the transition, then vanish.
   type Rider = FlatMember & { start: number };
@@ -513,10 +354,6 @@ export function SquadFloor({ view, onOpenRiffBot }: SquadFloorProps) {
   );
 
   const floorRefs = useRef<(HTMLDivElement | null)[]>([]);
-  // Old top band, only used when floor.json has no `screens` (topBand: screens > penthouse > placeholder penthouse).
-  const penthouse = floor.penthouse ?? placeholderFloor().penthouse!;
-  const screens = floor.screens;
-
   // A rider starts at the elevator of the floor it sat on and rises for RIDE_MS.
   const ridersOn = (floorIndex: number, elevator: Rect): ReactNode =>
     riders
@@ -544,11 +381,6 @@ export function SquadFloor({ view, onOpenRiffBot }: SquadFloorProps) {
         );
       });
 
-  const penthouseItems: BandItem[] = [];
-  const { riffbot: riffAgent, overlord: overlordAgent } = tower.penthouse;
-  if (riffAgent) penthouseItems.push({ agent: riffAgent, anchor: sliceAnchor(penthouse.riffbot.seat), onOpen: () => openAgent(hub?.lane.id ?? "", riffAgent.agentId) });
-  if (overlordAgent) penthouseItems.push({ agent: overlordAgent, anchor: sliceAnchor(penthouse.overlord.seat), onOpen: () => openAgent(hub?.lane.id ?? "", overlordAgent.agentId) });
-
   const bandStyle = (w: number, h: number): CSSProperties => ({
     width: w,
     height: h,
@@ -569,87 +401,6 @@ export function SquadFloor({ view, onOpenRiffBot }: SquadFloorProps) {
     <section className="sq-floor" data-testid="squad-floor" aria-label="Squad floor" ref={rootRef}>
       {scale >= 1 && (
         <div className="sq-floor-tower">
-          {/* Top band: Art10 CRT screens [RiffBot | lift top | Overlord] when floor.json has `screens`, else the old penthouse. */}
-          <div className="sq-floor-band-wrap" style={towerScale(top.w, top.h)}>
-            <div className="sq-floor-band" style={bandStyle(top.w, top.h)}>
-              {screens ? (
-                <Band
-                  cast={cast}
-                  sheet={sheet}
-                  frameIndex={frameIndex}
-                  frontSrc={roofFrontOk ? ROOF_FRONT_URL(theme) : null}
-                  items={[]}
-                  plate={
-                    roofImgOk ? (
-                      <img className="sq-floor-plate" src={ROOF_URL(theme)} alt="" draggable={false} style={{ width: screens.w, height: screens.h }} />
-                    ) : (
-                      <PlateBoxes rects={[screens.riffbot, screens.overlord, screens.elevatorTop]} />
-                    )
-                  }
-                  extras={
-                    <>
-                      <Crt
-                        bot="riffbot"
-                        rect={screens.riffbot}
-                        faces={faces}
-                        sheetOk={riffFaceOk}
-                        theme={theme}
-                        mode={faceMode(tower.penthouse.riffbot, blinking.riffbot)}
-                        tick={reduced ? 0 : faceTick}
-                        off={false}
-                        title="Open RiffBot"
-                        testid="sq-floor-crt-riffbot"
-                        onOpen={hub ? () => void Promise.resolve(onOpenRiffBot(hub)).catch(() => {}) : null}
-                      />
-                      <Crt
-                        bot="overlord"
-                        rect={screens.overlord}
-                        faces={faces}
-                        sheetOk={overlordFaceOk}
-                        theme={theme}
-                        mode={faceMode(tower.penthouse.overlord, blinking.overlord)}
-                        tick={reduced ? 0 : faceTick}
-                        off={!tower.penthouse.overlord}
-                        title={tower.penthouse.overlord ? "Open the Overlord" : "No Overlord running"}
-                        testid="sq-floor-crt-overlord"
-                        onOpen={tower.penthouse.overlord ? () => openAgent(hub?.lane.id ?? "", tower.penthouse.overlord!.agentId) : null}
-                      />
-                      {ridersOn(-1, screens.elevatorTop)}
-                    </>
-                  }
-                />
-              ) : (
-              <Band
-                cast={cast}
-                sheet={sheet}
-                frameIndex={frameIndex}
-                frontSrc={roofFrontOk ? ROOF_FRONT_URL(theme) : null}
-                items={penthouseItems}
-                plate={
-                  <>
-                    {roofImgOk ? (
-                      <img className="sq-floor-plate" src={ROOF_URL(theme)} alt="" draggable={false} style={{ width: penthouse.w, height: penthouse.h }} />
-                    ) : (
-                      <PlateBoxes rects={[penthouse.riffbot.lounge, penthouse.riffbot.seat, penthouse.overlord.crtWall, penthouse.overlord.seat, penthouse.elevatorTop]} />
-                    )}
-                    {hub && (
-                      <button
-                        type="button"
-                        className="sq-floor-lounge"
-                        data-testid="sq-floor-lounge"
-                        title="Open RiffBot"
-                        style={{ left: penthouse.riffbot.lounge.x, top: penthouse.riffbot.lounge.y, width: penthouse.riffbot.lounge.w, height: penthouse.riffbot.lounge.h }}
-                        onClick={() => void Promise.resolve(onOpenRiffBot(hub)).catch(() => {})}
-                      />
-                    )}
-                  </>
-                }
-                extras={ridersOn(-1, penthouse.elevatorTop)}
-              />
-              )}
-            </div>
-          </div>
-
           {/* Floors, top-down in squad pin order, two teams per floor. */}
           {tower.floors.map((f, i) => (
             <div

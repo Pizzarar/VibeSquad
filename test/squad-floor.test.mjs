@@ -245,7 +245,6 @@ test("P3b draw order: plate < y-sorted sprites < front < bubbles; no front layer
   assert.deepEqual(bandLayers(false), ["plate", "sprites", "bubbles"]);
   const src = readFileSync(new URL("../src/SquadFloor.tsx", import.meta.url), "utf8");
   assert.match(src, /floor\.front \? FLOOR_FRONT_URL/);
-  assert.match(src, /top\.front \? ROOF_FRONT_URL/);
   const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
   assert.match(css, /\.sq-floor-front\s*\{[^}]*pointer-events:\s*none/);
 });
@@ -540,18 +539,12 @@ test("P3d blink spacing is random within 3-8 s", () => {
   assert.equal(nextBlinkDelay(-3), BLINK_MIN_MS);
 });
 
-test("P3d wiring: RiffBot screen → hub onOpen, Overlord screen → openPinMember, roof-front over faces, reduced motion stops blink", () => {
-  const src = readFileSync(new URL("../src/SquadFloor.tsx", import.meta.url), "utf8");
-  assert.match(src, /testid="sq-floor-crt-riffbot"\s+onOpen=\{hub \? \(\) => void Promise\.resolve\(onOpenRiffBot\(hub\)\)/);
-  assert.match(src, /testid="sq-floor-crt-overlord"\s+onOpen=\{tower\.penthouse\.overlord \? \(\) => openAgent\(/);
-  assert.match(src, /openPinMember\(pin, agentId\)/);
-  assert.match(src, /off=\{!tower\.penthouse\.overlord\}/); // no live Overlord → dimmed
-  assert.match(src, /if \(reduced \|\| !hasScreens\)/); // no blink under reduced motion
-  assert.match(src, /faces\.json/);
-  // the faces live in the sprites layer; the front overlay layer is drawn after it
-  assert.ok(bandLayers(true).indexOf("sprites") < bandLayers(true).indexOf("front"));
-  const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
-  assert.match(css, /\.sq-floor-crt\.is-off\s*\{[^}]*filter/);
+test("P3d wiring moved (C2b G2): the faces + blink/reduced-motion logic live in useBotFace.ts, the tower draws none", () => {
+  const hook = readFileSync(new URL("../src/useBotFace.ts", import.meta.url), "utf8");
+  assert.ok(hook.includes("if (reduced || !faces)")); // no blink / no ticker under reduced motion
+  assert.ok(hook.includes("faces.json"));
+  const floorSrc = readFileSync(new URL("../src/SquadFloor.tsx", import.meta.url), "utf8");
+  assert.ok(floorSrc.includes("openPinMember(pin, agentId)"));
 });
 
 test("floor nits: riders expire at their own start+RIDE_MS; +N lobby badge draws in the bubbles layer above floor-front", () => {

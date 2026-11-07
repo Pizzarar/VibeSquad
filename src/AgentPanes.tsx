@@ -137,7 +137,7 @@ function TabStrip(props: { pane: Pane; tabs: string[]; activeId: string | null; 
   );
 }
 
-const DrawerSlot = memo(function DrawerSlot(props: {
+export const DrawerSlot = memo(function DrawerSlot(props: {
   id: string;
   pane: Pane;
   shown: boolean;
@@ -185,7 +185,11 @@ function EmptyPane({ pane, focus }: { pane: Pane; focus: boolean }) {
 }
 
 /** `header` (pinned focus view) replaces the tab strips in row 1; the drawer list is unchanged. */
-export const AgentPanes = memo(function AgentPanes({ onSuccessor, header }: { onSuccessor: (id: string) => void; header?: ReactNode }) {
+/**
+ * `excludeIds` (sky-gods hub): agents that another surface already mounts (the sky zones). They are NOT mounted here at all,
+ * so their drawer portals, key handlers and timeline subscriptions exist exactly once.
+ */
+export const AgentPanes = memo(function AgentPanes({ onSuccessor, header, excludeIds }: { onSuccessor: (id: string) => void; header?: ReactNode; excludeIds?: readonly string[] }) {
   const s = usePanes();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -197,15 +201,16 @@ export const AgentPanes = memo(function AgentPanes({ onSuccessor, header }: { on
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+  const mountedIds = excludeIds?.length ? s.mounted.filter((id) => !excludeIds.includes(id)) : s.mounted;
   const paneOf = (id: string): Pane => (s.rightTabs.includes(id) ? "right" : "left");
   return (
     <section className={`agent-panes ${s.split ? "split" : ""} active-${s.activePane}`}>
       {header ?? <TabStrip pane="left" tabs={s.leftTabs} activeId={s.leftActiveId} split={s.split} focus={s.focus} tools={!s.split} />}
       {!header && s.split && <TabStrip pane="right" tabs={s.rightTabs} activeId={s.rightActiveId} split focus={s.focus} tools />}
-      {s.mounted.map((id) => (
+      {mountedIds.map((id) => (
         <DrawerSlot key={id} id={id} pane={paneOf(id)} shown={isShown(s, id)} onSuccessor={onSuccessor} />
       ))}
-      {!s.leftActiveId && <EmptyPane pane="left" focus={s.focus} />}
+      {!s.leftActiveId && !excludeIds && <EmptyPane pane="left" focus={s.focus} />}
       {s.split && !s.rightActiveId && <EmptyPane pane="right" focus={s.focus} />}
     </section>
   );
