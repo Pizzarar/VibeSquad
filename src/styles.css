@@ -4615,6 +4615,36 @@ button.project-file-name:hover { text-decoration: underline; }
 .hub-body:not(.hub-agent-open) .agent-panes .pane-slot { display: none !important; }
 .hub-body.hub-agent-open .agent-panes { grid-row: 1 / span 2; height: 100%; }
 .hub-body .sq-panel { grid-column: 1; grid-row: 3; max-height: 22vh; overflow: auto; }
+/* Queue strip (G3): a row of chips in the clouds above the roof; empty = a thin cloud-height line. */
+.hub-body .sq-strip {
+  position: relative;
+  max-height: 26vh;
+  padding: 8px 18px 10px;
+  border: 0;
+  border-top: 2px solid var(--hot-pink);
+  background: linear-gradient(180deg, var(--sky-low, #3b3278), var(--navy));
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+}
+:root[data-theme="light"] .hub-body .sq-strip { background: linear-gradient(180deg, #eef8ff, var(--navy)); }
+.hub-body .sq-strip.is-empty {
+  height: 14px;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  border-top: 0;
+  background:
+    radial-gradient(ellipse 12% 100% at 18% 0, var(--sky-cloud, rgba(190, 200, 255, 0.22)), transparent 80%),
+    radial-gradient(ellipse 16% 100% at 52% 0, var(--sky-cloud, rgba(190, 200, 255, 0.22)), transparent 80%),
+    radial-gradient(ellipse 12% 100% at 84% 0, var(--sky-cloud, rgba(190, 200, 255, 0.22)), transparent 80%),
+    var(--sky-low, #3b3278);
+}
+:root[data-theme="light"] .hub-body .sq-strip.is-empty { --sky-cloud: rgba(255, 255, 255, 0.85); --sky-low: #eef8ff; }
+.hub-body .sq-strip .sq-head { flex: none; margin: 0; align-self: center; flex-direction: column; align-items: center; gap: 2px; }
+.hub-body .sq-strip .sq-rows { flex-direction: row; overflow-x: auto; flex: 1; min-width: 0; }
+.hub-body .sq-strip .sq-row { flex: none; width: 300px; background: var(--navy); }
+.hub-body .sq-strip .attn-err { flex: none; align-self: center; }
 .hub-body .sq-floor {
   grid-column: 1 / -1;
   grid-row: 4;

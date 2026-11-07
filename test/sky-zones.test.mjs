@@ -87,3 +87,25 @@ test("sky look: CSS gradient sky, CSS bezel, both themes, reduced motion freezes
   assert.ok(hook.includes("blinking && !reduced"));
   assert.ok(hook.includes("reduced ? 0 : tick"));
 });
+
+// ── G3 queue strip ───────────────────────────────────────────────────────────
+import { queueStripState } from "../src/skyZonesLogic.ts";
+
+test("queue strip collapses to a thin line when empty, opens with items", () => {
+  assert.equal(queueStripState(0), "empty");
+  assert.equal(queueStripState(1), "open");
+  assert.equal(queueStripState(7), "open");
+  const q = src("SquadQueue.tsx");
+  // Empty strip renders no head/rows/"Nobody needs you" body at all: just the thin aside.
+  assert.ok(/variant === "strip" && queueStripState\(items\.length\) === "empty"\) \{\s*return <aside[^>]*sq-strip is-empty[^>]*\/>/.test(q));
+  const css = src("styles.css");
+  assert.ok(/\.hub-body \.sq-strip\.is-empty \{[^}]*height: 14px/.test(css));
+  assert.ok(src("App.tsx").includes('<SquadQueue view={pinFocusView} variant="strip" />'));
+});
+
+test("queue strip order is unchanged: permissions first, then oldest first (shared squadQueue)", () => {
+  const q = src("SquadQueue.tsx");
+  assert.ok(q.includes("squadQueue(view.members)"));
+  const items = src("attentionItems.ts");
+  assert.ok(/export function squadQueue/.test(items));
+});

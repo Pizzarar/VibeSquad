@@ -2003,7 +2003,7 @@ export function App() {
         <div className={`hub-body${hubAgentOpen ? " hub-agent-open" : ""}`} data-testid="hub-body">
           {panesNode}
           {pinFocusView && !hubAgentOpen && <SkyZones view={pinFocusView} onSuccessor={paneSuccessor} onStartRiffBot={onQuickStart} />}
-          {pinFocusView && <SquadQueue view={pinFocusView} />}
+          {pinFocusView && <SquadQueue view={pinFocusView} variant="strip" />}
           {pinFocusView && <SquadFloor view={pinFocusView} />}
         </div>
       ) : (

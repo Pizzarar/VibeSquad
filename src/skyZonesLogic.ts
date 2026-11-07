@@ -38,3 +38,7 @@ export function skyZoneIds(zones: SkyZones): string[] {
 export type OverlordState = "live" | "none";
 export const overlordState = (zones: SkyZones): OverlordState => (zones.overlord.member ? "live" : "none");
 export const NO_OVERLORD_TEXT = "no Overlord on duty";
+
+/** The queue strip in the clouds: a thin cloud-height line while nobody needs you, the full chip row otherwise. */
+export type QueueStripState = "empty" | "open";
+export const queueStripState = (count: number): QueueStripState => (count > 0 ? "open" : "empty");

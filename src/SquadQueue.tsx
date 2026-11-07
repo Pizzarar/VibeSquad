@@ -8,6 +8,7 @@ import { bumpAgents, clearAgentAttention, clearNeedsYou, snoozeNeedsYou } from "
 import { openPinMember } from "./pinFocus";
 import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import { Avatar } from "./pixel";
+import { queueStripState } from "./skyZonesLogic";
 import type { Member, TeamView } from "./teams";
 
 const deps: AttentionDeps = {
@@ -80,7 +81,8 @@ function Row({ item, member, lane, now, onOpen, onError }: { item: AttentionItem
   );
 }
 
-export function SquadQueue({ view }: { view: TeamView }) {
+/** `strip` = the sky-gods hub (docs/PLAN_SKY_GODS_C2B.md G3): a horizontal row in the clouds above the roof that collapses to a thin line when empty. */
+export function SquadQueue({ view, variant = "panel" }: { view: TeamView; variant?: "panel" | "strip" }) {
   const [err, setErr] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -93,8 +95,11 @@ export function SquadQueue({ view }: { view: TeamView }) {
   const pins: Pin[] = [...pinned, ...done, ...(hub ? [hub] : [])];
   const byId = new Map(view.members.map((m) => [m.agent.id, m]));
   const laneName = (m: Member | undefined) => view.team.lanes.find((l) => l.id === m?.laneId)?.name ?? (m?.laneId ? m.laneId : "RiffBot");
+  if (variant === "strip" && queueStripState(items.length) === "empty") {
+    return <aside className="sq-panel sq-strip is-empty" data-testid="squad-queue" data-strip="empty" aria-label="Needs you: nobody" title="Nobody needs you" />;
+  }
   return (
-    <aside className="sq-panel" data-testid="squad-queue" aria-label="Needs you">
+    <aside className={`sq-panel${variant === "strip" ? " sq-strip" : ""}`} data-testid="squad-queue" data-strip={variant === "strip" ? "open" : undefined} aria-label="Needs you">
       <div className="sq-head">
         <b>Needs you</b>
         <span className="muted small">{items.length}</span>
