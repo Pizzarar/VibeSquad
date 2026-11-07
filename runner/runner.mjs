@@ -85,7 +85,7 @@ export function providerFamily(provider) {
 export class Runner {
   // limitsFile: where limit-window records go (default: limits.jsonl next to the agents dir, i.e. the runner home).
   // pollAgy: after antigravity-cli turns, poll `agy -p /usage` (ACP carries no quota); only the real server turns it on.
-  constructor({ dir, adapters = defaultAdapters(), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv() }) {
+  constructor({ dir, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts') }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv() }) {
     this.store = new LogStore(dir);
     this.folds = new Map(); // id -> log-derived status (no liveness), valid while the log file's size + mtime are unchanged
     this.limits = new LimitStore(limitsFile);
@@ -648,6 +648,7 @@ export class Runner {
       }
     }
     this.store.append(id, 'archive', {});
+    for (const a of new Set(Object.values(this.adapters))) a.cleanup?.(id); // drop per-agent prompt file; a resume rewrites it
     this._pump();
   }
 

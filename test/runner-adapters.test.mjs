@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Runner, defaultAdapters } from '../runner/runner.mjs';
@@ -293,3 +293,38 @@ for (const [label, opts] of [['no load advertised', { caps: {} }], ['load fails'
     assert.ok(state.lastPrompt.length < 9000);
   });
 }
+
+test('claude: a 60k system prompt goes via --append-system-prompt-file, never argv, on start and resume', () => {
+  const promptsDir = path.join(tmp(), 'prompts');
+  const prompt = ('Role prompt ünïcode ✓ ' + 'x'.repeat(100)).repeat(600).slice(0, 60000);
+  assert.equal(prompt.length, 60000);
+  for (const resume of [undefined, 'sess-1']) {
+    const spawnImpl = fakeSpawn();
+    const adapter = createClaudeAdapter({ spawnImpl, mcp: false, promptsDir });
+    adapter.start({ id: 'rn-big', cwd: '.', systemPrompt: prompt, emit() {}, onExit() {}, ...(resume ? { resume } : {}) });
+    const { args } = spawnImpl.calls[0];
+    const i = args.indexOf('--append-system-prompt-file');
+    assert.ok(i >= 0, 'file flag present');
+    assert.ok(!args.includes('--append-system-prompt'));
+    assert.ok(args.every((a) => !a.includes('Role prompt')), 'no prompt text in argv');
+    assert.ok(args.join(' ').length < 8000, `argv ${args.join(' ').length}`);
+    if (resume) assert.equal(args[args.indexOf('--resume') + 1], 'sess-1');
+    const buf = readFileSync(args[i + 1]);
+    assert.notEqual(buf[0], 0xef, 'no BOM');
+    assert.equal(buf.toString('utf8'), prompt);
+    adapter.cleanup('rn-big');
+    assert.ok(!existsSync(args[i + 1]), 'cleanup removes the file');
+  }
+});
+
+test('Runner: prompt file lives under <home>/prompts, is rewritten on resume, and archive removes it', async () => {
+  const home = tmp();
+  const spawnImpl = fakeSpawn();
+  const runner = new Runner({ dir: path.join(home, 'agents'), adapters: defaultAdapters({ spawnImpl, mcp: false, promptsDir: path.join(home, 'prompts') }) });
+  const id = runner.create({ provider: 'claude', cwd: '.', systemPrompt: 'PROMPT-A' });
+  const file = spawnImpl.calls[0].args[spawnImpl.calls[0].args.indexOf('--append-system-prompt-file') + 1];
+  assert.equal(path.dirname(file), path.join(home, 'prompts'));
+  assert.equal(readFileSync(file, 'utf8'), 'PROMPT-A');
+  runner.archive(id);
+  assert.ok(!existsSync(file), 'archive removed the prompt file');
+});
