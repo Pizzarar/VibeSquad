@@ -8,9 +8,19 @@ import {
   findLanePlanFile,
   readBrainstormSummary,
 } from "./brainstorm.mjs";
-import { effectiveAgentRole, formatDisplayTitle, isDigestAgent, isRetiredAgent, laneCodeFor, ordOf } from "./identity.mjs";
+import {
+  effectiveAgentRole,
+  findLaneInRegistry,
+  findTeamInRegistry,
+  formatDisplayTitle,
+  isDigestAgent,
+  isRetiredAgent,
+  laneCodeFor,
+  loadTeamsRegistry,
+  ordOf,
+} from "./identity.mjs";
 import { listDaemonAgents } from "./detach-children.mjs";
-import { getBackend, isRunnerId } from "./backend/index.mjs";
+import { getBackend, isRunnerId, readRunnerAgentSync } from "./backend/index.mjs";
 import { sharedSchedules } from "./schedules.mjs";
 // Re-exported: the HTTP handoff used `backend.listAgents`, which DaemonClient lacks, so workers were never re-pointed.
 export { listDaemonAgents };
@@ -28,7 +38,7 @@ export const LEAD_HARD_CAP_DEFAULT = 300_000;
 
 export const SOFT_FLAG_REASON = "Lead at 150k+ tokens: wrap up and hand off at a good stopping point";
 export const SOFT_FLAG_NUDGE =
-  "Wrap up: stop dispatching new blocks, let in-flight workers finish, write your handoff doc.";
+  "Wrap up: stop dispatching new blocks, let in-flight workers finish, write your Judgment in the packet, then run handoff_lead.";
 export const WRITE_HANDOFF_PROMPT =
   "Write handoff now: run 'vs handoff' and finish your turn so VS can auto-handoff.";
 export const TAKEOVER_CONFIRM_INSTRUCTION =
@@ -628,7 +638,9 @@ export function createLeadHandoffCoordinator(deps = {}) {
     }
 
     timer.mark("createAgent");
-    const successorId = created?.id || `lead-${laneId}-ord${nextOrd}-${Date.now().toString(36)}`;
+    // No real successor id -> nothing was spawned: fail before re-parenting workers or touching the old lead.
+    const successorId = String(created?.id ?? "").trim();
+    if (!successorId) throw new Error(`lead-handoff: successor spawn for lane "${laneId}" returned no agent id; old lead ${oldLead.id} left in place`);
     const successor = {
       id: successorId,
       title: created?.title || newTitle,
@@ -809,13 +821,20 @@ export function createLeadHandoffCoordinator(deps = {}) {
       return { ...(prev ?? {}), ok: true, stage: "self", triggered: false, deduped: true, reason: "already-handed-off" };
     }
     selfHandedOff.add(lead.id);
-    const res = await spawnSuccessor({
-      oldLead: lead,
-      trigger: "self",
-      retireImmediately: Boolean(options.retireImmediately),
-      forceSynthesize: Boolean(options.forceSynthesize),
-      job: options.job,
-    });
+    let res;
+    try {
+      res = await spawnSuccessor({
+        oldLead: lead,
+        trigger: options.trigger === "buddy" ? "buddy" : "self",
+        retireImmediately: Boolean(options.retireImmediately),
+        forceSynthesize: Boolean(options.forceSynthesize),
+        job: options.job,
+      });
+    } catch (err) {
+      selfHandedOff.delete(lead.id); // a failed spawn must stay retryable
+      throw err;
+    }
+    if (res?.ok === false) selfHandedOff.delete(lead.id);
     return { stage: "self", triggered: !res.deduped, ...res };
   }
 
@@ -1082,10 +1101,42 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
     }
     if (!lead || !lead.id) throw new Error(`lead agent not found: ${body.agentId || body.laneId || body.lane || "vibesquad"}`);
     if (!body.oldLead && effectiveAgentRole(lead) !== "lead") throw new Error(`not a lead: ${lead.id}`);
+    // A Buddy or lead hands off a live lead: the target must be one (not archived, closed or already retired).
+    if ((trigger === "buddy" || trigger === "self") && (lead.archivedAt || lead.status === "closed" || isRetiredAgent(lead))) {
+      throw new Error(`lead-handoff: ${lead.id} is not a live lead`);
+    }
+    // Defence in depth: the handoff_lead tool sends callerId, so re-check it from the caller's own record. Local-token holders
+    // are the owner by design and stay trusted; legacy calls without callerId (auto/soft triggers) are unchanged.
+    if (body.callerId && (trigger === "buddy" || trigger === "self")) {
+      const forbid = (why) => Object.assign(new Error(`lead-handoff: forbidden: ${why}`), { status: 403 });
+      const callerId = String(body.callerId);
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(callerId)) throw forbid("bad callerId");
+      if (trigger === "self") {
+        if (callerId !== lead.id) throw forbid("a lead may only hand off itself");
+      } else {
+        let caller = Array.isArray(body.agents) ? body.agents.map((a) => a?.agent ?? a).find((a) => a?.id === callerId) ?? null : null;
+        if (!caller && isRunnerId(callerId)) caller = readRunnerAgentSync(callerId);
+        if (!caller && connected && client && typeof backend.fetchAgent === "function") {
+          caller = (await backend.fetchAgent(callerId).catch(() => null))?.agent ?? null;
+        }
+        if (!caller) throw forbid("caller not found");
+        if (effectiveAgentRole(caller) !== "brainstorm" || isRetiredAgent(caller)) throw forbid("caller is not a live Buddy");
+        const teams = loadTeamsRegistry(rootDir);
+        const laneOf = (a) => findLaneInRegistry(String(a.labels?.lane || a.labels?.lead || ""), teams)?.lane;
+        const callerLane = laneOf(caller);
+        const leadLane = laneOf(lead);
+        const callerTeam = findTeamInRegistry(String(caller.labels?.team || ""), teams);
+        const leadTeam = findTeamInRegistry(String(lead.labels?.team || ""), teams);
+        if (!callerLane || !leadLane || callerLane.id !== leadLane.id || !callerTeam || !leadTeam || callerTeam.id !== leadTeam.id) {
+          throw forbid("caller is not a Buddy of the lead's lane");
+        }
+      }
+    }
 
     const handoffPromise =
-      trigger === "self"
+      trigger === "self" || trigger === "buddy"
         ? coordinator.triggerSelfHandoff(lead, {
+            trigger,
             retireImmediately: Boolean(body.retireImmediately),
             forceSynthesize: Boolean(body.forceSynthesize),
             job: body.job,
@@ -1098,10 +1149,11 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
     const waitMs = body.async === true ? 0 : typeof body.httpWaitMs === "number" ? body.httpWaitMs : null;
     if (waitMs !== null) {
       const TIMEOUT = Symbol("timeout");
+      let timer;
       const raced = await Promise.race([
         handoffPromise,
-        new Promise((r) => setTimeout(() => r(TIMEOUT), Math.max(0, waitMs))),
-      ]);
+        new Promise((r) => { timer = setTimeout(() => r(TIMEOUT), Math.max(0, waitMs)); }),
+      ]).finally(() => clearTimeout(timer));
       if (raced === TIMEOUT) {
         backgroundHandoff = handoffPromise.catch(() => {});
         const { teamId, laneId, laneName } = resolveTeamAndLane(lead, rootDir);

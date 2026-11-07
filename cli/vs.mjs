@@ -304,7 +304,7 @@ function parseArgs(argv) {
 
 const UNASSIGNED_LANE = "unassigned";
 
-function resolveIdentity(flags) {
+function resolveIdentity(flags, { recordWins = false } = {}) {
   const agentId = String(flags.agent ?? process.env.PASEO_AGENT_ID ?? process.env.VS_AGENT_ID ?? "").trim();
 
   // rn- ids belong to the runner: read its log (labels/role/lane).
@@ -315,7 +315,8 @@ function resolveIdentity(flags) {
   const cwd = record?.cwd || process.cwd();
 
   const pick = (flagName, envName) => {
-    const value = flags[flagName] ?? process.env[envName];
+    // recordWins (handoff_lead): a runner record's labels are the caller's identity; VS_* env only fills in when there is no record.
+    const value = flags[flagName] ?? (recordWins && record ? undefined : process.env[envName]);
     return typeof value === "string" && value.trim() ? value.trim() : "";
   };
 
@@ -483,6 +484,7 @@ Usage:
   vs task set <unit-id> [--goal <g>] [--files <f1,f2>] [--done-check <cmd>] [--status <todo|running|done|blocked>] [--branch <b>] [--commit <sha>]
   vs cap [list | add <provider> | clear <provider>]
   vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" [--cwd <dir>]   start a worker in your lane
+  vs lead handoff [--lane <code>]   hand the lane's lead to a successor (Buddy: its own lane's lead; lead: itself)
   vs send <agent> "<text>"   message an agent
   vs status <agent>   status + last assistant message
   vs wait <agent> [--timeout <seconds>]   block until idle (exit 0), error or blocked (1), timeout (2); no limit by default
@@ -1694,6 +1696,8 @@ export async function runAgentVerb(verb, flags, ctx) {
       prompt: flags.prompt ?? flags._.join(" "),
       ...(flags.cwd ? { cwd: path.resolve(String(flags.cwd)) } : {}),
     };
+  } else if (verb === "handoff_lead") {
+    args = flags.lane ? { lane: String(flags.lane) } : {};
   } else if (verb === "send") {
     args = { id, text: flags._.slice(1).join(" ") };
   } else {
@@ -1703,18 +1707,25 @@ export async function runAgentVerb(verb, flags, ctx) {
   return callTool(ctx, tool, args);
 }
 
-async function commandAgentVerb(verb, flags) {
+export async function commandAgentVerb(verb, flags, makeContext = createContext, out = (s) => process.stdout.write(s)) {
+  if (verb === "lead") {
+    if (flags._.shift() !== "handoff") throw new Error("usage: vs lead handoff [--lane <code>]");
+    verb = "handoff_lead";
+  }
   if (verb === "spawn" && (!flags.profile || !(flags.prompt ?? flags._.length))) {
     throw new Error('usage: vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" [--cwd <dir>]');
   }
   if (verb === "send" && (!flags._[0] || flags._.length < 2)) throw new Error('usage: vs send <agent> "<text>"');
   if (verb === "status" && !flags._[0]) throw new Error("usage: vs status <agent>");
-  const identity = resolveIdentity(flags);
-  const ctx = createContext({
+  // handoff_lead: --lane names only the TARGET lane (runAgentVerb reads it); the caller's identity comes from
+  // VS_AGENT_ID -> its record labels / VS_* env, never from --agent/--role/--team/--lane/--ord.
+  const { agent: _a, role: _r, team: _t, lane: _l, ord: _o, ...callerFlags } = flags;
+  const identity = verb === "handoff_lead" ? resolveIdentity(callerFlags, { recordWins: true }) : resolveIdentity(flags);
+  const ctx = makeContext({
     identity: { agentId: identity.agentId, team: identity.team.id, lane: identity.lane, role: identity.role },
   });
   const result = await runAgentVerb(verb, flags, ctx);
-  process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+  out(JSON.stringify(result, null, 2) + "\n");
   return 0;
 }
 
@@ -2121,7 +2132,7 @@ function main(argv) {
     if (command === "worktree") return commandWorktree(flags);
     if (command === "lesson" || command === "lessons") return commandLesson(flags);
     if (command === "wait") return commandWait(flags);
-    if (command === "spawn" || command === "send" || command === "status") return commandAgentVerb(command, flags);
+    if (command === "spawn" || command === "send" || command === "status" || command === "lead") return commandAgentVerb(command, flags);
     if (command === "mcp") return commandMcp(flags);
     if (command === "install-shim") return commandInstallShim(flags);
     if (command === "open") return commandOpen(flags);
