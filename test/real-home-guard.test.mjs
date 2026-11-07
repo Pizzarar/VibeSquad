@@ -49,3 +49,24 @@ test("runner client on the real home: no discovery, no request, no start", async
     prev === undefined ? delete process.env.VIBESQUAD_HOME : (process.env.VIBESQUAD_HOME = prev);
   }
 });
+
+test("the checkout's own teams.json is skipped under a test runner; a temp root keeps its teams.json", async () => {
+  const { isForbiddenRepoLocalTeams } = await import("../server/test-guard.mjs");
+  const { mkdtempSync, writeFileSync, rmSync, existsSync } = await import("node:fs");
+  const root = path.resolve(import.meta.dirname, "..");
+  assert.ok(isForbiddenRepoLocalTeams(root));
+  assert.ok(!isForbiddenRepoLocalTeams(root, {}));
+  assert.ok(!isForbiddenRepoLocalTeams(root, { NODE_TEST_CONTEXT: "x", VS_ALLOW_REAL_HOME: "1" }));
+  const prev = { f: process.env.VIBESQUAD_TEAMS_FILE, i: process.env.VIBESQUAD_IGNORE_HOME_TEAMS };
+  delete process.env.VIBESQUAD_TEAMS_FILE;
+  process.env.VIBESQUAD_IGNORE_HOME_TEAMS = "1";
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "vs-root-"));
+  try {
+    writeFileSync(path.join(tmp, "teams.json"), "{}");
+    assert.equal(resolveTeamsFilePath(tmp), path.join(tmp, "teams.json"));
+    assert.equal(resolveTeamsFilePath(root), path.join(root, "teams.example.json"), existsSync(path.join(root, "teams.json")) ? "local teams.json present and skipped" : "no local teams.json");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+    for (const [k, v] of [["VIBESQUAD_TEAMS_FILE", prev.f], ["VIBESQUAD_IGNORE_HOME_TEAMS", prev.i]]) v === undefined ? delete process.env[k] : (process.env[k] = v);
+  }
+});
