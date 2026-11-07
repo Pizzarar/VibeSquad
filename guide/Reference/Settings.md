@@ -2,7 +2,7 @@
 
 What each area of VibeSquad's Settings window does, when to touch it, and the safe default. If a setting isn't listed here, you don't need it yet.
 
-Open it from the **⚙ SETTINGS** button in a Squad's header in VibeSquad. It opens a **Settings** page with a list of tabs down the left (App, Chat, Notifications, New Agent defaults, Keybindings, Team, Remote Control, Paseo, Profiles, About) and a search box. Section names below are the labels you will see on screen; if one is not where you expect, click through the tabs or search for it. Where things live: **YOUR NAME** and **ALLOW OTHER DEVICES** are on the **Team** tab, **DISPLAY & 4K UI SCALE** is on **App**, and **UPDATE CHANNEL** is on **About**. (The screenshot below was taken before they were split across tabs, so it shows them stacked on one page.)
+Open it from the **⚙ SETTINGS** button in a Squad's header in VibeSquad. It opens a **Settings** page with a list of tabs down the left (App, Chat, Notifications, New Agent defaults, Keybindings, Team, Remote Control, Runner & Providers, Profiles, About) and a search box. Section names below are the labels you will see on screen; if one is not where you expect, click through the tabs or search for it. Where things live: **YOUR NAME** and **ALLOW OTHER DEVICES** are on the **Team** tab (the **Remote Control** tab has the full pairing flow, below), **DISPLAY & 4K UI SCALE** is on **App**, and **UPDATE CHANNEL** is on **About**. (The screenshot below was taken before they were split across tabs, so it shows them stacked on one page.)
 
 ![Settings, top: Your name, Allow other devices, Update channel and Display & 4K UI scale](../assets/screenshots/07a-settings-top.png)
 
@@ -39,6 +39,16 @@ How you update on Stable: a bar across the top of the window says **Update avail
 - **Change it when:** you want the newest fixes early and can live with the odd rough edge. Switch back to Stable if it gets annoying.
 - **Safe default:** Stable.
 
+### Unstick VibeSquad and Restart runner
+
+Both are on the **About** tab, on the host PC only (they don't show on a remotely connected device).
+
+- **Unstick VibeSquad**: for when sends stall. It kills stray node processes (never VibeSquad's own server, the runner, MCP servers or live agents) and restarts the runner if it is down. It then reports how many it killed and whether the runner is healthy or DOWN (and "(restarted)" if it brought it back). If the runner isn't responding, it asks "Runner not responding — restart it? Running agents stop; Spin Up resumes them in place." and offers a **Restart runner** button.
+- **Restart runner**: for when runner fixes aren't going live. It restarts the runner so the latest runner code loads. Pressing it asks first: "Restart runner? Running turns are cancelled; agents resume on next message." Choose **Restart now** or **Cancel**. Afterwards it says "Runner restarted" and how many turns it cancelled.
+
+- **Change it when:** a send hangs (try **Unstick VibeSquad** first), or after an update the runner still behaves like the old version (**Restart runner**).
+- **Safe default:** don't press either while an agent is mid-turn that you care about, since a restart cancels running turns.
+
 ## Profiles
 
 ![AGENT PROFILES and the squad editor in Settings](../assets/screenshots/07e-settings-profiles.png)
@@ -53,8 +63,6 @@ The fields:
 - **THINKING**: how hard the model thinks: `low`, `medium`, `high` or `default`. More thinking is slower and costs more.
 - **FEATURE VALUES (JSON)**: extra provider options as JSON. Leave it alone unless a guide tells you what to put there.
 - **NOTES (PROJECT-NEUTRAL SYSTEM PROMPT LAYER)**: standing instructions added to every agent that uses this profile. Keep them general, not about one project. If a note looks project-specific, a warning appears under the box.
-
-**Re-import / Sync from Paseo** pulls profiles from Paseo's own config. A "Diff detected" hint appears when the two disagree.
 
 - **Change it when:** you want a cheaper model for simple jobs, or a stricter mode for risky ones.
 - **Safe default:** keep the profiles VibeSquad gave you and change one field at a time.
@@ -83,33 +91,28 @@ An amber **⚠ CONFIG WARNING** box appears at the top only when a config file c
 - **Change it when:** it appears. Fix the file it names, or restore a backup, then reopen Settings. It appears on the **Team** tab (read from the source; UNVERIFIED on a real broken config).
 - **Safe default:** nothing to set. No box means no problem.
 
-## Paseo
+## Runner & Providers
 
-![PASEO SETTINGS, Daemon tab: Start, Reload config, Restart, Stop and the two checkboxes](../assets/screenshots/07g-settings-paseo-daemon.png)
+The runner is the background program that actually runs your agents. This tab lists the providers it can start (Claude Code, Codex and so on). VibeSquad finds them by probing the command-line tools installed on this PC. Each provider has a status pill, its version when known, and an **Enabled** checkbox. Three fields let you add to what the pickers offer:
 
-Paseo is the background program (the daemon) that actually runs your agents. **PASEO SETTINGS** edits its config and shows its status. A pill at the top says **RUNNING** with a version, or **STOPPED**. This section only appears when VibeSquad is the host, meaning the PC the daemon runs on.
+- **EXTRA MODELS (comma-separated)**: model names to add to the list.
+- **EXTRA MODES (comma-separated)**: modes to add to the list.
+- **DEFAULT MODEL**: the model used when none is chosen.
 
-The Daemon tab shows the version, the address it listens on, uptime, who manages it (VibeSquad-managed, External daemon or Stopped) and how many agents are live and busy. Its buttons:
+**Save runner settings** writes these to `~/.vibesquad/settings.json` and keeps every other key there. **Reload** re-reads them. Below that, **RUNNER USAGE** totals agent logs, turns and cost, with a chip per model and per lane. This tab only shows on the host PC. On a device connected remotely it is hidden, and runner settings live on the host.
 
-- **Start**: starts the daemon. Greyed out while it runs.
-- **Reload config**: re-reads the config without stopping anything.
-- **Restart**: stops and starts it. If agents are busy the button shows how many and asks you to confirm, because it interrupts them.
-- **Stop**: shuts it down, with the same busy check.
+- **Change it when:** a provider you installed isn't offered, or you want a model that isn't in the list.
+- **Safe default:** leave everything as found. Untick **Enabled** only for a provider you never want offered.
 
-Two checkboxes:
+## Remote Control
 
-- **Keep Paseo running when VibeSquad quits**: agents carry on after you close the window. On by default. A daemon VibeSquad didn't start is never stopped.
-- **Start Paseo with VibeSquad**: starts the local daemon when VibeSquad launches, if it isn't already running.
+The **Remote Control** tab lets paired phones, tablets and laptops open VibeSquad over your home network or a meshnet VPN. It has three parts:
 
-- **Change it when:** an agent seems stuck (try Reload config, then Restart when nothing is busy), or you want the daemon to start and stop with the app.
-- **Safe default:** leave both checkboxes as they are. Never press Stop or Restart while agents are busy unless you mean it.
+- **REMOTE CONTROL & REMOTE ACCESS**: the master switch, **Enabled** or **Off**. If a device reports that remote access is off on the PC, this is the one to turn on.
+- **DIRECT HOME LAN / NORDVPN MESHNET**: **Enabled** or **Off (loopback only)**. When on, VibeSquad serves HTTPS on port 4180 to your home network or meshnet and lists the addresses it is active on.
+- **LINK / PAIR A DEVICE**: the button **📱 Link / Pair a Device (QR & 6-Digit Code)** opens a window with a QR code and a 6-digit pairing code that expires after a short time. Scan the QR or type the code on the other device, and generate a new one when it expires. The window also shows the server addresses to type into the other device. A phone or browser may first need a one-time certificate step, which the same window explains.
 
-### Network
+Pairing is always required, even with the network switch on. Treat the code like a password: don't post it, or a screenshot of it, anywhere.
 
-The Network & Remote tab sets who can reach the daemon.
-
-- **This PC only (127.0.0.1:6767)** or **LAN (…)**: pick the address, then **Save listen**. A change needs a restart, and a banner with **Restart daemon now** appears.
-- **CORS ALLOWED ORIGINS**: web pages allowed to talk to the daemon. **+ Add origin** adds one.
-- **PASEO RELAY**: encrypted remote access through Paseo's relay. Leave it as it is unless you want to reach your agents away from home.
-
-Pair this with the LAN checkbox above. Leave all of it on its defaults unless you are setting up another device.
+- **Change it when:** you want to use VibeSquad from your phone or a second PC.
+- **Safe default:** off. Turn it on only on a network you trust.
