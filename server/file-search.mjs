@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, isAbsolute, join, parse, resolve, sep } from "node:path";
+import { basename, delimiter, isAbsolute, join, parse, resolve, sep } from "node:path";
 
 // Quick open (GET /__vibesquad/files) and find in files (GET /__vibesquad/search) for the Files dock.
 // The Paseo daemon has no content-search RPC, so both run here: `git ls-files` / `git grep` (git is always
@@ -416,7 +416,7 @@ export function findInWorktrees(cwd, rel, candidates) {
 }
 
 /** `worktreesFor(cwd)` (optional) lists the lane's other worktrees to try when the file is missing under cwd. */
-export function handleFsRead(req, res, roots, sendJson, worktreesFor) {
+export function handleFsRead(req, res, roots, sendJson, worktreesFor, labelFor = (d) => basename(d)) {
   if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
   const params = new URL(req.url, "http://x").searchParams;
   const c = confineReq(params.get("cwd") ?? "", roots);
@@ -427,7 +427,9 @@ export function handleFsRead(req, res, roots, sendJson, worktreesFor) {
   if (r.error && r.status === 404 && worktreesFor) {
     const alt = findInWorktrees(c.cwd, params.get("path") ?? "", worktreesFor(c.cwd));
     if (alt.ambiguous) {
-      return sendJson(res, 409, { ok: false, error: `ambiguous: ${alt.ambiguous.length} worktrees have this file (${alt.ambiguous.join(", ")})`, matches: alt.ambiguous });
+      const rel = normalizeRel(params.get("path") ?? "").rel;
+      const matches = alt.ambiguous.map((d) => `${labelFor(d)}/${rel}`); // never raw host paths
+      return sendJson(res, 409, { ok: false, error: `ambiguous: ${matches.length} worktrees have this file (${matches.join(", ")})`, matches });
     }
     if (alt.found) r = fsRead(alt.found.cwd, alt.found.rel, max);
   }

@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, realpathSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleFsRead, findInWorktrees } from "../server/file-search.mjs";
-import { laneWorktreeCandidates } from "../server/vibesquad-api.mjs";
+import { laneWorktreeCandidates, worktreeLabel } from "../server/vibesquad-api.mjs";
 
 const base = realpathSync(mkdtempSync(join(tmpdir(), "vs-lwl-")));
 const main = join(base, "projects", "Repo");
@@ -17,10 +17,16 @@ writeFileSync(join(wtA, "scratch/shots/both.png"), "A");
 writeFileSync(join(wtB, "scratch/shots/both.png"), "B");
 writeFileSync(join(main, "scratch/shots/local.png"), "M");
 
+const outside = realpathSync(mkdtempSync(join(tmpdir(), "vs-lwl-out-")));
+mkdirSync(join(outside, "scratch"), { recursive: true });
+writeFileSync(join(outside, "scratch/escaped.png"), "X");
+let junction = true;
+try { symlinkSync(outside, join(sanct, "Repo", "evil"), "junction"); } catch { junction = false; }
+
 const call = (cwd, path, roots, wts) => {
   const out = {};
   const res = { statusCode: 0, headers: {}, setHeader() {}, end(b) { out.body = b; } };
-  handleFsRead({ method: "GET", url: `/x?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}` }, res, roots, (r, st, j) => { out.status = st; out.json = j; }, wts);
+  handleFsRead({ method: "GET", url: `/x?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}` }, res, roots, (r, st, j) => { out.status = st; out.json = j; }, wts, (d) => worktreeLabel(d, sanct));
   out.status ??= res.statusCode;
   return out;
 };
@@ -45,6 +51,8 @@ test("ambiguous match is refused and lists the worktrees", () => {
   assert.equal(r.status, 409);
   assert.equal(r.json.matches.length, 2);
   assert.match(r.json.error, /ambiguous/);
+  assert.deepEqual([...r.json.matches].sort(), ["art-a/scratch/shots/both.png", "art-b/scratch/shots/both.png"]);
+  assert.ok(!JSON.stringify(r.json).includes(base), "no raw host paths in the reply");
 });
 
 test("missing everywhere stays 404; traversal still refused", () => {
@@ -56,4 +64,9 @@ test("missing everywhere stays 404; traversal still refused", () => {
 
 test("candidate that is a drive/home root is ignored", () => {
   assert.deepEqual(findInWorktrees(main, "scratch/shots/only-a.png", [join(base, "..")]), {});
+});
+
+test("a sanctuary entry that is a junction out of the sanctuary is skipped", { skip: !junction }, () => {
+  assert.ok(!cands(main).some((d) => d.includes("evil") || d === outside));
+  assert.equal(call(main, "scratch/escaped.png", [main], cands).status, 404);
 });
