@@ -1,6 +1,9 @@
 // Claude NATIVE adapter: one `claude` CLI child per agent in stream-json mode, stdin kept open
 // for multi-turn. Chosen over @anthropic-ai/claude-agent-sdk because the SDK is not a
 // dependency here and the CLI already gives exactly one child per agent.
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { killTree, spawnNoShell } from '../spawn.mjs';
 import { lineReader } from './lines.mjs';
 import { mcpServerSpec, mcpServerPath } from './mcp.mjs';
@@ -11,11 +14,14 @@ export const CLAUDE_PERMISSION_MODES = ['default', 'acceptEdits', 'plan', 'bypas
 export const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']; // claude --effort levels
 export const effectivePermissionMode = (meta = {}) => meta.permissionMode || DEFAULT_PERMISSION_MODE;
 
-export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true, mcpPath = mcpServerPath() } = {}) {
+// promptsDir: <runner home>/prompts (the Runner passes it); the tmpdir fallback only serves adapters built standalone.
+export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true, mcpPath = mcpServerPath(), promptsDir = path.join(os.tmpdir(), 'vibesquad-runner-prompts') } = {}) {
+  const promptFile = (id) => path.join(promptsDir, `${String(id ?? 'agent').replace(/[^\w.-]/g, '_')}.md`);
   return {
     name: 'claude',
     canPark: true, // the CLI keeps its transcript on disk, so a killed idle agent can be resumed with --resume <sessionId>
-    start({ model, cwd, meta = {}, systemPrompt, env, emit, onExit, resume }) {
+    cleanup(id) { try { rmSync(promptFile(id), { force: true }); } catch { /* best effort */ } }, // on archive; start rewrites it
+    start({ id, model, cwd, meta = {}, systemPrompt, env, emit, onExit, resume }) {
       const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'];
       if (resume) args.push('--resume', String(resume));
       if (model) args.push('--model', model);
@@ -26,7 +32,14 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
         args.push('--mcp-config', JSON.stringify({ mcpServers: { [spec.name]: { command: spec.command, args: spec.args, env: spec.env } } }));
         args.push('--allowedTools', `mcp__${spec.name}`);
       }
-      if (systemPrompt) args.push('--append-system-prompt', systemPrompt);
+      // The prompt goes via a file, never argv: a long role prompt blows the Windows 32,767-char command-line cap (spawn ENAMETOOLONG).
+      // Rewritten on every start/resume so a parked agent restarts with the same prompt.
+      if (systemPrompt) {
+        const file = promptFile(id);
+        mkdirSync(path.dirname(file), { recursive: true });
+        writeFileSync(file, String(systemPrompt), 'utf8'); // UTF-8, no BOM
+        args.push('--append-system-prompt-file', file);
+      }
       const child = spawnNoShell(command, args, { cwd, ...(env ? { env } : {}) }, spawnImpl);
       let turnOpen = false;
       child.stdin.on('error', () => {}); // EPIPE from a write racing child exit: the 'exit' handler already reports it
