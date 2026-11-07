@@ -24,7 +24,8 @@ test("titleFor / retiredLeadTitle honour hub for leads", () => {
   assert.equal(titleFor("lead", "Alpha", { ...i, hub: true, job: "ops" }), "Overlord · ops");
   assert.equal(titleFor("lead", "Alpha", { ...i, hub: false, job: "ops" }), "★ Alp2 · ops");
   assert.equal(titleFor("worker", "Alpha", { ...i, hub: true, job: "fix" }), "Alp2 · fix");
-  assert.match(retiredLeadTitle("Alpha", "alpha", 2, "ops"), /^\(old\) (Overlord · ops|Alp2 · ops)$/);
+  assert.equal(retiredLeadTitle("VibeSquad", "vibesquad", 2, "ops"), "(old) Overlord · ops");
+  assert.equal(retiredLeadTitle("Alpha", "alpha", 2, "ops"), "(old) Alp2 · ops");
 });
 
 test("rolePack lead gets HUB_LEAD_RULES only for the hub", () => {
