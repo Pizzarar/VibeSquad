@@ -8,6 +8,7 @@ import { useImageOk, usePrefersReducedMotion, useTheme, type Theme } from "./use
 import { gridPinsForSquad, hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import {
   bandLayers,
+  blipMotion,
   buildTower,
   FLOOR_NATIVE_HEIGHT,
   FLOOR_NATIVE_WIDTH,
@@ -20,6 +21,8 @@ import {
   sliceAnchor,
   sortByAnchorY,
   spriteFrame,
+  tvBlips,
+  tvCountText,
   transitionRiders,
   validateCast,
   type CastModel,
@@ -50,14 +53,14 @@ function towerTeamOf(pin: Pin): TowerTeam {
 }
 
 /** The squad tower from a TeamView: penthouse (RiffBot = hub Buddy, Overlord = hub lead) + floors in pin order. */
-export function towerForView(view: TeamView): Tower {
+export function towerForView(view: TeamView, floor?: FloorModel): Tower {
   const hub = hubPinForSquad(view);
   const { pinned } = gridPinsForSquad(view);
   return buildTower({
     hubBuddy: hub?.brainstorm ?? null,
     hubLead: hub?.lead ?? null,
     teams: pinned.map(towerTeamOf),
-  });
+  }, floor);
 }
 
 /** `floor` is the tower floor index the member sat on (the penthouse bots no longer ride; they live in the sky zones), so its ride starts at that floor's elevator. */
@@ -70,6 +73,7 @@ function towerMembers(tower: Tower): FlatMember[] {
     push(p.lead);
     push(p.buddy);
     p.desks.forEach(push);
+    p.tv.forEach(push);
     p.lobby.forEach(push);
   };
   for (const f of tower.floors) {
@@ -146,6 +150,7 @@ function SeatBubble({ item: { agent, anchor }, cast, sheet }: { item: BandItem; 
  */
 function Band({
   plate,
+  wall,
   items,
   extras,
   overlays,
@@ -155,6 +160,8 @@ function Band({
   frameIndex,
 }: {
   plate: ReactNode;
+  /** Wall fixtures (the stats TV): drawn right after the plate, under the sprites and the front overlay. */
+  wall?: ReactNode;
   items: BandItem[];
   extras?: ReactNode;
   /** Drawn in the bubbles layer, above the front overlay (needs indicators, +N). */
@@ -171,7 +178,7 @@ function Band({
       {layers.map((layer) => {
         switch (layer) {
           case "plate":
-            return <span key={layer} style={{ display: "contents" }}>{plate}</span>;
+            return <span key={layer} style={{ display: "contents" }}>{plate}{wall}</span>;
           case "sprites":
             return (
               <span key={layer} style={{ display: "contents" }}>
@@ -227,6 +234,47 @@ function LobbyPlus({ placement, lobby }: { placement: TeamFloorPlacement; lobby?
   );
 }
 
+/**
+ * F4b: overflow workers as blips inside the stats TV glass. One focusable button per blip (aria-label + tooltip),
+ * click opens that agent like a seated worker. No overflow → a dim idle scanline; the TV never disappears.
+ */
+function StatsTv({ placement, tv, reduced, onOpen }: { placement: TeamFloorPlacement; tv?: Rect; reduced: boolean; onOpen: (agentId: string) => void }) {
+  if (!tv) return null;
+  const blips = tvBlips(tv, placement.tv);
+  return (
+    <span
+      className={`sq-floor-tv${placement.tv.length ? "" : " is-idle"}${reduced ? " is-reduced" : ""}`}
+      data-testid={`sq-floor-tv-${placement.laneId}`}
+      role="group"
+      aria-label={`Overflow workers: ${placement.tv.length}`}
+      style={{ left: tv.x, top: tv.y, width: tv.w, height: tv.h }}
+    >
+      {blips.map(({ agent, x, y, tone }, i) => {
+        const status = POSE_LABEL[agent.pose] ?? agent.pose;
+        const motion = blipMotion(tone, reduced);
+        return (
+          <button
+            key={agent.agentId}
+            type="button"
+            className={`sq-floor-blip ${tone === "needs" ? "is-needs" : "is-work"}${motion === "blink" ? " is-blink" : motion === "pulse" ? " is-pulse" : ""}`}
+            data-testid={`sq-floor-blip-${agent.agentId}`}
+            aria-label={`${agent.title}, ${status}`}
+            title={`${agent.title} · ${status}`}
+            style={{ left: x, top: y, animationDelay: `${(i % 7) * -140}ms` }}
+            onClick={() => onOpen(agent.agentId)}
+          />
+        );
+      })}
+      <span className="sq-floor-tv-beat" aria-hidden="true" />
+      {placement.tv.length > 0 && (
+        <span className="sq-floor-tv-count" aria-hidden="true">
+          {tvCountText(placement.tv.length)}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function PlateBoxes({ rects, className }: { rects: Rect[]; className?: string }) {
   return (
     <>
@@ -240,7 +288,6 @@ function PlateBoxes({ rects, className }: { rects: Rect[]; className?: string })
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export function SquadFloor({ view }: SquadFloorProps) {
-  const tower = useMemo(() => towerForView(view), [view]);
   const hub = useMemo(() => hubPinForSquad(view), [view]);
   const pinsByLane = useMemo(() => {
     const { pinned, done } = pinsForSquad(view);
@@ -255,6 +302,8 @@ export function SquadFloor({ view }: SquadFloorProps) {
 
   const [floor, setFloor] = useState<FloorModel>(() => placeholderFloor());
   const [cast, setCast] = useState<CastModel | null>(null);
+  // The tower follows the loaded floor: desk count and statsTv (overflow → blips) come from floor.json.
+  const tower = useMemo(() => towerForView(view, floor), [view, floor]);
 
   const floorImgOk = useImageOk(FLOOR_URL(theme));
   const castImgOk = useImageOk(CAST_URL(theme));
@@ -393,6 +442,7 @@ export function SquadFloor({ view }: SquadFloorProps) {
     <>
       <PlateBoxes rects={[floor.teamA.lead, floor.teamA.buddyOffice, ...floor.teamA.desks, ...(floor.teamA.lobby ? [floor.teamA.lobby] : [])]} />
       <PlateBoxes rects={[floor.teamB.lead, floor.teamB.buddyOffice, ...floor.teamB.desks, ...(floor.teamB.lobby ? [floor.teamB.lobby] : [])]} />
+      <PlateBoxes className="sq-floor-box-tv" rects={[...(floor.teamA.statsTv ? [floor.teamA.statsTv] : []), ...(floor.teamB.statsTv ? [floor.teamB.statsTv] : [])]} />
       <PlateBoxes className="sq-floor-box-elevator" rects={[floor.elevator.car, floor.elevator.doorA, floor.elevator.doorB]} />
     </>
   );
@@ -427,6 +477,12 @@ export function SquadFloor({ view }: SquadFloorProps) {
                     ) : (
                       floorBoxes
                     )
+                  }
+                  wall={
+                    <>
+                      <StatsTv placement={f.teamA} tv={floor.teamA.statsTv} reduced={reduced} onOpen={(id) => openAgent(f.teamA.laneId, id)} />
+                      {f.teamB && <StatsTv placement={f.teamB} tv={floor.teamB.statsTv} reduced={reduced} onOpen={(id) => openAgent(f.teamB!.laneId, id)} />}
+                    </>
                   }
                   extras={ridersOn(f.index, floor.elevator.car)}
                   overlays={
