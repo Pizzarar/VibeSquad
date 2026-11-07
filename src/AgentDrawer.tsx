@@ -32,8 +32,8 @@ import { openAgentInTab, paneOfAgent } from "./panes";
 import { setLastBrainstormProfile } from "./pinActions";
 import { useTimeline, Timeline, TimelineErrorBoundary, stripBootPreamble } from "./Timeline";
 import { PermissionCard } from "./PermissionCard";
-import { Composer, formatBtwPrompt, shouldQueueOnSend, stageFiles, type QueuedTurnItem } from "./Composer";
-import { composeMessage, setAgentCwd, useAttachments } from "./attachments";
+import { Composer, formatBtwPrompt, shouldQueueOnSend, type QueuedTurnItem } from "./Composer";
+import { composeMessage, setAgentCwd, stageFiles, useAttachments } from "./attachments";
 import { DrawerHeader, normalizeProviderId, type ProviderSwitchTarget } from "./DrawerHeader";
 import { useWorkingMembers, WorkingBar } from "./WorkingBar";
 import { RightDock } from "./RightDock";
@@ -369,10 +369,8 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
       restore: () => setDraft(restoredDraft(typed, draftRef.current)),
       onError: (e) => setSendError(`Send failed: ${e instanceof Error ? e.message : String(e)}`),
       run: async () => {
-        // Large or binary browser files need an upload route the VS server doesn't have yet (P4 blocker); small text inlines.
-        const composed = await composeMessage(formattedBase, sentFiles, async ({ name }) => {
-          throw new Error(`${name} is too big or binary to inline, and there is no upload route yet`);
-        });
+        // Small text files are inlined; large/binary files were rejected at drop time (no upload route).
+        const composed = await composeMessage(formattedBase, sentFiles);
         // Providers that ignore `@dir/` (Gemini) get a time-boxed "Folder: …" listing line appended.
         const expanded = await expandFolderMentions(composed, agent.provider, async (dir) => {
           const res = await vsListDirectory(agent.cwd ?? "", dir);
@@ -574,7 +572,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
         setPaneDrop(false);
         if (e.defaultPrevented) return; // the composer already took it
         e.preventDefault();
-        stageFiles(Array.from(e.dataTransfer?.files ?? []), imgs, atts);
+        void stageFiles(Array.from(e.dataTransfer?.files ?? []), imgs, atts).then((note) => atts.setNotice(note));
       }}
     >
       {paneDrop && (

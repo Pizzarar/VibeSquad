@@ -8,7 +8,7 @@ import { addCtxSource, ctxGroupsFor, gitMenuItems, isCtxItem, laneMenuItems, use
 import { getTeams, useTeams } from "./teams";
 import { fetchChatContext, fetchGitContext, fetchTerminalContext, listTerminalNames } from "./contextFetch";
 import type { DraftImageView } from "./imageDrafts";
-import { formatSize, MAX_INLINE_BYTES, fenceFile, type useAttachments } from "./attachments";
+import { formatSize, stageFiles, type useAttachments } from "./attachments";
 import { isImeComposing, shouldComposerSubmit } from "./IdeaInbox";
 import { SecretInputPopover } from "./SecretInputPopover";
 import { composerKeyAction, usePref } from "./prefs";
@@ -33,8 +33,6 @@ const DEMO_ENTRIES: MentionEntry[] = [
   { path: "src", kind: "directory" },
   ...DEMO_MENTION_FILES.map((path) => ({ path, kind: "file" as const })),
 ];
-export const MAX_FILE_BYTES = 2 * 1024 * 1024;
-export { MAX_INLINE_BYTES, fenceFile };
 export const FILE_ACCEPT =
   "image/*,.md,.txt,.log,.json,.ts,.tsx,.js,.mjs,.py,.rs,.css,.html,.yml,.yaml,.toml,.csv";
 
@@ -81,34 +79,6 @@ export function relativizePath(p: string, cwd: string): string {
   const norm = p.split("\\").join("/");
   const base = cwd.split("\\").join("/").replace(/\/$/, "");
   return base && norm.startsWith(base + "/") ? norm.slice(base.length + 1) : norm;
-}
-
-export function isImageFile(f: { type: string }): boolean {
-  return f.type.startsWith("image/");
-}
-
-export function partitionFiles<T extends { type: string; size: number }>(files: T[]) {
-  const images: T[] = [];
-  const text: T[] = [];
-  const tooLarge: T[] = [];
-  for (const f of files) {
-    if (isImageFile(f)) images.push(f);
-    else if (f.size > MAX_FILE_BYTES) tooLarge.push(f);
-    else text.push(f);
-  }
-  return { images, text, tooLarge };
-}
-
-/** Route dropped/pasted/picked files: images to thumbnails, the rest to chips. Never touches the draft. */
-export function stageFiles(
-  all: File[],
-  imgs: { add: (f: File[]) => void },
-  atts: { add: (f: File[]) => void },
-): string | null {
-  const { images, text, tooLarge } = partitionFiles(all);
-  if (images.length) imgs.add(images);
-  if (text.length) atts.add(text);
-  return tooLarge.length ? `Too large (max 2MB): ${tooLarge.map((f) => f.name).join(", ")}` : null;
 }
 
 /** Step through history. idx -1 = original draft. Returns next idx (clamped). */
@@ -214,7 +184,6 @@ export function Composer({
   const [listFailed, setListFailed] = useState(false);
   const [sel, setSel] = useState(0);
   const [dismissed, setDismissed] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
   const [history, setHistory] = useState<string[]>(() => loadHistory(agent.id));
   const [histIdx, setHistIdx] = useState(-1);
   const origDraft = useRef("");
@@ -364,7 +333,7 @@ export function Composer({
   };
 
   const addFiles = (all: File[]) => {
-    if (all.length) setNotice(stageFiles(all, imgs, atts));
+    if (all.length) void stageFiles(all, imgs, atts).then((note) => atts.setNotice(note));
   };
 
   const send = () => {
@@ -521,9 +490,12 @@ export function Composer({
           steered
         </div>
       )}
-      {notice && (
+      {atts.notice && (
         <div className="chip warn" data-testid="composer-file-notice">
-          {notice}
+          {atts.notice}
+          <button className="thumb-x" aria-label="Dismiss" onClick={() => atts.setNotice(null)}>
+            ✕
+          </button>
         </div>
       )}
       {atts.items.length > 0 && (
@@ -743,7 +715,7 @@ export function Composer({
             className="btn ghost composer-stop-btn"
             title="Stop the current turn (keeps the agent)"
             data-testid="composer-stop-btn"
-            onClick={() => stopAgent(agent.id).catch((e) => setNotice(`Couldn't stop: ${e instanceof Error ? e.message : String(e)}`))}
+            onClick={() => stopAgent(agent.id).catch((e) => atts.setNotice(`Couldn't stop: ${e instanceof Error ? e.message : String(e)}`))}
           >
             ■ Stop
           </button>

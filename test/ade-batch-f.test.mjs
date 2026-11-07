@@ -5,7 +5,7 @@ import test from "node:test";
 // Helpers are mirrored from src/Composer.tsx; Node-only, no DOM.
 
 const FALLBACK_COMMANDS = ["/btw", "/compact", "/clear", "/help", "/model", "/mode", "/rewind"];
-const MAX_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_INLINE_BYTES = 100 * 1024;
 
 function slashToken(text, caret) {
   const m = /(^|\s)\/(\w*)$/.exec(text.slice(0, caret));
@@ -39,7 +39,7 @@ function partitionFiles(files) {
   const tooLarge = [];
   for (const f of files) {
     if (f.type.startsWith("image/")) images.push(f);
-    else if (f.size > MAX_FILE_BYTES) tooLarge.push(f);
+    else if (f.size > MAX_INLINE_BYTES) tooLarge.push(f);
     else text.push(f);
   }
   return { images, text, tooLarge };
@@ -120,8 +120,8 @@ test("F8: non-image files are accepted, images split out", () => {
   assert.equal(tooLarge.length, 0);
 });
 
-test("F9: files over 2MB are reported, not silently dropped", () => {
-  const { text, tooLarge } = partitionFiles([{ name: "big.log", type: "text/plain", size: MAX_FILE_BYTES + 1 }]);
+test("F9: files over 100KB (the inline limit) are reported, not silently dropped", () => {
+  const { text, tooLarge } = partitionFiles([{ name: "big.log", type: "text/plain", size: MAX_INLINE_BYTES + 1 }]);
   assert.equal(text.length, 0);
   assert.deepEqual(tooLarge.map((f) => f.name), ["big.log"]);
 });

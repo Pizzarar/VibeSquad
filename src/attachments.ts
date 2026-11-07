@@ -2,7 +2,8 @@ import { useCallback, useSyncExternalStore } from "react";
 import { normalizeRepoPath } from "./fileLinks.ts";
 
 // Non-image files staged in the composer. They are chips only: the draft text is never touched.
-// On send, composeMessage() turns them into fenced blocks (small text) or uploaded path references.
+// On send, composeMessage() inlines them as fenced blocks (small text). Large/binary files are
+// rejected at drop time (no upload route).
 
 export const MAX_INLINE_BYTES = 100 * 1024;
 
@@ -21,6 +22,41 @@ export function isBinaryBytes(bytes: Uint8Array): boolean {
   return false;
 }
 
+export function isImageFile(f: { type: string }): boolean {
+  return f.type.startsWith("image/");
+}
+
+export function partitionFiles<T extends { type: string; size: number }>(files: T[]) {
+  const images: T[] = [];
+  const text: T[] = [];
+  const tooLarge: T[] = [];
+  for (const f of files) {
+    if (isImageFile(f)) images.push(f);
+    else if (f.size > MAX_INLINE_BYTES) tooLarge.push(f);
+    else text.push(f);
+  }
+  return { images, text, tooLarge };
+}
+
+/** Route dropped/pasted/picked files: images to thumbnails, small text to chips; large/binary are rejected (no upload route). */
+export async function stageFiles(
+  all: File[],
+  imgs: { add: (f: File[]) => void },
+  atts: { add: (f: File[]) => void },
+): Promise<string | null> {
+  const { images, text, tooLarge } = partitionFiles(all);
+  const rejected = tooLarge.map((f) => f.name);
+  const ok: File[] = [];
+  for (const f of text) {
+    const head = new Uint8Array(await f.slice(0, 8192).arrayBuffer());
+    if (isBinaryBytes(head)) rejected.push(f.name);
+    else ok.push(f);
+  }
+  if (images.length) imgs.add(images);
+  if (ok.length) atts.add(ok);
+  return rejected.length ? `Too large / binary — attach a path instead: ${rejected.join(", ")}` : null;
+}
+
 export const longestBacktickRun = (content: string): number => Math.max(0, ...(content.match(/`+/g) ?? []).map((r) => r.length));
 
 /** A code fence longer than any backtick run inside `content`, so the parser can find the matching opener. */
@@ -31,24 +67,14 @@ export function fenceFile(name: string, content: string): string {
   return `\n[file: ${name}]\n${fence}\n${content}\n${fence}\n`;
 }
 
-export function attachedRef(path: string): string {
-  return `\n[attached file: ${path}]\n`;
-}
-
-/** Build the outgoing text. `upload` is only called for files that are big or binary. */
+/** Inline small text files into the outgoing text. Large/binary files are rejected at drop time, so they never reach here. */
 export async function composeMessage(
   text: string,
   items: Array<{ name: string; size: number; file: Pick<File, "text" | "arrayBuffer"> }>,
-  upload: (item: { name: string; file: never }) => Promise<string>,
 ): Promise<string> {
   let out = text;
   for (const it of items) {
-    const head = new Uint8Array(await it.file.arrayBuffer());
-    if (it.size <= MAX_INLINE_BYTES && !isBinaryBytes(head)) {
-      out += fenceFile(it.name, await it.file.text());
-    } else {
-      out += attachedRef(await upload({ name: it.name, file: it.file as never }));
-    }
+    out += fenceFile(it.name, await it.file.text());
   }
   return out;
 }
@@ -84,22 +110,27 @@ export function parseSentAttachments(text: string): { body: string; chips: SentC
   return { body: chips.length ? rest.replace(/\s+$/, "") : text, chips: chips.reverse() };
 }
 
-// ── tiny per-agent store so Composer and AgentDrawer share the staged list ──
-const mem = new Map<string, Attachment[]>();
+// ── tiny per-agent store so Composer and AgentDrawer share the staged list + a rejection notice ──
+type AttachmentStore = { items: Attachment[]; notice: string | null };
+const mem = new Map<string, AttachmentStore>();
 const subs = new Map<string, Set<() => void>>();
-const EMPTY: Attachment[] = [];
+const EMPTY_STORE: AttachmentStore = { items: [], notice: null };
 const emit = (k: string) => subs.get(k)?.forEach((f) => f());
 let seq = 0;
 
-export const getAttachments = (key: string): Attachment[] => mem.get(key) ?? EMPTY;
+export const getAttachments = (key: string): Attachment[] => (mem.get(key) ?? EMPTY_STORE).items;
+
+export const getAttachmentNotice = (key: string): string | null => (mem.get(key) ?? EMPTY_STORE).notice;
 
 export function addAttachments(key: string, files: File[]) {
   const add = files.map((f) => ({ id: `${f.name}-${Date.now()}-${seq++}`, name: f.name, size: f.size, file: f }));
-  mem.set(key, [...(mem.get(key) ?? []), ...add]);
+  const cur = mem.get(key) ?? EMPTY_STORE;
+  mem.set(key, { items: [...cur.items, ...add], notice: null }); // a valid attach clears the rejection notice
   emit(key);
 }
 export function removeAttachment(key: string, id: string) {
-  mem.set(key, (mem.get(key) ?? []).filter((a) => a.id !== id));
+  const cur = mem.get(key) ?? EMPTY_STORE;
+  mem.set(key, { ...cur, items: cur.items.filter((a) => a.id !== id) });
   emit(key);
 }
 export function clearAttachments(key: string) {
@@ -107,21 +138,29 @@ export function clearAttachments(key: string) {
   emit(key);
 }
 
+export function setAttachmentNotice(key: string, notice: string | null) {
+  const cur = mem.get(key) ?? EMPTY_STORE;
+  mem.set(key, { ...cur, notice });
+  emit(key);
+}
+
 export function useAttachments(key: string) {
-  const items = useSyncExternalStore(
+  const store = useSyncExternalStore(
     useCallback((cb) => {
       const s = subs.get(key) ?? new Set();
       s.add(cb);
       subs.set(key, s);
       return () => void s.delete(cb);
     }, [key]),
-    () => mem.get(key) ?? EMPTY,
+    () => mem.get(key) ?? EMPTY_STORE,
   );
   return {
-    items,
+    items: store.items,
+    notice: store.notice,
     add: useCallback((f: File[]) => addAttachments(key, f), [key]),
     remove: useCallback((id: string) => removeAttachment(key, id), [key]),
     clear: useCallback(() => clearAttachments(key), [key]),
+    setNotice: useCallback((n: string | null) => setAttachmentNotice(key, n), [key]),
   };
 }
 
