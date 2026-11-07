@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
+import { castVariant } from "../src/cast.ts";
 import {
   bandLayers,
   buildTower,
@@ -15,6 +16,7 @@ import {
   roleFrames,
   sliceAnchor,
   sortByAnchorY,
+  spreadNeighbours,
   spriteFrame,
   transitionRiders,
   validateCast,
@@ -340,4 +342,101 @@ test("P3a lobby +N counts only running/needs-you workers", () => {
   assert.equal(a.lobby.length, 2); // 8 running − 6 desks
   assert.equal(a.lobbyOverflow, 0);
   assert.ok([...a.desks, ...a.lobby].every((s) => s.agentId.startsWith("r")));
+});
+
+// ── P3e cast v2 ───────────────────────────────────────────────────────────────
+const castV2Json = JSON.parse(readFileSync(new URL("../public/office/cast.json", import.meta.url), "utf8")); // master (Art9 85e38b6), read-only
+const castV2 = validateCast(castV2Json);
+
+test("P3e v2 cast parses roles.X.variants[4] (work/needs/idle/ride); compat x,y on a variant is ignored", () => {
+  assert.equal(castV2.ok, true);
+  if (!castV2.ok) return;
+  assert.equal(castV2.value.version, 2);
+  assert.equal(castV2.value.variants.lead.length, 4);
+  for (const v of castV2.value.variants.lead) {
+    assert.deepEqual(Object.keys(v).sort(), ["idle", "needs", "ride", "work"]); // no stray "x"/"y" pose
+    assert.ok(v.work.length >= 1 && v.needs.length >= 1 && v.idle.length >= 1 && v.ride.length >= 1);
+  }
+  assert.deepEqual(castV2.value.variants.lead[1].work, castV2Json.roles.lead.variants[1].work);
+  // v1 keys stay = variant 0
+  assert.deepEqual(castV2.value.roles.lead.work, castV2.value.variants.lead[0].work);
+});
+
+test("P3e v1 cast still parses (no variants) and v2 lookups pick the variant, wrapping and falling back", () => {
+  if (!castV2.ok) return;
+  const v1 = validateCast({ version: 1, cell: 32, roles: { lead: { work: [{ x: 0, y: 0 }], needs: [{ x: 1, y: 0 }], idle: [{ x: 2, y: 0 }], ride: [{ x: 3, y: 0 }] } }, bubble: { x: 0, y: 0, w: 1, h: 1, offset: { x: 0, y: 0 } } });
+  assert.equal(v1.ok, true);
+  assert.deepEqual(v1.value.variants, {});
+  assert.deepEqual(roleFrames(v1.value, "lead", "work", 3), [{ x: 0, y: 0 }]); // v1: variant ignored
+  const c = castV2.value;
+  assert.deepEqual(roleFrames(c, "lead", "work", 2), c.variants.lead[2].work);
+  assert.deepEqual(roleFrames(c, "lead", "work", 6), c.variants.lead[2].work); // wraps mod 4
+  assert.deepEqual(spriteFrame(c, "lead", "idle", 5, 1), c.variants.lead[1].idle[0]);
+  assert.notDeepEqual(roleFrames(c, "lead", "work", 0), roleFrames(c, "lead", "work", 1));
+});
+
+test("P3e invalid v2 variants fail validation", () => {
+  const bad = structuredClone(castV2Json);
+  bad.roles.lead.variants[2].work = [];
+  assert.equal(validateCast(bad).ok, false);
+  const empty = structuredClone(castV2Json);
+  empty.roles.lead.variants = [];
+  assert.equal(validateCast(empty).ok, false);
+});
+
+test("P3e a seated agent's variant is castVariant(agent.id), the same as its icon", () => {
+  const ids = ["w-alpha", "w-bravo", "w-charlie", "w-delta"];
+  const tower = buildTower({
+    hubBuddy: member("riffbot", { kind: "brainstorm" }),
+    hubLead: null,
+    teams: [team("x", { lead: member("lead-1", { kind: "lead" }), workers: ids.map((id, i) => member(id, { status: "running", createdAt: new Date(2026, 0, 1, 0, i).toISOString() })) })],
+  });
+  const a = tower.floors[0].teamA;
+  assert.equal(a.lead.variant, castVariant("lead-1"));
+  assert.equal(tower.penthouse.riffbot.variant, castVariant("riffbot"));
+  for (const d of a.desks) assert.equal(d.variant, castVariant(d.agentId));
+});
+
+test("P3e spreadNeighbours: stable when no clash, splits same-row duplicates, never changes items", () => {
+  const key = (x) => x.k;
+  const same = [{ id: 1, k: "a" }, { id: 2, k: "b" }, { id: 3, k: "c" }];
+  assert.deepEqual(spreadNeighbours(same, key), same);
+  const dup = [{ id: 1, k: "a" }, { id: 2, k: "a" }, { id: 3, k: "b" }];
+  assert.deepEqual(spreadNeighbours(dup, key).map((x) => x.id), [1, 3, 2]);
+  // a row break is not a neighbour: slot 3 starts a new row
+  const rows = [{ id: 1, k: "a" }, { id: 2, k: "b" }, { id: 3, k: "c" }, { id: 4, k: "c" }];
+  assert.deepEqual(spreadNeighbours(rows, key).map((x) => x.id), [1, 2, 3, 4]);
+  // all identical: nothing to swap, keep order
+  const all = [{ id: 1, k: "a" }, { id: 2, k: "a" }];
+  assert.deepEqual(spreadNeighbours(all, key).map((x) => x.id), [1, 2]);
+});
+
+test("P3e desk assignment reorders same-look neighbours in a team without touching variants", () => {
+  // find three ids: first two share a variant, third differs (same role "implement")
+  const byVariant = new Map();
+  for (let i = 0; byVariant.size < 4 || [...byVariant.values()].every((l) => l.length < 2); i++) {
+    const v = castVariant(`probe-${i}`);
+    byVariant.set(v, [...(byVariant.get(v) ?? []), `probe-${i}`]);
+  }
+  const [vA, vB] = [...byVariant.entries()].filter(([, l]) => l.length >= 2).map(([v]) => v);
+  const [a1, a2] = byVariant.get(vA);
+  const b1 = byVariant.get([...byVariant.keys()].find((v) => v !== vA))[0];
+  const ws = [a1, a2, b1].map((id, i) => member(id, { status: "running", createdAt: new Date(2026, 0, 1, 0, i).toISOString() }));
+  const desks = buildTower({ hubBuddy: null, hubLead: null, teams: [team("x", { workers: ws })] }).floors[0].teamA.desks;
+  assert.deepEqual(desks.map((d) => d.agentId), [a1, b1, a2]); // spawn order was a1, a2, b1
+  assert.deepEqual(desks.map((d) => d.desk), [0, 1, 2]);
+  for (const d of desks) assert.equal(d.variant, castVariant(d.agentId));
+});
+test("P3e real cast.json has no riffbot/overlord roles: no crash, no sprite, the floor draws its fallback box", () => {
+  assert.ok(castV2.ok);
+  const c = castV2.value;
+  assert.equal(c.roles.riffbot, undefined);
+  assert.equal(c.roles.overlord, undefined);
+  for (const role of ["riffbot", "overlord"]) for (const pose of ["work", "needs", "idle", "ride"]) {
+    assert.equal(roleFrames(c, role, pose, 2), null);
+    assert.equal(spriteFrame(c, role, pose, 5, 3), null); // Seat renders is-fallback when null
+  }
+  const t = buildTower({ hubBuddy: member("rb", { kind: "brainstorm" }), hubLead: member("ov", { kind: "lead", status: "running" }), teams: [team("x")] });
+  assert.equal(t.penthouse.riffbot.role, "riffbot");
+  assert.equal(spriteFrame(c, t.penthouse.overlord.role, t.penthouse.overlord.pose, 0, t.penthouse.overlord.variant), null);
 });

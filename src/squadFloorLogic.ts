@@ -6,6 +6,7 @@
 // are imported type-only so node --test never loads React.
 
 import { kindOfAttention } from "./attentionItems.ts";
+import { castVariant } from "./cast.ts"; // @art owns cast.ts: import only
 import type { Member } from "./teams.ts";
 
 // ── JSON shapes (the @art contract, docs/PLAN_NEON_OFFICE.md) ─────────────────
@@ -21,6 +22,8 @@ export type CastModel = {
   anchor: string;
   /** role name → pose → frames (each frame is the top-left of a `cell` square in the sheet). */
   roles: Record<string, Record<Pose, Frame[]>>;
+  /** v2: role → its variants (each a full pose set). Empty for v1; roles without variants only have `roles`. */
+  variants: Record<string, Record<Pose, Frame[]>[]>;
   bubble: { x: number; y: number; w: number; h: number; offset: { x: number; y: number } };
   /** role → nearest drawn role, used when a role is missing from `roles`. May be `{}`. */
   fallback: Record<string, string>;
@@ -61,6 +64,7 @@ export type Validation<T> = { ok: true; value: T } | { ok: false; reason: string
 const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+const VARIANT_POSES: Pose[] = ["work", "needs", "idle", "ride"];
 const fail = <T,>(reason: string): Validation<T> => ({ ok: false, reason });
 const rectOf = (v: unknown): Rect | null =>
   isObject(v) && isNum(v.x) && isNum(v.y) && isNum(v.w) && isNum(v.h)
@@ -127,18 +131,44 @@ export function validateCast(json: unknown): Validation<CastModel> {
   if (!isNum(cell) || cell <= 0) return fail("cast.json cell must be a positive number");
   if (!isObject(json.roles) || Object.keys(json.roles).length === 0) return fail("cast.json roles is missing or empty");
   const roles: Record<string, Record<Pose, Frame[]>> = {};
+  const variants: Record<string, Record<Pose, Frame[]>[]> = {};
+  const poseFrames = (role: string, pose: string, frames: unknown): Validation<Frame[]> => {
+    if (!Array.isArray(frames) || frames.length === 0) return fail(`cast.json role "${role}" pose "${pose}" has no frames`);
+    const cells: Frame[] = [];
+    for (const f of frames) {
+      const frame = frameOf(f);
+      if (!frame) return fail(`cast.json role "${role}" pose "${pose}" has an invalid frame`);
+      cells.push(frame);
+    }
+    return { ok: true, value: cells };
+  };
   for (const [role, poses] of Object.entries(json.roles)) {
     if (!isObject(poses)) return fail(`cast.json role "${role}" is not an object`);
     const rolePoses = {} as Record<Pose, Frame[]>;
     for (const [pose, frames] of Object.entries(poses)) {
-      if (!Array.isArray(frames) || frames.length === 0) return fail(`cast.json role "${role}" pose "${pose}" has no frames`);
-      const cells: Frame[] = [];
-      for (const f of frames) {
-        const frame = frameOf(f);
-        if (!frame) return fail(`cast.json role "${role}" pose "${pose}" has an invalid frame`);
-        cells.push(frame);
+      if (pose === "variants") continue; // v2, parsed below
+      const r = poseFrames(role, pose, frames);
+      if (!r.ok) return fail(r.reason);
+      rolePoses[pose as Pose] = r.value;
+    }
+    // v2: roles.X.variants[i] = {work,needs,idle,ride}; the compat x,y on each variant is not a pose and is ignored.
+    if (poses.variants !== undefined) {
+      if (!Array.isArray(poses.variants) || poses.variants.length === 0) return fail(`cast.json role "${role}" variants must be a non-empty array`);
+      const list: Record<Pose, Frame[]>[] = [];
+      for (const v of poses.variants) {
+        if (!isObject(v)) return fail(`cast.json role "${role}" has an invalid variant`);
+        const vp = {} as Record<Pose, Frame[]>;
+        for (const pose of VARIANT_POSES) {
+          if (v[pose] === undefined) continue;
+          const r = poseFrames(role, pose, v[pose]);
+          if (!r.ok) return fail(r.reason);
+          vp[pose] = r.value;
+        }
+        list.push(vp);
       }
-      rolePoses[pose as Pose] = cells;
+      variants[role] = list;
+      // v1 keys (variant 0) win when present; a role that only has variants uses variant 0 as its base.
+      for (const pose of VARIANT_POSES) if (!rolePoses[pose] && list[0][pose]) rolePoses[pose] = list[0][pose];
     }
     roles[role] = rolePoses;
   }
@@ -172,6 +202,7 @@ export function validateCast(json: unknown): Validation<CastModel> {
       cell: cell as number,
       anchor: typeof json.anchor === "string" ? (json.anchor as string) : "bottom-centre",
       roles,
+      variants,
       bubble,
       fallback,
     },
@@ -239,6 +270,8 @@ export type SeatedAgent = {
   /** Cast role name (after any member-role → cast-role naming, e.g. brainstorm → "buddy"). */
   role: string;
   pose: Pose;
+  /** Look-alike column: castVariant(agentId), the same one the icon uses, so floor sprite = icon. */
+  variant: number;
   seat: SeatKind;
   /** 0-based desk slot for `desk` seats. */
   desk?: number;
@@ -348,14 +381,19 @@ export function transitionRiders(
 
 // ── 6. Role → sprite lookup with fallback ─────────────────────────────────────
 
-/** Frames for a role+pose, following `fallback` when the role (or that pose) is missing. Null when unresolvable. */
-export function roleFrames(cast: CastModel, role: string, pose: Pose): Frame[] | null {
+/**
+ * Frames for a role+pose, following `fallback` when the role (or that pose) is missing. A v2 role picks
+ * `variants[variant % n]` (falling back to its base poses when that variant lacks the pose). Null when unresolvable.
+ */
+export function roleFrames(cast: CastModel, role: string, pose: Pose, variant = 0): Frame[] | null {
   const seen = new Set<string>();
   let cur = role;
   for (;;) {
     if (seen.has(cur)) return null;
     seen.add(cur);
-    const frames = cast.roles[cur]?.[pose];
+    const vs = cast.variants?.[cur];
+    const picked = vs && vs.length > 0 ? vs[((variant % vs.length) + vs.length) % vs.length]?.[pose] : undefined;
+    const frames = picked && picked.length > 0 ? picked : cast.roles[cur]?.[pose];
     if (frames && frames.length > 0) return frames;
     const next = cast.fallback[cur];
     if (!next) return null;
@@ -363,9 +401,9 @@ export function roleFrames(cast: CastModel, role: string, pose: Pose): Frame[] |
   }
 }
 
-/** The sprite cell for a role+pose at a frame index (reduced motion → index 0); null when the role can't resolve. */
-export function spriteFrame(cast: CastModel, role: string, pose: Pose, frameIndex = 0): Frame | null {
-  const frames = roleFrames(cast, role, pose);
+/** The sprite cell for a role+pose at a frame index (reduced motion → index 0) and variant; null when the role can't resolve. */
+export function spriteFrame(cast: CastModel, role: string, pose: Pose, frameIndex = 0, variant = 0): Frame | null {
+  const frames = roleFrames(cast, role, pose, variant);
   if (!frames) return null;
   return frames[((frameIndex % frames.length) + frames.length) % frames.length] ?? null;
 }
@@ -423,9 +461,30 @@ const seat = (m: Member, seatKind: SeatKind, desk?: number): SeatedAgent => ({
   title: m.agent.title ?? m.agent.id.slice(0, 8),
   role: roleForMember(m),
   pose: poseFor(m),
+  variant: castVariant(m.agent.id),
   seat: seatKind,
   ...(desk !== undefined ? { desk } : {}),
 });
+
+/** Desks per row on the floor plate (desks 0-2 top, 3-5 bottom); side-by-side means the same row. */
+export const DESKS_PER_ROW = 3;
+
+/**
+ * Reorder desk assignment (never the agents' looks) so identical sprites don't sit side by side: fill slots in
+ * order, taking the earliest remaining item whose key differs from the left neighbour in the same row; when every
+ * remaining item matches, take the earliest anyway. Stable: with no clash the order is unchanged.
+ */
+export function spreadNeighbours<T>(items: readonly T[], keyOf: (item: T) => string, rowSize = DESKS_PER_ROW): T[] {
+  const left = [...items];
+  const out: T[] = [];
+  while (left.length > 0) {
+    const slot = out.length;
+    const leftKey = slot % rowSize === 0 ? null : keyOf(out[slot - 1]);
+    const at = left.findIndex((it) => leftKey === null || keyOf(it) !== leftKey);
+    out.push(left.splice(at < 0 ? 0 : at, 1)[0]);
+  }
+  return out;
+}
 
 function placeTeam(t: TowerTeam): TeamFloorPlacement {
   const lead = t.lead && isLiveMember(t.lead) && !isRetiredLead(t.lead) ? seat(t.lead, "lead") : null;
@@ -435,7 +494,7 @@ function placeTeam(t: TowerTeam): TeamFloorPlacement {
   const workers = [...(t.workers ?? [])]
     .filter((w): w is Member => isLiveMember(w) && !isRetiredLead(w) && isSeatedWorkerPose(poseFor(w)))
     .sort(spawnOrder);
-  const desks = workers.slice(0, DESK_COUNT).map((w, i) => seat(w, "desk", i));
+  const desks = spreadNeighbours(workers.slice(0, DESK_COUNT).map((w) => seat(w, "desk")), (a) => `${a.role}:${a.variant}`).map((a, i) => ({ ...a, desk: i }));
   const overflow = workers.slice(DESK_COUNT);
   const lobby = overflow.slice(0, LOBBY_MAX_SHOWN).map((w) => seat(w, "lobby"));
   const lobbyOverflow = Math.max(0, overflow.length - LOBBY_MAX_SHOWN);
@@ -450,11 +509,11 @@ export function buildTower(input: TowerInput): Tower {
   const penthouse = {
     riffbot:
       input.hubBuddy && isLiveMember(input.hubBuddy)
-        ? { agentId: input.hubBuddy.agent.id, title: input.hubBuddy.agent.title ?? input.hubBuddy.agent.id.slice(0, 8), role: "riffbot", pose: poseFor(input.hubBuddy), seat: "riffbot" as const }
+        ? { agentId: input.hubBuddy.agent.id, title: input.hubBuddy.agent.title ?? input.hubBuddy.agent.id.slice(0, 8), role: "riffbot", pose: poseFor(input.hubBuddy), variant: castVariant(input.hubBuddy.agent.id), seat: "riffbot" as const }
         : null,
     overlord:
       input.hubLead && isLiveMember(input.hubLead)
-        ? { agentId: input.hubLead.agent.id, title: input.hubLead.agent.title ?? input.hubLead.agent.id.slice(0, 8), role: "overlord", pose: poseFor(input.hubLead), seat: "overlord" as const }
+        ? { agentId: input.hubLead.agent.id, title: input.hubLead.agent.title ?? input.hubLead.agent.id.slice(0, 8), role: "overlord", pose: poseFor(input.hubLead), variant: castVariant(input.hubLead.agent.id), seat: "overlord" as const }
         : null,
   };
   const floors: Floor[] = [];

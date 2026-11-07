@@ -115,11 +115,11 @@ export function towerForView(view: TeamView): Tower {
 }
 
 /** `floor` is the tower floor index the member sat on (-1 = the penthouse), so its ride starts at that floor's elevator. */
-type FlatMember = { agentId: string; title: string; role: string; floor: number };
+type FlatMember = { agentId: string; title: string; role: string; variant: number; floor: number };
 function towerMembers(tower: Tower): FlatMember[] {
   const out: FlatMember[] = [];
   let floor = -1;
-  const push = (s: SeatedAgent | null) => s && out.push({ agentId: s.agentId, title: s.title, role: s.role, floor });
+  const push = (s: SeatedAgent | null) => s && out.push({ agentId: s.agentId, title: s.title, role: s.role, variant: s.variant, floor });
   const team = (p: TeamFloorPlacement) => {
     push(p.lead);
     push(p.buddy);
@@ -152,7 +152,7 @@ type SeatProps = {
 };
 
 function Seat({ item: { agent, anchor, onOpen }, cast, sheet, frameIndex }: SeatProps) {
-  const frame: Frame | null = cast ? spriteFrame(cast, agent.role, agent.pose, frameIndex) : null;
+  const frame: Frame | null = cast ? spriteFrame(cast, agent.role, agent.pose, frameIndex, agent.variant) : null;
   const hasSprite = !!(sheet && frame);
   const status = POSE_LABEL[agent.pose] ?? agent.pose;
   return (
@@ -178,7 +178,7 @@ function Seat({ item: { agent, anchor, onOpen }, cast, sheet, frameIndex }: Seat
 
 /** The needs-you bubble; drawn above the front overlay so it is never hidden. */
 function SeatBubble({ item: { agent, anchor }, cast, sheet }: { item: BandItem; cast: CastModel | null; sheet: string | null }) {
-  const frame: Frame | null = cast ? spriteFrame(cast, agent.role, agent.pose, 0) : null;
+  const frame: Frame | null = cast ? spriteFrame(cast, agent.role, agent.pose, 0, agent.variant) : null;
   if (agent.pose !== "needs" || !cast || !sheet || !frame) return null;
   return (
     <span
@@ -384,7 +384,7 @@ export function SquadFloor({ view, onOpenRiffBot }: SquadFloorProps) {
     if (gone.length) {
       const byId = new Map(prev.map((m) => [m.agentId, m]));
       const start = Date.now();
-      setRiders((rs) => [...rs, ...gone.map((id) => ({ start, ...(byId.get(id) ?? { agentId: id, title: id.slice(0, 8), role: "unknown", floor: -1 }) }))]);
+      setRiders((rs) => [...rs, ...gone.map((id) => ({ start, ...(byId.get(id) ?? { agentId: id, title: id.slice(0, 8), role: "unknown", variant: 0, floor: -1 }) }))]);
     }
     prevMembersRef.current = next;
   }, [tower, reduced]);
@@ -413,7 +413,7 @@ export function SquadFloor({ view, onOpenRiffBot }: SquadFloorProps) {
     riders
       .filter((r) => r.floor === floorIndex)
       .map((r, i) => {
-        const frame = cast ? spriteFrame(cast, r.role, "ride", 0) : null;
+        const frame = cast ? spriteFrame(cast, r.role, "ride", 0, r.variant) : null;
         return (
           <span
             key={r.agentId}
