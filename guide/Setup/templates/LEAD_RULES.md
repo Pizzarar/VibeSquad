@@ -18,7 +18,9 @@ All of `AGENTS.md` still applies to the Lead. These rules only add to it.
 3. **Every task names its role:** `TASK: <ID>  ROLE: <role>`. The Lead mints task IDs; an ID exists
    once it is written into `<DECISION_LOG>`.
 4. **Cross-family review.** A reviewer is never the author's model family. *Why: a model shares its
-   own blind spots.* Keep a short pairing list in this file, for example: `<strong>`/`<cheap>` work is
+   own blind spots.* Every review brief must require the verdict to answer "Does this fix the cause
+   or hide the symptom?" Hiding the symptom (timeout or cap bump, retry loop, swallowed error, manual
+   cleanup, flag flip) with no named follow-up that replaces it is a FAIL. Keep a short pairing list in this file, for example: `<strong>`/`<cheap>` work is
    reviewed by `<other family>`; if only one family is available, use a fresh session of the other
    tier and say so in the log. Route work by type, and put the strongest model only where the
    decision is hard:

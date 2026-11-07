@@ -515,6 +515,30 @@ test("7b. syncProfilesToPaseo replaces daemon.agentProfiles by default and only 
   }
 });
 
+test("7c. every reviewer/checker profile note carries the cause-vs-symptom gate, and sync still yields the full default pack", () => {
+  const question = "Does this fix the cause or hide the symptom?";
+  const gated = ["Review - Sonnet", "Review - Gemini", "Check - Haiku", "Pre-check - Flash"];
+  for (const name of gated) {
+    const p = DEFAULT_PACK_PROFILES.find((x) => x.name === name);
+    assert.ok(p, `${name} exists in the default pack`);
+    assert.ok(p.notes.includes(question), `${name} note contains the gate question`);
+    assert.match(p.notes, /FAIL/, `${name} note states the FAIL rule`);
+    assert.match(p.notes, /follow-up/, `${name} note names the follow-up exception`);
+  }
+  const env = makeTempEnv();
+  try {
+    mkdirSync(join(env.dir, ".paseo"), { recursive: true });
+    writeFileSync(env.paseoConfigPath, JSON.stringify({ daemon: { agentProfiles: [] } }), "utf8");
+    const synced = syncProfilesToPaseo(DEFAULT_PACK_PROFILES, env.paseoConfigPath);
+    assert.equal(synced.agentProfiles.length, 19);
+    for (const name of gated) {
+      assert.ok(synced.agentProfiles.find((p) => p.name === name)?.notes.includes(question), `${name} synced with gate`);
+    }
+  } finally {
+    env.cleanup();
+  }
+});
+
 test("8. DEFAULT_PROFILES in src/profiles.ts has all 19 default pack profiles matching DEFAULT_PACK_PROFILES and TeamSettingsModal renders visible profile roster", async () => {
   const { stripTypeScriptTypes } = await import("node:module");
   const tsPath = resolve(import.meta.dirname, "..", "src", "profiles.ts");
