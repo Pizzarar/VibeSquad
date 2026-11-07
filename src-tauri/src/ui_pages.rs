@@ -715,17 +715,6 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
       serverPicker.style.display = (lanHost || meshHost) ? 'block' : 'none';
     }}
 
-    function extractOfferHash(raw) {{
-      const s = (raw || '').trim();
-      if (!s) return null;
-      const hashIdx = s.indexOf('#offer=');
-      if (hashIdx >= 0) return s.slice(hashIdx);
-      const m = s.match(/[?#&]offer=([^&\s]+)/i);
-      if (m && m[1]) return '#offer=' + m[1];
-      if (s.startsWith('offer=')) return '#' + s;
-      return null;
-    }}
-
     function tryExtractPairUrl(inputEl) {{
       const raw = (inputEl.value || '').trim();
       if (!raw) return;
@@ -741,41 +730,22 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
 
     function syncLocalState() {{
       syncPresetButtons();
-      const codeVal = (codeInput.value || '').trim();
-      const offerInHost = extractOfferHash(hostInput.value);
-      const offerInCode = extractOfferHash(codeVal);
-      if (offerInCode && !offerInHost) {{
-        // #offer= link was pasted into the code field: move it into the host field and
-        // clear the code field so it can hold the optional daemon password.
-        hostInput.value = codeVal;
-        codeInput.value = '';
-      }}
       const val = (hostInput.value || '').trim();
-      const offerHash = extractOfferHash(val);
       const lanHost = presetLan.dataset.host;
       const meshHost = presetMesh.dataset.host;
       presetLan.classList.toggle('active', Boolean(lanHost) && val.startsWith(lanHost));
       presetMesh.classList.toggle('active', Boolean(meshHost) && val.startsWith(meshHost));
-      codeField.style.display = (!val || (isLocal(val) && !offerHash)) ? 'none' : 'block';
+      codeField.style.display = (!val || isLocal(val)) ? 'none' : 'block';
 
-      if (offerHash) {{
-        codeLabel.textContent = 'Daemon Password (if required)';
-        codeHint.innerHTML = 'Optional password for remote Paseo daemon';
-        codeInput.type = 'password';
-        codeInput.placeholder = 'Enter remote daemon password (optional)';
-        codeInput.required = false;
-        submitBtn.textContent = 'Connect via Paseo Offer Link';
+      codeLabel.textContent = '6-Digit Pairing Code';
+      codeHint.innerHTML = 'From server\'s <b>PAIR DEVICE</b> modal';
+      codeInput.type = 'text';
+      if (isLocal(val)) {{
+        codeInput.placeholder = 'No code needed on Server PC';
+        submitBtn.textContent = 'Connect to Localhost';
       }} else {{
-        codeLabel.textContent = '6-Digit Pairing Code';
-        codeHint.innerHTML = 'From server\'s <b>PAIR DEVICE</b> modal';
-        codeInput.type = 'text';
-        if (isLocal(val)) {{
-          codeInput.placeholder = 'No code needed on Server PC';
-          submitBtn.textContent = 'Connect to Localhost';
-        }} else {{
-          codeInput.placeholder = '000000';
-          submitBtn.textContent = 'Connect & Pair';
-        }}
+        codeInput.placeholder = '000000';
+        submitBtn.textContent = 'Connect & Pair';
       }}
     }}
 
@@ -849,38 +819,6 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
       try {{
         tryExtractPairUrl(hostInput);
         tryExtractPairUrl(codeInput);
-        if (extractOfferHash(codeInput.value) && !extractOfferHash(hostInput.value)) {{
-          hostInput.value = codeInput.value;
-          codeInput.value = '';
-        }}
-        const offerHash = extractOfferHash(hostInput.value) || extractOfferHash(codeInput.value);
-        if (offerHash) {{
-          const res = await fetch('/__desktop/pair', {{
-            method: 'POST',
-            headers: {{
-              'Content-Type': 'application/json',
-              'Accept': 'application/json'
-            }},
-            body: JSON.stringify({{
-              serverHost: hostInput.value.trim(),
-              code: codeInput.value
-            }})
-          }});
-          const data = await res.json().catch(() => ({{}}));
-          if (!res.ok || !data.ok) {{
-            errText.textContent = data.error || ('Connection failed (HTTP ' + res.status + ')');
-            errBox.style.display = 'flex';
-            submitBtn.disabled = false;
-            submitBtn.textContent = origText;
-            return;
-          }}
-          const pw = (codeInput.value || '').trim();
-          if (pw) {{
-            sessionStorage.setItem('vs.remote.password.tab', pw);
-          }}
-          window.location.replace(data.redirect || '/');
-          return;
-        }}
         const res = await fetch('/__desktop/pair', {{
           method: 'POST',
           headers: {{

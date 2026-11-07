@@ -106,11 +106,9 @@ describe("allowlist", () => {
   });
   const blocked = [
     "/__vibesquad/first-run/status",
-    "/__vibesquad/first-run/install-paseo",
     "/__vibesquad/paseo/daemon",
     "/__vibesquad/paseo/raw/open",
     "/__vibesquad/paseo/raw/restore",
-    "/__vibesquad/paseo/pair",
     "/__vibesquad/paseo/hub",
     "/__vibesquad/pair/start",
     "/pair",
@@ -1067,7 +1065,6 @@ describe("R2-5 handler: reopened writes against a fake loopback server", () => {
     setGate(true);
     const everything = Object.fromEntries(
       [
-        "/__vibesquad/first-run/install-paseo",
         "/__vibesquad/paseo/daemon",
         "/__vibesquad/paseo/raw/x",
         "/__vibesquad/pair/start",

@@ -110,11 +110,6 @@ export function stripPwFromUrl(loc: { pathname?: string; search: string; hash?: 
   return (loc.pathname ?? "/") + (qs ? `?${qs}` : "") + (hash ? `#${hash}` : "");
 }
 
-/** The canonical Paseo pairing URL for a page carrying an `#offer=` fragment (never the local redirect URL). */
-export function canonicalOfferUrl(hash: string): string {
-  return `https://app.paseo.sh/${hash}`;
-}
-
 /**
  * Consumes a one-shot `?pw=<urlencoded>` password placed in the URL by /__desktop/setup alongside a `#offer=…`
  * pairing link. The password is parked in this tab's password storage (readPassword() pre-fills the field), then
@@ -309,30 +304,6 @@ export function isAndroidUserAgent(
   ua: string = typeof navigator !== "undefined" ? navigator.userAgent : "",
 ): boolean {
   return /Android/i.test(ua || "");
-}
-
-export type OfferParse = { ok: true; offer: RemoteOffer } | { ok: false; error: RemoteError };
-
-/** Wraps parseConnectionOfferFromUrl (injected so this file stays import-free). Never throws. */
-export function parseOfferInput(input: string, parse: (url: string) => unknown): OfferParse {
-  const link = normalizeOfferInput(input);
-  if (!link) return { ok: false, error: remoteError("bad-link", "That doesn't look like a pairing link (no #offer= part).") };
-  let offer: unknown;
-  try {
-    offer = parse(link);
-  } catch (e) {
-    safe(() => console.warn("remote: pairing link rejected:", (e as Error)?.message ?? e), undefined);
-    return { ok: false, error: remoteError("bad-link", "The pairing link is damaged or from an unsupported Paseo version.") };
-  }
-  if (!isOffer(offer)) return { ok: false, error: remoteError("bad-link", "The pairing link is damaged or from an unsupported Paseo version.") };
-  return { ok: true, offer };
-}
-
-/** Relay connection parts. useTls defaults on for port 443 / the hosted relay, like Paseo's own client. */
-export function relayParts(offer: RemoteOffer): { endpoint: string; useTls: boolean; serverId: string } {
-  const ep = offer.relay.endpoint;
-  const useTls = offer.relay.useTls ?? (/:443$/.test(ep) || /(^|\.)paseo\.sh(:\d+)?$/.test(ep));
-  return { endpoint: ep, useTls, serverId: offer.serverId };
 }
 
 export type RemoteErrorKind = "bad-link" | "relay-unreachable" | "password-required" | "wrong-password" | "remote-off" | "timeout" | "unknown";

@@ -14,7 +14,6 @@ import { DEMO } from "./demoFlag";
 import { demoAgents, demoArchived, demoProviderUsage, demoWorkspaces } from "./demo";
 import { applyDaemonClientPassword, fetchLocalDaemonPassword, readClientAuthFailure } from "./paseoDaemonAuth";
 import { createPaseoLink } from "./paseoLink";
-import { remoteDaemonClient } from "./paseoRemote";
 import { isRemote } from "./remoteSession";
 import { perfRecord, perfSendBegin, perfSendResolved } from "./perf";
 import { addPending, failPending, markDelivered, retryPending } from "./pendingSend";
@@ -148,16 +147,13 @@ function queueAgent(id: string, agent: PaseoAgent | null) {
 }
 
 // Same construction as createPaseoClient, but we keep the DaemonClient for calls the SDK api lacks.
-// A paired remote page (R2-2) gets the relay + e2ee client from paseoRemote.ts instead; local boot: null.
-export const daemonClient =
-  remoteDaemonClient() ??
-  new DaemonClient({
-    url: WS_URL,
-    clientId: "vibesquad",
-    clientType: "browser",
-    appVersion: "0.0.1",
-    reconnect: { enabled: true, baseDelayMs: 1000, maxDelayMs: 10000 },
-  });
+export const daemonClient = new DaemonClient({
+  url: WS_URL,
+  clientId: "vibesquad",
+  clientType: "browser",
+  appVersion: "0.0.1",
+  reconnect: { enabled: true, baseDelayMs: 1000, maxDelayMs: 10000 },
+});
 const api = createPaseoApi(daemonClient);
 
 export const client: PaseoClient = {

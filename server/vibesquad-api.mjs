@@ -147,7 +147,6 @@ import {
   createPaseoConfigBackup,
   getPaseoConfigSurface,
   getPaseoDaemonStatus,
-  getPaseoPairOffer,
   getPaseoPlugins,
   getPaseoProviderDiagnostic,
   getPaseoProviderModels,
@@ -265,7 +264,6 @@ export {
   createPaseoConfigBackup,
   getPaseoConfigSurface,
   getPaseoDaemonStatus,
-  getPaseoPairOffer,
   getPaseoPlugins,
   getPaseoProviderDiagnostic,
   getPaseoProviderModels,
@@ -411,7 +409,6 @@ export function isGatedRead(pathOrMethod, urlOrPath = "") {
       : urlOrPath;
   if (path === "/__vibesquad/paseo/daemon-auth") return true; // daemon password status / handoff
   if (path === "/__vibesquad/local-token") return true; // local bootstrap handoff
-  if (path === "/__vibesquad/paseo/pair") return true; // daemon pairing offer (a credential)
   if (path === "/__vibesquad/push/vapid-public-key") return true; // creates and writes vapid.json on first call
   if (path === "/__vibesquad/paseo/providers/diagnostic" || path === "/__vibesquad/paseo/providers/models") return true; // runs the provider's own CLI
   if (path === "/__vibesquad/paseo/usage") return new URL(url, "http://x").searchParams.get("refresh") === "1"; // forces provider API calls
@@ -1935,9 +1932,6 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
             .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
         }
         return sendJson(res, 405, { error: "method not allowed" });
-      case "/__vibesquad/paseo/pair":
-        if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
-        return getPaseoPairOffer(opts.paseo).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
       case "/__vibesquad/paseo/hub":
         if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
         return readBody(req)

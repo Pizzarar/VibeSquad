@@ -405,9 +405,9 @@ export function TeamSettingsModal({
           <section className="ts-team" data-testid="remote-control-section" data-setting-id="remote-control">
             <div className="ts-scale-head">
               <div>
-                <div className="field-label">REMOTE CONTROL (PASEO RELAY &amp; REMOTE ACCESS)</div>
+                <div className="field-label">REMOTE CONTROL &amp; REMOTE ACCESS</div>
                 <div className="muted small">
-                  Allow paired phones, tablets, and laptops to open VibeSquad through Paseo Relay (<code>~/.vibesquad/settings.json</code> → <code>remote.enabled</code>). Fixes &quot;VibeSquad remote access is off on the PC&quot;.
+                  Allow paired phones, tablets, and laptops to open VibeSquad over Home LAN or NordVPN Meshnet (<code>~/.vibesquad/settings.json</code> → <code>remote.enabled</code>). Fixes &quot;VibeSquad remote access is off on the PC&quot;.
                 </div>
               </div>
               <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontWeight: 700 }}>
@@ -450,7 +450,7 @@ export function TeamSettingsModal({
               <div>
                 <div className="field-label">LINK / PAIR A DEVICE</div>
                 <div className="muted small">
-                  Generate a QR code, 6-digit pairing code, or Paseo Relay offer link to connect another PC, phone, or tablet in seconds.
+                  Generate a QR code or 6-digit pairing code to connect another PC, phone, or tablet in seconds.
                 </div>
               </div>
               <button

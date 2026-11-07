@@ -206,13 +206,10 @@ pub fn load_config() -> DesktopConfig {
                                 cfg.server_mode = "remote".to_string();
                             }
                         }
-                        // A config that was previously poisoned into "local" mode by a pasted
-                        // #offer= link must stop auto-starting the local Paseo daemon on launch.
-                        if cfg.server_mode == "local"
-                            && (cfg.last_hash.starts_with("#offer=")
-                                || cfg.last_route.contains("remote=1"))
-                        {
-                            cfg.server_mode = "relay".to_string();
+                        // P3 relay cut: a config left in the legacy "relay" mode (or any other unknown
+                        // mode) is no longer recognised, so the desktop would neither proxy nor start a
+                        // server. Migrate it to the native local default and persist it.
+                        if migrate_legacy_server_mode(&mut cfg) {
                             let _ = save_config(&cfg);
                         }
                         set_config_warning(None);
@@ -250,6 +247,19 @@ pub fn load_config() -> DesktopConfig {
     let cfg = DesktopConfig::default();
     let _ = save_config(&cfg);
     cfg
+}
+
+/// P3 relay cut: the legacy `"relay"` mode (and any other unknown non-empty mode) is no longer
+/// recognised, so the desktop would neither proxy nor start a server. Maps it to the native local
+/// default (with the default loopback host) and returns true so the caller persists the migration.
+pub fn migrate_legacy_server_mode(cfg: &mut DesktopConfig) -> bool {
+    if !cfg.server_mode.trim().is_empty() && cfg.server_mode != "local" && cfg.server_mode != "remote" {
+        cfg.server_mode = "local".to_string();
+        cfg.server_host = default_server_host();
+        true
+    } else {
+        false
+    }
 }
 
 pub fn is_lan_host(host: &str) -> bool {
@@ -440,7 +450,7 @@ fn run_background(cfg: &DesktopConfig) -> i32 {
     }
     let mode = cfg.server_mode.as_str();
     // Paired to someone else's server: nothing to run locally. Unset (fresh install) counts as local.
-    if (!mode.is_empty() && mode != "local" && mode != "relay") || !is_local_host(&cfg.server_host) {
+    if (!mode.is_empty() && mode != "local") || !is_local_host(&cfg.server_host) {
         return 0;
     }
     let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
@@ -457,7 +467,7 @@ fn run_background(cfg: &DesktopConfig) -> i32 {
         return 1;
     };
     let port = port_of_host(&cfg.server_host);
-    let child = match spawn_server_process(&node, &runtime_dir, mode, Some(port), true) {
+    let child = match spawn_server_process(&node, &runtime_dir, Some(port), true) {
         Ok(c) => c,
         Err(_) => return 1,
     };
@@ -544,7 +554,6 @@ impl SharedAppState {
         }
         let primary = normalize_host(&cfg.server_host);
         if cfg.server_mode == "local"
-            || cfg.server_mode == "relay"
             || (cfg.server_mode != "remote" && is_local_host(&primary))
         {
             return vec![primary];
@@ -860,7 +869,6 @@ async fn handle_desktop_status(State(state): State<Arc<SharedAppState>>) -> impl
     let cfg = state.config.read().unwrap().clone();
     let active = state.active_upstream.read().unwrap().clone();
     let is_local = cfg.server_mode == "local"
-        || cfg.server_mode == "relay"
         || (cfg.server_mode != "remote" && is_local_host(&cfg.server_host));
     let paired = if cfg.server_mode.trim().is_empty() {
         false
@@ -919,23 +927,6 @@ async fn handle_desktop_choose_mode(
         }))
         .into_response();
     }
-    if mode == "relay" {
-        {
-            let mut cfg = state.config.write().unwrap();
-            cfg.server_mode = "relay".to_string();
-            cfg.server_host = default_server_host();
-            let _ = save_config(&cfg);
-        }
-        state.setup_mode.store(false, Ordering::SeqCst);
-        ensure_local_server_running(&state).await;
-        *state.active_upstream.write().unwrap() = Some(default_server_host());
-        return Json(json!({
-            "ok": true,
-            "serverMode": "relay",
-            "redirect": "/"
-        }))
-        .into_response();
-    }
     if mode == "remote" {
         stop_managed_server(&state);
         {
@@ -963,7 +954,7 @@ async fn handle_desktop_choose_mode(
     }
     (
         StatusCode::BAD_REQUEST,
-        Json(json!({ "ok": false, "error": "mode must be 'local', 'relay' or 'remote'" })),
+        Json(json!({ "ok": false, "error": "mode must be 'local' or 'remote'" })),
     )
         .into_response()
 }
@@ -1175,34 +1166,6 @@ async fn handle_desktop_setup(
     html_no_store_response(StatusCode::OK, ui_pages::render_pair_page(&cfg, None))
 }
 
-fn extract_offer_hash(raw: &str) -> Option<String> {
-    let s = raw.trim();
-    if s.is_empty() {
-        return None;
-    }
-    if let Some(idx) = s.find("#offer=") {
-        let rest = s[idx..].trim();
-        if rest.len() > "#offer=".len() {
-            return Some(rest.to_string());
-        }
-    }
-    if let Some(rest) = s.strip_prefix("offer=") {
-        let clean = rest.trim();
-        if !clean.is_empty() {
-            return Some(format!("#offer={}", clean));
-        }
-    }
-    for sep in ["?offer=", "&offer="] {
-        if let Some(idx) = s.find(sep) {
-            let val = s[idx + sep.len()..].split(&['&', '#', ' '][..]).next().unwrap_or("");
-            if !val.is_empty() {
-                return Some(format!("#offer={}", val));
-            }
-        }
-    }
-    None
-}
-
 async fn handle_desktop_unpair(State(state): State<Arc<SharedAppState>>) -> impl IntoResponse {
     {
         let mut cfg = state.config.write().unwrap();
@@ -1242,49 +1205,6 @@ async fn handle_desktop_pair(
         }
         sub
     };
-
-    if let Some(offer_hash) = extract_offer_hash(&submission.server_host)
-        .or_else(|| extract_offer_hash(&submission.code))
-    {
-        // Optional remote daemon password: the code field is only a password when it isn't itself the offer link.
-        let pw = if extract_offer_hash(&submission.code).is_none() && !submission.code.trim().is_empty() {
-            submission.code.trim().to_string()
-        } else {
-            String::new()
-        };
-        let redirect = if pw.is_empty() {
-            format!("/?remote=1{}", offer_hash)
-        } else {
-            format!(
-                "/?remote=1&pw={}{}",
-                url::form_urlencoded::byte_serialize(pw.as_bytes()).collect::<String>(),
-                offer_hash
-            )
-        };
-        {
-            let mut cfg = state.config.write().unwrap();
-            cfg.server_mode = "relay".to_string();
-            cfg.server_host = default_server_host();
-            // Never persist the #offer= link in last_hash/last_route: restoring it would re-mount the
-            // pairing screen on the next reload and loop `Connecting…` forever.
-            cfg.last_hash = String::new();
-            cfg.last_route = "/?remote=1".to_string();
-            let _ = save_config(&cfg);
-        }
-        state.setup_mode.store(false, Ordering::SeqCst);
-        ensure_local_server_running(&state).await;
-        *state.active_upstream.write().unwrap() = Some(default_server_host());
-        return (
-            StatusCode::OK,
-            Json(json!({
-                "ok": true,
-                "redirect": redirect,
-                "serverMode": "relay",
-                "offer": true
-            })),
-        )
-            .into_response();
-    }
 
     let mut raw_host = submission.server_host.trim().to_string();
     let mut raw_code = submission.code.trim().to_string();
@@ -2110,7 +2030,6 @@ fn server_pid_path() -> PathBuf {
 fn spawn_server_process(
     node: &std::path::Path,
     runtime_dir: &std::path::Path,
-    mode: &str,
     port: Option<u16>,
     background: bool,
 ) -> Result<std::process::Child, String> {
@@ -2123,11 +2042,6 @@ fn spawn_server_process(
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
-        if mode == "relay" {
-            // In relay mode we only serve the static bundle for a remote #offer= link;
-            // never spawn the local Paseo daemon.
-            cmd.env("VIBESQUAD_NO_DAEMON", "1");
-        }
         if background {
             cmd.env("VIBESQUAD_START_RUNNER", "1");
         }
@@ -2164,7 +2078,7 @@ async fn ensure_local_server_running(state: &Arc<SharedAppState>) {
         let cfg = state.config.read().unwrap();
         (cfg.server_mode.clone(), cfg.server_host.clone())
     };
-    if (mode != "local" && mode != "relay") || !is_local_host(&host) {
+    if mode != "local" || !is_local_host(&host) {
         return;
     }
     if check_local_server_healthy(&state.client(), &host).await.is_ok() {
@@ -2184,7 +2098,7 @@ async fn ensure_local_server_running(state: &Arc<SharedAppState>) {
         let Some((node, runtime_dir)) = find_bundled_runtime() else {
             return;
         };
-        match spawn_server_process(&node, &runtime_dir, &mode, Some(port_of_host(&host)), false) {
+        match spawn_server_process(&node, &runtime_dir, Some(port_of_host(&host)), false) {
             Ok(child) => {
                 let _ = fs::create_dir_all(config_dir());
                 let _ = fs::write(server_pid_path(), child.id().to_string());
@@ -2284,7 +2198,6 @@ async fn proxy_http_handler(
 
     let cfg = state.config.read().unwrap().clone();
     let is_local = cfg.server_mode == "local"
-        || cfg.server_mode == "relay"
         || (cfg.server_mode != "remote" && is_local_host(&cfg.server_host));
     // Any GET document navigation (root, ?team=… deep links, SPA paths) gets the root treatment:
     // broken-root guard, desktop bridge injection, and the Reconnecting page. API fetches don't match.
@@ -3420,6 +3333,34 @@ mod tests {
         assert_eq!(fs::read(&cfg_path).unwrap(), corrupt);
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn migrate_legacy_server_mode_maps_relay_and_unknown_to_local() {
+        let mut cfg = DesktopConfig::default();
+        cfg.server_mode = "relay".to_string();
+        cfg.server_host = "127.0.0.1:4180".to_string();
+        assert!(migrate_legacy_server_mode(&mut cfg));
+        assert_eq!(cfg.server_mode, "local");
+        assert_eq!(cfg.server_host, default_server_host());
+
+        let mut cfg = DesktopConfig::default();
+        cfg.server_mode = "something-else".to_string();
+        assert!(migrate_legacy_server_mode(&mut cfg));
+        assert_eq!(cfg.server_mode, "local");
+        assert_eq!(cfg.server_host, default_server_host());
+
+        let mut cfg = DesktopConfig::default();
+        cfg.server_mode = "local".to_string();
+        assert!(!migrate_legacy_server_mode(&mut cfg));
+
+        let mut cfg = DesktopConfig::default();
+        cfg.server_mode = "remote".to_string();
+        assert!(!migrate_legacy_server_mode(&mut cfg));
+
+        let mut cfg = DesktopConfig::default();
+        cfg.server_mode = String::new();
+        assert!(!migrate_legacy_server_mode(&mut cfg));
     }
 
     #[test]

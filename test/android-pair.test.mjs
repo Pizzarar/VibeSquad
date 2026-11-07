@@ -116,31 +116,6 @@ describe("getPaseoPairOffer (deep-link QR pairing)", () => {
 });
 
 describe("UI wiring (source inspection)", () => {
-  test("PairDeviceModal.tsx renders the scannable QR, deep-link copy, and APK download", () => {
-    const src = read("src/PairDeviceModal.tsx");
-    assert.match(src, /data-testid="paseo-offer-qr"/);
-    assert.match(src, /dangerouslySetInnerHTML=\{\{ __html: paseoOffer\.qrSvg \}\}/);
-    assert.match(src, /Scan with your Android phone to open the VibeSquad APK and pair over Paseo Relay/);
-    assert.match(src, /data-testid="copy-android-deep-link"/);
-    assert.match(src, /"vibesquad:\/\/pair#offer=" \+ paseoOffer\.url!\.split\("#offer="\)\[1\]/);
-    assert.match(src, /data-testid="download-android-apk"/);
-    assert.match(src, /download="VibeSquad\.apk"/);
-    assert.match(src, /lanAndroidApkUrl\?: string \| null;/);
-    assert.match(src, /deepLinkUrl\?: string \| null;/);
-    assert.match(src, /qrSvg\?: string \| null;/);
-  });
-
-  test("RemotePair.tsx wires deep-link prefill, clipboard paste, and hides local daemon on Android", () => {
-    const src = read("src/RemotePair.tsx");
-    assert.match(src, /plugin:deep-link\|get_current/);
-    assert.match(src, /"vibesquad:deep-link"/);
-    assert.match(src, /data-testid="remote-pair-paste"/);
-    assert.match(src, /navigator\.clipboard\.readText\(\)/);
-    assert.match(src, /Clipboard access was denied\. Long-press the text box to paste\./);
-    assert.match(src, /!isAndroidUserAgent\(\)/);
-    assert.match(src, /isAndroidUserAgent, isLocalHost, normalizeOfferInput/);
-  });
-
   test("server/paseo-control.mjs imports qrSvg and builds the deep link", () => {
     const src = read("server/paseo-control.mjs");
     assert.match(src, /import \{ qrSvg \} from "\.\/qr\.mjs"/);
