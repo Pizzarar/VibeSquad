@@ -1,8 +1,8 @@
 -- S4 VS mark: hand-placed pixel sources, one table per master size.
 -- A mark is a tiny Win95 window: INK rim, MARBLE top-left bevel, INK bottom-right bevel,
--- VIOLET title bar, SKY_TOP body, a teal V + pink S with a 1px INK drop shadow, and one
--- amber twinkle on the title bar's right end. Every glyph, twinkle and title mark below is
--- placed by hand per size (16 is its own drawing, not a downscale of 64).
+-- VIOLET title bar, SKY_TOP body, a teal V + pink S with an INK drop shadow, and one
+-- amber twinkle kept inside the title bar's right end. Every glyph, twinkle and title mark
+-- below is placed by hand per size (16 is its own drawing, not a downscale of 64).
 -- Only P0 slots, chosen so the light .gpl swap keeps every role readable:
 -- VIOLET/TEAL/PINK/AMBER/MARBLE/INK keep their value in both palettes; SKY_TOP flips
 -- indigo night <-> baby-blue morning, which is the dark/light difference.
@@ -15,161 +15,20 @@ M.KEY = { k=15, m=4, v=8, y=13, t=7, p=9, a=11 }
 -- bottom-right bevel width (inside the rim), title = title-bar rows.
 M.sizes = {}
 
--- ---------------------------------------------------------------- 16 (ico 16, tab)
--- No rim at 16: the bevel is the edge. Letters fill the window; V is 7 wide so its
--- point stays a single pixel.
-M.sizes[16] = {
-  frame = { rim=0, hi=1, lo=1, title=2 },
-  glyphs = {
-    { 1, 5, [[
-tt...tt
-tt...tt
-tt...tt
-.tt.tt.
-.tt.tt.
-..ttt..
-..ttt..
-...t...
-]] },
-    { 9, 5, [[
-.pppp.
-pp..pp
-pp....
-.pppp.
-....pp
-....pp
-pp..pp
-.pppp.
-]] },
-  },
-  shadow = 1,
-  twinkle = { 11, 0, [[
+-- 3-row twinkle (fits a 3-row title bar), 5-row and 7-row versions for the bigger masters
+local TW3 = [[
+.a.
+ama
+.a.
+]]
+local TW5 = [[
 ..a..
-.ama.
 ..a..
-]] },
-}
-
--- ---------------------------------------------------------------- 22 (sidebar slot)
-M.sizes[22] = {
-  frame = { rim=1, hi=1, lo=0, title=3 },
-  titleMark = { {4, 3, 6, 1} },          -- x, y, w, h MARBLE "title text"
-  glyphs = {
-    { 2, 8, [[
-ttt...ttt
-ttt...ttt
-ttt...ttt
-ttt...ttt
-.ttt.ttt.
-.ttt.ttt.
-..ttttt..
-..ttttt..
-...ttt...
-...ttt...
-....t....
-]] },
-    { 12, 8, [[
-.pppppp.
-pppppppp
-ppp..ppp
-ppp.....
-pppppp..
-.pppppp.
-..pppppp
-.....ppp
-ppp..ppp
-pppppppp
-.pppppp.
-]] },
-  },
-  shadow = 1,
-  twinkle = { 15, 1, [[
+aamaa
 ..a..
-.ama.
 ..a..
-]] },
-}
-
--- ---------------------------------------------------------------- 24 (x2 -> ico 48)
-M.sizes[24] = {
-  frame = { rim=1, hi=1, lo=1, title=3 },
-  titleMark = { {4, 3, 6, 1} },
-  glyphs = {
-    { 3, 9, [[
-ttt...ttt
-ttt...ttt
-ttt...ttt
-ttt...ttt
-.ttt.ttt.
-.ttt.ttt.
-..ttttt..
-..ttttt..
-...ttt...
-...ttt...
-....t....
-]] },
-    { 13, 9, [[
-.pppppp.
-pppppppp
-ppp..ppp
-ppp.....
-pppppp..
-.pppppp.
-..pppppp
-.....ppp
-ppp..ppp
-pppppppp
-.pppppp.
-]] },
-  },
-  shadow = 1,
-  twinkle = { 16, 1, [[
-..a..
-.ama.
-..a..
-]] },
-}
-
--- ---------------------------------------------------------------- 32 (ico 32)
-M.sizes[32] = {
-  frame = { rim=1, hi=1, lo=1, title=4 },
-  titleMark = { {5, 4, 9, 2} },
-  glyphs = {
-    { 3, 11, [[
-tttt.....tttt
-tttt.....tttt
-tttt.....tttt
-tttt.....tttt
-.tttt...tttt.
-.tttt...tttt.
-..tttt.tttt..
-..tttt.tttt..
-...ttttttt...
-...ttttttt...
-....ttttt....
-....ttttt....
-.....ttt.....
-.....ttt.....
-]] },
-    { 17, 11, [[
-..ppppppppp
-.pppppppppp
-pppp.......
-pppp.......
-pppp.......
-.ppppppp...
-..ppppppp..
-...ppppppp.
-....ppppppp
-.......pppp
-.......pppp
-.......pppp
-pppppppppp.
-ppppppppp..
-]] },
-  },
-  shadow = 1,
-  twinkle = { 22, 0, [[
+]]
+local TW7 = [[
 ...a...
 ...a...
 ..ama..
@@ -177,7 +36,156 @@ aammmaa
 ..ama..
 ...a...
 ...a...
+]]
+
+-- ---------------------------------------------------------------- 16 (ico 16, tab)
+-- Full frame at 16 too (INK rim + MARBLE top-left), so it holds on white browser chrome.
+-- 5x7 glyphs with 2px stems, 1px body margin all round.
+M.sizes[16] = {
+  frame = { rim=1, hi=1, lo=0, title=3 },
+  glyphs = {
+    { 3, 6, [[
+tt.tt
+tt.tt
+tt.tt
+tt.tt
+.ttt.
+.ttt.
+..t..
 ]] },
+    { 9, 6, [[
+.pppp
+pp...
+pp...
+.ppp.
+...pp
+...pp
+pppp.
+]] },
+  },
+  shadow = 1,
+  twinkle = { 11, 2, TW3 },
+}
+
+-- ---------------------------------------------------------------- 22 (sidebar slot)
+M.sizes[22] = {
+  frame = { rim=1, hi=1, lo=0, title=3 },
+  titleMark = { {4, 3, 6, 1} },          -- x, y, w, h MARBLE "title text"
+  glyphs = {
+    { 3, 7, [[
+ttt...ttt
+ttt...ttt
+ttt...ttt
+ttt...ttt
+.ttt.ttt.
+.ttt.ttt.
+..ttttt..
+..ttttt..
+...ttt...
+...ttt...
+....t....
+]] },
+    { 13, 7, [[
+.pppppp
+ppppppp
+ppp....
+ppp....
+pppppp.
+.pppppp
+....ppp
+....ppp
+....ppp
+ppppppp
+pppppp.
+]] },
+  },
+  shadow = 1,
+  twinkle = { 16, 2, TW3 },
+}
+
+-- ---------------------------------------------------------------- 24 (x2 -> ico 48)
+M.sizes[24] = {
+  frame = { rim=1, hi=1, lo=1, title=3 },
+  titleMark = { {4, 3, 6, 1} },
+  glyphs = {
+    { 3, 8, [[
+ttt...ttt
+ttt...ttt
+ttt...ttt
+ttt...ttt
+.ttt.ttt.
+.ttt.ttt.
+..ttttt..
+..ttttt..
+...ttt...
+...ttt...
+....t....
+]] },
+    { 13, 8, [[
+.pppppp.
+pppppppp
+ppp..ppp
+ppp.....
+pppppp..
+.pppppp.
+..pppppp
+.....ppp
+ppp..ppp
+pppppppp
+.pppppp.
+]] },
+  },
+  shadow = 1,
+  twinkle = { 17, 2, TW3 },
+}
+
+-- ---------------------------------------------------------------- 32 (ico 32)
+-- 17-row glyphs, 3-row S bars, centred in the body.
+M.sizes[32] = {
+  frame = { rim=1, hi=1, lo=1, title=5 },
+  titleMark = { {5, 4, 9, 1} },
+  glyphs = {
+    { 3, 10, [[
+tttt.....tttt
+tttt.....tttt
+tttt.....tttt
+tttt.....tttt
+tttt.....tttt
+tttt.....tttt
+.tttt...tttt.
+.tttt...tttt.
+..tttt.tttt..
+..tttt.tttt..
+...ttttttt...
+...ttttttt...
+....ttttt....
+....ttttt....
+.....ttt.....
+.....ttt.....
+......t......
+]] },
+    { 17, 10, [[
+..ppppppppp
+.pppppppppp
+ppppppppppp
+pppp.......
+pppp.......
+pppp.......
+pppppppp...
+.pppppppp..
+..pppppppp.
+...pppppppp
+.......pppp
+.......pppp
+.......pppp
+.......pppp
+ppppppppppp
+pppppppppp.
+ppppppppp..
+]] },
+  },
+  shadow = 1,
+  twinkle = { 24, 2, TW5 },
 }
 
 -- ---------------------------------------------------------------- 64 (x2 / x4 -> 192 / 512)
@@ -200,28 +208,34 @@ local S64 = {
   {18,14,21},{19,14,21},{20,14,21},{21,14,21},{22,14,21},{23,14,21},
   {24,0,20},{25,0,19},{26,0,18},{27,0,17},
 }
+-- title caption "VAPOR OS": 3x5 letters, a 5-wide V so it can't read as U
+local CAP = {
+  V = { "m...m", "m...m", ".m.m.", ".m.m.", "..m.." },
+  A = { ".m.", "m.m", "mmm", "m.m", "m.m" },
+  P = { "mm.", "m.m", "mm.", "m..", "m.." },
+  O = { ".m.", "m.m", "m.m", "m.m", ".m." },
+  R = { "mm.", "m.m", "mm.", "m.m", "m.m" },
+  S = { ".mm", "m..", ".m.", "..m", "mm." },
+  [" "] = { "...", "...", "...", "...", "..." },
+}
+local function caption(s)
+  local rows = { "", "", "", "", "" }
+  for i=1,#s do
+    local g = CAP[s:sub(i, i)]
+    for r=1,5 do rows[r] = rows[r]..(i > 1 and "." or "")..g[r] end
+  end
+  return table.concat(rows, "\n")
+end
 M.sizes[64] = {
   frame = { rim=1, hi=2, lo=2, title=8 },
-  titleText = { 6, 5, "VAPOR OS" },     -- 3x5 MARBLE caption in the title bar
+  caption = { 6, 5, caption("VAPOR OS") },
   spans = {
     { 5, 22, vSpans(26, 28, 8, 8), 7 },
     { 34, 22, S64, 9 },
   },
   shadow = 2,
   glow = { 44, 60 },                    -- body rows dithered SKY_TOP -> VIOLET (sunset floor)
-  twinkle = { 47, 0, [[
-.....a.....
-.....a.....
-.....a.....
-....ama....
-...ammma...
-aaammmmmaaa
-...ammma...
-....ama....
-.....a.....
-.....a.....
-.....a.....
-]] },
+  twinkle = { 51, 4, TW7 },             -- rows 4..10, inside the 3..10 title bar
 }
 
 return M
