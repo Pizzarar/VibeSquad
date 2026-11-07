@@ -149,3 +149,51 @@ export function skyLayout(i: SkyLayoutInput): SkyLayout {
     : { expanded, widths: { riffbot: 50, overlord: 50 }, riffMode: null };
 }
 export const hasFaceMode = (faces: FacesModel | null, bot: FaceBot, mode: FaceMode): boolean => !!faces?.bots[bot]?.[mode]?.length;
+
+// ── G7 virus takeover overlay (docs/PLAN_SKY_GODS_C2B.md): the Overlord's glitch front eats Riff's squeezed screen ──
+export const TAKEOVER_URL = (theme: SkyTheme) => `/office/takeover-${theme}.png`;
+export const TAKEOVER_JSON_URL = "/office/takeover.json";
+export type TakeoverModel = { cell: { w: number; h: number }; fps: number; frames: { x: number; y: number }[] };
+const posNum = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n > 0;
+const frameNum = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0;
+/**
+ * Validate takeover.json. Frames are {x,y} objects or bare numbers (= x, y 0); cell sides > 0, fps > 0, at least one frame.
+ * Anything invalid → not ok, and the whole overlay is treated as absent (the CSS dissolve plays instead).
+ */
+export function validateTakeover(json: unknown): { ok: true; value: TakeoverModel } | { ok: false; error: string } {
+  if (!json || typeof json !== "object") return { ok: false, error: "not an object" };
+  const { cell, fps, frames } = json as Record<string, unknown>;
+  if (!cell || typeof cell !== "object") return { ok: false, error: "cell missing" };
+  const { w, h } = cell as Record<string, unknown>;
+  if (!posNum(w) || !posNum(h)) return { ok: false, error: "cell sides must be > 0" };
+  if (!posNum(fps)) return { ok: false, error: "fps must be > 0" };
+  if (!Array.isArray(frames) || frames.length < 1) return { ok: false, error: "frames must hold at least one frame" };
+  const out: { x: number; y: number }[] = [];
+  for (const f of frames) {
+    if (frameNum(f)) out.push({ x: f, y: 0 });
+    else if (f && typeof f === "object" && frameNum((f as { x?: unknown }).x) && frameNum((f as { y?: unknown }).y)) out.push({ x: (f as { x: number }).x, y: (f as { y: number }).y });
+    else return { ok: false, error: "bad frame" };
+  }
+  return { ok: true, value: { cell: { w, h }, fps, frames: out } };
+}
+/** Whole-overlay length in ms. */
+export const takeoverDurationMs = (m: Pick<TakeoverModel, "fps" | "frames">): number => (m.frames.length * 1000) / m.fps;
+/** The CSS dissolve fallback has no sheet: eight blocky steps at the sheet's usual 13 fps (≈615 ms). */
+export const TAKEOVER_FALLBACK: Pick<TakeoverModel, "fps"> & { steps: number } = { fps: 13, steps: 8 };
+export const TAKEOVER_FALLBACK_MS = Math.round((TAKEOVER_FALLBACK.steps * 1000) / TAKEOVER_FALLBACK.fps);
+
+/**
+ * One tick of the overlay clock. `pos` is elapsed frames in [0, n]: expanding runs it up to n (held on the last frame),
+ * collapsing runs it back down to 0 (overlay gone, Riff idle). A flip simply changes the direction of the same `pos`,
+ * so it reverses from the current frame instead of restarting.
+ */
+export function takeoverAdvance(pos: number, expanded: boolean, dtMs: number, fps: number, n: number): number {
+  const d = (Math.max(0, dtMs) * fps) / 1000;
+  return Math.min(n, Math.max(0, expanded ? pos + d : pos - d));
+}
+/** Frame to draw at `pos` (the last one is held at pos = n). */
+export const takeoverFrameAt = (pos: number, n: number): number => Math.min(n - 1, Math.max(0, Math.floor(pos)));
+/** Drawn while expanded or still reversing; gone once fully reversed. Reduced motion never draws it. */
+export const takeoverVisible = (pos: number, expanded: boolean, reduced: boolean): boolean => !reduced && (expanded || pos > 0);
+/** Nothing left to animate: expanded and fully in, or collapsed and fully out. */
+export const takeoverSettled = (pos: number, expanded: boolean, n: number): boolean => (expanded ? pos >= n : pos <= 0);
