@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { NO_OVERLORD_TEXT, overlordState, skyZoneIds, skyZonesFor } from "../src/skyZonesLogic.ts";
+import { NO_OVERLORD_TEXT, overlordProfileName, overlordState, skyZoneIds, skyZonesFor, spinUpOverlord } from "../src/skyZonesLogic.ts";
 
 const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
 const member = (id, kind, { status = "idle", attention = null, laneId = "sq1" } = {}) => ({
@@ -206,7 +206,7 @@ test("G1-fix: dormant RiffBot (closed, with history) keeps the sky layout and of
   assert.equal(skyZonesFor(view([member("buddy", "brainstorm")])).riffbot.dormant, false);
   assert.equal(skyZonesFor(view([member("boss", "lead")])).riffbot.dormant, false); // no Buddy at all: Spin Up, not Resume
   const sky = src("SkyZones.tsx");
-  assert.ok(sky.includes('data-testid="sky-resume-btn"'));
+  assert.ok(sky.includes('"sky-resume-btn"'));
   assert.ok(sky.includes("zone.dormant && onSpinUp"));
   // Resume and Spin Up both go through App's onSpinUpPin (spinUpPin → openPin), the existing path.
   assert.ok(src("App.tsx").includes("onSpinUp={onSpinUpPin}"));
@@ -225,4 +225,66 @@ test("G1-fix: face cell size + fps come from faces.json (48x48 @ 3fps), scaled b
   assert.ok(sky.includes("faces?.cell"));
   assert.ok(!/\b(128|96)\b/.test(sky));
   assert.ok(src("useBotFace.ts").includes("1000 / faces.fps"));
+});
+
+// ── O3: Spin Up / Resume Overlord ──
+const withCwd = (m, cwd) => ({ ...m, agent: { ...m.agent, cwd } });
+const profile = { name: "Lead - Claude", provider: "claude", model: "claude-opus-5-5", modeId: "bypassPermissions" };
+
+test("O3: off state renders Spin Up Overlord (sky-start-overlord) wired to App's onSpinUpOverlord", () => {
+  const sky = src("SkyZones.tsx");
+  assert.ok(sky.includes('data-testid="sky-start-overlord"'));
+  assert.ok(sky.includes("Spin Up Overlord"));
+  // The button sits inside the no-Overlord static, after the NO_OVERLORD_TEXT line.
+  assert.ok(/sky-static-overlord"[\s\S]*?NO_OVERLORD_TEXT[\s\S]*?sky-start-overlord/.test(sky));
+  assert.ok(sky.includes("onSpinUpOverlord(view)"));
+  assert.ok(src("App.tsx").includes("onSpinUpOverlord={onSpinUpOverlord}"));
+  assert.ok(src("App.tsx").includes("spawn: spawnTeamAgent"));
+});
+
+test("O3: spinUpOverlord spawns role=lead on the hub lane with the Squad's Lead profile, in the hub cwd", async () => {
+  const v = view([withCwd(member("buddy", "brainstorm"), "C:/hub")]);
+  let req;
+  const id = await spinUpOverlord(v, { spawn: async (r) => ((req = r), { id: "new-lead" }), profile, profileName: "Lead - Claude" });
+  assert.equal(id, "new-lead");
+  assert.equal(req.labels.role, "lead");
+  assert.equal(req.labels.lane, "sq1"); // the hub lane of the Squad
+  assert.equal(req.labels.team, "sq1");
+  assert.equal(req.labels.profile, "Lead - Claude");
+  assert.equal(req.labels.ord, "1");
+  assert.equal(req.provider, "claude");
+  assert.equal(req.model, "claude-opus-5-5");
+  assert.equal(req.modeId, "bypassPermissions");
+  assert.equal(req.cwd, "C:/hub");
+  assert.equal(req.title, "Overlord");
+});
+
+test("O3: spinUpOverlord falls back to the Gemini defaults, bumps ord, and refuses with no hub cwd", async () => {
+  const v = view([withCwd(member("buddy", "brainstorm"), "C:/hub"), { ...member("old", "lead", { status: "closed" }), agent: { ...member("old", "lead").agent, status: "closed", labels: { lane: "sq1", ord: "3" } } }]);
+  let req;
+  await spinUpOverlord(v, { spawn: async (r) => ((req = r), { id: "x" }), profile: undefined, profileName: "Lead - Gemini" });
+  assert.equal(req.provider, "antigravity-cli");
+  assert.equal(req.labels.ord, "4");
+  await assert.rejects(() => spinUpOverlord(view([member("buddy", "brainstorm")]), { spawn: async () => ({ id: "x" }), profile, profileName: "Lead - Claude" }), /working directory/);
+});
+
+test("O3: a closed Overlord keeps its zone read-only (dormant) with Resume Overlord; a live one wins", () => {
+  const closed = { ...member("old", "lead"), agent: { ...member("old", "lead").agent, status: "closed", labels: { lane: "sq1", profile: "Lead - Gemini" } } };
+  const z = skyZonesFor(view([member("buddy", "brainstorm"), closed]));
+  assert.equal(z.overlord.agentId, "old");
+  assert.equal(z.overlord.dormant, true);
+  assert.equal(z.overlord.member, null); // nobody on duty: never expands the sky
+  assert.equal(overlordState(z), "none");
+  assert.deepEqual(skyZoneIds(z), ["buddy", "old"]);
+  assert.equal(overlordProfileName(view([member("buddy", "brainstorm"), closed])), "Lead - Gemini");
+  assert.equal(overlordProfileName(view([member("buddy", "brainstorm")])), "Lead - Claude");
+  const live = skyZonesFor(view([member("buddy", "brainstorm"), closed, member("boss", "lead")]));
+  assert.equal(live.overlord.agentId, "boss");
+  assert.equal(live.overlord.dormant, false);
+  const sky = src("SkyZones.tsx");
+  assert.ok(sky.includes('"sky-resume-overlord"'));
+  assert.ok(sky.includes("Resume {label}"));
+  // Archived closed leads do not count as dormant.
+  const archived = { ...closed, agent: { ...closed.agent, archivedAt: "2026-11-07T00:00:00Z" } };
+  assert.equal(skyZonesFor(view([member("buddy", "brainstorm"), archived])).overlord.agentId, null);
 });
