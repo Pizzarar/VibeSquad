@@ -10,6 +10,9 @@ import { acquireStartLock, releaseLock } from "../../runner/lock.mjs";
 
 const RUNNER_ENTRY = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "runner", "server.mjs");
 
+/** Three missed 15s runner heartbeats and the event stream is treated as dead. */
+const STREAM_IDLE_MS = 45000;
+
 export const runnerHome = (env = process.env) => path.join(env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad"), "runner");
 
 export function readDiscovery(home) {
@@ -39,7 +42,10 @@ export class RunnerDownError extends RunnerHttpError {
 }
 
 export class RunnerClient {
-  constructor({ home, fetchImpl = fetch, spawnImpl = spawn, startTimeoutMs = 8000 } = {}) {
+  constructor({ home, fetchImpl = fetch, spawnImpl = spawn, startTimeoutMs = 8000, requestTimeoutMs = 15000, queueMs = 10 * 60_000, probeTimeoutMs = 2000 } = {}) {
+    this.queueMs = queueMs; // the runner's slot-queue wait: create/input may legitimately take this long
+    this.probeTimeoutMs = probeTimeoutMs;
+    this.requestTimeoutMs = requestTimeoutMs;
     this._home = home; // undefined = follow VIBESQUAD_HOME on every use (the shared backend outlives env changes)
     this._connHome = null;
     this.fetch = fetchImpl;
@@ -63,15 +69,64 @@ export class RunnerClient {
   }
 
   async request(method, route, body) {
+    try {
+      return await this._requestOnce(method, route, body);
+    } catch (err) {
+      if (!err?.transport || method !== "GET") throw err;
+      // Idempotent read: one retry, but only if re-discovery found a different runner (a timeout on the same port would just hang again).
+      const next = readDiscovery(this.home);
+      if (!next || next.port === err.port) throw err;
+      this.conn = next;
+      return this._requestOnce(method, route, body);
+    }
+  }
+
+  async _requestOnce(method, route, body) {
     const home = this.home; // also drops a conn cached for a different home
     if (!this.conn) this.conn = readDiscovery(home);
     if (!this.conn) throw new RunnerHttpError(0, "runner is not running");
-    const res = await this.fetch(`http://127.0.0.1:${this.conn.port}${route}`, {
-      method,
-      headers: { authorization: `Bearer ${this.conn.token}`, ...(body !== undefined ? { "content-type": "application/json" } : {}) },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
-    const data = await res.json().catch(() => ({}));
+    const { port, token } = this.conn;
+    const ac = new AbortController();
+    // create/input queue for a slot inside the runner (up to queueMs), so a silent 15s is not proof of a hang: probe /health instead.
+    const queued = method === "POST" && (route === "/agents" || /^\/agents\/[^/]+\/input$/.test(route));
+    const hardDeadline = Date.now() + this.queueMs + this.requestTimeoutMs;
+    let timer;
+    let done = false;
+    const arm = () => {
+      timer = setTimeout(async () => {
+        if (!queued || Date.now() >= hardDeadline) return ac.abort();
+        let healthy = false;
+        try {
+          const h = await this.fetch(`http://127.0.0.1:${port}/health`, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(this.probeTimeoutMs) });
+          healthy = h.ok;
+        } catch { /* unreachable */ }
+        if (done || ac.signal.aborted) return;
+        if (healthy) arm();
+        else ac.abort();
+      }, this.requestTimeoutMs);
+    };
+    arm();
+    let res;
+    let data;
+    try {
+      res = await this.fetch(`http://127.0.0.1:${port}${route}`, {
+        method,
+        headers: { authorization: `Bearer ${token}`, ...(body !== undefined ? { "content-type": "application/json" } : {}) },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal: ac.signal,
+      });
+      data = await res.json().catch(() => ({}));
+    } catch (e) {
+      // Connect error or timeout: the runner is hung or moved to a new port. Drop the stale conn so the next call re-reads discovery.
+      this.conn = null;
+      const err = new RunnerHttpError(504, ac.signal.aborted ? `runner not responding (no answer in ${Math.round(this.requestTimeoutMs / 1000)}s)` : `runner not responding (${e?.cause?.code || e?.message || "connection failed"})`);
+      err.transport = true;
+      err.port = port;
+      throw err;
+    } finally {
+      done = true;
+      clearTimeout(timer);
+    }
     if (!res.ok) throw new RunnerHttpError(res.status, data.error || `runner ${res.status}`);
     return data;
   }
@@ -80,10 +135,18 @@ export class RunnerClient {
    * Tail the runner's /events SSE stream. Reconnects (retryMs) until close(); onOpen/onClose bracket each connection,
    * onMessage gets each parsed { id, event }. close() aborts the request and clears the retry timer: nothing lingers.
    */
-  stream({ onMessage, onOpen, onClose, retryMs = 2000 } = {}) {
+  stream({ onMessage, onOpen, onClose, retryMs = 2000, idleMs = STREAM_IDLE_MS } = {}) {
     let closed = false;
     let ac = null;
     let timer = null;
+    let idle = null;
+    // The runner heartbeats every 15s: a stream that goes quiet without erroring (half-open socket) would freeze live chat
+    // until the VS server restarts, so silence past idleMs aborts it and falls into the normal reconnect.
+    const arm = () => {
+      clearTimeout(idle);
+      idle = setTimeout(() => ac?.abort(), idleMs);
+      idle.unref?.();
+    };
     const run = async () => {
       let opened = false;
       try {
@@ -93,10 +156,12 @@ export class RunnerClient {
         const res = await this.fetch(`http://127.0.0.1:${this.conn.port}/events`, { headers: { authorization: `Bearer ${this.conn.token}` }, signal: ac.signal });
         if (!res.ok || !res.body) throw new Error(`runner events ${res.status}`);
         opened = true;
+        arm();
         if (!closed) onOpen?.();
         const dec = new TextDecoder();
         let buf = "";
         for await (const chunk of res.body) {
+          arm();
           buf += dec.decode(chunk, { stream: true });
           let i;
           while ((i = buf.indexOf("\n\n")) >= 0) {
@@ -110,6 +175,7 @@ export class RunnerClient {
       } catch {
         this.conn = null; // stale discovery (runner restarted on a new port): re-read next time
       }
+      clearTimeout(idle);
       if (opened && !closed) onClose?.();
       if (!closed) {
         timer = setTimeout(run, retryMs);
@@ -121,6 +187,7 @@ export class RunnerClient {
       close() {
         closed = true;
         clearTimeout(timer);
+        clearTimeout(idle);
         ac?.abort();
       },
     };
