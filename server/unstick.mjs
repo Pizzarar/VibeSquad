@@ -14,7 +14,7 @@ import { killTree } from "./proc-tree.mjs";
 
 const NODE_IMAGE = /^node(\.exe)?$/i;
 // Command lines that are VS infrastructure or tools an agent depends on, never strays.
-const PROTECTED_CMD = [/server[\/]mcp[\/]/i, /vibesquad[\/]+server[\/]/i, /runner[\/]server\.mjs/i, /playwright/i, /@playwright[\/]mcp/i, /paseo/i, /vs-mcp/i];
+const PROTECTED_CMD = [/server[\\/]mcp[\\/]/i, /vibesquad[\\/]+server[\\/]/i, /runner[\\/]server\.mjs/i, /playwright/i, /@playwright[\\/]mcp/i, /paseo/i, /vs-mcp/i];
 
 /** All processes as [{ pid, ppid, name, cmd, startedMs }]. Windows: Win32_Process via PowerShell; elsewhere: ps. */
 export function listProcesses({ platform = process.platform, run = spawnSync } = {}) {
@@ -121,7 +121,7 @@ export async function unstick({
     if (hung) {
       // Kill the runner tree only if the pid still looks like the runner (pids get reused), then clear what blocks a fresh start.
       const rp = procs.find((p) => p.pid === runnerPid);
-      if (rp && /runner[\/]server\.mjs/i.test(rp.cmd ?? "")) {
+      if (rp && /runner[\\/]server\.mjs/i.test(rp.cmd ?? "")) {
         try { killPid(runnerPid); killed.push({ pid: runnerPid, cmd: String(rp.cmd).slice(0, 200) }); } catch { /* gone */ }
       }
       for (const f of ["runner.lock", "runner.json"]) rmSync(join(rHome, f), { force: true });

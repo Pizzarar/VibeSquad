@@ -11,10 +11,10 @@ const procs = [
   P(10, 1, 'cmd', 'cmd.exe'),
   P(100, 10, 'node server/serve.mjs'),        // serving VS server
   P(101, 100, 'node child-of-server'),
-  P(200, 1, 'node runner/server.mjs --home x'), // runner
+  P(200, 1, String.raw`node C:\x\runner\server.mjs --home x`), // runner
   P(201, 200, 'node codex-agent'),            // agent tree
   P(202, 201, 'node agent-grandchild'),
-  P(300, 1, 'node C:/x/server/mcp/vs-mcp.mjs'),
+  P(300, 1, String.raw`node C:\x\server\mcp\vs-mcp.mjs`),
   P(400, 1, 'node @playwright/mcp'),
   P(500, 1, 'node -e setInterval(()=>{},1e9)'), // stray
   P(501, 1, 'chrome', 'chrome.exe'),
