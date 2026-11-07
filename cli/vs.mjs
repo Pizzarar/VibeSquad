@@ -8,12 +8,8 @@
 //   vs log --since-me [--limit <N>] [--peek]
 //   vs handoff [--out <path>]
 //
-// Caller identity comes from PASEO_AGENT_ID (or --agent). Labels are read from
-// the local Paseo agent store, which is what the daemon persists live agent
-// state to, so this works whether the daemon is up, down, or absent. If the
-// agent is not in the store, a bounded `paseo inspect` probe (1500ms) supplies
-// the cwd, and teams.json path rules decide the team/lane. Every lookup falls
-// back cleanly so the CLI also runs in offline unit tests.
+// Caller identity comes from VS_AGENT_ID (PASEO_AGENT_ID is still read: the runner exports both, old prompts use it) or --agent.
+// Labels are read from the runner's own agent log; teams.json path rules decide the team/lane for everything else.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -32,8 +28,8 @@ import {
   parkTopicBrainstorm,
   triageInboxCards,
 } from "../server/inbox.mjs";
-import { createDaemonClient, readBrainstormSummary, writeBrainstormSummary } from "../server/brainstorm.mjs";
-import { getBackend, getCliBackend, hasCustomMockCli, hasCustomOfflineStore as hasCustomOfflineStoreAt, isRunnerId, listRunnerAgentsSync, readRunnerAgentSync, run, sharedRunnerBackend } from "../server/backend/index.mjs";
+import { createAgentClient, readBrainstormSummary, writeBrainstormSummary } from "../server/brainstorm.mjs";
+import { getBackend, isRunnerId, listRunnerAgentsSync, readRunnerAgentSync, sharedRunnerBackend } from "../server/backend/index.mjs";
 import { callTool, createContext } from "../server/mcp/tools.mjs";
 import { bestOverlap, newPinBrief, slugLaneId, takenLaneIds, uniqueLaneId } from "../server/pin-ideas.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "../server/teams-file.mjs";
@@ -98,11 +94,9 @@ const HIGH_PRIORITY = new Set(["decision", "you", "needs-you", LEGACY_USER_TYPE,
 const MAX_TEXT = 240;
 const MAX_READ_LINES = 40;
 const MAX_HANDOFF_LOG_LINES = 20;
-const DAEMON_TIMEOUT_MS = 1500;
 const GH_TIMEOUT_MS = 2000;
 
 const BASE_DIR = path.resolve(process.env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad"));
-const PASEO_HOME = process.env.PASEO_HOME || path.join(os.homedir(), ".paseo");
 // Root dir the lane-spec artifacts resolve against. VIBESQUAD_ROOT lets tests (and the installed
 // runtime) point the durable docs/lanes/<lane>/ tree at a specific checkout.
 const LANE_SPEC_ROOT = path.resolve(process.env.VIBESQUAD_ROOT || path.resolve(import.meta.dirname, ".."));
@@ -210,165 +204,7 @@ function teamByPath(cwd) {
     // ignore filesystem errors
   }
 
-  const targetKey = normalizePathKey(cwd);
-  if (targetKey) {
-    for (const [, file] of buildAgentIndex()) {
-      try {
-        const record = parseJsonWithBom(fs.readFileSync(file, "utf8"));
-        if (record?.cwd && record?.labels?.team && normalizePathKey(record.cwd) === targetKey) {
-          const found = findTeamDef(record.labels.team) || findLane(record.labels.team)?.team;
-          if (found) return found;
-        }
-      } catch {
-        // skip unreadable record
-      }
-    }
-  }
   return null;
-}
-
-// ---------------------------------------------------------------------------
-// Paseo agent store (labels, status, cwd)
-// ---------------------------------------------------------------------------
-
-const AGENTS_ROOT = path.join(PASEO_HOME, "agents");
-let agentIndex = null;
-
-function buildAgentIndex() {
-  if (agentIndex) return agentIndex;
-  const index = new Map();
-  try {
-    const dirs = fs.readdirSync(AGENTS_ROOT, { withFileTypes: true });
-    for (const dir of dirs) {
-      if (!dir.isDirectory()) continue;
-      const full = path.join(AGENTS_ROOT, dir.name);
-      let files = [];
-      try {
-        files = fs.readdirSync(full, { withFileTypes: true });
-      } catch {
-        continue;
-      }
-      for (const file of files) {
-        if (!file.isFile() || !file.name.endsWith(".json")) continue;
-        index.set(file.name.slice(0, -5), path.join(full, file.name));
-      }
-    }
-  } catch {
-    // no Paseo store on this machine
-  }
-  agentIndex = index;
-  return index;
-}
-
-function readAgentRecord(agentId) {
-  if (!agentId) return null;
-  const file = buildAgentIndex().get(String(agentId));
-  if (!file) return null;
-  try {
-    return parseJsonWithBom(fs.readFileSync(file, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-const cliBackend = getCliBackend();
-const hasCustomOfflineStore = () => hasCustomOfflineStoreAt(PASEO_HOME);
-
-function runPaseo(args, timeoutMs = DAEMON_TIMEOUT_MS) {
-  return cliBackend.runCli(PASEO_HOME, args, timeoutMs);
-}
-
-// Live daemon lookup by id. The local store already has labels, so the CLI
-// probe is only needed for an agent Paseo has not persisted (or another host).
-function inspectAgentViaDaemon(agentId) {
-  const out = runPaseo(["inspect", agentId, "--json"]);
-  if (!out) return null;
-  try {
-    const parsed = JSON.parse(out);
-    return {
-      id: parsed.Id ?? parsed.id ?? agentId,
-      title: parsed.Name ?? parsed.Title ?? parsed.title ?? parsed.name ?? "",
-      cwd: parsed.Cwd ?? parsed.cwd ?? "",
-      labels: parsed.Labels ?? parsed.labels ?? {},
-      status: parsed.Status ?? parsed.status,
-      usage: parsed.LastUsage ?? parsed.lastUsage ?? parsed.usage ?? null,
-      contextWindowUsedTokens:
-        parsed.ContextWindowUsedTokens ??
-        parsed.contextWindowUsedTokens ??
-        parsed.LastUsage?.ContextWindowUsedTokens ??
-        parsed.lastUsage?.contextWindowUsedTokens,
-      inputTokens:
-        parsed.InputTokens ??
-        parsed.inputTokens ??
-        parsed.LastUsage?.InputTokens ??
-        parsed.lastUsage?.inputTokens,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function listAgentsViaDaemon() {
-  const out = runPaseo(["ls", "-g", "--json", "-a"]);
-  if (!out) return null;
-  try {
-    const parsed = JSON.parse(out);
-    if (!Array.isArray(parsed)) return null;
-    return parsed.map((a) => {
-      const record = readAgentRecord(a.id);
-      const title = a.title ?? a.name ?? record?.title ?? record?.name ?? "";
-      return {
-        id: a.id,
-        name: title,
-        title,
-        status: a.status ?? record?.lastStatus ?? record?.status ?? "unknown",
-        cwd: a.cwd ?? record?.cwd ?? "",
-        archivedAt: a.archivedAt ?? record?.archivedAt ?? null,
-        archived: Boolean(a.archived || record?.archived || a.archivedAt || record?.archivedAt),
-        internal: Boolean(a.internal || record?.internal),
-        labels: { ...(record?.labels ?? {}), ...(a.labels ?? {}) },
-        requiresAttention: Boolean(a.requiresAttention ?? record?.requiresAttention),
-        attentionReason: a.attentionReason ?? record?.attentionReason ?? null,
-        pendingPermissions: a.pendingPermissions ?? record?.pendingPermissions ?? [],
-        usage: a.usage ?? a.lastUsage ?? record?.lastUsage ?? record?.usage ?? null,
-        contextWindowUsedTokens: a.contextWindowUsedTokens ?? record?.contextWindowUsedTokens,
-        inputTokens: a.inputTokens ?? record?.inputTokens,
-      };
-    });
-  } catch {
-    return null;
-  }
-}
-
-function listAgentsOffline() {
-  const agents = [];
-  for (const [id, file] of buildAgentIndex()) {
-    try {
-      const record = parseJsonWithBom(fs.readFileSync(file, "utf8"));
-      if (record.internal) continue;
-      const title = record.title ?? record.name ?? "";
-      agents.push({
-        id: record.id ?? id,
-        name: title,
-        title,
-        status: record.lastStatus ?? record.status ?? "unknown",
-        cwd: record.cwd ?? "",
-        archivedAt: record.archivedAt ?? null,
-        archived: Boolean(record.archived || record.archivedAt),
-        internal: Boolean(record.internal),
-        labels: record.labels ?? {},
-        requiresAttention: Boolean(record.requiresAttention),
-        attentionReason: record.attentionReason ?? null,
-        pendingPermissions: record.pendingPermissions ?? [],
-        usage: record.lastUsage ?? record.usage ?? null,
-        contextWindowUsedTokens: record.contextWindowUsedTokens,
-        inputTokens: record.inputTokens,
-      });
-    } catch {
-      // skip corrupt store entries
-    }
-  }
-  return agents;
 }
 
 // ---------------------------------------------------------------------------
@@ -471,9 +307,8 @@ const UNASSIGNED_LANE = "unassigned";
 function resolveIdentity(flags) {
   const agentId = String(flags.agent ?? process.env.PASEO_AGENT_ID ?? process.env.VS_AGENT_ID ?? "").trim();
 
-  // rn- ids belong to the runner: read its log (labels/role/lane) instead of asking Paseo.
-  let record = isRunnerId(agentId) ? readRunnerAgentSync(agentId) : agentId ? readAgentRecord(agentId) : null;
-  if (!record && agentId && !isRunnerId(agentId)) record = inspectAgentViaDaemon(agentId);
+  // rn- ids belong to the runner: read its log (labels/role/lane).
+  let record = isRunnerId(agentId) ? readRunnerAgentSync(agentId) : null;
 
   const labels = record?.labels ?? {};
   const title = record?.title ?? "";
@@ -633,7 +468,6 @@ const USAGE = `vs — VibeSquad team log, live roster, profiles, handoff packet,
 Usage:
   vs whoami [--agent <id>] [--lane <lane>] [--json]
   vs who [lead|brainstorm|buddy|workers|all] [--team <team>] [--lane <lane>] [--json]
-  vs migrate identity [--dry-run] [--json]
   vs profiles [--role <role>] [--name <name>] [--notes] [--json]
   vs log <type> "<text>" [--ref <ref>...] [--digest]
   vs log --since-me [--limit <N>] [--peek]
@@ -648,7 +482,7 @@ Usage:
   vs task list [--lane <lane>] [--json]
   vs task set <unit-id> [--goal <g>] [--files <f1,f2>] [--done-check <cmd>] [--status <todo|running|done|blocked>] [--branch <b>] [--commit <sha>]
   vs cap [list | add <provider> | clear <provider>]
-  vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" [--cwd <dir>]   start a worker in your lane (runner or Paseo)
+  vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" [--cwd <dir>]   start a worker in your lane
   vs send <agent> "<text>"   message an agent
   vs status <agent>   status + last assistant message
   vs wait <agent> [--timeout <seconds>]   block until idle (exit 0), error or blocked (1), timeout (2); no limit by default
@@ -762,7 +596,7 @@ function laneMembers(agents, team) {
   });
 }
 
-// Runner agents live in the runner's own logs, not in Paseo's store: shape them like the Paseo rows.
+// Runner agents live in the runner's own logs: shape them as agent rows.
 function listAgentsViaRunner() {
   return listRunnerAgentsSync().map((a) => ({
     id: a.id,
@@ -782,10 +616,7 @@ function listAgentsViaRunner() {
 }
 
 function collectAgents() {
-  const live = listAgentsViaDaemon();
-  const runnerAgents = listAgentsViaRunner();
-  if (live && live.length) return { agents: [...live, ...runnerAgents], source: "daemon" };
-  return { agents: [...listAgentsOffline(), ...runnerAgents], source: "offline" };
+  return { agents: listAgentsViaRunner(), source: "runner" };
 }
 
 function resolveCallerUsage(identity) {
@@ -795,19 +626,15 @@ function resolveCallerUsage(identity) {
     if (!u) return null;
     return { input: Number(u.inputTokens ?? 0), output: Number(u.outputTokens ?? 0), cached: 0 };
   }
-  const out = runPaseo(["inspect", identity.agentId, "--json"]);
-  if (!out) return null;
+  return null;
+}
+
+/** spawnSync wrapper for git / gh probes: never throws, always returns a result object. */
+function run(command, args, timeoutMs) {
   try {
-    const parsed = JSON.parse(out);
-    const usage = parsed.LastUsage;
-    if (!usage) return null;
-    return {
-      input: Number(usage.InputTokens ?? 0),
-      output: Number(usage.OutputTokens ?? 0),
-      cached: Number(usage.CachedTokens ?? 0),
-    };
-  } catch {
-    return null;
+    return spawnSync(command, args, { encoding: "utf8", timeout: timeoutMs, windowsHide: true });
+  } catch (err) {
+    return { status: null, stdout: "", stderr: String(err?.message ?? err), error: err };
   }
 }
 
@@ -840,7 +667,7 @@ function buildHandoffPacket(identity, agents, source) {
   lines.push("## Auto State");
   lines.push("");
   lines.push(`- **Team / Lane / Ord:** ${identity.team.name} / ${identity.lane} / ord${identity.ord}`);
-  lines.push(`- **Generated:** ${now} (${source === "daemon" ? "daemon reachable" : "daemon offline — local agent store"})`);
+  lines.push(`- **Generated:** ${now}`);
 
   const usage = resolveCallerUsage(identity);
   if (usage) {
@@ -1120,76 +947,6 @@ function formatWhoLine(entry) {
   return `${entry.title} · ${entry.id} · ${entry.status} · ${entry.tokensLabel}`;
 }
 
-async function enrichZeroTokenAgents(candidates) {
-  const needInspect = candidates.filter((a) => !isRunnerId(a.id) && extractAgentTokens(a).tokens === 0);
-  if (!needInspect.length) return;
-
-  if (!hasCustomOfflineStore() && !hasCustomMockCli()) {
-    const backend = getBackend(createDaemonClient());
-    let timer = null;
-    try {
-      await Promise.race([
-        (async () => {
-          if (typeof backend.connect === "function") await backend.connect();
-          const liveMap = new Map();
-          if (typeof backend.fetchAgents === "function") {
-            const res = await backend.fetchAgents({ filter: { includeArchived: false } }).catch(() => null);
-            const list = Array.isArray(res)
-              ? res
-              : Array.isArray(res?.agents)
-                ? res.agents
-                : Array.isArray(res?.entries)
-                  ? res.entries.map((e) => e.agent ?? e)
-                  : [];
-            for (const item of list) {
-              if (item?.id) liveMap.set(item.id, item);
-            }
-          }
-          for (const a of needInspect) {
-            let live = liveMap.get(a.id) ?? null;
-            if (!live && typeof backend.fetchAgent === "function") {
-              const fetched = await backend.fetchAgent(a.id).catch(() => null);
-              live = fetched?.agent ?? (fetched?.id ? fetched : null);
-            }
-            if (live) {
-              a.lastUsage = live.lastUsage ?? live.usage ?? a.lastUsage ?? null;
-              a.usage = live.lastUsage ?? live.usage ?? a.usage ?? null;
-              a.contextUsage = live.contextUsage ?? a.contextUsage;
-              a.contextWindowUsedTokens =
-                live.contextWindowUsedTokens ??
-                live.lastUsage?.contextWindowUsedTokens ??
-                a.contextWindowUsedTokens;
-              a.inputTokens = live.inputTokens ?? live.lastUsage?.inputTokens ?? a.inputTokens;
-              a.labels = { ...(live.labels ?? {}), ...(a.labels ?? {}) };
-            }
-          }
-        })(),
-        new Promise((resolve) => {
-          timer = setTimeout(resolve, DAEMON_TIMEOUT_MS);
-        }),
-      ]);
-    } catch {
-      // ignore daemon errors
-    } finally {
-      if (timer) clearTimeout(timer);
-      if (typeof backend?.close === "function") {
-        await Promise.resolve(backend.close()).catch(() => {});
-      }
-    }
-  }
-
-  for (const a of needInspect) {
-    if (extractAgentTokens(a).tokens > 0 && !hasCustomMockCli()) continue;
-    const inspected = inspectAgentViaDaemon(a.id);
-    if (inspected) {
-      a.usage = inspected.usage ?? a.usage ?? null;
-      a.contextWindowUsedTokens = a.contextWindowUsedTokens ?? inspected.contextWindowUsedTokens;
-      a.inputTokens = a.inputTokens ?? inspected.inputTokens;
-      a.labels = { ...(inspected.labels ?? {}), ...(a.labels ?? {}) };
-    }
-  }
-}
-
 async function commandWho(flags) {
   const rawTarget = String(flags._[0] ?? "all").trim().toLowerCase();
   if (!WHO_TARGETS.has(rawTarget)) {
@@ -1228,8 +985,6 @@ async function commandWho(flags) {
 
     rawMatched.push({ agent: a, title: title || a.id, role, status, teamId, lane });
   }
-
-  await enrichZeroTokenAgents(rawMatched.map((m) => m.agent));
 
   if (squadWide) {
     const order = new Map(identity.team.lanes.map((l, i) => [String(l.id).toLowerCase(), i]));
@@ -1305,8 +1060,7 @@ async function commandWhoami(flags) {
   // The caller's VS_LANE / VS_TEAM / VS_ROLE / VS_ORD env describe the *caller*, and must not
   // leak onto a different agent's identity (e.g. a worker's VS_ROLE=worker overriding a lead).
   const explicitTarget = typeof flags.agent === "string" && flags.agent.trim() !== "";
-  let record = isRunnerId(agentId) ? readRunnerAgentSync(agentId) : agentId ? readAgentRecord(agentId) : null;
-  if (!record && agentId && !isRunnerId(agentId)) record = inspectAgentViaDaemon(agentId);
+  let record = isRunnerId(agentId) ? readRunnerAgentSync(agentId) : null;
 
   const labels = record?.labels ?? {};
   const cwd = record?.cwd || process.cwd();
@@ -1363,7 +1117,6 @@ async function commandWhoami(flags) {
       leadCandidates.push(a);
     }
     if (leadCandidates.length > 0) {
-      await enrichZeroTokenAgents(leadCandidates);
       const lead = leadCandidates[0];
       const { tokens, tokensLabel } = extractAgentTokens(lead);
       const title = String(lead.title ?? lead.name ?? lead.id).trim();
@@ -1410,208 +1163,6 @@ async function commandWhoami(flags) {
     `lane: ${resolved.laneId || "unassigned"} · squad: ${resolved.teamId} (${resolved.teamName}) · role: ${resolved.role}${ordPart} · lead: ${leadSummary}\n`,
   );
   return exitCode;
-}
-
-function summarizeMigrationLabels(labels = {}) {
-  const parts = [];
-  if (labels.lane) parts.push(`lane=${labels.lane}`);
-  else if (labels.lead) parts.push(`lead=${labels.lead}`);
-  if (labels.team) parts.push(`team=${labels.team}`);
-  if (labels.role) parts.push(`role=${labels.role}`);
-  if (labels.ord) parts.push(`ord=${labels.ord}`);
-  if (labels.orphan) parts.push(`orphan=${labels.orphan}`);
-  return parts.length ? `{${parts.join(", ")}}` : "{}";
-}
-
-function migrationLabelsEqual(a = {}, b = {}) {
-  const keysA = Object.keys(a).filter((k) => a[k] !== undefined && a[k] !== "");
-  const keysB = Object.keys(b).filter((k) => b[k] !== undefined && b[k] !== "");
-  if (keysA.length !== keysB.length) return false;
-  for (const k of keysA) {
-    if (String(a[k]) !== String(b[k])) return false;
-  }
-  return true;
-}
-
-function commandMigrate(flags) {
-  const sub = String(flags._[0] ?? "identity").trim().toLowerCase();
-  if (sub && sub !== "identity") {
-    throw new Error(`unknown migrate target "${sub}". Use: vs migrate identity [--dry-run] [--json]`);
-  }
-  const dryRun = Boolean(flags.dryRun);
-
-  agentIndex = null;
-  const storeIndex = buildAgentIndex();
-  const recordsById = new Map();
-
-  for (const [id, file] of storeIndex.entries()) {
-    try {
-      const record = parseJsonWithBom(fs.readFileSync(file, "utf8"));
-      if (record.internal) continue;
-      recordsById.set(record.id ?? id, {
-        id: record.id ?? id,
-        file,
-        record,
-      });
-    } catch {
-      // skip corrupt store files
-    }
-  }
-
-  const daemonList = listAgentsViaDaemon();
-  if (Array.isArray(daemonList)) {
-    for (const d of daemonList) {
-      if (!d?.id || d.internal) continue;
-      if (!recordsById.has(d.id)) {
-        recordsById.set(d.id, {
-          id: d.id,
-          file: storeIndex.get(d.id) || null,
-          record: d,
-        });
-      }
-    }
-  }
-
-  const agentsById = new Map();
-  for (const [id, item] of recordsById.entries()) {
-    agentsById.set(id, item.record);
-  }
-
-  const entries = [];
-  let changedCount = 0;
-  let unchangedCount = 0;
-  let orphanCount = 0;
-  let archivedOrphanCount = 0;
-
-  for (const [id, item] of recordsById.entries()) {
-    const rec = item.record;
-    const currentLabels = { ...(rec.labels ?? {}) };
-    const archived = Boolean(rec.archivedAt || rec.archived);
-    const status = archived ? "archived" : String(rec.lastStatus ?? rec.status ?? "unknown");
-    const title = String(rec.title ?? rec.name ?? id).trim();
-
-    const resolved = resolveAgentIdentity(rec, {
-      teams: TEAM_DEFS,
-      cwd: rec.cwd,
-      agentsById,
-      recomputeOrphan: true,
-    });
-
-    const proposedLabels = { ...currentLabels };
-    // Digests are spawned with role=worker (digestFor/profile mark them): don't flip that label to role=digest.
-    proposedLabels.role =
-      resolved.role === "digest" && currentLabels.role !== "digest" ? "worker" : resolved.role;
-    if (resolved.role === "lead" || resolved.role === "former-lead") {
-      proposedLabels.ord = resolved.ord || "1";
-    }
-
-    if (!resolved.isOrphan) {
-      proposedLabels.lane = resolved.laneId;
-      proposedLabels.team = resolved.teamId;
-      delete proposedLabels.orphan;
-      if ("lead" in proposedLabels) {
-        proposedLabels.lead = resolved.laneId;
-      }
-    } else {
-      proposedLabels.orphan = "1";
-    }
-
-    const changed = !migrationLabelsEqual(currentLabels, proposedLabels);
-    const isOrphan = Boolean(resolved.isOrphan);
-    if (changed) changedCount++;
-    else unchangedCount++;
-    // Archived agents are history, not orphans to fix: count them apart so `orphans` lists only live ones.
-    if (isOrphan && archived) archivedOrphanCount++;
-    else if (isOrphan) orphanCount++;
-
-    const tag = isOrphan ? (archived ? "ARCHIVED-ORPHAN" : "ORPHAN") : changed ? "CHANGED" : "OK";
-    entries.push({
-      id,
-      file: item.file,
-      status,
-      title,
-      source: resolved.source,
-      currentLabels,
-      proposedLabels,
-      changed,
-      orphan: isOrphan,
-      tag,
-      line: `${id} (${status}) [${title}]: ${summarizeMigrationLabels(currentLabels)} -> ${summarizeMigrationLabels(proposedLabels)} [${tag}]`,
-    });
-  }
-
-  let backupDir = null;
-  if (!dryRun) {
-    const ts = new Date().toISOString().replace(/[:.]/g, "-");
-    backupDir = path.join(BASE_DIR, "backups", `identity-v2-${ts}`);
-    fs.mkdirSync(backupDir, { recursive: true });
-    for (const candidateTeams of [
-      path.join(BASE_DIR, "teams.json"),
-      path.join(import.meta.dirname, "..", "teams.json"),
-    ]) {
-      if (fs.existsSync(candidateTeams)) {
-        fs.copyFileSync(candidateTeams, path.join(backupDir, "teams.json"));
-        break;
-      }
-    }
-    const teamsRoot = path.join(BASE_DIR, "teams");
-    if (fs.existsSync(teamsRoot)) {
-      for (const dir of fs.readdirSync(teamsRoot, { withFileTypes: true })) {
-        if (!dir.isDirectory()) continue;
-        const srcLog = path.join(teamsRoot, dir.name, "log.jsonl");
-        if (fs.existsSync(srcLog)) {
-          const dstDir = path.join(backupDir, "teams", dir.name);
-          fs.mkdirSync(dstDir, { recursive: true });
-          fs.copyFileSync(srcLog, path.join(dstDir, "log.jsonl"));
-        }
-      }
-    }
-
-    for (const entry of entries) {
-      if (!entry.changed) continue;
-      if (entry.file && fs.existsSync(entry.file)) {
-        try {
-          const diskRec = parseJsonWithBom(fs.readFileSync(entry.file, "utf8"));
-          diskRec.labels = { ...entry.proposedLabels };
-          fs.writeFileSync(entry.file, JSON.stringify(diskRec, null, 2) + "\n", "utf8");
-        } catch {
-          // ignore write error on individual store file
-        }
-      }
-      if (!hasCustomOfflineStore()) {
-        const updateArgs = ["agent", "update", entry.id];
-        for (const [k, v] of Object.entries(entry.proposedLabels)) {
-          updateArgs.push("--label", `${k}=${v}`);
-        }
-        runPaseo(updateArgs);
-      }
-    }
-    agentIndex = null;
-  }
-
-  const summary = {
-    dryRun,
-    backupDir,
-    total: entries.length,
-    changed: changedCount,
-    unchanged: unchangedCount,
-    orphans: orphanCount,
-    archivedOrphans: archivedOrphanCount,
-    entries: entries.map(({ file: _file, ...rest }) => rest),
-  };
-
-  if (flags.json) {
-    process.stdout.write(JSON.stringify(summary, null, 2) + "\n");
-    return 0;
-  }
-
-  for (const entry of entries) {
-    process.stdout.write(`${entry.line}\n`);
-  }
-  process.stdout.write(
-    `total=${summary.total} changed=${summary.changed} unchanged=${summary.unchanged} orphans=${summary.orphans} archived-orphans=${summary.archivedOrphans}${backupDir ? ` backup=${backupDir}` : ""}\n`,
-  );
-  return 0;
 }
 
 function commandProfiles(flags) {
@@ -2100,7 +1651,7 @@ export function summarizeWait(agentId, result) {
   return { code, line: `${agentId}: ${status}${extra}` };
 }
 
-/** vs wait <agent> [--timeout s]: waits on the daemon (waitForFinish). Injectable client for tests. */
+/** vs wait <agent> [--timeout s]: waits on the runner (waitForFinish). Injectable client for tests. */
 export async function runWait(client, agentId, timeoutSec) {
   const backend = getBackend(client);
   const timeoutMs = timeoutSec === undefined ? 0 : Math.round(timeoutSec * 1000);
@@ -2120,7 +1671,7 @@ async function commandWait(flags) {
     process.stdout.write(line + "\n");
     return code;
   }
-  const backend = getBackend(createDaemonClient());
+  const backend = getBackend(createAgentClient());
   try {
     await backend.connect();
     const { code, line } = await runWait(backend, agentId, timeoutSec);
@@ -2558,7 +2109,6 @@ function main(argv) {
   try {
     if (command === "whoami") return commandWhoami(flags);
     if (command === "who") return commandWho(flags);
-    if (command === "migrate") return commandMigrate(flags);
     if (command === "profiles") return commandProfiles(flags);
     if (command === "log") return commandLog(flags);
     if (command === "handoff") return commandHandoff(flags);
