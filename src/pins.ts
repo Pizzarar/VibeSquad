@@ -421,3 +421,9 @@ export function briefShrinkWarning(before: string, after: string): string {
 
 /** The pin's Buddy id only while it is live; a closed (or archived) Buddy is dormant and goes through the Spin Up picker. */
 export const liveBuddyId = (pin: Pin): string | null => (isLive(pin.brainstorm) ? pin.brainstorm.agent.id : null);
+
+/**
+ * The pin's closed-but-unarchived Buddy (runner `lost`/`exited`, daemon restart): its history is still on disk, so the pin
+ * opens it read-only with the Spin Up picker above it. Null for a truly dormant pin (no Buddy at all) and while one is live.
+ */
+export const dormantBuddyId = (pin: Pin): string | null => (pin.brainstorm && !pin.brainstorm.agent.archivedAt && pin.brainstorm.agent.status === "closed" ? pin.brainstorm.agent.id : null);

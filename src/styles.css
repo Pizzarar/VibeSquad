@@ -3507,6 +3507,9 @@ html, body, #root { overflow-x: hidden; }
   gap: 14px; padding: 24px; text-align: center;
 }
 
+/* Closed Buddy with history: a compact picker strip above its read-only timeline. */
+.pin-focus-empty.has-history { grid-row: auto; flex-direction: row; flex-wrap: wrap; justify-content: flex-start; gap: 10px; padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--line); }
+
 .pin-focus-bar {
   grid-row: 1; grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; height: 40px; min-width: 0;
   padding: 0 10px 0 6px; background: #090a16; border-bottom: 1px solid var(--line);

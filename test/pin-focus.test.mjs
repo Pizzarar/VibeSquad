@@ -97,20 +97,20 @@ test("focusPin on a dormant pin (no Buddy) does not spawn; it shows the Spin Up 
 
 const viewOf = (pin) => ({ team: pin.squad, lanes: [{ lane: pin.lane, brainstorm: pin.brainstorm, lead: null, members: pin.brainstorm ? [pin.brainstorm] : [], topicBrainstorms: [], duplicateBrainstorms: [] }], members: pin.brainstorm ? [pin.brainstorm] : [], needsYou: 0 });
 
-test("focusPin on a closed Buddy does not spawn or reuse the closed id, and reconcile keeps gone:true; a live Buddy still opens", async () => {
+test("focusPin on a closed Buddy opens its history without spawning or resuming, and reconcile keeps gone:true (picker stays); a live Buddy still opens", async () => {
   const calls = [];
   globalThis.__testOpenPin = async (p) => (calls.push(p.lane.id), "bs-reopened");
   const closed = livePin("lane-closed", "closed");
   globalThis.__testViews = [viewOf(closed)];
-  assert.equal(await pinFocusMod.focusPin(closed), null);
+  assert.equal(await pinFocusMod.focusPin(closed), "bs-lane-closed", "the closed Buddy's history opens");
   assert.deepEqual(calls, []);
   // A panes change runs reconcile() against the views that still carry the closed Buddy.
   panesMod.toggleFocus();
   panesMod.toggleFocus();
   const f = pinFocusMod.getPinFocus();
   assert.equal(f?.laneId, "lane-closed", "pin stays focused");
-  assert.equal(f?.agentId, null, "reconcile must not follow the closed Buddy");
-  assert.equal(f?.gone, true);
+  assert.equal(f?.agentId, "bs-lane-closed", "reconcile keeps the closed Buddy's history up");
+  assert.equal(f?.gone, true, "Spin Up picker stays above the history");
   globalThis.__testViews = [];
   assert.equal(await pinFocusMod.focusPin(livePin("lane-live", "idle")), "bs-lane-live");
   assert.deepEqual(calls, [], "a live Buddy is focused without a start");

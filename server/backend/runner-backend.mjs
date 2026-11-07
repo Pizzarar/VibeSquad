@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { RunnerClient, runnerHome } from "./runner-client.mjs";
 import { joinTarget, joinInto, canExtendThought } from "../reply-coalesce.mjs";
+import { pidAlive } from "../../runner/lock.mjs";
 import { refreshWhosHere } from "../whos-here.mjs";
 import { runnerLanes } from "./lane-routing.mjs";
 import { createRunnerHookHost } from "./runner-hooks.mjs";
@@ -72,10 +73,24 @@ export function toAgent(rec) {
 }
 
 /**
+ * Liveness of the runner process that owns a home: { alive, startedAt } from <home>/runner.json, or null when no
+ * runner ever wrote one (then nothing can be said and the log status stands).
+ */
+function runnerLiveness(home) {
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(home, "runner.json"), "utf8"));
+    const alive = pidAlive(j.pid);
+    return { alive, startedAt: Number.isFinite(j.startedAt) ? j.startedAt : 0 };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Synchronous, read-only view of a runner agent straight from its JSONL log (<runner home>/agents/<id>.jsonl).
  * For callers that cannot await the HTTP API (vs log identity, vs who). Returns the toAgent() snapshot or null.
  */
-export function readRunnerAgentSync(id, { env = process.env, home } = {}) {
+export function readRunnerAgentSync(id, { env = process.env, home, liveness } = {}) {
   if (!isRunnerId(id) || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) return null;
   let text;
   try {
@@ -88,6 +103,7 @@ export function readRunnerAgentSync(id, { env = process.env, home } = {}) {
   let exited = false;
   let archivedAt = null;
   let last = null;
+  let lastLive = null; // last event that proves a child ran: meta/archive appends happen on lost agents too
   let usage = null;
   const perms = new Map();
   const meta = {};
@@ -96,6 +112,7 @@ export function readRunnerAgentSync(id, { env = process.env, home } = {}) {
     let e;
     try { e = JSON.parse(line); } catch { continue; }
     last = e;
+    if (e.type !== "meta" && e.type !== "archive") lastLive = e;
     if (e.type === "created") { created = e; Object.assign(meta, e.meta); }
     else if (e.type === "meta") Object.assign(meta, e.patch, e.patch?.labels ? { labels: { ...meta.labels, ...e.patch.labels } } : {});
     else if (e.type === "status") status = e.status;
@@ -105,6 +122,12 @@ export function readRunnerAgentSync(id, { env = process.env, home } = {}) {
     else if (e.type === "permission") { if (e.phase === "request") perms.set(e.id, { id: e.id, toolName: e.toolName }); else perms.delete(e.id); }
   }
   if (!created) return null;
+  // The log's last status is not liveness (runner/runner.mjs summary: "log says running but no child in this process").
+  // A non-parked agent whose last event predates the running runner's start, or whose runner is dead, has no child: lost.
+  if (!exited && status !== "parked") {
+    const rl = liveness === undefined ? runnerLiveness(home ?? runnerHome(env)) : liveness;
+    if (rl && (!rl.alive || (lastLive?.ts ?? 0) < rl.startedAt)) status = "lost";
+  }
   return toAgent({
     id, provider: created.provider, model: created.model, cwd: created.cwd, meta,
     status: exited ? "exited" : status, createdAt: created.ts, updatedAt: last?.ts, archivedAt,
@@ -114,13 +137,15 @@ export function readRunnerAgentSync(id, { env = process.env, home } = {}) {
 
 /** Every runner agent on this machine (sync, log-derived). Empty when no runner dir exists. */
 export function listRunnerAgentsSync({ env = process.env } = {}) {
+  const home = runnerHome(env);
   let names;
   try {
-    names = fs.readdirSync(path.join(runnerHome(env), "agents"));
+    names = fs.readdirSync(path.join(home, "agents"));
   } catch {
     return [];
   }
-  return names.filter((f) => f.endsWith(".jsonl")).map((f) => readRunnerAgentSync(f.slice(0, -6), { env })).filter(Boolean);
+  const liveness = runnerLiveness(home); // once for the whole list, not per agent
+  return names.filter((f) => f.endsWith(".jsonl")).map((f) => readRunnerAgentSync(f.slice(0, -6), { env, home, liveness })).filter(Boolean);
 }
 
 /** Runner JSONL events -> timeline entries ({ item, timestamp, seqStart, seqEnd }) as the timeline UI expects. */
