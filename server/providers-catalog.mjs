@@ -3,11 +3,14 @@
 // Paseo daemon ({providers:[{provider,available,error}]}, {models:[{id,label,...}]}, {modes:[...]}).
 // Probing: `<cli> --version` on the resolved executable, no shell, cached with a TTL. No background timers.
 import { execFile, execFileSync } from "node:child_process";
-import { openSync, closeSync, readSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { openSync, closeSync, readSync, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { ACP_PROVIDERS, PROVIDER_ALIASES } from "../runner/adapters/acp.mjs";
 import { resolveExecutable } from "../runner/spawn.mjs";
 import { DEFAULT_PACK_PROFILES, getProfilesPath, normalizeProfile } from "./profiles.mjs";
+import { resolveTeamsFilePath } from "./teams-file.mjs";
+import { isForbiddenRealHome } from "./test-guard.mjs";
 import { readJsonFileWithBom, vibesquadHome, writeSettingsAtomic } from "./user-settings.mjs";
 
 const PROBE_TTL_MS = 10 * 60_000;
@@ -222,7 +225,7 @@ export async function getModes(provider, opts = {}) {
 // ---------------------------------------------------------------- usage rollups (lazy + incremental)
 // Per file we keep the byte offset already folded in and the per-bucket totals. A request stats the directory,
 // re-reads only files whose size/mtime moved (and only the new tail), and drops nothing it has already counted.
-const usageFiles = new Map(); // path -> { size, mtimeMs, offset, provider, model, lane, role, prevCost, buckets, turns, pass, handoff, title }
+const usageFiles = new Map(); // path -> { size, mtimeMs, offset, provider, model, lane, role, prevCost, buckets, turns, tail, pass, handoff, title }
 export const clearUsageCache = () => usageFiles.clear();
 let usageReadBytes = 0;
 export const usageStats = () => ({ files: usageFiles.size, readBytes: usageReadBytes });
@@ -257,8 +260,14 @@ function foldEvent(st, ev) {
     const lane = ev.patch?.lane ?? ev.patch?.labels?.lane;
     if (typeof lane === "string" && lane) st.lane = lane;
     foldIdentity(st, ev.patch);
+  } else if (ev.type === "input") {
+    st.tail = ""; // a new prompt starts a new assistant message; echoed prompt text never counts
   } else if (ev.type === "output") {
-    if (!st.pass && typeof ev.text === "string" && PASS_RE.test(ev.text)) st.pass = true;
+    // PASS counts only at the start of a line of the agent's own message ("PASS", "Verdict: PASS", "**PASS**"), never mid-text.
+    if (typeof ev.text === "string") {
+      st.tail = (st.tail + ev.text).slice(-400);
+      if (!st.pass && PASS_RE.test(st.tail)) st.pass = true;
+    }
   } else if (ev.type === "usage") {
     // Adapter usage events (claude: per-call input/output tokens). ACP's contextTokens is a running size, not a delta: ignored.
     const inT = tokenCount(ev.inputTokens);
@@ -315,7 +324,7 @@ function readTail(file, from, to) {
 function refreshFile(file, stat) {
   let st = usageFiles.get(file);
   if (st && st.size === stat.size && st.mtimeMs === stat.mtimeMs) return st;
-  if (!st || stat.size < st.offset) st = { offset: 0, provider: "unknown", model: "unknown", lane: "", role: "", prevCost: 0, buckets: new Map(), turns: 0, pass: false, handoff: false, title: "" };
+  if (!st || stat.size < st.offset) st = { offset: 0, provider: "unknown", model: "unknown", lane: "", role: "", prevCost: 0, buckets: new Map(), turns: 0, tail: "", pass: false, handoff: false, title: "" };
   const buf = readTail(file, st.offset, stat.size);
   const lastNl = buf.lastIndexOf(10);
   if (lastNl >= 0) {
@@ -333,7 +342,7 @@ function refreshFile(file, stat) {
 
 /** A run (agent log) with more turns than this and no PASS in its output is flagged as a likely loop. */
 export const LOOP_TURN_THRESHOLD = 40;
-const PASS_RE = /\bPASS\b/;
+const PASS_RE = /(?:^|\n)[ \t>*_#-]*(?:verdict:?\s*)?[*_`]*PASS\b/i;
 const COORDINATION_ROLES = new Set(["brainstorm", "lead"]);
 const ROLE_ORDER = ["brainstorm", "lead", "worker"];
 
@@ -357,10 +366,12 @@ const getOrSet = (m, k, mk) => m.get(k) ?? m.set(k, mk()).get(k);
 // {at, provider, window:"5h"|"weekly", usedPct, resetsAt, source:"provider"|"estimate", agentId}
 const BURN_LOOKBACK_MS = 2 * 3600_000;
 
-/** Latest sample per provider/window + burn rate (%/h over the last 2h of the same window) + ETA-to-cap. Missing file -> []. */
+/** Latest sample per provider/window + burn rate (%/h over the last 2h of the current window) + ETA-to-cap. Missing file -> []. */
 export function readLimits(home) {
+  const dir = home || vibesquadHome();
+  if (isForbiddenRealHome(dir)) return [];
   let text = "";
-  try { text = readFileSync(join(home || vibesquadHome(), "runner", "limits.jsonl"), "utf8"); } catch { return []; }
+  try { text = readFileSync(join(dir, "runner", "limits.jsonl"), "utf8"); } catch { return []; }
   const groups = new Map();
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;
@@ -375,10 +386,15 @@ export function readLimits(home) {
   for (const pts of groups.values()) {
     pts.sort((x, y) => x.atMs - y.atMs);
     const last = pts[pts.length - 1];
-    // Same window = same reset time; a reset drops usedPct back, so only compare within the window.
-    const cur = pts.filter((p) => p.resetMs === last.resetMs && p.atMs >= last.atMs - BURN_LOOKBACK_MS);
+    // Current window starts after the last usedPct drop or the last change of a known resetsAt (both mean the window rolled over).
+    let start = 0;
+    for (let i = 1; i < pts.length; i++) {
+      const rolled = pts[i].used < pts[i - 1].used || (pts[i].resetMs !== null && pts[i - 1].resetMs !== null && pts[i].resetMs !== pts[i - 1].resetMs);
+      if (rolled) start = i;
+    }
+    const cur = pts.slice(start).filter((p) => p.atMs >= last.atMs - BURN_LOOKBACK_MS);
     const hours = (last.atMs - cur[0].atMs) / 3600_000;
-    const burn = hours > 0 ? (last.used - cur[0].used) / hours : 0;
+    const burn = Math.max(0, hours > 0 ? (last.used - cur[0].used) / hours : 0);
     let etaToCap = null;
     if (burn > 0) {
       const eta = last.used >= 100 ? last.atMs : last.atMs + ((100 - last.used) / burn) * 3600_000;
@@ -395,10 +411,12 @@ export function readLimits(home) {
 }
 
 // ---- merged units from git. `git` is injectable: (args: string[]) => stdout string.
-const defaultGit = (args) => execFileSync("git", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const defaultGit = (args) => execFileSync("git", args, { cwd: REPO_ROOT, encoding: "utf8", timeout: 15_000, maxBuffer: 64 * 1024 * 1024, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
 const REVIEW_RE = /review r(\d+)/i;
 const CODE_RE = /\(@([A-Za-z0-9_-]+)(?:\s[^)]*)?\)/g;
-const MAX_MERGES = 300;
+const MAX_COMMITS = 4000;
+const MAX_BRANCH_WALK = 500;
 
 /** Lane code of a subject: the last `(@code ...)` tag, lowercased, else null. */
 const codeOf = (subject) => {
@@ -408,30 +426,52 @@ const codeOf = (subject) => {
   return last;
 };
 
+let mergedCache = null; // { git, head, units }: recomputed only when HEAD (or the injected git) changes
+
 /** Merge commits -> units {sha, unit, code, reviewRounds, mergedAt, subject}. unit = branch from "Merge branch 'x'".
- * reviewRounds = highest N among "review rN" subjects on the merged side (p1..p2). Lane code = the merge subject's
- * `(@code)` tag, else the first tag found on a commit subject of the merged side. */
+ * One `git log` over recent history joined in memory (no per-merge spawns), cached by HEAD sha. The merged side of a
+ * merge = commits reachable from its 2nd parent until the first-parent (mainline) chain from HEAD is hit.
+ * reviewRounds = highest N among "review rN" subjects on that side. Lane code = the merge subject's `(@code)` tag,
+ * else the first tag found on the merged side. */
 export function readMergedUnits(git = defaultGit) {
+  let head = "";
+  try { head = git(["rev-parse", "HEAD"]).trim(); } catch { return []; }
+  if (mergedCache && mergedCache.git === git && mergedCache.head === head) return mergedCache.units;
   let raw = "";
-  try { raw = git(["log", "--merges", `-${MAX_MERGES}`, "--format=%H%x1f%P%x1f%ct%x1f%s"]); } catch { return []; }
-  const units = [];
+  try { raw = git(["log", `-${MAX_COMMITS}`, "--format=%H%x1f%P%x1f%ct%x1f%s"]); } catch { return []; }
+  const commits = new Map();
   for (const line of raw.split("\n")) {
     const [sha, parents, ct, subject = ""] = line.split("\x1f");
-    if (!sha || !parents) continue;
-    const [p1, p2] = parents.trim().split(/\s+/);
-    if (!p2) continue;
-    let subjects = [];
-    try { subjects = git(["log", "--format=%s", `${p1}..${p2}`]).split("\n").filter(Boolean); } catch { /* keep merge only */ }
-    let rounds = 0;
-    let code = codeOf(subject);
-    for (const sj of subjects) {
-      const m = REVIEW_RE.exec(sj);
-      if (m) rounds = Math.max(rounds, Number(m[1]));
-      code ??= codeOf(sj);
-    }
-    const branch = /Merge branch '([^']+)'/i.exec(subject)?.[1] ?? null;
-    units.push({ sha, unit: branch, code, reviewRounds: rounds, mergedAt: Number.isFinite(Number(ct)) ? new Date(Number(ct) * 1000).toISOString() : null, subject });
+    if (sha) commits.set(sha, { sha, parents: (parents ?? "").trim().split(/\s+/).filter(Boolean), ct, subject });
   }
+  const mainline = new Set();
+  for (let c = commits.get(head); c && !mainline.has(c.sha); c = commits.get(c.parents[0])) mainline.add(c.sha);
+  const units = [];
+  for (const c of commits.values()) {
+    if (c.parents.length < 2) continue;
+    const side = [];
+    const seen = new Set();
+    const stack = [c.parents[1]];
+    while (stack.length && side.length < MAX_BRANCH_WALK) {
+      const sha = stack.pop();
+      if (seen.has(sha) || mainline.has(sha)) continue;
+      seen.add(sha);
+      const k = commits.get(sha);
+      if (!k) continue;
+      side.push(k);
+      stack.push(...k.parents);
+    }
+    let rounds = 0;
+    let code = codeOf(c.subject);
+    for (const k of side) {
+      const m = REVIEW_RE.exec(k.subject);
+      if (m) rounds = Math.max(rounds, Number(m[1]));
+      code ??= codeOf(k.subject);
+    }
+    const branch = /Merge branch '([^']+)'/i.exec(c.subject)?.[1] ?? null;
+    units.push({ sha: c.sha, unit: branch, code, reviewRounds: rounds, mergedAt: Number.isFinite(Number(c.ct)) ? new Date(Number(c.ct) * 1000).toISOString() : null, subject: c.subject });
+  }
+  mergedCache = { git, head, units };
   return units;
 }
 
@@ -439,7 +479,9 @@ export function readMergedUnits(git = defaultGit) {
 function readLaneCodes(home) {
   const map = new Map();
   try {
-    const t = JSON.parse(readFileSync(join(home || vibesquadHome(), "teams.json"), "utf8").replace(/^﻿/, ""));
+    const own = home ? join(home, "teams.json") : null;
+    const file = own && !isForbiddenRealHome(home) && existsSync(own) ? own : resolveTeamsFilePath(REPO_ROOT);
+    const t = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
     for (const team of t.teams ?? []) for (const l of team.lanes ?? []) {
       if (!l?.id) continue;
       map.set(String(l.id).toLowerCase(), l.id);
@@ -450,14 +492,16 @@ function readLaneCodes(home) {
 }
 
 export function getUsage({ home, since, until, git, laneCodes } = {}) {
-  const dir = join(home || vibesquadHome(), "runner", "agents");
+  const homeDir = home || vibesquadHome();
+  const dir = join(homeDir, "runner", "agents");
   const seen = new Set();
   const agg = new Map();
+  const aggAgents = new Map(); // agg key -> Set of agent files (one agent spans several buckets when its role changes mid-day)
   const laneRole = new Map(); // lane|role -> stats (day-filtered)
   const laneAgents = new Map(); // lane -> { agents, handoffs, byRole: Map<role, count> }
   const loops = [];
   let names = [];
-  try { names = readdirSync(dir).filter((n) => n.endsWith(".jsonl")); } catch { /* no runner yet */ }
+  if (!isForbiddenRealHome(homeDir)) try { names = readdirSync(dir).filter((n) => n.endsWith(".jsonl")); } catch { /* no runner yet */ }
   for (const n of names) {
     const file = join(dir, n);
     seen.add(file);
@@ -472,7 +516,8 @@ export function getUsage({ home, since, until, git, laneCodes } = {}) {
       if ((since && b.day < since) || (until && b.day > until)) continue;
       const a = getOrSet(agg, `${b.provider}|${b.model}|${b.lane}|${b.day}`, () => ({ provider: b.provider, model: b.model, lane: b.lane, day: b.day, ...zeroStats(), agents: 0 }));
       addStats(a, b);
-      a.agents += 1;
+      const aKey = `${b.provider}|${b.model}|${b.lane}|${b.day}`;
+      a.agents = getOrSet(aggAgents, aKey, () => new Set()).add(n).size;
       addStats(getOrSet(laneRole, `${b.lane}|${b.role}`, () => ({ lane: b.lane, role: b.role, ...zeroStats() })), b);
     }
   }
@@ -560,7 +605,7 @@ export async function handleProvidersApi(req, res, { sendJson, readBody, home, .
     if (sub === "") return sendJson(res, 200, await getProviders(opts));
     if (sub === "models") return sendJson(res, 200, await getModels(url.searchParams.get("provider") ?? "", opts));
     if (sub === "modes") return sendJson(res, 200, await getModes(url.searchParams.get("provider") ?? "", opts));
-    if (sub === "usage") return sendJson(res, 200, getUsage({ home, since: url.searchParams.get("since") || undefined, until: url.searchParams.get("until") || undefined }));
+    if (sub === "usage") return sendJson(res, 200, getUsage({ home, since: url.searchParams.get("since") || undefined, until: url.searchParams.get("until") || undefined, git: probeOpts.git }));
     return sendJson(res, 404, { error: "not found" });
   } catch (err) {
     return sendJson(res, 500, { error: String(err?.message ?? err) });
