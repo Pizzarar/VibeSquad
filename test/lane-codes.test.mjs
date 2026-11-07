@@ -9,7 +9,7 @@ const agent = (title, labels, extra = {}) => ({ id: "a1", title, status: "idle",
 test("title lint: expectedTitleFor and lintTitle always return null; expectedV2TitleFor and legacyTitleFor still compute", () => {
   const lead = (title) => agent(title, { team: "vibesquad", lane: "vibesquad", role: "lead", ord: "5" });
   assert.equal(lintTitle(lead("★ VIBESQUAD ord5")), null);
-  assert.equal(expectedV2TitleFor(lead("★ VIBESQUAD ord5")), "★ Hub5");
+  assert.equal(expectedV2TitleFor(lead("★ VIBESQUAD ord5")), "Overlord");
   assert.equal(legacyTitleFor(lead("x")), "★ VIBESQUAD ord5");
   assert.equal(lintTitle(lead("★ Hub5")), null);
   assert.equal(lintTitle(lead("Some random title")), null);
@@ -31,8 +31,8 @@ test("title lint: expectedTitleFor and lintTitle always return null; expectedV2T
 
 test("titleFor defaults the code from the lane (hub lane is Hub, not Vib)", () => {
   assert.equal(titleFor("brainstorm", "VibeSquad", {}), "RiffBot");
-  assert.equal(titleFor("lead", "VibeSquad", { ord: "1" }), "★ Hub1");
-  assert.equal(titleFor("lead", "VibeSquad", { ord: "2", laneId: "vibesquad" }), "★ Hub2");
+  assert.equal(titleFor("lead", "VibeSquad", { ord: "1" }), "Overlord");
+  assert.equal(titleFor("lead", "VibeSquad", { ord: "2", laneId: "vibesquad" }), "Overlord");
   assert.equal(titleFor("worker", "VibeSquad", { ord: "2", job: "x" }), "Hub2 · x");
 });
 

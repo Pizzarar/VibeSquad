@@ -605,7 +605,7 @@ export function formatDisplayTitle({
   topic?: string;
   job?: string;
   title?: string;
-  /** The agent is the Squad's hub Buddy (isHubLane): a topic-less brainstorm reads "RiffBot". */
+  /** The agent is on the Squad's hub lane (isHubLane): a topic-less brainstorm reads "RiffBot", a lead reads "Overlord". */
   hub?: boolean;
 } = {}): string {
   const laneUpper = String(laneName || laneId || "AGENT").trim().toUpperCase();
@@ -617,9 +617,11 @@ export function formatDisplayTitle({
   const cleanJob = String(job || "").trim();
 
   if (r === "lead") {
+    if (hub) return cleanJob ? `Overlord · ${cleanJob}` : "Overlord";
     return cleanJob ? `★ ${c}${ordClean} · ${cleanJob}` : `★ ${c}${ordClean}`;
   }
   if (r === "former-lead" || r === "old-lead" || r === "retired") {
+    if (hub) return cleanJob ? `(old) Overlord · ${cleanJob}` : "(old) Overlord";
     return cleanJob ? `(old) ${c}${ordClean} · ${cleanJob}` : `(old) ${c}${ordClean}`;
   }
   if (r === "brainstorm" || r === "buddy") {

@@ -120,14 +120,25 @@ export const BRAINSTORM_PACK = [
 export const HUB_BUDDY_RULES = [
   "Hub rules (OVERRIDE feature-Buddy rules above):",
   "- You are this Squad's hub (RiffBot). You ONLY sort, split into parallel lanes, and coordinate lane convergence; Team Buddies do all feature design and plan writing.",
-  "- Never write `docs/PLAN_*.md` files, never design implementation blocks, never mark the hub done, and never spawn a Lead.",
+  "- Never write `docs/PLAN_*.md` files, never design implementation blocks, never mark the hub done, and never spawn a feature-lane Lead. Exception: you may message or spawn the Overlord (`role=lead` on the hub lane) when cross-lane ops, stalled leads or joint merges need coordination.",
   "- End **every** reply with `Open threads:` listing ideas that have no Team yet (or `none`). Keep `## Unsplit threads` in the brief in sync.",
   "- As soon as a thread can be worked on its own (its files and decisions don't overlap another thread or an in-flight Team), say how many parallel lanes we can run and propose them in a `vs:spin-off` block. Don't wait for details to be figured out — confirming the `vs:spin-off` block spins up each lane's Brainstorm Buddy to design it in parallel. When you merge or hold back an idea, give the reason in one line. Never spin off without the user's confirmation.",
   "- Propose spin-offs as one fenced block, line 1 ```vs:spin-off, then one Team per line: `Name | 1-line brief`. The user edits in words (4 proposed, \"energy and food in one lane called Needs\" → re-post the block with 3); only the newest block gets the button.",
   "- If the user keeps riffing on a thread that already has a Team, redirect: \"That's <Team>'s. Send it there?\" plus `vs:send-to`.",
   "- Lane convergence & merge: watch `## Teams` and `vs log --since-me` for lanes that need to work together (e.g. UI + Art touching the same screen/contract). To sync two active lanes without merging, log `vs log decision \"Sync @<laneA> + @<laneB>: <shared contract>\"` and route the contract via `vs:send-to <lane-id>`. When two lanes should combine into one, run `vs pin merge <from-lane> <into-lane>` after user confirmation to fold `<from-lane>`'s brief/decisions into `<into-lane>` and mark `<from-lane>` done.",
   "- On boot, read `## Teams` and `## Unsplit threads`. Your first message is the Squad status in ≤6 lines, plus the top parallel split you'd propose now.",
-  "- Never mark the hub done. Never spawn a Lead.",
+  "- Never mark the hub done. Never spawn a feature-lane Lead (the hub's own Overlord is the only Lead you may spawn).",
+].join("\n");
+
+/** Appended to the Lead pack only for the Squad's hub Lead (the Overlord; isHubLane contract). Feature-lane Leads never get it. */
+export const HUB_LEAD_RULES = [
+  "Overlord rules (this Squad's hub Lead; ADD to the Lead rules above):",
+  "- Primary role, Squad ops & cross-lane coordinator: watch `vs log --since-me` and `vs who all --team <squad>` across all feature lanes; coordinate rebases, shared contracts, joint merges, `vs worktree sweep --apply`, full-suite gates and runtime syncs.",
+  "- Lead escalation ladder for a feature lane's stalled lead (go in order, never skip ahead):",
+  "  1. Steer: idle/stalled lead → `vs send <lead> \"<steer>\"`, then `vs wait <lead> --timeout 90`.",
+  "  2. Interrupt + steer: runaway/looping turn → `vs cancel <lead>` (MCP `cancel`), send the steer, `vs wait <lead> --timeout 90`.",
+  "  3. Takeover/spawn: only if the steer failed or timed out, the lead is errored/wedged past budget, or `vs who lead --lane <x>` is NONE → `vs lead handoff --lane <x>` with the steer note, or spawn a fresh lead (`spawn_worker` with `role=lead`, `lane=<x>`) for a leaderless lane. Never raw-archive a lead.",
+  "- Secondary role, fast-lane hub executor: when the owner orders a quick cross-cutting fix or repo chore directly, dispatch hub workers titled `Hub<ord> · <job>` in a worktree from `vs worktree create`. Never take over feature design from Team Buddies.",
 ].join("\n");
 
 /** Appended to the Buddy pack only while the Squad's `vibeMode` is on (teams.json). Off = pack text unchanged. */
@@ -613,13 +624,14 @@ function findProjectRoot(cwd: string): string {
 
 export function rolePack(role: string, cwd: string, vibeMode = false, isHub = false): string {
   if (role === "lead") {
+    let base = LEAD_FALLBACK_PACK;
     try {
       const text = fs.readFileSync(path.join(findProjectRoot(cwd), "docs", "LEAD_RULES.md"), "utf8").trim();
-      if (text) return text;
+      if (text) base = text;
     } catch {
       // fall through
     }
-    return LEAD_FALLBACK_PACK;
+    return [base, isHub && HUB_LEAD_RULES].filter(Boolean).join("\n");
   }
   if (role === "brainstorm") return [BRAINSTORM_PACK, vibeMode && VIBE_MODE_BUDDY_RULES, isHub && HUB_BUDDY_RULES].filter(Boolean).join("\n");
   if (role === "worker") return WORKER_PACK;
@@ -1590,9 +1602,10 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const vibeMode = spawnTeam?.vibeMode === true;
         const isHubBuddy =
           role === "brainstorm" && !topicOf(reqLabels) && Boolean(explicitLane) && isHubCwd(spawnTeam, explicitLane);
+        const isHubLead = role === "lead" && Boolean(explicitLane) && isHubCwd(spawnTeam, explicitLane);
         st.team = spawnTeamId;
         st.lane = explicitLane;
-        const prefix = injectedPrefix(role, cwd, vibeMode, isHubBuddy);
+        const prefix = injectedPrefix(role, cwd, vibeMode, isHubBuddy || isHubLead);
         const profileNotes = isHubBuddy ? "" : dedupeNotesAgainst((matchedProfile?.notes ?? "").trim(), prefix);
         const gitState = await inspectGitSpawnState(cwd);
         st.mark("git-spawn-state");

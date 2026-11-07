@@ -12,7 +12,7 @@ for (const [name, fmt] of [["identity.ts", tsTitle], ["identity.mjs", mjsTitle]]
     assert.equal(fmt({ ...base, hub: true }), "RiffBot");
     assert.equal(fmt(base), "Alpha");
     assert.equal(fmt({ ...base, hub: true, topic: "naming" }), "Alpha · naming");
-    assert.equal(fmt({ role: "lead", laneId: "alpha", code: "Alp", ord: "2", hub: true }), "★ Alp2");
+    assert.equal(fmt({ role: "lead", laneId: "alpha", code: "Alp", ord: "2", hub: true }), "Overlord");
   });
 }
 
