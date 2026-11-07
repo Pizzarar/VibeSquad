@@ -34,6 +34,10 @@ const bounded =(p, ms = ROSTER_FETCH_MS) => {
 
 export const isRunnerId =(id) => typeof id === "string" && id.startsWith("rn-");
 
+// Non-enumerable key on a created agent carrying per-await createAgent timing (ms, in order) so the caller's
+// `spawn-timing` metric can print createAgent sub-parts (docs/PLAN_WORKAROUND_FOLLOWUPS.md F1b). Object spread drops it.
+export const SPAWN_TIMING = Symbol("spawn-timing");
+
 const iso = (ms) => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
 
 /**
@@ -365,11 +369,22 @@ export class RunnerBackend {
   async close() {}
 
   async createAgent({ config = {}, initialPrompt, prompt, labels = {}, env = {} } = {}) {
+    // Per-await spawn timing (docs/PLAN_WORKAROUND_FOLLOWUPS.md F1b): ms since the previous await, so a slow step
+    // shows up in the caller's `spawn-timing` metric as createAgent sub-parts. Attached to the returned agent under
+    // SPAWN_TIMING (non-enumerable, so the later {...created} merge in callers drops it after reading).
+    const timing = { last: Date.now(), parts: {} };
+    const mark = (name) => {
+      const now = Date.now();
+      timing.parts[name] = now - timing.last;
+      timing.last = now;
+    };
     await this.rc.requireRunning();
+    mark("requireRunning");
     // before("agent.create"): the plugin's prompt layering + spawn guard, in-process so every spawn path (UI, MCP, vs CLI) gets it.
     config = { ...config };
     if (PROVIDER_ALIASES[config.provider]) config.provider = PROVIDER_ALIASES[config.provider]; // the plugin's antigravity-cli guard keys on the canonical id
     const host = await this.hookHost();
+    mark("hookHost");
     if (host) {
       const request = {
         config: { ...config },
@@ -383,6 +398,7 @@ export class RunnerBackend {
         console.warn(`[vibesquad] runner spawn hook failed: ${err}`);
         return undefined;
       });
+      mark("hook");
       const next = out ?? request;
       config = next.config ?? config;
       env = next.env ?? env;
@@ -404,6 +420,7 @@ export class RunnerBackend {
       else meta.acpMode = config.modeId;
     }
     const prefix = host ? "" : await this.buildPrefix(meta.role || "", config.cwd);
+    mark("prefix");
     const systemPrompt = [prefix, config.systemPrompt].filter(Boolean).join("\n\n") || undefined;
     const { id } = await this.rc.request("POST", "/agents", {
       provider: config.provider,
@@ -413,8 +430,12 @@ export class RunnerBackend {
       systemPrompt,
       meta,
     });
+    mark("post");
     const agent = (await this.fetchAgent(id)).agent;
+    mark("fetch");
     await this.refreshLaneWhosHere(agent.labels?.lane);
+    mark("whos");
+    Object.defineProperty(agent, SPAWN_TIMING, { value: timing.parts, enumerable: false, configurable: true });
     return agent;
   }
 

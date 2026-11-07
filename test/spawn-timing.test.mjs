@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createSpawnTimer, performBrainstormRestart, resetBrainstormRestartState } from "../server/brainstorm.mjs";
+import { RunnerBackend, SPAWN_TIMING } from "../server/backend/runner-backend.mjs";
 
 // Mock-Paseo-daemon tests: the runner has a single owner and is never lazily started, so pin every lane to Paseo.
 process.env.VS_DEFAULT_BACKEND = "paseo";
@@ -14,6 +15,36 @@ test("spawn timer lists each marked step and a total", () => {
   t.mark("connect");
   t.mark("createAgent");
   assert.match(t.summary(), /^new-buddy: connect=\d+ms createAgent=\d+ms total=\d+ms loopLagMax=\d+ms$/);
+});
+
+test("spawn timer prints createAgent sub-parts from a marked sub-string", () => {
+  const t = createSpawnTimer("buddy-restart");
+  t.mark("connect");
+  t.mark("createAgent", "hook=120,prefix=3,post=251000,fetch=4,whos=2");
+  assert.match(t.summary(), /createAgent=\d+ms\(hook=120,prefix=3,post=251000,fetch=4,whos=2\)/);
+});
+
+test("a RunnerBackend.createAgent with a slow hook/post shows the parts in the metric line", async () => {
+  const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+  const backend = new RunnerBackend({
+    client: {
+      async requireRunning() {},
+      async request(method, route) {
+        if (method === "POST" && route === "/agents") { await delay(30); return { id: "rn-x" }; }
+        if (method === "GET" && route === "/agents/rn-x") return { id: "rn-x", provider: "claude", cwd: ".", status: "idle", meta: { title: "T" } };
+        throw new Error(`unexpected ${method} ${route}`);
+      },
+    },
+    buildPrefix: async () => "",
+    whosHere: async () => {},
+    lanes: () => new Set(),
+    hooks: { before: async () => { await delay(15); return undefined; } },
+  });
+  const created = await backend.createAgent({ config: { provider: "claude", cwd: "." }, labels: {}, env: {} });
+  const t = createSpawnTimer("buddy-restart");
+  t.mark("connect");
+  t.mark("createAgent", Object.entries(created[SPAWN_TIMING]).map(([k, v]) => `${k}=${v}`).join(","));
+  assert.match(t.summary(), /createAgent=\d+ms\(requireRunning=\d+,hookHost=\d+,hook=\d+,prefix=\d+,post=\d+,fetch=\d+,whos=\d+\)/);
 });
 
 test("a Buddy restart writes one spawn-timing metric with every step", async () => {

@@ -11,6 +11,7 @@ import { briefRootFor, laneWorkingDir } from "./brief-path.mjs";
 import { defangPromptFences } from "./write-guards.mjs";
 import { detachLiveChildrenViaClient, listDaemonAgents } from "./detach-children.mjs";
 import { getBackend, runnerLanes } from "./backend/index.mjs";
+import { SPAWN_TIMING } from "./backend/runner-backend.mjs";
 import { BRIEF_HISTORY_KEEP, BRIEF_SHRINK_FROM, BRIEF_SHRINK_TO, backupBrief, writeBriefFile } from "./brief-write.mjs";
 import { liveInFlightBlock } from "./in-flight.mjs";
 import { refreshWhosHere } from "./whos-here.mjs";
@@ -403,14 +404,14 @@ export function createSpawnTimer(kind) {
     add(step, ms) {
       marks.push([step, ms]);
     },
-    mark(step) {
+    mark(step, sub) {
       const now = Date.now();
-      marks.push([step, now - last]);
+      marks.push(sub ? [step, now - last, sub] : [step, now - last]);
       last = now;
     },
     summary() {
       stopLag();
-      return `${kind}: ${marks.map(([k, v]) => `${k}=${v}ms`).join(" ")} total=${Date.now() - t0}ms loopLagMax=${Math.max(0, lagMax)}ms`;
+      return `${kind}: ${marks.map(([k, v, sub]) => `${k}=${v}ms${sub ? `(${sub})` : ""}`).join(" ")} total=${Date.now() - t0}ms loopLagMax=${Math.max(0, lagMax)}ms`;
     },
     flush({ teamId, laneId, agent }) {
       const text = `spawn-timing ${this.summary()}`;
@@ -936,7 +937,8 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       }
     }
 
-    timer.mark("createAgent");
+    const createParts = created?.[SPAWN_TIMING];
+    timer.mark("createAgent", createParts ? Object.entries(createParts).map(([k, v]) => `${k}=${v}`).join(",") : undefined);
     const spawned = Boolean(created?.id);
     if (!created) {
       created = {

@@ -7,7 +7,7 @@ import { Runner } from '../runner/runner.mjs';
 import { createServer, writeDiscovery } from '../runner/server.mjs';
 import { killTree } from '../runner/spawn.mjs';
 import { RunnerClient } from '../server/backend/runner-client.mjs';
-import { RunnerBackend, toTimeline } from '../server/backend/runner-backend.mjs';
+import { RunnerBackend, SPAWN_TIMING, toTimeline } from '../server/backend/runner-backend.mjs';
 import { RoutingBackend, runnerLanes } from '../server/backend/lane-routing.mjs';
 import { getBackend, PaseoBackend } from '../server/backend/index.mjs';
 
@@ -97,6 +97,31 @@ test('RunnerBackend: create maps first-class fields, labels, status and timeline
     assert.equal((await b.backend.fetchAgents()).entries.length, 0);
     assert.equal((await b.backend.fetchAgents({ filter: { includeArchived: true } })).entries.length, 1);
   } finally { b.close(); }
+});
+
+test('RunnerBackend.createAgent records per-await timing (slow hook + post) under SPAWN_TIMING', async () => {
+  const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+  const client = {
+    async requireRunning() {},
+    async request(method, route) {
+      if (method === 'POST' && route === '/agents') { await delay(40); return { id: 'rn-slow' }; }
+      if (method === 'GET' && route === '/agents/rn-slow') return { id: 'rn-slow', provider: 'claude', cwd: '.', status: 'idle', meta: { title: 'T' } };
+      throw new Error(`unexpected ${method} ${route}`);
+    },
+  };
+  const backend = new RunnerBackend({
+    client,
+    buildPrefix: async () => '',
+    whosHere: async () => {},
+    lanes: () => new Set(),
+    hooks: { before: async () => { await delay(20); return undefined; } },
+  });
+  const agent = await backend.createAgent({ config: { provider: 'claude', cwd: '.' }, labels: {}, env: {} });
+  const parts = agent[SPAWN_TIMING];
+  assert.ok(parts, 'timing attached to the created agent');
+  assert.deepEqual(Object.keys(parts), ['requireRunning', 'hookHost', 'hook', 'prefix', 'post', 'fetch', 'whos']);
+  assert.ok(parts.hook >= 15, `hook=${parts.hook}ms should reflect the slow before() hook`);
+  assert.ok(parts.post >= 30, `post=${parts.post}ms should reflect the slow POST /agents`);
 });
 
 test('toTimeline merges streamed chunks and closes tool calls', () => {
