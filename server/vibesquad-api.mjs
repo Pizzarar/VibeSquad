@@ -980,7 +980,7 @@ async function handleLeadHandoff(req, res, rootDir, actionOverride) {
     const status = result?.status || (result?.accepted ? 202 : 200);
     return sendJson(res, status, result);
   } catch (e) {
-    return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
+    return sendJson(res, e?.status === 403 ? 403 : 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
 
