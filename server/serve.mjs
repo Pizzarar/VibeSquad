@@ -595,7 +595,7 @@ if (isMain) {
     startPushWatcher(rootDir);
     // Context budget duties the Paseo plugin used to run (lead nudge / successor handoff, Buddy warn / retire), now for runner agents.
     if (process.env.VS_TOKEN_WATCH !== "0" && runnerLanes().size) {
-      try { startTokenWatcher({ rootDir }); } catch (err) { console.warn("token watcher not started:", err?.message ?? err); }
+      try { const tw = startTokenWatcher({ rootDir }); server.once("close", () => tw.stop()); } catch (err) { console.warn("token watcher not started:", err?.message ?? err); }
     }
 
     if (wantOpen) void openBrowser(servedOpenUrl());

@@ -190,3 +190,36 @@ test("Root cause: a lead whose handoff-flagged/needs-you were pre-set by the bro
   assert.equal(r.agents.get("rn-lead").labels["handoff-nudged"], "1");
   w.stop();
 });
+
+test("buddy: the default performBrainstormRestart wiring restarts once (reason auto-token-limit) and never loops", async () => {
+  const rootDir = makeRoot();
+  writeFileSync(join(rootDir, "docs", "brainstorm", "l.md"), "# Brief\n\n## Open\n- x\n", "utf8");
+  const { seedDefaultPack } = await import("../server/profiles.mjs");
+  const { resetBrainstormRestartState } = await import("../server/brainstorm.mjs");
+  const profilesPath = join(rootDir, "profiles.json");
+  seedDefaultPack(profilesPath);
+  resetBrainstormRestartState();
+  const r = makeRunner();
+  r.agents.set("rn-bud", buddy("rn-bud"));
+  const creates = [];
+  const updates = [];
+  const daemonClient = {
+    async fetchAgents() { return []; },
+    async createAgent(req) { creates.push(req); return { id: `bs-${creates.length}`, labels: req.labels }; },
+    async updateAgent(id, patch) { updates.push({ id, patch }); if (id === "rn-bud" && patch.labels) r.agents.get(id).labels = { ...patch.labels }; },
+    async archiveAgent() {},
+    async cancelAgent() {},
+  };
+  const w = startTokenWatcher({ runner: r, rootDir, restartExtra: { daemonClient, profilesPath, backstopDelayMs: 60_000 } });
+  r.usage("rn-bud", 150_000);
+  r.usage("rn-bud", 151_000);
+  await new Promise((res) => setTimeout(res, 300));
+  assert.equal(creates.length, 1, "exactly one replacement Buddy");
+  assert.equal(creates[0].labels["vs.restart-reason"], "auto-token-limit");
+  assert.equal(creates[0].labels["vs.restarted-from"], "rn-bud");
+  // the restarted Buddy's next usage event (labels now carry vs.restarted-into) must not restart again
+  r.usage("rn-bud", 152_000);
+  await new Promise((res) => setTimeout(res, 300));
+  assert.equal(creates.length, 1, "no restart loop");
+  w.stop();
+});
