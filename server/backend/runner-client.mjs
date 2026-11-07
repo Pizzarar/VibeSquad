@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isForbiddenRealHome } from "../test-guard.mjs";
 import { acquireStartLock, releaseLock } from "../../runner/lock.mjs";
 
 const RUNNER_ENTRY = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "runner", "server.mjs");
@@ -12,6 +13,7 @@ const RUNNER_ENTRY = path.join(path.dirname(fileURLToPath(import.meta.url)), "..
 export const runnerHome = (env = process.env) => path.join(env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad"), "runner");
 
 export function readDiscovery(home) {
+  if (isForbiddenRealHome(home)) return null; // under a test runner the real runner does not exist
   try {
     const info = JSON.parse(fs.readFileSync(path.join(home, "runner.json"), "utf8"));
     const token = fs.readFileSync(path.join(home, "token"), "utf8").trim();
@@ -147,6 +149,7 @@ export class RunnerClient {
    */
   startOwned() {
     this.starting ??= (async () => {
+      if (isForbiddenRealHome(this.home)) throw new Error("refusing to start a runner in the real home under a test runner");
       if (await this.healthy()) return;
       fs.mkdirSync(this.home, { recursive: true });
       // Cross-process start lock: concurrent callers (other VS processes, CLI one-liners) wait for the one that holds it
