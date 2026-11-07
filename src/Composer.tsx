@@ -8,7 +8,7 @@ import { addCtxSource, ctxGroupsFor, gitMenuItems, isCtxItem, laneMenuItems, use
 import { getTeams, useTeams } from "./teams";
 import { fetchChatContext, fetchGitContext, fetchTerminalContext, listTerminalNames } from "./contextFetch";
 import type { DraftImageView } from "./imageDrafts";
-import { formatSize, MAX_INLINE_BYTES, isBinaryBytes, type useAttachments } from "./attachments";
+import { formatSize, stageFiles, type useAttachments } from "./attachments";
 import { isImeComposing, shouldComposerSubmit } from "./IdeaInbox";
 import { SecretInputPopover } from "./SecretInputPopover";
 import { composerKeyAction, usePref } from "./prefs";
@@ -79,41 +79,6 @@ export function relativizePath(p: string, cwd: string): string {
   const norm = p.split("\\").join("/");
   const base = cwd.split("\\").join("/").replace(/\/$/, "");
   return base && norm.startsWith(base + "/") ? norm.slice(base.length + 1) : norm;
-}
-
-export function isImageFile(f: { type: string }): boolean {
-  return f.type.startsWith("image/");
-}
-
-export function partitionFiles<T extends { type: string; size: number }>(files: T[]) {
-  const images: T[] = [];
-  const text: T[] = [];
-  const tooLarge: T[] = [];
-  for (const f of files) {
-    if (isImageFile(f)) images.push(f);
-    else if (f.size > MAX_INLINE_BYTES) tooLarge.push(f);
-    else text.push(f);
-  }
-  return { images, text, tooLarge };
-}
-
-/** Route dropped/pasted/picked files: images to thumbnails, small text to chips; large/binary are rejected (no upload route). */
-export async function stageFiles(
-  all: File[],
-  imgs: { add: (f: File[]) => void },
-  atts: { add: (f: File[]) => void },
-): Promise<string | null> {
-  const { images, text, tooLarge } = partitionFiles(all);
-  const rejected = tooLarge.map((f) => f.name);
-  const ok: File[] = [];
-  for (const f of text) {
-    const head = new Uint8Array(await f.slice(0, 8192).arrayBuffer());
-    if (isBinaryBytes(head)) rejected.push(f.name);
-    else ok.push(f);
-  }
-  if (images.length) imgs.add(images);
-  if (ok.length) atts.add(ok);
-  return rejected.length ? `Too large / binary — attach a path instead: ${rejected.join(", ")}` : null;
 }
 
 /** Step through history. idx -1 = original draft. Returns next idx (clamped). */

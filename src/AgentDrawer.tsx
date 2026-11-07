@@ -32,8 +32,8 @@ import { openAgentInTab, paneOfAgent } from "./panes";
 import { setLastBrainstormProfile } from "./pinActions";
 import { useTimeline, Timeline, TimelineErrorBoundary, stripBootPreamble } from "./Timeline";
 import { PermissionCard } from "./PermissionCard";
-import { Composer, formatBtwPrompt, shouldQueueOnSend, stageFiles, type QueuedTurnItem } from "./Composer";
-import { composeMessage, setAgentCwd, useAttachments } from "./attachments";
+import { Composer, formatBtwPrompt, shouldQueueOnSend, type QueuedTurnItem } from "./Composer";
+import { composeMessage, setAgentCwd, stageFiles, useAttachments } from "./attachments";
 import { DrawerHeader, normalizeProviderId, type ProviderSwitchTarget } from "./DrawerHeader";
 import { useWorkingMembers, WorkingBar } from "./WorkingBar";
 import { RightDock } from "./RightDock";
@@ -173,6 +173,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   const atts = useAttachments(`${agent.id}:files`);
   const ctxSrc = useCtxSources(agent.id);
   const [paneDrop, setPaneDrop] = useState(false);
+  const [dropNotice, setDropNotice] = useState<string | null>(null);
   setAgentCwd(agent.id, agent.cwd);
 
   const isBs = isBrainstormAgent(agent);
@@ -572,7 +573,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
         setPaneDrop(false);
         if (e.defaultPrevented) return; // the composer already took it
         e.preventDefault();
-        void stageFiles(Array.from(e.dataTransfer?.files ?? []), imgs, atts);
+        void stageFiles(Array.from(e.dataTransfer?.files ?? []), imgs, atts).then(setDropNotice);
       }}
     >
       {paneDrop && (
@@ -688,6 +689,12 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
           <button className="btn small" data-testid="send-retry" style={{ marginLeft: 8 }} onClick={() => lastBehavior.current && void sendWithBehavior(lastBehavior.current)}>
             Retry
           </button>
+        </div>
+      )}
+
+      {dropNotice && (
+        <div className="chip warn" role="status" data-testid="pane-drop-notice">
+          {dropNotice}
         </div>
       )}
 

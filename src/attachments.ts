@@ -22,6 +22,41 @@ export function isBinaryBytes(bytes: Uint8Array): boolean {
   return false;
 }
 
+export function isImageFile(f: { type: string }): boolean {
+  return f.type.startsWith("image/");
+}
+
+export function partitionFiles<T extends { type: string; size: number }>(files: T[]) {
+  const images: T[] = [];
+  const text: T[] = [];
+  const tooLarge: T[] = [];
+  for (const f of files) {
+    if (isImageFile(f)) images.push(f);
+    else if (f.size > MAX_INLINE_BYTES) tooLarge.push(f);
+    else text.push(f);
+  }
+  return { images, text, tooLarge };
+}
+
+/** Route dropped/pasted/picked files: images to thumbnails, small text to chips; large/binary are rejected (no upload route). */
+export async function stageFiles(
+  all: File[],
+  imgs: { add: (f: File[]) => void },
+  atts: { add: (f: File[]) => void },
+): Promise<string | null> {
+  const { images, text, tooLarge } = partitionFiles(all);
+  const rejected = tooLarge.map((f) => f.name);
+  const ok: File[] = [];
+  for (const f of text) {
+    const head = new Uint8Array(await f.slice(0, 8192).arrayBuffer());
+    if (isBinaryBytes(head)) rejected.push(f.name);
+    else ok.push(f);
+  }
+  if (images.length) imgs.add(images);
+  if (ok.length) atts.add(ok);
+  return rejected.length ? `Too large / binary — attach a path instead: ${rejected.join(", ")}` : null;
+}
+
 export const longestBacktickRun = (content: string): number => Math.max(0, ...(content.match(/`+/g) ?? []).map((r) => r.length));
 
 /** A code fence longer than any backtick run inside `content`, so the parser can find the matching opener. */

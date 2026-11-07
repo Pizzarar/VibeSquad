@@ -26,8 +26,10 @@ test("daemon upload is cut, but inline text-file attachment is kept", () => {
   assert.match(comp, /accept=\{FILE_ACCEPT\}/);
 
   // Large/binary files are rejected at drop time with an inline note, not uploaded.
-  assert.match(comp, /attach a path instead/);
-  assert.match(comp, /isBinaryBytes/);
+  assert.match(att, /attach a path instead/);
+  assert.match(att, /isBinaryBytes/);
+  assert.match(att, /export async function stageFiles/);
+  assert.match(att, /export function partitionFiles/);
 });
 
 test("GitHub clone entry points are gone from NewSquadModal, TeamActions and App", () => {

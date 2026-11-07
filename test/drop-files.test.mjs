@@ -8,8 +8,9 @@ import {
   parseSentAttachments,
   removeAttachment,
   formatSize,
-  isBinaryBytes,
   MAX_INLINE_BYTES,
+  partitionFiles,
+  stageFiles,
 } from "../src/attachments.ts";
 
 const mk = (name, body, type = "text/plain") => new File([body], name, { type });
@@ -93,13 +94,61 @@ test("md attachment containing ``` and ~~~~ round-trips without spilling", async
   assert.deepEqual(r.chips, [{ name: "n.md" }]);
 });
 
-test("isBinaryBytes flags null bytes and MAX_INLINE_BYTES is the inline limit", () => {
-  assert.equal(isBinaryBytes(new Uint8Array([1, 0, 2])), true);
-  assert.equal(isBinaryBytes(new Uint8Array([104, 105])), false); // "hi"
-  assert.equal(MAX_INLINE_BYTES, 100 * 1024);
+test("partitionFiles splits images, small text, and oversized files", () => {
+  const { images, text, tooLarge } = partitionFiles([
+    { name: "a.png", type: "image/png", size: 10 },
+    { name: "notes.md", type: "text/markdown", size: 10 },
+    { name: "big.log", type: "text/plain", size: MAX_INLINE_BYTES + 1 },
+  ]);
+  assert.deepEqual(images.map((f) => f.name), ["a.png"]);
+  assert.deepEqual(text.map((f) => f.name), ["notes.md"]);
+  assert.deepEqual(tooLarge.map((f) => f.name), ["big.log"]);
+});
+
+test("stageFiles routes images + small text and rejects >100 KB / binary with a notice", async () => {
+  const bucket = () => {
+    const names = [];
+    return { names, add: (files) => names.push(...files.map((f) => f.name)) };
+  };
+  const imgs = bucket();
+  const atts = bucket();
+  const note = await stageFiles(
+    [
+      mk("pic.png", new Uint8Array([1, 2]), "image/png"),
+      mk("a.md", "# hello"),
+      mk("big.log", "x".repeat(MAX_INLINE_BYTES + 1)),
+      mk("bin.dat", new Uint8Array([1, 0, 2]), "application/octet-stream"),
+    ],
+    imgs,
+    atts,
+  );
+  assert.deepEqual(imgs.names, ["pic.png"]);
+  assert.deepEqual(atts.names, ["a.md"]);
+  assert.match(note, /attach a path instead/);
+  assert.match(note, /big\.log/);
+  assert.match(note, /bin\.dat/);
+});
+
+test("stageFiles returns null (no notice) when nothing is rejected", async () => {
+  const bucket = () => {
+    const names = [];
+    return { names, add: (files) => names.push(...files.map((f) => f.name)) };
+  };
+  const imgs = bucket();
+  const atts = bucket();
+  const note = await stageFiles([mk("a.md", "# hello")], imgs, atts);
+  assert.equal(note, null);
+  assert.deepEqual(atts.names, ["a.md"]);
 });
 
 test("chips-only steer keeps a non-empty steered label", async () => {
   const fs = await import("node:fs");
   assert.match(fs.readFileSync(new URL("../src/AgentDrawer.tsx", import.meta.url), "utf8"), /setLastSteered\(base \|\| "\(files\)"\)/);
+});
+
+test("AgentDrawer pane drop surfaces the stageFiles rejection notice", async () => {
+  const fs = await import("node:fs");
+  const drawer = fs.readFileSync(new URL("../src/AgentDrawer.tsx", import.meta.url), "utf8");
+  assert.match(drawer, /stageFiles\(Array\.from\(e\.dataTransfer\?\.files \?\? \[\]\), imgs, atts\)\.then\(setDropNotice\)/);
+  assert.match(drawer, /data-testid="pane-drop-notice"/);
 });
