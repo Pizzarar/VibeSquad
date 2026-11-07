@@ -12,7 +12,7 @@ import { pidAlive, readLock } from "../runner/lock.mjs";
 import { readDiscovery, runnerHome } from "./backend/runner-client.mjs";
 import { sharedRunnerBackend } from "./backend/index.mjs";
 import { killTree } from "./proc-tree.mjs";
-import { restartRunner as ownerRestart } from "./runner-supervisor.mjs";
+import { restartRunner as ownerRestart, restartRunnerNow } from "./runner-supervisor.mjs";
 
 const NODE_IMAGE = /^node(\.exe)?$/i;
 // Command lines that are VS infrastructure or tools an agent depends on, never strays.
@@ -183,4 +183,37 @@ export async function unstick({
     if (!restarted && !note) note = "runner did not come back healthy";
   }
   return { ok: true, killed, snapshot, runner: { healthy: healthyNow, wasHealthy, hung, needsRestart, restarted, pid: runnerPid ?? null, ...(note ? { note } : {}) } };
+}
+
+/**
+ * Owner-confirmed "Restart runner" (Unstick's new action): stop every live turn cleanly the way archive/park does (cancel a
+ * running turn and keep its session so the agent stays parked/resumable), then kill the runner tree and start a fresh one.
+ * Unlike `unstick`, this restarts a HEALTHY runner — the exact gap that left runner code changes not live after build + sync.
+ * Everything environmental is injectable for tests: `listAgents`, `stopAgent`, `restartRunner`.
+ */
+export async function forceRestartRunner({
+  backend,
+  listAgents,
+  stopAgent,
+  restartRunner = (be) => restartRunnerNow(be),
+} = {}) {
+  const be = backend ?? sharedRunnerBackend();
+  let agents = [];
+  try {
+    agents = await (listAgents ?? (() => be.listAgents()))();
+  } catch {
+    // Runner down or unreachable: nothing to park; restartRunnerNow still starts a fresh runner.
+  }
+  const parked = [];
+  for (const a of agents ?? []) {
+    if (!a || a.archivedAt) continue;
+    try {
+      await (stopAgent ?? ((id) => be.archiveAgent(id)))(a.id);
+      parked.push(a.id);
+    } catch {
+      // Already gone mid-loop: nothing to park.
+    }
+  }
+  await restartRunner(be);
+  return { ok: true, parked, restarted: true };
 }

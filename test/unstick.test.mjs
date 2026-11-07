@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { computeKillSet, listProcesses, unstick } from '../server/unstick.mjs';
+import { computeKillSet, forceRestartRunner, listProcesses, unstick } from '../server/unstick.mjs';
 
 const P = (pid, ppid, cmd, name = 'node.exe') => ({ pid, ppid, name, cmd, startedMs: 1 });
 const procs = [
@@ -181,4 +182,50 @@ test('RunnerBackend.startOwned({force}) bypasses the failure cooldown and a doom
   b.ensuring = new Promise(() => {}); // never settles
   assert.equal(await b.startOwned({ force: true }), true);
   assert.equal(calls, 2);
+});
+
+test('forceRestartRunner parks live (non-archived) agents cleanly, then restarts', async () => {
+  const parked = [];
+  let restarted = 0;
+  const r = await forceRestartRunner({
+    listAgents: async () => [{ id: 'rn-a', archivedAt: null }, { id: 'rn-b', archivedAt: null }, { id: 'rn-c', archivedAt: '2026-11-07T00:00:00Z' }],
+    stopAgent: async (id) => parked.push(id),
+    restartRunner: async () => { restarted++; return true; },
+  });
+  assert.deepEqual(parked, ['rn-a', 'rn-b']);
+  assert.equal(restarted, 1);
+  assert.equal(r.ok, true);
+  assert.equal(r.restarted, true);
+});
+
+test('forceRestartRunner still restarts when the agent list is unreachable (runner down)', async () => {
+  let restarted = 0;
+  const r = await forceRestartRunner({
+    listAgents: async () => { throw new Error('runner down'); },
+    restartRunner: async () => { restarted++; return true; },
+  });
+  assert.equal(restarted, 1);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.parked, []);
+});
+
+test('restart-runner route is owner-only: POST without the local token is 403', async () => {
+  const { createVibesquadMiddleware } = await import('../server/vibesquad-api.mjs');
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'vs-restart-route-'));
+  const prev = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = path.join(dir, '.vibesquad');
+  const repo = path.join(dir, 'repo');
+  mkdirSync(repo, { recursive: true });
+  const mw = createVibesquadMiddleware(repo);
+  const server = http.createServer((req, res) => mw(req, res, () => { res.statusCode = 404; res.end(); }));
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    const port = server.address().port;
+    const noToken = await fetch(`http://127.0.0.1:${port}/__vibesquad/restart-runner`, { method: 'POST' });
+    assert.equal(noToken.status, 403);
+  } finally {
+    await new Promise((r) => server.close(r));
+    prev === undefined ? delete process.env.VIBESQUAD_HOME : (process.env.VIBESQUAD_HOME = prev);
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

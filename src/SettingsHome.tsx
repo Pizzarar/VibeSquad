@@ -362,6 +362,41 @@ function UnstickButton() {
   );
 }
 
+type RestartRunnerResult = { ok: boolean; parked?: string[]; restarted?: boolean; error?: string };
+
+function RestartRunnerButton() {
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState<RestartRunnerResult | null>(null);
+  const run = async () => {
+    setBusy(true);
+    try {
+      const r = await fetch("/__vibesquad/restart-runner", { method: "POST" });
+      setRes((await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }))) as RestartRunnerResult);
+    } catch (e) {
+      setRes({ ok: false, error: String((e as Error)?.message ?? e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div data-setting-id="restart-runner" data-testid="settings-restart-runner">
+      <p className="muted small">Runner fixes not going live? Restarts the runner so the latest runner code loads. Running turns are parked first and resume in place.</p>
+      <button className="btn ghost small" disabled={busy} onClick={() => void run()}>
+        {busy ? "Restarting…" : "Restart runner"}
+      </button>
+      {res && (
+        <div className="muted small" data-testid="settings-restart-runner-result">
+          {res.ok ? (
+            <>Runner restarted{res.parked?.length ? ` · parked ${res.parked.length}` : ""}</>
+          ) : (
+            <>Failed: {res.error}</>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function About(props: { onDiagnostics: () => void; onLicenses: () => void; onChecklist: () => void; onClose: () => void }) {
   const updaterStatus = useUpdaterStatus();
   const [upd, setUpd] = useState<UpdateCheck["state"]>("idle");
@@ -374,6 +409,7 @@ function About(props: { onDiagnostics: () => void; onLicenses: () => void; onChe
         <TeamSettingsModal embedded parts={["update"]} onClose={props.onClose} />
       </div>
       {!isRemote() && <UnstickButton />}
+      {!isRemote() && <RestartRunnerButton />}
       <p style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button
           className="btn ghost small"
