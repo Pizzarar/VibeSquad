@@ -2,12 +2,15 @@
 // /__vibesquad/providers[/models|/modes|/usage|/settings]. Shapes match what src/paseoProviders.ts got from the
 // Paseo daemon ({providers:[{provider,available,error}]}, {models:[{id,label,...}]}, {modes:[...]}).
 // Probing: `<cli> --version` on the resolved executable, no shell, cached with a TTL. No background timers.
-import { execFile } from "node:child_process";
-import { openSync, closeSync, readSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { execFile, execFileSync } from "node:child_process";
+import { openSync, closeSync, readSync, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { ACP_PROVIDERS, PROVIDER_ALIASES } from "../runner/adapters/acp.mjs";
 import { resolveExecutable } from "../runner/spawn.mjs";
 import { DEFAULT_PACK_PROFILES, getProfilesPath, normalizeProfile } from "./profiles.mjs";
+import { resolveTeamsFilePath } from "./teams-file.mjs";
+import { isForbiddenRealHome } from "./test-guard.mjs";
 import { readJsonFileWithBom, vibesquadHome, writeSettingsAtomic } from "./user-settings.mjs";
 
 const PROBE_TTL_MS = 10 * 60_000;
@@ -222,7 +225,7 @@ export async function getModes(provider, opts = {}) {
 // ---------------------------------------------------------------- usage rollups (lazy + incremental)
 // Per file we keep the byte offset already folded in and the per-bucket totals. A request stats the directory,
 // re-reads only files whose size/mtime moved (and only the new tail), and drops nothing it has already counted.
-const usageFiles = new Map(); // path -> { size, mtimeMs, offset, provider, model, lane, prevCost, buckets }
+const usageFiles = new Map(); // path -> { size, mtimeMs, offset, provider, model, lane, role, prevCost, buckets, turns, tail, pass, handoff, title }
 export const clearUsageCache = () => usageFiles.clear();
 let usageReadBytes = 0;
 export const usageStats = () => ({ files: usageFiles.size, readBytes: usageReadBytes });
@@ -235,10 +238,10 @@ const dayOf = (ts) => {
 const tokenCount = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : 0);
 
 function bucketFor(st, day) {
-  const key = `${st.provider}|${st.model}|${st.lane}|${day}`;
+  const key = `${st.provider}|${st.model}|${st.lane}|${st.role}|${day}`;
   let b = st.buckets.get(key);
   if (!b) {
-    b = { provider: st.provider, model: st.model, lane: st.lane, day, turns: 0, costUsd: 0, inputTokens: 0, outputTokens: 0 };
+    b = { provider: st.provider, model: st.model, lane: st.lane, role: st.role, day, turns: 0, costUsd: 0, inputTokens: 0, outputTokens: 0 };
     st.buckets.set(key, b);
   }
   return b;
@@ -249,12 +252,22 @@ function foldEvent(st, ev) {
     st.provider = ev.provider ?? st.provider;
     st.model = ev.model ?? st.model;
     st.lane = ev.meta?.lane ?? ev.meta?.labels?.lane ?? st.lane;
+    foldIdentity(st, ev.meta);
   } else if (ev.type === "session" && ev.model) {
     st.model = ev.model;
   } else if (ev.type === "meta") {
     // Runner.updateMeta appends { type: "meta", patch: { lane?, labels? } }.
     const lane = ev.patch?.lane ?? ev.patch?.labels?.lane;
     if (typeof lane === "string" && lane) st.lane = lane;
+    foldIdentity(st, ev.patch);
+  } else if (ev.type === "input") {
+    st.tail = ""; // a new prompt starts a new assistant message; echoed prompt text never counts
+  } else if (ev.type === "output") {
+    // PASS counts only at the start of a line of the agent's own message ("PASS", "Verdict: PASS", "**PASS**"), never mid-text.
+    if (typeof ev.text === "string") {
+      st.tail = (st.tail + ev.text).slice(-400);
+      if (!st.pass && PASS_RE.test(st.tail)) st.pass = true;
+    }
   } else if (ev.type === "usage") {
     // Adapter usage events (claude: per-call input/output tokens). ACP's contextTokens is a running size, not a delta: ignored.
     const inT = tokenCount(ev.inputTokens);
@@ -278,7 +291,17 @@ function foldEvent(st, ev) {
     const b = bucketFor(st, day);
     b.turns += 1;
     b.costUsd += delta;
+    st.turns += 1;
   }
+}
+
+/** Role (brainstorm|lead|worker), handoff marker and title ride on created.meta / meta.patch. */
+function foldIdentity(st, m) {
+  if (!m) return;
+  if (typeof m.role === "string" && m.role) st.role = m.role;
+  if (typeof m.labels?.["vs.handoff-from"] === "string") st.handoff = true;
+  const title = m.title ?? m.labels?.job;
+  if (typeof title === "string" && title) st.title = title;
 }
 
 function readTail(file, from, to) {
@@ -301,7 +324,7 @@ function readTail(file, from, to) {
 function refreshFile(file, stat) {
   let st = usageFiles.get(file);
   if (st && st.size === stat.size && st.mtimeMs === stat.mtimeMs) return st;
-  if (!st || stat.size < st.offset) st = { offset: 0, provider: "unknown", model: "unknown", lane: "", prevCost: 0, buckets: new Map() };
+  if (!st || stat.size < st.offset) st = { offset: 0, provider: "unknown", model: "unknown", lane: "", role: "", prevCost: 0, buckets: new Map(), turns: 0, tail: "", pass: false, handoff: false, title: "" };
   const buf = readTail(file, st.offset, stat.size);
   const lastNl = buf.lastIndexOf(10);
   if (lastNl >= 0) {
@@ -317,57 +340,249 @@ function refreshFile(file, stat) {
   return st;
 }
 
-export function getUsage({ home, since, until } = {}) {
-  const dir = join(home || vibesquadHome(), "runner", "agents");
+/** A run (agent log) with more turns than this and no PASS in its output is flagged as a likely loop. */
+export const LOOP_TURN_THRESHOLD = 40;
+const PASS_RE = /(?:^|\n)[ \t>*_#-]*(?:verdict:?\s*)?[*_`]*PASS\b/i;
+const COORDINATION_ROLES = new Set(["brainstorm", "lead"]);
+const ROLE_ORDER = ["brainstorm", "lead", "worker"];
+
+const zeroStats = () => ({ turns: 0, costUsd: 0, inputTokens: 0, outputTokens: 0 });
+const addStats = (t, b) => {
+  t.turns += b.turns;
+  t.costUsd += b.costUsd;
+  t.inputTokens += b.inputTokens;
+  t.outputTokens += b.outputTokens;
+  return t;
+};
+const withAvg = (t) => ({ ...t, avgTokensPerTurn: t.turns ? Math.round((t.inputTokens + t.outputTokens) / t.turns) : 0 });
+const toMs = (v) => {
+  if (v === null || v === undefined || v === "") return null;
+  const n = typeof v === "number" ? v : Date.parse(v);
+  return Number.isFinite(n) ? n : null;
+};
+const getOrSet = (m, k, mk) => m.get(k) ?? m.set(k, mk()).get(k);
+
+// ---- provider limit windows: <runner home>/limits.jsonl, one JSON line per sample (written by the adapters/runner):
+// {at, provider, window:"5h"|"weekly", usedPct, resetsAt, source:"provider"|"estimate", agentId}
+const BURN_LOOKBACK_MS = 2 * 3600_000;
+
+/** Latest sample per provider/window + burn rate (%/h over the last 2h of the current window) + ETA-to-cap. Missing file -> []. */
+export function readLimits(home) {
+  const dir = home || vibesquadHome();
+  if (isForbiddenRealHome(dir)) return [];
+  let text = "";
+  try { text = readFileSync(join(dir, "runner", "limits.jsonl"), "utf8"); } catch { return []; }
+  const groups = new Map();
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    let r;
+    try { r = JSON.parse(line); } catch { continue; }
+    const at = toMs(r?.at);
+    const used = Number(r?.usedPct);
+    if (!r?.provider || !r?.window || at === null || !Number.isFinite(used)) continue;
+    getOrSet(groups, `${r.provider}|${r.window}`, () => []).push({ ...r, atMs: at, used, resetMs: toMs(r.resetsAt) });
+  }
+  const out = [];
+  for (const pts of groups.values()) {
+    pts.sort((x, y) => x.atMs - y.atMs);
+    const last = pts[pts.length - 1];
+    // Current window starts after the last usedPct drop or the last change of a known resetsAt (both mean the window rolled over).
+    let start = 0;
+    for (let i = 1; i < pts.length; i++) {
+      const rolled = pts[i].used < pts[i - 1].used || (pts[i].resetMs !== null && pts[i - 1].resetMs !== null && pts[i].resetMs !== pts[i - 1].resetMs);
+      if (rolled) start = i;
+    }
+    const cur = pts.slice(start).filter((p) => p.atMs >= last.atMs - BURN_LOOKBACK_MS);
+    const hours = (last.atMs - cur[0].atMs) / 3600_000;
+    const burn = Math.max(0, hours > 0 ? (last.used - cur[0].used) / hours : 0);
+    let etaToCap = null;
+    if (burn > 0) {
+      const eta = last.used >= 100 ? last.atMs : last.atMs + ((100 - last.used) / burn) * 3600_000;
+      if (last.resetMs === null || eta < last.resetMs) etaToCap = new Date(eta).toISOString();
+    }
+    out.push({
+      provider: last.provider, window: last.window, usedPct: last.used,
+      resetsAt: last.resetMs === null ? null : new Date(last.resetMs).toISOString(),
+      source: last.source ?? "provider", agentId: last.agentId ?? null, at: new Date(last.atMs).toISOString(),
+      burnPctPerHour: Math.round(burn * 100) / 100, etaToCap,
+    });
+  }
+  return out.sort((x, y) => x.provider.localeCompare(y.provider) || x.window.localeCompare(y.window));
+}
+
+// ---- merged units from git. `git` is injectable: (args: string[]) => stdout string.
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const defaultGit = (args) => execFileSync("git", args, { cwd: REPO_ROOT, encoding: "utf8", timeout: 15_000, maxBuffer: 64 * 1024 * 1024, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+const REVIEW_RE = /review r(\d+)/i;
+const CODE_RE = /\(@([A-Za-z0-9_-]+)(?:\s[^)]*)?\)/g;
+const MAX_COMMITS = 4000;
+const MAX_BRANCH_WALK = 500;
+
+/** Lane code of a subject: the last `(@code ...)` tag, lowercased, else null. */
+const codeOf = (subject) => {
+  let m, last = null;
+  CODE_RE.lastIndex = 0;
+  while ((m = CODE_RE.exec(subject))) last = m[1].toLowerCase();
+  return last;
+};
+
+let mergedCache = null; // { git, head, units }: recomputed only when HEAD (or the injected git) changes
+
+/** Merge commits -> units {sha, unit, code, reviewRounds, mergedAt, subject}. unit = branch from "Merge branch 'x'".
+ * One `git log` over recent history joined in memory (no per-merge spawns), cached by HEAD sha. The merged side of a
+ * merge = commits reachable from its 2nd parent until the first-parent (mainline) chain from HEAD is hit.
+ * reviewRounds = highest N among "review rN" subjects on that side. Lane code = the merge subject's `(@code)` tag,
+ * else the first tag found on the merged side. */
+export function readMergedUnits(git = defaultGit) {
+  let head = "";
+  try { head = git(["rev-parse", "HEAD"]).trim(); } catch { return []; }
+  if (mergedCache && mergedCache.git === git && mergedCache.head === head) return mergedCache.units;
+  let raw = "";
+  try { raw = git(["log", `-${MAX_COMMITS}`, "--format=%H%x1f%P%x1f%ct%x1f%s"]); } catch { return []; }
+  const commits = new Map();
+  for (const line of raw.split("\n")) {
+    const [sha, parents, ct, subject = ""] = line.split("\x1f");
+    if (sha) commits.set(sha, { sha, parents: (parents ?? "").trim().split(/\s+/).filter(Boolean), ct, subject });
+  }
+  const mainline = new Set();
+  for (let c = commits.get(head); c && !mainline.has(c.sha); c = commits.get(c.parents[0])) mainline.add(c.sha);
+  const units = [];
+  for (const c of commits.values()) {
+    if (c.parents.length < 2) continue;
+    const side = [];
+    const seen = new Set();
+    const stack = [c.parents[1]];
+    while (stack.length && side.length < MAX_BRANCH_WALK) {
+      const sha = stack.pop();
+      if (seen.has(sha) || mainline.has(sha)) continue;
+      seen.add(sha);
+      const k = commits.get(sha);
+      if (!k) continue;
+      side.push(k);
+      stack.push(...k.parents);
+    }
+    let rounds = 0;
+    let code = codeOf(c.subject);
+    for (const k of side) {
+      const m = REVIEW_RE.exec(k.subject);
+      if (m) rounds = Math.max(rounds, Number(m[1]));
+      code ??= codeOf(k.subject);
+    }
+    const branch = /Merge branch '([^']+)'/i.exec(c.subject)?.[1] ?? null;
+    units.push({ sha: c.sha, unit: branch, code, reviewRounds: rounds, mergedAt: Number.isFinite(Number(c.ct)) ? new Date(Number(c.ct) * 1000).toISOString() : null, subject: c.subject });
+  }
+  mergedCache = { git, head, units };
+  return units;
+}
+
+/** lowercase lane code or id -> lane id, from <home>/teams.json lanes[]. */
+function readLaneCodes(home) {
+  const map = new Map();
+  try {
+    const own = home ? join(home, "teams.json") : null;
+    const file = own && !isForbiddenRealHome(home) && existsSync(own) ? own : resolveTeamsFilePath(REPO_ROOT);
+    const t = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
+    for (const team of t.teams ?? []) for (const l of team.lanes ?? []) {
+      if (!l?.id) continue;
+      map.set(String(l.id).toLowerCase(), l.id);
+      if (l.code) map.set(String(l.code).toLowerCase(), l.id);
+    }
+  } catch { /* no teams.json */ }
+  return map;
+}
+
+export function getUsage({ home, since, until, git, laneCodes } = {}) {
+  const homeDir = home || vibesquadHome();
+  const dir = join(homeDir, "runner", "agents");
   const seen = new Set();
   const agg = new Map();
+  const aggAgents = new Map(); // agg key -> Set of agent files (one agent spans several buckets when its role changes mid-day)
+  const laneRole = new Map(); // lane|role -> stats (day-filtered)
+  const laneAgents = new Map(); // lane -> { agents, handoffs, byRole: Map<role, count> }
+  const loops = [];
   let names = [];
-  try { names = readdirSync(dir).filter((n) => n.endsWith(".jsonl")); } catch { /* no runner yet */ }
+  if (!isForbiddenRealHome(homeDir)) try { names = readdirSync(dir).filter((n) => n.endsWith(".jsonl")); } catch { /* no runner yet */ }
   for (const n of names) {
     const file = join(dir, n);
     seen.add(file);
     let st;
     try { st = refreshFile(file, statSync(file)); } catch { continue; }
+    const la = getOrSet(laneAgents, st.lane, () => ({ agents: 0, handoffs: 0, byRole: new Map() }));
+    la.agents += 1;
+    if (st.handoff) la.handoffs += 1;
+    la.byRole.set(st.role, (la.byRole.get(st.role) ?? 0) + 1);
+    if (st.turns > LOOP_TURN_THRESHOLD && !st.pass) loops.push({ agentId: n.slice(0, -6), lane: st.lane, role: st.role, title: st.title, turns: st.turns });
     for (const b of st.buckets.values()) {
       if ((since && b.day < since) || (until && b.day > until)) continue;
-      const key = `${b.provider}|${b.model}|${b.lane}|${b.day}`;
-      const a = agg.get(key) ?? { provider: b.provider, model: b.model, lane: b.lane, day: b.day, turns: 0, costUsd: 0, inputTokens: 0, outputTokens: 0, agents: 0 };
-      a.turns += b.turns;
-      a.costUsd += b.costUsd;
-      a.inputTokens += b.inputTokens;
-      a.outputTokens += b.outputTokens;
-      a.agents += 1;
-      agg.set(key, a);
+      const a = getOrSet(agg, `${b.provider}|${b.model}|${b.lane}|${b.day}`, () => ({ provider: b.provider, model: b.model, lane: b.lane, day: b.day, ...zeroStats(), agents: 0 }));
+      addStats(a, b);
+      const aKey = `${b.provider}|${b.model}|${b.lane}|${b.day}`;
+      a.agents = getOrSet(aggAgents, aKey, () => new Set()).add(n).size;
+      addStats(getOrSet(laneRole, `${b.lane}|${b.role}`, () => ({ lane: b.lane, role: b.role, ...zeroStats() })), b);
     }
   }
   for (const f of [...usageFiles.keys()]) if (!seen.has(f)) usageFiles.delete(f); // file removed: forget it
   const rows = [...agg.values()].sort((a, b) => b.day.localeCompare(a.day) || b.costUsd - a.costUsd);
   const by = (k) => {
     const m = new Map();
-    for (const r of rows) {
-      const t = m.get(r[k]) ?? { [k]: r[k], turns: 0, costUsd: 0, inputTokens: 0, outputTokens: 0 };
-      t.turns += r.turns;
-      t.costUsd += r.costUsd;
-      t.inputTokens += r.inputTokens;
-      t.outputTokens += r.outputTokens;
-      m.set(r[k], t);
-    }
+    for (const r of rows) addStats(getOrSet(m, r[k], () => ({ [k]: r[k], ...zeroStats() })), r);
     return [...m.values()].sort((a, b) => b.costUsd - a.costUsd);
   };
+  const totals = rows.reduce((t, r) => addStats(t, r), zeroStats());
+
+  // role / lane x role / coordination vs execution
+  const lrRows = [...laneRole.values()].map(withAvg).sort((a, b) => a.lane.localeCompare(b.lane) || ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role));
+  const roleMap = new Map();
+  for (const r of lrRows) addStats(getOrSet(roleMap, r.role, () => ({ role: r.role, ...zeroStats() })), r);
+  const split = (list) => {
+    let coord = 0, exec = 0;
+    for (const r of list) {
+      if (COORDINATION_ROLES.has(r.role)) coord += r.inputTokens + r.outputTokens;
+      else exec += r.inputTokens + r.outputTokens;
+    }
+    return { coordinationTokens: coord, executionTokens: exec, coordinationShare: coord + exec ? Math.round((coord / (coord + exec)) * 1000) / 1000 : 0 };
+  };
+  const laneIds = [...new Set([...lrRows.map((r) => r.lane), ...laneAgents.keys()])].sort();
+  const lanes = laneIds.map((lane) => {
+    const mine = lrRows.filter((r) => r.lane === lane);
+    const la = laneAgents.get(lane) ?? { agents: 0, handoffs: 0, byRole: new Map() };
+    // restarts = extra lead/brainstorm instances in the lane (each replaced an earlier one); handoffs = agents carrying vs.handoff-from.
+    const restarts = [...COORDINATION_ROLES].reduce((s, r) => s + Math.max(0, (la.byRole.get(r) ?? 0) - 1), 0);
+    return {
+      lane, ...withAvg(mine.reduce((t, r) => addStats(t, r), zeroStats())), agents: la.agents, restarts, handoffs: la.handoffs,
+      byRole: Object.fromEntries(mine.map((r) => [r.role || "unknown", withAvg(addStats(zeroStats(), r))])),
+      ...split(mine),
+    };
+  });
+
+  // merged units; cost per merged unit = lane cost / lane merged units. Lane via the (@code) tag -> teams.json lane code/id.
+  const codes = laneCodes ? new Map(Object.entries(laneCodes).map(([k, v]) => [k.toLowerCase(), v])) : readLaneCodes(home);
+  const merged = readMergedUnits(git).map((u) => ({ ...u, lane: u.code ? (codes.get(u.code) ?? u.code) : null }));
+  const mergedByLane = new Map();
+  for (const u of merged) if (u.lane) getOrSet(mergedByLane, u.lane, () => []).push(u);
+  const laneCost = new Map(lanes.map((l) => [l.lane, l.costUsd]));
+  const perLane = [...mergedByLane].map(([lane, us]) => {
+    const rounds = us.reduce((s, u) => s + u.reviewRounds, 0);
+    const cost = laneCost.get(lane) ?? 0;
+    return { lane, mergedUnits: us.length, reviewRounds: rounds, avgReviewRounds: Math.round((rounds / us.length) * 100) / 100, costUsd: cost, costPerMergedUnit: cost / us.length };
+  }).sort((a, b) => b.mergedUnits - a.mergedUnits);
+
   return {
     note: "Cost is summed from turn_done.costUsd; token counts come from adapter usage events and are 0 for logs that have none.",
     files: seen.size,
-    totals: {
-      turns: rows.reduce((s, r) => s + r.turns, 0),
-      costUsd: rows.reduce((s, r) => s + r.costUsd, 0),
-      inputTokens: rows.reduce((s, r) => s + r.inputTokens, 0),
-      outputTokens: rows.reduce((s, r) => s + r.outputTokens, 0),
-    },
+    totals,
     byProvider: by("provider"),
     byModel: by("model"),
     byLane: by("lane"),
     byDay: by("day"),
     rows,
+    limits: readLimits(home),
+    byRole: [...roleMap.values()].map(withAvg).sort((a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role)),
+    lanes,
+    laneRole: lrRows,
+    coordination: split(lrRows),
+    merged: { units: merged, perLane },
+    loops: { threshold: LOOP_TURN_THRESHOLD, flagged: loops.sort((a, b) => b.turns - a.turns) },
   };
 }
 
@@ -390,7 +605,7 @@ export async function handleProvidersApi(req, res, { sendJson, readBody, home, .
     if (sub === "") return sendJson(res, 200, await getProviders(opts));
     if (sub === "models") return sendJson(res, 200, await getModels(url.searchParams.get("provider") ?? "", opts));
     if (sub === "modes") return sendJson(res, 200, await getModes(url.searchParams.get("provider") ?? "", opts));
-    if (sub === "usage") return sendJson(res, 200, getUsage({ home, since: url.searchParams.get("since") || undefined, until: url.searchParams.get("until") || undefined }));
+    if (sub === "usage") return sendJson(res, 200, getUsage({ home, since: url.searchParams.get("since") || undefined, until: url.searchParams.get("until") || undefined, git: probeOpts.git }));
     return sendJson(res, 404, { error: "not found" });
   } catch (err) {
     return sendJson(res, 500, { error: String(err?.message ?? err) });
