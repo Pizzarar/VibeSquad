@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
+import { clearConfigWarning, readJsonFileWithBom, writeSettingsAtomic } from "./user-settings.mjs";
 import {
   COUNTERPART_PROFILES,
   QUOTA_FAILOVER_THRESHOLD,
@@ -558,8 +558,7 @@ function readProviderBlock(targetPath) {
 
 function writeProfilesFile(targetPath, profiles) {
   const block = readProviderBlock(targetPath);
-  mkdirSync(dirname(targetPath), { recursive: true });
-  writeFileSync(targetPath, JSON.stringify({ version: 1, ...block, profiles }, null, 2) + "\n", "utf8");
+  writeSettingsAtomic(targetPath, { version: 1, ...block, profiles });
   clearConfigWarning(targetPath);
 }
 
@@ -674,7 +673,9 @@ const NOTE_HISTORY = new Set(
 );
 
 export function hashNote(notes) {
-  return createHash("sha256").update(String(notes ?? "")).digest("hex");
+  // CRLF/trailing whitespace differences (editors, git autocrlf) must not hide a never-edited default.
+  const norm = String(notes ?? "").replace(/\r\n?/g, "\n").replace(/\s+$/, "");
+  return createHash("sha256").update(norm).digest("hex");
 }
 
 export function isKnownDefaultNote(notes) {

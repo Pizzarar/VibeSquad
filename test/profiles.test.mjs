@@ -623,3 +623,33 @@ test("stale default note is upgraded on load and persisted; user-edited note is 
     env.cleanup();
   }
 });
+
+test("CRLF-stored stale note is upgraded", () => {
+  const env = makeTempEnv();
+  try {
+    const crlf = STALE_NOTE.replace(/\r?\n/g, "\r\n") + "  \r\n";
+    seedFile(env, { [PACK[0].name]: crlf });
+    const res = loadProfilesDirect(env.profilesPath, { paseoProfiles: [], autoSeed: false });
+    assert.equal(res.profiles[0].notes, PACK[0].notes);
+    const raw = readFileSync(env.profilesPath);
+    assert.notEqual(raw[0], 0xef, "no BOM");
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("custom (non-built-in) profile whose note equals a shipped default is not touched; no rewrite when unchanged", () => {
+  const env = makeTempEnv();
+  try {
+    const custom = { ...PACK[0], id: "custom-id-1", name: "My Custom Lead", notes: STALE_NOTE };
+    const profiles = [custom, ...PACK.slice(1, 3).map((p) => ({ ...p }))];
+    mkdirSync(join(env.dir, ".vibesquad"), { recursive: true });
+    writeFileSync(env.profilesPath, JSON.stringify({ version: 1, profiles }), "utf8");
+    const before = readFileSync(env.profilesPath, "utf8");
+    const res = loadProfilesDirect(env.profilesPath, { paseoProfiles: [], autoSeed: false });
+    assert.equal(res.profiles[0].notes, STALE_NOTE);
+    assert.equal(readFileSync(env.profilesPath, "utf8"), before, "file untouched when nothing changed");
+  } finally {
+    env.cleanup();
+  }
+});
