@@ -946,7 +946,7 @@ export function decideProxyRequest(method: unknown, path: unknown, allow: AllowM
   if (!norm.ok) return { ok: false, code: "path", error: norm.error };
   if (isBlockedPath(norm.pathname)) return { ok: false, code: "blocked", error: `blocked remotely: ${norm.pathname}` };
   const allowed = Object.hasOwn(allow, norm.pathname) ? allow[norm.pathname] : ownerRouteMethods(norm.pathname);
-  if (allowed && norm.pathname === "/__vibesquad/workspace-scripts/logs" && /(?:^|&)stream=/.test(norm.search.slice(1))) {
+  if (allowed && norm.pathname === "/__vibesquad/workspace-scripts/logs" && new URLSearchParams(norm.search).has("stream")) {
     return { ok: false, code: "not-allowed", error: `not available remotely: ${norm.pathname}?stream (use the non-stream form)` };
   }
   if (!allowed) return { ok: false, code: "not-allowed", error: `not available remotely: ${norm.pathname}` };

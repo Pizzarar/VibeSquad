@@ -1333,6 +1333,12 @@ describe("B8 part 2b: remote terminals are owner-only, long-polled, byte-exact a
     const n = seen.length;
     await assert.rejects(h({ method: "GET", path: `${T}/${id}/stream` }), /not available remotely.*\[403\]/);
     await assert.rejects(h({ method: "GET", path: "/__vibesquad/workspace-scripts/logs?stream=1&cwd=a&name=b" }), /not available remotely.*\[403\]/);
+    for (const q of ["%73tream=1", "cwd=a&%73%74ream=1", "stream", "x=1&stream=0"]) {
+      const d = decideProxyRequest("GET", `/__vibesquad/workspace-scripts/logs?${q}`);
+      assert.equal(d.ok, false, q);
+      assert.equal(d.code, "not-allowed", q);
+    }
+    assert.equal(decideProxyRequest("GET", "/__vibesquad/workspace-scripts/logs?cwd=a&name=b").ok, true);
     await assert.rejects(h({ method: "GET", path: `${T}/${id}/input` }), /not available remotely on.*\[405\]/);
     await assert.rejects(h({ method: "DELETE", path: `${T}/${id}/kill` }), /\[405\]/);
     await assert.rejects(h({ method: "GET", path: `${T}/not-an-id/poll` }), /not available remotely.*\[403\]/);
@@ -1370,6 +1376,22 @@ describe("B8 part 2b: remote terminals are owner-only, long-polled, byte-exact a
     assert.ok(JSON.parse(r.body).text.length <= REMOTE_TERMINAL_POLL_CHARS);
     assert.ok(Buffer.byteLength(r.body) < REMOTE_MAX_BODY_BYTES);
     for (const id of ids.slice(1)) await post(h, `${T}/${id}/kill`, {});
+  });
+  test("slots freed by a local kill, an exit or a closed tab are reclaimed: 4 killed on the host, then a 5th create succeeds", async () => {
+    const h = mk(OWNER_HOME);
+    const ids = [];
+    for (let i = 0; i < REMOTE_MAX_TERMINALS; i++) ids.push(JSON.parse((await post(h, T, { cwd: ws })).body).terminal.id);
+    await assert.rejects(post(h, T, { cwd: ws }), /too many remote terminals.*\[429\]/);
+    mgr.kill(ids[0]); // killed on the host, not through the proxy
+    mgr.get(ids[1]).kill();
+    mgr.get(ids[1]).exited = { code: 1 }; // exited on its own
+    mgr.kill(ids[2]);
+    mgr.kill(ids[3]);
+    const fresh = await post(h, T, { cwd: ws });
+    assert.equal(fresh.status, 201);
+    for (let i = 0; i < REMOTE_MAX_TERMINALS - 1; i++) assert.equal((await post(h, T, { cwd: ws })).status, 201);
+    await assert.rejects(post(h, T, { cwd: ws }), /too many remote terminals.*\[429\]/, "the cap still holds after a prune");
+    mgr.killAll();
   });
   test("terminal calls use their own rate bucket, not the 20/min write budget", async () => {
     const h = mk(OWNER_HOME);

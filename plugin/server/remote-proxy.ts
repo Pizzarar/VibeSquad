@@ -193,14 +193,14 @@ export type VsHttpDeps = {
 export function makeVsHttpHandler(deps: VsHttpDeps = {}) {
   const limiter = deps.limiter ?? createRateLimiter();
   // Terminals this handler (one paired PC session) created and has not seen die: the per-caller cap.
-  const remoteTerms = new Set<string>();
+  const remoteTerms = new Map<string, string>(); // id -> cwd
   const owner = { ...ownerIdentity(), ...(deps.homeDir !== undefined ? { homeDir: deps.homeDir } : {}), ...(deps.userName !== undefined ? { userName: deps.userName } : {}) };
   const trackTerminal = (method: string, pathname: string, status: number, text: string) => {
     const id = /^\/__vibesquad\/terminals\/(tm-[a-f0-9]{12})\//.exec(pathname)?.[1];
     if (method === "POST" && pathname === "/__vibesquad/terminals" && status === 201) {
       try {
-        const made = JSON.parse(text)?.terminal?.id;
-        if (typeof made === "string") remoteTerms.add(made);
+        const made = JSON.parse(text)?.terminal;
+        if (typeof made?.id === "string") remoteTerms.set(made.id, String(made.cwd ?? ""));
       } catch {}
     } else if (id && (pathname.endsWith("/kill") || status === 404 || status === 409)) {
       remoteTerms.delete(id);
@@ -208,6 +208,36 @@ export function makeVsHttpHandler(deps: VsHttpDeps = {}) {
       try {
         if (JSON.parse(text)?.exited) remoteTerms.delete(id);
       } catch {}
+    }
+  };
+  // Tabs closed, or shells killed / exited on the host, never reach us: before refusing at the cap, drop every tracked
+  // id the server no longer lists as live (one GET per cwd). A failed lookup keeps the id (fail closed on the cap).
+  const pruneTerminals = async (home: string, port: number) => {
+    const byCwd = new Map<string, string[]>();
+    for (const [id, cwd] of remoteTerms) byCwd.set(cwd, [...(byCwd.get(cwd) ?? []), id]);
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 3000);
+    try {
+      for (const [cwd, ids] of byCwd) {
+        try {
+          const res = await (deps.fetch ?? fetch)(`http://127.0.0.1:${port}/__vibesquad/terminals?cwd=${encodeURIComponent(cwd)}`, {
+            method: "GET",
+            headers: vsTokenHeaders(home),
+            redirect: "manual",
+            signal: abort.signal,
+          });
+          if (res.status !== 200) {
+            res.body?.cancel().catch(() => {});
+            continue;
+          }
+          const live = new Set<string>(
+            ((JSON.parse(await readCapped(res, abort.signal))?.terminals ?? []) as { id?: string; exited?: unknown }[]).filter((t) => !t.exited).map((t) => String(t.id)),
+          );
+          for (const id of ids) if (!live.has(id)) remoteTerms.delete(id);
+        } catch {}
+      }
+    } finally {
+      clearTimeout(timer);
     }
   };
   return async (input: VsHttpInput): Promise<VsHttpOutput> => {
@@ -226,6 +256,9 @@ export function makeVsHttpHandler(deps: VsHttpDeps = {}) {
     const termRoute = isTerminalRoute(d.pathname);
     if (ownerRoute && Object.keys(vsTokenHeaders(home)).length === 0) {
       throw new RemoteDenied(403, "terminals and scripts are owner-only (no owner token on the host)");
+    }
+    if (termRoute && d.method === "POST" && d.pathname === "/__vibesquad/terminals" && remoteTerms.size >= REMOTE_MAX_TERMINALS) {
+      await pruneTerminals(home, deps.port ?? Number(process.env.VIBESQUAD_PORT || 4180));
     }
     if (termRoute && d.method === "POST" && d.pathname === "/__vibesquad/terminals" && remoteTerms.size >= REMOTE_MAX_TERMINALS) {
       throw new RemoteDenied(429, `too many remote terminals (max ${REMOTE_MAX_TERMINALS}); close one first`);
