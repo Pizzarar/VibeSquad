@@ -4,7 +4,7 @@
 // Probing: `<cli> --version` on the resolved executable, no shell, cached with a TTL. No background timers.
 import { execFile, execFileSync } from "node:child_process";
 import { openSync, closeSync, readSync, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ACP_PROVIDERS, PROVIDER_ALIASES } from "../runner/adapters/acp.mjs";
 import { resolveExecutable } from "../runner/spawn.mjs";
@@ -248,18 +248,43 @@ function bucketFor(st, day) {
 }
 
 function foldEvent(st, ev) {
+  const t = tsMs(ev.ts);
+  if (t !== null) {
+    if (st.firstTs === undefined || t < st.firstTs) st.firstTs = t;
+    if (st.lastTs === undefined || t > st.lastTs) st.lastTs = t;
+  }
   if (ev.type === "created") {
     st.provider = ev.provider ?? st.provider;
     st.model = ev.model ?? st.model;
     st.lane = ev.meta?.lane ?? ev.meta?.labels?.lane ?? st.lane;
+    if (ev.cwd !== undefined) st.cwd = ev.cwd;
+    if (st.createdAt === undefined && t !== null) st.createdAt = t;
     foldIdentity(st, ev.meta);
   } else if (ev.type === "session" && ev.model) {
     st.model = ev.model;
   } else if (ev.type === "meta") {
-    // Runner.updateMeta appends { type: "meta", patch: { lane?, labels? } }.
+    // Runner.updateMeta appends { type: "meta", patch: { lane?, labels?, profile? } }.
     const lane = ev.patch?.lane ?? ev.patch?.labels?.lane;
     if (typeof lane === "string" && lane) st.lane = lane;
     foldIdentity(st, ev.patch);
+  } else if (ev.type === "status") {
+    // working intervals run from status "running" to "idle"/"parked"/"exited"; an open interval is closed at lastTs.
+    if (ev.status === "running") {
+      if (st.runningSince === undefined && t !== null) st.runningSince = t;
+    } else if (WORKING_END_STATUSES.has(ev.status)) {
+      if (st.runningSince !== undefined && t !== null) {
+        st.workingMs += Math.max(0, t - st.runningSince);
+        st.runningSince = undefined;
+      }
+    }
+  } else if (ev.type === "exit" || ev.type === "error") {
+    st.exited = true;
+    if (t !== null) st.exitTs = t;
+    if (ev.type === "error" || ev.error != null || (ev.code != null && ev.code !== 0)) st.exitError = true;
+    if (st.runningSince !== undefined && t !== null) {
+      st.workingMs += Math.max(0, t - st.runningSince);
+      st.runningSince = undefined;
+    }
   } else if (ev.type === "input") {
     st.tail = ""; // a new prompt starts a new assistant message; echoed prompt text never counts
   } else if (ev.type === "output") {
@@ -295,13 +320,15 @@ function foldEvent(st, ev) {
   }
 }
 
-/** Role (brainstorm|lead|worker), handoff marker and title ride on created.meta / meta.patch. */
+/** Role (brainstorm|lead|worker), handoff marker, title and profile ride on created.meta / meta.patch. */
 function foldIdentity(st, m) {
   if (!m) return;
   if (typeof m.role === "string" && m.role) st.role = m.role;
   if (typeof m.labels?.["vs.handoff-from"] === "string") st.handoff = true;
   const title = m.title ?? m.labels?.job;
   if (typeof title === "string" && title) st.title = title;
+  if (typeof m.profile === "string" && m.profile) st.profile = m.profile;
+  else if (typeof m.labels?.profile === "string" && m.labels.profile) st.profile = m.labels.profile;
 }
 
 function readTail(file, from, to) {
@@ -324,7 +351,7 @@ function readTail(file, from, to) {
 function refreshFile(file, stat) {
   let st = usageFiles.get(file);
   if (st && st.size === stat.size && st.mtimeMs === stat.mtimeMs) return st;
-  if (!st || stat.size < st.offset) st = { offset: 0, provider: "unknown", model: "unknown", lane: "", role: "", prevCost: 0, buckets: new Map(), turns: 0, tail: "", pass: false, handoff: false, title: "" };
+  if (!st || stat.size < st.offset) st = { offset: 0, provider: "unknown", model: "unknown", lane: "", role: "", prevCost: 0, buckets: new Map(), turns: 0, tail: "", pass: false, handoff: false, title: "", profile: undefined, cwd: undefined, createdAt: undefined, firstTs: undefined, lastTs: undefined, workingMs: 0, runningSince: undefined, exited: false, exitError: false, exitTs: undefined };
   const buf = readTail(file, st.offset, stat.size);
   const lastNl = buf.lastIndexOf(10);
   if (lastNl >= 0) {
@@ -345,6 +372,14 @@ export const LOOP_TURN_THRESHOLD = 40;
 const PASS_RE = /(?:^|\n)[ \t>*_#-]*(?:verdict:?\s*)?[*_`]*PASS\b/i;
 const COORDINATION_ROLES = new Set(["brainstorm", "lead"]);
 const ROLE_ORDER = ["brainstorm", "lead", "worker"];
+// v2 efficiency signals (usa-5): statuses that close a working interval, spawn-storm windows/thresholds, fix-after-merge.
+const WORKING_END_STATUSES = new Set(["idle", "parked", "exited"]);
+const SPAWN_BURST_WINDOW_MS = 2 * 60_000;
+const SPAWN_BURST_MIN = 3;
+const ZERO_TURN_EXIT_WINDOW_MS = 5 * 60_000;
+const ZERO_TURN_EXIT_MIN = 3;
+const FIX_AFTER_MERGE_WINDOW_MS = 24 * 3600_000;
+const FIX_UNIT_RE = /\b(?:fix|hotfix|regress(?:ion)?|revert)\b/i;
 
 const zeroStats = () => ({ turns: 0, costUsd: 0, inputTokens: 0, outputTokens: 0 });
 const addStats = (t, b) => {
@@ -359,6 +394,11 @@ const toMs = (v) => {
   if (v === null || v === undefined || v === "") return null;
   const n = typeof v === "number" ? v : Date.parse(v);
   return Number.isFinite(n) ? n : null;
+};
+/** Event ts -> ms, rejecting values that are not a valid date (e.g. 1e20), so firstTs/lastTs stay sane. */
+const tsMs = (v) => {
+  const n = toMs(v);
+  return n !== null && !Number.isNaN(new Date(n).getTime()) ? n : null;
 };
 const getOrSet = (m, k, mk) => m.get(k) ?? m.set(k, mk()).get(k);
 
@@ -463,13 +503,16 @@ export function readMergedUnits(git = defaultGit) {
     }
     let rounds = 0;
     let code = codeOf(c.subject);
+    let firstCt = null;
     for (const k of side) {
       const m = REVIEW_RE.exec(k.subject);
       if (m) rounds = Math.max(rounds, Number(m[1]));
       code ??= codeOf(k.subject);
+      const cts = Number(k.ct);
+      if (Number.isFinite(cts) && (firstCt === null || cts < firstCt)) firstCt = cts;
     }
     const branch = /Merge branch '([^']+)'/i.exec(c.subject)?.[1] ?? null;
-    units.push({ sha: c.sha, unit: branch, code, reviewRounds: rounds, mergedAt: Number.isFinite(Number(c.ct)) ? new Date(Number(c.ct) * 1000).toISOString() : null, subject: c.subject });
+    units.push({ sha: c.sha, unit: branch, code, reviewRounds: rounds, mergedAt: Number.isFinite(Number(c.ct)) ? new Date(Number(c.ct) * 1000).toISOString() : null, firstBranchCtMs: firstCt === null ? null : firstCt * 1000, subject: c.subject });
   }
   mergedCache = { git, head, units };
   return units;
@@ -491,6 +534,144 @@ function readLaneCodes(home) {
   return map;
 }
 
+// ---------------------------------------------------------------- usage v2 (usa-5): profiles, work/idle, cycles, fix-after-merge, spawn storms
+
+/** Per-agent whole-log summary for the v2 rollups (not day-filtered). */
+function agentV2(st, agentId) {
+  const stats = zeroStats();
+  for (const b of st.buckets.values()) addStats(stats, b);
+  let workingMs = st.workingMs;
+  if (st.runningSince !== undefined && st.lastTs !== undefined) workingMs += Math.max(0, st.lastTs - st.runningSince);
+  const spanMs = st.firstTs !== undefined && st.lastTs !== undefined ? Math.max(0, st.lastTs - st.firstTs) : 0;
+  return {
+    agentId,
+    provider: st.provider,
+    model: st.model,
+    profile: st.profile || "unknown",
+    role: st.role || "unknown",
+    lane: st.lane,
+    cwd: st.cwd,
+    createdAt: st.createdAt ?? st.firstTs ?? null,
+    firstTs: st.firstTs ?? null,
+    lastTs: st.lastTs ?? null,
+    turns: st.turns,
+    costUsd: stats.costUsd,
+    inputTokens: stats.inputTokens,
+    outputTokens: stats.outputTokens,
+    pass: !!st.pass,
+    workingMs,
+    idleMs: Math.max(0, spanMs - workingMs),
+    exited: !!st.exited,
+    exitError: !!st.exitError,
+    exitTs: st.exitTs ?? null,
+    loop: st.turns > LOOP_TURN_THRESHOLD && !st.pass,
+  };
+}
+
+/** Attribute a merged unit to the implementer worker: basename(cwd) === unit, else the single worker in the lane created before mergedAt. */
+function attributeImplementer(unit, agents) {
+  const mergedAtMs = tsMs(unit.mergedAt);
+  if (typeof unit.unit === "string" && unit.unit) {
+    const matches = agents.filter((a) => a.role === "worker" && typeof a.cwd === "string" && a.cwd && basename(a.cwd) === unit.unit);
+    if (matches.length === 1) return matches[0];
+    if (matches.length > 1) return null; // ambiguous cwd match
+  }
+  if (!unit.lane || mergedAtMs === null) return null;
+  const workers = agents.filter((a) => a.role === "worker" && a.lane === unit.lane && a.createdAt !== null && a.createdAt <= mergedAtMs);
+  return workers.length === 1 ? workers[0] : null;
+}
+
+/** handoff entries (type "handoff") from the vs-log dirs under home (logs and teams), deduped (same entry lands in both). */
+function readHandoffs(home) {
+  const dir = home || vibesquadHome();
+  if (isForbiddenRealHome(dir)) return [];
+  const files = [];
+  try {
+    const logs = join(dir, "logs");
+    if (existsSync(logs)) for (const n of readdirSync(logs)) if (n.endsWith(".jsonl")) files.push(join(logs, n));
+  } catch { /* none */ }
+  try {
+    const teams = join(dir, "teams");
+    if (existsSync(teams)) for (const t of readdirSync(teams)) {
+      const p = join(teams, t, "log.jsonl");
+      if (existsSync(p)) files.push(p);
+    }
+  } catch { /* none */ }
+  const seen = new Set();
+  const out = [];
+  for (const file of files) {
+    let text = "";
+    try { text = readFileSync(file, "utf8"); } catch { continue; }
+    for (const line of text.split("\n")) {
+      if (!line.trim()) continue;
+      let e;
+      try { e = JSON.parse(line); } catch { continue; }
+      if (e?.type !== "handoff") continue;
+      const t = tsMs(e.ts);
+      if (t === null) continue;
+      const lane = typeof e.lane === "string" && e.lane ? e.lane : "";
+      const key = `${lane}\u0000${t}\u0000${String(e.text ?? "").slice(0, 60)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ lane, ts: t });
+    }
+  }
+  return out.sort((a, b) => a.ts - b.ts);
+}
+
+/** Maximal clusters of >=min timestamps within windowMs, merged when they overlap. Returns [{ firstAt, lastAt, count }]. */
+function findStorms(tsList, windowMs, min) {
+  const ts = tsList.filter((t) => t !== null && t !== undefined).map(Number).sort((a, b) => a - b);
+  const storms = [];
+  for (let i = 0; i < ts.length; i++) {
+    let j = i;
+    while (j < ts.length && ts[j] - ts[i] <= windowMs) j++;
+    if (j - i >= min) {
+      const firstAt = ts[i];
+      const lastAt = ts[j - 1];
+      const last = storms[storms.length - 1];
+      if (last && firstAt <= last.lastAt) last.lastAt = Math.max(last.lastAt, lastAt);
+      else storms.push({ firstAt, lastAt });
+    }
+  }
+  return storms.map((s) => ({ firstAt: s.firstAt, lastAt: s.lastAt, count: ts.filter((t) => t >= s.firstAt && t <= s.lastAt).length }));
+}
+
+/** Spawn-retry storms: >=3 created in a 2-min window, or >=3 zero-turn/error exits in a 5-min window, per (lane, role). */
+function computeSpawnStorms(agents) {
+  const groups = new Map();
+  for (const a of agents) {
+    const lane = a.lane || "unknown";
+    const role = a.role || "unknown";
+    const g = getOrSet(groups, `${lane}|${role}`, () => ({ lane, role, created: [], zeroExits: [] }));
+    if (a.createdAt !== null && a.createdAt !== undefined) g.created.push(a.createdAt);
+    if (a.exited && (a.turns === 0 || a.exitError) && a.exitTs !== null && a.exitTs !== undefined) g.zeroExits.push(a.exitTs);
+  }
+  const entries = [];
+  for (const g of groups.values()) {
+    for (const s of findStorms(g.created, SPAWN_BURST_WINDOW_MS, SPAWN_BURST_MIN)) {
+      entries.push({ lane: g.lane, role: g.role, count: s.count, windowMs: s.lastAt - s.firstAt, firstAt: new Date(s.firstAt).toISOString(), lastAt: new Date(s.lastAt).toISOString(), zeroTurnExits: 0 });
+    }
+    for (const s of findStorms(g.zeroExits, ZERO_TURN_EXIT_WINDOW_MS, ZERO_TURN_EXIT_MIN)) {
+      entries.push({ lane: g.lane, role: g.role, count: s.count, windowMs: s.lastAt - s.firstAt, firstAt: new Date(s.firstAt).toISOString(), lastAt: new Date(s.lastAt).toISOString(), zeroTurnExits: s.count });
+    }
+  }
+  entries.sort((a, b) => a.lane.localeCompare(b.lane) || a.role.localeCompare(b.role) || Date.parse(a.firstAt) - Date.parse(b.firstAt));
+  const merged = [];
+  for (const e of entries) {
+    const last = merged[merged.length - 1];
+    if (last && last.lane === e.lane && last.role === e.role && Date.parse(e.firstAt) <= Date.parse(last.lastAt)) {
+      last.lastAt = e.lastAt;
+      last.windowMs = Date.parse(last.lastAt) - Date.parse(last.firstAt);
+      last.count = Math.max(last.count, e.count);
+      last.zeroTurnExits = (last.zeroTurnExits ?? 0) + (e.zeroTurnExits ?? 0);
+    } else {
+      merged.push({ ...e });
+    }
+  }
+  return merged;
+}
+
 export function getUsage({ home, since, until, git, laneCodes } = {}) {
   const homeDir = home || vibesquadHome();
   const dir = join(homeDir, "runner", "agents");
@@ -500,6 +681,7 @@ export function getUsage({ home, since, until, git, laneCodes } = {}) {
   const laneRole = new Map(); // lane|role -> stats (day-filtered)
   const laneAgents = new Map(); // lane -> { agents, handoffs, byRole: Map<role, count> }
   const loops = [];
+  const agentStates = []; // { st, agentId } for whole-log v2 rollups
   let names = [];
   if (!isForbiddenRealHome(homeDir)) try { names = readdirSync(dir).filter((n) => n.endsWith(".jsonl")); } catch { /* no runner yet */ }
   for (const n of names) {
@@ -507,6 +689,7 @@ export function getUsage({ home, since, until, git, laneCodes } = {}) {
     seen.add(file);
     let st;
     try { st = refreshFile(file, statSync(file)); } catch { continue; }
+    agentStates.push({ st, agentId: n.slice(0, -6) });
     const la = getOrSet(laneAgents, st.lane, () => ({ agents: 0, handoffs: 0, byRole: new Map() }));
     la.agents += 1;
     if (st.handoff) la.handoffs += 1;
@@ -557,14 +740,116 @@ export function getUsage({ home, since, until, git, laneCodes } = {}) {
 
   // merged units; cost per merged unit = lane cost / lane merged units. Lane via the (@code) tag -> teams.json lane code/id.
   const codes = laneCodes ? new Map(Object.entries(laneCodes).map(([k, v]) => [k.toLowerCase(), v])) : readLaneCodes(home);
-  const merged = readMergedUnits(git).map((u) => ({ ...u, lane: u.code ? (codes.get(u.code) ?? u.code) : null }));
+  const mergedRaw = readMergedUnits(git).map((u) => ({ ...u, lane: u.code ? (codes.get(u.code) ?? u.code) : null }));
   const mergedByLane = new Map();
-  for (const u of merged) if (u.lane) getOrSet(mergedByLane, u.lane, () => []).push(u);
+  for (const u of mergedRaw) if (u.lane) getOrSet(mergedByLane, u.lane, () => []).push(u);
   const laneCost = new Map(lanes.map((l) => [l.lane, l.costUsd]));
+
+  // ---- v2: per-agent summaries, implementer attribution, unit cycles, fix-after-merge (usa-5)
+  const agents = agentStates.map(({ st, agentId }) => agentV2(st, agentId));
+  const merged = mergedRaw.map((u) => {
+    const mergedAtMs = tsMs(u.mergedAt);
+    const implementer = attributeImplementer(u, agents);
+    const startMs = implementer?.createdAt ?? u.firstBranchCtMs ?? null;
+    const unitCycleMs = startMs !== null && startMs !== undefined && mergedAtMs !== null ? Math.max(0, mergedAtMs - startMs) : null;
+    const isFixUnit = (typeof u.unit === "string" && /^(fix|hotfix)-/i.test(u.unit)) || (typeof u.subject === "string" && FIX_UNIT_RE.test(u.subject));
+    let fixAfterMerge = false;
+    if (isFixUnit && u.lane && mergedAtMs !== null) {
+      fixAfterMerge = mergedRaw.some((p) => p !== u && p.lane === u.lane && p.mergedAt !== null && tsMs(p.mergedAt) !== null && tsMs(p.mergedAt) < mergedAtMs && mergedAtMs - tsMs(p.mergedAt) <= FIX_AFTER_MERGE_WINDOW_MS);
+    }
+    return { ...u, mergedAtMs, implementerProfile: implementer ? implementer.profile : null, implementerAgentId: implementer ? implementer.agentId : null, unitCycleMs, fixAfterMerge };
+  });
+
+  // byProfile: group agents by (provider, profile, role); fold in attributed merged units.
+  const profileMap = new Map();
+  for (const a of agents) {
+    const key = `${a.provider}|${a.profile}|${a.role}`;
+    const g = getOrSet(profileMap, key, () => ({ provider: a.provider, profile: a.profile, role: a.role, runs: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, workingMs: 0, idleMs: 0, passCount: 0, loopCount: 0, mergedUnits: 0, reviewRounds: 0, unitCycleSum: 0, unitCycleCount: 0, fixAfterMergeCount: 0 }));
+    g.runs += 1;
+    g.turns += a.turns;
+    g.inputTokens += a.inputTokens;
+    g.outputTokens += a.outputTokens;
+    g.costUsd += a.costUsd;
+    g.workingMs += a.workingMs;
+    g.idleMs += a.idleMs;
+    if (a.pass) g.passCount += 1;
+    if (a.loop) g.loopCount += 1;
+  }
+  for (const u of merged) {
+    if (!u.implementerAgentId) continue;
+    const a = agents.find((x) => x.agentId === u.implementerAgentId);
+    if (!a) continue;
+    const g = profileMap.get(`${a.provider}|${a.profile}|${a.role}`);
+    if (!g) continue;
+    g.mergedUnits += 1;
+    g.reviewRounds += u.reviewRounds;
+    if (u.unitCycleMs !== null) { g.unitCycleSum += u.unitCycleMs; g.unitCycleCount += 1; }
+    if (u.fixAfterMerge) g.fixAfterMergeCount += 1;
+  }
+  const byProfile = [...profileMap.values()].map((g) => ({
+    provider: g.provider, profile: g.profile, role: g.role,
+    runs: g.runs, turns: g.turns, avgTurnsPerRun: g.runs ? Math.round((g.turns / g.runs) * 100) / 100 : 0,
+    inputTokens: g.inputTokens, outputTokens: g.outputTokens, costUsd: g.costUsd,
+    workingMs: g.workingMs, idleMs: g.idleMs,
+    passCount: g.passCount, passRate: g.runs ? Math.round((g.passCount / g.runs) * 1000) / 1000 : 0,
+    loopCount: g.loopCount,
+    mergedUnits: g.mergedUnits, reviewRounds: g.reviewRounds, avgReviewRounds: g.mergedUnits ? Math.round((g.reviewRounds / g.mergedUnits) * 100) / 100 : 0,
+    costPerMergedUnit: g.mergedUnits ? g.costUsd / g.mergedUnits : null,
+    fixAfterMergeCount: g.fixAfterMergeCount, fixAfterMergeRate: g.mergedUnits ? Math.round((g.fixAfterMergeCount / g.mergedUnits) * 1000) / 1000 : 0,
+    avgUnitCycleMs: g.unitCycleCount ? Math.round(g.unitCycleSum / g.unitCycleCount) : null,
+  })).sort((a, b) => b.costUsd - a.costUsd || a.profile.localeCompare(b.profile) || a.role.localeCompare(b.role));
+
+  // per-lane v2 aggregates: working/idle time, unit cycle, fix rate, and plan cycle from handoff log entries.
+  const workByLane = new Map();
+  for (const a of agents) {
+    const g = getOrSet(workByLane, a.lane, () => ({ workingMs: 0, idleMs: 0 }));
+    g.workingMs += a.workingMs;
+    g.idleMs += a.idleMs;
+  }
+  const unitByLane = new Map();
+  for (const u of merged) {
+    if (!u.lane) continue;
+    const g = getOrSet(unitByLane, u.lane, () => ({ sum: 0, count: 0, fixCount: 0, mergedCount: 0 }));
+    g.mergedCount += 1;
+    if (u.fixAfterMerge) g.fixCount += 1;
+    if (u.unitCycleMs !== null) { g.sum += u.unitCycleMs; g.count += 1; }
+  }
+  const mergesByLaneMs = new Map();
+  for (const u of merged) if (u.lane && u.mergedAtMs !== null) getOrSet(mergesByLaneMs, u.lane, () => []).push(u.mergedAtMs);
+  for (const arr of mergesByLaneMs.values()) arr.sort((a, b) => a - b);
+  const handoffsByLane = new Map();
+  for (const h of readHandoffs(home)) getOrSet(handoffsByLane, h.lane, () => []).push(h.ts);
+  const planByLane = new Map();
+  for (const [lane, hts] of handoffsByLane) {
+    const merges = mergesByLaneMs.get(lane) ?? [];
+    const cycles = [];
+    for (let i = 0; i < hts.length; i++) {
+      const next = i + 1 < hts.length ? hts[i + 1] : Infinity;
+      const last = merges.filter((m) => m >= hts[i] && m < next).at(-1);
+      if (last !== undefined) cycles.push(Math.max(0, last - hts[i]));
+    }
+    planByLane.set(lane, { cycles, avg: cycles.length ? Math.round(cycles.reduce((s, c) => s + c, 0) / cycles.length) : null });
+  }
+  const laneV2 = new Map();
+  for (const lane of laneIds) {
+    const work = workByLane.get(lane) ?? { workingMs: 0, idleMs: 0 };
+    const cyc = unitByLane.get(lane) ?? { sum: 0, count: 0, fixCount: 0, mergedCount: 0 };
+    const plan = planByLane.get(lane) ?? { cycles: [], avg: null };
+    const total = work.workingMs + work.idleMs;
+    laneV2.set(lane, {
+      workingMs: work.workingMs, idleMs: work.idleMs,
+      workPct: total ? Math.round((work.workingMs / total) * 1000) / 1000 : 0,
+      avgUnitCycleMs: cyc.count ? Math.round(cyc.sum / cyc.count) : null,
+      planCycleMs: plan.avg, planCycles: plan.cycles,
+      fixAfterMergeCount: cyc.fixCount, fixAfterMergeRate: cyc.mergedCount ? Math.round((cyc.fixCount / cyc.mergedCount) * 1000) / 1000 : 0,
+    });
+  }
+
   const perLane = [...mergedByLane].map(([lane, us]) => {
     const rounds = us.reduce((s, u) => s + u.reviewRounds, 0);
     const cost = laneCost.get(lane) ?? 0;
-    return { lane, mergedUnits: us.length, reviewRounds: rounds, avgReviewRounds: Math.round((rounds / us.length) * 100) / 100, costUsd: cost, costPerMergedUnit: cost / us.length };
+    const cyc = unitByLane.get(lane) ?? { sum: 0, count: 0, fixCount: 0, mergedCount: 0 };
+    return { lane, mergedUnits: us.length, reviewRounds: rounds, avgReviewRounds: Math.round((rounds / us.length) * 100) / 100, costUsd: cost, costPerMergedUnit: cost / us.length, avgUnitCycleMs: cyc.count ? Math.round(cyc.sum / cyc.count) : null, fixAfterMergeCount: cyc.fixCount, fixAfterMergeRate: cyc.mergedCount ? Math.round((cyc.fixCount / cyc.mergedCount) * 1000) / 1000 : 0 };
   }).sort((a, b) => b.mergedUnits - a.mergedUnits);
 
   return {
@@ -578,11 +863,13 @@ export function getUsage({ home, since, until, git, laneCodes } = {}) {
     rows,
     limits: readLimits(home),
     byRole: [...roleMap.values()].map(withAvg).sort((a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role)),
-    lanes,
+    lanes: lanes.map((l) => ({ ...l, ...(laneV2.get(l.lane) ?? {}) })),
     laneRole: lrRows,
     coordination: split(lrRows),
     merged: { units: merged, perLane },
     loops: { threshold: LOOP_TURN_THRESHOLD, flagged: loops.sort((a, b) => b.turns - a.turns) },
+    byProfile,
+    spawnStorms: computeSpawnStorms(agents),
   };
 }
 
