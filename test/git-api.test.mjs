@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { handleGitApi, isGitPath, parseUnifiedDiff, parseStatus, parseCommits, badRefName, badRepoPath } from "../server/git-api.mjs";
 import { makeVsHttpHandler } from "../plugin/server/remote-proxy.ts";
-import { decideProxyRequest, checkRemoteBody } from "../plugin/server/remote-proxy-rules.ts";
+import { decideProxyRequest, checkRemoteBody, proxyTimeoutFor } from "../plugin/server/remote-proxy-rules.ts";
 
 const TOKEN = "a".repeat(64);
 const G = "/__vibesquad/git";
@@ -23,12 +23,18 @@ describe("parsers", () => {
   ].join("\n");
   test("unified diff -> panel shape", () => {
     const f = parseUnifiedDiff(DIFF);
-    assert.deepEqual(f.map((x) => [x.path, x.status, x.additions, x.deletions]), [["a.txt", "modified", 2, 1], ["new.txt", "added", 1, 0], ["old.txt", "deleted", 0, 1], ["bin.png", "added", 0, 0]]);
+    assert.deepEqual(f.map((x) => [x.path, x.status, x.additions, x.deletions]), [["a.txt", "modified", 2, 1], ["new.txt", "added", 1, 0], ["old.txt", "deleted", 0, 1], ["bin.png", "binary", 0, 0]]);
     assert.equal(f[0].hunks[0].newStart, 1);
     assert.deepEqual(f[0].hunks[0].lines.map((l) => l.type), ["header", "context", "remove", "add", "add"]);
     assert.equal(f[0].hunks[0].lines[3].content, "TWO");
     assert.equal(f[0].hunks[0].lines[1].content, "one");
     assert.ok(f[1].isNew && f[2].isDeleted);
+  });
+  test("CRLF diff: every line is stripped, so later file headers still parse", () => {
+    const crlf = ["diff --git a/a.txt b/a.txt", "--- a/a.txt", "+++ b/a.txt", "@@ -1 +1 @@", "-x", "+y", "diff --git a/del.txt b/del.txt", "deleted file mode 100644", "Binary files a/del.txt and /dev/null differ", ""].join("\r\n");
+    const f = parseUnifiedDiff(crlf);
+    assert.deepEqual(f.map((x) => [x.path, x.status]), [["a.txt", "modified"], ["del.txt", "binary"]]);
+    assert.equal(f[0].hunks[0].lines[2].content, "y");
   });
   test("status + commits parsers", () => {
     assert.deepEqual(parseStatus("# branch.oid x\n# branch.head main\n# branch.ab +2 -1\n1 .M N... a\n"), { currentBranch: "main", aheadBehind: { ahead: 2, behind: 1 }, isDirty: true });
@@ -172,6 +178,25 @@ describe("routes on a temp repo", () => {
     assert.equal((await call("GET", "nope", { cwd: repo })).status, 404);
   });
 
+  test("discarding a staged rename (path + oldPath) restores the old file and removes the new one", async () => {
+    const { existsSync } = await import("node:fs");
+    sh(repo, "mv", "a.txt", "r.txt");
+    const f = (await call("GET", "diff", { cwd: repo })).body.files.find((x) => x.path === "r.txt");
+    assert.equal(f.oldPath, "a.txt");
+    assert.equal((await call("POST", "discard", { cwd: repo, paths: [f.path, f.oldPath] })).body.ok, true);
+    assert.equal((await call("GET", "status", { cwd: repo })).body.isDirty, false);
+    assert.ok(existsSync(join(repo, "a.txt")) && !existsSync(join(repo, "r.txt")));
+  });
+
+  test("an untracked symlink is not followed into the diff", async (t) => {
+    const { symlinkSync } = await import("node:fs");
+    writeFileSync(join(outside, "secret.txt"), "TOPSECRET");
+    try { symlinkSync(join(outside, "secret.txt"), join(repo, "lnk.txt")); } catch { return t.skip("no symlink privilege"); }
+    const w = (await call("GET", "diff", { cwd: repo })).body;
+    assert.ok(!JSON.stringify(w).includes("TOPSECRET"));
+    rmSync(join(repo, "lnk.txt"));
+  });
+
   test("a commit message that looks like a flag is just a message", async () => {
     writeFileSync(join(repo, "c.txt"), "c");
     assert.equal((await call("POST", "commit", { cwd: repo, message: "--amend -a" })).body.ok, true);
@@ -228,6 +253,11 @@ describe("remote proxy: git is owner-only", () => {
     assert.equal(seen.at(-1).token, TOKEN);
     assert.equal((await h({ method: "POST", path: `${G}/commit`, body: JSON.stringify({ cwd: "x", message: "m" }) })).status, 200);
     assert.equal(seen.at(-1).token, TOKEN);
+  });
+
+  test("slow git/gh writes get the long proxy timeout; reads keep the default", () => {
+    for (const w of ["commit", "push", "pull", "merge-base", "switch", "stash-save", "stash-pop", "pr-create", "pr-merge", "pr-automerge"]) assert.equal(proxyTimeoutFor(`${G}/${w}`), 125_000, w);
+    for (const r of ["status", "diff", "commits", "pr-status"]) assert.equal(proxyTimeoutFor(`${G}/${r}`), 10_000, r);
   });
 
   test("write bodies are typed: unknown keys, bad method, wrong types and missing fields are refused", () => {

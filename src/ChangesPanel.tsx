@@ -144,6 +144,9 @@ const DEMO_COMMITS: CommitInfo[] = [
 
 export const DEMO_PR_STATUS = { status: null as PrStatusInfo | null, githubFeaturesEnabled: true, error: null as null | { message: string }, forge: "github" };
 
+/** A staged rename shows as one file (path = new name, oldPath = old): discarding must restore both, or the old name stays staged-deleted. */
+export const discardPaths = (f: { path: string; oldPath?: string }): string[] => (f.oldPath && f.oldPath !== f.path ? [f.path, f.oldPath] : [f.path]);
+
 // ─── Git action wrapper ───────────────────────────────────────────────────────
 
 export async function gitActionWrapper<T>(fn: () => Promise<T>): Promise<{ ok: boolean; error?: string; result?: T }> {
@@ -220,6 +223,7 @@ const keptHunks = new Map<string, Set<string>>();
 const keptFor = (cwd: string, path: string) => JSON.stringify([cwd, path]);
 const MAX_UNDO_BYTES = 2 * 1024 * 1024;
 const DIFF_POLL_MS = 5_000;
+const STATUS_EVERY_TICKS = 6;
 const REVIEW_PROFILE = "Review - Sonnet";
 // Diff chars copied into the review prompt; the reviewer runs `git diff` itself for the rest.
 const REVIEW_DIFF_CAP = 40_000;
@@ -272,6 +276,13 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
 
   // Monotonic request ids: a slow response must not overwrite a newer selection (or another checkout's data).
   const seq = useRef({ hist: 0, diff: 0, check: 0, timeline: 0 });
+  // Re-fetches diff + status + PR + stash; set by the load effect, called after every git write.
+  const reloadRef = useRef<() => void>(() => {});
+  const gitWrite = async <T,>(fn: () => Promise<T>) => {
+    const res = await gitActionWrapper(fn);
+    if (res.ok) reloadRef.current();
+    return res;
+  };
 
   const [reviewSpawned, setReviewSpawned] = useState<string | null>(null);
   const [reviewBusy, setReviewBusy] = useState(false);
@@ -315,27 +326,38 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
       return;
     }
 
-    // No daemon push any more: fetch once, then re-poll the diff while the tab is visible.
+    // WORKAROUND: the daemon pushed diff updates; until an fs/watch route exists (follow-up: N2 file watch -> subscribe here,
+    // then drop this poll) the tab re-polls the diff every DIFF_POLL_MS while visible, and every git write re-fetches via reloadRef.
+    let ticks = 0;
+    const loadStatus = () => vsgit.vsGitStatus(cwd).then((s) => { if (alive) setStatus(s); }).catch(() => {});
     const loadDiff = (first: boolean) =>
       withTimeout(vsgit.vsGitDiff(cwd, "uncommitted")).then((d) => {
         if (!alive) return;
-        setDiff((prev) => (JSON.stringify(prev) === JSON.stringify(d) ? prev : { files: d.files ?? [], diffTooLarge: d.diffTooLarge }));
+        let changed = false;
+        setDiff((prev) => {
+          if (JSON.stringify(prev) === JSON.stringify(d)) return prev;
+          changed = true;
+          return { files: d.files ?? [], diffTooLarge: d.diffTooLarge };
+        });
         if (first) setLoading(false);
-        else vsgit.vsGitStatus(cwd).then((s) => { if (alive) setStatus(s); }).catch(() => {});
+        // status only follows a diff change (or a slow heartbeat for commits made outside the panel)
+        else if (changed || ++ticks % STATUS_EVERY_TICKS === 0) void loadStatus();
       }).catch((e) => { if (first) fail(e); });
     void loadDiff(true);
     const poll = setInterval(() => { if (!document.hidden) void loadDiff(false); }, DIFF_POLL_MS);
-
-    Promise.all([
-      vsgit.vsGitStatus(cwd).then((s) => { if (alive) setStatus(s); }).catch(() => {}),
+    const loadRest = () => Promise.all([
+      loadStatus(),
       vsgit.vsGitPrStatus(cwd).then((p) => { if (alive) setPrData(p); }).catch(() => {}),
       vsgit.vsGitStashList(cwd).then((sl) => { if (alive) setStash(sl); }).catch(() => {}),
     ]);
+    void loadRest();
+    reloadRef.current = () => { void loadDiff(false); void loadRest(); };
 
     return () => {
       alive = false;
       clearTimeout(slowTimer);
       clearInterval(poll);
+      reloadRef.current = () => {};
     };
   }, [cwd, attempt]);
 
@@ -442,33 +464,33 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
   async function handleDiscard(paths: string[]) {
     setDiscardState(null);
     if (DEMO) { flash("Discarded (demo)"); return; }
-    const r = await gitActionWrapper(() => vsgit.vsGitDiscard(cwd, paths));
+    const r = await gitWrite(() => vsgit.vsGitDiscard(cwd, paths));
     r.ok ? flash("Changes discarded") : flash(r.error ?? "Discard failed", false);
   }
 
   async function handleCommit() {
     if (!commitMsg.trim()) { flash("Enter a commit message", false); return; }
     if (DEMO) { flash("Committed (demo)"); setCommitMsg(""); return; }
-    const r = await gitActionWrapper(() => vsgit.vsGitCommit(cwd, commitMsg));
+    const r = await gitWrite(() => vsgit.vsGitCommit(cwd, commitMsg));
     if (r.ok) { flash("Committed"); setCommitMsg(""); if (histOpen) void loadHistory(); }
     else flash(r.error ?? "Commit failed", false);
   }
 
   async function handlePush() {
     if (DEMO) { flash("Pushed (demo)"); return; }
-    const r = await gitActionWrapper(() => vsgit.vsGitPush(cwd));
+    const r = await gitWrite(() => vsgit.vsGitPush(cwd));
     r.ok ? (flash("Pushed"), histOpen && void loadHistory()) : flash(r.error ?? "Push failed", false);
   }
 
   async function handlePull() {
     if (DEMO) { flash("Pulled (demo)"); return; }
-    const r = await gitActionWrapper(() => vsgit.vsGitPull(cwd));
+    const r = await gitWrite(() => vsgit.vsGitPull(cwd));
     r.ok ? (flash("Pulled"), histOpen && void loadHistory()) : flash(r.error ?? "Pull failed", false);
   }
 
   async function handleMergeBase() {
     if (DEMO) { flash("Merged from base (demo)"); return; }
-    const r = await gitActionWrapper(() => vsgit.vsGitMergeBase(cwd));
+    const r = await gitWrite(() => vsgit.vsGitMergeBase(cwd));
     r.ok ? (flash("Merged from base"), histOpen && void loadHistory()) : flash(r.error ?? "Merge failed", false);
   }
 
@@ -476,14 +498,14 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
     const branch = branchInput.trim();
     if (!branch) return;
     if (DEMO) { flash(`Switched to ${branch} (demo)`); setBranchOpen(false); return; }
-    const r = await gitActionWrapper(() => vsgit.vsGitSwitch(cwd, branch));
+    const r = await gitWrite(() => vsgit.vsGitSwitch(cwd, branch));
     if (r.ok) { flash(`Switched to ${branch}`); setBranchOpen(false); setBranchInput(""); }
     else flash(r.error ?? "Switch failed", false);
   }
 
   async function handleStash() {
     if (DEMO) { flash("Stashed (demo)"); return; }
-    const r = await gitActionWrapper(() => vsgit.vsGitStashSave(cwd));
+    const r = await gitWrite(() => vsgit.vsGitStashSave(cwd));
     if (r.ok) {
       flash("Stashed");
       vsgit.vsGitStashList(cwd).then(setStash).catch(() => {});
@@ -492,7 +514,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
 
   async function handleStashPop() {
     if (DEMO) { flash("Stash popped (demo)"); return; }
-    const r = await gitActionWrapper(() => vsgit.vsGitStashPop(cwd, 0));
+    const r = await gitWrite(() => vsgit.vsGitStashPop(cwd, 0));
     if (r.ok) {
       flash("Stash popped");
       vsgit.vsGitStashList(cwd).then(setStash).catch(() => {});
@@ -501,7 +523,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
 
   async function handlePrCreate() {
     if (DEMO) { flash("PR created (demo)"); return; }
-    const r = await gitActionWrapper(() =>
+    const r = await gitWrite(() =>
       vsgit.vsGitPrCreate(cwd, prTitle, prBody, prBase)
     );
     if (r.ok) {
@@ -513,7 +535,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
   async function handlePrMerge() {
     setPrMergeArmed(false);
     if (DEMO) { flash("PR merged (demo)"); return; }
-    const r = await gitActionWrapper(() => vsgit.vsGitPrMerge(cwd, "merge"));
+    const r = await gitWrite(() => vsgit.vsGitPrMerge(cwd, "merge"));
     r.ok ? flash("PR merged") : flash(r.error ?? "Merge failed", false);
   }
 
@@ -521,7 +543,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
     setAutoMergeArmed(false);
     const enable = !autoMergeOn;
     if (DEMO) { flash(`Auto-merge ${enable ? "enabled" : "disabled"} (demo)`); return; }
-    const r = await gitActionWrapper(() => git.setAutoMerge(cwd, enable));
+    const r = await gitWrite(() => git.setAutoMerge(cwd, enable));
     if (r.ok) {
       flash(`Auto-merge ${enable ? "enabled" : "disabled"}`);
       vsgit.vsGitPrStatus(cwd).then(setPrData).catch(() => {});
@@ -566,7 +588,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
     const name = renameInput.trim();
     setRenameArmed(false);
     if (DEMO) { flash(`Renamed to ${name} (demo)`); setRenameOpen(false); return; }
-    const r = await gitActionWrapper(() => git.renameCurrentBranch(cwd, name));
+    const r = await gitWrite(() => git.renameCurrentBranch(cwd, name));
     if (r.ok) {
       flash(`Renamed to ${r.result}`);
       setRenameOpen(false); setRenameInput("");
@@ -758,7 +780,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
                     <button
                       className="btn bad small"
                       data-testid="changes-confirm-discard"
-                      onClick={(e) => { e.stopPropagation(); handleDiscard([f.path]); }}
+                      onClick={(e) => { e.stopPropagation(); handleDiscard(discardPaths(f)); }}
                     >
                       Confirm discard?
                     </button>
@@ -772,7 +794,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
                 ) : (
                   <button
                     className="btn ghost small"
-                    onClick={(e) => { e.stopPropagation(); setDiscardState(discardArm([f.path])); }}
+                    onClick={(e) => { e.stopPropagation(); setDiscardState(discardArm(discardPaths(f))); }}
                   >
                     Discard
                   </button>
@@ -815,7 +837,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
             ) : (
               <button
                 className="btn ghost small"
-                onClick={() => setDiscardState(discardArm(files.map((f) => f.path)))}
+                onClick={() => setDiscardState(discardArm(files.flatMap(discardPaths)))}
               >
                 Discard all
               </button>

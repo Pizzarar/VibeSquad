@@ -74,6 +74,20 @@ test("diffToText re-adds +/-/space to typed lines (the parser strips them)", asy
   assert.equal(t, "--- a/a\n+++ b/a\n@@ -1 +1 @@\n k\n-x\n+y");
 });
 
+test("git writes re-fetch diff+status; the poll only reads status when the diff changed; discard sends oldPath too", () => {
+  const c = src("ChangesPanel.tsx");
+  assert.match(c, /const gitWrite = async/);
+  assert.match(c, /if \(res\.ok\) reloadRef\.current\(\)/);
+  for (const w of ["vsGitDiscard", "vsGitCommit", "vsGitPush", "vsGitPull", "vsGitMergeBase", "vsGitSwitch", "vsGitStashSave", "vsGitStashPop", "vsGitPrCreate", "vsGitPrMerge"]) {
+    assert.match(c, new RegExp(`gitWrite\\(\\(\\) =>\\s+vsgit\\.${w}`), w);
+    assert.doesNotMatch(c, new RegExp(`gitActionWrapper\\(\\(\\) =>\\s+vsgit\\.${w}`), w);
+  }
+  assert.match(c, /changed \|\| \+\+ticks % STATUS_EVERY_TICKS === 0/);
+  assert.match(c, /WORKAROUND: the daemon pushed diff updates/);
+  assert.match(c, /handleDiscard\(discardPaths\(f\)\)/);
+  assert.match(c, /files\.flatMap\(discardPaths\)/);
+});
+
 test("openCommit request: hash validated, one slot, taken only by the matching cwd, live listeners notified", async () => {
   const R = await import("../src/commitRequest.ts");
   assert.equal(R.requestCommit("/r", "--help"), null);

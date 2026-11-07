@@ -3,7 +3,7 @@
 // cwd must pass resolveCwd (a known team path or agent cwd); ref names, branch names and paths that start with '-'
 // are refused; output is capped. Reads are owner-gated by the caller (isGatedRead), writes by the non-GET owner gate.
 import { execFile } from "node:child_process";
-import { statSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 
 export const GIT_PREFIX = "/__vibesquad/git/";
@@ -84,7 +84,7 @@ export function parseUnifiedDiff(text) {
   let oldLine = 0;
   let newLine = 0;
   for (const raw of text.split("\n")) {
-    const line = raw.endsWith("\r") && !h ? raw.slice(0, -1) : raw;
+    const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw; // CRLF diffs: every line, or later file headers stop matching
     if (line.startsWith("diff --git ")) {
       const m = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
       const path = m ? m[2] : line.slice(11);
@@ -120,7 +120,7 @@ export function parseUnifiedDiff(text) {
     else if (line.startsWith(" ")) { h.lines.push({ type: "context", content: line.slice(1) }); oldLine++; newLine++; }
     // "\ No newline at end of file" and the trailing blank are dropped
   }
-  for (const x of files) { if (x.isNew && x.status === "modified") x.status = "added"; if (x.isDeleted && x.status === "modified") x.status = "deleted"; delete x.binary; }
+  for (const x of files) { if (x.isNew && x.status === "modified") x.status = "added"; if (x.isDeleted && x.status === "modified") x.status = "deleted"; if (x.binary) x.status = "binary"; delete x.binary; }
   return files;
 }
 
@@ -209,7 +209,7 @@ async function diffUncommitted(cwd) {
   for (const p of untracked.slice(0, MAX_UNTRACKED)) {
     if (badRepoPath(p)) continue;
     try {
-      const st = statSync(join(cwd, p));
+      const st = lstatSync(join(cwd, p)); // lstat: an untracked symlink is skipped, never followed
       if (!st.isFile() || st.size > MAX_UNTRACKED_BYTES) continue;
       text += (await git(["diff", "--no-color", "--no-index", "--", "/dev/null", p], cwd, { okCodes: [0, 1] })).stdout;
     } catch {}
@@ -414,7 +414,10 @@ async function runWrite(action, body, cwd) {
       const paths = Array.isArray(body.paths) ? body.paths : [];
       if (!paths.length || paths.length > 500) throw new GitError("paths: 1-500 repo-relative paths");
       for (const p of paths) { const bad = badRepoPath(p); if (bad) throw new GitError(bad); }
-      const tracked = new Set((await git(["ls-files", "-z", "--", ...paths], cwd)).stdout.split("\0").filter(Boolean));
+      // "Tracked" = in the index or in HEAD: a staged rename's old name is only in HEAD, and must be restored, not `clean`ed.
+      const listed = [(await git(["ls-files", "-z", "--", ...paths], cwd)).stdout];
+      if (await refExists(cwd, "HEAD")) listed.push((await git(["ls-tree", "-r", "--name-only", "-z", "HEAD", "--", ...paths], cwd)).stdout);
+      const tracked = new Set(listed.flatMap((o) => o.split("\0").filter(Boolean)));
       const norm = (p) => p.replace(/\\/g, "/");
       const isTracked = (p) => tracked.has(norm(p));
       const t = paths.filter(isTracked);
