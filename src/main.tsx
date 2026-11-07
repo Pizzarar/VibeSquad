@@ -1,6 +1,6 @@
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
-import { daemonClient, start } from "./paseo";
+import { start } from "./paseo";
 import "./perfBoot";
 import { loadUserName } from "./userName";
 import { FiveLeads, SpriteSheet } from "./demo";

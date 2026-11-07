@@ -21,9 +21,9 @@ describe("U17: markAgentRead in src/paseo.ts & local attention state transitions
     resetAttentionLocal();
   });
 
-  test("src/paseo.ts imports clearUnreadLocal, dismissLocal, and clearWorkspaceIfQuiet", () => {
+  test("src/paseo.ts imports clearUnreadLocal and dismissLocal (no daemon workspace-flag clear)", () => {
     assert.match(paseoSrc, /import \{[^}]*clearUnreadLocal[^}]*dismissLocal[^}]*\} from "\.\/attentionLocal"/);
-    assert.match(paseoSrc, /import \{ clearWorkspaceIfQuiet \} from "\.\/paseoAttention"/);
+    assert.doesNotMatch(paseoSrc, /clearWorkspaceIfQuiet/);
   });
 
   test("markAgentRead is exported next to markAgentUnread with all 4 required steps", () => {
@@ -41,7 +41,7 @@ describe("U17: markAgentRead in src/paseo.ts & local attention state transitions
     );
     assert.match(block, /await clearNeedsYou\(agent, \{ optimistic: true \}\)/);
     assert.match(block, /await clearAgentAttention\(agent\.id\)/);
-    assert.match(block, /await clearWorkspaceIfQuiet\(agent\.id\)/);
+    assert.doesNotMatch(block, /clearWorkspaceIfQuiet/);
   });
 
   test("behavioral: unread, error, and requiresAttention transition from needs-you to quiet after mark-read steps", () => {

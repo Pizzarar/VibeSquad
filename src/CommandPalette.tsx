@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { daemonClient } from "./paseo";
+import { runnerFetchTimeline } from "./runnerBridge";
 import { DEMO } from "./demoFlag";
 import { getPanes, openAgent, subscribePanes } from "./panes";
 import { AGENT_TYPE_LABEL, type Member, type TeamView } from "./teams";
@@ -305,7 +305,7 @@ async function textsFor(agentId: string): Promise<string[]> {
   if (DEMO) return [];
   try {
     const p = Promise.race([
-      daemonClient.fetchAgentTimeline(agentId, { direction: "tail" as any, limit: 60, projection: "projected" as any }),
+      runnerFetchTimeline(agentId, { limit: 60 }),
       new Promise<any>((r) => setTimeout(() => r({ entries: [] }), 600)),
     ]);
     const t = await p;
@@ -399,7 +399,6 @@ export type PaletteActions = {
   newAgent: () => void;
   /** With a target: open Settings at that setting (a SettingHit id from src/prefs.ts). */
   settings: (target?: string) => void;
-  workspaces: () => void;
   toggleFocus: () => void;
   /** Ctrl+J: open the top NEEDS YOU agent. */
   needsYou?: () => void;
@@ -540,7 +539,6 @@ export function CommandPaletteHost(props: {
       act("search", "Search All Transcripts…"),
       act("shortcuts", "Keyboard Shortcuts"),
       act("settings", "Settings"),
-      act("workspaces", "Workspaces"),
       act("focus", "Toggle Focus Mode"),
       act("reopen", "Reopen Closed Tab"),
       ...stops,
@@ -593,7 +591,6 @@ export function CommandPaletteHost(props: {
     else if (id === "shortcuts") setMode("shortcuts");
     else if (id === "settings") props.actions.settings();
     else if (id.startsWith("setting:")) props.actions.settings(id.slice("setting:".length));
-    else if (id === "workspaces") props.actions.workspaces();
     else if (id === "focus") props.actions.toggleFocus();
     else if (id === "reopen") {
       const last = closed.current.pop();

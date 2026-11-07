@@ -90,10 +90,11 @@ test("closed agents are never woken by usePreview, hidden panes, Composer, Subag
   assert.match(ap, /if \(!everShown\)/, "DrawerSlot defers mounting AgentDrawer until the tab is actually shown");
 
   const comp = fs.readFileSync(new URL("../src/Composer.tsx", import.meta.url), "utf8");
-  assert.match(comp, /if \(DEMO \|\| agent\.status === "closed"\) return;/, "Composer skips listCommands on closed agents");
+  assert.doesNotMatch(comp, /listCommands/, "Composer no longer lists commands over the daemon (static list)");
 
   const sub = fs.readFileSync(new URL("../src/SubagentList.tsx", import.meta.url), "utf8");
-  assert.match(sub, /if \(parentStatus === "closed"\) return;/, "SubagentList skips listSubagents when parent is closed");
+  assert.match(sub, /if \(parentStatus === "closed"\) return;/, "SubagentList skips its effect when parent is closed");
+  assert.doesNotMatch(sub, /listSubagents/, "SubagentList makes no daemon call (rows come from scraped tool calls)");
 
   const ad = fs.readFileSync(new URL("../src/AgentDrawer.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(ad, /auto-150k/, "AgentDrawer does not auto-restart Brainstorm at 150k tokens");

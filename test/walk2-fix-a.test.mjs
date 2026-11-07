@@ -4,10 +4,9 @@ import { readFileSync } from "node:fs";
 
 const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
-test("addLocalProject times out and still saves the path", () => {
+test("addLocalProject saves the path without a daemon registration step", () => {
   const s = src("TeamActions.tsx");
-  assert.match(s, /15000/);
-  assert.match(s, /Folder saved, but the daemon could not register it/);
+  assert.doesNotMatch(s, /daemonClient|addProject\(/);
   assert.match(s, /setCwd\(path\)/);
 });
 
@@ -28,9 +27,9 @@ test("model change failure reverts and shows an error", () => {
   assert.doesNotMatch(s, /setModelHelper\(agent, next\)\.catch\(\(\) => \{\}\)/);
 });
 
-test("rewind updates timeline without resend", () => {
+test("rewind is gone (the runner has no rewind route)", () => {
   const s = src("Timeline.tsx");
-  assert.match(s, /else onRewound\?\.\(e\)/);
+  assert.doesNotMatch(s, /RewindButton|rewindAgent/);
   assert.match(s, /cutLen/);
 });
 

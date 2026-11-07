@@ -158,8 +158,7 @@ test("wiring: both badges open the list; ⋯ More has Mark unread; classes style
   assert.match(src("App.tsx"), /<AttentionBadge view=\{v\} onOpen=\{pick\} hubQueueInstead \/>/);
   assert.match(src("PinGrid.tsx"), /<AttentionBadge view=\{v\}/);
   assert.match(src("DrawerHeader.tsx"), /markAgentUnread\(agent\)/);
-  assert.match(src("paseo.ts"), /daemonClient\.clearAgentAttention\(agentId\)/);
-  assert.match(src("paseo.ts"), /daemonClient\.markWorkspaceUnread\(ws\)/);
+  assert.doesNotMatch(src("paseo.ts"), /daemonClient\.(clearAgentAttention|markWorkspaceUnread)/); // runner agents have no daemon attention flag
 });
 
 import { applyLabelsOptimistic } from "../src/attentionItems.ts";

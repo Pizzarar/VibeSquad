@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { defaultSpawnConfigFor } from "./antigravity";
-import { daemonClient, spawnTeamAgent, usePaseo } from "./paseo";
+import { spawnTeamAgent, usePaseo } from "./paseo";
 import { DEMO } from "./demoFlag";
-import { branchSuggestions, validateBranch } from "./paseoWorkspaces";
 import { branchHint } from "./workspaceLogic";
 import {
   checkBuddyOverlap,
@@ -142,7 +141,6 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
 
   // Directory suggestions
   const [cwdSugs, setCwdSugs] = useState<string[]>([]);
-  const cwdSugTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Add project / clone drawer
   const [addProjectOpen, setAddProjectOpen] = useState(false);
@@ -159,73 +157,21 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   const [wtMode, setWtMode] = useState<"none" | "existing" | "new">("none");
   const [selectedWt, setSelectedWt] = useState("");
 
-  // Branch hint: debounced validateBranch + suggestions for the NEW branch field.
-  const [branchCheck, setBranchCheck] = useState<Awaited<ReturnType<typeof validateBranch>> | null>(null);
-  const [branchSugs, setBranchSugs] = useState<string[]>([]);
-  useEffect(() => {
-    setBranchCheck(null);
-    setBranchSugs([]);
-    if (DEMO || !cwd || !branch.trim()) return;
-    let cancelled = false;
-    const t = setTimeout(() => {
-      validateBranch(cwd, branch.trim()).then((v) => !cancelled && setBranchCheck(v)).catch(() => !cancelled && setBranchCheck({ exists: false, isRemote: false, resolvedRef: null, error: "couldn't check (is this folder a Paseo project?)", requestId: "" }));
-      branchSuggestions(cwd, branch.trim()).then((b) => !cancelled && setBranchSugs(b.filter((x) => x !== branch.trim()).slice(0, 5))).catch(() => {});
-    }, 300);
-    return () => { cancelled = true; clearTimeout(t); };
-  }, [cwd, branch]);
+  // No VS git route to validate or suggest branches yet (P4 blocker), so the hint is the static one.
+  const branchCheck = null;
+  const branchSugs: string[] = [];
   const hint = branchHint(branch, branchCheck);
-
-  const fetchSuggestions = useCallback(async (query: string) => {
-    if (!query || DEMO) { setCwdSugs([]); return; }
-    try {
-      const res = await daemonClient.getDirectorySuggestions({ query, includeDirectories: true, includeFiles: false, limit: 8 });
-      setCwdSugs(res.directories ?? []);
-    } catch { setCwdSugs([]); }
-  }, []);
 
   const onCwdChange = (val: string) => {
     setCwd(val);
-    if (cwdSugTimer.current) clearTimeout(cwdSugTimer.current);
-    cwdSugTimer.current = setTimeout(() => void fetchSuggestions(val), 250);
   };
-
-  useEffect(() => {
-    if (!cwd) return;
-    let cancelled = false;
-    async function loadWts() {
-      try {
-        if (DEMO) { setExistingWts([]); return; }
-        const res = await daemonClient.getPaseoWorktreeList({ cwd });
-        if (!cancelled) setExistingWts(res.worktrees ?? []);
-      } catch { if (!cancelled) setExistingWts([]); }
-    }
-    loadWts();
-    return () => { cancelled = true; };
-  }, [cwd]);
 
   const addLocalProject = async () => {
     const path = addProjectPath.trim();
     if (!path) return;
     setAddingProject(true);
     setAddProjectErr("");
-    let warn = "";
     try {
-      if (!DEMO) {
-        // The daemon may never answer project.add.request (older daemons); don't hang the button.
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        try {
-          await Promise.race([
-            daemonClient.addProject(path),
-            new Promise((_, rej) => {
-              timer = setTimeout(() => rej(new Error("daemon did not answer within 15s")), 15000);
-            }),
-          ]);
-        } catch (e) {
-          warn = `Folder saved, but the daemon could not register it (${String(e instanceof Error ? e.message : e)}).`;
-        } finally {
-          clearTimeout(timer);
-        }
-      }
       await saveTeams((cur) =>
         cur.map((t) =>
           t.id === team.id && !t.paths.includes(path) ? { ...t, paths: [...t.paths, path] } : t,
@@ -233,8 +179,7 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
       );
       setCwd(path);
       setAddProjectPath("");
-      if (warn) setAddProjectErr(warn);
-      else setAddProjectOpen(false);
+      setAddProjectOpen(false);
     } catch (e) {
       setAddProjectErr(String(e));
     } finally {
@@ -248,12 +193,8 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
     setAddProjectErr("");
     try {
       const dest = cloneDest.trim() || cloneRepo.trim().split("/").pop()!.replace(/\.git$/, "");
-      let clonedPath = dest;
-      if (!DEMO) {
-        const res = await daemonClient.cloneGithubProject({ repo: cloneRepo.trim(), targetDirectory: dest });
-        clonedPath = (res as { path?: string }).path ?? dest;
-      }
-      setCwd(clonedPath);
+      if (!DEMO) throw new Error("Cloning from GitHub isn't available yet. Clone it in a terminal, then add the folder.");
+      setCwd(dest);
       setAddProjectOpen(false);
       setCloneRepo("");
       setCloneDest("");

@@ -1,10 +1,9 @@
-// Provider catalog wrappers (parity block P2). Kept out of paseo.ts on purpose.
-// Runner lanes read /__vibesquad/providers* (server/providers-catalog.mjs); Paseo lanes still ask the daemon.
-import { daemonClient } from "./paseo";
+// Provider catalog wrappers. Everything reads /__vibesquad/providers* (server/providers-catalog.mjs); no daemon.
+import type { CatalogMode, CatalogModel, CatalogProvider } from "./paseoProvidersLogic";
 
-export type ProvidersAvailable = Awaited<ReturnType<typeof daemonClient.listAvailableProviders>>;
-export type ProviderModelsPayload = Awaited<ReturnType<typeof daemonClient.listProviderModels>>;
-export type ProviderModesPayload = Awaited<ReturnType<typeof daemonClient.listProviderModes>>;
+export type ProvidersAvailable = { providers: CatalogProvider[] };
+export type ProviderModelsPayload = { models: CatalogModel[]; error?: string | null };
+export type ProviderModesPayload = { modes: CatalogMode[]; error?: string | null };
 
 const BASE = "/__vibesquad/providers";
 
@@ -15,13 +14,9 @@ async function catalogGet<T>(path: string): Promise<T> {
   return body as T;
 }
 
-/** Pass `runner: true` for runner-backed agents/lanes (id `rn-…`, or when the runner owns the lane). */
-export const listAvailableProviders = (runner = false) =>
-  runner ? catalogGet<ProvidersAvailable>("") : daemonClient.listAvailableProviders();
-export const listProviderModels = (provider: string, runner = false) =>
-  runner ? catalogGet<ProviderModelsPayload>(`/models?provider=${encodeURIComponent(provider)}`) : daemonClient.listProviderModels(provider);
-export const listProviderModes = (provider: string, runner = false) =>
-  runner ? catalogGet<ProviderModesPayload>(`/modes?provider=${encodeURIComponent(provider)}`) : daemonClient.listProviderModes(provider);
+export const listAvailableProviders = () => catalogGet<ProvidersAvailable>("");
+export const listProviderModels = (provider: string) => catalogGet<ProviderModelsPayload>(`/models?provider=${encodeURIComponent(provider)}`);
+export const listProviderModes = (provider: string) => catalogGet<ProviderModesPayload>(`/modes?provider=${encodeURIComponent(provider)}`);
 
 export interface RunnerProviderSettings {
   enabled?: boolean;

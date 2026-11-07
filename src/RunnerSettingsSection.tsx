@@ -18,7 +18,7 @@ export function RunnerSettingsSection() {
   const load = useCallback(async () => {
     setErr("");
     try {
-      const [prov, set, use] = await Promise.all([listAvailableProviders(true), loadRunnerSettings(), loadRunnerUsage()]);
+      const [prov, set, use] = await Promise.all([listAvailableProviders(), loadRunnerSettings(), loadRunnerUsage()]);
       setRows(sortProviders((prov.providers ?? []) as (CatalogProvider & { version?: string })[]));
       setDraft(set.runner.providers);
       setPath(set.path);

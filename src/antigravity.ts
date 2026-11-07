@@ -321,6 +321,22 @@ export function normalizeProviderUsage(raw: unknown): ProviderQuotaView[] {
   return out;
 }
 
+/** Header usage chip from the runner's /__vibesquad/providers/usage rollup: spend per provider (the runner has no quota %). */
+export function runnerUsageToQuota(raw: unknown): ProviderQuotaView[] {
+  const list = rec(raw)?.byProvider;
+  if (!Array.isArray(list)) return [];
+  const out: ProviderQuotaView[] = [];
+  for (const entry of list) {
+    const r = rec(entry);
+    const provider = str(r?.provider);
+    if (!r || !provider) continue;
+    const turns = num(r.turns) ?? 0;
+    const cost = num(r.costUsd) ?? 0;
+    out.push({ provider, remainingLabel: `$${cost.toFixed(2)} · ${turns} turn${turns === 1 ? "" : "s"}` });
+  }
+  return out;
+}
+
 // ---- Aggregate ----
 
 export type AntigravityAudit = {

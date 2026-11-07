@@ -1,14 +1,14 @@
 import { createPaseoApi, type PaseoAgent, type PaseoClient, type PaseoWorkspace } from "@getpaseo/client";
 import { applyLabelsOptimistic } from "./attentionItems";
 import { clearUnreadLocal, dismissLocal, markUnreadLocal, subscribeAttentionLocal } from "./attentionLocal";
-import { clearWorkspaceIfQuiet } from "./paseoAttention";
 import { fetchRunnerStatus, getRunnerStatus, isRunnerId, isRunnerLane, runnerArchive, runnerCancel, runnerSend, runnerSpawn, runnerUpdate, runnerStatusLoaded, startRunnerBridge, onRunnerStatusChange } from "./runnerBridge";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { spawnEnvFor } from "./spawn-env";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
 import { useSyncExternalStore } from "react";
 import { refreshTeams, retiredLeadTitle } from "./teams";
-import { normalizeProviderUsage, type ProviderQuotaView } from "./antigravity";
+import { normalizeProviderUsage, runnerUsageToQuota, type ProviderQuotaView } from "./antigravity";
+import { loadRunnerUsage } from "./paseoProviders";
 import { LEGACY_NEEDS_LABEL, LEGACY_NEEDS_UNTIL, LEGACY_NEEDS_REASON } from "./userName";
 import { DEMO } from "./demoFlag";
 import { demoAgents, demoArchived, demoProviderUsage, demoWorkspaces } from "./demo";
@@ -147,6 +147,10 @@ function queueAgent(id: string, agent: PaseoAgent | null) {
 }
 
 // Same construction as createPaseoClient, but we keep the DaemonClient for calls the SDK api lacks.
+// SHIM (PLAN_PASEO_CUT P4, removed in P5): the Paseo websocket survives only for calls the VS server has no route for yet.
+// Still on it: Changes/git (ChangesPanel, paseoGit, contextFetch @git), file writes (FilesPanel save+observeFile,
+// InlineEdit undo, ProjectPanel create, paseoFiles create/rename/duplicate/delete, paseoPermissions write), and
+// paseoWorkspaces.ensureWorkspace (Changes needs a workspace). Everything else in src/ talks to the runner or /__vibesquad/*.
 export const daemonClient = new DaemonClient({
   url: WS_URL,
   clientId: "vibesquad",
@@ -172,8 +176,7 @@ export const client: PaseoClient = {
 
 export async function stopAgent(agentId: string): Promise<void> {
   if (DEMO) return;
-  if (isRunnerId(agentId)) return runnerCancel(agentId);
-  await daemonClient.cancelAgent(agentId);
+  return runnerCancel(agentId);
 }
 
 type SendArgs = { images?: Array<{ data: string; mimeType: string }>; opts?: { activeTurnBehavior?: ActiveTurnBehavior } };
@@ -183,13 +186,7 @@ async function deliver(agentId: string, text: string, args: SendArgs): Promise<v
   const sendOpts = { activeTurnBehavior: "steer" as ActiveTurnBehavior, ...args.opts };
   const lb = (state.agents.get(agentId)?.labels ?? {}) as Record<string, string>;
   perfSendBegin(agentId, lb.team, lb.lane);
-  if (isRunnerId(agentId)) {
-    await runnerSend(agentId, text, { images: args.images, activeTurnBehavior: sendOpts.activeTurnBehavior });
-    perfSendResolved(agentId);
-    return;
-  }
-  if (args.images?.length) await daemonClient.sendAgentMessage(agentId, text, { ...sendOpts, images: args.images });
-  else await daemonClient.sendAgentMessage(agentId, text, sendOpts);
+  await runnerSend(agentId, text, { images: args.images, activeTurnBehavior: sendOpts.activeTurnBehavior });
   perfSendResolved(agentId);
 }
 
@@ -226,7 +223,7 @@ export async function retrySend(id: string): Promise<void> {
 
 export async function archiveAgent(agentId: string): Promise<{ archivedAt: string }> {
   if (DEMO) return { archivedAt: new Date().toISOString() };
-  const res = isRunnerId(agentId) ? await runnerArchive(agentId) : await client.agents.ref(agentId).archive();
+  const res = await runnerArchive(agentId);
   pendingAgents.delete(agentId);
   const agents = new Map(state.agents);
   agents.delete(agentId);
@@ -235,8 +232,7 @@ export async function archiveAgent(agentId: string): Promise<{ archivedAt: strin
 }
 
 export async function detachAgent(agentId: string): Promise<void> {
-  if (DEMO) return;
-  await client.agents.ref(agentId).detach();
+  if (DEMO || isRunnerId(agentId)) return; // runner agents have no attach/detach
 }
 
 export async function updateAgent(
@@ -255,9 +251,8 @@ export async function updateAgent(
     }
     return;
   }
-  if (isRunnerId(agentId)) return runnerUpdate(agentId, updates);
   if (opts.optimistic && updates.labels) return updateLabelsOptimistic(agentId, updates.labels);
-  await daemonClient.updateAgent(agentId, updates);
+  return runnerUpdate(agentId, updates);
 }
 
 /** Opt-in (attention list only): see applyLabelsOptimistic. */
@@ -272,7 +267,7 @@ function updateLabelsOptimistic(agentId: string, labels: Record<string, string>)
       state = { ...state, agents };
       listeners.forEach((l) => l());
     },
-    send: () => daemonClient.updateAgent(agentId, { labels }),
+    send: () => runnerUpdate(agentId, { labels }),
   });
 }
 
@@ -283,21 +278,12 @@ export function bumpAgents() {
 }
 subscribeAttentionLocal(bumpAgents);
 
-export async function clearAgentAttention(agentId: string): Promise<void> {
-  if (DEMO) return;
-  await daemonClient.clearAgentAttention(agentId);
-}
+// Runner agents have no daemon attention flag: the local dismiss + the needs-you label are the whole state.
+export async function clearAgentAttention(_agentId: string): Promise<void> {}
 
-/** Mark a chat unread: local flag puts it back in the attention list; Paseo's flag is best effort. */
+/** Mark a chat unread: the local flag puts it back in the attention list. */
 export async function markAgentUnread(agent: PaseoAgent): Promise<void> {
   markUnreadLocal(agent.id);
-  const ws = (agent as { workspaceId?: string }).workspaceId;
-  if (DEMO || !ws) return;
-  try {
-    await daemonClient.markWorkspaceUnread(ws);
-  } catch (err) {
-    console.warn("markWorkspaceUnread failed", err);
-  }
 }
 
 /** Mark a chat read: clears local unread, dismisses error/attention locally, clears needs-you label, and clears daemon/workspace attention. */
@@ -313,7 +299,6 @@ export async function markAgentRead(agent: PaseoAgent): Promise<void> {
     await clearNeedsYou(agent, { optimistic: true });
   }
   await clearAgentAttention(agent.id);
-  await clearWorkspaceIfQuiet(agent.id);
 }
 
 const labelsOf = (a: PaseoAgent) => (a.labels ?? {}) as Record<string, string>;
@@ -398,10 +383,9 @@ export const PASEO_REFETCH_MS = 60_000;
 // A9: per-provider quota for the sidebar. Best effort: older daemons lack providers.listUsage.
 async function refetchProviderUsage() {
   try {
-    const res: any = await daemonClient.listProviderUsage();
-    set({ providerUsage: normalizeProviderUsage(res?.payload ?? res) });
+    set({ providerUsage: runnerUsageToQuota(await loadRunnerUsage()) });
   } catch (err) {
-    console.warn("listProviderUsage failed", err);
+    console.warn("runner usage failed", err);
   }
 }
 

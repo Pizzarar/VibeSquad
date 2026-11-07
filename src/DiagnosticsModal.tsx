@@ -1,14 +1,11 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Modal } from "./TeamActions";
-import { daemonClient, reconnectWithDaemonPassword, usePaseo } from "./paseo";
+import { reconnectWithDaemonPassword, usePaseo } from "./paseo";
 import { decideOverlay, paseoIsDown, pillText, usesPaseoBackend } from "./daemonOverlay";
 import { getRunnerStatus } from "./runnerBridge";
 import { clearSession, isAndroidUserAgent, isLocalHost, isRemote } from "./remoteSession";
 import { getStaleBuild, loadUpdaterStatus, setStaleBuild, triggerUpdateInstall, useStaleBuild, useUpdaterStatus } from "./userName";
 import "./ResponsiveSmallWindow.css";
-
-type AnyClient = Record<string, ((...a: unknown[]) => Promise<unknown>) | undefined>;
-const dc = daemonClient as unknown as AnyClient;
 
 export type DiagnosticsBundle = {
   generatedAt: string;
@@ -16,26 +13,8 @@ export type DiagnosticsBundle = {
   environment: { userAgent: string; viewport: string; zoom: number };
   agents: { id: string; status: string; provider?: string }[];
   recentErrors: string[];
-  daemon: unknown;
-  provider: unknown;
-  pluginLogs: unknown;
   staleBuild: { built: string; head: string; behind: number } | null;
 };
-
-async function tryCall(name: string): Promise<unknown> {
-  try {
-    const fn = dc[name];
-    if (typeof fn !== "function") return null;
-    const result = fn();
-    if (!result || typeof (result as any).then !== "function") return result ?? null;
-    const timeout = new Promise<{ error: string }>((resolve) =>
-      setTimeout(() => resolve({ error: "timeout" }), 1500),
-    );
-    return await Promise.race([result, timeout]);
-  } catch (e) {
-    return { error: e instanceof Error ? e.message : String(e) };
-  }
-}
 
 async function refreshStaleFromHealth(): Promise<void> {
   if (typeof fetch !== "function") return;
@@ -51,21 +30,13 @@ async function refreshStaleFromHealth(): Promise<void> {
 
 export async function buildBundle(conn: string, agents: Iterable<{ id: string; status?: string; provider?: string }>): Promise<DiagnosticsBundle> {
   const list = [...agents].map((a) => ({ id: a.id, status: String(a.status ?? "unknown"), provider: a.provider }));
-  const [daemon, provider, pluginLogs] = await Promise.all([
-    tryCall("collectDiagnostics"),
-    tryCall("getProviderDiagnostic"),
-    tryCall("getPluginLogs"),
-    refreshStaleFromHealth(),
-  ]);
+  await refreshStaleFromHealth();
   return {
     generatedAt: new Date().toISOString(),
     connection: conn,
     environment: { userAgent: navigator.userAgent, viewport: `${innerWidth}x${innerHeight}`, zoom: Math.round(devicePixelRatio * 100) },
     agents: list,
     recentErrors: list.filter((a) => a.status === "error").map((a) => `${a.id}: status error`),
-    daemon,
-    provider,
-    pluginLogs,
     staleBuild: getStaleBuild(),
   };
 }
@@ -128,7 +99,6 @@ export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
       // connect() may never settle on a dead socket; cap the wait so RETRY NOW re-enables
       const attempt = (async () => {
         await reconnectWithDaemonPassword();
-        await dc.getDaemonStatus?.();
       })();
       await Promise.race([attempt, new Promise((r) => { timer = setTimeout(r, RETRY_TIMEOUT_MS); })]);
     } catch {
@@ -261,7 +231,7 @@ function PaseoConnectionSection() {
   return (
     <div className="diag-build-status stale" data-testid="diagnostics-paseo-section">
       <div>Connection lost · reconnecting automatically. VibeSquad keeps working on its own runner.</div>
-      <button type="button" className="btn ok small" data-testid="diagnostics-paseo-retry" disabled={busy} onClick={() => void run(async () => { await reconnectWithDaemonPassword(); await dc.getDaemonStatus?.(); })}>
+      <button type="button" className="btn ok small" data-testid="diagnostics-paseo-retry" disabled={busy} onClick={() => void run(async () => { await reconnectWithDaemonPassword(); })}>
         RETRY NOW
       </button>
       {err && <div className="daemon-disconnect-error" data-testid="diagnostics-connection-error">{err}</div>}

@@ -76,7 +76,6 @@ import {
   SidebarInboxBadge,
   openAndScrollToInbox,
 } from "./ui";
-import { WorkspacesView } from "./WorkspacesView";
 import { AttentionBadge } from "./AttentionList";
 import { SquadQueue } from "./SquadQueue";
 import { SquadFloor } from "./SquadFloor";
@@ -98,7 +97,7 @@ import { TeamFeed } from "./TeamFeed";
 import { HandoffModal } from "./HandoffModal";
 import { Avatar, TeamEmblem, TokenMeter, providerSpec } from "./pixel";
 import { playAlertChime } from "./notifications";
-import { claimAlert, usePaseoAttention } from "./paseoAttention";
+import { claimAlert } from "./paseoAttention";
 import { SettingsHome, requestSettingsTarget } from "./SettingsHome";
 import { alertEnabled, getPrefs, getPref , getRestoreLastView } from "./prefs";
 import { setCloseGuard } from "./drafts";
@@ -1218,9 +1217,8 @@ function ShowClosedChip() {
 }
 
 const Toolbar = memo(function Toolbar(props: {
-  screen: "teams" | "workspaces";
-  onScreen: (s: "teams" | "workspaces") => void;
-  workspaceCount: number;
+  screen: "teams";
+  onScreen: (s: "teams") => void;
   query: string;
   onQuery: (q: string) => void;
   showOld: boolean;
@@ -1252,9 +1250,6 @@ const Toolbar = memo(function Toolbar(props: {
           }}
         >
           SQUADS
-        </button>
-        <button className={props.screen === "workspaces" ? "on" : ""} onClick={() => props.onScreen("workspaces")}>
-          WORKSPACES ({props.workspaceCount})
         </button>
       </div>
       {props.screen === "teams" && (
@@ -1455,14 +1450,13 @@ export function App() {
   const [collapsedTeams, setCollapsedTeams] = useState<Set<string>>(() => readCollapsedTeams());
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1");
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => readSidebarWidth());
-  const [screen, setScreen] = useState<"teams" | "workspaces">("teams");
+  const [screen, setScreen] = useState<"teams">("teams");
   const [query, setQuery] = useState("");
   const [showOld, setShowOld] = useState(true);
   const [showArchived, setShowArchived] = useState(false);
   const [dateGroup, setDateGroup] = useState<DateBucket | "all">("all");
   const archivedMembers = useMemo(() => resolve(archivedAgents), [archivedAgents, teamsVersion]);
   useAttentionAlerts(members);
-  usePaseoAttention(members);
   // Settings › App › "Confirm before closing while agents run": the beforeunload hook in drafts.ts asks this.
   const membersRef = useRef(members);
   membersRef.current = members;
@@ -1765,7 +1759,6 @@ export function App() {
         if (target) requestSettingsTarget(target);
         openSettings();
       },
-      workspaces: () => setScreen("workspaces"),
       toggleFocus,
       needsYou: openTopNeedsYou,
     }),
@@ -1972,7 +1965,6 @@ export function App() {
           <Toolbar
             screen={screen}
             onScreen={setScreen}
-            workspaceCount={workspaces.size}
             query={query}
             onQuery={setQuery}
             showOld={showOld}
@@ -1987,9 +1979,7 @@ export function App() {
             onSelectSquad={onTeam}
           />
           {screen === "teams" && !(pinLayout && pinsHome && squadsHome) && <HubBar view={view} onOpen={onQuickStart} />}
-          {screen === "workspaces" ? (
-            <WorkspacesView />
-          ) : dateGrouped ? (
+          {dateGrouped ? (
             <div className="team-body date-group-list" data-testid="roster-date-group-list">
               {dateGrouped.length === 0 && <div className="muted">No agents active {dateGroup === "older" ? "before yesterday" : dateGroup} in any squad.</div>}
               {dateGrouped.map((m) => (

@@ -26,12 +26,3 @@ export async function duplicateEntry(cwd: string, path: string): Promise<string 
 export async function deleteEntry(cwd: string, path: string): Promise<void> {
   unwrap(await daemonClient.deleteFileEntry({ cwd, path }));
 }
-
-export async function renameTerminalTitle(terminalId: string, title: string): Promise<void> {
-  unwrap(await daemonClient.renameTerminal({ terminalId, title }));
-}
-
-export async function captureTerminalLines(terminalId: string): Promise<string[]> {
-  const r = await daemonClient.captureTerminal(terminalId, { stripAnsi: true });
-  return r.lines;
-}

@@ -1,18 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
-import type { TerminalStreamEvent } from "@getpaseo/client/internal/daemon-client";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { daemonClient, usePaseo } from "./paseo";
 import { DEMO } from "./demoFlag";
-import { workspaceIdForAgent } from "./workspaceLogic";
-import { NoWorkspaceBanner } from "./NoWorkspaceBanner";
 import { captureFileName, captureText } from "./fileOps";
 import {
   usesVsShells, vsCreateTerminal, vsKillTerminal, vsListTerminals, vsStream, vsTerminalInput, vsTerminalOutput, vsTerminalRename, vsTerminalResize, vsTerminalStreamUrl,
 } from "./vsShells";
-import { captureTerminalLines, renameTerminalTitle } from "./paseoFiles";
 import {
   detectPortsInText,
   dismissWorkspacePort,
@@ -58,26 +53,17 @@ const vsTerminalIds = new Set<string>(); // terminals served by /__vibesquad/ter
 function resizeTerminal(terminalId: string, cols: number, rows: number) {
   if (DEMO || cols < 1 || rows < 1) return;
   if (vsTerminalIds.has(terminalId)) { void vsTerminalResize(terminalId, cols, rows).catch(() => {}); return; }
-  try {
-    daemonClient.sendTerminalInput(terminalId, { type: "resize", cols, rows } as never);
-  } catch {}
 }
 
 export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
   const cwd = agent.cwd ?? "";
-  const { workspaces } = usePaseo();
-  // Paseo 0.14 scopes terminals by workspace: listTerminals(cwd) alone comes back empty.
-  const [addedWs, setAddedWs] = useState<{ cwd: string; id: string } | null>(null);
-  const workspaceId = useMemo(() => workspaceIdForAgent(agent, workspaces) ?? (addedWs?.cwd === cwd ? addedWs.id : null), [agent, workspaces, addedWs, cwd]);
-  const scope = workspaceId ? { workspaceId } : undefined;
   const vs = !DEMO && usesVsShells(agent.id); // runner agents: shells over /__vibesquad/terminals, keyed by folder
   const vsRef = useRef(vs);
   vsRef.current = vs;
-  const noWorkspace = !DEMO && !vs && !workspaceId;
-  const scopeKey = `${cwd}|${workspaceId ?? ""}`;
+  const scopeKey = cwd;
   const scopeKeyRef = useRef(scopeKey);
   scopeKeyRef.current = scopeKey;
-  const portsKey = cwd || workspaceId || agent.id || "default";
+  const portsKey = cwd || agent.id || "default";
   const portsKeyRef = useRef(portsKey);
   portsKeyRef.current = portsKey;
   const [detectedPorts, setDetectedPorts] = useState<DetectedPort[]>(() => getWorkspacePorts(portsKey));
@@ -136,8 +122,7 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
         term.write(data === "\r" ? "\r\n$ " : data);
         return;
       }
-      if (vsRef.current) { void vsTerminalInput(terminalId, data).catch(() => {}); return; }
-      daemonClient.sendTerminalInput(terminalId, { type: "input", data });
+      void vsTerminalInput(terminalId, data).catch(() => {});
     });
 
     termInstancesRef.current.set(terminalId, { term, fit });
@@ -164,16 +149,6 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
         unsubsRef.current.set(terminalId, stop);
         return;
       }
-      const sub = daemonClient.observeTerminal(
-        terminalId,
-        (event: TerminalStreamEvent) => {
-          if (event.type === "output" || event.type === "restore") {
-            writeToTerm(terminalId, event.data);
-          }
-        },
-        { restore: { mode: "full-snapshot" } },
-      );
-      unsubsRef.current.set(terminalId, () => { sub.release().catch(() => {}); });
     }
 
     async function loadTerminals() {
@@ -184,14 +159,8 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
         setActiveId(id);
         return;
       }
-      if (noWorkspace) return;
       try {
-        const loaded = vsRef.current
-          ? (await vsListTerminals(cwd)).map((t) => ({ id: t.id, name: t.name }))
-          : (await daemonClient.listTerminals(cwd, undefined, scope)).terminals.map((t) => ({
-              id: t.id,
-              name: (t as { title?: string; name?: string }).title ?? (t as { name?: string }).name ?? t.id.slice(-6),
-            }));
+        const loaded = (await vsListTerminals(cwd)).map((t) => ({ id: t.id, name: t.name }));
         if (cancelled) return;
         setTabs(loaded);
         setActiveId(loaded[0]?.id ?? null);
@@ -213,7 +182,7 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
       pendingOutputRef.current.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cwd, workspaceId, vs]);
+  }, [cwd, vs]);
 
   // Refit + resize the daemon PTY on tab switch, container resize and window resize
   useEffect(() => {
@@ -249,13 +218,10 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
       setActiveId(id);
       return;
     }
-    if (noWorkspace) return;
     const startedIn = scopeKey;
     try {
       const name = `Terminal ${tabs.length + 1}`;
-      const termId = vsRef.current
-        ? (await vsCreateTerminal(cwd, name, 80, 24)).id
-        : ((await daemonClient.createTerminal(cwd, name, undefined, scope)) as { terminal?: { id?: string } }).terminal?.id;
+      const termId = (await vsCreateTerminal(cwd, name, 80, 24)).id;
       if (!termId || scopeKeyRef.current !== startedIn) return; // scope changed mid-create: it shows up when you come back
       const newTab: TerminalTab = { id: termId, name: `Terminal ${tabs.length + 1}` };
       setTabs((prev) => [...prev, newTab]);
@@ -268,16 +234,6 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
 `)));
         return;
       }
-      const sub = daemonClient.observeTerminal(
-        termId,
-        (event: TerminalStreamEvent) => {
-          if (event.type === "output" || event.type === "restore") {
-            writeToTerm(termId, event.data);
-          }
-        },
-        { restore: { mode: "full-snapshot" } },
-      );
-      unsubsRef.current.set(termId, () => { sub.release().catch(() => {}); });
     } catch (e) {
       console.error("createTerminal failed", e);
       setTabErr(`New terminal failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -286,7 +242,7 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
 
   const killTab = async (terminalId: string) => {
     if (!DEMO) {
-      try { await (vsRef.current ? vsKillTerminal(terminalId) : daemonClient.killTerminal(terminalId)); } catch {}
+      try { await vsKillTerminal(terminalId); } catch {}
     }
     const unsub = unsubsRef.current.get(terminalId);
     if (unsub) {
@@ -321,7 +277,7 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
     setRenamingId(null);
     if (!title || title === tabs.find((t) => t.id === id)?.name) return;
     try {
-      if (!DEMO) await (vsRef.current ? vsTerminalRename(id, title) : renameTerminalTitle(id, title));
+      if (!DEMO) await vsTerminalRename(id, title);
       setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, name: title } : t)));
     } catch (e) {
       setTabErr(`Rename failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -340,7 +296,7 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
     if (!tab) return;
     setCapture({ title: tab.name, text: "", err: "", busy: true, copied: false });
     try {
-      const lines = DEMO ? ["$ npm run build", "build ok", ""] : vs ? (await vsTerminalOutput(tab.id)).split(/\r?\n/) : await captureTerminalLines(tab.id);
+      const lines = DEMO ? ["$ npm run build", "build ok", ""] : (await vsTerminalOutput(tab.id)).split(/\r?\n/);
       setCapture((c) => c && { ...c, text: captureText(lines), busy: false });
     } catch (e) {
       setCapture((c) => c && { ...c, err: e instanceof Error ? e.message : String(e), busy: false });
@@ -416,8 +372,6 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
         <button
           className="btn ghost small"
           data-testid="terminal-new-btn"
-          disabled={noWorkspace}
-          title={noWorkspace ? "No Paseo workspace for this folder" : undefined}
           onClick={() => void createTerminal()}
         >
           + New Terminal
@@ -524,11 +478,7 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
           </div>
         </div>
       )}
-      {noWorkspace ? (
-        <div data-testid="terminal-no-workspace">
-          <NoWorkspaceBanner cwd={cwd} onReady={(id) => setAddedWs({ cwd, id })} />
-        </div>
-      ) : tabs.length === 0 ? (
+      {tabs.length === 0 ? (
         <div className="muted" style={{ padding: 16 }}>
           No terminals open — click <b>+ New Terminal</b> to start one.
         </div>

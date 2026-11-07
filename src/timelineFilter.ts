@@ -83,8 +83,10 @@ export function localSearch(entries: Ent[], query: string): SearchLocation[] {
   return out;
 }
 
-export function localPrompts(entries: Ent[]): Array<{ seq: number; timestamp: string; preview: string }> {
-  const out: Array<{ seq: number; timestamp: string; preview: string }> = [];
+export type TimelinePrompt = { seq: number; timestamp: string; preview: string };
+
+export function localPrompts(entries: Ent[]): TimelinePrompt[] {
+  const out: TimelinePrompt[] = [];
   entries.forEach((e, i) => {
     if (e.item?.type === "user_message") out.push({ seq: e.seqStart ?? i, timestamp: e.timestamp ?? "", preview: entryText(e.item).slice(0, 120) });
   });

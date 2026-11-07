@@ -29,7 +29,6 @@ export const KEY_COMMANDS: KeyCommand[] = [
   { id: "search", label: "Search all transcripts", defaults: [] },
   { id: "new", label: "New agent", defaults: [] },
   { id: "settings", label: "Settings", defaults: [] },
-  { id: "workspaces", label: "Workspaces", defaults: [] },
   { id: "reopen", label: "Reopen closed tab", defaults: [] },
   { id: "inlineEdit", label: "Inline edit the selection (Files editor)", defaults: ["Ctrl+K"], scope: "files-editor" },
 ];

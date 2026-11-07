@@ -28,6 +28,7 @@ export const runnerSend = (id: string, text: string, opts: RunnerSendOpts = {}) 
     ...(opts.activeTurnBehavior === "interrupt" ? { activeTurnBehavior: "interrupt" } : {}),
   }).then(() => undefined);
 export const runnerCancel = (id: string) => post(id, "cancel").then(() => undefined);
+export const runnerUnarchive = (id: string) => post(id, "unarchive").then(() => undefined);
 export const runnerArchive = (id: string) => post(id, "archive").then(() => ({ archivedAt: new Date().toISOString() }));
 export const runnerUpdate = (id: string, updates: { name?: string; labels?: Record<string, string> }) => post(id, "meta", updates).then(() => undefined);
 
@@ -100,6 +101,9 @@ export function runnerHandle(id: string) {
     },
   };
 }
+
+/** Reload button: ask every mounted timeline for this agent to refetch (the runner has no session-refresh route). */
+export const runnerReloadTimeline = (id: string) => notifyTimeline(id, true);
 
 export const runnerFetchTimeline = (id: string, opts: { limit?: number; cursor?: { seq: number }; direction?: string }) => {
   const q = new URLSearchParams({ limit: String(opts.limit ?? 60) });
