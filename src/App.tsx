@@ -1999,7 +1999,7 @@ export function App() {
         <div className="hub-body" data-testid="hub-body">
           {panesNode}
           {pinFocusView && <SquadQueue view={pinFocusView} />}
-          {pinFocusView && <SquadFloor view={pinFocusView} onOpenRiffBot={onQuickStart} />}
+          {pinFocusView && <SquadFloor view={pinFocusView} />}
         </div>
       ) : (
         panesNode

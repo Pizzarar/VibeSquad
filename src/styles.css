@@ -4695,23 +4695,6 @@ button.project-file-name:hover { text-decoration: underline; }
 }
 .sq-floor-mark:hover,
 .sq-floor-mark:focus-visible { background: var(--text); color: var(--hot-pink); }
-.sq-floor-crt {
-  position: absolute;
-  padding: 0;
-  margin: 0;
-  border: 0;
-  background-color: transparent;
-  background-repeat: no-repeat;
-  image-rendering: pixelated;
-  cursor: pointer;
-}
-.sq-floor-crt:disabled { cursor: default; }
-.sq-floor-crt.is-off { filter: brightness(0.35) saturate(0.4); }
-.sq-floor-crt:hover:not(:disabled),
-.sq-floor-crt:focus-visible { outline: 1px solid var(--cyan); outline-offset: -1px; }
-.sq-floor-lounge { position: absolute; border: 0; background: transparent; cursor: pointer; padding: 0; }
-.sq-floor-lounge:hover,
-.sq-floor-lounge:focus-visible { outline: 1px dashed var(--cyan); outline-offset: -1px; }
 .sq-floor-rider { position: absolute; transform: translate(-50%, -100%); line-height: 0; animation: sq-floor-ride linear forwards; }
 .sq-floor-rider .sq-floor-sprite-fallback { width: 16px; height: 16px; }
 @keyframes sq-floor-ride {
