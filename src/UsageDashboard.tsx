@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { buildRows, etaText, foldRoles, relTime, sortRows, type LimitRow, type SortKey, type UsageData } from "./usageHelpers";
+import { buildProfiles, buildRows, dur, etaText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, workIdlePct, type LimitRow, type SortKey, type UsageData } from "./usageHelpers";
 
 // Usage dashboard for the Squads screen (docs/PLAN_USAGE_DASHBOARD.md step 4).
 // Data: GET /__vibesquad/providers/usage (server/providers-catalog.mjs getUsage).
@@ -7,6 +7,7 @@ import { buildRows, etaText, foldRoles, relTime, sortRows, type LimitRow, type S
 const POLL_MS = 60_000;
 const MIN_GAP_MS = 10_000;
 const HIGH_REVIEW_ROUNDS = 2;
+const HIGH_FIX_RATE = 0.25;
 
 const PROVIDER_LABEL: Record<string, string> = {
   claude: "Claude",
@@ -57,6 +58,9 @@ const COLS: { key: SortKey; label: string; num: boolean }[] = [
   { key: "merged", label: "Merged", num: true },
   { key: "rounds", label: "Rev rounds/unit", num: true },
   { key: "costUnit", label: "Cost/unit", num: true },
+  { key: "workPct", label: "Work %", num: true },
+  { key: "cycle", label: "Cycle (unit/plan)", num: true },
+  { key: "fixRate", label: "Fix rate", num: true },
 ];
 
 export function useUsage(): { data: UsageData | null; error: string | null } {
@@ -108,6 +112,7 @@ export function UsageDashboard() {
     return [...(data?.limits ?? [])].sort((a, b) => rank(a) - rank(b) || a.provider.localeCompare(b.provider) || a.window.localeCompare(b.window));
   }, [data]);
   const rows = useMemo(() => (data ? sortRows(buildRows(data), sort.key, sort.dir) : []), [data, sort]);
+  const profiles = useMemo(() => (data ? sortProfiles(buildProfiles(data)) : []), [data]);
 
   if (!data) {
     return (
@@ -117,6 +122,7 @@ export function UsageDashboard() {
     );
   }
   const flagged = data.loops?.flagged ?? [];
+  const storms = data.spawnStorms ?? [];
   const roles = foldRoles(data.byRole ?? []);
   const roleTotal = roles.reduce((s, r) => s + r.inputTokens + r.outputTokens, 0);
   const click = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: key === "lane" ? 1 : -1 }));
@@ -161,6 +167,20 @@ export function UsageDashboard() {
             ))
           )}
         </div>
+        {data.spawnStorms && (
+          <div className="usage-storms" data-testid="usage-storms">
+            <div className="usage-sub">Spawn storms {storms.length > 0 && <span className="usage-flag usage-flag-storm">{storms.length}</span>}</div>
+            {storms.length === 0 ? (
+              <div className="small muted">none (&lt;3 spawns or zero-turn exits per window)</div>
+            ) : (
+              storms.slice(0, 5).map((s, i) => (
+                <div className="usage-loop small" key={`${s.lane}|${s.role}|${i}`} title={`${s.firstAt} → ${s.lastAt}`}>
+                  <span className="usage-flag usage-flag-storm">storm</span> {stormText(s)}
+                </div>
+              ))
+            )}
+          </div>
+        )}
       </div>
 
       <div className="usage-table-wrap">
@@ -193,11 +213,58 @@ export function UsageDashboard() {
                 <td className="num">{r.merged || "–"}</td>
                 <td className={`num${r.rounds !== null && r.rounds >= HIGH_REVIEW_ROUNDS ? " usage-high" : ""}`}>{r.rounds === null ? "–" : r.rounds.toFixed(1)}</td>
                 <td className="num">{r.costUnit === null ? "–" : usd(r.costUnit)}</td>
+                <td className="num">{pctText(r.workPct)}</td>
+                <td className="num">{r.unitCycleMs === null && r.planCycleMs === null ? "–" : `${dur(r.unitCycleMs)} / ${dur(r.planCycleMs)}`}</td>
+                <td className={`num${r.fixRate !== null && r.fixRate >= HIGH_FIX_RATE ? " usage-high" : ""}`}>{pctText(r.fixRate)}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      {data.byProfile && (
+        <div className="usage-profiles">
+          <div className="usage-sub">Implementer / Profile comparison</div>
+          {profiles.length === 0 ? (
+            <div className="small muted">no profile data yet</div>
+          ) : (
+            <div className="usage-table-wrap">
+              <table className="usage-table" data-testid="usage-profile-table">
+                <thead>
+                  <tr>
+                    <th>Profile</th>
+                    <th>Provider</th>
+                    <th className="num">Runs</th>
+                    <th className="num">Turns/run</th>
+                    <th className="num">PASS %</th>
+                    <th className="num">Merged</th>
+                    <th className="num">Rev/unit</th>
+                    <th className="num">Cost/unit</th>
+                    <th className="num">Fix rate</th>
+                    <th className="num">Work/Idle</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {profiles.map((p) => (
+                    <tr key={p.key} data-profile={p.profile} data-role={p.role}>
+                      <td>{p.profile}</td>
+                      <td className="muted">{providerLabel(p.provider)}</td>
+                      <td className="num">{p.runs}</td>
+                      <td className="num">{p.avgTurnsPerRun.toFixed(1)}</td>
+                      <td className="num">{pctText(p.passRate)}</td>
+                      <td className="num">{p.mergedUnits}</td>
+                      <td className="num">{p.mergedUnits > 0 ? p.avgReviewRounds.toFixed(1) : "–"}</td>
+                      <td className="num">{p.costPerMergedUnit === null ? "–" : usd(p.costPerMergedUnit)}</td>
+                      <td className={`num${p.fixRate >= HIGH_FIX_RATE ? " usage-high" : ""}`}>{pctText(p.fixRate)}</td>
+                      <td className="num">{workIdlePct(p.workPct)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

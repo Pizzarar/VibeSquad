@@ -3806,14 +3806,15 @@ html, body, #root { overflow-x: hidden; }
 .usage-limit-meta { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); }
 .usage-eta { color: var(--muted); }
 .usage-eta-warn { color: var(--amber); }
-.usage-split { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 14px; }
+.usage-split { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
 @media (max-width: 800px) { .usage-split { grid-template-columns: 1fr; } }
-.usage-roles, .usage-loops { padding: 10px 12px; background: var(--navy); border: 1px solid var(--line); border-radius: 10px; }
+.usage-roles, .usage-loops, .usage-storms { padding: 10px 12px; background: var(--navy); border: 1px solid var(--line); border-radius: 10px; }
 .usage-role { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
 .usage-role-name { width: 84px; flex-shrink: 0; text-transform: capitalize; }
 .usage-coord { margin-top: 6px; }
 .usage-loop { padding: 2px 0; }
 .usage-flag { display: inline-block; margin-left: 6px; padding: 0 6px; font-size: 10px; text-transform: uppercase; color: var(--bg); background: var(--hot-pink); border-radius: 999px; }
+.usage-flag-storm { background: var(--amber); }
 .usage-table-wrap { overflow-x: auto; }
 .usage-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .usage-table th, .usage-table td { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }

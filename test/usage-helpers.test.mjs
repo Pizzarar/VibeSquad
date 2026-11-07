@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildRows, etaText, foldRoles, relTime, sortRows } from "../src/usageHelpers.ts";
+import { buildProfiles, buildRows, dur, etaText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, workIdlePct } from "../src/usageHelpers.ts";
 
 const st = (turns, costUsd, i, o) => ({ turns, costUsd, inputTokens: i, outputTokens: o, avgTokensPerTurn: turns ? Math.round((i + o) / turns) : 0 });
 
@@ -64,4 +64,89 @@ test("foldRoles: former-brainstorm/lead fold into live roles, ordered brainstorm
   assert.equal(lead.costUsd, 3);
   assert.equal(lead.inputTokens, 100);
   assert.equal(lead.avgTokensPerTurn, 25);
+});
+
+test("dur: human durations and missing fallback", () => {
+  assert.equal(dur(42 * 60_000), "42m");
+  assert.equal(dur(3.1 * 3600_000), "3.1h");
+  assert.equal(dur(2 * 24 * 3600_000), "2.0d");
+  assert.equal(dur(45_000), "45s");
+  assert.equal(dur(null), "—");
+  assert.equal(dur(undefined), "—");
+  assert.equal(dur(-5), "—");
+});
+
+test("pctText / workIdlePct: fraction -> %, missing -> —", () => {
+  assert.equal(pctText(0.625), "63%");
+  assert.equal(pctText(0), "0%");
+  assert.equal(pctText(null), "—");
+  assert.equal(pctText(undefined), "—");
+  assert.equal(workIdlePct(0.67), "67% / 33%");
+  assert.equal(workIdlePct(0), "0% / 100%");
+  assert.equal(workIdlePct(null), "—");
+});
+
+test("stormText: spawn burst vs zero-turn exits", () => {
+  const burst = { lane: "usage", role: "worker", count: 3, windowMs: 60_000, firstAt: "x", lastAt: "y", zeroTurnExits: 0 };
+  assert.equal(stormText(burst), "usage · worker · 3 spawns in 1m");
+  assert.equal(stormText({ ...burst, role: "lead", windowMs: 300_000, zeroTurnExits: 3 }), "usage · lead · 3 zero-turn exits");
+});
+
+const v2data = {
+  limits: [],
+  lanes: [
+    { lane: "a", ...st(10, 5, 900, 100), agents: 2, restarts: 1, handoffs: 0, coordinationShare: 0.25, workPct: 0.625, avgUnitCycleMs: 60_000, planCycleMs: 120_000, fixAfterMergeRate: 0.2 },
+    { lane: "b", ...st(4, 9, 400, 0), agents: 1, restarts: 0, handoffs: 2, coordinationShare: 0.5 },
+    { lane: "c", ...st(2, 1, 50, 50), agents: 1, restarts: 0, handoffs: 0, coordinationShare: 0, workPct: 0, avgUnitCycleMs: null, planCycleMs: null, fixAfterMergeRate: 0 },
+  ],
+  byRole: [],
+  merged: { perLane: [
+    { lane: "a", mergedUnits: 2, reviewRounds: 5, avgReviewRounds: 2.5, costPerMergedUnit: 2.5, avgUnitCycleMs: 60_000, fixAfterMergeRate: 0.2 },
+    { lane: "b", mergedUnits: 1, reviewRounds: 2, avgReviewRounds: 2, costPerMergedUnit: 9, avgUnitCycleMs: 90_000, fixAfterMergeRate: 0.5 },
+  ] },
+  loops: { threshold: 40, flagged: [] },
+};
+
+test("buildRows: v2 columns fall back to merged.perLane when the lane lacks them", () => {
+  const rows = buildRows(v2data);
+  const a = rows.find((r) => r.lane === "a");
+  assert.equal(a.workPct, 0.625);
+  assert.equal(a.unitCycleMs, 60_000);
+  assert.equal(a.planCycleMs, 120_000);
+  assert.equal(a.fixRate, 0.2);
+  const b = rows.find((r) => r.lane === "b");
+  assert.equal(b.workPct, null, "no workPct on lane, none in perLane");
+  assert.equal(b.unitCycleMs, 90_000, "falls back to perLane.avgUnitCycleMs");
+  assert.equal(b.planCycleMs, null, "plan cycle has no perLane fallback");
+  assert.equal(b.fixRate, 0.5, "falls back to perLane.fixAfterMergeRate");
+  const c = rows.find((r) => r.lane === "c");
+  assert.equal(c.workPct, 0, "explicit zero work is preserved");
+  assert.equal(c.fixRate, 0, "explicit zero fix rate is preserved (not null)");
+});
+
+test("sortRows: v2 keys workPct/cycle/fixRate sort with nulls last", () => {
+  const rows = buildRows(v2data);
+  assert.deepEqual(sortRows(rows, "workPct", -1).map((r) => r.lane), ["a", "c", "b"]);
+  assert.deepEqual(sortRows(rows, "cycle", -1).map((r) => r.lane), ["b", "a", "c"]);
+  assert.deepEqual(sortRows(rows, "fixRate", -1).map((r) => r.lane), ["b", "a", "c"]);
+});
+
+test("buildProfiles + sortProfiles: implementers first by mergedUnits desc, work% normalised", () => {
+  const d = {
+    limits: [], lanes: [], byRole: [],
+    byProfile: [
+      { provider: "claude", profile: "Lead", role: "lead", runs: 2, turns: 20, avgTurnsPerRun: 10, inputTokens: 1, outputTokens: 1, costUsd: 5, workingMs: 1000, idleMs: 1000, passCount: 2, passRate: 1, loopCount: 0, mergedUnits: 3, reviewRounds: 6, avgReviewRounds: 2, costPerMergedUnit: 1.5, fixAfterMergeCount: 0, fixAfterMergeRate: 0, avgUnitCycleMs: 1000 },
+      { provider: "claude", profile: "Implement - Sonnet", role: "worker", runs: 3, turns: 30, avgTurnsPerRun: 10, inputTokens: 1, outputTokens: 1, costUsd: 6, workingMs: 3000, idleMs: 1000, passCount: 3, passRate: 1, loopCount: 0, mergedUnits: 2, reviewRounds: 4, avgReviewRounds: 2, costPerMergedUnit: 3, fixAfterMergeCount: 1, fixAfterMergeRate: 0.5, avgUnitCycleMs: 2000 },
+      { provider: "antigravity-cli", profile: "Implement - Gemini", role: "worker", runs: 1, turns: 10, avgTurnsPerRun: 10, inputTokens: 1, outputTokens: 1, costUsd: 4, workingMs: 2000, idleMs: 2000, passCount: 1, passRate: 1, loopCount: 0, mergedUnits: 5, reviewRounds: 10, avgReviewRounds: 2, costPerMergedUnit: 0.8, fixAfterMergeCount: 0, fixAfterMergeRate: 0, avgUnitCycleMs: 1000 },
+    ],
+  };
+  const sorted = sortProfiles(buildProfiles(d));
+  assert.deepEqual(sorted.map((p) => p.profile), ["Implement - Gemini", "Implement - Sonnet", "Lead"], "implementers first, then mergedUnits desc");
+  const gemini = sorted[0];
+  assert.equal(gemini.mergedUnits, 5);
+  assert.equal(gemini.workPct, 0.5);
+  assert.equal(gemini.fixRate, 0);
+  const sonnet = sorted[1];
+  assert.equal(sonnet.workPct, 0.75);
+  assert.equal(sonnet.fixRate, 0.5);
 });
