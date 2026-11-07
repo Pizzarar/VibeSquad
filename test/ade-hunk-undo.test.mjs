@@ -212,7 +212,7 @@ test("wiring: Changes has per-hunk Keep/Undo, file Keep all/Undo all, Review spa
   assert.match(s, /spawnTeamAgent\(/);
   assert.match(s, /"Review - Sonnet"/);
   assert.doesNotMatch(s, /agents\.create\(/, "no second spawn path");
-  assert.match(s, /expectedModifiedAt/);
+  assert.match(s, /vsWriteFile\(cwd, f\.path, next, read\.modifiedAt\)/);
   assert.match(s, /status === "conflict"/);
 });
 
@@ -272,8 +272,10 @@ test("review prompt: diff fence outruns any backtick run in the diff, and the co
 test("Changes: git runs through the VS git routes, no workspace registration (N1)", () => {
   const s = src("ChangesPanel.tsx");
   assert.doesNotMatch(s, /noWorkspace|NoWorkspaceBanner|workspaceIdForAgent|usePaseo/);
-  // The only daemon calls left are the hunk-undo file read/write/delete (N2 owns file writes).
-  const daemon = s.match(/daemonClient\.\w+/g) ?? [];
-  assert.deepEqual([...new Set(daemon)].sort(), ["daemonClient.deleteFileEntry", "daemonClient.readFile", "daemonClient.writeFile"]);
+  // Hunk undo reads/writes/deletes through the VS fs routes (N2); no daemonClient left.
+  assert.doesNotMatch(s.replace(/content: "[^"]*"/g, ""), /daemonClient/);
+  assert.match(s, /vsReadFile\(cwd, f\.path, MAX_UNDO_BYTES\)/);
+  assert.match(s, /vsWriteFile\(cwd, f\.path, next, read\.modifiedAt\)/);
+  assert.match(s, /vsDeleteEntry\(cwd, f\.path\)/);
   assert.match(s, /vsgit\.vsGitDiff\(cwd, "uncommitted"\)/);
 });

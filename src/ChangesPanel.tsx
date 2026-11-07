@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
-import { daemonClient, spawnTeamAgent } from "./paseo";
+import { spawnTeamAgent } from "./paseo";
+import { VsFilesError, vsDeleteEntry, vsReadFile, vsWriteFile } from "./vsFiles";
 import { DEMO } from "./demoFlag";
 import { openAgent } from "./panes";
 import { findProfile } from "./profiles";
@@ -166,6 +167,11 @@ export function discardArm(paths: string[]): DiscardState { return paths; }
 export function discardCancel(): DiscardState { return null; }
 export function discardIsArmed(s: DiscardState): s is string[] { return s !== null; }
 
+// Which row armed the confirm: a renamed file arms 2 paths, so the path count can't tell a file row from "Discard all".
+export const DISCARD_ALL_SCOPE = "*all";
+export const discardFileScope = (path: string) => `file:${path}`;
+export const discardRowArmed = (s: DiscardState, scope: string | null, rowScope: string) => discardIsArmed(s) && scope === rowScope;
+
 // ─── Line style ──────────────────────────────────────────────────────────────
 
 const LINE_CLS: Record<string, string> = {
@@ -221,7 +227,7 @@ function FileDiffView({ file, actions }: { file: DiffFile; actions?: HunkActions
 // Kept hunks stay hidden for the session (across tab switches): (cwd, path) → hunk keys (text + position).
 const keptHunks = new Map<string, Set<string>>();
 const keptFor = (cwd: string, path: string) => JSON.stringify([cwd, path]);
-const MAX_UNDO_BYTES = 2 * 1024 * 1024;
+const MAX_UNDO_BYTES = 900 * 1024; // the fs/write route rejects bodies over FS_WRITE_MAX (900 KiB)
 const DIFF_POLL_MS = 5_000;
 const STATUS_EVERY_TICKS = 6;
 const REVIEW_PROFILE = "Review - Sonnet";
@@ -242,7 +248,9 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
   const [attempt, setAttempt] = useState(0);
 
   const [expandedFile, setExpandedFile] = useState<string | null>(null);
-  const [discardState, setDiscardState] = useState<DiscardState>(null);
+  const [discardState, setDiscardStateRaw] = useState<DiscardState>(null);
+  const [discardScope, setDiscardScope] = useState<string | null>(null);
+  const setDiscardState = (s: DiscardState, scope: string | null = null) => { setDiscardStateRaw(s); setDiscardScope(s === null ? null : scope); };
 
   const [commitMsg, setCommitMsg] = useState("");
   const [branchOpen, setBranchOpen] = useState(false);
@@ -278,6 +286,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
   const seq = useRef({ hist: 0, diff: 0, check: 0, timeline: 0 });
   // Re-fetches diff + status + PR + stash; set by the load effect, called after every git write.
   const reloadRef = useRef<() => void>(() => {});
+  const lastDiffJson = useRef<string | null>(null);
   const gitWrite = async <T,>(fn: () => Promise<T>) => {
     const res = await gitActionWrapper(fn);
     if (res.ok) reloadRef.current();
@@ -310,6 +319,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
     setAutoMergeArmed(false); setPrMergeArmed(false); setDiscardState(null);
     setCheckOpen(null); setCheckInfo(null); setTimeline(null);
     setExpandedFile(null);
+    lastDiffJson.current = null;
     setLoading(true);
     setLoadError(null);
     setSlow(false);
@@ -333,12 +343,10 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
     const loadDiff = (first: boolean) =>
       withTimeout(vsgit.vsGitDiff(cwd, "uncommitted")).then((d) => {
         if (!alive) return;
-        let changed = false;
-        setDiff((prev) => {
-          if (JSON.stringify(prev) === JSON.stringify(d)) return prev;
-          changed = true;
-          return { files: d.files ?? [], diffTooLarge: d.diffTooLarge };
-        });
+        const next = { files: d.files ?? [], diffTooLarge: d.diffTooLarge };
+        const json = JSON.stringify(next);
+        const changed = json !== lastDiffJson.current;
+        if (changed) { lastDiffJson.current = json; setDiff(next); }
         if (first) setLoading(false);
         // status only follows a diff change (or a slow heartbeat for commits made outside the panel)
         else if (changed || ++ticks % STATUS_EVERY_TICKS === 0) void loadStatus();
@@ -427,8 +435,11 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
     if (f.isDeleted) { flash("The file was deleted: use Discard to restore it", false); return; }
     setUndoBusy(true);
     try {
-      const read = await daemonClient.readFile(cwd, f.path, undefined, MAX_UNDO_BYTES + 1);
-      if (read.bytes.length > MAX_UNDO_BYTES) { flash("File too large to undo hunks here", false); return; }
+      const read = await vsReadFile(cwd, f.path, MAX_UNDO_BYTES).catch((e) => {
+        if (e instanceof VsFilesError && e.tooLarge) return null;
+        throw e;
+      });
+      if (!read || read.bytes.length > MAX_UNDO_BYTES) { flash("File too large to undo hunks here", false); return; }
       let content: string;
       try { content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(read.bytes); }
       catch { flash("Not UTF-8 text: can't undo hunks in this file", false); return; }
@@ -441,12 +452,10 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
         next = r.content;
       }
       if (next === "" && f.isNew) {
-        const del = await daemonClient.deleteFileEntry({ cwd, path: f.path });
-        if (!del.success) { flash(`Not undone: ${del.error ?? "delete failed"}`, false); return; }
+        await vsDeleteEntry(cwd, f.path);
       } else {
-        const res = await daemonClient.writeFile({ cwd, path: f.path, content: next, expectedModifiedAt: read.modifiedAt });
-        // writeFile resolves (doesn't throw) on a stale or failed write, so check the status.
-        const w = res as { status?: string; error?: string };
+        // vsWriteFile resolves (doesn't throw) on a stale or failed write, so check the status.
+        const w = await vsWriteFile(cwd, f.path, next, read.modifiedAt);
         if (w?.status === "conflict") { flash("Not undone: the file changed on disk while undoing. Try again.", false); return; }
         if (w?.status === "error") { flash(`Not undone: ${w.error ?? "write failed"}`, false); return; }
       }
@@ -739,7 +748,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
         {files.length === 0 && <div className="muted small">No uncommitted changes.</div>}
 
         {files.map((f) => {
-          const isArmed = discardIsArmed(discardState) && discardState.includes(f.path) && discardState.length === 1;
+          const isArmed = discardRowArmed(discardState, discardScope, discardFileScope(f.path));
           return (
             <div key={f.path} className="changes-file">
               <div
@@ -794,7 +803,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
                 ) : (
                   <button
                     className="btn ghost small"
-                    onClick={(e) => { e.stopPropagation(); setDiscardState(discardArm(discardPaths(f))); }}
+                    onClick={(e) => { e.stopPropagation(); setDiscardState(discardArm(discardPaths(f)), discardFileScope(f.path)); }}
                   >
                     Discard
                   </button>
@@ -821,12 +830,12 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
 
         {files.length > 0 && (
           <div className="changes-discard-all-row">
-            {discardIsArmed(discardState) && discardState.length > 1 ? (
+            {discardRowArmed(discardState, discardScope, DISCARD_ALL_SCOPE) ? (
               <span className="discard-confirm-group">
                 <button
                   className="btn bad small"
                   data-testid="changes-confirm-discard"
-                  onClick={() => handleDiscard(discardState)}
+                  onClick={() => handleDiscard(discardState ?? [])}
                 >
                   Confirm discard all?
                 </button>
@@ -837,7 +846,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
             ) : (
               <button
                 className="btn ghost small"
-                onClick={() => setDiscardState(discardArm(files.flatMap(discardPaths)))}
+                onClick={() => setDiscardState(discardArm(files.flatMap(discardPaths)), DISCARD_ALL_SCOPE)}
               >
                 Discard all
               </button>
