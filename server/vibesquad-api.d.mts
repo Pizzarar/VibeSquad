@@ -1,4 +1,3 @@
-export function readPaseo(rootDir?: string): { listen: string; serverId: string };
 export function createVibesquadMiddleware(rootDir?: string): (req: any, res: any, next?: (err?: unknown) => void) => void;
 export function handleHealth(req: any, res: any, rootDir?: string): void;
 export function isGatedRead(path: string, url?: string): boolean;
@@ -8,7 +7,7 @@ export function handleDesktopInstaller(req: any, res: any, rootDir?: string): vo
 export function handleDesktopUpdateJson(req: any, res: any, rootDir?: string): void;
 export {
   appendVsLogEntry,
-  createDaemonClient,
+  createAgentClient,
   performBrainstormRestart,
   readBrainstormSummary,
   writeBrainstormSummary,
@@ -45,8 +44,8 @@ export {
   writePushSubscriptions,
 } from "./push.mjs";
 export function handleLocalImage(req: any, res: any): void;
-export function lookupAgentCwd(agentId: unknown, paseoHome?: string): string | null;
-export function resolveAllowedImage(raw: unknown, roots?: string[], extraCwd?: string | { agentId?: string; paseoHome?: string; extraCwd?: string | null } | null): string | null;
+export function lookupAgentCwd(agentId: unknown): string | null;
+export function resolveAllowedImage(raw: unknown, roots?: string[], extraCwd?: string | { agentId?: string; extraCwd?: string | null } | null): string | null;
 export {
   LEAD_AUTO_HANDOFF_DEFAULT,
   LEAD_FLAG_DEFAULT,

@@ -33,7 +33,7 @@ export function loadBrainstormThresholds(agent, rootDir = REPO_ROOT) {
 
 /**
  * Watches runner usage and acts by role (leads: coordinator stages; Buddies: warn then restart; workers: nothing).
- * deps (all optional, for tests): restartExtra (merged into the default restart body: daemonClient, profilesPath, ...), runner, rootDir, coordinator, restartBuddy, getBuddyThresholds, baseHome, profilesPath.
+ * deps (all optional, for tests): restartExtra (merged into the default restart body: agentClient, profilesPath, ...), runner, rootDir, coordinator, restartBuddy, getBuddyThresholds, baseHome, profilesPath.
  * Returns { stop, evaluate }.
  */
 export function startTokenWatcher({

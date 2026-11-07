@@ -32,7 +32,7 @@ export function syncRuntimeDir(repoRoot = rootDir) {
   const runtimeDir = join(localAppData, "VibeSquad", "runtime");
   if (!existsSync(runtimeDir)) return { synced: false, runtimeDir };
 
-  for (const entry of ["dist", "public", "server", "cli", "plugin", "runner"]) {
+  for (const entry of ["dist", "public", "server", "cli", "runner"]) {
     const src = join(repoRoot, entry);
     if (!existsSync(src)) continue;
     try {

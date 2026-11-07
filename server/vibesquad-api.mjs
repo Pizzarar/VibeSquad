@@ -1,7 +1,6 @@
 import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { handleRunnerApi } from "./runner-api.mjs";
 import { forceRestartRunner, unstick } from "./unstick.mjs";
-import { resetPaseoProbe } from "./backend/lane-routing.mjs";
 import { handleSchedulesApi } from "./schedules.mjs";
 import { sharedRunnerBackend, isRunnerId, listRunnerAgentsSync, readRunnerAgentSync } from "./backend/index.mjs";
 import { handleTerminalsApi, isTerminalsPath } from "./terminals-api.mjs";
@@ -36,7 +35,7 @@ import {
 import { authenticate, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handlePairRedeem, handlePairStart, handleRevoke, hasDistIndex, isLocal, isLocalBrowserSafe, isLocalOwner, netConfig, READ_ONLY_ERROR } from "./auth.mjs";
 import {
   appendVsLogEntry,
-  createDaemonClient,
+  createAgentClient,
   findExistingLaneBrainstorm,
   performBrainstormRestart,
   readBrainstormSummary,
@@ -74,24 +73,10 @@ import {
   sendWebPushToSubscription,
   startPushWatcher,
   stopPushWatcher,
-  syncRunnerPushWatch,
   toBase64Url,
   fromBase64Url,
   writePushSubscriptions,
 } from "./push.mjs";
-import {
-  DAEMON_PASSWORD_FILE,
-  PASEO_LOCAL_CREDENTIAL_FILE,
-  daemonPasswordPath,
-  daemonPasswordSource,
-  getDaemonAuthStatus,
-  isDaemonPasswordRequired,
-  probeDaemonPassword,
-  readDaemonListen,
-  readDaemonPassword,
-  readPaseoLocalCredential,
-  writeDaemonPassword,
-} from "./daemon-password.mjs";
 import { removeTeamWorktrees, resolveManagedWorktreeRoot } from "./team-worktrees.mjs";
 import { extractManagedWorktreeRepoName } from "./identity.mjs";
 import {
@@ -138,37 +123,10 @@ import {
   resolveTeamAndLane,
   synthesizeHandoffPacket,
 } from "./lead-handoff.mjs";
-import {
-  SECRET_MASK,
-  checkDaemonListenExposure,
-  clearManagedDaemonMarker,
-  controlPaseoDaemon,
-  controlPaseoHub,
-  controlPaseoPlugin,
-  createPaseoConfigBackup,
-  getPaseoConfigSurface,
-  getPaseoDaemonStatus,
-  getPaseoPlugins,
-  getPaseoProviderDiagnostic,
-  getPaseoProviderModels,
-  getPaseoProviders,
-  getPaseoUsage,
-  listPaseoConfigBackups,
-  maskSecrets,
-  maskSecretsInText,
-  openPaseoConfigInEditor,
-  readRawPaseoConfig,
-  restoreLastPaseoConfigBackup,
-  runPaseoCli,
-  saveCustomAcpProvider,
-  togglePaseoProvider,
-  updatePaseoSettingsPatch,
-  writePaseoConfigAndReload,
-} from "./paseo-control.mjs";
 
 export {
   appendVsLogEntry,
-  createDaemonClient,
+  createAgentClient,
   findExistingLaneBrainstorm,
   performBrainstormRestart,
   readBrainstormSummary,
@@ -205,17 +163,6 @@ export {
   toBase64Url,
   fromBase64Url,
   writePushSubscriptions,
-  DAEMON_PASSWORD_FILE,
-  PASEO_LOCAL_CREDENTIAL_FILE,
-  daemonPasswordPath,
-  daemonPasswordSource,
-  getDaemonAuthStatus,
-  isDaemonPasswordRequired,
-  probeDaemonPassword,
-  readDaemonListen,
-  readDaemonPassword,
-  readPaseoLocalCredential,
-  writeDaemonPassword,
   DEFAULT_PACK_PROFILES,
   DEFAULT_PROFILES,
   LEGACY_PROFILE_ALIASES,
@@ -256,54 +203,9 @@ export {
   resolveLeadProfile,
   resolveTeamAndLane,
   synthesizeHandoffPacket,
-  SECRET_MASK,
-  checkDaemonListenExposure,
-  clearManagedDaemonMarker,
-  controlPaseoDaemon,
-  controlPaseoHub,
-  controlPaseoPlugin,
-  createPaseoConfigBackup,
-  getPaseoConfigSurface,
-  getPaseoDaemonStatus,
-  getPaseoPlugins,
-  getPaseoProviderDiagnostic,
-  getPaseoProviderModels,
-  getPaseoProviders,
-  getPaseoUsage,
-  listPaseoConfigBackups,
-  maskSecrets,
-  maskSecretsInText,
-  openPaseoConfigInEditor,
-  readRawPaseoConfig,
-  restoreLastPaseoConfigBackup,
-  runPaseoCli,
-  saveCustomAcpProvider,
-  togglePaseoProvider,
-  updatePaseoSettingsPatch,
-  writePaseoConfigAndReload,
 };
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
-
-// Read the daemon's listen address and server id straight from Paseo's own config,
-// so VibeSquad follows the daemon if it moves. PASEO_DAEMON overrides.
-export function readPaseo(_rootDir = REPO_ROOT) {
-  const home = join(homedir(), ".paseo");
-  let listen = "127.0.0.1:6767";
-  let serverId = "";
-  const cfgRes = readJsonFileWithBom(join(home, "config.json"), {
-    label: "~/.paseo/config.json",
-    fallback: null,
-    recordWarning: true,
-  });
-  if (cfgRes.ok && cfgRes.data) {
-    listen = cfgRes.data.daemon?.listen ?? listen;
-  }
-  try {
-    serverId = stripBom(readFileSync(join(home, "server-id"), "utf8")).trim();
-  } catch {}
-  return { listen: process.env.PASEO_DAEMON ?? listen, serverId };
-}
 
 const TEAM_ID = /^[A-Za-z0-9_-]+$/;
 const teamDir = (team) => join(process.env.VIBESQUAD_HOME || join(homedir(), ".vibesquad"), "teams", team);
@@ -317,8 +219,8 @@ const AGENT_ID_STRICT = /^[A-Za-z0-9_-]{1,64}$/;
 // Test/DI hooks and server-derived values that must never be taken from an HTTP body. `cwd` and `labels`
 // are derived from the lane or the daemon's own agent record; the timing knobs would skip cooldowns.
 export const INTERNAL_BODY_KEYS = [
-  "baseHome", "profilesPath", "daemonClient", "clientFactory", "oldAgent", "oldLead", "execSpawn", "teamsFilePath",
-  "skipDaemon", "agents", "cwd", "labels", "title", "forceNew", "cooldownMs", "emptyRetryMs", "backstopDelayMs",
+  "baseHome", "profilesPath", "agentClient", "clientFactory", "oldAgent", "oldLead", "execSpawn", "teamsFilePath",
+  "skipBackend", "agents", "cwd", "labels", "title", "forceNew", "cooldownMs", "emptyRetryMs", "backstopDelayMs",
 ];
 
 export function sanitizeBody(body) {
@@ -408,15 +310,10 @@ export function isGatedRead(pathOrMethod, urlOrPath = "") {
     typeof urlOrPath === "string" && urlOrPath.startsWith("/") && !String(pathOrMethod ?? "").startsWith("/")
       ? urlOrPath
       : urlOrPath;
-  if (path === "/__vibesquad/paseo/daemon-auth") return true; // daemon password status / handoff
-  if (path === "/__vibesquad/local-token") return true; // local bootstrap handoff
   if (path === "/__vibesquad/push/vapid-public-key") return true; // creates and writes vapid.json on first call
-  if (path === "/__vibesquad/paseo/providers/diagnostic" || path === "/__vibesquad/paseo/providers/models") return true; // runs the provider's own CLI
-  if (path === "/__vibesquad/paseo/usage") return new URL(url, "http://x").searchParams.get("refresh") === "1"; // forces provider API calls
   if (path === "/__vibesquad/providers" || String(path).startsWith("/__vibesquad/providers/")) {
     return new URL(url, "http://x").searchParams.get("refresh") === "1"; // bypasses the probe TTL: spawns the provider CLIs
   }
-  if (path === "/__vibesquad/paseo/surface") return true; // daemon config: listen, CORS, hub, backups
   if (path === "/__vibesquad/local-image") return true; // file contents
   if (path === "/__vibesquad/schedules" || path.startsWith("/__vibesquad/schedules/")) return true; // prompts, target configs, run logs
   if (isTerminalsPath(path)) return true; // live shells and script logs
@@ -428,7 +325,7 @@ export function isGatedRead(pathOrMethod, urlOrPath = "") {
 const READ_ONLY_CACHE_MS = 30_000;
 
 /**
- * Ungated GETs that shell out (`--version`s, `paseo status`/`ls`): a read-only caller shares one in-flight run and
+ * Ungated GETs that shell out (`--version`s): a read-only caller shares one in-flight run and
  * reuses its result for READ_ONLY_CACHE_MS, so it can't make the server spawn more than one process per route per
  * window. Owners always run fresh (and refresh the cache); `.clear()` drops it after an owner write.
  */
@@ -605,7 +502,6 @@ function handleTeams(req, res, rootDir) {
       }
       clearConfigWarning(file);
       seedHubBriefs(cur.teams, teams, rootDir);
-      syncRunnerPushWatch().catch(() => {}); // a lane pinned to / released from Paseo changes what the watcher must subscribe to
       sendJson(res, 200, {
         ok: true,
         revision: teamsRevision(resolveTeamsFilePath(rootDir)),
@@ -643,11 +539,8 @@ async function handleSettings(req, res) {
     const patch = {};
     if (body && "userName" in body) patch.userName = body.userName;
     if (body && "lanEnabled" in body) patch.lanEnabled = Boolean(body.lanEnabled);
-    if (body && "keepPaseoRunningOnQuit" in body) patch.keepPaseoRunningOnQuit = Boolean(body.keepPaseoRunningOnQuit);
-    if (body && "startPaseoWithVibeSquad" in body) patch.startPaseoWithVibeSquad = Boolean(body.startPaseoWithVibeSquad);
     if (body && "pushEvents" in body) patch.pushEvents = body.pushEvents;
     let saved = saveUserSettings(patch);
-    if ("startPaseoWithVibeSquad" in patch) syncRunnerPushWatch().catch(() => {});
     if (
       body &&
       (typeof body.remoteEnabled === "boolean" ||
@@ -747,26 +640,8 @@ const lexicallyInside = (p, roots) => {
   return roots.some((root) => insideDir(r, root) || insideDir(r, resolve(root)));
 };
 
-function paseoAgentCwds() {
-  const out = [];
-  const agentsRoot = join(process.env.PASEO_HOME || join(homedir(), ".paseo"), "agents");
-  try {
-    for (const dir of readdirSync(agentsRoot, { withFileTypes: true })) {
-      if (!dir.isDirectory()) continue;
-      for (const f of readdirSync(join(agentsRoot, dir.name))) {
-        if (!f.endsWith(".json")) continue;
-        try {
-          const cwd = JSON.parse(readFileSync(join(agentsRoot, dir.name, f), "utf8"))?.cwd;
-          if (typeof cwd === "string" && cwd.trim()) out.push(cwd.trim());
-        } catch {}
-      }
-    }
-  } catch {}
-  return out;
-}
-
 function allowedAttachRoots(rootDir, opts) {
-  const roots = [rootDir, ...(opts.allowedCwdRoots ?? []), ...paseoAgentCwds()];
+  const roots = [rootDir, ...(opts.allowedCwdRoots ?? [])];
   try {
     const teams = JSON.parse(stripBom(readFileSync(resolveTeamsFilePath(rootDir), "utf8"))).teams ?? [];
     // Same confinement as lane working dirs: a registry path outside the project roots widens nothing.
@@ -780,7 +655,7 @@ function allowedAttachRoots(rootDir, opts) {
   return [...new Set(roots)].map(realOrNull).filter(Boolean);
 }
 
-/** A terminal / script cwd must sit inside a team path or a Paseo or runner agent cwd (never an arbitrary path). Returns its real path or null. */
+/** A terminal / script cwd must sit inside a team path or a runner agent cwd (never an arbitrary path). Returns its real path or null. */
 async function resolveShellCwd(cwd, rootDir, opts) {
   if (!cwd || isUncLikePath(cwd)) return null;
   let roots = allowedAttachRoots(rootDir, opts);
@@ -798,8 +673,7 @@ async function resolveShellCwd(cwd, rootDir, opts) {
   return roots.some((r) => insideDir(real, r)) ? real : null;
 }
 
-// Quick open / find in files call per keystroke and the agent scan reads every ~/.paseo agent file:
-// reuse the roots for 30s; file-search.mjs rescans (fresh) once before it answers 403.
+// Quick open / find in files call per keystroke: reuse the roots for 30s; file-search.mjs rescans (fresh) once before it answers 403.
 const navRootsCache = new Map();
 const navRoots = (rootDir, opts) => (fresh) => {
   const hit = navRootsCache.get(rootDir);
@@ -864,7 +738,7 @@ export function worktreeLabel(dir, sanctuary = resolveManagedWorktreeRoot()) {
   return basename(d);
 }
 
-/** Agent id -> cwd, server-side only: runner record (on-disk log, then the live API), then ~/.paseo agents, then the repo root. */
+/** Agent id -> cwd, server-side only: runner record (on-disk log, then the live API), then the repo root. */
 export async function agentCwdFor(agentId, rootDir, { runner } = {}) {
   const id = String(agentId ?? "");
   if (!AGENT_ID_STRICT.test(id)) return rootDir;
@@ -875,7 +749,7 @@ export async function agentCwdFor(agentId, rootDir, { runner } = {}) {
       if (cwd) return cwd;
     } catch {}
   }
-  return lookupAgentCwd(id) || rootDir;
+  return rootDir;
 }
 
 function isSensitiveSource(real) {
@@ -1530,34 +1404,20 @@ export function handleDesktopUpdateJson(req, res, rootDir = REPO_ROOT) {
 const IMAGE_MIME = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp" };
 const AGENT_ID_RE = /^[A-Za-z0-9_-]{4,64}$/;
 
-export function lookupAgentCwd(agentId, paseoHome) {
+/** A runner agent's cwd from its on-disk record (sync: the image proxy reads it per request); null for any other id. */
+export function lookupAgentCwd(agentId) {
   const id = String(agentId ?? "").trim();
-  if (!AGENT_ID_RE.test(id)) return null;
-  const home = paseoHome || process.env.PASEO_HOME || join(homedir(), ".paseo");
-  const agentsRoot = join(home, "agents");
+  if (!AGENT_ID_RE.test(id) || !isRunnerId(id)) return null;
   try {
-    if (existsSync(agentsRoot)) {
-      for (const dir of readdirSync(agentsRoot, { withFileTypes: true })) {
-        if (!dir.isDirectory()) continue;
-        const candidate = join(agentsRoot, dir.name, `${id}.json`);
-        if (existsSync(candidate)) {
-          const record = readJsonFileWithBom(candidate, { recordWarning: false, rewriteBom: false }).data;
-          const cwd = record?.cwd ?? record?.Cwd ?? "";
-          if (typeof cwd === "string" && cwd.trim()) return cwd.trim();
-        }
-      }
-    }
-  } catch {}
-  return null;
+    const cwd = readRunnerAgentSync(id)?.cwd;
+    return typeof cwd === "string" && cwd.trim() ? cwd.trim() : null;
+  } catch {
+    return null;
+  }
 }
 
 function imageAllowedRoots() {
-  const paseoHome = process.env.PASEO_HOME || join(homedir(), ".paseo");
-  const roots = [paseoHome];
-  const tmp = tmpdir();
-  try {
-    for (const d of readdirSync(tmp)) if (d.startsWith("paseo-attachments-")) roots.push(join(tmp, d));
-  } catch {}
+  const roots = [];
   for (const extra of String(process.env.VIBESQUAD_IMAGE_ROOTS ?? "").split(";")) if (extra.trim()) roots.push(extra.trim());
   const out = [];
   for (const r of roots) {
@@ -1581,7 +1441,7 @@ export function resolveAllowedImage(raw, roots = imageAllowedRoots(), extraCwd =
     if (typeof extraCwd === "string" && extraCwd.trim()) {
       resolvedExtra = extraCwd.trim();
     } else if (extraCwd && typeof extraCwd === "object") {
-      resolvedExtra = extraCwd.extraCwd || (extraCwd.agentId ? lookupAgentCwd(extraCwd.agentId, extraCwd.paseoHome) : null);
+      resolvedExtra = extraCwd.extraCwd || (extraCwd.agentId ? lookupAgentCwd(extraCwd.agentId) : null);
     }
     if (resolvedExtra && !isUncLikePath(resolvedExtra)) {
       try {
@@ -1673,7 +1533,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
   return (req, res, next) => {
     const path = (req.url ?? "").split("?")[0];
     const cachedRead = (run) => readOnlyCache(path, isOwner(req), run);
-    // An owner write (install, toggle, daemon restart) can change what those reads return.
+    // An owner write (install, toggle) can change what those reads return.
     if (req.method !== "GET" && req.method !== "HEAD" && isOwner(req)) readOnlyCache.clear();
     if (path === "/api/health" || path === "/__vibesquad/health") return handleHealth(req, res, rootDir);
     if (path === "/ca.crt") return handleCaCrt(req, res);
@@ -1803,171 +1663,6 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
         return readBody(req)
           .then((body) => sendJson(res, 200, { ok: true, results: removeTeamWorktrees(body?.worktrees) }))
-          .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
-      case "/__vibesquad/local-token": {
-        if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
-        const authOpts = opts?.daemonAuthOpts || opts?.paseo || {};
-        return sendJson(res, 200, {
-          ok: true,
-          daemonPassword: readDaemonPassword(authOpts) || null,
-          localCredential: readPaseoLocalCredential(authOpts) || null,
-        });
-      }
-      case "/__vibesquad/paseo/daemon-auth": {
-        const authOpts = opts?.daemonAuthOpts || opts?.paseo || {};
-        if (req.method === "GET") {
-          const includePassword = new URL(req.url ?? "", "http://x").searchParams.get("includePassword") === "1";
-          const status = getDaemonAuthStatus(authOpts);
-          if (includePassword) {
-            return sendJson(res, 200, {
-              ...status,
-              password: readDaemonPassword(authOpts) || null,
-              localCredential: readPaseoLocalCredential(authOpts) || null,
-            });
-          }
-          return sendJson(res, 200, status);
-        }
-        if (req.method === "POST") {
-          return readBody(req)
-            .then(async (body) => {
-              if (body?.clear === true) {
-                writeDaemonPassword("", authOpts);
-                restartPushWatcher(rootDir).catch(() => {});
-                return sendJson(res, 200, { ...getDaemonAuthStatus(authOpts), cleared: true });
-              }
-              const candidate = typeof body?.password === "string" ? body.password.trim() : "";
-              if (!candidate) {
-                return sendJson(res, 400, { ok: false, error: "password required (or pass clear: true)" });
-              }
-              const probe = await (opts?.probeDaemonPassword || probeDaemonPassword)(candidate, opts?.daemonProbeOpts);
-              if (!probe?.ok) {
-                if (probe?.authFailureReason) {
-                  return sendJson(res, 401, {
-                    ...getDaemonAuthStatus(authOpts),
-                    ok: false,
-                    error: probe.error || "Invalid daemon password",
-                    authFailureReason: probe.authFailureReason,
-                  });
-                }
-                return sendJson(res, 503, {
-                  ...getDaemonAuthStatus(authOpts),
-                  ok: false,
-                  error: probe?.error || "Paseo daemon unreachable",
-                  unreachable: true,
-                });
-              }
-              writeDaemonPassword(candidate, authOpts);
-              restartPushWatcher(rootDir).catch(() => {});
-              return sendJson(res, 200, { ...getDaemonAuthStatus(authOpts), verified: true });
-            })
-            .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
-        }
-        return sendJson(res, 405, { error: "method not allowed" });
-      }
-      case "/__vibesquad/paseo/status":
-        if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
-        return cachedRead(() => getPaseoDaemonStatus(opts.paseo)).then(
-          (r) => {
-            const authStatus = getDaemonAuthStatus(opts?.daemonAuthOpts || opts?.paseo || {});
-            return sendJson(res, 200, {
-              ...r,
-              passwordRequired: authStatus.required,
-              passwordConfigured: authStatus.configured,
-              passwordSource: authStatus.source,
-              auth: authStatus,
-            });
-          },
-          (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }),
-        );
-      case "/__vibesquad/paseo/daemon":
-        if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
-        return readBody(req)
-          .then((body) => controlPaseoDaemon(String(body?.action || ""), { ...(opts.paseo || {}), confirmBusy: Boolean(body?.confirmBusy), reason: body?.reason }))
-          .then((r) => {
-            if (r.ok) {
-              resetPaseoProbe();
-              syncRunnerPushWatch().catch(() => {});
-            }
-            // a daemon that just started (or stopped) changes what the watcher should attach to
-            return sendJson(res, r.ok ? 200 : r.needsConfirmation ? 409 : 400, r);
-          })
-          .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
-      case "/__vibesquad/paseo/usage":
-        if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
-        if (new URL(req.url, "http://x").searchParams.get("refresh") === "1") {
-          return getPaseoUsage({ ...(opts.paseo || {}), refresh: true }).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
-        }
-        return cachedRead(() => getPaseoUsage({ ...(opts.paseo || {}), refresh: false }))
-          .then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
-      case "/__vibesquad/paseo/providers":
-        if (req.method === "GET") {
-          return cachedRead(() => getPaseoProviders(opts.paseo)).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
-        }
-        if (req.method === "POST") {
-          return readBody(req)
-            .then((body) => {
-              if (body?.mode === "custom-acp") return saveCustomAcpProvider(body, opts.paseo);
-              return togglePaseoProvider(body?.id, Boolean(body?.enabled), opts.paseo);
-            })
-            .then((r) => sendJson(res, r.ok ? 200 : 400, r))
-            .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
-        }
-        return sendJson(res, 405, { error: "method not allowed" });
-      case "/__vibesquad/paseo/providers/diagnostic":
-        if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
-        return getPaseoProviderDiagnostic(new URL(req.url, "http://x").searchParams.get("provider"), opts.paseo)
-          .then((r) => sendJson(res, 200, r), (e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
-      case "/__vibesquad/paseo/providers/models":
-        if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
-        return getPaseoProviderModels(new URL(req.url, "http://x").searchParams.get("provider"), opts.paseo)
-          .then((r) => sendJson(res, 200, r), (e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
-      case "/__vibesquad/paseo/plugins":
-        if (req.method === "GET") {
-          return cachedRead(() => getPaseoPlugins(opts.paseo)).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
-        }
-        if (req.method === "POST") {
-          return readBody(req)
-            .then((body) => controlPaseoPlugin(String(body?.action || ""), body, opts.paseo))
-            .then((r) => sendJson(res, r.ok ? 200 : r.needsConfirmation ? 409 : 400, r))
-            .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
-        }
-        return sendJson(res, 405, { error: "method not allowed" });
-      case "/__vibesquad/paseo/surface":
-        if (req.method === "GET") {
-          return getPaseoConfigSurface(opts.paseo).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
-        }
-        if (req.method === "POST" || req.method === "PUT") {
-          return readBody(req)
-            .then((body) => updatePaseoSettingsPatch(body, opts.paseo))
-            .then((r) => sendJson(res, r.ok ? 200 : r.needsConfirmation ? 409 : 400, r))
-            .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
-        }
-        return sendJson(res, 405, { error: "method not allowed" });
-      case "/__vibesquad/paseo/hub":
-        if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
-        return readBody(req)
-          .then((body) => controlPaseoHub(String(body?.action || "status"), body, opts.paseo))
-          .then((r) => sendJson(res, r.ok ? 200 : 400, r))
-          .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
-      case "/__vibesquad/paseo/raw/open":
-        if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
-        return readBody(req)
-          .then((body) => sendJson(res, 200, openPaseoConfigInEditor({ ...(opts.paseo || {}), dryRun: Boolean(body?.dryRun) })))
-          .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
-      case "/__vibesquad/paseo/raw/restore":
-        if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
-        return readBody(req)
-          .then((body) => {
-            const restored = restoreLastPaseoConfigBackup({ ...(opts.paseo || {}), backupPath: body?.backupPath });
-            checkDaemonListenExposure(opts.paseo);
-            return runPaseoCli(["reload"], opts.paseo).then(() =>
-              sendJson(res, 200, {
-                ok: true,
-                restoredFrom: restored.restoredFrom,
-                maskedConfig: maskSecrets(restored.config),
-              }),
-            );
-          })
           .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
       default:
         return next?.();

@@ -1,7 +1,7 @@
 import { createServer, get } from "node:http";
 import { guardHandler, installUncaughtGuard } from "./safe-handler.mjs";
 import { createServer as createHttpsServer } from "node:https";
-import { connect, createServer as createTcpServer } from "node:net";
+import { createServer as createTcpServer } from "node:net";
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { sharedSchedules } from "./schedules.mjs";
@@ -13,7 +13,6 @@ import {
   handleDesktopInstaller,
   handleDesktopUpdateJson,
   handleHealth,
-  readPaseo,
   setExposure,
 } from "./vibesquad-api.mjs";
 import {
@@ -25,13 +24,10 @@ import {
   handleCaCrt,
   handlePairRedeem,
   isAllowedHostHeader,
-  isLocalOwner,
-  isLoopbackOrigin,
   lockDownVibesquadHome,
   netConfig,
   sendUnpaired,
   setNoFraming,
-  trackSocket,
 } from "./auth.mjs";
 import "./brainstorm.mjs";
 import "./inbox.mjs";
@@ -41,10 +37,7 @@ import { startPushWatcher } from "./push.mjs";
 import { startTokenWatcher } from "./token-watch.mjs";
 import { sharedRunnerBackend } from "./backend/index.mjs";
 import { shouldSuperviseRunner, superviseRunner } from "./runner-supervisor.mjs";
-import { runnerLanes } from "./backend/lane-routing.mjs";
 import { startRunnerLifecycle } from "./backend/runner-lifecycle.mjs";
-import { ensurePaseoDaemon } from "./first-run.mjs";
-import { checkDaemonListenExposure } from "./paseo-control.mjs";
 import { logServerStart } from "./server-start.mjs";
 import { getStale } from "./stale-runtime.mjs";
 import { loadUserSettings } from "./user-settings.mjs";
@@ -326,50 +319,6 @@ function handle(req, res) {
   });
 }
 
-// Callers must have passed the auth + Origin allowlist before reaching this. The daemon only accepts its own origin.
-function proxyUpgrade(req, socket, head) {
-  const [host, p] = readPaseo(rootDir).listen.replace(/^wss?:\/\//, "").split(/:(?=\d+$)/);
-  const upstream = connect(Number(p), host || "127.0.0.1");
-  const close = () => {
-    socket.destroy();
-    upstream.destroy();
-  };
-  upstream.on("error", close);
-  socket.on("error", close);
-  upstream.on("close", close);
-  socket.on("close", close);
-  upstream.on("connect", () => {
-    let raw = `${req.method} ${req.url} HTTP/${req.httpVersion}\r\n`;
-    for (let i = 0; i < req.rawHeaders.length; i += 2) {
-      const name = req.rawHeaders[i];
-      const lower = name.toLowerCase();
-      if (lower === "origin" || lower === "host") continue;
-      raw += `${name}: ${req.rawHeaders[i + 1]}\r\n`;
-    }
-    raw += `Host: ${host || "127.0.0.1"}:${p}\r\n`;
-    raw += `Origin: http://${host || "127.0.0.1"}:${p}\r\n`;
-    upstream.write(raw + "\r\n");
-    if (head?.length) upstream.write(head);
-    socket.pipe(upstream);
-    upstream.pipe(socket);
-  });
-}
-
-function rejectUpgrade(socket, line) {
-  socket.write(`HTTP/1.1 ${line}\r\n\r\n`);
-  socket.destroy();
-}
-
-// Paired remote browsers send the https origin they loaded the app from (our own host/ip) or a loopback/tauri origin.
-function isAllowedWsOrigin(origin) {
-  if (isLoopbackOrigin(origin)) return true;
-  try {
-    return isAllowedHostHeader(new URL(origin).host);
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Where a plain-http request should go: the Host it used when this server answers to it, else the
  * meshnet name, else the meshnet IP (the TLS cert always carries it), else localhost. Never an empty
@@ -454,19 +403,6 @@ export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().mes
 
   const meshHttpServer = createServer(guardHandler(handleMeshnetHttp));
   const httpsServer = createHttpsServer(tls, guardHandler(handleMeshnetHttps));
-  httpsServer.on("upgrade", (req, socket, head) => {
-    if (!req.url?.startsWith("/ws")) {
-      socket.destroy();
-      return;
-    }
-    const dev = authenticate(req);
-    if (!dev) return rejectUpgrade(socket, "401 Unauthorized");
-    const origin = req.headers.origin;
-    if (origin !== undefined && !isAllowedWsOrigin(origin)) return rejectUpgrade(socket, "403 Forbidden");
-    trackSocket(dev.id, socket);
-    proxyUpgrade(req, socket, head);
-  });
-
   const mux = createTcpServer((socket) => {
     socket.once("readable", () => {
       const chunk = socket.read(1);
@@ -493,16 +429,6 @@ if (wantOpen && (await isListening())) {
 }
 
 export const server = createServer(guardHandler(handle));
-server.on("upgrade", (req, socket, head) => {
-  if (!req.url?.startsWith("/ws")) return socket.destroy();
-  // Cross-site WebSocket hijacking: a browser page can open ws://127.0.0.1 with any Origin. The daemon
-  // controls agents, so loopback also needs the local token (header) or the vs_local cookie.
-  if (!authenticate(req)) {
-    const origin = req.headers.origin;
-    if (!isLocalOwner(req) || (origin !== undefined && !isLoopbackOrigin(origin))) return rejectUpgrade(socket, "403 Forbidden");
-  }
-  proxyUpgrade(req, socket, head);
-});
 server.on("error", async (e) => {
   // Lost a race with another launcher: if it is ours, behave like the already-running case.
   if (e.code === "EADDRINUSE" && (await isListening())) {
@@ -514,25 +440,9 @@ server.on("error", async (e) => {
 });
 const isMain = process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename);
 
-// Whether serve.mjs should auto-start the local Paseo daemon on launch. Skipped when the caller sets
-// VIBESQUAD_NO_DAEMON=1 (e.g. desktop "relay" mode, which only serves the static bundle and must not
-// spawn a daemon that conflicts with a running service or remote relay). Since the runner cutover Paseo is opt-in:
-// it starts only when Settings › startPaseoWithVibeSquad is explicitly on. Env vars arrive as strings, so accept both "1" and 1.
-export function shouldAutoStartPaseoDaemon(env = process.env, settings = loadUserSettings()) {
-  const noDaemon = env?.VIBESQUAD_NO_DAEMON;
-  if (noDaemon === 1 || noDaemon === "1") return false;
-  return settings?.startPaseoWithVibeSquad === true;
-}
-
 if (isMain) {
   try {
     installVsShim();
-  } catch {}
-  if (shouldAutoStartPaseoDaemon()) {
-    void ensurePaseoDaemon({ listen: readPaseo(rootDir).listen });
-  }
-  try {
-    checkDaemonListenExposure();
   } catch {}
   try {
     lockDownVibesquadHome();
@@ -587,14 +497,14 @@ if (isMain) {
       }
     };
     applyLanListeners(lanEnabled);
-    // Plugin-hook parity for runner agents (prompt layering lives in createAgent; this feeds created / turn events + lead wakeups).
+    // Agent lifecycle hooks (prompt layering lives in createAgent; this feeds created / turn events + lead wakeups).
     // First, so its baseline + subscription exist before the push watcher opens the shared runner event stream.
-    if (process.env.VS_RUNNER_HOOKS !== "0" && runnerLanes().size) {
+    if (process.env.VS_RUNNER_HOOKS !== "0") {
       startRunnerLifecycle().catch((err) => console.warn("runner lifecycle hooks not started:", err?.message ?? err));
     }
     startPushWatcher(rootDir);
-    // Context budget duties the Paseo plugin used to run (lead nudge / successor handoff, Buddy warn / retire), now for runner agents.
-    if (process.env.VS_TOKEN_WATCH !== "0" && runnerLanes().size) {
+    // Context budget duties for runner agents (lead nudge / successor handoff, Buddy warn / retire).
+    if (process.env.VS_TOKEN_WATCH !== "0") {
       try { const tw = startTokenWatcher({ rootDir }); server.once("close", () => tw.stop()); } catch (err) { console.warn("token watcher not started:", err?.message ?? err); }
     }
 

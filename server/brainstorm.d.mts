@@ -1,5 +1,4 @@
-export function readPaseoConfig(rootDir?: string): { listen: string; serverId: string; home: string };
-export function createDaemonClient(rootDir?: string): any;
+export function createAgentClient(rootDir?: string): any;
 export function readBrainstormSummary(laneRaw: string, rootDir?: string): { laneId: string; path: string; fullPath: string; content: string };
 export function writeBrainstormSummary(laneRaw: string, content: string, rootDir?: string): { laneId: string; path: string; fullPath: string; content: string };
 export function laneWorkingDir(teamId: string, laneId: string, rootDir?: string): string | null;
