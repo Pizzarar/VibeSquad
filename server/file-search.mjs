@@ -1,14 +1,14 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, delimiter, isAbsolute, join, parse, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, parse, resolve, sep } from "node:path";
 
 // Quick open (GET /__vibesquad/files) and find in files (GET /__vibesquad/search) for the Files dock.
 // The Paseo daemon has no content-search RPC, so both run here: `git ls-files` / `git grep` (git is always
 // installed), or `rg --json` when ripgrep is on PATH. Args are arrays, never a shell string.
 
 // These GETs expose file names / contents: owner-gated reads. Wire into isGatedRead (security S3) in one line.
-export const ADE_GATED_READ_PATHS = ["/__vibesquad/files", "/__vibesquad/search", "/__vibesquad/fs/list", "/__vibesquad/fs/read", "/__vibesquad/fs/resolve"];
+export const ADE_GATED_READ_PATHS = ["/__vibesquad/files", "/__vibesquad/search", "/__vibesquad/fs/list", "/__vibesquad/fs/read", "/__vibesquad/fs/resolve", "/__vibesquad/fs/watch"];
 
 export const SEARCH_MAX_MATCHES = 500;
 export const SEARCH_MAX_LINE = 200;
@@ -443,6 +443,248 @@ export function handleFsRead(req, res, roots, sendJson, worktreesFor, labelFor =
   res.setHeader("x-vs-modified", r.modifiedAt);
   res.setHeader("x-vs-size", String(r.size));
   res.end(r.bytes);
+}
+
+// ---- Files dock writes + watch without the Paseo daemon (N2) ---------------------------------------
+// POST /__vibesquad/fs/{write,create,rename,delete,duplicate} (owner-only: the caller gates every non-GET) and
+// GET /__vibesquad/fs/watch?cwd=&path=&since= (long-poll; follows the read gate). Same confinement as read:
+// relative paths only, realpath inside the cwd root, no .git / credential dirs, symlinks never followed out.
+
+export const FS_WRITE_MAX = 900 * 1024; // under the 1 MiB request-body cap
+
+const badName = (name) => typeof name !== "string" || !name || name === "." || name === ".." || /[\\/\0]/.test(name) || name.toLowerCase() === ".git" || name.length > 255;
+
+/** New-or-existing target under cwd: the parent must resolve inside cwd; the leaf is never resolved (no symlink follow). */
+function resolveNewIn(cwd, parentRel, name) {
+  if (badName(name)) return { error: "invalid name", status: 400 };
+  const parent = parentRel ? resolveInCwd(cwd, parentRel) : { rel: "", real: realOr(cwd) };
+  if (parent.error) return parent;
+  try { if (!statSync(parent.real).isDirectory()) return { error: "parent is not a directory", status: 400 }; } catch { return { error: "not found", status: 404 }; }
+  const real = join(parent.real, name);
+  if (!insideDir(real, realOr(cwd))) return { error: "path is outside the workspace", status: 403 };
+  return { rel: parent.rel ? `${parent.rel}/${name}` : name, real, parentReal: parent.real };
+}
+
+const lexists = (p) => { try { lstatSync(p); return true; } catch { return false; } };
+
+/** Temp file next to the target, then rename over it: a crash never leaves a half-written file. */
+function atomicWrite(real, content, mode) {
+  const tmp = join(dirname(real), `.${basename(real)}.vs-${process.pid}-${Date.now()}.tmp`);
+  try {
+    writeFileSync(tmp, content, { mode });
+    renameSync(tmp, real);
+  } catch (e) {
+    try { unlinkSync(tmp); } catch { /* already gone */ }
+    throw e;
+  }
+}
+
+/** Overwrites an existing file. `expectedModifiedAt` (ISO from fs/read) guards a stale editor: mismatch => 409 conflict. */
+export function fsWrite(cwd, rel, content, expectedModifiedAt) {
+  if (typeof content !== "string") return { error: "content must be a string", status: 400 };
+  if (Buffer.byteLength(content) > FS_WRITE_MAX) return { error: `content too large (max ${FS_WRITE_MAX} bytes)`, status: 413 };
+  const r = resolveInCwd(cwd, rel);
+  if (r.error) return r;
+  try {
+    const st = statSync(r.real);
+    if (!st.isFile()) return { error: "not a file", status: 400 };
+    if (expectedModifiedAt && st.mtime.toISOString() !== expectedModifiedAt) return { error: "file changed on disk", status: 409, conflict: true };
+    atomicWrite(r.real, content, st.mode & 0o777);
+    return { entryPath: r.rel, modifiedAt: statSync(r.real).mtime.toISOString(), size: Buffer.byteLength(content) };
+  } catch (e) {
+    return { error: String(e?.message ?? e), status: 500 };
+  }
+}
+
+export function fsCreate(cwd, parentRel, name, kind) {
+  if (kind !== "file" && kind !== "directory") return { error: "kind must be file or directory", status: 400 };
+  const n = normalizeRel(parentRel ?? "");
+  if (n.error) return n;
+  const t = resolveNewIn(cwd, n.rel, name);
+  if (t.error) return t;
+  if (lexists(t.real)) return { error: "already exists", status: 409 };
+  try {
+    if (kind === "directory") mkdirSync(t.real);
+    else writeFileSync(t.real, "", { flag: "wx" });
+    return { entryPath: t.rel };
+  } catch (e) {
+    return { error: String(e?.message ?? e), status: 500 };
+  }
+}
+
+const splitRel = (rel) => { const i = rel.lastIndexOf("/"); return i < 0 ? { dir: "", leaf: rel } : { dir: rel.slice(0, i), leaf: rel.slice(i + 1) }; };
+
+/** An existing entry (file, dir or link) other than the root; a link is the entry itself, never its target. */
+function entryIn(cwd, rel) {
+  const n = normalizeRel(rel);
+  if (n.error) return n;
+  if (!n.rel) return { error: "refusing to modify the workspace root", status: 400 };
+  if (n.rel.split("/").some((s) => s.toLowerCase() === ".git")) return { error: "not found", status: 404 };
+  const { dir, leaf } = splitRel(n.rel);
+  const t = resolveNewIn(cwd, dir, leaf);
+  if (t.error) return t;
+  if (!lexists(t.real)) return { error: "not found", status: 404 };
+  if (isSensitivePath(t.real, cwd)) return { error: "not found", status: 404 };
+  return { ...t, dir, leaf };
+}
+
+export function fsRename(cwd, rel, name) {
+  const e = entryIn(cwd, rel);
+  if (e.error) return e;
+  if (badName(name)) return { error: "invalid name", status: 400 };
+  const dest = join(e.parentReal, name);
+  if (lexists(dest)) return { error: "already exists", status: 409 };
+  try {
+    renameSync(e.real, dest);
+    return { entryPath: e.dir ? `${e.dir}/${name}` : name };
+  } catch (err) {
+    return { error: String(err?.message ?? err), status: 500 };
+  }
+}
+
+export function fsDelete(cwd, rel) {
+  const e = entryIn(cwd, rel);
+  if (e.error) return e;
+  try {
+    if (lstatSync(e.real).isDirectory()) rmSync(e.real, { recursive: true });
+    else unlinkSync(e.real); // a symlink: removes the link, not its target
+    return { entryPath: e.rel };
+  } catch (err) {
+    return { error: String(err?.message ?? err), status: 500 };
+  }
+}
+
+export function fsDuplicate(cwd, rel) {
+  const e = entryIn(cwd, rel);
+  if (e.error) return e;
+  const dot = e.leaf.lastIndexOf(".");
+  const ext = dot > 0 ? e.leaf.slice(dot) : "";
+  const stem = ext ? e.leaf.slice(0, dot) : e.leaf;
+  let name = "";
+  for (let i = 1; i < 1000 && !name; i++) {
+    const cand = `${stem} copy${i > 1 ? ` ${i}` : ""}${ext}`;
+    if (!lexists(join(e.parentReal, cand))) name = cand;
+  }
+  if (!name) return { error: "no free name for the copy", status: 409 };
+  const dest = join(e.parentReal, name);
+  try {
+    const st = lstatSync(e.real);
+    if (st.isDirectory()) cpSync(e.real, dest, { recursive: true, dereference: false, verbatimSymlinks: true });
+    else if (st.isFile()) copyFileSync(e.real, dest);
+    else return { error: "not a file or directory", status: 400 };
+    return { entryPath: e.dir ? `${e.dir}/${name}` : name };
+  } catch (err) {
+    return { error: String(err?.message ?? err), status: 500 };
+  }
+}
+
+// ---- watch: one fs.watch per path, shared by every waiting long-poll, closed when the last one leaves ----
+// The cursor is the file's own signature (mtime:size, or "gone"), not a counter: it survives a watcher being closed
+// between two polls, and a change that lands in the gap between polls still shows up as a different signature.
+export const WATCH_HOLD_MS = 25_000; // client re-polls at once; keeps each request well under proxy idle limits
+const WATCH_DEBOUNCE_MS = 120;
+const watchers = new Map(); // normPath(real) -> { w, waiters:Set<fn>, timer }
+export const _watcherCount = () => watchers.size;
+
+const sigOf = (real) => { try { const st = statSync(real); return `${st.mtimeMs}:${st.size}`; } catch { return "gone"; } };
+
+function watcherFor(real) {
+  const key = normPath(real);
+  let e = watchers.get(key);
+  if (e) return e;
+  e = { w: null, waiters: new Set(), timer: null };
+  const bump = () => {
+    clearTimeout(e.timer);
+    e.timer = setTimeout(() => { for (const fn of [...e.waiters]) fn(); }, WATCH_DEBOUNCE_MS);
+    e.timer.unref?.();
+  };
+  // Watch the parent dir, not the file: atomic saves (temp + rename) replace the inode a file watch would hold.
+  const leaf = basename(real);
+  e.w = watch(dirname(real), { persistent: false }, (_ev, f) => { if (!f || String(f) === leaf) bump(); });
+  e.w.on("error", bump);
+  watchers.set(key, e);
+  return e;
+}
+
+function releaseWatcher(real, fn) {
+  const key = normPath(real);
+  const e = watchers.get(key);
+  if (!e) return;
+  if (fn) e.waiters.delete(fn);
+  if (e.waiters.size) return;
+  clearTimeout(e.timer);
+  try { e.w?.close(); } catch { /* already closed */ }
+  watchers.delete(key);
+}
+
+/**
+ * Resolves { seq, changed }. `since` undefined = baseline: answers at once with the current signature. Otherwise answers
+ * at once if the signature already differs, else waits until it does (changed true) or `holdMs` passes (changed false).
+ * Aborting `signal` (client gone) releases the watcher.
+ */
+export function fsWatch(cwd, rel, since, { holdMs = WATCH_HOLD_MS, signal } = {}) {
+  const n = normalizeRel(rel);
+  if (n.error) return Promise.resolve(n);
+  if (!n.rel) return Promise.resolve({ error: "path is required", status: 400 });
+  if (n.rel.split("/").some((s) => s.toLowerCase() === ".git")) return Promise.resolve({ error: "not found", status: 404 });
+  const { dir, leaf } = splitRel(n.rel);
+  const t = resolveNewIn(cwd, dir, leaf);
+  if (t.error) return Promise.resolve(t);
+  if (isSensitivePath(t.real, cwd)) return Promise.resolve({ error: "not found", status: 404 });
+  // The leaf itself may be a symlink pointing outside the workspace: don't report on it.
+  if (lexists(t.real) && !insideDir(realOr(t.real), realOr(cwd))) return Promise.resolve({ error: "path is outside the workspace", status: 403 });
+  const cur = sigOf(t.real);
+  if (typeof since !== "string" || !since) return Promise.resolve({ seq: cur, changed: false });
+  if (cur !== since) return Promise.resolve({ seq: cur, changed: true });
+  let e;
+  try { e = watcherFor(t.real); } catch (err) { return Promise.resolve({ error: String(err?.message ?? err), status: 500 }); }
+  return new Promise((done) => {
+    const finish = (changed) => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      releaseWatcher(t.real, wake);
+      done({ seq: sigOf(t.real), changed });
+    };
+    const wake = () => { if (sigOf(t.real) !== since) finish(true); };
+    const onAbort = () => finish(false);
+    const timer = setTimeout(() => finish(false), holdMs);
+    e.waiters.add(wake);
+    if (signal?.aborted) onAbort(); else signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/** POST handlers share one shape: JSON body { cwd, path, ... } -> { ok, ...result } or { ok:false, error }. `readBody` must keep `cwd`. */
+export async function handleFsMutation(op, req, res, roots, sendJson, readBody) {
+  if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "method not allowed" });
+  let body;
+  try { body = await readBody(req); } catch (e) { return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }); }
+  const c = confineReq(String(body?.cwd ?? ""), roots);
+  if (c.error) return sendJson(res, c.status ?? 400, { ok: false, error: c.error });
+  const path = String(body?.path ?? "");
+  const r =
+    op === "write" ? fsWrite(c.cwd, path, body?.content, typeof body?.expectedModifiedAt === "string" ? body.expectedModifiedAt : undefined)
+    : op === "create" ? fsCreate(c.cwd, String(body?.parentPath ?? ""), body?.name, body?.kind)
+    : op === "rename" ? fsRename(c.cwd, path, body?.name)
+    : op === "delete" ? fsDelete(c.cwd, path)
+    : op === "duplicate" ? fsDuplicate(c.cwd, path)
+    : { error: "unknown op", status: 404 };
+  if (r.error) return sendJson(res, r.status ?? 400, { ok: false, error: r.error, ...(r.conflict ? { conflict: true } : {}) });
+  return sendJson(res, 200, { ok: true, ...r });
+}
+
+export function handleFsWatch(req, res, roots, sendJson) {
+  if (req.method !== "GET") return sendJson(res, 405, { ok: false, error: "method not allowed" });
+  const params = new URL(req.url, "http://x").searchParams;
+  const c = confineReq(params.get("cwd") ?? "", roots);
+  if (c.error) return sendJson(res, c.status ?? 400, { ok: false, error: c.error });
+  const since = params.get("since") || undefined;
+  const ac = new AbortController();
+  res.on("close", () => !res.writableFinished && ac.abort());
+  return fsWatch(c.cwd, params.get("path") ?? "", since, { signal: ac.signal }).then((r) => {
+    if (ac.signal.aborted) return;
+    if (r.error) return sendJson(res, r.status ?? 400, { ok: false, error: r.error });
+    return sendJson(res, 200, { ok: true, seq: r.seq, changed: r.changed });
+  });
 }
 
 /** Repo paths whose basename equals `name`; only an unambiguous single hit resolves. */
