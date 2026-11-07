@@ -12,10 +12,11 @@ const css = src("styles.css");
 
 test("App imports SquadFloor and renders it only on the hub page", () => {
   assert.match(app, /import \{ SquadFloor \} from "\.\/SquadFloor";/);
-  // Guarded by hubFocused, right next to the Needs-you queue (same guard).
-  assert.match(app, /hubFocused && <SquadFloor/);
+  // Rendered exactly once, inside the hubFocused .hub-body branch (next to the Needs-you queue).
+  assert.equal((app.match(/<SquadFloor /g) || []).length, 1);
+  assert.match(app, /hubFocused \? \(/);
   assert.match(app, /onOpenRiffBot=\{onQuickStart\}/);
-  assert.match(app, /hubFocused && <SquadQueue/);
+  assert.match(app, /<SquadQueue view=\{pinFocusView\} \/>/);
 });
 
 test("SquadFloor opens a character's chat with openPinMember", () => {
@@ -59,6 +60,19 @@ test("scoped sq-floor-* styles live in styles.css with pixelated rendering", () 
   assert.match(css, /\.sq-floor-mark \{/);
   assert.match(css, /\.sq-floor-lounge \{/);
   assert.match(css, /image-rendering: pixelated/);
+});
+
+test("hub page nests the floor in .hub-body — no app-grid row override (banner-safe)", () => {
+  // App wraps the chat + queue + floor in a nested .hub-body grid item.
+  assert.match(app, /data-testid="hub-body"/);
+  assert.match(css, /\.hub-body \{/);
+  // The app-level hub-focus grid must not define its own rows (that clashed with :has([role="alert"])).
+  assert.doesNotMatch(css, /\.app\.pin-focus\.hub-focus[^{]*\{[^}]*grid-template-rows/);
+  assert.doesNotMatch(css, /grid-row:\s*1\s*\/\s*3/);
+  // The floor, queue and chat are positioned inside the nested grid.
+  assert.match(css, /\.hub-body \.sq-floor/);
+  assert.match(css, /\.hub-body \.sq-panel/);
+  assert.match(css, /\.hub-body \.agent-panes/);
 });
 
 test("sprite frames for the shipped cast.json resolve from the json (no constants)", () => {

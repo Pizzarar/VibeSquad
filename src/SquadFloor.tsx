@@ -198,7 +198,7 @@ function TeamChars({
   frameIndex: number;
   onOpen: (agentId: string) => void;
 }) {
-  const lobbyAnchor = (rect: Rect, i: number, count: number) => {
+  const lobbyAnchor = (rect: Rect, i: number) => {
     const step = rect.w / LOBBY_MAX_SHOWN;
     return { x: rect.x + step * (i + 0.5), y: rect.y + rect.h };
   };
@@ -214,7 +214,7 @@ function TeamChars({
       })}
       {placement.lobby.map((l, i) =>
         lobbyRect ? (
-          <Seat key={l.agentId} agent={l} anchor={lobbyAnchor(lobbyRect, i, placement.lobby.length)} cast={cast} sheet={sheet} frameIndex={frameIndex} onOpen={() => onOpen(l.agentId)} />
+          <Seat key={l.agentId} agent={l} anchor={lobbyAnchor(lobbyRect, i)} cast={cast} sheet={sheet} frameIndex={frameIndex} onOpen={() => onOpen(l.agentId)} />
         ) : null,
       )}
       {placement.lobbyOverflow > 0 && lobbyRect && (
