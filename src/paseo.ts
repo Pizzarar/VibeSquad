@@ -17,7 +17,7 @@ import { createPaseoLink } from "./paseoLink";
 import { remoteDaemonClient } from "./paseoRemote";
 import { isRemote } from "./remoteSession";
 import { perfRecord, perfSendBegin, perfSendResolved } from "./perf";
-import { addPending, failPending, retryPending } from "./pendingSend";
+import { addPending, failPending, markDelivered, retryPending } from "./pendingSend";
 
 declare const __PASEO_SERVER_ID__: string;
 export const SERVER_ID = __PASEO_SERVER_ID__;
@@ -210,6 +210,7 @@ export async function sendMessage(
   sendArgs.set(id, args);
   try {
     await deliver(agentId, text, args);
+    markDelivered(id);
   } catch (e) {
     failPending(id, e instanceof Error ? e.message : String(e));
     throw e;
@@ -221,6 +222,7 @@ export async function retrySend(id: string): Promise<void> {
   if (!p) return;
   try {
     await deliver(p.agentId, p.text, sendArgs.get(id) ?? {});
+    markDelivered(id);
   } catch (e) {
     failPending(id, e instanceof Error ? e.message : String(e));
   }

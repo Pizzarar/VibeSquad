@@ -18,6 +18,8 @@ const realClock: RefreshClock = {
 export const RUNNER_REFRESH_GAP_MS = 800;
 /** A mounted-but-hidden timeline (background tab, other pane) still refetches, just slower, so it is current when shown and its pending "Sending…" clears. */
 export const RUNNER_HIDDEN_GAP_MS = 3000;
+/** Catch-up requests this close to the last fetch are one connect burst. */
+export const CATCHUP_COALESCE_MS = 1000;
 
 export function createRefreshScheduler(opts: {
   load: () => void;
@@ -50,7 +52,8 @@ export function createRefreshScheduler(opts: {
     },
     /** The event stream (re)connected or the window came back: events may have been missed, so catch up. */
     catchUp() {
-      if (!timer) run();
+      if (timer || clock.now() - last < CATCHUP_COALESCE_MS) return; // a connect burst (open + connected + roster) fetches once
+      run();
     },
     /** The timeline became active/visible: refetch now if events were missed while it was not. */
     activate() {

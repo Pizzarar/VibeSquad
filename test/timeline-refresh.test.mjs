@@ -147,3 +147,14 @@ test('runner bridge: SSE open/reconnect/"connected" and a shown window send a ca
   listeners.visibilitychange();
   assert.equal(seen.length, 0);
 });
+
+test('catchUp bursts (open + connected + roster) coalesce into one fetch; a later reconnect fetches again', () => {
+  const clock = fakeClock();
+  let loads = 0;
+  const s = createRefreshScheduler({ load: () => loads++, isActive: () => true, clock });
+  s.catchUp(); s.catchUp(); s.catchUp();
+  assert.equal(loads, 1);
+  clock.advance(1500);
+  s.catchUp();
+  assert.equal(loads, 2);
+});

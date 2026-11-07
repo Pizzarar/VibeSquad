@@ -8,7 +8,7 @@ import { createRefreshScheduler } from "./timelineRefresh";
 
 /** client.agents.ref(id), except runner-owned agents (rn- ids) go over the VS runner routes. */
 const agentRef = (id: string): ReturnType<typeof client.agents.ref> => (isRunnerId(id) ? (runnerHandle(id) as any) : client.agents.ref(id));
-import { dismissPending, dropReconciled, getPending, pendingFor, reconciledIds, subscribePending } from "./pendingSend";
+import { dismissPending, dropReconciled, getPending, noteAgentSeq, pendingFor, reconciledIds, subscribePending } from "./pendingSend";
 import { REWIND_MODES, buildRewindRequest, truncateAfter, type RewindMode } from "./sessionLifecycle";
 import { demoTimeline } from "./demo";
 import { sentImagesFor } from "./imageDrafts";
@@ -980,7 +980,10 @@ export function useTimeline(agentId: string, status: string, active = true, pred
   }, [predecessor, entries]);
 
   useEffect(() => {
-    if (agentId && entries.length) noteTimelineOffers(agentId, entries);
+    if (agentId && entries.length) {
+      noteTimelineOffers(agentId, entries);
+      noteAgentSeq(agentId, maxEntrySeq(entries));
+    }
   }, [agentId, entries]);
 
   useEffect(() => {
