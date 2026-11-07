@@ -20,7 +20,7 @@ const ROSTER_EVENTS = new Set(["created", "status", "meta", "exit", "archive", "
 const FIRST_CLASS = ["squad", "team", "lane", "role", "ord", "profile"];
 const ENV_FOR = { lane: "VS_LANE", team: "VS_TEAM", role: "VS_ROLE", profile: "VS_PROFILE" };
 const CLAUDE_PERMISSION_MODES = new Set(["default", "acceptEdits", "plan", "bypassPermissions", "dontAsk", "auto"]);
-const STATUS = { starting: "initializing", running: "running", idle: "idle", parked: "idle", exited: "closed", lost: "closed", unknown: "idle" };
+const STATUS = { starting: "initializing", queued: "initializing", running: "running", idle: "idle", parked: "idle", exited: "closed", lost: "closed", unknown: "idle" };
 
 /** Roster work on the serialized live chain waits at most this long on the runner; a timeout takes the same path as a failed fetch. */
 const ROSTER_FETCH_MS = 8000;
@@ -236,6 +236,7 @@ export function reduceTurn(t, e) {
   if (e.type === "status" && e.status) {
     const wasRunning = t.status === "running";
     t.status = STATUS[e.status] ?? e.status;
+    t.queued = e.status === "queued" ? { ahead: Number.isInteger(e.ahead) ? e.ahead : 0 } : undefined; // waiting for a turn slot
     if (t.status === "running") {
       t.errored = false; // next turn began
       t.error = undefined;
@@ -860,7 +861,7 @@ export class RunnerBackend {
       this.live.turn.set(id, t);
     }
     const to = viewStatus(t);
-    const shown = { ...agent, status: to };
+    const shown = { ...agent, status: to, ...(t.queued ? { queued: t.queued } : {}) };
     this.emitEvent({ kind: "agent", agent: shown });
     if (e.type === "created") this.emitEvent({ kind: "created", agentId: id, agent: shown });
     if (lifecycle) this.emitEvent({ ...lifecycle, agentId: id, agent: shown });
