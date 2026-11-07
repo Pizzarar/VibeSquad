@@ -170,3 +170,8 @@ test("handleFsWatch: HTTP shape + request close releases", async () => {
   await p;
   assert.equal(_watcherCount(), 0);
 });
+
+test("create/rename refuse a sensitive target path (.git leaf via case/dir tricks)", () => {
+  assert.equal(fsCreate(root, "", ".git", "directory").status, 400);
+  assert.equal(fsRename(root, "a.txt", ".Git").status, 400);
+});

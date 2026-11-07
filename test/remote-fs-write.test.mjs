@@ -90,11 +90,25 @@ describe("contract: owner gate over the proxy", () => {
   });
 
   test("without an owner token every mutation is refused and nothing changes", async () => {
+    // One valid body per op, so the proxy body policy passes and the refusal comes from the server's owner gate.
+    const BODIES = {
+      write: { cwd: ws, path: "a.txt", content: "pwn" },
+      create: { cwd: ws, parentPath: "", name: "z.txt", kind: "file" },
+      rename: { cwd: ws, path: "a.txt", name: "z.txt" },
+      delete: { cwd: ws, path: "a.txt" },
+      duplicate: { cwd: ws, path: "a.txt" },
+    };
     for (const op of OPS) {
-      const body = { cwd: ws, path: "a.txt", content: "pwn", name: "z", kind: "file", parentPath: "" };
-      await assert.rejects(post(bare, op, body), /\[403\]|owner|read-only/i, op);
+      assert.equal(checkRemoteBody("POST", `/__vibesquad/fs/${op}`, JSON.stringify(BODIES[op])).ok, true, `${op}: body passes the proxy policy`);
+      const before = seen.length;
+      const denied = await post(bare, op, BODIES[op]).catch((e) => ({ status: Number(/\[(\d+)\]/.exec(String(e))?.[1]), err: String(e) }));
+      assert.equal(denied.status, 403, op);
+      assert.equal(seen.length, before + 1, `${op}: reached the server, which refused it`);
+      assert.equal(seen.at(-1)[2], undefined, `${op}: no owner token was sent`);
+      assert.ok(!/body key|policy/i.test(denied.err ?? JSON.stringify(denied.body ?? "")), `${op}: refused by the owner gate, not the proxy policy`);
     }
     assert.equal(readFileSync(join(ws, "a.txt"), "utf8"), "two");
+    assert.ok(!existsSync(join(ws, "z.txt")));
   });
 
   test("watch rides the read gate: baseline then change over the proxy", async () => {

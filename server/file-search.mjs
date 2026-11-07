@@ -502,6 +502,7 @@ export function fsCreate(cwd, parentRel, name, kind) {
   if (n.error) return n;
   const t = resolveNewIn(cwd, n.rel, name);
   if (t.error) return t;
+  if (isSensitivePath(t.real, cwd)) return { error: "not found", status: 404 };
   if (lexists(t.real)) return { error: "already exists", status: 409 };
   try {
     if (kind === "directory") mkdirSync(t.real);
@@ -533,6 +534,7 @@ export function fsRename(cwd, rel, name) {
   if (e.error) return e;
   if (badName(name)) return { error: "invalid name", status: 400 };
   const dest = join(e.parentReal, name);
+  if (isSensitivePath(dest, cwd)) return { error: "not found", status: 404 };
   if (lexists(dest)) return { error: "already exists", status: 409 };
   try {
     renameSync(e.real, dest);
