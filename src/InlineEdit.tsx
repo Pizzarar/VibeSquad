@@ -129,11 +129,17 @@ export async function startInlineEdit(opts: { cwd: string; path: string; agentId
   teardowns.set(key, () => offs.forEach((f) => f()));
   let released = false;
   offs.push(() => { released = true; });
+  let reading = false;
   const poll = setInterval(() => {
+    // A dismissed, replaced or failed session stops its own poll; one read at a time.
+    const cur = sessions.get(key);
+    if (released || !cur || cur.id !== id || cur.phase === "error") { clearInterval(poll); return; }
+    if (reading) return;
+    reading = true;
     vsReadFile(cwd, path, MAX_BYTES + 1).then(
       (v) => { if (!released && v.modifiedAt !== sessions.get(key)?.currentMtime) void refresh(key, id); },
       (e) => { if (!released && e?.notFound) patch(key, id, { phase: "error", error: "The file was deleted." }); },
-    );
+    ).finally(() => { reading = false; });
   }, 1500);
   offs.push(() => clearInterval(poll));
 
@@ -158,6 +164,7 @@ export async function startInlineEdit(opts: { cwd: string; path: string; agentId
     // A timeout only means the daemon didn't confirm in time; a busy daemon often still delivers, so keep watching.
     if (!/timeout/i.test(msg)) {
       patch(key, id, { phase: "error", error: `Not sent: ${msg}` });
+      offs.forEach((f) => f()); // nothing is coming: stop the poll and the agent watch
       return null;
     }
     patch(key, id, { error: "The daemon was slow to confirm the send; still watching the file." });

@@ -5,6 +5,7 @@
 import { AttentionBadge } from "./AttentionList";
 import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { client, getPaseoState, markAgentRead, sendMessage } from "./paseo";
+import { isRunnerId, runnerHandle } from "./runnerBridge";
 import { DEMO } from "./demoFlag";
 import { openContextMenu } from "./CommandPalette";
 import { demoTimeline } from "./demo";
@@ -448,7 +449,7 @@ export function usePreview(agentId: string | null): Line[] {
     }
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const handle = client.agents.ref(agentId);
+    const handle = isRunnerId(agentId) ? (runnerHandle(agentId) as any) : client.agents.ref(agentId);
     const agent = getPaseoState().agents.get(agentId);
     if (agent?.status === "closed") {
       const snap = (handle.timeline as any).getSnapshot?.();

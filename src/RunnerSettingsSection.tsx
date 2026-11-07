@@ -104,50 +104,15 @@ export function RunnerSettingsSection() {
   );
 }
 
-/** Header usage chip; P4 swaps its source for runner usage. */
-export interface PaseoUsageProvider {
-  id: string;
-  sourceId: string;
-  sourceLabel: string;
-  account: string | null;
-  status: string;
-  planLabel: string | null;
-  fetchedAt: string | null;
-  usedPct: number | null;
-  remainingPct: number | null;
-  windowLabel: string | null;
-  shortLabel: string | null;
-  resetsAt: string | null;
-  tone: string;
-  windows: {
-    id: string;
-    label: string;
-    shortLabel?: string;
-    usedPct?: number;
-    remainingPct?: number;
-    resetsAt?: string;
-    tone?: string;
-  }[];
-  balances: {
-    id: string;
-    label: string;
-    remaining: number;
-    unit: string;
-    tone?: string;
-  }[];
-}
-
-export function PaseoUsageHeaderChip({ onOpenSettings }: { onOpenSettings?: () => void }) {
-  const [providers, setProviders] = useState<PaseoUsageProvider[]>([]);
+/** Header usage chip: spend per provider from the runner usage rollup (/__vibesquad/providers/usage). */
+export function RunnerUsageHeaderChip({ onOpenSettings }: { onOpenSettings?: () => void }) {
+  const [rows, setRows] = useState<{ provider: string; costUsd: number }[]>([]);
 
   useEffect(() => {
     let alive = true;
-    fetch("/__vibesquad/paseo/usage")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (alive && Array.isArray(d?.providers)) {
-          setProviders(d.providers);
-        }
+    loadRunnerUsage()
+      .then((u) => {
+        if (alive) setRows((u.byProvider ?? []).filter((r) => r.costUsd > 0).sort((a, b) => b.costUsd - a.costUsd));
       })
       .catch(() => {});
     return () => {
@@ -155,26 +120,22 @@ export function PaseoUsageHeaderChip({ onOpenSettings }: { onOpenSettings?: () =
     };
   }, []);
 
-  if (providers.length === 0) return null;
+  if (rows.length === 0) return null;
 
   return (
     <button
       type="button"
       className="tchip"
-      data-testid="header-paseo-usage-chip"
+      data-testid="header-usage-chip"
       onClick={onOpenSettings}
-      title="Provider account usage (click to open Settings)"
+      title="Runner spend by provider (click to open Settings)"
       style={{ display: "inline-flex", alignItems: "center", gap: 8 }}
     >
-      {providers.slice(0, 3).map((p) => {
-        const pct = p.usedPct !== null ? `${Math.round(p.usedPct)}%` : p.status;
-        const color = p.tone === "danger" ? "#ff2a85" : p.tone === "warning" ? "#ffb000" : "#00f0ff";
-        return (
-          <span key={p.id} style={{ color, fontWeight: 700 }}>
-            {p.sourceLabel}: {pct}
-          </span>
-        );
-      })}
+      {rows.slice(0, 3).map((r) => (
+        <span key={r.provider} style={{ color: "#00f0ff", fontWeight: 700 }}>
+          {r.provider}: ${r.costUsd.toFixed(2)}
+        </span>
+      ))}
     </button>
   );
 }

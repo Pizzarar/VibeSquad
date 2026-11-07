@@ -5,7 +5,7 @@ import { attachFiles, clearNeedsYou, markAgentRead, markAgentUnread, sendMessage
 import { DEMO } from "./demoFlag";
 import { isLocallyHidden, isMarkedUnread } from "./attentionLocal";
 import { listProviderModels } from "./paseoProviders";
-import { runnerReloadTimeline, runnerSpawn, runnerUnarchive } from "./runnerBridge";
+import { runnerReloadTimeline, runnerResume, runnerSpawn, runnerUnarchive } from "./runnerBridge";
 import {
   auditAntigravityAgent,
   CANCEL_AND_RESUME_PROMPT,
@@ -558,6 +558,7 @@ function SessionActions({ agent, entries }: { agent: PaseoAgent; entries: Entry[
         labels: { ...(lb.lane ? { lane: lb.lane } : {}), ...(lb.team ? { team: lb.team } : {}) },
       });
       const id = forked?.id;
+      if (forked) upsertLocalAgent(forked);
       if (id) openAgentInTab(id);
     } catch (e) {
       setMsg(`Fork failed: ${(e as Error).message ?? e}`);
@@ -571,7 +572,11 @@ function SessionActions({ agent, entries }: { agent: PaseoAgent; entries: Entry[
     setMsg("");
     try {
       if (DEMO) return setMsg("Resume (demo)");
-      await runnerUnarchive(agent.id);
+      if (agent.archivedAt) await runnerUnarchive(agent.id);
+      // Unarchive only restores the record; a closed (lost/parked) agent needs the resume route to actually reopen.
+      const after = await runnerResume(agent.id);
+      if (after?.status === "closed" && !agent.archivedAt) throw new Error("it can't be resumed; use Spin Up to start a new one");
+      if (after) upsertLocalAgent(after);
       openAgent(agent.id);
     } catch (e) {
       setMsg(`Resume failed: ${(e as Error).message ?? e}`);
@@ -820,6 +825,7 @@ export function DrawerHeader({
           labels: nextLabels,
         });
         const newId = spawned?.id;
+        if (spawned) upsertLocalAgent(spawned);
         if (newId) openAgentInTab(newId);
       }
     } catch (e) {

@@ -1,7 +1,7 @@
 import { createPaseoApi, type PaseoAgent, type PaseoClient, type PaseoWorkspace } from "@getpaseo/client";
 import { applyLabelsOptimistic } from "./attentionItems";
 import { clearUnreadLocal, dismissLocal, markUnreadLocal, subscribeAttentionLocal } from "./attentionLocal";
-import { fetchRunnerStatus, getRunnerStatus, isRunnerId, isRunnerLane, runnerArchive, runnerCancel, runnerSend, runnerSpawn, runnerUpdate, runnerStatusLoaded, startRunnerBridge, onRunnerStatusChange } from "./runnerBridge";
+import { fetchRunnerStatus, getRunnerStatus, isRunnerId, isRunnerLane, runnerArchive, runnerCancel, runnerListArchived, runnerSend, runnerSpawn, runnerUpdate, runnerStatusLoaded, startRunnerBridge, onRunnerStatusChange } from "./runnerBridge";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { spawnEnvFor } from "./spawn-env";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
@@ -148,9 +148,12 @@ function queueAgent(id: string, agent: PaseoAgent | null) {
 
 // Same construction as createPaseoClient, but we keep the DaemonClient for calls the SDK api lacks.
 // SHIM (PLAN_PASEO_CUT P4, removed in P5): the Paseo websocket survives only for calls the VS server has no route for yet.
-// Still on it: Changes/git (ChangesPanel, paseoGit, contextFetch @git), file writes (FilesPanel save+observeFile,
-// InlineEdit undo, ProjectPanel create, paseoFiles create/rename/duplicate/delete, paseoPermissions write), and
-// paseoWorkspaces.ensureWorkspace (Changes needs a workspace). Everything else in src/ talks to the runner or /__vibesquad/*.
+// daemonClient: Changes/git (ChangesPanel, paseoGit, contextFetch @git), file writes (FilesPanel save+observeFile,
+// InlineEdit undo, ProjectPanel create, paseoFiles create/rename/duplicate/delete, paseoPermissions write),
+// paseoWorkspaces.ensureWorkspace (Changes needs a workspace).
+// client.agents / client.workspaces (same socket): the Paseo roster + subscribe + workspaces in this file, agents.create in
+// spawn (non-runner lanes), PermissionCard respondToPermission, and the non-runner fallbacks in Timeline.agentRef / PinGrid.usePreview.
+// Everything else in src/ talks to the runner or /__vibesquad/*.
 export const daemonClient = new DaemonClient({
   url: WS_URL,
   clientId: "vibesquad",
@@ -334,15 +337,20 @@ export async function loadArchived(): Promise<void> {
     return;
   }
   set({ archivedStatus: "loading" });
-  try {
-    const res = await client.agents.list({ filter: { includeArchived: true }, page: { limit: 200 } });
-    const next = new Map<string, PaseoAgent>();
-    for (const e of res.entries) if (e.agent.archivedAt) next.set(e.agent.id, e.agent);
-    set({ archivedAgents: next, archivedStatus: "ready" });
-  } catch (err) {
-    console.error("loadArchived failed", err);
+  // Runner archives come over the VS server; the Paseo websocket (when it is up) adds its own.
+  const [rn, px] = await Promise.allSettled([
+    runnerListArchived(),
+    link.paseoConn ? client.agents.list({ filter: { includeArchived: true }, page: { limit: 200 } }) : Promise.resolve(null),
+  ]);
+  if (rn.status === "rejected" && px.status === "rejected") {
+    console.error("loadArchived failed", rn.reason);
     set({ archivedStatus: "error" });
+    return;
   }
+  const next = new Map<string, PaseoAgent>();
+  if (px.status === "fulfilled" && px.value) for (const e of px.value.entries) if (e.agent.archivedAt) next.set(e.agent.id, e.agent);
+  if (rn.status === "fulfilled") for (const a of rn.value) next.set(a.id, a);
+  set({ archivedAgents: next, archivedStatus: "ready" });
 }
 
 export async function archiveWorkspace(workspaceId: string) {
@@ -547,10 +555,8 @@ export function start() {
   // Belt and braces: a full refetch every minute (never faster, a saturated daemon pays 500-700 ms per fetch_agents) in case an
   // update was dropped.
   setInterval(() => {
-    if (link.paseoConn) {
-      refetchAll().catch(console.error);
-      refetchProviderUsage();
-    }
+    if (link.paseoConn) refetchAll().catch(console.error);
+    if (!DEMO) refetchProviderUsage(); // runner usage: independent of the Paseo websocket
   }, PASEO_REFETCH_MS);
 
   void connect();
@@ -721,6 +727,7 @@ if (!DEMO && typeof window !== "undefined") {
       if (up && state.conn !== "connected") set({ rosterLoaded: true });
       set({ runnerConn: up ? "up" : "down" });
       link.onRunnerConnection(up);
+      if (up) refetchProviderUsage();
     },
   );
 }

@@ -425,6 +425,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
               env: { VS_PROFILE_OVERRIDE: "1" },
             });
             const newId = spawned.id;
+            if (spawned) upsertLocalAgent(spawned);
             if (newId) openAgentInTab(newId, paneOfAgent(agent.id), agent.id);
           }
           imgs.clear();

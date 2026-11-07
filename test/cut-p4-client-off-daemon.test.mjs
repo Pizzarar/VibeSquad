@@ -73,3 +73,64 @@ test("sends, cancels, archives and label updates are runner-only in paseo.ts", (
   assert.match(s, /await runnerSend\(agentId, text/);
   assert.match(s, /send: \(\) => runnerUpdate\(agentId, \{ labels \}\)/);
 });
+
+// ---- Review R1 fixes ----
+
+test("header usage chip reads runner usage and usage refetches on runner connect, not only on the Paseo socket", () => {
+  const chip = src("RunnerSettingsSection.tsx");
+  assert.doesNotMatch(chip, /paseo\/usage|PaseoUsageHeaderChip/);
+  assert.match(chip, /RunnerUsageHeaderChip/);
+  assert.match(chip, /loadRunnerUsage\(\)/);
+  assert.match(src("App.tsx"), /<RunnerUsageHeaderChip/);
+  const p = src("paseo.ts");
+  assert.match(p, /if \(up\) refetchProviderUsage\(\)/);
+  assert.match(p, /if \(!DEMO\) refetchProviderUsage\(\)/);
+});
+
+test("resume uses the resume route (unarchive only restores the record)", () => {
+  const d = src("DrawerHeader.tsx");
+  assert.match(d, /await runnerResume\(agent\.id\)/);
+  assert.match(d, /if \(agent\.archivedAt\) await runnerUnarchive\(agent\.id\)/);
+  assert.match(d, /can't be resumed/);
+});
+
+test("pin previews, predecessor stitch and archived list work without the Paseo socket", () => {
+  assert.match(src("PinGrid.tsx"), /isRunnerId\(agentId\) \? \(runnerHandle\(agentId\)/);
+  assert.match(src("Timeline.tsx"), /agentRef\(predecessorId\)/);
+  assert.doesNotMatch(src("Timeline.tsx"), /^\s*client\.agents$/m); // the stitch no longer calls the socket directly
+  const p = src("paseo.ts");
+  assert.match(p, /runnerListArchived\(\)/);
+  assert.match(p, /link\.paseoConn \? client\.agents\.list/);
+});
+
+test("spawned agents are upserted before their tab opens; InlineEdit poll stops itself; dead helpers gone", () => {
+  assert.match(src("DrawerHeader.tsx"), /if \(forked\) upsertLocalAgent\(forked\);\n\s*if \(id\) openAgentInTab\(id\)/);
+  assert.match(src("DrawerHeader.tsx"), /if \(spawned\) upsertLocalAgent\(spawned\);\n\s*if \(newId\) openAgentInTab\(newId\)/);
+  assert.match(src("AgentDrawer.tsx"), /if \(spawned\) upsertLocalAgent\(spawned\);\n\s*if \(newId\) openAgentInTab/);
+  const ie = src("InlineEdit.tsx");
+  assert.match(ie, /clearInterval\(poll\); return;/);
+  assert.match(ie, /offs\.forEach\(\(f\) => f\(\)\); \/\/ nothing is coming/);
+  assert.doesNotMatch(src("TerminalPanel.tsx"), /usesVsShells|vsRef/);
+  assert.doesNotMatch(src("sessionLifecycle.ts"), /buildRewindRequest|REWIND_MODES|rewindMessageId/);
+});
+
+test("runner API: GET /agents?archived=1 lists only archived; POST resume reopens via refreshAgent", async () => {
+  const { handleRunnerApi } = await import("../server/runner-api.mjs");
+  const seen = [];
+  const backend = {
+    listAgents: async (o) => (seen.push(["list", o]), [{ id: "rn-a", archivedAt: "t" }, { id: "rn-b", archivedAt: null }]),
+    refreshAgent: async (id) => (seen.push(["refresh", id]), { id, status: "idle" }),
+  };
+  const call = async (url, method) => {
+    const out = {};
+    await handleRunnerApi({ url, method }, {}, { readBody: async () => ({}), sendJson: (_r, status, body) => Object.assign(out, { status, body }), backend, lanes: () => new Set(["x"]), status: async () => ({}) });
+    return out;
+  };
+  const arch = await call("/__vibesquad/runner/agents?archived=1", "GET");
+  assert.deepEqual(arch.body.agents.map((a) => a.id), ["rn-a"]);
+  assert.deepEqual(seen[0], ["list", { filter: { includeArchived: true } }]);
+  const res = await call("/__vibesquad/runner/agents/rn-a/resume", "POST");
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body, { ok: true, agent: { id: "rn-a", status: "idle" } });
+  assert.deepEqual(seen[1], ["refresh", "rn-a"]);
+});

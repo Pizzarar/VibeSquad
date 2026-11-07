@@ -29,6 +29,9 @@ export const runnerSend = (id: string, text: string, opts: RunnerSendOpts = {}) 
   }).then(() => undefined);
 export const runnerCancel = (id: string) => post(id, "cancel").then(() => undefined);
 export const runnerUnarchive = (id: string) => post(id, "unarchive").then(() => undefined);
+/** Resume a closed agent in place. Resolves the agent as it is after: still "closed" means the runner could not resume it. */
+export const runnerResume = (id: string) => post(id, "resume").then((r) => (r as { agent: PaseoAgent }).agent);
+export const runnerListArchived = () => call<{ agents?: PaseoAgent[] }>("/agents?archived=1").then((r) => r.agents ?? []);
 export const runnerArchive = (id: string) => post(id, "archive").then(() => ({ archivedAt: new Date().toISOString() }));
 export const runnerUpdate = (id: string, updates: { name?: string; labels?: Record<string, string> }) => post(id, "meta", updates).then(() => undefined);
 

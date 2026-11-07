@@ -6,7 +6,7 @@ import "@xterm/xterm/css/xterm.css";
 import { DEMO } from "./demoFlag";
 import { captureFileName, captureText } from "./fileOps";
 import {
-  usesVsShells, vsCreateTerminal, vsKillTerminal, vsListTerminals, vsStream, vsTerminalInput, vsTerminalOutput, vsTerminalRename, vsTerminalResize, vsTerminalStreamUrl,
+  vsCreateTerminal, vsKillTerminal, vsListTerminals, vsStream, vsTerminalInput, vsTerminalOutput, vsTerminalRename, vsTerminalResize, vsTerminalStreamUrl,
 } from "./vsShells";
 import {
   detectPortsInText,
@@ -57,9 +57,6 @@ function resizeTerminal(terminalId: string, cols: number, rows: number) {
 
 export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
   const cwd = agent.cwd ?? "";
-  const vs = !DEMO && usesVsShells(agent.id); // runner agents: shells over /__vibesquad/terminals, keyed by folder
-  const vsRef = useRef(vs);
-  vsRef.current = vs;
   const scopeKey = cwd;
   const scopeKeyRef = useRef(scopeKey);
   scopeKeyRef.current = scopeKey;
@@ -141,14 +138,11 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
     setActiveId(null);
 
     function subscribeToTerminal(terminalId: string) {
-      if (vsRef.current) {
-        vsTerminalIds.add(terminalId);
-        const stop = vsStream(vsTerminalStreamUrl(terminalId), (d) => writeToTerm(terminalId, d), (code) => writeToTerm(terminalId, `
+      vsTerminalIds.add(terminalId);
+      const stop = vsStream(vsTerminalStreamUrl(terminalId), (d) => writeToTerm(terminalId, d), (code) => writeToTerm(terminalId, `
 [process exited${code == null ? "" : ` with code ${code}`}]
 `));
-        unsubsRef.current.set(terminalId, stop);
-        return;
-      }
+      unsubsRef.current.set(terminalId, stop);
     }
 
     async function loadTerminals() {
@@ -182,7 +176,7 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
       pendingOutputRef.current.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cwd, vs]);
+  }, [cwd]);
 
   // Refit + resize the daemon PTY on tab switch, container resize and window resize
   useEffect(() => {
@@ -227,13 +221,10 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
       setTabs((prev) => [...prev, newTab]);
       setActiveId(termId);
 
-      if (vsRef.current) {
-        vsTerminalIds.add(termId);
-        unsubsRef.current.set(termId, vsStream(vsTerminalStreamUrl(termId), (d) => writeToTerm(termId, d), (code) => writeToTerm(termId, `
+      vsTerminalIds.add(termId);
+      unsubsRef.current.set(termId, vsStream(vsTerminalStreamUrl(termId), (d) => writeToTerm(termId, d), (code) => writeToTerm(termId, `
 [process exited${code == null ? "" : ` with code ${code}`}]
 `)));
-        return;
-      }
     } catch (e) {
       console.error("createTerminal failed", e);
       setTabErr(`New terminal failed: ${e instanceof Error ? e.message : String(e)}`);

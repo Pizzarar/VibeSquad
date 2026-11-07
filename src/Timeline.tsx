@@ -903,8 +903,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
       return;
     }
     let alive = true;
-    client.agents
-      .ref(predecessorId)
+    agentRef(predecessorId)
       .timeline.refetch({ direction: "tail", limit: 40, projection: "projected" })
       .then((t) => {
         if (!alive) return;

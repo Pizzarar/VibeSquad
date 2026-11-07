@@ -45,7 +45,7 @@ import {
 import { isHubLaneId, titleFor } from "./teams";
 import { AgentPanes } from "./AgentPanes";
 import { CommandPaletteHost, agentCtxItems, dateBucket, teamCtxItems, openContextMenu, openOverlay, parseUrlState, serializeUrlState, type DateBucket } from "./CommandPalette";
-import { PaseoUsageHeaderChip } from "./RunnerSettingsSection";
+import { RunnerUsageHeaderChip } from "./RunnerSettingsSection";
 import { MobileBar, useMobileTeamView } from "./MobileBar";
 import { FocusRail, railAlerts } from "./FocusRail";
 import { perfEndPainted, perfStart } from "./perf";
@@ -1078,7 +1078,7 @@ const TeamPage = memo(function TeamPage(props: {
           </span>
         </h1>
         <div className="team-actions">
-          <PaseoUsageHeaderChip onOpenSettings={props.onSettings} />
+          <RunnerUsageHeaderChip onOpenSettings={props.onSettings} />
           <button className="btn ok" data-testid="add-buddy-btn" onClick={props.onAddBuddy}>
             + TEAM
           </button>
