@@ -5133,3 +5133,273 @@ button.project-file-name:hover { text-decoration: underline; }
 .usage-bar, .usage-review-select { box-shadow: var(--bevel-in); }
 .usage-limit.usage-warn .usage-limit-pct { color: var(--amber-t); }
 .usage-limit.usage-hot .usage-limit-pct { color: var(--pink-t); }
+
+/* ======================================================================
+   U3c: painted airbrush kit (public/ui/u3/README.md) over the U2 skin. Each rule keeps its U2
+   colours/borders underneath, so a missing PNG falls back to the U2 look. Theme swap = the --u3-* URLs.
+   ====================================================================== */
+:root {
+  --u3-window-frame: url("/ui/u3/window-frame-dark.png");
+  --u3-panel-frame: url("/ui/u3/panel-frame-dark.png");
+  --u3-panel-frame-pink: url("/ui/u3/panel-frame-pink-dark.png");
+  --u3-panel-frame-amber: url("/ui/u3/panel-frame-amber-dark.png");
+  --u3-well-frame: url("/ui/u3/well-frame-dark.png");
+  --u3-bg-page: url("/ui/u3/bg-page-dark.png");
+  --u3-bg-sidebar: url("/ui/u3/bg-sidebar-dark.png");
+  --u3-bg-panel: url("/ui/u3/bg-panel-dark.png");
+  --u3-bg-well: url("/ui/u3/bg-well-dark.png");
+  --u3-stars: url("/ui/u3/stars-dark.png");
+  --u3-tb-shade: url("/ui/u3/tb-shade-dark.png");
+  --u3-cloud-corner: url("/ui/u3/cloud-corner-dark.png");
+  --u3-cloud-foot: url("/ui/u3/cloud-foot-dark.png");
+  --u3-header-halo: url("/ui/u3/header-halo-dark.png");
+  --u3-sel-teal: url("/ui/u3/sel-teal-dark.png");
+  --u3-sel-violet: url("/ui/u3/sel-violet-dark.png");
+  --u3-sunset-plate: url("/ui/u3/sunset-plate-dark.png");
+  --u3-rule-pink: url("/ui/u3/rule-pink-dark.png");
+  --u3-rule-violet: url("/ui/u3/rule-violet-dark.png");
+  --u3-meter-teal: url("/ui/u3/meter-teal-dark.png");
+  --u3-meter-amber: url("/ui/u3/meter-amber-dark.png");
+  --u3-meter-pink: url("/ui/u3/meter-pink-dark.png");
+  --u3-meter-mint: url("/ui/u3/meter-mint-dark.png");
+  --u3-edge-sidebar: url("/ui/u3/edge-sidebar-dark.png");
+  --u3-tb-ramp: url("/ui/u3/tb-ramp-dark.png");
+  --u3-tb-peach: url("/ui/u3/tb-peach-dark.png");
+  --u3-tb-violet: url("/ui/u3/tb-violet-dark.png");
+  --u3-tb-pink: url("/ui/u3/tb-pink-dark.png");
+  --u3-tb-teal: url("/ui/u3/tb-teal-dark.png");
+  --u3-brand-vibesquad: url("/ui/u3/brand-vibesquad-dark.png");
+  --u3-font-chrome-big: url("/ui/u3/font-chrome-big-dark.png");
+  --u3-font-chrome-small: url("/ui/u3/font-chrome-small-dark.png");
+  --u3-sprites: url("/ui/u3/sprites-dark.png");
+  --u3-chip-teal: url("/ui/u3/chip-teal-dark.png");
+  --u3-chip-pink: url("/ui/u3/chip-pink-dark.png");
+  --u3-chip-mint: url("/ui/u3/chip-mint-dark.png");
+  --u3-chip-amber: url("/ui/u3/chip-amber-dark.png");
+  --u3-chip-violet: url("/ui/u3/chip-violet-dark.png");
+  --u3-chip-neutral: url("/ui/u3/chip-neutral-dark.png");
+  --u3-chip-marble: url("/ui/u3/chip-marble-dark.png");
+  --u3-chip-ring-teal: url("/ui/u3/chip-ring-teal-dark.png");
+  --u3-btn-ghost-normal: url("/ui/u3/btn-ghost-normal-dark.png");
+  --u3-btn-ghost-hover: url("/ui/u3/btn-ghost-hover-dark.png");
+  --u3-btn-ghost-active: url("/ui/u3/btn-ghost-active-dark.png");
+  --u3-btn-primary-normal: url("/ui/u3/btn-primary-normal-dark.png");
+  --u3-btn-primary-hover: url("/ui/u3/btn-primary-hover-dark.png");
+  --u3-btn-primary-active: url("/ui/u3/btn-primary-active-dark.png");
+  --u3-btn-hot-normal: url("/ui/u3/btn-hot-normal-dark.png");
+  --u3-btn-hot-hover: url("/ui/u3/btn-hot-hover-dark.png");
+  --u3-btn-hot-active: url("/ui/u3/btn-hot-active-dark.png");
+  --u3-btn-on-normal: url("/ui/u3/btn-on-normal-dark.png");
+  --u3-btn-on-hover: url("/ui/u3/btn-on-hover-dark.png");
+  --u3-btn-on-active: url("/ui/u3/btn-on-active-dark.png");
+  --u3-btn-warn-normal: url("/ui/u3/btn-warn-normal-dark.png");
+  --u3-btn-warn-hover: url("/ui/u3/btn-warn-hover-dark.png");
+  --u3-btn-warn-active: url("/ui/u3/btn-warn-active-dark.png");
+  --u3-btn-marble-normal: url("/ui/u3/btn-marble-normal-dark.png");
+  --u3-btn-marble-hover: url("/ui/u3/btn-marble-hover-dark.png");
+  --u3-btn-marble-active: url("/ui/u3/btn-marble-active-dark.png");
+}
+:root[data-theme="light"] {
+  --u3-window-frame: url("/ui/u3/window-frame-light.png");
+  --u3-panel-frame: url("/ui/u3/panel-frame-light.png");
+  --u3-panel-frame-pink: url("/ui/u3/panel-frame-pink-light.png");
+  --u3-panel-frame-amber: url("/ui/u3/panel-frame-amber-light.png");
+  --u3-well-frame: url("/ui/u3/well-frame-light.png");
+  --u3-bg-page: url("/ui/u3/bg-page-light.png");
+  --u3-bg-sidebar: url("/ui/u3/bg-sidebar-light.png");
+  --u3-bg-panel: url("/ui/u3/bg-panel-light.png");
+  --u3-bg-well: url("/ui/u3/bg-well-light.png");
+  --u3-stars: url("/ui/u3/stars-light.png");
+  --u3-tb-shade: url("/ui/u3/tb-shade-light.png");
+  --u3-cloud-corner: url("/ui/u3/cloud-corner-light.png");
+  --u3-cloud-foot: url("/ui/u3/cloud-foot-light.png");
+  --u3-header-halo: url("/ui/u3/header-halo-light.png");
+  --u3-sel-teal: url("/ui/u3/sel-teal-light.png");
+  --u3-sel-violet: url("/ui/u3/sel-violet-light.png");
+  --u3-sunset-plate: url("/ui/u3/sunset-plate-light.png");
+  --u3-rule-pink: url("/ui/u3/rule-pink-light.png");
+  --u3-rule-violet: url("/ui/u3/rule-violet-light.png");
+  --u3-meter-teal: url("/ui/u3/meter-teal-light.png");
+  --u3-meter-amber: url("/ui/u3/meter-amber-light.png");
+  --u3-meter-pink: url("/ui/u3/meter-pink-light.png");
+  --u3-meter-mint: url("/ui/u3/meter-mint-light.png");
+  --u3-edge-sidebar: url("/ui/u3/edge-sidebar-light.png");
+  --u3-tb-ramp: url("/ui/u3/tb-ramp-light.png");
+  --u3-tb-peach: url("/ui/u3/tb-peach-light.png");
+  --u3-tb-violet: url("/ui/u3/tb-violet-light.png");
+  --u3-tb-pink: url("/ui/u3/tb-pink-light.png");
+  --u3-tb-teal: url("/ui/u3/tb-teal-light.png");
+  --u3-brand-vibesquad: url("/ui/u3/brand-vibesquad-light.png");
+  --u3-font-chrome-big: url("/ui/u3/font-chrome-big-light.png");
+  --u3-font-chrome-small: url("/ui/u3/font-chrome-small-light.png");
+  --u3-sprites: url("/ui/u3/sprites-light.png");
+  --u3-chip-teal: url("/ui/u3/chip-teal-light.png");
+  --u3-chip-pink: url("/ui/u3/chip-pink-light.png");
+  --u3-chip-mint: url("/ui/u3/chip-mint-light.png");
+  --u3-chip-amber: url("/ui/u3/chip-amber-light.png");
+  --u3-chip-violet: url("/ui/u3/chip-violet-light.png");
+  --u3-chip-neutral: url("/ui/u3/chip-neutral-light.png");
+  --u3-chip-marble: url("/ui/u3/chip-marble-light.png");
+  --u3-chip-ring-teal: url("/ui/u3/chip-ring-teal-light.png");
+  --u3-btn-ghost-normal: url("/ui/u3/btn-ghost-normal-light.png");
+  --u3-btn-ghost-hover: url("/ui/u3/btn-ghost-hover-light.png");
+  --u3-btn-ghost-active: url("/ui/u3/btn-ghost-active-light.png");
+  --u3-btn-primary-normal: url("/ui/u3/btn-primary-normal-light.png");
+  --u3-btn-primary-hover: url("/ui/u3/btn-primary-hover-light.png");
+  --u3-btn-primary-active: url("/ui/u3/btn-primary-active-light.png");
+  --u3-btn-hot-normal: url("/ui/u3/btn-hot-normal-light.png");
+  --u3-btn-hot-hover: url("/ui/u3/btn-hot-hover-light.png");
+  --u3-btn-hot-active: url("/ui/u3/btn-hot-active-light.png");
+  --u3-btn-on-normal: url("/ui/u3/btn-on-normal-light.png");
+  --u3-btn-on-hover: url("/ui/u3/btn-on-hover-light.png");
+  --u3-btn-on-active: url("/ui/u3/btn-on-active-light.png");
+  --u3-btn-warn-normal: url("/ui/u3/btn-warn-normal-light.png");
+  --u3-btn-warn-hover: url("/ui/u3/btn-warn-hover-light.png");
+  --u3-btn-warn-active: url("/ui/u3/btn-warn-active-light.png");
+  --u3-btn-marble-normal: url("/ui/u3/btn-marble-normal-light.png");
+  --u3-btn-marble-hover: url("/ui/u3/btn-marble-hover-light.png");
+  --u3-btn-marble-active: url("/ui/u3/btn-marble-active-light.png");
+}
+:root { --u3-ink: #07040f; --u3-key: 1px 1px 0 var(--u3-ink); }
+:root[data-theme="light"] { --u3-ink: #35204c; }
+
+/* ---- backgrounds: sprayed ramps over the U2 colours (a missing PNG leaves the U2 gradient + Bayer below) ---- */
+body {
+  background-image: var(--u3-stars), var(--u3-bg-page), var(--bayer), var(--page-grad);
+  background-size: 256px 256px, 32px 512px, auto, auto;
+  background-repeat: repeat, repeat-x, repeat, no-repeat;
+  background-position: 0 0, 0 0, 0 0, 0 0;
+}
+:root[data-theme="light"] body, body { image-rendering: pixelated; }
+.sidebar {
+  background-image: var(--u3-cloud-foot), var(--u3-bg-sidebar), var(--bayer), linear-gradient(180deg, var(--well) 0%, var(--bg) 100%);
+  background-size: 224px 96px, 32px 1024px, auto, auto;
+  background-repeat: no-repeat, repeat-x, repeat, no-repeat;
+  background-position: left bottom, 0 0, 0 0, 0 0;
+  box-shadow: 2px 0 0 var(--shadow-hard);
+}
+.timeline, .team-head { background-image: var(--u3-bg-well), var(--bayer); background-size: 32px 96px, auto; background-repeat: repeat-x, repeat; }
+.team.active .team-head {
+  background-image: var(--u3-sel-teal), var(--bayer), linear-gradient(90deg, var(--pastel-violet), var(--pastel-pink));
+  background-size: 160px 36px, auto, auto; background-repeat: no-repeat, repeat, no-repeat; background-position: left center, 0 0, 0 0;
+}
+.pin-row:hover, .pin-row.sel, .cmd-item.on, .cmd-item:hover, .ctx-menu button:hover {
+  background-image: var(--u3-sel-violet); background-size: 170px 18px; background-repeat: no-repeat; background-position: left center;
+}
+
+/* ---- window / panel bodies: painted title strip cap (bar rows 8-13) over the spray panel wash ---- */
+:root {
+  --bar-h: 28px;
+  --cap-imgs: var(--u3-tb-ramp), var(--u3-tb-peach), var(--u3-bg-panel), var(--bayer), var(--panel-grad);
+  --cap-size: 384px 28px, 32px 28px, 32px 256px, auto, auto;
+  --cap-pos: 0 -16px, 0 -16px, 0 0, 0 0, 0 0;
+  --cap-rep: no-repeat, repeat-x, repeat-x, repeat, no-repeat;
+}
+.handoff-panel, .pin-tile, .pin-rail-active-buddy {
+  background-image: var(--u3-bg-panel), var(--bayer), var(--panel-grad);
+  background-size: 32px 256px, auto, auto;
+  background-repeat: repeat-x, repeat, no-repeat;
+  background-position: 0 0, 0 0, 0 0;
+}
+
+/* ---- 9-slice frames (slice 8, painted at 2x = 16px; border-image-width does not move layout) ---- */
+.modal, .idea-inbox, .cmd-palette, .shortcut-modal, .daemon-disconnect-card, .pin-tile:not(.pin-plus) {
+  border-image: var(--u3-window-frame) 8 / 16px / 0 repeat; box-shadow: none; image-rendering: pixelated;
+}
+.ts-team, .ws-row, .handoff-panel, .pin-menu-list, .ctx-menu, .drawer-features-menu, .drawer-sandbox-panel,
+.drawer-config-popover, .pin-rail-active-buddy, .pin-rail-tile, .team-head, .card, .squads-dashboard,
+.usage-limit, .usage-roles, .usage-loops, .usage-storms, .usage-review, .usage-review-card {
+  border-image: var(--u3-panel-frame) 8 / 16px / 0 repeat; box-shadow: none; image-rendering: pixelated;
+}
+.card.card-lead, .card.card-secondary-lead.card-lead-needs-you { border-image-source: var(--u3-panel-frame-pink); }
+.toolbar .search, .you-flag input, .ws-controls select, .modal input, .modal select, .modal textarea, .attach-body textarea,
+.composer textarea, .seg, .usage-bar, .usage-review-select {
+  border-image: var(--u3-well-frame) 8 / 16px / 0 repeat; box-shadow: none; image-rendering: pixelated;
+}
+.meter-fill, .usage-bar-fill, .brainstorm-ctx-fill { background-image: var(--u3-meter-teal); background-size: 32px 10px; background-repeat: repeat-x; image-rendering: pixelated; box-shadow: none; }
+.meter.warn .meter-fill { background-image: var(--u3-meter-amber); }
+.meter.alert .meter-fill { background-image: var(--u3-meter-pink); }
+
+/* ---- title bars: 28px painted strips (window / panel title bars only) ---- */
+.pin-tile-bar, .modal-head, .handoff-panel h2, .pin-rail-active-head {
+  background: var(--u3-tb-ramp) 0 0 / 384px 28px no-repeat, var(--u3-tb-peach) 0 0 / 32px 28px repeat-x, var(--titlebar);
+  box-shadow: none; border-bottom: 0; image-rendering: pixelated;
+}
+.modal-head { min-height: var(--bar-h); }
+.exposed-network-banner { background: var(--u3-tb-pink) 0 -6px / 32px 28px repeat-x, linear-gradient(90deg, var(--tb-2), var(--tb-3)) !important; }
+.read-only-banner, .config-warning-banner { background: var(--u3-tb-peach) 0 -6px / 32px 28px repeat-x, linear-gradient(90deg, var(--tb-3), var(--tb-3)) !important; }
+.update-available-banner { background: var(--u3-tb-violet) 0 -6px / 32px 28px repeat-x, linear-gradient(90deg, var(--tb-1), var(--tb-1)) !important; }
+.exposed-network-banner, .read-only-banner, .config-warning-banner, .update-available-banner { box-shadow: none !important; image-rendering: pixelated; }
+
+/* ---- buttons: 9-slice 24x14 (slice 4, painted 8px), face + label per the kit table ---- */
+.btn, .squads-pager-btn, .sidebar-cog-btn, .tl-jump-bottom, .seg button, .tchip, .sidebar-icon-btn,
+.drawer-working-chip, .drawer-subagent-chip, .usage-review-run, .bad-btn, .pin-tile-bar .pin-menu-btn {
+  border: 4px solid transparent; border-image: var(--u3-btn-primary-normal) 4 fill / 8px / 0 repeat; image-rendering: pixelated;
+  background: none; box-shadow: none; min-height: 28px;
+  color: #fffdfa; text-shadow: var(--u3-key);
+}
+.btn:hover, .btn:hover:not(:disabled), .usage-review-run:hover:not(:disabled) { background: none; border-image-source: var(--u3-btn-primary-hover); box-shadow: none; }
+.btn:active, .usage-review-run:active:not(:disabled) { border-image-source: var(--u3-btn-primary-active); box-shadow: none; }
+.btn.ghost, .squads-pager-btn, .sidebar-cog-btn, .tl-jump-bottom, .seg button, .tchip, .sidebar-icon-btn {
+  border-image-source: var(--u3-btn-ghost-normal); background: none; color: var(--text); text-shadow: none;
+}
+.btn.ghost:hover, .squads-pager-btn:hover, .sidebar-cog-btn:hover, .tl-jump-bottom:hover, .seg button:hover, .tchip:hover { border-image-source: var(--u3-btn-ghost-hover); background: none; }
+.btn.ghost:active, .squads-pager-btn:active, .sidebar-cog-btn:active, .tl-jump-bottom:active, .seg button:active, .tchip:active { border-image-source: var(--u3-btn-ghost-active); box-shadow: none; }
+.btn.hot, .btn.bad, .btn.confirm.danger:not(.armed), .bad-btn { border-image-source: var(--u3-btn-hot-normal); background: none; color: #fffdfa; text-shadow: var(--u3-key); }
+.btn.hot:hover, .btn.bad:hover, .bad-btn:hover { border-image-source: var(--u3-btn-hot-hover); }
+.btn.hot:active, .btn.bad:active, .bad-btn:active { border-image-source: var(--u3-btn-hot-active); }
+.seg button.on, .tchip.on { border-image-source: var(--u3-btn-on-normal); background: none; color: #fffdfa; text-shadow: var(--u3-key); }
+.btn.warn, .btn.confirm.warn:not(.armed), .btn.successor.warn { border-image-source: var(--u3-btn-warn-normal); background: none; color: var(--u3-ink); text-shadow: none; }
+.btn.warn:hover { border-image-source: var(--u3-btn-warn-hover); }
+.btn.warn:active { border-image-source: var(--u3-btn-warn-active); }
+.btn.confirm.armed { border-image-source: var(--u3-btn-hot-active); }
+.pin-tile-bar .pin-menu-btn, .modal-head .btn, .pin-rail-active-head .btn, .pin-rail-active-head .pin-menu-btn {
+  border-image: var(--u3-btn-marble-normal) 4 fill / 8px / 0 repeat; background: none; color: var(--u3-ink); text-shadow: none; min-height: 0; height: 20px;
+}
+.seg { background: none; }
+.btn:disabled { opacity: 0.55; }
+.update-available-banner .btn:not(.ghost) { background: none !important; }
+
+/* ---- chips: 9-slice 16x10 (slice 3/4, painted 6/8), text in the flat rows ---- */
+.badge, .unit-tag, .chip, .label-pill, .def-badge, .status-pill, .lane-tag, .warn-badge, .verdict, .changes-file-badge,
+.inbox-scope-badge, .inbox-id-badge, .inbox-lane-pill, .inbox-merged-badge, .inbox-related-chip, .brainstorm-topic-badge,
+.project-badge, .alert-pill, .pill, .pill.diag, .brainstorm-ctx-pill, .sidebar-inbox-badge, .quota-pill, .sidebar-role-pill,
+.rail-role-tag, .role-tag, .pin-lane-handle, .idea-box-profile-chip {
+  border: 3px solid transparent; border-width: 3px 4px; background: none; box-shadow: none; image-rendering: pixelated;
+  border-image: var(--u3-chip-violet) 3 4 fill / 6px 8px / 0 repeat;
+}
+.badge, .unit-tag, .chip, .status-pill, .project-badge, .lane-tag, .quota-pill { border-image-source: var(--u3-chip-teal); }
+.chip.dirty, .warn-badge, .status-pill.error, .changes-file-badge.del, .pill, .alert-pill.tone-error, .quota-pill.hot, .pill.diag.hot, .brainstorm-ctx-pill.tone-red, .badge.alert, .sidebar-inbox-badge { border-image-source: var(--u3-chip-pink); }
+.badge.alert, .sidebar-inbox-badge { color: var(--bg) !important; }
+.chip.clean, .status-pill.running, .verdict.safe, .alert-pill.tone-finished, .changes-file-badge.new { border-image-source: var(--u3-chip-mint); }
+.verdict.check, .alert-pill.tone-permission, .changes-file-badge.mod, .pill.diag.warn, .brainstorm-ctx-pill.tone-amber, .quota-pill.warn { border-image-source: var(--u3-chip-amber); }
+.label-pill, .pin-lane-handle { border-image-source: var(--u3-chip-neutral); }
+.pin-tile-bar .pin-lane-handle { border-image-source: var(--u3-chip-marble); }
+.sidebar-riffbot-badge { border: 3px solid transparent; border-width: 3px 4px; border-image: var(--u3-chip-ring-teal) 3 4 fill / 6px 8px / 0 repeat; background: none; box-shadow: none; image-rendering: pixelated; }
+
+/* ---- status pips (4x4 sprites at 2x) ---- */
+.signal, .conn, .sidebar-stale-dot {
+  border: 0; box-shadow: none; width: 8px; height: 8px;
+  background: var(--u3-sprites) -210px 0 / 256px 92px no-repeat; image-rendering: pixelated;
+}
+.signal.running, .conn.connected { background-position: -200px 0; }
+.signal.idle, .signal.closed { background-position: -220px 0; }
+.signal.error, .signal.attn-error, .signal.attn-permission, .signal.attn-needs-you, .conn.disconnected { background-position: -230px 0; }
+.signal.running, .conn.disconnected { animation: none; }
+
+/* ---- chrome lettering ---- */
+.brand-text > span:first-child {
+  display: block; width: 160px; height: 32px; font-size: 0; color: transparent; text-shadow: none;
+  background: var(--u3-brand-vibesquad) 0 0 / 160px 32px no-repeat; image-rendering: pixelated;
+}
+.sidebar.collapsed .brand-text > span:first-child { display: none; }
+.team-header h1 { position: relative; }
+.team-header h1::before, .team-header h1::after { content: ""; position: absolute; image-rendering: pixelated; pointer-events: none; }
+.team-header h1::before { left: 38px; top: -6px; width: 22px; height: 22px; background: var(--u3-sprites) -48px 0 / 256px 92px no-repeat; }
+.team-header h1::after { right: 25%; top: 2px; width: 14px; height: 14px; background: var(--u3-sprites) -12px 0 / 256px 92px no-repeat; }
+@media (prefers-reduced-motion: no-preference) {
+  .team-header h1::after { animation: u3-twinkle 0.72s steps(1) infinite; }
+}
+@keyframes u3-twinkle { 0% { opacity: 1; } 50% { opacity: 0.4; } }
+/* Squads grid tiles (@ui-bois layout) keep the U2 20px bar: show bar rows 4-13 of the strip (face, shade, INK floor) */
+.pin-tile-bar { --bar-h: 20px; background-position: 0 -8px, 0 -8px, 0 0; }
