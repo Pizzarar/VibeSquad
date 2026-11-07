@@ -14,6 +14,7 @@ import {
   findTeamInRegistry,
   formatDisplayTitle,
   isDigestAgent,
+  isHubLane,
   isRetiredAgent,
   laneCodeFor,
   loadTeamsRegistry,
@@ -374,6 +375,7 @@ export function buildSuccessorPrompt({
   summaryContent,
   latestPlan,
   openWorkers = [],
+  steer = "",
 }) {
   const laneUpper = (laneName || laneId).toUpperCase();
   const workerLines = openWorkers.length
@@ -400,6 +402,9 @@ export function buildSuccessorPrompt({
     `--- BEGIN BRAINSTORM SUMMARY (${summaryPath}) ---`,
     defangPromptFences(String(summaryContent ?? "").trim()),
     `--- END BRAINSTORM SUMMARY ---`,
+    ...(String(steer ?? "").trim()
+      ? ["", "--- BEGIN OVERLORD STEER ---", defangPromptFences(String(steer).trim().slice(0, 2000)), "--- END OVERLORD STEER ---"]
+      : []),
     "",
     TAKEOVER_CONFIRM_INSTRUCTION,
   ].join("\n");
@@ -518,6 +523,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
     retireImmediately = false,
     forceSynthesize = false,
     job,
+    steer,
   }) {
     const { teamId, teamName, laneId, laneName } = resolveTeamAndLane(oldLead, rootDir);
 
@@ -600,6 +606,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
       summaryContent: summary.content,
       latestPlan,
       openWorkers,
+      steer,
     });
 
     const newLabels = {
@@ -825,10 +832,11 @@ export function createLeadHandoffCoordinator(deps = {}) {
     try {
       res = await spawnSuccessor({
         oldLead: lead,
-        trigger: options.trigger === "buddy" ? "buddy" : "self",
+        trigger: options.trigger === "buddy" || options.trigger === "overlord" ? options.trigger : "self",
         retireImmediately: Boolean(options.retireImmediately),
         forceSynthesize: Boolean(options.forceSynthesize),
         job: options.job,
+        steer: options.steer,
       });
     } catch (err) {
       selfHandedOff.delete(lead.id); // a failed spawn must stay retryable
@@ -1102,13 +1110,15 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
     if (!lead || !lead.id) throw new Error(`lead agent not found: ${body.agentId || body.laneId || body.lane || "vibesquad"}`);
     if (!body.oldLead && effectiveAgentRole(lead) !== "lead") throw new Error(`not a lead: ${lead.id}`);
     // A Buddy or lead hands off a live lead: the target must be one (not archived, closed or already retired).
-    if ((trigger === "buddy" || trigger === "self") && (lead.archivedAt || lead.status === "closed" || isRetiredAgent(lead))) {
+    if ((trigger === "buddy" || trigger === "self" || trigger === "overlord") && (lead.archivedAt || lead.status === "closed" || isRetiredAgent(lead))) {
       throw new Error(`lead-handoff: ${lead.id} is not a live lead`);
     }
     // Defence in depth: the handoff_lead tool sends callerId, so re-check it from the caller's own record. Local-token holders
     // are the owner by design and stay trusted; legacy calls without callerId (auto/soft triggers) are unchanged.
-    if (body.callerId && (trigger === "buddy" || trigger === "self")) {
-      const forbid = (why) => Object.assign(new Error(`lead-handoff: forbidden: ${why}`), { status: 403 });
+    const forbid = (why) => Object.assign(new Error(`lead-handoff: forbidden: ${why}`), { status: 403 });
+    // The Overlord trigger is new and cross-lane: it always needs a verifiable callerId (no legacy callerId-less path).
+    if (trigger === "overlord" && !body.callerId) throw forbid("overlord handoff needs a callerId");
+    if (body.callerId && (trigger === "buddy" || trigger === "self" || trigger === "overlord")) {
       const callerId = String(body.callerId);
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(callerId)) throw forbid("bad callerId");
       if (trigger === "self") {
@@ -1120,23 +1130,30 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
           caller = (await backend.fetchAgent(callerId).catch(() => null))?.agent ?? null;
         }
         if (!caller) throw forbid("caller not found");
-        if (effectiveAgentRole(caller) !== "brainstorm" || isRetiredAgent(caller)) throw forbid("caller is not a live Buddy");
+        const wantRole = trigger === "overlord" ? "lead" : "brainstorm";
+        if (effectiveAgentRole(caller) !== wantRole || isRetiredAgent(caller) || caller.archivedAt || caller.status === "closed") {
+          throw forbid(trigger === "overlord" ? "caller is not a live lead" : "caller is not a live Buddy");
+        }
         const teams = loadTeamsRegistry(rootDir);
         const laneOf = (a) => findLaneInRegistry(String(a.labels?.lane || a.labels?.lead || ""), teams)?.lane;
         const callerLane = laneOf(caller);
         const leadLane = laneOf(lead);
         const callerTeam = findTeamInRegistry(String(caller.labels?.team || ""), teams);
         const leadTeam = findTeamInRegistry(String(lead.labels?.team || ""), teams);
-        if (!callerLane || !leadLane || callerLane.id !== leadLane.id || !callerTeam || !leadTeam || callerTeam.id !== leadTeam.id) {
+        if (trigger === "overlord") {
+          if (!callerLane || !leadLane || !callerTeam || !leadTeam || callerTeam.id !== leadTeam.id) throw forbid("caller is not in the lead's Squad");
+          if (!isHubLane(callerTeam, callerLane)) throw forbid("caller is not the Squad's hub lead (Overlord)");
+        } else if (!callerLane || !leadLane || callerLane.id !== leadLane.id || !callerTeam || !leadTeam || callerTeam.id !== leadTeam.id) {
           throw forbid("caller is not a Buddy of the lead's lane");
         }
       }
     }
 
     const handoffPromise =
-      trigger === "self" || trigger === "buddy"
+      trigger === "self" || trigger === "buddy" || trigger === "overlord"
         ? coordinator.triggerSelfHandoff(lead, {
             trigger,
+            steer: trigger === "overlord" ? body.steer : undefined,
             retireImmediately: Boolean(body.retireImmediately),
             forceSynthesize: Boolean(body.forceSynthesize),
             job: body.job,

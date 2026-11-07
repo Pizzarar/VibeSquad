@@ -3,7 +3,7 @@
 // rn- ids -> RunnerBackend, other ids -> Paseo, creates by lane (every lane runs on the runner unless pinned to Paseo).
 import { isRunnerId } from "../backend/runner-backend.mjs";
 import { coalesceReplies } from "../reply-coalesce.mjs";
-import { effectiveAgentRole, findLaneInRegistry, findTeamInRegistry, isRetiredAgent, loadTeamsRegistry, whoCandidate } from "../identity.mjs";
+import { effectiveAgentRole, findLaneInRegistry, findTeamInRegistry, isHubLane, isRetiredAgent, loadTeamsRegistry, whoCandidate } from "../identity.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
 export const REPORT_TYPES = ["done", "decision", "blocker"];
@@ -134,7 +134,7 @@ async function spawnWorker(ctx, args = {}) {
   const asLead = requestedRole === LEAD_ROLE;
   if (asLead) {
     const callerRole = clean(ctx.identity.role).toLowerCase();
-    if (callerRole !== "brainstorm") throw new Error(`cannot spawn a lead: caller role is "${callerRole || "none"}", only a brainstorm (Buddy) may`);
+    if (callerRole !== "brainstorm" && callerRole !== LEAD_ROLE) throw new Error(`cannot spawn a lead: caller role is "${callerRole || "none"}", only a brainstorm (Buddy) or the Squad's hub lead may`);
     if (!team || !lane) throw new Error("cannot spawn a lead: caller has no team and lane");
     // Canonical ids from the registry, the same resolution `vs who` applies; an unregistered team/lane cannot be verified.
     const teams = ctx.teams ?? loadTeamsRegistry();
@@ -142,9 +142,27 @@ async function spawnWorker(ctx, args = {}) {
     const callerTeam = findTeamInRegistry(team, teams);
     if (!callerLane || !callerTeam || callerLane.team.id !== callerTeam.id) throw new Error(`cannot spawn a lead: caller team "${team}" / lane "${lane}" is not in the team registry`);
     const canonTeam = callerTeam.id;
-    const canonLane = callerLane.lane.id;
-    const sameLane = (q) => findLaneInRegistry(q, teams)?.lane.id === canonLane;
-    if (requestedLane && !sameLane(requestedLane)) throw new Error(`cannot spawn a lead: target lane "${requestedLane}" is not the caller's lane "${canonLane}"`);
+    const callerIsHub = isHubLane(callerTeam, callerLane.lane);
+    // A lead may only spawn from the hub lane (the Overlord); a Buddy only for its own lane. The hub Overlord may name any lane of its own Squad.
+    if (callerRole === LEAD_ROLE && !callerIsHub) throw new Error(`cannot spawn a lead: a lead on non-hub lane "${callerLane.lane.id}" may not spawn leads; only a brainstorm (Buddy) or the Squad's hub lead (Overlord) may`);
+    if (callerRole === LEAD_ROLE) {
+      // Cross-lane power is never granted from env alone: the caller's own agent record must say it is a live lead on this hub lane.
+      const callerId = clean(ctx.identity.agentId);
+      const rec = callerId ? agentOf(await ctx.withBackend({ id: callerId }, (b) => b.fetchAgent(callerId)).catch(() => null)) : null;
+      const recLane = rec ? findLaneInRegistry(clean(rec.labels?.lane || rec.labels?.lead), teams) : null;
+      const recTeam = rec ? findTeamInRegistry(clean(rec.labels?.team), teams) : null;
+      if (!rec || effectiveAgentRole(rec) !== LEAD_ROLE || isRetiredAgent(rec) || rec.archivedAt || rec.status === "closed" || recLane?.lane.id !== callerLane.lane.id || recTeam?.id !== canonTeam) {
+        throw new Error(`cannot spawn a lead: ${callerId || "caller"} is not a live lead of hub lane "${callerLane.lane.id}" per its agent record`);
+      }
+    }
+    let canonLane = callerLane.lane.id;
+    if (callerRole === LEAD_ROLE && requestedLane) {
+      const target = findLaneInRegistry(requestedLane, teams);
+      if (!target || target.team.id !== canonTeam) throw new Error(`cannot spawn a lead: target lane "${requestedLane}" is not in the caller's Squad "${canonTeam}"`);
+      canonLane = target.lane.id;
+    } else if (requestedLane && findLaneInRegistry(requestedLane, teams)?.lane.id !== canonLane) {
+      throw new Error(`cannot spawn a lead: target lane "${requestedLane}" is not the caller's lane "${canonLane}"`);
+    }
     if (requestedTeam && findTeamInRegistry(requestedTeam, teams)?.id !== canonTeam) throw new Error(`cannot spawn a lead: target team "${requestedTeam}" is not the caller's team "${canonTeam}"`);
     if (!clean(profile?.name).startsWith(LEAD_PROFILE_PREFIX)) throw new Error(`cannot spawn a lead: profile "${clean(profile?.name) || profileName || "none"}" is not a "${LEAD_PROFILE_PREFIX}" profile`);
     let live;
@@ -278,10 +296,20 @@ const handoffView = (r, extra = {}) => ({
   ...extra,
 });
 
+/** A lead's handoff request that names another agent or lane than itself (the Overlord's cross-lane form). */
+async function isCrossLaneRequest(ctx, askedId, askedLane, callerId) {
+  if (askedId && askedId !== callerId) return true;
+  if (!askedLane) return false;
+  const teams = ctx.teams ?? loadTeamsRegistry();
+  const mine = findLaneInRegistry(clean(ctx.identity.lane), teams);
+  return !mine || findLaneInRegistry(askedLane, teams)?.lane.id !== mine.lane.id;
+}
+
 /**
  * Hand a lane's lead over to a successor through the existing lead-handoff flow (server/lead-handoff.mjs): spawns the successor,
  * re-parents open workers, relabels the old lead former-lead. A Buddy may do it for its OWN lane's live lead (trigger "buddy"),
- * a lead only for itself (trigger "self"); nobody else. Idempotent: a second call returns the existing successor.
+ * a lead only for itself (trigger "self"); the Squad's hub lead (Overlord) for any lane of its own Squad (trigger "overlord", optional steer);
+ * nobody else. Idempotent: a second call returns the existing successor.
  */
 async function handoffLead(ctx, args = {}) {
   const callerRole = clean(ctx.identity.role).toLowerCase();
@@ -316,6 +344,28 @@ async function handoffLead(ctx, args = {}) {
     if (!askedId && target.labels?.["vs.handoff-from"] && age >= 0 && age < HANDOFF_DEDUPE_MS) {
       return handoffView({ successorId: target.id, title: target.title, oldLeadId: target.labels["vs.handoff-from"], deduped: true }, { trigger });
     }
+  } else if (callerRole === LEAD_ROLE && (await isCrossLaneRequest(ctx, askedId, askedLane, callerId))) {
+    // (c) The Squad's hub lead (Overlord) hands off any lane's live lead in its own Squad. Identity is the runner record's, never args.
+    if (!callerId) throw new Error("cannot hand off a lead: caller has no agent id");
+    const caller = await fetchAgent(callerId);
+    if (!caller || effectiveAgentRole(caller) !== LEAD_ROLE || isRetiredAgent(caller) || caller.archivedAt || caller.status === "closed") {
+      throw new Error(`cannot hand off a lead: ${callerId} is not a live lead`);
+    }
+    const { team, lane } = ctx.identity;
+    const teams = ctx.teams ?? loadTeamsRegistry();
+    const callerLane = findLaneInRegistry(lane, teams);
+    const callerTeam = findTeamInRegistry(team, teams);
+    if (!callerLane || !callerTeam || callerLane.team.id !== callerTeam.id) throw new Error(`cannot hand off a lead: caller team "${team}" / lane "${lane}" is not in the team registry`);
+    if (!isHubLane(callerTeam, callerLane.lane)) throw new Error("cannot hand off a lead: a lead may only hand off itself unless it is the Squad's hub lead (Overlord)");
+    if (!askedLane) throw new Error("cannot hand off a lead: the Overlord must name the target lane");
+    const targetLane = findLaneInRegistry(askedLane, teams);
+    if (!targetLane || targetLane.team.id !== callerTeam.id) throw new Error(`cannot hand off a lead: target lane "${askedLane}" is not in the caller's Squad "${callerTeam.id}"`);
+    const live = await ctx.findLiveLeads({ team: callerTeam.id, lane: targetLane.lane.id });
+    if (!live.length) throw new Error(`cannot hand off a lead: lane "${targetLane.lane.id}" has no live lead (spawn one instead)`);
+    const ord = (a) => Number(a.labels?.ord) || 0;
+    target = [...live].sort((a, b) => ord(b) - ord(a))[0];
+    if (askedId && askedId !== target.id) throw new Error(`cannot hand off a lead: ${askedId} is not the live lead of lane "${targetLane.lane.id}" (${target.id})`);
+    trigger = "overlord";
   } else if (callerRole === LEAD_ROLE) {
     if (!callerId) throw new Error("cannot hand off a lead: caller has no agent id");
     // The lane is canonicalised through the registry like the Buddy branch; an empty or unknown lane is refused.
@@ -341,7 +391,8 @@ async function handoffLead(ctx, args = {}) {
   } else {
     throw new Error(`cannot hand off a lead: caller role is "${callerRole || "none"}", only a brainstorm (Buddy) or a lead may`);
   }
-  const body = { trigger, agentId: target.id, callerId, retireImmediately: true, httpWaitMs: 180_000 };
+  const steer = clean(args.steer).slice(0, 2000);
+  const body = { trigger, agentId: target.id, callerId, retireImmediately: true, httpWaitMs: 180_000, ...(trigger === "overlord" && steer ? { steer } : {}) };
   let res;
   let via = "server";
   if (ctx.performHandoff) {
@@ -404,8 +455,8 @@ export const VS_TOOLS = {
     run: reportTool,
   },
   handoff_lead: {
-    description: "Hand the lane's lead over to a successor (the lead-handoff flow: spawns it, re-parents workers, marks the old lead former-lead). A Buddy hands off its own lane's live lead; a lead hands off itself (write your packet Judgment first). Returns {id, title, oldLeadId}.",
-    inputSchema: obj({ lane: S }),
+    description: "Hand the lane's lead over to a successor (the lead-handoff flow: spawns it, re-parents workers, marks the old lead former-lead). A Buddy hands off its own lane's live lead; a lead hands off itself (write your packet Judgment first); the Squad's Overlord (hub lead) may hand off any lane's lead in its Squad with an optional steer note for the successor. Returns {id, title, oldLeadId}.",
+    inputSchema: obj({ lane: S, steer: S }),
     run: handoffLead,
   },
   list: { description: "Agents in your lane.", inputSchema: obj({}), run: listTool },
