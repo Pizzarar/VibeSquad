@@ -138,9 +138,12 @@ export class Runner {
 
   // Retries fn() while it fails only because the cap is full, waking on every idle/exit, for up to queueMs.
   // Leads dispatching several workers at once queue behind busy agents instead of getting spawn errors.
-  async _whenSlot(fn, queueMs = this.queueMs) {
+  // opts.signal: an aborted caller (HTTP client gone) stops waiting and never gets a late spawn/delivery.
+  async _whenSlot(fn, queueMs = this.queueMs, signal) {
     const deadline = Date.now() + queueMs;
+    const aborted = () => Object.assign(new Error('request aborted by client'), { code: 'ABORTED' });
     for (;;) {
+      if (signal?.aborted) throw aborted();
       try {
         return fn();
       } catch (err) {
@@ -151,13 +154,14 @@ export class Runner {
         const t = setTimeout(wake, Math.max(0, Math.min(deadline - Date.now(), 30_000))); // periodic recheck too
         t.unref?.();
         this._slotWaiters.add(wake);
+        signal?.addEventListener('abort', wake, { once: true });
       });
     }
   }
 
-  createQueued(spec, opts = {}) { return this._whenSlot(() => this.create(spec), opts.queueMs); }
+  createQueued(spec, opts = {}) { return this._whenSlot(() => this.create(spec), opts.queueMs, opts.signal); }
 
-  sendQueued(id, text, sendOpts = {}, opts = {}) { return this._whenSlot(() => this.send(id, text, sendOpts), opts.queueMs); }
+  sendQueued(id, text, sendOpts = {}, opts = {}) { return this._whenSlot(() => this.send(id, text, sendOpts), opts.queueMs, opts.signal); }
 
   // Stops an idle agent's process tree but keeps its transcript; the next send() resumes it with --resume.
   park(id) {

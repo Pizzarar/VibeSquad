@@ -76,8 +76,11 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
         return;
       }
       if (parts[0] !== 'agents') return json(res, 404, { error: 'not found' });
+      // A client that hangs up while its create/input waits for a slot must not get a late spawn or delivery.
+      const gone = new AbortController();
+      res.on('close', () => { if (!res.writableEnded) gone.abort(); });
       if (parts.length === 1) {
-        if (req.method === 'POST') return json(res, 201, { id: await runner.createQueued(await readBody(req)) }); // waits for a slot at the cap
+        if (req.method === 'POST') return json(res, 201, { id: await runner.createQueued(await readBody(req), { signal: gone.signal }) }); // waits for a slot at the cap
         if (req.method === 'GET') return json(res, 200, { ids: runner.list() });
       }
       const id = parts[1];
@@ -94,7 +97,7 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
       }
       if (parts[2] === 'input' && req.method === 'POST') {
         const b = await readBody(req, maxInputBytes);
-        await runner.sendQueued(id, b.text, { images: b.images, activeTurnBehavior: b.activeTurnBehavior }); // a parked agent may wait for a slot
+        await runner.sendQueued(id, b.text, { images: b.images, activeTurnBehavior: b.activeTurnBehavior }, { signal: gone.signal }); // a parked agent may wait for a slot
         return json(res, 202, { ok: true });
       }
       if (parts[2] === 'resume' && req.method === 'POST') {
