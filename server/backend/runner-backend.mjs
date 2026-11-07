@@ -24,7 +24,9 @@ const STATUS = { starting: "initializing", running: "running", idle: "idle", par
 
 /** Roster work on the serialized live chain waits at most this long on the runner; a timeout takes the same path as a failed fetch. */
 const ROSTER_FETCH_MS = 8000;
-const bounded = (p, ms = ROSTER_FETCH_MS) => {
+const SEED_RETRY_BASE_MS = 1000;
+const SEED_RETRY_MAX_MS = 10_000;
+const bounded =(p, ms = ROSTER_FETCH_MS) => {
   let t;
   return Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Error("runner request timed out")), ms); t.unref?.(); })]).finally(() => clearTimeout(t));
 };
@@ -328,7 +330,7 @@ export class RunnerBackend {
     Object.defineProperty(this, "whosHere", { value: whosHere });
     Object.defineProperty(this, "rootDir", { value: rootDir });
     Object.defineProperty(this, "listeners", { value: new Set() });
-    Object.defineProperty(this, "live", { value: { stream: null, chain: Promise.resolve(), turn: new Map(), gen: 0, hwm: null, known: new Map(), archived: new Set(), emitted: new WeakSet() } });
+    Object.defineProperty(this, "live", { value: { stream: null, chain: Promise.resolve(), turn: new Map(), gen: 0, retry: { timer: null, n: 0 }, hwm: null, known: new Map(), archived: new Set(), emitted: new WeakSet() } });
     // Paseo-side agents of the same lanes, set by the RoutingBackend so a Who's here refresh sees the whole lane.
     Object.defineProperty(this, "siblings", { value: { list: null } });
     Object.defineProperty(this, "lanes", { value: lanes });
@@ -507,8 +509,7 @@ export class RunnerBackend {
   }
 
   async fetchAgents(opts = {}) {
-    const { ids } = await this.rc.request("GET", "/agents");
-    const recs = await Promise.all(ids.map((id) => this.rc.request("GET", `/agents/${id}`).catch(() => null)));
+    const recs = await this.fetchAllRecs();
     const includeArchived = opts?.filter?.includeArchived;
     const entries = recs
       .filter(Boolean)
@@ -626,7 +627,11 @@ export class RunnerBackend {
     this.listeners.add(listener);
     if (!this.live.stream) {
       this.live.stream = this.rc.stream({
-        onOpen: () => this.enqueue((gen) => this.seedRoster(gen)),
+        onOpen: () => {
+          clearTimeout(this.live.retry.timer); // a fresh open seeds at once and restarts the backoff
+          this.live.retry.n = 0;
+          this.enqueue((gen) => this.seedRoster(gen));
+        },
         onClose: () => this.emitEvent({ kind: "disconnected" }),
         // The timeline emit never waits behind roster fetches on the chain: the browser refetches on it, so it goes out at once.
         onMessage: (m) => {
@@ -643,6 +648,8 @@ export class RunnerBackend {
       if (!this.listeners.size && this.live.stream) {
         this.live.stream.close();
         this.live.stream = null;
+        clearTimeout(this.live.retry.timer);
+        this.live.retry.n = 0;
         this.live.gen++; // work already queued on the chain belongs to the closed stream: drop its results
         this.live.turn.clear();
       }
@@ -696,7 +703,11 @@ export class RunnerBackend {
       } else agents = await bounded(this.listAgents());
     } catch { agents = null; }
     if (gen !== this.live.gen) return;
-    if (!agents) return this.emitEvent({ kind: "disconnected" });
+    if (!agents) {
+      this.emitEvent({ kind: "disconnected" });
+      return this.scheduleSeedRetry(gen);
+    }
+    this.live.retry.n = 0;
     // Lifecycle mode keeps turn state purely from the events it has consumed (baseline scan + replay): never re-seeded from tail-of-log status.
     if (!this.live.hwm) {
       const next = new Map();
@@ -711,11 +722,30 @@ export class RunnerBackend {
     if (recs) await this.catchUp(gen, recs);
   }
 
+  /** A failed seed on an open stream is retried (1s, 2s, 4s ... capped at 10s) until it lands; closing the stream cancels it. */
+  scheduleSeedRetry(gen) {
+    const r = this.live.retry;
+    clearTimeout(r.timer);
+    const base = r.base ?? SEED_RETRY_BASE_MS; // tests shrink it
+    const delay = Math.min(r.base ? base * 8 : SEED_RETRY_MAX_MS, base * 2 ** r.n);
+    r.n++;
+    r.timer = setTimeout(() => {
+      r.timer = null;
+      if (gen === this.live.gen && this.live.stream) this.enqueue((g) => this.seedRoster(g));
+    }, delay);
+    r.timer.unref?.();
+  }
+
   /** Raw runner records, skipping agents the baseline saw archived (their logs are never read again). */
   async fetchRecs() {
-    const { ids } = await this.rc.request("GET", "/agents");
-    const skip = this.live.archived;
-    const recs = await Promise.all(ids.filter((id) => !skip.has(id)).map((id) => this.rc.request("GET", `/agents/${encodeURIComponent(id)}`).catch(() => null)));
+    return this.fetchAllRecs(this.live.archived);
+  }
+
+  /** Every runner record in one call (GET /agents?full=1); a runner without it only answers { ids }, so fall back to one GET per id. */
+  async fetchAllRecs(skip = new Set()) {
+    const res = await this.rc.request("GET", "/agents?full=1");
+    if (Array.isArray(res.agents)) return res.agents.filter((r) => r && !skip.has(r.id));
+    const recs = await Promise.all(res.ids.filter((id) => !skip.has(id)).map((id) => this.rc.request("GET", `/agents/${encodeURIComponent(id)}`).catch(() => null)));
     return recs.filter(Boolean);
   }
 

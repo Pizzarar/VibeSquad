@@ -81,7 +81,7 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
       res.on('close', () => { if (!res.writableEnded) gone.abort(); });
       if (parts.length === 1) {
         if (req.method === 'POST') return json(res, 201, { id: await runner.createQueued(await readBody(req), { signal: gone.signal }) }); // waits for a slot at the cap
-        if (req.method === 'GET') return json(res, 200, { ids: runner.list() });
+        if (req.method === 'GET') return json(res, 200, url.searchParams.get('full') === '1' ? { ids: runner.list(), agents: runner.statusAll() } : { ids: runner.list() });
       }
       const id = parts[1];
       if (parts.length === 2 && req.method === 'GET') {
