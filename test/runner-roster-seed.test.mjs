@@ -25,7 +25,7 @@ const rec = (id) => ({ id, provider: 'claude', model: 'm', cwd: '/x', meta: {}, 
 function fakeClient({ failures, legacy = false }) {
   const calls = [];
   const c = {
-    home: tmp(),
+    home: path.join(tmp(), 'runner'),
     calls,
     opens: 0,
     closed: false,
@@ -95,7 +95,7 @@ test('runner GET /agents?full=1 returns every agent status in one request, with 
   const runner = new Runner({ dir, adapters: {} });
   const server = createServer(runner, { token: 't' });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  const home = tmp();
+  const home = path.join(tmp(), 'runner');
   writeDiscovery(home, { port: server.address().port, token: 't' });
   const rc = new RunnerClient({ home });
   try {

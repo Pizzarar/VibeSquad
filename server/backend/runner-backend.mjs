@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { RunnerClient, runnerHome } from "./runner-client.mjs";
+import { isForbiddenRealHome } from "../test-guard.mjs";
 import { joinTarget, joinInto, canExtendThought } from "../reply-coalesce.mjs";
 import { pidAlive } from "../../runner/lock.mjs";
 import { refreshWhosHere } from "../whos-here.mjs";
@@ -261,10 +262,11 @@ export function reduceTurn(t, e) {
 }
 
 /** One stderr line plus a `metric` entry in the team log (same path the runner hook failure uses); never throws. */
-export function logRunnerMetric(msg) {
+export function logRunnerMetric(msg, vsHome = process.env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad")) {
   console.error(`[vibesquad] ${msg}`);
   try {
-    const base = path.resolve(process.env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad"), "teams", "_unassigned");
+    const base = path.resolve(vsHome, "teams", "_unassigned");
+    if (isForbiddenRealHome(base)) return; // a test that forgot a temp home must not write the real team log
     fs.mkdirSync(base, { recursive: true });
     fs.appendFileSync(path.join(base, "log.jsonl"), JSON.stringify({ ts: new Date().toISOString(), agent: "runner", lane: "unassigned", type: "metric", text: msg.slice(0, 240), refs: [] }) + "\n");
   } catch {
@@ -706,8 +708,8 @@ export class RunnerBackend {
     }
   }
 
-  /** Sink for per-listener seed retry lines (server log + team-log metric); tests replace it. */
-  seedLog(msg) { logRunnerMetric(msg); }
+  /** Sink for per-listener seed retry lines (server log + team-log metric under the backend home); tests may replace it. */
+  seedLog(msg) { logRunnerMetric(msg, path.dirname(this.rc.home)); } // rc.home is <vibesquad home>/runner
 
   /** A listed agent with the in-memory "error" overlay (the runner log itself only knows running/idle). */
   overlay(agent) {
