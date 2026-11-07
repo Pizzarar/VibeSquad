@@ -501,8 +501,16 @@ test("Plugin integration: successor turn_ended automatically confirms takeover a
     const turnEnded = handlers.get("agent.turn_ended");
     const agentCreated = handlers.get("agent.created");
 
-    // 1. Old lead finishes turn at 255k (idle + packet exists) -> spawns lead-2, oldLead still live
-    await turnEnded({ agent: oldLead, turnId: "t1", outcome: { kind: "completed" } }, { paseo });
+    // 1. The token watcher (server/token-watch.mjs; the plugin no longer evaluates lead tokens) spawns lead-2 at 255k, oldLead still live
+    const spawner = createLeadHandoffCoordinator({
+      rootDir: env.dir,
+      baseHome: env.vsHome,
+      setLabels: async (id, labels) => { const a = store.get(id); if (a) a.labels = { ...(a.labels ?? {}), ...labels }; },
+      listAgents: async () => [...store.values()],
+      getAgent: async (id) => store.get(id) ?? null,
+      createAgent: async (payload) => (await paseo.agents.create({ config: payload.config, cwd: payload.cwd, title: payload.title, labels: payload.labels })).agent,
+    });
+    await spawner.evaluateLead(oldLead);
     const succ = store.get("lead-2");
     assert.ok(succ, "Expected successor lead-2 to be spawned");
     assert.equal(succ.title, "★ Hub2");

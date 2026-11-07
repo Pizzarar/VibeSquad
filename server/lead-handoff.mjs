@@ -917,7 +917,9 @@ export function createLeadHandoffCoordinator(deps = {}) {
 
     // Stage 1: >= 150k Soft Flag + Nudge (fires at most once per lead).
     if (used >= flagTokens) {
-      if (flagged150.has(lead.id) || labels["handoff-flagged"] === "1") {
+      // "handoff-nudged" (not "handoff-flagged") proves the nudge went out: the browser used to pre-set handoff-flagged as a display flag,
+      // which silently suppressed the nudge for three leads in a row.
+      if (flagged150.has(lead.id) || labels["handoff-nudged"] === "1") {
         return { stage: "flag-150", triggered: false, usedTokens: used };
       }
       flagged150.add(lead.id);
@@ -927,6 +929,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
         "needs-you-reason": SOFT_FLAG_REASON,
         "needs-you-at": new Date().toISOString(),
         "handoff-flagged": "1",
+        "handoff-nudged": "1",
       };
       await setLabels(lead.id, nextLabels);
       await sendMessage(lead.id, SOFT_FLAG_NUDGE);

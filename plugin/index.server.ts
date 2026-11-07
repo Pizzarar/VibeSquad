@@ -2018,10 +2018,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           markTurnSeen(agent?.id);
           try {
             if (outcome.kind === "failed") {
-              const { snap: me, labels } = await labelsFor(paseo, agent);
+              const { labels } = await labelsFor(paseo, agent);
               if (!isDigestAgent(labels) && effectiveAgentRole({ labels }) === "lead") {
-                const handoffRes = await checkLeadTokens(paseo, agent.id, me, labels);
-                if (handoffRes?.stage === "auto-250" || handoffRes?.stage === "hard-300") return;
                 void flushWake(paseo, agent.id);
               }
               return await handleFailure(paseo, agent, String(outcome.error?.message ?? ""));
@@ -2037,7 +2035,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             }
             retries.delete(agent.id);
 
-            const { snap: me, labels } = await labelsFor(paseo, agent);
+            const { labels } = await labelsFor(paseo, agent);
             await relayFromFormerLead(paseo, agent, labels);
             if (isDigestAgent(labels)) return;
 
@@ -2053,7 +2051,6 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               if (handoffCoordinator.hasPendingTakeover(agent.id) || labels["vs.handoff-from"]) {
                 await handoffCoordinator.confirmTakeover(agent.id).catch((e: unknown) => log(`confirmTakeover failed: ${e}`));
               }
-              await checkLeadTokens(paseo, agent.id, me, labels);
               void flushWake(paseo, agent.id);
             }
           } catch (err) {
@@ -2161,13 +2158,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
     }
 
-    async function checkLeadTokens(_paseo: Paseo, id: string, me: AgentSnap | null, labels: Labels) {
-      const leadSnap = me ? { ...me, id, labels: { ...(me.labels ?? {}), ...labels } } : { id, title: null, labels };
-      return await handoffCoordinator.evaluateLead(leadSnap).catch((e: unknown) => {
-        log(`lead handoff check failed: ${e}`);
-        return null;
-      });
-    }
+    // The lead context check (150k nudge, 250k/300k handoff) moved to server/token-watch.mjs (one owner: it fires mid-turn on usage,
+    // not only at turn_ended). confirmTakeover above stays here.
 
     // A4: transient network error retry with exponential backoff.
     async function handleFailure(paseo: Paseo, agent: any, message: string) {

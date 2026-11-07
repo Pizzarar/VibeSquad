@@ -174,3 +174,19 @@ test("workers (and archived / closed agents): nothing at any size", async () => 
   assert.equal(r.created.length, 0);
   w.stop();
 });
+
+test("Root cause: a lead whose handoff-flagged/needs-you were pre-set by the browser still gets the nudge, once", async () => {
+  const rootDir = makeRoot();
+  const r = makeRunner();
+  const l = lead("rn-lead");
+  l.labels["handoff-flagged"] = "1"; // what src/App.tsx used to write at 150k: this suppressed the nudge for good
+  l.labels["needs-you"] = "Lead at 150k+ tokens: wrap up and hand off at a good stopping point";
+  r.agents.set("rn-lead", l);
+  const w = startTokenWatcher({ runner: r, rootDir });
+  r.usage("rn-lead", 160_000);
+  r.usage("rn-lead", 161_000);
+  await tick();
+  assert.deepEqual(r.sent.map((s) => s.text), [SOFT_FLAG_NUDGE]);
+  assert.equal(r.agents.get("rn-lead").labels["handoff-nudged"], "1");
+  w.stop();
+});

@@ -5,8 +5,8 @@ import { getRunnerStatus } from "./runnerBridge";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { ProviderQuotaView } from "./antigravity";
-import { LEGACY_NEEDS_LABEL, dismissStaleBuild, dismissUpdateBanner, loadUpdaterStatus, setLanExposureState, setLocalAccess, setServerConfigWarnings, setStaleBuild, triggerUpdateInstall, useLocalReadOnly, useStaleBuild, useStaleBuildDismissed, useConfigWarnings, useExposedIpsStore, useUpdaterStatus } from "./userName";
-import { archiveAgent, detachAgent, getPaseoState, loadArchived, retireAgent, setNeedsYou, updateAgent, upsertLocalAgent, usePaseo } from "./paseo";
+import { dismissStaleBuild, dismissUpdateBanner, loadUpdaterStatus, setLanExposureState, setLocalAccess, setServerConfigWarnings, setStaleBuild, triggerUpdateInstall, useLocalReadOnly, useStaleBuild, useStaleBuildDismissed, useConfigWarnings, useExposedIpsStore, useUpdaterStatus } from "./userName";
+import { archiveAgent, detachAgent, getPaseoState, loadArchived, retireAgent, updateAgent, upsertLocalAgent, usePaseo } from "./paseo";
 import { DEMO } from "./demoFlag";
 import {
   AGENT_TYPE_LABEL,
@@ -29,7 +29,6 @@ import {
   UNASSIGNED,
   assignAgentToLane,
   countsAsNeedsYou,
-  getLeadThresholds,
   getTeams,
   saveTeams,
   leadLadderFor,
@@ -1471,23 +1470,8 @@ export function App() {
     perfEndPainted("switch-team", teamId, `agents=${agents.size}`);
   }, [teamId, agents.size]);
 
-  // A lead past its handoff budget with no needs-you flag would otherwise sit silently (only the card's
-  // SPAWN SUCCESSOR button hints at it). Flag it once; "handoff-flagged" stops a cleared flag re-firing.
-  const flaggedLeads = useRef(new Set<string>());
-  useEffect(() => {
-    if (DEMO) return;
-    for (const m of members) {
-      const { flagTokens } = getLeadThresholds(m.team);
-      if (m.kind !== "lead" || m.agent.archivedAt || usedTokens(m) < flagTokens) continue;
-      const labels = (m.agent.labels ?? {}) as Record<string, string>;
-      const needsValue = labels["needs-you"] || labels[LEGACY_NEEDS_LABEL];
-      const flagged = !!needsValue && needsValue !== "cleared";
-      if (flagged || labels["handoff-flagged"] || flaggedLeads.current.has(m.agent.id)) continue;
-      flaggedLeads.current.add(m.agent.id);
-      const reason = "Lead at 150k+ tokens: wrap up and hand off at a good stopping point";
-      setNeedsYou(m.agent, reason, { "handoff-flagged": "1" }).catch(() => flaggedLeads.current.delete(m.agent.id));
-    }
-  }, [members]);
+  // Lead 150k flag + nudge: server/token-watch.mjs owns it (it must also message the lead). The browser used to pre-set
+  // handoff-flagged here, which made the coordinator think the nudge had gone out.
 
   useEffect(() => {
     if (DEMO || isRemote()) return;

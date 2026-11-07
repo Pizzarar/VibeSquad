@@ -153,24 +153,17 @@ test('turn_ended: when the digest agent cannot start, the verdict is written dir
   }
 });
 
-test('turn_ended: lead usage over 150k flags once; over 250k sends the handoff prompt exactly once', async () => {
+test('turn_ended: the plugin no longer runs the lead context check (server/token-watch.mjs owns it, so nothing double-fires)', async () => {
   const b = await boot();
   try {
     const lead = await b.backend.createAgent(req({ lane: 'bug-chaser', role: 'lead' }, { initialPrompt: 'USAGE:160000' }));
-    await until(async () => (await b.backend.getAgent(lead.id)).labels['handoff-flagged'] === '1', 8000, '150k handoff-flagged label');
-    const nudges = async () => (await inputs(b, lead.id)).filter((t) => /handoff/i.test(t) && !t.startsWith('USAGE:'));
-    await until(async () => (await nudges()).length >= 1, 8000, '150k nudge');
-    // another turn at the same level: no second nudge
-    await b.backend.sendAgentPrompt(lead.id, 'USAGE:161000');
-    await settle(600);
-    assert.equal((await nudges()).length, 1);
-
+    await until(async () => (await b.backend.getAgent(lead.id)).labels.ord, 6000, 'lead ord label');
     await b.backend.sendAgentPrompt(lead.id, 'USAGE:260000');
-    await until(async () => (await b.backend.getAgent(lead.id)).labels['handoff-write-prompted'] === '1', 8000, '250k prompt label');
-    await b.backend.sendAgentPrompt(lead.id, 'USAGE:262000');
-    await settle(600);
-    const after = await nudges();
-    assert.equal(after.length, 2, 'one 150k nudge + one 250k write-handoff prompt, never repeated');
+    await settle(800);
+    const a = await b.backend.getAgent(lead.id);
+    assert.equal(a.labels['handoff-flagged'], undefined);
+    assert.equal(a.labels['handoff-write-prompted'], undefined);
+    assert.equal((await inputs(b, lead.id)).filter((t) => /handoff/i.test(t) && !t.startsWith('USAGE:')).length, 0);
   } finally {
     await b.close();
   }
