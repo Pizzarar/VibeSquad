@@ -1,27 +1,41 @@
--- S1 cast sheet: public/office/cast-{dark,light}.png + cast.json (pinned contract shape) and
--- art/office/cast.aseprite. Built from the H0 part maps (art/cast/hypno/{floor,front}.lua) plus
--- any extra roles in art/cast/hypno/extra.lua. The plate draws the desks, so sprites carry
--- only the chair + character. Rows = roles; cols = work0 work1 needs0 needs1 idle ride.
---   work : back of head; frame 2 bobs the head 1px (typing)
---   needs: turned round, hand up; frame 2 sways the hand 1px (wave). No baked bubble.
---   idle : standing (lobby queue)      ride: standing in the car, humming lift music
+-- S1v2 cast sheet, 3/4 top-down camera (above + behind, ~45deg):
+-- public/office/cast-{dark,light}.png + cast.json (pinned contract shape) and art/office/cast.aseprite.
+-- Heads come from the H0 part maps (art/cast/hypno/{floor,front,extra}.lua) so every role keeps its
+-- face; bodies, arms, chairs and shadows are redrawn here for the top-down angle.
+-- Rows = roles; cols = work0 work1 needs0 needs1 idle ride. Cell 32, anchor = bottom-centre (chair base / feet).
+--   work : crown of the head, shoulder tops, forearms reaching up onto the desk (typing: the hands
+--          alternate 1px), chair back seen from above covering the lower back
+--   needs: chair spun round, looking up at the camera, lap from above, hand up (frame 2 waves 1px)
+--   idle : standing, looking up, short foreshortened legs, dithered floor shadow
+--   ride : idle + lift-music note
 -- Run: Aseprite.exe -b --script-param root=<repo> --script art/office/build_cast.lua
 local root = app.params.root
 local hyp = root.."/art/cast/hypno/"
 local L = dofile(hyp.."lib.lua")
 local P = dofile(hyp.."floor.lua")
 local F = dofile(hyp.."front.lua")
-local X = io.open(hyp.."extra.lua") and dofile(hyp.."extra.lua")(L, P, F) or nil
+local X = dofile(hyp.."extra.lua")(L, P, F)
 local pal = { dark = Palette{ fromFile = root.."/art/palette/pc98-dark.gpl" },
               light = Palette{ fromFile = root.."/art/palette/pc98-light.gpl" } }
 local CELL = 32
 local ROLES = { "lead", "buddy", "implement", "review" }
-if X then for _, r in ipairs(X.roles) do ROLES[#ROLES+1] = r end end
-local ALL = { "lead", "buddy", "implement", "review", "retired-lead", "mechanical", "audit", "spec", "art", "unknown", "riffbot", "overlord" }
-local FALLBACK = { spec="review", audit="review", art="implement", mechanical="implement", ["retired-lead"]="lead", unknown="buddy", riffbot="buddy", overlord="lead" }
--- standing: how far the head/torso move up, and the trouser slot
-local STAND = { lead = {3, L.PINK}, buddy = {3, L.VIOLET}, implement = {1, L.VIOLET}, review = {0, L.MINT} }
-if X then for r, v in pairs(X.stand) do STAND[r] = v end end
+for _, r in ipairs(X.roles) do ROLES[#ROLES+1] = r end
+
+-- per role: shirt, hand, trouser, chair (slots)
+local LOOK = {
+  lead           = { L.PINK,   L.SKIN,   L.VIOLET, L.VIOLET },
+  buddy          = { L.TEAL,   L.SKIN,   L.VIOLET, L.VIOLET },
+  implement      = { L.MARBLE, L.SKIN,   L.VIOLET, L.VIOLET },
+  review         = { L.VIOLET, L.MINT,   L.MINT,   L.VIOLET },
+  ["retired-lead"] = { L.AMBER, L.CORAL, L.VIOLET, L.VIOLET },
+  mechanical     = { L.TEAL,   L.MARBLE, L.TEAL,   L.VIOLET },
+  audit          = { L.VIOLET, L.AMBER,  L.VIOLET, L.VIOLET },
+  spec           = { L.MINT,   L.MARBLE, L.VIOLET, L.VIOLET },
+  art            = { L.TEAL,   L.MARBLE, L.VIOLET, L.VIOLET },
+  unknown        = { L.CORAL,  L.MARBLE, L.CORAL,  L.VIOLET },
+  riffbot        = { L.PINK,   L.MARBLE, L.VIOLET, L.VIOLET },
+  overlord       = { L.VIOLET, L.MARBLE, L.VIOLET, L.PINK },
+}
 
 local tmp = Sprite(CELL, CELL, ColorMode.INDEXED); tmp:setPalette(pal.dark); tmp.transparentColor = 0
 local function canvas() return L.canvas(tmp, tmp.layers[1], tmp.frames[1]) end
@@ -38,63 +52,175 @@ local function flip(img)
   for y=0,CELL-1 do for x=0,CELL-1 do o:drawPixel(CELL-1-x, y, img:getPixel(x, y)) end end
   return o
 end
+local function bbox(img)
+  local y0, y1 = nil, nil
+  for y=0,CELL-1 do for x=0,CELL-1 do
+    if img:getPixel(x, y) ~= 0 then y0 = y0 or y; y1 = y end
+  end end
+  return y0 or 0, y1 or 0
+end
+local function rowCount(img, y)
+  local n = 0
+  for x=0,CELL-1 do if img:getPixel(x, y) ~= 0 then n = n + 1 end end
+  return n
+end
 local function st(C, part, dx, dy) if part then C.stamp(part[1] + (dx or 0), part[2] + (dy or 0), part[3]) end end
-local function firstRows(map, n)
-  local out, i = {}, 0
-  for row in map:gmatch("[^\n]+") do i = i + 1; if i <= n then out[#out+1] = row end end
-  return table.concat(out, "\n")
+-- a filled part with a 1px INK outline drawn outside it
+local function blob(out, fill)
+  local C = canvas(); fill(C); C.outline(L.INK); over(out, C.img)
+end
+local function pickRows(map, idx)
+  local rows = {}
+  for row in map:gmatch("[^\n]+") do rows[#rows+1] = row end
+  local o = {}
+  for _, i in ipairs(idx) do if rows[i+1] then o[#o+1] = rows[i+1] end end
+  return table.concat(o, "\n")
 end
 local RIM = { review = true, implement = true }
-local RIM_TOP = { implement = 7 } -- TV-head: keep the antenna rods INK
-local function rim(C, role, ymax, lift)
-  local y0 = math.max(0, (RIM_TOP[role] or 0) - (lift or 0))
+local RIM_TOP = { implement = 7 }
+local function rim(C, role)
   local set = {}
-  for y=y0,ymax-1 do for x=0,CELL-1 do
+  for y=RIM_TOP[role] or 0, CELL-1 do for x=0,CELL-1 do
     if C.img:getPixel(x, y) == L.INK and C.get(x, y-1) == 0 then set[#set+1] = {x, y} end
   end end
   for _, q in ipairs(set) do C.img:drawPixel(q[1], q[2], L.VIOLET) end
 end
 
--- part tables (H0 + extra)
-local PB = { body = P.bodyBack, head = P.headBack, prop = P.propBack, ears = P.earsBack, earsR = P.earsBackR }
+local PB = { head = P.headBack, prop = P.propBack, ears = P.earsBack, earsR = P.earsBackR }
 local FB = { body = F.body, head = F.head, fx = F.fx }
-if X then
-  for k, t in pairs(X.back) do for r, v in pairs(t) do PB[k][r] = v end end
-  for k, t in pairs(X.front) do for r, v in pairs(t) do FB[k][r] = v end end
+for k, t in pairs(X.back) do if PB[k] then for r, v in pairs(t) do PB[k][r] = v end end end
+for k, t in pairs(X.front) do for r, v in pairs(t) do FB[k][r] = v end end
+
+-- ---------- shared pieces ----------
+local function chairBase(out)
+  local C = canvas()
+  C.rect(15, 27, 2, 3, L.INK)
+  C.hline(10, 30, 12, L.INK); C.px(11, 29, L.INK); C.px(20, 29, L.INK)
+  C.rect(9, 31, 3, 1, L.INK); C.rect(20, 31, 3, 1, L.INK); C.rect(15, 31, 2, 1, L.INK)
+  over(out, C.img)
+end
+local function shadow(out, cx, cy, rx, ry)
+  local C = canvas()
+  for y=cy-ry, cy+ry do for x=cx-rx, cx+rx do
+    local d = ((x+0.5-cx)/rx)^2 + ((y+0.5-cy)/ry)^2
+    if d <= 1 and (x + y) % 2 == 0 then C.px(x, y, L.INK) end
+  end end
+  over(out, C.img)
+end
+-- back-of-head layer, neck stalk removed (from above the head sits straight on the shoulders)
+local function backHead(role)
+  local C = canvas()
+  st(C, PB.head[role]); st(C, PB.ears[role]); st(C, PB.earsR[role])
+  if role == "buddy" then for _, p in ipairs(P.phonesBack) do st(C, p) end end
+  if X.backExtra[role] then for _, p in ipairs(X.backExtra[role]) do st(C, p) end end
+  st(C, PB.prop[role])
+  local y0, y1 = bbox(C.img)
+  for _=1,3 do
+    if rowCount(C.img, y1) <= 9 then
+      for x=0,CELL-1 do C.img:drawPixel(x, y1, 0) end
+      y1 = y1 - 1
+    end
+  end
+  if RIM[role] then rim(C, role) end
+  return C.img, y0, y1
+end
+local function frontHead(role)
+  local C = canvas()
+  for _, p in ipairs(FB.head[role]) do st(C, p) end
+  if RIM[role] then rim(C, role) end
+  local y0, y1 = bbox(C.img)
+  return C.img, y0, y1
+end
+-- place a head so its bottom lands on `bottom`, never cropping the top
+local function putHead(out, img, y0, y1, bottom)
+  local dy = bottom - y1
+  if y0 + dy < 0 then dy = -y0 end
+  over(out, img, 0, dy)
 end
 
-local function work(role, bob)
+-- ---------- work: seen from above + behind ----------
+local function work(role, f)
+  local lk = LOOK[role]
+  local shirt, hand, chair = lk[1], lk[2], lk[4]
   local out = blank()
-  local C = canvas(); st(C, PB.body[role]); over(out, C.img)
-  -- per-role chair (Overlord's throne); a "high" chair is drawn over the head too
-  local chB = X and X.chairBack and X.chairBack[role] or P.chairBack
-  local high = X and X.chairHigh and X.chairHigh[role]
-  C = canvas(); st(C, chB); if not high then over(out, C.img) end
-  local chairImg = C.img
-  C = canvas(); st(C, PB.head[role]); st(C, PB.ears[role]); st(C, PB.earsR[role])
-  if role == "buddy" then for _, p in ipairs(P.phonesBack) do st(C, p) end end
-  if X and X.backExtra[role] then for _, p in ipairs(X.backExtra[role]) do st(C, p) end end
-  if RIM[role] then rim(C, role, 16) end
-  if role == "implement" and bob == 0 then C.px(14, 20, L.INK); C.px(15, 20, L.INK) end
-  over(out, C.img, 0, bob)
-  C = canvas(); st(C, PB.prop[role]); over(out, C.img, 0, bob)
-  if high then over(out, chairImg) end
+  chairBase(out)
+  -- seat (wider than the back; only its corners show)
+  blob(out, function(C) C.rect(8, 24, 16, 4, chair); C.px(9, 25, L.MARBLE) end)
+  -- shoulders: a broad hump, the top surface catches a little light
+  blob(out, function(C)
+    local hw = { 8, 10, 11, 11, 11, 11, 11, 11 }
+    for i, w in ipairs(hw) do C.hline(16 - w, 15 + i, w*2, shirt) end
+    C.hline(8, 17, 3, L.MARBLE); C.hline(21, 17, 3, L.MARBLE)
+    if shirt == L.MARBLE then C.hline(8, 17, 3, L.LINE); C.hline(21, 17, 3, L.LINE) end
+  end)
+  -- forearms reaching up-and-in onto the keyboard past the head; hands alternate (typing)
+  for side=0,1 do
+    local s = side == 0 and 1 or -1
+    local bx = side == 0 and 5 or 26
+    local up = (side + f) % 2
+    blob(out, function(C)
+      for t=0,1 do C.line(bx + t*s, 20, bx + (3+t)*s, 12 + up, shirt) end
+      C.rect(side == 0 and bx+3 or bx-4, 10 + up, 2, 2, hand)
+    end)
+  end
+  local hi, y0, y1 = backHead(role)
+  putHead(out, hi, y0, y1, 21)
+  -- chair back from above: cap on top, padded back below, covers the lower back
+  if role == "overlord" then
+    blob(out, function(C)
+      C.rect(6, 19, 20, 9, L.PINK); C.hline(6, 19, 20, L.AMBER); C.hline(6, 20, 20, L.AMBER)
+      C.px(6, 18, L.AMBER); C.px(25, 18, L.AMBER); C.px(15, 18, L.AMBER); C.px(16, 18, L.AMBER)
+      C.px(9, 23, L.MARBLE); C.px(22, 23, L.MARBLE); C.px(15, 25, L.MARBLE)
+    end)
+  else
+    blob(out, function(C)
+      C.hline(11, 20, 10, chair); C.rect(10, 21, 12, 6, chair)
+      C.hline(11, 22, 10, L.INK)
+      C.px(11, 20, L.MARBLE); C.px(12, 20, L.MARBLE); C.px(11, 23, L.MARBLE); C.px(11, 24, L.MARBLE)
+    end)
+  end
   return flip(out)
 end
 
--- fx[1] is the H0 baked bubble; the sheet ships the bubble as its own sprite
+-- ---------- needs: chair spun round, looking up at the camera ----------
+local function torsoMap(role) return FB.body[role][1], pickRows(FB.body[role][3], {0,1,2,3,4,5,6,9}) end
 local function needs(role, wave)
+  local lk = LOOK[role]
+  local trouser, chair = lk[3], lk[4]
   local out = blank()
-  local C = canvas(); st(C, X and X.chairFront and X.chairFront[role] or P.chairFront); over(out, C.img)
-  C = canvas(); st(C, FB.body[role]); over(out, C.img)
-  C = canvas(); for _, p in ipairs(FB.head[role]) do st(C, p) end
-  if RIM[role] then rim(C, role, 10) end
-  over(out, C.img)
-  C = canvas(); for i, p in ipairs(FB.fx[role]) do if i > 1 then st(C, p) end end
+  -- chair back behind the sitter
+  if role == "overlord" then
+    blob(out, function(C)
+      C.rect(5, 6, 22, 18, L.PINK); C.rect(5, 6, 22, 2, L.AMBER); C.vline(5, 6, 18, L.AMBER); C.vline(26, 6, 18, L.AMBER)
+      C.px(5, 5, L.AMBER); C.px(26, 5, L.AMBER); C.px(15, 5, L.AMBER); C.px(16, 5, L.AMBER)
+      C.px(8, 10, L.MARBLE); C.px(23, 10, L.MARBLE)
+    end)
+  else
+    blob(out, function(C)
+      C.hline(10, 11, 12, chair); C.rect(9, 12, 14, 11, chair)
+      C.px(10, 12, L.MARBLE); C.px(11, 12, L.MARBLE); C.px(10, 13, L.MARBLE)
+    end)
+  end
+  chairBase(out)
+  blob(out, function(C) C.rect(7, 23, 18, 4, chair); C.px(8, 24, L.MARBLE) end)
+  -- lap from above: thighs toward the camera, shoes peeking past the seat
+  blob(out, function(C)
+    C.rect(10, 24, 5, 3, trouser); C.rect(17, 24, 5, 3, trouser)
+    C.px(11, 24, L.MARBLE); C.px(18, 24, L.MARBLE)
+  end)
+  do local C = canvas()
+    C.rect(10, 28, 5, 2, L.INK); C.rect(17, 28, 5, 2, L.INK); C.px(11, 28, L.MARBLE); C.px(18, 28, L.MARBLE)
+    over(out, C.img) end
+  local bx, map = torsoMap(role)
+  local C = canvas(); C.stamp(bx, 17, map); over(out, C.img)
+  local hi, y0, y1 = frontHead(role)
+  putHead(out, hi, y0, y1, 18)
+  C = canvas(); for i, p in ipairs(FB.fx[role]) do if i > 1 then st(C, p, 0, -3) end end
   over(out, C.img, wave, 0)
   return out
 end
 
+-- ---------- idle / ride: standing, seen from above ----------
 local NOTE = [[
 |...kk.|
 |...kpk|
@@ -104,26 +230,23 @@ local NOTE = [[
 |.kkk..|
 ]]
 local function stand(role, ride)
-  local s, trouser = STAND[role][1], STAND[role][2]
+  local lk = LOOK[role]
+  local trouser = lk[3]
   local out = blank()
-  local C = canvas()
-  local b = FB.body[role]
-  C.stamp(b[1], b[2] - s, firstRows(b[3], 10))
-  -- legs from under the torso to the shoes
-  local top = b[2] - s + 10
-  for _, x0 in ipairs({11, 17}) do
-    for y=top, 30 do C.px(x0, y, L.INK); C.px(x0+1, y, trouser); C.px(x0+2, y, trouser); C.px(x0+3, y, L.INK) end
-    C.hline(x0 - (x0 == 11 and 1 or 0), 31, 5, L.INK)
-  end
-  over(out, C.img)
-  C = canvas(); for _, p in ipairs(FB.head[role]) do st(C, p, 0, -s) end
-  if RIM[role] then rim(C, role, 10 - s, s) end
-  over(out, C.img)
-  if ride then C = canvas(); C.stamp(26, 4, NOTE); over(out, C.img) end
+  shadow(out, 16, 29.5, 10, 2.5)
+  blob(out, function(C) C.rect(11, 24, 4, 3, trouser); C.rect(17, 24, 4, 3, trouser) end)
+  do local C = canvas()
+    C.rect(10, 28, 5, 2, L.INK); C.rect(17, 28, 5, 2, L.INK); C.px(11, 28, L.MARBLE); C.px(18, 28, L.MARBLE)
+    over(out, C.img) end
+  local bx, map = torsoMap(role)
+  local C = canvas(); C.stamp(bx, 17, map); over(out, C.img)
+  local hi, y0, y1 = frontHead(role)
+  putHead(out, hi, y0, y1, 18)
+  if ride then C = canvas(); C.stamp(26, 2, NOTE); over(out, C.img) end
   return out
 end
 
--- "!" callout: bold 2px bang, tail down-left toward the raised hand
+-- "!" callout (unchanged from S1)
 local BUBBLE = [[
 |.kkkkkkkkkkk.|
 |kppppppppppkk|
@@ -169,18 +292,15 @@ for _, mode in ipairs({"dark", "light"}) do
 end
 tmp:close()
 
--- cast.json (hand-ordered writer so diffs stay stable)
 local function xy(t) local s = {} for _, p in ipairs(t) do s[#s+1] = '{"x":'..p[1]..',"y":'..p[2]..'}' end return "["..table.concat(s, ",").."]" end
-local parts, fb = {}, {}
+local parts = {}
 for _, role in ipairs(ROLES) do
   local c = cells[role]
   parts[#parts+1] = '    "'..role..'":{"work":'..xy(c.work)..',"needs":'..xy(c.needs)..',"idle":'..xy(c.idle)..',"ride":'..xy(c.ride)..'}'
 end
-for _, r in ipairs(ALL) do if not cells[r] then fb[#fb+1] = '"'..r..'":"'..FALLBACK[r]..'"' end end
--- bubble offset = bubble top-left relative to the sprite anchor (cell bottom-centre):
--- floats just above the raised hand, top-left of the head
+-- bubble offset = bubble top-left relative to the sprite anchor (cell bottom-centre)
 local json = '{\n  "version":1,\n  "cell":32,\n  "anchor":"bottom-centre",\n  "roles":{\n'..table.concat(parts, ",\n")..
   '\n  },\n  "bubble":{"x":'..BX..',"y":'..BY..',"w":'..BW..',"h":'..BH..',"offset":{"x":-18,"y":-40}},\n'..
-  '  "fallback":{'..table.concat(fb, ",")..'}\n}\n'
+  '  "fallback":{}\n}\n'
 local f = io.open(root.."/public/office/cast.json", "wb"); f:write(json); f:close()
 print("wrote cast.json ("..#ROLES.." roles)")
