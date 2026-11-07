@@ -28,7 +28,7 @@ export const LEAD_HARD_CAP_DEFAULT = 300_000;
 
 export const SOFT_FLAG_REASON = "Lead at 150k+ tokens: wrap up and hand off at a good stopping point";
 export const SOFT_FLAG_NUDGE =
-  "Wrap up: stop dispatching new blocks, let in-flight workers finish, write your handoff doc.";
+  "Wrap up: stop dispatching new blocks, let in-flight workers finish, write your Judgment in the packet, then run handoff_lead.";
 export const WRITE_HANDOFF_PROMPT =
   "Write handoff now: run 'vs handoff' and finish your turn so VS can auto-handoff.";
 export const TAKEOVER_CONFIRM_INSTRUCTION =
