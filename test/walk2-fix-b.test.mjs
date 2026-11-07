@@ -36,6 +36,7 @@ test("App restores focus to modal opener", () => {
 
 test("round 2: Files short-circuits big/binary before readFile, caps images, svg via data:, notFound only in catch", () => {
   const s = src("FilesPanel.tsx");
+  assert.ok(s.includes("known > cap"), "size short-circuit present");
   assert.ok(s.indexOf("known > cap") < s.indexOf("vsReadFile(cwd, path, cap)"));
   assert.match(s, /MAX_IMG_BYTES/);
   assert.match(s, /data:image\/svg\+xml;base64/);
