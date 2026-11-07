@@ -5539,9 +5539,11 @@ button.project-file-name:hover { text-decoration: underline; }
      dotted outline) + a solid 2 kit px INK floor that is also the clean top edge of the chat area */
   height: calc(var(--u3-px) * 22); min-height: calc(var(--u3-px) * 22); padding: 0 var(--sp-2); color: var(--u3-ink-text); background-color: var(--tb-3);
   border-bottom: calc(var(--u3-px) * 2) solid var(--u3-ink);
-  background-image: var(--u3-tb-ramp), var(--u3-tb-peach);
-  background-size: calc(var(--u3-px) * 192) calc(var(--u3-px) * 14), calc(var(--u3-px) * 16) calc(var(--u3-px) * 14);
-  background-position: 0 calc(var(--u3-px) * -2), 0 calc(var(--u3-px) * -2); background-repeat: no-repeat, repeat-x;
+  /* the first layer is a flat peach cover over strip rows 12-13 (dithered shade + ink floor; 0.5 kit px of margin each side because the bar's top edge can sit on a half device px at fractional zoom x dpr), which would otherwise show as a
+     dotted line + solid rule across the middle of the 44px bar (no-session state has no controls to hide it) */
+  background-image: linear-gradient(var(--tb-3), var(--tb-3)), var(--u3-tb-ramp), var(--u3-tb-peach);
+  background-size: 100% calc(var(--u3-px) * 3), calc(var(--u3-px) * 192) calc(var(--u3-px) * 14), calc(var(--u3-px) * 16) calc(var(--u3-px) * 14);
+  background-position: 0 calc(var(--u3-px) * 9.5), 0 calc(var(--u3-px) * -2), 0 calc(var(--u3-px) * -2); background-repeat: no-repeat, no-repeat, repeat-x;
   background-clip: padding-box; box-shadow: none;
   image-rendering: pixelated;
 }
@@ -5573,3 +5575,14 @@ button.project-file-name:hover { text-decoration: underline; }
 .team-head .team-emblem { flex-shrink: 0; }
 /* U3e: chat text scrolling under the bar fades out over its first 4 kit px instead of being cut mid-glyph */
 .app.pin-focus > .agent-panes:not(:has(.sky-zones)) .timeline { -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 calc(var(--u3-px) * 4)); mask-image: linear-gradient(180deg, transparent 0, #000 calc(var(--u3-px) * 4)); }
+
+/* ---- U3f: no-session bar matches the session bar; disabled controls stay readable (>= 3:1) ---- */
+:root { --u3-disabled-text: color-mix(in srgb, #f6eef8 62%, var(--panel-hi)); }
+:root[data-theme="light"] { --u3-disabled-text: color-mix(in srgb, #160b24 62%, var(--panel-hi)); }
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) .pin-focus-bar .pin-lane-handle { opacity: 1; color: var(--u3-ink-text); }
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) .pin-focus-bar .pin-focus-name { color: var(--u3-ink-text); font-weight: 700; opacity: 1; }
+/* a disabled kit button keeps its full-strength quiet ghost frame (the old opacity .55 faded the frame itself into the page) */
+:is(.btn, .bad-btn, .usage-review-run, .squads-pager-btn, .sidebar-cog-btn, .tl-jump-bottom, .seg button, .tchip):disabled {
+  opacity: 1 !important; cursor: not-allowed; border-image-source: var(--u3-btn-ghost-normal) !important; background: none !important;
+  color: var(--u3-disabled-text) !important; text-shadow: none !important; transform: none; font-weight: 400;
+}
