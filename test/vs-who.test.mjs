@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -704,6 +704,8 @@ test("vs who uses runner liveness, not the last log event: a lead the restarted 
     const now = Date.now();
     writeRunnerAgent("rn-lost0000001", now - 60_000, "idle"); // last event predates the runner start: its child died
     writeRunnerAgent("rn-live0000001", now + 1_000, "idle");
+    // A meta/archive append after the restart (runner.updateMeta on a lost agent) is not liveness.
+    appendFileSync(join(agentsDir, "rn-lost0000001.jsonl"), JSON.stringify({ seq: 2, ts: now + 2_000, type: "meta", patch: { labels: { x: "1" } } }) + "\n");
     writeFileSync(join(env.vsHome, "runner", "runner.json"), JSON.stringify({ port: 1, pid: process.pid, startedAt: now }));
 
     const args = ["who", "lead", "--team", "vibesquad", "--lane", "vibesquad", "--json"];
