@@ -436,7 +436,8 @@ export class Runner {
   // Returns { queued, ahead? }: over the family's turn cap the prompt is logged now and delivered FIFO when a slot frees.
   send(id, text, opts = {}) {
     const live = this.live.get(id);
-    const spec = live ? null : this._parkedSpec(id);
+    // A lost agent (its process died in a runner restart) resumes in place on the next send, same id + session.
+    const spec = live ? null : (this._parkedSpec(id) ?? this._lostSpec(id));
     if (!live?.handle && !spec) throw new Error(`agent ${id} is not running`);
     const images = (Array.isArray(opts.images) ? opts.images : []).filter((i) => i && typeof i.data === 'string' && typeof i.mimeType === 'string');
     if (opts.activeTurnBehavior === 'interrupt' && live?.status === 'running') this.cancel(id);

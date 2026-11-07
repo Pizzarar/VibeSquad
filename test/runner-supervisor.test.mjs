@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { hashRunnerFiles } from "../runner/server.mjs";
-import { superviseRunner } from "../server/runner-supervisor.mjs";
+import { restartRunnerNow, superviseRunner } from "../server/runner-supervisor.mjs";
 
 /** Runs the supervisor with a fake healthy runner; each `next()` advances one tick. `restart` only counts (never flips state). */
 function harness(state, { runningCount } = {}) {
@@ -144,4 +144,34 @@ test("unknown running count (derivation fails): treated as busy, no restart", as
   assert.equal(h.logs.filter((l) => /pending/.test(l)).length, 1);
   assert.match(h.logs[0], /running turns unknown/);
   h.sup.stop();
+});
+
+test("restartRunnerNow is single-flight per owner: concurrent calls share one kill + one startOwned", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "vs-restart-now-"));
+  const home = path.join(dir, "runner");
+  mkdirSync(home, { recursive: true });
+  writeFileSync(path.join(home, "runner.json"), JSON.stringify({ port: 1, pid: 4242 }));
+  writeFileSync(path.join(home, "token"), "t");
+  writeFileSync(path.join(home, "runner.lock"), JSON.stringify({ pid: 4242 }));
+  const killed = [];
+  let starts = 0;
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const owner = {
+    rc: { home },
+    startOwned: async () => { starts += 1; await gate; return true; },
+  };
+  try {
+    const opts = { kill: (pid) => killed.push(pid), alive: () => false, waitMs: 0 };
+    const p1 = restartRunnerNow(owner, opts);
+    const p2 = restartRunnerNow(owner, opts);
+    assert.equal(p2, p1, "second caller awaits the in-flight restart");
+    release();
+    assert.equal(await p1, true);
+    assert.equal(await p2, true);
+    assert.deepEqual(killed, [4242], "exactly one kill");
+    assert.equal(starts, 1, "exactly one startOwned");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -36,21 +36,32 @@ export function restartRunner(owner, opts = {}) {
  * Kill the runner process tree, clear whatever blocks a fresh start, and force a start through the owner. A hard kill skips
  * the runner's shutdown() (which would log an `exit` for every live agent), so a mid-turn agent keeps its session and stays
  * resumable as "lost" via the existing park/resume path. Used by the supervisor (hash change) and the owner's "Restart runner".
+ * Single-flight per owner: a concurrent caller (a supervisor tick and an Unstick forced restart) awaits the same in-flight
+ * restart instead of starting a second kill/startOwned, so it can never kill the freshly started runner.
  */
-export async function restartRunnerNow(owner, { alive = pidAlive, waitMs = 3000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
-  const home = owner.rc.home;
-  const disc = readDiscovery(home);
-  const pid = disc?.pid;
-  if (Number.isInteger(pid) && pid > 0) {
-    killTree(pid, { sync: true });
-    const end = Date.now() + waitMs;
-    while (alive(pid) && Date.now() < end) await sleep(50);
-    // Only delete if they still name the pid we killed: superviseRunner may have started a new runner meanwhile.
-    if (readLock(path.join(home, "runner.lock"))?.pid === pid) rmSync(path.join(home, "runner.lock"), { force: true });
-    if (readDiscovery(home)?.pid === pid) rmSync(path.join(home, "runner.json"), { force: true });
-  }
-  await owner.startOwned({ force: true });
-  return true;
+const restarts = new WeakMap(); // owner -> in-flight restart promise
+export function restartRunnerNow(owner, { alive = pidAlive, waitMs = 3000, kill = (pid) => killTree(pid, { sync: true }), sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+  const inflight = restarts.get(owner);
+  if (inflight) return inflight;
+  const p = (async () => {
+    const home = owner.rc.home;
+    const disc = readDiscovery(home);
+    const pid = disc?.pid;
+    if (Number.isInteger(pid) && pid > 0) {
+      kill(pid);
+      const end = Date.now() + waitMs;
+      while (alive(pid) && Date.now() < end) await sleep(50);
+      // Only delete if they still name the pid we killed: superviseRunner may have started a new runner meanwhile.
+      if (readLock(path.join(home, "runner.lock"))?.pid === pid) rmSync(path.join(home, "runner.lock"), { force: true });
+      if (readDiscovery(home)?.pid === pid) rmSync(path.join(home, "runner.json"), { force: true });
+    }
+    await owner.startOwned({ force: true });
+    return true;
+  })().finally(() => {
+    if (restarts.get(owner) === p) restarts.delete(owner);
+  });
+  restarts.set(owner, p);
+  return p;
 }
 
 /**

@@ -62,6 +62,26 @@ test('a runner restart makes an idle agent lost; resume() brings it back in plac
   assert.ok(r2.timeline(id).some((e) => e.type === 'input' && e.text === 'hello'), 'history kept');
 });
 
+test('send to a lost (restarted) agent resumes it in place instead of "not running"', async () => {
+  const dir = tmp();
+  const s1 = fakeSpawn();
+  const r1 = mkRunner(dir, s1);
+  const id = r1.create({ provider: 'claude', cwd: os.tmpdir(), prompt: 'hello' });
+  await tick();
+  assert.equal(r1.status(id).status, 'idle');
+  // restart: a fresh Runner on the same log dir has no live child -> lost
+  const s2 = fakeSpawn();
+  const r2 = mkRunner(dir, s2);
+  assert.equal(r2.status(id).status, 'lost');
+  // send must resume in place (same id + session), not throw "agent <id> is not running"
+  assert.doesNotThrow(() => r2.send(id, 'follow up'));
+  await tick();
+  assert.equal(s2.calls.length, 1, 'spawned once');
+  assert.ok(s2.calls[0].args.includes('--resume') && s2.calls[0].args.includes('sess-1'), s2.calls[0].args.join(' '));
+  assert.deepEqual(r2.list(), [id], 'same id, no new agent');
+  assert.ok(r2.timeline(id).some((e) => e.type === 'input' && e.text === 'follow up'), 'new prompt logged');
+});
+
 test('resume() refuses an exited agent, a session-less one, and an unknown id', async () => {
   const dir = tmp();
   const r1 = mkRunner(dir, fakeSpawn());
