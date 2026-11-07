@@ -35,15 +35,15 @@ Example:
 
 You should see: a few short questions back. Answer them. If you do not know, say "I don't know, what do you suggest?".
 
-## 3. Ask what already does this
+## 3. Think through how one works in plain language
 
-This is the key move. Type:
+This is the key move. Describe how you picture it working, in plain English. Type:
 
-> What already does this? Explain in plain English what programs like it do, and how they work.
+> I picture it like this: the player sets a price, customers come by faster or slower depending on the weather, and each sale adds to the money. Walk me through the pieces of how that works, and fill in the parts I'm leaving out.
 
-You should see: a few real examples, and a plain description of the parts inside them. Ask follow-ups until the parts make sense. For example: "Why does it need a save file?" or "What is the hard part?"
+You should see: the Buddy fills in the missing pieces in plain English and asks where it is not sure. Ask follow-ups until the parts make sense. For example: "Why does it need a save file?" or "What is the hard part?"
 
-Now you know the how, because the Buddy taught you. Say which examples you like and which you do not.
+Now you know the how, because you and the Buddy worked it out together. Say which parts feel right and which do not.
 
 ## 4. Park side ideas
 
@@ -78,7 +78,7 @@ Keep one Buddy for one topic. See [Working with Squads](../Concepts/Squads.md).
 
 If you cannot say yes to every line, stay in the chat and keep refining. That is the Loop part of ROLO, and it starts here.
 
-> **Aub:** I started out wanting to build my own orchestrator from scratch. Claude pointed me to Paseo. Paseo led me to brainstorm chats. Brainstorming eventually led me to build VibeSquad on top of Paseo instead of writing an orchestrator from the ground up. Asking what already exists saved me from building the whole thing myself.
+> **Aub:** I started out wanting to build my own orchestrator from scratch. Claude pointed me to Paseo. Paseo led me to brainstorm chats. Brainstorming eventually led me to build VibeSquad, first on top of Paseo by getpaseo and now on its own built-in runner. Talking through how one works in plain language, piece by piece, is what got me there.
 
 ## Next
 

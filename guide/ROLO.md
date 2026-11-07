@@ -6,7 +6,7 @@ ROLO is four parts: Riff, Organize, Loop, Own.
 
 ## Riff
 
-Talk to a [Buddy](Concepts/Buddy.md). Say what you want in your own words. Then ask it to explain, in plain English, how programs like yours work. Ask what already does this, and how. You learn the how from it. You do not need to know it first.
+Talk to a [Buddy](Concepts/Buddy.md). Say what you want in your own words. Then think through how one works in plain language: walk through how you picture it working, and talk the pieces out with the Buddy. You learn the how from it. You do not need to know it first.
 
 ## Organize
 
