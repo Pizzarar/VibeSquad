@@ -97,6 +97,11 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
         await runner.sendQueued(id, b.text, { images: b.images, activeTurnBehavior: b.activeTurnBehavior }); // a parked agent may wait for a slot
         return json(res, 202, { ok: true });
       }
+      if (parts[2] === 'resume' && req.method === 'POST') {
+        if (!runner.store.exists(id)) return json(res, 404, { error: 'no such agent' });
+        if (!runner.resume(id)) return json(res, 409, { error: 'agent cannot be resumed' });
+        return json(res, 202, { ok: true });
+      }
       if (parts[2] === 'cancel' && req.method === 'POST') {
         runner.cancel(id);
         return json(res, 202, { ok: true });
