@@ -133,7 +133,8 @@ export class Runner {
       else if (type === 'turn_done' && (PROVIDER_ALIASES[provider] ?? provider) === 'antigravity-cli') this._pollAgy?.(id);
       this.store.append(id, type === 'status' ? 'status' : type, data);
       if (turnEnded) { // after the idle is logged, so a queued follow-up for this same agent logs its running after it
-        this._scheduleParkAfterTurn(id, entry);
+        if (entry.archiveWhenIdle && this._parkable(entry)) this.park(id); // archived mid-turn: park now, keeping the session
+        else this._scheduleParkAfterTurn(id, entry);
         this._pump(); // a turn slot just freed
       }
     };
@@ -152,7 +153,8 @@ export class Runner {
       });
     } catch (err) {
       if (this.live.get(id) === entry) this.live.delete(id);
-      this.store.append(id, 'exit', { code: null, error: err.message });
+      if (resume) this.store.append(id, 'error', { message: err.message }); // a failed resume must not end the agent: _failJob re-parks it
+      else this.store.append(id, 'exit', { code: null, error: err.message });
       throw err;
     }
     return entry;
@@ -236,10 +238,17 @@ export class Runner {
     this._announceQueue();
   }
 
+  // A job that cannot run must leave its agent recoverable: a live agent goes back to idle, a parked/lost one is put back
+  // to parked (same session, so the next send resumes it), and a create that never started gets a clear exit with the error.
   _failJob(job, err) {
     try {
-      this.store.append(job.id, 'error', { message: err.message });
-      this.store.append(job.id, 'status', { status: 'idle' });
+      const id = job.id;
+      this.store.append(id, 'error', { message: err.message });
+      if (this.live.get(id)) this.store.append(id, 'status', { status: 'idle' });
+      else if (job.spec) {
+        this.store.append(id, 'parked', { sessionId: job.spec.resume, systemPrompt: job.spec.systemPrompt ?? null });
+        this.store.append(id, 'status', { status: 'parked' });
+      } else if (!this._fold(id)?.exit) this.store.append(id, 'exit', { code: null, error: err.message });
     } catch { /* log gone */ }
   }
 
@@ -328,7 +337,7 @@ export class Runner {
     if (this.live.has(id)) return true;
     const spec = this._parkedSpec(id) ?? this._lostSpec(id);
     if (!spec) return false;
-    this._admit({ id, family: providerFamily(spec.provider), needsTurn: false, run: () => { this._resume(id, spec); } });
+    this._admit({ id, spec, family: providerFamily(spec.provider), needsTurn: false, run: () => { this._resume(id, spec); } });
     return true;
   }
 
@@ -360,7 +369,7 @@ export class Runner {
     if (opts.activeTurnBehavior === 'interrupt' && live?.status === 'running') this.cancel(id);
     this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}) });
     const job = {
-      id, family: live?.family ?? providerFamily(spec.provider), needsTurn: true,
+      id, spec, family: live?.family ?? providerFamily(spec.provider), needsTurn: true,
       run: () => this._deliver(this.live.get(id) ?? this._resume(id), text, images),
     };
     if (live?.inflight > 0 && !this.queue.some((j) => j.id === id)) job.run(); // steering a running turn: it already holds its slot
@@ -386,11 +395,22 @@ export class Runner {
     this.store.append(id, 'meta', { patch: pickMeta(patch) });
   }
 
+  // Archive keeps the agent revivable (unarchive + send): an idle parkable agent is parked first, a running one gets a
+  // cancel and parks as soon as its turn ends. kill() (which logs an exit) is only for agents that can't park.
   archive(id) {
     if (!this.store.exists(id)) throw new Error(`no such agent ${id}`);
     this.queue = this.queue.filter((j) => j.id !== id); // an archived agent's waiting prompts are dropped
-    this.kill(id);
+    this._announceQueue();
+    const e = this.live.get(id);
+    if (e?.handle) {
+      if (this._parkable(e)) this.park(id);
+      else if (e.sessionId && this.adapters[e.provider]?.canPark) {
+        e.archiveWhenIdle = true;
+        try { this.cancel(id); } catch { /* already ending */ }
+      } else this.kill(id);
+    }
     this.store.append(id, 'archive', {});
+    this._pump();
   }
 
   // Undoes archive (an agent archived by mistake): the log keeps the archive event, `unarchive` supersedes it. Never resumes anything.
@@ -406,7 +426,8 @@ export class Runner {
     let status = f.status;
     if (f.exit) status = 'exited';
     else if (!this.live.has(id) && status !== 'parked' && !this.queue.some((j) => j.id === id)) status = 'lost'; // log says running but no child in this process
-    return { ...f.rec, status, pendingPermissions: [...f.perms.values()] };
+    const { queued, ...rec } = f.rec;
+    return { ...rec, ...(status === 'queued' && queued ? { queued } : {}), status, pendingPermissions: [...f.perms.values()] };
   }
 
   // Every agent's status in one call (roster seed): one pass over the logs, then served from the fold cache.
@@ -432,7 +453,7 @@ export class Runner {
     for (const e of events) {
       if (!st.created) { st.created = e; st.meta = { ...e.meta }; }
       st.last = e;
-      if (e.type === 'status') st.status = e.status;
+      if (e.type === 'status') { st.status = e.status; st.ahead = e.status === 'queued' && Number.isInteger(e.ahead) ? e.ahead : undefined; }
       else if (e.type === 'usage') st.usage = { contextTokens: e.contextTokens, contextMax: e.contextMax, inputTokens: e.inputTokens, outputTokens: e.outputTokens, costUsd: e.costUsd };
       else if (e.type === 'permission') { if (e.phase === 'request') st.perms.set(e.id, { id: e.id, toolName: e.toolName }); else st.perms.delete(e.id); }
       else if (e.type === 'meta') Object.assign(st.meta, e.patch, e.patch?.labels ? { labels: { ...st.meta.labels, ...e.patch.labels } } : {});
@@ -444,7 +465,7 @@ export class Runner {
     st.stamp = stamp;
     if (!st.created) { this.folds.delete(id); return null; }
     this.folds.set(id, st);
-    st.rec = { id, provider: st.created.provider, model: st.created.model, cwd: st.created.cwd, meta: { ...st.meta }, usage: st.usage, lastSeq: st.last.seq, createdAt: st.created.ts, updatedAt: st.last.ts, archivedAt: st.archivedAt, exit: st.exit };
+    st.rec = { id, provider: st.created.provider, model: st.created.model, cwd: st.created.cwd, meta: { ...st.meta }, usage: st.usage, lastSeq: st.last.seq, createdAt: st.created.ts, updatedAt: st.last.ts, archivedAt: st.archivedAt, exit: st.exit, ...(st.status === 'queued' ? { queued: { ahead: st.ahead ?? 0 } } : {}) };
     return st;
   }
 

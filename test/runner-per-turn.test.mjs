@@ -187,3 +187,114 @@ test('runner HTTP: create/input answer at once with queued + ahead', () => {
   assert.match(src, /\.\.\.pos/);
   assert.ok(!/sendQueued|createQueued/.test(src));
 });
+
+test('review: a failed queued create leaves an exited agent with the error; a failed resume re-parks so the next send works', async () => {
+  const spawnImpl = fakeSpawn();
+  let failNext = false;
+  const inner = createClaudeAdapter({ spawnImpl, mcp: false });
+  const adapter = { canPark: true, start: (o) => { if (failNext) { failNext = false; throw new Error('spawn boom'); } return inner.start(o); } };
+  const runner = new Runner({ dir: tmp(), adapters: { claude: adapter }, turnCaps: { claude: 1 }, parkGraceMs: 0 });
+  const a = mk(runner, { prompt: 'one' });
+  await tick();
+  const b = mk(runner, { prompt: 'queued create' });
+  assert.equal(runner.queuePosition(b).queued, true);
+  failNext = true;
+  spawnImpl.calls[0].child.finish();
+  await tick(60);
+  assert.equal(runner.status(b).status, 'exited', 'not lost: a clear exited state');
+  assert.ok(runner.timeline(b).some((e) => e.type === 'error' && /spawn boom/.test(e.message)));
+  assert.equal(runner.queue.length, 0);
+  // a parked agent whose resume fails stays resumable
+  assert.equal(runner.status(a).status, 'parked');
+  failNext = true;
+  runner.send(a, 'again');
+  assert.equal(runner.status(a).status, 'parked', 'failed resume re-parked it');
+  runner.send(a, 'retry'); await tick();
+  assert.ok(spawnImpl.calls.at(-1).args.includes('--resume'));
+  finishAll(spawnImpl);
+  runner.shutdown();
+});
+
+test('review: archiving a queued agent re-announces the ones behind it', async () => {
+  const { runner, spawnImpl } = setup({ turnCaps: { claude: 1 } });
+  mk(runner, { prompt: 'run' });
+  const q1 = mk(runner, { prompt: 'q1' });
+  const q2 = mk(runner, { prompt: 'q2' });
+  assert.equal(runner.queuePosition(q2).ahead, 1);
+  runner.archive(q1);
+  assert.equal(runner.queuePosition(q2).ahead, 0);
+  assert.equal(lastStatus(runner, q2).ahead, 0);
+  finishAll(spawnImpl);
+  runner.shutdown();
+});
+
+test('review: queued ahead is in the status record (roster seed) and survives toAgent', async () => {
+  const { toAgent } = await import('../server/backend/runner-backend.mjs');
+  const { runner, spawnImpl } = setup({ turnCaps: { claude: 1 } });
+  mk(runner, { prompt: 'run' });
+  const q = mk(runner, { prompt: 'q' });
+  const rec = runner.statusAll().find((s) => s.id === q);
+  assert.deepEqual(rec.queued, { ahead: 0 });
+  assert.deepEqual(toAgent(rec).queued, { ahead: 0 });
+  assert.equal(toAgent(rec).status, 'initializing');
+  finishAll(spawnImpl); await tick();
+  assert.equal(runner.status(q).queued, undefined);
+  runner.shutdown();
+});
+
+test('review: a crash mid-turn and a start failure both free the turn slot', async () => {
+  const spawnImpl = fakeSpawn();
+  let failNext = false;
+  const inner = createClaudeAdapter({ spawnImpl, mcp: false });
+  const adapter = { canPark: true, start: (o) => { if (failNext) { failNext = false; throw new Error('boom'); } return inner.start(o); } };
+  const runner = new Runner({ dir: tmp(), adapters: { claude: adapter }, turnCaps: { claude: 1 }, parkGraceMs: 0 });
+  const a = mk(runner, { prompt: 'x' });
+  await tick();
+  assert.equal(running(runner), 1);
+  spawnImpl.calls[0].child.kill(); // crash mid-turn
+  await tick();
+  assert.equal(running(runner), 0, 'crash freed the slot');
+  failNext = true;
+  mk(runner, { prompt: 'fails to start' });
+  assert.equal(running(runner), 0, 'start failure holds no slot');
+  const c = mk(runner, { prompt: 'fine' });
+  assert.equal(runner.queuePosition(c).queued, false, 'slot is free for the next one');
+  assert.ok(a);
+  finishAll(spawnImpl);
+  runner.shutdown();
+});
+
+test('review: archive parks an idle agent (session kept); unarchive + send resumes the same session', async () => {
+  const { runner, spawnImpl } = setup({ parkGraceMs: 60_000 });
+  const a = mk(runner, { prompt: 'hi' });
+  await tick();
+  spawnImpl.calls[0].child.finish();
+  await tick();
+  assert.equal(runner.live.has(a), true);
+  runner.archive(a);
+  assert.equal(runner.live.has(a), false, 'no live process');
+  assert.ok(!runner.timeline(a).some((e) => e.type === 'exit'), 'archive is not an exit');
+  assert.ok(runner.timeline(a).some((e) => e.type === 'parked' && e.sessionId === 'sess-1'));
+  runner.unarchive(a);
+  runner.send(a, 'back'); await tick();
+  const r = spawnImpl.calls.at(-1);
+  assert.equal(r.args[r.args.indexOf('--resume') + 1], 'sess-1');
+  finishAll(spawnImpl);
+  runner.shutdown();
+});
+
+test('review: archiving a running agent cancels it and parks it when the turn ends, keeping the session', async () => {
+  const { runner, spawnImpl } = setup({ parkGraceMs: 60_000 });
+  const a = mk(runner, { prompt: 'long' });
+  await tick();
+  runner.archive(a);
+  assert.equal(runner.live.has(a), true, 'still finishing its turn');
+  spawnImpl.calls[0].child.finish();
+  await tick();
+  assert.equal(runner.live.has(a), false);
+  assert.ok(runner.timeline(a).some((e) => e.type === 'parked' && e.sessionId === 'sess-1'));
+  assert.ok(!runner.timeline(a).some((e) => e.type === 'exit'));
+  runner.unarchive(a);
+  assert.ok(runner._parkedSpec(a), 'revivable');
+  runner.shutdown();
+});
