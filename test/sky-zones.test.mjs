@@ -118,16 +118,18 @@ const fixture = (f) => JSON.parse(readFileSync(new URL(`./fixtures/${f}`, import
 
 test("assets absent: sky + frame are skipped (CSS gradient sky / CSS bezel stay), per theme", () => {
   for (const theme of ["dark", "light"]) {
-    assert.deepEqual(skyAssets(theme, { sky: false, frame: false }), { skyUrl: null, frameUrl: null });
+    assert.deepEqual(skyAssets(theme, { sky: false, frame: false }), { skyUrl: null, frameUrl: null, frameStyle: null });
   }
 });
 
 test("assets present: sky-{theme}.png and the sky-CRT frame load; each is independent", () => {
-  assert.deepEqual(skyAssets("dark", { sky: true, frame: true }), { skyUrl: "/office/sky-dark.png", frameUrl: "/office/sky-crt-dark.png" });
+  const crt = { slice: { top: 1, right: 1, bottom: 1, left: 1 }, scale: 2, repeat: "stretch" };
+  const both = skyAssets("dark", { sky: true, frame: true }, crt);
+  assert.deepEqual([both.skyUrl, both.frameUrl], ["/office/sky-dark.png", "/office/sky-crt-dark.png"]);
   assert.equal(skyAssets("light", { sky: true, frame: false }).skyUrl, SKY_URL("light"));
-  assert.equal(skyAssets("light", { sky: true, frame: false }).frameUrl, null);
-  assert.equal(skyAssets("dark", { sky: false, frame: true }).frameUrl, SKY_FRAME_URL("dark"));
-  assert.equal(skyAssets("dark", { sky: false, frame: true }).skyUrl, null);
+  assert.equal(skyAssets("light", { sky: true, frame: false }, crt).frameUrl, null);
+  assert.equal(skyAssets("dark", { sky: false, frame: true }, crt).frameUrl, SKY_FRAME_URL("dark"));
+  assert.equal(skyAssets("dark", { sky: false, frame: true }, crt).skyUrl, null);
 });
 
 test("lookDown absent (today's faces.json): idle stays the idle face", () => {
@@ -157,8 +159,8 @@ test("a malformed lookDown list is rejected rather than half-loaded", () => {
 
 test("SkyZones probes each asset and draws the frame/sky only when it loaded", () => {
   const sky = src("SkyZones.tsx");
-  assert.ok(sky.includes("skyAssets(theme, { sky: useImageOk(SKY_URL(theme)), frame: useImageOk(SKY_FRAME_URL(theme)) })"));
-  assert.ok(sky.includes("{frameUrl && <img"));
+  assert.ok(sky.includes("skyAssets(theme, { sky: useImageOk(SKY_URL(theme)), frame: useImageOk(SKY_FRAME_URL(theme)) }, crt)"));
+  assert.ok(sky.includes("style={frameStyle ?? undefined}"));
   assert.ok(sky.includes('skyUrl ? " has-sky-art" : ""'));
 });
 

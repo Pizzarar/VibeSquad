@@ -14,6 +14,7 @@ import {
   type Frame,
   type SeatedAgent,
 } from "./squadFloorLogic";
+import { SKY_CRT_JSON_URL, validateSkyCrt, type SkyCrtModel } from "./skyZonesLogic";
 
 export type Theme = "dark" | "light";
 
@@ -90,6 +91,26 @@ export function useFacesModel(): FacesModel | null {
     };
   }, []);
   return faces;
+}
+
+/** sky-crt.json, loaded once; missing/invalid → null (the sky zones keep the CSS bezel). */
+export function useSkyCrtModel(): SkyCrtModel | null {
+  const [model, setModel] = useState<SkyCrtModel | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch(SKY_CRT_JSON_URL)
+      .then((r) => (r.ok ? r.json() : undefined))
+      .catch(() => undefined)
+      .then((json) => {
+        if (cancelled) return;
+        const m = validateSkyCrt(json);
+        setModel(m.ok ? m.value : null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return model;
 }
 
 export type BotFace = {

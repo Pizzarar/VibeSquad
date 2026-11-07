@@ -52,10 +52,45 @@ export type SkyTheme = "dark" | "light";
 export const SKY_URL = (theme: SkyTheme) => `/office/sky-${theme}.png`;
 /** The sky-CRT bezel (transparent screen hole), one per theme. */
 export const SKY_FRAME_URL = (theme: SkyTheme) => `/office/sky-crt-${theme}.png`;
+/** sky-crt.json: the 9-slice of the sky-CRT bezel PNG (source px), the integer-or-not px scale, and how the edges tile. */
+export const SKY_CRT_JSON_URL = "/office/sky-crt.json";
+export type SkyCrtRepeat = "stretch" | "round";
+export type SkyCrtModel = { slice: { top: number; right: number; bottom: number; left: number }; scale: number; repeat: SkyCrtRepeat };
+const posInt = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n > 0;
+/** Validate sky-crt.json. Slice sides must be positive ints, scale > 0, repeat (optional) stretch|round; anything else → not ok (CSS bezel stays). */
+export function validateSkyCrt(json: unknown): { ok: true; value: SkyCrtModel } | { ok: false; error: string } {
+  if (!json || typeof json !== "object") return { ok: false, error: "not an object" };
+  const { slice, scale, repeat } = json as Record<string, unknown>;
+  if (!slice || typeof slice !== "object") return { ok: false, error: "slice missing" };
+  const { top, right, bottom, left } = slice as Record<string, unknown>;
+  if (!posInt(top) || !posInt(right) || !posInt(bottom) || !posInt(left)) return { ok: false, error: "slice sides must be positive integers" };
+  if (typeof scale !== "number" || !Number.isFinite(scale) || scale <= 0) return { ok: false, error: "scale must be > 0" };
+  if (repeat !== undefined && repeat !== "stretch" && repeat !== "round") return { ok: false, error: "repeat must be stretch|round" };
+  return { ok: true, value: { slice: { top, right, bottom, left }, scale, repeat: repeat ?? "stretch" } };
+}
+/** json → the zone's border-image style: width = slice × scale per side, slice + `fill`, crisp pixels. */
+export function skyCrtStyle(model: SkyCrtModel, url: string): Record<string, string> {
+  const { top, right, bottom, left } = model.slice;
+  const k = model.scale;
+  return {
+    borderStyle: "solid",
+    borderWidth: `${top * k}px ${right * k}px ${bottom * k}px ${left * k}px`,
+    borderImageSource: `url(${url})`,
+    borderImageSlice: `${top} ${right} ${bottom} ${left} fill`,
+    borderImageRepeat: model.repeat,
+    imageRendering: "pixelated",
+  };
+}
+
 export type SkyAssetOk = { sky: boolean; frame: boolean };
-/** URLs to draw: a probe that failed (absent file) yields null, so the CSS gradient sky / CSS bezel stay. */
-export function skyAssets(theme: SkyTheme, ok: SkyAssetOk): { skyUrl: string | null; frameUrl: string | null } {
-  return { skyUrl: ok.sky ? SKY_URL(theme) : null, frameUrl: ok.frame ? SKY_FRAME_URL(theme) : null };
+/** URLs to draw: a probe that failed (absent file) yields null, so the CSS gradient sky / CSS bezel stay. The bezel also needs a valid sky-crt.json. */
+export function skyAssets(
+  theme: SkyTheme,
+  ok: SkyAssetOk,
+  crt: SkyCrtModel | null = null,
+): { skyUrl: string | null; frameUrl: string | null; frameStyle: Record<string, string> | null } {
+  const frameUrl = ok.frame && crt ? SKY_FRAME_URL(theme) : null;
+  return { skyUrl: ok.sky ? SKY_URL(theme) : null, frameUrl, frameStyle: frameUrl && crt ? skyCrtStyle(crt, frameUrl) : null };
 }
 
 /** Crisp face size: the largest integer scale of the faces.json cell that fits `targetH` px (min 1). Cell size always comes from faces.json. */

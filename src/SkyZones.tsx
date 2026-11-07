@@ -7,7 +7,7 @@ import type { Pin } from "./pins";
 import { NO_OVERLORD_TEXT, SKY_FRAME_URL, SKY_URL, faceScale, skyAssets, skyZonesFor, type SkyZone } from "./skyZonesLogic";
 import type { FaceBot } from "./squadFloorLogic";
 import type { TeamView } from "./teams";
-import { useBotFace, useFacesModel, useImageOk, usePrefersReducedMotion, useTheme } from "./useBotFace";
+import { useBotFace, useFacesModel, useImageOk, usePrefersReducedMotion, useSkyCrtModel, useTheme } from "./useBotFace";
 
 const LABEL: Record<FaceBot, string> = { riffbot: "RiffBot", overlord: "Overlord" };
 
@@ -34,14 +34,14 @@ function ZoneFace({ zone, faces }: { zone: SkyZone; faces: ReturnType<typeof use
 function Zone({
   zone,
   faces,
-  frameUrl,
+  frameStyle,
   onSuccessor,
   onSpinUp,
 }: {
   zone: SkyZone;
   faces: ReturnType<typeof useFacesModel>;
-  /** The @art sky-CRT bezel when it exists; null → the CSS bezel. */
-  frameUrl: string | null;
+  /** The @art sky-CRT bezel as a border-image style (from sky-crt.json + PNG) when both exist; null → the CSS bezel. */
+  frameStyle: Record<string, string> | null;
   onSuccessor: (id: string) => void;
   /** Start (no Buddy) or resume (dormant) RiffBot: App's onSpinUpPin, the same path as the Spin Up button. */
   onSpinUp?: () => void;
@@ -50,7 +50,8 @@ function Zone({
   const off = zone.bot === "overlord" && !zone.member;
   return (
     <section
-      className={`sky-zone sky-zone-${zone.bot}${off ? " is-off" : ""}${frameUrl ? " has-frame" : ""}`}
+      className={`sky-zone sky-zone-${zone.bot}${off ? " is-off" : ""}${frameStyle ? " has-frame" : ""}`}
+      style={frameStyle ?? undefined}
       data-testid={`sky-zone-${zone.bot}`}
       data-agent={zone.agentId ?? ""}
       aria-label={`${label} chat`}
@@ -87,7 +88,6 @@ function Zone({
           </div>
         )}
       </div>
-      {frameUrl && <img className="sky-crt-frame" data-testid={`sky-frame-${zone.bot}`} src={frameUrl} alt="" draggable={false} />}
     </section>
   );
 }
@@ -106,12 +106,13 @@ export function SkyZones({
   const faces = useFacesModel();
   const theme = useTheme();
   // @art assets are optional: probe each, skip the absent ones (CSS gradient sky + CSS bezel stay).
-  const { skyUrl, frameUrl } = skyAssets(theme, { sky: useImageOk(SKY_URL(theme)), frame: useImageOk(SKY_FRAME_URL(theme)) });
+  const crt = useSkyCrtModel();
+  const { skyUrl, frameStyle } = skyAssets(theme, { sky: useImageOk(SKY_URL(theme)), frame: useImageOk(SKY_FRAME_URL(theme)) }, crt);
   const { hub } = zones;
   return (
     <div className={`sky-zones${skyUrl ? " has-sky-art" : ""}`} data-testid="sky-zones" style={skyUrl ? { backgroundImage: `url(${skyUrl})` } : undefined}>
-      <Zone zone={zones.riffbot} faces={faces} frameUrl={frameUrl} onSuccessor={onSuccessor} onSpinUp={hub && onSpinUp ? () => onSpinUp(hub) : undefined} />
-      <Zone zone={zones.overlord} faces={faces} frameUrl={frameUrl} onSuccessor={onSuccessor} />
+      <Zone zone={zones.riffbot} faces={faces} frameStyle={frameStyle} onSuccessor={onSuccessor} onSpinUp={hub && onSpinUp ? () => onSpinUp(hub) : undefined} />
+      <Zone zone={zones.overlord} faces={faces} frameStyle={frameStyle} onSuccessor={onSuccessor} />
     </div>
   );
 }
