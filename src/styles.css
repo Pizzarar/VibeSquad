@@ -48,13 +48,13 @@
 /* P0 "Pastel Morning". Teal/pink/mint ~3-4:1 here: borders, fills, icons; text uses the -t tokens. */
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #fdf4ec;
-  --navy: #fdf4ec;
-  --well: #f5e6ef;
-  --panel: #f5e6ef;
-  --panel-hi: #e9d5e8;
-  --panel-alt: #e9d5e8;
-  --line: #bba3cf;
+  --bg: #fff0f4;
+  --navy: #fff0f4;
+  --well: #fbe3ec;
+  --panel: #fbe3ec;
+  --panel-hi: #f4cfde;
+  --panel-alt: #f4cfde;
+  --line: #dba7c0;
   --marble: #fffdfa;
   --cyan: #1a868a;
   --cyan-dim: #1a868a26;
@@ -65,7 +65,7 @@
   --hot-pink-dim: #d63f8830;
   --amber: #f7bf5c;
   --emerald: #2e9462;
-  --slate: #bba3cf;
+  --slate: #dba7c0;
   --text: #2b1840;
   --muted: #65507d;
   --cyan-t: color-mix(in srgb, var(--cyan) 70%, #2b1840);
