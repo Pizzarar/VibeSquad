@@ -1,7 +1,7 @@
 -- C2a-R4 Overlord "brain-jar TV" at 48x48 in the H0 hand (art/cast/hypno/lib.lua): the screen is
 -- the jar glass, murky liquid with lots of empty space. Two loose bloodshot eyeballs on dangling
 -- optic-nerve tails and a separate floating set of teeth (no lips, no face outline). The middle
--- R4 (Aub): a real floating brain sits in the open middle between the eyes, above the teeth:
+-- R4 (owner): a real floating brain sits in the open middle between the eyes, above the teeth:
 -- pink lobes, violet folds, ink midline cleft; it bobs in idle and pulses (folds light up,
 -- pink halo) in talk/needs. Shapes are kept clean for ~10x display. Flat P0 fills, hand-placed pixels, no gradients.
 --   idle     : parts bob out of sync, tails sway
@@ -169,7 +169,7 @@ local function overlord(C, s)
 end
 
 ---------------------------------------------------------------- poses
--- idle: eyes in the upper corners, tails curl down beside the teeth (Aub sketch)
+-- idle: eyes in the upper corners, tails curl down beside the teeth (owner sketch)
 local function tailsDown(lx, ly, rx, ry, sw, short)
   sw = sw or 0
   if short then                                                -- needs: tails curl up short, clear of the grin

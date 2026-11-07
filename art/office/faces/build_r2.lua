@@ -10,7 +10,7 @@
 --                scheming (idle[1]), annoyed (talk[2]), needs = leans in (head scaled up). Between
 --                stills: 1px jitter and a rolling teal scan bar on the glass. Written to
 --                art/office/faces/overlord-a.aseprite + overlord-a-{dark,light}.png + overlord-a.json
---                only (Aub picks O-A or O-B).
+--                only (the owner picks O-A or O-B).
 -- Run: Aseprite.exe -b --script-param root=<repo> --script art/office/faces/build_r2.lua
 local root = app.params.root
 local L = dofile(root.."/art/cast/hypno/lib.lua")
