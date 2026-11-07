@@ -205,8 +205,12 @@ async function spawnWorker(ctx, args = {}) {
   const result = { id: agent?.id ?? created?.agentId ?? created?.id, title: agent?.title || title };
   const partnerName = !asLead && !args._duetPartner ? ART_DUET[labels.profile] : undefined;
   if (partnerName) {
-    const partner = await spawnArtPartner(ctx, args, { partnerName, self: result, selfProfile: labels.profile, job: labels.job, lane: labels.lane });
-    if (partner) result.partner = partner;
+    try {
+      const partner = await spawnArtPartner(ctx, args, { partnerName, self: result, selfProfile: labels.profile, job: labels.job, lane: labels.lane });
+      if (partner) result.partner = partner;
+    } catch (e) {
+      result.partnerError = String(e?.message ?? e); // the primary exists: return its id so a retry doesn't duplicate it
+    }
   }
   return result;
 }

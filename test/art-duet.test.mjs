@@ -54,3 +54,14 @@ test('non-art profiles spawn alone', async () => {
   assert.deepEqual(out, { id: 'rn-1', title: 'x' });
   assert.equal(ctx.calls.length, 1);
 });
+
+test('a failed partner spawn still returns the primary id with partnerError', async () => {
+  const ctx = ctxWith();
+  const realWith = ctx.withBackend;
+  let creates = 0;
+  ctx.withBackend = async (t, fn) => realWith(t, (b) => fn({ ...b, createAgent: async (req) => { if (++creates === 2) throw new Error('boom'); return b.createAgent(req); } }));
+  const out = await callTool(ctx, 'spawn_worker', { title: 'neon', profile: 'Art Painter - Opus', prompt: 'draw it' });
+  assert.equal(out.id, 'rn-1');
+  assert.equal(out.partner, undefined);
+  assert.equal(out.partnerError, 'boom');
+});
