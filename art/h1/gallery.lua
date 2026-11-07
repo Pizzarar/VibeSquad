@@ -49,7 +49,7 @@ local function shout(C, cx, cy, rx, ry) C.ellipse(cx, cy, rx, ry, P) end
 local function tongue(C, cx, cy, rx) C.ellipse(cx, cy, rx, 1.6, CO) end
 -- open palm waving, sleeve colour sc rising from the bottom edge (canvas outlined afterwards)
 local function palm(C, x, y, sc, H)
-  C.poly({x-5, H, x-4, y+4, x+4, y+4, x+5, H}, sc)
+  if sc then C.poly({x-5, H, x-4, y+4, x+4, y+4, x+5, H}, sc) end
   C.ellipse(x, y, 3.6, 3.6, S)
   C.rect(x-4, y-7, 2, 5, S); C.rect(x-1, y-8, 2, 6, S); C.rect(x+2, y-7, 2, 5, S)
   C.rect(x+4, y-2, 3, 2, S)
@@ -182,6 +182,9 @@ end
 local function cone(mood)
   local spr, C = mk(64, 64, BUST)
   leadBody(C.body)
+  if mood == "yo" then                                                          -- raised arm is part of the jacket
+    C.body.poly({2,64, 3,47, 8,45, 14,46, 15,64}, P); C.body.outline(K); C.body.line(14, 52, 14, 63, K)
+  end
   local h = C.head
   h.ellipse(31, 32, 14, 11, S, WOB_L, WOB_R)
   h.poly({18,30, 23,16, 28,6, 32,1, 36,5, 40,16, 45,30}, S)
@@ -217,10 +220,10 @@ local function cone(mood)
   end
   local p = C.prop
   brickPhone(p)
-  if mood == "yo" then palm(p, 9, 44, P, 64) end
+  if mood == "yo" then palm(p, 9, 38); p.rect(4, 42, 10, 3, M) end   -- palm + shirt cuff
   p.outline(K)
   p.vline(52, 6, 16, K); p.line(44, 35, 47, 33, K); p.line(45, 37, 48, 35, K)
-  if mood == "yo" then wiggle(p, 16, 37, 1); yo(C.bubble, 2, 2, 22, 18) end
+  if mood == "yo" then wiggle(p, 16, 31, 1); yo(C.bubble, 2, 2, 22, 18) end
   if mood == "rest" then twinkles(C.fx) else L.twinkle(C.fx, 59, 44, P, nil, 1) end
   return done(spr, C, "lead-cone-"..mood)
 end
@@ -326,8 +329,8 @@ local function overlord(mood)
   if mood == "yo" then
     local fx = C.fx
     fx.line(2, 4, 5, 7, A); fx.line(5, 7, 2, 10, A); fx.line(2, 10, 5, 13, A)    -- brain zaps
-    fx.line(45, 4, 42, 7, A); fx.line(42, 7, 45, 10, A)
-    bang(C.bubble, 39, 11)
+    fx.line(46, 12, 43, 15, A); fx.line(43, 15, 46, 18, A)
+    bang(C.bubble, 41, 0)
   else
     L.twinkle(C.fx, 43, 6, M, nil, 1)
   end
@@ -410,10 +413,10 @@ local function floorCrop()
   for _, x in ipairs({38, 86, 134}) do fr2.hline(x+1, 62, 9, M); fr2.vline(x+5, 66, 24, K) end
   for _, q in ipairs({{192,62},{196,70},{191,74},{197,60}}) do fr2.px(q[1], q[2], K) end
   fr2.hline(186, 84, 17, K)
-  blit(floorSprite("lead", 1), 4, 58)
-  blit(floorSprite("buddy", 2), 52, 58)
-  blit(floorSprite("implement", 1), 100, 58)
-  blit(floorSprite("review", 2), 148, 58)
+  blit(floorSprite("lead", 1), 4, 64)
+  blit(floorSprite("buddy", 2), 52, 64)
+  blit(floorSprite("implement", 1), 100, 64)
+  blit(floorSprite("review", 2), 148, 64)
   return done(spr, C, "floor-crop")
 end
 
