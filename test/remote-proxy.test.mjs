@@ -32,11 +32,13 @@ import {
   redactBody,
   scrubResponseBody,
 } from "../plugin/server/remote-proxy-rules.ts";
-import { makeVsHttpHandler, remoteEnabled, vsHttp, vsTokenHeaders } from "../plugin/server/remote-proxy.ts";
+import { REMOTE_MAX_BINARY_BYTES, makeVsHttpHandler, remoteEnabled, vsHttp, vsTokenHeaders } from "../plugin/server/remote-proxy.ts";
 import { installRemoteTransport, isRemoteMode, proxiedPath } from "../src/remoteTransport.ts";
 import { loadUserSettings, saveUserSettings } from "../server/user-settings.mjs";
 
 const TOKEN = "a".repeat(64);
+// Every byte value, so a text-decoding round trip would corrupt it.
+const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from(Array.from({ length: 256 }, (_, i) => i))]);
 const home = mkdtempSync(join(tmpdir(), "vs-remote-proxy-"));
 // Test-only allow map (the production map now opens these too; kept so plumbing tests don't depend on it).
 const WRITE_ALLOW = { ...REMOTE_ALLOW, "/api/teams": ["GET", "PUT"], "/__vibesquad/teams": ["GET", "POST"] };
@@ -1102,6 +1104,9 @@ describe("B8: fs/* over the proxy reach the real handlers, owner-gated, confined
     ws = mkdtempSync(join(tmpdir(), "vs-b8-ws-"));
     outside = mkdtempSync(join(tmpdir(), "vs-b8-out-"));
     writeFileSync(join(ws, "note.md"), "# hi");
+    writeFileSync(join(ws, "shot.png"), PNG);
+    writeFileSync(join(ws, "big.png"), Buffer.alloc(REMOTE_MAX_BINARY_BYTES + 1, 7));
+    writeFileSync(join(ws, "edge.png"), Buffer.alloc(REMOTE_MAX_BINARY_BYTES, 9));
     writeFileSync(join(outside, "secret.txt"), "nope");
     writeFileSync(join(home, "local-token"), TOKEN);
     const send = (res, status, obj) => {
@@ -1137,7 +1142,7 @@ describe("B8: fs/* over the proxy reach the real handlers, owner-gated, confined
   test("list / read / resolve succeed and the proxy sent the owner token", async () => {
     const list = await call("/__vibesquad/fs/list" + q({ cwd: ws, path: "" }));
     assert.equal(list.status, 200);
-    assert.deepEqual(JSON.parse(list.body).entries.map((e) => e.name), ["note.md"]);
+    assert.deepEqual(JSON.parse(list.body).entries.map((e) => e.name).sort(), ["big.png", "edge.png", "note.md", "shot.png"]);
     const read = await call("/__vibesquad/fs/read" + q({ cwd: ws, path: "note.md" }));
     assert.equal(read.status, 200);
     assert.equal(read.body, "# hi");
@@ -1145,6 +1150,31 @@ describe("B8: fs/* over the proxy reach the real handlers, owner-gated, confined
     assert.equal(resolved.status, 200, resolved.body);
     assert.equal(JSON.parse(resolved.body).ok, true, resolved.body);
     assert.ok(seenTokens.slice(-3).every((t) => t === TOKEN));
+  });
+  test("a PNG round-trips byte-exact as base64 with its content type; the shim hands back real bytes", async () => {
+    const out = await call("/__vibesquad/fs/read" + q({ cwd: ws, path: "shot.png" }));
+    assert.equal(out.status, 200);
+    assert.equal(out.encoding, "base64");
+    assert.equal(out.headers["content-type"], "image/png");
+    assert.equal(out.headers["x-vs-size"], String(PNG.length));
+    assert.ok(Buffer.from(out.body, "base64").equals(PNG));
+    const target = { fetch: async () => new Response("no"), location: { origin: "http://x" } };
+    const uninstall = installRemoteTransport(async () => out, target);
+    const r = await target.fetch("http://x/__vibesquad/fs/read?cwd=a&path=shot.png");
+    assert.ok(Buffer.from(await r.arrayBuffer()).equals(PNG));
+    assert.equal(r.headers.get("content-type"), "image/png");
+    uninstall();
+  });
+  test("over 8 MB raw is a 413 carrying the size; exactly 8 MB passes", async () => {
+    const big = await call("/__vibesquad/fs/read" + q({ cwd: ws, path: "big.png" }));
+    assert.equal(big.status, 413);
+    assert.equal(big.encoding, undefined);
+    const j = JSON.parse(big.body);
+    assert.equal(j.ok, false);
+    assert.equal(j.size, REMOTE_MAX_BINARY_BYTES + 1);
+    const edge = await call("/__vibesquad/fs/read" + q({ cwd: ws, path: "edge.png" }));
+    assert.equal(edge.status, 200);
+    assert.equal(Buffer.from(edge.body, "base64").length, REMOTE_MAX_BINARY_BYTES);
   });
   test("traversal, absolute paths and a cwd outside the roots are still refused over remote", async () => {
     for (const path of ["../" + "x", "a/../../x", "/etc/passwd", "C:/Windows/win.ini", "~/x"]) {

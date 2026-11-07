@@ -31,7 +31,8 @@ import {
 } from "./remote-proxy-rules.ts";
 
 export type VsHttpInput = { method: string; path: string; body?: string };
-export type VsHttpOutput = { status: number; headers: Record<string, string>; body: string };
+// `encoding: "base64"` marks a binary body (GET fs/read only, B8): `body` is base64 of the raw bytes.
+export type VsHttpOutput = { status: number; headers: Record<string, string>; body: string; encoding?: "base64" };
 
 const vsHome = () => process.env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad");
 
@@ -97,6 +98,38 @@ export class RemoteDenied extends Error {
     super(`vs.http: ${message} [${status}]`);
     this.status = status;
   }
+}
+
+/** Raw-byte cap for binary GET fs/read (images, PDFs) shown in the remote Files panel. Text routes keep REMOTE_MAX_BODY_BYTES. */
+export const REMOTE_MAX_BINARY_BYTES = 8 * 1024 * 1024;
+const BINARY_READ_PATH = "/__vibesquad/fs/read";
+const BINARY_HEADERS = ["x-vs-size", "x-vs-modified"] as const;
+
+/** Streams the body into one buffer, giving up (null) as soon as it passes `max` raw bytes. */
+async function readBytesCapped(res: Response, signal: AbortSignal, max: number): Promise<Uint8Array | null> {
+  if (!res.body) return new Uint8Array(0);
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      if (signal.aborted) throw new Error("vs.http: timed out");
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > max) return null;
+      chunks.push(value);
+    }
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+  const buf = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) {
+    buf.set(c, off);
+    off += c.byteLength;
+  }
+  return buf;
 }
 
 async function readCapped(res: Response, signal: AbortSignal): Promise<string> {
@@ -199,6 +232,25 @@ export function makeVsHttpHandler(deps: VsHttpDeps = {}) {
         signal: abort.signal,
       });
       const ct = res.headers.get("content-type");
+      if (!isTextContentType(ct) && d.method === "GET" && d.pathname === BINARY_READ_PATH && res.status === 200) {
+        const size = Number(res.headers.get("x-vs-size") ?? res.headers.get("content-length") ?? NaN);
+        const bytes = Number.isFinite(size) && size > REMOTE_MAX_BINARY_BYTES ? null : await readBytesCapped(res, abort.signal, REMOTE_MAX_BINARY_BYTES);
+        if (!bytes) {
+          res.body?.cancel().catch(() => {});
+          const mb = Math.floor(REMOTE_MAX_BINARY_BYTES / (1024 * 1024));
+          return {
+            status: 413,
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ ok: false, error: `file too large to preview remotely (over ${mb} MB)`, ...(Number.isFinite(size) ? { size } : {}) }),
+          };
+        }
+        const headers: Record<string, string> = {};
+        for (const h of [...REMOTE_RESPONSE_HEADERS, ...BINARY_HEADERS]) {
+          const v = res.headers.get(h);
+          if (v !== null) headers[h] = v;
+        }
+        return { status: 200, headers, body: Buffer.from(bytes).toString("base64"), encoding: "base64" };
+      }
       if (!isTextContentType(ct)) {
         res.body?.cancel().catch(() => {});
         throw new Error(`vs.http: non-text response (${ct}) is not proxied`);
