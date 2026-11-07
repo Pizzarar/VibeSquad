@@ -82,8 +82,8 @@ test("git writes re-fetch diff+status; the poll only reads status when the diff 
     assert.match(c, new RegExp(`gitWrite\\(\\(\\) =>\\s+vsgit\\.${w}`), w);
     assert.doesNotMatch(c, new RegExp(`gitActionWrapper\\(\\(\\) =>\\s+vsgit\\.${w}`), w);
   }
-  assert.match(c, /changed \|\| \+\+ticks % STATUS_EVERY_TICKS === 0/);
-  assert.match(c, /WORKAROUND: the daemon pushed diff updates/);
+  assert.match(c, /vsgit\.vsGitWatch\(cwd, refresh, refresh\)/);
+  assert.doesNotMatch(c, /DIFF_POLL_MS|STATUS_EVERY_TICKS|setInterval|WORKAROUND/);
   assert.match(c, /handleDiscard\(discardPaths\(f\)\)/);
   assert.match(c, /files\.flatMap\(discardPaths\)/);
 });

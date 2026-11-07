@@ -5,10 +5,11 @@
 import { execFile } from "node:child_process";
 import { lstatSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
+import { handleGitWatch } from "./git-watch.mjs";
 
 export const GIT_PREFIX = "/__vibesquad/git/";
 export const isGitPath = (path) => path.startsWith(GIT_PREFIX);
-export const GIT_READ_ACTIONS = ["status", "diff", "commits", "commit-diff", "branches", "validate-branch", "stash-list", "pr-status", "pr-timeline", "check-details"];
+export const GIT_READ_ACTIONS = ["status", "diff", "commits", "commit-diff", "branches", "validate-branch", "stash-list", "pr-status", "pr-timeline", "check-details", "watch"];
 export const GIT_WRITE_ACTIONS = ["commit", "push", "pull", "merge-base", "switch", "stash-save", "stash-pop", "discard", "rename-branch", "pr-create", "pr-merge", "pr-automerge"];
 
 export const MAX_OUTPUT = 400_000; // chars per response payload: keeps the JSON under the remote proxy's 512 KB text cap
@@ -474,6 +475,7 @@ export async function handleGitApi(req, res, { readBody, sendJson, resolveCwd })
     const rawCwd = isRead ? url.searchParams.get("cwd") : body.cwd;
     const cwd = typeof rawCwd === "string" && rawCwd ? await resolveCwd(rawCwd) : null;
     if (!cwd) return sendJson(res, 403, { error: "cwd is not inside a known team or agent path" });
+    if (action === "watch") return await handleGitWatch(req, res, cwd, url.searchParams.get("since"), sendJson);
     if (isRead) return sendJson(res, 200, await runRead(action, (k) => url.searchParams.get(k) ?? "", cwd));
     return sendJson(res, 200, await serialized(cwd, () => runWrite(action, body, cwd)));
   } catch (err) {
