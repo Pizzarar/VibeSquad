@@ -74,7 +74,7 @@ export class Runner {
     validateCreate({ model, cwd, meta });
     this._ensureSlot(); // before anything is logged: a refused spawn leaves no agent behind
     const id = `rn-${randomBytes(6).toString('hex')}`; // rn- prefix: the VS router tells runner ids from Paseo uuids without a lookup
-    this.store.append(id, 'created', { provider, model: model ?? null, cwd, meta: pickMeta(meta) });
+    this.store.append(id, 'created', { provider, model: model ?? null, cwd, meta: pickMeta(meta), ...(systemPrompt ? { systemPrompt } : {}) }); // kept so a lost resume restores the role prompt
     this._start(id, { provider, model, cwd, meta, systemPrompt });
     if (prompt) this.send(id, prompt);
     return id;
@@ -195,7 +195,7 @@ export class Runner {
     }
     const c = events[0];
     if (!sessionId || typeof sessionId !== 'string' || sessionId.startsWith('-') || !this.adapters[c?.provider]?.canPark) return null;
-    return { provider: c.provider, model: c.model ?? undefined, cwd: c.cwd, meta, resume: sessionId };
+    return { provider: c.provider, model: c.model ?? undefined, cwd: c.cwd, meta, systemPrompt: c.systemPrompt ?? undefined, resume: sessionId };
   }
 
   // Brings a parked or lost agent back in place (same id, same log) without sending anything. False if it can't be resumed.

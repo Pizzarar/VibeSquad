@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Runner } from '../runner/runner.mjs';
 import { createClaudeAdapter } from '../runner/adapters/claude.mjs';
+import { RunnerHttpError } from '../server/backend/runner-client.mjs';
 import { RunnerBackend } from '../server/backend/runner-backend.mjs';
 import { performBrainstormRestart, resetBrainstormRestartState } from '../server/brainstorm.mjs';
 
@@ -78,20 +79,46 @@ test('resume() refuses an exited agent, a session-less one, and an unknown id', 
   assert.equal(s2.calls.length, 0, 'nothing spawned');
 });
 
+test('resume() keeps the role prompt of a lost agent (--append-system-prompt)', async () => {
+  const dir = tmp();
+  const r1 = mkRunner(dir, fakeSpawn());
+  const id = r1.create({ provider: 'claude', cwd: os.tmpdir(), systemPrompt: 'You are the ADE Buddy.', prompt: 'hi' });
+  await tick();
+  const s2 = fakeSpawn();
+  const r2 = mkRunner(dir, s2);
+  assert.equal(r2.resume(id), true);
+  await tick();
+  const args = s2.calls[0].args;
+  assert.equal(args[args.indexOf('--append-system-prompt') + 1], 'You are the ADE Buddy.');
+});
+
+test('an archived agent is never resumed (resume() false, nothing spawned)', async () => {
+  const dir = tmp();
+  const r1 = mkRunner(dir, fakeSpawn());
+  const id = r1.create({ provider: 'claude', cwd: os.tmpdir(), prompt: 'hi' });
+  await tick();
+  r1.archive(id);
+  const s2 = fakeSpawn();
+  const r2 = mkRunner(dir, s2);
+  assert.equal(r2.resume(id), false);
+  assert.equal(s2.calls.length, 0);
+});
+
 // RunnerBackend.refreshAgent against a stub client.
-const rec = (status) => ({ id: 'rn-1', provider: 'claude', cwd: '/x', meta: {}, status, createdAt: 't', updatedAt: 't', archivedAt: null });
-function stubBackend({ resumable }) {
+const rec = (status, archivedAt = null) => ({ id: 'rn-1', provider: 'claude', cwd: '/x', meta: {}, status, createdAt: 't', updatedAt: 't', archivedAt });
+function stubBackend({ resumable, failWith, archived = false }) {
   const calls = [];
   const state = { status: 'lost' };
   const client = {
     request: async (method, route) => {
       calls.push(`${method} ${route}`);
       if (route.endsWith('/resume')) {
-        if (!resumable) throw new Error('agent cannot be resumed');
+        if (failWith) throw failWith;
+        if (!resumable) throw new RunnerHttpError(409, 'agent cannot be resumed');
         state.status = 'idle';
         return { ok: true };
       }
-      return rec(state.status);
+      return rec(state.status, archived ? Date.now() : null);
     },
   };
   return { backend: new RunnerBackend({ client }), calls };
@@ -108,6 +135,19 @@ test('RunnerBackend.refreshAgent: a lost (closed) agent resumes in place', async
 test('RunnerBackend.refreshAgent: a non-resumable agent stays closed (caller replaces it)', async () => {
   const { backend } = stubBackend({ resumable: false });
   assert.equal((await backend.refreshAgent('rn-1')).status, 'closed');
+});
+
+test('RunnerBackend.refreshAgent: an archived agent is not resumed', async () => {
+  const { backend, calls } = stubBackend({ resumable: true, archived: true });
+  await backend.refreshAgent('rn-1');
+  assert.ok(!calls.some((c) => c.endsWith('/resume')), calls.join(', '));
+});
+
+test('RunnerBackend.refreshAgent: a transient failure (503 cap, runner down) is rethrown, not treated as not-resumable', async () => {
+  const { backend } = stubBackend({ failWith: new RunnerHttpError(503, 'AGENT_CAP') });
+  await assert.rejects(() => backend.refreshAgent('rn-1'), (e) => e.status === 503);
+  const { backend: b2 } = stubBackend({ failWith: new Error('ipc broke') });
+  await assert.rejects(() => b2.refreshAgent('rn-1'), /ipc broke/);
 });
 
 // Brainstorm level: reopen vs replace. The daemon mock stands in for either backend's refreshAgent.

@@ -548,8 +548,9 @@ export class RunnerBackend {
     if (agent.status !== "closed" || agent.archivedAt) return agent;
     try {
       await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/resume`, {});
-    } catch {
-      return agent; // not resumable (exited, no session): the caller replaces it
+    } catch (err) {
+      if (err?.status === 409) return agent; // not resumable (exited, no session): the caller replaces it
+      throw err; // runner down / agent cap / IPC failure: surface it, don't replace a resumable Buddy
     }
     return (await this.fetchAgent(id)).agent;
   }
