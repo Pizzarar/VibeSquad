@@ -180,11 +180,11 @@ test("closed match: reopened and returned as an idle agent so the UI can show it
     assert.equal(daemon.created.length, 0);
   }));
 
-test("closed match that will not reopen is replaced by a fresh spawn, not silently reused", () =>
+test("closed match the owner says is not resumable (409) is replaced by a fresh spawn, not silently reused", () =>
   withEnv(async (env) => {
     const daemon = mockDaemon([{ id: "bs-closed", status: "closed", labels: { team: "sq", lane: "pin-test", role: "brainstorm" } }]);
     daemon.refreshAgent = async () => {
-      throw new Error("session gone");
+      throw Object.assign(new Error("session gone"), { status: 409 }); // 409 = not resumable
     };
     const res = await performBrainstormRestart(
       { reason: "start-brainstorm", teamId: "sq", laneId: "pin-test", daemonClient: daemon, profilesPath: env.profilesPath, backstopDelayMs: 0 },

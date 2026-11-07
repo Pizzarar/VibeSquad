@@ -152,7 +152,7 @@ test('RunnerBackend.refreshAgent: a transient failure (503 cap, runner down) is 
 
 // Brainstorm level: reopen vs replace. The daemon mock stands in for either backend's refreshAgent.
 const bs = (status) => ({ id: 'rn-1', title: 'BRAINSTORM · ADE', status, updatedAt: '2026-11-02T04:00:00Z', labels: { team: 'sq', lane: 'ade', role: 'brainstorm' } });
-function daemon({ resumable }) {
+function daemon({ resumable, refreshError }) {
   const agents = new Map([['rn-1', bs('closed')]]);
   const d = {
     agents,
@@ -164,7 +164,7 @@ function daemon({ resumable }) {
     archiveAgent: async (id) => { agents.get(id).archivedAt = 'x'; return { archivedAt: 'x' }; },
     cancelAgent: async () => {},
     detachAgent: async () => {},
-    refreshAgent: async (id) => { if (resumable) agents.get(id).status = 'idle'; return agents.get(id); },
+    refreshAgent: async (id) => { if (refreshError) throw refreshError; if (resumable) agents.get(id).status = 'idle'; return agents.get(id); },
     createAgent: async (req) => { d.created++; const id = `rn-new-${d.created}`; agents.set(id, { id, status: 'idle', labels: { ...(req.labels ?? {}) } }); return { id, labels: { ...(req.labels ?? {}) } }; },
   };
   return d;
@@ -196,6 +196,26 @@ test('Spin Up on a resumable closed Buddy reopens it: same id, no new agent', ()
 test('Spin Up on a non-resumable closed Buddy replaces it (new agent, old retired)', () => withHome(async (dir) => {
   resetBrainstormRestartState();
   const d = daemon({ resumable: false });
+  const r = await performBrainstormRestart({ reason: 'start-brainstorm', teamId: 'sq', laneId: 'ade', daemonClient: d }, dir);
+  assert.notEqual(r.reused, true);
+  assert.equal(d.created, 1);
+  assert.notEqual(r.newAgentId, 'rn-1');
+}));
+
+test('Spin Up on a closed Buddy whose reopen throws (cap / runner down) errors and does NOT replace it', () => withHome(async (dir) => {
+  resetBrainstormRestartState();
+  const d = daemon({ refreshError: new RunnerHttpError(503, 'AGENT_CAP') });
+  const r = await performBrainstormRestart({ reason: 'start-brainstorm', teamId: 'sq', laneId: 'ade', daemonClient: d }, dir);
+  assert.equal(r.ok, false);
+  assert.equal(r.existingAgentId, 'rn-1');
+  assert.match(r.error, /AGENT_CAP/);
+  assert.equal(d.created, 0, 'no replacement spawned');
+  assert.equal(d.agents.get('rn-1').archivedAt, undefined, 'old Buddy not retired');
+}));
+
+test('Spin Up on a closed Buddy whose reopen answers 409 (not resumable) replaces it', () => withHome(async (dir) => {
+  resetBrainstormRestartState();
+  const d = daemon({ refreshError: new RunnerHttpError(409, 'agent cannot be resumed') });
   const r = await performBrainstormRestart({ reason: 'start-brainstorm', teamId: 'sq', laneId: 'ade', daemonClient: d }, dir);
   assert.notEqual(r.reused, true);
   assert.equal(d.created, 1);

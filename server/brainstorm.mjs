@@ -670,11 +670,21 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
         let reopenedAgent = null;
         let reopenFailed = existing.status === "closed" && !reopened; // nothing here can reopen it
         if (reopened) {
+          let refreshFailure = null;
           const refreshed = await backend.refreshAgent(existing.id).catch((e) => {
-            reopenFailed = true;
-            console.warn(`[vibesquad] reopen ${existing.id} failed: ${e?.message ?? e}; spawning a replacement`);
+            // 409 = the owner says it can't be resumed: replace. Anything else (agent cap, runner down, IPC) leaves a
+            // resumable Buddy alone: report the error rather than spawn a second one.
+            if (e?.status === 409) {
+              reopenFailed = true;
+              console.warn(`[vibesquad] reopen ${existing.id} not resumable: ${e?.message ?? e}; spawning a replacement`);
+            } else refreshFailure = e;
             return null;
           });
+          if (refreshFailure) {
+            const msg = refreshFailure?.message ?? String(refreshFailure);
+            console.warn(`[vibesquad] reopen ${existing.id} failed: ${msg}; not replacing`);
+            return { ok: false, spawned: false, reason: "reopen-failed", error: `Could not reopen ${existing.title || existing.id}: ${msg}. Try again in a moment.`, existingAgentId: existing.id, laneId, teamId };
+          }
           // A backend may hand back the agent still closed without throwing.
           const fresh = refreshed?.agent ?? refreshed;
           if (!reopenFailed && fresh?.status === "closed") reopenFailed = true;
