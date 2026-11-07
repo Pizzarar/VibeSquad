@@ -268,6 +268,7 @@ export class Runner {
 
   // Marks every live agent as exited by the runner, then kills its process tree.
   shutdown() {
+    this._pollAgy?.shutdown();
     for (const id of [...this.live.keys()]) {
       try { this.store.append(id, 'exit', { code: null, reason: 'runner-shutdown' }); } catch { /* best effort */ }
       this.kill(id);

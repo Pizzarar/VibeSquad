@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import os from 'node:os';
 import path from 'node:path';
-import { parseClaudeRateLimit, parseAgyUsage, LimitStore, createAgyUsagePoller } from '../runner/limits.mjs';
+import { parseClaudeRateLimit, parseAgyUsage, LimitStore, createAgyUsagePoller, runAgyUsage } from '../runner/limits.mjs';
 import { createClaudeAdapter } from '../runner/adapters/claude.mjs';
 import { Runner } from '../runner/runner.mjs';
 
@@ -113,4 +113,60 @@ test('Runner polls agy after an antigravity-cli turn_done (alias included) and r
   assert.equal(recs.filter((r) => r.provider === 'antigravity-cli').length, 2);
   assert.ok(recs.every((r) => r.agentId === id && r.source === 'provider'));
   runner.shutdown();
+});
+
+function fakeAgy({ onSpawn } = {}) {
+  const calls = [];
+  const spawnImpl = (file, args, opts) => {
+    const child = new EventEmitter();
+    child.stdout = new PassThrough(); child.stderr = new PassThrough();
+    child.exitCode = null; child.killed = 0;
+    child.kill = () => { child.killed++; };
+    calls.push({ file, args, opts, child });
+    onSpawn?.(child);
+    return child;
+  };
+  return { spawnImpl, calls };
+}
+
+test('runAgyUsage: spawns `agy -p /usage` without a shell and resolves stdout', async () => {
+  const { spawnImpl, calls } = fakeAgy({ onSpawn: (c) => setImmediate(() => { c.stdout.write(fx('agy-usage.txt')); c.emit('exit', 0); }) });
+  const out = await runAgyUsage({ spawnImpl });
+  assert.deepEqual(calls[0].args, ['-p', '/usage']);
+  assert.equal(calls[0].opts.shell, false);
+  assert.equal(parseAgyUsage(out).length, 4);
+});
+
+test('runAgyUsage: timeout kills the child tree and rejects; spawn error rejects', async () => {
+  const hung = fakeAgy();
+  await assert.rejects(runAgyUsage({ spawnImpl: hung.spawnImpl, timeoutMs: 20 }), /timed out/);
+  assert.equal(hung.calls[0].child.killed, 1);
+  const bad = fakeAgy({ onSpawn: (c) => setImmediate(() => c.emit('error', new Error('ENOENT'))) });
+  await assert.rejects(runAgyUsage({ spawnImpl: bad.spawnImpl }), /ENOENT/);
+});
+
+test('runAgyUsage: refuses to spawn the real agy under a test runner without spawnImpl', async () => {
+  await assert.rejects(runAgyUsage(), /refusing to spawn the real agy/);
+});
+
+test('LimitStore refuses to write inside the real ~/.vibesquad under a test runner', () => {
+  const f = path.join(os.homedir(), '.vibesquad', 'runner', 'limits.jsonl');
+  const before = existsSync(f) ? readFileSync(f, 'utf8') : null;
+  assert.equal(new LimitStore(f).record({ provider: 'claude', window: 'weekly', usedPct: 1, resetsAt: null }), null);
+  assert.equal(existsSync(f) ? readFileSync(f, 'utf8') : null, before);
+});
+
+test('poller: concurrent poll() runs agy once; shutdown() kills the in-flight child and records nothing', async () => {
+  const store = new LimitStore(path.join(tmp(), 'limits.jsonl'));
+  const fake = fakeAgy();
+  let calls = 0;
+  const poll = createAgyUsagePoller({ store, minIntervalMs: 0, run: (o) => { calls++; return runAgyUsage({ ...o, spawnImpl: fake.spawnImpl }); } });
+  const [a, b, c] = [poll('rn-a'), poll('rn-b'), poll('rn-c')];
+  await new Promise((r) => setImmediate(r));
+  assert.equal(calls, 1);
+  poll.shutdown();
+  assert.equal(fake.calls[0].child.killed, 1);
+  fake.calls[0].child.stdout.write(fx('agy-usage.txt')); fake.calls[0].child.emit('exit', 0);
+  assert.deepEqual(await Promise.all([a, b, c]), [[], [], []]);
+  assert.equal(existsSync(store.file), false);
 });

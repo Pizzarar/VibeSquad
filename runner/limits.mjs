@@ -6,7 +6,8 @@
 //   { at, provider, window: "5h"|"weekly", usedPct (0-100), resetsAt (ISO), source: "provider"|"estimate", agentId }
 import { appendFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { spawnNoShell, resolveExecutable } from './spawn.mjs';
+import { spawnNoShell, killTree } from './spawn.mjs';
+import { isForbiddenRealHome, underTestRunner } from '../server/test-guard.mjs';
 
 // Claude's unifiedWindows keys -> our window ids. Add 'five_hour' here is already mapped, so a plan with a 5h window just works.
 const CLAUDE_WINDOWS = { five_hour: '5h', seven_day: 'weekly' };
@@ -53,6 +54,7 @@ const round1 = (n) => Math.round(n * 10) / 10;
 export class LimitStore {
   constructor(file) { this.file = file; this.last = new Map(); }
   record({ provider, window, usedPct, resetsAt, source = 'provider', agentId = null }, now = Date.now()) {
+    if (isForbiddenRealHome(this.file)) return null; // a test must never write the developer's real ~/.vibesquad
     const key = `${provider}|${window}`;
     const prev = this.last.get(key);
     if (prev && prev.usedPct === usedPct && prev.resetsAt === resetsAt && prev.source === source) return null;
@@ -64,28 +66,44 @@ export class LimitStore {
   }
 }
 
-// Polls `agy -p /usage` at most once per minIntervalMs, one in flight. run() resolves to stdout; injectable for tests.
-export function runAgyUsage({ spawnImpl, timeoutMs = 30_000 } = {}) {
+// Runs `agy -p /usage` and resolves to stdout. Refuses to spawn the real agy under a test runner (no spawnImpl injected).
+// onChild gets the live child so the owner can kill it on shutdown; the timeout kills the whole tree (win32 leaks otherwise).
+export function runAgyUsage({ spawnImpl, timeoutMs = 30_000, onChild } = {}) {
   return new Promise((resolve, reject) => {
-    const r = resolveExecutable('agy');
-    const child = spawnNoShell(r.file, [...r.args, '-p', '/usage'], { env: process.env }, spawnImpl);
+    if (!spawnImpl && underTestRunner()) return reject(new Error('refusing to spawn the real agy under a test runner'));
+    let child;
+    try {
+      child = spawnNoShell('agy', ['-p', '/usage'], { env: process.env, ...(spawnImpl ? { resolved: { file: 'agy', args: [] } } : {}) }, spawnImpl);
+    } catch (e) { return reject(e); }
+    onChild?.(child);
     let out = '';
-    const timer = setTimeout(() => { child.kill(); reject(new Error('agy /usage timed out')); }, timeoutMs);
+    let done = false;
+    const finish = (fn, v) => { if (done) return; done = true; clearTimeout(timer); onChild?.(null); fn(v); };
+    const timer = setTimeout(() => { killTree(child); finish(reject, new Error('agy /usage timed out')); }, timeoutMs);
+    timer.unref?.();
     child.stdout.on('data', (d) => { out += d; });
-    child.on('error', (e) => { clearTimeout(timer); reject(e); });
-    child.on('exit', () => { clearTimeout(timer); resolve(out); });
+    child.stderr?.on('data', () => {}); // drain: an unread stderr pipe can stall the child
+    child.on('error', (e) => finish(reject, e));
+    child.on('exit', () => finish(resolve, out));
   });
 }
 
+// Polls at most once per minIntervalMs, one in flight (concurrent calls return []). poll.shutdown() kills an in-flight agy.
 export function createAgyUsagePoller({ store, run = runAgyUsage, minIntervalMs = 5 * 60_000, now = Date.now } = {}) {
   let busy = false;
   let lastAt = 0;
-  return async function poll(agentId) {
-    if (busy || now() - lastAt < minIntervalMs) return [];
+  let current = null;
+  let stopped = false;
+  const poll = async function poll(agentId) {
+    if (busy || stopped || now() - lastAt < minIntervalMs) return [];
     busy = true;
     lastAt = now();
     try {
-      return parseAgyUsage(await run()).map((r) => store.record({ ...r, source: 'provider', agentId }, now())).filter(Boolean);
-    } catch { return []; } finally { busy = false; }
+      const text = await run({ onChild: (c) => { current = c; } });
+      if (stopped) return [];
+      return parseAgyUsage(text).map((r) => store.record({ ...r, source: 'provider', agentId }, now())).filter(Boolean);
+    } catch { return []; } finally { busy = false; current = null; }
   };
+  poll.shutdown = () => { stopped = true; if (current) killTree(current); current = null; };
+  return poll;
 }
