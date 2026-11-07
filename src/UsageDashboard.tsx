@@ -117,7 +117,7 @@ export function UsageDashboard() {
     );
   }
   const flagged = data.loops?.flagged ?? [];
-  const roles = foldRoles(data.byRole);
+  const roles = foldRoles(data.byRole ?? []);
   const roleTotal = roles.reduce((s, r) => s + r.inputTokens + r.outputTokens, 0);
   const click = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: key === "lane" ? 1 : -1 }));
 
