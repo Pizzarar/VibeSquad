@@ -3343,7 +3343,7 @@ html, body, #root { overflow-x: hidden; }
 .modal textarea.brief-editor-text { flex: 1; resize: none; font-family: var(--mono, monospace); font-size: 13px; line-height: 1.5; padding: 10px 12px; }
 .pin-menu { position: relative; display: inline-block; }
 .pin-menu-btn { padding: 0 6px; line-height: 1.2; }
-.pin-menu-list { position: absolute; right: 0; top: calc(100% + 4px); z-index: 40; min-width: 180px; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--cyan); box-shadow: 0 0 16px var(--cyan-dim); padding: 4px 0; }
+.pin-menu-list { position: fixed; z-index: 1200; max-width: calc(100vw - 16px); min-width: 180px; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--cyan); box-shadow: 0 0 16px var(--cyan-dim); padding: 4px 0; }
 .pin-menu-list > button { background: none; border: 0; color: var(--text); font: inherit; text-align: left; padding: 6px 12px; cursor: pointer; }
 .pin-menu-list > button:hover:not(:disabled) { background: var(--navy); color: var(--cyan); }
 .pin-menu-list > button:disabled { opacity: 0.5; cursor: default; }
