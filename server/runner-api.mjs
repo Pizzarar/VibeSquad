@@ -18,7 +18,7 @@ function streamEvents(req, res, backend, heartbeatMs = HEARTBEAT_MS) {
   const send = (ev) => { if (!res.writableEnded && !res.destroyed) res.write(`data: ${JSON.stringify(ev)}\n\n`); };
   let off = null;
   let closed = false;
-  const beat = setInterval(() => { if (!res.writableEnded && !res.destroyed) res.write(": hb\n\n"); }, heartbeatMs);
+  const beat = setInterval(() => { if (!res.writableEnded && !res.destroyed) res.write(': hb\n\ndata: {"kind":"hb"}\n\n'); }, heartbeatMs); // comment for proxies; data event so the browser watchdog sees activity
   beat.unref?.();
   const cleanup = () => {
     if (closed) return;
