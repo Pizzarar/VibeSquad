@@ -26,7 +26,8 @@ describe("parsers", () => {
     assert.deepEqual(f.map((x) => [x.path, x.status, x.additions, x.deletions]), [["a.txt", "modified", 2, 1], ["new.txt", "added", 1, 0], ["old.txt", "deleted", 0, 1], ["bin.png", "added", 0, 0]]);
     assert.equal(f[0].hunks[0].newStart, 1);
     assert.deepEqual(f[0].hunks[0].lines.map((l) => l.type), ["header", "context", "remove", "add", "add"]);
-    assert.equal(f[0].hunks[0].lines[3].content, "+TWO");
+    assert.equal(f[0].hunks[0].lines[3].content, "TWO");
+    assert.equal(f[0].hunks[0].lines[1].content, "one");
     assert.ok(f[1].isNew && f[2].isDeleted);
   });
   test("status + commits parsers", () => {

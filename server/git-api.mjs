@@ -76,7 +76,7 @@ const gh = (args, cwd, opts) => exec("gh", args, cwd, { timeout: 30_000, ...opts
 
 // ---- parsers (pure; exported for tests) -------------------------------------------------------------------------
 
-/** Unified diff text -> the shape the Changes panel renders: files[{path, oldPath?, isNew, isDeleted, additions, deletions, status, hunks[{..., lines[{type, content}]}]}]. */
+/** Unified diff text -> the shape the Changes panel renders (add/remove/context content has its +/-/space prefix stripped, like the daemon's parser; hunkUndo relies on that): files[{path, oldPath?, isNew, isDeleted, additions, deletions, status, hunks[{..., lines[{type, content}]}]}]. */
 export function parseUnifiedDiff(text) {
   const files = [];
   let f = null;
@@ -115,9 +115,9 @@ export function parseUnifiedDiff(text) {
       continue;
     }
     if (!h) continue;
-    if (line.startsWith("+")) { h.lines.push({ type: "add", content: line }); f.additions++; newLine++; }
-    else if (line.startsWith("-")) { h.lines.push({ type: "remove", content: line }); f.deletions++; oldLine++; }
-    else if (line.startsWith(" ")) { h.lines.push({ type: "context", content: line }); oldLine++; newLine++; }
+    if (line.startsWith("+")) { h.lines.push({ type: "add", content: line.slice(1) }); f.additions++; newLine++; }
+    else if (line.startsWith("-")) { h.lines.push({ type: "remove", content: line.slice(1) }); f.deletions++; oldLine++; }
+    else if (line.startsWith(" ")) { h.lines.push({ type: "context", content: line.slice(1) }); oldLine++; newLine++; }
     // "\ No newline at end of file" and the trailing blank are dropped
   }
   for (const x of files) { if (x.isNew && x.status === "modified") x.status = "added"; if (x.isDeleted && x.status === "modified") x.status = "deleted"; delete x.binary; }
