@@ -36,15 +36,51 @@ describe("ungated side-effect GETs (read-only callers)", () => {
   let srv;
   let port;
   let token;
+  // inspectFirstRunStatus reads env.PATH on every real run, so reads of the proxy count real (uncached) runs.
+  const counts = { runs: 0 };
   before(async () => {
     token = auth.getLocalToken();
+    const env = new Proxy({ ...process.env }, {
+      get(t, k) {
+        if (k === "PATH") counts.runs += 1;
+        return t[k];
+      },
+    });
     srv = createServer(
-      api.createVibesquadMiddleware(rootDir, { firstRun: { probeVersions: false } }),
+      api.createVibesquadMiddleware(rootDir, { firstRun: { probeVersions: false, env } }),
     );
     await new Promise((ok) => srv.listen(0, "127.0.0.1", ok));
     port = srv.address().port;
   });
   after(() => new Promise((ok) => srv.close(ok)));
+
+  test("/first-run/status: read-only callers share one run per window; the owner always runs fresh", async () => {
+    const path = "/__vibesquad/first-run/status";
+    const first = await call(port, path);
+    assert.equal(first.status, 200, first.body);
+    const afterFirst = counts.runs;
+    assert.ok(afterFirst > 0, "the first read-only call still gets real data");
+    const burst = await Promise.all(Array.from({ length: 8 }, () => call(port, path)));
+    for (const r of burst) assert.equal(r.status, 200);
+    assert.equal(counts.runs, afterFirst, "a burst of read-only GETs runs nothing new");
+    assert.deepEqual(json(burst[0]), json(first));
+    await call(port, path, { headers: { "x-vibesquad-token": token } });
+    assert.ok(counts.runs > afterFirst, "owner bypasses the cache");
+  });
+
+  test("an owner write clears the cache, so read-only callers see the new state", async () => {
+    const path = "/__vibesquad/first-run/status";
+    await call(port, path);
+    const before = counts.runs;
+    await call(port, path);
+    assert.equal(counts.runs, before);
+    await call(port, "/__vibesquad/vs-log", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    await call(port, path);
+    assert.equal(counts.runs, before, "a refused read-only write clears nothing");
+    await call(port, "/__vibesquad/vs-log", { method: "POST", headers: { "content-type": "application/json", "x-vibesquad-token": token }, body: "{}" });
+    await call(port, path);
+    assert.ok(counts.runs > before);
+  });
 
   test("the cache expires, and concurrent first calls share one run", async () => {
     let t = 0;
