@@ -467,7 +467,16 @@ export type FacesModel = {
   fps: number;
   /** Frame counts come from the json, never hardcoded. */
   bots: Partial<Record<FaceBot, Partial<Record<FaceMode, Frame[]>>>>;
+  /** Optional per-bot gutter colour (`<bot>.bg`, a CSS colour string); only valid values are kept. */
+  bg?: Partial<Record<FaceBot, string>>;
 };
+
+/** Conservative CSS colour check (hex, rgb[a]/hsl[a](...), or a plain keyword); nothing that could carry url()/var()/;. */
+export const isCssColor = (v: unknown): v is string =>
+  typeof v === "string" &&
+  (/^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(v) ||
+    /^(?:rgb|hsl)a?\(\s*[-+0-9.%]+(?:\s*[, /]\s*[-+0-9.%]+(?:deg)?){2,3}\s*\)$/i.test(v) ||
+    /^[a-z]{3,20}$/i.test(v));
 
 /** Validate faces.json: `cell {w,h}`, `fps`, and per bot a list of frames for idle/blink/talk/needs. */
 export function validateFaces(json: unknown): Validation<FacesModel> {
@@ -476,6 +485,7 @@ export function validateFaces(json: unknown): Validation<FacesModel> {
   if (!cell) return fail("faces.json cell must be {w,h}");
   const fps = isNum(json.fps) && json.fps > 0 ? (json.fps as number) : 3;
   const bots: FacesModel["bots"] = {};
+  const bg: NonNullable<FacesModel["bg"]> = {};
   for (const bot of ["riffbot", "overlord"] as FaceBot[]) {
     const raw = json[bot];
     if (raw === undefined) continue;
@@ -489,9 +499,10 @@ export function validateFaces(json: unknown): Validation<FacesModel> {
     }
     if (!modes.idle) return fail(`faces.json ${bot} needs an idle face`);
     bots[bot] = modes;
+    if (isCssColor(raw.bg)) bg[bot] = raw.bg; // invalid → ignored, the theme variable stays
   }
   if (!bots.riffbot && !bots.overlord) return fail("faces.json has neither riffbot nor overlord");
-  return { ok: true, value: { cell, fps, bots } };
+  return { ok: true, value: { cell, fps, bots, ...(Object.keys(bg).length ? { bg } : null) } };
 }
 
 /** Face mode: talk while the bot is running, needs on needs-you (pose "needs" already folds kindOfAttention), else blink/idle. No agent → idle. */

@@ -5,14 +5,14 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { DrawerSlot } from "./AgentPanes";
 import type { Pin } from "./pins";
-import { NO_OVERLORD_TEXT, SKY_FRAME_URL, SKY_URL, faceCover, hasFaceMode, skyAssets, skyLayout, skyZonesFor, type SkyZone } from "./skyZonesLogic";
+import { NO_OVERLORD_TEXT, SKY_FRAME_URL, SKY_URL, faceBg, faceContain, hasFaceMode, skyAssets, skyColumns, skyLayout, skyZonesFor, type SkyZone } from "./skyZonesLogic";
 import type { FaceBot, FaceMode } from "./squadFloorLogic";
 import type { TeamView } from "./teams";
 import { useBotFace, useFacesModel, useImageOk, usePrefersReducedMotion, useSkyCrtModel, useTheme } from "./useBotFace";
 
 const LABEL: Record<FaceBot, string> = { riffbot: "RiffBot", overlord: "Overlord" };
 
-/** G6: the bot's face fills the whole zone as a big pixelated background (integer scale, centred, cropped evenly). */
+/** G6-fix2: the bot's whole face, as big as an integer scale fits (contain, never cropped), centred on a per-bot gutter colour. */
 function ZoneFace({ zone, faces, force }: { zone: SkyZone; faces: ReturnType<typeof useFacesModel>; force: FaceMode | null }) {
   const theme = useTheme();
   const reduced = usePrefersReducedMotion();
@@ -30,9 +30,10 @@ function ZoneFace({ zone, faces, force }: { zone: SkyZone; faces: ReturnType<typ
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  const { k, left, top } = faceCover(cell, box);
+  const bg = faceBg(faces, zone.bot);
+  const { k, left, top } = faceContain(cell, box);
   return (
-    <span ref={stage} className="sky-face-stage" aria-hidden="true">
+    <span ref={stage} className="sky-face-stage" aria-hidden="true" style={bg ? ({ ["--sky-face-bg-custom" as string]: bg } as React.CSSProperties) : undefined}>
       {k > 0 && (
         <span
           className={`sky-face${face.frame ? "" : " is-blank"}`}
@@ -180,7 +181,9 @@ export function SkyZones({
     setFocus("riffbot");
     requestAnimationFrame(() => root.current?.querySelector<HTMLElement>('[data-sky-bot="riffbot"] textarea')?.focus());
   };
-  const cols = `minmax(0, ${layout.widths.riffbot}fr) minmax(0, ${layout.widths.overlord}fr)`;
+  // Zone bezel on both sides: the sky-crt border-image widths when it is drawn, else the 7px CSS border.
+  const bezelH = crt && frameStyle ? (crt.slice.left + crt.slice.right) * crt.scale : 14;
+  const cols = skyColumns(layout, faces?.cell ?? { w: 48 }, bezelH);
   return (
     <div
       ref={root}
