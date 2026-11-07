@@ -160,6 +160,6 @@ test("SquadFloor wires the TV: focusable button, aria-label, tooltip, open; belo
 test("css: blink and pulse are off under prefers-reduced-motion; pink blip and light-theme TV exist", () => {
   const c = src("styles.css");
   assert.match(c, /@media \(prefers-reduced-motion: reduce\) \{\s*\.sq-floor-blip\.is-pulse, \.sq-floor-blip\.is-blink, \.sq-floor-tv-beat \{ animation: none; \}/);
-  assert.match(c, /\.sq-floor-blip\.is-needs \{ background: var\(--hot-pink\); \}/);
-  assert.match(c, /:root\[data-theme="light"\] \.sq-floor-tv/);
+  assert.match(c, /\.sq-floor-blip\.is-needs \{ background: #ff68a8; \}/);
+  assert.doesNotMatch(c, /data-theme="light"\] \.sq-floor-(tv|blip)/); // ink glass: same bright blips in both themes
 });

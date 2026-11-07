@@ -4862,10 +4862,9 @@ button.project-file-name:hover { text-decoration: underline; }
   display: block;
   box-sizing: border-box;
   overflow: hidden;
-  background: color-mix(in srgb, var(--bg) 80%, #000);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cyan) 35%, transparent);
+  /* The art's glass is ink in both themes: no fill of our own, so the painted glass shows, and every colour below is a bright fixed one. */
+  background: transparent;
 }
-:root[data-theme="light"] .sq-floor-tv { background: #1d2a36; box-shadow: inset 0 0 0 1px #3fa3a6; }
 .sq-floor-tv::after {
   content: "";
   position: absolute;
@@ -4880,7 +4879,7 @@ button.project-file-name:hover { text-decoration: underline; }
   right: 0;
   top: 40%;
   height: 1px;
-  background: var(--cyan);
+  background: #4fd6cf;
   opacity: 0.25;
 }
 .sq-floor-blip {
@@ -4893,10 +4892,9 @@ button.project-file-name:hover { text-decoration: underline; }
   border: 0;
   border-radius: 0;
   cursor: pointer;
-  background: var(--cyan);
+  background: #4fd6cf;
 }
-:root[data-theme="light"] .sq-floor-blip.is-work { background: #6fe3dc; }
-.sq-floor-blip.is-needs { background: var(--hot-pink); }
+.sq-floor-blip.is-needs { background: #ff68a8; }
 .sq-floor-blip.is-pulse { animation: sq-floor-blip-pulse 1s ease-in-out infinite; }
 .sq-floor-blip.is-blink { animation: sq-floor-blip-blink 0.4s steps(2, jump-none) infinite; }
 /* The 3px dot is a tiny hit target at 1x: grow it with an invisible halo, and ring it on hover/focus. */
@@ -4909,7 +4907,7 @@ button.project-file-name:hover { text-decoration: underline; }
   bottom: 1px;
   width: 24px;
   height: 2px;
-  background: repeating-linear-gradient(to right, var(--cyan) 0 1px, transparent 1px 3px);
+  background: repeating-linear-gradient(to right, #4fd6cf 0 1px, transparent 1px 3px);
   opacity: 0.55;
   animation: sq-floor-beat 1.2s steps(3) infinite;
 }
@@ -4921,9 +4919,9 @@ button.project-file-name:hover { text-decoration: underline; }
   font-family: var(--arcade);
   font-size: 6px;
   line-height: 6px;
-  color: var(--cyan);
+  color: #4fd6cf;
 }
-.sq-floor-box-tv { background: #1d2a36; border-color: var(--cyan); }
+.sq-floor-box-tv { background: #1d2a36; border-color: #4fd6cf; }
 @keyframes sq-floor-blip-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 @keyframes sq-floor-blip-blink { 0% { opacity: 1; } 100% { opacity: 0.15; } }
 @keyframes sq-floor-beat { to { background-position: 3px 0; } }
