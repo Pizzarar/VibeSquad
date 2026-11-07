@@ -198,9 +198,9 @@ describe("allowlist", () => {
       }
     }
   });
-  test("B8: fs/list|resolve|read are GET-only remotely and are exactly the gated reads that carry the token", async () => {
+  test("B8: fs/list|resolve|read|watch are GET-only remotely and are exactly the gated reads that carry the token", async () => {
     const { isGatedRead } = await import("../server/vibesquad-api.mjs");
-    const fs = ["/__vibesquad/fs/list", "/__vibesquad/fs/resolve", "/__vibesquad/fs/read"];
+    const fs = ["/__vibesquad/fs/list", "/__vibesquad/fs/resolve", "/__vibesquad/fs/read", "/__vibesquad/fs/watch"];
     assert.deepEqual([...REMOTE_OWNER_READS].sort(), [...fs].sort());
     for (const p of fs) {
       assert.equal(decideProxyRequest("GET", `${p}?cwd=C:/w&path=a.md`).ok, true, p);
