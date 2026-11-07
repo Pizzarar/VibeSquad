@@ -12,6 +12,7 @@ import { pidAlive, readLock } from "../runner/lock.mjs";
 import { readDiscovery, runnerHome } from "./backend/runner-client.mjs";
 import { sharedRunnerBackend } from "./backend/index.mjs";
 import { killTree } from "./proc-tree.mjs";
+import { restartRunner as ownerRestart } from "./runner-supervisor.mjs";
 
 const NODE_IMAGE = /^node(\.exe)?$/i;
 // Command lines that are VS infrastructure or tools an agent depends on, never strays.
@@ -118,7 +119,7 @@ export async function unstick({
   const rHome = runnerHome({ VIBESQUAD_HOME: home });
   const be = backend ?? sharedRunnerBackend();
   const healthy = runnerHealthy ?? (() => be.rc.healthy());
-  const restart = restartRunner ?? ((opts) => be.startOwned(opts));
+  const restart = restartRunner ?? ((opts) => ownerRestart(be, opts));
   let procs;
   try {
     procs = list();
@@ -131,7 +132,7 @@ export async function unstick({
   const ledger = readChildren(rHome).map((r) => r.pid);
   const check = () => Promise.race([Promise.resolve(healthy()).catch(() => false), new Promise((r) => setTimeout(() => r(false), healthTimeoutMs).unref?.())]);
   const wasHealthy = await check();
-  const hung = !wasHealthy && Number.isInteger(runnerPid) && alive(runnerPid); // alive pid that does not answer: startOwned() would wait on its lock forever
+  const hung = !wasHealthy && Number.isInteger(runnerPid) && alive(runnerPid); // alive pid that does not answer: a start would wait on its lock forever
 
   const roots = [runnerPid, ...ledger].filter(Number.isInteger);
   const { kill, spared } = computeKillSet(procs, { selfPid, roots });
