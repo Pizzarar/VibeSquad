@@ -4360,3 +4360,35 @@ button.project-file-name:hover { text-decoration: underline; }
 .pin-rail-mark-read { padding: 1px 6px; font-size: 10px; flex-shrink: 0; }
 .tl-note.info, .info { color: var(--cyan); }
 .tl-spinoff-block, .tl-sendto-block, .tl-looksdone-block { display: flex; flex-direction: column; gap: 6px; margin: 4px 0; }
+
+/* ── Squad floor phase 1 (src/SquadQueue.tsx): squad-wide Needs-you queue beside the hub's RiffBot chat ── */
+.app.pin-focus.hub-focus { grid-template-columns: var(--sidebar-w, 265px) minmax(0, 1fr) 320px 300px; }
+.app.pin-focus.hub-focus.sidebar-collapsed { grid-template-columns: 56px minmax(0, 1fr) 320px 300px; }
+.sq-panel {
+  grid-column: 3; min-height: 0; overflow: auto; padding: 8px; font-size: 12px;
+  background: var(--navy); border-left: 1px solid var(--line); border-top: 2px solid var(--hot-pink);
+}
+.sq-head { display: flex; align-items: baseline; gap: 6px; margin-bottom: 8px; color: var(--cyan); }
+.sq-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.sq-row { border: 1px solid var(--line); padding: 6px; }
+.sq-row.attn-permission { border-color: var(--amber); }
+.sq-row.attn-finished { opacity: 0.7; }
+.sq-open { display: flex; align-items: center; gap: 8px; width: 100%; padding: 0; background: transparent; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.sq-open:hover .sq-who b, .sq-open:focus-visible .sq-who b { color: var(--cyan); }
+.sq-open .avatar { flex: none; }
+.sq-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.sq-who { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.sq-who b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sq-lane { white-space: nowrap; }
+.sq-reason { color: var(--muted); overflow-wrap: anywhere; }
+.sq-age { flex: none; align-self: flex-start; font-variant-numeric: tabular-nums; }
+.sq-actions { display: flex; gap: 6px; margin-top: 6px; }
+.sq-empty { padding: 16px 4px; text-align: center; }
+@media (max-width: 900px) {
+  .app.pin-focus.hub-focus { grid-template-columns: var(--sidebar-w, 265px) minmax(0, 1fr) 240px 64px; }
+}
+@media (max-width: 600px) {
+  .app.pin-focus.hub-focus { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .sq-panel { grid-column: 1; grid-row: 1; max-height: 38vh; border-left: 0; }
+  .app.pin-focus.hub-focus > .agent-panes { grid-column: 1; grid-row: 2; }
+}

@@ -14,6 +14,8 @@ import { clearUnreadLocal, dismissLocal, snoozeLocal } from "./attentionLocal";
 import { respondToPermission } from "./PermissionCard";
 import { bumpAgents, clearAgentAttention, clearNeedsYou, snoozeNeedsYou } from "./paseo";
 import { clearWorkspaceIfQuiet } from "./paseoAttention";
+import { usePinFocus } from "./pinFocus";
+import { hubPinForSquad } from "./pins";
 import type { TeamView } from "./teams";
 
 const deps: AttentionDeps = {
@@ -174,14 +176,25 @@ export function AttentionBadge({
   className = "badge alert",
   testId,
   children,
+  hubQueueInstead,
 }: {
   view: TeamView;
   onOpen: (agentId: string) => void;
   className?: string;
   testId?: string;
   children?: ReactNode;
+  /** Sidebar badge: while this squad's hub page is focused its Needs-you queue is the list, so no popover. */
+  hubQueueInstead?: boolean;
 }) {
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  const focus = usePinFocus();
+  if (hubQueueInstead && focus?.squadId === view.team.id && hubPinForSquad(view)?.lane.id === focus.laneId) {
+    return (
+      <span className={className} data-testid={testId} title={`${view.needsYou} need you: see the Needs-you queue`}>
+        {children ?? view.needsYou}
+      </span>
+    );
+  }
   return (
     <>
       <button

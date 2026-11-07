@@ -61,6 +61,32 @@ export function attentionItems(members: Member[]): AttentionItem[] {
   return out.sort((a, b) => ORDER[a.kind] - ORDER[b.kind]);
 }
 
+/** When this item started needing the owner: the `needs-you-at` stamp (label items), else the agent's last update. */
+export function itemSince(item: AttentionItem): number | null {
+  const a = item.agent as PaseoAgent & { lastActivityAt?: string | null };
+  const labels = (a.labels ?? {}) as Record<string, string>;
+  const stamp = item.kind === "label" ? Date.parse(labels["needs-you-at"] ?? "") : NaN;
+  const t = Number.isNaN(stamp) ? Date.parse(a.updatedAt ?? a.lastActivityAt ?? "") : stamp;
+  return Number.isNaN(t) ? null : t;
+}
+
+/** "4m", "2h", "3d" (under a minute: "now"; unknown: ""). */
+export function formatAge(since: number | null, now: number): string {
+  if (since == null) return "";
+  const m = Math.max(0, Math.floor((now - since) / 60_000));
+  if (m < 1) return "now";
+  if (m < 60) return `${m}m`;
+  if (m < 1440) return `${Math.floor(m / 60)}h`;
+  return `${Math.floor(m / 1440)}d`;
+}
+
+/** The squad-wide "Needs you" queue: permissions first, then everything else oldest first (unknown age last). */
+export function squadQueue(members: Member[]): AttentionItem[] {
+  const keyed = attentionItems(members).map((item) => ({ item, since: itemSince(item) ?? Infinity }));
+  const rank = (i: AttentionItem) => (i.kind === "permission" ? 0 : 1);
+  return keyed.sort((a, b) => rank(a.item) - rank(b.item) || (a.since === b.since ? 0 : a.since - b.since)).map((k) => k.item);
+}
+
 /** Items the badge counts (finished ones are listed but not counted). */
 export const countedItems = (items: AttentionItem[]) => items.filter((i) => i.kind !== "finished");
 

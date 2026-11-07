@@ -925,6 +925,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
         ...labels,
         "needs-you": SOFT_FLAG_REASON,
         "needs-you-reason": SOFT_FLAG_REASON,
+        "needs-you-at": new Date().toISOString(),
         "handoff-flagged": "1",
       };
       await setLabels(lead.id, nextLabels);
