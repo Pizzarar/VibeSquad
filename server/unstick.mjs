@@ -3,10 +3,11 @@
 // its whole tree (every agent), the runner's child ledger, VS MCP servers, Playwright MCP, Paseo, and everything below those.
 // When unsure (no parent info, unrecognised cmdline of a tree member) a process is spared, never killed.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readChildren } from "../runner/children.mjs";
+import { pidAlive } from "../runner/lock.mjs";
 import { readDiscovery, runnerHome } from "./backend/runner-client.mjs";
 import { sharedRunnerBackend } from "./backend/index.mjs";
 import { killTree } from "./proc-tree.mjs";
@@ -81,6 +82,9 @@ export async function unstick({
   backend,
   runnerHealthy,
   restartRunner,
+  confirmRestart = false,
+  alive = pidAlive,
+  healthTimeoutMs = 3000,
   now = () => new Date(),
 } = {}) {
   const rHome = runnerHome({ VIBESQUAD_HOME: home });
@@ -91,7 +95,9 @@ export async function unstick({
   const disc = readDiscovery(rHome);
   const runnerPid = disc?.pid;
   const ledger = readChildren(rHome).map((r) => r.pid);
-  const wasHealthy = await Promise.resolve(healthy()).catch(() => false);
+  const check = () => Promise.race([Promise.resolve(healthy()).catch(() => false), new Promise((r) => setTimeout(() => r(false), healthTimeoutMs).unref?.())]);
+  const wasHealthy = await check();
+  const hung = !wasHealthy && Number.isInteger(runnerPid) && alive(runnerPid); // alive pid that does not answer: startOwned() would wait on its lock forever
 
   const roots = [runnerPid, ...ledger].filter(Number.isInteger);
   const { kill, spared } = computeKillSet(procs, { selfPid, roots });
@@ -100,7 +106,7 @@ export async function unstick({
   mkdirSync(dir, { recursive: true });
   const snapshot = join(dir, `unstick-${ts}.json`);
   const nodes = procs.filter((p) => NODE_IMAGE.test(p.name));
-  writeFileSync(snapshot, JSON.stringify({ at: now().toISOString(), selfPid, runnerPid: runnerPid ?? null, runnerHealthy: wasHealthy, node: nodes, wouldKill: kill.map((p) => p.pid), spared }, null, 2));
+  writeFileSync(snapshot, JSON.stringify({ at: now().toISOString(), selfPid, runnerPid: runnerPid ?? null, runnerHealthy: wasHealthy, runnerHung: hung, confirmRestart, node: nodes, wouldKill: kill.map((p) => p.pid), spared }, null, 2));
 
   const killed = [];
   for (const p of kill) {
@@ -108,9 +114,22 @@ export async function unstick({
   }
   let restarted = false;
   let healthyNow = wasHealthy;
-  if (!wasHealthy) {
-    restarted = await Promise.resolve(restart()).then((v) => v !== false, () => false);
-    healthyNow = await Promise.resolve(healthy()).catch(() => false);
+  let needsRestart = false;
+  if (hung && !confirmRestart) {
+    needsRestart = true; // never kill the runner (and the agents under it) without an explicit yes
+  } else {
+    if (hung) {
+      // Kill the runner tree only if the pid still looks like the runner (pids get reused), then clear what blocks a fresh start.
+      const rp = procs.find((p) => p.pid === runnerPid);
+      if (rp && /runner[\/]server\.mjs/i.test(rp.cmd ?? "")) {
+        try { killPid(runnerPid); killed.push({ pid: runnerPid, cmd: String(rp.cmd).slice(0, 200) }); } catch { /* gone */ }
+      }
+      for (const f of ["runner.lock", "runner.json"]) rmSync(join(rHome, f), { force: true });
+    }
+    if (!wasHealthy) {
+      restarted = await Promise.resolve(restart()).then((v) => v !== false, () => false);
+      healthyNow = await check();
+    }
   }
-  return { ok: true, killed, snapshot, runner: { healthy: healthyNow, wasHealthy, restarted, pid: runnerPid ?? null } };
+  return { ok: true, killed, snapshot, runner: { healthy: healthyNow, wasHealthy, hung, needsRestart, restarted, pid: runnerPid ?? null } };
 }

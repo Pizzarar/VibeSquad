@@ -314,15 +314,15 @@ function SoundTest() {
   );
 }
 
-type UnstickResult = { ok: boolean; killed?: { pid: number; cmd: string }[]; snapshot?: string; runner?: { healthy: boolean; restarted: boolean }; error?: string };
+type UnstickResult = { ok: boolean; killed?: { pid: number; cmd: string }[]; snapshot?: string; runner?: { healthy: boolean; restarted: boolean; needsRestart?: boolean }; error?: string };
 
 function UnstickButton() {
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState<UnstickResult | null>(null);
-  const run = async () => {
+  const run = async (confirmRestart = false) => {
     setBusy(true);
     try {
-      const r = await fetch("/__vibesquad/unstick", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+      const r = await fetch("/__vibesquad/unstick", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirmRestart }) });
       setRes((await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }))) as UnstickResult);
     } catch (e) {
       setRes({ ok: false, error: String((e as Error)?.message ?? e) });
@@ -342,6 +342,14 @@ function UnstickButton() {
             <>
               Killed {res.killed?.length ?? 0}
               {res.runner && <> · runner {res.runner.healthy ? "healthy" : "DOWN"}{res.runner.restarted ? " (restarted)" : ""}</>}
+              {res.runner?.needsRestart && (
+                <div>
+                  Runner not responding — restart it? Running agents stop; Spin Up resumes them in place.{" "}
+                  <button className="btn small" disabled={busy} data-testid="settings-unstick-confirm" onClick={() => void run(true)}>
+                    Restart runner
+                  </button>
+                </div>
+              )}
               {res.killed?.map((k) => <div key={k.pid}><code>{k.pid}</code> {k.cmd}</div>)}
               {res.snapshot && <div>Snapshot: <code>{res.snapshot}</code></div>}
             </>

@@ -1693,7 +1693,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return handleVsLog(req, res);
       case "/__vibesquad/unstick": // owner-only: POST is gated above (isOwner for every non-GET)
         if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "method not allowed" });
-        return unstick().then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
+        return readBody(req).then((body) => unstick({ confirmRestart: body?.confirmRestart === true })).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
       case "/__vibesquad/brainstorm-restart":
         return handleBrainstormRestart(req, res, rootDir);
       case "/__vibesquad/lead-handoff":

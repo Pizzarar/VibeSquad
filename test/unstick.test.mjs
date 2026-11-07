@@ -67,3 +67,46 @@ test('unhealthy runner triggers a restart', async () => {
     assert.equal(r.runner.healthy, true);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
+
+function hung(confirmRestart) {
+  const home = mkdtempSync(path.join(os.tmpdir(), 'vs-unstick-'));
+  const rHome = path.join(home, 'runner');
+  mkdirSync(rHome, { recursive: true });
+  writeFileSync(path.join(rHome, 'runner.json'), JSON.stringify({ port: 1, pid: 200 }));
+  writeFileSync(path.join(rHome, 'token'), 't');
+  writeFileSync(path.join(rHome, 'runner.lock'), JSON.stringify({ pid: 200 }));
+  const killed = [];
+  let restarts = 0;
+  const run = () => unstick({
+    home, selfPid: 100, list: () => procs, killPid: (pid) => killed.push(pid), alive: () => true,
+    runnerHealthy: () => restarts > 0, restartRunner: () => { restarts++; return true; },
+    confirmRestart, healthTimeoutMs: 50,
+  });
+  return { home, rHome, killed, run, restarts: () => restarts };
+}
+
+test('hung runner without confirm is spared and reports needsRestart', async () => {
+  const h = hung(false);
+  try {
+    const r = await h.run();
+    assert.deepEqual(h.killed, [500]);
+    assert.equal(r.runner.needsRestart, true);
+    assert.equal(r.runner.restarted, false);
+    assert.equal(h.restarts(), 0);
+    assert.ok(existsSync(path.join(h.rHome, 'runner.lock')));
+    assert.ok(existsSync(r.snapshot));
+  } finally { rmSync(h.home, { recursive: true, force: true }); }
+});
+
+test('hung runner with confirm is killed, lock/discovery cleared, restarted', async () => {
+  const h = hung(true);
+  try {
+    const r = await h.run();
+    assert.deepEqual(h.killed, [500, 200]);
+    assert.equal(r.runner.needsRestart, false);
+    assert.equal(r.runner.restarted, true);
+    assert.equal(r.runner.healthy, true);
+    assert.ok(!existsSync(path.join(h.rHome, 'runner.lock')));
+    assert.ok(!existsSync(path.join(h.rHome, 'runner.json')));
+  } finally { rmSync(h.home, { recursive: true, force: true }); }
+});
