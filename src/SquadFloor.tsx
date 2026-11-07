@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { openPinMember } from "./pinFocus";
 import { gridPinsForSquad, hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import {
+  bandLayers,
   buildTower,
   FLOOR_NATIVE_HEIGHT,
   FLOOR_NATIVE_WIDTH,
@@ -16,6 +17,7 @@ import {
   POSE_FPS,
   RIDE_MS,
   sliceAnchor,
+  sortByAnchorY,
   spriteFrame,
   transitionRiders,
   validateCast,
@@ -58,6 +60,8 @@ function useTheme(): "dark" | "light" {
 const CAST_URL = (theme: "dark" | "light") => `/office/cast-${theme}.png`;
 const FLOOR_URL = (theme: "dark" | "light") => `/office/floor-${theme}.png`;
 const ROOF_URL = (theme: "dark" | "light") => `/office/roof-${theme}.png`;
+const FLOOR_FRONT_URL = (theme: "dark" | "light") => `/office/floor-front-${theme}.png`;
+const ROOF_FRONT_URL = (theme: "dark" | "light") => `/office/roof-front-${theme}.png`;
 
 /** True once an image at `url` loads (per theme); resets to false on error so the caller falls back to boxes. */
 function useImageOk(url: string | null): boolean {
@@ -133,96 +137,142 @@ function towerMembers(tower: Tower): FlatMember[] {
 
 const POSE_LABEL: Record<string, string> = { work: "working", needs: "needs you", idle: "idle", ride: "riding" };
 
+type Anchor = { x: number; y: number };
+/** One drawable character in a band; the band y-sorts these by anchor. */
+type BandItem = { agent: SeatedAgent; anchor: Anchor; onOpen: () => void };
+
 type SeatProps = {
-  agent: SeatedAgent;
-  anchor: { x: number; y: number };
+  item: BandItem;
   cast: CastModel | null;
   sheet: string | null;
   frameIndex: number;
-  onOpen: () => void;
 };
 
-function Seat({ agent, anchor, cast, sheet, frameIndex, onOpen }: SeatProps) {
+function Seat({ item: { agent, anchor, onOpen }, cast, sheet, frameIndex }: SeatProps) {
   const frame: Frame | null = cast ? spriteFrame(cast, agent.role, agent.pose, frameIndex) : null;
   const hasSprite = !!(sheet && frame);
   const status = POSE_LABEL[agent.pose] ?? agent.pose;
   return (
-    <>
-      <button
-        type="button"
-        className={`sq-floor-char${hasSprite ? "" : " is-fallback"}`}
-        data-testid={`sq-floor-char-${agent.agentId}`}
-        title={`${agent.title} · ${status}`}
-        style={{ left: anchor.x, top: anchor.y, ...(cast ? { width: cast.cell, height: cast.cell } : {}) }}
-        onClick={onOpen}
-      >
-        {hasSprite ? (
-          <span
-            className="sq-floor-sprite"
-            style={{ backgroundImage: `url(${sheet})`, backgroundPosition: `-${frame.x}px -${frame.y}px` }}
-          />
-        ) : (
-          <span className="sq-floor-sprite sq-floor-sprite-fallback" />
-        )}
-      </button>
-      {agent.pose === "needs" && cast && hasSprite && (
+    <button
+      type="button"
+      className={`sq-floor-char${hasSprite ? "" : " is-fallback"}`}
+      data-testid={`sq-floor-char-${agent.agentId}`}
+      title={`${agent.title} · ${status}`}
+      style={{ left: anchor.x, top: anchor.y, ...(cast ? { width: cast.cell, height: cast.cell } : {}) }}
+      onClick={onOpen}
+    >
+      {hasSprite ? (
         <span
-          className="sq-floor-bubble"
-          aria-hidden="true"
-          style={{
-            left: anchor.x + cast.bubble.offset.x,
-            top: anchor.y + cast.bubble.offset.y,
-            width: cast.bubble.w,
-            height: cast.bubble.h,
-            backgroundImage: `url(${sheet})`,
-            backgroundPosition: `-${cast.bubble.x}px -${cast.bubble.y}px`,
-          }}
+          className="sq-floor-sprite"
+          style={{ backgroundImage: `url(${sheet})`, backgroundPosition: `-${frame.x}px -${frame.y}px` }}
         />
+      ) : (
+        <span className="sq-floor-sprite sq-floor-sprite-fallback" />
       )}
+    </button>
+  );
+}
+
+/** The needs-you bubble; drawn above the front overlay so it is never hidden. */
+function SeatBubble({ item: { agent, anchor }, cast, sheet }: { item: BandItem; cast: CastModel | null; sheet: string | null }) {
+  const frame: Frame | null = cast ? spriteFrame(cast, agent.role, agent.pose, 0) : null;
+  if (agent.pose !== "needs" || !cast || !sheet || !frame) return null;
+  return (
+    <span
+      className="sq-floor-bubble"
+      aria-hidden="true"
+      style={{
+        left: anchor.x + cast.bubble.offset.x,
+        top: anchor.y + cast.bubble.offset.y,
+        width: cast.bubble.w,
+        height: cast.bubble.h,
+        backgroundImage: `url(${sheet})`,
+        backgroundPosition: `-${cast.bubble.x}px -${cast.bubble.y}px`,
+      }}
+    />
+  );
+}
+
+/**
+ * One band in 3/4 top-down draw order (bandLayers): plate → y-sorted sprites → front overlay → bubbles.
+ * The front overlay is `pointer-events: none`, so character clicks pass through it.
+ */
+function Band({
+  plate,
+  items,
+  extras,
+  frontSrc,
+  cast,
+  sheet,
+  frameIndex,
+}: {
+  plate: ReactNode;
+  items: BandItem[];
+  extras?: ReactNode;
+  frontSrc: string | null;
+  cast: CastModel | null;
+  sheet: string | null;
+  frameIndex: number;
+}) {
+  const sorted = sortByAnchorY(items);
+  const layers = bandLayers(!!frontSrc);
+  return (
+    <>
+      {layers.map((layer) => {
+        switch (layer) {
+          case "plate":
+            return <span key={layer} style={{ display: "contents" }}>{plate}</span>;
+          case "sprites":
+            return (
+              <span key={layer} style={{ display: "contents" }}>
+                {sorted.map((it) => (
+                  <Seat key={it.agent.agentId} item={it} cast={cast} sheet={sheet} frameIndex={frameIndex} />
+                ))}
+                {extras}
+              </span>
+            );
+          case "front":
+            return <img key={layer} className="sq-floor-front" src={frontSrc!} alt="" draggable={false} />;
+          case "bubbles":
+            return (
+              <span key={layer} style={{ display: "contents" }}>
+                {sorted.map((it) => (
+                  <SeatBubble key={it.agent.agentId} item={it} cast={cast} sheet={sheet} />
+                ))}
+              </span>
+            );
+        }
+      })}
     </>
   );
 }
 
-function TeamChars({
-  placement,
-  slices,
-  cast,
-  sheet,
-  frameIndex,
-  onOpen,
-}: {
-  placement: TeamFloorPlacement;
-  slices: FloorModel["teamA"];
-  cast: CastModel | null;
-  sheet: string | null;
-  frameIndex: number;
-  onOpen: (agentId: string) => void;
-}) {
-  const lobbyAnchor = (rect: Rect, i: number) => {
-    const step = rect.w / LOBBY_MAX_SHOWN;
-    return { x: rect.x + step * (i + 0.5), y: rect.y + rect.h };
+function teamItems(placement: TeamFloorPlacement, slices: FloorModel["teamA"], onOpen: (agentId: string) => void): BandItem[] {
+  const out: BandItem[] = [];
+  const add = (agent: SeatedAgent | null, anchor: Anchor | null) => {
+    if (agent && anchor) out.push({ agent, anchor, onOpen: () => onOpen(agent.agentId) });
   };
-  const lobbyRect = slices.lobby;
+  add(placement.lead, sliceAnchor(slices.lead));
+  add(placement.buddy, sliceAnchor(slices.buddyOffice));
+  placement.desks.forEach((d, i) => {
+    const rect = slices.desks[d.desk ?? i];
+    add(d, rect ? sliceAnchor(rect) : null);
+  });
+  const lobby = slices.lobby;
+  placement.lobby.forEach((l, i) => {
+    if (!lobby) return;
+    const step = lobby.w / LOBBY_MAX_SHOWN;
+    add(l, { x: lobby.x + step * (i + 0.5), y: lobby.y + lobby.h });
+  });
+  return out;
+}
+
+function LobbyPlus({ placement, lobby }: { placement: TeamFloorPlacement; lobby?: Rect }) {
+  if (placement.lobbyOverflow <= 0 || !lobby) return null;
   return (
-    <>
-      {placement.lead && <Seat agent={placement.lead} anchor={sliceAnchor(slices.lead)} cast={cast} sheet={sheet} frameIndex={frameIndex} onOpen={() => onOpen(placement.lead!.agentId)} />}
-      {placement.buddy && <Seat agent={placement.buddy} anchor={sliceAnchor(slices.buddyOffice)} cast={cast} sheet={sheet} frameIndex={frameIndex} onOpen={() => onOpen(placement.buddy!.agentId)} />}
-      {placement.desks.map((d, i) => {
-        const rect = slices.desks[d.desk ?? i];
-        if (!rect) return null;
-        return <Seat key={d.agentId} agent={d} anchor={sliceAnchor(rect)} cast={cast} sheet={sheet} frameIndex={frameIndex} onOpen={() => onOpen(d.agentId)} />;
-      })}
-      {placement.lobby.map((l, i) =>
-        lobbyRect ? (
-          <Seat key={l.agentId} agent={l} anchor={lobbyAnchor(lobbyRect, i)} cast={cast} sheet={sheet} frameIndex={frameIndex} onOpen={() => onOpen(l.agentId)} />
-        ) : null,
-      )}
-      {placement.lobbyOverflow > 0 && lobbyRect && (
-        <span className="sq-floor-plus" style={{ left: lobbyRect.x + lobbyRect.w + 4, top: lobbyRect.y + lobbyRect.h }}>
-          +{placement.lobbyOverflow}
-        </span>
-      )}
-    </>
+    <span className="sq-floor-plus" style={{ left: lobby.x + lobby.w + 4, top: lobby.y + lobby.h }}>
+      +{placement.lobbyOverflow}
+    </span>
   );
 }
 
@@ -258,6 +308,9 @@ export function SquadFloor({ view, onOpenRiffBot }: SquadFloorProps) {
   const floorImgOk = useImageOk(FLOOR_URL(theme));
   const roofImgOk = useImageOk(ROOF_URL(theme));
   const castImgOk = useImageOk(CAST_URL(theme));
+  // Front overlays are opt-in per floor.json (`"front": true`); absent → skip.
+  const floorFrontOk = useImageOk(floor.front ? FLOOR_FRONT_URL(theme) : null);
+  const roofFrontOk = useImageOk(floor.penthouse?.front ? ROOF_FRONT_URL(theme) : null);
   const sheet = cast && castImgOk ? CAST_URL(theme) : null;
 
   // Load the art JSON; missing/invalid → F1 placeholder layout (and no sprites when cast.json is absent).
@@ -344,6 +397,11 @@ export function SquadFloor({ view, onOpenRiffBot }: SquadFloorProps) {
   const floorRefs = useRef<(HTMLDivElement | null)[]>([]);
   const penthouse = floor.penthouse ?? placeholderFloor().penthouse!;
 
+  const penthouseItems: BandItem[] = [];
+  const { riffbot: riffAgent, overlord: overlordAgent } = tower.penthouse;
+  if (riffAgent) penthouseItems.push({ agent: riffAgent, anchor: sliceAnchor(penthouse.riffbot.seat), onOpen: () => openAgent(hub?.lane.id ?? "", riffAgent.agentId) });
+  if (overlordAgent) penthouseItems.push({ agent: overlordAgent, anchor: sliceAnchor(penthouse.overlord.seat), onOpen: () => openAgent(hub?.lane.id ?? "", overlordAgent.agentId) });
+
   const bandStyle = (w: number, h: number): CSSProperties => ({
     width: w,
     height: h,
@@ -367,50 +425,55 @@ export function SquadFloor({ view, onOpenRiffBot }: SquadFloorProps) {
           {/* Penthouse [RiffBot lounge | elevator top | Overlord office] */}
           <div className="sq-floor-band-wrap" style={towerScale(penthouse.w, penthouse.h)}>
             <div className="sq-floor-band" style={bandStyle(penthouse.w, penthouse.h)}>
-              {roofImgOk ? (
-                <img className="sq-floor-plate" src={ROOF_URL(theme)} alt="" draggable={false} style={{ width: penthouse.w, height: penthouse.h }} />
-              ) : (
-                <PlateBoxes rects={[penthouse.riffbot.lounge, penthouse.riffbot.seat, penthouse.overlord.crtWall, penthouse.overlord.seat, penthouse.elevatorTop]} />
-              )}
-              {hub && (
-                <button
-                  type="button"
-                  className="sq-floor-lounge"
-                  data-testid="sq-floor-lounge"
-                  title="Open RiffBot"
-                  style={{ left: penthouse.riffbot.lounge.x, top: penthouse.riffbot.lounge.y, width: penthouse.riffbot.lounge.w, height: penthouse.riffbot.lounge.h }}
-                  onClick={() => void Promise.resolve(onOpenRiffBot(hub)).catch(() => {})}
-                />
-              )}
-              {tower.penthouse.riffbot && (
-                <Seat agent={tower.penthouse.riffbot} anchor={sliceAnchor(penthouse.riffbot.seat)} cast={cast} sheet={sheet} frameIndex={frameIndex} onOpen={() => openAgent(hub?.lane.id ?? "", tower.penthouse.riffbot!.agentId)} />
-              )}
-              {tower.penthouse.overlord && (
-                <Seat agent={tower.penthouse.overlord} anchor={sliceAnchor(penthouse.overlord.seat)} cast={cast} sheet={sheet} frameIndex={frameIndex} onOpen={() => openAgent(hub?.lane.id ?? "", tower.penthouse.overlord!.agentId)} />
-              )}
-              {riders.map((r, i) => {
-                const frame = cast ? spriteFrame(cast, r.role, "ride", 0) : null;
-                const elevatorTop = penthouse.elevatorTop;
-                return (
-                  <span
-                    key={r.agentId}
-                    className="sq-floor-rider"
-                    title={`${r.title} · riding`}
-                    style={{
-                      left: elevatorTop.x + elevatorTop.w / 2 + (i % 2 === 0 ? -6 : 6),
-                      top: elevatorTop.y + elevatorTop.h,
-                      animationDuration: `${RIDE_MS}ms`,
-                      ...(cast ? { width: cast.cell, height: cast.cell } : {}),
-                    }}
-                  >
-                    {sheet && frame ? (
-                      <span className="sq-floor-sprite" style={{ backgroundImage: `url(${sheet})`, backgroundPosition: `-${frame.x}px -${frame.y}px` }} />
+              <Band
+                cast={cast}
+                sheet={sheet}
+                frameIndex={frameIndex}
+                frontSrc={roofFrontOk ? ROOF_FRONT_URL(theme) : null}
+                items={penthouseItems}
+                plate={
+                  <>
+                    {roofImgOk ? (
+                      <img className="sq-floor-plate" src={ROOF_URL(theme)} alt="" draggable={false} style={{ width: penthouse.w, height: penthouse.h }} />
                     ) : (
-                      <span className="sq-floor-sprite sq-floor-sprite-fallback" />
+                      <PlateBoxes rects={[penthouse.riffbot.lounge, penthouse.riffbot.seat, penthouse.overlord.crtWall, penthouse.overlord.seat, penthouse.elevatorTop]} />
                     )}
-                  </span>
-                );
-              })}
+                    {hub && (
+                      <button
+                        type="button"
+                        className="sq-floor-lounge"
+                        data-testid="sq-floor-lounge"
+                        title="Open RiffBot"
+                        style={{ left: penthouse.riffbot.lounge.x, top: penthouse.riffbot.lounge.y, width: penthouse.riffbot.lounge.w, height: penthouse.riffbot.lounge.h }}
+                        onClick={() => void Promise.resolve(onOpenRiffBot(hub)).catch(() => {})}
+                      />
+                    )}
+                  </>
+                }
+                extras={riders.map((r, i) => {
+                  const frame = cast ? spriteFrame(cast, r.role, "ride", 0) : null;
+                  const elevatorTop = penthouse.elevatorTop;
+                  return (
+                    <span
+                      key={r.agentId}
+                      className="sq-floor-rider"
+                      title={`${r.title} · riding`}
+                      style={{
+                        left: elevatorTop.x + elevatorTop.w / 2 + (i % 2 === 0 ? -6 : 6),
+                        top: elevatorTop.y + elevatorTop.h,
+                        animationDuration: `${RIDE_MS}ms`,
+                        ...(cast ? { width: cast.cell, height: cast.cell } : {}),
+                      }}
+                    >
+                      {sheet && frame ? (
+                        <span className="sq-floor-sprite" style={{ backgroundImage: `url(${sheet})`, backgroundPosition: `-${frame.x}px -${frame.y}px` }} />
+                      ) : (
+                        <span className="sq-floor-sprite sq-floor-sprite-fallback" />
+                      )}
+                    </span>
+                  );
+                })}
+              />
             </div>
           </div>
 
@@ -425,13 +488,29 @@ export function SquadFloor({ view, onOpenRiffBot }: SquadFloorProps) {
               style={towerScale(FLOOR_NATIVE_WIDTH, FLOOR_NATIVE_HEIGHT)}
             >
               <div className="sq-floor-band" style={bandStyle(FLOOR_NATIVE_WIDTH, FLOOR_NATIVE_HEIGHT)}>
-                {floorImgOk ? (
-                  <img className="sq-floor-plate" src={FLOOR_URL(theme)} alt="" draggable={false} style={{ width: FLOOR_NATIVE_WIDTH, height: FLOOR_NATIVE_HEIGHT }} />
-                ) : (
-                  floorBoxes
-                )}
-                <TeamChars placement={f.teamA} slices={floor.teamA} cast={cast} sheet={sheet} frameIndex={frameIndex} onOpen={(agentId) => openAgent(f.teamA.laneId, agentId)} />
-                {f.teamB && <TeamChars placement={f.teamB} slices={floor.teamB} cast={cast} sheet={sheet} frameIndex={frameIndex} onOpen={(agentId) => openAgent(f.teamB!.laneId, agentId)} />}
+                <Band
+                  cast={cast}
+                  sheet={sheet}
+                  frameIndex={frameIndex}
+                  frontSrc={floorFrontOk ? FLOOR_FRONT_URL(theme) : null}
+                  items={[
+                    ...teamItems(f.teamA, floor.teamA, (agentId) => openAgent(f.teamA.laneId, agentId)),
+                    ...(f.teamB ? teamItems(f.teamB, floor.teamB, (agentId) => openAgent(f.teamB!.laneId, agentId)) : []),
+                  ]}
+                  plate={
+                    floorImgOk ? (
+                      <img className="sq-floor-plate" src={FLOOR_URL(theme)} alt="" draggable={false} style={{ width: FLOOR_NATIVE_WIDTH, height: FLOOR_NATIVE_HEIGHT }} />
+                    ) : (
+                      floorBoxes
+                    )
+                  }
+                  extras={
+                    <>
+                      <LobbyPlus placement={f.teamA} lobby={floor.teamA.lobby} />
+                      {f.teamB && <LobbyPlus placement={f.teamB} lobby={floor.teamB.lobby} />}
+                    </>
+                  }
+                />
               </div>
               {f.needsYou && (
                 <button

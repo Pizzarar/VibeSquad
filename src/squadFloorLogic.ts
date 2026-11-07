@@ -42,6 +42,8 @@ export type PenthouseModel = {
   riffbot: { seat: Rect; lounge: Rect };
   overlord: { seat: Rect; crtWall: Rect };
   elevatorTop: Rect;
+  /** `roof-front-{theme}.png` exists and is drawn over the penthouse sprites. */
+  front?: boolean;
 };
 
 export type FloorModel = {
@@ -50,6 +52,8 @@ export type FloorModel = {
   elevator: { doorA: Rect; doorB: Rect; car: Rect };
   /** Present once S1 lands; the placeholder supplies one meanwhile. */
   penthouse?: PenthouseModel;
+  /** `floor-front-{theme}.png` exists and is drawn over the y-sorted sprites (floor.json `"front": true`). */
+  front?: boolean;
 };
 
 export type Validation<T> = { ok: true; value: T } | { ok: false; reason: string };
@@ -96,6 +100,7 @@ function penthouseOf(v: unknown): PenthouseModel | undefined {
     riffbot: { seat: riffbot.seat, lounge: riffbot.lounge },
     overlord: { seat: overlord.seat, crtWall: overlord.crtWall },
     elevatorTop,
+    ...(v.front === true ? { front: true } : {}),
   };
 }
 
@@ -112,7 +117,7 @@ export function validateFloor(json: unknown): Validation<FloorModel> {
       : null;
   if (!elevator) return fail("floor.json elevator is missing doorA, doorB or car");
   const penthouse = penthouseOf(json.penthouse);
-  return { ok: true, value: { teamA, teamB, elevator, ...(penthouse ? { penthouse } : {}) } };
+  return { ok: true, value: { teamA, teamB, elevator, ...(penthouse ? { penthouse } : {}), ...(json.front === true ? { front: true } : {}) } };
 }
 
 /** Validate cast.json. Unknown roles/poses/fields are kept; `fallback` may be `{}`; nothing about the sheet is hardcoded. */
@@ -375,6 +380,16 @@ export function needsYouFloors(floors: readonly Floor[]): number[] {
 export function integerScale(panelWidth: number): number {
   if (!Number.isFinite(panelWidth) || panelWidth < FLOOR_NATIVE_WIDTH) return 0;
   return Math.floor(panelWidth / FLOOR_NATIVE_WIDTH);
+}
+
+/** Band draw order (3/4 top-down, docs/PLAN_NEON_OFFICE.md "Camera"): plate, y-sorted sprites, front overlay (only when floor.json says so), bubbles. */
+export function bandLayers(front: boolean): ("plate" | "sprites" | "front" | "bubbles")[] {
+  return front ? ["plate", "sprites", "front", "bubbles"] : ["plate", "sprites", "bubbles"];
+}
+
+/** Stable y-sort by anchor: the lower anchor (bigger y) draws later, so it is in front. */
+export function sortByAnchorY<T extends { anchor: { y: number } }>(items: readonly T[]): T[] {
+  return items.map((item, i) => ({ item, i })).sort((a, b) => a.item.anchor.y - b.item.anchor.y || a.i - b.i).map((e) => e.item);
 }
 
 /** The sprite anchor point: bottom-centre of a slice (its feet sit on the slice's bottom-centre). */

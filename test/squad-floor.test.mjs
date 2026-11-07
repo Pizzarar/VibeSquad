@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import {
+  bandLayers,
   buildTower,
   DESK_COUNT,
   floorOrPlaceholder,
@@ -12,6 +13,7 @@ import {
   poseFor,
   roleFrames,
   sliceAnchor,
+  sortByAnchorY,
   spriteFrame,
   transitionRiders,
   validateCast,
@@ -226,4 +228,33 @@ test("integer scale helper", () => {
 
 test("slice anchor is bottom-centre", () => {
   assert.deepEqual(sliceAnchor({ x: 10, y: 20, w: 40, h: 30 }), { x: 30, y: 50 });
+});
+
+test("P3b draw order: plate < y-sorted sprites < front < bubbles; no front layer unless floor.json says so", () => {
+  assert.deepEqual(bandLayers(true), ["plate", "sprites", "front", "bubbles"]);
+  assert.deepEqual(bandLayers(false), ["plate", "sprites", "bubbles"]);
+  const src = readFileSync(new URL("../src/SquadFloor.tsx", import.meta.url), "utf8");
+  assert.match(src, /floor\.front \? FLOOR_FRONT_URL/);
+  assert.match(src, /floor\.penthouse\?\.front \? ROOF_FRONT_URL/);
+  const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+  assert.match(css, /\.sq-floor-front\s*\{[^}]*pointer-events:\s*none/);
+});
+
+test("P3b y-sort: lower anchor draws later (in front), ties keep input order", () => {
+  const items = [{ id: "c", anchor: { y: 30 } }, { id: "a", anchor: { y: 10 } }, { id: "b2", anchor: { y: 20 } }, { id: "b1", anchor: { y: 20 } }];
+  assert.deepEqual(sortByAnchorY(items).map((i) => i.id), ["a", "b2", "b1", "c"]);
+});
+
+test("P3b floor.json `front` flags: floor and penthouse, absent → undefined", () => {
+  const base = {
+    teamA: { lead: { x: 0, y: 0, w: 1, h: 1 }, buddyOffice: { x: 1, y: 0, w: 1, h: 1 }, desks: [] },
+    teamB: { lead: { x: 0, y: 0, w: 1, h: 1 }, buddyOffice: { x: 1, y: 0, w: 1, h: 1 }, desks: [] },
+    elevator: { doorA: { x: 0, y: 0, w: 1, h: 1 }, doorB: { x: 1, y: 0, w: 1, h: 1 }, car: { x: 2, y: 0, w: 1, h: 1 } },
+  };
+  assert.equal(validateFloor(base).value.front, undefined);
+  assert.equal(validateFloor({ ...base, front: true }).value.front, true);
+  const r = { x: 0, y: 0, w: 1, h: 1 };
+  const pent = { plate: "roof", w: 640, h: 200, riffbot: { seat: r, lounge: r }, overlord: { seat: r, crtWall: r }, elevatorTop: r };
+  assert.equal(validateFloor({ ...base, penthouse: pent }).value.penthouse.front, undefined);
+  assert.equal(validateFloor({ ...base, penthouse: { ...pent, front: true } }).value.penthouse.front, true);
 });
