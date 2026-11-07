@@ -6,6 +6,7 @@
 // are imported type-only so node --test never loads React.
 
 import { kindOfAttention } from "./attentionItems.ts";
+import { castVariant } from "./cast.ts"; // @art owns cast.ts: import only
 import type { Member } from "./teams.ts";
 
 // ── JSON shapes (the @art contract, docs/PLAN_NEON_OFFICE.md) ─────────────────
@@ -21,6 +22,8 @@ export type CastModel = {
   anchor: string;
   /** role name → pose → frames (each frame is the top-left of a `cell` square in the sheet). */
   roles: Record<string, Record<Pose, Frame[]>>;
+  /** v2: role → its variants (each a full pose set). Empty for v1; roles without variants only have `roles`. */
+  variants: Record<string, Record<Pose, Frame[]>[]>;
   bubble: { x: number; y: number; w: number; h: number; offset: { x: number; y: number } };
   /** role → nearest drawn role, used when a role is missing from `roles`. May be `{}`. */
   fallback: Record<string, string>;
@@ -42,14 +45,33 @@ export type PenthouseModel = {
   riffbot: { seat: Rect; lounge: Rect };
   overlord: { seat: Rect; crtWall: Rect };
   elevatorTop: Rect;
+  /** `roof-front-{theme}.png` exists and is drawn over the penthouse sprites. */
+  front?: boolean;
+};
+
+/** Art10 top band (floor.json `screens`): two big CRTs [RiffBot | lift top | Overlord] that replace the penthouse. */
+export type ScreensModel = {
+  plate: string;
+  w: number;
+  h: number;
+  /** `roof-front-{theme}.png` (lift car front + glass corners) is drawn over the faces. */
+  front?: boolean;
+  /** Glass rects (a face cell: faces.json cell w x h). */
+  riffbot: Rect;
+  overlord: Rect;
+  elevatorTop: Rect;
 };
 
 export type FloorModel = {
   teamA: TeamSlices;
   teamB: TeamSlices;
   elevator: { doorA: Rect; doorB: Rect; car: Rect };
-  /** Present once S1 lands; the placeholder supplies one meanwhile. */
+  /** Old top band (S1). Used only when `screens` is absent; the placeholder supplies one when neither exists. */
   penthouse?: PenthouseModel;
+  /** Art10 CRT screens; wins over `penthouse`. */
+  screens?: ScreensModel;
+  /** `floor-front-{theme}.png` exists and is drawn over the y-sorted sprites (floor.json `"front": true`). */
+  front?: boolean;
 };
 
 export type Validation<T> = { ok: true; value: T } | { ok: false; reason: string };
@@ -57,6 +79,7 @@ export type Validation<T> = { ok: true; value: T } | { ok: false; reason: string
 const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+const VARIANT_POSES: Pose[] = ["work", "needs", "idle", "ride"];
 const fail = <T,>(reason: string): Validation<T> => ({ ok: false, reason });
 const rectOf = (v: unknown): Rect | null =>
   isObject(v) && isNum(v.x) && isNum(v.y) && isNum(v.w) && isNum(v.h)
@@ -96,7 +119,17 @@ function penthouseOf(v: unknown): PenthouseModel | undefined {
     riffbot: { seat: riffbot.seat, lounge: riffbot.lounge },
     overlord: { seat: overlord.seat, crtWall: overlord.crtWall },
     elevatorTop,
+    ...(v.front === true ? { front: true } : {}),
   };
+}
+
+function screensOf(v: unknown): ScreensModel | undefined {
+  if (!isObject(v) || typeof v.plate !== "string" || !isNum(v.w) || !isNum(v.h)) return undefined;
+  const riffbot = rectOf(v.riffbot);
+  const overlord = rectOf(v.overlord);
+  const elevatorTop = rectOf(v.elevatorTop);
+  if (!riffbot || !overlord || !elevatorTop) return undefined;
+  return { plate: v.plate, w: v.w as number, h: v.h as number, riffbot, overlord, elevatorTop, ...(v.front === true ? { front: true } : {}) };
 }
 
 /** Validate floor.json. Unknown extra fields are ignored; `lobby` and `penthouse` are optional (S1 growth). */
@@ -112,7 +145,8 @@ export function validateFloor(json: unknown): Validation<FloorModel> {
       : null;
   if (!elevator) return fail("floor.json elevator is missing doorA, doorB or car");
   const penthouse = penthouseOf(json.penthouse);
-  return { ok: true, value: { teamA, teamB, elevator, ...(penthouse ? { penthouse } : {}) } };
+  const screens = screensOf(json.screens);
+  return { ok: true, value: { teamA, teamB, elevator, ...(penthouse ? { penthouse } : {}), ...(screens ? { screens } : {}), ...(json.front === true ? { front: true } : {}) } };
 }
 
 /** Validate cast.json. Unknown roles/poses/fields are kept; `fallback` may be `{}`; nothing about the sheet is hardcoded. */
@@ -122,18 +156,44 @@ export function validateCast(json: unknown): Validation<CastModel> {
   if (!isNum(cell) || cell <= 0) return fail("cast.json cell must be a positive number");
   if (!isObject(json.roles) || Object.keys(json.roles).length === 0) return fail("cast.json roles is missing or empty");
   const roles: Record<string, Record<Pose, Frame[]>> = {};
+  const variants: Record<string, Record<Pose, Frame[]>[]> = {};
+  const poseFrames = (role: string, pose: string, frames: unknown): Validation<Frame[]> => {
+    if (!Array.isArray(frames) || frames.length === 0) return fail(`cast.json role "${role}" pose "${pose}" has no frames`);
+    const cells: Frame[] = [];
+    for (const f of frames) {
+      const frame = frameOf(f);
+      if (!frame) return fail(`cast.json role "${role}" pose "${pose}" has an invalid frame`);
+      cells.push(frame);
+    }
+    return { ok: true, value: cells };
+  };
   for (const [role, poses] of Object.entries(json.roles)) {
     if (!isObject(poses)) return fail(`cast.json role "${role}" is not an object`);
     const rolePoses = {} as Record<Pose, Frame[]>;
     for (const [pose, frames] of Object.entries(poses)) {
-      if (!Array.isArray(frames) || frames.length === 0) return fail(`cast.json role "${role}" pose "${pose}" has no frames`);
-      const cells: Frame[] = [];
-      for (const f of frames) {
-        const frame = frameOf(f);
-        if (!frame) return fail(`cast.json role "${role}" pose "${pose}" has an invalid frame`);
-        cells.push(frame);
+      if (pose === "variants") continue; // v2, parsed below
+      const r = poseFrames(role, pose, frames);
+      if (!r.ok) return fail(r.reason);
+      rolePoses[pose as Pose] = r.value;
+    }
+    // v2: roles.X.variants[i] = {work,needs,idle,ride}; the compat x,y on each variant is not a pose and is ignored.
+    if (poses.variants !== undefined) {
+      if (!Array.isArray(poses.variants) || poses.variants.length === 0) return fail(`cast.json role "${role}" variants must be a non-empty array`);
+      const list: Record<Pose, Frame[]>[] = [];
+      for (const v of poses.variants) {
+        if (!isObject(v)) return fail(`cast.json role "${role}" has an invalid variant`);
+        const vp = {} as Record<Pose, Frame[]>;
+        for (const pose of VARIANT_POSES) {
+          if (v[pose] === undefined) continue;
+          const r = poseFrames(role, pose, v[pose]);
+          if (!r.ok) return fail(r.reason);
+          vp[pose] = r.value;
+        }
+        list.push(vp);
       }
-      rolePoses[pose as Pose] = cells;
+      variants[role] = list;
+      // v1 keys (variant 0) win when present; a role that only has variants uses variant 0 as its base.
+      for (const pose of VARIANT_POSES) if (!rolePoses[pose] && list[0][pose]) rolePoses[pose] = list[0][pose];
     }
     roles[role] = rolePoses;
   }
@@ -167,6 +227,7 @@ export function validateCast(json: unknown): Validation<CastModel> {
       cell: cell as number,
       anchor: typeof json.anchor === "string" ? (json.anchor as string) : "bottom-centre",
       roles,
+      variants,
       bubble,
       fallback,
     },
@@ -234,6 +295,8 @@ export type SeatedAgent = {
   /** Cast role name (after any member-role → cast-role naming, e.g. brainstorm → "buddy"). */
   role: string;
   pose: Pose;
+  /** Look-alike column: castVariant(agentId), the same one the icon uses, so floor sprite = icon. */
+  variant: number;
   seat: SeatKind;
   /** 0-based desk slot for `desk` seats. */
   desk?: number;
@@ -322,6 +385,9 @@ export function poseFor(m: Pick<Member, "agent" | "attention">): Pose {
   return "idle";
 }
 
+/** Workers are seated only while working or needing you; leads, Buddies, RiffBot and the Overlord sit idle too. */
+export const isSeatedWorkerPose = (pose: Pose): boolean => pose === "work" || pose === "needs";
+
 /** Agents present in `prev` but gone from `next`: animate `ride` for ~RIDE_MS, then drop them. */
 export function transitionRiders(
   prev: readonly { agent: { id: string } }[],
@@ -340,14 +406,19 @@ export function transitionRiders(
 
 // ── 6. Role → sprite lookup with fallback ─────────────────────────────────────
 
-/** Frames for a role+pose, following `fallback` when the role (or that pose) is missing. Null when unresolvable. */
-export function roleFrames(cast: CastModel, role: string, pose: Pose): Frame[] | null {
+/**
+ * Frames for a role+pose, following `fallback` when the role (or that pose) is missing. A v2 role picks
+ * `variants[variant % n]` (falling back to its base poses when that variant lacks the pose). Null when unresolvable.
+ */
+export function roleFrames(cast: CastModel, role: string, pose: Pose, variant = 0): Frame[] | null {
   const seen = new Set<string>();
   let cur = role;
   for (;;) {
     if (seen.has(cur)) return null;
     seen.add(cur);
-    const frames = cast.roles[cur]?.[pose];
+    const vs = cast.variants?.[cur];
+    const picked = vs && vs.length > 0 ? vs[((variant % vs.length) + vs.length) % vs.length]?.[pose] : undefined;
+    const frames = picked && picked.length > 0 ? picked : cast.roles[cur]?.[pose];
     if (frames && frames.length > 0) return frames;
     const next = cast.fallback[cur];
     if (!next) return null;
@@ -355,9 +426,9 @@ export function roleFrames(cast: CastModel, role: string, pose: Pose): Frame[] |
   }
 }
 
-/** The sprite cell for a role+pose at a frame index (reduced motion → index 0); null when the role can't resolve. */
-export function spriteFrame(cast: CastModel, role: string, pose: Pose, frameIndex = 0): Frame | null {
-  const frames = roleFrames(cast, role, pose);
+/** The sprite cell for a role+pose at a frame index (reduced motion → index 0) and variant; null when the role can't resolve. */
+export function spriteFrame(cast: CastModel, role: string, pose: Pose, frameIndex = 0, variant = 0): Frame | null {
+  const frames = roleFrames(cast, role, pose, variant);
   if (!frames) return null;
   return frames[((frameIndex % frames.length) + frames.length) % frames.length] ?? null;
 }
@@ -371,10 +442,99 @@ export function needsYouFloors(floors: readonly Floor[]): number[] {
 
 // ── 8. Integer render scale ───────────────────────────────────────────────────
 
-/** Largest integer scale for the 640-wide native floor that fits `panelWidth` (min 1); 0 when narrower than 1x. */
-export function integerScale(panelWidth: number): number {
+/**
+ * The CSS-px scale for the 640-wide native floor: the largest whole *device*-pixel multiple that fits `panelWidth`,
+ * `floor(panelWidth * dpr / 640) / dpr` (crisp at any devicePixelRatio, and it fills the column at 4K where whole
+ * CSS-px steps leave up to half the width empty). 0 when that is under 1 CSS px (narrower than the native floor).
+ */
+export function integerScale(panelWidth: number, dpr = 1): number {
+  const ratio = Number.isFinite(dpr) && dpr >= 1 ? dpr : 1;
   if (!Number.isFinite(panelWidth) || panelWidth < FLOOR_NATIVE_WIDTH) return 0;
-  return Math.floor(panelWidth / FLOOR_NATIVE_WIDTH);
+  const scale = Math.floor((panelWidth * ratio) / FLOOR_NATIVE_WIDTH) / ratio;
+  return scale >= 1 ? scale : 0;
+}
+
+// ── CRT faces (faces.json, Art10) ─────────────────────────────────────────────
+
+export type FaceBot = "riffbot" | "overlord";
+export type FaceMode = "idle" | "blink" | "talk" | "needs";
+const FACE_MODES: FaceMode[] = ["idle", "blink", "talk", "needs"];
+
+export type FacesModel = {
+  /** Cell size of one face frame in the sheet (128x96). */
+  cell: { w: number; h: number };
+  fps: number;
+  /** Frame counts come from the json, never hardcoded. */
+  bots: Partial<Record<FaceBot, Partial<Record<FaceMode, Frame[]>>>>;
+};
+
+/** Validate faces.json: `cell {w,h}`, `fps`, and per bot a list of frames for idle/blink/talk/needs. */
+export function validateFaces(json: unknown): Validation<FacesModel> {
+  if (!isObject(json)) return fail("faces.json is not an object");
+  const cell = isObject(json.cell) && isNum(json.cell.w) && isNum(json.cell.h) && json.cell.w > 0 && json.cell.h > 0 ? { w: json.cell.w as number, h: json.cell.h as number } : null;
+  if (!cell) return fail("faces.json cell must be {w,h}");
+  const fps = isNum(json.fps) && json.fps > 0 ? (json.fps as number) : 3;
+  const bots: FacesModel["bots"] = {};
+  for (const bot of ["riffbot", "overlord"] as FaceBot[]) {
+    const raw = json[bot];
+    if (raw === undefined) continue;
+    if (!isObject(raw)) return fail(`faces.json ${bot} is not an object`);
+    const modes: Partial<Record<FaceMode, Frame[]>> = {};
+    for (const mode of FACE_MODES) {
+      if (raw[mode] === undefined) continue;
+      const frames = Array.isArray(raw[mode]) ? (raw[mode] as unknown[]).map(frameOf) : [];
+      if (frames.length === 0 || frames.some((f) => f === null)) return fail(`faces.json ${bot} ${mode} has no valid frames`);
+      modes[mode] = frames as Frame[];
+    }
+    if (!modes.idle) return fail(`faces.json ${bot} needs an idle face`);
+    bots[bot] = modes;
+  }
+  if (!bots.riffbot && !bots.overlord) return fail("faces.json has neither riffbot nor overlord");
+  return { ok: true, value: { cell, fps, bots } };
+}
+
+/** Face mode: talk while the bot is running, needs on needs-you (pose "needs" already folds kindOfAttention), else blink/idle. No agent → idle. */
+export function faceMode(agent: Pick<SeatedAgent, "pose"> | null, blinking = false): FaceMode {
+  if (!agent) return "idle";
+  if (agent.pose === "needs") return "needs";
+  if (agent.pose === "work") return "talk";
+  return blinking ? "blink" : "idle";
+}
+
+/** The face cell for a bot+mode at a tick (falls back to idle when the mode is missing); null when the bot has no faces. */
+export function faceFrame(faces: FacesModel, bot: FaceBot, mode: FaceMode, tick = 0): Frame | null {
+  const modes = faces.bots[bot];
+  const frames = modes?.[mode] ?? modes?.idle;
+  if (!frames || frames.length === 0) return null;
+  return frames[((tick % frames.length) + frames.length) % frames.length] ?? null;
+}
+
+/** Random blink spacing: every 3-8 s (rand in [0,1)), the blink face holds for BLINK_MS. */
+export const BLINK_MIN_MS = 3000;
+export const BLINK_MAX_MS = 8000;
+export const BLINK_MS = 300;
+export const nextBlinkDelay = (rand: number): number => Math.round(BLINK_MIN_MS + Math.min(Math.max(rand, 0), 1) * (BLINK_MAX_MS - BLINK_MIN_MS));
+
+export type TopBand = { kind: "screens" | "penthouse"; w: number; h: number; elevatorTop: Rect; front: boolean };
+
+/** The top band: Art10 `screens` when present, else the old `penthouse`, else the placeholder penthouse (old path only when neither exists). */
+export function topBand(floor: FloorModel): TopBand {
+  if (floor.screens) {
+    const s = floor.screens;
+    return { kind: "screens", w: s.w, h: s.h, elevatorTop: s.elevatorTop, front: s.front === true };
+  }
+  const p = floor.penthouse ?? placeholderFloor().penthouse!;
+  return { kind: "penthouse", w: p.w, h: p.h, elevatorTop: p.elevatorTop, front: p.front === true };
+}
+
+/** Band draw order (3/4 top-down, docs/PLAN_NEON_OFFICE.md "Camera"): plate, y-sorted sprites, front overlay (only when floor.json says so), bubbles. */
+export function bandLayers(front: boolean): ("plate" | "sprites" | "front" | "bubbles")[] {
+  return front ? ["plate", "sprites", "front", "bubbles"] : ["plate", "sprites", "bubbles"];
+}
+
+/** Stable y-sort by anchor: the lower anchor (bigger y) draws later, so it is in front. */
+export function sortByAnchorY<T extends { anchor: { y: number } }>(items: readonly T[]): T[] {
+  return items.map((item, i) => ({ item, i })).sort((a, b) => a.item.anchor.y - b.item.anchor.y || a.i - b.i).map((e) => e.item);
 }
 
 /** The sprite anchor point: bottom-centre of a slice (its feet sit on the slice's bottom-centre). */
@@ -399,17 +559,40 @@ const seat = (m: Member, seatKind: SeatKind, desk?: number): SeatedAgent => ({
   title: m.agent.title ?? m.agent.id.slice(0, 8),
   role: roleForMember(m),
   pose: poseFor(m),
+  variant: castVariant(m.agent.id),
   seat: seatKind,
   ...(desk !== undefined ? { desk } : {}),
 });
 
+/** Desks per row on the floor plate (desks 0-2 top, 3-5 bottom); side-by-side means the same row. */
+export const DESKS_PER_ROW = 3;
+
+/**
+ * Reorder desk assignment (never the agents' looks) so identical sprites don't sit side by side: fill slots in
+ * order, taking the earliest remaining item whose key differs from the left neighbour in the same row; when every
+ * remaining item matches, take the earliest anyway. Stable: with no clash the order is unchanged.
+ */
+export function spreadNeighbours<T>(items: readonly T[], keyOf: (item: T) => string, rowSize = DESKS_PER_ROW): T[] {
+  const left = [...items];
+  const out: T[] = [];
+  while (left.length > 0) {
+    const slot = out.length;
+    const leftKey = slot % rowSize === 0 ? null : keyOf(out[slot - 1]);
+    const at = left.findIndex((it) => leftKey === null || keyOf(it) !== leftKey);
+    out.push(left.splice(at < 0 ? 0 : at, 1)[0]);
+  }
+  return out;
+}
+
 function placeTeam(t: TowerTeam): TeamFloorPlacement {
   const lead = t.lead && isLiveMember(t.lead) && !isRetiredLead(t.lead) ? seat(t.lead, "lead") : null;
   const buddy = t.buddy && isLiveMember(t.buddy) && !isRetiredLead(t.buddy) ? seat(t.buddy, "buddyOffice") : null;
+  // Done workers go home: only running (work) and needs-you workers are seated; an idle worker with
+  // no needs-you is "out for the day" (the floor animates its ride, then it is gone).
   const workers = [...(t.workers ?? [])]
-    .filter((w): w is Member => isLiveMember(w) && !isRetiredLead(w))
+    .filter((w): w is Member => isLiveMember(w) && !isRetiredLead(w) && isSeatedWorkerPose(poseFor(w)))
     .sort(spawnOrder);
-  const desks = workers.slice(0, DESK_COUNT).map((w, i) => seat(w, "desk", i));
+  const desks = spreadNeighbours(workers.slice(0, DESK_COUNT).map((w) => seat(w, "desk")), (a) => `${a.role}:${a.variant}`).map((a, i) => ({ ...a, desk: i }));
   const overflow = workers.slice(DESK_COUNT);
   const lobby = overflow.slice(0, LOBBY_MAX_SHOWN).map((w) => seat(w, "lobby"));
   const lobbyOverflow = Math.max(0, overflow.length - LOBBY_MAX_SHOWN);
@@ -424,11 +607,11 @@ export function buildTower(input: TowerInput): Tower {
   const penthouse = {
     riffbot:
       input.hubBuddy && isLiveMember(input.hubBuddy)
-        ? { agentId: input.hubBuddy.agent.id, title: input.hubBuddy.agent.title ?? input.hubBuddy.agent.id.slice(0, 8), role: "riffbot", pose: poseFor(input.hubBuddy), seat: "riffbot" as const }
+        ? { agentId: input.hubBuddy.agent.id, title: input.hubBuddy.agent.title ?? input.hubBuddy.agent.id.slice(0, 8), role: "riffbot", pose: poseFor(input.hubBuddy), variant: castVariant(input.hubBuddy.agent.id), seat: "riffbot" as const }
         : null,
     overlord:
       input.hubLead && isLiveMember(input.hubLead)
-        ? { agentId: input.hubLead.agent.id, title: input.hubLead.agent.title ?? input.hubLead.agent.id.slice(0, 8), role: "overlord", pose: poseFor(input.hubLead), seat: "overlord" as const }
+        ? { agentId: input.hubLead.agent.id, title: input.hubLead.agent.title ?? input.hubLead.agent.id.slice(0, 8), role: "overlord", pose: poseFor(input.hubLead), variant: castVariant(input.hubLead.agent.id), seat: "overlord" as const }
         : null,
   };
   const floors: Floor[] = [];
