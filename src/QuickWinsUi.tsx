@@ -16,6 +16,7 @@ import {
 } from "./quickwins";
 import { formatTimestamp, usePref } from "./prefs";
 import { useClock } from "./ui";
+import { chromeGlyphStyle } from "./chromeFont";
 
 // ---- tab title + favicon dot (walk 57) -------------------------------------------------
 let baseIcon: HTMLImageElement | null = null;
@@ -186,6 +187,21 @@ export function InlineRename({
 }
 
 // ---- team + agent rename wrappers -------------------------------------------------------
+/** The real name stays as live text (queries, screen readers); the painted-glyph copy is aria-hidden and only shown by the team header skin. */
+function ChromeName({ name }: { name: string }) {
+  return (
+    <>
+      <span className="chrome-real">{name}</span>
+      <span className="chrome-glyphs" aria-hidden="true">
+        {[...name].map((ch, i) => {
+          const st = chromeGlyphStyle(ch);
+          return st ? <span key={i} className="chrome-glyph" style={st} /> : <span key={i} className="chrome-glyph-gap" />;
+        })}
+      </span>
+    </>
+  );
+}
+
 export function TeamNameEdit({ team }: { team: Pick<TeamDef, "id" | "name"> }) {
   return (
     <InlineRename
@@ -196,7 +212,7 @@ export function TeamNameEdit({ team }: { team: Pick<TeamDef, "id" | "name"> }) {
       }}
       className="team-name-chrome"
     >
-      {team.name}
+      <ChromeName name={team.name} />
     </InlineRename>
   );
 }

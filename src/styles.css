@@ -5426,13 +5426,12 @@ button.project-file-name:hover { text-decoration: underline; }
   image-rendering: pixelated;
 }
 .team-header h1 { background: var(--u3-header-halo) 44px center / 464px 64px no-repeat; }
-.team-header h1 .team-name-chrome {
-  font-family: var(--display); font-size: 30px; font-weight: 900; letter-spacing: 0.05em; line-height: 1.15; padding: 2px 6px; text-transform: uppercase; text-shadow: none;
-  color: transparent;
-  background: linear-gradient(180deg, #ffffff 0%, #f6eef8 24%, #c3aee8 46%, #160b24 47%, #160b24 54%, #ff6b9d 55%, #ff9e7d 76%, #ffd166 100%);
-  -webkit-background-clip: text; background-clip: text;
-  filter: drop-shadow(2px 0 0 #160b24) drop-shadow(-2px 0 0 #160b24) drop-shadow(0 2px 0 #160b24) drop-shadow(0 -2px 0 #160b24) drop-shadow(2px 2px 0 #160b24) drop-shadow(-2px -2px 0 #160b24) drop-shadow(2px -2px 0 #160b24) drop-shadow(-2px 2px 0 #160b24) drop-shadow(3px 3px 0 #160b24);
-}
+.chrome-glyphs { display: none; }
+.team-header h1 .team-name-chrome { display: inline-flex; align-items: center; min-height: 36px; }
+.team-header h1 .chrome-glyphs { display: inline-flex; align-items: flex-start; margin-left: -2px; font-size: 0; line-height: 0; }
+.team-header h1 .chrome-glyph { flex: none; background: var(--u3-font-chrome-big) 0 0 / 416px 106px no-repeat; image-rendering: pixelated; }
+.team-header h1 .chrome-glyph-gap { width: 12px; flex: none; }
+.team-header h1 .chrome-real { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .team-head .team-name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .btn.ok:not(.confirm), .btn.confirm.cool:not(.armed), .usage-review-run, .usage-review-run:hover:not(:disabled) { color: var(--u3-ink-text); }
 /* team-view centre pane = a painted window; its existing breadcrumb bar is the title bar (hub's sky-zone pane keeps its own look) */
