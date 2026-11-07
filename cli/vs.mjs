@@ -51,6 +51,7 @@ import {
   whoCandidate,
 } from "../server/identity.mjs";
 import { loadProfiles } from "../server/profiles.mjs";
+import { isCapExpired, pruneExpiredCapsFile } from "../server/provider-failover.mjs";
 import { staleWarning } from "../server/stale-runtime.mjs";
 import { localTokenPath, requestLocalLoginUrl } from "../server/local-token.mjs";
 import {
@@ -2310,7 +2311,10 @@ function cappedProvidersFile() {
 function readCappedProviders() {
   const { value } = readJsonFileWithBom(cappedProvidersFile(), { fallback: null, label: "capped-providers.json" });
   if (value && typeof value === "object" && value.capped && typeof value.capped === "object" && !Array.isArray(value.capped)) {
-    return value;
+    // Expired caps (past their reset time, or 5 h after updatedAt) are dropped and pruned, so `vs cap list` never shows them.
+    const live = Object.fromEntries(Object.entries(value.capped).filter(([, v]) => !isCapExpired(v)));
+    if (Object.keys(live).length !== Object.keys(value.capped).length) pruneExpiredCapsFile(cappedProvidersFile());
+    return { ...value, capped: live };
   }
   return { capped: {} };
 }

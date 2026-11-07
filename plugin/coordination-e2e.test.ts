@@ -162,6 +162,7 @@ function harness(
   const detachedIds: string[] = [];
   const appliedSettings: Array<{ agentId: string; patch: AgentSettingsPatch }> = [];
   const refusedIds: string[] = [];
+  const archivedIds: string[] = [];
   const sent: Array<{ to: string; text: string }> = [];
   const timelineByAgent = opts.timelineByAgent ?? new Map<string, any[]>();
 
@@ -193,7 +194,11 @@ function harness(
         if (name) a.title = name;
       }
     },
-    archiveAgent: async () => {},
+    archiveAgent: async (agentId: string) => {
+      archivedIds.push(agentId);
+      const a = agents.get(agentId);
+      if (a) a.archivedAt = new Date().toISOString();
+    },
     applyAgentSettings: async (agentId: string, patch: AgentSettingsPatch) => {
       appliedSettings.push({ agentId, patch });
       const a = agents.get(agentId);
@@ -245,8 +250,13 @@ function harness(
 
   return {
     stop,
+    archivedIds,
+    scanLogs: (stop as any).scanLogs as (baseline?: boolean) => void,
     async beforeCreate(req: any) {
       return (await before.get("agent.create")!({ request: req })) ?? req;
+    },
+    beforeSend(payload: any) {
+      return before.get("send_agent_prompt")!(payload);
     },
     onCreated(agent: any) {
       return on.get("agent.created")!({ agent }, { paseo });
@@ -1090,6 +1100,145 @@ test(
       agents.set("riff-running", spawnedRunning);
       await h.onCreated(spawnedRunning);
       assert.deepEqual(h.appliedSettings, [], "applyAgentSettings skipped while status === running on initial snapshot");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// R5 — workers close on done; failover relabels the profile for the new provider
+// ---------------------------------------------------------------------------
+
+test(
+  "R5: a worker that files a done report is archived when its turn ends; leads and workers without a report are not",
+  withEnv(async ({ vsHome, briefRoot }) => {
+    const mk = (id: string, role: string, extra: any = {}) => ({
+      id, title: id, cwd: CWD, status: "idle", provider: "claude", model: "claude-opus-5-5",
+      labels: { team: "vibesquad", lane: "vibesquad", role, ...extra },
+    });
+    const agents = new Map<string, any>([
+      ["w-done", mk("w-done", "worker")],
+      ["w-quiet", mk("w-quiet", "worker")],
+      ["lead-1", mk("lead-1", "lead", { lead: "vibesquad" })],
+    ]);
+    const h = harness(agents, { briefRoot });
+    try {
+      const file = join(vsHome, "teams", "vibesquad", "log.jsonl");
+      mkdirSync(join(vsHome, "teams", "vibesquad"), { recursive: true });
+      const line = (o: any) => JSON.stringify({ ts: new Date().toISOString(), lane: "vibesquad", ...o }) + "\n";
+      writeFileSync(file, line({ agent: "w-done", type: "done", text: "PASS: shipped", refs: [] }) + line({ agent: "lead-1", type: "done", text: "lane done", refs: [] }), "utf8");
+      h.scanLogs(false);
+      await h.onTurnEnded(agents.get("w-done"));
+      await h.onTurnEnded(agents.get("w-quiet"));
+      await h.onTurnEnded(agents.get("lead-1"));
+      assert.deepEqual(h.archivedIds, ["w-done"], "only the reporting worker is archived");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "R5: a digest verdict (done filed by the digest agent against the worker's id in refs) closes the worker after the grace period",
+  withEnv(async ({ vsHome, briefRoot }) => {
+    const agents = new Map<string, any>([
+      ["w-1", { id: "w-1", title: "w-1", cwd: CWD, status: "idle", provider: "claude", model: "claude-opus-5-5", labels: { team: "vibesquad", lane: "vibesquad", role: "worker" } }],
+    ]);
+    const h = harness(agents, { briefRoot });
+    try {
+      mkdirSync(join(vsHome, "teams", "vibesquad"), { recursive: true });
+      await h.onTurnEnded(agents.get("w-1")); // gives the plugin its paseo handle; no report yet -> stays
+      assert.deepEqual(h.archivedIds, []);
+      writeFileSync(join(vsHome, "teams", "vibesquad", "log.jsonl"), JSON.stringify({ ts: new Date().toISOString(), agent: "digest-9", lane: "vibesquad", type: "done", text: "PASS", refs: ["w-1"] }) + "\n", "utf8");
+      h.scanLogs(false);
+      await wait(3300);
+      assert.deepEqual(h.archivedIds, ["w-1"]);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "R5: failover relabels env VS_PROFILE and config labels, not just request labels",
+  withEnv(async ({ briefRoot }) => {
+    const h = harness(new Map(), { briefRoot, cappedProviders: { claude: { reason: "cap" } } });
+    try {
+      const out = await h.beforeCreate({
+        config: { cwd: CWD, provider: "claude", model: "claude-opus-5-5", title: "RiffBot", labels: { role: "brainstorm", lane: "vibesquad", profile: "Brainstorm - Claude" } },
+        env: { VS_PROFILE: "Brainstorm - Claude", VS_ROLE: "brainstorm" },
+      });
+      assert.equal(out.config.provider, "antigravity-cli");
+      assert.equal(out.env?.VS_PROFILE, "Brainstorm - Gemini");
+      assert.equal(out.config.labels?.profile, "Brainstorm - Gemini");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "R5 review: a failover spawn whose labels Paseo omitted is relabelled at agent.created, not refused",
+  withEnv(async ({ briefRoot }) => {
+    const agents = new Map<string, any>();
+    const h = harness(agents, { briefRoot, cappedProviders: { claude: { reason: "cap" } } });
+    try {
+      const out = await h.beforeCreate({
+        config: { cwd: CWD, provider: "claude", model: "claude-opus-5-5", title: "RiffBot" },
+        env: { VS_PROFILE: "Brainstorm - Claude", VS_ROLE: "brainstorm", VS_LANE: "vibesquad" },
+      });
+      assert.equal(out.config.provider, "antigravity-cli", "failed over");
+      // Paseo created the agent with the ORIGINAL (capped) profile label, on the failed-over provider.
+      const agent = {
+        id: "riff-fo", title: "RiffBot", cwd: CWD, status: "idle", provider: "antigravity-cli", model: out.config.model,
+        modeId: out.config.modeId, currentModeId: out.config.modeId, thinkingOptionId: out.config.thinkingOptionId,
+        labels: { team: "vibesquad", lane: "vibesquad", role: "brainstorm", profile: "Brainstorm - Claude" },
+      };
+      agents.set(agent.id, agent);
+      await h.onCreated(agent);
+      assert.deepEqual(h.refusedIds, [], "failover agent is not refused");
+      assert.equal(agents.get("riff-fo").labels.profile, "Brainstorm - Gemini", "profile label follows the provider");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "R5 review: auto-archive re-checks status + permissions, turn_started clears the mark, and the marker keeps the worker out of the retired-holder redirect",
+  withEnv(async ({ vsHome, briefRoot }) => {
+    const w: any = { id: "w-9", title: "w-9", cwd: CWD, status: "idle", provider: "claude", model: "claude-opus-5-5", labels: { team: "vibesquad", lane: "vibesquad", role: "worker" } };
+    const agents = new Map<string, any>([["w-9", w]]);
+    const h = harness(agents, { briefRoot });
+    try {
+      mkdirSync(join(vsHome, "teams", "vibesquad"), { recursive: true });
+      const file = join(vsHome, "teams", "vibesquad", "log.jsonl");
+      const report = () => {
+        writeFileSync(file, JSON.stringify({ ts: new Date().toISOString(), agent: "w-9", lane: "vibesquad", type: "done", text: "PASS", refs: [] }) + "\n", { encoding: "utf8", flag: "a" });
+        h.scanLogs(false);
+      };
+      report();
+      w.status = "running"; // a fast follow-up started while the digest was awaited
+      await h.onTurnEnded(w);
+      assert.deepEqual(h.archivedIds, [], "running agent is never archived");
+      w.status = "idle";
+      w.pendingPermissions = [{ id: "p1" }];
+      await h.onTurnEnded(w);
+      assert.deepEqual(h.archivedIds, [], "pending permission blocks the archive");
+      w.pendingPermissions = [];
+      await h.onTurnStarted(w); // new turn after the report clears the mark
+      await h.onTurnEnded(w);
+      assert.deepEqual(h.archivedIds, [], "mark cleared by turn_started");
+      report();
+      await h.onTurnEnded(w);
+      assert.deepEqual(h.archivedIds, ["w-9"]);
+      assert.equal(w.labels["vs.auto-archived"], "1", "marker set before archive");
+      // handleSendAgentPrompt: an auto-archived worker is not a retired holder (no redirect, no throw).
+      assert.equal(await h.beforeSend({ agentId: "w-9", senderAgentId: "lead-x", prompt: "more" }), undefined);
+      // The same archived agent WITHOUT the marker is still treated as retired (no live lead -> throws).
+      delete w.labels["vs.auto-archived"];
+      await assert.rejects(() => h.beforeSend({ agentId: "w-9", senderAgentId: "lead-x", prompt: "more" }), /retired/);
     } finally {
       h.stop?.();
     }

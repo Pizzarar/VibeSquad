@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -185,16 +185,77 @@ export function resolveCappedProvidersPath(opts = {}) {
   return join(base, "capped-providers.json");
 }
 
-/** Read the raw `{ capped: { ... } }` object directly from disk (never merges in-memory opts). */
+/** A cap with no reset time is assumed to clear with the 5 h usage window. */
+export const CAP_DEFAULT_TTL_MS = 5 * 60 * 60 * 1000;
+
+/** When a cap stops applying, in ms epoch: its reset time if it carries one, else updatedAt + 5 h. Null = unknown age, never expires. */
+export function capExpiryMs(entry) {
+  if (!entry || typeof entry !== "object") return null;
+  for (const k of ["resetsAt", "resetAt", "resetTime"]) {
+    const raw = entry[k];
+    if (raw === undefined || raw === null || raw === "") continue;
+    const num = typeof raw === "number" ? raw : /^\d+(\.\d+)?$/.test(String(raw).trim()) ? Number(raw) : NaN;
+    // Epoch seconds (< 1e11, year ~5138 in ms) are common in provider payloads; ms values are larger.
+    const t = Number.isFinite(num) ? (num < 1e11 ? num * 1000 : num) : Date.parse(raw);
+    if (Number.isFinite(t)) return t;
+  }
+  const at = Date.parse(entry.updatedAt);
+  return Number.isFinite(at) ? at + CAP_DEFAULT_TTL_MS : null;
+}
+
+export function isCapExpired(entry, now = Date.now()) {
+  const exp = capExpiryMs(entry);
+  return exp !== null && exp <= now;
+}
+
+const parseCapFile = (text) => {
+  const parsed = JSON.parse(String(text).replace(/^\uFEFF/, ""));
+  const capped = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed.capped ?? parsed) : null;
+  return capped && typeof capped === "object" && !Array.isArray(capped) ? capped : null;
+};
+
+/**
+ * Drop expired caps from the file. Re-reads right before writing so a cap added by a concurrent writer is kept, and writes
+ * tmp + rename so a reader never sees a half-written file. Best effort: a failure leaves the file as it was.
+ */
+export function pruneExpiredCapsFile(path, now = Date.now()) {
+  const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    const current = parseCapFile(readFileSync(path, "utf8"));
+    if (!current) return;
+    const live = Object.fromEntries(Object.entries(current).filter(([, v]) => !isCapExpired(v, now)));
+    if (Object.keys(live).length === Object.keys(current).length) return;
+    writeFileSync(tmp, JSON.stringify({ capped: live }, null, 2) + "\n", "utf8");
+    renameSync(tmp, path);
+  } catch {
+    try { rmSync(tmp, { force: true }); } catch { /* nothing to clean */ }
+  }
+}
+
+/** Read the raw `{ capped: { ... } }` object directly from disk (never merges in-memory opts). Expired caps are dropped and pruned from the file. */
 function readDiskCaps(opts = {}) {
   const path = resolveCappedProvidersPath(opts);
+  let capped;
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
-    const capped = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed.capped ?? parsed) : null;
-    return capped && typeof capped === "object" && !Array.isArray(capped) ? capped : {};
+    capped = parseCapFile(readFileSync(path, "utf8"));
   } catch {
     return {};
   }
+  if (!capped) return {};
+  const now = opts.now ?? Date.now();
+  const live = {};
+  let pruned = false;
+  for (const [k, v] of Object.entries(capped)) {
+    if (isCapExpired(v, now)) pruned = true;
+    else live[k] = v;
+  }
+  if (pruned) pruneExpiredCapsFile(path, now);
+  return live;
+}
+
+/** `{ capped: {...} }` with expired caps removed (and pruned from disk): what `vs cap list` shows. */
+export function readLiveCapDoc(opts = {}) {
+  return { capped: readDiskCaps(opts) };
 }
 
 function isFamilyCapped(caps, targetFamily) {
