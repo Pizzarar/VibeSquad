@@ -8,10 +8,12 @@ export type VsRead = { bytes: Uint8Array; mime: string; size: number; modifiedAt
 export class VsFilesError extends Error {
   notFound: boolean;
   tooLarge: boolean;
-  constructor(message: string, notFound = false, tooLarge = false) {
+  size?: number; // real byte size, carried on a 413
+  constructor(message: string, notFound = false, tooLarge = false, size?: number) {
     super(message);
     this.notFound = notFound;
     this.tooLarge = tooLarge;
+    this.size = size;
   }
 }
 
@@ -23,10 +25,10 @@ async function call(kind: "list" | "read", cwd: string, path: string, extra = ""
     throw new VsFilesError(`Can't read files: ${e instanceof Error ? e.message : String(e)} (is the VibeSquad server running?)`);
   }
   if (r.ok) return r;
-  const j = await r.json().catch(() => ({}) as { error?: string });
+  const j = await r.json().catch(() => ({}) as { error?: string; size?: number });
   const why = j.error || `HTTP ${r.status}`;
   if (r.status === 404 && j.error === "not found") throw new VsFilesError(`File not found: ${path}`, true);
-  throw new VsFilesError(r.status === 413 ? why : `Can't read files: ${why}`, false, r.status === 413);
+  throw new VsFilesError(r.status === 413 ? why : `Can't read files: ${why}`, false, r.status === 413, typeof j.size === "number" ? j.size : undefined);
 }
 
 export async function vsListDirectory(cwd: string, path: string): Promise<{ entries: VsEntry[] }> {

@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { delimiter, isAbsolute, join, resolve, sep } from "node:path";
+import { homedir } from "node:os";
+import { delimiter, isAbsolute, join, parse, resolve, sep } from "node:path";
 
 // Quick open (GET /__vibesquad/files) and find in files (GET /__vibesquad/search) for the Files dock.
 // The Paseo daemon has no content-search RPC, so both run here: `git ls-files` / `git grep` (git is always
@@ -232,7 +233,8 @@ export function walkFiles(root, max = FILES_MAX) {
 }
 
 const fileCache = new Map();
-export function listFiles(cwd, { refresh = false, now = Date.now() } = {}) {
+export function listFiles(rawCwd, { refresh = false, now = Date.now() } = {}) {
+  const cwd = realOr(rawCwd); // one cache entry per real directory, however it was spelled
   const hit = fileCache.get(cwd);
   if (hit && !refresh && now - hit.at < FILES_TTL_MS) return hit.value;
   let value;
@@ -247,10 +249,16 @@ export function listFiles(cwd, { refresh = false, now = Date.now() } = {}) {
 // ---- HTTP ---------------------------------------------------------------------------------
 
 /** `roots` is a list or a (fresh) => list getter; a cached miss is retried once with a fresh list. */
-function confineReq(cwd, roots) {
+const RESCAN_COOLDOWN_MS = 5000;
+let lastRescanAt = 0;
+export const _resetRescan = () => { lastRescanAt = 0; };
+export function confineReq(cwd, roots, now = Date.now()) {
   if (typeof roots !== "function") return confineCwd(cwd, roots);
   const c = confineCwd(cwd, roots(false));
-  return c.status === 403 ? confineCwd(cwd, roots(true)) : c;
+  // A 403 may just mean a new agent worktree: rescan once, but never more than every 5s (a probe loop must not hammer the disk).
+  if (c.status !== 403 || now - lastRescanAt < RESCAN_COOLDOWN_MS) return c;
+  lastRescanAt = now;
+  return confineCwd(cwd, roots(true));
 }
 
 /** GET ?cwd=&refresh=1 → { ok, files, truncated, source }. `roots` = allowed cwd roots (real paths). */
@@ -305,7 +313,24 @@ export function normalizeRel(raw) {
   return { rel: p };
 }
 
-/** Real path of cwd/rel, only if it stays inside cwd (symlink-safe) and avoids .git. */
+const realOr = (p) => { try { return realpathSync(p); } catch { return p; } };
+const SENSITIVE_HOME_DIRS = [".vibesquad", ".paseo", ".ssh"];
+
+/** Never a browsable workspace root: the home dir itself, or a drive / filesystem root. */
+export function isUnsafeRoot(p) {
+  if (typeof p !== "string" || !p) return true;
+  const r = resolve(p);
+  return parse(r).root === r || normPath(realOr(r)) === normPath(realOr(homedir()));
+}
+
+/** `real` sits in ~/.vibesquad, ~/.paseo or ~/.ssh (or a .git dir) and the workspace `cwd` is not itself inside that dir. */
+export function isSensitivePath(real, cwd) {
+  const home = realOr(homedir());
+  const hit = SENSITIVE_HOME_DIRS.map((d) => realOr(join(home, d))).some((b) => insideDir(real, b) && !insideDir(cwd, b));
+  return hit || real.split(/[\\/]/).some((seg) => seg.toLowerCase() === ".git");
+}
+
+/** Real path of cwd/rel, only if it stays inside cwd (symlink-safe) and avoids .git and credential dirs. */
 export function resolveInCwd(cwd, rel) {
   const n = normalizeRel(rel);
   if (n.error) return n;
@@ -317,6 +342,7 @@ export function resolveInCwd(cwd, rel) {
     return { error: "not found", status: 404 };
   }
   if (!insideDir(real, cwd)) return { error: "path is outside the workspace", status: 403 };
+  if (isSensitivePath(real, cwd)) return { error: "not found", status: 404 };
   return { rel: n.rel, real };
 }
 
@@ -396,13 +422,15 @@ export function resolveBareName(files, name) {
 }
 
 /** GET ?agentId=&name= → { ok, path|null, count }. `cwdFor(agentId)` is the server-side agent cwd lookup. */
-export async function handleFsResolve(req, res, cwdFor, sendJson) {
+export async function handleFsResolve(req, res, cwdFor, sendJson, roots) {
   if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
   const params = new URL(req.url, "http://x").searchParams;
   try {
-    const cwd = await cwdFor(params.get("agentId") ?? "");
-    if (!cwd) return sendJson(res, 404, { ok: false, error: "unknown agent" });
-    return sendJson(res, 200, { ok: true, ...resolveBareName(listFiles(cwd).files, params.get("name") ?? "") });
+    const raw = await cwdFor(params.get("agentId") ?? "");
+    if (!raw) return sendJson(res, 404, { ok: false, error: "unknown agent" });
+    const c = confineReq(raw, roots ?? []); // same realpath + roots check as list/read
+    if (c.error) return sendJson(res, c.status ?? 400, { ok: false, error: c.error });
+    return sendJson(res, 200, { ok: true, ...resolveBareName(listFiles(c.cwd).files, params.get("name") ?? "") });
   } catch (e) {
     return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) });
   }

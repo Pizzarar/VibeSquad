@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, realpathSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { fsList, fsRead, resolveInCwd, resolveBareName, handleFsRead, handleFsList, handleFsResolve } from "../server/file-search.mjs";
+import { tmpdir, homedir } from "node:os";
+import { join, parse } from "node:path";
+import { fsList, fsRead, resolveInCwd, resolveBareName, handleFsRead, handleFsList, handleFsResolve, isUnsafeRoot, confineReq, _resetRescan, listFiles } from "../server/file-search.mjs";
 import { lookupBareName, isBareNameCandidate, _resetBareNames } from "../src/fileLinks.ts";
 import { vsReadFile, vsListDirectory, VsFilesError } from "../src/vsFiles.ts";
 
@@ -85,7 +85,7 @@ test("HTTP handlers serve confined reads and resolve a bare name end to end", as
   handleFsList(url("/x", { cwd: root, path: "" }), res, [root], sendJson);
   assert.equal(JSON.parse(res.body).ok, true);
   res = mkRes();
-  await handleFsResolve(url("/x", { agentId: "a1", name: "README.md" }), res, () => root, sendJson);
+  await handleFsResolve(url("/x", { agentId: "a1", name: "README.md" }), res, () => root, sendJson, [root]);
   assert.equal(JSON.parse(res.body).path, "README.md");
 });
 
@@ -157,7 +157,7 @@ test("fs/resolve uses the runner agent's worktree, not the repo root", async () 
   const wt = realpathSync(mkdtempSync(join(tmpdir(), "vs-wt-")));
   writeFileSync(join(wt, "only-in-worktree.png"), PNG);
   const res = mkRes();
-  await handleFsResolve({ method: "GET", url: "/x?agentId=rn-abc123&name=only-in-worktree.png" }, res, (id) => agentCwdFor(id, root, { runner: { fetchAgent: async () => ({ agent: { cwd: wt } }) } }), sendJson);
+  await handleFsResolve({ method: "GET", url: "/x?agentId=rn-abc123&name=only-in-worktree.png" }, res, (id) => agentCwdFor(id, root, { runner: { fetchAgent: async () => ({ agent: { cwd: wt } }) } }), sendJson, [wt]);
   assert.equal(JSON.parse(res.body).path, "only-in-worktree.png");
 });
 
@@ -178,5 +178,72 @@ test("junction/symlink escape (worktree node_modules) is blocked for read, list 
 test("new routes sit behind the same owner gate as the other /__vibesquad file reads", () => {
   for (const p of ["/__vibesquad/fs/list", "/__vibesquad/fs/read", "/__vibesquad/fs/resolve", "/__vibesquad/files"]) {
     assert.equal(isGatedRead(p, p), true, p);
+  }
+});
+
+test("browse roots: home dir and drive/filesystem roots are unsafe, a normal workspace is not", () => {
+  assert.equal(isUnsafeRoot(homedir()), true);
+  assert.equal(isUnsafeRoot(parse(root).root), true);
+  assert.equal(isUnsafeRoot(""), true);
+  assert.equal(isUnsafeRoot(root), false);
+});
+
+test("resolveInCwd refuses ~/.ssh, ~/.vibesquad, ~/.paseo contents but allows a workspace that lives inside ~/.paseo", () => {
+  const fakeHome = realpathSync(mkdtempSync(join(tmpdir(), "vs-home2-")));
+  mkdirSync(join(fakeHome, ".ssh"));
+  writeFileSync(join(fakeHome, ".ssh/id_rsa"), "k");
+  mkdirSync(join(fakeHome, ".paseo/worktrees/w1"), { recursive: true });
+  writeFileSync(join(fakeHome, ".paseo/worktrees/w1/ok.txt"), "fine");
+  writeFileSync(join(fakeHome, ".paseo/config.json"), "secret");
+  const saved = { u: process.env.USERPROFILE, h: process.env.HOME };
+  process.env.USERPROFILE = fakeHome; process.env.HOME = fakeHome;
+  try {
+    assert.equal(fsRead(fakeHome, ".ssh/id_rsa").status, 404);
+    assert.equal(fsRead(fakeHome, ".paseo/config.json").status, 404);
+    assert.equal(fsList(fakeHome, ".ssh").status, 404);
+    assert.equal(fsRead(join(fakeHome, ".paseo/worktrees/w1"), "ok.txt").bytes.toString(), "fine");
+  } finally {
+    if (saved.u === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = saved.u;
+    if (saved.h === undefined) delete process.env.HOME; else process.env.HOME = saved.h;
+  }
+});
+
+test("confineReq: a 403 rescans roots at most once per 5s", () => {
+  _resetRescan();
+  let fresh = 0;
+  const roots = (f) => { if (f) fresh++; return [root]; };
+  const bad = outside; // not under any root → 403
+  assert.equal(confineReq(bad, roots, 1_000_000).status, 403);
+  assert.equal(confineReq(bad, roots, 1_001_000).status, 403);
+  assert.equal(confineReq(bad, roots, 1_004_999).status, 403);
+  assert.equal(fresh, 1);
+  assert.equal(confineReq(bad, roots, 1_005_001).status, 403);
+  assert.equal(fresh, 2);
+  assert.equal(confineReq(root, roots, 1_005_002).cwd, root); // allowed cwd never rescans
+  assert.equal(fresh, 2);
+});
+
+test("fs/resolve confines the agent cwd (outside every root -> 403) and listFiles canonicalizes its cache key", async () => {
+  const res = mkRes();
+  await handleFsResolve({ method: "GET", url: "/x?agentId=rn-x&name=a.png" }, res, async () => outside, sendJson, [root]);
+  assert.equal(res.statusCode, 403);
+  const a = listFiles(root);
+  writeFileSync(join(root, "late.md"), "x");
+  assert.strictEqual(listFiles(join(root, "docs", "..")), a); // same real dir -> same cached entry
+});
+
+test("agentCwdFor prefers the on-disk runner record over the HTTP API", async () => {
+  const wt = join(root, "wt-disk");
+  const home = mkdtempSync(join(tmpdir(), "vs-home3-"));
+  mkdirSync(join(home, "runner/agents"), { recursive: true });
+  writeFileSync(join(home, "runner/agents/rn-first.jsonl"), JSON.stringify({ type: "created", ts: 1, provider: "p", model: "m", cwd: wt, meta: {} }) + "\n");
+  const prev = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = home;
+  let calls = 0;
+  try {
+    assert.equal(await agentCwdFor("rn-first", root, { runner: { fetchAgent: async () => { calls++; return { agent: { cwd: "/http" } }; } } }), wt);
+    assert.equal(calls, 0);
+  } finally {
+    if (prev === undefined) delete process.env.VIBESQUAD_HOME; else process.env.VIBESQUAD_HOME = prev;
   }
 });

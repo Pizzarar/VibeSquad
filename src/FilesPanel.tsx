@@ -291,7 +291,7 @@ export function FilesPanel({
         return;
       }
       try {
-        const result = await vsReadFile(cwd, path, cap + 1);
+        const result = await vsReadFile(cwd, path, cap);
         const kb = Math.max(1, Math.round(result.bytes.length / 1024));
         if (result.bytes.length > cap) {
           setFileContent("");
@@ -336,7 +336,7 @@ export function FilesPanel({
         } catch { /* no daemon: file stays static */ }
       } catch (e) {
         setFileContent("");
-        if (e instanceof VsFilesError && e.tooLarge) tooBig(0);
+        if (e instanceof VsFilesError && e.tooLarge) tooBig(e.size ? Math.round(e.size / 1024) : 0);
         else if (e instanceof VsFilesError && !e.notFound) setReadErr(e.message);
         else setNotFound(true);
       }
@@ -508,7 +508,7 @@ export function FilesPanel({
       if (DEMO) throw new Error("Download isn't available in demo mode");
       const tooBig = "File too large to download (over 25 MB)";
       if (node.size !== undefined && node.size > MAX_DOWNLOAD_BYTES) throw new Error(tooBig);
-      const r = await vsReadFile(cwd, node.path, MAX_DOWNLOAD_BYTES + 1);
+      const r = await vsReadFile(cwd, node.path, MAX_DOWNLOAD_BYTES);
       if (r.bytes.length > MAX_DOWNLOAD_BYTES) throw new Error(tooBig);
       const url = URL.createObjectURL(new Blob([r.bytes as BlobPart], { type: r.mime || "application/octet-stream" }));
       const a = document.createElement("a");

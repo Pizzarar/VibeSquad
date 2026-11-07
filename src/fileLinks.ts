@@ -114,7 +114,10 @@ export function lookupBareName(agentId: string | undefined, name: string, fetche
       .then((r) => r.json())
       .then((j) => resolved.set(key, j?.ok && typeof j.path === "string" ? j.path : null))
       .catch(() => resolved.set(key, null))
-      .finally(() => { inflight.delete(key); version++; listeners.forEach((l) => l()); });
+      .finally(() => {
+        inflight.delete(key);
+        if (resolved.get(key)) { version++; listeners.forEach((l) => l()); } // a miss changes nothing on screen
+      });
   }
   return undefined;
 }

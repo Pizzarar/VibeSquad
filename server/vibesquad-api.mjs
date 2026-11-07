@@ -17,7 +17,7 @@ import { resolveTeamsFilePath, resolveTeamsWritePath } from "./teams-file.mjs";
 import { seedHubBriefs } from "./hub-seed.mjs";
 import { resolveProjectPath } from "./brief-path.mjs";
 import { contentRevision, createWindowLimiter } from "./write-guards.mjs";
-import { ADE_GATED_READ_PATHS, handleFileList, handleFsList, handleFsRead, handleFsResolve, handleSearch } from "./file-search.mjs";
+import { ADE_GATED_READ_PATHS, isUnsafeRoot, handleFileList, handleFsList, handleFsRead, handleFsResolve, handleSearch } from "./file-search.mjs";
 import { handleSecretInputRequest } from "./secret-input.mjs";
 import {
   LEGACY_NEEDS_LABEL,
@@ -805,22 +805,23 @@ const navRoots = (rootDir, opts) => (fresh) => {
   if (!fresh && hit && Date.now() - hit.at < 30_000) return hit.roots;
   // Runner (rn-) agents are the default and often sit in worktrees outside the project roots.
   let runnerCwds = [];
-  try { runnerCwds = listRunnerAgentsSync().map((a) => realOrNull(a.cwd)).filter(Boolean); } catch {}
-  const roots = [...new Set([...allowedAttachRoots(rootDir, opts), ...runnerCwds])];
+  try { runnerCwds = listRunnerAgentsSync().filter((a) => !a.archivedAt).map((a) => realOrNull(a.cwd)).filter(Boolean); } catch {}
+  // A home dir or drive root as a browse root would expose everything under it.
+  const roots = [...new Set([...allowedAttachRoots(rootDir, opts), ...runnerCwds])].filter((r) => !isUnsafeRoot(r));
   navRootsCache.set(rootDir, { at: Date.now(), roots });
   return roots;
 };
 
-/** Agent id -> cwd, server-side only: runner record (live API, then its on-disk log), then ~/.paseo agents, then the repo root. */
+/** Agent id -> cwd, server-side only: runner record (on-disk log, then the live API), then ~/.paseo agents, then the repo root. */
 export async function agentCwdFor(agentId, rootDir, { runner } = {}) {
   const id = String(agentId ?? "");
   if (!AGENT_ID_STRICT.test(id)) return rootDir;
   if (isRunnerId(id)) {
+    try { const rec = readRunnerAgentSync(id); if (rec?.cwd) return rec.cwd; } catch {} // on-disk record: no HTTP round trip
     try {
       const cwd = (await (runner ?? sharedRunnerBackend()).fetchAgent(id)).agent?.cwd;
       if (cwd) return cwd;
     } catch {}
-    try { const rec = readRunnerAgentSync(id); if (rec?.cwd) return rec.cwd; } catch {}
   }
   return lookupAgentCwd(id) || rootDir;
 }
@@ -1728,7 +1729,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
       case "/__vibesquad/fs/list":
         return handleFsList(req, res, navRoots(rootDir, opts), sendJson);
       case "/__vibesquad/fs/resolve":
-        return handleFsResolve(req, res, (id) => agentCwdFor(id, rootDir), sendJson);
+        return handleFsResolve(req, res, (id) => agentCwdFor(id, rootDir), sendJson, navRoots(rootDir, opts));
       case "/__vibesquad/fs/read":
         return handleFsRead(req, res, navRoots(rootDir, opts), sendJson);
       case "/__vibesquad/search":
