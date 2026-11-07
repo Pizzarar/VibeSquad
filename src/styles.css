@@ -4254,6 +4254,7 @@ button.project-file-name:hover { text-decoration: underline; }
 .composer-queued-banner { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .composer-queued-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-send-now-btn { flex: none; }
+.composer-stop-btn { flex: none; }
 .composer-queued-cancel-btn { flex: none; }
 .pin-lane-handle { font-family: var(--mono); font-size: 10px; opacity: 0.78; padding: 1px 5px; border-radius: 3px; background: #00f0ff14; color: var(--cyan); margin-left: 6px; }
 .secret-input-popover { z-index: 80; }

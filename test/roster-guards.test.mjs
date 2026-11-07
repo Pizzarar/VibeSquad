@@ -25,6 +25,10 @@ import {
   teamForAgent,
 } from "../src/teams.ts";
 
+// Mock-Paseo-daemon tests: the runner has a single owner and is never lazily started, so pin every lane to Paseo (as 35e895e did for 11 other suites).
+process.env.VS_DEFAULT_BACKEND = "paseo";
+delete process.env.VS_BACKEND;
+
 function makeTempEnv() {
   const dir = mkdtempSync(join(tmpdir(), "vs-roster-guards-test-"));
   const vsHome = join(dir, ".vibesquad");

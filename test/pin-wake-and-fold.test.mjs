@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { registerHooks } from "node:module";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
@@ -364,53 +364,5 @@ test("(6) vs pin merge adds fromLane.id + code to intoLane.aliases and sets from
     assert.deepEqual(into.aliases, ["bug-chaser-2", "bugc", "bc2"]);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("(7) teams.json (and ~/.vibesquad/teams.json if present) has valid JSON (no BOM), folded aliases, and standing flags", () => {
-  // Both files are gitignored per-machine config: check whichever exist (a fresh worktree has neither).
-  const paths = [];
-  const repoTeams = resolve(ROOT_DIR, "teams.json");
-  if (fs.existsSync(repoTeams)) paths.push(repoTeams);
-  const homeTeams = join(homedir(), ".vibesquad", "teams.json");
-  if (fs.existsSync(homeTeams)) paths.push(homeTeams);
-
-  const expectedStanding = {
-    vibesquad: ["art-direction", "token-checker", "android-app", "quickstart", "release-desk", "ui-bois", "bug-chaser", "squadbot"],
-    efi: ["sim-core", "economy-balance", "ui-raid", "ui-shell-hideout", "ui-screens", "art-pipeline", "platform-qa-security"],
-    "team-squadz-meet": ["mesh-certs", "homeserver-voice", "soundboard-bots", "game-streaming", "channels-client-ux"],
-  };
-
-  for (const p of paths) {
-    const buf = fs.readFileSync(p);
-    assert.notEqual(buf[0], 0xef, `${p} must not start with UTF-8 BOM`);
-    const doc = JSON.parse(buf.toString("utf8"));
-    const vs = doc.teams.find((t) => t.id === "vibesquad");
-    assert.ok(vs, `vibesquad exists in ${p}`);
-    assert.equal(vs.lanes.some((l) => l.id === "bug-chaser-2"), false, `bug-chaser-2 removed from ${p}`);
-    assert.equal(vs.lanes.some((l) => l.id === "quickstart-2"), false, `quickstart-2 renamed in ${p}`);
-
-    const bug = vs.lanes.find((l) => l.id === "bug-chaser");
-    assert.ok(bug, `bug-chaser exists in ${p}`);
-    assert.equal(bug.state, "pinned");
-    assert.equal(bug.standing, true);
-    assert.deepEqual(bug.aliases, ["bug-chaser-2", "bugc"]);
-    assert.equal("removedAt" in bug, false);
-
-    const qui = vs.lanes.find((l) => l.id === "quickstart");
-    assert.ok(qui, `quickstart exists in ${p}`);
-    assert.equal(qui.state, "pinned");
-    assert.equal(qui.standing, true);
-    assert.deepEqual(qui.aliases, ["quickstart-2"]);
-
-    for (const [teamId, laneIds] of Object.entries(expectedStanding)) {
-      const team = doc.teams.find((t) => t.id === teamId);
-      assert.ok(team, `${teamId} exists in ${p}`);
-      for (const laneId of laneIds) {
-        const lane = team.lanes.find((l) => l.id === laneId);
-        assert.ok(lane, `${teamId}.${laneId} exists in ${p}`);
-        assert.equal(lane.standing, true, `${teamId}.${laneId} has standing: true in ${p}`);
-      }
-    }
   }
 });

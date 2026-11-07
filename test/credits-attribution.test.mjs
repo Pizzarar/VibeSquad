@@ -56,7 +56,8 @@ test("1) CREDITS.md exists at repo root and includes all 11 community accolades 
     .split(/\r?\n/)
     .filter((l) => l.startsWith("- Implemented ") || l.startsWith("- Built on the Paseo Daemon"));
   // 11 v0.2.0 accolades + 2 runner entries (VS agent runner adapters, ACP adapters) added with Own Daemon B2.
-  assert.equal(bullets.length, 16, "Expected 11 community accolades + 5 runner credits (incl. VS MCP aliases, native schedules, terminals) in CREDITS.md");
+  // +1 Aseprite pipeline credit (97d2029); the two "Inspired by the vibe of" lines are vibe-only and not counted.
+  assert.equal(bullets.length, 17, "Expected 11 community accolades + 5 runner credits (incl. VS MCP aliases, native schedules, terminals) + 1 Aseprite pipeline credit in CREDITS.md");
 });
 
 test("2) server/profiles.mjs and plugin/index.server.ts require attribution format in plans, commits, CREDITS.md, and release notes", () => {

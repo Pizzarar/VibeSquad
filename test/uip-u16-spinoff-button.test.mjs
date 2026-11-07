@@ -125,10 +125,11 @@ describe("U16: PinIdeas.tsx exports findPinForAgent and renders LooksDoneCard in
 });
 
 describe("U16: Timeline.tsx feeds noteTimelineOffers in useTimeline and renders inline action cards in MarkdownRenderer", () => {
+  // noteAgentSeq joined the same effect in 50f95f9 (B7), so the if-body is a block now.
   test("useTimeline feeds noteTimelineOffers(agentId, entries) in a useEffect", () => {
     assert.match(
       timelineSrc,
-      /useEffect\(\(\)\s*=>\s*\{\s*if\s*\(agentId\s*&&\s*entries\.length\)\s*noteTimelineOffers\(agentId,\s*entries\);\s*\},\s*\[agentId,\s*entries\]\);/,
+      /useEffect\(\(\)\s*=>\s*\{\s*if\s*\(agentId\s*&&\s*entries\.length\)\s*\{\s*noteTimelineOffers\(agentId,\s*entries\);\s*noteAgentSeq\(agentId,\s*maxEntrySeq\(entries\)\);\s*\}\s*\},\s*\[agentId,\s*entries\]\);/,
     );
   });
 

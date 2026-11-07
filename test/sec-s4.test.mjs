@@ -7,6 +7,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 
+// Mock-Paseo-daemon tests: the runner has a single owner and is never lazily started, so pin every lane to Paseo (as 35e895e did for 11 other suites).
+process.env.VS_DEFAULT_BACKEND = "paseo";
+delete process.env.VS_BACKEND;
+
 const home = mkdtempSync(join(tmpdir(), "vs-sec-s4-"));
 const paseoHome = mkdtempSync(join(tmpdir(), "vs-sec-s4-paseo-"));
 process.env.VIBESQUAD_HOME = home;
