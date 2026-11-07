@@ -1,15 +1,20 @@
 // Append-only JSONL log per agent. One file per agent; nothing scans all files at startup.
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
+// Each agent gets an in-memory index (bytes covered, event count, sparse ordinal->byte offset) so appends
+// never re-read the file and `read(after)` seeks to the right offset instead of reading from byte 0.
+import * as nodeFs from 'node:fs';
 import path from 'node:path';
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const STEP = 64; // sparse index granularity: one offset per STEP events
+const CHUNK = 1 << 20;
 
 export class LogStore {
-  constructor(dir) {
+  constructor(dir, fsImpl = nodeFs) {
+    this.fs = fsImpl;
     this.dir = dir;
-    this.seqs = new Map(); // id -> next seq; filled lazily, per agent
+    this.idx = new Map(); // id -> { size, count, offs: [byte offset of event 0, STEP, 2*STEP...] }
     this.listeners = new Set(); // fn(id, ev) per append; see onAppend
-    mkdirSync(dir, { recursive: true });
+    this.fs.mkdirSync(dir, { recursive: true });
   }
 
   file(id) {
@@ -17,19 +22,63 @@ export class LogStore {
     return path.join(this.dir, `${id}.jsonl`);
   }
 
-  exists(id) { return ID_RE.test(id) && existsSync(this.file(id)); }
+  exists(id) { return ID_RE.test(id) && this.fs.existsSync(this.file(id)); }
 
   // Directory listing only (names, no file reads).
   ids() {
-    return readdirSync(this.dir).filter((f) => f.endsWith('.jsonl')).map((f) => f.slice(0, -6));
+    return this.fs.readdirSync(this.dir).filter((f) => f.endsWith('.jsonl')).map((f) => f.slice(0, -6));
   }
 
+  // Brings the index in line with the file: new bytes are scanned from the known offset; a file that shrank (or is unknown) is scanned once from 0.
+  _index(id) {
+    let size;
+    try { size = this.fs.statSync(this.file(id)).size; } catch { this.idx.delete(id); return null; }
+    let ix = this.idx.get(id);
+    if (ix && size < ix.size) ix = null;
+    if (!ix) { ix = { size: 0, count: 0, offs: [] }; this.idx.set(id, ix); }
+    if (size > ix.size) this._scan(id, ix, size);
+    return ix;
+  }
+
+  // Counts complete lines in [ix.size, end) without parsing them.
+  _scan(id, ix, end) {
+    const fd = this.fs.openSync(this.file(id), 'r');
+    try {
+      const buf = Buffer.allocUnsafe(Math.min(CHUNK, end - ix.size));
+      let pos = ix.size;
+      let lineStart = pos;
+      let lineLen = 0; // non-newline bytes seen on the current line
+      while (pos < end) {
+        const n = this.fs.readSync(fd, buf, 0, Math.min(buf.length, end - pos), pos);
+        if (n <= 0) break;
+        for (let i = 0; i < n; i++) {
+          if (buf[i] === 10) {
+            if (lineLen > 0) { if (ix.count % STEP === 0) ix.offs.push(lineStart); ix.count++; }
+            lineStart = pos + i + 1;
+            lineLen = 0;
+            ix.size = lineStart;
+          } else lineLen++;
+        }
+        pos += n;
+      }
+    } finally { this.fs.closeSync(fd); }
+  }
+
+  // Number of events (the next seq).
+  count(id) { return this._index(id)?.count ?? 0; }
+
   append(id, type, data = {}) {
-    let seq = this.seqs.get(id);
-    if (seq === undefined) seq = this.exists(id) ? this.read(id).length : 0; // lazy index for this agent only
+    const ix = this.exists(id) ? this._index(id) : null;
+    const seq = ix ? ix.count : 0;
     const ev = { seq, ts: Date.now(), type, ...data };
-    appendFileSync(this.file(id), JSON.stringify(ev) + '\n');
-    this.seqs.set(id, seq + 1);
+    const line = JSON.stringify(ev) + '\n';
+    const before = ix ? ix.size : 0;
+    this.fs.appendFileSync(this.file(id), line);
+    const cur = ix ?? { size: 0, count: 0, offs: [] };
+    if (cur.count % STEP === 0) cur.offs.push(before);
+    cur.count++;
+    cur.size = before + Buffer.byteLength(line);
+    this.idx.set(id, cur);
     for (const fn of [...this.listeners]) { try { fn(id, ev); } catch { /* a bad listener must not break logging */ } }
     return ev;
   }
@@ -40,19 +89,43 @@ export class LogStore {
     return () => this.listeners.delete(fn);
   }
 
-  // Events with seq >= after (callers tail by passing last seq + 1).
+  // Events with seq >= after (callers tail by passing last seq + 1). Seeks via the index; never reads the whole file for a tail.
   read(id, after = 0, limit = Infinity) {
-    if (!this.exists(id)) return [];
+    return this.readFrom(id, after > 0 ? this._index(id)?.offs[Math.floor(after / STEP)] ?? 0 : 0, after, limit).events;
+  }
+
+  // Parses complete lines from byte `offset`; returns the events (seq >= after) and `end`, the byte offset after the last complete line read.
+  readFrom(id, offset = 0, after = 0, limit = Infinity) {
     const out = [];
-    for (const line of readFileSync(this.file(id), 'utf8').split('\n')) {
-      if (!line) continue;
-      let ev;
-      try { ev = JSON.parse(line); } catch { continue; }
-      if (ev.seq >= after) {
-        out.push(ev);
-        if (out.length >= limit) break;
+    const ix = this._index(id);
+    if (!ix) return { events: out, end: offset };
+    if (offset > ix.size) offset = 0;
+    const end = ix.size;
+    if (offset >= end) return { events: out, end: offset };
+    const fd = this.fs.openSync(this.file(id), 'r');
+    let pos = offset;
+    let carry = Buffer.alloc(0);
+    try {
+      const buf = Buffer.allocUnsafe(Math.min(CHUNK, end - offset));
+      while (pos < end && out.length < limit) {
+        const n = this.fs.readSync(fd, buf, 0, Math.min(buf.length, end - pos), pos);
+        if (n <= 0) break;
+        pos += n;
+        let data = carry.length ? Buffer.concat([carry, buf.subarray(0, n)]) : buf.subarray(0, n);
+        let nl;
+        let from = 0;
+        while ((nl = data.indexOf(10, from)) !== -1 && out.length < limit) {
+          const line = data.toString('utf8', from, nl);
+          from = nl + 1;
+          offset += Buffer.byteLength(line) + 1;
+          if (!line) continue;
+          let ev;
+          try { ev = JSON.parse(line); } catch { continue; }
+          if (ev.seq >= after) out.push(ev);
+        }
+        carry = Buffer.from(data.subarray(from));
       }
-    }
-    return out;
+    } finally { this.fs.closeSync(fd); }
+    return { events: out, end: offset };
   }
 }
