@@ -4,6 +4,7 @@ import { messageCtxItems, openContextMenu, selectionWithin } from "./CommandPale
 import { daemonClient, client, retrySend } from "./paseo";
 import { DEMO } from "./demoFlag";
 import { isRunnerId, runnerFetchTimeline, runnerHandle } from "./runnerBridge";
+import { createRefreshScheduler } from "./timelineRefresh";
 
 /** client.agents.ref(id), except runner-owned agents (rn- ids) go over the VS runner routes. */
 const agentRef = (id: string): ReturnType<typeof client.agents.ref> => (isRunnerId(id) ? (runnerHandle(id) as any) : client.agents.ref(id));
@@ -927,6 +928,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
   const stale = useRef(false);
   const lastSeq = useRef<number | null>(null);
   const reload = useRef<() => void>(() => {});
+  const runnerSched = useRef<ReturnType<typeof createRefreshScheduler> | null>(null);
   // Feel pass: click → transcript painted for a freshly opened agent (no-op unless perfStart ran).
   useEffect(() => {
     if (loaded && active) perfEndPainted("open-agent", agentId);
@@ -1022,6 +1024,9 @@ export function useTimeline(agentId: string, status: string, active = true, pred
 
     reload.current = load;
     load();
+    // Runner events carry no item: refetch on the leading edge, throttled (never a restarting debounce).
+    const runnerRefresh = isRunnerId(agentId) ? createRefreshScheduler({ load, isActive: () => activeRef.current }) : null;
+    runnerSched.current = runnerRefresh;
     const sub = handle.timeline.subscribe((ev: PaseoAgentTimelineEvent) => {
       if (ev.event.type === "timeline") {
         const item = ev.event.item;
@@ -1036,12 +1041,15 @@ export function useTimeline(agentId: string, status: string, active = true, pred
       } else {
         // A turn lifecycle event is a real turn boundary: the next turn's text never rejoins this turn's reply.
         if (/^turn_(started|completed|failed|canceled)$/.test(String(ev.event.type))) setEntries((cur) => markTurnBoundary(cur));
-        soon(2500, true);
+        if (runnerRefresh) runnerRefresh.request();
+        else soon(2500, true);
       }
     });
     return () => {
       alive = false;
       if (timer) clearTimeout(timer);
+      runnerRefresh?.dispose();
+      runnerSched.current = null;
       if (typeof sub === "function") sub();
       else if (sub && typeof (sub as any).unsubscribe === "function") (sub as any).unsubscribe();
     };
@@ -1080,7 +1088,9 @@ export function useTimeline(agentId: string, status: string, active = true, pred
   }, [agentId, status]);
 
   useEffect(() => {
-    if (active && stale.current) {
+    if (!active) return;
+    runnerSched.current?.activate();
+    if (stale.current) {
       stale.current = false;
       reload.current();
     }

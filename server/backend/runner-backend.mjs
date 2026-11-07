@@ -19,7 +19,7 @@ const ROSTER_EVENTS = new Set(["created", "status", "meta", "exit", "archive", "
 const FIRST_CLASS = ["squad", "team", "lane", "role", "ord", "profile"];
 const ENV_FOR = { lane: "VS_LANE", team: "VS_TEAM", role: "VS_ROLE", profile: "VS_PROFILE" };
 const CLAUDE_PERMISSION_MODES = new Set(["default", "acceptEdits", "plan", "bypassPermissions", "dontAsk", "auto"]);
-const STATUS = { starting: "initializing", running: "running", idle: "idle", exited: "closed", lost: "closed", unknown: "idle" };
+const STATUS = { starting: "initializing", running: "running", idle: "idle", parked: "idle", exited: "closed", lost: "closed", unknown: "idle" };
 
 export const isRunnerId = (id) => typeof id === "string" && id.startsWith("rn-");
 
