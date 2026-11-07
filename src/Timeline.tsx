@@ -8,7 +8,7 @@ import { createRefreshScheduler } from "./timelineRefresh";
 
 /** client.agents.ref(id), except runner-owned agents (rn- ids) go over the VS runner routes. */
 const agentRef = (id: string): ReturnType<typeof client.agents.ref> => (isRunnerId(id) ? (runnerHandle(id) as any) : client.agents.ref(id));
-import { dismissPending, dropReconciled, getPending, pendingFor, reconciledIds, subscribePending } from "./pendingSend";
+import { dismissPending, dropMatched, getPending, noteAgentSeq, pendingFor, reconcile, subscribePending } from "./pendingSend";
 import { REWIND_MODES, buildRewindRequest, truncateAfter, type RewindMode } from "./sessionLifecycle";
 import { demoTimeline } from "./demo";
 import { sentImagesFor } from "./imageDrafts";
@@ -980,7 +980,10 @@ export function useTimeline(agentId: string, status: string, active = true, pred
   }, [predecessor, entries]);
 
   useEffect(() => {
-    if (agentId && entries.length) noteTimelineOffers(agentId, entries);
+    if (agentId && entries.length) {
+      noteTimelineOffers(agentId, entries);
+      noteAgentSeq(agentId, maxEntrySeq(entries));
+    }
   }, [agentId, entries]);
 
   useEffect(() => {
@@ -1058,8 +1061,10 @@ export function useTimeline(agentId: string, status: string, active = true, pred
       } else {
         // A turn lifecycle event is a real turn boundary: the next turn's text never rejoins this turn's reply.
         if (/^turn_(started|completed|failed|canceled)$/.test(String(ev.event.type))) setEntries((cur) => markTurnBoundary(cur));
-        if (runnerRefresh) runnerRefresh.request();
-        else soon(2500, true);
+        if (runnerRefresh) {
+          if (String(ev.event.type) === "runner-catchup") runnerRefresh.catchUp();
+          else runnerRefresh.request();
+        } else soon(2500, true);
       }
     });
     return () => {
@@ -1240,9 +1245,10 @@ export function Timeline({
   const allPending = useSyncExternalStore(subscribePending, getPending);
   const pendingHere = pendingFor(allPending, agentId);
   // Drop optimistic bubbles once the daemon's own user_message entry has arrived (no duplicate).
-  const covered = reconciledIds(pendingHere, entries);
+  const matches = reconcile(pendingHere, entries);
+  const covered = matches.map((m) => m.id);
   useEffect(() => {
-    dropReconciled(covered);
+    dropMatched(matches);
   }, [covered.join(",")]);
   const lastEntry = entries[entries.length - 1];
   // A reply that grows behind a trailing thought row must still re-pin the scroll: include the last assistant message.

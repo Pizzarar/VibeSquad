@@ -75,9 +75,10 @@ export async function runnerSpawn(payload: unknown): Promise<PaseoAgent> {
 
 type TimelineResult = { entries: unknown[]; hasOlder?: boolean; startCursor?: unknown; lastSeq?: number };
 
-const timelineListeners = new Map<string, Set<() => void>>();
-const notifyTimeline = (id?: string) => {
-  for (const [k, set] of timelineListeners) if (!id || k === id) for (const cb of [...set]) cb();
+const timelineListeners = new Map<string, Set<(catchUp: boolean) => void>>();
+/** `catchUp`: events may have been missed (stream reconnect, window shown again), so every mounted timeline refetches. */
+const notifyTimeline = (id?: string, catchUp = false) => {
+  for (const [k, set] of timelineListeners) if (!id || k === id) for (const cb of [...set]) cb(catchUp);
 };
 
 /** Stands in for client.agents.ref(id) in Timeline.tsx: refetch over HTTP, subscribe to the runner event stream (no polling). */
@@ -87,7 +88,7 @@ export function runnerHandle(id: string) {
     timeline: {
       refetch,
       subscribe(cb: (ev: { event: { type: string } }) => void) {
-        const fire = () => cb({ event: { type: "runner-changed" } });
+        const fire = (catchUp: boolean) => cb({ event: { type: catchUp ? "runner-catchup" : "runner-changed" } });
         let set = timelineListeners.get(id);
         if (!set) timelineListeners.set(id, (set = new Set()));
         set.add(fire);
@@ -143,7 +144,11 @@ export function startRunnerBridge(apply: (agents: PaseoAgent[], archivedIds: str
       if (!s || !s.enabled || typeof EventSource === "undefined") return; // runner off: stay inert for this page load
       let roster = new Map<string, PaseoAgent>();
       const es = new EventSource(`${BASE}/events`);
-      es.onopen = () => onConnection?.(true);
+      es.onopen = () => {
+        onConnection?.(true);
+        notifyTimeline(undefined, true); // reconnect: anything emitted while the stream was down is lost
+      };
+      if (typeof document !== "undefined") document.addEventListener("visibilitychange", () => !document.hidden && notifyTimeline(undefined, true));
       es.onerror = () => onConnection?.(false);
       es.onmessage = (m) => {
         let ev: RunnerStreamEvent;
@@ -155,12 +160,15 @@ export function startRunnerBridge(apply: (agents: PaseoAgent[], archivedIds: str
         if (ev.kind === "timeline") return notifyTimeline(ev.agentId);
         // Runner unreachable: the server says "disconnected" instead of an (empty) roster, so keep every agent we have.
         if (ev.kind === "disconnected") return onConnection?.(false);
-        if (ev.kind === "connected") return onConnection?.(true);
+        if (ev.kind === "connected") {
+          onConnection?.(true);
+          return notifyTimeline(undefined, true);
+        }
         const next = reduceRunnerRoster(roster, ev);
         if (!next) return;
         roster = next;
         apply([...roster.values()], ev.kind === "remove" ? [ev.agentId] : []);
-        if (ev.kind === "roster") notifyTimeline();
+        if (ev.kind === "roster") notifyTimeline(undefined, true);
       };
     })
     .catch(() => resolveStatusLoaded());
