@@ -4,6 +4,8 @@ import { statSync } from 'node:fs';
 import { createClaudeAdapter } from './adapters/claude.mjs';
 import { createAcpAdapter, acpProviderIds, PROVIDER_ALIASES } from './adapters/acp.mjs';
 import { LogStore } from './log.mjs';
+import { LimitStore, createAgyUsagePoller } from './limits.mjs';
+import path from 'node:path';
 
 // squad/team/lane/role/ord/profile are plain meta fields, first-class on the agent record.
 const META_FIELDS = ['squad', 'team', 'lane', 'role', 'ord', 'profile', 'title', 'permissionMode', 'acpMode', 'thinkingOptionId', 'featureValues', 'labels'];
@@ -60,8 +62,12 @@ export function maxLiveFromEnv(env = process.env) {
 }
 
 export class Runner {
-  constructor({ dir, adapters = defaultAdapters(), maxLive = maxLiveFromEnv(), queueMs = queueMsFromEnv() }) {
+  // limitsFile: where limit-window records go (default: limits.jsonl next to the agents dir, i.e. the runner home).
+  // pollAgy: after antigravity-cli turns, poll `agy -p /usage` (ACP carries no quota); only the real server turns it on.
+  constructor({ dir, adapters = defaultAdapters(), maxLive = maxLiveFromEnv(), queueMs = queueMsFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage }) {
     this.store = new LogStore(dir);
+    this.limits = new LimitStore(limitsFile);
+    this._pollAgy = pollAgy ? createAgyUsagePoller({ store: this.limits, ...(agyUsage ? { run: agyUsage } : {}) }) : null;
     this.adapters = adapters;
     this.maxLive = maxLive;
     this.queueMs = queueMs;
@@ -90,6 +96,8 @@ export class Runner {
         if (data.status === 'idle' || data.status === 'running') entry.lastActive = Date.now();
         if (data.status === 'idle') this._wakeSlotWaiters();
       } else if (type === 'session' && data.sessionId) entry.sessionId = data.sessionId;
+      else if (type === 'limit') { try { this.limits.record({ ...data, agentId: id }); } catch { /* limits are best-effort */ } }
+      else if (type === 'turn_done' && (PROVIDER_ALIASES[provider] ?? provider) === 'antigravity-cli') this._pollAgy?.(id);
       this.store.append(id, type === 'status' ? 'status' : type, data);
     };
     try {
@@ -282,6 +290,7 @@ export class Runner {
 
   // Marks every live agent as exited by the runner, then kills its process tree.
   shutdown() {
+    this._pollAgy?.shutdown();
     for (const id of [...this.live.keys()]) {
       try { this.store.append(id, 'exit', { code: null, reason: 'runner-shutdown' }); } catch { /* best effort */ }
       this.kill(id);
