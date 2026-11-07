@@ -691,7 +691,7 @@ test(
 // ---------------------------------------------------------------------------
 
 test(
-  "Stage 6: stream idle timeout / context deadline exceeded auto-retries and failed turns still evaluate checkLeadTokens",
+  "Stage 6: stream idle timeout / context deadline exceeded auto-retries and failed turns no longer evaluate lead tokens (token-watch owns it)",
   withEnv(async ({ briefRoot }) => {
     const leadUnder = {
       id: "lead-under",
@@ -729,8 +729,7 @@ test(
         kind: "failed",
         error: { message: "non-transient provider error" },
       });
-      assert.equal(leadOverFlag.labels["handoff-flagged"], "1", "failed turn still flags lead over 150k tokens");
-      assert.ok(leadOverFlag.labels["needs-you"]?.includes("150k"), "failed turn sets needs-you on lead over 150k tokens");
+      assert.equal(leadOverFlag.labels["handoff-flagged"], undefined, "the lead token check moved to server/token-watch.mjs: the plugin does not flag");
     } finally {
       h.stop?.();
     }

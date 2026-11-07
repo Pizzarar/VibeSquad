@@ -38,6 +38,7 @@ import "./inbox.mjs";
 import { installVsShim } from "../cli/vs.mjs";
 import { requestLocalLoginUrl } from "./local-token.mjs";
 import { startPushWatcher } from "./push.mjs";
+import { startTokenWatcher } from "./token-watch.mjs";
 import { sharedRunnerBackend } from "./backend/index.mjs";
 import { shouldSuperviseRunner, superviseRunner } from "./runner-supervisor.mjs";
 import { runnerLanes } from "./backend/lane-routing.mjs";
@@ -592,6 +593,10 @@ if (isMain) {
       startRunnerLifecycle().catch((err) => console.warn("runner lifecycle hooks not started:", err?.message ?? err));
     }
     startPushWatcher(rootDir);
+    // Context budget duties the Paseo plugin used to run (lead nudge / successor handoff, Buddy warn / retire), now for runner agents.
+    if (process.env.VS_TOKEN_WATCH !== "0" && runnerLanes().size) {
+      try { const tw = startTokenWatcher({ rootDir }); server.once("close", () => tw.stop()); } catch (err) { console.warn("token watcher not started:", err?.message ?? err); }
+    }
 
     if (wantOpen) void openBrowser(servedOpenUrl());
   });

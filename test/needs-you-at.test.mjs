@@ -63,7 +63,7 @@ test("setNeedsYou extra labels survive even when state.agents lacks them (handof
   assert.equal(calls[0]["needs-you"], "why");
 });
 
-test("App.tsx passes handoff-flagged as the extra arg", () => {
+test("App.tsx no longer pre-sets handoff-flagged (server/token-watch.mjs owns the 150k flag + nudge)", () => {
   const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
-  assert.match(app, /setNeedsYou\(m\.agent, reason, \{ "handoff-flagged": "1" \}\)/);
+  assert.doesNotMatch(app, /"handoff-flagged": "1"/);
 });
