@@ -85,7 +85,7 @@ export function providerFamily(provider) {
 export class Runner {
   // limitsFile: where limit-window records go (default: limits.jsonl next to the agents dir, i.e. the runner home).
   // pollAgy: after antigravity-cli turns, poll `agy -p /usage` (ACP carries no quota); only the real server turns it on.
-  constructor({ dir, adapters = defaultAdapters(), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage }) {
+  constructor({ dir, adapters = defaultAdapters(), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv() }) {
     this.store = new LogStore(dir);
     this.folds = new Map(); // id -> log-derived status (no liveness), valid while the log file's size + mtime are unchanged
     this.limits = new LimitStore(limitsFile);
@@ -95,6 +95,7 @@ export class Runner {
     this.turnCaps = { ...DEFAULT_TURN_CAPS, ...turnCaps };
     this.parkGraceMs = parkGraceMs;
     this.archiveKillMs = archiveKillMs;
+    this.queueMaxAgeMs = queueMaxAgeMs; // recoverQueued ignores inputs queued longer ago than this (0 = no bound)
     this.queue = []; // FIFO of jobs waiting for a turn slot or a live-process slot: { id, family, needsTurn, run, ahead }
     this.live = new Map(); // id -> { handle, status, ... } for agents running in THIS process only
     this.overCapOwner = new Map(); // family -> count of owner turns currently running OVER that family's turn cap (released on turn end)
@@ -107,14 +108,15 @@ export class Runner {
     this.store.append(id, 'created', { provider, model: model ?? null, cwd, meta: pickMeta(meta), ...(systemPrompt ? { systemPrompt } : {}) }); // kept so a lost resume restores the role prompt
     if (prompt) this.store.append(id, 'input', { text: prompt });
     // Over a cap the agent still exists (its log says queued, N ahead) and starts when its turn comes: never refused.
-    this._admit({
-      id, family: providerFamily(provider), needsTurn: !!prompt,
+    const job = {
+      id, family: providerFamily(provider), needsTurn: !!prompt, kind: 'create', text: prompt, images: [],
       run: () => {
         this._makeRoom(id);
         const entry = this._start(id, { provider, model, cwd, meta, systemPrompt });
-        if (prompt) this._deliver(entry, prompt);
+        if (job.text) { this._noteOwnerOverCap(job, entry); this._deliver(entry, job.text, job.images ?? []); } // job.text: a send may have coalesced into the queued create
       },
-    });
+    };
+    this._admit(job);
     return id;
   }
 
@@ -292,7 +294,7 @@ export class Runner {
       const id = job.id;
       this.store.append(id, 'error', { message: err.message });
       if (this.live.get(id)) this.store.append(id, 'status', { status: 'idle' });
-      else if (job.spec) {
+      else if (job.spec?.resume) {
         this.store.append(id, 'parked', { sessionId: job.spec.resume, systemPrompt: job.spec.systemPrompt ?? null });
         this.store.append(id, 'status', { status: 'parked' });
       } else if (!this._fold(id)?.exit) this.store.append(id, 'exit', { code: null, error: err.message });
@@ -403,6 +405,91 @@ export class Runner {
     return { provider: c.provider, model: c.model ?? undefined, cwd: c.cwd, meta, systemPrompt: c.systemPrompt ?? undefined, resume: sessionId };
   }
 
+  // An agent whose log ends in a `queued` status never got its turn: nothing was delivered after the queued events. The runner's
+  // queue is in memory, so a runner restart drops the job while the log still says queued. Returns the spec to start it (fresh
+  // or, when a session was recorded, resumed) and the inputs logged since the last real status, or null if it is not that case.
+  _unstartedPlan(id) {
+    if (!this.store.exists(id) || this.live.has(id) || this.queue.some((j) => j.id === id)) return null; // a queued job already owns these inputs
+    const events = this.store.read(id);
+    const c = events[0];
+    if (c?.type !== 'created' || !this.adapters[c.provider]) return null;
+    let status = null;
+    let statusTs = 0;
+    let archived = false;
+    let sessionId = null;
+    let cut = -1; // index of the last non-queued status: inputs before it were delivered
+    const meta = { ...(c.meta ?? {}) };
+    events.forEach((e, i) => {
+      if (e.type === 'exit') status = 'exited';
+      else if (e.type === 'archive') archived = true;
+      else if (e.type === 'unarchive') archived = false;
+      else if (e.type === 'session' && e.sessionId) sessionId = e.sessionId;
+      else if (e.type === 'meta') Object.assign(meta, e.patch, e.patch?.labels ? { labels: { ...meta.labels, ...e.patch.labels } } : {});
+      else if (e.type === 'status') { status = e.status; statusTs = e.ts ?? 0; if (e.status !== 'queued') cut = i; }
+    });
+    if (status !== 'queued' || archived) return null;
+    const inputs = events.filter((e, i) => e.type === 'input' && i > cut && typeof e.text === 'string');
+    if (!inputs.length) return null;
+    if (isRetiredMeta(meta)) return null; // retirePredecessors / confirmTakeover only relabel the role (never archive): a former-lead stays dead
+    if (this.queueMaxAgeMs > 0 && Date.now() - statusTs > this.queueMaxAgeMs) return null; // stale: a days-old input must not run on a whim
+    const supersededBy = this._successorOf(id, meta);
+    const resumable = sessionId && !sessionId.startsWith('-') && this.adapters[c.provider]?.canPark;
+    return {
+      spec: { provider: c.provider, model: c.model ?? undefined, cwd: c.cwd, meta, systemPrompt: c.systemPrompt ?? undefined, ...(resumable ? { resume: sessionId } : {}) },
+      text: inputs.map((e) => e.text).join('\n\n'),
+      owner: inputs.some((e) => e.owner === true),
+      ts: inputs[0].ts ?? 0,
+      supersededBy,
+    };
+  }
+
+  // A lead/Buddy whose replacement was spawned while it sat queued is superseded, whatever became of the replacement (it may have
+  // exited, been archived or itself retired by the time of a restart). Reviving the old one would make `vs who lead` CONFLICT.
+  // Superseded = any NEWER agent (created later; id breaks a tie) in the same team + lane + role family (lead/former-lead,
+  // brainstorm/former-brainstorm; Buddies also the same topic). Workers and lane-less agents have no successor. Returns its id or null.
+  _successorOf(id, meta) {
+    const family = roleFamily(meta);
+    const lane = meta?.lane;
+    if ((family !== 'lead' && family !== 'brainstorm') || !lane) return null;
+    const team = meta.team ?? null;
+    const topic = family === 'brainstorm' ? (meta.labels?.topic ?? meta.topic ?? null) : null;
+    const mine = this._fold(id)?.created?.ts ?? 0;
+    for (const other of this.store.ids()) {
+      if (other === id) continue;
+      let f = null;
+      try { f = this._fold(other); } catch { continue; }
+      if (!f?.created) continue;
+      const ts = f.created.ts ?? 0;
+      if (ts < mine || (ts === mine && other < id)) continue;
+      const m = f.meta ?? {};
+      if (roleFamily(m) !== family || m.lane !== lane || (m.team ?? null) !== team) continue;
+      if (family === 'brainstorm' && (m.labels?.topic ?? m.topic ?? null) !== topic) continue;
+      return other;
+    }
+    return null;
+  }
+
+  // Runner boot: re-enqueues every agent that was queued (turn cap) when the previous runner went away, in their original
+  // order (oldest unstarted input first; owner jobs still jump non-owner ones). Idempotent: the job's start logs a
+  // non-queued status, which moves the log's cut past the input, so a second boot never replays it. Returns the ids re-enqueued.
+  recoverQueued() {
+    const plans = [];
+    for (const id of this.store.ids()) {
+      let plan = null;
+      try { plan = this._unstartedPlan(id); } catch { /* unreadable log: skip */ }
+      if (!plan) continue;
+      if (plan.supersededBy) continue;
+      plans.push({ id, plan });
+    }
+    // Owner inputs take the free slots first (they would have jumped the queue), then oldest first.
+    plans.sort((a, b) => (b.plan.owner ? 1 : 0) - (a.plan.owner ? 1 : 0) || a.plan.ts - b.plan.ts);
+    for (const { id, plan } of plans) {
+      const job = { id, spec: plan.spec, family: providerFamily(plan.spec.provider), needsTurn: true, kind: 'send', owner: plan.owner, text: plan.text, images: [], run: () => this._deliverJob(job) };
+      this._admit(job);
+    }
+    return plans.map((p) => p.id);
+  }
+
   // Brings a parked or lost agent back in place (same id, same log) without sending anything. False if it can't be resumed.
   // A resume needs no turn slot, only a live-process slot; it may queue like a send.
   resume(id) {
@@ -437,30 +524,38 @@ export class Runner {
   send(id, text, opts = {}) {
     const live = this.live.get(id);
     // A lost agent (its process died in a runner restart) resumes in place on the next send, same id + session.
-    const spec = live ? null : (this._parkedSpec(id) ?? this._lostSpec(id));
-    if (!live?.handle && !spec) throw new Error(`agent ${id} is not running`);
+    // Coalesce into a job still waiting in this process's queue first (a queued create or send): one entry, one turn.
+    const queued = this.queue.find((j) => j.id === id && (j.kind === 'send' || j.kind === 'create'));
+    let spec = null;
+    let pending = null; // inputs queued before a runner restart that this send must carry along (they never ran)
+    if (!live && !queued) {
+      pending = this._unstartedPlan(id); // checked even when the agent has a session: those inputs are not in the session yet
+      if (pending?.supersededBy) throw new Error(`agent ${id} is superseded by ${pending.supersededBy}; send to the successor`);
+      spec = this._parkedSpec(id) ?? this._lostSpec(id) ?? pending?.spec ?? null;
+    }
+    if (!live?.handle && !spec && !queued) throw new Error(`agent ${id} is not running`);
     const images = (Array.isArray(opts.images) ? opts.images : []).filter((i) => i && typeof i.data === 'string' && typeof i.mimeType === 'string');
     if (opts.activeTurnBehavior === 'interrupt' && live?.status === 'running') this.cancel(id);
     const owner = opts.owner === true;
-    const family = live?.family ?? providerFamily(spec.provider);
+    const family = live?.family ?? queued?.family ?? providerFamily(spec.provider);
 
-    // Coalesce a new send into a queued (not started) send for the same agent: one queue entry, one turn. Texts join in
-    // order with a blank line, images append, and the owner flag is the OR (an owner line makes the merged job owner).
-    const queued = this.queue.find((j) => j.id === id && j.kind === 'send');
+    // Texts join in order with a blank line, images append, and the owner flag is the OR (an owner line makes the merged job owner).
     if (queued) {
-      this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}) });
+      this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}), ...(owner ? { owner: true } : {}) });
       queued.text = queued.text ? `${queued.text}\n\n${text}` : text;
+      queued.needsTurn = true; // a create without a prompt now has one
       queued.images = [...(queued.images ?? []), ...images];
       if (owner && !queued.owner) {
         queued.owner = true;
         this._reinsertOwner(queued); // move it ahead of non-owner jobs of its family
+        this._pump(); // as an owner job it may now start over the cap
       }
       return this.queuePosition(id);
     }
 
-    this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}) });
+    this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}), ...(owner ? { owner: true } : {}) });
     const job = {
-      id, spec, family, needsTurn: true, kind: 'send', owner, text, images,
+      id, spec, family, needsTurn: true, kind: 'send', owner: owner || pending?.owner === true, text: pending ? `${pending.text}\n\n${text}` : text, images,
       run: () => this._deliverJob(job),
     };
     if (live?.inflight > 0 && !this.queue.some((j) => j.id === id)) job.run(); // steering a running turn: it already holds its slot
@@ -472,11 +567,16 @@ export class Runner {
   // family cap as an over-cap owner turn (tracked for the +OWNER_OVER_CAP budget).
   _deliverJob(job) {
     const entry = this.live.get(job.id) ?? this._resume(job.id, job.spec);
-    if (job.owner && !(entry?.inflight > 0) && this._running(job.family) >= (this.turnCaps[job.family] ?? this.turnCaps.other)) {
+    this._noteOwnerOverCap(job, entry);
+    this._deliver(entry, job.text, job.images ?? []);
+  }
+
+  // An owner job that begins a fresh turn over the family cap is tracked against the +OWNER_OVER_CAP budget until that turn ends.
+  _noteOwnerOverCap(job, entry) {
+    if (job.owner && entry && !(entry.inflight > 0) && this._running(job.family) >= (this.turnCaps[job.family] ?? this.turnCaps.other)) {
       entry.ownerOverCap = (entry.ownerOverCap ?? 0) + 1;
       this.overCapOwner.set(job.family, (this.overCapOwner.get(job.family) ?? 0) + 1);
     }
-    this._deliver(entry, job.text, job.images ?? []);
   }
 
   // Moves a queued job (that just became owner via coalesce) to the owner segment of its family's queue.
@@ -589,14 +689,29 @@ export class Runner {
   // Marks every live agent as exited by the runner, then kills its process tree.
   shutdown() {
     this._pollAgy?.shutdown();
+    const waiting = new Set(this.queue.map((j) => j.id)); // agents with a queued, unstarted input: their log must keep ending in `queued` so the next boot re-enqueues them
     this.queue.length = 0;
     for (const e of this.live.values()) { clearTimeout(e.parkTimer); this._clearArchive(e); }
     for (const id of [...this.live.keys()]) {
+      if (waiting.has(id)) { const e = this.live.get(id); if (e) e.parked = true; this.kill(id); continue; } // parked flag: onExit logs nothing
       try { this.store.append(id, 'exit', { code: null, reason: 'runner-shutdown' }); } catch { /* best effort */ }
       this.kill(id);
     }
     this.live.clear();
   }
+}
+
+function queueMaxAgeFromEnv(env = process.env) {
+  const raw = env.VS_RUNNER_QUEUE_MAX_AGE_MS;
+  const n = Number(raw);
+  return raw !== undefined && raw !== '' && Number.isFinite(n) && n >= 0 ? n : 24 * 60 * 60 * 1000;
+}
+
+// Same rule as server/identity.mjs isRetiredRole (former-*, old-lead, retired, old), applied to a log's folded meta (role + labels.role).
+function roleOf(meta) { return String(meta?.role ?? meta?.labels?.role ?? '').trim().toLowerCase(); }
+function roleFamily(meta) { return roleOf(meta).replace(/^former-/, ''); }
+function isRetiredMeta(meta) {
+  return [meta?.role, meta?.labels?.role].some((r) => { const v = String(r ?? '').trim().toLowerCase(); return v.startsWith('former-') || v === 'old-lead' || v === 'retired' || v === 'old'; });
 }
 
 function pickMeta(meta) {
