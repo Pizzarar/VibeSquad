@@ -46,24 +46,24 @@ local function head(hair, extra)
 end
 
 -- ---------- hair / hats ----------
-F.head.lead = head({hx, hy, [[
-|....kkkkkkk....|
-|..kkkvvvkkkkk..|
-|.kkkkkkkkvvvkk.|
-|kkkvkkkkkkkkkkk|
-|kk.kkkk.....kkk|
-|k............kk|
+-- lead: big pompadour swoop, forehead open
+F.head.lead = head({hx, hy-4, [[
+|...kkkkkk......|
+|.kkkvvvkkkk....|
+|kkkkkkkkvvkk...|
+|kkkkkkkkkkkkk..|
+|kkkkkkkkkkkkkk.|
+|kkkkkkkkkkkkkkk|
+|kk.........kkkk|
 |k.............k|
 ]]})
 F.head.buddy = head({hx, hy-3, [[
-|......k........|
-|..k...kk...k...|
-|..kk.kkkk.kk...|
+|..k...k...k....|
+|..kk.kkk.kk..k.|
 |.kkkkkkkkkkkkk.|
 |kkkkvkkkkkkvkkk|
 |kkkkkkkkkkkkkkk|
-|kkk.kkk.kkkk.kk|
-|kk...k.....k.kk|
+|kk..........kkk|
 |k.............k|
 ]]}, {
  -- headphones: band over the mop, cups over the ears
@@ -81,50 +81,67 @@ F.head.buddy = head({hx, hy-3, [[
 |kkkk...........kkkk|
 ]]},
 })
-F.head.implement = head({hx, hy-1, [[
-|....k..k..k....|
-|...kkkkkkkkk...|
-|..kkkkkkkkkkk..|
-|.kkkkkkkkkkkkk.|
-|kmmmmmmpmmmmmmk|
-|kmmmmmpppmmmmmk|
-|kk..k.......kkk|
-]]}, {
- -- hachimaki tails flapping out to the right
- {hx+14, hy+3, [[
-|kk....|
-|mmkk..|
-|kmmmk.|
-|.kkmmk|
-|...kk.|
-]]},
-})
-F.head.review = head({hx-5, hy-7, [[
-|.........kkkkkkk.........|
-|.......kkvvkkkkkkk.......|
-|......kkvvkkkkkkkkk......|
-|......kvvkkkkkkkkkk......|
-|......kvkkkkkkkkkkk......|
-|......kpppppppppppk......|
-|..kkkkkpppppppppppkkkkk..|
-|kkvvvvkkkkkkkkkkkkkvvvvkk|
-|.kkkkkkkkkkkkkkkkkkkkkkk.|
-|.....k.............k.....|
-]]})
+-- implement: TV-head; the face lives on the screen
+F.head.implement = { {6, 1, [[
+|.....p.........p..|
+|.....k........k...|
+|......k......k....|
+|......k.....k.....|
+|.......k...k......|
+|........kkk.......|
+|..kkkkkkkkkkkkkk..|
+|.kaaaaaaaaaaaaaak.|
+|.kakkkkkkkkkkaaak.|
+|.kakttttttttkacak.|
+|.kaktmmttmmtkaaak.|
+|.kaktmkttmktkaaak.|
+|.kakttttttttkacak.|
+|.kaktkttttktkaaak.|
+|.kakttkkkkttkaaak.|
+|.kakkkkkkkkkkaaak.|
+|.kcccccccccccccck.|
+|..kkkkkkkkkkkkkk..|
+|........kk........|
+|.......kkk........|
+]]} }
+-- review: stalk-eye alien; the giant eye swings round to stare at you
+F.head.review = { {6, 0, [[
+|.......kkkkk......|
+|.....kkmmmmmkk....|
+|....kmmmmmmmmmk...|
+|....kmmmtttmmmk...|
+|....kmmtkkktmmk...|
+|....kmmtkkmtmmk...|
+|....kmmmtttmmmk...|
+|.....kkmmmmmkk....|
+|.......kkgkk......|
+|........kgk.......|
+|...kkkkkkgkkkkk...|
+|..kggggggggggggk..|
+|.kggggggggggggggk.|
+|.kgcggggggggggcgk.|
+|kggkkkkkkkkkkkgggk|
+|kgggkppppppppkgggk|
+|kggggkkpppppkkgggk|
+|.kgggggkkkkkggggk.|
+|..kggggggggggggk..|
+|....kkggggggkk....|
+|......kggggk......|
+]]} }
 
 -- ---------- bodies (origin 3,20) ----------
 F.body.lead = { 3, 20, [[
 |....kkkkkkkkmmmmmkkkkkkkk..|
-|...kvvvvvvvkmmpmmkvvvvvvvk.|
-|..kvvvvvvvvvkmpmkvvvvvvvvvk|
-|.kvvvvvvvvvvkmpmkvvvvvvvvvk|
-|.kvvkvvvvvvvvkpkvvvvvvvvkvk|
-|.kvvkvvvvvvvvkpkvvvvvvvvkvk|
-|.kvvkvvvvvvvvvkvvvvvvvvvkvk|
-|.kvvkvvvvvvvvvvvvvvvvvvvkvk|
-|.kvvvkvvvvvvvvvvvvvvvvvkssk|
+|...kpppppppkmmtmmkpppppppk.|
+|..kpppppppppkmtmkpppppppppk|
+|.kppppppppppkmtmkpppppppppk|
+|.kppkppppppppktkppppppppkpk|
+|.kppkppppppppktkppppppppkpk|
+|.kppkpppppppppkpppppppppkpk|
+|.kppkpppppppppppppppppppkpk|
+|.kpppkpppppppppppppppppkssk|
 |.kkkkkkkkkkkkkkkkkkkkkkkkkk|
-|....kvvvvvk.....kvvvvvk....|
+|....kpppppk.....kpppppk....|
 |....kkkkkkk.....kkkkkkk....|
 ]]}
 F.body.buddy = { 1, 20, [[
@@ -155,20 +172,19 @@ F.body.implement = { 3, 20, [[
 |.....kvvvvvk....kvvvvvk....|
 |.....kkkkkkk....kkkkkkk....|
 ]]}
-F.body.review = { 2, 19, [[
-|.......kak.....kak.........|
-|......kaak.kkk.kaak........|
-|....kkaaakmmmmmkaaakkkk....|
-|...kaaaaaakmpmkaaaaaaaak...|
-|..kaaaaaaaakpkaaaaaaaaaak..|
-|.kaaacaaaaakpkaaaaaaacaaak.|
-|.kaaacaaaaaakaaaaaaaacaaak.|
-|.kaaacaaaaaaacaaaaaaacaaak.|
-|.kcccccccccccccccccccccccck|
-|.kaaacaaaaaaacaaaaaaacaaak.|
-|.kaaacaaaaaaacaaaaaaacsssk.|
-|.kkkkkkkkkkkkkkkkkkkkkkkkk.|
-|.....kaaaak.....kaaaak.....|
+F.body.review = { 5, 20, [[
+|....kkkkkkkkkkkkkk....|
+|...kvvvvkpkkpkvvvvk...|
+|..kvvvvvkmmmmkvvvvvk..|
+|.kvvvvvvkmmmmkvvvvvvk.|
+|.kvvvvvvvkakvvvvvvvvk.|
+|.kvvkvvvvvkvvvvvvkvvk.|
+|.kvvkvvvvvavvvvvvkvvk.|
+|.kvvkvvvvvkvvvvvvkvvk.|
+|.kvvkvvvvvavvvvvvkggk.|
+|.kkkkkkkkkkkkkkkkkkkk.|
+|....kvvvk....kvvvk....|
+|....kkkkk....kkkkk....|
 ]]}
 
 -- ---------- fx: raised arm + bubble ----------
@@ -229,19 +245,19 @@ F.fx.lead = {
 |kssak...|
 |ksssk...|
 |.kssk...|
-|.kvvk...|
-|..kvvk..|
-|..kvvk..|
-|..kvvk..|
-|...kvvk.|
-|...kvvk.|
-|....kvk.|
-|....kvk.|
-|....kvk.|
+|.kppk...|
+|..kppk..|
+|..kppk..|
+|..kppk..|
+|...kppk.|
+|...kppk.|
+|....kpk.|
+|....kpk.|
+|....kpk.|
 ]]},
 }
 F.fx.buddy = { bubble(0, 0), {0, 11, (ARM_R:gsub("v", "t"))} }
 F.fx.implement = { bubble(0, 0), {0, 11, (ARM_R:gsub("kvvk", "kmmk"):gsub("kvk", "ksk"):gsub("v", "s"))} }
-F.fx.review = { bubble(0, 0), {0, 11, (ARM_R:gsub("v", "a"))} }
+F.fx.review = { bubble(0, 0), {0, 11, (ARM_R:gsub("s", "g"))} }
 
 return F

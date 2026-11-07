@@ -31,7 +31,6 @@ local function floorSprite(role)
   if P.earsBack[role] then C.stamp(table.unpack(P.earsBack[role])) end
   if P.earsBackR[role] then C.stamp(table.unpack(P.earsBackR[role])) end
   if role == "buddy" then stampAll(C, P.phonesBack) end
-  if role == "implement" then C.stamp(table.unpack(P.tailsBack)) end
   if role == "review" or role == "implement" then C.rim(L.VIOLET, 16) end
   C.flipH(); C.commit()
   C = L.canvas(spr, lay.fx, f)

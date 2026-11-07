@@ -30,28 +30,33 @@ P.desk = {
 
 P.chairBack = { 10, 24, [[
 |.kkkkkkkkkkk.|
-|kpppppppppppk|
-|kpmmppppppppk|
-|kpmpppppppppk|
-|kpppppppppppk|
-|kpppppppppppk|
-|kpppppppppppk|
+|kvvvvvvvvvvvk|
+|kvmmvvvvvvvvk|
+|kvmvvvvvvvvvk|
+|kvvvvvvvvvvvk|
+|kvvvvvvvvvvvk|
+|kvvvvvvvvvvvk|
 |.kkkkkkkkkkk.|
 ]]}
 -- chair seen behind a turned-round sitter: just the top rim peeking out
 P.chairFront = { 6, 22, [[
 |.kkkkkkkkkkkkkkkkkkk.|
-|kpmmppppppppppppppppk|
-|kpmpppppppppppppppppk|
+|kvmmvvvvvvvvvvvvvvvvk|
+|kvmvvvvvvvvvvvvvvvvvk|
 ]]}
 
 -- ---------- back-of-head heads (origin 8,8) ----------
 P.headBack = {}
-P.headBack.lead = { 8, 8, [[
-|.....tkkkk.....|
-|...ttkkkkkkk...|
+-- lead: tall pompadour quiff (reads above the CRT line) + phone antenna
+P.headBack.lead = { 8, 4, [[
+|....kkkkk......|
+|..tkkkkkkkk....|
+|.tkkkkkkkkkk...|
+|.tkkkkkkkkkkk..|
 |..tkkkkkkkkkk..|
 |.tkkkkkkkkkkkk.|
+|tkkkkkkkkkkkkkk|
+|tkkkkkkkkkkkkkk|
 |tkkkkkkkkkkkkkk|
 |tkkkkkkkkkkkkkk|
 |tkkkkkkkkkkkkkk|
@@ -80,54 +85,65 @@ P.headBack.buddy = { 8, 4, [[
 |...kkkkkkkkk...|
 |....ksssssk....|
 ]]}
-P.headBack.implement = { 8, 6, [[
-|....k..k..k....|
-|...kkkkkkkkk...|
-|..kkkkkkkkkkk..|
-|.kkkvkkkkkkkkk.|
-|kkkkkkkkkvkkkkk|
-|kkkkkkkkkkkkkkk|
-|kkkkkkkkkkkkkkk|
-|kkkkkkmmmkkkkkk|
-|mmmmmmmkmmmmmmm|
-|kkkkkkmmmkkkkkk|
-|kkkkkkkkkkkkkkk|
-|.kkkkkkkkkkkkk.|
-|..kkkkkkkkkkk..|
-|....kkkkkkk....|
-|....ksssssk....|
+-- implement: TV-head. From behind: back of the set, vents, rabbit ears
+P.headBack.implement = { 6, 1, [[
+|.....p.........p..|
+|.....k........k...|
+|......k......k....|
+|......k.....k.....|
+|.......k...k......|
+|........kkk.......|
+|..kkkkkkkkkkkkkk..|
+|.taaaaaaaaaaaaaak.|
+|.taaaaaaaaaaaaaak.|
+|.taakkkkkkkkkkaak.|
+|.taaaaaaaaaaaaaak.|
+|.taakkkkkkkkkkaak.|
+|.taaaaaaaaaaaaaak.|
+|.taakkkkkkkkkkaak.|
+|.kaaaaaaaaaaaaaak.|
+|.kcccccccccccccck.|
+|..kkkkkkkkkkkkkk..|
+|........kk........|
+|.......kkk........|
 ]]}
-P.headBack.review = { 3, 2, [[
-|.........kkkkkkk.........|
-|.......kkvvkkkkkkk.......|
-|......kkvvkkkkkkkkk......|
-|......kvvkkkkkkkkkk......|
-|......kvkkkkkkkkkkk......|
-|......kvkkkkkkkkkkk......|
-|......kpppppppppppk......|
-|..kkkkkpppppppppppkkkkk..|
-|kkvvvvkkkkkkkkkkkkkvvvvkk|
-|kkkkkkkkkkkkkkkkkkkkkkkkk|
-|.kkkkkkkkkkkkkkkkkkkkkkk.|
-|...kkkkkkkkkkkkkkkkkkk...|
-|.......kkkkkkkkkkk.......|
-|.......kkkkkkkkkkk.......|
-|........kkkkkkkkk........|
-|.........ksssssk.........|
+-- review: stalk-eye alien; from behind the eyeball on its stalk rises over the head
+P.headBack.review = { 6, 0, [[
+|........kkkkk.....|
+|.......kmmmmmk....|
+|......ktmmmmmmk...|
+|......kttmmmmmk...|
+|......ktmmmmmmk...|
+|.......kmmmmmk....|
+|........kkkkk.....|
+|.........kgk......|
+|........kgk.......|
+|........kgk.......|
+|...kkkkkkgkkkkk...|
+|..kggggggggggggk..|
+|.kggggggggggggggk.|
+|kggggggggggggggggk|
+|kggggggggggggggggk|
+|kggggggggggggggggk|
+|kggggggggggggggggk|
+|kggggggggggggggggk|
+|.kggggggggggggggk.|
+|...kkggggggggkk...|
+|......kggggk......|
 ]]}
 
 -- ---------- back bodies (origin 3,20) ----------
 P.bodyBack = {}
 P.bodyBack.lead = { 3, 21, [[
 |..kkkkkkkmmmmmmmkkkkkkkkk.|
-|.kvvvvvvvvvvvvvvvvvvvvvvvk|
-|.kvvvvkvvvvvvvvvvvvvkvvvvk|
-|.kvvvvkvvvvvvvvvvvvvkvvvvk|
-|.kvvvvvvvvvvvvvvvvvvvvvvvk|
-|.kvvvvvvvvvvvvvvvvvvvvvvvk|
-|.kvvvvvvvvvvvvvvvvvvvvvvvk|
-|.kvvvvvvvvvvvvvvvvvvvvvvvk|
-|.kvvvvvvvvvvvvvvvvvvvvvvvk|
+|.kpppppppppppppppppppppppk|
+|.kppppkpppppppppppppkppppk|
+|.kppppkpppppppppppppkppppk|
+|.kpppppppppppppppppppppppk|
+|.kpppppppppppppppppppppppk|
+|.kpppppppppppppppppppppppk|
+|.kpppppppppppppppppppppppk|
+|.kpppppppppppppppppppppppk|
 |.kkkkkkkkkkkkkkkkkkkkkkkkk|
 ]]}
 P.bodyBack.buddy = { 1, 20, [[
@@ -155,21 +171,17 @@ P.bodyBack.implement = { 2, 21, [[
 |..kk..kmmmmmmmmmmmmmk..kk..|
 |......kkkkkkkkkkkkkkk......|
 ]]}
-P.bodyBack.review = { 2, 18, [[
-|.........ka.....ak.........|
-|........kaak...kaak........|
-|........kaaak.kaaak........|
-|....kkkkkaaakkkaaakkkkk....|
-|...kaaaaaaaakkkaaaaaaaaak..|
-|..kaaaaaaaaaaaaaaaaaaaaaak.|
-|.kaaacaaaaaaaaaaaaaaaacaaak|
-|.kaaacaaaaaaaaaaaaaaaacaaak|
-|.kaaacaaaaaaaaaaaaaaaacaaak|
-|.kaaacaaaaaaaaaaaaaaaacaaak|
-|.kcccccccccccccccccccccccck|
-|.kaaacaaaaaaaaaaaaaaaacaaak|
-|.kaaacaaaaaaaaaaaaaaaacaaak|
-|.kkkkkkkkkkkkkkkkkkkkkkkkkk|
+P.bodyBack.review = { 5, 21, [[
+|....kkkkkkkkkkkkkk....|
+|...kvvvvvvvvvvvvvvk...|
+|..kvvvvvvvvvvvvvvvvk..|
+|.kvvvvvvvvvvvvvvvvvvk.|
+|.kvvvvvvvvvvvvvvvvvvk.|
+|.kvvkvvvvvvvvvvvvkvvk.|
+|.kvvkvvvvvvvvvvvvkvvk.|
+|.kvvkvvvvvvvvvvvvkvvk.|
+|.kvvkvvvvvvvvvvvvkvvk.|
+|.kkkkkkkkkkkkkkkkkkkk.|
 ]]}
 
 -- ---------- back props ----------
@@ -192,11 +204,11 @@ P.propBack.lead = { 21, 0, [[
 |.ksaak..|
 |.ksssk..|
 |.kssskk.|
-|..kvvk..|
-|...kvvk.|
-|...kvvk.|
-|...kvvk.|
-|...kvvk.|
+|..kppk..|
+|...kppk.|
+|...kppk.|
+|...kppk.|
+|...kppk.|
 ]]}
 P.earsBack = {
  lead = { 6, 13, "|.k|\n|ks|\n|ks|\n|.k|" },
@@ -225,12 +237,6 @@ P.phonesBack = {
 |a...............a|
 ]]},
 }
--- implement: headband tails flapping out to the right
-P.tailsBack = { 12, 16, [[
-|..kmkmk..|
-|..kmkkmk.|
-|.kmk..kmk|
-|.kk....kk|
-]]}
+P.tailsBack = nil
 
 return P

@@ -3,7 +3,7 @@
 -- strip under it. Writes scratch/shots/cast-h0-dark.png and cast-h0-light.png.
 return function(L, root, pal, ROLES, out)
   local LABEL = { lead = "LEAD", buddy = "BUDDY", implement = "IMPLEMENT", review = "REVIEW" }
-  local SUB = { lead = "BRICK PHONE", buddy = "WALKMAN KID", implement = "HACHIMAKI", review = "FEDORA" }
+  local SUB = { lead = "BIG CHEESE", buddy = "WALKMAN KID", implement = "TV HEAD", review = "STALK EYE" }
   local LW, CW, BW, RH, PAD = 50, 40, 72, 76, 6
   local W = PAD + LW + PAD + CW + PAD + CW + PAD + BW + PAD
   local TOP = 34

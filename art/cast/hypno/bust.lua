@@ -34,7 +34,6 @@ local function face(C, cx, ey, opt)
     C.spans({{my+1, cx-5, cx+4}, {my+2, cx-4, cx+3}, {my+3, cx-2, cx+1}}, P)
     C.px(cx-6, my+1, K); C.px(cx+5, my, K)
     C.line(cx-5, my+2, cx-3, my+4, K); C.line(cx+4, my+1, cx+2, my+4, K); C.hline(cx-3, my+4, 5, K)
-    C.hline(cx-4, my+1, 3, M)   -- teeth, a bit crooked
   elseif opt.mouth == "o" then
     C.ellipse(cx, my+2, 2.2, 2.6, P); C.px(cx-2, my+1, K)
     C.line(cx-2, my, cx+1, my, K); C.line(cx-3, my+1, cx-3, my+3, K); C.line(cx+2, my+1, cx+2, my+3, K)
@@ -66,9 +65,12 @@ local ROLE = {}
 -- LEAD: shoulder-pad salaryman exec, slick side-parted hair, brick phone at ear
 function ROLE.lead(L, C)
   local b = C.body
-  b.poly({2,64, 4,50, 12,45, 52,45, 60,50, 62,64}, V)             -- boxy padded jacket
+  b.poly({2,64, 4,50, 12,45, 52,45, 60,50, 62,64}, P)             -- loud hot-pink padded jacket
+  for _, d in ipairs({{7,53},{16,58},{9,61},{47,55},{56,59},{51,62},{20,51},{44,50},{57,52}}) do
+    b.rect(d[1], d[2], 2, 2, A)                                    -- amber polka dots
+  end
   b.poly({24,45, 40,45, 32,60}, M)                                -- shirt V
-  b.poly({30,47, 34,47, 35,57, 32,61, 29,57}, P)                  -- tie
+  b.poly({30,47, 34,47, 35,57, 32,61, 29,57}, T)                  -- teal tie
   b.outline(K)
   b.line(24,45, 31,60, K); b.line(40,45, 33,60, K)                -- lapels
   b.line(30,47, 34,47, K); b.line(29,57, 32,61, K); b.line(35,57, 32,61, K)
@@ -76,19 +78,17 @@ function ROLE.lead(L, C)
   b.hline(5, 50, 6, M); b.hline(54, 50, 5, M)                     -- pad shine
   b.rect(27, 41, 10, 5, S); b.vline(27, 41, 4, K); b.vline(36, 41, 4, K)  -- neck
   local h = C.head
-  head(h, 31, 26, 15, 16)
+  head(h, 31, 27, 15, 15)
   h.outline(K)
   local r = C.hair
-  -- slick helmet with a side part and a forelock swoop to the viewer's right
-  r.spans({{8,24,38},{9,21,41},{10,19,43},{11,18,44},{12,17,45},{13,16,46},{14,16,46},
-           {15,16,30},{15,33,46},{16,16,27},{16,36,46},{17,16,24},{17,39,46},
-           {18,16,21},{18,42,46},{19,16,19},{19,44,46},{20,16,18},{20,45,46},{21,16,17},{22,16,17},{23,16,16}}, K)
+  -- huge pompadour swoop leaning forward and up, forehead left open
+  r.poly({16,25, 15,14, 19,6, 27,1, 38,0, 46,3, 49,9, 45,13, 46,18, 46,25, 43,18, 36,16, 26,17, 19,19}, K)
   r.outline(K)
-  for _, s in ipairs({{11,22,28},{10,30,34},{13,35,40},{12,20,23},{15,40,43},{14,26,29}}) do r.hline(s[2], s[1], s[3]-s[2]+1, V) end
-  r.px(37,11,V); r.px(38,12,V)
-  face(C.face, 31, 28, {mouth = "grin"})
+  for _, s in ipairs({{4,25,33},{6,36,42},{9,21,27},{8,30,38},{11,40,45}}) do r.hline(s[2], s[1], s[3]-s[2]+1, V) end
+  r.px(20,10,V); r.px(43,5,V)
+  face(C.face, 31, 29, {mouth = "grin"})
   local p = C.prop
-  -- brick phone held to the viewer's right ear, antenna past the hair
+  -- brick phone held to the viewer's right ear, antenna past the quiff
   p.rect(47, 22, 7, 16, A); p.rect(48, 24, 5, 3, G); p.rect(48, 29, 5, 6, K)
   for y=29,33,2 do for x=48,52,2 do p.px(x, y, M) end end
   p.vline(52, 6, 16, K); p.rect(51, 4, 3, 3, P)
@@ -97,7 +97,7 @@ function ROLE.lead(L, C)
   p.vline(52, 6, 16, K); p.line(44, 35, 47, 33, K); p.line(45, 37, 48, 35, K)
 end
 
--- BUDDY: Walkman kid, oversized colour-block windbreaker, big headphones over a mop
+-- BUDDY: Walkman kid, oversized colour-block windbreaker, big headphones over spiky hair
 function ROLE.buddy(L, C)
   local b = C.body
   b.poly({0,64, 2,51, 14,44, 50,44, 62,51, 64,64}, T)
@@ -115,18 +115,14 @@ function ROLE.buddy(L, C)
   head(h, 32, 27, 15, 15)
   h.outline(K)
   local r = C.hair
-  -- messy mop: lumpy cap + spikes + jagged fringe
-  r.ellipse(32, 19, 17, 11, K, {0,1,-1,0,1,0,0,-1,0}, {0,-1,1,0,0,1,0,0,-1})
-  -- tufts stay under the band; a couple stick out sideways below the cups instead
-  r.poly({17,36, 12,41, 19,39}, K); r.poly({46,37, 52,42, 45,40}, K)
-  r.spans({{24,16,20},{25,16,18},{26,16,17},{24,45,48},{25,46,48},{26,47,48}}, K)
-  -- jagged fringe teeth
-  for i, x in ipairs({19,23,27,31,35,39,43}) do
-    local d = ({3,2,4,2,3,1,3})[i]
-    r.poly({x,26, x+2,26+d, x+4,26}, K)
-  end
+  -- spiky swept-up hair, forehead open; tufts stay inside the headphone band
+  r.ellipse(32, 16, 17, 9, K, {0,1,-1,0,1,0,0,-1,0}, {0,-1,1,0,0,1,0,0,-1})
+  r.poly({20,13, 22,9, 26,11}, K); r.poly({26,10, 29,7, 32,9}, K); r.poly({33,9, 36,7, 38,10}, K); r.poly({39,11, 42,9, 44,13}, K)
+  r.poly({17,36, 12,41, 19,39}, K); r.poly({46,37, 52,42, 45,40}, K)   -- sideways tufts under the cups
+  r.spans({{24,16,19},{25,16,18},{26,16,17},{24,45,48},{25,46,48},{26,47,48}}, K)
+  r.poly({19,26, 22,20, 27,18, 32,21, 37,18, 42,20, 45,26}, 0)  -- open forehead, wavy hairline
   r.outline(K)
-  for _, s in ipairs({{12,22,26},{11,33,38},{15,40,44},{14,27,29}}) do r.hline(s[2], s[1], s[3]-s[2]+1, V) end
+  for _, s in ipairs({{11,22,26},{10,33,38},{14,40,44},{13,27,29}}) do r.hline(s[2], s[1], s[3]-s[2]+1, V) end
   face(C.face, 32, 33, {mouth = "o", mouthDy = -2, pupL = {1, 1}, pupR = {0, 1}})
   local p = C.prop
   -- headphones: amber band arching over the mop, pink cups with marble shine
@@ -140,96 +136,81 @@ function ROLE.buddy(L, C)
   p.vline(11, 27, 4, M); p.vline(49, 27, 4, M)
 end
 
--- IMPLEMENT: rolled sleeves + hachimaki, spiky hair, determined grin
+-- IMPLEMENT: TV-head coder. Wood-cabinet set for a head, the face lives on the screen.
 function ROLE.implement(L, C)
   local b = C.body
-  b.poly({4,64, 6,50, 16,44, 48,44, 58,50, 60,64}, M)              -- white shirt
-  b.poly({4,64, 5,55, 14,55, 14,64}, M)
+  b.poly({4,64, 6,50, 16,46, 48,46, 58,50, 60,64}, M)              -- white shirt
   b.outline(K)
-  -- rolled-up sleeve bunches: fat marble rolls with fold lines
-  for _, x in ipairs({4, 49}) do
+  for _, x in ipairs({4, 49}) do                                   -- rolled-up sleeve bunches
     b.hline(x, 51, 11, K); b.hline(x, 56, 11, K)
     b.line(x+2, 52, x+4, 55, K); b.line(x+6, 52, x+8, 55, K)
   end
   b.rect(5, 57, 9, 7, S); b.rect(50, 57, 9, 7, S)                  -- forearms
   b.vline(14, 57, 7, K); b.vline(49, 57, 7, K)
-  b.poly({25,44, 32,51, 39,44}, S); b.line(25,44, 32,51, K); b.line(39,44, 32,51, K)  -- open collar
-  b.line(22,44, 27,50, K); b.line(42,44, 37,50, K)
-  b.px(32, 55, K); b.px(32, 60, K)                                 -- buttons
+  b.poly({30,47, 34,47, 35,58, 32,62, 29,58}, P)                   -- pink tie
+  b.line(29,58, 32,62, K); b.line(35,58, 32,62, K)
+  b.vline(29, 47, 11, K); b.vline(35, 47, 11, K); b.hline(30, 47, 5, K)
   b.line(20,47, 20,63, V); b.line(44,47, 44,63, V)                 -- suspenders
-  b.rect(27, 40, 10, 5, S); b.vline(27, 40, 4, K); b.vline(36, 40, 4, K)
+  b.rect(29, 42, 7, 5, K)                                          -- neck = a cable stub
   local h = C.head
-  head(h, 32, 26, 15, 15)
+  -- the set: rounded amber cabinet, coral wood base, knob column on the right
+  h.spans({{9,12,52},{10,11,53}}, A); h.rect(10, 11, 45, 30, A); h.spans({{41,11,53},{42,12,52}}, A)
+  h.rect(11, 38, 43, 4, CO)
   h.outline(K)
-  local r = C.hair
-  r.spans({{9,22,42},{10,19,45},{11,18,46},{12,17,47},{13,17,47},{14,17,47},{15,17,47}}, K)
-  r.poly({18,11, 17,2, 24,9}, K); r.poly({24,9, 27,1, 31,8}, K); r.poly({31,8, 35,0, 38,8}, K); r.poly({38,9, 44,2, 45,11}, K)
-  r.outline(K)
-  r.hline(25, 10, 5, V); r.hline(37, 11, 4, V)
-  r.rim(V, 16)                                                     -- violet rim so spikes read on dark BG
-  -- hachimaki: marble band across the forehead, pink sun, knot + tails out to the right
-  r.spans({{16,16,48},{17,16,48},{18,16,48},{19,17,47}}, M)
-  r.ellipse(30, 17, 2.6, 2.1, P)
-  r.hline(16, 15, 33, K); r.line(17, 20, 47, 20, K)
-  r.poly({47,14, 58,10, 61,15, 50,18}, M); r.poly({47,18, 57,21, 58,26, 48,20}, M)
-  r.hline(16, 15, 33, K)
-  local tmp = {}
-  r.line(47,14, 58,10, K); r.line(58,10, 61,15, K); r.line(61,15, 50,18, K)
-  r.line(47,18, 57,21, K); r.line(57,21, 58,26, K); r.line(58,26, 48,20, K)
-  r.vline(48, 15, 6, K); r.vline(16, 16, 4, K)
-  face(C.face, 32, 29, {mouth = "grin", noBrows = true, pupL = {1, 0}, pupR = {0, 0}})
+  h.hline(11, 37, 43, K)
+  for x=13,52,3 do h.px(x, 39, A) end                              -- wood grain flecks
+  h.rect(15, 13, 27, 23, K)                                        -- screen bezel
+  h.rect(16, 14, 25, 21, T)                                        -- screen
+  for _, k in ipairs({{47,17},{47,26}}) do                         -- dials
+    h.ellipse(k[1], k[2], 3.2, 3.2, CO); h.px(k[1], k[2]-2, K); h.px(k[1], k[2]-1, K)
+  end
+  h.outline(K)
+  for y=31,35,2 do h.hline(45, y, 5, K) end                        -- speaker grille
   local f = C.face
-  -- determined brows: slanted down toward the nose
-  f.line(21, 23, 27, 25, K); f.line(37, 21, 43, 19, K)
+  -- face on the screen: big round eyes, wide grin, mint scanlines
+  for y=16,34,4 do f.hline(17, y, 23, G) end
+  f.ellipse(22, 21, 3.6, 4.1, M); f.ellipse(34, 20, 4.1, 4.6, M)
+  f.outline(K)
+  f.rect(22, 21, 2, 3, K); f.rect(34, 20, 2, 3, K)
+  f.line(19, 27, 21, 30, K); f.hline(21, 30, 15, K); f.line(36, 30, 38, 27, K)
+  f.hline(22, 31, 13, P); f.hline(24, 32, 9, P); f.hline(22, 32, 2, K); f.hline(33, 32, 2, K); f.hline(24, 33, 9, K)
+  f.rect(17, 27, 2, 1, P); f.rect(38, 27, 2, 1, P)                 -- screen blush
   local p = C.prop
-  -- pencil behind the ear
-  p.line(9, 21, 15, 27, A); p.line(10, 21, 16, 27, A); p.px(9, 20, P); p.px(10, 20, P)
-  p.outline(K)
+  -- rabbit-ear antenna with pink tips
+  p.line(28, 9, 18, 0, K); p.line(36, 9, 47, 1, K); p.rect(29, 7, 7, 2, K)
+  p.rect(17, 0, 2, 2, P); p.rect(46, 0, 2, 2, P)
 end
 
--- REVIEW: trench-coat detective, big fedora, magnifying glass making one eye huge
+-- REVIEW: stalk-eye alien in a cardigan. One giant eye on a wobbly stalk, wide grin below.
 function ROLE.review(L, C)
   local b = C.body
-  b.poly({2,64, 4,51, 14,45, 50,45, 60,51, 62,64}, A)
-  b.poly({16,45, 28,45, 32,58, 22,56, 12,48}, A); b.poly({36,45, 48,45, 52,48, 42,56, 32,58}, A)
+  b.poly({6,64, 8,53, 18,49, 46,49, 56,53, 58,64}, V)              -- violet cardigan, lanky
+  b.poly({26,49, 38,49, 32,60}, M)                                 -- shirt
   b.outline(K)
-  b.line(16,45, 32,58, K); b.line(48,45, 32,58, K)                 -- popped lapels
-  b.line(12,48, 22,56, K); b.line(52,48, 42,56, K)
-  b.line(22,56, 32,58, K); b.line(42,56, 32,58, K)
-  b.poly({28,45, 36,45, 32,55}, M); b.line(28,45, 32,55, K); b.line(36,45, 32,55, K)
-  b.poly({31,46, 33,46, 33,53, 32,55, 31,53}, P)
-  b.hline(3, 59, 58, CO); b.hline(3, 60, 58, K)                    -- belt
-  b.rect(30, 58, 5, 4, A); b.hline(30, 58, 5, K); b.hline(30, 62, 5, K); b.vline(30, 58, 5, K); b.vline(34, 58, 5, K)
-  b.line(8, 52, 8, 63, CO); b.line(56, 52, 56, 63, CO)              -- coat seams
-  b.rect(27, 41, 10, 5, S); b.vline(27, 41, 4, K); b.vline(36, 41, 4, K)
+  b.line(26,49, 32,60, K); b.line(38,49, 32,60, K); b.vline(32, 60, 4, K)
+  for y=59,63,4 do b.rect(33, y, 2, 2, A) end                      -- amber buttons
+  b.poly({27,49, 32,51, 37,49, 37,54, 32,52, 27,54}, P)            -- pink bow tie
+  b.line(27,49, 27,54, K); b.line(37,49, 37,54, K); b.line(27,49, 32,51, K); b.line(37,49, 32,51, K)
+  b.line(27,54, 32,52, K); b.line(37,54, 32,52, K); b.rect(31, 50, 3, 3, K)
+  b.line(14,54, 14,63, K); b.line(50,54, 50,63, K)                 -- cardigan seams
   local h = C.head
-  head(h, 31, 29, 15, 14)
+  -- squat green blob head, wide and lopsided, with a wobbly stalk
+  h.ellipse(32, 41, 19, 10, G, {0,-1,0,0,1,0,0,0,-1,0}, {0,1,0,0,0,-1,0,0,1,0})
+  h.poly({30,32, 29,24, 31,20, 34,20, 36,24, 35,32}, G)
   h.outline(K)
-  local r = C.hair
-  -- fedora: pinched crown + wide tilted brim (pink band)
-  r.poly({17,16, 19,5, 26,2, 38,2, 45,5, 47,16}, K)
-  r.poly({4,20, 12,15, 52,14, 61,17, 54,21, 10,23}, K)
-  r.outline(K)
-  r.spans({{13,18,46},{14,18,46}}, P)
-  r.line(24,4, 20,12, V); r.line(25,4, 21,12, V); r.line(30,3, 33,6, V)
-  r.line(8,19, 18,17, V); r.line(46,16, 55,17, V)
-  r.rim(V, 22)                                                     -- violet rim on crown + brim for dark BG
-  -- sideburns under the brim
-  r.spans({{22,17,18},{23,17,18},{24,17,17},{22,44,45},{23,45,45}}, K)
-  face(C.face, 31, 31, {mouth = "smile", noBrows = true, pupL = {1, 0}, pupR = {-1, 1}})
+  h.line(31, 22, 30, 31, K)                                        -- stalk crease
+  -- giant eye on top
+  h.ellipse(33, 13, 11.6, 11.1, M)
+  h.outline(K)
+  h.ellipse(31, 14, 6.1, 6.1, T)
+  h.ellipse(31, 14, 3.1, 3.1, K)
+  h.rect(28, 11, 2, 2, M); h.px(34, 17, M)                         -- catch-lights
   local f = C.face
-  f.line(20, 24, 26, 25, K); f.line(35, 23, 42, 24, K)          -- low suspicious brows
-  local p = C.prop
-  -- magnifying glass over the right eye: amber rim, glass = teal-ish, eye drawn huge inside
-  p.ellipse(38, 30, 8.6, 8.6, A); p.ellipse(38, 30, 6.6, 6.6, T)
-  p.ellipse(38, 31, 5.1, 5.6, M)
-  p.rect(37, 30, 4, 4, K); p.px(37, 30, M); p.px(38, 30, M)
-  p.poly({44,36, 47,35, 56,46, 53,48}, V)
-  p.ellipse(54, 50, 5.2, 4.6, S)                                  -- chunky fist on the handle
-  p.outline(K)
-  p.line(50, 48, 57, 48, K); p.line(50, 50, 56, 51, K)             -- knuckle creases
-  p.line(44,36, 53,48, K); p.line(47,35, 56,46, K)
-  p.px(33, 26, M); p.px(34, 25, M); p.px(32, 27, M)               -- glint
+  -- big wide grin + cheeks on the blob
+  f.line(19, 40, 46, 40, K); f.line(19, 40, 22, 44, K); f.hline(22, 44, 21, K); f.line(43, 44, 46, 40, K)
+  f.spans({{41,21,44},{42,22,43},{43,23,42}}, P)
+  f.rect(15, 36, 3, 2, CO); f.rect(47, 36, 3, 2, CO)
+  f.px(24, 47, K); f.px(39, 47, K)                                 -- two little freckles
 end
 
 function B.draw(L, spr, role)
