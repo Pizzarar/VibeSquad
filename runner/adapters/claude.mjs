@@ -4,6 +4,7 @@
 import { killTree, spawnNoShell } from '../spawn.mjs';
 import { lineReader } from './lines.mjs';
 import { mcpServerSpec, mcpServerPath } from './mcp.mjs';
+import { parseClaudeRateLimit } from '../limits.mjs';
 
 export const DEFAULT_PERMISSION_MODE = 'auto';
 export const effectivePermissionMode = (meta = {}) => meta.permissionMode || DEFAULT_PERMISSION_MODE;
@@ -31,7 +32,9 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
         let m;
         try { m = JSON.parse(line); } catch { emit('raw', { line }); return; }
         if (m.type === 'system' && m.subtype === 'init') emit('session', { sessionId: m.session_id, model: m.model });
-        else if (m.type === 'assistant') {
+        else if (m.type === 'rate_limit_event') {
+          for (const w of parseClaudeRateLimit(m)) emit('limit', { provider: 'claude', ...w, source: 'provider' });
+        } else if (m.type === 'assistant') {
           const u = m.message?.usage;
           if (u) {
             // Context size = everything the last call read (fresh + cached input); outputs add on top for the next call.

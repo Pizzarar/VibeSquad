@@ -154,7 +154,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   } catch (err) { console.error('orphan sweep failed', err); }
   setChildLedger(createChildLedger(home));
   const token = randomBytes(32).toString('hex');
-  const runner = new Runner({ dir });
+  const runner = new Runner({ dir, limitsFile: path.join(home, 'limits.jsonl'), pollAgy: true });
   const server = createServer(runner, { token });
   server.listen(Number(arg('port', 0)), '127.0.0.1', () => {
     const port = server.address().port;
