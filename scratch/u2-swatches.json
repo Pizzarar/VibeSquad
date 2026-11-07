@@ -1,0 +1,26 @@
+[
+ {
+  "id": "A",
+  "bg": "#e0d1dc",
+  "panel": "#ebe0e8",
+  "hi": "#d6c2d0",
+  "line": "#b092a7",
+  "min": "5.04"
+ },
+ {
+  "id": "B",
+  "bg": "#ddd3e3",
+  "panel": "#e9e3ed",
+  "hi": "#d0c4d9",
+  "line": "#a693b4",
+  "min": "5.08"
+ },
+ {
+  "id": "C",
+  "bg": "#e7d6ca",
+  "panel": "#efe4dc",
+  "hi": "#dfc8b9",
+  "line": "#c19a81",
+  "min": "5.29"
+ }
+]
