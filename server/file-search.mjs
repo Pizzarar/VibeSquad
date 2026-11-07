@@ -402,13 +402,27 @@ export function handleFsList(req, res, roots, sendJson) {
 export function findInWorktrees(cwd, rel, candidates) {
   const own = normPath(realOr(cwd));
   const hits = new Map();
+  const n = normalizeRel(rel);
+  if (n.error) return {};
+  const segs = n.rel.split("/");
   for (const cand of candidates ?? []) {
     const dir = realOr(cand);
     if (normPath(dir) === own || isUnsafeRoot(dir)) continue;
-    const r = resolveInCwd(dir, rel);
-    if (r.error) continue;
-    try { if (!statSync(r.real).isFile()) continue; } catch { continue; }
-    hits.set(normPath(r.real), { cwd: dir, rel: r.rel });
+    // A link may carry the sanctuary prefix (`worktrees/<repo>/<unit>/`, `<repo>/<unit>/`, `<unit>/`) where <unit> is this
+    // candidate's folder; try the link as-is plus each prefix-stripped form. Every form still goes through resolveInCwd.
+    const unit = basename(dir).toLowerCase();
+    const forms = [n.rel];
+    for (const at of [0, 1, 2]) {
+      if (segs.length > at + 1 && segs[at].toLowerCase() === unit && (at < 2 || segs[0].toLowerCase() === "worktrees")) {
+        forms.push(segs.slice(at + 1).join("/"));
+      }
+    }
+    for (const form of forms) {
+      const r = resolveInCwd(dir, form);
+      if (r.error) continue;
+      try { if (!statSync(r.real).isFile()) continue; } catch { continue; }
+      hits.set(normPath(r.real), { cwd: dir, rel: r.rel });
+    }
   }
   const all = [...hits.values()];
   if (all.length === 1) return { found: all[0] };
