@@ -211,6 +211,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const token = randomBytes(32).toString('hex');
   const runner = new Runner({ dir, limitsFile: path.join(home, 'limits.jsonl'), pollAgy: true });
   const server = createServer(runner, { token });
+  try { const back = runner.recoverQueued(); if (back.length) console.log(JSON.stringify({ requeued: back })); } catch (err) { console.error('queue recovery failed', err); }
   server.listen(Number(arg('port', 0)), '127.0.0.1', () => {
     const port = server.address().port;
     writeDiscovery(home, { port, token });

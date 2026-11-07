@@ -292,7 +292,7 @@ export class Runner {
       const id = job.id;
       this.store.append(id, 'error', { message: err.message });
       if (this.live.get(id)) this.store.append(id, 'status', { status: 'idle' });
-      else if (job.spec) {
+      else if (job.spec?.resume) {
         this.store.append(id, 'parked', { sessionId: job.spec.resume, systemPrompt: job.spec.systemPrompt ?? null });
         this.store.append(id, 'status', { status: 'parked' });
       } else if (!this._fold(id)?.exit) this.store.append(id, 'exit', { code: null, error: err.message });
@@ -403,6 +403,57 @@ export class Runner {
     return { provider: c.provider, model: c.model ?? undefined, cwd: c.cwd, meta, systemPrompt: c.systemPrompt ?? undefined, resume: sessionId };
   }
 
+  // An agent whose log ends in a `queued` status never got its turn: nothing was delivered after the queued events. The runner's
+  // queue is in memory, so a runner restart drops the job while the log still says queued. Returns the spec to start it (fresh
+  // or, when a session was recorded, resumed) and the inputs logged since the last real status, or null if it is not that case.
+  _unstartedPlan(id) {
+    if (!this.store.exists(id) || this.live.has(id)) return null;
+    const events = this.store.read(id);
+    const c = events[0];
+    if (c?.type !== 'created' || !this.adapters[c.provider]) return null;
+    let status = null;
+    let archived = false;
+    let sessionId = null;
+    let cut = -1; // index of the last non-queued status: inputs before it were delivered
+    const meta = { ...(c.meta ?? {}) };
+    events.forEach((e, i) => {
+      if (e.type === 'exit') status = 'exited';
+      else if (e.type === 'archive') archived = true;
+      else if (e.type === 'unarchive') archived = false;
+      else if (e.type === 'session' && e.sessionId) sessionId = e.sessionId;
+      else if (e.type === 'meta') Object.assign(meta, e.patch, e.patch?.labels ? { labels: { ...meta.labels, ...e.patch.labels } } : {});
+      else if (e.type === 'status') { status = e.status; if (e.status !== 'queued') cut = i; }
+    });
+    if (status !== 'queued' || archived) return null;
+    const inputs = events.filter((e, i) => e.type === 'input' && i > cut && typeof e.text === 'string');
+    if (!inputs.length) return null;
+    const resumable = sessionId && !sessionId.startsWith('-') && this.adapters[c.provider]?.canPark;
+    return {
+      spec: { provider: c.provider, model: c.model ?? undefined, cwd: c.cwd, meta, systemPrompt: c.systemPrompt ?? undefined, ...(resumable ? { resume: sessionId } : {}) },
+      text: inputs.map((e) => e.text).join('\n\n'),
+      owner: inputs.some((e) => e.owner === true),
+      ts: inputs[0].ts ?? 0,
+    };
+  }
+
+  // Runner boot: re-enqueues every agent that was queued (turn cap) when the previous runner went away, in their original
+  // order (oldest unstarted input first; owner jobs still jump non-owner ones). Idempotent: the job's start logs a
+  // non-queued status, which moves the log's cut past the input, so a second boot never replays it. Returns the ids re-enqueued.
+  recoverQueued() {
+    const plans = [];
+    for (const id of this.store.ids()) {
+      let plan = null;
+      try { plan = this._unstartedPlan(id); } catch { /* unreadable log: skip */ }
+      if (plan && !this.queue.some((j) => j.id === id)) plans.push({ id, plan });
+    }
+    plans.sort((a, b) => a.plan.ts - b.plan.ts);
+    for (const { id, plan } of plans) {
+      const job = { id, spec: plan.spec, family: providerFamily(plan.spec.provider), needsTurn: true, kind: 'send', owner: plan.owner, text: plan.text, images: [], run: () => this._deliverJob(job) };
+      this._admit(job);
+    }
+    return plans.map((p) => p.id);
+  }
+
   // Brings a parked or lost agent back in place (same id, same log) without sending anything. False if it can't be resumed.
   // A resume needs no turn slot, only a live-process slot; it may queue like a send.
   resume(id) {
@@ -437,7 +488,12 @@ export class Runner {
   send(id, text, opts = {}) {
     const live = this.live.get(id);
     // A lost agent (its process died in a runner restart) resumes in place on the next send, same id + session.
-    const spec = live ? null : (this._parkedSpec(id) ?? this._lostSpec(id));
+    let spec = null;
+    let pending = null; // inputs queued before a runner restart that this send must carry along (they never ran)
+    if (!live) {
+      spec = this._parkedSpec(id) ?? this._lostSpec(id);
+      if (!spec) { pending = this._unstartedPlan(id); spec = pending?.spec ?? null; }
+    }
     if (!live?.handle && !spec) throw new Error(`agent ${id} is not running`);
     const images = (Array.isArray(opts.images) ? opts.images : []).filter((i) => i && typeof i.data === 'string' && typeof i.mimeType === 'string');
     if (opts.activeTurnBehavior === 'interrupt' && live?.status === 'running') this.cancel(id);
@@ -448,7 +504,7 @@ export class Runner {
     // order with a blank line, images append, and the owner flag is the OR (an owner line makes the merged job owner).
     const queued = this.queue.find((j) => j.id === id && j.kind === 'send');
     if (queued) {
-      this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}) });
+      this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}), ...(owner ? { owner: true } : {}) });
       queued.text = queued.text ? `${queued.text}\n\n${text}` : text;
       queued.images = [...(queued.images ?? []), ...images];
       if (owner && !queued.owner) {
@@ -458,9 +514,11 @@ export class Runner {
       return this.queuePosition(id);
     }
 
-    this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}) });
+    this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}), ...(owner ? { owner: true } : {}) });
     const job = {
-      id, spec, family, needsTurn: true, kind: 'send', owner, text, images,
+      id, spec, family, needsTurn: true, kind: 'send', owner: owner || pending?.owner === true, text: pending ? `${pending.text}
+
+${text}` : text, images,
       run: () => this._deliverJob(job),
     };
     if (live?.inflight > 0 && !this.queue.some((j) => j.id === id)) job.run(); // steering a running turn: it already holds its slot
@@ -589,9 +647,11 @@ export class Runner {
   // Marks every live agent as exited by the runner, then kills its process tree.
   shutdown() {
     this._pollAgy?.shutdown();
+    const waiting = new Set(this.queue.map((j) => j.id)); // agents with a queued, unstarted input: their log must keep ending in `queued` so the next boot re-enqueues them
     this.queue.length = 0;
     for (const e of this.live.values()) { clearTimeout(e.parkTimer); this._clearArchive(e); }
     for (const id of [...this.live.keys()]) {
+      if (waiting.has(id)) { const e = this.live.get(id); if (e) e.parked = true; this.kill(id); continue; } // parked flag: onExit logs nothing
       try { this.store.append(id, 'exit', { code: null, reason: 'runner-shutdown' }); } catch { /* best effort */ }
       this.kill(id);
     }
