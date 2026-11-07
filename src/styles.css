@@ -5460,3 +5460,9 @@ button.project-file-name:hover { text-decoration: underline; }
 .team-head-line { gap: 2px; }
 /* title-bar contents: air between the @code chip and the caption button, and off the bar's right edge */
 .pin-tile-bar { gap: calc(var(--u3-px) * 4); padding-right: calc(var(--u3-px) * 3); }
+
+/* U3d: backgrounds (clouds, washes) stay inside the frame; the sidebar footer row clears the viewport edge and its buttons keep their frame */
+.card, .idea-inbox, .team-head, .pin-tile, .handoff-panel, .pin-rail-active-buddy { background-clip: padding-box; background-origin: padding-box; }
+.sidebar-footer-row { padding-bottom: calc(var(--u3-px) * 3); flex-shrink: 0; }
+.sidebar-footer-row .btn, .sidebar-footer-row .sidebar-icon-btn, .sidebar-footer-row .sidebar-cog-btn { min-height: calc(var(--u3-px) * 14); flex-shrink: 0; }
+.team-head .team-emblem { flex-shrink: 0; }
