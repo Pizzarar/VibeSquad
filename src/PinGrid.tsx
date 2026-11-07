@@ -791,6 +791,9 @@ export function SquadsHome({
   const maxOffset = Math.max(0, totalRows - SQUAD_ROWS);
   const offset = Math.min(rowOffset, maxOffset);
   const paged = totalRows > SQUAD_ROWS;
+  useEffect(() => {
+    if (rowOffset > maxOffset) setRowOffset(maxOffset);
+  }, [rowOffset, maxOffset]);
   const step = (d: number) => setRowOffset(Math.max(0, Math.min(maxOffset, offset + d)));
   const first = offset * cols;
   const slice = views.slice(first, first + SQUAD_ROWS * cols);
@@ -819,13 +822,13 @@ export function SquadsHome({
         </div>
         {paged && (
           <div className="squads-home-pager" data-testid="squads-home-pager" role="group" aria-label="Squad rows">
-            <button type="button" className="squads-pager-btn" data-testid="squads-pager-up" aria-label="Previous squad row" disabled={offset <= 0} onClick={() => step(-1)}>
+            <button type="button" className="squads-pager-btn" data-testid="squads-pager-up" aria-label="Previous squad row" aria-disabled={offset <= 0} onClick={() => step(-1)}>
               ▲
             </button>
             <span className="squads-pager-pos muted small" data-testid="squads-pager-pos">
               {offset + 1}–{Math.min(totalRows, offset + SQUAD_ROWS)} / {totalRows}
             </span>
-            <button type="button" className="squads-pager-btn" data-testid="squads-pager-down" aria-label="Next squad row" disabled={offset >= maxOffset} onClick={() => step(1)}>
+            <button type="button" className="squads-pager-btn" data-testid="squads-pager-down" aria-label="Next squad row" aria-disabled={offset >= maxOffset} onClick={() => step(1)}>
               ▼
             </button>
           </div>
