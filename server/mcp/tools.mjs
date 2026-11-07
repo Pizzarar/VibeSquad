@@ -202,7 +202,36 @@ async function spawnWorker(ctx, args = {}) {
     }),
   );
   const agent = agentOf(created);
-  return { id: agent?.id ?? created?.agentId ?? created?.id, title: agent?.title || title };
+  const result = { id: agent?.id ?? created?.agentId ?? created?.id, title: agent?.title || title };
+  const partnerName = !asLead && !args._duetPartner ? ART_DUET[labels.profile] : undefined;
+  if (partnerName) {
+    const partner = await spawnArtPartner(ctx, args, { partnerName, self: result, selfProfile: labels.profile, job: labels.job, lane: labels.lane });
+    if (partner) result.partner = partner;
+  }
+  return result;
+}
+
+// Art duet: spawning one half of Painter + Director starts the other (same job) unless that job already has a live partner.
+const ART_DUET = { "Art Painter - Opus": "Art Director - Gemini", "Art Director - Gemini": "Art Painter - Opus" };
+const ART_PAINTER = "Art Painter - Opus";
+
+async function spawnArtPartner(ctx, args, { partnerName, self, selfProfile, job, lane }) {
+  const live = await ctx.withBackend({ lane, requireRunner: true }, (b) => (b.fetchAgents ?? b.listAgents).call(b, {})).catch(() => null);
+  const dead = new Set(["closed", "error", "archived"]);
+  const taken = entriesOf(live).map((e) => e?.agent ?? e).some((a) => a && !a.archivedAt && !dead.has(a.status) && a.id !== self.id
+    && clean(a.labels?.profile) === partnerName && clean(a.labels?.job) === job && clean(a.labels?.lane).toLowerCase() === clean(lane).toLowerCase());
+  if (taken) return null;
+  const painterId = selfProfile === ART_PAINTER ? self.id : null;
+  const brief = clean(args.prompt ?? args.initialPrompt);
+  const prompt = painterId
+    ? `You are the Art Director in a Painter + Director duet. Your Painter is agent ${painterId}; it will send you gallery PNG paths via \`send\`. Reply with numbered fixes or PASS (max round 4).\n\nBrief:\n${brief}`
+    : `You are the Art Painter in a Painter + Director duet. Your Director is agent ${self.id}; send it each gallery PNG path via \`send\` and fix only its numbered items until PASS or round 4.\n\nBrief:\n${brief}`;
+  const p = await spawnWorker(ctx, { ...args, _duetPartner: true, profile: partnerName, prompt, title: `${partnerName} · ${job}`, labels: { ...(args.labels ?? {}), job } });
+  const msg = painterId
+    ? `Your Art Director is agent ${p.id}. Send it each gallery PNG via \`send\`.`
+    : `Your Art Painter is agent ${p.id}; it will send you gallery PNGs. Judge them and reply with numbered fixes or PASS.`;
+  await ctx.withBackend({ id: self.id }, (b) => b.sendAgentPrompt(self.id, msg, isRunnerCaller(ctx) && self.id.startsWith("rn-") ? { senderId: ctx.identity.agentId } : undefined)).catch(() => {});
+  return p.id;
 }
 
 async function sendTool(ctx, args = {}) {

@@ -90,7 +90,7 @@ const LEAD_NOTE_BODY = [
   "Blocked on an owner decision → flag it (needs-you label, one-line reason) and keep working on anything that doesn't depend on it. Don't wait in chat.",
   "Context management: at ~150k stop dispatching and write a handoff at the next good stopping point; VS auto-hands off at 250k, hard cap 300k. At handoff, delete your heartbeat; the new lead archives the old one once takeover is confirmed. Heartbeats only while waiting on a worker.",
   "Never read sweeps, long logs or raw worker output yourself. Send them to Audit - DSF, Scout - Flash or Pre-check - Flash and read only the result.",
-  "Routing: ambiguous work → Implement - Sonnet. Tier A invariant work → Implement - Opus. Clear file scope → Planner - Sonnet + Work Order - DSP. One-file or mechanical → Mechanical - DSF.",
+  "Routing: ambiguous work → Implement - Sonnet. Tier A invariant work → Implement - Opus. Clear file scope → Planner - Sonnet + Work Order - DSP. One-file or mechanical → Mechanical - DSF. Art work → Art Painter - Opus + Art Director - Gemini duet (spawning one starts the other).",
   "Review: Claude work → Review - Gemini (Tier A waits if Gemini is capped; Tier B falls back to Review - Sonnet unless Sonnet wrote it). Gemini work → Review - Sonnet. DeepSeek work → Review - Gemini; if capped, Check - Haiku, then Review - Sonnet only on a Haiku FAIL or doubt.",
   "Durable lane state & failover: keep `docs/lanes/<lane>/SPEC.md` and `TASKS.json` current (`vs spec @<lane>`, `vs task @<lane> list|add|done`), record root-cause lessons via `vs lesson add`, and check/set provider quota caps with `vs cap list|set|clear` (automatic failover routes Claude → Gemini → DeepSeek).",
   PRIOR_ART_CHECK_RULE,
