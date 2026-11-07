@@ -4612,7 +4612,8 @@ button.project-file-name:hover { text-decoration: underline; }
 .hub-body .agent-panes { grid-column: 1; grid-row: 1; min-height: 0; overflow: hidden; height: auto; }
 /* Sky-gods hub: the two bots chat in the sky zones, so the panes keep only their header here; any other
    agent opened on the hub lane (.hub-agent-open) takes the normal focus view and the sky steps aside. */
-.hub-body:not(.hub-agent-open) .agent-panes .pane-slot { display: none !important; }
+.hub-body:not(.hub-agent-open) .agent-panes .pane-slot,
+.hub-body:not(.hub-agent-open) .agent-panes .pin-focus-empty { display: none !important; }
 .hub-body.hub-agent-open .agent-panes { grid-row: 1 / span 2; height: 100%; }
 .hub-body .sq-panel { grid-column: 1; grid-row: 3; max-height: 22vh; overflow: auto; }
 /* Queue strip (G3): a row of chips in the clouds above the roof; empty = a thin cloud-height line. */
@@ -4649,7 +4650,7 @@ button.project-file-name:hover { text-decoration: underline; }
   grid-column: 1 / -1;
   grid-row: 4;
   min-height: 0;
-  max-height: 46vh;
+  max-height: 38vh;
   overflow: auto;
 }
 
@@ -4664,7 +4665,7 @@ button.project-file-name:hover { text-decoration: underline; }
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 18px;
-  min-height: 260px;
+  min-height: 360px;
   padding: 12px 18px 22px;
   overflow: hidden;
   position: relative;
