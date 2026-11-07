@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { delimiter, isAbsolute, join, resolve, sep } from "node:path";
 
 // Quick open (GET /__vibesquad/files) and find in files (GET /__vibesquad/search) for the Files dock.
@@ -7,7 +7,7 @@ import { delimiter, isAbsolute, join, resolve, sep } from "node:path";
 // installed), or `rg --json` when ripgrep is on PATH. Args are arrays, never a shell string.
 
 // These GETs expose file names / contents: owner-gated reads. Wire into isGatedRead (security S3) in one line.
-export const ADE_GATED_READ_PATHS = ["/__vibesquad/files", "/__vibesquad/search"];
+export const ADE_GATED_READ_PATHS = ["/__vibesquad/files", "/__vibesquad/search", "/__vibesquad/fs/list", "/__vibesquad/fs/read", "/__vibesquad/fs/resolve"];
 
 export const SEARCH_MAX_MATCHES = 500;
 export const SEARCH_MAX_LINE = 200;
@@ -281,4 +281,129 @@ export function handleSearch(req, res, roots, sendJson) {
     if (r.error) return sendJson(res, 400, { ok: false, error: r.error, engine: r.engine });
     return sendJson(res, 200, { ok: true, ...r });
   });
+}
+
+// ---- Files dock tree + read without the Paseo daemon -----------------------------------------
+// GET /__vibesquad/fs/list?cwd=&path= → { ok, entries[{name,path,kind,size?}] }
+// GET /__vibesquad/fs/read?cwd=&path=&max= → raw bytes (content-type by extension; x-vs-modified header)
+// Both are confined to the agent/team cwd: no absolute paths, no `..`, symlinks must resolve inside cwd.
+
+export const FS_READ_MAX = 25 * 1024 * 1024;
+const FS_MIME = {
+  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml",
+  ico: "image/x-icon", bmp: "image/bmp", pdf: "application/pdf", mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg",
+  mp4: "video/mp4", webm: "video/webm", json: "application/json", html: "text/html", md: "text/markdown",
+};
+export const fsMime = (p) => FS_MIME[(p.split(".").pop() ?? "").toLowerCase()] ?? "application/octet-stream";
+
+/** Repo-relative path → { rel } or { error, status }. Mirrors src/fileLinks.ts normalizeRepoPath. */
+export function normalizeRel(raw) {
+  const p = String(raw ?? "").replaceAll("\\", "/").replace(/^(\.\/)+/, "").replace(/\/+$/, "");
+  if (p.includes("\0")) return { error: "invalid path", status: 400 };
+  if (p.startsWith("/") || p.startsWith("~") || /^[A-Za-z]:/.test(p)) return { error: "path must be relative to the workspace", status: 400 };
+  if (p.split("/").some((s) => s === "..")) return { error: "path must not contain ..", status: 400 };
+  return { rel: p };
+}
+
+/** Real path of cwd/rel, only if it stays inside cwd (symlink-safe) and avoids .git. */
+export function resolveInCwd(cwd, rel) {
+  const n = normalizeRel(rel);
+  if (n.error) return n;
+  if (n.rel.split("/").some((s) => s.toLowerCase() === ".git")) return { error: "not found", status: 404 };
+  let real;
+  try {
+    real = realpathSync(join(cwd, n.rel));
+  } catch {
+    return { error: "not found", status: 404 };
+  }
+  if (!insideDir(real, cwd)) return { error: "path is outside the workspace", status: 403 };
+  return { rel: n.rel, real };
+}
+
+export function fsList(cwd, rel) {
+  const r = resolveInCwd(cwd, rel);
+  if (r.error) return r;
+  try {
+    if (!statSync(r.real).isDirectory()) return { error: "not a directory", status: 400 };
+    const entries = readdirSync(r.real, { withFileTypes: true })
+      .filter((d) => d.name.toLowerCase() !== ".git")
+      .map((d) => {
+        const path = r.rel ? `${r.rel}/${d.name}` : d.name;
+        let kind = d.isDirectory() ? "directory" : "file";
+        let size;
+        try {
+          const st = statSync(join(r.real, d.name));
+          if (st.isDirectory()) kind = "directory";
+          else size = st.size;
+        } catch { /* dangling link: list as file */ }
+        return { name: d.name, path, kind, ...(size !== undefined ? { size } : {}) };
+      })
+      .sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === "directory" ? -1 : 1));
+    return { entries };
+  } catch (e) {
+    return { error: String(e?.message ?? e), status: 500 };
+  }
+}
+
+export function fsRead(cwd, rel, max = FS_READ_MAX) {
+  const r = resolveInCwd(cwd, rel);
+  if (r.error) return r;
+  try {
+    const st = statSync(r.real);
+    if (!st.isFile()) return { error: "not a file", status: 400 };
+    if (st.size > max) return { error: `file too large (${st.size} bytes)`, status: 413, size: st.size };
+    return { bytes: readFileSync(r.real), size: st.size, modifiedAt: st.mtime.toISOString(), mime: fsMime(r.rel) };
+  } catch (e) {
+    return { error: String(e?.message ?? e), status: 500 };
+  }
+}
+
+export function handleFsList(req, res, roots, sendJson) {
+  if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+  const params = new URL(req.url, "http://x").searchParams;
+  const c = confineReq(params.get("cwd") ?? "", roots);
+  if (c.error) return sendJson(res, c.status ?? 400, { ok: false, error: c.error });
+  const r = fsList(c.cwd, params.get("path") ?? "");
+  if (r.error) return sendJson(res, r.status ?? 400, { ok: false, error: r.error });
+  return sendJson(res, 200, { ok: true, entries: r.entries });
+}
+
+export function handleFsRead(req, res, roots, sendJson) {
+  if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+  const params = new URL(req.url, "http://x").searchParams;
+  const c = confineReq(params.get("cwd") ?? "", roots);
+  if (c.error) return sendJson(res, c.status ?? 400, { ok: false, error: c.error });
+  const asked = Number(params.get("max"));
+  const r = fsRead(c.cwd, params.get("path") ?? "", Number.isFinite(asked) && asked > 0 ? Math.min(asked, FS_READ_MAX) : FS_READ_MAX);
+  if (r.error) return sendJson(res, r.status ?? 400, { ok: false, error: r.error, size: r.size });
+  res.statusCode = 200;
+  res.setHeader("content-type", r.mime);
+  res.setHeader("x-content-type-options", "nosniff");
+  // SVG/HTML served from our origin must not run script if opened directly.
+  res.setHeader("content-security-policy", "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'");
+  res.setHeader("cache-control", "no-store");
+  res.setHeader("x-vs-modified", r.modifiedAt);
+  res.setHeader("x-vs-size", String(r.size));
+  res.end(r.bytes);
+}
+
+/** Repo paths whose basename equals `name`; only an unambiguous single hit resolves. */
+export function resolveBareName(files, name) {
+  const want = String(name ?? "");
+  if (!want || /[\/]/.test(want)) return { path: null, count: 0 };
+  const hits = files.filter((f) => f === want || f.endsWith(`/${want}`));
+  return { path: hits.length === 1 ? hits[0] : null, count: hits.length };
+}
+
+/** GET ?agentId=&name= → { ok, path|null, count }. `cwdFor(agentId)` is the server-side agent cwd lookup. */
+export function handleFsResolve(req, res, cwdFor, sendJson) {
+  if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+  const params = new URL(req.url, "http://x").searchParams;
+  const cwd = cwdFor(params.get("agentId") ?? "");
+  if (!cwd) return sendJson(res, 404, { ok: false, error: "unknown agent" });
+  try {
+    return sendJson(res, 200, { ok: true, ...resolveBareName(listFiles(cwd).files, params.get("name") ?? "") });
+  } catch (e) {
+    return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) });
+  }
 }

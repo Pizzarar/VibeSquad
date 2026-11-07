@@ -17,7 +17,7 @@ import { resolveTeamsFilePath, resolveTeamsWritePath } from "./teams-file.mjs";
 import { seedHubBriefs } from "./hub-seed.mjs";
 import { resolveProjectPath } from "./brief-path.mjs";
 import { contentRevision, createWindowLimiter } from "./write-guards.mjs";
-import { ADE_GATED_READ_PATHS, handleFileList, handleSearch } from "./file-search.mjs";
+import { ADE_GATED_READ_PATHS, handleFileList, handleFsList, handleFsRead, handleFsResolve, handleSearch } from "./file-search.mjs";
 import { handleSecretInputRequest } from "./secret-input.mjs";
 import {
   LEGACY_NEEDS_LABEL,
@@ -1708,6 +1708,12 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return handleWorkspacePackageScripts(req, res, rootDir, opts);
       case "/__vibesquad/files":
         return handleFileList(req, res, navRoots(rootDir, opts), sendJson);
+      case "/__vibesquad/fs/list":
+        return handleFsList(req, res, navRoots(rootDir, opts), sendJson);
+      case "/__vibesquad/fs/resolve":
+        return handleFsResolve(req, res, (id) => (AGENT_ID_STRICT.test(String(id)) && lookupAgentCwd(id)) || rootDir, sendJson);
+      case "/__vibesquad/fs/read":
+        return handleFsRead(req, res, navRoots(rootDir, opts), sendJson);
       case "/__vibesquad/search":
         return handleSearch(req, res, navRoots(rootDir, opts), sendJson);
       case "/__vibesquad/secret-input":

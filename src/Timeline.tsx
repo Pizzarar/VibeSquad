@@ -17,7 +17,7 @@ import { openRightDockTab } from "./RightDock";
 import { listTimelinePrompts, searchTimeline, type TimelinePrompt } from "./paseoTimeline";
 import { perfEndPainted, perfSendEvent } from "./perf";
 import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, coalesceReplies, hasMoreOf, joinPages, markTurnBoundary, matchesFilter, localPrompts, localSearch, mergeLiveItem, maxEntrySeq, syncNeeded, latestReasoningIndex, reasoningText, sortedHits, stepIndex, type SearchLocation, type TimelineFilter } from "./timelineFilter";
-import { BARE_PATH_RE, parseFileToken } from "./fileLinks";
+import { BARE_NAME_RE, BARE_PATH_RE, bareNamesVersion, lookupBareName, parseFileToken, subscribeBareNames } from "./fileLinks";
 import { toolStartsExpanded, usePref } from "./prefs";
 import { getPanes } from "./panes";
 import { SubagentList } from "./SubagentList";
@@ -269,6 +269,8 @@ function renderInline(text: string, agentId?: string): React.ReactNode[] {
     { re: /(?<![`"'\w@.\/\x5c:#~-])([a-zA-Z0-9_.\-\/\x5c]+\.[a-zA-Z]{1,6})#L(\d+)(?:-L?\d+)?(?![a-zA-Z0-9_])/g, key: "filelink2" },
     // Bare repo path (dir/file.ext, dir/); validated by parseFileToken
     { re: BARE_PATH_RE, key: "barepath" },
+    // Bare filename (no folder): linked only when the repo has exactly one such file
+    { re: BARE_NAME_RE, key: "barename" },
   ];
 
   // Build a combined regex
@@ -296,7 +298,11 @@ function renderInline(text: string, agentId?: string): React.ReactNode[] {
       nodes.push(<strong key={keyIdx++}>{m[5]}</strong>);
     } else if (m[6] !== undefined) {
       // inline code
-      const tgt = parseFileToken(m[7], { backticked: true });
+      let tgt = parseFileToken(m[7], { backticked: true });
+      if (tgt && !tgt.isDir && !tgt.path.includes("/") && agentId) {
+        const hit = lookupBareName(agentId, tgt.path);
+        tgt = hit ? { ...tgt, path: hit } : null;
+      }
       nodes.push(
         tgt ? (
           <code key={keyIdx++} className="tl-icode tl-file-link" role="button" tabIndex={0}
@@ -321,6 +327,16 @@ function renderInline(text: string, agentId?: string): React.ReactNode[] {
             onClick={() => openFileTarget(tgt)}>{raw}</button>
         ) : (
           <span key={keyIdx++}>{raw}</span>
+        ),
+      );
+    } else if (m[19] !== undefined) {
+      const hit = lookupBareName(agentId, m[19]);
+      nodes.push(
+        hit ? (
+          <button key={keyIdx++} className="tl-file-link" data-testid="tl-file-link"
+            onClick={() => openFileTarget({ path: hit, line: null, isDir: false })}>{m[19]}</button>
+        ) : (
+          <span key={keyIdx++}>{m[19]}</span>
         ),
       );
     } else if (m[17] !== undefined) {
@@ -374,6 +390,7 @@ export function MarkdownRenderer({ text, agentId, doc = false }: { text: string;
   const liveSpinOff = useSpinOff(agentId ?? null);
   const liveSendTo = useSendTo(agentId ?? null);
   const liveLooksDoneId = useLooksDoneId(agentId ?? null);
+  useSyncExternalStore(subscribeBareNames, bareNamesVersion); // re-render when a bare filename resolves
   const tokens = tokenizeMarkdown(text, doc);
 
   const renderInlineWithImages = (t: string) => {
@@ -718,7 +735,7 @@ function onMessageClick(ev: React.MouseEvent<HTMLElement>, onSelect?: () => void
   const names: string[] = [];
   for (let n = ev.target as HTMLElement | null; n && n !== ev.currentTarget; n = n.parentElement) {
     names.push(n.tagName.toLowerCase());
-    if (n.classList?.contains("tl-actions") || n.classList?.contains("copy-btn")) names.push(".tl-actions");
+    if (n.classList?.contains("tl-actions") || n.classList?.contains("copy-btn") || n.classList?.contains("tl-file-link")) names.push(".tl-actions");
   }
   if (shouldSelectMessageOnClick(names, window.getSelection()?.toString() ?? "")) onSelect();
 }
