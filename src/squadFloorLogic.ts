@@ -467,8 +467,8 @@ export type FacesModel = {
   fps: number;
   /** Frame counts come from the json, never hardcoded. */
   bots: Partial<Record<FaceBot, Partial<Record<FaceMode, Frame[]>>>>;
-  /** Optional per-bot gutter colour (`<bot>.bg`, a CSS colour string); only valid values are kept. */
-  bg?: Partial<Record<FaceBot, string>>;
+  /** Optional per-bot, per-theme gutter colour (`<bot>.bg = {dark, light}`); kept only when both keys are valid colours. */
+  bg?: Partial<Record<FaceBot, { dark: string; light: string }>>;
 };
 
 /** Conservative CSS colour check (hex, rgb[a]/hsl[a](...), or a plain keyword); nothing that could carry url()/var()/;. */
@@ -499,7 +499,8 @@ export function validateFaces(json: unknown): Validation<FacesModel> {
     }
     if (!modes.idle) return fail(`faces.json ${bot} needs an idle face`);
     bots[bot] = modes;
-    if (isCssColor(raw.bg)) bg[bot] = raw.bg; // invalid → ignored, the theme variable stays
+    // Only {dark, light} with both valid; anything else (a plain string, one key, a bad colour) → the whole field is ignored, the CSS variable stays.
+    if (isObject(raw.bg) && isCssColor(raw.bg.dark) && isCssColor(raw.bg.light)) bg[bot] = { dark: raw.bg.dark, light: raw.bg.light };
   }
   if (!bots.riffbot && !bots.overlord) return fail("faces.json has neither riffbot nor overlord");
   return { ok: true, value: { cell, fps, bots, ...(Object.keys(bg).length ? { bg } : null) } };

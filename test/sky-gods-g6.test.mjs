@@ -42,12 +42,12 @@ test("RiffBot active (focused or talking) never expands Riff over the Overlord",
   assert.ok(l.widths.riffbot <= l.widths.overlord);
 });
 
-test("faceContain: integer scale, the whole cell always fits the box (never cropped), centred with whole-px offsets", () => {
+test("faceContain: integer scale, whole cell fits (never cropped), centred sideways, anchored to the bottom", () => {
   const cell = { w: 48, h: 48 };
-  assert.deepEqual(faceContain(cell, { w: 700, h: 400 }), { k: 8, left: 158, top: 8 }); // wide box: height decides, gutters left/right
-  assert.deepEqual(faceContain(cell, { w: 200, h: 500 }), { k: 4, left: 4, top: 154 }); // tall box: width decides, gutters top/bottom
+  assert.deepEqual(faceContain(cell, { w: 700, h: 400 }), { k: 8, left: 158, top: 16 }); // wide box: height decides, side gutters, slack (16) at the top
+  assert.deepEqual(faceContain(cell, { w: 200, h: 500 }), { k: 4, left: 4, top: 308 }); // squeezed/tall: width decides, the gap is at the TOP only
   assert.deepEqual(faceContain(cell, { w: 480, h: 480 }), { k: 10, left: 0, top: 0 }); // square
-  assert.deepEqual(faceContain({ w: 128, h: 96 }, { w: 500, h: 300 }), { k: 3, left: 58, top: 6 }); // cell from faces.json, never hardcoded
+  assert.deepEqual(faceContain({ w: 128, h: 96 }, { w: 500, h: 300 }), { k: 3, left: 58, top: 12 }); // cell from faces.json, never hardcoded
   assert.equal(faceContain(cell, { w: 0, h: 0 }).k, 0); // not measured yet
   assert.equal(faceContain(cell, { w: 30, h: 30 }).k, 1); // smaller than one cell: min 1 (the only crop case)
   for (const box of [{ w: 700, h: 400 }, { w: 200, h: 500 }, { w: 560, h: 497 }, { w: 1306, h: 497 }, { w: 96, h: 96 }, { w: 143, h: 400 }]) {
@@ -55,6 +55,22 @@ test("faceContain: integer scale, the whole cell always fits the box (never crop
     assert.ok(Number.isInteger(c.k) && Number.isInteger(c.left) && Number.isInteger(c.top));
     assert.ok(c.left >= 0 && c.top >= 0 && c.left + cell.w * c.k <= box.w && c.top + cell.h * c.k <= box.h, `face fits inside ${JSON.stringify(box)}`);
   }
+});
+
+test("faceContain bottom anchoring: the face's bottom edge is the box's bottom edge, never a gap below", () => {
+  const cell = { w: 48, h: 48 };
+  for (const box of [{ w: 700, h: 400 }, { w: 1306, h: 497 }, { w: 560, h: 497 }, { w: 368, h: 497 }, { w: 216, h: 497 }, { w: 143, h: 400 }, { w: 480, h: 481 }, { w: 481, h: 999 }]) {
+    const c = faceContain(cell, box);
+    assert.equal(c.top + cell.h * c.k, box.h, `no gap below at ${JSON.stringify(box)}`);
+  }
+  // Height-driven (normal) case: the slack at the top is under one scale step.
+  const c = faceContain(cell, { w: 1306, h: 497 });
+  assert.ok(c.top >= 0 && c.top < cell.h);
+  // Width-forced (squeezed Riff): the gap goes to the top, larger than a step, still nothing below.
+  const sq = faceContain(cell, { w: 100, h: 497 });
+  assert.equal(sq.k, 2);
+  assert.ok(sq.top > cell.h);
+  assert.equal(sq.top + cell.h * sq.k, 497);
 });
 
 // ── faces.json `scared` ──
@@ -115,22 +131,35 @@ test("a11y: squeezed Riff is tabbable, labelled, and Enter/Space/focus hand the 
 });
 
 // ── G6-fix2: gutter colour + Riff's minimum strip ──
-test("faces.json bg: kept when a valid CSS colour, ignored when invalid, absent → null (the --sky-face-bg-* variable)", () => {
-  const withBg = validateFaces({ ...faces(), riffbot: { idle: frames(0), bg: "#2a1b6b" }, overlord: { idle: frames(0), bg: "rgb(20, 30, 40)" } });
-  assert.equal(withBg.ok, true);
-  assert.equal(faceBg(withBg.value, "riffbot"), "#2a1b6b");
-  assert.equal(faceBg(withBg.value, "overlord"), "rgb(20, 30, 40)");
-  for (const bad of ["url(x)", "red; x:y", "var(--a)", 5, "", "#12", "rgb(1,2", null, {}]) {
-    const v = validateFaces({ ...faces(), riffbot: { idle: frames(0), bg: bad } });
-    assert.equal(v.ok, true, `invalid bg ${JSON.stringify(bad)} must not reject the file`);
-    assert.equal(faceBg(v.value, "riffbot"), null);
+test("faces.json bg: {dark, light} per bot, both valid → used per theme; any other shape → whole field ignored (CSS variable)", () => {
+  const bg = { dark: "#2a1b6b", light: "#95d3f2" };
+  const ok = validateFaces({ ...faces(), riffbot: { idle: frames(0), bg }, overlord: { idle: frames(0), bg: { dark: "rgb(20, 30, 40)", light: "#fff" } } });
+  assert.equal(ok.ok, true);
+  assert.equal(faceBg(ok.value, "riffbot", "dark"), "#2a1b6b");
+  assert.equal(faceBg(ok.value, "riffbot", "light"), "#95d3f2");
+  assert.equal(faceBg(ok.value, "overlord", "dark"), "rgb(20, 30, 40)");
+  assert.equal(faceBg(ok.value, "overlord", "light"), "#fff");
+  const bad = [
+    "#2a1b6b", // the old plain-string form is dropped
+    { dark: "#2a1b6b" }, // a key missing
+    { light: "#95d3f2" },
+    { dark: "#2a1b6b", light: "url(x)" }, // one invalid → the whole field is invalid
+    { dark: "red; x:y", light: "#95d3f2" },
+    { dark: 5, light: "#95d3f2" },
+    { dark: "#12", light: "#95d3f2" },
+    {}, [], null, 5,
+  ];
+  for (const b of bad) {
+    const v = validateFaces({ ...faces(), riffbot: { idle: frames(0), bg: b } });
+    assert.equal(v.ok, true, `invalid bg ${JSON.stringify(b)} must not reject the file`);
+    for (const t of ["dark", "light"]) assert.equal(faceBg(v.value, "riffbot", t), null);
   }
-  assert.equal(faceBg(validateFaces(faces()).value, "riffbot"), null);
-  assert.equal(faceBg(null, "riffbot"), null);
+  assert.equal(faceBg(validateFaces(faces()).value, "riffbot", "dark"), null);
+  assert.equal(faceBg(null, "riffbot", "light"), null);
   const css = src("styles.css");
   assert.ok(/--sky-face-bg-dark: #[0-9a-f]{6}/i.test(css) && /--sky-face-bg-light: #[0-9a-f]{6}/i.test(css));
   assert.ok(css.includes("var(--sky-face-bg-custom, var(--sky-face-bg-dark))"));
-  assert.ok(src("SkyZones.tsx").includes("--sky-face-bg-custom"));
+  assert.ok(src("SkyZones.tsx").includes("--sky-face-bg-custom") && src("SkyZones.tsx").includes("faceBg(faces, zone.bot, theme)"));
 });
 
 test("Riff's squeezed strip keeps two whole cells + bezel; at a 1280 hub the scared face is still scale >= 2", () => {

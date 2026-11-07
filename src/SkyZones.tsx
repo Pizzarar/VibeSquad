@@ -30,7 +30,7 @@ function ZoneFace({ zone, faces, force }: { zone: SkyZone; faces: ReturnType<typ
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  const bg = faceBg(faces, zone.bot);
+  const bg = faceBg(faces, zone.bot, theme);
   const { k, left, top } = faceContain(cell, box);
   return (
     <span ref={stage} className="sky-face-stage" aria-hidden="true" style={bg ? ({ ["--sky-face-bg-custom" as string]: bg } as React.CSSProperties) : undefined}>
