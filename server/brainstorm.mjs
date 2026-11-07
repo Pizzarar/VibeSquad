@@ -672,9 +672,9 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
         if (reopened) {
           let refreshFailure = null;
           const refreshed = await backend.refreshAgent(existing.id).catch((e) => {
-            // 409 = the owner says it can't be resumed: replace. Anything else (agent cap, runner down, IPC) leaves a
+            // 409, or any throw from a Paseo id (it throws plain Errors for a gone session): replace. A runner (rn-) failure (agent cap, runner down, IPC) leaves a
             // resumable Buddy alone: report the error rather than spawn a second one.
-            if (e?.status === 409) {
+            if (e?.status === 409 || !String(existing.id).startsWith("rn-")) {
               reopenFailed = true;
               console.warn(`[vibesquad] reopen ${existing.id} not resumable: ${e?.message ?? e}; spawning a replacement`);
             } else refreshFailure = e;
