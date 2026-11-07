@@ -332,7 +332,7 @@ export class RunnerBackend {
     Object.defineProperty(this, "whosHere", { value: whosHere });
     Object.defineProperty(this, "rootDir", { value: rootDir });
     Object.defineProperty(this, "listeners", { value: new Set() });
-    Object.defineProperty(this, "live", { value: { stream: null, chain: Promise.resolve(), turn: new Map(), gen: 0, retry: { timer: null, n: 0 }, hwm: null, known: new Map(), archived: new Set(), emitted: new WeakSet() } });
+    Object.defineProperty(this, "live", { value: { stream: null, chain: Promise.resolve(), turn: new Map(), gen: 0, retry: { timer: null, n: 0 }, seedTimers: new Map(), seeded: new Set(), hwm: null, known: new Map(), archived: new Set(), emitted: new WeakSet() } });
     // Paseo-side agents of the same lanes, set by the RoutingBackend so a Who's here refresh sees the whole lane.
     Object.defineProperty(this, "siblings", { value: { list: null } });
     Object.defineProperty(this, "lanes", { value: lanes });
@@ -667,11 +667,17 @@ export class RunnerBackend {
     this.enqueue((gen) => this.seedListener(listener, gen));
     return () => {
       this.listeners.delete(listener);
+      clearTimeout(this.live.seedTimers.get(listener));
+      this.live.seedTimers.delete(listener);
+      this.live.seeded.delete(listener);
       if (!this.listeners.size && this.live.stream) {
         this.live.stream.close();
         this.live.stream = null;
         clearTimeout(this.live.retry.timer);
         this.live.retry.n = 0;
+        for (const t of this.live.seedTimers.values()) clearTimeout(t);
+        this.live.seedTimers.clear();
+        this.live.seeded.clear();
         this.live.gen++; // work already queued on the chain belongs to the closed stream: drop its results
         this.live.turn.clear();
       }
@@ -701,17 +707,29 @@ export class RunnerBackend {
     return this.live.turn.get(agent.id)?.errored && agent.status !== "running" ? { ...agent, status: "error" } : agent;
   }
 
-  /** Initial roster for one new listener (the stream's shared status map is seeded by seedRoster on open). */
-  async seedListener(listener, gen) {
+  /** Initial roster for one new listener (the stream's shared status map is seeded by seedRoster on open).
+   *  A failed first fetch is retried for this listener alone (1s..10s backoff) until it gets roster + connected; leaving or a gen change cancels it. */
+  async seedListener(listener, gen, attempt = 0) {
     let agents;
     try { agents = await bounded(this.listAgents()); } catch { agents = null; }
-    if (gen !== this.live.gen || !this.listeners.has(listener)) return;
+    if (gen !== this.live.gen || !this.listeners.has(listener) || this.live.seeded.has(listener)) return; // seedRoster may have seeded it meanwhile
+    if (agents) this.live.seeded.add(listener);
     try {
       if (agents) {
         listener({ kind: "roster", agents: agents.map((a) => this.overlay(a)) });
         listener({ kind: "connected" });
       } else listener({ kind: "disconnected" });
     } catch { /* a bad listener must not stop the chain */ }
+    if (agents) return;
+    const base = this.live.retry.base ?? SEED_RETRY_BASE_MS; // tests shrink it
+    const delay = Math.min(this.live.retry.base ? base * 8 : SEED_RETRY_MAX_MS, base * 2 ** attempt);
+    clearTimeout(this.live.seedTimers.get(listener));
+    const t = setTimeout(() => {
+      this.live.seedTimers.delete(listener);
+      if (gen === this.live.gen && this.listeners.has(listener) && !this.live.seeded.has(listener)) this.enqueue((g) => this.seedListener(listener, g, attempt + 1));
+    }, delay);
+    t.unref?.();
+    this.live.seedTimers.set(listener, t);
   }
 
   /** On (re)connect: remember every agent's status (so the first transition after it is detected) and publish the full roster. */
@@ -739,6 +757,9 @@ export class RunnerBackend {
       }
       this.live.turn = next;
     } else for (const a of agents) this.live.known.set(a.id, a);
+    for (const t of this.live.seedTimers.values()) clearTimeout(t); // every listener gets this roster: their own retries are moot
+    this.live.seedTimers.clear();
+    for (const l of this.listeners) this.live.seeded.add(l);
     this.emitEvent({ kind: "roster", agents: agents.map((a) => this.overlay(a)) });
     this.emitEvent({ kind: "connected" });
     if (recs) await this.catchUp(gen, recs);
