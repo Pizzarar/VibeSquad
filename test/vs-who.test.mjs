@@ -686,3 +686,37 @@ test("Fix 1b: vs install-shim --bin-dir <tempDir> creates vs, vs.cmd, vs.ps1 + r
     env.cleanup();
   }
 });
+
+test("vs who uses runner liveness, not the last log event: a lead the restarted runner lost is closed, not live (CONFLICT fix)", () => {
+  const env = makeMockEnv();
+  try {
+    const agentsDir = join(env.vsHome, "runner", "agents");
+    mkdirSync(agentsDir, { recursive: true });
+    const labels = { team: "vibesquad", lane: "vibesquad", role: "lead" };
+    const writeRunnerAgent = (id, ts, lastStatus) =>
+      writeFileSync(
+        join(agentsDir, `${id}.jsonl`),
+        [
+          { seq: 0, ts, type: "created", provider: "claude", model: "m", cwd: REPO_ROOT, meta: { title: "★ VIBESQUAD lead", ...labels } },
+          { seq: 1, ts, type: "status", status: lastStatus },
+        ].map((e) => JSON.stringify(e)).join("\n") + "\n",
+      );
+    const now = Date.now();
+    writeRunnerAgent("rn-lost0000001", now - 60_000, "idle"); // last event predates the runner start: its child died
+    writeRunnerAgent("rn-live0000001", now + 1_000, "idle");
+    writeFileSync(join(env.vsHome, "runner", "runner.json"), JSON.stringify({ port: 1, pid: process.pid, startedAt: now }));
+
+    const args = ["who", "lead", "--team", "vibesquad", "--lane", "vibesquad", "--json"];
+    const res = env.runVs(args);
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    const ids = JSON.parse(res.stdout).entries.map((e) => e.id);
+    assert.deepEqual(ids, ["rn-live0000001"]);
+
+    // A dead runner process owns no children at all.
+    writeFileSync(join(env.vsHome, "runner", "runner.json"), JSON.stringify({ port: 1, pid: 2 ** 22 - 3, startedAt: now - 120_000 }));
+    const dead = env.runVs(args);
+    assert.equal(dead.status, 1, dead.stdout + dead.stderr);
+  } finally {
+    env.cleanup();
+  }
+});

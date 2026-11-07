@@ -11,7 +11,7 @@ import { getPaseoState, subscribePaseo } from "./paseo";
 import { openPin } from "./PinGrid";
 import { isLiveUrlAgent, levelUp, loadSavedFocus, planRestore, reconcilePinFocus, saveFocus, startsOnGrid } from "./pinFocusLogic";
 import { getRestoreLastView } from "./prefs";
-import { hubPinForSquad, liveBuddyId, pinsForSquad, type Pin } from "./pins";
+import { dormantBuddyId, hubPinForSquad, liveBuddyId, pinsForSquad, type Pin } from "./pins";
 import { subscribeTeams } from "./teams";
 import { derived, subscribeTree } from "./ui";
 
@@ -115,14 +115,16 @@ function reconcile() {
   const f = state.focus;
   if (!f || reconciling) return;
   const pin = focusedPin(f);
-  const d = reconcilePinFocus(f, pin ? liveBuddyId(pin) : null, active, laneMemberIdsOf(pin));
+  const liveId = pin ? liveBuddyId(pin) : null;
+  const d = reconcilePinFocus(f, liveId ?? (pin ? dormantBuddyId(pin) : null), active, laneMemberIdsOf(pin));
   if (d.kind === "keep") return;
   reconciling = true;
   try {
     if (d.kind === "exit") set({ focus: null });
     else if (d.kind === "gone") set({ focus: { ...f, agentId: null, gone: true, held: active } });
     else {
-      set({ focus: { ...f, agentId: d.agentId, gone: false, held: null } });
+      // A closed Buddy is followed with the Spin Up picker still shown above its history.
+      set({ focus: { ...f, agentId: d.agentId, gone: !liveId, held: null } });
       if (d.open) show(d.agentId);
     }
   } finally {
@@ -141,6 +143,19 @@ subscribeTeams(reconcile);
 export async function focusPin(pin: Pin): Promise<string | null> {
   // Dormant pin (no Buddy, or only a closed one): never auto-spawn. Show the Spin Up profile picker instead.
   const live = liveBuddyId(pin);
+  const dormant = live ? null : dormantBuddyId(pin);
+  if (dormant) {
+    // Closed/lost Buddy with history: open it read-only and keep the picker above it. Never auto-spawn or resume.
+    set({
+      focus: { squadId: pin.squad.id, laneId: pin.lane.id, agentId: dormant, gone: true, held: null, seq: ++seq, spinUpError: null },
+      home: false,
+      homeActive: null,
+      squadsHome: false,
+      spinUpError: null,
+    });
+    show(dormant);
+    return dormant;
+  }
   if (!live) {
     set({
       focus: { squadId: pin.squad.id, laneId: pin.lane.id, agentId: null, gone: true, held: getPanes().leftActiveId, seq: ++seq, spinUpError: null },

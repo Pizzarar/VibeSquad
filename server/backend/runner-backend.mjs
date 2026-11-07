@@ -72,6 +72,21 @@ export function toAgent(rec) {
 }
 
 /**
+ * Liveness of the runner process that owns a home: { alive, startedAt } from <home>/runner.json, or null when no
+ * runner ever wrote one (then nothing can be said and the log status stands).
+ */
+function runnerLiveness(home) {
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(home, "runner.json"), "utf8"));
+    let alive = true;
+    try { process.kill(j.pid, 0); } catch (e) { alive = e?.code === "EPERM"; }
+    return { alive, startedAt: Number.isFinite(j.startedAt) ? j.startedAt : 0 };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Synchronous, read-only view of a runner agent straight from its JSONL log (<runner home>/agents/<id>.jsonl).
  * For callers that cannot await the HTTP API (vs log identity, vs who). Returns the toAgent() snapshot or null.
  */
@@ -105,6 +120,12 @@ export function readRunnerAgentSync(id, { env = process.env, home } = {}) {
     else if (e.type === "permission") { if (e.phase === "request") perms.set(e.id, { id: e.id, toolName: e.toolName }); else perms.delete(e.id); }
   }
   if (!created) return null;
+  // The log's last status is not liveness (runner/runner.mjs summary: "log says running but no child in this process").
+  // A non-parked agent whose last event predates the running runner's start, or whose runner is dead, has no child: lost.
+  if (!exited && status !== "parked") {
+    const rl = runnerLiveness(home ?? runnerHome(env));
+    if (rl && (!rl.alive || (last?.ts ?? 0) < rl.startedAt)) status = "lost";
+  }
   return toAgent({
     id, provider: created.provider, model: created.model, cwd: created.cwd, meta,
     status: exited ? "exited" : status, createdAt: created.ts, updatedAt: last?.ts, archivedAt,

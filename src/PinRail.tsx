@@ -279,18 +279,10 @@ export function PinFocusHeader(props: {
   useEffect(() => {
     setSelectedProfile(pin?.lane?.lastProfile || getLastBrainstormProfile(DEFAULT_PIN_PROFILE));
   }, [pinKey, pin?.lane?.lastProfile]);
-  return (
-    <>
-      {belowBar ? (
-        <div className="pin-focus-head">
-          <PinFocusBar view={view} focus={focus} onSelectSquad={onSelectSquad} />
-          {belowBar}
-        </div>
-      ) : (
-        <PinFocusBar view={view} focus={focus} onSelectSquad={onSelectSquad} />
-      )}
-      {!focus.agentId && (
-        <div className="pin-focus-empty" data-testid="pin-focus-empty">
+  // A closed Buddy with history: the history shows in the drawer below, the picker sits above it in the header cell.
+  const history = !!focus.agentId && focus.gone;
+  const panel = (
+    <div className={"pin-focus-empty" + (history ? " has-history" : "")} data-testid="pin-focus-empty">
           {spinUpError && (
             <div className="pin-focus-spinup-error" role="alert" data-testid="pin-spin-up-error">
               {spinUpError}
@@ -299,7 +291,9 @@ export function PinFocusHeader(props: {
           {focus.gone ? (
             <>
               <span className="muted">
-                {pin && isHubPin(pin)
+                {focus.agentId
+                  ? "This chat is closed. Its history is below (read-only). Spin Up resumes it."
+                  : pin && isHubPin(pin)
                   ? "RiffBot has no active chat yet. Click Spin Up when you want to start a session."
                   : `${pin?.lane.name ?? "This team"} has no active Brainstorm chat yet. Click Spin Up when you want to start a session from the brief.`}
               </span>
@@ -344,8 +338,20 @@ export function PinFocusHeader(props: {
               />
             </div>
           )}
+    </div>
+  );
+  return (
+    <>
+      {belowBar || history ? (
+        <div className="pin-focus-head">
+          <PinFocusBar view={view} focus={focus} onSelectSquad={onSelectSquad} />
+          {belowBar}
+          {history && panel}
         </div>
+      ) : (
+        <PinFocusBar view={view} focus={focus} onSelectSquad={onSelectSquad} />
       )}
+      {!focus.agentId && panel}
     </>
   );
 }

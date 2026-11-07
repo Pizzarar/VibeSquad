@@ -66,7 +66,7 @@ test("focusPin hands a Buddy-less or closed pin to spinUpPin; spinUpPin calls op
 
 test("closed Buddy is dormant everywhere a pin is opened: reconcile, restore, grid click", () => {
   const pf = fs.readFileSync(new URL("../src/pinFocus.ts", import.meta.url), "utf8");
-  assert.ok(pf.includes("reconcilePinFocus(f, pin ? liveBuddyId(pin) : null"), "reconcile ignores a closed Buddy");
+  assert.ok(pf.includes("reconcilePinFocus(f, liveId ?? (pin ? dormantBuddyId(pin) : null)"), "reconcile follows a closed Buddy as dormant, never as live");
   assert.ok(pf.includes("pinBrainstorm: pin ? liveBuddyId(pin) : undefined"), "tryRestore ignores a closed Buddy");
   const grid = fs.readFileSync(new URL("../src/PinGrid.tsx", import.meta.url), "utf8");
   const m = grid.slice(grid.indexOf("export function openPinOr"), grid.indexOf("// ── Context meter"));
@@ -184,4 +184,25 @@ test("U5: Lead click in PinTeamTree opens the Lead in pin focus instead of FULL 
   assert.doesNotMatch(treeFn, /setFullView/);
   assert.deepEqual(pr.match(/setFullView/g), ["setFullView", "setFullView"], "PinRail only uses setFullView for PinMenu onShowPlumbing");
   assert.match(pr, /onShowPlumbing=\{\(\) => \{\s*exitPinFocus\(\);\s*setFullView\(true\);\s*\}\}/);
+});
+
+test("a closed/lost Buddy with history opens read-only under the Spin Up picker; a Buddy-less pin keeps the bare picker", async () => {
+  const { dormantBuddyId, liveBuddyId } = await import("../src/pins.ts");
+  const pin = (agent) => ({ brainstorm: agent ? { agent } : null });
+  const lost = { id: "rn-c41d9353a536", status: "closed", archivedAt: null };
+  assert.equal(dormantBuddyId(pin(lost)), "rn-c41d9353a536");
+  assert.equal(liveBuddyId(pin(lost)), null, "still not live: no auto-resume, no composer focus");
+  assert.equal(dormantBuddyId(pin({ ...lost, status: "idle" })), null, "a live Buddy is not dormant");
+  assert.equal(dormantBuddyId(pin({ ...lost, archivedAt: "2026-11-06T00:00:00Z" })), null, "archived is gone, not history");
+  assert.equal(dormantBuddyId(pin(null)), null, "truly dormant pin (no agent id) keeps today's picker");
+
+  const pf = fs.readFileSync(new URL("../src/pinFocus.ts", import.meta.url), "utf8");
+  const fp = pf.match(/export async function focusPin\b[\s\S]*?\n\}/)[0];
+  assert.match(fp, /const dormant = live \? null : dormantBuddyId\(pin\)/);
+  assert.match(fp, /agentId: dormant, gone: true/, "focus the closed Buddy with the picker still up");
+  assert.match(fp, /show\(dormant\)/, "its history opens in the middle");
+  assert.doesNotMatch(fp.slice(fp.indexOf("if (dormant)"), fp.indexOf("if (!live)")), /spinUpPin|openPin\(|focusComposerSoon/, "never auto-spawns or resumes");
+  const rail = fs.readFileSync(new URL("../src/PinRail.tsx", import.meta.url), "utf8");
+  assert.match(rail, /const history = !!focus\.agentId && focus\.gone;/, "picker renders above the history");
+  assert.match(rail, /\{history && panel\}/);
 });
