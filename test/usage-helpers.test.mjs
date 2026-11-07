@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildProfiles, buildRows, dur, etaText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, workIdlePct } from "../src/usageHelpers.ts";
+import { buildProfiles, buildRows, dur, etaText, foldRoles, pctText, relTime, reviewBullets, sortProfiles, sortRows, splitBullets, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, workIdlePct } from "../src/usageHelpers.ts";
 
 const st = (turns, costUsd, i, o) => ({ turns, costUsd, inputTokens: i, outputTokens: o, avgTokensPerTurn: turns ? Math.round((i + o) / turns) : 0 });
 
@@ -149,4 +149,48 @@ test("buildProfiles + sortProfiles: implementers first by mergedUnits desc, work
   const sonnet = sorted[1];
   assert.equal(sonnet.workPct, 0.75);
   assert.equal(sonnet.fixRate, 0.5);
+});
+
+// ---- usa-8: usage review section helpers
+
+test("usageReviewStatus: off / waiting for new turns / never reviewed / last reviewed · next in / due", () => {
+  const now = 1_000_000_000_000;
+  const base = { interval: "1d", inFlight: false, last: null, nextAt: null, waitingForTurns: false, history: [] };
+  assert.equal(usageReviewStatus({ ...base, interval: "off" }, now), "off");
+  assert.equal(usageReviewStatus({ ...base, waitingForTurns: true }, now), "waiting for new turns");
+  assert.equal(usageReviewStatus(base, now), "never reviewed");
+  assert.equal(usageReviewStatus(null, now), "");
+  const last = {
+    at: new Date(now - 90 * 60_000).toISOString(),
+    trigger: "scheduled",
+    interval: "1d",
+    turnsAtRun: 5,
+    opus: { ok: true, text: "a" },
+    gemini: { ok: true, text: "b" },
+  };
+  const nextAt = new Date(now + 6 * 3600_000).toISOString();
+  assert.equal(usageReviewStatus({ ...base, last, nextAt }, now), "last reviewed 1h 30m ago · next in 6.0h");
+  assert.equal(usageReviewStatus({ ...base, last, nextAt: new Date(now - 1000).toISOString() }, now), "last reviewed 1h 30m ago · due");
+});
+
+test("splitBullets: strips -/*/• markers and numbered lines, drops blanks", () => {
+  assert.deepEqual(splitBullets("- routing tip\n- handoff idea\n\n* tool friction\n3. cycle time"), ["routing tip", "handoff idea", "tool friction", "cycle time"]);
+  assert.deepEqual(splitBullets("  1) first\n2) second"), ["first", "second"]);
+  assert.deepEqual(splitBullets(null), []);
+  assert.deepEqual(splitBullets(""), []);
+});
+
+test("reviewBullets: empty / error / ok states", () => {
+  assert.deepEqual(reviewBullets(null), []);
+  assert.deepEqual(reviewBullets(undefined), []);
+  assert.deepEqual(reviewBullets({ ok: false, error: "boom" }), ["error: boom"]);
+  assert.deepEqual(reviewBullets({ ok: false }), ["error: review failed"]);
+  assert.deepEqual(reviewBullets({ ok: true, text: "- a\n- b" }), ["a", "b"]);
+});
+
+test("USAGE_REVIEW_INTERVALS / LABELS: the 7 options in select order", () => {
+  assert.deepEqual([...USAGE_REVIEW_INTERVALS], ["off", "6h", "12h", "1d", "3d", "5d", "2w"]);
+  assert.equal(USAGE_REVIEW_LABELS.off, "Off");
+  assert.equal(USAGE_REVIEW_LABELS["6h"], "6h");
+  assert.equal(USAGE_REVIEW_LABELS["2w"], "2w");
 });

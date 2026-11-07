@@ -81,6 +81,7 @@ export type UsageData = {
   loops?: { threshold: number; flagged: LoopRow[] };
   byProfile?: ProfileRow[];
   spawnStorms?: SpawnStorm[];
+  usageReview?: UsageReview;
 };
 
 export function relTime(ms: number, now: number): string {
@@ -241,4 +242,60 @@ export function sortProfiles(rows: ProfileView[]): ProfileView[] {
     if (b.mergedUnits !== a.mergedUnits) return b.mergedUnits - a.mergedUnits;
     return a.profile.localeCompare(b.profile) || a.provider.localeCompare(b.provider);
   });
+}
+
+// ---- usa-8: Opus & Gemini usage review section
+
+export type ReviewResult = { ok: boolean; text?: string; error?: string; ms?: number };
+export type UsageReviewRecord = {
+  at: string;
+  trigger: string;
+  interval: string;
+  turnsAtRun: number;
+  opus: ReviewResult;
+  gemini: ReviewResult;
+};
+export type UsageReview = {
+  interval: string;
+  inFlight: boolean;
+  last: UsageReviewRecord | null;
+  nextAt: string | null;
+  waitingForTurns: boolean;
+  history: UsageReviewRecord[];
+};
+
+export const USAGE_REVIEW_INTERVALS = ["off", "6h", "12h", "1d", "3d", "5d", "2w"] as const;
+export type UsageReviewInterval = (typeof USAGE_REVIEW_INTERVALS)[number];
+export const USAGE_REVIEW_LABELS: Record<UsageReviewInterval, string> = {
+  off: "Off", "6h": "6h", "12h": "12h", "1d": "1d", "3d": "3d", "5d": "5d", "2w": "2w",
+};
+
+/** Status line for the review section: `off`, `waiting for new turns`, `never reviewed`, or `last reviewed … · next in …` / `… · due`. */
+export function usageReviewStatus(r: UsageReview | null | undefined, now: number): string {
+  if (!r) return "";
+  if (r.interval === "off") return "off";
+  if (r.waitingForTurns) return "waiting for new turns";
+  if (!r.last) return "never reviewed";
+  const parts = [`last reviewed ${relTime(Date.parse(r.last.at), now)}`];
+  if (r.nextAt) {
+    const next = Date.parse(r.nextAt);
+    if (Number.isFinite(next)) parts.push(next <= now ? "due" : `next in ${dur(next - now)}`);
+  }
+  return parts.join(" · ");
+}
+
+/** Split a model's free-text brief into display lines, stripping common bullet markers and blank lines. */
+export function splitBullets(text: string | null | undefined): string[] {
+  if (!text) return [];
+  return text
+    .split(/\r?\n/)
+    .map((l) => l.replace(/^\s*(?:[-*•·]\s*|\d+[.)]\s*)/, "").trim())
+    .filter(Boolean);
+}
+
+/** Lines to render for one model's last review: `[]` empty, `["error: …"]` when it failed, else the split bullets. */
+export function reviewBullets(result: ReviewResult | null | undefined): string[] {
+  if (!result) return [];
+  if (!result.ok) return [result.error ? `error: ${result.error}` : "error: review failed"];
+  return splitBullets(result.text);
 }

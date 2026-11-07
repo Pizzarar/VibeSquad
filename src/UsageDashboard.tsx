@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { buildProfiles, buildRows, dur, etaText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, workIdlePct, type LimitRow, type SortKey, type UsageData } from "./usageHelpers";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { buildProfiles, buildRows, dur, etaText, foldRoles, pctText, relTime, reviewBullets, sortProfiles, sortRows, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, workIdlePct, type LimitRow, type ReviewResult, type SortKey, type UsageData } from "./usageHelpers";
 
 // Usage dashboard for the Squads screen (docs/PLAN_USAGE_DASHBOARD.md step 4).
 // Data: GET /__vibesquad/providers/usage (server/providers-catalog.mjs getUsage).
@@ -20,6 +20,36 @@ const providerLabel = (p: string) => PROVIDER_LABEL[p] ?? p;
 const tok = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(Math.round(n)));
 const usd = (n: number) => `$${n >= 100 ? n.toFixed(0) : n.toFixed(2)}`;
 const pct = (n: number) => `${Math.round(n * 100)}%`;
+
+/** Owner-gated write to the usage-review endpoint (interval change or Run now). */
+async function postUsageReview(body: { interval?: string; runNow?: boolean }): Promise<void> {
+  const res = await fetch("/__vibesquad/providers/usage-review", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const j = (await res.json().catch(() => ({}))) as { error?: string };
+  if (!res.ok) throw new Error(j.error ?? `usage-review ${res.status}`);
+}
+
+function ReviewCard({ label, result, accent }: { label: string; result?: ReviewResult; accent: string }) {
+  const lines = reviewBullets(result);
+  const failed = Boolean(result && !result.ok);
+  return (
+    <div className={`usage-review-card ${accent}`} data-testid={`usage-review-${label.toLowerCase()}`}>
+      <div className="usage-review-card-head">{label}</div>
+      {lines.length === 0 ? (
+        <div className="usage-review-empty">no review yet</div>
+      ) : (
+        <ul className="usage-review-bullets">
+          {lines.map((ln, i) => (
+            <li key={i} className={failed ? "usage-review-err" : undefined}>{ln}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 function LimitCard({ l, now }: { l: LimitRow; now: number }) {
   const used = Math.max(0, Math.min(100, l.usedPct));
@@ -63,9 +93,10 @@ const COLS: { key: SortKey; label: string; num: boolean }[] = [
   { key: "fixRate", label: "Fix rate", num: true },
 ];
 
-export function useUsage(): { data: UsageData | null; error: string | null } {
+export function useUsage(): { data: UsageData | null; error: string | null; refresh: () => void } {
   const [data, setData] = useState<UsageData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const loadRef = useRef<(() => void) | null>(null);
   useEffect(() => {
     let alive = true;
     let last = 0;
@@ -86,6 +117,7 @@ export function useUsage(): { data: UsageData | null; error: string | null } {
         inflight = false;
       }
     };
+    loadRef.current = load;
     void load();
     const timer = window.setInterval(() => { if (document.visibilityState !== "hidden") void load(); }, POLL_MS);
     const onFocus = () => void load();
@@ -93,19 +125,48 @@ export function useUsage(): { data: UsageData | null; error: string | null } {
     document.addEventListener("visibilitychange", onFocus);
     return () => {
       alive = false;
+      loadRef.current = null;
       window.clearInterval(timer);
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onFocus);
     };
   }, []);
-  return { data, error };
+  const refresh = useCallback(() => loadRef.current?.(), []);
+  return { data, error, refresh };
 }
 
 export function UsageDashboard() {
-  const { data, error } = useUsage();
+  const { data, error, refresh } = useUsage();
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "costUsd", dir: -1 });
   const [now, setNow] = useState(() => Date.now());
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewError, setReviewError] = useState<string | null>(null);
   useEffect(() => { setNow(Date.now()); }, [data]);
+
+  const changeInterval = async (interval: string) => {
+    setReviewBusy(true);
+    setReviewError(null);
+    try {
+      await postUsageReview({ interval });
+      refresh();
+    } catch (e) {
+      setReviewError(String((e as Error)?.message ?? e));
+    } finally {
+      setReviewBusy(false);
+    }
+  };
+  const runNow = async () => {
+    setReviewBusy(true);
+    setReviewError(null);
+    try {
+      await postUsageReview({ runNow: true });
+      refresh();
+    } catch (e) {
+      setReviewError(String((e as Error)?.message ?? e));
+    } finally {
+      setReviewBusy(false);
+    }
+  };
 
   const limits = useMemo(() => {
     const rank = (l: LimitRow) => (l.provider === "antigravity-cli" && l.window === "5h" ? 0 : l.provider === "claude" && l.window === "weekly" ? 1 : 2);
@@ -126,6 +187,9 @@ export function UsageDashboard() {
   const roles = foldRoles(data.byRole ?? []);
   const roleTotal = roles.reduce((s, r) => s + r.inputTokens + r.outputTokens, 0);
   const click = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: key === "lane" ? 1 : -1 }));
+  const review = data.usageReview;
+  const running = Boolean(review?.inFlight) || reviewBusy;
+  const reviewStatus = usageReviewStatus(review, now);
 
   return (
     <div className="squads-dashboard" data-testid="squads-dashboard">
@@ -264,6 +328,35 @@ export function UsageDashboard() {
             </div>
           )}
         </div>
+      )}
+
+      {review && (
+        <section className="usage-review" data-testid="usage-review">
+          <div className="usage-review-head">
+            <div className="usage-sub">Usage Review · Opus &amp; Gemini</div>
+            <div className="usage-review-controls">
+              <select
+                className="usage-review-select"
+                value={review.interval}
+                onChange={(e) => changeInterval(e.target.value)}
+                aria-label="Usage review interval"
+              >
+                {USAGE_REVIEW_INTERVALS.map((iv) => (
+                  <option key={iv} value={iv}>{USAGE_REVIEW_LABELS[iv]}</option>
+                ))}
+              </select>
+              <button type="button" className="usage-review-run" onClick={runNow} disabled={running}>
+                {running ? "running…" : "Run now"}
+              </button>
+            </div>
+          </div>
+          <div className="usage-review-status small">{reviewStatus}</div>
+          {reviewError && <div className="usage-review-error small">{reviewError}</div>}
+          <div className="usage-review-grid">
+            <ReviewCard label="Opus" accent="usage-review-opus" result={review.last?.opus} />
+            <ReviewCard label="Gemini" accent="usage-review-gemini" result={review.last?.gemini} />
+          </div>
+        </section>
       )}
     </div>
   );
