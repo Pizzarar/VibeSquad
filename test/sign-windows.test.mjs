@@ -77,7 +77,10 @@ describe("sign-windows", () => {
       return msg.last;
     };
     assert.match(msg({ secret: null }), /missing vibesquad\/artifact-signing credential/);
-    assert.match(msg({ drop: ["/h/.vibesquad/signing/metadata.json"] }), /missing ~\/\.vibesquad\/signing\/metadata\.json/);
+    assert.match(norm(msg({ drop: ["/h/.vibesquad/signing/metadata.json"] })), /missing \/h\/\.vibesquad\/signing\/metadata\.json/);
+    const custom = rig({ drop: ["/h/.vibesquad/signing/metadata.json"] });
+    custom.deps.env.VS_SIGN_DIR = "/custom/dir";
+    assert.throws(() => signFile("f.exe", custom.deps), (e) => /missing \/custom\/dir\/metadata\.json/.test(norm(e.message)) && !/~/.test(e.message));
     assert.match(msg({ drop: ["/t/Azure.CodeSigning.Dlib.dll"] }), /dlib not found/);
     assert.match(msg({ drop: ["/t/signtool.exe"] }), /signtool not found/);
   });
@@ -91,7 +94,7 @@ describe("sign-windows", () => {
     assert.equal(runCheck(bad.deps), 1);
     const out = bad.logs.join("\n");
     assert.match(out, /step 7: missing vibesquad\/artifact-signing credential/);
-    assert.match(out, /step 8: missing ~\/\.vibesquad\/signing\/metadata\.json/);
+    assert.match(norm(out), /step 8: missing \/h\/\.vibesquad\/signing\/metadata\.json/);
     assert.match(out, /step 9: signtool not found/);
     assert.match(out, /step 9: dlib not found/);
 

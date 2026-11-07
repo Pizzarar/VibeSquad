@@ -348,6 +348,11 @@ export function assertFrozenCommit({ commit, requireClean, exec = execFileSync, 
 }
 
 const ANDROID_MARKER = "android-build.json";
+// Written by `build --unsigned`; the sign and publish stages refuse while it exists.
+export const UNSIGNED_MARKER = "UNSIGNED";
+const assertSigned = (distDir, stage) => {
+  if (existsSync(join(distDir, UNSIGNED_MARKER))) throw new Error(`Refusing to ${stage}: dist-desktop/${UNSIGNED_MARKER} marks an --unsigned test build. Rebuild without --unsigned.`);
+};
 
 /** The APK ships only when this version+commit built it (marker written by the build stage). */
 export function selectApk({ distDir, version, commit, exists = existsSync, read = (p) => readFileSync(p, "utf8") }) {
@@ -471,6 +476,7 @@ export function runRelease(argv, { rootDir: root = rootDir, exec = execFileSync,
 
   if (stages.includes("build") && !opts.skipBuild) {
     rmSync(join(distDir, ANDROID_MARKER), { force: true });
+    rmSync(join(distDir, UNSIGNED_MARKER), { force: true });
     const buildEnv = buildSigningEnv(env, keyPath);
     const signArgs = [];
     if (!opts.unsigned) {
@@ -483,6 +489,10 @@ export function runRelease(argv, { rootDir: root = rootDir, exec = execFileSync,
       signArgs.push("--config", join(root, "src-tauri", "tauri.release-sign.conf.json"));
     }
     exec(process.execPath, [join(root, "server", "build-desktop.mjs"), ...signArgs], { cwd: root, env: buildEnv, stdio: "inherit" });
+    if (opts.unsigned) {
+      mkdirSync(distDir, { recursive: true });
+      writeFileSync(join(distDir, UNSIGNED_MARKER), "build --unsigned: not Authenticode-signed; never publish\n");
+    }
     if (opts.withAndroid) {
       exec(process.execPath, [join(root, "server", "build-android.mjs")], { cwd: root, env: buildEnv, stdio: "inherit" });
       mkdirSync(distDir, { recursive: true });
@@ -491,6 +501,7 @@ export function runRelease(argv, { rootDir: root = rootDir, exec = execFileSync,
   }
 
   if (stages.includes("sign")) {
+    assertSigned(distDir, "sign");
     if (!env.TAURI_SIGNING_PRIVATE_KEY && !existsSync(keyPath)) {
       throw new Error(`Signing key not found at ${keyPath}. Run 'npx tauri signer generate -w ~/.tauri/vibesquad-updater.key' first.`);
     }
@@ -506,6 +517,7 @@ export function runRelease(argv, { rootDir: root = rootDir, exec = execFileSync,
   }
 
   if (stages.includes("publish")) {
+    assertSigned(distDir, "publish");
     if (!existsSync(sigPath) || !existsSync(latestJsonPath)) throw new Error("Nothing to publish: run the sign stage first.");
     const signature = readFileSync(sigPath, "utf8").trim();
     const latestManifest = buildLatestJson({ version: targetVersion, channel, signature });

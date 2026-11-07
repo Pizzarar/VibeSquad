@@ -94,9 +94,9 @@ export function checkSetup(deps = {}) {
   const metaFile = metadataPath(d);
   const meta = d.exists(metaFile) ? readJson(d, metaFile) : null;
   if (!d.exists(metaFile)) {
-    missing.push({ step: 8, message: "missing ~/.vibesquad/signing/metadata.json" });
+    missing.push({ step: 8, message: `missing ${metaFile}` });
   } else if (!meta) {
-    missing.push({ step: 8, message: "~/.vibesquad/signing/metadata.json is not valid JSON" });
+    missing.push({ step: 8, message: `${metaFile} is not valid JSON` });
   } else {
     const absent = METADATA_FIELDS.filter((f) => !meta[f]);
     if (absent.length) missing.push({ step: 6, message: `metadata.json is missing certificate profile fields: ${absent.join(", ")}` });

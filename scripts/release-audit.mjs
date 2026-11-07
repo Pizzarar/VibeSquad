@@ -16,7 +16,7 @@ const SECRET_PATTERNS = [
   { id: "S1", re: new RegExp("BEGIN [A-Z ]*PRIVATE" + " KEY") },
   { id: "S2", re: new RegExp("store" + "pass", "i") },
   { id: "S3", re: new RegExp("pa" + "ss:") },
-  { id: "S4", re: new RegExp("AZURE_CLIENT_" + "SECRET") },
+  { id: "S4", re: new RegExp("AZURE_CLIENT_" + "SECRET\\s*[=:]\\s*['\"]?[^\\s'\"$]{8,}") },
   { id: "S5", re: new RegExp("sk" + "-[A-Za-z0-9]") },
 ];
 const SELF_EXCLUDE = /(^|\/)(scripts\/release-audit\.mjs|test\/release-audit\.test\.mjs|package-lock\.json)$/;
