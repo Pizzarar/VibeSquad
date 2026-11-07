@@ -140,6 +140,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
           }
         }
         // The profile mode is this provider's own ACP mode (meta.acpMode); apply it only if the agent advertises it.
+        if (meta.acpMode && s.modes && !(s.modes.availableModes ?? []).some((m) => m.id === meta.acpMode)) emit('stderr', { line: `mode "${meta.acpMode}" not offered by ${name}; using ${s.modes.currentModeId ?? 'its default'}` });
         if (meta.acpMode && (s.modes?.availableModes ?? []).some((m) => m.id === meta.acpMode) && meta.acpMode !== s.modes?.currentModeId) {
           try { await request('session/set_mode', { sessionId, modeId: meta.acpMode }); }
           catch (e) { emit('stderr', { line: `set_mode ${meta.acpMode} failed: ${e.message}` }); }

@@ -7,6 +7,8 @@ import { mcpServerSpec, mcpServerPath } from './mcp.mjs';
 import { parseClaudeRateLimit } from '../limits.mjs';
 
 export const DEFAULT_PERMISSION_MODE = 'auto';
+export const CLAUDE_PERMISSION_MODES = ['default', 'acceptEdits', 'plan', 'bypassPermissions', 'dontAsk', 'auto'];
+export const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']; // claude --effort levels
 export const effectivePermissionMode = (meta = {}) => meta.permissionMode || DEFAULT_PERMISSION_MODE;
 
 export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true, mcpPath = mcpServerPath() } = {}) {
@@ -18,6 +20,7 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
       if (resume) args.push('--resume', String(resume));
       if (model) args.push('--model', model);
       args.push('--permission-mode', effectivePermissionMode(meta));
+      if (CLAUDE_EFFORTS.includes(meta.thinkingOptionId)) args.push('--effort', meta.thinkingOptionId);
       if (mcp) {
         const spec = mcpServerSpec({ env, path: mcpPath });
         args.push('--mcp-config', JSON.stringify({ mcpServers: { [spec.name]: { command: spec.command, args: spec.args, env: spec.env } } }));

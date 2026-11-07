@@ -33,6 +33,10 @@ export const runnerUnarchive = (id: string) => post(id, "unarchive").then(() => 
 export const runnerResume = (id: string) => post(id, "resume").then((r) => (r as { agent: PaseoAgent }).agent);
 export const runnerListArchived = () => call<{ agents?: PaseoAgent[] }>("/agents?archived=1").then((r) => r.agents ?? []);
 export const runnerArchive = (id: string) => post(id, "archive").then(() => ({ archivedAt: new Date().toISOString() }));
+/** Live model / mode / thinking change; applies from the next turn (busy = a turn is running and keeps its old settings). */
+export type RunnerConfigResult = { appliesFrom: "next-turn"; busy: boolean };
+export const runnerSetConfig = (id: string, cfg: { model?: string; modeId?: string; thinkingOptionId?: string | null }) =>
+  post(id, "config", cfg).then((r) => ({ appliesFrom: "next-turn", busy: !!(r as { busy?: boolean }).busy }) as RunnerConfigResult);
 export const runnerUpdate = (id: string, updates: { name?: string; labels?: Record<string, string> }) => post(id, "meta", updates).then(() => undefined);
 
 export type RunnerStatus = {

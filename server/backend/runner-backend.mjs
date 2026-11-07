@@ -72,6 +72,7 @@ export function toAgent(rec) {
     labels,
     ...(labels["vs.parent"] ? { parentAgentId: labels["vs.parent"] } : {}),
     modeId: meta.permissionMode ?? meta.acpMode ?? (rec.provider === "claude" ? "auto" : null),
+    currentModeId: meta.permissionMode ?? meta.acpMode ?? (rec.provider === "claude" ? "auto" : null),
     thinkingOptionId: meta.thinkingOptionId ?? null,
     ...(meta.featureValues ? { featureValues: meta.featureValues } : {}),
     ...(rec.queued ? { queued: { ahead: rec.queued.ahead } } : {}),
@@ -650,6 +651,20 @@ export class RunnerBackend {
     if (patch.role !== undefined || patch.lane !== undefined || patch.labels?.role !== undefined) {
       await this.refreshLaneWhosHere((await this.fetchAgent(id).catch(() => null))?.agent.labels?.lane);
     }
+  }
+
+  /**
+   * Live model / mode / thinking change: a meta patch the runner folds into the NEXT turn's process args (process per turn).
+   * Resolves { appliesFrom: "next-turn", busy } (busy = a turn is running now and keeps its old settings); the runner
+   * rejects values the provider cannot take (400 -> thrown here with its message).
+   */
+  async setAgentConfig(id, { model, modeId, thinkingOptionId } = {}) {
+    const body = {};
+    if (model !== undefined) body.model = model;
+    if (modeId !== undefined) body.modeId = modeId;
+    if (thinkingOptionId !== undefined) body.thinkingOptionId = thinkingOptionId;
+    const r = await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/config`, body);
+    return { appliesFrom: r?.appliesFrom ?? "next-turn", busy: !!r?.busy };
   }
 
   /** Reopens a closed agent in place when the runner can resume it (lost or parked with a saved session): same id, same history. */

@@ -156,6 +156,9 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
         runner.updateMeta(id, await readBody(req));
         return json(res, 202, { ok: true });
       }
+      if (parts[2] === 'config' && req.method === 'POST') {
+        return json(res, 202, { ok: true, ...runner.setConfig(id, await readBody(req)) });
+      }
       if (parts[2] === 'archive' && req.method === 'POST') {
         runner.archive(id);
         return json(res, 202, { ok: true });
