@@ -98,56 +98,78 @@ export function ensureAndroidSystemBarFit(mainActivityPath) {
   return true;
 }
 
+/** Where `scripts/rotate-android-keystore.mjs` creates the release keystore (outside the repo). */
+export const SIGNING_DIR = join(homedir(), ".vibesquad", "signing");
+export const DEFAULT_KEYSTORE_PATH = join(SIGNING_DIR, "vibesquad-android.jks");
+export const ANDROID_KEY_ALIAS = "vibesquad";
+export { KS_SECRET };
+
 /**
- * Creates (or reuses) the persistent Android release keystore used to sign the APK.
+ * Cert pin: a non-secret file next to the keystore. Kept outside the repo on purpose: the
+ * fingerprint belongs to this machine's keystore (rotating the keystore re-pins it), and a repo
+ * file would need a commit per rotation. VS_ANDROID_CERT_PIN_FILE or `pinPath` overrides it (tests).
+ */
+export const DEFAULT_PIN_PATH = join(SIGNING_DIR, "android-cert.sha256");
+
+/**
+ * Resolves the release keystore + signing env. Never creates a keystore: a missing one is a
+ * hard error pointing at the rotate script (the password comes from env/Credential Manager only).
  */
 export function ensureAndroidKeystore({
-  keystorePath = join(homedir(), ".tauri", "vibesquad-android.keystore"),
-  alias = "vibesquad",
+  keystorePath = DEFAULT_KEYSTORE_PATH,
+  alias = ANDROID_KEY_ALIAS,
   env = process.env,
-  exec = execFileSync,
   resolve: resolveKsSecret = resolveSecret,
 } = {}) {
+  if (!existsSync(keystorePath)) {
+    throw new Error(`Android keystore not found at ${keystorePath}: run node scripts/rotate-android-keystore.mjs`);
+  }
   const storePass = resolveKsSecret(KS_SECRET, { env });
   const secretEnv = { ...env, VS_KS_PASS: storePass };
-  if (!existsSync(keystorePath)) {
-    mkdirSync(dirname(keystorePath), { recursive: true });
-    const keytool = env.JAVA_HOME
-      ? join(env.JAVA_HOME, "bin", process.platform === "win32" ? "keytool.exe" : "keytool")
-      : "keytool";
-    exec(keytool, [
-      "-genkeypair",
-      "-v",
-      "-keystore",
-      keystorePath,
-      "-alias",
-      alias,
-      "-keyalg",
-      "RSA",
-      "-keysize",
-      "2048",
-      "-validity",
-      "10000",
-      "-storepass:env",
-      "VS_KS_PASS",
-      "-keypass:env",
-      "VS_KS_PASS",
-      "-dname",
-      "CN=VibeSquad, O=VibeSquad, C=US",
-    ], { env: secretEnv });
-  }
   return { keystorePath, secretEnv, alias };
 }
 
-/** Signs with apksigner (password via env only), then prints `apksigner verify --print-certs`. */
-export function signAndVerifyApk({ javaExe, apksignerJar, keystorePath, alias, secretEnv, inputApk, outApk, cwd, exec = execFileSync }) {
+/** Extracts the first signer's SHA-256 from `apksigner verify --print-certs` output, as lowercase hex. */
+export function parseSignerSha256(text) {
+  const m = /certificate SHA-256 digest:\s*([0-9a-fA-F:]{64,95})/.exec(String(text || ""));
+  return m ? m[1].replace(/:/g, "").toLowerCase() : null;
+}
+
+/**
+ * Compares the signer fingerprint to the pin. First release (no pin): writes it and reports so.
+ * A mismatch throws with both fingerprints.
+ */
+export function checkCertPin(fingerprint, { pinPath = process.env.VS_ANDROID_CERT_PIN_FILE || DEFAULT_PIN_PATH, log = console.log } = {}) {
+  if (!existsSync(pinPath)) {
+    mkdirSync(dirname(pinPath), { recursive: true });
+    writeFileSync(pinPath, fingerprint + "\n", "utf8");
+    log(`[build:android] No cert pin yet (first release): pinned signer SHA-256 ${fingerprint} to ${pinPath}`);
+    return { pinned: true, created: true };
+  }
+  const expected = readFileSync(pinPath, "utf8").trim().replace(/:/g, "").toLowerCase();
+  if (expected !== fingerprint) {
+    throw new Error(`Android signing cert mismatch: pinned ${expected} (${pinPath}) but the APK is signed by ${fingerprint}`);
+  }
+  log(`[build:android] Signer cert SHA-256 matches pin (${fingerprint}).`);
+  return { pinned: true, created: false };
+}
+
+/**
+ * Signs with apksigner (password via env only), verifies with `--print-certs`, and checks the
+ * signer cert against the pin. Returns the signer SHA-256 for the release record.
+ */
+export function signAndVerifyApk({ javaExe, apksignerJar, keystorePath, alias, secretEnv, inputApk, outApk, cwd, exec = execFileSync, pinPath, log = console.log }) {
   exec(
     javaExe,
     ["-jar", apksignerJar, "sign", "--ks", keystorePath, "--ks-key-alias", alias, "--ks-pass", "env:VS_KS_PASS", "--key-pass", "env:VS_KS_PASS", "--out", outApk, inputApk],
     { cwd, env: secretEnv, stdio: "inherit" },
   );
   const out = exec(javaExe, ["-jar", apksignerJar, "verify", "--print-certs", outApk], { cwd, env: secretEnv, encoding: "utf8" });
-  if (out) console.log(String(out).trimEnd());
+  if (out) log(String(out).trimEnd());
+  const certSha256 = parseSignerSha256(out);
+  if (!certSha256) throw new Error("Could not read the signer certificate SHA-256 from apksigner verify --print-certs output");
+  checkCertPin(certSha256, { pinPath, log });
+  return { certSha256 };
 }
 
 function findApk(dir) {
@@ -226,21 +248,22 @@ export function buildAndroidApk({
   const distDesktopDir = join(rootDir, "dist-desktop");
   mkdirSync(distDesktopDir, { recursive: true });
   const destApk = join(distDesktopDir, "VibeSquad.apk");
+  let certSha256 = null;
   if (apk.endsWith("-unsigned.apk")) {
     console.log("[build:android] 5/6 Signing APK...");
-    const { keystorePath, secretEnv, alias } = ensureAndroidKeystore({ env: androidEnv, exec });
+    const { keystorePath, secretEnv, alias } = ensureAndroidKeystore({ env: androidEnv });
     const latest = latestBuildTools(androidEnv.ANDROID_HOME);
     if (!latest) throw new Error(`Android build-tools not found under ${join(androidEnv.ANDROID_HOME, "build-tools")}`);
     const javaExe = androidEnv.JAVA_HOME
       ? join(androidEnv.JAVA_HOME, "bin", process.platform === "win32" ? "java.exe" : "java")
       : "java";
     const apksignerJar = join(androidEnv.ANDROID_HOME, "build-tools", latest, "lib", "apksigner.jar");
-    signAndVerifyApk({ javaExe, apksignerJar, keystorePath, alias, secretEnv, inputApk: apk, outApk: destApk, cwd: rootDir, exec });
+    ({ certSha256 } = signAndVerifyApk({ javaExe, apksignerJar, keystorePath, alias, secretEnv, inputApk: apk, outApk: destApk, cwd: rootDir, exec }));
   } else {
     copyFileSync(apk, destApk);
   }
   console.log(`[build:android] 6/6 Staged ${destApk}`);
-  return { apkPath: destApk };
+  return { apkPath: destApk, certSha256 };
 }
 
 const isMain = process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename);
