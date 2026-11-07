@@ -269,6 +269,66 @@ async function reportTool(ctx, args = {}) {
   return { logged: true, type };
 }
 
+const HANDOFF_DEDUPE_MS = 10 * 60_000;
+const handoffView = (r, extra = {}) => ({
+  id: r.successorId ?? r.id,
+  title: r.title ?? r.successor?.title ?? "",
+  oldLeadId: r.oldLeadId,
+  ...(r.deduped ? { deduped: true } : {}),
+  ...extra,
+});
+
+/**
+ * Hand a lane's lead over to a successor through the existing lead-handoff flow (server/lead-handoff.mjs): spawns the successor,
+ * re-parents open workers, relabels the old lead former-lead. A Buddy may do it for its OWN lane's live lead (trigger "buddy"),
+ * a lead only for itself (trigger "self"); nobody else. Idempotent: a second call returns the existing successor.
+ */
+async function handoffLead(ctx, args = {}) {
+  const callerRole = clean(ctx.identity.role).toLowerCase();
+  const callerId = clean(ctx.identity.agentId);
+  const askedId = clean(pick(args, "id", "agentId"));
+  const askedLane = clean(pick(args, "lane", "laneId"));
+  const fetchAgent = async (id) => agentOf(await ctx.withBackend({ id }, (b) => b.fetchAgent(id)).catch(() => null));
+  let target;
+  let trigger;
+  if (callerRole === "brainstorm") {
+    const { team, lane } = ctx.identity;
+    if (!team || !lane) throw new Error("cannot hand off a lead: caller has no team and lane");
+    const teams = ctx.teams ?? loadTeamsRegistry();
+    const callerLane = findLaneInRegistry(lane, teams);
+    const callerTeam = findTeamInRegistry(team, teams);
+    if (!callerLane || !callerTeam || callerLane.team.id !== callerTeam.id) throw new Error(`cannot hand off a lead: caller team "${team}" / lane "${lane}" is not in the team registry`);
+    if (askedLane && findLaneInRegistry(askedLane, teams)?.lane.id !== callerLane.lane.id) throw new Error(`cannot hand off a lead: target lane "${askedLane}" is not the caller's lane "${callerLane.lane.id}"`);
+    const live = await ctx.findLiveLeads({ team: callerTeam.id, lane: callerLane.lane.id });
+    if (!live.length) throw new Error(`cannot hand off a lead: lane "${callerLane.lane.id}" has no live lead`);
+    const ord = (a) => Number(a.labels?.ord) || 0;
+    target = [...live].sort((a, b) => ord(b) - ord(a))[0];
+    if (askedId && askedId !== target.id) throw new Error(`cannot hand off a lead: ${askedId} is not the live lead of lane "${callerLane.lane.id}" (${target.id})`);
+    trigger = "buddy";
+    // The live lead is already a fresh handoff successor: a repeated call returns it instead of handing off again.
+    const age = Date.now() - Date.parse(target.createdAt ?? "");
+    if (target.labels?.["vs.handoff-from"] && age >= 0 && age < HANDOFF_DEDUPE_MS) {
+      return handoffView({ successorId: target.id, title: target.title, oldLeadId: target.labels["vs.handoff-from"], deduped: true }, { trigger });
+    }
+  } else if (callerRole === LEAD_ROLE) {
+    if (!callerId) throw new Error("cannot hand off a lead: caller has no agent id");
+    if ((askedId && askedId !== callerId) || (askedLane && clean(ctx.identity.lane) && askedLane.toLowerCase() !== clean(ctx.identity.lane).toLowerCase())) {
+      throw new Error("cannot hand off a lead: a lead may only hand off itself");
+    }
+    target = await fetchAgent(callerId);
+    if (!target) target = { id: callerId };
+    trigger = "self";
+    const successor = clean(target.labels?.["handoff-successor"]);
+    if (successor) return handoffView({ successorId: successor, oldLeadId: callerId, deduped: true }, { trigger });
+  } else {
+    throw new Error(`cannot hand off a lead: caller role is "${callerRole || "none"}", only a brainstorm (Buddy) or a lead may`);
+  }
+  const run = ctx.performHandoff ?? (async (body) => (await import("../lead-handoff.mjs")).performLeadHandoffHttp(body));
+  const res = await run({ trigger, agentId: target.id, retireImmediately: true });
+  if (res?.ok === false || res?.error) throw new Error(`handoff failed: ${res.error ?? "unknown"}`);
+  return handoffView(res, { trigger });
+}
+
 const obj = (properties, required = []) => ({ type: "object", properties, required, additionalProperties: true });
 const S = { type: "string" };
 
@@ -290,6 +350,11 @@ export const VS_TOOLS = {
     description: "Write a done/decision/blocker entry to your team log as yourself.",
     inputSchema: obj({ type: { type: "string", enum: REPORT_TYPES }, text: S }, ["type", "text"]),
     run: reportTool,
+  },
+  handoff_lead: {
+    description: "Hand the lane's lead over to a successor (the lead-handoff flow: spawns it, re-parents workers, marks the old lead former-lead). A Buddy hands off its own lane's live lead; a lead hands off itself (write your packet Judgment first). Returns {id, title, oldLeadId}.",
+    inputSchema: obj({ lane: S }),
+    run: handoffLead,
   },
   list: { description: "Agents in your lane.", inputSchema: obj({}), run: listTool },
   cancel: { description: "Interrupt an agent's current turn.", inputSchema: obj({ id: S }, ["id"]), run: cancelTool },

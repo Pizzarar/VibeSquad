@@ -811,7 +811,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
     selfHandedOff.add(lead.id);
     const res = await spawnSuccessor({
       oldLead: lead,
-      trigger: "self",
+      trigger: options.trigger === "buddy" ? "buddy" : "self",
       retireImmediately: Boolean(options.retireImmediately),
       forceSynthesize: Boolean(options.forceSynthesize),
       job: options.job,
@@ -1082,10 +1082,15 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
     }
     if (!lead || !lead.id) throw new Error(`lead agent not found: ${body.agentId || body.laneId || body.lane || "vibesquad"}`);
     if (!body.oldLead && effectiveAgentRole(lead) !== "lead") throw new Error(`not a lead: ${lead.id}`);
+    // A Buddy hands off a lane's live lead: the target must be one (not archived, closed or already retired).
+    if (trigger === "buddy" && (lead.archivedAt || lead.status === "closed" || isRetiredAgent(lead))) {
+      throw new Error(`lead-handoff: ${lead.id} is not a live lead`);
+    }
 
     const handoffPromise =
-      trigger === "self"
+      trigger === "self" || trigger === "buddy"
         ? coordinator.triggerSelfHandoff(lead, {
+            trigger,
             retireImmediately: Boolean(body.retireImmediately),
             forceSynthesize: Boolean(body.forceSynthesize),
             job: body.job,

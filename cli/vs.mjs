@@ -483,6 +483,7 @@ Usage:
   vs task set <unit-id> [--goal <g>] [--files <f1,f2>] [--done-check <cmd>] [--status <todo|running|done|blocked>] [--branch <b>] [--commit <sha>]
   vs cap [list | add <provider> | clear <provider>]
   vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" [--cwd <dir>]   start a worker in your lane
+  vs lead handoff [--lane <code>]   hand the lane's lead to a successor (Buddy: its own lane's lead; lead: itself)
   vs send <agent> "<text>"   message an agent
   vs status <agent>   status + last assistant message
   vs wait <agent> [--timeout <seconds>]   block until idle (exit 0), error or blocked (1), timeout (2); no limit by default
@@ -1694,6 +1695,8 @@ export async function runAgentVerb(verb, flags, ctx) {
       prompt: flags.prompt ?? flags._.join(" "),
       ...(flags.cwd ? { cwd: path.resolve(String(flags.cwd)) } : {}),
     };
+  } else if (verb === "handoff_lead") {
+    args = flags.lane ? { lane: String(flags.lane) } : {};
   } else if (verb === "send") {
     args = { id, text: flags._.slice(1).join(" ") };
   } else {
@@ -1704,6 +1707,10 @@ export async function runAgentVerb(verb, flags, ctx) {
 }
 
 async function commandAgentVerb(verb, flags) {
+  if (verb === "lead") {
+    if (flags._.shift() !== "handoff") throw new Error("usage: vs lead handoff [--lane <code>]");
+    verb = "handoff_lead";
+  }
   if (verb === "spawn" && (!flags.profile || !(flags.prompt ?? flags._.length))) {
     throw new Error('usage: vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" [--cwd <dir>]');
   }
@@ -2121,7 +2128,7 @@ function main(argv) {
     if (command === "worktree") return commandWorktree(flags);
     if (command === "lesson" || command === "lessons") return commandLesson(flags);
     if (command === "wait") return commandWait(flags);
-    if (command === "spawn" || command === "send" || command === "status") return commandAgentVerb(command, flags);
+    if (command === "spawn" || command === "send" || command === "status" || command === "lead") return commandAgentVerb(command, flags);
     if (command === "mcp") return commandMcp(flags);
     if (command === "install-shim") return commandInstallShim(flags);
     if (command === "open") return commandOpen(flags);
