@@ -40,10 +40,24 @@ export function restartRunner(owner, opts = {}) {
  * restart instead of starting a second kill/startOwned, so it can never kill the freshly started runner.
  */
 const restarts = new WeakMap(); // owner -> in-flight restart promise
-export function restartRunnerNow(owner, { alive = pidAlive, waitMs = 3000, kill = (pid) => killTree(pid, { sync: true }), sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+
+/**
+ * Single-flight per owner: run `fn` once. A concurrent caller (a supervisor/forced restart and an Unstick hung-runner
+ * restart) gets the same in-flight promise instead of starting a second run, so a restart can never kill the freshly
+ * started runner or spawn a duplicate.
+ */
+export function oncePerOwner(owner, fn) {
   const inflight = restarts.get(owner);
   if (inflight) return inflight;
-  const p = (async () => {
+  const p = Promise.resolve().then(fn).finally(() => {
+    if (restarts.get(owner) === p) restarts.delete(owner);
+  });
+  restarts.set(owner, p);
+  return p;
+}
+
+export function restartRunnerNow(owner, { alive = pidAlive, waitMs = 3000, kill = (pid) => killTree(pid, { sync: true }), sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+  return oncePerOwner(owner, async () => {
     const home = owner.rc.home;
     const disc = readDiscovery(home);
     const pid = disc?.pid;
@@ -57,11 +71,7 @@ export function restartRunnerNow(owner, { alive = pidAlive, waitMs = 3000, kill 
     }
     await owner.startOwned({ force: true });
     return true;
-  })().finally(() => {
-    if (restarts.get(owner) === p) restarts.delete(owner);
   });
-  restarts.set(owner, p);
-  return p;
 }
 
 /**

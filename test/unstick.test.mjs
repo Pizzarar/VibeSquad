@@ -5,6 +5,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { computeKillSet, forceRestartRunner, listProcesses, unstick } from '../server/unstick.mjs';
+import { restartRunnerNow } from '../server/runner-supervisor.mjs';
 
 const P = (pid, ppid, cmd, name = 'node.exe') => ({ pid, ppid, name, cmd, startedMs: 1 });
 const procs = [
@@ -236,5 +237,41 @@ test('restart-runner route is owner-only: POST without the local token is 403', 
     await new Promise((r) => server.close(r));
     prev === undefined ? delete process.env.VIBESQUAD_HOME : (process.env.VIBESQUAD_HOME = prev);
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('unstick({confirmRestart:true}) concurrent with restartRunnerNow: one kill + one startOwned', async () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), 'vs-unstick-conc-'));
+  const rHome = path.join(home, 'runner');
+  mkdirSync(rHome, { recursive: true });
+  writeFileSync(path.join(rHome, 'runner.json'), JSON.stringify({ port: 1, pid: 200 }));
+  writeFileSync(path.join(rHome, 'token'), 't');
+  writeFileSync(path.join(rHome, 'runner.lock'), JSON.stringify({ pid: 200 }));
+  const kills = [];
+  const starts = [];
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const backend = {
+    rc: { home: rHome, healthy: async () => false },
+    startOwned: async () => { starts.push('start'); await gate; return true; },
+  };
+  const alive = (pid) => !kills.includes(pid);
+  const procs = [P(100, 1, 'node server/serve.mjs'), P(200, 1, String.raw`node C:\x\runner\server.mjs --home x`)];
+  try {
+    const p1 = restartRunnerNow(backend, { kill: (pid) => kills.push(pid), alive, waitMs: 0 });
+    const p2 = unstick({
+      home, selfPid: 100, list: () => procs,
+      killPid: (pid) => kills.push(pid), alive,
+      runnerHealthy: () => false, confirmRestart: true,
+      healthTimeoutMs: 50, deadTimeoutMs: 50, backend,
+    });
+    // Let both reach the single-flight (restartRunnerNow is in-flight on the gate) before releasing the start.
+    await new Promise((r) => setTimeout(r, 30));
+    release();
+    await Promise.all([p1, p2]);
+    assert.equal(kills.length, 1, `exactly one kill, got ${JSON.stringify(kills)}`);
+    assert.equal(starts.length, 1, `exactly one startOwned, got ${starts.length}`);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
   }
 });
