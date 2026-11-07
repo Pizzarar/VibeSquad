@@ -1,15 +1,9 @@
-// N2: owner-only fs mutations + the watch long-poll through the remote proxy (rules + a real handler against the real routes).
+// N2: owner-only fs mutations + the watch long-poll through the remote proxy (rules only; the vs.http handler is gone).
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
-import { createServer } from "node:http";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { after, before, describe, test } from "node:test";
+import { describe, test } from "node:test";
 import { decideProxyRequest, checkRemoteBody, proxyTimeoutFor, REMOTE_FS_WRITE_CHARS } from "../server/hooks/remote-proxy-rules.ts";
-import { handleFsMutation, handleFsWatch } from "../server/file-search.mjs";
 
 const OPS = ["write", "create", "rename", "delete", "duplicate"];
-const TOKEN = "d".repeat(64);
 
 describe("rules", () => {
   test("mutations are POST-only, watch is GET-only, nothing else under fs/ opens", () => {
@@ -39,37 +33,4 @@ describe("rules", () => {
     assert.equal(ok("duplicate", { cwd: "C:/w", path: "a" }).ok, true);
     assert.equal(ok("delete", { cwd: "C:/w" }).status, 403);
   });
-});
-
-describe("contract: owner gate over the proxy", () => {
-  let server, port, ws, home, bare;
-  const seen = [];
-  before(async () => {
-    ws = mkdtempSync(join(tmpdir(), "vs-n2-ws-"));
-    home = mkdtempSync(join(tmpdir(), "vs-n2-home-"));
-    bare = mkdtempSync(join(tmpdir(), "vs-n2-bare-")); // a host with no loopback owner token
-    writeFileSync(join(home, "local-token"), TOKEN);
-    for (const h of [home, bare]) writeFileSync(join(h, "settings.json"), JSON.stringify({ userName: "Owner", remote: { enabled: true } }));
-    writeFileSync(join(ws, "a.txt"), "one");
-    const send = (res, status, obj) => { res.statusCode = status; res.setHeader("content-type", "application/json"); res.end(JSON.stringify(obj)); };
-    const readBody = (req) => new Promise((ok) => { let d = ""; req.on("data", (c) => (d += c)); req.on("end", () => ok(JSON.parse(d || "{}"))); });
-    server = createServer((req, res) => {
-      const path = req.url.split("?")[0];
-      seen.push([req.method, path, req.headers["x-vibesquad-token"]]);
-      // Mirrors the middleware: non-GET and gated reads need the loopback owner token.
-      if (req.headers["x-vibesquad-token"] !== TOKEN) return send(res, 403, { error: "read-only", readOnly: true });
-      if (path === "/__vibesquad/fs/watch") return handleFsWatch(req, res, [ws], send);
-      if (path.startsWith("/__vibesquad/fs/")) return handleFsMutation(path.slice("/__vibesquad/fs/".length), req, res, [ws], send, readBody);
-      send(res, 404, {});
-    });
-    await new Promise((r) => server.listen(0, "127.0.0.1", r));
-    port = server.address().port;
-  });
-  after(() => {
-    server.closeAllConnections?.();
-    server.close();
-    for (const d of [ws, home, bare]) rmSync(d, { recursive: true, force: true });
-  });
-  const post = (h, op, body) => makeVsHttpHandler({ port, home: h })({ method: "POST", path: `/__vibesquad/fs/${op}`, body: JSON.stringify(body) });
-
 });
