@@ -423,6 +423,11 @@ export function createSpawnTimer(kind) {
   };
 }
 
+/** The createAgent sub-parts object (SPAWN_TIMING) rendered as `k=v,k=v`, or undefined when absent. */
+function formatSpawnSubParts(parts) {
+  return parts ? Object.entries(parts).map(([k, v]) => `${k}=${v}`).join(",") : undefined;
+}
+
 const restartedAgents = new Map();
 const lastAutoRestartByLane = new Map();
 
@@ -876,6 +881,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
       appendVsLogEntry({ teamId, laneId, agent: agentId, type: "metric", text: `brief-inlined: lane=${laneId} chars=${summary.content.length}` });
     } catch {}
     let created = null;
+    let spawnErrParts = null;
     if (connected && client && typeof backend.createAgent === "function") {
       const spawnStartMs = Date.now();
       try {
@@ -897,6 +903,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
           env: { VS_ROLE: "brainstorm", ...(newLabels.profile ? { VS_PROFILE: newLabels.profile } : {}), ...(hasCallerOverride ? { VS_PROFILE_OVERRIDE: "1" } : {}), VS_LANE: laneId, VS_TEAM: teamId, VS_BRIEF_INLINE: "1" },
         });
       } catch (err) {
+        spawnErrParts = err?.[SPAWN_TIMING] ?? null;
         if (isCreateTimeoutError(err)) {
           const recovered = await recoverTimedOutCreate({
             backend,
@@ -933,12 +940,17 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
             }
           }
         } catch {}
-        if (!created) throw err;
+        if (!created) {
+          // The 252s stall lives on the timeout/throw path: report the partial per-await timing before failing.
+          timer.mark("createAgent", formatSpawnSubParts(spawnErrParts));
+          timer.flush({ teamId, laneId, agent: agentId });
+          throw err;
+        }
       }
     }
 
-    const createParts = created?.[SPAWN_TIMING];
-    timer.mark("createAgent", createParts ? Object.entries(createParts).map(([k, v]) => `${k}=${v}`).join(",") : undefined);
+    const createParts = created?.[SPAWN_TIMING] ?? spawnErrParts;
+    timer.mark("createAgent", formatSpawnSubParts(createParts));
     const spawned = Boolean(created?.id);
     if (!created) {
       created = {

@@ -119,9 +119,36 @@ test('RunnerBackend.createAgent records per-await timing (slow hook + post) unde
   const agent = await backend.createAgent({ config: { provider: 'claude', cwd: '.' }, labels: {}, env: {} });
   const parts = agent[SPAWN_TIMING];
   assert.ok(parts, 'timing attached to the created agent');
-  assert.deepEqual(Object.keys(parts), ['requireRunning', 'hookHost', 'hook', 'prefix', 'post', 'fetch', 'whos']);
-  assert.ok(parts.hook >= 15, `hook=${parts.hook}ms should reflect the slow before() hook`);
+  assert.deepEqual(Object.keys(parts), ['req', 'hh', 'hk', 'pfx', 'post', 'get', 'whos']);
+  assert.ok(parts.hk >= 15, `hk=${parts.hk}ms should reflect the slow before() hook`);
   assert.ok(parts.post >= 30, `post=${parts.post}ms should reflect the slow POST /agents`);
+});
+
+test('RunnerBackend.createAgent attaches partial timing to a rejecting POST', async () => {
+  const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+  const client = {
+    async requireRunning() {},
+    async request(method, route) {
+      if (method === 'POST' && route === '/agents') { await delay(40); throw new Error('runner down'); }
+      throw new Error(`unexpected ${method} ${route}`);
+    },
+  };
+  const backend = new RunnerBackend({
+    client,
+    buildPrefix: async () => '',
+    whosHere: async () => {},
+    lanes: () => new Set(),
+    hooks: { before: async () => { await delay(20); return undefined; } },
+  });
+  let caught = null;
+  try {
+    await backend.createAgent({ config: { provider: 'claude', cwd: '.' }, labels: {}, env: {} });
+  } catch (err) { caught = err; }
+  assert.ok(caught, 'createAgent should reject');
+  const parts = caught[SPAWN_TIMING];
+  assert.ok(parts, 'partial timing attached to the thrown error');
+  assert.deepEqual(Object.keys(parts), ['req', 'hh', 'hk', 'pfx', 'post']);
+  assert.ok(parts.post >= 30, `post=${parts.post}ms should reflect the rejecting POST`);
 });
 
 test('toTimeline merges streamed chunks and closes tool calls', () => {
