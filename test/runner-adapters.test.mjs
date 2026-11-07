@@ -216,3 +216,80 @@ for (const [provider, bin, model] of smoke) {
     } finally { runner.shutdown(); }
   });
 }
+
+// ---- ACP park/resume (R3) ----
+function fakeStatefulAcp({ caps, failLoad = false } = {}) {
+  const state = { sessions: new Map(), seq: 0, calls: [] };
+  const spawnImpl = fakeSpawn((m, child) => {
+    if (!m.method) return;
+    state.calls.push(m.method);
+    const reply = (result) => child.push({ jsonrpc: '2.0', id: m.id, result });
+    const text = (t) => child.push({ jsonrpc: '2.0', method: 'session/update', params: { update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: t } } } });
+    if (m.method === 'initialize') reply({ protocolVersion: 1, agentCapabilities: caps });
+    else if (m.method === 'session/new') { const sid = `S${++state.seq}`; state.sessions.set(sid, []); reply({ sessionId: sid }); }
+    else if (m.method === 'session/load' || m.method === 'session/resume') {
+      if (failLoad || !state.sessions.has(m.params.sessionId)) return child.push({ jsonrpc: '2.0', id: m.id, error: { code: -32602, message: 'unknown session' } });
+      if (m.method === 'session/load') for (const p of state.sessions.get(m.params.sessionId)) text(`replay:${p}`);
+      reply({});
+    } else if (m.method === 'session/prompt') {
+      const sid = m.params.sessionId;
+      const t = m.params.prompt[0].text;
+      const seen = state.sessions.get(sid) ?? [];
+      state.lastPrompt = t;
+      text(`${sid} remembers [${seen.join('|')}]`);
+      seen.push(t);
+      reply({ stopReason: 'end_turn' });
+    }
+  });
+  return { spawnImpl, state };
+}
+const acpAdapter = (spawnImpl) => createAcpAdapter({ spawnImpl, provider: 'antigravity-cli', mcp: false, resolved: { file: '/bin/fake', args: [] } });
+
+test('acp park: next send resumes the same session via session/load, remembers the earlier fact, replay not double-logged', async () => {
+  const { spawnImpl, state } = fakeStatefulAcp({ caps: { loadSession: true } });
+  const runner = new Runner({ dir: tmp(), adapters: { 'antigravity-cli': acpAdapter(spawnImpl) } });
+  const id = runner.create({ provider: 'antigravity-cli', cwd: '.', prompt: 'the code is 42' });
+  for (let i = 0; i < 6; i++) await tick();
+  runner.park(id);
+  assert.equal(runner.timeline(id).filter((e) => e.type === 'parked').length, 1);
+  runner.send(id, 'what is the code?');
+  for (let i = 0; i < 8; i++) await tick();
+  assert.deepEqual(state.calls.filter((c) => c.startsWith('session/')), ['session/new', 'session/prompt', 'session/load', 'session/prompt']);
+  assert.equal(state.sessions.size, 1);
+  const outs = runner.timeline(id).filter((e) => e.type === 'output').map((e) => e.text);
+  assert.deepEqual(outs, ['S1 remembers []', 'S1 remembers [the code is 42]']);
+  assert.ok(!runner.timeline(id).some((e) => e.type === 'resume_fallback'));
+});
+
+test('acp park prefers session/resume over session/load when advertised', async () => {
+  const { spawnImpl, state } = fakeStatefulAcp({ caps: { loadSession: true, sessionCapabilities: { resume: {}, load: {} } } });
+  const runner = new Runner({ dir: tmp(), adapters: { 'antigravity-cli': acpAdapter(spawnImpl) } });
+  const id = runner.create({ provider: 'antigravity-cli', cwd: '.', prompt: 'a' });
+  for (let i = 0; i < 6; i++) await tick();
+  runner.park(id);
+  runner.send(id, 'b');
+  for (let i = 0; i < 8; i++) await tick();
+  assert.ok(state.calls.includes('session/resume') && !state.calls.includes('session/load'));
+  assert.equal(runner.timeline(id).filter((e) => e.type === 'output').at(-1).text, 'S1 remembers [a]');
+});
+
+for (const [label, opts] of [['no load advertised', { caps: {} }], ['load fails', { caps: { loadSession: true }, failLoad: true }]]) {
+  test(`acp park, ${label}: falls back to a primed session/new and logs resume_fallback`, async () => {
+    const { spawnImpl, state } = fakeStatefulAcp(opts);
+    const runner = new Runner({ dir: tmp(), adapters: { 'antigravity-cli': acpAdapter(spawnImpl) } });
+    const id = runner.create({ provider: 'antigravity-cli', cwd: '.', systemPrompt: 'You are Zed.', prompt: 'the code is 42' });
+    for (let i = 0; i < 6; i++) await tick();
+    runner.park(id);
+    runner.send(id, 'what is the code?');
+    for (let i = 0; i < 8; i++) await tick();
+    assert.equal(state.sessions.size, 2);
+    const fb = runner.timeline(id).find((e) => e.type === 'resume_fallback');
+    assert.ok(fb && fb.sessionId === 'S1' && fb.reason);
+    assert.match(state.lastPrompt, /You are Zed\./);
+    assert.match(state.lastPrompt, /User: the code is 42/);
+    assert.match(state.lastPrompt, /Assistant: S1 remembers \[\]/);
+    assert.match(state.lastPrompt, /what is the code\?$/);
+    assert.equal(state.lastPrompt.match(/what is the code\?/g).length, 1);
+    assert.ok(state.lastPrompt.length < 9000);
+  });
+}
