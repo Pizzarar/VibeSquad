@@ -116,7 +116,12 @@ export type RunnerStreamEvent =
   | { kind: "remove"; agentId: string }
   | { kind: "status"; agentId: string; from: string; to: string }
   | { kind: "timeline"; agentId: string; seq: number; type: string }
-  | { kind: "connected" | "disconnected" };
+  | { kind: "connected" | "disconnected" | "hb" };
+
+const RECONNECT_MIN_MS = 1000;
+const RECONNECT_MAX_MS = 10000;
+/** The server beats every 15 s (data event kind "hb"); two missed beats plus slack means the stream is dead. */
+const WATCHDOG_MS = 40000;
 
 /** Pure reducer for the roster view of the stream. Returns the next roster, or null when the event does not change it. */
 export function reduceRunnerRoster(roster: Map<string, PaseoAgent>, ev: RunnerStreamEvent): Map<string, PaseoAgent> | null {
@@ -143,20 +148,73 @@ export function startRunnerBridge(apply: (agents: PaseoAgent[], archivedIds: str
       resolveStatusLoaded();
       if (!s || !s.enabled || typeof EventSource === "undefined") return; // runner off: stay inert for this page load
       let roster = new Map<string, PaseoAgent>();
-      const es = new EventSource(`${BASE}/events`);
-      es.onopen = () => {
-        onConnection?.(true);
-        notifyTimeline(undefined, true); // reconnect: anything emitted while the stream was down is lost
+      let es: EventSource | null = null;
+      let backoff = RECONNECT_MIN_MS;
+      let retryTimer: ReturnType<typeof setTimeout> | null = null;
+      let watchdog: ReturnType<typeof setTimeout> | null = null;
+      const stopTimers = () => {
+        if (retryTimer) clearTimeout(retryTimer);
+        if (watchdog) clearTimeout(watchdog);
+        retryTimer = watchdog = null;
       };
-      if (typeof document !== "undefined") document.addEventListener("visibilitychange", () => !document.hidden && notifyTimeline(undefined, true));
-      es.onerror = () => onConnection?.(false);
-      es.onmessage = (m) => {
+      // A native EventSource only retries while CONNECTING; once a reconnect gets a non-200 / non-event-stream reply it is CLOSED
+      // for good, so the bridge owns recreation (backoff), plus a watchdog for streams that go silent without erroring.
+      const scheduleRetry = () => {
+        if (retryTimer) return;
+        const delay = backoff;
+        backoff = Math.min(backoff * 2, RECONNECT_MAX_MS);
+        retryTimer = setTimeout(connect, delay);
+        (retryTimer as { unref?: () => void }).unref?.();
+      };
+      const touch = () => {
+        if (watchdog) clearTimeout(watchdog);
+        watchdog = setTimeout(() => {
+          watchdog = null;
+          es?.close?.();
+          onConnection?.(false);
+          scheduleRetry();
+        }, WATCHDOG_MS);
+        (watchdog as { unref?: () => void }).unref?.(); // never keeps a Node process (tests, SSR) alive
+      };
+      const reviveIfClosed = () => {
+        if (!es || es.readyState === 2) connect();
+      };
+      function connect() {
+        stopTimers();
+        es?.close?.();
+        const cur = (es = new EventSource(`${BASE}/events`));
+        touch();
+        cur.onopen = () => {
+          backoff = RECONNECT_MIN_MS;
+          touch();
+          onConnection?.(true);
+          notifyTimeline(undefined, true); // reconnect: anything emitted while the stream was down is lost
+        };
+        cur.onerror = () => {
+          if (es !== cur) return;
+          onConnection?.(false);
+          if (cur.readyState === 2) scheduleRetry();
+        };
+        cur.onmessage = (m) => {
+          if (es === cur) touch();
+          onMessage(m);
+        };
+      }
+      if (typeof document !== "undefined")
+        document.addEventListener("visibilitychange", () => {
+          if (document.hidden) return;
+          reviveIfClosed();
+          notifyTimeline(undefined, true);
+        });
+      if (typeof window !== "undefined") window.addEventListener("online", reviveIfClosed);
+      const onMessage = (m: MessageEvent) => {
         let ev: RunnerStreamEvent;
         try {
           ev = JSON.parse(m.data);
         } catch {
           return;
         }
+        if (ev.kind === "hb") return;
         if (ev.kind === "timeline") return notifyTimeline(ev.agentId);
         // Runner unreachable: the server says "disconnected" instead of an (empty) roster, so keep every agent we have.
         if (ev.kind === "disconnected") return onConnection?.(false);
@@ -170,6 +228,7 @@ export function startRunnerBridge(apply: (agents: PaseoAgent[], archivedIds: str
         apply([...roster.values()], ev.kind === "remove" ? [ev.agentId] : []);
         if (ev.kind === "roster") notifyTimeline(undefined, true);
       };
+      connect();
     })
     .catch(() => resolveStatusLoaded());
 }
