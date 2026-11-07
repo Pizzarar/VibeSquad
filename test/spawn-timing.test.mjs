@@ -5,6 +5,10 @@ import { join } from "node:path";
 import test from "node:test";
 import { createSpawnTimer, performBrainstormRestart, resetBrainstormRestartState } from "../server/brainstorm.mjs";
 
+// Mock-Paseo-daemon tests: the runner has a single owner and is never lazily started, so pin every lane to Paseo.
+process.env.VS_DEFAULT_BACKEND = "paseo";
+delete process.env.VS_BACKEND;
+
 test("spawn timer lists each marked step and a total", () => {
   const t = createSpawnTimer("new-buddy");
   t.mark("connect");

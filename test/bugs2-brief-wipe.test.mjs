@@ -10,6 +10,10 @@ import { performBrainstormRestart, resetBrainstormRestartState } from "../server
 import { writeBriefFile } from "../server/brief-write.mjs";
 import { refreshWhosHere, whosHereBody } from "../server/whos-here.mjs";
 
+// Mock-Paseo-daemon tests: the runner has a single owner and is never lazily started, so pin every lane to Paseo.
+process.env.VS_DEFAULT_BACKEND = "paseo";
+delete process.env.VS_BACKEND;
+
 const BIG = `# Brainstorm Summary · VIBESQUAD (\`vibesquad\`)\n\n> brief\n\n## Decided\n${"- a decision that matters\n".repeat(60)}\n## Open\n- none\n`;
 
 async function withHome(fn) {

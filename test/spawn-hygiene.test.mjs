@@ -3,6 +3,10 @@ import test from "node:test";
 import { EVERYONE_LAYER, dedupeNotesAgainst, injectedPrefix } from "../plugin/index.server.ts";
 import { SHARED_NOTE_PREFIX } from "../server/profiles.mjs";
 
+// Mock-Paseo-daemon tests: the runner has a single owner and is never lazily started, so pin every lane to Paseo.
+process.env.VS_DEFAULT_BACKEND = "paseo";
+delete process.env.VS_BACKEND;
+
 test("block 1: R1-R7 rules appear once when profile notes repeat them", () => {
   const prefix = injectedPrefix("worker", "");
   const notes = `${SHARED_NOTE_PREFIX}\nRole-specific line.`;

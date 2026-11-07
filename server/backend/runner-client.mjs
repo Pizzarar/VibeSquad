@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isForbiddenRealHome } from "../test-guard.mjs";
 import { acquireStartLock, releaseLock } from "../../runner/lock.mjs";
 
 const RUNNER_ENTRY = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "runner", "server.mjs");
@@ -12,6 +13,7 @@ const RUNNER_ENTRY = path.join(path.dirname(fileURLToPath(import.meta.url)), "..
 export const runnerHome = (env = process.env) => path.join(env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad"), "runner");
 
 export function readDiscovery(home) {
+  if (isForbiddenRealHome(home)) return null; // under a test runner the real runner does not exist
   try {
     const info = JSON.parse(fs.readFileSync(path.join(home, "runner.json"), "utf8"));
     const token = fs.readFileSync(path.join(home, "token"), "utf8").trim();
@@ -37,8 +39,9 @@ export class RunnerDownError extends RunnerHttpError {
 }
 
 export class RunnerClient {
-  constructor({ home = runnerHome(), fetchImpl = fetch, spawnImpl = spawn, startTimeoutMs = 8000 } = {}) {
-    this.home = home;
+  constructor({ home, fetchImpl = fetch, spawnImpl = spawn, startTimeoutMs = 8000 } = {}) {
+    this._home = home; // undefined = follow VIBESQUAD_HOME on every use (the shared backend outlives env changes)
+    this._connHome = null;
     this.fetch = fetchImpl;
     this.spawn = spawnImpl;
     this.startTimeoutMs = startTimeoutMs;
@@ -46,8 +49,22 @@ export class RunnerClient {
     this.starting = null;
   }
 
+  /** Explicit `home` wins; otherwise resolved per call so a cached client never keeps pointing at an earlier VIBESQUAD_HOME. */
+  get home() {
+    const home = this._home ?? runnerHome();
+    if (home !== this._connHome) {
+      this._connHome = home;
+      this.conn = null; // discovery belongs to the old home
+    }
+    return home;
+  }
+  set home(v) {
+    this._home = v;
+  }
+
   async request(method, route, body) {
-    if (!this.conn) this.conn = readDiscovery(this.home);
+    const home = this.home; // also drops a conn cached for a different home
+    if (!this.conn) this.conn = readDiscovery(home);
     if (!this.conn) throw new RunnerHttpError(0, "runner is not running");
     const res = await this.fetch(`http://127.0.0.1:${this.conn.port}${route}`, {
       method,
@@ -132,6 +149,7 @@ export class RunnerClient {
    */
   startOwned() {
     this.starting ??= (async () => {
+      if (isForbiddenRealHome(this.home)) throw new Error("refusing to start a runner in the real home under a test runner");
       if (await this.healthy()) return;
       fs.mkdirSync(this.home, { recursive: true });
       // Cross-process start lock: concurrent callers (other VS processes, CLI one-liners) wait for the one that holds it

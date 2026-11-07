@@ -5,6 +5,10 @@ import { join } from "node:path";
 import test from "node:test";
 import { isCreateTimeoutError, performBrainstormRestart, recoverTimedOutCreate, resetBrainstormRestartState } from "../server/brainstorm.mjs";
 
+// Mock-Paseo-daemon tests: the runner has a single owner and is never lazily started, so pin every lane to Paseo.
+process.env.VS_DEFAULT_BACKEND = "paseo";
+delete process.env.VS_BACKEND;
+
 const labels = { team: "site", lane: "pinned", role: "brainstorm", "vs.restarted-from": "start-brainstorm" };
 const fast = { pollMs: 1, waitMs: 50, sleep: () => new Promise((r) => setTimeout(r, 1)) };
 

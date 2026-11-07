@@ -9,6 +9,10 @@ import { createPlugin } from "../plugin/index.server.ts";
 import { archiveBuddyKeepingChildren, performBrainstormRestart, resetBrainstormRestartState } from "../server/brainstorm.mjs";
 import { detachLiveChildren, PARENT_LABEL } from "../server/detach-children.mjs";
 
+// Mock-daemon tests: the runner has a single owner and is never lazily started, so pin every lane to Paseo.
+process.env.VS_DEFAULT_BACKEND = "paseo";
+delete process.env.VS_BACKEND;
+
 /** A daemon that archives like Paseo: archiving a parent archives every unarchived child labelled with it, recursively. */
 function cascadingDaemon(list) {
   const agents = new Map(list.map((a) => [a.id, { status: "idle", ...a, labels: { ...(a.labels ?? {}) } }]));

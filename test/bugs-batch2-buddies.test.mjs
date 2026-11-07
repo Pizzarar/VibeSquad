@@ -12,6 +12,10 @@ import { PARENT_LABEL } from "../server/detach-children.mjs";
 import { keepBuddy, liveBuddyDupes, pinsForSquad } from "../src/pins.ts";
 import { buildTeamViews, resolve as resolveMembers } from "../src/teams.ts";
 
+// Mock-Paseo-daemon tests: the runner has a single owner and is never lazily started, so pin every lane to Paseo.
+process.env.VS_DEFAULT_BACKEND = "paseo";
+delete process.env.VS_BACKEND;
+
 const REPO_ROOT = resolve(import.meta.dirname, "..");
 const CLI_PATH = resolve(REPO_ROOT, "cli", "vs.mjs");
 

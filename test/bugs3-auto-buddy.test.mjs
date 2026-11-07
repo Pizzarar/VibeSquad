@@ -5,6 +5,10 @@ import { join } from "node:path";
 import test from "node:test";
 import { performBrainstormRestart, resetBrainstormRestartState } from "../server/brainstorm.mjs";
 
+// Mock-Paseo-daemon tests: the runner has a single owner and is never lazily started, so pin every lane to Paseo.
+process.env.VS_DEFAULT_BACKEND = "paseo";
+delete process.env.VS_BACKEND;
+
 function withEnv(fn) {
   return async () => {
     const dir = mkdtempSync(join(tmpdir(), "vs-bugs3-auto-buddy-"));

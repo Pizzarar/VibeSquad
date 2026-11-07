@@ -6,6 +6,10 @@ import test from "node:test";
 import { performBrainstormRestart, resetBrainstormRestartState } from "../server/brainstorm.mjs";
 import { seedDefaultPack } from "../server/profiles.mjs";
 
+// Mock-Paseo-daemon tests: the runner has a single owner and is never lazily started, so pin every lane to Paseo.
+process.env.VS_DEFAULT_BACKEND = "paseo";
+delete process.env.VS_BACKEND;
+
 function makeTestEnv() {
   const dir = mkdtempSync(join(tmpdir(), "vs-brainstorm-test-"));
   const vsHome = join(dir, ".vibesquad");
