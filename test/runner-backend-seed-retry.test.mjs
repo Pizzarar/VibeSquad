@@ -72,3 +72,29 @@ test('retry stops when the backend gen changes', async () => {
   assert.equal(evs.length, seen);
   off();
 });
+
+test('seedRoster succeeds while a listener retry is pending: one roster + connected, no later disconnected, timer cleared', async () => {
+  let fail = true;
+  const rc = { home: '/tmp/x', request: async () => { throw new Error('unused'); }, stream: (h) => { rc.h = h; return { close() {} }; } };
+  const b = new RunnerBackend({ client: rc, buildPrefix: async () => '' });
+  b.live.retry.base = 20;
+  b.calls = 0;
+  b.listAgents = async () => {
+    b.calls++;
+    if (fail) throw new Error('runner request timed out');
+    return [{ id: 'rn-a', status: 'idle' }];
+  };
+  const kinds = [];
+  const off = b.subscribeEvents((ev) => kinds.push(ev.kind));
+  await until(() => kinds.includes('disconnected') && b.live.seedTimers.size === 1);
+  fail = false;
+  rc.h.onOpen(); // stream seed lands for every listener
+  await until(() => kinds.includes('connected'));
+  assert.equal(b.live.seedTimers.size, 0, 'seedRoster cancels the pending per-listener retry');
+  await sleep(150);
+  assert.equal(kinds.filter((k) => k === 'roster').length, 1);
+  assert.equal(kinds.filter((k) => k === 'connected').length, 1);
+  assert.notEqual(kinds.lastIndexOf('disconnected'), kinds.length - 1);
+  assert.ok(kinds.lastIndexOf('disconnected') < kinds.indexOf('connected'), 'no disconnected after connected');
+  off();
+});
