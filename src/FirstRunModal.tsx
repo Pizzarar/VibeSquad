@@ -1,24 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Modal } from "./TeamActions";
-import { reconnectWithDaemonPassword } from "./paseo";
-import { submitDaemonPassword } from "./paseoDaemonAuth";
 
 export type FirstRunStatus = {
-  pinnedPaseoVersion: string;
-  paseo: {
-    installed: boolean;
-    running: boolean;
-    daemonReachable?: boolean;
-    source: "existing" | "managed" | "none";
-    version: string | null;
-    installing: boolean;
-    progress: string;
-    error: string | null;
-    installDurationMs: number | null;
-    passwordRequired?: boolean;
-    passwordConfigured?: boolean;
-    passwordSource?: "env" | "file" | "local-credential" | "none";
-  };
   claude: { installed: boolean; loggedIn: boolean; version: string | null; installUrl: string };
   gemini: { installed: boolean; loggedIn: boolean; version: string | null; installUrl: string };
   git: { installed: boolean; version: string | null; installUrl: string };
@@ -51,73 +34,16 @@ const Ext = ({ href, children }: { href: string; children: React.ReactNode }) =>
 
 export function FirstRunModal({ initial, onClose }: { initial?: FirstRunStatus | null; onClose: () => void }) {
   const [status, setStatus] = useState<FirstRunStatus | null>(initial ?? null);
-  const [daemonBusy, setDaemonBusy] = useState(false);
-  const [pw, setPw] = useState("");
-  const [editingPw, setEditingPw] = useState(false);
-  const [pwBusy, setPwBusy] = useState(false);
-  const [pwMsg, setPwMsg] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     const s = await fetchFirstRunStatus();
     if (s) setStatus(s);
     return s;
   }, []);
-  const refreshStatus = refresh;
-
-  const install = useCallback(async () => {
-    try {
-      await fetch("/__vibesquad/first-run/install-paseo", { method: "POST" });
-    } catch {}
-    await refresh();
-  }, [refresh]);
-
-  const p = status?.paseo;
-
-  const onStartOrRestartDaemon = useCallback(async () => {
-    setDaemonBusy(true);
-    try {
-      await fetch("/__vibesquad/paseo/daemon", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: (p?.daemonReachable ?? p?.running) ? "restart" : "start" }),
-      });
-    } catch {}
-    await refreshStatus();
-    setDaemonBusy(false);
-  }, [p?.daemonReachable, p?.running, refreshStatus]);
-
-  const onSavePassword = useCallback(async () => {
-    const trimmed = pw.trim();
-    if (!trimmed || pwBusy) return;
-    setPwBusy(true);
-    setPwMsg(null);
-    try {
-      const res = await submitDaemonPassword(trimmed);
-      if (!res.ok) {
-        setPwMsg(res.error || "Password rejected");
-        return;
-      }
-      setPw("");
-      setPwMsg("✓ Saved & verified");
-      await reconnectWithDaemonPassword(trimmed);
-      await refreshStatus();
-    } catch (e) {
-      setPwMsg(e instanceof Error ? e.message : String(e));
-    } finally {
-      setPwBusy(false);
-    }
-  }, [pw, pwBusy, refreshStatus]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
-
-  const installing = status?.paseo.installing ?? false;
-  useEffect(() => {
-    if (!installing) return;
-    const t = setInterval(() => void refresh(), 1500);
-    return () => clearInterval(t);
-  }, [installing, refresh]);
 
   const canContinue = Boolean(status && (status.claude.installed || status.gemini.installed));
   const done = () => {
@@ -145,80 +71,6 @@ export function FirstRunModal({ initial, onClose }: { initial?: FirstRunStatus |
           <p>Checking your machine…</p>
         ) : (
           <>
-            <Row id="paseo" name="1. Paseo CLI & Daemon (optional)">
-              <div>
-                {status.paseo.installed ? (
-                  <span>
-                    ✓ Paseo {status.paseo.version ? `v${status.paseo.version}` : ""} ({status.paseo.source === "existing" ? "found existing" : "bundled/managed"}){" "}
-                  </span>
-                ) : status.paseo.installing ? (
-                  <span>
-                    <span className="spinner">⏳</span> {status.paseo.progress || `Installing @getpaseo/cli@${status.pinnedPaseoVersion} from npm...`}{" "}
-                  </span>
-                ) : status.paseo.error ? (
-                  <span>
-                    <span role="alert" style={{ color: "#ff2a85" }}>
-                      {status.paseo.error}
-                    </span>{" "}
-                    <button className="btn small" data-testid="paseo-retry-btn" onClick={() => void install()}>
-                      Retry
-                    </button>{" "}
-                  </span>
-                ) : (
-                  <span>
-                    Not installed. VibeSquad runs agents on its own runner; Paseo is only needed for Paseo-hosted agents.{" "}
-                    <button className="btn small" data-testid="paseo-install-btn" onClick={() => void install()}>
-                      Install Paseo
-                    </button>{" "}
-                  </span>
-                )}
-                <button
-                  type="button"
-                  className="btn ghost small"
-                  data-testid="first-run-daemon-start-btn"
-                  disabled={daemonBusy || status.paseo.installing}
-                  onClick={() => void onStartOrRestartDaemon()}
-                >
-                  {daemonBusy ? "Working…" : (p?.daemonReachable ?? p?.running) ? "Restart Daemon" : "Start Daemon"}
-                </button>
-              </div>
-              {(p?.passwordRequired || p?.passwordConfigured) && (
-                <div style={{ marginTop: 6 }}>
-                  <div className="muted small">
-                    {p?.passwordRequired ? "Daemon password required" : "Daemon password optional"} ·{" "}
-                    {p?.passwordConfigured ? `Configured (${p?.passwordSource ?? "file"})` : "Not configured"}
-                  </div>
-                  {p?.passwordSource === "local-credential" && !editingPw ? (
-                    <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 4 }}>
-                      <span>✓ Local Paseo credential active</span>
-                      <button type="button" className="btn ghost small" onClick={() => setEditingPw(true)}>
-                        Change password
-                      </button>
-                    </div>
-                  ) : (
-                  <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 4 }}>
-                    <input
-                      type="password"
-                      data-testid="first-run-password-input"
-                      value={pw}
-                      onChange={(e) => setPw(e.target.value)}
-                      placeholder="Daemon password…"
-                    />
-                    <button
-                      type="button"
-                      className="btn small"
-                      data-testid="first-run-password-save-btn"
-                      disabled={pwBusy || !pw.trim()}
-                      onClick={() => void onSavePassword()}
-                    >
-                      {pwBusy ? "Saving…" : "Save & Test"}
-                    </button>
-                    {pwMsg && <span className="muted small">{pwMsg}</span>}
-                  </div>
-                  )}
-                </div>
-              )}
-            </Row>
             <Row id="claude" name="Claude Code">
               {status.claude.installed ? (
                 <span>✓ Installed {status.claude.loggedIn ? "· Logged in" : "· Run 'claude' once to log in"}</span>
@@ -246,7 +98,7 @@ export function FirstRunModal({ initial, onClose }: { initial?: FirstRunStatus |
                 </span>
               )}
             </Row>
-            <p style={{ fontSize: 11, opacity: 0.7 }}>You need at least one of Claude Code or Gemini to continue. Paseo is optional.</p>
+            <p style={{ fontSize: 11, opacity: 0.7 }}>You need at least one of Claude Code or Gemini to continue.</p>
           </>
         )}
       </div>

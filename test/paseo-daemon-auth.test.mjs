@@ -192,7 +192,7 @@ describe("P0-B · paseoDaemonAuth helpers", () => {
     });
   });
 
-  test("source guards: z-index lift, DaemonStatusBanner unlock + escape hatches, FirstRunModal daemon + password controls", () => {
+  test("source guards: z-index lift, DaemonStatusBanner escape hatches; no daemon password UI in the banner or checklist", () => {
     const css = read("src/ResponsiveSmallWindow.css");
     assert.match(
       css,
@@ -201,25 +201,19 @@ describe("P0-B · paseoDaemonAuth helpers", () => {
 
     const diag = read("src/DiagnosticsModal.tsx");
     for (const id of [
-      "daemon-banner-auth-form",
-      "daemon-banner-password-input",
-      "daemon-banner-unlock-btn",
-      "daemon-banner-auth-error",
       "daemon-banner-retry",
       "daemon-banner-diagnostics",
       "daemon-banner-setup",
-      "daemon-banner-paseo-settings",
     ]) {
       assert.ok(diag.includes(id), `DiagnosticsModal.tsx missing ${id}`);
     }
+    for (const id of ["daemon-banner-auth-form", "daemon-banner-password-input", "daemon-banner-unlock-btn", "daemon-banner-paseo-settings"]) {
+      assert.ok(!diag.includes(id), `DiagnosticsModal.tsx should not have ${id}`);
+    }
 
     const firstRun = read("src/FirstRunModal.tsx");
-    for (const id of [
-      "first-run-daemon-start-btn",
-      "first-run-password-input",
-      "first-run-password-save-btn",
-    ]) {
-      assert.ok(firstRun.includes(id), `FirstRunModal.tsx missing ${id}`);
+    for (const id of ["first-run-daemon-start-btn", "first-run-password-input", "first-run-password-save-btn", "paseo-install-btn", "install-paseo", "Paseo CLI"]) {
+      assert.ok(!firstRun.includes(id), `FirstRunModal.tsx should not have ${id}`);
     }
 
     const paseo = read("src/paseo.ts");
@@ -229,6 +223,6 @@ describe("P0-B · paseoDaemonAuth helpers", () => {
 
     const app = read("src/App.tsx");
     assert.match(app, /onOpenSetup=\{\(\) => \{[\s\S]*?setFirstRunOpen\(true\)/);
-    assert.match(app, /requestSettingsTarget\("paseo-daemon"\)/);
+    assert.doesNotMatch(app, /requestSettingsTarget\("paseo-daemon"\)|onOpenPaseoSettings/);
   });
 });

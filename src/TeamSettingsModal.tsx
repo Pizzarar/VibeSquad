@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { getUserName, loadDesktopStatus, loadUpdaterStatus, loadUserName, saveLanEnabled, saveRemoteEnabled, saveUpdateChannel, saveUserName, useConfigWarnings, useDesktopStatus, useExposedIpsStore, useLanEnabled, useRemoteEnabled, useUpdaterStatus } from "./userName";
-import { PaseoSettingsSection } from "./PaseoSettingsSection";
+import { RunnerSettingsSection } from "./RunnerSettingsSection";
 import { PairDeviceModal } from "./PairDeviceModal";
 import {
   AGENT_TYPE_NAME,
@@ -25,7 +25,6 @@ import {
   detectNoteWarnings,
   dismissSetupPrompt,
   fetchProfiles,
-  importFromPaseo,
   saveProfile,
   seedDefaultPack,
   useProfiles,
@@ -58,47 +57,14 @@ export const ARCHETYPES: { type: AgentType; desc: string; sampleProv: string }[]
   { type: "unknown", desc: "Shadow silhouette, violet rim light & glowing eyes", sampleProv: "codex" },
 ];
 
+/** First-run profile setup: seed the project-neutral default pack into ~/.vibesquad/profiles.json. */
 export function ProfileImportModal({ onClose }: { onClose: () => void }) {
-  const { paseoProfiles, profiles, diff, warningsByProfile, installedProviders, needsSetup } = useProfiles();
-  const candidates = paseoProfiles.length > 0 ? paseoProfiles : profiles;
-  const [selected, setSelected] = useState<Set<string>>(() => new Set(candidates.map((p) => p.name)));
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
 
   useEffect(() => {
     void fetchProfiles();
   }, []);
-
-  useEffect(() => {
-    setSelected((prev) => {
-      if (candidates.length === 0) return prev;
-      const next = new Set(prev);
-      for (const p of candidates) next.add(p.name);
-      return next;
-    });
-  }, [candidates]);
-
-  const toggle = (name: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      return next;
-    });
-  };
-
-  const onImportSelected = async () => {
-    setBusy(true);
-    setStatus("");
-    try {
-      await importFromPaseo([...selected], true);
-      onClose();
-    } catch (e) {
-      setStatus(String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const onSeedDefault = async () => {
     setBusy(true);
@@ -113,16 +79,13 @@ export function ProfileImportModal({ onClose }: { onClose: () => void }) {
     }
   };
 
-  const diffByName = new Map(diff.map((d) => [d.name, d]));
-
   return (
     <Modal
-      title={needsSetup ? "SETUP · IMPORT PASEO PROFILES" : "SYNC / RE-IMPORT PROFILES FROM PASEO"}
+      title="SETUP · AGENT PROFILES"
       onClose={() => {
         dismissSetupPrompt();
         onClose();
       }}
-      wide
       footer={
         <>
           {status && <span className="stat-alert small">{status}</span>}
@@ -137,94 +100,14 @@ export function ProfileImportModal({ onClose }: { onClose: () => void }) {
           >
             Later
           </button>
-          <button
-            type="button"
-            className="btn"
-            disabled={busy}
-            data-testid="profiles-seed-default-btn"
-            onClick={onSeedDefault}
-          >
-            Seed Default Pack (19)
-          </button>
-          <button
-            type="button"
-            className="btn ok"
-            disabled={busy || selected.size === 0}
-            data-testid="profiles-import-selected-btn"
-            onClick={onImportSelected}
-          >
-            {busy ? "Importing…" : `Import ${selected.size} profile(s)`}
+          <button type="button" className="btn ok" disabled={busy} data-testid="profiles-seed-default-btn" onClick={onSeedDefault}>
+            {busy ? "Seeding…" : "Seed Default Pack (19)"}
           </button>
         </>
       }
     >
-      <div className="muted small" style={{ marginBottom: 10 }}>
-        VibeSquad stores profiles in <code>~/.vibesquad/profiles.json</code>. Check the Paseo profiles to import, or seed the 19-profile project-neutral default pack.
-      </div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-        <button type="button" className="btn ghost small" onClick={() => setSelected(new Set(candidates.map((p) => p.name)))}>
-          Select all ({candidates.length})
-        </button>
-        <button type="button" className="btn ghost small" onClick={() => setSelected(new Set())}>
-          Select none
-        </button>
-        <button type="button" className="btn ghost small" disabled={busy} onClick={onSeedDefault}>
-          Seed Default Pack (19)
-        </button>
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: "52vh", overflowY: "auto" }}>
-        {candidates.map((p) => {
-          const d = diffByName.get(p.name);
-          const warns = warningsByProfile[p.name] ?? detectNoteWarnings(p.notes);
-          const inst = installedProviders.includes(p.provider);
-          return (
-            <label
-              key={p.name}
-              className="ts-team"
-              style={{ display: "flex", flexDirection: "column", gap: 4, padding: "8px 10px", opacity: inst ? 1 : 0.65 }}
-              data-testid={`import-profile-row-${p.name}`}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                <input
-                  type="checkbox"
-                  checked={selected.has(p.name)}
-                  onChange={() => toggle(p.name)}
-                />
-                <b>{p.name}</b>
-                <span className="chip">{p.role}</span>
-                <span className="def-badge">
-                  <b>provider/model</b> {p.provider}/{p.model}
-                </span>
-                {p.modeId && (
-                  <span className="def-badge">
-                    <b>modeId</b> {p.modeId}
-                  </span>
-                )}
-                {p.thinkingOptionId && (
-                  <span className="def-badge">
-                    <b>thinking</b> {p.thinkingOptionId}
-                  </span>
-                )}
-                {!inst && (
-                  <span className="pill diag warn" data-testid={`install-provider-${p.name}`}>
-                    install {p.provider}
-                  </span>
-                )}
-                {d && d.status !== "same" && (
-                  <span className="pill diag hot">
-                    {d.status} ({d.changedFields.join(", ")})
-                  </span>
-                )}
-                {d && d.status === "same" && <span className="muted small">in sync</span>}
-              </div>
-              {warns.map((w, idx) => (
-                <div key={idx} className="stat-alert small" data-testid={`profile-warning-${p.name}`}>
-                  ⚠ {w}
-                </div>
-              ))}
-            </label>
-          );
-        })}
+      <div className="muted small">
+        VibeSquad stores profiles in <code>~/.vibesquad/profiles.json</code>. Seed the 19-profile project-neutral default pack to get started; you can edit or add profiles in Settings → Profiles.
       </div>
     </Modal>
   );
@@ -283,7 +166,7 @@ function StartAtLoginRow() {
   );
 }
 
-export type TeamSettingsPart = "account" | "remote" | "update" | "scale" | "paseo" | "profiles" | "teams";
+export type TeamSettingsPart = "account" | "remote" | "update" | "scale" | "runner" | "profiles" | "teams";
 
 export function TeamSettingsModal({
   onClose,
@@ -303,7 +186,7 @@ export function TeamSettingsModal({
   const [base, setBase] = useState(snapshotTeams);
   const [teams, setTeams] = useState<TeamDef[]>(() => JSON.parse(JSON.stringify(base.teams)));
   const [msg, setMsg] = useDraft("settings:msg");
-  const { profiles, installedProviders, diff } = useProfiles();
+  const { profiles, installedProviders } = useProfiles();
   const [selectedProfileName, setSelectedProfileName] = useState<string>(() => profiles[0]?.name ?? "Lead - Claude");
   const activeProfile = profiles.find((p) => p.name === selectedProfileName) ?? profiles[0];
   const [draftProfile, setDraftProfile] = useState<Profile | null>(() => (activeProfile ? { ...activeProfile } : null));
@@ -311,7 +194,6 @@ export function TeamSettingsModal({
     activeProfile?.featureValues ? JSON.stringify(activeProfile.featureValues) : "{}",
   );
   const [profileDirty, setProfileDirty] = useState(false);
-  const [showImportModal, setShowImportModal] = useState(false);
 
   const handleSelectProfile = (name: string) => {
     setSelectedProfileName(name);
@@ -665,19 +547,13 @@ export function TeamSettingsModal({
           </div>
         </div>
       </section>}
-      {show("paseo") && isHostMode && (
-        <PaseoSettingsSection
-          lanIpHint={exposedIps[0]}
-          onJumpToProfiles={
-            onJumpToProfiles ??
-            (() => {
-              document.querySelector('[data-testid="profiles-settings-section"]')?.scrollIntoView?.({ behavior: "smooth", block: "start" });
-            })
-          }
-        />
+      {show("runner") && isHostMode && (
+        <section className="ts-team" data-testid="runner-settings-section" data-setting-id="runner-providers">
+          <RunnerSettingsSection />
+        </section>
       )}
-      {show("paseo") && embedded && !isHostMode && (
-        <div className="muted small" data-testid="paseo-settings-remote">Paseo settings live on the host machine; this device is connected remotely.</div>
+      {show("runner") && embedded && !isHostMode && (
+        <div className="muted small" data-testid="runner-settings-remote">Runner settings live on the host machine; this device is connected remotely.</div>
       )}
       {show("profiles") && <section className="ts-team" data-testid="profiles-settings-section" data-setting-id="profiles">
         <div className="ts-scale-head" style={{ marginBottom: 8 }}>
@@ -685,7 +561,6 @@ export function TeamSettingsModal({
             <div className="field-label">AGENT PROFILES (~/.vibesquad/profiles.json · {profiles.length} profiles)</div>
             <div className="muted small">
               Every spawn path (New Agent, Handoff, Brainstorm restart, Inbox topic, Digest) reads this store.
-              {diff.some((d) => d.status !== "same") ? " Diff detected against Paseo config." : ""}
             </div>
           </div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -696,15 +571,6 @@ export function TeamSettingsModal({
               onClick={() => void onSeedDefaultPackInSettings()}
             >
               Seed Default Pack (19)
-            </button>
-            <button
-              type="button"
-              className="btn small"
-              data-testid="open-paseo-sync-btn"
-              data-setting-id="profile-import"
-              onClick={() => setShowImportModal(true)}
-            >
-              Re-import / Sync from Paseo
             </button>
             <button
               type="button"
@@ -731,15 +597,6 @@ export function TeamSettingsModal({
           }}
         >
           {profiles.map((p) => {
-            const d = diff.find((entry) => entry.name === p.name);
-            const syncLabel =
-              !d || d.status === "same"
-                ? "SYNCED"
-                : d.status === "modified"
-                  ? "MODIFIED"
-                  : d.status === "vs-only"
-                    ? "VS ONLY"
-                    : "PASEO ONLY";
             const isSelected = p.name === selectedProfileName;
             const inst = installedProviders.includes(p.provider);
             return (
@@ -783,9 +640,6 @@ export function TeamSettingsModal({
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   {!inst && <span className="pill diag warn">install {p.provider}</span>}
-                  <span className={`pill diag ${syncLabel === "MODIFIED" ? "hot" : syncLabel === "VS ONLY" ? "warn" : "ok"}`}>
-                    {syncLabel}
-                  </span>
                 </div>
               </button>
             );
@@ -918,7 +772,6 @@ export function TeamSettingsModal({
           </div>
         )}
       </section>}
-      {showImportModal && <ProfileImportModal onClose={() => setShowImportModal(false)} />}
       {show("teams") && <>
       {teams.map((t, i) => (
         // Settings-home jump anchors go on the first team only, so each id stays unique.

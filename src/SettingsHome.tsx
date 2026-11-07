@@ -36,13 +36,13 @@ const NAV: { id: HomeSection; label: string }[] = [
   { id: "keys", label: "Keybindings" },
   { id: "team", label: "Team" },
   { id: "remote", label: "Remote Control" },
-  { id: "paseo", label: "Paseo" },
+  { id: "runner", label: "Runner & Providers" },
   { id: "profiles", label: "Profiles" },
   { id: "about", label: "About" },
 ];
 const navLabel = (s: HomeSection) => NAV.find((n) => n.id === s)!.label;
 const PREF_SECTIONS = new Set<HomeSection>(["app", "chat", "notifications", "newAgent"]);
-const REHOUSED: Partial<Record<HomeSection, TeamSettingsPart[]>> = { team: ["account", "teams"], paseo: ["paseo"], profiles: ["profiles"], remote: ["remote"] };
+const REHOUSED: Partial<Record<HomeSection, TeamSettingsPart[]>> = { team: ["account", "teams"], runner: ["runner"], profiles: ["profiles"], remote: ["remote"] };
 
 // The palette ("Settings: <name>") asks for a setting before the home mounts; the home picks it up on open.
 let pendingTarget: string | null = null;
@@ -130,7 +130,7 @@ export function SettingsHome(props: { onClose: () => void; onDiagnostics: () => 
     >
       <nav className="settings-nav" aria-label="Settings sections">
         <input data-testid="settings-search" autoFocus placeholder="Search settings…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search settings" />
-        {NAV.filter((n) => !isRemote() || n.id !== "paseo").map((n) => (
+        {NAV.filter((n) => !isRemote() || n.id !== "runner").map((n) => (
           <button
             key={n.id}
             className={`settings-nav-item ${!searching && section === n.id ? "on" : ""}`}
@@ -146,7 +146,7 @@ export function SettingsHome(props: { onClose: () => void; onDiagnostics: () => 
       </nav>
       <div className="settings-pane" ref={paneRef} data-testid="settings-pane">
         {searching && <SearchResults hits={hits} q={q} onOpen={jumpTo} />}
-        {NAV.filter((n) => (!isRemote() || n.id !== "paseo") && visited.has(n.id)).map((n) => (
+        {NAV.filter((n) => (!isRemote() || n.id !== "runner") && visited.has(n.id)).map((n) => (
           <div key={n.id} hidden={searching || section !== n.id} data-testid={`settings-section-${n.id}`}>
             <h2>
               {n.label}
@@ -154,7 +154,7 @@ export function SettingsHome(props: { onClose: () => void; onDiagnostics: () => 
             </h2>
             {n.id === "app" && (
               <p className="settings-note" data-testid="settings-agents-keep-running">
-                Agents keep running when you close this window — they live in the Paseo daemon.
+                Agents keep running when you close this window — they live in the VibeSquad runner.
               </p>
             )}
             {PREF_SECTIONS.has(n.id) && visiblePrefDefs().filter((d) => d.section === n.id).map((d) => <PrefRow key={d.key} k={d.key} />)}

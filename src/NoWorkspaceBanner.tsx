@@ -1,5 +1,5 @@
 // Usage: <NoWorkspaceBanner cwd={agent.cwd} onReady={(workspaceId) => setWsOverride(workspaceId)} />
-// Show it when an agent's folder has no Paseo workspace (workspaceIdForAgent returned null). Clicking
+// Show it when an agent's folder has no workspace (workspaceIdForAgent returned null). Clicking
 // [Add as workspace] calls ensureWorkspace(cwd); onReady fires with the id so the host panel can reload with it
 // (the daemon's workspace push may land a moment later, so keep the id in local state until the store catches up).
 import { useState } from "react";
@@ -26,7 +26,7 @@ export function NoWorkspaceBanner({ cwd, onReady }: { cwd: string; onReady: (wor
   };
   return (
     <div className="no-workspace-banner" data-testid="no-workspace-banner">
-      <div>This folder isn't a Paseo workspace yet.</div>
+      <div>This folder isn't a workspace yet.</div>
       <div className="muted small no-workspace-cwd" title={cwd}>{cwd}</div>
       <div className="no-workspace-actions">
         <button className="btn ok" data-testid="no-workspace-add" disabled={busy || !!unsafe} onClick={() => void add()}>

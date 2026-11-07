@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { PaseoAgent } from "@getpaseo/client";
-import { buildAgentDeepLink } from "@getpaseo/protocol/agent-deep-link";
-import { attachFiles, clearNeedsYou, markAgentRead, markAgentUnread, daemonClient, SERVER_ID, sendMessage, setNeedsYou, snoozeNeedsYou, stopAgent, updateAgent, upsertLocalAgent } from "./paseo";
+import { attachFiles, clearNeedsYou, markAgentRead, markAgentUnread, daemonClient, sendMessage, setNeedsYou, snoozeNeedsYou, stopAgent, updateAgent, upsertLocalAgent } from "./paseo";
 import { DEMO } from "./demoFlag";
 import { isLocallyHidden, isMarkedUnread } from "./attentionLocal";
 import { clearWorkspaceIfQuiet } from "./paseoAttention";
@@ -1151,15 +1150,6 @@ export function DrawerHeader({
     </>
   );
 
-  const paseoLink = (
-    <>
-          {SERVER_ID && (
-            <a className="btn" href={buildAgentDeepLink({ serverId: SERVER_ID, agentId: agent.id })}>
-              Open in Paseo
-            </a>
-          )}
-    </>
-  );
   const secondaryPlumbing = (
     <>
           <span className="role-tag">{AGENT_TYPE_LABEL[agentType]}</span>
@@ -1168,7 +1158,6 @@ export function DrawerHeader({
           </span>
           {featureChips}
           <AgentActions agent={agent} archive />
-          {paseoLink}
     </>
   );
   const dockBtns = (
@@ -1422,7 +1411,6 @@ export function DrawerHeader({
           {moreOpen && (
             <div className="labels drawer-labels-list" style={{ display: "flex", flexWrap: "wrap", gap: 4, padding: "2px 4px", border: "none", minWidth: 0, maxWidth: "100%" }}>
               {Object.entries(agentLabels)
-                .filter(([k]) => !k.startsWith("paseo.open-agent-tab"))
                 .map(([k, v]) => (
                   <span key={k} className="chip">
                     {k}={v}
@@ -1462,7 +1450,6 @@ export function DrawerHeader({
         </div>
         <div className="drawer-actions" style={{ flexWrap: "wrap", gap: 4, alignItems: "center" }}>
           {extraActions}
-          {paseoLink}
           {dockBtns}
         </div>
       </header>
@@ -1540,7 +1527,6 @@ export function DrawerHeader({
       <SessionActions agent={agent} entries={entries} />
       <div className="labels drawer-labels-list" style={{ display: "flex", flexWrap: "wrap", gap: 4, padding: "2px 4px", border: "none", minWidth: 0, maxWidth: "100%" }}>
         {Object.entries(agentLabels)
-          .filter(([k]) => !k.startsWith("paseo.open-agent-tab"))
           .map(([k, v]) => (
             <span key={k} className="chip">
               {k}={v}

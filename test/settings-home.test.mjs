@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 // prefs.ts reads localStorage lazily; give it an in-memory one before it loads.
 const mem = new Map();
@@ -206,11 +206,11 @@ test("confirm-on-close guard lives on the drafts beforeunload hook", async () =>
   assert.match(src("App.tsx"), /setCloseGuard\(\(\) => getPref\("app\.confirmClose"\) && membersRef\.current\.some\(\(m\) => m\.agent\.status === "running"\)\)/);
 });
 
-test("Settings home: one entry point, all sections, rehoused Team/Paseo/Profiles, note, push moved", () => {
+test("Settings home: one entry point, all sections, rehoused Team/Runner/Profiles, note, push moved", () => {
   const home = src("SettingsHome.tsx");
-  for (const label of ["App", "Chat", "Notifications", "New Agent defaults", "Team", "Paseo", "Profiles", "About"]) assert.ok(home.includes(`label: "${label}"`), label);
-  assert.match(home, /Agents keep running when you close this window — they live in the Paseo daemon\./);
-  assert.match(home, /team: \["account", "teams"\], paseo: \["paseo"\], profiles: \["profiles"\]/);
+  for (const label of ["App", "Chat", "Notifications", "New Agent defaults", "Team", "Runner & Providers", "Profiles", "About"]) assert.ok(home.includes(`label: "${label}"`), label);
+  assert.match(home, /Agents keep running when you close this window — they live in the VibeSquad runner./);
+  assert.match(home, /team: \["account", "teams"\], runner: \["runner"\], profiles: \["profiles"\]/);
   assert.match(home, /<PushNotificationControls \/>/);
   const app = src("App.tsx");
   assert.match(app, /modal === "settings" && \(\s*<SettingsHome/);
@@ -221,7 +221,7 @@ test("Settings home: one entry point, all sections, rehoused Team/Paseo/Profiles
 });
 
 test("nit 1: every jumpable setting has a data-setting-id anchor in the component that renders it", () => {
-  const rendered = ["SettingsHome.tsx", "TeamSettingsModal.tsx", "PaseoSettingsSection.tsx"].map(src).join("\n");
+  const rendered = ["SettingsHome.tsx", "TeamSettingsModal.tsx", "RunnerSettingsSection.tsx"].map(src).join("\n");
   const anchors = new Set();
   for (const m of rendered.matchAll(/data-setting-id=(?:"([^"]+)"|\{([^}]*)\})/g)) {
     if (m[1]) anchors.add(m[1]);
@@ -357,4 +357,22 @@ test("Settings search finds the start-at-login toggle, which surfaces failures",
   const modalSrc = src("TeamSettingsModal.tsx");
   assert.match(modalSrc, /data-testid="start-at-login-error"/);
   assert.match(modalSrc, /d\.ok === false/);
+});
+
+test("P2: Settings has no Paseo tab or Paseo import UI; Runner & Providers moved out first", () => {
+  const home = src("SettingsHome.tsx");
+  assert.doesNotMatch(home, /id: "paseo"|label: "Paseo"/);
+  assert.match(home, /id: "runner", label: "Runner & Providers"/);
+  const team = src("TeamSettingsModal.tsx");
+  assert.doesNotMatch(team, /PaseoSettingsSection|Re-import \/ Sync from Paseo|importFromPaseo|PASEO ONLY/);
+  assert.match(team, /<RunnerSettingsSection \/>/);
+  assert.ok(!existsSync(new URL("../src/PaseoSettingsSection.tsx", import.meta.url)));
+  assert.doesNotMatch(src("DrawerHeader.tsx"), /Open in Paseo|buildAgentDeepLink/);
+  assert.doesNotMatch(src("App.tsx"), /Connecting to Paseo|works with Paseo \(pinned/);
+});
+
+test("P2: the Setup Checklist has no Paseo item", () => {
+  const fr = src("FirstRunModal.tsx");
+  assert.doesNotMatch(fr, /Paseo|paseo/);
+  assert.match(fr, /checklist-row-|<Row id="claude"/);
 });

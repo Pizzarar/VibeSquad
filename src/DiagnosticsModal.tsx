@@ -1,7 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Modal } from "./TeamActions";
 import { daemonClient, reconnectWithDaemonPassword, usePaseo } from "./paseo";
-import { submitDaemonPassword } from "./paseoDaemonAuth";
 import { decideOverlay, paseoIsDown, pillText, usesPaseoBackend } from "./daemonOverlay";
 import { getRunnerStatus } from "./runnerBridge";
 import { clearSession, isAndroidUserAgent, isLocalHost, isRemote } from "./remoteSession";
@@ -86,7 +85,6 @@ export function shouldShowDisconnectOverlay(conn: string, disconnectedSinceMs: n
 export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
   onOpenDiagnostics?: () => void;
   onOpenSetup?: () => void;
-  onOpenPaseoSettings?: () => void;
   onRePair?: () => void;
 }) {
   const { conn, status, error, authFailureReason, runnerConn, agents, paseoConn } = usePaseo();
@@ -94,9 +92,6 @@ export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
   const [updateChecking, setUpdateChecking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [visible, setVisible] = useState(false);
-  const [pw, setPw] = useState("");
-  const [unlockBusy, setUnlockBusy] = useState(false);
-  const [unlockErr, setUnlockErr] = useState<string | null>(null);
   const paseoDown = paseoIsDown({ remote: isRemote(), conn, status, paseoConn });
   const kind = decideOverlay({
     remote: isRemote(),
@@ -201,61 +196,13 @@ export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
     } catch {}
     props.onOpenSetup?.();
   };
-  const onUnlockSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmed = pw.trim();
-    if (!trimmed || unlockBusy) return;
-    setUnlockBusy(true);
-    setUnlockErr(null);
-    try {
-      const res = await submitDaemonPassword(trimmed);
-      if (!res.ok) {
-        setUnlockErr(res.error || "Failed to verify password");
-        return;
-      }
-      setPw("");
-      setUnlockErr(null);
-      await reconnectWithDaemonPassword(trimmed);
-    } catch (err) {
-      setUnlockErr(err instanceof Error ? err.message : String(err));
-    } finally {
-      setUnlockBusy(false);
-    }
-  };
   return (
     <div className="daemon-disconnect-scrim" data-testid="daemon-disconnect-scrim">
       <div className="daemon-disconnect-card" data-testid="daemon-down-banner" role="alert">
         <div className="daemon-disconnect-title" data-testid="daemon-disconnect-text">
-          {authFailureReason ? "PASEO DAEMON LOCKED" : <>Daemon disconnected · reconnecting automatically</>}
+          Daemon disconnected · reconnecting automatically
         </div>
-        {authFailureReason ? (
-          <>
-            <div className="daemon-disconnect-subtext">
-              {authFailureReason === "password_required"
-                ? "The local Paseo daemon requires a password (daemon.auth.password is set in ~/.paseo/config.json)."
-                : "The stored daemon password was rejected by the local Paseo daemon."}
-            </div>
-            <form className="daemon-banner-auth-form" data-testid="daemon-banner-auth-form" onSubmit={(e) => void onUnlockSubmit(e)}>
-              <input
-                type="password"
-                data-testid="daemon-banner-password-input"
-                value={pw}
-                onChange={(e) => setPw(e.target.value)}
-                placeholder="Enter Paseo daemon password…"
-              />
-              <button type="submit" className="btn small" data-testid="daemon-banner-unlock-btn" disabled={unlockBusy || !pw.trim()}>
-                {unlockBusy ? "VERIFYING…" : "UNLOCK & SAVE"}
-              </button>
-            </form>
-            {unlockErr && (
-              <div className="daemon-disconnect-error" data-testid="daemon-banner-auth-error">
-                {unlockErr}
-              </div>
-            )}
-          </>
-        ) : error ? (
-          <div className="daemon-disconnect-subtext">{error}</div>
-        ) : null}
+        {error ? <div className="daemon-disconnect-subtext">{error}</div> : null}
         <div className="daemon-disconnect-actions">
           <button type="button" className="btn ok small" data-testid="daemon-banner-retry" disabled={busy} onClick={onRetryNow}>
             RETRY NOW
@@ -297,12 +244,7 @@ export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
           )}
           {props.onOpenSetup && (
             <button type="button" className="btn ghost small" data-testid="daemon-banner-setup" onClick={props.onOpenSetup}>
-              SETUP / DAEMON
-            </button>
-          )}
-          {props.onOpenPaseoSettings && (
-            <button type="button" className="btn ghost small" data-testid="daemon-banner-paseo-settings" onClick={props.onOpenPaseoSettings}>
-              PASEO SETTINGS
+              SETUP
             </button>
           )}
         </div>
@@ -311,10 +253,9 @@ export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
   );
 });
 
-/** Paseo connection controls in Diagnostics: the header pill links here, so the unlock form stays reachable without a scrim. */
+/** Connection status in Diagnostics: the header pill links here, so Retry stays reachable without a scrim. */
 function PaseoConnectionSection() {
-  const { conn, status, authFailureReason, paseoConn, agents } = usePaseo();
-  const [pw, setPw] = useState("");
+  const { conn, status, paseoConn, agents } = usePaseo();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const remote = isRemote();
@@ -334,38 +275,13 @@ function PaseoConnectionSection() {
       setBusy(false);
     }
   };
-  const onUnlock = (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmed = pw.trim();
-    if (!trimmed) return;
-    void run(async () => {
-      const res = await submitDaemonPassword(trimmed);
-      if (!res.ok) throw new Error(res.error || "Failed to verify password");
-      setPw("");
-      await reconnectWithDaemonPassword(trimmed);
-    });
-  };
   return (
     <div className="diag-build-status stale" data-testid="diagnostics-paseo-section">
-      <div>
-        {authFailureReason === "password_required"
-          ? "Paseo daemon locked: it requires a password (daemon.auth.password in ~/.paseo/config.json)."
-          : authFailureReason
-            ? "Paseo daemon locked: the stored password was rejected."
-            : "Paseo daemon disconnected · reconnecting automatically. VibeSquad keeps working on its own runner."}
-      </div>
-      {authFailureReason && (
-        <form className="daemon-banner-auth-form" data-testid="diagnostics-unlock-form" onSubmit={onUnlock}>
-          <input type="password" data-testid="diagnostics-unlock-input" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="Enter Paseo daemon password…" />
-          <button type="submit" className="btn small" data-testid="diagnostics-unlock-btn" disabled={busy || !pw.trim()}>
-            {busy ? "VERIFYING…" : "UNLOCK & SAVE"}
-          </button>
-        </form>
-      )}
+      <div>Connection lost · reconnecting automatically. VibeSquad keeps working on its own runner.</div>
       <button type="button" className="btn ok small" data-testid="diagnostics-paseo-retry" disabled={busy} onClick={() => void run(async () => { await reconnectWithDaemonPassword(); await dc.getDaemonStatus?.(); })}>
         RETRY NOW
       </button>
-      {err && <div className="daemon-disconnect-error" data-testid="diagnostics-unlock-error">{err}</div>}
+      {err && <div className="daemon-disconnect-error" data-testid="diagnostics-connection-error">{err}</div>}
     </div>
   );
 }
