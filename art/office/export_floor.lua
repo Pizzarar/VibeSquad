@@ -46,9 +46,12 @@ local function R(n)
 end
 local function team(t)
   local d = {}
-  for i=0,5 do d[#d+1] = R(t..".desk"..i) end
+  local i = 0
+  while S[t..".desk"..i] do d[#d+1] = R(t..".desk"..i); i = i + 1 end
+  -- statsTv (F4): the wall CRT's glass rect; optional for the parser, so only written when the slice exists
   return '{"lead":'..R(t..".lead")..',"buddyOffice":'..R(t..".buddyOffice")..
-    ',"desks":['..table.concat(d, ",")..'],"lobby":'..R(t..".lobby")..'}'
+    ',"desks":['..table.concat(d, ",")..'],"lobby":'..R(t..".lobby")..
+    (S[t..".statsTv"] and ',"statsTv":'..R(t..".statsTv") or '')..'}'
 end
 -- screens (Contract v2): the roof band is its own plate (public/office/roof-*.png); rects in ROOF-plate px.
 -- riffbot/overlord = the CRT glass (one face cell from faces.json), elevatorTop = 32x32 sprite cell.
