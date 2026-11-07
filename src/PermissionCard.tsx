@@ -309,7 +309,7 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
             <div
               className="perm-plan-body"
               data-testid="perm-plan-body"
-              style={{ maxHeight: "40vh", overflowY: "auto", margin: "6px 0", padding: 8, background: "#090a16", border: "1px solid var(--line)", fontSize: 12 }}
+              style={{ maxHeight: "40vh", overflowY: "auto", margin: "6px 0", padding: 8, background: "var(--well)", border: "1px solid var(--line)", fontSize: 12 }}
             >
               <MarkdownRenderer text={edited ? planDraft! : planText} agentId={agentId} doc />
               {edited && <div className="muted small" data-testid="perm-plan-edited">edited, will be sent on approve</div>}
@@ -422,7 +422,7 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
             style={{
               margin: "6px 0",
               padding: 8,
-              background: "#090a16",
+              background: "var(--well)",
               border: "1px solid var(--line)",
               whiteSpace: "pre-wrap",
               fontFamily: "monospace",
@@ -447,7 +447,7 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
                 data-testid="perm-preview-diff"
                 style={{
                   padding: 8,
-                  background: "#090a16",
+                  background: "var(--well)",
                   border: "1px solid var(--line)",
                   whiteSpace: "pre-wrap",
                   fontFamily: "monospace",
@@ -461,7 +461,7 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
                     key={i}
                     style={{
                       display: "block",
-                      color: line.startsWith("+") ? "#4caf50" : line.startsWith("-") ? "#f44336" : undefined,
+                      color: line.startsWith("+") ? "var(--mint-t)" : line.startsWith("-") ? "var(--pink-t)" : undefined,
                     }}
                   >
                     {line}
@@ -479,7 +479,7 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
             style={{
               margin: "6px 0",
               padding: 8,
-              background: "#090a16",
+              background: "var(--well)",
               border: "1px solid var(--line)",
               whiteSpace: "pre-wrap",
               fontFamily: "monospace",
@@ -497,7 +497,7 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
           className="perm-error"
           role="alert"
           data-testid="perm-error"
-          style={{ color: "#f44336", padding: "4px 0", fontSize: 12 }}
+          style={{ color: "var(--pink-t)", padding: "4px 0", fontSize: 12 }}
         >
           {error}
           <button

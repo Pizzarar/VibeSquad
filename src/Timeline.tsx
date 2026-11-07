@@ -524,7 +524,7 @@ function DiffView({ diff }: { diff: string }) {
   return (
     <pre className="tl-diff">
       {diff.split("\n").map((line, i) => {
-        const color = line.startsWith("+") ? "#1a7f37" : line.startsWith("-") ? "#cf222e" : undefined;
+        const color = line.startsWith("+") ? "var(--mint-t)" : line.startsWith("-") ? "var(--pink-t)" : undefined;
         return <div key={i} style={{ color }}>{line}</div>;
       })}
     </pre>
@@ -546,7 +546,7 @@ function ToolDetail({ it, d }: { it: any; d: any }) {
           <div>
             <span
               className="tl-exit-badge"
-              style={{ background: d.exitCode === 0 ? "#1a7f37" : "#cf222e", color: "#fff", padding: "1px 6px", borderRadius: 3 }}
+              style={{ background: d.exitCode === 0 ? "var(--mint-fill)" : "var(--pink-fill)", color: "var(--bg)", padding: "1px 6px", borderRadius: 3 }}
             >
               exit {d.exitCode}
             </span>
@@ -555,7 +555,7 @@ function ToolDetail({ it, d }: { it: any; d: any }) {
         {output && (
           <pre className="tl-tool-output" style={{ maxHeight: 240, overflow: "auto" }}>{String(output)}</pre>
         )}
-        {it.error && <div className="tl-tool-error" style={{ color: "#ff4d6d" }}>{formatToolError(it.error)}</div>}
+        {it.error && <div className="tl-tool-error" style={{ color: "var(--pink-t)" }}>{formatToolError(it.error)}</div>}
       </div>
     );
   }
@@ -565,7 +565,7 @@ function ToolDetail({ it, d }: { it: any; d: any }) {
       return (
         <div data-testid="tl-tool-detail" className="tl-tool-detail">
           <DiffView diff={diffText} />
-          {it.error && <div style={{ color: "#ff4d6d" }}>{formatToolError(it.error)}</div>}
+          {it.error && <div style={{ color: "var(--pink-t)" }}>{formatToolError(it.error)}</div>}
         </div>
       );
     }
@@ -574,7 +574,7 @@ function ToolDetail({ it, d }: { it: any; d: any }) {
     return (
       <div data-testid="tl-tool-detail" className="tl-tool-detail">
         <pre style={{ maxHeight: 240, overflow: "auto" }}>{String(content).slice(0, 2000)}</pre>
-        {it.error && <div style={{ color: "#ff4d6d" }}>{formatToolError(it.error)}</div>}
+        {it.error && <div style={{ color: "var(--pink-t)" }}>{formatToolError(it.error)}</div>}
       </div>
     );
   }
@@ -587,7 +587,7 @@ function ToolDetail({ it, d }: { it: any; d: any }) {
       ) : (
         <pre style={{ maxHeight: 240, overflow: "auto" }}>{JSON.stringify(d ?? it.input, null, 2)}</pre>
       )}
-      {it.error && <div style={{ color: "#ff4d6d" }}>{formatToolError(it.error)}</div>}
+      {it.error && <div style={{ color: "var(--pink-t)" }}>{formatToolError(it.error)}</div>}
     </div>
   );
 }
@@ -612,7 +612,7 @@ function SubAgentBody({ agentId, subagentKey, d }: { agentId: string; subagentKe
   const previewText = d.output ?? d.prompt ?? d.result;
 
   return (
-    <div data-testid="tl-subagent-body" style={{ paddingLeft: 20, borderLeft: "2px solid #888", marginTop: 4 }}>
+    <div data-testid="tl-subagent-body" style={{ paddingLeft: 20, borderLeft: "2px solid var(--line)", marginTop: 4 }}>
       {previewText && <div className="muted">{String(previewText).slice(0, 200)}</div>}
       {loading && <div className="muted">Loading…</div>}
       {entries?.map((e, i) => (
@@ -712,7 +712,7 @@ export function TimelineItem({
 
   if (isCompaction(it) || (it.type === "notification" && typeof it.message === "string" && it.message.includes("compacted"))) {
     return (
-      <div data-testid="tl-compaction-row" className="tl tl-compaction" style={{ textAlign: "center", color: "#888", borderTop: "1px dashed #888", borderBottom: "1px dashed #888", padding: "2px 0", fontSize: "0.85em" }}>
+      <div data-testid="tl-compaction-row" className="tl tl-compaction" style={{ textAlign: "center", color: "var(--muted)", borderTop: "1px dashed var(--line)", borderBottom: "1px dashed var(--line)", padding: "2px 0", fontSize: "0.85em" }}>
         ✂ Context compacted{(it.summary || it.detail) ? ` — ${it.summary ?? it.detail}` : ""}
       </div>
     );
@@ -785,7 +785,7 @@ export function TimelineItem({
         <div
           data-testid="tl-reasoning-row"
           className="tl tl-reasoning"
-          style={{ cursor: "pointer", color: "#888", fontSize: "0.9em" }}
+          style={{ cursor: "pointer", color: "var(--muted)", fontSize: "0.9em" }}
           onClick={() => setExpanded(!open)}
         >
           {open ? "▾" : "▸"} Thinking…{!open && preview ? ` ${preview}${txt.length > 80 ? "…" : ""}` : ""}
@@ -817,7 +817,7 @@ export function TimelineItem({
             <span style={{ cursor: "pointer" }}>{expanded ? "▾" : "▸"}</span>{" "}
             <b>◈ sub-agent</b> {d.subAgentType ? `[${d.subAgentType}] ` : ""}
             {summary} <span className="muted">· {it.status}</span>
-            {failed && errText && <div style={{ color: "#ff4d6d", fontSize: "0.85em" }}>{errText}</div>}
+            {failed && errText && <div style={{ color: "var(--pink-t)", fontSize: "0.85em" }}>{errText}</div>}
             {expanded && (
               <SubAgentBody agentId={agentId} subagentKey={subagentKey} d={d} />
             )}
@@ -839,7 +839,7 @@ export function TimelineItem({
           <span style={{ cursor: "pointer" }}>{open ? "▾" : "▸"}</span>{" "}
           <span className="tool-name">{it.name}</span>{" "}
           <SummaryWithLinks text={summaryStr} />
-          {failed && errText && <span style={{ color: "#ff4d6d", marginLeft: 4 }}>{errText}</span>}
+          {failed && errText && <span style={{ color: "var(--pink-t)", marginLeft: 4 }}>{errText}</span>}
           {open && <ToolDetail it={it} d={d} />}
         </div>
       );
@@ -864,7 +864,7 @@ export function TimelineItem({
 
     case "provider_switch":
       return (
-        <div data-testid="tl-provider-switch-row" className="tl tl-compaction tl-provider-switch" style={{ textAlign: "center", color: "#888", borderTop: "1px dashed #888", borderBottom: "1px dashed #888", padding: "2px 0", fontSize: "0.85em" }}>
+        <div data-testid="tl-provider-switch-row" className="tl tl-compaction tl-provider-switch" style={{ textAlign: "center", color: "var(--muted)", borderTop: "1px dashed var(--line)", borderBottom: "1px dashed var(--line)", padding: "2px 0", fontSize: "0.85em" }}>
           ── Switched to {it.label || "new provider"} ──
         </div>
       );
@@ -1103,7 +1103,7 @@ function PinnedTodo({ entry }: { entry: Entry }) {
   return (
     <div
       data-testid="tl-pinned-todo"
-      style={{ background: "var(--bg, #1e1e1e)", borderBottom: "1px solid #444", padding: "4px 8px", cursor: "pointer" }}
+      style={{ background: "var(--bg, #1e1e1e)", borderBottom: "1px solid var(--line)", padding: "4px 8px", cursor: "pointer" }}
       onClick={() => setOpen((v) => !v)}
     >
       {open ? "▾" : "▸"} 📋 Plan / Tasks ({done}/{total})

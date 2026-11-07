@@ -80,7 +80,7 @@ export function SandboxView({
                       borderRadius: 999,
                       background: "rgba(0, 245, 212, 0.12)",
                       border: "1px solid rgba(0, 245, 212, 0.35)",
-                      color: "#00f5d4",
+                      color: "var(--cyan-t)",
                       textDecoration: "none",
                       fontFamily: "monospace",
                       fontSize: 11,

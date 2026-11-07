@@ -70,7 +70,7 @@ export function AllowRulesModal({ agentId, onClose }: { agentId: string; onClose
           Saved in this project's <code>.claude</code> settings. Removing a rule means Claude asks again next time.
         </div>
         {error && (
-          <div role="alert" data-testid="allow-rules-error" style={{ color: "#f44336", fontSize: 12, marginBottom: 6 }}>
+          <div role="alert" data-testid="allow-rules-error" style={{ color: "var(--pink-t)", fontSize: 12, marginBottom: 6 }}>
             {error}
           </div>
         )}
@@ -82,7 +82,7 @@ export function AllowRulesModal({ agentId, onClose }: { agentId: string; onClose
               <div key={f.path} data-testid="allow-rules-file" style={{ marginBottom: 10 }}>
                 <div style={{ fontFamily: "monospace", fontSize: 12 }}>{f.path}</div>
                 {!f.exists && <div className="muted small">Not found.</div>}
-                {f.error && <div className="muted small" style={{ color: "#f44336" }}>{f.error}</div>}
+                {f.error && <div className="muted small" style={{ color: "var(--pink-t)" }}>{f.error}</div>}
                 {f.exists && !f.error && total === 0 && <div className="muted small">No permission rules.</div>}
                 {RULE_LISTS.map((list) =>
                   f.rules[list].map((rule) => {
@@ -153,7 +153,7 @@ export function AllowRulesModal({ agentId, onClose }: { agentId: string; onClose
             <option value={SETTINGS_FILES[1]}>Save to: settings.json (shared, committed)</option>
           </select>
         </div>
-        {ruleError && <div className="small" data-testid="allow-rule-invalid" style={{ color: "#f44336", marginTop: 4 }}>{ruleError}</div>}
+        {ruleError && <div className="small" data-testid="allow-rule-invalid" style={{ color: "var(--pink-t)", marginTop: 4 }}>{ruleError}</div>}
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
           <button type="button" className="btn ghost" onClick={onClose}>Close</button>
         </div>

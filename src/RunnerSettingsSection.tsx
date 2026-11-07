@@ -53,7 +53,7 @@ export function RunnerSettingsSection() {
         Providers the VS runner can start, found by probing the installed CLIs. Extra models and modes are saved to <code>{path || "~/.vibesquad/settings.json"}</code> (other keys are kept).
       </div>
       {err && <div className="stat-alert small" data-testid="runner-settings-error">{err}</div>}
-      {msg && <div className="small" data-testid="runner-settings-notice" style={{ color: "#00f0ff" }}>✓ {msg}</div>}
+      {msg && <div className="small" data-testid="runner-settings-notice" style={{ color: "var(--cyan-t)" }}>✓ {msg}</div>}
       {rows.map((p) => {
         const st = providerState(p);
         const d = draft[p.provider] ?? {};
@@ -132,7 +132,7 @@ export function RunnerUsageHeaderChip({ onOpenSettings }: { onOpenSettings?: () 
       style={{ display: "inline-flex", alignItems: "center", gap: 8 }}
     >
       {rows.slice(0, 3).map((r) => (
-        <span key={r.provider} style={{ color: "#00f0ff", fontWeight: 700 }}>
+        <span key={r.provider} style={{ color: "var(--cyan-t)", fontWeight: 700 }}>
           {r.provider}: ${r.costUsd.toFixed(2)}
         </span>
       ))}
