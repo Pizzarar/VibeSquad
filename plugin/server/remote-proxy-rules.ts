@@ -28,8 +28,10 @@ export function proxyTimeoutFor(pathname: string, defaultMs: number = REMOTE_TIM
   if (/^\/__vibesquad\/git\/(?:commit|push|pull|merge-base|switch|stash-save|stash-pop|pr-create|pr-merge|pr-automerge)$/.test(pathname)) {
     return Math.max(defaultMs, REMOTE_GIT_WRITE_TIMEOUT_MS);
   }
+  if (pathname === "/__vibesquad/fs/watch") return Math.max(defaultMs, REMOTE_FS_WATCH_TIMEOUT_MS); // server holds a poll up to 25 s
   return defaultMs;
 }
+export const REMOTE_FS_WATCH_TIMEOUT_MS = 30_000;
 export const REMOTE_MAX_PATH_CHARS = 2048;
 export const REMOTE_MAX_IN_FLIGHT = 4;
 export const REMOTE_WINDOW_MS = 60_000;
@@ -81,10 +83,18 @@ export const REMOTE_ALLOW: AllowMap = {
   "/__vibesquad/fs/list": READ,
   "/__vibesquad/fs/resolve": READ,
   "/__vibesquad/fs/read": READ,
+  // N2: file watch is a long-poll (GET ?cwd=&path=&since=) and follows the read gate. The five mutations are
+  // owner-only (a non-GET from a caller without the loopback token is 403 server-side); bodies: REMOTE_BODY_POLICY.
+  "/__vibesquad/fs/watch": READ,
+  "/__vibesquad/fs/write": ["POST"],
+  "/__vibesquad/fs/create": ["POST"],
+  "/__vibesquad/fs/rename": ["POST"],
+  "/__vibesquad/fs/delete": ["POST"],
+  "/__vibesquad/fs/duplicate": ["POST"],
 };
 
 /** Allowlisted GETs the server owner-gates (isGatedRead): the proxy sends the loopback token on these, like a write. */
-export const REMOTE_OWNER_READS: readonly string[] = ["/__vibesquad/fs/list", "/__vibesquad/fs/resolve", "/__vibesquad/fs/read"];
+export const REMOTE_OWNER_READS: readonly string[] = ["/__vibesquad/fs/list", "/__vibesquad/fs/resolve", "/__vibesquad/fs/read", "/__vibesquad/fs/watch"];
 
 // ---- owner-only terminal + script routes (B8 part 2b) -------------------------------------------------------
 // A full shell on the host, so every route here (reads and writes) carries the loopback owner token and the proxy
@@ -217,7 +227,18 @@ const LOG_TYPE = oneOf("you", "needs-you", "handoff", "metric", "decision");
 const INBOX_STATUS = oneOf("parked", "handed-off", "archived");
 const INBOX_SCOPE = oneOf("art", "mechanic", "plugin", "UI", "infra", "docs", "other");
 
+// N2 fs mutations: `cwd` is exempt from the forbidden-key list because confineReq (file-search.mjs) refuses anything
+// outside a known team / agent root; `path` stays repo-relative (normalizeRel). Content stays under the 512 KB body cap.
+const FS_CWD = str(1024);
+const FS_PATH = str(REMOTE_MAX_PATH_CHARS);
+export const REMOTE_FS_WRITE_CHARS = 400_000;
+const fsPolicy = (fields: Record<string, FieldSpec>, require: string[]): BodyPolicy => ({ fields: { cwd: FS_CWD, ...fields }, require: ["cwd", ...require], allowKeys: ["cwd"] });
 export const REMOTE_BODY_POLICY: Readonly<Record<string, BodyPolicy>> = {
+  "/__vibesquad/fs/write": fsPolicy({ path: FS_PATH, content: str(REMOTE_FS_WRITE_CHARS), expectedModifiedAt: str(40) }, ["path", "content"]),
+  "/__vibesquad/fs/create": fsPolicy({ parentPath: FS_PATH, name: str(255), kind: oneOf("file", "directory") }, ["name", "kind"]),
+  "/__vibesquad/fs/rename": fsPolicy({ path: FS_PATH, name: str(255) }, ["path", "name"]),
+  "/__vibesquad/fs/delete": fsPolicy({ path: FS_PATH }, ["path"]),
+  "/__vibesquad/fs/duplicate": fsPolicy({ path: FS_PATH }, ["path"]),
   "/api/teams": TEAMS_POLICY,
   "/__vibesquad/teams": TEAMS_POLICY,
   "/__vibesquad/log": {

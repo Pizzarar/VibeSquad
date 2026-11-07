@@ -9,9 +9,9 @@
 // late write still shows up.
 
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { daemonClient, getPaseoState, sendMessage, subscribePaseo, usePaseo } from "./paseo";
+import { getPaseoState, sendMessage, subscribePaseo, usePaseo } from "./paseo";
 import { DEMO } from "./demoFlag";
-import { vsReadFile } from "./vsFiles";
+import { vsReadFile, vsWatchFile, vsWriteFile } from "./vsFiles";
 import { getPanes } from "./panes";
 import { cleanTitle } from "./ui";
 import { openRightDockTab } from "./RightDock";
@@ -129,19 +129,13 @@ export async function startInlineEdit(opts: { cwd: string; path: string; agentId
   teardowns.set(key, () => offs.forEach((f) => f()));
   let released = false;
   offs.push(() => { released = true; });
-  let reading = false;
-  const poll = setInterval(() => {
-    // A dismissed, replaced or failed session stops its own poll; one read at a time.
+  // The VS server's fs/watch long-poll replaces the old 1.5 s read poll: it fires only when the file changes on disk.
+  // A dismissed, replaced or failed session stops reacting; refresh() reads once and settles the phase (a deleted file errors there).
+  offs.push(vsWatchFile(cwd, path, () => {
     const cur = sessions.get(key);
-    if (released || !cur || cur.id !== id || cur.phase === "error") { clearInterval(poll); return; }
-    if (reading) return;
-    reading = true;
-    vsReadFile(cwd, path, MAX_BYTES + 1).then(
-      (v) => { if (!released && v.modifiedAt !== sessions.get(key)?.currentMtime) void refresh(key, id); },
-      (e) => { if (!released && e?.notFound) patch(key, id, { phase: "error", error: "The file was deleted." }); },
-    ).finally(() => { reading = false; });
-  }, 1500);
-  offs.push(() => clearInterval(poll));
+    if (released || !cur || cur.id !== id || cur.phase === "error") return;
+    void refresh(key, id);
+  }));
 
   // The agent stopping is the other signal: settle once it has run and stopped.
   let sawRunning = false;
@@ -190,9 +184,8 @@ async function undoInline(key: string, hunks: Hunk[]) {
     if (!alive(key, id)) return;
     const r = hunks.length === 1 ? undoHunk(text, hunks[0]) : undoHunks(text, hunks);
     if (!r.ok) { patch(key, id, { error: r.error }); return; }
-    const res = await daemonClient.writeFile({ cwd: s.cwd, path: s.path, content: r.content, expectedModifiedAt: mtime });
-    // writeFile resolves (doesn't throw) on a stale or failed write, so check the status.
-    const w = res as { status?: string; error?: string; modifiedAt?: string };
+    // vsWriteFile resolves (doesn't throw) on a stale or failed write, so check the status.
+    const w = await vsWriteFile(s.cwd, s.path, r.content, mtime);
     if (w?.status === "conflict") { patch(key, id, { error: "Not undone: the file changed on disk while undoing. Try again." }); return; }
     if (w?.status === "error") { patch(key, id, { error: `Not undone: ${w.error ?? "write failed"}` }); return; }
     const cur = sessions.get(key);
