@@ -5531,13 +5531,31 @@ button.project-file-name:hover { text-decoration: underline; }
 /* team-view centre pane = a painted window; its existing breadcrumb bar is the title bar (hub's sky-zone pane keeps its own look) */
 .app.pin-focus > .agent-panes:not(:has(.sky-zones)) { border: 1px solid transparent; border-image: var(--u3-window-frame) 8 / calc(var(--u3-px) * 8) / 0 repeat; }
 .app.pin-focus > .agent-panes:not(:has(.sky-zones)) .pin-focus-bar {
-  height: calc(var(--u3-px) * 22); min-height: calc(var(--u3-px) * 22); padding: 0 var(--sp-2); border-bottom: 0; color: var(--u3-ink-text); background-color: var(--tb-3);
-  background-image: var(--u3-tb-ramp), var(--u3-tb-peach); /* strip centred in the 44px chat bar: 4 kit px of flat peach above and below */
-  background-size: calc(var(--u3-px) * 192) calc(var(--u3-px) * 14), calc(var(--u3-px) * 16) calc(var(--u3-px) * 14); background-position: 0 calc(var(--u3-px) * 4), 0 calc(var(--u3-px) * 4); background-repeat: no-repeat, repeat-x;
+  /* U3e: 44px = 20 kit px of clean airbrush face (strip rows 2-11, so none of the dithered gloss/shade rows show as a
+     dotted outline) + a solid 2 kit px INK floor that is also the clean top edge of the chat area */
+  height: calc(var(--u3-px) * 22); min-height: calc(var(--u3-px) * 22); padding: 0 var(--sp-2); color: var(--u3-ink-text); background-color: var(--tb-3);
+  border-bottom: calc(var(--u3-px) * 2) solid var(--u3-ink);
+  background-image: var(--u3-tb-ramp), var(--u3-tb-peach);
+  background-size: calc(var(--u3-px) * 192) calc(var(--u3-px) * 14), calc(var(--u3-px) * 16) calc(var(--u3-px) * 14);
+  background-position: 0 calc(var(--u3-px) * -2), 0 calc(var(--u3-px) * -2); background-repeat: no-repeat, repeat-x;
+  background-clip: padding-box; box-shadow: none;
   image-rendering: pixelated;
 }
 .app.pin-focus > .agent-panes:not(:has(.sky-zones)) .pin-focus-bar :is(.breadcrumb-seg, .breadcrumb-sep, .pin-focus-name, .muted) { color: var(--u3-ink-text); opacity: 1; text-shadow: none; }
 .app.pin-focus > .agent-panes:not(:has(.sky-zones)) .pin-focus-bar .pin-focus-home { min-height: 0; height: 24px; padding: 0 var(--sp-1); }
+/* U3e: provider / model / thinking selects and their labels are solid light controls with ink text on the strip (both themes) */
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) .pin-focus-bar :is(select, input) {
+  background: var(--u3-lt-text); color: var(--u3-ink-text); border: 1px solid var(--u3-ink); box-shadow: 1px 1px 0 var(--u3-ink); opacity: 1;
+  font-weight: 700; text-shadow: none;
+}
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) .pin-focus-bar select option { color: var(--u3-ink-text); background: var(--u3-lt-text); }
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) .pin-focus-bar :is(.drawer-thinking-label, .drawer-mode-label, label, .small, .muted) { color: var(--u3-ink-text); opacity: 1; font-weight: 700; text-shadow: none; }
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) .pin-focus-bar .pin-lane-handle { background: var(--u3-lt-text); }
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) .pin-focus-bar .top-breadcrumb { background: var(--u3-lt-text); border: 1px solid var(--u3-ink); box-shadow: 1px 1px 0 var(--u3-ink); padding: 0 var(--sp-2); }
+/* the portaled drawer header inherits the generic drawer-head cap (a second dithered strip = the dotted line through the bar): flatten it */
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) .pin-focus-bar .drawer-head-compact { background: none; background-image: none; border: 0; border-image: none; box-shadow: none; padding-top: 0; padding-bottom: 0; }
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) .pin-focus-bar :is(select, input) { background: var(--u3-lt-text) !important; color: var(--u3-ink-text) !important; }
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) .pin-focus-bar :is(.drawer-config-summary, .dock-toggle-btn) { border-image: none; border: 1px solid var(--u3-ink); background: var(--u3-lt-text); color: var(--u3-ink-text); min-height: 0; height: calc(var(--u3-px) * 11); box-shadow: 1px 1px 0 var(--u3-ink); text-shadow: none; }
 
 .team-head { gap: var(--sp-1); padding-left: 6px; padding-right: 4px; }
 .team-head-line { gap: 2px; }
@@ -5549,3 +5567,5 @@ button.project-file-name:hover { text-decoration: underline; }
 .sidebar-footer-row { padding-bottom: calc(var(--u3-px) * 3); flex-shrink: 0; }
 .sidebar-footer-row .btn, .sidebar-footer-row .sidebar-icon-btn, .sidebar-footer-row .sidebar-cog-btn { min-height: calc(var(--u3-px) * 14); flex-shrink: 0; }
 .team-head .team-emblem { flex-shrink: 0; }
+/* U3e: chat text scrolling under the bar fades out over its first 4 kit px instead of being cut mid-glyph */
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) .timeline { -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 calc(var(--u3-px) * 4)); mask-image: linear-gradient(180deg, transparent 0, #000 calc(var(--u3-px) * 4)); }
