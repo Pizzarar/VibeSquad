@@ -113,22 +113,3 @@ test("queued request is bounded by queueMs + base timeout even when healthy", as
     await assert.rejects(rc.request("POST", "/agents/a/input", {}), { status: 504 });
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
-
-test("runner: a client hang-up cancels the queued slot wait, no late delivery", async () => {
-  const { Runner } = await import("../runner/runner.mjs");
-  const dir = mkdtempSync(path.join(os.tmpdir(), "vs-rt-run-"));
-  try {
-    const r = new Runner({ dir, adapters: {}, maxLive: 1, queueMs: 5000 });
-    let sent = 0;
-    r.send = () => { const e = new Error("cap"); e.code = "AGENT_CAP"; if (r.__free) { sent++; return; } throw e; };
-    const ac = new AbortController();
-    const p = r.sendQueued("a", "hi", {}, { signal: ac.signal });
-    await new Promise((x) => setTimeout(x, 30));
-    ac.abort();
-    await assert.rejects(p, { code: "ABORTED" });
-    r.__free = true;
-    for (const w of [...r._slotWaiters]) w();
-    await new Promise((x) => setTimeout(x, 30));
-    assert.equal(sent, 0, "aborted request never delivers");
-  } finally { rmSync(dir, { recursive: true, force: true }); }
-});

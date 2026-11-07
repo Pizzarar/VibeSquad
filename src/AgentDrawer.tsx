@@ -660,6 +660,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
           <Timeline
             agentId={agent.id}
             agentStatus={agent.status}
+            queuedAhead={(agent as { queued?: { ahead: number } }).queued?.ahead}
             agentTitle={agent.title}
             entries={entries}
             error={error}

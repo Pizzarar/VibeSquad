@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import { Runner, maxLiveFromEnv, DEFAULT_MAX_LIVE, queueMsFromEnv, DEFAULT_QUEUE_MS } from '../runner/runner.mjs';
+import { Runner, maxLiveFromEnv, DEFAULT_MAX_LIVE } from '../runner/runner.mjs';
 import { createClaudeAdapter } from '../runner/adapters/claude.mjs';
 import { killTree, spawnNoShell } from '../runner/spawn.mjs';
 
@@ -47,7 +47,7 @@ const tick = () => new Promise((r) => setTimeout(r, 25));
 function setup(maxLive) {
   const spawnImpl = fakeSpawn();
   const adapter = createClaudeAdapter({ spawnImpl, mcp: false });
-  const runner = new Runner({ dir: tmp(), adapters: { claude: adapter }, maxLive });
+  const runner = new Runner({ dir: tmp(), adapters: { claude: adapter }, maxLive, parkGraceMs: 60_000 });
   return { runner, spawnImpl };
 }
 const mk = (runner, extra = {}) => runner.create({ provider: 'claude', cwd: os.tmpdir(), ...extra });
@@ -55,8 +55,6 @@ const mk = (runner, extra = {}) => runner.create({ provider: 'claude', cwd: os.t
 test('default cap is 16 and VS_RUNNER_MAX_LIVE overrides it', () => {
   assert.equal(DEFAULT_MAX_LIVE, 16);
   assert.equal(maxLiveFromEnv({}), 16);
-  assert.equal(queueMsFromEnv({}), DEFAULT_QUEUE_MS);
-  assert.equal(queueMsFromEnv({ VS_RUNNER_QUEUE_MS: '0' }), 0);
   assert.equal(maxLiveFromEnv({ VS_RUNNER_MAX_LIVE: '3' }), 3);
   assert.equal(maxLiveFromEnv({ VS_RUNNER_MAX_LIVE: 'nope' }), 16);
   assert.equal(maxLiveFromEnv({ VS_RUNNER_MAX_LIVE: '0' }), 16);
@@ -132,40 +130,6 @@ test('a parked agent resumes lazily from the log in a fresh Runner (after a runn
   assert.equal(s2.calls.length, 1);
   assert.ok(s2.calls[0].args.includes('--resume'));
   r2.shutdown();
-});
-
-test('refuses with a clear error only when no agent is idle; a refused spawn leaves no agent behind', async () => {
-  const { runner } = setup(2);
-  const a = mk(runner, { prompt: 'work' }); const b = mk(runner, { prompt: 'work' });
-  // the fake finishes turns asynchronously: check before they go idle
-  assert.equal(runner.status(a).status, 'running');
-  const before = runner.list().length;
-  assert.throws(() => mk(runner), /agent cap reached \(2 live\) and none are idle/);
-  assert.equal(runner.list().length, before);
-  assert.equal(runner.live.size, 2);
-  await tick();
-  assert.doesNotThrow(() => mk(runner), 'once a turn ends there is an idle agent to park');
-  assert.ok(b);
-  runner.shutdown();
-});
-
-test('at the cap a queued spawn waits for a turn to end instead of failing', async () => {
-  const { runner } = setup(2);
-  mk(runner, { prompt: 'work' }); mk(runner, { prompt: 'work' });
-  assert.throws(() => mk(runner), (err) => err.code === 'AGENT_CAP' && err.status === 503);
-  const before = runner.list().length;
-  const id = await runner.createQueued({ provider: 'claude', cwd: os.tmpdir() }, { queueMs: 5000 });
-  assert.match(id, /^rn-/);
-  assert.equal(runner.list().length, before + 1, 'exactly one agent created after waiting');
-  assert.equal(runner.live.size, 2, 'still within the cap: an idle agent was parked');
-  runner.shutdown();
-});
-
-test('a queued spawn still fails with AGENT_CAP once its wait runs out', async () => {
-  const { runner } = setup(1);
-  mk(runner, { prompt: 'work' });
-  await assert.rejects(runner.createQueued({ provider: 'claude', cwd: os.tmpdir() }, { queueMs: 0 }), (err) => err.code === 'AGENT_CAP');
-  runner.shutdown();
 });
 
 test('only idle agents can be parked', async () => {

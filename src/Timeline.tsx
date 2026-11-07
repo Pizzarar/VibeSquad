@@ -1196,6 +1196,8 @@ type TimelineProps = {
   loaded?: boolean;
   agentStatus?: string;
   agentTitle?: string | null;
+  /** Set while the runner holds this agent's prompt for a free turn slot: how many same-provider prompts are in front. */
+  queuedAhead?: number;
 };
 
 export function Timeline({
@@ -1209,6 +1211,7 @@ export function Timeline({
   loaded = true,
   agentStatus,
   agentTitle,
+  queuedAhead,
 }: TimelineProps) {
   const timelineRef = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
@@ -1486,6 +1489,11 @@ export function Timeline({
         </div>
       )}
       {error && <div className="tl tl-error">{error}</div>}
+      {queuedAhead !== undefined && (
+        <div className="tl tl-note info" data-testid="tl-queued">
+          <Spinner label={`Queued, ${queuedAhead} ahead — starts when a slot frees`} />
+        </div>
+      )}
       {loaded && !error && shown.length === 0 && (
         agentStatus === "running" || agentStatus === "initializing" ? (
           <div className="tl tl-note info" data-testid="tl-booting-indicator">
