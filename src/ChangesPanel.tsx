@@ -10,6 +10,7 @@ import { undoHunk, undoDelta, hunkKey, ideUrl, firstChangedLine, clientOnDaemonH
 import { CHANGES_SLOW_MS, changesErrorText, withTimeout } from "./changesLoad";
 import * as git from "./paseoGit";
 import * as vsgit from "./vsGit";
+import { onCommitRequest, takeCommitRequest, type CommitRequest } from "./commitRequest";
 import type { CommitInfo, CheckDetails, TimelineItem } from "./paseoGit";
 import { parsePrUrl, branchNameError, relTime, commitFileBadge, commitFileBadgeClass, clip } from "./gitHistoryLogic";
 
@@ -255,6 +256,10 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
   const [openCommitFile, setOpenCommitFile] = useState<string | null>(null);
   const [commitDiff, setCommitDiff] = useState<DiffFile | "loading" | "none" | null>(null);
 
+  // A commit opened from elsewhere (chat hash links, via changesNav.openCommit): any hash, not just the 60 listed in History.
+  const [pinned, setPinned] = useState<{ sha: string; state: "loading" | { error: string } | { commit: vsgit.VsCommitMeta; files: DiffFile[]; tooLarge: boolean } } | null>(null);
+  const pinSeq = useRef(0);
+
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameInput, setRenameInput] = useState("");
   const [renameArmed, setRenameArmed] = useState(false);
@@ -335,6 +340,22 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
   }, [cwd, attempt]);
 
   useEffect(() => { undone.current.clear(); }, [diff]);
+
+  useEffect(() => {
+    const show = (req: CommitRequest) => {
+      const id = ++pinSeq.current;
+      setPinned({ sha: req.sha, state: "loading" });
+      vsgit.vsGitCommitDiff(req.cwd, req.sha).then(
+        (d) => { if (id === pinSeq.current) setPinned({ sha: req.sha, state: { commit: d.commit, files: d.files as DiffFile[], tooLarge: !!d.diffTooLarge } }); },
+        (e) => { if (id === pinSeq.current) setPinned({ sha: req.sha, state: { error: e instanceof Error ? e.message : String(e) } }); },
+      );
+    };
+    setPinned(null);
+    pinSeq.current++;
+    const waiting = takeCommitRequest(cwd);
+    if (waiting) show(waiting);
+    return onCommitRequest((req) => { if (req.cwd === cwd) { takeCommitRequest(cwd); show(req); } });
+  }, [cwd]);
 
   // ─── Derived ─────────────────────────────────────────────────────────────────
 
@@ -890,6 +911,28 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
       )}
 
       {/* ── Commit history ── */}
+      {pinned && (
+        <div className="changes-pinned" data-testid="changes-pinned-commit">
+          <div className="changes-file-header">
+            <code className="changes-sha">{pinned.sha.slice(0, 7)}</code>
+            <span className="changes-file-path">{typeof pinned.state === "object" && "commit" in pinned.state ? pinned.state.commit.subject : ""}</span>
+            <button className="btn ghost small" data-testid="changes-pinned-close" onClick={() => { pinSeq.current++; setPinned(null); }}>✕</button>
+          </div>
+          {pinned.state === "loading" && <div className="muted small">Loading commit…</div>}
+          {typeof pinned.state === "object" && "error" in pinned.state && <div className="stat-alert small" data-testid="changes-pinned-error">{pinned.state.error}</div>}
+          {typeof pinned.state === "object" && "commit" in pinned.state && (
+            <>
+              <div className="muted small">{pinned.state.commit.authorName} · {pinned.state.files.length} file{pinned.state.files.length === 1 ? "" : "s"}{pinned.state.tooLarge ? " · diff truncated" : ""}</div>
+              {pinned.state.files.map((f) => (
+                <div key={f.path} className="changes-file">
+                  <div className="changes-file-header"><span className="changes-file-path">{f.path}</span><span className="muted small">+{f.additions} −{f.deletions}</span></div>
+                  <FileDiffView file={f} />
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
       <div className="changes-history" data-testid="changes-history">
         <button className="btn ghost small" data-testid="changes-history-toggle" onClick={toggleHistory}>
           History {histOpen ? "▲" : "▼"}

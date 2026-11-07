@@ -73,3 +73,29 @@ test("diffToText re-adds +/-/space to typed lines (the parser strips them)", asy
   const t = diffToText([{ path: "a", hunks: [{ lines: [{ type: "header", content: "@@ -1 +1 @@" }, { type: "context", content: "k" }, { type: "remove", content: "x" }, { type: "add", content: "y" }] }] }]);
   assert.equal(t, "--- a/a\n+++ b/a\n@@ -1 +1 @@\n k\n-x\n+y");
 });
+
+test("openCommit request: hash validated, one slot, taken only by the matching cwd, live listeners notified", async () => {
+  const R = await import("../src/commitRequest.ts");
+  assert.equal(R.requestCommit("/r", "--help"), null);
+  assert.equal(R.requestCommit("/r", "abc12"), null);
+  assert.equal(R.requestCommit("", "abc1234"), null);
+  const got = [];
+  const off = R.onCommitRequest((r) => got.push(r.sha));
+  const req = R.requestCommit("/r", "ABC1234");
+  assert.equal(req.sha, "ABC1234");
+  assert.deepEqual(got, ["ABC1234"]);
+  assert.equal(R.takeCommitRequest("/other"), null);
+  assert.equal(R.takeCommitRequest("/r").sha, "ABC1234");
+  assert.equal(R.takeCommitRequest("/r"), null, "consumed once");
+  off();
+  R.requestCommit("/r", "abc1234");
+  assert.equal(got.length, 1, "unsubscribed");
+  R.takeCommitRequest("/r");
+});
+
+test("changesNav.openCommit opens the Changes tab; ChangesPanel consumes the request", () => {
+  assert.match(src("changesNav.ts"), /requestCommit\(cwd, sha\)[\s\S]*openRightDockTab\("Changes"\)/);
+  const c = src("ChangesPanel.tsx");
+  assert.match(c, /takeCommitRequest\(cwd\)/);
+  assert.match(c, /vsgit\.vsGitCommitDiff\(req\.cwd, req\.sha\)/);
+});
