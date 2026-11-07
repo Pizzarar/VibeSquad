@@ -16,7 +16,7 @@ const realClock: RefreshClock = {
 };
 
 export const RUNNER_REFRESH_GAP_MS = 800;
-/** A mounted-but-hidden timeline (background tab, other pane) still refetches, just slower, so it is current when shown and its pending "Sending…" clears. */
+/** A mounted-but-hidden timeline (background tab, other pane) still refetches, just slower, so it is current when shown and its pending "Sendingâ€¦" clears. */
 export const RUNNER_HIDDEN_GAP_MS = 3000;
 
 export function createRefreshScheduler(opts: {
