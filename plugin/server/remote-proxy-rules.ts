@@ -855,7 +855,6 @@ export const REMOTE_BLOCKED: readonly string[] = [
   "/__vibesquad/first-run*",
   "/__vibesquad/paseo/daemon*",
   "/__vibesquad/paseo/raw*",
-  "/__vibesquad/paseo/pair*", // returns the relay pairing offer, i.e. the secret
   "/__vibesquad/paseo/hub*", // connects the daemon to an external hub origin
   "/__vibesquad/pair*",
   "/pair*",

@@ -120,7 +120,7 @@ describe("loopback API: owner vs read-only", () => {
   });
 
   test("gated GETs need the token too", async () => {
-    for (const path of ["/__vibesquad/paseo/pair", "/__vibesquad/push/vapid-public-key", "/__vibesquad/paseo/providers/diagnostic?provider=x", "/__vibesquad/paseo/providers/models?provider=x", "/__vibesquad/paseo/usage?refresh=1", "/__vibesquad/paseo/surface", "/__vibesquad/local-image?path=x.png"]) {
+    for (const path of ["/__vibesquad/push/vapid-public-key", "/__vibesquad/paseo/providers/diagnostic?provider=x", "/__vibesquad/paseo/providers/models?provider=x", "/__vibesquad/paseo/usage?refresh=1", "/__vibesquad/paseo/surface", "/__vibesquad/local-image?path=x.png"]) {
       const r = await call(port, path);
       assert.equal(r.status, 403, path);
       assert.equal(json(r).readOnly, true, path);

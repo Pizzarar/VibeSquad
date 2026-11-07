@@ -46,7 +46,6 @@ describe("R2-3 static remote build and Pages workflow", () => {
     assert.ok(jsFiles.length >= 1, "at least one JS bundle in dist-remote/assets/");
 
     const bundle = jsFiles.map((f) => readFileSync(join(assetsDir, f), "utf8")).join("\n");
-    assert.ok(bundle.includes("VibeSquad · remote"), "bundle includes RemotePair UI title");
     assert.match(bundle, /vs\.remote`,[A-Za-z0-9_$]+=\(\(\)=>\{try\{return!0\}/, "BUILD_REMOTE is baked in as true");
 
     for (const forbidden of ["C:\\Users\\", "/home/", "local-token", "daemon-password", homedir()]) {

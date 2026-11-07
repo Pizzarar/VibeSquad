@@ -172,20 +172,6 @@ export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
     }
     window.location.href = "/?remote=1";
   };
-  const onPaseoLinkClick = () => {
-    if ((window as any).__VIBESQUAD_DESKTOP_BRIDGE__) {
-      window.location.href = "/__desktop/mode";
-      return;
-    }
-    if (isLocalHost(location.hostname)) {
-      // A local window never opens a bare /?remote=1: that would try to relay to its own PC.
-      if (props.onRePair) props.onRePair();
-      else props.onOpenDiagnostics?.();
-      return;
-    }
-    clearSession();
-    window.location.href = "/?remote=1";
-  };
   const onFirstTimeSetupClick = () => {
     if ((window as any).__VIBESQUAD_DESKTOP_BRIDGE__) {
       window.location.href = "/__desktop/mode";
@@ -209,9 +195,6 @@ export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
           </button>
           <button type="button" className="btn ghost small" data-testid="daemon-banner-repair" onClick={onRePairClick}>
             RE-PAIR / CHANGE SERVER
-          </button>
-          <button type="button" className="btn ghost small" data-testid="daemon-banner-paseo-link" onClick={onPaseoLinkClick}>
-            PAIR WITH PASEO LINK
           </button>
           <button type="button" className="btn ghost small" data-testid="daemon-banner-first-time" onClick={onFirstTimeSetupClick}>
             FIRST-TIME SETUP
