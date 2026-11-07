@@ -29,7 +29,7 @@
   --muted: #b5a5d8; /* 06 */
   /* accent colours for text: same as the accent in dark; darkened in light for 4.5:1 */
   --cyan-t: var(--cyan);
-  --violet-t: var(--violet);
+  --violet-t: color-mix(in srgb, var(--violet) 78%, var(--text));
   --coral-t: var(--coral);
   --pink-t: var(--hot-pink);
   --amber-t: var(--amber);
@@ -4931,3 +4931,12 @@ button.project-file-name:hover { text-decoration: underline; }
   box-shadow: var(--bevel-in);
 }
 .toolbar .search:focus, .you-flag input:focus, .ws-row input:focus, .modal :focus { box-shadow: var(--bevel-in); border-color: var(--violet); outline: 1px solid var(--violet); }
+
+/* U2 review fixes: update-banner buttons keep a visible face; keyboard focus ring replaces the removed glows */
+.update-available-banner .btn:not(.ghost) { background: var(--face-hi) !important; border-color: var(--shadow-hard) !important; color: var(--text) !important; }
+:is(button, a, input, select, textarea, summary, [tabindex]):focus-visible,
+.pin-tile:focus-visible, .cmd-palette > input:focus-visible, .find-files-bar > input:focus-visible {
+  outline: 2px solid var(--violet) !important;
+  outline-offset: 1px;
+  box-shadow: var(--bevel-in);
+}
