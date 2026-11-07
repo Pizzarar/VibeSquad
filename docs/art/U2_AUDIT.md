@@ -52,3 +52,11 @@ Fix: rewrite to `color-mix(in srgb, var(--accent) N%, transparent)`; hairlines t
 
 ## TSX touched
 Planned: none. The four inline-styled banners (App.tsx:1807, 1829, ~1865, ~1882) are overridden from CSS with !important.
+
+## Phase B result
+- Glows: 78 shadow declarations rewritten by `scratch/u2-deneon.mjs` (bevel / 2px hard offset); the only `0 0 Npx` glow left is `.badge.alert` (needs-you badge). 75 neon hex/rgba literals tokenised.
+- Skin layer: end of `src/styles.css` ("U2: Hypno-vaporwave skin"); Bayer tiles `public/ui/bayer-{dark,light}.png` (4x4, ~2% avg contrast).
+- Title bars: real gradient bar on `.modal-head` and `.handoff-panel h2`; compact 5px gradient cap strip on cards, drawer head, menus, popovers, tiles (those have no heading row).
+- Text on pastel chips/buttons uses `--text` (accent -t tokens fail 4.5:1 on accent-tinted fills in dark).
+- Light `--bg` = swatch A `#e0d1dc`; light `--muted` darkened to `#574268`, -t tokens deepened to hold >= 4.5:1.
+- TSX touched: none. App.tsx inline banner fills overridden from CSS with !important.

@@ -1,13 +1,13 @@
 /* ADE batch I: small window (900x700), 120% zoom wrapping, 4K scaling, diagnostics UI. */
 .daemon-disconnect-scrim { position: fixed; inset: 0; z-index: 9500; background: rgba(5, 6, 13, 0.72); backdrop-filter: blur(2px); display: flex; align-items: center; justify-content: center; pointer-events: auto; }
-.daemon-disconnect-card { display: flex; flex-direction: column; gap: 12px; align-items: center; padding: 20px 24px; max-width: 92vw; background: var(--panel); border: 1px solid #ff4d6a; box-shadow: 0 0 24px rgba(255, 77, 106, 0.35); text-align: center; }
+.daemon-disconnect-card { display: flex; flex-direction: column; gap: 12px; align-items: center; padding: 20px 24px; max-width: 92vw; background: var(--panel); border: 1px solid var(--hot-pink); box-shadow: var(--bevel), var(--hard); text-align: center; }
 .daemon-disconnect-title { font-weight: 700; color: #ffd9de; }
 .daemon-disconnect-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
 /* Diagnostics, Setup Checklist, and Settings opened from the disconnect card must sit above the scrim. */
 .modal-back:has([data-testid="diagnostics-modal"]) { z-index: 9600; }
 .modal-back:has([data-testid="diagnostics-modal"], [data-testid="first-run-checklist-modal"], .settings-home) { z-index: 9600; }
 .daemon-disconnect-subtext { font-size: 12px; color: var(--muted); max-width: 440px; }
-.daemon-disconnect-error { font-size: 12px; color: #ff4d6a; font-weight: 600; }
+.daemon-disconnect-error { font-size: 12px; color: var(--hot-pink); font-weight: 600; }
 .daemon-banner-auth-form { display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap; width: 100%; }
 .diag-log { max-height: 40vh; overflow: auto; white-space: pre-wrap; font-size: 11px; background: var(--panel); border: 1px solid var(--line); padding: 8px; }
 .diag-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
@@ -35,4 +35,4 @@
   html { font-size: 125%; }
   .drawer, .panes-area { min-width: 0; width: 100%; max-width: none; }
 }
-.daemon-status-pill { position: fixed; top: 6px; left: 50%; transform: translateX(-50%); z-index: 9400; padding: 2px 10px; font-size: 11px; border-radius: 999px; background: var(--panel); color: inherit; border: 1px solid #ff4d6a; cursor: pointer; }
+.daemon-status-pill { position: fixed; top: 6px; left: 50%; transform: translateX(-50%); z-index: 9400; padding: 2px 10px; font-size: 11px; border-radius: 999px; background: var(--panel); color: inherit; border: 1px solid var(--hot-pink); cursor: pointer; }
