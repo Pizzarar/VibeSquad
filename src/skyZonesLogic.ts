@@ -91,7 +91,7 @@ export const overlordStarting = (squadId: string): boolean => spinning.has(squad
 /**
  * Spawn the hub lead (role=lead on the Squad's hub lane) through the same primitive a lead handoff uses.
  * A live Overlord is returned as is, concurrent calls for one Squad share one spawn, and any closed unarchived
- * hub lead is retired first so it cannot resurface as a dormant "(old) Overlord". The sky zone shows the new
+ * hub lead is retired once the successor spawned, so it cannot resurface as a dormant "(old) Overlord". The sky zone shows the new
  * agent as soon as it lands in the store.
  */
 export function spinUpOverlord(
@@ -121,9 +121,6 @@ async function doSpinUp(view: TeamView, hub: Pin, deps: Parameters<typeof spinUp
   const inHub = (view.members ?? []).filter((m) => (m.laneId ?? "").toLowerCase() === lane.toLowerCase());
   const cwd = hub.brainstorm?.agent.cwd || inHub.find((m) => m.agent.cwd)?.agent.cwd;
   if (!cwd) throw new Error("No working directory known for the hub; start RiffBot first");
-  for (const m of inHub) {
-    if (m.kind === "lead" && !m.agent.archivedAt && m.agent.status === "closed") await deps.retire?.(m)?.catch?.(() => {});
-  }
   const ord = Math.max(0, ...inHub.filter((m) => m.kind === "lead" || m.kind === "old-lead").map((m) => ordOf(m.agent))) + 1;
   const p = deps.profile;
   const gemini = deps.profileName === "Lead - Gemini";
@@ -146,6 +143,10 @@ async function doSpinUp(view: TeamView, hub: Pin, deps: Parameters<typeof spinUp
     prompt,
     cwd,
   });
+  // Only after the successor exists: a failed spawn leaves the dormant Overlord (history + Resume) untouched.
+  for (const m of inHub) {
+    if (m.kind === "lead" && !m.agent.archivedAt && m.agent.status === "closed") await deps.retire?.(m)?.catch?.(() => {});
+  }
   return r.id;
 }
 

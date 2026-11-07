@@ -301,7 +301,7 @@ test("O3-fix: closed predecessor lead is retired first and old-lead ords are nev
     profile,
     profileName: "Lead - Claude",
   });
-  assert.deepEqual(order, ["retire:old", "spawn"]);
+  assert.deepEqual(order, ["spawn", "retire:old"]);
   assert.equal(req.labels.ord, "6");
 });
 
@@ -340,4 +340,18 @@ test("O3-fix: profile falls back on the previous lead's provider like HandoffMod
   const prev = (provider) => ({ ...member("old", "lead"), agent: { ...member("old", "lead").agent, status: "closed", provider, labels: { lane: "sq1" } } });
   assert.equal(overlordProfileName(view([member("buddy", "brainstorm"), prev("antigravity-cli")])), "Lead - Gemini");
   assert.equal(overlordProfileName(view([member("buddy", "brainstorm"), prev("claude")])), "Lead - Claude");
+});
+
+test("O3-fix2: a rejected spawn leaves the closed Overlord alone (no retire)", async () => {
+  const closed = { ...member("old", "lead"), agent: { ...member("old", "lead").agent, status: "closed", labels: { lane: "sq1", profile: "Lead - Gemini" } } };
+  const v = view([withCwd(member("buddy", "brainstorm"), "C:/hub"), closed]);
+  let retired = 0;
+  await assert.rejects(
+    () => spinUpOverlord(v, { retire: async () => void retired++, spawn: async () => Promise.reject(new Error("runner down")), profile, profileName: "Lead - Claude" }),
+    /runner down/,
+  );
+  assert.equal(retired, 0);
+  assert.equal(overlordStarting("sq1"), false);
+  assert.equal(skyZonesFor(v).overlord.dormant, true);
+  assert.equal(overlordProfileName(v), "Lead - Gemini");
 });
