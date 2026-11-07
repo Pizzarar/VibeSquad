@@ -8,6 +8,9 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ACP_PROVIDERS, PROVIDER_ALIASES } from "../runner/adapters/acp.mjs";
 import { killTree, resolveExecutable, spawnNoShell } from "../runner/spawn.mjs";
+// runner.mjs is import-safe here: it (and its deps — adapters, log, limits) only declare factories/constants, no
+// import-time side effects, and none of them import back into this module (no cycle). turnCapsFromEnv is a pure env read.
+import { turnCapsFromEnv } from "../runner/runner.mjs";
 import { DEFAULT_PACK_PROFILES, getProfilesPath, normalizeProfile } from "./profiles.mjs";
 import { resolveTeamsFilePath } from "./teams-file.mjs";
 import { isForbiddenRealHome, underTestRunner } from "./test-guard.mjs";
@@ -302,7 +305,12 @@ function foldEvent(st, ev) {
   } else if (ev.type === "exit" || ev.type === "error") {
     st.exited = true;
     if (t !== null) st.exitTs = t;
-    if (ev.type === "error" || ev.error != null || (ev.code != null && ev.code !== 0)) st.exitError = true;
+    if (ev.type === "error" || ev.error != null || (ev.code != null && ev.code !== 0)) {
+      st.exitError = true;
+      st.errors = (st.errors ?? 0) + 1;
+      const msg = ev.type === "error" ? (ev.message ?? ev.error) : (ev.error ?? (ev.code != null && ev.code !== 0 ? `exit code ${ev.code}` : ""));
+      if (msg) { st.lastError = String(msg).slice(0, 200); st.lastErrorTs = t; }
+    }
     if (st.runningSince !== undefined && t !== null) {
       st.workingMs += Math.max(0, t - st.runningSince);
       st.runningSince = undefined;
@@ -373,7 +381,7 @@ function readTail(file, from, to) {
 function refreshFile(file, stat) {
   let st = usageFiles.get(file);
   if (st && st.size === stat.size && st.mtimeMs === stat.mtimeMs) return st;
-  if (!st || stat.size < st.offset) st = { offset: 0, provider: "unknown", model: "unknown", lane: "", role: "", prevCost: 0, buckets: new Map(), turns: 0, tail: "", pass: false, handoff: false, title: "", profile: undefined, cwd: undefined, createdAt: undefined, firstTs: undefined, lastTs: undefined, workingMs: 0, runningSince: undefined, exited: false, exitError: false, exitTs: undefined };
+  if (!st || stat.size < st.offset) st = { offset: 0, provider: "unknown", model: "unknown", lane: "", role: "", prevCost: 0, buckets: new Map(), turns: 0, tail: "", pass: false, handoff: false, title: "", profile: undefined, cwd: undefined, createdAt: undefined, firstTs: undefined, lastTs: undefined, workingMs: 0, runningSince: undefined, exited: false, exitError: false, exitTs: undefined, errors: 0, lastError: "", lastErrorTs: undefined };
   const buf = readTail(file, st.offset, stat.size);
   const lastNl = buf.lastIndexOf(10);
   if (lastNl >= 0) {
@@ -586,6 +594,9 @@ function agentV2(st, agentId) {
     exited: !!st.exited,
     exitError: !!st.exitError,
     exitTs: st.exitTs ?? null,
+    errors: st.errors ?? 0,
+    lastError: st.lastError ?? "",
+    lastErrorTs: st.lastErrorTs ?? null,
     loop: st.turns > LOOP_TURN_THRESHOLD && !st.pass,
   };
 }
@@ -639,6 +650,77 @@ function readHandoffs(home) {
     }
   }
   return out.sort((a, b) => a.ts - b.ts);
+}
+
+// Recent vs-log signals for the periodic usage review (usa-9): @usa/usage-lane notes, friction (blockers, FAIL
+// completions, restart-feedback, cap/queue/failover decisions) and compact mcp-alias metric counts. Harvested from
+// <home>/logs/*.jsonl and <home>/teams/*/log.jsonl, deduped like readHandoffs (the same entry lands in both). Entries
+// with ts <= sinceMs are dropped (sinceMs null/undefined -> no filter). Newest wins; the combined signal list is capped
+// at 25 lines. Malformed lines and missing dirs never throw.
+const NOTE_TYPES = new Set(["metric", "decision", "blocker", "handoff"]);
+const FRICTION_DECISION_RE = /\b(?:cap|queue|jam|failover|re-dispatch|archiv|timeout|stuck|retry)\b/i;
+// plugin-agent metric noise (hook-timing / prompt-injection) never counts as a @usa/usage note.
+const PLUGIN_METRIC_NOISE_RE = /^(?:plugin:|hook-timing\b|prompt-injection\b)/i;
+export function readUsageLogSignals(home, { sinceMs } = {}) {
+  const dir = home || vibesquadHome();
+  if (isForbiddenRealHome(dir)) return { notes: [], friction: [], mcpAlias: [] };
+  const files = [];
+  try {
+    const logs = join(dir, "logs");
+    if (existsSync(logs)) for (const n of readdirSync(logs)) if (n.endsWith(".jsonl")) files.push(join(logs, n));
+  } catch { /* none */ }
+  try {
+    const teams = join(dir, "teams");
+    if (existsSync(teams)) for (const t of readdirSync(teams)) {
+      const p = join(teams, t, "log.jsonl");
+      if (existsSync(p)) files.push(p);
+    }
+  } catch { /* none */ }
+  const seen = new Set();
+  const hits = []; // { lane, ts, type, text, agent, note, friction } before the 25-line cap
+  const mcpCounts = new Map(); // "tool|lane" -> count
+  for (const file of files) {
+    let text = "";
+    try { text = readFileSync(file, "utf8"); } catch { continue; }
+    for (const line of text.split("\n")) {
+      if (!line.trim()) continue;
+      let e;
+      try { e = JSON.parse(line); } catch { continue; }
+      const t = tsMs(e.ts);
+      if (t === null) continue;
+      if (sinceMs !== null && sinceMs !== undefined && t <= sinceMs) continue;
+      const lane = typeof e.lane === "string" && e.lane ? e.lane : "";
+      const textStr = typeof e.text === "string" ? e.text : "";
+      const agent = typeof e.agent === "string" ? e.agent : "";
+      const key = `${lane}\u0000${t}\u0000${textStr.slice(0, 60)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const type = e.type;
+      if (type === "metric" && textStr.startsWith("mcp-alias:")) {
+        const m = /mcp-alias:\s*tool=(\S+)(?:\s+\S+)*\s+lane=(\S+)/.exec(textStr);
+        const tool = m?.[1] ?? "?";
+        const mlane = m?.[2] ?? lane;
+        const k = `${tool}|${mlane}`;
+        mcpCounts.set(k, (mcpCounts.get(k) ?? 0) + 1);
+        continue; // mcp-alias metrics are compact-counted, never listed as note/friction lines
+      }
+      const isNote = (textStr.includes("@usa") || lane === "usage") && NOTE_TYPES.has(type)
+        && !(type === "metric" && (PLUGIN_METRIC_NOISE_RE.test(textStr) || agent === "plugin"));
+      const isFriction = type === "blocker" || type === "restart-feedback"
+        || (type === "metric" && textStr.startsWith("restart-feedback:"))
+        || (type === "done" && /\bFAIL\b/i.test(textStr))
+        || (type === "decision" && FRICTION_DECISION_RE.test(textStr));
+      if (isNote || isFriction) hits.push({ lane, ts: t, type, text: textStr, agent, note: isNote, friction: isFriction });
+    }
+  }
+  hits.sort((a, b) => b.ts - a.ts);
+  const capped = hits.slice(0, 25);
+  const strip = (h) => ({ lane: h.lane, ts: h.ts, type: h.type, text: h.text, agent: h.agent });
+  const mcpAlias = [...mcpCounts.entries()].map(([k, count]) => {
+    const [tool, lane] = k.split("|");
+    return { tool, lane, count };
+  }).sort((a, b) => b.count - a.count || a.tool.localeCompare(b.tool) || a.lane.localeCompare(b.lane));
+  return { notes: capped.filter((h) => h.note).map(strip), friction: capped.filter((h) => h.friction).map(strip), mcpAlias };
 }
 
 /** Maximal clusters of >=min timestamps within windowMs, merged when they overlap. Returns [{ firstAt, lastAt, count }]. */
@@ -723,9 +805,13 @@ const latestUsageReview = (home) => {
 };
 
 const round2 = (n) => Math.round(Number(n) * 100) / 100;
+const clip = (s, n = 200) => { const t = String(s ?? ""); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
 
-/** Compact prompt from the usage payload: totals, limits, loops, spawn storms, by-profile and per-lane review rounds. No raw logs. */
-function buildUsageReviewPrompt(usage) {
+/** Compact prompt from the usage payload: totals, limits, loops, spawn storms, by-profile and per-lane review rounds, plus
+ * usa-9 context — recent @usa/usage-lane notes, friction signals, mcp-alias counts, recent agent errors, the active
+ * profile catalog and runner turn caps — so Opus and Gemini see *why* friction happened. `home` + `sinceMs` scope the
+ * log-signal harvest (sinceMs = lastReview.at, so only entries since the prior review are shown). */
+function buildUsageReviewPrompt(usage, { home, sinceMs } = {}) {
   const u = usage ?? {};
   const totals = u.totals ?? {};
   const out = [];
@@ -747,6 +833,28 @@ function buildUsageReviewPrompt(usage) {
     const la = lanes.find((x) => x.lane === l.lane);
     out.push(`- ${l.lane} | ${l.mergedUnits} | ${l.reviewRounds} | ${round2(l.costPerMergedUnit)} | ${handoffByLane.get(l.lane) ?? 0} | ${la?.workPct ?? "-"} | ${l.fixAfterMergeRate}`);
   }
+
+  // usa-9 context: why friction happened (harvested since the prior review, bounded).
+  const signals = readUsageLogSignals(home, { sinceMs });
+  if (signals.notes.length) {
+    out.push("Recent @usa / usage-lane log notes:");
+    for (const n of signals.notes) out.push(`- [${n.type}]${n.lane ? ` (${n.lane})` : ""} ${clip(n.text)}`);
+  }
+  if (signals.friction.length) {
+    out.push("Recent friction signals:");
+    for (const f of signals.friction) out.push(`- [${f.type}]${f.lane ? ` (${f.lane})` : ""} ${clip(f.text)}`);
+  }
+  if (signals.mcpAlias.length) out.push(`mcp-alias tool hits: ${signals.mcpAlias.map((m) => `${m.tool}@${m.lane || "-"} x${m.count}`).join(", ")}.`);
+  const recentErrors = u.recentErrors ?? [];
+  if (recentErrors.length) {
+    out.push("Recent agent errors:");
+    for (const e of recentErrors) out.push(`- ${e.profile || e.role} (${e.agentId}): ${clip(e.message)}`);
+  }
+  const profiles = profileList(home);
+  out.push(`Active profiles: ${profiles.map((p) => `${p.name} (${p.role}/${p.provider}/${p.model})`).join("; ")}.`);
+  const caps = turnCapsFromEnv();
+  out.push(`Runner turn caps: ${Object.entries(caps).map(([k, v]) => `${k}=${v}`).join(" ")}.`);
+
   out.push("Give 3-5 concise, actionable bullets covering (1) Profile/Provider routing, (2) Loops/Tool friction, and (3) Handoffs/Review rounds. One line per bullet, no preamble.");
   return out.join("\n");
 }
@@ -788,7 +896,9 @@ export function runUsageReview({ home, trigger = "manual", usage, runOpus, runGe
   usageReviewInFlight = (async () => {
     try {
       const interval = loadRunnerSettings(home).usageReview.interval;
-      const prompt = buildUsageReviewPrompt(usage);
+      const last = latestUsageReview(home);
+      const sinceMs = last ? toMs(last.at) : null;
+      const prompt = buildUsageReviewPrompt(usage, { home, sinceMs });
       const opusRun = runOpus ?? defaultRunOpus;
       const geminiRun = runGemini ?? defaultRunGemini;
       const results = await Promise.all([
@@ -957,7 +1067,7 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview } = {
   const profileMap = new Map();
   for (const a of agents) {
     const key = `${a.provider}|${a.profile}|${a.role}`;
-    const g = getOrSet(profileMap, key, () => ({ provider: a.provider, profile: a.profile, role: a.role, runs: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, workingMs: 0, idleMs: 0, passCount: 0, loopCount: 0, mergedUnits: 0, reviewRounds: 0, unitCycleSum: 0, unitCycleCount: 0, fixAfterMergeCount: 0 }));
+    const g = getOrSet(profileMap, key, () => ({ provider: a.provider, profile: a.profile, role: a.role, runs: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, workingMs: 0, idleMs: 0, passCount: 0, loopCount: 0, errorCount: 0, mergedUnits: 0, reviewRounds: 0, unitCycleSum: 0, unitCycleCount: 0, fixAfterMergeCount: 0 }));
     g.runs += 1;
     g.turns += a.turns;
     g.inputTokens += a.inputTokens;
@@ -967,6 +1077,7 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview } = {
     g.idleMs += a.idleMs;
     if (a.pass) g.passCount += 1;
     if (a.loop) g.loopCount += 1;
+    g.errorCount += a.errors ?? 0;
   }
   for (const u of merged) {
     if (!u.implementerAgentId) continue;
@@ -986,6 +1097,7 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview } = {
     workingMs: g.workingMs, idleMs: g.idleMs,
     passCount: g.passCount, passRate: g.runs ? Math.round((g.passCount / g.runs) * 1000) / 1000 : 0,
     loopCount: g.loopCount,
+    errorCount: g.errorCount,
     mergedUnits: g.mergedUnits, reviewRounds: g.reviewRounds, avgReviewRounds: g.mergedUnits ? Math.round((g.reviewRounds / g.mergedUnits) * 100) / 100 : 0,
     costPerMergedUnit: g.mergedUnits ? g.costUsd / g.mergedUnits : null,
     fixAfterMergeCount: g.fixAfterMergeCount, fixAfterMergeRate: g.mergedUnits ? Math.round((g.fixAfterMergeCount / g.mergedUnits) * 1000) / 1000 : 0,
@@ -1045,6 +1157,13 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview } = {
     return { lane, mergedUnits: us.length, reviewRounds: rounds, avgReviewRounds: Math.round((rounds / us.length) * 100) / 100, costUsd: cost, costPerMergedUnit: cost / us.length, avgUnitCycleMs: cyc.count ? Math.round(cyc.sum / cyc.count) : null, fixAfterMergeCount: cyc.fixCount, fixAfterMergeRate: cyc.mergedCount ? Math.round((cyc.fixCount / cyc.mergedCount) * 1000) / 1000 : 0 };
   }).sort((a, b) => b.mergedUnits - a.mergedUnits);
 
+  // Recent agent errors (most recent first, capped at 10) for the usage review prompt.
+  const recentErrors = agents
+    .filter((a) => (a.errors ?? 0) > 0)
+    .sort((a, b) => (b.lastErrorTs ?? 0) - (a.lastErrorTs ?? 0))
+    .slice(0, 10)
+    .map((a) => ({ agentId: a.agentId, profile: a.profile, provider: a.provider, role: a.role, lane: a.lane, message: a.lastError ?? "", errors: a.errors }));
+
   const result = {
     note: "Cost is summed from turn_done.costUsd; token counts come from adapter usage events and are 0 for logs that have none.",
     files: seen.size,
@@ -1063,6 +1182,7 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview } = {
     loops: { threshold: LOOP_TURN_THRESHOLD, flagged: loops.sort((a, b) => b.turns - a.turns) },
     byProfile,
     spawnStorms: computeSpawnStorms(agents),
+    recentErrors,
   };
   maybeScheduleUsageReview(result, home, usageReview ?? {});
   return { ...result, usageReview: usageReviewState(home, result, usageReview ?? {}) };

@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   buildCatalog, clearProbeCache, clearUsageCache, getModels, getProviders, getUsage, handleProvidersApi, intervalMs, LOOP_TURN_THRESHOLD,
-  loadRunnerSettings, normalizeRunnerSettings, oneShotReviewRun, probeProviders, probeStats, readUsageReviews, runUsageReview, saveRunnerSettings, usageStats,
+  loadRunnerSettings, normalizeRunnerSettings, oneShotReviewRun, probeProviders, probeStats, readUsageLogSignals, readUsageReviews, runUsageReview, saveRunnerSettings, usageStats,
 } from '../server/providers-catalog.mjs';
 import { saveUserSettings, loadUserSettings, saveRemoteAccess } from '../server/user-settings.mjs';
 
@@ -935,4 +935,116 @@ test('usage review: manual Run-now is recorded as "manual" even when a scheduled
   const recs = readUsageReviews(home);
   assert.equal(recs.length, 1, 'exactly one review, not a scheduled one plus a manual one');
   assert.equal(recs[0].trigger, 'manual');
+});
+
+// ---- usa-9: review-context enrichment (log signals, error rollups, prompt context) ----
+
+/** Write a vs-log entry (shape: { ts, agent, lane, type, text }) into <home>/logs/<file>.jsonl or <home>/teams/<t>/log.jsonl. */
+const writeLog = (home, file, e) => {
+  const p = path.join(home, file);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.appendFileSync(p, JSON.stringify(e) + '\n');
+};
+const L_ENTRY = (ts, agent, lane, type, text) => ({ ts: new Date(ts).toISOString(), agent, lane, type, text, refs: [] });
+
+test('usage review context: readUsageLogSignals harvests @usa/usage notes, friction, and mcp-alias counts with sinceMs filtering', () => {
+  const home = tmp();
+  const t0 = Date.UTC(2026, 10, 7, 12);
+  // notes
+  writeLog(home, 'logs/vibesquad--usage.jsonl', L_ENTRY(t0, 'rn-lead', 'usage', 'decision', '@usa: shift implementation to Gemini'));
+  writeLog(home, 'logs/vibesquad--usage.jsonl', L_ENTRY(t0 + 1000, 'rn-buddy', 'usage', 'metric', 'spawn-timing new-buddy total=10ms'));
+  writeLog(home, 'logs/vibesquad--other.jsonl', L_ENTRY(t0 + 2000, 'rn-x', 'other', 'handoff', '@usa plan ready for review'));
+  // plugin metric noise (usage lane) must NOT become a note
+  writeLog(home, 'logs/vibesquad--usage.jsonl', L_ENTRY(t0 + 3000, 'plugin', 'usage', 'metric', 'hook-timing hook=before.agent.create total=21'));
+  writeLog(home, 'logs/vibesquad--usage.jsonl', L_ENTRY(t0 + 4000, 'plugin', 'usage', 'metric', 'prompt-injection role=worker chars=5'));
+  // friction
+  writeLog(home, 'logs/vibesquad--other.jsonl', L_ENTRY(t0 + 5000, 'rn-w', 'other', 'blocker', 'gemini turn cap hit'));
+  writeLog(home, 'logs/vibesquad--other.jsonl', L_ENTRY(t0 + 6000, 'rn-w2', 'other', 'done', 'FAIL: merge conflict on unit-x'));
+  writeLog(home, 'logs/vibesquad--other.jsonl', L_ENTRY(t0 + 7000, 'rn-w3', 'other', 'metric', 'restart-feedback: good (from X -> Y)'));
+  writeLog(home, 'logs/vibesquad--other.jsonl', L_ENTRY(t0 + 8000, 'rn-ld', 'other', 'decision', 'gemini queue jam -> re-dispatch'));
+  // mcp-alias counts (compact, not note lines)
+  writeLog(home, 'logs/vibesquad--art.jsonl', L_ENTRY(t0 + 9000, 'rn-a', 'art-direction', 'metric', 'mcp-alias: tool=create_agent caller=rn-a lane=art-direction'));
+  writeLog(home, 'logs/vibesquad--art.jsonl', L_ENTRY(t0 + 10000, 'rn-b', 'art-direction', 'metric', 'mcp-alias: tool=create_agent caller=rn-b lane=art-direction'));
+  writeLog(home, 'logs/vibesquad--uib.jsonl', L_ENTRY(t0 + 11000, 'rn-c', 'ui-bois', 'metric', 'mcp-alias: tool=send_agent_prompt caller=rn-c lane=ui-bois'));
+  // duplicate of the first note landing in the teams log too -> deduped
+  writeLog(home, 'teams/vibesquad/log.jsonl', L_ENTRY(t0, 'rn-lead', 'usage', 'decision', '@usa: shift implementation to Gemini'));
+
+  const s = readUsageLogSignals(home, { sinceMs: null });
+  assert.equal(s.notes.length, 3, 'notes = @usa or usage-lane, plugin noise excluded, deduped');
+  assert.deepEqual(s.notes.map((n) => n.type).sort(), ['decision', 'handoff', 'metric']);
+  assert.ok(s.notes.some((n) => n.type === 'decision' && n.text.startsWith('@usa: shift implementation')), 'decision @usa note harvested');
+  assert.ok(s.notes.some((n) => n.type === 'handoff' && n.text.includes('@usa plan ready')), 'handoff @usa note harvested');
+  assert.ok(s.notes.some((n) => n.type === 'metric' && n.text.startsWith('spawn-timing')), 'usage-lane metric note harvested');
+  assert.ok(!s.notes.some((n) => n.text.includes('hook-timing') || n.text.includes('prompt-injection')), 'plugin metric noise excluded');
+  assert.deepEqual(s.friction.map((f) => f.type).sort(), ['blocker', 'decision', 'done', 'metric'], 'blocker + FAIL done + restart-feedback(metric) + cap decision');
+  assert.ok(s.friction.some((f) => f.type === 'metric' && f.text.startsWith('restart-feedback:')), 'restart-feedback classified as friction');
+  assert.deepEqual(s.mcpAlias, [
+    { tool: 'create_agent', lane: 'art-direction', count: 2 },
+    { tool: 'send_agent_prompt', lane: 'ui-bois', count: 1 },
+  ], 'mcp-alias compact counts grouped by tool+lane');
+
+  // sinceMs filtering: only entries strictly after t0+8500 survive
+  const s2 = readUsageLogSignals(home, { sinceMs: t0 + 8500 });
+  assert.deepEqual(s2.notes, [], 'no note after the cut');
+  assert.deepEqual(s2.friction, [], 'no friction after the cut');
+  assert.deepEqual(s2.mcpAlias, [
+    { tool: 'create_agent', lane: 'art-direction', count: 2 },
+    { tool: 'send_agent_prompt', lane: 'ui-bois', count: 1 },
+  ], 'mcp-alias hits after the cut survive');
+
+  assert.deepEqual(readUsageLogSignals(path.join(home, 'does-not-exist')), { notes: [], friction: [], mcpAlias: [] }, 'missing dirs -> empty');
+});
+
+test('usage review context: error events and error exits roll up to byProfile.errorCount and recentErrors', () => {
+  const home = tmp();
+  clearUsageCache();
+  const d = Date.UTC(2026, 10, 3, 12);
+  writeAgent(home, 'rn-e1', [
+    { ts: d, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } },
+    { ts: d + 1000, type: 'error', message: 'boom A' },
+    { ts: d + 2000, type: 'exit', code: null, error: 'boom B' },
+    { ts: d + 3000, type: 'exit', code: 0 }, // clean exit: not an error
+  ]);
+  writeAgent(home, 'rn-e2', [
+    { ts: d, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } },
+    { ts: d + 1000, type: 'exit', code: 1, error: 'nonzero exit' },
+  ]);
+  const u = getUsage({ home, git: () => '' });
+  const sonnet = byProfileOf(u, 'Implement - Sonnet');
+  assert.equal(sonnet.errorCount, 3, 'rn-e1: error + error-exit (clean exit not counted); rn-e2: error-exit');
+  assert.equal(u.recentErrors.length, 2);
+  const byId = Object.fromEntries(u.recentErrors.map((e) => [e.agentId, e]));
+  assert.equal(byId['rn-e1'].message, 'boom B', 'lastError is the most recent error message');
+  assert.equal(byId['rn-e1'].errors, 2);
+  assert.equal(byId['rn-e2'].message, 'nonzero exit');
+  assert.equal(byId['rn-e2'].profile, 'Implement - Sonnet');
+  assert.ok(u.recentErrors[0].agentId === 'rn-e2' || u.recentErrors[0].agentId === 'rn-e1', 'ordered by last error time');
+});
+
+test('usage review context: prompt includes @usa notes, friction, mcp-alias counts, profile catalog, and turn caps', async () => {
+  const home = tmp();
+  const t0 = Date.UTC(2026, 10, 7, 12);
+  writeLog(home, 'logs/vibesquad--usage.jsonl', L_ENTRY(t0, 'rn-lead', 'usage', 'decision', '@usa: shift implementation to Gemini'));
+  writeLog(home, 'logs/vibesquad--other.jsonl', L_ENTRY(t0 + 1000, 'rn-w', 'other', 'blocker', 'gemini turn cap hit'));
+  writeLog(home, 'logs/vibesquad--art.jsonl', L_ENTRY(t0 + 2000, 'rn-a', 'art-direction', 'metric', 'mcp-alias: tool=create_agent caller=rn-a lane=art-direction'));
+  const prev = process.env.VS_RUNNER_TURN_CAP_CLAUDE;
+  process.env.VS_RUNNER_TURN_CAP_CLAUDE = '7';
+  try {
+    const prompts = [];
+    const runOpus = async ({ prompt }) => { prompts.push(prompt); return { ok: true, text: 'o', ms: 1 }; };
+    const runGemini = async () => ({ ok: true, text: 'g', ms: 1 });
+    await runUsageReview({ home, trigger: 'manual', usage: { totals: { turns: 3, costUsd: 1.25 }, recentErrors: [{ agentId: 'rn-e', profile: 'Implement - Sonnet', message: 'boom' }] }, runOpus, runGemini });
+    const prompt = prompts[0];
+    assert.match(prompt, /@usa: shift implementation to Gemini/, 'harvested @usa note in the prompt');
+    assert.match(prompt, /Recent friction signals:/, 'friction section present');
+    assert.match(prompt, /gemini turn cap hit/, 'blocker text in the prompt');
+    assert.match(prompt, /mcp-alias tool hits: create_agent@art-direction x1/, 'mcp-alias counts in the prompt');
+    assert.match(prompt, /Recent agent errors:/, 'recent errors section present');
+    assert.match(prompt, /Implement - Sonnet \(rn-e\): boom/, 'error message in the prompt');
+    assert.match(prompt, /Active profiles: .*Lead - Claude \(lead\/claude\/claude-opus-5-5\)/, 'profile catalog in the prompt');
+    assert.match(prompt, /Runner turn caps: .*claude=7/, 'turn caps (env-overridden) in the prompt');
+  } finally {
+    if (prev === undefined) delete process.env.VS_RUNNER_TURN_CAP_CLAUDE;
+    else process.env.VS_RUNNER_TURN_CAP_CLAUDE = prev;
+  }
 });
