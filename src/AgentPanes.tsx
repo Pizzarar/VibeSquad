@@ -142,8 +142,10 @@ export const DrawerSlot = memo(function DrawerSlot(props: {
   pane: Pane;
   shown: boolean;
   onSuccessor: (id: string) => void;
+  /** Sky zones: chat messages + composer only, no right dock (see AgentDrawer). */
+  chatOnly?: boolean;
 }) {
-  const { id, pane, shown, onSuccessor } = props;
+  const { id, pane, shown, onSuccessor, chatOnly } = props;
   const [everShown, setEverShown] = useState(shown);
   useEffect(() => {
     if (shown) setEverShown(true);
@@ -162,7 +164,7 @@ export const DrawerSlot = memo(function DrawerSlot(props: {
       onPointerDownCapture={() => setActivePane(pane)}
     >
       {agent ? (
-        <AgentDrawer agent={agent} onClose={close} onSuccessor={successor} active={shown} />
+        <AgentDrawer agent={agent} onClose={close} onSuccessor={successor} active={shown} chatOnly={chatOnly} />
       ) : (
         <div className="pane-empty">Loading {id.slice(0, 8)}… (or no longer on the daemon)</div>
       )}

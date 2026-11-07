@@ -135,9 +135,10 @@ export async function triggerBrainstormRestart(opts: {
   return { newAgentId, title };
 }
 
-type DrawerProps = { agent: PaseoAgent; onClose: () => void; onSuccessor?: () => void; active?: boolean };
+/** `chatOnly` (sky-gods zones): messages + composer only. The right dock (Changes/Files/Terminal) is never rendered, never read from or written to the shared `vs.right-dock.open` key, and `vs:open-right-dock` is ignored. */
+type DrawerProps = { agent: PaseoAgent; onClose: () => void; onSuccessor?: () => void; active?: boolean; chatOnly?: boolean };
 
-export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccessor, active = true }: DrawerProps) {
+export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccessor, active = true, chatOnly = false }: DrawerProps) {
   useTeams();
   const labels = (agent.labels ?? {}) as Record<string, string>;
   const prov = providerSpec(agent.provider);
@@ -167,7 +168,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   const [queuedByAgent, setQueuedByAgent] = useState<Record<string, QueuedTurnItem[]>>({});
   const queuedItems = queuedByAgent[agent.id] ?? [];
   const [permInputs, setPermInputs] = useState<Record<string, string>>({});
-  const [dockOpen, setDockOpen] = useState(() => localStorage.getItem("vs.right-dock.open") === "true");
+  const [dockOpen, setDockOpen] = useState(() => !chatOnly && localStorage.getItem("vs.right-dock.open") === "true");
 
   const imgs = useImageDraft(`${agent.id}:images`);
   const atts = useAttachments(`${agent.id}:files`);
@@ -234,8 +235,8 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   }, [agent.status]);
 
   useEffect(() => {
-    localStorage.setItem("vs.right-dock.open", String(dockOpen));
-  }, [dockOpen]);
+    if (!chatOnly) localStorage.setItem("vs.right-dock.open", String(dockOpen));
+  }, [dockOpen, chatOnly]);
 
   useEffect(() => {
     if (agent.status !== "running" && agent.status !== "closed" && queuedItems.length > 0) {
@@ -250,10 +251,11 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   }, [agent.id, agent.status, queuedItems.length]);
 
   useEffect(() => {
+    if (chatOnly) return;
     const onOpenDock = () => setDockOpen(true);
     window.addEventListener("vs:open-right-dock", onOpenDock);
     return () => window.removeEventListener("vs:open-right-dock", onOpenDock);
-  }, []);
+  }, [chatOnly]);
 
   const loadSummary = useCallback(async () => {
     setSummaryLoading(true);
@@ -639,7 +641,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
         onFeedback={onFeedback}
         att={att}
         dockOpen={dockOpen}
-        onToggleDock={() => setDockOpen((v) => !v)}
+        onToggleDock={() => !chatOnly && setDockOpen((v) => !v)}
       />
 
       {agent.pendingPermissions?.map((p) => (
@@ -669,7 +671,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
             onParkText={(txt) => void parkToInbox(txt, false)}
           />
         </TimelineErrorBoundary>
-        {dockOpen && (
+        {dockOpen && !chatOnly && (
           <TimelineErrorBoundary fallbackLabel="dock">
             <RightDock key={agent.id} agent={agent} />
           </TimelineErrorBoundary>

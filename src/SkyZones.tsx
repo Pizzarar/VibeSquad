@@ -40,7 +40,7 @@ function ZoneFace({
   const face = useBotFace(zone.bot, zone.pose ? { pose: zone.pose } : null, faces, { theme, reduced, force: force ?? (holdScared ? "scared" : null) });
   // Cell size comes from faces.json (never hardcoded); until it loads, a blank stage.
   const cell = faces?.cell ?? { w: 48, h: 48 };
-  const stage = useRef<HTMLSpanElement>(null);
+  const stage = useRef<HTMLSpanElement>(null); // the face box: the part of the zone the chat does not cover
   const [box, setBox] = useState({ w: 0, h: 0 });
   useLayoutEffect(() => {
     const el = stage.current;
@@ -56,7 +56,8 @@ function ZoneFace({
   const tk = sheet ? faceContain(sheet.cell, box) : null;
   const tf = sheet?.frames[clock.frame];
   return (
-    <span ref={stage} className="sky-face-stage" aria-hidden="true" style={bg ? ({ ["--sky-face-bg-custom" as string]: bg } as React.CSSProperties) : undefined}>
+    <span className="sky-face-stage" aria-hidden="true" style={bg ? ({ ["--sky-face-bg-custom" as string]: bg } as React.CSSProperties) : undefined}>
+      <span ref={stage} className="sky-face-area" data-testid={`sky-face-area-${zone.bot}`}>
       {k > 0 && (
         <span
           className={`sky-face${face.frame ? "" : " is-blank"}`}
@@ -81,6 +82,7 @@ function ZoneFace({
           }}
         />
       )}
+      </span>
       {isRiff && !sheet && !reduced && <span className={`sky-takeover-fallback${expanded ? " is-on" : ""}`} data-testid="sky-takeover-fallback" />}
     </span>
   );
@@ -146,7 +148,7 @@ function Zone({
                 </button>
               </div>
             )}
-            <DrawerSlot id={zone.agentId} pane="left" shown onSuccessor={onSuccessor} />
+            <DrawerSlot id={zone.agentId} pane="left" shown chatOnly onSuccessor={onSuccessor} />
           </>
         ) : off ? (
           <div className="sky-static" data-testid="sky-static-overlord" role="status">
