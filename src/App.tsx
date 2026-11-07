@@ -1489,7 +1489,7 @@ export function App() {
       if (flagged || labels["handoff-flagged"] || flaggedLeads.current.has(m.agent.id)) continue;
       flaggedLeads.current.add(m.agent.id);
       const reason = "Lead at 150k+ tokens: wrap up and hand off at a good stopping point";
-      setNeedsYou({ ...m.agent, labels: { ...labels, "handoff-flagged": "1" } } as PaseoAgent, reason).catch(() => flaggedLeads.current.delete(m.agent.id));
+      setNeedsYou(m.agent, reason, { "handoff-flagged": "1" }).catch(() => flaggedLeads.current.delete(m.agent.id));
     }
   }, [members]);
 

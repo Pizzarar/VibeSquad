@@ -12,7 +12,7 @@ const grab = (name) => {
   return src
     .slice(start, end)
     .replace("export function", "function")
-    .replace(/\(agent: PaseoAgent, reason: string\): Promise<void>/, "(agent, reason)")
+    .replace(/\(agent: PaseoAgent, reason: string(?:, extra\?: Record<string, string>)?\): Promise<void>/, "(agent, reason, extra)")
     .replace(/\(agent: PaseoAgent, opts\?: \{ optimistic\?: boolean \}\): Promise<void>/, "(agent, opts)");
 };
 
@@ -47,4 +47,23 @@ test("set stamps needs-you-at ≈ now as ISO; clear blanks it; re-flag is newer"
   await new Promise((r) => setTimeout(r, 15));
   await h.setNeedsYou({ id: "a1", labels: h.calls[1].labels }, "again");
   assert.ok(Date.parse(h.calls[2].labels["needs-you-at"]) > Date.parse(first));
+});
+
+test("setNeedsYou extra labels survive even when state.agents lacks them (handoff-flagged)", async () => {
+  const calls = [];
+  const factory = new Function(
+    "updateAgent", "latestLabels", "hasLegacy", "LEGACY_NEEDS_LABEL", "LEGACY_NEEDS_REASON", "LEGACY_NEEDS_UNTIL",
+    `${grab("setNeedsYou")}\nreturn setNeedsYou;`,
+  );
+  // latestLabels reads the store, which does NOT have handoff-flagged.
+  const set = factory(async (id, patch) => calls.push(patch.labels), () => ({ role: "lead" }), () => false, "l", "r", "u");
+  await set({ id: "a1", labels: {} }, "why", { "handoff-flagged": "1" });
+  assert.equal(calls[0]["handoff-flagged"], "1");
+  assert.equal(calls[0].role, "lead");
+  assert.equal(calls[0]["needs-you"], "why");
+});
+
+test("App.tsx passes handoff-flagged as the extra arg", () => {
+  const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  assert.match(app, /setNeedsYou\(m\.agent, reason, \{ "handoff-flagged": "1" \}\)/);
 });
