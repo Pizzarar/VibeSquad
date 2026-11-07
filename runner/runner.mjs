@@ -182,8 +182,30 @@ export class Runner {
     return { provider: c.provider, model: c.model ?? undefined, cwd: c.cwd, meta, systemPrompt: parked.systemPrompt ?? undefined, resume: parked.sessionId };
   }
 
-  _resume(id) {
-    const spec = this._parkedSpec(id);
+  // Resume spec for a lost agent (runner restarted while it was idle/running): the log's last session id, if no exit/archive.
+  _lostSpec(id) {
+    if (!this.store.exists(id) || this.live.has(id)) return null;
+    const events = this.store.read(id);
+    let sessionId = null;
+    const meta = { ...(events[0]?.meta ?? {}) };
+    for (const e of events) {
+      if (e.type === 'meta') Object.assign(meta, e.patch, e.patch?.labels ? { labels: { ...meta.labels, ...e.patch.labels } } : {});
+      if (e.type === 'exit' || e.type === 'archive') return null;
+      if (e.type === 'session' && e.sessionId) sessionId = e.sessionId;
+    }
+    const c = events[0];
+    if (!sessionId || typeof sessionId !== 'string' || sessionId.startsWith('-') || !this.adapters[c?.provider]?.canPark) return null;
+    return { provider: c.provider, model: c.model ?? undefined, cwd: c.cwd, meta, resume: sessionId };
+  }
+
+  // Brings a parked or lost agent back in place (same id, same log) without sending anything. False if it can't be resumed.
+  resume(id) {
+    if (this.live.has(id)) return true;
+    return !!this._resume(id, this._lostSpec(id));
+  }
+
+  _resume(id, fallbackSpec = null) {
+    const spec = this._parkedSpec(id) ?? fallbackSpec;
     if (!spec) return null;
     this._ensureSlot(id);
     this.store.append(id, 'status', { status: 'starting' });
