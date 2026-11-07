@@ -13,6 +13,11 @@ export function shouldSuperviseRunner(env = process.env, lanes = () => runnerLan
   }
 }
 
+/** Owner-confirmed forced restart (Unstick, after it killed the old runner tree and cleared runner.lock): the start still goes through the owner. */
+export function restartRunner(owner, opts = {}) {
+  return owner.startOwned(opts);
+}
+
 /**
  * `owner`: { startOwned(): Promise<boolean>, rc: { healthy(): Promise<boolean> } } (a RunnerBackend).
  * Checks every `checkMs`; when the runner is down it starts it, and after a failed start waits longer (backoff, capped).
