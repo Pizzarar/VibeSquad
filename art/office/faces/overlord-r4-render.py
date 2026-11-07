@@ -1,6 +1,6 @@
-"""C2a-R3 Overlord review gallery, one PNG per mode: H0 alien refs | Overlord R3 frames, 4x nearest.
-Usage (repo root): python -I art/office/faces/overlord-r3-render.py [tag]
-Needs scratch/c2a/alien-* (art/office/export_alien_ref.lua). Writes scratch/shots/c2a-r3-overlord-<tag>-{mode}.png"""
+"""C2a-R4 Overlord review gallery, one PNG per mode: H0 alien refs | Overlord R3 frames, 4x nearest.
+Usage (repo root): python -I art/office/faces/overlord-r4-render.py [tag]
+Needs scratch/c2a/alien-* (art/office/export_alien_ref.lua). Writes scratch/shots/c2a-r4-overlord-<tag>-{mode}.png"""
 import json, sys
 from PIL import Image, ImageDraw, ImageFont
 TAG = sys.argv[1] if len(sys.argv) > 1 else 'wip'
@@ -25,7 +25,7 @@ for mode in ('dark', 'light'):
     W = max(len(r) for r in rows) * (colw + PAD) + PAD
     H = 40 + sum(max(c.height for _, c in r) * Z + LAB + PAD for r in rows) + PAD
     im = Image.new('RGBA', (W, H), BG[mode]); d = ImageDraw.Draw(im)
-    d.text((PAD, 8), f'R3-overlord brain-jar TV ({TAG}) - {mode} - {Z}x nearest, cell 48x48', font=FONT, fill=FG[mode])
+    d.text((PAD, 8), f'R4-overlord brain-jar TV ({TAG}) - {mode} - {Z}x nearest, cell 48x48', font=FONT, fill=FG[mode])
     y = 40
     for r in rows:
         x, hm = PAD, max(c.height for _, c in r)
@@ -34,5 +34,5 @@ for mode in ('dark', 'light'):
             im.alpha_composite(c.resize((c.width * Z, c.height * Z), Image.NEAREST), (x, y + LAB + (hm - c.height) * Z))
             x += colw + PAD
         y += hm * Z + LAB + PAD
-    p = f'scratch/shots/c2a-r3-overlord-{TAG}-{mode}.png'
+    p = f'scratch/shots/c2a-r4-overlord-{TAG}-{mode}.png'
     im.save(p); print(p, im.size)

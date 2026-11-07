@@ -1,21 +1,23 @@
--- C2a-R3 Overlord "brain-jar TV" at 48x48 in the H0 hand (art/cast/hypno/lib.lua): the screen is
+-- C2a-R4 Overlord "brain-jar TV" at 48x48 in the H0 hand (art/cast/hypno/lib.lua): the screen is
 -- the jar glass, murky liquid with lots of empty space. Two loose bloodshot eyeballs on dangling
 -- optic-nerve tails and a separate floating set of teeth (no lips, no face outline). The middle
--- of the jar stays open murk (R1 Director: a back-wall brain read as a nose). Flat P0 fills, hand-placed pixels, no gradients.
+-- R4 (Aub): a real floating brain sits in the open middle between the eyes, above the teeth:
+-- pink lobes, violet folds, ink midline cleft; it bobs in idle and pulses (folds light up,
+-- pink halo) in talk/needs. Shapes are kept clean for ~10x display. Flat P0 fills, hand-placed pixels, no gradients.
 --   idle     : parts bob out of sync, tails sway
 --   blink    : slow murky lid
 --   talk     : teeth chatter, bubbles rise
 --   lookDown : eyes roll down and press the bottom glass
 --   needs    : eyes swing to the camera, teeth grin, glass flickers
 -- Cells/offsets match public/office/faces.json (overlord entry unchanged).
--- Run: Aseprite.exe -b --script-param root=<repo> --script art/office/faces/overlord-r3.lua
+-- Run: Aseprite.exe -b --script-param root=<repo> --script art/office/faces/overlord-r4.lua
 local root = app.params.root
 local L = dofile(root.."/art/cast/hypno/lib.lua")
 local K, V, P, CO, A, M, T, G, Y, LN, MU = 15, 8, 9, 10, 11, 4, 7, 12, 13, 3, 6
 local KEY = { k=K, m=M, g=G, a=A, p=P, t=T, v=V, c=CO, y=Y, l=LN }
 local pal = Palette{ fromFile = root.."/art/palette/pc98-dark.gpl" }
 local CW, CH = 48, 48
-local LAYERS = { "liquid", "tails", "teeth", "eyes", "fx" }
+local LAYERS = { "liquid", "brain", "tails", "teeth", "eyes", "fx" }
 
 local BANG = [[
 |kkkk|
@@ -28,6 +30,27 @@ local BANG = [[
 |kkkk|
 |kaak|
 |kkkk|
+]]
+
+-- the brain, side view (frontal lobe left): scalloped cortical bumps along the top, ink central +
+-- lateral fissures and orthogonally connected violet creases (no lone diagonal dots), a rounded
+-- violet/pink striped cerebellum under an ink transverse fissure, a blunt 2px coral brainstem
+-- outlined on both sides; 3px marble wet glint on the front lobe. Reads as a brain at 48px and holds at ~10x.
+local BRAIN = [[
+|.....ppp..ppp..pp....|
+|...pppppppkppvppppp..|
+|..pmmpvppkkppvvvppp..|
+|.ppmppvppkpppppvpppp.|
+|.ppppvvpkkppvppvvppp.|
+|ppvvppppkpppvvvpppvpp|
+|pppvvppkkkkkpppppvvpp|
+|.ppppkkkpppppppppvppp|
+|.ppkkkppppppkkkkkkkpp|
+|..pppppppp..vvvvvvv..|
+|...ppppppp..ppppppp..|
+|.....pppp.cc.vvvvv...|
+|..........cc.........|
+|..........cc.........|
 ]]
 
 -- murky particles (hand-placed, fixed)
@@ -103,6 +126,16 @@ local function bubble(C, x, y, big)
   end
 end
 
+-- pulse 0 = rest, 1 = extra wet glint + amber spark, 2 = glint + two bigger sparks
+local function brain(C, x, y, pulse)
+  pulse = pulse or 0
+  C.stamp(x, y, BRAIN, { p=P, v=V, k=K, m=M, c=CO })
+  if pulse > 0 then C.px(x + 4, y + 1, M); C.px(x + 4, y + 3, M) end
+  C.outline(K)
+  if pulse > 0 then L.twinkle(C, x + 5, y - 3, A, nil, 1) end
+  if pulse > 1 then L.twinkle(C, x + 15, y - 3, A, nil, 1) end
+end
+
 ---------------------------------------------------------------- one frame
 -- s = { le, re (eyes), lt, rt (tail points), tx, ty, gap, grin, bubbles, flash, flick }
 local function overlord(C, s)
@@ -119,6 +152,8 @@ local function overlord(C, s)
   if s.flash then
     g.rect(0, 0, CW, 2, P); g.rect(0, CH-2, CW, 2, P); g.rect(0, 0, 2, CH, P); g.rect(CW-2, 0, 2, CH, P)
   end
+
+  if s.bx then brain(C.brain, s.bx, s.bry, s.pulse) end
 
   tail(C.tails, s.lt); tail(C.tails, s.rt)
   C.tails.outline(K)
@@ -138,40 +173,42 @@ end
 local function tailsDown(lx, ly, rx, ry, sw, short)
   sw = sw or 0
   if short then                                                -- needs: tails curl up short, clear of the grin
-    return { lx+1,ly+6, lx+2,ly+9, lx+sw,ly+12, lx-3+sw,ly+13, lx-4+sw,ly+11 },
-           { rx-2,ry+6, rx-3,ry+9, rx-1-sw,ry+12, rx+2-sw,ry+13, rx+3-sw,ry+11 }
+    return { lx,ly+6, lx,ly+9, lx-1+sw,ly+12, lx-2+sw,ly+14, lx-4+sw,ly+14, lx-5+sw,ly+12 },
+           { rx-1,ry+6, rx-1,ry+9, rx-sw,ry+12, rx+1-sw,ry+14, rx+3-sw,ry+14, rx+4-sw,ry+12 }
   end
-  local lt = { lx+1,ly+6,  lx+3,ly+10, lx+3+sw,ly+15, lx+1+sw,ly+19, lx-2+sw,ly+21, lx-4+sw,ly+19, lx-3+sw,ly+17 }
-  local rt = { rx-2,ry+6,  rx-4,ry+10, rx-4-sw,ry+15, rx-2-sw,ry+19, rx+1-sw,ry+21, rx+3-sw,ry+19, rx+2-sw,ry+17 }
+  local lt = { lx,ly+6,  lx-1,ly+11, lx+sw,ly+17, lx+sw,ly+22, lx-2+sw,ly+24, lx-4+sw,ly+23, lx-4+sw,ly+21 }
+  local rt = { rx-1,ry+6, rx,ry+11, rx-1-sw,ry+17, rx-1-sw,ry+22, rx+1-sw,ry+24, rx+3-sw,ry+23, rx+3-sw,ry+21 }
   return lt, rt
 end
 -- lookDown: eyes pressed on the bottom glass, nerves float up behind them
 local function tailsUp(lx, ly, rx, ry, sw)
   sw = sw or 0
-  local lt = { lx-3,ly-5,  lx-5,ly-8,  lx-5+sw,ly-11, lx-2+sw,ly-12, lx-1+sw,ly-10 }
-  local rt = { rx+2,ry-5,  rx+4,ry-8,  rx+4-sw,ry-11, rx+1-sw,ry-12, rx-sw,ry-10 }
+  local lt = { lx-3,ly-5,  lx-6,ly-7,  lx-8+sw,ly-10, lx-7+sw,ly-13, lx-5+sw,ly-13, lx-4+sw,ly-11 }
+  local rt = { rx+2,ry-5,  rx+5,ry-7,  rx+7-sw,ry-10, rx+6-sw,ry-13, rx+4-sw,ry-13, rx+3-sw,ry-11 }
   return lt, rt
 end
 
 local function idle(o)
-  local lx, ly, rx, ry = 10, 10 + o.l, 37, 10 + o.r
+  local lx, ly, rx, ry = 8, 8 + o.l, 39, 8 + o.r
   local lt, rt = tailsDown(lx, ly, rx, ry, o.sw)
   return { le = { x=lx, y=ly, px=o.px or 1, py=o.py or 1, lid=o.lid }, re = { x=rx, y=ry, px=o.rpx or -1, py=o.py or 1, lid=o.lid },
-           lt = lt, rt = rt, tx = 13, ty = 34 + o.t, gap = o.gap, bubbles = o.bubbles }
+           lt = lt, rt = rt, tx = 13, ty = 34 + o.t, gap = o.gap, bubbles = o.bubbles,
+           bx = 13, bry = 13 + (o.b or 0), pulse = o.pulse }
 end
 
 local function down(o)
   local lx, ly, rx, ry = 12 + (o.lx or 0), 38, 35 + (o.rx or 0), 38
   local lt, rt = tailsUp(lx, ly, rx, ry, o.sw)
   return { le = { x=lx, y=ly, px=1, py=3, press=true }, re = { x=rx, y=ry, px=-1, py=3, press=true },
-           lt = lt, rt = rt, tx = 13, ty = 16 + o.t, gap = 0 }
+           lt = lt, rt = rt, tx = 13, ty = 22 + o.t, gap = 0, bx = 13, bry = 2 + (o.b or 0) }
 end
 
 local function needs(o)
-  local lx, ly, rx, ry = 15, 13, 32, 13 + (o.r or 0)
+  local lx, ly, rx, ry = 8, 8, 39, 8 + (o.r or 0)
   local lt, rt = tailsDown(lx, ly, rx, ry, o.sw, true)
   return { le = { x=lx, y=ly, px=0, py=0, big=true }, re = { x=rx, y=ry, px=0, py=0, big=true },
-           lt = lt, rt = rt, tx = 13, ty = 36, gap = 0, grin = true, flash = o.flash, flick = o.flick }
+           lt = lt, rt = rt, tx = 13, ty = 36, gap = 0, grin = true, flash = o.flash, flick = o.flick,
+           bx = 13, bry = 13, pulse = o.pulse }
 end
 
 ---------------------------------------------------------------- build + export
@@ -208,15 +245,15 @@ local function sheet(asePath, pngBase, frames)
 end
 
 -- order = faces.json overlord: lookDown x0/48, idle x96/144, blink x192, talk x240/288/336, needs x384/432
-sheet(root.."/art/office/faces/overlord-r3.aseprite", root.."/public/office/face-overlord", {
-  down  { t = 0, sw = 0 },
-  down  { t = 1, sw = 1, lx = 1 },
-  idle  { l = 0, r = 1, t = 0, sw = 0 },
-  idle  { l = 1, r = 0, t = -1, sw = 1 },
-  idle  { l = 0, r = 0, t = 0, sw = 0, lid = 0.85, px = 1, py = 2, rpx = -1 },
-  idle  { l = 0, r = 1, t = 0, gap = 4, sw = 1, bubbles = { {24, 29, true}, {20, 24} } },
-  idle  { l = 1, r = 0, t = 1, gap = 0, sw = 0, bubbles = { {25, 22, true}, {21, 18}, {27, 31} } },
-  idle  { l = 0, r = 0, t = 0, gap = 3, sw = 1, bubbles = { {25, 14, true}, {21, 8}, {20, 29, true} } },
-  needs { sw = 0, flick = { 21 } },
-  needs { sw = 1, r = 1, flash = true, flick = { 8, 29, 40 } },
+sheet(root.."/art/office/faces/overlord-r4.aseprite", root.."/public/office/face-overlord", {
+  down  { t = 0, sw = 0, b = 0 },
+  down  { t = 1, sw = 1, lx = 1, b = 1 },
+  idle  { l = 0, r = 1, t = 0, sw = 0, b = 0 },
+  idle  { l = 1, r = 0, t = -1, sw = 1, b = -1 },
+  idle  { l = 0, r = 0, t = 0, sw = 0, b = 0, lid = 0.85, px = 1, py = 2, rpx = -1 },
+  idle  { l = 0, r = 1, t = 0, gap = 4, sw = 1, b = 0, pulse = 1, bubbles = { {20, 7, true}, {24, 3} } },
+  idle  { l = 1, r = 0, t = 1, gap = 0, sw = 0, b = -1, pulse = 2, bubbles = { {27, 4, true}, {22, 3}, {21, 9} } },
+  idle  { l = 0, r = 0, t = 0, gap = 3, sw = 1, b = 0, pulse = 1, bubbles = { {23, 3, true}, {27, 9}, {19, 8} } },
+  needs { sw = 0, flick = { 21 }, pulse = 1 },
+  needs { sw = 1, r = 1, flash = true, flick = { 8, 40 }, pulse = 2 },
 })
