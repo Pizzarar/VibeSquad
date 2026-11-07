@@ -40,7 +40,8 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
   resolved ??= def?.resolve?.();
   return {
     name,
-    start({ cwd, model, meta = {}, systemPrompt, env, emit, onExit }) {
+    canPark: true, // sessions persist agent-side: resumed with session/resume or session/load, else a new session primed from our log
+    start({ cwd, model, meta = {}, systemPrompt, env, emit, onExit, resume, history }) {
       const child = spawnNoShell(command, args, { cwd, ...(resolved ? { resolved } : {}), ...(env ? { env } : {}) }, spawnImpl);
       let nextId = 1;
       const pending = new Map();
@@ -56,6 +57,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
       let imageCapable = false;
       const queue = [];
       let pendingSystem = systemPrompt || '';
+      let replaying = false; // session/load replays the old transcript as session/update; our log already has it
 
       lineReader(child.stdout, (line) => {
         let m;
@@ -65,6 +67,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
           pending.delete(m.id);
           if (p) { if (m.error) p.reject(new Error(m.error.message)); else p.resolve(m.result); }
         } else if (m.method === 'session/update') {
+          if (replaying) return;
           const u = m.params?.update ?? {};
           switch (u.sessionUpdate) {
             case 'agent_message_chunk': if (u.content?.type === 'text') emit('output', { text: u.content.text }); break;
@@ -98,8 +101,27 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
       const ready = (async () => {
         const init = await request('initialize', { protocolVersion: 1, clientCapabilities: {} });
         imageCapable = !!init?.agentCapabilities?.promptCapabilities?.image;
-        const s = await request('session/new', { cwd, mcpServers: mcp ? [acpMcpServer(mcpServerSpec({ env, path: mcpPath }))] : [] });
-        sessionId = s.sessionId;
+        const sessionParams = { cwd, mcpServers: mcp ? [acpMcpServer(mcpServerSpec({ env, path: mcpPath }))] : [] };
+        const caps = init?.agentCapabilities ?? {};
+        let s = null;
+        if (resume) {
+          // session/resume restores without replaying history, so prefer it; session/load replays (swallowed above).
+          const via = caps.sessionCapabilities?.resume ? 'session/resume' : caps.loadSession ? 'session/load' : null;
+          let reason = via ? null : 'agent advertises neither session/resume nor session/load';
+          if (via) {
+            replaying = via === 'session/load';
+            try { s = (await request(via, { sessionId: resume, ...sessionParams })) ?? {}; sessionId = resume; }
+            catch (e) { reason = `${via} failed: ${e.message}`; }
+            replaying = false;
+          }
+          if (s) pendingSystem = ''; // the restored session already has its system prompt
+          else {
+            emit('resume_fallback', { sessionId: resume, reason });
+            const primer = history?.() ?? '';
+            if (primer) pendingSystem = `${pendingSystem ? `${pendingSystem}\n\n` : ''}${primer}`;
+          }
+        }
+        if (!s) { s = await request('session/new', sessionParams); sessionId = s.sessionId; }
         // Model lists come either as `models` (opencode, agy: session/set_model) or as a `model` configOption
         // (codex-acp: session/set_config_option).
         const opt = (s.configOptions ?? []).find((o) => o.id === 'model' || o.category === 'model');

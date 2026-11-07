@@ -103,7 +103,7 @@ export class Runner {
     };
     try {
       entry.handle = this.adapters[provider].start({
-        id, env: agentEnv(id, meta), model, cwd, meta, systemPrompt, emit, resume,
+        id, env: agentEnv(id, meta), model, cwd, meta, systemPrompt, emit, resume, history: () => this._primer(id),
         onExit: (info) => {
           if (entry.parked) return; // stopped on purpose; the log already says parked
           entry.status = 'exited';
@@ -118,6 +118,27 @@ export class Runner {
       throw err;
     }
     return entry;
+  }
+
+  // Short recap of the conversation so far (from the log) to prime a fresh session when a provider cannot resume the old one.
+  _primer(id, maxChars = 8000) {
+    const turns = [];
+    for (const e of this.store.read(id)) {
+      if (e.type === 'input' && typeof e.text === 'string') turns.push({ who: 'User', text: e.text });
+      else if (e.type === 'output' && typeof e.text === 'string') {
+        if (turns.at(-1)?.who === 'Assistant') turns.at(-1).text += e.text; else turns.push({ who: 'Assistant', text: e.text });
+      }
+    }
+    if (turns.at(-1)?.who === 'User') turns.pop(); // the prompt that triggered this resume: it is sent right after the primer
+    const kept = [];
+    let size = 0;
+    for (const t of turns.reverse()) {
+      const line = `${t.who}: ${t.text}`.slice(-Math.max(200, maxChars - size));
+      if (size + line.length > maxChars) break;
+      kept.unshift(line);
+      size += line.length + 2;
+    }
+    return kept.length ? `[Context: your previous session could not be restored. Recent conversation so far, oldest first:]\n\n${kept.join('\n\n')}\n\n[End of earlier context. Continue from here.]` : '';
   }
 
   // Makes room for one more live process: parks the oldest idle agent, or refuses if none can be parked.
