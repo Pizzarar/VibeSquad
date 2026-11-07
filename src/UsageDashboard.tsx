@@ -1,37 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
+import { buildRows, etaText, foldRoles, relTime, sortRows, type LimitRow, type SortKey, type UsageData } from "./usageHelpers";
 
 // Usage dashboard for the Squads screen (docs/PLAN_USAGE_DASHBOARD.md step 4).
 // Data: GET /__vibesquad/providers/usage (server/providers-catalog.mjs getUsage).
-
-export type LimitRow = {
-  provider: string;
-  window: string;
-  usedPct: number;
-  resetsAt: string | null;
-  source?: string;
-  at?: string;
-  burnPctPerHour: number;
-  etaToCap: string | null;
-};
-type Stats = { turns: number; costUsd: number; inputTokens: number; outputTokens: number; avgTokensPerTurn: number };
-export type LaneRow = Stats & {
-  lane: string;
-  agents: number;
-  restarts: number;
-  handoffs: number;
-  coordinationShare: number;
-};
-type RoleRow = Stats & { role: string };
-type PerLane = { lane: string; mergedUnits: number; reviewRounds: number; avgReviewRounds: number; costPerMergedUnit: number };
-type LoopRow = { agentId: string; lane: string; role: string; title?: string; turns: number };
-export type UsageData = {
-  limits: LimitRow[];
-  lanes: LaneRow[];
-  byRole: RoleRow[];
-  coordination?: { coordinationTokens: number; executionTokens: number; coordinationShare: number };
-  merged?: { perLane: PerLane[] };
-  loops?: { threshold: number; flagged: LoopRow[] };
-};
 
 const POLL_MS = 60_000;
 const MIN_GAP_MS = 10_000;
@@ -48,25 +19,6 @@ const providerLabel = (p: string) => PROVIDER_LABEL[p] ?? p;
 const tok = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(Math.round(n)));
 const usd = (n: number) => `$${n >= 100 ? n.toFixed(0) : n.toFixed(2)}`;
 const pct = (n: number) => `${Math.round(n * 100)}%`;
-
-export function relTime(ms: number, now: number): string {
-  const d = ms - now;
-  const a = Math.abs(d);
-  const m = Math.round(a / 60_000);
-  const txt = m < 60 ? `${m}m` : m < 48 * 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${Math.round(m / 1440)}d`;
-  return d >= 0 ? `in ${txt}` : `${txt} ago`;
-}
-
-const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-function dayTime(ms: number): string {
-  const d = new Date(ms);
-  return `${DAYS[d.getDay()]} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-}
-
-export function etaText(l: LimitRow): string {
-  if (l.etaToCap) return `hits cap ~${dayTime(Date.parse(l.etaToCap))}`;
-  return l.burnPctPerHour > 0 ? "won't cap before reset" : "idle · no burn";
-}
 
 function LimitCard({ l, now }: { l: LimitRow; now: number }) {
   const used = Math.max(0, Math.min(100, l.usedPct));
@@ -93,11 +45,6 @@ function LimitCard({ l, now }: { l: LimitRow; now: number }) {
   );
 }
 
-type SortKey = "lane" | "tokens" | "costUsd" | "turns" | "avg" | "coord" | "restarts" | "handoffs" | "merged" | "rounds" | "costUnit";
-type Row = {
-  lane: string; tokens: number; costUsd: number; turns: number; avg: number; coord: number; restarts: number; handoffs: number;
-  merged: number; rounds: number | null; costUnit: number | null; looped: number;
-};
 const COLS: { key: SortKey; label: string; num: boolean }[] = [
   { key: "lane", label: "Lane", num: false },
   { key: "tokens", label: "Tokens", num: true },
@@ -111,32 +58,6 @@ const COLS: { key: SortKey; label: string; num: boolean }[] = [
   { key: "rounds", label: "Rev rounds/unit", num: true },
   { key: "costUnit", label: "Cost/unit", num: true },
 ];
-
-export function buildRows(d: UsageData): Row[] {
-  const per = new Map((d.merged?.perLane ?? []).map((p) => [p.lane, p]));
-  const loops = new Map<string, number>();
-  for (const f of d.loops?.flagged ?? []) loops.set(f.lane, (loops.get(f.lane) ?? 0) + 1);
-  return (d.lanes ?? []).map((l) => {
-    const p = per.get(l.lane);
-    return {
-      lane: l.lane, tokens: l.inputTokens + l.outputTokens, costUsd: l.costUsd, turns: l.turns, avg: l.avgTokensPerTurn,
-      coord: l.coordinationShare, restarts: l.restarts, handoffs: l.handoffs, merged: p?.mergedUnits ?? 0,
-      rounds: p ? p.avgReviewRounds : null, costUnit: p ? p.costPerMergedUnit : null, looped: loops.get(l.lane) ?? 0,
-    };
-  });
-}
-
-export function sortRows(rows: Row[], key: SortKey, dir: 1 | -1): Row[] {
-  return [...rows].sort((a, b) => {
-    const x = a[key] as string | number | null;
-    const y = b[key] as string | number | null;
-    if (x === null && y === null) return a.lane.localeCompare(b.lane);
-    if (x === null) return 1; // nulls always last
-    if (y === null) return -1;
-    const c = typeof x === "string" ? x.localeCompare(y as string) : (x as number) - (y as number);
-    return c * dir || a.lane.localeCompare(b.lane);
-  });
-}
 
 export function useUsage(): { data: UsageData | null; error: string | null } {
   const [data, setData] = useState<UsageData | null>(null);
@@ -196,7 +117,8 @@ export function UsageDashboard() {
     );
   }
   const flagged = data.loops?.flagged ?? [];
-  const roleTotal = data.byRole.reduce((s, r) => s + r.inputTokens + r.outputTokens, 0);
+  const roles = foldRoles(data.byRole);
+  const roleTotal = roles.reduce((s, r) => s + r.inputTokens + r.outputTokens, 0);
   const click = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: key === "lane" ? 1 : -1 }));
 
   return (
@@ -213,7 +135,7 @@ export function UsageDashboard() {
       <div className="usage-split">
         <div className="usage-roles" data-testid="usage-roles">
           <div className="usage-sub">Role split</div>
-          {data.byRole.map((r) => {
+          {roles.map((r) => {
             const t = r.inputTokens + r.outputTokens;
             return (
               <div className="usage-role" key={r.role} data-role={r.role}>
