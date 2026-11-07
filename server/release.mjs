@@ -136,23 +136,23 @@ export function ghReleaseArgs(subcommandArgs, repo = DEFAULT_RELEASE_REPO) {
   return ["release", ...subcommandArgs, "--repo", repo];
 }
 
-export function buildLatestJson({ version, channel, signature, repo = DEFAULT_RELEASE_REPO, pubDate = new Date().toISOString(), notes }) {
+export function buildLatestJson({ version, channel, signature, repo = DEFAULT_RELEASE_REPO, pubDate = new Date().toISOString(), notes, android = true }) {
   const cleanVer = String(version).trim().replace(/^v/, "");
   const tag = channel === "beta" ? "beta" : `v${cleanVer}`;
   const downloadUrl = `https://github.com/${repo}/releases/download/${tag}/VibeSquad-setup.exe`;
+  const platforms = {
+    "windows-x86_64": {
+      signature: String(signature || "").trim(),
+      url: downloadUrl,
+    },
+  };
+  // Only advertise the APK when one was built for this version+commit (a dead link otherwise).
+  if (android) platforms["android-aarch64"] = { url: `https://github.com/${repo}/releases/download/${tag}/VibeSquad.apk` };
   return {
     version: cleanVer,
     notes: notes || defaultReleaseNotes(cleanVer, channel),
     pub_date: pubDate,
-    platforms: {
-      "windows-x86_64": {
-        signature: String(signature || "").trim(),
-        url: downloadUrl,
-      },
-      "android-aarch64": {
-        url: `https://github.com/${repo}/releases/download/${tag}/VibeSquad.apk`,
-      },
-    },
+    platforms,
   };
 }
 
@@ -212,6 +212,7 @@ export function publishRelease({
   latestJsonPath,
   latestManifest,
   signature,
+  android = true,
   cwd = rootDir,
   exec = execFileSync,
   targetCommit = "",
@@ -219,7 +220,7 @@ export function publishRelease({
   writeManifest = (filePath, manifest) => writeFileSync(filePath, JSON.stringify(manifest, null, 2) + "\n"),
 }) {
   const cleanVer = String(targetVersion).trim().replace(/^v/, "");
-  const effectiveManifest = latestManifest || buildLatestJson({ version: cleanVer, channel, signature });
+  const effectiveManifest = latestManifest || buildLatestJson({ version: cleanVer, channel, signature, android });
   const tag = channel === "beta" ? "beta" : `v${cleanVer}`;
   const releaseTitle = channel === "beta" ? `VibeSquad Beta (${cleanVer})` : `VibeSquad v${cleanVer}`;
 
@@ -264,7 +265,7 @@ export function publishRelease({
   console.log(`[release:${channel}] Published ${tag} with ${assets.length} asset(s).`);
 
   if (channel === "stable") {
-    const betaManifest = buildLatestJson({ version: cleanVer, channel: "beta", signature });
+    const betaManifest = buildLatestJson({ version: cleanVer, channel: "beta", signature, android });
     if (latestJsonPath) {
       writeManifest(latestJsonPath, betaManifest);
     }
@@ -310,6 +311,7 @@ export function parseArgs(argv) {
     changelog: "",
     stageOnly: false,
     unsigned: false,
+    noAuthenticode: false,
     skipBuild: false,
     withAndroid: false,
   };
@@ -322,9 +324,11 @@ export function parseArgs(argv) {
     else if (valued[flag]) out[valued[flag]] = eq > 0 ? a.slice(eq + 1) : (argv[++i] ?? "");
     else if (a === "--stage-only") out.stageOnly = true;
     else if (a === "--unsigned") out.unsigned = true;
+    else if (a === "--no-authenticode") out.noAuthenticode = true;
     else if (a === "--skip-build") out.skipBuild = true;
     else if (a === "--with-android") out.withAndroid = true;
   }
+  if (out.unsigned && out.noAuthenticode) throw new Error("--unsigned and --no-authenticode cannot be combined: --unsigned is a test build, --no-authenticode an owner-approved release.");
   out.version = out.version.replace(/^v/, "");
   return out;
 }
@@ -350,6 +354,8 @@ export function assertFrozenCommit({ commit, requireClean, exec = execFileSync, 
 const ANDROID_MARKER = "android-build.json";
 // Written by `build --unsigned`; the sign and publish stages refuse while it exists.
 export const UNSIGNED_MARKER = "UNSIGNED";
+// Written by `build --no-authenticode`: owner waiver, a real release without Authenticode (updater minisign only).
+export const NO_AUTHENTICODE_MARKER = "NO-AUTHENTICODE";
 const assertSigned = (distDir, stage) => {
   if (existsSync(join(distDir, UNSIGNED_MARKER))) throw new Error(`Refusing to ${stage}: dist-desktop/${UNSIGNED_MARKER} marks an --unsigned test build. Rebuild without --unsigned.`);
 };
@@ -478,7 +484,7 @@ export function runRelease(argv, { rootDir: root = rootDir, exec = execFileSync,
     rmSync(join(distDir, ANDROID_MARKER), { force: true });
     const buildEnv = buildSigningEnv(env, keyPath);
     const signArgs = [];
-    if (!opts.unsigned) {
+    if (!opts.unsigned && !opts.noAuthenticode) {
       // Authenticode (tauri signCommand overlay) runs inside the build, before the minisign updater .sig below.
       try {
         exec(process.execPath, [join(root, "scripts", "sign-windows.mjs"), "--check"], { cwd: root, env, stdio: "inherit" });
@@ -489,11 +495,16 @@ export function runRelease(argv, { rootDir: root = rootDir, exec = execFileSync,
     }
     exec(process.execPath, [join(root, "server", "build-desktop.mjs"), ...signArgs], { cwd: root, env: buildEnv, stdio: "inherit" });
     // Only a successful signed build clears the marker; a failed one leaves any earlier --unsigned artifacts marked.
+    mkdirSync(distDir, { recursive: true });
     if (opts.unsigned) {
-      mkdirSync(distDir, { recursive: true });
       writeFileSync(join(distDir, UNSIGNED_MARKER), "build --unsigned: not Authenticode-signed; never publish\n");
     } else {
       rmSync(join(distDir, UNSIGNED_MARKER), { force: true });
+    }
+    if (opts.noAuthenticode) {
+      writeFileSync(join(distDir, NO_AUTHENTICODE_MARKER), "build --no-authenticode: owner waiver, updater-signed (minisign) only, no Authenticode\n");
+    } else {
+      rmSync(join(distDir, NO_AUTHENTICODE_MARKER), { force: true });
     }
     if (opts.withAndroid) {
       exec(process.execPath, [join(root, "server", "build-android.mjs")], { cwd: root, env: buildEnv, stdio: "inherit" });
@@ -513,7 +524,7 @@ export function runRelease(argv, { rootDir: root = rootDir, exec = execFileSync,
       exec(process.execPath, signerSignArgs(tauriCliJs, keyPath, installerPath), { cwd: root, env: updaterSigningEnv(env, keyPath), stdio: "inherit" });
     }
     if (!existsSync(sigPath)) throw new Error(`Signature file missing at ${sigPath}`);
-    const manifest = buildLatestJson({ version: targetVersion, channel, signature: readFileSync(sigPath, "utf8").trim() });
+    const manifest = buildLatestJson({ version: targetVersion, channel, signature: readFileSync(sigPath, "utf8").trim(), android: Boolean(selectApk({ distDir, version: targetVersion, commit })) });
     writeFileSync(latestJsonPath, JSON.stringify(manifest, null, 2) + "\n");
     log(`[release:${channel}] Wrote signed ${latestJsonPath} for v${targetVersion}`);
   }
@@ -522,12 +533,12 @@ export function runRelease(argv, { rootDir: root = rootDir, exec = execFileSync,
     assertSigned(distDir, "publish");
     if (!existsSync(sigPath) || !existsSync(latestJsonPath)) throw new Error("Nothing to publish: run the sign stage first.");
     const signature = readFileSync(sigPath, "utf8").trim();
-    const latestManifest = buildLatestJson({ version: targetVersion, channel, signature });
     const apk = selectApk({ distDir, version: targetVersion, commit });
+    const latestManifest = buildLatestJson({ version: targetVersion, channel, signature, android: Boolean(apk) });
     if (!apk && existsSync(join(distDir, "VibeSquad.apk"))) log(`[release:${channel}] Skipping VibeSquad.apk: not built for ${targetVersion}@${commit.slice(0, 7)}.`);
     const licenses = join(distDir, "THIRD-PARTY-LICENSES.txt");
     const assets = [installerPath, sigPath, latestJsonPath, apk, licenses].filter((p) => p && existsSync(p));
-    publishRelease({ channel, targetVersion, assets, latestJsonPath, latestManifest, signature, cwd: root, exec, targetCommit: commit, repo });
+    publishRelease({ channel, targetVersion, assets, latestJsonPath, latestManifest, signature, android: Boolean(apk), cwd: root, exec, targetCommit: commit, repo });
     const tag = channel === "beta" ? "beta" : `v${targetVersion}`;
     if (subcommand) {
     const record = writeReleaseRecord({
@@ -542,7 +553,7 @@ export function runRelease(argv, { rootDir: root = rootDir, exec = execFileSync,
       changelog: opts.changelog,
       releaseUrl: `https://github.com/${repo}/releases/tag/${tag}`,
       artifacts: assets.filter((p) => !p.endsWith("latest.json")).map((p) => ({ name: p.split(/[\\/]/).pop(), sha256: sha256(p) })),
-      signature: "Signature file `VibeSquad-setup.exe.sig` present and embedded in latest.json (not cryptographically re-verified by this script).",
+      signature: `Signature file \`VibeSquad-setup.exe.sig\` present and embedded in latest.json (not cryptographically re-verified by this script).${existsSync(join(distDir, NO_AUTHENTICODE_MARKER)) ? "\nWindows: updater-signed (minisign) only, no Authenticode (owner waiver)" : ""}`,
     });
     log(`[release:${channel}] Updated release record ${record}`);
     }
