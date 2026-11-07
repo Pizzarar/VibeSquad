@@ -1,6 +1,6 @@
 // Build the cast sprite sheet + review galleries from the layered shape sources in art/cast/.
 // Usage: node scripts/build-cast.mjs [--shots <dir>] [--zoom <role>] [--no-dpr]
-//   public/cast.png               256x640 sheet, 64x64 cells, row = role (fixed order), col = variant 0-3
+//   public/cast.png               (only with --legacy-sheet; now built by build-cast-hypno.mjs) 256x640 sheet, 64x64 cells, row = role (fixed order), col = variant 0-3
 //   art/cast/piskel/<role>.piskel one 64x64 frame per variant, for hand tweaks in Piskel
 //   <shots>/cast64-4x.png         labelled gallery, every sprite at 4x
 //   <shots>/cast64-dpr{2,1}.png   every sprite at 32 CSS px (as the app shows it), rendered by Playwright
@@ -80,7 +80,8 @@ const sheetFile = join(root, "public", "cast.png");
       for (let y = 0; y < S; y++) img.set(px.subarray(y * S * 4, (y + 1) * S * 4), ((row * S + y) * W + col * S) * 4);
     }),
   );
-  save(sheetFile, W, H, img);
+  if (args.includes("--legacy-sheet")) save(sheetFile, W, H, img);
+  else console.log("public/cast.png untouched: it is built from the Hypnospace busts by scripts/build-cast-hypno.mjs (--legacy-sheet to overwrite)");
 }
 
 // Piskel files: one layer, one frame per variant, stored as a single horizontal strip chunk.
