@@ -1,6 +1,6 @@
 // Shared bot-face plumbing (docs/PLAN_SKY_GODS_C2B.md G2): theme, reduced-motion, image probing, faces.json
 // loading and the talk/needs/blink/idle mode logic. The tower no longer draws faces; the sky zones do.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   BLINK_MS,
   faceFrame,
@@ -14,7 +14,17 @@ import {
   type Frame,
   type SeatedAgent,
 } from "./squadFloorLogic";
-import { SKY_CRT_JSON_URL, validateSkyCrt, type SkyCrtModel } from "./skyZonesLogic";
+import {
+  SKY_CRT_JSON_URL,
+  TAKEOVER_JSON_URL,
+  takeoverAdvance,
+  takeoverFrameAt,
+  takeoverSettled,
+  validateSkyCrt,
+  validateTakeover,
+  type SkyCrtModel,
+  type TakeoverModel,
+} from "./skyZonesLogic";
 
 export type Theme = "dark" | "light";
 
@@ -93,24 +103,66 @@ export function useFacesModel(): FacesModel | null {
   return faces;
 }
 
-/** sky-crt.json, loaded once; missing/invalid → null (the sky zones keep the CSS bezel). */
-export function useSkyCrtModel(): SkyCrtModel | null {
-  const [model, setModel] = useState<SkyCrtModel | null>(null);
+/** An optional @art json, fetched once; missing/invalid → null so the caller keeps its CSS fallback. */
+function useJsonModel<T>(url: string, validate: (json: unknown) => { ok: true; value: T } | { ok: false }): T | null {
+  const [model, setModel] = useState<T | null>(null);
   useEffect(() => {
     let cancelled = false;
-    fetch(SKY_CRT_JSON_URL)
+    fetch(url)
       .then((r) => (r.ok ? r.json() : undefined))
       .catch(() => undefined)
       .then((json) => {
         if (cancelled) return;
-        const m = validateSkyCrt(json);
+        const m = validate(json);
         setModel(m.ok ? m.value : null);
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [url]);
   return model;
+}
+
+/** sky-crt.json, loaded once; missing/invalid → null (the sky zones keep the CSS bezel). */
+export const useSkyCrtModel = (): SkyCrtModel | null => useJsonModel(SKY_CRT_JSON_URL, validateSkyCrt);
+
+/** takeover.json (G7), loaded once; missing/invalid → null (the CSS dissolve plays instead). */
+export const useTakeoverModel = (): TakeoverModel | null => useJsonModel(TAKEOVER_JSON_URL, validateTakeover);
+
+/**
+ * G7 overlay clock: steps through `n` frames at `fps` while `expanded`, holds the last, and runs back down on collapse.
+ * A flip mid-play reverses from the frame it is on (the position lives in a ref). Returns the frame to draw and `pos`
+ * (0 = fully out). Reduced motion or no sheet (n = 0): no clock.
+ */
+export function useTakeoverClock(expanded: boolean, fps: number, n: number, reduced: boolean): { frame: number; pos: number } {
+  const posRef = useRef(0);
+  const keyRef = useRef("0:false");
+  const [pos, setPos] = useState(0);
+  useEffect(() => {
+    if (reduced || n < 1) {
+      posRef.current = 0;
+      keyRef.current = "0:false";
+      setPos(0);
+      return;
+    }
+    let raf = 0;
+    let last = performance.now();
+    const tick = (now: number) => {
+      posRef.current = takeoverAdvance(posRef.current, expanded, now - last, fps, n);
+      last = now;
+      // Re-render only when the drawn frame or the in/out state changes.
+      const key = `${takeoverFrameAt(posRef.current, n)}:${posRef.current > 0}`;
+      if (key !== keyRef.current) {
+        keyRef.current = key;
+        setPos(posRef.current);
+      }
+      if (!takeoverSettled(posRef.current, expanded, n)) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [expanded, fps, n, reduced]);
+  return { frame: takeoverFrameAt(pos, Math.max(1, n)), pos };
 }
 
 export type BotFace = {
