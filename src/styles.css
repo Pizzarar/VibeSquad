@@ -3889,6 +3889,7 @@ html, body, #root { overflow-x: hidden; }
 .usage-flag { display: inline-block; margin-left: 6px; padding: 0 6px; font-size: 10px; text-transform: uppercase; color: var(--bg); background: var(--pink-fill); border-radius: 999px; }
 .usage-flag-storm { background: var(--amber); color: var(--on-amber); }
 .usage-table-wrap { overflow-x: auto; }
+.usage-profiles { display: flex; flex-direction: column; gap: 6px; }
 .usage-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .usage-table th, .usage-table td { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
 .usage-table .num { text-align: right; font-variant-numeric: tabular-nums; }
