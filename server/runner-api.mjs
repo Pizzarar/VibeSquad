@@ -90,6 +90,7 @@ export async function handleRunnerApi(req, res, { readBody, sendJson, backend = 
         }
         else if (action === "cancel") await backend.cancelAgent(id);
         else if (action === "archive") await backend.archiveAgent(id);
+        else if (action === "unarchive") await backend.unarchiveAgent(id);
         else if (action === "meta") await backend.updateAgent(id, body);
         else return sendJson(res, 404, { error: "not found" });
         return sendJson(res, 200, { ok: true });

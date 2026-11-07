@@ -114,6 +114,10 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
         runner.archive(id);
         return json(res, 202, { ok: true });
       }
+      if (parts[2] === 'unarchive' && req.method === 'POST') {
+        runner.unarchive(id);
+        return json(res, 202, { ok: true });
+      }
       return json(res, 404, { error: 'not found' });
     } catch (err) {
       return json(res, err.status ?? 400, { error: err.message });
