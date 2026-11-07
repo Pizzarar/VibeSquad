@@ -64,7 +64,7 @@ export const laneOfCreate = (req) => norm(req?.labels?.lane || req?.env?.VS_LANE
 
 const PER_ID = [
   "fetchAgent", "getAgent", "sendAgentPrompt", "fetchAgentTimeline", "getAgentTimeline", "cancelAgent",
-  "archiveAgent", "updateAgent", "refreshAgent", "detachAgent", "deleteHeartbeat", "waitForFinish",
+  "archiveAgent", "unarchiveAgent", "updateAgent", "refreshAgent", "detachAgent", "deleteHeartbeat", "waitForFinish",
 ];
 const PASS_TO_PASEO = ["close", "subscribe", "subscribeConnectionStatus"];
 

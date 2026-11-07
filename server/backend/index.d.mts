@@ -11,6 +11,7 @@ export interface AgentBackend {
   getAgentTimeline?(...args: any[]): Promise<any>;
   cancelAgent?(...args: any[]): Promise<any>;
   archiveAgent?(...args: any[]): Promise<any>;
+  unarchiveAgent?(...args: any[]): Promise<any>;
   updateAgent?(...args: any[]): Promise<any>;
   refreshAgent?(...args: any[]): Promise<any>;
   detachAgent?(...args: any[]): Promise<any>;

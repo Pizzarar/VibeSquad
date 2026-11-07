@@ -15,7 +15,7 @@ import { PROVIDER_ALIASES } from "../../runner/adapters/acp.mjs";
 
 const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 // Log event types that change the roster row (everything else is timeline-only).
-const ROSTER_EVENTS = new Set(["created", "status", "meta", "exit", "archive", "usage", "permission", "session"]);
+const ROSTER_EVENTS = new Set(["created", "status", "meta", "exit", "archive", "unarchive", "usage", "permission", "session"]);
 
 const FIRST_CLASS = ["squad", "team", "lane", "role", "ord", "profile"];
 const ENV_FOR = { lane: "VS_LANE", team: "VS_TEAM", role: "VS_ROLE", profile: "VS_PROFILE" };
@@ -118,6 +118,7 @@ export function readRunnerAgentSync(id, { env = process.env, home, liveness } = 
     else if (e.type === "status") status = e.status;
     else if (e.type === "exit") exited = true;
     else if (e.type === "archive") archivedAt = e.ts;
+    else if (e.type === "unarchive") archivedAt = null;
     else if (e.type === "usage") usage = e;
     else if (e.type === "permission") { if (e.phase === "request") perms.set(e.id, { id: e.id, toolName: e.toolName }); else perms.delete(e.id); }
   }
@@ -289,7 +290,7 @@ function scanTail(file) {
       const last = evs[evs.length - 1];
       const seq = last?.seq ?? -1;
       // Runner.archive appends `archive` and then the killed child's exit / error / idle, so it is rarely the last event.
-      const archived = evs.some((e) => e.type === "archive");
+      const archived = evs.reduce((a, e) => (e.type === "archive" ? true : e.type === "unarchive" ? false : a), false);
       if (b < 0) return { seq, t: null, archived };
       const e0 = evs[b];
       const t = { status: e0.type === "created" ? "initializing" : e0.type === "exit" ? "closed" : "idle", errored: false };
@@ -550,6 +551,13 @@ export class RunnerBackend {
     return { archivedAt: new Date().toISOString() };
   }
 
+  /** Brings an archived agent back to the roster as it was (closed/idle history, no resume). */
+  async unarchiveAgent(id) {
+    await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/unarchive`, {});
+    await this.refreshLaneWhosHere((await this.fetchAgent(id).catch(() => null))?.agent.labels?.lane);
+    return { archivedAt: null };
+  }
+
   async updateAgent(id, { name, labels } = {}) {
     const patch = {};
     if (name) patch.title = name;
@@ -755,6 +763,15 @@ export class RunnerBackend {
     }
     if (!ROSTER_EVENTS.has(e.type)) {
       if (t0) reduceTurn(t0, e); // input / error / cancel only move turn state
+      return;
+    }
+    if (e.type === "unarchive") {
+      this.live.archived.delete(id);
+      const agent = (await this.fetchAgent(id).catch(() => null))?.agent;
+      if (agent) {
+        this.live.known.set(id, agent);
+        this.emitEvent({ kind: "agent", agent: this.overlay(agent) });
+      }
       return;
     }
     if (e.type === "archive") {

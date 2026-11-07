@@ -177,15 +177,18 @@ export class Runner {
     if (!this.store.exists(id)) return null;
     const events = this.store.read(id);
     let parked = null;
+    let archived = false;
     // Fold later meta patches (labels, permissionMode, ...) the same way the summary does, so a resume uses the current meta.
     const meta = { ...(events[0]?.meta ?? {}) };
     for (const e of events) {
       if (e.type === 'meta') Object.assign(meta, e.patch, e.patch?.labels ? { labels: { ...meta.labels, ...e.patch.labels } } : {});
       if (e.type === 'parked') parked = e;
-      else if (e.type === 'exit' || e.type === 'archive') return null;
+      else if (e.type === 'exit') return null;
+      else if (e.type === 'archive') archived = true;
+      else if (e.type === 'unarchive') archived = false;
       else if (e.type === 'status' && e.status !== 'parked') parked = null;
     }
-    if (!parked || typeof parked.sessionId !== 'string' || !parked.sessionId || parked.sessionId.startsWith('-')) return null;
+    if (archived || !parked || typeof parked.sessionId !== 'string' || !parked.sessionId || parked.sessionId.startsWith('-')) return null;
     const c = events[0];
     return { provider: c.provider, model: c.model ?? undefined, cwd: c.cwd, meta, systemPrompt: parked.systemPrompt ?? undefined, resume: parked.sessionId };
   }
@@ -195,14 +198,17 @@ export class Runner {
     if (!this.store.exists(id) || this.live.has(id)) return null;
     const events = this.store.read(id);
     let sessionId = null;
+    let archived = false;
     const meta = { ...(events[0]?.meta ?? {}) };
     for (const e of events) {
       if (e.type === 'meta') Object.assign(meta, e.patch, e.patch?.labels ? { labels: { ...meta.labels, ...e.patch.labels } } : {});
-      if (e.type === 'exit' || e.type === 'archive') return null;
+      if (e.type === 'exit') return null;
+      if (e.type === 'archive') archived = true;
+      else if (e.type === 'unarchive') archived = false;
       if (e.type === 'session' && e.sessionId) sessionId = e.sessionId;
     }
     const c = events[0];
-    if (!sessionId || typeof sessionId !== 'string' || sessionId.startsWith('-') || !this.adapters[c?.provider]?.canPark) return null;
+    if (archived || !sessionId || typeof sessionId !== 'string' || sessionId.startsWith('-') || !this.adapters[c?.provider]?.canPark) return null;
     return { provider: c.provider, model: c.model ?? undefined, cwd: c.cwd, meta, systemPrompt: c.systemPrompt ?? undefined, resume: sessionId };
   }
 
@@ -255,6 +261,12 @@ export class Runner {
     this.store.append(id, 'archive', {});
   }
 
+  // Undoes archive (an agent archived by mistake): the log keeps the archive event, `unarchive` supersedes it. Never resumes anything.
+  unarchive(id) {
+    if (!this.store.exists(id)) throw new Error(`no such agent ${id}`);
+    this.store.append(id, 'unarchive', {});
+  }
+
   // Reads only this agent's log (lazy: no other file is touched).
   status(id) {
     const events = this.store.read(id);
@@ -274,6 +286,7 @@ export class Runner {
     for (const e of events) {
       if (e.type === 'meta') Object.assign(meta, e.patch, e.patch?.labels ? { labels: { ...meta.labels, ...e.patch.labels } } : {});
       else if (e.type === 'archive') archivedAt = e.ts;
+      else if (e.type === 'unarchive') archivedAt = null;
     }
     const exit = events.find((e) => e.type === 'exit');
     if (exit) status = 'exited';
