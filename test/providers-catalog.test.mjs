@@ -414,3 +414,202 @@ test('usage: limits treat a usedPct drop as a window reset, tolerate null resets
   assert.equal(p.burnPctPerHour, 0);
   assert.equal(p.etaToCap, null);
 });
+
+// ---------------------------------------------------------------- usage dashboard API v2 (usa-5)
+const sec = (ms) => String(Math.round(ms / 1000));
+const v2Dir = (home) => { const d = path.join(home, 'runner', 'agents'); fs.mkdirSync(d, { recursive: true }); return d; };
+const writeAgent = (home, id, evs) => fs.writeFileSync(path.join(v2Dir(home), `${id}.jsonl`), evs.map((e, i) => ev({ seq: i, ...e })).join(''));
+const byProfileOf = (u, profile) => u.byProfile.find((p) => p.profile === profile);
+
+test('usage v2: byProfile compares Implement - Sonnet vs a Gemini implementer via cwd-basename attribution', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 3, 12);
+  writeAgent(home, 'rn-sonnet', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/worktrees/unit-sonnet', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } },
+    { ts: T0 + 1000, type: 'usage', inputTokens: 500, outputTokens: 100 },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 0.5 },
+  ]);
+  writeAgent(home, 'rn-gemini', [
+    { ts: T0 + 5000, type: 'created', provider: 'antigravity-cli', model: 'gemini-4-argon', cwd: '/worktrees/unit-gemini', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Gemini' } },
+    { ts: T0 + 6000, type: 'usage', inputTokens: 900, outputTokens: 200 },
+    { ts: T0 + 6000, type: 'turn_done', costUsd: 1.5 },
+  ]);
+  const git = (args) => {
+    if (args[0] === 'rev-parse') return 'm2\n';
+    if (args[0] === 'log') return [
+      L('m2', 'm1 b2', sec(T0 + 100000), "Merge branch 'unit-gemini' (@usa)"),
+      L('b2', 'm1', sec(T0 + 90000), 'feat: gemini (@usa) review r1'),
+      L('m1', 'a1 b1', sec(T0 + 50000), "Merge branch 'unit-sonnet' (@usa)"),
+      L('b1', 'a1', sec(T0 + 40000), 'feat: sonnet (@usa) review r2'),
+      L('a1', 'root', sec(T0), 'mainline'),
+      L('root', '', '0', 'init'),
+    ].join('\n');
+    return '';
+  };
+  const u = getUsage({ home, git, laneCodes: { usa: 'usage' } });
+  const sonnet = byProfileOf(u, 'Implement - Sonnet');
+  const gemini = byProfileOf(u, 'Implement - Gemini');
+  assert.ok(sonnet && gemini, 'both profiles present');
+  assert.equal(sonnet.provider, 'claude');
+  assert.equal(sonnet.role, 'worker');
+  assert.equal(sonnet.runs, 1);
+  assert.equal(sonnet.turns, 1);
+  assert.equal(sonnet.mergedUnits, 1);
+  assert.equal(sonnet.reviewRounds, 2, 'reviewRounds from side commits');
+  assert.equal(gemini.provider, 'antigravity-cli');
+  assert.equal(gemini.mergedUnits, 1);
+  assert.ok(Math.abs(sonnet.costPerMergedUnit - 0.5) < 1e-9);
+  assert.ok(Math.abs(gemini.costPerMergedUnit - 1.5) < 1e-9);
+  const su = u.merged.units.find((x) => x.unit === 'unit-sonnet');
+  assert.equal(su.implementerAgentId, 'rn-sonnet');
+  assert.equal(su.implementerProfile, 'Implement - Sonnet');
+  assert.equal(su.unitCycleMs, 50000, 'worker createdAt -> mergedAt');
+});
+
+test('usage v2: byProfile falls back to the single worker in the lane when cwd does not match', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 4, 12);
+  writeAgent(home, 'rn-w', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', cwd: '/worktrees/somewhere-else', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 2 },
+  ]);
+  const git = (args) => {
+    if (args[0] === 'rev-parse') return 'm1\n';
+    if (args[0] === 'log') return [
+      L('m1', 'a1 b1', sec(T0 + 500000), "Merge branch 'unit-fallback' (@usa)"),
+      L('b1', 'a1', sec(T0 + 400000), 'feat: x (@usa)'),
+      L('a1', 'root', sec(T0), 'mainline'),
+      L('root', '', '0', 'init'),
+    ].join('\n');
+    return '';
+  };
+  const u = getUsage({ home, git, laneCodes: { usa: 'usage' } });
+  const sonnet = byProfileOf(u, 'Implement - Sonnet');
+  assert.equal(sonnet.mergedUnits, 1, 'attributed via lane fallback (single worker)');
+  assert.equal(u.merged.units[0].implementerAgentId, 'rn-w');
+});
+
+test('usage v2: working vs idle time from status running->idle intervals', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 5, 12);
+  writeAgent(home, 'rn-w', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } },
+    { ts: T0 + 1000, type: 'status', status: 'running' },
+    { ts: T0 + 3000, type: 'status', status: 'idle' },
+    { ts: T0 + 5000, type: 'status', status: 'running' },
+    { ts: T0 + 8000, type: 'status', status: 'idle' },
+    { ts: T0 + 8000, type: 'exit', code: 0 },
+  ]);
+  const u = getUsage({ home, git: noGit });
+  const lane = u.lanes.find((l) => l.lane === 'usage');
+  assert.equal(lane.workingMs, 5000);
+  assert.equal(lane.idleMs, 3000);
+  assert.equal(lane.workPct, 0.625);
+  const p = byProfileOf(u, 'Implement - Sonnet');
+  assert.equal(p.workingMs, 5000);
+  assert.equal(p.idleMs, 3000);
+});
+
+test('usage v2: unit cycle time (worker createdAt and first-branch-commit fallback) and plan cycle time', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 6, 12);
+  writeAgent(home, 'rn-w', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', cwd: '/worktrees/unit-a', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+  ]);
+  const git = (args) => {
+    if (args[0] === 'rev-parse') return 'm2\n';
+    if (args[0] === 'log') return [
+      L('m2', 'm1 b2', sec(T0 + 120000), "Merge branch 'unit-b' (@oth)"),
+      L('b2', 'm1', sec(T0 + 90000), 'feat: b (@oth)'),
+      L('m1', 'a1 b1', sec(T0 + 60000), "Merge branch 'unit-a' (@usa)"),
+      L('b1', 'a1', sec(T0 + 30000), 'feat: a (@usa)'),
+      L('a1', 'root', sec(T0), 'mainline'),
+      L('root', '', '0', 'init'),
+    ].join('\n');
+    return '';
+  };
+  const logsDir = path.join(home, 'logs');
+  fs.mkdirSync(logsDir, { recursive: true });
+  fs.writeFileSync(path.join(logsDir, 'vibesquad--usage.jsonl'),
+    ev({ ts: new Date(T0).toISOString(), agent: 'lead', lane: 'usage', type: 'handoff', text: 'handoff 1' }) +
+    ev({ ts: new Date(T0 + 180000).toISOString(), agent: 'lead', lane: 'usage', type: 'handoff', text: 'handoff 2' }));
+  const u = getUsage({ home, git, laneCodes: { usa: 'usage', oth: 'other' } });
+  const unitA = u.merged.units.find((x) => x.unit === 'unit-a');
+  const unitB = u.merged.units.find((x) => x.unit === 'unit-b');
+  assert.equal(unitA.unitCycleMs, 60000, 'worker createdAt -> mergedAt');
+  assert.equal(unitB.unitCycleMs, 30000, 'unattributed: first branch commit ct -> mergedAt');
+  const lane = u.lanes.find((l) => l.lane === 'usage');
+  assert.equal(lane.avgUnitCycleMs, 60000);
+  assert.equal(lane.planCycleMs, 60000);
+  assert.deepEqual(lane.planCycles, [60000]);
+});
+
+test('usage v2: fix-after-merge flags only units with a prior merge on the lane within 24h', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 7, 12);
+  writeAgent(home, 'rn-w', [
+    { ts: T0 - 3600_000, type: 'created', provider: 'claude', model: 'm', cwd: '/worktrees/elsewhere', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } },
+    { ts: T0 - 3500_000, type: 'turn_done', costUsd: 1 },
+  ]);
+  const git = (args) => {
+    if (args[0] === 'rev-parse') return 'm3\n';
+    if (args[0] === 'log') return [
+      L('m3', 'm2 b3', sec(T0 + 3 * 3600_000), "Merge branch 'fix-x' (@usa)"),
+      L('b3', 'm2', sec(T0 + 2 * 3600_000), 'fix: y (@usa)'),
+      L('m2', 'm1 b2', sec(T0 + 3600_000), "Merge branch 'unit-y' (@usa)"),
+      L('b2', 'm1', sec(T0 + 3600_000), 'feat: y (@usa)'),
+      L('m1', 'a1 b1', sec(T0), "Merge branch 'unit-x' (@usa)"),
+      L('b1', 'a1', sec(T0), 'feat: x (@usa)'),
+      L('a1', 'root', sec(T0 - 3600_000), 'mainline'),
+      L('root', '', '0', 'init'),
+    ].join('\n');
+    return '';
+  };
+  const u = getUsage({ home, git, laneCodes: { usa: 'usage' } });
+  const byUnit = Object.fromEntries(u.merged.units.map((x) => [x.unit, x]));
+  assert.equal(byUnit['fix-x'].fixAfterMerge, true, 'fix within 24h of a prior merge');
+  assert.equal(byUnit['unit-y'].fixAfterMerge, false);
+  assert.equal(byUnit['unit-x'].fixAfterMerge, false, 'first merge: no prior merge');
+  const pl = u.merged.perLane.find((l) => l.lane === 'usage');
+  assert.equal(pl.fixAfterMergeCount, 1);
+  assert.equal(pl.fixAfterMergeRate, 0.333);
+  const lane = u.lanes.find((l) => l.lane === 'usage');
+  assert.equal(lane.fixAfterMergeCount, 1);
+  assert.equal(lane.fixAfterMergeRate, 0.333);
+});
+
+test('usage v2: spawn storms detect spawn bursts and zero-turn exits, skip non-storms', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 8, 12);
+  for (const [id, ts] of [['rn-b1', T0], ['rn-b2', T0 + 30000], ['rn-b3', T0 + 60000]]) {
+    writeAgent(home, id, [{ ts, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } }]);
+  }
+  const exits = [[T0 + 30 * 60_000, T0], [T0 + 30 * 60_000 + 30000, T0 + 5 * 60_000], [T0 + 30 * 60_000 + 60000, T0 + 10 * 60_000]];
+  exits.forEach(([exitTs, createdTs], i) => {
+    writeAgent(home, `rn-z${i + 1}`, [
+      { ts: createdTs, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'lead', profile: 'Lead' } },
+      { ts: exitTs, type: 'exit', code: 1 },
+    ]);
+  });
+  writeAgent(home, 'rn-n1', [{ ts: T0, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'other', role: 'worker', profile: 'Implement - Sonnet' } }]);
+  writeAgent(home, 'rn-n2', [{ ts: T0 + 30000, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'other', role: 'worker', profile: 'Implement - Sonnet' } }]);
+
+  const u = getUsage({ home, git: noGit });
+  const storms = u.spawnStorms;
+  const burst = storms.find((s) => s.lane === 'usage' && s.role === 'worker');
+  assert.ok(burst, 'spawn burst detected');
+  assert.equal(burst.count, 3);
+  assert.equal(burst.zeroTurnExits, 0);
+  const zero = storms.find((s) => s.lane === 'usage' && s.role === 'lead');
+  assert.ok(zero, 'zero-turn exit storm detected');
+  assert.equal(zero.count, 3);
+  assert.equal(zero.zeroTurnExits, 3);
+  assert.ok(!storms.some((s) => s.lane === 'other'), 'non-storm lane has no entry');
+});
