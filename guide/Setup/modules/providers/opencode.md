@@ -61,7 +61,7 @@ does not say). Which of these is best for planning or building: UNVERIFIED, nobo
 1. Run `opencode` once in any folder. For paid models the official page says to run `/connect` inside it and sign
    in at opencode.ai/auth. How to pick a free model in its screen: UNVERIFIED, read what it shows you.
 2. Never paste an API key into the chat or a file. Enter it only in the tool's own prompt.
-3. Then in VibeSquad, make a profile for it under **⚙ SETTINGS**, **AGENT PROFILES** (**PROVIDER** and **MODEL**), and pick that profile in **PROFILE** (**+ NEW AGENT**) or **BRAINSTORM PROFILE** (**+ TEAM**) when you start a chat. You cannot change the provider of a chat that is already running. The Paseo provider id is `opencode` (VibeSquad `docs/PLAN_ANY_PROVIDER.md`).
+3. Then in VibeSquad, make a profile for it under **⚙ SETTINGS**, **AGENT PROFILES** (**PROVIDER** and **MODEL**), and pick that profile in **PROFILE** (**+ NEW AGENT**) or **BRAINSTORM PROFILE** (**+ TEAM**) when you start a chat. You cannot change the provider of a chat that is already running. The provider id is `opencode` (VibeSquad `docs/PLAN_ANY_PROVIDER.md`).
 
 ## Gotchas
 - In PowerShell use `npm.cmd`, not `npm` (a fresh PC blocks scripts). If a command you installed says "running scripts is disabled", run its `.cmd` form, for example `opencode.cmd --version`.

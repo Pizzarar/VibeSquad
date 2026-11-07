@@ -45,7 +45,7 @@ Expected: a version matching `^\d+\.\d+\.\d+`.
 1. Run `gemini` once. The official page lists three logins: **Sign in with Google** (for a Code Assist licence), a
    **Gemini API key**, or **Vertex AI**. Use your own account.
 2. Never paste an API key into the chat or a file. Set it only as the official page describes, in your own terminal.
-3. Then in VibeSquad, make a profile for it under **⚙ SETTINGS**, **AGENT PROFILES** (**PROVIDER** and **MODEL**), and pick that profile in **PROFILE** (**+ NEW AGENT**) or **BRAINSTORM PROFILE** (**+ TEAM**) when you start a chat. You cannot change the provider of a chat that is already running. Whether the `PROVIDER` list offers the Gemini CLI itself: UNVERIFIED (Paseo lists `antigravity-cli`, see VibeSquad `docs/PLAN_ANY_PROVIDER.md`).
+3. Then in VibeSquad, make a profile for it under **⚙ SETTINGS**, **AGENT PROFILES** (**PROVIDER** and **MODEL**), and pick that profile in **PROFILE** (**+ NEW AGENT**) or **BRAINSTORM PROFILE** (**+ TEAM**) when you start a chat. You cannot change the provider of a chat that is already running. Whether the `PROVIDER` list offers the Gemini CLI itself: UNVERIFIED (the built-in runner knows Gemini as `antigravity-cli`, see VibeSquad `docs/PLAN_ANY_PROVIDER.md`).
 
 ## Gotchas
 - In PowerShell use `npm.cmd`, not `npm` (a fresh PC blocks scripts). If a command you installed says "running scripts is disabled", run its `.cmd` form, for example `gemini.cmd --version`.
@@ -56,7 +56,7 @@ Lessons from running Google's Antigravity (`agy`) and Gemini agents on a team:
 - Set `approvalPolicy: skip`. With the default `agy` setting it waits for an approval nobody sees and stalls
   without a word. **Warning:** `skip` turns off approval prompts for that worker, so use it only when the worker
   runs on its own task branch or worktree, never on a branch that can reach `main`. If you leave the default on,
-  approve prompts in the permission prompt, or list them with `paseo permit ls`.
+  approve the prompts in the agent's chat in VibeSquad.
 - Run commands in the foreground, with a `timeout` on every one.
 - Put multi-part commands in a script file, with no nested quotes.
 - It can only read inside its workspace, so copy any input files in first.
