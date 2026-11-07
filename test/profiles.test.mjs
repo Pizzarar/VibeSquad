@@ -584,3 +584,72 @@ test("8. DEFAULT_PROFILES in src/profiles.ts has all 19 default pack profiles ma
   assert.ok(modalSrc.includes("Seed Default Pack (19)"), "Missing Seed Default Pack (19) button in TeamSettingsModal.tsx");
   assert.ok(modalSrc.includes("+ New Profile"), "Missing + New Profile button in TeamSettingsModal.tsx");
 });
+
+// Root cause: stored built-in notes that still equal an older default must follow default changes.
+import { DEFAULT_PACK_PROFILES as PACK, isKnownDefaultNote, loadProfiles as loadProfilesDirect } from "../server/profiles.mjs";
+
+const STALE_NOTE = readFileSync(resolve(import.meta.dirname, "fixtures", "stale-review-gemini-note.txt"), "utf8");
+
+function seedFile(env, notesByName) {
+  const profiles = PACK.slice(0, 3).map((p) => ({ ...p, notes: notesByName[p.name] ?? p.notes }));
+  mkdirSync(join(env.dir, ".vibesquad"), { recursive: true });
+  writeFileSync(env.profilesPath, JSON.stringify({ version: 1, profiles }), "utf8");
+  return profiles.map((p) => p.name);
+}
+
+test("every current default note is recorded in profile-note-history.json", () => {
+  for (const p of PACK) assert.equal(isKnownDefaultNote(p.notes), true, `${p.name}: add its hash to server/profile-note-history.json`);
+  assert.equal(isKnownDefaultNote(STALE_NOTE), true);
+  assert.equal(isKnownDefaultNote("Aub's own custom note"), false);
+});
+
+test("stale default note is upgraded on load and persisted; user-edited note is preserved; canonical set unchanged", () => {
+  const env = makeTempEnv();
+  try {
+    const [n0, n1] = PACK.slice(0, 2).map((p) => p.name);
+    const current0 = PACK[0].notes;
+    const names = seedFile(env, { [n0]: STALE_NOTE, [n1]: "Aub's own custom note" });
+    const res = loadProfilesDirect(env.profilesPath, { paseoProfiles: [], autoSeed: false });
+    assert.notEqual(STALE_NOTE, current0);
+    assert.equal(res.profiles[0].notes, current0);
+    assert.equal(res.profiles[1].notes, "Aub's own custom note");
+    assert.equal(res.profiles[2].notes, PACK[2].notes);
+    assert.deepEqual(res.profiles.map((p) => p.name), names);
+    const disk = JSON.parse(readFileSync(env.profilesPath, "utf8"));
+    assert.equal(disk.profiles[0].notes, current0);
+    assert.equal(disk.profiles[1].notes, "Aub's own custom note");
+    assert.equal(disk.profiles.length, 3);
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("CRLF-stored stale note is upgraded", () => {
+  const env = makeTempEnv();
+  try {
+    const crlf = STALE_NOTE.replace(/\r?\n/g, "\r\n") + "  \r\n";
+    seedFile(env, { [PACK[0].name]: crlf });
+    const res = loadProfilesDirect(env.profilesPath, { paseoProfiles: [], autoSeed: false });
+    assert.equal(res.profiles[0].notes, PACK[0].notes);
+    const raw = readFileSync(env.profilesPath);
+    assert.notEqual(raw[0], 0xef, "no BOM");
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("custom (non-built-in) profile whose note equals a shipped default is not touched; no rewrite when unchanged", () => {
+  const env = makeTempEnv();
+  try {
+    const custom = { ...PACK[0], id: "custom-id-1", name: "My Custom Lead", notes: STALE_NOTE };
+    const profiles = [custom, ...PACK.slice(1, 3).map((p) => ({ ...p }))];
+    mkdirSync(join(env.dir, ".vibesquad"), { recursive: true });
+    writeFileSync(env.profilesPath, JSON.stringify({ version: 1, profiles }), "utf8");
+    const before = readFileSync(env.profilesPath, "utf8");
+    const res = loadProfilesDirect(env.profilesPath, { paseoProfiles: [], autoSeed: false });
+    assert.equal(res.profiles[0].notes, STALE_NOTE);
+    assert.equal(readFileSync(env.profilesPath, "utf8"), before, "file untouched when nothing changed");
+  } finally {
+    env.cleanup();
+  }
+});

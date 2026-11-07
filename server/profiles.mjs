@@ -1,7 +1,8 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
+import { clearConfigWarning, readJsonFileWithBom, writeSettingsAtomic } from "./user-settings.mjs";
 import {
   COUNTERPART_PROFILES,
   QUOTA_FAILOVER_THRESHOLD,
@@ -557,8 +558,7 @@ function readProviderBlock(targetPath) {
 
 function writeProfilesFile(targetPath, profiles) {
   const block = readProviderBlock(targetPath);
-  mkdirSync(dirname(targetPath), { recursive: true });
-  writeFileSync(targetPath, JSON.stringify({ version: 1, ...block, profiles }, null, 2) + "\n", "utf8");
+  writeSettingsAtomic(targetPath, { version: 1, ...block, profiles });
   clearConfigWarning(targetPath);
 }
 
@@ -665,6 +665,35 @@ function matchesProfileIdentity(a, b) {
   return false;
 }
 
+// sha256 of every note a built-in profile has shipped with (current included). A stored note
+// whose hash is here was never user-edited, so it is safe to upgrade to the current default.
+// When you change a default note, append the NEW note's hash (a test enforces it).
+const NOTE_HISTORY = new Set(
+  JSON.parse(readFileSync(new URL("./profile-note-history.json", import.meta.url), "utf8")),
+);
+
+export function hashNote(notes) {
+  // CRLF/trailing whitespace differences (editors, git autocrlf) must not hide a never-edited default.
+  const norm = String(notes ?? "").replace(/\r\n?/g, "\n").replace(/\s+$/, "");
+  return createHash("sha256").update(norm).digest("hex");
+}
+
+export function isKnownDefaultNote(notes) {
+  return NOTE_HISTORY.has(hashNote(notes));
+}
+
+// Built-in profiles still carrying an older default note get the current default; edited notes stay.
+export function upgradeStaleDefaultNotes(profiles) {
+  let changed = false;
+  for (const p of profiles) {
+    const def = DEFAULT_PACK_PROFILES.find((d) => matchesProfileIdentity(d, p));
+    if (!def || p.notes === def.notes || !isKnownDefaultNote(p.notes)) continue;
+    p.notes = def.notes;
+    changed = true;
+  }
+  return changed;
+}
+
 export function loadProfiles(profilesPath, options = {}) {
   const targetPath = getProfilesPath(profilesPath);
   const paseoInfo =
@@ -690,21 +719,21 @@ export function loadProfiles(profilesPath, options = {}) {
       const profiles = rawList.map(normalizeProfile).filter(Boolean);
       providerOverrides = normalizeProviderOverrides(parsed);
       if (profiles.length > 0) {
+        let dirty = upgradeStaleDefaultNotes(profiles);
         const normalizedPaseo = paseoInfo.agentProfiles.map(normalizeProfile).filter(Boolean);
         if (
           options.mergePaseoIntoExisting === true &&
           normalizedPaseo.length > 0
         ) {
-          let added = false;
           for (const pp of normalizedPaseo) {
             if (!profiles.some((ep) => matchesProfileIdentity(ep, pp))) {
               profiles.push(pp);
-              added = true;
+              dirty = true;
             }
           }
-          if (added) {
-            writeProfilesFile(targetPath, profiles);
-          }
+        }
+        if (dirty) {
+          writeProfilesFile(targetPath, profiles);
         }
         return {
           providerOverrides,
