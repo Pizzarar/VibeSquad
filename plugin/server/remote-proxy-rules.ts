@@ -18,10 +18,15 @@
 export const REMOTE_MAX_BODY_BYTES = 512 * 1024; // request and response bodies; relay frames allow 32 MiB
 export const REMOTE_TIMEOUT_MS = 10_000;
 export const REMOTE_SPAWN_TIMEOUT_MS = 45_000;
+export const REMOTE_GIT_WRITE_TIMEOUT_MS = 125_000;
 
 export function proxyTimeoutFor(pathname: string, defaultMs: number = REMOTE_TIMEOUT_MS): number {
   if (pathname === "/__vibesquad/brainstorm-restart" || pathname === "/__vibesquad/inbox/triage") {
     return Math.max(defaultMs, REMOTE_SPAWN_TIMEOUT_MS);
+  }
+  // git/gh writes can run hooks or hit the network (server WRITE_TIMEOUT is 120 s); the 10 s default would abort a push mid-way.
+  if (/^\/__vibesquad\/git\/(?:commit|push|pull|merge-base|switch|stash-save|stash-pop|pr-create|pr-merge|pr-automerge)$/.test(pathname)) {
+    return Math.max(defaultMs, REMOTE_GIT_WRITE_TIMEOUT_MS);
   }
   return defaultMs;
 }
