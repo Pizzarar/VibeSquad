@@ -1,6 +1,6 @@
-"""C2a-R3 RiffBot review gallery, one PNG per mode: H0 alien refs | RiffBot R3 frames, 4x nearest.
+"""C2a RiffBot review gallery, one PNG per mode: H0 alien refs | RiffBot R3 frames, 4x nearest.
 Usage (repo root): python -I art/office/faces/riffbot-r3-preview.py <tag>
-Needs scratch/c2a/alien-* (art/office/export_alien_ref.lua). Writes scratch/shots/c2a-r3-riff-<tag>-{mode}.png."""
+Needs scratch/c2a/alien-* (art/office/export_alien_ref.lua). Writes scratch/shots/c2a-riff-<tag>-{mode}.png."""
 import json, sys
 from PIL import Image, ImageDraw, ImageFont
 TAG = sys.argv[1] if len(sys.argv) > 1 else 'wip'
@@ -18,11 +18,11 @@ for mode in ('dark', 'light'):
     refs = [('H0 alien bust 64', Image.open(f'scratch/c2a/alien-bust-{mode}.png').convert('RGBA')),
             ('H0 alien floor', Image.open(f'scratch/c2a/alien-floor1-{mode}.png').convert('RGBA'))]
     z, pad, lab = 4, 20, 26
-    rows = [refs, cells[:4], cells[4:]]
+    rows = [refs, cells[:5], cells[5:]]
     W = max(sum(max(c.width * z, 200) + pad for _, c in r) for r in rows) + pad
     H = 40 + sum(max(c.height for _, c in r) * z + lab + pad for r in rows) + pad
     im = Image.new('RGBA', (W, H), BG[mode]); d = ImageDraw.Draw(im)
-    d.text((pad, 10), f'C2a-R3-riff {TAG}: RiffBot ticker face - {mode} - 4x (cell 48)', font=FONT, fill=FG[mode])
+    d.text((pad, 10), f'C2a-riff {TAG}: RiffBot - {mode} - 4x (cell 48)', font=FONT, fill=FG[mode])
     y = 40
     for r in rows:
         x, hm = pad, max(c.height for _, c in r)
@@ -31,5 +31,9 @@ for mode in ('dark', 'light'):
             im.alpha_composite(c.resize((c.width * z, c.height * z), Image.NEAREST), (x, y + lab + (hm - c.height) * z))
             x += max(c.width * z, 200) + pad
         y += hm * z + lab + pad
-    p = f'scratch/shots/c2a-r3-riff-{TAG}-{mode}.png'
+    p = f'scratch/shots/c2a-riff-{TAG}-{mode}.png'
     im.save(p); print(p, im.size)
+    # zone-size check: idle + scared[0] at 10x
+    big = [sheet.crop((x, 0, x + 48, 48)).resize((480, 480), Image.NEAREST) for x in (48, 384)]
+    z10 = Image.new('RGBA', (980, 480), BG[mode]); z10.paste(big[0], (0, 0)); z10.paste(big[1], (500, 0))
+    z10.save(f'scratch/shots/c2a-riff-{TAG}-10x-{mode}.png')
