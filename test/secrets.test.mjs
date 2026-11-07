@@ -47,28 +47,25 @@ describe("readCredential", () => {
   });
 });
 
+function mkKs() { const p = join(mkdtempSync(join(tmpdir(), "vs-ks-")), "k.jks"); writeFileSync(p, "x"); return p; }
+
 describe("build-android keystore secrets", () => {
-  test("no argv entry carries the secret; env: forms only", () => {
-    const calls = [];
+  test("keystore env carries the secret; missing keystore fails pointing at rotate script", () => {
     const dir = mkdtempSync(join(tmpdir(), "vs-ks-"));
-    const r = ensureAndroidKeystore({
-      keystorePath: join(dir, "x.keystore"),
-      env: { VS_KS_PASS: SECRET },
-      exec: (cmd, args, opts) => calls.push({ cmd, args, opts }),
-    });
-    assert.equal(calls.length, 1);
-    assert.ok(!calls[0].args.some((a) => a.includes(SECRET)));
-    assert.ok(!calls[0].args.some((a) => /^pass:/.test(a)));
-    assert.ok(calls[0].args.includes("-storepass:env"));
-    assert.equal(calls[0].opts.env.VS_KS_PASS, SECRET);
-    assert.ok(!JSON.stringify(Object.keys(r)).includes(SECRET));
+    const keystorePath = join(dir, "x.jks");
+    assert.throws(() => ensureAndroidKeystore({ keystorePath, env: { VS_KS_PASS: SECRET } }), /rotate-android-keystore.mjs/);
+    writeFileSync(keystorePath, "x");
+    const r = ensureAndroidKeystore({ keystorePath, env: { VS_KS_PASS: SECRET } });
+    assert.equal(r.secretEnv.VS_KS_PASS, SECRET);
+    assert.ok(!JSON.stringify({ keystorePath: r.keystorePath, alias: r.alias }).includes(SECRET));
   });
   test("apksigner sign gets VS_KS_PASS in env only, then verify --print-certs runs", () => {
     const calls = [];
+    const dir = mkdtempSync(join(tmpdir(), "vs-pin-"));
     signAndVerifyApk({
       javaExe: "java", apksignerJar: "a.jar", keystorePath: "k", alias: "al", inputApk: "in.apk", outApk: "out.apk", cwd: ".",
-      secretEnv: { VS_KS_PASS: SECRET },
-      exec: (cmd, args, opts) => (calls.push({ cmd, args, opts }), "Signer #1 certificate DN: CN=x"),
+      secretEnv: { VS_KS_PASS: SECRET }, pinPath: join(dir, "pin"), pinFirst: true, log: () => {},
+      exec: (cmd, args, opts) => (calls.push({ cmd, args, opts }), "Signer #1 certificate SHA-256 digest: " + "ab".repeat(32)),
     });
     assert.equal(calls.length, 2);
     assert.ok(calls[0].args.includes("sign"));
@@ -78,7 +75,7 @@ describe("build-android keystore secrets", () => {
   });
   test("missing secret throws without a value", () => {
     assert.throws(
-      () => ensureAndroidKeystore({ keystorePath: "x", env: {}, resolve: () => resolveSecret({ envVar: "VS_KS_PASS", target: "vibesquad/android-keystore", required: true }, { env: {}, read: () => null }) }),
+      () => ensureAndroidKeystore({ keystorePath: mkKs(), env: {}, resolve: () => resolveSecret({ envVar: "VS_KS_PASS", target: "vibesquad/android-keystore", required: true }, { env: {}, read: () => null }) }),
       /vibesquad\/android-keystore/,
     );
   });
@@ -89,5 +86,5 @@ describe("build-android keystore secrets", () => {
   });
 });
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 function require_src() { return readFileSync(new URL("../server/build-android.mjs", import.meta.url), "utf8"); }
