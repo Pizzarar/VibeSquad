@@ -87,7 +87,7 @@ export const COMMUNITY_ACCOLADES_020 = [
   "Implemented Keep Host Awake while agents are running — Thanks to Keep Awake by Hicham Boushaba",
   "Implemented Per-hunk Diff Review, Line Quote & Code Annotations — Thanks to Annotations by neunzig-zehn, Quote by Chechulin Serhii, and Codex Style Annotations by xzthemeofsss",
   "Implemented Turn Recap & Digest Summaries — Thanks to Recap by Kingsley",
-  "Built on the Paseo Daemon, CLI, and ACP Plugin Runtime — Thanks to Paseo (`@getpaseo`) by the Paseo team (getpaseo)",
+  "Implemented runner-era agent orchestration (originally built on Paseo) — Thanks to Paseo by getpaseo",
 ];
 
 export function defaultReleaseNotes(version, channel = "stable") {
