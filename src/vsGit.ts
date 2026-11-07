@@ -55,3 +55,50 @@ export const vsGitRenameBranch = (cwd: string, branch: string) => post<{ ok: tru
 export const vsGitPrCreate = (cwd: string, title: string, body?: string, baseRef?: string) => post<{ ok: true; url: string }>("pr-create", cwd, { title, ...(body ? { body } : {}), ...(baseRef ? { baseRef } : {}) });
 export const vsGitPrMerge = (cwd: string, method: "merge" | "squash" | "rebase" = "merge") => post("pr-merge", cwd, { method });
 export const vsGitPrAutoMerge = (cwd: string, enabled: boolean, method: "merge" | "squash" | "rebase" = "merge") => post("pr-automerge", cwd, { enabled, method });
+
+const WATCH_RETRY_MS = 3000;
+
+/**
+ * Calls onChange whenever the repo at `cwd` changes (working tree, index, HEAD, refs): one long-poll on git/watch at a time,
+ * aborted by the returned stop(). The first poll is a baseline; failures back off and retry. `onRecover` fires after an outage
+ * ends, so the caller can re-fetch what it missed.
+ */
+export function vsGitWatch(cwd: string, onChange: () => void, onRecover?: () => void): () => void {
+  const ac = new AbortController();
+  const url = (since?: string) => `${G}/watch?cwd=${encodeURIComponent(cwd)}${since ? `&since=${encodeURIComponent(since)}` : ""}`;
+  void (async () => {
+    let since: string | undefined;
+    let down = false;
+    while (!ac.signal.aborted) {
+      try {
+        const r = await fetch(url(since), { signal: ac.signal });
+        // 400/403 (cwd not allowed, no owner token) will not fix itself: stop; the panel's Retry restarts the watch.
+        if (r.status === 400 || r.status === 403) return;
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = (await r.json()) as { seq?: string; changed?: boolean };
+        if (ac.signal.aborted) return;
+        const first = since === undefined;
+        since = j.seq;
+        if (down) { down = false; onRecover?.(); }
+        else if (j.changed && !first) onChange();
+      } catch {
+        if (ac.signal.aborted) return;
+        down = true;
+        await new Promise((res) => setTimeout(res, WATCH_RETRY_MS));
+      }
+    }
+  })();
+  return () => ac.abort();
+}
+
+/** Runs `fn` now, or once more after the current run if called meanwhile (a burst of calls costs at most one extra run). */
+export function coalesceRuns(fn: () => Promise<unknown>): () => void {
+  let running = false;
+  let again = false;
+  const run = (): void => {
+    if (running) { again = true; return; }
+    running = true;
+    void fn().catch(() => {}).finally(() => { running = false; if (again) { again = false; run(); } });
+  };
+  return run;
+}

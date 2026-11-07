@@ -228,8 +228,6 @@ function FileDiffView({ file, actions }: { file: DiffFile; actions?: HunkActions
 const keptHunks = new Map<string, Set<string>>();
 const keptFor = (cwd: string, path: string) => JSON.stringify([cwd, path]);
 const MAX_UNDO_BYTES = 900 * 1024; // the fs/write route rejects bodies over FS_WRITE_MAX (900 KiB)
-const DIFF_POLL_MS = 5_000;
-const STATUS_EVERY_TICKS = 6;
 const REVIEW_PROFILE = "Review - Sonnet";
 // Diff chars copied into the review prompt; the reviewer runs `git diff` itself for the rest.
 const REVIEW_DIFF_CAP = 40_000;
@@ -336,9 +334,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
       return;
     }
 
-    // WORKAROUND: the daemon pushed diff updates; until an fs/watch route exists (follow-up: N2 file watch -> subscribe here,
-    // then drop this poll) the tab re-polls the diff every DIFF_POLL_MS while visible, and every git write re-fetches via reloadRef.
-    let ticks = 0;
+    // Diff + status re-fetch when the repo changes (git/watch: working tree, index, HEAD, refs), and after every git write via reloadRef.
     const loadStatus = () => vsgit.vsGitStatus(cwd).then((s) => { if (alive) setStatus(s); }).catch(() => {});
     const loadDiff = (first: boolean) =>
       withTimeout(vsgit.vsGitDiff(cwd, "uncommitted")).then((d) => {
@@ -348,11 +344,15 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
         const changed = json !== lastDiffJson.current;
         if (changed) { lastDiffJson.current = json; setDiff(next); }
         if (first) setLoading(false);
-        // status only follows a diff change (or a slow heartbeat for commits made outside the panel)
-        else if (changed || ++ticks % STATUS_EVERY_TICKS === 0) void loadStatus();
       }).catch((e) => { if (first) fail(e); });
     void loadDiff(true);
-    const poll = setInterval(() => { if (!document.hidden) void loadDiff(false); }, DIFF_POLL_MS);
+    // A change while the tab is hidden is applied when it becomes visible again.
+    let stale = false;
+    const reload = vsgit.coalesceRuns(() => Promise.all([loadDiff(false), loadStatus()]));
+    const refresh = () => { if (document.hidden) { stale = true; return; } if (alive) reload(); };
+    const onVisible = () => { if (!document.hidden && stale) { stale = false; refresh(); } };
+    document.addEventListener("visibilitychange", onVisible);
+    const stopWatch = vsgit.vsGitWatch(cwd, refresh, refresh);
     const loadRest = () => Promise.all([
       loadStatus(),
       vsgit.vsGitPrStatus(cwd).then((p) => { if (alive) setPrData(p); }).catch(() => {}),
@@ -364,7 +364,8 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
     return () => {
       alive = false;
       clearTimeout(slowTimer);
-      clearInterval(poll);
+      stopWatch();
+      document.removeEventListener("visibilitychange", onVisible);
       reloadRef.current = () => {};
     };
   }, [cwd, attempt]);

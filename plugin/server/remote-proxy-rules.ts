@@ -28,7 +28,7 @@ export function proxyTimeoutFor(pathname: string, defaultMs: number = REMOTE_TIM
   if (/^\/__vibesquad\/git\/(?:commit|push|pull|merge-base|switch|stash-save|stash-pop|pr-create|pr-merge|pr-automerge)$/.test(pathname)) {
     return Math.max(defaultMs, REMOTE_GIT_WRITE_TIMEOUT_MS);
   }
-  if (pathname === "/__vibesquad/fs/watch") return Math.max(defaultMs, REMOTE_FS_WATCH_TIMEOUT_MS); // server holds a poll up to 25 s
+  if (pathname === "/__vibesquad/fs/watch" || pathname === "/__vibesquad/git/watch") return Math.max(defaultMs, REMOTE_FS_WATCH_TIMEOUT_MS); // server holds a poll up to 25 s (fs/watch, git/watch)
   return defaultMs;
 }
 export const REMOTE_FS_WATCH_TIMEOUT_MS = 30_000;
@@ -113,7 +113,7 @@ export const REMOTE_OWNER_ROUTES: readonly { re: RegExp; methods: readonly Remot
   { re: /^\/__vibesquad\/workspace-scripts\/(?:start|stop)$/, methods: ["POST"] },
   // N1 git: diffs are file contents and writes change the repo, so reads and writes are both owner-token routes.
   // Actions mirror server/git-api.mjs (GIT_READ_ACTIONS / GIT_WRITE_ACTIONS); cwd is confined server-side by resolveShellCwd.
-  { re: /^\/__vibesquad\/git\/(?:status|diff|commits|commit-diff|branches|validate-branch|stash-list|pr-status|pr-timeline|check-details)$/, methods: ["GET"] },
+  { re: /^\/__vibesquad\/git\/(?:status|diff|commits|commit-diff|branches|validate-branch|stash-list|pr-status|pr-timeline|check-details|watch)$/, methods: ["GET"] },
   { re: /^\/__vibesquad\/git\/(?:commit|push|pull|merge-base|switch|stash-save|stash-pop|discard|rename-branch|pr-create|pr-merge|pr-automerge)$/, methods: ["POST"] },
 ];
 const ownerRouteMethods = (pathname: string) => REMOTE_OWNER_ROUTES.find((r) => r.re.test(pathname))?.methods;
