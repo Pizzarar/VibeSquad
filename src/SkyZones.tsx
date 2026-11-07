@@ -2,31 +2,45 @@
 // left, the Overlord (hub lead) on the right. Each zone is a CRT bezel with the bot's face and that bot's live
 // chat, rendered by the same DrawerSlot AgentPanes uses, so nothing about the chat is re-implemented. Every
 // zone owns its own agent, drawer and composer; nothing is shared between them.
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { DrawerSlot } from "./AgentPanes";
 import type { Pin } from "./pins";
-import { NO_OVERLORD_TEXT, SKY_FRAME_URL, SKY_URL, faceScale, skyAssets, skyZonesFor, type SkyZone } from "./skyZonesLogic";
-import type { FaceBot } from "./squadFloorLogic";
+import { NO_OVERLORD_TEXT, SKY_FRAME_URL, SKY_URL, faceCover, hasFaceMode, skyAssets, skyLayout, skyZonesFor, type SkyZone } from "./skyZonesLogic";
+import type { FaceBot, FaceMode } from "./squadFloorLogic";
 import type { TeamView } from "./teams";
 import { useBotFace, useFacesModel, useImageOk, usePrefersReducedMotion, useSkyCrtModel, useTheme } from "./useBotFace";
 
 const LABEL: Record<FaceBot, string> = { riffbot: "RiffBot", overlord: "Overlord" };
 
-function ZoneFace({ zone, faces }: { zone: SkyZone; faces: ReturnType<typeof useFacesModel> }) {
+/** G6: the bot's face fills the whole zone as a big pixelated background (integer scale, centred, cropped evenly). */
+function ZoneFace({ zone, faces, force }: { zone: SkyZone; faces: ReturnType<typeof useFacesModel>; force: FaceMode | null }) {
   const theme = useTheme();
   const reduced = usePrefersReducedMotion();
-  const face = useBotFace(zone.bot, zone.pose ? { pose: zone.pose } : null, faces, { theme, reduced });
-  // Cell size comes from faces.json (never hardcoded); until it loads, a blank placeholder box.
+  const face = useBotFace(zone.bot, zone.pose ? { pose: zone.pose } : null, faces, { theme, reduced, force });
+  // Cell size comes from faces.json (never hardcoded); until it loads, a blank stage.
   const cell = faces?.cell ?? { w: 48, h: 48 };
-  const k = faceScale(cell);
+  const stage = useRef<HTMLSpanElement>(null);
+  const [box, setBox] = useState({ w: 0, h: 0 });
+  useLayoutEffect(() => {
+    const el = stage.current;
+    if (!el) return;
+    const measure = () => setBox({ w: el.clientWidth, h: el.clientHeight });
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const { k, left, top } = faceCover(cell, box);
   return (
-    <span className="sky-face-box" style={{ width: cell.w * k, height: cell.h * k }}>
-      <span
-        className={`sky-face${face.frame ? "" : " is-blank"}`}
-        data-testid={`sky-face-${zone.bot}`}
-        data-face-mode={face.mode}
-        aria-hidden="true"
-        style={{ width: cell.w, height: cell.h, transform: `scale(${k})`, ...face.style }}
-      />
+    <span ref={stage} className="sky-face-stage" aria-hidden="true">
+      {k > 0 && (
+        <span
+          className={`sky-face${face.frame ? "" : " is-blank"}`}
+          data-testid={`sky-face-${zone.bot}`}
+          data-face-mode={face.mode}
+          style={{ width: cell.w, height: cell.h, left, top, transform: `scale(${k})`, ...face.style }}
+        />
+      )}
     </span>
   );
 }
@@ -35,11 +49,14 @@ function Zone({
   zone,
   faces,
   frameStyle,
+  force = null,
   onSuccessor,
   onSpinUp,
 }: {
   zone: SkyZone;
   faces: ReturnType<typeof useFacesModel>;
+  /** Forced face mode (Riff scared while the Overlord is expanded). */
+  force?: FaceMode | null;
   /** The @art sky-CRT bezel as a border-image style (from sky-crt.json + PNG) when both exist; null → the CSS bezel. */
   frameStyle: Record<string, string> | null;
   onSuccessor: (id: string) => void;
@@ -53,13 +70,12 @@ function Zone({
       className={`sky-zone sky-zone-${zone.bot}${off ? " is-off" : ""}${frameStyle ? " has-frame" : ""}`}
       style={frameStyle ?? undefined}
       data-testid={`sky-zone-${zone.bot}`}
+      data-sky-bot={zone.bot}
       data-agent={zone.agentId ?? ""}
       aria-label={`${label} chat`}
     >
-      <header className="sky-crt-head">
-        <ZoneFace zone={zone} faces={faces} />
-        <span className="sky-crt-name">{label}</span>
-      </header>
+      {!off && <ZoneFace zone={zone} faces={faces} force={force} />}
+      <span className="sky-crt-name">{label}</span>
       <div className="sky-crt-body">
         {zone.agentId ? (
           <>
@@ -109,9 +125,53 @@ export function SkyZones({
   const crt = useSkyCrtModel();
   const { skyUrl, frameStyle } = skyAssets(theme, { sky: useImageOk(SKY_URL(theme)), frame: useImageOk(SKY_FRAME_URL(theme)) }, crt);
   const { hub } = zones;
+
+  // G6: "Overlord active" = focus/click inside its zone, or it is talking. Pure decision in skyLayout().
+  const [focus, setFocus] = useState<FaceBot | null>(null);
+  const root = useRef<HTMLDivElement>(null);
+  const layout = skyLayout({
+    overlordLive: !!zones.overlord.member,
+    overlordFocused: focus === "overlord",
+    overlordTalking: zones.overlord.pose === "work",
+    riffFocused: focus === "riffbot",
+    riffHasScared: hasFaceMode(faces, "riffbot", "scared"),
+  });
+  const zoneOf = (t: EventTarget | null): FaceBot | null => {
+    const el = t instanceof Element ? t.closest<HTMLElement>("[data-sky-bot]") : null;
+    return el && root.current?.contains(el) ? (el.dataset.skyBot as FaceBot) : null;
+  };
+  const onFocusIn = (e: React.FocusEvent) => setFocus(zoneOf(e.target));
+  const onFocusOut = (e: React.FocusEvent) => {
+    if (!e.relatedTarget || zoneOf(e.relatedTarget) !== zoneOf(e.target)) setFocus(zoneOf(e.relatedTarget));
+  };
+  // A click in a zone's chat (even on plain text) counts; a click anywhere else, or Escape, hands the sky back.
+  useEffect(() => {
+    const down = (e: PointerEvent) => setFocus(zoneOf(e.target));
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setFocus(null);
+      const a = document.activeElement;
+      if (a instanceof HTMLElement && root.current?.contains(a)) a.blur();
+    };
+    document.addEventListener("pointerdown", down, true);
+    document.addEventListener("keydown", key, true);
+    return () => {
+      document.removeEventListener("pointerdown", down, true);
+      document.removeEventListener("keydown", key, true);
+    };
+  }, []);
+  const cols = `minmax(0, ${layout.widths.riffbot}fr) minmax(0, ${layout.widths.overlord}fr)`;
   return (
-    <div className={`sky-zones${skyUrl ? " has-sky-art" : ""}`} data-testid="sky-zones" style={skyUrl ? { backgroundImage: `url(${skyUrl})` } : undefined}>
-      <Zone zone={zones.riffbot} faces={faces} frameStyle={frameStyle} onSuccessor={onSuccessor} onSpinUp={hub && onSpinUp ? () => onSpinUp(hub) : undefined} />
+    <div
+      ref={root}
+      className={`sky-zones${skyUrl ? " has-sky-art" : ""}${layout.expanded ? " is-expanded" : ""}`}
+      data-testid="sky-zones"
+      data-expanded={layout.expanded ? "overlord" : "none"}
+      style={{ ["--sky-cols" as string]: cols, ...(skyUrl ? { backgroundImage: `url(${skyUrl})` } : null) }}
+      onFocus={onFocusIn}
+      onBlur={onFocusOut}
+    >
+      <Zone zone={zones.riffbot} faces={faces} frameStyle={frameStyle} force={layout.riffMode} onSuccessor={onSuccessor} onSpinUp={hub && onSpinUp ? () => onSpinUp(hub) : undefined} />
       <Zone zone={zones.overlord} faces={faces} frameStyle={frameStyle} onSuccessor={onSuccessor} />
     </div>
   );

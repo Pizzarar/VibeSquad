@@ -4662,9 +4662,10 @@ button.project-file-name:hover { text-decoration: underline; }
   grid-column: 1;
   grid-row: 2;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: var(--sky-cols, minmax(0, 1fr) minmax(0, 1fr));
+  transition: grid-template-columns 0.35s ease; /* G6: Overlord widens over Riff */
   gap: 18px;
-  min-height: 360px;
+  min-height: clamp(380px, 46vh, 560px);
   padding: 12px 18px 22px;
   overflow: hidden;
   position: relative;
@@ -4701,15 +4702,37 @@ button.project-file-name:hover { text-decoration: underline; }
 :root .sky-zone.has-frame, :root[data-theme="light"] .sky-zone.has-frame { box-shadow: none; } /* the bezel art is the frame: no CSS ring on top, any theme/zone */
 .sky-zone .composer-row { flex-wrap: wrap; }
 .sky-zone .composer-row textarea { flex: 1 1 100%; min-width: 0; min-height: 56px; }
-.sky-crt-head { display: flex; align-items: center; justify-content: center; gap: 12px; flex: none; padding: 6px 10px; background: var(--well); border-bottom: 1px solid var(--line); }
-.sky-face-box { flex: none; display: block; position: relative; overflow: hidden; }
-.sky-face { position: absolute; left: 0; top: 0; transform-origin: top left; display: block; background-repeat: no-repeat; image-rendering: pixelated; background-color: #05060c; border: 1px solid var(--line); box-sizing: content-box; }
-.sky-zone.is-off .sky-face { filter: brightness(0.35) saturate(0.4); }
-.sky-crt-name { font-family: var(--arcade); font-size: 13px; color: var(--cyan-t); letter-spacing: 0.04em; }
+/* G6: the face is the zone's background (integer scale, centred, crisp); the chat overlays its lower part. */
+.sky-face-stage { position: absolute; inset: 0; overflow: hidden; background: #05060c; z-index: 0; }
+:root[data-theme="light"] .sky-face-stage { background: #cfd3e2; }
+.sky-face { position: absolute; transform-origin: top left; display: block; background-repeat: no-repeat; image-rendering: pixelated; }
+.sky-face.is-blank { background-color: transparent; }
+.sky-zone.is-off .sky-face-stage { display: none; }
+.sky-crt-name { position: absolute; top: 8px; left: 12px; z-index: 2; font-family: var(--arcade); font-size: 13px; color: var(--cyan-t); letter-spacing: 0.04em; padding: 2px 8px; background: color-mix(in srgb, var(--bg) 70%, transparent); border: 1px solid var(--line); }
 .sky-zone-overlord .sky-crt-name { color: var(--violet-t); }
 .sky-resume { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 10px; background: var(--well); border-bottom: 1px solid var(--line); }
-.sky-crt-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.sky-crt-body .pane-slot { flex: 1; grid-row: auto; grid-column: auto; border-left: 0; }
+.sky-crt-body {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 58%;
+  min-height: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  backdrop-filter: blur(1px);
+  border-top: 1px solid var(--line);
+  transition: opacity 0.25s ease, visibility 0s linear 0s;
+}
+.sky-zone.is-off .sky-crt-body { top: 0; height: auto; background: none; backdrop-filter: none; border-top: 0; }
+/* Squeezed Riff: its chat steps aside (still mounted, composer state kept) so the scared face shows. */
+.sky-zones.is-expanded .sky-zone-riffbot .sky-crt-body { opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 0.2s ease, visibility 0s linear 0.2s; }
+.sky-crt-body .pane-slot { flex: 1; grid-row: auto; grid-column: auto; border-left: 0; background: transparent; }
+@media (prefers-reduced-motion: reduce) {
+  .sky-zones, .sky-crt-body, .sky-zones.is-expanded .sky-zone-riffbot .sky-crt-body { transition: none; }
+}
 .sky-static {
   flex: 1;
   display: flex;
@@ -4818,7 +4841,7 @@ button.project-file-name:hover { text-decoration: underline; }
   .app.pin-focus.hub-focus { grid-template-columns: var(--sidebar-w, 265px) minmax(0, 1fr) 240px 64px; }
 }
 @media (max-width: 700px) {
-  .sky-zones { grid-template-columns: minmax(0, 1fr); overflow: auto; }
+  .sky-zones, .sky-zones.is-expanded { grid-template-columns: minmax(0, 1fr); overflow: auto; }
   .sky-zone { min-height: 280px; }
 }
 @media (max-width: 600px) {

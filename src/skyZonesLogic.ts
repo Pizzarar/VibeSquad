@@ -1,7 +1,7 @@
 // Sky-gods hub (docs/PLAN_SKY_GODS_C2B.md G1): the pure zone→agent mapping. RiffBot is the hub Buddy (left),
 // the Overlord is the hub lead (right). No React here so it is unit-testable under node.
 import { dormantBuddyId, hubPinForSquad, type Pin } from "./pins.ts";
-import { poseFor, type FaceBot, type Pose } from "./squadFloorLogic.ts";
+import { poseFor, type FaceBot, type FaceMode, type FacesModel, type Pose } from "./squadFloorLogic.ts";
 import type { Member, TeamView } from "./teams.ts";
 
 export type SkyZone = {
@@ -93,7 +93,44 @@ export function skyAssets(
   return { skyUrl: ok.sky ? SKY_URL(theme) : null, frameUrl, frameStyle: frameUrl && crt ? skyCrtStyle(crt, frameUrl) : null };
 }
 
-/** Crisp face size: the largest integer scale of the faces.json cell that fits `targetH` px (min 1). Cell size always comes from faces.json. */
-export function faceScale(cell: { w: number; h: number }, targetH = 144): number {
-  return Math.max(1, Math.floor(targetH / Math.max(1, cell.h)));
+/**
+ * G6 big face: an integer scale of the faces.json cell that covers the whole `box` (cover-like: the larger axis
+ * decides, the other overflows), centred, the overflow cropped evenly. Offsets are whole px so the pixels stay crisp.
+ * Returns `k` 0 until the box has a size.
+ */
+export function faceCover(cell: { w: number; h: number }, box: { w: number; h: number }): { k: number; left: number; top: number } {
+  if (!(box.w > 0 && box.h > 0) || !(cell.w > 0 && cell.h > 0)) return { k: 0, left: 0, top: 0 };
+  const k = Math.max(1, Math.ceil(Math.max(box.w / cell.w, box.h / cell.h)));
+  return { k, left: Math.round((box.w - cell.w * k) / 2), top: Math.round((box.h - cell.h * k) / 2) };
 }
+
+// ── G6 Overlord expand ────────────────────────────────────────────────────────
+/** Share of the sky the Overlord zone takes while it is active (Riff keeps the rest). */
+export const OVERLORD_EXPAND_PCT = 70;
+export type SkyLayoutInput = {
+  /** A live Overlord is on duty; without one nothing ever expands (the static fills its zone). */
+  overlordLive: boolean;
+  /** Focus (composer focus or a click in its chat) is inside the Overlord zone. */
+  overlordFocused: boolean;
+  /** The Overlord is running (talking). */
+  overlordTalking: boolean;
+  /** Focus is inside RiffBot's zone: the person is working with Riff, so a talking Overlord does not squeeze it. */
+  riffFocused?: boolean;
+  /** faces.json has a `riffbot.scared` mode. */
+  riffHasScared: boolean;
+};
+export type SkyLayout = {
+  expanded: boolean;
+  /** Grid fractions, RiffBot then Overlord (sum 100). */
+  widths: { riffbot: number; overlord: number };
+  /** Forced RiffBot face while squeezed: `scared`, or `idle` when faces.json has none; null → the normal talk/needs/blink logic. */
+  riffMode: Extract<FaceMode, "scared" | "idle"> | null;
+};
+/** Overlord active → 70/30 and Riff scared (idle when `scared` is absent); otherwise 50/50. RiffBot activity never expands. */
+export function skyLayout(i: SkyLayoutInput): SkyLayout {
+  const expanded = i.overlordLive && (i.overlordFocused || (i.overlordTalking && !i.riffFocused));
+  return expanded
+    ? { expanded, widths: { riffbot: 100 - OVERLORD_EXPAND_PCT, overlord: OVERLORD_EXPAND_PCT }, riffMode: i.riffHasScared ? "scared" : "idle" }
+    : { expanded, widths: { riffbot: 50, overlord: 50 }, riffMode: null };
+}
+export const hasFaceMode = (faces: FacesModel | null, bot: FaceBot, mode: FaceMode): boolean => !!faces?.bots[bot]?.[mode]?.length;

@@ -129,9 +129,9 @@ export function useBotFace(
   bot: FaceBot,
   agent: Pick<SeatedAgent, "pose"> | null,
   faces: FacesModel | null,
-  opts: { theme: Theme; reduced: boolean },
+  opts: { theme: Theme; reduced: boolean; /** G6: play this mode regardless of the agent (Riff scared while the Overlord is expanded). */ force?: FaceMode | null },
 ): BotFace {
-  const { theme, reduced } = opts;
+  const { theme, reduced, force } = opts;
   const sheetUrl = FACE_URL(bot, theme);
   const sheetOk = useImageOk(faces?.bots[bot] ? sheetUrl : null);
 
@@ -169,7 +169,7 @@ export function useBotFace(
   }, [reduced, faces]);
 
   const base = faceMode(agent, blinking && !reduced);
-  const mode = base === "idle" ? idleFaceMode(faces, bot) : base; // lookDown replaces idle once it exists
+  const mode = force ?? (base === "idle" ? idleFaceMode(faces, bot) : base); // lookDown replaces idle once it exists
   const frame = faces && sheetOk ? faceFrame(faces, bot, mode, reduced ? 0 : tick) : null;
   return {
     mode,

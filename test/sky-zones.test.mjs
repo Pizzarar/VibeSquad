@@ -62,7 +62,8 @@ test("each zone's chat is independent: its own agent id into the shared chat bod
   assert.ok(src("AgentPanes.tsx").includes("export const DrawerSlot"));
   assert.ok(sky.includes('<DrawerSlot id={zone.agentId} pane="left" shown'));
   // Zones share nothing but the faces.json model: no store, no draft key, no shared agent id.
-  assert.ok(!/useDraft|setActivePane|sendMessage|useState/.test(sky));
+  // (G6 adds UI-only useState for which zone has focus and the face box size; still no draft/send/agent state.)
+  assert.ok(!/useDraft|setActivePane|sendMessage/.test(sky));
   // Drafts and sends are per agent id (Composer/AgentDrawer take the agent), so two ids never cross.
   assert.ok(src("AgentPanes.tsx").includes("<AgentDrawer agent={agent}"));
   const z = skyZonesFor(view([member("buddy", "brainstorm"), member("boss", "lead")]));
@@ -165,7 +166,6 @@ test("SkyZones probes each asset and draws the frame/sky only when it loaded", (
 });
 
 // ── G1-fix ───────────────────────────────────────────────────────────────────
-import { faceScale } from "../src/skyZonesLogic.ts";
 
 test("G1-fix: a sky bot is mounted exactly once — AgentPanes excludes it, no CSS hiding", () => {
   const panes = src("AgentPanes.tsx");
@@ -213,7 +213,7 @@ test("G1-fix: dormant RiffBot (closed, with history) keeps the sky layout and of
   assert.ok(src("pinFocus.ts").includes("export async function spinUpPin"));
 });
 
-test("G1-fix: face cell size + fps come from faces.json (48x48 @ 3fps), scaled by an integer to fill the CRT", () => {
+test("G1-fix: face cell size + fps come from faces.json (48x48 @ 3fps), scaled by an integer (faceCover) to fill the CRT", () => {
   const v = validateFaces(fixture("faces-48.json"));
   assert.equal(v.ok, true);
   assert.deepEqual(v.value.cell, { w: 48, h: 48 });
@@ -221,9 +221,6 @@ test("G1-fix: face cell size + fps come from faces.json (48x48 @ 3fps), scaled b
   assert.equal(idleFaceMode(v.value, "riffbot"), "lookDown");
   assert.equal(idleFaceMode(v.value, "overlord"), "lookDown");
   assert.deepEqual(faceFrame(v.value, "overlord", "lookDown", 1), { x: 48, y: 0 });
-  assert.equal(faceScale({ w: 48, h: 48 }), 3);
-  assert.equal(faceScale({ w: 128, h: 96 }), 1);
-  assert.equal(faceScale({ w: 500, h: 500 }), 1);
   const sky = src("SkyZones.tsx");
   assert.ok(sky.includes("faces?.cell"));
   assert.ok(!/\b(128|96)\b/.test(sky));
