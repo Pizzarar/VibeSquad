@@ -106,8 +106,10 @@ if (signingKeyPath && existsSync(signingKeyPath)) {
 }
 
 console.log("[build:desktop] 3/4 Building Tauri 2 NSIS installer...");
+const cfgAt = process.argv.indexOf("--config");
+const tauriConfigArgs = cfgAt > 0 && process.argv[cfgAt + 1] ? ["--config", process.argv[cfgAt + 1]] : [];
 const tauriCliJs = require.resolve("@tauri-apps/cli/tauri.js");
-execFileSync(process.execPath, [tauriCliJs, "build", "--bundles", "nsis"], {
+execFileSync(process.execPath, [tauriCliJs, "build", "--bundles", "nsis", ...tauriConfigArgs], {
   cwd: rootDir,
   env,
   stdio: "inherit",

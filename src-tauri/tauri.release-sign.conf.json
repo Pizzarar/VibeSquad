@@ -1,0 +1,13 @@
+{
+  "bundle": {
+    "windows": {
+      "signCommand": {
+        "cmd": "node",
+        "args": [
+          "scripts/sign-windows.mjs",
+          "%1"
+        ]
+      }
+    }
+  }
+}

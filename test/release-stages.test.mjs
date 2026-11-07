@@ -310,6 +310,35 @@ describe("review fixes", () => {
     assert.match(rec, /## Signature verification/);
   });
 
+  test("build --unsigned writes UNSIGNED; sign and publish refuse; a real build clears it", () => {
+    const root = makeRoot();
+    const { exec } = fakeExec();
+    const run = (args) => runRelease(args, { rootDir: root, exec, env: { TAURI_SIGNING_PRIVATE_KEY: "k" }, log: () => {}, resolveTauriCli: () => "t.js" });
+    const marker = join(root, "dist-desktop", "UNSIGNED");
+    run(["build", "--commit", HEAD, "--unsigned"]);
+    assert.equal(existsSync(marker), true);
+    assert.throws(() => run(["sign", "--commit", HEAD]), /UNSIGNED.*--unsigned/s);
+    assert.throws(() => run(["publish", "--commit", HEAD]), /UNSIGNED.*--unsigned/s);
+    run(["build", "--commit", HEAD]);
+    assert.equal(existsSync(marker), false);
+  });
+
+  test("a failed signed build after an unsigned one leaves UNSIGNED, and sign still refuses", () => {
+    const root = makeRoot();
+    const { exec } = fakeExec();
+    const env = { TAURI_SIGNING_PRIVATE_KEY: "k" };
+    const base = { rootDir: root, env, log: () => {}, resolveTauriCli: () => "t.js" };
+    const marker = join(root, "dist-desktop", "UNSIGNED");
+    runRelease(["build", "--commit", HEAD, "--unsigned"], { ...base, exec });
+    const failing = (cmd, args) => {
+      if (String(args[0]).endsWith("build-desktop.mjs")) throw new Error("build blew up");
+      return exec(cmd, args);
+    };
+    assert.throws(() => runRelease(["build", "--commit", HEAD], { ...base, exec: failing }), /build blew up/);
+    assert.equal(existsSync(marker), true);
+    assert.throws(() => runRelease(["sign", "--commit", HEAD], { ...base, exec }), /UNSIGNED.*--unsigned/s);
+  });
+
   test("legacy no-subcommand run writes no release record", () => {
     const root = makeRoot();
     const { exec } = fakeExec();

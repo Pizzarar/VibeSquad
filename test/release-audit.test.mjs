@@ -116,6 +116,21 @@ describe("release-audit", () => {
     assert.equal(exitCode, 1);
   });
 
+  test("B1 ignores the bare AZURE_CLIENT_SECRET name but flags an assigned value", () => {
+    const name = "AZURE_CLIENT_" + "SECRET";
+    const run = (text) => {
+      const fs = memFs({ [`${ROOT}/a.mjs`]: text });
+      return runAudit({ repoRoot: ROOT }, { fs, exec: gitExec({ tracked: { "a.mjs": 1 } }), env: {} }).checks;
+    };
+    assert.notEqual(row(run(`const v = { envVar: "${name}" }; env.${name} ?? x
+`), "B1").result, "FAIL");
+    const bad = row(run(`${name}=abcd1234efgh5678
+`), "B1");
+    assert.equal(bad.result, "FAIL");
+    assert.match(bad.evidence, /S4.1 \[a\.mjs:1\]/);
+    assert.ok(!bad.evidence.includes("abcd1234"));
+  });
+
   test("sweepText / parseAddedLines report positions only", () => {
     assert.deepEqual(sweepText("a\nb sk-ABC\n", "f", [{ id: "X", re: /sk-[A-Z]/ }]), [{ file: "f", line: 2, id: "X" }]);
     assert.deepEqual(parseAddedLines("+++ b/f\n@@ -1,2 +5,2 @@\n ctx\n+new\n"), [{ file: "f", line: 6, text: "new" }]);
