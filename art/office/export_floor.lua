@@ -1,4 +1,4 @@
--- S1v2 export: floor.aseprite + roof.aseprite -> public/office/{floor,roof}-{dark,light}.png,
+-- S1v2 export (Contract v2 screens): floor.aseprite + roof.aseprite -> public/office/{floor,roof}-{dark,light}.png,
 -- the front overlays {floor,roof}-front-{dark,light}.png (the "front" layer alone, same size as the
 -- plate, index 0 = transparent) and floor.json (from the slices, "front": true).
 -- Run: Aseprite.exe -b --script-param root=<repo> --script art/office/export_floor.lua
@@ -50,17 +50,17 @@ local function team(t)
   return '{"lead":'..R(t..".lead")..',"buddyOffice":'..R(t..".buddyOffice")..
     ',"desks":['..table.concat(d, ",")..'],"lobby":'..R(t..".lobby")..'}'
 end
--- penthouse: its own plate (public/office/roof-*.png); its rects are in ROOF-plate px
+-- screens (Contract v2): the roof band is its own plate (public/office/roof-*.png); rects in ROOF-plate px.
+-- riffbot/overlord = the CRT glass (one face cell from faces.json), elevatorTop = 32x32 sprite cell.
 local roof = app.open(root.."/art/office/roof.aseprite")
 local roofFront = plate(roof, "roof")
 for _, s in ipairs(roof.slices) do S[s.name] = s.bounds end
-local pent = '{"plate":"roof","w":'..roof.width..',"h":'..roof.height..
+local scr = '{"plate":"roof","w":'..roof.width..',"h":'..roof.height..
   (roofFront and ',"front":true' or '')..
-  ',"riffbot":{"seat":'..R("penthouse.riffbot.seat")..',"lounge":'..R("penthouse.riffbot.lounge")..'}'..
-  ',"overlord":{"seat":'..R("penthouse.overlord.seat")..',"crtWall":'..R("penthouse.overlord.crtWall")..'}'..
-  ',"elevatorTop":'..R("penthouse.elevatorTop")..'}'
+  ',"riffbot":'..R("screens.riffbot")..',"overlord":'..R("screens.overlord")..
+  ',"elevatorTop":'..R("screens.elevatorTop")..'}'
 local json = '{"w":'..spr.width..',"h":'..spr.height..',"front":true,\n "teamA":'..team("teamA")..',\n "teamB":'..team("teamB")..
   ',\n "elevator":{"doorA":'..R("elevator.doorA")..',"doorB":'..R("elevator.doorB")..',"car":'..R("elevator.car")..'},'..
-  '\n "penthouse":'..pent..'}\n'
+  '\n "screens":'..scr..'}\n'
 local f = io.open(root.."/public/office/floor.json", "wb"); f:write(json); f:close()
 print("wrote floor.json ("..#spr.slices.." slices)")
