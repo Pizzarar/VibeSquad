@@ -12,6 +12,7 @@ import { localTokenHeaders, localTokenPath } from "@vibesquad/server/local-token
 import {
   REMOTE_ALLOW,
   REMOTE_MAX_BODY_BYTES,
+  REMOTE_OWNER_READS,
   REMOTE_RESPONSE_HEADERS,
   REMOTE_TIMEOUT_MS,
   checkRemoteBody,
@@ -48,8 +49,9 @@ export function remoteEnabled(home = vsHome()): boolean {
   return s?.remote?.enabled === true;
 }
 
-// Loopback owner token (security S3, server/local-token.mjs). Sent only on writes: remote GETs go without
-// it, so S3's read-only loopback mode is a second wall (no writes, no isGatedRead paths) behind the allowlist.
+// Loopback owner token (security S3, server/local-token.mjs). Sent on writes and on REMOTE_OWNER_READS (the B8
+// fs/* reads); other remote GETs go without it, so S3's read-only loopback mode is a second wall (no writes,
+// no isGatedRead paths) behind the allowlist.
 export function vsTokenHeaders(home = vsHome()): Record<string, string> {
   return localTokenHeaders(localTokenPath(home));
 }
@@ -191,7 +193,7 @@ export function makeVsHttpHandler(deps: VsHttpDeps = {}) {
       const res = await (deps.fetch ?? fetch)(url, {
         method: d.method,
         // No caller headers are forwarded: just our content type and the loopback token.
-        headers: { ...(hasBody ? { "content-type": "application/json" } : {}), ...(write ? vsTokenHeaders(home) : {}) },
+        headers: { ...(hasBody ? { "content-type": "application/json" } : {}), ...(write || REMOTE_OWNER_READS.includes(d.pathname) ? vsTokenHeaders(home) : {}) },
         ...(hasBody ? { body: sendBody } : {}),
         redirect: "manual",
         signal: abort.signal,

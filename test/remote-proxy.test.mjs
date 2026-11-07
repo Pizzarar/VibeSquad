@@ -15,6 +15,7 @@ import {
   REMOTE_BUDGET_PER_MIN,
   REMOTE_MAX_BODY_BYTES,
   REMOTE_MAX_IN_FLIGHT,
+  REMOTE_OWNER_READS,
   REMOTE_SPAWN_TIMEOUT_MS,
   REMOTE_TIMEOUT_MS,
   REMOTE_BODY_POLICY,
@@ -187,12 +188,29 @@ describe("allowlist", () => {
   });
   test("no allowlisted GET is an S3 gated read (token-less GETs work; S3 backs the allowlist)", async () => {
     const { isGatedRead } = await import("../server/vibesquad-api.mjs");
-    for (const p of Object.keys(REMOTE_ALLOW).filter((k) => REMOTE_ALLOW[k].includes("GET"))) {
+    for (const p of Object.keys(REMOTE_ALLOW).filter((k) => REMOTE_ALLOW[k].includes("GET") && !REMOTE_OWNER_READS.includes(k))) {
       for (const q of ["", "?refresh=1"]) {
         const d = decideProxyRequest("GET", p + q);
         assert.equal(d.ok, true, p + q);
         assert.equal(isGatedRead(d.pathname, d.pathname + d.search), false, p + q);
       }
+    }
+  });
+  test("B8: fs/list|resolve|read are GET-only remotely and are exactly the gated reads that carry the token", async () => {
+    const { isGatedRead } = await import("../server/vibesquad-api.mjs");
+    const fs = ["/__vibesquad/fs/list", "/__vibesquad/fs/resolve", "/__vibesquad/fs/read"];
+    assert.deepEqual([...REMOTE_OWNER_READS].sort(), [...fs].sort());
+    for (const p of fs) {
+      assert.equal(decideProxyRequest("GET", `${p}?cwd=C:/w&path=a.md`).ok, true, p);
+      assert.equal(isGatedRead(p, p), true, `${p} is owner-gated server-side`);
+      for (const m of ["POST", "PUT", "PATCH", "DELETE"]) assert.equal(decideProxyRequest(m, p).code, "method", `${m} ${p}`);
+      assert.equal(decideProxyRequest("GET", `${p}/x`).code, "not-allowed", `${p}/x`);
+      assert.equal(decideProxyRequest("GET", `${p}/../files`).code, "path", `${p}/../files`);
+      assert.equal(decideProxyRequest("GET", `${p}%2F..%2Ffiles`).code, "path");
+    }
+    for (const p of ["/__vibesquad/files", "/__vibesquad/search", "/__vibesquad/files/x", "/__vibesquad/search/x"]) {
+      assert.equal(decideProxyRequest("GET", p).ok, false, p);
+      assert.equal(decideProxyRequest("GET", p).code, "blocked", p);
     }
   });
   test("method filter", () => {
@@ -1070,5 +1088,77 @@ describe("R2-5 handler: reopened writes against a fake loopback server", () => {
     assert.equal(proxyTimeoutFor("/__vibesquad/brainstorm-restart"), 45_000);
     assert.equal(proxyTimeoutFor("/__vibesquad/inbox/triage"), 45_000);
     assert.equal(proxyTimeoutFor("/api/health"), 10_000);
+  });
+});
+
+describe("B8: fs/* over the proxy reach the real handlers, owner-gated, confined", () => {
+  let server;
+  let port;
+  let ws;
+  let outside;
+  const seenTokens = [];
+  before(async () => {
+    const { handleFsList, handleFsRead, handleFsResolve } = await import("../server/file-search.mjs");
+    ws = mkdtempSync(join(tmpdir(), "vs-b8-ws-"));
+    outside = mkdtempSync(join(tmpdir(), "vs-b8-out-"));
+    writeFileSync(join(ws, "note.md"), "# hi");
+    writeFileSync(join(outside, "secret.txt"), "nope");
+    writeFileSync(join(home, "local-token"), TOKEN);
+    const send = (res, status, obj) => {
+      res.statusCode = status;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify(obj));
+    };
+    server = createServer((req, res) => {
+      const path = req.url.split("?")[0];
+      seenTokens.push(req.headers["x-vibesquad-token"]);
+      // Mirrors the real middleware: fs/* are isGatedRead, so a tokenless loopback caller gets 403.
+      if (req.headers["x-vibesquad-token"] !== TOKEN) return send(res, 403, { error: "read-only", readOnly: true });
+      if (path === "/__vibesquad/fs/list") return handleFsList(req, res, [ws], send);
+      if (path === "/__vibesquad/fs/read") return handleFsRead(req, res, [ws], send);
+      if (path === "/__vibesquad/fs/resolve") return handleFsResolve(req, res, async () => ws, send, [ws]);
+      send(res, 404, {});
+    });
+    await new Promise((r) => server.listen(0, "127.0.0.1", r));
+    port = server.address().port;
+  });
+  after(() => {
+    server.closeAllConnections?.();
+    server.close();
+    rmSync(ws, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  });
+  const call = (path, method = "GET") => {
+    setGate(true);
+    return makeVsHttpHandler({ port, home })({ method, path });
+  };
+  const q = (o) => "?" + new URLSearchParams(o).toString();
+
+  test("list / read / resolve succeed and the proxy sent the owner token", async () => {
+    const list = await call("/__vibesquad/fs/list" + q({ cwd: ws, path: "" }));
+    assert.equal(list.status, 200);
+    assert.deepEqual(JSON.parse(list.body).entries.map((e) => e.name), ["note.md"]);
+    const read = await call("/__vibesquad/fs/read" + q({ cwd: ws, path: "note.md" }));
+    assert.equal(read.status, 200);
+    assert.equal(read.body, "# hi");
+    const resolved = await call("/__vibesquad/fs/resolve" + q({ agentId: "a", name: "note.md" }));
+    assert.equal(resolved.status, 200, resolved.body);
+    assert.equal(JSON.parse(resolved.body).ok, true, resolved.body);
+    assert.ok(seenTokens.slice(-3).every((t) => t === TOKEN));
+  });
+  test("traversal, absolute paths and a cwd outside the roots are still refused over remote", async () => {
+    for (const path of ["../" + "x", "a/../../x", "/etc/passwd", "C:/Windows/win.ini", "~/x"]) {
+      const r = await call("/__vibesquad/fs/read" + q({ cwd: ws, path }));
+      assert.ok(r.status >= 400, `${path} -> ${r.status}`);
+    }
+    const out = await call("/__vibesquad/fs/read" + q({ cwd: outside, path: "secret.txt" }));
+    assert.ok(out.status >= 400 && !out.body.includes("nope"), `outside cwd -> ${out.status}`);
+  });
+  test("POST and files/search are refused before any fetch", async () => {
+    const n = seenTokens.length;
+    await assert.rejects(call("/__vibesquad/fs/read" + q({ cwd: ws, path: "note.md" }), "POST"), /not available remotely.*\[405\]/);
+    await assert.rejects(call("/__vibesquad/files" + q({ cwd: ws })), /blocked remotely.*\[403\]/);
+    await assert.rejects(call("/__vibesquad/search" + q({ cwd: ws, q: "hi" })), /blocked remotely.*\[403\]/);
+    assert.equal(seenTokens.length, n);
   });
 });
