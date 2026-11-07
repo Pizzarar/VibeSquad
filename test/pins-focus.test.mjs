@@ -99,7 +99,9 @@ test("closed agents are never woken by usePreview, hidden panes, Composer, Subag
   assert.doesNotMatch(ad, /auto-150k/, "AgentDrawer does not auto-restart Brainstorm at 150k tokens");
 
   const app = fs.readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
-  assert.match(app, /\{\(withPanes \|\| pinFocused\) && \(/, "App only mounts AgentPanes when withPanes or pinFocused");
+  // F2 nests the RiffBot chat + queue + tower in .hub-body, so AgentPanes is built into `panesNode`
+  // and mounted in both branches (hubFocused and not); it still only exists when withPanes || pinFocused.
+  assert.match(app, /const panesNode = \(withPanes \|\| pinFocused\) \? \(/, "App only mounts AgentPanes when withPanes or pinFocused");
   assert.match(app, /onStart=\{onSpinUpPin\}/, "PinFocusHeader onStart is wired to onSpinUpPin");
 });
 
