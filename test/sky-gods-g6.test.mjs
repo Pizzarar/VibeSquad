@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { OVERLORD_EXPAND_PCT, faceCover, hasFaceMode, skyLayout } from "../src/skyZonesLogic.ts";
+import { OVERLORD_EXPAND_PCT, faceBg, faceContain, hasFaceMode, riffMinWidth, skyColumns, skyLayout } from "../src/skyZonesLogic.ts";
 import { faceFrame, validateFaces } from "../src/squadFloorLogic.ts";
 
 const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
@@ -42,13 +42,35 @@ test("RiffBot active (focused or talking) never expands Riff over the Overlord",
   assert.ok(l.widths.riffbot <= l.widths.overlord);
 });
 
-test("faceCover: integer scale covers the box, centred, cropped evenly, whole-px offsets", () => {
-  const c = faceCover({ w: 48, h: 48 }, { w: 700, h: 400 });
-  assert.deepEqual(c, { k: 15, left: -10, top: -160 }); // 720x720 over 700x400
-  assert.ok(Number.isInteger(c.k) && Number.isInteger(c.left) && Number.isInteger(c.top));
-  assert.deepEqual(faceCover({ w: 48, h: 48 }, { w: 48, h: 48 }), { k: 1, left: 0, top: 0 });
-  assert.deepEqual(faceCover({ w: 128, h: 96 }, { w: 500, h: 300 }), { k: 4, left: -6, top: -42 }); // cell from faces.json, never hardcoded
-  assert.equal(faceCover({ w: 48, h: 48 }, { w: 0, h: 0 }).k, 0); // not measured yet
+test("faceContain: integer scale, whole cell fits (never cropped), centred sideways, anchored to the bottom", () => {
+  const cell = { w: 48, h: 48 };
+  assert.deepEqual(faceContain(cell, { w: 700, h: 400 }), { k: 8, left: 158, top: 16 }); // wide box: height decides, side gutters, slack (16) at the top
+  assert.deepEqual(faceContain(cell, { w: 200, h: 500 }), { k: 4, left: 4, top: 308 }); // squeezed/tall: width decides, the gap is at the TOP only
+  assert.deepEqual(faceContain(cell, { w: 480, h: 480 }), { k: 10, left: 0, top: 0 }); // square
+  assert.deepEqual(faceContain({ w: 128, h: 96 }, { w: 500, h: 300 }), { k: 3, left: 58, top: 12 }); // cell from faces.json, never hardcoded
+  assert.equal(faceContain(cell, { w: 0, h: 0 }).k, 0); // not measured yet
+  assert.equal(faceContain(cell, { w: 30, h: 30 }).k, 1); // smaller than one cell: min 1 (the only crop case)
+  for (const box of [{ w: 700, h: 400 }, { w: 200, h: 500 }, { w: 560, h: 497 }, { w: 1306, h: 497 }, { w: 96, h: 96 }, { w: 143, h: 400 }]) {
+    const c = faceContain(cell, box);
+    assert.ok(Number.isInteger(c.k) && Number.isInteger(c.left) && Number.isInteger(c.top));
+    assert.ok(c.left >= 0 && c.top >= 0 && c.left + cell.w * c.k <= box.w && c.top + cell.h * c.k <= box.h, `face fits inside ${JSON.stringify(box)}`);
+  }
+});
+
+test("faceContain bottom anchoring: the face's bottom edge is the box's bottom edge, never a gap below", () => {
+  const cell = { w: 48, h: 48 };
+  for (const box of [{ w: 700, h: 400 }, { w: 1306, h: 497 }, { w: 560, h: 497 }, { w: 368, h: 497 }, { w: 216, h: 497 }, { w: 143, h: 400 }, { w: 480, h: 481 }, { w: 481, h: 999 }]) {
+    const c = faceContain(cell, box);
+    assert.equal(c.top + cell.h * c.k, box.h, `no gap below at ${JSON.stringify(box)}`);
+  }
+  // Height-driven (normal) case: the slack at the top is under one scale step.
+  const c = faceContain(cell, { w: 1306, h: 497 });
+  assert.ok(c.top >= 0 && c.top < cell.h);
+  // Width-forced (squeezed Riff): the gap goes to the top, larger than a step, still nothing below.
+  const sq = faceContain(cell, { w: 100, h: 497 });
+  assert.equal(sq.k, 2);
+  assert.ok(sq.top > cell.h);
+  assert.equal(sq.top + cell.h * sq.k, 497);
 });
 
 // ── faces.json `scared` ──
@@ -82,7 +104,7 @@ test("validateFaces: idle stays required, an unknown extra mode is ignored, a ma
 
 test("wiring: the face is a zone background, the thumbnail is gone, Riff gets the forced mode, no new loader", () => {
   const sky = src("SkyZones.tsx");
-  assert.ok(sky.includes("faceCover(cell, box)"));
+  assert.ok(sky.includes("faceContain(cell, box)") && !sky.includes("faceCover"));
   assert.ok(!sky.includes("sky-face-box") && !sky.includes("sky-crt-head"));
   assert.ok(sky.includes("force={layout.riffMode}"));
   assert.ok(sky.includes("skyLayout({"));
@@ -106,4 +128,51 @@ test("a11y: squeezed Riff is tabbable, labelled, and Enter/Space/focus hand the 
   assert.ok(sky.includes('setFocus("riffbot")'));
   assert.ok(sky.includes("squeezed={layout.expanded} onReclaim={reclaimRiff}"));
   assert.ok(!sky.includes("onReclaim={reclaimRiff}") || !/<Zone zone=\{zones\.overlord\}[^>]*onReclaim/.test(sky)); // Overlord never gets it
+});
+
+// ── G6-fix2: gutter colour + Riff's minimum strip ──
+test("faces.json bg: {dark, light} per bot, both valid → used per theme; any other shape → whole field ignored (CSS variable)", () => {
+  const bg = { dark: "#2a1b6b", light: "#95d3f2" };
+  const ok = validateFaces({ ...faces(), riffbot: { idle: frames(0), bg }, overlord: { idle: frames(0), bg: { dark: "rgb(20, 30, 40)", light: "#fff" } } });
+  assert.equal(ok.ok, true);
+  assert.equal(faceBg(ok.value, "riffbot", "dark"), "#2a1b6b");
+  assert.equal(faceBg(ok.value, "riffbot", "light"), "#95d3f2");
+  assert.equal(faceBg(ok.value, "overlord", "dark"), "rgb(20, 30, 40)");
+  assert.equal(faceBg(ok.value, "overlord", "light"), "#fff");
+  const bad = [
+    "#2a1b6b", // the old plain-string form is dropped
+    { dark: "#2a1b6b" }, // a key missing
+    { light: "#95d3f2" },
+    { dark: "#2a1b6b", light: "url(x)" }, // one invalid → the whole field is invalid
+    { dark: "red; x:y", light: "#95d3f2" },
+    { dark: 5, light: "#95d3f2" },
+    { dark: "#12", light: "#95d3f2" },
+    {}, [], null, 5,
+  ];
+  for (const b of bad) {
+    const v = validateFaces({ ...faces(), riffbot: { idle: frames(0), bg: b } });
+    assert.equal(v.ok, true, `invalid bg ${JSON.stringify(b)} must not reject the file`);
+    for (const t of ["dark", "light"]) assert.equal(faceBg(v.value, "riffbot", t), null);
+  }
+  assert.equal(faceBg(validateFaces(faces()).value, "riffbot", "dark"), null);
+  assert.equal(faceBg(null, "riffbot", "light"), null);
+  const css = src("styles.css");
+  assert.ok(/--sky-face-bg-dark: #[0-9a-f]{6}/i.test(css) && /--sky-face-bg-light: #[0-9a-f]{6}/i.test(css));
+  assert.ok(css.includes("var(--sky-face-bg-custom, var(--sky-face-bg-dark))"));
+  assert.ok(src("SkyZones.tsx").includes("--sky-face-bg-custom") && src("SkyZones.tsx").includes("faceBg(faces, zone.bot, theme)"));
+});
+
+test("Riff's squeezed strip keeps two whole cells + bezel; at a 1280 hub the scared face is still scale >= 2", () => {
+  const cell = { w: 48 };
+  const bezel = (20 + 20) * 3; // sky-crt.json left+right × scale
+  assert.equal(riffMinWidth(cell, bezel), 216);
+  const exp = skyLayout({ ...base, overlordFocused: true });
+  assert.equal(skyColumns(exp, cell, bezel), "minmax(216px, 30fr) minmax(0, 70fr)");
+  assert.equal(skyColumns(skyLayout(base), cell, bezel), "minmax(0px, 50fr) minmax(0, 50fr)"); // at rest: plain 50/50
+  // Narrow hub column (1280 viewport minus rail/sidebar ≈ 760): 30% is a sliver, the floor wins and the face still gets k >= 2.
+  for (const hub of [760, 900, 1280]) {
+    const riff = Math.max(Math.round((hub - 36) * 0.3), riffMinWidth(cell, bezel));
+    assert.ok(riff >= 216);
+    assert.ok(faceContain({ w: 48, h: 48 }, { w: riff - bezel, h: 400 }).k >= 2, `k>=2 at hub ${hub}`);
+  }
 });

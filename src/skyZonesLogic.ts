@@ -94,14 +94,29 @@ export function skyAssets(
 }
 
 /**
- * G6 big face: an integer scale of the faces.json cell that covers the whole `box` (cover-like: the larger axis
- * decides, the other overflows), centred, the overflow cropped evenly. Offsets are whole px so the pixels stay crisp.
- * Returns `k` 0 until the box has a size.
+ * G6-fix2/2b big face: the largest whole-number scale at which the WHOLE cell fits the box (contain, never crop).
+ * Centred horizontally (side letterbox only), anchored to the BOTTOM so the suit meets the bottom edge; any vertical
+ * slack goes at the top. The gutters are filled by the bot's background colour. k is at least 1 (a box smaller than one
+ * cell is the only case that crops). Returns `k` 0 until the box has a size.
  */
-export function faceCover(cell: { w: number; h: number }, box: { w: number; h: number }): { k: number; left: number; top: number } {
+export function faceContain(cell: { w: number; h: number }, box: { w: number; h: number }): { k: number; left: number; top: number } {
   if (!(box.w > 0 && box.h > 0) || !(cell.w > 0 && cell.h > 0)) return { k: 0, left: 0, top: 0 };
-  const k = Math.max(1, Math.ceil(Math.max(box.w / cell.w, box.h / cell.h)));
-  return { k, left: Math.round((box.w - cell.w * k) / 2), top: Math.round((box.h - cell.h * k) / 2) };
+  const k = Math.max(1, Math.floor(Math.min(box.w / cell.w, box.h / cell.h)));
+  return { k, left: Math.round((box.w - cell.w * k) / 2), top: box.h - cell.h * k };
+}
+
+/** Gutter colour around a contained face: faces.json `<bot>.bg[theme]` when the field is valid, else null → the per-theme `--sky-face-bg-*` CSS variable. */
+export const faceBg = (faces: FacesModel | null, bot: FaceBot, theme: SkyTheme): string | null => faces?.bg?.[bot]?.[theme] ?? null;
+
+/**
+ * Smallest width of Riff's squeezed strip: two whole cells of face plus both bezel sides, so the scared face stays at
+ * scale >= 2 however narrow the hub column gets. `bezelH` = left+right border widths in px.
+ */
+export const riffMinWidth = (cell: { w: number }, bezelH: number): number => 2 * cell.w + bezelH;
+/** The grid-template-columns value for a layout: Riff never narrower than riffMinWidth while squeezed; the Overlord takes the rest. */
+export function skyColumns(layout: SkyLayout, cell: { w: number }, bezelH: number): string {
+  const riffMin = layout.expanded ? riffMinWidth(cell, bezelH) : 0;
+  return `minmax(${riffMin}px, ${layout.widths.riffbot}fr) minmax(0, ${layout.widths.overlord}fr)`;
 }
 
 // ── G6 Overlord expand ────────────────────────────────────────────────────────

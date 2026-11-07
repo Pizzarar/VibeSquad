@@ -4702,9 +4702,11 @@ button.project-file-name:hover { text-decoration: underline; }
 :root .sky-zone.has-frame, :root[data-theme="light"] .sky-zone.has-frame { box-shadow: none; } /* the bezel art is the frame: no CSS ring on top, any theme/zone */
 .sky-zone .composer-row { flex-wrap: wrap; }
 .sky-zone .composer-row textarea { flex: 1 1 100%; min-width: 0; min-height: 56px; }
-/* G6: the face is the zone's background (integer scale, centred, crisp); the chat overlays its lower part. */
-.sky-face-stage { position: absolute; inset: 0; overflow: hidden; background: #05060c; z-index: 0; }
-:root[data-theme="light"] .sky-face-stage { background: #cfd3e2; }
+/* G6: the face is the zone's background (whole face, integer scale, centred, crisp); the chat overlays its lower part. */
+/* G6-fix2: contained face; the gutters show faces.json <bot>.bg (--sky-face-bg-custom) else the sky-CRT screen colour of the theme. */
+.sky-zones { --sky-face-bg-dark: #2a1b6b; --sky-face-bg-light: #95d3f2; }
+.sky-face-stage { position: absolute; inset: 0; overflow: hidden; background: var(--sky-face-bg-custom, var(--sky-face-bg-dark)); z-index: 0; }
+:root[data-theme="light"] .sky-face-stage { background: var(--sky-face-bg-custom, var(--sky-face-bg-light)); }
 .sky-face { position: absolute; transform-origin: top left; display: block; background-repeat: no-repeat; image-rendering: pixelated; }
 .sky-face.is-blank { background-color: transparent; }
 .sky-zone.is-off .sky-face-stage { display: none; }
