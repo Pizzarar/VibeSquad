@@ -55,9 +55,9 @@ const HASH_RE = /^[0-9a-fA-F]{7,64}$/;
 
 const ENV = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_LITERAL_PATHSPECS: "1", GIT_EDITOR: "true", LC_ALL: "C", GH_PROMPT_DISABLED: "1", NO_COLOR: "1" };
 
-function exec(cmd, args, cwd, { timeout = READ_TIMEOUT, okCodes = [0], env } = {}) {
+function exec(cmd, args, cwd, { timeout = READ_TIMEOUT, okCodes = [0], env, input } = {}) {
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { cwd, timeout, maxBuffer: MAX_BUFFER, windowsHide: true, encoding: "utf8", env: env ?? ENV }, (err, stdout, stderr) => {
+    const child = execFile(cmd, args, { cwd, timeout, maxBuffer: MAX_BUFFER, windowsHide: true, encoding: "utf8", env: env ?? ENV }, (err, stdout, stderr) => {
       stdout = String(stdout ?? "");
       stderr = String(stderr ?? "");
       if (!err) return resolve({ stdout, stderr, code: 0, truncated: false });
@@ -70,6 +70,8 @@ function exec(cmd, args, cwd, { timeout = READ_TIMEOUT, okCodes = [0], env } = {
       const msg = (stderr.trim() || stdout.trim() || err.message).split(/\r?\n/).slice(0, 8).join("\n");
       reject(new GitError(msg.slice(0, 2000)));
     });
+    // `input` goes on stdin, never argv: Windows caps a command line at 32,767 chars.
+    if (input !== undefined) child.stdin?.on("error", () => {}).end(input);
   });
 }
 const git = (args, cwd, opts) => exec("git", ["-c", "core.quotepath=false", "-c", "color.ui=never", ...args], cwd, opts);
@@ -380,7 +382,7 @@ async function runWrite(action, body, cwd) {
       const message = str(body.message, 10_000).trim();
       if (!message) throw new GitError("enter a commit message");
       if (body.addAll !== false) await git(["add", "-A"], cwd, { timeout: WRITE_TIMEOUT });
-      await git(["commit", "-m", message], cwd, { timeout: WRITE_TIMEOUT });
+      await git(["commit", "-F", "-"], cwd, { timeout: WRITE_TIMEOUT, input: message });
       return { ok: true };
     }
     case "push":
