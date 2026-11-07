@@ -79,6 +79,7 @@ import {
 import { WorkspacesView } from "./WorkspacesView";
 import { AttentionBadge } from "./AttentionList";
 import { SquadQueue } from "./SquadQueue";
+import { SquadFloor } from "./SquadFloor";
 import { FullToggle, PinGrid, SidebarPins, SquadsHome, setFullView, useFullView, type PinHandler } from "./PinGrid";
 import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import { popAction, urlAgentFor } from "./pinFocusLogic";
@@ -1796,6 +1797,13 @@ export function App() {
     [showArchived, view, archivedMembers, query],
   );
 
+  const panesNode = (withPanes || pinFocused) ? (
+    <AgentPanes
+      onSuccessor={paneSuccessor}
+      header={pinFocusView && pinFocus ? <PinFocusHeader view={pinFocusView} focus={pinFocus} spinUpError={pinFocus.spinUpError} onStart={onSpinUpPin} onSelectSquad={onTeam} belowBar={pinFocus.agentId ? undefined : <HubBar view={pinFocusView} onOpen={onQuickStart} />} /> : undefined}
+    />
+  ) : null;
+
   return (
     <div
       className={`app ${focus ? "focus" : ""} ${withPanes ? "with-panes" : ""} ${split && withPanes ? "split" : ""} ${pinFocused ? `pin-focus ${pinFocus?.agentId ? "" : "pin-no-drawer"} ${hubFocused ? "hub-focus" : ""}` : ""} ${hidePanes ? "pins-home" : ""} ${sheet ? "sheet-open" : ""} ${mobileTeamView ? "mobile-team-view" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
@@ -2012,13 +2020,15 @@ export function App() {
           )}
         </main>
       )}
-      {(withPanes || pinFocused) && (
-        <AgentPanes
-          onSuccessor={paneSuccessor}
-          header={pinFocusView && pinFocus ? <PinFocusHeader view={pinFocusView} focus={pinFocus} spinUpError={pinFocus.spinUpError} onStart={onSpinUpPin} onSelectSquad={onTeam} belowBar={pinFocus.agentId ? undefined : <HubBar view={pinFocusView} onOpen={onQuickStart} />} /> : undefined}
-        />
+      {hubFocused ? (
+        <div className="hub-body" data-testid="hub-body">
+          {panesNode}
+          {pinFocusView && <SquadQueue view={pinFocusView} />}
+          {pinFocusView && <SquadFloor view={pinFocusView} onOpenRiffBot={onQuickStart} />}
+        </div>
+      ) : (
+        panesNode
       )}
-      {pinFocusView && pinFocus && hubFocused && <SquadQueue view={pinFocusView} />}
       {pinFocusView && pinFocus && <PinRail view={pinFocusView} focus={pinFocus} onPick={onRailPick} />}
       <PinToast />
       <MobileBar />

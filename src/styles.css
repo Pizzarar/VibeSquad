@@ -4429,11 +4429,122 @@ button.project-file-name:hover { text-decoration: underline; }
 .sq-age { flex: none; align-self: flex-start; font-variant-numeric: tabular-nums; }
 .sq-actions { display: flex; gap: 6px; margin-top: 6px; }
 .sq-empty { padding: 16px 4px; text-align: center; }
+
+/* ── Squad floor phase 2 (src/SquadFloor.tsx): nested hub body (chat + queue + tower) ──
+   The app grid keeps its single row (and the `:has([role="alert"])` banner rows are untouched),
+   so the tower lives inside `.hub-body`, a nested grid over the main + queue columns. ── */
+.hub-body {
+  grid-column: 2 / 4;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.hub-body .agent-panes { grid-column: 1; grid-row: 1; min-height: 0; overflow: hidden; }
+.hub-body .sq-panel { grid-column: 2; grid-row: 1; }
+.hub-body .sq-floor {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  min-height: 0;
+  max-height: 46vh;
+  overflow: auto;
+}
+.sq-floor-tower {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: max-content;
+  min-width: 100%;
+  padding: 6px 0;
+  background: var(--navy);
+  border-top: 2px solid var(--cyan);
+}
+.sq-floor-band-wrap { position: relative; flex: none; }
+.sq-floor-band {
+  position: relative;
+  overflow: hidden;
+  image-rendering: pixelated;
+  background: var(--bg);
+}
+.sq-floor-plate { display: block; image-rendering: pixelated; }
+.sq-floor-box {
+  position: absolute;
+  display: block;
+  border: 1px solid var(--line);
+  background: var(--panel-hi);
+}
+.sq-floor-box-elevator { background: var(--panel-alt); border-color: var(--slate); }
+.sq-floor-char {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  line-height: 0;
+}
+.sq-floor-char.is-fallback { width: 16px; height: 16px; }
+.sq-floor-sprite {
+  display: block;
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+  background-repeat: no-repeat;
+}
+.sq-floor-sprite-fallback { background: var(--coral); border: 1px solid var(--line); box-sizing: border-box; }
+.sq-floor-char:hover .sq-floor-sprite,
+.sq-floor-char:focus-visible .sq-floor-sprite { outline: 1px solid var(--cyan); }
+.sq-floor-bubble { position: absolute; display: block; pointer-events: none; image-rendering: pixelated; background-repeat: no-repeat; }
+.sq-floor-plus {
+  position: absolute;
+  transform: translateY(-100%);
+  font-family: var(--arcade);
+  font-size: 10px;
+  color: var(--text);
+  background: var(--hot-pink);
+  padding: 0 3px;
+  border: 1px solid var(--line);
+  pointer-events: none;
+}
+.sq-floor-mark {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--hot-pink);
+  background: var(--hot-pink);
+  color: #05060d;
+  font-family: var(--arcade);
+  font-weight: 700;
+  cursor: pointer;
+  line-height: 1;
+}
+.sq-floor-mark:hover,
+.sq-floor-mark:focus-visible { background: var(--text); color: var(--hot-pink); }
+.sq-floor-lounge { position: absolute; border: 0; background: transparent; cursor: pointer; padding: 0; }
+.sq-floor-lounge:hover,
+.sq-floor-lounge:focus-visible { outline: 1px dashed var(--cyan); outline-offset: -1px; }
+.sq-floor-rider { position: absolute; transform: translate(-50%, -100%); line-height: 0; animation: sq-floor-ride linear forwards; }
+.sq-floor-rider .sq-floor-sprite-fallback { width: 16px; height: 16px; }
+@keyframes sq-floor-ride {
+  from { transform: translate(-50%, -100%); opacity: 1; }
+  to { transform: translate(-50%, -260%); opacity: 0.2; }
+}
+@media (prefers-reduced-motion: reduce) { .sq-floor-rider { animation: none; } }
+
 @media (max-width: 900px) {
   .app.pin-focus.hub-focus { grid-template-columns: var(--sidebar-w, 265px) minmax(0, 1fr) 240px 64px; }
+  .hub-body { grid-template-columns: minmax(0, 1fr) 240px; }
 }
 @media (max-width: 600px) {
-  .app.pin-focus.hub-focus { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-  .sq-panel { grid-column: 1; grid-row: 1; max-height: 38vh; border-left: 0; }
-  .app.pin-focus.hub-focus > .agent-panes { grid-column: 1; grid-row: 2; }
+  .app.pin-focus.hub-focus { grid-template-columns: minmax(0, 1fr); }
+  .hub-body { grid-column: 1; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
+  .hub-body .sq-panel { grid-column: 1; grid-row: 1; max-height: 38vh; border-left: 0; }
+  .hub-body .agent-panes { grid-column: 1; grid-row: 2; }
+  .hub-body .sq-floor { grid-column: 1; grid-row: 3; max-height: 40vh; }
 }
