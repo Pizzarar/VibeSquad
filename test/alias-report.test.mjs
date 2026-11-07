@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { aliasReport, parseDuration } from '../cli/vs.mjs';
 import { ART_PAINTER_NOTE_BODY } from '../server/profiles.mjs';
-import { WORKER_PACK, LEAD_FALLBACK_PACK } from '../plugin/index.server.ts';
+import { WORKER_PACK, LEAD_FALLBACK_PACK } from '../server/hooks/agent-duties.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const hit = (ts, tool, caller, lane = 'runner-pilot', agent = caller) => ({ ts, agent, lane, type: 'metric', text: `mcp-alias: tool=${tool} caller=${caller} lane=${lane}`, refs: [] });

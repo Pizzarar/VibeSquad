@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createPlugin, stepTimer } from "../plugin/index.server.ts";
+import { createPlugin, stepTimer } from "../server/hooks/agent-duties.ts";
 import { perfClear, perfEnabled, perfEntries, perfEnd, perfEndPainted, perfRecord, perfReportText, perfSendBegin, perfSendEvent, perfSendResolved, perfStart } from "../src/perf.ts";
 
 test("stepTimer records per-step ms and a total, and never throws", () => {

@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { createPlugin } from "../plugin/index.server.ts";
+import { createPlugin } from "../server/hooks/agent-duties.ts";
 import {
   UNASSIGNED_TEAM_ID,
   effectiveAgentRole,

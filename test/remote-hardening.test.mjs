@@ -12,7 +12,7 @@ import { buildNewSquadTeamDef } from "../src/newSquadDef.ts";
 import {
   checkRemoteBody,
   pinTeamsRegistry,
-} from "../plugin/server/remote-proxy-rules.ts";
+} from "../server/hooks/remote-proxy-rules.ts";
 
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
 

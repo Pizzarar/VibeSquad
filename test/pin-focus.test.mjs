@@ -4,7 +4,7 @@ import { registerHooks } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
-import { checkRemoteBody } from "../plugin/server/remote-proxy-rules.ts";
+import { checkRemoteBody } from "../server/hooks/remote-proxy-rules.ts";
 
 // Allow Node to import src/pinFocus.ts and src/pinActions.ts directly by resolving extensionless .ts imports
 // and providing lightweight stubs for browser-only .tsx modules.

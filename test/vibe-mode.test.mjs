@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BRAINSTORM_PACK, VIBE_MODE_BUDDY_RULES, injectedPrefix, rolePack } from "../plugin/index.server.ts";
+import { BRAINSTORM_PACK, VIBE_MODE_BUDDY_RULES, injectedPrefix, rolePack } from "../server/hooks/agent-duties.ts";
 import { VIBE_HEARTBEAT_LINE, buildBrainstormInitialPrompt } from "../server/brainstorm.mjs";
 
 test("Buddy pack is byte-identical with Vibe mode off and gains only the rule block when on", () => {

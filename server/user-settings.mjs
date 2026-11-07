@@ -172,7 +172,7 @@ function viewOf(data) {
   if (Object.keys(pushEvents).length) out.pushEvents = pushEvents;
   // Runner & Providers block: owned by providers-catalog.mjs, carried through here so saves do not drop it.
   if (data.runner && typeof data.runner === "object" && !Array.isArray(data.runner)) out.runner = data.runner;
-  // Remote (relay) proxy gate, read by plugin/server/remote-proxy.ts. Hand-edited only: saveUserSettings
+  // Remote (relay) proxy gate, read by server/hooks/remote-proxy-rules.ts. Hand-edited only: saveUserSettings
   // carries it over but never takes it from a patch, so no HTTP caller can switch it on.
   if (data.remote && typeof data.remote === "object") out.remote = { enabled: data.remote.enabled === true };
   return out;

@@ -19,7 +19,7 @@ import { findProfile, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
 import { defangPromptFences } from "./write-guards.mjs";
 
-// import.meta.dirname is undefined when bundled into the Paseo plugin; fall back like plugin/index.server.ts.
+// import.meta.dirname is undefined when bundled into the Paseo plugin; fall back like server/hooks/agent-duties.ts.
 const REPO_ROOT = resolve(process.env.VIBESQUAD_ROOT || (typeof import.meta.dirname === "string" ? join(import.meta.dirname, "..") : join(homedir(), "projects", "VibeSquad")));
 
 export const LEAD_FLAG_DEFAULT = 150_000;

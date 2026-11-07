@@ -2183,8 +2183,6 @@ function vsImportClosure(repoRoot) {
   walk("cli/vs.mjs");
   // The MCP server is spawned by path (not imported) and loads these lazily.
   for (const entry of ["server/mcp/server.mjs", "server/backend/index.mjs"]) walk(entry);
-  // server/backend/runner-hooks.mjs imports the plugin (a .ts file, run by Node's built-in type stripping) lazily.
-  if (seen.has("plugin/index.server.ts")) seen.add("plugin/package.json");
   return [...seen];
 }
 

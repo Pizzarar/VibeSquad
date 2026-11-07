@@ -1,4 +1,4 @@
-// Hosts the Paseo plugin's hook closure (plugin/index.server.ts) for runner agents (docs/lanes/runner-pilot/B11-hook-inventory.md).
+// Hosts the Paseo plugin's hook closure (server/hooks/agent-duties.ts) for runner agents (docs/lanes/runner-pilot/B11-hook-inventory.md).
 // The plugin is written against a tiny duck-typed server (`before` / `on`) and a `paseo` facade; this module provides both,
 // backed by a RunnerBackend, so prompt layering, labelling, digests, wakeups and lead handoff run the SAME code for rn-* agents.
 // Paseo agents keep getting the plugin from the Paseo daemon only; this host is only ever fed runner events, so nothing double-fires.
@@ -6,7 +6,7 @@
 const GENERIC = new Set(["agent.create", "agent.created", "agent.turn_started", "agent.turn_ended", "send_agent_prompt", "agent.send"]);
 
 let pluginModule;
-const loadPlugin = () => (pluginModule ??= import("../../plugin/index.server.ts"));
+const loadPlugin = () => (pluginModule ??= import("../hooks/agent-duties.ts"));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const NOT_FINISHED_AFTER_MS = 60_000;

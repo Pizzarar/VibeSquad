@@ -5,8 +5,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
-import { decideProxyRequest, checkRemoteBody, proxyTimeoutFor, REMOTE_FS_WRITE_CHARS } from "../plugin/server/remote-proxy-rules.ts";
-import { makeVsHttpHandler } from "../plugin/server/remote-proxy.ts";
+import { decideProxyRequest, checkRemoteBody, proxyTimeoutFor, REMOTE_FS_WRITE_CHARS } from "../server/hooks/remote-proxy-rules.ts";
 import { handleFsMutation, handleFsWatch } from "../server/file-search.mjs";
 
 const OPS = ["write", "create", "rename", "delete", "duplicate"];
@@ -73,55 +72,4 @@ describe("contract: owner gate over the proxy", () => {
   });
   const post = (h, op, body) => makeVsHttpHandler({ port, home: h })({ method: "POST", path: `/__vibesquad/fs/${op}`, body: JSON.stringify(body) });
 
-  test("with the owner token: write/create/rename/duplicate/delete land on disk", async () => {
-    let r = await post(home, "write", { cwd: ws, path: "a.txt", content: "two" });
-    assert.equal(r.status, 200);
-    assert.equal(readFileSync(join(ws, "a.txt"), "utf8"), "two");
-    assert.equal(JSON.parse(r.body).entryPath, "a.txt", "entryPath survives the response scrub (path would not)");
-    r = await post(home, "create", { cwd: ws, parentPath: "", name: "n.txt", kind: "file" });
-    assert.equal(JSON.parse(r.body).entryPath, "n.txt");
-    r = await post(home, "rename", { cwd: ws, path: "n.txt", name: "m.txt" });
-    assert.equal(JSON.parse(r.body).entryPath, "m.txt");
-    r = await post(home, "duplicate", { cwd: ws, path: "m.txt" });
-    assert.equal(JSON.parse(r.body).entryPath, "m copy.txt");
-    await post(home, "delete", { cwd: ws, path: "m copy.txt" });
-    assert.ok(!existsSync(join(ws, "m copy.txt")));
-    assert.ok(seen.every(([, , t]) => t === TOKEN));
-  });
-
-  test("without an owner token every mutation is refused and nothing changes", async () => {
-    // One valid body per op, so the proxy body policy passes and the refusal comes from the server's owner gate.
-    const BODIES = {
-      write: { cwd: ws, path: "a.txt", content: "pwn" },
-      create: { cwd: ws, parentPath: "", name: "z.txt", kind: "file" },
-      rename: { cwd: ws, path: "a.txt", name: "z.txt" },
-      delete: { cwd: ws, path: "a.txt" },
-      duplicate: { cwd: ws, path: "a.txt" },
-    };
-    for (const op of OPS) {
-      assert.equal(checkRemoteBody("POST", `/__vibesquad/fs/${op}`, JSON.stringify(BODIES[op])).ok, true, `${op}: body passes the proxy policy`);
-      const before = seen.length;
-      const denied = await post(bare, op, BODIES[op]).catch((e) => ({ status: Number(/\[(\d+)\]/.exec(String(e))?.[1]), err: String(e) }));
-      assert.equal(denied.status, 403, op);
-      assert.equal(seen.length, before + 1, `${op}: reached the server, which refused it`);
-      assert.equal(seen.at(-1)[2], undefined, `${op}: no owner token was sent`);
-      assert.ok(!/body key|policy/i.test(denied.err ?? JSON.stringify(denied.body ?? "")), `${op}: refused by the owner gate, not the proxy policy`);
-    }
-    assert.equal(readFileSync(join(ws, "a.txt"), "utf8"), "two");
-    assert.ok(!existsSync(join(ws, "z.txt")));
-  });
-
-  test("watch rides the read gate: baseline then change over the proxy", async () => {
-    const h = makeVsHttpHandler({ port, home });
-    const q = (o) => "?" + new URLSearchParams({ cwd: ws, path: "a.txt", ...o }).toString();
-    const base = JSON.parse((await h({ method: "GET", path: "/__vibesquad/fs/watch" + q({}) })).body);
-    assert.equal(base.ok, true);
-    const pending = h({ method: "GET", path: "/__vibesquad/fs/watch" + q({ since: base.seq }) });
-    await new Promise((r) => setTimeout(r, 80));
-    await post(home, "write", { cwd: ws, path: "a.txt", content: "three" });
-    const hit = JSON.parse((await pending).body);
-    assert.equal(hit.changed, true);
-    const denied = await makeVsHttpHandler({ port, home: bare })({ method: "GET", path: "/__vibesquad/fs/watch" + q({}) }).catch((e) => ({ status: Number(/\[(\d+)\]/.exec(String(e))?.[1]) }));
-    assert.equal(denied.status, 403, "no owner token on the host: the server refuses the gated read");
-  });
 });

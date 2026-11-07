@@ -25,7 +25,7 @@ test("lead, brainstorm and worker prompt text names only vs / VS MCP tools", () 
     brainstorm: flat(BRAINSTORM_NOTE_BODY),
     lessons: flat(STANDING_RULES),
     pack: notes.join("\n"),
-    plugin: readFileSync(resolve(ROOT, "plugin/index.server.ts"), "utf8"),
+    plugin: readFileSync(resolve(ROOT, "server/hooks/agent-duties.ts"), "utf8"),
     ui: readFileSync(resolve(ROOT, "src/profiles.ts"), "utf8"),
     brainstormSrc: readFileSync(resolve(ROOT, "server/brainstorm.mjs"), "utf8"),
   };

@@ -1,6 +1,6 @@
 # Role packs
 
-The VibeSquad server plugin (`plugin/index.ts`) adds a small, fixed prompt prefix to every new agent so workers never pay for lead-only rules and prompt caches keep hitting.
+The VibeSquad server plugin (`server/hooks/agent-duties.ts`) adds a small, fixed prompt prefix to every new agent so workers never pay for lead-only rules and prompt caches keep hitting.
 
 ## Layer order (fixed, no timestamps or per-spawn values)
 
@@ -36,4 +36,4 @@ Each start logs a `metric` entry: `prompt-injection role=<role> provider=<prov> 
 
 ## Editing a pack
 
-Lead pack: edit the project's `docs/LEAD_RULES.md`. Worker and brainstorm packs live in `plugin/index.ts` (`WORKER_PACK`, `BRAINSTORM_PACK`). Keep them short; every character is paid on every start.
+Lead pack: edit the project's `docs/LEAD_RULES.md`. Worker and brainstorm packs live in `server/hooks/agent-duties.ts` (`WORKER_PACK`, `BRAINSTORM_PACK`). Keep them short; every character is paid on every start.

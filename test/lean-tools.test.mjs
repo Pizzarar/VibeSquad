@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { LEAN_ARGS, LEAN_DENY, leanApplies, leanProviderOptions } from "../server/lean-tools.mjs";
-import { createPlugin } from "../plugin/index.server.ts";
+import { createPlugin } from "../server/hooks/agent-duties.ts";
 
 test("leanApplies: claude only, VS_LEAN=off opts out, provider/model string handled", () => {
   assert.equal(leanApplies("claude", {}), true);

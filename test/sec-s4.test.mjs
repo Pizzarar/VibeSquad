@@ -21,8 +21,7 @@ const inbox = await import("../server/inbox.mjs");
 const { performLeadHandoffHttp } = await import("../server/lead-handoff.mjs");
 const { buildBrainstormInitialPrompt, performBrainstormRestart } = await import("../server/brainstorm.mjs");
 const guards = await import("../server/write-guards.mjs");
-const rules = await import("../plugin/server/remote-proxy-rules.ts");
-const { makeVsHttpHandler } = await import("../plugin/server/remote-proxy.ts");
+const rules = await import("../server/hooks/remote-proxy-rules.ts");
 after(() => {
   rmSync(home, { recursive: true, force: true });
   rmSync(paseoHome, { recursive: true, force: true });
@@ -378,19 +377,4 @@ describe("S4-6: the R2 body-key allowlist is enforced in code", () => {
     }
   });
 
-  test("vs.http refuses a bad body before any fetch, even with the write allowlisted", async () => {
-    const h = tmp("vs-s4-gate-");
-    writeFileSync(join(h, "settings.json"), JSON.stringify({ remote: { enabled: true } }));
-    try {
-      let fetched = 0;
-      const vs = makeVsHttpHandler({ home: h, allow: { [P]: ["POST"], "/__vibesquad/settings": ["POST"] }, fetch: async () => (fetched++, new Response("{}")) });
-      await assert.rejects(vs({ method: "POST", path: P, body: '{"cardId":"1","cwd":"C:/"}' }), /body key not allowed remotely: cwd/);
-      await assert.rejects(vs({ method: "POST", path: "/__vibesquad/settings", body: "{}" }), /no remote body policy/);
-      assert.equal(fetched, 0);
-      await vs({ method: "POST", path: P, body: '{"cardId":"1"}' });
-      assert.equal(fetched, 1);
-    } finally {
-      rmSync(h, { recursive: true, force: true });
-    }
-  });
 });

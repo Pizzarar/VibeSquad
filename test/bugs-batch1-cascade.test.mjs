@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createPlugin } from "../plugin/index.server.ts";
+import { createPlugin } from "../server/hooks/agent-duties.ts";
 import { archiveBuddyKeepingChildren, performBrainstormRestart, resetBrainstormRestartState } from "../server/brainstorm.mjs";
 import { detachLiveChildren, PARENT_LABEL } from "../server/detach-children.mjs";
 
@@ -190,7 +190,7 @@ function fakePaseo(list) {
   };
 }
 
-test("plugin agent.created: a lead spawned by a Buddy is detached at once", () =>
+test("plugin agent.created: a lead spawned by a Buddy is NOT detached (row 13 dropped)", () =>
   withHome(async () => {
     const h = pluginHarness();
     createPlugin({ startWatcher: false, setLabels: async () => {}, archiveAgent: async () => {} })(h.server);
@@ -201,11 +201,12 @@ test("plugin agent.created: a lead spawned by a Buddy is detached at once", () =
     ]);
     const created = h.handlers.get("agent.created");
     await created({ agent: { ...p.agents.get("lead9") } }, { paseo: p.api });
-    assert.deepEqual(p.calls.detach, ["lead9"]);
-    assert.equal(p.agents.get("lead9").labels[PARENT_LABEL], undefined);
+    // Row 13 dropped (RH1): runner agents are independent processes, nothing detaches a new lead.
+    assert.deepEqual(p.calls.detach, []);
+    assert.equal(p.agents.get("lead9").labels[PARENT_LABEL], "bs");
     // Workers are not leads: they stay chained to their lead.
     await created({ agent: { ...p.agents.get("wk") } }, { paseo: p.api });
-    assert.deepEqual(p.calls.detach, ["lead9"]);
+    assert.deepEqual(p.calls.detach, []);
   }));
 
 // ---- block 0b: a Buddy for lane bug-chaser gets docs/brainstorm/bug-chaser.md, not vibesquad.md ----

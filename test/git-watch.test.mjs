@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import { gitWatch, startSignaturePoll, _gitWatcherCount, worktreeEventRelevant, gitDirEventRelevant } from "../server/git-watch.mjs";
 import { handleGitApi } from "../server/git-api.mjs";
-import { decideProxyRequest, proxyTimeoutFor } from "../plugin/server/remote-proxy-rules.ts";
+import { decideProxyRequest, proxyTimeoutFor } from "../server/hooks/remote-proxy-rules.ts";
 
 const git = (cwd, ...a) => execFileSync("git", a, { cwd, stdio: "pipe", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

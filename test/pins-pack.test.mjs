@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { BRAINSTORM_PACK, LEAD_FALLBACK_PACK } from "../plugin/index.server.ts";
+import { BRAINSTORM_PACK, LEAD_FALLBACK_PACK } from "../server/hooks/agent-duties.ts";
 import {
   buildBrainstormInitialPrompt,
   performBrainstormRestart,

@@ -1,5 +1,5 @@
 // Server-side context watcher for runner agents (PLAN_PLUGIN_DUTIES_PORT T1). The same duty the Paseo plugin ran in
-// plugin/index.server.ts (lead 150k nudge / 300k successor, Buddy warn / hard-limit retire), now driven by the runner's
+// server/hooks/agent-duties.ts (lead 150k nudge / 300k successor, Buddy warn / hard-limit retire), now driven by the runner's
 // usage-bearing "agent" upserts. Idempotent through labels, so a server restart or an event replay never repeats a send.
 import { effectiveAgentRole } from "./identity.mjs";
 import { sharedRunnerBackend } from "./backend/index.mjs";

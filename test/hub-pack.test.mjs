@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { BRAINSTORM_PACK, HUB_BUDDY_RULES, VIBE_MODE_BUDDY_RULES, createPlugin, injectedPrefix, isHubCwd, rolePack } from "../plugin/index.server.ts";
+import { BRAINSTORM_PACK, HUB_BUDDY_RULES, VIBE_MODE_BUDDY_RULES, createPlugin, injectedPrefix, isHubCwd, rolePack } from "../server/hooks/agent-duties.ts";
 import { buildBrainstormInitialPrompt } from "../server/brainstorm.mjs";
 import { BRAINSTORM_NOTE_BODY } from "../server/profiles.mjs";
 

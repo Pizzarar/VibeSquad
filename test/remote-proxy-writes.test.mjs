@@ -24,8 +24,7 @@ import {
   pinTeamsRegistry,
   redactBody,
   scrubResponseBody,
-} from "../plugin/server/remote-proxy-rules.ts";
-import { makeVsHttpHandler } from "../plugin/server/remote-proxy.ts";
+} from "../server/hooks/remote-proxy-rules.ts";
 
 // Mock-Paseo-daemon tests: the runner has a single owner and is never lazily started, so pin every lane to Paseo (as 35e895e did for 11 other suites).
 process.env.VS_DEFAULT_BACKEND = "paseo";
@@ -102,57 +101,6 @@ describe("1. Spawn endpoints: open-topic stays closed; Buddy start/restart and h
     assert.equal(checkRemoteRegistry("/__vibesquad/handoff", { team: "sq", lane: "ghost" }, disk).status, 403);
   });
 
-  test("forwarded through makeVsHttpHandler; refusals and the 6th call per minute never reach the server", async () => {
-    const h = mkdtempSync(join(tmpdir(), "vs-remote-spawn-"));
-    writeFileSync(join(h, "local-token"), "c".repeat(64));
-    writeFileSync(join(h, "settings.json"), JSON.stringify({ userName: "Owner", remote: { enabled: true } }));
-    const forwarded = [];
-    const srv = createServer((req, res) => {
-      res.setHeader("content-type", "application/json");
-      if (req.url === "/api/teams" && req.method === "GET") return res.end(JSON.stringify({ ...disk, revision: "r1" }));
-      let data = "";
-      req.on("data", (c) => (data += c));
-      req.on("end", () => {
-        forwarded.push({ method: req.method, url: req.url, body: data });
-        if (req.url === "/__vibesquad/handoff") {
-          res.statusCode = 202;
-          return res.end(JSON.stringify({ exists: false, path: "C:\\Users\\Owner\\.vibesquad\\teams\\sq\\packet-lane1.md", accepted: true, running: true }));
-        }
-        res.end(JSON.stringify({ ok: true, newAgentId: "bs-2" }));
-      });
-    });
-    await new Promise((r) => srv.listen(0, "127.0.0.1", r));
-    const port = srv.address().port;
-    try {
-      const handler = makeVsHttpHandler({ port, home: h });
-      for (const [p, body] of OK_BODIES) {
-        const out = await handler({ method: "POST", path: p, body: JSON.stringify(body) });
-        assert.ok(out.status === 200 || out.status === 202, `${p}: ${out.status}`);
-        assert.deepEqual(JSON.parse(forwarded.at(-1).body), body, p);
-      }
-      const hand = await handler({ method: "POST", path: "/__vibesquad/handoff", body: JSON.stringify(OK_BODIES[2][1]) });
-      assert.equal(hand.status, 202);
-      assert.deepEqual(JSON.parse(hand.body), { exists: false, accepted: true, running: true }, "path is scrubbed remotely");
-
-      const n = forwarded.length;
-      const BR = "/__vibesquad/brainstorm-restart";
-      await assert.rejects(handler({ method: "POST", path: BR, body: JSON.stringify({ laneId: "lane1", profile: "Evil" }) }), /body key not allowed remotely: profile \[403\]/);
-      await assert.rejects(handler({ method: "POST", path: BR, body: JSON.stringify({ laneId: "lane1", cwd: "C:/" }) }), /\[403\]/);
-      await assert.rejects(handler({ method: "POST", path: BR, body: JSON.stringify({ teamId: "sq", laneId: "ghost" }) }), /\[403\]/);
-      assert.equal(forwarded.length, n, "refused bodies are not forwarded");
-
-      // Refused calls spend a slot too, so the 5/min endpoint budget is checked on a fresh handler.
-      const fresh = makeVsHttpHandler({ port, home: h });
-      const before = forwarded.length;
-      for (let i = 0; i < 5; i++) await fresh({ method: "POST", path: BR, body: JSON.stringify(OK_BODIES[0][1]) });
-      await assert.rejects(fresh({ method: "POST", path: BR, body: JSON.stringify(OK_BODIES[0][1]) }), /rate limited.*\[429\]/);
-      assert.equal(forwarded.length - before, 5);
-    } finally {
-      srv.closeAllConnections?.();
-      await new Promise((r) => srv.close(r));
-      rmSync(h, { recursive: true, force: true });
-    }
-  });
 });
 
 describe("2 & 3. PINNED_TEAM_KEYS (vibeMode) and hardened pinTeamsRegistry", () => {
@@ -636,85 +584,6 @@ describe("6 & 7. Per-endpoint write rate limits and response/error path scrubbin
     assert.equal(limiter.check("POST", "/__vibesquad/log").ok, true);
   });
 
-  test("scrubResponseBody strips path and teamLogPath on writes and scrubs >= 400 error bodies", async () => {
-    const h = mkdtempSync(join(tmpdir(), "vs-remote-writes-"));
-    const token = "b".repeat(64);
-    writeFileSync(join(h, "local-token"), token);
-    writeFileSync(join(h, "settings.json"), JSON.stringify({ userName: "Owner", remote: { enabled: true } }));
-
-    const srv = createServer((req, res) => {
-      res.setHeader("content-type", "application/json");
-      if (req.url === "/api/teams" && req.method === "GET") {
-        return res.end(JSON.stringify({ teams: [{ id: "sq", name: "Squad", lanes: [{ id: "l1", name: "L1" }] }], revision: "r1" }));
-      }
-      if (req.url === "/__vibesquad/vs-log") {
-        return res.end(
-          JSON.stringify({
-            ok: true,
-            path: "C:\\Users\\Owner\\.vibesquad\\logs\\sq--l1.jsonl",
-            teamLogPath: "C:\\Users\\Owner\\proj\\.vibesquad\\log.jsonl",
-          }),
-        );
-      }
-      res.statusCode = 500;
-      res.end(
-        JSON.stringify({
-          ok: false,
-          error: "Failed at /Users/owner/secret/server.js",
-          path: "/Users/owner/secret/server.js",
-          cwd: "/Users/owner/secret",
-          worktree: "/Users/owner/wt",
-          stack: "Error: Failed\n    at /Users/owner/secret/server.js:10:2",
-        }),
-      );
-    });
-    await new Promise((r) => srv.listen(0, "127.0.0.1", r));
-    const port = srv.address().port;
-    try {
-      const handler = makeVsHttpHandler({ port, home: h });
-      const okRes = await handler({
-        method: "POST",
-        path: "/__vibesquad/vs-log",
-        body: JSON.stringify({ teamId: "sq", laneId: "l1", text: "hello" }),
-      });
-      assert.equal(okRes.status, 200);
-      assert.deepEqual(JSON.parse(okRes.body), { ok: true });
-
-      const errRes = await handler({
-        method: "POST",
-        path: "/__vibesquad/inbox",
-        body: JSON.stringify({ teamId: "sq", laneId: "l1", text: "idea" }),
-      });
-      assert.equal(errRes.status, 500);
-      assert.deepEqual(JSON.parse(errRes.body), {
-        ok: false,
-        error: "Failed at [redacted-path]",
-      });
-
-      // Non-object JSON >= 400 error bodies (string and array) are also scrubbed
-      assert.equal(
-        JSON.parse(scrubResponseBody("/__vibesquad/inbox", JSON.stringify("Failed at /Users/owner/secret/server.js"), 500)),
-        "Failed at [redacted-path]",
-      );
-      assert.deepEqual(
-        JSON.parse(
-          scrubResponseBody(
-            "/__vibesquad/inbox",
-            JSON.stringify([
-              "Error in C:\\Users\\Owner\\secret\\file.ts",
-              { msg: "at /home/owner/app/index.js", path: "/home/owner/app/index.js", stack: "trace" },
-            ]),
-            400,
-          ),
-        ),
-        ["Error in [redacted-path]", { msg: "at [redacted-path]" }],
-      );
-    } finally {
-      srv.closeAllConnections?.();
-      await new Promise((r) => srv.close(r));
-      rmSync(h, { recursive: true, force: true });
-    }
-  });
 });
 
 describe("Block 4 server side: lane lastProfile, spawn budget, async handoff", () => {

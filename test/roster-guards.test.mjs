@@ -8,8 +8,7 @@ import {
   WORKER_PACK,
   createPlugin,
   deriveTeamForSpawn,
-  sanitizeLegacyRosterPrompt,
-} from "../plugin/index.server.ts";
+} from "../server/hooks/agent-duties.ts";
 import {
   findExistingLaneBrainstorm,
   performBrainstormRestart,

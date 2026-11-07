@@ -23,7 +23,7 @@ const { createServer, writeDiscovery } = await import('../runner/server.mjs');
 const { RunnerClient } = await import('../server/backend/runner-client.mjs');
 const { RunnerBackend } = await import('../server/backend/runner-backend.mjs');
 const { startRunnerLifecycle, stopRunnerLifecycle } = await import('../server/backend/runner-lifecycle.mjs');
-const { createPlugin } = await import('../plugin/index.server.ts');
+const { createPlugin } = await import('../server/hooks/agent-duties.ts');
 
 const until = async (fn, ms = 6000, what = 'condition') => {
   const end = Date.now() + ms;
@@ -295,7 +295,7 @@ test('ACP-style failure before the first "running" still ends the turn as failed
 });
 
 test('profile ids and names both resolve explicitly; spawn_worker labels carry the name', async () => {
-  const { matchStoredProfile, loadStoredProfiles } = await import('../plugin/index.server.ts');
+  const { matchStoredProfile, loadStoredProfiles } = await import('../server/hooks/agent-duties.ts');
   const p = loadStoredProfiles().find((x) => x.id);
   assert.ok(p, 'a stored/default profile with an id exists');
   assert.equal(matchStoredProfile(p.name)?.explicit, true);
@@ -332,11 +332,11 @@ test('created agents carry thinkingOptionId/featureValues and a spawn-configured
   }
 });
 
-test('vs shim runtime closure carries the plugin (.ts), its package.json and the runner alias table', async () => {
+test('vs shim runtime closure carries the agent-duties hook module (.ts) and the runner alias table', async () => {
   const { installVsShim } = await import('../cli/vs.mjs');
   const base = tmp();
   installVsShim({ binDirs: [path.join(base, 'bin')], baseHome: base });
-  for (const rel of ['plugin/index.server.ts', 'plugin/package.json', 'plugin/server/remote-proxy.ts', 'runner/adapters/acp.mjs', 'server/backend/runner-hooks.mjs', 'server/lead-handoff.mjs', 'server/lean-tools.mjs']) {
+  for (const rel of ['server/hooks/agent-duties.ts', 'runner/adapters/acp.mjs', 'server/backend/runner-hooks.mjs', 'server/lead-handoff.mjs', 'server/lean-tools.mjs']) {
     assert.ok(existsSync(path.join(base, 'runtime', rel)), `${rel} copied into the runtime`);
   }
 });

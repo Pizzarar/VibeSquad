@@ -466,7 +466,7 @@ export async function sharedSchedules() {
     const { sharedRunnerBackend } = await import("./backend/index.mjs");
     shared = createSchedulesStore({
       backend: sharedRunnerBackend(),
-      resolveIdentity: async (cwd) => (await import("../plugin/index.server.ts")).resolveByCwd(cwd),
+      resolveIdentity: async (cwd) => (await import("../server/hooks/agent-duties.ts")).resolveByCwd(cwd),
     });
   }
   return shared;

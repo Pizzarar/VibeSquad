@@ -27,7 +27,7 @@ const { applyDaemonClientPassword, fetchLocalDaemonPassword } = await import("..
 const { getLocalToken, HOME_SECRET_FILES, resetLocalTokenForTest } = await import("../server/auth.mjs");
 const { inspectFirstRunStatus } = await import("../server/first-run.mjs");
 const { createVibesquadMiddleware, isGatedRead, stopPushWatcher } = await import("../server/vibesquad-api.mjs");
-const { isBlockedPath } = await import("../plugin/server/remote-proxy-rules.ts");
+const { isBlockedPath } = await import("../server/hooks/remote-proxy-rules.ts");
 
 const root = resolve(import.meta.dirname, "..");
 

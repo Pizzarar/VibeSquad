@@ -38,7 +38,7 @@ test("Squads Home is carried in the URL (?view=squads) so a reconnect restores i
 });
 
 test("lead role pack tells leads to restart the server only when needed and log it", () => {
-  assert.match(src("plugin/index.server.ts"), /Restart the VibeSquad server only when a merged change needs it, and log it/);
+  assert.match(src("server/hooks/agent-duties.ts"), /Restart the VibeSquad server only when a merged change needs it, and log it/);
 });
 
 test("useDraft persists composer drafts per agent in localStorage", () => {

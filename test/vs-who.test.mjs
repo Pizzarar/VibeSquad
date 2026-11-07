@@ -10,7 +10,7 @@ import {
   LEAD_FALLBACK_PACK,
   createPlugin,
   inspectGitSpawnState,
-} from "../plugin/index.server.ts";
+} from "../server/hooks/agent-duties.ts";
 import { DEFAULT_PROFILES, SHARED_NOTE_PREFIX, seedDefaultPack } from "../server/profiles.mjs";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
@@ -256,7 +256,7 @@ test("Done-when #2: vs who lead handles NONE (exit 1) and CONFLICT (exit 2), and
 
 test("Done-when #3 & Audit §2 + §3A: 0 hits for paseo ls -g, prior-art check rule and R1/R3/R4/R6/R2-R7 guardrails present", () => {
   const filesToCheck = [
-    "plugin/index.server.ts",
+    "server/hooks/agent-duties.ts",
     "server/profiles.mjs",
     "src/profiles.ts",
     "docs/profiles/DEFAULT_PACK.md",
