@@ -132,7 +132,7 @@ export function RunnerUsageHeaderChip({ onOpenSettings }: { onOpenSettings?: () 
       style={{ display: "inline-flex", alignItems: "center", gap: 8 }}
     >
       {rows.slice(0, 3).map((r) => (
-        <span key={r.provider} style={{ color: "#00f0ff", fontWeight: 700 }}>
+        <span key={r.provider} style={{ color: "var(--cyan-t)", fontWeight: 700 }}>
           {r.provider}: ${r.costUsd.toFixed(2)}
         </span>
       ))}

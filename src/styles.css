@@ -4574,9 +4574,9 @@ button.project-file-name:hover { text-decoration: underline; }
   width: 18px;
   height: 18px;
   padding: 0;
-  border: 1px solid var(--hot-pink);
-  background: var(--hot-pink);
-  color: #05060d;
+  border: 1px solid var(--pink-fill);
+  background: var(--pink-fill);
+  color: var(--bg);
   font-family: var(--arcade);
   font-weight: 700;
   cursor: pointer;
