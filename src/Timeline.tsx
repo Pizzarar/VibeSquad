@@ -524,7 +524,7 @@ function DiffView({ diff }: { diff: string }) {
   return (
     <pre className="tl-diff">
       {diff.split("\n").map((line, i) => {
-        const color = line.startsWith("+") ? "var(--emerald)" : line.startsWith("-") ? "var(--hot-pink)" : undefined;
+        const color = line.startsWith("+") ? "var(--mint-t)" : line.startsWith("-") ? "var(--pink-t)" : undefined;
         return <div key={i} style={{ color }}>{line}</div>;
       })}
     </pre>
@@ -546,7 +546,7 @@ function ToolDetail({ it, d }: { it: any; d: any }) {
           <div>
             <span
               className="tl-exit-badge"
-              style={{ background: d.exitCode === 0 ? "var(--emerald)" : "var(--hot-pink)", color: "#fff", padding: "1px 6px", borderRadius: 3 }}
+              style={{ background: d.exitCode === 0 ? "var(--mint-fill)" : "var(--pink-fill)", color: "var(--bg)", padding: "1px 6px", borderRadius: 3 }}
             >
               exit {d.exitCode}
             </span>

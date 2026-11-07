@@ -889,7 +889,7 @@ export function TeamSettingsModal({
             {
               id: `team-${teams.length + 1}`,
               name: "New Team",
-              color: "var(--cyan-t)",
+              color: "#00f0ff",
               brainstormWarnTokens: BRAINSTORM_WARN_DEFAULT,
               brainstormRestartTokens: BRAINSTORM_RESTART_DEFAULT,
               leadFlagTokens: LEAD_FLAG_DEFAULT,

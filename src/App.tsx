@@ -1896,7 +1896,7 @@ export function App() {
             type="button"
             className="btn small"
             data-testid="update-restart-btn"
-            style={{ background: "var(--well)", color: "var(--cyan-t)", borderColor: "#05060d" }}
+            style={{ background: "var(--well)", color: "var(--cyan-t)", borderColor: "var(--well)" }}
             onClick={() => void triggerUpdateInstall()}
           >
             {isAndroidUserAgent() ? "Download Update" : "Restart & Update"}

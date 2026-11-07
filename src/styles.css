@@ -212,7 +212,7 @@ code {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  background: linear-gradient(180deg, rgba(16, 14, 36, 0.95) 0%, var(--well) 100%);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 95%, transparent) 0%, var(--well) 100%);
 }
 
 .sidebar-signals-toggle {
@@ -257,7 +257,7 @@ code {
   font-family: var(--arcade);
   font-size: 15px;
   color: var(--cyan-t);
-  text-shadow: 0 0 10px var(--cyan-dim), 2px 2px 0 #000;
+  text-shadow: 0 0 10px var(--cyan-dim), 2px 2px 0 var(--well);
   letter-spacing: 1px;
 }
 
@@ -582,7 +582,7 @@ code {
   align-items: center;
   gap: 12px;
   color: var(--text);
-  text-shadow: 0 0 14px var(--cyan-dim), 2px 2px 0 #000;
+  text-shadow: 0 0 14px var(--cyan-dim), 2px 2px 0 var(--well);
 }
 
 .h1-stats {
@@ -3965,7 +3965,7 @@ html, body, #root { overflow-x: hidden; }
 
 /* drop-to-attach */
 .drawer { position: relative; }
-.drop-overlay { position: absolute; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; pointer-events: none; font-size: 1.2em; color: var(--cyan-t); background: rgba(8, 18, 26, 0.82); border: 2px dashed var(--cyan); }
+.drop-overlay { position: absolute; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; pointer-events: none; font-size: 1.2em; color: var(--cyan-t); background: color-mix(in srgb, var(--well) 82%, transparent); border: 2px dashed var(--cyan); }
 .file-chip { display: inline-flex; align-items: center; gap: 4px; }
 .file-chip-size { opacity: 0.6; font-size: 0.85em; }
 .tl-file-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
