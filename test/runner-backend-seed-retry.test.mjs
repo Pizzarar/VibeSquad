@@ -98,3 +98,33 @@ test('seedRoster succeeds while a listener retry is pending: one roster + connec
   assert.ok(kinds.lastIndexOf('disconnected') < kinds.indexOf('connected'), 'no disconnected after connected');
   off();
 });
+
+test('retry attempts and the final success are logged once each with elapsed ms + attempt (server log + team-log metric sink)', async () => {
+  const b = make(2);
+  const lines = [];
+  b.seedLog = (msg) => lines.push(msg);
+  const kinds = [];
+  const off = b.subscribeEvents((ev) => kinds.push(ev.kind));
+  await until(() => kinds.includes('connected'));
+  await sleep(100);
+  const retries = lines.filter((l) => /seed retry/.test(l));
+  const ok = lines.filter((l) => /seed recovered/.test(l));
+  assert.equal(retries.length, 2, `one line per retry attempt: ${JSON.stringify(lines)}`);
+  assert.match(retries[0], /attempt=1 elapsed=\d+ms/);
+  assert.match(retries[1], /attempt=2 elapsed=\d+ms/);
+  assert.equal(ok.length, 1, 'one success line');
+  assert.match(ok[0], /attempts=3 elapsed=\d+ms/);
+  assert.equal(lines.length, 3, 'nothing else (no per-heartbeat lines)');
+  off();
+});
+
+test('no log line when the first seed succeeds', async () => {
+  const b = make(0);
+  const lines = [];
+  b.seedLog = (msg) => lines.push(msg);
+  const kinds = [];
+  const off = b.subscribeEvents((ev) => kinds.push(ev.kind));
+  await until(() => kinds.includes('connected'));
+  assert.deepEqual(lines, []);
+  off();
+});

@@ -260,9 +260,8 @@ export function reduceTurn(t, e) {
   return null;
 }
 
-/** Never silent: hooks that cannot load mean unlayered runner spawns / dead lifecycle. Say so on stderr and in the team log. */
-export function logHooksUnavailable(err) {
-  const msg = `runner hooks unavailable (${process.version}): ${err?.message ?? err}`;
+/** One stderr line plus a `metric` entry in the team log (same path the runner hook failure uses); never throws. */
+export function logRunnerMetric(msg) {
   console.error(`[vibesquad] ${msg}`);
   try {
     const base = path.resolve(process.env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad"), "teams", "_unassigned");
@@ -271,6 +270,11 @@ export function logHooksUnavailable(err) {
   } catch {
     /* the stderr line above is the fallback */
   }
+}
+
+/** Never silent: hooks that cannot load mean unlayered runner spawns / dead lifecycle. Say so on stderr and in the team log. */
+export function logHooksUnavailable(err) {
+  logRunnerMetric(`runner hooks unavailable (${process.version}): ${err?.message ?? err}`);
 }
 
 /**
@@ -702,6 +706,9 @@ export class RunnerBackend {
     }
   }
 
+  /** Sink for per-listener seed retry lines (server log + team-log metric); tests replace it. */
+  seedLog(msg) { logRunnerMetric(msg); }
+
   /** A listed agent with the in-memory "error" overlay (the runner log itself only knows running/idle). */
   overlay(agent) {
     return this.live.turn.get(agent.id)?.errored && agent.status !== "running" ? { ...agent, status: "error" } : agent;
@@ -709,7 +716,7 @@ export class RunnerBackend {
 
   /** Initial roster for one new listener (the stream's shared status map is seeded by seedRoster on open).
    *  A failed first fetch is retried for this listener alone (1s..10s backoff) until it gets roster + connected; leaving or a gen change cancels it. */
-  async seedListener(listener, gen, attempt = 0) {
+  async seedListener(listener, gen, attempt = 0, started = Date.now()) {
     let agents;
     try { agents = await bounded(this.listAgents()); } catch { agents = null; }
     if (gen !== this.live.gen || !this.listeners.has(listener) || this.live.seeded.has(listener)) return; // seedRoster may have seeded it meanwhile
@@ -720,13 +727,19 @@ export class RunnerBackend {
         listener({ kind: "connected" });
       } else listener({ kind: "disconnected" });
     } catch { /* a bad listener must not stop the chain */ }
-    if (agents) return;
+    if (agents) {
+      if (attempt > 0) this.seedLog(`seed recovered: attempts=${attempt + 1} elapsed=${Date.now() - started}ms`);
+      return;
+    }
     const base = this.live.retry.base ?? SEED_RETRY_BASE_MS; // tests shrink it
     const delay = Math.min(this.live.retry.base ? base * 8 : SEED_RETRY_MAX_MS, base * 2 ** attempt);
     clearTimeout(this.live.seedTimers.get(listener));
     const t = setTimeout(() => {
       this.live.seedTimers.delete(listener);
-      if (gen === this.live.gen && this.listeners.has(listener) && !this.live.seeded.has(listener)) this.enqueue((g) => this.seedListener(listener, g, attempt + 1));
+      if (gen === this.live.gen && this.listeners.has(listener) && !this.live.seeded.has(listener)) {
+        this.seedLog(`seed retry: attempt=${attempt + 1} elapsed=${Date.now() - started}ms`);
+        this.enqueue((g) => this.seedListener(listener, g, attempt + 1, started));
+      }
     }, delay);
     t.unref?.();
     this.live.seedTimers.set(listener, t);
