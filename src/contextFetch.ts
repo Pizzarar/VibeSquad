@@ -1,10 +1,10 @@
-// Daemon fetches behind the Composer's @git / @terminal / @chat. Each is time-boxed (CTX_TIMEOUT_MS) and
+// VS-server fetches behind the Composer's @git / @terminal / @chat. Each is time-boxed (CTX_TIMEOUT_MS) and
 // throws a short readable Error on failure, so the menu shows a failure state instead of freezing.
-import { daemonClient } from "./paseo";
 import { runnerFetchTimeline } from "./runnerBridge";
 import { DEMO } from "./demoFlag";
 import { DEMO_DIFF } from "./ChangesPanel";
 import { vsListTerminals, vsTerminalOutput } from "./vsShells";
+import { vsGitDiff } from "./vsGit";
 import {
   chatExcerpt,
   chatLabel,
@@ -28,11 +28,10 @@ async function boxed<T>(p: Promise<T>, what: string): Promise<T> {
 }
 
 export async function fetchGitContext(cwd: string, kind: "git" | "git-base"): Promise<Picked> {
-  const d: any = DEMO ? DEMO_DIFF : await boxed(daemonClient.getCheckoutDiff(cwd, { mode: kind === "git" ? "uncommitted" : "base" }), "git diff");
-  if (d?.error) throw new Error(`git diff failed: ${d.error.message ?? d.error}`);
+  const d: any = DEMO ? DEMO_DIFF : await boxed(vsGitDiff(cwd, kind === "git" ? "uncommitted" : "base"), "git diff");
   const text = diffToText(d?.files ?? []);
   if (!text) throw new Error(kind === "git" ? "no uncommitted changes" : "no changes vs the base branch");
-  return { kind, label: gitLabel(kind), text: d?.diffTooLarge ? `${text}\n[daemon marked this diff too large; showing what it returned]` : text };
+  return { kind, label: gitLabel(kind), text: d?.diffTooLarge ? `${text}\n[this diff is too large; showing the part the server returned]` : text };
 }
 
 export async function listTerminalNames(cwd: string, workspaceId: string | null): Promise<Array<{ id: string; name: string }>> {

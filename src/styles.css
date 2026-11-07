@@ -4161,6 +4161,7 @@ button.project-file-name:hover { text-decoration: underline; }
 
 .changes-history { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .changes-history-list { display: flex; flex-direction: column; gap: 4px; align-self: stretch; }
+.changes-pinned { display: flex; flex-direction: column; gap: 4px; align-self: stretch; padding: 4px 8px 8px; border: 1px solid var(--line); background: var(--navy); }
 .changes-commit-files { display: flex; flex-direction: column; gap: 4px; padding: 4px 8px 8px; border-top: 1px solid var(--line); }
 .changes-sha { flex: none; color: var(--cyan-t); font-size: 11px; }
 .changes-history-note { font-size: 11px; width: 100%; }

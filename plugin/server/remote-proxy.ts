@@ -255,7 +255,7 @@ export function makeVsHttpHandler(deps: VsHttpDeps = {}) {
     const ownerRoute = isOwnerRoute(d.pathname);
     const termRoute = isTerminalRoute(d.pathname);
     if (ownerRoute && Object.keys(vsTokenHeaders(home)).length === 0) {
-      throw new RemoteDenied(403, "terminals and scripts are owner-only (no owner token on the host)");
+      throw new RemoteDenied(403, "terminals, scripts and git are owner-only (no owner token on the host)");
     }
     if (termRoute && d.method === "POST" && d.pathname === "/__vibesquad/terminals" && remoteTerms.size >= REMOTE_MAX_TERMINALS) {
       await pruneTerminals(home, deps.port ?? Number(process.env.VIBESQUAD_PORT || 4180));

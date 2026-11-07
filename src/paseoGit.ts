@@ -1,5 +1,5 @@
-// Git history / rename / PR-detail wrappers for the Changes panel. Kept out of paseo.ts on purpose.
-import { daemonClient } from "./paseo";
+// Git history / rename / PR-detail wrappers for the Changes panel, on the VS git routes (src/vsGit.ts), not the Paseo daemon.
+import { vsGitCommits, vsGitCommitDiff, vsGitValidateBranch, vsGitRenameBranch, vsGitCheckDetails, vsGitPrTimeline, vsGitPrAutoMerge } from "./vsGit";
 
 export type CommitFile = { path: string; additions: number; deletions: number; status?: string };
 export type CommitInfo = {
@@ -14,39 +14,36 @@ export type CheckDetails = {
 };
 
 export async function listCommits(cwd: string): Promise<{ baseRef: string | null; commits: CommitInfo[] }> {
-  const r: any = await daemonClient.listCheckoutCommits(cwd);
-  return { baseRef: r.baseRef ?? null, commits: r.commits ?? [] };
+  const r = await vsGitCommits(cwd);
+  return { baseRef: r.baseRef ?? null, commits: (r.commits ?? []) as CommitInfo[] };
 }
 
 export async function commitFileDiff(cwd: string, sha: string, path: string) {
-  const r: any = await daemonClient.getCommitFileDiff(cwd, sha, path);
+  const r = await vsGitCommitDiff(cwd, sha, path);
   return r.file ?? null;
 }
 
 export async function validateBranchName(cwd: string, branchName: string): Promise<{ exists: boolean; error: string | null }> {
-  const r: any = await daemonClient.validateBranch({ cwd, branchName });
+  const r = await vsGitValidateBranch(cwd, branchName);
   return { exists: !!r.exists, error: r.error ?? null };
 }
 
 export async function renameCurrentBranch(cwd: string, branch: string): Promise<string | null> {
-  const r: any = await daemonClient.renameBranch({ cwd, branch });
-  if (!r.success) throw new Error(r.error?.message ?? "Rename failed");
+  const r = await vsGitRenameBranch(cwd, branch);
   return r.currentBranch ?? branch;
 }
 
 export async function checkDetails(cwd: string, c: { checkRunId?: number; workflowRunId?: number; repoOwner?: string; repoName?: string; changeRequestNumber?: number }): Promise<CheckDetails | null> {
-  const r: any = await daemonClient.checkoutForgeGetCheckDetails({ cwd, ...c });
-  if (!r.success) throw new Error(r.error?.message ?? "Could not load check details");
+  if (!c.checkRunId || !c.repoOwner || !c.repoName) throw new Error("This check has no details to load");
+  const r = await vsGitCheckDetails(cwd, c.repoOwner, c.repoName, c.checkRunId);
   return r.details ?? null;
 }
 
-export async function prTimeline(cwd: string, prNumber: number, repoOwner: string, repoName: string): Promise<{ items: TimelineItem[]; truncated: boolean }> {
-  const r: any = await daemonClient.pullRequestTimeline({ cwd, prNumber, repoOwner, repoName });
-  if (r.error) throw new Error(r.error.message ?? "Could not load timeline");
+export async function prTimeline(cwd: string, prNumber: number, _repoOwner?: string, _repoName?: string): Promise<{ items: TimelineItem[]; truncated: boolean }> {
+  const r = await vsGitPrTimeline(cwd, prNumber);
   return { items: r.items ?? [], truncated: !!r.truncated };
 }
 
 export async function setAutoMerge(cwd: string, enabled: boolean, method: "merge" | "squash" | "rebase" = "merge"): Promise<void> {
-  const r: any = await daemonClient.checkoutForgeSetAutoMerge(cwd, enabled ? { enabled: true, method: method as any } : { enabled: false });
-  if (r.success === false) throw new Error(r.error?.message ?? "Auto-merge failed");
+  await vsGitPrAutoMerge(cwd, enabled, method);
 }

@@ -55,13 +55,16 @@ export function terminalTail(lines: string[], n = TERMINAL_LINES): string {
 type DiffLine = { type?: string; content?: string };
 type DiffFileLike = { path: string; oldPath?: string; isNew?: boolean; isDeleted?: boolean; hunks?: Array<{ lines?: DiffLine[] }> };
 
-/** Daemon diff files → unified-diff-style text, capped at MAX_DIFF_BYTES. Empty string = no changes. */
+/** Re-adds the +/-/space the diff parser strips from add/remove/context lines (header lines and untyped lines already carry theirs). */
+const diffLinePrefix = (l: DiffLine) => (l.type === "add" ? "+" : l.type === "remove" ? "-" : l.type === "context" ? " " : "");
+
+/** Diff files (VS git route) → unified-diff-style text, capped at MAX_DIFF_BYTES. Empty string = no changes. */
 export function diffToText(files: DiffFileLike[], max = MAX_DIFF_BYTES): string {
   const out: string[] = [];
   for (const f of files) {
     out.push(`--- ${f.isNew ? "/dev/null" : `a/${f.oldPath ?? f.path}`}`);
     out.push(`+++ ${f.isDeleted ? "/dev/null" : `b/${f.path}`}`);
-    for (const h of f.hunks ?? []) for (const l of h.lines ?? []) out.push(l.content ?? "");
+    for (const h of f.hunks ?? []) for (const l of h.lines ?? []) out.push(diffLinePrefix(l) + (l.content ?? ""));
   }
   return truncateWithNote(out.join("\n"), max, "head");
 }
