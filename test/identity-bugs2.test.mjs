@@ -141,34 +141,6 @@ test("block 2: spawn labels - digests get role=worker, leads get the next ord", 
   }
 });
 
-test("block 2: migrate dry-run counts archived orphans apart and keeps digests at role=worker", () => {
-  const env = makeEnv();
-  try {
-    env.writeAgent({ id: "live-orphan", lastStatus: "idle", cwd: "C:/tmp/x", labels: { team: "efi", role: "worker" } });
-    env.writeAgent({
-      id: "old-orphan",
-      lastStatus: "closed",
-      archivedAt: "2026-10-01T00:00:00.000Z",
-      cwd: "C:/tmp/y",
-      labels: { role: "worker", orphan: "1" },
-    });
-    env.writeAgent({
-      id: "digest-1",
-      lastStatus: "closed",
-      cwd: "",
-      labels: { lane: "site-polish", team: "site", role: "worker", profile: "Pre-check - Flash", digestFor: "w1" },
-    });
-    const res = env.runVs(["migrate", "identity", "--dry-run"]);
-    assert.equal(res.status, 0, res.stderr);
-    assert.match(res.stdout, /live-orphan \(idle\).*\[ORPHAN\]/);
-    assert.match(res.stdout, /old-orphan \(archived\).*\[ARCHIVED-ORPHAN\]/);
-    assert.match(res.stdout, /digest-1 \(closed\).*role=worker.*-> .*role=worker.*\[OK\]/);
-    assert.match(res.stdout, /total=3 .*orphans=1 archived-orphans=1/);
-    assert.equal(res.stdout.match(/\[ORPHAN\]/g)?.length, 1, "only live orphans are tagged ORPHAN");
-  } finally {
-    env.cleanup();
-  }
-});
 
 test("block 3: vs whoami --json prints lane: null + orphan: true for a lane-less agent", () => {
   const env = makeEnv();

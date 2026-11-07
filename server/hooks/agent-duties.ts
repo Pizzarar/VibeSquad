@@ -54,7 +54,7 @@ type Labels = Record<string, string>;
 
 /**
  * The hook surface this module is written against. server/backend/runner-hooks.mjs provides it (backed by a
- * RunnerBackend); the Paseo daemon plugin host is gone, so this replaces the old @getpaseo/plugin/server type.
+ * RunnerBackend); the Paseo daemon plugin host is gone, so this is the in-repo server type.
  */
 export interface PluginServerContext {
   before(event: string, handler: (input: any) => any): () => void;

@@ -90,8 +90,8 @@ test("header usage chip reads runner usage and usage refetches on runner connect
   assert.match(chip, /loadRunnerUsage\(\)/);
   assert.match(src("App.tsx"), /<RunnerUsageHeaderChip/);
   const p = src("paseo.ts");
-  assert.match(p, /if \(up\) refetchProviderUsage\(\)/);
-  assert.match(p, /if \(!DEMO\) refetchProviderUsage\(\)/);
+  assert.match(p, /if \(up\) \{\s*void refetchProviderUsage\(\)/);
+  assert.match(p, /setInterval\(\(\) => void refetchProviderUsage\(\), 60_000\)/);
 });
 
 test("resume uses the resume route (unarchive only restores the record)", () => {
@@ -102,12 +102,11 @@ test("resume uses the resume route (unarchive only restores the record)", () => 
 });
 
 test("pin previews, predecessor stitch and archived list work without the Paseo socket", () => {
-  assert.match(src("PinGrid.tsx"), /isRunnerId\(agentId\) \? \(runnerHandle\(agentId\)/);
+  assert.match(src("PinGrid.tsx"), /runnerHandle\(agentId\)/);
   assert.match(src("Timeline.tsx"), /agentRef\(predecessorId\)/);
   assert.doesNotMatch(src("Timeline.tsx"), /^\s*client\.agents$/m); // the stitch no longer calls the socket directly
   const p = src("paseo.ts");
   assert.match(p, /runnerListArchived\(\)/);
-  assert.match(p, /link\.paseoConn \? client\.agents\.list/);
 });
 
 test("spawned agents are upserted before their tab opens; InlineEdit watch stops itself; dead helpers gone", () => {

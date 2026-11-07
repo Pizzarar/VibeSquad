@@ -67,7 +67,7 @@ test("performBrainstormRestart archives ghost initializing/error brainstorm agen
       ],
     ]);
     const archived = [];
-    const daemonClient = {
+    const agentClient = {
       async fetchAgents() {
         return {
           entries: [...agents.values()].filter((a) => !a.archivedAt).map((agent) => ({ agent })),
@@ -102,7 +102,7 @@ test("performBrainstormRestart archives ghost initializing/error brainstorm agen
             teamId: "vibesquad",
             laneId: "bug-chaser",
             laneName: "Bug Chaser",
-            daemonClient,
+            agentClient,
             profilesPath: env.profilesPath,
           },
           env.dir,
@@ -128,7 +128,7 @@ test("performBrainstormRestart accepts profileName for known brainstorm profiles
   resetBrainstormRestartState();
   try {
     const created = [];
-    const daemonClient = {
+    const agentClient = {
       async fetchAgents() {
         return [];
       },
@@ -150,7 +150,7 @@ test("performBrainstormRestart accepts profileName for known brainstorm profiles
         laneId: "bug-chaser",
         laneName: "Bug Chaser",
         profileName: "Brainstorm - Gemini",
-        daemonClient,
+        agentClient,
         profilesPath: env.profilesPath,
         backstopDelayMs: 60000,
       },
@@ -170,7 +170,7 @@ test("performBrainstormRestart accepts profileName for known brainstorm profiles
         laneName: "Bug Chaser",
         profileName: "Lead - Claude",
         forceNew: true,
-        daemonClient,
+        agentClient,
         profilesPath: env.profilesPath,
         backstopDelayMs: 60000,
       },

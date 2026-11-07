@@ -613,7 +613,7 @@ test("HTTP handoff with a real-shaped daemon client re-points the open workers t
     });
     const agents = new Map([oldLead, worker("w1"), worker("w2"), worker("w3", { status: "closed" })].map((a) => [a.id, a]));
     const client = fakeDaemonClient(agents, 2);
-    const res = await performLeadHandoffHttp({ trigger: "self", daemonClient: client, oldLead, baseHome: env.vsHome, profilesPath: env.profilesPath }, env.dir);
+    const res = await performLeadHandoffHttp({ trigger: "self", agentClient: client, oldLead, baseHome: env.vsHome, profilesPath: env.profilesPath }, env.dir);
     assert.ok(client.calls.fetchAgents.length >= 1, "the real list call is used");
     const succId = res?.successor?.id ?? res?.successorId ?? "succ-http";
     for (const id of ["w1", "w2"]) {
@@ -648,11 +648,11 @@ test("HTTP self-handoff without oldLead resolves Hub8 from daemon, titles succes
 
     // Simulate HTTP body after sanitizeBody strips oldLead: only { trigger: "self", lane: "vibesquad" } or { agentId }
     const [r1, r2] = await Promise.all([
-      performLeadHandoffHttp({ trigger: "self", lane: "vibesquad", daemonClient: client, baseHome: env.vsHome, profilesPath: env.profilesPath }, env.dir),
-      performLeadHandoffHttp({ trigger: "self", agentId: hub8.id, daemonClient: client, baseHome: env.vsHome, profilesPath: env.profilesPath }, env.dir),
+      performLeadHandoffHttp({ trigger: "self", lane: "vibesquad", agentClient: client, baseHome: env.vsHome, profilesPath: env.profilesPath }, env.dir),
+      performLeadHandoffHttp({ trigger: "self", agentId: hub8.id, agentClient: client, baseHome: env.vsHome, profilesPath: env.profilesPath }, env.dir),
     ]);
     const r3 = await performLeadHandoffHttp(
-      { trigger: "self", agentId: hub8.id, daemonClient: client, baseHome: env.vsHome, profilesPath: env.profilesPath },
+      { trigger: "self", agentId: hub8.id, agentClient: client, baseHome: env.vsHome, profilesPath: env.profilesPath },
       env.dir,
     );
 
@@ -699,7 +699,7 @@ test("HTTP self-handoff with slow createAgent returns 202 + handoffId quickly wi
     };
 
     const rFast = await performLeadHandoffHttp(
-      { trigger: "self", agentId: hub8.id, httpWaitMs: 20, daemonClient: slowClient, baseHome: env.vsHome, profilesPath: env.profilesPath },
+      { trigger: "self", agentId: hub8.id, httpWaitMs: 20, agentClient: slowClient, baseHome: env.vsHome, profilesPath: env.profilesPath },
       env.dir,
     );
     assert.equal(rFast.accepted, true);
@@ -709,7 +709,7 @@ test("HTTP self-handoff with slow createAgent returns 202 + handoffId quickly wi
 
     // Retry after completion resolves the same successor without spawning a second one
     const rRetry = await performLeadHandoffHttp(
-      { trigger: "self", agentId: hub8.id, daemonClient: slowClient, baseHome: env.vsHome, profilesPath: env.profilesPath },
+      { trigger: "self", agentId: hub8.id, agentClient: slowClient, baseHome: env.vsHome, profilesPath: env.profilesPath },
       env.dir,
     );
     assert.equal(rRetry.deduped, true);

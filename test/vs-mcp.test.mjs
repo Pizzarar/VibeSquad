@@ -259,12 +259,7 @@ test('spawn_worker: lead spawn refuses when the lane list cannot be verified (fa
   await assert.rejects(askLead(down.ctx), /can't verify the lane has no live lead/);
   const thrown = leadCtx({ list: async () => { throw new Error('boom'); } });
   await assert.rejects(askLead(thrown.ctx), /can't verify the lane has no live lead: boom/);
-  const partial = leadCtx({ env: { VS_PASEO_LANES: 'own' }, list: async () => ({ entries: [], paseoUnavailable: true }) });
-  await assert.rejects(askLead(partial.ctx), /can't verify the lane has no live lead: Paseo is unavailable/);
-  for (const c of [down, thrown, partial]) assert.equal(c.runnerBackend.calls.length, 0);
-  // Paseo down is fine for a runner lane (default): the runner list is complete.
-  const runnerOnly = leadCtx({ list: async () => ({ entries: [], paseoUnavailable: true }) });
-  assert.equal((await askLead(runnerOnly.ctx)).id, 'rn-new');
+  for (const c of [down, thrown]) assert.equal(c.runnerBackend.calls.length, 0);
 });
 
 test('spawn_worker: lead spawn normalizes team/lane through the registry; a mismatched label is rejected', async () => {

@@ -155,7 +155,7 @@ test(
       async cancelAgent() {},
     };
     const r = await performBrainstormRestart(
-      { reason: "start-brainstorm", mode: "quick-start", teamId: "efi", laneId: "efi-pin", profile: "Brainstorm - Claude", daemonClient: daemon, profilesPath },
+      { reason: "start-brainstorm", mode: "quick-start", teamId: "efi", laneId: "efi-pin", profile: "Brainstorm - Claude", agentClient: daemon, profilesPath },
       repo,
     );
     assert.equal(r.ok, true);

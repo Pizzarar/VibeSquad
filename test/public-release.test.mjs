@@ -95,10 +95,10 @@ describe("repo hygiene", () => {
 
 describe("third-party licenses", () => {
   const text = readFileSync(join(rootDir, "public", "THIRD-PARTY-LICENSES.txt"), "utf8").replace(/\r\n/g, "\n");
-  test("credits Paseo under Apache-2.0", () => {
-    assert.match(text, /@getpaseo\/client@[\d.]+\s+Apache-2\.0/);
-    assert.match(text, /@getpaseo\/protocol@[\d.]+\s+Apache-2\.0/);
+  test("credits Paseo under Apache-2.0 without listing a Paseo package", () => {
+    assert.match(text, /Paseo[^\n]*Apache-2\.0/);
     assert.ok(text.includes("Copyright (c) 2025-present Mohamed Boudra"));
+    assert.doesNotMatch(text, /@getpaseo\/(client|protocol)@/);
   });
   test("embeds the full Apache License 2.0 text", () => {
     assert.ok(text.includes("Apache License\n                           Version 2.0, January 2004"));
@@ -253,7 +253,7 @@ describe("request guard", () => {
 
   test("sanitizeBody-equivalent: internal keys never reach the handoff helpers", () => {
     assert.ok(api.sanitizeBody);
-    const clean = api.sanitizeBody({ baseHome: "x", oldLead: {}, oldAgent: {}, daemonClient: {}, execSpawn: 1, teamsFilePath: "y", profilesPath: "z", team: "t" });
+    const clean = api.sanitizeBody({ baseHome: "x", oldLead: {}, oldAgent: {}, agentClient: {}, execSpawn: 1, teamsFilePath: "y", profilesPath: "z", team: "t" });
     assert.deepEqual(clean, { team: "t" });
   });
 });
@@ -327,12 +327,13 @@ describe("WebSocket CSWSH upgrade guard", () => {
       req.end();
     });
 
-  test("rejects WebSocket upgrade from evil Origin with 403 (CSWSH check)", async () => {
-    assert.equal(await tryUpgrade({ Origin: "http://evil.example" }), 403);
+  // The /ws proxy to the Paseo daemon is gone: no upgrade is ever accepted, whatever the Origin or credentials.
+  test("never accepts a WebSocket upgrade from an evil Origin", async () => {
+    assert.notEqual(await tryUpgrade({ Origin: "http://evil.example" }), 101);
   });
 
-  test("rejects unauthenticated WebSocket upgrade without Origin with 403", async () => {
-    assert.equal(await tryUpgrade({}), 403);
+  test("never accepts an unauthenticated WebSocket upgrade without Origin", async () => {
+    assert.notEqual(await tryUpgrade({}), 101);
   });
 });
 

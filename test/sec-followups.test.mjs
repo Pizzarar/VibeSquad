@@ -14,8 +14,6 @@ const api = await import("../server/vibesquad-api.mjs");
 const push = await import("../server/push.mjs");
 const stale = await import("../server/stale-runtime.mjs");
 const fileSearch = await import("../server/file-search.mjs");
-const paseo = await import("../server/paseo-control.mjs");
-const firstRun = await import("../server/first-run.mjs");
 const { createMeshnetMux } = await import("../server/serve.mjs");
 after(() => rmSync(home, { recursive: true, force: true }));
 
@@ -38,50 +36,15 @@ describe("ungated side-effect GETs (read-only callers)", () => {
   let srv;
   let port;
   let token;
-  const counts = { cli: 0, listen: 0 };
   before(async () => {
     token = auth.getLocalToken();
-    const paseoHome = join(home, "paseo-home");
-    mkdirSync(paseoHome, { recursive: true });
-    const cliRunner = () => {
-      counts.cli += 1;
-      return { ok: true, code: 0, stdout: "[]", stderr: "", data: [] };
-    };
-    const isListening = async () => {
-      counts.listen += 1;
-      return false;
-    };
     srv = createServer(
-      api.createVibesquadMiddleware(rootDir, {
-        paseo: { paseoHome, cliRunner, isListening },
-        firstRun: { cli: null, isListening, probeVersions: false, listen: "127.0.0.1:1" },
-      }),
+      api.createVibesquadMiddleware(rootDir, { firstRun: { probeVersions: false } }),
     );
     await new Promise((ok) => srv.listen(0, "127.0.0.1", ok));
     port = srv.address().port;
   });
   after(() => new Promise((ok) => srv.close(ok)));
-
-  for (const [path, counter] of [
-    ["/__vibesquad/paseo/status", "cli"],
-    ["/__vibesquad/paseo/providers", "cli"],
-    ["/__vibesquad/paseo/plugins", "cli"],
-    ["/__vibesquad/paseo/usage", "cli"],
-    ["/__vibesquad/first-run/status", "listen"],
-  ]) {
-    test(`${path}: read-only callers share one run per window; the owner always runs fresh`, async () => {
-      const first = await call(port, path);
-      assert.equal(first.status, 200, first.body);
-      const afterFirst = counts[counter];
-      assert.ok(afterFirst > 0, "the first read-only call still gets real data");
-      const burst = await Promise.all(Array.from({ length: 8 }, () => call(port, path)));
-      for (const r of burst) assert.equal(r.status, 200);
-      assert.equal(counts[counter], afterFirst, "a burst of read-only GETs spawns nothing new");
-      assert.deepEqual(json(burst[0]), json(first));
-      await call(port, path, { headers: { "x-vibesquad-token": token } });
-      assert.ok(counts[counter] > afterFirst, "owner bypasses the cache");
-    });
-  }
 
   test("the cache expires, and concurrent first calls share one run", async () => {
     let t = 0;
@@ -105,23 +68,6 @@ describe("ungated side-effect GETs (read-only callers)", () => {
     cached.clear();
     await cached("k", false, run);
     assert.equal(runs, 4, "clear() drops cached results");
-  });
-
-  test("an owner write clears the cache, so read-only callers see the new state", async () => {
-    await call(port, "/__vibesquad/paseo/plugins");
-    const before = counts.cli;
-    await call(port, "/__vibesquad/paseo/plugins");
-    assert.equal(counts.cli, before);
-    await call(port, "/__vibesquad/vs-log", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
-    await call(port, "/__vibesquad/paseo/plugins");
-    assert.equal(counts.cli, before, "a refused read-only write clears nothing");
-    await call(port, "/__vibesquad/vs-log", { method: "POST", headers: { "content-type": "application/json", "x-vibesquad-token": token }, body: "{}" });
-    await call(port, "/__vibesquad/paseo/plugins");
-    assert.ok(counts.cli > before);
-  });
-
-  test("usage?refresh=1 stays gated for read-only callers", async () => {
-    assert.equal((await call(port, "/__vibesquad/paseo/usage?refresh=1")).status, 403);
   });
 
   test("health: read-only gets the cached stale value without running git or writing stale.json", async () => {
@@ -177,38 +123,6 @@ describe("confineCwd checks the roots lexically before touching the disk", () =>
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
-});
-
-describe("Paseo CLI argv", () => {
-  test("provider / plugin ids refuse a leading '-'", async () => {
-    assert.equal(paseo.PASEO_ID_RE.test("--help"), false);
-    assert.equal(paseo.PASEO_ID_RE.test("-x"), false);
-    assert.equal(paseo.PASEO_ID_RE.test("claude"), true);
-    assert.equal(paseo.PASEO_ID_RE.test("my-plugin.v2_x"), true);
-    let ran = 0;
-    const opts = { paseoHome: join(home, "paseo-home"), cliRunner: () => (ran++, { ok: true, code: 0, stdout: "", stderr: "", data: null }) };
-    await assert.rejects(paseo.getPaseoProviderDiagnostic("--help", opts), /Invalid provider id/);
-    await assert.rejects(paseo.getPaseoProviderModels("-v", opts), /Invalid provider id/);
-    await assert.rejects(paseo.togglePaseoProvider("--x", true, opts), /Invalid provider id/);
-    for (const action of ["enable", "remove", "logs"]) {
-      await assert.rejects(paseo.controlPaseoPlugin(action, { id: "--help" }, opts), /Invalid plugin id/, action);
-    }
-    assert.equal(ran, 0);
-  });
-
-  test("the cmd.exe fallback also refuses a CLI path with metacharacters", async () => {
-    const seen = [];
-    const execFile = (file, args, _o, cb) => {
-      seen.push({ file, args });
-      cb(null, "", "");
-    };
-    for (const bin of ["C:\\npm&calc\\paseo.cmd", 'C:\\a"b\\paseo.cmd', "C:\\%TEMP%\\paseo.cmd"]) {
-      const res = await paseo.runPaseoCli(["ls", "--json"], { cli: { kind: "cmd", bin }, execFile, resolveCmdShim: () => null, paseoHome: "C:\\ph" });
-      assert.equal(res.ok, false, bin);
-      assert.match(res.stderr, /metacharacters/);
-    }
-    assert.equal(seen.length, 0);
   });
 });
 
@@ -269,38 +183,5 @@ describe("review nits on 1be096a", () => {
     const code = auth.createPairCode();
     assert.equal(auth.discardPlainHttpPairCode(code, "10.2.2.2"), true, "the IP isn't throttled by empty requests");
     auth.resetPairRateLimitForTest();
-  });
-
-  test("ensurePaseoDaemon: cmd.exe fallback refuses an unsafe cli.bin; a resolved shim runs node directly", async () => {
-    const spawned = [];
-    const spawn = (file, args) => (spawned.push({ file, args }), { on() {}, unref() {}, pid: 1 });
-    const base = { isListening: async () => false, spawn, paseoHome: join(home, "paseo-home") };
-    for (const bin of ["C:/tools&calc/paseo.cmd", "C:/%TEMP%/paseo.cmd", 'C:/a"b/paseo.cmd', "C:/a|b/paseo.cmd"]) {
-      const r = await firstRun.ensurePaseoDaemon({ ...base, cli: { kind: "cmd", bin, source: "path" }, resolveCmdShim: () => null });
-      assert.equal(r.started, false, bin);
-      assert.match(r.reason, /metacharacters/);
-    }
-    assert.equal(spawned.length, 0);
-    await firstRun.ensurePaseoDaemon({ ...base, cli: { kind: "cmd", bin: "C:/tools&x/paseo.cmd", source: "path" }, resolveCmdShim: () => ({ script: "C:/tools/cli/paseo", nodeArgs: [] }) });
-    assert.equal(spawned.length, 1);
-    assert.notEqual(spawned[0].file, "cmd.exe");
-    assert.deepEqual(spawned[0].args.slice(-2), ["C:/tools/cli/paseo", "start"]);
-    await firstRun.ensurePaseoDaemon({ ...base, cli: { kind: "cmd", bin: "C:/Program Files/npm/paseo.cmd", source: "path" }, resolveCmdShim: () => null });
-    assert.equal(spawned[1].file, "cmd.exe");
-    assert.equal(spawned[1].args[3], '""C:/Program Files/npm/paseo.cmd" start"');
-  });
-
-  test("custom ACP provider ids strip every leading/trailing '-'", async () => {
-    const paseoHome = mkdtempSync(join(tmpdir(), "vs-acp-id-"));
-    try {
-      const opts = { paseoHome, cliRunner: () => ({ ok: true, code: 0, stdout: "", stderr: "", data: null }) };
-      await paseo.saveCustomAcpProvider({ id: "--foo--", command: "foo-acp --stdio" }, opts);
-      const ids = Object.keys(paseo.readRawPaseoConfig(opts).config?.agents?.providers ?? {});
-      assert.ok(ids.includes("foo"), JSON.stringify(ids));
-      assert.ok(!ids.some((id) => id.startsWith("-")), JSON.stringify(ids));
-      await assert.rejects(paseo.saveCustomAcpProvider({ id: "---", command: "x" }, opts), /Provider ID is required/);
-    } finally {
-      rmSync(paseoHome, { recursive: true, force: true });
-    }
   });
 });

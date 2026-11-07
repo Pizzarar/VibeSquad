@@ -20,7 +20,7 @@ function makeMockEnv() {
   const dir = mkdtempSync(join(tmpdir(), "vs-who-test-"));
   const vsHome = join(dir, ".vibesquad");
   const paseoHome = join(dir, ".paseo");
-  const agentsDir = join(paseoHome, "agents", "srv_test");
+  const agentsDir = join(vsHome, "runner", "agents");
   mkdirSync(agentsDir, { recursive: true });
   mkdirSync(vsHome, { recursive: true });
   seedDefaultPack(join(vsHome, "profiles.json"));
@@ -70,7 +70,15 @@ function makeMockEnv() {
         );
       },
       writeAgent(record) {
-        writeFileSync(join(agentsDir, `${record.id}.json`), JSON.stringify(record, null, 2), "utf8");
+        const ts = Date.now();
+        const { labels = {}, title, cwd, lastStatus = "idle", archivedAt } = record;
+        const evs = [
+          { seq: 0, ts, type: "created", provider: "claude", model: "m", cwd, meta: { title, labels } },
+          { seq: 1, ts, type: "status", status: lastStatus },
+          ...(record.lastUsage ? [{ seq: 2, ts, type: "usage", contextTokens: record.lastUsage.contextWindowUsedTokens }] : []),
+          ...(archivedAt ? [{ seq: 3, ts, type: "archive" }] : []),
+        ];
+        writeFileSync(join(agentsDir, `${record.id}.jsonl`), evs.map((e) => JSON.stringify(e)).join(String.fromCharCode(10)) + String.fromCharCode(10), "utf8");
       },
       runVs(args, extraEnv = {}) {
         // Hermetic: drop the caller's agent identity and live paseo CLI so a run inside an agent
@@ -97,7 +105,7 @@ test("Done-when #1: vs who lead returns only the live lead (ignoring former-lead
   const env = makeMockEnv();
   try {
     env.writeAgent({
-      id: "lead-old-1",
+      id: "rn-lead-old-1",
       title: "(old) VIBESQUAD ord0",
       lastStatus: "idle",
       cwd: REPO_ROOT,
@@ -105,7 +113,7 @@ test("Done-when #1: vs who lead returns only the live lead (ignoring former-lead
       lastUsage: { contextWindowUsedTokens: 155_000 },
     });
     env.writeAgent({
-      id: "lead-old-2",
+      id: "rn-lead-old-2",
       title: "(old) ★ VIBESQUAD ord0b",
       lastStatus: "idle",
       cwd: REPO_ROOT,
@@ -113,7 +121,7 @@ test("Done-when #1: vs who lead returns only the live lead (ignoring former-lead
       lastUsage: { contextWindowUsedTokens: 90_000 },
     });
     env.writeAgent({
-      id: "lead-archived-3",
+      id: "rn-lead-archived-3",
       title: "★ VIBESQUAD ord0c",
       lastStatus: "idle",
       archivedAt: "2026-10-31T00:00:00.000Z",
@@ -121,7 +129,7 @@ test("Done-when #1: vs who lead returns only the live lead (ignoring former-lead
       labels: { team: "vibesquad", lane: "vibesquad", role: "lead", ord: "0" },
     });
     env.writeAgent({
-      id: "lead-live-1",
+      id: "rn-lead-live-1",
       title: "★ VIBESQUAD ord1",
       lastStatus: "idle",
       cwd: REPO_ROOT,
@@ -133,7 +141,7 @@ test("Done-when #1: vs who lead returns only the live lead (ignoring former-lead
     assert.equal(res.status, 0);
     const lines = res.stdout.trim().split(/\r?\n/);
     assert.equal(lines.length, 1);
-    assert.equal(lines[0], "★ VIBESQUAD ord1 · lead-live-1 · idle · 115k");
+    assert.equal(lines[0], "★ VIBESQUAD ord1 · rn-lead-live-1 · idle · 115k");
 
     // Also verify running vs who lead against the live repo prints ★ VIBESQUAD ord1 only
     // Runs in the repo cwd but against the mock agent homes: the real ~/.vibesquad runner agents must not leak in.
@@ -142,7 +150,7 @@ test("Done-when #1: vs who lead returns only the live lead (ignoring former-lead
     if (liveRes.status === 0) {
       const liveLines = liveRes.stdout.trim().split(/\r?\n/);
       assert.equal(liveLines.length, 1);
-      assert.equal(liveLines[0], "★ VIBESQUAD ord1 · lead-live-1 · idle · 115k");
+      assert.equal(liveLines[0], "★ VIBESQUAD ord1 · rn-lead-live-1 · idle · 115k");
     }
   } finally {
     env.cleanup();
@@ -154,7 +162,7 @@ test("Done-when #2: vs who lead handles NONE (exit 1) and CONFLICT (exit 2), and
   try {
     // 0 live leads -> NONE, exit code 1
     env.writeAgent({
-      id: "retired-only",
+      id: "rn-retired-only",
       title: "(old) VIBESQUAD ord1",
       lastStatus: "idle",
       cwd: REPO_ROOT,
@@ -171,7 +179,7 @@ test("Done-when #2: vs who lead handles NONE (exit 1) and CONFLICT (exit 2), and
 
     // 2 live leads -> CONFLICT + both lines, exit code 2
     env.writeAgent({
-      id: "lead-a",
+      id: "rn-lead-a",
       title: "★ VIBESQUAD ord1",
       lastStatus: "idle",
       cwd: REPO_ROOT,
@@ -179,7 +187,7 @@ test("Done-when #2: vs who lead handles NONE (exit 1) and CONFLICT (exit 2), and
       lastUsage: { contextWindowUsedTokens: 80_000 },
     });
     env.writeAgent({
-      id: "lead-b",
+      id: "rn-lead-b",
       title: "★ VIBESQUAD ord2",
       lastStatus: "running",
       cwd: REPO_ROOT,
@@ -192,12 +200,12 @@ test("Done-when #2: vs who lead handles NONE (exit 1) and CONFLICT (exit 2), and
     const conflictLines = conflictRes.stdout.trim().split(/\r?\n/);
     assert.equal(conflictLines[0], "CONFLICT");
     assert.equal(conflictLines.length, 3);
-    assert.equal(conflictLines.some((l) => l.includes("lead-a")), true);
-    assert.equal(conflictLines.some((l) => l.includes("lead-b")), true);
+    assert.equal(conflictLines.some((l) => l.includes("rn-lead-a")), true);
+    assert.equal(conflictLines.some((l) => l.includes("rn-lead-b")), true);
 
     // Add brainstorm, retired brainstorm, worker, and digest worker
     env.writeAgent({
-      id: "bs-live",
+      id: "rn-bs-live",
       title: "BRAINSTORM · VIBESQUAD",
       lastStatus: "idle",
       cwd: REPO_ROOT,
@@ -205,14 +213,14 @@ test("Done-when #2: vs who lead handles NONE (exit 1) and CONFLICT (exit 2), and
       lastUsage: { contextWindowUsedTokens: 42_000 },
     });
     env.writeAgent({
-      id: "bs-retired",
+      id: "rn-bs-retired",
       title: "(old) BRAINSTORM · VIBESQUAD",
       lastStatus: "idle",
       cwd: REPO_ROOT,
       labels: { team: "vibesquad", lane: "vibesquad", role: "former-brainstorm" },
     });
     env.writeAgent({
-      id: "worker-live",
+      id: "rn-worker-live",
       title: "VIBESQUAD · unit-vs-who",
       lastStatus: "running",
       cwd: REPO_ROOT,
@@ -220,7 +228,7 @@ test("Done-when #2: vs who lead handles NONE (exit 1) and CONFLICT (exit 2), and
       lastUsage: { contextWindowUsedTokens: 15_000 },
     });
     env.writeAgent({
-      id: "worker-digest",
+      id: "rn-worker-digest",
       title: "Pre-check - Flash digest",
       lastStatus: "running",
       cwd: REPO_ROOT,
@@ -229,26 +237,26 @@ test("Done-when #2: vs who lead handles NONE (exit 1) and CONFLICT (exit 2), and
         lane: "vibesquad",
         role: "worker",
         profile: "Pre-check - Flash",
-        digestFor: "worker-live",
+        digestFor: "rn-worker-live",
       },
     });
 
     const bsRes = env.runVs(["who", "brainstorm", "--team", "vibesquad", "--lane", "vibesquad"]);
     assert.equal(bsRes.status, 0);
-    assert.equal(bsRes.stdout.trim(), "BRAINSTORM · VIBESQUAD · bs-live · idle · 42k");
+    assert.equal(bsRes.stdout.trim(), "BRAINSTORM · VIBESQUAD · rn-bs-live · idle · 42k");
 
     const buddyRes = env.runVs(["who", "buddy", "--team", "vibesquad", "--lane", "vibesquad"]);
     assert.equal(buddyRes.status, 0);
-    assert.equal(buddyRes.stdout.trim(), "BRAINSTORM · VIBESQUAD · bs-live · idle · 42k");
+    assert.equal(buddyRes.stdout.trim(), "BRAINSTORM · VIBESQUAD · rn-bs-live · idle · 42k");
 
     const workersRes = env.runVs(["who", "workers", "--team", "vibesquad", "--lane", "vibesquad"]);
     assert.equal(workersRes.status, 0);
-    assert.equal(workersRes.stdout.trim(), "VIBESQUAD · unit-vs-who · worker-live · running · 15k");
+    assert.equal(workersRes.stdout.trim(), "VIBESQUAD · unit-vs-who · rn-worker-live · running · 15k");
 
     const allRes = env.runVs(["who", "all", "--team", "vibesquad", "--lane", "vibesquad"]);
     assert.equal(allRes.status, 0);
     const allLines = allRes.stdout.trim().split(/\r?\n/);
-    assert.equal(allLines.length, 4); // lead-a, lead-b, bs-live, worker-live
+    assert.equal(allLines.length, 4); // rn-lead-a, rn-lead-b, rn-bs-live, rn-worker-live
   } finally {
     env.cleanup();
   }
@@ -375,7 +383,7 @@ test("misroute-old metric: turn_ended logs relay-old and turn_started agent-mess
   process.env.VIBESQUAD_HOME = env.vsHome;
   try {
     const retiredLead = {
-      id: "old-lead-42",
+      id: "rn-old-lead-42",
       title: "(old) VIBESQUAD ord0",
       cwd: REPO_ROOT,
       status: "idle",
@@ -387,7 +395,7 @@ test("misroute-old metric: turn_ended logs relay-old and turn_started agent-mess
       },
     };
     const liveLead = {
-      id: "live-lead-43",
+      id: "rn-live-lead-43",
       title: "★ VIBESQUAD ord1",
       cwd: REPO_ROOT,
       status: "idle",
@@ -458,13 +466,13 @@ test("misroute-old metric: turn_ended logs relay-old and turn_started agent-mess
         .map((l) => JSON.parse(l));
       const relayEntry = lines.find((e) => e.type === "metric" && e.text.startsWith("relay-old:"));
       assert.ok(relayEntry, "Expected relay-old metric entry in team log on turn_ended");
-      assert.match(relayEntry.text, /relay-old: date=\d{4}-\d{2}-\d{2} count=1 target=old-lead-42/);
-      assert.deepEqual(relayEntry.refs, ["old-lead-42"]);
+      assert.match(relayEntry.text, /relay-old: date=\d{4}-\d{2}-\d{2} count=1 target=rn-old-lead-42/);
+      assert.deepEqual(relayEntry.refs, ["rn-old-lead-42"]);
 
       const metricEntry = lines.find((e) => e.type === "metric" && e.text.startsWith("misroute-old:"));
       assert.ok(metricEntry, "Expected misroute-old metric entry in team log on turn_started");
-      assert.match(metricEntry.text, /misroute-old: date=\d{4}-\d{2}-\d{2} count=1 target=old-lead-42/);
-      assert.deepEqual(metricEntry.refs, ["old-lead-42"]);
+      assert.match(metricEntry.text, /misroute-old: date=\d{4}-\d{2}-\d{2} count=1 target=rn-old-lead-42/);
+      assert.deepEqual(metricEntry.refs, ["rn-old-lead-42"]);
     } finally {
       dispose();
     }
@@ -475,90 +483,12 @@ test("misroute-old metric: turn_ended logs relay-old and turn_started agent-mess
   }
 });
 
-test("Fix 2: vs who lead reports non-zero tokens when lastUsage comes from paseo inspect LastUsage while disk record has no lastUsage", () => {
-  const env = makeMockEnv();
-  try {
-    // On-disk agent record has NO lastUsage (mirrors active Paseo session files)
-    env.writeAgent({
-      id: "lead-inspect-tokens",
-      title: "★ VIBESQUAD ord1",
-      lastStatus: "idle",
-      cwd: REPO_ROOT,
-      labels: { team: "vibesquad", lane: "vibesquad", role: "lead", ord: "1" },
-    });
-
-    const mockScript = join(env.dir, "mock-paseo.mjs");
-    writeFileSync(
-      mockScript,
-      `
-const args = process.argv.slice(2);
-const mode = process.env.MOCK_INSPECT_MODE || "input";
-if (args[0] === "inspect") {
-  const id = args[1];
-  const lastUsage = mode === "context"
-    ? { ContextWindowUsedTokens: 95000, InputTokens: 5900000 }
-    : { InputTokens: 142000, OutputTokens: 3200 };
-  process.stdout.write(JSON.stringify({
-    ID: id,
-    Title: "★ VIBESQUAD ord1",
-    Status: "idle",
-    Cwd: ${JSON.stringify(REPO_ROOT)},
-    Labels: { team: "vibesquad", lane: "vibesquad", role: "lead", ord: "1" },
-    LastUsage: lastUsage,
-  }));
-  process.exit(0);
-}
-if (args[0] === "ls") {
-  process.stdout.write(JSON.stringify([{
-    id: "lead-inspect-tokens",
-    title: "★ VIBESQUAD ord1",
-    status: "idle",
-    cwd: ${JSON.stringify(REPO_ROOT)},
-    labels: { team: "vibesquad", lane: "vibesquad", role: "lead", ord: "1" },
-  }]));
-  process.exit(0);
-}
-process.exit(1);
-`,
-      "utf8",
-    );
-
-    const isWin = process.platform === "win32";
-    const mockCli = join(env.dir, isWin ? "mock-paseo.cmd" : "mock-paseo.sh");
-    if (isWin) {
-      writeFileSync(mockCli, `@echo off\r\n"${process.execPath}" "${mockScript}" %*\r\n`, "utf8");
-    } else {
-      writeFileSync(mockCli, `#!/bin/sh\nexec "${process.execPath}" "${mockScript}" "$@"\n`, {
-        encoding: "utf8",
-        mode: 0o755,
-      });
-    }
-
-    // 1. InputTokens fallback -> 142k
-    const resInput = env.runVs(["who", "lead", "--team", "vibesquad", "--lane", "vibesquad"], {
-      PASEO_CLI: mockCli,
-      MOCK_INSPECT_MODE: "input",
-    });
-    assert.equal(resInput.status, 0);
-    assert.equal(resInput.stdout.trim(), "★ VIBESQUAD ord1 · lead-inspect-tokens · idle · 142k");
-
-    // 2. ContextWindowUsedTokens -> 95k
-    const resCtx = env.runVs(["who", "lead", "--team", "vibesquad", "--lane", "vibesquad"], {
-      PASEO_CLI: mockCli,
-      MOCK_INSPECT_MODE: "context",
-    });
-    assert.equal(resCtx.status, 0);
-    assert.equal(resCtx.stdout.trim(), "★ VIBESQUAD ord1 · lead-inspect-tokens · idle · 95k");
-  } finally {
-    env.cleanup();
-  }
-});
 
 test("Fix 1a: vs who lead and vs log --since-me work when cwd is outside the VibeSquad repo (homedir with PASEO_AGENT_ID and git worktree pointer file)", () => {
   const env = makeMockEnv();
   try {
     env.writeAgent({
-      id: "site-lead-1",
+      id: "rn-site-lead-1",
       title: "★ SITE ord1",
       lastStatus: "idle",
       cwd: "/path/to/example-site",
@@ -566,7 +496,7 @@ test("Fix 1a: vs who lead and vs log --since-me work when cwd is outside the Vib
       lastUsage: { contextWindowUsedTokens: 64_000 },
     });
     env.writeAgent({
-      id: "site-worker-1",
+      id: "rn-site-worker-1",
       title: "SITE · suave-rhino",
       lastStatus: "running",
       cwd: join(env.dir, "external-worktree"),
@@ -590,7 +520,7 @@ test("Fix 1a: vs who lead and vs log --since-me work when cwd is outside the Vib
 
     const baseEnv = env.baseEnv();
 
-    // Case A: cwd is os.homedir() (outside any repo) with PASEO_AGENT_ID=site-worker-1
+    // Case A: cwd is os.homedir() (outside any repo) with PASEO_AGENT_ID=rn-site-worker-1
     const homeWho = spawnSync(process.execPath, [CLI_PATH, "who", "lead"], {
       cwd: homedir(),
       encoding: "utf8",
@@ -598,11 +528,11 @@ test("Fix 1a: vs who lead and vs log --since-me work when cwd is outside the Vib
         ...baseEnv,
         VIBESQUAD_HOME: env.vsHome,
         PASEO_HOME: env.paseoHome,
-        PASEO_AGENT_ID: "site-worker-1",
+        PASEO_AGENT_ID: "rn-site-worker-1",
       },
     });
     assert.equal(homeWho.status, 0);
-    assert.equal(homeWho.stdout.trim(), "★ SITE ord1 · site-lead-1 · idle · 64k");
+    assert.equal(homeWho.stdout.trim(), "★ SITE ord1 · rn-site-lead-1 · idle · 64k");
 
     const homeLog = spawnSync(process.execPath, [CLI_PATH, "log", "--since-me"], {
       cwd: homedir(),
@@ -611,7 +541,7 @@ test("Fix 1a: vs who lead and vs log --since-me work when cwd is outside the Vib
         ...baseEnv,
         VIBESQUAD_HOME: env.vsHome,
         PASEO_HOME: env.paseoHome,
-        PASEO_AGENT_ID: "site-worker-1",
+        PASEO_AGENT_ID: "rn-site-worker-1",
       },
     });
     assert.equal(homeLog.status, 0);
@@ -639,7 +569,7 @@ test("Fix 1a: vs who lead and vs log --since-me work when cwd is outside the Vib
       },
     });
     assert.equal(wtWho.status, 0);
-    assert.equal(wtWho.stdout.trim(), "★ SITE ord1 · site-lead-1 · idle · 64k");
+    assert.equal(wtWho.stdout.trim(), "★ SITE ord1 · rn-site-lead-1 · idle · 64k");
   } finally {
     env.cleanup();
   }
@@ -649,7 +579,7 @@ test("Fix 1b: vs install-shim --bin-dir <tempDir> creates vs, vs.cmd, vs.ps1 + r
   const env = makeMockEnv();
   try {
     env.writeAgent({
-      id: "lead-shim-1",
+      id: "rn-lead-shim-1",
       title: "★ VIBESQUAD ord1",
       lastStatus: "idle",
       cwd: REPO_ROOT,
@@ -683,7 +613,7 @@ test("Fix 1b: vs install-shim --bin-dir <tempDir> creates vs, vs.cmd, vs.ps1 + r
       },
     });
     assert.equal(shimRes.status, 0);
-    assert.equal(shimRes.stdout.trim(), "★ VIBESQUAD ord1 · lead-shim-1 · idle · 33k");
+    assert.equal(shimRes.stdout.trim(), "★ VIBESQUAD ord1 · rn-lead-shim-1 · idle · 33k");
   } finally {
     env.cleanup();
   }

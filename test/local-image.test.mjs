@@ -12,7 +12,7 @@ const root = join(base, "allowed");
 const outside = join(base, "outside");
 const agentWorktree = join(base, "worktree-agent-1");
 const fakePaseoHome = join(base, "paseo-home");
-const fakeAgentsSrv = join(fakePaseoHome, "agents", "srv");
+const fakeAgentsSrv = join(fakePaseoHome, "runner", "agents");
 mkdirSync(root);
 mkdirSync(outside);
 mkdirSync(agentWorktree, { recursive: true });
@@ -23,8 +23,8 @@ writeFileSync(join(outside, "b.png"), "x");
 writeFileSync(join(agentWorktree, "shot.png"), "PNGDATA");
 writeFileSync(join(agentWorktree, "notes.md"), "# no");
 writeFileSync(
-  join(fakeAgentsSrv, "agent-wt-1234.json"),
-  JSON.stringify({ id: "agent-wt-1234", title: "Worker 1", cwd: agentWorktree }),
+  join(fakeAgentsSrv, "rn-wt1234.jsonl"),
+  JSON.stringify({ seq: 0, ts: 1, type: "created", provider: "claude", model: "m", cwd: agentWorktree, meta: { title: "Worker 1" } }) + String.fromCharCode(10),
   "utf8",
 );
 const roots = [root];
@@ -81,21 +81,21 @@ test("rejects symlink escape", (t) => {
 });
 
 test("Done-when #3: serves image inside agent cwd looked up by agentId and rejects outside path or forged cwd param", async () => {
-  const prevPaseoHome = process.env.PASEO_HOME;
-  process.env.PASEO_HOME = fakePaseoHome;
+  const prevHome = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = fakePaseoHome;
   try {
-    // 1. Server looks up agent cwd from PASEO_HOME/agents/srv/<agentId>.json
-    assert.equal(lookupAgentCwd("agent-wt-1234"), agentWorktree);
+    // 1. Server looks up agent cwd from VIBESQUAD_HOME/runner/agents/<agentId>.jsonl
+    assert.equal(lookupAgentCwd("rn-wt1234"), agentWorktree);
     assert.equal(lookupAgentCwd("../traversal"), null);
     assert.equal(lookupAgentCwd("unknown-agent-id"), null);
 
     // 2. resolveAllowedImage allows an image inside agentWorktree when agent cwd is supplied
-    const resolved = resolveAllowedImage(join(agentWorktree, "shot.png"), roots, lookupAgentCwd("agent-wt-1234"));
+    const resolved = resolveAllowedImage(join(agentWorktree, "shot.png"), roots, lookupAgentCwd("rn-wt1234"));
     assert.ok(resolved, "Expected image in agent worktree to resolve");
 
-    // 3. HTTP route succeeds (200) for image inside the agent's cwd with ?path=...&agentId=agent-wt-1234
+    // 3. HTTP route succeeds (200) for image inside the agent's cwd with ?path=...&agentId=rn-wt1234
     const okRes = await invokeLocalImage(
-      `/__vibesquad/local-image?path=${encodeURIComponent(join(agentWorktree, "shot.png"))}&agentId=agent-wt-1234`,
+      `/__vibesquad/local-image?path=${encodeURIComponent(join(agentWorktree, "shot.png"))}&agentId=rn-wt1234`,
     );
     assert.equal(okRes.statusCode, 200);
     assert.equal(okRes.headers["content-type"], "image/png");
@@ -103,7 +103,7 @@ test("Done-when #3: serves image inside agent cwd looked up by agentId and rejec
 
     // 4. Requesting an image outside that agent's cwd with valid agentId is rejected (404)
     const outsideRes = await invokeLocalImage(
-      `/__vibesquad/local-image?path=${encodeURIComponent(join(outside, "b.png"))}&agentId=agent-wt-1234`,
+      `/__vibesquad/local-image?path=${encodeURIComponent(join(outside, "b.png"))}&agentId=rn-wt1234`,
     );
     assert.equal(outsideRes.statusCode, 404);
 
@@ -115,11 +115,11 @@ test("Done-when #3: serves image inside agent cwd looked up by agentId and rejec
 
     // 6. Requesting a non-image inside the agent's cwd is rejected (404)
     const nonImgRes = await invokeLocalImage(
-      `/__vibesquad/local-image?path=${encodeURIComponent(join(agentWorktree, "notes.md"))}&agentId=agent-wt-1234`,
+      `/__vibesquad/local-image?path=${encodeURIComponent(join(agentWorktree, "notes.md"))}&agentId=rn-wt1234`,
     );
     assert.equal(nonImgRes.statusCode, 404);
   } finally {
-    if (prevPaseoHome === undefined) delete process.env.PASEO_HOME;
-    else process.env.PASEO_HOME = prevPaseoHome;
+    if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
+    else process.env.VIBESQUAD_HOME = prevHome;
   }
 });

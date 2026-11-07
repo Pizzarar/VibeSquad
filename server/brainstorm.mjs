@@ -588,7 +588,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
         if (client && !connected) return null;
         if (connected && client && typeof backend.fetchAgents === "function") {
           // Runner down (the supervisor is restarting it): unreadable list, not "no agents". fetchAgents below then fails closed.
-          await backend.ensureRunner?.().catch(() => {});
+          await backend.requireRunning?.().catch(() => {});
           const res = await backend.fetchAgents().catch(() => null);
           return asList(res);
         }

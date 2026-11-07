@@ -269,11 +269,3 @@ test(
   }),
 );
 
-test("paseo-cli (moved from vs) refuses only the chars that escape a double-quoted cmd.exe arg", () => {
-  const src = readFileSync("server/backend/paseo-cli.mjs", "utf8");
-  const m = src.match(/const UNSAFE_SHELL_ARG = (\/.*\/);/);
-  assert.ok(m);
-  const re = eval(m[1]);
-  for (const c of ['"', "%", "\r", "\n", "\0"]) assert.ok(re.test(`a${c}b`), JSON.stringify(c));
-  for (const ok of ["A & B", "done!", "a ^ b | c < d > e", "plain-arg_1 with spaces"]) assert.ok(!re.test(ok), ok);
-});

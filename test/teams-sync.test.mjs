@@ -26,7 +26,7 @@ test("loadTeams ignores legacy bare arrays and accepts revisioned caches", () =>
 
 test("paseo refreshes teams on connected transition", () => {
   assert.match(paseo, /import \{ refreshTeams, retiredLeadTitle \} from "\.\/teams"/);
-  assert.match(paseo, /refetchProviderUsage\(\);\s*void refreshTeams\(\);/);
+  assert.match(paseo, /void refetchProviderUsage\(\);\s*void refreshTeams\(\);/);
 });
 
 test("user registry names efi Escape From Idle", (t) => {

@@ -6,7 +6,6 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
 import { isAndroidUserAgent, normalizeOfferInput, toAndroidDeepLink } from "../src/remoteSession.ts";
-import { getPaseoPairOffer } from "../server/paseo-control.mjs";
 
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
 
@@ -65,62 +64,6 @@ describe("isAndroidUserAgent", () => {
     assert.equal(isAndroidUserAgent("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15"), false);
     assert.equal(isAndroidUserAgent(""), false);
     assert.equal(isAndroidUserAgent(), false);
-  });
-});
-
-describe("getPaseoPairOffer (deep-link QR pairing)", () => {
-  test("returns deepLinkUrl and an <svg> qrSvg when the offer url contains #offer=", async () => {
-    const pairUrl = `https://app.paseo.sh/#offer=${TOKEN}`;
-    const res = await getPaseoPairOffer({
-      cliRunner: async () => ({
-        ok: true,
-        code: 0,
-        stdout: "",
-        stderr: "",
-        data: { relayEnabled: true, url: pairUrl, qr: "\u001b[32m█▀▀▀\u001b[0m" },
-      }),
-    });
-
-    assert.equal(res.ok, true);
-    assert.equal(res.relayEnabled, true);
-    assert.equal(res.url, pairUrl);
-    assert.equal(res.deepLinkUrl, `vibesquad://pair#offer=${TOKEN}`);
-    assert.equal(typeof res.qrSvg, "string");
-    assert.match(res.qrSvg, /<svg/, "qrSvg must be an SVG string");
-    assert.equal(res.qr, "█▀▀▀", "ANSI escape codes are stripped from the text QR");
-  });
-
-  test("returns null deepLinkUrl and qrSvg when the url has no #offer=", async () => {
-    const res = await getPaseoPairOffer({
-      cliRunner: async () => ({
-        ok: true,
-        code: 0,
-        stdout: "",
-        stderr: "",
-        data: { relayEnabled: false, url: "https://app.paseo.sh/", qr: "" },
-      }),
-    });
-    assert.equal(res.ok, true);
-    assert.equal(res.deepLinkUrl, null);
-    assert.equal(res.qrSvg, null);
-  });
-
-  test("keeps url null when the CLI omits it", async () => {
-    const res = await getPaseoPairOffer({
-      cliRunner: async () => ({ ok: true, code: 0, stdout: "", stderr: "", data: { relayEnabled: true } }),
-    });
-    assert.equal(res.url, null);
-    assert.equal(res.deepLinkUrl, null);
-    assert.equal(res.qrSvg, null);
-  });
-});
-
-describe("UI wiring (source inspection)", () => {
-  test("server/paseo-control.mjs imports qrSvg and builds the deep link", () => {
-    const src = read("server/paseo-control.mjs");
-    assert.match(src, /import \{ qrSvg \} from "\.\/qr\.mjs"/);
-    assert.match(src, /const deepLinkUrl = offerFragment \? `vibesquad:\/\/pair\$\{offerFragment\}` : null/);
-    assert.match(src, /qrSvg: offerQrSvg/);
   });
 });
 

@@ -4,7 +4,7 @@ import { applyLabelsOptimistic } from "./attentionItems";
 import { clearUnreadLocal, dismissLocal, markUnreadLocal, subscribeAttentionLocal } from "./attentionLocal";
 import { isRunnerId, runnerArchive, runnerCancel, runnerListArchived, runnerSend, runnerSpawn, runnerUpdate, runnerStatusLoaded, startRunnerBridge, onRunnerStatusChange } from "./runnerBridge";
 import { useSyncExternalStore } from "react";
-import { retiredLeadTitle } from "./teams";
+import { refreshTeams, retiredLeadTitle } from "./teams";
 import { normalizeProviderUsage, runnerUsageToQuota, type ProviderQuotaView } from "./antigravity";
 import { loadRunnerUsage } from "./paseoProviders";
 import { LEGACY_NEEDS_LABEL, LEGACY_NEEDS_UNTIL, LEGACY_NEEDS_REASON } from "./userName";
@@ -449,7 +449,10 @@ if (!DEMO && typeof window !== "undefined") {
         status: up ? "connected" : "disconnected",
         ...(up ? { error: undefined, rosterLoaded: true } : {}),
       });
-      if (up) void refetchProviderUsage();
+      if (up) {
+        void refetchProviderUsage();
+        void refreshTeams();
+      }
     },
   );
 }

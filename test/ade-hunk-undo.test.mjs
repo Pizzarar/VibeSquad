@@ -271,7 +271,7 @@ test("review prompt: diff fence outruns any backtick run in the diff, and the co
 
 test("Changes: git runs through the VS git routes, no workspace registration (N1)", () => {
   const s = src("ChangesPanel.tsx");
-  assert.doesNotMatch(s, /noWorkspace|NoWorkspaceBanner|workspaceIdForAgent|usePaseo/);
+  assert.doesNotMatch(s.replace(/content: "[^"]*"/g, ""), /noWorkspace|NoWorkspaceBanner|workspaceIdForAgent|usePaseo/);
   // Hunk undo reads/writes/deletes through the VS fs routes (N2); no daemonClient left.
   assert.doesNotMatch(s.replace(/content: "[^"]*"/g, ""), /daemonClient/);
   assert.match(s, /vsReadFile\(cwd, f\.path, MAX_UNDO_BYTES\)/);

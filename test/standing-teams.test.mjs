@@ -3,7 +3,6 @@ import fs from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { checkRemoteBody, pinTeamsRegistry, PINNED_LANE_KEYS } from "../server/hooks/remote-proxy-rules.ts";
 import { BRAINSTORM_PACK } from "../server/hooks/agent-duties.ts";
 import { buildBrainstormInitialPrompt } from "../server/brainstorm.mjs";
 import { runMarkComplete, shipGoalBrief } from "../src/pinComplete.ts";
@@ -185,65 +184,3 @@ test("(4) patchLane toggles standing and PinDone / PinMenu expose standing team 
   assert.ok(standingPrompt.includes("✓ Goal shipped"));
 });
 
-test("(5) remote-proxy-rules accepts standing: boolean and backend: 'paseo'|'runner' on /api/teams and pins backend to disk", () => {
-  assert.ok(PINNED_LANE_KEYS.includes("backend"));
-
-  const payload = {
-    revision: "rev-1",
-    teams: [
-      {
-        id: "vibesquad",
-        name: "VibeSquad",
-        lanes: [
-          {
-            id: "android-app",
-            name: "Android App",
-            state: "pinned",
-            standing: true,
-            backend: "runner",
-          },
-        ],
-      },
-    ],
-  };
-
-  const bodyCheck = checkRemoteBody("PUT", "/api/teams", JSON.stringify(payload));
-  assert.equal(bodyCheck.ok, true);
-
-  // Rejects invalid backend value
-  const badBackend = checkRemoteBody(
-    "PUT",
-    "/api/teams",
-    JSON.stringify({
-      ...payload,
-      teams: [{ ...payload.teams[0], lanes: [{ ...payload.teams[0].lanes[0], backend: "invalid" }] }],
-    }),
-  );
-  assert.equal(badBackend.ok, false);
-
-  // Registry check allows toggling standing remotely while keeping backend pinned to disk
-  const diskTeams = {
-    teams: [
-      {
-        id: "vibesquad",
-        name: "VibeSquad",
-        lanes: [{ id: "android-app", name: "Android App", state: "pinned", standing: false, backend: "runner" }],
-      },
-    ],
-  };
-  const regOk = pinTeamsRegistry(payload, diskTeams);
-  assert.equal(regOk.ok, true);
-  assert.equal(regOk.value.teams[0].lanes[0].standing, true);
-  assert.equal(regOk.value.teams[0].lanes[0].backend, "runner");
-
-  // Remote attempt to change backend from disk's "runner" to "paseo" is denied
-  const regDenied = pinTeamsRegistry(
-    {
-      ...payload,
-      teams: [{ ...payload.teams[0], lanes: [{ ...payload.teams[0].lanes[0], backend: "paseo" }] }],
-    },
-    diskTeams,
-  );
-  assert.equal(regDenied.ok, false);
-  assert.match(regDenied.error, /backend can't be changed remotely/);
-});

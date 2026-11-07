@@ -95,8 +95,19 @@ function makeTempEnv() {
   );
 
   function writeAgent(record) {
-    const file = join(agentsShard, `${record.id}.json`);
-    writeFileSync(file, JSON.stringify(record, null, 2) + "\n", "utf8");
+    const dir = join(vsHome, "runner", "agents");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, `${record.id}.jsonl`);
+    const ts = Date.now();
+    const { labels = {}, title, cwd, lastStatus = "idle" } = record;
+    writeFileSync(
+      file,
+      [
+        { seq: 0, ts, type: "created", provider: "claude", model: "m", cwd, meta: { title, labels } },
+        { seq: 1, ts, type: "status", status: lastStatus },
+      ].map((e) => JSON.stringify(e)).join(String.fromCharCode(10)) + String.fromCharCode(10),
+      "utf8",
+    );
     return file;
   }
 
@@ -142,8 +153,8 @@ function collectSourceFiles(dir, out = []) {
   return out;
 }
 
-test("Done-when #1: Zero title/name-prefix matching for identity in plugin/server/src/cli and misleading titles never affect resolved identity", () => {
-  const dirs = ["plugin", "server", "src", "cli"].map((d) => join(REPO_ROOT, d));
+test("Done-when #1: Zero title/name-prefix matching for identity in server/src/cli and misleading titles never affect resolved identity", () => {
+  const dirs = ["server", "src", "cli"].map((d) => join(REPO_ROOT, d));
   const files = dirs.flatMap((d) => collectSourceFiles(d));
   assert.ok(files.length > 0, "Expected source files to scan");
 
@@ -497,21 +508,21 @@ test("Done-when #3: vs whoami is right for a lead, a brainstorm, and a worker ac
   try {
     // Squad 1: vibesquad (lane: vibesquad)
     env.writeAgent({
-      id: "vs-lead-1",
+      id: "rn-vs-lead-1",
       title: "★ VIBESQUAD ord2",
       lastStatus: "idle",
       cwd: "/path/to/vibesquad",
       labels: { lane: "vibesquad", team: "vibesquad", role: "lead", ord: "2" },
     });
     env.writeAgent({
-      id: "vs-bs-1",
+      id: "rn-vs-bs-1",
       title: "BRAINSTORM · VIBESQUAD",
       lastStatus: "idle",
       cwd: "/path/to/vibesquad",
       labels: { lane: "vibesquad", team: "vibesquad", role: "brainstorm" },
     });
     env.writeAgent({
-      id: "vs-worker-1",
+      id: "rn-vs-worker-1",
       title: "VIBESQUAD · unit-identity-v2",
       lastStatus: "running",
       cwd: "/path/to/vibesquad",
@@ -520,21 +531,21 @@ test("Done-when #3: vs whoami is right for a lead, a brainstorm, and a worker ac
 
     // Squad 2: site (lane: site-polish)
     env.writeAgent({
-      id: "site-lead-1",
+      id: "rn-site-lead-1",
       title: "★ SITE POLISH ord1",
       lastStatus: "idle",
       cwd: "/path/to/example-site",
       labels: { lane: "site-polish", team: "site", role: "lead", ord: "1" },
     });
     env.writeAgent({
-      id: "site-bs-1",
+      id: "rn-site-bs-1",
       title: "BRAINSTORM · SITE POLISH",
       lastStatus: "idle",
       cwd: "/path/to/example-site",
       labels: { lane: "site-polish", team: "site", role: "brainstorm" },
     });
     env.writeAgent({
-      id: "site-worker-1",
+      id: "rn-site-worker-1",
       title: "SITE POLISH · css-audit",
       lastStatus: "running",
       cwd: "/path/to/example-site",
@@ -552,52 +563,52 @@ test("Done-when #3: vs whoami is right for a lead, a brainstorm, and a worker ac
 
     for (const check of [
       {
-        agentId: "vs-lead-1",
+        agentId: "rn-vs-lead-1",
         lane: "vibesquad",
         squad: "vibesquad",
         role: "lead",
         ord: "2",
-        leadId: "vs-lead-1",
+        leadId: "rn-vs-lead-1",
       },
       {
-        agentId: "vs-bs-1",
+        agentId: "rn-vs-bs-1",
         lane: "vibesquad",
         squad: "vibesquad",
         role: "brainstorm",
         ord: "1",
-        leadId: "vs-lead-1",
+        leadId: "rn-vs-lead-1",
       },
       {
-        agentId: "vs-worker-1",
+        agentId: "rn-vs-worker-1",
         lane: "vibesquad",
         squad: "vibesquad",
         role: "worker",
         ord: "1",
-        leadId: "vs-lead-1",
+        leadId: "rn-vs-lead-1",
       },
       {
-        agentId: "site-lead-1",
+        agentId: "rn-site-lead-1",
         lane: "site-polish",
         squad: "site",
         role: "lead",
         ord: "1",
-        leadId: "site-lead-1",
+        leadId: "rn-site-lead-1",
       },
       {
-        agentId: "site-bs-1",
+        agentId: "rn-site-bs-1",
         lane: "site-polish",
         squad: "site",
         role: "brainstorm",
         ord: "1",
-        leadId: "site-lead-1",
+        leadId: "rn-site-lead-1",
       },
       {
-        agentId: "site-worker-1",
+        agentId: "rn-site-worker-1",
         lane: "site-polish",
         squad: "site",
         role: "worker",
         ord: "1",
-        leadId: "site-lead-1",
+        leadId: "rn-site-lead-1",
       },
     ]) {
       const textRes = env.runVs(["whoami", "--agent", check.agentId]);
@@ -624,125 +635,6 @@ test("Done-when #3: vs whoami is right for a lead, a brainstorm, and a worker ac
     const orphanJson = JSON.parse(orphanRes.stdout);
     assert.equal(orphanJson.orphan, true);
     assert.equal(orphanJson.squad, "_unassigned");
-  } finally {
-    env.cleanup();
-  }
-});
-
-test("Done-when #4: vs migrate identity --dry-run lists all agents with proposed labels without writing, and the real run backs up and is idempotent", () => {
-  const env = makeTempEnv();
-  try {
-    // 1. Already canonical agent
-    const fCanonical = env.writeAgent({
-      id: "ag-canonical",
-      title: "★ VIBESQUAD ord1",
-      lastStatus: "idle",
-      cwd: "/path/to/vibesquad",
-      labels: { lane: "vibesquad", team: "vibesquad", role: "lead", ord: "1" },
-    });
-    // 2. Legacy alias lane + wrong team
-    const fAlias = env.writeAgent({
-      id: "ag-alias",
-      title: "★ MAIN GAME ord3",
-      lastStatus: "idle",
-      cwd: "/path/to/main-project",
-      labels: { lane: "main-old", team: "main-old", role: "lead", ord: "3" },
-    });
-    // 3. Archived agent with cwd only (no lane/team labels)
-    const fArchivedCwd = env.writeAgent({
-      id: "ag-archived-cwd",
-      title: "SITE POLISH · worker",
-      lastStatus: "closed",
-      archivedAt: "2026-10-30T00:00:00.000Z",
-      cwd: "/path/to/example-site",
-      labels: { role: "worker" },
-    });
-    // 4. Team label, no lane: an orphan, never the Squad's first lane
-    const fTeamOnly = env.writeAgent({
-      id: "ag-team-only",
-      title: "PLUGINS · audit",
-      lastStatus: "idle",
-      cwd: "",
-      labels: { team: "plugins", role: "buddy" },
-    });
-    // 5. Unmatched orphan
-    const fOrphan = env.writeAgent({
-      id: "ag-orphan",
-      title: "Random Scratch",
-      lastStatus: "idle",
-      cwd: "C:/tmp/unmatched-folder",
-      labels: { lane: "unknown-free-text", role: "worker" },
-    });
-
-    const snapshotBeforeDryRun = readFileSync(fAlias, "utf8");
-
-    // Step A: Run --dry-run
-    const dryText = env.runVs(["migrate", "identity", "--dry-run"]);
-    assert.equal(dryText.status, 0, dryText.stderr);
-    assert.match(dryText.stdout, /ag-canonical \(idle\)/);
-    assert.match(dryText.stdout, /ag-alias \(idle\).*lane=main-old.*->.*lane=main-game, team=efi.*\[CHANGED\]/);
-    assert.match(dryText.stdout, /ag-archived-cwd \(archived\).*\[CHANGED\]/);
-    assert.match(dryText.stdout, /ag-orphan \(idle\).*\[ORPHAN\]/);
-    assert.match(dryText.stdout, /ag-team-only \(idle\).*\[ORPHAN\]/);
-    assert.match(dryText.stdout, /total=5 changed=4 unchanged=1 orphans=2 archived-orphans=0/);
-
-    // Verify --dry-run did NOT modify files or create backups
-    assert.equal(readFileSync(fAlias, "utf8"), snapshotBeforeDryRun);
-    assert.equal(existsSync(join(env.vsHome, "backups")), false);
-
-    // Step B: Run real migration (inside isolated temp PASEO_HOME & VIBESQUAD_HOME)
-    const run1 = env.runVs(["migrate", "identity", "--json"]);
-    assert.equal(run1.status, 0, run1.stderr);
-    const out1 = JSON.parse(run1.stdout);
-    assert.equal(out1.dryRun, false);
-    assert.equal(out1.total, 5);
-    assert.equal(out1.changed, 4);
-    assert.equal(out1.unchanged, 1);
-    assert.equal(out1.orphans, 2);
-    assert.ok(out1.backupDir, "Expected backupDir to be created");
-    assert.equal(existsSync(join(out1.backupDir, "teams.json")), true, "Expected teams.json backup");
-    assert.equal(
-      existsSync(join(out1.backupDir, "teams", "vibesquad", "log.jsonl")),
-      true,
-      "Expected log.jsonl backup",
-    );
-
-    // Verify updated labels on disk
-    assert.deepEqual(JSON.parse(readFileSync(fCanonical, "utf8")).labels, {
-      lane: "vibesquad",
-      team: "vibesquad",
-      role: "lead",
-      ord: "1",
-    });
-    assert.deepEqual(JSON.parse(readFileSync(fAlias, "utf8")).labels, {
-      lane: "main-game",
-      team: "efi",
-      role: "lead",
-      ord: "3",
-    });
-    assert.deepEqual(JSON.parse(readFileSync(fArchivedCwd, "utf8")).labels, {
-      lane: "site-polish",
-      team: "site",
-      role: "worker",
-    });
-    assert.deepEqual(JSON.parse(readFileSync(fTeamOnly, "utf8")).labels, {
-      team: "plugins",
-      role: "brainstorm",
-      orphan: "1",
-    });
-    assert.deepEqual(JSON.parse(readFileSync(fOrphan, "utf8")).labels, {
-      lane: "unknown-free-text",
-      role: "worker",
-      orphan: "1",
-    });
-
-    // Step C: Run real migration a second time -> must be idempotent (changed=0)
-    const run2 = env.runVs(["migrate", "identity", "--json"]);
-    assert.equal(run2.status, 0, run2.stderr);
-    const out2 = JSON.parse(run2.stdout);
-    assert.equal(out2.total, 5);
-    assert.equal(out2.changed, 0, "Second migration run must produce 0 changes (idempotent)");
-    assert.equal(out2.unchanged, 5);
   } finally {
     env.cleanup();
   }

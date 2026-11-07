@@ -71,7 +71,7 @@ test("performBrainstormRestart adopts the late agent after a createAgent timeout
       {
         agentId: "bs-1", teamId: "site", laneId: "pinned", reason: "manual",
         oldAgent: { id: "bs-1", title: "BRAINSTORM · PINNED", cwd: dir, labels: { team: "site", lane: "pinned", role: "brainstorm" } },
-        daemonClient: b,
+        agentClient: b,
         createRecovery: fast,
       },
       dir,
@@ -97,7 +97,7 @@ test("a non-timeout createAgent error still throws and nothing is sent", async (
     const b = fakeBackend([[mk()]], { createErr: new Error("provider exploded") });
     await assert.rejects(
       performBrainstormRestart(
-        { agentId: "bs-1", teamId: "site", laneId: "pinned", reason: "manual", oldAgent: { id: "bs-1", title: "B", cwd: dir, labels: { team: "site", lane: "pinned", role: "brainstorm" } }, daemonClient: b, createRecovery: fast },
+        { agentId: "bs-1", teamId: "site", laneId: "pinned", reason: "manual", oldAgent: { id: "bs-1", title: "B", cwd: dir, labels: { team: "site", lane: "pinned", role: "brainstorm" } }, agentClient: b, createRecovery: fast },
         dir,
       ),
       /provider exploded/,
@@ -154,7 +154,7 @@ test("the spawn lag sampler is stopped on a throwing spawn path (no 50ms interva
     const b = fakeBackend([[mk()]], { createErr: new Error("provider exploded") });
     await assert.rejects(
       performBrainstormRestart(
-        { agentId: "bs-1", teamId: "site", laneId: "pinned", reason: "manual", oldAgent: { id: "bs-1", title: "B", cwd: dir, labels: { team: "site", lane: "pinned", role: "brainstorm" } }, daemonClient: b, createRecovery: fast },
+        { agentId: "bs-1", teamId: "site", laneId: "pinned", reason: "manual", oldAgent: { id: "bs-1", title: "B", cwd: dir, labels: { team: "site", lane: "pinned", role: "brainstorm" } }, agentClient: b, createRecovery: fast },
         dir,
       ),
       /provider exploded/,

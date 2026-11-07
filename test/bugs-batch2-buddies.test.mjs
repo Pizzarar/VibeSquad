@@ -101,13 +101,13 @@ test("(a) a fresh Buddy spawn with an existing closed + idle Buddy in the lane l
       { id: "lead1", labels: { team: "sq", lane: "bug", role: "lead", ord: "1", [PARENT_LABEL]: "bs-closed" } },
       // Other lanes and topic Buddies are other seats: untouched.
       bs("bs-other-lane", { labels: { team: "sq", lane: "art", role: "brainstorm" } }),
-      bs("bs-topic", { labels: { team: "sq", lane: "bug", role: "brainstorm", topic: "icons" } }),
+      bs("rn-bs-topic", { labels: { team: "sq", lane: "bug", role: "brainstorm", topic: "icons" } }),
     ]);
-    const r = await performBrainstormRestart({ reason: "start-brainstorm", forceNew: true, teamId: "sq", laneId: "bug", daemonClient: d, backstopDelayMs: 0 }, dir);
+    const r = await performBrainstormRestart({ reason: "start-brainstorm", forceNew: true, teamId: "sq", laneId: "bug", agentClient: d, backstopDelayMs: 0 }, dir);
     assert.equal(r.ok, true);
     assert.equal(r.newAgentId, "bs-new-1");
     assert.ok(await waitFor(() => d.calls.archive.length === 2), JSON.stringify(d.calls));
-    assert.deepEqual(liveBrainstorms(d).sort(), ["bs-new-1", "bs-other-lane", "bs-topic"]);
+    assert.deepEqual(liveBrainstorms(d).sort(), ["bs-new-1", "bs-other-lane", "rn-bs-topic"]);
     for (const id of ["bs-closed", "bs-idle"]) {
       const a = d.agents.get(id);
       assert.equal(a.labels.role, "former-brainstorm", id);
@@ -123,7 +123,7 @@ test("(a) a Buddy restart also retires a third duplicate, and the old Buddy is r
   withHome(async (dir) => {
     resetBrainstormRestartState();
     const d = fakeDaemon([bs("bs-old"), bs("bs-dupe", { status: "closed" })]);
-    await performBrainstormRestart({ agentId: "bs-old", reason: "manual", teamId: "sq", laneId: "bug", daemonClient: d, backstopDelayMs: 0 }, dir);
+    await performBrainstormRestart({ agentId: "bs-old", reason: "manual", teamId: "sq", laneId: "bug", agentClient: d, backstopDelayMs: 0 }, dir);
     assert.ok(await waitFor(() => d.calls.archive.length === 2));
     assert.deepEqual(liveBrainstorms(d), ["bs-new-1"]);
     assert.equal(d.calls.update.filter((id) => id === "bs-old").length, 1, "restart path retires bs-old; the backstop skips it");
@@ -134,7 +134,7 @@ test("(a) the reopen rule stays: a pin click on a closed Buddy reopens it, spawn
   withHome(async (dir) => {
     resetBrainstormRestartState();
     const d = fakeDaemon([bs("bs-closed", { status: "closed" })]);
-    const r = await performBrainstormRestart({ reason: "start-brainstorm", teamId: "sq", laneId: "bug", daemonClient: d, backstopDelayMs: 0 }, dir);
+    const r = await performBrainstormRestart({ reason: "start-brainstorm", teamId: "sq", laneId: "bug", agentClient: d, backstopDelayMs: 0 }, dir);
     assert.equal(r.reopened, true);
     assert.equal(r.existingAgentId, "bs-closed");
     await new Promise((res) => setTimeout(res, 30));
@@ -156,16 +156,21 @@ test("(a) the backstop skips Buddies the plugin already retired", async () => {
 function mockVsEnv() {
   const dir = mkdtempSync(join(tmpdir(), "vs-who-bs-"));
   const vsHome = join(dir, ".vibesquad");
-  const paseoHome = join(dir, ".paseo");
-  const agentsDir = join(paseoHome, "agents", "srv_test");
+  const agentsDir = join(vsHome, "runner", "agents");
   mkdirSync(agentsDir, { recursive: true });
-  mkdirSync(vsHome, { recursive: true });
   const teams = { teams: [{ id: "vibesquad", name: "VibeSquad", paths: ["vibesquad"], lanes: [{ id: "bug-chaser", name: "Bug Chaser" }] }] };
-  writeFileSync(join(vsHome, "teams.json"), JSON.stringify(teams) + "\n", "utf8");
+  writeFileSync(join(vsHome, "teams.json"), JSON.stringify(teams) + String.fromCharCode(10), "utf8");
   return {
-    write: (rec) => writeFileSync(join(agentsDir, `${rec.id}.json`), JSON.stringify(rec), "utf8"),
+    write: (rec) => {
+      const ts = Date.now();
+      const lines = [
+        { seq: 0, ts, type: "created", provider: "claude", model: "m", cwd: rec.cwd, meta: { title: rec.title, labels: rec.labels } },
+        { seq: 1, ts, type: "status", status: rec.lastStatus },
+      ];
+      writeFileSync(join(agentsDir, rec.id + ".jsonl"), lines.map((e) => JSON.stringify(e)).join(String.fromCharCode(10)) + String.fromCharCode(10), "utf8");
+    },
     run: (args) =>
-      spawnSync(process.execPath, [CLI_PATH, ...args], { cwd: REPO_ROOT, encoding: "utf8", env: { ...process.env, VIBESQUAD_HOME: vsHome, PASEO_HOME: paseoHome } }),
+      spawnSync(process.execPath, [CLI_PATH, ...args], { cwd: REPO_ROOT, encoding: "utf8", env: { ...process.env, VIBESQUAD_HOME: vsHome } }),
     cleanup: () => rmSync(dir, { recursive: true, force: true }),
   };
 }
@@ -174,18 +179,18 @@ test("(b) vs who brainstorm prints CONFLICT + both ids (exit 2) for two live Bud
   const env = mockVsEnv();
   try {
     const labels = { team: "vibesquad", lane: "bug-chaser", role: "brainstorm" };
-    env.write({ id: "bs-a", title: "BC Buddy", lastStatus: "idle", cwd: REPO_ROOT, labels });
-    env.write({ id: "bs-topic", title: "BC Buddy · icons", lastStatus: "idle", cwd: REPO_ROOT, labels: { ...labels, topic: "icons" } });
+    env.write({ id: "rn-bs-a", title: "BC Buddy", lastStatus: "idle", cwd: REPO_ROOT, labels });
+    env.write({ id: "rn-bs-topic", title: "BC Buddy · icons", lastStatus: "idle", cwd: REPO_ROOT, labels: { ...labels, topic: "icons" } });
     const ok = env.run(["who", "brainstorm", "--team", "vibesquad", "--lane", "bug-chaser"]);
     assert.equal(ok.status, 0, ok.stderr);
     assert.doesNotMatch(ok.stdout, /CONFLICT/);
 
-    env.write({ id: "bs-b", title: "Bug Buddy", lastStatus: "running", cwd: REPO_ROOT, labels });
+    env.write({ id: "rn-bs-b", title: "Bug Buddy", lastStatus: "running", cwd: REPO_ROOT, labels });
     const res = env.run(["who", "brainstorm", "--team", "vibesquad", "--lane", "bug-chaser"]);
     assert.equal(res.status, 2, res.stderr);
     const lines = res.stdout.trim().split(/\r?\n/);
     assert.equal(lines[0], "CONFLICT");
-    assert.ok(lines.some((l) => l.includes("bs-a")) && lines.some((l) => l.includes("bs-b")), res.stdout);
+    assert.ok(lines.some((l) => l.includes("rn-bs-a")) && lines.some((l) => l.includes("rn-bs-b")), res.stdout);
 
     const buddy = env.run(["who", "buddy", "--team", "vibesquad", "--lane", "bug-chaser", "--json"]);
     assert.equal(buddy.status, 2);

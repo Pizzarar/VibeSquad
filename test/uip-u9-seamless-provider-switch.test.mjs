@@ -107,7 +107,7 @@ test("performBrainstormRestart on provider-switch honours the requested profile 
   resetBrainstormRestartState();
   try {
     const created = [];
-    const daemonClient = {
+    const agentClient = {
       async fetchAgents() {
         return { entries: [] };
       },
@@ -136,7 +136,7 @@ test("performBrainstormRestart on provider-switch honours the requested profile 
           status: "idle",
           labels: { team: "vibesquad", lane: "art-direction", role: "brainstorm", profile: "Brainstorm - Claude" },
         },
-        daemonClient,
+        agentClient,
         profilesPath: env.profilesPath,
         backstopDelayMs: 0,
       },

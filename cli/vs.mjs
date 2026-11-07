@@ -612,6 +612,7 @@ function listAgentsViaRunner() {
     attentionReason: null,
     pendingPermissions: [],
     usage: null,
+    lastUsage: a.lastUsage ?? null,
   }));
 }
 
