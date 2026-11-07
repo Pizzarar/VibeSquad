@@ -53,10 +53,9 @@ Expected: a version matching `^\d+\.\d+\.\d+`.
 
 ### Antigravity / Gemini as a worker
 Lessons from running Google's Antigravity (`agy`) and Gemini agents on a team:
-- Set `approvalPolicy: skip`. With the default `agy` setting it waits for an approval nobody sees and stalls
-  without a word. **Warning:** `skip` turns off approval prompts for that worker, so use it only when the worker
-  runs on its own task branch or worktree, never on a branch that can reach `main`. If you leave the default on,
-  approve the prompts in the agent's chat in VibeSquad.
+- In VibeSquad the runner approves an Antigravity worker's permission requests automatically, so it does not stall
+  waiting for you (VibeSquad also sets `approvalPolicy: skip` on these workers itself; you do not set it). Because nothing
+  asks you first, run it only on its own task branch or worktree, never on one that can reach `main`.
 - Run commands in the foreground, with a `timeout` on every one.
 - Put multi-part commands in a script file, with no nested quotes.
 - It can only read inside its workspace, so copy any input files in first.
