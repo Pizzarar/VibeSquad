@@ -7,7 +7,7 @@ const R10 =
 
 test("R10 (Releases) rule text is identical in all four rule sources", () => {
   const sources = {
-    "plugin/index.server.ts": `  ${JSON.stringify("- R10 (Releases): " + R10)},`,
+    "server/hooks/agent-duties.ts": `  ${JSON.stringify("- R10 (Releases): " + R10)},`,
     "server/profiles.mjs": `  ${JSON.stringify("- R10 (Releases): " + R10)},`,
     "src/profiles.ts": `  ${JSON.stringify("- R10 (Releases): " + R10)},`,
     "docs/profiles/DEFAULT_PACK.md": `- **R10 (Releases):** ${R10}`,

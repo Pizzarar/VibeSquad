@@ -5,7 +5,7 @@ import {
   EVERYONE_LAYER,
   LEAD_FALLBACK_PACK,
   sameLaneRole,
-} from "../plugin/index.server.ts";
+} from "../server/hooks/agent-duties.ts";
 import {
   DEFAULT_PACK_PROFILES,
   DEFAULT_PROFILES,

@@ -18,7 +18,7 @@ import { refreshWhosHere } from "./whos-here.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
 import { readDaemonPassword, readPaseoLocalCredential } from "./daemon-password.mjs";
 
-// import.meta.dirname is undefined when bundled into the Paseo plugin; fall back like plugin/index.server.ts.
+// import.meta.dirname is undefined when bundled into the Paseo plugin; fall back like server/hooks/agent-duties.ts.
 const REPO_ROOT = resolve(process.env.VIBESQUAD_ROOT || (typeof import.meta.dirname === "string" ? join(import.meta.dirname, "..") : join(homedir(), "projects", "VibeSquad")));
 const MAX_SUMMARY_CHARS = 20_000;
 const MAX_LOG_TEXT = 240;
@@ -362,7 +362,7 @@ export async function recoverTimedOutCreate({ backend, labels, title, initialPro
     if (found && found.status !== "initializing") {
       if (found.status === "error" || found.status === "closed") return null;
       // lastActivityAt is stamped at creation by RunnerBackend.toAgent, so it proves nothing; real activity is a non-idle status,
-      // a user message or used tokens (as plugin/index.server.ts does).
+      // a user message or used tokens (as server/hooks/agent-duties.ts does).
       const usedTokens = (found.lastUsage?.contextWindowUsedTokens ?? 0) + (found.lastUsage?.inputTokens ?? 0);
       const hasActivity = found.status !== "idle" || Boolean(found.lastUserMessageAt) || usedTokens > 0;
       if (!hasActivity && initialPrompt && typeof backend.sendAgentPrompt === "function") {

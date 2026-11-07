@@ -6,7 +6,7 @@ import {
   BRAINSTORM_PACK,
   EVERYONE_LAYER,
   LEAD_FALLBACK_PACK,
-} from "../plugin/index.server.ts";
+} from "../server/hooks/agent-duties.ts";
 import {
   BRAINSTORM_NOTE_BODY,
   DEFAULT_PROFILES,
@@ -61,7 +61,7 @@ test("1) CREDITS.md exists at repo root and includes all 11 community accolades 
   assert.equal(bullets.length, 18, "Expected 11 community accolades + 7 later credits in CREDITS.md");
 });
 
-test("2) server/profiles.mjs and plugin/index.server.ts require attribution format in plans, commits, CREDITS.md, and release notes", () => {
+test("2) server/profiles.mjs and server/hooks/agent-duties.ts require attribution format in plans, commits, CREDITS.md, and release notes", () => {
   for (const [label, text] of [
     ["PRIOR_ART_CHECK_RULE", PRIOR_ART_CHECK_RULE],
     ["BRAINSTORM_NOTE_BODY", BRAINSTORM_NOTE_BODY],

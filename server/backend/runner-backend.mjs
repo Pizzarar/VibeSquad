@@ -236,7 +236,7 @@ let promptModule;
 async function injectedPrefix(role, cwd) {
   if (!["lead", "brainstorm", "worker"].includes(role)) return "";
   try {
-    promptModule ??= await import("../../plugin/index.server.ts");
+    promptModule ??= await import("../hooks/agent-duties.ts");
     return promptModule.injectedPrefix(role, cwd) || "";
   } catch {
     return ""; // prompt layering is best effort: an agent without it is still usable

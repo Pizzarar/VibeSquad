@@ -17,7 +17,7 @@ const assistantEvents = (text) => [
 
 test("detectPromisedRunIdle does not flag completed summary sentences containing running/checking", () => {
   const s1 =
-    'Updated [flushWake](file:///C:/Users/you/projects/VibeSquad/plugin/index.server.ts) to re-check lead.status === "idle" before sending, coalesce wakeups within a 3s cooldown window, cap running re-checks.';
+    'Updated [flushWake](file:///C:/Users/you/projects/VibeSquad/server/hooks/agent-duties.ts) to re-check lead.status === "idle" before sending, coalesce wakeups within a 3s cooldown window, cap running re-checks.';
   assert.equal(detectPromisedRunIdle(idleAgyAgent(), assistantEvents(s1)), null);
 
   const s2 = "Finished running non-daemon background commands and checking logs.";

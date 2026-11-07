@@ -9,7 +9,10 @@
     "skipLibCheck": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
+    "allowJs": true,
+    "checkJs": false,
     "erasableSyntaxOnly": true
   },
-  "include": ["*.ts", "*.d.ts", "server/**/*.ts"]
+  "include": ["server/hooks/*.ts"],
+  "exclude": ["server/hooks/*.test.ts"]
 }

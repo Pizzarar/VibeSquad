@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, w
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createPlugin, keptLaneOf, snapshotIntoBrief } from "../plugin/index.server.ts";
+import { createPlugin, keptLaneOf, snapshotIntoBrief } from "../server/hooks/agent-duties.ts";
 import { isThrowawayLane, laneLeadMismatch } from "../server/identity.mjs";
 
 const CWD = "/projects/VibeSquad";

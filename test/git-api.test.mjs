@@ -7,10 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { handleGitApi, isGitPath, parseUnifiedDiff, parseStatus, parseCommits, badRefName, badRepoPath } from "../server/git-api.mjs";
-import { makeVsHttpHandler } from "../plugin/server/remote-proxy.ts";
-import { decideProxyRequest, checkRemoteBody, proxyTimeoutFor } from "../plugin/server/remote-proxy-rules.ts";
+import { decideProxyRequest, checkRemoteBody, proxyTimeoutFor } from "../server/hooks/remote-proxy-rules.ts";
 
-const TOKEN = "a".repeat(64);
 const G = "/__vibesquad/git";
 const sh = (cwd, ...a) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...a], { cwd, encoding: "utf8" });
 
@@ -205,22 +203,6 @@ describe("routes on a temp repo", () => {
 });
 
 describe("remote proxy: git is owner-only", () => {
-  let server, port;
-  const seen = [];
-  const OWNER = mkdtempSync(join(tmpdir(), "vs-git-own-"));
-  const NONE = mkdtempSync(join(tmpdir(), "vs-git-none-"));
-  before(async () => {
-    writeFileSync(join(OWNER, "local-token"), TOKEN);
-    for (const h of [OWNER, NONE]) writeFileSync(join(h, "settings.json"), JSON.stringify({ remote: { enabled: true } }));
-    server = createServer((req, res) => {
-      seen.push({ method: req.method, url: req.url, token: req.headers["x-vibesquad-token"] });
-      res.setHeader("content-type", "application/json");
-      res.end("{}");
-    });
-    await new Promise((r) => server.listen(0, "127.0.0.1", r));
-    port = server.address().port;
-  });
-  after(() => { server.close(); for (const d of [OWNER, NONE]) rmSync(d, { recursive: true, force: true }); });
   const READS = ["status", "diff", "commits", "commit-diff", "branches", "validate-branch", "stash-list", "pr-status", "pr-timeline", "check-details"];
   const WRITES = ["commit", "push", "pull", "merge-base", "switch", "stash-save", "stash-pop", "discard", "rename-branch", "pr-create", "pr-merge", "pr-automerge"];
   const BODY = { commit: { message: "m" }, switch: { branch: "b" }, "rename-branch": { branch: "b" }, discard: { paths: ["a"] }, "pr-create": { title: "t" } };
@@ -237,22 +219,6 @@ describe("remote proxy: git is owner-only", () => {
     }
     assert.equal(decideProxyRequest("GET", `${G}/unknown`).ok, false);
     assert.equal(decideProxyRequest("GET", `${G}/status/x`).ok, false);
-  });
-
-  test("without the owner token every git route is refused locally; nothing reaches the server", async () => {
-    const n = seen.length;
-    const h = makeVsHttpHandler({ port, home: NONE });
-    for (const a of READS) await assert.rejects(h({ method: "GET", path: `${G}/${a}?cwd=x` }), /owner-only/, a);
-    for (const a of WRITES) await assert.rejects(h({ method: "POST", path: `${G}/${a}`, body: JSON.stringify({ cwd: "x", ...BODY[a] }) }), /owner-only/, a);
-    assert.equal(seen.length, n);
-  });
-
-  test("with the owner token, reads and writes carry it", async () => {
-    const h = makeVsHttpHandler({ port, home: OWNER });
-    assert.equal((await h({ method: "GET", path: `${G}/diff?cwd=x&mode=staged` })).status, 200);
-    assert.equal(seen.at(-1).token, TOKEN);
-    assert.equal((await h({ method: "POST", path: `${G}/commit`, body: JSON.stringify({ cwd: "x", message: "m" }) })).status, 200);
-    assert.equal(seen.at(-1).token, TOKEN);
   });
 
   test("slow git/gh writes get the long proxy timeout; reads keep the default", () => {

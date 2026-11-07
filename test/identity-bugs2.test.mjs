@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { createPlugin, nextLeadOrd, spawnRoleLabel } from "../plugin/index.server.ts";
+import { createPlugin, nextLeadOrd, spawnRoleLabel } from "../server/hooks/agent-duties.ts";
 import { UNASSIGNED_TEAM_ID, resolveAgentIdentity } from "../server/identity.mjs";
 import { resolveAgentIdentity as tsResolveAgentIdentity } from "../src/identity.ts";
 

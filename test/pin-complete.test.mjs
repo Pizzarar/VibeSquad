@@ -4,7 +4,7 @@ import { registerHooks } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
-import { checkRemoteBody } from "../plugin/server/remote-proxy-rules.ts";
+import { checkRemoteBody } from "../server/hooks/remote-proxy-rules.ts";
 import { runMarkComplete } from "../src/pinComplete.ts";
 
 const SRC_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "src");

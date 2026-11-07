@@ -20,7 +20,7 @@ Squad (team)
 The **Paseo daemon** manages agent sessions. VibeSquad adds:
 
 - `vs` CLI: team log, `vs who`, `vs whoami`, `vs handoff`, `vs inbox`, `vs profiles`
-- Server plugin (`plugin/index.server.ts`): prompt layering, auto-labelling, digest routing, lead handoff
+- Agent duties hook module (`server/hooks/agent-duties.ts`, hosted by the VS server for runner agents): prompt layering, auto-labelling, digest routing, lead handoff
 - Web UI (`src/`): roster view, team settings, idea inbox, profile management, pair-device QR modal
 - Push server (`server/push.mjs`): Web Push notifications for agent attention events
 
@@ -96,7 +96,7 @@ The CLI and plugin find `teams.json` in this order:
 Install the server plugin in the Paseo daemon to enable prompt layering and agent auto-labelling:
 
 ```sh
-# In the Paseo config, point the plugin path at plugin/index.server.ts
+# In the Paseo config, point the plugin path at plugin/index.ts
 # (exact steps depend on your Paseo version — see paseo --help plugins)
 ```
 

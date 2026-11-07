@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createPlugin, LEAD_FALLBACK_PACK, matchStoredProfile, resolveStoredProfile } from "../plugin/index.server.ts";
+import { createPlugin, LEAD_FALLBACK_PACK, matchStoredProfile, resolveStoredProfile } from "../server/hooks/agent-duties.ts";
 
 const PROFILES = [
   {
@@ -218,7 +218,7 @@ test(
       const toAgy = await h.create({ provider: "claude", model: "claude-opus-5-5", modeId: "bypassPermissions", title: "x" }, { VS_PROFILE: "Worker - Gemini" });
       assert.equal(toAgy.config.provider, "antigravity-cli");
       assert.equal(toAgy.config.featureValues?.approvalPolicy, "skip");
-      assert.equal(toAgy.config.modeId, "accept-edits", "caller's claude mode is dropped on a provider swap");
+      assert.equal(toAgy.config.modeId, undefined, "caller's claude mode is dropped on a provider swap; no forced accept-edits (row 4 gone)");
 
       const fromAgy = await h.create({ provider: "antigravity-cli", model: "gemini-3.8-pro", title: "x" }, { VS_PROFILE: "Worker - Codex" });
       assert.equal(fromAgy.config.provider, "codex");
@@ -382,7 +382,7 @@ test(
       });
       assert.equal(reviewer.config.provider, "antigravity-cli");
       assert.equal(reviewer.config.featureValues?.approvalPolicy, "skip");
-      assert.equal(reviewer.config.modeId, "accept-edits");
+      assert.equal(reviewer.config.modeId, undefined);
 
       assert.ok(LEAD_FALLBACK_PACK.includes("no `features`"));
       assert.ok(!LEAD_FALLBACK_PACK.includes("approvalPolicy"));

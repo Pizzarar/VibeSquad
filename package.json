@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "vite",
     "start": "node server/serve.mjs",
-    "build": "node server/generate-licenses.mjs && tsc --noEmit && vite build && node server/sync-runtime.mjs",
+    "build": "node server/generate-licenses.mjs && tsc --noEmit && tsc --noEmit -p tsconfig.server.json && vite build && node server/sync-runtime.mjs",
     "sync-runtime": "node server/sync-runtime.mjs",
     "build:remote": "vite build --mode remote",
     "build:desktop": "node server/build-desktop.mjs",
@@ -17,7 +17,7 @@
     "release:beta": "node server/release.mjs --channel beta",
     "release:stable": "node server/release.mjs --channel stable",
     "desktop:dev": "tauri dev",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.server.json",
     "test": "node scripts/run-tests.mjs"
   },
   "dependencies": {

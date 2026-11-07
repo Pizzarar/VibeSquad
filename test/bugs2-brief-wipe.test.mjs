@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { snapshotIntoBrief } from "../plugin/index.server.ts";
+import { snapshotIntoBrief } from "../server/hooks/agent-duties.ts";
 import { performBrainstormRestart, resetBrainstormRestartState } from "../server/brainstorm.mjs";
 import { writeBriefFile } from "../server/brief-write.mjs";
 import { refreshWhosHere, whosHereBody } from "../server/whos-here.mjs";

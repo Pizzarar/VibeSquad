@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createPlugin } from "../plugin/index.server.ts";
+import { createPlugin } from "../server/hooks/agent-duties.ts";
 
 function writeTeams(file, vibesquadLanes) {
   writeFileSync(

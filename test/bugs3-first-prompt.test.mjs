@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createPlugin } from "../plugin/index.server.ts";
+import { createPlugin } from "../server/hooks/agent-duties.ts";
 
 const CWD = "/projects/VibeSquad/.worktrees/unit-bugs3-block12";
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));

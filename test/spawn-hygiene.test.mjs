@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { EVERYONE_LAYER, dedupeNotesAgainst, injectedPrefix } from "../plugin/index.server.ts";
+import { EVERYONE_LAYER, dedupeNotesAgainst, injectedPrefix } from "../server/hooks/agent-duties.ts";
 import { SHARED_NOTE_PREFIX } from "../server/profiles.mjs";
 
 // Mock-Paseo-daemon tests: the runner has a single owner and is never lazily started, so pin every lane to Paseo.
@@ -28,7 +28,7 @@ test("block 1: bold-style rules in notes are deduped too", async () => {
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createPlugin } from "../plugin/index.server.ts";
+import { createPlugin } from "../server/hooks/agent-duties.ts";
 
 async function withBriefEnv(fn) {
   const dir = mkdtempSync(join(tmpdir(), "vs-spawn-hygiene-"));
@@ -245,7 +245,7 @@ test("block 6: a new lane may start small; normal overwrites back up the previou
   }));
 
 // ---- block 8: honest first-dispatch metric ----
-import { firstDispatchMetricText } from "../plugin/index.server.ts";
+import { firstDispatchMetricText } from "../server/hooks/agent-duties.ts";
 
 test("block 8: missing contextWindowUsedTokens logs n/a (never inputTokens); provider/model recorded", () => {
   const agy = { provider: "antigravity-cli", model: "gemini-3.8-pro", lastUsage: { inputTokens: 2100 } };

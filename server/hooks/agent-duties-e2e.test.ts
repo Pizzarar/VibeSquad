@@ -15,8 +15,8 @@ import {
   HUB_BUDDY_RULES,
   BRAINSTORM_PACK,
   EVERYONE_LAYER,
-} from "./index.server.ts";
-import type { AgentSettingsPatch } from "./index.server.ts";
+} from "./agent-duties.ts";
+import type { AgentSettingsPatch } from "./agent-duties.ts";
 
 const CWD = "/projects/VibeSquad";
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -330,7 +330,7 @@ test(
 // ---------------------------------------------------------------------------
 
 test(
-  "Stage 2: a Lane Buddy's handoff spawn auto-assigns team/ord, detaches the new lead, and retires the predecessor",
+  "Stage 2: a Lane Buddy's handoff spawn auto-assigns team/ord, does not detach the new lead (row 13 gone), and retires the predecessor",
   withEnv(async ({ briefRoot }) => {
     assert.equal(nextLeadOrd([], "feat-alpha", "lead-2"), "1", "no lead -> ord 1");
     assert.equal(
@@ -377,7 +377,7 @@ test(
       assert.equal(lead2.labels.team, "vibesquad", "auto-assigned team");
       assert.equal(lead2.labels.lane, "feat-alpha", "lane kept");
       assert.equal(lead2.labels.ord, "2", "auto-assigned next ord");
-      assert.ok(h.detachedIds.includes("lead-2"), "new lead detached from its Buddy parent");
+      assert.deepEqual(h.detachedIds, [], "row 13 gone: the new lead is no longer detached from its Buddy parent");
 
       assert.equal(lead1.labels.role, "former-lead", "predecessor retired");
       assert.equal(lead1.title, "(old) Fea1 · initial setup", "predecessor title updated");
@@ -442,7 +442,7 @@ test(
         labels: { team: "vibesquad", lane: "feat-alpha", role: "worker" },
       });
       assert.equal(agy.config.featureValues.approvalPolicy, "skip");
-      assert.equal(agy.config.modeId, "accept-edits");
+      assert.equal(agy.config.modeId, undefined, "row 4 gone: no forced accept-edits mode");
 
       const m1 = metricTexts(vsHome);
       for (const field of ["model", "mode", "thinking"]) {

@@ -8,7 +8,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { performBrainstormRestart, resetBrainstormRestartState } from "../server/brainstorm.mjs";
 import { seedDefaultPack } from "../server/profiles.mjs";
-import { checkRemoteBody } from "../plugin/server/remote-proxy-rules.ts";
+import { checkRemoteBody } from "../server/hooks/remote-proxy-rules.ts";
 
 const drawerSrc = readFileSync(new URL("../src/DrawerHeader.tsx", import.meta.url), "utf8");
 const agentSrc = readFileSync(new URL("../src/AgentDrawer.tsx", import.meta.url), "utf8");

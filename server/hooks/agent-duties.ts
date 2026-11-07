@@ -1,4 +1,4 @@
-// @vibesquad/plugin — slim Paseo server plugin.
+// VibeSquad agent duties: the hook closure the VS server hosts for runner agents (server/backend/runner-hooks.mjs).
 //
 //   1. before("agent.create")  fixed-order, cache-stable prompt layering + A1 spawn guard
 //      agent.created           team/lane auto-labelling + first-dispatch context metric
@@ -14,13 +14,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
-import type { PluginServerContext } from "@getpaseo/plugin/server";
 import {
   LEAD_AUTO_HANDOFF_DEFAULT,
   LEAD_FLAG_DEFAULT,
   LEAD_HARD_CAP_DEFAULT,
   createLeadHandoffCoordinator,
-} from "@vibesquad/server/lead-handoff.mjs";
+} from "../lead-handoff.mjs";
 import {
   UNASSIGNED_TEAM_ID,
   effectiveAgentRole,
@@ -35,24 +34,32 @@ import {
   normalizeRoleLabel,
   resolveAgentIdentity,
   topicOf,
-} from "@vibesquad/server/identity.mjs";
-import { refreshWhosHere } from "@vibesquad/server/whos-here.mjs";
-import { writeBriefFile } from "@vibesquad/server/brief-write.mjs";
-import { defangPromptFences } from "@vibesquad/server/write-guards.mjs";
-import { detachLiveChildren } from "@vibesquad/server/detach-children.mjs";
-import { briefRootFor } from "@vibesquad/server/brief-path.mjs";
-import { DEFAULT_PACK_PROFILES, deriveRole } from "@vibesquad/server/profiles.mjs";
-import { normalizeProviderFamily, resolveProfileWithFailover } from "@vibesquad/server/provider-failover.mjs";
-import { leanApplies, leanProviderOptions } from "@vibesquad/server/lean-tools.mjs";
-import { makeVsHttpHandler, vsHttp } from "./server/remote-proxy.ts";
+} from "../identity.mjs";
+import { refreshWhosHere } from "../whos-here.mjs";
+import { writeBriefFile } from "../brief-write.mjs";
+import { defangPromptFences } from "../write-guards.mjs";
+import { detachLiveChildren } from "../detach-children.mjs";
+import { briefRootFor } from "../brief-path.mjs";
+import { DEFAULT_PACK_PROFILES, deriveRole } from "../profiles.mjs";
+import { normalizeProviderFamily, resolveProfileWithFailover } from "../provider-failover.mjs";
+import { leanApplies, leanProviderOptions } from "../lean-tools.mjs";
 import {
   LEGACY_NEEDS_LABEL,
   LEGACY_USER_TYPE,
   loadUserSettings,
   readJsonFileWithBom,
-} from "@vibesquad/server/user-settings.mjs";
+} from "../user-settings.mjs";
 
 type Labels = Record<string, string>;
+
+/**
+ * The hook surface this module is written against. server/backend/runner-hooks.mjs provides it (backed by a
+ * RunnerBackend); the Paseo daemon plugin host is gone, so this replaces the old @getpaseo/plugin/server type.
+ */
+export interface PluginServerContext {
+  before(event: string, handler: (input: any) => any): () => void;
+  on(event: string, handler: (input: any, ctx: { paseo: any }) => any): () => void;
+}
 type Paseo = any;
 
 export const HANDOFF_FLAG_TOKENS = LEAD_FLAG_DEFAULT;
@@ -68,7 +75,7 @@ const WAKE_TYPES = new Set(["done", "blocker", "decision", "needs-you", "you", L
 const TRANSIENT_ERROR = /googleapis|EOF|no such host|ECONNRESET|stream idle timeout|context deadline exceeded|stream was interrupted|temporarily unavailable/i;
 const MAX_RETRIES = 2;
 const MAX_TEXT = 240;
-const REPO_ROOT = path.resolve(process.env.VIBESQUAD_ROOT || (typeof import.meta?.dirname === "string" ? path.join(import.meta.dirname, "..") : path.join(os.homedir(), "projects", "VibeSquad")));
+const REPO_ROOT = path.resolve(process.env.VIBESQUAD_ROOT || (typeof import.meta?.dirname === "string" ? path.join(import.meta.dirname, "..", "..") : path.join(os.homedir(), "projects", "VibeSquad")));
 
 // ---------------------------------------------------------------------------
 // Static prompt layers (no timestamps / per-spawn values: keeps caches warm)
@@ -412,14 +419,6 @@ export function deriveTeamForSpawn(
     source: resolved.source,
     role: resolved.role,
   };
-}
-
-export function sanitizeLegacyRosterPrompt(systemPrompt: string | undefined): string {
-  if (!systemPrompt) return "";
-  return systemPrompt.replace(
-    /To find a project's current lead:\s*run\s*`paseo\s+ls\s+-g\s+--json`[^\r\n]*/gi,
-    "To find a project's current lead: run `vs who lead`.",
-  );
 }
 
 export function isRetiredLeadSnap(
@@ -886,7 +885,7 @@ export interface AgentSettingsPatch {
 }
 
 async function withDaemonClient<T>(fn: (client: any) => Promise<T>): Promise<T> {
-  const { createDaemonClient } = await import("@vibesquad/server/brainstorm.mjs");
+  const { createDaemonClient } = await import("../brainstorm.mjs");
   const client: any = createDaemonClient();
   await client.connect();
   try {
@@ -993,8 +992,6 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
     };
 
-    // R2-1 remote proxy RPC (vs.http). Gated off by default; see server/remote-proxy.ts.
-    if (typeof server.handle === "function") server.handle(vsHttp, makeVsHttpHandler());
     const digested = new Set<string>();
     const retries = new Map<string, number>();
     const offsets = new Map<string, number>();
@@ -1575,18 +1572,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             next.featureValues = fv;
             changed = true;
           }
-          if (!next.modeId) {
-            next.modeId = "accept-edits";
-            changed = true;
-          }
         }
 
         const rawSysPrompt = config.systemPrompt ?? "";
-        const sanitizedSysPrompt = sanitizeLegacyRosterPrompt(rawSysPrompt);
-        if (sanitizedSysPrompt !== rawSysPrompt) {
-          next.systemPrompt = sanitizedSysPrompt;
-          changed = true;
-        }
 
         const explicitLane = (reqLabels.orphan === "1" ? "" : callerLane || env?.VS_LANE || "").trim();
         const envOrReqLabels: Labels = {
@@ -1608,8 +1596,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const profileNotes = isHubBuddy ? "" : dedupeNotesAgainst((matchedProfile?.notes ?? "").trim(), prefix);
         const gitState = await inspectGitSpawnState(cwd);
         st.mark("git-spawn-state");
-        if (prefix && !sanitizedSysPrompt.includes(EVERYONE_LAYER)) {
-          const existing = sanitizedSysPrompt.trim();
+        if (prefix && !rawSysPrompt.includes(EVERYONE_LAYER)) {
+          const existing = rawSysPrompt.trim();
           const parts = [prefix];
           if (profileNotes && !existing.includes(profileNotes)) {
             parts.push(profileNotes);
@@ -1645,7 +1633,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           const briefLane = (reqLabels.orphan === "1" ? "" : callerLane || env?.VS_LANE || "").trim();
           const marker = briefBeginMarker(briefLane);
           const reqPrompt = String((request as any).prompt ?? (request as any).initialPrompt ?? "");
-          const currentSys = String(next.systemPrompt ?? sanitizedSysPrompt ?? "");
+          const currentSys = String(next.systemPrompt ?? rawSysPrompt ?? "");
           // VS's own restart path (server/brainstorm.mjs) already puts the brief in the first prompt.
           const fromVsRestart = Boolean(reqLabels["vs.restarted-from"]) || env?.VS_BRIEF_INLINE === "1";
           if (briefLane && !fromVsRestart && !currentSys.includes(marker) && !reqPrompt.includes(marker)) {
@@ -1677,7 +1665,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         // lose the lane's source of truth.
         const artifactLane = (reqLabels.orphan === "1" ? "" : callerLane || env?.VS_LANE || spawnLoc?.lane || "").trim();
         if (artifactLane) {
-          const currentSys = String(next.systemPrompt ?? sanitizedSysPrompt ?? "");
+          const currentSys = String(next.systemPrompt ?? rawSysPrompt ?? "");
           const artMarker = "<!-- vibesquad:lane-artifact:begin lane=";
           if (!currentSys.includes(artMarker)) {
             const briefRoot = deps.briefRoot ?? briefRootFor(reqLabels.team || env?.VS_TEAM || spawnTeamId || "", artifactLane, REPO_ROOT);
@@ -1866,14 +1854,6 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           st.mark("set-labels");
 
           const finalRole = labels.role || want.role || "";
-          // A lead outlives the Buddy (or old lead) that spawned it: Paseo archives children with their
-          // parent, so a chained lead and all its workers went down with every Buddy restart. Start it detached.
-          if (finalRole === "lead" && parentId) {
-            await Promise.resolve()
-              .then(() => paseo.agents.ref(agent.id).detach())
-              .then(() => log(`detached new lead ${agent.id} from parent ${parentId}`))
-              .catch((e: unknown) => log(`detach failed for lead ${agent.id}: ${e}`));
-          }
           const finalTopic = finalRole === "brainstorm" ? brainstormTopicOf({ ...labels, ...want }) : "";
           // An explicit lane label beats cwd for retirement: if the label lane was
           // overridden from cwd, the plugin is guessing, so never retire anyone on a guess.
@@ -1894,6 +1874,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           if (team && lane) await refreshLaneWhosHere(paseo, lane);
           st.mark("refresh-whos-here");
 
+          // WORKAROUND: a 30 s timer that redelivers a first prompt which never ran. The real fix is 867793b
+          // (queued inputs survive a restart); revisit and delete this duty once that has been live a while.
           // Block 2a: If a new agent had an initial prompt and stays idle with 0 tokens ~30 s after
           // creation without ever running, redeliver the initial prompt once and log first-prompt-redelivered.
           const aid = String(agent?.id ?? "").trim();

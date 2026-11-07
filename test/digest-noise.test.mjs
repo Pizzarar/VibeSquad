@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { isDigestNoise, statesVerdict } from "../plugin/index.server.ts";
+import { isDigestNoise, statesVerdict } from "../server/hooks/agent-duties.ts";
 
 test("digest skips workers with no job label", () => {
   assert.equal(isDigestNoise({ role: "worker" }, "Bug1"), true);

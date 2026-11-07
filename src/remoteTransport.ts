@@ -1,7 +1,7 @@
 // Remote mode fetch shim (PLAN_PASEO_PARITY.md block R2-1). When the UI runs away from the PC, same-origin
 // /__vibesquad/* and /api/* calls go through the `vibesquad` plugin's vs.http RPC over the Paseo daemon
 // connection instead of HTTP. Everything else passes through. Never installed in normal mode.
-// The allowlist lives server-side (plugin/server/remote-proxy-rules.ts); this file only routes.
+// The allowlist lives server-side (server/hooks/remote-proxy-rules.ts); this file only routes.
 // No imports: main.tsx passes the daemonClient-backed invoke, and node tests pass a fake.
 
 export type VsHttpRequest = { method: string; path: string; body?: string };
