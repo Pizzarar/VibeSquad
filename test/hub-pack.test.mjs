@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { BRAINSTORM_PACK, HUB_BUDDY_RULES, VIBE_MODE_BUDDY_RULES, createPlugin, injectedPrefix, isHubCwd, rolePack } from "../server/hooks/agent-duties.ts";
+import { BRAINSTORM_PACK, HUB_BUDDY_RULES, HUB_LEAD_RULES, VIBE_MODE_BUDDY_RULES, createPlugin, injectedPrefix, isHubCwd, rolePack } from "../server/hooks/agent-duties.ts";
 import { buildBrainstormInitialPrompt } from "../server/brainstorm.mjs";
 import { BRAINSTORM_NOTE_BODY } from "../server/profiles.mjs";
 
@@ -24,7 +24,8 @@ test("topic Buddy pack has no hub rules; hub Buddy pack appends them", () => {
 test("hub rules come after vibe rules; other roles ignore isHub", () => {
   assert.equal(rolePack("brainstorm", "", true, true), `${BRAINSTORM_PACK}\n${VIBE_MODE_BUDDY_RULES}\n${HUB_BUDDY_RULES}`);
   assert.equal(rolePack("worker", "", false, true), rolePack("worker", ""));
-  assert.equal(rolePack("lead", "", false, true), rolePack("lead", ""));
+  assert.equal(rolePack("lead", "", false, true), `${rolePack("lead", "")}
+${HUB_LEAD_RULES}`);
 });
 
 test("isHubCwd matches isHubLane: explicit flag, id fallback, no fallback when another lane is flagged", () => {
@@ -121,7 +122,7 @@ test("lane Buddy started in repo root does not get HUB_BUDDY_RULES; hub Buddy do
     );
     const sysD = String(d.config.systemPrompt ?? "");
     assert.ok(sysD.includes(HUB_BUDDY_RULES), "hub Buddy must get HUB_BUDDY_RULES");
-    assert.match(sysD, /Never spawn a Lead/);
+    assert.match(sysD, /Never spawn a feature-lane Lead/);
     assert.match(sysD, /vs pin merge/);
     assert.doesNotMatch(sysD, /thinking partner for one feature lane/, "hub Buddy must not get feature-lane BRAINSTORM_NOTE_BODY");
   } finally {
@@ -137,7 +138,7 @@ test("lane Buddy started in repo root does not get HUB_BUDDY_RULES; hub Buddy do
 test("lane Buddies may spawn leads (including in parallel) when a lane has none; only HUB_BUDDY_RULES forbids spawning a Lead", () => {
   assert.match(BRAINSTORM_PACK, /spawn one.*parallel|spawn leads.*parallel/i);
   assert.doesNotMatch(BRAINSTORM_PACK, /Never spawn a Lead/);
-  assert.match(HUB_BUDDY_RULES, /Never spawn a Lead/);
+  assert.match(HUB_BUDDY_RULES, /Never spawn a feature-lane Lead/);
   assert.ok(
     BRAINSTORM_NOTE_BODY.includes(
       "Starting agents: you may spawn leads (including several in parallel) when a lane has none; other agents (tooling, research, prototypes) only when the owner asks.",

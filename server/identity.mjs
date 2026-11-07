@@ -723,9 +723,11 @@ export function formatDisplayTitle({
   const cleanJob = String(job || "").trim();
 
   if (r === "lead") {
+    if (hub) return cleanJob ? `Overlord · ${cleanJob}` : "Overlord";
     return cleanJob ? `★ ${c}${ordClean} · ${cleanJob}` : `★ ${c}${ordClean}`;
   }
   if (r === "former-lead" || r === "old-lead" || r === "retired") {
+    if (hub) return cleanJob ? `(old) Overlord · ${cleanJob}` : "(old) Overlord";
     return cleanJob ? `(old) ${c}${ordClean} · ${cleanJob}` : `(old) ${c}${ordClean}`;
   }
   if (r === "brainstorm" || r === "buddy") {

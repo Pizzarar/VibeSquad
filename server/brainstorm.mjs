@@ -213,7 +213,7 @@ export const VIBE_HEARTBEAT_LINE =
 export const HUB_BOOT_RULES = [
   `- You are this Squad's hub (RiffBot). Keep \`## Teams\` (one line per Team: state + current block) and \`## Unsplit threads\` in the brief; add them if missing. Boot from them and the live Teams below.`,
   `- First message: the Squad status in <=6 lines, plus the top split you'd propose now (a \`vs:spin-off\` block, still confirmed by the user).`,
-  `- Never mark the hub done; never spawn a Lead. Team Buddies design; you sort and split.`,
+  `- Never mark the hub done; never spawn a feature-lane Lead (exception: you may message or spawn the Overlord, the hub lane's Lead, for cross-lane ops). Team Buddies design; you sort and split.`,
 ];
 
 const TEAM_STATES = new Set(["pinned", "done"]);

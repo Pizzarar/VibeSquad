@@ -1116,14 +1116,14 @@ export function titleFor(
       ord: role === "lead" ? i.ord || "?" : i.ord,
       topic: i.topic,
       job: role === "worker" ? i.job || "job" : i.job,
-      hub: role === "brainstorm" && (i.hub ?? isHubLaneId(i.laneId || lane)),
+      hub: role !== "worker" && (i.hub ?? isHubLaneId(i.laneId || lane)),
     }),
   );
 }
 
 /** `(old) <Code><ord>[ · objective]` for a retired lead. */
 export function retiredLeadTitle(lane: string, laneId: string, ord: string | number, job?: string): string {
-  return clip(formatDisplayTitle({ role: "former-lead", laneName: lane, laneId, code: laneCodeOf(laneId || lane), ord, job }));
+  return clip(formatDisplayTitle({ role: "former-lead", laneName: lane, laneId, code: laneCodeOf(laneId || lane), ord, job, hub: isHubLaneId(laneId || lane) }));
 }
 
 /** True when the lane (id, alias or name) is its Squad's hub lane. */

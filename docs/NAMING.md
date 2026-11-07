@@ -35,6 +35,7 @@ UI and docs use these names (2026-11-01). Labels, `teams.json` keys and code ide
 | Retired lead | same, with `role=former-lead` | `(old) <Code><ord> · <objective>`, or `(old) <Code><ord>` |
 | Brainstorm (Buddy) | `lane`, `role=brainstorm` (plus optional `topic`) | `<Code> Buddy` or `<Code> Buddy · <topic>` (e.g. `Bug Buddy`) |
 | RiffBot (the hub lane's Buddy) | `lane` = the Squad's hub lane (`hub: true`, else the lane whose id is the Squad id), `role=brainstorm`, no `topic` | `RiffBot`; with a topic: `Hub Buddy · <topic>` (e.g. `<Code> Buddy · <topic>` with the hub's code). "Hub" is internal only (flag, `isHubLane`); the UI says RiffBot. |
+| Overlord (the hub lane's Lead) | `lane` = the Squad's hub lane, `role=lead`, optional `job` | `Overlord`, or `Overlord · <objective>`; card badge `OVERLORD` (like `RIFFBOT`). Retired (`role=former-lead`): `(old) Overlord` / `(old) Overlord · <objective>`. Feature-lane Leads keep `★ <Code><ord>`. |
 | Retired brainstorm | same, with `role=former-brainstorm` | unchanged (not rewritten) |
 | Worker | `lane`, `role=worker`, `job`, `ord` (its lead's) | `<Code><ord> · <job>` (e.g. `Hub6 · drop files`); no `ord` → `<Code> · <job>` |
 
