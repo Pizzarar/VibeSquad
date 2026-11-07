@@ -79,6 +79,7 @@ import {
 import { WorkspacesView } from "./WorkspacesView";
 import { AttentionBadge } from "./AttentionList";
 import { SquadQueue } from "./SquadQueue";
+import { SquadFloor } from "./SquadFloor";
 import { FullToggle, PinGrid, SidebarPins, SquadsHome, setFullView, useFullView, type PinHandler } from "./PinGrid";
 import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import { popAction, urlAgentFor } from "./pinFocusLogic";
@@ -2019,6 +2020,7 @@ export function App() {
         />
       )}
       {pinFocusView && pinFocus && hubFocused && <SquadQueue view={pinFocusView} />}
+      {pinFocusView && pinFocus && hubFocused && <SquadFloor view={pinFocusView} onOpenRiffBot={onQuickStart} />}
       {pinFocusView && pinFocus && <PinRail view={pinFocusView} focus={pinFocus} onPick={onRailPick} />}
       <PinToast />
       <MobileBar />
