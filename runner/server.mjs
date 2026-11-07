@@ -5,7 +5,7 @@
 // Discovery for VS: <home>/runner.json = { port, pid, startedAt }.
 import http from 'node:http';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,23 +20,45 @@ const SSE_SKIP = new Set(['stderr', 'raw']); // noisy, never rendered
 const SSE_HEARTBEAT_MS = 15000;
 
 /**
- * Content hash of a runner's own *.mjs files (its whole code surface, one process = one set). The supervisor hashes
+ * Content hash of a runner's own *.mjs files, recursive (adapters/ etc.), one process = one set. The supervisor hashes
  * the runtime runner/ dir on disk the same way and compares against the hash the live runner reports on /health, so a
  * build → sync-runtime that changed runner code is detected and the runner auto-restarts (RR1).
+ * Cached by (relative path, size, mtimeMs): a tick that rehashes unchanged files only stats them, never re-reads them.
  */
+const runnerHashCache = new Map(); // dir -> { key, hash }
 export function hashRunnerFiles(dir = path.dirname(fileURLToPath(import.meta.url))) {
+  const files = [];
+  const walk = (d, rel) => {
+    let entries;
+    try { entries = readdirSync(d, { withFileTypes: true }); } catch { return; } // dir missing: empty digest
+    for (const ent of entries) {
+      if (ent.isSymbolicLink()) continue; // never follow links (node_modules, junctions)
+      const p = path.join(d, ent.name);
+      const r = rel ? `${rel}/${ent.name}` : ent.name;
+      if (ent.isDirectory()) walk(p, r);
+      else if (ent.name.endsWith('.mjs')) {
+        try {
+          const st = statSync(p);
+          files.push({ r, size: st.size, mtimeMs: st.mtimeMs });
+        } catch { /* vanished mid-walk */ }
+      }
+    }
+  };
+  walk(dir, '');
+  files.sort((a, b) => (a.r < b.r ? -1 : 1));
+  const key = files.map((f) => `${f.r}\u0000${f.size}\u0000${f.mtimeMs}`).join('\n');
+  const hit = runnerHashCache.get(dir);
+  if (hit && hit.key === key) return hit.hash;
   const h = createHash('sha256');
-  let names = [];
-  try {
-    names = readdirSync(dir).filter((n) => n.endsWith('.mjs')).sort();
-  } catch { /* dir missing: empty digest */ }
-  for (const name of names) {
-    h.update(name);
+  for (const f of files) {
+    h.update(f.r);
     h.update('\0');
-    try { h.update(readFileSync(path.join(dir, name))); } catch { /* file vanished mid-read */ }
+    try { h.update(readFileSync(path.join(dir, f.r))); } catch { /* file vanished mid-read */ }
     h.update('\0');
   }
-  return h.digest('hex');
+  const hash = h.digest('hex');
+  runnerHashCache.set(dir, { key, hash });
+  return hash;
 }
 
 export function tokenMatches(header, token) {

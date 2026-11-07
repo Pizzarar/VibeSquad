@@ -186,15 +186,16 @@ export async function unstick({
 }
 
 /**
- * Owner-confirmed "Restart runner" (Unstick's new action): stop every live turn cleanly the way archive/park does (cancel a
- * running turn and keep its session so the agent stays parked/resumable), then kill the runner tree and start a fresh one.
- * Unlike `unstick`, this restarts a HEALTHY runner — the exact gap that left runner code changes not live after build + sync.
- * Everything environmental is injectable for tests: `listAgents`, `stopAgent`, `restartRunner`.
+ * Owner-confirmed "Restart runner" (Unstick's new action): cancel every running turn cleanly (cancelAgent keeps the session,
+ * the agent stays unarchived), then kill the runner tree and start a fresh one. Unlike `unstick`, this restarts a HEALTHY
+ * runner — the exact gap that left runner code changes not live after build + sync. Cancelled agents come back parked/lost
+ * and resume on their next send through the existing park/resume path. Never archives anything.
+ * Everything environmental is injectable for tests: `listAgents`, `cancelAgent`, `restartRunner`.
  */
 export async function forceRestartRunner({
   backend,
   listAgents,
-  stopAgent,
+  cancelAgent,
   restartRunner = (be) => restartRunnerNow(be),
 } = {}) {
   const be = backend ?? sharedRunnerBackend();
@@ -202,18 +203,18 @@ export async function forceRestartRunner({
   try {
     agents = await (listAgents ?? (() => be.listAgents()))();
   } catch {
-    // Runner down or unreachable: nothing to park; restartRunnerNow still starts a fresh runner.
+    // Runner down or unreachable: nothing to cancel; restartRunnerNow still starts a fresh runner.
   }
-  const parked = [];
+  const cancelled = [];
   for (const a of agents ?? []) {
-    if (!a || a.archivedAt) continue;
+    if (!a || a.archivedAt || a.status !== "running") continue; // only stop turns that are actually running
     try {
-      await (stopAgent ?? ((id) => be.archiveAgent(id)))(a.id);
-      parked.push(a.id);
+      await (cancelAgent ?? ((id) => be.cancelAgent(id)))(a.id);
+      cancelled.push(a.id);
     } catch {
-      // Already gone mid-loop: nothing to park.
+      // Already finished mid-loop: nothing to cancel.
     }
   }
   await restartRunner(be);
-  return { ok: true, parked, restarted: true };
+  return { ok: true, cancelled, restarted: true };
 }

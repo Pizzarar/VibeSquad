@@ -362,13 +362,15 @@ function UnstickButton() {
   );
 }
 
-type RestartRunnerResult = { ok: boolean; parked?: string[]; restarted?: boolean; error?: string };
+type RestartRunnerResult = { ok: boolean; cancelled?: string[]; restarted?: boolean; error?: string };
 
 function RestartRunnerButton() {
   const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [res, setRes] = useState<RestartRunnerResult | null>(null);
   const run = async () => {
     setBusy(true);
+    setConfirming(false);
     try {
       const r = await fetch("/__vibesquad/restart-runner", { method: "POST" });
       setRes((await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }))) as RestartRunnerResult);
@@ -380,14 +382,22 @@ function RestartRunnerButton() {
   };
   return (
     <div data-setting-id="restart-runner" data-testid="settings-restart-runner">
-      <p className="muted small">Runner fixes not going live? Restarts the runner so the latest runner code loads. Running turns are parked first and resume in place.</p>
-      <button className="btn ghost small" disabled={busy} onClick={() => void run()}>
-        {busy ? "Restarting…" : "Restart runner"}
-      </button>
+      <p className="muted small">Runner fixes not going live? Restarts the runner so the latest runner code loads.</p>
+      {confirming ? (
+        <div data-testid="settings-restart-runner-confirm">
+          <p className="muted small">Restart runner? Running turns are cancelled; agents resume on next message.</p>
+          <button className="btn small" disabled={busy} onClick={() => void run()}>Restart now</button>{" "}
+          <button className="btn ghost small" disabled={busy} onClick={() => setConfirming(false)}>Cancel</button>
+        </div>
+      ) : (
+        <button className="btn ghost small" disabled={busy} onClick={() => setConfirming(true)}>
+          {busy ? "Restarting…" : "Restart runner"}
+        </button>
+      )}
       {res && (
         <div className="muted small" data-testid="settings-restart-runner-result">
           {res.ok ? (
-            <>Runner restarted{res.parked?.length ? ` · parked ${res.parked.length}` : ""}</>
+            <>Runner restarted{res.cancelled?.length ? ` · cancelled ${res.cancelled.length}` : ""}</>
           ) : (
             <>Failed: {res.error}</>
           )}

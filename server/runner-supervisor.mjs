@@ -57,7 +57,8 @@ export async function restartRunnerNow(owner, { alive = pidAlive, waitMs = 3000,
  * `owner`: { startOwned(): Promise<boolean>, rc: { healthy(): Promise<boolean>, home } } (a RunnerBackend).
  * Checks every `checkMs`; when the runner is down it starts it, and after a failed start waits longer (backoff, capped).
  * When it is up it also compares the runner's reported code hash against the runtime runner/ dir and restarts it once the
- * hash differs AND there are zero running turns (never a forced kill on a timer: it just waits for the next tick).
+ * hash differs AND there are zero running turns. It restarts at most once per distinct disk hash (no restart loop), and it
+ * never treats an unknown running count as zero (it waits, or derives it from the agent list).
  */
 export function superviseRunner(owner, {
   checkMs = 5000,
@@ -65,7 +66,8 @@ export function superviseRunner(owner, {
   maxBackoffMs = 60000,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
-  healthInfo = (o) => o.rc.request("GET", "/health").then((h) => ({ hash: h.hash, running: Number(h.running) || 0 })).catch(() => null),
+  healthInfo = (o) => o.rc.request("GET", "/health").then((h) => ({ hash: h.hash, running: h.running })).catch(() => null),
+  runningCount = (o) => o.listAgents().then((agents) => agents.filter((a) => a.status === "running").length).catch(() => null),
   diskHash = () => hashRunnerFiles(runtimeRunnerDir()),
   restart = (o) => restartRunnerNow(o),
   log = logRunnerMetric,
@@ -74,6 +76,8 @@ export function superviseRunner(owner, {
   let timer = null;
   let backoff = minBackoffMs;
   let pendingLogged = false;
+  let restartedFor = null; // the disk hash we already restarted for (restart at most once per distinct hash)
+  let gaveUpLogged = false; // "still stale after restart" logged once per stuck hash
   const tick = async () => {
     let delay = checkMs;
     try {
@@ -87,24 +91,41 @@ export function superviseRunner(owner, {
         }
       } else {
         backoff = minBackoffMs;
+        const disk = diskHash();
         const health = await healthInfo(owner);
         const hash = health?.hash;
-        const running = health?.running ?? 0;
         // A runner whose /health has no hash field (old build) is stale; so is a hash that differs from the runtime files.
-        const stale = typeof hash !== "string" || hash !== diskHash();
-        if (stale) {
-          if (running > 0) {
+        const stale = typeof hash !== "string" || hash !== disk;
+        if (!stale) {
+          pendingLogged = false;
+        } else {
+          // Running turns: prefer /health's count. An old build lacks `running`, so derive it from the agent list;
+          // if that also fails the count is unknown and we treat it as busy (never as zero).
+          let running;
+          if (typeof health?.running === "number" && Number.isFinite(health.running) && health.running >= 0) {
+            running = health.running;
+          } else {
+            running = await runningCount(owner); // number | null
+          }
+          if (running === null || running > 0) {
             if (!pendingLogged) {
               pendingLogged = true;
-              log(`runner restart pending: ${running} running turn(s), waiting for them to finish`);
+              log(`runner restart pending: ${running === null ? "running turns unknown" : `${running} running turn(s)`}, waiting for them to finish`);
             }
           } else {
             pendingLogged = false;
-            log("runner restart: runtime runner code changed, restarting");
-            await restart(owner);
+            if (disk === restartedFor) {
+              if (!gaveUpLogged) {
+                gaveUpLogged = true;
+                log("runner restart: restarted for this code but the runner still reports a different hash; giving up until the runtime changes");
+              }
+            } else {
+              gaveUpLogged = false;
+              log("runner restart: runtime runner code changed, restarting");
+              await restart(owner);
+              restartedFor = disk;
+            }
           }
-        } else {
-          pendingLogged = false;
         }
       }
     } catch {

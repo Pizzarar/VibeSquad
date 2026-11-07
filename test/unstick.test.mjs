@@ -184,18 +184,27 @@ test('RunnerBackend.startOwned({force}) bypasses the failure cooldown and a doom
   assert.equal(calls, 2);
 });
 
-test('forceRestartRunner parks live (non-archived) agents cleanly, then restarts', async () => {
-  const parked = [];
+test('forceRestartRunner cancels only running turns and never archives', async () => {
+  const cancelled = [];
+  const archived = [];
   let restarted = 0;
-  const r = await forceRestartRunner({
-    listAgents: async () => [{ id: 'rn-a', archivedAt: null }, { id: 'rn-b', archivedAt: null }, { id: 'rn-c', archivedAt: '2026-11-07T00:00:00Z' }],
-    stopAgent: async (id) => parked.push(id),
-    restartRunner: async () => { restarted++; return true; },
-  });
-  assert.deepEqual(parked, ['rn-a', 'rn-b']);
+  const backend = {
+    listAgents: async () => [
+      { id: 'rn-run', status: 'running', archivedAt: null },
+      { id: 'rn-idle', status: 'idle', archivedAt: null },
+      { id: 'rn-closed', status: 'closed', archivedAt: null },
+      { id: 'rn-archived', status: 'running', archivedAt: '2026-11-07T00:00:00Z' },
+    ],
+    cancelAgent: async (id) => cancelled.push(id),
+    archiveAgent: async (id) => archived.push(id),
+  };
+  const r = await forceRestartRunner({ backend, restartRunner: async () => { restarted++; return true; } });
+  assert.deepEqual(cancelled, ['rn-run']); // running + not archived only
+  assert.deepEqual(archived, []);          // never archives anything
   assert.equal(restarted, 1);
   assert.equal(r.ok, true);
   assert.equal(r.restarted, true);
+  assert.deepEqual(r.cancelled, ['rn-run']);
 });
 
 test('forceRestartRunner still restarts when the agent list is unreachable (runner down)', async () => {
@@ -206,7 +215,7 @@ test('forceRestartRunner still restarts when the agent list is unreachable (runn
   });
   assert.equal(restarted, 1);
   assert.equal(r.ok, true);
-  assert.deepEqual(r.parked, []);
+  assert.deepEqual(r.cancelled, []);
 });
 
 test('restart-runner route is owner-only: POST without the local token is 403', async () => {
