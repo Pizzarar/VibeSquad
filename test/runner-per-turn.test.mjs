@@ -42,6 +42,29 @@ const setup = (opts = {}) => {
   const runner = new Runner({ dir: tmp(), adapters: { claude: createClaudeAdapter({ spawnImpl, mcp: false }) }, maxLive: 16, parkGraceMs: 0, turnCaps: { claude: 6 }, ...opts });
   return { runner, spawnImpl };
 };
+// fakeSpawn, but every `user` message the claude adapter writes to child stdin is captured in order.
+function captureSpawn() {
+  const impl = fakeSpawn();
+  const texts = [];
+  const wrapped = (file, args) => {
+    const child = impl(file, args);
+    child.stdin.on('data', (d) => {
+      for (const line of d.toString().split('\n')) {
+        if (!line.trim()) continue;
+        let o;
+        try { o = JSON.parse(line); } catch { continue; }
+        if (o.type !== 'user') continue;
+        const c = o.message?.content;
+        if (typeof c === 'string') texts.push(c);
+        else if (Array.isArray(c)) texts.push(c.filter((b) => b.type === 'text').map((b) => b.text).join('\n'));
+      }
+    });
+    return child;
+  };
+  wrapped.calls = impl.calls;
+  wrapped.texts = texts;
+  return wrapped;
+}
 const mk = (runner, extra = {}) => runner.create({ provider: 'claude', cwd: os.tmpdir(), ...extra });
 const running = (runner) => [...runner.live.values()].filter((e) => e.inflight > 0).length;
 const lastStatus = (runner, id) => runner.timeline(id).filter((e) => e.type === 'status').at(-1);
@@ -49,6 +72,7 @@ const finishAll = (spawnImpl) => { for (const c of spawnImpl.calls) if (!c.child
 
 test('env knobs: per-family turn caps and park grace', () => {
   assert.deepEqual(turnCapsFromEnv({}), DEFAULT_TURN_CAPS);
+  assert.equal(DEFAULT_TURN_CAPS.claude, 12, 'Q2: claude default turn cap is 12');
   assert.equal(turnCapsFromEnv({ VS_RUNNER_TURN_CAP_CLAUDE: '2', VS_RUNNER_TURN_CAP_OTHER: 'x' }).claude, 2);
   assert.equal(turnCapsFromEnv({ VS_RUNNER_TURN_CAP_OTHER: 'x' }).other, DEFAULT_TURN_CAPS.other);
   assert.equal(parkGraceFromEnv({ VS_RUNNER_PARK_GRACE_MS: '0' }), 0);
@@ -361,6 +385,80 @@ test('unarchive within the kill window cancels the archive-stop: turn ends, a ne
   assert.equal(spawnImpl.calls[0].child.killed, false, 'timer was cleared');
   assert.equal(runner.live.get(a).inflight, 1, 'new prompt running normally');
   assert.ok(!runner.timeline(a).some((e) => e.type === 'parked' || e.type === 'exit'));
+  finishAll(spawnImpl);
+  runner.shutdown();
+});
+
+test('owner send while claude is at cap starts immediately (one over the cap)', async () => {
+  const { runner, spawnImpl } = setup(); // cap 6
+  const ids = Array.from({ length: 6 }, () => mk(runner));
+  await tick();
+  ids.forEach((id) => runner.send(id, 'go'));
+  assert.equal(running(runner), 6);
+  const ownerAgent = mk(runner);
+  await tick();
+  const p = runner.send(ownerAgent, 'owner hi', { owner: true });
+  assert.equal(p.queued, false, 'owner send starts now, not queued');
+  assert.equal(running(runner), 7, 'owner runs one over the cap');
+  finishAll(spawnImpl);
+  runner.shutdown();
+});
+
+test('over-cap owner budget is +2 per family: a 3rd owner send queues first in line', async () => {
+  const { runner, spawnImpl } = setup(); // cap 6
+  const ids = Array.from({ length: 6 }, () => mk(runner));
+  const o1 = mk(runner); const o2 = mk(runner); const o3 = mk(runner); const w = mk(runner);
+  await tick();
+  ids.forEach((id) => runner.send(id, 'go'));
+  assert.equal(runner.send(o1, 'a', { owner: true }).queued, false);
+  assert.equal(runner.send(o2, 'b', { owner: true }).queued, false);
+  assert.equal(running(runner), 8, 'two owner turns over the cap');
+  const p = runner.send(o3, 'c', { owner: true });
+  assert.deepEqual(p, { queued: true, ahead: 0 }, '3rd owner is first in line');
+  // a worker send queues BEHIND the queued owner (FIFO, no jump)
+  assert.deepEqual(runner.send(w, 'worker'), { queued: true, ahead: 1 }, 'worker sits behind the owner');
+  finishAll(spawnImpl);
+  runner.shutdown();
+});
+
+test('two queued owner sends to one agent coalesce into one turn with both texts', async () => {
+  const spawnImpl = captureSpawn();
+  const runner = new Runner({ dir: tmp(), adapters: { claude: createClaudeAdapter({ spawnImpl, mcp: false }) }, maxLive: 16, parkGraceMs: 0, turnCaps: { claude: 6 } });
+  const ids = Array.from({ length: 6 }, () => mk(runner));
+  await tick();
+  ids.forEach((id) => runner.send(id, 'go'));
+  const o1 = mk(runner); const o2 = mk(runner); const t = mk(runner);
+  await tick();
+  runner.send(o1, 'a', { owner: true });
+  runner.send(o2, 'b', { owner: true }); // +2 owner budget now used
+  assert.deepEqual(runner.send(t, 'first', { owner: true }), { queued: true, ahead: 0 });
+  assert.deepEqual(runner.send(t, 'second', { owner: true }), { queued: true, ahead: 0 }, 'coalesced into the same entry');
+  assert.equal(runner.queue.filter((j) => j.id === t).length, 1, 'one queue entry');
+  assert.equal(runner.queue.find((j) => j.id === t).text, 'first\n\nsecond', 'texts joined in order');
+  // free one over-cap owner turn: the coalesced job runs once with both texts
+  spawnImpl.calls[6].child.finish(); // o1's turn ends
+  await tick();
+  assert.equal(spawnImpl.texts.filter((x) => x === 'first\n\nsecond').length, 1, 'exactly one turn with both texts');
+  finishAll(spawnImpl);
+  runner.shutdown();
+});
+
+test('worker sends stay strict FIFO and never use the over-cap budget', async () => {
+  const { runner, spawnImpl } = setup(); // cap 6
+  const ids = Array.from({ length: 6 }, () => mk(runner));
+  const w1 = mk(runner); const w2 = mk(runner);
+  const o1 = mk(runner); const o2 = mk(runner); const o3 = mk(runner);
+  await tick();
+  ids.forEach((id) => runner.send(id, 'go'));
+  assert.deepEqual(runner.send(w1, 'w1'), { queued: true, ahead: 0 });
+  assert.deepEqual(runner.send(w2, 'w2'), { queued: true, ahead: 1 });
+  assert.equal(running(runner), 6, 'workers never run over the cap');
+  // exhaust the +2 owner budget; the owner then queues ahead of the workers
+  runner.send(o1, 'o1', { owner: true });
+  runner.send(o2, 'o2', { owner: true });
+  assert.deepEqual(runner.send(o3, 'o3', { owner: true }), { queued: true, ahead: 0 }, 'owner queues at the front');
+  assert.deepEqual(runner.queuePosition(w1), { queued: true, ahead: 1 }, 'worker did not jump the owner');
+  assert.deepEqual(runner.queuePosition(w2), { queued: true, ahead: 2 });
   finishAll(spawnImpl);
   runner.shutdown();
 });

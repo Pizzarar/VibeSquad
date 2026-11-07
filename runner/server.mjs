@@ -94,7 +94,7 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
       }
       if (parts[2] === 'input' && req.method === 'POST') {
         const b = await readBody(req, maxInputBytes);
-        const pos = runner.send(id, b.text, { images: b.images, activeTurnBehavior: b.activeTurnBehavior }); // over a turn cap it queues and answers at once
+        const pos = runner.send(id, b.text, { images: b.images, activeTurnBehavior: b.activeTurnBehavior, owner: b.owner === true }); // over a turn cap it queues and answers at once
         return json(res, 202, { ok: true, ...pos });
       }
       if (parts[2] === 'resume' && req.method === 'POST') {

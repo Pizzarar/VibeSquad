@@ -48,7 +48,11 @@ export function maxLiveFromEnv(env = process.env) {
 }
 
 // Concurrent RUNNING TURNS per provider family. Over the cap a send/create is queued (FIFO), never refused.
-export const DEFAULT_TURN_CAPS = { claude: 6, gemini: 4, antigravity: 3, other: 4 };
+export const DEFAULT_TURN_CAPS = { claude: 12, gemini: 4, antigravity: 3, other: 4 };
+// Owner turns (a human send from the UI / `vs send`) may run over a family's cap: at most this many extra
+// owner turns per family at once, so an owner message to a busy Buddy starts within seconds instead of
+// waiting behind the worker backlog. The count is released as each over-cap owner turn ends.
+export const OWNER_OVER_CAP = 2;
 export function turnCapsFromEnv(env = process.env) {
   const caps = { ...DEFAULT_TURN_CAPS };
   for (const f of Object.keys(caps)) {
@@ -93,6 +97,7 @@ export class Runner {
     this.archiveKillMs = archiveKillMs;
     this.queue = []; // FIFO of jobs waiting for a turn slot or a live-process slot: { id, family, needsTurn, run, ahead }
     this.live = new Map(); // id -> { handle, status, ... } for agents running in THIS process only
+    this.overCapOwner = new Map(); // family -> count of owner turns currently running OVER that family's turn cap (released on turn end)
   }
 
   create({ provider, model, cwd, prompt, systemPrompt, meta = {} }) {
@@ -133,6 +138,7 @@ export class Runner {
           entry.inflight = Math.max(0, entry.inflight - 1);
           entry.turns++;
           turnEnded = true;
+          this._releaseOverCap(entry, 1); // an owner turn that was running over the cap just ended
         }
       } else if (type === 'permission') { if (data.phase === 'request') entry.perms.add(data.id); else entry.perms.delete(data.id); }
       else if (type === 'session' && data.sessionId) entry.sessionId = data.sessionId;
@@ -152,6 +158,7 @@ export class Runner {
           if (entry.parked) return; // stopped on purpose; the log already says parked
           entry.status = 'exited';
           entry.inflight = 0;
+          this._releaseOverCap(entry, entry.ownerOverCap ?? 0); // any owner over-cap turns end with the process
           clearTimeout(entry.parkTimer);
           this._clearArchive(entry);
           this.store.append(id, 'exit', info);
@@ -211,19 +218,51 @@ export class Runner {
     return n;
   }
 
+  // Releases up to `n` of an entry's owner over-cap turns from its family's over-cap budget. Idempotent: an entry
+  // with no over-cap turns (or a normal turn ending) releases nothing.
+  _releaseOverCap(entry, n) {
+    const have = entry?.ownerOverCap ?? 0;
+    if (!entry || have <= 0 || !(n > 0)) return;
+    const take = Math.min(have, n);
+    entry.ownerOverCap = have - take;
+    const f = entry.family;
+    this.overCapOwner.set(f, Math.max(0, (this.overCapOwner.get(f) ?? 0) - take));
+  }
+
   _fits(job) {
     const entry = this.live.get(job.id);
-    if (job.needsTurn && !(entry?.inflight > 0) && this._running(job.family) >= (this.turnCaps[job.family] ?? this.turnCaps.other)) return false;
+    if (job.needsTurn && !(entry?.inflight > 0)) {
+      const cap = this.turnCaps[job.family] ?? this.turnCaps.other;
+      const running = this._running(job.family);
+      // Over the cap only an OWNER job may start, and only within the +OWNER_OVER_CAP over-cap budget.
+      if (running >= cap && (!job.owner || (this.overCapOwner.get(job.family) ?? 0) >= OWNER_OVER_CAP)) return false;
+    }
     return !!entry || this._makeRoom(job.id, { dryRun: true });
   }
 
-  // Runs the job now when its family has no queue and it fits; otherwise queues it (FIFO) and says so in the log. Never throws a cap error.
+  // Runs the job now when it fits and nothing of its family should run first; otherwise queues it and says so in the log.
+  // An owner job jumps non-owner jobs of its family (FIFO among owner jobs), so it can start over the cap immediately.
   _admit(job) {
-    if (!this.queue.some((j) => j.family === job.family) && this._fits(job)) {
+    // A job that would run ahead of this one in the queue: any same-family job for a non-owner, but only a same-family
+    // OWNER job for an owner (owners run before workers, FIFO among themselves).
+    const familyQueued = this.queue.some((j) => j.family === job.family && (!job.owner || j.owner));
+    if (!familyQueued && this._fits(job)) {
       try { job.run(); } catch (err) { this._failJob(job, err); }
       return;
     }
-    this.queue.push({ ...job, ahead: -1 });
+    this._enqueue(job);
+  }
+
+  // Owner jobs sit ahead of non-owner jobs of the same family (FIFO within each group). Everything else appends FIFO.
+  _enqueue(job) {
+    job.ahead = -1;
+    if (job.owner) {
+      const idx = this.queue.findIndex((j) => j.family === job.family && !j.owner);
+      if (idx === -1) this.queue.push(job);
+      else this.queue.splice(idx, 0, job);
+    } else {
+      this.queue.push(job);
+    }
     this._announceQueue();
   }
 
@@ -313,6 +352,7 @@ export class Runner {
   _stopKeepingSession(id, entry) {
     clearTimeout(entry.parkTimer);
     this._clearArchive(entry);
+    this._releaseOverCap(entry, entry.ownerOverCap ?? 0); // any owner over-cap turns end with the session stop
     if (!entry.handle || this.live.get(id) !== entry) return;
     if (entry.sessionId && this.adapters[entry.provider]?.canPark) {
       entry.parked = true;
@@ -391,7 +431,8 @@ export class Runner {
   }
 
   // opts.images: [{ data (base64), mimeType }]; opts.activeTurnBehavior: 'steer' (default, queue behind/into the turn)
-  // or 'interrupt' (cancel the active turn first). The log keeps the image count, never the base64 payload.
+  // or 'interrupt' (cancel the active turn first). opts.owner marks a human (UI / `vs send`) turn: it jumps the family
+  // queue and may run over the turn cap (see _fits). The log keeps the image count, never the base64 payload.
   // Returns { queued, ahead? }: over the family's turn cap the prompt is logged now and delivered FIFO when a slot frees.
   send(id, text, opts = {}) {
     const live = this.live.get(id);
@@ -399,14 +440,50 @@ export class Runner {
     if (!live?.handle && !spec) throw new Error(`agent ${id} is not running`);
     const images = (Array.isArray(opts.images) ? opts.images : []).filter((i) => i && typeof i.data === 'string' && typeof i.mimeType === 'string');
     if (opts.activeTurnBehavior === 'interrupt' && live?.status === 'running') this.cancel(id);
+    const owner = opts.owner === true;
+    const family = live?.family ?? providerFamily(spec.provider);
+
+    // Coalesce a new send into a queued (not started) send for the same agent: one queue entry, one turn. Texts join in
+    // order with a blank line, images append, and the owner flag is the OR (an owner line makes the merged job owner).
+    const queued = this.queue.find((j) => j.id === id && j.kind === 'send');
+    if (queued) {
+      this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}) });
+      queued.text = queued.text ? `${queued.text}\n\n${text}` : text;
+      queued.images = [...(queued.images ?? []), ...images];
+      if (owner && !queued.owner) {
+        queued.owner = true;
+        this._reinsertOwner(queued); // move it ahead of non-owner jobs of its family
+      }
+      return this.queuePosition(id);
+    }
+
     this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}) });
     const job = {
-      id, spec, family: live?.family ?? providerFamily(spec.provider), needsTurn: true,
-      run: () => this._deliver(this.live.get(id) ?? this._resume(id), text, images),
+      id, spec, family, needsTurn: true, kind: 'send', owner, text, images,
+      run: () => this._deliverJob(job),
     };
     if (live?.inflight > 0 && !this.queue.some((j) => j.id === id)) job.run(); // steering a running turn: it already holds its slot
     else this._admit(job);
     return this.queuePosition(id);
+  }
+
+  // Starts (or resumes) the job's agent and delivers its text, marking an owner job that begins a fresh turn over the
+  // family cap as an over-cap owner turn (tracked for the +OWNER_OVER_CAP budget).
+  _deliverJob(job) {
+    const entry = this.live.get(job.id) ?? this._resume(job.id, job.spec);
+    if (job.owner && !(entry?.inflight > 0) && this._running(job.family) >= (this.turnCaps[job.family] ?? this.turnCaps.other)) {
+      entry.ownerOverCap = (entry.ownerOverCap ?? 0) + 1;
+      this.overCapOwner.set(job.family, (this.overCapOwner.get(job.family) ?? 0) + 1);
+    }
+    this._deliver(entry, job.text, job.images ?? []);
+  }
+
+  // Moves a queued job (that just became owner via coalesce) to the owner segment of its family's queue.
+  _reinsertOwner(job) {
+    const idx = this.queue.indexOf(job);
+    if (idx === -1) return;
+    this.queue.splice(idx, 1);
+    this._enqueue(job);
   }
 
   // Live tail of every log append: fn(id, event). Returns the unsubscribe.

@@ -530,7 +530,7 @@ export class RunnerBackend {
     return (await this.fetchAgents(opts)).entries.map((e) => e.agent);
   }
 
-  /** opts: { senderId (calling agent, for the retired-lead redirect), images: [{ data (base64), mimeType }], activeTurnBehavior: 'steer' (default) | 'interrupt' }. */
+  /** opts: { senderId (calling agent, for the retired-lead redirect), images: [{ data (base64), mimeType }], activeTurnBehavior: 'steer' (default) | 'interrupt', owner (a human UI/`vs send` turn that jumps the queue) }. */
   async sendAgentPrompt(id, text, opts = {}) {
     // An agent (opts.senderId) writing to a retired Lead/Buddy is redirected to the live one (plugin handleSendAgentPrompt).
     if (opts.senderId) {
@@ -545,6 +545,7 @@ export class RunnerBackend {
     const body = { text };
     if (opts.images?.length) body.images = opts.images;
     if (opts.activeTurnBehavior) body.activeTurnBehavior = opts.activeTurnBehavior;
+    if (opts.owner) body.owner = true;
     const post = () => this.rc.request("POST", `/agents/${encodeURIComponent(id)}/input`, body);
     // A worker closed by the done-report path (role=worker + vs.auto-archived) is archived but resumable: a follow-up brings it back
     // first, because the runner refuses to resume an archived agent. Retired leads / Buddies and manually archived agents are never revived.

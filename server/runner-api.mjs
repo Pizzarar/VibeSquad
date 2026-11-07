@@ -86,6 +86,7 @@ export async function handleRunnerApi(req, res, { readBody, sendJson, backend = 
           await backend.sendAgentPrompt(id, String(body?.text ?? ""), {
             images: Array.isArray(body?.images) ? body.images : undefined,
             activeTurnBehavior: body?.activeTurnBehavior === "interrupt" ? "interrupt" : undefined,
+            owner: true, // this route is owner-gated (vibesquad-api.mjs forbids non-owner POSTs), so the UI composer is a human send
           });
         }
         else if (action === "cancel") await backend.cancelAgent(id);

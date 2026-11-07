@@ -241,7 +241,15 @@ async function spawnArtPartner(ctx, args, { partnerName, self, selfProfile, job,
 async function sendTool(ctx, args = {}) {
   const id = need(args, "id", "agentId");
   const text = need(args, "text", "prompt", "message");
-  await ctx.withBackend({ id }, (b) => b.sendAgentPrompt(id, text, isRunnerCaller(ctx) && id.startsWith("rn-") ? { senderId: ctx.identity.agentId } : undefined));
+  // Owner turns jump the queue: only a human `vs send` (no VS_AGENT_ID / PASEO_AGENT_ID in the environment) is the owner.
+  // An agent calling `send` (MCP) is not: a runner agent carries senderId instead, a Paseo agent tracks its sender natively.
+  const isOwner = !ctx.identity.agentId;
+  const opts = isRunnerCaller(ctx) && id.startsWith("rn-")
+    ? { senderId: ctx.identity.agentId }
+    : isOwner
+      ? { owner: true }
+      : undefined;
+  await ctx.withBackend({ id }, (b) => b.sendAgentPrompt(id, text, opts));
   return { id, sent: true };
 }
 
