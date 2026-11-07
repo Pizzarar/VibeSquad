@@ -91,7 +91,8 @@ import {
   readPaseoLocalCredential,
   writeDaemonPassword,
 } from "./daemon-password.mjs";
-import { removeTeamWorktrees } from "./team-worktrees.mjs";
+import { removeTeamWorktrees, resolveManagedWorktreeRoot } from "./team-worktrees.mjs";
+import { extractManagedWorktreeRepoName } from "./identity.mjs";
 import {
   DEFAULT_PACK_PROFILES,
   DEFAULT_PROFILES,
@@ -812,6 +813,57 @@ const navRoots = (rootDir, opts) => (fresh) => {
   navRootsCache.set(rootDir, { at: Date.now(), roots });
   return roots;
 };
+
+/**
+ * Other worktrees a relative file link may point into when the file is missing under `cwd`: the managed sanctuary
+ * dirs for the same repo, plus cwds of live agents in the same team + lane. Lane cwds must already be allowed roots.
+ */
+let laneAgentsCache = { at: 0, agents: [] };
+function liveRunnerAgents(now = Date.now()) {
+  // listRunnerAgentsSync parses every jsonl: share one scan across 404s for 30s, like navRoots.
+  if (now - laneAgentsCache.at >= 30_000) {
+    let agents = [];
+    try { agents = listRunnerAgentsSync().filter((a) => !a.archivedAt); } catch {}
+    laneAgentsCache = { at: now, agents };
+  }
+  return laneAgentsCache.agents;
+}
+export const _resetLaneAgentsCache = () => { laneAgentsCache = { at: 0, agents: [] }; };
+
+export function laneWorktreeCandidates(cwd, roots, { sanctuary = resolveManagedWorktreeRoot(), agents } = {}) {
+  const out = [];
+  const repo = extractManagedWorktreeRepoName(cwd) ?? basename(String(cwd).replace(/[\\/]+$/, ""));
+  try {
+    const base = join(sanctuary, repo);
+    const realBase = realOrNull(base);
+    for (const d of readdirSync(base, { withFileTypes: true })) {
+      if (!d.isDirectory()) continue;
+      // A unit entry that is a junction out of the sanctuary must not widen the search.
+      const real = realOrNull(join(base, d.name));
+      if (real && realBase && insideDir(real, realBase)) out.push(real);
+    }
+  } catch {}
+  try {
+    const live = (agents ?? liveRunnerAgents()).filter((a) => !a.archivedAt);
+    const here = realOrNull(cwd);
+    const mine = live.filter((a) => here && insideDir(realOrNull(a.cwd) ?? "", here) && insideDir(here, realOrNull(a.cwd) ?? "") && a.labels?.team && a.labels?.lane);
+    const allowed = typeof roots === "function" ? roots(false) : roots ?? [];
+    for (const a of live) {
+      if (!mine.some((m) => m.labels.team === a.labels?.team && m.labels.lane === a.labels?.lane)) continue;
+      const real = realOrNull(a.cwd);
+      if (real && allowed.some((r) => insideDir(real, r))) out.push(real);
+    }
+  } catch {}
+  return [...new Set(out)];
+}
+
+/** Host-path-free name for a worktree in a 409 reply: relative to the sanctuary, else just the folder name. */
+export function worktreeLabel(dir, sanctuary = resolveManagedWorktreeRoot()) {
+  const real = realOrNull(sanctuary);
+  const d = realOrNull(dir) ?? dir;
+  if (real && insideDir(d, real)) return d.slice(real.length).replace(/^[\\/]+/, "").replace(/\\/g, "/").split("/").slice(1).join("/") || basename(d);
+  return basename(d);
+}
 
 /** Agent id -> cwd, server-side only: runner record (on-disk log, then the live API), then ~/.paseo agents, then the repo root. */
 export async function agentCwdFor(agentId, rootDir, { runner } = {}) {
@@ -1734,8 +1786,11 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return handleFsList(req, res, navRoots(rootDir, opts), sendJson);
       case "/__vibesquad/fs/resolve":
         return handleFsResolve(req, res, (id) => agentCwdFor(id, rootDir), sendJson, navRoots(rootDir, opts));
-      case "/__vibesquad/fs/read":
-        return handleFsRead(req, res, navRoots(rootDir, opts), sendJson);
+      case "/__vibesquad/fs/read": {
+        const roots = navRoots(rootDir, opts);
+        // Cross-worktree lookup is an owner read like the rest of fs/*; a read-only caller gets the plain cwd-only answer.
+        return handleFsRead(req, res, roots, sendJson, isOwner(req) ? (cwd) => laneWorktreeCandidates(cwd, roots) : undefined, worktreeLabel);
+      }
       case "/__vibesquad/search":
         return handleSearch(req, res, navRoots(rootDir, opts), sendJson);
       case "/__vibesquad/secret-input":
