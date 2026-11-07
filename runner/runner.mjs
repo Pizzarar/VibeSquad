@@ -406,7 +406,7 @@ export class Runner {
     let status = f.status;
     if (f.exit) status = 'exited';
     else if (!this.live.has(id) && status !== 'parked' && !this.queue.some((j) => j.id === id)) status = 'lost'; // log says running but no child in this process
-    return { ...f.rec, status, pendingPermissions: [...f.perms] };
+    return { ...f.rec, status, pendingPermissions: [...f.perms.values()] };
   }
 
   // Every agent's status in one call (roster seed): one pass over the logs, then served from the fold cache.
@@ -420,37 +420,32 @@ export class Runner {
     return out;
   }
 
+  // Incremental: the folded state keeps the byte offset it has consumed, so a changed log only folds its new tail.
   _fold(id) {
     let stamp = null;
-    try { const st = statSync(this.store.file(id)); stamp = `${st.size}:${st.mtimeMs}`; } catch { this.folds.delete(id); return null; }
-    const hit = this.folds.get(id);
-    if (hit?.stamp === stamp) return hit;
-    const events = this.store.read(id);
-    if (!events.length) return null;
-    const created = events[0];
-    const last = events[events.length - 1];
-    let status = 'unknown';
-    let usage = null;
-    const perms = new Map();
+    let size = 0;
+    try { const st = statSync(this.store.file(id)); size = st.size; stamp = `${st.size}:${st.mtimeMs}`; } catch { this.folds.delete(id); return null; }
+    let st = this.folds.get(id);
+    if (st?.stamp === stamp) return st;
+    if (!st || size < st.offset) st = { created: null, last: null, status: 'unknown', usage: null, perms: new Map(), meta: null, archivedAt: null, exit: null, offset: 0 };
+    const { events, end } = this.store.readFrom(id, st.offset);
     for (const e of events) {
-      if (e.type === 'status') status = e.status;
-      else if (e.type === 'usage') usage = { contextTokens: e.contextTokens, contextMax: e.contextMax, inputTokens: e.inputTokens, outputTokens: e.outputTokens, costUsd: e.costUsd };
-      else if (e.type === 'permission') { if (e.phase === 'request') perms.set(e.id, { id: e.id, toolName: e.toolName }); else perms.delete(e.id); }
+      if (!st.created) { st.created = e; st.meta = { ...e.meta }; }
+      st.last = e;
+      if (e.type === 'status') st.status = e.status;
+      else if (e.type === 'usage') st.usage = { contextTokens: e.contextTokens, contextMax: e.contextMax, inputTokens: e.inputTokens, outputTokens: e.outputTokens, costUsd: e.costUsd };
+      else if (e.type === 'permission') { if (e.phase === 'request') st.perms.set(e.id, { id: e.id, toolName: e.toolName }); else st.perms.delete(e.id); }
+      else if (e.type === 'meta') Object.assign(st.meta, e.patch, e.patch?.labels ? { labels: { ...st.meta.labels, ...e.patch.labels } } : {});
+      else if (e.type === 'archive') st.archivedAt = e.ts;
+      else if (e.type === 'unarchive') st.archivedAt = null;
+      else if (e.type === 'exit' && !st.exit) st.exit = e;
     }
-    const meta = { ...created.meta };
-    let archivedAt = null;
-    for (const e of events) {
-      if (e.type === 'meta') Object.assign(meta, e.patch, e.patch?.labels ? { labels: { ...meta.labels, ...e.patch.labels } } : {});
-      else if (e.type === 'archive') archivedAt = e.ts;
-      else if (e.type === 'unarchive') archivedAt = null;
-    }
-    const exit = events.find((e) => e.type === 'exit');
-    const fold = {
-      stamp, status, exit: exit ?? null, perms: [...perms.values()],
-      rec: { id, provider: created.provider, model: created.model, cwd: created.cwd, meta, usage, lastSeq: last.seq, createdAt: created.ts, updatedAt: last.ts, archivedAt, exit: exit ?? null },
-    };
-    this.folds.set(id, fold);
-    return fold;
+    st.offset = end;
+    st.stamp = stamp;
+    if (!st.created) { this.folds.delete(id); return null; }
+    this.folds.set(id, st);
+    st.rec = { id, provider: st.created.provider, model: st.created.model, cwd: st.created.cwd, meta: { ...st.meta }, usage: st.usage, lastSeq: st.last.seq, createdAt: st.created.ts, updatedAt: st.last.ts, archivedAt: st.archivedAt, exit: st.exit };
+    return st;
   }
 
   timeline(id, after = 0, limit = Infinity) { return this.store.read(id, after, limit); }

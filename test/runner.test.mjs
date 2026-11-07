@@ -72,12 +72,12 @@ test('lazy index: startup and status() never read other agents logs', () => {
   const dir = tmp();
   for (let i = 0; i < 50; i++) writeFileSync(path.join(dir, `old${i}.jsonl`), 'NOT JSON AT ALL\n');
   const runner = new Runner({ dir, adapters: {} });
-  assert.equal(runner.store.seqs.size, 0, 'nothing indexed at startup');
+  assert.equal(runner.store.idx.size, 0, 'nothing indexed at startup');
   assert.equal(runner.list().length, 50, 'listing is by file name only');
   const s = new LogStore(dir);
   s.append('fresh', 'created', { provider: 'claude', meta: {} });
   assert.equal(runner.status('fresh').id, 'fresh');
-  assert.equal(runner.store.seqs.size, 0, 'status() reads one file and indexes nothing else');
+  assert.equal(runner.store.idx.size, 1, 'status() reads and indexes only the one file');
 });
 
 test('claude adapter: create, input, output, status, cancel, exit; meta fields are first-class', async () => {
