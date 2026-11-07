@@ -4783,26 +4783,25 @@ button.project-file-name:hover { text-decoration: underline; }
   --face-hi: color-mix(in srgb, var(--panel) 70%, var(--marble));
 }
 
-/* ---- window bodies: gradient + dither; --bar-h chunky Win95 title bar (gradient + two window-button squares) ---- */
+/* ---- window bodies: gradient + dither; --bar-h chunky Win95 title bar on real title rows, thin 12px gradient cap on title-less boxes ---- */
 :root {
   --bar-h: 20px;
-  --cap-imgs: linear-gradient(var(--shadow-hard), var(--shadow-hard)), linear-gradient(var(--face-hi), var(--face-hi)),
-    linear-gradient(var(--shadow-hard), var(--shadow-hard)), linear-gradient(var(--face-hi), var(--face-hi)), var(--titlebar), var(--bayer), var(--panel-grad);
-  --cap-size: 12px 12px, 10px 10px, 12px 12px, 10px 10px, 100% var(--bar-h), auto, auto;
-  --cap-pos: right 4px top 4px, right 5px top 5px, right 20px top 4px, right 21px top 5px, 0 0, 0 0, 0 0;
-  --cap-rep: no-repeat, no-repeat, no-repeat, no-repeat, no-repeat, repeat, no-repeat;
-  --cap-pad: calc(var(--bar-h) + var(--sp-2));
+  --cap-imgs: var(--titlebar), var(--bayer), var(--panel-grad);
+  --cap-size: 100% var(--sp-3), auto, auto;
+  --cap-pos: 0 0, 0 0, 0 0;
+  --cap-rep: no-repeat, repeat, no-repeat;
+  --cap-pad: calc(var(--sp-3) + var(--sp-2));
 }
 .modal, .idea-inbox, .ts-team, .ws-row, .pin-menu-list, .ctx-menu, .cmd-palette,
 .shortcut-modal, .daemon-disconnect-card, .drawer-features-menu, .drawer-sandbox-panel,
-.drawer-config-popover, .card, .squad-home-tile, .drawer-head, .sidebar-legend {
+.drawer-config-popover, .card, .squad-home-tile, .drawer-head, .sidebar-legend, .pin-rail-tile, .brainstorm-ctx-bar {
   background-color: var(--panel);
   background-image: var(--cap-imgs);
   background-size: var(--cap-size);
   background-repeat: var(--cap-rep);
   background-position: var(--cap-pos);
 }
-.handoff-panel, .pin-tile {
+.handoff-panel, .pin-tile, .pin-rail-active-buddy {
   background-color: var(--panel);
   background-image: var(--bayer), var(--panel-grad);
   background-size: auto, auto;
@@ -4811,20 +4810,22 @@ button.project-file-name:hover { text-decoration: underline; }
 }
 .modal, .handoff-panel, .idea-inbox, .ts-team, .pin-menu-list, .ctx-menu, .cmd-palette, .shortcut-modal,
 .drawer-features-menu, .drawer-sandbox-panel, .drawer-config-popover, .card, .pin-tile, .squad-home-tile,
-.daemon-disconnect-card {
+.daemon-disconnect-card, .pin-rail-active-buddy {
   border: 1px solid var(--line);
   box-shadow: var(--bevel), var(--hard);
 }
 .pin-menu-list, .ctx-menu, .drawer-features-menu, .drawer-sandbox-panel, .drawer-config-popover,
-.ws-row, .ts-team, .squad-home-tile, .sidebar-legend, .idea-inbox, .cmd-palette, .shortcut-modal { padding-top: var(--cap-pad); }
-.card { border-top: 1px solid var(--line); padding-top: calc(var(--bar-h) + var(--sp-3)); }
+.ws-row, .ts-team, .squad-home-tile, .sidebar-legend, .idea-inbox, .cmd-palette, .shortcut-modal, .pin-rail-tile, .brainstorm-ctx-bar { padding-top: var(--cap-pad); }
+.pin-rail-tile.on { background-image: var(--cap-imgs); background-color: var(--panel-hi); }
+.card { border-top: 1px solid var(--line); padding-top: calc(var(--cap-pad) + var(--sp-1)); }
 .card:hover, .card.sel, .card.card-lead, .card.card-secondary-lead, .card.card-secondary-lead.card-lead-needs-you {
   background-image: var(--cap-imgs);
   background-color: var(--panel-hi);
 }
 /* team tile (PinGrid.tsx): real title bar element with name + @code + menu button */
-.pin-tile { padding: 0 0 var(--sp-3); gap: var(--sp-2); border-top: 1px solid var(--line); }
-.pin-tile > :not(.pin-tile-bar) { margin-left: var(--sp-3); margin-right: var(--sp-3); }
+.pin-tile:not(.pin-plus) { padding: 0 0 var(--sp-3); gap: var(--sp-2); border-top: 1px solid var(--line); }
+.pin-tile.pin-plus { border-style: dashed; }
+.pin-tile:not(.pin-plus) > :not(.pin-tile-bar) { margin-left: var(--sp-3); margin-right: var(--sp-3); }
 .pin-tile-bar {
   display: flex; align-items: center; gap: var(--sp-2); height: var(--bar-h); flex: none;
   padding: 0 var(--sp-1) 0 var(--sp-2);
@@ -4976,3 +4977,13 @@ button.project-file-name:hover { text-decoration: underline; }
   box-shadow: var(--bevel-in);
 }
 .handoff-panel { padding-top: var(--sp-4); }
+
+/* chat right rail: active Buddy header is a real title bar */
+.pin-rail-active-buddy { padding-top: 0; gap: var(--sp-2); }
+.pin-rail-active-head {
+  height: var(--bar-h); flex: none; margin: 0 calc(var(--sp-2) * -1); padding: 0 var(--sp-1) 0 var(--sp-2); gap: var(--sp-1);
+  background: var(--titlebar); color: var(--on-pastel); border-bottom: 1px solid var(--shadow-hard); box-shadow: var(--bevel);
+}
+.pin-rail-active-head .pin-rail-name { flex: 1; min-width: 0; color: var(--on-pastel); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pin-rail-active-head .btn, .pin-rail-active-head .pin-menu-btn { height: 16px; padding: 0 var(--sp-1); line-height: 1; font-size: 10px; background: var(--face-hi); color: var(--text); border: 1px solid var(--shadow-hard); box-shadow: var(--bevel); }
+.pin-rail-active-head .pin-menu { display: inline-flex; align-items: center; }
