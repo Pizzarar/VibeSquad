@@ -56,8 +56,8 @@
   --panel-alt: #f4cfde;
   --line: #dba7c0;
   --marble: #fffdfa;
-  --cyan: #1a868a;
-  --cyan-dim: #1a868a26;
+  --cyan: #3fa3a6;
+  --cyan-dim: #3fa3a626;
   --violet: #9a7fe0;
   --violet-dim: #9a7fe026;
   --coral: #f6967f;
@@ -68,7 +68,7 @@
   --slate: #dba7c0;
   --text: #2b1840;
   --muted: #65507d;
-  --cyan-t: color-mix(in srgb, var(--cyan) 70%, #2b1840);
+  --cyan-t: color-mix(in srgb, var(--cyan) 50%, #2b1840);
   --violet-t: color-mix(in srgb, var(--violet) 50%, #2b1840);
   --coral-t: color-mix(in srgb, var(--coral) 40%, #2b1840);
   --pink-t: color-mix(in srgb, var(--hot-pink) 70%, #2b1840);
