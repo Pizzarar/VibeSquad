@@ -3,7 +3,7 @@
 .pin-focus-head { grid-row: 1; grid-column: 1 / -1; min-width: 0; }
 .pin-focus-head > .pin-focus-bar { grid-row: auto; grid-column: auto; }
 .pin-focus-head > .hub-bar { margin: 0; border-width: 0 0 1px; }
-.hub-bar-btn { background: #4df7a61f; color: var(--emerald); border: 1px solid var(--emerald); padding: 4px 12px; font-family: var(--arcade); font-size: 10px; letter-spacing: 0.8px; cursor: pointer; white-space: nowrap; }
+.hub-bar-btn { background: #4df7a61f; color: var(--mint-t); border: 1px solid var(--emerald); padding: 4px 12px; font-family: var(--arcade); font-size: 10px; letter-spacing: 0.8px; cursor: pointer; white-space: nowrap; }
 .hub-bar-btn:hover, .hub-bar-btn:focus-visible { background: var(--mint-fill); color: var(--bg); }
 .hub-bar-long { display: inline; }
 .hub-bar-short { display: none; }

@@ -257,7 +257,7 @@ export function PairDeviceModal({ onClose }: { onClose: () => void }) {
           data-testid="desktop-pair-hero"
         >
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-            <div className="field-label" style={{ color: "var(--cyan)" }}>
+            <div className="field-label" style={{ color: "var(--cyan-t)" }}>
               🖥️ WINDOWS DESKTOP APP — ZERO-CERT PAIRING (RECOMMENDED)
             </div>
             <span className="badge">PINNED CA · LAN + MESHNET AUTO-DISCOVERY</span>
@@ -317,7 +317,7 @@ export function PairDeviceModal({ onClose }: { onClose: () => void }) {
                 {pair && remainingSec > 0 && (
                   <span className="small">
                     Expires in{" "}
-                    <b style={{ color: remainingSec < 60 ? "var(--hot-pink)" : "var(--cyan)" }}>
+                    <b style={{ color: remainingSec < 60 ? "var(--pink-t)" : "var(--cyan-t)" }}>
                       {mins}:{String(secs).padStart(2, "0")}
                     </b>
                   </span>
@@ -341,7 +341,7 @@ export function PairDeviceModal({ onClose }: { onClose: () => void }) {
                         fontSize: 24,
                         fontWeight: 700,
                         letterSpacing: 6,
-                        color: "var(--cyan)",
+                        color: "var(--cyan-t)",
                       }}
                       data-testid="pairing-code-display"
                     >
@@ -421,7 +421,7 @@ export function PairDeviceModal({ onClose }: { onClose: () => void }) {
 
               <div className="field-label">CA SHA-256 FINGERPRINT</div>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 2 }}>
-                <code style={{ color: "var(--cyan)", fontWeight: 700 }}>{fp?.short ?? "generating…"}</code>
+                <code style={{ color: "var(--cyan-t)", fontWeight: 700 }}>{fp?.short ?? "generating…"}</code>
                 {fp?.full && (
                   <button className="btn ghost small" onClick={() => setShowFullFp((v) => !v)}>
                     {showFullFp ? "Hide full" : "Full hex"}
@@ -441,7 +441,7 @@ export function PairDeviceModal({ onClose }: { onClose: () => void }) {
                 {showWinHelp && (
                   <div style={{ padding: "6px 8px", background: "var(--navy)", border: "1px solid var(--line)" }}>
                     <div className="muted small">PowerShell (CurrentUser Root store, no admin prompt needed):</div>
-                    <pre style={{ margin: "4px 0", whiteSpace: "pre-wrap", wordBreak: "break-all", fontSize: 11, color: "var(--cyan)" }}>
+                    <pre style={{ margin: "4px 0", whiteSpace: "pre-wrap", wordBreak: "break-all", fontSize: 11, color: "var(--cyan-t)" }}>
                       {psCmd}
                     </pre>
                     <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -496,7 +496,7 @@ export function PairDeviceModal({ onClose }: { onClose: () => void }) {
                   <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0, flex: 1 }}>
                     <div className="small">
                       Expires in{" "}
-                      <b style={{ color: remainingSec < 60 ? "var(--hot-pink)" : "var(--cyan)" }}>
+                      <b style={{ color: remainingSec < 60 ? "var(--pink-t)" : "var(--cyan-t)" }}>
                         {mins}:{String(secs).padStart(2, "0")}
                       </b>
                     </div>
@@ -505,7 +505,7 @@ export function PairDeviceModal({ onClose }: { onClose: () => void }) {
                       href={activePairUrl}
                       target="_blank"
                       rel="noreferrer"
-                      style={{ color: "var(--cyan)", wordBreak: "break-all", fontSize: 11 }}
+                      style={{ color: "var(--cyan-t)", wordBreak: "break-all", fontSize: 11 }}
                       data-testid="active-pair-url"
                     >
                       {activePairUrl}
@@ -557,7 +557,7 @@ export function PairDeviceModal({ onClose }: { onClose: () => void }) {
                     border: "1px solid var(--line)",
                   }}
                 >
-                  <b style={{ color: d.current ? "var(--cyan)" : "var(--text)" }}>{d.name}</b>
+                  <b style={{ color: d.current ? "var(--cyan-t)" : "var(--text)" }}>{d.name}</b>
                   {d.current && <span className="badge">THIS DEVICE</span>}
                   <span className="muted small" style={{ marginLeft: "auto" }}>
                     last seen <Ago iso={d.lastSeenAt} /> ago

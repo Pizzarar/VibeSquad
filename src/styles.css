@@ -3779,14 +3779,14 @@ html, body, #root { overflow-x: hidden; }
   height: 100%;
   padding: 8px;
   box-sizing: border-box;
-  background: var(--bg);
+  background: #0d111c;
   overflow: hidden;
 }
 .terminal-output .xterm {
   height: 100%;
 }
 .terminal-output .xterm-viewport {
-  background-color: var(--bg) !important;
+  background-color: #0d111c !important;
   scrollbar-width: thin;
   scrollbar-color: var(--line) transparent;
 }
@@ -4560,8 +4560,8 @@ button.project-file-name:hover { text-decoration: underline; }
   transform: translateY(-100%);
   font-family: var(--arcade);
   font-size: 10px;
-  color: var(--text);
-  background: var(--hot-pink);
+  color: var(--bg);
+  background: var(--pink-fill);
   padding: 0 3px;
   border: 1px solid var(--line);
   pointer-events: none;

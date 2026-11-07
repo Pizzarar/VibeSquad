@@ -592,8 +592,8 @@ export function TeamSettingsModal({
             overflowY: "auto",
             marginBottom: 12,
             padding: 6,
-            border: "1px solid rgba(255,255,255,0.08)",
-            background: "rgba(0,0,0,0.2)",
+            border: "1px solid var(--line)",
+            background: "var(--well)",
           }}
         >
           {profiles.map((p) => {
@@ -616,8 +616,8 @@ export function TeamSettingsModal({
                   cursor: "pointer",
                   fontFamily: "inherit",
                   color: "inherit",
-                  background: isSelected ? "rgba(0, 240, 255, 0.12)" : "rgba(255, 255, 255, 0.02)",
-                  border: isSelected ? "1px solid #00f0ff" : "1px solid rgba(255, 255, 255, 0.06)",
+                  background: isSelected ? "var(--cyan-dim)" : "var(--well)",
+                  border: isSelected ? "1px solid var(--cyan)" : "1px solid var(--line)",
                   opacity: inst ? 1 : 0.7,
                 }}
               >
