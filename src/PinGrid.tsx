@@ -18,6 +18,7 @@ import { DoneRow, DoneShelf, LooksDoneCard, useDoneShelfOpen } from "./PinDone";
 import { countsAsNeedsYou, getBrainstormThresholds, isHubLane, saveTeams, type Member, type TeamView } from "./teams";
 import { ConfirmButton, StatusDot, usePaneClass } from "./ui";
 import { Avatar, TeamEmblem } from "./pixel";
+import { UsageDashboard } from "./UsageDashboard";
 import { laneCodeOf, ordOf } from "./teams";
 import { laneCodeFor } from "./identity";
 import { cleanTitle } from "./ui";
@@ -834,9 +835,7 @@ export function SquadsHome({
           </div>
         )}
       </div>
-      <div className="squads-dashboard" data-testid="squads-dashboard">
-        <div className="squads-dashboard-empty muted small">Usage dashboard: limit cards and lane stats land here.</div>
-      </div>
+      <UsageDashboard />
     </section>
   );
 }
