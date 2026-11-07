@@ -595,6 +595,11 @@ const PinTile = memo(function PinTile({ pin, onPin, onOpenAgent }: { pin: Pin; o
         }
       }}
     >
+      <div className="pin-tile-bar">
+        <span className="pin-tile-name">{pin.lane.name}</span>
+        <span className="pin-lane-handle">{laneHandleOf(pin)}</span>
+        <PinMenu pin={pin} onShowPlumbing={() => setFullView(true)} />
+      </div>
       <div className="pin-tile-head">
         {bs ? (
           <Avatar id={bs.agent.id} provider={bs.agent.provider} agentType="brainstorm" size={40} />
@@ -602,15 +607,12 @@ const PinTile = memo(function PinTile({ pin, onPin, onOpenAgent }: { pin: Pin; o
           <Avatar id={`bs-empty-${pin.squad.id}-${pin.lane.id}`} provider="claude" agentType="brainstorm" size={40} />
         )}
         <div className="pin-tile-title">
-          <span className="pin-tile-name">{pin.lane.name}</span>
-          <span className="pin-lane-handle">{laneHandleOf(pin)}</span>
           <span className="pin-tile-sub muted small">
             <PinDot pin={pin} /> {bs ? (bs.agent.status === "running" ? "Brainstorm working" : "Brainstorm") : "No session yet"}
           </span>
         </div>
         <NeedsBadge pin={pin} />
         <PinCtx pin={pin} showLabel />
-        <PinMenu pin={pin} onShowPlumbing={() => setFullView(true)} />
       </div>
       <BuddyDupeWarning pin={pin} onOpenAgent={onOpenAgent} />
       {bs && looksDoneId && <LooksDoneCard pin={pin} messageId={looksDoneId} />}
