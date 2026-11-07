@@ -29,5 +29,5 @@ local function team(t)
 end
 local json = '{"w":'..spr.width..',"h":'..spr.height..',\n "teamA":'..team("teamA")..',\n "teamB":'..team("teamB")..
   ',\n "elevator":{"doorA":'..R("elevator.doorA")..',"doorB":'..R("elevator.doorB")..',"car":'..R("elevator.car")..'}}\n'
-local f = io.open(root.."/public/office/floor.json", "w"); f:write(json); f:close()
+local f = io.open(root.."/public/office/floor.json", "wb"); f:write(json); f:close()
 print("wrote floor.json ("..#spr.slices.." slices)")

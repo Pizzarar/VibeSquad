@@ -8,6 +8,6 @@
     "implement":{"work":[{"x":0,"y":64},{"x":32,"y":64}],"needs":[{"x":64,"y":64},{"x":96,"y":64}],"idle":[{"x":128,"y":64}],"ride":[{"x":160,"y":64}]},
     "review":{"work":[{"x":0,"y":96},{"x":32,"y":96}],"needs":[{"x":64,"y":96},{"x":96,"y":96}],"idle":[{"x":128,"y":96}],"ride":[{"x":160,"y":96}]}
   },
-  "bubble":{"x":0,"y":128,"w":12,"h":12,"offset":{"x":-18,"y":-40}},
+  "bubble":{"x":0,"y":128,"w":13,"h":13,"offset":{"x":-18,"y":-40}},
   "fallback":{"retired-lead":"lead","mechanical":"implement","audit":"review","spec":"review","art":"implement","unknown":"buddy"}
 }

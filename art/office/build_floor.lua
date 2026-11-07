@@ -498,10 +498,10 @@ do
   end
   L.text(c, 21, 112, "IDEA LAB", L.INK)
   L.text(c, W-21-L.textW("IDEA LAB"), 112, "IDEA LAB", L.INK)
-  -- lead nameplate on the exec desk's left pedestal (the phone arm covers the desktop)
+  -- lead crown badge on the exec desk's left pedestal, clear of the seated shoulder
   local function nameplate(x, y)
-    L.plate(c, x-8, y+23, 15, 7, L.AMBER, L.MARBLE, L.CORAL)
-    L.text(c, x-6, y+24, "VIP", L.INK)
+    L.plate(c, x-8, y+23, 9, 7, L.INK, L.LINE, L.INK)
+    c.stamp(x-6, y+24, "|a.a.a|\n|aaaaa|\n|apapa|\n|aaaaa|", K)
   end
   nameplate(A.lead[1], A.lead[2]); local rb = mirR(A.lead); nameplate(rb[1], rb[2])
   local function poster(x, y, label, face)

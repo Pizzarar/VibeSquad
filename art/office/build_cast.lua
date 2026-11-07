@@ -45,6 +45,15 @@ local function firstRows(map, n)
   return table.concat(out, "\n")
 end
 local RIM = { review = true, implement = true }
+local RIM_TOP = { implement = 7 } -- TV-head: keep the antenna rods INK
+local function rim(C, role, ymax, lift)
+  local y0 = math.max(0, (RIM_TOP[role] or 0) - (lift or 0))
+  local set = {}
+  for y=y0,ymax-1 do for x=0,CELL-1 do
+    if C.img:getPixel(x, y) == L.INK and C.get(x, y-1) == 0 then set[#set+1] = {x, y} end
+  end end
+  for _, q in ipairs(set) do C.img:drawPixel(q[1], q[2], L.VIOLET) end
+end
 
 -- part tables (H0 + extra)
 local PB = { body = P.bodyBack, head = P.headBack, prop = P.propBack, ears = P.earsBack, earsR = P.earsBackR }
@@ -61,7 +70,8 @@ local function work(role, bob)
   C = canvas(); st(C, PB.head[role]); st(C, PB.ears[role]); st(C, PB.earsR[role])
   if role == "buddy" then for _, p in ipairs(P.phonesBack) do st(C, p) end end
   if X and X.backExtra[role] then for _, p in ipairs(X.backExtra[role]) do st(C, p) end end
-  if RIM[role] then C.rim(L.VIOLET, 16) end
+  if RIM[role] then rim(C, role, 16) end
+  if role == "implement" and bob == 0 then C.px(14, 20, L.INK); C.px(15, 20, L.INK) end
   over(out, C.img, 0, bob)
   C = canvas(); st(C, PB.prop[role]); over(out, C.img, 0, bob)
   return flip(out)
@@ -73,7 +83,7 @@ local function needs(role, wave)
   local C = canvas(); st(C, P.chairFront); over(out, C.img)
   C = canvas(); st(C, FB.body[role]); over(out, C.img)
   C = canvas(); for _, p in ipairs(FB.head[role]) do st(C, p) end
-  if RIM[role] then C.rim(L.VIOLET, 10) end
+  if RIM[role] then rim(C, role, 10) end
   over(out, C.img)
   C = canvas(); for i, p in ipairs(FB.fx[role]) do if i > 1 then st(C, p) end end
   over(out, C.img, wave, 0)
@@ -102,7 +112,7 @@ local function stand(role, ride)
   end
   over(out, C.img)
   C = canvas(); for _, p in ipairs(FB.head[role]) do st(C, p, 0, -s) end
-  if RIM[role] then C.rim(L.VIOLET, 10 - s) end
+  if RIM[role] then rim(C, role, 10 - s, s) end
   over(out, C.img)
   if ride then C = canvas(); C.stamp(26, 4, NOTE); over(out, C.img) end
   return out
@@ -110,20 +120,21 @@ end
 
 -- "!" callout: bold 2px bang, tail down-left toward the raised hand
 local BUBBLE = [[
-|.kkkkkkkkkk.|
-|kppppppppppk|
-|kppppmmppppk|
-|kppppmmppppk|
-|kppppmmppppk|
-|kppppmmppppk|
-|kppppppppppk|
-|kppppmmppppk|
-|kppppppppppk|
-|.kkpkkkkkkk.|
-|..kpk.......|
-|..kk........|
+|.kkkkkkkkkkk.|
+|kppppppppppkk|
+|kpppmmkpppppk|
+|kpppmmkpppppk|
+|kpppmmkpppppk|
+|kpppmmkpppppk|
+|kppppkkpppppk|
+|kpppmmkpppppk|
+|kppppkkpppppk|
+|kppppppppppkk|
+|.kkpkkkkkkkk.|
+|..kpk........|
+|..kk.........|
 ]]
-local BW, BH = 12, 12
+local BW, BH = 13, 13
 
 local SW, SH = CELL*6, CELL*(#ROLES + 1)
 local sheet = Image(SW, SH, ColorMode.INDEXED); sheet:clear(0)
@@ -166,5 +177,5 @@ for _, r in ipairs(ALL) do if not cells[r] then fb[#fb+1] = '"'..r..'":"'..FALLB
 local json = '{\n  "version":1,\n  "cell":32,\n  "anchor":"bottom-centre",\n  "roles":{\n'..table.concat(parts, ",\n")..
   '\n  },\n  "bubble":{"x":'..BX..',"y":'..BY..',"w":'..BW..',"h":'..BH..',"offset":{"x":-18,"y":-40}},\n'..
   '  "fallback":{'..table.concat(fb, ",")..'}\n}\n'
-local f = io.open(root.."/public/office/cast.json", "w"); f:write(json); f:close()
+local f = io.open(root.."/public/office/cast.json", "wb"); f:write(json); f:close()
 print("wrote cast.json ("..#ROLES.." roles)")
