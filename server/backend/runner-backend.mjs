@@ -481,10 +481,16 @@ export class RunnerBackend {
    * OWNER ONLY (the VS server's runner supervisor): start the runner if it is down. Single-flight, and not again for a while
    * after a failed start. Resolves true when a runner is up afterwards.
    */
-  startOwned() {
+  startOwned({ force = false } = {}) {
+    // force (explicit owner-confirmed restart): drop the failure cooldown and any in-flight start, which may be waiting on a runner we just killed.
+    if (force) {
+      this.ensureFailedAt = 0;
+      this.ensuring = null;
+      this.rc.starting = null;
+    }
     if (this.ensuring) return this.ensuring;
     if (Date.now() - (this.ensureFailedAt ?? 0) < ENSURE_COOLDOWN_MS) return Promise.resolve(false);
-    this.ensuring = Promise.resolve()
+    const p = Promise.resolve()
       .then(() => this.rc.startOwned())
       .then(
         () => true,
@@ -494,9 +500,10 @@ export class RunnerBackend {
         },
       )
       .finally(() => {
-        this.ensuring = null;
+        if (this.ensuring === p) this.ensuring = null;
       });
-    return this.ensuring;
+    this.ensuring = p;
+    return p;
   }
 
   async fetchAgents(opts = {}) {
