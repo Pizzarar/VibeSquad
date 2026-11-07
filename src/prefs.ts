@@ -419,8 +419,8 @@ export function importPrefs(text: string): ImportResult {
 
 export const visiblePrefDefs = (): PrefDef[] => PREF_DEFS.filter((d) => !d.hidden);
 
-/** Settings that live in rehoused components (Team, Paseo, Profiles, About): searchable by label, open their section. */
-export type HomeSection = "app" | "chat" | "notifications" | "newAgent" | "keys" | "team" | "remote" | "paseo" | "profiles" | "about";
+/** Settings that live in rehoused components (Team, Runner, Profiles, About): searchable by label, open their section. */
+export type HomeSection = "app" | "chat" | "notifications" | "newAgent" | "keys" | "team" | "remote" | "runner" | "profiles" | "about";
 export const EXTRA_SETTINGS: { id: string; section: HomeSection; label: string }[] = [
   { id: "ui-scale", section: "app", label: "UI scale (4K)" },
   { id: "keybindings", section: "keys", label: "Keybindings (rebind shortcuts)" },
@@ -430,10 +430,8 @@ export const EXTRA_SETTINGS: { id: string; section: HomeSection; label: string }
   { id: "teams", section: "team", label: "Teams and lanes" },
   { id: "path-matchers", section: "team", label: "Path matchers" },
   { id: "token-thresholds", section: "team", label: "Token thresholds" },
-  { id: "paseo-daemon", section: "paseo", label: "Paseo daemon" },
-  { id: "paseo-providers", section: "paseo", label: "Paseo providers" },
+  { id: "runner-providers", section: "runner", label: "Runner & Providers" },
   { id: "profiles", section: "profiles", label: "Agent profiles" },
-  { id: "profile-import", section: "profiles", label: "Import profiles" },
   { id: "update-channel", section: "about", label: "Update channel" },
   { id: "start-at-login", section: "about", label: "Start at login (agents run without a window)" },
   { id: "check-updates", section: "about", label: "Check for updates" },

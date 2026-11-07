@@ -13,7 +13,7 @@ import { realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { inspectFirstRunStatus, startManagedPaseoInstall } from "./first-run.mjs";
+import { inspectFirstRunStatus } from "./first-run.mjs";
 import { resolveTeamsFilePath, resolveTeamsWritePath } from "./teams-file.mjs";
 import { seedHubBriefs } from "./hub-seed.mjs";
 import { resolveProjectPath } from "./brief-path.mjs";
@@ -1721,13 +1721,6 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
       case "/__vibesquad/first-run/status":
         if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
         return cachedRead(() => inspectFirstRunStatus(opts.firstRun)).then((st) => sendJson(res, 200, st), (e) => sendJson(res, 500, { error: String(e?.message ?? e) }));
-      case "/__vibesquad/first-run/install-paseo":
-        if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
-        return startManagedPaseoInstall(opts.firstRun).then((r) => {
-          resetPaseoProbe();
-          syncRunnerPushWatch().catch(() => {});
-          return sendJson(res, 200, r);
-        }, (e) => sendJson(res, 500, { error: String(e?.message ?? e) }));
       case "/__vibesquad/settings":
         return handleSettings(req, res).catch((e) => {
           if (!res.headersSent) sendJson(res, 500, { ok: false, error: String(e?.message ?? e) });

@@ -117,7 +117,7 @@ describe("R2-4 remote UI & module-load guards", () => {
     assert.match(app, /data-testid="sidebar-unpair-btn"/);
 
     const settings = read("src/SettingsHome.tsx");
-    assert.match(settings, /NAV\.filter\(\(n\) => !isRemote\(\) \|\| n\.id !== "paseo"\)/);
+    assert.match(settings, /NAV\.filter\(\(n\) => !isRemote\(\) \|\| n\.id !== "runner"\)/);
     assert.match(settings, /data-testid="settings-unpair-btn"/);
   });
 

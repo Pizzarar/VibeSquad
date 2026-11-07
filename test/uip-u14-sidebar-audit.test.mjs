@@ -137,13 +137,13 @@ describe("U14: compact Active Buddy Card (DrawerHeader.tsx)", () => {
     assert.doesNotMatch(primary, /<AgentActions/);
   });
 
-  test("secondaryPlumbing holds role-tag, prov-pill, featureChips, AgentActions, paseoLink", () => {
+  test("secondaryPlumbing holds role-tag, prov-pill, featureChips, AgentActions", () => {
     const secondary = dh.slice(dh.indexOf("const secondaryPlumbing"), dh.indexOf("const dockBtns"));
     assert.match(secondary, /role-tag/);
     assert.match(secondary, /prov-pill/);
     assert.match(secondary, /featureChips/);
     assert.match(secondary, /<AgentActions agent=\{agent\} archive \/>/);
-    assert.match(secondary, /paseoLink/);
+    assert.doesNotMatch(secondary, /paseoLink/);
   });
 
   test("compact card renders Search, Reload and More toggle by default", () => {

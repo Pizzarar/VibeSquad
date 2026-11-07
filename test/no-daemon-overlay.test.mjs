@@ -62,12 +62,13 @@ test('header dot shows Paseo only when in use, else the runner', () => {
   assert.equal(statusDot({ remote: true, usesPaseo: false, paseoConn: 'connected', runnerConn: 'down' }).conn, 'connected');
 });
 
-test('the banner renders a clickable pill to Diagnostics, and Diagnostics keeps the unlock form', () => {
+test('the banner renders a clickable pill to Diagnostics, and Diagnostics keeps the connection section', () => {
   const src = readFileSync(new URL('../src/DiagnosticsModal.tsx', import.meta.url), 'utf8');
   assert.match(src, /decideOverlay\(/);
   assert.match(src, /data-testid="daemon-status-pill"[^>]*onClick=\{props\.onOpenDiagnostics\}/);
   assert.match(src, /<PaseoConnectionSection \/>/);
-  assert.match(src, /data-testid="diagnostics-unlock-form"/);
+  assert.match(src, /data-testid="diagnostics-paseo-retry"/);
+  assert.doesNotMatch(src, /diagnostics-unlock-form|daemon-banner-password-input|PASEO DAEMON LOCKED|Enter Paseo daemon password/);
 });
 
 test('a /status change notifies listeners (so usePaseo subscribers re-render); an identical probe does not', async () => {

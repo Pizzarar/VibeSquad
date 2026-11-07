@@ -45,7 +45,7 @@ import {
 import { isHubLaneId, titleFor } from "./teams";
 import { AgentPanes } from "./AgentPanes";
 import { CommandPaletteHost, agentCtxItems, dateBucket, teamCtxItems, openContextMenu, openOverlay, parseUrlState, serializeUrlState, type DateBucket } from "./CommandPalette";
-import { PaseoUsageHeaderChip } from "./PaseoSettingsSection";
+import { PaseoUsageHeaderChip } from "./RunnerSettingsSection";
 import { MobileBar, useMobileTeamView } from "./MobileBar";
 import { FocusRail, railAlerts } from "./FocusRail";
 import { perfEndPainted, perfStart } from "./perf";
@@ -521,7 +521,7 @@ const Sidebar = memo(function Sidebar(props: {
               className="btn ghost small sidebar-icon-btn sidebar-cog-btn"
               data-testid="sidebar-settings-btn"
               onClick={props.onSettings}
-              title="Settings: app, chat, notifications, teams, Paseo, profiles"
+              title="Settings: app, chat, notifications, teams, runner, profiles"
               aria-label="Settings"
             >
               ⚙
@@ -1399,7 +1399,7 @@ function AboutLicensesModal({ onClose, onChecklist }: { onClose: () => void; onC
             {updateLabel(upd, updaterStatus.currentVersion)}
           </button>
         </p>
-        <p>VibeSquad works with Paseo (pinned CLI v0.14.0).</p>
+        <p>Agent orchestration originally built on Paseo by getpaseo (Apache-2.0).</p>
         <p>Licensed under the MIT License.</p>
         <p>
           <button className="btn ghost small" data-testid="about-setup-checklist-btn" onClick={onChecklist}>
@@ -1920,10 +1920,6 @@ export function App() {
           } catch {}
           setFirstRunOpen(true);
         }}
-        onOpenPaseoSettings={() => {
-          requestSettingsTarget("paseo-daemon");
-          setModal("settings");
-        }}
       />
       {!focus && (
         <Sidebar
@@ -2012,7 +2008,7 @@ export function App() {
               onQuickStart={onQuickStart}
             />
           ) : (
-            <div className="muted">Connecting to Paseo…</div>
+            <div className="muted">Connecting…</div>
           )}
         </main>
       )}
