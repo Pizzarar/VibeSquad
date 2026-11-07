@@ -32,6 +32,8 @@ function setup({ callerRole, callerId, lane = "site-polish" }) {
   add("rn-lead", "lead");
   add("rn-lead-b", "lead", { labels: { lane: "other" } });
   add("rn-worker", "worker", { status: "running", labels: { "vs.parent": "rn-lead" } });
+  if (!agents.has("rn-buddy")) add("rn-buddy", "brainstorm");
+  add("rn-buddy-b", "brainstorm", { labels: { lane: "other" } });
   let n = 0;
   const behavior = { createAgent: null };
   const calls = { createAgent: [], updateAgent: [] };
@@ -50,7 +52,8 @@ function setup({ callerRole, callerId, lane = "site-polish" }) {
     return c;
   };
   const ctx = makeCtx({ identity });
-  return { ctx, makeCtx, behavior, agents, calls, cleanup() { if (prevHome === undefined) delete process.env.VIBESQUAD_HOME; else process.env.VIBESQUAD_HOME = prevHome; rmSync(dir, { recursive: true, force: true }); } };
+  const deps = { agentClient: backend, baseHome: vsHome, profilesPath };
+  return { ctx, makeCtx, behavior, agents, calls, deps, dir, vsHome, cleanup() { if (prevHome === undefined) delete process.env.VIBESQUAD_HOME; else process.env.VIBESQUAD_HOME = prevHome; rmSync(dir, { recursive: true, force: true }); } };
 }
 
 const liveLeads = async (ctx) => (await ctx.findLiveLeads({ team: "site", lane: "site-polish" })).map((a) => a.id);
@@ -237,6 +240,59 @@ test("handoff goes through the VS server endpoint, falling back in-process only 
     // A server-side refusal is an error, never a silent in-process retry.
     c.fetch = async () => ({ ok: false, status: 400, json: async () => ({ ok: false, error: "nope" }) });
     await assert.rejects(callTool(c, "handoff_lead", {}), /handoff failed: nope/);
+  } finally { t.cleanup(); }
+});
+
+test("fetch rejects with ECONNREFUSED: in-process fallback runs on the injected backend and says so", async () => {
+  const t = setup({ callerRole: "brainstorm", callerId: "rn-buddy" });
+  try {
+    const c = t.makeCtx({ identity: t.ctx.identity });
+    delete c.performHandoff;
+    c.inProcessDeps = t.deps;
+    c.fetch = async () => { throw Object.assign(new Error("fetch failed"), { cause: { code: "ECONNREFUSED" } }); };
+    const r = await callTool(c, "handoff_lead", {});
+    assert.equal(r.id, "rn-succ-1");
+    assert.match(r.via, /in-process/);
+    assert.equal(t.calls.createAgent.length, 1);
+  } finally { t.cleanup(); }
+});
+
+test("env spoof: a runner record with role=worker plus VS_ROLE=brainstorm is refused", async () => {
+  const t = setup({ callerRole: "brainstorm", callerId: "rn-buddy" });
+  const env = { VS_AGENT_ID: "rn-spoof", VS_ROLE: "brainstorm", VS_TEAM: "site", VS_LANE: "site-polish" };
+  const saved = {};
+  for (const k of Object.keys(env)) { saved[k] = process.env[k]; process.env[k] = env[k]; }
+  delete process.env.PASEO_AGENT_ID;
+  try {
+    const dir = join(t.vsHome, "runner", "agents");
+    mkdirSync(dir, { recursive: true });
+    const ts = Date.now();
+    writeFileSync(join(dir, "rn-spoof.jsonl"), [
+      { seq: 0, ts, type: "created", provider: "claude", model: "m", cwd: t.dir, meta: { title: "spoof", labels: { team: "site", lane: "site-polish", role: "worker" } } },
+      { seq: 1, ts, type: "status", status: "idle" },
+    ].map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
+    const seen = [];
+    const makeContext = (opts) => { seen.push(opts.identity); return t.makeCtx(opts); };
+    await assert.rejects(commandAgentVerb("lead", { _: ["handoff"] }, makeContext, () => {}), /only a brainstorm \(Buddy\) or a lead may/);
+    assert.equal(seen[0].role, "worker");
+    assert.equal(t.calls.createAgent.length, 0);
+  } finally {
+    for (const k of Object.keys(env)) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+    t.cleanup();
+  }
+});
+
+test("server re-check: buddy from another lane and a mismatched self callerId both get 403", async () => {
+  const t = setup({ callerRole: "brainstorm", callerId: "rn-buddy" });
+  try {
+    const run = (extra) => performLeadHandoffHttp({ agentId: "rn-lead", retireImmediately: true, ...t.deps, ...extra }, t.dir);
+    await assert.rejects(run({ trigger: "buddy", callerId: "rn-buddy-b" }), (e) => e.status === 403);
+    await assert.rejects(run({ trigger: "buddy", callerId: "rn-worker" }), (e) => e.status === 403);
+    await assert.rejects(run({ trigger: "self", callerId: "rn-buddy" }), (e) => e.status === 403);
+    assert.equal(t.calls.createAgent.length, 0);
+    const ok = await run({ trigger: "buddy", callerId: "rn-buddy" });
+    assert.equal(ok.ok !== false, true);
+    assert.equal(t.calls.createAgent.length, 1);
   } finally { t.cleanup(); }
 });
 

@@ -3,7 +3,7 @@
 // rn- ids -> RunnerBackend, other ids -> Paseo, creates by lane (every lane runs on the runner unless pinned to Paseo).
 import { isRunnerId } from "../backend/runner-backend.mjs";
 import { coalesceReplies } from "../reply-coalesce.mjs";
-import { findLaneInRegistry, findTeamInRegistry, loadTeamsRegistry, whoCandidate } from "../identity.mjs";
+import { effectiveAgentRole, findLaneInRegistry, findTeamInRegistry, isRetiredAgent, loadTeamsRegistry, whoCandidate } from "../identity.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
 export const REPORT_TYPES = ["done", "decision", "blocker"];
@@ -294,6 +294,11 @@ async function handoffLead(ctx, args = {}) {
   if (callerRole === "brainstorm") {
     const { team, lane } = ctx.identity;
     if (!team || !lane) throw new Error("cannot hand off a lead: caller has no team and lane");
+    if (!callerId) throw new Error("cannot hand off a lead: caller has no agent id");
+    const caller = await fetchAgent(callerId);
+    if (!caller || effectiveAgentRole(caller) !== "brainstorm" || isRetiredAgent(caller)) {
+      throw new Error(`cannot hand off a lead: ${callerId} is not a live Buddy`);
+    }
     const teams = ctx.teams ?? loadTeamsRegistry();
     const callerLane = findLaneInRegistry(lane, teams);
     const callerTeam = findTeamInRegistry(team, teams);
@@ -322,6 +327,7 @@ async function handoffLead(ctx, args = {}) {
       throw new Error("cannot hand off a lead: a lead may only hand off itself");
     }
     target = await fetchAgent(callerId);
+    const known = Boolean(target);
     if (!target) target = { id: callerId };
     trigger = "self";
     const successor = clean(target.labels?.["handoff-successor"]);
@@ -329,13 +335,13 @@ async function handoffLead(ctx, args = {}) {
       const s = await fetchAgent(successor);
       return handoffView({ successorId: successor, title: s?.title ?? "", oldLeadId: callerId, deduped: true }, { trigger });
     }
-    if (target.archivedAt || target.status === "closed" || ["former-lead", "retired"].includes(clean(target.labels?.role).toLowerCase())) {
+    if (target.archivedAt || target.status === "closed" || (known && (effectiveAgentRole(target) !== "lead" || isRetiredAgent(target)))) {
       throw new Error(`cannot hand off a lead: ${callerId} is not a live lead`);
     }
   } else {
     throw new Error(`cannot hand off a lead: caller role is "${callerRole || "none"}", only a brainstorm (Buddy) or a lead may`);
   }
-  const body = { trigger, agentId: target.id, retireImmediately: true, httpWaitMs: 180_000 };
+  const body = { trigger, agentId: target.id, callerId, retireImmediately: true, httpWaitMs: 180_000 };
   let res;
   let via = "server";
   if (ctx.performHandoff) {
@@ -348,7 +354,7 @@ async function handoffLead(ctx, args = {}) {
     } catch (e) {
       if (!e?.unreachable) throw e;
       via = "in-process (VS server unreachable)";
-      res = await (await import("../lead-handoff.mjs")).performLeadHandoffHttp(body);
+      res = await (await import("../lead-handoff.mjs")).performLeadHandoffHttp({ ...body, ...(ctx.inProcessDeps ?? {}) });
     }
   }
   if (res?.ok === false || res?.error) throw new Error(`handoff failed: ${res.error ?? "unknown"}`);
