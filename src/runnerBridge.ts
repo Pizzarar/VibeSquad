@@ -1,7 +1,7 @@
 // Runner lanes in the UI (docs/PLAN_OWN_DAEMON.md Block 3). The browser only speaks the Paseo websocket, so agents
 // owned by the VS runner come through /__vibesquad/runner/*. Everything here is inert unless a lane is switched:
 // the first status probe answers enabled:false and nothing else ever runs.
-import type { PaseoAgent } from "@getpaseo/client";
+import type { PaseoAgent } from "./agentTypes";
 
 export const isRunnerId = (id: string | undefined | null): boolean => typeof id === "string" && id.startsWith("rn-");
 
@@ -39,15 +39,7 @@ export const runnerSetConfig = (id: string, cfg: { model?: string; modeId?: stri
   post(id, "config", cfg).then((r) => ({ appliesFrom: "next-turn", busy: !!(r as { busy?: boolean }).busy }) as RunnerConfigResult);
 export const runnerUpdate = (id: string, updates: { name?: string; labels?: Record<string, string> }) => post(id, "meta", updates).then(() => undefined);
 
-export type RunnerStatus = {
-  enabled: boolean;
-  defaultBackend?: "runner" | "paseo";
-  /** Lanes explicitly switched to the runner (only meaningful when defaultBackend is "paseo"). */
-  lanes: string[];
-  /** Lanes pinned to Paseo; every other lane (including none) runs on the runner when defaultBackend is "runner". */
-  paseoLanes?: string[];
-  paseo?: { expected: boolean; reachable: boolean };
-};
+export type RunnerStatus = { enabled: boolean };
 
 let status: RunnerStatus | null = null;
 let resolveStatusLoaded: () => void = () => {};
@@ -56,15 +48,7 @@ export const runnerStatusLoaded: Promise<void> = new Promise((r) => (resolveStat
 /** Latest runner status, or null before the first probe / when the probe failed. */
 export const getRunnerStatus = (): RunnerStatus | null => status;
 
-/** True when `lane` runs on the runner (known after the first bridge probe). With the cutover default that is every lane not pinned to Paseo, including none. */
-export const isRunnerLane = (lane: string | undefined): boolean => {
-  if (!status?.enabled) return false;
-  const l = (lane ?? "").trim().toLowerCase();
-  if (status.defaultBackend === "runner") return !(status.paseoLanes ?? []).includes(l);
-  return !!l && status.lanes.includes(l);
-};
-
-/** Fetches /status once more (e.g. to learn whether a Paseo daemon came up). Null when the server is unreachable. */
+/** Fetches /status once more. Null when the server is unreachable. */
 export const fetchRunnerStatus = (): Promise<RunnerStatus | null> =>
   call<RunnerStatus>("/status").then((s) => {
     const changed = JSON.stringify(s) !== JSON.stringify(status);
@@ -89,7 +73,7 @@ const notifyTimeline = (id?: string, catchUp = false) => {
   for (const [k, set] of timelineListeners) if (!id || k === id) for (const cb of [...set]) cb(catchUp);
 };
 
-/** Stands in for client.agents.ref(id) in Timeline.tsx: refetch over HTTP, subscribe to the runner event stream (no polling). */
+/** The agent handle Timeline.tsx and the pin previews use: refetch over HTTP, subscribe to the runner event stream (no polling). */
 export function runnerHandle(id: string) {
   const refetch = async (opts: { limit?: number } = {}): Promise<TimelineResult> => call<TimelineResult>(`/agents/${id}/timeline?limit=${opts.limit ?? 60}`);
   return {

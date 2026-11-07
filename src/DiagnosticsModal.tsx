@@ -1,10 +1,9 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Modal } from "./TeamActions";
-import { reconnectWithDaemonPassword, usePaseo } from "./paseo";
-import { decideOverlay, paseoIsDown, pillText, usesPaseoBackend } from "./daemonOverlay";
-import { getRunnerStatus } from "./runnerBridge";
-import { clearSession, isAndroidUserAgent, isLocalHost, isRemote } from "./remoteSession";
-import { getStaleBuild, loadUpdaterStatus, setStaleBuild, triggerUpdateInstall, useStaleBuild, useUpdaterStatus } from "./userName";
+import { usePaseo } from "./paseo";
+import { decideOverlay, pillText } from "./daemonOverlay";
+import { isAndroidUserAgent } from "./remoteSession";
+import { getStaleBuild, loadUpdaterStatus, setStaleBuild, useStaleBuild, useUpdaterStatus } from "./userName";
 import "./ResponsiveSmallWindow.css";
 
 export type DiagnosticsBundle = {
@@ -41,36 +40,18 @@ export async function buildBundle(conn: string, agents: Iterable<{ id: string; s
   };
 }
 
-/** A blip shorter than this shows nothing: the scrim only appears once the daemon has been away this long. */
+/** A blip shorter than this shows nothing: the pill only appears once the runner stream has been away this long. */
 export const DISCONNECT_DEBOUNCE_MS = 2000;
-const RETRY_TIMEOUT_MS = 10_000;
 
 export function shouldShowDisconnectOverlay(conn: string, disconnectedSinceMs: number | null, nowMs: number, debounceMs = DISCONNECT_DEBOUNCE_MS): boolean {
   return conn !== "connected" && disconnectedSinceMs !== null && nowMs - disconnectedSinceMs >= debounceMs;
 }
 
-/**
- * Local: a non-blocking header pill that opens Diagnostics. Remote relay only: a centered card over a dimmed scrim
- * (position: fixed and not a role="alert" child of .app, so the layout underneath never changes).
- */
-export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
-  onOpenDiagnostics?: () => void;
-  onOpenSetup?: () => void;
-  onRePair?: () => void;
-}) {
-  const { conn, status, error, authFailureReason, runnerConn, agents, paseoConn } = usePaseo();
-  const updaterStatus = useUpdaterStatus();
-  const [updateChecking, setUpdateChecking] = useState(false);
-  const [busy, setBusy] = useState(false);
+/** A non-blocking header pill that opens Diagnostics while the runner stream is down (nothing underneath is covered or disabled). */
+export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: { onOpenDiagnostics?: () => void }) {
+  const { runnerConn } = usePaseo();
+  const kind = decideOverlay({ runnerConn });
   const [visible, setVisible] = useState(false);
-  const paseoDown = paseoIsDown({ remote: isRemote(), conn, status, paseoConn });
-  const kind = decideOverlay({
-    remote: isRemote(),
-    runnerConn,
-    paseoDown,
-    authFailureReason,
-    usesPaseo: usesPaseoBackend(getRunnerStatus(), agents.keys()),
-  });
   const down = kind !== "none";
 
   useEffect(() => {
@@ -78,163 +59,28 @@ export const DaemonStatusBanner = memo(function DaemonStatusBanner(props: {
       setVisible(false);
       return;
     }
-    if (authFailureReason && kind === "scrim") {
-      setVisible(true);
-      return;
-    }
     const since = Date.now();
     const t = setTimeout(() => {
       if (shouldShowDisconnectOverlay("disconnected", since, Date.now())) setVisible(true);
     }, DISCONNECT_DEBOUNCE_MS);
     return () => clearTimeout(t);
-  }, [down, kind, authFailureReason]);
-
-  const inFlight = useRef(false);
-  const retry = useCallback(async () => {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    setBusy(true);
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      // connect() may never settle on a dead socket; cap the wait so RETRY NOW re-enables
-      const attempt = (async () => {
-        await reconnectWithDaemonPassword();
-      })();
-      await Promise.race([attempt, new Promise((r) => { timer = setTimeout(r, RETRY_TIMEOUT_MS); })]);
-    } catch {
-      /* still down; the scrim stays */
-    } finally {
-      clearTimeout(timer);
-      inFlight.current = false;
-      setBusy(false);
-    }
-  }, []);
+  }, [down]);
 
   if (!down || !visible) return null;
-  if (kind === "pill") {
-    // Non-blocking: a small header pill, no scrim; nothing underneath is covered or disabled.
-    return (
-      <button type="button" className="daemon-status-pill" data-testid="daemon-status-pill" role="status" onClick={props.onOpenDiagnostics} title="Open Diagnostics">
-        {pillText({ runnerConn, authFailureReason })}
-      </button>
-    );
-  }
-  const onRetryNow = () => {
-    void retry();
-  };
-  const onRePairClick = () => {
-    if (isRemote()) {
-      clearSession();
-      location.replace(location.pathname + "?remote=1");
-      return;
-    }
-    if ((window as any).__VIBESQUAD_DESKTOP_BRIDGE__) {
-      window.location.href = "/__desktop/setup";
-      return;
-    }
-    if (props.onRePair) {
-      props.onRePair();
-      return;
-    }
-    if (isLocalHost(location.hostname)) {
-      props.onOpenSetup?.();
-      return;
-    }
-    window.location.href = "/?remote=1";
-  };
-  const onFirstTimeSetupClick = () => {
-    if ((window as any).__VIBESQUAD_DESKTOP_BRIDGE__) {
-      window.location.href = "/__desktop/mode";
-      return;
-    }
-    try {
-      localStorage.removeItem("vs.firstRunDone");
-    } catch {}
-    props.onOpenSetup?.();
-  };
   return (
-    <div className="daemon-disconnect-scrim" data-testid="daemon-disconnect-scrim">
-      <div className="daemon-disconnect-card" data-testid="daemon-down-banner" role="alert">
-        <div className="daemon-disconnect-title" data-testid="daemon-disconnect-text">
-          Daemon disconnected · reconnecting automatically
-        </div>
-        {error ? <div className="daemon-disconnect-subtext">{error}</div> : null}
-        <div className="daemon-disconnect-actions">
-          <button type="button" className="btn ok small" data-testid="daemon-banner-retry" disabled={busy} onClick={onRetryNow}>
-            RETRY NOW
-          </button>
-          <button type="button" className="btn ghost small" data-testid="daemon-banner-repair" onClick={onRePairClick}>
-            RE-PAIR / CHANGE SERVER
-          </button>
-          <button type="button" className="btn ghost small" data-testid="daemon-banner-first-time" onClick={onFirstTimeSetupClick}>
-            FIRST-TIME SETUP
-          </button>
-          <button type="button" className="btn ghost small" data-testid="daemon-banner-diagnostics" onClick={props.onOpenDiagnostics}>
-            OPEN DIAGNOSTICS
-          </button>
-          {updaterStatus.updateAvailable && updaterStatus.downloaded ? (
-            <button
-              type="button"
-              className="btn ok small"
-              data-testid="daemon-banner-update"
-              onClick={() => void triggerUpdateInstall()}
-            >
-              RESTART &amp; UPDATE (v{updaterStatus.availableVersion})
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="btn ghost small"
-              data-testid="daemon-banner-update"
-              disabled={updateChecking}
-              onClick={() => {
-                setUpdateChecking(true);
-                void checkForUpdates().finally(() => setUpdateChecking(false));
-              }}
-            >
-              {updateChecking ? "CHECKING UPDATES…" : "CHECK FOR UPDATES"}
-            </button>
-          )}
-          {props.onOpenSetup && (
-            <button type="button" className="btn ghost small" data-testid="daemon-banner-setup" onClick={props.onOpenSetup}>
-              SETUP
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
+    <button type="button" className="daemon-status-pill" data-testid="daemon-status-pill" role="status" onClick={props.onOpenDiagnostics} title="Open Diagnostics">
+      {pillText({ runnerConn })}
+    </button>
   );
 });
 
-/** Connection status in Diagnostics: the header pill links here, so Retry stays reachable without a scrim. */
-function PaseoConnectionSection() {
-  const { conn, status, paseoConn, agents } = usePaseo();
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const remote = isRemote();
-  if (!paseoIsDown({ remote, conn, status, paseoConn })) return null;
-  if (!remote && !usesPaseoBackend(getRunnerStatus(), agents.keys())) return null;
-  const run = async (fn: () => Promise<void>) => {
-    if (busy) return;
-    setBusy(true);
-    setErr(null);
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      await Promise.race([fn(), new Promise((r) => { timer = setTimeout(r, RETRY_TIMEOUT_MS); })]);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      clearTimeout(timer);
-      setBusy(false);
-    }
-  };
+/** Connection status in Diagnostics: the header pill links here. The runner stream reconnects on its own. */
+function RunnerConnectionSection() {
+  const { runnerConn } = usePaseo();
+  if (runnerConn !== "down") return null;
   return (
-    <div className="diag-build-status stale" data-testid="diagnostics-paseo-section">
-      <div>Connection lost · reconnecting automatically. VibeSquad keeps working on its own runner.</div>
-      <button type="button" className="btn ok small" data-testid="diagnostics-paseo-retry" disabled={busy} onClick={() => void run(async () => { await reconnectWithDaemonPassword(); })}>
-        RETRY NOW
-      </button>
-      {err && <div className="daemon-disconnect-error" data-testid="diagnostics-connection-error">{err}</div>}
+    <div className="diag-build-status stale" data-testid="diagnostics-runner-section">
+      <div>Runner disconnected · reconnecting automatically.</div>
     </div>
   );
 }
@@ -306,7 +152,7 @@ export function DiagnosticsModal({ onClose }: { onClose: () => void }) {
             </span>
           )}
         </div>
-        <PaseoConnectionSection />
+        <RunnerConnectionSection />
         <div className="diag-actions">
           <button className="btn small" data-testid="diagnostics-copy-btn" onClick={() => void copy()}>{copied ? "✓ Copied" : "📋 Copy Diagnostics Bundle"}</button>
           <button className="btn small" data-testid="diagnostics-download-btn" onClick={download}>⬇ Download .json</button>

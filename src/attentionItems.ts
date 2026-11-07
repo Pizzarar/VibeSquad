@@ -1,6 +1,6 @@
 // The "everything that needs you" list behind a team's pink badge: which rows exist, and which
 // clear/snooze call each kind maps to. Pure (deps injected) so tests drive it with fixtures.
-import type { PaseoAgent } from "@getpaseo/client";
+import type { PaseoAgent } from "./agentTypes";
 import { isMarkedUnread } from "./attentionLocal.ts";
 import type { Member } from "./teams.ts";
 

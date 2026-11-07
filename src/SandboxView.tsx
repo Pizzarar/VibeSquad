@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { PaseoAgent } from "@getpaseo/client";
+import type { PaseoAgent } from "./agentTypes";
 import { missingLine, sandboxPosture, sourceLabel } from "./paseoSandboxLogic";
 import { getWorkspacePorts, subscribeWorkspacePorts, type DetectedPort } from "./portsDetect";
 

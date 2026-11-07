@@ -1,13 +1,14 @@
 import { Component, Fragment, type ReactNode, useCallback, useSyncExternalStore, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { PaseoAgentTimelineEvent } from "@getpaseo/client";
+import type { PaseoAgentTimelineEvent } from "./agentTypes";
 import { messageCtxItems, openContextMenu, selectionWithin } from "./CommandPalette";
-import { client, retrySend } from "./paseo";
+import { retrySend } from "./paseo";
 import { DEMO } from "./demoFlag";
 import { isRunnerId, runnerFetchTimeline, runnerHandle } from "./runnerBridge";
 import { createRefreshScheduler } from "./timelineRefresh";
 
-/** client.agents.ref(id), except runner-owned agents (rn- ids) go over the VS runner routes. */
-const agentRef = (id: string): ReturnType<typeof client.agents.ref> => (isRunnerId(id) ? (runnerHandle(id) as any) : client.agents.ref(id));
+/** The agent's timeline handle: refetch over the VS runner routes, live updates from the runner event stream. */
+type AgentHandle = { timeline: { refetch(opts?: any): Promise<any>; subscribe(cb: (ev: any) => void): any } };
+const agentRef = (id: string): AgentHandle => runnerHandle(id) as AgentHandle;
 import { dismissPending, dropMatched, getPending, noteAgentSeq, pendingFor, reconcile, subscribePending } from "./pendingSend";
 import { truncateAfter } from "./sessionLifecycle";
 import { demoTimeline } from "./demo";

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { PaseoAgent } from "@getpaseo/client";
-import type { FileExplorerDirectoryPayload } from "@getpaseo/client/internal/daemon-client";
+import type { PaseoAgent } from "./agentTypes";
+import type { FileExplorerDirectoryPayload } from "./agentTypes";
 import { VsFilesError, vsListDirectory, vsReadFile, vsWatchFile, vsWriteFile } from "./vsFiles";
 import { DEMO } from "./demoFlag";
 import { MarkdownRenderer } from "./Timeline";

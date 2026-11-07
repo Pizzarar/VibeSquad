@@ -1,6 +1,6 @@
 // Fixed cast for ?demo (art review and screenshots without a live daemon) and the
 // ?cast=1 cast sheet. Nothing here talks to Paseo.
-import type { PaseoAgent } from "@getpaseo/client";
+import type { PaseoAgent } from "./agentTypes";
 import { AGENT_TYPE_NAME, type AgentType } from "./teams";
 import { Avatar, providerSpec } from "./pixel";
 

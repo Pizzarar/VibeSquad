@@ -3,7 +3,7 @@
 // parsing and error mapping. No imports: the browser wiring is src/paseoRemote.ts + src/RemotePair.tsx,
 // and node tests pass fakes. R2-4 (hide desktop-only UI) and R2-3 (remote build) hook in via isRemote().
 
-/** Relay pairing offer, as validated by @getpaseo/protocol's parseConnectionOfferFromUrl. */
+/** Relay pairing offer, from a pairing link. */
 export type RemoteOffer = {
   v: 2;
   serverId: string;

@@ -1,8 +1,8 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { expandFolderMentions } from "./projectContext";
 import { appendContext, useCtxSources } from "./contextSources";
-import type { PaseoAgent } from "@getpaseo/client";
-import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
+import type { PaseoAgent } from "./agentTypes";
+import type { ActiveTurnBehavior } from "./agentTypes";
 import { removeLocalAgent, sendMessage, updateAgent, upsertLocalAgent } from "./paseo";
 import { runnerSpawn } from "./runnerBridge";
 import { vsListDirectory } from "./vsFiles";

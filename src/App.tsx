@@ -1,9 +1,8 @@
 import { FIRST_RUN_DONE_KEY, FirstRunModal, fetchFirstRunStatus, type FirstRunStatus } from "./FirstRunModal";
 import { clearSession, isAndroidUserAgent, isRemote } from "./remoteSession";
-import { showsPaseoDot, statusDot } from "./daemonOverlay";
-import { getRunnerStatus } from "./runnerBridge";
+import { statusDot } from "./daemonOverlay";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { PaseoAgent } from "@getpaseo/client";
+import type { PaseoAgent } from "./agentTypes";
 import type { ProviderQuotaView } from "./antigravity";
 import { dismissStaleBuild, dismissUpdateBanner, loadUpdaterStatus, setLanExposureState, setLocalAccess, setServerConfigWarnings, setStaleBuild, triggerUpdateInstall, useLocalReadOnly, useStaleBuild, useStaleBuildDismissed, useConfigWarnings, useExposedIpsStore, useUpdaterStatus } from "./userName";
 import { archiveAgent, detachAgent, getPaseoState, loadArchived, retireAgent, updateAgent, upsertLocalAgent, usePaseo } from "./paseo";
@@ -1334,7 +1333,7 @@ function openTopNeedsYou() {
 }
 
 const LICENSES_FALLBACK =
-  "Paseo (@getpaseo/client, @getpaseo/protocol) — Apache-2.0, Copyright (c) 2025-present Mohamed Boudra. Full third-party license list unavailable offline.";
+  "Agent orchestration originally built on Paseo by getpaseo — Apache-2.0, Copyright (c) 2025-present Mohamed Boudra. Full third-party license list unavailable offline.";
 
 /** Reports which non-loopback addresses the server listens on (empty unless --lan / VIBESQUAD_LAN=1 / Settings). */
 function useExposedIps(): string[] {
@@ -1409,8 +1408,8 @@ function AboutLicensesModal({ onClose, onChecklist }: { onClose: () => void; onC
 }
 
 export function App() {
-  const { conn, runnerConn, paseoConn, archivedAgents, workspaces, providerUsage, agents, rosterLoaded } = usePaseo();
-  const dot = statusDot({ remote: isRemote(), usesPaseo: showsPaseoDot(getRunnerStatus(), agents.keys()), paseoConn: isRemote() ? conn : paseoConn ? "connected" : "disconnected", runnerConn });
+  const { conn, runnerConn, archivedAgents, workspaces, providerUsage, agents, rosterLoaded } = usePaseo();
+  const dot = statusDot({ runnerConn });
   const teamsVersion = useTeams();
   const { members, views } = derived();
   const full = useFullView();
@@ -1897,16 +1896,7 @@ export function App() {
           </button>
         </div>
       )}
-      {/* <DaemonStatusBanner onOpenDiagnostics={openDiagnostics} /> */}
-      <DaemonStatusBanner
-        onOpenDiagnostics={() => setModal("diagnostics")}
-        onOpenSetup={() => {
-          try {
-            localStorage.removeItem(FIRST_RUN_DONE_KEY);
-          } catch {}
-          setFirstRunOpen(true);
-        }}
-      />
+      <DaemonStatusBanner onOpenDiagnostics={() => setModal("diagnostics")} />
       {!focus && (
         <Sidebar
           views={sidebarViews}

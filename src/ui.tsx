@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
-import type { PaseoAgent } from "@getpaseo/client";
+import type { PaseoAgent } from "./agentTypes";
 import { archiveAgent, getPaseoState, stopAgent, subscribePaseo } from "./paseo";
 import { auditAntigravityAgent } from "./antigravity";
 import { useUserName } from "./userName";
