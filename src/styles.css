@@ -5427,18 +5427,31 @@ button.project-file-name:hover { text-decoration: underline; }
 }
 .team-header h1 { background: var(--u3-header-halo) 44px center / 464px 64px no-repeat; }
 .team-header h1 .team-name-chrome {
-  font-family: var(--display); font-size: 30px; letter-spacing: 2px; text-transform: uppercase; text-shadow: none;
+  font-family: var(--display); font-size: 30px; font-weight: 900; letter-spacing: 0.05em; line-height: 1.15; padding: 2px 6px; text-transform: uppercase; text-shadow: none;
   color: transparent;
-  background: linear-gradient(180deg, var(--marble) 0 44%, var(--pastel-violet) 45% 62%, var(--hot-pink) 63% 100%);
+  background: linear-gradient(180deg, #ffffff 0%, #f6eef8 24%, #c3aee8 46%, #160b24 47%, #160b24 54%, #ff6b9d 55%, #ff9e7d 76%, #ffd166 100%);
   -webkit-background-clip: text; background-clip: text;
-  filter: drop-shadow(1px 0 0 var(--u3-ink)) drop-shadow(-1px 0 0 var(--u3-ink)) drop-shadow(0 1px 0 var(--u3-ink)) drop-shadow(0 -1px 0 var(--u3-ink)) drop-shadow(2px 2px 0 var(--u3-ink));
+  filter: drop-shadow(2px 0 0 #160b24) drop-shadow(-2px 0 0 #160b24) drop-shadow(0 2px 0 #160b24) drop-shadow(0 -2px 0 #160b24) drop-shadow(2px 2px 0 #160b24) drop-shadow(-2px -2px 0 #160b24) drop-shadow(2px -2px 0 #160b24) drop-shadow(-2px 2px 0 #160b24) drop-shadow(3px 3px 0 #160b24);
 }
 .team-head .team-name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .btn.ok:not(.confirm), .btn.confirm.cool:not(.armed), .usage-review-run, .usage-review-run:hover:not(:disabled) { color: var(--u3-ink-text); }
-/* team-view centre pane = a painted window (frame + 28px title strip); the hub's sky-zone pane keeps its own look */
+/* team-view centre pane = a painted window; its existing breadcrumb bar is the title bar (hub's sky-zone pane keeps its own look) */
 .app.pin-focus > .agent-panes:not(:has(.sky-zones)) {
-  border: 1px solid transparent; border-image: var(--u3-window-frame) 8 / 16px / 0 repeat; padding-top: var(--bar-h);
-  background-image: var(--u3-cloud-corner), var(--u3-tb-ramp), var(--u3-tb-peach), var(--u3-bg-panel);
-  background-position: right bottom, 0 0, 0 0, 0 0;
+  border: 1px solid transparent; border-image: var(--u3-window-frame) 8 / 16px / 0 repeat;
+  background-image: var(--u3-cloud-corner), var(--u3-bg-panel);
+  background-size: 320px 144px, 32px 256px;
+  background-position: right bottom, 0 0;
+  background-repeat: no-repeat, repeat-x;
 }
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) .pin-focus-bar {
+  padding: 0 var(--sp-2); border-bottom: 0; color: var(--u3-ink-text); background-color: var(--tb-3);
+  background-image: var(--u3-tb-ramp), var(--u3-tb-peach); /* the bar keeps its 44px chat-bar height: strip at 3x (integer) */
+  background-size: 576px 42px, 48px 42px; background-position: 0 1px, 0 1px; background-repeat: no-repeat, repeat-x;
+  image-rendering: pixelated;
+}
+.pin-focus-bar :is(.breadcrumb-seg, .breadcrumb-sep, .pin-focus-name, .muted) { color: var(--u3-ink-text); opacity: 1; text-shadow: none; }
+.pin-focus-bar .pin-focus-home { min-height: 0; height: 24px; padding: 0 var(--sp-1); }
 .app.pin-focus > .agent-panes { background-color: var(--panel-hi); }
+
+.team-head { gap: var(--sp-1); padding-left: 6px; padding-right: 4px; }
+.team-head-line { gap: 2px; }
