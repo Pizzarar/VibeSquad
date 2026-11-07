@@ -110,22 +110,27 @@ export function parseSentAttachments(text: string): { body: string; chips: SentC
   return { body: chips.length ? rest.replace(/\s+$/, "") : text, chips: chips.reverse() };
 }
 
-// ── tiny per-agent store so Composer and AgentDrawer share the staged list ──
-const mem = new Map<string, Attachment[]>();
+// ── tiny per-agent store so Composer and AgentDrawer share the staged list + a rejection notice ──
+type AttachmentStore = { items: Attachment[]; notice: string | null };
+const mem = new Map<string, AttachmentStore>();
 const subs = new Map<string, Set<() => void>>();
-const EMPTY: Attachment[] = [];
+const EMPTY_STORE: AttachmentStore = { items: [], notice: null };
 const emit = (k: string) => subs.get(k)?.forEach((f) => f());
 let seq = 0;
 
-export const getAttachments = (key: string): Attachment[] => mem.get(key) ?? EMPTY;
+export const getAttachments = (key: string): Attachment[] => (mem.get(key) ?? EMPTY_STORE).items;
+
+export const getAttachmentNotice = (key: string): string | null => (mem.get(key) ?? EMPTY_STORE).notice;
 
 export function addAttachments(key: string, files: File[]) {
   const add = files.map((f) => ({ id: `${f.name}-${Date.now()}-${seq++}`, name: f.name, size: f.size, file: f }));
-  mem.set(key, [...(mem.get(key) ?? []), ...add]);
+  const cur = mem.get(key) ?? EMPTY_STORE;
+  mem.set(key, { items: [...cur.items, ...add], notice: null }); // a valid attach clears the rejection notice
   emit(key);
 }
 export function removeAttachment(key: string, id: string) {
-  mem.set(key, (mem.get(key) ?? []).filter((a) => a.id !== id));
+  const cur = mem.get(key) ?? EMPTY_STORE;
+  mem.set(key, { ...cur, items: cur.items.filter((a) => a.id !== id) });
   emit(key);
 }
 export function clearAttachments(key: string) {
@@ -133,21 +138,29 @@ export function clearAttachments(key: string) {
   emit(key);
 }
 
+export function setAttachmentNotice(key: string, notice: string | null) {
+  const cur = mem.get(key) ?? EMPTY_STORE;
+  mem.set(key, { ...cur, notice });
+  emit(key);
+}
+
 export function useAttachments(key: string) {
-  const items = useSyncExternalStore(
+  const store = useSyncExternalStore(
     useCallback((cb) => {
       const s = subs.get(key) ?? new Set();
       s.add(cb);
       subs.set(key, s);
       return () => void s.delete(cb);
     }, [key]),
-    () => mem.get(key) ?? EMPTY,
+    () => mem.get(key) ?? EMPTY_STORE,
   );
   return {
-    items,
+    items: store.items,
+    notice: store.notice,
     add: useCallback((f: File[]) => addAttachments(key, f), [key]),
     remove: useCallback((id: string) => removeAttachment(key, id), [key]),
     clear: useCallback(() => clearAttachments(key), [key]),
+    setNotice: useCallback((n: string | null) => setAttachmentNotice(key, n), [key]),
   };
 }
 

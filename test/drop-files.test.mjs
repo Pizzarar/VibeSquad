@@ -11,6 +11,8 @@ import {
   MAX_INLINE_BYTES,
   partitionFiles,
   stageFiles,
+  setAttachmentNotice,
+  getAttachmentNotice,
 } from "../src/attachments.ts";
 
 const mk = (name, body, type = "text/plain") => new File([body], name, { type });
@@ -146,9 +148,31 @@ test("chips-only steer keeps a non-empty steered label", async () => {
   assert.match(fs.readFileSync(new URL("../src/AgentDrawer.tsx", import.meta.url), "utf8"), /setLastSteered\(base \|\| "\(files\)"\)/);
 });
 
-test("AgentDrawer pane drop surfaces the stageFiles rejection notice", async () => {
+test("attachment notice clears on a valid attach, on clear, and on dismiss", () => {
+  const key = "notice-test";
+  setAttachmentNotice(key, "Too large / binary — attach a path instead: big.log");
+  assert.equal(getAttachmentNotice(key), "Too large / binary — attach a path instead: big.log");
+  addAttachments(key, [mk("a.md", "# ok")]); // valid attach clears it
+  assert.equal(getAttachmentNotice(key), null);
+  setAttachmentNotice(key, "rejected: bin.dat");
+  assert.equal(getAttachmentNotice(key), "rejected: bin.dat");
+  setAttachmentNotice(key, null); // dismiss
+  assert.equal(getAttachmentNotice(key), null);
+  setAttachmentNotice(key, "rejected again");
+  clearAttachments(key); // send clears it
+  assert.equal(getAttachmentNotice(key), null);
+});
+
+test("pane drop and composer share the one attachment rejection notice", async () => {
   const fs = await import("node:fs");
   const drawer = fs.readFileSync(new URL("../src/AgentDrawer.tsx", import.meta.url), "utf8");
-  assert.match(drawer, /stageFiles\(Array\.from\(e\.dataTransfer\?\.files \?\? \[\]\), imgs, atts\)\.then\(setDropNotice\)/);
-  assert.match(drawer, /data-testid="pane-drop-notice"/);
+  const comp = fs.readFileSync(new URL("../src/Composer.tsx", import.meta.url), "utf8");
+  // Both the pane drop and the composer route the stageFiles notice into atts.setNotice.
+  assert.match(drawer, /stageFiles\(Array\.from\(e\.dataTransfer\?\.files \?\? \[\]\), imgs, atts\)\.then\(\(note\) => atts\.setNotice\(note\)\)/);
+  assert.match(comp, /stageFiles\(all, imgs, atts\)\.then\(\(note\) => atts\.setNotice\(note\)\)/);
+  // A single render site, dismissible, reads atts.notice (no write-only dropNotice state).
+  assert.match(comp, /data-testid="composer-file-notice"/);
+  assert.match(comp, /atts\.notice/);
+  assert.match(comp, /atts\.setNotice\(null\)/);
+  assert.doesNotMatch(drawer, /dropNotice|pane-drop-notice/);
 });

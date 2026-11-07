@@ -184,7 +184,6 @@ export function Composer({
   const [listFailed, setListFailed] = useState(false);
   const [sel, setSel] = useState(0);
   const [dismissed, setDismissed] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
   const [history, setHistory] = useState<string[]>(() => loadHistory(agent.id));
   const [histIdx, setHistIdx] = useState(-1);
   const origDraft = useRef("");
@@ -334,7 +333,7 @@ export function Composer({
   };
 
   const addFiles = (all: File[]) => {
-    if (all.length) void stageFiles(all, imgs, atts).then(setNotice);
+    if (all.length) void stageFiles(all, imgs, atts).then((note) => atts.setNotice(note));
   };
 
   const send = () => {
@@ -491,9 +490,12 @@ export function Composer({
           steered
         </div>
       )}
-      {notice && (
+      {atts.notice && (
         <div className="chip warn" data-testid="composer-file-notice">
-          {notice}
+          {atts.notice}
+          <button className="thumb-x" aria-label="Dismiss" onClick={() => atts.setNotice(null)}>
+            ✕
+          </button>
         </div>
       )}
       {atts.items.length > 0 && (
@@ -713,7 +715,7 @@ export function Composer({
             className="btn ghost composer-stop-btn"
             title="Stop the current turn (keeps the agent)"
             data-testid="composer-stop-btn"
-            onClick={() => stopAgent(agent.id).catch((e) => setNotice(`Couldn't stop: ${e instanceof Error ? e.message : String(e)}`))}
+            onClick={() => stopAgent(agent.id).catch((e) => atts.setNotice(`Couldn't stop: ${e instanceof Error ? e.message : String(e)}`))}
           >
             ■ Stop
           </button>

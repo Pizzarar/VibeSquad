@@ -173,7 +173,6 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   const atts = useAttachments(`${agent.id}:files`);
   const ctxSrc = useCtxSources(agent.id);
   const [paneDrop, setPaneDrop] = useState(false);
-  const [dropNotice, setDropNotice] = useState<string | null>(null);
   setAgentCwd(agent.id, agent.cwd);
 
   const isBs = isBrainstormAgent(agent);
@@ -573,7 +572,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
         setPaneDrop(false);
         if (e.defaultPrevented) return; // the composer already took it
         e.preventDefault();
-        void stageFiles(Array.from(e.dataTransfer?.files ?? []), imgs, atts).then(setDropNotice);
+        void stageFiles(Array.from(e.dataTransfer?.files ?? []), imgs, atts).then((note) => atts.setNotice(note));
       }}
     >
       {paneDrop && (
@@ -689,12 +688,6 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
           <button className="btn small" data-testid="send-retry" style={{ marginLeft: 8 }} onClick={() => lastBehavior.current && void sendWithBehavior(lastBehavior.current)}>
             Retry
           </button>
-        </div>
-      )}
-
-      {dropNotice && (
-        <div className="chip warn" role="status" data-testid="pane-drop-notice">
-          {dropNotice}
         </div>
       )}
 
