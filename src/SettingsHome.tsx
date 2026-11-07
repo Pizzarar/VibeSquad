@@ -314,6 +314,46 @@ function SoundTest() {
   );
 }
 
+type UnstickResult = { ok: boolean; killed?: { pid: number; cmd: string }[]; snapshot?: string; runner?: { healthy: boolean; restarted: boolean }; error?: string };
+
+function UnstickButton() {
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState<UnstickResult | null>(null);
+  const run = async () => {
+    setBusy(true);
+    try {
+      const r = await fetch("/__vibesquad/unstick", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+      setRes((await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }))) as UnstickResult);
+    } catch (e) {
+      setRes({ ok: false, error: String((e as Error)?.message ?? e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div data-setting-id="unstick" data-testid="settings-unstick">
+      <p className="muted small">Sends stuck? Kills stray node processes (never this server, the runner, MCP servers or live agents), and restarts the runner if it is down.</p>
+      <button className="btn ghost small" disabled={busy} onClick={() => void run()}>
+        {busy ? "Unsticking…" : "Unstick VibeSquad"}
+      </button>
+      {res && (
+        <div className="muted small" data-testid="settings-unstick-result">
+          {res.ok ? (
+            <>
+              Killed {res.killed?.length ?? 0}
+              {res.runner && <> · runner {res.runner.healthy ? "healthy" : "DOWN"}{res.runner.restarted ? " (restarted)" : ""}</>}
+              {res.killed?.map((k) => <div key={k.pid}><code>{k.pid}</code> {k.cmd}</div>)}
+              {res.snapshot && <div>Snapshot: <code>{res.snapshot}</code></div>}
+            </>
+          ) : (
+            <>Failed: {res.error}</>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function About(props: { onDiagnostics: () => void; onLicenses: () => void; onChecklist: () => void; onClose: () => void }) {
   const updaterStatus = useUpdaterStatus();
   const [upd, setUpd] = useState<UpdateCheck["state"]>("idle");
@@ -325,6 +365,7 @@ function About(props: { onDiagnostics: () => void; onLicenses: () => void; onChe
       <div data-setting-id="update-channel">
         <TeamSettingsModal embedded parts={["update"]} onClose={props.onClose} />
       </div>
+      {!isRemote() && <UnstickButton />}
       <p style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button
           className="btn ghost small"
