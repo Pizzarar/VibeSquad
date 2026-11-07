@@ -1,8 +1,8 @@
 // Assemble public/cast.png (256x640, 64x64 cells, row = role in CAST_ROWS order, col = variant 0-3) from the H0 Hypnospace
-// busts: art/cast/hypno/<role>-bust.aseprite, exported with the Aseprite CLI. Every role now has its own bust; drop a new
-// <role>-bust.aseprite in art/cast/hypno/ and it is picked up on the next run (no code change).
+// busts, exported with the Aseprite CLI. Column 0 = art/cast/hypno/<role>-bust.aseprite (the base drawing); columns 1-3 =
+// <role>-bust-v{1,2,3}.aseprite from art/cast/hypno/build_variants.lua (contract v2: the same spec as the floor cast, so
+// bust column v is the same person as floor variant v in public/office/cast.json).
 // Usage: node scripts/build-cast-hypno.mjs [--aseprite <exe>]
-// Variants: no per-variant drawings exist, so every column repeats the bust (one look per role).
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -62,13 +62,19 @@ const dir = join(root, "art", "cast", "hypno");
 const tmp = mkdtempSync(join(tmpdir(), "vs-cast-hypno-"));
 const drawn = {};
 for (const role of ROLES) {
-  const src = join(dir, `${FILE[role] ?? role}-bust.aseprite`);
-  if (!existsSync(src)) continue;
-  const out = join(tmp, `${role}.png`);
-  execFileSync(exe, ["-b", src, "--color-mode", "rgb", "--frame-range", "0,0", "--save-as", out], { stdio: "pipe" });
-  const { W, H, px } = decode(readFileSync(out));
-  if (W !== CELL || H !== CELL) throw new Error(`${src}: ${W}x${H}, expected ${CELL}x${CELL}`);
-  drawn[role] = px;
+  const cols = [];
+  for (let v = 0; v < VARIANTS; v++) {
+    const src = join(dir, `${FILE[role] ?? role}-bust${v ? `-v${v}` : ""}.aseprite`);
+    if (!existsSync(src)) break;
+    const out = join(tmp, `${role}-${v}.png`);
+    execFileSync(exe, ["-b", src, "--color-mode", "rgb", "--frame-range", "0,0", "--save-as", out], { stdio: "pipe" });
+    const { W, H, px } = decode(readFileSync(out));
+    if (W !== CELL || H !== CELL) throw new Error(`${src}: ${W}x${H}, expected ${CELL}x${CELL}`);
+    cols.push(px);
+  }
+  if (cols.length === 0) continue;
+  if (cols.length !== VARIANTS) throw new Error(`${role}: ${cols.length} of ${VARIANTS} variant busts (run art/cast/hypno/build_variants.lua)`);
+  drawn[role] = cols;
 }
 rmSync(tmp, { recursive: true, force: true });
 
@@ -78,9 +84,9 @@ ROLES.forEach((role, row) => {
   let src = role;
   while (src && !drawn[src]) src = FALLBACK[src];
   if (!src) throw new Error(`no bust for ${role} and no fallback chain reaches a drawn role`);
-  const note = src === role ? "drawn" : `fallback ${src}`;
+  const note = src === role ? `drawn x${VARIANTS}` : `fallback ${src}`;
   for (let col = 0; col < VARIANTS; col++)
-    for (let y = 0; y < CELL; y++) img.set(drawn[src].subarray(y * CELL * 4, (y + 1) * CELL * 4), ((row * CELL + y) * W + col * CELL) * 4);
+    for (let y = 0; y < CELL; y++) img.set(drawn[src][col].subarray(y * CELL * 4, (y + 1) * CELL * 4), ((row * CELL + y) * W + col * CELL) * 4);
   console.log(`${String(row).padStart(2)} ${role.padEnd(13)} ${note}`);
 });
 const file = join(root, "public", "cast.png");

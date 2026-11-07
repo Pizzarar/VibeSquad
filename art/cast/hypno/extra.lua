@@ -286,8 +286,8 @@ return function(L, P, F)
 ]]) }
   front.body.spec = part(5, 20, torso(FRONT, "g", "m", "m", "v"))
   front.fx.spec = { NOBUB, part(0, 11, arm("g", "m")),
-    -- clipboard held up
-    part(0, 2, [[
+    -- clipboard held up (sits on the raised paw's fingertips)
+    part(0, 4, [[
 |..kkk..|
 |kkkakkk|
 |kmmmmmk|
