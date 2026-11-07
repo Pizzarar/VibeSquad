@@ -345,4 +345,49 @@ describe("review fixes", () => {
     runRelease(["--channel", "stable", "--skip-build"], { rootDir: root, exec, env: { TAURI_SIGNING_PRIVATE_KEY: "k" }, log: () => {}, resolveTauriCli: () => "t.js" });
     assert.equal(existsSync(join(root, "docs", "releases", "VibeSquad-0.3.0.md")), false);
   });
+
+  test("latest.json android entry only when a matching APK was built (sign and publish agree)", () => {
+    assert.equal("android-aarch64" in buildLatestJson({ version: "0.3.0", channel: "stable", signature: "S" }).platforms, true);
+    assert.equal("android-aarch64" in buildLatestJson({ version: "0.3.0", channel: "stable", signature: "S", android: false }).platforms, false);
+    const env = { TAURI_SIGNING_PRIVATE_KEY: "k" };
+    const manifestPath = (root) => join(root, "dist-desktop", "latest.json");
+    const hasAndroid = (root) => "android-aarch64" in JSON.parse(readFileSync(manifestPath(root), "utf8")).platforms;
+    const sign = (root) => runRelease(["sign", "--commit", HEAD], { rootDir: root, exec: fakeExec().exec, env, log: () => {}, resolveTauriCli: () => "t.js" });
+    const publish = (root) => runRelease(["publish", "--channel", "stable", "--commit", HEAD], { rootDir: root, exec: fakeExec().exec, env, log: () => {} });
+    const none = makeRoot();
+    sign(none);
+    assert.equal(hasAndroid(none), false);
+    publish(none);
+    assert.equal(hasAndroid(none), false);
+    const stale = makeRoot({ apk: true, marker: { version: "0.2.9", commit: HEAD } });
+    sign(stale);
+    assert.equal(hasAndroid(stale), false);
+    const fresh = makeRoot({ apk: true, marker: { version: "0.3.0", commit: HEAD } });
+    sign(fresh);
+    assert.equal(hasAndroid(fresh), true);
+    publish(fresh);
+    assert.equal(hasAndroid(fresh), true);
+  });
+
+  test("--no-authenticode: no preflight/overlay, NO-AUTHENTICODE not UNSIGNED, sign+publish allowed, record has waiver line", () => {
+    const root = makeRoot();
+    const { exec, calls } = fakeExec();
+    const run = (args) => runRelease(args, { rootDir: root, exec, env: { TAURI_SIGNING_PRIVATE_KEY: "k" }, log: () => {}, resolveTauriCli: () => "t.js" });
+    run(["build", "--commit", HEAD, "--no-authenticode"]);
+    assert.ok(!calls.some((c) => c.some((a) => String(a).endsWith("sign-windows.mjs") || String(a).endsWith("tauri.release-sign.conf.json"))));
+    assert.ok(calls.some((c) => String(c[1]).endsWith("build-desktop.mjs")));
+    assert.equal(existsSync(join(root, "dist-desktop", "UNSIGNED")), false);
+    assert.equal(existsSync(join(root, "dist-desktop", "NO-AUTHENTICODE")), true);
+    run(["sign", "--commit", HEAD]);
+    run(["publish", "--channel", "stable", "--commit", HEAD, "--project", "Demo"]);
+    assert.match(readFileSync(join(root, "docs", "releases", "Demo-0.3.0.md"), "utf8"), /Windows: updater-signed \(minisign\) only, no Authenticode \(owner waiver\)/);
+    run(["build", "--commit", HEAD]);
+    assert.equal(existsSync(join(root, "dist-desktop", "NO-AUTHENTICODE")), false);
+  });
+
+  test("--unsigned with --no-authenticode is an error; each alone parses", () => {
+    assert.throws(() => parseArgs(["build", "--unsigned", "--no-authenticode"]), /cannot be combined/);
+    assert.equal(parseArgs(["build", "--unsigned"]).unsigned, true);
+    assert.equal(parseArgs(["build", "--no-authenticode"]).noAuthenticode, true);
+  });
 });
