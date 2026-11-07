@@ -25,5 +25,3 @@ Attribution format used across plans, commits, `CREDITS.md`, and release notes:
 - Implemented runner-agent terminals (PTY shells) — Thanks to **node-pty** by `Microsoft` and **xterm.js** by `the xterm.js authors`
 - Implemented hand-pixelled office art pipeline (indexed palettes, batch scripts) — Thanks to **Aseprite** by `Igara Studio`
 - Implemented Aseprite pixel pipeline — Thanks to **aseprite-mcp** by `diivi`
-- Inspired by the vibe of **Hypnospace Outlaw** by `Tendershoot (Jay Tholen)` (vibe only, nothing copied)
-- Inspired by the vibe of **STONKS-9800: Stock Market Simulator** (vibe only, nothing copied)
