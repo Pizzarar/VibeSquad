@@ -68,6 +68,8 @@ test("hub page nests the floor in .hub-body — no app-grid row override (banner
   assert.match(css, /\.hub-body \{/);
   // The app-level hub-focus grid must not define its own rows (that clashed with :has([role="alert"])).
   assert.doesNotMatch(css, /\.app\.pin-focus\.hub-focus[^{]*\{[^}]*grid-template-rows/);
+  // .hub-body itself must not pin an explicit app-grid row (mirror master: column only, auto row).
+  assert.doesNotMatch(css, /\.hub-body\s*\{[^}]*grid-row/);
   assert.doesNotMatch(css, /grid-row:\s*1\s*\/\s*3/);
   // The floor, queue and chat are positioned inside the nested grid.
   assert.match(css, /\.hub-body \.sq-floor/);

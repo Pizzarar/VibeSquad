@@ -4435,7 +4435,6 @@ button.project-file-name:hover { text-decoration: underline; }
    so the tower lives inside `.hub-body`, a nested grid over the main + queue columns. ── */
 .hub-body {
   grid-column: 2 / 4;
-  grid-row: 1;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
   grid-template-rows: minmax(0, 1fr) auto;
@@ -4544,7 +4543,7 @@ button.project-file-name:hover { text-decoration: underline; }
 }
 @media (max-width: 600px) {
   .app.pin-focus.hub-focus { grid-template-columns: minmax(0, 1fr); }
-  .hub-body { grid-column: 1; grid-row: 1; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
+  .hub-body { grid-column: 1; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
   .hub-body .sq-panel { grid-column: 1; grid-row: 1; max-height: 38vh; border-left: 0; }
   .hub-body .agent-panes { grid-column: 1; grid-row: 2; }
   .hub-body .sq-floor { grid-column: 1; grid-row: 3; max-height: 40vh; }
