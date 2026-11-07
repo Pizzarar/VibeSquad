@@ -1160,10 +1160,10 @@ function scrubErrorValue(v: unknown, depth = 0): unknown {
  */
 export function redactBody(body: string, homeDir: string, userName: string): string {
   let out = body;
-  // Keep a leading "" for POSIX homes ("/home/x") so the root separator is part of the needle.
+  // Keep a leading "" for POSIX homes (a path starting at the root) so the root separator is part of the needle.
   const parts = homeDir.replace(/[\\/]+$/, "").split(/[\\/]+/);
   if (parts.filter(Boolean).length >= 2) {
-    // Longest form first: JSON-escaped "C:\\Users\\x" before raw "C:\Users\x".
+    // Longest form first: the JSON-escaped (doubled-backslash) Windows user-home prefix before the raw one.
     for (const sep of ["\\\\", "\\", "/"]) {
       out = out.replace(new RegExp(escapeRe(parts.join(sep)), "gi"), "~");
     }
