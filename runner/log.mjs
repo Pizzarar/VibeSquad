@@ -57,7 +57,7 @@ export class LogStore {
             lineStart = pos + i + 1;
             lineLen = 0;
             ix.size = lineStart;
-          } else lineLen++;
+          } else if (buf[i] !== 13) lineLen++; // a bare CR LF line is blank, like readFrom treats it
         }
         pos += n;
       }
@@ -91,7 +91,10 @@ export class LogStore {
 
   // Events with seq >= after (callers tail by passing last seq + 1). Seeks via the index; never reads the whole file for a tail.
   read(id, after = 0, limit = Infinity) {
-    return this.readFrom(id, after > 0 ? this._index(id)?.offs[Math.floor(after / STEP)] ?? 0 : 0, after, limit).events;
+    const ix = this._index(id);
+    if (!ix || after >= ix.count) return []; // seq <= event ordinal, so nothing at or past count can match
+    const start = after > 0 ? ix.offs[Math.min(Math.floor(after / STEP), ix.offs.length - 1)] : 0;
+    return this.readFrom(id, start, after, limit).events;
   }
 
   // Parses complete lines from byte `offset`; returns the events (seq >= after) and `end`, the byte offset after the last complete line read.
@@ -116,9 +119,9 @@ export class LogStore {
         let from = 0;
         while ((nl = data.indexOf(10, from)) !== -1 && out.length < limit) {
           const line = data.toString('utf8', from, nl);
+          offset += nl - from + 1;
           from = nl + 1;
-          offset += Buffer.byteLength(line) + 1;
-          if (!line) continue;
+          if (!line.trim()) continue;
           let ev;
           try { ev = JSON.parse(line); } catch { continue; }
           if (ev.seq >= after) out.push(ev);

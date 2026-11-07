@@ -110,3 +110,50 @@ test('bench: GET /agents/:id p95 < 20 ms on ~476 KB log; 453-agent roster seed <
   assert.equal(all.length, 453);
   assert.ok(took < 2000, `roster ${took}ms`);
 });
+
+test('read past the last indexed bucket reads ~0 bytes (count at a bucket boundary)', () => {
+  let bytesRead = 0;
+  const fsSpy = { ...nodeFs, readSync: (...a) => { const n = nodeFs.readSync(...a); bytesRead += n; return n; } };
+  const dir = tmp();
+  seed(new LogStore(dir), 'rn-a', 128);
+  const store = new LogStore(dir, fsSpy);
+  assert.equal(store.count('rn-a'), 128);
+  bytesRead = 0;
+  assert.deepEqual(store.read('rn-a', 128), []);
+  assert.deepEqual(store.read('rn-a', 200), []);
+  assert.equal(bytesRead, 0);
+  assert.equal(store.read('rn-a', 127).length, 1);
+  assert.ok(bytesRead < nodeFs.statSync(store.file('rn-a')).size * 0.6, `read ${bytesRead}`); // one bucket, not the file
+});
+
+test('CRLF logs and blank lines: index count, offsets and reads agree', () => {
+  const dir = tmp();
+  const store = new LogStore(dir);
+  const ev = (seq) => JSON.stringify({ seq, ts: 1, type: 'text', text: 'é' });
+  writeFileSync(store.file('rn-a'), [ev(0), '\r', ev(1), '', ev(2)].join('\r\n').replace('\r\n\r\n', '\r\n\r\n') + '\r\n');
+  assert.equal(store.count('rn-a'), 3);
+  assert.deepEqual(store.read('rn-a', 1).map((e) => e.seq), [1, 2]);
+  const { events, end } = store.readFrom('rn-a', 0);
+  assert.equal(events.length, 3);
+  assert.equal(end, nodeFs.statSync(store.file('rn-a')).size);
+  assert.equal(store.append('rn-a', 'text', {}).seq, 3);
+});
+
+test('incremental status deepEquals a cold fold from 0 across every event kind', () => {
+  const r = mkRunner();
+  const id = 'rn-a';
+  const check = () => assert.deepEqual(r.status(id), new Runner({ dir: r.store.dir, adapters: {}, maxLive: 4 }).status(id));
+  seed(r.store, id, 10);
+  check();
+  r.updateMeta(id, { labels: { a: '1' } }); check();
+  r.updateMeta(id, { labels: { b: '2' }, title: 't2' }); check();
+  r.store.append(id, 'usage', { contextTokens: 5, contextMax: 10, inputTokens: 1, outputTokens: 2, costUsd: 0.1 }); check();
+  r.store.append(id, 'permission', { phase: 'request', id: 'p1', toolName: 'Bash' }); check();
+  r.store.append(id, 'permission', { phase: 'request', id: 'p2', toolName: 'Edit' }); check();
+  r.store.append(id, 'permission', { phase: 'resolve', id: 'p1' }); check();
+  r.archive(id); check();
+  r.unarchive(id); check();
+  r.store.append(id, 'resume_fallback', { reason: 'x' }); check();
+  r.store.append(id, 'exit', { code: 0 }); check();
+  r.store.append(id, 'exit', { code: 1 }); check();
+});
