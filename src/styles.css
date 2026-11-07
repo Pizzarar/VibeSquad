@@ -5573,3 +5573,114 @@ button.project-file-name:hover { text-decoration: underline; }
 .team-head .team-emblem { flex-shrink: 0; }
 /* U3e: chat text scrolling under the bar fades out over its first 4 kit px instead of being cut mid-glyph */
 .app.pin-focus > .agent-panes:not(:has(.sky-zones)) .timeline { -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 calc(var(--u3-px) * 4)); mask-image: linear-gradient(180deg, transparent 0, #000 calc(var(--u3-px) * 4)); }
+
+/* ======================================================================
+   U4b: quiet tools, loud world (art/ui/u4a mock). Sidebar, chat pane (messages, composer) and the team top bar go back
+   to flat P0 surfaces: 1-2px bevels, one UI font, solid controls, no stars / grain / 9-slice frames / chrome sprite
+   text behind body copy. The U3 painted layers stay on the sky, the floor and the brand. A calm spray-paint gradient
+   wash (the light theme ramp bg -> panel -> panel-hi, as a plain CSS gradient) sits behind it in both themes.
+   Every text/control pair is checked at both ends of the ramp (art/ui/u4b/CONTRAST.md).
+   ====================================================================== */
+:root {
+  --u4-edge: var(--violet);
+  --u4-on-fill: var(--bg);
+  --u4-ramp: linear-gradient(180deg, var(--bg) 0%, var(--panel) 52%, var(--panel-hi) 100%);
+  --u4-wash:
+    radial-gradient(ellipse 80% 55% at 100% 0%, color-mix(in srgb, var(--violet) 14%, transparent), transparent 72%),
+    radial-gradient(ellipse 70% 50% at 0% 100%, color-mix(in srgb, var(--hot-pink) 9%, transparent), transparent 72%),
+    linear-gradient(180deg, var(--bg) 0%, var(--panel) 100%);
+}
+:root[data-theme="light"] { --u4-edge: var(--muted); --u4-on-fill: var(--marble); }
+
+/* ---- background wash (page, sidebar, chat pane) ---- */
+body { background-color: var(--bg); background-image: var(--u4-wash); background-size: auto; background-repeat: no-repeat; background-attachment: fixed; image-rendering: auto; }
+.sidebar { background-color: var(--panel); background-image: var(--u4-ramp); background-size: 100% 100%; background-repeat: no-repeat; image-rendering: auto; box-shadow: 1px 0 0 var(--line), 2px 0 0 var(--shadow-hard); }
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) {
+  background-color: var(--bg); background-image: var(--u4-wash); background-size: 100% 100%; background-repeat: no-repeat; image-rendering: auto;
+  border: 1px solid var(--line); border-image: none; box-shadow: none;
+}
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) .timeline { background: transparent; background-image: none; -webkit-mask-image: none; mask-image: none; }
+
+/* ---- quiet tool surfaces: flat solid controls (sidebar + chat pane only) ---- */
+:is(.sidebar, .app.pin-focus > .agent-panes:not(:has(.sky-zones))) :is(.btn, .tchip, .seg button, .sidebar-icon-btn, .sidebar-cog-btn, .tl-jump-bottom, .drawer-working-chip, .drawer-subagent-chip, .drawer-config-summary, .dock-toggle-btn, .pin-focus-home) {
+  border: 1px solid var(--u4-edge); border-image: none; background: var(--panel-hi); color: var(--text); box-shadow: var(--bevel);
+  text-shadow: none; font-weight: 400; image-rendering: auto;
+}
+:is(.sidebar, .app.pin-focus > .agent-panes:not(:has(.sky-zones))) :is(.btn, .tchip, .seg button, .sidebar-icon-btn, .sidebar-cog-btn, .tl-jump-bottom, .drawer-working-chip, .drawer-config-summary, .dock-toggle-btn, .pin-focus-home):hover:not(:disabled) {
+  border-image: none; background: color-mix(in srgb, var(--violet) 26%, var(--panel-hi)); color: var(--text); box-shadow: var(--bevel);
+}
+:is(.sidebar, .app.pin-focus > .agent-panes:not(:has(.sky-zones))) :is(.btn, .tchip, .seg button, .sidebar-icon-btn, .sidebar-cog-btn, .tl-jump-bottom, .drawer-working-chip, .drawer-config-summary, .dock-toggle-btn, .pin-focus-home):active:not(:disabled) {
+  border-image: none; box-shadow: var(--bevel-in); transform: translate(1px, 1px);
+}
+/* primary (teal), hot (pink), selected (violet), warn (amber): solid fills with on-fill ink */
+:is(.sidebar, .app.pin-focus > .agent-panes:not(:has(.sky-zones))) :is(.btn:not(.ghost):not(.hot):not(.bad):not(.warn), .drawer-working-chip) {
+  background: var(--cyan-fill); color: var(--on-cyan-fill); border-color: var(--shadow-hard); font-weight: 700;
+}
+:is(.sidebar, .app.pin-focus > .agent-panes:not(:has(.sky-zones))) :is(.btn:not(.ghost):not(.hot):not(.bad):not(.warn), .drawer-working-chip):hover:not(:disabled) { background: color-mix(in srgb, var(--cyan-fill) 86%, var(--marble)); color: var(--on-cyan-fill); }
+:is(.sidebar, .app.pin-focus > .agent-panes:not(:has(.sky-zones))) :is(.btn.hot, .btn.bad, .btn.confirm.danger:not(.armed), .bad-btn) { background: var(--pink-fill); color: var(--u4-on-fill); border-color: var(--shadow-hard); font-weight: 700; }
+:is(.sidebar, .app.pin-focus > .agent-panes:not(:has(.sky-zones))) :is(.btn.hot, .btn.bad, .bad-btn):hover:not(:disabled) { background: color-mix(in srgb, var(--pink-fill) 86%, var(--marble)); color: var(--u4-on-fill); }
+:is(.sidebar, .app.pin-focus > .agent-panes:not(:has(.sky-zones))) :is(.seg button.on, .tchip.on, .sidebar-inbox-badge.on) { background: var(--violet); color: var(--on-pastel) !important; border-color: var(--shadow-hard); font-weight: 700; }
+:is(.sidebar, .app.pin-focus > .agent-panes:not(:has(.sky-zones))) :is(.btn.warn, .btn.confirm.warn:not(.armed)) { background: var(--amber); color: var(--on-amber); border-color: var(--shadow-hard); font-weight: 700; }
+/* disabled: quiet dashed ghost, full-contrast muted label (u3f values, no opacity) */
+:is(.sidebar, .app.pin-focus > .agent-panes:not(:has(.sky-zones))) :is(.btn, .tchip, .seg button, .sidebar-icon-btn, .sidebar-cog-btn, .drawer-working-chip, .drawer-config-summary, .dock-toggle-btn):disabled {
+  opacity: 1; background: var(--panel); color: var(--muted); border: 1px dashed var(--u4-edge); box-shadow: none; font-weight: 400; cursor: not-allowed;
+}
+
+/* ---- chips and pills ---- */
+:is(.sidebar, .app.pin-focus > .agent-panes:not(:has(.sky-zones))) :is(.badge, .unit-tag, .chip, .label-pill, .status-pill, .lane-tag, .warn-badge, .project-badge, .alert-pill, .pill, .brainstorm-ctx-pill, .quota-pill, .sidebar-role-pill, .rail-role-tag, .role-tag, .pin-lane-handle, .sidebar-riffbot-badge, .changes-file-badge, .verdict) {
+  border: 1px solid var(--u4-edge); border-image: none; background: color-mix(in srgb, var(--violet) 16%, var(--panel)); color: var(--text); box-shadow: none; image-rendering: auto; font-weight: 400;
+}
+:is(.sidebar, .app.pin-focus > .agent-panes:not(:has(.sky-zones))) :is(.pin-lane-handle, .label-pill) { background: var(--bg); color: var(--muted); }
+:is(.sidebar, .app.pin-focus > .agent-panes:not(:has(.sky-zones))) :is(.badge, .unit-tag, .chip, .status-pill, .project-badge, .lane-tag, .quota-pill, .sidebar-riffbot-badge) { border-color: var(--cyan); background: color-mix(in srgb, var(--cyan) 18%, var(--panel)); }
+:is(.sidebar, .app.pin-focus > .agent-panes:not(:has(.sky-zones))) :is(.chip.clean, .status-pill.running, .verdict.safe, .alert-pill.tone-finished, .changes-file-badge.new) { border-color: var(--emerald); background: color-mix(in srgb, var(--emerald) 20%, var(--panel)); }
+:is(.sidebar, .app.pin-focus > .agent-panes:not(:has(.sky-zones))) :is(.verdict.check, .alert-pill.tone-permission, .changes-file-badge.mod, .quota-pill.warn, .brainstorm-ctx-pill.tone-amber) { border-color: var(--amber); background: color-mix(in srgb, var(--amber) 22%, var(--panel)); }
+:is(.sidebar, .app.pin-focus > .agent-panes:not(:has(.sky-zones))) :is(.chip.dirty, .warn-badge, .status-pill.error, .changes-file-badge.del, .pill, .alert-pill.tone-error, .quota-pill.hot, .brainstorm-ctx-pill.tone-red) { border-color: var(--hot-pink); background: color-mix(in srgb, var(--hot-pink) 20%, var(--panel)); }
+/* needs-you count / badge: solid pink with on-fill ink */
+:is(.sidebar, .app.pin-focus > .agent-panes:not(:has(.sky-zones))) :is(.badge.alert, .team-head .badge) { background: var(--pink-fill); border-color: var(--shadow-hard); color: var(--u4-on-fill) !important; font-weight: 700; }
+
+/* ---- sidebar rows ---- */
+.sidebar :is(.team-head, .sidebar-riffbot) { border: 1px solid transparent; border-image: none; background: transparent; box-shadow: none; image-rendering: auto; }
+.sidebar .team-head:hover, .sidebar .pin-row:hover { background-image: none; background-color: color-mix(in srgb, var(--violet) 18%, var(--panel)); }
+.sidebar .team.active .team-head { background: var(--panel-hi); border: 1px solid var(--u4-edge); box-shadow: var(--bevel), inset 3px 0 0 var(--cyan-fill); }
+.sidebar .pin-row.sel, .sidebar .pin-row.sel:hover { background-image: none; background-color: var(--panel-hi); box-shadow: inset 3px 0 0 var(--cyan-fill); }
+.sidebar-teams-divider i { background: var(--line); background-image: none; border-image: none; height: 1px; }
+
+/* ---- chat messages ---- */
+.timeline .tl-user { background: var(--panel-hi); border: 1px solid var(--u4-edge); box-shadow: var(--bevel); color: var(--text); }
+.timeline .tl-tool { background: var(--panel); border: 1px solid var(--line); box-shadow: none; }
+.timeline .tl-tool .muted, .timeline .tl-stamp { color: var(--muted); opacity: 1; }
+
+/* ---- composer ---- */
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) .composer { background: var(--panel); border-top: 1px solid var(--line); box-shadow: 0 1px 0 var(--bevel-hi) inset; }
+.composer textarea, .composer input:not([type="file"]) {
+  background: var(--bg); color: var(--text); border: 1px solid var(--u4-edge); border-image: none; box-shadow: var(--bevel-in); image-rendering: auto;
+}
+.composer textarea::placeholder { color: var(--muted); opacity: 1; }
+.composer textarea:focus { outline: 2px solid var(--cyan); outline-offset: 0; }
+
+/* ---- team top bar / breadcrumb ---- */
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) .pin-focus-bar {
+  height: auto; min-height: calc(var(--u3-px) * 22); padding: 0 var(--sp-2); color: var(--text);
+  background: var(--panel); background-image: none; border: 0; border-bottom: 2px solid var(--line); box-shadow: 0 1px 0 var(--bevel-hi) inset; image-rendering: auto;
+}
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) .pin-focus-bar :is(.breadcrumb-sep, .muted, .small, label, .drawer-thinking-label, .drawer-mode-label, .breadcrumb-seg) { color: var(--muted); opacity: 1; font-weight: 400; text-shadow: none; }
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) .pin-focus-bar :is(.breadcrumb-seg.current, .pin-focus-name) { color: var(--text); font-weight: 700; text-shadow: none; }
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) .pin-focus-bar .top-breadcrumb { background: transparent; border: 0; box-shadow: none; padding: 0; }
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) .pin-focus-bar :is(select, input),
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) .pin-focus-bar select option {
+  background: var(--bg) !important; color: var(--text) !important; border: 1px solid var(--u4-edge); box-shadow: none; font-weight: 400; opacity: 1; text-shadow: none;
+}
+/* U4b: quiet text buttons in the sidebar (collapse, row menus, add) show their frame on hover only */
+.sidebar :is(.tchip, .sidebar-collapse-all-btn, .sidebar-collapse-btn, .sidebar-add-brainstorm-btn, .pin-done-toggle) {
+  background: transparent; border: 1px solid transparent; box-shadow: none; color: var(--muted); font-weight: 400; min-height: 0;
+}
+.sidebar :is(.tchip, .sidebar-collapse-all-btn, .sidebar-collapse-btn, .sidebar-add-brainstorm-btn, .pin-done-toggle):hover:not(:disabled) {
+  background: color-mix(in srgb, var(--violet) 22%, var(--panel)); border-color: var(--u4-edge); color: var(--text); box-shadow: none;
+}
+/* top bar: restate controls at the U3e specificity so the flat solid look wins */
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) .pin-focus-bar :is(.drawer-config-summary, .dock-toggle-btn, .pin-focus-home) {
+  background: var(--panel-hi); color: var(--text); border: 1px solid var(--u4-edge); box-shadow: var(--bevel); font-weight: 400; height: auto; min-height: 0;
+}
+.app.pin-focus > .agent-panes:not(:has(.sky-zones)) .pin-focus-bar .pin-lane-handle { background: var(--bg); color: var(--muted); border: 1px solid var(--u4-edge); box-shadow: none; }
+/* status pips: the sprite carries an INK rim (reads on light); the idle/closed fill is LINE, so give it a muted outline to hold >= 3:1 on the dark ramp */
+.sidebar :is(.signal.idle, .signal.closed), .pin-focus-bar :is(.signal.idle, .signal.closed) { outline: 1px solid var(--muted); outline-offset: 0; }
