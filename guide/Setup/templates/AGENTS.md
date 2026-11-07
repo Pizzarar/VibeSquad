@@ -144,7 +144,7 @@ The Lead's rules live in `LEAD_RULES.md`. Only the Lead reads that file; workers
 7. **Your final message is your report.** The Lead reads it when you finish. Never use Claude's
    `SendMessage` or `ListAgents` tools to report: on a team that mixes providers, the Lead may not
    be a Claude agent and never gets it. To reach the Lead mid-task (a blocker, a question), use
-   `paseo send --no-wait <lead-id> "<message>"`. *Why: the Lead only sees what reaches it through Paseo.*
+   `vs send <lead-id> "<message>"`. *Why: the Lead only sees what reaches it through VibeSquad.*
 
 ### Verification (no exceptions)
 

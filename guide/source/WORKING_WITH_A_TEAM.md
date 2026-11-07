@@ -158,14 +158,14 @@ You don't need special software for this. You need two Claude Code sessions and 
 3. Carry the worker's report back to Session A by hand: copy, paste. The Lead checks it
    against the task.
 
-That hand-carrying is the whole trick. Level 2 (Paseo, see section 12) just automates the
+That hand-carrying is the whole trick. Level 2 (VibeSquad's built-in runner, see section 12) just automates the
 copy and paste. The thinking is the same.
 
 At Level 2, one reporting rule matters once your team mixes providers (say a Claude Lead and
 a Gemini worker): **a worker's final message is its report.** The Lead reads it when the
 worker finishes. Workers never use Claude's `SendMessage` or `ListAgents` tools to report;
 an agent from another provider never sees those. If a worker needs the Lead mid-task, it uses
-`paseo send`. The rule is in the Worker hard rules of
+`vs send`. The rule is in the Worker hard rules of
 [Setup/templates/AGENTS.md](../Setup/templates/AGENTS.md).
 
 > **Try this (15 min).** Take the `BRIEF.md` from section 2. Open two terminals. In the
@@ -636,7 +636,7 @@ right way to start. You learn what the automation is for.
 
 When the copy and paste starts to hurt, add one of these, not all of them:
 
-- **Paseo**, a tool for running and managing many agent sessions together. It handles
+- **VibeSquad**, an app with a built-in runner for managing many agent sessions together. It handles
   hand-carrying briefs and reports for you. See
   [Setup/modules/core/vibesquad.md](../Setup/modules/core/vibesquad.md). Same ideas, less typing.
 - **A second provider** for reviews and a backup, so one quota running out doesn't stop you.

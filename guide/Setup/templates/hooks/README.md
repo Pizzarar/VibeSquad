@@ -22,8 +22,8 @@ Treat 100k/150k as a starting point and tune them with `GUARD_SOFT` / `GUARD_HAR
 | `GUARD_SOFT` | `100000` | Soft mark, in tokens |
 | `GUARD_HARD` | `150000` | Hard mark, in tokens |
 | `GUARD_ALWAYS` | unset | `1` = warn every session that has the hook (use this at Level 1) |
-| `GUARD_NAME` | `^(?!\(old\))(?:★\|.*LEAD)` | *(Level 2)* Regex (`re.search`) the Paseo agent name must match to be warned. The default skips names starting with `(old)` |
-| `PASEO_AGENT_ID` | set by Paseo | *(Level 2)* When present, the hook looks up the agent's name with `paseo inspect`. Only letters, digits, `_` and `-` are accepted |
+| `GUARD_NAME` | `^(?!\(old\))(?:★\|.*LEAD)` | *(Level 2)* Regex (`re.search`) the agent name must match to be warned. The name lookup needs a Paseo CLI on PATH (`PASEO_CLI`); VibeSquad's built-in runner does not ship one, so without it a Level 2 session is never matched. Use `GUARD_ALWAYS=1` instead. The default skips names starting with `(old)` |
+| `PASEO_AGENT_ID` | set by the runner (also as `VS_AGENT_ID`) | *(Level 2)* When present, the hook looks up the agent's name with `paseo inspect` (needs the Paseo CLI). Only letters, digits, `_` and `-` are accepted |
 
 Without `GUARD_ALWAYS=1` and without `PASEO_AGENT_ID`, the hook does nothing. It never prints errors
 and never blocks: if anything goes wrong it exits quietly.
