@@ -345,10 +345,11 @@ const Sidebar = memo(function Sidebar(props: {
   return (
     <nav className={`sidebar ${props.sidebarCollapsed ? "collapsed" : ""}`} data-testid="sidebar">
       <div className="brand">
-        <img src="/vibesquad-192.png" width={22} height={22} alt="" style={{ borderRadius: 5, flex: "none" }} />
+        <img src="/vibesquad-mark-dark.png" width={22} height={22} alt="" className="brand-mark brand-mark-dark" />
+        <img src="/vibesquad-mark-light.png" width={22} height={22} alt="" className="brand-mark brand-mark-light" />
         <div className="brand-text">
           <span>VIBESQUAD</span>
-          <span className="brand-sub">NEON-NOIR // 198X</span>
+          <span className="brand-sub">VAPOR OS // 199X</span>
         </div>
         <span className={`conn ${props.conn}`} title={props.connTitle} />
         {props.lanExposed && (

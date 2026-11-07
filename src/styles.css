@@ -269,6 +269,23 @@ code {
   text-shadow: none;
 }
 
+.brand-mark {
+  image-rendering: pixelated;
+  flex: none;
+}
+
+.brand-mark-light {
+  display: none;
+}
+
+:root[data-theme="light"] .brand-mark-dark {
+  display: none;
+}
+
+:root[data-theme="light"] .brand-mark-light {
+  display: block;
+}
+
 .conn {
   width: 9px;
   height: 9px;
