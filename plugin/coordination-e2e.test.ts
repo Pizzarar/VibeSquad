@@ -255,6 +255,9 @@ function harness(
     async beforeCreate(req: any) {
       return (await before.get("agent.create")!({ request: req })) ?? req;
     },
+    beforeSend(payload: any) {
+      return before.get("send_agent_prompt")!(payload);
+    },
     onCreated(agent: any) {
       return on.get("agent.created")!({ agent }, { paseo });
     },
@@ -1169,6 +1172,73 @@ test(
       assert.equal(out.config.provider, "antigravity-cli");
       assert.equal(out.env?.VS_PROFILE, "Brainstorm - Gemini");
       assert.equal(out.config.labels?.profile, "Brainstorm - Gemini");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "R5 review: a failover spawn whose labels Paseo omitted is relabelled at agent.created, not refused",
+  withEnv(async ({ briefRoot }) => {
+    const agents = new Map<string, any>();
+    const h = harness(agents, { briefRoot, cappedProviders: { claude: { reason: "cap" } } });
+    try {
+      const out = await h.beforeCreate({
+        config: { cwd: CWD, provider: "claude", model: "claude-opus-5-5", title: "RiffBot" },
+        env: { VS_PROFILE: "Brainstorm - Claude", VS_ROLE: "brainstorm", VS_LANE: "vibesquad" },
+      });
+      assert.equal(out.config.provider, "antigravity-cli", "failed over");
+      // Paseo created the agent with the ORIGINAL (capped) profile label, on the failed-over provider.
+      const agent = {
+        id: "riff-fo", title: "RiffBot", cwd: CWD, status: "idle", provider: "antigravity-cli", model: out.config.model,
+        modeId: out.config.modeId, currentModeId: out.config.modeId, thinkingOptionId: out.config.thinkingOptionId,
+        labels: { team: "vibesquad", lane: "vibesquad", role: "brainstorm", profile: "Brainstorm - Claude" },
+      };
+      agents.set(agent.id, agent);
+      await h.onCreated(agent);
+      assert.deepEqual(h.refusedIds, [], "failover agent is not refused");
+      assert.equal(agents.get("riff-fo").labels.profile, "Brainstorm - Gemini", "profile label follows the provider");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "R5 review: auto-archive re-checks status + permissions, turn_started clears the mark, and the marker keeps the worker out of the retired-holder redirect",
+  withEnv(async ({ vsHome, briefRoot }) => {
+    const w: any = { id: "w-9", title: "w-9", cwd: CWD, status: "idle", provider: "claude", model: "claude-opus-5-5", labels: { team: "vibesquad", lane: "vibesquad", role: "worker" } };
+    const agents = new Map<string, any>([["w-9", w]]);
+    const h = harness(agents, { briefRoot });
+    try {
+      mkdirSync(join(vsHome, "teams", "vibesquad"), { recursive: true });
+      const file = join(vsHome, "teams", "vibesquad", "log.jsonl");
+      const report = () => {
+        writeFileSync(file, JSON.stringify({ ts: new Date().toISOString(), agent: "w-9", lane: "vibesquad", type: "done", text: "PASS", refs: [] }) + "\n", { encoding: "utf8", flag: "a" });
+        h.scanLogs(false);
+      };
+      report();
+      w.status = "running"; // a fast follow-up started while the digest was awaited
+      await h.onTurnEnded(w);
+      assert.deepEqual(h.archivedIds, [], "running agent is never archived");
+      w.status = "idle";
+      w.pendingPermissions = [{ id: "p1" }];
+      await h.onTurnEnded(w);
+      assert.deepEqual(h.archivedIds, [], "pending permission blocks the archive");
+      w.pendingPermissions = [];
+      await h.onTurnStarted(w); // new turn after the report clears the mark
+      await h.onTurnEnded(w);
+      assert.deepEqual(h.archivedIds, [], "mark cleared by turn_started");
+      report();
+      await h.onTurnEnded(w);
+      assert.deepEqual(h.archivedIds, ["w-9"]);
+      assert.equal(w.labels["vs.auto-archived"], "1", "marker set before archive");
+      // handleSendAgentPrompt: an auto-archived worker is not a retired holder (no redirect, no throw).
+      assert.equal(await h.beforeSend({ agentId: "w-9", senderAgentId: "lead-x", prompt: "more" }), undefined);
+      // The same archived agent WITHOUT the marker is still treated as retired (no live lead -> throws).
+      delete w.labels["vs.auto-archived"];
+      await assert.rejects(() => h.beforeSend({ agentId: "w-9", senderAgentId: "lead-x", prompt: "more" }), /retired/);
     } finally {
       h.stop?.();
     }

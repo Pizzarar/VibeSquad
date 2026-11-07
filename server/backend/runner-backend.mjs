@@ -527,21 +527,31 @@ export class RunnerBackend {
     // An agent (opts.senderId) writing to a retired Lead/Buddy is redirected to the live one (plugin handleSendAgentPrompt).
     if (opts.senderId) {
       const host = await this.hookHost();
-      const res = host ? await host.before("send_agent_prompt", { agentId: id, senderAgentId: opts.senderId, prompt: text }).catch(() => undefined) : undefined;
+      const res = host
+        ? await host.before("send_agent_prompt", { agentId: id, senderAgentId: opts.senderId, prompt: text }).catch((err) => {
+            if (/is retired and no live/.test(String(err?.message ?? err))) throw err; // the sender must see "no live lead", not a delivery to the retired one
+          })
+        : undefined;
       if (res?.redirected) return;
     }
     const body = { text };
     if (opts.images?.length) body.images = opts.images;
     if (opts.activeTurnBehavior) body.activeTurnBehavior = opts.activeTurnBehavior;
     const post = () => this.rc.request("POST", `/agents/${encodeURIComponent(id)}/input`, body);
-    // A finished worker is archived (no process, off the roster) but stays resumable: a follow-up brings it back first, because the
-    // runner refuses to resume an archived agent and the send would otherwise fail as "not running".
-    if (this.live.archived.has(id)) await this.unarchiveAgent(id);
+    // A worker closed by the done-report path (role=worker + vs.auto-archived) is archived but resumable: a follow-up brings it back
+    // first, because the runner refuses to resume an archived agent. Retired leads / Buddies and manually archived agents are never revived.
+    const revive = async () => {
+      const a = (await this.fetchAgent(id)).agent;
+      if (!a.archivedAt || a.labels?.role !== "worker" || a.labels?.["vs.auto-archived"] !== "1") return false;
+      await this.unarchiveAgent(id);
+      await this.updateAgent(id, { labels: { "vs.auto-archived": "" } }).catch(() => {});
+      return true;
+    };
+    if (this.live.archived.has(id)) await revive().catch(() => false);
     try {
       await post();
     } catch (err) {
-      if (!/not running/.test(String(err?.message ?? err)) || !(await this.fetchAgent(id).then((r) => r.agent.archivedAt, () => null))) throw err;
-      await this.unarchiveAgent(id);
+      if (!/not running/.test(String(err?.message ?? err)) || !(await revive().catch(() => false))) throw err;
       await post();
     }
   }

@@ -1098,6 +1098,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
 
     const recentBeforeMismatches = new Map<string, number>();
     const beforeConfiguredSpawns = new Map<string, number>();
+    /** Spawns before(agent.create) failed over to another provider: key (agent id or title::cwd) -> the profile the agent now runs. */
+    const failoverSpawns = new Map<string, { profile: string; at: number }>();
 
     const logProfileMetric = (labels: Labels, cwd: string, text: string, refs: string[] = []) => {
       const where = teamOf(labels, cwd);
@@ -1116,6 +1118,22 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
      * agent is stopped and archived rather than left running on the wrong provider.
      */
     const enforceProfileAfterSpawn = async (agent: any, me: AgentSnap | null, labels: Labels): Promise<"refused" | void> => {
+      // A failover spawn: Paseo omitted labels in before(agent.create), so the agent still carries the capped profile label.
+      // before() already configured provider/model for the failover profile: relabel instead of refusing it.
+      {
+        const now0 = Date.now();
+        for (const [k, v] of failoverSpawns) if (now0 - v.at >= 120_000) failoverSpawns.delete(k);
+        const keyed = (agent.id && failoverSpawns.get(agent.id)) || failoverSpawns.get(`${agent.title ?? ""}::${agent.cwd ?? (me as any)?.cwd ?? ""}`);
+        if (keyed) {
+          failoverSpawns.delete(agent.id);
+          failoverSpawns.delete(`${agent.title ?? ""}::${agent.cwd ?? (me as any)?.cwd ?? ""}`);
+          if (String(labels.profile ?? "").trim() !== keyed.profile) {
+            labels.profile = keyed.profile;
+            await deps.setLabels(agent.id, { profile: keyed.profile }).catch((e) => log(`failover relabel failed for ${agent.id}: ${e}`));
+          }
+          return;
+        }
+      }
       const hint = String(labels.profile ?? "").trim();
       if (!hint) return;
       const match = matchStoredProfile(hint);
@@ -1353,6 +1371,11 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               // Relabel for the new provider: every carrier of the stale profile name (request labels, config labels, env)
               // must say the profile the agent actually runs, or enforceProfileAfterSpawn / digests match the capped one.
               failoverProfileName = fo.profile.name;
+              {
+                const at = Date.now();
+                failoverSpawns.set(`${title}::${cwd}`, { profile: fo.profile.name, at });
+                if (reqAgentId) failoverSpawns.set(reqAgentId, { profile: fo.profile.name, at });
+              }
               if (nextReqLabels?.profile) nextReqLabels.profile = fo.profile.name;
               if (config?.labels?.profile) {
                 next.labels = { ...(next.labels ?? config.labels), profile: fo.profile.name };
@@ -2185,6 +2208,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
      * Leads, Buddies and digests never match the role check. Archive is reversible: a later `send` unarchives and resumes.
      */
     const doneReported = new Set<string>();
+    const AUTO_ARCHIVED_LABEL = "vs.auto-archived";
     const WORKER_CLOSE_GRACE_MS = 3000;
 
     async function closeFinishedWorker(paseo: Paseo, agentId: string, opts: { turnEnded?: boolean } = {}) {
@@ -2199,9 +2223,15 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         doneReported.delete(agentId); // lead / Buddy / digest: never auto-closed
         return;
       }
-      const status = String((s as any).status ?? "");
-      if (!opts.turnEnded && (status === "running" || status === "initializing")) return; // turn_ended will close it
+      // Re-read right before archiving (the digest await above can outlast a fast follow-up send): never close a busy agent or
+      // one waiting on a permission. It stays marked, so its next turn_ended retries.
+      const fresh = (await snap(paseo, agentId)) ?? s;
+      const status = String((fresh as any).status ?? "");
+      if (status === "running" || status === "initializing") return;
+      if (((fresh as any).pendingPermissions?.length ?? 0) > 0 || (fresh as any).requiresAttention) return;
       doneReported.delete(agentId);
+      // Marker: only an auto-archived worker is revived by a later send (never a retired lead/Buddy) and is not a "retired holder".
+      await deps.setLabels(agentId, { [AUTO_ARCHIVED_LABEL]: "1" }).catch((e: unknown) => log(`auto-archive marker failed for ${agentId}: ${e}`));
       await deps.archiveAgent(agentId).catch((e: unknown) => log(`worker auto-close failed for ${agentId}: ${e}`));
       log(`worker auto-closed after done report: ${agentId}`);
     }
@@ -2442,6 +2472,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
 
       const target = await snap(paseo, targetId);
       if (!target) return undefined;
+      // A worker closed by the done-report path is not a retired holder: the send revives it (RunnerBackend unarchives it).
+      if (target.labels?.[AUTO_ARCHIVED_LABEL] === "1" && String(target.labels?.role ?? "").trim().toLowerCase() === "worker") return undefined;
       const isRetired = Boolean(target.archivedAt || target.status === "closed" || isRetiredLeadSnap(target));
       if (!isRetired) return undefined;
 
@@ -2510,6 +2542,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         server.on("agent.turn_started" as any, async ({ agent }: { agent: any }, { paseo }: { paseo: any }) => {
           paseoApi = paseo;
           markTurnSeen(agent?.id);
+          if (agent?.id) doneReported.delete(agent.id); // a new turn after a report: the worker is working again, do not close it
           try {
             const me = await snap(paseo, agent.id);
             if (me && effectiveAgentRole(me) === "lead") lastWakeAt.set(agent.id, Date.now());

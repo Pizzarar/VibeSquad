@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Runner } from '../runner/runner.mjs';
@@ -31,6 +31,20 @@ test('cap TTL: a stated reset time overrides the 5 h default in both directions'
   assert.equal(isCapExpired({ updatedAt: hoursAgo(10), resetsAt: new Date(now + 3600_000).toISOString() }, now), false, 'reset still ahead');
   assert.equal(isCapExpired({ updatedAt: hoursAgo(1), resetsAt: new Date(now - 1000).toISOString() }, now), true, 'reset passed');
   assert.equal(isCapExpired({ reason: 'no timestamp' }, now), false, 'unknown age never expires');
+});
+
+test('cap TTL: epoch-seconds resetsAt is read as seconds, a BOM does not hide the file, and pruning keeps a concurrent cap', () => {
+  const now = Date.now();
+  assert.equal(isCapExpired({ resetsAt: Math.floor(now / 1000) - 60 }, now), true, 'seconds in the past');
+  assert.equal(isCapExpired({ resetsAt: Math.floor(now / 1000) + 3600 }, now), false, 'seconds in the future');
+  const dir = tmp();
+  const file = path.join(dir, 'c.json');
+  try {
+    writeFileSync(file, '\uFEFF' + JSON.stringify({ capped: { claude: { updatedAt: hoursAgo(8) }, deepseek: { updatedAt: hoursAgo(1) } } }), 'utf8');
+    assert.deepEqual(Object.keys(readCappedProviders({ cappedProvidersPath: file, useDiskCaps: true })), ['deepseek']);
+    assert.deepEqual(Object.keys(JSON.parse(readFileSync(file, 'utf8')).capped), ['deepseek']);
+    assert.deepEqual(readdirSync(dir), ['c.json'], 'no tmp file left behind');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('vs cap list never shows an expired cap', () => {
@@ -77,6 +91,7 @@ test('a finished worker (parked, then archived) has no live process and a later 
     await backend.waitForFinish(agent.id, 2000);
     await new Promise((r) => setTimeout(r, 20)); // session event
     runner.park(agent.id); // R4 parks an idle agent right after turn_done; the close path then archives
+    await backend.updateAgent(agent.id, { labels: { 'vs.auto-archived': '1' } }); // what the plugin's close path sets
     await backend.archiveAgent(agent.id);
     assert.equal(runner.live.size, 0, 'no live process');
     assert.equal((await backend.fetchAgents()).entries.length, 0, 'archived from the roster');
@@ -85,6 +100,32 @@ test('a finished worker (parked, then archived) has no live process and a later 
     const tl = await backend.getAgentTimeline(agent.id);
     assert.equal(tl.at(-1).item.text, 'echo:follow-up', 'the send was delivered, not dropped');
     assert.equal((await backend.fetchAgents()).entries.length, 1, 'back on the roster');
+  } finally {
+    server.close(); server.closeAllConnections?.();
+  }
+});
+
+test('send revives only an auto-archived worker: a retired lead stays archived and the send fails', async () => {
+  const runner = new Runner({ dir: tmp(), adapters: { claude: parkableAdapter() } });
+  const server = createServer(runner, { token: 't' });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const home = tmp();
+  writeDiscovery(home, { port: server.address().port, token: 't' });
+  const backend = new RunnerBackend({ client: new RunnerClient({ home }), buildPrefix: async () => '' });
+  const mk = (role) => backend.createAgent({ config: { provider: 'claude', model: 'm', cwd: process.cwd(), title: role }, initialPrompt: 'x', labels: { team: 'vibesquad', lane: 'bug', role }, env: {} });
+  try {
+    const lead = await mk('lead');
+    const worker = await mk('worker');
+    for (const a of [lead, worker]) { await backend.waitForFinish(a.id, 2000); await new Promise((r) => setTimeout(r, 20)); runner.park(a.id); }
+    // Unmarked archives (a retired lead, a manual archive) are never revived, even for a worker.
+    await backend.archiveAgent(lead.id);
+    await assert.rejects(() => backend.sendAgentPrompt(lead.id, 'hi'), /not running/);
+    await backend.archiveAgent(worker.id);
+    await assert.rejects(() => backend.sendAgentPrompt(worker.id, 'hi'), /not running/, 'unmarked worker archive is not revived');
+    assert.equal((await backend.fetchAgent(lead.id)).agent.archivedAt !== null, true);
+    await backend.updateAgent(worker.id, { labels: { 'vs.auto-archived': '1' } });
+    await backend.sendAgentPrompt(worker.id, 'hi');
+    assert.equal((await backend.getAgentTimeline(worker.id)).at(-1).item.text, 'echo:hi');
   } finally {
     server.close(); server.closeAllConnections?.();
   }
