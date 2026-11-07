@@ -35,7 +35,7 @@ below looks for Claude Code or Gemini on this PC when it opens.
 3. Open VibeSquad. On a clean machine it first asks "How will you use VibeSquad on this PC?" Choose
    **💻 Run agents on this PC** (`src-tauri/src/ui_pages.rs:185`; shown first when no mode is saved,
    `src-tauri/src/main.rs:2150`). Do not choose "Connect to another PC". Then the **Setup Checklist** can show
-   (`src/FirstRunModal.tsx:140`); follow it (see "First run" below). UNVERIFIED: how this looks on a real machine.
+   (`src/FirstRunModal.tsx:35`); follow it (see "First run" below). UNVERIFIED: how this looks on a real machine.
 
 What the installer puts on the PC (read from the source, not from a run):
 - The app, with a private `runtime\` folder inside the install folder: its own Node.js, the VibeSquad server and the
@@ -67,7 +67,7 @@ Expected: the `vs` command prints its usage text without an error (`cli/vs.mjs:2
 
 ## First run (the human's steps)
 1. Open VibeSquad. The **Setup Checklist** opens by itself until a provider is ready, or until it has been
-   closed once (`src/App.tsx:1489`). Its rows, exactly as the app writes them (`src/FirstRunModal.tsx`):
+   closed once (`src/App.tsx:1481`). Its rows, exactly as the app writes them (`src/FirstRunModal.tsx`):
    - **Claude Code** (`:74`): "Installed", then "Logged in" or "Run 'claude' once to log in". If missing, a link to
      the installer.
    - **Gemini / Antigravity** (`:83`): "Installed", plus "Logged in" when it finds a login. If missing, a link to the
