@@ -16,7 +16,7 @@ import { parseSentAttachments, repoPathFor } from "./attachments";
 import { openRightDockTab } from "./RightDock";
 import { listTimelinePrompts, searchTimeline, type TimelinePrompt } from "./paseoTimeline";
 import { perfEndPainted, perfSendEvent } from "./perf";
-import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, coalesceReplies, hasMoreOf, joinPages, markTurnBoundary, matchesFilter, localPrompts, localSearch, mergeLiveItem, maxEntrySeq, syncNeeded, latestReasoningIndex, reasoningText, sortedHits, stepIndex, type SearchLocation, type TimelineFilter } from "./timelineFilter";
+import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, coalesceReplies, hasMoreOf, joinPages, mergeTail, createLoadGate, markTurnBoundary, matchesFilter, localPrompts, localSearch, mergeLiveItem, maxEntrySeq, syncNeeded, latestReasoningIndex, reasoningText, sortedHits, stepIndex, type SearchLocation, type TimelineFilter } from "./timelineFilter";
 import { BARE_NAME_RE, BARE_PATH_RE, bareNamesVersion, lookupBareName, parseFileToken, subscribeBareNames } from "./fileLinks";
 import { toolStartsExpanded, usePref } from "./prefs";
 import { getPanes } from "./panes";
@@ -940,6 +940,8 @@ export function useTimeline(agentId: string, status: string, active = true, pred
   const [loadingMore, setLoadingMore] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const earliestCursor = useRef<any>(null);
+  const gate = useRef(createLoadGate());
+  const olderLoaded = useRef(false); // "Load older" pages are on screen: a tail refetch must not drop them or move the cursor
   const activeRef = useRef(active);
   activeRef.current = active;
   const stale = useRef(false);
@@ -986,6 +988,22 @@ export function useTimeline(agentId: string, status: string, active = true, pred
     }
   }, [agentId, entries]);
 
+  /** Fold a newest-page response in: older pages already loaded stay, and their cursor / hasMore with them. */
+  const applyTail = (t: any) => {
+    const newEntries = coalesceReplies(t.entries as Entry[]);
+    setEntries((prev) => (olderLoaded.current ? mergeTail(prev, newEntries) : newEntries));
+    lastSeq.current = maxEntrySeq(newEntries);
+    if (olderLoaded.current) return;
+    setHasMore(hasMoreOf(t));
+    const startCur = t.startCursor;
+    if (startCur && typeof startCur.epoch === "string" && typeof startCur.seq === "number") {
+      earliestCursor.current = startCur;
+    } else if (newEntries.length > 0) {
+      const first = newEntries[0] as any;
+      earliestCursor.current = { epoch: first.timestamp ?? "", seq: first.seqStart ?? 0 };
+    }
+  };
+
   useEffect(() => {
     if (DEMO) {
       setEntries(demoTimeline(agentId) as Entry[]);
@@ -995,28 +1013,19 @@ export function useTimeline(agentId: string, status: string, active = true, pred
     let alive = true;
     setLoaded(false);
     lastSeq.current = null; // other agent's seq must not judge this stream; load() sets the baseline
+    olderLoaded.current = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const handle = agentRef(agentId);
 
     const load = async () => {
       try {
+        const ticket = gate.current.begin();
         const t = await handle.timeline.refetch({ direction: "tail", limit: 60, projection: "projected" });
-        if (!alive) return;
+        if (!alive || !gate.current.accept(ticket)) return;
         if (t.error) setError(String(t.error));
         else {
           setError(null);
-          const newEntries = coalesceReplies(t.entries as Entry[]);
-          setEntries(newEntries);
-          lastSeq.current = maxEntrySeq(newEntries);
-          const tAny = t as any;
-          setHasMore(hasMoreOf(tAny));
-          const startCur = tAny.startCursor;
-          if (startCur && typeof startCur.epoch === "string" && typeof startCur.seq === "number") {
-            earliestCursor.current = startCur;
-          } else if (newEntries.length > 0) {
-            const first = newEntries[0] as any;
-            earliestCursor.current = { epoch: first.timestamp ?? "", seq: first.seqStart ?? 0 };
-          }
+          applyTail(t);
         }
       } catch (e) {
         if (alive) setError(String(e));
@@ -1084,24 +1093,12 @@ export function useTimeline(agentId: string, status: string, active = true, pred
       return;
     }
     let alive = true;
+    const ticket = gate.current.begin();
     agentRef(agentId)
       .timeline.refetch({ direction: "tail", limit: 60, projection: "projected" })
       .then((t) => {
-        if (!alive) return;
-        if (!t.error) {
-          const newEntries = coalesceReplies(t.entries as Entry[]);
-          setEntries(newEntries);
-          lastSeq.current = maxEntrySeq(newEntries);
-          const tAny = t as any;
-          setHasMore(hasMoreOf(tAny));
-          const startCur = tAny.startCursor;
-          if (startCur && typeof startCur.epoch === "string" && typeof startCur.seq === "number") {
-            earliestCursor.current = startCur;
-          } else if (newEntries.length > 0) {
-            const first = newEntries[0] as any;
-            earliestCursor.current = { epoch: first.timestamp ?? "", seq: first.seqStart ?? 0 };
-          }
-        }
+        if (!alive || !gate.current.accept(ticket)) return;
+        if (!t.error) applyTail(t);
       })
       .catch(() => {});
     return () => {
@@ -1132,6 +1129,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
       const tAny = t as any;
       const older = (tAny.entries ?? tAny.payload?.entries ?? []) as Entry[];
       if (older.length > 0) {
+        olderLoaded.current = true;
         setEntries((prev) => joinPages(coalesceReplies(older), prev));
         const startCur = tAny.startCursor ?? tAny.payload?.startCursor;
         if (startCur && typeof startCur.epoch === "string" && typeof startCur.seq === "number") {

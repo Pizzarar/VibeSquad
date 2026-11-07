@@ -194,6 +194,31 @@ export function syncNeeded(lastSeq: number | null, seq: number | undefined): "no
   return seq > lastSeq + 1 ? "gap" : "none";
 }
 
+/**
+ * A refetch returns only the newest page. Folding it over the entries already on screen keeps the older pages the user
+ * loaded (every runner event refetches, so replacing wiped them and jumped the scroll); rows inside the new window are replaced.
+ */
+export function mergeTail<T extends Ent>(prev: T[], tail: T[]): T[] {
+  const first = tail.length ? tail[0].seqStart : undefined;
+  if (first == null) return tail;
+  const older = prev.filter((e) => e.seqStart != null && e.seqStart < first);
+  return older.length ? (joinPages(older, tail) as T[]) : tail;
+}
+
+/**
+ * Tail refetches overlap (leading + trailing + turn-end) and responses can complete out of order under load; an older
+ * snapshot landing last used to overwrite the newer one and nothing refetched after it, so the chat stayed stale.
+ * begin() before each request; apply the response only when accept(ticket) is true.
+ */
+export function createLoadGate() {
+  let issued = 0;
+  let applied = 0;
+  return {
+    begin: () => ++issued,
+    accept: (ticket: number) => (ticket > applied ? ((applied = ticket), true) : false),
+  };
+}
+
 /** "Load older" stays available when the daemon says so, else when the raw (pre-coalesce) page was full. */
 export function hasMoreOf(t: { hasOlder?: boolean; entries?: unknown[] }, limit = 60): boolean {
   return t.hasOlder ?? (t.entries?.length ?? 0) >= limit;
