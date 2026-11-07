@@ -64,41 +64,64 @@ const TAIL_WINDOW = 60;
  * Match each still-pending (not failed) message to a distinct daemon user_message with the same text
  * that arrived at/after the send. Returns the ids that the timeline now covers.
  */
-export function reconciledIds(pending: PendingSend[], entries: Ent[]): string[] {
+export type Match = { id: string; agentId: string; seq: number | null };
+
+/**
+ * Pass 1 matches every pending on exact text; pass 2 gives a delivered send the oldest unclaimed user_message past its baseline
+ * (hook rewrote the text, clock skew), in send order and only while no earlier pending of that agent is still unmatched.
+ */
+export function reconcile(pending: PendingSend[], entries: Ent[]): Match[] {
   const used = new Set<number>();
-  const out: string[] = [];
+  const hits = new Map<string, Match>();
+  const todo = pending.filter((p) => p.state === "pending");
   const firstSeq = entries.reduce<number | null>((m, e) => (e.seqStart != null && (m === null || e.seqStart < m) ? e.seqStart : m), null);
-  for (const p of pending) {
-    if (p.state !== "pending") continue;
+  const take = (p: PendingSend, i: number) => {
+    used.add(i);
+    hits.set(p.id, { id: p.id, agentId: p.agentId, seq: entries[i].seqStart ?? null });
+  };
+  for (const p of todo) {
     const want = p.text.trim();
-    let hit = -1;
     for (let i = entries.length - 1; i >= 0; i--) {
       const e = entries[i];
       if (used.has(i) || e.item?.type !== "user_message" || String(e.item.text ?? "").trim() !== want) continue;
       const t = e.timestamp ? Date.parse(e.timestamp) : NaN;
       if (!Number.isNaN(t) && t < p.at - CLOCK_SKEW_MS) continue;
-      hit = i;
+      take(p, i);
       break;
     }
-    // Delivered but the text did not match (hook rewrote it, clock skew): the oldest user_message past the send's baseline is it.
-    if (hit < 0 && p.delivered && p.baselineSeq != null) {
+  }
+  const blocked = new Set<string>(); // agents with an earlier pending still unmatched
+  for (const p of todo) {
+    if (hits.has(p.id)) continue;
+    if (!blocked.has(p.agentId) && p.delivered && p.baselineSeq != null) {
       for (let i = 0; i < entries.length; i++) {
         const e = entries[i];
         if (!used.has(i) && e.item?.type === "user_message" && e.seqStart != null && e.seqStart > p.baselineSeq) {
-          hit = i;
+          take(p, i);
           break;
         }
       }
       // The tail window now starts after the baseline: the message landed and scrolled out of the window.
-      if (hit < 0 && entries.length >= TAIL_WINDOW && firstSeq !== null && firstSeq > p.baselineSeq) {
-        out.push(p.id);
-        continue;
+      if (!hits.has(p.id) && entries.length >= TAIL_WINDOW && firstSeq !== null && firstSeq > p.baselineSeq) {
+        hits.set(p.id, { id: p.id, agentId: p.agentId, seq: null });
       }
     }
-    if (hit >= 0) {
-      used.add(hit);
-      out.push(p.id);
-    }
+    if (!hits.has(p.id)) blocked.add(p.agentId);
   }
-  return out;
+  return todo.filter((p) => hits.has(p.id)).map((p) => hits.get(p.id)!);
+}
+
+export const reconciledIds = (pending: PendingSend[], entries: Ent[]): string[] => reconcile(pending, entries).map((m) => m.id);
+
+/** Drop matched bubbles and move the other pendings of the same agent past each claimed seq, so a later render cannot reuse it. */
+export function dropMatched(matches: Match[]): void {
+  if (!matches.length) return;
+  const ids = new Set(matches.map((m) => m.id));
+  all = all
+    .filter((p) => !ids.has(p.id))
+    .map((p) => {
+      const top = Math.max(-1, ...matches.filter((m) => m.agentId === p.agentId && m.seq != null).map((m) => m.seq as number));
+      return top >= 0 && p.baselineSeq != null && p.baselineSeq < top ? { ...p, baselineSeq: top } : p;
+    });
+  emit();
 }

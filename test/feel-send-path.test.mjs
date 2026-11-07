@@ -154,3 +154,33 @@ test("seq fallback gives each pending its own user_message", () => {
   assert.deepEqual(reconciledIds(getPending(), [um("X", 2)]), [a]);
   assert.deepEqual(reconciledIds(getPending(), [um("X", 2), um("Y", 3)]).sort(), [a, b].sort());
 });
+
+import { dropMatched, reconcile } from "../src/pendingSend.ts";
+
+test("a claimed seq is not reused on the next render (p2 cannot steal p1's user_message)", () => {
+  resetPending();
+  noteAgentSeq("r1", 10);
+  const p1 = addPending("r1", "one", 1);
+  const p2 = addPending("r1", "two", 2);
+  markDelivered(p1); markDelivered(p2);
+  const entries = [um("one", 11)];
+  const m = reconcile(getPending(), entries);
+  assert.deepEqual(m.map((x) => x.id), [p1]);
+  dropMatched(m);
+  assert.deepEqual(reconciledIds(getPending(), entries), [], "second render: p2 stays pending");
+  assert.deepEqual(reconciledIds(getPending(), [um("one", 11), um("two", 12)]), [p2]);
+});
+
+test("exact text is matched across all pendings first, and an unmatched earlier send blocks later seq fallbacks (FIFO)", () => {
+  resetPending();
+  noteAgentSeq("f1", 10);
+  const p1 = addPending("f1", "one", 1); // never delivered: its message was hook-rewritten
+  const p2 = addPending("f1", "two", 2);
+  markDelivered(p2);
+  const entries = [um("[hook] one", 11)];
+  assert.deepEqual(reconciledIds(getPending(), entries), [], "p2 must not claim p1's seq");
+  markDelivered(p1);
+  assert.deepEqual(reconciledIds(getPending(), entries), [p1]);
+  // exact text for p2 beats p1's seq fallback even though p1 is earlier
+  assert.deepEqual(reconciledIds(getPending(), [um("two", 11)]), [p2], "p1 cannot grab the entry p2 matches by text");
+});
