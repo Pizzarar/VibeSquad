@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { FileExplorerDirectoryPayload } from "@getpaseo/client/internal/daemon-client";
 import { daemonClient } from "./paseo";
+import { VsFilesError, vsListDirectory, vsReadFile } from "./vsFiles";
 import { DEMO } from "./demoFlag";
 import { MarkdownRenderer } from "./Timeline";
 import {
@@ -42,7 +43,7 @@ const DEMO_CHILDREN: TreeNode[] = [
   { name: "AgentDrawer.tsx", path: "src/AgentDrawer.tsx", kind: "file" },
 ];
 
-function entriesToNodes(entries: DirEntry[]): TreeNode[] {
+function entriesToNodes(entries: Array<Pick<DirEntry, "name" | "path" | "kind"> & { size?: number }>): TreeNode[] {
   return entries.map((e) => ({
     name: e.name,
     path: e.path,
@@ -115,6 +116,8 @@ export function FilesPanel({
   const [saveErr, setSaveErr] = useState("");
   const [loading, setLoading] = useState(false);
   const [notFound, setNotFound] = useState(false);
+  const [readErr, setReadErr] = useState("");
+  const [treeErr, setTreeErr] = useState("");
   const [sourceView, setSourceView] = useState(false);
   const [notice, setNotice] = useState("");
   const [imgUrl, setImgUrl] = useState<string | null>(null);
@@ -161,10 +164,11 @@ export function FilesPanel({
           setTree(DEMO_TREE);
           return;
         }
-        const dir = await daemonClient.listDirectory(cwd, "");
-        if (!cancelled) setTree(entriesToNodes(dir.entries));
-      } catch {
+        const dir = await vsListDirectory(cwd, "");
+        if (!cancelled) { setTree(entriesToNodes(dir.entries)); setTreeErr(""); }
+      } catch (e) {
         if (!cancelled && DEMO) setTree(DEMO_TREE);
+        else if (!cancelled) setTreeErr(e instanceof Error ? e.message : String(e));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -203,7 +207,7 @@ export function FilesPanel({
         return;
       }
       try {
-        const dir = await daemonClient.listDirectory(cwd, path);
+        const dir = await vsListDirectory(cwd, path);
         setTree((prev) => updateNode(prev, path, entriesToNodes(dir.entries)));
       } catch {
         // silently ignore
@@ -249,6 +253,7 @@ export function FilesPanel({
       setEditMode(false);
       setSaveErr("");
       setNotFound(false);
+      setReadErr("");
       setNotice("");
       setImgUrl(null);
       setFileBytes(null);
@@ -286,7 +291,7 @@ export function FilesPanel({
         return;
       }
       try {
-        const result = await daemonClient.readFile(cwd, path, undefined, cap + 1);
+        const result = await vsReadFile(cwd, path, cap);
         const kb = Math.max(1, Math.round(result.bytes.length / 1024));
         if (result.bytes.length > cap) {
           setFileContent("");
@@ -313,7 +318,7 @@ export function FilesPanel({
           setFileContent("");
           return;
         }
-        if (result.kind === "binary" || kind === "binary" || isBinaryBytes(result.bytes)) {
+        if (kind === "binary" || isBinaryBytes(result.bytes)) {
           setFileMime(resolvedMime === "text/plain" ? "application/octet-stream" : resolvedMime);
           setImgUrl(`Binary file, ${kb} KB, not shown`);
           setFileContent("");
@@ -324,12 +329,15 @@ export function FilesPanel({
         setEditValue(text);
         setFileModifiedAt(result.modifiedAt);
 
-        // Subscribe to live updates
-        const sub = daemonClient.observeFile({ cwd, path });
-        unsubscribeRef.current = () => { sub.release().catch(() => {}); };
+        // Live updates are best effort: they need the Paseo daemon, which may not be running.
+        try {
+          const sub = daemonClient.observeFile({ cwd, path });
+          unsubscribeRef.current = () => { sub.release().catch(() => {}); };
+        } catch { /* no daemon: file stays static */ }
       } catch (e) {
         setFileContent("");
-        if (/too large|max.?bytes|exceeds/i.test(String(e))) tooBig(0);
+        if (e instanceof VsFilesError && e.tooLarge) tooBig(e.size ? Math.round(e.size / 1024) : 0);
+        else if (e instanceof VsFilesError && !e.notFound) setReadErr(e.message);
         else setNotFound(true);
       }
     },
@@ -400,7 +408,7 @@ export function FilesPanel({
   const refreshTree = useCallback(async () => {
     if (DEMO) return;
     try {
-      const dir = await daemonClient.listDirectory(cwd, "");
+      const dir = await vsListDirectory(cwd, "");
       setTree(entriesToNodes(dir.entries));
     } catch {
       return;
@@ -422,7 +430,7 @@ export function FilesPanel({
   const siblingNames = async (parent: string): Promise<string[]> => {
     const list = parent ? findNode(tree, parent)?.children : tree;
     if (list) return list.map((n) => n.name);
-    const dir = await daemonClient.listDirectory(cwd, parent);
+    const dir = await vsListDirectory(cwd, parent);
     return dir.entries.map((e) => e.name);
   };
 
@@ -500,7 +508,7 @@ export function FilesPanel({
       if (DEMO) throw new Error("Download isn't available in demo mode");
       const tooBig = "File too large to download (over 25 MB)";
       if (node.size !== undefined && node.size > MAX_DOWNLOAD_BYTES) throw new Error(tooBig);
-      const r = await daemonClient.readFile(cwd, node.path, undefined, MAX_DOWNLOAD_BYTES + 1);
+      const r = await vsReadFile(cwd, node.path, MAX_DOWNLOAD_BYTES);
       if (r.bytes.length > MAX_DOWNLOAD_BYTES) throw new Error(tooBig);
       const url = URL.createObjectURL(new Blob([r.bytes as BlobPart], { type: r.mime || "application/octet-stream" }));
       const a = document.createElement("a");
@@ -543,7 +551,7 @@ export function FilesPanel({
   const openInlineEdit = () => {
     setInlineErr("");
     const viewer = viewerRef.current;
-    if (!openFile || !viewer || notFound || notice || imgUrl) return;
+    if (!openFile || !viewer || notFound || readErr || notice || imgUrl) return;
     const below = (r: DOMRect) => r.bottom - viewer.getBoundingClientRect().top + 4;
     if (editMode) {
       const ta = textareaRef.current;
@@ -598,6 +606,7 @@ export function FilesPanel({
         </div>
         {opErr && <div className="stat-alert small" data-testid="files-op-error">{opErr}</div>}
         {loading && <div className="muted small">Loading…</div>}
+        {!loading && treeErr && <div className="muted small" data-testid="files-tree-error">{treeErr}</div>}
         {renderNodes(tree, expanded, toggleDir, openFileNode, openFile, (e, node) => {
           e.preventDefault();
           e.stopPropagation();
@@ -685,7 +694,7 @@ export function FilesPanel({
                 <a className="btn ghost small" data-testid="files-open-ide" href={href} title="Open in your IDE at this line">IDE ↗</a>
               );
             })()}
-            {(isMd || canTogglePreview) && !notFound && !notice && !imgUrl && !editMode && (
+            {(isMd || canTogglePreview) && !notFound && !readErr && !notice && !imgUrl && !editMode && (
               <button
                 className="btn ghost small"
                 data-testid="files-source-btn"
@@ -694,7 +703,7 @@ export function FilesPanel({
                 {sourceView ? "Preview" : "Source"}
               </button>
             )}
-            {!editMode && !notFound && !notice && !imgUrl && (
+            {!editMode && !notFound && !readErr && !notice && !imgUrl && (
               <button
                 className="btn ghost small"
                 data-testid="files-edit-btn"
@@ -737,6 +746,8 @@ export function FilesPanel({
               onChange={(e) => setEditValue(e.target.value)}
               spellCheck={false}
             />
+          ) : readErr ? (
+            <div className="muted small" data-testid="files-read-error">{readErr}</div>
           ) : notFound ? (
             <div className="muted small" data-testid="files-not-found">File not found: {openFile}</div>
           ) : notice ? (

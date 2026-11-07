@@ -2,7 +2,7 @@ import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, 
 import { handleRunnerApi } from "./runner-api.mjs";
 import { resetPaseoProbe } from "./backend/lane-routing.mjs";
 import { handleSchedulesApi } from "./schedules.mjs";
-import { sharedRunnerBackend } from "./backend/index.mjs";
+import { sharedRunnerBackend, isRunnerId, listRunnerAgentsSync, readRunnerAgentSync } from "./backend/index.mjs";
 import { handleTerminalsApi, isTerminalsPath } from "./terminals-api.mjs";
 import { handleProvidersApi } from "./providers-catalog.mjs";
 import { getStale, peekStale, readBuildStamp } from "./stale-runtime.mjs";
@@ -17,7 +17,7 @@ import { resolveTeamsFilePath, resolveTeamsWritePath } from "./teams-file.mjs";
 import { seedHubBriefs } from "./hub-seed.mjs";
 import { resolveProjectPath } from "./brief-path.mjs";
 import { contentRevision, createWindowLimiter } from "./write-guards.mjs";
-import { ADE_GATED_READ_PATHS, handleFileList, handleSearch } from "./file-search.mjs";
+import { ADE_GATED_READ_PATHS, isUnsafeRoot, handleFileList, handleFsList, handleFsRead, handleFsResolve, handleSearch } from "./file-search.mjs";
 import { handleSecretInputRequest } from "./secret-input.mjs";
 import {
   LEGACY_NEEDS_LABEL,
@@ -803,10 +803,28 @@ const navRootsCache = new Map();
 const navRoots = (rootDir, opts) => (fresh) => {
   const hit = navRootsCache.get(rootDir);
   if (!fresh && hit && Date.now() - hit.at < 30_000) return hit.roots;
-  const roots = allowedAttachRoots(rootDir, opts);
+  // Runner (rn-) agents are the default and often sit in worktrees outside the project roots.
+  let runnerCwds = [];
+  try { runnerCwds = listRunnerAgentsSync().filter((a) => !a.archivedAt).map((a) => realOrNull(a.cwd)).filter(Boolean); } catch {}
+  // A home dir or drive root as a browse root would expose everything under it.
+  const roots = [...new Set([...allowedAttachRoots(rootDir, opts), ...runnerCwds])].filter((r) => !isUnsafeRoot(r));
   navRootsCache.set(rootDir, { at: Date.now(), roots });
   return roots;
 };
+
+/** Agent id -> cwd, server-side only: runner record (on-disk log, then the live API), then ~/.paseo agents, then the repo root. */
+export async function agentCwdFor(agentId, rootDir, { runner } = {}) {
+  const id = String(agentId ?? "");
+  if (!AGENT_ID_STRICT.test(id)) return rootDir;
+  if (isRunnerId(id)) {
+    try { const rec = readRunnerAgentSync(id); if (rec?.cwd) return rec.cwd; } catch {} // on-disk record: no HTTP round trip
+    try {
+      const cwd = (await (runner ?? sharedRunnerBackend()).fetchAgent(id)).agent?.cwd;
+      if (cwd) return cwd;
+    } catch {}
+  }
+  return lookupAgentCwd(id) || rootDir;
+}
 
 function isSensitiveSource(real) {
   const home = homedir();
@@ -1708,6 +1726,12 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return handleWorkspacePackageScripts(req, res, rootDir, opts);
       case "/__vibesquad/files":
         return handleFileList(req, res, navRoots(rootDir, opts), sendJson);
+      case "/__vibesquad/fs/list":
+        return handleFsList(req, res, navRoots(rootDir, opts), sendJson);
+      case "/__vibesquad/fs/resolve":
+        return handleFsResolve(req, res, (id) => agentCwdFor(id, rootDir), sendJson, navRoots(rootDir, opts));
+      case "/__vibesquad/fs/read":
+        return handleFsRead(req, res, navRoots(rootDir, opts), sendJson);
       case "/__vibesquad/search":
         return handleSearch(req, res, navRoots(rootDir, opts), sendJson);
       case "/__vibesquad/secret-input":

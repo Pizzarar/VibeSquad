@@ -82,3 +82,43 @@ export function makePending(
 export function claimPending(p: PendingOpen | null, now = Date.now()): PendingOpen | null {
   return p && now - p.at <= PENDING_TTL_MS ? p : null;
 }
+
+// ── bare filenames (no folder) ───────────────────────────────────────────────────
+// `pingrid-menu-500.png` only becomes a link if the repo has exactly one file with that name;
+// the VS server answers (GET /__vibesquad/fs/resolve) and results are cached per agent.
+
+const BARE_NAME_EXT = /\.(png|jpe?g|gif|webp|svg|md|mdx|txt|json|ts|tsx|js|jsx|mjs|cjs|css|html|rs|toml|ya?ml|py|sh|ps1|pdf|csv|cfg|ini|gd|tscn|mp4|mp3|wav)$/i;
+/** Bare filename candidate regex (renderInline); each hit is still checked by isBareNameCandidate + the server. */
+export const BARE_NAME_RE = /(?<![\w@.\/\x5c:#~-])(\w[\w.\-]*\.[A-Za-z][A-Za-z0-9]{0,5})(?![\w\/\x5c])/g;
+
+export function isBareNameCandidate(name: string): boolean {
+  return !name.includes("/") && !name.includes("\\") && BARE_NAME_EXT.test(name);
+}
+
+type Resolved = string | null | undefined; // undefined = not asked yet / in flight
+const resolved = new Map<string, string | null>();
+const inflight = new Set<string>();
+const listeners = new Set<() => void>();
+let version = 0;
+export const subscribeBareNames = (cb: () => void) => { listeners.add(cb); return () => { listeners.delete(cb); }; };
+export const bareNamesVersion = () => version;
+
+/** Cached repo path for a bare name (null = zero or several matches); kicks off the lookup on first sight. */
+export function lookupBareName(agentId: string | undefined, name: string, fetcher: typeof fetch = fetch): Resolved {
+  if (!agentId || !isBareNameCandidate(name)) return null;
+  const key = `${agentId}\0${name}`;
+  if (resolved.has(key)) return resolved.get(key);
+  if (!inflight.has(key)) {
+    inflight.add(key);
+    fetcher(`/__vibesquad/fs/resolve?agentId=${encodeURIComponent(agentId)}&name=${encodeURIComponent(name)}`)
+      .then((r) => r.json())
+      .then((j) => resolved.set(key, j?.ok && typeof j.path === "string" ? j.path : null))
+      .catch(() => resolved.set(key, null))
+      .finally(() => {
+        inflight.delete(key);
+        if (resolved.get(key)) { version++; listeners.forEach((l) => l()); } // a miss changes nothing on screen
+      });
+  }
+  return undefined;
+}
+export const _resetBareNames = () => { resolved.clear(); inflight.clear(); };
