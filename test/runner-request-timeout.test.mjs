@@ -75,3 +75,60 @@ test("GET on the same port after a timeout is not retried", async () => {
     assert.equal(n, 1);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
+
+const hangUnlessHealth = (healthOk) => (url, { signal } = {}) => {
+  if (url.endsWith("/health")) return healthOk ? Promise.resolve(ok({ ok: true })) : Promise.reject(new Error("ECONNREFUSED"));
+  return new Promise((res, rej) => signal.addEventListener("abort", () => rej(new Error("aborted"))));
+};
+
+test("queued input on a healthy runner is not aborted at the base timeout", async () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "vs-rt-"));
+  try {
+    disco(home, 1111);
+    let settle;
+    const fetchImpl = (url, o) => url.endsWith("/health") ? Promise.resolve(ok({ ok: true })) : new Promise((r) => { settle = () => r(ok({ ok: true })); o.signal.addEventListener("abort", () => r(Promise.reject(new Error("aborted")))); });
+    const rc = new RunnerClient({ home, fetchImpl, requestTimeoutMs: 20, queueMs: 1000 });
+    const p = rc.request("POST", "/agents/a1/input", { text: "hi" });
+    await new Promise((r) => setTimeout(r, 120)); // several base timeouts later
+    settle();
+    assert.deepEqual(await p, { ok: true });
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("queued create/input on an unhealthy runner aborts with 'runner not responding'", async () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "vs-rt-"));
+  try {
+    disco(home, 1111);
+    const rc = new RunnerClient({ home, fetchImpl: hangUnlessHealth(false), requestTimeoutMs: 20, queueMs: 1000 });
+    await assert.rejects(rc.request("POST", "/agents", {}), (e) => e.status === 504 && /runner not responding/.test(e.message));
+    assert.equal(rc.conn, null);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("queued request is bounded by queueMs + base timeout even when healthy", async () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "vs-rt-"));
+  try {
+    disco(home, 1111);
+    const rc = new RunnerClient({ home, fetchImpl: hangUnlessHealth(true), requestTimeoutMs: 20, queueMs: 60 });
+    await assert.rejects(rc.request("POST", "/agents/a/input", {}), { status: 504 });
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("runner: a client hang-up cancels the queued slot wait, no late delivery", async () => {
+  const { Runner } = await import("../runner/runner.mjs");
+  const dir = mkdtempSync(path.join(os.tmpdir(), "vs-rt-run-"));
+  try {
+    const r = new Runner({ dir, adapters: {}, maxLive: 1, queueMs: 5000 });
+    let sent = 0;
+    r.send = () => { const e = new Error("cap"); e.code = "AGENT_CAP"; if (r.__free) { sent++; return; } throw e; };
+    const ac = new AbortController();
+    const p = r.sendQueued("a", "hi", {}, { signal: ac.signal });
+    await new Promise((x) => setTimeout(x, 30));
+    ac.abort();
+    await assert.rejects(p, { code: "ABORTED" });
+    r.__free = true;
+    for (const w of [...r._slotWaiters]) w();
+    await new Promise((x) => setTimeout(x, 30));
+    assert.equal(sent, 0, "aborted request never delivers");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

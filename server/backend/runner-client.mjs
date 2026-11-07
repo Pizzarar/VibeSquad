@@ -39,7 +39,9 @@ export class RunnerDownError extends RunnerHttpError {
 }
 
 export class RunnerClient {
-  constructor({ home, fetchImpl = fetch, spawnImpl = spawn, startTimeoutMs = 8000, requestTimeoutMs = 15000 } = {}) {
+  constructor({ home, fetchImpl = fetch, spawnImpl = spawn, startTimeoutMs = 8000, requestTimeoutMs = 15000, queueMs = 10 * 60_000, probeTimeoutMs = 2000 } = {}) {
+    this.queueMs = queueMs; // the runner's slot-queue wait: create/input may legitimately take this long
+    this.probeTimeoutMs = probeTimeoutMs;
     this.requestTimeoutMs = requestTimeoutMs;
     this._home = home; // undefined = follow VIBESQUAD_HOME on every use (the shared backend outlives env changes)
     this._connHome = null;
@@ -82,7 +84,25 @@ export class RunnerClient {
     if (!this.conn) throw new RunnerHttpError(0, "runner is not running");
     const { port, token } = this.conn;
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), this.requestTimeoutMs);
+    // create/input queue for a slot inside the runner (up to queueMs), so a silent 15s is not proof of a hang: probe /health instead.
+    const queued = method === "POST" && (route === "/agents" || /^\/agents\/[^/]+\/input$/.test(route));
+    const hardDeadline = Date.now() + this.queueMs + this.requestTimeoutMs;
+    let timer;
+    let done = false;
+    const arm = () => {
+      timer = setTimeout(async () => {
+        if (!queued || Date.now() >= hardDeadline) return ac.abort();
+        let healthy = false;
+        try {
+          const h = await this.fetch(`http://127.0.0.1:${port}/health`, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(this.probeTimeoutMs) });
+          healthy = h.ok;
+        } catch { /* unreachable */ }
+        if (done || ac.signal.aborted) return;
+        if (healthy) arm();
+        else ac.abort();
+      }, this.requestTimeoutMs);
+    };
+    arm();
     let res;
     let data;
     try {
@@ -101,6 +121,7 @@ export class RunnerClient {
       err.port = port;
       throw err;
     } finally {
+      done = true;
       clearTimeout(timer);
     }
     if (!res.ok) throw new RunnerHttpError(res.status, data.error || `runner ${res.status}`);
