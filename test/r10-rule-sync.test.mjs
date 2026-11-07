@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 const R10 =
-  "Never run release, publish, tag or signing scripts yourself. When the owner asks for a release, send `vs log handoff \"release <project> <stable|beta> <commit|branch>\" -> Release Desk` plus a Paseo message to the Release Desk Buddy (`vs who brainstorm --lane release-desk`) with the change list and credits, then go back to your work. The desk versions, audits, signs, publishes and reports back.";
+  "Never run release, publish, tag or signing scripts yourself. When the owner asks for a release, send `vs log handoff \"release <project> <stable|beta> <commit|branch>\" -> Release Desk` plus a `send` (VS MCP / `vs send`) message to the Release Desk Buddy (`vs who brainstorm --lane release-desk`) with the change list and credits, then go back to your work. The desk versions, audits, signs, publishes and reports back.";
 
 test("R10 (Releases) rule text is identical in all four rule sources", () => {
   const sources = {

@@ -101,7 +101,7 @@ compact `<!-- vibesquad:lessons:begin -->` digest into prompts.
   worker.
 - **Root Cause (How We Got Here):** No explicit rule forced an in-turn wait with a bound.
 - **Rule / Fix:** Never end a turn just to wait on a background task — poll it within the turn with a
-  timeout, or use `paseo wait <id> --timeout <s>` (always with a timeout; no sleep/poll loops).
+  timeout, or use `vs wait <id> --timeout <s>` (always with a timeout; no sleep/poll loops).
 - **Evidence:** `docs/PLAN_ROUTING_POLICY.md` §5 (lead role-pack rule, Aub-approved); `docs/ROLE_PACKS.md`
   guardrail R6.
 
@@ -430,14 +430,14 @@ Aub (the owner) talks fast, tersely, with typos, and often while an agent is alr
 
 ## Standing rules (quick reference)
 
-1. Find the lead with `vs who lead` (labels `role`/`lane`/`ord`), never `paseo ls -g --json` or
+1. Find the lead with `vs who lead` (labels `role`/`lane`/`ord`), never agent-list JSON scraping or
    title-prefix regex.
 2. Run unit work in `%LOCALAPPDATA%\VibeSquad\worktrees\<repo>\<unit>`; never
    `git worktree add ../<repo>-<unit>` into `projects/`.
 3. Write JSON with node `fs.writeFileSync(..., 'utf8')`, never PowerShell `Set-Content`/`Out-File`
    (UTF-8 BOM breaks parsers).
 4. Never end a turn just to wait on a background task: poll with a timeout or
-   `paseo wait <id> --timeout <s>`.
+   `vs wait <id> --timeout <s>`.
 5. Route by Role + Tier with automatic provider failover (Claude → Gemini → DeepSeek); never pin every
    profile to one provider.
 6. Detach live children before archiving any agent (Paseo cascades archives to the parent's children).
