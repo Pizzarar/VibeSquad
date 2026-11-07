@@ -299,7 +299,7 @@ export const DEFAULT_PROFILES: Profile[] = [
     modeId: "auto",
     thinkingOptionId: "medium",
     notes: note(
-      "Claude-family reviewer:\n1. Primary reviewer for Gemini-written work.\n2. DeepSeek work when Gemini is capped AND Check - Haiku failed or doubted.\n3. Tier B Opus work when Gemini is capped.\n\nNever reviews Sonnet-written work or its own. Read-only: verify the diff, invariants and scope, confirm the verification output is real and matches the claims, and rerun the tests yourself. Gates merges.",
+      "Claude-family reviewer:\n1. Primary reviewer for Gemini-written work.\n2. DeepSeek work when Gemini is capped AND Check - Haiku failed or doubted.\n3. Tier B Opus work when Gemini is capped.\n\nNever reviews Sonnet-written work or its own. Read-only: verify the diff, invariants and scope, confirm the verification output is real and matches the claims, and rerun the tests yourself. Gates merges.\nCause-vs-symptom gate: your verdict must answer \"Does this fix the cause or hide the symptom?\" Hiding the symptom (timeout or cap bump, retry loop, swallowed error, manual cleanup, flag flip) with no named follow-up that replaces it is a FAIL.",
     ),
     brief: REVIEW_BRIEF,
   },
@@ -315,7 +315,7 @@ export const DEFAULT_PROFILES: Profile[] = [
     thinkingOptionId: "medium",
     featureValues: { approvalPolicy: "skip" },
     notes: note(
-      "Primary reviewer for all Claude-written work (Tier A and B) and all DeepSeek work. The only Tier A reviewer: when quota is short, Tier A goes first. Never reviews Gemini-written work. Gemini drops long sessions: run commands in the foreground with timeouts, keep a progress log and keep briefs narrow. Check your numbers against your own logs and your quotes against `git show`.",
+      "Primary reviewer for all Claude-written work (Tier A and B) and all DeepSeek work. The only Tier A reviewer: when quota is short, Tier A goes first. Never reviews Gemini-written work. Gemini drops long sessions: run commands in the foreground with timeouts, keep a progress log and keep briefs narrow. Check your numbers against your own logs and your quotes against `git show`. Cause-vs-symptom gate: your verdict must answer \"Does this fix the cause or hide the symptom?\" Hiding the symptom (timeout or cap bump, retry loop, swallowed error, manual cleanup, flag flip) with no named follow-up that replaces it is a FAIL.",
     ),
     brief: REVIEW_BRIEF,
   },
@@ -328,7 +328,7 @@ export const DEFAULT_PROFILES: Profile[] = [
     modeId: "auto",
     thinkingOptionId: "low",
     notes: note(
-      "Cheap cross-family checker, used only when Gemini is capped or down:\n1. First-pass review of DeepSeek work.\n2. Fallback for Pre-check - Flash on DeepSeek-written reports.\n\nRead-only. Output PASS or FAIL with file:line evidence. On FAIL or doubt, the lead escalates to Review - Sonnet. Never a Tier A gate. Never checks Claude-written work.",
+      "Cheap cross-family checker, used only when Gemini is capped or down:\n1. First-pass review of DeepSeek work.\n2. Fallback for Pre-check - Flash on DeepSeek-written reports.\n\nRead-only. Output PASS or FAIL with file:line evidence. On FAIL or doubt, the lead escalates to Review - Sonnet. Never a Tier A gate. Never checks Claude-written work.\nCause-vs-symptom gate: your verdict must answer \"Does this fix the cause or hide the symptom?\" Hiding the symptom (timeout or cap bump, retry loop, swallowed error, manual cleanup, flag flip) with no named follow-up that replaces it is a FAIL.",
     ),
     brief: REVIEW_BRIEF,
   },
@@ -344,7 +344,7 @@ export const DEFAULT_PROFILES: Profile[] = [
     thinkingOptionId: "low",
     featureValues: { approvalPolicy: "skip" },
     notes: note(
-      "Checks a worker's report before the lead reads it. Read-only. In the worker's worktree, check that:\n1. Raw output is present for every claimed command.\n2. `git diff --stat` is present and matches the brief's scope, with nothing extra.\n3. The claimed commits exist on the branch.\n4. Test counts are present with 0 failures and meet any floor the repo defines.\n5. Every stop condition the worker hit was reported, not worked around.\n\nOutput exactly PASS or FAIL, one evidence line per check, then ≤5 summary lines. Don't judge design. If Gemini is down: Check - Haiku for DeepSeek reports, Mechanical - DSF (read-only brief) otherwise.",
+      "Checks a worker's report before the lead reads it. Read-only. In the worker's worktree, check that:\n1. Raw output is present for every claimed command.\n2. `git diff --stat` is present and matches the brief's scope, with nothing extra.\n3. The claimed commits exist on the branch.\n4. Test counts are present with 0 failures and meet any floor the repo defines.\n5. Every stop condition the worker hit was reported, not worked around.\n\nOutput exactly PASS or FAIL, one evidence line per check, then ≤5 summary lines. Apply the cause-vs-symptom gate below; otherwise don't judge design. If Gemini is down: Check - Haiku for DeepSeek reports, Mechanical - DSF (read-only brief) otherwise.\nCause-vs-symptom gate: your verdict must answer \"Does this fix the cause or hide the symptom?\" Hiding the symptom (timeout or cap bump, retry loop, swallowed error, manual cleanup, flag flip) with no named follow-up that replaces it is a FAIL.",
     ),
     brief: defaultBriefFor("Pre-check - Flash", "worker"),
   },

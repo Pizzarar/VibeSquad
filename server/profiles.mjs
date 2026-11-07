@@ -87,6 +87,9 @@ export const ART_DIRECTOR_NOTE_BODY = [
   "AI-generated art (e.g. PixelLab) may ship once the lead and owner approve it. When the plan says a source is style reference only, redraw it rather than shipping it.",
 ].join("\n");
 
+const CAUSE_GATE_NOTE =
+  'Cause-vs-symptom gate: your verdict must answer "Does this fix the cause or hide the symptom?" Hiding the symptom (timeout or cap bump, retry loop, swallowed error, manual cleanup, flag flip) with no named follow-up that replaces it is a FAIL.';
+
 const NOTE_BODIES = {
   "Lead - Claude": LEAD_NOTE_BODY,
   "Lead - Gemini": `${LEAD_NOTE_BODY}\nYour planning docs are Gemini-written, so Review - Sonnet reviews them.`,
@@ -124,15 +127,17 @@ const NOTE_BODIES = {
     "3. Tier B Opus work when Gemini is capped.",
     "",
     "Never reviews Sonnet-written work or its own. Read-only: verify the diff, invariants and scope, confirm the verification output is real and matches the claims, and rerun the tests yourself. Gates merges.",
+    CAUSE_GATE_NOTE,
   ].join("\n"),
   "Review - Gemini":
-    "Primary reviewer for all Claude-written work (Tier A and B) and all DeepSeek work. The only Tier A reviewer: when quota is short, Tier A goes first. Never reviews Gemini-written work. Gemini drops long sessions: run commands in the foreground with timeouts, keep a progress log and keep briefs narrow. Check your numbers against your own logs and your quotes against `git show`.",
+    "Primary reviewer for all Claude-written work (Tier A and B) and all DeepSeek work. The only Tier A reviewer: when quota is short, Tier A goes first. Never reviews Gemini-written work. Gemini drops long sessions: run commands in the foreground with timeouts, keep a progress log and keep briefs narrow. Check your numbers against your own logs and your quotes against `git show`. " + CAUSE_GATE_NOTE,
   "Check - Haiku": [
     "Cheap cross-family checker, used only when Gemini is capped or down:",
     "1. First-pass review of DeepSeek work.",
     "2. Fallback for Pre-check - Flash on DeepSeek-written reports.",
     "",
     "Read-only. Output PASS or FAIL with file:line evidence. On FAIL or doubt, the lead escalates to Review - Sonnet. Never a Tier A gate. Never checks Claude-written work.",
+    CAUSE_GATE_NOTE,
   ].join("\n"),
   "Pre-check - Flash": [
     "Checks a worker's report before the lead reads it. Read-only. In the worker's worktree, check that:",
@@ -142,7 +147,8 @@ const NOTE_BODIES = {
     "4. Test counts are present with 0 failures and meet any floor the repo defines.",
     "5. Every stop condition the worker hit was reported, not worked around.",
     "",
-    "Output exactly PASS or FAIL, one evidence line per check, then ≤5 summary lines. Don't judge design. If Gemini is down: Check - Haiku for DeepSeek reports, Mechanical - DSF (read-only brief) otherwise.",
+    "Output exactly PASS or FAIL, one evidence line per check, then ≤5 summary lines. Apply the cause-vs-symptom gate below; otherwise don't judge design. If Gemini is down: Check - Haiku for DeepSeek reports, Mechanical - DSF (read-only brief) otherwise.",
+    CAUSE_GATE_NOTE,
   ].join("\n"),
   "Scout - Flash":
     'Answers one lookup question for a lead ("where is X used", "what does Y return"). Reply in ≤20 lines: the answer first, then file:line citations. No opinions or fixes. Read-only. If it isn\'t in the code, say NOT FOUND and list where you looked. One question per session. If Gemini is down, the lead uses Audit - DSF.',
