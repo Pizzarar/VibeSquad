@@ -370,7 +370,11 @@ describe("S4-6: the R2 body-key allowlist is enforced in code", () => {
       return out;
     };
     for (const [path, pol] of Object.entries(rules.REMOTE_BODY_POLICY)) {
-      for (const k of keys(pol.fields)) assert.ok(!rules.REMOTE_FORBIDDEN_BODY_KEYS.includes(k), `${path} allows ${k}`);
+      // N2 fs mutations carry `cwd` on purpose: server/file-search.mjs confineReq() realpaths it against the known team/agent roots
+      // (same model as REMOTE_TERMINAL_POLICY / REMOTE_GIT_POLICY). The exemption is explicit per route via allowKeys and limited to cwd.
+      const allowed = pol.allowKeys ?? [];
+      assert.ok(allowed.every((k) => k === "cwd"), `${path} allowKeys beyond cwd: ${allowed}`);
+      for (const k of keys(pol.fields)) assert.ok(allowed.includes(k) || !rules.REMOTE_FORBIDDEN_BODY_KEYS.includes(k), `${path} allows ${k}`);
     }
   });
 
