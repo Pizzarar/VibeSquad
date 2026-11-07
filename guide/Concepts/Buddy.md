@@ -5,7 +5,7 @@ A Buddy is the agent you talk to first. It is a normal chat with an AI agent, ke
 What a Buddy does:
 
 - Listens to what you want and asks short questions.
-- Explains, in plain English, how similar programs work.
+- Helps you think through how one works in plain English.
 - Parks side ideas so they do not get lost.
 - Ends the talk with a [plain plan](Plain-Plan.md).
 

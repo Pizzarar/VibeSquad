@@ -49,8 +49,8 @@ Starting from an empty folder is a different job from changing an existing proje
 > **Aub:**
 >
 > 1. **Brain dump.** I dump everything into one chat in a stream of consciousness: features, style, pitfalls, whatever I can think of. The goal is to get as much of what I'm building into plain English as possible.
-> 2. **Look up what already exists.** A web-search agent explains, in plain English, the ideas and existing things I'm drawing from. For example: "Describe the post-apocalyptic worlds of Escape from Tarkov and the STALKER series: the colors, the world-building, common structures, the nature. Everything."
-> 3. **Set up the lanes.** I give the Buddy what I want plus what already exists, and it sets up the lanes. Then I talk through each lane and how it connects to the others.
+> 2. **Think through how one works in plain language.** I walk through how I picture it working, and the Buddy fills in the pieces, mood, and rules. For example: "I picture a small town that changes as you play: shops open and close, and the people remember what you did. Walk me through the parts of how that works."
+> 3. **Set up the lanes.** I give the Buddy what I want plus the pieces we worked out, and it sets up the lanes. Then I talk through each lane and how it connects to the others.
 
 ## Next
 
