@@ -3943,7 +3943,11 @@ html, body, #root { overflow-x: hidden; }
 .usage-review-run:hover:not(:disabled) { border-color: var(--mint-t); color: var(--mint-t); }
 .usage-review-run:disabled { opacity: 0.6; cursor: default; }
 .usage-review-status { color: var(--violet-t); }
-.usage-review-error { color: var(--pink-t); }
+.usage-review-error {
+  color: var(--pink-t);
+  border: 1px solid var(--pink-t);
+  padding: var(--sp-2, 8px);
+}
 .usage-review-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildProfiles, buildRows, dur, etaText, foldRoles, pctText, relTime, reviewBullets, sortProfiles, sortRows, splitBullets, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, workIdlePct } from "../src/usageHelpers.ts";
+import { buildProfiles, buildRows, dur, etaText, foldRoles, pctText, relTime, reviewBullets, sortProfiles, sortRows, splitBullets, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workIdlePct } from "../src/usageHelpers.ts";
 
 const st = (turns, costUsd, i, o) => ({ turns, costUsd, inputTokens: i, outputTokens: o, avgTokensPerTurn: turns ? Math.round((i + o) / turns) : 0 });
 
@@ -193,4 +193,15 @@ test("USAGE_REVIEW_INTERVALS / LABELS: the 7 options in select order", () => {
   assert.equal(USAGE_REVIEW_LABELS.off, "Off");
   assert.equal(USAGE_REVIEW_LABELS["6h"], "6h");
   assert.equal(USAGE_REVIEW_LABELS["2w"], "2w");
+});
+
+test("withUsageReview: merges review onto data, keeps other fields, no-op when absent", () => {
+  const d = { limits: [], lanes: [], byRole: [], loops: { threshold: 40, flagged: [] } };
+  const review = { interval: "6h", inFlight: true, last: null, nextAt: null, waitingForTurns: false, history: [] };
+  const out = withUsageReview(d, review);
+  assert.equal(out.usageReview, review);
+  assert.equal(out.loops, d.loops);
+  assert.equal(out.limits, d.limits);
+  assert.equal(withUsageReview(d, null), d);
+  assert.equal(withUsageReview(d, undefined), d);
 });

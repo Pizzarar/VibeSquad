@@ -299,3 +299,9 @@ export function reviewBullets(result: ReviewResult | null | undefined): string[]
   if (!result.ok) return [result.error ? `error: ${result.error}` : "error: review failed"];
   return splitBullets(result.text);
 }
+
+/** Optimistically apply a fresh usageReview payload onto an existing usage snapshot (after a POST). */
+export function withUsageReview(data: UsageData, review: UsageReview | null | undefined): UsageData {
+  if (!review) return data;
+  return { ...data, usageReview: review };
+}
