@@ -64,6 +64,12 @@ export function parkGraceFromEnv(env = process.env) {
   const n = Number(env.VS_RUNNER_PARK_GRACE_MS);
   return Number.isInteger(n) && n >= 0 ? n : DEFAULT_PARK_GRACE_MS;
 }
+// An archived agent that is mid-turn gets a cancel; if it has not stopped by then it is killed (session kept).
+export const DEFAULT_ARCHIVE_KILL_MS = 10_000;
+export function archiveKillFromEnv(env = process.env) {
+  const n = Number(env.VS_RUNNER_ARCHIVE_KILL_MS);
+  return Number.isInteger(n) && n >= 0 ? n : DEFAULT_ARCHIVE_KILL_MS;
+}
 export function providerFamily(provider) {
   const p = PROVIDER_ALIASES[provider] ?? provider;
   if (p === 'claude') return 'claude';
@@ -75,7 +81,7 @@ export function providerFamily(provider) {
 export class Runner {
   // limitsFile: where limit-window records go (default: limits.jsonl next to the agents dir, i.e. the runner home).
   // pollAgy: after antigravity-cli turns, poll `agy -p /usage` (ACP carries no quota); only the real server turns it on.
-  constructor({ dir, adapters = defaultAdapters(), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage }) {
+  constructor({ dir, adapters = defaultAdapters(), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage }) {
     this.store = new LogStore(dir);
     this.folds = new Map(); // id -> log-derived status (no liveness), valid while the log file's size + mtime are unchanged
     this.limits = new LimitStore(limitsFile);
@@ -84,6 +90,7 @@ export class Runner {
     this.maxLive = maxLive;
     this.turnCaps = { ...DEFAULT_TURN_CAPS, ...turnCaps };
     this.parkGraceMs = parkGraceMs;
+    this.archiveKillMs = archiveKillMs;
     this.queue = []; // FIFO of jobs waiting for a turn slot or a live-process slot: { id, family, needsTurn, run, ahead }
     this.live = new Map(); // id -> { handle, status, ... } for agents running in THIS process only
   }
@@ -133,7 +140,7 @@ export class Runner {
       else if (type === 'turn_done' && (PROVIDER_ALIASES[provider] ?? provider) === 'antigravity-cli') this._pollAgy?.(id);
       this.store.append(id, type === 'status' ? 'status' : type, data);
       if (turnEnded) { // after the idle is logged, so a queued follow-up for this same agent logs its running after it
-        if (entry.archiveWhenIdle && this._parkable(entry)) this.park(id); // archived mid-turn: park now, keeping the session
+        if (entry.archiveWhenIdle) this._stopKeepingSession(id, entry); // archived mid-turn: stop now (any prompts still queued in the child are moot)
         else this._scheduleParkAfterTurn(id, entry);
         this._pump(); // a turn slot just freed
       }
@@ -291,6 +298,21 @@ export class Runner {
     entry.handle.kill();
   }
 
+  // Ends an agent's process for good measure but leaves it resumable: with a session it is logged as parked (so unarchive + send
+  // resumes it) even when mid-turn or still starting; without one the kill logs a plain exit. Frees its live and turn slots.
+  _stopKeepingSession(id, entry) {
+    clearTimeout(entry.parkTimer);
+    clearTimeout(entry.archiveTimer);
+    if (!entry.handle || this.live.get(id) !== entry) return;
+    if (entry.sessionId && this.adapters[entry.provider]?.canPark) {
+      entry.parked = true;
+      this.store.append(id, 'parked', { sessionId: entry.sessionId, systemPrompt: entry.systemPrompt ?? null });
+      this.store.append(id, 'status', { status: 'parked' });
+      this.live.delete(id);
+      entry.handle.kill();
+    } else entry.handle.kill(); // onExit logs the exit and frees the slot
+  }
+
   // Resume spec for a parked agent, read from its log so it survives a runner restart. Null if not parked.
   _parkedSpec(id) {
     if (!this.store.exists(id)) return null;
@@ -403,11 +425,13 @@ export class Runner {
     this._announceQueue();
     const e = this.live.get(id);
     if (e?.handle) {
-      if (this._parkable(e)) this.park(id);
-      else if (e.sessionId && this.adapters[e.provider]?.canPark) {
+      if (e.inflight === 0) this._stopKeepingSession(id, e); // idle or starting, no turn open: nothing to wait for
+      else {
         e.archiveWhenIdle = true;
         try { this.cancel(id); } catch { /* already ending */ }
-      } else this.kill(id);
+        e.archiveTimer = setTimeout(() => { if (this.live.get(id) === e) this._stopKeepingSession(id, e); this._pump(); }, this.archiveKillMs); // hung or ignoring cancel
+        e.archiveTimer.unref?.();
+      }
     }
     this.store.append(id, 'archive', {});
     this._pump();
@@ -477,7 +501,7 @@ export class Runner {
   shutdown() {
     this._pollAgy?.shutdown();
     this.queue.length = 0;
-    for (const e of this.live.values()) clearTimeout(e.parkTimer);
+    for (const e of this.live.values()) { clearTimeout(e.parkTimer); clearTimeout(e.archiveTimer); }
     for (const id of [...this.live.keys()]) {
       try { this.store.append(id, 'exit', { code: null, reason: 'runner-shutdown' }); } catch { /* best effort */ }
       this.kill(id);

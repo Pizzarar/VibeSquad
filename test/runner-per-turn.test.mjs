@@ -298,3 +298,52 @@ test('review: archiving a running agent cancels it and parks it when the turn en
   assert.ok(runner._parkedSpec(a), 'revivable');
   runner.shutdown();
 });
+
+test('archive (a): a hung child that ignores cancel is killed after the timeout, session kept, slots freed', async () => {
+  const { runner, spawnImpl } = setup({ turnCaps: { claude: 1 }, archiveKillMs: 40 });
+  const a = mk(runner, { prompt: 'hang' });
+  await tick();
+  const q = mk(runner, { prompt: 'waiting' });
+  assert.equal(runner.queuePosition(q).queued, true);
+  runner.archive(a); // the fake never answers the interrupt
+  assert.equal(runner.live.has(a), true);
+  await tick(120);
+  assert.equal(runner.live.has(a), false);
+  assert.equal(spawnImpl.calls[0].child.killed, true);
+  assert.ok(runner.timeline(a).some((e) => e.type === 'parked' && e.sessionId === 'sess-1'));
+  assert.ok(!runner.timeline(a).some((e) => e.type === 'exit'), 'no permanent exit');
+  assert.equal(runner.queuePosition(q).queued, false, 'turn slot freed: the queued agent started');
+  runner.unarchive(a);
+  assert.ok(runner._parkedSpec(a));
+  finishAll(spawnImpl);
+  runner.shutdown();
+});
+
+test('archive (b): an agent with no turn open (cancel is a no-op) is stopped at once, session kept', async () => {
+  const { runner, spawnImpl } = setup({ parkGraceMs: 60_000 });
+  const a = mk(runner); // no prompt: idle, never had a turn
+  await tick();
+  runner.archive(a);
+  assert.equal(runner.live.has(a), false);
+  assert.equal(spawnImpl.calls[0].child.killed, true);
+  assert.ok(runner.timeline(a).some((e) => e.type === 'parked' && e.sessionId === 'sess-1'));
+  const b = mk(runner); // still starting: no session yet, so a plain exit
+  runner.archive(b);
+  assert.equal(runner.live.has(b), false);
+  runner.shutdown();
+});
+
+test('archive (c): with 2 prompts queued in the child, the first turn ending stops it (the second never runs)', async () => {
+  const { runner, spawnImpl } = setup({ parkGraceMs: 60_000, archiveKillMs: 60_000 });
+  const a = mk(runner, { prompt: 'one' });
+  await tick();
+  runner.send(a, 'two');
+  assert.equal(runner.live.get(a).inflight, 2);
+  runner.archive(a);
+  spawnImpl.calls[0].child.finish(); // interrupted turn 1 ends; inflight 2 -> 1
+  await tick();
+  assert.equal(runner.live.has(a), false, 'stopped despite inflight > 0');
+  assert.equal(running(runner), 0);
+  assert.ok(runner.timeline(a).some((e) => e.type === 'parked'));
+  runner.shutdown();
+});
