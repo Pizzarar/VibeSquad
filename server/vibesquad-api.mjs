@@ -1,6 +1,6 @@
 import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { handleRunnerApi } from "./runner-api.mjs";
-import { unstick } from "./unstick.mjs";
+import { forceRestartRunner, unstick } from "./unstick.mjs";
 import { resetPaseoProbe } from "./backend/lane-routing.mjs";
 import { handleSchedulesApi } from "./schedules.mjs";
 import { sharedRunnerBackend, isRunnerId, listRunnerAgentsSync, readRunnerAgentSync } from "./backend/index.mjs";
@@ -1739,6 +1739,9 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
       case "/__vibesquad/unstick": // owner-only: POST is gated above (isOwner for every non-GET)
         if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "method not allowed" });
         return readBody(req).then((body) => unstick({ confirmRestart: body?.confirmRestart === true })).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
+      case "/__vibesquad/restart-runner": // owner-only (same guard as Unstick): park live turns cleanly, then restart the runner
+        if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "method not allowed" });
+        return forceRestartRunner().then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
       case "/__vibesquad/brainstorm-restart":
         return handleBrainstormRestart(req, res, rootDir);
       case "/__vibesquad/lead-handoff":

@@ -4,8 +4,8 @@
 // Every request needs `Authorization: Bearer <token>`; the token lives in <home>/token (mode 0600).
 // Discovery for VS: <home>/runner.json = { port, pid, startedAt }.
 import http from 'node:http';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { chmodSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,6 +19,48 @@ export const MAX_INPUT_BYTES = 24 * 1024 * 1024; // /input carries base64 image 
 const SSE_SKIP = new Set(['stderr', 'raw']); // noisy, never rendered
 const SSE_HEARTBEAT_MS = 15000;
 
+/**
+ * Content hash of a runner's own *.mjs files, recursive (adapters/ etc.), one process = one set. The supervisor hashes
+ * the runtime runner/ dir on disk the same way and compares against the hash the live runner reports on /health, so a
+ * build → sync-runtime that changed runner code is detected and the runner auto-restarts (RR1).
+ * Cached by (relative path, size, mtimeMs): a tick that rehashes unchanged files only stats them, never re-reads them.
+ */
+const runnerHashCache = new Map(); // dir -> { key, hash }
+export function hashRunnerFiles(dir = path.dirname(fileURLToPath(import.meta.url))) {
+  const files = [];
+  const walk = (d, rel) => {
+    let entries;
+    try { entries = readdirSync(d, { withFileTypes: true }); } catch { return; } // dir missing: empty digest
+    for (const ent of entries) {
+      if (ent.isSymbolicLink()) continue; // never follow links (node_modules, junctions)
+      const p = path.join(d, ent.name);
+      const r = rel ? `${rel}/${ent.name}` : ent.name;
+      if (ent.isDirectory()) walk(p, r);
+      else if (ent.name.endsWith('.mjs')) {
+        try {
+          const st = statSync(p);
+          files.push({ r, size: st.size, mtimeMs: st.mtimeMs });
+        } catch { /* vanished mid-walk */ }
+      }
+    }
+  };
+  walk(dir, '');
+  files.sort((a, b) => (a.r < b.r ? -1 : 1));
+  const key = files.map((f) => `${f.r}\u0000${f.size}\u0000${f.mtimeMs}`).join('\n');
+  const hit = runnerHashCache.get(dir);
+  if (hit && hit.key === key) return hit.hash;
+  const h = createHash('sha256');
+  for (const f of files) {
+    h.update(f.r);
+    h.update('\0');
+    try { h.update(readFileSync(path.join(dir, f.r))); } catch { /* file vanished mid-read */ }
+    h.update('\0');
+  }
+  const hash = h.digest('hex');
+  runnerHashCache.set(dir, { key, hash });
+  return hash;
+}
+
 export function tokenMatches(header, token) {
   const m = /^Bearer (.+)$/.exec(String(header ?? ''));
   if (!m || !token) return false;
@@ -27,7 +69,7 @@ export function tokenMatches(header, token) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, maxInputBytes = MAX_INPUT_BYTES, heartbeatMs = SSE_HEARTBEAT_MS } = {}) {
+export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, maxInputBytes = MAX_INPUT_BYTES, heartbeatMs = SSE_HEARTBEAT_MS, hash = hashRunnerFiles() } = {}) {
   const json = (res, code, body) => {
     res.writeHead(code, { 'content-type': 'application/json' });
     res.end(JSON.stringify(body));
@@ -60,7 +102,11 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
       if (declared > (isInput ? maxInputBytes : maxBodyBytes)) { res.setHeader('connection', 'close'); return json(res, 413, { error: 'request body too large' }); }
       const url = new URL(req.url, 'http://x');
       const parts = url.pathname.split('/').filter(Boolean); // agents, :id, action
-      if (req.method === 'GET' && parts[0] === 'health') return json(res, 200, { ok: true, live: runner.live.size, pid: process.pid });
+      if (req.method === 'GET' && parts[0] === 'health') {
+        let running = 0;
+        for (const e of runner.live.values()) if (e.inflight > 0) running += 1;
+        return json(res, 200, { ok: true, live: runner.live.size, running, pid: process.pid, hash });
+      }
       if (req.method === 'GET' && parts[0] === 'events' && parts.length === 1) {
         // SSE tail of every log append. Cleaned up on client disconnect; nothing buffers per client.
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });

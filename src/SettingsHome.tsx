@@ -362,6 +362,51 @@ function UnstickButton() {
   );
 }
 
+type RestartRunnerResult = { ok: boolean; cancelled?: string[]; restarted?: boolean; error?: string };
+
+function RestartRunnerButton() {
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [res, setRes] = useState<RestartRunnerResult | null>(null);
+  const run = async () => {
+    setBusy(true);
+    setConfirming(false);
+    try {
+      const r = await fetch("/__vibesquad/restart-runner", { method: "POST" });
+      setRes((await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }))) as RestartRunnerResult);
+    } catch (e) {
+      setRes({ ok: false, error: String((e as Error)?.message ?? e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div data-setting-id="restart-runner" data-testid="settings-restart-runner">
+      <p className="muted small">Runner fixes not going live? Restarts the runner so the latest runner code loads.</p>
+      {confirming ? (
+        <div data-testid="settings-restart-runner-confirm">
+          <p className="muted small">Restart runner? Running turns are cancelled; agents resume on next message.</p>
+          <button className="btn small" disabled={busy} onClick={() => void run()}>Restart now</button>{" "}
+          <button className="btn ghost small" disabled={busy} onClick={() => setConfirming(false)}>Cancel</button>
+        </div>
+      ) : (
+        <button className="btn ghost small" disabled={busy} onClick={() => setConfirming(true)}>
+          {busy ? "Restarting…" : "Restart runner"}
+        </button>
+      )}
+      {res && (
+        <div className="muted small" data-testid="settings-restart-runner-result">
+          {res.ok ? (
+            <>Runner restarted{res.cancelled?.length ? ` · cancelled ${res.cancelled.length}` : ""}</>
+          ) : (
+            <>Failed: {res.error}</>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function About(props: { onDiagnostics: () => void; onLicenses: () => void; onChecklist: () => void; onClose: () => void }) {
   const updaterStatus = useUpdaterStatus();
   const [upd, setUpd] = useState<UpdateCheck["state"]>("idle");
@@ -374,6 +419,7 @@ function About(props: { onDiagnostics: () => void; onLicenses: () => void; onChe
         <TeamSettingsModal embedded parts={["update"]} onClose={props.onClose} />
       </div>
       {!isRemote() && <UnstickButton />}
+      {!isRemote() && <RestartRunnerButton />}
       <p style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button
           className="btn ghost small"

@@ -12,7 +12,7 @@ import { pidAlive, readLock } from "../runner/lock.mjs";
 import { readDiscovery, runnerHome } from "./backend/runner-client.mjs";
 import { sharedRunnerBackend } from "./backend/index.mjs";
 import { killTree } from "./proc-tree.mjs";
-import { restartRunner as ownerRestart } from "./runner-supervisor.mjs";
+import { oncePerOwner, restartRunner as ownerRestart, restartRunnerNow } from "./runner-supervisor.mjs";
 
 const NODE_IMAGE = /^node(\.exe)?$/i;
 // Command lines that are VS infrastructure or tools an agent depends on, never strays.
@@ -156,31 +156,69 @@ export async function unstick({
   } else if (!wasHealthy) {
     let forced = false;
     let dead = true;
-    if (hung) {
-      // Kill the runner tree only if the pid still looks like the runner (pids get reused), then clear what blocks a fresh start.
-      const rp = procs.find((p) => p.pid === runnerPid);
-      if (rp && RUNNER_CMD.test(rp.cmd ?? "")) {
-        try { killPid(runnerPid); killed.push({ pid: runnerPid, cmd: String(rp.cmd).slice(0, 200) }); } catch { /* gone */ }
-        dead = await waitDead(runnerPid, alive, deadTimeoutMs);
-      } else {
-        dead = !alive(runnerPid) ? true : false;
-        if (!dead) note = "runner pid no longer looks like the runner; left alone";
+    // Route the whole kill -> wait -> clear -> restart through the same single-flight as the supervisor's restartRunnerNow,
+    // so a concurrent forced/hash restart can never spawn a duplicate runner.
+    await oncePerOwner(be, async () => {
+      if (hung) {
+        // Kill the runner tree only if the pid still looks like the runner (pids get reused), then clear what blocks a fresh start.
+        const rp = procs.find((p) => p.pid === runnerPid);
+        if (rp && RUNNER_CMD.test(rp.cmd ?? "")) {
+          try { killPid(runnerPid); killed.push({ pid: runnerPid, cmd: String(rp.cmd).slice(0, 200) }); } catch { /* gone */ }
+          dead = await waitDead(runnerPid, alive, deadTimeoutMs);
+        } else {
+          dead = !alive(runnerPid) ? true : false;
+          if (!dead) note = "runner pid no longer looks like the runner; left alone";
+        }
+        if (!dead) note ??= "runner process did not exit";
+        // superviseRunner may have started a new runner during the health check: delete lock/discovery only if they still name the pid we killed.
+        if (dead) {
+          if (readLock(join(rHome, "runner.lock"))?.pid === runnerPid) rmSync(join(rHome, "runner.lock"), { force: true });
+          if (readDiscovery(rHome)?.pid === runnerPid) rmSync(join(rHome, "runner.json"), { force: true });
+          forced = true;
+        }
       }
-      if (!dead) note ??= "runner process did not exit";
-      // superviseRunner may have started a new runner during the health check: delete lock/discovery only if they still name the pid we killed.
       if (dead) {
-        if (readLock(join(rHome, "runner.lock"))?.pid === runnerPid) rmSync(join(rHome, "runner.lock"), { force: true });
-        if (readDiscovery(rHome)?.pid === runnerPid) rmSync(join(rHome, "runner.json"), { force: true });
-        forced = true;
+        // A fresh owner-confirmed restart must not no-op on the failure cooldown or join a doomed in-flight start: force it.
+        await Promise.resolve(restart({ force: forced })).catch(() => false);
       }
-    }
-    if (dead) {
-      // A fresh owner-confirmed restart must not no-op on the failure cooldown or join a doomed in-flight start: force it.
-      await Promise.resolve(restart({ force: forced })).catch(() => false);
-    }
+    }).catch(() => {});
     healthyNow = await check();
     restarted = dead && healthyNow;
     if (!restarted && !note) note = "runner did not come back healthy";
   }
   return { ok: true, killed, snapshot, runner: { healthy: healthyNow, wasHealthy, hung, needsRestart, restarted, pid: runnerPid ?? null, ...(note ? { note } : {}) } };
+}
+
+/**
+ * Owner-confirmed "Restart runner" (Unstick's new action): cancel every running turn cleanly (cancelAgent keeps the session,
+ * the agent stays unarchived), then kill the runner tree and start a fresh one. Unlike `unstick`, this restarts a HEALTHY
+ * runner — the exact gap that left runner code changes not live after build + sync. Cancelled agents come back parked/lost
+ * and resume on their next send through the existing park/resume path. Never archives anything.
+ * Everything environmental is injectable for tests: `listAgents`, `cancelAgent`, `restartRunner`.
+ */
+export async function forceRestartRunner({
+  backend,
+  listAgents,
+  cancelAgent,
+  restartRunner = (be) => restartRunnerNow(be),
+} = {}) {
+  const be = backend ?? sharedRunnerBackend();
+  let agents = [];
+  try {
+    agents = await (listAgents ?? (() => be.listAgents()))();
+  } catch {
+    // Runner down or unreachable: nothing to cancel; restartRunnerNow still starts a fresh runner.
+  }
+  const cancelled = [];
+  for (const a of agents ?? []) {
+    if (!a || a.archivedAt || a.status !== "running") continue; // only stop turns that are actually running
+    try {
+      await (cancelAgent ?? ((id) => be.cancelAgent(id)))(a.id);
+      cancelled.push(a.id);
+    } catch {
+      // Already finished mid-loop: nothing to cancel.
+    }
+  }
+  await restartRunner(be);
+  return { ok: true, cancelled, restarted: true };
 }

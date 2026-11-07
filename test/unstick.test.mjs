@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { computeKillSet, listProcesses, unstick } from '../server/unstick.mjs';
+import { computeKillSet, forceRestartRunner, listProcesses, unstick } from '../server/unstick.mjs';
+import { restartRunnerNow } from '../server/runner-supervisor.mjs';
 
 const P = (pid, ppid, cmd, name = 'node.exe') => ({ pid, ppid, name, cmd, startedMs: 1 });
 const procs = [
@@ -181,4 +183,95 @@ test('RunnerBackend.startOwned({force}) bypasses the failure cooldown and a doom
   b.ensuring = new Promise(() => {}); // never settles
   assert.equal(await b.startOwned({ force: true }), true);
   assert.equal(calls, 2);
+});
+
+test('forceRestartRunner cancels only running turns and never archives', async () => {
+  const cancelled = [];
+  const archived = [];
+  let restarted = 0;
+  const backend = {
+    listAgents: async () => [
+      { id: 'rn-run', status: 'running', archivedAt: null },
+      { id: 'rn-idle', status: 'idle', archivedAt: null },
+      { id: 'rn-closed', status: 'closed', archivedAt: null },
+      { id: 'rn-archived', status: 'running', archivedAt: '2026-11-07T00:00:00Z' },
+    ],
+    cancelAgent: async (id) => cancelled.push(id),
+    archiveAgent: async (id) => archived.push(id),
+  };
+  const r = await forceRestartRunner({ backend, restartRunner: async () => { restarted++; return true; } });
+  assert.deepEqual(cancelled, ['rn-run']); // running + not archived only
+  assert.deepEqual(archived, []);          // never archives anything
+  assert.equal(restarted, 1);
+  assert.equal(r.ok, true);
+  assert.equal(r.restarted, true);
+  assert.deepEqual(r.cancelled, ['rn-run']);
+});
+
+test('forceRestartRunner still restarts when the agent list is unreachable (runner down)', async () => {
+  let restarted = 0;
+  const r = await forceRestartRunner({
+    listAgents: async () => { throw new Error('runner down'); },
+    restartRunner: async () => { restarted++; return true; },
+  });
+  assert.equal(restarted, 1);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.cancelled, []);
+});
+
+test('restart-runner route is owner-only: POST without the local token is 403', async () => {
+  const { createVibesquadMiddleware } = await import('../server/vibesquad-api.mjs');
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'vs-restart-route-'));
+  const prev = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = path.join(dir, '.vibesquad');
+  const repo = path.join(dir, 'repo');
+  mkdirSync(repo, { recursive: true });
+  const mw = createVibesquadMiddleware(repo);
+  const server = http.createServer((req, res) => mw(req, res, () => { res.statusCode = 404; res.end(); }));
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    const port = server.address().port;
+    const noToken = await fetch(`http://127.0.0.1:${port}/__vibesquad/restart-runner`, { method: 'POST' });
+    assert.equal(noToken.status, 403);
+  } finally {
+    await new Promise((r) => server.close(r));
+    prev === undefined ? delete process.env.VIBESQUAD_HOME : (process.env.VIBESQUAD_HOME = prev);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('unstick({confirmRestart:true}) concurrent with restartRunnerNow: one kill + one startOwned', async () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), 'vs-unstick-conc-'));
+  const rHome = path.join(home, 'runner');
+  mkdirSync(rHome, { recursive: true });
+  writeFileSync(path.join(rHome, 'runner.json'), JSON.stringify({ port: 1, pid: 200 }));
+  writeFileSync(path.join(rHome, 'token'), 't');
+  writeFileSync(path.join(rHome, 'runner.lock'), JSON.stringify({ pid: 200 }));
+  const kills = [];
+  const starts = [];
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const backend = {
+    rc: { home: rHome, healthy: async () => false },
+    startOwned: async () => { starts.push('start'); await gate; return true; },
+  };
+  const alive = (pid) => !kills.includes(pid);
+  const procs = [P(100, 1, 'node server/serve.mjs'), P(200, 1, String.raw`node C:\x\runner\server.mjs --home x`)];
+  try {
+    const p1 = restartRunnerNow(backend, { kill: (pid) => kills.push(pid), alive, waitMs: 0 });
+    const p2 = unstick({
+      home, selfPid: 100, list: () => procs,
+      killPid: (pid) => kills.push(pid), alive,
+      runnerHealthy: () => false, confirmRestart: true,
+      healthTimeoutMs: 50, deadTimeoutMs: 50, backend,
+    });
+    // Let both reach the single-flight (restartRunnerNow is in-flight on the gate) before releasing the start.
+    await new Promise((r) => setTimeout(r, 30));
+    release();
+    await Promise.all([p1, p2]);
+    assert.equal(kills.length, 1, `exactly one kill, got ${JSON.stringify(kills)}`);
+    assert.equal(starts.length, 1, `exactly one startOwned, got ${starts.length}`);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });
