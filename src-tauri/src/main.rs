@@ -206,6 +206,12 @@ pub fn load_config() -> DesktopConfig {
                                 cfg.server_mode = "remote".to_string();
                             }
                         }
+                        // P3 relay cut: a config left in the legacy "relay" mode (or any other unknown
+                        // mode) is no longer recognised, so the desktop would neither proxy nor start a
+                        // server. Migrate it to the native local default and persist it.
+                        if migrate_legacy_server_mode(&mut cfg) {
+                            let _ = save_config(&cfg);
+                        }
                         set_config_warning(None);
                         if had_bom {
                             let _ = save_config(&cfg);
@@ -241,6 +247,19 @@ pub fn load_config() -> DesktopConfig {
     let cfg = DesktopConfig::default();
     let _ = save_config(&cfg);
     cfg
+}
+
+/// P3 relay cut: the legacy `"relay"` mode (and any other unknown non-empty mode) is no longer
+/// recognised, so the desktop would neither proxy nor start a server. Maps it to the native local
+/// default (with the default loopback host) and returns true so the caller persists the migration.
+pub fn migrate_legacy_server_mode(cfg: &mut DesktopConfig) -> bool {
+    if !cfg.server_mode.trim().is_empty() && cfg.server_mode != "local" && cfg.server_mode != "remote" {
+        cfg.server_mode = "local".to_string();
+        cfg.server_host = default_server_host();
+        true
+    } else {
+        false
+    }
 }
 
 pub fn is_lan_host(host: &str) -> bool {
@@ -3314,6 +3333,34 @@ mod tests {
         assert_eq!(fs::read(&cfg_path).unwrap(), corrupt);
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn migrate_legacy_server_mode_maps_relay_and_unknown_to_local() {
+        let mut cfg = DesktopConfig::default();
+        cfg.server_mode = "relay".to_string();
+        cfg.server_host = "127.0.0.1:4180".to_string();
+        assert!(migrate_legacy_server_mode(&mut cfg));
+        assert_eq!(cfg.server_mode, "local");
+        assert_eq!(cfg.server_host, default_server_host());
+
+        let mut cfg = DesktopConfig::default();
+        cfg.server_mode = "something-else".to_string();
+        assert!(migrate_legacy_server_mode(&mut cfg));
+        assert_eq!(cfg.server_mode, "local");
+        assert_eq!(cfg.server_host, default_server_host());
+
+        let mut cfg = DesktopConfig::default();
+        cfg.server_mode = "local".to_string();
+        assert!(!migrate_legacy_server_mode(&mut cfg));
+
+        let mut cfg = DesktopConfig::default();
+        cfg.server_mode = "remote".to_string();
+        assert!(!migrate_legacy_server_mode(&mut cfg));
+
+        let mut cfg = DesktopConfig::default();
+        cfg.server_mode = String::new();
+        assert!(!migrate_legacy_server_mode(&mut cfg));
     }
 
     #[test]
