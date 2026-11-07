@@ -1,5 +1,5 @@
 // Hand-drawn cast: public/cast.png is a 256x640 sheet of 64x64 cells (shown at 32 CSS px, half scale). One row per role,
-// four variant columns. Built from the Hypnospace busts by scripts/build-cast-hypno.mjs (roles without a bust reuse the nearest). The agent id picks the column so an agent always gets the same sprite.
+// four variant columns. Built from the Hypnospace busts by scripts/build-cast-hypno.mjs (each role has its own bust). The agent id picks the column so an agent always gets the same sprite.
 
 import type { AgentType } from "./teams";
 

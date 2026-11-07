@@ -1,6 +1,6 @@
 // Assemble public/cast.png (256x640, 64x64 cells, row = role in CAST_ROWS order, col = variant 0-3) from the H0 Hypnospace
-// busts: art/cast/hypno/<role>-bust.aseprite, exported with the Aseprite CLI. Roles without a bust borrow the nearest drawn one;
-// drop a new <role>-bust.aseprite in art/cast/hypno/ and it is picked up on the next run (no code change).
+// busts: art/cast/hypno/<role>-bust.aseprite, exported with the Aseprite CLI. Every role now has its own bust; drop a new
+// <role>-bust.aseprite in art/cast/hypno/ and it is picked up on the next run (no code change).
 // Usage: node scripts/build-cast-hypno.mjs [--aseprite <exe>]
 // Variants: no per-variant drawings exist, so every column repeats the bust (one look per role).
 import { execFileSync } from "node:child_process";
@@ -15,9 +15,9 @@ const exe = args.includes("--aseprite") ? args[args.indexOf("--aseprite") + 1] :
 
 const CELL = 64, VARIANTS = 4;
 const ROLES = ["lead", "retired-lead", "brainstorm", "implement", "mechanical", "review", "audit", "spec", "art", "unknown"]; // = CAST_ROWS
-// Aseprite file name per role (the brainstorm Buddy is drawn as "buddy"), and the one place the fallbacks live.
+// Aseprite file name per role (the brainstorm Buddy is drawn as "buddy"). Every role now has its own bust, so no fallbacks.
 const FILE = { brainstorm: "buddy" };
-const FALLBACK = { "retired-lead": "lead", mechanical: "implement", audit: "review", spec: "review", art: "implement", unknown: "brainstorm" };
+const FALLBACK = {};
 
 function decode(buf) {
   let p = 8, W = 0, H = 0, ct = 0;
