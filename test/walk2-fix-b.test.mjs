@@ -10,7 +10,7 @@ test("FilesPanel handles images, binary, oversize and not-found", () => {
   assert.match(s, /files-image-view/);
   assert.match(s, /Binary file, \$\{kb\} KB, not shown/);
   assert.match(s, /MAX_TEXT_BYTES/);
-  assert.match(s, /!notFound && !notice && !imgUrl/); // Edit hidden for non-text
+  assert.match(s, /!notFound && !readErr && !notice && !imgUrl/); // Edit hidden for non-text (readErr added with the VS-server Files read, 0ba9d18)
 });
 
 test("terminal tabs are one-line with ellipsis and a title", () => {
@@ -36,7 +36,7 @@ test("App restores focus to modal opener", () => {
 
 test("round 2: Files short-circuits big/binary before readFile, caps images, svg via data:, notFound only in catch", () => {
   const s = src("FilesPanel.tsx");
-  assert.ok(s.indexOf("known > cap") < s.indexOf("daemonClient.readFile(cwd, path, undefined, cap + 1)"));
+  assert.ok(s.indexOf("known > cap") < s.indexOf("vsReadFile(cwd, path, cap)"));
   assert.match(s, /MAX_IMG_BYTES/);
   assert.match(s, /data:image\/svg\+xml;base64/);
   assert.doesNotMatch(s, /Could not read file/);

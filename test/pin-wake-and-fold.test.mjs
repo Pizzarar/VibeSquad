@@ -367,13 +367,13 @@ test("(6) vs pin merge adds fromLane.id + code to intoLane.aliases and sets from
   }
 });
 
-test("(7) teams.json (and ~/.vibesquad/teams.json if present) has valid JSON (no BOM), folded aliases, and standing flags", () => {
-  // Both files are gitignored per-machine config: check whichever exist (a fresh worktree has neither).
+test("(7) repo teams.json (if present) has valid JSON (no BOM), folded aliases, and standing flags", () => {
+  // The repo-root teams.json is gitignored per-machine config: check it if present (a fresh worktree has none).
+  // The live ~/.vibesquad/teams.json is deliberately NOT read: it is the owner's mutable runtime state (lanes get
+  // removed/renamed in normal use, e.g. bug-chaser state "removed"), so asserting on it made this test fail on a healthy machine.
   const paths = [];
   const repoTeams = resolve(ROOT_DIR, "teams.json");
   if (fs.existsSync(repoTeams)) paths.push(repoTeams);
-  const homeTeams = join(homedir(), ".vibesquad", "teams.json");
-  if (fs.existsSync(homeTeams)) paths.push(homeTeams);
 
   const expectedStanding = {
     vibesquad: ["art-direction", "token-checker", "android-app", "quickstart", "release-desk", "ui-bois", "bug-chaser", "squadbot"],
