@@ -39,6 +39,16 @@ How you update on Stable: a bar across the top of the window says **Update avail
 - **Change it when:** you want the newest fixes early and can live with the odd rough edge. Switch back to Stable if it gets annoying.
 - **Safe default:** Stable.
 
+### Unstick VibeSquad and Restart runner
+
+Both are on the **About** tab, on the host PC only (they don't show on a remotely connected device).
+
+- **Unstick VibeSquad**: for when sends stall. It kills stray node processes (never VibeSquad's own server, the runner, MCP servers or live agents) and restarts the runner if it is down. It then reports how many it killed and whether the runner is healthy or DOWN (and "(restarted)" if it brought it back). If the runner isn't responding, it asks "Runner not responding — restart it? Running agents stop; Spin Up resumes them in place." and offers a **Restart runner** button.
+- **Restart runner**: for when runner fixes aren't going live. It restarts the runner so the latest runner code loads. Pressing it asks first: "Restart runner? Running turns are cancelled; agents resume on next message." Choose **Restart now** or **Cancel**. Afterwards it says "Runner restarted" and how many turns it cancelled.
+
+- **Change it when:** a send hangs (try **Unstick VibeSquad** first), or after an update the runner still behaves like the old version (**Restart runner**).
+- **Safe default:** don't press either while an agent is mid-turn that you care about, since a restart cancels running turns.
+
 ## Profiles
 
 ![AGENT PROFILES and the squad editor in Settings](../assets/screenshots/07e-settings-profiles.png)
@@ -106,13 +116,3 @@ Pairing is always required, even with the network switch on. Treat the code like
 
 - **Change it when:** you want to use VibeSquad from your phone or a second PC.
 - **Safe default:** off. Turn it on only on a network you trust.
-
-## Unstick and Restart runner
-
-Both are on the **About** tab, on the host PC only (they don't show on a remotely connected device).
-
-- **Unstick VibeSquad**: for when sends stall. It kills stray node processes (never VibeSquad's own server, the runner, MCP servers or live agents) and restarts the runner if it is down. It then reports how many it killed and whether the runner is healthy or DOWN (and "(restarted)" if it brought it back). If the runner isn't responding, it asks "Runner not responding — restart it? Running agents stop; Spin Up resumes them in place." and offers a **Restart runner** button.
-- **Restart runner**: for when runner fixes aren't going live. It restarts the runner so the latest runner code loads. Pressing it asks first: "Restart runner? Running turns are cancelled; agents resume on next message." Choose **Restart now** or **Cancel**. Afterwards it says "Runner restarted" and how many turns it cancelled.
-
-- **Change it when:** a send hangs (try **Unstick VibeSquad** first), or after an update the runner still behaves like the old version (**Restart runner**).
-- **Safe default:** don't press either while an agent is mid-turn that you care about, since a restart cancels running turns.
