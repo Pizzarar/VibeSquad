@@ -3,7 +3,7 @@ import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Runner } from '../runner/runner.mjs';
@@ -99,7 +99,7 @@ test('resume() refuses an exited agent, a session-less one, and an unknown id', 
   assert.equal(s2.calls.length, 0, 'nothing spawned');
 });
 
-test('resume() keeps the role prompt of a lost agent (--append-system-prompt)', async () => {
+test('resume() keeps the role prompt of a lost agent (--append-system-prompt-file)', async () => {
   const dir = tmp();
   const r1 = mkRunner(dir, fakeSpawn());
   const id = r1.create({ provider: 'claude', cwd: os.tmpdir(), systemPrompt: 'You are the ADE Buddy.', prompt: 'hi' });
@@ -109,7 +109,11 @@ test('resume() keeps the role prompt of a lost agent (--append-system-prompt)', 
   assert.equal(r2.resume(id), true);
   await tick();
   const args = s2.calls[0].args;
-  assert.equal(args[args.indexOf('--append-system-prompt') + 1], 'You are the ADE Buddy.');
+  const i = args.indexOf('--append-system-prompt-file');
+  assert.ok(i >= 0, args.join(' '));
+  assert.ok(existsSync(args[i + 1]), 'prompt file exists');
+  assert.equal(readFileSync(args[i + 1], 'utf8'), 'You are the ADE Buddy.');
+  assert.ok(!args.includes('--append-system-prompt'), 'no inline prompt arg');
 });
 
 test('an archived agent is never resumed (resume() false, nothing spawned)', async () => {
