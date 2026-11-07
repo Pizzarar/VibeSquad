@@ -66,6 +66,7 @@ export class Runner {
   // pollAgy: after antigravity-cli turns, poll `agy -p /usage` (ACP carries no quota); only the real server turns it on.
   constructor({ dir, adapters = defaultAdapters(), maxLive = maxLiveFromEnv(), queueMs = queueMsFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage }) {
     this.store = new LogStore(dir);
+    this.folds = new Map(); // id -> log-derived status (no liveness), valid while the log file's size + mtime are unchanged
     this.limits = new LimitStore(limitsFile);
     this._pollAgy = pollAgy ? createAgyUsagePoller({ store: this.limits, ...(agyUsage ? { run: agyUsage } : {}) }) : null;
     this.adapters = adapters;
@@ -273,6 +274,30 @@ export class Runner {
 
   // Reads only this agent's log (lazy: no other file is touched).
   status(id) {
+    const f = this._fold(id);
+    if (!f) return null;
+    let status = f.status;
+    if (f.exit) status = 'exited';
+    else if (!this.live.has(id) && status !== 'parked') status = 'lost'; // log says running but no child in this process
+    return { ...f.rec, status, pendingPermissions: [...f.perms] };
+  }
+
+  // Every agent's status in one call (roster seed): one pass over the logs, then served from the fold cache.
+  statusAll() {
+    const out = [];
+    for (const id of this.store.ids()) {
+      let s = null;
+      try { s = this.status(id); } catch { /* unreadable log: left out, like a failed per-id GET */ }
+      if (s) out.push(s);
+    }
+    return out;
+  }
+
+  _fold(id) {
+    let stamp = null;
+    try { const st = statSync(this.store.file(id)); stamp = `${st.size}:${st.mtimeMs}`; } catch { this.folds.delete(id); return null; }
+    const hit = this.folds.get(id);
+    if (hit?.stamp === stamp) return hit;
     const events = this.store.read(id);
     if (!events.length) return null;
     const created = events[0];
@@ -293,12 +318,12 @@ export class Runner {
       else if (e.type === 'unarchive') archivedAt = null;
     }
     const exit = events.find((e) => e.type === 'exit');
-    if (exit) status = 'exited';
-    else if (!this.live.has(id) && status !== 'parked') status = 'lost'; // log says running but no child in this process
-    return {
-      id, provider: created.provider, model: created.model, cwd: created.cwd, meta,
-      status, usage, pendingPermissions: [...perms.values()], lastSeq: last.seq, createdAt: created.ts, updatedAt: last.ts, archivedAt, exit: exit ?? null,
+    const fold = {
+      stamp, status, exit: exit ?? null, perms: [...perms.values()],
+      rec: { id, provider: created.provider, model: created.model, cwd: created.cwd, meta, usage, lastSeq: last.seq, createdAt: created.ts, updatedAt: last.ts, archivedAt, exit: exit ?? null },
     };
+    this.folds.set(id, fold);
+    return fold;
   }
 
   timeline(id, after = 0, limit = Infinity) { return this.store.read(id, after, limit); }
