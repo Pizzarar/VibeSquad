@@ -3,7 +3,7 @@ import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Runner } from '../runner/runner.mjs';
@@ -152,7 +152,7 @@ test('RunnerBackend.refreshAgent: a transient failure (503 cap, runner down) is 
 
 // Brainstorm level: reopen vs replace. The daemon mock stands in for either backend's refreshAgent.
 const bs = (status) => ({ id: 'rn-1', title: 'BRAINSTORM · ADE', status, updatedAt: '2026-11-02T04:00:00Z', labels: { team: 'sq', lane: 'ade', role: 'brainstorm' } });
-function daemon({ resumable }) {
+function daemon({ resumable, refreshError }) {
   const agents = new Map([['rn-1', bs('closed')]]);
   const d = {
     agents,
@@ -164,7 +164,7 @@ function daemon({ resumable }) {
     archiveAgent: async (id) => { agents.get(id).archivedAt = 'x'; return { archivedAt: 'x' }; },
     cancelAgent: async () => {},
     detachAgent: async () => {},
-    refreshAgent: async (id) => { if (resumable) agents.get(id).status = 'idle'; return agents.get(id); },
+    refreshAgent: async (id) => { if (refreshError) throw refreshError; if (resumable) agents.get(id).status = 'idle'; return agents.get(id); },
     createAgent: async (req) => { d.created++; const id = `rn-new-${d.created}`; agents.set(id, { id, status: 'idle', labels: { ...(req.labels ?? {}) } }); return { id, labels: { ...(req.labels ?? {}) } }; },
   };
   return d;
@@ -172,9 +172,14 @@ function daemon({ resumable }) {
 async function withHome(fn) {
   const dir = tmp();
   const prev = process.env.VIBESQUAD_HOME;
+  const prevTeams = process.env.VIBESQUAD_TEAMS_FILE;
   process.env.VIBESQUAD_HOME = path.join(dir, '.vibesquad');
   mkdirSync(process.env.VIBESQUAD_HOME, { recursive: true });
-  try { return await fn(dir); } finally { prev === undefined ? delete process.env.VIBESQUAD_HOME : (process.env.VIBESQUAD_HOME = prev); }
+  // Pin the registry: a repo-root teams.json with backend:"runner" lanes (main checkout) would make getBackend() a RoutingBackend that sends rn- ids to the real runner.
+  process.env.VIBESQUAD_TEAMS_FILE = path.join(dir, 'teams.json');
+  writeFileSync(process.env.VIBESQUAD_TEAMS_FILE, JSON.stringify({ teams: [] }));
+  const restore = (k, v) => (v === undefined ? delete process.env[k] : (process.env[k] = v));
+  try { return await fn(dir); } finally { restore('VIBESQUAD_HOME', prev); restore('VIBESQUAD_TEAMS_FILE', prevTeams); }
 }
 
 test('Spin Up on a resumable closed Buddy reopens it: same id, no new agent', () => withHome(async (dir) => {
@@ -191,6 +196,26 @@ test('Spin Up on a resumable closed Buddy reopens it: same id, no new agent', ()
 test('Spin Up on a non-resumable closed Buddy replaces it (new agent, old retired)', () => withHome(async (dir) => {
   resetBrainstormRestartState();
   const d = daemon({ resumable: false });
+  const r = await performBrainstormRestart({ reason: 'start-brainstorm', teamId: 'sq', laneId: 'ade', daemonClient: d }, dir);
+  assert.notEqual(r.reused, true);
+  assert.equal(d.created, 1);
+  assert.notEqual(r.newAgentId, 'rn-1');
+}));
+
+test('Spin Up on a closed Buddy whose reopen throws (cap / runner down) errors and does NOT replace it', () => withHome(async (dir) => {
+  resetBrainstormRestartState();
+  const d = daemon({ refreshError: new RunnerHttpError(503, 'AGENT_CAP') });
+  const r = await performBrainstormRestart({ reason: 'start-brainstorm', teamId: 'sq', laneId: 'ade', daemonClient: d }, dir);
+  assert.equal(r.ok, false);
+  assert.equal(r.existingAgentId, 'rn-1');
+  assert.match(r.error, /AGENT_CAP/);
+  assert.equal(d.created, 0, 'no replacement spawned');
+  assert.equal(d.agents.get('rn-1').archivedAt, undefined, 'old Buddy not retired');
+}));
+
+test('Spin Up on a closed Buddy whose reopen answers 409 (not resumable) replaces it', () => withHome(async (dir) => {
+  resetBrainstormRestartState();
+  const d = daemon({ refreshError: new RunnerHttpError(409, 'agent cannot be resumed') });
   const r = await performBrainstormRestart({ reason: 'start-brainstorm', teamId: 'sq', laneId: 'ade', daemonClient: d }, dir);
   assert.notEqual(r.reused, true);
   assert.equal(d.created, 1);
