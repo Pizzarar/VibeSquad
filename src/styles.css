@@ -3911,8 +3911,9 @@ html, body, #root { overflow-x: hidden; }
 .squad-home-lead-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 520px) { .squads-home-grid, .pin-grid { grid-template-columns: 1fr; } }
 
-/* Chat file links: code-styled but clickable */
-.tl-file-link.tl-icode { cursor: pointer; }
+/* Chat inline code: plain code is muted, only file links stay cyan + clickable */
+.tl-icode { color: var(--muted); cursor: text; }
+.tl-file-link.tl-icode { color: var(--cyan-t); cursor: pointer; }
 .tl-file-link:hover { text-decoration: underline; }
 .files-md { padding: 8px 10px; overflow: auto; }
 .files-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }
