@@ -5,6 +5,7 @@ import {
   BLINK_MS,
   faceFrame,
   faceMode,
+  idleFaceMode,
   nextBlinkDelay,
   validateFaces,
   type FaceBot,
@@ -146,7 +147,8 @@ export function useBotFace(
     };
   }, [reduced, faces]);
 
-  const mode = faceMode(agent, blinking && !reduced);
+  const base = faceMode(agent, blinking && !reduced);
+  const mode = base === "idle" ? idleFaceMode(faces, bot) : base; // lookDown replaces idle once it exists
   const frame = faces && sheetOk ? faceFrame(faces, bot, mode, reduced ? 0 : tick) : null;
   return {
     mode,

@@ -457,8 +457,8 @@ export function integerScale(panelWidth: number, dpr = 1): number {
 // ── CRT faces (faces.json, Art10) ─────────────────────────────────────────────
 
 export type FaceBot = "riffbot" | "overlord";
-export type FaceMode = "idle" | "blink" | "talk" | "needs";
-const FACE_MODES: FaceMode[] = ["idle", "blink", "talk", "needs"];
+export type FaceMode = "idle" | "blink" | "talk" | "needs" | "lookDown";
+const FACE_MODES: FaceMode[] = ["idle", "blink", "talk", "needs", "lookDown"];
 
 export type FacesModel = {
   /** Cell size of one face frame in the sheet (128x96). */
@@ -499,6 +499,11 @@ export function faceMode(agent: Pick<SeatedAgent, "pose"> | null, blinking = fal
   if (agent.pose === "needs") return "needs";
   if (agent.pose === "work") return "talk";
   return blinking ? "blink" : "idle";
+}
+
+/** C2b G4: once @art ships `lookDown` frames for a bot (the gods watching the tower) it replaces plain idle; until then idle. */
+export function idleFaceMode(faces: FacesModel | null, bot: FaceBot): FaceMode {
+  return faces?.bots[bot]?.lookDown?.length ? "lookDown" : "idle";
 }
 
 /** The face cell for a bot+mode at a tick (falls back to idle when the mode is missing); null when the bot has no faces. */

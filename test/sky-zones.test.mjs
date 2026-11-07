@@ -109,3 +109,55 @@ test("queue strip order is unchanged: permissions first, then oldest first (shar
   const items = src("attentionItems.ts");
   assert.ok(/export function squadQueue/.test(items));
 });
+
+// ── G4 asset swap-in ─────────────────────────────────────────────────────────
+import { SKY_FRAME_URL, SKY_URL, skyAssets } from "../src/skyZonesLogic.ts";
+import { faceFrame, idleFaceMode, validateFaces } from "../src/squadFloorLogic.ts";
+
+const fixture = (f) => JSON.parse(readFileSync(new URL(`./fixtures/${f}`, import.meta.url), "utf8"));
+
+test("assets absent: sky + frame are skipped (CSS gradient sky / CSS bezel stay), per theme", () => {
+  for (const theme of ["dark", "light"]) {
+    assert.deepEqual(skyAssets(theme, { sky: false, frame: false }), { skyUrl: null, frameUrl: null });
+  }
+});
+
+test("assets present: sky-{theme}.png and the sky-CRT frame load; each is independent", () => {
+  assert.deepEqual(skyAssets("dark", { sky: true, frame: true }), { skyUrl: "/office/sky-dark.png", frameUrl: "/office/sky-crt-dark.png" });
+  assert.equal(skyAssets("light", { sky: true, frame: false }).skyUrl, SKY_URL("light"));
+  assert.equal(skyAssets("light", { sky: true, frame: false }).frameUrl, null);
+  assert.equal(skyAssets("dark", { sky: false, frame: true }).frameUrl, SKY_FRAME_URL("dark"));
+  assert.equal(skyAssets("dark", { sky: false, frame: true }).skyUrl, null);
+});
+
+test("lookDown absent (today's faces.json): idle stays the idle face", () => {
+  const v = validateFaces(fixture("faces.json"));
+  assert.equal(v.ok, true);
+  assert.equal(idleFaceMode(v.value, "riffbot"), "idle");
+  assert.equal(idleFaceMode(v.value, "overlord"), "idle");
+  assert.equal(idleFaceMode(null, "riffbot"), "idle");
+});
+
+test("lookDown present: it becomes that bot's default idle, other bots keep idle", () => {
+  const v = validateFaces(fixture("faces-lookdown.json"));
+  assert.equal(v.ok, true);
+  assert.equal(idleFaceMode(v.value, "riffbot"), "lookDown");
+  assert.equal(idleFaceMode(v.value, "overlord"), "idle");
+  assert.deepEqual(faceFrame(v.value, "riffbot", "lookDown", 1), { x: 1024, y: 0 });
+  // Mode order of the hook: talk/needs/blink still win over the idle swap.
+  const hook = src("useBotFace.ts");
+  assert.ok(hook.includes('base === "idle" ? idleFaceMode(faces, bot) : base'));
+});
+
+test("a malformed lookDown list is rejected rather than half-loaded", () => {
+  const bad = fixture("faces-lookdown.json");
+  bad.riffbot.lookDown = [];
+  assert.equal(validateFaces(bad).ok, false);
+});
+
+test("SkyZones probes each asset and draws the frame/sky only when it loaded", () => {
+  const sky = src("SkyZones.tsx");
+  assert.ok(sky.includes("skyAssets(theme, { sky: useImageOk(SKY_URL(theme)), frame: useImageOk(SKY_FRAME_URL(theme)) })"));
+  assert.ok(sky.includes("{frameUrl && <img"));
+  assert.ok(sky.includes('skyUrl ? " has-sky-art" : ""'));
+});

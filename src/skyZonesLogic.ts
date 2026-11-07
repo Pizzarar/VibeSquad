@@ -42,3 +42,14 @@ export const NO_OVERLORD_TEXT = "no Overlord on duty";
 /** The queue strip in the clouds: a thin cloud-height line while nobody needs you, the full chip row otherwise. */
 export type QueueStripState = "empty" | "open";
 export const queueStripState = (count: number): QueueStripState => (count > 0 ? "open" : "empty");
+
+// ── G4 asset swap-in: every @art asset is optional; an absent one is skipped (same rule as the `front` overlays) ──
+export type SkyTheme = "dark" | "light";
+export const SKY_URL = (theme: SkyTheme) => `/office/sky-${theme}.png`;
+/** The sky-CRT bezel (transparent screen hole), one per theme. */
+export const SKY_FRAME_URL = (theme: SkyTheme) => `/office/sky-crt-${theme}.png`;
+export type SkyAssetOk = { sky: boolean; frame: boolean };
+/** URLs to draw: a probe that failed (absent file) yields null, so the CSS gradient sky / CSS bezel stay. */
+export function skyAssets(theme: SkyTheme, ok: SkyAssetOk): { skyUrl: string | null; frameUrl: string | null } {
+  return { skyUrl: ok.sky ? SKY_URL(theme) : null, frameUrl: ok.frame ? SKY_FRAME_URL(theme) : null };
+}
