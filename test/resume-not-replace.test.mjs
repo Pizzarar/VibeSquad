@@ -3,7 +3,7 @@ import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Runner } from '../runner/runner.mjs';
@@ -172,9 +172,14 @@ function daemon({ resumable }) {
 async function withHome(fn) {
   const dir = tmp();
   const prev = process.env.VIBESQUAD_HOME;
+  const prevTeams = process.env.VIBESQUAD_TEAMS_FILE;
   process.env.VIBESQUAD_HOME = path.join(dir, '.vibesquad');
   mkdirSync(process.env.VIBESQUAD_HOME, { recursive: true });
-  try { return await fn(dir); } finally { prev === undefined ? delete process.env.VIBESQUAD_HOME : (process.env.VIBESQUAD_HOME = prev); }
+  // Pin the registry: a repo-root teams.json with backend:"runner" lanes (main checkout) would make getBackend() a RoutingBackend that sends rn- ids to the real runner.
+  process.env.VIBESQUAD_TEAMS_FILE = path.join(dir, 'teams.json');
+  writeFileSync(process.env.VIBESQUAD_TEAMS_FILE, JSON.stringify({ teams: [] }));
+  const restore = (k, v) => (v === undefined ? delete process.env[k] : (process.env[k] = v));
+  try { return await fn(dir); } finally { restore('VIBESQUAD_HOME', prev); restore('VIBESQUAD_TEAMS_FILE', prevTeams); }
 }
 
 test('Spin Up on a resumable closed Buddy reopens it: same id, no new agent', () => withHome(async (dir) => {
