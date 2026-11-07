@@ -102,7 +102,7 @@ VibeSquad sets labels for the agents it starts. If you start agents by hand, giv
 you create it, not later: `lane` (the feature), `role` (`brainstorm`, `lead` or `worker`), plus `ord=N` for a Lead and
 `job` for a worker. For example:
 Most people never need this by hand: your Buddy starts the Lead through VibeSquad, and the Lead starts workers with
-`vs spawn --title "<t>" --profile "<profile>" --prompt "<text>"` (from `vs --help`), which sets the labels for you.
+`vs spawn --title "<t>" --profile "<profile>" --prompt "<text>"` (from `vs --help`), which sets the labels for you. For a long brief use `--prompt-file <path>` (or `--prompt-file -` for stdin) instead of `--prompt "<text>"`; the same goes for `vs send <agent> --prompt-file <path>`.
 Labels are the source of truth; the agent's title is built from them. The full naming scheme is VibeSquad's
 [`docs/NAMING.md`](https://github.com/Pizzarar/VibeSquad/blob/HEAD/docs/NAMING.md). It is still changing, so it
 is linked here, not copied.
