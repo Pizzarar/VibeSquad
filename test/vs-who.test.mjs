@@ -276,6 +276,8 @@ test("Done-when #3 & Audit §2 + §3A: 0 hits for paseo ls -g, prior-art check r
   const priorArtNeedle = "check for an existing primitive";
   assert.equal(BRAINSTORM_PACK.includes(priorArtNeedle), true);
   assert.equal(LEAD_FALLBACK_PACK.includes(priorArtNeedle), true);
+  assert.equal(BRAINSTORM_PACK.includes("Each block is marked Root cause or Workaround; a Workaround names the follow-up that replaces it"), true);
+  assert.equal(BRAINSTORM_PACK.includes("A plan with an unnamed workaround is not ready to hand off."), true);
   assert.equal(readFileSync(resolve(REPO_ROOT, "docs/profiles/DEFAULT_PACK.md"), "utf8").includes(priorArtNeedle), true);
 
   for (const name of ["Brainstorm - Claude", "Brainstorm - Gemini", "Lead - Claude", "Lead - Gemini"]) {
