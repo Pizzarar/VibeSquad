@@ -78,7 +78,7 @@ Keep one Buddy for one topic. See [Working with Squads](../Concepts/Squads.md).
 
 If you cannot say yes to every line, stay in the chat and keep refining. That is the Loop part of ROLO, and it starts here.
 
-> **Aub:** I started out wanting to build my own orchestrator from scratch. I talked the pieces out with a Buddy in plain English until I understood how one works, and VibeSquad's runner grew out of that — the orchestration was originally built on Paseo by getpaseo. Thinking it through in plain language, piece by piece, saved me from building the whole thing myself.
+> **Aub:** I started out wanting to build my own orchestrator from scratch. Claude pointed me to Paseo. Paseo led me to brainstorm chats. Brainstorming eventually led me to build VibeSquad, first on top of Paseo by getpaseo and now on its own built-in runner. Talking through how one works in plain language, piece by piece, is what got me there.
 
 ## Next
 
