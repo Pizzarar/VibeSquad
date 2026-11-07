@@ -62,6 +62,33 @@ test("missing everywhere stays 404; traversal still refused", () => {
   assert.deepEqual(findInWorktrees(main, "../x", [wtA]), {});
 });
 
+test("links carrying the sanctuary prefix resolve to the candidate", () => {
+  for (const p of [
+    "worktrees/Repo/art-a/scratch/shots/only-a.png",
+    "worktrees\\Repo\\art-a\\scratch\\shots\\only-a.png",
+    "Repo/art-a/scratch/shots/only-a.png",
+    "art-a/scratch/shots/only-a.png",
+  ]) {
+    const r = call(main, p, [main], cands);
+    assert.equal(r.status, 200, p);
+    assert.equal(r.body.toString(), "A");
+  }
+});
+
+test("prefix naming one worktree does not match another's file", () => {
+  assert.equal(call(main, "art-a/scratch/shots/both.png", [main], cands).body.toString(), "A");
+  assert.equal(call(main, "art-b/scratch/shots/only-a.png", [main], cands).status, 404);
+});
+
+test("prefixed link with .. is rejected", () => {
+  assert.equal(call(main, "worktrees/Repo/art-a/../../other/x", [main], cands).status, 400);
+  assert.deepEqual(findInWorktrees(main, "worktrees/Repo/art-a/../../other/x", [wtA]), {});
+});
+
+test("non-owner (no worktreesFor) gets no prefix fallback", () => {
+  assert.equal(call(main, "worktrees/Repo/art-a/scratch/shots/only-a.png", [main], undefined).status, 404);
+});
+
 test("candidate that is a drive/home root is ignored", () => {
   assert.deepEqual(findInWorktrees(main, "scratch/shots/only-a.png", [join(base, "..")]), {});
 });
