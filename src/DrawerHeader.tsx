@@ -281,6 +281,17 @@ export const FALLBACK_MODES = [
   { id: "bypassPermissions", label: "Bypass Perms" },
 ];
 
+// Runner agents carry their provider's real modes (toAgent.availableModes); the Claude-flavoured FALLBACK_MODES are only for DEMO
+// and for a staged provider switch (the target is not running yet). A live agent with none known yet offers no mode picker.
+export function modesFor(agent: { availableModes?: ReadonlyArray<{ id: string }> | null }, useFallback: boolean) {
+  return useFallback ? FALLBACK_MODES : ((agent.availableModes ?? []) as Array<{ id: string; label?: string }>);
+}
+
+/** Thinking levels the agent's provider accepts (toAgent.thinkingOptions); empty = no thinking picker. */
+export function thinkingLevelsFor(agent: { thinkingOptions?: ReadonlyArray<{ id: string }> | null }, useFallback: boolean): string[] {
+  return useFallback ? ["low", "medium", "high"] : (agent.thinkingOptions ?? []).map((o) => o.id);
+}
+
 export function nextModeInCycle(modes: Array<{ id: string }>, currentId: string | null): string {
   if (!modes.length) return "default";
   const idx = modes.findIndex((m) => m.id === currentId);
@@ -895,7 +906,8 @@ export function DrawerHeader({
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.shiftKey && e.key === "Tab") {
         e.preventDefault();
-        const modes = !DEMO && agent.availableModes?.length ? agent.availableModes : FALLBACK_MODES;
+        const modes = modesFor(agent, DEMO || !!staged);
+        if (!modes.length) return;
         const currentMode = staged ? staged.modeId ?? agent.currentModeId ?? null : agent.currentModeId ?? null;
         const next = nextModeInCycle(modes, currentMode);
         if (staged) {
@@ -912,8 +924,9 @@ export function DrawerHeader({
   }, [active, agent, modeBusy, staged]);
 
   const modeSelect = (() => {
-              const modes = (!DEMO && agent.availableModes?.length) ? agent.availableModes : FALLBACK_MODES;
+              const modes = modesFor(agent, DEMO || !!staged);
               const stagedModeId = staged ? staged.modeId ?? agent.currentModeId ?? "" : agent.currentModeId ?? "";
+              if (!modes.length) return null;
               return (
                 <select
                   data-testid="drawer-mode-select"
@@ -938,12 +951,13 @@ export function DrawerHeader({
                 </select>
               );
             })();
-  const modes = (!DEMO && agent.availableModes?.length) ? agent.availableModes : FALLBACK_MODES;
+  const modes = modesFor(agent, DEMO || !!staged);
   const stagedModeId = staged ? staged.modeId ?? agent.currentModeId ?? "" : agent.currentModeId ?? "";
   const activeModeObj = modes.find((m) => m.id === stagedModeId) ?? modes[0];
   const activeModeLabel = activeModeObj ? ((activeModeObj as any).label || (activeModeObj as any).name || activeModeObj.id) : (stagedModeId || "default");
   const stagedThinking = staged ? staged.thinkingOptionId ?? agent.thinkingOptionId ?? "" : agent.thinkingOptionId ?? "";
-  const thinkingSelect = (
+  const thinkingLevels = thinkingLevelsFor(agent as any, DEMO || !!staged);
+  const thinkingSelect = !thinkingLevels.length ? null : (
             <select
               data-testid="drawer-thinking-select"
               className="drawer-thinking-select"
@@ -959,10 +973,10 @@ export function DrawerHeader({
                 setThinkingHelper(agent, e.target.value || null).then((r) => setReloadError(configNote(r))).catch((e2) => setReloadError(String(e2 instanceof Error ? e2.message : e2))).finally(() => setThinkingBusy(false));
               }}
             >
-              {(["low", "medium", "high"] as const).map((opt) => (
+              {thinkingLevels.map((opt) => (
                 <option key={opt} value={opt}>{opt}</option>
               ))}
-              {!["low", "medium", "high"].includes(stagedThinking) && stagedThinking && (
+              {!thinkingLevels.includes(stagedThinking) && stagedThinking && (
                 <option value={stagedThinking}>{stagedThinking}</option>
               )}
             </select>
@@ -1477,7 +1491,7 @@ export function DrawerHeader({
             ⚙ {stagedThinking || "medium"} · {activeModeLabel} ▾
           </summary>
           <div className="drawer-config-popover">
-            <label className="drawer-config-row"><span className="muted small">Thinking</span>{thinkingSelect}</label>
+            {thinkingSelect && <label className="drawer-config-row"><span className="muted small">Thinking</span>{thinkingSelect}</label>}
             <label className="drawer-config-row"><span className="muted small">Mode</span>{modeSelect}</label>
           </div>
         </details>

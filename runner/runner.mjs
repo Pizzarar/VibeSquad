@@ -2,7 +2,7 @@
 import { randomBytes } from 'node:crypto';
 import { statSync } from 'node:fs';
 import { createClaudeAdapter, CLAUDE_PERMISSION_MODES, CLAUDE_EFFORTS } from './adapters/claude.mjs';
-import { createAcpAdapter, acpProviderIds, PROVIDER_ALIASES } from './adapters/acp.mjs';
+import { createAcpAdapter, acpProviderIds, PROVIDER_ALIASES, pickModel } from './adapters/acp.mjs';
 import { LogStore } from './log.mjs';
 import { LimitStore, createAgyUsagePoller } from './limits.mjs';
 import path from 'node:path';
@@ -503,7 +503,7 @@ export class Runner {
 
   // Starts the parked/lost agent's process in place. Callers have checked the room (_fits); false if there is no spec.
   _resume(id, fallbackSpec = null) {
-    const spec = this._parkedSpec(id) ?? this._lostSpec(id) ?? fallbackSpec; // fresh from the log: picks up a config change made while the job waited
+    const spec = this._parkedSpec(id) ?? this._lostSpec(id) ?? this._unstartedPlan(id)?.spec ?? fallbackSpec; // fresh from the log: picks up a config change made while the job waited
     if (!spec) return null;
     if (!this._makeRoom(id)) throw new Error('no live process slot free');
     this.store.append(id, 'status', { status: 'starting' });
@@ -612,8 +612,13 @@ export class Runner {
   // Unsupported values for the agent's provider are rejected (never silently ignored).
   setConfig(id, { model, modeId, thinkingOptionId } = {}) {
     if (!this.store.exists(id)) throw new Error(`no such agent ${id}`);
-    const provider = this._fold(id).created.provider;
+    const f = this._fold(id);
+    const provider = f.created.provider;
     const patch = configPatch(PROVIDER_ALIASES[provider] ?? provider, { model, modeId, thinkingOptionId });
+    // An ACP agent that has told us what it offers: anything else is refused here (HTTP 400), not skipped at the next start.
+    const offered = f.offered;
+    if (offered && patch.acpMode !== undefined && offered.modes.length && !offered.modes.includes(patch.acpMode)) throw new Error(`${provider}: mode "${patch.acpMode}" is not offered (one of ${offered.modes.join(', ')})`);
+    if (offered && patch.model !== undefined && offered.models.length && pickModel(patch.model, offered.models.map((m) => ({ modelId: m }))) === null && (PROVIDER_ALIASES[provider] ?? provider) !== 'codex') throw new Error(`${provider}: model "${patch.model}" is not offered (one of ${offered.models.join(', ')})`);
     if (!Object.keys(patch).length) throw new Error('nothing to change');
     this.store.append(id, 'meta', { patch });
     const e = this.live.get(id);
@@ -691,6 +696,7 @@ export class Runner {
       else if (e.type === 'usage') st.usage = { contextTokens: e.contextTokens, contextMax: e.contextMax, inputTokens: e.inputTokens, outputTokens: e.outputTokens, costUsd: e.costUsd };
       else if (e.type === 'permission') { if (e.phase === 'request') st.perms.set(e.id, { id: e.id, toolName: e.toolName }); else st.perms.delete(e.id); }
       else if (e.type === 'meta') Object.assign(st.meta, e.patch, e.patch?.labels ? { labels: { ...st.meta.labels, ...e.patch.labels } } : {});
+      else if (e.type === 'session' && Array.isArray(e.modes)) st.offered = { modes: e.modes, models: Array.isArray(e.models) ? e.models : [] };
       else if (e.type === 'archive') st.archivedAt = e.ts;
       else if (e.type === 'unarchive') st.archivedAt = null;
       else if (e.type === 'exit' && !st.exit) st.exit = e;
@@ -699,7 +705,7 @@ export class Runner {
     st.stamp = stamp;
     if (!st.created) { this.folds.delete(id); return null; }
     this.folds.set(id, st);
-    st.rec = { id, provider: st.created.provider, model: st.meta.model ?? st.created.model, cwd: st.created.cwd, meta: { ...st.meta }, usage: st.usage, lastSeq: st.last.seq, createdAt: st.created.ts, updatedAt: st.last.ts, archivedAt: st.archivedAt, exit: st.exit, ...(st.status === 'queued' ? { queued: { ahead: st.ahead ?? 0 } } : {}) };
+    st.rec = { id, provider: st.created.provider, model: st.meta.model ?? st.created.model, cwd: st.created.cwd, meta: { ...st.meta }, usage: st.usage, lastSeq: st.last.seq, createdAt: st.created.ts, updatedAt: st.last.ts, ...(st.offered ? { offered: st.offered } : {}), archivedAt: st.archivedAt, exit: st.exit, ...(st.status === 'queued' ? { queued: { ahead: st.ahead ?? 0 } } : {}) };
     return st;
   }
 
@@ -740,6 +746,7 @@ const effModel = (created, meta) => meta?.model ?? created.model ?? undefined;
 // Validates a live config change against what the provider's CLI can actually take at process start.
 // claude: --model, --permission-mode, --effort. ACP agents (antigravity-cli, opencode, codex): session/set_model and
 // session/set_mode on (re)start; ACP has no thinking/effort knob, so a thinking value is refused.
+export { CLAUDE_PERMISSION_MODES, CLAUDE_EFFORTS };
 export function configPatch(provider, { model, modeId, thinkingOptionId } = {}) {
   const patch = {};
   const bad = (what, v) => new Error(`${provider}: unsupported ${what} "${v}"`);

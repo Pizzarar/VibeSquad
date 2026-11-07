@@ -206,3 +206,74 @@ test('DrawerHeader pickers call the runner config route and say "Applies from th
   const bridge = readFileSync(path.join(ROOT, 'src', 'runnerBridge.ts'), 'utf8');
   assert.match(bridge, /runnerSetConfig[\s\S]{0,120}post\(id, "config", cfg\)/);
 });
+
+// ---- N4-fix1 ----
+test('fix1.1 ACP agent reports the modes/models it really offers; unoffered values are refused with a clear error, never skipped', async () => {
+  const { toAgent } = await import('../server/backend/runner-backend.mjs');
+  const spawnImpl = acpSpawn();
+  const adapter = createAcpAdapter({ spawnImpl, provider: 'antigravity-cli', mcp: false, resolved: { file: '/bin/fake', args: [] } });
+  const runner = new Runner({ dir: tmp(), adapters: { 'antigravity-cli': adapter }, parkGraceMs: 60_000 });
+  const id = runner.create({ provider: 'antigravity-cli', model: 'gemini-4-argon', cwd: '.', prompt: 'hi' });
+  for (let i = 0; i < 8; i++) await tick();
+  const rec = runner.status(id);
+  assert.deepEqual(rec.offered.modes, ['default', 'accept-edits']);
+  const agent = toAgent(rec);
+  assert.deepEqual(agent.availableModes.map((m) => m.id), ['default', 'accept-edits'], 'real ACP modes, not claude permission modes');
+  assert.deepEqual(agent.thinkingOptions, [], 'no thinking picker for ACP providers');
+  const before = runner.timeline(id).length;
+  assert.throws(() => runner.setConfig(id, { modeId: 'plan' }), /mode "plan" is not offered \(one of default, accept-edits\)/);
+  assert.throws(() => runner.setConfig(id, { model: 'gpt-9' }), /model "gpt-9" is not offered/);
+  assert.equal(runner.timeline(id).length, before, 'refused change writes nothing');
+  assert.doesNotThrow(() => runner.setConfig(id, { model: 'gemini-2.5-pro', modeId: 'accept-edits' }));
+});
+
+test('fix1.1 claude agents carry the 6 permission modes + effort levels; UI helpers use them, fallback only for DEMO/staged', async () => {
+  const { toAgent } = await import('../server/backend/runner-backend.mjs');
+  const a = toAgent({ id: 'rn-1', provider: 'claude', cwd: '.', meta: {}, status: 'idle' });
+  assert.deepEqual(a.availableModes.map((m) => m.id), ['default', 'acceptEdits', 'plan', 'bypassPermissions', 'dontAsk', 'auto']);
+  assert.deepEqual(a.thinkingOptions.map((m) => m.id), ['low', 'medium', 'high', 'xhigh', 'max']);
+  const g = toAgent({ id: 'rn-2', provider: 'opencode', cwd: '.', meta: {}, status: 'idle' });
+  assert.deepEqual(g.availableModes, [], 'no modes known before the first session: no Claude fallback');
+  const src = readFileSync(path.join(ROOT, 'src', 'DrawerHeader.tsx'), 'utf8');
+  const s = src.indexOf('export const FALLBACK_MODES');
+  const e = src.indexOf('export function nextModeInCycle');
+  const mod = await import(`data:text/javascript;charset=utf-8,${encodeURIComponent(stripTypeScriptTypes(src.slice(s, e)))}`);
+  assert.deepEqual(mod.modesFor(g, false), []);
+  assert.equal(mod.modesFor(g, true).length, 5, 'DEMO/staged keeps the fallback list');
+  assert.deepEqual(mod.thinkingLevelsFor(g, false), []);
+  assert.deepEqual(mod.thinkingLevelsFor(a, false), ['low', 'medium', 'high', 'xhigh', 'max']);
+  assert.doesNotMatch(src, /availableModes\?\.length\) \? agent\.availableModes : FALLBACK_MODES/);
+  assert.match(src, /thinkingSelect = !thinkingLevels\.length \? null/);
+});
+
+test('fix1.2 readRunnerAgentSync reports the effective (meta) model and offered modes', async () => {
+  const { readRunnerAgentSync } = await import('../server/backend/runner-backend.mjs');
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const home = tmp();
+  mkdirSync(path.join(home, 'agents'));
+  const ev = (o, seq) => JSON.stringify({ seq, ts: 1000 + seq, ...o });
+  writeFileSync(path.join(home, 'agents', 'rn-sync1.jsonl'), [
+    ev({ type: 'created', provider: 'antigravity-cli', model: 'gemini-4-argon', cwd: '.', meta: {} }, 1),
+    ev({ type: 'session', sessionId: 'S', model: 'gemini-4-argon-medium', modes: ['default', 'accept-edits'], models: ['gemini-2.5-pro'] }, 2),
+    ev({ type: 'meta', patch: { model: 'gemini-2.5-pro', acpMode: 'accept-edits' } }, 3),
+  ].join('\n') + '\n');
+  const a = readRunnerAgentSync('rn-sync1', { home, liveness: null });
+  assert.equal(a.model, 'gemini-2.5-pro');
+  assert.equal(a.modeId, 'accept-edits');
+  assert.deepEqual(a.availableModes.map((m) => m.id), ['default', 'accept-edits']);
+});
+
+test('fix1.3 _resume of an unstarted queued agent uses the folded log spec, not the stale job spec', async () => {
+  const spawnImpl = claudeSpawn();
+  const runner = new Runner({ dir: tmp(), adapters: { claude: createClaudeAdapter({ spawnImpl, mcp: false }) }, parkGraceMs: 60_000, turnCaps: { claude: 1 } });
+  runner.create({ provider: 'claude', model: 'claude-sonnet-5-5', cwd: '.', prompt: 'A' }); // takes the only turn slot
+  const b = runner.create({ provider: 'claude', model: 'claude-sonnet-5-5', cwd: '.', prompt: 'B' });
+  await tick();
+  assert.equal(runner.status(b).status, 'queued');
+  runner.queue = runner.queue.filter((j) => j.id !== b); // the in-memory job is gone (as after a runner restart); the log still says queued
+  runner.setConfig(b, { model: 'claude-opus-5-5' });
+  const stale = { provider: 'claude', model: 'claude-sonnet-5-5', cwd: '.', meta: {} };
+  runner._resume(b, stale);
+  await tick();
+  assert.equal(flag(spawnImpl.calls.at(-1).args, '--model'), 'claude-opus-5-5');
+});
