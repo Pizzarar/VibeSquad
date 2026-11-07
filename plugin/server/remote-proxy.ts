@@ -102,8 +102,8 @@ export class RemoteDenied extends Error {
 
 /** Raw-byte cap for binary GET fs/read (images, PDFs) shown in the remote Files panel. Text routes keep REMOTE_MAX_BODY_BYTES. */
 export const REMOTE_MAX_BINARY_BYTES = 8 * 1024 * 1024;
-const BINARY_READ_PATH = "/__vibesquad/fs/read";
-const BINARY_HEADERS = ["x-vs-size", "x-vs-modified"] as const;
+const FS_READ_PATH = "/__vibesquad/fs/read";
+const FS_READ_HEADERS = ["x-vs-size", "x-vs-modified"] as const;
 
 /** Streams the body into one buffer, giving up (null) as soon as it passes `max` raw bytes. */
 async function readBytesCapped(res: Response, signal: AbortSignal, max: number): Promise<Uint8Array | null> {
@@ -232,24 +232,30 @@ export function makeVsHttpHandler(deps: VsHttpDeps = {}) {
         signal: abort.signal,
       });
       const ct = res.headers.get("content-type");
-      if (!isTextContentType(ct) && d.method === "GET" && d.pathname === BINARY_READ_PATH && res.status === 200) {
+      // Every 200 on GET fs/read is file content: no scrub/redact (it would rewrite the owner's name inside the
+      // file), x-vs-size/x-vs-modified kept. Text is capped at the text cap, binary at 8 MB raw and sent as base64.
+      if (d.method === "GET" && d.pathname === FS_READ_PATH && res.status === 200) {
+        const isText = isTextContentType(ct);
+        const cap = isText ? REMOTE_MAX_BODY_BYTES : REMOTE_MAX_BINARY_BYTES;
         const size = Number(res.headers.get("x-vs-size") ?? res.headers.get("content-length") ?? NaN);
-        const bytes = Number.isFinite(size) && size > REMOTE_MAX_BINARY_BYTES ? null : await readBytesCapped(res, abort.signal, REMOTE_MAX_BINARY_BYTES);
+        const bytes = Number.isFinite(size) && size > cap ? null : await readBytesCapped(res, abort.signal, cap);
         if (!bytes) {
           res.body?.cancel().catch(() => {});
-          const mb = Math.floor(REMOTE_MAX_BINARY_BYTES / (1024 * 1024));
+          const lim = isText ? `${Math.floor(cap / 1024)} KB` : `${Math.floor(cap / (1024 * 1024))} MB`;
           return {
             status: 413,
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ ok: false, error: `file too large to preview remotely (over ${mb} MB)`, ...(Number.isFinite(size) ? { size } : {}) }),
+            body: JSON.stringify({ ok: false, error: `file too large to preview remotely (over ${lim})`, ...(Number.isFinite(size) ? { size } : {}) }),
           };
         }
         const headers: Record<string, string> = {};
-        for (const h of [...REMOTE_RESPONSE_HEADERS, ...BINARY_HEADERS]) {
+        for (const h of [...REMOTE_RESPONSE_HEADERS, ...FS_READ_HEADERS]) {
           const v = res.headers.get(h);
           if (v !== null) headers[h] = v;
         }
-        return { status: 200, headers, body: Buffer.from(bytes).toString("base64"), encoding: "base64" };
+        return isText
+          ? { status: 200, headers, body: new TextDecoder().decode(bytes) }
+          : { status: 200, headers, body: Buffer.from(bytes).toString("base64"), encoding: "base64" };
       }
       if (!isTextContentType(ct)) {
         res.body?.cancel().catch(() => {});

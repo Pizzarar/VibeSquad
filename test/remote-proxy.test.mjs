@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 
@@ -1041,6 +1041,8 @@ describe("R2-5 handler: reopened writes against a fake loopback server", () => {
       JSON.parse(scrubResponseBody("/__vibesquad/vs-log", JSON.stringify({ ok: true, path: "C:\\a\\b.jsonl", teamLogPath: "/home/u/x.jsonl" }), 200)),
       { ok: true },
     );
+    const resolved = JSON.stringify({ ok: true, path: "docs/a.md", count: 1 });
+    assert.deepEqual(JSON.parse(scrubResponseBody("/__vibesquad/fs/resolve", resolved, 200)), { ok: true, path: "docs/a.md", count: 1 });
     const errOut = JSON.parse(
       scrubResponseBody(
         "/api/teams",
@@ -1105,6 +1107,9 @@ describe("B8: fs/* over the proxy reach the real handlers, owner-gated, confined
     outside = mkdtempSync(join(tmpdir(), "vs-b8-out-"));
     writeFileSync(join(ws, "note.md"), "# hi");
     writeFileSync(join(ws, "shot.png"), PNG);
+    writeFileSync(join(ws, "home.md"), `see ${homedir()} and ${userInfo().username}
+`);
+    writeFileSync(join(ws, "long.md"), "x".repeat(600 * 1024));
     writeFileSync(join(ws, "big.png"), Buffer.alloc(REMOTE_MAX_BINARY_BYTES + 1, 7));
     writeFileSync(join(ws, "edge.png"), Buffer.alloc(REMOTE_MAX_BINARY_BYTES, 9));
     writeFileSync(join(outside, "secret.txt"), "nope");
@@ -1142,13 +1147,13 @@ describe("B8: fs/* over the proxy reach the real handlers, owner-gated, confined
   test("list / read / resolve succeed and the proxy sent the owner token", async () => {
     const list = await call("/__vibesquad/fs/list" + q({ cwd: ws, path: "" }));
     assert.equal(list.status, 200);
-    assert.deepEqual(JSON.parse(list.body).entries.map((e) => e.name).sort(), ["big.png", "edge.png", "note.md", "shot.png"]);
+    assert.deepEqual(JSON.parse(list.body).entries.map((e) => e.name).sort(), ["big.png", "edge.png", "home.md", "long.md", "note.md", "shot.png"]);
     const read = await call("/__vibesquad/fs/read" + q({ cwd: ws, path: "note.md" }));
     assert.equal(read.status, 200);
     assert.equal(read.body, "# hi");
     const resolved = await call("/__vibesquad/fs/resolve" + q({ agentId: "a", name: "note.md" }));
     assert.equal(resolved.status, 200, resolved.body);
-    assert.equal(JSON.parse(resolved.body).ok, true, resolved.body);
+    assert.deepEqual(JSON.parse(resolved.body), { ok: true, path: "note.md", count: 1 });
     assert.ok(seenTokens.slice(-3).every((t) => t === TOKEN));
   });
   test("a PNG round-trips byte-exact as base64 with its content type; the shim hands back real bytes", async () => {
@@ -1164,6 +1169,20 @@ describe("B8: fs/* over the proxy reach the real handlers, owner-gated, confined
     assert.ok(Buffer.from(await r.arrayBuffer()).equals(PNG));
     assert.equal(r.headers.get("content-type"), "image/png");
     uninstall();
+  });
+  test("text fs/read is byte-exact (no homedir/username redaction), keeps x-vs-* headers; >512 KB text is a 413 with size", async () => {
+    const out = await call("/__vibesquad/fs/read" + q({ cwd: ws, path: "home.md" }));
+    assert.equal(out.status, 200);
+    assert.equal(out.encoding, undefined);
+    assert.equal(out.body, `see ${homedir()} and ${userInfo().username}
+`);
+    assert.equal(out.headers["x-vs-size"], String(Buffer.byteLength(out.body)));
+    assert.ok(out.headers["x-vs-modified"]);
+    const big = await call("/__vibesquad/fs/read" + q({ cwd: ws, path: "long.md" }));
+    assert.equal(big.status, 413);
+    const j = JSON.parse(big.body);
+    assert.equal(j.ok, false);
+    assert.equal(j.size, 600 * 1024);
   });
   test("over 8 MB raw is a 413 carrying the size; exactly 8 MB passes", async () => {
     const big = await call("/__vibesquad/fs/read" + q({ cwd: ws, path: "big.png" }));

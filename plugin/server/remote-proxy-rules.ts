@@ -1090,7 +1090,8 @@ export function scrubResponseBody(pathname: string, body: string, status?: numbe
         delete parsed.remote;
         mutated = true;
       }
-      if ("path" in parsed) {
+      // fs/resolve's `path` is repo-relative and already confined server-side; bare-name links need it.
+      if ("path" in parsed && pathname !== "/__vibesquad/fs/resolve") {
         delete parsed.path;
         mutated = true;
       }
