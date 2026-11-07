@@ -553,3 +553,14 @@ test("P3d wiring: RiffBot screen → hub onOpen, Overlord screen → openPinMemb
   const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
   assert.match(css, /\.sq-floor-crt\.is-off\s*\{[^}]*filter/);
 });
+
+test("floor nits: riders expire at their own start+RIDE_MS; +N lobby badge draws in the bubbles layer above floor-front", () => {
+  const src = readFileSync(new URL("../src/SquadFloor.tsx", import.meta.url), "utf8");
+  assert.match(src, /r\.start \+ RIDE_MS/);
+  assert.match(src, /Math\.min\(\.\.\.riders\.map/);
+  assert.doesNotMatch(src, /RIDE_MS \+ 50/);
+  assert.match(src, /overlays=\{\s*<>\s*<LobbyPlus/);
+  assert.doesNotMatch(src, /extras=\{\s*<>\s*<LobbyPlus/);
+  assert.match(src, /\{overlays\}/);
+  assert.ok(bandLayers(true).indexOf("front") < bandLayers(true).indexOf("bubbles"));
+});

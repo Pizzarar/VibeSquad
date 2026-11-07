@@ -213,6 +213,7 @@ function Band({
   plate,
   items,
   extras,
+  overlays,
   frontSrc,
   cast,
   sheet,
@@ -221,6 +222,8 @@ function Band({
   plate: ReactNode;
   items: BandItem[];
   extras?: ReactNode;
+  /** Drawn in the bubbles layer, above the front overlay (needs indicators, +N). */
+  overlays?: ReactNode;
   frontSrc: string | null;
   cast: CastModel | null;
   sheet: string | null;
@@ -251,6 +254,7 @@ function Band({
                 {sorted.map((it) => (
                   <SeatBubble key={it.agent.agentId} item={it} cast={cast} sheet={sheet} />
                 ))}
+                {overlays}
               </span>
             );
         }
@@ -491,10 +495,12 @@ export function SquadFloor({ view, onOpenRiffBot }: SquadFloorProps) {
   }, [tower, reduced]);
   useEffect(() => {
     if (!riders.length) return;
+    // Each rider expires at its own start + RIDE_MS; the timer targets the earliest one.
+    const nextExpiry = Math.min(...riders.map((r) => r.start + RIDE_MS));
     const t = setTimeout(() => {
       const now = Date.now();
-      setRiders((rs) => rs.filter((r) => now - r.start < RIDE_MS));
-    }, RIDE_MS + 50);
+      setRiders((rs) => rs.filter((r) => now < r.start + RIDE_MS));
+    }, Math.max(0, nextExpiry - Date.now()) + 20);
     return () => clearTimeout(t);
   }, [riders]);
 
@@ -671,11 +677,11 @@ export function SquadFloor({ view, onOpenRiffBot }: SquadFloorProps) {
                       floorBoxes
                     )
                   }
-                  extras={
+                  extras={ridersOn(f.index, floor.elevator.car)}
+                  overlays={
                     <>
                       <LobbyPlus placement={f.teamA} lobby={floor.teamA.lobby} />
                       {f.teamB && <LobbyPlus placement={f.teamB} lobby={floor.teamB.lobby} />}
-                      {ridersOn(f.index, floor.elevator.car)}
                     </>
                   }
                 />
