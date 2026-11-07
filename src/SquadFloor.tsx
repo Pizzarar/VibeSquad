@@ -114,10 +114,12 @@ export function towerForView(view: TeamView): Tower {
   });
 }
 
-type FlatMember = { agentId: string; title: string; role: string };
+/** `floor` is the tower floor index the member sat on (-1 = the penthouse), so its ride starts at that floor's elevator. */
+type FlatMember = { agentId: string; title: string; role: string; floor: number };
 function towerMembers(tower: Tower): FlatMember[] {
   const out: FlatMember[] = [];
-  const push = (s: SeatedAgent | null) => s && out.push({ agentId: s.agentId, title: s.title, role: s.role });
+  let floor = -1;
+  const push = (s: SeatedAgent | null) => s && out.push({ agentId: s.agentId, title: s.title, role: s.role, floor });
   const team = (p: TeamFloorPlacement) => {
     push(p.lead);
     push(p.buddy);
@@ -127,6 +129,7 @@ function towerMembers(tower: Tower): FlatMember[] {
   push(tower.penthouse.riffbot);
   push(tower.penthouse.overlord);
   for (const f of tower.floors) {
+    floor = f.index;
     team(f.teamA);
     if (f.teamB) team(f.teamB);
   }
@@ -381,7 +384,7 @@ export function SquadFloor({ view, onOpenRiffBot }: SquadFloorProps) {
     if (gone.length) {
       const byId = new Map(prev.map((m) => [m.agentId, m]));
       const start = Date.now();
-      setRiders((rs) => [...rs, ...gone.map((id) => ({ start, ...(byId.get(id) ?? { agentId: id, title: id.slice(0, 8), role: "unknown" }) }))]);
+      setRiders((rs) => [...rs, ...gone.map((id) => ({ start, ...(byId.get(id) ?? { agentId: id, title: id.slice(0, 8), role: "unknown", floor: -1 }) }))]);
     }
     prevMembersRef.current = next;
   }, [tower, reduced]);
@@ -404,6 +407,33 @@ export function SquadFloor({ view, onOpenRiffBot }: SquadFloorProps) {
 
   const floorRefs = useRef<(HTMLDivElement | null)[]>([]);
   const penthouse = floor.penthouse ?? placeholderFloor().penthouse!;
+
+  // A rider starts at the elevator of the floor it sat on and rises for RIDE_MS.
+  const ridersOn = (floorIndex: number, elevator: Rect): ReactNode =>
+    riders
+      .filter((r) => r.floor === floorIndex)
+      .map((r, i) => {
+        const frame = cast ? spriteFrame(cast, r.role, "ride", 0) : null;
+        return (
+          <span
+            key={r.agentId}
+            className="sq-floor-rider"
+            title={`${r.title} · riding`}
+            style={{
+              left: elevator.x + elevator.w / 2 + (i % 2 === 0 ? -6 : 6),
+              top: elevator.y + elevator.h,
+              animationDuration: `${RIDE_MS}ms`,
+              ...(cast ? { width: cast.cell, height: cast.cell } : {}),
+            }}
+          >
+            {sheet && frame ? (
+              <span className="sq-floor-sprite" style={{ backgroundImage: `url(${sheet})`, backgroundPosition: `-${frame.x}px -${frame.y}px` }} />
+            ) : (
+              <span className="sq-floor-sprite sq-floor-sprite-fallback" />
+            )}
+          </span>
+        );
+      });
 
   const penthouseItems: BandItem[] = [];
   const { riffbot: riffAgent, overlord: overlordAgent } = tower.penthouse;
@@ -458,29 +488,7 @@ export function SquadFloor({ view, onOpenRiffBot }: SquadFloorProps) {
                     )}
                   </>
                 }
-                extras={riders.map((r, i) => {
-                  const frame = cast ? spriteFrame(cast, r.role, "ride", 0) : null;
-                  const elevatorTop = penthouse.elevatorTop;
-                  return (
-                    <span
-                      key={r.agentId}
-                      className="sq-floor-rider"
-                      title={`${r.title} · riding`}
-                      style={{
-                        left: elevatorTop.x + elevatorTop.w / 2 + (i % 2 === 0 ? -6 : 6),
-                        top: elevatorTop.y + elevatorTop.h,
-                        animationDuration: `${RIDE_MS}ms`,
-                        ...(cast ? { width: cast.cell, height: cast.cell } : {}),
-                      }}
-                    >
-                      {sheet && frame ? (
-                        <span className="sq-floor-sprite" style={{ backgroundImage: `url(${sheet})`, backgroundPosition: `-${frame.x}px -${frame.y}px` }} />
-                      ) : (
-                        <span className="sq-floor-sprite sq-floor-sprite-fallback" />
-                      )}
-                    </span>
-                  );
-                })}
+                extras={ridersOn(-1, penthouse.elevatorTop)}
               />
             </div>
           </div>
@@ -516,6 +524,7 @@ export function SquadFloor({ view, onOpenRiffBot }: SquadFloorProps) {
                     <>
                       <LobbyPlus placement={f.teamA} lobby={floor.teamA.lobby} />
                       {f.teamB && <LobbyPlus placement={f.teamB} lobby={floor.teamB.lobby} />}
+                      {ridersOn(f.index, floor.elevator.car)}
                     </>
                   }
                 />

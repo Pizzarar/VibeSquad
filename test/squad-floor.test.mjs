@@ -10,6 +10,7 @@ import {
   LOBBY_MAX_SHOWN,
   needsYouFloors,
   placeholderFloor,
+  isSeatedWorkerPose,
   poseFor,
   roleFrames,
   sliceAnchor,
@@ -66,7 +67,7 @@ test("lead → lead slice, Buddy → buddyOffice, workers → desks in oldest-sp
       team("x", {
         lead: member("lead-1", { kind: "lead" }),
         buddy: member("buddy-1", { kind: "brainstorm" }),
-        workers: [member("w-new", { createdAt: newer }), member("w-old", { createdAt: old })],
+        workers: [member("w-new", { createdAt: newer, status: "running" }), member("w-old", { createdAt: old, status: "running" })],
       }),
     ],
   });
@@ -81,7 +82,7 @@ test("lead → lead slice, Buddy → buddyOffice, workers → desks in oldest-sp
 });
 
 test("7th–10th worker → lobby shows 3 and a +1 badge", () => {
-  const workers = Array.from({ length: 10 }, (_, i) => member(`w${i + 1}`, { createdAt: new Date(2026, 0, 1, 0, i).toISOString() }));
+  const workers = Array.from({ length: 10 }, (_, i) => member(`w${i + 1}`, { createdAt: new Date(2026, 0, 1, 0, i).toISOString(), status: "running" }));
   const tower = buildTower({ hubBuddy: null, hubLead: null, teams: [team("x", { workers })] });
   const a = tower.floors[0].teamA;
   assert.equal(a.desks.length, DESK_COUNT);
@@ -273,4 +274,70 @@ test("P3f 4K: scale is floor(w*dpr/640)/dpr, so the floor fills the column at th
     assert.ok(Math.abs(sc * dpr - Math.round(sc * dpr)) < 1e-9);
     assert.ok(sc * 640 <= 2300);
   }
+});
+
+test("P3a idle worker with no needs-you is not seated; running and needs-you workers are", () => {
+  const tower = buildTower({
+    hubBuddy: null,
+    hubLead: null,
+    teams: [
+      team("x", {
+        workers: [
+          member("idle", { createdAt: "2026-01-01T00:00:00Z" }),
+          member("busy", { status: "running", createdAt: "2026-01-02T00:00:00Z" }),
+          member("needy", { attention: { tone: "needs-you", reason: "decide" }, createdAt: "2026-01-03T00:00:00Z" }),
+        ],
+      }),
+    ],
+  });
+  const a = tower.floors[0].teamA;
+  assert.deepEqual(a.desks.map((d) => d.agentId), ["busy", "needy"]);
+  assert.deepEqual(a.desks.map((d) => d.desk), [0, 1]); // desks pack, no gap where the idle one was
+  assert.equal(a.desks[1].pose, "needs"); // still seated with its bubble pose
+  assert.equal(isSeatedWorkerPose("idle"), false);
+  assert.equal(isSeatedWorkerPose("ride"), false);
+});
+
+test("P3a running → idle: the worker leaves the tower, so the floor plays ride at the elevator, then it is gone", () => {
+  const mk = (status) => buildTower({ hubBuddy: null, hubLead: null, teams: [team("x", { workers: [member("w", { status })] })] });
+  const ids = (t) => t.floors[0].teamA.desks.map((d) => ({ agent: { id: d.agentId } }));
+  const before = mk("running");
+  const after = mk("idle");
+  assert.equal(before.floors[0].teamA.desks.length, 1);
+  assert.equal(after.floors[0].teamA.desks.length, 0);
+  assert.deepEqual(transitionRiders(ids(before), ids(after)), ["w"]);
+  // an idle worker that was never seated does not ride
+  assert.deepEqual(transitionRiders(ids(after), ids(after)), []);
+});
+
+test("P3a needs-you → idle (finished) also goes home; leads, Buddies, RiffBot and Overlord stay seated idle", () => {
+  const tower = buildTower({
+    hubBuddy: member("riffbot", { kind: "brainstorm" }),
+    hubLead: member("overlord", { kind: "lead" }),
+    teams: [
+      team("x", {
+        lead: member("lead-1", { kind: "lead" }),
+        buddy: member("buddy-1", { kind: "brainstorm" }),
+        workers: [member("done", { attention: { tone: "finished", reason: "all green" } })],
+      }),
+    ],
+  });
+  const a = tower.floors[0].teamA;
+  assert.equal(a.lead.pose, "idle");
+  assert.equal(a.buddy.pose, "idle");
+  assert.equal(tower.penthouse.riffbot.pose, "idle");
+  assert.equal(tower.penthouse.overlord.pose, "idle");
+  assert.equal(a.desks.length, 0);
+});
+
+test("P3a lobby +N counts only running/needs-you workers", () => {
+  const workers = [
+    ...Array.from({ length: 8 }, (_, i) => member(`r${i}`, { status: "running", createdAt: new Date(2026, 0, 1, 0, i).toISOString() })),
+    ...Array.from({ length: 5 }, (_, i) => member(`i${i}`, { createdAt: new Date(2026, 0, 2, 0, i).toISOString() })),
+  ];
+  const a = buildTower({ hubBuddy: null, hubLead: null, teams: [team("x", { workers })] }).floors[0].teamA;
+  assert.equal(a.desks.length, DESK_COUNT);
+  assert.equal(a.lobby.length, 2); // 8 running − 6 desks
+  assert.equal(a.lobbyOverflow, 0);
+  assert.ok([...a.desks, ...a.lobby].every((s) => s.agentId.startsWith("r")));
 });

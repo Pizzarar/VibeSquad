@@ -327,6 +327,9 @@ export function poseFor(m: Pick<Member, "agent" | "attention">): Pose {
   return "idle";
 }
 
+/** Workers are seated only while working or needing you; leads, Buddies, RiffBot and the Overlord sit idle too. */
+export const isSeatedWorkerPose = (pose: Pose): boolean => pose === "work" || pose === "needs";
+
 /** Agents present in `prev` but gone from `next`: animate `ride` for ~RIDE_MS, then drop them. */
 export function transitionRiders(
   prev: readonly { agent: { id: string } }[],
@@ -427,8 +430,10 @@ const seat = (m: Member, seatKind: SeatKind, desk?: number): SeatedAgent => ({
 function placeTeam(t: TowerTeam): TeamFloorPlacement {
   const lead = t.lead && isLiveMember(t.lead) && !isRetiredLead(t.lead) ? seat(t.lead, "lead") : null;
   const buddy = t.buddy && isLiveMember(t.buddy) && !isRetiredLead(t.buddy) ? seat(t.buddy, "buddyOffice") : null;
+  // Done workers go home: only running (work) and needs-you workers are seated; an idle worker with
+  // no needs-you is "out for the day" (the floor animates its ride, then it is gone).
   const workers = [...(t.workers ?? [])]
-    .filter((w): w is Member => isLiveMember(w) && !isRetiredLead(w))
+    .filter((w): w is Member => isLiveMember(w) && !isRetiredLead(w) && isSeatedWorkerPose(poseFor(w)))
     .sort(spawnOrder);
   const desks = workers.slice(0, DESK_COUNT).map((w, i) => seat(w, "desk", i));
   const overflow = workers.slice(DESK_COUNT);
