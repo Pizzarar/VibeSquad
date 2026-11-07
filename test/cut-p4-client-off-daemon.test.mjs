@@ -41,7 +41,14 @@ test("DrawerHeader: fork / switch / resume / reload go through the runner, mode+
   assert.match(s, /runnerSpawn\(/);
   assert.match(s, /runnerUnarchive\(agent\.id\)/);
   assert.match(s, /runnerReloadTimeline\(agent\.id\)/);
-  assert.match(s, /LIVE_CHANGE_UNSUPPORTED/);
+  // N4: mode/model/thinking go through the runner /config route; a runner 400 (unoffered value) is shown, never swallowed.
+  assert.doesNotMatch(s, /LIVE_CHANGE_UNSUPPORTED/);
+  assert.match(s, /runnerSetConfig\(agent\.id, \{ modeId \}\)/);
+  assert.match(s, /runnerSetConfig\(agent\.id, \{ model: modelId \}\)/);
+  assert.match(s, /runnerSetConfig\(agent\.id, \{ thinkingOptionId: optionId \}\)/);
+  assert.match(s, /setModeHelper\(agent, [^)]*\)\.then\(\(r\) => setReloadError\(configNote\(r\)\)\)\.catch\(\(e2?\) => setReloadError\(/);
+  assert.match(s, /setThinkingHelper\(agent, [^)]*\)\.then\(\(r\) => setReloadError\(configNote\(r\)\)\)\.catch\(/);
+  assert.match(s, /setModelHelper\(agent, next\)\.then\(\(r\) => setReloadError\(configNote\(r\)\)\)\.catch\(/);
   assert.doesNotMatch(s, /drawer-schedules-btn|drawer-import-btn|SchedulesPanel|ImportSessionModal/);
 });
 
