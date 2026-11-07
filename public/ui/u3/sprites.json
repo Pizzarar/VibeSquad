@@ -1,0 +1,153 @@
+{
+  "anims": {
+    "twinkle": ["sparkle-xs","sparkle-m","sparkle-s","sparkle-m"]
+  },
+  "image": "sprites-{dark,light}.png",
+  "scale": 2,
+  "sprites": {
+    "bullet-teal": {
+      "h": 3,
+      "w": 2,
+      "x": 30,
+      "y": 16
+    },
+    "pip-amber": {
+      "h": 4,
+      "w": 4,
+      "x": 105,
+      "y": 0
+    },
+    "pip-line": {
+      "h": 4,
+      "w": 4,
+      "x": 110,
+      "y": 0
+    },
+    "pip-mint": {
+      "h": 4,
+      "w": 4,
+      "x": 100,
+      "y": 0
+    },
+    "pip-pink": {
+      "h": 4,
+      "w": 4,
+      "x": 115,
+      "y": 0
+    },
+    "pip-teal": {
+      "h": 4,
+      "w": 4,
+      "x": 120,
+      "y": 0
+    },
+    "pool-floor-amber": {
+      "h": 12,
+      "w": 40,
+      "x": 74,
+      "y": 16
+    },
+    "pool-floor-pink": {
+      "h": 12,
+      "w": 40,
+      "x": 33,
+      "y": 16
+    },
+    "sparkle-l": {
+      "h": 11,
+      "w": 11,
+      "x": 24,
+      "y": 0
+    },
+    "sparkle-l-pink": {
+      "h": 15,
+      "w": 15,
+      "x": 50,
+      "y": 0
+    },
+    "sparkle-l-violet": {
+      "h": 15,
+      "w": 15,
+      "x": 66,
+      "y": 0
+    },
+    "sparkle-m": {
+      "h": 9,
+      "w": 9,
+      "x": 14,
+      "y": 0
+    },
+    "sparkle-s": {
+      "h": 7,
+      "w": 7,
+      "x": 6,
+      "y": 0
+    },
+    "sparkle-xl": {
+      "h": 13,
+      "w": 13,
+      "x": 36,
+      "y": 0
+    },
+    "sparkle-xs": {
+      "h": 5,
+      "w": 5,
+      "x": 0,
+      "y": 0
+    },
+    "star-dot": {
+      "h": 1,
+      "w": 1,
+      "x": 82,
+      "y": 0
+    },
+    "star-plus-amber": {
+      "h": 3,
+      "w": 3,
+      "x": 96,
+      "y": 0
+    },
+    "star-plus-line": {
+      "h": 3,
+      "w": 3,
+      "x": 84,
+      "y": 0
+    },
+    "star-plus-pink": {
+      "h": 3,
+      "w": 3,
+      "x": 88,
+      "y": 0
+    },
+    "star-plus-teal": {
+      "h": 3,
+      "w": 3,
+      "x": 92,
+      "y": 0
+    },
+    "vs-tile": {
+      "h": 17,
+      "w": 17,
+      "x": 0,
+      "y": 29
+    },
+    "wbtn-close": {
+      "h": 9,
+      "w": 9,
+      "x": 20,
+      "y": 16
+    },
+    "wbtn-max": {
+      "h": 9,
+      "w": 9,
+      "x": 10,
+      "y": 16
+    },
+    "wbtn-min": {
+      "h": 9,
+      "w": 9,
+      "x": 0,
+      "y": 16
+    }
+  }
+}

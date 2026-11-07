@@ -1,0 +1,10 @@
+{
+  "repeat": "repeat",
+  "scale": 2,
+  "slice": {
+    "bottom": 0,
+    "left": 16,
+    "right": 16,
+    "top": 0
+  }
+}

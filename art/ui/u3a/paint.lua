@@ -12,7 +12,7 @@ local BG,PANEL,PHI,LINE,MARBLE,TEXT,MUTED,TEAL,VIOLET,PINK,CORAL,AMBER,MINT,SKY,
 
 local pal = { dark = Palette{ fromFile = root.."/art/palette/pc98-dark.gpl" },
               light = Palette{ fromFile = root.."/art/palette/pc98-light.gpl" } }
--- Light surfaces follow the U2 swatch A that Aub picked (src/styles.css light block):
+-- Light surfaces follow the U2 swatch A that the owner picked (src/styles.css light block):
 -- the P0 light BG #fdf4ec was the flash-bang. Slots stay index-matched.
 for i, hex in pairs({ [0]=0xe0d1dc, [1]=0xebe0e8, [2]=0xd6c2d0, [3]=0xb092a7, [6]=0x574268 }) do
   pal.light:setColor(i, Color{ r = hex >> 16, g = (hex >> 8) & 255, b = hex & 255 })
