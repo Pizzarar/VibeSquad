@@ -1697,15 +1697,20 @@ export function App() {
     [],
   );
   // Spin Up / Resume Overlord (sky-CRT): spawn the hub lead with the Squad's Lead profile; the right zone picks it up from the store.
+  const [overlordBusy, setOverlordBusy] = useState(false);
   const onSpinUpOverlord = useCallback((view: TeamView) => {
+    setOverlordBusy(true);
     const profileName = overlordProfileName(view);
     const profile = findProfile(profileName, getProfiles());
     void spinUpOverlord(view, {
       spawn: spawnTeamAgent,
+      retire: (m) => retireAgent(m.agent),
       profile,
       profileName,
       defaults: defaultSpawnConfigFor(profile?.provider ?? (profileName === "Lead - Gemini" ? "antigravity-cli" : "claude")),
-    }).catch((e) => alert(`Could not start the Overlord: ${e?.message ?? e}`));
+    })
+      .catch((e) => alert(`Could not start the Overlord: ${e?.message ?? e}`))
+      .finally(() => setOverlordBusy(false));
   }, []);
   // The pinned layout (focus view + rail, or the clean grid) is the default page only: FULL, focus mode
   // and the Workspaces screen show the panes as before.
@@ -2008,7 +2013,7 @@ export function App() {
       {hubFocused ? (
         <div className={`hub-body${hubAgentOpen ? " hub-agent-open" : ""}`} data-testid="hub-body">
           {panesNode}
-          {pinFocusView && !hubAgentOpen && <SkyZones view={pinFocusView} onSuccessor={paneSuccessor} onSpinUp={onSpinUpPin} onSpinUpOverlord={onSpinUpOverlord} />}
+          {pinFocusView && !hubAgentOpen && <SkyZones view={pinFocusView} onSuccessor={paneSuccessor} onSpinUp={onSpinUpPin} onSpinUpOverlord={onSpinUpOverlord} overlordBusy={overlordBusy} />}
           {pinFocusView && <SquadQueue view={pinFocusView} variant="strip" />}
           {pinFocusView && <SquadFloor view={pinFocusView} />}
         </div>

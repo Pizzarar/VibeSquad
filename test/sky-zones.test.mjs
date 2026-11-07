@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { NO_OVERLORD_TEXT, overlordProfileName, overlordState, skyZoneIds, skyZonesFor, spinUpOverlord } from "../src/skyZonesLogic.ts";
+import { NO_OVERLORD_TEXT, overlordProfileName, overlordStarting, overlordState, skyZoneIds, skyZonesFor, spinUpOverlord } from "../src/skyZonesLogic.ts";
 
 const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
 const member = (id, kind, { status = "idle", attention = null, laneId = "sq1" } = {}) => ({
@@ -206,7 +206,7 @@ test("G1-fix: dormant RiffBot (closed, with history) keeps the sky layout and of
   assert.equal(skyZonesFor(view([member("buddy", "brainstorm")])).riffbot.dormant, false);
   assert.equal(skyZonesFor(view([member("boss", "lead")])).riffbot.dormant, false); // no Buddy at all: Spin Up, not Resume
   const sky = src("SkyZones.tsx");
-  assert.ok(sky.includes('"sky-resume-btn"'));
+  assert.ok(sky.includes('"sky-resume-btn"') && sky.includes('"sky-resume-overlord"'));
   assert.ok(sky.includes("zone.dormant && onSpinUp"));
   // Resume and Spin Up both go through App's onSpinUpPin (spinUpPin → openPin), the existing path.
   assert.ok(src("App.tsx").includes("onSpinUp={onSpinUpPin}"));
@@ -287,4 +287,57 @@ test("O3: a closed Overlord keeps its zone read-only (dormant) with Resume Overl
   // Archived closed leads do not count as dormant.
   const archived = { ...closed, agent: { ...closed.agent, archivedAt: "2026-11-07T00:00:00Z" } };
   assert.equal(skyZonesFor(view([member("buddy", "brainstorm"), archived])).overlord.agentId, null);
+});
+
+test("O3-fix: closed predecessor lead is retired first and old-lead ords are never reused", async () => {
+  const closed = { ...member("old", "lead"), agent: { ...member("old", "lead").agent, status: "closed", labels: { lane: "sq1", ord: "2" } } };
+  const oldLead = { ...member("older", "lead"), kind: "old-lead", agent: { ...member("older", "lead").agent, status: "closed", archivedAt: "2026-11-06T00:00:00Z", labels: { lane: "sq1", role: "former-lead", ord: "5" } } };
+  const v = view([withCwd(member("buddy", "brainstorm"), "C:/hub"), closed, oldLead]);
+  const order = [];
+  let req;
+  await spinUpOverlord(v, {
+    retire: async (m) => void order.push(`retire:${m.agent.id}`),
+    spawn: async (r) => (order.push("spawn"), (req = r), { id: "n" }),
+    profile,
+    profileName: "Lead - Claude",
+  });
+  assert.deepEqual(order, ["retire:old", "spawn"]);
+  assert.equal(req.labels.ord, "6");
+});
+
+test("O3-fix: double click spawns once; a live Overlord is returned as is", async () => {
+  const v = view([withCwd(member("buddy", "brainstorm"), "C:/hub")]);
+  let n = 0;
+  let release;
+  const gate = new Promise((r) => (release = r));
+  const deps = { spawn: async () => (n++, await gate, { id: "one" }), profile, profileName: "Lead - Claude" };
+  const a = spinUpOverlord(v, deps);
+  const b = spinUpOverlord(v, deps);
+  assert.equal(overlordStarting("sq1"), true);
+  release();
+  assert.deepEqual(await Promise.all([a, b]), ["one", "one"]);
+  assert.equal(n, 1);
+  assert.equal(overlordStarting("sq1"), false);
+  const live = view([withCwd(member("buddy", "brainstorm"), "C:/hub"), member("boss", "lead")]);
+  assert.equal(await spinUpOverlord(live, deps), "boss");
+  assert.equal(n, 1);
+  const sky = src("SkyZones.tsx");
+  assert.ok(sky.includes("disabled={busy}"));
+  assert.ok(src("App.tsx").includes("overlordBusy={overlordBusy}"));
+});
+
+test("O3-fix: cwd comes only from the hub lane; never a feature-lane member", async () => {
+  const feature = { ...withCwd(member("f", "worker", { laneId: "feat" }), "C:/feature-wt") };
+  const deps = { spawn: async () => ({ id: "x" }), profile, profileName: "Lead - Claude" };
+  await assert.rejects(() => spinUpOverlord(view([member("buddy", "brainstorm"), feature]), deps), /start RiffBot first/);
+  let req;
+  const hubWorker = withCwd(member("hw", "worker"), "C:/hub-wt");
+  await spinUpOverlord(view([member("buddy", "brainstorm"), feature, hubWorker]), { ...deps, spawn: async (r) => ((req = r), { id: "x" }) });
+  assert.equal(req.cwd, "C:/hub-wt");
+});
+
+test("O3-fix: profile falls back on the previous lead's provider like HandoffModal", () => {
+  const prev = (provider) => ({ ...member("old", "lead"), agent: { ...member("old", "lead").agent, status: "closed", provider, labels: { lane: "sq1" } } });
+  assert.equal(overlordProfileName(view([member("buddy", "brainstorm"), prev("antigravity-cli")])), "Lead - Gemini");
+  assert.equal(overlordProfileName(view([member("buddy", "brainstorm"), prev("claude")])), "Lead - Claude");
 });

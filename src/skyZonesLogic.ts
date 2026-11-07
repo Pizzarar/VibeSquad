@@ -76,33 +76,55 @@ export type OverlordSpawnReq = {
 export const OVERLORD_PROFILES = ["Lead - Claude", "Lead - Gemini"] as const;
 export const OVERLORD_TITLE = "Overlord";
 
-/** The Lead profile name for the Squad's Overlord: the previous Overlord's own when it was a Lead profile, else Lead - Claude. */
+/** The Lead profile name for the Squad's Overlord: the previous Overlord's own Lead profile, else by provider like HandoffModal (antigravity-cli → Gemini, else Claude). */
 export function overlordProfileName(view: TeamView | null | undefined): string {
   const prev = dormantOverlordMember(view, hubPinForSquad(view));
   const p = (prev?.agent.labels as Record<string, string> | undefined)?.profile;
-  return p === "Lead - Gemini" || p === "Lead - Claude" ? p : "Lead - Claude";
+  if (p === "Lead - Gemini" || p === "Lead - Claude") return p;
+  return prev?.agent.provider?.startsWith("antigravity-cli") ? "Lead - Gemini" : "Lead - Claude";
 }
+
+const spinning = new Map<string, Promise<string>>();
+/** True while a Spin Up / Resume Overlord spawn is running for this Squad. */
+export const overlordStarting = (squadId: string): boolean => spinning.has(squadId.toLowerCase());
 
 /**
  * Spawn the hub lead (role=lead on the Squad's hub lane) through the same primitive a lead handoff uses.
- * The sky zone then shows it as soon as the agent lands in the store; spawnTeamAgent retires any closed predecessor.
+ * A live Overlord is returned as is, concurrent calls for one Squad share one spawn, and any closed unarchived
+ * hub lead is retired first so it cannot resurface as a dormant "(old) Overlord". The sky zone shows the new
+ * agent as soon as it lands in the store.
  */
-export async function spinUpOverlord(
+export function spinUpOverlord(
   view: TeamView,
   deps: {
     spawn: (req: OverlordSpawnReq) => Promise<{ id: string }>;
+    /** Retire a closed predecessor (App passes retireAgent). */
+    retire?: (m: Member) => Promise<unknown>;
     profile: OverlordProfile | undefined;
     profileName: string;
     defaults?: { modeId?: string; approvalPolicy?: string; sandbox?: string; shareMcp?: boolean };
   },
 ): Promise<string> {
   const hub = hubPinForSquad(view);
-  if (!hub) throw new Error("No hub lane for this Squad");
+  if (!hub) return Promise.reject(new Error("No hub lane for this Squad"));
+  if (hub.lead) return Promise.resolve(hub.lead.agent.id);
+  const key = view.team.id.toLowerCase();
+  const pending = spinning.get(key);
+  if (pending) return pending;
+  const run = doSpinUp(view, hub, deps).finally(() => spinning.delete(key));
+  spinning.set(key, run);
+  return run;
+}
+
+async function doSpinUp(view: TeamView, hub: Pin, deps: Parameters<typeof spinUpOverlord>[1]): Promise<string> {
   const lane = hub.lane.id;
   const inHub = (view.members ?? []).filter((m) => (m.laneId ?? "").toLowerCase() === lane.toLowerCase());
-  const cwd = (hub.brainstorm ?? inHub.find((m) => m.agent.cwd) ?? view.members?.find((m) => m.agent.cwd))?.agent.cwd;
+  const cwd = hub.brainstorm?.agent.cwd || inHub.find((m) => m.agent.cwd)?.agent.cwd;
   if (!cwd) throw new Error("No working directory known for the hub; start RiffBot first");
-  const ord = Math.max(0, ...inHub.filter((m) => m.kind === "lead").map((m) => ordOf(m.agent))) + 1;
+  for (const m of inHub) {
+    if (m.kind === "lead" && !m.agent.archivedAt && m.agent.status === "closed") await deps.retire?.(m)?.catch?.(() => {});
+  }
+  const ord = Math.max(0, ...inHub.filter((m) => m.kind === "lead" || m.kind === "old-lead").map((m) => ordOf(m.agent))) + 1;
   const p = deps.profile;
   const gemini = deps.profileName === "Lead - Gemini";
   const profileName = p?.name ?? deps.profileName;

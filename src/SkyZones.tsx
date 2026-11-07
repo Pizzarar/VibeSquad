@@ -98,6 +98,7 @@ function Zone({
   onReclaim,
   onSuccessor,
   onSpinUp,
+  busy = false,
 }: {
   zone: SkyZone;
   /** Riff while the Overlord is expanded: its chat is hidden, so the strip itself is the keyboard way back (a11y). */
@@ -114,6 +115,8 @@ function Zone({
   onSuccessor: (id: string) => void;
   /** Start (no Buddy) or resume (dormant) RiffBot: App's onSpinUpPin, the same path as the Spin Up button. */
   onSpinUp?: () => void;
+  /** The Overlord spawn is running: its Spin Up / Resume button is disabled. */
+  busy?: boolean;
 }) {
   const label = LABEL[zone.bot];
   const off = zone.bot === "overlord" && !zone.agentId; // a closed Overlord keeps its zone (history + Resume)
@@ -143,7 +146,7 @@ function Zone({
             {zone.dormant && onSpinUp && (
               <div className="sky-resume" data-testid={zone.bot === "overlord" ? "sky-resume-overlord-bar" : "sky-resume-riffbot"}>
                 <span className="muted small">This chat is closed (history below).</span>
-                <button type="button" className="btn ok small" data-testid={zone.bot === "overlord" ? "sky-resume-overlord" : "sky-resume-btn"} onClick={onSpinUp}>
+                <button type="button" className="btn ok small" data-testid={zone.bot === "overlord" ? "sky-resume-overlord" : "sky-resume-btn"} disabled={busy} onClick={onSpinUp}>
                   Resume {label}
                 </button>
               </div>
@@ -154,8 +157,8 @@ function Zone({
           <div className="sky-static" data-testid="sky-static-overlord" role="status">
             <span className="sky-static-text">{NO_OVERLORD_TEXT}</span>
             {onSpinUp && (
-              <button type="button" className="btn small" data-testid="sky-start-overlord" onClick={onSpinUp}>
-                Spin Up Overlord
+              <button type="button" className="btn small" data-testid="sky-start-overlord" disabled={busy} onClick={onSpinUp}>
+                {busy ? "Starting…" : "Spin Up Overlord"}
               </button>
             )}
           </div>
@@ -179,6 +182,7 @@ export function SkyZones({
   onSuccessor,
   onSpinUp,
   onSpinUpOverlord,
+  overlordBusy = false,
 }: {
   view: TeamView;
   onSuccessor: (id: string) => void;
@@ -186,6 +190,7 @@ export function SkyZones({
   onSpinUp?: (pin: Pin) => void;
   /** Spawn the hub lead (Spin Up / Resume Overlord); the new agent lands in the right zone once the store has it. */
   onSpinUpOverlord?: (view: TeamView) => void;
+  overlordBusy?: boolean;
 }) {
   const zones = skyZonesFor(view);
   const faces = useFacesModel();
@@ -249,7 +254,7 @@ export function SkyZones({
       onBlur={onFocusOut}
     >
       <Zone zone={zones.riffbot} faces={faces} frameStyle={frameStyle} force={layout.riffMode} takeover={takeover} squeezed={layout.expanded} onReclaim={reclaimRiff} onSuccessor={onSuccessor} onSpinUp={hub && onSpinUp ? () => onSpinUp(hub) : undefined} />
-      <Zone zone={zones.overlord} faces={faces} frameStyle={frameStyle} onSuccessor={onSuccessor} onSpinUp={hub && onSpinUpOverlord ? () => onSpinUpOverlord(view) : undefined} />
+      <Zone zone={zones.overlord} faces={faces} frameStyle={frameStyle} onSuccessor={onSuccessor} onSpinUp={hub && onSpinUpOverlord ? () => onSpinUpOverlord(view) : undefined} busy={overlordBusy} />
     </div>
   );
 }
