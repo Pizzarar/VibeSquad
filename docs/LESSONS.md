@@ -430,7 +430,7 @@ Aub (the owner) talks fast, tersely, with typos, and often while an agent is alr
 
 ## Standing rules (quick reference)
 
-1. Find the lead with `vs who lead` (labels `role`/`lane`/`ord`), never `vs list` JSON scraping or
+1. Find the lead with `vs who lead` (labels `role`/`lane`/`ord`), never agent-list JSON scraping or
    title-prefix regex.
 2. Run unit work in `%LOCALAPPDATA%\VibeSquad\worktrees\<repo>\<unit>`; never
    `git worktree add ../<repo>-<unit>` into `projects/`.
