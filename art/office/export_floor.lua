@@ -27,7 +27,25 @@ local function team(t)
   return '{"lead":'..R(t..".lead")..',"buddyOffice":'..R(t..".buddyOffice")..
     ',"desks":['..table.concat(d, ",")..'],"lobby":'..R(t..".lobby")..'}'
 end
+-- penthouse: its own plate (public/office/roof-*.png); its rects are in ROOF-plate px
+local roof = app.open(root.."/art/office/roof.aseprite")
+local rimg = Image(roof.width, roof.height, ColorMode.INDEXED)
+rimg:clear(0); rimg:drawSprite(roof, 1)
+for _, mode in ipairs({"dark", "light"}) do
+  local out = Sprite(roof.width, roof.height, ColorMode.INDEXED)
+  out:setPalette(Palette{ fromFile = root.."/art/palette/pc98-"..mode..".gpl" })
+  out.transparentColor = 0
+  out.cels[1].image = rimg
+  out:saveAs(root.."/public/office/roof-"..mode..".png"); out:close()
+  print("wrote roof-"..mode..".png "..roof.width.."x"..roof.height)
+end
+for _, s in ipairs(roof.slices) do S[s.name] = s.bounds end
+local pent = '{"plate":"roof","w":'..roof.width..',"h":'..roof.height..
+  ',"riffbot":{"seat":'..R("penthouse.riffbot.seat")..',"lounge":'..R("penthouse.riffbot.lounge")..'}'..
+  ',"overlord":{"seat":'..R("penthouse.overlord.seat")..',"crtWall":'..R("penthouse.overlord.crtWall")..'}'..
+  ',"elevatorTop":'..R("penthouse.elevatorTop")..'}'
 local json = '{"w":'..spr.width..',"h":'..spr.height..',\n "teamA":'..team("teamA")..',\n "teamB":'..team("teamB")..
-  ',\n "elevator":{"doorA":'..R("elevator.doorA")..',"doorB":'..R("elevator.doorB")..',"car":'..R("elevator.car")..'}}\n'
+  ',\n "elevator":{"doorA":'..R("elevator.doorA")..',"doorB":'..R("elevator.doorB")..',"car":'..R("elevator.car")..'},'..
+  '\n "penthouse":'..pent..'}\n'
 local f = io.open(root.."/public/office/floor.json", "wb"); f:write(json); f:close()
 print("wrote floor.json ("..#spr.slices.." slices)")

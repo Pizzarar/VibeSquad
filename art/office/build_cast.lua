@@ -17,8 +17,8 @@ local pal = { dark = Palette{ fromFile = root.."/art/palette/pc98-dark.gpl" },
 local CELL = 32
 local ROLES = { "lead", "buddy", "implement", "review" }
 if X then for _, r in ipairs(X.roles) do ROLES[#ROLES+1] = r end end
-local ALL = { "lead", "buddy", "implement", "review", "retired-lead", "mechanical", "audit", "spec", "art", "unknown" }
-local FALLBACK = { spec="review", audit="review", art="implement", mechanical="implement", ["retired-lead"]="lead", unknown="buddy" }
+local ALL = { "lead", "buddy", "implement", "review", "retired-lead", "mechanical", "audit", "spec", "art", "unknown", "riffbot", "overlord" }
+local FALLBACK = { spec="review", audit="review", art="implement", mechanical="implement", ["retired-lead"]="lead", unknown="buddy", riffbot="buddy", overlord="lead" }
 -- standing: how far the head/torso move up, and the trouser slot
 local STAND = { lead = {3, L.PINK}, buddy = {3, L.VIOLET}, implement = {1, L.VIOLET}, review = {0, L.MINT} }
 if X then for r, v in pairs(X.stand) do STAND[r] = v end end
@@ -66,7 +66,11 @@ end
 local function work(role, bob)
   local out = blank()
   local C = canvas(); st(C, PB.body[role]); over(out, C.img)
-  C = canvas(); st(C, P.chairBack); over(out, C.img)
+  -- per-role chair (Overlord's throne); a "high" chair is drawn over the head too
+  local chB = X and X.chairBack and X.chairBack[role] or P.chairBack
+  local high = X and X.chairHigh and X.chairHigh[role]
+  C = canvas(); st(C, chB); if not high then over(out, C.img) end
+  local chairImg = C.img
   C = canvas(); st(C, PB.head[role]); st(C, PB.ears[role]); st(C, PB.earsR[role])
   if role == "buddy" then for _, p in ipairs(P.phonesBack) do st(C, p) end end
   if X and X.backExtra[role] then for _, p in ipairs(X.backExtra[role]) do st(C, p) end end
@@ -74,13 +78,14 @@ local function work(role, bob)
   if role == "implement" and bob == 0 then C.px(14, 20, L.INK); C.px(15, 20, L.INK) end
   over(out, C.img, 0, bob)
   C = canvas(); st(C, PB.prop[role]); over(out, C.img, 0, bob)
+  if high then over(out, chairImg) end
   return flip(out)
 end
 
 -- fx[1] is the H0 baked bubble; the sheet ships the bubble as its own sprite
 local function needs(role, wave)
   local out = blank()
-  local C = canvas(); st(C, P.chairFront); over(out, C.img)
+  local C = canvas(); st(C, X and X.chairFront and X.chairFront[role] or P.chairFront); over(out, C.img)
   C = canvas(); st(C, FB.body[role]); over(out, C.img)
   C = canvas(); for _, p in ipairs(FB.head[role]) do st(C, p) end
   if RIM[role] then rim(C, role, 10) end

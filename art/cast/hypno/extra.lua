@@ -406,8 +406,146 @@ return function(L, P, F)
   front.fx.unknown = { NOBUB, part(0, 11, arm("c", "m")) }
   stand.unknown = { 2, L.CORAL }
 
+  -- ---------------- riffbot: boombox-headed lounge bot (the Squad's Buddy) ----------------
+  back.head.riffbot = part(6, 2, [[
+|....kkkkkkkkkk.....|
+|....k........k..p..|
+|....k........k..k..|
+|.kkkkkkkkkkkkkkkkk.|
+|kgggggggggggggggggk|
+|kgkkkkgggggggkkkkgk|
+|kkmkmkkgggggkkmkmkk|
+|kkkmkmkgggggkmkmkkk|
+|kkmkmkkgggggkkmkmkk|
+|kgkkkkgggggggkkkkgk|
+|kgggggggggggggggggk|
+|kgggggkkkkkkkgggggk|
+|kgggggkaaaaakgggggk|
+|kgggggkkkkkkkgggggk|
+|kgggggggggggggggggk|
+|.kkkkkkkkkkkkkkkkk.|
+|.......kmmmk.......|
+|.......kmmmk.......|
+|.......kkkkk.......|
+]])
+  back.body.riffbot = part(5, 21, torso(BACK, "p"):gsub("kpppppppppppppppppk", "kaaaaaaaaaaaaaaaaaak", 1))
+  front.head.riffbot = { part(6, 2, [[
+|....kkkkkkkkkk.....|
+|....k........k..p..|
+|....k........k..k..|
+|.kkkkkkkkkkkkkkkkk.|
+|kgggggggggggggggggk|
+|kgkkkkgggggggkkkkgk|
+|kkmmmmkgggggkmmmmkk|
+|kkmkkmkgggggkmkkmkk|
+|kkmkkmkgggggkmkkmkk|
+|kkmmmmkgggggkmmmmkk|
+|kgkkkkgggggggkkkkgk|
+|kgggkkkkkkkkkkkgggk|
+|kgggkaakmmmkaakgggk|
+|kgggkakmkkkmkakgggk|
+|kgggkkkkkkkkkkkgggk|
+|kgggggggggggggggggk|
+|.kkkkkkkkkkkkkkkkk.|
+|.......kmmmk.......|
+|.......kkkkk.......|
+]]) }
+  front.body.riffbot = part(5, 20, torso(FRONT, "p", "a", "m", "v"))
+  front.fx.riffbot = { NOBUB, part(0, 11, arm("p", "m")),
+    part(1, 3, [[
+|..kk.|
+|..kpk|
+|..k..|
+|kkk..|
+|kak..|
+|kkk..|
+]]) }
+  stand.riffbot = { 2, L.VIOLET }
+
+  -- ---------------- overlord: brain-in-a-dome boss on a giant pink throne ----------------
+  local DOME_BACK = [[
+|......kkkkkkk......|
+|....kktttttttkk....|
+|...kttpppppppttk...|
+|..kttppkpppkppptk..|
+|..ktpppkppppkpptk..|
+|.kttppppkpppppppttk|
+|.kttpkppppppkpppttk|
+|.ktttpppppppppptttk|
+|.kttttttttttttttttk|
+|kkkkkkkkkkkkkkkkkkk|
+|kaaaaaaaaaaaaaaaaak|
+|kkkkkkkkkkkkkkkkkkk|
+|.kmmmmmmmmmmmmmmmk.|
+|.kmkmmmmmmmmmmmkmk.|
+|.kmmmmmmmmmmmmmmmk.|
+|.kmmmmkkkkkkkmmmmk.|
+|.kmmmmmmmmmmmmmmmk.|
+|..kkkkkkkkkkkkkkk..|
+|......kmmmmmk......|
+|......kkkkkkk......|
+]]
+  back.head.overlord = part(6, 1, DOME_BACK)
+  back.body.overlord = part(5, 21, torso(BACK, "v"))
+  front.head.overlord = { part(6, 1, [[
+|......kkkkkkk......|
+|....kktttttttkk....|
+|...kttpppppppttk...|
+|..kttppkpppkppptk..|
+|..ktpppkppppkpptk..|
+|.kttppppkpppppppttk|
+|.kttpkppppppkpppttk|
+|.ktttpppppppppptttk|
+|.kttttttttttttttttk|
+|kkkkkkkkkkkkkkkkkkk|
+|kaaaaaaaaaaaaaaaaak|
+|kkkkkkkkkkkkkkkkkkk|
+|.kmmmmmmmmmmmmmmmk.|
+|.kkkkkkkkkkkkkkkkk.|
+|.kkkmmkkkkkkkmmkkk.|
+|.kkkmmkkkkkkkmmkkk.|
+|.kkkkkkkkkkkkkkkkk.|
+|.kmmmmmkpppkmmmmmk.|
+|..kkkkkkkkkkkkkkk..|
+|......kmmmmmk......|
+]]) }
+  -- popped gold collar over a violet suit
+  front.body.overlord = part(5, 20, torso(FRONT, "v", "a", "m", "v"):gsub("kvvvvkaaaakvvvvk", "kaavvkaaaakvvaak", 1))
+  front.fx.overlord = { NOBUB, part(0, 11, arm("v", "m")) }
+  stand.overlord = { 1, L.VIOLET }
+  -- the big chair: seen from behind it hides the whole body, only the dome peeks over
+  local THRONE = [[
+|.kkk..............kkk.|
+|kaaak............kaaak|
+|kaaakkkkkkkkkkkkkkaaak|
+|.kakvvvvvvvvvvvvvvkak.|
+|.kakvvmvvvvvvvmvvvkak.|
+|.kakvvvvvvvvvvvvvvkak.|
+|.kakvvvvvvvvvvvvvvkak.|
+|.kakvvvvvmvvvvvvvvkak.|
+|.kakvvvvvvvvvvvvvvkak.|
+|.kakvvmvvvvvvvmvvvkak.|
+|.kakvvvvvvvvvvvvvvkak.|
+|.kakvvvvvvvvvvvvvvkak.|
+|.kakvvvvvmvvvvvvvvkak.|
+|.kakvvvvvvvvvvvvvvkak.|
+|.kakvvvvvvvvvvvvvvkak.|
+|.kakvvmvvvvvvvmvvvkak.|
+|.kakvvvvvvvvvvvvvvkak.|
+|.kakvvvvvvvvvvvvvvkak.|
+|.kakvvvvvvvvvvvvvvkak.|
+|.kakkkkkkkkkkkkkkkkak.|
+|.kaaaaaaaaaaaaaaaaaak.|
+|.kkkkkkkkkkkkkkkkkkkk.|
+|...kk............kk...|
+]]
+  local chairBack = { overlord = part(5, 9, THRONE) }
+  local chairFront = { overlord = part(5, 7, THRONE) }
+  local chairHigh = { overlord = true }
+
   return {
-    roles = { "retired-lead", "mechanical", "audit", "spec", "art", "unknown" },
+    roles = { "retired-lead", "mechanical", "audit", "spec", "art", "unknown", "riffbot", "overlord" },
     back = back, front = front, backExtra = backExtra, stand = stand,
+    chairBack = chairBack, chairFront = chairFront, chairHigh = chairHigh,
   }
 end
