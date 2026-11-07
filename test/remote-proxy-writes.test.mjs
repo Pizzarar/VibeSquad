@@ -27,6 +27,10 @@ import {
 } from "../plugin/server/remote-proxy-rules.ts";
 import { makeVsHttpHandler } from "../plugin/server/remote-proxy.ts";
 
+// Mock-Paseo-daemon tests: the runner has a single owner and is never lazily started, so pin every lane to Paseo (as 35e895e did for 11 other suites).
+process.env.VS_DEFAULT_BACKEND = "paseo";
+delete process.env.VS_BACKEND;
+
 describe("1. Spawn endpoints: open-topic stays closed; Buddy start/restart and handoff POST reopen (Block 4)", () => {
   const disk = { teams: [{ id: "sq", name: "Squad", lanes: [{ id: "lane1", name: "One", lastProfile: "Brainstorm - Gemini" }] }] };
   const OK_BODIES = [

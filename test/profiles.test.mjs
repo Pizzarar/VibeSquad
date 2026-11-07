@@ -20,6 +20,10 @@ import {
   toPaseoSpawnConfig,
 } from "../server/vibesquad-api.mjs";
 
+// Mock-Paseo-daemon tests: the runner has a single owner and is never lazily started, so pin every lane to Paseo (as 35e895e did for 11 other suites).
+process.env.VS_DEFAULT_BACKEND = "paseo";
+delete process.env.VS_BACKEND;
+
 const FIXTURE_PATH = resolve(import.meta.dirname, "fixtures", "paseo-profiles.json");
 
 function makeTempEnv() {
@@ -600,7 +604,7 @@ function seedFile(env, notesByName) {
 test("every current default note is recorded in profile-note-history.json", () => {
   for (const p of PACK) assert.equal(isKnownDefaultNote(p.notes), true, `${p.name}: add its hash to server/profile-note-history.json`);
   assert.equal(isKnownDefaultNote(STALE_NOTE), true);
-  assert.equal(isKnownDefaultNote("Aub's own custom note"), false);
+  assert.equal(isKnownDefaultNote("A user's own custom note"), false);
 });
 
 test("stale default note is upgraded on load and persisted; user-edited note is preserved; canonical set unchanged", () => {
@@ -608,16 +612,16 @@ test("stale default note is upgraded on load and persisted; user-edited note is 
   try {
     const [n0, n1] = PACK.slice(0, 2).map((p) => p.name);
     const current0 = PACK[0].notes;
-    const names = seedFile(env, { [n0]: STALE_NOTE, [n1]: "Aub's own custom note" });
+    const names = seedFile(env, { [n0]: STALE_NOTE, [n1]: "A user's own custom note" });
     const res = loadProfilesDirect(env.profilesPath, { paseoProfiles: [], autoSeed: false });
     assert.notEqual(STALE_NOTE, current0);
     assert.equal(res.profiles[0].notes, current0);
-    assert.equal(res.profiles[1].notes, "Aub's own custom note");
+    assert.equal(res.profiles[1].notes, "A user's own custom note");
     assert.equal(res.profiles[2].notes, PACK[2].notes);
     assert.deepEqual(res.profiles.map((p) => p.name), names);
     const disk = JSON.parse(readFileSync(env.profilesPath, "utf8"));
     assert.equal(disk.profiles[0].notes, current0);
-    assert.equal(disk.profiles[1].notes, "Aub's own custom note");
+    assert.equal(disk.profiles[1].notes, "A user's own custom note");
     assert.equal(disk.profiles.length, 3);
   } finally {
     env.cleanup();
