@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { isForbiddenRealHome } from "./test-guard.mjs";
+import { isForbiddenRealHome, isForbiddenRepoTeams } from "./test-guard.mjs";
 
 // The one teams registry lookup shared by the server, the CLI and the plugin's server modules.
 // Order: VIBESQUAD_TEAMS_FILE > <VIBESQUAD_HOME or ~/.vibesquad>/teams.json > <repo>/teams.json > teams.example.json.
@@ -25,7 +25,7 @@ export function resolveTeamsFilePath(rootDir) {
     if (fs.existsSync(homeTeams)) return homeTeams;
   }
   const local = path.join(rootDir, "teams.json");
-  if (fs.existsSync(local)) return local;
+  if (fs.existsSync(local) && !isForbiddenRepoTeams(local)) return local;
   return path.join(rootDir, "teams.example.json");
 }
 
