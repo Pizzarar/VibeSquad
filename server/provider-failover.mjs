@@ -194,7 +194,7 @@ export function capExpiryMs(entry) {
   for (const k of ["resetsAt", "resetAt", "resetTime"]) {
     const raw = entry[k];
     if (raw === undefined || raw === null || raw === "") continue;
-    const num = typeof raw === "number" ? raw : /^d+(.d+)?$/.test(String(raw).trim()) ? Number(raw) : NaN;
+    const num = typeof raw === "number" ? raw : /^\d+(\.\d+)?$/.test(String(raw).trim()) ? Number(raw) : NaN;
     // Epoch seconds (< 1e11, year ~5138 in ms) are common in provider payloads; ms values are larger.
     const t = Number.isFinite(num) ? (num < 1e11 ? num * 1000 : num) : Date.parse(raw);
     if (Number.isFinite(t)) return t;

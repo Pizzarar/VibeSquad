@@ -130,3 +130,12 @@ test('send revives only an auto-archived worker: a retired lead stays archived a
     server.close(); server.closeAllConnections?.();
   }
 });
+
+test('cap TTL: numeric-string resetsAt is read as seconds or ms', () => {
+  const now = Date.now();
+  const sec = (d) => String(Math.floor(now / 1000) + d);
+  assert.equal(isCapExpired({ resetsAt: sec(-60) }, now), true, 'seconds string, past');
+  assert.equal(isCapExpired({ resetsAt: sec(3600) }, now), false, 'seconds string, future');
+  assert.equal(isCapExpired({ resetsAt: String(now - 60_000) }, now), true, 'ms string, past');
+  assert.equal(isCapExpired({ resetsAt: String(now + 3600_000) }, now), false, 'ms string, future');
+});
