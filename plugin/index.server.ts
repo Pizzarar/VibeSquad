@@ -1285,6 +1285,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         let changed = false;
         const next: any = { ...config };
         let nextReqLabels: Labels | undefined = rawReqLabels ? { ...rawReqLabels } : undefined;
+        let failoverProfileName = "";
 
         const explicitRole =
           rawRole === "lead"
@@ -1349,7 +1350,14 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               // Preserve explicitness: a fuzzy match stays fuzzy so the caller's provider/model
               // are never clobbered by the explicit-profile override below.
               profileMatch = { profile: fo.profile, explicit: wasExplicit };
+              // Relabel for the new provider: every carrier of the stale profile name (request labels, config labels, env)
+              // must say the profile the agent actually runs, or enforceProfileAfterSpawn / digests match the capped one.
+              failoverProfileName = fo.profile.name;
               if (nextReqLabels?.profile) nextReqLabels.profile = fo.profile.name;
+              if (config?.labels?.profile) {
+                next.labels = { ...(next.labels ?? config.labels), profile: fo.profile.name };
+                changed = true;
+              }
               reqLabels.profile = fo.profile.name;
               log(`profile-failover: ${fo.fromProfile}->${fo.toProfile} reason=${fo.reason}`);
             }
@@ -1668,6 +1676,10 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         // agent exists (agent.created runs later). Propagate only what isn't already set.
         const nextEnv: Record<string, string> = { ...(env ?? {}) };
         let envChanged = false;
+        if (failoverProfileName && nextEnv.VS_PROFILE && nextEnv.VS_PROFILE !== failoverProfileName) {
+          nextEnv.VS_PROFILE = failoverProfileName;
+          envChanged = true;
+        }
         if (role && !nextEnv.VS_ROLE) {
           nextEnv.VS_ROLE = role;
           envChanged = true;
@@ -2008,7 +2020,11 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
 
             const role = effectiveAgentRole({ labels });
             if (role === "worker") {
-              await spawnDigest(paseo, agent, turnId, labels);
+              try {
+                await spawnDigest(paseo, agent, turnId, labels);
+              } finally {
+                await closeFinishedWorker(paseo, agent.id, { turnEnded: true });
+              }
             }
             if (role === "lead") {
               if (handoffCoordinator.hasPendingTakeover(agent.id) || labels["vs.handoff-from"]) {
@@ -2161,7 +2177,49 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }, deps.debounceMs);
     }
 
+    /**
+     * Workers close when done. A role=worker that files a `done` report is archived once its turn is over, so a finished
+     * worker holds no process and no roster row. Trigger: the report itself only MARKS the worker (the report tool call is
+     * still inside the turn, and archiving then would kill the agent mid-reply); the archive fires on that worker's
+     * turn_ended, or after a short grace if the turn already ended before the log watcher saw the report (agent idle then).
+     * Leads, Buddies and digests never match the role check. Archive is reversible: a later `send` unarchives and resumes.
+     */
+    const doneReported = new Set<string>();
+    const WORKER_CLOSE_GRACE_MS = 3000;
+
+    async function closeFinishedWorker(paseo: Paseo, agentId: string, opts: { turnEnded?: boolean } = {}) {
+      if (!doneReported.has(agentId)) return;
+      const s = await snap(paseo, agentId);
+      if (!s) {
+        doneReported.delete(agentId); // a ref that is not an agent
+        return;
+      }
+      const labels = s.labels ?? {};
+      if (isDigestAgent(labels) || effectiveAgentRole({ labels }) !== "worker") {
+        doneReported.delete(agentId); // lead / Buddy / digest: never auto-closed
+        return;
+      }
+      const status = String((s as any).status ?? "");
+      if (!opts.turnEnded && (status === "running" || status === "initializing")) return; // turn_ended will close it
+      doneReported.delete(agentId);
+      await deps.archiveAgent(agentId).catch((e: unknown) => log(`worker auto-close failed for ${agentId}: ${e}`));
+      log(`worker auto-closed after done report: ${agentId}`);
+    }
+
+    function noteWorkerDone(entry: LogEntry) {
+      // The subject of a final report: the author (worker's own `report`) and its refs (the digest agent files PASS/FAIL verdicts
+      // against the worker). Non-agent refs and non-worker roles fall out in closeFinishedWorker.
+      const ids = new Set([entry.agent, ...(entry.refs ?? [])].map((x) => String(x ?? "").trim()).filter((x) => x && x !== "plugin" && x !== "you"));
+      for (const id of ids) {
+        doneReported.add(id);
+        later(() => {
+          if (paseoApi) void closeFinishedWorker(paseoApi, id).catch((e: unknown) => log(`worker auto-close failed for ${id}: ${e}`));
+        }, WORKER_CLOSE_GRACE_MS);
+      }
+    }
+
     function noteEntry(team: string, entry: LogEntry) {
+      if (entry.type === "done") noteWorkerDone(entry);
       if (!WAKE_TYPES.has(entry.type)) return;
       queueWake(team, entry);
     }

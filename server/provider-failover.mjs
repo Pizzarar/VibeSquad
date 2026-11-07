@@ -185,16 +185,56 @@ export function resolveCappedProvidersPath(opts = {}) {
   return join(base, "capped-providers.json");
 }
 
-/** Read the raw `{ capped: { ... } }` object directly from disk (never merges in-memory opts). */
+/** A cap with no reset time is assumed to clear with the 5 h usage window. */
+export const CAP_DEFAULT_TTL_MS = 5 * 60 * 60 * 1000;
+
+/** When a cap stops applying, in ms epoch: its reset time if it carries one, else updatedAt + 5 h. Null = unknown age, never expires. */
+export function capExpiryMs(entry) {
+  if (!entry || typeof entry !== "object") return null;
+  for (const k of ["resetsAt", "resetAt", "resetTime"]) {
+    const t = entry[k] === undefined || entry[k] === null || entry[k] === "" ? NaN : typeof entry[k] === "number" ? entry[k] : Date.parse(entry[k]);
+    if (Number.isFinite(t)) return t;
+  }
+  const at = Date.parse(entry.updatedAt);
+  return Number.isFinite(at) ? at + CAP_DEFAULT_TTL_MS : null;
+}
+
+export function isCapExpired(entry, now = Date.now()) {
+  const exp = capExpiryMs(entry);
+  return exp !== null && exp <= now;
+}
+
+/** Read the raw `{ capped: { ... } }` object directly from disk (never merges in-memory opts). Expired caps are dropped and pruned from the file. */
 function readDiskCaps(opts = {}) {
   const path = resolveCappedProvidersPath(opts);
+  let parsed;
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
-    const capped = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed.capped ?? parsed) : null;
-    return capped && typeof capped === "object" && !Array.isArray(capped) ? capped : {};
+    parsed = JSON.parse(readFileSync(path, "utf8"));
   } catch {
     return {};
   }
+  const capped = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed.capped ?? parsed) : null;
+  if (!capped || typeof capped !== "object" || Array.isArray(capped)) return {};
+  const now = opts.now ?? Date.now();
+  const live = {};
+  let pruned = false;
+  for (const [k, v] of Object.entries(capped)) {
+    if (isCapExpired(v, now)) pruned = true;
+    else live[k] = v;
+  }
+  if (pruned) {
+    try {
+      writeFileSync(path, JSON.stringify({ capped: live }, null, 2) + "\n", "utf8");
+    } catch {
+      // read-only or racing writer: the expired caps are still ignored above
+    }
+  }
+  return live;
+}
+
+/** `{ capped: {...} }` with expired caps removed (and pruned from disk): what `vs cap list` shows. */
+export function readLiveCapDoc(opts = {}) {
+  return { capped: readDiskCaps(opts) };
 }
 
 function isFamilyCapped(caps, targetFamily) {

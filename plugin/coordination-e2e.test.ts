@@ -162,6 +162,7 @@ function harness(
   const detachedIds: string[] = [];
   const appliedSettings: Array<{ agentId: string; patch: AgentSettingsPatch }> = [];
   const refusedIds: string[] = [];
+  const archivedIds: string[] = [];
   const sent: Array<{ to: string; text: string }> = [];
   const timelineByAgent = opts.timelineByAgent ?? new Map<string, any[]>();
 
@@ -193,7 +194,11 @@ function harness(
         if (name) a.title = name;
       }
     },
-    archiveAgent: async () => {},
+    archiveAgent: async (agentId: string) => {
+      archivedIds.push(agentId);
+      const a = agents.get(agentId);
+      if (a) a.archivedAt = new Date().toISOString();
+    },
     applyAgentSettings: async (agentId: string, patch: AgentSettingsPatch) => {
       appliedSettings.push({ agentId, patch });
       const a = agents.get(agentId);
@@ -245,6 +250,8 @@ function harness(
 
   return {
     stop,
+    archivedIds,
+    scanLogs: (stop as any).scanLogs as (baseline?: boolean) => void,
     async beforeCreate(req: any) {
       return (await before.get("agent.create")!({ request: req })) ?? req;
     },
@@ -1090,6 +1097,78 @@ test(
       agents.set("riff-running", spawnedRunning);
       await h.onCreated(spawnedRunning);
       assert.deepEqual(h.appliedSettings, [], "applyAgentSettings skipped while status === running on initial snapshot");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// R5 — workers close on done; failover relabels the profile for the new provider
+// ---------------------------------------------------------------------------
+
+test(
+  "R5: a worker that files a done report is archived when its turn ends; leads and workers without a report are not",
+  withEnv(async ({ vsHome, briefRoot }) => {
+    const mk = (id: string, role: string, extra: any = {}) => ({
+      id, title: id, cwd: CWD, status: "idle", provider: "claude", model: "claude-opus-5-5",
+      labels: { team: "vibesquad", lane: "vibesquad", role, ...extra },
+    });
+    const agents = new Map<string, any>([
+      ["w-done", mk("w-done", "worker")],
+      ["w-quiet", mk("w-quiet", "worker")],
+      ["lead-1", mk("lead-1", "lead", { lead: "vibesquad" })],
+    ]);
+    const h = harness(agents, { briefRoot });
+    try {
+      const file = join(vsHome, "teams", "vibesquad", "log.jsonl");
+      mkdirSync(join(vsHome, "teams", "vibesquad"), { recursive: true });
+      const line = (o: any) => JSON.stringify({ ts: new Date().toISOString(), lane: "vibesquad", ...o }) + "\n";
+      writeFileSync(file, line({ agent: "w-done", type: "done", text: "PASS: shipped", refs: [] }) + line({ agent: "lead-1", type: "done", text: "lane done", refs: [] }), "utf8");
+      h.scanLogs(false);
+      await h.onTurnEnded(agents.get("w-done"));
+      await h.onTurnEnded(agents.get("w-quiet"));
+      await h.onTurnEnded(agents.get("lead-1"));
+      assert.deepEqual(h.archivedIds, ["w-done"], "only the reporting worker is archived");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "R5: a digest verdict (done filed by the digest agent against the worker's id in refs) closes the worker after the grace period",
+  withEnv(async ({ vsHome, briefRoot }) => {
+    const agents = new Map<string, any>([
+      ["w-1", { id: "w-1", title: "w-1", cwd: CWD, status: "idle", provider: "claude", model: "claude-opus-5-5", labels: { team: "vibesquad", lane: "vibesquad", role: "worker" } }],
+    ]);
+    const h = harness(agents, { briefRoot });
+    try {
+      mkdirSync(join(vsHome, "teams", "vibesquad"), { recursive: true });
+      await h.onTurnEnded(agents.get("w-1")); // gives the plugin its paseo handle; no report yet -> stays
+      assert.deepEqual(h.archivedIds, []);
+      writeFileSync(join(vsHome, "teams", "vibesquad", "log.jsonl"), JSON.stringify({ ts: new Date().toISOString(), agent: "digest-9", lane: "vibesquad", type: "done", text: "PASS", refs: ["w-1"] }) + "\n", "utf8");
+      h.scanLogs(false);
+      await wait(3300);
+      assert.deepEqual(h.archivedIds, ["w-1"]);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "R5: failover relabels env VS_PROFILE and config labels, not just request labels",
+  withEnv(async ({ briefRoot }) => {
+    const h = harness(new Map(), { briefRoot, cappedProviders: { claude: { reason: "cap" } } });
+    try {
+      const out = await h.beforeCreate({
+        config: { cwd: CWD, provider: "claude", model: "claude-opus-5-5", title: "RiffBot", labels: { role: "brainstorm", lane: "vibesquad", profile: "Brainstorm - Claude" } },
+        env: { VS_PROFILE: "Brainstorm - Claude", VS_ROLE: "brainstorm" },
+      });
+      assert.equal(out.config.provider, "antigravity-cli");
+      assert.equal(out.env?.VS_PROFILE, "Brainstorm - Gemini");
+      assert.equal(out.config.labels?.profile, "Brainstorm - Gemini");
     } finally {
       h.stop?.();
     }

@@ -533,7 +533,17 @@ export class RunnerBackend {
     const body = { text };
     if (opts.images?.length) body.images = opts.images;
     if (opts.activeTurnBehavior) body.activeTurnBehavior = opts.activeTurnBehavior;
-    await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/input`, body);
+    const post = () => this.rc.request("POST", `/agents/${encodeURIComponent(id)}/input`, body);
+    // A finished worker is archived (no process, off the roster) but stays resumable: a follow-up brings it back first, because the
+    // runner refuses to resume an archived agent and the send would otherwise fail as "not running".
+    if (this.live.archived.has(id)) await this.unarchiveAgent(id);
+    try {
+      await post();
+    } catch (err) {
+      if (!/not running/.test(String(err?.message ?? err)) || !(await this.fetchAgent(id).then((r) => r.agent.archivedAt, () => null))) throw err;
+      await this.unarchiveAgent(id);
+      await post();
+    }
   }
 
   async fetchAgentTimeline(id, opts = {}) {
