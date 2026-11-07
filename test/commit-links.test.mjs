@@ -10,6 +10,8 @@ test("parseCommitToken: standalone 7-40 hex only", async () => {
   assert.equal(parseCommitToken("7E1C1F6"), "7E1C1F6");
   assert.equal(parseCommitToken("a".repeat(40)), "a".repeat(40));
   assert.equal(parseCommitToken("deadbeef"), "deadbeef"); // not a real commit? links anyway; Changes shows the error
+  for (const num of ["1234567", "86400000", "20261107", "1".repeat(40)]) assert.equal(parseCommitToken(num), null, num);
+  assert.equal(parseCommitToken("1234567a"), "1234567a");
   for (const bad of ["abc12", "a".repeat(41), "git show 7e1c1f6", "7e1c1f6 ", "7e1c1f6.", "src/7e1c1f6", "xyz1234", "--help", "`7e1c1f6`", ""]) {
     assert.equal(parseCommitToken(bad), null, JSON.stringify(bad));
   }
