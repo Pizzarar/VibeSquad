@@ -10,6 +10,9 @@ import { acquireStartLock, releaseLock } from "../../runner/lock.mjs";
 
 const RUNNER_ENTRY = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "runner", "server.mjs");
 
+/** Three missed 15s runner heartbeats and the event stream is treated as dead. */
+const STREAM_IDLE_MS = 45000;
+
 export const runnerHome = (env = process.env) => path.join(env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad"), "runner");
 
 export function readDiscovery(home) {
@@ -80,10 +83,18 @@ export class RunnerClient {
    * Tail the runner's /events SSE stream. Reconnects (retryMs) until close(); onOpen/onClose bracket each connection,
    * onMessage gets each parsed { id, event }. close() aborts the request and clears the retry timer: nothing lingers.
    */
-  stream({ onMessage, onOpen, onClose, retryMs = 2000 } = {}) {
+  stream({ onMessage, onOpen, onClose, retryMs = 2000, idleMs = STREAM_IDLE_MS } = {}) {
     let closed = false;
     let ac = null;
     let timer = null;
+    let idle = null;
+    // The runner heartbeats every 15s: a stream that goes quiet without erroring (half-open socket) would freeze live chat
+    // until the VS server restarts, so silence past idleMs aborts it and falls into the normal reconnect.
+    const arm = () => {
+      clearTimeout(idle);
+      idle = setTimeout(() => ac?.abort(), idleMs);
+      idle.unref?.();
+    };
     const run = async () => {
       let opened = false;
       try {
@@ -93,10 +104,12 @@ export class RunnerClient {
         const res = await this.fetch(`http://127.0.0.1:${this.conn.port}/events`, { headers: { authorization: `Bearer ${this.conn.token}` }, signal: ac.signal });
         if (!res.ok || !res.body) throw new Error(`runner events ${res.status}`);
         opened = true;
+        arm();
         if (!closed) onOpen?.();
         const dec = new TextDecoder();
         let buf = "";
         for await (const chunk of res.body) {
+          arm();
           buf += dec.decode(chunk, { stream: true });
           let i;
           while ((i = buf.indexOf("\n\n")) >= 0) {
@@ -110,6 +123,7 @@ export class RunnerClient {
       } catch {
         this.conn = null; // stale discovery (runner restarted on a new port): re-read next time
       }
+      clearTimeout(idle);
       if (opened && !closed) onClose?.();
       if (!closed) {
         timer = setTimeout(run, retryMs);
@@ -121,6 +135,7 @@ export class RunnerClient {
       close() {
         closed = true;
         clearTimeout(timer);
+        clearTimeout(idle);
         ac?.abort();
       },
     };
