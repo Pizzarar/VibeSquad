@@ -8,25 +8,21 @@ import {
   parseSentAttachments,
   removeAttachment,
   formatSize,
+  isBinaryBytes,
+  MAX_INLINE_BYTES,
 } from "../src/attachments.ts";
 
 const mk = (name, body, type = "text/plain") => new File([body], name, { type });
 
-test("composeMessage appends fenced blocks for small text and refs for big/binary", async () => {
+test("composeMessage inlines small text files as fenced blocks", async () => {
   const small = mk("a.ts", "const x = 1;");
-  const big = mk("big.log", "x".repeat(300 * 1024));
-  const bin = mk("b.bin", new Uint8Array([1, 0, 2]), "application/octet-stream");
-  const items = [small, big, bin].map((f) => ({ name: f.name, size: f.size, file: f }));
-  const ups = [];
-  const out = await composeMessage("hello", items, async ({ name }) => (ups.push(name), `/repo/uploads/${name}`));
+  const items = [small].map((f) => ({ name: f.name, size: f.size, file: f }));
+  const out = await composeMessage("hello", items);
   assert.ok(out.startsWith("hello\n[file: a.ts]\n```\nconst x = 1;\n```"));
-  assert.ok(out.includes("[attached file: /repo/uploads/big.log]"));
-  assert.ok(out.includes("[attached file: /repo/uploads/b.bin]"));
-  assert.deepEqual(ups, ["big.log", "b.bin"]);
 });
 
 test("composeMessage with no files returns the draft untouched", async () => {
-  assert.equal(await composeMessage("hi", [], async () => "x"), "hi");
+  assert.equal(await composeMessage("hi", []), "hi");
 });
 
 test("adding attachments never touches a draft; remove drops the chip", () => {
@@ -43,7 +39,7 @@ test("adding attachments never touches a draft; remove drops the chip", () => {
 
 test("parseSentAttachments turns blocks and refs into chips and strips the wall of text", async () => {
   const f = mk("a.md", "line1\nline2");
-  const text = await composeMessage("look", [{ name: "a.md", size: f.size, file: f }], async () => "");
+  const text = await composeMessage("look", [{ name: "a.md", size: f.size, file: f }]);
   const withRef = text + "\n[attached file: C:/r/up/big.log]\n";
   const r = parseSentAttachments(withRef);
   assert.equal(r.body, "look");
@@ -56,7 +52,7 @@ test("parseSentAttachments leaves plain messages alone", () => {
 
 test("fenced content containing ``` round-trips with the ~~~~ fence", async () => {
   const f = mk("n.md", "```js\nx\n```");
-  const t = await composeMessage("", [{ name: "n.md", size: f.size, file: f }], async () => "");
+  const t = await composeMessage("", [{ name: "n.md", size: f.size, file: f }]);
   const r = parseSentAttachments(t);
   assert.equal(r.chips[0].name, "n.md");
   assert.equal(r.body, "");
@@ -69,7 +65,7 @@ test("formatSize", () => {
 
 const roundTrip = async (text, files) => {
   const items = files.map((f) => ({ name: f.name, size: f.size, file: f }));
-  return parseSentAttachments(await composeMessage(text, items, async ({ name }) => `/repo/up/${name}`));
+  return parseSentAttachments(await composeMessage(text, items));
 };
 
 test("repoPathFor confines chips to the repo, case-insensitive on Windows drives", async () => {
@@ -92,9 +88,15 @@ test("parseSentAttachments leaves inline [attached file: x] in plain text alone"
 
 test("md attachment containing ``` and ~~~~ round-trips without spilling", async () => {
   const md = "# t\n```js\nx\n```\n~~~~\ny\n~~~~\n````\nz\n````\n";
-  const r = await roundTrip("hi [attached file: x]", [mk("n.md", md), mk("b.bin", new Uint8Array([0]))]);
+  const r = await roundTrip("hi [attached file: x]", [mk("n.md", md)]);
   assert.equal(r.body, "hi [attached file: x]");
-  assert.deepEqual(r.chips, [{ name: "n.md" }, { name: "b.bin", path: "/repo/up/b.bin" }]);
+  assert.deepEqual(r.chips, [{ name: "n.md" }]);
+});
+
+test("isBinaryBytes flags null bytes and MAX_INLINE_BYTES is the inline limit", () => {
+  assert.equal(isBinaryBytes(new Uint8Array([1, 0, 2])), true);
+  assert.equal(isBinaryBytes(new Uint8Array([104, 105])), false); // "hi"
+  assert.equal(MAX_INLINE_BYTES, 100 * 1024);
 });
 
 test("chips-only steer keeps a non-empty steered label", async () => {

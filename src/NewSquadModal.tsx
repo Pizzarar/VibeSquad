@@ -1,6 +1,5 @@
-// New squad creation modal: add a local folder or clone a repo, auto-fill name, optionally start a Buddy.
+// New squad creation modal: add a local folder, auto-fill name, optionally start a Buddy.
 import { useEffect, useMemo, useState } from "react";
-import { DEMO } from "./demoFlag";
 import {
   getTeams,
   saveTeams,
@@ -31,10 +30,7 @@ export function NewSquadModal({
   onClose: () => void;
   onCreated: (squadId: string, pin: Pin | null) => void;
 }) {
-  const [source, setSource] = useState<"path" | "clone">("path");
   const [folderPath, setFolderPath] = useState("");
-  const [cloneRepo, setCloneRepo] = useState("");
-  const [cloneDest, setCloneDest] = useState("");
   const [squadName, setSquadName] = useState("");
   const [nameEdited, setNameEdited] = useState(false);
   const [startBuddy, setStartBuddy] = useState(true);
@@ -49,32 +45,20 @@ export function NewSquadModal({
   }, [profiles]);
 
   const remote = isRemote();
-  const rawPath =
-    source === "path" ? folderPath : cloneDest || cloneRepo.split("/").pop()?.replace(/\.git$/, "") || "";
+  const rawPath = folderPath;
   const derived = useMemo(() => deriveSquadNameFromPath(rawPath), [rawPath]);
 
   useEffect(() => {
     if (!nameEdited && !remote) setSquadName(derived.name);
   }, [derived.name, nameEdited, remote]);
 
-  const canSubmit = remote
-    ? squadName.trim().length > 0
-    : source === "path"
-      ? folderPath.trim().length > 0
-      : cloneRepo.trim().length > 0;
+  const canSubmit = remote ? squadName.trim().length > 0 : folderPath.trim().length > 0;
 
   const create = async () => {
     setBusy(true);
     setErr("");
     try {
-      let finalPath = folderPath.trim();
-      if (!remote) {
-        if (source === "clone") {
-          const dest = cloneDest.trim() || cloneRepo.trim().split("/").pop()!.replace(/\.git$/, "");
-          if (!DEMO) throw new Error("Cloning from GitHub isn't available yet. Clone it in a terminal, then add the folder.");
-          finalPath = dest;
-        }
-      }
+      const finalPath = folderPath.trim();
 
       const teams = getTeams();
       const base = `team-${(squadName.trim() || "new").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
@@ -153,48 +137,15 @@ export function NewSquadModal({
           Remote mode: creates a squad entry on the host; folder paths are configured on the PC
         </p>
       ) : (
-        <>
-          <div className="seg" style={{ display: "flex", width: "100%", marginBottom: 12 }}>
-            <button type="button" className={source === "path" ? "on" : ""} onClick={() => setSource("path")}>
-              Folder path
-            </button>
-            <button type="button" className={source === "clone" ? "on" : ""} onClick={() => setSource("clone")}>
-              Clone repo URL
-            </button>
-          </div>
-          {source === "path" ? (
-            <div className="pin-idea-field">
-              <label className="muted small">Folder path</label>
-              <input
-                value={folderPath}
-                placeholder="C:\Users\you\projects\my-app"
-                style={{ width: "100%" }}
-                onChange={(e) => setFolderPath(e.target.value)}
-              />
-            </div>
-          ) : (
-            <>
-              <div className="pin-idea-field">
-                <label className="muted small">Repo URL or owner/repo</label>
-                <input
-                  value={cloneRepo}
-                  placeholder="owner/repo or https://github.com/owner/repo"
-                  style={{ width: "100%" }}
-                  onChange={(e) => setCloneRepo(e.target.value)}
-                />
-              </div>
-              <div className="pin-idea-field">
-                <label className="muted small">Clone to (optional)</label>
-                <input
-                  value={cloneDest}
-                  placeholder="Target directory name"
-                  style={{ width: "100%" }}
-                  onChange={(e) => setCloneDest(e.target.value)}
-                />
-              </div>
-            </>
-          )}
-        </>
+        <div className="pin-idea-field">
+          <label className="muted small">Folder path</label>
+          <input
+            value={folderPath}
+            placeholder="C:\Users\you\projects\my-app"
+            style={{ width: "100%" }}
+            onChange={(e) => setFolderPath(e.target.value)}
+          />
+        </div>
       )}
       <div className="pin-idea-field">
         <label className="muted small" htmlFor="new-squad-name-input">

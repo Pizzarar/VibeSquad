@@ -8,7 +8,7 @@ import { addCtxSource, ctxGroupsFor, gitMenuItems, isCtxItem, laneMenuItems, use
 import { getTeams, useTeams } from "./teams";
 import { fetchChatContext, fetchGitContext, fetchTerminalContext, listTerminalNames } from "./contextFetch";
 import type { DraftImageView } from "./imageDrafts";
-import { formatSize, MAX_INLINE_BYTES, fenceFile, type useAttachments } from "./attachments";
+import { formatSize, MAX_INLINE_BYTES, isBinaryBytes, type useAttachments } from "./attachments";
 import { isImeComposing, shouldComposerSubmit } from "./IdeaInbox";
 import { SecretInputPopover } from "./SecretInputPopover";
 import { composerKeyAction, usePref } from "./prefs";
@@ -33,8 +33,6 @@ const DEMO_ENTRIES: MentionEntry[] = [
   { path: "src", kind: "directory" },
   ...DEMO_MENTION_FILES.map((path) => ({ path, kind: "file" as const })),
 ];
-export const MAX_FILE_BYTES = 2 * 1024 * 1024;
-export { MAX_INLINE_BYTES, fenceFile };
 export const FILE_ACCEPT =
   "image/*,.md,.txt,.log,.json,.ts,.tsx,.js,.mjs,.py,.rs,.css,.html,.yml,.yaml,.toml,.csv";
 
@@ -93,22 +91,29 @@ export function partitionFiles<T extends { type: string; size: number }>(files: 
   const tooLarge: T[] = [];
   for (const f of files) {
     if (isImageFile(f)) images.push(f);
-    else if (f.size > MAX_FILE_BYTES) tooLarge.push(f);
+    else if (f.size > MAX_INLINE_BYTES) tooLarge.push(f);
     else text.push(f);
   }
   return { images, text, tooLarge };
 }
 
-/** Route dropped/pasted/picked files: images to thumbnails, the rest to chips. Never touches the draft. */
-export function stageFiles(
+/** Route dropped/pasted/picked files: images to thumbnails, small text to chips; large/binary are rejected (no upload route). */
+export async function stageFiles(
   all: File[],
   imgs: { add: (f: File[]) => void },
   atts: { add: (f: File[]) => void },
-): string | null {
+): Promise<string | null> {
   const { images, text, tooLarge } = partitionFiles(all);
+  const rejected = tooLarge.map((f) => f.name);
+  const ok: File[] = [];
+  for (const f of text) {
+    const head = new Uint8Array(await f.slice(0, 8192).arrayBuffer());
+    if (isBinaryBytes(head)) rejected.push(f.name);
+    else ok.push(f);
+  }
   if (images.length) imgs.add(images);
-  if (text.length) atts.add(text);
-  return tooLarge.length ? `Too large (max 2MB): ${tooLarge.map((f) => f.name).join(", ")}` : null;
+  if (ok.length) atts.add(ok);
+  return rejected.length ? `Too large / binary — attach a path instead: ${rejected.join(", ")}` : null;
 }
 
 /** Step through history. idx -1 = original draft. Returns next idx (clamped). */
@@ -364,7 +369,7 @@ export function Composer({
   };
 
   const addFiles = (all: File[]) => {
-    if (all.length) setNotice(stageFiles(all, imgs, atts));
+    if (all.length) void stageFiles(all, imgs, atts).then(setNotice);
   };
 
   const send = () => {

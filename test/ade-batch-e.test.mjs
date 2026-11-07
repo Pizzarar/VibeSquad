@@ -185,15 +185,6 @@ test("E13: TeamActions add-project skips duplicate paths", () => {
   assert.equal(updated[0].paths.length, 1, "no duplicate added");
 });
 
-test("E14: TeamActions clone helper resolves destination from repo shorthand", () => {
-  function resolveDest(repo, dest) {
-    return dest.trim() || repo.trim().split("/").pop().replace(/\.git$/, "");
-  }
-  assert.equal(resolveDest("owner/my-repo", ""), "my-repo");
-  assert.equal(resolveDest("https://github.com/owner/my-repo.git", ""), "my-repo");
-  assert.equal(resolveDest("owner/repo", "/custom/path"), "/custom/path");
-});
-
 test("E15: TeamActions worktree picker: wtMode none → no worktree on spawn", () => {
   function resolveWorktree(wtMode, branch, selectedWt) {
     if (wtMode === "new" && branch) return { branch };

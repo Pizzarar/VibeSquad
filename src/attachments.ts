@@ -2,7 +2,8 @@ import { useCallback, useSyncExternalStore } from "react";
 import { normalizeRepoPath } from "./fileLinks.ts";
 
 // Non-image files staged in the composer. They are chips only: the draft text is never touched.
-// On send, composeMessage() turns them into fenced blocks (small text) or uploaded path references.
+// On send, composeMessage() inlines them as fenced blocks (small text). Large/binary files are
+// rejected at drop time (no upload route).
 
 export const MAX_INLINE_BYTES = 100 * 1024;
 
@@ -31,24 +32,14 @@ export function fenceFile(name: string, content: string): string {
   return `\n[file: ${name}]\n${fence}\n${content}\n${fence}\n`;
 }
 
-export function attachedRef(path: string): string {
-  return `\n[attached file: ${path}]\n`;
-}
-
-/** Build the outgoing text. `upload` is only called for files that are big or binary. */
+/** Inline small text files into the outgoing text. Large/binary files are rejected at drop time, so they never reach here. */
 export async function composeMessage(
   text: string,
   items: Array<{ name: string; size: number; file: Pick<File, "text" | "arrayBuffer"> }>,
-  upload: (item: { name: string; file: never }) => Promise<string>,
 ): Promise<string> {
   let out = text;
   for (const it of items) {
-    const head = new Uint8Array(await it.file.arrayBuffer());
-    if (it.size <= MAX_INLINE_BYTES && !isBinaryBytes(head)) {
-      out += fenceFile(it.name, await it.file.text());
-    } else {
-      out += attachedRef(await upload({ name: it.name, file: it.file as never }));
-    }
+    out += fenceFile(it.name, await it.file.text());
   }
   return out;
 }

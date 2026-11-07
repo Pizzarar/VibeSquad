@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { defaultSpawnConfigFor } from "./antigravity";
 import { spawnTeamAgent, usePaseo } from "./paseo";
-import { DEMO } from "./demoFlag";
 import { branchHint } from "./workspaceLogic";
 import {
   checkBuddyOverlap,
@@ -142,13 +141,10 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   // Directory suggestions
   const [cwdSugs, setCwdSugs] = useState<string[]>([]);
 
-  // Add project / clone drawer
+  // Add project drawer
   const [addProjectOpen, setAddProjectOpen] = useState(false);
   const [addProjectPath, setAddProjectPath] = useState("");
   const [addingProject, setAddingProject] = useState(false);
-  const [cloneRepo, setCloneRepo] = useState("");
-  const [cloneDest, setCloneDest] = useState("");
-  const [cloning, setCloning] = useState(false);
   const [addProjectErr, setAddProjectErr] = useState("");
 
   // Worktree picker
@@ -184,24 +180,6 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
       setAddProjectErr(String(e));
     } finally {
       setAddingProject(false);
-    }
-  };
-
-  const cloneProject = async () => {
-    if (!cloneRepo.trim()) return;
-    setCloning(true);
-    setAddProjectErr("");
-    try {
-      const dest = cloneDest.trim() || cloneRepo.trim().split("/").pop()!.replace(/\.git$/, "");
-      if (!DEMO) throw new Error("Cloning from GitHub isn't available yet. Clone it in a terminal, then add the folder.");
-      setCwd(dest);
-      setAddProjectOpen(false);
-      setCloneRepo("");
-      setCloneDest("");
-    } catch (e) {
-      setAddProjectErr(String(e));
-    } finally {
-      setCloning(false);
     }
   };
 
@@ -453,7 +431,7 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
             style={{ marginBottom: 4 }}
             onClick={() => { setAddProjectOpen((v) => !v); setAddProjectErr(""); }}
           >
-            {addProjectOpen ? "▲ Close" : "+ Add folder / Clone repo"}
+            {addProjectOpen ? "▲ Close" : "+ Add folder"}
           </button>
           {addProjectOpen && (
             <div className="add-project-drawer" style={{ border: "1px solid var(--border)", borderRadius: 4, padding: 8, marginBottom: 8 }}>
@@ -474,27 +452,6 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
                   </button>
                 </>
               </Field>
-              <div className="field-label" style={{ marginTop: 8 }}>CLONE GITHUB REPO</div>
-              <input
-                value={cloneRepo}
-                placeholder="owner/repo or https://github.com/…"
-                onChange={(e) => setCloneRepo(e.target.value)}
-                style={{ marginBottom: 4 }}
-              />
-              <input
-                value={cloneDest}
-                placeholder="Destination path (optional)"
-                onChange={(e) => setCloneDest(e.target.value)}
-                style={{ marginBottom: 4 }}
-              />
-              <button
-                className="btn ok small"
-                data-testid="clone-repo-btn"
-                disabled={cloning || !cloneRepo.trim()}
-                onClick={() => void cloneProject()}
-              >
-                {cloning ? "Cloning…" : "Clone repo"}
-              </button>
             </div>
           )}
           <div data-testid="worktree-picker" style={{ marginTop: 4 }}>

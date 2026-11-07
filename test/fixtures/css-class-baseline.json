@@ -71,10 +71,7 @@
     "mobile-bar-tabs",
     "mobile-bar-teams"
   ],
-  "NewSquadModal.tsx": [
-    "clone",
-    "path"
-  ],
+  "NewSquadModal.tsx": [],
   "PairDeviceModal.tsx": [
     "na-col",
     "pair-modal"

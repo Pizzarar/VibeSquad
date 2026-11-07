@@ -401,7 +401,7 @@ const Sidebar = memo(function Sidebar(props: {
           type="button"
           className="btn ghost small sidebar-new-squad-btn"
           data-testid="sidebar-new-squad-btn"
-          title="Add a new squad (project folder or clone repo)"
+          title="Add a new squad (project folder)"
           onClick={props.onNewSquad}
         >
           {props.sidebarCollapsed ? "+" : "+ New squad"}
