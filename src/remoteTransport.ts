@@ -5,7 +5,7 @@
 // No imports: main.tsx passes the daemonClient-backed invoke, and node tests pass a fake.
 
 export type VsHttpRequest = { method: string; path: string; body?: string };
-export type VsHttpResponse = { status: number; headers: Record<string, string>; body: string };
+export type VsHttpResponse = { status: number; headers: Record<string, string>; body: string; encoding?: "base64" };
 export type VsHttpInvoke = (input: VsHttpRequest) => Promise<unknown>;
 
 export const REMOTE_FLAG_KEY = "vs.remote";
@@ -72,11 +72,20 @@ export function proxiedPath(url: string, origin: string): string | null {
 
 const NULL_BODY_STATUS = new Set([101, 103, 204, 205, 304]);
 
+function base64ToBytes(b64: string): BodyInit {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes as BodyInit;
+}
+
 function toResponse(out: unknown): Response {
   const r = out as VsHttpResponse;
   if (!r || typeof r.status !== "number" || typeof r.body !== "string") throw new TypeError("remote: bad vs.http response");
   const status = r.status >= 200 && r.status <= 599 ? r.status : 502;
-  return new Response(NULL_BODY_STATUS.has(status) ? null : r.body, { status, headers: r.headers ?? {} });
+  // Binary fs/read bodies (images, PDFs) arrive base64-encoded; hand callers real bytes so arrayBuffer()/blob() work.
+  const body = NULL_BODY_STATUS.has(status) ? null : r.encoding === "base64" ? base64ToBytes(r.body) : r.body;
+  return new Response(body, { status, headers: r.headers ?? {} });
 }
 
 function abortError(): DOMException {

@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 
@@ -15,6 +15,7 @@ import {
   REMOTE_BUDGET_PER_MIN,
   REMOTE_MAX_BODY_BYTES,
   REMOTE_MAX_IN_FLIGHT,
+  REMOTE_OWNER_READS,
   REMOTE_SPAWN_TIMEOUT_MS,
   REMOTE_TIMEOUT_MS,
   REMOTE_BODY_POLICY,
@@ -31,11 +32,13 @@ import {
   redactBody,
   scrubResponseBody,
 } from "../plugin/server/remote-proxy-rules.ts";
-import { makeVsHttpHandler, remoteEnabled, vsHttp, vsTokenHeaders } from "../plugin/server/remote-proxy.ts";
+import { REMOTE_MAX_BINARY_BYTES, makeVsHttpHandler, remoteEnabled, vsHttp, vsTokenHeaders } from "../plugin/server/remote-proxy.ts";
 import { installRemoteTransport, isRemoteMode, proxiedPath } from "../src/remoteTransport.ts";
 import { loadUserSettings, saveUserSettings } from "../server/user-settings.mjs";
 
 const TOKEN = "a".repeat(64);
+// Every byte value, so a text-decoding round trip would corrupt it.
+const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from(Array.from({ length: 256 }, (_, i) => i))]);
 const home = mkdtempSync(join(tmpdir(), "vs-remote-proxy-"));
 // Test-only allow map (the production map now opens these too; kept so plumbing tests don't depend on it).
 const WRITE_ALLOW = { ...REMOTE_ALLOW, "/api/teams": ["GET", "PUT"], "/__vibesquad/teams": ["GET", "POST"] };
@@ -187,12 +190,29 @@ describe("allowlist", () => {
   });
   test("no allowlisted GET is an S3 gated read (token-less GETs work; S3 backs the allowlist)", async () => {
     const { isGatedRead } = await import("../server/vibesquad-api.mjs");
-    for (const p of Object.keys(REMOTE_ALLOW).filter((k) => REMOTE_ALLOW[k].includes("GET"))) {
+    for (const p of Object.keys(REMOTE_ALLOW).filter((k) => REMOTE_ALLOW[k].includes("GET") && !REMOTE_OWNER_READS.includes(k))) {
       for (const q of ["", "?refresh=1"]) {
         const d = decideProxyRequest("GET", p + q);
         assert.equal(d.ok, true, p + q);
         assert.equal(isGatedRead(d.pathname, d.pathname + d.search), false, p + q);
       }
+    }
+  });
+  test("B8: fs/list|resolve|read are GET-only remotely and are exactly the gated reads that carry the token", async () => {
+    const { isGatedRead } = await import("../server/vibesquad-api.mjs");
+    const fs = ["/__vibesquad/fs/list", "/__vibesquad/fs/resolve", "/__vibesquad/fs/read"];
+    assert.deepEqual([...REMOTE_OWNER_READS].sort(), [...fs].sort());
+    for (const p of fs) {
+      assert.equal(decideProxyRequest("GET", `${p}?cwd=C:/w&path=a.md`).ok, true, p);
+      assert.equal(isGatedRead(p, p), true, `${p} is owner-gated server-side`);
+      for (const m of ["POST", "PUT", "PATCH", "DELETE"]) assert.equal(decideProxyRequest(m, p).code, "method", `${m} ${p}`);
+      assert.equal(decideProxyRequest("GET", `${p}/x`).code, "not-allowed", `${p}/x`);
+      assert.equal(decideProxyRequest("GET", `${p}/../files`).code, "path", `${p}/../files`);
+      assert.equal(decideProxyRequest("GET", `${p}%2F..%2Ffiles`).code, "path");
+    }
+    for (const p of ["/__vibesquad/files", "/__vibesquad/search", "/__vibesquad/files/x", "/__vibesquad/search/x"]) {
+      assert.equal(decideProxyRequest("GET", p).ok, false, p);
+      assert.equal(decideProxyRequest("GET", p).code, "blocked", p);
     }
   });
   test("method filter", () => {
@@ -1021,6 +1041,8 @@ describe("R2-5 handler: reopened writes against a fake loopback server", () => {
       JSON.parse(scrubResponseBody("/__vibesquad/vs-log", JSON.stringify({ ok: true, path: "C:\\a\\b.jsonl", teamLogPath: "/home/u/x.jsonl" }), 200)),
       { ok: true },
     );
+    const resolved = JSON.stringify({ ok: true, path: "docs/a.md", count: 1 });
+    assert.deepEqual(JSON.parse(scrubResponseBody("/__vibesquad/fs/resolve", resolved, 200)), { ok: true, path: "docs/a.md", count: 1 });
     const errOut = JSON.parse(
       scrubResponseBody(
         "/api/teams",
@@ -1070,5 +1092,122 @@ describe("R2-5 handler: reopened writes against a fake loopback server", () => {
     assert.equal(proxyTimeoutFor("/__vibesquad/brainstorm-restart"), 45_000);
     assert.equal(proxyTimeoutFor("/__vibesquad/inbox/triage"), 45_000);
     assert.equal(proxyTimeoutFor("/api/health"), 10_000);
+  });
+});
+
+describe("B8: fs/* over the proxy reach the real handlers, owner-gated, confined", () => {
+  let server;
+  let port;
+  let ws;
+  let outside;
+  const seenTokens = [];
+  before(async () => {
+    const { handleFsList, handleFsRead, handleFsResolve } = await import("../server/file-search.mjs");
+    ws = mkdtempSync(join(tmpdir(), "vs-b8-ws-"));
+    outside = mkdtempSync(join(tmpdir(), "vs-b8-out-"));
+    writeFileSync(join(ws, "note.md"), "# hi");
+    writeFileSync(join(ws, "shot.png"), PNG);
+    writeFileSync(join(ws, "home.md"), `see ${homedir()} and ${userInfo().username}
+`);
+    writeFileSync(join(ws, "long.md"), "x".repeat(600 * 1024));
+    writeFileSync(join(ws, "big.png"), Buffer.alloc(REMOTE_MAX_BINARY_BYTES + 1, 7));
+    writeFileSync(join(ws, "edge.png"), Buffer.alloc(REMOTE_MAX_BINARY_BYTES, 9));
+    writeFileSync(join(outside, "secret.txt"), "nope");
+    writeFileSync(join(home, "local-token"), TOKEN);
+    const send = (res, status, obj) => {
+      res.statusCode = status;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify(obj));
+    };
+    server = createServer((req, res) => {
+      const path = req.url.split("?")[0];
+      seenTokens.push(req.headers["x-vibesquad-token"]);
+      // Mirrors the real middleware: fs/* are isGatedRead, so a tokenless loopback caller gets 403.
+      if (req.headers["x-vibesquad-token"] !== TOKEN) return send(res, 403, { error: "read-only", readOnly: true });
+      if (path === "/__vibesquad/fs/list") return handleFsList(req, res, [ws], send);
+      if (path === "/__vibesquad/fs/read") return handleFsRead(req, res, [ws], send);
+      if (path === "/__vibesquad/fs/resolve") return handleFsResolve(req, res, async () => ws, send, [ws]);
+      send(res, 404, {});
+    });
+    await new Promise((r) => server.listen(0, "127.0.0.1", r));
+    port = server.address().port;
+  });
+  after(() => {
+    server.closeAllConnections?.();
+    server.close();
+    rmSync(ws, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  });
+  const call = (path, method = "GET") => {
+    setGate(true);
+    return makeVsHttpHandler({ port, home })({ method, path });
+  };
+  const q = (o) => "?" + new URLSearchParams(o).toString();
+
+  test("list / read / resolve succeed and the proxy sent the owner token", async () => {
+    const list = await call("/__vibesquad/fs/list" + q({ cwd: ws, path: "" }));
+    assert.equal(list.status, 200);
+    assert.deepEqual(JSON.parse(list.body).entries.map((e) => e.name).sort(), ["big.png", "edge.png", "home.md", "long.md", "note.md", "shot.png"]);
+    const read = await call("/__vibesquad/fs/read" + q({ cwd: ws, path: "note.md" }));
+    assert.equal(read.status, 200);
+    assert.equal(read.body, "# hi");
+    const resolved = await call("/__vibesquad/fs/resolve" + q({ agentId: "a", name: "note.md" }));
+    assert.equal(resolved.status, 200, resolved.body);
+    assert.deepEqual(JSON.parse(resolved.body), { ok: true, path: "note.md", count: 1 });
+    assert.ok(seenTokens.slice(-3).every((t) => t === TOKEN));
+  });
+  test("a PNG round-trips byte-exact as base64 with its content type; the shim hands back real bytes", async () => {
+    const out = await call("/__vibesquad/fs/read" + q({ cwd: ws, path: "shot.png" }));
+    assert.equal(out.status, 200);
+    assert.equal(out.encoding, "base64");
+    assert.equal(out.headers["content-type"], "image/png");
+    assert.equal(out.headers["x-vs-size"], String(PNG.length));
+    assert.ok(Buffer.from(out.body, "base64").equals(PNG));
+    const target = { fetch: async () => new Response("no"), location: { origin: "http://x" } };
+    const uninstall = installRemoteTransport(async () => out, target);
+    const r = await target.fetch("http://x/__vibesquad/fs/read?cwd=a&path=shot.png");
+    assert.ok(Buffer.from(await r.arrayBuffer()).equals(PNG));
+    assert.equal(r.headers.get("content-type"), "image/png");
+    uninstall();
+  });
+  test("text fs/read is byte-exact (no homedir/username redaction), keeps x-vs-* headers; >512 KB text is a 413 with size", async () => {
+    const out = await call("/__vibesquad/fs/read" + q({ cwd: ws, path: "home.md" }));
+    assert.equal(out.status, 200);
+    assert.equal(out.encoding, undefined);
+    assert.equal(out.body, `see ${homedir()} and ${userInfo().username}
+`);
+    assert.equal(out.headers["x-vs-size"], String(Buffer.byteLength(out.body)));
+    assert.ok(out.headers["x-vs-modified"]);
+    const big = await call("/__vibesquad/fs/read" + q({ cwd: ws, path: "long.md" }));
+    assert.equal(big.status, 413);
+    const j = JSON.parse(big.body);
+    assert.equal(j.ok, false);
+    assert.equal(j.size, 600 * 1024);
+  });
+  test("over 8 MB raw is a 413 carrying the size; exactly 8 MB passes", async () => {
+    const big = await call("/__vibesquad/fs/read" + q({ cwd: ws, path: "big.png" }));
+    assert.equal(big.status, 413);
+    assert.equal(big.encoding, undefined);
+    const j = JSON.parse(big.body);
+    assert.equal(j.ok, false);
+    assert.equal(j.size, REMOTE_MAX_BINARY_BYTES + 1);
+    const edge = await call("/__vibesquad/fs/read" + q({ cwd: ws, path: "edge.png" }));
+    assert.equal(edge.status, 200);
+    assert.equal(Buffer.from(edge.body, "base64").length, REMOTE_MAX_BINARY_BYTES);
+  });
+  test("traversal, absolute paths and a cwd outside the roots are still refused over remote", async () => {
+    for (const path of ["../" + "x", "a/../../x", "/etc/passwd", "C:/Windows/win.ini", "~/x"]) {
+      const r = await call("/__vibesquad/fs/read" + q({ cwd: ws, path }));
+      assert.ok(r.status >= 400, `${path} -> ${r.status}`);
+    }
+    const out = await call("/__vibesquad/fs/read" + q({ cwd: outside, path: "secret.txt" }));
+    assert.ok(out.status >= 400 && !out.body.includes("nope"), `outside cwd -> ${out.status}`);
+  });
+  test("POST and files/search are refused before any fetch", async () => {
+    const n = seenTokens.length;
+    await assert.rejects(call("/__vibesquad/fs/read" + q({ cwd: ws, path: "note.md" }), "POST"), /not available remotely.*\[405\]/);
+    await assert.rejects(call("/__vibesquad/files" + q({ cwd: ws })), /blocked remotely.*\[403\]/);
+    await assert.rejects(call("/__vibesquad/search" + q({ cwd: ws, q: "hi" })), /blocked remotely.*\[403\]/);
+    assert.equal(seenTokens.length, n);
   });
 });

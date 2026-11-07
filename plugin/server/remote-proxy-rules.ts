@@ -70,7 +70,15 @@ export const REMOTE_ALLOW: AllowMap = {
   "/__vibesquad/paseo/providers": READ,
   "/__vibesquad/paseo/usage": READ, // `refresh` is stripped from the query
   "/__vibesquad/paseo/plugins": READ,
+  // B8 Files panel: GET only. Confinement (roots, realpath, .ssh/.vibesquad/.paseo/.git filter, 413 cap) stays in
+  // server/file-search.mjs. The server owner-gates these reads (isGatedRead), so they go with the loopback token.
+  "/__vibesquad/fs/list": READ,
+  "/__vibesquad/fs/resolve": READ,
+  "/__vibesquad/fs/read": READ,
 };
+
+/** Allowlisted GETs the server owner-gates (isGatedRead): the proxy sends the loopback token on these, like a write. */
+export const REMOTE_OWNER_READS: readonly string[] = ["/__vibesquad/fs/list", "/__vibesquad/fs/resolve", "/__vibesquad/fs/read"];
 
 /** Writes that stay closed remotely, and why. Reopening one needs the server change named here first. */
 export const REMOTE_WRITES_CLOSED: Readonly<Record<string, string>> = {
@@ -1082,7 +1090,8 @@ export function scrubResponseBody(pathname: string, body: string, status?: numbe
         delete parsed.remote;
         mutated = true;
       }
-      if ("path" in parsed) {
+      // fs/resolve's `path` is repo-relative and already confined server-side; bare-name links need it.
+      if ("path" in parsed && pathname !== "/__vibesquad/fs/resolve") {
         delete parsed.path;
         mutated = true;
       }

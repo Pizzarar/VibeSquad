@@ -12,6 +12,7 @@ import { localTokenHeaders, localTokenPath } from "@vibesquad/server/local-token
 import {
   REMOTE_ALLOW,
   REMOTE_MAX_BODY_BYTES,
+  REMOTE_OWNER_READS,
   REMOTE_RESPONSE_HEADERS,
   REMOTE_TIMEOUT_MS,
   checkRemoteBody,
@@ -30,7 +31,8 @@ import {
 } from "./remote-proxy-rules.ts";
 
 export type VsHttpInput = { method: string; path: string; body?: string };
-export type VsHttpOutput = { status: number; headers: Record<string, string>; body: string };
+// `encoding: "base64"` marks a binary body (GET fs/read only, B8): `body` is base64 of the raw bytes.
+export type VsHttpOutput = { status: number; headers: Record<string, string>; body: string; encoding?: "base64" };
 
 const vsHome = () => process.env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad");
 
@@ -48,8 +50,9 @@ export function remoteEnabled(home = vsHome()): boolean {
   return s?.remote?.enabled === true;
 }
 
-// Loopback owner token (security S3, server/local-token.mjs). Sent only on writes: remote GETs go without
-// it, so S3's read-only loopback mode is a second wall (no writes, no isGatedRead paths) behind the allowlist.
+// Loopback owner token (security S3, server/local-token.mjs). Sent on writes and on REMOTE_OWNER_READS (the B8
+// fs/* reads); other remote GETs go without it, so S3's read-only loopback mode is a second wall (no writes,
+// no isGatedRead paths) behind the allowlist.
 export function vsTokenHeaders(home = vsHome()): Record<string, string> {
   return localTokenHeaders(localTokenPath(home));
 }
@@ -95,6 +98,38 @@ export class RemoteDenied extends Error {
     super(`vs.http: ${message} [${status}]`);
     this.status = status;
   }
+}
+
+/** Raw-byte cap for binary GET fs/read (images, PDFs) shown in the remote Files panel. Text routes keep REMOTE_MAX_BODY_BYTES. */
+export const REMOTE_MAX_BINARY_BYTES = 8 * 1024 * 1024;
+const FS_READ_PATH = "/__vibesquad/fs/read";
+const FS_READ_HEADERS = ["x-vs-size", "x-vs-modified"] as const;
+
+/** Streams the body into one buffer, giving up (null) as soon as it passes `max` raw bytes. */
+async function readBytesCapped(res: Response, signal: AbortSignal, max: number): Promise<Uint8Array | null> {
+  if (!res.body) return new Uint8Array(0);
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      if (signal.aborted) throw new Error("vs.http: timed out");
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > max) return null;
+      chunks.push(value);
+    }
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+  const buf = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) {
+    buf.set(c, off);
+    off += c.byteLength;
+  }
+  return buf;
 }
 
 async function readCapped(res: Response, signal: AbortSignal): Promise<string> {
@@ -191,12 +226,37 @@ export function makeVsHttpHandler(deps: VsHttpDeps = {}) {
       const res = await (deps.fetch ?? fetch)(url, {
         method: d.method,
         // No caller headers are forwarded: just our content type and the loopback token.
-        headers: { ...(hasBody ? { "content-type": "application/json" } : {}), ...(write ? vsTokenHeaders(home) : {}) },
+        headers: { ...(hasBody ? { "content-type": "application/json" } : {}), ...(write || REMOTE_OWNER_READS.includes(d.pathname) ? vsTokenHeaders(home) : {}) },
         ...(hasBody ? { body: sendBody } : {}),
         redirect: "manual",
         signal: abort.signal,
       });
       const ct = res.headers.get("content-type");
+      // Every 200 on GET fs/read is file content: no scrub/redact (it would rewrite the owner's name inside the
+      // file), x-vs-size/x-vs-modified kept. Text is capped at the text cap, binary at 8 MB raw and sent as base64.
+      if (d.method === "GET" && d.pathname === FS_READ_PATH && res.status === 200) {
+        const isText = isTextContentType(ct);
+        const cap = isText ? REMOTE_MAX_BODY_BYTES : REMOTE_MAX_BINARY_BYTES;
+        const size = Number(res.headers.get("x-vs-size") ?? res.headers.get("content-length") ?? NaN);
+        const bytes = Number.isFinite(size) && size > cap ? null : await readBytesCapped(res, abort.signal, cap);
+        if (!bytes) {
+          res.body?.cancel().catch(() => {});
+          const lim = isText ? `${Math.floor(cap / 1024)} KB` : `${Math.floor(cap / (1024 * 1024))} MB`;
+          return {
+            status: 413,
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ ok: false, error: `file too large to preview remotely (over ${lim})`, ...(Number.isFinite(size) ? { size } : {}) }),
+          };
+        }
+        const headers: Record<string, string> = {};
+        for (const h of [...REMOTE_RESPONSE_HEADERS, ...FS_READ_HEADERS]) {
+          const v = res.headers.get(h);
+          if (v !== null) headers[h] = v;
+        }
+        return isText
+          ? { status: 200, headers, body: new TextDecoder().decode(bytes) }
+          : { status: 200, headers, body: Buffer.from(bytes).toString("base64"), encoding: "base64" };
+      }
       if (!isTextContentType(ct)) {
         res.body?.cancel().catch(() => {});
         throw new Error(`vs.http: non-text response (${ct}) is not proxied`);
