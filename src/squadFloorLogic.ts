@@ -49,12 +49,27 @@ export type PenthouseModel = {
   front?: boolean;
 };
 
+/** Art10 top band (floor.json `screens`): two big CRTs [RiffBot | lift top | Overlord] that replace the penthouse. */
+export type ScreensModel = {
+  plate: string;
+  w: number;
+  h: number;
+  /** `roof-front-{theme}.png` (lift car front + glass corners) is drawn over the faces. */
+  front?: boolean;
+  /** Glass rects (a face cell: faces.json cell w x h). */
+  riffbot: Rect;
+  overlord: Rect;
+  elevatorTop: Rect;
+};
+
 export type FloorModel = {
   teamA: TeamSlices;
   teamB: TeamSlices;
   elevator: { doorA: Rect; doorB: Rect; car: Rect };
-  /** Present once S1 lands; the placeholder supplies one meanwhile. */
+  /** Old top band (S1). Used only when `screens` is absent; the placeholder supplies one when neither exists. */
   penthouse?: PenthouseModel;
+  /** Art10 CRT screens; wins over `penthouse`. */
+  screens?: ScreensModel;
   /** `floor-front-{theme}.png` exists and is drawn over the y-sorted sprites (floor.json `"front": true`). */
   front?: boolean;
 };
@@ -108,6 +123,15 @@ function penthouseOf(v: unknown): PenthouseModel | undefined {
   };
 }
 
+function screensOf(v: unknown): ScreensModel | undefined {
+  if (!isObject(v) || typeof v.plate !== "string" || !isNum(v.w) || !isNum(v.h)) return undefined;
+  const riffbot = rectOf(v.riffbot);
+  const overlord = rectOf(v.overlord);
+  const elevatorTop = rectOf(v.elevatorTop);
+  if (!riffbot || !overlord || !elevatorTop) return undefined;
+  return { plate: v.plate, w: v.w as number, h: v.h as number, riffbot, overlord, elevatorTop, ...(v.front === true ? { front: true } : {}) };
+}
+
 /** Validate floor.json. Unknown extra fields are ignored; `lobby` and `penthouse` are optional (S1 growth). */
 export function validateFloor(json: unknown): Validation<FloorModel> {
   if (!isObject(json)) return fail("floor.json is not an object");
@@ -121,7 +145,8 @@ export function validateFloor(json: unknown): Validation<FloorModel> {
       : null;
   if (!elevator) return fail("floor.json elevator is missing doorA, doorB or car");
   const penthouse = penthouseOf(json.penthouse);
-  return { ok: true, value: { teamA, teamB, elevator, ...(penthouse ? { penthouse } : {}), ...(json.front === true ? { front: true } : {}) } };
+  const screens = screensOf(json.screens);
+  return { ok: true, value: { teamA, teamB, elevator, ...(penthouse ? { penthouse } : {}), ...(screens ? { screens } : {}), ...(json.front === true ? { front: true } : {}) } };
 }
 
 /** Validate cast.json. Unknown roles/poses/fields are kept; `fallback` may be `{}`; nothing about the sheet is hardcoded. */
@@ -427,6 +452,79 @@ export function integerScale(panelWidth: number, dpr = 1): number {
   if (!Number.isFinite(panelWidth) || panelWidth < FLOOR_NATIVE_WIDTH) return 0;
   const scale = Math.floor((panelWidth * ratio) / FLOOR_NATIVE_WIDTH) / ratio;
   return scale >= 1 ? scale : 0;
+}
+
+// ── CRT faces (faces.json, Art10) ─────────────────────────────────────────────
+
+export type FaceBot = "riffbot" | "overlord";
+export type FaceMode = "idle" | "blink" | "talk" | "needs";
+const FACE_MODES: FaceMode[] = ["idle", "blink", "talk", "needs"];
+
+export type FacesModel = {
+  /** Cell size of one face frame in the sheet (128x96). */
+  cell: { w: number; h: number };
+  fps: number;
+  /** Frame counts come from the json, never hardcoded. */
+  bots: Partial<Record<FaceBot, Partial<Record<FaceMode, Frame[]>>>>;
+};
+
+/** Validate faces.json: `cell {w,h}`, `fps`, and per bot a list of frames for idle/blink/talk/needs. */
+export function validateFaces(json: unknown): Validation<FacesModel> {
+  if (!isObject(json)) return fail("faces.json is not an object");
+  const cell = isObject(json.cell) && isNum(json.cell.w) && isNum(json.cell.h) && json.cell.w > 0 && json.cell.h > 0 ? { w: json.cell.w as number, h: json.cell.h as number } : null;
+  if (!cell) return fail("faces.json cell must be {w,h}");
+  const fps = isNum(json.fps) && json.fps > 0 ? (json.fps as number) : 3;
+  const bots: FacesModel["bots"] = {};
+  for (const bot of ["riffbot", "overlord"] as FaceBot[]) {
+    const raw = json[bot];
+    if (raw === undefined) continue;
+    if (!isObject(raw)) return fail(`faces.json ${bot} is not an object`);
+    const modes: Partial<Record<FaceMode, Frame[]>> = {};
+    for (const mode of FACE_MODES) {
+      if (raw[mode] === undefined) continue;
+      const frames = Array.isArray(raw[mode]) ? (raw[mode] as unknown[]).map(frameOf) : [];
+      if (frames.length === 0 || frames.some((f) => f === null)) return fail(`faces.json ${bot} ${mode} has no valid frames`);
+      modes[mode] = frames as Frame[];
+    }
+    if (!modes.idle) return fail(`faces.json ${bot} needs an idle face`);
+    bots[bot] = modes;
+  }
+  if (!bots.riffbot && !bots.overlord) return fail("faces.json has neither riffbot nor overlord");
+  return { ok: true, value: { cell, fps, bots } };
+}
+
+/** Face mode: talk while the bot is running, needs on needs-you (pose "needs" already folds kindOfAttention), else blink/idle. No agent → idle. */
+export function faceMode(agent: Pick<SeatedAgent, "pose"> | null, blinking = false): FaceMode {
+  if (!agent) return "idle";
+  if (agent.pose === "needs") return "needs";
+  if (agent.pose === "work") return "talk";
+  return blinking ? "blink" : "idle";
+}
+
+/** The face cell for a bot+mode at a tick (falls back to idle when the mode is missing); null when the bot has no faces. */
+export function faceFrame(faces: FacesModel, bot: FaceBot, mode: FaceMode, tick = 0): Frame | null {
+  const modes = faces.bots[bot];
+  const frames = modes?.[mode] ?? modes?.idle;
+  if (!frames || frames.length === 0) return null;
+  return frames[((tick % frames.length) + frames.length) % frames.length] ?? null;
+}
+
+/** Random blink spacing: every 3-8 s (rand in [0,1)), the blink face holds for BLINK_MS. */
+export const BLINK_MIN_MS = 3000;
+export const BLINK_MAX_MS = 8000;
+export const BLINK_MS = 300;
+export const nextBlinkDelay = (rand: number): number => Math.round(BLINK_MIN_MS + Math.min(Math.max(rand, 0), 1) * (BLINK_MAX_MS - BLINK_MIN_MS));
+
+export type TopBand = { kind: "screens" | "penthouse"; w: number; h: number; elevatorTop: Rect; front: boolean };
+
+/** The top band: Art10 `screens` when present, else the old `penthouse`, else the placeholder penthouse (old path only when neither exists). */
+export function topBand(floor: FloorModel): TopBand {
+  if (floor.screens) {
+    const s = floor.screens;
+    return { kind: "screens", w: s.w, h: s.h, elevatorTop: s.elevatorTop, front: s.front === true };
+  }
+  const p = floor.penthouse ?? placeholderFloor().penthouse!;
+  return { kind: "penthouse", w: p.w, h: p.h, elevatorTop: p.elevatorTop, front: p.front === true };
 }
 
 /** Band draw order (3/4 top-down, docs/PLAN_NEON_OFFICE.md "Camera"): plate, y-sorted sprites, front overlay (only when floor.json says so), bubbles. */

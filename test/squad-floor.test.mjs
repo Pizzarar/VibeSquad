@@ -4,6 +4,13 @@ import { readFileSync } from "node:fs";
 import { castVariant } from "../src/cast.ts";
 import {
   bandLayers,
+  BLINK_MAX_MS,
+  BLINK_MIN_MS,
+  faceFrame,
+  faceMode,
+  nextBlinkDelay,
+  topBand,
+  validateFaces,
   buildTower,
   DESK_COUNT,
   floorOrPlaceholder,
@@ -238,7 +245,7 @@ test("P3b draw order: plate < y-sorted sprites < front < bubbles; no front layer
   assert.deepEqual(bandLayers(false), ["plate", "sprites", "bubbles"]);
   const src = readFileSync(new URL("../src/SquadFloor.tsx", import.meta.url), "utf8");
   assert.match(src, /floor\.front \? FLOOR_FRONT_URL/);
-  assert.match(src, /floor\.penthouse\?\.front \? ROOF_FRONT_URL/);
+  assert.match(src, /top\.front \? ROOF_FRONT_URL/);
   const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
   assert.match(css, /\.sq-floor-front\s*\{[^}]*pointer-events:\s*none/);
 });
@@ -439,4 +446,110 @@ test("P3e real cast.json has no riffbot/overlord roles: no crash, no sprite, the
   const t = buildTower({ hubBuddy: member("rb", { kind: "brainstorm" }), hubLead: member("ov", { kind: "lead", status: "running" }), teams: [team("x")] });
   assert.equal(t.penthouse.riffbot.role, "riffbot");
   assert.equal(spriteFrame(c, t.penthouse.overlord.role, t.penthouse.overlord.pose, 0, t.penthouse.overlord.variant), null);
+});
+
+// ── P3d CRT screens (Art10 as built, art-crt-screens 6b156b9) ────────────────
+const screensJson = JSON.parse(readFileSync(new URL("./fixtures/floor-screens.json", import.meta.url), "utf8"));
+const facesJson = JSON.parse(readFileSync(new URL("./fixtures/faces.json", import.meta.url), "utf8"));
+
+test("P3d held Art10 floor.json: screens parse (no penthouse key), screens wins the top band", () => {
+  assert.equal(screensJson.penthouse, undefined);
+  const v = validateFloor(screensJson);
+  assert.equal(v.ok, true);
+  const f = v.value;
+  assert.equal(f.penthouse, undefined);
+  assert.equal(f.screens.plate, "roof");
+  assert.equal(f.screens.w, 640);
+  assert.equal(f.screens.h, 200);
+  assert.equal(f.screens.front, true);
+  assert.deepEqual(f.screens.riffbot, { x: 74, y: 52, w: 128, h: 96 });
+  assert.deepEqual(f.screens.overlord, { x: 438, y: 52, w: 128, h: 96 });
+  assert.deepEqual(f.screens.elevatorTop, { x: 304, y: 146, w: 32, h: 32 });
+  assert.deepEqual(topBand(f), { kind: "screens", w: 640, h: 200, elevatorTop: f.screens.elevatorTop, front: true });
+});
+
+test("P3d old top band only when neither screens nor penthouse exists", () => {
+  const ph = placeholderFloor();
+  const none = { ...ph };
+  delete none.penthouse;
+  assert.equal(topBand(none).kind, "penthouse"); // placeholder penthouse stands in
+  assert.equal(topBand(none).h, 200);
+  assert.equal(topBand(ph).kind, "penthouse");
+  const both = { ...ph, screens: validateFloor(screensJson).value.screens };
+  assert.equal(topBand(both).kind, "screens"); // screens beats a penthouse
+  assert.equal(validateFloor({ ...screensJson, screens: { plate: "roof", w: 640, h: 200 } }).value.screens, undefined); // incomplete screens ignored
+});
+
+test("P3d held faces.json: 128x96 cells, fps 3, frame counts read from the json", () => {
+  const v = validateFaces(facesJson);
+  assert.equal(v.ok, true);
+  const f = v.value;
+  assert.deepEqual(f.cell, { w: 128, h: 96 });
+  assert.equal(f.fps, 3);
+  const count = (bot) => Object.values(f.bots[bot]).reduce((n, frames) => n + frames.length, 0);
+  assert.equal(count("riffbot"), 7);
+  assert.equal(f.bots.riffbot.talk.length, 3);
+  assert.equal(f.bots.riffbot.needs.length, 2);
+  assert.equal(count("overlord"), 8);
+  assert.equal(f.bots.overlord.idle.length, 2);
+  assert.equal(f.bots.overlord.talk.length, 3);
+  assert.equal(f.bots.overlord.needs.length, 2);
+  assert.equal(validateFaces({}).ok, false);
+  assert.equal(validateFaces({ cell: { w: 128, h: 96 }, riffbot: { talk: [{ x: 0, y: 0 }] } }).ok, false); // no idle
+  assert.equal(validateFaces({ cell: { w: 128, h: 96 } }).ok, false); // no bots
+});
+
+test("P3d face mode: talk while running, needs on needs-you (wins), blink only when otherwise idle, none → idle", () => {
+  const seated = (pose) => ({ pose });
+  assert.equal(faceMode(seated("work")), "talk");
+  assert.equal(faceMode(seated("needs")), "needs");
+  assert.equal(faceMode(seated("idle")), "idle");
+  assert.equal(faceMode(seated("idle"), true), "blink");
+  assert.equal(faceMode(seated("work"), true), "talk");
+  assert.equal(faceMode(seated("needs"), true), "needs");
+  assert.equal(faceMode(null), "idle");
+  assert.equal(faceMode(null, true), "idle"); // an "off" screen never blinks
+  // end-to-end with the tower: Overlord running → talk; needs-you → needs; hub Buddy idle → idle
+  const t = buildTower({
+    hubBuddy: member("riffbot", { kind: "brainstorm" }),
+    hubLead: member("overlord", { kind: "lead", status: "running" }),
+    teams: [],
+  });
+  assert.equal(faceMode(t.penthouse.riffbot), "idle");
+  assert.equal(faceMode(t.penthouse.overlord), "talk");
+  const n = buildTower({ hubBuddy: null, hubLead: member("overlord", { kind: "lead", status: "running", attention: { tone: "needs-you", reason: "x" } }), teams: [] });
+  assert.equal(faceMode(n.penthouse.overlord), "needs");
+  const none = buildTower({ hubBuddy: null, hubLead: member("gone", { kind: "lead", status: "closed" }), teams: [] });
+  assert.equal(none.penthouse.overlord, null); // no live Overlord → dimmed idle screen
+});
+
+test("P3d face frames: cycle the frames from the json, fall back to idle, reduced motion = tick 0", () => {
+  const f = validateFaces(facesJson).value;
+  assert.deepEqual(faceFrame(f, "riffbot", "talk", 0), { x: 256, y: 0 });
+  assert.deepEqual(faceFrame(f, "riffbot", "talk", 4), { x: 384, y: 0 }); // wraps over 3 frames
+  assert.deepEqual(faceFrame(f, "overlord", "needs", 1), { x: 896, y: 0 });
+  const noBlink = { ...f, bots: { riffbot: { idle: f.bots.riffbot.idle } } };
+  assert.deepEqual(faceFrame(noBlink, "riffbot", "blink", 3), { x: 0, y: 0 }); // missing mode → idle
+  assert.equal(faceFrame(noBlink, "overlord", "idle", 0), null);
+});
+
+test("P3d blink spacing is random within 3-8 s", () => {
+  assert.equal(nextBlinkDelay(0), BLINK_MIN_MS);
+  assert.equal(nextBlinkDelay(1), BLINK_MAX_MS);
+  assert.ok(nextBlinkDelay(0.5) > BLINK_MIN_MS && nextBlinkDelay(0.5) < BLINK_MAX_MS);
+  assert.equal(nextBlinkDelay(-3), BLINK_MIN_MS);
+});
+
+test("P3d wiring: RiffBot screen → hub onOpen, Overlord screen → openPinMember, roof-front over faces, reduced motion stops blink", () => {
+  const src = readFileSync(new URL("../src/SquadFloor.tsx", import.meta.url), "utf8");
+  assert.match(src, /testid="sq-floor-crt-riffbot"\s+onOpen=\{hub \? \(\) => void Promise\.resolve\(onOpenRiffBot\(hub\)\)/);
+  assert.match(src, /testid="sq-floor-crt-overlord"\s+onOpen=\{tower\.penthouse\.overlord \? \(\) => openAgent\(/);
+  assert.match(src, /openPinMember\(pin, agentId\)/);
+  assert.match(src, /off=\{!tower\.penthouse\.overlord\}/); // no live Overlord → dimmed
+  assert.match(src, /if \(reduced \|\| !hasScreens\)/); // no blink under reduced motion
+  assert.match(src, /faces\.json/);
+  // the faces live in the sprites layer; the front overlay layer is drawn after it
+  assert.ok(bandLayers(true).indexOf("sprites") < bandLayers(true).indexOf("front"));
+  const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+  assert.match(css, /\.sq-floor-crt\.is-off\s*\{[^}]*filter/);
 });

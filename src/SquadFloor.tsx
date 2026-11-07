@@ -7,21 +7,29 @@ import { openPinMember } from "./pinFocus";
 import { gridPinsForSquad, hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import {
   bandLayers,
+  BLINK_MS,
   buildTower,
+  faceFrame,
+  faceMode,
   FLOOR_NATIVE_HEIGHT,
   FLOOR_NATIVE_WIDTH,
   floorOrPlaceholder,
   integerScale,
   LOBBY_MAX_SHOWN,
+  nextBlinkDelay,
   placeholderFloor,
   POSE_FPS,
   RIDE_MS,
   sliceAnchor,
   sortByAnchorY,
   spriteFrame,
+  topBand,
   transitionRiders,
   validateCast,
+  validateFaces,
   type CastModel,
+  type FaceBot,
+  type FacesModel,
   type FloorModel,
   type Frame,
   type Rect,
@@ -60,6 +68,7 @@ function useTheme(): "dark" | "light" {
 const CAST_URL = (theme: "dark" | "light") => `/office/cast-${theme}.png`;
 const FLOOR_URL = (theme: "dark" | "light") => `/office/floor-${theme}.png`;
 const ROOF_URL = (theme: "dark" | "light") => `/office/roof-${theme}.png`;
+const FACE_URL = (bot: FaceBot, theme: "dark" | "light") => `/office/face-${bot}-${theme}.png`;
 const FLOOR_FRONT_URL = (theme: "dark" | "light") => `/office/floor-front-${theme}.png`;
 const ROOF_FRONT_URL = (theme: "dark" | "light") => `/office/roof-front-${theme}.png`;
 
@@ -279,6 +288,53 @@ function LobbyPlus({ placement, lobby }: { placement: TeamFloorPlacement; lobby?
   );
 }
 
+/** One CRT: the bot's face cell on the glass, clickable (opens that bot's chat). A null `onOpen` disables it. */
+function Crt({
+  bot,
+  rect,
+  faces,
+  sheetOk,
+  theme,
+  mode,
+  tick,
+  off,
+  title,
+  testid,
+  onOpen,
+}: {
+  bot: FaceBot;
+  rect: Rect;
+  faces: FacesModel | null;
+  sheetOk: boolean;
+  theme: "dark" | "light";
+  mode: ReturnType<typeof faceMode>;
+  tick: number;
+  off: boolean;
+  title: string;
+  testid: string;
+  onOpen: (() => void) | null;
+}) {
+  const frame = faces && sheetOk ? faceFrame(faces, bot, mode, tick) : null;
+  return (
+    <button
+      type="button"
+      className={`sq-floor-crt${off ? " is-off" : ""}`}
+      data-testid={testid}
+      data-face-mode={mode}
+      title={title}
+      disabled={!onOpen}
+      style={{
+        left: rect.x,
+        top: rect.y,
+        width: rect.w,
+        height: rect.h,
+        ...(frame ? { backgroundImage: `url(${FACE_URL(bot, theme)})`, backgroundPosition: `-${frame.x}px -${frame.y}px` } : {}),
+      }}
+      onClick={() => onOpen?.()}
+    />
+  );
+}
+
 function PlateBoxes({ rects, className }: { rects: Rect[]; className?: string }) {
   return (
     <>
@@ -313,7 +369,11 @@ export function SquadFloor({ view, onOpenRiffBot }: SquadFloorProps) {
   const castImgOk = useImageOk(CAST_URL(theme));
   // Front overlays are opt-in per floor.json (`"front": true`); absent → skip.
   const floorFrontOk = useImageOk(floor.front ? FLOOR_FRONT_URL(theme) : null);
-  const roofFrontOk = useImageOk(floor.penthouse?.front ? ROOF_FRONT_URL(theme) : null);
+  const top = useMemo(() => topBand(floor), [floor]);
+  const roofFrontOk = useImageOk(top.front ? ROOF_FRONT_URL(theme) : null);
+  const [faces, setFaces] = useState<FacesModel | null>(null);
+  const riffFaceOk = useImageOk(faces?.bots.riffbot ? FACE_URL("riffbot", theme) : null);
+  const overlordFaceOk = useImageOk(faces?.bots.overlord ? FACE_URL("overlord", theme) : null);
   const sheet = cast && castImgOk ? CAST_URL(theme) : null;
 
   // Load the art JSON; missing/invalid → F1 placeholder layout (and no sprites when cast.json is absent).
@@ -326,11 +386,16 @@ export function SquadFloor({ view, onOpenRiffBot }: SquadFloorProps) {
       fetch("/office/cast.json")
         .then((r) => (r.ok ? r.json() : undefined))
         .catch(() => undefined),
-    ]).then(([floorJson, castJson]) => {
+      fetch("/office/faces.json")
+        .then((r) => (r.ok ? r.json() : undefined))
+        .catch(() => undefined),
+    ]).then(([floorJson, castJson, facesJson]) => {
       if (cancelled) return;
       setFloor(floorOrPlaceholder(floorJson));
       const v = validateCast(castJson);
       setCast(v.ok ? v.value : null);
+      const f = validateFaces(facesJson);
+      setFaces(f.ok ? f.value : null);
     });
     return () => {
       cancelled = true;
@@ -367,6 +432,42 @@ export function SquadFloor({ view, onOpenRiffBot }: SquadFloorProps) {
     return () => clearInterval(t);
   }, [reduced]);
   const frameIndex = reduced ? 0 : tick;
+
+  // CRT faces tick at faces.json fps; each bot blinks at random every few seconds. Reduced motion: frozen, no blinking.
+  const hasScreens = !!floor.screens;
+  const [faceTick, setFaceTick] = useState(0);
+  useEffect(() => {
+    if (reduced || !faces || !hasScreens) return;
+    const t = setInterval(() => setFaceTick((n) => n + 1), Math.round(1000 / faces.fps));
+    return () => clearInterval(t);
+  }, [reduced, faces, hasScreens]);
+  const [blinking, setBlinking] = useState<Record<FaceBot, boolean>>({ riffbot: false, overlord: false });
+  useEffect(() => {
+    if (reduced || !hasScreens) {
+      setBlinking({ riffbot: false, overlord: false });
+      return;
+    }
+    let alive = true;
+    const timers: Partial<Record<FaceBot, ReturnType<typeof setTimeout>>> = {};
+    const loop = (bot: FaceBot) => {
+      timers[bot] = setTimeout(() => {
+        if (!alive) return;
+        setBlinking((b) => ({ ...b, [bot]: true }));
+        timers[bot] = setTimeout(() => {
+          if (!alive) return;
+          setBlinking((b) => ({ ...b, [bot]: false }));
+          loop(bot);
+        }, BLINK_MS);
+      }, nextBlinkDelay(Math.random()));
+    };
+    loop("riffbot");
+    loop("overlord");
+    return () => {
+      alive = false;
+      clearTimeout(timers.riffbot);
+      clearTimeout(timers.overlord);
+    };
+  }, [reduced, hasScreens]);
 
   // Closed/archived agents ride the elevator for RIDE_MS on the transition, then vanish.
   type Rider = FlatMember & { start: number };
@@ -406,7 +507,9 @@ export function SquadFloor({ view, onOpenRiffBot }: SquadFloorProps) {
   );
 
   const floorRefs = useRef<(HTMLDivElement | null)[]>([]);
+  // Old top band, only used when floor.json has no `screens` (topBand: screens > penthouse > placeholder penthouse).
   const penthouse = floor.penthouse ?? placeholderFloor().penthouse!;
+  const screens = floor.screens;
 
   // A rider starts at the elevator of the floor it sat on and rises for RIDE_MS.
   const ridersOn = (floorIndex: number, elevator: Rect): ReactNode =>
@@ -460,9 +563,56 @@ export function SquadFloor({ view, onOpenRiffBot }: SquadFloorProps) {
     <section className="sq-floor" data-testid="squad-floor" aria-label="Squad floor" ref={rootRef}>
       {scale >= 1 && (
         <div className="sq-floor-tower">
-          {/* Penthouse [RiffBot lounge | elevator top | Overlord office] */}
-          <div className="sq-floor-band-wrap" style={towerScale(penthouse.w, penthouse.h)}>
-            <div className="sq-floor-band" style={bandStyle(penthouse.w, penthouse.h)}>
+          {/* Top band: Art10 CRT screens [RiffBot | lift top | Overlord] when floor.json has `screens`, else the old penthouse. */}
+          <div className="sq-floor-band-wrap" style={towerScale(top.w, top.h)}>
+            <div className="sq-floor-band" style={bandStyle(top.w, top.h)}>
+              {screens ? (
+                <Band
+                  cast={cast}
+                  sheet={sheet}
+                  frameIndex={frameIndex}
+                  frontSrc={roofFrontOk ? ROOF_FRONT_URL(theme) : null}
+                  items={[]}
+                  plate={
+                    roofImgOk ? (
+                      <img className="sq-floor-plate" src={ROOF_URL(theme)} alt="" draggable={false} style={{ width: screens.w, height: screens.h }} />
+                    ) : (
+                      <PlateBoxes rects={[screens.riffbot, screens.overlord, screens.elevatorTop]} />
+                    )
+                  }
+                  extras={
+                    <>
+                      <Crt
+                        bot="riffbot"
+                        rect={screens.riffbot}
+                        faces={faces}
+                        sheetOk={riffFaceOk}
+                        theme={theme}
+                        mode={faceMode(tower.penthouse.riffbot, blinking.riffbot)}
+                        tick={reduced ? 0 : faceTick}
+                        off={false}
+                        title="Open RiffBot"
+                        testid="sq-floor-crt-riffbot"
+                        onOpen={hub ? () => void Promise.resolve(onOpenRiffBot(hub)).catch(() => {}) : null}
+                      />
+                      <Crt
+                        bot="overlord"
+                        rect={screens.overlord}
+                        faces={faces}
+                        sheetOk={overlordFaceOk}
+                        theme={theme}
+                        mode={faceMode(tower.penthouse.overlord, blinking.overlord)}
+                        tick={reduced ? 0 : faceTick}
+                        off={!tower.penthouse.overlord}
+                        title={tower.penthouse.overlord ? "Open the Overlord" : "No Overlord running"}
+                        testid="sq-floor-crt-overlord"
+                        onOpen={tower.penthouse.overlord ? () => openAgent(hub?.lane.id ?? "", tower.penthouse.overlord!.agentId) : null}
+                      />
+                      {ridersOn(-1, screens.elevatorTop)}
+                    </>
+                  }
+                />
+              ) : (
               <Band
                 cast={cast}
                 sheet={sheet}
@@ -490,6 +640,7 @@ export function SquadFloor({ view, onOpenRiffBot }: SquadFloorProps) {
                 }
                 extras={ridersOn(-1, penthouse.elevatorTop)}
               />
+              )}
             </div>
           </div>
 
