@@ -330,13 +330,13 @@ export function setNeedsYou(agent: PaseoAgent, reason: string): Promise<void> {
     ? { [LEGACY_NEEDS_LABEL]: reason, [LEGACY_NEEDS_REASON]: reason, [LEGACY_NEEDS_UNTIL]: "" }
     : {};
   return updateAgent(agent.id, {
-    labels: { ...latestLabels(agent), ...legacy, "needs-you": reason, "needs-you-reason": reason, "needs-you-until": "" },
+    labels: { ...latestLabels(agent), ...legacy, "needs-you": reason, "needs-you-reason": reason, "needs-you-until": "", "needs-you-at": new Date().toISOString() },
   });
 }
 
 export function clearNeedsYou(agent: PaseoAgent, opts?: { optimistic?: boolean }): Promise<void> {
   const legacy = hasLegacy(agent) ? { [LEGACY_NEEDS_LABEL]: "cleared", [LEGACY_NEEDS_UNTIL]: "" } : {};
-  return updateAgent(agent.id, { labels: { ...latestLabels(agent), ...legacy, "needs-you": "cleared", "needs-you-until": "" } }, opts);
+  return updateAgent(agent.id, { labels: { ...latestLabels(agent), ...legacy, "needs-you": "cleared", "needs-you-until": "", "needs-you-at": "" } }, opts);
 }
 
 export function snoozeNeedsYou(agent: PaseoAgent, durationMs: number, opts?: { optimistic?: boolean }): Promise<void> {
