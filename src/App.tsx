@@ -78,6 +78,8 @@ import {
 import { AttentionBadge } from "./AttentionList";
 import { SquadQueue } from "./SquadQueue";
 import { SquadFloor } from "./SquadFloor";
+import { SkyZones } from "./SkyZones";
+import { skyZoneIds, skyZonesFor } from "./skyZonesLogic";
 import { FullToggle, PinGrid, SidebarPins, SquadsHome, setFullView, useFullView, type PinHandler } from "./PinGrid";
 import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import { popAction, urlAgentFor } from "./pinFocusLogic";
@@ -1703,6 +1705,8 @@ export function App() {
   const pinFocused = !!pinFocusView;
   const hubPinNow = pinFocusView ? hubPinForSquad(pinFocusView) : null;
   const hubFocused = !!pinFocus && !!hubPinNow && hubPinNow.lane.id === pinFocus.laneId;
+  // Sky-gods hub: the two bots chat in the sky zones; any other agent opened on the hub lane takes the normal focus view.
+  const hubAgentOpen = hubFocused && !!pinFocus?.agentId && !!pinFocusView && !skyZoneIds(skyZonesFor(pinFocusView)).includes(pinFocus.agentId);
   const hidePanes = pinLayout && pinsHome && !pinFocused;
   const withPanes = (hasTabs || focus) && !pinFocused && !hidePanes;
   const urlAgentId = urlAgentFor({ activeAgentId, onGrid: hidePanes, startFresh: pinFocused && !pinFocus?.agentId });
@@ -1996,8 +2000,9 @@ export function App() {
         </main>
       )}
       {hubFocused ? (
-        <div className="hub-body" data-testid="hub-body">
+        <div className={`hub-body${hubAgentOpen ? " hub-agent-open" : ""}`} data-testid="hub-body">
           {panesNode}
+          {pinFocusView && !hubAgentOpen && <SkyZones view={pinFocusView} onSuccessor={paneSuccessor} onStartRiffBot={onQuickStart} />}
           {pinFocusView && <SquadQueue view={pinFocusView} />}
           {pinFocusView && <SquadFloor view={pinFocusView} />}
         </div>

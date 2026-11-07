@@ -1,0 +1,89 @@
+// C2b G1: sky zones. Zone→agent mapping, the no-Overlord state, and per-zone chat independence.
+import assert from "node:assert/strict";
+import test from "node:test";
+import { readFileSync } from "node:fs";
+import { NO_OVERLORD_TEXT, overlordState, skyZoneIds, skyZonesFor } from "../src/skyZonesLogic.ts";
+
+const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
+const member = (id, kind, { status = "idle", attention = null, laneId = "sq1" } = {}) => ({
+  agent: { id, title: id, status, updatedAt: "2026-11-07T00:00:00Z", archivedAt: null, labels: { lane: laneId }, createdAt: "2026-11-07T00:00:00Z" },
+  attention,
+  kind,
+  agentType: kind === "brainstorm" ? "brainstorm" : kind === "lead" ? "lead" : "implement",
+  laneId,
+});
+const view = (members) => ({ team: { id: "sq1", name: "Squad One", color: "#fff", lanes: [] }, lanes: [], members });
+
+test("zone→agent mapping: RiffBot = hub Buddy (left), Overlord = hub lead (right)", () => {
+  const z = skyZonesFor(view([member("buddy", "brainstorm"), member("boss", "lead"), member("w1", "worker")]));
+  assert.equal(z.riffbot.bot, "riffbot");
+  assert.equal(z.riffbot.agentId, "buddy");
+  assert.equal(z.overlord.bot, "overlord");
+  assert.equal(z.overlord.agentId, "boss");
+  assert.deepEqual(skyZoneIds(z), ["buddy", "boss"]);
+  assert.equal(overlordState(z), "live");
+});
+
+test("face pose follows the zone's agent: running → work (talk), needs → needs", () => {
+  const z = skyZonesFor(view([member("buddy", "brainstorm", { status: "running" }), member("boss", "lead")]));
+  assert.equal(z.riffbot.pose, "work");
+  assert.equal(z.overlord.pose, "idle");
+});
+
+test("no live Overlord: the right zone has no agent and no pose, RiffBot is unaffected", () => {
+  const z = skyZonesFor(view([member("buddy", "brainstorm")]));
+  assert.equal(z.overlord.member, null);
+  assert.equal(z.overlord.agentId, null);
+  assert.equal(z.overlord.pose, null);
+  assert.equal(overlordState(z), "none");
+  assert.deepEqual(skyZoneIds(z), ["buddy"]);
+  assert.equal(z.riffbot.agentId, "buddy");
+  assert.equal(NO_OVERLORD_TEXT, "no Overlord on duty");
+});
+
+test("no hub view at all: both zones empty, nothing throws", () => {
+  const z = skyZonesFor(null);
+  assert.equal(z.hub, null);
+  assert.deepEqual(skyZoneIds(z), []);
+});
+
+test("no-Overlord zone renders static + the text and mounts no chat (so no composer)", () => {
+  const sky = src("SkyZones.tsx");
+  assert.ok(sky.includes("NO_OVERLORD_TEXT"));
+  assert.ok(sky.includes('data-testid="sky-static-overlord"'));
+  // A DrawerSlot (which owns the composer) is only rendered behind `zone.agentId ? ... : static`.
+  assert.ok(/zone\.agentId \? \(\s*<DrawerSlot/.test(sky));
+  assert.equal((sky.match(/<DrawerSlot/g) || []).length, 1);
+});
+
+test("each zone's chat is independent: its own agent id into the shared chat body, no cross-zone state", () => {
+  const sky = src("SkyZones.tsx");
+  // The chat body is AgentPanes' DrawerSlot (reused, not rewritten), keyed to this zone's own agent.
+  assert.ok(src("AgentPanes.tsx").includes("export const DrawerSlot"));
+  assert.ok(sky.includes('<DrawerSlot id={zone.agentId} pane="left" shown'));
+  // Zones share nothing but the faces.json model: no store, no draft key, no shared agent id.
+  assert.ok(!/useDraft|setActivePane|sendMessage|useState/.test(sky));
+  // Drafts and sends are per agent id (Composer/AgentDrawer take the agent), so two ids never cross.
+  assert.ok(src("AgentPanes.tsx").includes("<AgentDrawer agent={agent}"));
+  const z = skyZonesFor(view([member("buddy", "brainstorm"), member("boss", "lead")]));
+  assert.notEqual(z.riffbot.agentId, z.overlord.agentId);
+});
+
+test("hub wiring: sky zones in hub-body; other agents take the normal focus view", () => {
+  const app = src("App.tsx");
+  assert.ok(app.includes("<SkyZones view={pinFocusView}"));
+  assert.ok(app.includes("hub-agent-open"));
+  const css = src("styles.css");
+  assert.ok(css.includes(".hub-body:not(.hub-agent-open) .agent-panes .pane-slot"));
+});
+
+test("sky look: CSS gradient sky, CSS bezel, both themes, reduced motion freezes static + faces", () => {
+  const css = src("styles.css");
+  assert.ok(/\.sky-zones \{[^}]*linear-gradient/.test(css));
+  assert.ok(/\.sky-zone \{[^}]*border: 7px solid/.test(css));
+  assert.ok(css.includes(':root[data-theme="light"] .sky-zones'));
+  assert.ok(/prefers-reduced-motion: reduce\) \{ \.sky-static \{ animation: none/.test(css));
+  const hook = src("useBotFace.ts");
+  assert.ok(hook.includes("blinking && !reduced"));
+  assert.ok(hook.includes("reduced ? 0 : tick"));
+});

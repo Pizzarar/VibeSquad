@@ -137,7 +137,7 @@ function TabStrip(props: { pane: Pane; tabs: string[]; activeId: string | null; 
   );
 }
 
-const DrawerSlot = memo(function DrawerSlot(props: {
+export const DrawerSlot = memo(function DrawerSlot(props: {
   id: string;
   pane: Pane;
   shown: boolean;
