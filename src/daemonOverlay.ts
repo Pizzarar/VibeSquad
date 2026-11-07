@@ -44,8 +44,8 @@ export function paseoIsDown(i: { remote: boolean; conn: string; status: string; 
 /** Header pill text for a local connection problem. */
 export function pillText(i: Pick<OverlayInput, "runnerConn" | "authFailureReason">): string {
   if (i.runnerConn === "down") return "Runner disconnected · reconnecting";
-  if (i.authFailureReason) return "Paseo locked · unlock in Diagnostics";
-  return "Paseo disconnected · reconnecting";
+  if (i.authFailureReason) return "VS server locked · see Diagnostics";
+  return "VS server disconnected · reconnecting";
 }
 
 /** The quiet header dot also shows for the legacy "daemon expected" flag, which alone never counts as using Paseo. */

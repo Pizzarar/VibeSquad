@@ -31,8 +31,8 @@ test('Paseo down while in use, runner down, or Paseo locked: a header pill', () 
 
 test('pill text names the problem', () => {
   assert.equal(pillText({ runnerConn: 'down', authFailureReason: null }), 'Runner disconnected · reconnecting');
-  assert.equal(pillText({ runnerConn: 'up', authFailureReason: 'incorrect_password' }), 'Paseo locked · unlock in Diagnostics');
-  assert.equal(pillText({ runnerConn: 'up', authFailureReason: null }), 'Paseo disconnected · reconnecting');
+  assert.equal(pillText({ runnerConn: 'up', authFailureReason: 'incorrect_password' }), 'VS server locked · see Diagnostics');
+  assert.equal(pillText({ runnerConn: 'up', authFailureReason: null }), 'VS server disconnected · reconnecting');
 });
 
 test('usesPaseoBackend: runner off, pinned lane, expected daemon or a daemon agent', () => {
