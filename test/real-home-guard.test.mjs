@@ -70,3 +70,23 @@ test("the checkout's own teams.json is skipped under a test runner; a temp root 
     for (const [k, v] of [["VIBESQUAD_TEAMS_FILE", prev.f], ["VIBESQUAD_IGNORE_HOME_TEAMS", prev.i]]) v === undefined ? delete process.env[k] : (process.env[k] = v);
   }
 });
+
+test("repo-root check ignores drive/path case and follows symlinks/junctions", async () => {
+  const { isForbiddenRepoLocalTeams } = await import("../server/test-guard.mjs");
+  const { mkdtempSync, symlinkSync, rmSync } = await import("node:fs");
+  const root = path.resolve(import.meta.dirname, "..");
+  if (process.platform === "win32") {
+    assert.ok(isForbiddenRepoLocalTeams(root.toLowerCase()), "lower-cased root");
+    assert.ok(isForbiddenRepoLocalTeams(root.toUpperCase()), "upper-cased root");
+  }
+  assert.ok(isForbiddenRepoLocalTeams(path.join(root, "server", "..")), "unnormalised path");
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "vs-link-"));
+  try {
+    const link = path.join(tmp, "repo-link");
+    symlinkSync(root, link, "junction");
+    assert.ok(isForbiddenRepoLocalTeams(link), "junction to the repo root");
+    assert.ok(!isForbiddenRepoLocalTeams(tmp), "unrelated dir");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
