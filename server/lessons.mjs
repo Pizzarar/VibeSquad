@@ -155,10 +155,10 @@ export function readLessons({ category, query, limit = 50, storePath, rootDir } 
 // top rules of docs/LESSONS.md and are injected verbatim; the detailed symptom/cause/evidence
 // lives in the catalog, not in the prompt.
 export const STANDING_RULES = [
-  "Find the lead with `vs who lead` (labels role/lane/ord), never `paseo ls -g --json` or title-prefix regex.",
+  "Find the lead with `vs who lead` (labels role/lane/ord), never `vs list` JSON scraping or title-prefix regex.",
   "Run unit work in `%LOCALAPPDATA%\\VibeSquad\\worktrees\\<repo>\\<unit>`; never `git worktree add ../<repo>-<unit>` into `projects/`.",
   "Write JSON with node `fs.writeFileSync(..., 'utf8')`, never PowerShell `Set-Content`/`Out-File` (UTF-8 BOM breaks parsers).",
-  "Never end a turn just to wait on a background task: poll with a timeout or `paseo wait <id> --timeout <s>`.",
+  "Never end a turn just to wait on a background task: poll with a timeout or `vs wait <id> --timeout <s>`.",
   "Route by Role + Tier with automatic provider failover (Claude -> Gemini -> DeepSeek); never pin every profile to one provider.",
   "Detach live children before archiving any agent (Paseo cascades archives to the parent's children).",
   "Treat durable lane artifacts (`docs/lanes/<lane>/SPEC.md` + `docs/brainstorm/<lane>.md`) as the source of truth, not chat history.",

@@ -303,7 +303,7 @@ export function buildBrainstormInitialPrompt({ laneId, laneUpper, buddyName, sum
             : `- Never complete the team yourself. When the lead reported PASS on the last plan block and nothing is Open, post "<Team> looks done. ✓ Mark complete · Not yet" with the line \`vs:looks-done\` in a code fence.`,
         ]),
     `- To find your current lead for handoff: run \`vs who lead\`.`,
-    `- Before handing off a plan that adds a command, rule or feature, check for an existing primitive (\`paseo --help\`, Paseo MCP tool list, \`vs --help\`, skills). Name what you checked in the plan's Decided section.`,
+    `- Before handing off a plan that adds a command, rule or feature, check for an existing primitive (\`vs --help\`, the VS MCP tool list, skills). Name what you checked in the plan's Decided section.`,
     `- At >=80k context tokens, update the brief now. At the hard limit VibeSquad retires you; the next click on the pin starts a fresh Brainstorm from the brief.`,
     ...(vibeMode ? [VIBE_HEARTBEAT_LINE] : []),
     ...(hubTeams ? HUB_BOOT_RULES : []),

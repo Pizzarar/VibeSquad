@@ -8,11 +8,11 @@ VibeSquad owns its portable 19-profile store in `~/.vibesquad/profiles.json` (`s
 - **R1 (Search/Read):** Use your provider's native search/read tools. If you must use the shell, cap the output (`| head -50`, `-m`, `Select-Object -First`).
 - **R3 (Images):** Don't re-read an image file you've already seen unless it changed. Take screenshots at the needed size, not full-page tall captures.
 - **R4 (Large files):** For files over ~30k chars, grep first, then read with offset/limit. Never re-read from byte 0.
-- **R6 (Waiting):** Wait on agents with `paseo wait <id> --timeout <s>` (always with a timeout). No sleep/poll loops.
+- **R6 (Waiting):** Wait on agents with `vs wait <id> --timeout <s>` (always with a timeout). No sleep/poll loops.
 - **R2/R7 (Git state):** Git state in the spawn context is a starting point only. Re-check right before commit/push/merge, not every turn. Fetch at most once per worktree per hour unless about to merge.
 - **R8 (Worktrees & Lanes):** Address feature lanes by their `@<code>` handle (e.g. `@bug`, `@ade`, `@uip`, `@art`). Create linked git worktrees only via `vs worktree create <unit>` (stored in the managed worktree sanctuary, never as sibling folders in the projects directory), and sweep merged worktrees with `vs worktree sweep --apply`.
-- **R9 (Owner shorthand & interrupts):** Decode keyboard/phonetic shorthand silently (`dameon`→daemon, `emini`→gemini, `paseo la`→paseo ls, `gold`→hold, `sotpped`→stopped, `ahvent`→haven't). Translate mechanism suggestions into cleaner primitives (`vs who`, worktree sanctuary, role-tier failover) and record the translation in Decided. Treat `/btw` / `also` / `on another note` as separate queued units, split multi-item dumps into parallel `@lane` units, and treat short approvals (`send it`, `go for b`, `do it`) as terminal go-signals.
-- **R10 (Releases):** Never run release, publish, tag or signing scripts yourself. When the owner asks for a release, send `vs log handoff "release <project> <stable|beta> <commit|branch>" -> Release Desk` plus a Paseo message to the Release Desk Buddy (`vs who brainstorm --lane release-desk`) with the change list and credits, then go back to your work. The desk versions, audits, signs, publishes and reports back.
+- **R9 (Owner shorthand & interrupts):** Decode keyboard/phonetic shorthand silently (`dameon`→daemon, `emini`→gemini, `vs lst`→vs list, `gold`→hold, `sotpped`→stopped, `ahvent`→haven't). Translate mechanism suggestions into cleaner primitives (`vs who`, worktree sanctuary, role-tier failover) and record the translation in Decided. Treat `/btw` / `also` / `on another note` as separate queued units, split multi-item dumps into parallel `@lane` units, and treat short approvals (`send it`, `go for b`, `do it`) as terminal go-signals.
+- **R10 (Releases):** Never run release, publish, tag or signing scripts yourself. When the owner asks for a release, send `vs log handoff "release <project> <stable|beta> <commit|branch>" -> Release Desk` plus a `send` (VS MCP / `vs send`) message to the Release Desk Buddy (`vs who brainstorm --lane release-desk`) with the change list and credits, then go back to your work. The desk versions, audits, signs, publishes and reports back.
 
 ## Squad, Feature Lane & Buddy Model
 
@@ -22,7 +22,7 @@ VibeSquad owns its portable 19-profile store in `~/.vibesquad/profiles.json` (`s
 - **Buddy (`role=brainstorm`)**: Friendly mascot name for the brainstorm role (`Brainstorm - Claude`, `Brainstorm - Gemini`). Each Feature Lane has 1 live Buddy (`TALK HERE`) and 1 live Lead (`RUNS THE WORK`).
 - **Shared Squad Log**: All Feature Lanes in a Squad share `~/.vibesquad/teams/<team>/log.jsonl` via `vs log --since-me`.
 - **Prior-Art Check Rule** (included in both Brainstorm and Lead profile notes):
-  - Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`paseo --help`, Paseo MCP tool list, `vs --help`, skills). Name what you checked in the plan's Decided section.
+  - Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`vs --help`, the VS MCP tool list, skills). Name what you checked in the plan's Decided section.
 - **Lead Context Management (`Lead - Claude`, `Lead - Gemini`)**:
   - Context management: at ~150k stop dispatching and write a handoff at the next good stopping point; VS auto-hands off at 250k, hard cap 300k.
 - **`"Spin up a buddy (for X)"` Trigger Rule** (included in both Brainstorm and Lead profile notes):

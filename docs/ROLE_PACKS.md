@@ -4,7 +4,7 @@ The VibeSquad server plugin (`plugin/index.ts`) adds a small, fixed prompt prefi
 
 ## Layer order (fixed, no timestamps or per-spawn values)
 
-1. **Everyone layer**: how to find the lead (`vs who lead`, `role=lead` in the same team/lane, never `(old)` or `former-lead`), the multi-lane Squad model (multiple feature lanes per Squad `team`, each with 1 Buddy `role=brainstorm` and 1 Lead `role=lead`), the `needs-you` label, `vs log --since-me` (shared across all lanes in the Squad), `docs/NAMING.md`, and the guardrail rules R1 (Search/Read), R3 (Images), R4 (Large files), R6 (Waiting with `paseo wait <id> --timeout <s>`), and R2/R7 (Git state).
+1. **Everyone layer**: how to find the lead (`vs who lead`, `role=lead` in the same team/lane, never `(old)` or `former-lead`), the multi-lane Squad model (multiple feature lanes per Squad `team`, each with 1 Buddy `role=brainstorm` and 1 Lead `role=lead`), the `needs-you` label, `vs log --since-me` (shared across all lanes in the Squad), `docs/NAMING.md`, and the guardrail rules R1 (Search/Read), R3 (Images), R4 (Large files), R6 (Waiting with `vs wait <id> --timeout <s>`), and R2/R7 (Git state).
 2. **Project `AGENTS.md`**: loaded natively by the provider, not by the plugin.
 3. **Role pack**, chosen by role:
 
@@ -12,7 +12,7 @@ The VibeSquad server plugin (`plugin/index.ts`) adds a small, fixed prompt prefi
    |---|---|
    | `lead` | `<projectRoot>/docs/LEAD_RULES.md`; falls back to a built-in compact pack if the file is missing (includes prior-art check rule, `"Spin up a buddy (for X)"` trigger + overlap check via `vs who brainstorm`, and 150k/250k/300k handoff ladder: at ~150k stop dispatching and write a handoff at the next good stopping point; VS auto-hands off at 250k, hard cap 300k) |
    | `worker` | built-in: never `vs log` write; report PASS/FAIL and refs in the final message (the digest logs it); never call built-in `SendMessage`/`ListAgents` (A11) |
-   | `brainstorm` (Buddy) | built-in: mascot name **Buddy**; may `vs log decision` / `vs log needs-you`; checks for existing primitives (`paseo --help`, Paseo MCP tool list, `vs --help`, skills) before handing off a plan that adds a command, rule or feature; hands build work to a lead; handles `"Spin up a buddy (for X)"` / `"spin up another buddy"` / `"get me a buddy for X"` with overlap check (`vs who brainstorm` and `vs log --since-me`) before spawning a new Buddy in a new feature lane (`lane=<slug from X>`) under the same Squad (`team=<product>`) |
+   | `brainstorm` (Buddy) | built-in: mascot name **Buddy**; may `vs log decision` / `vs log needs-you`; checks for existing primitives (`vs --help`, the VS MCP tool list, skills) before handing off a plan that adds a command, rule or feature; hands build work to a lead; handles `"Spin up a buddy (for X)"` / `"spin up another buddy"` / `"get me a buddy for X"` with overlap check (`vs who brainstorm` and `vs log --since-me`) before spawning a new Buddy in a new feature lane (`lane=<slug from X>`) under the same Squad (`team=<product>`) |
 
 4. **The caller's brief** (the agent's own prompt).
 
@@ -28,7 +28,7 @@ The `before("agent.create")` request carries no labels, so the plugin uses env `
 
 ### Worker report routing (A11)
 
-A worker's final message is its report. The worker pack says: "Your final message is the report; never call built-in SendMessage or ListAgents; mid-task use `send` (VS MCP; `send_agent_prompt` on the Paseo MCP)." Workers never address a lead directly; the digest routes by `team`/`lane` labels to the current lead. `src/antigravity.ts` exports `WORKER_REPORT_ROUTING_GUARD` and `detectMisroutedReport` (surfaced as `a11MisroutedReport` on `AntigravityAudit`) to flag turns that used Claude Code's built-in `SendMessage` or `ListAgents` instead.
+A worker's final message is its report. The worker pack says: "Your final message is the report; never call built-in SendMessage or ListAgents; mid-task use `send` (VS MCP or `vs send`)." Workers never address a lead directly; the digest routes by `team`/`lane` labels to the current lead. `src/antigravity.ts` exports `WORKER_REPORT_ROUTING_GUARD` and `detectMisroutedReport` (surfaced as `a11MisroutedReport` on `AntigravityAudit`) to flag turns that used Claude Code's built-in `SendMessage` or `ListAgents` instead.
 
 ## Measuring
 

@@ -60,9 +60,11 @@ test('vs mcp alias-report reads team logs under VIBESQUAD_HOME (text + --json)',
   assert.equal(json.groups[0].caller, 'rn-7');
 });
 
-test('shared prompt text leads with VS MCP names and keeps the Paseo names as the fallback', () => {
-  assert.match(WORKER_PACK, /use `send` \(VS MCP; `send_agent_prompt` on the Paseo MCP\)/);
-  assert.match(LEAD_FALLBACK_PACK, /`spawn_worker` \(VS MCP: `title`, `profile`, `prompt`, `cwd`, `labels` `\{job, ord\}`; the profile supplies provider\/model\/mode\)\. On the Paseo MCP use `create_agent` and pass `provider`, `model`, `mode`/);
-  assert.match(ART_PAINTER_NOTE_BODY, /via `send` \(VS MCP; `send_agent_prompt` on the Paseo MCP\)/);
-  for (const text of [WORKER_PACK, LEAD_FALLBACK_PACK, ART_PAINTER_NOTE_BODY]) assert.ok(!/(?<![`(]|Paseo MCP; )\b(?:Paseo send_agent_prompt|calling `create_agent`)/.test(text));
+test('shared prompt text names only vs / VS MCP tools, never the Paseo ones', () => {
+  assert.match(WORKER_PACK, /use `send` \(VS MCP or `vs send`\)/);
+  assert.match(LEAD_FALLBACK_PACK, /`spawn_worker` \(VS MCP: `title`, `profile`, `prompt`, `cwd`, `labels` `\{job, ord\}`; the profile supplies provider\/model\/mode\)\. Pass the `profile`/);
+  assert.match(ART_PAINTER_NOTE_BODY, /via `send` \(VS MCP or `vs send`\)/);
+  for (const text of [WORKER_PACK, LEAD_FALLBACK_PACK, ART_PAINTER_NOTE_BODY]) {
+    assert.ok(!/paseo (wait|ls|la|--help|agent|inspect)|Paseo MCP|create_agent|send_agent_prompt/.test(text), text.slice(0, 80));
+  }
 });
