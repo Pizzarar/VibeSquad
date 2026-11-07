@@ -394,13 +394,43 @@ export function handleFsList(req, res, roots, sendJson) {
   return sendJson(res, 200, { ok: true, entries: r.entries });
 }
 
-export function handleFsRead(req, res, roots, sendJson) {
+/**
+ * A relative path that is missing under `cwd` may live in a sibling worktree of the same lane (an Art Lead in the main
+ * repo linking a file only its worktree has). `candidates` are already-vetted dirs; one direct existence check each,
+ * no scans. Returns { found: {cwd, rel} } for a unique hit, { ambiguous: [cwd...] } for several, else {}.
+ */
+export function findInWorktrees(cwd, rel, candidates) {
+  const own = normPath(realOr(cwd));
+  const hits = new Map();
+  for (const cand of candidates ?? []) {
+    const dir = realOr(cand);
+    if (normPath(dir) === own || isUnsafeRoot(dir)) continue;
+    const r = resolveInCwd(dir, rel);
+    if (r.error) continue;
+    try { if (!statSync(r.real).isFile()) continue; } catch { continue; }
+    hits.set(normPath(r.real), { cwd: dir, rel: r.rel });
+  }
+  const all = [...hits.values()];
+  if (all.length === 1) return { found: all[0] };
+  return all.length ? { ambiguous: all.map((h) => h.cwd) } : {};
+}
+
+/** `worktreesFor(cwd)` (optional) lists the lane's other worktrees to try when the file is missing under cwd. */
+export function handleFsRead(req, res, roots, sendJson, worktreesFor) {
   if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
   const params = new URL(req.url, "http://x").searchParams;
   const c = confineReq(params.get("cwd") ?? "", roots);
   if (c.error) return sendJson(res, c.status ?? 400, { ok: false, error: c.error });
   const asked = Number(params.get("max"));
-  const r = fsRead(c.cwd, params.get("path") ?? "", Number.isFinite(asked) && asked > 0 ? Math.min(asked, FS_READ_MAX) : FS_READ_MAX);
+  const max = Number.isFinite(asked) && asked > 0 ? Math.min(asked, FS_READ_MAX) : FS_READ_MAX;
+  let r = fsRead(c.cwd, params.get("path") ?? "", max);
+  if (r.error && r.status === 404 && worktreesFor) {
+    const alt = findInWorktrees(c.cwd, params.get("path") ?? "", worktreesFor(c.cwd));
+    if (alt.ambiguous) {
+      return sendJson(res, 409, { ok: false, error: `ambiguous: ${alt.ambiguous.length} worktrees have this file (${alt.ambiguous.join(", ")})`, matches: alt.ambiguous });
+    }
+    if (alt.found) r = fsRead(alt.found.cwd, alt.found.rel, max);
+  }
   if (r.error) return sendJson(res, r.status ?? 400, { ok: false, error: r.error, size: r.size });
   res.statusCode = 200;
   res.setHeader("content-type", r.mime);
