@@ -4,7 +4,7 @@
 // Run via Playwright MCP browser_run_code_unsafe(filename). Edit base/out below.
 async (page) => {
   const base = 'http://127.0.0.1:5391';
-  const out = 'C:/Users/Fugma/AppData/Local/VibeSquad/worktrees/VibeSquad/art-s2b/scratch/icons-s2b/inplace';
+  const out = process.env.S2B_SHOTS_DIR || 'scratch/icons-s2b/inplace';
   const browser = page.context().browser();
   const log = [];
   const img = (n, th, label) => `<img alt="" src="${base}/scratch/icons-s2b/png/${n}-16-${th}.png" srcset="${base}/scratch/icons-s2b/png/${n}-16-${th}.png 1x, ${base}/scratch/icons-s2b/png/${n}-32-${th}.png 2x" width="16" height="16" style="image-rendering:pixelated;vertical-align:middle;display:inline-block">${label}`;

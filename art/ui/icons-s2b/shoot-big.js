@@ -6,7 +6,7 @@
 // MCP file roots). Edit base/out below.
 async (page) => {
   const base = 'http://127.0.0.1:5391';
-  const out = 'C:/Users/Fugma/AppData/Local/VibeSquad/worktrees/VibeSquad/art-s2b/scratch/icons-s2b/inplace-big';
+  const out = process.env.S2B_SHOTS_DIR || 'scratch/icons-s2b/inplace-big';
   const browser = page.context().browser();
   const log = [];
   const img = (n, th) => `<img alt="" src="${base}/ui/icon-${n}-${th}.png" srcset="${base}/ui/icon-${n}-${th}.png 1x, ${base}/ui/icon-${n}-${th}@2x.png 2x" style="width:calc(var(--u3-px) * 16);height:calc(var(--u3-px) * 16);image-rendering:pixelated;vertical-align:middle;display:inline-block">`;
