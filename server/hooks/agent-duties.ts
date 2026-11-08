@@ -1013,8 +1013,19 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     };
 
     const digested = new Set<string>();
-    const digestedTurn = new Set<string>(); // worker ids whose current turn already dispatched a digest (cleared on turn_started)
-    const inflightDigests = new Set<string>(); // worker ids with a digest spawn or run currently in flight
+    const turnEpoch = new Map<string, number>(); // worker id -> monotonically increasing turn counter (incremented on turn_started)
+    const digestedTurn = new Map<string, { epoch: number; turnId: string; lastText: string; at: number }>();
+    const inflightDigests = new Map<string, number>(); // worker id -> turn epoch of the digest currently in flight
+    const pruneWorkerDigestState = (workerId: string) => {
+      if (!workerId) return;
+      digestedTurn.delete(workerId);
+      inflightDigests.delete(workerId);
+      turnEpoch.delete(workerId);
+      const prefix = `${workerId}:`;
+      for (const k of digested) {
+        if (k.startsWith(prefix)) digested.delete(k);
+      }
+    };
     const retries = new Map<string, number>();
     const offsets = new Map<string, number>();
     const misrouteCounts = new Map<string, number>();
@@ -2082,13 +2093,28 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       if (isDigestAgent(labels, worker.title) || isDigestNoise(labels, worker.title)) return;
       const workerId = String(worker.id ?? "").trim();
       if (!workerId) return;
-      const key = `${workerId}:${turnId ?? ""}`;
-      if (digested.has(key) || digestedTurn.has(workerId) || inflightDigests.has(workerId)) return;
+      const tid = String(turnId ?? "").trim();
+      const key = `${workerId}:${tid}`;
+      const epoch = turnEpoch.get(workerId) ?? 0;
+      if (digested.has(key) || inflightDigests.get(workerId) === epoch) return;
       const where = teamOf(labels, worker.cwd);
       if (!where) return;
+      const prev = digestedTurn.get(workerId);
+      if (prev && prev.epoch === epoch) {
+        if (!tid || tid === prev.turnId) return;
+        const curText = await lastAssistantText(paseo, workerId);
+        // Same turn epoch (no turn_started since): suppress if the assistant output has not changed (e.g. parked->idle).
+        // If turn_started was missed (reconnect/catch-up) and a real turn produced new assistant output, allow it.
+        if (curText === prev.lastText && (curText !== "" || Date.now() - prev.at < 2000)) return;
+        if (inflightDigests.get(workerId) === epoch) return;
+        digestedTurn.set(workerId, { epoch, turnId: tid, lastText: curText, at: Date.now() });
+      } else {
+        inflightDigests.set(workerId, epoch);
+        const curText = await lastAssistantText(paseo, workerId);
+        digestedTurn.set(workerId, { epoch, turnId: tid, lastText: curText, at: Date.now() });
+      }
       digested.add(key);
-      digestedTurn.add(workerId);
-      inflightDigests.add(workerId);
+      inflightDigests.set(workerId, epoch);
       const { team, lane } = where;
       const prompt = [
         `You are a digest agent. Inspect the final result of worker agent ${worker.id} ("${worker.title ?? ""}"):`,
@@ -2161,9 +2187,11 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             if (!verdictLogged()) return fallback("logged nothing");
           })
           .catch(() => fallback("errored"))
-          .finally(() => inflightDigests.delete(workerId));
+          .finally(() => {
+            if (inflightDigests.get(workerId) === epoch) inflightDigests.delete(workerId);
+          });
       } catch (err) {
-        inflightDigests.delete(workerId);
+        if (inflightDigests.get(workerId) === epoch) inflightDigests.delete(workerId);
         log(`digest spawn failed for ${worker.id}: ${err}`);
         await fallback("spawn failed");
       }
@@ -2233,6 +2261,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       if (status === "running" || status === "initializing") return;
       if (((fresh as any).pendingPermissions?.length ?? 0) > 0 || (fresh as any).requiresAttention) return;
       doneReported.delete(agentId);
+      pruneWorkerDigestState(agentId);
       // Marker: only an auto-archived worker is revived by a later send (never a retired lead/Buddy) and is not a "retired holder".
       await deps.setLabels(agentId, { [AUTO_ARCHIVED_LABEL]: "1" }).catch((e: unknown) => log(`auto-archive marker failed for ${agentId}: ${e}`));
       await deps.archiveAgent(agentId).catch((e: unknown) => log(`worker auto-close failed for ${agentId}: ${e}`));
@@ -2547,7 +2576,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           markTurnSeen(agent?.id);
           if (agent?.id) {
             doneReported.delete(agent.id); // a new turn after a report: the worker is working again, do not close it
+            turnEpoch.set(agent.id, (turnEpoch.get(agent.id) ?? 0) + 1);
             digestedTurn.delete(agent.id);
+            inflightDigests.delete(agent.id);
           }
           try {
             const me = await snap(paseo, agent.id);

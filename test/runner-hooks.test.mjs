@@ -672,6 +672,12 @@ test('turn_ended: rapid or concurrent duplicate turn_ended triggers for the same
     await b.backend.sendAgentPrompt(w.id, 'PASS: second turn');
     const second = await until(async () => (await b.backend.listAgents({ filter: { includeArchived: true } })).find((a) => a.labels.digestFor === w.id && a.id !== first.id), 8000, 'second turn gets its own digest');
     await until(async () => (await b.backend.getAgent(second.id)).archivedAt, 8000, 'second digest finished');
+
+    // Missed turn_started (e.g. reconnect/catch-up replaying only turn_ended after new output) still gets a digest
+    b.runner.store.append(w.id, 'output', { text: 'PASS: third turn without turn_started' });
+    await b.lifecycle.host.emit('agent.turn_ended', { agent, turnId: '200', outcome: { kind: 'completed' } });
+    const third = await until(async () => (await b.backend.listAgents({ filter: { includeArchived: true } })).find((a) => a.labels.digestFor === w.id && a.id !== first.id && a.id !== second.id), 8000, 'third turn (missed turn_started) gets its own digest');
+    await until(async () => (await b.backend.getAgent(third.id)).archivedAt, 8000, 'third digest finished');
   } finally {
     await b.close();
   }
