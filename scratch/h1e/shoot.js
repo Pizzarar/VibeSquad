@@ -1,5 +1,5 @@
 async (page) => {
-  const out = 'C:/Users/Fugma/AppData/Local/VibeSquad/worktrees/VibeSquad/art-h1e/scratch/shots/';
+  const out = process.env.H1E_SHOTS_DIR || 'scratch/shots/';
   const browser = page.context().browser();
   const res = [];
   for (const [tag, vp, dpr] of [['4k120', {width:3200,height:1800}, 1.2], ['1080p', {width:1920,height:1080}, 1]]) {
