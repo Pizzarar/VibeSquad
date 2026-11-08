@@ -1,9 +1,89 @@
 {
   "_doc": "Intentional overlaps only; every entry needs a reason. Fields (optional regex strings): kind, selector (hit element css path + classes), other, text, surface.",
   "allow": [
-    { "kind": "overlap", "selector": "sq-floor-(char|blip|mark|plate|front|tv)", "other": "sq-floor-(char|blip|mark|plate|front|tv)", "reason": "Squad Floor: character/blip/mark sprites stand on the floor plate and sit behind the front lip by design (@art floor composition)." },
-    { "kind": "overlap", "selector": "sq-floor-(plate|front)", "reason": "Squad Floor plate/front layers are stacked images by design." },
-    { "kind": "overlap", "selector": "sq-floor-tv", "other": "sq-floor-(plate|front)", "reason": "Floor TV count sits on the floor art by design." },
-    { "kind": "overlap", "selector": "sky-(wall|zone|crt)", "other": "sky-(wall|zone|crt)", "reason": "Sky wall: CRT zones are framed on the wall art by design." }
+    {
+      "kind": "overlap",
+      "selector": "sq-floor-(char|blip|mark|plate|front|tv)",
+      "other": "sq-floor-(char|blip|mark|plate|front|tv)",
+      "reason": "Squad Floor: character/blip/mark sprites stand on the floor plate and sit behind the front lip by design (@art floor composition)."
+    },
+    {
+      "kind": "overlap",
+      "selector": "sq-floor-(plate|front)",
+      "reason": "Squad Floor plate/front layers are stacked images by design."
+    },
+    {
+      "kind": "overlap",
+      "selector": "sq-floor-tv",
+      "other": "sq-floor-(plate|front)",
+      "reason": "Floor TV count sits on the floor art by design."
+    },
+    {
+      "kind": "overlap",
+      "selector": "sky-(wall|zone|crt)",
+      "other": "sky-(wall|zone|crt)",
+      "reason": "Sky wall: CRT zones are framed on the wall art by design."
+    },
+    {
+      "kind": "overlap",
+      "other": "pin-menu-list",
+      "surface": "menu-pin-tile",
+      "reason": "Open row menu (popover) floats over the sidebar by design; it is the top layer at that point."
+    },
+    {
+      "kind": "decor-line",
+      "selector": "pin-menu-list",
+      "other": "sidebar-new-squad-btn",
+      "surface": "menu-pin-tile",
+      "reason": "Same popover over the sidebar: the button border under the menu is covered content, not a line through menu text."
+    },
+    {
+      "kind": "overlap",
+      "selector": "drawer-mode-select",
+      "other": "timeline",
+      "surface": "menu-drawer-config",
+      "reason": "Config popover floats over the chat timeline by design."
+    },
+    {
+      "kind": "decor-line",
+      "selector": "drawer-config-popover",
+      "other": "timeline",
+      "surface": "menu-drawer-config",
+      "reason": "Config popover over the chat timeline: the timeline border under the popover is covered content."
+    },
+    {
+      "kind": "text-outside-container",
+      "selector": "chrome-real",
+      "reason": "Visually hidden real-text twin of the painted chrome lettering (1x1 clip-path), kept for screen readers."
+    },
+    {
+      "kind": "text-overflow",
+      "selector": "chrome-real",
+      "reason": "Visually hidden real-text twin of the painted chrome lettering (1x1 clip-path), kept for screen readers."
+    },
+    {
+      "kind": "overlap",
+      "surface": "menu-pin-tile",
+      "other": "pin-(standing-toggle|complete|remove-item)",
+      "reason": "Row menu popover (mobile sheet) floats over the tile; menu items are the top layer."
+    },
+    {
+      "kind": "overlap",
+      "selector": "tl-pinned-todo",
+      "other": "tl-(subagent-row|tool-row)",
+      "reason": "Sticky plan header (opaque background) overlays timeline rows that scroll under it, by design."
+    },
+    {
+      "kind": "decor-line",
+      "surface": "menu-pin-tile",
+      "selector": "pin-(complete|remove-item|standing-toggle)",
+      "reason": "Row menu popover (mobile sheet) is opaque and floats over the tile; the tile borders under it are covered, not drawn through the menu text."
+    },
+    {
+      "kind": "decor-line",
+      "selector": "tl-pinned-todo",
+      "other": "tl-(tool|subagent)-row",
+      "reason": "Sticky plan header (opaque) over timeline rows that scroll under it, by design."
+    }
   ]
 }

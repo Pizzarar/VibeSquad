@@ -92,6 +92,9 @@ export function providerColor(provider: string): string {
 
 // ---- components ------------------------------------------------------------------
 
+/** Room to the right of the sprite for the provider badge, so the badge sits beside the art instead of covering its corner. */
+const AVATAR_BADGE_GUTTER = 12;
+
 /** A cast member, cut from the hand-drawn sheet (public/cast.png) and shown pixelated at whole multiples of 32. */
 export function Avatar({
   id,
@@ -122,7 +125,7 @@ export function Avatar({
   return (
     <span
       className={`avatar type-${agentType} prov-${p.key} ${retired ? "is-retired" : ""}`}
-      style={{ width: snapped, height: snapped }}
+      style={{ width: snapped + AVATAR_BADGE_GUTTER, height: snapped }}
       title={`${roleLabel} · ${p.name} (#${tag})`}
     >
       <span
