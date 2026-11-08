@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { addInboxCards, readInboxCards, triageInboxCards } from '../server/inbox.mjs';
+import { addInboxCards, readInboxCards, triageInboxCards, buildConciseTitle } from '../server/inbox.mjs';
 import { audit, loadRuns, relayBucket, handoffBucket, fixerBucket, fixOfferBucket, gitMerges } from './audit-owner-stamps.mjs';
 
 export const AUDIT_SOURCE = 'audit:perfection';
@@ -58,7 +58,7 @@ export function fileFindings(findings, { baseHome, dryRun = false, needsYou = ()
   const lines = filed.map(renderFinding);
   if (!dryRun) {
     if (lines.length) addInboxCards({ ideas: lines, laneId: auditLaneId(), teamId: 'vibesquad', source: AUDIT_SOURCE, baseHome });
-    for (const u of updated) triageInboxCards({ action: 'update', cardId: u.id, patch: { text: renderFinding(u.finding) }, baseHome });
+    for (const u of updated) triageInboxCards({ action: 'update', cardId: u.id, patch: { text: renderFinding(u.finding), title: buildConciseTitle(renderFinding(u.finding)) }, baseHome });
     for (const f of filed) if (f.risky) needsYou(renderFinding(f));
   }
   return {
@@ -91,13 +91,13 @@ export function transcriptFindings({ dir, since, until, repo = process.cwd(), no
   const runs = loadRuns(dir);
   const relay = relayBucket(runs, range);
   if (relay.strict) out.push({ key: `owner-relay:${day}`, text: `${relay.strict} agent reports were relayed by the owner by hand instead of sent agent-to-agent.`, evidence: `audit-owner-stamps bucket 2 strict, examples ${JSON.stringify(relay.strictExamples.slice(0, 3))}` });
-  const h = handoffBucket(runs);
+  const h = handoffBucket(runs, range);
   if (h.handoffs.under100k > MIN_EARLY_HANDOFFS) out.push({ key: `early-handoffs:${day}`, text: `${h.handoffs.under100k} lead handoffs happened below 100k context tokens (unneeded churn).`, evidence: `audit-owner-stamps bucket 3, by trigger ${JSON.stringify(h.byTrigger)}` });
-  const merges = gitMerges(repo);
+  // Only merges inside the window count: for fix-after-merge (closed cards must not re-file) and for multi-implementer.
+  const merges = gitMerges(repo).filter((m) => (since === undefined || m.ts >= since) && (until === undefined || m.ts <= until));
   const fx = fixerBucket(runs, merges);
   for (const [unit, branch] of fx.fixAfterMerge.slice(0, 5)) out.push({ key: `fix-after-merge:${unit}`, text: `Unit ${unit} started a fix less than 24h after ${branch} merged: the merge gate let a defect through.`, evidence: `audit-owner-stamps bucket 4 fixAfterMerge ${unit} <- ${branch}` });
-  // Only units merged inside the window count, so old units don't keep coming back.
-  const mergedInWindow = new Set(merges.filter((m) => (since === undefined || m.ts >= since) && (until === undefined || m.ts <= until)).map((m) => m.branch));
+  const mergedInWindow = new Set(merges.map((m) => m.branch));
   const multi = fx.multiWorker.filter(([unit]) => mergedInWindow.has(unit));
   if (multi.length) {
     const listed = multi.slice(0, MULTI_IMPL_LISTED).map(([u, n]) => `${u} (${n})`).join(', ');

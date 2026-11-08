@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileFindings, staleUsageReviewFindings, AUDIT_SOURCE } from '../scripts/audit-perfection.mjs';
+import { execFileSync } from 'node:child_process';
+import { fileFindings, staleUsageReviewFindings, transcriptFindings, AUDIT_SOURCE } from '../scripts/audit-perfection.mjs';
 import { readInboxCards, addInboxCards } from '../server/inbox.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'vs-audit-'));
@@ -67,4 +68,35 @@ test('daily series: an open card of the same series is updated in place, not dup
   assert.match(cards[0].text, /audit-key: rubber-stamps:2026-11-08/);
   assert.equal(fileFindings([day('2026-11-08', 9)], { baseHome }).skipped.length, 1);
   assert.equal(readInboxCards(baseHome).length, 1);
+});
+
+test('series update refreshes the title too', () => {
+  const baseHome = tmp();
+  fileFindings([{ key: 'rubber-stamps:2026-11-07', text: '17 owner rubber-stamp replies.', evidence: 'b1' }], { baseHome });
+  fileFindings([{ key: 'rubber-stamps:2026-11-08', text: '3 owner rubber-stamp replies.', evidence: 'b1' }], { baseHome });
+  const [c] = readInboxCards(baseHome);
+  assert.match(c.title, /^3 owner/);
+});
+
+test('early-handoffs only counts handoffs inside the window', () => {
+  const dir = tmp();
+  const ev = (o) => JSON.stringify(o) + '\n';
+  const day = 24 * 3600 * 1000, now = Date.now();
+  const lead = (id, ts, from) => ev({ type: 'created', ts, cwd: 'C:/x', meta: { role: 'lead', lane: 'a', team: 't', labels: from ? { 'vs.handoff-from': from } : {} } });
+  const old = now - 10 * day;
+  fs.writeFileSync(path.join(dir, 'p.jsonl'), lead('p', old - day) + ev({ type: 'usage', ts: old - day, contextTokens: 50000 }));
+  fs.writeFileSync(path.join(dir, 's.jsonl'), lead('s', old, 'p'));
+  const noRepo = tmp();
+  const since = now - day;
+  assert.equal(transcriptFindings({ dir, since, repo: noRepo, now }).some((f) => f.key.startsWith('early-handoffs')), false);
+  assert.equal(transcriptFindings({ dir, since: old - 1, repo: noRepo, now }).some((f) => f.key.startsWith('early-handoffs')), true);
+});
+
+test('vs inbox add --source tags the card', () => {
+  const home = tmp();
+  const vs = path.resolve(import.meta.dirname, '..', 'cli', 'vs.mjs');
+  execFileSync(process.execPath, [vs, 'inbox', 'add', 'Check the sidebar density', '--lane', 'perfection', '--source', 'audit:perfection'], { env: { ...process.env, VIBESQUAD_HOME: home }, stdio: 'pipe' });
+  const [c] = readInboxCards(home);
+  assert.equal(c.source, 'audit:perfection');
+  assert.equal(c.laneId, 'perfection');
 });

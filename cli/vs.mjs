@@ -254,6 +254,7 @@ function parseArgs(argv) {
     "title",
     "note",
     "since",
+    "source",
     "revision",
   ]);
   const booleans = new Set([
