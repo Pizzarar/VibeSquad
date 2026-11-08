@@ -126,7 +126,7 @@ test("validateFaces: idle stays required, an unknown extra mode is ignored, a ma
 
 test("wiring: the face fills the TV, the thumbnail is gone, Riff gets the forced mode, no new loader", () => {
   const sky = src("SkyZones.tsx");
-  assert.ok(sky.includes("faceContain(cell, box)") && !sky.includes("faceCover"));
+  assert.ok(sky.includes("faceContain(cell, box, dpr)") && !sky.includes("faceCover"));
   assert.ok(!sky.includes("sky-face-box") && !sky.includes("sky-crt-head"));
   assert.ok(sky.includes("force={skyRiffMode(open,"));
   assert.ok(sky.includes("taken={open === \"overlord\"}")); // G7 takeover runs off the explicit open state
@@ -216,7 +216,8 @@ test("G8b: thinner bezels need no code change - small slice/scale values validat
   const st = skyCrtStyle(v.value, "/office/sky-crt-dark.png");
   assert.equal(st.borderWidth, "8px 8px 12px 8px"); // slice x scale per side: the screen inset follows the JSON
   assert.equal(st.borderImageSlice, "4 4 6 4 fill");
-  assert.equal(skyCrtStyle(validateSkyCrt({ slice: { top: 1, right: 1, bottom: 1, left: 1 }, scale: 1.5 }).value, "u").borderWidth, "1.5px 1.5px 1.5px 1.5px");
+  assert.equal(skyCrtStyle(validateSkyCrt({ slice: { top: 1, right: 1, bottom: 1, left: 1 }, scale: 1.5 }).value, "u").borderWidth, "1px 1px 1px 1px"); // G8e: a fractional scale snaps down to whole device px (dpr 1: 1px)
+  assert.equal(skyCrtStyle(validateSkyCrt({ slice: { top: 1, right: 1, bottom: 1, left: 1 }, scale: 1.5 }).value, "u", 2).borderWidth, "1.5px 1.5px 1.5px 1.5px"); // 3 device px at dpr 2
   assert.equal(validateSkyCrt({ slice: { top: 0, right: 4, bottom: 6, left: 4 }, scale: 2 }).ok, false); // zero slice still rejected
   const css = src("styles.css");
   const sky = css.slice(css.indexOf(".sky-zones {"), css.indexOf("/* G7 virus takeover"));
@@ -323,4 +324,99 @@ test("SquadTile's portrait button also holds the inline badge; the only plain Ne
   assert.equal(plain, 2); // PinTile head (div.pin-tile-head) + PinRail active head (div.pin-rail-active-head); every other site is Inline
   assert.ok(/<div className="pin-tile-head">[\s\S]*?<NeedsBadge pin=\{pin\} \/>/.test(grid));
   assert.ok(/<div className="pin-rail-active-head">[\s\S]*?<NeedsBadge pin=\{active\} \/>/.test(src("PinRail.tsx")));
+});
+
+// ── G8e: crisp device pixels at non-integer DPR ──
+test("G8e faceContain: dpr 1 is exactly the old integer scale", () => {
+  const cell = { w: 48, h: 48 };
+  for (const box of [{ w: 700, h: 400 }, { w: 200, h: 500 }, { w: 480, h: 480 }, { w: 1306, h: 497 }, { w: 30, h: 30 }]) {
+    assert.deepEqual(faceContain(cell, box, 1), faceContain(cell, box));
+  }
+  assert.deepEqual(faceContain(cell, { w: 700, h: 400 }, 1), { k: 8, left: 158, top: 16 });
+  assert.equal(logic.safeDpr(0), 1);
+  assert.equal(logic.safeDpr(NaN), 1);
+  assert.equal(logic.safeDpr(undefined), 1);
+  assert.equal(logic.safeDpr(0.5), 1);
+});
+
+test("G8e faceContain at dpr 1.2 (4K@120%): a whole number of DEVICE px per art px, bottom anchored, centred, device-aligned offsets", () => {
+  const dpr = 1.2;
+  const cell = { w: 80, h: 48 };
+  const box = { w: 1291 - 6, h: 884 - 6 }; // a ~1291x884 TV minus a thin bezel (CSS px)
+  const c = faceContain(cell, box, dpr);
+  const kd = c.k * dpr;
+  assert.ok(Math.abs(kd - Math.round(kd)) < 1e-9, `device px per art px is an integer (${kd})`);
+  assert.equal(Math.round(kd), Math.floor(Math.min(box.w / cell.w, box.h / cell.h) * dpr)); // the LARGEST such scale
+  for (const v of [c.left, c.top]) assert.ok(Math.abs(v * dpr - Math.round(v * dpr)) < 1e-9, "offset is a device-px multiple");
+  const bottom = c.top + cell.h * c.k;
+  assert.ok(bottom <= box.h + 1e-9 && box.h - bottom < 1 / dpr + 1e-9, "bottom edge within one device px of the box bottom");
+  assert.ok(c.left >= 0 && c.left + cell.w * c.k <= box.w + 1e-9);
+  // the old CSS-integer pick was soft: 16 CSS px per art px = 19.2 device px (the bug report)
+  const old = faceContain({ w: 48, h: 48 }, { w: 1300, h: 800 }, 1);
+  assert.equal(old.k * 1.2, 16 * 1.2); // 19.2: not an integer
+  const fixed = faceContain({ w: 48, h: 48 }, { w: 1300, h: 800 }, 1.2);
+  assert.ok(Math.abs(fixed.k * 1.2 - Math.round(fixed.k * 1.2)) < 1e-9);
+  assert.equal(fixed.k * 1.2, 20); // 20 device px per art px (16.667 CSS px)
+});
+
+test("G8e faceContain at dpr 1.5 and 2; never below 1 device px; bottom anchor kept", () => {
+  const cell = { w: 48, h: 48 };
+  const a = faceContain(cell, { w: 1000, h: 600 }, 1.5);
+  assert.equal(a.k * 1.5, Math.floor((600 / 48) * 1.5)); // 18 device px
+  assert.equal(a.k * 1.5, 18);
+  assert.equal(a.top + 48 * a.k, 600); // 600*1.5 = 900 device px, face 864: bottom flush
+  const b = faceContain(cell, { w: 1000, h: 600 }, 2);
+  assert.equal(b.k * 2, 25);
+  assert.equal(b.k, 12.5);
+  assert.ok(Math.abs(b.top * 2 - Math.round(b.top * 2)) < 1e-9);
+  const tiny = faceContain(cell, { w: 30, h: 30 }, 1.5);
+  assert.equal(tiny.k * 1.5, 1); // kd at least 1
+  assert.equal(faceContain(cell, { w: 0, h: 0 }, 1.5).k, 0);
+});
+
+test("G8e bezel + wall snap to whole device px per source px; integer products are kept", () => {
+  const { crispScale, snapPx, skyCrtStyle, skyWallStyle, validateSkyCrt } = logic;
+  assert.equal(crispScale(3, 1), 3);
+  assert.equal(crispScale(3, 2), 3); // integer product kept (6 device px)
+  assert.ok(Math.abs(crispScale(3, 1.2) * 1.2 - 3) < 1e-9); // 3.6 -> 3 device px per source px
+  assert.ok(Math.abs(crispScale(3, 1.5) * 1.5 - 4) < 1e-9); // 4.5 -> 4
+  assert.equal(snapPx(10.3, 1.2), Math.round(10.3 * 1.2) / 1.2);
+  const crt = validateSkyCrt({ slice: { top: 3, right: 3, bottom: 5, left: 3 }, scale: 3, repeat: "round", wall: { width: 4, scale: 3, slice: { top: 3, bottom: 5 }, repeat: "round" } }).value;
+  const px = (s) => s.split(" ").map((v) => parseFloat(v));
+  for (const dpr of [1, 1.2, 1.25, 1.5, 2]) {
+    const st = skyCrtStyle(crt, "/u.png", dpr);
+    for (const v of px(st.borderWidth)) assert.ok(Math.abs(v * dpr - Math.round(v * dpr)) < 1e-6, `bezel edge ${v}px is whole device px at dpr ${dpr}`);
+    const w = skyWallStyle(crt.wall, crt.scale, "/w.png", dpr);
+    assert.ok(Math.abs(parseFloat(w.width) * dpr - Math.round(parseFloat(w.width) * dpr)) < 1e-6, `wall width whole device px at dpr ${dpr}`);
+    for (const v of px(w.borderWidth)) assert.ok(Math.abs(v * dpr - Math.round(v * dpr)) < 1e-6);
+  }
+  assert.equal(skyCrtStyle(crt, "/u.png", 1).borderWidth, "9px 9px 15px 9px"); // dpr 1 unchanged
+  assert.equal(skyWallStyle(crt.wall, 3, "/w.png", 1).width, "12px");
+});
+
+test("G8e a DPR change triggers a recompute: the live ratio feeds the face, bezel and wall; matchMedia re-arms on the new ratio", () => {
+  assert.equal(logic.dprMediaQuery(1.2), "(resolution: 1.2dppx)");
+  assert.equal(logic.dprMediaQuery(NaN), "(resolution: 1dppx)");
+  const hook = src("useBotFace.ts");
+  assert.ok(hook.includes("export function useDpr()") && hook.includes("window.matchMedia(dprMediaQuery(dpr))"));
+  assert.ok(hook.includes("}, [dpr]);")); // dep on dpr: every change tears the listener down and arms one for the new ratio
+  assert.ok(hook.includes('typeof window === "undefined" ? 1'));
+  const sky = src("SkyZones.tsx");
+  assert.ok(sky.includes("faceContain(cell, box, dpr)") && sky.includes("faceContain(sheet.cell, box, dpr)")); // takeover shares it
+  assert.ok(sky.includes("}, crt, dpr)") && sky.includes("useImageOk(wallUrl) ? wallUrl : null, dpr)"));
+  // Simulated zoom: 100% -> 120% changes the pick, so a re-render with the new dpr moves the face to the new device-aligned scale.
+  const cell = { w: 48, h: 48 }, box = { w: 1300, h: 800 };
+  assert.notEqual(logic.faceContain(cell, box, 1).k, logic.faceContain(cell, box, 1.2).k);
+});
+
+test("G8e: the fallback seam snaps to whole device px and the DPR hook also re-reads on resize (zoom)", () => {
+  const { skyWallFallbackStyle } = logic;
+  assert.deepEqual(skyWallFallbackStyle(1), { width: "2px", marginLeft: "-1px" }); // today's seam at dpr 1
+  const f = skyWallFallbackStyle(1.2);
+  assert.ok(Math.abs(parseFloat(f.width) * 1.2 - 2) < 1e-9); // 2 device px
+  assert.ok(Math.abs(parseFloat(f.marginLeft) * 1.2 + 1) < 1e-9);
+  const g = skyWallFallbackStyle(1.5); // 3 device px
+  assert.ok(Math.abs(parseFloat(g.width) * 1.5 - 3) < 1e-9);
+  assert.ok(src("SkyZones.tsx").includes("style={wallStyle ?? skyWallFallbackStyle(dpr)}"));
+  assert.ok(src("useBotFace.ts").includes('window.addEventListener("resize", onChange)') && src("useBotFace.ts").includes('window.removeEventListener("resize", onChange)'));
 });

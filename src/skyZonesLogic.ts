@@ -202,12 +202,19 @@ export function parseWall(raw: unknown): SkyWall | null {
   };
 }
 export const SKY_WALL_URL = (theme: SkyTheme) => `/office/sky-wall-${theme}.png`;
+/** The 2px CSS ink seam, snapped to whole device px (1.2 dpr: 2 device px = 1.667 css px) so it is crisp too; at dpr 1 it is the plain 2px. */
+export function skyWallFallbackStyle(dpr = 1): Record<string, string> {
+  const d = safeDpr(dpr);
+  const n = Math.max(1, Math.round(2 * d));
+  return { width: `${n / d}px`, marginLeft: `-${Math.floor(n / 2) / d}px` };
+}
 /** Inline style for the wall element when its art loaded: width = width x (wall.scale ?? bezel scale), pixelated, vertical 3-slice when `slice` is given. null (no wall / no art) -> the CSS ink seam. */
-export function skyWallStyle(wall: SkyWall | undefined, bezelScale: number, url: string | null): Record<string, string> | null {
+export function skyWallStyle(wall: SkyWall | undefined, bezelScale: number, url: string | null, dpr = 1): Record<string, string> | null {
   if (!wall || !url) return null;
-  const k = wall.scale ?? bezelScale;
-  const width = `${wall.width * k}px`;
-  const base = { width, marginLeft: `-${Math.floor((wall.width * k) / 2)}px`, background: "none", imageRendering: "pixelated" };
+  const k = crispScale(wall.scale ?? bezelScale, dpr); // whole device px per source px
+  const d = safeDpr(dpr);
+  const width = `${snapPx(wall.width * k, d)}px`;
+  const base = { width, marginLeft: `-${Math.floor((wall.width * k * d) / 2) / d}px`, background: "none", imageRendering: "pixelated" };
   if (!wall.slice) return { ...base, backgroundImage: `url(${url})`, backgroundSize: `${width} auto`, backgroundRepeat: "repeat-y" };
   const { top, bottom } = wall.slice;
   return {
@@ -220,9 +227,9 @@ export function skyWallStyle(wall: SkyWall | undefined, bezelScale: number, url:
   };
 }
 /** json → the zone's border-image style: width = slice × scale per side, slice + `fill`, crisp pixels. */
-export function skyCrtStyle(model: SkyCrtModel, url: string): Record<string, string> {
+export function skyCrtStyle(model: SkyCrtModel, url: string, dpr = 1): Record<string, string> {
   const { top, right, bottom, left } = model.slice;
-  const k = model.scale;
+  const k = crispScale(model.scale, dpr); // G8e: whole device px per source px, so the 9-slice edges stay sharp at 120% zoom
   return {
     borderStyle: "solid",
     borderWidth: `${top * k}px ${right * k}px ${bottom * k}px ${left * k}px`,
@@ -239,9 +246,10 @@ export function skyAssets(
   theme: SkyTheme,
   ok: SkyAssetOk,
   crt: SkyCrtModel | null = null,
+  dpr = 1,
 ): { skyUrl: string | null; frameUrl: string | null; frameStyle: Record<string, string> | null } {
   const frameUrl = ok.frame && crt ? SKY_FRAME_URL(theme) : null;
-  return { skyUrl: ok.sky ? SKY_URL(theme) : null, frameUrl, frameStyle: frameUrl && crt ? skyCrtStyle(crt, frameUrl) : null };
+  return { skyUrl: ok.sky ? SKY_URL(theme) : null, frameUrl, frameStyle: frameUrl && crt ? skyCrtStyle(crt, frameUrl, dpr) : null };
 }
 
 /**
@@ -250,11 +258,31 @@ export function skyAssets(
  * slack goes at the top. The gutters are filled by the bot's background colour. k is at least 1 (a box smaller than one
  * cell is the only case that crops). Returns `k` 0 until the box has a size.
  */
-export function faceContain(cell: { w: number; h: number }, box: { w: number; h: number }): { k: number; left: number; top: number } {
+export function faceContain(cell: { w: number; h: number }, box: { w: number; h: number }, dpr = 1): { k: number; left: number; top: number } {
   if (!(box.w > 0 && box.h > 0) || !(cell.w > 0 && cell.h > 0)) return { k: 0, left: 0, top: 0 };
-  const k = Math.max(1, Math.floor(Math.min(box.w / cell.w, box.h / cell.h)));
-  return { k, left: Math.round((box.w - cell.w * k) / 2), top: box.h - cell.h * k };
+  const d = safeDpr(dpr);
+  // G8e: the scale is a whole number of DEVICE pixels per art pixel (kd), so every art pixel lands on the same number of
+  // screen pixels; the CSS scale is kd / dpr. Offsets are device-pixel multiples too. At dpr 1 this is the old integer CSS scale.
+  const kd = Math.max(1, Math.floor(Math.min(box.w / cell.w, box.h / cell.h) * d + 1e-9));
+  const k = kd / d;
+  return { k, left: Math.round(((box.w - cell.w * k) / 2) * d) / d, top: Math.floor(box.h * d - cell.h * kd + 1e-9) / d };
 }
+/** A usable device-pixel ratio: finite and >= 1 (anything else, SSR/tests included, is 1). */
+export const safeDpr = (dpr: unknown): number => (typeof dpr === "number" && Number.isFinite(dpr) && dpr >= 1 ? dpr : 1);
+/** The matchMedia query that flips when the page zoom / monitor changes the ratio away from `dpr` (re-armed with the new ratio each time). */
+export const dprMediaQuery = (dpr: number): string => `(resolution: ${safeDpr(dpr)}dppx)`;
+/**
+ * G8e: CSS px per source px for art that is drawn by a CSS border-image / width (bezel, wall): the largest whole number of
+ * DEVICE px per source px at or below `scale` x dpr (an exact integer product is kept as is), divided back to CSS px.
+ */
+export function crispScale(scale: number, dpr = 1): number {
+  const d = safeDpr(dpr);
+  const dev = scale * d;
+  const kd = Math.abs(dev - Math.round(dev)) < 1e-6 ? Math.round(dev) : Math.floor(dev);
+  return Math.max(1, kd) / d;
+}
+/** A CSS length (px) rounded to a whole number of device px. */
+export const snapPx = (px: number, dpr = 1): number => Math.round(px * safeDpr(dpr)) / safeDpr(dpr);
 
 /** Gutter colour around a contained face: faces.json `<bot>.bg[theme]` when the field is valid, else null → the per-theme `--sky-face-bg-*` CSS variable. */
 export const faceBg = (faces: FacesModel | null, bot: FaceBot, theme: SkyTheme): string | null => faces?.bg?.[bot]?.[theme] ?? null;
