@@ -230,6 +230,13 @@ describe("wiring (source inspection)", () => {
     assert.match(src, /"VibeSquad\.apk"/);
   });
 
+  test("server/build-android.mjs --debug / --unsigned sideload builds skip release signing and the cert pin", () => {
+    const src = read("server/build-android.mjs");
+    assert.match(src, /process\.argv\.includes\("--debug"\)/);
+    assert.match(src, /process\.argv\.includes\("--unsigned"\)/);
+    assert.match(src, /if \(debug \|\| unsigned\) \{[\s\S]*?copyFileSync\(apk, destApk\);[\s\S]*?\} else if \(apk\.endsWith\("-unsigned\.apk"\)\)/);
+  });
+
   test("server/build-android.mjs builds aarch64 without --apk=true, uses arm64 flavor, Windows jniLibs fallback, and apksigner.jar", () => {
     const src = read("server/build-android.mjs");
     assert.match(src, /"--apk", "--target", "aarch64"/);
