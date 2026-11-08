@@ -15,9 +15,9 @@ A [Buddy](../Concepts/Buddy.md) is a chat for thinking.
 
 In VibeSquad, click **+ New squad** at the bottom of the left column. A [Squad](../Concepts/Squads.md) is one product, and this window creates it.
 
-![The New Squad window: Folder path or Clone repo URL, Squad name, Start a Buddy, and a Create button](../assets/screenshots/02-new-squad-modal.png)
+![The New Squad window: Folder path, Squad name, Start a Buddy with BRAINSTORM - CLAUDE and BRAINSTORM - GEMINI chips, and Cancel and Create buttons](../assets/screenshots/02-new-squad-modal.png)
 
-Pick **Folder path** and type your project folder (or choose **Clone repo URL** to copy one from GitHub). Give it a **Squad name**. Leave **Start a Buddy** ticked, pick **BRAINSTORM - CLAUDE** or **BRAINSTORM - GEMINI**, and click **Create**. The Buddy's chat opens as "TALK HERE". Use a **new, empty project folder** for this. Leave the `guide` squad alone: it is only for the setup chat.
+Type your project folder in **Folder path**. Give it a **Squad name**. Leave **Start a Buddy** ticked, pick **BRAINSTORM - CLAUDE** or **BRAINSTORM - GEMINI**, and click **Create**. The Buddy's chat opens as "TALK HERE". Use a **new, empty project folder** for this. Leave the `guide` squad alone: it is only for the setup chat.
 
 Already have a Squad and want a new feature? Click **+ TEAM** in the Squad's header, or the **New idea** card, and a fresh Buddy starts for it. Either way, type:
 
@@ -65,7 +65,7 @@ Open PLAN.md and read it. If something is wrong, say what, and ask for a fix.
 
 Click the **New idea** card on the Squad's home screen. The **New idea** window asks for a team name and "I just thought of…". Click **Create team** and that idea gets its own team and Buddy. Use **Add to existing team** to drop it into a team you already have. It says "No lead until you approve a plan", so nothing runs until you say so.
 
-![The New Idea window: New team or Add to existing team, a name, I just thought of…, and Create team](../assets/screenshots/03-new-idea-dialog.png)
+![The New Idea window: the + New team and Add to existing team tabs, a team Name, an "I just thought of…" box, the Buddy chips, and Create team](../assets/screenshots/03-new-idea-dialog.png)
 
 Keep one Buddy for one topic. See [Working with Squads](../Concepts/Squads.md).
 

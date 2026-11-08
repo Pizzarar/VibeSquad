@@ -266,10 +266,12 @@ export function SkyZones({
   const clickable = (tv: FaceBot) => (open !== null ? tv === "riffbot" : can[tv]);
   const spinRiff = hub && onSpinUp ? () => onSpinUp(hub) : undefined;
   const spinOverlord = hub && onSpinUpOverlord ? () => onSpinUpOverlord(view) : undefined;
+  // Built outside the JSX: a nested template literal in className defeats test/css-classes.test.mjs's token scan.
+  const zonesClass = ["sky-zones", skyUrl ? "has-sky-art" : "", open ? "is-open" : "", open ? "is-open-" + open : ""].filter(Boolean).join(" ");
   return (
     <div
       ref={root}
-      className={`sky-zones${skyUrl ? " has-sky-art" : ""}${open ? ` is-open is-open-${open}` : ""}`}
+      className={zonesClass}
       data-testid="sky-zones"
       data-open={open ?? "none"}
       style={{ ["--sky-cols" as string]: SKY_COLUMNS, ...(skyUrl ? { backgroundImage: `url(${skyUrl})` } : null) }}
