@@ -4688,7 +4688,6 @@ button.project-file-name:hover { text-decoration: underline; }
   grid-row: 2;
   display: grid;
   grid-template-columns: var(--sky-cols, minmax(0, 1fr) minmax(0, 1fr));
-  transition: grid-template-columns 0.35s ease; /* G6: Overlord widens over Riff */
   gap: 18px;
   min-height: clamp(380px, 46vh, 560px);
   padding: 12px 18px 22px;
@@ -4735,10 +4734,21 @@ button.project-file-name:hover { text-decoration: underline; }
 .sky-face { position: absolute; transform-origin: top left; display: block; background-repeat: no-repeat; image-rendering: pixelated; }
 .sky-face.is-blank { background-color: transparent; }
 .sky-zone.is-off .sky-face-stage { display: none; }
-/* The face box is the stage minus the chat's footprint (--sky-chat-h, the .sky-crt-body height), so the whole face sits above the chat. Squeezed Riff has no chat: the box is the whole stage. */
-.sky-zones { --sky-chat-h: 58%; }
-.sky-face-area { position: absolute; left: 0; right: 0; top: 0; bottom: var(--sky-chat-h); }
-.sky-zones.is-expanded .sky-zone-riffbot .sky-face-area { bottom: 0; }
+/* G8: the TVs are fixed 50/50 and the portrait fills the WHOLE screen inside the bezel (no chat under it, so no chat-height cut). */
+.sky-face-area { position: absolute; inset: 0; }
+/* G8: TV placement is explicit; each bot's chat panel is a second TV-shaped sheet laid over the RIGHT TV's grid cell. */
+.sky-zone-riffbot:not(.sky-chat-panel) { grid-column: 1; grid-row: 1; }
+.sky-zone-overlord:not(.sky-chat-panel) { grid-column: 2; grid-row: 1; }
+.sky-zone.sky-chat-panel { grid-column: 2; grid-row: 1; z-index: 3; }
+.sky-zone[hidden] { display: none; }
+/* The face is the TV's button: click opens (rest) / closes (open). Transparent, under the name tag. */
+.sky-face-hit { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; padding: 0; border: 0; background: transparent; cursor: pointer; }
+.sky-face-hit:focus-visible { outline: 3px solid var(--cyan); outline-offset: -6px; }
+.sky-chat-close { position: absolute; top: 6px; right: 8px; z-index: 4; min-width: 28px; height: 26px; padding: 0 8px; cursor: pointer; font-family: var(--arcade); font-size: 13px; color: var(--text); background: color-mix(in srgb, var(--bg) 80%, transparent); border: 1px solid var(--line); }
+.sky-chat-close:hover, .sky-chat-close:focus-visible { border-color: var(--cyan); color: var(--cyan-t); }
+/* The slam: Riff's / the Overlord's chat drops over the right TV in a few hard steps. Reduced motion = instant swap. */
+.sky-chat-panel:not([hidden]) { animation: sky-chat-slam 180ms steps(4, end) both; }
+@keyframes sky-chat-slam { from { transform: translateX(14%); opacity: 0; } to { transform: none; opacity: 1; } }
 /* G7 virus takeover: the overlay sheet sits exactly over Riff's face (same contain/scale); never takes a click or focus. */
 .sky-takeover { position: absolute; transform-origin: top left; display: block; background-repeat: no-repeat; image-rendering: pixelated; pointer-events: none; z-index: 1; }
 /* No sheet: a blocky violet dissolve eats the stage from the right (the Overlord's side) in 8 hard steps (~615ms). A class flip reverses from the current step. */
@@ -4758,22 +4768,22 @@ button.project-file-name:hover { text-decoration: underline; }
   left: 0;
   right: 0;
   bottom: 0;
-  height: var(--sky-chat-h);
   min-height: 0;
-  z-index: 1;
+  z-index: 2;
   display: flex;
   flex-direction: column;
-  background: color-mix(in srgb, var(--bg) 78%, transparent);
-  backdrop-filter: blur(1px);
-  border-top: 1px solid var(--line);
-  transition: opacity 0.25s ease, visibility 0s linear 0s;
 }
-.sky-zone.is-off .sky-crt-body { top: 0; height: auto; background: none; backdrop-filter: none; border-top: 0; }
-/* Squeezed Riff: its chat steps aside (still mounted, composer state kept) so the scared face shows. */
-.sky-zones.is-expanded .sky-zone-riffbot .sky-crt-body { opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 0.2s ease, visibility 0s linear 0.2s; }
+/* Chat panel: the whole screen, under a strip for the name tag and the ✕. */
+.sky-chat-panel .sky-crt-body { top: 38px; background: var(--bg); border-top: 1px solid var(--line); }
+.sky-chat-panel { background: var(--bg); }
+/* TV with no agent: the Overlord's static fills the screen; RiffBot's face stays and its Spin Up sits on a bottom strip. */
+.sky-zone.is-off .sky-crt-body { top: 0; }
+.sky-zone-riffbot:not(.sky-chat-panel) .sky-crt-body:has(.sky-static) { background: color-mix(in srgb, var(--bg) 82%, transparent); border-top: 1px solid var(--line); }
+.sky-zone-riffbot:not(.sky-chat-panel) .sky-static { flex: none; padding: 10px; }
+.sky-zone:not(.sky-chat-panel):not(.is-off) .sky-crt-body:not(:has(.sky-static)) { display: none; }
 .sky-crt-body .pane-slot { flex: 1; grid-row: auto; grid-column: auto; border-left: 0; background: transparent; }
 @media (prefers-reduced-motion: reduce) {
-  .sky-zones, .sky-crt-body, .sky-zones.is-expanded .sky-zone-riffbot .sky-crt-body { transition: none; }
+  .sky-chat-panel:not([hidden]) { animation: none; }
 }
 .sky-static {
   flex: 1;
@@ -4955,8 +4965,9 @@ button.project-file-name:hover { text-decoration: underline; }
   .app.pin-focus.hub-focus { grid-template-columns: var(--sidebar-w, 265px) minmax(0, 1fr) 240px 64px; }
 }
 @media (max-width: 700px) {
-  .sky-zones, .sky-zones.is-expanded { grid-template-columns: minmax(0, 1fr); overflow: auto; }
+  .sky-zones { grid-template-columns: minmax(0, 1fr); overflow: auto; }
   .sky-zone { min-height: 280px; }
+  .sky-zone-overlord:not(.sky-chat-panel), .sky-zone.sky-chat-panel { grid-column: 1; grid-row: 2; }
 }
 @media (max-width: 600px) {
   .app.pin-focus.hub-focus { grid-template-columns: minmax(0, 1fr); }

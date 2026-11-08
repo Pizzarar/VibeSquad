@@ -2,44 +2,65 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { OVERLORD_EXPAND_PCT, faceBg, faceContain, hasFaceMode, riffMinWidth, skyColumns, skyLayout } from "../src/skyZonesLogic.ts";
+import { SKY_COLUMNS, faceBg, faceContain, hasFaceMode, skyEffectiveOpen, skyExit, skyFaceClick, skyRiffMode } from "../src/skyZonesLogic.ts";
 import { faceFrame, validateFaces } from "../src/squadFloorLogic.ts";
 
 const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
-const base = { overlordLive: true, overlordFocused: false, overlordTalking: false, riffFocused: false, riffHasScared: true };
+const can = { riffbot: true, overlord: true };
+const noOverlord = { riffbot: true, overlord: false };
 
-test("at rest: 50/50, Riff plays its normal faces (no forced mode)", () => {
-  assert.deepEqual(skyLayout(base), { expanded: false, widths: { riffbot: 50, overlord: 50 }, riffMode: null });
+test("rest -> riff -> rest: clicking Riff's face opens his chat, clicking it again closes", () => {
+  const open = skyFaceClick(null, "riffbot", can);
+  assert.equal(open, "riffbot");
+  assert.equal(skyRiffMode(open, true), null); // Riff keeps his own faces; no takeover
+  assert.equal(skyFaceClick(open, "riffbot", can), null);
 });
 
-test("Overlord focused → 70/30 and Riff scared", () => {
-  const l = skyLayout({ ...base, overlordFocused: true });
-  assert.equal(OVERLORD_EXPAND_PCT, 70);
-  assert.deepEqual(l, { expanded: true, widths: { riffbot: 30, overlord: 70 }, riffMode: "scared" });
+test("rest -> overlord -> rest: the Overlord opens (Riff scared), re-click of the left TV (the open bot's face) closes", () => {
+  const open = skyFaceClick(null, "overlord", can);
+  assert.equal(open, "overlord");
+  assert.equal(skyRiffMode(open, true), "scared");
+  assert.equal(skyRiffMode(open, false), "idle"); // no scared in faces.json
+  assert.equal(skyFaceClick(open, "riffbot", can), null);
 });
 
-test("Overlord talking (running) → expands too; focus on Riff keeps 50/50 so Riff stays usable", () => {
-  assert.equal(skyLayout({ ...base, overlordTalking: true }).expanded, true);
-  assert.equal(skyLayout({ ...base, overlordTalking: true, riffFocused: true }).expanded, false);
-  assert.equal(skyLayout({ ...base, overlordTalking: true, overlordFocused: true, riffFocused: false }).expanded, true);
+test("Esc, a click outside the sky and the chat's x all go back to rest from either open state", () => {
+  for (const o of ["riffbot", "overlord"]) assert.equal(skyExit(o), null);
+  assert.equal(skyExit(null), null);
 });
 
-test("scared absent from faces.json → the squeezed Riff plays idle", () => {
-  const l = skyLayout({ ...base, overlordFocused: true, riffHasScared: false });
-  assert.equal(l.expanded, true);
-  assert.equal(l.riffMode, "idle");
+test("the right TV's face is not a click target while a chat covers it", () => {
+  assert.equal(skyFaceClick("riffbot", "overlord", can), "riffbot");
+  assert.equal(skyFaceClick("overlord", "overlord", can), "overlord");
 });
 
-test("no Overlord → never expands, whatever else is true", () => {
-  for (const f of [{}, { overlordFocused: true }, { overlordTalking: true }, { overlordFocused: true, overlordTalking: true }]) {
-    assert.deepEqual(skyLayout({ ...base, overlordLive: false, ...f }), { expanded: false, widths: { riffbot: 50, overlord: 50 }, riffMode: null });
+test("no Overlord: Riff still opens (his chat covers the static), the Overlord cannot be opened", () => {
+  assert.equal(skyFaceClick(null, "riffbot", noOverlord), "riffbot");
+  assert.equal(skyFaceClick(null, "overlord", noOverlord), null);
+  assert.equal(skyEffectiveOpen("riffbot", noOverlord), "riffbot");
+});
+
+test("the Overlord going away under its open chat drops to rest; no RiffBot agent cannot open Riff", () => {
+  assert.equal(skyEffectiveOpen("overlord", noOverlord), null);
+  assert.equal(skyEffectiveOpen("overlord", can), "overlord");
+  assert.equal(skyEffectiveOpen(null, can), null);
+  assert.equal(skyFaceClick(null, "riffbot", { riffbot: false, overlord: true }), null);
+  assert.equal(skyEffectiveOpen("riffbot", { riffbot: false, overlord: true }), null);
+});
+
+test("width never changes: one fixed 50/50 grid, whatever is open; no expand/squeeze code is left", () => {
+  assert.equal(SKY_COLUMNS, "minmax(0, 1fr) minmax(0, 1fr)");
+  const sky = src("SkyZones.tsx");
+  const logic = src("skyZonesLogic.ts");
+  const css = src("styles.css");
+  assert.ok(sky.includes('["--sky-cols" as string]: SKY_COLUMNS'));
+  for (const gone of ["OVERLORD_EXPAND_PCT", "skyLayout", "skyColumns", "riffMinWidth", "onReclaim", "squeezed"]) {
+    assert.ok(!sky.includes(gone) && !logic.includes(gone), `${gone} is gone`);
   }
-});
-
-test("RiffBot active (focused or talking) never expands Riff over the Overlord", () => {
-  const l = skyLayout({ ...base, riffFocused: true });
-  assert.equal(l.expanded, false);
-  assert.ok(l.widths.riffbot <= l.widths.overlord);
+  assert.ok(!css.includes("is-expanded") && !css.includes("--sky-chat-h"));
+  assert.ok(!/\.sky-zones \{[^}]*transition: grid-template-columns/.test(css));
+  // Open state is click-set only: no focus handlers, no talking/pose input.
+  assert.ok(!sky.includes("onFocus") && !sky.includes("overlordTalking") && !/pose === "work"/.test(sky));
 });
 
 test("faceContain: integer scale, whole cell fits (never cropped), centred sideways, anchored to the bottom", () => {
@@ -102,32 +123,29 @@ test("validateFaces: idle stays required, an unknown extra mode is ignored, a ma
   assert.equal(validateFaces(faces({ scared: [] })).ok, false);
 });
 
-test("wiring: the face is a zone background, the thumbnail is gone, Riff gets the forced mode, no new loader", () => {
+test("wiring: the face fills the TV, the thumbnail is gone, Riff gets the forced mode, no new loader", () => {
   const sky = src("SkyZones.tsx");
   assert.ok(sky.includes("faceContain(cell, box)") && !sky.includes("faceCover"));
   assert.ok(!sky.includes("sky-face-box") && !sky.includes("sky-crt-head"));
-  assert.ok(sky.includes("force={layout.riffMode}"));
-  assert.ok(sky.includes("skyLayout({"));
-  assert.equal((sky.match(/<DrawerSlot/g) || []).length, 1); // sky bots still mounted once
+  assert.ok(sky.includes("force={skyRiffMode(open,"));
+  assert.ok(sky.includes("taken={open === \"overlord\"}")); // G7 takeover runs off the explicit open state
+  assert.equal((sky.match(/<DrawerSlot/g) || []).length, 1); // each sky bot's chat is still mounted once
   assert.ok(src("useBotFace.ts").includes("force ?? ("));
   const css = src("styles.css");
-  assert.ok(/\.sky-zones \{[^}]*transition: grid-template-columns/.test(css));
-  assert.ok(/prefers-reduced-motion: reduce\) \{\s*\.sky-zones,[^}]*transition: none/.test(css));
-  assert.ok(/--sky-cols/.test(css));
+  assert.ok(/\.sky-face-area \{ position: absolute; inset: 0; \}/.test(css)); // no chat-height cut
+  assert.ok(/\.sky-zone\.sky-chat-panel \{ grid-column: 2; grid-row: 1;/.test(css)); // chat lands on the right TV
+  assert.ok(/prefers-reduced-motion: reduce\) \{\s*\.sky-chat-panel:not\(\[hidden\]\) \{ animation: none; \}/.test(css));
 });
 
-test("a11y: squeezed Riff is tabbable, labelled, and Enter/Space/focus hand the sky back (riffFocused → 50/50)", () => {
-  // The pure side: once Riff is focused, even a talking Overlord no longer expands.
-  assert.equal(skyLayout({ ...base, overlordFocused: true }).expanded, true);
-  assert.equal(skyLayout({ ...base, overlordTalking: true, riffFocused: true }).expanded, false);
+test("exit paths: Esc, outside click, x on the chat, face re-click are all wired; panels are hidden (not unmounted) at rest", () => {
   const sky = src("SkyZones.tsx");
-  assert.ok(sky.includes("tabIndex={onReclaim ? (squeezed ? 0 : -1) : undefined}"));
-  assert.ok(sky.includes("press to expand"));
-  assert.ok(sky.includes("squeezed && e.target === e.currentTarget && onReclaim?.()")); // focus
-  assert.ok(sky.includes('e.key === "Enter" || e.key === " "')); // Enter / Space
-  assert.ok(sky.includes('setFocus("riffbot")'));
-  assert.ok(sky.includes("squeezed={layout.expanded} onReclaim={reclaimRiff}"));
-  assert.ok(!sky.includes("onReclaim={reclaimRiff}") || !/<Zone zone=\{zones\.overlord\}[^>]*onReclaim/.test(sky)); // Overlord never gets it
+  assert.ok(sky.includes('e.key !== "Escape" || openRef.current === null') && sky.includes("setOpen(skyExit)"));
+  assert.ok(sky.includes("e.preventDefault(); // this Esc closed the chat")); // the app's Esc (to Squads Home) must not also fire
+  assert.ok(sky.includes("!root.current?.contains(e.target)"));
+  assert.ok(sky.includes('document.addEventListener("pointerdown", down, true)'));
+  assert.ok(sky.includes("onClick={onClose}") && sky.includes("onClick={onFace}"));
+  assert.ok(sky.includes("hidden={panel && !isOpen}"));
+  assert.equal((sky.match(/<Zone /g) || []).length, 2 + 2); // two TVs + two chat panels
 });
 
 // ── G6-fix2: gutter colour + Riff's minimum strip ──
@@ -160,19 +178,4 @@ test("faces.json bg: {dark, light} per bot, both valid → used per theme; any o
   assert.ok(/--sky-face-bg-dark: #[0-9a-f]{6}/i.test(css) && /--sky-face-bg-light: #[0-9a-f]{6}/i.test(css));
   assert.ok(css.includes("var(--sky-face-bg-custom, var(--sky-face-bg-dark))"));
   assert.ok(src("SkyZones.tsx").includes("--sky-face-bg-custom") && src("SkyZones.tsx").includes("faceBg(faces, zone.bot, theme)"));
-});
-
-test("Riff's squeezed strip keeps two whole cells + bezel; at a 1280 hub the scared face is still scale >= 2", () => {
-  const cell = { w: 48 };
-  const bezel = (20 + 20) * 3; // sky-crt.json left+right × scale
-  assert.equal(riffMinWidth(cell, bezel), 216);
-  const exp = skyLayout({ ...base, overlordFocused: true });
-  assert.equal(skyColumns(exp, cell, bezel), "minmax(216px, 30fr) minmax(0, 70fr)");
-  assert.equal(skyColumns(skyLayout(base), cell, bezel), "minmax(0px, 50fr) minmax(0, 50fr)"); // at rest: plain 50/50
-  // Narrow hub column (1280 viewport minus rail/sidebar ≈ 760): 30% is a sliver, the floor wins and the face still gets k >= 2.
-  for (const hub of [760, 900, 1280]) {
-    const riff = Math.max(Math.round((hub - 36) * 0.3), riffMinWidth(cell, bezel));
-    assert.ok(riff >= 216);
-    assert.ok(faceContain({ w: 48, h: 48 }, { w: riff - bezel, h: 400 }).k >= 2, `k>=2 at hub ${hub}`);
-  }
 });

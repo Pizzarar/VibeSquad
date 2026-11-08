@@ -224,49 +224,30 @@ export function faceContain(cell: { w: number; h: number }, box: { w: number; h:
 /** Gutter colour around a contained face: faces.json `<bot>.bg[theme]` when the field is valid, else null → the per-theme `--sky-face-bg-*` CSS variable. */
 export const faceBg = (faces: FacesModel | null, bot: FaceBot, theme: SkyTheme): string | null => faces?.bg?.[bot]?.[theme] ?? null;
 
+// ── G8 fixed TVs (docs/PLAN_SKY_GODS_C2B.md): both TVs are always 50/50; which chat is open is explicit click state ──
+/** The two TVs never resize: a fixed 50/50 grid. (G6's 70/30 Overlord expand is gone.) */
+export const SKY_COLUMNS = "minmax(0, 1fr) minmax(0, 1fr)";
+/** Which bot's chat is open over the right TV; null = rest (portraits only). Set by clicks only, never by focus or talking. */
+export type SkyOpen = FaceBot | null;
+/** Who can be opened: RiffBot needs a chat agent (live or dormant); the Overlord needs to be live (no static, no closed one). */
+export type SkyCan = { riffbot: boolean; overlord: boolean };
 /**
- * Smallest width of Riff's squeezed strip: two whole cells of face plus both bezel sides, so the scared face stays at
- * scale >= 2 however narrow the hub column gets. `bezelH` = left+right border widths in px.
+ * A click on a TV's face. At rest the bot opens (if it can). While anything is open the left TV shows the open bot's face
+ * (Riff's own, or the Overlord that took it over), so clicking it again closes; the right TV is under the chat and cannot be clicked.
  */
-export const riffMinWidth = (cell: { w: number }, bezelH: number): number => 2 * cell.w + bezelH;
-/** The grid-template-columns value for a layout: Riff never narrower than riffMinWidth while squeezed; the Overlord takes the rest. */
-export function skyColumns(layout: SkyLayout, cell: { w: number }, bezelH: number): string {
-  const riffMin = layout.expanded ? riffMinWidth(cell, bezelH) : 0;
-  return `minmax(${riffMin}px, ${layout.widths.riffbot}fr) minmax(0, ${layout.widths.overlord}fr)`;
+export function skyFaceClick(open: SkyOpen, tv: FaceBot, can: SkyCan): SkyOpen {
+  if (open !== null) return tv === "riffbot" ? null : open;
+  return can[tv] ? tv : null;
 }
-
-// ── G6 Overlord expand ────────────────────────────────────────────────────────
-/** Share of the sky the Overlord zone takes while it is active (Riff keeps the rest). */
-export const OVERLORD_EXPAND_PCT = 70;
-export type SkyLayoutInput = {
-  /** A live Overlord is on duty; without one nothing ever expands (the static fills its zone). */
-  overlordLive: boolean;
-  /** Focus (composer focus or a click in its chat) is inside the Overlord zone. */
-  overlordFocused: boolean;
-  /** The Overlord is running (talking). */
-  overlordTalking: boolean;
-  /** Focus is inside RiffBot's zone: the person is working with Riff, so a talking Overlord does not squeeze it. */
-  riffFocused?: boolean;
-  /** faces.json has a `riffbot.scared` mode. */
-  riffHasScared: boolean;
-};
-export type SkyLayout = {
-  expanded: boolean;
-  /** Grid fractions, RiffBot then Overlord (sum 100). */
-  widths: { riffbot: number; overlord: number };
-  /** Forced RiffBot face while squeezed: `scared`, or `idle` when faces.json has none; null → the normal talk/needs/blink logic. */
-  riffMode: Extract<FaceMode, "scared" | "idle"> | null;
-};
-/** Overlord active → 70/30 and Riff scared (idle when `scared` is absent); otherwise 50/50. RiffBot activity never expands. */
-export function skyLayout(i: SkyLayoutInput): SkyLayout {
-  const expanded = i.overlordLive && (i.overlordFocused || (i.overlordTalking && !i.riffFocused));
-  return expanded
-    ? { expanded, widths: { riffbot: 100 - OVERLORD_EXPAND_PCT, overlord: OVERLORD_EXPAND_PCT }, riffMode: i.riffHasScared ? "scared" : "idle" }
-    : { expanded, widths: { riffbot: 50, overlord: 50 }, riffMode: null };
-}
+/** Esc, a click outside the sky, or the chat's ✕. */
+export const skyExit = (_open: SkyOpen): SkyOpen => null;
+/** The Overlord going away (closed, killed) while its chat is open drops back to rest; an open RiffBot with no chat agent too. */
+export const skyEffectiveOpen = (open: SkyOpen, can: SkyCan): SkyOpen => (open && can[open] ? open : null);
+/** Forced RiffBot face while the Overlord has taken it over: `scared`, or `idle` when faces.json has none; null → normal talk/needs/blink. */
+export const skyRiffMode = (open: SkyOpen, riffHasScared: boolean): Extract<FaceMode, "scared" | "idle"> | null => (open === "overlord" ? (riffHasScared ? "scared" : "idle") : null);
 export const hasFaceMode = (faces: FacesModel | null, bot: FaceBot, mode: FaceMode): boolean => !!faces?.bots[bot]?.[mode]?.length;
 
-// ── G7 virus takeover overlay (docs/PLAN_SKY_GODS_C2B.md): the Overlord's glitch front eats Riff's squeezed screen ──
+// ── G7 virus takeover overlay (docs/PLAN_SKY_GODS_C2B.md): the Overlord's glitch front eats Riff's TV ──
 export const TAKEOVER_URL = (theme: SkyTheme) => `/office/takeover-${theme}.png`;
 export const TAKEOVER_JSON_URL = "/office/takeover.json";
 export type TakeoverModel = { cell: { w: number; h: number }; fps: number; frames: { x: number; y: number }[] };
