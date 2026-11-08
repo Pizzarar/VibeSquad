@@ -774,7 +774,7 @@ function SquadTile({ v, onSelectSquad, onOpenPin, onOpenAgent }: { v: TeamView; 
             />
             <span className="squad-home-portrait-pip">
               <PinDot pin={pin} />
-              <NeedsBadge pin={pin} />
+              <NeedsBadgeInline pin={pin} />
               <PinCtx pin={pin} />
             </span>
           </button>

@@ -314,3 +314,13 @@ test("the pin-rail tile button also uses the inline (span) needs badge: no <butt
   const tile = rail.slice(rail.indexOf('className="pin-rail-open"') - 200, rail.indexOf("<CheckinButton"));
   assert.ok(tile.includes("<NeedsBadgeInline pin={pin} />") && !/<NeedsBadge pin/.test(tile));
 });
+
+test("SquadTile's portrait button also holds the inline badge; the only plain NeedsBadge <button>s left are in div heads (tile head, rail active head)", () => {
+  const grid = src("PinGrid.tsx");
+  const portrait = grid.slice(grid.indexOf('className="squad-home-portrait"'), grid.indexOf('className="squad-home-lead-line'));
+  assert.ok(portrait.includes("<NeedsBadgeInline pin={pin} />") && !/<NeedsBadge pin/.test(portrait));
+  const plain = [...grid.matchAll(/<NeedsBadge pin=/g)].length + [...src("PinRail.tsx").matchAll(/<NeedsBadge pin=/g)].length;
+  assert.equal(plain, 2); // PinTile head (div.pin-tile-head) + PinRail active head (div.pin-rail-active-head); every other site is Inline
+  assert.ok(/<div className="pin-tile-head">[\s\S]*?<NeedsBadge pin=\{pin\} \/>/.test(grid));
+  assert.ok(/<div className="pin-rail-active-head">[\s\S]*?<NeedsBadge pin=\{active\} \/>/.test(src("PinRail.tsx")));
+});
