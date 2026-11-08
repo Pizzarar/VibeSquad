@@ -305,8 +305,11 @@ function parseArgs(argv) {
 
 const UNASSIGNED_LANE = "unassigned";
 
-function resolveIdentity(flags, { recordWins = false } = {}) {
-  const agentId = String(flags.agent ?? process.env.PASEO_AGENT_ID ?? process.env.VS_AGENT_ID ?? "").trim();
+export function resolveIdentity(flags = {}, { recordWins = false } = {}) {
+  const envAgentId = recordWins
+    ? (process.env.VS_AGENT_ID || process.env.PASEO_AGENT_ID)
+    : (process.env.PASEO_AGENT_ID ?? process.env.VS_AGENT_ID);
+  const agentId = String((recordWins ? envAgentId : (flags.agent ?? envAgentId)) ?? "").trim();
 
   // rn- ids belong to the runner: read its log (labels/role/lane).
   let record = isRunnerId(agentId) ? readRunnerAgentSync(agentId) : null;
@@ -316,8 +319,8 @@ function resolveIdentity(flags, { recordWins = false } = {}) {
   const cwd = record?.cwd || process.cwd();
 
   const pick = (flagName, envName) => {
-    // recordWins (handoff_lead): a runner record's labels are the caller's identity; VS_* env only fills in when there is no record.
-    const value = flags[flagName] ?? (recordWins && record ? undefined : process.env[envName]);
+    // recordWins (handoff_lead, spawn): a runner record's labels are the caller's identity; CLI flags never override it and VS_* env only fills in when there is no record.
+    const value = (recordWins ? undefined : flags[flagName]) ?? (recordWins && record ? undefined : process.env[envName]);
     return typeof value === "string" && value.trim() ? value.trim() : "";
   };
 
@@ -1745,10 +1748,16 @@ export async function commandAgentVerb(verb, flags, makeContext = createContext,
   }
   if (verb === "send" && (!flags._[0] || flags._.length < 2)) throw new Error('usage: vs send <agent> "<text>" | --prompt-file <path|->');
   if (verb === "status" && !flags._[0]) throw new Error("usage: vs status <agent>");
-  // handoff_lead: --lane names only the TARGET lane (runAgentVerb reads it); the caller's identity comes from
-  // VS_AGENT_ID -> its record labels / VS_* env, never from --agent/--role/--team/--lane/--ord.
+  // handoff_lead / spawn: --lane (for handoff_lead) names only the TARGET lane (runAgentVerb reads it); the caller's
+  // identity comes from VS_AGENT_ID -> its record labels / VS_* env, never from --agent/--role/--team/--lane/--ord.
+  if (verb === "spawn" && (flags.agent || flags.role || flags.team || flags.lane || flags.ord)) {
+    process.stderr.write("Warning: vs spawn ignores --agent/--role/--team/--lane/--ord; caller identity comes from VS_AGENT_ID.\n");
+  }
   const { agent: _a, role: _r, team: _t, lane: _l, ord: _o, ...callerFlags } = flags;
-  const identity = verb === "handoff_lead" ? resolveIdentity(callerFlags, { recordWins: true }) : resolveIdentity(flags);
+  const identity =
+    verb === "handoff_lead" || verb === "spawn"
+      ? resolveIdentity(callerFlags, { recordWins: true })
+      : resolveIdentity(flags);
   const ctx = makeContext({
     identity: { agentId: identity.agentId, team: identity.team.id, lane: identity.lane, role: identity.role },
   });
