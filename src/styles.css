@@ -4995,7 +4995,7 @@ button.project-file-name:hover { text-decoration: underline; }
 .sq-floor-tv-count {
   position: absolute;
   right: 2px;
-  bottom: 0;
+  bottom: var(--sp-1); /* V1b: inside the glass (at 0 the counter box ran 3px past the TV's clipped bottom edge) */
   font-family: var(--arcade);
   font-size: 6px;
   line-height: 6px;
@@ -5748,3 +5748,41 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 /* one UI font for tool surfaces: the Silkscreen/Pixelify (--arcade/--display) rows, @code chips, breadcrumb and provider names fall back to Courier New and clash with --mono.
    Scoped, not aliased globally (floor/sky keep --arcade); the brand block, terminals and diagrams keep their own fonts. */
 :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :not(.brand-text, .brand-text *, .xterm, .xterm *, svg, svg *, .sky-static-text) { font-family: var(--mono) !important; }
+
+/* ── V1b overlap pass (docs/PLAN_OVERLAP_AUDIT_V1.md): layout / spacing only, --sp-N tokens; colour and skin stay with @art ── */
+/* Window title bars: the skin paints a 23px strip at the top (ramp rows 8-13); text and controls centre inside it, not below it. */
+.modal-head { padding-block: 0; min-height: var(--bar-h); gap: var(--sp-2); }
+/* App banners (exposed-LAN / read-only / config / update): one slim row inside the painted strip; App.tsx sets inline padding, so the block padding needs !important. */
+.exposed-network-banner, .read-only-banner, .config-warning-banner, .update-available-banner {
+  padding-block: 0 !important; min-height: calc(var(--u3-px) * 9); line-height: calc(var(--u3-px) * 9); gap: var(--sp-2);
+}
+.exposed-network-banner button, .read-only-banner button, .config-warning-banner button, .update-available-banner button { line-height: 1; padding-block: 0; }
+/* Context bar: the readout and actions start below the painted cap, not across its edge (DrawerHeader.tsx no longer sets inline padding). */
+.brainstorm-ctx-bar { padding: calc(var(--u3-px) * 6 + var(--sp-1)) var(--sp-2) var(--sp-1); }
+/* Worker chips above the composer: the name ellipsizes inside the chip (the chip is a flex row, so bare text could only be cut), and the bar is tall enough for two chip rows before it scrolls. */
+.drawer-subagents-bar { max-height: calc(var(--u3-px) * 28 + var(--sp-2) * 2); }
+.drawer-subagent-chip { min-width: 0; }
+.drawer-subagent-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Squads home huddle: portraits sit side by side (they were stacked with a -10px margin, so their click targets overlapped) and each pip sits under its own portrait instead of floating over the neighbour. */
+.squad-home-huddle { gap: var(--sp-2); padding-left: var(--sp-1); flex-wrap: wrap; align-items: flex-start; }
+.squad-home-portrait { display: inline-flex; flex-direction: column; align-items: center; gap: var(--sp-1); }
+.squad-home-portrait:not(:first-child) { margin-left: 0; }
+.squad-home-portrait-pip { position: static; justify-content: center; }
+/* Avatar: the sprite is left-aligned and the provider badge sits in its own gutter (pixel.tsx AVATAR_BADGE_GUTTER) beside it, never over the art. */
+.avatar { justify-content: flex-start; }
+.avatar .prov-badge { right: 0; bottom: 0; }
+/* Sidebar: brand row wraps its LAN badge + collapse toggle to a second line instead of pushing the toggle past the sidebar edge; lane rows tighten their gap so short names are not ellipsized. */
+.sidebar:not(.collapsed) .brand { flex-wrap: wrap; gap: var(--sp-1); }
+.sidebar:not(.collapsed) .brand .sidebar-collapse-btn { margin-left: auto; }
+.sidebar .pin-row { gap: var(--sp-1); }
+/* Banner text stays on one row (ellipsis, full text in the title attr) so narrow screens never grow it past the painted strip. */
+.exposed-network-banner > span, .read-only-banner > span, .config-warning-banner > span, .update-available-banner > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Chat top bar: the crumbs before the current page keep their full label; only the current page shrinks (ellipsis). */
+.top-breadcrumb .breadcrumb-seg:not(.current) { flex: none; max-width: none; overflow: visible; }
+.top-breadcrumb .breadcrumb-seg.current { flex: 0 1 auto; min-width: 0; }
+/* Config popover opens leftwards from the summary so it stays inside the pane at narrow widths. */
+.pin-focus-bar .drawer-config-popover { left: auto; right: 0; }
+/* Phone: tab titles get room before they ellipsize (the strip scrolls sideways). */
+.pane-tab { max-width: 220px; }
+/* Chat top bar at narrow widths: tighter gaps so the config summary is not cut by the pane edge. */
+.pin-focus-bar .drawer-head-compact { gap: var(--sp-1); }

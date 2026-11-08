@@ -54,8 +54,11 @@ export function WorkingBar({ members, subs }: { members: Member[]; subs: number 
       <span className="muted small">⚡ Working under this agent:</span>
       {members.map((m) => (
         <button key={m.agent.id} type="button" className="drawer-subagent-chip" data-testid={`subagent-chip-${m.agent.id}`} title={`Open ${nameOf(m)}`} onClick={() => openAgent(m.agent.id)}>
-          <StatusDot agent={m.agent} /> {m.kind === "lead" ? "★ " : ""}
-          {nameOf(m)}
+          <StatusDot agent={m.agent} />
+          <span className="drawer-subagent-chip-name">
+            {m.kind === "lead" ? "★ " : ""}
+            {nameOf(m)}
+          </span>
         </button>
       ))}
       {subs > 0 && <span className="muted small">{subs} sub-agent call{subs === 1 ? "" : "s"}</span>}

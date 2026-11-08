@@ -40,6 +40,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const SQUAD = "vibesquad";
 const tid = (id) => `[data-testid="${id}"]`;
 let BASE = "";
+export const setBase = (b) => { BASE = b; };
 
 async function click(page, sel, ms = 4000) {
   const loc = page.locator(sel).first();
@@ -64,7 +65,7 @@ async function toSquadsHome(page) {
 }
 async function toPinGrid(page) {
   await toSquadsHome(page);
-  await click(page, tid(`squad-home-tile-${SQUAD}`));
+  await click(page, `${tid(`squad-home-tile-${SQUAD}`)} .squad-home-tile-name`);
   await page.locator(tid("pin-grid")).waitFor({ timeout: 6000 });
   await sleep(500);
 }

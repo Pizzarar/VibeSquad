@@ -58,7 +58,8 @@
   };
   const clipBox = (el, b) => {
     let l = b.left, t = b.top, r = b.right, bt = b.bottom;
-    for (let n = cbParentOf(el); n && n !== document.documentElement && n !== document.body; n = cbParentOf(n)) {
+    // el itself clips its own text (overflow:hidden + ellipsis / line-clamp paints only the visible part).
+    for (let n = el; n && n !== document.documentElement && n !== document.body; n = n === el ? cbParentOf(el) : cbParentOf(n)) {
       const s = style(n);
       const a = n.getBoundingClientRect();
       if (s.overflowX !== "visible") { l = Math.max(l, a.left); r = Math.min(r, a.right); }
@@ -88,7 +89,10 @@
 
   const SKIP = new Set(["script", "style", "path", "option", "br", "canvas", "g", "defs", "use", "rect", "circle", "line", "polygon", "polyline", "text"]);
   const allEls = [...root.querySelectorAll("*")].filter((el) => !SKIP.has(el.tagName.toLowerCase()) && visible(el));
-  const els = opts.rootSelectors ? allEls.filter((el) => roots.some((r) => r.contains(el))) : allEls;
+  // An open modal sits on an 80% backdrop: the page beneath it is not what the user sees, so only the modal itself is audited.
+  const openModal = [...document.querySelectorAll(".modal-back")].filter((m) => visible(m)).pop();
+  const scoped = opts.rootSelectors ? allEls.filter((el) => roots.some((r) => r.contains(el))) : allEls;
+  const els = openModal ? scoped.filter((el) => openModal.contains(el)) : scoped;
 
   const hits = [];
   const add = (kind, split, el, other, detail, box) => hits.push({
@@ -101,8 +105,9 @@
   const textLeaves = [];
   for (const el of els) {
     const r = el.getBoundingClientRect();
-    if (el.matches(INTERACTIVE) && !(el.tagName === "INPUT" && el.type === "hidden") && inViewport(r) && onTop(el, r)) cands.push({ el, box: r, kind: "interactive" });
-    if (el.matches("img,canvas,[role=img]") && r.width >= 6 && r.height >= 6 && inViewport(r) && onTop(el, r)) cands.push({ el, box: r, kind: "art" });
+    // Boxes are the part that survives scroll/overflow clipping: a chip half-scrolled out of its bar is not painted over what lies below the bar.
+    if (el.matches(INTERACTIVE) && !(el.tagName === "INPUT" && el.type === "hidden") && inViewport(r) && onTop(el, r)) { const v = clipBox(el, r); if (v) cands.push({ el, box: v, raw: r, kind: "interactive" }); }
+    if (el.matches("img,canvas,[role=img]") && r.width >= 6 && r.height >= 6 && inViewport(r) && onTop(el, r)) { const v = clipBox(el, r); if (v) cands.push({ el, box: v, raw: r, kind: "art" }); }
     const raw = textBoxOf(el);
     const tb = raw && inViewport(raw) && onTop(el, raw) ? raw : null;
     if (tb) {
@@ -176,8 +181,10 @@
       const s = style(n);
       const xClip = s.overflowX === "hidden" || s.overflowX === "clip";
       const yClip = s.overflowY === "hidden" || s.overflowY === "clip";
+      // A scroller (overflow:auto/scroll) owns its overflow: content past its edge is scrollable, not clipped.
+      if (["auto", "scroll"].includes(s.overflowX) || ["auto", "scroll"].includes(s.overflowY)) break;
       if (!xClip && !yClip) continue;
-      if (c.kind === "text" && (ellipsisSeen || /^[1-9]/.test(s.webkitLineClamp))) break;
+      if (c.kind === "text" && (ellipsisSeen || (s.textOverflow === "ellipsis" && !/flex|grid/.test(s.display)) || /^[1-9]/.test(s.webkitLineClamp))) break;
       const a = n.getBoundingClientRect();
       if (a.width === 0 || a.height === 0) continue;
       const ow = Math.min(r.right, a.right) - Math.max(r.left, a.left), oh = Math.min(r.bottom, a.bottom) - Math.max(r.top, a.top);
@@ -257,9 +264,11 @@
 
   // 4. Decorative lines through text: border edges, pseudo-element boxes, repeating gradients vs text boxes.
   const decor = [];
-  for (const el of allEls) {
+  for (const el of els) {
     const r = el.getBoundingClientRect();
     if (!inViewport(r) || (r.width > vw * 1.2 && r.height > vh * 1.2)) continue;
+    const clip = clipBox(el, r); // a border scrolled out of / cut by an overflow container is not painted there
+    if (!clip) continue;
     const s = style(el);
     const edges = [
       ["top", r.left, r.top, r.width, parseFloat(s.borderTopWidth), s.borderTopStyle, s.borderTopColor],
@@ -270,7 +279,9 @@
     for (const [side, x, y, w, h, bst, bcol] of edges) {
       const thick = side === "top" || side === "bottom" ? h : w;
       if (!(thick > 0) || bst === "none" || bst === "hidden" || /, 0\)$|transparent/.test(bcol)) continue;
-      decor.push({ el, what: `border-${side}`, x, y, w, h, from: "border" });
+      const x0 = Math.max(x, clip.left), y0 = Math.max(y, clip.top), x1 = Math.min(x + w, clip.right), y1 = Math.min(y + h, clip.bottom);
+      if (x1 - x0 <= 0 || y1 - y0 <= 0) continue;
+      decor.push({ el, what: `border-${side}`, x: x0, y: y0, w: x1 - x0, h: y1 - y0, from: "border" });
     }
     for (const ps of ["::before", "::after"]) {
       const p = style(el, ps);
