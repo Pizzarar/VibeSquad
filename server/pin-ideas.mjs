@@ -211,7 +211,22 @@ export function cardId(kind, _agentId, key, text) {
 /** Old `send-to:<agentId>:...` / `spin-off:<agentId>:...` ids -> the agent-free form; anything else is returned as is. */
 export const canonicalCardId = (id) => String(id).replace(/^(send-to|spin-off):[^:]+:/, "$1:*:");
 
-export const sendToCardId = (agentId, offer) => cardId("send-to", agentId, offer.laneId, offer.text);
+export const sendToCardId = (agentId, offer) => cardId("send-to", agentId, String(offer.laneId).toLowerCase(), offer.text);
+
+/**
+ * The offer in the newest Brainstorm message, else null. `legacyIds` are the pre-D1 `${agentId}:${messageId}` ids that a
+ * tab still running the old bundle writes when its card is fired, so such a dismissal keeps hiding this card.
+ */
+export function sendToFrom(agentId, entries) {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const it = entries[i].item;
+    if (it?.type !== "assistant_message" || typeof it.text !== "string") continue;
+    const offer = parseSendTo(it.text);
+    if (!offer) return null;
+    return { ...offer, id: sendToCardId(agentId, offer), legacyIds: [`${agentId}:${it.id ?? it.messageId ?? entries[i].seqStart ?? entries[i].timestamp ?? it.text.length}`] };
+  }
+  return null;
+}
 export const spinOffCardId = (agentId, teams) =>
   cardId("spin-off", agentId, teams.map((t) => t.name).join(",").toLowerCase(), teams.map((t) => `${t.name}|${t.brief}`).join("\n"));
 

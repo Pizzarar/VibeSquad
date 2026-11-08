@@ -319,11 +319,33 @@ export const subscribeDismissed = (l: () => void): (() => void) => {
 };
 export const dismissedVersion = (): number => dismissedVer;
 
+// Every dismissed id (this device's localStorage + the server list), raw and canonicalized once, so a render is an O(1)
+// lookup instead of a scan. Rebuilt lazily after any change (merge, dismiss, another tab's localStorage write).
+let known: Set<string> | null = null;
+const knownIds = (): Set<string> => {
+  if (known) return known;
+  known = new Set<string>();
+  for (const id of [...DISMISS_KEYS.flatMap((k) => [...dismissedSet(k)]), ...serverDismissed]) {
+    known.add(id);
+    known.add(canonicalCardId(id));
+  }
+  return known;
+};
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("storage", () => {
+    known = null;
+    bumpDismissed();
+  });
+}
+
 function mergeServerDismissed(body: { dismissedCards?: unknown } | null): void {
   const ids = Array.isArray(body?.dismissedCards) ? (body!.dismissedCards as unknown[]).filter((x): x is string => typeof x === "string") : [];
   const before = serverDismissed.size;
   for (const id of ids) serverDismissed.add(id);
-  if (serverDismissed.size !== before) bumpDismissed();
+  if (serverDismissed.size !== before) {
+    known = null;
+    bumpDismissed();
+  }
 }
 
 async function postDismissed(ids: string[]): Promise<void> {
@@ -339,8 +361,10 @@ async function postDismissed(ids: string[]): Promise<void> {
 /** Fetch the shared list once (and push up any ids only this device knows). Safe to call repeatedly. */
 export function loadDismissedCards(): Promise<void> {
   if (DEMO) return Promise.resolve();
+  watchDismissedRefresh();
   dismissedLoad ??= (async () => {
     try {
+      lastDismissedFetch = Date.now();
       const res = await fetch(SETTINGS_URL);
       if (!res.ok) throw new Error(String(res.status));
       mergeServerDismissed((await res.json()) as { dismissedCards?: unknown });
@@ -353,20 +377,46 @@ export function loadDismissedCards(): Promise<void> {
   return dismissedLoad;
 }
 
+// The load above is once per tab, so a card fired or dismissed on another tab/device (or by a tab on an older bundle)
+// would never reach this one. Re-read the list when the tab is focused again or a Buddy timeline opens.
+let lastDismissedFetch = 0;
+let refreshWatched = false;
+export async function refreshDismissedCards(minGapMs = 5000): Promise<void> {
+  if (DEMO) return;
+  await loadDismissedCards(); // first call: the initial load is the fetch
+  if (Date.now() - lastDismissedFetch < minGapMs) return;
+  lastDismissedFetch = Date.now();
+  try {
+    const res = await fetch(SETTINGS_URL);
+    if (res.ok) mergeServerDismissed((await res.json()) as { dismissedCards?: unknown });
+  } catch {
+    // offline: keep what we have
+  }
+}
+function watchDismissedRefresh(): void {
+  if (refreshWatched || typeof window === "undefined" || typeof document === "undefined") return;
+  refreshWatched = true;
+  const onBack = () => {
+    if (!document.hidden) void refreshDismissedCards();
+  };
+  window.addEventListener("focus", onBack);
+  document.addEventListener("visibilitychange", onBack);
+}
+
 /** Test hook: forget the in-memory server list, as a freshly opened client would. */
 export function resetDismissedCards(): void {
   serverDismissed = new Set();
   dismissedLoad = null;
   dismissedVer = 0;
+  lastDismissedFetch = 0;
+  known = null;
 }
 
-function isDismissed(key: string, id: string): boolean {
+/** `legacyIds`: the pre-D1 `${agentId}:${messageId}` ids of this card, still written by a tab on an old bundle. */
+function isDismissed(_key: string, id: string, legacyIds: string[] = []): boolean {
   void loadDismissedCards();
-  if (dismissedSet(key).has(id) || serverDismissed.has(id)) return true;
-  // Cards dismissed before ids dropped the agent id carry it; match them by content so they stay dismissed.
-  const want = canonicalCardId(id);
-  for (const old of [...dismissedSet(key), ...serverDismissed]) if (canonicalCardId(old) === want) return true;
-  return false;
+  const ids = knownIds();
+  return ids.has(id) || ids.has(canonicalCardId(id)) || legacyIds.some((l) => ids.has(l));
 }
 
 export const isLooksDoneDismissed = (messageId: string): boolean => isDismissed(LOOKS_DONE_KEY, messageId);
@@ -378,6 +428,7 @@ function dismiss(key: string, messageId: string): void {
     localStorage.setItem(key, JSON.stringify(ids));
   } catch {}
   serverDismissed.add(messageId);
+  known = null;
   bumpDismissed();
   if (!DEMO) void postDismissed([messageId]);
 }
@@ -587,7 +638,7 @@ export async function sendIdeaToTeam(laneId: string, text: string, from?: string
 }
 
 const SEND_TO_KEY = "vibesquad.sendToDismissed";
-export const isSendToDismissed = (messageId: string): boolean => isDismissed(SEND_TO_KEY, messageId);
+export const isSendToDismissed = (messageId: string, legacyIds?: string[]): boolean => isDismissed(SEND_TO_KEY, messageId, legacyIds);
 export const dismissSendTo = (messageId: string): void => dismiss(SEND_TO_KEY, messageId);
 
 const SPIN_OFF_KEY = "vibesquad.spinOffDismissed";

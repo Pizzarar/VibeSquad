@@ -380,6 +380,7 @@ export {
   cardId,
   canonicalCardId,
   sendToCardId,
+  sendToFrom,
   spinOffCardId,
   nameFromIdea,
   newPinBrief,
