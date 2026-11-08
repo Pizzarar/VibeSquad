@@ -63,7 +63,7 @@ function ZoneFace({
     return () => clearTimeout(t);
   }, [expanded, fallback]);
   const landed = isRiff && !!lander && (sheet ? takeoverLanded(clock.pos, !!expanded, sheet.frames.length, reduced) : reduced ? !!expanded : fb.landed);
-  const shown = skyLeftBot(landed);
+  const shown = isRiff ? skyLeftBot(landed) : zone.bot; // the Overlord's own TV never swaps (landed is Riff-only)
   const shownZone = landed && lander ? lander : zone;
   const holdScared = !landed && showSheet && !force && hasFaceMode(faces, "riffbot", "scared");
   const face = useBotFace(shown, shownZone.pose ? { pose: shownZone.pose } : null, faces, { theme, reduced, force: landed ? null : (force ?? (holdScared ? "scared" : null)) });
