@@ -23,6 +23,7 @@ import { UsageDashboard } from "./UsageDashboard";
 import { laneCodeOf, ordOf } from "./teams";
 import { laneCodeFor } from "./identity";
 import { cleanTitle } from "./ui";
+import { PixelIcon } from "./PixelIcon";
 import { pickLead } from "./pinFocusLogic";
 
 // ── FULL toggle (persisted) ──────────────────────────────────────────────────
@@ -65,7 +66,7 @@ export function FullToggle() {
       title={full ? "Back to the Teams grid" : "Show the full plumbing view: agent cards, workers, handoffs, folders, retired agents"}
       onClick={() => setFullView(!full)}
     >
-      {full ? "⊞ TEAMS" : "FULL"}
+      {full ? <><PixelIcon name="teams" alt="" fallback="⊞" /> TEAMS</> : "FULL"}
     </button>
   );
 }
