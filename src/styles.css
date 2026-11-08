@@ -1816,10 +1816,10 @@ code {
   border-color: var(--cyan);
   color: var(--cyan-t);
 }
+/* The U3 primary sprite paints an opaque teal fill (#4fd6cf dark / #1a868a light); near-black text clears 4.5:1 on both. */
 .brainstorm-ctx-actions .btn-brainstorm-restart {
-  background: color-mix(in srgb, var(--cyan) 28%, transparent);
-  color: var(--text);
-  font-weight: 700;
+  color: #07040f;
+  text-shadow: none;
 }
 .brainstorm-ctx-bar.tone-amber .btn-brainstorm-restart {
   border-color: var(--amber);
