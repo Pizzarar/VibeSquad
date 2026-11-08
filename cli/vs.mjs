@@ -44,6 +44,7 @@ import {
   normalizeRoleLabel,
   ordStringOf,
   resolveAgentIdentity,
+  resolveLeadWinner,
   whoCandidate,
 } from "../server/identity.mjs";
 import { loadProfiles } from "../server/profiles.mjs";
@@ -625,6 +626,9 @@ function listAgentsViaRunner() {
     pendingPermissions: [],
     usage: null,
     lastUsage: a.lastUsage ?? null,
+    resumable: a.resumable === true,
+    createdAt: a.createdAt ?? null,
+    updatedAt: a.updatedAt ?? null,
   }));
 }
 
@@ -1020,30 +1024,45 @@ async function commandWho(flags) {
     return { ...entry, line: formatWhoLine(entry) };
   });
 
-  // Two live main Buddies for one (lane, topic) is a conflict too (docs/PLAN_BUGS_BATCH2.md block 0).
-  // Topic Buddies are separate seats, so only same-topic pairs count.
-  const bsTopics = rawMatched.map((m) => String(m.agent.labels?.topic ?? m.agent.labels?.["vs.inbox-card-id"] ?? "").trim().toLowerCase());
-  const bsConflict = target === "brainstorm" && bsTopics.some((t, i) => bsTopics.indexOf(t) !== i);
-  if (target === "lead" || bsConflict) {
-    const status = matched.length === 1 ? "ok" : matched.length === 0 ? "none" : "conflict";
-    const exitCode = matched.length === 1 ? 0 : matched.length === 0 ? 1 : 2;
+  // Single-role seats resolve a winner (docs/PLAN_BUGS_BATCH2.md block 0 for Buddies): a closed-but-resumable holder
+  // (a lost lead/Buddy) loses to a live one, and 2+ live holders of the same seat is a conflict. Buddies are one seat per topic.
+  if (target === "lead" || target === "brainstorm") {
+    const topicKey = (m) =>
+      String(m.agent.labels?.topic ?? m.agent.labels?.["vs.inbox-card-id"] ?? "").trim().toLowerCase();
+    const groups = new Map();
+    for (const m of rawMatched) {
+      const k = target === "lead" ? "" : topicKey(m);
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(m);
+    }
+    const winners = [];
+    const conflictRows = [];
+    for (const group of groups.values()) {
+      const { winner, conflict } = resolveLeadWinner(group.map((m) => m.agent));
+      if (conflict) conflictRows.push(...group);
+      else if (winner) winners.push(winner);
+    }
+    const conflictIds = new Set(conflictRows.map((m) => m.agent.id));
+    const entries = conflictIds.size
+      ? matched.filter((m) => conflictIds.has(m.id))
+      : matched.filter((m) => winners.some((w) => w.id === m.id));
+    const status = conflictIds.size ? "conflict" : entries.length ? "ok" : "none";
+    const exitCode = conflictIds.size ? 2 : entries.length ? 0 : 1;
     if (flags.json) {
-      process.stdout.write(JSON.stringify({ status, entries: matched }, null, 2) + "\n");
+      process.stdout.write(JSON.stringify({ status, entries }, null, 2) + "\n");
       return exitCode;
     }
-    if (matched.length === 0) {
+    if (!entries.length) {
       process.stdout.write("NONE\n");
       return 1;
     }
-    if (matched.length === 1) {
-      process.stdout.write(`${matched[0].line}\n`);
-      return 0;
+    if (conflictIds.size) {
+      process.stdout.write("CONFLICT\n");
+      for (const item of entries) process.stdout.write(`${item.line}\n`);
+      return 2;
     }
-    process.stdout.write("CONFLICT\n");
-    for (const item of matched) {
-      process.stdout.write(`${item.line}\n`);
-    }
-    return 2;
+    for (const item of entries) process.stdout.write(`${item.line}\n`);
+    return 0;
   }
 
   const status = matched.length > 0 ? "ok" : "none";
@@ -1121,7 +1140,7 @@ async function commandWhoami(flags) {
     const leadCandidates = [];
     for (const a of agents) {
       const status = String(a.status ?? "unknown").trim();
-      if (a.archivedAt || a.archived || a.internal || status.toLowerCase() === "closed") continue;
+      if (a.archivedAt || a.archived || a.internal || (status.toLowerCase() === "closed" && a.resumable !== true)) continue;
       if (isRetiredAgent(a.labels ?? {})) continue;
       const aResolved = resolveAgentIdentity(a, { teams: TEAM_DEFS, cwd: a.cwd, agentsById });
       if (aResolved.isOrphan) continue;
@@ -1130,7 +1149,8 @@ async function commandWhoami(flags) {
       leadCandidates.push(a);
     }
     if (leadCandidates.length > 0) {
-      const lead = leadCandidates[0];
+      const { winner } = resolveLeadWinner(leadCandidates);
+      const lead = winner;
       const { tokens, tokensLabel } = extractAgentTokens(lead);
       const title = String(lead.title ?? lead.name ?? lead.id).trim();
       const status = String(lead.status ?? "unknown").trim();

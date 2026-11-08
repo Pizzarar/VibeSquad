@@ -832,7 +832,7 @@ export function SquadsHome({
   return (
     <section className="squads-home" data-testid="squads-home">
       <div
-        className={`squads-home-pager-wrap ${paged ? "paged" : ""}`}
+        className={`squads-section squads-home-pager-wrap ${paged ? "paged" : ""}`}
         onKeyDown={(e) => {
           if (!paged || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
           if (e.target instanceof HTMLElement && e.target.closest(".squad-home-tile")) return;
@@ -840,6 +840,7 @@ export function SquadsHome({
           step(e.key === "ArrowUp" ? -1 : 1);
         }}
       >
+        <h2 className="squads-section-title" data-testid="squads-section-title">Squads</h2>
         <div className="squads-home-grid" ref={gridRef} data-testid="squads-home-grid">
           {slice.map((v) => (
             <SquadTile key={v.team.id} v={v} onSelectSquad={onSelectSquad} onOpenPin={onOpenPin} onOpenAgent={onOpenAgent} />
