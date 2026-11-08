@@ -86,7 +86,7 @@ Expected: the `vs` command prints its usage text without an error (`cli/vs.mjs:2
    **Squad name**, leave **Start a Buddy** ticked and pick **BRAINSTORM - CLAUDE** or **BRAINSTORM - GEMINI**, then
    click **Create**.
 
-   ![The New Squad window with Folder path, Squad name and Start a Buddy](../../../assets/screenshots/02-new-squad-modal.png)
+   ![The New Squad window with Folder path, Squad name, Start a Buddy and the two Brainstorm chips](../../../assets/screenshots/02-new-squad-modal.png)
 
    If your provider is not Claude Code or Gemini, also set up a profile for it under **AGENT PROFILES** in
    **⚙ SETTINGS** (the provider page says how; see [Settings](../../../Reference/Settings.md)).
