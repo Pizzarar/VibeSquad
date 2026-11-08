@@ -119,6 +119,23 @@ export function ensureAndroidSystemBarFit(mainActivityPath) {
   return true;
 }
 
+/** Source of the host-scoped CA pin (Kotlin) copied into the generated project. */
+const TRUST_KOTLIN_SRC = resolve(import.meta.dirname, "..", "src-tauri", "android", "VsTrust.kt");
+
+/**
+ * Copies VsTrust.kt (host-scoped CA pin, PLAN_ANDROID_MESHNET.md A2) next to the generated MainActivity.kt. The hooks that
+ * call it (RustWebViewClient.onReceivedSslError, RustWebView init) come from src-tauri/.cargo/config.toml [env] for wry.
+ * Idempotent: rewrites only when the content differs; returns false when unchanged or the project dir is missing.
+ */
+export function ensureAndroidTrustKotlin(mainActivityDir, src = TRUST_KOTLIN_SRC) {
+  if (!existsSync(mainActivityDir) || !existsSync(src)) return false;
+  const dest = join(mainActivityDir, "VsTrust.kt");
+  const text = readFileSync(src, "utf8");
+  if (existsSync(dest) && readFileSync(dest, "utf8") === text) return false;
+  writeFileSync(dest, text, "utf8");
+  return true;
+}
+
 /** Where `scripts/rotate-android-keystore.mjs` creates the release keystore (outside the repo). */
 export const SIGNING_DIR = join(homedir(), ".vibesquad", "signing");
 export const DEFAULT_KEYSTORE_PATH = join(SIGNING_DIR, "vibesquad-android.jks");
@@ -261,7 +278,9 @@ export function buildAndroidApk({
   const manifest = join(rootDir, "src-tauri", "gen", "android", "app", "src", "main", "AndroidManifest.xml");
   ensureAndroidDeepLinkIntentFilter(manifest);
   ensureAndroidCameraPermission(manifest);
-  ensureAndroidSystemBarFit(join(rootDir, "src-tauri", "gen", "android", "app", "src", "main", "java", "com", "vibesquad", "desktop", "MainActivity.kt"));
+  const activityDir = join(rootDir, "src-tauri", "gen", "android", "app", "src", "main", "java", "com", "vibesquad", "desktop");
+  ensureAndroidSystemBarFit(join(activityDir, "MainActivity.kt"));
+  ensureAndroidTrustKotlin(activityDir);
 
   // Step 4: build the release APK.
   console.log(`[build:android] 3/6 Building ${debug ? "debug" : "release"} APK (tauri android build --apk${debug ? " --debug" : ""})...`);
