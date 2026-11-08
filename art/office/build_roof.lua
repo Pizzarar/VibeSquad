@@ -1,7 +1,7 @@
 -- Contract v2 roof band (C1): art/office/roof.aseprite, 640x200, INDEXED (P0), stacks ABOVE the floor plates.
--- [big CRT: RiffBot | lift top | big CRT: Overlord] on the tower roof, 3/4 top-down (above + in front of
--- the sets: we see each TV's top face and rear hump receding up the screen).
--- Bands: sky 0..141 (far city 104..145), parapet 142..151, roof deck from above 152..191, slab 192..199.
+-- [big CRT: RiffBot | lift top | big CRT: Overlord] on the tower roof. H1d: front view like the floors
+-- (docs/art/STYLE_BIBLE.md, ruling 3a): chunky INK-outlined sets, crooked lids, outlined clouds, checker deck.
+-- Bands: sky 0..141 (far city 104..145), parapet 142..151, roof deck (front-view checker) 152..191, slab 192..199.
 -- The two screen glasses are left EMPTY (dark glass): the UI draws face-{riffbot,overlord}-*.png in them.
 -- Layers: bg, building, furniture, signs, light, front. "front" = what covers sprites/faces: the lift car
 -- jambs/sill (elevatorTop rider) + the rounded glass corners of both CRTs (they clip the face cells).
@@ -57,7 +57,9 @@ do
   L.twinkle(c, 132, 10, L.MARBLE, L.MARBLE, 2); L.twinkle(c, 470, 12, L.MARBLE, L.MARBLE, 2)
   L.twinkle(c, 30, 26, L.MARBLE, L.MARBLE, 1); L.twinkle(c, 612, 30, L.MARBLE, L.MARBLE, 1)
   for _, cl in ipairs({{36,64},{604,72},{262,52},{378,90},{520,14},{24,16}}) do
+    c.ellipse(cl[1], cl[2], 10, 4, L.INK); c.ellipse(cl[1]+8, cl[2]-2, 7, 4, L.INK); c.ellipse(cl[1]-7, cl[2]+1, 6, 3, L.INK)
     c.ellipse(cl[1], cl[2], 9, 3, L.MARBLE); c.ellipse(cl[1]+8, cl[2]-2, 6, 3, L.MARBLE); c.ellipse(cl[1]-7, cl[2]+1, 5, 2, L.MARBLE)
+    c.hline(cl[1]-8, cl[2]+2, 16, L.LINE); c.px(cl[1]+5, cl[2]-4, L.MARBLE)
   end
   -- far city skyline (only peeks out round the sets and the lift core)
   local x = 0
@@ -79,17 +81,13 @@ end
 -- ======================= building: parapet, roof deck, slab, lift core =======================
 do
   local c = C.building
-  -- parapet: cap seen from above, then its inner face
-  c.hline(0, CAP0, W, L.INK); c.rect(0, CAP0+1, W, 2, L.MARBLE); c.hline(0, CAP0+3, W, L.INK)
-  c.rect(0, CAP0+4, W, DECK0-CAP0-5, L.LINE); c.hline(0, DECK0-1, W, L.INK)
-  for x=8,W-1,32 do c.vline(x, CAP0+4, DECK0-CAP0-5, L.PHI) end
-  -- roof deck from above: gravel PHI with LINE flecks + a tile seam grid (foreshortened)
-  c.rect(0, DECK0, W, SLAB-DECK0, L.PHI)
+  -- H1d front view: chunky parapet rail (INK / VIOLET / INK like the floors' skirting), then the deck checker
+  c.hline(0, CAP0, W, L.INK); c.rect(0, CAP0+1, W, 3, L.VIOLET); c.hline(0, CAP0+1, W, L.MARBLE); c.hline(0, CAP0+4, W, L.INK)
+  c.rect(0, CAP0+5, W, DECK0-CAP0-6, L.LINE); c.hline(0, DECK0-1, W, L.INK)
+  for x=8,W-1,32 do c.rect(x, CAP0+5, 2, DECK0-CAP0-6, L.PHI) end
   for y=DECK0, SLAB-1 do for x=0, W-1 do
-    if (x*5 + y*11) % 17 == 0 then c.px(x, y, L.LINE) end
+    c.px(x, y, ((x//12 + (y-DECK0)//8) % 2 == 0) and L.PANEL or L.PHI)
   end end
-  for _, y in ipairs({DECK0+9, DECK0+21}) do c.hline(0, y, W, L.LINE) end
-  for x=0,W-1,40 do c.vline(x, DECK0, SLAB-DECK0, L.LINE) end
   c.hline(0, SLAB, W, L.INK); c.hline(0, SLAB+1, W, L.MARBLE); c.rect(0, SLAB+2, W, 5, L.LINE); c.hline(0, H-1, W, L.INK)
   for x=6,W-1,24 do c.rect(x, SLAB+3, 12, 3, L.PHI) end
 
@@ -117,14 +115,11 @@ local function tvSet(c, g, ctl, st)
   local x0 = (ctl == "R") and gx - 12 or gx - 48
   local y0, w, h = TV.y, TV.w, TV.h
   local x1 = x0 + w - 1
-  -- rear hump (the deep CRT tube housing), seen from above, behind the top face
-  c.poly({x0+34, y0-9, x1-33, y0-9, x1-46, y0-21, x0+47, y0-21}, L.INK)
-  c.poly({x0+36, y0-10, x1-35, y0-10, x1-47, y0-20, x0+48, y0-20}, st.lo)
-  for vx=x0+56, x1-56, 6 do c.line(vx, y0-18, vx-1, y0-12, L.INK) end
-  -- top face (recedes up-screen), light far edge
-  c.poly({x0, y0, x1+1, y0, x1-8, y0-10, x0+9, y0-10}, L.INK)
-  c.poly({x0+2, y0, x1-1, y0, x1-9, y0-9, x0+10, y0-9}, st.hi)
-  c.hline(x0+11, y0-8, w-21, L.MARBLE)
+  -- H1d front view: no top face; a crooked lid ridge (1px higher on the control side) + two stubby feet
+  local lift = (ctl == "R") and 1 or 0
+  c.poly({x0+6, y0+1, x1-5, y0+1, x1-8 - lift*0, y0-3 - lift, x0+9, y0-3 - (1-lift)}, L.INK)
+  c.poly({x0+8, y0, x1-7, y0, x1-9, y0-2 - lift, x0+10, y0-2 - (1-lift)}, st.hi)
+  c.hline(x0+12, y0-1 - 0, 10, L.MARBLE)
   -- front face: chunky bevelled case
   c.rect(x0, y0, w, h, L.INK)
   c.rect(x0+1, y0+1, w-2, h-2, st.face)
@@ -170,10 +165,11 @@ do
   end end
   -- rabbit-ear antenna on the top face
   local ax = (rx0 + rx1)//2
-  c.rect(ax-7, TV.y-26, 15, 6, L.INK); c.rect(ax-6, TV.y-25, 13, 4, L.VIOLET); c.hline(ax-6, TV.y-25, 13, L.PINK)
-  c.line(ax-3, TV.y-26, ax-30, TV.y-38, L.INK); c.line(ax-3, TV.y-27, ax-30, TV.y-39, L.MARBLE)
-  c.line(ax+3, TV.y-26, ax+34, TV.y-36, L.INK); c.line(ax+3, TV.y-27, ax+34, TV.y-37, L.MARBLE)
-  c.ellipse(ax-31, TV.y-39, 2, 2, L.PINK); c.ellipse(ax+35, TV.y-37, 2, 2, L.MINT)
+  c.rect(ax-7, TV.y-9, 15, 6, L.INK); c.rect(ax-6, TV.y-8, 13, 4, L.VIOLET); c.hline(ax-6, TV.y-8, 13, L.PINK)
+  c.line(ax-3, TV.y-9, ax-26, TV.y-31, L.INK); c.line(ax-2, TV.y-9, ax-25, TV.y-31, L.INK)
+  c.line(ax+3, TV.y-9, ax+31, TV.y-27, L.INK); c.line(ax+4, TV.y-9, ax+32, TV.y-27, L.INK)
+  c.ellipse(ax-26, TV.y-33, 3, 3, L.INK); c.ellipse(ax-26, TV.y-33, 2, 2, L.PINK)
+  c.ellipse(ax+32, TV.y-29, 3, 3, L.INK); c.ellipse(ax+32, TV.y-29, 2, 2, L.MINT)
   -- Memphis stickers on the case
   c.stamp(rx0+5, TV.y+4, "|.a.|\n|aaa|\n|.a.|", K)
   c.stamp(rx1-20, TV.y+TV.h-15, "|g..g..g|\n|.g..g..|", K)
@@ -195,10 +191,10 @@ do
   end
   -- ON AIR lamp + whip antenna on the top face
   local lx = (ox0 + ox1)//2
-  c.rect(lx-15, TV.y-30, 31, 10, L.INK); c.rect(lx-14, TV.y-29, 29, 8, L.PINK)
-  c.hline(lx-14, TV.y-29, 29, L.CORAL)
-  c.vline(ox1-30, TV.y-46, 34, L.INK); c.vline(ox1-29, TV.y-46, 34, L.MUTED)
-  c.ellipse(ox1-29, TV.y-47, 2, 2, L.PINK); c.px(ox1-29, TV.y-48, L.MARBLE)
+  c.rect(lx-15, TV.y-14, 31, 11, L.INK); c.rect(lx-14, TV.y-13, 29, 9, L.PINK)
+  c.hline(lx-14, TV.y-13, 29, L.MARBLE)
+  c.rect(ox1-31, TV.y-32, 3, 29, L.INK); c.vline(ox1-30, TV.y-31, 27, L.MUTED)
+  c.ellipse(ox1-30, TV.y-34, 3, 3, L.INK); c.ellipse(ox1-30, TV.y-34, 2, 2, L.PINK); c.px(ox1-31, TV.y-35, L.MARBLE)
   -- black rack stand with two VCR decks (12:00 blinking, naturally)
   KIT.slab(c, ox0+12, TV.y+TV.h+1, TV.w-24, 4, L.LINE, L.INK, 16)
   for i, dy in ipairs({TV.y+TV.h+8, TV.y+TV.h+15}) do
@@ -344,7 +340,7 @@ do
   end
   nameplate(S.riff, "RIFFBOT", L.PINK, L.MARBLE)
   nameplate(S.lord, "OVERLORD", L.INK, L.AMBER)
-  L.text(c, (390 + 577)//2 - 11, TV.y-27, "ON AIR", L.MARBLE)
+  L.text(c, (390 + 577)//2 - 11, TV.y-11, "ON AIR", L.MARBLE)
   c.rect(305, 110, 30, 11, L.INK)
   L.text(c, 316, 113, "TV", L.AMBER)
   c.stamp(308, 113, "|.g.|\n|ggg|", K)
@@ -391,8 +387,6 @@ do
       end
     end end
   end
-  pool(S.riff[1] + 64, 186, 120, 10, L.TEAL, 0.55)
-  pool(S.lord[1] + 64, 186, 120, 10, L.PINK, 0.55)
   L.twinkle(c, 296, 100, L.TEAL, L.MARBLE, 2)
   c.commit()
 end
