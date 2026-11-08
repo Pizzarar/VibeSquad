@@ -22,6 +22,7 @@ import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, coal
 import { BARE_NAME_RE, BARE_PATH_RE, bareNamesVersion, isLocalHref, localLinkTarget, lookupBareName, parseFileToken, subscribeBareNames } from "./fileLinks";
 import { toolStartsExpanded, usePref } from "./prefs";
 import { getPanes } from "./panes";
+import { recoveredBlips } from "./transientBlip";
 import { SubagentList } from "./SubagentList";
 import { Spinner, Stamp, TimelineSkeleton, useDelayedBusy } from "./QuickWinsUi";
 import { MermaidView } from "./MermaidView";
@@ -710,6 +711,7 @@ export function TimelineItem({
   selected = false,
   onSelect,
   latestReasoning = false,
+  blip = null,
 }: {
   e: Entry;
   agentId: string;
@@ -719,6 +721,8 @@ export function TimelineItem({
   onSelect?: () => void;
   /** The most recent thought in the loaded timeline opens by default; a user toggle still wins. */
   latestReasoning?: boolean;
+  /** Set when this is a transient error the agent recovered from: renders the "signal interrupted" blip. */
+  blip?: { raw: string; line: string } | null;
 }) {
   const it = e.item;
   // null = not toggled yet: tool rows follow Settings › Chat › Collapse successful tool calls.
@@ -874,6 +878,7 @@ export function TimelineItem({
       );
 
     case "error":
+      if (blip) return <div className="tl tl-blip" data-testid="tl-blip" title={blip.raw}>{blip.line}</div>;
       return <div className="tl tl-error">{formatToolError(it.message ?? it.error)}</div>;
 
     case "notification":
@@ -1195,6 +1200,7 @@ export function Timeline({
   const [pendingJump, setPendingJump] = useState<{ seq: number; n: number } | null>(null);
   const base = cut ? truncateAfter(entries, cut) : entries;
   const shown = filterEntries(base, filter);
+  const blips = useMemo(() => recoveredBlips(base, agentStatus, formatToolError), [base, agentStatus]);
   const slowFirstLoad = useDelayedBusy(!loaded && entries.length === 0);
   const slowMore = useDelayedBusy(loadingMore);
   const slowSearch = useDelayedBusy(searching);
@@ -1470,6 +1476,7 @@ export function Timeline({
             onParkText={onParkText}
             onRewound={(x) => { cutLen.current = entries.length; setCut(x); }}
             latestReasoning={e === entries[latestReasoningIndex(entries)]}
+            blip={blips.get(e) ?? null}
             selected={selectedEntryKey === String(e.seqStart ?? i)}
             onSelect={() => setSelectedEntryKey((k) => (k === String(e.seqStart ?? i) ? null : String(e.seqStart ?? i)))}
           />
