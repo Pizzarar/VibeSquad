@@ -617,6 +617,6 @@ export function dismissSetupPrompt(): void {
 }
 
 // Kick off initial load in browser environments.
-if (typeof window !== "undefined" && !(isRemote() && needsPairing(true, location.hash))) {
+if (typeof window !== "undefined" && !(isRemote() && needsPairing(true))) {
   void fetchProfiles();
 }

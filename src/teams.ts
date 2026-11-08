@@ -228,7 +228,7 @@ export function resetTeamsToDisk(): void {
 }
 
 // Agents edit the registry too (`vs pin new`), so re-read it on focus and every 10s while visible.
-if (typeof window !== "undefined" && typeof document !== "undefined" && !(isRemote() && needsPairing(true, location.hash))) {
+if (typeof window !== "undefined" && typeof document !== "undefined" && !(isRemote() && needsPairing(true))) {
   void refreshTeams();
   window.addEventListener("focus", () => void refreshTeams());
   setInterval(() => {

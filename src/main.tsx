@@ -3,6 +3,8 @@ import { App } from "./App";
 import { start } from "./paseo";
 import "./perfBoot";
 import { loadUserName } from "./userName";
+import { isRemote } from "./remoteSession";
+import { RemotePairScreen } from "./RemotePairScreen";
 import { FiveLeads, SpriteSheet } from "./demo";
 import "./styles.css";
 
@@ -11,8 +13,11 @@ import "./styles.css";
 const q = new URLSearchParams(location.search);
 const cast = q.has("cast");
 const five = q.has("five-leads");
-if (!cast && !five) {
+// The APK (remote build) carries no UI of its own beyond pairing: it pairs with the PC over LAN/Meshnet, then
+// opens the server's UI (RemotePairScreen), so it never starts the local client.
+const remote = isRemote();
+if (!cast && !five && !remote) {
   start();
   loadUserName();
 }
-createRoot(document.getElementById("root")!).render(five ? <FiveLeads /> : cast ? <SpriteSheet /> : <App />);
+createRoot(document.getElementById("root")!).render(remote ? <RemotePairScreen /> : five ? <FiveLeads /> : cast ? <SpriteSheet /> : <App />);
