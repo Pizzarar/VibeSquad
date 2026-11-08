@@ -8,11 +8,105 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSyn
 import { basename, dirname, extname, isAbsolute, join, posix, relative, resolve } from "node:path";
 
 // Root-only skips (matched on the path relative to guide/, so Setup/templates/AGENTS.md stays mirrored).
-const SKIP_ROOT = new Set(["AGENTS.md", "CLAUDE.md", "GEMINI.md", "LEAD_BRIEF.md"]);
-const SKIP_DIRS = new Set(["source", "node_modules"]);
-const SKIP_EXT = new Set([".py", ".json"]);
-const IMAGE_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"]);
+export const SKIP_ROOT = new Set(["AGENTS.md", "CLAUDE.md", "GEMINI.md", "LEAD_BRIEF.md"]);
+export const SKIP_DIRS = new Set(["source", "node_modules"]);
+export const SKIP_EXT = new Set([".py", ".json"]);
+export const IMAGE_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"]);
+export const LINK_RE = /(!?)\[([^\]]*)\]\(\s*(<[^>]+>|[^)\s]+)((?:\s+"[^"]*")?)\s*\)/g;
+export const WIKI_RE = /(!?)\[\[([^\]\n]+)\]\]/g;
 
+export const toPosix = (p) => p.split("\\").join("/");
+export const assetName = (rel) => rel.replace(/\//g, "-").replace(/\s+/g, "-");
+export function pageName(rel) {
+  if (rel === "README.md") return "Home";
+  return rel.replace(/\.md$/i, "").replace(/\//g, "-").replace(/\s+/g, "-");
+}
+export const slugHeading = (h) =>
+  h
+    .replace(/\s+#+\s*$/, "")
+    .replace(/!\[([^\]]*)\]\([^)]*\)|\[([^\]]*)\]\([^)]*\)/g, "$1$2")
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\p{M}\s_-]/gu, "")
+    .replace(/\s/g, "-");
+
+export function skipDir(name) {
+  return name.startsWith(".") || SKIP_DIRS.has(name);
+}
+
+export function collectGuide(srcDir) {
+  const pages = new Map(); // rel path (posix, from srcDir) -> page name
+  const images = new Map(); // rel path -> asset file name
+  const skipped = new Set(); // rel paths that exist but are not mirrored
+  const allMd = [];
+
+  function walk(dir, inSkippedDir = false) {
+    for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const full = join(dir, entry.name);
+      const rel = toPosix(relative(srcDir, full));
+      if (entry.isDirectory()) {
+        if (!entry.name.startsWith(".") && entry.name !== "node_modules") {
+          walk(full, inSkippedDir || SKIP_DIRS.has(entry.name));
+        }
+        continue;
+      }
+      const ext = extname(entry.name).toLowerCase();
+      if (!entry.name.startsWith(".") && ext === ".md") allMd.push(rel);
+      if (inSkippedDir) continue;
+      // Notebook/ is private; only its README is shared (matches guide/.gitignore).
+      const privateNote = rel.startsWith("Notebook/") && rel !== "Notebook/README.md";
+      if (entry.name.startsWith(".") || SKIP_ROOT.has(rel) || SKIP_EXT.has(ext) || privateNote) {
+        skipped.add(rel);
+      } else if (ext === ".md") {
+        pages.set(rel, pageName(rel));
+      } else if (IMAGE_EXT.has(ext)) {
+        images.set(rel, assetName(rel));
+      } else {
+        skipped.add(rel);
+      }
+    }
+  }
+  walk(srcDir);
+
+  const collisions = [];
+  const seen = new Map();
+  for (const [rel, name] of pages) {
+    const key = name.toLowerCase();
+    if (seen.has(key)) collisions.push(`page name collision: ${rel} and ${seen.get(key)} both map to ${name}`);
+    else seen.set(key, rel);
+  }
+  const seenAssets = new Map();
+  for (const [rel, name] of images) {
+    const key = name.toLowerCase();
+    if (seenAssets.has(key)) collisions.push(`asset name collision: ${rel} and ${seenAssets.get(key)} both map to ${name}`);
+    else seenAssets.set(key, rel);
+  }
+  const byBase = new Map(); // Obsidian wikilink lookup: lowercase basename -> rel
+  for (const rel of pages.keys()) {
+    const key = basename(rel, ".md").toLowerCase();
+    const depth = rel.split("/").length;
+    const prev = byBase.get(key);
+    const prevDepth = prev ? prev.split("/").length : Infinity;
+    if (!prev || depth < prevDepth) byBase.set(key, rel);
+    else if (depth === prevDepth && key !== "readme") {
+      collisions.push(`wikilink basename collision: ${rel} and ${prev} both match [[${key}]]`);
+    }
+  }
+  return { pages, images, skipped, allMd, byBase, collisions };
+}
+
+export function resolveWikilink(name, pages, images, byBase) {
+  const lower = name.toLowerCase().replace(/\.md$/, "");
+  const pageRel = byBase.get(lower);
+  if (pageRel) return { kind: "page", rel: pageRel };
+  const imgRel = [...images.keys()].find((k) => basename(k).toLowerCase() === name.toLowerCase());
+  if (imgRel) return { kind: "image", rel: imgRel };
+  const pathHit = [...pages.keys()].find((k) => k.toLowerCase().replace(/\.md$/, "") === lower);
+  if (pathHit) return { kind: "page", rel: pathHit };
+  return null;
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === import.meta.filename) {
 const argv = process.argv.slice(2);
 const opt = (name, fallback) => {
   const i = argv.indexOf(`--${name}`);
@@ -47,67 +141,15 @@ const srcRel = relative(repoRoot, srcDir).split("\\").join("/") || "guide";
 const ghBase = `https://github.com/${repo}`;
 
 // ---- collect ----
-const toPosix = (p) => p.split("\\").join("/");
-const pages = new Map(); // rel path (posix, from srcDir) -> page name
-const images = new Map(); // rel path -> asset file name
-const skipped = new Set(); // rel paths that exist but are not mirrored
-
-function skipDir(name) {
-  return name.startsWith(".") || SKIP_DIRS.has(name);
-}
-function walk(dir) {
-  for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-    const full = join(dir, entry.name);
-    const rel = toPosix(relative(srcDir, full));
-    if (entry.isDirectory()) {
-      if (!skipDir(entry.name)) walk(full);
-      continue;
-    }
-    const ext = extname(entry.name).toLowerCase();
-    // Notebook/ is private; only its README is shared (matches guide/.gitignore).
-    const privateNote = rel.startsWith("Notebook/") && rel !== "Notebook/README.md";
-    if (entry.name.startsWith(".") || SKIP_ROOT.has(rel) || SKIP_EXT.has(ext) || privateNote) {
-      skipped.add(rel);
-    } else if (ext === ".md") {
-      pages.set(rel, pageName(rel));
-    } else if (IMAGE_EXT.has(ext)) {
-      images.set(rel, rel.replace(/\//g, "-").replace(/\s+/g, "-"));
-    } else {
-      skipped.add(rel);
-    }
-  }
-}
-function pageName(rel) {
-  if (rel === "README.md") return "Home";
-  return rel.replace(/\.md$/i, "").replace(/\//g, "-").replace(/\s+/g, "-");
-}
-walk(srcDir);
-
-const seen = new Map();
-for (const [rel, name] of pages) {
-  const key = name.toLowerCase();
-  if (seen.has(key)) {
-    console.error(`page name collision: ${rel} and ${seen.get(key)} both map to ${name}`);
-    process.exit(1);
-  }
-  seen.set(key, rel);
-}
-const byBase = new Map(); // Obsidian wikilink lookup: lowercase basename -> rel
-for (const rel of pages.keys()) {
-  const key = basename(rel, ".md").toLowerCase();
-  if (!byBase.has(key) || rel.split("/").length < byBase.get(key).split("/").length) byBase.set(key, rel);
+const { pages, images, skipped, byBase, collisions } = collectGuide(srcDir);
+if (collisions.length) {
+  for (const c of collisions) console.error(c);
+  process.exit(1);
 }
 
 // ---- link rewriting ----
 const unresolved = [];
 const stats = { pages: 0, links: 0, wikilinks: 0, images: 0, external: 0, github: 0 };
-
-const slugHeading = (h) =>
-  h
-    .trim()
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s-]/gu, "")
-    .replace(/\s/g, "-");
 
 function ghUrl(repoPath, isDir) {
   return `${ghBase}/${isDir ? "tree" : "blob"}/${ref}/${repoPath.split("/").map(encodeURIComponent).join("/")}`;
@@ -136,9 +178,6 @@ function resolveTarget(fromRel, rawPath, anchor, isImage, where) {
   return null;
 }
 
-const LINK_RE = /(!?)\[([^\]]*)\]\(\s*(<[^>]+>|[^)\s]+)((?:\s+"[^"]*")?)\s*\)/g;
-const WIKI_RE = /(!?)\[\[([^\]\n]+)\]\]/g;
-
 function rewriteSegment(seg, fromRel) {
   seg = seg.replace(LINK_RE, (m, bang, text, target, title) => {
     const t = target.startsWith("<") ? target.slice(1, -1) : target;
@@ -161,28 +200,21 @@ function rewriteSegment(seg, fromRel) {
     const hash = targetPart.indexOf("#");
     const name = (hash >= 0 ? targetPart.slice(0, hash) : targetPart).trim();
     const heading = hash >= 0 ? targetPart.slice(hash + 1).trim() : "";
-    let rel;
     if (!name) {
       return `[${alias || heading}](#${slugHeading(heading)})`;
     }
-    const lower = name.toLowerCase().replace(/\.md$/, "");
-    rel = byBase.get(lower);
-    if (!rel) {
-      const img = [...images.keys()].find((k) => basename(k).toLowerCase() === name.toLowerCase());
-      if (img) {
-        stats.images++;
-        return `![${alias || name}](assets/${images.get(img)})`;
-      }
-      const pathHit = [...pages.keys()].find((k) => k.toLowerCase().replace(/\.md$/, "") === lower);
-      rel = pathHit;
+    const hit = resolveWikilink(name, pages, images, byBase);
+    if (hit?.kind === "image") {
+      stats.images++;
+      return `![${alias || name}](assets/${images.get(hit.rel)})`;
     }
-    if (!rel) {
+    if (!hit) {
       unresolved.push(`${fromRel}: wikilink -> ${m}`);
       return m;
     }
     stats.wikilinks++;
     const label = alias || (heading ? `${name} > ${heading}` : name);
-    return `${bang ? "" : ""}[${label}](${pages.get(rel)}${heading ? `#${slugHeading(heading)}` : ""})`;
+    return `${bang ? "" : ""}[${label}](${pages.get(hit.rel)}${heading ? `#${slugHeading(heading)}` : ""})`;
   });
 }
 
@@ -269,4 +301,5 @@ if (unresolved.length) {
   console.error(`\n${unresolved.length} unresolved link(s):`);
   for (const u of unresolved) console.error(`  ${u}`);
   process.exit(1);
+}
 }
