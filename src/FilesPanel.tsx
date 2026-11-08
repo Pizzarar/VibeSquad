@@ -537,12 +537,19 @@ export function FilesPanel({
   useEffect(() => {
     if (!menu) return;
     const close = () => setMenu(null);
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    // Capture phase: the drawer's Esc handler (PinRail.tsx) is a bubble-phase window listener that sends you home;
+    // an open context menu eats the Esc first and marks it handled so the drawer stays open.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+    };
     window.addEventListener("mousedown", close);
-    window.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
     return () => {
       window.removeEventListener("mousedown", close);
-      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
     };
   }, [menu]);
 
