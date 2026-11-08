@@ -1,12 +1,16 @@
--- H1c-v2 RiffBot + Overlord 80x48 widescreen faces (G8: both sky TVs fixed 50/50, portrait fills the
--- whole ~5:3 screen hole, faceContain 7x at 4K@120% / 6x at 1080p), re-anchored on the H0 hand (docs/art/STYLE_BIBLE.md) from the
--- owner-approved H1a sketches (art/h1/gallery.lua riffbot/overlord, 60e5144). One solid outlined
--- object per bot, googly MARBLE eyes, INK line mouths, flat P0 fills, hand-placed shapes, no dither.
---   RiffBot : cream TV on rabbit ears and sneakers. Googly eyes on the teal screen; the stock
---             ticker IS the mouth (owner 4a): an INK band with AMBER prices that opens, ticks,
---             shouts "YO!!" (needs) and crashes to a PINK "-9.99" with a wobbly lip (scared).
---   Overlord: one violet TV with a glass jar on top holding its brain (owner 4a), one big googly
---             eye and a toothy grin on the mint screen. Brain bobs (idle/lookDown), glows (needs).
+-- H1c-v3 RiffBot + Overlord 80x48 widescreen faces (G8: both sky TVs fixed 50/50; faceContain scales
+-- the cell at an integer and bottom-anchors it), in the H0 hand (docs/art/STYLE_BIBLE.md) from the
+-- owner-approved H1a sketches (art/h1/gallery.lua, 60e5144). Owner H1c-v3: no stretch to fill the
+-- cell. Both bots keep natural H0 proportions, centred, with clean SKY left and right. Googly MARBLE
+-- eyes, INK line mouths, 1px INK outlines, flat P0 fills, hand-placed shapes, no dither.
+--   RiffBot : headshot. Boxy ~4:3 cream CRT head with rabbit ears, sitting on violet suit shoulders,
+--             MARBLE collar and PINK tie flush to row 47. Googly eyes on the teal screen; the
+--             stock ticker IS the mouth (owner 4a): "+4.20", shouts "YO!!" (needs) and crashes to
+--             a PINK "-9.99" with a wobbly lip (scared). No feet, no side arms: only on needs a
+--             hand pops up from the bottom edge to wave.
+--   Overlord: the sky-CRT screen IS the jar (no inner TV): murky SKY water, bubbles, glass glare,
+--             a floating brain, 2 lopsided googly eyeballs on dangling optic nerves and a
+--             floating set of teeth, each organ outlined and bobbing out of sync.
 -- Gutter contract (UI lane): bg = SKY (13) everywhere, columns 0 and 79 stay flat SKY in every
 -- frame (asserted below), no pink flash background: needs[1] flashes inside the object instead.
 -- Cells/offsets/order = public/office/faces.json (cell 80x48; keys/frame names unchanged; not written here).
@@ -16,7 +20,7 @@
 local root = app.params.root
 local L = dofile(root.."/art/cast/hypno/lib.lua")
 local pal = Palette{ fromFile = root.."/art/palette/pc98-dark.gpl" }
-local K, V, P, CO, A, S, M, T, G, Y = 15, 8, 9, 10, 11, 14, 4, 7, 12, 13
+local K, V, P, CO, A, S, M, T, G, Y, LN = 15, 8, 9, 10, 11, 14, 4, 7, 12, 13, 3
 local CW, CH = 80, 48
 
 -- ---------- shared face language (same helpers as art/h1/gallery.lua) ----------
@@ -41,56 +45,64 @@ local function clipText(C, x, y, s, c, x0, x1)
   L.text(tmp, x, y, s, c)
 end
 
--- ---------- RiffBot (80x48: wide cream TV, stubby arms, 43px ticker mouth) ----------
-local RIFF = { "back", "body", "screen", "face", "mouth", "prop", "fx" }
-local EYE_N = {{26, 20, 5.1, 4.1}, {41, 19, 5.6, 5.1}}
-local EYE_W = {{26, 19, 5.6, 4.6}, {41, 18, 6.1, 5.6}}
-local TICK = "RIFF +4.20"
+-- ---------- RiffBot (headshot: boxy ~4:3 CRT head x20..60 on suit shoulders flush to row 47) ----------
+local RIFF = { "back", "suit", "tie", "body", "screen", "face", "mouth", "prop", "arm", "fx" }
+local EYE_N = {{31, 15, 3.1, 3.6}, {41, 14, 3.6, 4.6}}
+local EYE_W = {{31, 15, 3.6, 4.1}, {41, 15, 4.1, 4.6}}
+local TICK = "+4.20"
 
 local function riff(C, s)
   C.back.rect(0, 0, CW, CH, Y)
+  -- suit: wide violet shoulders, MARBLE shirt V + collar points, lapels, pocket square
+  local su = C.suit
+  su.poly({8,48, 9,43, 15,39, 30,37, 50,37, 65,39, 71,43, 72,48}, V)
+  su.outline(K)
+  su.poly({32,37, 48,37, 44,48, 36,48}, M)
+  su.line(32, 37, 37, 43, K); su.line(48, 37, 43, 43, K)                       -- collar points
+  su.line(31, 37, 35, 47, K); su.line(49, 37, 45, 47, K)                       -- lapels
+  su.line(18, 41, 19, 47, K); su.line(62, 41, 61, 47, K)                       -- sleeve seams
+  su.hline(55, 42, 4, M); su.px(56, 41, P); su.px(57, 41, P)                   -- pocket square
+  local ti = C.tie
+  ti.rect(38, 37, 4, 3, P); ti.poly({38,41, 42,41, 43,48, 37,48}, P)
+  ti.outline(K)
+  -- cabinet
   local b = C.body
-  b.poly({9,11, 38,9, 70,10, 72,26, 71,41, 40,42, 8,41, 7,25}, M)
-  b.poly({8,37, 71,37, 71,41, 40,42, 8,41}, CO)
+  b.poly({22,8, 39,6, 58,7, 60,21, 59,34, 41,35, 21,34, 20,20}, M)
+  b.poly({21,31, 59,31, 59,34, 41,35, 21,34}, CO)
   b.outline(K)
-  b.hline(8, 36, 64, K)
-  for x=11,69,4 do b.px(x, 39, A) end
+  b.hline(21, 30, 39, K)
+  for x=24,57,4 do b.px(x, 33, A) end
   local sc = C.screen
-  sc.rect(12, 13, 46, 22, K); sc.rect(13, 14, 44, 20, T)
-  for y=15,33,4 do sc.hline(14, y, 42, G) end
-  for i, k in ipairs({{64, 16}, {64, 23}}) do
+  sc.rect(24, 9, 26, 20, K); sc.rect(25, 10, 24, 18, T)
+  for y=11,27,4 do sc.hline(26, y, 22, G) end
+  for i, k in ipairs({{54, 12}, {54, 18}}) do
     sc.ellipse(k[1], k[2], 2.2, 2.2, (s.flash and i == 1) and A or P)
   end
-  for y=28,32,2 do sc.hline(61, y, 7, K) end
-  sc.px(64, 14, K); sc.px(64, 21, K)
+  for y=22,26,2 do sc.hline(52, y, 5, K) end
+  sc.px(54, 10, K); sc.px(54, 16, K)
 
   -- eyes
   local f = C.face
   local E = s.wide and EYE_W or EYE_N
   eyes(f, E)
   if s.eyes == "look" then                       -- idle: lopsided googly stare
-    pupil(f, 25, 20); pupil(f, 41 + (s.px or 0), 18)
+    pupil(f, 30, 15); pupil(f, 42 + (s.px or 0), 13)
   elseif s.eyes == "down" then                   -- lookDown: lids half, pupils sunk
-    lids(f, E, T, 0.45); pupil(f, 25, 21); pupil(f, 40, 20)
+    lids(f, E, T, 0.45); pupil(f, 30, 16); pupil(f, 40, 16)
   elseif s.eyes == "shut" then                   -- shut: lids all the way, INK lid curves
     lids(f, E, T, 1.0)
-    f.line(21, 20, 26, 22, K); f.line(26, 22, 31, 20, K); f.line(36, 19, 41, 21, K); f.line(41, 21, 46, 19, K)
+    f.line(28, 15, 31, 17, K); f.line(31, 17, 34, 15, K); f.line(37, 14, 41, 16, K); f.line(41, 16, 45, 14, K)
   elseif s.eyes == "yo" then
-    pupil(f, 26 + (s.px or 0), 16, 2, 2); pupil(f, 41 + (s.px or 0), 14, 2, 2)
+    pupil(f, 31 + (s.px or 0), 12, 2, 2); pupil(f, 41 + (s.px or 0), 12, 2, 2)
   elseif s.eyes == "scared" then                 -- pin pupils that jitter
     local j = s.jit or 0
-    f.rect(26 + j, 19, 1, 2, K); f.rect(42 - j, 18, 1, 2, K)
-  end
-  if s.brow == "up" then
-    f.line(20, 13, 28, 12, K); f.line(35, 11, 44, 12, K)
-  elseif s.brow == "worry" then                  -- inner ends up
-    f.line(20, 13, 28, 11, K); f.line(36, 10, 45, 12, K)
+    f.rect(31 + j, 15, 1, 2, K); f.rect(42 - j, 15, 1, 2, K)
   end
 
   -- ticker mouth (owner 4a): INK band across the screen, text rows y0+1..y0+5, optional tongue
   local m = C.mouth
   local y0, h = s.band[1], s.band[2]
-  local x0, x1 = 14, 56
+  local x0, x1 = 26, 47
   m.rect(x0, y0, x1 - x0 + 1, h, s.flash and P or K)
   m.px(x0, y0 + h - 1, 0); m.px(x1, y0 + h - 1, 0)                            -- rounded lower lip
   if s.lip == "smirk" then                                                     -- lopsided corner hooks
@@ -100,168 +112,196 @@ local function riff(C, s)
   end
   if s.tongue then
     local ty = y0 + h - 2
-    m.hline(25, ty, 20, s.tongueC or P); m.hline(28, ty - 1, 14, s.tongueC or P)
+    m.hline(32, ty, 10, s.tongueC or P); m.hline(34, ty - 1, 6, s.tongueC or P)
   end
   clipText(m, x0 + 1 - (s.scroll or 0), y0 + 1, s.text or TICK, s.textC or A, x0 + 1, x1 - 1)
 
-  -- antennas, sneakers, stubby arms
+  -- rabbit ears (sag when scared)
   local p = C.prop
-  p.rect(33, 8, 13, 2, K)
-  p.rect(17, 43, 8, 3, A); p.rect(54, 43, 8, 3, A)
-  if s.scared then                                                             -- both hands up
-    p.poly({8,29, 6,22, 8,21, 10,28}, M); p.ellipse(6, 18, 2.2, 2.6, M)
-    p.poly({71,29, 73,22, 75,23, 73,30}, M); p.ellipse(74, 18, 2.2, 2.6, M)
+  p.rect(36, 5, 9, 2, K)
+  if s.droop then
+    p.line(36, 5, 28, 3, K); p.line(44, 5, 50, 4, K); p.line(50, 4, 56, 5, K)
+    p.rect(27, 3, 2, 2, P); p.rect(56, 4, 2, 2, P)
   else
-    p.poly({8,24, 5,26, 4,33, 7,33, 8,30}, M); p.ellipse(5, 35, 2.2, 2.2, M)  -- left arm hangs
+    p.line(36, 5, 30, 1, K); p.line(44, 5, 47, 3, K); p.line(47, 3, 53, 1, K)
+    p.rect(29, 0, 2, 2, P); p.rect(53, 0, 2, 2, P)
+  end
+
+  -- needs only: a hand pops UP from the bottom edge (row 47) beside the head and waves
+  if s.arm then
+    local a = C.arm
     if s.arm == 1 then
-      p.poly({71,29, 74,22, 76,23, 73,30}, M); p.ellipse(75, 18, 2.2, 2.6, M)
-    elseif s.arm == 2 then
-      p.poly({71,29, 73,21, 75,21, 73,30}, M); p.ellipse(74, 17, 2.2, 2.6, M)
+      a.poly({62,48, 63,27, 69,26, 69,48}, V); a.rect(63, 24, 6, 2, M)
+      a.ellipse(66, 19, 3.2, 3.6, M); a.ellipse(62, 21, 1.3, 1.6, M)
     else
-      p.poly({71,24, 74,26, 75,33, 72,33, 71,30}, M); p.ellipse(74, 35, 2.2, 2.2, M)
+      a.poly({63,48, 61,28, 67,26, 70,48}, V); a.rect(61, 24, 6, 2, M)
+      a.ellipse(65, 18, 3.2, 3.6, M); a.ellipse(61, 20, 1.3, 1.6, M)
     end
+    a.outline(K)
+    local hx = s.arm == 1 and 66 or 65
+    a.vline(hx - 1, 15 + (s.arm == 1 and 1 or 0), 2, K); a.vline(hx + 1, 15 + (s.arm == 1 and 1 or 0), 2, K)
+    a.hline(63, 46, 6, K)                                                      -- sleeve meets the frame edge
   end
-  p.outline(K)
-  if s.droop then                                                              -- scared: ears sag
-    p.line(34, 9, 25, 4, K); p.line(44, 9, 53, 6, K); p.line(53, 6, 61, 7, K)
-    p.rect(24, 3, 2, 2, P); p.rect(61, 6, 2, 2, P)
-  else
-    p.line(34, 9, 22, 2, K); p.line(44, 9, 51, 5, K); p.line(51, 5, 60, 3, K)
-    p.rect(21, 1, 2, 2, P); p.rect(60, 2, 2, 2, P)
-  end
-  p.vline(20, 41, 2, K); p.vline(57, 41, 2, K)
 
   local fx = C.fx
-  if s.arm == 1 then fx.line(78, 15, 77, 13, K); fx.line(78, 20, 78, 19, K)    -- wave ticks
-  elseif s.arm == 2 then fx.line(71, 14, 70, 12, K); fx.line(78, 13, 77, 11, K) end
+  if s.arm == 1 then fx.line(72, 15, 71, 13, K); fx.line(72, 20, 72, 19, K)    -- wave ticks
+  elseif s.arm == 2 then fx.line(70, 12, 69, 10, K); fx.line(73, 15, 72, 13, K) end
   if s.yo then
-    if s.flash then L.twinkle(fx, 10, 6, A, M, 2); L.twinkle(fx, 3, 40, P, nil, 1)
-    else L.twinkle(fx, 10, 4, A, M, 2); L.twinkle(fx, 68, 6, A, nil, 1) end
+    if s.flash then L.twinkle(fx, 15, 8, A, M, 2); L.twinkle(fx, 11, 28, P, nil, 1)
+    else L.twinkle(fx, 15, 6, A, M, 2); L.twinkle(fx, 63, 5, A, nil, 1) end
   elseif s.scared then                                                         -- shake ticks off the case
     local o = s.jit or 0
-    fx.vline(2, 27 + o, 3, K); fx.vline(3, 34 - o, 2, K); fx.vline(77, 28 - o, 3, K); fx.vline(76, 34 + o, 2, K)
+    fx.vline(16, 18 + o, 3, K); fx.vline(17, 25 - o, 2, K); fx.vline(63, 19 - o, 3, K); fx.vline(64, 26 + o, 2, K)
   else
-    L.twinkle(fx, 70, 4, M, nil, 1); fx.px(12, 5, V); fx.px(3, 42, V)
+    L.twinkle(fx, 64, 5, M, nil, 1); fx.px(15, 7, V); fx.px(11, 29, V)
   end
 end
 
 local RIFF_FRAMES = {
-  { eyes = "down", band = {27, 7}, lip = "smirk" },                                         -- lookDown x0
-  { eyes = "look", band = {27, 7}, lip = "smirk" },                                         -- idle     x80
-  { eyes = "shut", band = {27, 7}, lip = "smirk" },                                         -- blink    x160
-  { eyes = "look", band = {26, 8}, text = "RIFF +6.90 SQD", tongue = true },                -- talk     x240
-  { eyes = "look", band = {25, 9}, text = "RIFF +6.90 SQD", scroll = 6, tongue = true, px = 1 }, -- talk x320
-  { eyes = "look", band = {27, 7}, text = "RIFF +6.90 SQD", scroll = 12, lip = "smirk" },  -- talk     x400
-  { eyes = "yo", wide = true, brow = "up", band = {25, 9}, text = "YO!! YO!!", textC = P,
+  { eyes = "down", band = {21, 7}, lip = "smirk" },                                         -- lookDown x0
+  { eyes = "look", band = {21, 7}, lip = "smirk" },                                         -- idle     x80
+  { eyes = "shut", band = {21, 7}, lip = "smirk" },                                         -- blink    x160
+  { eyes = "look", band = {20, 8}, text = "RIFF +6.90 SQD", tongue = true },                -- talk     x240
+  { eyes = "look", band = {19, 9}, text = "RIFF +6.90 SQD", scroll = 12, tongue = true, px = 1 }, -- talk x320
+  { eyes = "look", band = {21, 7}, text = "RIFF +6.90 SQD", scroll = 24, lip = "smirk" },  -- talk     x400
+  { eyes = "yo", wide = true, band = {20, 8}, text = "YO!!", textC = P,
     scroll = -3, tongue = true, tongueC = CO, arm = 1, yo = true },                         -- needs    x480
-  { eyes = "yo", wide = true, brow = "up", band = {25, 9}, text = "YO!! YO!!", textC = K,
+  { eyes = "yo", wide = true, band = {20, 8}, text = "YO!!", textC = K,
     scroll = -3, tongue = true, tongueC = CO, arm = 2, yo = true, flash = true, px = 1 },   -- needs    x560
-  { eyes = "scared", wide = true, brow = "worry", band = {27, 6}, text = "-9.99 OOF", textC = P,
-    lip = "wobble", droop = true, scared = true, jit = 0, shake = -1, scroll = -3 },        -- scared   x640
-  { eyes = "scared", wide = true, brow = "worry", band = {27, 6}, text = "-9.99 OOF", textC = P,
-    lip = "wobble", droop = true, scared = true, jit = 1, shake = 1, scroll = -2 },         -- scared   x720
+  { eyes = "scared", wide = true, band = {21, 6}, text = "-9.99", textC = P,
+    lip = "wobble", droop = true, scared = true, jit = 0, shake = -1 },                     -- scared   x640
+  { eyes = "scared", wide = true, band = {21, 6}, text = "-9.99", textC = P,
+    lip = "wobble", droop = true, scared = true, jit = 1, shake = 1, scroll = -1 },         -- scared   x720
 }
 
--- ---------- Overlord (80x48: wide violet console, big brain-jar dome, side gauges) ----------
-local OVER = { "back", "brain", "jar", "body", "screen", "gauge", "face", "mouth", "prop", "fx" }
-local OEYE_N = {{40, 30, 9.1, 4.6}}
-local OEYE_W = {{40, 30, 9.6, 5.1}}
+-- ---------- Overlord (80x48: the sky-CRT screen IS the jar, owner H1c-v3) ----------
+-- No cabinet, no dome, no drawn glass: the sky-CRT bezel is the jar rim. Murky SKY jar water with
+-- rising bubbles, holding a round floating brain, 2 lopsided googly eyeballs dangling on optic-nerve tails
+-- and a separate floating set of chunky teeth (one gold tooth). Natural H0 proportions, centred,
+-- clean water left and right (no stretch to fill). Every organ is its own layer with its own 1px
+-- INK outline and bobs on its own cel offset, so the parts drift out of sync.
+local OVER = { "back", "bubbles", "eyeL", "eyeR", "brain", "teeth", "fx" }
+local OEYES = {
+  eyeL = { x = 17, y = 13, r = 6.6, hook = 1, pup = 3,
+           veins = {{-6,-2,-4,-1}, {-5,3,-3,2}, {5,-3,3,-2}} },
+  eyeR = { x = 63, y = 11, r = 5.1, hook = -1, pup = 2,
+           veins = {{-5,-1,-3,0}, {4,-2,2,-1}, {3,3,2,2}} },
+}
+-- rising bubbles {x, y, size}; y climbs 2px per frame step (s.t)
+local BUBS = { {26,44,3}, {56,41,2}, {7,30,1}, {72,25,1}, {54,46,1}, {34,47,2}, {70,44,3}, {9,45,2}, {50,28,1} }
 
-local function over(C, s)
-  C.back.rect(0, 0, CW, CH, Y)
-  local br = C.brain
-  br.ellipse(40, 12, 14.6, 6.1, P, {0,1,0,0,-1,0}, {0,0,1,0,0,1})
-  br.outline(K)
-  local fold = s.glow and A or CO
-  br.line(29, 10, 33, 8, fold); br.line(33, 8, 36, 11, fold); br.line(39, 7, 40, 12, fold)
-  br.line(44, 9, 49, 8, fold); br.line(45, 13, 50, 12, fold); br.line(30, 14, 36, 14, fold)
-  br.line(51, 10, 53, 9, fold); br.line(27, 12, 29, 12, fold)
-  br.vline(40, 13, 4, K)
-  br.px(31, 7, M); br.px(30, 8, M)                                             -- shine
-  local j = C.jar
-  j.ellipse(40, 12, 23, 11, M); j.rect(16, 12, 49, 7, M)
-  j.outline(K)
-  for y=0,20 do for x=0,CW-1 do if j.get(x, y) == M then j.px(x, y, 0) end end end
-  j.vline(20, 6, 9, M); j.vline(21, 4, 2, M); j.px(58, 5, M); j.px(59, 6, M)
-  local b = C.body
-  b.poly({5,22, 40,21, 74,22, 75,34, 74,43, 40,44, 5,43, 4,33}, V)
-  b.rect(13, 18, 54, 3, A)
-  b.outline(K)
-  for _, x in ipairs({16, 40, 63}) do b.px(x, 19, K) end
-  b.hline(6, 21, 68, K)
-  b.px(72, 24, M); b.px(73, 25, M)                                             -- shine on the cabinet
-  local sc = C.screen
-  sc.rect(16, 24, 48, 18, K); sc.rect(17, 25, 46, 16, G)
-  for y=26,40,3 do sc.hline(18, y, 44, T) end
-  for i, k in ipairs({{69, 28}, {69, 35}}) do
-    sc.ellipse(k[1], k[2], 2.2, 2.2, (s.flash and i == 2) and P or A)
-  end
-  sc.px(69, 26, K); sc.px(69, 33, K)
-  for y=39,41,2 do sc.hline(66, y, 6, K) end
-  -- left side gauges: a dial with a swinging needle and a bar meter
-  local g = C.gauge
-  g.ellipse(10, 29, 3.6, 3.1, M)
-  g.rect(7, 36, 7, 4, K)
-  g.outline(K)
-  g.px(8, 28, P); g.px(12, 27, P)
-  local nd = s.needle or {11, 27}
-  g.line(10, 30, nd[1], nd[2], K)
-  g.rect(8, 37, s.meter or 2, 2, (s.meter or 0) >= 5 and P or A)
-
-  local f = C.face
-  local E = s.wide and OEYE_W or OEYE_N
-  eyes(f, E)
-  local ix, iy = s.iris[1], s.iris[2]
-  if s.lid then lids(f, E, G, s.lid) end
-  if s.lid and s.lid >= 0.8 then f.line(32, 30, 40, 32, K); f.line(40, 32, 48, 30, K) end      -- shut lid curve
-  if s.lid == nil or s.lid < 0.8 then
-    if s.wide then f.ellipse(ix, iy, 3.1, 2.6, P) else f.ellipse(ix, iy, 2.6, 1.6, P) end
-    pupil(f, ix - 1, iy - (s.wide and 1 or 0), 2, 2)                          -- iris sits below the lid cut
-  end
-  if s.brow == "smug" then f.line(29, 24 + (s.browDy or 0), 51, 26 + (s.browDy or 0), K)
-  elseif s.brow == "up" then f.line(29, 23, 37, 25, K); f.line(43, 25, 51, 22, K) end
-
-  local m = C.mouth
-  if s.mouth == "grin" then                                                    -- closed toothy grin
-    f.hline(26, 37, 28, K); f.hline(27, 39, 26, K)
-    for x=27,52 do f.px(x, 38, (x % 3) ~= 0 and M or K) end
-    f.px(25, 36, K); f.px(54, 36, K)
-  else                                                                         -- open: {y, h}
-    local my, mh = s.mouth[1], s.mouth[2]
-    m.rect(26, my, 28, mh, P); m.outline(K)
-    for x=27,52 do if (x % 3) ~= 1 then m.px(x, my, M) end end
-    if mh >= 4 then m.hline(33, my + mh - 1, 14, CO) end
-  end
-
-  local p = C.prop
-  p.rect(15, 45, 8, 2, A); p.rect(57, 45, 8, 2, A)
-  p.outline(K)
-  local fx = C.fx
-  if s.zap then bang(C.fx, 66, s.zap - 1) end                                 -- bang first: zaps stay unoutlined
-  if s.zap == 1 then
-    fx.line(4, 4, 7, 7, A); fx.line(7, 7, 4, 10, A); fx.line(4, 10, 7, 13, A)
-    fx.line(78, 12, 75, 15, A); fx.line(75, 15, 78, 18, A)
-  elseif s.zap == 2 then
-    fx.line(7, 2, 4, 5, A); fx.line(4, 5, 7, 8, A); fx.line(7, 8, 4, 11, A)
-    fx.line(75, 10, 78, 13, A); fx.line(78, 13, 75, 16, A); fx.line(75, 16, 78, 19, A)
-  else
-    L.twinkle(fx, 70, 6, M, nil, 1); fx.px(6, 9, V); fx.px(75, 16, V)
+local function nerve(C, pts)                       -- 2px-thick CORAL optic nerve along a polyline
+  for i = 1, #pts - 3, 2 do
+    C.line(pts[i], pts[i+1], pts[i+2], pts[i+3], CO); C.line(pts[i]+1, pts[i+1], pts[i+2]+1, pts[i+3], CO)
   end
 end
 
+local function eyeball(C, e, s, look)
+  local cx, cy = e.x, e.y
+  local r = e.r + (s.wide and 1 or 0)
+  local h, sw = e.hook, (s.swing or 0) * e.hook
+  local by = math.floor(cy + r)
+  nerve(C, {cx, by - 1, cx - h + sw, by + 5, cx + sw, by + 10, cx - h, by + 15, cx, by + 18,
+            cx + 2*h, by + 18, cx + 3*h, by + 16})
+  C.ellipse(cx, cy, r, r, M)
+  for _, v in ipairs(e.veins) do C.line(cx + v[1], cy + v[2], cx + v[3], cy + v[4], P) end
+  if s.shut then                                   -- blink: PINK lid shut, INK slit + 3 lashes
+    for y = math.ceil(cy - r), by do for x = math.floor(cx - r), math.ceil(cx + r) do
+      if C.get(x, y) == M or C.get(x, y) == P then C.px(x, y, P) end
+    end end
+    local w = math.floor(r) - 2
+    C.line(cx - w, cy, cx, cy + 2, K); C.line(cx, cy + 2, cx + w, cy, K)
+    C.px(cx - w + 1, cy + 2, K); C.px(cx, cy + 4, K); C.px(cx + w - 1, cy + 2, K)
+  else
+    local ix, iy = cx + look[1], cy + look[2]
+    local ir = s.wide and r * 0.32 or r * 0.46
+    C.ellipse(ix, iy, ir, ir, T)
+    local p = s.wide and 2 or e.pup
+    C.rect(ix - p // 2, iy - p // 2, p, p, K); C.px(ix - p // 2, iy - p // 2, M)
+    if s.lid then                                  -- lookDown: heavy PINK upper lid
+      local cut = math.floor(cy - r + 2 * r * s.lid + 0.5)
+      for y = math.ceil(cy - r), cut do for x = math.floor(cx - r), math.ceil(cx + r) do
+        local c = C.get(x, y)
+        if c ~= 0 and c ~= CO then C.px(x, y, y == cut and K or P) end
+      end end
+    end
+  end
+  C.outline(K)
+end
+
+local function brain(C, s)
+  local g = s.pulse and 1 or 0
+  C.ellipse(40, 14, 12.6 + g, 10.1 + g, P, {0,0,0,-1,-1,0,0,0,1,1,0,0}, {0,0,1,1,0,0,0,-1,-1,0,0,0})
+  C.hline(39, 4 - g, 3, 0)                         -- dip between the two halves
+  C.rect(41, 24 + g, 3, 2 - g, CO)                   -- stub of a brain stem (2-3px water gap to the teeth)
+  C.outline(K)
+  local f = s.glow and A or CO                     -- wobbly gyri, left half then right half
+  C.line(30, 11, 32, 8, f); C.line(32, 8, 35, 10, f); C.line(35, 10, 37, 8, f)
+  C.line(30, 16, 33, 14, f); C.line(33, 14, 35, 17, f); C.line(35, 17, 38, 15, f)
+  C.line(31, 21, 36, 21, f)
+  C.line(43, 8, 45, 7, f); C.line(45, 7, 48, 9, f); C.line(48, 9, 50, 8, f)
+  C.line(43, 13, 46, 12, f); C.line(46, 12, 48, 15, f); C.line(48, 15, 51, 13, f)
+  C.line(44, 20, 49, 19, f)
+  C.vline(40, 5 - g, 5 + g, K); C.vline(39, 10, 5, K); C.vline(40, 15, 6, K)       -- crooked fissure
+  C.px(31, 6, M); C.px(32, 5, M); C.px(33, 5, M); C.px(30, 7, M)                  -- shine
+end
+
+local function teeth(C, s)
+  local gap = s.gap or 0                           -- 0 = closed on one 1px INK bite line (row 35)
+  C.rect(32, 30, 17, 1, P); C.rect(30, 31, 21, 1, P)                              -- upper gum, rounded
+  C.rect(31, 32, 19, 3, M); C.rect(43, 32, 3, 3, A)                               -- upper teeth + gold tooth
+  if gap > 0 then C.rect(35, 35, 3, 1, M) end                                     -- fang shows when open
+  local lt = 36 + gap
+  C.rect(32, lt, 19, 3, M)                                                        -- lower teeth
+  C.rect(31, lt + 3, 21, 1, P); C.rect(33, lt + 4, 17, 1, P)                      -- lower gum, rounded
+  C.outline(K)
+  for i = 0, 3 do C.vline(34 + i*4, 32, 2, K); C.vline(35 + i*4, lt + 1, 2, K) end  -- short tooth gaps
+end
+
+local function over(C, s)
+  C.back.rect(0, 0, CW, CH, Y)
+  local bu = C.bubbles
+  local bubs = {}
+  for _, b in ipairs(BUBS) do bubs[#bubs + 1] = b end
+  if s.chomp then bubs[#bubs + 1] = {54, 35, 2}; bubs[#bubs + 1] = {27, 34, 1}; bubs[#bubs + 1] = {56, 31, 1} end
+  for _, b in ipairs(bubs) do
+    local x, y = b[1], (b[2] - 2 * (s.t or 0) - 3) % 46 + 2
+    if b[3] == 1 then bu.px(x, y, LN)
+    elseif b[3] == 2 then bu.px(x, y-1, LN); bu.px(x-1, y, LN); bu.px(x+1, y, LN); bu.px(x, y+1, LN)
+    else
+      bu.hline(x, y-1, 2, LN); bu.hline(x, y+2, 2, LN); bu.vline(x-1, y, 2, LN); bu.vline(x+2, y, 2, LN)
+      bu.px(x+1, y, M)
+    end
+  end
+  eyeball(C.eyeL, OEYES.eyeL, s, s.lookL)
+  eyeball(C.eyeR, OEYES.eyeR, s, s.lookR)
+  brain(C.brain, s)
+  teeth(C.teeth, s)
+  local fx = C.fx
+  if s.zap then bang(fx, 70, 28 + (s.zap == 2 and -1 or 0)) end
+  if s.zap == 1 then
+    fx.line(27, 0, 29, 2, A); fx.line(29, 2, 27, 4, A); fx.line(27, 4, 29, 6, A)
+    fx.line(54, 1, 52, 3, A); fx.line(52, 3, 54, 5, A)
+  elseif s.zap == 2 then
+    fx.line(29, 0, 27, 2, A); fx.line(27, 2, 29, 4, A); fx.line(29, 4, 27, 6, A)
+    fx.line(52, 0, 54, 2, A); fx.line(54, 2, 52, 4, A); fx.line(52, 4, 54, 6, A)
+  end
+end
+
+-- off = cel y offsets per organ (out-of-sync bob); t = bubble rise step
 local OVER_FRAMES = {
-  { lid = 0.5, iris = {39, 33}, brow = "smug", browDy = 1, mouth = "grin", meter = 2 },      -- lookDown x0
-  { lid = 0.5, iris = {37, 33}, brow = "smug", browDy = 1, mouth = "grin", bob = -1, meter = 2 }, -- lookDown x80
-  { lid = 0.5, iris = {39, 32}, brow = "smug", mouth = "grin", meter = 3 },                  -- idle     x160
-  { lid = 0.5, iris = {43, 32}, brow = "smug", mouth = "grin", bob = -1, meter = 3, needle = {12, 28} }, -- idle x240
-  { lid = 1.0, iris = {39, 32}, brow = "smug", mouth = "grin", meter = 3 },                 -- blink    x320
-  { lid = 0.35, iris = {40, 31}, brow = "smug", mouth = {36, 3}, meter = 4 },                -- talk     x400
-  { lid = 0.35, iris = {40, 31}, brow = "smug", mouth = {36, 5}, bob = -1, meter = 5, needle = {12, 28} }, -- talk x480
-  { lid = 0.35, iris = {40, 31}, brow = "smug", mouth = {37, 2}, meter = 4 },                -- talk     x560
-  { wide = true, iris = {40, 30}, brow = "up", mouth = {36, 5}, zap = 1, glow = true,
-    meter = 5, needle = {13, 29} },                                                          -- needs    x640
-  { wide = true, iris = {42, 29}, brow = "up", mouth = {35, 6}, zap = 2, glow = true,
-    flash = true, bob = -1, meter = 5, needle = {13, 30} },                                  -- needs    x720
+  { lid = 0.42, lookL = {1, 3}, lookR = {-1, 2}, t = 0, off = {brain = 1, eyeL = 2, eyeR = 2, teeth = 1} },            -- lookDown x0
+  { lid = 0.42, lookL = {0, 3}, lookR = {0, 2}, t = 1, swing = 1, off = {brain = 1, eyeL = 3, eyeR = 2, teeth = 1} },  -- lookDown x80
+  { lookL = {2, 0}, lookR = {-2, -1}, t = 0, off = {brain = 0, eyeL = 0, eyeR = 1, teeth = 0} },                         -- idle x160
+  { lookL = {2, 1}, lookR = {-1, -1}, t = 1, swing = 1, off = {brain = -1, eyeL = 1, eyeR = 0, teeth = -1} },            -- idle x240
+  { shut = true, t = 0, off = {brain = 0, eyeL = 0, eyeR = 1, teeth = 0} },                                              -- blink x320
+  { lookL = {2, 0}, lookR = {-2, 0}, gap = 4, chomp = true, t = 0, off = {brain = 0, eyeL = 0, eyeR = 1, teeth = 0} },  -- talk x400
+  { lookL = {2, 0}, lookR = {-2, 0}, gap = 0, chomp = true, t = 1, swing = 1, off = {brain = -1, eyeL = 1, eyeR = 0, teeth = 0} }, -- talk x480
+  { lookL = {2, 1}, lookR = {-1, 0}, gap = 2, chomp = true, t = 2, off = {brain = 0, eyeL = 0, eyeR = 1, teeth = 0} },   -- talk x560
+  { wide = true, lookL = {0, 0}, lookR = {0, 0}, gap = 3, zap = 1, glow = true, t = 0,
+    off = {brain = 0, eyeL = -1, eyeR = 0, teeth = 0} },                                                                 -- needs x640
+  { wide = true, lookL = {1, 0}, lookR = {-1, 0}, gap = 4, zap = 2, glow = true, pulse = true, swing = 1, t = 1,
+    off = {brain = 0, eyeL = 0, eyeR = -1, teeth = 0} },                                                                -- needs x720
 }
 
 -- ---------- build + export ----------
@@ -311,5 +351,5 @@ build("riffbot", RIFF, riff, RIFF_FRAMES, function(spr, lay, i, s)
   end
 end)
 build("overlord", OVER, over, OVER_FRAMES, function(spr, lay, i, s)
-  if s.bob then local cel = lay.brain:cel(spr.frames[i]); cel.position = Point(0, s.bob) end
+  for n, dy in pairs(s.off or {}) do local cel = lay[n]:cel(spr.frames[i]); cel.position = Point(0, dy) end
 end)

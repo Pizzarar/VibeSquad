@@ -1,10 +1,10 @@
 -- Overlord "takeover glitch" overlay (owner: tapping the Overlord makes him assimilate RiffBot
--- like a virus while Riff looks terrified). Drawn over RiffBot's 80x48 widescreen TV cell (H1c-v2, G8 50/50 TVs). A jagged glitch
+-- like a virus while Riff looks terrified). Drawn over RiffBot's 80x48 widescreen TV cell (H1c-v3, G8 50/50 TVs). A jagged glitch
 -- front eats in from the right edge (the Overlord's side): rows step in hand-placed runs of
 -- 1/2/3/5px, 1px scanline spikes shoot ahead into Riff's screen, 2-3px corruption bars
 -- (ink/pink/coral/mint) hop in front, and the front itself burns pink/coral with an ink edge.
--- Behind the front the Overlord's real face (its needs[0] cell: H1c brain-jar TV, one big eye,
--- toothy grin, zaps) is revealed, with thin CRT interference streaks and 1-2px
+-- Behind the front the Overlord's real face (its needs[0] cell, H1c-v3 jar: murky water, floating
+-- brain, 2 dangling googly eyeballs, floating teeth, zaps, "!" badge) spreads over Riff's TV, with thin CRT interference streaks and 1-2px
 -- scanline jitter bands; the last frame is the complete Overlord face with a few static streaks.
 -- H0 hand: every run, spike, bar and streak is hand-placed; flat P0 fills, no gradients.
 -- Transparent (index 0) where uncovered.
