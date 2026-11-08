@@ -91,6 +91,9 @@ export function toAgent(rec) {
     // Closed-but-resumable (lost, saved session, no exit): the roster/who/send treat it as live. Exposed by the runner's
     // status record from the same predicate as the resume endpoint's 409 (Runner._resumable).
     resumable: rec.resumable === true,
+    // Raw runner status 'lost' (restarted, child gone) is flattened to 'closed' above; keep the flag so vs who can
+    // print "lost" instead of "closed" for a still-resumable agent.
+    lost: rec.status === "lost",
     labels,
     ...(labels["vs.parent"] ? { parentAgentId: labels["vs.parent"] } : {}),
     modeId: meta.permissionMode ?? meta.acpMode ?? (rec.provider === "claude" ? "auto" : null),

@@ -629,6 +629,7 @@ function listAgentsViaRunner() {
     usage: null,
     lastUsage: a.lastUsage ?? null,
     resumable: a.resumable === true,
+    lost: a.lost === true,
     createdAt: a.createdAt ?? null,
     updatedAt: a.updatedAt ?? null,
   }));
@@ -995,7 +996,7 @@ async function commandWho(flags) {
     const hit = whoCandidate(a, { teams: TEAM_DEFS, wantTeamId, wantLane, squadWide, removedLanes });
     if (!hit) continue;
     const { teamId, lane, role } = hit;
-    const status = String(a.status ?? "unknown").trim();
+    const status = a.lost ? "lost" : String(a.status ?? "unknown").trim();
     const title = String(a.title ?? a.name ?? "").trim();
 
     if (target === "lead" && role !== "lead") continue;
