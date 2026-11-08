@@ -88,6 +88,9 @@ export function toAgent(rec) {
     cwd: rec.cwd,
     title: meta.title || rec.id,
     status: STATUS[rec.status] ?? "idle",
+    // Closed-but-resumable (lost, saved session, no exit): the roster/who/send treat it as live. Exposed by the runner's
+    // status record from the same predicate as the resume endpoint's 409 (Runner._resumable).
+    resumable: rec.resumable === true,
     labels,
     ...(labels["vs.parent"] ? { parentAgentId: labels["vs.parent"] } : {}),
     modeId: meta.permissionMode ?? meta.acpMode ?? (rec.provider === "claude" ? "auto" : null),
@@ -150,6 +153,7 @@ export function readRunnerAgentSync(id, { env = process.env, home, liveness } = 
   const perms = new Map();
   const meta = {};
   let offered = null;
+  let sessionId = null;
   for (const line of text.split("\n")) {
     if (!line) continue;
     let e;
@@ -160,7 +164,10 @@ export function readRunnerAgentSync(id, { env = process.env, home, liveness } = 
     if (isTurnProgressEvent(e)) lastProgress = e;
     if (e.type === "created") { created = e; Object.assign(meta, e.meta); }
     else if (e.type === "meta") Object.assign(meta, e.patch, e.patch?.labels ? { labels: { ...meta.labels, ...e.patch.labels } } : {});
-    else if (e.type === "session" && Array.isArray(e.modes)) offered = { modes: e.modes, models: e.models ?? [] };
+    else if (e.type === "session") {
+      if (e.sessionId) sessionId = e.sessionId;
+      if (Array.isArray(e.modes)) offered = { modes: e.modes, models: e.models ?? [] };
+    }
     else if (e.type === "status") status = e.status;
     else if (e.type === "exit") exited = true;
     else if (e.type === "archive") archivedAt = e.ts;
@@ -175,11 +182,19 @@ export function readRunnerAgentSync(id, { env = process.env, home, liveness } = 
     const rl = liveness === undefined ? runnerLiveness(home ?? runnerHome(env)) : liveness;
     if (rl && (!rl.alive || (lastLive?.ts ?? 0) < rl.startedAt)) status = "lost";
   }
+  // A lost (restarted) agent is resumable in place only when it has a saved session and never exited/archived:
+  // the same predicate the runner's resume endpoint (409) applies (_lostSpec/_parkedSpec). Every adapter canPark today.
+  const resumable =
+    status === "lost" &&
+    !archivedAt &&
+    typeof sessionId === "string" &&
+    sessionId !== "" &&
+    !sessionId.startsWith("-");
   return toAgent({
     id, provider: created.provider, model: meta.model ?? created.model, cwd: created.cwd, meta, ...(offered ? { offered } : {}),
     status: exited ? "exited" : status, createdAt: created.ts, updatedAt: last?.ts, archivedAt,
     lastPromptAt: lastPrompt?.ts ?? null, lastProgressAt: lastProgress?.ts ?? null,
-    usage, pendingPermissions: [...perms.values()],
+    usage, pendingPermissions: [...perms.values()], resumable,
   });
 }
 

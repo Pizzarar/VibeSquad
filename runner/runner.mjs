@@ -432,6 +432,16 @@ export class Runner {
     return { provider: c.provider, model: effModel(c, meta), cwd: c.cwd, meta, systemPrompt: parked.systemPrompt ?? undefined, resume: parked.sessionId };
   }
 
+  // Whether a closed agent can come back in place (same id + session). Mirrors the resume endpoint's 409 condition
+  // (_lostSpec/_parkedSpec): a saved session event, no exit, no archive, and an adapter that can resume. Exposed on the
+  // status record so the server can tell "closed (resumable, live)" from "closed (retired, replace it)".
+  _resumable(f) {
+    if (!f || f.exit || f.archivedAt) return false;
+    const sid = f.sessionId;
+    if (!sid || typeof sid !== 'string' || sid.startsWith('-')) return false;
+    return !!this.adapters[f.created?.provider]?.canPark;
+  }
+
   // Resume spec for a lost agent (runner restarted while it was idle/running): the log's last session id, if no exit/archive.
   _lostSpec(id) {
     if (!this.store.exists(id) || this.live.has(id)) return null;
@@ -719,7 +729,7 @@ export class Runner {
     if (f.exit) status = 'exited';
     else if (!this.live.has(id) && status !== 'parked' && !this.queue.some((j) => j.id === id)) status = 'lost'; // log says running but no child in this process
     const { queued, ...rec } = f.rec;
-    return { ...rec, ...(status === 'queued' && queued ? { queued } : {}), status, pendingPermissions: [...f.perms.values()] };
+    return { ...rec, ...(status === 'queued' && queued ? { queued } : {}), status, resumable: this._resumable(f), pendingPermissions: [...f.perms.values()] };
   }
 
   // Every agent's status in one call (roster seed): one pass over the logs, then served from the fold cache.
@@ -749,7 +759,10 @@ export class Runner {
       else if (e.type === 'usage') st.usage = { contextTokens: e.contextTokens, contextMax: e.contextMax, inputTokens: e.inputTokens, outputTokens: e.outputTokens, costUsd: e.costUsd };
       else if (e.type === 'permission') { if (e.phase === 'request') st.perms.set(e.id, { id: e.id, toolName: e.toolName }); else st.perms.delete(e.id); }
       else if (e.type === 'meta') Object.assign(st.meta, e.patch, e.patch?.labels ? { labels: { ...st.meta.labels, ...e.patch.labels } } : {});
-      else if (e.type === 'session' && Array.isArray(e.modes)) st.offered = { modes: e.modes, models: Array.isArray(e.models) ? e.models : [] };
+      else if (e.type === 'session') {
+        if (e.sessionId) st.sessionId = e.sessionId;
+        if (Array.isArray(e.modes)) st.offered = { modes: e.modes, models: Array.isArray(e.models) ? e.models : [] };
+      }
       else if (e.type === 'archive') st.archivedAt = e.ts;
       else if (e.type === 'unarchive') st.archivedAt = null;
       else if (e.type === 'exit' && !st.exit) st.exit = e;
