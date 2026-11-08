@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import { sandboxPosture, missingLine, MAX_VALUE } from "../src/paseoSandboxLogic.ts";
 
 const by = (p, k) => p.rows.find((r) => r.key === k);
@@ -52,4 +53,12 @@ test("long strings and arrays are capped, full value kept", () => {
   assert.equal(by(p, "sandbox").full, long);
   const q = sandboxPosture({ runtimeInfo: { extra: { writableRoots: Array.from({ length: 20 }, (_, i) => `/r${i}`) } } });
   assert.match(by(q, "roots").value, /\(\+12 more\)$/);
+});
+
+test("SandboxView Esc marks the event handled so outer Esc handlers skip it", () => {
+  const src = readFileSync(new URL("../src/SandboxView.tsx", import.meta.url), "utf8");
+  const m = src.match(/const onKey = \(e: KeyboardEvent\) => \{([\s\S]*?)\n    \};/);
+  assert.ok(m, "onKey handler found");
+  assert.match(m[1], /"Escape"/);
+  assert.ok(m[1].indexOf("e.preventDefault()") < m[1].indexOf("setOpen(false)"));
 });

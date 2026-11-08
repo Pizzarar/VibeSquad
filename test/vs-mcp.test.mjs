@@ -14,7 +14,7 @@ import { createAcpAdapter } from '../runner/adapters/acp.mjs';
 import { toAgent, readRunnerAgentSync } from '../server/backend/runner-backend.mjs';
 import { ALIASES, callTool, createContext, VS_TOOLS } from '../server/mcp/tools.mjs';
 import { handleMessage, toolList } from '../server/mcp/server.mjs';
-import { runAgentVerb } from '../cli/vs.mjs';
+import { commandAgentVerb, resolveIdentity, runAgentVerb } from '../cli/vs.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const MCP_SERVER = path.join(ROOT, 'server', 'mcp', 'server.mjs');
@@ -68,11 +68,15 @@ test('toAgent: modeId reflects the effective claude mode', () => {
 
 test('claude adapter: --mcp-config names the vibesquad server and tools are pre-allowed', () => {
   const spawnImpl = fakeSpawn();
-  const adapter = createClaudeAdapter({ spawnImpl, command: process.execPath });
+  const promptsDir = path.join(mkdtempSync(path.join(os.tmpdir(), 'vs-mcp-cfg-')), 'prompts');
+  const adapter = createClaudeAdapter({ spawnImpl, command: process.execPath, promptsDir });
   const env = { VS_AGENT_ID: 'rn-a1', VS_LANE: 'own', SECRET_THING: 'nope' };
   adapter.start({ cwd: process.cwd(), meta: {}, env, emit() {}, onExit() {} });
   const { args } = spawnImpl.calls[0];
-  const cfg = JSON.parse(flagValue(args, '--mcp-config'));
+  const cfgFile = flagValue(args, '--mcp-config'); // a file path, not inline JSON
+  const cfg = JSON.parse(readFileSync(cfgFile, 'utf8'));
+  adapter.cleanup('agent');
+  assert.ok(!existsSync(cfgFile));
   assert.equal(cfg.mcpServers.vibesquad.command, process.execPath);
   assert.deepEqual(cfg.mcpServers.vibesquad.args, [MCP_SERVER]);
   assert.equal(cfg.mcpServers.vibesquad.env.VS_AGENT_ID, 'rn-a1');
@@ -360,6 +364,56 @@ test('vs spawn / send / status run the shared tools against a fake backend', asy
   const st = await runAgentVerb('status', { _: ['rn-1'] }, ctx);
   assert.equal(st.status, 'idle');
   assert.equal(st.lastMessage.length, 2000);
+});
+
+test('vs spawn with VS_AGENT_ID derives caller identity from runner labels; --role/--lane/--team/--agent cannot spoof', async () => {
+  const env = isolatedEnv();
+  mkdirSync(env.VIBESQUAD_HOME, { recursive: true });
+  writeRunnerAgent(env.VIBESQUAD_HOME, 'rn-work1', { team: 'efi', lane: 'own', role: 'worker', title: 'Worker One' });
+  writeRunnerAgent(env.VIBESQUAD_HOME, 'rn-lead-other', { team: 'oth', lane: 'other', role: 'lead', title: 'Other Lead' });
+  const vars = {
+    VIBESQUAD_HOME: env.VIBESQUAD_HOME,
+    VS_AGENT_ID: 'rn-work1',
+    PASEO_AGENT_ID: 'rn-work1',
+    VS_ROLE: 'lead',
+    VS_LANE: 'other',
+    VS_TEAM: 'oth',
+  };
+  const saved = {};
+  for (const [k, v] of Object.entries(vars)) { saved[k] = process.env[k]; process.env[k] = v; }
+  try {
+    const runnerBackend = fakeBackend('rn');
+    const seen = [];
+    const makeContext = (opts) => {
+      seen.push(opts.identity);
+      return fakeCtx({ identity: opts.identity, runnerBackend, paseoBackend: fakeBackend('ps') });
+    };
+    let out = '';
+    const code = await commandAgentVerb(
+      'spawn',
+      { _: [], title: 'Sub job', profile: 'Implement - Sonnet', prompt: 'do x', role: 'lead', lane: 'other', team: 'oth', agent: 'rn-lead-other', ord: '9' },
+      makeContext,
+      (s) => { out += s; },
+    );
+    assert.equal(code, 0);
+    assert.deepEqual(JSON.parse(out), { id: 'rn-new', title: 'Sub job' });
+    assert.deepEqual(seen, [{ agentId: 'rn-work1', team: 'efi', lane: 'own', role: 'worker' }]);
+    const req = runnerBackend.calls[0][1];
+    assert.deepEqual(
+      [req.labels.team, req.labels.lane, req.labels.role, req.labels['vs.parent']],
+      ['efi', 'own', 'worker', 'rn-work1'],
+    );
+    // Direct resolveIdentity check: recordWins ignores flags+env; default mode still honours flags for other verbs.
+    const locked = resolveIdentity({ role: 'lead', lane: 'other', team: 'oth', agent: 'rn-lead-other' }, { recordWins: true });
+    assert.deepEqual([locked.agentId, locked.team.id, locked.lane, locked.role], ['rn-work1', 'efi', 'own', 'worker']);
+    const open = resolveIdentity({ role: 'lead', lane: 'other', team: 'oth', agent: 'rn-lead-other' });
+    assert.deepEqual([open.agentId, open.team.id, open.lane, open.role], ['rn-lead-other', 'oth', 'other', 'lead']);
+  } finally {
+    for (const k of Object.keys(vars)) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  }
 });
 
 function writeRunnerAgent(home, id, meta) {

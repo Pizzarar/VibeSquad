@@ -123,7 +123,7 @@ test("overlay is inert and aligned: pointer-events none, aria-hidden stage, face
   assert.ok(/\.sky-takeover \{[^}]*image-rendering: pixelated/.test(css));
   const sky = src("SkyZones.tsx");
   assert.ok(sky.includes('className="sky-face-stage" aria-hidden="true"'));
-  assert.ok(sky.includes("faceContain(sheet.cell, box)"));
-  assert.ok(sky.includes("onReclaim={reclaimRiff}")); // keyboard reclaim kept on the zone
-  assert.equal((sky.match(/<Zone /g) ?? []).length, 2); // still exactly two mounted zones
+  assert.ok(sky.includes("faceContain(sheet.cell, box, dpr)"));
+  assert.ok(sky.includes("aria-expanded={isOpen}")); // the face is a real button (keyboard open / close)
+  assert.equal((sky.match(/<Zone /g) ?? []).length, 4); // two TVs + two chat panels, all mounted
 });

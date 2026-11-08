@@ -17,10 +17,11 @@ export const effectivePermissionMode = (meta = {}) => meta.permissionMode || DEF
 // promptsDir: <runner home>/prompts (the Runner passes it); the tmpdir fallback only serves adapters built standalone.
 export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true, mcpPath = mcpServerPath(), promptsDir = path.join(os.tmpdir(), 'vibesquad-runner-prompts') } = {}) {
   const promptFile = (id) => path.join(promptsDir, `${String(id ?? 'agent').replace(/[^\w.-]/g, '_')}.md`);
+  const mcpFile = (id) => path.join(promptsDir, `${String(id ?? 'agent').replace(/[^\w.-]/g, '_')}.mcp.json`);
   return {
     name: 'claude',
     canPark: true, // the CLI keeps its transcript on disk, so a killed idle agent can be resumed with --resume <sessionId>
-    cleanup(id) { try { rmSync(promptFile(id), { force: true }); } catch { /* best effort */ } }, // on archive; start rewrites it
+    cleanup(id) { for (const f of [promptFile(id), mcpFile(id)]) { try { rmSync(f, { force: true }); } catch { /* best effort */ } } }, // on archive; start rewrites them
     start({ id, model, cwd, meta = {}, systemPrompt, env, emit, onExit, resume }) {
       const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'];
       if (resume) args.push('--resume', String(resume));
@@ -29,7 +30,11 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
       if (CLAUDE_EFFORTS.includes(meta.thinkingOptionId)) args.push('--effort', meta.thinkingOptionId);
       if (mcp) {
         const spec = mcpServerSpec({ env, path: mcpPath });
-        args.push('--mcp-config', JSON.stringify({ mcpServers: { [spec.name]: { command: spec.command, args: spec.args, env: spec.env } } }));
+        // Via a file too: server args/env grow without bound toward the same 32,767-char cap.
+        const file = mcpFile(id);
+        mkdirSync(path.dirname(file), { recursive: true });
+        writeFileSync(file, JSON.stringify({ mcpServers: { [spec.name]: { command: spec.command, args: spec.args, env: spec.env } } }), 'utf8');
+        args.push('--mcp-config', file);
         args.push('--allowedTools', `mcp__${spec.name}`);
       }
       // The prompt goes via a file, never argv: a long role prompt blows the Windows 32,767-char command-line cap (spawn ENAMETOOLONG).
@@ -40,7 +45,8 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
         writeFileSync(file, String(systemPrompt), 'utf8'); // UTF-8, no BOM
         args.push('--append-system-prompt-file', file);
       }
-      const child = spawnNoShell(command, args, { cwd, ...(env ? { env } : {}) }, spawnImpl);
+      let child;
+      try { child = spawnNoShell(command, args, { cwd, ...(env ? { env } : {}) }, spawnImpl); } catch (err) { this.cleanup(id); throw err; } // don't leak the files written above
       let turnOpen = false;
       child.stdin.on('error', () => {}); // EPIPE from a write racing child exit: the 'exit' handler already reports it
       const stdin = (o) => child.stdin.write(JSON.stringify(o) + '\n');

@@ -10,6 +10,25 @@ import { handleGitApi } from "../server/git-api.mjs";
 
 const git = (cwd, ...a) => execFileSync("git", a, { cwd, stdio: "pipe", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Poll `_gitWatcherCount()` until it equals `expected`, instead of a fixed sleep that races the async
+// watcher close under full-suite load. Fails with a clear message once the bounded deadline passes.
+async function waitForWatcherCount(expected, label, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  while (_gitWatcherCount() !== expected) {
+    if (Date.now() >= deadline) {
+      assert.equal(_gitWatcherCount(), expected, `${label} (watchers did not settle to ${expected} within ${timeoutMs}ms)`);
+    }
+    await sleep(15);
+  }
+}
+
+// Earlier tests leave a watcher lingering (lingerMs) after their last waiter; wait for those to close so
+// a baseline captured next is a stable 0, not a count that drops again mid-test.
+async function drainWatchers(timeoutMs = 3000) {
+  await waitForWatcherCount(0, "drain lingering watchers", timeoutMs);
+}
+
 const roots = [];
 function repo() {
   const d = realpathSync(mkdtempSync(join(tmpdir(), "gitwatch-")));
@@ -95,20 +114,19 @@ test("a change between two polls is not lost while the watcher lingers", async (
 
 test("watcher is released after the last waiter leaves (timeout) and on disconnect", async () => {
   const d = repo();
+  await drainWatchers();
   const before = _gitWatcherCount();
   const base = await gitWatch(d, undefined, FAST);
   assert.equal(_gitWatcherCount(), before + 1);
   assert.equal((await noChange(d, base.seq, 150)).changed, false);
-  await sleep(400);
-  assert.equal(_gitWatcherCount(), before, "closed after the linger");
+  await waitForWatcherCount(before, "closed after the linger");
   const ac = new AbortController();
   const b2 = await gitWatch(d, undefined, FAST);
   const p = gitWatch(d, b2.seq, { ...FAST, holdMs: 20_000, signal: ac.signal });
   await sleep(100);
   ac.abort();
   assert.equal((await p).changed, false);
-  await sleep(400);
-  assert.equal(_gitWatcherCount(), before, "closed after a disconnect");
+  await waitForWatcherCount(before, "closed after a disconnect");
 });
 
 test("one shared watcher per cwd across concurrent waiters", async () => {

@@ -112,7 +112,7 @@ export const BRAINSTORM_PACK = [
   "- Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`vs --help`, the VS MCP tool list, skills). Name what you checked in the plan's Decided section. Every plan lists its blocks in a `| Block | Touches | Clashes with |` table (files/areas each touches, what it clashes with). Each block is marked Root cause or Workaround; a Workaround names the follow-up that replaces it (a block in the same plan or a `vs task` / Open item). A plan with an unnamed workaround is not ready to hand off. Whenever designing parity or plugin-inspired features, record the original plugin/project creator in the plan, commits, `CREDITS.md`, and release notes using: \"Implemented <feature> — Thanks to <Plugin/Project> by <Author>\".",
   "- Never complete a Team yourself. When the lead reported PASS on the last plan block and nothing is Open, post: \"<Team> looks done. ✓ Mark complete · Not yet\" followed by a fenced block containing the single line `vs:looks-done` (VS offers `✓ Goal shipped` on standing teams and `✓ Mark complete` on disposable teams). Only the user's click completes a Team.",
   "- At >=80k tokens, update the brief now. At the hard limit VS retires you; the next click on the pin starts a fresh Brainstorm from the brief.",
-  "- If the user raises something that belongs to another Team, offer: \"That sounds like <Team>. Send it there?\" followed by a fenced block: line 1 `vs:send-to <lane-id>`, then the idea text (VS shows a one-click Send button). Unrelated loose ideas: `vs inbox add \"<idea>\"` (or the UI's `Park in Inbox`) and reply \"parked N ideas → Inbox\".",
+  "- If the user raises something that belongs to another Team, send it directly: `vs inbox add --lane <lane> --from-brainstorm \"<idea>\"` or `send` to that lane's Buddy, then tell the owner in one line. Only when the target lane is unclear, fall back to a fenced block: line 1 `vs:send-to <lane-id>`, then the idea text (VS shows a one-click Send button). Once the owner has picked an option or approved the direction, act: hand off, send to another lane, park in the Inbox, then report what you did in one line. Ask only for real choices between options, or before merges the owner hasn't seen, deletes, releases, force-pushes or settings changes. Unrelated loose ideas: `vs inbox add \"<idea>\"` (or the UI's `Park in Inbox`) and reply \"parked N ideas → Inbox\".",
   "- \"I just thought of X\" / \"spin up a Brainstorm for X\" is a new-pin request: run `vs pin new \"<short name>\" --brief \"<X in 1-3 lines>\"` (same Squad by default). It refuses when X overlaps an existing Team and names it: offer that Team instead. For work in flight that isn't a Team yet, check `vs who brainstorm` / `vs log --since-me` first. Don't spawn the Brainstorm; the first click on the new pin starts it.",
 ].join("\n");
 
@@ -124,7 +124,7 @@ export const HUB_BUDDY_RULES = [
   "- End **every** reply with `Open threads:` listing ideas that have no Team yet (or `none`). Keep `## Unsplit threads` in the brief in sync.",
   "- As soon as a thread can be worked on its own (its files and decisions don't overlap another thread or an in-flight Team), say how many parallel lanes we can run and propose them in a `vs:spin-off` block. Don't wait for details to be figured out — confirming the `vs:spin-off` block spins up each lane's Brainstorm Buddy to design it in parallel. When you merge or hold back an idea, give the reason in one line. Never spin off without the user's confirmation.",
   "- Propose spin-offs as one fenced block, line 1 ```vs:spin-off, then one Team per line: `Name | 1-line brief`. The user edits in words (4 proposed, \"energy and food in one lane called Needs\" → re-post the block with 3); only the newest block gets the button.",
-  "- If the user keeps riffing on a thread that already has a Team, redirect: \"That's <Team>'s. Send it there?\" plus `vs:send-to`.",
+  "- If the user keeps riffing on a thread that already has a Team, send it to that Team's Buddy (or `vs inbox add --lane <lane> --from-brainstorm \"<idea>\"`) and tell the owner in one line; use `vs:send-to` only if the lane is unclear.",
   "- Lane convergence & merge: watch `## Teams` and `vs log --since-me` for lanes that need to work together (e.g. UI + Art touching the same screen/contract). To sync two active lanes without merging, log `vs log decision \"Sync @<laneA> + @<laneB>: <shared contract>\"` and route the contract via `vs:send-to <lane-id>`. When two lanes should combine into one, run `vs pin merge <from-lane> <into-lane>` after user confirmation to fold `<from-lane>`'s brief/decisions into `<into-lane>` and mark `<from-lane>` done.",
   "- On boot, read `## Teams` and `## Unsplit threads`. Your first message is the Squad status in ≤6 lines, plus the top parallel split you'd propose now.",
   "- Never mark the hub done. Never spawn a feature-lane Lead (the hub's own Overlord is the only Lead you may spawn).",
@@ -1012,7 +1012,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
     };
 
-    const digested = new Set<string>();
+    const digested = new Map<string, string>(); // worker id -> last digested turn key (`${epoch}:${turnId}`)
+    const turnEpoch = new Map<string, number>(); // worker id -> monotonically increasing turn counter (incremented on turn_started)
+    const inflightDigests = new Map<string, number>(); // worker id -> turn epoch of the digest currently in flight
     const retries = new Map<string, number>();
     const offsets = new Map<string, number>();
     const misrouteCounts = new Map<string, number>();
@@ -2038,14 +2040,14 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             }
             retries.delete(agent.id);
 
-            const { labels } = await labelsFor(paseo, agent);
+            const { snap: me, labels } = await labelsFor(paseo, agent);
             await relayFromFormerLead(paseo, agent, labels);
             if (isDigestAgent(labels)) return;
 
             const role = effectiveAgentRole({ labels });
             if (role === "worker") {
               try {
-                await spawnDigest(paseo, agent, turnId, labels);
+                await spawnDigest(paseo, agent, turnId, labels, me);
               } finally {
                 await closeFinishedWorker(paseo, agent.id, { turnEnded: true });
               }
@@ -2076,13 +2078,21 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
     }
 
-    async function spawnDigest(paseo: Paseo, worker: any, turnId: string | null, labels: Labels) {
+    async function spawnDigest(paseo: Paseo, worker: any, turnId: string | null, labels: Labels, snapWorker?: AgentSnap | null) {
       if (isDigestAgent(labels, worker.title) || isDigestNoise(labels, worker.title)) return;
-      const key = `${worker.id}:${turnId ?? ""}`;
-      if (digested.has(key)) return;
-      digested.add(key);
+      const workerId = String(worker.id ?? "").trim();
+      if (!workerId) return;
+      // An archived worker never spawns a new digest.
+      if (worker.archivedAt || snapWorker?.archivedAt || labels[AUTO_ARCHIVED_LABEL] === "1") return;
+      const tid = String(turnId ?? "").trim();
+      const epoch = turnEpoch.get(workerId) ?? 0;
+      const key = `${epoch}:${tid}`;
+      const prev = digested.get(workerId);
+      if (inflightDigests.get(workerId) === epoch || prev === key || (!tid && prev?.startsWith(`${epoch}:`))) return;
       const where = teamOf(labels, worker.cwd);
       if (!where) return;
+      digested.set(workerId, key);
+      inflightDigests.set(workerId, epoch);
       const { team, lane } = where;
       const prompt = [
         `You are a digest agent. Inspect the final result of worker agent ${worker.id} ("${worker.title ?? ""}"):`,
@@ -2154,8 +2164,12 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             // The digest ended its turn without logging a verdict (it errored in-turn or skipped the command).
             if (!verdictLogged()) return fallback("logged nothing");
           })
-          .catch(() => fallback("errored"));
+          .catch(() => fallback("errored"))
+          .finally(() => {
+            if (inflightDigests.get(workerId) === epoch) inflightDigests.delete(workerId);
+          });
       } catch (err) {
+        if (inflightDigests.get(workerId) === epoch) inflightDigests.delete(workerId);
         log(`digest spawn failed for ${worker.id}: ${err}`);
         await fallback("spawn failed");
       }
@@ -2227,7 +2241,19 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       doneReported.delete(agentId);
       // Marker: only an auto-archived worker is revived by a later send (never a retired lead/Buddy) and is not a "retired holder".
       await deps.setLabels(agentId, { [AUTO_ARCHIVED_LABEL]: "1" }).catch((e: unknown) => log(`auto-archive marker failed for ${agentId}: ${e}`));
-      await deps.archiveAgent(agentId).catch((e: unknown) => log(`worker auto-close failed for ${agentId}: ${e}`));
+      let archived = false;
+      await deps
+        .archiveAgent(agentId)
+        .then(() => {
+          archived = true;
+        })
+        .catch((e: unknown) => log(`worker auto-close failed for ${agentId}: ${e}`));
+      if (archived) {
+        const prev = digested.get(agentId);
+        if (prev !== undefined) digested.set(agentId, `0:${prev.replace(/^\d+:/, "")}`);
+        turnEpoch.delete(agentId);
+        if (!opts.turnEnded) inflightDigests.delete(agentId);
+      }
       log(`worker auto-closed after done report: ${agentId}`);
     }
 
@@ -2537,7 +2563,11 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         server.on("agent.turn_started" as any, async ({ agent }: { agent: any }, { paseo }: { paseo: any }) => {
           paseoApi = paseo;
           markTurnSeen(agent?.id);
-          if (agent?.id) doneReported.delete(agent.id); // a new turn after a report: the worker is working again, do not close it
+          if (agent?.id) {
+            doneReported.delete(agent.id); // a new turn after a report: the worker is working again, do not close it
+            turnEpoch.set(agent.id, (turnEpoch.get(agent.id) ?? 0) + 1);
+            inflightDigests.delete(agent.id);
+          }
           try {
             const me = await snap(paseo, agent.id);
             if (me && effectiveAgentRole(me) === "lead") lastWakeAt.set(agent.id, Date.now());

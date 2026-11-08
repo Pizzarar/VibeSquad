@@ -27,7 +27,8 @@ test("only the newest assistant message counts; a revised block replaces the off
   const revised = asst(fence("Needs | energy + food\nAmmo | a\nMap | m"), "m2");
   const chatter = asst("Sounds good, anything else?", "m3");
   const r = spinOffFrom("ag", [four, revised]);
-  assert.equal(r.id, "ag:m2");
+  assert.match(r.id, /^spin-off:ag:needs,ammo,map:/); // content-derived, not the message id
+  assert.notEqual(r.id, spinOffFrom("ag", [four])?.id);
   assert.deepEqual(r.teams.map((t) => t.name), ["Needs", "Ammo", "Map"]);
   assert.equal(spinOffFrom("ag", [four, revised, chatter]), null); // newer message without a block: no offer
   assert.equal(spinOffFrom("ag", [asst("x", "a"), { item: { type: "user_message", text: "hi" } }])?.id, undefined);

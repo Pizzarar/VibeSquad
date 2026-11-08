@@ -1,91 +1,55 @@
--- C2 phase 2: the sky-CRT bezel, one per theme (docs/PLAN_NEON_OFFICE.md "C2: Sky gods" Art 2), built as a
--- 9-slice for CSS border-image: art/office/sky-crt.aseprite, 56x52, INDEXED (P0).
---   slice top 14 / right 20 / bottom 30 / left 20 (public/office/sky-crt.json), drawn at scale 3.
---   Corners are fixed. The top and side edges are constant along their run, so they repeat, round or
---   stretch identically. The bottom edge (x 20..35) is just the chin, transparent below (the TV floats);
---   the cloud clusters live in the two bottom corners. The centre (x 20..35, y 14..21) is transparent.
--- Case: beige/white plastic (MARBLE, LINE shade on the right + chin), INK outline, rounded outer corners,
--- a LINE recess on the top/left of the glass, INK + SKY_TOP glass lip round the hole. Bottom-left corner:
--- a little VIOLET/PINK/AMBER badge; bottom-right: a knob + MINT power LED. The case is inset 3px on the
--- sides so the base clouds can bulge past it; clouds use art/office/sky-lib.lua (same as the sky band).
--- Layers: case, glass, details, clouds.
+-- H1e: the thin sky-CRT bezel, one per theme, built as a 9-slice for CSS border-image:
+-- art/office/sky-crt.aseprite, 10x12, INDEXED (P0). Supersedes the C2 phase 2 56x52 chunky case (Aub: "waaaay thinner
+-- tv/monitor bezels for the gods ... the screen must be the star").
+--   slice top 3 / right 3 / bottom 5 / left 3 (public/office/sky-crt.json), drawn at scale 3 -> 9 CSS px on the top and
+--   sides, a 15 CSS px chin. Corners are fixed; every edge row/column is constant along its run, so round/stretch tile
+--   identically. The centre (x 3..6, y 3..6) is transparent: the face stage is the screen.
+-- Per side, outside in: 1px INK outline, 1px MARBLE case (LINE on the right side and the chin's lower row = shade),
+-- 1px INK glass edge. Outer corners are cut 1px (rounded). Chin corners: a 2px PINK/AMBER badge bottom-left and a
+-- MINT power LED bottom-right. No feet, no stand, no clouds.
+-- Layers: case, glass, details.
 -- Run: Aseprite.exe -b --script-param root=<repo> --script art/office/sky-crt-build.lua
 local root = app.params.root
 local L = dofile(root.."/art/cast/hypno/lib.lua")
-local S = dofile(root.."/art/office/sky-lib.lua")
 local pal = Palette{ fromFile = root.."/art/palette/pc98-dark.gpl" }
-local W, H = 56, 52
-local ST, SR, SB, SL = 14, 20, 30, 20
-local HX0, HX1, HY0, HY1 = SL, W - SR - 1, ST, H - SB - 1      -- transparent hole 20..35 x 14..21
-local CX0, CX1, CY0, CY1 = 3, W - 4, 0, 35                        -- case outline box
+local W, H = 10, 12
+local ST, SR, SB, SL = 3, 3, 5, 3
+local HX0, HX1, HY0, HY1 = SL, W - SR - 1, ST, H - SB - 1      -- transparent hole 3..6 x 3..6
 
 local spr = L.new(W, H, pal)
 local C = {}
-for _, n in ipairs({ "case", "glass", "details", "clouds" }) do C[n] = L.canvas(spr, L.layer(spr, n), spr.frames[1]) end
+for _, n in ipairs({ "case", "glass", "details" }) do C[n] = L.canvas(spr, L.layer(spr, n), spr.frames[1]) end
 
--- ======================= case: rounded box, MARBLE face, INK outline, LINE shade =======================
-do
-  local c = C.case
-  local round = { 3, 1, 1 }                                     -- inset per row from a corner (face box)
-  for y = CY0 + 1, CY1 - 1 do
-    local r = math.min(y - (CY0 + 1), (CY1 - 1) - y)
-    local ins = round[r + 1] or 0
-    c.hline(CX0 + 1 + ins, y, (CX1 - 1 - ins) - (CX0 + 1 + ins) + 1, L.MARBLE)
-  end
-  for y = CY0 + 2, CY1 - 1 do                                   -- right-side shade
-    for x = CX1 - 1, CX0 + 1, -1 do if c.get(x, y) == L.MARBLE then c.px(x, y, L.LINE); break end end
-  end
-  for x = CX0 + 2, CX1 - 1 do                                   -- chin bottom shade
-    for y = CY1 - 1, CY0 + 1, -1 do if c.get(x, y) ~= 0 then c.px(x, y, L.LINE); break end end
-  end
-  c.outline(L.INK)
-  c.commit()
-end
+-- ======================= case: MARBLE face, LINE shade (right + chin underside), INK outline =======================
+C.case.stamp(0, 0, [[
+|.kkkkkkkk.|
+|kmmmmmmmlk|
+|kmmmmmmmlk|
+|kmm....mlk|
+|kmm....mlk|
+|kmm....mlk|
+|kmm....mlk|
+|kmmmmmmmlk|
+|kmmmmmmmlk|
+|kmmmmmmmlk|
+|kllllllllk|
+|.kkkkkkkk.|
+]], { k = L.INK, m = L.MARBLE, l = L.LINE })
+C.case.commit()
 
--- ======================= glass: recess shade, INK ring, SKY_TOP lip, transparent hole =======================
+-- ======================= glass: the INK edge round the screen hole =======================
 do
   local c = C.glass
-  local function ring(x0, y0, x1, y1, col)
-    c.hline(x0, y0, x1 - x0 + 1, col); c.hline(x0, y1, x1 - x0 + 1, col)
-    c.vline(x0, y0, y1 - y0 + 1, col); c.vline(x1, y0, y1 - y0 + 1, col)
-  end
-  c.hline(HX0 - 3, HY0 - 3, (HX1 + 2) - (HX0 - 3) + 1, L.LINE)  -- recess: bezel shadow on top + left
-  c.vline(HX0 - 3, HY0 - 3, (HY1 + 2) - (HY0 - 3) + 1, L.LINE)
-  ring(HX0 - 2, HY0 - 2, HX1 + 2, HY1 + 2, L.INK)
-  ring(HX0 - 1, HY0 - 1, HX1 + 1, HY1 + 1, L.SKY)
-  for _, p in ipairs({ { HX0 - 1, HY0 - 1 }, { HX1 + 1, HY0 - 1 }, { HX0 - 1, HY1 + 1 }, { HX1 + 1, HY1 + 1 } }) do
-    c.px(p[1], p[2], L.INK)                                     -- rounded glass corners
-  end
+  c.hline(HX0 - 1, HY0 - 1, HX1 - HX0 + 3, L.INK); c.hline(HX0 - 1, HY1 + 1, HX1 - HX0 + 3, L.INK)
+  c.vline(HX0 - 1, HY0 - 1, HY1 - HY0 + 3, L.INK); c.vline(HX1 + 1, HY0 - 1, HY1 - HY0 + 3, L.INK)
   c.commit()
 end
 
--- ======================= details: badge (bottom-left), knob + LED (bottom-right) =======================
+-- ======================= details: chin badge (bottom-left corner), power LED (bottom-right corner) =======================
 do
   local c = C.details
-  c.stamp(8, 26, [[
-|kkkkkkk|
-|kvvvvvk|
-|kpppppk|
-|kaaaaak|
-|kkkkkkk|
-]], { k = L.INK, v = L.VIOLET, p = L.PINK, a = L.AMBER })
-  c.stamp(W - 16, 26, [[
-|.kk.....|
-|kmlk.kk.|
-|kllk.ggk|
-|.kk..kk.|
-]], { k = L.INK, m = L.MARBLE, l = L.LINE, g = L.MINT })
-  c.commit()
-end
-
--- ======================= clouds: a low, wide cushion hugging each bottom corner =======================
--- Wider than tall, stepped domes, MARBLE + PINK belly row + VIOLET outline (same as the sky cumulus),
--- bottom outline 4px under the chin (row 39). Inside x 0..18 / 37..55, so the bottom edge tile is untouched.
-do
-  local c = C.clouds
-  local o = { base = 38, und = 1, flat = true, seams = false }
-  S.cloud(c, L, { { 2, 34, 3, 3 }, { 7, 34, 6, 4 }, { 13, 36, 5, 3 } }, o)       -- left
-  S.cloud(c, L, { { 53, 34, 3, 3 }, { 49, 34, 6, 4 }, { 42, 36, 5, 3 } }, o)     -- right
+  c.px(1, 9, L.PINK); c.px(2, 9, L.AMBER)
+  c.px(W - 3, 9, L.MINT)
   c.commit()
 end
 
@@ -101,3 +65,50 @@ for _, mode in ipairs({ "dark", "light" }) do
   out:saveAs(root.."/public/office/sky-crt-"..mode..".png"); out:close()
 end
 print("wrote sky-crt "..W.."x"..H.." slice "..ST.."/"..SR.."/"..SB.."/"..SL)
+
+-- ======================= wall: the shared seam between the two butted TVs (G8b) =======================
+-- "Two gods in the sky always fighting for control, awful roommates": a thin brick wall, 4x20, INDEXED (P0),
+-- public/office/sky-wall-{dark,light}.png, sky-crt.json wall = width 4, scale 3 (12 CSS px), slice top 3 / bottom 5.
+-- The caps line up with the bezel's top band and chin (same 3/5 rows): row 0 and the last row are INK so the TVs'
+-- outer outline runs straight across the wall. Rows 3..14 are a 12-row brick tile (three CORAL courses, 3 rows each
+-- over a LINE mortar row, one MARBLE shine) that repeats round; one INK crack lives in the bottom cap so it shows once.
+-- The TVs drop their bezel side at the seam: the wall's INK columns are the screens' glass edges there.
+do
+  local WW, WH = 4, 20
+  local wspr = L.new(WW, WH, pal)
+  local c = L.canvas(wspr, L.layer(wspr, "wall"), wspr.frames[1])
+  c.stamp(0, 0, [[
+|kkkk|
+|kcck|
+|kllk|
+|kmck|
+|kcck|
+|kcck|
+|kllk|
+|kcck|
+|kcck|
+|kcck|
+|kllk|
+|kcck|
+|kcck|
+|kcck|
+|kllk|
+|kcck|
+|kckk|
+|kkck|
+|kclk|
+|kkkk|
+]], { k = L.INK, c = L.CORAL, l = L.LINE, m = L.MARBLE })
+  c.commit()
+  wspr:saveAs(root.."/art/office/sky-wall.aseprite")
+  local wflat = Image(WW, WH, ColorMode.INDEXED); wflat:clear(0); wflat:drawSprite(wspr, wspr.frames[1])
+  wspr:close()
+  for _, mode in ipairs({ "dark", "light" }) do
+    local out = Sprite(WW, WH, ColorMode.INDEXED)
+    out:setPalette(Palette{ fromFile = root.."/art/palette/pc98-"..mode..".gpl" })
+    out.transparentColor = 0
+    out.cels[1].image = wflat
+    out:saveAs(root.."/public/office/sky-wall-"..mode..".png"); out:close()
+  end
+  print("wrote sky-wall "..WW.."x"..WH.." slice 3/5")
+end

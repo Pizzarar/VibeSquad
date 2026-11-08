@@ -317,7 +317,7 @@ test("push filter (server): per-event toggles persist in settings.json and gate 
 test("push filter (client): toggles sync through /__vibesquad/settings; copy no longer says push ignores them", () => {
   assert.deepEqual(P.pushEventsFromPrefs({ "notify.permission": true, "notify.needsYou": false, "notify.finished": true, "notify.errored": false }), { permission: true, needsYou: false, finished: true, errored: false });
   const n = src("notifications.tsx");
-  assert.match(n, /fetch\("\/__vibesquad\/settings", \{ method: "POST"[^)]*JSON\.stringify\(\{ pushEvents \}\)/);
+  assert.match(n, /\(opts\?\.fetchFn \?\? fetch\)\("\/__vibesquad\/settings", \{ method: "POST"[^)]*JSON\.stringify\(\{ pushEvents \}\)/);
   assert.match(n, /subscribePrefs\(syncPushEvents\)/);
   const home = src("SettingsHome.tsx");
   assert.doesNotMatch(home, /Push alerts are sent by the server for every event/);

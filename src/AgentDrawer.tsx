@@ -155,7 +155,6 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   const [summaryPath, setSummaryPath] = useState<string>("");
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summarySaving, setSummarySaving] = useState(false);
-  const [handoffMarked, setHandoffMarked] = useState(false);
   const [inboxPopoverOpen, setInboxPopoverOpen] = useState(false);
   const [inboxDumpText, setInboxDumpText] = useState("");
   const [inboxParking, setInboxParking] = useState(false);
@@ -212,7 +211,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
     }
     return "";
   })();
-  const planHandedOff = isBs && (handoffMarked || PLAN_HANDOFF_RE.test(lastAssistantMsg));
+  const planHandedOff = isBs && PLAN_HANDOFF_RE.test(lastAssistantMsg);
 
   const usedK = Math.round(bsUsedTokens / 1000);
   const warnK = Math.round(warnTokens / 1000);
@@ -630,8 +629,6 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
         inboxParking={inboxParking}
         inboxToast={inboxToast}
         parkToInbox={parkToInbox}
-        handoffMarked={handoffMarked}
-        setHandoffMarked={setHandoffMarked}
         topicHandingOff={topicHandingOff}
         handleTopicHandoff={handleTopicHandoff}
         topicParking={topicParking}
@@ -642,6 +639,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
         att={att}
         dockOpen={dockOpen}
         onToggleDock={() => !chatOnly && setDockOpen((v) => !v)}
+        chatOnly={chatOnly}
       />
 
       {agent.pendingPermissions?.map((p) => (

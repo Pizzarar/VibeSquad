@@ -21,16 +21,16 @@ test("chat-only: AgentDrawer never opens, persists or listens for the right dock
   assert.match(d, /\{dockOpen && !chatOnly && \(/);
 });
 
-test("face box = stage minus the chat's height, whole face above the chat; squeezed Riff uses the whole stage", () => {
+test("G8: the face box is the whole TV screen (no chat-height cut); the chat lives in its own panel over the right TV", () => {
   const css = src("styles.css");
-  assert.match(css, /--sky-chat-h: 58%/);
-  assert.match(css, /\.sky-crt-body \{[^}]*height: var\(--sky-chat-h\)/);
-  assert.match(css, /\.sky-face-area \{[^}]*bottom: var\(--sky-chat-h\)/);
-  assert.match(css, /\.sky-zones\.is-expanded \.sky-zone-riffbot \.sky-face-area \{ bottom: 0; \}/);
-  assert.match(src("SkyZones.tsx"), /ref=\{stage\} className="sky-face-area"/);
-  // 4K@120% zone ~ 1200x640 css px: face box is the top 42%, the face fits whole inside it, bottom-anchored at the chat edge.
-  const zone = { w: 1200, h: 640 };
-  const box = { w: zone.w, h: Math.round(zone.h * 0.42) };
+  assert.doesNotMatch(css, /--sky-chat-h/);
+  assert.match(css, /.sky-face-area { position: absolute; inset: 0; }/);
+  assert.match(src("SkyZones.tsx"), /ref={stage} className="sky-face-area"/);
+  // 4K@120% TV ~ 1200x640 css px: the whole screen is the box, so the face scales to the height (k=13 of 640), bottom-anchored.
+  const box = { w: 1200, h: 640 };
   const { k, top } = faceContain({ w: 48, h: 48 }, box);
-  assert.ok(48 * k <= box.h && top + 48 * k === box.h, "never reaches under the chat");
+  assert.equal(k, 13);
+  assert.ok(48 * k <= box.h && top + 48 * k === box.h);
+  const old = faceContain({ w: 48, h: 48 }, { w: 1200, h: Math.round(640 * 0.42) });
+  assert.ok(k > old.k, "bigger than the old chat-cut box");
 });

@@ -171,7 +171,9 @@ export const SKY_FRAME_URL = (theme: SkyTheme) => `/office/sky-crt-${theme}.png`
 /** sky-crt.json: the 9-slice of the sky-CRT bezel PNG (source px), the integer-or-not px scale, and how the edges tile. */
 export const SKY_CRT_JSON_URL = "/office/sky-crt.json";
 export type SkyCrtRepeat = "stretch" | "round";
-export type SkyCrtModel = { slice: { top: number; right: number; bottom: number; left: number }; scale: number; repeat: SkyCrtRepeat };
+/** Optional `wall` (H1e contract): the always-present divider between the two TVs. width = source px wide; scale = its own scale (falls back to the bezel's); slice = vertical 3-slice caps (source px); repeat = how the middle tiles. The art is always /office/sky-wall-{theme}.png. */
+export type SkyWall = { width: number; scale?: number; slice?: { top: number; bottom: number }; repeat: SkyCrtRepeat };
+export type SkyCrtModel = { slice: { top: number; right: number; bottom: number; left: number }; scale: number; repeat: SkyCrtRepeat; wall?: SkyWall };
 const posInt = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n > 0;
 /** Validate sky-crt.json. Slice sides must be positive ints, scale > 0, repeat (optional) stretch|round; anything else → not ok (CSS bezel stays). */
 export function validateSkyCrt(json: unknown): { ok: true; value: SkyCrtModel } | { ok: false; error: string } {
@@ -182,12 +184,52 @@ export function validateSkyCrt(json: unknown): { ok: true; value: SkyCrtModel } 
   if (!posInt(top) || !posInt(right) || !posInt(bottom) || !posInt(left)) return { ok: false, error: "slice sides must be positive integers" };
   if (typeof scale !== "number" || !Number.isFinite(scale) || scale <= 0) return { ok: false, error: "scale must be > 0" };
   if (repeat !== undefined && repeat !== "stretch" && repeat !== "round") return { ok: false, error: "repeat must be stretch|round" };
-  return { ok: true, value: { slice: { top, right, bottom, left }, scale, repeat: repeat ?? "stretch" } };
+  const wall = parseWall((json as Record<string, unknown>).wall);
+  return { ok: true, value: { slice: { top, right, bottom, left }, scale, repeat: repeat ?? "stretch", ...(wall ? { wall } : null) } };
+}
+const nonNegInt = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n >= 0;
+/** Optional: a bad `wall` (width not a positive int, not an object) is ignored, never an error - the 2px CSS ink seam stays. A bad slice / scale / repeat falls back to none / the bezel's / round. */
+export function parseWall(raw: unknown): SkyWall | null {
+  if (!raw || typeof raw !== "object") return null;
+  const { width, scale, slice, repeat } = raw as Record<string, unknown>;
+  if (!posInt(width)) return null;
+  const sl = slice && typeof slice === "object" ? (slice as Record<string, unknown>) : null;
+  return {
+    width,
+    ...(typeof scale === "number" && Number.isFinite(scale) && scale > 0 ? { scale } : null),
+    ...(sl && nonNegInt(sl.top) && nonNegInt(sl.bottom) && (sl.top > 0 || sl.bottom > 0) ? { slice: { top: sl.top, bottom: sl.bottom } } : null),
+    repeat: repeat === "stretch" ? "stretch" : "round",
+  };
+}
+export const SKY_WALL_URL = (theme: SkyTheme) => `/office/sky-wall-${theme}.png`;
+/** The 2px CSS ink seam, snapped to whole device px (1.2 dpr: 2 device px = 1.667 css px) so it is crisp too; at dpr 1 it is the plain 2px. */
+export function skyWallFallbackStyle(dpr = 1): Record<string, string> {
+  const d = safeDpr(dpr);
+  const n = Math.max(1, Math.round(2 * d));
+  return { width: `${n / d}px`, marginLeft: `-${Math.floor(n / 2) / d}px` };
+}
+/** Inline style for the wall element when its art loaded: width = width x (wall.scale ?? bezel scale), pixelated, vertical 3-slice when `slice` is given. null (no wall / no art) -> the CSS ink seam. */
+export function skyWallStyle(wall: SkyWall | undefined, bezelScale: number, url: string | null, dpr = 1): Record<string, string> | null {
+  if (!wall || !url) return null;
+  const k = crispScale(wall.scale ?? bezelScale, dpr); // whole device px per source px
+  const d = safeDpr(dpr);
+  const width = `${snapPx(wall.width * k, d)}px`;
+  const base = { width, marginLeft: `-${Math.floor((wall.width * k * d) / 2) / d}px`, background: "none", imageRendering: "pixelated" };
+  if (!wall.slice) return { ...base, backgroundImage: `url(${url})`, backgroundSize: `${width} auto`, backgroundRepeat: "repeat-y" };
+  const { top, bottom } = wall.slice;
+  return {
+    ...base,
+    borderStyle: "solid",
+    borderWidth: `${top * k}px 0 ${bottom * k}px`,
+    borderImageSource: `url(${url})`,
+    borderImageSlice: `${top} 0 ${bottom} fill`,
+    borderImageRepeat: wall.repeat,
+  };
 }
 /** json → the zone's border-image style: width = slice × scale per side, slice + `fill`, crisp pixels. */
-export function skyCrtStyle(model: SkyCrtModel, url: string): Record<string, string> {
+export function skyCrtStyle(model: SkyCrtModel, url: string, dpr = 1): Record<string, string> {
   const { top, right, bottom, left } = model.slice;
-  const k = model.scale;
+  const k = crispScale(model.scale, dpr); // G8e: whole device px per source px, so the 9-slice edges stay sharp at 120% zoom
   return {
     borderStyle: "solid",
     borderWidth: `${top * k}px ${right * k}px ${bottom * k}px ${left * k}px`,
@@ -204,9 +246,10 @@ export function skyAssets(
   theme: SkyTheme,
   ok: SkyAssetOk,
   crt: SkyCrtModel | null = null,
+  dpr = 1,
 ): { skyUrl: string | null; frameUrl: string | null; frameStyle: Record<string, string> | null } {
   const frameUrl = ok.frame && crt ? SKY_FRAME_URL(theme) : null;
-  return { skyUrl: ok.sky ? SKY_URL(theme) : null, frameUrl, frameStyle: frameUrl && crt ? skyCrtStyle(crt, frameUrl) : null };
+  return { skyUrl: ok.sky ? SKY_URL(theme) : null, frameUrl, frameStyle: frameUrl && crt ? skyCrtStyle(crt, frameUrl, dpr) : null };
 }
 
 /**
@@ -215,58 +258,65 @@ export function skyAssets(
  * slack goes at the top. The gutters are filled by the bot's background colour. k is at least 1 (a box smaller than one
  * cell is the only case that crops). Returns `k` 0 until the box has a size.
  */
-export function faceContain(cell: { w: number; h: number }, box: { w: number; h: number }): { k: number; left: number; top: number } {
+export function faceContain(cell: { w: number; h: number }, box: { w: number; h: number }, dpr = 1): { k: number; left: number; top: number } {
   if (!(box.w > 0 && box.h > 0) || !(cell.w > 0 && cell.h > 0)) return { k: 0, left: 0, top: 0 };
-  const k = Math.max(1, Math.floor(Math.min(box.w / cell.w, box.h / cell.h)));
-  return { k, left: Math.round((box.w - cell.w * k) / 2), top: box.h - cell.h * k };
+  const d = safeDpr(dpr);
+  // G8e: the scale is a whole number of DEVICE pixels per art pixel (kd), so every art pixel lands on the same number of
+  // screen pixels; the CSS scale is kd / dpr. Offsets are device-pixel multiples too. At dpr 1 this is the old integer CSS scale.
+  const kd = Math.max(1, Math.floor(Math.min(box.w / cell.w, box.h / cell.h) * d + 1e-9));
+  const k = kd / d;
+  return { k, left: Math.round(((box.w - cell.w * k) / 2) * d) / d, top: Math.floor(box.h * d - cell.h * kd + 1e-9) / d };
 }
+/** A usable device-pixel ratio: finite and >= 1 (anything else, SSR/tests included, is 1). */
+export const safeDpr = (dpr: unknown): number => (typeof dpr === "number" && Number.isFinite(dpr) && dpr >= 1 ? dpr : 1);
+/** The matchMedia query that flips when the page zoom / monitor changes the ratio away from `dpr` (re-armed with the new ratio each time). */
+export const dprMediaQuery = (dpr: number): string => `(resolution: ${safeDpr(dpr)}dppx)`;
+/**
+ * G8e: CSS px per source px for art that is drawn by a CSS border-image / width (bezel, wall): the largest whole number of
+ * DEVICE px per source px at or below `scale` x dpr (an exact integer product is kept as is), divided back to CSS px.
+ */
+export function crispScale(scale: number, dpr = 1): number {
+  const d = safeDpr(dpr);
+  const dev = scale * d;
+  const kd = Math.abs(dev - Math.round(dev)) < 1e-6 ? Math.round(dev) : Math.floor(dev);
+  return Math.max(1, kd) / d;
+}
+/** A CSS length (px) rounded to a whole number of device px. */
+export const snapPx = (px: number, dpr = 1): number => Math.round(px * safeDpr(dpr)) / safeDpr(dpr);
 
 /** Gutter colour around a contained face: faces.json `<bot>.bg[theme]` when the field is valid, else null → the per-theme `--sky-face-bg-*` CSS variable. */
 export const faceBg = (faces: FacesModel | null, bot: FaceBot, theme: SkyTheme): string | null => faces?.bg?.[bot]?.[theme] ?? null;
 
+// ── G8 fixed TVs (docs/PLAN_SKY_GODS_C2B.md): both TVs are always 50/50; which chat is open is explicit click state ──
+/** The two TVs never resize: a fixed 50/50 grid. (G6's 70/30 Overlord expand is gone.) */
+export const SKY_COLUMNS = "minmax(0, 1fr) minmax(0, 1fr)";
+/** Which bot's chat is open over the right TV; null = rest (portraits only). Set by clicks only, never by focus or talking. */
+export type SkyOpen = FaceBot | null;
+/** Who can be opened: RiffBot needs a chat agent (live or dormant); the Overlord needs to be live (no static, no closed one). */
+export type SkyCan = { riffbot: boolean; overlord: boolean };
 /**
- * Smallest width of Riff's squeezed strip: two whole cells of face plus both bezel sides, so the scared face stays at
- * scale >= 2 however narrow the hub column gets. `bezelH` = left+right border widths in px.
+ * A click on a TV's face. At rest the bot opens (if it can). While anything is open the left TV shows the open bot's face
+ * (Riff's own, or the Overlord that took it over), so clicking it again closes; the right TV is under the chat and cannot be clicked.
  */
-export const riffMinWidth = (cell: { w: number }, bezelH: number): number => 2 * cell.w + bezelH;
-/** The grid-template-columns value for a layout: Riff never narrower than riffMinWidth while squeezed; the Overlord takes the rest. */
-export function skyColumns(layout: SkyLayout, cell: { w: number }, bezelH: number): string {
-  const riffMin = layout.expanded ? riffMinWidth(cell, bezelH) : 0;
-  return `minmax(${riffMin}px, ${layout.widths.riffbot}fr) minmax(0, ${layout.widths.overlord}fr)`;
+export function skyFaceClick(open: SkyOpen, tv: FaceBot, can: SkyCan): SkyOpen {
+  if (open !== null) return tv === "riffbot" ? null : open;
+  return can[tv] ? tv : null;
 }
-
-// ── G6 Overlord expand ────────────────────────────────────────────────────────
-/** Share of the sky the Overlord zone takes while it is active (Riff keeps the rest). */
-export const OVERLORD_EXPAND_PCT = 70;
-export type SkyLayoutInput = {
-  /** A live Overlord is on duty; without one nothing ever expands (the static fills its zone). */
-  overlordLive: boolean;
-  /** Focus (composer focus or a click in its chat) is inside the Overlord zone. */
-  overlordFocused: boolean;
-  /** The Overlord is running (talking). */
-  overlordTalking: boolean;
-  /** Focus is inside RiffBot's zone: the person is working with Riff, so a talking Overlord does not squeeze it. */
-  riffFocused?: boolean;
-  /** faces.json has a `riffbot.scared` mode. */
-  riffHasScared: boolean;
-};
-export type SkyLayout = {
-  expanded: boolean;
-  /** Grid fractions, RiffBot then Overlord (sum 100). */
-  widths: { riffbot: number; overlord: number };
-  /** Forced RiffBot face while squeezed: `scared`, or `idle` when faces.json has none; null → the normal talk/needs/blink logic. */
-  riffMode: Extract<FaceMode, "scared" | "idle"> | null;
-};
-/** Overlord active → 70/30 and Riff scared (idle when `scared` is absent); otherwise 50/50. RiffBot activity never expands. */
-export function skyLayout(i: SkyLayoutInput): SkyLayout {
-  const expanded = i.overlordLive && (i.overlordFocused || (i.overlordTalking && !i.riffFocused));
-  return expanded
-    ? { expanded, widths: { riffbot: 100 - OVERLORD_EXPAND_PCT, overlord: OVERLORD_EXPAND_PCT }, riffMode: i.riffHasScared ? "scared" : "idle" }
-    : { expanded, widths: { riffbot: 50, overlord: 50 }, riffMode: null };
-}
+/** Esc, a click outside the sky, or the chat's ✕. */
+export const skyExit = (_open: SkyOpen): SkyOpen => null;
+/** The Overlord going away (closed, killed) while its chat is open drops back to rest; an open RiffBot with no chat agent too. */
+export const skyEffectiveOpen = (open: SkyOpen, can: SkyCan): SkyOpen => (open && can[open] ? open : null);
+/** Anything that owns Esc / outside clicks before the sky does: modals, menus, the composer's slash/mention menus, the needs-you popover. */
+export const SKY_POPOVER_SELECTOR = ".modal-back, [role='dialog'], [role='menu'], [role='listbox'], .composer-menu, .attn-pop, .pin-menu-list";
+/** Esc closes the sky chat only when it is open, nothing already handled the key, and no popover/dialog is up to be dismissed first. */
+export const skyEscCloses = (open: SkyOpen, defaultPrevented: boolean, popoverOpen: boolean): boolean => open !== null && !defaultPrevented && !popoverOpen;
+/** A pointerdown closes the sky chat only when it lands outside the sky AND outside any (portalled) popover/dialog. */
+export const skyOutsideCloses = (insideSky: boolean, insidePopover: boolean): boolean => !insideSky && !insidePopover;
+/** Forced RiffBot face while the Overlord has taken it over: `scared`, or `idle` when faces.json has none; null → normal talk/needs/blink. */
+export const skyRiffMode = (open: SkyOpen, riffHasScared: boolean): Extract<FaceMode, "scared" | "idle"> | null => (open === "overlord" ? (riffHasScared ? "scared" : "idle") : null);
 export const hasFaceMode = (faces: FacesModel | null, bot: FaceBot, mode: FaceMode): boolean => !!faces?.bots[bot]?.[mode]?.length;
 
-// ── G7 virus takeover overlay (docs/PLAN_SKY_GODS_C2B.md): the Overlord's glitch front eats Riff's squeezed screen ──
+// ── G7 virus takeover overlay (docs/PLAN_SKY_GODS_C2B.md): the Overlord's glitch front eats Riff's TV ──
 export const TAKEOVER_URL = (theme: SkyTheme) => `/office/takeover-${theme}.png`;
 export const TAKEOVER_JSON_URL = "/office/takeover.json";
 export type TakeoverModel = { cell: { w: number; h: number }; fps: number; frames: { x: number; y: number }[] };

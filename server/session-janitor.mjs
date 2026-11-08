@@ -1,4 +1,5 @@
 import { getBackend } from "./backend/index.mjs";
+import { logRunnerMetric } from "./backend/runner-backend.mjs";
 import { detachLiveChildrenViaClient, listDaemonAgents } from "./detach-children.mjs";
 
 export const JANITOR_MAX_AGE_MS = 2 * 60 * 60 * 1000;
@@ -25,11 +26,58 @@ export function findJanitorCandidates(agents, opts = {}) {
   return agents.filter((a) => isJanitorCandidate(a?.agent ?? a, opts)).map((a) => a?.agent ?? a);
 }
 
+export const STALL_QUEUED_MS = 15 * 60 * 1000;
+export const STALL_RUNNING_MS = 30 * 60 * 1000;
+
+// updatedAt is the runner log's last event ts (lastActivityAt mirrors it), so it moves with real output.
+const activityTs = (a) => Date.parse(a.updatedAt || a.lastActivityAt || a.createdAt || "");
+
+/**
+ * Returns `{ status, silentMs }` with status "initializing" (queued or starting: the runner maps both to this status, so a worker that never ran
+ * shows up here) / "running" when `agent` is a non-archived `role=worker` that has sat there with no activity for
+ * at least the matching threshold; otherwise null. (Queued workers also carry `agent.queued`; the status covers them.) A worker waiting on a permission prompt is not stalled.
+ * Flag-only: never acts on it.
+ */
+export function stalledWorker(
+  agent,
+  { now = Date.now(), queuedMs = STALL_QUEUED_MS, runningMs = STALL_RUNNING_MS } = {},
+) {
+  if (!agent || typeof agent !== "object") return null;
+  if (agent.archivedAt) return null;
+  if (String(agent.labels?.role || "").toLowerCase() !== "worker") return null;
+  const status = String(agent.status || "").toLowerCase();
+  if (status !== "initializing" && status !== "running") return null;
+  if (agent.requiresAttention) return null;
+  const ts = activityTs(agent);
+  if (!Number.isFinite(ts)) return null;
+  const silentMs = now - ts;
+  return silentMs >= (status === "initializing" ? queuedMs : runningMs) ? { status, silentMs } : null;
+}
+
+/**
+ * Lists stalled workers as `{ id, status, silentMs }`.
+ */
+export function findStalledWorkers(agents, opts = {}) {
+  if (!Array.isArray(agents)) return [];
+  const out = [];
+  for (const raw of agents) {
+    const a = raw?.agent ?? raw;
+    const s = stalledWorker(a, opts);
+    if (s) out.push({ id: a.id, ...s });
+  }
+  return out;
+}
+
 /**
  * Scans non-archived daemon agents, detaches live children of each candidate worker first
  * (so live children are never cascade-archived), and archives eligible closed workers.
  */
-export async function runSessionJanitor(client, { now = Date.now(), maxAgeMs = JANITOR_MAX_AGE_MS, agents } = {}) {
+const reportedStalls = new Set(); // ids already logged, so repeated janitor runs don't re-log the same stall
+
+export async function runSessionJanitor(
+  client,
+  { now = Date.now(), maxAgeMs = JANITOR_MAX_AGE_MS, agents, log = logRunnerMetric, queuedMs, runningMs } = {},
+) {
   const backend = getBackend(client);
   const rawList = agents ?? (await listDaemonAgents(backend));
   const list = Array.isArray(rawList) ? rawList.map((a) => a?.agent ?? a) : [];
@@ -56,6 +104,13 @@ export async function runSessionJanitor(client, { now = Date.now(), maxAgeMs = J
     }
   }
 
+  const stalled = findStalledWorkers(list, { now, queuedMs, runningMs });
+  for (const st of stalled) {
+    if (reportedStalls.has(st.id)) continue;
+    reportedStalls.add(st.id);
+    log(`stalled worker ${st.id}: ${st.status}, no activity for ${Math.round(st.silentMs / 60000)}m`);
+  }
+
   return {
     ok: true,
     scanned: list.length,
@@ -64,6 +119,7 @@ export async function runSessionJanitor(client, { now = Date.now(), maxAgeMs = J
     detachedChildren,
     skipped,
     errors,
+    stalled,
   };
 }
 
@@ -133,6 +189,7 @@ export async function handleJanitorRun(
         scanned: list.length,
         candidates: candidates.length,
         candidateIds: candidates.map((c) => c.id),
+        stalled: findStalledWorkers(list, { now }),
       });
       return true;
     }
@@ -143,7 +200,13 @@ export async function handleJanitorRun(
         typeof body?.maxAgeMs === "number" && Number.isFinite(body.maxAgeMs) && body.maxAgeMs >= 0
           ? body.maxAgeMs
           : defaultMaxAgeMs;
-      const result = await runSessionJanitor(client, { now, maxAgeMs, agents });
+      const result = await runSessionJanitor(client, {
+        now,
+        maxAgeMs,
+        agents,
+        ...(Number.isFinite(body?.queuedMs) ? { queuedMs: body.queuedMs } : {}),
+        ...(Number.isFinite(body?.runningMs) ? { runningMs: body.runningMs } : {}),
+      });
       sendJson(res, 200, result);
       return true;
     }

@@ -95,8 +95,10 @@ export { briefRootFor, laneWorkingDir };
 
 export const NO_BRIEF_LINE = "(no brief yet)";
 
-export function readBrainstormSummary(laneRaw, rootDir = REPO_ROOT) {
-  const { teamId, laneId } = laneDisplayName(laneRaw, rootDir);
+export function readBrainstormSummary(laneRaw, rootDir = REPO_ROOT, { teamId: teamHint = "" } = {}) {
+  const resolved = laneDisplayName(laneRaw, rootDir);
+  const laneId = resolved.laneId;
+  const teamId = resolved.teamId || String(teamHint || "");
   const safeLane = safeSegment(laneId || laneRaw || "vibesquad");
   const relPath = `docs/brainstorm/${safeLane}.md`;
   // Only the lane's project dir counts; a stale copy under rootDir is ignored once the project dir resolves.
@@ -107,19 +109,34 @@ export function readBrainstormSummary(laneRaw, rootDir = REPO_ROOT) {
 
 export { BRIEF_HISTORY_KEEP, BRIEF_SHRINK_FROM, BRIEF_SHRINK_TO, backupBrief };
 
-export function writeBrainstormSummary(laneRaw, content, rootDir = REPO_ROOT) {
+// The installed app's rootDir is its own runtime folder (no .git); a brief landing there is invisible to the lane.
+export function isInstalledRuntime(rootDir) {
+  return /[\\/]runtime$/i.test(resolve(rootDir)) && !existsSync(join(rootDir, ".git"));
+}
+
+/** `teamId` is the Squad id for a lane not yet in teams.json (createPin writes the brief before adding the lane). */
+export function writeBrainstormSummary(laneRaw, content, rootDir = REPO_ROOT, { teamId: teamHint = "" } = {}) {
   const text = String(content ?? "");
   if (text.length > MAX_SUMMARY_CHARS) {
     throw new Error(`Summary is ${text.length} chars; must be <= ${MAX_SUMMARY_CHARS} chars (~5k tokens)`);
   }
-  const { teamId, laneId } = laneDisplayName(laneRaw, rootDir);
+  const resolved = laneDisplayName(laneRaw, rootDir);
+  const laneId = resolved.laneId;
+  const teamId = resolved.teamId || String(teamHint || "");
   const safeLane = safeSegment(laneId || laneRaw || "vibesquad");
   const relPath = `docs/brainstorm/${safeLane}.md`;
-  const dir = join(briefRootFor(teamId, laneId, rootDir), "docs", "brainstorm");
+  const root = briefRootFor(teamId, laneId, rootDir);
+  const dir = join(root, "docs", "brainstorm");
   mkdirSync(dir, { recursive: true });
   const fullPath = join(dir, `${safeLane}.md`);
   writeBriefFile(fullPath, safeLane, text);
-  return { laneId: safeLane, path: relPath, fullPath, content: text };
+  const fallback = resolve(root) === resolve(rootDir) && isInstalledRuntime(rootDir);
+  if (fallback) {
+    try {
+      appendVsLogEntry({ teamId: teamId || "vibesquad", laneId: safeLane, agent: "server", type: "metric", text: `brief-fallback lane=${safeLane} path=${fullPath}` });
+    } catch {}
+  }
+  return { laneId: safeLane, path: relPath, fullPath, content: text, ...(fallback ? { fallback: true } : {}) };
 }
 
 export function findNewestPlanFile(cwd, rootDir = REPO_ROOT) {
@@ -277,59 +294,6 @@ export function buildBrainstormInitialPrompt({ laneId, laneUpper, buddyName, sum
 }
 
 const SPAWN_LAG_TICK_MS = 50;
-
-/** True for the errors a caller-side abort or daemon wait deadline produces (the daemon usually finishes the create anyway). */
-export function isCreateTimeoutError(err) {
-  // The daemon's own provider-refresh deadline is a definitive failure (nothing is being built), so it is not recoverable.
-  if (/Timed out refreshing/i.test(String(err?.message ?? err ?? ""))) return false;
-  return /time(d)?[ -]?out|timeout|abort/i.test(`${err?.name ?? ""} ${err?.message ?? err ?? ""}`);
-}
-
-function agentListOf(raw) {
-  return Array.isArray(raw) ? raw : Array.isArray(raw?.entries) ? raw.entries : Array.isArray(raw?.agents) ? raw.agents : [];
-}
-
-/**
- * createAgent timed out but Paseo keeps building the agent (docs/research/spawn-hang-2026-11-06.md: 4/4 slow Bugc spawns landed
- * without their initial prompt). Poll the agent list for the label-matched agent; once it is idle with no activity send the
- * initial prompt exactly once, and if it already has activity adopt it untouched. Returns the agent, or null when it never showed.
- */
-export async function recoverTimedOutCreate({ backend, labels, title, initialPrompt, startedMs, waitMs = 120_000, pollMs = 5_000, now = Date.now, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
-  const list = backend.listAgents ?? backend.fetchAgents;
-  if (typeof list !== "function") return null;
-  const deadline = now() + waitMs;
-  for (;;) {
-    let found = null;
-    try {
-      for (const item of agentListOf(await list.call(backend))) {
-        const a = item?.agent ?? item;
-        if (!a?.id || a.archivedAt || a.id === labels["vs.restarted-from"]) continue; // never adopt the predecessor
-        const l = a.labels ?? {};
-        // Labels only (a title alone can match another lane's or an older Buddy): role, lane, team and the restart origin must all agree.
-        const sameRestart = Boolean(labels["vs.restarted-from"]) && l["vs.restarted-from"] === labels["vs.restarted-from"];
-        const matches = Boolean(labels.role) && l.role === labels.role && l.lane === labels.lane && l.team === labels.team && sameRestart;
-        const ts = Date.parse(a.createdAt || a.updatedAt || "");
-        if (matches && Number.isFinite(ts) && ts >= startedMs - 5000) {
-          found = a;
-          break;
-        }
-      }
-    } catch {}
-    if (found && found.status !== "initializing") {
-      if (found.status === "error" || found.status === "closed") return null;
-      // lastActivityAt is stamped at creation by RunnerBackend.toAgent, so it proves nothing; real activity is a non-idle status,
-      // a user message or used tokens (as server/hooks/agent-duties.ts does).
-      const usedTokens = (found.lastUsage?.contextWindowUsedTokens ?? 0) + (found.lastUsage?.inputTokens ?? 0);
-      const hasActivity = found.status !== "idle" || Boolean(found.lastUserMessageAt) || usedTokens > 0;
-      if (!hasActivity && initialPrompt && typeof backend.sendAgentPrompt === "function") {
-        await backend.sendAgentPrompt(found.id, initialPrompt);
-      }
-      return found;
-    }
-    if (now() >= deadline) return null;
-    await sleep(pollMs);
-  }
-}
 
 // Per-step spawn timing (docs/PLAN_SPAWN_SPEED.md): marks are ms since start, flushed as one log line + one `spawn-timing` metric.
 export function createSpawnTimer(kind) {
@@ -844,17 +808,6 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
         });
       } catch (err) {
         spawnErrParts = err?.[SPAWN_TIMING] ?? null;
-        if (isCreateTimeoutError(err)) {
-          const recovered = await recoverTimedOutCreate({
-            backend,
-            labels: newLabels,
-            title: newTitle,
-            initialPrompt,
-            startedMs: spawnStartMs,
-            ...(body.createRecovery ?? {}),
-          }).catch(() => null);
-          if (recovered) created = recovered;
-        }
         if (!created) try {
           const raw =
             typeof backend.fetchAgents === "function"

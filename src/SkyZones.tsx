@@ -5,10 +5,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { DrawerSlot } from "./AgentPanes";
 import type { Pin } from "./pins";
-import { NO_OVERLORD_TEXT, SKY_FRAME_URL, SKY_URL, TAKEOVER_FALLBACK, TAKEOVER_URL, faceBg, faceContain, hasFaceMode, skyAssets, skyColumns, skyLayout, skyZonesFor, takeoverVisible, type SkyZone, type TakeoverModel } from "./skyZonesLogic";
+import { NO_OVERLORD_TEXT, SKY_COLUMNS, SKY_FRAME_URL, SKY_POPOVER_SELECTOR, SKY_WALL_URL, SKY_URL, TAKEOVER_FALLBACK, TAKEOVER_URL, faceBg, faceContain, hasFaceMode, skyAssets, skyEffectiveOpen, skyEscCloses, skyExit, skyFaceClick, skyOutsideCloses, skyRiffMode, skyWallFallbackStyle, skyWallStyle, skyZonesFor, takeoverVisible, type SkyCan, type SkyOpen, type SkyZone, type TakeoverModel } from "./skyZonesLogic";
 import type { FaceBot, FaceMode } from "./squadFloorLogic";
 import type { TeamView } from "./teams";
-import { useBotFace, useFacesModel, useImageOk, usePrefersReducedMotion, useSkyCrtModel, useTakeoverClock, useTakeoverModel, useTheme } from "./useBotFace";
+import { useBotFace, useDpr, useFacesModel, useImageOk, usePrefersReducedMotion, useSkyCrtModel, useTakeoverClock, useTakeoverModel, useTheme } from "./useBotFace";
 
 const LABEL: Record<FaceBot, string> = { riffbot: "RiffBot", overlord: "Overlord" };
 
@@ -40,7 +40,7 @@ function ZoneFace({
   const face = useBotFace(zone.bot, zone.pose ? { pose: zone.pose } : null, faces, { theme, reduced, force: force ?? (holdScared ? "scared" : null) });
   // Cell size comes from faces.json (never hardcoded); until it loads, a blank stage.
   const cell = faces?.cell ?? { w: 48, h: 48 };
-  const stage = useRef<HTMLSpanElement>(null); // the face box: the part of the zone the chat does not cover
+  const stage = useRef<HTMLSpanElement>(null); // the face box: the whole TV screen (G8: no chat under it)
   const [box, setBox] = useState({ w: 0, h: 0 });
   useLayoutEffect(() => {
     const el = stage.current;
@@ -52,8 +52,9 @@ function ZoneFace({
     return () => ro.disconnect();
   }, []);
   const bg = faceBg(faces, zone.bot, theme);
-  const { k, left, top } = faceContain(cell, box);
-  const tk = sheet ? faceContain(sheet.cell, box) : null;
+  const dpr = useDpr();
+  const { k, left, top } = faceContain(cell, box, dpr);
+  const tk = sheet ? faceContain(sheet.cell, box, dpr) : null;
   const tf = sheet?.frames[clock.frame];
   return (
     <span className="sky-face-stage" aria-hidden="true" style={bg ? ({ ["--sky-face-bg-custom" as string]: bg } as React.CSSProperties) : undefined}>
@@ -88,28 +89,44 @@ function ZoneFace({
   );
 }
 
+/**
+ * One sky TV or one chat panel. `panel` false = the TV: just the bot's portrait filling the screen (plus the static / Spin Up
+ * states when it has no agent). `panel` true = the bot's chat (messages + composer, no drawer) laid over the right TV.
+ */
 function Zone({
   zone,
   faces,
   frameStyle,
+  panel = false,
   force = null,
   takeover = null,
-  squeezed = false,
-  onReclaim,
+  taken = false,
+  clickable = false,
+  isOpen = false,
+  openLabel,
+  onFace,
+  onClose,
   onSuccessor,
   onSpinUp,
   busy = false,
 }: {
   zone: SkyZone;
-  /** Riff while the Overlord is expanded: its chat is hidden, so the strip itself is the keyboard way back (a11y). */
-  squeezed?: boolean;
-  /** Hand the sky back to this zone (50/50) and move focus into its composer. */
-  onReclaim?: () => void;
   faces: ReturnType<typeof useFacesModel>;
-  /** Forced face mode (Riff scared while the Overlord is expanded). */
+  panel?: boolean;
+  /** Forced face mode (Riff scared while the Overlord has taken it over). */
   force?: FaceMode | null;
-  /** G7 overlay sheet model (Riff's zone only). */
+  /** G7 overlay sheet model (Riff's TV only). */
   takeover?: TakeoverModel | null;
+  /** The Overlord's takeover is on (this is Riff's TV): the overlay plays in, and reverses when it ends. */
+  taken?: boolean;
+  /** The TV's face is a button (open / close). */
+  clickable?: boolean;
+  /** Panel: this bot's chat is the one showing. TV: a chat is open (aria-expanded). */
+  isOpen?: boolean;
+  /** The bot whose chat is open (the left TV shows its face): names the close button. Defaults to this TV's bot. */
+  openLabel?: string;
+  onFace?: () => void;
+  onClose?: () => void;
   /** The @art sky-CRT bezel as a border-image style (from sky-crt.json + PNG) when both exist; null → the CSS bezel. */
   frameStyle: Record<string, string> | null;
   onSuccessor: (id: string) => void;
@@ -119,41 +136,52 @@ function Zone({
   busy?: boolean;
 }) {
   const label = LABEL[zone.bot];
+  openLabel ??= label;
   const off = zone.bot === "overlord" && !zone.agentId; // a closed Overlord keeps its zone (history + Resume)
+  const idle = !panel && zone.bot === "riffbot" && !zone.agentId; // RiffBot not running: dimmed whole face + a bottom Spin Up strip
   return (
     <section
-      className={`sky-zone sky-zone-${zone.bot}${off ? " is-off" : ""}${frameStyle ? " has-frame" : ""}`}
+      className={`sky-zone sky-zone-${zone.bot}${panel ? " sky-chat-panel" : ""}${off ? " is-off" : ""}${idle ? " is-idle" : ""}${frameStyle ? " has-frame" : ""}`}
       style={frameStyle ?? undefined}
-      data-testid={`sky-zone-${zone.bot}`}
+      data-testid={panel ? `sky-chat-${zone.bot}` : `sky-zone-${zone.bot}`}
       data-sky-bot={zone.bot}
       data-agent={zone.agentId ?? ""}
-      aria-label={squeezed ? `${label} chat, press to expand` : `${label} chat`}
-      // Squeezed: tabbable (0). Otherwise -1, not absent, so the focused strip doesn't lose focus the moment it un-squeezes.
-      tabIndex={onReclaim ? (squeezed ? 0 : -1) : undefined}
-      onFocus={(e) => squeezed && e.target === e.currentTarget && onReclaim?.()}
-      onKeyDown={(e) => {
-        if (squeezed && e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
-          e.preventDefault();
-          onReclaim?.();
-        }
-      }}
+      aria-label={`${label} chat`}
+      hidden={panel && !isOpen}
     >
-      {!off && <ZoneFace zone={zone} faces={faces} force={force} takeover={takeover} expanded={squeezed} />}
+      {!panel && !off && <ZoneFace zone={zone} faces={faces} force={force} takeover={takeover} expanded={taken} />}
+      {!panel && clickable && (
+        <button
+          type="button"
+          className="sky-face-hit"
+          data-testid={`sky-face-hit-${zone.bot}`}
+          aria-label={isOpen ? `Close ${openLabel} chat` : `Open ${label} chat`}
+          aria-expanded={isOpen}
+          onClick={onFace}
+        />
+      )}
       <span className="sky-crt-name">{label}</span>
+      {panel && (
+        <button type="button" className="sky-chat-close" data-testid={`sky-chat-close-${zone.bot}`} aria-label={`Close ${label} chat`} onClick={onClose}>
+          ✕
+        </button>
+      )}
       <div className="sky-crt-body">
-        {zone.agentId ? (
-          <>
-            {zone.dormant && onSpinUp && (
-              <div className="sky-resume" data-testid={zone.bot === "overlord" ? "sky-resume-overlord-bar" : "sky-resume-riffbot"}>
-                <span className="muted small">This chat is closed (history below).</span>
-                <button type="button" className="btn ok small" data-testid={zone.bot === "overlord" ? "sky-resume-overlord" : "sky-resume-btn"} disabled={busy} onClick={onSpinUp}>
-                  Resume {label}
-                </button>
-              </div>
-            )}
-            <DrawerSlot id={zone.agentId} pane="left" shown chatOnly onSuccessor={onSuccessor} />
-          </>
-        ) : off ? (
+        {panel ? (
+          zone.agentId ? (
+            <>
+              {zone.dormant && onSpinUp && (
+                <div className="sky-resume" data-testid={zone.bot === "overlord" ? "sky-resume-overlord-bar" : "sky-resume-riffbot"}>
+                  <span className="muted small">This chat is closed (history below).</span>
+                  <button type="button" className="btn ok small" data-testid={zone.bot === "overlord" ? "sky-resume-overlord" : "sky-resume-btn"} disabled={busy} onClick={onSpinUp}>
+                    Resume {label}
+                  </button>
+                </div>
+              )}
+              <DrawerSlot id={zone.agentId} pane="left" shown chatOnly onSuccessor={onSuccessor} />
+            </>
+          ) : null
+        ) : zone.agentId ? null : off ? (
           <div className="sky-static" data-testid="sky-static-overlord" role="status">
             <span className="sky-static-text">{NO_OVERLORD_TEXT}</span>
             {onSpinUp && (
@@ -197,34 +225,32 @@ export function SkyZones({
   const theme = useTheme();
   // @art assets are optional: probe each, skip the absent ones (CSS gradient sky + CSS bezel stay).
   const crt = useSkyCrtModel();
-  const { skyUrl, frameStyle } = skyAssets(theme, { sky: useImageOk(SKY_URL(theme)), frame: useImageOk(SKY_FRAME_URL(theme)) }, crt);
+  const dpr = useDpr();
+  const { skyUrl, frameStyle } = skyAssets(theme, { sky: useImageOk(SKY_URL(theme)), frame: useImageOk(SKY_FRAME_URL(theme)) }, crt, dpr);
   const takeover = useTakeoverModel();
   const { hub } = zones;
+  // G8c: the wall between the TVs. Art from sky-crt.json `wall` when its PNG loads, else the CSS ink seam. Absolute: takes no grid space.
+  const wallUrl = crt?.wall ? SKY_WALL_URL(theme) : null;
+  const wallStyle = skyWallStyle(crt?.wall, crt?.scale ?? 1, useImageOk(wallUrl) ? wallUrl : null, dpr);
 
-  // G6: "Overlord active" = focus/click inside its zone, or it is talking. Pure decision in skyLayout().
-  const [focus, setFocus] = useState<FaceBot | null>(null);
+  // G8: the TVs never resize. `openRaw` is set by clicks only; the Overlord talking never opens anything.
+  const can: SkyCan = { riffbot: !!zones.riffbot.agentId, overlord: !!zones.overlord.member };
+  const [openRaw, setOpen] = useState<SkyOpen>(null);
+  const open = skyEffectiveOpen(openRaw, can); // the Overlord closing under an open chat drops back to rest
   const root = useRef<HTMLDivElement>(null);
-  const layout = skyLayout({
-    overlordLive: !!zones.overlord.member,
-    overlordFocused: focus === "overlord",
-    overlordTalking: zones.overlord.pose === "work",
-    riffFocused: focus === "riffbot",
-    riffHasScared: hasFaceMode(faces, "riffbot", "scared"),
-  });
-  const zoneOf = (t: EventTarget | null): FaceBot | null => {
-    const el = t instanceof Element ? t.closest<HTMLElement>("[data-sky-bot]") : null;
-    return el && root.current?.contains(el) ? (el.dataset.skyBot as FaceBot) : null;
-  };
-  const onFocusIn = (e: React.FocusEvent) => setFocus(zoneOf(e.target));
-  const onFocusOut = (e: React.FocusEvent) => {
-    if (!e.relatedTarget || zoneOf(e.relatedTarget) !== zoneOf(e.target)) setFocus(zoneOf(e.relatedTarget));
-  };
-  // A click in a zone's chat (even on plain text) counts; a click anywhere else, or Escape, hands the sky back.
+  const openRef = useRef<SkyOpen>(null);
+  openRef.current = open;
+  // Esc, or a click anywhere outside the sky, closes whatever is open. Clicks inside are the faces' / chat's / ✕'s own handlers.
   useEffect(() => {
-    const down = (e: PointerEvent) => setFocus(zoneOf(e.target));
+    const down = (e: PointerEvent) => {
+      const t = e.target instanceof Element ? e.target : null;
+      if (skyOutsideCloses(!!t && !!root.current?.contains(t), !!t?.closest(SKY_POPOVER_SELECTOR)) || !t) setOpen(skyExit);
+    };
     const key = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      setFocus(null);
+      // At rest Esc is the app's (up to Squads Home); with a popover/dialog up (slash menu, modal) Esc dismisses that first.
+      if (e.key !== "Escape" || !skyEscCloses(openRef.current, e.defaultPrevented, !!document.querySelector(`${SKY_POPOVER_SELECTOR}:not([hidden])`))) return;
+      e.preventDefault(); // this Esc closed the chat; the app's own Esc handler honours defaultPrevented
+      setOpen(skyExit);
       const a = document.activeElement;
       if (a instanceof HTMLElement && root.current?.contains(a)) a.blur();
     };
@@ -235,26 +261,24 @@ export function SkyZones({
       document.removeEventListener("keydown", key, true);
     };
   }, []);
-  // Riff's chat is hidden while squeezed; this is the keyboard path back: 50/50 (riffFocused), then into its composer.
-  const reclaimRiff = () => {
-    setFocus("riffbot");
-    requestAnimationFrame(() => root.current?.querySelector<HTMLElement>('[data-sky-bot="riffbot"] textarea')?.focus());
-  };
-  // Zone bezel on both sides: the sky-crt border-image widths when it is drawn, else the 7px CSS border.
-  const bezelH = crt && frameStyle ? (crt.slice.left + crt.slice.right) * crt.scale : 14;
-  const cols = skyColumns(layout, faces?.cell ?? { w: 48 }, bezelH);
+  const onFace = (tv: FaceBot) => setOpen((o) => skyFaceClick(skyEffectiveOpen(o, can), tv, can));
+  // While a chat is open the left TV is the open bot's face (clickable to close); the right TV is under the chat.
+  const clickable = (tv: FaceBot) => (open !== null ? tv === "riffbot" : can[tv]);
+  const spinRiff = hub && onSpinUp ? () => onSpinUp(hub) : undefined;
+  const spinOverlord = hub && onSpinUpOverlord ? () => onSpinUpOverlord(view) : undefined;
   return (
     <div
       ref={root}
-      className={`sky-zones${skyUrl ? " has-sky-art" : ""}${layout.expanded ? " is-expanded" : ""}`}
+      className={`sky-zones${skyUrl ? " has-sky-art" : ""}${open ? ` is-open is-open-${open}` : ""}`}
       data-testid="sky-zones"
-      data-expanded={layout.expanded ? "overlord" : "none"}
-      style={{ ["--sky-cols" as string]: cols, ...(skyUrl ? { backgroundImage: `url(${skyUrl})` } : null) }}
-      onFocus={onFocusIn}
-      onBlur={onFocusOut}
+      data-open={open ?? "none"}
+      style={{ ["--sky-cols" as string]: SKY_COLUMNS, ...(skyUrl ? { backgroundImage: `url(${skyUrl})` } : null) }}
     >
-      <Zone zone={zones.riffbot} faces={faces} frameStyle={frameStyle} force={layout.riffMode} takeover={takeover} squeezed={layout.expanded} onReclaim={reclaimRiff} onSuccessor={onSuccessor} onSpinUp={hub && onSpinUp ? () => onSpinUp(hub) : undefined} />
-      <Zone zone={zones.overlord} faces={faces} frameStyle={frameStyle} onSuccessor={onSuccessor} onSpinUp={hub && onSpinUpOverlord ? () => onSpinUpOverlord(view) : undefined} busy={overlordBusy} />
+      <Zone zone={zones.riffbot} faces={faces} frameStyle={frameStyle} force={skyRiffMode(open, hasFaceMode(faces, "riffbot", "scared"))} takeover={takeover} taken={open === "overlord"} clickable={clickable("riffbot")} isOpen={open !== null} openLabel={open ? LABEL[open] : undefined} onFace={() => onFace("riffbot")} onSuccessor={onSuccessor} onSpinUp={spinRiff} />
+      <Zone zone={zones.overlord} faces={faces} frameStyle={frameStyle} clickable={clickable("overlord")} isOpen={open === "overlord"} onFace={() => onFace("overlord")} onSuccessor={onSuccessor} onSpinUp={spinOverlord} busy={overlordBusy} />
+      <Zone panel zone={zones.riffbot} faces={faces} frameStyle={frameStyle} isOpen={open === "riffbot"} onClose={() => setOpen(skyExit)} onSuccessor={onSuccessor} onSpinUp={spinRiff} />
+      <span className={`sky-wall${wallStyle ? " has-art" : ""}`} data-testid="sky-wall" aria-hidden="true" style={wallStyle ?? skyWallFallbackStyle(dpr)} />
+      <Zone panel zone={zones.overlord} faces={faces} frameStyle={frameStyle} isOpen={open === "overlord"} onClose={() => setOpen(skyExit)} onSuccessor={onSuccessor} onSpinUp={spinOverlord} busy={overlordBusy} />
     </div>
   );
 }

@@ -39,6 +39,7 @@ import { sharedRunnerBackend } from "./backend/index.mjs";
 import { shouldSuperviseRunner, superviseRunner } from "./runner-supervisor.mjs";
 import { startRunnerLifecycle } from "./backend/runner-lifecycle.mjs";
 import { logServerStart } from "./server-start.mjs";
+import { runBriefOrphanSweep } from "./brief-orphan-sweep.mjs";
 import { getStale } from "./stale-runtime.mjs";
 import { loadUserSettings } from "./user-settings.mjs";
 
@@ -454,6 +455,7 @@ if (isMain) {
   server.listen(port, "127.0.0.1", () => {
     console.log(`VibeSquad serving ${distDir} on ${url}`);
     logServerStart({ rootDir });
+    setImmediate(() => runBriefOrphanSweep(rootDir));
     // This server is the runner's only owner: start it now and keep it up (backoff). All other callers only connect.
     if (shouldSuperviseRunner()) {
       const sup = superviseRunner(sharedRunnerBackend());

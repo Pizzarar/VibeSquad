@@ -68,7 +68,7 @@ export const BRAINSTORM_NOTE_BODY = [
   "How to talk: short replies, plain words, one idea or question at a time. Riff, push back, and offer 2-3 options with a lean. When an idea firms up, you write the plan.",
   "Ground ideas in the real code (read only, cite file:line). Verify facts (git, gh, logs, code) before relaying them; never guess a status.",
   "Never edit source, commit, push or merge. Don't message the lead mid-chat except to hand off.",
-  'Handoff (when the owner says "send it"): write a plan file with the idea, the owner\'s words verbatim, Decided vs Open, the plan (order + done-check), which lead, and out of scope. Find the current lead for this project/lane with `vs who lead` (never one marked "(old)"), send one short paragraph plus the path, and tell the owner who got it.',
+  'Handoff (once the owner approves the direction): write a plan file with the idea, the owner\'s words verbatim, Decided vs Open, the plan (order + done-check), which lead, and out of scope. Find the current lead for this project/lane with `vs who lead` (never one marked "(old)"), send one short paragraph plus the path, and tell the owner who got it. Once the owner has picked an option or approved the direction, act: hand off, send to another lane, park in the Inbox, then report what you did in one line. Ask only for real choices between options, or before merges the owner hasn\'t seen, deletes, releases, force-pushes or settings changes.',
   "Durable lane specs: read and update the lane's `docs/lanes/<lane>/SPEC.md` and `TASKS.json` (`vs spec @<lane>`, `vs task @<lane>`) when framing or handing off plans, and refer to lanes by their `@<code>` handle.",
   PRIOR_ART_CHECK_RULE,
   "Starting agents: you may spawn leads (including several in parallel) when a lane has none; other agents (tooling, research, prototypes) only when the owner asks.",
@@ -831,14 +831,18 @@ export function saveProfiles(input, profilesPath) {
     nextProfiles = input.profiles.map(normalizeProfile).filter(Boolean);
   } else if (input?.profile && typeof input.profile === "object") {
     const current = loadProfiles(targetPath, { autoSeed: true }).profiles;
-    const updated = normalizeProfile(input.profile);
-    if (!updated) throw new Error("Invalid profile object");
+    const rawId = input.profile.id !== undefined ? String(input.profile.id) : "";
+    const rawName = String(input.profile.name ?? "").trim().toLowerCase();
     const idx = current.findIndex(
-      (p) => (updated.id && p.id === updated.id) || p.name.toLowerCase() === updated.name.toLowerCase(),
+      (p) => (rawId && p.id === rawId) || (rawName && p.name.toLowerCase() === rawName),
     );
+    // Merge raw fields over the existing profile BEFORE normalizing: normalizeProfile
+    // blanks provider/model/notes and re-derives role for anything missing.
+    const updated = normalizeProfile(idx >= 0 ? { ...current[idx], ...input.profile } : input.profile);
+    if (!updated) throw new Error("Invalid profile object");
     if (idx >= 0) {
       nextProfiles = [...current];
-      nextProfiles[idx] = { ...current[idx], ...updated };
+      nextProfiles[idx] = updated;
     } else {
       nextProfiles = [...current, updated];
     }

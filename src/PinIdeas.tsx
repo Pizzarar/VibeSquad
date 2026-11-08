@@ -3,8 +3,8 @@
 // and the toast both report to. Side effects live in src/pinActions.ts.
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { bestOverlap, DEFAULT_PIN_PROFILE, hubPinForSquad, looksDoneFor, nameFromIdea, parseSendTo, pinsForSquad, describeSpinOff, isSpinOffRunning, spinOffFrom, spinOffRemaining, spinOffVersion, subscribeSpinOff, type Pin } from "./pins";
-import { createPin, createSpinOffPins, dismissSendTo, dismissSpinOff, isSpinOffDismissed, getLastBrainstormProfile, isSendToDismissed, sendIdeaToTeam, setLastBrainstormProfile } from "./pinActions";
+import { bestOverlap, DEFAULT_PIN_PROFILE, hubPinForSquad, looksDoneFor, nameFromIdea, parseSendTo, sendToCardId, spinOffCardId, pinsForSquad, describeSpinOff, isSpinOffRunning, spinOffFrom, spinOffRemaining, spinOffVersion, subscribeSpinOff, type Pin } from "./pins";
+import { createPin, dismissedVersion, subscribeDismissed, createSpinOffPins, dismissSendTo, dismissSpinOff, isSpinOffDismissed, getLastBrainstormProfile, isSendToDismissed, sendIdeaToTeam, setLastBrainstormProfile } from "./pinActions";
 import { spinUpPin } from "./pinFocus";
 import { getTeams, type TeamView } from "./teams";
 import { useLooksDoneId, type PinHandler } from "./PinGrid";
@@ -16,6 +16,13 @@ import { useProfiles } from "./profiles";
 let toast = "";
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 const toastListeners = new Set<() => void>();
+
+/** The server saved a brief in its runtime folder (lane folder not found); say so instead of silently losing it. */
+export const briefFallbackWarning = (laneIds: string[]) =>
+  laneIds.length ? `Brief for ${laneIds.join(", ")} was saved in the app folder, not the project. Check the lane path.` : "";
+
+/** A plain toast plus the fallback warning, so the later "Pinned ..." toast can't hide it. */
+export const withBriefWarning = (msg: string, laneIds: string[]) => [msg, briefFallbackWarning(laneIds)].filter(Boolean).join(" · ");
 
 export function showPinToast(msg: string) {
   toast = msg;
@@ -55,7 +62,7 @@ export function sendToFrom(agentId: string, entries: TimelineEntry[]): SendToOff
     if (it?.type !== "assistant_message" || typeof it.text !== "string") continue;
     const offer = parseSendTo(it.text);
     if (!offer) return null;
-    return { ...offer, id: `${agentId}:${it.id ?? it.messageId ?? entries[i].seqStart ?? entries[i].timestamp ?? it.text.length}` };
+    return { ...offer, id: sendToCardId(agentId, offer) };
   }
   return null;
 }
@@ -108,16 +115,18 @@ export function useSpinOff(agentId: string | null): SpinOffOffer | null {
 /** "Spin up 3 Teams: A, B, C · Not yet". One click pins them all in this Squad; no Buddies start. */
 export function SpinOffCard({ pin, offer, variant = "tile" }: { pin: Pin; offer: SpinOffOffer; variant?: "tile" | "bar" }) {
   const [hidden, setHidden] = useState(() => isSpinOffDismissed(offer.id));
-  useEffect(() => setHidden(isSpinOffDismissed(offer.id)), [offer.id]);
+  const dv = useSyncExternalStore(subscribeDismissed, dismissedVersion);
+  useEffect(() => setHidden(isSpinOffDismissed(offer.id)), [offer.id, dv]);
   useSyncExternalStore(subscribeSpinOff, spinOffVersion);
   const busy = isSpinOffRunning(offer.id);
   const teams = spinOffRemaining(offer.id, offer.teams);
   if (hidden || !teams.length) return null;
   const n = teams.length;
   const go = async () => {
-    const results = await createSpinOffPins(offer.id, pin.squad.id, offer.teams); // the full list: runSpinOffOnce skips the rows already created
+    const fellBack: string[] = [];
+    const results = await createSpinOffPins(offer.id, pin.squad.id, offer.teams, { onBriefFallback: (id) => fellBack.push(id) }); // the full list: runSpinOffOnce skips the rows already created
     if (!results) return; // already running (double click, or the other card)
-    showPinToast(describeSpinOff(results));
+    showPinToast(withBriefWarning(describeSpinOff(results), fellBack));
     if (results.every((r) => r.pin)) {
       dismissSpinOff(offer.id);
       setHidden(true);
@@ -162,10 +171,11 @@ export function SendToCard({ pin, offer, variant = "tile" }: { pin: Pin; offer: 
   const [hidden, setHidden] = useState(() => isSendToDismissed(offer.id));
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState(false);
+  const dv = useSyncExternalStore(subscribeDismissed, dismissedVersion);
   useEffect(() => {
     setHidden(isSendToDismissed(offer.id));
     setPreview(false);
-  }, [offer.id, offer.text]);
+  }, [offer.id, offer.text, dv]);
   if (hidden || !offer.text) return null;
   const target = laneName(offer.laneId);
   const lines = offer.text.split("\n");
@@ -383,9 +393,10 @@ export function IdeaBox({
         return;
       }
       setLastBrainstormProfile(selectedProfile);
-      const pin = await createPin(view.team.id, resolveIdeaTeamName(name, rawIdea) || "New team", rawIdea, { lastProfile: selectedProfile });
+      const fellBack: string[] = [];
+      const pin = await createPin(view.team.id, resolveIdeaTeamName(name, rawIdea) || "New team", rawIdea, { lastProfile: selectedProfile, onBriefFallback: (id) => fellBack.push(id) });
       onClose();
-      showPinToast(`Pinned ${pin.lane.name}`);
+      showPinToast(withBriefWarning(`Pinned ${pin.lane.name}`, fellBack));
       await onQuickStart(pin);
       await spinUpPin(pin, selectedProfile);
     } catch (e) {

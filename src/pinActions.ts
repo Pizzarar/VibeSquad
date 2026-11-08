@@ -189,24 +189,26 @@ export function capBriefForSave(content: string, maxChars = 19_500): string {
   return content.slice(0, headLen) + sep + content.slice(content.length - tailLen);
 }
 
-async function readBrief(laneId: string, doFetch: typeof fetch): Promise<string> {
-  const url = `/__vibesquad/brainstorm-summary?lane=${encodeURIComponent(laneId)}`;
+async function readBrief(laneId: string, doFetch: typeof fetch, teamId?: string): Promise<string> {
+  const url = `/__vibesquad/brainstorm-summary?lane=${encodeURIComponent(laneId)}${teamId ? `&teamId=${encodeURIComponent(teamId)}` : ""}`;
   const cur = (await (await doFetch(url)).json().catch(() => ({}))) as { ok?: boolean; content?: string; revision?: string; error?: string };
   if (!cur.ok) throw new Error(cur.error ?? "Could not read the brief");
   if (typeof cur.revision === "string") lastBriefRevision.set(laneId, cur.revision);
   return String(cur.content ?? "");
 }
 
-async function writeBrief(laneId: string, content: string, doFetch: typeof fetch, revision = lastBriefRevision.get(laneId)): Promise<void> {
+// teamId: the Squad id, so the server finds the project folder before the lane is in teams.json. Returns true when the server fell back to its runtime folder.
+async function writeBrief(laneId: string, content: string, doFetch: typeof fetch, revision = lastBriefRevision.get(laneId), teamId?: string): Promise<boolean> {
   const capped = content.length >= 20_000 || content.length > 19_500 ? capBriefForSave(content) : content;
   const res = await doFetch("/__vibesquad/brainstorm-summary", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ laneId, content: capped, ...(revision ? { revision } : {}) }),
+    body: JSON.stringify({ laneId, content: capped, ...(revision ? { revision } : {}), ...(teamId ? { teamId } : {}) }),
   });
-  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; revision?: string; error?: string };
+  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; revision?: string; error?: string; fallback?: boolean };
   if (!res.ok || !body.ok) throw new Error(body.error ?? `Brief save failed (${res.status})`);
   if (typeof body.revision === "string") lastBriefRevision.set(laneId, body.revision);
+  return body.fallback === true;
 }
 
 async function appendToBrief(laneId: string, line: string, doFetch: typeof fetch): Promise<void> {
@@ -229,7 +231,7 @@ export function markPinComplete(pin: Pin, deps: CompleteDeps = {}): Promise<{ ok
   const doFetch = deps.fetch ?? fetch;
   return runMarkComplete(pin, {
     readBrief: (laneId) => readBrief(laneId, doFetch),
-    writeBrief: (laneId, content) => writeBrief(laneId, content, doFetch),
+    writeBrief: (laneId, content) => writeBrief(laneId, content, doFetch).then(() => {}),
     retire: deps.retire ?? retireAgent,
     archive: deps.archive ?? archiveAgent,
     saveTeams: deps.saveTeams ?? saveTeams,
@@ -271,7 +273,7 @@ export function removePin(pin: Pin, plan: RemovePlan, opts: { deleteWorktrees: b
   return runRemoveTeam(pin, plan, opts, {
     archive: deps.archive ?? archiveAgent,
     saveTeams: deps.saveTeams ?? saveTeams,
-    ...(DEMO ? {} : { readBrief: (laneId: string) => readBrief(laneId, doFetch), writeBrief: (laneId: string, c: string) => writeBrief(laneId, c, doFetch) }),
+    ...(DEMO ? {} : { readBrief: (laneId: string) => readBrief(laneId, doFetch), writeBrief: (laneId: string, c: string) => writeBrief(laneId, c, doFetch).then(() => {}) }),
     removeWorktrees: async (worktrees) => {
       if (DEMO) return worktrees.map((w) => ({ ...w, worktree: "removed" as const, branchResult: "deleted" }));
       const res = await doFetch("/__vibesquad/remove-team-worktrees", {
@@ -298,7 +300,71 @@ function dismissedSet(key = LOOKS_DONE_KEY): Set<string> {
   }
 }
 
-export const isLooksDoneDismissed = (messageId: string): boolean => dismissedSet().has(messageId);
+// Dismissed cards also live on the server (settings.json `dismissedCards`, newest 500) so every device hides a card
+// once any device acted on it. localStorage stays as the offline cache; the two are merged on read.
+const DISMISS_KEYS = [LOOKS_DONE_KEY, "vibesquad.sendToDismissed", "vibesquad.spinOffDismissed"];
+const SETTINGS_URL = "/__vibesquad/settings";
+let serverDismissed = new Set<string>();
+let dismissedLoad: Promise<void> | null = null;
+let dismissedVer = 0;
+const dismissedListeners = new Set<() => void>();
+const bumpDismissed = () => {
+  dismissedVer++;
+  dismissedListeners.forEach((l) => l());
+};
+export const subscribeDismissed = (l: () => void): (() => void) => {
+  dismissedListeners.add(l);
+  return () => dismissedListeners.delete(l);
+};
+export const dismissedVersion = (): number => dismissedVer;
+
+function mergeServerDismissed(body: { dismissedCards?: unknown } | null): void {
+  const ids = Array.isArray(body?.dismissedCards) ? (body!.dismissedCards as unknown[]).filter((x): x is string => typeof x === "string") : [];
+  const before = serverDismissed.size;
+  for (const id of ids) serverDismissed.add(id);
+  if (serverDismissed.size !== before) bumpDismissed();
+}
+
+async function postDismissed(ids: string[]): Promise<void> {
+  if (!ids.length) return;
+  try {
+    const res = await fetch(SETTINGS_URL, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ dismissedCards: ids }) });
+    if (res.ok) mergeServerDismissed((await res.json().catch(() => null)) as { dismissedCards?: unknown } | null);
+  } catch {
+    // offline: the localStorage copy keeps it hidden here, and the next load pushes it up
+  }
+}
+
+/** Fetch the shared list once (and push up any ids only this device knows). Safe to call repeatedly. */
+export function loadDismissedCards(): Promise<void> {
+  if (DEMO) return Promise.resolve();
+  dismissedLoad ??= (async () => {
+    try {
+      const res = await fetch(SETTINGS_URL);
+      if (!res.ok) throw new Error(String(res.status));
+      mergeServerDismissed((await res.json()) as { dismissedCards?: unknown });
+      const local = DISMISS_KEYS.flatMap((k) => [...dismissedSet(k)]);
+      await postDismissed(local.filter((id) => !serverDismissed.has(id)));
+    } catch {
+      dismissedLoad = null; // retry on the next read
+    }
+  })();
+  return dismissedLoad;
+}
+
+/** Test hook: forget the in-memory server list, as a freshly opened client would. */
+export function resetDismissedCards(): void {
+  serverDismissed = new Set();
+  dismissedLoad = null;
+  dismissedVer = 0;
+}
+
+function isDismissed(key: string, id: string): boolean {
+  void loadDismissedCards();
+  return dismissedSet(key).has(id) || serverDismissed.has(id);
+}
+
+export const isLooksDoneDismissed = (messageId: string): boolean => isDismissed(LOOKS_DONE_KEY, messageId);
 
 function dismiss(key: string, messageId: string): void {
   // Keep the newest 200 ids so the key cannot grow without bound.
@@ -306,6 +372,9 @@ function dismiss(key: string, messageId: string): void {
   try {
     localStorage.setItem(key, JSON.stringify(ids));
   } catch {}
+  serverDismissed.add(messageId);
+  bumpDismissed();
+  if (!DEMO) void postDismissed([messageId]);
 }
 
 export const dismissLooksDone = (messageId: string): void => dismiss(LOOKS_DONE_KEY, messageId);
@@ -333,6 +402,8 @@ export function setLastBrainstormProfile(profile: string): void {
 export type CreatePinDeps = Pick<OpenPinDeps, "fetch" | "getTeams" | "saveTeams" | "agents" | "onSpawned" | "profile"> & {
   lastProfile?: string;
   startBuddies?: boolean;
+  /** Called when the server saved the brief in its runtime folder instead of the project's. */
+  onBriefFallback?: (laneId: string) => void;
 };
 
 /** The pinned team an idea most likely belongs to in this squad, or null ("Sounds like X. Use it?"). */
@@ -392,12 +463,13 @@ export async function createPin(squadId: string, name: string, idea: string, dep
     if (!DEMO) {
       let updated: string | null = null;
       try {
-        const existingBrief = await readBrief(reopenTarget.id, doFetch);
+        const existingBrief = await readBrief(reopenTarget.id, doFetch, squadId);
         updated = appendIdeaToOpenSection(existingBrief, idea);
       } catch {
         updated = null;
       }
-      await writeBrief(reopenTarget.id, updated ?? newPinBrief(reopenTarget.id, clean, idea), doFetch);
+      const fellBack = await writeBrief(reopenTarget.id, updated ?? newPinBrief(reopenTarget.id, clean, idea), doFetch, undefined, squadId);
+      if (fellBack) deps.onBriefFallback?.(reopenTarget.id);
     }
     let next = teams;
     await (deps.saveTeams ?? saveTeams)((cur) =>
@@ -428,7 +500,7 @@ export async function createPin(squadId: string, name: string, idea: string, dep
   const code = laneCodesForTeam({ lanes: [...squad.lanes, { id, name: clean }] })[id];
   const lane: PinLane = { id, name: clean, ...(code ? { code } : {}), state: "pinned", ...(deps.lastProfile ? { lastProfile: deps.lastProfile } : {}) };
   // Brief first: a failed write leaves no half-made pin behind.
-  if (!DEMO) await writeBrief(lane.id, newPinBrief(lane.id, clean, idea), doFetch);
+  if (!DEMO && (await writeBrief(lane.id, newPinBrief(lane.id, clean, idea), doFetch, undefined, squadId))) deps.onBriefFallback?.(lane.id);
   // The brief write is async, so add the lane to whatever the registry holds by then.
   let next = teams;
   await (deps.saveTeams ?? saveTeams)((cur) =>
@@ -510,11 +582,11 @@ export async function sendIdeaToTeam(laneId: string, text: string, from?: string
 }
 
 const SEND_TO_KEY = "vibesquad.sendToDismissed";
-export const isSendToDismissed = (messageId: string): boolean => dismissedSet(SEND_TO_KEY).has(messageId);
+export const isSendToDismissed = (messageId: string): boolean => isDismissed(SEND_TO_KEY, messageId);
 export const dismissSendTo = (messageId: string): void => dismiss(SEND_TO_KEY, messageId);
 
 const SPIN_OFF_KEY = "vibesquad.spinOffDismissed";
-export const isSpinOffDismissed = (messageId: string): boolean => dismissedSet(SPIN_OFF_KEY).has(messageId);
+export const isSpinOffDismissed = (messageId: string): boolean => isDismissed(SPIN_OFF_KEY, messageId);
 export const dismissSpinOff = (messageId: string): void => dismiss(SPIN_OFF_KEY, messageId);
 
 /**

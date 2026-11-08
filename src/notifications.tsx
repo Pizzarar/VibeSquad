@@ -68,16 +68,71 @@ async function desktopAvailable(): Promise<boolean> {
 
 // Push filter: the server's watcher skips any event turned off in Settings › Notifications. Synced through the
 // existing /__vibesquad/settings endpoint on load and whenever a toggle changes (the last device to change wins).
-let lastPushEvents = "";
+const PUSH_SYNC_DELAYS_MS = [500, 1000, 2000];
+
+export interface PushEventsSyncerOpts {
+  getPushEvents?: () => Record<string, boolean>;
+  fetchFn?: typeof fetch;
+  scheduleRetry?: (fn: () => void, ms: number) => unknown;
+  cancelRetry?: (handle: unknown) => void;
+  isDisabled?: () => boolean;
+  delaysMs?: readonly number[];
+}
+
+export function createPushEventsSyncer(opts?: PushEventsSyncerOpts): () => void {
+  const getEvents = opts?.getPushEvents ?? (() => pushEventsFromPrefs(getPrefs()));
+  const schedule = opts?.scheduleRetry ?? ((fn, ms) => setTimeout(fn, ms));
+  const cancel = opts?.cancelRetry ?? ((h) => clearTimeout(h as any));
+  const disabled = opts?.isDisabled ?? (() => isRemote() || DEMO);
+  const delays = opts?.delaysMs ?? PUSH_SYNC_DELAYS_MS;
+
+  let lastPushEvents = "";
+  let syncSeq = 0;
+  let retryTimer: unknown = null;
+
+  const clearRetry = () => {
+    if (retryTimer !== null) {
+      cancel(retryTimer);
+      retryTimer = null;
+    }
+  };
+
+  const attempt = (seq: number, pushEvents: Record<string, boolean>, key: string, retryIndex: number) => {
+    void Promise.resolve()
+      .then(() => (opts?.fetchFn ?? fetch)("/__vibesquad/settings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pushEvents }) }))
+      .then((r) => {
+        if (!r || !r.ok) throw new Error(`HTTP ${r?.status ?? "error"}`);
+      })
+      .catch(() => {
+        if (seq !== syncSeq) return;
+        lastPushEvents = "";
+        if (retryIndex < delays.length) {
+          retryTimer = schedule(() => {
+            retryTimer = null;
+            if (seq !== syncSeq) return;
+            lastPushEvents = key;
+            attempt(seq, pushEvents, key, retryIndex + 1);
+          }, delays[retryIndex]);
+        }
+      });
+  };
+
+  return function sync(): void {
+    if (disabled()) return;
+    const pushEvents = getEvents();
+    const key = JSON.stringify(pushEvents);
+    if (key === lastPushEvents) return;
+    clearRetry();
+    const seq = ++syncSeq;
+    lastPushEvents = key;
+    attempt(seq, pushEvents, key, 0);
+  };
+}
+
+const syncPushEventsImpl = createPushEventsSyncer();
 function syncPushEvents(): void {
   if (isRemote()) return;
-  const pushEvents = pushEventsFromPrefs(getPrefs());
-  const key = JSON.stringify(pushEvents);
-  if (key === lastPushEvents || DEMO) return;
-  lastPushEvents = key;
-  void fetch("/__vibesquad/settings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pushEvents }) }).catch(() => {
-    lastPushEvents = "";
-  });
+  syncPushEventsImpl();
 }
 if (typeof window !== "undefined") {
   syncPushEvents();

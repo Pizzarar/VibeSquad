@@ -19,6 +19,8 @@ import {
   TAKEOVER_JSON_URL,
   takeoverAdvance,
   takeoverFrameAt,
+  dprMediaQuery,
+  safeDpr,
   takeoverSettled,
   validateSkyCrt,
   validateTakeover,
@@ -44,6 +46,26 @@ export function useTheme(): Theme {
     return () => mo.disconnect();
   }, []);
   return theme;
+}
+
+/** G8e: the live device-pixel ratio (page zoom included). 1 without a window. Re-arms a matchMedia(resolution) listener after every change. */
+export function useDpr(): number {
+  const read = () => (typeof window === "undefined" ? 1 : safeDpr(window.devicePixelRatio));
+  const [dpr, setDpr] = useState(read);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia(dprMediaQuery(dpr));
+    const onChange = () => setDpr(read());
+    onChange();
+    mq.addEventListener?.("change", onChange);
+    // Zoom also resizes the viewport; some engines / emulation never fire the resolution query, so re-read on resize too (same value = no re-render).
+    window.addEventListener("resize", onChange);
+    return () => {
+      mq.removeEventListener?.("change", onChange);
+      window.removeEventListener("resize", onChange);
+    };
+  }, [dpr]);
+  return dpr;
 }
 
 export function usePrefersReducedMotion(): boolean {

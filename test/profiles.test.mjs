@@ -657,3 +657,58 @@ test("custom (non-built-in) profile whose note equals a shipped default is not t
     env.cleanup();
   }
 });
+
+// P1: single-profile saveProfiles merges raw fields over the existing profile before normalizing.
+test("P1: saveProfiles({profile:{name,id}}) keeps provider/model/notes/role; notes:'' clears; new profile still created", () => {
+  const env = makeTempEnv();
+  try {
+    saveProfiles(
+      {
+        profiles: [
+          { id: "p-1", name: "Lead - Opus", role: "lead", provider: "claude", model: "opus", notes: "keep me" },
+        ],
+      },
+      env.profilesPath,
+    );
+    const r1 = saveProfiles({ profile: { name: "Lead - Opus", id: "p-1" } }, env.profilesPath);
+    const kept = r1.profiles.find((p) => p.id === "p-1");
+    assert.equal(kept.provider, "claude");
+    assert.equal(kept.model, "opus");
+    assert.equal(kept.notes, "keep me");
+    assert.equal(kept.role, "lead");
+
+    // Matching by id alone also merges
+    const r1b = saveProfiles({ profile: { id: "p-1", color: "#fff" } }, env.profilesPath);
+    const kept2 = r1b.profiles.find((p) => p.id === "p-1");
+    assert.equal(kept2.provider, "claude");
+    assert.equal(kept2.color, "#fff");
+
+    const r2 = saveProfiles({ profile: { name: "Lead - Opus", id: "p-1", notes: "" } }, env.profilesPath);
+    const cleared = r2.profiles.find((p) => p.id === "p-1");
+    assert.equal(cleared.notes, "");
+    assert.equal(cleared.provider, "claude");
+
+    const r3 = saveProfiles(
+      { profile: { id: "p-2", name: "Worker - New", provider: "codex", model: "gpt", notes: "n" } },
+      env.profilesPath,
+    );
+    assert.equal(r3.profiles.length, 2);
+    const added = r3.profiles.find((p) => p.id === "p-2");
+    assert.equal(added.provider, "codex");
+    assert.equal(added.notes, "n");
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("just-send-it rule: identical sentence in all three prompt sources, old ask-to-confirm phrases gone", () => {
+  const SENTENCE =
+    "Once the owner has picked an option or approved the direction, act: hand off, send to another lane, park in the Inbox, then report what you did in one line. Ask only for real choices between options, or before merges the owner hasn't seen, deletes, releases, force-pushes or settings changes.";
+  const root = resolve(import.meta.dirname, "..");
+  for (const rel of ["server/profiles.mjs", "src/profiles.ts", "server/hooks/agent-duties.ts"]) {
+    const src = readFileSync(join(root, rel), "utf8").replace(/\\(['"])/g, "$1");
+    assert.ok(src.includes(SENTENCE), `${rel}: missing the just-send-it sentence`);
+    assert.ok(!src.includes('owner says "send it"'), `${rel}: old send-it trigger`);
+    assert.ok(!src.includes("Send it there?"), `${rel}: old confirm question`);
+  }
+});

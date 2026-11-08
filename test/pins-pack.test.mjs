@@ -24,7 +24,7 @@ test("(a) packs carry the new rules", () => {
     "Never complete a Team yourself",
     "vs:looks-done",
     "✓ Mark complete · Not yet",
-    "That sounds like <Team>. Send it there?",
+    "vs:send-to <lane-id>",
     "I just thought of X",
     "overlap",
     "hard limit VS retires you",

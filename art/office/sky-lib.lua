@@ -1,6 +1,6 @@
 -- C2 phase 2: the shared cloud painter for the sky band (sky-build.lua) and the sky-CRT base
 -- (sky-crt-build.lua), so both read as the same clouds. H0 hand: chunky hand-placed puffs, flat
--- MARBLE fill, a CORAL underside lit by the sunset, PINK bottom row, VIOLET outline + VIOLET seams
+-- MARBLE fill, a CORAL underside lit by the sunset, PINK bottom row, INK outline + INK seams (H1d: bible line rule)
 -- where one puff overlaps the next. Only slots that keep their role in both P0 palettes.
 local S = {}
 
@@ -12,7 +12,7 @@ local S = {}
 --   body  {y, x0, x1}: every pixel at row >= y in columns x0..x1 is cloud too (a solid bank)
 --   flat  true: a straight CORAL underside line (no 5px wave), for edges that must be constant along x
 --   belly false: no CORAL/PINK underside (a bank that runs off the bottom edge)
---   seams false: no VIOLET seam lines between overlapping puffs
+--   seams false: no INK seam lines between overlapping puffs
 -- L = the hypno lib (slot names).
 function S.cloud(C, L, puffs, opt)
   opt = opt or {}
@@ -57,7 +57,7 @@ function S.cloud(C, L, puffs, opt)
   for _, m in pairs(mask) do
     for _, d in ipairs({ { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 } }) do
       local x, y = m.x + d[1], m.y + d[2]
-      if not inside(x, y) and y <= base + 1 then put(x, y, L.VIOLET) end
+      if not inside(x, y) and y <= base + 1 then put(x, y, L.INK) end
     end
   end
   for _, m in pairs(mask) do
@@ -75,7 +75,7 @@ function S.cloud(C, L, puffs, opt)
     local p = puffs[i]
     for y, xl in pairs(left[i]) do
       if y > p[2] - p[4] * 0.55 and y < p[2] + p[4] * 0.35 and y < base - und and inside(xl - 1, y) and owner[key(xl - 1, y)] ~= i then
-        put(xl, y, L.VIOLET)
+        put(xl, y, L.INK)
       end
     end
   end
