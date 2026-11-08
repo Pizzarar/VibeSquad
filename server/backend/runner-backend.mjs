@@ -356,36 +356,42 @@ function scanTail(file) {
 }
 
 /**
- * The last prompt/created event (`input`/`created`) and the last turn-progress event from a log's tail, without parsing
- * the whole file. Reads a bounded 64 KB tail and scans backwards, stopping at the first prompt/created event (anything
- * earlier is an earlier turn). A prompt beyond the window returns null (the caller falls back to `createdAt`). Returns
+ * The last prompt/created event (`input`/`created`) and the last turn-progress event from a log. Reads a tail window
+ * and scans backwards, stopping at the first prompt/created event (anything earlier is an earlier turn). Grows the
+ * window (×4) up to the full file so a huge prompt line or a large run of raw/stderr/meta noise does not hide the
+ * prompt; the caller only runs this for starting/queued agents, so the cost stays small in practice. Returns
  * { lastPromptAt, lastProgressAt } (either may be null when absent).
  */
 export function scanLogProgress(file) {
   const fd = fs.openSync(file, "r");
   try {
     const size = fs.fstatSync(fd).size;
-    const len = Math.min(size, 64 * 1024);
-    const buf = Buffer.alloc(len);
-    fs.readSync(fd, buf, 0, len, size - len);
-    let lines = buf.toString("utf8").split("\n");
-    if (len < size) lines = lines.slice(1); // first line is cut
     let lastPrompt = null;
     let lastProgress = null;
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const line = lines[i];
-      if (!line) continue;
-      let e;
-      try { e = JSON.parse(line); } catch { continue; }
-      if (e.type === "input" || e.type === "created") {
-        // The most recent prompt/created event: a progress event seen before it (later in the log) is "since the
-        // prompt"; anything earlier belongs to an earlier turn, so stop here.
-        lastPrompt = e.ts;
-        break;
+    for (let want = 64 * 1024; ; want *= 4) {
+      const len = Math.min(size, want);
+      const buf = Buffer.alloc(len);
+      fs.readSync(fd, buf, 0, len, size - len);
+      let lines = buf.toString("utf8").split("\n");
+      if (len < size) lines = lines.slice(1); // first line is cut
+      let foundPrompt = false;
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i];
+        if (!line) continue;
+        let e;
+        try { e = JSON.parse(line); } catch { continue; }
+        if (e.type === "input" || e.type === "created") {
+          // The most recent prompt/created event: a progress event seen before it (later in the log) is "since the
+          // prompt"; anything earlier belongs to an earlier turn, so stop here.
+          lastPrompt = e.ts;
+          foundPrompt = true;
+          break;
+        }
+        if (!lastProgress && isTurnProgressEvent(e)) lastProgress = e.ts;
       }
-      if (!lastProgress && isTurnProgressEvent(e)) lastProgress = e.ts;
+      if (foundPrompt || len >= size) break;
     }
-    return { lastPromptAt: lastPrompt ?? null, lastProgressAt: lastProgress ?? null };
+    return { lastPromptAt: lastPrompt, lastProgressAt: lastProgress };
   } finally {
     fs.closeSync(fd);
   }
@@ -410,6 +416,7 @@ export class RunnerBackend {
     Object.defineProperty(this, "whosHere", { value: whosHere });
     Object.defineProperty(this, "rootDir", { value: rootDir });
     Object.defineProperty(this, "listeners", { value: new Set() });
+    Object.defineProperty(this, "progressCache", { value: new Map() }); // rec.id -> { lastSeq, lastPromptAt, lastProgressAt }
     Object.defineProperty(this, "live", { value: { stream: null, chain: Promise.resolve(), turn: new Map(), gen: 0, retry: { timer: null, n: 0 }, seedTimers: new Map(), seeded: new Set(), hwm: null, known: new Map(), archived: new Set(), emitted: new WeakSet() } });
   }
 
@@ -552,8 +559,16 @@ export class RunnerBackend {
     // isStalePredecessor is the only consumer and returns false for every status but starting/queued; skip the log
     // scan for everything else so a running/idle turn never re-reads its log on every tick.
     if (rec.status !== "starting" && rec.status !== "queued") return rec;
+    const cached = this.progressCache.get(rec.id);
+    if (cached && cached.lastSeq === rec.lastSeq) {
+      // The log has not advanced since the last scan (same lastSeq): reuse it, so repeated ticks don't re-read.
+      if (cached.lastPromptAt != null) rec.lastPromptAt = cached.lastPromptAt;
+      if (cached.lastProgressAt != null) rec.lastProgressAt = cached.lastProgressAt;
+      return rec;
+    }
     try {
       const p = scanLogProgress(path.join(this.rc.home, "agents", `${rec.id}.jsonl`));
+      this.progressCache.set(rec.id, { lastSeq: rec.lastSeq, ...p });
       if (p.lastPromptAt != null) rec.lastPromptAt = p.lastPromptAt;
       if (p.lastProgressAt != null) rec.lastProgressAt = p.lastProgressAt;
     } catch { /* leave fields absent */ }

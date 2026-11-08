@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { createPlugin } from "../server/hooks/agent-duties.ts";
 import { isStalePredecessor } from "../server/lead-handoff.mjs";
+import { scanLogProgress } from "../server/backend/runner-backend.mjs";
 import {
   LEAD_AUTO_HANDOFF_DEFAULT,
   LEAD_FLAG_DEFAULT,
@@ -114,13 +115,22 @@ test("isStalePredecessor: queued lead under threshold is not stale", () => {
   assert.equal(isStalePredecessor(lead, { now: NOW, staleMs: STALE }), false);
 });
 
-test("isStalePredecessor: initializing past threshold is stale (createdAt fallback), even if a meta/label event just bumped updatedAt", () => {
+test("isStalePredecessor: initializing past threshold is stale, even if a meta/label event just bumped updatedAt", () => {
+  const lead = staleLead({
+    status: "initializing",
+    lastPromptAt: "2026-11-07T00:00:00.000Z", // stuck since the last prompt (24h before NOW)
+    updatedAt: "2026-11-07T23:59:00.000Z", // meta write 1 min before NOW must not reset the clock
+  });
+  assert.equal(isStalePredecessor(lead, { now: NOW, staleMs: STALE }), true);
+});
+
+test("isStalePredecessor: unknown lastPromptAt fails safe (not stale) instead of guessing from createdAt", () => {
   const lead = {
     ...staleLead({ status: "initializing" }),
-    lastPromptAt: undefined, // no runner lastPromptAt -> fall back to createdAt (old)
-    updatedAt: "2026-11-07T23:59:00.000Z", // meta write 1 min before NOW must not reset the clock
+    lastPromptAt: undefined, // the runner did not expose a prompt history
+    createdAt: "2026-11-06T00:00:00.000Z", // old creation must NOT be used as the clock
   };
-  assert.equal(isStalePredecessor(lead, { now: NOW, staleMs: STALE }), true);
+  assert.equal(isStalePredecessor(lead, { now: NOW, staleMs: STALE }), false);
 });
 
 test("isStalePredecessor: a 250k lead with usage, re-prompted and wedged in initializing past threshold, is stale", () => {
@@ -149,6 +159,37 @@ test("isStalePredecessor: a same-millisecond progress event after the prompt cou
     lastProgressAt: "2026-11-07T00:00:00.000Z", // a running event logged in the same millisecond as the input
   });
   assert.equal(isStalePredecessor(lead, { now: NOW, staleMs: STALE }), false);
+});
+
+test("huge prompt line: scan finds the prompt — queued 5s not stale, past threshold stale", () => {
+  const dir = mkdtempSync(join(tmpdir(), "vs-stale-log-"));
+  try {
+    const now = Date.now();
+    const iso = (ts) => (ts == null ? null : new Date(ts).toISOString()); // toAgent() exposes ISO strings
+    const huge = "x".repeat(100 * 1024); // a 100KB prompt line hides its `type` beyond a 64KB tail
+    const writeLog = (file, promptTs) =>
+      writeFileSync(file, [
+        JSON.stringify({ seq: 1, ts: promptTs - 1000, type: "created" }),
+        JSON.stringify({ seq: 2, ts: promptTs, type: "input", text: huge }),
+        JSON.stringify({ seq: 3, ts: promptTs + 100, type: "status", status: "queued" }),
+      ].join("\n") + "\n");
+
+    // Queued 5 s ago -> not stale.
+    const recent = join(dir, "rn-recent.jsonl");
+    writeLog(recent, now - 5000);
+    const r = scanLogProgress(recent);
+    assert.equal(r.lastPromptAt, now - 5000, "the huge prompt is found by growing the window");
+    assert.equal(isStalePredecessor({ status: "queued", lastPromptAt: iso(r.lastPromptAt), lastProgressAt: iso(r.lastProgressAt) }, { now, staleMs: STALE }), false);
+
+    // Same case, past the threshold -> stale.
+    const old = join(dir, "rn-old.jsonl");
+    writeLog(old, now - 40 * 60 * 1000);
+    const o = scanLogProgress(old);
+    assert.equal(o.lastPromptAt, now - 40 * 60 * 1000);
+    assert.equal(isStalePredecessor({ status: "queued", lastPromptAt: iso(o.lastPromptAt), lastProgressAt: iso(o.lastProgressAt) }, { now, staleMs: STALE }), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("Done-when #1: simulated lead stepping 150k -> 250k -> 300k triggers flag, auto-handoff, and forced handoff each at most once", async () => {

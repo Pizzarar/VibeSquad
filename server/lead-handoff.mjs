@@ -223,7 +223,8 @@ export function leadUsedTokens(lead, overrideTokens) {
  * Silence alone never makes a running or idle lead stale. A lead that DID run turns but got wedged in a fresh
  * "initializing" after a re-prompt is still caught: the clock is `lastPromptAt` (the runner's last input/created event),
  * not lifetime `usage` and not `updatedAt`/`lastActivityAt` (which a `setLabels`/meta write bumps without proving the
- * turn ran). Falls back to `createdAt` when the runner did not expose `lastPromptAt`.
+ * turn ran). When the runner did not expose `lastPromptAt`, fail safe (not stale): never guess from `createdAt`, because
+ * a just-re-prompted lead whose prompt we can't see would be wrongly retired within seconds.
  */
 export function isStalePredecessor(
   lead,
@@ -234,8 +235,9 @@ export function isStalePredecessor(
   const status = String(lead.status ?? "").toLowerCase();
   if (status !== "initializing" && status !== "queued" && status !== "starting") return false;
 
-  // Clock = the most recent prompt/created event (last input/created). meta/label writes never move it.
-  const promptTs = Date.parse(lead.lastPromptAt ?? lead.createdAt ?? "");
+  // Clock = the most recent prompt/created event (last input/created). meta/label writes never move it. An unknown
+  // lastPromptAt means we can't see the prompt history: fail safe (not stale) instead of guessing from createdAt.
+  const promptTs = Date.parse(lead.lastPromptAt ?? "");
   if (!Number.isFinite(promptTs)) return false;
 
   // The current turn got going if a turn-progress event landed AT or after the last prompt; a missing lastProgressAt

@@ -76,18 +76,18 @@ test('isTurnProgressEvent: classifies turn-progress vs non-progress events', () 
   assert.equal(isTurnProgressEvent(null), false);
 });
 
-test('scanLogProgress: stops at the first prompt and bounds its read to a 64KB tail', () => {
+test('scanLogProgress: grows past 64KB to find the prompt (stops at the first input/created)', () => {
   const dir = tmp();
   try {
     const file = path.join(dir, 'rn-big.jsonl');
-    // A prompt at the very start, then >64KB of output: the prompt is beyond the bounded tail, so it is NOT read back.
+    // A prompt at the very start, then >64KB of output: the prompt is found by growing the window.
     const lines = [JSON.stringify({ seq: 1, ts: 1000, type: 'input', text: 'go' })];
     const pad = 'x'.repeat(1024);
     for (let i = 0; i < 200; i++) lines.push(JSON.stringify({ seq: i + 2, ts: 2000 + i, type: 'output', text: pad }));
     writeFileSync(file, lines.join('\n') + '\n');
-    assert.ok(statSync(file).size > 64 * 1024, 'log is larger than the bounded window');
+    assert.ok(statSync(file).size > 64 * 1024, 'log is larger than 64KB');
     const res = scanLogProgress(file);
-    assert.equal(res.lastPromptAt, null, 'prompt beyond the bounded 64KB window is not read back');
+    assert.equal(res.lastPromptAt, 1000, 'prompt is found by growing the window');
     assert.equal(res.lastProgressAt, 2000 + 199, 'most recent progress is read');
     // A prompt as the LAST event: stop there — no progress after it.
     const file2 = path.join(dir, 'rn-stop.jsonl');
@@ -100,7 +100,38 @@ test('scanLogProgress: stops at the first prompt and bounds its read to a 64KB t
   }
 });
 
-test('progressFor: skips the scan for running/idle, scans (bounded) only for starting/queued', () => {
+test('scanLogProgress: grows past a 100KB prompt line and past 100KB of raw noise to find the input', () => {
+  const dir = tmp();
+  try {
+    const now = Date.now();
+    // 100KB prompt line: the prompt's JSON key is beyond a 64KB tail.
+    const huge = path.join(dir, 'rn-huge.jsonl');
+    writeFileSync(huge, [
+      JSON.stringify({ seq: 1, ts: now - 5000 - 1000, type: 'created' }),
+      JSON.stringify({ seq: 2, ts: now - 5000, type: 'input', text: 'x'.repeat(100 * 1024) }),
+      JSON.stringify({ seq: 3, ts: now - 5000 + 100, type: 'status', status: 'queued' }),
+    ].join('\n') + '\n');
+    assert.ok(statSync(huge).size > 64 * 1024);
+    assert.equal(scanLogProgress(huge).lastPromptAt, now - 5000, 'huge prompt is found by growing the window');
+
+    // 100KB of raw (non-progress) after the input: the input is before the tail.
+    const raw = path.join(dir, 'rn-raw.jsonl');
+    const lines = [
+      JSON.stringify({ seq: 1, ts: now - 5000 - 1000, type: 'created' }),
+      JSON.stringify({ seq: 2, ts: now - 5000, type: 'input', text: 'go' }),
+    ];
+    for (let i = 0; i < 200; i++) lines.push(JSON.stringify({ seq: 3 + i, ts: now - 5000 + 100 + i, type: 'raw', line: 'y'.repeat(500) }));
+    writeFileSync(raw, lines.join('\n') + '\n');
+    assert.ok(statSync(raw).size > 64 * 1024);
+    const r = scanLogProgress(raw);
+    assert.equal(r.lastPromptAt, now - 5000, 'input is found past the raw noise');
+    assert.equal(r.lastProgressAt, null, 'raw is not progress');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('progressFor: skips the scan for running/idle, scans (cached) only for starting/queued', () => {
   const dir = tmp();
   try {
     mkdirSync(path.join(dir, 'agents'), { recursive: true });
@@ -114,10 +145,13 @@ test('progressFor: skips the scan for running/idle, scans (bounded) only for sta
     const running = backend.progressFor({ id: 'rn-big', status: 'running', createdAt: 1000, updatedAt: 2199 });
     assert.equal(running.lastPromptAt, undefined, 'running status triggers no scan');
     assert.equal(running.lastProgressAt, undefined);
-    // queued: scans, bounded (the prompt beyond the 64KB window stays unset), but reads the most recent progress.
-    const queued = backend.progressFor({ id: 'rn-big', status: 'queued', createdAt: 1000, updatedAt: 2199 });
-    assert.equal(queued.lastPromptAt, undefined, 'prompt beyond the window is left unset');
+    // queued: scans (grows to find the prompt) and reads the most recent progress; cached by lastSeq.
+    const queued = backend.progressFor({ id: 'rn-big', status: 'queued', createdAt: 1000, updatedAt: 2199, lastSeq: 201 });
+    assert.equal(queued.lastPromptAt, 1000);
     assert.equal(queued.lastProgressAt, 2199);
+    const queuedAgain = backend.progressFor({ id: 'rn-big', status: 'queued', createdAt: 1000, updatedAt: 2199, lastSeq: 201 });
+    assert.equal(queuedAgain.lastPromptAt, 1000, 'cached by lastSeq');
+    assert.equal(queuedAgain.lastProgressAt, 2199);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
