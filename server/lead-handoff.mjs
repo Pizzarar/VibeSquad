@@ -19,6 +19,7 @@ import {
   laneCodeFor,
   loadTeamsRegistry,
   ordOf,
+  resolveLeadWinner,
 } from "./identity.mjs";
 import { listDaemonAgents } from "./detach-children.mjs";
 import { getBackend, isRunnerId, readRunnerAgentSync } from "./backend/index.mjs";
@@ -1153,21 +1154,21 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
       if (!lead) {
         const wantLane = String(body.laneId || body.lane || body.teamId || body.team || "vibesquad").trim().toLowerCase();
         const laneLeads = liveList.filter((a) => {
-          if (!a || a.archivedAt || a.internal || a.status === "closed") return false;
+          if (!a || a.archivedAt || a.internal || (a.status === "closed" && a.resumable !== true)) return false;
           if (effectiveAgentRole(a) !== "lead" || isRetiredAgent(a)) return false;
           const aLane = String(a.labels?.lane || a.labels?.lead || "").trim().toLowerCase();
           return aLane === wantLane;
         });
         if (laneLeads.length) {
-          laneLeads.sort((a, b) => parseLeadOrd(b) - parseLeadOrd(a));
-          lead = laneLeads[0];
+          lead = resolveLeadWinner(laneLeads).winner ?? laneLeads[0];
         }
       }
     }
     if (!lead || !lead.id) throw new Error(`lead agent not found: ${body.agentId || body.laneId || body.lane || "vibesquad"}`);
     if (!body.oldLead && effectiveAgentRole(lead) !== "lead") throw new Error(`not a lead: ${lead.id}`);
-    // A Buddy or lead hands off a live lead: the target must be one (not archived, closed or already retired).
-    if ((trigger === "buddy" || trigger === "self" || trigger === "overlord") && (lead.archivedAt || lead.status === "closed" || isRetiredAgent(lead))) {
+    // A Buddy or lead hands off a live lead: the target must be one (not archived, not closed-dead, not already retired).
+    // A closed-but-resumable lead (lost, no successor) is accepted as the source and retired, not required to be live.
+    if ((trigger === "buddy" || trigger === "self" || trigger === "overlord") && (lead.archivedAt || (lead.status === "closed" && lead.resumable !== true) || isRetiredAgent(lead))) {
       throw new Error(`lead-handoff: ${lead.id} is not a live lead`);
     }
     // Defence in depth: the handoff_lead tool sends callerId, so re-check it from the caller's own record. Local-token holders
@@ -1188,7 +1189,7 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
         }
         if (!caller) throw forbid("caller not found");
         const wantRole = trigger === "overlord" ? "lead" : "brainstorm";
-        if (effectiveAgentRole(caller) !== wantRole || isRetiredAgent(caller) || caller.archivedAt || caller.status === "closed") {
+        if (effectiveAgentRole(caller) !== wantRole || isRetiredAgent(caller) || caller.archivedAt || (caller.status === "closed" && caller.resumable !== true)) {
           throw forbid(trigger === "overlord" ? "caller is not a live lead" : "caller is not a live Buddy");
         }
         const teams = loadTeamsRegistry(rootDir);

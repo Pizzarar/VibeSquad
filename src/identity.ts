@@ -27,6 +27,7 @@ export interface IdentityInput {
   title?: string | null;
   cwd?: string | null;
   status?: string | null;
+  resumable?: boolean;
   archivedAt?: string | null;
   parentAgentId?: string | null;
   labels?: Record<string, unknown> | null;
@@ -99,7 +100,8 @@ export function isRetiredAgent(agentOrLabels: IdentityInput | Record<string, str
   if (isRetiredRole(labels.role)) return true;
   const maybeAgent = agentOrLabels as IdentityInput;
   if (maybeAgent.archivedAt) return true;
-  if (maybeAgent.status === "closed") return true;
+  // A closed agent is retired only when it cannot be resumed in place (mirrors server/identity.mjs isRetiredAgent).
+  if (maybeAgent.status === "closed") return maybeAgent.resumable !== true;
   return false;
 }
 
