@@ -3,6 +3,7 @@
 import type { PaseoAgent } from "./agentTypes";
 import { archiveAgent, archiveWorkspace, detachAgent, getPaseoState, retireAgent, sendMessage, updateAgent, upsertLocalAgent } from "./paseo";
 import { DEMO } from "./demoFlag";
+import { canonicalCardId } from "../server/pin-ideas.mjs";
 import { parkIdeasInInbox } from "./IdeaInbox";
 import { isRemote } from "./remoteSession";
 import {
@@ -361,7 +362,11 @@ export function resetDismissedCards(): void {
 
 function isDismissed(key: string, id: string): boolean {
   void loadDismissedCards();
-  return dismissedSet(key).has(id) || serverDismissed.has(id);
+  if (dismissedSet(key).has(id) || serverDismissed.has(id)) return true;
+  // Cards dismissed before ids dropped the agent id carry it; match them by content so they stay dismissed.
+  const want = canonicalCardId(id);
+  for (const old of [...dismissedSet(key), ...serverDismissed]) if (canonicalCardId(old) === want) return true;
+  return false;
 }
 
 export const isLooksDoneDismissed = (messageId: string): boolean => isDismissed(LOOKS_DONE_KEY, messageId);

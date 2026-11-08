@@ -78,7 +78,7 @@ describe("U16: parseSpinOff behavioral tests (server/pin-ideas.mjs & src/pins.ts
     ]);
 
     const offer = spinOffFrom("riffbot-1", [{ item: { type: "assistant_message", text: formatted, id: "msg-7" } }]);
-    assert.match(offer?.id ?? "", /^spin-off:riffbot-1:sim core,ui raid,art pipeline:/);
+    assert.match(offer?.id ?? "", /^spin-off:[*]:sim core,ui raid,art pipeline:/);
     assert.equal(offer?.teams.length, 3);
   });
 });

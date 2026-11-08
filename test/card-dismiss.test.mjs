@@ -158,3 +158,27 @@ test("D2: the list is capped at the newest 500 and other saves neither clobber n
   assert.equal(got.at(-1), "late");
   assert.equal(got[0], "c21");
 });
+
+test("D1 regress: a card dismissed under one Buddy agent id stays dismissed when the resumed Buddy has another id", async () => {
+  newClient();
+  await settle();
+  const offer = { laneId: "usage", text: "track token usage per lane" };
+  actions.dismissSendTo(ideas.sendToCardId("rn-before", offer)); // fired while the Buddy was rn-before
+  const spin = ideas.parseSpinOff("```vs:spin-off\nAudio | sounds\nUI | menus\n```");
+  actions.dismissSpinOff(ideas.spinOffCardId("rn-before", spin));
+  await flush();
+  newClient(); // reload / resume: empty localStorage, fresh server list
+  await settle();
+  assert.equal(actions.isSendToDismissed(ideas.sendToCardId("rn-after", offer)), true, "send-to keyed by content, not agent");
+  assert.equal(actions.isSpinOffDismissed(ideas.spinOffCardId("rn-after", spin)), true, "spin-off keyed by content, not agent");
+  assert.equal(actions.isSendToDismissed(ideas.sendToCardId("rn-after", { laneId: "usage", text: "another idea" })), false);
+});
+
+test("D1 regress: ids dismissed in the old agent-prefixed form still hide the card", async () => {
+  newClient();
+  const offer = { laneId: "usage", text: "legacy dismissed idea" };
+  const legacy = ideas.sendToCardId("rn-old", offer).replace("send-to:*:", "send-to:rn-123:");
+  globalThis.localStorage.setItem("vibesquad.sendToDismissed", JSON.stringify([legacy]));
+  await settle();
+  assert.equal(actions.isSendToDismissed(ideas.sendToCardId("rn-new", offer)), true);
+});

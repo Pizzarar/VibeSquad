@@ -378,6 +378,7 @@ import { takenLaneIds } from "../server/pin-ideas.mjs";
 export {
   bestOverlap,
   cardId,
+  canonicalCardId,
   sendToCardId,
   spinOffCardId,
   nameFromIdea,
