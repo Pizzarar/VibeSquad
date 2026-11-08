@@ -32,7 +32,7 @@ import { createAgentClient, readBrainstormSummary, writeBrainstormSummary } from
 import { getBackend, isRunnerId, listRunnerAgentsSync, readRunnerAgentSync, sharedRunnerBackend } from "../server/backend/index.mjs";
 import { callTool, createContext } from "../server/mcp/tools.mjs";
 import { bestOverlap, newPinBrief, slugLaneId, takenLaneIds, uniqueLaneId } from "../server/pin-ideas.mjs";
-import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "../server/teams-file.mjs";
+import { resolveTeamsFilePath as resolveSharedTeamsFilePath, teamsRevision, writeTeamsRegistry } from "../server/teams-file.mjs";
 import {
   UNASSIGNED_TEAM_ID,
   effectiveAgentRole as resolveEffectiveAgentRole,
@@ -253,6 +253,7 @@ function parseArgs(argv) {
     "title",
     "note",
     "since",
+    "revision",
   ]);
   const booleans = new Set([
     "sinceMe",
@@ -1457,28 +1458,13 @@ function matchLaneRef(lanes, rawRef) {
   );
 }
 
-import { teamsRevision, writeTeamsRegistry } from "../server/teams-file.mjs";
-
-let cliPinRevision;
-for (let i = 2; i < process.argv.length; i++) {
-  if (process.argv[i] === "--revision") {
-    cliPinRevision = process.argv[i + 1] ?? "";
-    process.argv.splice(i, 2);
-    break;
-  }
-  if (process.argv[i]?.startsWith("--revision=")) {
-    cliPinRevision = process.argv[i].slice("--revision=".length);
-    process.argv.splice(i, 1);
-    break;
-  }
-}
-
 function loadPinTeamsSnapshot(flags) {
   const file = resolveTeamsFilePath();
-  const revision = String(flags?.revision ?? flags?.base ?? cliPinRevision ?? process.env.VS_TEAMS_REVISION ?? teamsRevision(file));
+  const revision = String(flags?.revision ?? flags?.base ?? process.env.VS_TEAMS_REVISION ?? teamsRevision(file));
   const { value: cur } = readJsonFileWithBom(file, { fallback: null, label: "teams.json" });
-  const doc = Array.isArray(cur?.teams) ? structuredClone(cur) : structuredClone(TEAMS_FILE);
-  return { file, revision, doc };
+  const prevDoc = Array.isArray(cur?.teams) ? structuredClone(cur) : null;
+  const doc = prevDoc ? structuredClone(prevDoc) : structuredClone(TEAMS_FILE);
+  return { file, revision, prevDoc, doc };
 }
 
 function findSquadInDoc(doc, value) {
@@ -1490,7 +1476,7 @@ function findSquadInDoc(doc, value) {
   );
 }
 
-function savePinTeams(doc, revision, flags) {
+function savePinTeams(doc, revision, flags, { prevDoc = null, writeBrief } = {}) {
   if (typeof flags?.beforeWrite === "function") flags.beforeWrite();
   const res = writeTeamsRegistry({ ...doc, teams: doc.teams, revision });
   if (res.status === 409) {
@@ -1499,7 +1485,20 @@ function savePinTeams(doc, revision, flags) {
     );
     return { ok: false, status: 409, revision: res.body?.revision };
   }
-  return { ok: true, status: res.status, file: res.file, revision: res.body?.revision };
+  let written;
+  if (typeof writeBrief === "function") {
+    try {
+      written = writeBrief();
+    } catch (err) {
+      if (prevDoc && Array.isArray(prevDoc.teams)) {
+        try {
+          writeTeamsRegistry({ ...prevDoc, teams: prevDoc.teams, revision: res.body?.revision });
+        } catch {}
+      }
+      throw err;
+    }
+  }
+  return { ok: true, status: res.status, file: res.file, revision: res.body?.revision, written };
 }
 
 export function commandPinMerge(flags) {
@@ -1509,7 +1508,7 @@ export function commandPinMerge(flags) {
     throw new Error('usage: vs pin merge <from-lane> <into-lane> [--note "<shared contract>"] [--team <squad>]');
   }
   const note = String(flags.note ?? flags.brief ?? "").trim();
-  const { file, revision, doc } = loadPinTeamsSnapshot(flags);
+  const { file, revision, prevDoc, doc } = loadPinTeamsSnapshot(flags);
   const identity = resolveIdentity({ ...flags, lane: undefined });
   const squadDef = findSquadInDoc(doc, flags.team ? String(flags.team) : identity.team.id) ?? findSquadInDoc(doc, identity.team.name);
   if (!squadDef) throw new Error(`unknown squad "${flags.team ?? identity.team.name}". Pass --team <squad>.`);
@@ -1573,10 +1572,12 @@ export function commandPinMerge(flags) {
     }
     return l;
   });
-  const saved = savePinTeams(doc, revision, flags);
+  const saved = savePinTeams(doc, revision, flags, {
+    prevDoc,
+    writeBrief: () => writeBrainstormSummary(intoLane.id, merged, briefRoot, { teamId: squadDef.id }),
+  });
   if (!saved.ok) return 1;
-
-  const written = writeBrainstormSummary(intoLane.id, merged, briefRoot, { teamId: squadDef.id });
+  const written = saved.written;
 
   const logEntry = {
     ts: nowIso,
@@ -1609,7 +1610,7 @@ export function commandPin(flags) {
   if (!name) throw new Error('pin new needs a name: vs pin new "<name>" --brief "<idea>"');
   const brief = String(flags.brief ?? "").trim() || name;
 
-  const { file, revision, doc } = loadPinTeamsSnapshot(flags);
+  const { file, revision, prevDoc, doc } = loadPinTeamsSnapshot(flags);
   const identity = resolveIdentity({ ...flags, lane: undefined });
   const squadDef = findSquadInDoc(doc, flags.team ? String(flags.team) : identity.team.id) ?? findSquadInDoc(doc, identity.team.name);
   if (!squadDef) throw new Error(`unknown squad "${flags.team ?? identity.team.name}". Pass --team <squad>.`);
@@ -1646,9 +1647,12 @@ ${brief}`, live);
         return { ...rest, name, state: "pinned" };
       }),
     );
-    const saved = savePinTeams(doc, revision, flags);
+    const saved = savePinTeams(doc, revision, flags, {
+      prevDoc,
+      writeBrief: () => writeBrainstormSummary(reopenTarget.id, updatedBrief, briefRoot, { teamId: squadDef.id }),
+    });
     if (!saved.ok) return 1;
-    const written = writeBrainstormSummary(reopenTarget.id, updatedBrief, briefRoot, { teamId: squadDef.id });
+    const written = saved.written;
 
     if (flags.json) {
       process.stdout.write(
@@ -1672,9 +1676,12 @@ ${brief}`, live);
 
   // Freeze: persist generated codes on every lane of the Squad that lacks one, plus the new lane's.
   target.lanes = freezeLaneCodes([...freezeLaneCodes(target.lanes ?? []), { id, name, state: "pinned" }]);
-  const saved = savePinTeams(doc, revision, flags);
+  const saved = savePinTeams(doc, revision, flags, {
+    prevDoc,
+    writeBrief: () => writeBrainstormSummary(id, newPinBrief(id, name, brief), briefRoot, { teamId: squadDef.id }),
+  });
   if (!saved.ok) return 1;
-  const written = writeBrainstormSummary(id, newPinBrief(id, name, brief), briefRoot, { teamId: squadDef.id });
+  const written = saved.written;
 
   if (flags.json) {
     process.stdout.write(JSON.stringify({ ok: true, squad: squadDef.id, laneId: id, name, brief: written.path, teamsFile: saved.file, revision: saved.revision }, null, 2) + "\n");

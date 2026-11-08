@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { withFileLockSync } from "./file-lock.mjs";
 import { isForbiddenRealHome, isForbiddenRepoTeams } from "./test-guard.mjs";
 import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
 
@@ -85,76 +86,78 @@ export function validateTeamsBody(teams) {
 }
 
 /**
- * Shared atomic + revision-checked writer for teams.json (used by both the server PUT/POST handler and `vs pin`).
+ * Shared locked + atomic + revision-checked writer for teams.json (used by both the server PUT/POST handler and `vs pin`).
  * Returns `{ status: 200 | 409, file, prevTeams, body }`.
  */
 export function writeTeamsRegistry(parsed, rootDir = REPO_ROOT) {
   const teams = Array.isArray(parsed) ? parsed : parsed?.teams;
   validateTeamsBody(teams);
-  const readPath = resolveTeamsFilePath(rootDir);
-  const curRes = readJsonFileWithBom(readPath, {
-    label: "teams.json",
-    fallback: {},
-    recordWarning: true,
-  });
-  const { revision: _staleRevision, ...cur } = curRes.data ?? {};
-  const currentRevision = teamsRevision(readPath);
-  if (!Array.isArray(parsed) && typeof parsed.revision === "string" && parsed.revision !== currentRevision) {
-    return { status: 409, file: readPath, prevTeams: cur.teams, body: { error: "teams.json changed", ...cur, revision: currentRevision } };
-  }
-  const firstTeam = teams[0] ?? null;
-  const leadFlagTokens =
-    typeof parsed.leadFlagTokens === "number"
-      ? parsed.leadFlagTokens
-      : typeof firstTeam?.leadFlagTokens === "number"
-        ? firstTeam.leadFlagTokens
-        : cur.leadFlagTokens ?? cur.leadHandoffTokens ?? LEAD_FLAG_DEFAULT;
-  const leadAutoHandoffTokens =
-    typeof parsed.leadAutoHandoffTokens === "number"
-      ? parsed.leadAutoHandoffTokens
-      : typeof firstTeam?.leadAutoHandoffTokens === "number"
-        ? firstTeam.leadAutoHandoffTokens
-        : cur.leadAutoHandoffTokens ?? LEAD_AUTO_HANDOFF_DEFAULT;
-  const leadHardCapTokens =
-    typeof parsed.leadHardCapTokens === "number"
-      ? parsed.leadHardCapTokens
-      : typeof firstTeam?.leadHardCapTokens === "number"
-        ? firstTeam.leadHardCapTokens
-        : cur.leadHardCapTokens ?? LEAD_HARD_CAP_DEFAULT;
-  const next = {
-    ...cur,
-    leadHandoffTokens: leadFlagTokens,
-    leadFlagTokens,
-    leadAutoHandoffTokens,
-    leadHardCapTokens,
-    ...(typeof parsed.brainstormWarnTokens === "number" ? { brainstormWarnTokens: parsed.brainstormWarnTokens } : {}),
-    ...(typeof parsed.brainstormRestartTokens === "number" ? { brainstormRestartTokens: parsed.brainstormRestartTokens } : {}),
-    teams,
-  };
   const file = resolveTeamsWritePath(rootDir);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  // Unique per write, so two PUTs in this process never share a temp file.
-  const tmp = `${file}.tmp-${process.pid}-${Date.now()}-${++teamsTmpSeq}`;
-  try {
-    fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + "\n", "utf8");
-    fs.renameSync(tmp, file);
-  } catch (e) {
-    fs.rmSync(tmp, { force: true });
-    throw e;
-  }
-  clearConfigWarning(file);
-  return {
-    status: 200,
-    file,
-    prevTeams: cur.teams,
-    body: {
-      ok: true,
-      revision: teamsRevision(resolveTeamsFilePath(rootDir)),
-      teams: next.teams,
-      leadFlagTokens: next.leadFlagTokens,
-      leadAutoHandoffTokens: next.leadAutoHandoffTokens,
-      leadHardCapTokens: next.leadHardCapTokens,
-    },
-  };
+  return withFileLockSync(file, () => {
+    const readPath = resolveTeamsFilePath(rootDir);
+    const curRes = readJsonFileWithBom(readPath, {
+      label: "teams.json",
+      fallback: {},
+      recordWarning: true,
+    });
+    const { revision: _staleRevision, ...cur } = curRes.data ?? {};
+    const currentRevision = teamsRevision(readPath);
+    if (!Array.isArray(parsed) && typeof parsed.revision === "string" && parsed.revision !== currentRevision) {
+      return { status: 409, file: readPath, prevTeams: cur.teams, body: { error: "teams.json changed", ...cur, revision: currentRevision } };
+    }
+    const firstTeam = teams[0] ?? null;
+    const leadFlagTokens =
+      typeof parsed.leadFlagTokens === "number"
+        ? parsed.leadFlagTokens
+        : typeof firstTeam?.leadFlagTokens === "number"
+          ? firstTeam.leadFlagTokens
+          : cur.leadFlagTokens ?? cur.leadHandoffTokens ?? LEAD_FLAG_DEFAULT;
+    const leadAutoHandoffTokens =
+      typeof parsed.leadAutoHandoffTokens === "number"
+        ? parsed.leadAutoHandoffTokens
+        : typeof firstTeam?.leadAutoHandoffTokens === "number"
+          ? firstTeam.leadAutoHandoffTokens
+          : cur.leadAutoHandoffTokens ?? LEAD_AUTO_HANDOFF_DEFAULT;
+    const leadHardCapTokens =
+      typeof parsed.leadHardCapTokens === "number"
+        ? parsed.leadHardCapTokens
+        : typeof firstTeam?.leadHardCapTokens === "number"
+          ? firstTeam.leadHardCapTokens
+          : cur.leadHardCapTokens ?? LEAD_HARD_CAP_DEFAULT;
+    const next = {
+      ...cur,
+      leadHandoffTokens: leadFlagTokens,
+      leadFlagTokens,
+      leadAutoHandoffTokens,
+      leadHardCapTokens,
+      ...(typeof parsed.brainstormWarnTokens === "number" ? { brainstormWarnTokens: parsed.brainstormWarnTokens } : {}),
+      ...(typeof parsed.brainstormRestartTokens === "number" ? { brainstormRestartTokens: parsed.brainstormRestartTokens } : {}),
+      teams,
+    };
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    // Unique per write, so two PUTs in this process never share a temp file.
+    const tmp = `${file}.tmp-${process.pid}-${Date.now()}-${++teamsTmpSeq}`;
+    try {
+      fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + "\n", "utf8");
+      fs.renameSync(tmp, file);
+    } catch (e) {
+      fs.rmSync(tmp, { force: true });
+      throw e;
+    }
+    clearConfigWarning(file);
+    return {
+      status: 200,
+      file,
+      prevTeams: cur.teams,
+      body: {
+        ok: true,
+        revision: teamsRevision(resolveTeamsFilePath(rootDir)),
+        teams: next.teams,
+        leadFlagTokens: next.leadFlagTokens,
+        leadAutoHandoffTokens: next.leadAutoHandoffTokens,
+        leadHardCapTokens: next.leadHardCapTokens,
+      },
+    };
+  });
 }
 

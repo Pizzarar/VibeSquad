@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -45,7 +45,7 @@ test("user registry names efi Escape From Idle", (t) => {
 const ENV_KEYS = ["VIBESQUAD_HOME", "VIBESQUAD_ROOT", "VIBESQUAD_TEAMS_FILE", "VIBESQUAD_IGNORE_HOME_TEAMS", "PASEO_AGENT_ID", "VS_TEAMS_REVISION"];
 
 function withTempHome(fn) {
-  return () => {
+  return async () => {
     const dir = mkdtempSync(join(tmpdir(), "vs-teams-sync-cli-"));
     const home = join(dir, "home");
     const root = join(dir, "root");
@@ -57,7 +57,7 @@ function withTempHome(fn) {
     process.env.VIBESQUAD_ROOT = root;
     process.env.PASEO_AGENT_ID = "";
     try {
-      fn({ dir, home, root, teamsFile: join(home, "teams.json") });
+      await fn({ dir, home, root, teamsFile: join(home, "teams.json") });
     } finally {
       for (const [k, v] of Object.entries(prev)) {
         if (v === undefined) delete process.env[k];
@@ -122,11 +122,13 @@ test(
     assert.equal(existsSync(join(root, "docs", "brainstorm", "weather-system.md")), false);
 
     // 4. CLI pin reopen and merge with a concurrent server write in between read and write are also refused.
+    let expectedAfterServerReopen;
     const inBetweenServerWrite = () => {
       const cur = JSON.parse(readFileSync(teamsFile, "utf8"));
       cur.teams[0].lanes.push({ id: "lighting", name: "Lighting", code: "Lig", state: "pinned" });
       const r = writeTeamsRegistry({ teams: cur.teams, revision: teamsRevision(teamsFile) }, root);
       assert.equal(r.status, 200);
+      expectedAfterServerReopen = readFileSync(teamsFile, "utf8");
     };
     const raceCode = commandPin({
       _: ["new", "Fishing"],
@@ -135,7 +137,8 @@ test(
       beforeWrite: inBetweenServerWrite,
     });
     assert.equal(raceCode, 1, "reopen refused when server wrote in between");
-    const afterRace = JSON.parse(readFileSync(teamsFile, "utf8"));
+    assert.equal(readFileSync(teamsFile, "utf8"), expectedAfterServerReopen);
+    const afterRace = JSON.parse(expectedAfterServerReopen);
     assert.equal(afterRace.teams[0].lanes.find((l) => l.id === "fishing")?.state, "done", "fishing remained done");
     assert.equal(afterRace.teams[0].lanes.some((l) => l.id === "lighting"), true, "server write preserved");
 
@@ -147,6 +150,7 @@ test(
     assert.equal(readFileSync(teamsFile, "utf8"), snapshotBeforeMerge);
     assert.equal(teamsRevision(teamsFile), revBeforeMerge);
 
+    let expectedAfterServerMerge;
     const raceMerge = commandPinMerge({
       _: ["audio", "crafting-tree"],
       note: "race merge",
@@ -156,10 +160,12 @@ test(
         cur.teams[0].lanes.push({ id: "combat", name: "Combat", code: "Com", state: "pinned" });
         const r = writeTeamsRegistry({ teams: cur.teams, revision: teamsRevision(teamsFile) }, root);
         assert.equal(r.status, 200);
+        expectedAfterServerMerge = readFileSync(teamsFile, "utf8");
       },
     });
     assert.equal(raceMerge, 1, "merge refused when server wrote in between");
-    const afterRaceMerge = JSON.parse(readFileSync(teamsFile, "utf8"));
+    assert.equal(readFileSync(teamsFile, "utf8"), expectedAfterServerMerge);
+    const afterRaceMerge = JSON.parse(expectedAfterServerMerge);
     assert.equal(afterRaceMerge.teams[0].lanes.find((l) => l.id === "audio")?.state, "pinned", "audio not marked removed");
     assert.equal(afterRaceMerge.teams[0].lanes.some((l) => l.id === "combat"), true, "server write preserved");
 
@@ -173,6 +179,60 @@ test(
     assert.equal(
       JSON.parse(readFileSync(teamsFile, "utf8")).teams[0].lanes.find((l) => l.id === "audio")?.state,
       "removed",
+    );
+  }),
+);
+
+test(
+  "two concurrent writers with the same base revision: lock serializes them so exactly one wins (200) and the other gets 409",
+  withTempHome(async ({ home, root, teamsFile }) => {
+    const seed = {
+      teams: [{ id: "efi", name: "EFI", paths: [], lanes: [{ id: "base-lane", name: "Base Lane", code: "Bas", state: "pinned" }] }],
+    };
+    writeFileSync(teamsFile, JSON.stringify(seed, null, 2) + "\n", "utf8");
+    const baseRev = teamsRevision(teamsFile);
+
+    const env = { ...process.env, VIBESQUAD_HOME: home, VIBESQUAD_ROOT: root, PASEO_AGENT_ID: "" };
+    const runWriter = (laneId, laneName) =>
+      new Promise((resolve, reject) => {
+        const script = `
+          import { writeTeamsRegistry } from "./server/teams-file.mjs";
+          const res = writeTeamsRegistry({
+            revision: ${JSON.stringify(baseRev)},
+            teams: [{ id: "efi", name: "EFI", paths: [], lanes: [
+              { id: "base-lane", name: "Base Lane", code: "Bas", state: "pinned" },
+              { id: ${JSON.stringify(laneId)}, name: ${JSON.stringify(laneName)}, state: "pinned" }
+            ] }],
+          }, ${JSON.stringify(root)});
+          process.stdout.write(JSON.stringify({ status: res.status, revision: res.body?.revision, error: res.body?.error }));
+        `;
+        const child = spawn(process.execPath, ["--input-type=module", "-e", script], { env, stdio: ["ignore", "pipe", "pipe"] });
+        let stdout = "";
+        let stderr = "";
+        child.stdout.on("data", (d) => (stdout += d));
+        child.stderr.on("data", (d) => (stderr += d));
+        child.on("error", reject);
+        child.on("close", (code) => {
+          if (code !== 0) return reject(new Error(`writer ${laneId} exited ${code}: ${stderr}`));
+          resolve({ laneId, ...JSON.parse(stdout) });
+        });
+      });
+
+    const [a, b] = await Promise.all([runWriter("writer-a", "Writer A"), runWriter("writer-b", "Writer B")]);
+    const statuses = [a.status, b.status].sort((x, y) => x - y);
+    assert.deepEqual(statuses, [200, 409], "exactly one writer wins (200) and the other gets 409");
+
+    const winner = a.status === 200 ? a : b;
+    const loser = a.status === 409 ? a : b;
+    assert.equal(loser.error, "teams.json changed");
+    assert.equal(loser.revision, winner.revision);
+    assert.equal(teamsRevision(teamsFile), winner.revision);
+    assert.equal(existsSync(`${teamsFile}.lock`), false, "lock file cleaned up after write");
+
+    const onDisk = JSON.parse(readFileSync(teamsFile, "utf8"));
+    assert.deepEqual(
+      onDisk.teams[0].lanes.map((l) => l.id),
+      ["base-lane", winner.laneId],
     );
   }),
 );
