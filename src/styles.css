@@ -4699,8 +4699,9 @@ button.project-file-name:hover { text-decoration: underline; }
   grid-column: 1 / -1;
   grid-row: 4;
   min-height: 0;
+  height: 38vh; /* stand-in until the hub-pages shell hands SquadFloor its fixed box */
   max-height: 38vh;
-  overflow: auto;
+  overflow: hidden;
 }
 
 /* ── Sky zones (src/SkyZones.tsx, docs/PLAN_SKY_GODS_C2B.md G1): two sky-CRT chats above the tower ── */
@@ -4776,8 +4777,17 @@ button.project-file-name:hover { text-decoration: underline; }
 .sky-face-hit:focus-visible { outline: 3px solid var(--cyan); outline-offset: -6px; }
 .sky-chat-close { position: absolute; top: 6px; right: 8px; z-index: 4; min-width: 28px; height: 26px; padding: 0 8px; cursor: pointer; font-family: var(--arcade); font-size: 13px; color: var(--text); background: color-mix(in srgb, var(--bg) 80%, transparent); border: 1px solid var(--line); }
 .sky-chat-close:hover, .sky-chat-close:focus-visible { border-color: var(--cyan); color: var(--cyan-t); }
-/* The slam: Riff's / the Overlord's chat drops over the right TV in a few hard steps. Reduced motion = instant swap. */
-.sky-chat-panel:not([hidden]) { animation: sky-chat-slam 180ms steps(4, end) both; }
+/* The Overlord's chat drops over the right TV in a few hard steps. Riff's window is the RS-b slam instead (clock-driven in SkyZones: zoom-rect, hold, squash, shake, puff). Reduced motion = instant swap. */
+.sky-chat-panel:not([hidden]):not(.sky-zone-riffbot) { animation: sky-chat-slam 180ms steps(4, end) both; }
+/* RS-b: while the dotted zoom-rect runs the real window is held back (opacity, not visibility: the composer can still take focus). */
+.sky-zone.is-slam-held { opacity: 0; pointer-events: none; }
+/* Shake + squash come from vars on .sky-zones (SkyZones sets them per clock step); the squash pins the bottom edge so the window thuds down. */
+.sky-zone.is-slam-fx { transform: var(--slam-tv-tf, none); transform-origin: 50% 100%; }
+.sky-zone.sky-chat-panel.is-slam-fx { transform: var(--slam-panel-tf, none); }
+.sky-slam-fx { position: absolute; inset: 0; z-index: 6; pointer-events: none; overflow: hidden; }
+/* Win95 zoom-rect: a dotted XOR outline (difference blend keeps it readable on both skies); width/height/position inline, dot size = 3 device px. */
+.sky-zoom-rect { position: absolute; box-sizing: border-box; border: 2px dotted #fff; mix-blend-mode: difference; }
+.sky-slam-puff { position: absolute; transform-origin: top left; display: block; background-repeat: no-repeat; image-rendering: pixelated; }
 @keyframes sky-chat-slam { from { transform: translateX(14%); opacity: 0; } to { transform: none; opacity: 1; } }
 /* G7 virus takeover: the overlay sheet sits exactly over Riff's face (same contain/scale); never takes a click or focus. */
 .sky-takeover { position: absolute; transform-origin: top left; display: block; background-repeat: no-repeat; image-rendering: pixelated; pointer-events: none; z-index: 1; }
@@ -4839,6 +4849,8 @@ button.project-file-name:hover { text-decoration: underline; }
 .sky-crt-body .pane-slot { flex: 1; grid-row: auto; grid-column: auto; border-left: 0; background: transparent; }
 @media (prefers-reduced-motion: reduce) {
   .sky-chat-panel:not([hidden]) { animation: none; }
+  .sky-slam-fx { display: none; }
+  .sky-zone.is-slam-held { opacity: 1; pointer-events: auto; }
 }
 .sky-static {
   flex: 1;
@@ -4859,17 +4871,64 @@ button.project-file-name:hover { text-decoration: underline; }
 .sky-static-text { font-family: var(--arcade); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; background: var(--bg); padding: 4px 8px; border: 1px solid var(--line); }
 @keyframes sky-static-roll { to { background-position: 0 4px, 7px 0, 0 0; } }
 @media (prefers-reduced-motion: reduce) { .sky-static { animation: none; } }
-.sq-floor-tower {
+/* HP4: one floor per screen. The section fills the box its parent gives it and never scrolls; the stage holds the floor, the lift bar pages it. */
+.sq-floor {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  width: max-content;
-  min-width: 100%;
-  padding: 6px 0;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
   background: var(--navy);
   border-top: 2px solid var(--cyan);
 }
+.sq-floor-stage { flex: 1 1 0; min-height: 0; min-width: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.sq-floor-tower { display: flex; flex-direction: column; align-items: center; justify-content: center; max-width: 100%; max-height: 100%; }
 .sq-floor-band-wrap { position: relative; flex: none; }
+/* CRT blink between floors: collapse to a line, then open again. Two ~100ms halves, CSS only; reduced motion swaps instantly (no class is ever set). */
+.sq-floor-band-wrap.is-blink-out { animation: sq-floor-blink-out 100ms steps(4, end) forwards; }
+.sq-floor-band-wrap.is-blink-in { animation: sq-floor-blink-in 100ms steps(4, end) both; }
+@keyframes sq-floor-blink-out { 0% { transform: scaleY(1); filter: brightness(1); } 60% { transform: scaleY(0.04); filter: brightness(2.2); } 100% { transform: scaleY(0.01) scaleX(0.6); filter: brightness(3); } }
+@keyframes sq-floor-blink-in { 0% { transform: scaleY(0.01) scaleX(0.6); filter: brightness(3); } 40% { transform: scaleY(0.04); filter: brightness(2.2); } 100% { transform: scaleY(1); filter: brightness(1); } }
+@media (prefers-reduced-motion: reduce) { .sq-floor-band-wrap.is-blink-out, .sq-floor-band-wrap.is-blink-in { animation: none; } }
+/* The lift bar: < 07 > under the shaft, so paging reads as the elevator. */
+.sq-floor-lift { flex: none; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 4px 0 6px; }
+.sq-floor-counter {
+  min-width: 3ch;
+  padding: 1px 8px;
+  text-align: center;
+  font-family: var(--arcade);
+  font-size: 16px;
+  letter-spacing: 0.1em;
+  color: var(--cyan);
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+.sq-floor-arrow {
+  position: relative;
+  width: 28px;
+  height: 24px;
+  padding: 0;
+  font-family: var(--arcade);
+  font-size: 18px;
+  line-height: 1;
+  color: var(--text);
+  background: var(--panel-hi);
+  border: 1px solid var(--line);
+  cursor: pointer;
+}
+.sq-floor-arrow:hover:not(:disabled),
+.sq-floor-arrow:focus-visible { background: var(--text); color: var(--bg); }
+.sq-floor-arrow:disabled { opacity: 0.35; cursor: default; }
+.sq-floor-arrow.has-needs::after {
+  content: "";
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 8px;
+  height: 8px;
+  background: var(--pink-fill);
+  border: 1px solid var(--bg);
+}
 .sq-floor-band {
   position: relative;
   overflow: hidden;
@@ -4904,8 +4963,22 @@ button.project-file-name:hover { text-decoration: underline; }
   background-repeat: no-repeat;
 }
 .sq-floor-sprite-fallback { background: var(--coral); border: 1px solid var(--line); box-sizing: border-box; }
+/* FS-a: a 1px silhouette that hugs the sprite's own pixels (4 hard drop-shadows, no blur) + a 1px stepped hop on hover. */
+/* the global U2 focus ring is !important; the silhouette below is the focus indicator here */
+/* FS-b: the selector arrow shows on keyboard focus only (2-frame bob from floor-cursor.json; reduced motion = static frame 0). */
+.sq-floor-cursor { display: none; position: absolute; pointer-events: none; image-rendering: pixelated; background-repeat: no-repeat; background-position: 0 0; animation: sq-floor-cursor-bob steps(var(--cur-frames, 2), jump-none) infinite; }
+.sq-floor-char:focus-visible { z-index: 3; }
+.sq-floor-char:focus-visible .sq-floor-cursor { display: block; }
+@keyframes sq-floor-cursor-bob { from { background-position: 0 0; } to { background-position: calc(var(--cur-w) * (1 - var(--cur-frames, 2))) 0; } }
+@media (prefers-reduced-motion: reduce) { .sq-floor-cursor { animation: none; } }
+button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none !important; }
 .sq-floor-char:hover .sq-floor-sprite,
-.sq-floor-char:focus-visible .sq-floor-sprite { outline: 1px solid var(--cyan); }
+.sq-floor-char:focus-visible .sq-floor-sprite {
+  filter: drop-shadow(1px 0 0 var(--cyan)) drop-shadow(-1px 0 0 var(--cyan)) drop-shadow(0 1px 0 var(--cyan)) drop-shadow(0 -1px 0 var(--cyan));
+}
+.sq-floor-char:hover .sq-floor-sprite { animation: sq-floor-hop 120ms steps(1, end) forwards; }
+@keyframes sq-floor-hop { from { transform: translateY(0); } to { transform: translateY(-1px); } }
+@media (prefers-reduced-motion: reduce) { .sq-floor-char:hover .sq-floor-sprite { animation: none; } }
 .sq-floor-bubble { position: absolute; display: block; pointer-events: none; image-rendering: pixelated; background-repeat: no-repeat; }
 .sq-floor-plus {
   position: absolute;
@@ -5027,7 +5100,7 @@ button.project-file-name:hover { text-decoration: underline; }
 @media (max-width: 600px) {
   .app.pin-focus.hub-focus { grid-template-columns: minmax(0, 1fr); }
   .hub-body { grid-column: 1; }
-  .hub-body .sq-floor { max-height: 40vh; }
+  .hub-body .sq-floor { height: 40vh; max-height: 40vh; }
 }
 
 :root[data-theme="light"] .feed-type.you { background: var(--pink-fill); }
@@ -5807,3 +5880,33 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 :root:root .brainstorm-ctx-bar:not(.tone-red) .btn-brainstorm-restart { background: var(--cyan-fill); color: var(--on-cyan-fill) !important; text-shadow: none; }
 /* teal label chips: tinted panel with body text, like the other quiet chips */
 :root:root .drawer-labels-list .chip { background: color-mix(in srgb, var(--cyan) 18%, var(--panel)); color: var(--text); text-shadow: none; }
+
+/* usa-11: efficiency trend, clean-run floor, savings, workflow era */
+.usage-efficiency, .usage-workflows { margin-top: var(--sp-4, 16px); padding: var(--sp-4, 16px); background: var(--navy); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; gap: var(--sp-3, 12px); }
+.usage-cohort-tiles, .usage-saving-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--sp-3, 12px); }
+.usage-cohort-tile, .usage-saving-card { display: flex; flex-direction: column; gap: var(--sp-1, 4px); padding: var(--sp-3, 12px); background: var(--panel-alt); border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
+.usage-cohort-label { color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.usage-cohort-value { font-size: 22px; line-height: 1.1; }
+.usage-cohort-value small { font-size: 11px; color: var(--muted); }
+.usage-delta { font-variant-numeric: tabular-nums; color: var(--muted); }
+.usage-delta-good { color: var(--mint-t); font-weight: 700; }
+.usage-delta-bad { color: var(--pink-t); font-weight: 700; }
+.usage-floor { display: flex; flex-direction: column; gap: var(--sp-2, 8px); }
+.usage-floor-bar { display: flex; height: 14px; border-radius: 999px; overflow: hidden; background: var(--panel-alt); }
+.usage-floor-seg { height: 100%; min-width: 2px; }
+.usage-floor-legend { display: flex; flex-wrap: wrap; gap: var(--sp-1, 4px) var(--sp-4, 16px); color: var(--muted); }
+.usage-floor-key { display: inline-flex; align-items: center; gap: var(--sp-1, 4px); }
+.usage-floor-dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.usage-floor-clean { background: var(--mint-fill); }
+.usage-floor-rework { background: var(--pink-fill); }
+.usage-floor-loops { background: var(--amber); }
+.usage-floor-fixes { background: var(--violet); }
+.usage-floor-restarts { background: var(--cyan); }
+.usage-export { color: var(--cyan-t); text-decoration: none; border: 1px solid var(--line); border-radius: 6px; padding: var(--sp-1, 4px) var(--sp-3, 12px); font-size: 12px; }
+.usage-export:hover, .usage-export:focus-visible { border-color: var(--cyan-t); }
+.usage-low-coverage { margin-left: var(--sp-2, 8px); }
+.usage-cohort-prior { font-variant-numeric: tabular-nums; }
+.usage-floor-callout { color: var(--text); }
+
+/* V1b part 2: the Overlord "no one on duty" label and Spin Up button sit above the static scanline on their own solid boxes */
+.sky-static > :is(.sky-static-text, .btn) { position: relative; z-index: 1; background-color: var(--bg); }

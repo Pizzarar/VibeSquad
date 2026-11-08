@@ -10,22 +10,35 @@ import {
   bandLayers,
   blipMotion,
   buildTower,
+  clampFloorIndex,
+  cursorInButton,
+  FLOOR_CURSOR_JSON_URL,
+  FLOOR_BLINK_MS,
+  FLOOR_INDEX_KEY,
   FLOOR_NATIVE_HEIGHT,
   FLOOR_NATIVE_WIDTH,
+  floorCounterText,
+  floorFitScale,
   floorOrPlaceholder,
-  integerScale,
+  isTypingTarget,
   LOBBY_MAX_SHOWN,
+  needsYouArrows,
+  pagingDir,
+  parseStoredFloor,
   placeholderFloor,
   POSE_FPS,
   RIDE_MS,
   sliceAnchor,
   sortByAnchorY,
   spriteFrame,
+  stepFloorIndex,
   tvBlips,
   tvCountText,
   transitionRiders,
   validateCast,
+  validateFloorCursor,
   type CastModel,
+  type FloorCursor,
   type FloorModel,
   type Frame,
   type Rect,
@@ -45,6 +58,7 @@ export type SquadFloorProps = {
 // ── Art URLs (the @art contract; hardcode nothing about the sheet itself) ──────
 const CAST_URL = (theme: Theme) => `/office/cast-${theme}.png`;
 const FLOOR_URL = (theme: Theme) => `/office/floor-${theme}.png`;
+const CURSOR_URL = (theme: Theme) => `/office/floor-cursor-${theme}.png`;
 const FLOOR_FRONT_URL = (theme: Theme) => `/office/floor-front-${theme}.png`;
 
 // ── Pin → tower mapping (the F1 buildTower is the model; we only supply inputs) ─
@@ -92,14 +106,19 @@ type Anchor = { x: number; y: number };
 /** One drawable character in a band; the band y-sorts these by anchor. */
 type BandItem = { agent: SeatedAgent; anchor: Anchor; onOpen: () => void };
 
+/** The FS-b arrow: the sheet url + its json, only when both loaded (skip-if-absent) and motion is allowed to play. */
+type CursorArt = { model: FloorCursor; url: string; reduced: boolean };
+
 type SeatProps = {
   item: BandItem;
+  cursor: CursorArt | null;
   cast: CastModel | null;
   sheet: string | null;
   frameIndex: number;
 };
 
-function Seat({ item: { agent, anchor, onOpen }, cast, sheet, frameIndex }: SeatProps) {
+function Seat({ item: { agent, anchor, onOpen }, cast, sheet, frameIndex, cursor }: SeatProps) {
+  const at = cursor && cast ? cursorInButton(cast, cursor.model) : null;
   const frame: Frame | null = cast ? spriteFrame(cast, agent.role, agent.pose, frameIndex, agent.variant) : null;
   const hasSprite = !!(sheet && frame);
   const status = POSE_LABEL[agent.pose] ?? agent.pose;
@@ -112,6 +131,24 @@ function Seat({ item: { agent, anchor, onOpen }, cast, sheet, frameIndex }: Seat
       style={{ left: anchor.x, top: anchor.y, ...(cast ? { width: cast.cell, height: cast.cell } : {}) }}
       onClick={onOpen}
     >
+      {cursor && at && (
+        <span
+          className="sq-floor-cursor"
+          aria-hidden="true"
+          style={
+            {
+              left: at.left,
+              top: at.top,
+              width: cursor.model.cell.w,
+              height: cursor.model.cell.h,
+              backgroundImage: `url(${cursor.url})`,
+              "--cur-w": `${cursor.model.cell.w}px`,
+              "--cur-frames": cursor.model.frames,
+              ...(cursor.reduced ? { animation: "none" } : { animationDuration: `${cursor.model.frames / cursor.model.fps}s` }),
+            } as unknown as CSSProperties
+          }
+        />
+      )}
       {hasSprite ? (
         <span
           className="sq-floor-sprite"
@@ -158,6 +195,7 @@ function Band({
   cast,
   sheet,
   frameIndex,
+  cursor,
 }: {
   plate: ReactNode;
   /** Wall fixtures (the stats TV): drawn right after the plate, under the sprites and the front overlay. */
@@ -170,6 +208,7 @@ function Band({
   cast: CastModel | null;
   sheet: string | null;
   frameIndex: number;
+  cursor: CursorArt | null;
 }) {
   const sorted = sortByAnchorY(items);
   const layers = bandLayers(!!frontSrc);
@@ -183,7 +222,7 @@ function Band({
             return (
               <span key={layer} style={{ display: "contents" }}>
                 {sorted.map((it) => (
-                  <Seat key={it.agent.agentId} item={it} cast={cast} sheet={sheet} frameIndex={frameIndex} />
+                  <Seat key={it.agent.agentId} item={it} cast={cast} sheet={sheet} frameIndex={frameIndex} cursor={cursor} />
                 ))}
                 {extras}
               </span>
@@ -285,6 +324,14 @@ function PlateBoxes({ rects, className }: { rects: Rect[]; className?: string })
   );
 }
 
+function readStoredFloor(): string | null {
+  try {
+    return typeof localStorage === "undefined" ? null : localStorage.getItem(FLOOR_INDEX_KEY);
+  } catch {
+    return null;
+  }
+}
+
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export function SquadFloor({ view }: SquadFloorProps) {
@@ -302,6 +349,7 @@ export function SquadFloor({ view }: SquadFloorProps) {
 
   const [floor, setFloor] = useState<FloorModel>(() => placeholderFloor());
   const [cast, setCast] = useState<CastModel | null>(null);
+  const [cursorModel, setCursorModel] = useState<FloorCursor | null>(null);
   // The tower follows the loaded floor: desk count and statsTv (overflow → blips) come from floor.json.
   const tower = useMemo(() => towerForView(view, floor), [view, floor]);
 
@@ -310,6 +358,8 @@ export function SquadFloor({ view }: SquadFloorProps) {
   // Front overlays are opt-in per floor.json (`"front": true`); absent → skip.
   const floorFrontOk = useImageOk(floor.front ? FLOOR_FRONT_URL(theme) : null);
   const sheet = cast && castImgOk ? CAST_URL(theme) : null;
+  const cursorImgOk = useImageOk(cursorModel ? CURSOR_URL(theme) : null);
+  const cursor: CursorArt | null = cast && cursorModel && cursorImgOk ? { model: cursorModel, url: CURSOR_URL(theme), reduced } : null;
 
   // Load the art JSON; missing/invalid → F1 placeholder layout (and no sprites when cast.json is absent).
   useEffect(() => {
@@ -318,28 +368,33 @@ export function SquadFloor({ view }: SquadFloorProps) {
       fetch("/office/floor.json")
         .then((r) => (r.ok ? r.json() : undefined))
         .catch(() => undefined),
+      fetch(FLOOR_CURSOR_JSON_URL)
+        .then((r) => (r.ok ? r.json() : undefined))
+        .catch(() => undefined),
       fetch("/office/cast.json")
         .then((r) => (r.ok ? r.json() : undefined))
         .catch(() => undefined),
-    ]).then(([floorJson, castJson]) => {
+    ]).then(([floorJson, cursorJson, castJson]) => {
       if (cancelled) return;
       setFloor(floorOrPlaceholder(floorJson));
       const v = validateCast(castJson);
       setCast(v.ok ? v.value : null);
+      const cv = validateFloorCursor(cursorJson);
+      setCursorModel(cv.ok ? cv.value : null);
     });
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // Measure the panel width for the integer scale (native 640px wide, min 1x).
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const [panelWidth, setPanelWidth] = useState(0);
+  // Measure the stage (the box left over above the lift bar): the floor scales to fit both ways, never scrolls.
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const [box, setBox] = useState({ w: 0, h: 0 });
   useEffect(() => {
-    const el = rootRef.current;
+    const el = stageRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver((entries) => {
-      for (const e of entries) setPanelWidth(e.contentRect.width);
+      for (const e of entries) setBox({ w: e.contentRect.width, h: e.contentRect.height });
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -352,7 +407,55 @@ export function SquadFloor({ view }: SquadFloorProps) {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-  const scale = integerScale(panelWidth, dpr);
+  const scale = floorFitScale(box.w, box.h, dpr);
+
+  // HP4 paging: one floor per screen, persisted; `blink` is the CRT collapse (out) / open (in) around the swap.
+  const floorCount = tower.floors.length;
+  const [storedIdx, setStoredIdx] = useState(() => parseStoredFloor(readStoredFloor(), Number.MAX_SAFE_INTEGER));
+  const current = clampFloorIndex(storedIdx, floorCount);
+  const [blink, setBlink] = useState<"out" | "in" | null>(null);
+  const busyRef = useRef(false);
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(() => () => timers.current.forEach(clearTimeout), []);
+  const goRef = useRef<(dir: -1 | 1) => void>(() => {});
+  goRef.current = (dir) => {
+    const next = stepFloorIndex(current, dir, floorCount);
+    if (next === current || busyRef.current) return;
+    const commit = () => {
+      setStoredIdx(next);
+      try {
+        localStorage.setItem(FLOOR_INDEX_KEY, String(next));
+      } catch {
+        /* storage blocked: paging still works, it just will not persist */
+      }
+    };
+    if (reduced) return commit();
+    busyRef.current = true;
+    setBlink("out");
+    timers.current.push(
+      setTimeout(() => {
+        commit();
+        setBlink("in");
+        timers.current.push(
+          setTimeout(() => {
+            setBlink(null);
+            busyRef.current = false;
+          }, FLOOR_BLINK_MS),
+        );
+      }, FLOOR_BLINK_MS),
+    );
+  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const dir = pagingDir(e);
+      if (!dir || e.defaultPrevented || isTypingTarget(e.target as HTMLElement | null)) return;
+      e.preventDefault();
+      goRef.current(dir);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  const arrows = needsYouArrows(tower.floors, current);
 
   // Work/needs frames play at POSE_FPS; reduced motion freezes on frame 0.
   const [tick, setTick] = useState(0);
@@ -402,7 +505,6 @@ export function SquadFloor({ view }: SquadFloorProps) {
     [pinsByLane],
   );
 
-  const floorRefs = useRef<(HTMLDivElement | null)[]>([]);
   // A rider starts at the elevator of the floor it sat on and rises for RIDE_MS.
   const ridersOn = (floorIndex: number, elevator: Rect): ReactNode =>
     riders
@@ -448,17 +550,17 @@ export function SquadFloor({ view }: SquadFloorProps) {
   );
 
   return (
-    <section className="sq-floor" data-testid="squad-floor" aria-label="Squad floor" ref={rootRef}>
-      {scale >= 1 && (
+    <section className="sq-floor" data-testid="squad-floor" aria-label="Squad floor" >
+      <div className="sq-floor-stage" ref={stageRef}>
+        {scale >= 1 && (
         <div className="sq-floor-tower">
-          {/* Floors, top-down in squad pin order, two teams per floor. */}
-          {tower.floors.map((f, i) => (
+          {/* One floor per screen (squad pin order, two teams per floor); < > in the lift bar page it. */}
+          {tower.floors.slice(current, current + 1).map((f) => (
             <div
               key={f.index}
-              ref={(el) => {
-                floorRefs.current[i] = el;
-              }}
-              className="sq-floor-band-wrap"
+              className={`sq-floor-band-wrap${blink ? ` is-blink-${blink}` : ""}`}
+              data-testid="sq-floor-page"
+              data-floor={f.index}
               style={towerScale(FLOOR_NATIVE_WIDTH, FLOOR_NATIVE_HEIGHT)}
             >
               <div className="sq-floor-band" style={bandStyle(FLOOR_NATIVE_WIDTH, FLOOR_NATIVE_HEIGHT)}>
@@ -466,6 +568,7 @@ export function SquadFloor({ view }: SquadFloorProps) {
                   cast={cast}
                   sheet={sheet}
                   frameIndex={frameIndex}
+                  cursor={cursor}
                   frontSrc={floorFrontOk ? FLOOR_FRONT_URL(theme) : null}
                   items={[
                     ...teamItems(f.teamA, floor.teamA, (agentId) => openAgent(f.teamA.laneId, agentId)),
@@ -494,20 +597,45 @@ export function SquadFloor({ view }: SquadFloorProps) {
                 />
               </div>
               {f.needsYou && (
-                <button
-                  type="button"
-                  className="sq-floor-mark"
-                  data-testid={`sq-floor-mark-${f.index}`}
-                  title="Someone needs you on this floor"
-                  onClick={() => floorRefs.current[i]?.scrollIntoView({ behavior: "smooth", block: "nearest" })}
-                >
+                <span className="sq-floor-mark" data-testid={`sq-floor-mark-${f.index}`} title="Someone needs you on this floor">
                   !
-                </button>
+                </span>
               )}
             </div>
           ))}
         </div>
+        )}
+      </div>
+      {floorCount > 0 && (
+        <div className="sq-floor-lift" role="group" aria-label="Lift: change floor">
+          <button
+            type="button"
+            className={`sq-floor-arrow${arrows.prev ? " has-needs" : ""}`}
+            data-testid="sq-floor-prev"
+            aria-label={arrows.prev ? "Previous floor (someone needs you up there)" : "Previous floor"}
+            title="Previous floor (←)"
+            disabled={current <= 0}
+            onClick={() => goRef.current(-1)}
+          >
+            ‹
+          </button>
+          <span className="sq-floor-counter" data-testid="sq-floor-counter" aria-live="polite" aria-label={`Floor ${floorCounterText(current)} of ${floorCount}`}>
+            {floorCounterText(current)}
+          </span>
+          <button
+            type="button"
+            className={`sq-floor-arrow${arrows.next ? " has-needs" : ""}`}
+            data-testid="sq-floor-next"
+            aria-label={arrows.next ? "Next floor (someone needs you down there)" : "Next floor"}
+            title="Next floor (→)"
+            disabled={current >= floorCount - 1}
+            onClick={() => goRef.current(1)}
+          >
+            ›
+          </button>
+        </div>
       )}
     </section>
+
   );
 }
