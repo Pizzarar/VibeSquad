@@ -85,55 +85,61 @@ function makeTempEnv() {
 }
 
 // ---------------------------------------------------------------------------
-// isStalePredecessor: only a lead that never got a turn going (still starting/queued, no usage)
-// can be stale. Silence alone never makes a running or idle lead stale.
+// isStalePredecessor: stale only when the CURRENT turn never got going (status
+// initializing/queued/starting AND no turn-progress since the last prompt). Silence alone
+// never makes a running or idle lead stale, and lifetime usage does not make a lead immune.
 // ---------------------------------------------------------------------------
+const NOW = Date.parse("2026-11-08T00:00:00.000Z");
+const STALE = 30 * 60 * 1000;
 const staleLead = (over = {}) => ({
   id: "rn-stale",
   status: "initializing",
   createdAt: "2026-11-06T00:00:00.000Z",
+  lastPromptAt: "2026-11-07T00:00:00.000Z", // last prompt/created
   labels: { team: "vibesquad", lane: "vibesquad", role: "lead", ord: "1" },
   ...over,
 });
 
 test("isStalePredecessor: running lead silent 31 min is not stale", () => {
-  assert.equal(
-    isStalePredecessor(staleLead({ status: "running", updatedAt: "2026-11-07T00:00:00.000Z" }), { now: Date.parse("2026-11-07T00:31:00.000Z"), staleMs: 30 * 60 * 1000 }),
-    false,
-  );
+  assert.equal(isStalePredecessor(staleLead({ status: "running", updatedAt: "2026-11-07T00:00:00.000Z" }), { now: NOW, staleMs: STALE }), false);
 });
 
-test("isStalePredecessor: idle lead is not stale", () => {
-  assert.equal(
-    isStalePredecessor(staleLead({ status: "idle", updatedAt: "2026-11-07T00:00:00.000Z" }), { now: Date.parse("2026-11-07T00:31:00.000Z"), staleMs: 30 * 60 * 1000 }),
-    false,
-  );
+test("isStalePredecessor: idle lead is not stale (with or without usage — ACP may not report usage)", () => {
+  assert.equal(isStalePredecessor(staleLead({ status: "idle", updatedAt: "2026-11-07T00:00:00.000Z" }), { now: NOW, staleMs: STALE }), false);
+  assert.equal(isStalePredecessor(staleLead({ status: "idle", lastUsage: undefined, usage: undefined }), { now: NOW, staleMs: STALE }), false);
 });
 
 test("isStalePredecessor: queued lead under threshold is not stale", () => {
-  assert.equal(
-    isStalePredecessor(staleLead({ status: "queued", createdAt: "2026-11-07T00:10:00.000Z" }), { now: Date.parse("2026-11-07T00:20:00.000Z"), staleMs: 30 * 60 * 1000 }),
-    false,
-  );
+  const lead = staleLead({ status: "queued", lastPromptAt: "2026-11-07T23:50:00.000Z" }); // queued 10 min before NOW
+  assert.equal(isStalePredecessor(lead, { now: NOW, staleMs: STALE }), false);
 });
 
-test("isStalePredecessor: initializing past threshold is stale, even if a meta/label event just bumped updatedAt", () => {
-  // createdAt is old (never left the gate); updatedAt is recent only because setLabels appended a meta event.
+test("isStalePredecessor: initializing past threshold is stale (createdAt fallback), even if a meta/label event just bumped updatedAt", () => {
+  const lead = {
+    ...staleLead({ status: "initializing" }),
+    lastPromptAt: undefined, // no runner lastPromptAt -> fall back to createdAt (old)
+    updatedAt: "2026-11-07T23:59:00.000Z", // meta write 1 min before NOW must not reset the clock
+  };
+  assert.equal(isStalePredecessor(lead, { now: NOW, staleMs: STALE }), true);
+});
+
+test("isStalePredecessor: a 250k lead with usage, re-prompted and wedged in initializing past threshold, is stale", () => {
   const lead = staleLead({
     status: "initializing",
-    createdAt: "2026-11-06T00:00:00.000Z",
-    updatedAt: "2026-11-07T00:29:00.000Z", // meta write 1 min before "now"
+    lastUsage: { contextWindowUsedTokens: 250_000 }, // it ran turns to reach budget…
+    lastPromptAt: "2026-11-07T00:00:00.000Z", // …then was re-prompted 24h ago and wedged
+    lastProgressAt: "2026-11-06T23:59:00.000Z", // last output was BEFORE the re-prompt
   });
-  assert.equal(isStalePredecessor(lead, { now: Date.parse("2026-11-07T00:30:00.000Z"), staleMs: 30 * 60 * 1000 }), true);
+  assert.equal(isStalePredecessor(lead, { now: NOW, staleMs: STALE }), true);
 });
 
-test("isStalePredecessor: a lead that has produced usage is never stale (queued behind the family cap)", () => {
+test("isStalePredecessor: a lead whose current turn made progress since its last prompt is not stale", () => {
   const lead = staleLead({
-    status: "queued",
-    createdAt: "2026-11-06T00:00:00.000Z", // old creation…
-    lastUsage: { contextWindowUsedTokens: 42_000 }, // …but it has run turns before
+    status: "initializing",
+    lastPromptAt: "2026-11-07T00:00:00.000Z",
+    lastProgressAt: "2026-11-07T00:05:00.000Z", // turn-progress AFTER the prompt
   });
-  assert.equal(isStalePredecessor(lead, { now: Date.parse("2026-11-07T00:30:00.000Z"), staleMs: 30 * 60 * 1000 }), false);
+  assert.equal(isStalePredecessor(lead, { now: NOW, staleMs: STALE }), false);
 });
 
 test("Done-when #1: simulated lead stepping 150k -> 250k -> 300k triggers flag, auto-handoff, and forced handoff each at most once", async () => {
@@ -290,7 +296,7 @@ test("Done-when #1: simulated lead stepping 150k -> 250k -> 300k triggers flag, 
   }
 });
 
-test("stale initializing lead at 250k auto-hands off immediately (no steer+wait, retired without takeover confirmation)", async () => {
+test("a 250k lead with usage, re-prompted and wedged in initializing, auto-hands off immediately (no steer+wait)", async () => {
   const env = makeTempEnv();
   const prevHome = process.env.VIBESQUAD_HOME;
   process.env.VIBESQUAD_HOME = env.vsHome;
@@ -305,11 +311,12 @@ test("stale initializing lead at 250k auto-hands off immediately (no steer+wait,
       provider: "claude",
       model: "claude-opus-5-5",
       cwd: env.dir,
-      status: "initializing", // stuck out of the gate: never ran a turn, can't be steered
-      createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+      status: "initializing", // re-prompted, then wedged before this turn started
+      createdAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+      lastPromptAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), // the re-prompt, 2h ago
+      lastProgressAt: new Date(Date.now() - 2 * 60 * 60 * 1000 - 60 * 1000).toISOString(), // last output BEFORE the re-prompt
+      lastUsage: { contextWindowUsedTokens: 250_000 }, // it ran turns to reach budget
       labels: { team: "vibesquad", lane: "vibesquad", role: "lead", ord: "1", profile: "Lead - Claude" },
-      // No lastUsage/usage: this predecessor never got a turn going (the `usedTokens` override below is what
-      // drives the auto-250 stage, not the lead's own recorded usage).
     };
     agents.set(lead.id, lead);
 
@@ -348,7 +355,7 @@ test("stale initializing lead at 250k auto-hands off immediately (no steer+wait,
       appendLog: () => {},
     });
 
-    const r = await coordinator.evaluateLead(lead, { usedTokens: 250_000 });
+    const r = await coordinator.evaluateLead(lead);
     assert.equal(r.stage, "auto-250");
     assert.equal(r.triggered, true);
     assert.equal(createdAgents.length, 1, "successor spawned immediately (no steer+wait for a stale lead)");

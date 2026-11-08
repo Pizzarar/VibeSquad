@@ -24,6 +24,17 @@ const ENV_FOR = { lane: "VS_LANE", team: "VS_TEAM", role: "VS_ROLE", profile: "V
 const CLAUDE_PERMISSION_MODES = new Set(["default", "acceptEdits", "plan", "bypassPermissions", "dontAsk", "auto"]);
 const STATUS = { starting: "initializing", queued: "initializing", running: "running", idle: "idle", parked: "idle", exited: "closed", lost: "closed", unknown: "idle" };
 
+// A "turn-progress" event proves a turn ran (assistant output / tool call / status running|idle / usage / turn_done /
+// permission / session / resume_fallback). Everything else is setup, lifecycle or noise: meta / stderr / raw / limit
+// (the runner's NON_PROGRESS_EVENTS) plus the events the runner appends directly (created/input/status starting|queued|parked/
+// parked/error/exit/archive/unarchive/cancel). `lastProgressAt`/`lastPromptAt` are derived from this split for staleness.
+const NON_PROGRESS_LOG_EVENTS = new Set(["meta", "stderr", "raw", "limit", "archive", "unarchive", "cancel", "created", "input", "parked", "error", "exit"]);
+export function isTurnProgressEvent(e) {
+  if (!e || typeof e !== "object") return false;
+  if (e.type === "status") return e.status === "running" || e.status === "idle";
+  return !NON_PROGRESS_LOG_EVENTS.has(e.type);
+}
+
 /** Roster work on the serialized live chain waits at most this long on the runner; a timeout takes the same path as a failed fetch. */
 const ROSTER_FETCH_MS = 8000;
 const SEED_RETRY_BASE_MS = 1000;
@@ -93,6 +104,8 @@ export function toAgent(rec) {
     createdAt: iso(rec.createdAt),
     updatedAt: iso(rec.updatedAt ?? rec.createdAt),
     lastActivityAt: iso(rec.updatedAt ?? rec.createdAt),
+    ...(rec.lastPromptAt != null ? { lastPromptAt: iso(rec.lastPromptAt) } : {}),
+    ...(rec.lastProgressAt != null ? { lastProgressAt: iso(rec.lastProgressAt) } : {}),
     archivedAt: iso(rec.archivedAt),
     workspaceId: null,
     backend: "runner",
@@ -131,6 +144,8 @@ export function readRunnerAgentSync(id, { env = process.env, home, liveness } = 
   let archivedAt = null;
   let last = null;
   let lastLive = null; // last event that proves a child ran: meta/archive appends happen on lost agents too
+  let lastPrompt = null; // last input/created event (the "most recent prompt/created" clock for staleness)
+  let lastProgress = null; // last turn-progress event (output/tool/status running|idle/usage/…)
   let usage = null;
   const perms = new Map();
   const meta = {};
@@ -141,6 +156,8 @@ export function readRunnerAgentSync(id, { env = process.env, home, liveness } = 
     try { e = JSON.parse(line); } catch { continue; }
     last = e;
     if (e.type !== "meta" && e.type !== "archive") lastLive = e;
+    if (e.type === "input" || e.type === "created") lastPrompt = e;
+    if (isTurnProgressEvent(e)) lastProgress = e;
     if (e.type === "created") { created = e; Object.assign(meta, e.meta); }
     else if (e.type === "meta") Object.assign(meta, e.patch, e.patch?.labels ? { labels: { ...meta.labels, ...e.patch.labels } } : {});
     else if (e.type === "session" && Array.isArray(e.modes)) offered = { modes: e.modes, models: e.models ?? [] };
@@ -161,6 +178,7 @@ export function readRunnerAgentSync(id, { env = process.env, home, liveness } = 
   return toAgent({
     id, provider: created.provider, model: meta.model ?? created.model, cwd: created.cwd, meta, ...(offered ? { offered } : {}),
     status: exited ? "exited" : status, createdAt: created.ts, updatedAt: last?.ts, archivedAt,
+    lastPromptAt: lastPrompt?.ts ?? null, lastProgressAt: lastProgress?.ts ?? null,
     usage, pendingPermissions: [...perms.values()],
   });
 }
@@ -337,6 +355,40 @@ function scanTail(file) {
   }
 }
 
+/**
+ * The last prompt/created event (`input`/`created`) and the last turn-progress event from a log's tail, without parsing
+ * the whole file. Reads the tail (growing if needed) and scans backwards; the two events of interest are almost always
+ * recent. Returns { lastPromptAt, lastProgressAt } (either may be null when absent).
+ */
+function scanLogProgress(file) {
+  const fd = fs.openSync(file, "r");
+  try {
+    const size = fs.fstatSync(fd).size;
+    let lastPrompt = null;
+    let lastProgress = null;
+    for (let want = 64 * 1024; ; want *= 4) {
+      const len = Math.min(size, want);
+      const buf = Buffer.alloc(len);
+      fs.readSync(fd, buf, 0, len, size - len);
+      let lines = buf.toString("utf8").split("\n");
+      if (len < size) lines = lines.slice(1); // first line is cut
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i];
+        if (!line) continue;
+        let e;
+        try { e = JSON.parse(line); } catch { continue; }
+        if (!lastPrompt && (e.type === "input" || e.type === "created")) lastPrompt = e.ts;
+        if (!lastProgress && isTurnProgressEvent(e)) lastProgress = e.ts;
+        if (lastPrompt && lastProgress) break;
+      }
+      if ((lastPrompt && lastProgress) || len >= size) break;
+    }
+    return { lastPromptAt: lastPrompt ?? null, lastProgressAt: lastProgress ?? null };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 /** Shown status of a tracked agent: "error" while an errored turn has not been followed by a new one. */
 const viewStatus = (t) => (t.errored && t.status !== "running" ? "error" : t.status);
 
@@ -492,9 +544,20 @@ export class RunnerBackend {
     }
   }
 
+  /** Best-effort: enrich a runner rec with lastPromptAt/lastProgressAt from its log tail (absent on an unreadable log). */
+  progressFor(rec) {
+    if (!rec || !rec.id) return rec;
+    try {
+      const p = scanLogProgress(path.join(this.rc.home, "agents", `${rec.id}.jsonl`));
+      if (p.lastPromptAt != null) rec.lastPromptAt = p.lastPromptAt;
+      if (p.lastProgressAt != null) rec.lastProgressAt = p.lastProgressAt;
+    } catch { /* leave fields absent */ }
+    return rec;
+  }
+
   async fetchAgent(id) {
     const rec = await this.rc.request("GET", `/agents/${encodeURIComponent(id)}`);
-    return { agent: toAgent(rec), project: null };
+    return { agent: toAgent(this.progressFor(rec)), project: null };
   }
 
   async getAgent(id) {
@@ -836,9 +899,9 @@ export class RunnerBackend {
   /** Every runner record in one call (GET /agents?full=1); a runner without it only answers { ids }, so fall back to one GET per id. */
   async fetchAllRecs(skip = new Set()) {
     const res = await this.rc.request("GET", "/agents?full=1");
-    if (Array.isArray(res.agents)) return res.agents.filter((r) => r && !skip.has(r.id));
+    if (Array.isArray(res.agents)) return res.agents.filter((r) => r && !skip.has(r.id)).map((r) => this.progressFor(r));
     const recs = await Promise.all(res.ids.filter((id) => !skip.has(id)).map((id) => this.rc.request("GET", `/agents/${encodeURIComponent(id)}`).catch(() => null)));
-    return recs.filter(Boolean);
+    return recs.filter(Boolean).map((r) => this.progressFor(r));
   }
 
   /**

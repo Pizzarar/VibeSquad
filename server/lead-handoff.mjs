@@ -216,13 +216,14 @@ export function leadUsedTokens(lead, overrideTokens) {
 }
 
 /**
- * True when `lead` is a live predecessor the handoff must not block on: it has never got a turn going (no adapter
- * usage ever reported) and has sat in "initializing"/"queued"/"starting" for at least `staleMs`.
+ * True when `lead` is a live predecessor the handoff must not block on: its CURRENT turn never got going — status is
+ * "initializing"/"queued"/"starting" and it has had no turn-progress event (assistant output / tool call / status
+ * running / usage — i.e. not meta/stderr/raw/limit) since its most recent prompt/created event — for at least `staleMs`.
  *
- * Silence alone never makes a running or idle lead stale. Only a lead that is still starting/queued — and has no
- * assistant/tool output to show for it — is stale. The clock is `createdAt` (the lead's initial prompt/creation),
- * never `updatedAt`/`lastActivityAt`, because a `setLabels`/meta write appends a meta event that bumps those without
- * proving the lead ever ran.
+ * Silence alone never makes a running or idle lead stale. A lead that DID run turns but got wedged in a fresh
+ * "initializing" after a re-prompt is still caught: the clock is `lastPromptAt` (the runner's last input/created event),
+ * not lifetime `usage` and not `updatedAt`/`lastActivityAt` (which a `setLabels`/meta write bumps without proving the
+ * turn ran). Falls back to `createdAt` when the runner did not expose `lastPromptAt`.
  */
 export function isStalePredecessor(
   lead,
@@ -232,12 +233,17 @@ export function isStalePredecessor(
   if (lead.archivedAt || lead.status === "closed" || isRetiredAgent(lead)) return false;
   const status = String(lead.status ?? "").toLowerCase();
   if (status !== "initializing" && status !== "queued" && status !== "starting") return false;
-  // It has produced output before (adapter usage reported): not a never-started predecessor, don't retire it.
-  if (leadUsedTokens(lead) > 0) return false;
-  // Clock = the last prompt/created event. meta/label events only bump updatedAt/lastActivityAt, never createdAt.
-  const createdTs = Date.parse(lead.createdAt ?? "");
-  if (!Number.isFinite(createdTs)) return false;
-  return now - createdTs >= staleMs;
+
+  // Clock = the most recent prompt/created event (last input/created). meta/label writes never move it.
+  const promptTs = Date.parse(lead.lastPromptAt ?? lead.createdAt ?? "");
+  if (!Number.isFinite(promptTs)) return false;
+
+  // The current turn got going if a turn-progress event landed AFTER the last prompt; a missing lastProgressAt
+  // (never produced any output) also means the current turn never got going.
+  const progressTs = Date.parse(lead.lastProgressAt ?? "");
+  if (Number.isFinite(progressTs) && progressTs > promptTs) return false;
+
+  return now - promptTs >= staleMs;
 }
 
 export function getHandoffPacketPath(teamId, laneId, baseHome) {
