@@ -831,14 +831,18 @@ export function saveProfiles(input, profilesPath) {
     nextProfiles = input.profiles.map(normalizeProfile).filter(Boolean);
   } else if (input?.profile && typeof input.profile === "object") {
     const current = loadProfiles(targetPath, { autoSeed: true }).profiles;
-    const updated = normalizeProfile(input.profile);
-    if (!updated) throw new Error("Invalid profile object");
+    const rawId = input.profile.id !== undefined ? String(input.profile.id) : "";
+    const rawName = String(input.profile.name ?? "").trim().toLowerCase();
     const idx = current.findIndex(
-      (p) => (updated.id && p.id === updated.id) || p.name.toLowerCase() === updated.name.toLowerCase(),
+      (p) => (rawId && p.id === rawId) || (rawName && p.name.toLowerCase() === rawName),
     );
+    // Merge raw fields over the existing profile BEFORE normalizing: normalizeProfile
+    // blanks provider/model/notes and re-derives role for anything missing.
+    const updated = normalizeProfile(idx >= 0 ? { ...current[idx], ...input.profile } : input.profile);
+    if (!updated) throw new Error("Invalid profile object");
     if (idx >= 0) {
       nextProfiles = [...current];
-      nextProfiles[idx] = { ...current[idx], ...updated };
+      nextProfiles[idx] = updated;
     } else {
       nextProfiles = [...current, updated];
     }
