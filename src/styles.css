@@ -5803,7 +5803,7 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 .usage-cohort-tiles, .usage-saving-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--sp-3, 12px); }
 .usage-cohort-tile, .usage-saving-card { display: flex; flex-direction: column; gap: var(--sp-1, 4px); padding: var(--sp-3, 12px); background: var(--panel-alt); border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
 .usage-cohort-label { color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
-.usage-cohort-value { font-family: var(--display); font-size: 22px; line-height: 1.1; }
+.usage-cohort-value { font-size: 22px; line-height: 1.1; }
 .usage-cohort-value small { font-size: 11px; color: var(--muted); }
 .usage-delta { font-variant-numeric: tabular-nums; color: var(--muted); }
 .usage-delta-good { color: var(--mint-t); font-weight: 700; }
@@ -5822,3 +5822,5 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 .usage-export { color: var(--cyan-t); text-decoration: none; border: 1px solid var(--line); border-radius: 6px; padding: var(--sp-1, 4px) var(--sp-3, 12px); font-size: 12px; }
 .usage-export:hover, .usage-export:focus-visible { border-color: var(--cyan-t); }
 .usage-low-coverage { margin-left: var(--sp-2, 8px); }
+.usage-cohort-prior { font-variant-numeric: tabular-nums; }
+.usage-floor-callout { color: var(--text); }
