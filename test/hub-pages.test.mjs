@@ -38,7 +38,7 @@ test("switcher: both pages render the same needs-you strip; the tower sits in a 
   assert.match(hp, /role="tablist"/);
   const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
   assert.match(css, /\.hub-tower-box \{[^}]*overflow: hidden/);
-  assert.match(css, /\.hub-tower-box \.sq-floor \{[^}]*overflow: hidden/);
+  assert.match(css, /\.hub-pages \.hub-tower-box \.sq-floor \{[^}]*height: auto;[^}]*overflow: hidden/);
   assert.match(css, /\.hub-sky-page \.sky-zones \{ flex: none; height: clamp\(/); // HP2 cap
   assert.doesNotMatch(css, /\.hub-(tab|pages|backdrop)[^{]*\{[^}]*(transition|animation)/); // instant switch, reduced motion or not
 });
