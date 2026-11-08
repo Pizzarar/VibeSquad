@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { effectiveAgentRole, isDigestAgent, isRetiredAgent } from "./identity.mjs";
+import { effectiveAgentRole, isDigestAgent, isLiveAgent } from "./identity.mjs";
 
 function laneOf(agent) {
   const l = agent?.labels ?? {};
@@ -38,8 +38,7 @@ export function liveInFlightBlock({ agents, laneId, teamId, home }) {
     const want = String(laneId ?? "").trim().toLowerCase();
     const live = agents
       .map((a) => a?.agent ?? a)
-      .filter((a) => a && !a.archivedAt && !a.internal && a.status !== "closed")
-      .filter((a) => !isRetiredAgent(a) && !isDigestAgent(a))
+      .filter((a) => isLiveAgent(a) && !isDigestAgent(a))
       .filter((a) => laneOf(a) === want);
     const row = (a) => `${String(a.title || a.id).trim()} [${a.status || "?"}${a.updatedAt ? `, active ${a.updatedAt}` : ""}]`;
     const lead = live.filter((a) => effectiveAgentRole(a) === "lead").map(row);
