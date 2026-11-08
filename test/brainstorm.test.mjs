@@ -121,6 +121,47 @@ test("performBrainstormRestart archives ghost initializing/error brainstorm agen
   }
 });
 
+test("performBrainstormRestart surfaces a createAgent timeout instead of adopting the late agent", async () => {
+  const env = makeTestEnv();
+  const prevHome = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = env.vsHome;
+  resetBrainstormRestartState();
+  try {
+    const agentClient = {
+      async fetchAgents() {
+        return [];
+      },
+      async createAgent() {
+        throw new Error("agent.create.request timed out after 300000ms");
+      },
+      async archiveAgent() {},
+      async updateAgent() {},
+      async cancelAgent() {},
+    };
+
+    await assert.rejects(
+      () =>
+        performBrainstormRestart(
+          {
+            reason: "start-brainstorm",
+            mode: "quick-start",
+            teamId: "vibesquad",
+            laneId: "bug-chaser",
+            laneName: "Bug Chaser",
+            agentClient,
+            profilesPath: env.profilesPath,
+          },
+          env.dir,
+        ),
+      /agent\.create\.request timed out after 300000ms/,
+    );
+  } finally {
+    if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
+    else process.env.VIBESQUAD_HOME = prevHome;
+    env.cleanup();
+  }
+});
+
 test("performBrainstormRestart accepts profileName for known brainstorm profiles and falls back for unknown/non-brainstorm names", async () => {
   const env = makeTestEnv();
   const prevHome = process.env.VIBESQUAD_HOME;
