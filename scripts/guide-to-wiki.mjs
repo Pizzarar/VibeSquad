@@ -82,21 +82,25 @@ export function collectGuide(srcDir) {
     else seenAssets.set(key, rel);
   }
   const byBase = new Map(); // Obsidian wikilink lookup: lowercase basename -> rel
+  const ambiguousBases = new Map(); // lowercase basename -> [rel, ...] when tied at min depth
   for (const rel of pages.keys()) {
     const key = basename(rel, ".md").toLowerCase();
     const depth = rel.split("/").length;
     const prev = byBase.get(key);
     const prevDepth = prev ? prev.split("/").length : Infinity;
-    if (!prev || depth < prevDepth) byBase.set(key, rel);
-    else if (depth === prevDepth && key !== "readme") {
-      collisions.push(`wikilink basename collision: ${rel} and ${prev} both match [[${key}]]`);
+    if (!prev || depth < prevDepth) {
+      byBase.set(key, rel);
+      ambiguousBases.delete(key);
+    } else if (depth === prevDepth && key !== "readme") {
+      ambiguousBases.set(key, [...(ambiguousBases.get(key) ?? [prev]), rel]);
     }
   }
-  return { pages, images, skipped, allMd, byBase, collisions };
+  return { pages, images, skipped, allMd, byBase, collisions, ambiguousBases };
 }
 
-export function resolveWikilink(name, pages, images, byBase) {
+export function resolveWikilink(name, pages, images, byBase, ambiguousBases) {
   const lower = name.toLowerCase().replace(/\.md$/, "");
+  if (ambiguousBases?.has(lower)) return { kind: "ambiguous", rels: ambiguousBases.get(lower) };
   const pageRel = byBase.get(lower);
   if (pageRel) return { kind: "page", rel: pageRel };
   const imgRel = [...images.keys()].find((k) => basename(k).toLowerCase() === name.toLowerCase());
@@ -141,7 +145,7 @@ const srcRel = relative(repoRoot, srcDir).split("\\").join("/") || "guide";
 const ghBase = `https://github.com/${repo}`;
 
 // ---- collect ----
-const { pages, images, skipped, byBase, collisions } = collectGuide(srcDir);
+const { pages, images, skipped, byBase, collisions, ambiguousBases } = collectGuide(srcDir);
 if (collisions.length) {
   for (const c of collisions) console.error(c);
   process.exit(1);
@@ -203,10 +207,14 @@ function rewriteSegment(seg, fromRel) {
     if (!name) {
       return `[${alias || heading}](#${slugHeading(heading)})`;
     }
-    const hit = resolveWikilink(name, pages, images, byBase);
+    const hit = resolveWikilink(name, pages, images, byBase, ambiguousBases);
     if (hit?.kind === "image") {
       stats.images++;
       return `![${alias || name}](assets/${images.get(hit.rel)})`;
+    }
+    if (hit?.kind === "ambiguous") {
+      unresolved.push(`${fromRel}: ambiguous wikilink -> ${m} (${hit.rels.join(", ")})`);
+      return m;
     }
     if (!hit) {
       unresolved.push(`${fromRel}: wikilink -> ${m}`);

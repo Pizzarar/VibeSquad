@@ -58,7 +58,10 @@ function parseMarkdownFile(absPath) {
 }
 
 function auditGuideTree(srcDir, repoRoot = resolve(srcDir, "..")) {
-  const { pages, images, allMd, byBase, collisions } = collectGuide(srcDir);
+  const { pages, images, allMd, byBase, collisions, ambiguousBases } = collectGuide(srcDir);
+  for (const [key, rels] of ambiguousBases) {
+    collisions.push(`wikilink basename collision: ${rels.join(" and ")} both match [[${key}]]`);
+  }
   const parsedByRel = new Map(allMd.map((rel) => [rel, parseMarkdownFile(join(srcDir, rel))]));
   const unresolved = [];
   const brokenAnchors = [];
@@ -156,7 +159,7 @@ function auditGuideTree(srcDir, repoRoot = resolve(srcDir, "..")) {
 
         let targetRel = rel;
         if (name) {
-          const hit = resolveWikilink(name, pages, images, byBase);
+          const hit = resolveWikilink(name, pages, images, byBase, ambiguousBases);
           if (hit?.kind === "image" && !hasAnchor) continue;
           if (hit?.kind !== "page") {
             unresolved.push(`${rel}:${lineNo} -> ${full}`);
