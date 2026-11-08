@@ -9,6 +9,7 @@ import {
   detectNoteWarnings,
   diffProfiles,
   findProfile,
+  SHARED_NOTE_PREFIX,
   importPaseoProfiles,
   loadProfiles,
   openTopicBrainstorm,
@@ -710,5 +711,17 @@ test("just-send-it rule: identical sentence in all three prompt sources, old ask
     assert.ok(src.includes(SENTENCE), `${rel}: missing the just-send-it sentence`);
     assert.ok(!src.includes('owner says "send it"'), `${rel}: old send-it trigger`);
     assert.ok(!src.includes("Send it there?"), `${rel}: old confirm question`);
+  }
+});
+
+test("B1 bug-routing rule (R11): same text in the shared prefix of all three sources, so every role gets it", () => {
+  const RULE =
+    "- R11 (Bugs & fixes): Small root-cause fixes inside your own unit: just do them and report after. A bug you find, or a root-cause fix outside your own unit: don't ask, don't offer it as a question. Workers: put the item in your final message for the lead to send. Leads and Buddies: run `vs inbox add --lane <project bug lane> --from-brainstorm \"<item>\"` yourself, then keep working. A workaround ships only with its named follow-up already queued.";
+  assert.ok(SHARED_NOTE_PREFIX.includes(RULE), "server SHARED_NOTE_PREFIX missing R11");
+  for (const p of PACK) assert.ok(p.notes.includes(RULE), `${p.name}: note missing R11`);
+  const root = resolve(import.meta.dirname, "..");
+  for (const rel of ["src/profiles.ts", "server/hooks/agent-duties.ts"]) {
+    const src = readFileSync(join(root, rel), "utf8").replace(/\\(['"])/g, "$1");
+    assert.ok(src.includes(RULE), `${rel}: missing R11`);
   }
 });
