@@ -1012,7 +1012,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
     };
 
-    const digested = new Set<string>();
+    const digested = new Map<string, string>(); // worker id -> last digested turn key (`${epoch}:${turnId}`)
+    const turnEpoch = new Map<string, number>(); // worker id -> monotonically increasing turn counter (incremented on turn_started)
+    const inflightDigests = new Map<string, number>(); // worker id -> turn epoch of the digest currently in flight
     const retries = new Map<string, number>();
     const offsets = new Map<string, number>();
     const misrouteCounts = new Map<string, number>();
@@ -2038,14 +2040,14 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             }
             retries.delete(agent.id);
 
-            const { labels } = await labelsFor(paseo, agent);
+            const { snap: me, labels } = await labelsFor(paseo, agent);
             await relayFromFormerLead(paseo, agent, labels);
             if (isDigestAgent(labels)) return;
 
             const role = effectiveAgentRole({ labels });
             if (role === "worker") {
               try {
-                await spawnDigest(paseo, agent, turnId, labels);
+                await spawnDigest(paseo, agent, turnId, labels, me);
               } finally {
                 await closeFinishedWorker(paseo, agent.id, { turnEnded: true });
               }
@@ -2076,13 +2078,21 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
     }
 
-    async function spawnDigest(paseo: Paseo, worker: any, turnId: string | null, labels: Labels) {
+    async function spawnDigest(paseo: Paseo, worker: any, turnId: string | null, labels: Labels, snapWorker?: AgentSnap | null) {
       if (isDigestAgent(labels, worker.title) || isDigestNoise(labels, worker.title)) return;
-      const key = `${worker.id}:${turnId ?? ""}`;
-      if (digested.has(key)) return;
-      digested.add(key);
+      const workerId = String(worker.id ?? "").trim();
+      if (!workerId) return;
+      // An archived worker never spawns a new digest.
+      if (worker.archivedAt || snapWorker?.archivedAt || labels[AUTO_ARCHIVED_LABEL] === "1") return;
+      const tid = String(turnId ?? "").trim();
+      const epoch = turnEpoch.get(workerId) ?? 0;
+      const key = `${epoch}:${tid}`;
+      const prev = digested.get(workerId);
+      if (inflightDigests.get(workerId) === epoch || prev === key || (!tid && prev?.startsWith(`${epoch}:`))) return;
       const where = teamOf(labels, worker.cwd);
       if (!where) return;
+      digested.set(workerId, key);
+      inflightDigests.set(workerId, epoch);
       const { team, lane } = where;
       const prompt = [
         `You are a digest agent. Inspect the final result of worker agent ${worker.id} ("${worker.title ?? ""}"):`,
@@ -2154,8 +2164,12 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             // The digest ended its turn without logging a verdict (it errored in-turn or skipped the command).
             if (!verdictLogged()) return fallback("logged nothing");
           })
-          .catch(() => fallback("errored"));
+          .catch(() => fallback("errored"))
+          .finally(() => {
+            if (inflightDigests.get(workerId) === epoch) inflightDigests.delete(workerId);
+          });
       } catch (err) {
+        if (inflightDigests.get(workerId) === epoch) inflightDigests.delete(workerId);
         log(`digest spawn failed for ${worker.id}: ${err}`);
         await fallback("spawn failed");
       }
@@ -2227,7 +2241,19 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       doneReported.delete(agentId);
       // Marker: only an auto-archived worker is revived by a later send (never a retired lead/Buddy) and is not a "retired holder".
       await deps.setLabels(agentId, { [AUTO_ARCHIVED_LABEL]: "1" }).catch((e: unknown) => log(`auto-archive marker failed for ${agentId}: ${e}`));
-      await deps.archiveAgent(agentId).catch((e: unknown) => log(`worker auto-close failed for ${agentId}: ${e}`));
+      let archived = false;
+      await deps
+        .archiveAgent(agentId)
+        .then(() => {
+          archived = true;
+        })
+        .catch((e: unknown) => log(`worker auto-close failed for ${agentId}: ${e}`));
+      if (archived) {
+        const prev = digested.get(agentId);
+        if (prev !== undefined) digested.set(agentId, `0:${prev.replace(/^\d+:/, "")}`);
+        turnEpoch.delete(agentId);
+        if (!opts.turnEnded) inflightDigests.delete(agentId);
+      }
       log(`worker auto-closed after done report: ${agentId}`);
     }
 
@@ -2537,7 +2563,11 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         server.on("agent.turn_started" as any, async ({ agent }: { agent: any }, { paseo }: { paseo: any }) => {
           paseoApi = paseo;
           markTurnSeen(agent?.id);
-          if (agent?.id) doneReported.delete(agent.id); // a new turn after a report: the worker is working again, do not close it
+          if (agent?.id) {
+            doneReported.delete(agent.id); // a new turn after a report: the worker is working again, do not close it
+            turnEpoch.set(agent.id, (turnEpoch.get(agent.id) ?? 0) + 1);
+            inflightDigests.delete(agent.id);
+          }
           try {
             const me = await snap(paseo, agent.id);
             if (me && effectiveAgentRole(me) === "lead") lastWakeAt.set(agent.id, Date.now());
