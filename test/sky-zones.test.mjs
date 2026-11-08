@@ -160,7 +160,7 @@ test("a malformed lookDown list is rejected rather than half-loaded", () => {
 
 test("SkyZones probes each asset and draws the frame/sky only when it loaded", () => {
   const sky = src("SkyZones.tsx");
-  assert.ok(sky.includes("skyAssets(theme, { sky: useImageOk(SKY_URL(theme)), frame: useImageOk(SKY_FRAME_URL(theme)) }, crt)"));
+  assert.ok(sky.includes("skyAssets(theme, { sky: useImageOk(SKY_URL(theme)), frame: useImageOk(SKY_FRAME_URL(theme)) }, crt, dpr)"));
   assert.ok(sky.includes("style={frameStyle ?? undefined}"));
   assert.ok(sky.includes('skyUrl ? " has-sky-art" : ""'));
 });

@@ -4,7 +4,7 @@
 // a badge and never reorders the rail. The bar on top of the drawer is the only route to the plumbing.
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getDraft, useDraft } from "./drafts";
-import { markPinRead, NeedsBadge, PinDot, PinTeamTree, setFullView, usePreview } from "./PinGrid";
+import { markPinRead, NeedsBadge, NeedsBadgeInline, PinDot, PinTeamTree, setFullView, usePreview } from "./PinGrid";
 import { exitPinFocus, type PinFocus } from "./pinFocus";
 import { PinMenu } from "./PinMenu";
 import { TopBreadcrumb } from "./Breadcrumb";
@@ -104,7 +104,7 @@ const RailTile = memo(function RailTile(props: { pin: Pin; onPick: (pin: Pin) =>
           </span>
           <span className="pin-rail-line muted small">{line}</span>
         </span>
-        <NeedsBadge pin={pin} />
+        <NeedsBadgeInline pin={pin} />
       </button>
       <CheckinButton pin={pin} testId={`pin-rail-checkin-${pin.lane.id}`} />
     </div>
