@@ -79,7 +79,7 @@ test('one UI font: everything in the tool surfaces is --mono (brand block, termi
   const fam = u4rules.filter((r) => /font-family\s*:/.test(r.body));
   assert.equal(fam.length, 1, 'exactly one font-family rule in U4b');
   const r = fam[0];
-  assert.match(r.sel, /^:is\(\.sidebar, \.agent-panes:not\(:has\(\.sky-zones\)\), \.pin-focus-bar\) :not\(/);
+  assert.match(r.sel, /^:is\(\.sidebar, \.agent-panes:not\(:has\(\.sky-zones\)\), \.sky-crt-body, \.pin-focus-bar\) :not\(/);
   assert.match(r.body, /font-family:\s*var\(--mono\)\s*!important/);
   for (const ex of ['.brand-text', '.brand-text *', '.xterm', 'svg']) assert.ok(r.sel.includes(ex), `exempts ${ex}`);
   assert.doesNotMatch(stripped, /var\(--(arcade|display)\)/);
@@ -101,7 +101,7 @@ test('U4b surfaces carry no U3 painted layers (only the --u3-px kit pixel is ref
 // ---- scope + specificity ----
 test('scope reaches every chat pane and top bar (hub, .app.focus, .app.with-panes) and never needs .app.pin-focus', () => {
   assert.doesNotMatch(u4, /\.app\.pin-focus/);
-  assert.match(u4, /:is\(\.sidebar, \.agent-panes:not\(:has\(\.sky-zones\)\), \.pin-focus-bar\)/);
+  assert.match(u4, /:is\(\.sidebar, \.agent-panes:not\(:has\(\.sky-zones\)\), \.sky-crt-body, \.pin-focus-bar\)/);
   assert.ok(u4rules.some((r) => /^\.pin-focus-bar\b/.test(r.sel)), 'direct .pin-focus-bar rules');
   // U3 pane painting only survives on the sky-zone (world) pane; the old strip/bar/select overrides for the chat bar are gone
   assert.match(u3, /\.app\.pin-focus > \.agent-panes:has\(\.sky-zones\)\s*\{/);
@@ -140,6 +140,21 @@ test('rows that dimmed with opacity use the muted token; unselected Inbox and as
   assert.match(get('.sidebar-signals-toggle').body, /background: var\(--panel-hi\);[^}]*color: var\(--text\)/);
 });
 
+test('sky CRT chat drawer rides the U4b tool-surface scope; light provider pills drop neon for P0', () => {
+  // .sky-crt-body sits alongside .agent-panes:not(:has(.sky-zones)) in every shared tool-surface scope
+  const scoped = u4rules.filter((r) => /^:is\(\.sidebar, \.agent-panes:not\(:has\(\.sky-zones\)\), \.sky-crt-body, \.pin-focus-bar\)/.test(r.sel));
+  assert.equal(scoped.length, 18, '18 shared tool-surface scope rules now include .sky-crt-body');
+  // the composer is scoped to the sky drawer too
+  const composer = u4rules.find((r) => r.sel === ':is(.agent-panes:not(:has(.sky-zones)), .sky-crt-body) .composer');
+  assert.ok(composer && /background: var\(--panel\)/.test(composer.body), 'composer rule scoped to the sky drawer');
+  // light-mode provider pills/badges swap the inline neon colours for a P0 surface
+  const pill = u4rules.find((r) => r.sel === ':root[data-theme="light"] :is(.prov-pill, .prov-badge)');
+  assert.ok(pill, 'light provider pill override exists');
+  assert.match(pill.body, /background: var\(--panel-hi\)/);
+  assert.match(pill.body, /color: var\(--text\) !important/);
+  assert.match(pill.body, /border-color: var\(--u4-edge\) !important/);
+});
+
 // ---- U3 world art untouched ----
 test('U3 world art stays: sky zones, floor, brand mark/text are neither touched nor restyled by U4b', () => {
   const u4NoFont = u4rules.filter((r) => !/font-family/.test(r.body)).map((r) => r.sel + '{' + r.body + '}').join('\n'); // the font rule only EXEMPTS .brand-text
@@ -170,6 +185,12 @@ function color(tokens, v, depth = 0) {
 const lum = (c) => { const f = (x) => { x /= 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; }; return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]); };
 const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
 const mixc = (a, b, p) => a.map((x, i) => x * p + b[i] * (1 - p));
+
+// provider pill override: --text ink on --panel-hi must clear 4.5:1 in light (the inline neon was ~1.4:1)
+test('light: provider pill ink (--text on --panel-hi) passes 4.5:1', () => {
+  assert.ok(ratio(color(light, 'var(--text)'), color(light, 'var(--panel-hi)')) >= 4.5,
+    `--text on --panel-hi (light): ${ratio(color(light, 'var(--text)'), color(light, 'var(--panel-hi)')).toFixed(2)}`);
+});
 
 for (const [name, tokens] of [['dark', dark], ['light', light]]) {
   const c = (n) => color(tokens, `var(${n})`);

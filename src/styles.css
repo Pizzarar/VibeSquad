@@ -5576,41 +5576,44 @@ body { background-color: var(--bg); background-image: var(--u4-wash); background
 .agent-panes:not(:has(.sky-zones)) .timeline { background: transparent; background-image: none; -webkit-mask-image: none; mask-image: none; }
 
 /* ---- quiet tool surfaces: flat solid controls (sidebar + chat pane only) ---- */
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .pin-focus-bar) :is(.btn, .tchip, .seg button, .sidebar-icon-btn, .sidebar-cog-btn, .tl-jump-bottom, .drawer-working-chip, .drawer-subagent-chip, .drawer-config-summary, .dock-toggle-btn, .pin-focus-home) {
+:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn, .tchip, .seg button, .sidebar-icon-btn, .sidebar-cog-btn, .tl-jump-bottom, .drawer-working-chip, .drawer-subagent-chip, .drawer-config-summary, .dock-toggle-btn, .pin-focus-home) {
   border: 1px solid var(--u4-edge); border-image: none; background: var(--panel-hi); color: var(--text); box-shadow: var(--bevel);
   text-shadow: none; font-weight: 400; image-rendering: auto;
 }
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .pin-focus-bar) :is(.btn, .tchip, .seg button, .sidebar-icon-btn, .sidebar-cog-btn, .tl-jump-bottom, .drawer-working-chip, .drawer-config-summary, .dock-toggle-btn, .pin-focus-home):hover:not(:disabled) {
+:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn, .tchip, .seg button, .sidebar-icon-btn, .sidebar-cog-btn, .tl-jump-bottom, .drawer-working-chip, .drawer-config-summary, .dock-toggle-btn, .pin-focus-home):hover:not(:disabled) {
   border-image: none; background: color-mix(in srgb, var(--violet) 26%, var(--panel-hi)); color: var(--text); box-shadow: var(--bevel);
 }
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .pin-focus-bar) :is(.btn, .tchip, .seg button, .sidebar-icon-btn, .sidebar-cog-btn, .tl-jump-bottom, .drawer-working-chip, .drawer-config-summary, .dock-toggle-btn, .pin-focus-home):active:not(:disabled) {
+:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn, .tchip, .seg button, .sidebar-icon-btn, .sidebar-cog-btn, .tl-jump-bottom, .drawer-working-chip, .drawer-config-summary, .dock-toggle-btn, .pin-focus-home):active:not(:disabled) {
   border-image: none; box-shadow: var(--bevel-in); transform: translate(1px, 1px);
 }
 /* primary (teal), hot (pink), selected (violet), warn (amber): solid fills with on-fill ink */
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .pin-focus-bar) :is(.btn:not(.ghost):not(.hot):not(.bad):not(.warn), .drawer-working-chip) {
+:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn:not(.ghost):not(.hot):not(.bad):not(.warn), .drawer-working-chip) {
   background: var(--cyan-fill); color: var(--on-cyan-fill); border-color: var(--shadow-hard); font-weight: 700;
 }
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .pin-focus-bar) :is(.btn:not(.ghost):not(.hot):not(.bad):not(.warn), .drawer-working-chip):hover:not(:disabled) { background: color-mix(in srgb, var(--cyan-fill) 86%, var(--marble)); color: var(--on-cyan-fill); }
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .pin-focus-bar) :is(.btn.hot, .btn.bad, .btn.confirm.danger:not(.armed), .bad-btn) { background: var(--pink-fill); color: var(--u4-on-fill); border-color: var(--shadow-hard); font-weight: 700; }
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .pin-focus-bar) :is(.btn.hot, .btn.bad, .bad-btn):hover:not(:disabled) { background: color-mix(in srgb, var(--pink-fill) 86%, var(--marble)); color: var(--u4-on-fill); }
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .pin-focus-bar) :is(.seg button.on, .tchip.on, .sidebar-inbox-badge.on) { background: var(--violet); color: var(--on-pastel) !important; border-color: var(--shadow-hard); font-weight: 700; }
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .pin-focus-bar) :is(.btn.warn, .btn.confirm.warn:not(.armed)) { background: var(--amber); color: var(--on-amber); border-color: var(--shadow-hard); font-weight: 700; }
+:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn:not(.ghost):not(.hot):not(.bad):not(.warn), .drawer-working-chip):hover:not(:disabled) { background: color-mix(in srgb, var(--cyan-fill) 86%, var(--marble)); color: var(--on-cyan-fill); }
+:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn.hot, .btn.bad, .btn.confirm.danger:not(.armed), .bad-btn) { background: var(--pink-fill); color: var(--u4-on-fill); border-color: var(--shadow-hard); font-weight: 700; }
+:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn.hot, .btn.bad, .bad-btn):hover:not(:disabled) { background: color-mix(in srgb, var(--pink-fill) 86%, var(--marble)); color: var(--u4-on-fill); }
+:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.seg button.on, .tchip.on, .sidebar-inbox-badge.on) { background: var(--violet); color: var(--on-pastel) !important; border-color: var(--shadow-hard); font-weight: 700; }
+:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn.warn, .btn.confirm.warn:not(.armed)) { background: var(--amber); color: var(--on-amber); border-color: var(--shadow-hard); font-weight: 700; }
 /* disabled: quiet dashed ghost, full-contrast muted label (u3f values, no opacity) */
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .pin-focus-bar) :is(.btn, .tchip, .seg button, .sidebar-icon-btn, .sidebar-cog-btn, .drawer-working-chip, .drawer-config-summary, .dock-toggle-btn):disabled {
+:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn, .tchip, .seg button, .sidebar-icon-btn, .sidebar-cog-btn, .drawer-working-chip, .drawer-config-summary, .dock-toggle-btn):disabled {
   opacity: 1; background: var(--panel); color: var(--muted); border: 1px dashed var(--u4-edge); box-shadow: none; font-weight: 400; cursor: not-allowed;
 }
 
 /* ---- chips and pills ---- */
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .pin-focus-bar) :is(.badge, .unit-tag, .chip, .label-pill, .status-pill, .lane-tag, .warn-badge, .project-badge, .alert-pill, .pill, .brainstorm-ctx-pill, .quota-pill, .sidebar-role-pill, .rail-role-tag, .role-tag, .pin-lane-handle, .sidebar-riffbot-badge, .changes-file-badge, .verdict) {
+:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.badge, .unit-tag, .chip, .label-pill, .status-pill, .lane-tag, .warn-badge, .project-badge, .alert-pill, .pill, .brainstorm-ctx-pill, .quota-pill, .sidebar-role-pill, .rail-role-tag, .role-tag, .pin-lane-handle, .sidebar-riffbot-badge, .changes-file-badge, .verdict) {
   border: 1px solid var(--u4-edge); border-image: none; background: color-mix(in srgb, var(--violet) 16%, var(--panel)); color: var(--text); box-shadow: none; image-rendering: auto; font-weight: 400;
 }
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .pin-focus-bar) :is(.pin-lane-handle, .label-pill) { background: var(--bg); color: var(--muted); }
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .pin-focus-bar) :is(.badge, .unit-tag, .chip, .status-pill, .project-badge, .lane-tag, .quota-pill, .sidebar-riffbot-badge) { border-color: var(--cyan); background: color-mix(in srgb, var(--cyan) 18%, var(--panel)); }
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .pin-focus-bar) :is(.chip.clean, .status-pill.running, .verdict.safe, .alert-pill.tone-finished, .changes-file-badge.new) { border-color: var(--emerald); background: color-mix(in srgb, var(--emerald) 20%, var(--panel)); }
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .pin-focus-bar) :is(.verdict.check, .alert-pill.tone-permission, .changes-file-badge.mod, .quota-pill.warn, .brainstorm-ctx-pill.tone-amber) { border-color: var(--amber); background: color-mix(in srgb, var(--amber) 22%, var(--panel)); }
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .pin-focus-bar) :is(.chip.dirty, .warn-badge, .status-pill.error, .changes-file-badge.del, .pill, .alert-pill.tone-error, .quota-pill.hot, .brainstorm-ctx-pill.tone-red) { border-color: var(--hot-pink); background: color-mix(in srgb, var(--hot-pink) 20%, var(--panel)); }
+:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.pin-lane-handle, .label-pill) { background: var(--bg); color: var(--muted); }
+:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.badge, .unit-tag, .chip, .status-pill, .project-badge, .lane-tag, .quota-pill, .sidebar-riffbot-badge) { border-color: var(--cyan); background: color-mix(in srgb, var(--cyan) 18%, var(--panel)); }
+:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.chip.clean, .status-pill.running, .verdict.safe, .alert-pill.tone-finished, .changes-file-badge.new) { border-color: var(--emerald); background: color-mix(in srgb, var(--emerald) 20%, var(--panel)); }
+:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.verdict.check, .alert-pill.tone-permission, .changes-file-badge.mod, .quota-pill.warn, .brainstorm-ctx-pill.tone-amber) { border-color: var(--amber); background: color-mix(in srgb, var(--amber) 22%, var(--panel)); }
+:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.chip.dirty, .warn-badge, .status-pill.error, .changes-file-badge.del, .pill, .alert-pill.tone-error, .quota-pill.hot, .brainstorm-ctx-pill.tone-red) { border-color: var(--hot-pink); background: color-mix(in srgb, var(--hot-pink) 20%, var(--panel)); }
 /* needs-you count / badge: solid pink with on-fill ink */
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .pin-focus-bar) :is(.badge.alert, .team-head .badge) { background: var(--pink-fill); border-color: var(--shadow-hard); color: var(--u4-on-fill) !important; font-weight: 700; }
+:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.badge.alert, .team-head .badge) { background: var(--pink-fill); border-color: var(--shadow-hard); color: var(--u4-on-fill) !important; font-weight: 700; }
+
+/* provider pills/badges: the inline neon provider colours (#00f0ff Gemini, #e2e8f0 Codex) on --well are ~1.4:1 in light, so drop them for the P0 raised surface */
+:root[data-theme="light"] :is(.prov-pill, .prov-badge) { background: var(--panel-hi); color: var(--text) !important; border-color: var(--u4-edge) !important; }
 
 /* ---- sidebar rows ---- */
 .sidebar :is(.team-head, .sidebar-riffbot) { border: 1px solid transparent; border-image: none; background: transparent; box-shadow: none; image-rendering: auto; }
@@ -5625,7 +5628,7 @@ body { background-color: var(--bg); background-image: var(--u4-wash); background
 .timeline .tl-tool .muted, .timeline .tl-stamp { color: var(--muted); opacity: 1; }
 
 /* ---- composer ---- */
-.agent-panes:not(:has(.sky-zones)) .composer { background: var(--panel); border-top: 1px solid var(--line); box-shadow: 0 1px 0 var(--bevel-hi) inset; }
+:is(.agent-panes:not(:has(.sky-zones)), .sky-crt-body) .composer { background: var(--panel); border-top: 1px solid var(--line); box-shadow: 0 1px 0 var(--bevel-hi) inset; }
 .composer textarea, .composer input:not([type="file"]) {
   background: var(--bg); color: var(--text); border: 1px solid var(--u4-edge); border-image: none; box-shadow: var(--bevel-in); image-rendering: auto;
 }
@@ -5675,4 +5678,4 @@ body { background-color: var(--bg); background-image: var(--u4-wash); background
 
 /* one UI font for tool surfaces: the Silkscreen/Pixelify (--arcade/--display) rows, @code chips, breadcrumb and provider names fall back to Courier New and clash with --mono.
    Scoped, not aliased globally (floor/sky keep --arcade); the brand block, terminals and diagrams keep their own fonts. */
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .pin-focus-bar) :not(.brand-text, .brand-text *, .xterm, .xterm *, svg, svg *) { font-family: var(--mono) !important; }
+:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :not(.brand-text, .brand-text *, .xterm, .xterm *, svg, svg *) { font-family: var(--mono) !important; }
