@@ -2044,6 +2044,13 @@ code {
   background: var(--well);
   border: 1px solid var(--line);
 }
+.inbox-card[data-audit-finding] {
+  cursor: pointer;
+}
+.inbox-card[data-audit-finding]:hover,
+.inbox-card[data-audit-finding]:focus-visible {
+  border-color: var(--cyan);
+}
 .inbox-card.selected {
   border-color: var(--cyan);
   box-shadow: inset 2px 0 0 var(--cyan);
