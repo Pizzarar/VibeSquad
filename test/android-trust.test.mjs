@@ -17,7 +17,7 @@ process.env.VIBESQUAD_MESHNET_IP = "100.64.0.7";
 const auth = await import("../server/auth.mjs");
 const { normalizeFp, parsePairInput, toAndroidDeepLink } = await import("../src/remoteSession.ts");
 const { createTrustClient, nativeTrust } = await import("../src/vsTrust.ts");
-const { androidTrustKotlinEnv, ensureAndroidTrustKotlin } = await import("../server/build-android.mjs");
+const { ensureAndroidTrustKotlin } = await import("../server/build-android.mjs");
 
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
 const FP = "ab".repeat(32);
@@ -87,12 +87,13 @@ describe("Kotlin trust guards and build wiring", () => {
   const kt = read("src-tauri/android/VsTrust.kt");
 
   test("the only proceed() is behind VsTrust.allow; no trust-all handler, user-CA or network-config override", () => {
-    const env = androidTrustKotlinEnv();
-    const ext = env.WRY_RUSTWEBVIEWCLIENT_CLASS_EXTENSION;
+    const cfg = read("src-tauri/.cargo/config.toml");
+    const ext = JSON.parse(cfg.match(/^WRY_RUSTWEBVIEWCLIENT_CLASS_EXTENSION = (".*")$/m)[1]);
     assert.match(ext, /if \(VsTrust\.allow\(view\.context, error\)\) handler\.proceed\(\) else handler\.cancel\(\)/);
     assert.equal((ext.match(/proceed\(\)/g) ?? []).length, 1);
-    assert.equal(env.WRY_RUSTWEBVIEW_CLASS_INIT, "VsTrust.install(this)");
+    assert.match(cfg, /^WRY_RUSTWEBVIEW_CLASS_INIT = "VsTrust\.install\(this\)"$/m);
     assert.doesNotMatch(kt, /handler\.proceed|HttpsURLConnection\.setDefault|setDefaultSSLSocketFactory|setDefaultHostnameVerifier/);
+    assert.doesNotMatch(read("src-tauri/tauri.android.conf.json"), /cleartext|networkSecurity|trust/i);
   });
 
   test("allow() requires a pinned host, https, validity, non-CA leaf, pinned issuer signature and SAN host match", () => {

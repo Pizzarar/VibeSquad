@@ -123,7 +123,8 @@ export function ensureAndroidSystemBarFit(mainActivityPath) {
 const TRUST_KOTLIN_SRC = resolve(import.meta.dirname, "..", "src-tauri", "android", "VsTrust.kt");
 
 /**
- * Copies VsTrust.kt (host-scoped CA pin, PLAN_ANDROID_MESHNET.md A2) next to the generated MainActivity.kt.
+ * Copies VsTrust.kt (host-scoped CA pin, PLAN_ANDROID_MESHNET.md A2) next to the generated MainActivity.kt. The hooks that
+ * call it (RustWebViewClient.onReceivedSslError, RustWebView init) come from src-tauri/.cargo/config.toml [env] for wry.
  * Idempotent: rewrites only when the content differs; returns false when unchanged or the project dir is missing.
  */
 export function ensureAndroidTrustKotlin(mainActivityDir, src = TRUST_KOTLIN_SRC) {
@@ -133,22 +134,6 @@ export function ensureAndroidTrustKotlin(mainActivityDir, src = TRUST_KOTLIN_SRC
   if (existsSync(dest) && readFileSync(dest, "utf8") === text) return false;
   writeFileSync(dest, text, "utf8");
   return true;
-}
-
-/**
- * wry splices these into its generated RustWebViewClient / RustWebView (env read by wry's build.rs): the client cancels
- * every TLS error unless VsTrust.allow() proves a pinned host + pinned CA, and the WebView gets the app-origin-only
- * pairing bridge. No blanket onReceivedSslError proceed.
- */
-export function androidTrustKotlinEnv() {
-  return {
-    WRY_RUSTWEBVIEWCLIENT_CLASS_EXTENSION: [
-      "override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: android.net.http.SslError) {",
-      "    if (VsTrust.allow(view.context, error)) handler.proceed() else handler.cancel()",
-      "}",
-    ].join("\n"),
-    WRY_RUSTWEBVIEW_CLASS_INIT: "VsTrust.install(this)",
-  };
 }
 
 /** Where `scripts/rotate-android-keystore.mjs` creates the release keystore (outside the repo). */
@@ -269,7 +254,7 @@ export function buildAndroidApk({
 } = {}) {
   const require = createRequire(import.meta.url);
   const tauriCliJs = require.resolve("@tauri-apps/cli/tauri.js");
-  const androidEnv = { ...resolveAndroidEnv(env), ...androidTrustKotlinEnv() };
+  const androidEnv = resolveAndroidEnv(env);
   const run = (cmd, args, opts = {}) => exec(cmd, args, { cwd: rootDir, env: androidEnv, stdio: "inherit", ...opts });
   const runNode = (args, opts = {}) => exec(process.execPath, args, { cwd: rootDir, env: androidEnv, stdio: "inherit", ...opts });
 
