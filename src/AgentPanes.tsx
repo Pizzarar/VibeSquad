@@ -8,6 +8,7 @@ import { exitSquadsHome } from "./pinFocus";
 import { setFullView } from "./PinGrid";
 import { StatusDot, cleanTitle } from "./ui";
 import { Avatar } from "./pixel";
+import { PixelIcon } from "./PixelIcon";
 import {
   activateTab,
   closeTab,
@@ -128,7 +129,7 @@ function TabStrip(props: { pane: Pane; tabs: string[]; activeId: string | null; 
               exitSquadsHome();
             }}
           >
-            ⊞ TEAMS
+            <PixelIcon name="teams" alt="" fallback="⊞" /> TEAMS
           </button>
           <span className="kbd">Ctrl+.</span>
         </div>

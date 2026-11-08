@@ -41,7 +41,7 @@ test("TabStrip has a ⊞ TEAMS button with the same reset", () => {
   assert.ok(i > 0);
   const block = panes.slice(i, i + 400);
   assert.match(block, /setFocus\(false\);\s*setFullView\(false\);\s*exitSquadsHome\(\);/);
-  assert.match(block, /⊞ TEAMS/);
+  assert.match(block, /<PixelIcon name="teams"[^>]*fallback="⊞"[^>]*\/>\s*TEAMS/);
 });
 
 test("rail alerts skip finished items and rows drop the role tags", () => {

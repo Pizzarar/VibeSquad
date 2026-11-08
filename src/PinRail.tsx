@@ -5,6 +5,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getDraft, useDraft } from "./drafts";
 import { markPinRead, NeedsBadge, NeedsBadgeInline, PinDot, PinTeamTree, setFullView, usePreview } from "./PinGrid";
+import { PixelIcon } from "./PixelIcon";
 import { exitPinFocus, type PinFocus } from "./pinFocus";
 import { PinMenu } from "./PinMenu";
 import { TopBreadcrumb } from "./Breadcrumb";
@@ -234,7 +235,7 @@ function PinFocusBar({ view, focus, onSelectSquad }: { view: TeamView; focus: Pi
   return (
     <div className="pin-focus-bar" data-testid="pin-focus-bar">
       <button type="button" className="btn ghost small pin-focus-home" data-testid="pin-focus-home" title="Back to all teams (Esc)" onClick={exitPinFocus}>
-        ⊞
+        <PixelIcon name="squads" alt="Squads" fallback="⊞" />
       </button>
       <TopBreadcrumb squadsHome={false} squadId={view.team.id} squadName={view.team.name} laneName={pin?.lane.name ?? focus.laneId} hub={pin ? isHubPin(pin) : false} onSelectSquad={onSelectSquad} />
       <span className="pin-lane-handle" data-testid="pin-focus-handle">{handle}</span>
