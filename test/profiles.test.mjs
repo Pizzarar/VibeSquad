@@ -712,3 +712,13 @@ test("just-send-it rule: identical sentence in all three prompt sources, old ask
     assert.ok(!src.includes("Send it there?"), `${rel}: old confirm question`);
   }
 });
+
+test("S6 fix-routing rule: identical sentence in all three prompt sources, no offer-as-question wording", () => {
+  const SENTENCE =
+    'Small root-cause fixes inside your own unit: just do them and report after. A bug you find, or a root-cause fix outside your own unit: don\'t ask, run `vs inbox add --lane <project bug lane> --from-brainstorm "<item>"` (workers: put it in your final message for the lead to send), then keep working. A workaround ships only with its named follow-up already queued.';
+  const root = resolve(import.meta.dirname, "..");
+  for (const rel of ["server/profiles.mjs", "src/profiles.ts", "server/hooks/agent-duties.ts"]) {
+    const src = readFileSync(join(root, rel), "utf8").replace(/\\(['"])/g, "$1");
+    assert.ok(src.includes(SENTENCE), `${rel}: missing the S6 sentence`);
+  }
+});
