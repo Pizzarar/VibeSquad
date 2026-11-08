@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -334,6 +334,7 @@ test("11. multi-process race: concurrent server setProviderCapped and vs cap CLI
   const dir = mkdtempSync(join(tmpdir(), "vs-caps-race-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const vsHome = join(dir, ".vibesquad");
+  mkdirSync(vsHome, { recursive: true });
   const cappedProvidersPath = join(vsHome, "capped-providers.json");
 
   const modUrl = pathToFileURL(fileURLToPath(new URL("../server/provider-failover.mjs", import.meta.url))).href;
@@ -344,8 +345,10 @@ test("11. multi-process race: concurrent server setProviderCapped and vs cap CLI
   const providers = ["claude", "antigravity-cli", "opencode", "openai", "mistral", "cohere"];
   const runChild = (args) =>
     new Promise((resolveProc, rejectProc) => {
-      const c = spawn(process.execPath, args, { env, stdio: ["ignore", "ignore", "inherit"] });
-      c.on("exit", (rc) => (rc === 0 ? resolveProc() : rejectProc(new Error(`child exit ${rc}`))));
+      const c = spawn(process.execPath, args, { env, stdio: ["ignore", "pipe", "pipe"] });
+      let stderr = "";
+      c.stderr.on("data", (d) => { stderr += d.toString(); });
+      c.on("exit", (rc) => (rc === 0 ? resolveProc() : rejectProc(new Error(`child exit ${rc}: ${stderr.trim()}`))));
       c.on("error", rejectProc);
     });
 

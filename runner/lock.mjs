@@ -30,7 +30,7 @@ export function tryCreateLock(file, pid = process.pid) {
   try {
     fd = openSync(file, 'wx');
   } catch (e) {
-    if (e.code === 'EEXIST') return false;
+    if (e.code === 'EEXIST' || e.code === 'EPERM' || e.code === 'EACCES') return false;
     throw e;
   }
   try {
