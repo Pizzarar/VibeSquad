@@ -184,6 +184,10 @@ local RIFF_FRAMES = {
 -- 2 lopsided googly eyeballs hang from the lobes on short CORAL nerve tails, a floating set of
 -- chunky teeth sits below, bubbles rise only in the clear water. Brain never bobs (it is cropped);
 -- eyes + teeth bob on their own cel offsets.
+-- RS-a (Riff slam, appended after needs so no existing cell moves): `smacked` = RiffBot's chat window
+-- slams in from the left: eyes squashed shut >< then popped wide with pin pupils, face shoved right,
+-- teeth knocked crooked and the gold tooth flies out. `dizzy` = spiral eyes that spin and a ring of
+-- AMBER stars circling under the lobes, teeth hanging loose, gold tooth still missing (it returns on idle). Brain stays put (gutter contract).
 local OVER = { "back", "bubbles", "brain", "eyeL", "eyeR", "teeth", "fx" }
 local OEYES = {
   eyeL = { x = 20, y = 27, r = 7.6, hook = 1, pup = 3, up = 13,
@@ -236,12 +240,32 @@ local function eyeball(C, e, s, look)
   local cx, cy = e.x, e.y
   local r = e.r + (s.wide and 1 or 0)
   local h, sw = e.hook, (s.swing or 0) * e.hook
-  local by = math.floor(cy + r)
-  local ty = math.ceil(cy - r)
+  local rx, ry = r, r
+  if s.squish then rx, ry = r * 1.2, r * 0.62 end  -- smacked: eyeball squashed flat by the hit
+  local by = math.floor(cy + ry)
+  local ty = math.ceil(cy - ry)
   nerve(C, {cx, ty + 1, cx + h + sw, ty - 2, cx, ty - 4, cx - h, e.up - 1, cx, e.up - 3})   -- plugs into the lobe
-  C.ellipse(cx, cy, r, r, M)
-  for _, v in ipairs(e.veins) do C.line(cx + v[1], cy + v[2], cx + v[3], cy + v[4], P) end
-  if s.shut then                                   -- blink: PINK lid shut, INK slit + 3 lashes
+  C.ellipse(cx, cy, rx, ry, M)
+  if not s.squish then
+    for _, v in ipairs(e.veins) do C.line(cx + v[1], cy + v[2], cx + v[3], cy + v[4], P) end
+  end
+  if s.squish then                                 -- squeezed shut: one clean INK chevron pointing at the nose (> <)
+    local w = math.floor(rx) - 3
+    local tip, tail, k = cx + h * (w - 1), cx - h * (w - 2), math.floor(ry) - 1
+    C.line(tail, cy - k, tip, cy, K); C.line(tip, cy, tail, cy + k, K)
+    C.px(cx - h * (w + 2), cy - math.floor(ry) - 1, K); C.px(cx - h * (w + 3), cy - math.floor(ry), K)  -- wince creases
+    C.px(cx - h * (w + 2), cy + math.floor(ry) + 1, K); C.px(cx - h * (w + 3), cy + math.floor(ry), K)
+  elseif s.spiral then                             -- dizzy: 2-turn INK spiral, phase turns it each frame
+    local ph = s.spiral * h
+    for i = 0, 140 do
+      local a = i / 140 * 4 * math.pi
+      local rr = 0.6 + (r - 1.6) * i / 140
+      C.px(math.floor(cx + rr * math.cos(a * h + ph) + 0.5), math.floor(cy + rr * math.sin(a * h + ph) + 0.5), K)
+    end
+  elseif s.pin then                                -- smacked recoil: popped wide, iris gone, pin pupils spun apart
+    local ix, iy = cx + look[1], cy + look[2]
+    C.ellipse(ix + 0.5, iy + 0.5, 2.2, 2.2, T); C.rect(ix, iy, 2, 2, K)
+  elseif s.shut then                                   -- blink: PINK lid shut, INK slit + 3 lashes
     for y = ty, by do for x = math.floor(cx - r), math.ceil(cx + r) do
       if C.get(x, y) == M or C.get(x, y) == P then C.px(x, y, P) end
     end end
@@ -267,7 +291,7 @@ end
 
 local function brain(C, s)
   local g = s.pulse and 1 or 0                     -- talk pulse: lobes swell 1px
-  local fold = s.glow and A or (s.pulse and P or V)
+  local fold = s.glow and A or ((s.pulse or s.sting) and P or V)
   local function dens(x, y)                        -- fade band wobbles along x so no dither row reads as a line
     local dip = (x >= 38 and x <= 41) and 2 or 0   -- the fissure dips the top fade at the centre line
     return math.max(0, math.min(1, (y + 1.5 - dip + 1.0 * math.sin(0.33 * x + 1.1) + 0.6 * math.sin(0.71 * x)) / FADE_Y))
@@ -344,9 +368,18 @@ local function brain(C, s)
 end
 
 local function teeth(C, s)
+  if s.shear then                                  -- knocked askew: every pixel slides with a column shear
+    local px = C.px
+    C.px = function(x, y, c) px(x, y + math.floor(s.shear * (x - 40) + 0.5), c) end
+    local ok, err = pcall(function() teeth(C, { gap = s.gap, knock = s.knock }) end)
+    C.px = px
+    assert(ok, err)
+    return
+  end
   local gap, oy = s.gap or 0, 0                    -- 0 = closed on one 1px INK bite line
   C.rect(32, 30+oy, 17, 1, P); C.rect(30, 31+oy, 21, 1, P)                        -- upper gum, rounded
   C.rect(31, 32+oy, 19, 3, M); C.rect(43, 32+oy, 3, 3, A)                         -- upper teeth + gold tooth
+  if s.knock then C.rect(43, 32+oy, 3, 3, K) end                                  -- smacked: gold tooth knocked out
   if gap > 0 then C.rect(35, 35+oy, 3, 1, M) end                                  -- fang shows when open
   local lt = 36 + gap + oy
   C.rect(32, lt, 19, 3, M)                                                        -- lower teeth
@@ -385,6 +418,26 @@ local function over(C, s)
     fx.line(31, 13, 29, 15, A); fx.line(29, 15, 31, 17, A); fx.line(31, 17, 29, 19, A)
     fx.line(48, 13, 50, 15, A); fx.line(50, 15, 48, 17, A); fx.line(48, 17, 50, 19, A)
   end
+  if s.tooth then                                  -- smacked: the gold tooth tumbles out to the right
+    local tx, ty = s.tooth[1], s.tooth[2]
+    if s.tooth[3] then fx.poly({tx+1,ty, tx+3,ty+1, tx+2,ty+3, tx,ty+2}, A) else fx.rect(tx, ty, 3, 3, A) end
+    fx.px(tx + 1, ty + 1, M)
+  end
+  for _, st in ipairs(s.stars or {}) do            -- dizzy: chunky 5px AMBER stars (MARBLE core) ringing the head
+    local x, y = st[1], st[2]
+    fx.rect(x - 2, y, 5, 1, A); fx.rect(x - 1, y - 1, 3, 3, A); fx.px(x, y - 2, A)
+    fx.px(x - 1, y + 2, A); fx.px(x + 1, y + 2, A); fx.px(x, y, M)
+  end
+  if s.tooth or s.stars then fx.outline(K) end      -- (only RS-a frames: needs zaps stay un-outlined)
+  if s.tooth then                                  -- its INK motion ticks trail back toward the gap
+    local tx, ty = s.tooth[1], s.tooth[2]
+    fx.hline(tx - 5, ty + 1, 2, K); fx.hline(tx - 4, ty + 3, 2, K)
+  end
+  if s.hit then                                    -- smacked: INK impact streaks off the left (the window hits from Riff's side)
+    local o = s.hit
+    fx.hline(2, 14 + o, 5, K); fx.hline(3, 20 - o, 6, K); fx.hline(2, 27 + o, 4, K); fx.hline(4, 34, 5, K)
+    if o == 0 then fx.line(9, 9, 11, 11, K); fx.line(9, 41, 11, 39, K) end
+  end
 end
 
 -- off = cel y offsets per organ (out-of-sync bob; brain fixed); t = bubble rise step
@@ -401,6 +454,15 @@ local OVER_FRAMES = {
     off = {eyeL = -1, eyeR = 0, teeth = -1} },                                                                   -- needs x640
   { wide = true, lookL = {1, 0}, lookR = {-1, 0}, gap = 4, zap = 2, glow = true, pulse = true, swing = 1, t = 1,
     off = {eyeL = 0, eyeR = -1, teeth = -1} },                                                                   -- needs x720
+  -- RS-a, appended (existing cells keep their x)
+  { squish = true, sting = true, shear = 0.22, gap = 1, knock = true, tooth = {54, 37}, hit = 0, t = 0,
+    off = {eyeL = 0, eyeR = 1, teeth = 1}, offx = {eyeL = 2, eyeR = 2, teeth = 2} },                            -- smacked x800
+  { wide = true, pin = true, lookL = {-4, -4}, lookR = {3, 2}, sting = true, shear = -0.16, gap = 3, knock = true,
+    tooth = {62, 41, true}, hit = 1, swing = 1, t = 1, off = {eyeL = -1, eyeR = 0, teeth = 0}, offx = {eyeL = 1, eyeR = 1, teeth = 1} }, -- smacked x880
+  { spiral = 0, shear = 0.08, gap = 2, knock = true, swing = 1, t = 0, stars = {{11, 16}, {40, 20}, {69, 14}},
+    off = {eyeL = 1, eyeR = 0, teeth = 0} },                                                                     -- dizzy x960
+  { spiral = math.pi, shear = -0.08, gap = 2, knock = true, t = 1, stars = {{28, 15}, {52, 14}, {72, 31}},
+    off = {eyeL = 0, eyeR = 1, teeth = 1} },                                                                     -- dizzy x1040
 }
 
 -- ---------- build + export ----------
@@ -450,5 +512,5 @@ build("riffbot", RIFF, riff, RIFF_FRAMES, function(spr, lay, i, s)
   end
 end)
 build("overlord", OVER, over, OVER_FRAMES, function(spr, lay, i, s)
-  for n, dy in pairs(s.off or {}) do local cel = lay[n]:cel(spr.frames[i]); cel.position = Point(0, dy) end
+  for n, dy in pairs(s.off or {}) do local cel = lay[n]:cel(spr.frames[i]); cel.position = Point((s.offx or {})[n] or 0, dy) end
 end)
