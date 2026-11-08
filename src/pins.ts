@@ -3,7 +3,7 @@
 // This file is the shared contract for the pinned-team UI. Keep it pure (no fetch, no React):
 // steps 1 (sidebar + grid), 2 (focus rail) and 3 (resolver + quick start) all build on it.
 import type { LaneDef, Member, TeamDef, TeamView } from "./teams.ts";
-import { UNASSIGNED, brainstormUsedTokens, countsAsNeedsYou, formerNewest, isFormerBrainstormMember, isHiddenLane, isHubLane, isTopicBrainstorm } from "./teams.ts";
+import { UNASSIGNED, brainstormUsedTokens, findAuditLane, countsAsNeedsYou, formerNewest, isFormerBrainstormMember, isHiddenLane, isHubLane, isTopicBrainstorm } from "./teams.ts";
 export { topicOfBrainstorm } from "./teams.ts";
 
 /** "removed" lanes stay in teams.json (brief + history kept) but are hidden everywhere. */
@@ -66,6 +66,18 @@ export const isLive = (m: Member | null | undefined): m is Member =>
   Boolean(m) && !m!.agent.archivedAt && m!.agent.status !== "closed";
 
 const live = (ms: Member[]) => ms.filter(isLive);
+
+/** Inbox source stamped by scripts/audit-perfection.mjs on every finding. */
+export const AUDIT_SOURCE = "audit:perfection";
+
+/** The pin whose Buddy chat a triage card opens: the Squad's hidden audit lane for `audit:perfection` cards, null for every other card. */
+export function auditCardPin(view: TeamView, card: { source?: string | null }): Pin | null {
+  if (card.source !== AUDIT_SOURCE) return null;
+  const lane = findAuditLane(view.team);
+  if (!lane) return null;
+  const all = pinsForSquad(view, { includeHidden: true });
+  return [...all.pinned, ...all.done].find((p) => p.lane.id === lane.id) ?? null;
+}
 
 /**
  * Build the pins for one squad. Pins are ordered by `order`, then by teams.json order. The "_other" bucket and removed lanes are never pins.

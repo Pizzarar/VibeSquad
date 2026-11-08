@@ -5,8 +5,9 @@ import { DEMO } from "./demoFlag";
 import { useDraft } from "./drafts";
 import { closeTab, openAgentInTab } from "./panes";
 import { getTeams, isTopicBrainstorm, titleFor, topicOfBrainstorm, useTeams } from "./teams";
-import { laneDisplayName } from "./pins";
+import { auditCardPin, laneDisplayName, type Pin } from "./pins";
 import { isRemote } from "./remoteSession";
+import type { TeamView } from "./teams";
 import type { InboxCard, InboxScope, TeamDef } from "./types";
 
 export const TOPIC_SOFT_CAP = 3;
@@ -435,7 +436,11 @@ export const SidebarInboxBadge = memo(function SidebarInboxBadge({ onSelect }: {
   );
 });
 
-export const IdeaInbox = memo(function IdeaInbox({ team }: { team: TeamDef }) {
+/** True when a click landed on a control inside the card (checkbox, selects, buttons): those keep their own behaviour. */
+export const isInboxControlClick = (target: EventTarget | null): boolean =>
+  target instanceof Element && !!target.closest("button, select, input, label, a, textarea");
+
+export const IdeaInbox = memo(function IdeaInbox({ team, view, onOpenLane }: { team: TeamDef; view?: TeamView; onOpenLane?: (pin: Pin) => void | Promise<unknown> }) {
   const open = useInboxOpen();
   const cards = useInboxCards();
   const notice = useInboxNotice();
@@ -446,6 +451,11 @@ export const IdeaInbox = memo(function IdeaInbox({ team }: { team: TeamDef }) {
   const [openingId, setOpeningId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [highlightId, setHighlightId] = useState<string | null>(null);
+
+  const openAuditChat = (pin: Pin) => {
+    setError("");
+    void Promise.resolve(onOpenLane?.(pin)).catch((e) => setError(`Could not open ${pin.lane.name}: ${e}`));
+  };
 
   const handleOpenTopic = async (cardId: string) => {
     if (openingId) return;
@@ -658,12 +668,25 @@ export const IdeaInbox = memo(function IdeaInbox({ team }: { team: TeamDef }) {
                 const isHighlighted = highlightId === card.id;
                 const lColor = laneColor(card.laneId);
 
+                const auditPin = view && onOpenLane ? auditCardPin(view, card) : null;
                 return (
                   <div
                     key={card.id}
                     id={`inbox-card-${card.id}`}
                     className={`inbox-card ${isSelected ? "selected" : ""} ${isHighlighted ? "highlighted" : ""}`}
                     data-testid={`inbox-card-${card.id}`}
+                    {...(auditPin && {
+                      role: "link",
+                      tabIndex: 0,
+                      title: `Open ${auditPin.lane.name} chat`,
+                      "data-audit-finding": "true",
+                      onClick: (e: React.MouseEvent) => {
+                        if (!isInboxControlClick(e.target)) openAuditChat(auditPin);
+                      },
+                      onKeyDown: (e: React.KeyboardEvent) => {
+                        if (e.key === "Enter" && e.target === e.currentTarget) openAuditChat(auditPin);
+                      },
+                    })}
                   >
                     <div className="inbox-card-top">
                       <label className="inbox-card-check" title="Select to merge multiple cards">
