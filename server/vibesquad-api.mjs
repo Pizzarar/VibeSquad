@@ -14,7 +14,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspectFirstRunStatus } from "./first-run.mjs";
-import { resolveTeamsFilePath, resolveTeamsWritePath } from "./teams-file.mjs";
+import { resolveTeamsFilePath, resolveTeamsWritePath, teamsRevision, validateTeamsBody, writeTeamsRegistry } from "./teams-file.mjs";
 import { seedHubBriefs } from "./hub-seed.mjs";
 import { resolveProjectPath } from "./brief-path.mjs";
 import { contentRevision, createWindowLimiter } from "./write-guards.mjs";
@@ -389,49 +389,10 @@ export function handleAuthStatus(req, res, rootDir = REPO_ROOT) {
   return sendJson(res, 200, { ...full, localAccess: localAccess(req) });
 }
 
-/** Content hash of the registry file; a PUT that sends a stale one gets 409 instead of overwriting newer edits. */
-export function teamsRevision(file) {
-  try {
-    return createHash("sha1").update(readFileSync(file)).digest("hex");
-  } catch {
-    return "none";
-  }
-}
-
-const MAX_TEAMS = 200;
-const MAX_LANES = 500;
-const MAX_PATHS = 64;
-const MAX_PATH_LEN = 1024;
-
-/** Throws on a teams array the registry can't safely hold (ids are slug-safe, paths are strings). */
-export function validateTeamsBody(teams) {
-  if (!Array.isArray(teams)) throw new Error("teams must be an array");
-  if (teams.length > MAX_TEAMS) throw new Error("too many teams");
-  const checkPaths = (obj, where) => {
-    if (obj.paths !== undefined) {
-      if (!Array.isArray(obj.paths) || obj.paths.length > MAX_PATHS) throw new Error(`${where}: paths must be an array of strings`);
-      for (const p of obj.paths) if (typeof p !== "string" || p.length > MAX_PATH_LEN) throw new Error(`${where}: paths must be strings`);
-    }
-    if (obj.path != null && (typeof obj.path !== "string" || obj.path.length > MAX_PATH_LEN)) throw new Error(`${where}: path must be a string`);
-  };
-  for (const t of teams) {
-    if (!t || typeof t !== "object" || Array.isArray(t)) throw new Error("each team must be an object");
-    if (typeof t.id !== "string" || !TEAM_ID.test(t.id)) throw new Error("bad team id");
-    checkPaths(t, `team ${t.id}`);
-    if (t.lanes === undefined) continue;
-    if (!Array.isArray(t.lanes) || t.lanes.length > MAX_LANES) throw new Error(`team ${t.id}: lanes must be an array`);
-    for (const l of t.lanes) {
-      if (!l || typeof l !== "object" || Array.isArray(l)) throw new Error(`team ${t.id}: each lane must be an object`);
-      if (typeof l.id !== "string" || !TEAM_ID.test(l.id)) throw new Error(`team ${t.id}: bad lane id`);
-      checkPaths(l, `lane ${l.id}`);
-    }
-  }
-}
+export { teamsRevision, validateTeamsBody, writeTeamsRegistry };
 
 // The teams registry the CLI and plugin read (see teams-file.mjs). Writes keep the other top-level keys.
 // GET adds `revision`; a write that sends one must still match the file, or it gets 409 with the current registry.
-let teamsTmpSeq = 0;
-
 function handleTeams(req, res, rootDir) {
   if (req.method === "GET") {
     const file = resolveTeamsFilePath(rootDir);
@@ -447,69 +408,11 @@ function handleTeams(req, res, rootDir) {
   }
   readBody(req).then((parsed) => {
     try {
-      const teams = Array.isArray(parsed) ? parsed : parsed.teams;
-      validateTeamsBody(teams);
-      const readPath = resolveTeamsFilePath(rootDir);
-      const curRes = readJsonFileWithBom(readPath, {
-        label: "teams.json",
-        fallback: {},
-        recordWarning: true,
-      });
-      const { revision: _staleRevision, ...cur } = curRes.data ?? {};
-      const currentRevision = teamsRevision(readPath);
-      if (!Array.isArray(parsed) && typeof parsed.revision === "string" && parsed.revision !== currentRevision) {
-        return sendJson(res, 409, { error: "teams.json changed", ...cur, revision: currentRevision });
+      const result = writeTeamsRegistry(parsed, rootDir);
+      if (result.status === 200) {
+        seedHubBriefs(result.prevTeams, result.body.teams, rootDir);
       }
-      const firstTeam = teams[0] ?? null;
-      const leadFlagTokens =
-        typeof parsed.leadFlagTokens === "number"
-          ? parsed.leadFlagTokens
-          : typeof firstTeam?.leadFlagTokens === "number"
-            ? firstTeam.leadFlagTokens
-            : cur.leadFlagTokens ?? cur.leadHandoffTokens ?? LEAD_FLAG_DEFAULT;
-      const leadAutoHandoffTokens =
-        typeof parsed.leadAutoHandoffTokens === "number"
-          ? parsed.leadAutoHandoffTokens
-          : typeof firstTeam?.leadAutoHandoffTokens === "number"
-            ? firstTeam.leadAutoHandoffTokens
-            : cur.leadAutoHandoffTokens ?? LEAD_AUTO_HANDOFF_DEFAULT;
-      const leadHardCapTokens =
-        typeof parsed.leadHardCapTokens === "number"
-          ? parsed.leadHardCapTokens
-          : typeof firstTeam?.leadHardCapTokens === "number"
-            ? firstTeam.leadHardCapTokens
-            : cur.leadHardCapTokens ?? LEAD_HARD_CAP_DEFAULT;
-      const next = {
-        ...cur,
-        leadHandoffTokens: leadFlagTokens,
-        leadFlagTokens,
-        leadAutoHandoffTokens,
-        leadHardCapTokens,
-        ...(typeof parsed.brainstormWarnTokens === "number" ? { brainstormWarnTokens: parsed.brainstormWarnTokens } : {}),
-        ...(typeof parsed.brainstormRestartTokens === "number" ? { brainstormRestartTokens: parsed.brainstormRestartTokens } : {}),
-        teams,
-      };
-      const file = resolveTeamsWritePath(rootDir);
-      mkdirSync(dirname(file), { recursive: true });
-      // Unique per write, so two PUTs in this process never share a temp file.
-      const tmp = `${file}.tmp-${process.pid}-${Date.now()}-${++teamsTmpSeq}`;
-      try {
-        writeFileSync(tmp, JSON.stringify(next, null, 2) + "\n", "utf8");
-        renameSync(tmp, file);
-      } catch (e) {
-        rmSync(tmp, { force: true });
-        throw e;
-      }
-      clearConfigWarning(file);
-      seedHubBriefs(cur.teams, teams, rootDir);
-      sendJson(res, 200, {
-        ok: true,
-        revision: teamsRevision(resolveTeamsFilePath(rootDir)),
-        teams: next.teams,
-        leadFlagTokens: next.leadFlagTokens,
-        leadAutoHandoffTokens: next.leadAutoHandoffTokens,
-        leadHardCapTokens: next.leadHardCapTokens,
-      });
+      sendJson(res, result.status, result.body);
     } catch (e) {
       res.statusCode = 400;
       res.end(String(e));
