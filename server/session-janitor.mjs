@@ -25,6 +25,44 @@ export function findJanitorCandidates(agents, opts = {}) {
   return agents.filter((a) => isJanitorCandidate(a?.agent ?? a, opts)).map((a) => a?.agent ?? a);
 }
 
+export const STALL_QUEUED_MS = 15 * 60 * 1000;
+export const STALL_RUNNING_MS = 30 * 60 * 1000;
+
+/**
+ * Returns "queued" / "running" when `agent` is a non-archived `role=worker` that has sat queued (never started)
+ * or running with no activity for at least the matching threshold; otherwise null. Flag-only: never acts on it.
+ */
+export function stalledWorkerKind(
+  agent,
+  { now = Date.now(), queuedMs = STALL_QUEUED_MS, runningMs = STALL_RUNNING_MS } = {},
+) {
+  if (!agent || typeof agent !== "object") return null;
+  if (agent.archivedAt) return null;
+  if (String(agent.labels?.role || "").toLowerCase() !== "worker") return null;
+  const status = String(agent.status || "").toLowerCase();
+  if (status !== "queued" && status !== "running") return null;
+  const ts = Date.parse(agent.lastActivityAt || agent.updatedAt || agent.createdAt || "");
+  if (!Number.isFinite(ts)) return null;
+  return now - ts >= (status === "queued" ? queuedMs : runningMs) ? status : null;
+}
+
+/**
+ * Lists stalled workers as `{ id, status, silentMs }`.
+ */
+export function findStalledWorkers(agents, opts = {}) {
+  if (!Array.isArray(agents)) return [];
+  const now = opts.now ?? Date.now();
+  const out = [];
+  for (const raw of agents) {
+    const a = raw?.agent ?? raw;
+    const kind = stalledWorkerKind(a, opts);
+    if (!kind) continue;
+    const ts = Date.parse(a.lastActivityAt || a.updatedAt || a.createdAt);
+    out.push({ id: a.id, status: kind, silentMs: now - ts });
+  }
+  return out;
+}
+
 /**
  * Scans non-archived daemon agents, detaches live children of each candidate worker first
  * (so live children are never cascade-archived), and archives eligible closed workers.
@@ -64,6 +102,7 @@ export async function runSessionJanitor(client, { now = Date.now(), maxAgeMs = J
     detachedChildren,
     skipped,
     errors,
+    stalled: findStalledWorkers(list, { now }),
   };
 }
 
@@ -133,6 +172,7 @@ export async function handleJanitorRun(
         scanned: list.length,
         candidates: candidates.length,
         candidateIds: candidates.map((c) => c.id),
+        stalled: findStalledWorkers(list, { now }),
       });
       return true;
     }
