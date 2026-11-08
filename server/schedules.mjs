@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { findAuditLane } from "./identity.mjs";
 import crypto from "node:crypto";
 
 export const vsHome = (env = process.env) => env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad");
@@ -140,6 +141,11 @@ function validateExpiresAt(v) {
 const iso = (ms) => (ms == null ? null : new Date(ms).toISOString());
 const fail = (status, message) => Object.assign(new Error(message), { status });
 
+export const AUDIT_PROMPT = "Read docs/lanes/perfection/AUDIT_BRIEF.md and follow it.";
+/** Sonnet medium: the audit makes judgment calls (checklist 1-3) but only reports, so Opus is overkill and Flash too thin. Same config as the "Implement - Sonnet" profile. */
+export const AUDIT_PROFILE = { name: "Implement - Sonnet", provider: "claude", model: "claude-sonnet-5-5", modeId: "auto", thinkingOptionId: "medium" };
+export const AUDIT_CADENCE = { type: "cron", expression: "17 4 * * *" };
+
 export function createSchedulesStore({ home = vsHome(), backend = null, now = () => Date.now(), tickMs = 15_000, resolveIdentity = null, pruneEveryMs = 60_000 } = {}) {
   const file = path.join(home, "schedules.json");
   const logDir = path.join(home, "schedule-logs");
@@ -202,8 +208,9 @@ export function createSchedulesStore({ home = vsHome(), backend = null, now = ()
           schedule: s.id,
           ...(s.name ? { scheduleName: s.name } : {}),
           role: "worker",
-          ...(where?.team ? { team: where.team } : {}),
-          ...(where?.lane ? { lane: where.lane } : {}),
+          ...(s.profile ? { profile: s.profile } : {}),
+          ...((s.team ?? where?.team) ? { team: s.team ?? where.team } : {}),
+          ...((s.lane ?? where?.lane) ? { lane: s.lane ?? where.lane } : {}),
         },
       });
       return { agentId: agent?.id ?? null, message: `${trigger}: started agent ${agent?.id ?? "?"}` };
@@ -293,6 +300,26 @@ export function createSchedulesStore({ home = vsHome(), backend = null, now = ()
       // The immediate run is the first counted run, so maxRuns: 1 means exactly one.
       if (req.runOnCreate) void fire(s.id, { trigger: "run-on-create", cadence: true }).catch(() => {});
       return view(s);
+    },
+
+    /** Idempotent: one daily new-agent entry per Squad's audit lane, keyed by `seed`. Squads without an audit lane or repo path are skipped. Returns the created ids. */
+    seedAuditSchedules(teams = []) {
+      const created = [];
+      for (const team of Array.isArray(teams) ? teams : []) {
+        const lane = findAuditLane(team);
+        const cwd = team?.paths?.[0];
+        if (!lane || !cwd) continue;
+        const seed = `audit:${team.id}:${lane.id}`;
+        if (load().some((s) => s.seed === seed)) continue;
+        const { name, ...cfg } = AUDIT_PROFILE;
+        const v = store.create({ name: `Daily audit: ${team.name ?? team.id}`, prompt: AUDIT_PROMPT, cadence: AUDIT_CADENCE, target: { type: "new-agent", config: { ...cfg, cwd } } });
+        const list = load();
+        const raw = list.find((x) => x.id === v.id);
+        Object.assign(raw, { seed, team: team.id, lane: lane.id, profile: name });
+        save(list);
+        created.push(v.id);
+      }
+      return created;
     },
 
     update(req = {}) {

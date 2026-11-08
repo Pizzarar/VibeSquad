@@ -5,6 +5,7 @@ import { createServer as createTcpServer } from "node:net";
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { sharedSchedules } from "./schedules.mjs";
+import { loadTeamsRegistry } from "./identity.mjs";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import {
   createVibesquadMiddleware,
@@ -461,7 +462,7 @@ if (isMain) {
       const sup = superviseRunner(sharedRunnerBackend());
       server.once("close", () => sup.stop());
     }
-    void sharedSchedules().then((st) => st.start()).catch(() => {});
+    void sharedSchedules().then((st) => { try { st.seedAuditSchedules(loadTeamsRegistry(rootDir)); } catch {} st.start(); }).catch(() => {});
     server.once("close", () => void sharedSchedules().then((st) => st.stop()).catch(() => {}));
     setImmediate(() => getStale({ rootDir }));
     let activeMuxes = [];

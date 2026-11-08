@@ -342,3 +342,34 @@ test("update: extending a completed schedule reactivates it; shrinking an active
   assert.equal(store.update({ id: s.id, expiresAt: new Date(clock.t - 1000).toISOString() }).status, "completed");
   assert.equal(store.update({ id: s.id, name: "renamed" }).status, "completed"); // untouched limits do not resurrect it
 });
+
+const auditTeams = [
+  { id: "vs", name: "VibeSquad", paths: ["/repo/vs"], lanes: [{ id: "hub" }, { id: "perfection", kind: "audit", hidden: true }] },
+  { id: "plain", name: "Plain", paths: ["/repo/plain"], lanes: [{ id: "plain", hub: true }] },
+];
+
+test("seedAuditSchedules: one daily new-agent entry in the audit lane, none for Squads without one", () => {
+  const { store } = mk();
+  const ids = store.seedAuditSchedules(auditTeams);
+  assert.equal(ids.length, 1);
+  const s = store.get(ids[0]);
+  assert.equal(s.prompt, "Read docs/lanes/perfection/AUDIT_BRIEF.md and follow it.");
+  assert.equal(s.target.type, "new-agent");
+  assert.equal(s.target.config.cwd, "/repo/vs");
+  assert.equal(s.target.config.provider, "claude");
+  assert.equal(s.cadence.type, "cron");
+  assert.equal(s.lane, "perfection");
+  assert.equal(s.team, "vs");
+});
+
+test("seedAuditSchedules is idempotent across calls and store restarts", async () => {
+  const { store, home, backend } = mk();
+  store.seedAuditSchedules(auditTeams);
+  assert.deepEqual(store.seedAuditSchedules(auditTeams), []);
+  const again = createSchedulesStore({ home, backend });
+  assert.deepEqual(again.seedAuditSchedules(auditTeams), []);
+  assert.equal(again.list().length, 1);
+  await again.runOnce(again.list()[0].id);
+  assert.deepEqual(backend.calls[0][1].labels.lane, "perfection");
+  assert.equal(backend.calls[0][1].labels.profile, "Implement - Sonnet");
+});
