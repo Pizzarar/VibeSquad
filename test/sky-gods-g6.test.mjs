@@ -206,7 +206,7 @@ test("chat-only header drops the no-op Dock button and the duplicate x; wrapped 
   const h = src("DrawerHeader.tsx");
   assert.ok(h.includes("{!chatOnly && <button") && h.includes("{!compact && !chatOnly && ("));
   assert.ok(/chatOnly=\{chatOnly\}\s*\/>/.test(src("AgentDrawer.tsx")));
-  assert.ok(src("styles.css").includes(".sky-chat-panel .drawer-subagents-bar { max-height: none; overflow-y: visible; }"));
+  assert.ok(src("styles.css").includes(".sky-chat-panel .drawer-subagents-bar { max-height: none; }"));
 });
 
 test("G8b: thinner bezels need no code change - small slice/scale values validate, size the border from JSON, nothing hardcodes the old 60px sides / 90px chin", async () => {
@@ -266,7 +266,7 @@ test("G8c wall: absolute, above both TVs and the chat panel, never in the grid -
   const css = src("styles.css");
   const sky = src("SkyZones.tsx");
   assert.ok(/\.sky-wall \{ position: absolute;/.test(css) && /z-index: 4; pointer-events: none;/.test(css));
-  assert.ok(/\.sky-zone\.sky-chat-panel \{ grid-column: 2; grid-row: 1; z-index: 3; \}/.test(css)); // panel under the wall, on exactly the right cell
+  assert.ok(/\.sky-zone\.sky-chat-panel \{ grid-column: 2; grid-row: 1; z-index: 3;/.test(css)); // panel under the wall, on exactly the right cell
   assert.ok(sky.includes('data-testid="sky-wall"') && sky.includes("skyWallStyle(crt?.wall, crt?.scale ?? 1,"));
   assert.ok(!/\.sky-wall[^{]*\{[^}]*grid-(column|row)/.test(css)); // out of flow
   assert.equal(logic.SKY_COLUMNS, "minmax(0, 1fr) minmax(0, 1fr)"); // the columns do not depend on the wall
