@@ -20,5 +20,18 @@
     "active": true,
     "createUpdaterArtifacts": false,
     "resources": []
+  },
+  "plugins": {
+    "deep-link": {
+      "mobile": [
+        {
+          "scheme": [
+            "vibesquad"
+          ],
+          "host": "pair",
+          "appLink": false
+        }
+      ]
+    }
   }
 }

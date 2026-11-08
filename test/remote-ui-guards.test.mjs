@@ -9,11 +9,11 @@ describe("R2-4 remote UI & module-load guards", () => {
   test("teams.ts, profiles.ts, notifications.tsx, userName.ts guard module-load and desktop fetches", () => {
 
     const teams = read("src/teams.ts");
-    assert.match(teams, /!\(isRemote\(\) && needsPairing\(true, location\.hash\)\)/);
+    assert.match(teams, /typeof document !== "undefined" && !isRemote\(\)\) \{\s*void refreshTeams\(\);/);
     assert.match(teams, /if \(teamsRevision === "unknown"\) \{\s*await refreshTeams\(\);/);
 
     const profiles = read("src/profiles.ts");
-    assert.match(profiles, /!\(isRemote\(\) && needsPairing\(true, location\.hash\)\)/);
+    assert.match(profiles, /typeof window !== "undefined" && !isRemote\(\)\) \{\s*void fetchProfiles\(\);/);
 
     const notifications = read("src/notifications.tsx");
     assert.match(notifications, /function syncPushEvents\(\): void \{\s*if \(isRemote\(\)\) return;/);

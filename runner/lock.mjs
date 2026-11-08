@@ -1,9 +1,11 @@
 // Lockfiles that keep ONE runner per home. Shared by runner/server.mjs (runner.lock, held for the runner's life)
 // and server/backend/runner-client.mjs (starting.lock, held only while one process spawns the runner).
-import { closeSync, openSync, readFileSync, rmSync, statSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readFileSync, rmSync, statSync, writeSync } from 'node:fs';
 import path from 'node:path';
 
 export const STALE_START_LOCK_MS = 15000;
+const sleepBuf = new Int32Array(new SharedArrayBuffer(4));
+const sleepSync = (ms) => Atomics.wait(sleepBuf, 0, 0, ms);
 
 export function pidAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -27,11 +29,22 @@ export function readLock(file) {
 /** O_EXCL create of `file` holding { pid, startedAt }. True if we now own it. */
 export function tryCreateLock(file, pid = process.pid) {
   let fd;
-  try {
-    fd = openSync(file, 'wx');
-  } catch (e) {
-    if (e.code === 'EEXIST') return false;
-    throw e;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      fd = openSync(file, 'wx');
+      break;
+    } catch (e) {
+      if (e.code === 'EEXIST') return false;
+      if (e.code === 'EPERM' || e.code === 'EACCES') {
+        if (existsSync(file)) return false;
+        if (attempt < 5) {
+          sleepSync(2 * (attempt + 1));
+          if (existsSync(file)) return false;
+          continue;
+        }
+      }
+      throw e;
+    }
   }
   try {
     writeSync(fd, JSON.stringify({ pid, startedAt: Date.now() }));

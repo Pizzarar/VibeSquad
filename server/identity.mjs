@@ -109,8 +109,25 @@ export function isRetiredAgent(agentOrLabels) {
   const labels = extractLabels(agentOrLabels);
   if (isRetiredRole(labels.role)) return true;
   if (agentOrLabels.archivedAt) return true;
-  if (agentOrLabels.status === "closed") return true;
+  // A closed agent is retired only when it cannot be resumed in place (exited / no saved session). A lost-but-resumable
+  // agent (runner restart) stays live: the roster/who/send treat it as live, so the lane is never left leaderless by a restart.
+  if (agentOrLabels.status === "closed") return agentOrLabels.resumable !== true;
   return false;
+}
+
+/**
+ * Shared predicate: is an agent live for roster / lead resolution / send routing?
+ * Non-archived, non-internal, non-retired-role, and not closed-dead. A closed agent is live only when the runner marked it
+ * `resumable` (lost, saved session, no exit); a closed agent with no resumable session is retired as before. Runner agents
+ * carry `resumable` from toAgent(); Paseo/daemon agents without it are treated as retired when closed (the old behaviour).
+ */
+export function isLiveAgent(agentOrLabels) {
+  if (!agentOrLabels || typeof agentOrLabels !== "object") return false;
+  const labels = extractLabels(agentOrLabels);
+  if (isRetiredRole(labels.role)) return false;
+  if (agentOrLabels.archivedAt || agentOrLabels.archived || agentOrLabels.internal) return false;
+  if (agentOrLabels.status === "closed") return agentOrLabels.resumable === true;
+  return true;
 }
 
 /**
@@ -261,6 +278,13 @@ export function formatLaneHandle(laneIdOrQuery, teams = loadTeamsRegistry()) {
 export function isHubLane(team, lane) {
   if (lane?.hub === true) return true;
   return lane?.id != null && !(team?.lanes || []).some((l) => l.hub === true) && lane.id === team?.id;
+}
+
+/** Mirror of findBugLane in src/teams.ts: the lane flagged `bug: true`, else `bug-runner` / `bug-chaser`; null when none. */
+export const BUG_LANE_FALLBACK_IDS = ["bug-runner", "bug-chaser"];
+export function findBugLane(team) {
+  const lanes = team?.lanes || [];
+  return lanes.find((l) => l?.bug === true) ?? lanes.find((l) => BUG_LANE_FALLBACK_IDS.includes(l?.id)) ?? null;
 }
 
 /**
@@ -747,13 +771,11 @@ export function formatDisplayTitle({
 
 /**
  * The `vs who` per-agent filter, shared with the MCP lead-spawn check so both agree on "live in this lane":
- * skips archived/internal/closed, retired (former-*, (old)), other teams/lanes (unless squadWide) and removed lanes.
- * Returns {role, teamId, lane} (role is the effective role) or null.
+ * skips archived/internal/closed-dead (isLiveAgent: a closed-but-resumable agent is live), retired (former-*, (old)),
+ * other teams/lanes (unless squadWide) and removed lanes. Returns {role, teamId, lane} (role is the effective role) or null.
  */
 export function whoCandidate(a, { teams, wantTeamId, wantLane, squadWide = false, removedLanes = new Set() } = {}) {
-  const status = String(a.status ?? "unknown").trim();
-  if (a.archivedAt || a.archived || a.internal || status.toLowerCase() === "closed") return null;
-  if (isRetiredRole(a.labels?.role)) return null;
+  if (!isLiveAgent(a)) return null;
   const resolved = resolveAgentIdentity(a, { teams, cwd: a.cwd });
   const teamId = resolved.isOrphan ? "" : resolved.teamId;
   const lane = resolved.isOrphan ? "" : resolved.laneId;
@@ -761,4 +783,28 @@ export function whoCandidate(a, { teams, wantTeamId, wantLane, squadWide = false
   if (!squadWide && lane.toLowerCase() !== String(wantLane).toLowerCase()) return null;
   if (removedLanes.has(lane.toLowerCase())) return null;
   return { role: effectiveAgentRole(a), teamId, lane };
+}
+
+/**
+ * Pick the single live winner from same-(team,lane,role) candidates, mirroring the runner's `_successorOf` preference:
+ * a non-closed agent beats a closed-but-resumable one (its successor is live, so a lost predecessor must not surface as a
+ * duplicate live lead); among equals the newest wins (createdAt, then updatedAt, then id). `conflict` is true only when 2+
+ * non-closed agents remain (the genuine duplicate-live-lead case). Returns { winner, conflict }.
+ */
+export function resolveLeadWinner(candidates) {
+  const live = (candidates ?? []).filter((a) => a && isLiveAgent(a));
+  if (!live.length) return { winner: null, conflict: false };
+  const nonClosed = live.filter((a) => String(a.status ?? "").toLowerCase() !== "closed");
+  const conflict = nonClosed.length >= 2;
+  const pool = nonClosed.length ? nonClosed : live;
+  const newest = (a, b) => {
+    const at = Date.parse(a?.createdAt ?? a?.updatedAt ?? "") || 0;
+    const bt = Date.parse(b?.createdAt ?? b?.updatedAt ?? "") || 0;
+    if (at !== bt) return bt - at;
+    const au = Date.parse(a?.updatedAt ?? "") || 0;
+    const bu = Date.parse(b?.updatedAt ?? "") || 0;
+    if (au !== bu) return bu - au;
+    return String(b?.id ?? "").localeCompare(String(a?.id ?? ""));
+  };
+  return { winner: [...pool].sort(newest)[0], conflict };
 }

@@ -16,16 +16,24 @@ import {
   topicOf as identityTopicOf,
 } from "./identity.ts";
 import type { PinFields } from "./pins.ts";
-import { isRemote, needsPairing } from "./remoteSession.ts";
+import { isRemote } from "./remoteSession.ts";
 import { mergeTeams } from "./teamsMerge.ts";
 
 // A lane is a pinned Team in the UI. Pin fields (state, doneAt, order, lastProfile) live in src/pins.ts
 // and round-trip through saveTeams untouched; lanes without `state` count as pinned.
-export type LaneDef = { id: string; name: string; code?: string; paths?: string[]; aliases?: string[]; hub?: boolean } & PinFields;
+export type LaneDef = { id: string; name: string; code?: string; paths?: string[]; aliases?: string[]; hub?: boolean; bug?: boolean } & PinFields;
 /** The Squad's hub lane (RiffBot's). Explicit `hub: true` wins; with no flagged lane, the lane whose id is the Squad id. */
 export function isHubLane(team: Pick<TeamDef, "id" | "lanes">, lane: Pick<LaneDef, "id" | "hub">): boolean {
   if (lane.hub === true) return true;
   return lane.id != null && !team.lanes.some((l) => l.hub === true) && lane.id === team.id;
+}
+
+/** Lane ids that count as a Squad's bug lane when none is flagged `bug: true` (VibeSquad's existing @bug lane is `bug-chaser`). */
+export const BUG_LANE_FALLBACK_IDS = ["bug-runner", "bug-chaser"];
+/** The Squad's standing bug lane (its Buddy is the Bug Runner): the lane flagged `bug: true`, else a lane with a fallback id; null when none. Never creates one. */
+export function findBugLane<L extends Pick<LaneDef, "id" | "bug">>(team: { lanes: L[] } | null | undefined): L | null {
+  const lanes = team?.lanes ?? [];
+  return lanes.find((l) => l.bug === true) ?? lanes.find((l) => BUG_LANE_FALLBACK_IDS.includes(l.id)) ?? null;
 }
 
 export type TeamDef = {
@@ -228,7 +236,7 @@ export function resetTeamsToDisk(): void {
 }
 
 // Agents edit the registry too (`vs pin new`), so re-read it on focus and every 10s while visible.
-if (typeof window !== "undefined" && typeof document !== "undefined" && !(isRemote() && needsPairing(true, location.hash))) {
+if (typeof window !== "undefined" && typeof document !== "undefined" && !isRemote()) {
   void refreshTeams();
   window.addEventListener("focus", () => void refreshTeams());
   setInterval(() => {

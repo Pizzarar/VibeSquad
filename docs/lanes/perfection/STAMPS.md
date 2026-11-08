@@ -33,5 +33,29 @@ Baseline run 2026-11-08 ~01:00Z. Markers used, found by reading the transcripts:
 
 Limits: relay cannot be proven for pre-marker data; bucket 4's unit id comes from the runner job label, else a branch/worktree/TASK cue in the first input; implementers are picked by profile and job labels (digestFor, Review/Pre-check/Art Painter/Art Director/Lead profiles, verify/triage/probe jobs), text only as fallback. A worker whose job label and input name no unit (e.g. unit-mcp-scope's first worker) is not counted. Class rules: classifySuccessor in the script.
 
+## Bucket 5 baseline (2026-11-08): fix offered as a question
+`--waste` now prints `(5)`; `--json` has `waste.fixOffers` (`total`, `outputs`, `byLane`, `byRole`, `byLaneRole`, `examples`). Counts agent `output` events whose closing two paragraphs (last ~450 chars) ask permission for a fix/step: "want me to / should I / shall I / can I …?", "Okay with that?", "Go on spawning …?", "Send it? / Send M3?", "say so/say the word and I'll …", "I can … if you'd like". Patterns: `OFFER_PATTERNS` in the script.
+Calibrated on @ui-bois transcripts (a naive "want me to / the real fix" regex had found only 5 and none from @ui-bois). Trimmed real snippets are fixtures in `test/audit-owner-stamps.test.mjs`.
+
+**Total: 50 of 33,546 agent outputs** (live data, run 2026-11-08; grows with the transcripts).
+
+| Lane | Hits | | Role | Hits |
+|---|---|---|---|---|
+| bug-chaser | 23 (brainstorm 20, worker 3) | | brainstorm | 45 |
+| art-direction | 12 (all brainstorm) | | worker | 4 |
+| ui-bois | 9 (brainstorm 8, lead 1) | | lead | 1 |
+| runner-pilot | 3 (brainstorm 2, worker 1) | | | |
+| release-desk | 3 (brainstorm) | | | |
+
+Example hits (tails):
+- ui-bois/brainstorm: "The deadlock is a VibeSquad bug: a Buddy can't replace a live lead. Want me to send it to @bug?"
+- ui-bois/brainstorm: "…the fix itself isn't affected. Should I send the timestamp fix to the lead?"
+- bug-chaser/brainstorm: "…the two don't touch the same files. Send it?"
+
+Excluded on purpose: A/B option lists with no stated lean ("I lean …" / "I'd go with …" keeps the hit, since the agent already decided); questions that restart with ", or …" / "or should I …"; closing paragraphs mentioning risky steps (delete, force-push, release, publish, sign, overwrite, replace the app, spend/cost); owner approvals ("Do you OK P4b?"), "Which one?" and messages under 40 chars.
+
+Known false positives: "Send it?" on a finished plan is counted (art-direction 9 hits are mostly this) and is arguably an approval request rather than a skipped fix, so treat it as an upper bound; "Okay with that?" after a lean; worker "should I continue with B4?" scope checks.
+Known false negatives: offers not in the last 450 chars or not in the last two paragraphs; offers without a question mark or the listed phrasings ("If useful I could …", "Let me know and I'll …", "tell me and I'll check", deliberately dropped as too noisy); questions with a comma+or that are really fix offers; offers wrapped in a code fence; multi-chunk outputs where the ask is a separate event.
+
 ## Re-runs
 (none yet; S3 on/after 2026-11-15)

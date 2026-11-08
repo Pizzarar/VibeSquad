@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   COUNTERPART_PROFILES,
   QUOTA_FAILOVER_THRESHOLD,
@@ -315,4 +317,54 @@ test("9. setProviderCapped / readCappedProviders mark claude capped and fail ove
   assert.equal(res2.profile.name, "Brainstorm - Claude");
 
   rmSync(dir, { recursive: true, force: true });
+});
+
+test("10. setProviderCapped throws on corrupt capped-providers.json without overwriting", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "vs-caps-corrupt-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const cappedProvidersPath = join(dir, "capped-providers.json");
+
+  writeFileSync(cappedProvidersPath, "{corrupt json", "utf8");
+  assert.throws(() => setProviderCapped("claude", true, { cappedProvidersPath }), SyntaxError);
+  assert.equal(readFileSync(cappedProvidersPath, "utf8"), "{corrupt json");
+  assert.equal(existsSync(`${cappedProvidersPath}.lock`), false);
+});
+
+test("11. multi-process race: concurrent server setProviderCapped and vs cap CLI preserve all caps", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "vs-caps-race-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const vsHome = join(dir, ".vibesquad");
+  mkdirSync(vsHome, { recursive: true });
+  const cappedProvidersPath = join(vsHome, "capped-providers.json");
+
+  const modUrl = pathToFileURL(fileURLToPath(new URL("../server/provider-failover.mjs", import.meta.url))).href;
+  const vsCli = resolve(ROOT, "cli", "vs.mjs");
+  const env = { ...process.env, VIBESQUAD_HOME: vsHome };
+  delete env.VIBESQUAD_CAPPED_PROVIDERS_PATH;
+
+  const providers = ["claude", "antigravity-cli", "opencode", "openai", "mistral", "cohere"];
+  const runChild = (args) =>
+    new Promise((resolveProc, rejectProc) => {
+      const c = spawn(process.execPath, args, { env, stdio: ["ignore", "pipe", "pipe"] });
+      let stderr = "";
+      c.stderr.on("data", (d) => { stderr += d.toString(); });
+      c.on("exit", (rc) => (rc === 0 ? resolveProc() : rejectProc(new Error(`child exit ${rc}: ${stderr.trim()}`))));
+      c.on("error", rejectProc);
+    });
+
+  await Promise.all(
+    providers.map((prov, idx) => {
+      if (idx % 2 === 0) {
+        const code = `import(${JSON.stringify(modUrl)}).then(m=>{for(let i=0;i<15;i++){m.setProviderCapped(${JSON.stringify(prov)},false,{timeoutMs:20000});m.setProviderCapped(${JSON.stringify(prov)},true,{reason:"race-"+i,timeoutMs:20000});}})`;
+        return runChild(["-e", code]);
+      }
+      return runChild([vsCli, "cap", "add", prov]);
+    }),
+  );
+
+  const doc = JSON.parse(readFileSync(cappedProvidersPath, "utf8"));
+  for (const prov of providers) {
+    assert.ok(doc.capped[prov], `expected ${prov} cap to be present after concurrent writes`);
+  }
+  assert.equal(existsSync(`${cappedProvidersPath}.lock`), false);
 });

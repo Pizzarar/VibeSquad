@@ -104,8 +104,9 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
       const parts = url.pathname.split('/').filter(Boolean); // agents, :id, action
       if (req.method === 'GET' && parts[0] === 'health') {
         let running = 0;
-        for (const e of runner.live.values()) if (e.inflight > 0) running += 1;
-        return json(res, 200, { ok: true, live: runner.live.size, running, pid: process.pid, hash });
+        let quiet = 0;
+        for (const e of runner.live.values()) { if (e.inflight > 0) running += 1; if (e.quiet) quiet += 1; }
+        return json(res, 200, { ok: true, live: runner.live.size, running, quiet, pid: process.pid, hash });
       }
       if (req.method === 'GET' && parts[0] === 'events' && parts.length === 1) {
         // SSE tail of every log append. Cleaned up on client disconnect; nothing buffers per client.

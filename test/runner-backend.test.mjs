@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, statSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, statSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Runner } from '../runner/runner.mjs';
 import { createServer, writeDiscovery } from '../runner/server.mjs';
 import { killTree } from '../runner/spawn.mjs';
 import { RunnerClient } from '../server/backend/runner-client.mjs';
-import { RunnerBackend, SPAWN_TIMING, toTimeline } from '../server/backend/runner-backend.mjs';
+import { RunnerBackend, SPAWN_TIMING, isTurnProgressEvent, scanLogProgress, toTimeline, readRunnerAgentSync } from '../server/backend/runner-backend.mjs';
 import { getBackend } from '../server/backend/index.mjs';
 
 const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'vs-rb-'));
@@ -54,6 +54,107 @@ const spawnReq = (lane, over = {}) => ({
   initialPrompt: 'hi',
   labels: { team: 'vibesquad', lane, role: 'worker', ord: '2', profile: 'cheap', 'vs.x': 'y', ...over },
   env: {},
+});
+
+test('isTurnProgressEvent: classifies turn-progress vs non-progress events', () => {
+  assert.equal(isTurnProgressEvent({ type: 'output' }), true);
+  assert.equal(isTurnProgressEvent({ type: 'tool' }), true);
+  assert.equal(isTurnProgressEvent({ type: 'usage' }), true);
+  assert.equal(isTurnProgressEvent({ type: 'turn_done' }), true);
+  assert.equal(isTurnProgressEvent({ type: 'status', status: 'running' }), true);
+  assert.equal(isTurnProgressEvent({ type: 'status', status: 'idle' }), true);
+  assert.equal(isTurnProgressEvent({ type: 'meta' }), false);
+  assert.equal(isTurnProgressEvent({ type: 'stderr' }), false);
+  assert.equal(isTurnProgressEvent({ type: 'raw' }), false);
+  assert.equal(isTurnProgressEvent({ type: 'limit' }), false);
+  assert.equal(isTurnProgressEvent({ type: 'status', status: 'starting' }), false);
+  assert.equal(isTurnProgressEvent({ type: 'status', status: 'queued' }), false);
+  assert.equal(isTurnProgressEvent({ type: 'status', status: 'parked' }), false);
+  assert.equal(isTurnProgressEvent({ type: 'input' }), false);
+  assert.equal(isTurnProgressEvent({ type: 'created' }), false);
+  assert.equal(isTurnProgressEvent({ type: 'error' }), false);
+  assert.equal(isTurnProgressEvent(null), false);
+});
+
+test('scanLogProgress: grows past 64KB to find the prompt (stops at the first input/created)', () => {
+  const dir = tmp();
+  try {
+    const file = path.join(dir, 'rn-big.jsonl');
+    // A prompt at the very start, then >64KB of output: the prompt is found by growing the window.
+    const lines = [JSON.stringify({ seq: 1, ts: 1000, type: 'input', text: 'go' })];
+    const pad = 'x'.repeat(1024);
+    for (let i = 0; i < 200; i++) lines.push(JSON.stringify({ seq: i + 2, ts: 2000 + i, type: 'output', text: pad }));
+    writeFileSync(file, lines.join('\n') + '\n');
+    assert.ok(statSync(file).size > 64 * 1024, 'log is larger than 64KB');
+    const res = scanLogProgress(file);
+    assert.equal(res.lastPromptAt, 1000, 'prompt is found by growing the window');
+    assert.equal(res.lastProgressAt, 2000 + 199, 'most recent progress is read');
+    // A prompt as the LAST event: stop there — no progress after it.
+    const file2 = path.join(dir, 'rn-stop.jsonl');
+    writeFileSync(file2, JSON.stringify({ seq: 1, ts: 3000, type: 'input', text: 'go' }) + '\n');
+    const res2 = scanLogProgress(file2);
+    assert.equal(res2.lastPromptAt, 3000);
+    assert.equal(res2.lastProgressAt, null, 'no progress after the prompt');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('scanLogProgress: grows past a 100KB prompt line and past 100KB of raw noise to find the input', () => {
+  const dir = tmp();
+  try {
+    const now = Date.now();
+    // 100KB prompt line: the prompt's JSON key is beyond a 64KB tail.
+    const huge = path.join(dir, 'rn-huge.jsonl');
+    writeFileSync(huge, [
+      JSON.stringify({ seq: 1, ts: now - 5000 - 1000, type: 'created' }),
+      JSON.stringify({ seq: 2, ts: now - 5000, type: 'input', text: 'x'.repeat(100 * 1024) }),
+      JSON.stringify({ seq: 3, ts: now - 5000 + 100, type: 'status', status: 'queued' }),
+    ].join('\n') + '\n');
+    assert.ok(statSync(huge).size > 64 * 1024);
+    assert.equal(scanLogProgress(huge).lastPromptAt, now - 5000, 'huge prompt is found by growing the window');
+
+    // 100KB of raw (non-progress) after the input: the input is before the tail.
+    const raw = path.join(dir, 'rn-raw.jsonl');
+    const lines = [
+      JSON.stringify({ seq: 1, ts: now - 5000 - 1000, type: 'created' }),
+      JSON.stringify({ seq: 2, ts: now - 5000, type: 'input', text: 'go' }),
+    ];
+    for (let i = 0; i < 200; i++) lines.push(JSON.stringify({ seq: 3 + i, ts: now - 5000 + 100 + i, type: 'raw', line: 'y'.repeat(500) }));
+    writeFileSync(raw, lines.join('\n') + '\n');
+    assert.ok(statSync(raw).size > 64 * 1024);
+    const r = scanLogProgress(raw);
+    assert.equal(r.lastPromptAt, now - 5000, 'input is found past the raw noise');
+    assert.equal(r.lastProgressAt, null, 'raw is not progress');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('progressFor: skips the scan for running/idle, scans (cached) only for starting/queued', () => {
+  const dir = tmp();
+  try {
+    mkdirSync(path.join(dir, 'agents'), { recursive: true });
+    const file = path.join(dir, 'agents', 'rn-big.jsonl');
+    const lines = [JSON.stringify({ seq: 1, ts: 1000, type: 'input', text: 'go' })];
+    const pad = 'x'.repeat(1024);
+    for (let i = 0; i < 200; i++) lines.push(JSON.stringify({ seq: i + 2, ts: 2000 + i, type: 'output', text: pad }));
+    writeFileSync(file, lines.join('\n') + '\n');
+    const backend = new RunnerBackend({ client: { home: dir }, hooks: false });
+    // running: the status guard returns without scanning (no fields).
+    const running = backend.progressFor({ id: 'rn-big', status: 'running', createdAt: 1000, updatedAt: 2199 });
+    assert.equal(running.lastPromptAt, undefined, 'running status triggers no scan');
+    assert.equal(running.lastProgressAt, undefined);
+    // queued: scans (grows to find the prompt) and reads the most recent progress; cached by lastSeq.
+    const queued = backend.progressFor({ id: 'rn-big', status: 'queued', createdAt: 1000, updatedAt: 2199, lastSeq: 201 });
+    assert.equal(queued.lastPromptAt, 1000);
+    assert.equal(queued.lastProgressAt, 2199);
+    const queuedAgain = backend.progressFor({ id: 'rn-big', status: 'queued', createdAt: 1000, updatedAt: 2199, lastSeq: 201 });
+    assert.equal(queuedAgain.lastPromptAt, 1000, 'cached by lastSeq');
+    assert.equal(queuedAgain.lastProgressAt, 2199);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('RunnerBackend: create maps first-class fields, labels, status and timeline into the Paseo shapes', async () => {
@@ -355,6 +456,46 @@ test('runner API: the timeline route forwards direction + cursor to fetchAgentTi
   await run('/__vibesquad/runner/agents/rn-abc/timeline?limit=60&direction=before&cursor=42');
   assert.deepEqual(calls[0], { limit: 60 });
   assert.deepEqual(calls[1], { limit: 60, direction: 'before', cursor: { epoch: 'runner', seq: 42 } });
+});
+
+test('Q1: readRunnerAgentSync exposes queued {ahead} for a queued agent (sync path must not drop it)', () => {
+  const home = tmp();
+  mkdirSync(path.join(home, 'agents'));
+  const ev = (o, seq) => JSON.stringify({ seq, ts: 1000 + seq, ...o });
+  writeFileSync(path.join(home, 'agents', 'rn-queued.jsonl'), [
+    ev({ type: 'created', provider: 'claude', model: 'm', cwd: '.', meta: { title: 'Buddy', labels: { role: 'brainstorm' } } }, 1),
+    ev({ type: 'input', text: 'handoff brief' }, 2),
+    ev({ type: 'status', status: 'queued', ahead: 3, family: 'claude' }, 3),
+  ].join('\n') + '\n');
+  const a = readRunnerAgentSync('rn-queued', { home, liveness: null });
+  assert.equal(a.status, 'initializing', 'queued maps to initializing');
+  assert.deepEqual(a.queued, { ahead: 3 }, 'the queue position is exposed on the sync read');
+  // A non-queued agent still has no queued field.
+  writeFileSync(path.join(home, 'agents', 'rn-idle.jsonl'), [
+    ev({ type: 'created', provider: 'claude', model: 'm', cwd: '.', meta: { title: 'Idle' } }, 1),
+    ev({ type: 'status', status: 'idle' }, 2),
+  ].join('\n') + '\n');
+  assert.equal(readRunnerAgentSync('rn-idle', { home, liveness: null }).queued, undefined);
+});
+
+test('H2: handleLogEvent preserves queued when the turn state is lazily initialized on a non-status event', async () => {
+  const home = tmp();
+  const queuedRec = { id: 'rn-q', provider: 'claude', model: 'm', cwd: '.', meta: { title: 'Q' }, status: 'queued', queued: { ahead: 3 }, createdAt: 1, updatedAt: 2 };
+  const client = {
+    home,
+    request: async (method, route) => {
+      if (method === 'GET' && route === '/agents/rn-q') return queuedRec;
+      throw new Error(`unexpected ${method} ${route}`);
+    },
+  };
+  const backend = new RunnerBackend({ client, buildPrefix: async () => '' });
+  const evs = [];
+  backend.listeners.add((ev) => evs.push(ev));
+  // A meta event (ROSTER_EVENTS, but not a status) with no prior turn state must not strip the fetch's queued.
+  await backend.handleLogEvent({ id: 'rn-q', event: { seq: 5, ts: 5, type: 'meta', patch: { labels: { x: '1' } } } });
+  const agentEv = evs.find((e) => e.kind === 'agent');
+  assert.ok(agentEv, 'emitted an agent event');
+  assert.deepEqual(agentEv.agent.queued, { ahead: 3 }, 'queued survives the lazy turn-state init');
 });
 
 test('fetchAgentTimeline lastSeq advances with absorbed post-thought text while the newest row (a thought) does not', async () => {

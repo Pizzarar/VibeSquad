@@ -48,7 +48,8 @@ export const shortPath = (p: string) => p.split(/[\\/]+/).filter(Boolean).slice(
 export function StatusDot({ agent }: { agent: PaseoAgent }) {
   const att = attentionOf(agent);
   const cls = att && att.tone !== "finished" ? `attn-${att.tone}` : agent.status;
-  return <span className={`signal ${cls}`} title={att?.reason ?? agent.status} />;
+  const title = att?.reason ?? (agent.queued ? `queued · ${agent.queued.ahead} ahead` : agent.status);
+  return <span className={`signal ${cls}`} title={title} />;
 }
 
 // Strip legacy display prefixes and "(talk here: ...)" suffix for compact card headers.
@@ -296,6 +297,7 @@ export function sameMember(a: Member | null, b: Member | null): boolean {
       (x.id === y.id &&
         x.updatedAt === y.updatedAt &&
         x.status === y.status &&
+        x.queued?.ahead === y.queued?.ahead &&
         x.requiresAttention === y.requiresAttention &&
         (x.pendingPermissions?.length ?? 0) === (y.pendingPermissions?.length ?? 0) &&
         usedTokens(a) === usedTokens(b) &&
