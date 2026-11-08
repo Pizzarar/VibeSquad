@@ -160,6 +160,17 @@ test('sky CRT chat drawer rides the U4b tool-surface scope; light provider pills
   assert.match(pill.body, /border-color: var\(--u4-edge\) !important/);
 });
 
+test('danger (confirm.danger) buttons outrank the primary cyan fill', () => {
+  // the primary cyan rule must exclude .confirm.danger so the danger rule wins
+  const cyan = u4rules.filter((r) => r.sel.includes('.btn:not(.ghost)'));
+  assert.ok(cyan.length >= 1, 'cyan rules found');
+  for (const r of cyan) assert.ok(r.sel.includes(':not(.confirm.danger)'), 'cyan rule excludes .confirm.danger');
+  const dangerBase = u4rules.find((r) => r.sel.includes('.btn.confirm.danger:not(.armed)') && /background: var\(--pink-fill\)/.test(r.body));
+  assert.ok(dangerBase, 'danger base rule');
+  const dangerHover = u4rules.filter((r) => r.sel.includes('.btn.confirm.danger:not(.armed)') && /:hover/.test(r.sel) && /var\(--pink-fill\)/.test(r.body));
+  assert.ok(dangerHover.length >= 2, `danger hover rules (dark + light), got ${dangerHover.length}`);
+});
+
 // ---- U3 world art untouched ----
 test('U3 world art stays: sky zones, floor, brand mark/text are neither touched nor restyled by U4b', () => {
   const u4NoFont = u4rules.filter((r) => !/font-family/.test(r.body)).map((r) => r.sel + '{' + r.body + '}').join('\n'); // the font rule only EXEMPTS .brand-text
@@ -195,6 +206,15 @@ const mixc = (a, b, p) => a.map((x, i) => x * p + b[i] * (1 - p));
 test('light: provider pill ink (--text on --panel-hi) passes 4.5:1', () => {
   assert.ok(ratio(color(light, 'var(--text)'), color(light, 'var(--panel-hi)')) >= 4.5,
     `--text on --panel-hi (light): ${ratio(color(light, 'var(--text)'), color(light, 'var(--panel-hi)')).toFixed(2)}`);
+});
+
+test('light: filled-control hover keeps >= 4.5:1 (darken toward ink, not marble)', () => {
+  const lightHovers = u4rules.filter((r) => /^:root\[data-theme="light"\]/.test(r.sel) && /:hover/.test(r.sel) && /--on-pastel/.test(r.body));
+  assert.equal(lightHovers.length, 2, 'light-only hover overrides (cyan + pink)');
+  const cyanHover = color(light, 'color-mix(in srgb, var(--cyan-fill) 86%, var(--on-pastel))');
+  assert.ok(ratio(color(light, 'var(--on-cyan-fill)'), cyanHover) >= 4.5, `cyan hover: ${ratio(color(light, 'var(--on-cyan-fill)'), cyanHover).toFixed(2)}`);
+  const pinkHover = color(light, 'color-mix(in srgb, var(--pink-fill) 86%, var(--on-pastel))');
+  assert.ok(ratio(color(light, 'var(--marble)'), pinkHover) >= 4.5, `pink hover: ${ratio(color(light, 'var(--marble)'), pinkHover).toFixed(2)}`);
 });
 
 for (const [name, tokens] of [['dark', dark], ['light', light]]) {

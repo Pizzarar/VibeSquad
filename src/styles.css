@@ -5587,12 +5587,15 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
   border-image: none; box-shadow: var(--bevel-in); transform: translate(1px, 1px);
 }
 /* primary (teal), hot (pink), selected (violet), warn (amber): solid fills with on-fill ink */
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn:not(.ghost):not(.hot):not(.bad):not(.warn), .drawer-working-chip) {
+:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn:not(.ghost):not(.hot):not(.bad):not(.warn):not(.confirm.danger), .drawer-working-chip) {
   background: var(--cyan-fill); color: var(--on-cyan-fill); border-color: var(--shadow-hard); font-weight: 700;
 }
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn:not(.ghost):not(.hot):not(.bad):not(.warn), .drawer-working-chip):hover:not(:disabled) { background: color-mix(in srgb, var(--cyan-fill) 86%, var(--marble)); color: var(--on-cyan-fill); }
+:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn:not(.ghost):not(.hot):not(.bad):not(.warn):not(.confirm.danger), .drawer-working-chip):hover:not(:disabled) { background: color-mix(in srgb, var(--cyan-fill) 86%, var(--marble)); color: var(--on-cyan-fill); }
 :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn.hot, .btn.bad, .btn.confirm.danger:not(.armed), .bad-btn) { background: var(--pink-fill); color: var(--u4-on-fill); border-color: var(--shadow-hard); font-weight: 700; }
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn.hot, .btn.bad, .bad-btn):hover:not(:disabled) { background: color-mix(in srgb, var(--pink-fill) 86%, var(--marble)); color: var(--u4-on-fill); }
+:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn.hot, .btn.bad, .btn.confirm.danger:not(.armed), .bad-btn):hover:not(:disabled) { background: color-mix(in srgb, var(--pink-fill) 86%, var(--marble)); color: var(--u4-on-fill); }
+/* light: the --marble hover lightens the fill and drops the white on-fill ink below 4.5:1 — darken toward the ink instead (dark keeps --marble) */
+:root[data-theme="light"] :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn:not(.ghost):not(.hot):not(.bad):not(.warn):not(.confirm.danger), .drawer-working-chip):hover:not(:disabled) { background: color-mix(in srgb, var(--cyan-fill) 86%, var(--on-pastel)); }
+:root[data-theme="light"] :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn.hot, .btn.bad, .btn.confirm.danger:not(.armed), .bad-btn):hover:not(:disabled) { background: color-mix(in srgb, var(--pink-fill) 86%, var(--on-pastel)); }
 :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.seg button.on, .tchip.on, .sidebar-inbox-badge.on) { background: var(--violet); color: var(--on-pastel) !important; border-color: var(--shadow-hard); font-weight: 700; }
 :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn.warn, .btn.confirm.warn:not(.armed)) { background: var(--amber); color: var(--on-amber); border-color: var(--shadow-hard); font-weight: 700; }
 /* disabled: quiet dashed ghost, full-contrast muted label (u3f values, no opacity) */
