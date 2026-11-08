@@ -5,7 +5,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { DrawerSlot } from "./AgentPanes";
 import type { Pin } from "./pins";
-import { NO_OVERLORD_TEXT, SKY_COLUMNS, SKY_FRAME_URL, SKY_POPOVER_SELECTOR, SKY_WALL_URL, SKY_URL, TAKEOVER_FALLBACK, TAKEOVER_URL, faceBg, faceContain, hasFaceMode, skyAssets, skyEffectiveOpen, skyEscCloses, skyExit, skyFaceClick, skyOutsideCloses, skyRiffMode, skyWallFallbackStyle, skyWallStyle, skyZonesFor, takeoverVisible, type SkyCan, type SkyOpen, type SkyZone, type TakeoverModel } from "./skyZonesLogic";
+import { NO_OVERLORD_TEXT, SKY_COLUMNS, SKY_FRAME_URL, SKY_POPOVER_SELECTOR, SKY_WALL_URL, SKY_URL, TAKEOVER_FALLBACK, TAKEOVER_FALLBACK_MS, TAKEOVER_URL, faceBg, faceContain, hasFaceMode, skyAssets, skyEffectiveOpen, skyEscCloses, skyExit, skyFaceClick, skyLeftBot, skyOutsideCloses, skyRiffMode, skyWallFallbackStyle, skyWallStyle, skyZonesFor, takeoverLanded, takeoverVisible, type SkyCan, type SkyOpen, type SkyZone, type TakeoverModel } from "./skyZonesLogic";
 import type { FaceBot, FaceMode } from "./squadFloorLogic";
 import type { TeamView } from "./teams";
 import { useBotFace, useDpr, useFacesModel, useImageOk, usePrefersReducedMotion, useSkyCrtModel, useTakeoverClock, useTakeoverModel, useTheme } from "./useBotFace";
@@ -15,12 +15,15 @@ const LABEL: Record<FaceBot, string> = { riffbot: "RiffBot", overlord: "Overlord
 /** G6-fix2: the bot's whole face, as big as an integer scale fits (contain, never cropped), centred on a per-bot gutter colour. */
 function ZoneFace({
   zone,
+  lander,
   faces,
   force,
   takeover,
   expanded,
 }: {
   zone: SkyZone;
+  /** Riff's TV only (G8f): the Overlord's zone, whose face this TV ends on once the takeover has landed. */
+  lander?: SkyZone;
   faces: ReturnType<typeof useFacesModel>;
   force: FaceMode | null;
   /** Riff only (G7): the overlay sheet when takeover.json + the theme PNG both load; null → the CSS dissolve. */
@@ -35,9 +38,28 @@ function ZoneFace({
   const sheet = sheetOk ? takeover : null;
   const clock = useTakeoverClock(!!expanded && isRiff, sheet?.fps ?? TAKEOVER_FALLBACK.fps, sheet?.frames.length ?? 0, reduced);
   const showSheet = !!sheet && takeoverVisible(clock.pos, !!expanded, reduced);
-  // Riff keeps playing scared underneath until the reverse has finished, then goes idle.
-  const holdScared = showSheet && !force && hasFaceMode(faces, "riffbot", "scared");
-  const face = useBotFace(zone.bot, zone.pose ? { pose: zone.pose } : null, faces, { theme, reduced, force: force ?? (holdScared ? "scared" : null) });
+  // G8f: the takeover is the transition. Landed (fully in) = the Overlord's face, normal talk/idle; Riff keeps playing
+  // scared underneath until then, and again from the first reverse frame until the overlay is gone, then goes idle.
+  // No sheet: the CSS dissolve (cover in, then clear) swaps the face under full cover, halfway through its own run.
+  const fallback = isRiff && !sheet && !reduced;
+  const [fb, setFb] = useState({ landed: false, play: 0 });
+  const fbFirst = useRef(true);
+  useEffect(() => {
+    if (!fallback) return;
+    if (fbFirst.current) {
+      fbFirst.current = false;
+      if (expanded) setFb((f) => ({ ...f, landed: true }));
+      return;
+    }
+    setFb((f) => ({ ...f, play: f.play + 1 }));
+    const t = setTimeout(() => setFb((f) => ({ ...f, landed: !!expanded })), TAKEOVER_FALLBACK_MS);
+    return () => clearTimeout(t);
+  }, [expanded, fallback]);
+  const landed = isRiff && !!lander && (sheet ? takeoverLanded(clock.pos, !!expanded, sheet.frames.length, reduced) : reduced ? !!expanded : fb.landed);
+  const shown = skyLeftBot(landed);
+  const shownZone = landed && lander ? lander : zone;
+  const holdScared = !landed && showSheet && !force && hasFaceMode(faces, "riffbot", "scared");
+  const face = useBotFace(shown, shownZone.pose ? { pose: shownZone.pose } : null, faces, { theme, reduced, force: landed ? null : (force ?? (holdScared ? "scared" : null)) });
   // Cell size comes from faces.json (never hardcoded); until it loads, a blank stage.
   const cell = faces?.cell ?? { w: 48, h: 48 };
   const stage = useRef<HTMLSpanElement>(null); // the face box: the whole TV screen (G8: no chat under it)
@@ -51,7 +73,7 @@ function ZoneFace({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  const bg = faceBg(faces, zone.bot, theme);
+  const bg = faceBg(faces, shown, theme);
   const dpr = useDpr();
   const { k, left, top } = faceContain(cell, box, dpr);
   const tk = sheet ? faceContain(sheet.cell, box, dpr) : null;
@@ -63,11 +85,12 @@ function ZoneFace({
         <span
           className={`sky-face${face.frame ? "" : " is-blank"}`}
           data-testid={`sky-face-${zone.bot}`}
+          data-face-bot={shown}
           data-face-mode={face.mode}
           style={{ width: cell.w, height: cell.h, left, top, transform: `scale(${k})`, ...face.style }}
         />
       )}
-      {showSheet && sheet && tk && tf && tk.k > 0 && (
+      {showSheet && !landed && sheet && tk && tf && tk.k > 0 && (
         <span
           className="sky-takeover"
           data-testid="sky-takeover"
@@ -84,7 +107,7 @@ function ZoneFace({
         />
       )}
       </span>
-      {isRiff && !sheet && !reduced && <span className={`sky-takeover-fallback${expanded ? " is-on" : ""}`} data-testid="sky-takeover-fallback" />}
+      {fallback && <span key={fb.play} className={`sky-takeover-fallback${fb.play ? " is-play" : ""}`} data-testid="sky-takeover-fallback" />}
     </span>
   );
 }
@@ -95,6 +118,7 @@ function ZoneFace({
  */
 function Zone({
   zone,
+  lander,
   faces,
   frameStyle,
   panel = false,
@@ -111,6 +135,8 @@ function Zone({
   busy = false,
 }: {
   zone: SkyZone;
+  /** Riff's TV: the Overlord's zone (its face lands here when the Overlord's chat is open). */
+  lander?: SkyZone;
   faces: ReturnType<typeof useFacesModel>;
   panel?: boolean;
   /** Forced face mode (Riff scared while the Overlord has taken it over). */
@@ -149,7 +175,7 @@ function Zone({
       aria-label={`${label} chat`}
       hidden={panel && !isOpen}
     >
-      {!panel && !off && <ZoneFace zone={zone} faces={faces} force={force} takeover={takeover} expanded={taken} />}
+      {!panel && !off && <ZoneFace zone={zone} lander={lander} faces={faces} force={force} takeover={takeover} expanded={taken} />}
       {!panel && clickable && (
         <button
           type="button"
@@ -276,7 +302,7 @@ export function SkyZones({
       data-open={open ?? "none"}
       style={{ ["--sky-cols" as string]: SKY_COLUMNS, ...(skyUrl ? { backgroundImage: `url(${skyUrl})` } : null) }}
     >
-      <Zone zone={zones.riffbot} faces={faces} frameStyle={frameStyle} force={skyRiffMode(open, hasFaceMode(faces, "riffbot", "scared"))} takeover={takeover} taken={open === "overlord"} clickable={clickable("riffbot")} isOpen={open !== null} openLabel={open ? LABEL[open] : undefined} onFace={() => onFace("riffbot")} onSuccessor={onSuccessor} onSpinUp={spinRiff} />
+      <Zone zone={zones.riffbot} lander={zones.overlord} faces={faces} frameStyle={frameStyle} force={skyRiffMode(open, hasFaceMode(faces, "riffbot", "scared"))} takeover={takeover} taken={open === "overlord"} clickable={clickable("riffbot")} isOpen={open !== null} openLabel={open ? LABEL[open] : undefined} onFace={() => onFace("riffbot")} onSuccessor={onSuccessor} onSpinUp={spinRiff} />
       <Zone zone={zones.overlord} faces={faces} frameStyle={frameStyle} clickable={clickable("overlord")} isOpen={open === "overlord"} onFace={() => onFace("overlord")} onSuccessor={onSuccessor} onSpinUp={spinOverlord} busy={overlordBusy} />
       <Zone panel zone={zones.riffbot} faces={faces} frameStyle={frameStyle} isOpen={open === "riffbot"} onClose={() => setOpen(skyExit)} onSuccessor={onSuccessor} onSpinUp={spinRiff} />
       <span className={`sky-wall${wallStyle ? " has-art" : ""}`} data-testid="sky-wall" aria-hidden="true" style={wallStyle ?? skyWallFallbackStyle(dpr)} />

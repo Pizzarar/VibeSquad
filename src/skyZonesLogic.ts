@@ -361,5 +361,9 @@ export function takeoverAdvance(pos: number, expanded: boolean, dtMs: number, fp
 export const takeoverFrameAt = (pos: number, n: number): number => Math.min(n - 1, Math.max(0, Math.floor(pos)));
 /** Drawn while expanded or still reversing; gone once fully reversed. Reduced motion never draws it. */
 export const takeoverVisible = (pos: number, expanded: boolean, reduced: boolean): boolean => !reduced && (expanded || pos > 0);
+/** G8f: the takeover has landed once expanded and fully in (or at once under reduced motion; the no-sheet dissolve lands on its own timer): the left TV now shows the Overlord's face. */
+export const takeoverLanded = (pos: number, expanded: boolean, n: number, reduced: boolean): boolean => expanded && (reduced || pos >= n);
+/** G8f: which bot's face the left TV shows. Riff at rest and while the takeover plays in/out; the Overlord once it has landed. */
+export const skyLeftBot = (landed: boolean): FaceBot => (landed ? "overlord" : "riffbot");
 /** Nothing left to animate: expanded and fully in, or collapsed and fully out. */
 export const takeoverSettled = (pos: number, expanded: boolean, n: number): boolean => (expanded ? pos >= n : pos <= 0);

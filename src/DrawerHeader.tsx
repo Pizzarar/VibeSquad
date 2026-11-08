@@ -538,7 +538,7 @@ export type DrawerHeaderProps = {
   att: { tone: string; reason: string } | null;
   dockOpen: boolean;
   onToggleDock: () => void;
-  /** Sky chat panel: no dock to toggle and the panel has its own ✕, so both header buttons are dropped. */
+  /** Sky chat panel: the whole header is dropped (the zone shows name + ✕ itself); no dock either. */
   chatOnly?: boolean;
 };
 
@@ -1542,6 +1542,8 @@ export function DrawerHeader({
         )}
       </>
     );
+  // Sky chat panel: the zone's own name + ✕ is the whole header (no badges, selects, token bar, actions, handoff bar, More).
+  if (chatOnly) return null;
   return (
     <>
       {header}
