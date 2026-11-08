@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
@@ -300,6 +300,8 @@ export function buildAndroidApk({
   if (debug || unsigned) {
     // Sideload test builds: Gradle debug-signed (--debug) or raw unsigned (--unsigned, install needs apksigner). No release pin/keystore; never publishable.
     console.log(`[build:android] 5/6 ${debug ? "Debug build (Gradle debug keystore)" : "Unsigned build"}: skipping release signing and cert pin.`);
+    // A stale release marker must never let release.mjs publish this test APK.
+    rmSync(join(distDesktopDir, "android-build.json"), { force: true });
     copyFileSync(apk, destApk);
   } else if (apk.endsWith("-unsigned.apk")) {
     console.log("[build:android] 5/6 Signing APK...");
