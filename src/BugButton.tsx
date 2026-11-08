@@ -40,7 +40,8 @@ function useBugCards(teamId: string, laneId: string) {
 
 export function BugButton({ view, onOpen }: { view: TeamView; onOpen: (pin: Pin) => void | Promise<unknown> }) {
   const lane = findBugLane(view.team);
-  const pin = lane ? [...pinsForSquad(view).pinned, ...pinsForSquad(view).done].find((p) => p.lane.id === lane.id) ?? null : null;
+  const all = pinsForSquad(view, { includeHidden: true });
+  const pin = lane ? [...all.pinned, ...all.done].find((p) => p.lane.id === lane.id) ?? null : null;
   const teamId = view.team.id;
   const cards = useBugCards(teamId, pin?.lane.id ?? "");
   const [seen, setSeen] = useState(() => readSeen(teamId));

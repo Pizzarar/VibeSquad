@@ -1,6 +1,6 @@
 import { memo, useState } from "react";
 import type { ProviderQuotaView } from "./antigravity";
-import { alertLabel, budgetFor, fmtTok, leadVariant, usedTokens, type Member, type TeamView } from "./teams";
+import { alertLabel, budgetFor, fmtTok, isHiddenLane, leadVariant, usedTokens, type Member, type TeamView } from "./teams";
 import {
   StatusDot,
   alertOrder,
@@ -254,7 +254,8 @@ export const FocusRail = memo(function FocusRail(props: {
   const [collapsedLanes, setCollapsedLanes] = useState<Set<string>>(() => new Set());
   const teamIds = new Set(view?.members.map((m) => m.agent.id) ?? []);
   const hot = props.usage.filter((u) => (u.usedPct ?? 0) >= 85);
-  const laneIds = (view?.lanes ?? []).map((l) => l.lane.id);
+  const shownLanes = (view?.lanes ?? []).filter((l) => !view || !isHiddenLane(view.team, l.lane));
+  const laneIds = shownLanes.map((l) => l.lane.id);
   const allLanesCollapsed = teamCollapsed || (laneIds.length > 0 && laneIds.every((id) => collapsedLanes.has(id)));
 
   const toggleLane = (laneId: string) => {
@@ -319,7 +320,7 @@ export const FocusRail = memo(function FocusRail(props: {
       <div className="rbody">
         <NeedsYou teamId={view?.team.id ?? ""} />
         {!teamCollapsed &&
-          view?.lanes.map((l) => (
+          shownLanes.map((l) => (
             <LaneBlock
               key={l.lane.id}
               lane={l}

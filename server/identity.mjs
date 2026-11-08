@@ -280,11 +280,22 @@ export function isHubLane(team, lane) {
   return lane?.id != null && !(team?.lanes || []).some((l) => l.hub === true) && lane.id === team?.id;
 }
 
-/** Mirror of findBugLane in src/teams.ts: the lane flagged `bug: true`, else `bug-runner` / `bug-chaser`; null when none. */
+/** Mirrors of laneKindOf / findBugLane / findAuditLane / isHiddenLane in src/teams.ts. */
 export const BUG_LANE_FALLBACK_IDS = ["bug-runner", "bug-chaser"];
-export function findBugLane(team) {
+export const AUDIT_LANE_FALLBACK_IDS = ["perfection"];
+export function laneKindOf(lane) {
+  return lane?.kind === "bug" || lane?.kind === "audit" ? lane.kind : lane?.bug === true ? "bug" : undefined;
+}
+function findKindLane(team, kind, fallback) {
   const lanes = team?.lanes || [];
-  return lanes.find((l) => l?.bug === true) ?? lanes.find((l) => BUG_LANE_FALLBACK_IDS.includes(l?.id)) ?? null;
+  return lanes.find((l) => laneKindOf(l) === kind) ?? lanes.find((l) => laneKindOf(l) === undefined && fallback.includes(l?.id)) ?? null;
+}
+export const findBugLane = (team) => findKindLane(team, "bug", BUG_LANE_FALLBACK_IDS);
+export const findAuditLane = (team) => findKindLane(team, "audit", AUDIT_LANE_FALLBACK_IDS);
+export function isHiddenLane(team, lane) {
+  if (typeof lane?.hidden === "boolean") return lane.hidden;
+  if (isHubLane(team, lane)) return false;
+  return findBugLane(team)?.id === lane?.id || findAuditLane(team)?.id === lane?.id;
 }
 
 /**

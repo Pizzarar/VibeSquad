@@ -128,7 +128,8 @@ export function PinRail({ view, focus, onPick }: { view: TeamView; focus: PinFoc
   const allPins = pinsForSquad(view);
   const { pinned } = allPins;
   const hubPin = hubPinForSquad(view);
-  const active = pinned.find((p) => p.lane.id === focus.laneId) ?? allPins.done.find((p) => p.lane.id === focus.laneId) ?? (hubPin?.lane.id === focus.laneId ? hubPin : undefined);
+  const withHidden = pinsForSquad(view, { includeHidden: true });
+  const active = withHidden.pinned.find((p) => p.lane.id === focus.laneId) ?? withHidden.done.find((p) => p.lane.id === focus.laneId) ?? (hubPin?.lane.id === focus.laneId ? hubPin : undefined);
   const others = pinned.filter((p) => p.lane.id !== focus.laneId);
   const bs = active?.brainstorm;
   return (
@@ -263,7 +264,7 @@ export function PinFocusHeader(props: {
   const { view, focus, onStart, onSelectSquad, belowBar } = props;
   const spinUpError = props.spinUpError ?? focus.spinUpError ?? null;
   const hubPin = hubPinForSquad(view);
-  const allPins = pinsForSquad(view);
+  const allPins = pinsForSquad(view, { includeHidden: true });
   const pin = allPins.pinned.find((p) => p.lane.id === focus.laneId) ?? allPins.done.find((p) => p.lane.id === focus.laneId) ?? (hubPin?.lane.id === focus.laneId ? hubPin : undefined);
   const { profiles } = useProfiles();
   const brainstormProfiles = useMemo(() => {

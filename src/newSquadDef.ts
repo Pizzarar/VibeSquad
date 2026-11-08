@@ -5,18 +5,25 @@ import {
   LEAD_AUTO_HANDOFF_DEFAULT,
   LEAD_FLAG_DEFAULT,
   LEAD_HARD_CAP_DEFAULT,
+  findAuditLane,
   findBugLane,
   type TeamDef,
 } from "./teams.ts";
 import { allLaneIds, slugLaneId, uniqueLaneId, type PinLane } from "./pins.ts";
 import { freezeLaneCodes } from "./identity.ts";
 
-/** Seeds the Squad's standing Bug Runner lane. Idempotent: a Squad that already has a bug lane (flagged or `bug-chaser`) comes back unchanged. Lane ids are unique across Squads, so a second Squad gets `bug-runner-2`. */
+/** Seeds the Squad's standing, hidden Bug Runner and Perfection (audit) lanes. Idempotent: a lane the Squad already has (flagged or by fallback id) is kept as is. Lane ids are unique across Squads, so a second Squad gets `bug-runner-2`. */
 export function withBugLane(team: TeamDef, existingTeams: TeamDef[] = []): TeamDef {
-  if (findBugLane(team)) return team;
-  const taken = allLaneIds([...existingTeams.filter((t) => t.id !== team.id), team]);
-  const lane: PinLane = { id: uniqueLaneId("bug-runner", taken), name: "Bug Runner", bug: true, standing: true, state: "pinned" };
-  return { ...team, lanes: freezeLaneCodes([...team.lanes, lane]) };
+  const others = existingTeams.filter((t) => t.id !== team.id);
+  let next = team;
+  const seed = (kind: "bug" | "audit", id: string, name: string) => {
+    if ((kind === "bug" ? findBugLane : findAuditLane)(next)) return;
+    const lane: PinLane = { id: uniqueLaneId(id, allLaneIds([...others, next])), name, kind, hidden: true, standing: true, state: "pinned" };
+    next = { ...next, lanes: freezeLaneCodes([...next.lanes, lane]) };
+  };
+  seed("bug", "bug-runner", "Bug Runner");
+  seed("audit", "perfection", "Perfection");
+  return next;
 }
 
 export function buildNewSquadTeamDef(opts: {
