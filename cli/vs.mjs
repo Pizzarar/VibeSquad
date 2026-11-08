@@ -254,6 +254,7 @@ function parseArgs(argv) {
     "title",
     "note",
     "since",
+    "source",
     "revision",
   ]);
   const booleans = new Set([
@@ -479,7 +480,7 @@ Usage:
   vs log <type> "<text>" [--ref <ref>...] [--digest]
   vs log --since-me [--limit <N>] [--peek]
   vs handoff [--out <path>]
-  vs inbox add "<idea 1>" ["<idea 2>" ...] [--lane <lane>] [--from-brainstorm]
+  vs inbox add "<idea 1>" ["<idea 2>" ...] [--lane <lane>] [--from-brainstorm] [--source <tag>]
   vs inbox list [--lane <lane>]
   vs inbox triage --merge <targetId> <sourceId...> | --bounce <cardId> --lane <newLane>
   vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force]
@@ -809,7 +810,7 @@ function commandInbox(flags) {
       ideas,
       laneId: flags.lane ? String(flags.lane) : undefined,
       teamId: flags.team ? String(flags.team) : undefined,
-      source: flags.fromBrainstorm ? "brainstorm-dump" : "cli",
+      source: flags.source ? String(flags.source) : flags.fromBrainstorm ? "brainstorm-dump" : "cli",
       splitDump: Boolean(flags.splitDump),
       baseHome,
     });

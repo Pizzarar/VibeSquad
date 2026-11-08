@@ -140,11 +140,11 @@ export function relayBucket(runs, { since, until } = {}) {
 }
 
 // (3) unneeded handoffs + lead churn per lane.
-export function handoffBucket(runs) {
+export function handoffBucket(runs, { since, until } = {}) {
   const byId = new Map(runs.map((x) => [x.id, x]));
   const leads = runs.filter((x) => x.role === 'lead');
   const fixtures = leads.filter((x) => FIXTURE_CWD.test(x.cwd));
-  const real = leads.filter((x) => !FIXTURE_CWD.test(x.cwd));
+  const real = leads.filter((x) => !FIXTURE_CWD.test(x.cwd) && !(since !== undefined && x.ts < since) && !(until !== undefined && x.ts > until));
   const r = { leadRuns: leads.length, fixtureRuns: fixtures.length, handoffs: { total: 0, under100k: 0, atOrOver100k: 0, predecessorUnknown: 0 }, byTrigger: {}, churn: {} };
   for (const x of real) {
     const from = x.labels['vs.handoff-from'];
