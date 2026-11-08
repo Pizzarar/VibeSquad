@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
@@ -234,7 +234,10 @@ export function buildAndroidApk({
   env = process.env,
   exec = execFileSync,
   pinFirst = false,
+  debug = false,
+  unsigned = false,
 } = {}) {
+  if (debug && unsigned) throw new Error("--debug and --unsigned cannot be combined");
   const require = createRequire(import.meta.url);
   const tauriCliJs = require.resolve("@tauri-apps/cli/tauri.js");
   const androidEnv = resolveAndroidEnv(env);
@@ -261,23 +264,26 @@ export function buildAndroidApk({
   ensureAndroidSystemBarFit(join(rootDir, "src-tauri", "gen", "android", "app", "src", "main", "java", "com", "vibesquad", "desktop", "MainActivity.kt"));
 
   // Step 4: build the release APK.
-  console.log("[build:android] 3/6 Building release APK (tauri android build --apk)...");
-  const builtSo = join(rootDir, "src-tauri", "target", "aarch64-linux-android", "release", "libvibesquad_desktop_lib.so");
+  console.log(`[build:android] 3/6 Building ${debug ? "debug" : "release"} APK (tauri android build --apk${debug ? " --debug" : ""})...`);
+  const builtSo = join(rootDir, "src-tauri", "target", "aarch64-linux-android", debug ? "debug" : "release", "libvibesquad_desktop_lib.so");
   try {
-    runNode([tauriCliJs, "android", "build", "--apk", "--target", "aarch64", "--ci", "--config", "src-tauri/tauri.android.conf.json"]);
+    runNode([tauriCliJs, "android", "build", "--apk", "--target", "aarch64", "--ci", "--config", "src-tauri/tauri.android.conf.json", ...(debug ? ["--debug"] : [])]);
   } catch (err) {
     if (process.platform !== "win32" || !existsSync(builtSo)) throw err;
-    console.log("[build:android] Windows symlink fallback: copying libvibesquad_desktop_lib.so into jniLibs/arm64-v8a and running Gradle assembleArm64Release...");
+    console.log(`[build:android] Windows symlink fallback: copying libvibesquad_desktop_lib.so into jniLibs/arm64-v8a and running Gradle (${debug ? "debug" : "release"})...`);
     const jniDir = join(genAndroidDir, "app", "src", "main", "jniLibs", "arm64-v8a");
     mkdirSync(jniDir, { recursive: true });
     copyFileSync(builtSo, join(jniDir, "libvibesquad_desktop_lib.so"));
-    run("cmd.exe", ["/d", "/s", "/c", ".\\gradlew.bat assembleArm64Release -x rustBuildArm64Release"], { cwd: genAndroidDir });
+    const task = debug ? "assembleArm64Debug -x rustBuildArm64Debug" : "assembleArm64Release -x rustBuildArm64Release";
+    run("cmd.exe", ["/d", "/s", "/c", `.\\gradlew.bat ${task}`], { cwd: genAndroidDir });
   }
 
   // Step 5: locate the built APK (prefer universal, then aarch64).
   console.log("[build:android] 4/6 Locating built APK...");
   const apkOutDir = join(rootDir, "src-tauri", "gen", "android", "app", "build", "outputs", "apk");
-  const apk = findApk(join(apkOutDir, "universal", "release")) || findApk(join(apkOutDir, "arm64", "release")) || findApk(join(apkOutDir, "aarch64", "release"));
+  const apk = debug
+    ? findApk(join(apkOutDir, "universal", "debug")) || findApk(join(apkOutDir, "arm64", "debug")) || findApk(join(apkOutDir, "aarch64", "debug"))
+    : findApk(join(apkOutDir, "universal", "release")) || findApk(join(apkOutDir, "arm64", "release")) || findApk(join(apkOutDir, "aarch64", "release"));
   if (!apk) throw new Error(`No built APK found under ${apkOutDir}`);
 
   // Step 6: sign (if unsigned) and stage into dist-desktop/VibeSquad.apk.
@@ -291,7 +297,13 @@ export function buildAndroidApk({
     : "java";
   const apksignerJar = join(androidEnv.ANDROID_HOME, "build-tools", latest, "lib", "apksigner.jar");
   let certSha256;
-  if (apk.endsWith("-unsigned.apk")) {
+  if (debug || unsigned) {
+    // Sideload test builds: Gradle debug-signed (--debug) or raw unsigned (--unsigned, install needs apksigner). No release pin/keystore; never publishable.
+    console.log(`[build:android] 5/6 ${debug ? "Debug build (Gradle debug keystore)" : "Unsigned build"}: skipping release signing and cert pin.`);
+    // A stale release marker must never let release.mjs publish this test APK.
+    rmSync(join(distDesktopDir, "android-build.json"), { force: true });
+    copyFileSync(apk, destApk);
+  } else if (apk.endsWith("-unsigned.apk")) {
     console.log("[build:android] 5/6 Signing APK...");
     const { keystorePath, secretEnv, alias } = ensureAndroidKeystore({ env: androidEnv });
     ({ certSha256 } = signAndVerifyApk({ javaExe, apksignerJar, keystorePath, alias, secretEnv, inputApk: apk, outApk: destApk, cwd: rootDir, exec, pinFirst }));
@@ -307,5 +319,5 @@ export function buildAndroidApk({
 
 const isMain = process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename);
 if (isMain) {
-  buildAndroidApk({ pinFirst: process.argv.includes("--pin-first") });
+  buildAndroidApk({ pinFirst: process.argv.includes("--pin-first"), debug: process.argv.includes("--debug"), unsigned: process.argv.includes("--unsigned") });
 }

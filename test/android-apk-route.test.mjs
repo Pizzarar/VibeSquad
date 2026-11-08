@@ -4,12 +4,12 @@
 // - wiring: server/serve.mjs, server/auth.mjs, server/release.mjs, package.json
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
 import { createVibesquadMiddleware, handleAndroidApk } from "../server/vibesquad-api.mjs";
-import { ensureAndroidDeepLinkIntentFilter, ensureAndroidSystemBarFit, resolveAndroidEnv } from "../server/build-android.mjs";
+import { buildAndroidApk, ensureAndroidDeepLinkIntentFilter, ensureAndroidSystemBarFit, resolveAndroidEnv } from "../server/build-android.mjs";
 import { buildLatestJson, syncVersionFiles } from "../server/release.mjs";
 import { checkGithubAndroidRelease, parseGithubReleaseVersion } from "../src/userName.ts";
 
@@ -228,6 +228,32 @@ describe("wiring (source inspection)", () => {
     assert.match(src, /build-android\.mjs/);
     assert.match(src, /selectApk/);
     assert.match(src, /"VibeSquad\.apk"/);
+  });
+
+  test("buildAndroidApk: --debug and --unsigned conflict; sideload builds drop a stale android-build.json and skip signing", () => {
+    assert.throws(() => buildAndroidApk({ debug: true, unsigned: true }), /cannot be combined/);
+    for (const flag of ["debug", "unsigned"]) {
+      const root = mkdtempSync(join(tmpdir(), "vs-apk-"));
+      const sdk = join(root, "sdk");
+      mkdirSync(join(sdk, "build-tools", "1.0.0"), { recursive: true });
+      const apkDir = join(root, "src-tauri", "gen", "android", "app", "build", "outputs", "apk", "universal", flag === "debug" ? "debug" : "release");
+      mkdirSync(apkDir, { recursive: true });
+      writeFileSync(join(apkDir, "app-universal-test.apk"), "apk-bytes");
+      mkdirSync(join(root, "dist-desktop"), { recursive: true });
+      writeFileSync(join(root, "dist-desktop", "android-build.json"), "{}");
+      const calls = [];
+      const origLog = console.log;
+      console.log = () => {};
+      try {
+        const out = buildAndroidApk({ rootDir: root, env: { ...process.env, ANDROID_HOME: sdk }, exec: (cmd, args) => { calls.push([cmd, ...args]); }, [flag]: true });
+        assert.equal(out.apkPath, join(root, "dist-desktop", "VibeSquad.apk"));
+      } finally {
+        console.log = origLog;
+      }
+      assert.equal(readFileSync(join(root, "dist-desktop", "VibeSquad.apk"), "utf8"), "apk-bytes");
+      assert.equal(existsSync(join(root, "dist-desktop", "android-build.json")), false);
+      assert.equal(calls.some((c) => c.includes("sign") || c.includes("verify")), false);
+    }
   });
 
   test("server/build-android.mjs builds aarch64 without --apk=true, uses arm64 flavor, Windows jniLibs fallback, and apksigner.jar", () => {
