@@ -142,6 +142,15 @@ test("isStalePredecessor: a lead whose current turn made progress since its last
   assert.equal(isStalePredecessor(lead, { now: NOW, staleMs: STALE }), false);
 });
 
+test("isStalePredecessor: a same-millisecond progress event after the prompt counts as progress (>=)", () => {
+  const lead = staleLead({
+    status: "initializing",
+    lastPromptAt: "2026-11-07T00:00:00.000Z",
+    lastProgressAt: "2026-11-07T00:00:00.000Z", // a running event logged in the same millisecond as the input
+  });
+  assert.equal(isStalePredecessor(lead, { now: NOW, staleMs: STALE }), false);
+});
+
 test("Done-when #1: simulated lead stepping 150k -> 250k -> 300k triggers flag, auto-handoff, and forced handoff each at most once", async () => {
   const env = makeTempEnv();
   const prevHome = process.env.VIBESQUAD_HOME;

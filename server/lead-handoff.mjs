@@ -238,10 +238,10 @@ export function isStalePredecessor(
   const promptTs = Date.parse(lead.lastPromptAt ?? lead.createdAt ?? "");
   if (!Number.isFinite(promptTs)) return false;
 
-  // The current turn got going if a turn-progress event landed AFTER the last prompt; a missing lastProgressAt
+  // The current turn got going if a turn-progress event landed AT or after the last prompt; a missing lastProgressAt
   // (never produced any output) also means the current turn never got going.
   const progressTs = Date.parse(lead.lastProgressAt ?? "");
-  if (Number.isFinite(progressTs) && progressTs > promptTs) return false;
+  if (Number.isFinite(progressTs) && progressTs >= promptTs) return false;
 
   return now - promptTs >= staleMs;
 }

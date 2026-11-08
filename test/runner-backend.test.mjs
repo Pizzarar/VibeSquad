@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, statSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, statSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Runner } from '../runner/runner.mjs';
 import { createServer, writeDiscovery } from '../runner/server.mjs';
 import { killTree } from '../runner/spawn.mjs';
 import { RunnerClient } from '../server/backend/runner-client.mjs';
-import { RunnerBackend, SPAWN_TIMING, toTimeline } from '../server/backend/runner-backend.mjs';
+import { RunnerBackend, SPAWN_TIMING, isTurnProgressEvent, scanLogProgress, toTimeline } from '../server/backend/runner-backend.mjs';
 import { getBackend } from '../server/backend/index.mjs';
 
 const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'vs-rb-'));
@@ -54,6 +54,73 @@ const spawnReq = (lane, over = {}) => ({
   initialPrompt: 'hi',
   labels: { team: 'vibesquad', lane, role: 'worker', ord: '2', profile: 'cheap', 'vs.x': 'y', ...over },
   env: {},
+});
+
+test('isTurnProgressEvent: classifies turn-progress vs non-progress events', () => {
+  assert.equal(isTurnProgressEvent({ type: 'output' }), true);
+  assert.equal(isTurnProgressEvent({ type: 'tool' }), true);
+  assert.equal(isTurnProgressEvent({ type: 'usage' }), true);
+  assert.equal(isTurnProgressEvent({ type: 'turn_done' }), true);
+  assert.equal(isTurnProgressEvent({ type: 'status', status: 'running' }), true);
+  assert.equal(isTurnProgressEvent({ type: 'status', status: 'idle' }), true);
+  assert.equal(isTurnProgressEvent({ type: 'meta' }), false);
+  assert.equal(isTurnProgressEvent({ type: 'stderr' }), false);
+  assert.equal(isTurnProgressEvent({ type: 'raw' }), false);
+  assert.equal(isTurnProgressEvent({ type: 'limit' }), false);
+  assert.equal(isTurnProgressEvent({ type: 'status', status: 'starting' }), false);
+  assert.equal(isTurnProgressEvent({ type: 'status', status: 'queued' }), false);
+  assert.equal(isTurnProgressEvent({ type: 'status', status: 'parked' }), false);
+  assert.equal(isTurnProgressEvent({ type: 'input' }), false);
+  assert.equal(isTurnProgressEvent({ type: 'created' }), false);
+  assert.equal(isTurnProgressEvent({ type: 'error' }), false);
+  assert.equal(isTurnProgressEvent(null), false);
+});
+
+test('scanLogProgress: stops at the first prompt and bounds its read to a 64KB tail', () => {
+  const dir = tmp();
+  try {
+    const file = path.join(dir, 'rn-big.jsonl');
+    // A prompt at the very start, then >64KB of output: the prompt is beyond the bounded tail, so it is NOT read back.
+    const lines = [JSON.stringify({ seq: 1, ts: 1000, type: 'input', text: 'go' })];
+    const pad = 'x'.repeat(1024);
+    for (let i = 0; i < 200; i++) lines.push(JSON.stringify({ seq: i + 2, ts: 2000 + i, type: 'output', text: pad }));
+    writeFileSync(file, lines.join('\n') + '\n');
+    assert.ok(statSync(file).size > 64 * 1024, 'log is larger than the bounded window');
+    const res = scanLogProgress(file);
+    assert.equal(res.lastPromptAt, null, 'prompt beyond the bounded 64KB window is not read back');
+    assert.equal(res.lastProgressAt, 2000 + 199, 'most recent progress is read');
+    // A prompt as the LAST event: stop there — no progress after it.
+    const file2 = path.join(dir, 'rn-stop.jsonl');
+    writeFileSync(file2, JSON.stringify({ seq: 1, ts: 3000, type: 'input', text: 'go' }) + '\n');
+    const res2 = scanLogProgress(file2);
+    assert.equal(res2.lastPromptAt, 3000);
+    assert.equal(res2.lastProgressAt, null, 'no progress after the prompt');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('progressFor: skips the scan for running/idle, scans (bounded) only for starting/queued', () => {
+  const dir = tmp();
+  try {
+    mkdirSync(path.join(dir, 'agents'), { recursive: true });
+    const file = path.join(dir, 'agents', 'rn-big.jsonl');
+    const lines = [JSON.stringify({ seq: 1, ts: 1000, type: 'input', text: 'go' })];
+    const pad = 'x'.repeat(1024);
+    for (let i = 0; i < 200; i++) lines.push(JSON.stringify({ seq: i + 2, ts: 2000 + i, type: 'output', text: pad }));
+    writeFileSync(file, lines.join('\n') + '\n');
+    const backend = new RunnerBackend({ client: { home: dir }, hooks: false });
+    // running: the status guard returns without scanning (no fields).
+    const running = backend.progressFor({ id: 'rn-big', status: 'running', createdAt: 1000, updatedAt: 2199 });
+    assert.equal(running.lastPromptAt, undefined, 'running status triggers no scan');
+    assert.equal(running.lastProgressAt, undefined);
+    // queued: scans, bounded (the prompt beyond the 64KB window stays unset), but reads the most recent progress.
+    const queued = backend.progressFor({ id: 'rn-big', status: 'queued', createdAt: 1000, updatedAt: 2199 });
+    assert.equal(queued.lastPromptAt, undefined, 'prompt beyond the window is left unset');
+    assert.equal(queued.lastProgressAt, 2199);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('RunnerBackend: create maps first-class fields, labels, status and timeline into the Paseo shapes', async () => {

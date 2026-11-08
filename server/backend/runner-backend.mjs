@@ -357,31 +357,33 @@ function scanTail(file) {
 
 /**
  * The last prompt/created event (`input`/`created`) and the last turn-progress event from a log's tail, without parsing
- * the whole file. Reads the tail (growing if needed) and scans backwards; the two events of interest are almost always
- * recent. Returns { lastPromptAt, lastProgressAt } (either may be null when absent).
+ * the whole file. Reads a bounded 64 KB tail and scans backwards, stopping at the first prompt/created event (anything
+ * earlier is an earlier turn). A prompt beyond the window returns null (the caller falls back to `createdAt`). Returns
+ * { lastPromptAt, lastProgressAt } (either may be null when absent).
  */
-function scanLogProgress(file) {
+export function scanLogProgress(file) {
   const fd = fs.openSync(file, "r");
   try {
     const size = fs.fstatSync(fd).size;
+    const len = Math.min(size, 64 * 1024);
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, size - len);
+    let lines = buf.toString("utf8").split("\n");
+    if (len < size) lines = lines.slice(1); // first line is cut
     let lastPrompt = null;
     let lastProgress = null;
-    for (let want = 64 * 1024; ; want *= 4) {
-      const len = Math.min(size, want);
-      const buf = Buffer.alloc(len);
-      fs.readSync(fd, buf, 0, len, size - len);
-      let lines = buf.toString("utf8").split("\n");
-      if (len < size) lines = lines.slice(1); // first line is cut
-      for (let i = lines.length - 1; i >= 0; i--) {
-        const line = lines[i];
-        if (!line) continue;
-        let e;
-        try { e = JSON.parse(line); } catch { continue; }
-        if (!lastPrompt && (e.type === "input" || e.type === "created")) lastPrompt = e.ts;
-        if (!lastProgress && isTurnProgressEvent(e)) lastProgress = e.ts;
-        if (lastPrompt && lastProgress) break;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i];
+      if (!line) continue;
+      let e;
+      try { e = JSON.parse(line); } catch { continue; }
+      if (e.type === "input" || e.type === "created") {
+        // The most recent prompt/created event: a progress event seen before it (later in the log) is "since the
+        // prompt"; anything earlier belongs to an earlier turn, so stop here.
+        lastPrompt = e.ts;
+        break;
       }
-      if ((lastPrompt && lastProgress) || len >= size) break;
+      if (!lastProgress && isTurnProgressEvent(e)) lastProgress = e.ts;
     }
     return { lastPromptAt: lastPrompt ?? null, lastProgressAt: lastProgress ?? null };
   } finally {
@@ -547,6 +549,9 @@ export class RunnerBackend {
   /** Best-effort: enrich a runner rec with lastPromptAt/lastProgressAt from its log tail (absent on an unreadable log). */
   progressFor(rec) {
     if (!rec || !rec.id) return rec;
+    // isStalePredecessor is the only consumer and returns false for every status but starting/queued; skip the log
+    // scan for everything else so a running/idle turn never re-reads its log on every tick.
+    if (rec.status !== "starting" && rec.status !== "queued") return rec;
     try {
       const p = scanLogProgress(path.join(this.rc.home, "agents", `${rec.id}.jsonl`));
       if (p.lastPromptAt != null) rec.lastPromptAt = p.lastPromptAt;
