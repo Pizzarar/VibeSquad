@@ -679,14 +679,17 @@ test('turn_ended: rapid or concurrent duplicate turn_ended triggers for the same
     const third = await until(async () => (await b.backend.listAgents({ filter: { includeArchived: true } })).find((a) => a.labels.digestFor === w.id && a.id !== first.id && a.id !== second.id), 8000, 'third turn (missed turn_started) gets its own digest');
     await until(async () => (await b.backend.getAgent(third.id)).archivedAt, 8000, 'third digest finished');
 
-    // Archive path: after a done report marks and auto-archives the worker, a late/duplicate turn_ended does not spawn another digest
+    // Archive path (including closeFinishedWorker on turnEnded: true): after a done report marks and auto-archives the worker,
+    // late/duplicate turn_ended events do not spawn another digest
     mkdirSync(path.join(VS_HOME, 'teams', 'vibesquad'), { recursive: true });
     appendFileSync(
       path.join(VS_HOME, 'teams', 'vibesquad', 'log.jsonl'),
       JSON.stringify({ ts: new Date().toISOString(), agent: third.id, lane: 'bug-chaser', type: 'done', text: 'PASS: done', refs: [w.id] }) + '\n',
     );
     b.lifecycle.host.scanLogs(false);
-    await until(async () => (await b.backend.getAgent(w.id)).archivedAt, 8000, 'worker auto-archived');
+    await b.lifecycle.host.emit('agent.turn_ended', { agent, turnId: '200', outcome: { kind: 'completed' } });
+    assert.ok((await b.backend.getAgent(w.id)).archivedAt, 'worker auto-archived on turn_ended');
+    await b.lifecycle.host.emit('agent.turn_ended', { agent, turnId: '200', outcome: { kind: 'completed' } });
     await b.lifecycle.host.emit('agent.turn_ended', { agent, turnId: '201', outcome: { kind: 'completed' } });
     await settle(400);
     const afterArchive = (await b.backend.listAgents({ filter: { includeArchived: true } })).filter((a) => a.labels.digestFor === w.id);

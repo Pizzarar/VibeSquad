@@ -2082,8 +2082,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       if (isDigestAgent(labels, worker.title) || isDigestNoise(labels, worker.title)) return;
       const workerId = String(worker.id ?? "").trim();
       if (!workerId) return;
-      // An archived worker, or one with a done report awaiting archive, never spawns a new digest.
-      if (worker.archivedAt || snapWorker?.archivedAt || doneReported.has(workerId)) return;
+      // An archived worker never spawns a new digest.
+      if (worker.archivedAt || snapWorker?.archivedAt || labels[AUTO_ARCHIVED_LABEL] === "1") return;
       const tid = String(turnId ?? "").trim();
       const epoch = turnEpoch.get(workerId) ?? 0;
       const key = `${epoch}:${tid}`;
@@ -2241,10 +2241,19 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       doneReported.delete(agentId);
       // Marker: only an auto-archived worker is revived by a later send (never a retired lead/Buddy) and is not a "retired holder".
       await deps.setLabels(agentId, { [AUTO_ARCHIVED_LABEL]: "1" }).catch((e: unknown) => log(`auto-archive marker failed for ${agentId}: ${e}`));
-      await deps.archiveAgent(agentId).catch((e: unknown) => log(`worker auto-close failed for ${agentId}: ${e}`));
-      digested.delete(agentId);
-      turnEpoch.delete(agentId);
-      inflightDigests.delete(agentId);
+      let archived = false;
+      await deps
+        .archiveAgent(agentId)
+        .then(() => {
+          archived = true;
+        })
+        .catch((e: unknown) => log(`worker auto-close failed for ${agentId}: ${e}`));
+      if (archived) {
+        const prev = digested.get(agentId);
+        if (prev !== undefined) digested.set(agentId, `0:${prev.replace(/^\d+:/, "")}`);
+        turnEpoch.delete(agentId);
+        if (!opts.turnEnded) inflightDigests.delete(agentId);
+      }
       log(`worker auto-closed after done report: ${agentId}`);
     }
 
