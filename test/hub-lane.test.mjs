@@ -127,3 +127,16 @@ test("hubTeamsBlock omits hidden lanes", () => {
   const out = hubTeamsBlock({ team, agents: [] });
   assert.ok(out.includes("art") && !out.includes("perfection") && !out.includes("bug-chaser"), out);
 });
+
+import { findPinInViews } from "../src/pins.ts";
+
+test("findPinInViews resolves an agent in a hidden lane (SendTo/SpinOff/LooksDone cards keep working)", () => {
+  const team = { id: "vibesquad", name: "VibeSquad", color: "#0ff", paths: [], lanes: [{ id: "vibesquad", name: "R", hub: true }, { id: "bug-chaser", name: "Bug" }, { id: "art", name: "Art" }] };
+  const view = viewOf(team);
+  const bs = { agent: { id: "bs-bug", status: "idle", labels: {} }, kind: "brainstorm", laneId: "bug-chaser" };
+  view.lanes[1].brainstorm = bs;
+  view.lanes[1].members = [bs];
+  view.members = [bs];
+  assert.equal(findPinInViews([view], "bs-bug")?.lane.id, "bug-chaser");
+  assert.equal(findPinInViews([view], "nope"), null);
+});

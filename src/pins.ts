@@ -98,6 +98,33 @@ export function pinsForSquad(view: TeamView, opts: { includeHidden?: boolean } =
   return { pinned: pins.filter((p) => p.state === "pinned"), done: pins.filter((p) => p.state === "done") };
 }
 
+/** The pin (hidden lanes included: a Bug Runner / Perfection chat still gets its cards) owning `agentId` in `views`, or null. */
+export function findPinInViews(views: TeamView[], agentId?: string | null): Pin | null {
+  if (!agentId) return null;
+  for (const v of views) {
+    const hub = hubPinForSquad(v);
+    const { pinned, done } = pinsForSquad(v, { includeHidden: true });
+    const all = [...(hub ? [hub] : []), ...pinned, ...done];
+    for (const p of all) {
+      if (
+        p.brainstorm?.agent.id === agentId ||
+        p.lead?.agent.id === agentId ||
+        p.workers.some((w) => w.agent.id === agentId) ||
+        (p.topicBrainstorms ?? []).some((tb) => tb.agent.id === agentId)
+      ) {
+        return p;
+      }
+    }
+    const m = v.members.find((mem) => mem.agent.id === agentId);
+    const mLane = m?.laneId ?? (m as any)?.lane;
+    if (mLane) {
+      const hit = all.find((p) => p.lane.id === mLane);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
 /** True for the Squad's hub pin (RiffBot's lane). It lives in the hub bar, not the Team grid or Done shelf. */
 export const isHubPin = (pin: Pin): boolean => isHubLane(pin.squad, pin.lane);
 

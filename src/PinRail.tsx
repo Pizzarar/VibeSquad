@@ -195,7 +195,7 @@ const isTyping = (t: EventTarget | null) =>
 
 function PinFocusBar({ view, focus, onSelectSquad }: { view: TeamView; focus: PinFocus; onSelectSquad: (id: string) => void }) {
   const hubPin = hubPinForSquad(view);
-  const pin = pinsForSquad(view).pinned.find((p) => p.lane.id === focus.laneId) ?? (hubPin?.lane.id === focus.laneId ? hubPin : undefined);
+  const pin = pinsForSquad(view, { includeHidden: true }).pinned.find((p) => p.lane.id === focus.laneId) ?? (hubPin?.lane.id === focus.laneId ? hubPin : undefined);
   const agentIdRef = useRef(focus.agentId);
   agentIdRef.current = focus.agentId;
 
