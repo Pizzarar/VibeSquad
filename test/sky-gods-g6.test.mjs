@@ -178,7 +178,7 @@ test("faces.json bg: {dark, light} per bot, both valid → used per theme; any o
   const css = src("styles.css");
   assert.ok(/--sky-face-bg-dark: #[0-9a-f]{6}/i.test(css) && /--sky-face-bg-light: #[0-9a-f]{6}/i.test(css));
   assert.ok(css.includes("var(--sky-face-bg-custom, var(--sky-face-bg-dark))"));
-  assert.ok(src("SkyZones.tsx").includes("--sky-face-bg-custom") && src("SkyZones.tsx").includes("faceBg(faces, zone.bot, theme)"));
+  assert.ok(src("SkyZones.tsx").includes("--sky-face-bg-custom") && src("SkyZones.tsx").includes("faceBg(faces, shown, theme)"));
 });
 
 test("Esc yields to a popover/dialog or an already-handled key; outside clicks inside a portalled popover do not close", () => {

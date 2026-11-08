@@ -1,0 +1,1 @@
+{"version":1,"frameW":32,"frameH":32,"frames":4,"frameList":[{"x":0,"y":0},{"x":32,"y":0},{"x":64,"y":0},{"x":96,"y":0}],"scale":3,"ms":60,"anchor":"center","note":"scale = integer px multiplier (3 at 1080; match the face k at 4K@120%); transparent bg, burst centred in each cell for a window-edge anchor; play once"}

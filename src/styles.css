@@ -3562,6 +3562,7 @@ html, body, #root { overflow-x: hidden; }
 .pin-row.done { cursor: default; opacity: 0.6; }
 .pin-row.done:hover { background: transparent; border-left-color: transparent; color: var(--muted); }
 .pin-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pin-row-status { flex: none; white-space: nowrap; }
 .pin-done-check { color: var(--mint-t); width: 8px; text-align: center; }
 .pin-done-toggle {
   background: transparent; border: 0; color: var(--muted); font-family: var(--arcade); font-size: 10px;
@@ -3576,7 +3577,7 @@ html, body, #root { overflow-x: hidden; }
 .pin-needs { flex: none; }
 
 .pin-grid-wrap { margin: 0 0 18px; min-width: 0; max-width: 100%; }
-.pin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 14px; min-width: 0; max-width: 100%; }
+.pin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr)); gap: var(--sp-3); min-width: 0; max-width: 100%; }
 .pin-tile {
   display: flex; flex-direction: column; gap: 10px; min-height: 190px; padding: var(--sp-3) 14px;
   min-width: 0; max-width: 100%; overflow: hidden;
@@ -3895,15 +3896,18 @@ html, body, #root { overflow-x: hidden; }
 .breadcrumb-seg:hover, .breadcrumb-seg:focus-visible { color: var(--cyan-t); }
 .breadcrumb-seg.current, .breadcrumb-seg[aria-current="page"] { color: inherit; cursor: default; font-weight: 700; }
 .breadcrumb-sep { opacity: 0.5; }
-.squads-home { padding: 14px 0; }
-.squads-home-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
-.squads-home-pager-wrap { display: flex; flex-direction: column; gap: 8px; }
-.squads-home-pager { display: flex; align-items: center; justify-content: center; gap: 12px; }
-.squads-pager-btn { background: var(--panel, var(--bg)); color: var(--cyan-t); border: 1px solid var(--line, #232846); border-radius: 8px; padding: 4px 18px; cursor: pointer; font: inherit; }
+/* P4b: one vertical rhythm (pager -> Usage dashboard -> Review) on the --sp-* tokens; one max-width + gutter shared by every block */
+.squads-home { --squads-max: 120rem; --squads-card-min: 18rem; display: flex; flex-direction: column; gap: var(--sp-5); width: 100%; max-width: var(--squads-max); margin-inline: auto; padding: var(--sp-4) 0; box-sizing: border-box; min-width: 0; }
+.squads-section { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
+.squads-section-title { font-family: var(--arcade); font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--cyan-t); margin: 0; }
+.squads-home-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--squads-card-min)), 1fr)); gap: var(--sp-3); min-width: 0; }
+.squads-home-pager-wrap { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
+.squads-home-pager { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: var(--sp-3); }
+.squads-pager-btn { background: var(--panel, var(--bg)); color: var(--cyan-t); border: 1px solid var(--line, #232846); border-radius: 8px; padding: var(--sp-1) var(--sp-4); cursor: pointer; font: inherit; }
 .squads-pager-btn:hover:not([aria-disabled="true"]), .squads-pager-btn:focus-visible { border-color: var(--cyan); }
 .squads-pager-btn[aria-disabled="true"] { opacity: 0.35; cursor: default; }
-.squads-pager-pos { min-width: 72px; text-align: center; font-variant-numeric: tabular-nums; }
-.squads-dashboard { margin-top: 18px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); display: flex; flex-direction: column; gap: 14px; }
+.squads-pager-pos { min-width: 9ch; text-align: center; font-variant-numeric: tabular-nums; }
+.squads-dashboard { margin: 0; min-width: 0; max-width: 100%; box-sizing: border-box; padding: var(--sp-4); border: 1px solid var(--line); border-radius: 10px; background: var(--panel); display: flex; flex-direction: column; gap: var(--sp-4); }
 .usage-title { font-family: var(--arcade); font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--cyan-t); }
 .usage-sub { font-family: var(--arcade); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
 .usage-limits { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
@@ -4777,17 +4781,28 @@ button.project-file-name:hover { text-decoration: underline; }
 @keyframes sky-chat-slam { from { transform: translateX(14%); opacity: 0; } to { transform: none; opacity: 1; } }
 /* G7 virus takeover: the overlay sheet sits exactly over Riff's face (same contain/scale); never takes a click or focus. */
 .sky-takeover { position: absolute; transform-origin: top left; display: block; background-repeat: no-repeat; image-rendering: pixelated; pointer-events: none; z-index: 1; }
-/* No sheet: a blocky violet dissolve eats the stage from the right (the Overlord's side) in 8 hard steps (~615ms). A class flip reverses from the current step. */
+/* No sheet: a blocky violet dissolve covers the stage from the right (the Overlord's side) in 8 hard steps, the face swaps under full cover, then it clears the same way (~1230ms, in and out). */
 .sky-takeover-fallback {
   position: absolute; inset: 0; pointer-events: none; z-index: 1;
   background: repeating-conic-gradient(var(--violet) 0% 25%, #05060c 0% 50%) 0 0 / 16px 16px;
   image-rendering: pixelated;
   clip-path: inset(0 0 0 100%);
-  transition: clip-path 615ms steps(8, end);
 }
-.sky-takeover-fallback.is-on { clip-path: inset(0 0 0 0); }
+.sky-takeover-fallback.is-play { animation: sky-takeover-dissolve 1230ms steps(8, end) both; }
+@keyframes sky-takeover-dissolve { 0% { clip-path: inset(0 0 0 100%); } 50% { clip-path: inset(0 0 0 0); } 100% { clip-path: inset(0 100% 0 0); } }
 .sky-crt-name { position: absolute; top: 8px; left: 12px; z-index: 2; font-family: var(--arcade); font-size: 13px; color: var(--cyan-t); letter-spacing: 0.04em; padding: 2px 8px; background: color-mix(in srgb, var(--bg) 70%, transparent); border: 1px solid var(--line); }
 .sky-zone-overlord .sky-crt-name { color: var(--violet-t); }
+/* T1: while the takeover is on, Riff's label is struck through and OVERLORD is scrawled over it. Art sticker when takeover-label-<theme>.png loads, CSS scrawl otherwise. Reduced motion: end state, no transition. */
+.sky-crt-name { overflow: visible; }
+.sky-crt-name-text { position: relative; }
+.sky-crt-name.is-struck:not(.has-art) .sky-crt-name-text { text-decoration: line-through wavy; text-decoration-color: var(--pink); text-decoration-thickness: 3px; }
+.sky-label-scrawl { position: absolute; left: -2px; top: 50%; z-index: 1; font-family: var(--arcade); font-size: 15px; font-weight: 700; letter-spacing: 0.02em; color: var(--violet-t); text-shadow: 2px 2px 0 var(--bg), -1px -1px 0 var(--bg); white-space: nowrap; pointer-events: none; transform: translateY(-50%) rotate(-7deg) skewX(-8deg); clip-path: inset(0 100% 0 0); transition: clip-path 300ms steps(5, end); }
+.sky-label-scrawl.is-on { clip-path: inset(0 0 0 0); }
+/* Art sticker (takeover-label.json): same parent as the chip, above it; box from takeoverLabelGeom. Shown only while the takeover is on. */
+.sky-label-art { position: absolute; z-index: 3; pointer-events: none; background-size: 100% 100%; background-repeat: no-repeat; image-rendering: pixelated; clip-path: inset(0 100% 0 0); transition: clip-path 300ms steps(5, end); }
+.sky-label-art.is-on { clip-path: inset(0 0 0 0); }
+.sky-label-art.is-still { transition: none; }
+.sky-crt-name.is-still .sky-label-scrawl { transition: none; }
 .sky-resume { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 10px; background: var(--well); border-bottom: 1px solid var(--line); }
 .sky-crt-body {
   position: absolute;

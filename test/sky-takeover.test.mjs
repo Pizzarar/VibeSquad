@@ -107,8 +107,7 @@ test("absent json or PNG → CSS stepped dissolve; sheet only when both load", (
   assert.ok(sky.includes("const sheet = sheetOk ? takeover : null"));
   assert.ok(sky.includes("sky-takeover-fallback"));
   const css = src("styles.css");
-  assert.ok(/\.sky-takeover-fallback \{[^}]*steps\(8, end\)/.test(css));
-  assert.ok(css.includes(".sky-takeover-fallback.is-on { clip-path: inset(0 0 0 0); }"));
+    assert.ok(/\.sky-takeover-fallback\.is-play \{[^}]*steps\(8, end\)/.test(css) && css.includes("@keyframes sky-takeover-dissolve"));
   assert.equal(TAKEOVER_URL("light"), "/office/takeover-light.png");
   // reuses the shared fetch + image probe; no second loader
   const hook = src("useBotFace.ts");
