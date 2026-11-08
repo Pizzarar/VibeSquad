@@ -20,6 +20,7 @@ const readSeen = (teamId: string): number => {
 function useBugCards(teamId: string, laneId: string) {
   const [state, setState] = useState<{ key: string; cards: BugCard[] } | null>(null);
   useEffect(() => {
+    if (!laneId) return;
     const key = `${teamId}/${laneId}`;
     setState(null);
     let cancelled = false;
