@@ -1816,6 +1816,11 @@ code {
   border-color: var(--cyan);
   color: var(--cyan-t);
 }
+.brainstorm-ctx-actions .btn-brainstorm-restart {
+  background: color-mix(in srgb, var(--cyan) 28%, transparent);
+  color: var(--text);
+  font-weight: 700;
+}
 .brainstorm-ctx-bar.tone-amber .btn-brainstorm-restart {
   border-color: var(--amber);
   color: var(--amber-t);
