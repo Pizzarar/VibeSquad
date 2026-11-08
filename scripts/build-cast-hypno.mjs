@@ -1,6 +1,6 @@
 // Assemble public/cast.png (256x640, 64x64 cells, row = role in CAST_ROWS order, col = variant 0-3) from the H0 Hypnospace
 // busts, exported with the Aseprite CLI. Column 0 = art/cast/hypno/<role>-bust.aseprite (the base drawing); columns 1-3 =
-// <role>-bust-v{1,2,3}.aseprite from art/cast/hypno/build_variants.lua (contract v2: the same spec as the floor cast, so
+// <role>-bust-v{1,2,3}.aseprite from art/cast/hypno/build_h1b.lua (H1b weirdos in h1b.lua, which also drives the floor cast, so
 // bust column v is the same person as floor variant v in public/office/cast.json).
 // Usage: node scripts/build-cast-hypno.mjs [--aseprite <exe>]
 import { execFileSync } from "node:child_process";
@@ -73,7 +73,7 @@ for (const role of ROLES) {
     cols.push(px);
   }
   if (cols.length === 0) continue;
-  if (cols.length !== VARIANTS) throw new Error(`${role}: ${cols.length} of ${VARIANTS} variant busts (run art/cast/hypno/build_variants.lua)`);
+  if (cols.length !== VARIANTS) throw new Error(`${role}: ${cols.length} of ${VARIANTS} variant busts (run art/cast/hypno/build_h1b.lua)`);
   drawn[role] = cols;
 }
 rmSync(tmp, { recursive: true, force: true });
