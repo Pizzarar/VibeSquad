@@ -74,9 +74,21 @@ test('body, sidebar and chat pane use the wash/ramp (no U3 stars, grain or url()
   assert.ok(!/data-theme/.test(body.body + side.body + pane.body));
 });
 
-test('one UI font: the U4b block never sets font-family (everything inherits --mono)', () => {
-  assert.doesNotMatch(u4, /font-family\s*:/);
-  assert.doesNotMatch(u4, /var\(--(arcade|display)\)/);
+test('one UI font: everything in the tool surfaces is --mono (brand block, terminals, diagrams exempt)', () => {
+  const stripped = u4.replace(/\/\*[\s\S]*?\*\//g, '');
+  const fam = u4rules.filter((r) => /font-family\s*:/.test(r.body));
+  assert.equal(fam.length, 1, 'exactly one font-family rule in U4b');
+  const r = fam[0];
+  assert.match(r.sel, /^:is\(\.sidebar, \.agent-panes:not\(:has\(\.sky-zones\)\), \.pin-focus-bar\) :not\(/);
+  assert.match(r.body, /font-family:\s*var\(--mono\)\s*!important/);
+  for (const ex of ['.brand-text', '.brand-text *', '.xterm', 'svg']) assert.ok(r.sel.includes(ex), `exempts ${ex}`);
+  assert.doesNotMatch(stripped, /var\(--(arcade|display)\)/);
+  // --arcade / --display stay defined for the floor, sky and brand (not aliased globally)
+  assert.match(css, /--arcade: "Silkscreen"/);
+  assert.match(css, /--display: "Pixelify Sans"/);
+  assert.ok(!/--(arcade|display)\s*:\s*var\(--mono\)/.test(css));
+  // every arcade/display rule outside U4b that targets a tool surface is overridden by the !important scope above
+  assert.ok(cmpSpec(specOfList(r.sel), [0, 1, 0]) >= 0);
 });
 
 test('U4b surfaces carry no U3 painted layers (only the --u3-px kit pixel is referenced)', () => {
@@ -130,7 +142,8 @@ test('rows that dimmed with opacity use the muted token; unselected Inbox and as
 
 // ---- U3 world art untouched ----
 test('U3 world art stays: sky zones, floor, brand mark/text are neither touched nor restyled by U4b', () => {
-  assert.doesNotMatch(u4, /\.sky-zone(?!s\)\)|\))|\.sq-floor|\.brand-mark|\.brand-text|\.chrome-glyph|--u3-brand|--u3-sprites|--u3-stars/);
+  const u4NoFont = u4rules.filter((r) => !/font-family/.test(r.body)).map((r) => r.sel + '{' + r.body + '}').join('\n'); // the font rule only EXEMPTS .brand-text
+  assert.doesNotMatch(u4NoFont, /\.sky-zone(?!s\)\)|\))|\.sq-floor|\.brand-mark|\.brand-text|\.chrome-glyph|--u3-brand|--u3-sprites|--u3-stars/);
   assert.match(css, /\.brand-text > span:first-child\s*\{[^}]*--u3-brand-vibesquad/);
   assert.match(css, /\.hub-body \.sq-floor\s*\{/);
   assert.match(css, /:root\[data-theme="light"\] \.sky-zones\s*\{/);

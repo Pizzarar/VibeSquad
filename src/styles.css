@@ -5646,10 +5646,10 @@ body { background-color: var(--bg); background-image: var(--u4-wash); background
 }
 /* U4b: quiet text buttons in the sidebar (collapse, row menus, add) show their frame on hover only.
    `:root:root` lifts these above the shared tool-surface rules (scope :is() weighs 0,2,0, item up to 0,1,1 for `.seg button`) so they win by order, not by accident. */
-:root:root .sidebar :is(.tchip, .sidebar-collapse-all-btn, .sidebar-collapse-btn, .sidebar-add-brainstorm-btn, .pin-done-toggle) {
+:root:root .sidebar :is(.tchip, .sidebar-collapse-all-btn, .sidebar-collapse-btn, .sidebar-add-brainstorm-btn, .pin-done-toggle, .pin-menu-btn) {
   background: transparent; border: 1px solid transparent; box-shadow: none; color: var(--muted); font-weight: 400; min-height: 0;
 }
-:root:root .sidebar :is(.tchip, .sidebar-collapse-all-btn, .sidebar-collapse-btn, .sidebar-add-brainstorm-btn, .pin-done-toggle):hover:not(:disabled) {
+:root:root .sidebar :is(.tchip, .sidebar-collapse-all-btn, .sidebar-collapse-btn, .sidebar-add-brainstorm-btn, .pin-done-toggle, .pin-menu-btn):hover:not(:disabled) {
   background: color-mix(in srgb, var(--violet) 22%, var(--panel)); border-color: var(--u4-edge); color: var(--text); box-shadow: none;
 }
 /* unselected Inbox row: a normal raised control (the shared chip rule's --bg ink would land on pastel violet) */
@@ -5672,3 +5672,7 @@ body { background-color: var(--bg); background-image: var(--u4-wash); background
 .pin-focus-bar .pin-lane-handle { background: var(--bg); color: var(--muted); border: 1px solid var(--u4-edge); box-shadow: none; }
 /* status pips: the sprite carries an INK rim (reads on light); the idle/closed fill is LINE, so give it a muted outline to hold >= 3:1 on the dark ramp */
 .sidebar :is(.signal.idle, .signal.closed), .pin-focus-bar :is(.signal.idle, .signal.closed) { outline: 1px solid var(--muted); outline-offset: 0; }
+
+/* one UI font for tool surfaces: the Silkscreen/Pixelify (--arcade/--display) rows, @code chips, breadcrumb and provider names fall back to Courier New and clash with --mono.
+   Scoped, not aliased globally (floor/sky keep --arcade); the brand block, terminals and diagrams keep their own fonts. */
+:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .pin-focus-bar) :not(.brand-text, .brand-text *, .xterm, .xterm *, svg, svg *) { font-family: var(--mono) !important; }
