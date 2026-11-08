@@ -6,10 +6,11 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   buildCatalog, clearProbeCache, clearUsageCache, getModels, getProviders, getUsage, handleProvidersApi, intervalMs, LOOP_TURN_THRESHOLD,
-  loadRunnerSettings, normalizeRunnerSettings, oneShotReviewRun, probeProviders, probeStats, readMergedUnits, readUsageLedger, readUsageLogSignals, readUsageReviews, runUsageReview, saveRunnerSettings, syncUsageLedger, usageStats,
+  loadRunnerSettings, normalizeRunnerSettings, oneShotReviewRun, parseReviewBullets, probeProviders, probeStats, readMergedUnits, readUsageLedger, readUsageLogSignals, readUsageReviews, runUsageReview, saveRunnerSettings, syncUsageLedger, usageStats,
 } from '../server/providers-catalog.mjs';
 import { saveUserSettings, loadUserSettings, saveRemoteAccess } from '../server/user-settings.mjs';
 import { realVibesquadHome } from '../server/test-guard.mjs';
+import { addInboxCards, readInboxCards, triageInboxCards } from '../server/inbox.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'vs-catalog-'));
 const okExec = (file, args, o, cb) => cb(null, `${path.basename(file)} 1.2.3\n`);
@@ -1347,4 +1348,116 @@ test('usa-10: GET /usage-export returns json or markdown, 400 on bad format', as
   assert.match(bad.data.error, /bad format/);
   const post = await call('POST', '/__vibesquad/providers/usage-export');
   assert.equal(post.code, 405);
+});
+
+// ---------------------------------------------------------------- usa-15: auto-route review bullets to bug-chaser inbox
+
+test('usa-15: parseReviewBullets strips markers/headings, skips the self-grade line, caps and truncates', () => {
+  const text = [
+    'Grade: prior review improved firstTryPassRate 0->1.',
+    '- Profile/Provider routing: shift implementation to Gemini for low-risk units.',
+    '2. Reduce review rounds by having Buddy pre-check the plan.',
+    'Loops/Tool friction:',
+    '* Cache tool results to cut re-fetching.',
+    'Previous review: no prior review.',
+    'a'.repeat(300),
+  ].join('\n');
+  const bullets = parseReviewBullets(text, { max: 5, maxLen: 100 });
+  assert.equal(bullets.length, 4);
+  assert.equal(bullets[0], 'Profile/Provider routing: shift implementation to Gemini for low-risk units.');
+  assert.equal(bullets[1], 'Reduce review rounds by having Buddy pre-check the plan.');
+  assert.equal(bullets[2], 'Cache tool results to cut re-fetching.');
+  assert.equal(bullets[3], `${'a'.repeat(99)}…`);
+});
+
+test('usa-15: parseReviewBullets skips the first line of a multi-line reply and treats a lone grade line as empty', () => {
+  assert.deepEqual(parseReviewBullets('No prior review yet.'), [], 'lone grade line -> no bullets');
+  assert.deepEqual(parseReviewBullets('- Use Gemini more for implementation.'), ['Use Gemini more for implementation.'], 'single bullet line kept');
+  assert.deepEqual(
+    parseReviewBullets('The prior suggestions moved firstTryPassRate up.\n- Route to Gemini.'),
+    ['Route to Gemini.'],
+    'first line dropped even when it does not match the grade regex',
+  );
+  assert.deepEqual(parseReviewBullets(undefined), []);
+  assert.deepEqual(parseReviewBullets(''), []);
+});
+
+test('usa-15: runUsageReview routes deduped bullets to the bug-chaser inbox and records sentCardIds', async () => {
+  const home = tmp();
+  const root = path.resolve(import.meta.dirname, '..');
+  const seed = addInboxCards(
+    { ideas: ['Route implementation to Gemini'], laneId: 'bug-chaser', teamId: 'vibesquad', source: 'seed', baseHome: home },
+    root,
+  );
+
+  const runOpus = async () => ({
+    ok: true,
+    text: [
+      'Grade: prior review improved KPIs.',
+      '- Route implementation to Gemini', // deduped against the seed card
+      '- Cache tool results to cut re-fetching', // new opus bullet
+      '- Cache tool results to cut re-fetching', // deduped against the previous opus bullet
+    ].join('\n'),
+    ms: 1,
+  });
+  const runGemini = async () => ({
+    ok: true,
+    text: [
+      'No prior review.',
+      '- Cache tool results to cut re-fetching', // deduped against the opus bullet
+      '- Reduce review rounds by pre-checking the plan', // new gemini bullet
+    ].join('\n'),
+    ms: 1,
+  });
+
+  const rec = await runUsageReview({ home, trigger: 'manual', usage: { totals: { turns: 2 } }, runOpus, runGemini });
+  assert.equal(rec.sentCardIds.length, 2, 'two non-duplicate bullets routed');
+
+  const cards = readInboxCards(home).filter((c) => c.laneId === 'bug-chaser');
+  assert.equal(cards.length, 3, 'seed + 2 routed');
+  assert.equal(cards.filter((c) => c.text === 'Route implementation to Gemini').length, 1, 'seed not duplicated');
+  assert.ok(cards.some((c) => c.text === 'Cache tool results to cut re-fetching' && c.source === 'usage-review:opus'));
+  assert.ok(cards.some((c) => c.text === 'Reduce review rounds by pre-checking the plan' && c.source === 'usage-review:gemini'));
+
+  const recs = readUsageReviews(home);
+  assert.equal(recs.length, 1);
+  assert.deepEqual(recs[0].sentCardIds, rec.sentCardIds);
+});
+
+test('usa-15: a model that fails to return ok contributes no inbox cards', async () => {
+  const home = tmp();
+  const runOpus = async () => ({ ok: false, error: 'quota exceeded', ms: 1 });
+  const runGemini = async () => ({ ok: true, text: 'No prior review.\n- Reduce review rounds.', ms: 1 });
+  const rec = await runUsageReview({ home, trigger: 'manual', usage: { totals: { turns: 1 } }, runOpus, runGemini });
+  assert.equal(rec.sentCardIds.length, 1, 'only the gemini bullet routed');
+  const cards = readInboxCards(home).filter((c) => c.laneId === 'bug-chaser');
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0].source, 'usage-review:gemini');
+});
+
+test('usa-15: forbidden real home -> no inbox write, empty sentCardIds', async () => {
+  const runOpus = async () => ({ ok: true, text: 'No prior review.\n- Route to Gemini.', ms: 1 });
+  const runGemini = async () => ({ ok: true, text: 'No prior review.\n- Reduce rounds.', ms: 1 });
+  const rec = await runUsageReview({ home: realVibesquadHome(), trigger: 'manual', usage: { totals: { turns: 1 } }, runOpus, runGemini });
+  assert.deepEqual(rec.sentCardIds, [], 'forbidden real home: nothing enqueued');
+  assert.equal(rec.opus.ok, true);
+});
+
+test('usa-15: triageInboxCards update accepts accepted/rejected and rejects bogus statuses', () => {
+  const home = tmp();
+  const root = path.resolve(import.meta.dirname, '..');
+  const seeded = addInboxCards(
+    { ideas: ['Route implementation to Gemini'], laneId: 'bug-chaser', teamId: 'vibesquad', source: 'seed', baseHome: home },
+    root,
+  );
+  const cardId = seeded.added[0].id;
+
+  assert.equal(triageInboxCards({ action: 'update', cardId, patch: { status: 'accepted' }, baseHome: home }, root).card.status, 'accepted');
+  assert.equal(triageInboxCards({ action: 'update', cardId, patch: { status: 'rejected' }, baseHome: home }, root).card.status, 'rejected');
+  assert.equal(triageInboxCards({ action: 'update', cardId, patch: { status: 'parked' }, baseHome: home }, root).card.status, 'parked');
+  assert.equal(triageInboxCards({ action: 'update', cardId, patch: { status: 'handed-off' }, baseHome: home }, root).card.status, 'handed-off');
+  assert.equal(triageInboxCards({ action: 'update', cardId, patch: { status: 'archived' }, baseHome: home }, root).card.status, 'archived');
+
+  assert.throws(() => triageInboxCards({ action: 'update', cardId, patch: { status: 'bogus' }, baseHome: home }, root), /Unknown inbox status "bogus"/);
+  assert.throws(() => triageInboxCards({ action: 'update', cardId, patch: { status: 'accept' }, baseHome: home }, root), /Unknown inbox status "accept"/);
 });
