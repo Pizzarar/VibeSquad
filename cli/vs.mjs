@@ -1473,8 +1473,8 @@ function commandPinMerge(flags) {
   if (!intoLane) throw new Error(`unknown target lane "${intoRaw}" in ${squadDef.name}`);
   if (fromLane.id === intoLane.id) throw new Error("source and target lanes must be different");
 
-  const fromBrief = readBrainstormSummary(fromLane.id).content;
-  const intoSummary = readBrainstormSummary(intoLane.id);
+  const fromBrief = readBrainstormSummary(fromLane.id, undefined, { teamId: squadDef.id }).content;
+  const intoSummary = readBrainstormSummary(intoLane.id, undefined, { teamId: squadDef.id });
   let merged = intoSummary.content.includes("## Open")
     ? intoSummary.content
     : newPinBrief(intoLane.id, intoLane.name || intoLane.id, "");
@@ -1490,7 +1490,7 @@ function commandPinMerge(flags) {
 
   merged = appendBulletsToSection(merged, "Decided", decidedBullets);
   merged = appendBulletsToSection(merged, "Open", openBullets);
-  const written = writeBrainstormSummary(intoLane.id, merged);
+  const written = writeBrainstormSummary(intoLane.id, merged, undefined, { teamId: squadDef.id });
 
   const nowIso = new Date().toISOString();
   const existingAliases = Array.isArray(intoLane.aliases) ? intoLane.aliases.map((a) => String(a).trim()).filter(Boolean) : [];
@@ -1579,11 +1579,11 @@ ${brief}`, live);
       (String(l.name ?? "").toLowerCase() === name.toLowerCase() || String(l.id).toLowerCase() === slug),
   );
   if (reopenTarget) {
-    const curSummary = readBrainstormSummary(reopenTarget.id);
+    const curSummary = readBrainstormSummary(reopenTarget.id, undefined, { teamId: squadDef.id });
     const updatedBrief = curSummary.content.includes("## Open")
       ? appendBulletsToSection(curSummary.content, "Open", [`- ${brief.replace(/\r?\n/g, "\n  ")}`])
       : newPinBrief(reopenTarget.id, name, brief);
-    const written = writeBrainstormSummary(reopenTarget.id, updatedBrief);
+    const written = writeBrainstormSummary(reopenTarget.id, updatedBrief, undefined, { teamId: squadDef.id });
     let file = resolveTeamsFilePath();
     if (path.basename(file) === "teams.example.json") file = path.join(BASE_DIR, "teams.json");
     const { value: cur } = readJsonFileWithBom(file, { fallback: null, label: "teams.json" });
@@ -1617,12 +1617,12 @@ ${brief}`, live);
   const taken = new Set(takenLaneIds(TEAM_DEFS.flatMap((t) => t.lanes ?? [])));
   let id = uniqueLaneId(slugLaneId(name), taken);
   // Lane ids and brief files are global: skip ids that still have a brief on disk.
-  while (fs.existsSync(readBrainstormSummary(id).fullPath)) {
+  while (fs.existsSync(readBrainstormSummary(id, undefined, { teamId: squadDef.id }).fullPath)) {
     taken.add(id);
     id = uniqueLaneId(slugLaneId(name), taken);
   }
 
-  const written = writeBrainstormSummary(id, newPinBrief(id, name, brief));
+  const written = writeBrainstormSummary(id, newPinBrief(id, name, brief), undefined, { teamId: squadDef.id });
   let file = resolveTeamsFilePath();
   if (path.basename(file) === "teams.example.json") file = path.join(BASE_DIR, "teams.json");
   // Re-read the file right before the write (the UI may have saved since TEAM_DEFS loaded) and swap it in with a

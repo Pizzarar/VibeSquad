@@ -866,24 +866,25 @@ async function handleBrainstormSummary(req, res, rootDir) {
     if (req.method === "GET") {
       const q = new URL(req.url, "http://x").searchParams;
       const lane = q.get("lane") || q.get("laneId") || "vibesquad";
-      const s = readBrainstormSummary(lane, rootDir);
+      const s = readBrainstormSummary(lane, rootDir, { teamId: q.get("teamId") || q.get("team") || "" });
       return sendJson(res, 200, { ok: true, laneId: s.laneId, path: s.path, content: s.content, revision: contentRevision(s.content) });
     }
     if (req.method === "POST" || req.method === "PUT") {
       const body = await readCleanBody(req);
       const lane = body.laneId || body.lane || "vibesquad";
+      const teamId = String(body.teamId || body.team || "");
       const content = String(body.content ?? "");
       if (content.length >= 20_000) {
         return sendJson(res, 400, { ok: false, error: `Summary is ${content.length} chars; must be < 20000 chars (~5k tokens)` });
       }
       // Like teams.json: a write that sends the revision it read gets 409 if the brief changed since.
       if (body.revision !== undefined) {
-        const cur = readBrainstormSummary(lane, rootDir);
+        const cur = readBrainstormSummary(lane, rootDir, { teamId });
         const revision = contentRevision(cur.content);
         if (body.revision !== revision) return sendJson(res, 409, { ok: false, error: "brief changed", content: cur.content, revision });
       }
-      const s = writeBrainstormSummary(lane, content, rootDir);
-      return sendJson(res, 200, { ok: true, laneId: s.laneId, path: s.path, content: s.content, revision: contentRevision(s.content) });
+      const s = writeBrainstormSummary(lane, content, rootDir, { teamId });
+      return sendJson(res, 200, { ok: true, laneId: s.laneId, path: s.path, content: s.content, revision: contentRevision(s.content), ...(s.fallback ? { fallback: true } : {}) });
     }
     res.statusCode = 405;
     res.end();

@@ -17,6 +17,9 @@ let toast = "";
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 const toastListeners = new Set<() => void>();
 
+/** The server saved a brief in its runtime folder (lane folder not found); say so instead of silently losing it. */
+export const warnBriefFallback = (laneId: string) => showPinToast(`Brief for ${laneId} was saved in the app folder, not the project. Check the lane path.`);
+
 export function showPinToast(msg: string) {
   toast = msg;
   toastListeners.forEach((l) => l());
@@ -115,7 +118,7 @@ export function SpinOffCard({ pin, offer, variant = "tile" }: { pin: Pin; offer:
   if (hidden || !teams.length) return null;
   const n = teams.length;
   const go = async () => {
-    const results = await createSpinOffPins(offer.id, pin.squad.id, offer.teams); // the full list: runSpinOffOnce skips the rows already created
+    const results = await createSpinOffPins(offer.id, pin.squad.id, offer.teams, { onBriefFallback: warnBriefFallback }); // the full list: runSpinOffOnce skips the rows already created
     if (!results) return; // already running (double click, or the other card)
     showPinToast(describeSpinOff(results));
     if (results.every((r) => r.pin)) {
@@ -383,7 +386,7 @@ export function IdeaBox({
         return;
       }
       setLastBrainstormProfile(selectedProfile);
-      const pin = await createPin(view.team.id, resolveIdeaTeamName(name, rawIdea) || "New team", rawIdea, { lastProfile: selectedProfile });
+      const pin = await createPin(view.team.id, resolveIdeaTeamName(name, rawIdea) || "New team", rawIdea, { lastProfile: selectedProfile, onBriefFallback: warnBriefFallback });
       onClose();
       showPinToast(`Pinned ${pin.lane.name}`);
       await onQuickStart(pin);
