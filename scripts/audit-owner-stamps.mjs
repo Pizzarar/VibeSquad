@@ -241,7 +241,59 @@ export function gitMerges(repo) {
   } catch { return []; }
 }
 
-function printWaste({ buckets, ownerInputs, waste: { relay, handoffs, fixers } }) {
+// ================= S6 bucket 5: fix offered as a question =================
+// An agent output whose closing paragraphs ask permission for a fix/step it could just have done.
+// Not counted: real owner choices (an A/B option list with no stated lean) and risky-step confirmations.
+export const OFFER_PATTERNS = [
+  /\b(want me to|do you want me to|would you like me to|should i|shall i|can i|ok(ay)? if i)\b[^?]*\?/,
+  /\b(ok(ay)?|good|fine) with (that|this|it)\?/,
+  /\bgo on (spawning|sending|writing|fixing|dispatching)\b[^?]*\?/,
+  /\bsend (it|m\d+|p\d+[a-z]?|this|that)\?/,
+  /\b(say so|say the word)\b[^.]{0,40}\b(i'?ll|i will|and i)\b/,
+  /\bi can [^.?]{1,100} if you('d| would)? (like|want|prefer)\b/,
+  /\bif you want( it| that)?( done)?( now)?,? (i can|i'?ll)\b/,
+];
+export const RISKY_STEP = /\b(delete|deleting|force[- ]?push|release|publish|sign(ing)?|overwrite|reset --hard|wipe|drop (the )?(table|branch)|replace the app|pay|spend|cost)\b/i;
+export const OPTION_LIST = /(^|\n)\s*(?:[-*\d.]+\s*)?(?:\*\*)?\(?[a-c][).]\)?(?:\*\*)?[\s:]/gi;
+export const STATED_LEAN = /\bi (still |strongly )?(lean|recommend|suggest|propose)|\bmy (pick|recommendation)|\bi'd (go|pick|choose|send|give|keep)\b/i;
+export function offersFix(text) {
+  if (typeof text !== 'string') return false;
+  const t = text.trim();
+  if (t.length < 40) return false;
+  const close = t.slice(-450).split(/\n\s*\n/).slice(-2).join(' ');
+  // A question that restarts with ", or ..." / "or should I ..." offers alternatives = a real choice, not a fix offer.
+  const hit = OFFER_PATTERNS.map((p) => close.toLowerCase().match(p)).find((m) => m && !(m[0].endsWith('?') && /,\s*or\b|\bor (should|do you|would you|want|shall)\b/.test(m[0])));
+  if (!hit) return false;
+  if (RISKY_STEP.test(close)) return false;
+  const tail = t.slice(-900);
+  if ((tail.match(OPTION_LIST) || []).length >= 2 && !STATED_LEAN.test(tail)) return false;
+  return true;
+}
+
+export function fixOfferBucket(dir, { since, until } = {}) {
+  const r = { total: 0, outputs: 0, byLane: {}, byRole: {}, byLaneRole: {}, examples: [] };
+  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.jsonl'))) {
+    let meta = {};
+    for (const line of fs.readFileSync(path.join(dir, f), 'utf8').split('\n')) {
+      if (!line) continue;
+      let e; try { e = JSON.parse(line); } catch { continue; }
+      if (e.type === 'created') { meta = e.meta || {}; continue; }
+      if (e.type !== 'output' || typeof e.text !== 'string') continue;
+      if ((since !== undefined && e.ts < since) || (until !== undefined && e.ts > until)) continue;
+      r.outputs++;
+      if (!offersFix(e.text)) continue;
+      const lane = meta.lane || '(none)', role = meta.role || '(none)', lr = `${lane}/${role}`;
+      r.total++;
+      r.byLane[lane] = (r.byLane[lane] || 0) + 1;
+      r.byRole[role] = (r.byRole[role] || 0) + 1;
+      r.byLaneRole[lr] = (r.byLaneRole[lr] || 0) + 1;
+      r.examples.push({ run: f.replace(/\.jsonl$/, ''), lane, role, ts: e.ts, tail: e.text.trim().slice(-200) });
+    }
+  }
+  return r;
+}
+
+function printWaste({ buckets, ownerInputs, waste: { relay, handoffs, fixers, fixOffers } }) {
   console.log('\n== waste report ==');
   console.log(`(1) rubber stamps: ${buckets['rubber stamp'] || 0} of ${ownerInputs} owner inputs`);
   console.log(`(2) owner-as-relay: strict (owner:true, report-shaped, VS notices/forwards excluded) = ${relay.strict}`);
@@ -256,6 +308,10 @@ function printWaste({ buckets, ownerInputs, waste: { relay, handoffs, fixers } }
   console.log('    multi-worker:', JSON.stringify(fixers.multiWorker.slice(0, 15)));
   console.log('    lane bounce:', JSON.stringify(fixers.laneBounce.slice(0, 10)));
   console.log('    fix after merge:', JSON.stringify(fixers.fixAfterMerge.slice(0, 10)));
+  console.log(`(5) fix offered as a question: ${fixOffers.total} of ${fixOffers.outputs} agent outputs`);
+  console.log('    by lane:', JSON.stringify(fixOffers.byLane));
+  console.log('    by role:', JSON.stringify(fixOffers.byRole));
+  for (const x of fixOffers.examples.slice(0, 3)) console.log(`    e.g. ${x.run} ${x.lane}/${x.role}: ...${x.tail.slice(-120).replace(/\n/g, ' ')}`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -263,7 +319,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const r = audit(args);
   if (args.waste) {
     const runs = loadRuns(args.dir);
-    r.waste = { relay: relayBucket(runs, args), handoffs: handoffBucket(runs), fixers: fixerBucket(runs, gitMerges(args.repo)) };
+    r.waste = { relay: relayBucket(runs, args), handoffs: handoffBucket(runs), fixers: fixerBucket(runs, gitMerges(args.repo)), fixOffers: fixOfferBucket(args.dir, args) };
   }
   if (args.json) console.log(JSON.stringify(r, null, 2));
   else {
