@@ -5759,5 +5759,17 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 .drawer-subagents-bar { max-height: calc(var(--u3-px) * 28 + var(--sp-2) * 2); }
 .drawer-subagent-chip { min-width: 0; }
 .drawer-subagent-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Squads home huddle: portraits sit side by side (they were stacked with a -10px margin, so their click targets overlapped) and each pip sits under its own portrait instead of floating over the neighbour. */
+.squad-home-huddle { gap: var(--sp-2); padding-left: var(--sp-1); flex-wrap: wrap; align-items: flex-start; }
+.squad-home-portrait { display: inline-flex; flex-direction: column; align-items: center; gap: var(--sp-1); }
+.squad-home-portrait:not(:first-child) { margin-left: 0; }
+.squad-home-portrait-pip { position: static; justify-content: center; }
+/* Avatar: the sprite is left-aligned and the provider badge sits in its own gutter (pixel.tsx AVATAR_BADGE_GUTTER) beside it, never over the art. */
+.avatar { justify-content: flex-start; }
+.avatar .prov-badge { right: 0; bottom: 0; }
+/* Sidebar: brand row wraps its LAN badge + collapse toggle to a second line instead of pushing the toggle past the sidebar edge; lane rows tighten their gap so short names are not ellipsized. */
+.sidebar:not(.collapsed) .brand { flex-wrap: wrap; gap: var(--sp-1); }
+.sidebar:not(.collapsed) .brand .sidebar-collapse-btn { margin-left: auto; }
+.sidebar .pin-row { gap: var(--sp-1); }
 /* Banner text stays on one row (ellipsis, full text in the title attr) so narrow screens never grow it past the painted strip. */
 .exposed-network-banner > span, .read-only-banner > span, .config-warning-banner > span, .update-available-banner > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
