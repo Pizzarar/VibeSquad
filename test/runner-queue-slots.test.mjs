@@ -349,3 +349,30 @@ test('M: a late running emit after park is dropped (log stays parked, no slot re
   assert.ok(runner._parkedSpec(a), 'still resumable (_parkedSpec not corrupted)');
   runner.shutdown();
 });
+
+test('claude: a standalone cancel after an interrupt-send does not leak an extra turn slot', async () => {
+  const spawnImpl = fakeClaudeSpawn();
+  const runner = new Runner({ dir: tmp(), adapters: { claude: createClaudeAdapter({ spawnImpl, mcp: false }) }, turnCaps: { claude: 1 }, parkGraceMs: 0 });
+  const a = mk(runner, { prompt: 'one' });
+  await tick();
+  assert.equal(runner.live.get(a).inflight, 1, 'turn 1 running');
+
+  // 1) interrupt-send: cancel turn 1 + deliver turn 2 (adapter pending=2, interrupted=false).
+  runner.send(a, 'two', { activeTurnBehavior: 'interrupt' });
+  // 2) a standalone cancel before turn 1's result sets interrupted=true again.
+  runner.cancel(a);
+  // 3) turn 1's result: pending 2 -> 1. With the fix, `interrupted` is cleared here.
+  spawnImpl.calls[0].child.result();
+  await tick();
+  assert.equal(runner.live.get(a).inflight, 1, 'turn 2 running after turn 1 result');
+
+  // 4) a normal steer must merge into turn 2, not open a third slot.
+  runner.send(a, 'three');
+  // turn 2 (the merged interrupt-send + normal steer) ends.
+  spawnImpl.calls[0].child.result();
+  await tick(30);
+  assert.equal(runner.live.get(a)?.inflight ?? 0, 0, 'inflight 0: the normal steer did not open an extra slot');
+  assert.equal(runner.live.has(a), false, 'parked after turn 2 (no leaked slot)');
+  assert.equal(runner.status(a).status, 'parked', 'no leaked slot');
+  runner.shutdown();
+});
