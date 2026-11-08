@@ -82,7 +82,7 @@ Expected: the `vs` command prints its usage text without an error (`cli/vs.mjs:2
 3. If you installed your provider after the checklist opened, **Check again** refreshes it. Sign in with **your own**
    account. Never reuse someone else's login.
 4. Add your project. In VibeSquad, click **+ New squad** at the bottom of the left column (`src/App.tsx:398`). In the
-   **NEW SQUAD** window (`src/NewSquadModal.tsx`) leave **Folder path** selected, type this folder, check the
+   **NEW SQUAD** window (`src/NewSquadModal.tsx`) type this folder in **Folder path**, check the
    **Squad name**, leave **Start a Buddy** ticked and pick **BRAINSTORM - CLAUDE** or **BRAINSTORM - GEMINI**, then
    click **Create**.
 
