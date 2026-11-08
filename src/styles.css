@@ -1176,6 +1176,16 @@ code {
   color: var(--pink-t);
 }
 
+.tl-blip {
+  font-size: 11px;
+  color: var(--muted);
+  font-style: italic;
+  letter-spacing: 0.04em;
+  text-shadow: 0 0 6px var(--cyan-t);
+  opacity: 0.8;
+  cursor: help;
+}
+
 .tl-note {
   font-size: 11px;
   color: var(--muted);
@@ -1815,6 +1825,11 @@ code {
 .btn-brainstorm-restart {
   border-color: var(--cyan);
   color: var(--cyan-t);
+}
+/* The U3 primary sprite paints an opaque teal fill (#4fd6cf dark / #1a868a light); near-black text clears 4.5:1 on both. */
+.brainstorm-ctx-actions .btn-brainstorm-restart {
+  color: #07040f;
+  text-shadow: none;
 }
 .brainstorm-ctx-bar.tone-amber .btn-brainstorm-restart {
   border-color: var(--amber);

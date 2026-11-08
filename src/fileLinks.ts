@@ -122,3 +122,39 @@ export function lookupBareName(agentId: string | undefined, name: string, fetche
   return undefined;
 }
 export const _resetBareNames = () => { resolved.clear(); inflight.clear(); };
+
+/** A markdown link href that points at the local disk (`file:` URL, drive path or UNC), not the web. */
+export const isLocalHref = (href: string) => /^(?:file:|[A-Za-z]:[\x5c/]|[\x5c/]{2})/i.test(href.trim());
+
+export type LocalLinkTarget = { path: string; line: null; isDir: false } | { path: null; name: string };
+
+/**
+ * Map a local-disk md link to something the Files dock can open. Inside the agent's cwd → repo-relative;
+ * inside a sanctuary worktree (`…/worktrees/<repo>/<unit>/…`) → from `worktrees` on, which the server's
+ * findInWorktrees resolves; anything else → `{ path: null, name }` so the caller can say why nothing opened.
+ * Only `file:///` (or `file://localhost/`) + a drive or POSIX path and plain drive paths are accepted: UNC in any
+ * form, remote hosts, undecodable text and any `.`/`..` segment are refused.
+ */
+export function localLinkTarget(href: string, cwd?: string): LocalLinkTarget {
+  const miss = (text: string): LocalLinkTarget => ({ path: null, name: text.split(/[\x5c/]/).filter(Boolean).pop() ?? text });
+  // Query/fragment go first so a decoded %23 or %3F in a filename survives.
+  let raw = href.trim().replace(/[?#].*$/, "");
+  const fm = /^file:\/\/(?:localhost)?(\/.*)?$/i.exec(raw);
+  if (/^file:/i.test(raw)) {
+    if (!fm || !fm[1]) return miss(raw);
+    raw = /^\/[A-Za-z]:/.test(fm[1]) ? fm[1].slice(1) : fm[1]; // drive paths lose the URL slash, POSIX keeps it
+  }
+  let p: string;
+  try { p = decodeURIComponent(raw); } catch { return miss(raw); }
+  p = p.replaceAll("\\", "/");
+  if (!/^(?:[A-Za-z]:\/|\/(?!\/))/.test(p) || p.split("/").some((seg) => seg === "." || seg === "..")) return miss(p);
+  const base = (cwd ?? "").replaceAll("\\", "/").replace(/\/$/, "");
+  // Windows drive paths are case-insensitive.
+  if (base && p.toLowerCase().startsWith(base.toLowerCase() + "/")) {
+    const rel = normalizeRepoPath(p.slice(base.length + 1));
+    if (rel) return { path: rel, line: null, isDir: false };
+  }
+  const wt = /\/worktrees\/([^/]+\/[^/]+\/.+)$/i.exec(p);
+  const rel = wt ? normalizeRepoPath(`worktrees/${wt[1]}`) : null;
+  return rel ? { path: rel, line: null, isDir: false } : miss(p);
+}

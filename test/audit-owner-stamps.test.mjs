@@ -76,3 +76,51 @@ test('fixerBucket finds multi-worker, lane bounce and fix-after-merge; skips rev
   assert.equal(unitOf('Branch unit-a-b, commit'), 'unit-a-b');
   assert.equal(isReviewer('Review - Gemini', 'x'), true);
 });
+
+import { isImplementer, classifySuccessor, ownUnitFromText } from '../scripts/audit-owner-stamps.mjs';
+
+const wk = (o) => run({ role: 'worker', profile: 'Implement - Sonnet', outputs: 5, lastStatus: 'idle', ...o, inputs: [{ text: o.text || 'TASK: unit-x ROLE: implement' }] });
+
+test('isImplementer excludes digests, art duet, leads, reviewers, verify/triage/pre-check', () => {
+  assert.equal(isImplementer(wk({ id: 'a' })), true);
+  assert.equal(isImplementer(wk({ id: 'a', labels: { job: 'fix B6 review' } })), true);
+  assert.equal(isImplementer(wk({ id: 'b', labels: { digestFor: 'rn-1' } })), false);
+  assert.equal(isImplementer(wk({ id: 'b', profile: 'Pre-check - Flash', text: 'You are a digest agent. Inspect' })), false);
+  assert.equal(isImplementer(wk({ id: 'c', text: 'You are a digest agent. Inspect the final result' })), false);
+  for (const profile of ['Art Painter - Opus', 'Art Director - Gemini', 'Review - Gemini', 'Lead - Claude']) assert.equal(isImplementer(wk({ id: 'd', profile })), false, profile);
+  for (const job of ['C2 joint verify', 'triage AGY test fails', 'spawn probe 3', 'review D5']) assert.equal(isImplementer(wk({ id: 'e', labels: { job } })), false, job);
+  assert.equal(isImplementer(run({ id: 'f', role: 'lead', inputs: [{ text: 'x' }] })), false);
+});
+
+test('ownUnitFromText ignores units named only in prose', () => {
+  assert.equal(ownUnitFromText('Branch `unit-a-b` (0e44c2e)'), 'unit-a-b');
+  assert.equal(ownUnitFromText('@bugc B5 `unit-resume-x`. You are'), 'unit-resume-x');
+  assert.equal(ownUnitFromText('Doc-only task, read merged unit-stream-s2 for context'), null);
+});
+
+test('classifySuccessor covers the five classes', () => {
+  const pred = wk({ id: 'p', ts: 1000, endTs: 2000, labels: { job: 'B1 foo' } });
+  const next = (o) => wk({ id: 'n', ts: 3000, endTs: 4000, ...o });
+  assert.equal(classifySuccessor(wk({ id: 'p', outputs: 0, lastStatus: 'queued' }), next({})), 'respawn after stall');
+  assert.equal(classifySuccessor(wk({ id: 'p', lastStatus: 'running' }), next({})), 'respawn after stall');
+  assert.equal(classifySuccessor(pred, next({ labels: { job: 'B1 foo' } })), 'duplicate dispatch');
+  assert.equal(classifySuccessor(pred, next({ ts: 2010, labels: { job: 'other' } })), 'duplicate dispatch');
+  assert.equal(classifySuccessor(pred, next({ labels: { job: 'B1 fix1' } })), 'review-fix round');
+  assert.equal(classifySuccessor(pred, next({ ts: 2000 + 2 * 3600 * 1000, labels: { job: 'B1 rework' } })), 'lead re-dispatch');
+  assert.equal(classifySuccessor(pred, next({ ts: 2000 + 600000, labels: { job: 'B2 next block' } })), 'follow-up');
+  assert.equal(classifySuccessor(pred, next({ ts: 2000 + 2 * 3600 * 1000, labels: { job: 'B1 rebase' } })), 'follow-up');
+});
+
+test('fixerBucket counts only implementers and classes each unit by its worst successor', () => {
+  const d = (i) => wk({ id: 'd' + i, labels: { digestFor: 'rn-a' }, text: 'TASK: unit-u ROLE: x' });
+  const runs = [
+    wk({ id: 'a', ts: 1000, endTs: 2000, labels: { job: 'U one' }, text: 'Branch unit-u' }),
+    d(1), d(2),
+    wk({ id: 'b', ts: 3000, endTs: 4000, labels: { job: 'U fix1' }, text: 'Branch unit-u' }),
+    wk({ id: 'solo', labels: { job: 'S' }, text: 'Branch unit-solo' }),
+  ];
+  const r = fixerBucket(runs);
+  assert.deepEqual(r.multiWorker, [['unit-u', 2]]);
+  assert.deepEqual(r.classes['review-fix round'], ['unit-u']);
+  assert.equal(r.successorClasses['review-fix round'], 1);
+});

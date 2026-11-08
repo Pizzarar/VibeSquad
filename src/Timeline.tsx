@@ -19,14 +19,15 @@ import { parseCommitToken } from "./commitLinks";
 import { openRightDockTab } from "./RightDock";
 import { perfEndPainted, perfSendEvent } from "./perf";
 import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, coalesceReplies, hasMoreOf, joinPages, markTurnBoundary, matchesFilter, localPrompts, localSearch, mergeLiveItem, maxEntrySeq, syncNeeded, latestReasoningIndex, reasoningText, sortedHits, stepIndex, type SearchLocation, type TimelineFilter, type TimelinePrompt } from "./timelineFilter";
-import { BARE_NAME_RE, BARE_PATH_RE, bareNamesVersion, lookupBareName, parseFileToken, subscribeBareNames } from "./fileLinks";
+import { BARE_NAME_RE, BARE_PATH_RE, bareNamesVersion, isLocalHref, localLinkTarget, lookupBareName, parseFileToken, subscribeBareNames } from "./fileLinks";
 import { toolStartsExpanded, usePref } from "./prefs";
 import { getPanes } from "./panes";
+import { recoveredBlips } from "./transientBlip";
 import { SubagentList } from "./SubagentList";
 import { Spinner, Stamp, TimelineSkeleton, useDelayedBusy } from "./QuickWinsUi";
 import { MermaidView } from "./MermaidView";
 import { noteTimelineOffers, useLooksDoneId } from "./PinGrid";
-import { SpinOffCard, SendToCard, findPinForAgent } from "./PinIdeas";
+import { SpinOffCard, SendToCard, findPinForAgent, showPinToast } from "./PinIdeas";
 import { LooksDoneCard } from "./PinDone";
 import { hasLooksDone, isHubPin, parseSendTo, parseSpinOff, sendToCardId, spinOffCardId } from "./pins";
 
@@ -321,7 +322,17 @@ function renderInline(text: string, agentId?: string): React.ReactNode[] {
         ),
       );
     } else if (m[8] !== undefined) {
-      // link
+      // link; a file:// or drive-path href can't open from an http origin, so route it to the Files dock
+      if (isLocalHref(m[10])) {
+        const lt = localLinkTarget(m[10], agentId ? getAgentCwd(agentId) : undefined);
+        const open = () => (lt.path !== null ? openFileTarget(lt) : showPinToast(`Can't open ${lt.name}: outside the workspace`));
+        nodes.push(
+          <button key={keyIdx++} className="tl-file-link" data-testid="tl-file-link" title={m[10]}
+            onClick={open}>{m[9]}</button>,
+        );
+        last = m.index + m[0].length;
+        continue;
+      }
       nodes.push(
         <a key={keyIdx++} href={m[10]} target="_blank" rel="noopener noreferrer">{m[9]}</a>,
       );
@@ -700,6 +711,7 @@ export function TimelineItem({
   selected = false,
   onSelect,
   latestReasoning = false,
+  blip = null,
 }: {
   e: Entry;
   agentId: string;
@@ -709,6 +721,8 @@ export function TimelineItem({
   onSelect?: () => void;
   /** The most recent thought in the loaded timeline opens by default; a user toggle still wins. */
   latestReasoning?: boolean;
+  /** Set when this is a transient error the agent recovered from: renders the "signal interrupted" blip. */
+  blip?: { raw: string; line: string } | null;
 }) {
   const it = e.item;
   // null = not toggled yet: tool rows follow Settings › Chat › Collapse successful tool calls.
@@ -864,6 +878,7 @@ export function TimelineItem({
       );
 
     case "error":
+      if (blip) return <div className="tl tl-blip" data-testid="tl-blip" title={blip.raw}>{blip.line}</div>;
       return <div className="tl tl-error">{formatToolError(it.message ?? it.error)}</div>;
 
     case "notification":
@@ -1185,6 +1200,7 @@ export function Timeline({
   const [pendingJump, setPendingJump] = useState<{ seq: number; n: number } | null>(null);
   const base = cut ? truncateAfter(entries, cut) : entries;
   const shown = filterEntries(base, filter);
+  const blips = useMemo(() => recoveredBlips(base, agentStatus, formatToolError), [base, agentStatus]);
   const slowFirstLoad = useDelayedBusy(!loaded && entries.length === 0);
   const slowMore = useDelayedBusy(loadingMore);
   const slowSearch = useDelayedBusy(searching);
@@ -1460,6 +1476,7 @@ export function Timeline({
             onParkText={onParkText}
             onRewound={(x) => { cutLen.current = entries.length; setCut(x); }}
             latestReasoning={e === entries[latestReasoningIndex(entries)]}
+            blip={blips.get(e) ?? null}
             selected={selectedEntryKey === String(e.seqStart ?? i)}
             onSelect={() => setSelectedEntryKey((k) => (k === String(e.seqStart ?? i) ? null : String(e.seqStart ?? i)))}
           />

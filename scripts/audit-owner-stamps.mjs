@@ -110,10 +110,12 @@ export function loadRuns(dir) {
     for (const line of fs.readFileSync(path.join(dir, f), 'utf8').split('\n')) {
       if (!line) continue;
       let e; try { e = JSON.parse(line); } catch { continue; }
-      if (e.type === 'created') { run.ts = e.ts; run.cwd = e.cwd || ''; Object.assign(run, { role: e.meta?.role, lane: e.meta?.lane, team: e.meta?.team, profile: e.meta?.profile, labels: e.meta?.labels || {} }); }
+      if (e.type === 'created') { run.ts = e.ts; run.cwd = e.cwd || ''; Object.assign(run, { role: e.meta?.role, lane: e.meta?.lane, team: e.meta?.team, profile: e.meta?.profile, title: e.meta?.title, labels: e.meta?.labels || {} }); }
       else if (e.type === 'output') run.outputs++;
+      else if (e.type === 'status') { run.lastStatus = e.status || e.state || run.lastStatus; run.endTs = e.ts; }
       else if (e.type === 'usage') run.maxCtx = Math.max(run.maxCtx, e.contextTokens || 0);
       else if (e.type === 'input') run.inputs.push(e);
+      if (e.ts) run.endTs = Math.max(run.endTs || 0, e.ts);
     }
     if (run.ts) runs.push(run);
   }
@@ -164,20 +166,63 @@ export function handoffBucket(runs) {
   return r;
 }
 
-// (4) fixers passed around. merges = [{ts, branch}] (git merge commits on master).
+// (4) fixers passed around. Only implementers count: runner profile/labels first, text as fallback.
+// Non-implementer profiles (reviewers, digests, art duet, leads) and non-implementing jobs are excluded.
+export const NON_IMPL_PROFILE = /^(Review|Pre-check|Art Painter|Art Director|Lead)\b/i;
+export const NON_IMPL_JOB = /\b(re-?review|review|verify|triage|scout|pre-?check|smoke|digest|audit|baseline|probe|painter|director)\b/i;
+export const NON_IMPL_TEXT = /^(You are a digest agent|TASK:\s*review|Read-only|READ-ONLY)|ROLE:\s*review/i;
+export function isImplementer(run) {
+  if (run.role !== 'worker') return false;
+  if (run.labels?.digestFor) return false;
+  if (NON_IMPL_PROFILE.test(run.profile || '')) return false;
+  const job = run.labels?.job || run.title || '';
+  if (NON_IMPL_JOB.test(job) && !/\bfix/i.test(job)) return false;
+  return !NON_IMPL_TEXT.test((run.inputs[0]?.text || '').slice(0, 200));
+}
+
+// Why did unit get a second implementer? Classes, in waste priority order (the unit's class is its worst one).
+export const FIXER_CLASSES = ['respawn after stall', 'duplicate dispatch', 'lead re-dispatch', 'review-fix round', 'follow-up'];
+export const STALLED_STATUS = /^(queued|starting|running)$/;
+export const REDISPATCH_GAP_MS = 3600 * 1000;
+const normJob = (r) => (r.labels?.job || r.title || '').toLowerCase().replace(/^.*·\s*/, '').trim();
+export function classifySuccessor(pred, succ) {
+  const stalled = pred.outputs === 0 || STALLED_STATUS.test(pred.lastStatus || '');
+  if (stalled) return 'respawn after stall';
+  if (normJob(pred) && normJob(pred) === normJob(succ)) return 'duplicate dispatch';
+  const job = succ.labels?.job || succ.title || '';
+  const txt = (succ.inputs[0]?.text || '').slice(0, 300);
+  if (/\b(fix\w*|finding\w*|nits?|review)\b/i.test(job) || /review (found|finding|fix)|findings|\bFAIL\b/i.test(txt)) return 'review-fix round';
+  if (succ.ts < (pred.endTs || pred.ts) + 60000) return 'duplicate dispatch';
+  if (!/rebase/i.test(job) && succ.ts - (pred.endTs || pred.ts) > REDISPATCH_GAP_MS) return 'lead re-dispatch';
+  return 'follow-up';
+}
+
+// A unit named only in prose ("read merged unit-x") is not this worker's unit: require a branch/worktree/task cue.
+export function ownUnitFromText(text) {
+  const head = text.slice(0, 600);
+  const m = head.match(/(?:branch|worktree|task)[\s`:]*\(?`?(unit-[a-z0-9][a-z0-9-]*)/i) || head.slice(0, 200).match(/`(unit-[a-z0-9][a-z0-9-]*)`/);
+  return m ? m[1] : null;
+}
+
+// merges = [{ts, branch}] (git merge commits on master).
 export function fixerBucket(runs, merges = []) {
   const units = {};
   for (const x of runs) {
-    if (x.role !== 'worker' || !x.inputs[0]) continue;
-    const first = x.inputs[0].text || '';
-    if (isReviewer(x.profile, first)) continue;
-    const u = unitOf(first); if (!u) continue;
-    const e = (units[u] ||= { workers: new Set(), lanes: new Set(), firstTs: x.ts });
-    e.workers.add(x.id); if (x.lane) e.lanes.add(x.lane); e.firstTs = Math.min(e.firstTs, x.ts);
+    if (!x.inputs[0] || !isImplementer(x)) continue;
+    const u = unitOf(x.labels?.job || x.title || '') || ownUnitFromText(x.inputs[0].text || ''); if (!u) continue;
+    const e = (units[u] ||= { runs: [], workers: new Set(), lanes: new Set(), firstTs: x.ts });
+    e.runs.push(x); e.workers.add(x.id); if (x.lane) e.lanes.add(x.lane); e.firstTs = Math.min(e.firstTs, x.ts);
   }
-  const r = { unitsSeen: Object.keys(units).length, multiWorker: [], laneBounce: [], fixAfterMerge: [] };
+  const r = { unitsSeen: Object.keys(units).length, multiWorker: [], laneBounce: [], fixAfterMerge: [], classes: Object.fromEntries(FIXER_CLASSES.map((c) => [c, []])), successorClasses: Object.fromEntries(FIXER_CLASSES.map((c) => [c, 0])) };
   for (const [u, e] of Object.entries(units)) {
-    if (e.workers.size >= 2) r.multiWorker.push([u, e.workers.size]);
+    if (e.workers.size >= 2) {
+      r.multiWorker.push([u, e.workers.size]);
+      const rs = e.runs.sort((a, b) => a.ts - b.ts);
+      const cls = rs.slice(1).map((s, i) => classifySuccessor(rs[i], s));
+      cls.forEach((c) => r.successorClasses[c]++);
+      const worst = FIXER_CLASSES.find((c) => cls.includes(c));
+      r.classes[worst].push(u);
+    }
     if (e.lanes.size >= 2) r.laneBounce.push([u, [...e.lanes].join(',')]);
     if (FIX_UNIT.test(u)) {
       const base = u.replace(/-?(fix|followup|hotfix|regress|redo)\w*/g, '').replace(/-+$/, '');
@@ -207,6 +252,7 @@ function printWaste({ buckets, ownerInputs, waste: { relay, handoffs, fixers } }
   console.log('    fixture runs by lane:', JSON.stringify(handoffs.fixtureByLane));
   for (const [lane, c] of Object.entries(handoffs.churn)) console.log(`    churn ${lane}: runs ${c.runs} (handoff successors ${c.handoffSuccessors}, fresh ${c.freshSpawns}, thin <5 outputs ${c.thinRuns})`);
   console.log(`(4) fixers: ${fixers.unitsSeen} units seen; 2+ implementers ${fixers.multiWorker.length}; across lanes ${fixers.laneBounce.length}; fix unit <24h after merge ${fixers.fixAfterMerge.length}`);
+  for (const c of FIXER_CLASSES) console.log(`    class ${c}: ${fixers.classes[c].length} units (${fixers.successorClasses[c]} extra implementers) ${JSON.stringify(fixers.classes[c].slice(0, 8))}`);
   console.log('    multi-worker:', JSON.stringify(fixers.multiWorker.slice(0, 15)));
   console.log('    lane bounce:', JSON.stringify(fixers.laneBounce.slice(0, 10)));
   console.log('    fix after merge:', JSON.stringify(fixers.fixAfterMerge.slice(0, 10)));

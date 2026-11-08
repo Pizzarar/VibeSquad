@@ -528,8 +528,6 @@ export type DrawerHeaderProps = {
   inboxParking: boolean;
   inboxToast: string;
   parkToInbox: (text: string, fromComposer: boolean) => void;
-  handoffMarked: boolean;
-  setHandoffMarked: (v: boolean) => void;
   topicHandingOff: boolean;
   handleTopicHandoff: () => Promise<void>;
   topicParking: boolean;
@@ -682,8 +680,6 @@ export function DrawerHeader({
   inboxParking,
   inboxToast,
   parkToInbox,
-  handoffMarked,
-  setHandoffMarked,
   topicHandingOff,
   handleTopicHandoff,
   topicParking,
@@ -1243,9 +1239,9 @@ export function DrawerHeader({
                 onClick={() =>
                   void doRestart(planHandedOff ? "handoff" : bsUsedTokens >= warnTokens ? "warn-80k" : "manual")
                 }
-                title="Spawn a fresh brainstorm seeded from docs/brainstorm/<team>.md and archive this one"
+                title="Hand off to a fresh Buddy from the brief"
               >
-                {restarting ? "↻…" : "↻ Restart"}
+                {restarting ? "⇄…" : "⇄ Handoff"}
               </button>
               <button
                 className="btn ghost small btn-brainstorm-summary"
@@ -1254,14 +1250,6 @@ export function DrawerHeader({
                 title={`Preview docs/brainstorm/${laneId}.md`}
               >
                 📄 Summary
-              </button>
-              <button
-                className={`btn ghost small btn-brainstorm-handoff ${handoffMarked ? "on" : ""}`}
-                style={{ padding: "2px 6px", fontSize: 10 }}
-                onClick={() => setHandoffMarked(true)}
-                title="Mark plan handed off to lead"
-              >
-                ✓ Handed off
               </button>
               <button
                 className={`btn ghost small btn-brainstorm-inbox ${inboxPopoverOpen ? "on" : ""}`}
