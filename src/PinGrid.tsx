@@ -195,6 +195,9 @@ export function NeedsBadgeInline({ pin }: { pin: Pin }) {
 
 const memberTitle = (m: Member) => cleanTitle(m.agent.title) || m.agent.id.slice(0, 8);
 const hasTeam = (pin: Pin) => !!pin.lead || pin.workers.length > 0 || pin.topicBrainstorms.length > 0;
+/** Team-row status label: a queued agent shows its queue position instead of the bare running/idle. */
+const memberStatusLabel = (agent: { status: string; queued?: { ahead: number } }): string =>
+  agent.queued ? `queued · ${agent.queued.ahead} ahead` : agent.status === "running" ? "running" : "idle";
 
 function TeamRow({ pin, m, glyph, depth, testId, active }: { pin: Pin; m: Member; glyph: string; depth: number; testId: string; active: boolean }) {
   const shown = useIsShown(m.agent.id);
@@ -213,7 +216,7 @@ function TeamRow({ pin, m, glyph, depth, testId, active }: { pin: Pin; m: Member
       <span className="pin-row-name">
         {glyph} {cleanTitle}
       </span>
-      <span className="muted small">{m.agent.status === "running" ? "running" : "idle"}</span>
+      <span className="muted small">{memberStatusLabel(m.agent)}</span>
     </button>
   );
 }

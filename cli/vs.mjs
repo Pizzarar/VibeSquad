@@ -616,6 +616,7 @@ function listAgentsViaRunner() {
     name: a.title,
     title: a.title,
     status: a.status,
+    queued: a.queued ?? null,
     cwd: a.cwd ?? "",
     archivedAt: a.archivedAt ?? null,
     archived: Boolean(a.archivedAt),
@@ -961,7 +962,8 @@ function extractAgentTokens(a) {
 }
 
 function formatWhoLine(entry) {
-  return `${entry.title} · ${entry.id} · ${entry.status} · ${entry.tokensLabel}`;
+  const status = entry.queued ? `queued(${entry.queued.ahead})` : entry.status;
+  return `${entry.title} · ${entry.id} · ${status} · ${entry.tokensLabel}`;
 }
 
 async function commandWho(flags) {
@@ -1000,7 +1002,7 @@ async function commandWho(flags) {
     if (target === "workers" && role !== "worker") continue;
     if (target === "all" && role !== "lead" && role !== "brainstorm" && role !== "worker") continue;
 
-    rawMatched.push({ agent: a, title: title || a.id, role, status, teamId, lane });
+    rawMatched.push({ agent: a, title: title || a.id, role, status, teamId, lane, queued: a.queued ?? null });
   }
 
   if (squadWide) {
@@ -1009,13 +1011,14 @@ async function commandWho(flags) {
     rawMatched.sort((x, y) => rank(x) - rank(y) || x.lane.localeCompare(y.lane));
   }
 
-  const matched = rawMatched.map(({ agent: a, title, role, status, teamId, lane }) => {
+  const matched = rawMatched.map(({ agent: a, title, role, status, teamId, lane, queued }) => {
     const { tokens, tokensLabel } = extractAgentTokens(a);
     const entry = {
       id: a.id,
       title,
       role,
       status,
+      queued,
       team: teamId,
       lane,
       tokens,

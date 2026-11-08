@@ -150,6 +150,7 @@ export function readRunnerAgentSync(id, { env = process.env, home, liveness } = 
   let lastPrompt = null; // last input/created event (the "most recent prompt/created" clock for staleness)
   let lastProgress = null; // last turn-progress event (output/tool/status running|idle/usage/…)
   let usage = null;
+  let queued = null; // last `queued` status event's ahead count (waiting for a turn slot), like the async status record
   const perms = new Map();
   const meta = {};
   let offered = null;
@@ -168,7 +169,7 @@ export function readRunnerAgentSync(id, { env = process.env, home, liveness } = 
       if (e.sessionId) sessionId = e.sessionId;
       if (Array.isArray(e.modes)) offered = { modes: e.modes, models: e.models ?? [] };
     }
-    else if (e.type === "status") status = e.status;
+    else if (e.type === "status") { status = e.status; queued = e.status === "queued" && Number.isInteger(e.ahead) ? { ahead: e.ahead } : null; }
     else if (e.type === "exit") exited = true;
     else if (e.type === "archive") archivedAt = e.ts;
     else if (e.type === "unarchive") archivedAt = null;
@@ -195,6 +196,7 @@ export function readRunnerAgentSync(id, { env = process.env, home, liveness } = 
     status: exited ? "exited" : status, createdAt: created.ts, updatedAt: last?.ts, archivedAt,
     lastPromptAt: lastPrompt?.ts ?? null, lastProgressAt: lastProgress?.ts ?? null,
     usage, pendingPermissions: [...perms.values()], resumable,
+    ...(status === "queued" && !exited && queued ? { queued } : {}),
   });
 }
 

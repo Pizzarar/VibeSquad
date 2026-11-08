@@ -7,7 +7,7 @@ import { Runner } from '../runner/runner.mjs';
 import { createServer, writeDiscovery } from '../runner/server.mjs';
 import { killTree } from '../runner/spawn.mjs';
 import { RunnerClient } from '../server/backend/runner-client.mjs';
-import { RunnerBackend, SPAWN_TIMING, isTurnProgressEvent, scanLogProgress, toTimeline } from '../server/backend/runner-backend.mjs';
+import { RunnerBackend, SPAWN_TIMING, isTurnProgressEvent, scanLogProgress, toTimeline, readRunnerAgentSync } from '../server/backend/runner-backend.mjs';
 import { getBackend } from '../server/backend/index.mjs';
 
 const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'vs-rb-'));
@@ -456,6 +456,26 @@ test('runner API: the timeline route forwards direction + cursor to fetchAgentTi
   await run('/__vibesquad/runner/agents/rn-abc/timeline?limit=60&direction=before&cursor=42');
   assert.deepEqual(calls[0], { limit: 60 });
   assert.deepEqual(calls[1], { limit: 60, direction: 'before', cursor: { epoch: 'runner', seq: 42 } });
+});
+
+test('Q1: readRunnerAgentSync exposes queued {ahead} for a queued agent (sync path must not drop it)', () => {
+  const home = tmp();
+  mkdirSync(path.join(home, 'agents'));
+  const ev = (o, seq) => JSON.stringify({ seq, ts: 1000 + seq, ...o });
+  writeFileSync(path.join(home, 'agents', 'rn-queued.jsonl'), [
+    ev({ type: 'created', provider: 'claude', model: 'm', cwd: '.', meta: { title: 'Buddy', labels: { role: 'brainstorm' } } }, 1),
+    ev({ type: 'input', text: 'handoff brief' }, 2),
+    ev({ type: 'status', status: 'queued', ahead: 3, family: 'claude' }, 3),
+  ].join('\n') + '\n');
+  const a = readRunnerAgentSync('rn-queued', { home, liveness: null });
+  assert.equal(a.status, 'initializing', 'queued maps to initializing');
+  assert.deepEqual(a.queued, { ahead: 3 }, 'the queue position is exposed on the sync read');
+  // A non-queued agent still has no queued field.
+  writeFileSync(path.join(home, 'agents', 'rn-idle.jsonl'), [
+    ev({ type: 'created', provider: 'claude', model: 'm', cwd: '.', meta: { title: 'Idle' } }, 1),
+    ev({ type: 'status', status: 'idle' }, 2),
+  ].join('\n') + '\n');
+  assert.equal(readRunnerAgentSync('rn-idle', { home, liveness: null }).queued, undefined);
 });
 
 test('fetchAgentTimeline lastSeq advances with absorbed post-thought text while the newest row (a thought) does not', async () => {
