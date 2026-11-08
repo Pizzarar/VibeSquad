@@ -199,5 +199,15 @@ describe("routes on a temp repo", () => {
     assert.equal((await call("POST", "commit", { cwd: repo, message: "--amend -a" })).body.ok, true);
     assert.equal((await call("GET", "commits", { cwd: repo })).body.commits[0].subject, "--amend -a");
   });
-});
 
+  test("a 40k-char commit message goes over stdin, not argv (E3)", async () => {
+    writeFileSync(join(repo, "d.txt"), "d");
+    const message = ['big "quoted" subject', "", ...Array(2500).fill("line of body text")].join("\n"); // ~45k chars, above the Windows 32,767 command-line limit
+    assert.ok(message.length > 40_000);
+    assert.equal((await call("POST", "commit", { cwd: repo, message })).body.ok, true);
+    const subject = (await call("GET", "commits", { cwd: repo })).body.commits[0].subject;
+    assert.equal(subject, 'big "quoted" subject');
+    const body = sh(repo, "log", "-1", "--format=%B").trim();
+    assert.equal(body.length, message.slice(0, 10_000).trim().length); // the API's own 10k cap still applies
+  });
+});

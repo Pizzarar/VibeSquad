@@ -249,6 +249,7 @@ function parseArgs(argv) {
     "profile",
     "cwd",
     "prompt",
+    "promptFile",
     "title",
     "note",
     "since",
@@ -483,9 +484,9 @@ Usage:
   vs task list [--lane <lane>] [--json]
   vs task set <unit-id> [--goal <g>] [--files <f1,f2>] [--done-check <cmd>] [--status <todo|running|done|blocked>] [--branch <b>] [--commit <sha>]
   vs cap [list | add <provider> | clear <provider>]
-  vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" [--cwd <dir>]   start a worker in your lane
+  vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>]   start a worker in your lane (long brief: --prompt-file <path>, or "-" for stdin)
   vs lead handoff [--lane <code>] [--steer "<note>"]   hand the lane's lead to a successor (Buddy: its own lane's lead; lead: itself; Overlord: any lane in its Squad, steer goes to the successor)
-  vs send <agent> "<text>"   message an agent
+  vs send <agent> "<text>" | --prompt-file <path|->   message an agent (long text: --prompt-file <path>, or "-" for stdin)
   vs status <agent>   status + last assistant message
   vs wait <agent> [--timeout <seconds>]   block until idle (exit 0), error or blocked (1), timeout (2); no limit by default
   vs mcp alias-report [--since <30m|12h|7d>] [--json]   Paseo-name alias hits per alias + caller
@@ -1707,15 +1708,42 @@ export async function runAgentVerb(verb, flags, ctx) {
   return callTool(ctx, tool, args);
 }
 
-export async function commandAgentVerb(verb, flags, makeContext = createContext, out = (s) => process.stdout.write(s)) {
+// Long text must not ride on argv (Windows caps a command line at 32,767 chars): --prompt-file <path>, or "-" /
+// --prompt-file - for stdin. Fills flags.prompt (spawn) or the text positional (send) in place.
+export function loadPromptInput(verb, flags, readStdin = () => fs.readFileSync(0, "utf8")) {
+  if (verb !== "spawn" && verb !== "send") return flags;
+  let text;
+  if (flags.promptFile !== undefined) {
+    const src = String(flags.promptFile);
+    text = src === "-" ? readStdin() : fs.readFileSync(path.resolve(src), "utf8");
+  } else if (verb === "spawn" && flags.prompt === "-") {
+    text = readStdin();
+  } else if (verb === "spawn" && flags.prompt === undefined && flags._.length === 1 && flags._[0] === "-") {
+    text = readStdin();
+  } else if (verb === "send" && flags._.length === 2 && flags._[1] === "-") {
+    text = readStdin();
+  }
+  if (text === undefined) return flags;
+  if (!text.trim()) throw new Error("prompt input is empty");
+  if (verb === "spawn") {
+    flags.prompt = text;
+    flags._ = [];
+  } else {
+    flags._ = [flags._[0], text];
+  }
+  return flags;
+}
+
+export async function commandAgentVerb(verb, flags, makeContext = createContext, out = (s) => process.stdout.write(s), readStdin) {
+  loadPromptInput(verb, flags, readStdin);
   if (verb === "lead") {
     if (flags._.shift() !== "handoff") throw new Error("usage: vs lead handoff [--lane <code>] [--steer \"<note>\"]");
     verb = "handoff_lead";
   }
   if (verb === "spawn" && (!flags.profile || !(flags.prompt ?? flags._.length))) {
-    throw new Error('usage: vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" [--cwd <dir>]');
+    throw new Error('usage: vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>]');
   }
-  if (verb === "send" && (!flags._[0] || flags._.length < 2)) throw new Error('usage: vs send <agent> "<text>"');
+  if (verb === "send" && (!flags._[0] || flags._.length < 2)) throw new Error('usage: vs send <agent> "<text>" | --prompt-file <path|->');
   if (verb === "status" && !flags._[0]) throw new Error("usage: vs status <agent>");
   // handoff_lead: --lane names only the TARGET lane (runAgentVerb reads it); the caller's identity comes from
   // VS_AGENT_ID -> its record labels / VS_* env, never from --agent/--role/--team/--lane/--ord.

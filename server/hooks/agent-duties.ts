@@ -101,7 +101,7 @@ export const EVERYONE_LAYER = [
 export const WORKER_PACK = [
   "Role: worker.",
   "- Never run `vs log` writes. Put your result (PASS/FAIL, what changed, refs) in your final message; a digest agent logs it for the lead.",
-  "- Your final message is the report; never call built-in SendMessage or ListAgents; mid-task use `send` (VS MCP or `vs send`).",
+  "- Your final message is the report; never call built-in SendMessage or ListAgents; mid-task use `send` (VS MCP or `vs send`). For anything long in `vs spawn`/`vs send`, use `--prompt-file <path>` or `-` for stdin, never a huge argv string.",
   "- Report blockers to your lead in your final message. Do not edit lead-only docs or spawn successors.",
 ].join("\n");
 
