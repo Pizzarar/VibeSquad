@@ -228,6 +228,7 @@ export function humanizeProfile(profile: string): string {
 
 export function buildProfiles(d: UsageData): ProfileView[] {
   const out = new Map<string, ProfileView>();
+  const msByKey = new Map<string, { work: number; idle: number }>();
   for (const p of d.byProfile ?? []) {
     const total = (p.workingMs ?? 0) + (p.idleMs ?? 0);
     const view: ProfileView = {
@@ -245,6 +246,10 @@ export function buildProfiles(d: UsageData): ProfileView[] {
       fixRate: p.fixAfterMergeRate ?? 0,
       workPct: total > 0 ? (p.workingMs ?? 0) / total : null,
     };
+    const ms = msByKey.get(view.key) ?? { work: 0, idle: 0 };
+    ms.work += p.workingMs ?? 0;
+    ms.idle += p.idleMs ?? 0;
+    msByKey.set(view.key, ms);
     const prev = out.get(view.key);
     if (!prev) {
       out.set(view.key, view);
@@ -256,7 +261,6 @@ export function buildProfiles(d: UsageData): ProfileView[] {
     const wRun = (a: number, b: number) => (runs > 0 ? (a * prev.runs + b * view.runs) / runs : 0);
     const wUnit = (a: number, b: number) => (units > 0 ? (a * prev.mergedUnits + b * view.mergedUnits) / units : 0);
     const cost = prev.costPerMergedUnit === null && view.costPerMergedUnit === null ? null : wUnit(prev.costPerMergedUnit ?? 0, view.costPerMergedUnit ?? 0);
-    const work = prev.workPct === null ? view.workPct : view.workPct === null ? prev.workPct : (prev.workPct + view.workPct) / 2;
     out.set(view.key, {
       ...prev,
       runs,
@@ -267,7 +271,7 @@ export function buildProfiles(d: UsageData): ProfileView[] {
       avgReviewRounds: wUnit(prev.avgReviewRounds, view.avgReviewRounds),
       costPerMergedUnit: cost,
       fixRate: wUnit(prev.fixRate, view.fixRate),
-      workPct: work,
+      workPct: ms.work + ms.idle > 0 ? ms.work / (ms.work + ms.idle) : null,
     });
   }
   return [...out.values()];
@@ -320,12 +324,13 @@ export function filterInbox(cards: InboxCard[], f: InboxFilter): InboxCard[] {
   return f === "all" ? cards : cards.filter((c) => inboxBucket(c) === f);
 }
 
-export type SourceBadge = { key: "opus" | "gemini" | "bug"; label: string };
-export function inboxSourceBadge(source: string | undefined): SourceBadge {
+export type SourceBadge = { key: "opus" | "gemini"; label: string };
+/** Only usage-review cards get a source badge; other origins are implied by the lane badge. */
+export function inboxSourceBadge(source: string | undefined): SourceBadge | null {
   const s = (source ?? "").toLowerCase();
   if (s === "usage-review:opus") return { key: "opus", label: "Opus" };
   if (s === "usage-review:gemini") return { key: "gemini", label: "Gemini" };
-  return { key: "bug", label: "Bug" };
+  return null;
 }
 
 export function inboxStatusLabel(c: Pick<InboxCard, "status" | "topicAgentId">): string {

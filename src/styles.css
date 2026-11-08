@@ -4005,7 +4005,7 @@ html, body, #root { overflow-x: hidden; }
 }
 .usage-collapse { border: 1px solid var(--line); background: var(--well); padding: var(--sp-2, 8px) var(--sp-3, 12px); }
 .usage-collapse[open] { display: flex; flex-direction: column; gap: var(--sp-2, 8px); }
-.usage-collapse-head { cursor: pointer; font-family: var(--arcade); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.usage-collapse-head { cursor: pointer; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
 .usage-collapse-head:hover, .usage-collapse-head:focus-visible { color: var(--cyan-t); }
 .usage-bug-inbox { display: flex; flex-direction: column; gap: var(--sp-3, 12px); }
 .usage-inbox-tabs { display: flex; flex-wrap: wrap; gap: var(--sp-2, 8px); }
@@ -4024,7 +4024,6 @@ html, body, #root { overflow-x: hidden; }
 .usage-inbox-status-closed { color: var(--muted); }
 .usage-inbox-src-opus { color: var(--violet-t); border-color: var(--violet-t); }
 .usage-inbox-src-gemini { color: var(--cyan-t); border-color: var(--cyan-t); }
-.usage-inbox-src-bug { color: var(--amber-t); border-color: var(--amber-t); }
 .usage-inbox-scope { text-transform: none; }
 .usage-inbox-note { word-break: break-word; }
 .usage-inbox-lane-bug { color: var(--amber-t); border-color: var(--amber-t); }

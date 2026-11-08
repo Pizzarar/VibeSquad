@@ -89,7 +89,7 @@ function BugInbox({ now }: { now: number }) {
               <li key={c.id} className="usage-inbox-row" data-testid="usage-bug-inbox-row" data-status={bucket}>
                 <div className="usage-inbox-meta small">
                   <span className={`usage-inbox-badge usage-inbox-status-${bucket}`}>{inboxStatusLabel(c)}</span>
-                  <span className={`usage-inbox-badge usage-inbox-src-${src.key}`}>{src.label}</span>
+                  {src && <span className={`usage-inbox-badge usage-inbox-src-${src.key}`}>{src.label}</span>}
                   <span className={`usage-inbox-badge usage-inbox-lane-${lane.key}`}>{lane.label}</span>
                   <span className="usage-inbox-badge usage-inbox-scope">{c.scope}</span>
                   <span className="muted">{inboxIdLabel(c.id)}</span>

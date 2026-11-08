@@ -311,12 +311,24 @@ test("bug inbox helpers: lane filter, buckets, counts, source badges", () => {
   assert.equal(filterInbox(bug, "all").length, 6);
   assert.deepEqual(inboxSourceBadge("usage-review:opus"), { key: "opus", label: "Opus" });
   assert.equal(inboxSourceBadge("usage-review:gemini").key, "gemini");
-  assert.equal(inboxSourceBadge("cli").key, "bug");
-  assert.equal(inboxSourceBadge(undefined).key, "bug");
+  assert.equal(inboxSourceBadge("cli"), null);
+  assert.equal(inboxSourceBadge(undefined), null);
 });
 
 test("collapsed-table rollup summaries", () => {
   assert.equal(laneSummary([{ costUsd: 1.5, merged: 2 }, { costUsd: 2, merged: 1 }]), "Lane breakdown · 2 lanes · $3.50 · 3 merged");
   assert.equal(profileSummary([{ mergedUnits: 4 }]), "Implementer / profile comparison · 1 profile · 4 merged");
   assert.equal(workflowSummary([{ units: 3, costUsd: 120 }]), "Workflow era · 1 mode · 3 units · $120");
+});
+
+test("buildProfiles fold weights workPct by working+idle ms across 3 orphan rows", () => {
+  const base = { provider: "claude", role: "worker", runs: 1, turns: 1, passRate: 1, avgReviewRounds: 0, costPerMergedUnit: null, mergedUnits: 0, fixAfterMergeRate: 0 };
+  const d = { limits: [], lanes: [], byRole: [], byProfile: [
+    { ...base, profile: "agent_profile_a", workingMs: 100, idleMs: 0 },
+    { ...base, profile: "agent_profile_b", workingMs: 0, idleMs: 100 },
+    { ...base, profile: "agent_profile_c", workingMs: 0, idleMs: 100 },
+  ] };
+  const rows = buildProfiles(d);
+  assert.equal(rows.length, 1);
+  assert.ok(Math.abs(rows[0].workPct - 1 / 3) < 1e-9, "1/3 working, not pairwise-halved 0.25");
 });
