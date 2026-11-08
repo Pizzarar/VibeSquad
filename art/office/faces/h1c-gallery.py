@@ -1,6 +1,6 @@
 """H1c review gallery, one PNG per mode: canon (H0 sheet + H1a approved faces) beside every new
-RiffBot/Overlord frame. Writes scratch/shots/h1c-gallery-{mode}.png (labels, 4x frames),
-scratch/shots/h1c-native-{mode}.png (1x strips) and scratch/shots/h1c-10x-{mode}.png (key frames 10x).
+RiffBot/Overlord frame. Writes scratch/shots/h1c-v2-gallery-{mode}.png (labels, 4x frames),
+scratch/shots/h1c-v2-native-{mode}.png (1x strips) and scratch/shots/h1c-v2-7x-{mode}.png (key frames 7x = 4K@120% TV size).
 Usage (repo root): python -I art/office/faces/h1c-gallery.py"""
 import json
 from PIL import Image, ImageDraw, ImageFont
@@ -50,22 +50,23 @@ for mode in ('dark', 'light'):
                 im.alpha_composite(big(c, Z), (x, y + LAB))
                 x += cellW
             y += LAB + ch * Z + PAD
-    im.save(f'scratch/shots/h1c-gallery-{mode}.png'); print(f'scratch/shots/h1c-gallery-{mode}.png', im.size)
+    im.save(f'scratch/shots/h1c-v2-gallery-{mode}.png'); print(f'scratch/shots/h1c-v2-gallery-{mode}.png', im.size)
 
     # native 1x strips beside the H1a canon crop
     n = Image.new('RGBA', (cw * 10 + 16, ch * 3 + 32), BG[mode])
     n.alpha_composite(h1a, (8, 8))
     n.alpha_composite(cells['riffbot'][0][2], (8, 8 + ch + 8))
     n.alpha_composite(cells['overlord'][0][2], (8, 8 + 2 * (ch + 8)))
-    n.save(f'scratch/shots/h1c-native-{mode}.png')
+    n.save(f'scratch/shots/h1c-v2-native-{mode}.png')
 
-    # 10x key frames (zone size on a 4K screen): riff idle/needs/scared, overlord idle/needs[0]/needs[1]
+    # 7x key frames (faceContain scale in the 50/50 TV at 4K@120%): riff idle/needs/scared, overlord idle/needs/talk
     pick = [('riffbot', 'idle[0]'), ('riffbot', 'needs[1]'), ('riffbot', 'scared[0]'),
             ('overlord', 'idle[0]'), ('overlord', 'needs[0]'), ('overlord', 'talk[1]')]
-    t = Image.new('RGBA', (3 * 480 + 4 * PAD, 2 * 480 + 3 * PAD + 2 * LAB), BG[mode]); dt = ImageDraw.Draw(t)
+    KZ = 7; TW, TH = cw * KZ, ch * KZ
+    t = Image.new('RGBA', (3 * TW + 4 * PAD, 2 * TH + 3 * PAD + 2 * LAB), BG[mode]); dt = ImageDraw.Draw(t)
     for i, (bot, name) in enumerate(pick):
         c = next(c for nm, c, _ in cells[bot] if nm == name)
-        x, yy = PAD + (i % 3) * (480 + PAD), PAD + (i // 3) * (480 + PAD + LAB)
-        dt.text((x, yy), f'{bot} {name} 10x', font=FONT, fill=FG[mode])
-        t.alpha_composite(big(c, 10), (x, yy + LAB))
-    t.save(f'scratch/shots/h1c-10x-{mode}.png')
+        x, yy = PAD + (i % 3) * (TW + PAD), PAD + (i // 3) * (TH + PAD + LAB)
+        dt.text((x, yy), f'{bot} {name} {KZ}x', font=FONT, fill=FG[mode])
+        t.alpha_composite(big(c, KZ), (x, yy + LAB))
+    t.save(f'scratch/shots/h1c-v2-7x-{mode}.png')
