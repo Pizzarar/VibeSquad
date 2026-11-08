@@ -491,6 +491,11 @@ Usage:
   vs lead handoff [--lane <code>] [--steer "<note>"]   hand the lane's lead to a successor (Buddy: its own lane's lead; lead: itself; Overlord: any lane in its Squad, steer goes to the successor)
   vs send <agent> "<text>" | --prompt-file <path|->   message an agent (long text: --prompt-file <path>, or "-" for stdin)
   vs status <agent>   status + last assistant message
+  vs ls [--lane <lane>] [--team <team>]   list live agents in your lane
+  vs logs <agent> [--limit <N>]   agent timeline entries
+  vs inspect <agent>   full agent record
+  vs stop <agent>   interrupt an agent's current turn
+  vs archive <agent>   archive a single agent
   vs wait <agent> [--timeout <seconds>]   block until idle (exit 0), error or blocked (1), timeout (2); no limit by default
   vs mcp alias-report [--since <30m|12h|7d>] [--json]   Paseo-name alias hits per alias + caller
   vs install-shim [--bin-dir <dir>] [--force]
@@ -1689,9 +1694,33 @@ async function commandWait(flags) {
   }
 }
 
-// vs spawn / send / status share server/mcp/tools.mjs with the VS MCP server. Injectable ctx for tests.
+// vs spawn / send / status / ls / logs / inspect / stop / archive / lead share server/mcp/tools.mjs + backend with the VS MCP server. Injectable ctx for tests.
 export async function runAgentVerb(verb, flags, ctx) {
-  const id = String(flags._[0] ?? "");
+  const id = String(flags._[0] ?? "").trim();
+  if (verb === "stop" || verb === "archive") {
+    if (!id || flags._.length > 1) throw new Error(`usage: vs ${verb} <agent>`);
+  }
+  if (verb === "inspect") {
+    if (!id || flags._.length > 1) throw new Error("usage: vs inspect <agent>");
+    const res = await ctx.withBackend({ id }, (b) => (b.fetchAgent ?? b.getAgent).call(b, id));
+    return res?.agent ?? res;
+  }
+  if (verb === "logs") {
+    if (!id || flags._.length > 1) throw new Error("usage: vs logs <agent> [--limit <N>]");
+    let limit;
+    if (flags.limit !== undefined) {
+      limit = Number(flags.limit);
+      if (!Number.isInteger(limit) || limit < 1) throw new Error(`--limit must be a positive integer (got "${flags.limit}")`);
+    }
+    const opts = { direction: "tail", ...(limit ? { limit } : {}) };
+    const res = await ctx.withBackend({ id }, (b) => (b.fetchAgentTimeline ?? b.getAgentTimeline).call(b, id, opts));
+    const entries = Array.isArray(res) ? res : Array.isArray(res?.entries) ? res.entries : [];
+    return { ...(res && typeof res === "object" && !Array.isArray(res) ? res : {}), id, entries };
+  }
+  if (verb === "archive") {
+    const res = await ctx.withBackend({ id }, (b) => b.archiveAgent(id));
+    return { id, archived: true, ...(res?.archivedAt ? { archivedAt: res.archivedAt } : {}) };
+  }
   let args;
   if (verb === "spawn") {
     args = {
@@ -1704,10 +1733,12 @@ export async function runAgentVerb(verb, flags, ctx) {
     args = { ...(flags.lane ? { lane: String(flags.lane) } : {}), ...(flags.steer ? { steer: String(flags.steer) } : {}) };
   } else if (verb === "send") {
     args = { id, text: flags._.slice(1).join(" ") };
+  } else if (verb === "ls") {
+    args = {};
   } else {
     args = { id };
   }
-  const tool = verb === "spawn" ? "spawn_worker" : verb;
+  const tool = verb === "spawn" ? "spawn_worker" : verb === "ls" ? "list" : verb === "stop" ? "cancel" : verb;
   return callTool(ctx, tool, args);
 }
 
@@ -1748,6 +1779,12 @@ export async function commandAgentVerb(verb, flags, makeContext = createContext,
   }
   if (verb === "send" && (!flags._[0] || flags._.length < 2)) throw new Error('usage: vs send <agent> "<text>" | --prompt-file <path|->');
   if (verb === "status" && !flags._[0]) throw new Error("usage: vs status <agent>");
+  if ((verb === "inspect" || verb === "stop" || verb === "archive") && (!String(flags._[0] ?? "").trim() || flags._.length > 1)) {
+    throw new Error(`usage: vs ${verb} <agent>`);
+  }
+  if (verb === "logs" && (!String(flags._[0] ?? "").trim() || flags._.length > 1)) {
+    throw new Error("usage: vs logs <agent> [--limit <N>]");
+  }
   // handoff_lead / spawn: --lane (for handoff_lead) names only the TARGET lane (runAgentVerb reads it); the caller's
   // identity comes from VS_AGENT_ID -> its record labels / VS_* env, never from --agent/--role/--team/--lane/--ord.
   if (verb === "spawn" && (flags.agent || flags.role || flags.team || flags.lane || flags.ord)) {
@@ -1758,8 +1795,9 @@ export async function commandAgentVerb(verb, flags, makeContext = createContext,
     verb === "handoff_lead" || verb === "spawn"
       ? resolveIdentity(callerFlags, { recordWins: true })
       : resolveIdentity(flags);
+  const lane = verb === "ls" && identity.lane === UNASSIGNED_LANE && !flags.lane && !process.env.VS_LANE ? "" : identity.lane;
   const ctx = makeContext({
-    identity: { agentId: identity.agentId, team: identity.team.id, lane: identity.lane, role: identity.role },
+    identity: { agentId: identity.agentId, team: identity.team.id, lane, role: identity.role },
   });
   const result = await runAgentVerb(verb, flags, ctx);
   out(JSON.stringify(result, null, 2) + "\n");
@@ -2139,7 +2177,93 @@ function commandLesson(flags) {
 // Main
 // ---------------------------------------------------------------------------
 
-function main(argv) {
+export const KNOWN_VERBS = [
+  "whoami",
+  "who",
+  "profiles",
+  "log",
+  "handoff",
+  "inbox",
+  "pin",
+  "spec",
+  "task",
+  "cap",
+  "worktree",
+  "lesson",
+  "lessons",
+  "wait",
+  "spawn",
+  "send",
+  "status",
+  "lead",
+  "ls",
+  "logs",
+  "inspect",
+  "stop",
+  "archive",
+  "mcp",
+  "install-shim",
+  "open",
+  "help",
+];
+
+const VERB_HINTS = {
+  list: "ls",
+  ps: "ls",
+  run: "spawn",
+  create: "spawn",
+  start: "spawn",
+  cancel: "stop",
+  kill: "stop",
+  rm: "archive",
+  delete: "archive",
+  close: "archive",
+  tail: "logs",
+  show: "inspect",
+  get: "inspect",
+  info: "inspect",
+};
+
+function editDistance(a, b) {
+  const m = a.length;
+  const n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        dp[i][j] = Math.min(dp[i][j], dp[i - 2][j - 2] + 1);
+      }
+    }
+  }
+  return dp[m][n];
+}
+
+export function suggestVerb(raw, verbs = KNOWN_VERBS) {
+  const needle = String(raw ?? "").trim().toLowerCase();
+  if (!needle) return null;
+  if (VERB_HINTS[needle] && verbs.includes(VERB_HINTS[needle])) return VERB_HINTS[needle];
+  let best = null;
+  let bestScore = Infinity;
+  for (const v of verbs) {
+    const cand = v.toLowerCase();
+    if (cand === needle) return v;
+    const d = editDistance(needle, cand);
+    const maxDist = Math.max(2, Math.floor(Math.max(needle.length, cand.length) / 2));
+    const prefixBonus = cand.startsWith(needle) || needle.startsWith(cand) ? 0.5 : 0;
+    const score = d - prefixBonus;
+    if (d <= maxDist && score < bestScore) {
+      bestScore = score;
+      best = v;
+    }
+  }
+  return best;
+}
+
+export function main(argv) {
   let flags;
   try {
     flags = parseArgs(argv);
@@ -2169,11 +2293,25 @@ function main(argv) {
     if (command === "worktree") return commandWorktree(flags);
     if (command === "lesson" || command === "lessons") return commandLesson(flags);
     if (command === "wait") return commandWait(flags);
-    if (command === "spawn" || command === "send" || command === "status" || command === "lead") return commandAgentVerb(command, flags);
+    if (
+      command === "spawn" ||
+      command === "send" ||
+      command === "status" ||
+      command === "lead" ||
+      command === "ls" ||
+      command === "logs" ||
+      command === "inspect" ||
+      command === "stop" ||
+      command === "archive"
+    ) {
+      return commandAgentVerb(command, flags);
+    }
     if (command === "mcp") return commandMcp(flags);
     if (command === "install-shim") return commandInstallShim(flags);
     if (command === "open") return commandOpen(flags);
-    process.stderr.write(`Error: unknown command "${command}". Try "vs --help".\n`);
+    const hint = suggestVerb(command);
+    const didYouMean = hint ? `, did you mean "${hint}"?` : ".";
+    process.stderr.write(`Error: unknown verb "${command}"${didYouMean} Try "vs --help".\n`);
     return 1;
   } catch (err) {
     process.stderr.write(`Error: ${err.message}\n`);
