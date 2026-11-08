@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { buildProfiles, buildRows, dur, etaText, foldRoles, pctText, relTime, reviewBullets, sortProfiles, sortRows, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workIdlePct, type LimitRow, type ReviewResult, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
+import { buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, floorSegments, lowCostCoverage, sortWorkflows, speedupText, tokText, USAGE_EXPORT_MD_URL, usdText, foldRoles, pctText, relTime, reviewBullets, sortProfiles, sortRows, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workIdlePct, type LimitRow, type ReviewResult, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
 
 // Usage dashboard for the Squads screen (docs/PLAN_USAGE_DASHBOARD.md step 4).
 // Data: GET /__vibesquad/providers/usage (server/providers-catalog.mjs getUsage).
@@ -189,6 +189,7 @@ export function UsageDashboard() {
   }, [data]);
   const rows = useMemo(() => (data ? sortRows(buildRows(data), sort.key, sort.dir) : []), [data, sort]);
   const profiles = useMemo(() => (data ? sortProfiles(buildProfiles(data)) : []), [data]);
+  const workflows = useMemo(() => sortWorkflows(data?.byWorkflow), [data]);
 
   if (!data) {
     return (
@@ -343,6 +344,129 @@ export function UsageDashboard() {
             </div>
           )}
         </div>
+      )}
+
+      {(data.cohorts || data.floor) && (
+        <section className="usage-efficiency" data-testid="usage-efficiency-strip">
+          <div className="usage-sub">Efficiency trend &amp; clean-run floor</div>
+          {data.cohorts && (
+            <>
+              <div className="usage-cohort-tiles">
+                {COHORT_METRICS.map((m) => {
+                  const c = data.cohorts!;
+                  const delta = c.delta?.[m.key];
+                  const { trend } = deltaTrend(delta, m.higherIsBetter);
+                  return (
+                    <div className="usage-cohort-tile" key={m.key} data-metric={m.key} data-trend={trend}>
+                      <div className="usage-cohort-label small">{m.label}</div>
+                      <div className="usage-cohort-value">{cohortValueText(m.kind, c.recent[m.key])}</div>
+                      <div className={`usage-delta usage-delta-${trend} small`}>{deltaText(m.kind, delta)}</div>
+                      <div className="usage-cohort-prior small muted">prior {cohortValueText(m.kind, c.prior[m.key])}</div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="small muted">Last {data.cohorts.recent.units} vs Prior {data.cohorts.prior.units} merged units</div>
+            </>
+          )}
+          {data.floor && (
+            <div className="usage-floor" data-testid="usage-floor">
+              {floorSegments(data.floor).every((g) => g.usd === 0) ? (
+                <div className="small muted">no spend recorded yet</div>
+              ) : (
+                <>
+                  <div className="usage-floor-bar" role="img" aria-label="Clean shipping vs waste share of spend">
+                    {floorSegments(data.floor).filter((g) => g.share > 0).map((g) => (
+                      <div key={g.key} className={`usage-floor-seg usage-floor-${g.key}`} style={{ width: `${g.share * 100}%` }} title={`${g.label}: ${usdText(g.usd)} (${pct(g.share)})`} />
+                    ))}
+                  </div>
+                  <div className="usage-floor-legend small">
+                    {floorSegments(data.floor).map((g) => (
+                      <span key={g.key} className="usage-floor-key"><i className={`usage-floor-dot usage-floor-${g.key}`} />{g.label} {pctText(g.share)} · {usdText(g.usd)}</span>
+                    ))}
+                  </div>
+                </>
+              )}
+              <div className="usage-floor-callout small">
+                Clean-run floor: <strong>{usdText(data.floor.cleanCostPerUnit)}</strong>/unit · <strong>{tokText(data.floor.cleanTokensPerUnit)}</strong> tokens/unit
+                {data.floor.cleanShare !== null && <> · clean {pctText(data.floor.cleanShare)} of spend</>}
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+
+      {(data.savings || workflows.length > 0) && (
+        <section className="usage-workflows" data-testid="usage-workflows">
+          <div className="usage-review-head">
+            <div className="usage-sub">Savings vs solo workflow &amp; A/B workflow era</div>
+            <a className="usage-export" href={USAGE_EXPORT_MD_URL} download data-testid="usage-export-md">Export Benchmark (.md)</a>
+          </div>
+          {data.savings && (
+            <div className="usage-saving-cards">
+              <div className="usage-saving-card" data-testid="usage-saving-routing">
+                <div className="usage-cohort-label small">Model routing saved</div>
+                <div className="usage-cohort-value">{usdText(data.savings.routingSavingsUsd)}{data.savings.routingSavingsPct !== null && <small> · {pctText(data.savings.routingSavingsPct)}</small>}</div>
+                <div className="small muted">vs all-Opus {usdText(data.savings.soloOpusBaselineUsd)}</div>
+              </div>
+              <div className="usage-saving-card" data-testid="usage-saving-context">
+                <div className="usage-cohort-label small">Brief/split context saved</div>
+                <div className="usage-cohort-value">{tokText(data.savings.contextSavingsTokens)}<small> tokens</small></div>
+                <div className="small muted">vs monolithic {tokText(data.savings.monolithicBaselineTokens)}</div>
+              </div>
+              <div className="usage-saving-card" data-testid="usage-saving-speedup">
+                <div className="usage-cohort-label small">Parallel speedup</div>
+                <div className="usage-cohort-value">{speedupText(data.savings.parallelSpeedup)}</div>
+                <div className="small muted">agent work / wall clock</div>
+              </div>
+              <div className="usage-saving-card" data-testid="usage-saving-loc">
+                <div className="usage-cohort-label small">Cost / 100 LOC</div>
+                <div className="usage-cohort-value">{usdText(data.savings.costPer100Loc)}</div>
+                <div className="small muted">{usdText(data.savings.costPerMergedUnit)}/unit · {data.savings.totalLocChanged.toLocaleString()} LOC</div>
+              </div>
+            </div>
+          )}
+          <div className="usage-sub">Workflow era</div>
+          {workflows.length === 0 ? (
+            <div className="small muted">no merged units tagged yet</div>
+          ) : (
+            <div className="usage-table-wrap">
+              <table className="usage-table" data-testid="usage-workflow-table">
+                <thead>
+                  <tr>
+                    <th>Workflow</th>
+                    <th className="num">Units</th>
+                    <th className="num">1st-try PASS %</th>
+                    <th className="num">Avg rev rounds</th>
+                    <th className="num">Cost/unit</th>
+                    <th className="num">Cost/100 LOC</th>
+                    <th className="num">Avg cycle</th>
+                    <th className="num">Fix rate</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {workflows.map((w) => (
+                    <tr key={w.workflowMode} data-workflow={w.workflowMode}>
+                      <td>
+                        {w.workflowMode}
+                        {lowCostCoverage(w.costCoverage) && (
+                          <span className="usage-estimate usage-low-coverage" title={`Cost known for ${pctText(w.costCoverage)} of units; non-Claude cost may be missing`}>low cost data</span>
+                        )}
+                      </td>
+                      <td className="num">{w.units}</td>
+                      <td className="num">{pctText(w.firstTryPassRate)}</td>
+                      <td className={`num${w.avgReviewRounds >= HIGH_REVIEW_ROUNDS ? " usage-high" : ""}`}>{w.avgReviewRounds.toFixed(1)}</td>
+                      <td className="num">{w.costCoverage === 0 ? "—" : usdText(w.costPerUnit)}</td>
+                      <td className="num">{w.costCoverage === 0 ? "—" : usdText(w.costPer100Loc)}</td>
+                      <td className="num">{dur(w.avgUnitCycleMs)}</td>
+                      <td className={`num${w.fixAfterMergeRate >= HIGH_FIX_RATE ? " usage-high" : ""}`}>{pctText(w.fixAfterMergeRate)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
       )}
 
       {review && (

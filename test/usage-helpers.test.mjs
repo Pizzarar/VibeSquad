@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { cohortValueText, COHORT_METRICS, deltaText, deltaTrend, floorSegments, lowCostCoverage, sortWorkflows, speedupText, tokText, usdText } from "../src/usageHelpers.ts";
 import { buildProfiles, buildRows, dur, etaText, foldRoles, pctText, relTime, reviewBullets, sortProfiles, sortRows, splitBullets, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workIdlePct } from "../src/usageHelpers.ts";
 
 const st = (turns, costUsd, i, o) => ({ turns, costUsd, inputTokens: i, outputTokens: o, avgTokensPerTurn: turns ? Math.round((i + o) / turns) : 0 });
@@ -204,4 +205,63 @@ test("withUsageReview: merges review onto data, keeps other fields, no-op when a
   assert.equal(out.limits, d.limits);
   assert.equal(withUsageReview(d, null), d);
   assert.equal(withUsageReview(d, undefined), d);
+});
+
+test("deltaTrend: direction depends on metric polarity", () => {
+  assert.deepEqual(deltaTrend(0.2, true), { dir: "up", trend: "good" });
+  assert.deepEqual(deltaTrend(-0.2, true), { dir: "down", trend: "bad" });
+  assert.deepEqual(deltaTrend(-1, false), { dir: "down", trend: "good" });
+  assert.deepEqual(deltaTrend(1, false), { dir: "up", trend: "bad" });
+  assert.deepEqual(deltaTrend(0, false), { dir: "flat", trend: "flat" });
+  assert.deepEqual(deltaTrend(null, true), { dir: "none", trend: "none" });
+  assert.deepEqual(deltaTrend(NaN, true), { dir: "none", trend: "none" });
+  assert.equal(COHORT_METRICS.find((m) => m.key === "firstTryPassRate").higherIsBetter, true);
+  assert.ok(COHORT_METRICS.filter((m) => m.key !== "firstTryPassRate").every((m) => !m.higherIsBetter));
+});
+
+test("deltaText / cohortValueText: arrows, units, em-dash for null", () => {
+  assert.equal(deltaText("pct", 0.12), "▲ +12%");
+  assert.equal(deltaText("usd", -0.4), "▼ -$0.40");
+  assert.equal(deltaText("rounds", 0.5), "▲ +0.5");
+  assert.equal(deltaText("dur", -3_600_000), "▼ -1.0h");
+  assert.equal(deltaText("pct", null), "— no prior");
+  assert.equal(deltaText("pct", 0), "• no change");
+  assert.equal(cohortValueText("pct", 0.5), "50%");
+  assert.equal(cohortValueText("rounds", 1.25), "1.3");
+  assert.equal(cohortValueText("usd", null), "—");
+  assert.equal(cohortValueText("dur", 90 * 60_000), "1.5h");
+});
+
+test("usdText / tokText / speedupText: raw floats, null -> em-dash", () => {
+  assert.equal(usdText(null), "—");
+  assert.equal(usdText(undefined), "—");
+  assert.equal(usdText(0.0456), "$0.046");
+  assert.equal(usdText(1.234), "$1.23");
+  assert.equal(usdText(250.4), "$250");
+  assert.equal(usdText(0), "$0.00");
+  assert.equal(tokText(null), "—");
+  assert.equal(tokText(1500), "1.5k");
+  assert.equal(tokText(2_500_000), "2.5M");
+  assert.equal(speedupText(1.84), "1.8x");
+  assert.equal(speedupText(null), "—");
+});
+
+test("floorSegments: shares sum to 1, empty/missing handled", () => {
+  const f = { cleanCostUsd: 6, cleanShare: 0.6, wasteShare: 0.4, cleanCostPerUnit: 1, cleanTokensPerUnit: 100, reworkCostUsd: 2, loopAndAbandonedCostUsd: 1, fixAfterMergeCostUsd: 1, restartOverheadCostUsd: 0 };
+  const segs = floorSegments(f);
+  assert.deepEqual(segs.map((s) => s.key), ["clean", "rework", "loops", "fixes", "restarts"]);
+  assert.equal(segs[0].share, 0.6);
+  assert.ok(Math.abs(segs.reduce((s, g) => s + g.share, 0) - 1) < 1e-9);
+  assert.ok(floorSegments({ ...f, cleanCostUsd: 0, reworkCostUsd: 0, loopAndAbandonedCostUsd: 0, fixAfterMergeCostUsd: 0 }).every((s) => s.share === 0));
+  assert.deepEqual(floorSegments(null), []);
+});
+
+test("lowCostCoverage / sortWorkflows", () => {
+  assert.equal(lowCostCoverage(0.5), true);
+  assert.equal(lowCostCoverage(0.8), false);
+  assert.equal(lowCostCoverage(1), false);
+  assert.equal(lowCostCoverage(undefined), false);
+  const rows = [{ workflowMode: "b", units: 1 }, { workflowMode: "a", units: 1 }, { workflowMode: "z", units: 5 }];
+  assert.deepEqual(sortWorkflows(rows).map((r) => r.workflowMode), ["z", "a", "b"]);
+  assert.deepEqual(sortWorkflows(undefined), []);
 });
