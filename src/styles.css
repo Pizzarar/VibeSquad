@@ -5744,3 +5744,14 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 /* one UI font for tool surfaces: the Silkscreen/Pixelify (--arcade/--display) rows, @code chips, breadcrumb and provider names fall back to Courier New and clash with --mono.
    Scoped, not aliased globally (floor/sky keep --arcade); the brand block, terminals and diagrams keep their own fonts. */
 :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :not(.brand-text, .brand-text *, .xterm, .xterm *, svg, svg *, .sky-static-text) { font-family: var(--mono) !important; }
+
+/* ── V1b overlap pass (docs/PLAN_OVERLAP_AUDIT_V1.md): layout / spacing only, --sp-N tokens; colour and skin stay with @art ── */
+/* Window title bars: the skin paints a 23px strip at the top (ramp rows 8-13); text and controls centre inside it, not below it. */
+.modal-head { padding-block: 0; min-height: var(--bar-h); gap: var(--sp-2); }
+/* App banners (exposed-LAN / read-only / config / update): one slim row inside the painted strip; App.tsx sets inline padding, so the block padding needs !important. */
+.exposed-network-banner, .read-only-banner, .config-warning-banner, .update-available-banner {
+  padding-block: 0 !important; min-height: calc(var(--u3-px) * 9); line-height: calc(var(--u3-px) * 9); gap: var(--sp-2);
+}
+.exposed-network-banner button, .read-only-banner button, .config-warning-banner button, .update-available-banner button { line-height: 1; padding-block: 0; }
+/* Banner text stays on one row (ellipsis, full text in the title attr) so narrow screens never grow it past the painted strip. */
+.exposed-network-banner > span, .read-only-banner > span, .config-warning-banner > span, .update-available-banner > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
