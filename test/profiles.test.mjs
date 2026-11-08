@@ -700,3 +700,15 @@ test("P1: saveProfiles({profile:{name,id}}) keeps provider/model/notes/role; not
     env.cleanup();
   }
 });
+
+test("just-send-it rule: identical sentence in all three prompt sources, old ask-to-confirm phrases gone", () => {
+  const SENTENCE =
+    "Once the owner has picked an option or approved the direction, act: hand off, send to another lane, park in the Inbox, then report what you did in one line. Ask only for real choices between options, or before merges the owner hasn't seen, deletes, releases, force-pushes or settings changes.";
+  const root = resolve(import.meta.dirname, "..");
+  for (const rel of ["server/profiles.mjs", "src/profiles.ts", "server/hooks/agent-duties.ts"]) {
+    const src = readFileSync(join(root, rel), "utf8").replace(/\\(['"])/g, "$1");
+    assert.ok(src.includes(SENTENCE), `${rel}: missing the just-send-it sentence`);
+    assert.ok(!src.includes('owner says "send it"'), `${rel}: old send-it trigger`);
+    assert.ok(!src.includes("Send it there?"), `${rel}: old confirm question`);
+  }
+});
