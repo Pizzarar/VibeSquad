@@ -45,7 +45,8 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
         writeFileSync(file, String(systemPrompt), 'utf8'); // UTF-8, no BOM
         args.push('--append-system-prompt-file', file);
       }
-      const child = spawnNoShell(command, args, { cwd, ...(env ? { env } : {}) }, spawnImpl);
+      let child;
+      try { child = spawnNoShell(command, args, { cwd, ...(env ? { env } : {}) }, spawnImpl); } catch (err) { this.cleanup(id); throw err; } // don't leak the files written above
       let turnOpen = false;
       child.stdin.on('error', () => {}); // EPIPE from a write racing child exit: the 'exit' handler already reports it
       const stdin = (o) => child.stdin.write(JSON.stringify(o) + '\n');

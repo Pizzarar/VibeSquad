@@ -68,11 +68,15 @@ test('toAgent: modeId reflects the effective claude mode', () => {
 
 test('claude adapter: --mcp-config names the vibesquad server and tools are pre-allowed', () => {
   const spawnImpl = fakeSpawn();
-  const adapter = createClaudeAdapter({ spawnImpl, command: process.execPath });
+  const promptsDir = path.join(mkdtempSync(path.join(os.tmpdir(), 'vs-mcp-cfg-')), 'prompts');
+  const adapter = createClaudeAdapter({ spawnImpl, command: process.execPath, promptsDir });
   const env = { VS_AGENT_ID: 'rn-a1', VS_LANE: 'own', SECRET_THING: 'nope' };
   adapter.start({ cwd: process.cwd(), meta: {}, env, emit() {}, onExit() {} });
   const { args } = spawnImpl.calls[0];
-  const cfg = JSON.parse(flagValue(args, '--mcp-config'));
+  const cfgFile = flagValue(args, '--mcp-config'); // a file path, not inline JSON
+  const cfg = JSON.parse(readFileSync(cfgFile, 'utf8'));
+  adapter.cleanup('agent');
+  assert.ok(!existsSync(cfgFile));
   assert.equal(cfg.mcpServers.vibesquad.command, process.execPath);
   assert.deepEqual(cfg.mcpServers.vibesquad.args, [MCP_SERVER]);
   assert.equal(cfg.mcpServers.vibesquad.env.VS_AGENT_ID, 'rn-a1');
