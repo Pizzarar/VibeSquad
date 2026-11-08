@@ -25,21 +25,45 @@ export function isTransientErrorText(text: unknown): boolean {
 }
 
 type Item = { item?: any; seqStart?: number } | null | undefined;
+export type Blip = { raw: string; line: string };
 
-// Items that prove the agent carried on after the error.
-const ACTIVITY = new Set(["assistant_message", "reasoning", "tool_call", "todo", "user_message"]);
+// Items that prove the agent carried on after the error. user_message is excluded on purpose: the
+// server auto-retry posts one after every transient failure, so it says nothing about recovery.
+const ACTIVITY = new Set(["assistant_message", "reasoning", "tool_call", "todo"]);
+
+function defaultFormat(err: any): string {
+  if (err == null) return "";
+  if (typeof err === "string") return err;
+  if (typeof err.message === "string") return err.message;
+  if (typeof err.text === "string") return err.text;
+  try { return JSON.stringify(err); } catch { return String(err); }
+}
 
 /**
- * Blip vs error for the timeline item at `index`: a blip only when the error is transient AND a later
- * item shows activity. The last item (retries ran out, agent errored/idle) stays a ⚠ error.
+ * One reverse pass over the (already cut/rewound) entries: an error is a blip only when it is transient
+ * and activity follows it before the next error. The last error stays a ⚠ while the agent is in "error".
+ * `fmt` should be the same text formatter the error row uses (Timeline passes formatToolError).
  */
-export function transientBlip(entries: Item[], index: number): { raw: string; line: string } | null {
-  const it = entries[index]?.item;
-  if (!it || it.type !== "error") return null;
-  const raw = String(it.message ?? it.error ?? "");
-  if (!isTransientErrorText(raw)) return null;
-  for (let i = index + 1; i < entries.length; i++) {
-    if (ACTIVITY.has(entries[i]?.item?.type)) return { raw, line: blipLine(entries[index]?.seqStart ?? index) };
+export function recoveredBlips(
+  entries: Item[],
+  agentStatus?: string,
+  fmt: (err: any) => string = defaultFormat,
+): Map<object, Blip> {
+  const out = new Map<object, Blip>();
+  let recovered = false;
+  let lastError = true;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i];
+    const t = e?.item?.type;
+    if (t === "error") {
+      const stuck = lastError && agentStatus === "error";
+      lastError = false;
+      if (recovered && !stuck) {
+        const raw = fmt(e!.item.message ?? e!.item.error);
+        if (isTransientErrorText(raw)) out.set(e as object, { raw, line: blipLine(e!.seqStart ?? i) });
+      }
+      recovered = false;
+    } else if (ACTIVITY.has(t)) recovered = true;
   }
-  return null;
+  return out;
 }

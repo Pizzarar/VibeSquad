@@ -22,7 +22,7 @@ import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, coal
 import { BARE_NAME_RE, BARE_PATH_RE, bareNamesVersion, isLocalHref, localLinkTarget, lookupBareName, parseFileToken, subscribeBareNames } from "./fileLinks";
 import { toolStartsExpanded, usePref } from "./prefs";
 import { getPanes } from "./panes";
-import { transientBlip } from "./transientBlip";
+import { recoveredBlips } from "./transientBlip";
 import { SubagentList } from "./SubagentList";
 import { Spinner, Stamp, TimelineSkeleton, useDelayedBusy } from "./QuickWinsUi";
 import { MermaidView } from "./MermaidView";
@@ -1200,6 +1200,7 @@ export function Timeline({
   const [pendingJump, setPendingJump] = useState<{ seq: number; n: number } | null>(null);
   const base = cut ? truncateAfter(entries, cut) : entries;
   const shown = filterEntries(base, filter);
+  const blips = useMemo(() => recoveredBlips(base, agentStatus, formatToolError), [base, agentStatus]);
   const slowFirstLoad = useDelayedBusy(!loaded && entries.length === 0);
   const slowMore = useDelayedBusy(loadingMore);
   const slowSearch = useDelayedBusy(searching);
@@ -1475,7 +1476,7 @@ export function Timeline({
             onParkText={onParkText}
             onRewound={(x) => { cutLen.current = entries.length; setCut(x); }}
             latestReasoning={e === entries[latestReasoningIndex(entries)]}
-            blip={e.item?.type === "error" ? transientBlip(entries, entries.indexOf(e)) : null}
+            blip={blips.get(e) ?? null}
             selected={selectedEntryKey === String(e.seqStart ?? i)}
             onSelect={() => setSelectedEntryKey((k) => (k === String(e.seqStart ?? i) ? null : String(e.seqStart ?? i)))}
           />
