@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test, { afterEach } from "node:test";
+import { pathToFileURL } from "node:url";
 import {
   laneArtifactDir,
   readLaneSpec,
@@ -167,6 +168,45 @@ test("upsertLaneTask rejects a unit without an id and a missing board is empty",
   const missing = readLaneTasks("squad", "never-written", root);
   assert.equal(missing.exists, false);
   assert.deepEqual(missing.units, []);
+});
+
+test("upsertLaneTask throws on corrupt TASKS.json and leaves it untouched; SPEC.md write leaves no lock/tmp", (t) => {
+  const { base, root } = setupLib();
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  upsertLaneTask("squad", "feat-x", { id: "a" }, root);
+  const file = readLaneTasks("squad", "feat-x", root).fullPath;
+  writeFileSync(file, "{ not json", "utf8");
+  assert.throws(() => upsertLaneTask("squad", "feat-x", { id: "b" }, root));
+  assert.equal(readFileSync(file, "utf8"), "{ not json");
+  assert.equal(existsSync(`${file}.lock`), false);
+
+  const spec = writeLaneSpec("squad", "feat-x", "# spec\n", root);
+  assert.equal(readFileSync(spec.fullPath, "utf8"), "# spec\n");
+  assert.equal(existsSync(`${spec.fullPath}.lock`), false);
+});
+
+test("real cross-process race: concurrent upsertLaneTask loses no units", async (t) => {
+  const { base, root, teamsFile } = setupLib();
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const PROCS = 4;
+  const K = 15;
+  const modUrl = pathToFileURL(resolve(REPO_ROOT, "server", "lane-spec.mjs")).href;
+  const code = `import(${JSON.stringify(modUrl)}).then(({ upsertLaneTask }) => {
+    const [p, k, root] = process.argv.slice(1);
+    for (let i = 0; i < Number(k); i++) upsertLaneTask("squad", "feat-x", { id: "p" + p + "-t" + i, goal: "g" }, root);
+  });`;
+  const env = { ...process.env, VIBESQUAD_TEAMS_FILE: teamsFile };
+  await Promise.all(
+    Array.from({ length: PROCS }, (_, p) =>
+      new Promise((res, rej) => {
+        const c = spawn(process.execPath, ["--input-type=module", "-e", code, String(p), String(K), root], { stdio: ["ignore", "inherit", "inherit"], env });
+        c.on("exit", (n) => (n === 0 ? res() : rej(new Error(`child ${p} exited ${n}`))));
+        c.on("error", rej);
+      }),
+    ),
+  );
+  const ids = new Set(readLaneTasks("squad", "feat-x", root).units.map((u) => u.id));
+  assert.equal(ids.size, PROCS * K);
 });
 
 // ---------------------------------------------------------------------------

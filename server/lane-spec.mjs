@@ -1,6 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { briefRootFor } from "./brief-path.mjs";
+import { writeFileAtomic } from "./brief-write.mjs";
+import { updateJsonFileSync, withFileLockSync } from "./file-lock.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
 
 // Durable per-lane source of truth (docs/lanes/<lane>/SPEC.md + TASKS.json) that survives
@@ -50,7 +52,7 @@ export function writeLaneSpec(teamId, laneId, content, rootDir) {
   mkdirSync(dir, { recursive: true });
   const fullPath = join(dir, "SPEC.md");
   const text = String(content ?? "");
-  writeFileSync(fullPath, text, "utf8");
+  withFileLockSync(fullPath, () => writeFileAtomic(fullPath, text));
   return { laneId: safeLane, path: `docs/lanes/${safeLane}/SPEC.md`, fullPath, bytes: Buffer.byteLength(text, "utf8") };
 }
 
@@ -83,37 +85,45 @@ export function upsertLaneTask(teamId, laneId, unitPatch, rootDir) {
   const id = String(unitPatch?.id ?? "").trim();
   if (!id) throw new Error("task set needs a unit id");
 
-  const current = readLaneTasks(teamId, laneId, rootDir);
-  const units = current.units.slice();
-  const idx = units.findIndex((u) => String(u?.id) === id);
-  const existing = idx >= 0 ? units[idx] : null;
-
-  const has = (key) => unitPatch && Object.prototype.hasOwnProperty.call(unitPatch, key) && unitPatch[key] !== undefined;
-  const val = (key, fallback) => (has(key) ? unitPatch[key] : fallback);
-
-  const merged = { id };
-  if (has("title") && String(unitPatch.title)) merged.title = String(unitPatch.title);
-  else if (existing?.title) merged.title = existing.title;
-  merged.goal = String(val("goal", existing?.goal ?? "") ?? "");
-  merged.files = Array.isArray(val("files", existing?.files ?? [])) ? val("files", existing?.files ?? []).map(String) : [];
-  merged.doneCheck = String(val("doneCheck", existing?.doneCheck ?? "") ?? "");
-  const status = String(val("status", existing?.status ?? "todo"));
-  merged.status = UNIT_STATUSES.has(status) ? status : "todo";
-  if (has("dependsOn")) merged.dependsOn = Array.isArray(unitPatch.dependsOn) ? unitPatch.dependsOn.map(String) : [];
-  else if (existing?.dependsOn !== undefined) merged.dependsOn = existing.dependsOn;
-  for (const opt of ["branch", "worktreePath", "commit", "agentId"]) {
-    const v = val(opt, existing?.[opt]);
-    if (v !== undefined && v !== "") merged[opt] = String(v);
-  }
-
-  if (idx >= 0) units[idx] = merged;
-  else units.push(merged);
-
-  const doc = { laneId: safeLane, updatedAt: new Date().toISOString(), units };
   const dir = artifactDir(teamId, laneId, rootDir);
   mkdirSync(dir, { recursive: true });
   const fullPath = join(dir, "TASKS.json");
-  writeFileSync(fullPath, JSON.stringify(doc, null, 2) + "\n", "utf8");
+
+  let merged;
+  let units;
+  // Locked read-modify-write: server and CLI both upsert, so an unlocked one loses units. A corrupt file throws.
+  updateJsonFileSync(
+    fullPath,
+    (data) => {
+      units = Array.isArray(data?.units) ? data.units.slice() : [];
+      const idx = units.findIndex((u) => String(u?.id) === id);
+      const existing = idx >= 0 ? units[idx] : null;
+
+      const has = (key) => unitPatch && Object.prototype.hasOwnProperty.call(unitPatch, key) && unitPatch[key] !== undefined;
+      const val = (key, fallback) => (has(key) ? unitPatch[key] : fallback);
+
+      merged = { id };
+      if (has("title") && String(unitPatch.title)) merged.title = String(unitPatch.title);
+      else if (existing?.title) merged.title = existing.title;
+      merged.goal = String(val("goal", existing?.goal ?? "") ?? "");
+      merged.files = Array.isArray(val("files", existing?.files ?? [])) ? val("files", existing?.files ?? []).map(String) : [];
+      merged.doneCheck = String(val("doneCheck", existing?.doneCheck ?? "") ?? "");
+      const status = String(val("status", existing?.status ?? "todo"));
+      merged.status = UNIT_STATUSES.has(status) ? status : "todo";
+      if (has("dependsOn")) merged.dependsOn = Array.isArray(unitPatch.dependsOn) ? unitPatch.dependsOn.map(String) : [];
+      else if (existing?.dependsOn !== undefined) merged.dependsOn = existing.dependsOn;
+      for (const opt of ["branch", "worktreePath", "commit", "agentId"]) {
+        const v = val(opt, existing?.[opt]);
+        if (v !== undefined && v !== "") merged[opt] = String(v);
+      }
+
+      if (idx >= 0) units[idx] = merged;
+      else units.push(merged);
+
+      return { laneId: safeLane, updatedAt: new Date().toISOString(), units };
+    },
+    { fallback: {} },
+  );
 
   return { unit: merged, units };
 }
