@@ -10,6 +10,10 @@ import path from 'node:path';
 // squad/team/lane/role/ord/profile are plain meta fields, first-class on the agent record.
 const META_FIELDS = ['squad', 'team', 'lane', 'role', 'ord', 'profile', 'title', 'permissionMode', 'acpMode', 'thinkingOptionId', 'featureValues', 'labels', 'model'];
 
+// Child/provider noise that is not turn progress: it must not refresh `lastEvent` or clear `quiet` (only assistant
+// output, tool activity, status and the like count as a turn still making progress).
+const NON_PROGRESS_EVENTS = new Set(['stderr', 'raw', 'limit']);
+
 // Values that reach a CLI as an argument must never look like a flag.
 export function validateCreate({ model, cwd, meta = {} }) {
   for (const [name, v] of [['model', model], ['permissionMode', meta.permissionMode]]) {
@@ -74,6 +78,13 @@ export function archiveKillFromEnv(env = process.env) {
   const n = Number(env.VS_RUNNER_ARCHIVE_KILL_MS);
   return Number.isInteger(n) && n >= 0 ? n : DEFAULT_ARCHIVE_KILL_MS;
 }
+// A running turn that has produced no log events for this long is flagged `quiet` and stops counting toward its family
+// turn cap (its process keeps running; its next event counts it again). 0 flags immediately (dev/test only).
+export const DEFAULT_QUIET_MS = 600000;
+export function quietFromEnv(env = process.env) {
+  const n = Number(env.VS_RUNNER_QUIET_MS);
+  return Number.isInteger(n) && n >= 0 ? n : DEFAULT_QUIET_MS;
+}
 export function providerFamily(provider) {
   const p = PROVIDER_ALIASES[provider] ?? provider;
   if (p === 'claude') return 'claude';
@@ -85,7 +96,7 @@ export function providerFamily(provider) {
 export class Runner {
   // limitsFile: where limit-window records go (default: limits.jsonl next to the agents dir, i.e. the runner home).
   // pollAgy: after antigravity-cli turns, poll `agy -p /usage` (ACP carries no quota); only the real server turns it on.
-  constructor({ dir, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts') }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv() }) {
+  constructor({ dir, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts') }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), quietMs = quietFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv() }) {
     this.store = new LogStore(dir);
     this.folds = new Map(); // id -> log-derived status (no liveness), valid while the log file's size + mtime are unchanged
     this.limits = new LimitStore(limitsFile);
@@ -96,6 +107,9 @@ export class Runner {
     this.parkGraceMs = parkGraceMs;
     this.archiveKillMs = archiveKillMs;
     this.queueMaxAgeMs = queueMaxAgeMs; // recoverQueued ignores inputs queued longer ago than this (0 = no bound)
+    this.quietMs = quietMs;
+    this._quietSweep = setInterval(() => this._sweepQuiet(), Math.max(25, Math.min(this.quietMs, 1000)));
+    this._quietSweep.unref?.(); // never keeps the process alive (tests exit without clearing it)
     this.queue = []; // FIFO of jobs waiting for a turn slot or a live-process slot: { id, family, needsTurn, run, ahead }
     this.live = new Map(); // id -> { handle, status, ... } for agents running in THIS process only
     this.overCapOwner = new Map(); // family -> count of owner turns currently running OVER that family's turn cap (released on turn end)
@@ -129,16 +143,30 @@ export class Runner {
 
   // The only place an agent process is started (create and resume-from-park).
   _start(id, { provider, model, cwd, meta, systemPrompt, resume }) {
-    // inflight: prompts delivered whose turn has not ended (each adapter emits one idle per finished turn); > 0 means this agent holds a turn slot.
-    const entry = { status: 'starting', handle: null, provider, family: providerFamily(provider), systemPrompt, sessionId: resume ?? null, parked: false, lastActive: Date.now(), inflight: 0, turns: resume ? 1 : 0, perms: new Set(), parkTimer: null };
+    // inflight: OPEN TURNS, not prompts (each adapter emits one idle per finished turn); > 0 means this agent holds a
+    // turn slot. A steer into a turn already running merges into it (one idle), so it must not open a second slot.
+    const entry = { status: 'starting', handle: null, provider, family: providerFamily(provider), systemPrompt, sessionId: resume ?? null, parked: false, lastActive: Date.now(), lastEvent: Date.now(), quiet: false, inflight: 0, turns: resume ? 1 : 0, perms: new Set(), parkTimer: null };
     this.live.set(id, entry);
     const emit = (type, data) => {
+      // A late event from a child that was just parked/killed (killTree is async on Windows) must not touch a dead
+      // entry: a stray 'running' after 'parked' would corrupt _parkedSpec (the agent reads 'lost') or re-take inflight.
+      if (entry.parked || entry.status === 'exited' || this.live.get(id) !== entry) return;
+      if (!NON_PROGRESS_EVENTS.has(type)) { // only turn-progress events count: stderr/raw/limit are noise
+        entry.lastEvent = Date.now();
+        if (entry.quiet) entry.quiet = false; // a real event ends a quiet turn's quiet period: it counts again
+      }
       let turnEnded = false;
       if (type === 'status') {
         entry.status = data.status;
         if (data.status === 'idle' || data.status === 'running') entry.lastActive = Date.now();
+        if (data.status === 'running') {
+          // Mirror the adapter's real turn state: a follow-up turn (an ACP steer, a claude interrupt) re-takes the
+          // slot after the previous idle cleared it. Over-cap is allowed (like OWNER_OVER_CAP / a quiet turn): the
+          // agent was already admitted, so it is never re-queued or cancelled for a turn it is already running.
+          if (entry.inflight === 0) entry.inflight = 1;
+        }
         if (data.status === 'idle') {
-          entry.inflight = Math.max(0, entry.inflight - 1);
+          entry.inflight = 0;
           entry.turns++;
           turnEnded = true;
           this._releaseOverCap(entry, 1); // an owner turn that was running over the cap just ended
@@ -214,11 +242,28 @@ export class Runner {
     return true;
   }
 
-  // Running turns of one provider family (agents holding a turn slot), not live processes.
+  // Running turns of one provider family (agents holding a turn slot), not live processes. A quiet turn (see _sweepQuiet)
+  // does not count: its process keeps running but it yields its family slot so the queue can advance.
   _running(family) {
     let n = 0;
-    for (const e of this.live.values()) if (e.family === family && e.inflight > 0) n++;
+    for (const e of this.live.values()) if (e.family === family && e.inflight > 0 && !e.quiet) n++;
     return n;
+  }
+
+  // Flags running turns that have produced no log events for quietMs as `quiet`: they stop counting toward their
+  // family turn cap (see _running) so the queue can advance, but the process keeps running (never cancel/park/requeue).
+  // Its next event clears the flag (see emit); it may then sit over the cap, which is allowed.
+  _sweepQuiet() {
+    let changed = false;
+    const now = Date.now();
+    for (const [id, e] of this.live.entries()) {
+      if (e.inflight > 0 && !e.quiet && now - e.lastEvent >= this.quietMs) {
+        e.quiet = true;
+        try { this.store.append(id, 'turn-quiet', { since: e.lastEvent }); } catch { /* best effort */ }
+        changed = true;
+      }
+    }
+    if (changed) this._pump();
   }
 
   // Releases up to `n` of an entry's owner over-cap turns from its family's over-cap budget. Idempotent: an entry
@@ -514,8 +559,15 @@ export class Runner {
   _deliver(entry, text, images = []) {
     if (!entry?.handle) throw new Error('agent is not running');
     clearTimeout(entry.parkTimer);
-    entry.inflight++;
-    try { entry.handle.send(text, images.length ? { images } : undefined); } catch (err) { entry.inflight--; throw err; }
+    // inflight counts OPEN TURNS (one per agent at a time), not prompts. A fresh turn takes its slot here — and marks
+    // itself active — immediately, without waiting for the adapter's (possibly async, e.g. ACP ready.then) 'running'.
+    const fresh = entry.inflight === 0;
+    if (fresh) {
+      entry.inflight = 1;
+      entry.lastEvent = Date.now();
+      entry.quiet = false;
+    }
+    try { entry.handle.send(text, images.length ? { images } : undefined); } catch (err) { if (fresh) entry.inflight = 0; throw err; }
   }
 
   // opts.images: [{ data (base64), mimeType }]; opts.activeTurnBehavior: 'steer' (default, queue behind/into the turn)
@@ -717,6 +769,7 @@ export class Runner {
   // Marks every live agent as exited by the runner, then kills its process tree.
   shutdown() {
     this._pollAgy?.shutdown();
+    clearInterval(this._quietSweep);
     const waiting = new Set(this.queue.map((j) => j.id)); // agents with a queued, unstarted input: their log must keep ending in `queued` so the next boot re-enqueues them
     this.queue.length = 0;
     for (const e of this.live.values()) { clearTimeout(e.parkTimer); this._clearArchive(e); }

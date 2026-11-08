@@ -362,9 +362,9 @@ test('archive (c): with 2 prompts queued in the child, the first turn ending sto
   const a = mk(runner, { prompt: 'one' });
   await tick();
   runner.send(a, 'two');
-  assert.equal(runner.live.get(a).inflight, 2);
+  assert.equal(runner.live.get(a).inflight, 1); // a steer merges into the open turn (one slot), not a second slot
   runner.archive(a);
-  spawnImpl.calls[0].child.finish(); // interrupted turn 1 ends; inflight 2 -> 1
+  spawnImpl.calls[0].child.finish(); // interrupted turn 1 ends; inflight 1 -> 0
   await tick();
   assert.equal(runner.live.has(a), false, 'stopped despite inflight > 0');
   assert.equal(running(runner), 0);
