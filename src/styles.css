@@ -5786,3 +5786,24 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 .pane-tab { max-width: 220px; }
 /* Chat top bar at narrow widths: tighter gaps so the config summary is not cut by the pane edge. */
 .pin-focus-bar .drawer-head-compact { gap: var(--sp-1); }
+
+/* ======================================================================
+   V1b @art contrast pass: controls the U3 sprite fills left with a label that only clears the sprite, not the solid colour
+   the guard (and a no-sprite fallback) sees. Every pair below is a P0 token pair, >= 4.5:1 in dark and light.
+   ====================================================================== */
+:root { --on-pink-fill: var(--bg); }
+:root[data-theme="light"] { --on-pink-fill: var(--marble); }
+/* selected seg / chip: INK on the violet fill (the U3 light label #f6eef8 was 2.85:1 on light violet) */
+:root:root :is(.seg button.on, .tchip.on) { background: var(--violet); color: var(--on-pastel) !important; text-shadow: none; }
+/* selected teal button (Settings UI-scale 100%: label equalled the fill) */
+:root:root .btn.on:not(.ghost) { background: var(--cyan-fill); color: var(--on-cyan-fill) !important; text-shadow: none; }
+/* needs-you counts and hot/bad buttons: solid pink fill with on-fill ink (light pink-fill #b4377a + marble = 5.5:1) */
+:root:root :is(.badge.alert, [data-testid^="pin-needs-"], [data-testid^="squad-home-needs-"]) { background: var(--pink-fill); color: var(--on-pink-fill) !important; text-shadow: none; }
+:root:root :is(.btn.hot, .btn.bad):not(:disabled):not(.sky-zones *) { background: var(--pink-fill); color: var(--on-pink-fill); text-shadow: none; }
+/* plain confirm (Archive) and warn (Cancel & Resume) buttons */
+:root:root .btn.confirm:not(.danger):not(.warn):not(.armed):not(:disabled) { background: var(--cyan-fill); color: var(--on-cyan-fill); text-shadow: none; }
+:root:root :is(.btn.warn, .btn.confirm.warn):not(.armed):not(:disabled) { background: var(--amber); color: var(--on-amber); text-shadow: none; }
+/* ⇄ Handoff (Aub's R1 "blank yellow button"): ink label on the teal fill whatever the ctx tone */
+:root:root .brainstorm-ctx-bar:not(.tone-red) .btn-brainstorm-restart { background: var(--cyan-fill); color: var(--on-cyan-fill) !important; text-shadow: none; }
+/* teal label chips: tinted panel with body text, like the other quiet chips */
+:root:root .drawer-labels-list .chip { background: color-mix(in srgb, var(--cyan) 18%, var(--panel)); color: var(--text); text-shadow: none; }
