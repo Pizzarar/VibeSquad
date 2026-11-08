@@ -3628,10 +3628,10 @@ html, body, #root { overflow-x: hidden; }
   padding: 0 10px 0 6px; background: var(--well); border-bottom: 1px solid var(--line);
 }
 .pin-focus-home { font-size: 16px; padding: 2px 8px; display: inline-flex; align-items: center; justify-content: center; }
-/* @art S2b-2 pixel icons: 8 kit px = 16 device px, so the 1x art is 1:1 and the @2x art is exact at dpr 2 */
-.pixel-icon { width: calc(var(--u3-px) * 8); height: calc(var(--u3-px) * 8); image-rendering: pixelated; flex: none; vertical-align: middle; }
-.pin-focus-bar .pin-focus-home:has(.pixel-icon) { min-height: 0; height: calc(var(--u3-px) * 18); padding: 0 calc(var(--u3-px) * 4); }
-.agent-panes .btn[data-testid="pane-teams-home-btn"]:has(.pixel-icon) { min-height: 0; display: inline-flex; align-items: center; gap: calc(var(--u3-px) * 2); height: calc(var(--u3-px) * 24); padding-top: 0; padding-bottom: 0; }
+/* @art S2b-2 pixel icons: the sprite is 16 art px drawn at 2 device px each, so 16 kit px = 32 device px (--u3-px is device-snapped; 26.67 CSS at 4K@120%, 32 at 1080) */
+.pixel-icon { width: calc(var(--u3-px) * 16); height: calc(var(--u3-px) * 16); image-rendering: pixelated; flex: none; vertical-align: middle; }
+.pin-focus-bar .pin-focus-home:has(.pixel-icon) { min-height: 0; height: calc(var(--u3-px) * 18); padding: 0 calc(var(--u3-px) * 1); }
+.agent-panes .btn[data-testid="pane-teams-home-btn"]:has(.pixel-icon) { min-height: 0; display: inline-flex; align-items: center; gap: calc(var(--u3-px) * 2); height: calc(var(--u3-px) * 18); padding-top: 0; padding-bottom: 0; }
 .pin-focus-name { font-family: var(--display); font-size: 14px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pin-focus-spinup-error { margin-top: 6px; padding: 6px 10px; color: var(--coral-t); background: color-mix(in srgb, var(--coral) 8%, transparent); border: 1px solid var(--coral); border-radius: 4px; font-size: 12px; line-height: 1.4; }
 .pin-focus-squad { white-space: nowrap; }

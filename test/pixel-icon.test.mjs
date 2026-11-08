@@ -10,12 +10,13 @@ test("PixelIcon wires theme-picked 1x/@2x srcset, glyph fallback", () => {
   assert.match(src, /\/ui\/icon-\$\{name\}-\$\{theme\}/);
   assert.match(src, /useImageOk/);
   assert.match(src, /alt=\{alt\}/);
+  assert.match(src, /onError=\{\(\) => setFailed\(srcSet\)\}/);
 });
 
 test("pixel-icon CSS is pixelated and kit-pixel sized; both call sites use it", () => {
   const css = read("src/styles.css");
   assert.match(css, /\.pixel-icon \{[^}]*image-rendering: pixelated/);
-  assert.match(css, /\.pixel-icon \{[^}]*calc\(var\(--u3-px\) \* 8\)/);
+  assert.match(css, /\.pixel-icon \{[^}]*calc\(var\(--u3-px\) \* 16\)/);
   assert.match(read("src/PinRail.tsx"), /<PixelIcon name="squads"/);
   assert.match(read("src/AgentPanes.tsx"), /<PixelIcon name="teams"/);
 });
