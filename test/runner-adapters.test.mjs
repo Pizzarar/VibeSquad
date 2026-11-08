@@ -165,7 +165,7 @@ test('AGY spawned with modeId "default" reports modeId default (acpMode fallback
 
 test('a write racing child exit (EPIPE on stdin) does not crash the process, ACP and claude', async () => {
   const fake = { file: '/bin/fake', args: [] };
-  for (const make of [(spawnImpl) => createAcpAdapter({ spawnImpl, provider: 'opencode', mcp: false, resolved: fake }), (spawnImpl) => createClaudeAdapter({ spawnImpl, mcp: false })]) {
+  for (const make of [(spawnImpl) => createAcpAdapter({ spawnImpl, provider: 'opencode', mcp: false, resolved: fake }), (spawnImpl) => createClaudeAdapter({ spawnImpl, command: process.execPath, mcp: false })]) {
     const spawnImpl = fakeSpawn((m, child) => { if (m.method === 'initialize') child.push({ jsonrpc: '2.0', id: m.id, result: {} }); });
     const adapter = make(spawnImpl);
     const runner = new Runner({ dir: tmp(), adapters: { x: adapter } });
@@ -300,7 +300,7 @@ test('claude: a 60k system prompt goes via --append-system-prompt-file, never ar
   assert.equal(prompt.length, 60000);
   for (const resume of [undefined, 'sess-1']) {
     const spawnImpl = fakeSpawn();
-    const adapter = createClaudeAdapter({ spawnImpl, mcp: false, promptsDir });
+    const adapter = createClaudeAdapter({ spawnImpl, command: process.execPath, mcp: false, promptsDir });
     adapter.start({ id: 'rn-big', cwd: '.', systemPrompt: prompt, emit() {}, onExit() {}, ...(resume ? { resume } : {}) });
     const { args } = spawnImpl.calls[0];
     const i = args.indexOf('--append-system-prompt-file');
@@ -320,7 +320,7 @@ test('claude: a 60k system prompt goes via --append-system-prompt-file, never ar
 test('Runner: prompt file lives under <home>/prompts, is rewritten on resume, and archive removes it', async () => {
   const home = tmp();
   const spawnImpl = fakeSpawn();
-  const runner = new Runner({ dir: path.join(home, 'agents'), adapters: defaultAdapters({ spawnImpl, mcp: false, promptsDir: path.join(home, 'prompts') }) });
+  const runner = new Runner({ dir: path.join(home, 'agents'), adapters: defaultAdapters({ spawnImpl, command: process.execPath, mcp: false, promptsDir: path.join(home, 'prompts') }) });
   const id = runner.create({ provider: 'claude', cwd: '.', systemPrompt: 'PROMPT-A' });
   const file = spawnImpl.calls[0].args[spawnImpl.calls[0].args.indexOf('--append-system-prompt-file') + 1];
   assert.equal(path.dirname(file), path.join(home, 'prompts'));
