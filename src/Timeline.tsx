@@ -26,9 +26,9 @@ import { SubagentList } from "./SubagentList";
 import { Spinner, Stamp, TimelineSkeleton, useDelayedBusy } from "./QuickWinsUi";
 import { MermaidView } from "./MermaidView";
 import { noteTimelineOffers, useLooksDoneId } from "./PinGrid";
-import { SpinOffCard, SendToCard, findPinForAgent, useSendTo, useSpinOff } from "./PinIdeas";
+import { SpinOffCard, SendToCard, findPinForAgent } from "./PinIdeas";
 import { LooksDoneCard } from "./PinDone";
-import { hasLooksDone, isHubPin, parseSendTo, parseSpinOff } from "./pins";
+import { hasLooksDone, isHubPin, parseSendTo, parseSpinOff, sendToCardId, spinOffCardId } from "./pins";
 
 export class TimelineErrorBoundary extends Component<
   { children: ReactNode; fallbackLabel?: string },
@@ -395,8 +395,6 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 
 export function MarkdownRenderer({ text, agentId, doc = false }: { text: string; agentId?: string; doc?: boolean }) {
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
-  const liveSpinOff = useSpinOff(agentId ?? null);
-  const liveSendTo = useSendTo(agentId ?? null);
   const liveLooksDoneId = useLooksDoneId(agentId ?? null);
   useSyncExternalStore(subscribeBareNames, bareNamesVersion); // re-render when a bare filename resolves
   const tokens = tokenizeMarkdown(text, doc);
@@ -451,7 +449,7 @@ export function MarkdownRenderer({ text, agentId, doc = false }: { text: string;
             return (
               <div key={i} className="tl-spinoff-block" data-testid="tl-spinoff-block">
                 <CodeBlock lang={tok.lang || "vs:spin-off"} code={tok.code} />
-                <SpinOffCard pin={pin} offer={{ id: liveSpinOff?.id ?? `${agentId ?? "inline"}:inline:${i}`, teams }} variant="bar" />
+                <SpinOffCard pin={pin} offer={{ id: spinOffCardId(agentId ?? "inline", teams), teams }} variant="bar" />
               </div>
             );
           }
@@ -463,7 +461,7 @@ export function MarkdownRenderer({ text, agentId, doc = false }: { text: string;
             return (
               <div key={i} className="tl-sendto-block" data-testid="tl-sendto-block">
                 <CodeBlock lang={tok.lang || "vs:send-to"} code={tok.code} />
-                <SendToCard pin={pin} offer={{ ...parsedSendTo, id: liveSendTo?.id ?? `${agentId ?? "inline"}:inline:${i}` }} variant="bar" />
+                <SendToCard pin={pin} offer={{ ...parsedSendTo, id: sendToCardId(agentId ?? "inline", parsedSendTo) }} variant="bar" />
               </div>
             );
           }

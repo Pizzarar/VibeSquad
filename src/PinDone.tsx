@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { completeBlocker, type Pin } from "./pins";
 import { createDoneShelfStore } from "./pinFocusLogic";
-import { dismissLooksDone, isLooksDoneDismissed, markPinComplete, reopenPin } from "./pinActions";
+import { dismissedVersion, subscribeDismissed, dismissLooksDone, isLooksDoneDismissed, markPinComplete, reopenPin } from "./pinActions";
 
 type MarkState = { kind: "idle" } | { kind: "blocked"; why: string } | { kind: "armed" } | { kind: "busy" };
 
@@ -158,7 +158,8 @@ export function DoneShelf({ done, squadId }: { done: Pin[]; squadId: string }) {
 /** "<Team> looks done. ✓ Mark complete · Not yet", shown on the tile while the newest Brainstorm message carries vs:looks-done. */
 export function LooksDoneCard({ pin, messageId }: { pin: Pin; messageId: string }) {
   const [dismissed, setDismissed] = useState(() => isLooksDoneDismissed(messageId));
-  useEffect(() => setDismissed(isLooksDoneDismissed(messageId)), [messageId]);
+  const dv = useSyncExternalStore(subscribeDismissed, dismissedVersion);
+  useEffect(() => setDismissed(isLooksDoneDismissed(messageId)), [messageId, dv]);
   if (dismissed) return null;
   return (
     <div className="pin-looks-done" data-testid={`pin-looks-done-${pin.lane.id}`} onClick={(e) => e.stopPropagation()}>

@@ -192,6 +192,25 @@ export function parseSpinOff(text) {
   return last?.length ? last : null;
 }
 
+const hashText = (s) => {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193) >>> 0;
+  return h.toString(36);
+};
+
+/**
+ * Stable id of a send-to / spin-off card: `${kind}:${agentId}:${laneId|teamsKey}:${hash(normalized text)}`. It depends only
+ * on what the card says, so it is the same in the hub bar and the inline Timeline card, and does not change when the
+ * Buddy posts again. This is the key the dismissed list stores.
+ */
+export function cardId(kind, agentId, key, text) {
+  return `${kind}:${agentId}:${key}:${hashText(String(text ?? "").replace(/\s+/g, " ").trim().toLowerCase())}`;
+}
+
+export const sendToCardId = (agentId, offer) => cardId("send-to", agentId, offer.laneId, offer.text);
+export const spinOffCardId = (agentId, teams) =>
+  cardId("spin-off", agentId, teams.map((t) => t.name).join(",").toLowerCase(), teams.map((t) => `${t.name}|${t.brief}`).join("\n"));
+
 /** The spin-off offer in the newest assistant message of a Brainstorm timeline, else null. Same message-id scheme as sendToFrom. */
 export function spinOffFrom(agentId, entries) {
   for (let i = entries.length - 1; i >= 0; i--) {
@@ -199,7 +218,7 @@ export function spinOffFrom(agentId, entries) {
     if (it?.type !== "assistant_message" || typeof it.text !== "string") continue;
     const teams = parseSpinOff(it.text);
     if (!teams) return null;
-    return { teams, id: `${agentId}:${it.id ?? it.messageId ?? entries[i].seqStart ?? entries[i].timestamp ?? it.text.length}` };
+    return { teams, id: spinOffCardId(agentId, teams) };
   }
   return null;
 }

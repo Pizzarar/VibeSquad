@@ -78,7 +78,7 @@ describe("U16: parseSpinOff behavioral tests (server/pin-ideas.mjs & src/pins.ts
     ]);
 
     const offer = spinOffFrom("riffbot-1", [{ item: { type: "assistant_message", text: formatted, id: "msg-7" } }]);
-    assert.equal(offer?.id, "riffbot-1:msg-7");
+    assert.match(offer?.id ?? "", /^spin-off:riffbot-1:sim core,ui raid,art pipeline:/);
     assert.equal(offer?.teams.length, 3);
   });
 });
@@ -135,9 +135,9 @@ describe("U16: Timeline.tsx feeds noteTimelineOffers in useTimeline and renders 
 
   test("MarkdownRenderer renders inline SpinOffCard, SendToCard, and LooksDoneCard beneath code blocks", () => {
     assert.match(timelineSrc, /data-testid="tl-spinoff-block"/);
-    assert.match(timelineSrc, /<SpinOffCard\s+pin=\{pin\}\s+offer=\{\{\s*id:\s*liveSpinOff\?\.id\s*\?\?\s*`\$\{agentId\s*\?\?\s*"inline"\}:inline:\$\{i\}`,\s*teams\s*\}\}\s+variant="bar"\s*\/>/);
+    assert.match(timelineSrc, /<SpinOffCard\s+pin=\{pin\}\s+offer=\{\{\s*id:\s*spinOffCardId\(agentId\s*\?\?\s*"inline",\s*teams\),\s*teams\s*\}\}\s+variant="bar"\s*\/>/);
     assert.match(timelineSrc, /data-testid="tl-sendto-block"/);
-    assert.match(timelineSrc, /<SendToCard\s+pin=\{pin\}\s+offer=\{\{\s*\.\.\.parsedSendTo,\s*id:\s*liveSendTo\?\.id\s*\?\?\s*`\$\{agentId\s*\?\?\s*"inline"\}:inline:\$\{i\}`\s*\}\}\s+variant="bar"\s*\/>/);
+    assert.match(timelineSrc, /<SendToCard\s+pin=\{pin\}\s+offer=\{\{\s*\.\.\.parsedSendTo,\s*id:\s*sendToCardId\(agentId\s*\?\?\s*"inline",\s*parsedSendTo\)\s*\}\}\s+variant="bar"\s*\/>/);
     assert.match(timelineSrc, /data-testid="tl-looksdone-block"/);
     assert.match(timelineSrc, /<LooksDoneCard\s+pin=\{pin\}\s+messageId=\{liveLooksDoneId\s*\?\?\s*`\$\{agentId\s*\?\?\s*"inline"\}:inline:\$\{i\}`\}\s*\/>/);
   });
