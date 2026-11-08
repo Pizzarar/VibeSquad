@@ -245,6 +245,9 @@ test("handoff goes through the VS server endpoint, falling back in-process only 
     // A server-side refusal is an error, never a silent in-process retry.
     c.fetch = async () => ({ ok: false, status: 400, json: async () => ({ ok: false, error: "nope" }) });
     await assert.rejects(callTool(c, "handoff_lead", {}), /handoff failed: nope/);
+    // A pre-H1 server answers 200 without a successor id: that is a failure, never {title:"", via:"server"}.
+    c.fetch = async () => ({ ok: true, status: 200, json: async () => ({ ok: true }) });
+    await assert.rejects(callTool(c, "handoff_lead", {}), /no successor agent id/);
   } finally { t.cleanup(); }
 });
 

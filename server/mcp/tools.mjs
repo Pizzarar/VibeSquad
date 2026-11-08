@@ -414,6 +414,8 @@ async function handoffLead(ctx, args = {}) {
     }
   }
   if (res?.ok === false || res?.error) throw new Error(`handoff failed: ${res.error ?? "unknown"}`);
+  // A pre-H1 server doesn't know the route/shape and answers without a successor id: nothing was spawned.
+  if (!clean(res?.successorId ?? res?.id)) throw new Error("handoff failed: the VS server returned no successor agent id (server too old for lead handoff, or no agent was created)");
   return handoffView(res, { trigger, via });
 }
 
