@@ -1,4 +1,4 @@
--- S2b-2 shipping icons (Aub picked candidate 1: mini tower + 2-CRT desk pod, "needs to be
+-- S2b-2 shipping icons (owner picked candidate 1: mini tower + 2-CRT desk pod, "needs to be
 -- bigger"). Redrawn to fill the cell: the 16 native is shown at calc(var(--u3-px) * 16) =
 -- 32 device px on the 22-kit-px focus bar (both 1080 and 4K@120%), so 1 icon px = 1 kit px,
 -- and the 32 master (@2x) lands 1:1 on device pixels at 4K. Same key/outline/shadow rules as
