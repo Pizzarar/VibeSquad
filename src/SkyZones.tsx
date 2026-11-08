@@ -5,7 +5,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { DrawerSlot } from "./AgentPanes";
 import type { Pin } from "./pins";
-import { NO_OVERLORD_TEXT, SKY_COLUMNS, SKY_FRAME_URL, SKY_POPOVER_SELECTOR, SKY_WALL_URL, SKY_URL, TAKEOVER_FALLBACK, TAKEOVER_FALLBACK_MS, TAKEOVER_LABEL_URL, TAKEOVER_URL, faceBg, faceContain, hasFaceMode, skyAssets, skyEffectiveOpen, skyEscCloses, skyExit, skyFaceClick, skyLeftBot, skyOutsideCloses, skyRiffMode, skyWallFallbackStyle, skyWallStyle, skyZonesFor, takeoverLabelStyle, takeoverLanded, takeoverVisible, type SkyCan, type SkyOpen, type SkyZone, type TakeoverLabel, type TakeoverModel } from "./skyZonesLogic";
+import { NO_OVERLORD_TEXT, SKY_COLUMNS, SKY_FRAME_URL, SKY_POPOVER_SELECTOR, SKY_WALL_URL, SKY_URL, TAKEOVER_FALLBACK, TAKEOVER_FALLBACK_MS, TAKEOVER_LABEL_URL, TAKEOVER_URL, faceBg, faceContain, hasFaceMode, skyAssets, skyEffectiveOpen, skyEscCloses, skyExit, skyFaceClick, skyLeftBot, skyOutsideCloses, skyRiffMode, skyWallFallbackStyle, skyWallStyle, skyZonesFor, takeoverLabelGeom, takeoverLanded, takeoverVisible, type SkyCan, type SkyOpen, type SkyZone, type TakeoverLabel, type TakeoverModel } from "./skyZonesLogic";
 import type { FaceBot, FaceMode } from "./squadFloorLogic";
 import type { TeamView } from "./teams";
 import { useBotFace, useDpr, useFacesModel, useImageOk, usePrefersReducedMotion, useSkyCrtModel, useTakeoverClock, useTakeoverLabelModel, useTakeoverModel, useTheme } from "./useBotFace";
@@ -179,6 +179,19 @@ function Zone({
   const tks = useTakeoverState(scrawl, takeover, taken);
   const labelArt = useImageOk(scrawl && labelModel ? TAKEOVER_LABEL_URL(theme) : null);
   // In with the takeover, reversed when it ends (same clock as the face overlay); reduced motion shows the end state at once.
+  const chip = useRef<HTMLSpanElement>(null);
+  const [chipBox, setChipBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  const dpr = useDpr();
+  useLayoutEffect(() => {
+    const el = chip.current;
+    if (!el || !scrawl) return;
+    const measure = () => setChipBox((b) => (b && b.left === el.offsetLeft && b.top === el.offsetTop && b.width === el.offsetWidth && b.height === el.offsetHeight ? b : { left: el.offsetLeft, top: el.offsetTop, width: el.offsetWidth, height: el.offsetHeight }));
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [scrawl]);
+  const geom = labelModel && chipBox ? takeoverLabelGeom(labelModel, chipBox, dpr) : null;
   const struck = scrawl && (reduced ? taken : takeoverVisible(tks.clock.pos, taken, reduced));
   openLabel ??= label;
   const off = zone.bot === "overlord" && !zone.agentId; // a closed Overlord keeps its zone (history + Resume)
@@ -204,10 +217,13 @@ function Zone({
           onClick={onFace}
         />
       )}
-      <span className={`sky-crt-name${struck ? " is-struck" : ""}${labelArt ? " has-art" : ""}${reduced ? " is-still" : ""}`} data-testid={`sky-name-${zone.bot}${panel ? "-panel" : ""}`} role={scrawl ? "img" : undefined} aria-label={scrawl ? (struck ? "Overlord (takeover)" : label) : undefined}>
+      <span ref={chip} className={`sky-crt-name${struck ? " is-struck" : ""}${labelArt && geom ? " has-art" : ""}${reduced ? " is-still" : ""}`} data-testid={`sky-name-${zone.bot}${panel ? "-panel" : ""}`} role={scrawl ? "img" : undefined} aria-label={scrawl ? (struck ? "Overlord (takeover)" : label) : undefined}>
         <span className="sky-crt-name-text">{label}</span>
-        {scrawl && (labelArt ? <span className={`sky-label-scrawl is-art${struck ? " is-on" : ""}`} data-testid="sky-label-art" style={takeoverLabelStyle(labelModel, TAKEOVER_LABEL_URL(theme))} /> : <span className={`sky-label-scrawl${struck ? " is-on" : ""}`} data-testid="sky-label-scrawl" aria-hidden="true">OVERLORD</span>)}
+        {scrawl && !(labelArt && geom) && <span className={`sky-label-scrawl${struck ? " is-on" : ""}`} data-testid="sky-label-scrawl" aria-hidden="true">OVERLORD</span>}
       </span>
+      {scrawl && labelArt && geom && (
+        <span className={`sky-label-art${struck ? " is-on" : ""}${reduced ? " is-still" : ""}`} data-testid="sky-label-art" aria-hidden="true" style={{ ...geom, backgroundImage: `url(${TAKEOVER_LABEL_URL(theme)})` }} />
+      )}
       {panel && (
         <button type="button" className="sky-chat-close" data-testid={`sky-chat-close-${zone.bot}`} aria-label={`Close ${label} chat`} onClick={onClose}>
           ✕

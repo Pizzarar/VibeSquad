@@ -4793,7 +4793,10 @@ button.project-file-name:hover { text-decoration: underline; }
 .sky-crt-name.is-struck:not(.has-art) .sky-crt-name-text { text-decoration: line-through wavy; text-decoration-color: var(--pink); text-decoration-thickness: 3px; }
 .sky-label-scrawl { position: absolute; left: -2px; top: 50%; z-index: 1; font-family: var(--arcade); font-size: 15px; font-weight: 700; letter-spacing: 0.02em; color: var(--violet-t); text-shadow: 2px 2px 0 var(--bg), -1px -1px 0 var(--bg); white-space: nowrap; pointer-events: none; transform: translateY(-50%) rotate(-7deg) skewX(-8deg); clip-path: inset(0 100% 0 0); transition: clip-path 300ms steps(5, end); }
 .sky-label-scrawl.is-on { clip-path: inset(0 0 0 0); }
-.sky-label-scrawl.is-art { inset: 0; left: 0; top: 0; font-size: 0; transform: none; background-size: 100% 100%; background-repeat: no-repeat; image-rendering: pixelated; }
+/* Art sticker (takeover-label.json): same parent as the chip, above it; box from takeoverLabelGeom. Shown only while the takeover is on. */
+.sky-label-art { position: absolute; z-index: 3; pointer-events: none; background-size: 100% 100%; background-repeat: no-repeat; image-rendering: pixelated; clip-path: inset(0 100% 0 0); transition: clip-path 300ms steps(5, end); }
+.sky-label-art.is-on { clip-path: inset(0 0 0 0); }
+.sky-label-art.is-still { transition: none; }
 .sky-crt-name.is-still .sky-label-scrawl { transition: none; }
 .sky-resume { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 10px; background: var(--well); border-bottom: 1px solid var(--line); }
 .sky-crt-body {
