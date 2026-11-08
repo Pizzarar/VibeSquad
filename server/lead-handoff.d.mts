@@ -1,6 +1,8 @@
 export const LEAD_FLAG_DEFAULT: number;
 export const LEAD_AUTO_HANDOFF_DEFAULT: number;
 export const LEAD_HARD_CAP_DEFAULT: number;
+export const STALE_PREDECESSOR_INITIALIZING_MS: number;
+export const STALE_PREDECESSOR_SILENT_MS: number;
 export const SOFT_FLAG_REASON: string;
 export const SOFT_FLAG_NUDGE: string;
 export const WRITE_HANDOFF_PROMPT: string;
@@ -17,6 +19,10 @@ export function resolveTeamAndLane(
 ): { teamId: string; teamName: string; laneId: string; laneName: string; teamDef: any };
 export function parseLeadOrd(lead: any): number;
 export function leadUsedTokens(lead: any, overrideTokens?: number): number;
+export function isStalePredecessor(
+  lead: any,
+  opts?: { now?: number; initializingMs?: number; silentMs?: number },
+): boolean;
 export function getHandoffPacketPath(teamId: string, laneId: string, baseHome?: string): string;
 export function readLaneLogEntries(opts: {
   teamId: string;

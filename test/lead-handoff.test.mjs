@@ -237,6 +237,77 @@ test("Done-when #1: simulated lead stepping 150k -> 250k -> 300k triggers flag, 
   }
 });
 
+test("stale initializing lead at 250k auto-hands off immediately (no steer+wait, retired without takeover confirmation)", async () => {
+  const env = makeTempEnv();
+  const prevHome = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = env.vsHome;
+  try {
+    const agents = new Map();
+    const messages = [];
+    const createdAgents = [];
+
+    const lead = {
+      id: "lead-ord1",
+      title: "★ VIBESQUAD ord1",
+      provider: "claude",
+      model: "claude-opus-5-5",
+      cwd: env.dir,
+      status: "initializing", // stuck out of the gate: never ran a turn, can't be steered
+      createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+      labels: { team: "vibesquad", lane: "vibesquad", role: "lead", ord: "1", profile: "Lead - Claude" },
+      lastUsage: { contextWindowUsedTokens: 250_000 },
+    };
+    agents.set(lead.id, lead);
+
+    const coordinator = createLeadHandoffCoordinator({
+      rootDir: env.dir,
+      baseHome: env.vsHome,
+      profilesPath: env.profilesPath,
+      listAgents: async () => [...agents.values()],
+      getAgent: async (id) => agents.get(id) ?? null,
+      setLabels: async (id, labels, name) => {
+        const cur = agents.get(id);
+        if (cur) {
+          cur.labels = { ...(cur.labels ?? {}), ...labels };
+          if (name) cur.title = name;
+        }
+      },
+      sendMessage: async (id, text) => {
+        messages.push({ id, text });
+      },
+      createAgent: async (payload) => {
+        const created = {
+          id: `spawned-${createdAgents.length + 1}`,
+          title: payload.title,
+          provider: payload.config.provider,
+          model: payload.config.model,
+          cwd: payload.cwd,
+          status: "idle",
+          labels: { ...payload.labels },
+          prompt: payload.prompt,
+        };
+        createdAgents.push(created);
+        agents.set(created.id, created);
+        return created;
+      },
+      deleteHeartbeat: async () => {},
+      appendLog: () => {},
+    });
+
+    const r = await coordinator.evaluateLead(lead, { usedTokens: 250_000 });
+    assert.equal(r.stage, "auto-250");
+    assert.equal(r.triggered, true);
+    assert.equal(createdAgents.length, 1, "successor spawned immediately (no steer+wait for a stale lead)");
+    assert.equal(messages.length, 0, "no WRITE_HANDOFF_PROMPT steer for a stale lead");
+    assert.equal(lead.labels.role, "former-lead", "stale predecessor retired immediately (no takeover-confirmation wait)");
+    assert.equal(r.retiredImmediately, true);
+  } finally {
+    if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
+    else process.env.VIBESQUAD_HOME = prevHome;
+    env.cleanup();
+  }
+});
+
 test("Done-when #2 (250k auto-handoff & 300k forced synthesis): successor has same profile, ordN+1, handoff doc in first prompt, open workers re-pointed, heartbeat deleted, and old lead retired ONLY after takeover confirmation", async () => {
   const env = makeTempEnv();
   const prevHome = process.env.VIBESQUAD_HOME;

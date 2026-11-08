@@ -37,6 +37,14 @@ export const LEAD_FLAG_DEFAULT = 150_000;
 export const LEAD_AUTO_HANDOFF_DEFAULT = 250_000;
 export const LEAD_HARD_CAP_DEFAULT = 300_000;
 
+// A predecessor lead that has sat in "initializing"/"queued" (or produced no events) beyond these bounds is
+// stale: the handoff must not block on it — spawn+retire immediately and synthesize the packet instead of
+// waiting for it to reply or write its Judgment. Env-overridable so the thresholds can be tuned without a rebuild.
+export const STALE_PREDECESSOR_INITIALIZING_MS =
+  Number(process.env.VS_STALE_PREDECESSOR_INITIALIZING_MS) || 5 * 60 * 1000; // 5 min stuck starting/queued
+export const STALE_PREDECESSOR_SILENT_MS =
+  Number(process.env.VS_STALE_PREDECESSOR_SILENT_MS) || 30 * 60 * 1000; // 30 min with no events
+
 export const SOFT_FLAG_REASON = "Lead at 150k+ tokens: wrap up and hand off at a good stopping point";
 export const SOFT_FLAG_NUDGE =
   "Wrap up: stop dispatching new blocks, let in-flight workers finish, write your Judgment in the packet, then run handoff_lead.";
@@ -207,6 +215,33 @@ export function leadUsedTokens(lead, overrideTokens) {
   if (Number.isFinite(cw) && cw > 0) return cw;
   const inp = Number(lead?.lastUsage?.inputTokens ?? lead?.usage?.inputTokens ?? 0);
   return Number.isFinite(inp) && inp > 0 ? inp : 0;
+}
+
+/**
+ * True when `lead` is a live predecessor the handoff must not block on: it has been "initializing"/"queued"
+ * for at least `initializingMs` (stuck out of the gate), or it has produced no events (`updatedAt`/`lastActivityAt`)
+ * for at least `silentMs`. A stale lead can't be steered or asked to write its Judgment, so the handoff should
+ * spawn+retire immediately and synthesize the packet instead of waiting on its reply.
+ */
+export function isStalePredecessor(
+  lead,
+  { now = Date.now(), initializingMs = STALE_PREDECESSOR_INITIALIZING_MS, silentMs = STALE_PREDECESSOR_SILENT_MS } = {},
+) {
+  if (!lead || typeof lead !== "object") return false;
+  if (lead.archivedAt || lead.status === "closed" || isRetiredAgent(lead)) return false;
+  const status = String(lead.status ?? "").toLowerCase();
+  const createdTs = Date.parse(lead.createdAt || "");
+  const activityTs = Date.parse(lead.updatedAt || lead.lastActivityAt || "");
+
+  // Stuck initializing/queued: measured from creation, so a lead that never left the gate is caught.
+  if (status === "initializing" || status === "queued" || status === "starting") {
+    if (!Number.isFinite(createdTs)) return false;
+    return now - createdTs >= initializingMs;
+  }
+
+  // No events for too long: only when we have a real activity timestamp (createdAt alone proves nothing).
+  if (!Number.isFinite(activityTs)) return false;
+  return now - activityTs >= silentMs;
 }
 
 export function getHandoffPacketPath(teamId, laneId, baseHome) {
@@ -527,6 +562,11 @@ export function createLeadHandoffCoordinator(deps = {}) {
   }) {
     const { teamId, teamName, laneId, laneName } = resolveTeamAndLane(oldLead, rootDir);
 
+    // A stale predecessor can't be steered or asked to write Judgment: retire it now and synthesize the packet.
+    const stalePred = isStalePredecessor(oldLead);
+    const retireNow = retireImmediately || stalePred;
+    const synthesizeNow = forceSynthesize || stalePred;
+
     const timer = createSpawnTimer("lead-handoff");
     if (typeof deps.connectMs === "number") timer.add("connect", deps.connectMs);
     const allAgents = await listAgents();
@@ -570,7 +610,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
       } catch {}
     }
 
-    if (!packetExists || packetStale || forceSynthesize) {
+    if (!packetExists || packetStale || synthesizeNow) {
       const syn = synthesizeHandoffPacket({
         lead: oldLead,
         teamId,
@@ -705,7 +745,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
       oldLabels,
     };
 
-    if (retireImmediately) {
+    if (retireNow) {
       await setLabels(
         oldLead.id,
         {
@@ -740,8 +780,8 @@ export function createLeadHandoffCoordinator(deps = {}) {
       synthesizedPacket: synthesized,
       prompt,
       repointedWorkers,
-      retiredImmediately: retireImmediately,
-      pendingConfirmation: !retireImmediately,
+      retiredImmediately: retireNow,
+      pendingConfirmation: !retireNow,
     };
     completedBySlot.set(slotKey, result);
     return result;
@@ -896,11 +936,13 @@ export function createLeadHandoffCoordinator(deps = {}) {
       if (autoHandedOff250.has(lead.id) || labels["handoff-auto-250"] === "1") {
         return { stage: "auto-250", triggered: false, usedTokens: used };
       }
+      // A stale predecessor (stuck initializing/queued, or silent too long) can't be steered: hand it off now.
+      const stalePred = isStalePredecessor(lead);
       const isRunning = lead.status === "running";
       const packetPath = getHandoffPacketPath(teamId, laneId, getBase());
       const hasPacket = existsSync(packetPath);
 
-      if (isRunning || !hasPacket) {
+      if (!stalePred && (isRunning || !hasPacket)) {
         if (writePrompted250.has(lead.id) || labels["handoff-write-prompted"] === "1") {
           return {
             stage: "prompt-250",
