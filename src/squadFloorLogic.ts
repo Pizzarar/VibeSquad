@@ -762,3 +762,36 @@ export function floorFitScale(boxW: number, boxH: number, dpr = 1): number {
   const byHeight = Math.floor((boxH * ratio) / FLOOR_NATIVE_HEIGHT) / ratio;
   return byHeight >= 1 ? Math.min(byWidth, byHeight) : 1;
 }
+
+// ── FS-b: keyboard-focus selector arrow (floor-cursor.json, Art9) ─────────────
+
+export const FLOOR_CURSOR_JSON_URL = "/office/floor-cursor.json";
+
+export type FloorCursor = { cell: { w: number; h: number }; frames: number; fps: number; anchor: { x: number; y: number } };
+
+export function validateFloorCursor(json: unknown): Validation<FloorCursor> {
+  if (!isObject(json)) return { ok: false, reason: "floor-cursor.json is not an object" };
+  const pos = (v: unknown): v is number => isNum(v) && v > 0;
+  const c = json.cell;
+  const a = json.anchor;
+  if (!isObject(c) || !pos(c.w) || !pos(c.h)) return { ok: false, reason: "cell must be {w,h} > 0" };
+  if (!isObject(a) || !isNum(a.x) || !isNum(a.y)) return { ok: false, reason: "anchor must be {x,y}" };
+  if (!pos(json.frames) || !Number.isInteger(json.frames)) return { ok: false, reason: "frames must be an integer > 0" };
+  if (!pos(json.fps)) return { ok: false, reason: "fps must be > 0" };
+  return { ok: true, value: { cell: { w: c.w, h: c.h }, frames: json.frames, fps: json.fps, anchor: { x: a.x, y: a.y } } };
+}
+
+/**
+ * Where the arrow cell sits, relative to the seat anchor (floor art px; the band's integer scale multiplies it).
+ * The tip (`anchor` pixel of frame 0) lands on seat.x, and the cell top rides the bubble's vertical offset, so the
+ * tip sits beside the "!" bubble without overlapping it. Nothing here is a hardcoded number.
+ */
+export function cursorOffset(cast: Pick<CastModel, "bubble">, cursor: FloorCursor): { x: number; y: number } {
+  return { x: -cursor.anchor.x, y: cast.bubble.offset.y };
+}
+
+/** The same placement in the seat button's own box (its top-left is seat − (cell/2, cell)). */
+export function cursorInButton(cast: Pick<CastModel, "bubble" | "cell">, cursor: FloorCursor): { left: number; top: number } {
+  const o = cursorOffset(cast, cursor);
+  return { left: o.x + cast.cell / 2, top: o.y + cast.cell };
+}

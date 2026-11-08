@@ -105,3 +105,41 @@ test("FS-a the square outline is gone; silhouette + stepped hop replace it", () 
   assert.match(css, /sq-floor-hop 120ms steps\(1, end\)/);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{ \.sq-floor-char:hover \.sq-floor-sprite \{ animation: none; \} \}/);
 });
+
+// ── FS-b wire ──────────────────────────────────────────────────────────────────
+import { cursorInButton, cursorOffset, validateFloorCursor } from "../src/squadFloorLogic.ts";
+const cursorJson = JSON.parse(readFileSync(new URL("../public/office/floor-cursor.json", import.meta.url), "utf8"));
+const castJson = JSON.parse(readFileSync(new URL("../public/office/cast.json", import.meta.url), "utf8"));
+
+test("FS-b json validates; bad json is rejected (skip-if-absent)", () => {
+  const v = validateFloorCursor(cursorJson);
+  assert.ok(v.ok);
+  assert.deepEqual(v.value, { cell: { w: 9, h: 8 }, frames: 2, fps: 3, anchor: { x: 4, y: 6 } });
+  assert.equal(validateFloorCursor(undefined).ok, false);
+  assert.equal(validateFloorCursor({ ...cursorJson, frames: 0 }).ok, false);
+  assert.equal(validateFloorCursor({ ...cursorJson, cell: { w: 9 } }).ok, false);
+});
+
+test("FS-b placement: tip lands on seat.x, cell top rides bubble.offset.y (Art9: seat-4, seat-40)", () => {
+  const cursor = validateFloorCursor(cursorJson).value;
+  const cast = { cell: 32, bubble: { offset: { x: -18, y: -40 } } };
+  assert.deepEqual(cursorOffset(cast, cursor), { x: -4, y: -40 });
+  // tip = cell origin + anchor = (seat.x, seat.y-34)
+  const o = cursorOffset(cast, cursor);
+  assert.deepEqual({ x: o.x + cursor.anchor.x, y: o.y + cursor.anchor.y }, { x: 0, y: -34 });
+  assert.deepEqual(cursorInButton(cast, cursor), { left: 12, top: -8 });
+  // follows the json values, not constants
+  assert.deepEqual(cursorOffset({ bubble: { offset: { x: 0, y: -10 } } }, { ...cursor, anchor: { x: 2, y: 1 } }), { x: -2, y: -10 });
+  assert.equal(castJson.bubble.offset.y, -40);
+});
+
+test("FS-b wiring: skip-if-absent, focus-only, reduced motion static", () => {
+  assert.match(comp, /useImageOk\(cursorModel \? CURSOR_URL\(theme\) : null\)/);
+  assert.match(comp, /cast && cursorModel && cursorImgOk \? \{/);
+  assert.match(comp, /cursor && at && \(/);
+  assert.match(comp, /cursor\.reduced \? \{ animation: "none" \}/);
+  assert.match(css, /\.sq-floor-cursor \{ display: none;[^}]*image-rendering: pixelated/);
+  assert.match(css, /\.sq-floor-char:focus-visible \.sq-floor-cursor \{ display: block; \}/);
+  assert.doesNotMatch(css, /\.sq-floor-char:hover \.sq-floor-cursor/);
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{ \.sq-floor-cursor \{ animation: none; \} \}/);
+});

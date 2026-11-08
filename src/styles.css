@@ -4965,6 +4965,12 @@ button.project-file-name:hover { text-decoration: underline; }
 .sq-floor-sprite-fallback { background: var(--coral); border: 1px solid var(--line); box-sizing: border-box; }
 /* FS-a: a 1px silhouette that hugs the sprite's own pixels (4 hard drop-shadows, no blur) + a 1px stepped hop on hover. */
 /* the global U2 focus ring is !important; the silhouette below is the focus indicator here */
+/* FS-b: the selector arrow shows on keyboard focus only (2-frame bob from floor-cursor.json; reduced motion = static frame 0). */
+.sq-floor-cursor { display: none; position: absolute; pointer-events: none; image-rendering: pixelated; background-repeat: no-repeat; background-position: 0 0; animation: sq-floor-cursor-bob steps(var(--cur-frames, 2), jump-none) infinite; }
+.sq-floor-char:focus-visible { z-index: 3; }
+.sq-floor-char:focus-visible .sq-floor-cursor { display: block; }
+@keyframes sq-floor-cursor-bob { from { background-position: 0 0; } to { background-position: calc(var(--cur-w) * (1 - var(--cur-frames, 2))) 0; } }
+@media (prefers-reduced-motion: reduce) { .sq-floor-cursor { animation: none; } }
 button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none !important; }
 .sq-floor-char:hover .sq-floor-sprite,
 .sq-floor-char:focus-visible .sq-floor-sprite {

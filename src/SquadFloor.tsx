@@ -11,6 +11,8 @@ import {
   blipMotion,
   buildTower,
   clampFloorIndex,
+  cursorInButton,
+  FLOOR_CURSOR_JSON_URL,
   FLOOR_BLINK_MS,
   FLOOR_INDEX_KEY,
   FLOOR_NATIVE_HEIGHT,
@@ -34,7 +36,9 @@ import {
   tvCountText,
   transitionRiders,
   validateCast,
+  validateFloorCursor,
   type CastModel,
+  type FloorCursor,
   type FloorModel,
   type Frame,
   type Rect,
@@ -54,6 +58,7 @@ export type SquadFloorProps = {
 // ── Art URLs (the @art contract; hardcode nothing about the sheet itself) ──────
 const CAST_URL = (theme: Theme) => `/office/cast-${theme}.png`;
 const FLOOR_URL = (theme: Theme) => `/office/floor-${theme}.png`;
+const CURSOR_URL = (theme: Theme) => `/office/floor-cursor-${theme}.png`;
 const FLOOR_FRONT_URL = (theme: Theme) => `/office/floor-front-${theme}.png`;
 
 // ── Pin → tower mapping (the F1 buildTower is the model; we only supply inputs) ─
@@ -101,14 +106,19 @@ type Anchor = { x: number; y: number };
 /** One drawable character in a band; the band y-sorts these by anchor. */
 type BandItem = { agent: SeatedAgent; anchor: Anchor; onOpen: () => void };
 
+/** The FS-b arrow: the sheet url + its json, only when both loaded (skip-if-absent) and motion is allowed to play. */
+type CursorArt = { model: FloorCursor; url: string; reduced: boolean };
+
 type SeatProps = {
   item: BandItem;
+  cursor: CursorArt | null;
   cast: CastModel | null;
   sheet: string | null;
   frameIndex: number;
 };
 
-function Seat({ item: { agent, anchor, onOpen }, cast, sheet, frameIndex }: SeatProps) {
+function Seat({ item: { agent, anchor, onOpen }, cast, sheet, frameIndex, cursor }: SeatProps) {
+  const at = cursor && cast ? cursorInButton(cast, cursor.model) : null;
   const frame: Frame | null = cast ? spriteFrame(cast, agent.role, agent.pose, frameIndex, agent.variant) : null;
   const hasSprite = !!(sheet && frame);
   const status = POSE_LABEL[agent.pose] ?? agent.pose;
@@ -121,6 +131,24 @@ function Seat({ item: { agent, anchor, onOpen }, cast, sheet, frameIndex }: Seat
       style={{ left: anchor.x, top: anchor.y, ...(cast ? { width: cast.cell, height: cast.cell } : {}) }}
       onClick={onOpen}
     >
+      {cursor && at && (
+        <span
+          className="sq-floor-cursor"
+          aria-hidden="true"
+          style={
+            {
+              left: at.left,
+              top: at.top,
+              width: cursor.model.cell.w,
+              height: cursor.model.cell.h,
+              backgroundImage: `url(${cursor.url})`,
+              "--cur-w": `${cursor.model.cell.w}px`,
+              "--cur-frames": cursor.model.frames,
+              ...(cursor.reduced ? { animation: "none" } : { animationDuration: `${cursor.model.frames / cursor.model.fps}s` }),
+            } as unknown as CSSProperties
+          }
+        />
+      )}
       {hasSprite ? (
         <span
           className="sq-floor-sprite"
@@ -167,6 +195,7 @@ function Band({
   cast,
   sheet,
   frameIndex,
+  cursor,
 }: {
   plate: ReactNode;
   /** Wall fixtures (the stats TV): drawn right after the plate, under the sprites and the front overlay. */
@@ -179,6 +208,7 @@ function Band({
   cast: CastModel | null;
   sheet: string | null;
   frameIndex: number;
+  cursor: CursorArt | null;
 }) {
   const sorted = sortByAnchorY(items);
   const layers = bandLayers(!!frontSrc);
@@ -192,7 +222,7 @@ function Band({
             return (
               <span key={layer} style={{ display: "contents" }}>
                 {sorted.map((it) => (
-                  <Seat key={it.agent.agentId} item={it} cast={cast} sheet={sheet} frameIndex={frameIndex} />
+                  <Seat key={it.agent.agentId} item={it} cast={cast} sheet={sheet} frameIndex={frameIndex} cursor={cursor} />
                 ))}
                 {extras}
               </span>
@@ -319,6 +349,7 @@ export function SquadFloor({ view }: SquadFloorProps) {
 
   const [floor, setFloor] = useState<FloorModel>(() => placeholderFloor());
   const [cast, setCast] = useState<CastModel | null>(null);
+  const [cursorModel, setCursorModel] = useState<FloorCursor | null>(null);
   // The tower follows the loaded floor: desk count and statsTv (overflow → blips) come from floor.json.
   const tower = useMemo(() => towerForView(view, floor), [view, floor]);
 
@@ -327,6 +358,8 @@ export function SquadFloor({ view }: SquadFloorProps) {
   // Front overlays are opt-in per floor.json (`"front": true`); absent → skip.
   const floorFrontOk = useImageOk(floor.front ? FLOOR_FRONT_URL(theme) : null);
   const sheet = cast && castImgOk ? CAST_URL(theme) : null;
+  const cursorImgOk = useImageOk(cursorModel ? CURSOR_URL(theme) : null);
+  const cursor: CursorArt | null = cast && cursorModel && cursorImgOk ? { model: cursorModel, url: CURSOR_URL(theme), reduced } : null;
 
   // Load the art JSON; missing/invalid → F1 placeholder layout (and no sprites when cast.json is absent).
   useEffect(() => {
@@ -335,14 +368,19 @@ export function SquadFloor({ view }: SquadFloorProps) {
       fetch("/office/floor.json")
         .then((r) => (r.ok ? r.json() : undefined))
         .catch(() => undefined),
+      fetch(FLOOR_CURSOR_JSON_URL)
+        .then((r) => (r.ok ? r.json() : undefined))
+        .catch(() => undefined),
       fetch("/office/cast.json")
         .then((r) => (r.ok ? r.json() : undefined))
         .catch(() => undefined),
-    ]).then(([floorJson, castJson]) => {
+    ]).then(([floorJson, cursorJson, castJson]) => {
       if (cancelled) return;
       setFloor(floorOrPlaceholder(floorJson));
       const v = validateCast(castJson);
       setCast(v.ok ? v.value : null);
+      const cv = validateFloorCursor(cursorJson);
+      setCursorModel(cv.ok ? cv.value : null);
     });
     return () => {
       cancelled = true;
@@ -530,6 +568,7 @@ export function SquadFloor({ view }: SquadFloorProps) {
                   cast={cast}
                   sheet={sheet}
                   frameIndex={frameIndex}
+                  cursor={cursor}
                   frontSrc={floorFrontOk ? FLOOR_FRONT_URL(theme) : null}
                   items={[
                     ...teamItems(f.teamA, floor.teamA, (agentId) => openAgent(f.teamA.laneId, agentId)),
