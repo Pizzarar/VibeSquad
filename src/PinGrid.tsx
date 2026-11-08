@@ -306,6 +306,9 @@ const PinRow = memo(function PinRow({ pin, dimmed, onPin }: { pin: Pin; dimmed?:
           <PinDot pin={pin} />
           <span className="pin-row-name">{isHubPin(pin) ? "RiffBot" : pin.lane.name}</span>
           <span className="pin-lane-handle" data-testid={`pin-handle-${pin.lane.id}`}>{laneHandleOf(pin)}</span>
+          {pin.brainstorm?.agent.queued && (
+            <span className="pin-row-status muted small">{`queued · ${pin.brainstorm.agent.queued.ahead} ahead`}</span>
+          )}
           <NeedsBadgeInline pin={pin} />
           <PinCtx pin={pin} />
         </button>
@@ -638,7 +641,7 @@ const PinTile = memo(function PinTile({ pin, onPin, onOpenAgent }: { pin: Pin; o
         )}
         <div className="pin-tile-title">
           <span className="pin-tile-sub muted small">
-            <PinDot pin={pin} /> {bs ? (bs.agent.status === "running" ? "Brainstorm working" : "Brainstorm") : "No session yet"}
+            <PinDot pin={pin} /> {bs ? (bs.agent.queued ? `queued · ${bs.agent.queued.ahead} ahead` : bs.agent.status === "running" ? "Brainstorm working" : "Brainstorm") : "No session yet"}
           </span>
         </div>
         <NeedsBadge pin={pin} />

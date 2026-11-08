@@ -478,6 +478,26 @@ test('Q1: readRunnerAgentSync exposes queued {ahead} for a queued agent (sync pa
   assert.equal(readRunnerAgentSync('rn-idle', { home, liveness: null }).queued, undefined);
 });
 
+test('H2: handleLogEvent preserves queued when the turn state is lazily initialized on a non-status event', async () => {
+  const home = tmp();
+  const queuedRec = { id: 'rn-q', provider: 'claude', model: 'm', cwd: '.', meta: { title: 'Q' }, status: 'queued', queued: { ahead: 3 }, createdAt: 1, updatedAt: 2 };
+  const client = {
+    home,
+    request: async (method, route) => {
+      if (method === 'GET' && route === '/agents/rn-q') return queuedRec;
+      throw new Error(`unexpected ${method} ${route}`);
+    },
+  };
+  const backend = new RunnerBackend({ client, buildPrefix: async () => '' });
+  const evs = [];
+  backend.listeners.add((ev) => evs.push(ev));
+  // A meta event (ROSTER_EVENTS, but not a status) with no prior turn state must not strip the fetch's queued.
+  await backend.handleLogEvent({ id: 'rn-q', event: { seq: 5, ts: 5, type: 'meta', patch: { labels: { x: '1' } } } });
+  const agentEv = evs.find((e) => e.kind === 'agent');
+  assert.ok(agentEv, 'emitted an agent event');
+  assert.deepEqual(agentEv.agent.queued, { ahead: 3 }, 'queued survives the lazy turn-state init');
+});
+
 test('fetchAgentTimeline lastSeq advances with absorbed post-thought text while the newest row (a thought) does not', async () => {
   const mk = (n) => [rev(1, 'output', { text: 'Hello ' }), rev(2, 'thought', { text: 'hmm' }), ...Array.from({ length: n }, (_, i) => rev(3 + i, 'output', { text: 'x' }))];
   const seqs = [];

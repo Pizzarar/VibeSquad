@@ -1047,7 +1047,10 @@ export class RunnerBackend {
     }
     if (gen !== this.live.gen) return;
     if (!t) {
-      t = { status: agent.status, errored: false };
+      // A non-status event (meta/usage/session/permission) with no prior turn state: seed the turn from the fetch,
+      // but keep the fetch's `queued` so a queued agent read here is not stripped below (the log's own status events
+      // set t.queued; a meta/usage event before any status would otherwise wipe it).
+      t = { status: agent.status, errored: false, ...(agent.queued ? { queued: agent.queued } : {}) };
       lifecycle = reduceTurn(t, e);
       this.live.turn.set(id, t);
     }

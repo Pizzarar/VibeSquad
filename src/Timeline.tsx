@@ -1228,6 +1228,7 @@ export function Timeline({
     reasoningText(lastEntry?.item).length || String(lastEntry?.item?.text ?? "").length,
     JSON.stringify(lastEntry?.item?.detail ?? "").length,
     pendingHere.length,
+    queuedAhead,
   ].join("|");
   const stickToBottom = () => {
     const el = timelineRef.current;
@@ -1450,11 +1451,6 @@ export function Timeline({
         </div>
       )}
       {error && <div className="tl tl-error">{error}</div>}
-      {queuedAhead !== undefined && (
-        <div className="tl tl-note info" data-testid="tl-queued">
-          <Spinner label={`Queued, ${queuedAhead} ahead — starts when a slot frees`} />
-        </div>
-      )}
       {loaded && !error && shown.length === 0 && (
         agentStatus === "running" || agentStatus === "initializing" ? (
           <div className="tl tl-note info" data-testid="tl-booting-indicator">
@@ -1483,6 +1479,11 @@ export function Timeline({
         </TimelineErrorBoundary>
         </Fragment>
       ))}
+      {queuedAhead !== undefined && (
+        <div className="tl tl-note info" data-testid="tl-queued">
+          <Spinner label={`Queued, ${queuedAhead} ahead — starts when a slot frees`} />
+        </div>
+      )}
       {pendingHere
         .filter((p) => !covered.includes(p.id))
         .map((p) => (
