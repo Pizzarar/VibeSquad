@@ -9,7 +9,7 @@ import { Runner, defaultAdapters } from '../runner/runner.mjs';
 import { createClaudeAdapter } from '../runner/adapters/claude.mjs';
 import { RunnerBackend, toAgent } from '../server/backend/runner-backend.mjs';
 import { ACP_PROVIDERS, createAcpAdapter, pickModel, parseAcpUsage } from '../runner/adapters/acp.mjs';
-import { priceFor } from '../runner/adapters/pricing.mjs';
+import { priceFor, estimateCostUsd } from '../runner/adapters/pricing.mjs';
 import { resolveExecutable } from '../runner/spawn.mjs';
 
 const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'vs-adapters-'));
@@ -393,7 +393,54 @@ test('unknown model: tokens emitted, costUsd omitted (never 0); parseAcpUsage + 
   assert.equal(tl.find((e) => e.type === 'usage' && e.inputTokens).outputTokens, 5);
   assert.equal('costUsd' in tl.find((e) => e.type === 'turn_done'), false);
   assert.equal(parseAcpUsage({}), undefined);
-  assert.deepEqual(parseAcpUsage({ inputTokens: 7, outputTokens: 3, thoughtTokens: 2, totalTokens: 12, cachedReadTokens: 4 }), { inputTokens: 7, outputTokens: 5, cachedReadTokens: 4 });
+  assert.deepEqual(parseAcpUsage({ inputTokens: 7, outputTokens: 3, thoughtTokens: 2, totalTokens: 12, cachedReadTokens: 4 }), { inputTokens: 11, outputTokens: 5, cachedReadTokens: 4, cachedWriteTokens: 0 });
   assert.ok(priceFor('gemini-4-argon-high'));
   assert.equal(priceFor('nope'), null);
+});
+
+// --- usa-13 fix1: review findings ---
+test('fix1: parseAcpUsage input includes cache read+write; thoughts added to output when total absent or outside', () => {
+  assert.deepEqual(parseAcpUsage({ inputTokens: 100, outputTokens: 10, cachedReadTokens: 50, cachedWriteTokens: 20, thoughtTokens: 5 }), { inputTokens: 170, outputTokens: 15, cachedReadTokens: 50, cachedWriteTokens: 20 });
+  // total says thoughts already inside outputTokens -> not double counted
+  assert.equal(parseAcpUsage({ inputTokens: 100, outputTokens: 10, thoughtTokens: 5, totalTokens: 110 }).outputTokens, 10);
+  assert.equal(estimateCostUsd('deepseek-v4-pro', { inputTokens: 1000000, cachedReadTokens: 1000000 }), 0.055); // all cache read
+  assert.ok(Math.abs(estimateCostUsd('deepseek-v4-pro', { inputTokens: 1000000, cachedWriteTokens: 1000000 }) - 0.55) < 1e-9); // write at input rate
+});
+
+test('fix1: agy (no usage_update) still emits contextTokens on its per-turn usage event', async () => {
+  const { runner, id } = usageHarness('antigravity-cli', 'gemini-4-argon-medium', [
+    (c, m) => c.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn', usage: { inputTokens: 800, outputTokens: 100, cachedReadTokens: 200, thoughtTokens: 30 } } }),
+  ]);
+  await tick(); await tick(); await tick();
+  const u = runner.timeline(id).find((e) => e.type === 'usage' && e.inputTokens);
+  assert.equal(u.contextTokens, 1000 + 130);
+  assert.equal(u.inputTokens, 1000);
+  assert.equal(u.cachedReadTokens, 200);
+});
+
+test('fix1: opencode keeps its usage_update context event and prefers real PromptResponse.usage over estimate', async () => {
+  const { runner, id } = usageHarness('opencode', 'deepseek/deepseek-v4-pro', [
+    (c, m) => { upd(c, { sessionUpdate: 'usage_update', used: 4000, size: 100000, cost: { amount: 0.1, currency: 'USD' } }); c.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn', usage: { inputTokens: 10, outputTokens: 5 } } }); },
+  ]);
+  await tick(); await tick(); await tick();
+  const tl = runner.timeline(id);
+  assert.ok(tl.some((e) => e.type === 'usage' && e.contextTokens === 4000 && e.contextMax === 100000 && !e.inputTokens));
+  const u = tl.find((e) => e.type === 'usage' && e.inputTokens);
+  assert.equal(u.estimated, undefined);
+  assert.equal(u.contextTokens, 4000);
+  assert.equal(tl.find((e) => e.type === 'turn_done').costUsd, 0.1);
+});
+
+test('fix1: resumed session skips the context-delta estimate on its first turn (unknown baseline)', async () => {
+  const spawnImpl = fakeSpawn((m, child) => {
+    if (m.method === 'initialize') child.push({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: 1, agentCapabilities: { sessionCapabilities: { resume: {} } } } });
+    if (m.method === 'session/resume') child.push({ jsonrpc: '2.0', id: m.id, result: {} });
+    if (m.method === 'session/prompt') { upd(child, { sessionUpdate: 'usage_update', used: 90000, size: 1000000 }); child.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn' } }); }
+  });
+  const events = [];
+  fakeAdapter(spawnImpl, 'opencode').start({ cwd: '.', model: 'deepseek/deepseek-v4-pro', resume: 'S0', emit: (type, d) => events.push({ type, ...d }), onExit() {} }).send('hi');
+  await tick(); await tick(); await tick();
+  assert.equal(events.filter((e) => e.type === 'turn_done').length, 1);
+  assert.equal(events.some((e) => e.type === 'usage' && e.estimated), false);
+  assert.equal(events.some((e) => e.type === 'usage' && e.inputTokens), false);
 });

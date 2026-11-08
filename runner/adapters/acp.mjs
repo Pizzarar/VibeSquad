@@ -9,7 +9,10 @@ import { estimateCostUsd } from './pricing.mjs';
 
 const num = (v) => (Number.isFinite(Number(v)) && Number(v) >= 0 && v !== null && v !== '' ? Number(v) : undefined);
 
-// ACP PromptResponse.usage (camelCase per spec; snake_case tolerated). Returns undefined when the agent reports none.
+// ACP PromptResponse.usage (camelCase per spec; snake_case tolerated). Per the real opencode/agy payloads inputTokens
+// EXCLUDES cache, so the returned inputTokens is the whole prompt size (fresh + cache read + cache write), like claude.mjs.
+// thoughtTokens are billed as output: added unless totalTokens shows they are already inside outputTokens.
+// Returns undefined when the agent reports none.
 export function parseAcpUsage(u) {
   if (!u || typeof u !== 'object') return undefined;
   const input = num(u.inputTokens ?? u.input_tokens);
@@ -17,10 +20,12 @@ export function parseAcpUsage(u) {
   if (input === undefined && output === undefined) return undefined;
   const thought = num(u.thoughtTokens ?? u.thought_tokens) ?? 0;
   const total = num(u.totalTokens ?? u.total_tokens);
+  const cachedReadTokens = num(u.cachedReadTokens ?? u.cached_read_tokens) ?? 0;
+  const cachedWriteTokens = num(u.cachedWriteTokens ?? u.cached_write_tokens) ?? 0;
   const inT = input ?? 0;
   const outT = output ?? 0;
-  // thoughts are billed as output; only add them when the total shows they are not already inside outputTokens
-  return { inputTokens: inT, outputTokens: outT + (total !== undefined && total - inT - outT >= thought ? thought : 0), cachedReadTokens: num(u.cachedReadTokens ?? u.cached_read_tokens) ?? 0 };
+  const thoughtOutside = total === undefined || total - inT - outT >= thought;
+  return { inputTokens: inT + cachedReadTokens + cachedWriteTokens, outputTokens: outT + (thoughtOutside ? thought : 0), cachedReadTokens, cachedWriteTokens };
 }
 
 // Provider ids are the ones profiles use (server/profiles.mjs). Codex has no ACP mode of its own: Zed's
@@ -77,7 +82,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
       let replaying = false; // session/load replays the old transcript as session/update; our log already has it
       let activeModel = model;
       let ctxNow = 0; // latest usage_update.used (context size)
-      let ctxPrev = 0; // context size at the end of the previous turn
+      let ctxPrev = resume ? null : 0; // context size at the end of the previous turn; null = unknown (resumed session restored an unseen history)
       let reportedCost; // agent-reported cumulative session cost (usage_update.cost), if any
       let costTotal = 0; // cumulative session cost, same convention as claude's total_cost_usd (the fold diffs it)
       let costKnown = false;
@@ -204,7 +209,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
           // Real per-turn tokens from PromptResponse.usage; else estimate from context-size growth (marked estimated).
           let tok = parseAcpUsage(r?.usage);
           let estimated = false;
-          if (!tok && ctxNow > 0) {
+          if (!tok && ctxNow > 0 && ctxStart !== null) {
             const promptTokens = Math.ceil(text.length / 4);
             const grew = ctxNow - ctxStart;
             tok = { inputTokens: ctxStart + promptTokens, outputTokens: Math.max(0, grew - promptTokens), cachedReadTokens: 0 };
@@ -213,7 +218,8 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
           ctxPrev = ctxNow;
           let turnCost = null;
           if (tok) {
-            emit('usage', { inputTokens: tok.inputTokens, outputTokens: tok.outputTokens, ...(tok.cachedReadTokens ? { cachedReadTokens: tok.cachedReadTokens } : {}), ...(estimated ? { estimated: true } : {}) });
+            // contextTokens stays on the event (agy sends no usage_update) so the context meter keeps working
+            emit('usage', { contextTokens: ctxNow > 0 ? ctxNow : tok.inputTokens + tok.outputTokens, inputTokens: tok.inputTokens, outputTokens: tok.outputTokens, ...(tok.cachedReadTokens ? { cachedReadTokens: tok.cachedReadTokens } : {}), ...(tok.cachedWriteTokens ? { cachedWriteTokens: tok.cachedWriteTokens } : {}), ...(estimated ? { estimated: true } : {}) });
             turnCost = estimateCostUsd(activeModel, tok);
           }
           const done = { stopReason: r?.stopReason };

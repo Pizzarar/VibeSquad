@@ -21,10 +21,11 @@ export function priceFor(model) {
   return key ? MODEL_PRICES[key] : null;
 }
 
-/** USD for one turn, or null when the model has no price. `inputTokens` includes cached reads. */
-export function estimateCostUsd(model, { inputTokens = 0, outputTokens = 0, cachedReadTokens = 0 } = {}) {
+/** USD for one turn, or null when the model has no price. `inputTokens` is the whole prompt (fresh + cache read + cache write); cache writes bill at the input rate. */
+export function estimateCostUsd(model, { inputTokens = 0, outputTokens = 0, cachedReadTokens = 0, cachedWriteTokens = 0 } = {}) {
   const p = priceFor(model);
   if (!p) return null;
-  const cached = Math.min(cachedReadTokens, inputTokens);
-  return ((inputTokens - cached) * p.input + cached * (p.cachedRead ?? p.input) + outputTokens * p.output) / 1e6;
+  const read = Math.min(cachedReadTokens, inputTokens);
+  const fresh = Math.max(0, inputTokens - read);
+  return (fresh * p.input + read * (p.cachedRead ?? p.input) + outputTokens * p.output) / 1e6;
 }
