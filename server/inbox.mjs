@@ -23,6 +23,8 @@ const TITLE_MAX = 60;
 
 export const INBOX_SCOPES = ["art", "mechanic", "plugin", "UI", "infra", "docs", "other"];
 export const INBOX_LANES = ["main-game", "ui-lab", "plugins", "vibesquad", "site-polish"];
+/** Valid card lifecycle statuses (a card may also be "accepted" or "rejected" by a triager). */
+export const INBOX_STATUSES = ["parked", "handed-off", "archived", "accepted", "rejected"];
 
 const STOPWORDS = new Set([
   "a", "an", "and", "are", "as", "at", "be", "but", "by", "can", "could",
@@ -123,6 +125,20 @@ export function extractSignificantTokens(text) {
     }
   }
   return out;
+}
+
+/**
+ * Token-overlap between two texts (the same signal sortIdeaCard uses for "goes with card X"): the count of shared
+ * significant tokens plus Jaccard similarity. Both empty/one empty -> `{ shared: 0, jaccard: 0 }`.
+ */
+export function significantTokenOverlap(textA, textB) {
+  const a = extractSignificantTokens(textA);
+  const b = extractSignificantTokens(textB);
+  if (!a.length || !b.length) return { shared: 0, jaccard: 0 };
+  const aSet = new Set(a);
+  const shared = b.filter((t) => aSet.has(t)).length;
+  const unionSize = new Set([...a, ...b]).size;
+  return { shared, jaccard: unionSize > 0 ? shared / unionSize : 0 };
 }
 
 export function buildConciseTitle(rawText) {
@@ -338,8 +354,6 @@ export function sortIdeaCard(rawText, existingCards = [], teams = []) {
   }
 
   // 3. Detect "goes with card X" (relatedCardId) against open parked cards
-  const myTokens = extractSignificantTokens(text);
-  const mySet = new Set(myTokens);
   let relatedCardId = null;
   let relatedReason = null;
   let bestSim = 0;
@@ -349,24 +363,21 @@ export function sortIdeaCard(rawText, existingCards = [], teams = []) {
   );
 
   for (const card of parkedCards) {
-    const cardTokens = extractSignificantTokens(`${card.title || ""} ${card.text || ""}`);
-    if (!cardTokens.length || !myTokens.length) continue;
-    const shared = cardTokens.filter((t) => mySet.has(t));
-    const unionSize = new Set([...myTokens, ...cardTokens]).size;
-    const jaccard = unionSize > 0 ? shared.length / unionSize : 0;
+    const { shared, jaccard } = significantTokenOverlap(text, `${card.title || ""} ${card.text || ""}`);
+    if (!shared) continue;
     const sameLane = card.laneId === laneId;
     const sameScope = card.scope === bestScope;
 
     // Strong similarity when >=2 significant domain words overlap, or >=1 significant word + same lane & scope
     const score =
       jaccard +
-      shared.length * 0.18 +
+      shared * 0.18 +
       (sameLane ? 0.2 : 0) +
       (sameScope ? 0.12 : 0);
 
     const qualifies =
-      shared.length >= 2 ||
-      (shared.length >= 1 && sameLane && (sameScope || jaccard >= 0.15));
+      shared >= 2 ||
+      (shared >= 1 && sameLane && (sameScope || jaccard >= 0.15));
 
     if (qualifies && score > bestSim) {
       bestSim = score;
@@ -602,6 +613,11 @@ export function triageInboxCards(body = {}, rootDir = REPO_ROOT) {
       if (!cardId) throw new Error("update requires cardId");
       const card = cards.find((c) => c.id === cardId);
       if (!card) throw new Error(`Card not found: ${cardId}`);
+
+      // Status is a closed lifecycle set; reject unknown values (e.g. a typo'd "accept") before mutating.
+      if (patch.status !== undefined && patch.status !== null && !INBOX_STATUSES.includes(patch.status)) {
+        throw new Error(`Unknown inbox status "${patch.status}"`);
+      }
 
       // No topicAgentId: it names the agent park/handoff-topic archive, so only open-topic sets it.
       const allowed = [

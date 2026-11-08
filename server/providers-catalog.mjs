@@ -13,6 +13,7 @@ import { killTree, resolveExecutable, spawnNoShell } from "../runner/spawn.mjs";
 import { turnCapsFromEnv } from "../runner/runner.mjs";
 import { DEFAULT_PACK_PROFILES, getProfilesPath, normalizeProfile } from "./profiles.mjs";
 import { resolveTeamsFilePath } from "./teams-file.mjs";
+import { addInboxCards, readInboxCards, significantTokenOverlap } from "./inbox.mjs";
 import { isForbiddenRealHome, underTestRunner } from "./test-guard.mjs";
 import { readJsonFileWithBom, vibesquadHome, writeSettingsAtomic } from "./user-settings.mjs";
 
@@ -1305,6 +1306,84 @@ export function oneShotReviewRun(cmd, args) {
 const defaultRunOpus = oneShotReviewRun("claude", ["-p", "--model", "claude-opus-5-5"]);
 const defaultRunGemini = oneShotReviewRun("agy", ["-p"]);
 
+// ---------------------------------------------------------------- usa-15: auto-route review bullets to bug-chaser inbox
+
+const REVIEW_BULLET_LEAD_RE = /^(?:[-*•+]\s+|\d+[.)]\s+)+/;
+const REVIEW_GRADE_RE = /^grade\b|previous review|no prior review/i;
+
+/** A bare section label (e.g. "Profile/Provider routing", "Loops/Tool friction:", "Handoffs/Review rounds:"). */
+function isReviewHeading(line) {
+  if (/^(?:profile\/provider\s*routing|loops?\/tool\s*friction|handoffs?\/review\s*rounds?|review\s*rounds?|routing|loops?|handoffs?|tool\s*friction|friction)\s*$/i.test(line)) return true;
+  if (/[:：]\s*$/.test(line)) {
+    const words = line.replace(/[:：]\s*$/, "").trim().split(/\s+/).filter(Boolean);
+    if (words.length <= 5) return true;
+  }
+  return false;
+}
+
+/**
+ * Split a review response into actionable bullets: strip leading `-`, `*`, `•`, `+` and `1.` markers, drop empty lines
+ * and bare section headings, and skip the closed-loop KPI self-grade line (a `/^grade\b|previous review|no prior review/i`
+ * match, or the first line of a multi-line reply). Each bullet is truncated to `maxLen` and the list capped at `max`.
+ */
+export function parseReviewBullets(text, { max = 5, maxLen = 200 } = {}) {
+  const lines = String(text ?? "")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    if (REVIEW_GRADE_RE.test(raw)) continue;
+    if (i === 0 && lines.length > 1) continue; // first line is the self-grade line
+    const line = raw.replace(REVIEW_BULLET_LEAD_RE, "").trim();
+    if (!line) continue;
+    if (isReviewHeading(line)) continue;
+    out.push(clip(line, maxLen));
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+/** True when `text` significantly overlaps any of the `seen` texts (>=2 shared tokens, or >=1 with jaccard >= 0.15). */
+function overlapsSeen(text, seen) {
+  for (const other of seen) {
+    const { shared, jaccard } = significantTokenOverlap(text, other);
+    if (shared >= 2 || (shared >= 1 && jaccard >= 0.15)) return true;
+  }
+  return false;
+}
+
+/**
+ * Best-effort: parse the review's actionable bullets and enqueue them into the bug-chaser inbox, deduped against
+ * existing bug-chaser cards and across the opus/gemini sets. Returns the enqueued card ids (never throws).
+ */
+function routeReviewToInbox(opusResult, geminiResult, dir) {
+  const sent = [];
+  if (!dir || isForbiddenRealHome(dir)) return sent;
+  const existing = readInboxCards(dir).filter((c) => c && String(c.laneId || "").toLowerCase() === "bug-chaser");
+  const seen = existing.map((c) => `${c.title || ""} ${c.text || ""}`).filter(Boolean);
+  const process = (result, source) => {
+    if (!result?.ok || typeof result.text !== "string") return;
+    const ideas = [];
+    for (const bullet of parseReviewBullets(result.text)) {
+      if (overlapsSeen(bullet, seen)) continue;
+      ideas.push(bullet);
+      seen.push(bullet);
+    }
+    if (!ideas.length) return;
+    try {
+      const res = addInboxCards({ ideas, laneId: "bug-chaser", teamId: "vibesquad", source, baseHome: dir });
+      for (const c of res.added ?? []) sent.push(c.id);
+    } catch (e) {
+      console.error(`usage-review: failed to route ${source} bullets to bug-chaser inbox: ${e?.message ?? e}`);
+    }
+  };
+  process(opusResult, "usage-review:opus");
+  process(geminiResult, "usage-review:gemini");
+  return sent;
+}
+
 /**
  * Run one Opus + Gemini usage review (parallel, one-shot). `runOpus`/`runGemini` default to the real CLIs and refuse
  * under a test runner; inject fakes in tests. One provider failing never loses the other. Appends one record to
@@ -1324,6 +1403,8 @@ export function runUsageReview({ home, trigger = "manual", usage, runOpus, runGe
         opusRun({ prompt }).catch((e) => ({ ok: false, error: String(e?.message ?? e), ms: 0 })),
         geminiRun({ prompt }).catch((e) => ({ ok: false, error: String(e?.message ?? e), ms: 0 })),
       ]);
+      const dir = home || vibesquadHome();
+      const sentCardIds = routeReviewToInbox(results[0], results[1], dir);
       const record = {
         at: new Date(now()).toISOString(),
         trigger,
@@ -1332,8 +1413,8 @@ export function runUsageReview({ home, trigger = "manual", usage, runOpus, runGe
         kpis: usageKpis(usage),
         opus: results[0],
         gemini: results[1],
+        sentCardIds,
       };
-      const dir = home || vibesquadHome();
       try {
         if (!isForbiddenRealHome(dir)) {
           mkdirSync(join(dir, "runner"), { recursive: true });
