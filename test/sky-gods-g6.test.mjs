@@ -207,3 +207,18 @@ test("chat-only header drops the no-op Dock button and the duplicate x; wrapped 
   assert.ok(/chatOnly=\{chatOnly\}\s*\/>/.test(src("AgentDrawer.tsx")));
   assert.ok(src("styles.css").includes(".sky-chat-panel .drawer-subagents-bar { max-height: none; overflow-y: visible; }"));
 });
+
+test("G8b: thinner bezels need no code change - small slice/scale values validate, size the border from JSON, nothing hardcodes the old 60px sides / 90px chin", async () => {
+  const { validateSkyCrt, skyCrtStyle } = await import("../src/skyZonesLogic.ts");
+  const v = validateSkyCrt({ slice: { top: 4, right: 4, bottom: 6, left: 4 }, scale: 2, repeat: "round" });
+  assert.equal(v.ok, true);
+  const st = skyCrtStyle(v.value, "/office/sky-crt-dark.png");
+  assert.equal(st.borderWidth, "8px 8px 12px 8px"); // slice x scale per side: the screen inset follows the JSON
+  assert.equal(st.borderImageSlice, "4 4 6 4 fill");
+  assert.equal(skyCrtStyle(validateSkyCrt({ slice: { top: 1, right: 1, bottom: 1, left: 1 }, scale: 1.5 }).value, "u").borderWidth, "1.5px 1.5px 1.5px 1.5px");
+  assert.equal(validateSkyCrt({ slice: { top: 0, right: 4, bottom: 6, left: 4 }, scale: 2 }).ok, false); // zero slice still rejected
+  const css = src("styles.css");
+  const sky = css.slice(css.indexOf(".sky-zones {"), css.indexOf("/* G7 virus takeover"));
+  assert.ok(!/(60|90)px/.test(sky), "no old bezel side/chin size in the sky rules");
+  assert.ok(!src("SkyZones.tsx").includes("bezelH")); // the screen is whatever is inside the border box
+});
