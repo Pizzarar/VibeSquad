@@ -182,3 +182,30 @@ test("Timeline routes local md links to a tl-file-link button, http stays an anc
   assert.match(branch, /data-testid="tl-file-link"/);
   assert.match(timeline.slice(i), /<a key=\{keyIdx\+\+\} href=\{m\[10\]\} target="_blank"/);
 });
+
+test("localLinkTarget rejects UNC / remote hosts in every form", () => {
+  const W = "worktrees/R/u/x.png";
+  for (const h of [`file://evil-host/${W}`, `file:////host/share/${W}`, `file:///${BS}${BS}host${BS}share${BS}${W}`,
+    `//host/${W}`, `${BS}${BS}host${BS}share${BS}${W}`, `file://host/C:/${W}`]) {
+    assert.ok(isLocalHref(h), h);
+    const t = localLinkTarget(h, CWD);
+    assert.equal(t.path, null, h);
+    assert.equal(t.name, "x.png", h);
+  }
+  assert.equal(localLinkTarget("file://localhost/C:/Users/me/AppData/Local/VibeSquad/worktrees/R/u/a.png").path, "worktrees/R/u/a.png");
+});
+test("localLinkTarget rejects . and .. segments (cwd and worktrees forms, encoded too)", () => {
+  assert.equal(localLinkTarget(`file:///${CWD}/../../worktrees/VibeSquad/art-h1d/x.png`, CWD).path, null);
+  assert.equal(localLinkTarget(`file:///${CWD}/docs/../src/x.ts`, CWD).path, null);
+  assert.equal(localLinkTarget(`file:///${CWD}/docs/%2e%2e/x.ts`, CWD).path, null);
+  assert.equal(localLinkTarget(`${CWD}/./docs/x.ts`, CWD).path, null);
+});
+test("localLinkTarget keeps the leading slash of POSIX file:/// paths", () => {
+  assert.equal(localLinkTarget("file:///Users/me/repo/docs/x.md", "/Users/me/repo").path, "docs/x.md");
+  assert.equal(localLinkTarget("file:///home/me/.local/share/VibeSquad/worktrees/R/u/s.png").path, "worktrees/R/u/s.png");
+});
+test("localLinkTarget: %23/%3F survive in filenames, bad escapes and real ?# are handled", () => {
+  assert.equal(localLinkTarget(`file:///${CWD}/docs/a%23b%3Fc.md`, CWD).path, "docs/a#b?c.md");
+  assert.equal(localLinkTarget(`file:///${CWD}/docs/x.md#L3`, CWD).path, "docs/x.md");
+  assert.equal(localLinkTarget(`file:///${CWD}/docs/%E0%A4%A.md`, CWD).path, null);
+});
