@@ -33,7 +33,7 @@ test("Riff open never lands the Overlord on the left TV", () => {
 
 test("ZoneFace wires it: the shown bot drives useBotFace + the bg, Overlord's pose when landed, overlay hidden once landed", () => {
   const z = src("SkyZones.tsx");
-  assert.match(z, /const shown = skyLeftBot\(landed\)/);
+  assert.match(z, /const shown = isRiff \? skyLeftBot\(landed\) : zone\.bot;/, "only Riff's TV swaps bots; the Overlord's own TV keeps the Overlord (RS-b root cause: it showed Riff's face)");
   assert.match(z, /useBotFace\(shown, shownZone\.pose/);
   assert.match(z, /faceBg\(faces, shown, theme\)/);
   assert.match(z, /showSheet && !landed && sheet/);

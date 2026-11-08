@@ -464,9 +464,9 @@ export function integerScale(panelWidth: number, dpr = 1): number {
 // ── CRT faces (faces.json, Art10) ─────────────────────────────────────────────
 
 export type FaceBot = "riffbot" | "overlord";
-export type FaceMode = "idle" | "blink" | "talk" | "needs" | "lookDown" | "scared";
-/** Modes read from faces.json. `idle` is required; every other mode is optional (`lookDown` C2b G4, `scared` C2b G6: Riff while the Overlord is expanded). Unknown keys are ignored. */
-const FACE_MODES: FaceMode[] = ["idle", "blink", "talk", "needs", "lookDown", "scared"];
+export type FaceMode = "idle" | "blink" | "talk" | "needs" | "lookDown" | "scared" | "smacked" | "dizzy";
+/** Modes read from faces.json. `idle` is required; every other mode is optional (`lookDown` C2b G4, `scared` C2b G6: Riff while the Overlord is expanded, `smacked`/`dizzy` RS-b: the Overlord when Riff's window slams into him / after it closes). Unknown keys are ignored. */
+const FACE_MODES: FaceMode[] = ["idle", "blink", "talk", "needs", "lookDown", "scared", "smacked", "dizzy"];
 
 export type FacesModel = {
   /** Cell size of one face frame in the sheet (128x96). */
