@@ -280,6 +280,13 @@ export function isHubLane(team, lane) {
   return lane?.id != null && !(team?.lanes || []).some((l) => l.hub === true) && lane.id === team?.id;
 }
 
+/** Mirror of findBugLane in src/teams.ts: the lane flagged `bug: true`, else `bug-runner` / `bug-chaser`; null when none. */
+export const BUG_LANE_FALLBACK_IDS = ["bug-runner", "bug-chaser"];
+export function findBugLane(team) {
+  const lanes = team?.lanes || [];
+  return lanes.find((l) => l?.bug === true) ?? lanes.find((l) => BUG_LANE_FALLBACK_IDS.includes(l?.id)) ?? null;
+}
+
 /**
  * Look up a Squad (team) in the teams.json registry by id or name (case-insensitive).
  */
