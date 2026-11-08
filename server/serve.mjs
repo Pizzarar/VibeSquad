@@ -462,7 +462,7 @@ if (isMain) {
       const sup = superviseRunner(sharedRunnerBackend());
       server.once("close", () => sup.stop());
     }
-    void sharedSchedules().then((st) => { try { st.seedAuditSchedules(loadTeamsRegistry(rootDir)); } catch {} st.start(); }).catch(() => {});
+    void sharedSchedules().then((st) => { try { st.seedAuditSchedules(loadTeamsRegistry(rootDir), rootDir); } catch {} st.start(); }).catch(() => {});
     server.once("close", () => void sharedSchedules().then((st) => st.stop()).catch(() => {}));
     setImmediate(() => getStale({ rootDir }));
     let activeMuxes = [];

@@ -7,6 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { findAuditLane } from "./identity.mjs";
+import { resolveProjectPath } from "./brief-path.mjs";
 import crypto from "node:crypto";
 
 export const vsHome = (env = process.env) => env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad");
@@ -162,10 +163,19 @@ export function createSchedulesStore({ home = vsHome(), backend = null, now = ()
       return [];
     }
   };
-  const save = (schedules) => {
+  /** Seed keys of seeded schedules the user deleted: kept in schedules.json so a restart does not re-seed them. */
+  const loadDeletedSeeds = () => {
+    try {
+      const d = JSON.parse(fs.readFileSync(file, "utf8"))?.deletedSeeds;
+      return Array.isArray(d) ? d : [];
+    } catch {
+      return [];
+    }
+  };
+  const save = (schedules, deletedSeeds = loadDeletedSeeds()) => {
     fs.mkdirSync(home, { recursive: true });
     const tmp = `${file}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify({ version: 1, schedules }, null, 2), "utf8");
+    fs.writeFileSync(tmp, JSON.stringify({ version: 1, schedules, ...(deletedSeeds.length ? { deletedSeeds } : {}) }, null, 2), "utf8");
     fs.renameSync(tmp, file);
   };
   const getRaw = (list, id) => {
@@ -302,15 +312,16 @@ export function createSchedulesStore({ home = vsHome(), backend = null, now = ()
       return view(s);
     },
 
-    /** Idempotent: one daily new-agent entry per Squad's audit lane, keyed by `seed`. Squads without an audit lane or repo path are skipped. Returns the created ids. */
-    seedAuditSchedules(teams = []) {
+    /** Idempotent: one daily new-agent entry per Squad's audit lane, keyed by `seed`. Squads without an audit lane or an existing repo folder are skipped; user-deleted seeds stay deleted. Returns the created ids. */
+    seedAuditSchedules(teams = [], rootDir = process.cwd()) {
       const created = [];
       for (const team of Array.isArray(teams) ? teams : []) {
         const lane = findAuditLane(team);
-        const cwd = team?.paths?.[0];
-        if (!lane || !cwd) continue;
+        if (!lane) continue;
+        const cwd = (team.paths ?? []).map((p) => resolveProjectPath(p, rootDir)).find(Boolean);
+        if (!cwd) continue; // registry paths are folder names: skip until one resolves to a real folder
         const seed = `audit:${team.id}:${lane.id}`;
-        if (load().some((s) => s.seed === seed)) continue;
+        if (load().some((s) => s.seed === seed) || loadDeletedSeeds().includes(seed)) continue;
         const { name, ...cfg } = AUDIT_PROFILE;
         const v = store.create({ name: `Daily audit: ${team.name ?? team.id}`, prompt: AUDIT_PROMPT, cadence: AUDIT_CADENCE, target: { type: "new-agent", config: { ...cfg, cwd } } });
         const list = load();
@@ -390,8 +401,10 @@ export function createSchedulesStore({ home = vsHome(), backend = null, now = ()
 
     delete(id) {
       const list = load();
-      getRaw(list, id);
-      save(list.filter((s) => s.id !== id));
+      const gone = getRaw(list, id);
+      const tomb = loadDeletedSeeds();
+      if (gone.seed && !tomb.includes(gone.seed)) tomb.push(gone.seed);
+      save(list.filter((s) => s.id !== id), tomb);
       try { fs.rmSync(path.join(logDir, `${id}.jsonl`), { force: true }); } catch {}
       return { ok: true };
     },
