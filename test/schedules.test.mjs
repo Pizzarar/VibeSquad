@@ -342,3 +342,52 @@ test("update: extending a completed schedule reactivates it; shrinking an active
   assert.equal(store.update({ id: s.id, expiresAt: new Date(clock.t - 1000).toISOString() }).status, "completed");
   assert.equal(store.update({ id: s.id, name: "renamed" }).status, "completed"); // untouched limits do not resurrect it
 });
+
+// Realistic shape: registry paths are folder names under the project roots, not absolute repo roots.
+const auditRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vs-audit-"));
+const repoDir = path.join(auditRoot, "VibeSquadX");
+fs.mkdirSync(repoDir);
+const auditTeams = [
+  { id: "vs", name: "VibeSquad", paths: ["VibeSquadX"], lanes: [{ id: "hub" }, { id: "perfection", kind: "audit", hidden: true }] },
+  { id: "plain", name: "Plain", paths: ["VibeSquadX"], lanes: [{ id: "plain", hub: true }] },
+  { id: "ghost", name: "Ghost", paths: ["NoSuchFolderZz"], lanes: [{ id: "perfection", kind: "audit" }] },
+];
+const rootDir = path.join(auditRoot, "VibeSquadX");
+
+test("seedAuditSchedules: one daily new-agent entry in the audit lane, resolved cwd, skips no-lane and unresolved-path Squads", () => {
+  const { store } = mk();
+  const ids = store.seedAuditSchedules(auditTeams, rootDir);
+  assert.equal(ids.length, 1);
+  const s = store.get(ids[0]);
+  assert.equal(s.prompt, "Read docs/lanes/perfection/AUDIT_BRIEF.md and follow it.");
+  assert.equal(s.target.type, "new-agent");
+  assert.equal(path.resolve(s.target.config.cwd), path.resolve(repoDir));
+  assert.equal(s.target.config.provider, "claude");
+  assert.equal(s.cadence.type, "cron");
+  assert.equal(s.lane, "perfection");
+  assert.equal(s.team, "vs");
+});
+
+test("seedAuditSchedules is idempotent across calls and store restarts", async () => {
+  const { store, home, backend } = mk();
+  store.seedAuditSchedules(auditTeams, rootDir);
+  assert.deepEqual(store.seedAuditSchedules(auditTeams, rootDir), []);
+  const again = createSchedulesStore({ home, backend });
+  assert.deepEqual(again.seedAuditSchedules(auditTeams, rootDir), []);
+  assert.equal(again.list().length, 1);
+  await again.runOnce(again.list()[0].id);
+  assert.deepEqual(backend.calls[0][1].labels.lane, "perfection");
+  assert.equal(backend.calls[0][1].labels.profile, "Implement - Sonnet");
+});
+
+test("seedAuditSchedules: a user-deleted seeded schedule stays deleted after restart", () => {
+  const { store, home, backend } = mk();
+  const [id] = store.seedAuditSchedules(auditTeams, rootDir);
+  store.delete(id);
+  assert.deepEqual(store.seedAuditSchedules(auditTeams, rootDir), []);
+  const again = createSchedulesStore({ home, backend });
+  assert.deepEqual(again.seedAuditSchedules(auditTeams, rootDir), []);
+  assert.equal(again.list().length, 0);
+  again.create({ prompt: "x", cadence: { type: "every", everyMs: 60_000 }, target: { type: "new-agent", config: { provider: "claude", cwd: "/x" } } });
+  assert.equal(JSON.parse(fs.readFileSync(again.file, "utf8")).deletedSeeds.length, 1); // tombstone survives later saves
+});
