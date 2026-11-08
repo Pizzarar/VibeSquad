@@ -237,11 +237,17 @@ function leadCtx({ role = 'brainstorm', lane = 'own', team = 'efi', agents = [],
 const askLead = (ctx, extra = {}) => callTool(ctx, 'spawn_worker', { title: 'L', profile: 'Lead - Opus', prompt: 'lead', labels: { role: 'lead' }, ...extra });
 
 test('spawn_worker: a Buddy starts the lane lead when none is live (lead labels + VS_ROLE=lead)', async () => {
-  const { ctx, runnerBackend } = leadCtx({ agents: [leadAgent('rn-old', { role: 'former-lead' }), { ...leadAgent('rn-closed'), status: 'closed' }, leadAgent('rn-otherlane', { lane: 'ui' })] });
+  const { ctx, runnerBackend } = leadCtx({ agents: [leadAgent('rn-old', { role: 'former-lead' }), { ...leadAgent('rn-archived'), archivedAt: '2026-01-01T00:00:00Z' }, leadAgent('rn-otherlane', { lane: 'ui' })] });
   assert.equal((await askLead(ctx)).id, 'rn-new');
   const req = runnerBackend.calls[0][1];
   assert.deepEqual([req.labels.role, req.labels.lane, req.labels.team, req.labels.lead, req.labels.profile], ['lead', 'own', 'efi', 'own', 'Lead - Opus']);
   assert.deepEqual([req.env.VS_ROLE, req.env.VS_LANE, req.env.VS_TEAM, req.env.VS_PROFILE], ['lead', 'own', 'efi', 'Lead - Opus']);
+});
+
+test('spawn_worker: a closed (resumable) lead counts as live, so the Buddy cannot spawn a duplicate', async () => {
+  const { ctx, runnerBackend } = leadCtx({ agents: [{ ...leadAgent('rn-closed'), status: 'closed' }] });
+  await assert.rejects(askLead(ctx), /already has a live lead \(rn-closed\)/);
+  assert.equal(runnerBackend.calls.length, 0);
 });
 
 test('spawn_worker: lead request is an error (no downgrade) unless Buddy + own lane + Lead profile + no live lead', async () => {

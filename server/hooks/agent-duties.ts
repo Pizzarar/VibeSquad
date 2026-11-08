@@ -33,6 +33,7 @@ import {
   matchPathInRegistry,
   normalizeRoleLabel,
   resolveAgentIdentity,
+  resolveLeadWinner,
   topicOf,
 } from "../identity.mjs";
 import { refreshWhosHere } from "../whos-here.mjs";
@@ -2454,7 +2455,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const wantLane = (lane || "").toLowerCase();
       const leads = (res.entries as any[])
         .map((e) => ({ ...e.agent, labels: e.agent.labels ?? {} }) as AgentSnap)
-        .filter((a) => !a.archivedAt && !a.internal && a.status !== "closed")
+        .filter((a) => !a.archivedAt && !a.internal)
         .filter((a) => effectiveAgentRole(a) === role)
         .filter((a) => {
           const d = deriveTeamForSpawn(a.labels, a.cwd, currentTeams());
@@ -2462,12 +2463,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           const aLane = (d.lane || a.labels.lane || a.labels.lead || "").toLowerCase();
           return aTeam === team && (!wantLane || aLane === wantLane);
         });
-      leads.sort((a, b) => {
-        const at = Date.parse(a.updatedAt ?? "");
-        const bt = Date.parse(b.updatedAt ?? "");
-        return (Number.isNaN(bt) ? 0 : bt) - (Number.isNaN(at) ? 0 : at);
-      });
-      return leads[0] ?? null;
+      // A non-closed lead beats a closed (resumable) one; newest wins among equals. Only CONFLICT for 2+ non-closed.
+      return resolveLeadWinner(leads).winner ?? null;
     }
 
     async function handleSendAgentPrompt(input: any, ctx?: { paseo?: Paseo }) {
@@ -2495,7 +2492,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       if (!target) return undefined;
       // A worker closed by the done-report path is not a retired holder: the send revives it (RunnerBackend unarchives it).
       if (target.labels?.[AUTO_ARCHIVED_LABEL] === "1" && String(target.labels?.role ?? "").trim().toLowerCase() === "worker") return undefined;
-      const isRetired = Boolean(target.archivedAt || target.status === "closed" || isRetiredLeadSnap(target));
+      const isRetired = Boolean(target.archivedAt || isRetiredLeadSnap(target));
       if (!isRetired) return undefined;
 
       const { team: rawTeam, lane: rawLane } = deriveTeamForSpawn(target.labels, target.cwd, currentTeams());

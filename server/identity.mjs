@@ -109,8 +109,38 @@ export function isRetiredAgent(agentOrLabels) {
   const labels = extractLabels(agentOrLabels);
   if (isRetiredRole(labels.role)) return true;
   if (agentOrLabels.archivedAt) return true;
-  if (agentOrLabels.status === "closed") return true;
+  // "closed" is resumable (lost/parked runner agent), not retired: only archived or former-* is retired.
   return false;
+}
+
+/**
+ * Deterministic lead-winner rule (docs/NAMING.md lane integrity). Among role=lead agents in one lane,
+ * a non-closed (running/idle/initializing/error) lead beats a closed (resumable) one; among the same
+ * closed-ness the newest (by createdAt, then updatedAt, then id) wins. A losing closed lead stays listed
+ * (resumable) but is not the lead, and send-by-lane routes to the winner. Returns
+ * { winner, conflict, contenders } — `conflict` is true only when 2+ NON-closed leads remain.
+ */
+export function resolveLeadWinner(leads) {
+  const list = (Array.isArray(leads) ? leads : []).filter(Boolean);
+  if (!list.length) return { winner: null, conflict: false, contenders: [] };
+  const isClosed = (a) => String(a?.status ?? "").trim().toLowerCase() === "closed";
+  const closed = list.filter(isClosed);
+  const nonClosed = list.filter((a) => !isClosed(a));
+  const newestFirst = (arr) =>
+    [...arr].sort((a, b) => {
+      const at = Date.parse(a?.createdAt ?? a?.updatedAt ?? "");
+      const bt = Date.parse(b?.createdAt ?? b?.updatedAt ?? "");
+      const na = Number.isFinite(at) ? at : 0;
+      const nb = Number.isFinite(bt) ? bt : 0;
+      if (na !== nb) return nb - na;
+      return String(b?.id ?? "").localeCompare(String(a?.id ?? ""));
+    });
+  if (nonClosed.length >= 2) {
+    return { winner: newestFirst(nonClosed)[0], conflict: true, contenders: newestFirst(nonClosed) };
+  }
+  if (nonClosed.length === 1) return { winner: nonClosed[0], conflict: false, contenders: nonClosed };
+  // No non-closed lead: the newest closed lead is the winner (still resumable).
+  return { winner: newestFirst(closed)[0], conflict: false, contenders: closed };
 }
 
 /**
@@ -751,8 +781,7 @@ export function formatDisplayTitle({
  * Returns {role, teamId, lane} (role is the effective role) or null.
  */
 export function whoCandidate(a, { teams, wantTeamId, wantLane, squadWide = false, removedLanes = new Set() } = {}) {
-  const status = String(a.status ?? "unknown").trim();
-  if (a.archivedAt || a.archived || a.internal || status.toLowerCase() === "closed") return null;
+  if (a.archivedAt || a.archived || a.internal) return null;
   if (isRetiredRole(a.labels?.role)) return null;
   const resolved = resolveAgentIdentity(a, { teams, cwd: a.cwd });
   const teamId = resolved.isOrphan ? "" : resolved.teamId;

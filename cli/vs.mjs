@@ -44,6 +44,7 @@ import {
   normalizeRoleLabel,
   ordStringOf,
   resolveAgentIdentity,
+  resolveLeadWinner,
   whoCandidate,
 } from "../server/identity.mjs";
 import { loadProfiles } from "../server/profiles.mjs";
@@ -616,6 +617,8 @@ function listAgentsViaRunner() {
     title: a.title,
     status: a.status,
     cwd: a.cwd ?? "",
+    createdAt: a.createdAt ?? null,
+    updatedAt: a.updatedAt ?? null,
     archivedAt: a.archivedAt ?? null,
     archived: Boolean(a.archivedAt),
     internal: false,
@@ -1020,6 +1023,19 @@ async function commandWho(flags) {
     return { ...entry, line: formatWhoLine(entry) };
   });
 
+  // Deterministic lead-winner rule: a non-closed lead beats a closed (resumable) one; newest wins among equals.
+  // Only CONFLICT when 2+ non-closed leads remain. A losing closed lead stays in `vs who` but isn't the lead.
+  if (target === "lead") {
+    const res = resolveLeadWinner(rawMatched.map((m) => m.agent));
+    if (res.winner && !res.conflict) {
+      const keepId = res.winner.id;
+      matched.splice(0, matched.length, ...matched.filter((m) => m.id === keepId));
+    } else if (res.conflict) {
+      const keepIds = new Set(res.contenders.map((a) => a.id));
+      matched.splice(0, matched.length, ...matched.filter((m) => keepIds.has(m.id)));
+    }
+  }
+
   // Two live main Buddies for one (lane, topic) is a conflict too (docs/PLAN_BUGS_BATCH2.md block 0).
   // Topic Buddies are separate seats, so only same-topic pairs count.
   const bsTopics = rawMatched.map((m) => String(m.agent.labels?.topic ?? m.agent.labels?.["vs.inbox-card-id"] ?? "").trim().toLowerCase());
@@ -1120,8 +1136,7 @@ async function commandWhoami(flags) {
     const wantLane = resolved.laneId.toLowerCase();
     const leadCandidates = [];
     for (const a of agents) {
-      const status = String(a.status ?? "unknown").trim();
-      if (a.archivedAt || a.archived || a.internal || status.toLowerCase() === "closed") continue;
+      if (a.archivedAt || a.archived || a.internal) continue;
       if (isRetiredAgent(a.labels ?? {})) continue;
       const aResolved = resolveAgentIdentity(a, { teams: TEAM_DEFS, cwd: a.cwd, agentsById });
       if (aResolved.isOrphan) continue;
@@ -1130,7 +1145,7 @@ async function commandWhoami(flags) {
       leadCandidates.push(a);
     }
     if (leadCandidates.length > 0) {
-      const lead = leadCandidates[0];
+      const lead = resolveLeadWinner(leadCandidates).winner ?? leadCandidates[0];
       const { tokens, tokensLabel } = extractAgentTokens(lead);
       const title = String(lead.title ?? lead.name ?? lead.id).trim();
       const status = String(lead.status ?? "unknown").trim();

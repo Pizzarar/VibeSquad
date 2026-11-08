@@ -619,7 +619,7 @@ test("Fix 1b: vs install-shim --bin-dir <tempDir> creates vs, vs.cmd, vs.ps1 + r
   }
 });
 
-test("vs who uses runner liveness, not the last log event: a lead the restarted runner lost is closed, not live (CONFLICT fix)", () => {
+test("vs who uses runner liveness, not the last log event: a lead the restarted runner lost is closed (resumable), and the non-closed lead wins", () => {
   const env = makeMockEnv();
   try {
     const agentsDir = join(env.vsHome, "runner", "agents");
@@ -634,7 +634,7 @@ test("vs who uses runner liveness, not the last log event: a lead the restarted 
         ].map((e) => JSON.stringify(e)).join("\n") + "\n",
       );
     const now = Date.now();
-    writeRunnerAgent("rn-lost0000001", now - 60_000, "idle"); // last event predates the runner start: its child died
+    writeRunnerAgent("rn-lost0000001", now - 60_000, "idle"); // last event predates the runner start: its child died -> closed
     writeRunnerAgent("rn-live0000001", now + 1_000, "idle");
     // A meta/archive append after the restart (runner.updateMeta on a lost agent) is not liveness.
     appendFileSync(join(agentsDir, "rn-lost0000001.jsonl"), JSON.stringify({ seq: 2, ts: now + 2_000, type: "meta", patch: { labels: { x: "1" } } }) + "\n");
@@ -646,10 +646,12 @@ test("vs who uses runner liveness, not the last log event: a lead the restarted 
     const ids = JSON.parse(res.stdout).entries.map((e) => e.id);
     assert.deepEqual(ids, ["rn-live0000001"]);
 
-    // A dead runner process owns no children at all.
+    // A dead runner process owns no live children: both read "closed" (lost). The newest closed lead still
+    // resolves (resumable), so `vs who lead` returns it rather than NONE.
     writeFileSync(join(env.vsHome, "runner", "runner.json"), JSON.stringify({ port: 1, pid: 2 ** 22 - 3, startedAt: now - 120_000 }));
     const dead = env.runVs(args);
-    assert.equal(dead.status, 1, dead.stdout + dead.stderr);
+    assert.equal(dead.status, 0, dead.stdout + dead.stderr);
+    assert.deepEqual(JSON.parse(dead.stdout).entries.map((e) => e.id), ["rn-live0000001"]);
   } finally {
     env.cleanup();
   }
