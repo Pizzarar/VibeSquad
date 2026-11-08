@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { DEMO } from "./demoFlag";
 import { setProviderOverrides } from "./pixel";
-import { isRemote, needsPairing } from "./remoteSession";
+import { isRemote } from "./remoteSession";
 
 export type Role = "lead" | "brainstorm" | "worker";
 
@@ -617,6 +617,6 @@ export function dismissSetupPrompt(): void {
 }
 
 // Kick off initial load in browser environments.
-if (typeof window !== "undefined" && !(isRemote() && needsPairing(true))) {
+if (typeof window !== "undefined" && !isRemote()) {
   void fetchProfiles();
 }

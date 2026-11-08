@@ -3,14 +3,18 @@
 // https://<host>/pair?code=… so the server sets the vs_device cookie and serves its own UI.
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  clearPending,
   clearSession,
   mapRemoteError,
   normalizeCode,
   normalizeHost,
   pairRedeemUrl,
   parsePairInput,
+  parsePairReturn,
+  readPending,
   readSession,
   remoteError,
+  savePending,
   saveSession,
   serverUrl,
   type RemoteError,
@@ -18,7 +22,10 @@ import {
 
 const PROBE_MS = 5000;
 
-/** Reachability check: /api/health is open on the server's HTTPS port; no-cors is enough to tell up from down. */
+// Set before opening the server's UI: coming back (Android Back) shows the form with Forget instead of reopening again.
+const OPENED_KEY = "vs.remote.opened";
+
+/** Reachability only (up vs down). A no-cors fetch succeeds against any HTTPS host, so it proves nothing about the host. */
 async function probe(host: string): Promise<void> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), PROBE_MS);
@@ -41,16 +48,57 @@ async function onDeepLink(handler: (urls: string[]) => void): Promise<() => void
   }
 }
 
+/** The server redirects back here as `#paired` (code redeemed), `#unpaired` (cookie rejected) or `#failed` (bad code). */
+function takeServerReturn(): { error: RemoteError | null; open: string | null } {
+  const ret = parsePairReturn(location.hash);
+  if (!ret) return { error: null, open: null };
+  history.replaceState(null, "", location.pathname + location.search);
+  const pending = readPending();
+  clearPending();
+  if (ret === "paired") {
+    if (pending) {
+      saveSession(pending);
+      return { error: null, open: pending };
+    }
+    return { error: remoteError("unknown", "Pairing finished too late to be saved. Pair again."), open: null };
+  }
+  if (ret === "unpaired") {
+    clearSession();
+    return { error: remoteError("unknown", "Your PC no longer recognizes this phone. Pair again with a new code."), open: null };
+  }
+  return { error: remoteError("unknown", "That code was invalid, already used or expired. Generate a new one on your PC."), open: null };
+}
+
+function openServer(host: string): void {
+  try {
+    sessionStorage.setItem(OPENED_KEY, "1");
+  } catch {
+    /* no sessionStorage: Back just reopens */
+  }
+  location.href = serverUrl(host, location.origin);
+}
+
 export function RemotePairScreen() {
+  const [ret] = useState(takeServerReturn);
   const saved = readSession();
   const [host, setHost] = useState(saved?.host ?? "");
   const [code, setCode] = useState("");
   const [link, setLink] = useState("");
-  const [error, setError] = useState<RemoteError | null>(null);
+  const [error, setError] = useState<RemoteError | null>(ret.error);
+  const [fromLink, setFromLink] = useState(false);
   const [busy, setBusy] = useState(false);
   const [scanning, setScanning] = useState(false);
   // A saved server reopens on launch unless the user came here to re-pair.
-  const [reopening, setReopening] = useState(Boolean(saved));
+  const [reopening, setReopening] = useState(() => {
+    let cameBack = false;
+    try {
+      cameBack = Boolean(sessionStorage.getItem(OPENED_KEY));
+      sessionStorage.removeItem(OPENED_KEY);
+    } catch {
+      /* no sessionStorage */
+    }
+    return Boolean(saved) && !cameBack && !ret.error && !ret.open;
+  });
 
   const pairWith = useCallback(async (h: string, c: string) => {
     const hostN = normalizeHost(h);
@@ -68,34 +116,40 @@ export function RemotePairScreen() {
       setBusy(false);
       return;
     }
-    saveSession(hostN);
-    location.href = pairRedeemUrl(hostN, codeN);
+    // Only a pending record: the session is saved when the server sends the browser back with #paired.
+    savePending(hostN);
+    location.href = pairRedeemUrl(hostN, codeN, undefined, location.origin);
   }, []);
 
   const apply = useCallback(
-    (text: string, autoPair: boolean) => {
+    (text: string, fromExternal = false) => {
       const p = parsePairInput(text);
       if (!p) {
         setError(remoteError("bad-input", "That isn't a VibeSquad pairing link, address or code."));
         return;
       }
-      const h = p.host || host;
-      const c = p.code || code;
       if (p.host) setHost(p.host);
       if (p.code) setCode(p.code);
       setLink("");
       setError(null);
-      if (autoPair && p.host && p.code) void pairWith(h, c);
+      // Scans, links and deep links only fill the form; the user presses Pair after checking the address.
+      setFromLink(fromExternal);
     },
-    [host, code, pairWith],
+    [],
   );
+
+  // Just paired: open the server's UI now that the session is saved.
+  useEffect(() => {
+    if (ret.open) openServer(ret.open);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Reopen the saved server. A dead one drops back to this form (with Forget) instead of a blank page.
   useEffect(() => {
     if (!saved || !reopening) return;
     let live = true;
     probe(saved.host).then(
-      () => live && (location.href = serverUrl(saved.host)),
+      () => live && openServer(saved.host),
       (e) => {
         if (!live) return;
         setError(mapRemoteError(e));
@@ -128,6 +182,17 @@ export function RemotePairScreen() {
           <button type="button" className="btn ghost remote-pair-forget" onClick={() => setReopening(false)}>
             Pair a different PC
           </button>
+          <button
+            type="button"
+            className="btn ghost remote-pair-forget"
+            data-testid="forget-pc"
+            onClick={() => {
+              clearSession();
+              setReopening(false);
+            }}
+          >
+            Forget {saved.host}
+          </button>
         </div>
       </div>
     );
@@ -139,7 +204,7 @@ export function RemotePairScreen() {
         className="remote-pair-card"
         onSubmit={(e) => {
           e.preventDefault();
-          if (link.trim()) apply(link, true);
+          if (link.trim()) apply(link);
           else void pairWith(host, code);
         }}
       >
@@ -170,7 +235,7 @@ export function RemotePairScreen() {
             data-testid="pair-host"
             value={host}
             onChange={(e) => setHost(e.target.value)}
-            placeholder="192.168.1.20:4180 or host.nord:4180"
+            placeholder="192.168.1.20:4180 or pc.example:4180"
             autoCapitalize="off"
             autoCorrect="off"
             spellCheck={false}
@@ -202,6 +267,11 @@ export function RemotePairScreen() {
             spellCheck={false}
           />
         </label>
+        {fromLink && host && (
+          <div className="remote-pair-help" data-testid="pair-confirm">
+            A link filled in <b>{host}</b>. Only press Pair if that is your PC.
+          </div>
+        )}
         {error && (
           <div className="remote-pair-error" role="alert" data-testid="pair-error">
             {error.message}

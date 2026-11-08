@@ -103,14 +103,45 @@ export function toAndroidDeepLink(input: string): string | null {
 }
 
 /** The server URL that redeems a code: GET sets the vs_device cookie and redirects to `/`. */
-export function pairRedeemUrl(host: string, code: string, deviceName = "VibeSquad Android"): string {
-  const q = new URLSearchParams({ code, name: deviceName });
+export function pairRedeemUrl(host: string, code: string, deviceName = "VibeSquad Android", appOrigin = ""): string {
+  const q = new URLSearchParams({ code, name: deviceName, ...(appOrigin ? { vs_app: appOrigin } : {}) });
   return `https://${host}/pair?${q.toString()}`;
 }
 
-/** The URL of the server's own UI for a stored host. */
-export function serverUrl(host: string): string {
-  return `https://${host}/`;
+/**
+ * The URL of the server's own UI for a stored host. `appOrigin` (the WebView's own origin) lets the server send the
+ * user back to the pair screen (`#unpaired`) when this device is no longer paired, instead of a dead 401 page.
+ */
+export function serverUrl(host: string, appOrigin = ""): string {
+  return `https://${host}/${appOrigin ? `?${new URLSearchParams({ vs_app: appOrigin }).toString()}` : ""}`;
+}
+
+/** What the server's redirect back to the app (`<app origin>/#paired|#unpaired|#failed`) says. */
+export type PairReturn = "paired" | "unpaired" | "failed";
+export function parsePairReturn(hash: string): PairReturn | null {
+  const m = /^#(paired|unpaired|failed)$/.exec(hash ?? "");
+  return m ? (m[1] as PairReturn) : null;
+}
+
+/** A pairing the user confirmed and sent to the server, not yet proven: becomes the session on `#paired` only. */
+export const REMOTE_PENDING_KEY = "vs.remote.pending";
+const PENDING_MAX_AGE_MS = 10 * 60_000;
+
+export function savePending(host: string, local: GetSet | null = browserStorage("localStorage"), now = new Date()): void {
+  const h = normalizeHost(host);
+  if (!local || !h) throw new Error("remote: not a valid server address");
+  local.setItem(REMOTE_PENDING_KEY, JSON.stringify({ host: h, at: now.getTime() }));
+}
+
+/** The host of a fresh pending pairing, or null. */
+export function readPending(local: Get | null = browserStorage("localStorage"), now = new Date()): string | null {
+  const s = safe(() => JSON.parse(local?.getItem(REMOTE_PENDING_KEY) ?? "null"), null);
+  if (!s || typeof s.host !== "string" || typeof s.at !== "number" || now.getTime() - s.at > PENDING_MAX_AGE_MS) return null;
+  return normalizeHost(s.host);
+}
+
+export function clearPending(local: GetSet | null = browserStorage("localStorage")): void {
+  safe(() => local?.removeItem(REMOTE_PENDING_KEY), undefined);
 }
 
 /** The stored pairing, or null when missing or malformed (an old relay-offer session is not trusted). */

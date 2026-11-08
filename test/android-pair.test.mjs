@@ -26,18 +26,18 @@ const fakeStore = (init = {}) => {
 describe("parsePairInput", () => {
   test("reads the desktop QR / Copy Pairing Link (LAN, Meshnet host and Meshnet IP)", () => {
     assert.deepEqual(parsePairInput("https://192.168.1.20:4180/pair?code=123456"), { host: "192.168.1.20:4180", code: "123456" });
-    assert.deepEqual(parsePairInput("https://pc-name.nord:4180/pair?code=654321"), { host: "pc-name.nord:4180", code: "654321" });
+    assert.deepEqual(parsePairInput("https://pc-name.example:4180/pair?code=654321"), { host: "pc-name.example:4180", code: "654321" });
     assert.deepEqual(parsePairInput("  https://100.64.0.7:4180/pair?code=000111  "), { host: "100.64.0.7:4180", code: "000111" });
   });
 
   test("reads the vibesquad://pair deep link", () => {
     assert.deepEqual(parsePairInput("vibesquad://pair?host=192.168.1.20%3A4180&code=123456"), { host: "192.168.1.20:4180", code: "123456" });
-    assert.deepEqual(parsePairInput("vibesquad://pair?host=pc.nord"), { host: "pc.nord:4180", code: "" });
+    assert.deepEqual(parsePairInput("vibesquad://pair?host=pc.example"), { host: "pc.example:4180", code: "" });
   });
 
   test("accepts a typed host (default port 4180) and a bare or dashed 6-digit code", () => {
     assert.deepEqual(parsePairInput("192.168.1.20"), { host: "192.168.1.20:4180", code: "" });
-    assert.deepEqual(parsePairInput("pc.nord:4443"), { host: "pc.nord:4443", code: "" });
+    assert.deepEqual(parsePairInput("pc.example:4443"), { host: "pc.example:4443", code: "" });
     assert.deepEqual(parsePairInput("123456"), { host: "", code: "123456" });
     assert.deepEqual(parsePairInput("123-456"), { host: "", code: "123456" });
   });
@@ -50,7 +50,7 @@ describe("parsePairInput", () => {
   });
 
   test("a link without a usable code still yields the host", () => {
-    assert.deepEqual(parsePairInput("https://pc.nord:4180/pair?code=nope"), { host: "pc.nord:4180", code: "" });
+    assert.deepEqual(parsePairInput("https://pc.example:4180/pair?code=nope"), { host: "pc.example:4180", code: "" });
   });
 });
 
@@ -61,7 +61,7 @@ describe("toAndroidDeepLink / pairRedeemUrl", () => {
     assert.equal(dl, "vibesquad://pair?host=192.168.1.20%3A4180&code=123456");
     assert.deepEqual(parsePairInput(dl), parsePairInput(qr));
     assert.equal(toAndroidDeepLink("123456"), null);
-    assert.equal(toAndroidDeepLink("pc.nord"), "vibesquad://pair?host=pc.nord%3A4180");
+    assert.equal(toAndroidDeepLink("pc.example"), "vibesquad://pair?host=pc.example%3A4180");
   });
 
   test("redeem URL is the https /pair?code= the paired-PC browser hits", () => {
@@ -73,7 +73,7 @@ describe("toAndroidDeepLink / pairRedeemUrl", () => {
   });
 
   test("normalizeHost defaults the port and refuses loopback / bad ports", () => {
-    assert.equal(normalizeHost("https://pc.nord/pair"), "pc.nord:4180");
+    assert.equal(normalizeHost("https://pc.example/pair"), "pc.example:4180");
     assert.equal(normalizeHost("[fd00::1]:4180"), "[fd00::1]:4180");
     assert.equal(normalizeHost("localhost:4180"), null);
     assert.equal(normalizeHost("pc:0"), null);
@@ -86,8 +86,8 @@ describe("stored pairing session", () => {
     assert.equal(readSession(s), null);
     assert.equal(needsPairing(true, s), true);
     assert.equal(needsPairing(false, s), false);
-    saveSession("pc.nord", s, new Date("2026-11-07T00:00:00Z"));
-    assert.deepEqual(readSession(s), { v: 2, host: "pc.nord:4180", savedAt: "2026-11-07T00:00:00.000Z" });
+    saveSession("pc.example", s, new Date("2026-11-07T00:00:00Z"));
+    assert.deepEqual(readSession(s), { v: 2, host: "pc.example:4180", savedAt: "2026-11-07T00:00:00.000Z" });
     assert.equal(needsPairing(true, s), false);
     clearSession(s);
     assert.equal(needsPairing(true, s), true);
@@ -292,5 +292,41 @@ describe("Block A5: Phone UI pass (status bar fit, Lead page wrap, right sidebar
     assert.match(src, /\.right-dock\s*\{[^}]*border-left:\s*0;/);
     assert.match(src, /\.right-dock\s*\{[^}]*border-top:\s*1px solid var\(--cyan\);/);
     assert.match(src, /\.right-dock-resize-handle\s*\{[^}]*display:\s*none;/);
+  });
+});
+
+describe("pairing is proven before it is saved (review fixes)", () => {
+  test("a pending pairing is not a session, and expires", async () => {
+    const { savePending, readPending, clearPending, parsePairReturn, serverUrl } = await import("../src/remoteSession.ts");
+    const s = fakeStore();
+    savePending("pc.example", s, new Date("2026-11-07T00:00:00Z"));
+    assert.equal(readSession(s), null);
+    assert.equal(needsPairing(true, s), true);
+    assert.equal(readPending(s, new Date("2026-11-07T00:05:00Z")), "pc.example:4180");
+    assert.equal(readPending(s, new Date("2026-11-07T00:11:00Z")), null);
+    clearPending(s);
+    assert.equal(readPending(s, new Date("2026-11-07T00:00:01Z")), null);
+    assert.equal(parsePairReturn("#paired"), "paired");
+    assert.equal(parsePairReturn("#unpaired"), "unpaired");
+    assert.equal(parsePairReturn("#paired=evil.example"), null);
+    assert.match(pairRedeemUrl("pc.example:4180", "123456", "x", "http://tauri.localhost"), /vs_app=http%3A%2F%2Ftauri\.localhost/);
+    assert.equal(serverUrl("pc.example:4180"), "https://pc.example:4180/");
+  });
+
+  test("screen saves only a pending record, deep links never auto-pair, reachability is not trust", () => {
+    const src = read("src/RemotePairScreen.tsx");
+    assert.doesNotMatch(src, /saveSession\(hostN\)/);
+    assert.match(src, /savePending\(hostN\)/);
+    assert.doesNotMatch(src, /apply\([^)]*\)[^\n]*\bpairWith\b|autoPair/);
+    assert.match(src, /data-testid="pair-confirm"/);
+    assert.match(src, /data-testid="forget-pc"/);
+  });
+
+  test("the server sends the APK back to its own origin: #paired / #unpaired / #failed", () => {
+    const src = read("server/auth.mjs");
+    assert.match(src, /\$\{app\}\/#unpaired/);
+    assert.match(src, /\$\{app\}\/#failed/);
+    assert.match(src, /app \? `\$\{app\}\/#paired` : "\/"/);
+    assert.match(src, /TAURI_ORIGINS\.has\(o\)/);
   });
 });
