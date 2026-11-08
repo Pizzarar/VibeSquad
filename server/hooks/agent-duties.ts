@@ -2088,7 +2088,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const epoch = turnEpoch.get(workerId) ?? 0;
       const key = `${epoch}:${tid}`;
       const prev = digested.get(workerId);
-      if (inflightDigests.get(workerId) === epoch || prev === key || (!tid && prev !== undefined)) return;
+      if (inflightDigests.get(workerId) === epoch || prev === key || (!tid && prev?.startsWith(`${epoch}:`))) return;
       const where = teamOf(labels, worker.cwd);
       if (!where) return;
       digested.set(workerId, key);
