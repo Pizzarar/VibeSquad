@@ -4703,6 +4703,34 @@ button.project-file-name:hover { text-decoration: underline; }
   overflow: auto;
 }
 
+/* ── Hub pages (src/HubPages.tsx, docs/PLAN_HUB_PAGES.md HP1-HP3): Sky / Tower switcher over one shared skyline backdrop ── */
+.hub-pages { grid-column: 1; grid-row: 2 / -1; position: relative; display: flex; flex-direction: column; min-height: 0; overflow: hidden; isolation: isolate; }
+.hub-backdrop { position: absolute; inset: 0; z-index: -1; image-rendering: pixelated; pointer-events: none; background-color: #2a1b6b; }
+:root[data-theme="light"] .hub-backdrop { background-color: #95d3f2; }
+/* Fallback (A1 absent): today's sky band along the bottom over a vertical gradient. */
+.hub-backdrop.is-fallback { background-image: linear-gradient(180deg, #070a22, #18225e 62%, #3b3278); }
+:root[data-theme="light"] .hub-backdrop.is-fallback { background-image: linear-gradient(180deg, #7fc4f5, #bfe3fb 62%, #eef8ff); }
+.hub-backdrop.is-fallback.has-sky-band { background-size: auto 60%; background-position: left bottom; background-repeat: repeat-x; }
+.hub-tabs { flex: none; display: flex; gap: 4px; padding: 4px 10px; justify-content: flex-end; }
+.hub-tab { font-family: var(--arcade); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; padding: 3px 14px; border: 2px solid var(--line); background: var(--bg); color: var(--muted); cursor: pointer; }
+.hub-tab.is-on { color: var(--text); border-color: var(--cyan); }
+.hub-tab:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
+.hub-sky-page, .hub-tower-page { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* HP2: the sky TVs are capped so the faces do not eat the screen; the skyline shows below them. The portrait stays integer-scaled inside. */
+.hub-sky-page .sky-zones { flex: none; height: clamp(260px, 36vh, 440px); }
+.hub-tower-sky { flex: none; display: flex; justify-content: space-between; align-items: flex-end; padding: 2px 18px 6px; }
+.hub-mini-face { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 0; border: 0; background: transparent; cursor: pointer; color: var(--text); }
+.hub-mini-face:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.hub-mini-screen { position: relative; display: block; overflow: hidden; border: 2px solid var(--line); background: var(--sky-face-bg-custom, #2a1b6b); box-sizing: content-box; }
+:root[data-theme="light"] .hub-mini-screen { background: var(--sky-face-bg-custom, #95d3f2); }
+.hub-mini-riffbot .hub-mini-screen { border-color: var(--cyan); }
+.hub-mini-overlord .hub-mini-screen { border-color: var(--violet); }
+.hub-mini-name { font-family: var(--arcade); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; background: var(--bg); padding: 1px 6px; }
+/* The tower gets a fixed-height, non-scrolling box (HP4 shows one floor per screen); the gutters beside it are the backdrop, so the tower strip is transparent here. */
+.hub-tower-box { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+.hub-tower-box .sq-floor { flex: 1; min-height: 0; max-height: none; overflow: hidden; }
+.hub-tower-box .sq-floor-tower { background: transparent; border-top: 0; }
+
 /* ── Sky zones (src/SkyZones.tsx, docs/PLAN_SKY_GODS_C2B.md G1): two sky-CRT chats above the tower ── */
 .sky-zones {
   --sky-top: #070a22;
