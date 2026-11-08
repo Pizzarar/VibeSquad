@@ -4,6 +4,10 @@ import { closeSync, existsSync, openSync, readFileSync, rmSync, statSync, writeS
 import path from 'node:path';
 
 export const STALE_START_LOCK_MS = 15000;
+// Total budget for retrying an EPERM/EACCES create (Windows "delete-pending": the directory entry is
+// gone but the name is not yet reclaimable). 30ms was too short under AV/live scanners.
+export const LOCK_CREATE_RETRY_BUDGET_MS = 100;
+const LOCK_CREATE_RETRY_BACKOFF_MAX_MS = 20; // per-attempt cap keeps the total budget deterministic
 const sleepBuf = new Int32Array(new SharedArrayBuffer(4));
 const sleepSync = (ms) => Atomics.wait(sleepBuf, 0, 0, ms);
 
@@ -26,20 +30,26 @@ export function readLock(file) {
   }
 }
 
-/** O_EXCL create of `file` holding { pid, startedAt }. True if we now own it. */
-export function tryCreateLock(file, pid = process.pid) {
+/**
+ * O_EXCL create of `file` holding { pid, startedAt }. True if we now own it.
+ * `open`/`exists`/`sleep`/`budgetMs` are injectable for tests.
+ */
+export function tryCreateLock(file, pid = process.pid, { open = openSync, exists = existsSync, sleep = sleepSync, budgetMs = LOCK_CREATE_RETRY_BUDGET_MS } = {}) {
+  const deadline = Date.now() + budgetMs;
   let fd;
   for (let attempt = 0; ; attempt++) {
     try {
-      fd = openSync(file, 'wx');
+      fd = open(file, 'wx');
       break;
     } catch (e) {
       if (e.code === 'EEXIST') return false;
       if (e.code === 'EPERM' || e.code === 'EACCES') {
-        if (existsSync(file)) return false;
-        if (attempt < 5) {
-          sleepSync(2 * (attempt + 1));
-          if (existsSync(file)) return false;
+        if (exists(file)) return false;
+        // Delete-pending: the entry is gone but not yet reclaimable, so retry until the budget runs out.
+        if (Date.now() < deadline) {
+          const backoff = Math.min(2 * (attempt + 1), LOCK_CREATE_RETRY_BACKOFF_MAX_MS);
+          sleep(Math.min(backoff, deadline - Date.now()));
+          if (exists(file)) return false;
           continue;
         }
       }
