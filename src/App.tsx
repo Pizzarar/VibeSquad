@@ -1068,7 +1068,7 @@ const TeamPage = memo(function TeamPage(props: {
           onQuickStart={props.onQuickStart}
         />
         <SquadUnsortedGroup view={view} onPick={onPick} />
-        <IdeaInbox team={view.team} />
+        <IdeaInbox team={view.team} view={view} onOpenLane={props.onQuickStart} />
       </div>
     );
   }
@@ -1120,7 +1120,7 @@ const TeamPage = memo(function TeamPage(props: {
       )}
       <HandoffPanel handoff={handoff} />
       <UnassignedTray members={unassignedMembers} onPick={onPick} />
-      <IdeaInbox team={view.team} />
+      <IdeaInbox team={view.team} view={view} onOpenLane={props.onQuickStart} />
       <TeamFeed team={view.team} />
       <SquadUnsortedGroup view={view} onPick={onPick} />
 
