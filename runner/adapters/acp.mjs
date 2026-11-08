@@ -5,6 +5,28 @@ import { existsSync } from 'node:fs';
 import { killTree, spawnNoShell } from '../spawn.mjs';
 import { lineReader } from './lines.mjs';
 import { mcpServerSpec, mcpServerPath } from './mcp.mjs';
+import { estimateCostUsd } from './pricing.mjs';
+
+const num = (v) => (Number.isFinite(Number(v)) && Number(v) >= 0 && v !== null && v !== '' ? Number(v) : undefined);
+
+// ACP PromptResponse.usage (camelCase per spec; snake_case tolerated). Per the real opencode/agy payloads inputTokens
+// EXCLUDES cache, so the returned inputTokens is the whole prompt size (fresh + cache read + cache write), like claude.mjs.
+// thoughtTokens are billed as output: added unless totalTokens shows they are already inside outputTokens.
+// Returns undefined when the agent reports none.
+export function parseAcpUsage(u) {
+  if (!u || typeof u !== 'object') return undefined;
+  const input = num(u.inputTokens ?? u.input_tokens);
+  const output = num(u.outputTokens ?? u.output_tokens);
+  if (input === undefined && output === undefined) return undefined;
+  const thought = num(u.thoughtTokens ?? u.thought_tokens) ?? 0;
+  const total = num(u.totalTokens ?? u.total_tokens);
+  const cachedReadTokens = num(u.cachedReadTokens ?? u.cached_read_tokens) ?? 0;
+  const cachedWriteTokens = num(u.cachedWriteTokens ?? u.cached_write_tokens) ?? 0;
+  const inT = input ?? 0;
+  const outT = output ?? 0;
+  const thoughtOutside = total === undefined || total - inT - outT >= thought;
+  return { inputTokens: inT + cachedReadTokens + cachedWriteTokens, outputTokens: outT + (thoughtOutside ? thought : 0), cachedReadTokens, cachedWriteTokens };
+}
 
 // Provider ids are the ones profiles use (server/profiles.mjs). Codex has no ACP mode of its own: Zed's
 // codex-acp wraps it (Paseo drives `codex app-server` natively instead; we stay on ACP until it measurably fails).
@@ -59,6 +81,12 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
       const queue = [];
       let pendingSystem = systemPrompt || '';
       let replaying = false; // session/load replays the old transcript as session/update; our log already has it
+      let activeModel = model;
+      let ctxNow = 0; // latest usage_update.used (context size)
+      let ctxPrev = resume ? null : 0; // context size at the end of the previous turn; null = unknown (resumed session restored an unseen history)
+      let reportedCost; // agent-reported cumulative session cost (usage_update.cost), if any
+      let costTotal = 0; // cumulative session cost, same convention as claude's total_cost_usd (the fold diffs it)
+      let costKnown = false;
 
       lineReader(child.stdout, (line) => {
         let m;
@@ -74,7 +102,11 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
             case 'agent_message_chunk': if (u.content?.type === 'text') emit('output', { text: u.content.text }); break;
             case 'agent_thought_chunk': if (u.content?.type === 'text') emit('thought', { text: u.content.text }); break;
             case 'tool_call': emit('tool', { phase: 'call', id: u.toolCallId, name: u.title, kind: u.kind }); break;
-            case 'usage_update': if (Number.isFinite(u.used)) emit('usage', { contextTokens: u.used, contextMax: u.size }); break;
+            case 'usage_update':
+              if (Number.isFinite(u.used)) { ctxNow = u.used; emit('usage', { contextTokens: u.used, contextMax: u.size }); }
+              // some agents report a cumulative session cost here; it beats our price-table estimate
+              if (Number.isFinite(u.cost?.amount) && (u.cost.currency ?? 'USD') === 'USD') reportedCost = u.cost.amount;
+              break;
             case 'tool_call_update': emit('tool', { phase: 'update', id: u.toolCallId, status: u.status }); break;
             default: break;
           }
@@ -147,6 +179,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
           catch (e) { emit('stderr', { line: `set_mode ${meta.acpMode} failed: ${e.message}` }); }
         }
         // modes/models the agent really offers, so the UI lists only those and a live change to anything else is refused up front
+        activeModel = current ?? model;
         emit('session', { sessionId, model: current, mode: s.modes?.currentModeId, modes: (s.modes?.availableModes ?? []).map((m) => m.id), models: (s.models?.availableModels ?? (opt?.options ?? []).map((o) => ({ modelId: o.value }))).map((m) => m.modelId ?? m.id).filter(Boolean) });
       })();
       let failed = null;
@@ -172,8 +205,29 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
         }
         const prompt = [{ type: 'text', text }, ...(imageCapable ? images.map((i) => ({ type: 'image', data: i.data, mimeType: i.mimeType })) : [])];
         try {
+          const ctxStart = ctxPrev;
           const r = await request('session/prompt', { sessionId, prompt });
-          emit('turn_done', { stopReason: r?.stopReason });
+          // Real per-turn tokens from PromptResponse.usage; else estimate from context-size growth (marked estimated).
+          let tok = parseAcpUsage(r?.usage);
+          let estimated = false;
+          if (!tok && ctxNow > 0 && ctxStart !== null) {
+            const promptTokens = Math.ceil(text.length / 4);
+            const grew = ctxNow - ctxStart;
+            tok = { inputTokens: ctxStart + promptTokens, outputTokens: Math.max(0, grew - promptTokens), cachedReadTokens: 0 };
+            estimated = true;
+          }
+          ctxPrev = ctxNow;
+          let turnCost = null;
+          if (tok) {
+            // contextTokens stays on the event (agy sends no usage_update) so the context meter keeps working
+            emit('usage', { contextTokens: ctxNow > 0 ? ctxNow : tok.inputTokens + tok.outputTokens, inputTokens: tok.inputTokens, outputTokens: tok.outputTokens, ...(tok.cachedReadTokens ? { cachedReadTokens: tok.cachedReadTokens } : {}), ...(tok.cachedWriteTokens ? { cachedWriteTokens: tok.cachedWriteTokens } : {}), ...(estimated ? { estimated: true } : {}) });
+            turnCost = estimateCostUsd(activeModel, tok);
+          }
+          const done = { stopReason: r?.stopReason };
+          if (reportedCost !== undefined) { costTotal = reportedCost; costKnown = true; }
+          else if (turnCost !== null) { costTotal += turnCost; costKnown = true; done.costEstimated = true; } // price-table figure, not provider-billed
+          if (costKnown) done.costUsd = costTotal;
+          emit('turn_done', done);
         } catch (e) { emit('error', { message: e.message }); }
         promptInFlight = false;
         emit('status', { status: 'idle' });

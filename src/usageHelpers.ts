@@ -82,6 +82,10 @@ export type UsageData = {
   byProfile?: ProfileRow[];
   spawnStorms?: SpawnStorm[];
   usageReview?: UsageReview;
+  cohorts?: Cohorts;
+  floor?: Floor;
+  savings?: Savings;
+  byWorkflow?: WorkflowRow[];
 };
 
 export function relTime(ms: number, now: number): string {
@@ -305,3 +309,144 @@ export function withUsageReview(data: UsageData, review: UsageReview | null | un
   if (!review) return data;
   return { ...data, usageReview: review };
 }
+
+// ---- usa-11: efficiency trend, clean-run floor, savings & A/B workflow era
+
+export type CohortStats = {
+  units: number;
+  firstTryPassRate: number | null;
+  avgReviewRounds: number | null;
+  costPerUnit: number | null;
+  tokensPerUnit: number | null;
+  avgUnitCycleMs: number | null;
+  fixAfterMergeRate: number | null;
+};
+export type CohortKey = "firstTryPassRate" | "avgReviewRounds" | "costPerUnit" | "avgUnitCycleMs" | "fixAfterMergeRate";
+export type Cohorts = { recent: CohortStats; prior: CohortStats; delta: Partial<Record<CohortKey | "tokensPerUnit", number | null>> };
+export type Floor = {
+  cleanCostUsd: number;
+  cleanShare: number | null;
+  wasteShare: number | null;
+  cleanCostPerUnit: number | null;
+  cleanTokensPerUnit: number | null;
+  reworkCostUsd: number;
+  loopAndAbandonedCostUsd: number;
+  fixAfterMergeCostUsd: number;
+  restartOverheadCostUsd: number;
+};
+export type Savings = {
+  routingSavingsUsd: number;
+  soloOpusBaselineUsd: number;
+  actualCostUsd: number;
+  routingSavingsPct: number | null;
+  contextSavingsTokens: number;
+  monolithicBaselineTokens: number;
+  parallelSpeedup: number | null;
+  totalLocChanged: number;
+  costPer100Loc: number | null;
+  costPerMergedUnit: number | null;
+};
+export type WorkflowRow = {
+  workflowMode: string;
+  units: number;
+  firstTryPassRate: number;
+  avgReviewRounds: number;
+  costUsd: number;
+  costPerUnit: number | null;
+  costPer100Loc: number | null;
+  tokensPerUnit: number;
+  avgUnitCycleMs: number | null;
+  fixAfterMergeRate: number;
+  costCoverage: number;
+};
+
+/** Metrics shown as cohort tiles, in display order. `higherIsBetter` drives the good/bad colouring. */
+export const COHORT_METRICS: { key: CohortKey; label: string; higherIsBetter: boolean; kind: "pct" | "rounds" | "usd" | "dur" }[] = [
+  { key: "firstTryPassRate", label: "1st-try PASS %", higherIsBetter: true, kind: "pct" },
+  { key: "avgReviewRounds", label: "Rev rounds/unit", higherIsBetter: false, kind: "rounds" },
+  { key: "costPerUnit", label: "Cost/unit", higherIsBetter: false, kind: "usd" },
+  { key: "avgUnitCycleMs", label: "Cycle/unit", higherIsBetter: false, kind: "dur" },
+  { key: "fixAfterMergeRate", label: "Fix rate", higherIsBetter: false, kind: "pct" },
+];
+
+/** Dollar text from a raw float: `—` for null/NaN, 2 decimals (3 below 10 cents so small costs stay visible). */
+export function usdText(n: number | null | undefined): string {
+  if (n === null || n === undefined || !Number.isFinite(n)) return "—";
+  if (n > 0 && n < 0.1) return `$${n.toFixed(3)}`;
+  return `$${n >= 100 ? n.toFixed(0) : n.toFixed(2)}`;
+}
+
+/** Token count: `—` for missing, `1.2k` / `3.4M` otherwise. */
+export function tokText(n: number | null | undefined): string {
+  if (n === null || n === undefined || !Number.isFinite(n)) return "—";
+  const a = Math.abs(n);
+  return a >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : a >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(Math.round(n));
+}
+
+export type DeltaDir = "up" | "down" | "flat" | "none";
+export type Trend = "good" | "bad" | "flat" | "none";
+
+/** Direction arrow + whether the change is an improvement. null/NaN delta -> `none`; |delta| < eps -> `flat`. */
+export function deltaTrend(delta: number | null | undefined, higherIsBetter: boolean, eps = 1e-9): { dir: DeltaDir; trend: Trend } {
+  if (delta === null || delta === undefined || !Number.isFinite(delta)) return { dir: "none", trend: "none" };
+  if (Math.abs(delta) < eps) return { dir: "flat", trend: "flat" };
+  const up = delta > 0;
+  return { dir: up ? "up" : "down", trend: up === higherIsBetter ? "good" : "bad" };
+}
+
+/** Format a metric value by kind (`pct` fraction, `rounds` 1dp, `usd`, `dur` ms). */
+export function cohortValueText(kind: "pct" | "rounds" | "usd" | "dur", v: number | null | undefined): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return "—";
+  if (kind === "pct") return pctText(v);
+  if (kind === "rounds") return v.toFixed(1);
+  if (kind === "usd") return usdText(v);
+  return dur(v);
+}
+
+/** Signed delta text with arrow, e.g. `▲ +12%`, `▼ -$0.40`, `— no prior` when missing, `• 0` when flat. */
+export function deltaText(kind: "pct" | "rounds" | "usd" | "dur", delta: number | null | undefined): string {
+  const { dir } = deltaTrend(delta, true);
+  if (dir === "none") return "— no prior";
+  if (dir === "flat") return "• no change";
+  const d = delta as number;
+  const sign = d > 0 ? "+" : "-";
+  const a = Math.abs(d);
+  const body = kind === "pct" ? `${Math.round(a * 100)}%` : kind === "rounds" ? a.toFixed(1) : kind === "usd" ? usdText(a) : dur(a);
+  return `${dir === "up" ? "▲" : "▼"} ${sign}${body}`;
+}
+
+export type FloorSegment = { key: "clean" | "rework" | "loops" | "fixes" | "restarts"; label: string; usd: number; share: number };
+
+/** Stacked-bar segments (clean + 4 waste buckets) with share of the segment total (so widths sum to 100% even if clean was clamped). */
+export function floorSegments(f: Floor | null | undefined): FloorSegment[] {
+  if (!f) return [];
+  const raw: [FloorSegment["key"], string, number][] = [
+    ["clean", "Clean shipping", f.cleanCostUsd],
+    ["rework", "Rework (r2+)", f.reworkCostUsd],
+    ["loops", "Loops/Abandoned", f.loopAndAbandonedCostUsd],
+    ["fixes", "Post-merge fixes", f.fixAfterMergeCostUsd],
+    ["restarts", "Restarts", f.restartOverheadCostUsd],
+  ];
+  const vals = raw.map(([, , v]) => (Number.isFinite(v) && v > 0 ? v : 0));
+  const total = vals.reduce((s, v) => s + v, 0);
+  return raw.map(([key, label], i) => ({ key, label, usd: vals[i], share: total > 0 ? vals[i] / total : 0 }));
+}
+
+/** Parallel speedup as `1.8x`, `—` when missing. */
+export function speedupText(n: number | null | undefined): string {
+  if (n === null || n === undefined || !Number.isFinite(n)) return "—";
+  return `${n.toFixed(1)}x`;
+}
+
+export const LOW_COST_COVERAGE = 0.8;
+/** True when under 80% of a workflow's units have a known (non-zero) cost, i.e. non-Claude cost may be missing. */
+export function lowCostCoverage(coverage: number | null | undefined): boolean {
+  return typeof coverage === "number" && Number.isFinite(coverage) && coverage < LOW_COST_COVERAGE;
+}
+
+/** Workflow rows sorted by units desc then mode; tolerates a missing array. */
+export function sortWorkflows(rows: WorkflowRow[] | null | undefined): WorkflowRow[] {
+  return [...(rows ?? [])].sort((a, b) => b.units - a.units || a.workflowMode.localeCompare(b.workflowMode));
+}
+
+export const USAGE_EXPORT_MD_URL = "/__vibesquad/providers/usage-export?format=md";
