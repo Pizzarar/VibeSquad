@@ -5729,3 +5729,28 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 /* one UI font for tool surfaces: the Silkscreen/Pixelify (--arcade/--display) rows, @code chips, breadcrumb and provider names fall back to Courier New and clash with --mono.
    Scoped, not aliased globally (floor/sky keep --arcade); the brand block, terminals and diagrams keep their own fonts. */
 :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :not(.brand-text, .brand-text *, .xterm, .xterm *, svg, svg *, .sky-static-text) { font-family: var(--mono) !important; }
+
+/* usa-11: efficiency trend, clean-run floor, savings, workflow era */
+.usage-efficiency, .usage-workflows { margin-top: var(--sp-4, 16px); padding: var(--sp-4, 16px); background: var(--navy); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; gap: var(--sp-3, 12px); }
+.usage-cohort-tiles, .usage-saving-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--sp-3, 12px); }
+.usage-cohort-tile, .usage-saving-card { display: flex; flex-direction: column; gap: var(--sp-1, 4px); padding: var(--sp-3, 12px); background: var(--panel-alt); border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
+.usage-cohort-label { color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.usage-cohort-value { font-family: var(--display); font-size: 22px; line-height: 1.1; }
+.usage-cohort-value small { font-size: 11px; color: var(--muted); }
+.usage-delta { font-variant-numeric: tabular-nums; color: var(--muted); }
+.usage-delta-good { color: var(--mint-t); font-weight: 700; }
+.usage-delta-bad { color: var(--pink-t); font-weight: 700; }
+.usage-floor { display: flex; flex-direction: column; gap: var(--sp-2, 8px); }
+.usage-floor-bar { display: flex; height: 14px; border-radius: 999px; overflow: hidden; background: var(--panel-alt); }
+.usage-floor-seg { height: 100%; min-width: 2px; }
+.usage-floor-legend { display: flex; flex-wrap: wrap; gap: var(--sp-1, 4px) var(--sp-4, 16px); color: var(--muted); }
+.usage-floor-key { display: inline-flex; align-items: center; gap: var(--sp-1, 4px); }
+.usage-floor-dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.usage-floor-clean { background: var(--mint-fill); }
+.usage-floor-rework { background: var(--pink-fill); }
+.usage-floor-loops { background: var(--amber); }
+.usage-floor-fixes { background: var(--violet); }
+.usage-floor-restarts { background: var(--cyan); }
+.usage-export { color: var(--cyan-t); text-decoration: none; border: 1px solid var(--line); border-radius: 6px; padding: var(--sp-1, 4px) var(--sp-3, 12px); font-size: 12px; }
+.usage-export:hover, .usage-export:focus-visible { border-color: var(--cyan-t); }
+.usage-low-coverage { margin-left: var(--sp-2, 8px); }
