@@ -110,7 +110,7 @@ export function readBrainstormSummary(laneRaw, rootDir = REPO_ROOT, { teamId: te
 export { BRIEF_HISTORY_KEEP, BRIEF_SHRINK_FROM, BRIEF_SHRINK_TO, backupBrief };
 
 // The installed app's rootDir is its own runtime folder (no .git); a brief landing there is invisible to the lane.
-function isInstalledRuntime(rootDir) {
+export function isInstalledRuntime(rootDir) {
   return /[\\/]runtime$/i.test(resolve(rootDir)) && !existsSync(join(rootDir, ".git"));
 }
 
