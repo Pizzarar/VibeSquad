@@ -751,16 +751,22 @@ export function isTypingTarget(t: { tagName?: string; isContentEditable?: boolea
 }
 
 /**
- * Scale for a single floor in a fixed box: whole device-pixel multiple fitting both width and height.
- * Never overflows when the box fits 1x; a box shorter than one native floor still draws 1x (clipped, no scrollbar). 0 when too narrow.
+ * Scale for a single floor in a fixed box: a whole device-pixel multiple fitting both width and height, so the pixel art stays crisp.
+ * It never returns 0 for a measured box (a narrow hub pane or a UI-scale zoom used to blank the tower: at dpr 1.2 a stage under 768 css px
+ * has no whole CSS-px scale): below one device pixel per native pixel it falls back to a fractional fit of the width (and height).
+ * A box shorter than one native floor still draws at the width fit, clipped, no scrollbar. 0 only when there is no width yet.
  */
 export function floorFitScale(boxW: number, boxH: number, dpr = 1): number {
-  const byWidth = integerScale(boxW, dpr);
-  if (byWidth <= 0) return 0;
+  if (!Number.isFinite(boxW) || boxW <= 0) return 0;
   const ratio = Number.isFinite(dpr) && dpr >= 1 ? dpr : 1;
-  if (!Number.isFinite(boxH) || boxH <= 0) return byWidth;
-  const byHeight = Math.floor((boxH * ratio) / FLOOR_NATIVE_HEIGHT) / ratio;
-  return byHeight >= 1 ? Math.min(byWidth, byHeight) : 1;
+  const hasH = Number.isFinite(boxH) && boxH > 0;
+  const crisp = Math.floor((boxW * ratio) / FLOOR_NATIVE_WIDTH) / ratio; // whole device-pixel multiple of the width
+  if (crisp >= 1 / ratio) {
+    if (!hasH) return crisp;
+    const byHeight = Math.floor((boxH * ratio) / FLOOR_NATIVE_HEIGHT) / ratio;
+    return byHeight >= 1 / ratio ? Math.min(crisp, byHeight) : Math.min(crisp, Math.max(byHeight, 1 / ratio));
+  }
+  return boxW / FLOOR_NATIVE_WIDTH; // narrower than 1 device px per native px: fit the width fractionally rather than vanish
 }
 
 // ── FS-b: keyboard-focus selector arrow (floor-cursor.json, Art9) ─────────────
