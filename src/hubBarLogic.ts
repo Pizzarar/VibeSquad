@@ -15,3 +15,14 @@ export function countUnsplit(brief: string): number {
   }
   return n;
 }
+
+/** Minimal inbox card shape the bug button reads (server/inbox.mjs). */
+export type BugCard = { id?: string; laneId?: string; status?: string };
+
+const cardNum = (c: BugCard): number => Number(/^idea-(\d+)$/i.exec(String(c.id ?? ""))?.[1] ?? 0);
+
+/** Open (parked) cards for the bug lane: `total` is the shown N, `unseen` the ones newer than `seenMax` (the highest id seen when last opened). */
+export function bugCounts(cards: ReadonlyArray<BugCard>, laneId: string, seenMax: number): { total: number; unseen: number; max: number } {
+  const mine = cards.filter((c) => String(c.laneId ?? "").toLowerCase() === laneId.toLowerCase() && (!c.status || c.status === "parked"));
+  return { total: mine.length, unseen: mine.filter((c) => cardNum(c) > seenMax).length, max: mine.reduce((m, c) => Math.max(m, cardNum(c)), 0) };
+}
