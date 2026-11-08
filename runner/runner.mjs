@@ -10,6 +10,10 @@ import path from 'node:path';
 // squad/team/lane/role/ord/profile are plain meta fields, first-class on the agent record.
 const META_FIELDS = ['squad', 'team', 'lane', 'role', 'ord', 'profile', 'title', 'permissionMode', 'acpMode', 'thinkingOptionId', 'featureValues', 'labels', 'model'];
 
+// Child/provider noise that is not turn progress: it must not refresh `lastEvent` or clear `quiet` (only assistant
+// output, tool activity, status and the like count as a turn still making progress).
+const NON_PROGRESS_EVENTS = new Set(['stderr', 'raw', 'limit']);
+
 // Values that reach a CLI as an argument must never look like a flag.
 export function validateCreate({ model, cwd, meta = {} }) {
   for (const [name, v] of [['model', model], ['permissionMode', meta.permissionMode]]) {
@@ -144,12 +148,20 @@ export class Runner {
     const entry = { status: 'starting', handle: null, provider, family: providerFamily(provider), systemPrompt, sessionId: resume ?? null, parked: false, lastActive: Date.now(), lastEvent: Date.now(), quiet: false, inflight: 0, turns: resume ? 1 : 0, perms: new Set(), parkTimer: null };
     this.live.set(id, entry);
     const emit = (type, data) => {
-      entry.lastEvent = Date.now();
-      if (entry.quiet) entry.quiet = false; // a real event ends a quiet turn's quiet period: it counts again
+      if (!NON_PROGRESS_EVENTS.has(type)) { // only turn-progress events count: stderr/raw/limit are noise
+        entry.lastEvent = Date.now();
+        if (entry.quiet) entry.quiet = false; // a real event ends a quiet turn's quiet period: it counts again
+      }
       let turnEnded = false;
       if (type === 'status') {
         entry.status = data.status;
         if (data.status === 'idle' || data.status === 'running') entry.lastActive = Date.now();
+        if (data.status === 'running') {
+          // Mirror the adapter's real turn state: a follow-up turn (an ACP steer, a claude interrupt) re-takes the
+          // slot after the previous idle cleared it. Over-cap is allowed (like OWNER_OVER_CAP / a quiet turn): the
+          // agent was already admitted, so it is never re-queued or cancelled for a turn it is already running.
+          if (entry.inflight === 0) entry.inflight = 1;
+        }
         if (data.status === 'idle') {
           entry.inflight = 0;
           entry.turns++;
@@ -544,11 +556,15 @@ export class Runner {
   _deliver(entry, text, images = []) {
     if (!entry?.handle) throw new Error('agent is not running');
     clearTimeout(entry.parkTimer);
-    // inflight counts OPEN TURNS (one per agent at a time), not prompts: a steer into a turn already running merges
-    // into that turn (the adapter emits a single idle for it), so it must not take a second slot.
+    // inflight counts OPEN TURNS (one per agent at a time), not prompts. A fresh turn takes its slot here — and marks
+    // itself active — immediately, without waiting for the adapter's (possibly async, e.g. ACP ready.then) 'running'.
     const fresh = entry.inflight === 0;
-    if (fresh) entry.inflight++;
-    try { entry.handle.send(text, images.length ? { images } : undefined); } catch (err) { if (fresh) entry.inflight--; throw err; }
+    if (fresh) {
+      entry.inflight = 1;
+      entry.lastEvent = Date.now();
+      entry.quiet = false;
+    }
+    try { entry.handle.send(text, images.length ? { images } : undefined); } catch (err) { if (fresh) entry.inflight = 0; throw err; }
   }
 
   // opts.images: [{ data (base64), mimeType }]; opts.activeTurnBehavior: 'steer' (default, queue behind/into the turn)

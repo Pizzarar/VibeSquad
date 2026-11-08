@@ -47,7 +47,8 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
       }
       let child;
       try { child = spawnNoShell(command, args, { cwd, ...(env ? { env } : {}) }, spawnImpl); } catch (err) { this.cleanup(id); throw err; } // don't leak the files written above
-      let turnOpen = false;
+      let pending = 0; // user turns written to stdin whose `result` has not arrived yet (steers queue as follow-up turns)
+      let stopped = false; // set by kill(): a result that lands after we were stopped must not log a follow-up turn
       child.stdin.on('error', () => {}); // EPIPE from a write racing child exit: the 'exit' handler already reports it
       const stdin = (o) => child.stdin.write(JSON.stringify(o) + '\n');
       lineReader(child.stdout, (line) => {
@@ -72,13 +73,14 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
             if (b.type === 'tool_result') emit('tool', { phase: 'result', id: b.tool_use_id, isError: !!b.is_error });
           }
         } else if (m.type === 'result') {
-          turnOpen = false;
+          pending = Math.max(0, pending - 1);
           // A failed turn must read as an error (push "Agent Error", UI status), not a normal completion.
           if (m.is_error || String(m.subtype ?? '').startsWith('error')) {
             emit('error', { message: (typeof m.result === 'string' && m.result) || m.subtype || 'turn failed' });
           }
           emit('turn_done', { stopReason: m.stop_reason ?? m.subtype, costUsd: m.total_cost_usd });
           emit('status', { status: 'idle' });
+          if (pending > 0 && !stopped) emit('status', { status: 'running' }); // a follow-up turn (steer/interrupt) now runs
         }
       });
       lineReader(child.stderr, (line) => emit('stderr', { line }));
@@ -86,7 +88,7 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
       child.on('exit', (code, signal) => onExit({ code, signal }));
       return {
         send(text, { images = [] } = {}) {
-          turnOpen = true;
+          pending++;
           emit('status', { status: 'running' });
           // stream-json accepts Anthropic content blocks: images go as base64 sources ahead of the text.
           const content = images.length
@@ -96,9 +98,9 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
         },
         // Interrupts the current turn only; prompts already written to stdin still run (the ACP adapter drops its queue).
         cancel() {
-          if (turnOpen) stdin({ type: 'control_request', request_id: `int-${Date.now()}`, request: { subtype: 'interrupt' } });
+          if (pending > 0) stdin({ type: 'control_request', request_id: `int-${Date.now()}`, request: { subtype: 'interrupt' } });
         },
-        kill() { killTree(child); },
+        kill() { stopped = true; killTree(child); },
       };
     },
   };
