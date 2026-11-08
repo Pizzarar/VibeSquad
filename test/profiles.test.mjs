@@ -725,3 +725,14 @@ test("B1 bug-routing rule (R11): same text in the shared prefix of all three sou
     assert.ok(src.includes(RULE), `${rel}: missing R11`);
   }
 });
+
+test("R12 owner-principles rule: same text in the shared prefix of all three sources, <=240 chars", () => {
+  const RULE = "- R12 (Owner principles): When the owner states a cross-lane principle (UI, process), escalate it to the hub Overlord (`vs who lead --lane vibesquad`) and queue a @bug audit item; don't keep it lane-local. (Workers: final message.)";
+  assert.ok(RULE.length <= 240);
+  assert.ok(SHARED_NOTE_PREFIX.includes(RULE), "server SHARED_NOTE_PREFIX missing R12");
+  for (const p of PACK) assert.ok(p.notes.includes(RULE), `${p.name}: note missing R12`);
+  const root = resolve(import.meta.dirname, "..");
+  for (const rel of ["src/profiles.ts", "server/hooks/agent-duties.ts"]) {
+    assert.ok(readFileSync(join(root, rel), "utf8").includes(RULE), `${rel}: missing R12`);
+  }
+});
