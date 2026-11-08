@@ -654,3 +654,25 @@ test("vs who uses runner liveness, not the last log event: a lead the restarted 
     env.cleanup();
   }
 });
+
+test("Q2: vs who shows queued(N) for a queued agent instead of idle/initializing", () => {
+  const env = makeMockEnv();
+  try {
+    const agentsDir = join(env.vsHome, "runner", "agents");
+    mkdirSync(agentsDir, { recursive: true });
+    const now = Date.now();
+    writeFileSync(
+      join(agentsDir, "rn-queued-lead-1.jsonl"),
+      [
+        { seq: 0, ts: now, type: "created", provider: "claude", model: "m", cwd: REPO_ROOT, meta: { title: "★ VIBESQUAD ord1", labels: { team: "vibesquad", lane: "vibesquad", role: "lead", ord: "1" } } },
+        { seq: 1, ts: now, type: "input", text: "handoff brief" },
+        { seq: 2, ts: now, type: "status", status: "queued", ahead: 3 },
+      ].map((e) => JSON.stringify(e)).join("\n") + "\n",
+    );
+    const res = env.runVs(["who", "lead", "--team", "vibesquad", "--lane", "vibesquad"]);
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(res.stdout.trim(), "★ VIBESQUAD ord1 · rn-queued-lead-1 · queued(3) · 0k");
+  } finally {
+    env.cleanup();
+  }
+});

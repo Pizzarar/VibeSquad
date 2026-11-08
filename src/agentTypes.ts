@@ -63,6 +63,8 @@ export type PaseoAgent = {
   updatedAt: string;
   lastUserMessageAt: string | null;
   status: AgentStatus;
+  /** Set while the runner holds this agent's prompt for a free turn slot: how many same-provider prompts are in front. */
+  queued?: { ahead: number };
   activeTurn?: { turnId: string; startedAt: string | null } | null;
   capabilities: Record<string, boolean | undefined>;
   currentModeId: string | null;

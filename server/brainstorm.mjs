@@ -2,7 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statS
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import os from "node:os";
-import { effectiveAgentRole, findLaneInRegistry, formatDisplayTitle, isHubLane, isRetiredAgent, laneCodeFor, resolveWorktreeRootPath, topicOf } from "./identity.mjs";
+import { effectiveAgentRole, findLaneInRegistry, formatDisplayTitle, isHubLane, isLiveAgent, isRetiredAgent, laneCodeFor, resolveWorktreeRootPath, topicOf } from "./identity.mjs";
 import { findProfileOrFallback, loadProfiles, readCappedProviders, resolveProfileWithFailover, toPaseoSpawnConfig } from "./profiles.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
 import { briefRootFor, laneWorkingDir } from "./brief-path.mjs";
@@ -245,7 +245,7 @@ export function hubTeamsBlock({ team, agents }) {
   const out = ["Teams in this Squad (live, generated at boot):"];
   const lanes = (team?.lanes ?? []).filter((l) => l.id !== "_other" && !isHubLane(team, l) && (l.state ?? "pinned") !== "removed");
   if (!lanes.length) out.push("- (no Teams besides the hub yet)");
-  const live = agents == null ? null : agents.map((a) => a?.agent ?? a).filter((a) => a && !a.archivedAt && !a.internal && a.status !== "closed" && !isRetiredAgent(a));
+  const live = agents == null ? null : agents.map((a) => a?.agent ?? a).filter((a) => isLiveAgent(a));
   for (const l of lanes) {
     const state = TEAM_STATES.has(l.state) ? l.state : "pinned";
     const lead = live?.find((a) => sameLane(a, l.id) && effectiveAgentRole(a) === "lead");
