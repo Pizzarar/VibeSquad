@@ -122,3 +122,29 @@ export function lookupBareName(agentId: string | undefined, name: string, fetche
   return undefined;
 }
 export const _resetBareNames = () => { resolved.clear(); inflight.clear(); };
+
+/** A markdown link href that points at the local disk (`file://` URL or a drive path), not the web. */
+export const isLocalHref = (href: string) => /^(?:file:\/\/|[A-Za-z]:[\x5c/])/i.test(href.trim());
+
+export type LocalLinkTarget = { path: string; line: null; isDir: false } | { path: null; name: string };
+
+/**
+ * Map a local-disk md link to something the Files dock can open. Inside the agent's cwd → repo-relative;
+ * inside a sanctuary worktree (`…/worktrees/<repo>/<unit>/…`) → from `worktrees` on, which the server's
+ * findInWorktrees resolves; anything else → `{ path: null, name }` so the caller can say why nothing opened.
+ */
+export function localLinkTarget(href: string, cwd?: string): LocalLinkTarget {
+  let p = href.trim().replace(/^file:\/\/(?:localhost)?\/?/i, "");
+  try { p = decodeURIComponent(p); } catch { /* keep the raw text */ }
+  p = p.replaceAll("\\", "/").replace(/[?#].*$/, "");
+  const name = p.split("/").filter(Boolean).pop() ?? p;
+  const base = (cwd ?? "").replaceAll("\\", "/").replace(/\/$/, "");
+  // Windows drive paths are case-insensitive.
+  if (base && p.toLowerCase().startsWith(base.toLowerCase() + "/")) {
+    const rel = normalizeRepoPath(p.slice(base.length + 1));
+    if (rel) return { path: rel, line: null, isDir: false };
+  }
+  const wt = /\/worktrees\/([^/]+\/[^/]+\/.+)$/i.exec(p);
+  const rel = wt ? normalizeRepoPath(`worktrees/${wt[1]}`) : null;
+  return rel ? { path: rel, line: null, isDir: false } : { path: null, name };
+}

@@ -147,3 +147,38 @@ test("RightDock: nonce per request, pending claimed once, keyed per agent", () =
   assert.match(r, /pendingOpen = null;\s+if \(p\)/);
   assert.match(src("src/AgentDrawer.tsx"), /<RightDock key=\{agent\.id\}/);
 });
+
+// ── local-disk md links (file:// / drive paths) ──────────────────────────────
+import { isLocalHref, localLinkTarget } from "../src/fileLinks.ts";
+const CWD = "C:/Users/Fugma/projects/VibeSquad";
+const SANCT = "C:/Users/Fugma/AppData/Local/VibeSquad/worktrees/VibeSquad/art-h1d/scratch/shots/h1d-gate-light-r1.png";
+test("isLocalHref: file:// and drive paths are local, http(s) is not", () => {
+  assert.ok(isLocalHref("file:///C:/a/b.png"));
+  assert.ok(isLocalHref("C:/a/b.png"));
+  assert.ok(isLocalHref("C:" + BS + "a" + BS + "b.png"));
+  assert.ok(!isLocalHref("https://example.com/a.png"));
+  assert.ok(!isLocalHref("http://localhost:5173/x"));
+});
+test("localLinkTarget (a): inside the agent cwd becomes repo-relative", () => {
+  assert.deepEqual(localLinkTarget(`file:///${CWD}/docs/x.md`, CWD), { path: "docs/x.md", line: null, isDir: false });
+  assert.equal(localLinkTarget(`file:///${CWD.toLowerCase()}/docs/x.md`, CWD + "/").path, "docs/x.md");
+});
+test("localLinkTarget (b): sanctuary worktree path keeps worktrees/<repo>/<unit>/…", () => {
+  assert.equal(localLinkTarget(`file:///${SANCT}`, CWD).path, "worktrees/VibeSquad/art-h1d/scratch/shots/h1d-gate-light-r1.png");
+  assert.equal(localLinkTarget(SANCT).path, "worktrees/VibeSquad/art-h1d/scratch/shots/h1d-gate-light-r1.png");
+});
+test("localLinkTarget decodes %20 and normalises backslashes", () => {
+  assert.equal(localLinkTarget("file:///C:/Users/me/AppData/Local/VibeSquad/worktrees/R/u/a%20b.png").path, "worktrees/R/u/a b.png");
+  const win = ["C:", "Users", "me", "AppData", "Local", "VibeSquad", "worktrees", "R", "u", "s.png"].join(BS);
+  assert.equal(localLinkTarget(win).path, "worktrees/R/u/s.png");
+});
+test("localLinkTarget (c): outside the workspace yields a name for the toast", () => {
+  assert.deepEqual(localLinkTarget("file:///C:/Users/me/Desktop/my%20shot.png", CWD), { path: null, name: "my shot.png" });
+});
+test("Timeline routes local md links to a tl-file-link button, http stays an anchor", () => {
+  const i = timeline.indexOf("isLocalHref(m[10])");
+  assert.ok(i > 0);
+  const branch = timeline.slice(i, timeline.indexOf("<a key", i));
+  assert.match(branch, /data-testid="tl-file-link"/);
+  assert.match(timeline.slice(i), /<a key=\{keyIdx\+\+\} href=\{m\[10\]\} target="_blank"/);
+});
