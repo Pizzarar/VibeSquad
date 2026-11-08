@@ -95,8 +95,10 @@ export { briefRootFor, laneWorkingDir };
 
 export const NO_BRIEF_LINE = "(no brief yet)";
 
-export function readBrainstormSummary(laneRaw, rootDir = REPO_ROOT) {
-  const { teamId, laneId } = laneDisplayName(laneRaw, rootDir);
+export function readBrainstormSummary(laneRaw, rootDir = REPO_ROOT, { teamId: teamHint = "" } = {}) {
+  const resolved = laneDisplayName(laneRaw, rootDir);
+  const laneId = resolved.laneId;
+  const teamId = resolved.teamId || String(teamHint || "");
   const safeLane = safeSegment(laneId || laneRaw || "vibesquad");
   const relPath = `docs/brainstorm/${safeLane}.md`;
   // Only the lane's project dir counts; a stale copy under rootDir is ignored once the project dir resolves.
@@ -107,19 +109,34 @@ export function readBrainstormSummary(laneRaw, rootDir = REPO_ROOT) {
 
 export { BRIEF_HISTORY_KEEP, BRIEF_SHRINK_FROM, BRIEF_SHRINK_TO, backupBrief };
 
-export function writeBrainstormSummary(laneRaw, content, rootDir = REPO_ROOT) {
+// The installed app's rootDir is its own runtime folder (no .git); a brief landing there is invisible to the lane.
+function isInstalledRuntime(rootDir) {
+  return /[\\/]runtime$/i.test(resolve(rootDir)) && !existsSync(join(rootDir, ".git"));
+}
+
+/** `teamId` is the Squad id for a lane not yet in teams.json (createPin writes the brief before adding the lane). */
+export function writeBrainstormSummary(laneRaw, content, rootDir = REPO_ROOT, { teamId: teamHint = "" } = {}) {
   const text = String(content ?? "");
   if (text.length > MAX_SUMMARY_CHARS) {
     throw new Error(`Summary is ${text.length} chars; must be <= ${MAX_SUMMARY_CHARS} chars (~5k tokens)`);
   }
-  const { teamId, laneId } = laneDisplayName(laneRaw, rootDir);
+  const resolved = laneDisplayName(laneRaw, rootDir);
+  const laneId = resolved.laneId;
+  const teamId = resolved.teamId || String(teamHint || "");
   const safeLane = safeSegment(laneId || laneRaw || "vibesquad");
   const relPath = `docs/brainstorm/${safeLane}.md`;
-  const dir = join(briefRootFor(teamId, laneId, rootDir), "docs", "brainstorm");
+  const root = briefRootFor(teamId, laneId, rootDir);
+  const dir = join(root, "docs", "brainstorm");
   mkdirSync(dir, { recursive: true });
   const fullPath = join(dir, `${safeLane}.md`);
   writeBriefFile(fullPath, safeLane, text);
-  return { laneId: safeLane, path: relPath, fullPath, content: text };
+  const fallback = resolve(root) === resolve(rootDir) && isInstalledRuntime(rootDir);
+  if (fallback) {
+    try {
+      appendVsLogEntry({ teamId: teamId || "vibesquad", laneId: safeLane, agent: "server", type: "metric", text: `brief-fallback lane=${safeLane} path=${fullPath}` });
+    } catch {}
+  }
+  return { laneId: safeLane, path: relPath, fullPath, content: text, ...(fallback ? { fallback: true } : {}) };
 }
 
 export function findNewestPlanFile(cwd, rootDir = REPO_ROOT) {
