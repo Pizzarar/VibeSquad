@@ -4876,7 +4876,8 @@ button.project-file-name:hover { text-decoration: underline; }
 .sky-zone.is-idle .sky-face-area { bottom: var(--sky-idle-strip); }
 .sky-zone.is-idle .sky-face { opacity: 0.5; filter: grayscale(0.5); }
 .sky-zone.is-idle .sky-crt-body { top: auto; height: var(--sky-idle-strip); background: var(--bg); border-top: 1px solid var(--line); }
-.sky-zone.is-idle .sky-static { flex-direction: row; gap: 10px; padding: 0 10px; animation: none; background: var(--bg); }
+.sky-zone.is-idle .sky-static { flex-direction: row; gap: 10px; padding: 0 10px; background: var(--bg); }
+.sky-zone.is-idle .sky-static::before { display: none; animation: none; }
 .sky-zone.is-idle .sky-static-text { border: 0; padding: 0; background: none; font-size: 11px; color: var(--text); }
 .sky-zone.is-idle .sky-static .btn { min-height: 0; padding: 2px 10px; }
 .sky-zones { --sky-idle-strip: 34px; }
@@ -4888,6 +4889,8 @@ button.project-file-name:hover { text-decoration: underline; }
   .sky-zone.is-slam-held { opacity: 1; pointer-events: auto; }
 }
 .sky-static {
+  position: relative;
+  isolation: isolate;
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -4896,16 +4899,24 @@ button.project-file-name:hover { text-decoration: underline; }
   gap: 12px;
   color: var(--text);
   text-align: center;
+  background-color: #11131f;
+}
+.sky-static::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 60% 0; /* stops above the centered label and Spin Up button so no scanline crosses the text */
+  z-index: -1;
+  pointer-events: none;
   background:
     repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.06) 0 2px, rgba(0, 0, 0, 0.18) 2px 4px),
-    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.05) 0 3px, rgba(0, 0, 0, 0.12) 3px 7px),
-    #11131f;
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.05) 0 3px, rgba(0, 0, 0, 0.12) 3px 7px);
   animation: sky-static-roll 0.5s steps(4) infinite;
 }
 :root[data-theme="light"] .sky-static { background-color: #cfd3e2; color: #222; }
 .sky-static-text { font-family: var(--arcade); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; background: var(--bg); padding: 4px 8px; border: 1px solid var(--line); }
-@keyframes sky-static-roll { to { background-position: 0 4px, 7px 0, 0 0; } }
-@media (prefers-reduced-motion: reduce) { .sky-static { animation: none; } }
+.sky-static .btn { background: var(--cyan-fill); border: 1px solid var(--shadow-hard); border-image: none; color: var(--on-cyan-fill); text-shadow: none; }
+@keyframes sky-static-roll { to { background-position: 0 4px, 7px 0; } }
+@media (prefers-reduced-motion: reduce) { .sky-static { animation: none; } .sky-static::before { animation: none; } }
 /* HP4: one floor per screen. The section fills the box its parent gives it and never scrolls; the stage holds the floor, the lift bar pages it. */
 .sq-floor {
   display: flex;
@@ -5914,7 +5925,7 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 /* ⇄ Handoff (Aub's R1 "blank yellow button"): ink label on the teal fill whatever the ctx tone */
 :root:root .brainstorm-ctx-bar:not(.tone-red) .btn-brainstorm-restart:not(.warn) { background: var(--cyan-fill); color: var(--on-cyan-fill) !important; text-shadow: none; }
 /* teal label chips: tinted panel with body text, like the other quiet chips */
-:root:root .drawer-labels-list .chip { background: color-mix(in srgb, var(--cyan) 18%, var(--panel)) !important; background-image: none !important; border-image: none !important; color: var(--text) !important; text-shadow: none; }
+:root:root .drawer-labels-list .chip { background: color-mix(in srgb, var(--cyan) 18%, var(--panel)) !important; background-image: none !important; border: 1px solid var(--cyan) !important; border-image: none !important; border-image-source: none !important; color: var(--text) !important; text-shadow: none; }
 
 /* usa-11: efficiency trend, clean-run floor, savings, workflow era */
 .usage-efficiency, .usage-workflows { margin-top: var(--sp-4, 16px); padding: var(--sp-4, 16px); background: var(--navy); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; gap: var(--sp-3, 12px); }
