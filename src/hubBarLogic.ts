@@ -19,14 +19,6 @@ export function countUnsplit(brief: string): number {
 /** Minimal inbox card shape the bug button reads (server/inbox.mjs). */
 export type BugCard = { id?: string; laneId?: string; status?: string };
 
-/** The Squad's bug lane id: the standing "Bug Runner" lane, else a lane called bug-chaser / bug*. Swap for B2's resolver at merge. */
-export function resolveBugLane(lanes: ReadonlyArray<{ id: string; name?: string }>): string | null {
-  const l = (x: string | undefined) => (x ?? "").toLowerCase();
-  const hit =
-    lanes.find((x) => l(x.name) === "bug runner") ?? lanes.find((x) => l(x.id) === "bug-chaser") ?? lanes.find((x) => /^bug/.test(l(x.id)));
-  return hit?.id ?? null;
-}
-
 const cardNum = (c: BugCard): number => Number(/^idea-(\d+)$/i.exec(String(c.id ?? ""))?.[1] ?? 0);
 
 /** Open (parked) cards for the bug lane: `total` is the shown N, `unseen` the ones newer than `seenMax` (the highest id seen when last opened). */

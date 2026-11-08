@@ -28,13 +28,8 @@ test("countUnsplit: the seeded '(none yet)' placeholder counts as 0", () => {
   assert.equal(countUnsplit("## Unsplit threads\n- None.\n- n/a\n"), 0);
 });
 
-import { bugCounts, resolveBugLane } from "../src/hubBarLogic.ts";
+import { bugCounts } from "../src/hubBarLogic.ts";
 
-test("resolveBugLane: Bug Runner name, then bug-chaser id, else null", () => {
-  assert.equal(resolveBugLane([{ id: "x", name: "X" }, { id: "bug-chaser", name: "Bug Chaser" }]), "bug-chaser");
-  assert.equal(resolveBugLane([{ id: "b1", name: "Bug Runner" }, { id: "bug-chaser" }]), "b1");
-  assert.equal(resolveBugLane([{ id: "ui", name: "UI" }]), null);
-});
 test("bugCounts: only parked cards of the lane; unseen = newer than seenMax", () => {
   const cards = [
     { id: "idea-1", laneId: "bug-chaser", status: "parked" },

@@ -87,6 +87,7 @@ import { popAction, urlAgentFor } from "./pinFocusLogic";
 import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, spinUpPin, usePinFocus, usePinsHome, useSquadsHome } from "./pinFocus";
 import { TopBreadcrumb } from "./Breadcrumb";
 import { HubBar } from "./HubBar";
+import { BugButton } from "./BugButton";
 import { PinFocusHeader, PinRail } from "./PinRail";
 import { PinToast } from "./PinIdeas";
 import { NewSquadModal } from "./NewSquadModal";
@@ -280,6 +281,7 @@ const SidebarTeam = memo(function SidebarTeam({
           {v.running > 0 && <span className="badge">{v.running}▶</span>}
         </button>
         {firstAlert && <AttentionBadge view={v} onOpen={pick} hubQueueInstead />}
+        {v.team.id !== UNASSIGNED.id && <BugButton view={v} onOpen={onPin} />}
         {v.team.id !== UNASSIGNED.id && (
           <button
             className="tchip"
