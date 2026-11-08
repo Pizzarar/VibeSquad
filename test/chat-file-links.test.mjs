@@ -150,8 +150,8 @@ test("RightDock: nonce per request, pending claimed once, keyed per agent", () =
 
 // ── local-disk md links (file:// / drive paths) ──────────────────────────────
 import { isLocalHref, localLinkTarget } from "../src/fileLinks.ts";
-const CWD = "C:/Users/Fugma/projects/VibeSquad";
-const SANCT = "C:/Users/Fugma/AppData/Local/VibeSquad/worktrees/VibeSquad/art-h1d/scratch/shots/h1d-gate-light-r1.png";
+const CWD = "C:/Users/dev/projects/Repo";
+const SANCT = "C:/Users/dev/AppData/Local/Repo/worktrees/Repo/art-a/scratch/shots/a.png";
 test("isLocalHref: file:// and drive paths are local, http(s) is not", () => {
   assert.ok(isLocalHref("file:///C:/a/b.png"));
   assert.ok(isLocalHref("C:/a/b.png"));
@@ -164,12 +164,12 @@ test("localLinkTarget (a): inside the agent cwd becomes repo-relative", () => {
   assert.equal(localLinkTarget(`file:///${CWD.toLowerCase()}/docs/x.md`, CWD + "/").path, "docs/x.md");
 });
 test("localLinkTarget (b): sanctuary worktree path keeps worktrees/<repo>/<unit>/…", () => {
-  assert.equal(localLinkTarget(`file:///${SANCT}`, CWD).path, "worktrees/VibeSquad/art-h1d/scratch/shots/h1d-gate-light-r1.png");
-  assert.equal(localLinkTarget(SANCT).path, "worktrees/VibeSquad/art-h1d/scratch/shots/h1d-gate-light-r1.png");
+  assert.equal(localLinkTarget(`file:///${SANCT}`, CWD).path, "worktrees/Repo/art-a/scratch/shots/a.png");
+  assert.equal(localLinkTarget(SANCT).path, "worktrees/Repo/art-a/scratch/shots/a.png");
 });
 test("localLinkTarget decodes %20 and normalises backslashes", () => {
-  assert.equal(localLinkTarget("file:///C:/Users/me/AppData/Local/VibeSquad/worktrees/R/u/a%20b.png").path, "worktrees/R/u/a b.png");
-  const win = ["C:", "Users", "me", "AppData", "Local", "VibeSquad", "worktrees", "R", "u", "s.png"].join(BS);
+  assert.equal(localLinkTarget("file:///C:/Users/me/AppData/Local/Repo/worktrees/R/u/a%20b.png").path, "worktrees/R/u/a b.png");
+  const win = ["C:", "Users", "me", "AppData", "Local", "Repo", "worktrees", "R", "u", "s.png"].join(BS);
   assert.equal(localLinkTarget(win).path, "worktrees/R/u/s.png");
 });
 test("localLinkTarget (c): outside the workspace yields a name for the toast", () => {
@@ -192,17 +192,17 @@ test("localLinkTarget rejects UNC / remote hosts in every form", () => {
     assert.equal(t.path, null, h);
     assert.equal(t.name, "x.png", h);
   }
-  assert.equal(localLinkTarget("file://localhost/C:/Users/me/AppData/Local/VibeSquad/worktrees/R/u/a.png").path, "worktrees/R/u/a.png");
+  assert.equal(localLinkTarget("file://localhost/C:/Users/me/AppData/Local/Repo/worktrees/R/u/a.png").path, "worktrees/R/u/a.png");
 });
 test("localLinkTarget rejects . and .. segments (cwd and worktrees forms, encoded too)", () => {
-  assert.equal(localLinkTarget(`file:///${CWD}/../../worktrees/VibeSquad/art-h1d/x.png`, CWD).path, null);
+  assert.equal(localLinkTarget(`file:///${CWD}/../../worktrees/Repo/art-a/x.png`, CWD).path, null);
   assert.equal(localLinkTarget(`file:///${CWD}/docs/../src/x.ts`, CWD).path, null);
   assert.equal(localLinkTarget(`file:///${CWD}/docs/%2e%2e/x.ts`, CWD).path, null);
   assert.equal(localLinkTarget(`${CWD}/./docs/x.ts`, CWD).path, null);
 });
 test("localLinkTarget keeps the leading slash of POSIX file:/// paths", () => {
   assert.equal(localLinkTarget("file:///Users/me/repo/docs/x.md", "/Users/me/repo").path, "docs/x.md");
-  assert.equal(localLinkTarget("file:///home/me/.local/share/VibeSquad/worktrees/R/u/s.png").path, "worktrees/R/u/s.png");
+  assert.equal(localLinkTarget("file:///home/me/.local/share/Repo/worktrees/R/u/s.png").path, "worktrees/R/u/s.png");
 });
 test("localLinkTarget: %23/%3F survive in filenames, bad escapes and real ?# are handled", () => {
   assert.equal(localLinkTarget(`file:///${CWD}/docs/a%23b%3Fc.md`, CWD).path, "docs/a#b?c.md");
