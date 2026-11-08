@@ -8,7 +8,8 @@ import path from 'node:path';
 import { Runner, defaultAdapters } from '../runner/runner.mjs';
 import { createClaudeAdapter } from '../runner/adapters/claude.mjs';
 import { RunnerBackend, toAgent } from '../server/backend/runner-backend.mjs';
-import { ACP_PROVIDERS, createAcpAdapter, pickModel } from '../runner/adapters/acp.mjs';
+import { ACP_PROVIDERS, createAcpAdapter, pickModel, parseAcpUsage } from '../runner/adapters/acp.mjs';
+import { priceFor } from '../runner/adapters/pricing.mjs';
 import { resolveExecutable } from '../runner/spawn.mjs';
 
 const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'vs-adapters-'));
@@ -327,4 +328,72 @@ test('Runner: prompt file lives under <home>/prompts, is rewritten on resume, an
   assert.equal(readFileSync(file, 'utf8'), 'PROMPT-A');
   runner.archive(id);
   assert.ok(!existsSync(file), 'archive removed the prompt file');
+});
+
+// --- usa-13: per-turn tokens + costUsd from ACP adapters ---
+function usageHarness(provider, model, promptReplies) {
+  let n = 0;
+  const spawnImpl = fakeSpawn((m, child) => {
+    if (m.method === 'initialize') child.push({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: 1 } });
+    if (m.method === 'session/new') child.push({ jsonrpc: '2.0', id: m.id, result: { sessionId: 'S', models: { currentModelId: model, availableModels: [{ modelId: model }] } } });
+    if (m.method === 'session/prompt') promptReplies[n++](child, m);
+  });
+  const runner = new Runner({ dir: tmp(), adapters: { [provider]: fakeAdapter(spawnImpl, provider) } });
+  const id = runner.create({ provider, model, cwd: '.', prompt: 'hello world' });
+  return { runner, id, spawnImpl };
+}
+const upd = (child, u) => child.push({ jsonrpc: '2.0', method: 'session/update', params: { update: u } });
+
+test('opencode: PromptResponse.usage -> usage + cumulative turn_done.costUsd (price table, estimated flag)', async () => {
+  const { runner, id } = usageHarness('opencode', 'deepseek/deepseek-v4-pro', [
+    (c, m) => c.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn', usage: { inputTokens: 1000000, outputTokens: 100000, cachedReadTokens: 0, totalTokens: 1100000 } } }),
+    (c, m) => c.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn', usage: { inputTokens: 1000000, outputTokens: 100000 } } }),
+  ]);
+  await tick(); await tick(); await tick();
+  runner.send(id, 'again');
+  await tick(); await tick(); await tick();
+  const tl = runner.timeline(id);
+  const usage = tl.filter((e) => e.type === 'usage' && e.inputTokens);
+  assert.equal(usage.length, 2);
+  assert.deepEqual([usage[0].inputTokens, usage[0].outputTokens, usage[0].estimated], [1000000, 100000, undefined]);
+  const done = tl.filter((e) => e.type === 'turn_done');
+  assert.equal(done.length, 2);
+  assert.ok(Math.abs(done[0].costUsd - 0.77) < 1e-9); // 1M*0.55 + 0.1M*2.2
+  assert.ok(Math.abs(done[1].costUsd - 1.54) < 1e-9); // cumulative, like claude's total_cost_usd
+  assert.equal(done[0].costEstimated, true);
+});
+
+test('antigravity-cli: no usage in response -> estimate from context deltas, marked estimated; reported cost wins', async () => {
+  const { runner, id } = usageHarness('antigravity-cli', 'gemini-4-argon-medium', [
+    (c, m) => { upd(c, { sessionUpdate: 'usage_update', used: 5000, size: 1000000 }); c.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn' } }); },
+    (c, m) => { upd(c, { sessionUpdate: 'usage_update', used: 9000, size: 1000000, cost: { amount: 0.42, currency: 'USD' } }); c.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn' } }); },
+  ]);
+  await tick(); await tick(); await tick();
+  runner.send(id, 'x'.repeat(400));
+  await tick(); await tick(); await tick();
+  const tl = runner.timeline(id);
+  const usage = tl.filter((e) => e.type === 'usage' && e.estimated);
+  assert.equal(usage.length, 2);
+  assert.equal(usage[0].inputTokens, 3); // ctxStart 0 + ceil("hello world"/4)
+  assert.equal(usage[0].outputTokens, 5000 - 3);
+  assert.equal(usage[1].inputTokens, 5000 + 100); // previous context + prompt
+  assert.equal(usage[1].outputTokens, 4000 - 100);
+  const done = tl.filter((e) => e.type === 'turn_done');
+  assert.ok(done[0].costUsd > 0 && done[0].costEstimated);
+  assert.equal(done[1].costUsd, 0.42); // provider-reported cumulative cost, not estimated
+  assert.equal(done[1].costEstimated, undefined);
+});
+
+test('unknown model: tokens emitted, costUsd omitted (never 0); parseAcpUsage + priceFor', async () => {
+  const { runner, id } = usageHarness('opencode', 'mystery/model-x', [
+    (c, m) => c.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn', usage: { input_tokens: 10, output_tokens: 5 } } }),
+  ]);
+  await tick(); await tick(); await tick();
+  const tl = runner.timeline(id);
+  assert.equal(tl.find((e) => e.type === 'usage' && e.inputTokens).outputTokens, 5);
+  assert.equal('costUsd' in tl.find((e) => e.type === 'turn_done'), false);
+  assert.equal(parseAcpUsage({}), undefined);
+  assert.deepEqual(parseAcpUsage({ inputTokens: 7, outputTokens: 3, thoughtTokens: 2, totalTokens: 12, cachedReadTokens: 4 }), { inputTokens: 7, outputTokens: 5, cachedReadTokens: 4 });
+  assert.ok(priceFor('gemini-4-argon-high'));
+  assert.equal(priceFor('nope'), null);
 });
