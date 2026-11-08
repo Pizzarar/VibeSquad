@@ -33,7 +33,7 @@ test("mini-face click: Sky page with that bot's chat open", () => {
 
 test("switcher: both pages render the same needs-you strip; the tower sits in a fixed non-scrolling box", () => {
   const hp = src("HubPages.tsx");
-  assert.equal((hp.match(/\{strip\}/g) || []).length, 2);
+  assert.equal((hp.match(/\{strip\}/g) || []).length, 3); // sky page, tower page, agent-open fallback
   assert.match(hp, /data-testid=\{`hub-tab-\$\{p\}`\}/);
   assert.match(hp, /role="tablist"/);
   const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
