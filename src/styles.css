@@ -4991,7 +4991,7 @@ button.project-file-name:hover { text-decoration: underline; }
 .sq-floor-tv-count {
   position: absolute;
   right: 2px;
-  bottom: 0;
+  bottom: var(--sp-1); /* V1b: inside the glass (at 0 the counter box ran 3px past the TV's clipped bottom edge) */
   font-family: var(--arcade);
   font-size: 6px;
   line-height: 6px;
@@ -5773,3 +5773,12 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 .sidebar .pin-row { gap: var(--sp-1); }
 /* Banner text stays on one row (ellipsis, full text in the title attr) so narrow screens never grow it past the painted strip. */
 .exposed-network-banner > span, .read-only-banner > span, .config-warning-banner > span, .update-available-banner > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Chat top bar: the crumbs before the current page keep their full label; only the current page shrinks (ellipsis). */
+.top-breadcrumb .breadcrumb-seg:not(.current) { flex: none; max-width: none; overflow: visible; }
+.top-breadcrumb .breadcrumb-seg.current { flex: 0 1 auto; min-width: 0; }
+/* Config popover opens leftwards from the summary so it stays inside the pane at narrow widths. */
+.pin-focus-bar .drawer-config-popover { left: auto; right: 0; }
+/* Phone: tab titles get room before they ellipsize (the strip scrolls sideways). */
+.pane-tab { max-width: 220px; }
+/* Chat top bar at narrow widths: tighter gaps so the config summary is not cut by the pane edge. */
+.pin-focus-bar .drawer-head-compact { gap: var(--sp-1); }
