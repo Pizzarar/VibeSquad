@@ -355,3 +355,31 @@ test("O3-fix2: a rejected spawn leaves the closed Overlord alone (no retire)", a
   assert.equal(skyZonesFor(v).overlord.dormant, true);
   assert.equal(overlordProfileName(v), "Lead - Gemini");
 });
+
+test("hotfix2: Overlord clicks follow the zone's agentId (real-shaped zones): off = nothing opens, closed = read-only chat + Resume, live = chat", async () => {
+  const { skyCanOpen, skyFaceClick, skyEffectiveOpen, slamPrevOpenOnMount, slamView, slamStart } = await import("../src/skyZonesLogic.ts");
+  const click = (zones, tv) => skyEffectiveOpen(skyFaceClick(null, tv, skyCanOpen(zones)), skyCanOpen(zones));
+  // No Overlord agent running (and no history): static + Spin Up, so the Overlord TV / mini face open nothing; Riff still opens.
+  const off = skyZonesFor(view([member("buddy", "brainstorm")]));
+  assert.equal(off.overlord.agentId, null);
+  assert.equal(click(off, "overlord"), null);
+  assert.equal(click(off, "riffbot"), "riffbot");
+  // Closed Overlord (member null, agentId set): used to be unclickable because can.overlord read `member`. Now opens its history.
+  const closed = { ...member("old", "lead"), agent: { ...member("old", "lead").agent, status: "closed", labels: { lane: "sq1" } } };
+  const dormant = skyZonesFor(view([member("buddy", "brainstorm"), closed]));
+  assert.equal(dormant.overlord.member, null);
+  assert.equal(dormant.overlord.agentId, "old");
+  assert.equal(click(dormant, "overlord"), "overlord");
+  assert.equal(skyFaceClick(null, "overlord", { riffbot: true, overlord: !!dormant.overlord.member }), null); // the old `can.overlord = !!member` wiring: dead click
+  // A running Overlord opens as before.
+  const live = skyZonesFor(view([member("buddy", "brainstorm"), member("boss", "lead")]));
+  assert.equal(click(live, "overlord"), "overlord");
+  assert.match(src("SkyZones.tsx"), /const can: SkyCan = skyCanOpen\(zones\)/);
+  // Riff open triggers the slam, including a chat that mounts already open (Tower mini-face jump, SkyZones initialOpen).
+  assert.equal(slamPrevOpenOnMount(true, false), true); // plain mount: no slam
+  assert.equal(slamPrevOpenOnMount(true, true), false); // jump mount: flips false -> true, so the slam starts
+  const v = slamView(slamStart(true, false), false);
+  assert.equal(v.zoomStep, 1);
+  assert.equal(v.windowShown, false);
+  assert.equal(v.face, "smacked");
+});

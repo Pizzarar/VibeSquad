@@ -295,6 +295,13 @@ export type SkyOpen = FaceBot | null;
 /** Who can be opened: RiffBot needs a chat agent (live or dormant); the Overlord needs to be live (no static, no closed one). */
 export type SkyCan = { riffbot: boolean; overlord: boolean };
 /**
+ * Which TVs open a chat. Keyed on the zone's agentId, not its live `member`: a closed Overlord keeps its zone (history + Resume Overlord,
+ * member is null) and must stay clickable; with no Overlord at all (no agentId) the TV is static + Spin Up and nothing opens.
+ */
+export const skyCanOpen = (z: Pick<SkyZones, "riffbot" | "overlord">): SkyCan => ({ riffbot: !!z.riffbot.agentId, overlord: !!z.overlord.agentId });
+/** The slam clock's first `prev open`: a chat that mounts already open (a Tower mini-face jump) still plays the slam once. */
+export const slamPrevOpenOnMount = (open: boolean, playOnMount: boolean): boolean => (playOnMount ? false : open);
+/**
  * A click on a TV's face. At rest the bot opens (if it can). While anything is open the left TV shows the open bot's face
  * (Riff's own, or the Overlord that took it over), so clicking it again closes; the right TV is under the chat and cannot be clicked.
  */

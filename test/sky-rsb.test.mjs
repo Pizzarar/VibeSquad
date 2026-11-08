@@ -173,7 +173,7 @@ test("validateSlamPuff: the shipped json, and bad input is rejected / defaulted"
 
 test("wiring: clock, Overlord face force, held chat, bezel fx, SlamFx; the old slide is the Overlord's chat only; reduced motion hides the fx", () => {
   const z = src("SkyZones.tsx");
-  assert.match(z, /useSlamClock\(open === "riffbot", reduced, puff\)/);
+  assert.match(z, /useSlamClock\(open === "riffbot", reduced, puff, initialOpen === "riffbot"\)/);
   assert.match(z, /force=\{slamFaceForce\(slam, faces\)\}/);
   assert.match(z, /<SlamFx root=\{root\}/);
   assert.match(z, /is-slam-held/);

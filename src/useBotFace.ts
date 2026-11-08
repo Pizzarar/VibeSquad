@@ -39,6 +39,7 @@ import {
   type TakeoverModel,
   TAKEOVER_LABEL_JSON_URL,
   validateTakeoverLabel,
+  slamPrevOpenOnMount,
 } from "./skyZonesLogic";
 
 export type Theme = "dark" | "light";
@@ -211,9 +212,10 @@ export const useSlamPuffModel = (): SlamPuff | null => useJsonModel(SLAM_PUFF_JS
  * advances by the frame timestamps; the first mount is not a flip. Re-renders only when what is drawn changes (slamKey).
  * Reduced motion = no clock: the plain end state at once.
  */
-export function useSlamClock(open: boolean, reduced: boolean, puff: SlamPuff | null): SlamView {
+/** `playOnMount`: the chat mounts already open (Tower mini-face jump) and should still slam in. */
+export function useSlamClock(open: boolean, reduced: boolean, puff: SlamPuff | null, playOnMount = false): SlamView {
   const stateRef = useRef<SlamState>(SLAM_REST);
-  const prevOpen = useRef(open);
+  const prevOpen = useRef(slamPrevOpenOnMount(open, playOnMount));
   const puffRef = useRef(puff);
   puffRef.current = puff;
   const reducedRef = useRef(reduced);
