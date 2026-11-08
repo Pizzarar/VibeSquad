@@ -19,14 +19,14 @@ import { parseCommitToken } from "./commitLinks";
 import { openRightDockTab } from "./RightDock";
 import { perfEndPainted, perfSendEvent } from "./perf";
 import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, coalesceReplies, hasMoreOf, joinPages, markTurnBoundary, matchesFilter, localPrompts, localSearch, mergeLiveItem, maxEntrySeq, syncNeeded, latestReasoningIndex, reasoningText, sortedHits, stepIndex, type SearchLocation, type TimelineFilter, type TimelinePrompt } from "./timelineFilter";
-import { BARE_NAME_RE, BARE_PATH_RE, bareNamesVersion, lookupBareName, parseFileToken, subscribeBareNames } from "./fileLinks";
+import { BARE_NAME_RE, BARE_PATH_RE, bareNamesVersion, isLocalHref, localLinkTarget, lookupBareName, parseFileToken, subscribeBareNames } from "./fileLinks";
 import { toolStartsExpanded, usePref } from "./prefs";
 import { getPanes } from "./panes";
 import { SubagentList } from "./SubagentList";
 import { Spinner, Stamp, TimelineSkeleton, useDelayedBusy } from "./QuickWinsUi";
 import { MermaidView } from "./MermaidView";
 import { noteTimelineOffers, useLooksDoneId } from "./PinGrid";
-import { SpinOffCard, SendToCard, findPinForAgent } from "./PinIdeas";
+import { SpinOffCard, SendToCard, findPinForAgent, showPinToast } from "./PinIdeas";
 import { LooksDoneCard } from "./PinDone";
 import { hasLooksDone, isHubPin, parseSendTo, parseSpinOff, sendToCardId, spinOffCardId } from "./pins";
 
@@ -321,7 +321,17 @@ function renderInline(text: string, agentId?: string): React.ReactNode[] {
         ),
       );
     } else if (m[8] !== undefined) {
-      // link
+      // link; a file:// or drive-path href can't open from an http origin, so route it to the Files dock
+      if (isLocalHref(m[10])) {
+        const lt = localLinkTarget(m[10], agentId ? getAgentCwd(agentId) : undefined);
+        const open = () => (lt.path !== null ? openFileTarget(lt) : showPinToast(`Can't open ${lt.name}: outside the workspace`));
+        nodes.push(
+          <button key={keyIdx++} className="tl-file-link" data-testid="tl-file-link" title={m[10]}
+            onClick={open}>{m[9]}</button>,
+        );
+        last = m.index + m[0].length;
+        continue;
+      }
       nodes.push(
         <a key={keyIdx++} href={m[10]} target="_blank" rel="noopener noreferrer">{m[9]}</a>,
       );
