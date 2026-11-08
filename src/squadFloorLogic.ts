@@ -699,3 +699,99 @@ export function blipMotion(tone: "work" | "needs", reduced: boolean): "none" | "
 
 /** The 2-digit corner count, capped at 99. */
 export const tvCountText = (n: number): string => String(Math.min(99, Math.max(0, Math.trunc(n)))).padStart(2, "0");
+
+// ── HP4: floor paging (one floor per screen, TV-channel < >) ──────────────────
+
+export const FLOOR_INDEX_KEY = "vs.squadFloor.index";
+/** CRT blink: collapse to a line, swap the floor, open again. Each half; reduced motion skips both. */
+export const FLOOR_BLINK_MS = 100;
+
+/** Keep a floor index inside 0..count-1 (0 when there are no floors or the value is not a number). */
+export function clampFloorIndex(index: number, count: number): number {
+  if (!Number.isFinite(index) || !Number.isFinite(count) || count <= 0) return 0;
+  return Math.min(Math.max(Math.trunc(index), 0), Math.trunc(count) - 1);
+}
+
+/** One step (-1 = previous/up, +1 = next/down). Clamped at the ends: no wrap. */
+export function stepFloorIndex(index: number, dir: -1 | 1, count: number): number {
+  return clampFloorIndex(clampFloorIndex(index, count) + dir, count);
+}
+
+/** The persisted index, clamped to the current tower; junk or absent storage → 0. */
+export function parseStoredFloor(raw: string | null | undefined, count: number): number {
+  if (raw == null || raw.trim() === "") return 0;
+  return clampFloorIndex(Number(raw), count);
+}
+
+/** The lift readout: 1-based, two digits ("07"). */
+export function floorCounterText(index: number): string {
+  return String(Math.max(Math.trunc(index) + 1, 1)).padStart(2, "0");
+}
+
+/** A dot on the prev arrow when needs-you sits on an earlier floor, on the next arrow when it sits on a later one. */
+export function needsYouArrows(floors: readonly Floor[], current: number): { prev: boolean; next: boolean } {
+  const idx = needsYouFloors(floors);
+  return { prev: idx.some((i) => i < current), next: idx.some((i) => i > current) };
+}
+
+/** ←/PgUp page up, →/PgDn page down; modified keys never page. */
+export function pagingDir(e: { key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; shiftKey?: boolean }): -1 | 0 | 1 {
+  if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return 0;
+  if (e.key === "ArrowLeft" || e.key === "PageUp") return -1;
+  if (e.key === "ArrowRight" || e.key === "PageDown") return 1;
+  return 0;
+}
+
+/** Paging keys must not fire while the user types (or drives a select / slider). */
+export function isTypingTarget(t: { tagName?: string; isContentEditable?: boolean; type?: string } | null | undefined): boolean {
+  if (!t) return false;
+  if (t.isContentEditable) return true;
+  const tag = (t.tagName ?? "").toUpperCase();
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+}
+
+/**
+ * Scale for a single floor in a fixed box: whole device-pixel multiple fitting both width and height.
+ * Never overflows when the box fits 1x; a box shorter than one native floor still draws 1x (clipped, no scrollbar). 0 when too narrow.
+ */
+export function floorFitScale(boxW: number, boxH: number, dpr = 1): number {
+  const byWidth = integerScale(boxW, dpr);
+  if (byWidth <= 0) return 0;
+  const ratio = Number.isFinite(dpr) && dpr >= 1 ? dpr : 1;
+  if (!Number.isFinite(boxH) || boxH <= 0) return byWidth;
+  const byHeight = Math.floor((boxH * ratio) / FLOOR_NATIVE_HEIGHT) / ratio;
+  return byHeight >= 1 ? Math.min(byWidth, byHeight) : 1;
+}
+
+// ── FS-b: keyboard-focus selector arrow (floor-cursor.json, Art9) ─────────────
+
+export const FLOOR_CURSOR_JSON_URL = "/office/floor-cursor.json";
+
+export type FloorCursor = { cell: { w: number; h: number }; frames: number; fps: number; anchor: { x: number; y: number } };
+
+export function validateFloorCursor(json: unknown): Validation<FloorCursor> {
+  if (!isObject(json)) return { ok: false, reason: "floor-cursor.json is not an object" };
+  const pos = (v: unknown): v is number => isNum(v) && v > 0;
+  const c = json.cell;
+  const a = json.anchor;
+  if (!isObject(c) || !pos(c.w) || !pos(c.h)) return { ok: false, reason: "cell must be {w,h} > 0" };
+  if (!isObject(a) || !isNum(a.x) || !isNum(a.y)) return { ok: false, reason: "anchor must be {x,y}" };
+  if (!pos(json.frames) || !Number.isInteger(json.frames)) return { ok: false, reason: "frames must be an integer > 0" };
+  if (!pos(json.fps)) return { ok: false, reason: "fps must be > 0" };
+  return { ok: true, value: { cell: { w: c.w, h: c.h }, frames: json.frames, fps: json.fps, anchor: { x: a.x, y: a.y } } };
+}
+
+/**
+ * Where the arrow cell sits, relative to the seat anchor (floor art px; the band's integer scale multiplies it).
+ * The tip (`anchor` pixel of frame 0) lands on seat.x, and the cell top rides the bubble's vertical offset, so the
+ * tip sits beside the "!" bubble without overlapping it. Nothing here is a hardcoded number.
+ */
+export function cursorOffset(cast: Pick<CastModel, "bubble">, cursor: FloorCursor): { x: number; y: number } {
+  return { x: -cursor.anchor.x, y: cast.bubble.offset.y };
+}
+
+/** The same placement in the seat button's own box (its top-left is seat − (cell/2, cell)). */
+export function cursorInButton(cast: Pick<CastModel, "bubble" | "cell">, cursor: FloorCursor): { left: number; top: number } {
+  const o = cursorOffset(cast, cursor);
+  return { left: o.x + cast.cell / 2, top: o.y + cast.cell };
+}
