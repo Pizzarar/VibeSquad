@@ -38,10 +38,33 @@ test("takes over a stale lock from a dead pid", (t) => {
   assert.equal(existsSync(`${f}.lock`), false);
 });
 
-test("takes over a live-pid lock older than staleMs", (t) => {
+test("takes over a live other-pid lock older than staleMs (positive staleMs)", (t) => {
   const f = path.join(tmp(t), "a.json");
-  writeFileSync(`${f}.lock`, JSON.stringify({ pid: process.pid, startedAt: 0 }));
-  assert.equal(withFileLockSync(f, () => "ok", { timeoutMs: 1000, staleMs: -1 }), "ok");
+  writeFileSync(`${f}.lock`, JSON.stringify({ pid: process.ppid, startedAt: Date.now() - 60000 }));
+  assert.equal(withFileLockSync(f, () => "ok", { timeoutMs: 1000, staleMs: 30000, alive: () => true }), "ok");
+});
+
+test("re-entry in the same process times out instead of stealing its own lock", (t) => {
+  const f = path.join(tmp(t), "a.json");
+  assert.throws(() => withFileLockSync(f, () => withFileLockSync(f, () => 1, { timeoutMs: 100, staleMs: 10 }), { staleMs: 10 }), /Timed out/);
+  assert.equal(existsSync(`${f}.lock`), false);
+});
+
+test("creates a missing parent directory", (t) => {
+  const f = path.join(tmp(t), "new", "lane", "TASKS.json");
+  updateJsonFileSync(f, (d) => { d.a = 1; });
+  assert.equal(JSON.parse(readFileSync(f, "utf8")).a, 1);
+});
+
+test("corrupt file throws and is left intact; BOM file parses", (t) => {
+  const f = path.join(tmp(t), "a.json");
+  writeFileSync(f, "{not json");
+  assert.throws(() => updateJsonFileSync(f, (d) => { d.x = 1; }), SyntaxError);
+  assert.equal(readFileSync(f, "utf8"), "{not json");
+  assert.equal(existsSync(`${f}.lock`), false);
+  writeFileSync(f, "﻿" + JSON.stringify({ keep: 1 }));
+  updateJsonFileSync(f, (d) => { d.x = 2; });
+  assert.deepEqual(JSON.parse(readFileSync(f, "utf8")), { keep: 1, x: 2 });
 });
 
 test("a live-held lock times out with a clear error and is left alone", (t) => {
