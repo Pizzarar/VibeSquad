@@ -101,13 +101,14 @@ describe("U16: PinGrid.tsx exports noteTimelineOffers and wires usePreview", () 
 });
 
 describe("U16: PinIdeas.tsx exports findPinForAgent and renders LooksDoneCard in SendToBar", () => {
-  test("exports findPinForAgent searching hubPinForSquad and pinsForSquad across derived().views", () => {
-    assert.match(pinIdeasSrc, /export function findPinForAgent\(agentId\?:\s*string\s*\|\s*null\):\s*Pin\s*\|\s*null/);
-    const fnStart = pinIdeasSrc.indexOf("export function findPinForAgent");
-    const fnSlice = pinIdeasSrc.slice(fnStart, fnStart + 900);
-    assert.match(fnSlice, /derived\(\)\.views/);
+  test("exports findPinForAgent over derived().views via findPinInViews, which searches hub + squad pins (hidden lanes included) by agent id", () => {
+    assert.match(pinIdeasSrc, /export const findPinForAgent = \(agentId\?:\s*string\s*\|\s*null\):\s*Pin\s*\|\s*null\s*=>\s*findPinInViews\(derived\(\)\.views,\s*agentId\)/);
+    const pinsSrc = read("src/pins.ts");
+    const fnStart = pinsSrc.indexOf("export function findPinInViews");
+    assert.ok(fnStart >= 0, "findPinInViews found");
+    const fnSlice = pinsSrc.slice(fnStart, fnStart + 900);
     assert.match(fnSlice, /hubPinForSquad\(v\)/);
-    assert.match(fnSlice, /pinsForSquad\(v\)/);
+    assert.match(fnSlice, /pinsForSquad\(v,\s*\{\s*includeHidden:\s*true\s*\}\)/);
     assert.match(fnSlice, /p\.brainstorm\?\.agent\.id === agentId/);
     assert.match(fnSlice, /p\.lead\?\.agent\.id === agentId/);
     assert.match(fnSlice, /p\.workers\.some/);

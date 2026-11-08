@@ -90,7 +90,7 @@ export function SquadQueue({ view, variant = "panel" }: { view: TeamView; varian
     return () => clearInterval(t);
   }, []);
   const items = squadQueue(view.members);
-  const { pinned, done } = pinsForSquad(view);
+  const { pinned, done } = pinsForSquad(view, { includeHidden: true });
   const hub = hubPinForSquad(view);
   const pins: Pin[] = [...pinned, ...done, ...(hub ? [hub] : [])];
   const byId = new Map(view.members.map((m) => [m.agent.id, m]));

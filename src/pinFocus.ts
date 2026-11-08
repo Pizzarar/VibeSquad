@@ -93,7 +93,7 @@ const show = (id: string) => {
 function focusedPin(f: PinFocus): Pin | null {
   const view = derived().views.find((v) => v.team.id === f.squadId);
   if (!view) return null;
-  const { pinned, done } = pinsForSquad(view);
+  const { pinned, done } = pinsForSquad(view, { includeHidden: true });
   const hub = hubPinForSquad(view);
   return [...pinned, ...done].find((p) => p.lane.id === f.laneId) ?? (hub?.lane.id === f.laneId ? hub : null);
 }
@@ -291,7 +291,7 @@ function tryRestore() {
   if (saved) {
     const view = derived().views.find((v) => v.team.id === saved.squadId);
     const hubPin = view ? hubPinForSquad(view) : null;
-    pin = view ? (pinsForSquad(view).pinned.find((p) => p.lane.id === saved.laneId) ?? (hubPin?.lane.id === saved.laneId ? hubPin : undefined)) : undefined;
+    pin = view ? (pinsForSquad(view, { includeHidden: true }).pinned.find((p) => p.lane.id === saved.laneId) ?? (hubPin?.lane.id === saved.laneId ? hubPin : undefined)) : undefined;
   }
   const plan = planRestore({
     saved,

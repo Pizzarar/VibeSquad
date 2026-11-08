@@ -35,6 +35,7 @@ import {
   leadLadderFor,
   matchesSearch,
   resolve,
+  isHiddenLane,
   shownLanesOf,
   sortMembers,
   useTeams,
@@ -1036,7 +1037,7 @@ const TeamPage = memo(function TeamPage(props: {
 
   // Default squad page: one tile per pinned Team. FULL brings back the plumbing view below.
   if (!full) {
-    const teamCount = view.lanes.filter((l) => l.lane.id !== "_other" && l.lane.state !== "done" && l.lane.state !== "removed").length;
+    const teamCount = view.lanes.filter((l) => l.lane.id !== "_other" && l.lane.state !== "done" && l.lane.state !== "removed" && !isHiddenLane(view.team, l.lane)).length;
     return (
       <div className="team-body">
         <header className="team-header">
@@ -1060,7 +1061,7 @@ const TeamPage = memo(function TeamPage(props: {
         <PinGrid
           view={view}
           onOpenAgent={(id) => {
-            const pin = pinsForSquad(view).pinned.find((p) => p.brainstorm?.agent.id === id);
+            const pin = pinsForSquad(view, { includeHidden: true }).pinned.find((p) => p.brainstorm?.agent.id === id);
             if (pin) void props.onQuickStart(pin);
             else onPick(id);
           }}

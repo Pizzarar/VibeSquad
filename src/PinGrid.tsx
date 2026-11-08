@@ -76,7 +76,7 @@ export type PinHandler = (pin: Pin) => void | Promise<unknown>;
 export function pinByKey(views: TeamView[], key: { squadId: string; laneId: string }): Pin | null {
   for (const v of views) {
     if (v.team.id !== key.squadId) continue;
-    const { pinned, done } = pinsForSquad(v);
+    const { pinned, done } = pinsForSquad(v, { includeHidden: true });
     const hit = [...pinned, ...done].find((p) => p.lane.id === key.laneId);
     if (hit) return hit;
     const hub = hubPinForSquad(v);
