@@ -75,6 +75,7 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
           }
         } else if (m.type === 'result') {
           pending = Math.max(0, pending - 1);
+          interrupted = false; // an interrupt flag lasts only until the turn it interrupts produces its result
           // A failed turn must read as an error (push "Agent Error", UI status), not a normal completion.
           if (m.is_error || String(m.subtype ?? '').startsWith('error')) {
             emit('error', { message: (typeof m.result === 'string' && m.result) || m.subtype || 'turn failed' });
