@@ -227,7 +227,7 @@ export function SkyZones({
   const takeover = useTakeoverModel();
   const { hub } = zones;
   // G8c: the wall between the TVs. Art from sky-crt.json `wall` when its PNG loads, else the CSS ink seam. Absolute: takes no grid space.
-  const wallUrl = crt?.wall ? SKY_WALL_URL(theme, crt.wall) : null;
+  const wallUrl = crt?.wall ? SKY_WALL_URL(theme) : null;
   const wallStyle = skyWallStyle(crt?.wall, crt?.scale ?? 1, useImageOk(wallUrl) ? wallUrl : null);
 
   // G8: the TVs never resize. `openRaw` is set by clicks only; the Overlord talking never opens anything.

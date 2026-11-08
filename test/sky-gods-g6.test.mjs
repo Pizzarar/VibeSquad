@@ -225,32 +225,40 @@ test("G8b: thinner bezels need no code change - small slice/scale values validat
 });
 
 // ── G8c: the wall ──
-test("G8c wall: optional sky-crt.json key, validated; absent or bad -> ignored (CSS seam)", () => {
+test("G8c wall (H1e contract): optional sky-crt.json key {width, scale?, slice?, repeat?}; absent or bad -> ignored (CSS seam)", () => {
   const { validateSkyCrt, parseWall, skyWallStyle, SKY_WALL_URL } = logic;
+  const shipped = JSON.parse(readFileSync(new URL("../public/office/sky-crt.json", import.meta.url), "utf8"));
+  assert.equal(validateSkyCrt(shipped).ok, true); // whatever sky-crt.json is on this branch parses
+  const real = { slice: { top: 3, right: 3, bottom: 5, left: 3 }, scale: 3, repeat: "round", wall: { width: 4, scale: 3, slice: { top: 3, bottom: 5 }, repeat: "round" } };
+  const v = validateSkyCrt(real);
+  assert.equal(v.ok, true);
+  assert.deepEqual(v.value.wall, { width: 4, scale: 3, slice: { top: 3, bottom: 5 }, repeat: "round" });
   const crt = (wall) => ({ slice: { top: 14, right: 20, bottom: 30, left: 20 }, scale: 3, repeat: "round", ...(wall === undefined ? null : { wall }) });
-  const none = validateSkyCrt(crt());
-  assert.equal(none.ok, true);
-  assert.equal("wall" in none.value, false); // existing files parse exactly as before
-  const ok = validateSkyCrt(crt({ w: 6, slice: { top: 4, bottom: 4 }, src: "sky-wall-{theme}.png" }));
-  assert.deepEqual(ok.value.wall, { w: 6, slice: { top: 4, bottom: 4 }, src: "sky-wall-{theme}.png" });
-  assert.deepEqual(parseWall({ w: 2 }), { w: 2, src: "sky-wall-{theme}.png" }); // slice + src optional
-  assert.equal(SKY_WALL_URL("light", ok.value.wall), "/office/sky-wall-light.png");
-  for (const bad of [{ w: 0 }, { w: -2 }, { w: 1.5 }, { w: "6" }, {}, null, 5, "x", []]) {
-    const v = validateSkyCrt(crt(bad));
-    assert.equal(v.ok, true, "a bad wall never rejects the bezel");
-    assert.equal("wall" in v.value, false, JSON.stringify(bad));
+  assert.equal("wall" in validateSkyCrt(crt()).value, false); // absent -> no wall
+  assert.deepEqual(parseWall({ width: 2 }), { width: 2, repeat: "round" }); // scale, slice optional; repeat defaults round
+  assert.equal(parseWall({ width: 2, repeat: "stretch" }).repeat, "stretch");
+  assert.equal(parseWall({ width: 2, repeat: "tile" }).repeat, "round");
+  assert.equal(SKY_WALL_URL("light"), "/office/sky-wall-light.png"); // no src key: the name is fixed
+  assert.equal("src" in parseWall({ width: 2, src: "x.png" }), false);
+  for (const bad of [{ width: 0 }, { width: -2 }, { width: 1.5 }, { width: "6" }, { w: 6 }, {}, null, 5, "x", []]) {
+    const r = validateSkyCrt(crt(bad));
+    assert.equal(r.ok, true, "a bad wall never rejects the bezel");
+    assert.equal("wall" in r.value, false, JSON.stringify(bad));
   }
-  assert.equal(parseWall({ w: 3, slice: { top: -1, bottom: 2.5 } }).slice, undefined); // bad slice dropped, wall kept
-  assert.equal(parseWall({ w: 3, src: "../x/evil.png" }).src, "sky-wall-{theme}.png"); // no path tricks
-  // style: width = w x scale, integer scaled, pixelated; no art -> null (CSS fallback)
+  assert.equal(parseWall({ width: 3, slice: { top: -1, bottom: 2.5 } }).slice, undefined); // bad slice dropped, wall kept
+  assert.equal("scale" in parseWall({ width: 3, scale: -1 }), false);
+  // style: width = width x (wall.scale ?? bezel scale), pixelated; no art -> null (CSS fallback)
   assert.equal(skyWallStyle(undefined, 3, "/u.png"), null);
-  assert.equal(skyWallStyle(ok.value.wall, 3, null), null);
-  const st = skyWallStyle(ok.value.wall, 3, "/office/sky-wall-dark.png");
-  assert.equal(st.width, "18px");
+  assert.equal(skyWallStyle(v.value.wall, 3, null), null);
+  const st = skyWallStyle(v.value.wall, 3, "/office/sky-wall-dark.png");
+  assert.equal(st.width, "12px");
   assert.equal(st.imageRendering, "pixelated");
-  assert.equal(st.borderWidth, "12px 0 12px");
-  assert.equal(st.borderImageSlice, "4 0 4 fill");
-  assert.equal(skyWallStyle({ w: 6, src: "s.png" }, 3, "/s.png").backgroundSize, "18px auto");
+  assert.equal(st.borderWidth, "9px 0 15px");
+  assert.equal(st.borderImageSlice, "3 0 5 fill");
+  assert.equal(st.borderImageRepeat, "round");
+  assert.equal(skyWallStyle({ width: 4, repeat: "stretch" }, 3, "/s.png").width, "12px"); // wall.scale absent -> the bezel's
+  assert.equal(skyWallStyle({ width: 4, scale: 2, repeat: "round" }, 3, "/s.png").backgroundSize, "8px auto"); // own scale wins
+  assert.equal(skyWallStyle({ width: 4, slice: { top: 3, bottom: 5 }, repeat: "stretch" }, 3, "/s.png").borderImageRepeat, "stretch");
 });
 
 test("G8c wall: absolute, above both TVs and the chat panel, never in the grid - a wide wall (w 6 x scale 3) cannot change the 50/50", () => {
@@ -261,7 +269,7 @@ test("G8c wall: absolute, above both TVs and the chat panel, never in the grid -
   assert.ok(sky.includes('data-testid="sky-wall"') && sky.includes("skyWallStyle(crt?.wall, crt?.scale ?? 1,"));
   assert.ok(!/\.sky-wall[^{]*\{[^}]*grid-(column|row)/.test(css)); // out of flow
   assert.equal(logic.SKY_COLUMNS, "minmax(0, 1fr) minmax(0, 1fr)"); // the columns do not depend on the wall
-  const st = logic.skyWallStyle({ w: 6, src: "s.png" }, 3, "/s.png");
+  const st = logic.skyWallStyle({ width: 6, scale: 3, repeat: "round" }, 3, "/s.png");
   assert.equal(st.width, "18px");
   for (const k of Object.keys(st)) assert.ok(!/grid|flex|gap|padding/i.test(k), k); // only its own box
 });

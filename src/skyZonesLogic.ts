@@ -171,9 +171,8 @@ export const SKY_FRAME_URL = (theme: SkyTheme) => `/office/sky-crt-${theme}.png`
 /** sky-crt.json: the 9-slice of the sky-CRT bezel PNG (source px), the integer-or-not px scale, and how the edges tile. */
 export const SKY_CRT_JSON_URL = "/office/sky-crt.json";
 export type SkyCrtRepeat = "stretch" | "round";
-/** G8c optional `wall`: the always-present divider between the two TVs. w = source px wide; slice = vertical 3-slice caps (source px); src = PNG name, `{theme}` is replaced. */
-export type SkyWall = { w: number; slice?: { top: number; bottom: number }; src: string };
-export const SKY_WALL_SRC = "sky-wall-{theme}.png";
+/** Optional `wall` (H1e contract): the always-present divider between the two TVs. width = source px wide; scale = its own scale (falls back to the bezel's); slice = vertical 3-slice caps (source px); repeat = how the middle tiles. The art is always /office/sky-wall-{theme}.png. */
+export type SkyWall = { width: number; scale?: number; slice?: { top: number; bottom: number }; repeat: SkyCrtRepeat };
 export type SkyCrtModel = { slice: { top: number; right: number; bottom: number; left: number }; scale: number; repeat: SkyCrtRepeat; wall?: SkyWall };
 const posInt = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n > 0;
 /** Validate sky-crt.json. Slice sides must be positive ints, scale > 0, repeat (optional) stretch|round; anything else → not ok (CSS bezel stays). */
@@ -189,33 +188,35 @@ export function validateSkyCrt(json: unknown): { ok: true; value: SkyCrtModel } 
   return { ok: true, value: { slice: { top, right, bottom, left }, scale, repeat: repeat ?? "stretch", ...(wall ? { wall } : null) } };
 }
 const nonNegInt = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n >= 0;
-/** Optional + additive: a bad `wall` (w not a positive int, not an object) is ignored, never an error - the 2px CSS ink seam stays. A bad slice/src falls back to no-slice / the default name. */
+/** Optional: a bad `wall` (width not a positive int, not an object) is ignored, never an error - the 2px CSS ink seam stays. A bad slice / scale / repeat falls back to none / the bezel's / round. */
 export function parseWall(raw: unknown): SkyWall | null {
   if (!raw || typeof raw !== "object") return null;
-  const { w, slice, src } = raw as Record<string, unknown>;
-  if (!posInt(w)) return null;
+  const { width, scale, slice, repeat } = raw as Record<string, unknown>;
+  if (!posInt(width)) return null;
   const sl = slice && typeof slice === "object" ? (slice as Record<string, unknown>) : null;
   return {
-    w,
+    width,
+    ...(typeof scale === "number" && Number.isFinite(scale) && scale > 0 ? { scale } : null),
     ...(sl && nonNegInt(sl.top) && nonNegInt(sl.bottom) && (sl.top > 0 || sl.bottom > 0) ? { slice: { top: sl.top, bottom: sl.bottom } } : null),
-    src: typeof src === "string" && /^[\w.{}-]+\.png$/.test(src) ? src : SKY_WALL_SRC,
+    repeat: repeat === "stretch" ? "stretch" : "round",
   };
 }
-export const SKY_WALL_URL = (theme: SkyTheme, wall: SkyWall) => `/office/${wall.src.replace("{theme}", theme)}`;
-/** Inline style for the wall element when its art loaded: width = w x scale, pixelated, vertical 3-slice when `slice` is given. null (no wall / no art) -> the CSS ink seam. */
-export function skyWallStyle(wall: SkyWall | undefined, scale: number, url: string | null): Record<string, string> | null {
+export const SKY_WALL_URL = (theme: SkyTheme) => `/office/sky-wall-${theme}.png`;
+/** Inline style for the wall element when its art loaded: width = width x (wall.scale ?? bezel scale), pixelated, vertical 3-slice when `slice` is given. null (no wall / no art) -> the CSS ink seam. */
+export function skyWallStyle(wall: SkyWall | undefined, bezelScale: number, url: string | null): Record<string, string> | null {
   if (!wall || !url) return null;
-  const width = `${wall.w * scale}px`;
-  const base = { width, marginLeft: `-${Math.floor((wall.w * scale) / 2)}px`, background: "none", imageRendering: "pixelated" };
+  const k = wall.scale ?? bezelScale;
+  const width = `${wall.width * k}px`;
+  const base = { width, marginLeft: `-${Math.floor((wall.width * k) / 2)}px`, background: "none", imageRendering: "pixelated" };
   if (!wall.slice) return { ...base, backgroundImage: `url(${url})`, backgroundSize: `${width} auto`, backgroundRepeat: "repeat-y" };
   const { top, bottom } = wall.slice;
   return {
     ...base,
     borderStyle: "solid",
-    borderWidth: `${top * scale}px 0 ${bottom * scale}px`,
+    borderWidth: `${top * k}px 0 ${bottom * k}px`,
     borderImageSource: `url(${url})`,
     borderImageSlice: `${top} 0 ${bottom} fill`,
-    borderImageRepeat: "round",
+    borderImageRepeat: wall.repeat,
   };
 }
 /** json → the zone's border-image style: width = slice × scale per side, slice + `fill`, crisp pixels. */
