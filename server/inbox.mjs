@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import os from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import {
   appendVsLogEntry,
   archiveBuddyKeepingChildren,
@@ -15,6 +15,7 @@ import { findLaneInRegistry, formatDisplayTitle, laneCodeFor } from "./identity.
 import { findProfile, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
+import { updateJsonFileSync } from "./file-lock.mjs";
 import { defangPromptFences, isSpawnId } from "./write-guards.mjs";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
@@ -63,10 +64,28 @@ export function readInboxCards(baseHome) {
   return Array.isArray(parsed) ? parsed : Array.isArray(parsed?.cards) ? parsed.cards : [];
 }
 
+/**
+ * Locked read-modify-write of ~/.vibesquad/inbox.json. `mutate(cards)` receives the current card array and either
+ * mutates it in place (return undefined) or returns the replacement array. A missing file yields []. Every inbox
+ * write in the server and the CLI funnels through this so a concurrent add/triage can never lose cards or mint a
+ * duplicate idea-N id.
+ */
+function updateInboxCardsSync(baseHome, mutate, opts = {}) {
+  const file = getInboxPath(baseHome);
+  return updateJsonFileSync(
+    file,
+    (data) => {
+      const cards = Array.isArray(data) ? data : Array.isArray(data?.cards) ? data.cards : [];
+      const out = mutate(cards);
+      return out === undefined ? cards : out;
+    },
+    { fallback: [], ...opts },
+  );
+}
+
 export function writeInboxCards(cards, baseHome) {
   const file = getInboxPath(baseHome);
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, JSON.stringify(cards, null, 2) + "\n", "utf8");
+  updateJsonFileSync(file, () => cards, { fallback: [] });
   clearConfigWarning(file);
   return cards;
 }
@@ -434,7 +453,6 @@ export function listInboxCards(filter = {}, rootDir = REPO_ROOT) {
 
 export function addInboxCards(body = {}, rootDir = REPO_ROOT) {
   const baseHome = body.baseHome;
-  const existing = readInboxCards(baseHome);
   const teams = loadTeamsForInbox(rootDir);
 
   const rawIdeas =
@@ -451,46 +469,49 @@ export function addInboxCards(body = {}, rootDir = REPO_ROOT) {
   const explicitTeam = typeof body.teamId === "string" && body.teamId.trim() ? body.teamId.trim() : "";
   const source = typeof body.source === "string" && body.source.trim() ? body.source.trim() : "ui";
 
-  const working = [...existing];
-  const added = [];
-  const now = new Date().toISOString();
+  let added = [];
+  const cards = updateInboxCardsSync(baseHome, (working) => {
+    added = [];
+    const now = new Date().toISOString();
 
-  for (const ideaText of rawIdeas) {
-    const sorted = sortIdeaCard(ideaText, working, teams);
-    const finalLane = explicitLane || (sorted.matchedDomain ? sorted.laneId : defaultLane || sorted.laneId);
-    const finalTeam = explicitLane
-      ? explicitTeam || teamIdForLane(finalLane, ideaText, teams)
-      : sorted.matchedDomain
-        ? sorted.teamId
-        : explicitTeam || teamIdForLane(finalLane, ideaText, teams);
+    for (const ideaText of rawIdeas) {
+      const sorted = sortIdeaCard(ideaText, working, teams);
+      const finalLane = explicitLane || (sorted.matchedDomain ? sorted.laneId : defaultLane || sorted.laneId);
+      const finalTeam = explicitLane
+        ? explicitTeam || teamIdForLane(finalLane, ideaText, teams)
+        : sorted.matchedDomain
+          ? sorted.teamId
+          : explicitTeam || teamIdForLane(finalLane, ideaText, teams);
 
-    const card = {
-      id: nextCardId(working),
-      text: ideaText,
-      title: sorted.title,
-      teamId: finalTeam,
-      laneId: finalLane,
-      scope: sorted.scope,
-      relatedCardId: sorted.relatedCardId ?? null,
-      relatedReason: sorted.relatedReason ?? null,
-      mergedFromIds: [],
-      status: "parked",
-      topicAgentId: null,
-      summaryNote: null,
-      source,
-      createdAt: now,
-      updatedAt: now,
-    };
-    working.push(card);
-    added.push(card);
-  }
+      const card = {
+        id: nextCardId(working),
+        text: ideaText,
+        title: sorted.title,
+        teamId: finalTeam,
+        laneId: finalLane,
+        scope: sorted.scope,
+        relatedCardId: sorted.relatedCardId ?? null,
+        relatedReason: sorted.relatedReason ?? null,
+        mergedFromIds: [],
+        status: "parked",
+        topicAgentId: null,
+        summaryNote: null,
+        source,
+        createdAt: now,
+        updatedAt: now,
+      };
+      working.push(card);
+      added.push(card);
+    }
 
-  writeInboxCards(working, baseHome);
+    return working;
+  });
+
   const summary = `parked ${added.length} ideas → Inbox`;
   return {
     ok: true,
     added,
-    cards: working,
+    cards,
     summary,
   };
 }
@@ -505,122 +526,129 @@ function toBulletLines(text) {
 export function triageInboxCards(body = {}, rootDir = REPO_ROOT) {
   const baseHome = body.baseHome;
   const teams = loadTeamsForInbox(rootDir);
-  const cards = readInboxCards(baseHome);
   const action = String(body.action || "").trim();
-  const now = new Date().toISOString();
 
-  if (action === "merge") {
-    const targetId = String(body.targetId || "").trim();
-    const sourceIds = (Array.isArray(body.sourceIds) ? body.sourceIds : [body.sourceId].filter(Boolean))
-      .map((s) => String(s).trim())
-      .filter((s) => s && s !== targetId);
-    if (!targetId || !sourceIds.length) {
-      throw new Error("merge requires targetId and sourceIds[]");
-    }
-    const target = cards.find((c) => c.id === targetId);
-    if (!target) throw new Error(`Target card not found: ${targetId}`);
-    const sources = sourceIds.map((id) => cards.find((c) => c.id === id)).filter(Boolean);
-    if (!sources.length) throw new Error(`Source card(s) not found: ${sourceIds.join(", ")}`);
+  let result = null;
+  const cards = updateInboxCardsSync(baseHome, (cards) => {
+    const now = new Date().toISOString();
 
-    const bullets = [...toBulletLines(target.text)];
-    const mergedFrom = new Set([...(Array.isArray(target.mergedFromIds) ? target.mergedFromIds : [])]);
-    for (const src of sources) {
-      for (const line of toBulletLines(src.text)) {
-        if (!bullets.includes(line)) bullets.push(line);
+    if (action === "merge") {
+      const targetId = String(body.targetId || "").trim();
+      const sourceIds = (Array.isArray(body.sourceIds) ? body.sourceIds : [body.sourceId].filter(Boolean))
+        .map((s) => String(s).trim())
+        .filter((s) => s && s !== targetId);
+      if (!targetId || !sourceIds.length) {
+        throw new Error("merge requires targetId and sourceIds[]");
       }
-      mergedFrom.add(src.id);
-      for (const prevId of Array.isArray(src.mergedFromIds) ? src.mergedFromIds : []) {
-        mergedFrom.add(prevId);
+      const target = cards.find((c) => c.id === targetId);
+      if (!target) throw new Error(`Target card not found: ${targetId}`);
+      const sources = sourceIds.map((id) => cards.find((c) => c.id === id)).filter(Boolean);
+      if (!sources.length) throw new Error(`Source card(s) not found: ${sourceIds.join(", ")}`);
+
+      const bullets = [...toBulletLines(target.text)];
+      const mergedFrom = new Set([...(Array.isArray(target.mergedFromIds) ? target.mergedFromIds : [])]);
+      for (const src of sources) {
+        for (const line of toBulletLines(src.text)) {
+          if (!bullets.includes(line)) bullets.push(line);
+        }
+        mergedFrom.add(src.id);
+        for (const prevId of Array.isArray(src.mergedFromIds) ? src.mergedFromIds : []) {
+          mergedFrom.add(prevId);
+        }
       }
-    }
 
-    target.text = bullets.map((b) => `- ${b}`).join("\n");
-    target.mergedFromIds = [...mergedFrom];
-    if (sourceIds.includes(target.relatedCardId)) {
-      target.relatedCardId = null;
-      target.relatedReason = null;
-    }
-    target.updatedAt = now;
-
-    const sourceSet = new Set(sourceIds);
-    const remaining = cards.filter((c) => !sourceSet.has(c.id));
-    for (const c of remaining) {
-      if (c.relatedCardId && sourceSet.has(c.relatedCardId) && c.id !== target.id) {
-        c.relatedCardId = target.id;
-        c.relatedReason = `goes with card ${target.id} (${target.title})`;
+      target.text = bullets.map((b) => `- ${b}`).join("\n");
+      target.mergedFromIds = [...mergedFrom];
+      if (sourceIds.includes(target.relatedCardId)) {
+        target.relatedCardId = null;
+        target.relatedReason = null;
       }
-    }
+      target.updatedAt = now;
 
-    writeInboxCards(remaining, baseHome);
-    return { ok: true, action: "merge", card: target, mergedIds: sourceIds, cards: remaining };
-  }
-
-  if (action === "bounce") {
-    const cardId = String(body.cardId || "").trim();
-    const laneId = String(body.laneId || body.lane || "").trim();
-    if (!cardId || !laneId) throw new Error("bounce requires cardId and laneId");
-    const card = cards.find((c) => c.id === cardId);
-    if (!card) throw new Error(`Card not found: ${cardId}`);
-
-    card.laneId = laneId;
-    card.teamId = body.teamId ? String(body.teamId).trim() : teamIdForLane(laneId, card.text, teams);
-    if (body.scope && INBOX_SCOPES.includes(body.scope)) {
-      card.scope = body.scope;
-    }
-    card.updatedAt = now;
-    writeInboxCards(cards, baseHome);
-    return { ok: true, action: "bounce", card, cards };
-  }
-
-  if (action === "update") {
-    const cardId = String(body.cardId || "").trim();
-    const patch = body.patch && typeof body.patch === "object" ? body.patch : {};
-    if (!cardId) throw new Error("update requires cardId");
-    const card = cards.find((c) => c.id === cardId);
-    if (!card) throw new Error(`Card not found: ${cardId}`);
-
-    // No topicAgentId: it names the agent park/handoff-topic archive, so only open-topic sets it.
-    const allowed = [
-      "status",
-      "title",
-      "text",
-      "scope",
-      "summaryNote",
-      "topicTitle",
-      "topicOpenedAt",
-      "handedOffAt",
-      "laneId",
-      "teamId",
-      "relatedCardId",
-      "relatedReason",
-    ];
-    for (const key of allowed) {
-      if (key in patch && patch[key] !== undefined) {
-        card[key] = patch[key];
+      const sourceSet = new Set(sourceIds);
+      const remaining = cards.filter((c) => !sourceSet.has(c.id));
+      for (const c of remaining) {
+        if (c.relatedCardId && sourceSet.has(c.relatedCardId) && c.id !== target.id) {
+          c.relatedCardId = target.id;
+          c.relatedReason = `goes with card ${target.id} (${target.title})`;
+        }
       }
-    }
-    card.updatedAt = now;
-    writeInboxCards(cards, baseHome);
-    return { ok: true, action: "update", card, cards };
-  }
 
-  if (action === "delete" || action === "archive") {
-    const cardId = String(body.cardId || "").trim();
-    if (!cardId) throw new Error(`${action} requires cardId`);
-    const idx = cards.findIndex((c) => c.id === cardId);
-    if (idx < 0) throw new Error(`Card not found: ${cardId}`);
-    if (action === "archive" || body.archive === true) {
-      cards[idx].status = "archived";
-      cards[idx].updatedAt = now;
-      writeInboxCards(cards, baseHome);
-      return { ok: true, action, card: cards[idx], cards };
+      result = { action: "merge", card: target, mergedIds: sourceIds };
+      return remaining;
     }
-    const [removed] = cards.splice(idx, 1);
-    writeInboxCards(cards, baseHome);
-    return { ok: true, action: "delete", card: removed, cards };
-  }
 
-  throw new Error(`Unknown triage action "${action}"`);
+    if (action === "bounce") {
+      const cardId = String(body.cardId || "").trim();
+      const laneId = String(body.laneId || body.lane || "").trim();
+      if (!cardId || !laneId) throw new Error("bounce requires cardId and laneId");
+      const card = cards.find((c) => c.id === cardId);
+      if (!card) throw new Error(`Card not found: ${cardId}`);
+
+      card.laneId = laneId;
+      card.teamId = body.teamId ? String(body.teamId).trim() : teamIdForLane(laneId, card.text, teams);
+      if (body.scope && INBOX_SCOPES.includes(body.scope)) {
+        card.scope = body.scope;
+      }
+      card.updatedAt = now;
+
+      result = { action: "bounce", card };
+      return cards;
+    }
+
+    if (action === "update") {
+      const cardId = String(body.cardId || "").trim();
+      const patch = body.patch && typeof body.patch === "object" ? body.patch : {};
+      if (!cardId) throw new Error("update requires cardId");
+      const card = cards.find((c) => c.id === cardId);
+      if (!card) throw new Error(`Card not found: ${cardId}`);
+
+      // No topicAgentId: it names the agent park/handoff-topic archive, so only open-topic sets it.
+      const allowed = [
+        "status",
+        "title",
+        "text",
+        "scope",
+        "summaryNote",
+        "topicTitle",
+        "topicOpenedAt",
+        "handedOffAt",
+        "laneId",
+        "teamId",
+        "relatedCardId",
+        "relatedReason",
+      ];
+      for (const key of allowed) {
+        if (key in patch && patch[key] !== undefined) {
+          card[key] = patch[key];
+        }
+      }
+      card.updatedAt = now;
+
+      result = { action: "update", card };
+      return cards;
+    }
+
+    if (action === "delete" || action === "archive") {
+      const cardId = String(body.cardId || "").trim();
+      if (!cardId) throw new Error(`${action} requires cardId`);
+      const idx = cards.findIndex((c) => c.id === cardId);
+      if (idx < 0) throw new Error(`Card not found: ${cardId}`);
+      if (action === "archive" || body.archive === true) {
+        cards[idx].status = "archived";
+        cards[idx].updatedAt = now;
+        result = { action, card: cards[idx] };
+        return cards;
+      }
+      const [removed] = cards.splice(idx, 1);
+      result = { action: "delete", card: removed };
+      return cards;
+    }
+
+    throw new Error(`Unknown triage action "${action}"`);
+  });
+
+  return { ok: true, ...result, cards };
 }
 
 function clipTitle(s) {
@@ -885,22 +913,28 @@ export async function openTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
     };
   }
 
-  card.topicAgentId = created.id;
-  card.topicTitle = created.title || newTitle;
-  card.topicOpenedAt = now;
-  card.status = "parked";
-  card.updatedAt = now;
-  writeInboxCards(cards, baseHome);
+  let updatedCard = card;
+  const writtenCards = updateInboxCardsSync(baseHome, (current) => {
+    const target = current.find((c) => c.id === card.id);
+    if (!target) throw new Error(`Inbox card not found: ${card.id}`);
+    target.topicAgentId = created.id;
+    target.topicTitle = created.title || newTitle;
+    target.topicOpenedAt = now;
+    target.status = "parked";
+    target.updatedAt = now;
+    updatedCard = target;
+    return current;
+  });
 
-  const openTopicCards = cards
+  const openTopicCards = writtenCards
     .filter((c) => c.status === "parked" && c.topicAgentId)
     .sort((a, b) => String(a.topicOpenedAt || a.updatedAt || a.createdAt || "").localeCompare(String(b.topicOpenedAt || b.updatedAt || b.createdAt || "")));
   const oldestCard = openTopicCards[0] || null;
 
   return {
     ok: true,
-    card,
-    cards,
+    card: updatedCard,
+    cards: writtenCards,
     agent: created,
     agentId: created.id,
     spawnConfig: spawnCfg,
@@ -998,12 +1032,18 @@ export async function handoffTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
   const now = new Date().toISOString();
   const planNote = typeof body.planNote === "string" && body.planNote.trim() ? body.planNote.trim() : "";
 
-  card.status = "handed-off";
-  card.handedOffAt = now;
-  card.summaryNote = planNote || card.summaryNote || null;
-  card.topicAgentId = null;
-  card.updatedAt = now;
-  writeInboxCards(cards, baseHome);
+  let updatedCard = card;
+  const writtenCards = updateInboxCardsSync(baseHome, (current) => {
+    const target = current.find((c) => c.id === card.id);
+    if (!target) throw new Error(`Inbox card not found: ${card.id}`);
+    target.status = "handed-off";
+    target.handedOffAt = now;
+    target.summaryNote = planNote || target.summaryNote || null;
+    target.topicAgentId = null;
+    target.updatedAt = now;
+    updatedCard = target;
+    return current;
+  });
 
   const prevHome = process.env.VIBESQUAD_HOME;
   if (baseHome) process.env.VIBESQUAD_HOME = baseHome;
@@ -1013,16 +1053,16 @@ export async function handoffTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
       laneId,
       agent: targetAgentId || "topic-brainstorm",
       type: "handoff",
-      text: `topic-handoff (#${card.id} ${card.title}): ${planNote || card.summaryNote || "plan handed off to lead"}`,
-      refs: [card.id, summary.path],
+      text: `topic-handoff (#${updatedCard.id} ${updatedCard.title}): ${updatedCard.summaryNote || "plan handed off to lead"}`,
+      refs: [updatedCard.id, summary.path],
     });
     appendVsLogEntry({
       teamId,
       laneId,
       agent: targetAgentId || "topic-brainstorm",
       type: "metric",
-      text: `tokens-per-plan-handoff: ${usedTokens} tok (topic #${card.id} ${card.title})`,
-      refs: [card.id, summary.path],
+      text: `tokens-per-plan-handoff: ${usedTokens} tok (topic #${updatedCard.id} ${updatedCard.title})`,
+      refs: [updatedCard.id, summary.path],
     });
   } finally {
     if (baseHome) {
@@ -1033,8 +1073,8 @@ export async function handoffTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
 
   return {
     ok: true,
-    card,
-    cards,
+    card: updatedCard,
+    cards: writtenCards,
     archivedAgentId,
     handedOffAt: now,
     summaryPath: summary.path,
@@ -1125,17 +1165,23 @@ export async function parkTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
   } else {
     parkedSummary = `Parked topic summary (${card.topicTitle || card.title})`;
   }
-  card.summaryNote = parkedSummary;
-  card.parkedSummary = parkedSummary;
-  card.status = "parked";
-  card.topicAgentId = null;
-  card.updatedAt = now;
-  writeInboxCards(cards, baseHome);
+  let updatedCard = card;
+  const writtenCards = updateInboxCardsSync(baseHome, (current) => {
+    const target = current.find((c) => c.id === card.id);
+    if (!target) throw new Error(`Inbox card not found: ${card.id}`);
+    target.summaryNote = parkedSummary;
+    target.parkedSummary = parkedSummary;
+    target.status = "parked";
+    target.topicAgentId = null;
+    target.updatedAt = now;
+    updatedCard = target;
+    return current;
+  });
 
   return {
     ok: true,
-    card,
-    cards,
+    card: updatedCard,
+    cards: writtenCards,
     parkedSummary,
     archivedAgentId,
   };
