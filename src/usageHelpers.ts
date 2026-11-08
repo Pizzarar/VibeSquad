@@ -344,22 +344,44 @@ export function inboxIdLabel(id: string): string {
 
 const money = (n: number) => `$${n >= 100 ? n.toFixed(0) : n.toFixed(2)}`;
 
-export function profileSummary(profiles: { mergedUnits: number }[]): string {
-  const merged = profiles.reduce((s, p) => s + p.mergedUnits, 0);
-  return `Implementer / profile comparison · ${profiles.length} profile${profiles.length === 1 ? "" : "s"} · ${merged} merged`;
+export function profileSummary(profiles: unknown[]): string {
+  return `Implementer / Profile comparison · ${profiles.length} profile${profiles.length === 1 ? "" : "s"}`;
 }
 
-export function workflowSummary(rows: { units: number; costUsd?: number }[]): string {
-  const units = rows.reduce((s, w) => s + w.units, 0);
-  const cost = rows.reduce((s, w) => s + (w.costUsd ?? 0), 0);
-  return `Workflow era · ${rows.length} mode${rows.length === 1 ? "" : "s"} · ${units} units · ${money(cost)}`;
+export function workflowSummary(savings: { routingSavingsUsd: number; parallelSpeedup: number | null } | null | undefined, modes: number): string {
+  const parts = ["Savings & Workflow Era"];
+  if (savings) parts.push(`saved ${usdText(savings.routingSavingsUsd)} vs Opus`, `${speedupText(savings.parallelSpeedup)} speedup`);
+  parts.push(`${modes} mode${modes === 1 ? "" : "s"}`);
+  return parts.join(" · ");
 }
+
+export function rolesSummary(coordShare: number | null | undefined, loops: number, storms: number): string {
+  const split = typeof coordShare === "number" && Number.isFinite(coordShare) ? `coord ${pctText(coordShare)} / exec ${pctText(1 - coordShare)}` : "coord — / exec —";
+  return `Roles, Loops & Storms · ${split} · ${loops} loop${loops === 1 ? "" : "s"} · ${storms} storm${storms === 1 ? "" : "s"}`;
+}
+
+export function efficiencySummary(cohorts: { recent: { firstTryPassRate?: number | null } } | null | undefined, floor: { cleanShare: number | null; cleanCostPerUnit: number | null } | null | undefined): string {
+  const parts = ["Efficiency & Clean-Run Floor"];
+  if (cohorts) parts.push(`1st-try PASS ${pctText(cohorts.recent.firstTryPassRate)}`);
+  if (floor) parts.push(`clean ${pctText(floor.cleanShare)} (${usdText(floor.cleanCostPerUnit)}/unit)`);
+  return parts.join(" · ");
+}
+
+export function reviewSummary(counts: { queue: number; accepted: number; closed: number }, status: string): string {
+  const parts = ["Bug & Perfection Triage Inbox", `${counts.queue} in queue`, `${counts.accepted} accepted`, `${counts.closed} rejected`];
+  if (status) parts.push(status);
+  return parts.join(" · ");
+}
+
+/** Persistence key for a collapsible dashboard section. */
+export const usageOpenKey = (id: string): string => `vs.usage.open.${id}`;
 
 /** One-line rollups for the collapsed detail tables. */
-export function laneSummary(rows: { costUsd: number; merged: number }[]): string {
+export function laneSummary(rows: { costUsd: number; merged: number; looped?: number }[]): string {
   const cost = rows.reduce((s, r) => s + r.costUsd, 0);
   const merged = rows.reduce((s, r) => s + r.merged, 0);
-  return `Lane breakdown · ${rows.length} lane${rows.length === 1 ? "" : "s"} · ${money(cost)} · ${merged} merged`;
+  const loops = rows.reduce((s, r) => s + (r.looped ?? 0), 0);
+  return `Lane breakdown · ${rows.length} lane${rows.length === 1 ? "" : "s"} · ${money(cost)} · ${merged} merged · ${loops} loop${loops === 1 ? "" : "s"}`;
 }
 
 /** Implementers first, then by merged units desc, then name. */

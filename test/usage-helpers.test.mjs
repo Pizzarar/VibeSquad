@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { cohortValueText, COHORT_METRICS, deltaText, deltaTrend, floorSegments, lowCostCoverage, sortWorkflows, speedupText, tokText, usdText } from "../src/usageHelpers.ts";
-import { bugInboxCards, inboxLaneBadge, isTriageCard, buildProfiles, buildRows, filterInbox, humanizeProfile, inboxBucket, inboxCounts, inboxSourceBadge, laneSummary, profileSummary, workflowSummary, dur, etaText, foldRoles, pctText, relTime, reviewBullets, sortProfiles, sortRows, splitBullets, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workIdlePct } from "../src/usageHelpers.ts";
+import { bugInboxCards, inboxLaneBadge, isTriageCard, buildProfiles, buildRows, filterInbox, humanizeProfile, inboxBucket, inboxCounts, inboxSourceBadge, laneSummary, profileSummary, workflowSummary, rolesSummary, efficiencySummary, reviewSummary, usageOpenKey, dur, etaText, foldRoles, pctText, relTime, reviewBullets, sortProfiles, sortRows, splitBullets, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workIdlePct } from "../src/usageHelpers.ts";
 
 const st = (turns, costUsd, i, o) => ({ turns, costUsd, inputTokens: i, outputTokens: o, avgTokensPerTurn: turns ? Math.round((i + o) / turns) : 0 });
 
@@ -315,11 +315,20 @@ test("bug inbox helpers: lane filter, buckets, counts, source badges", () => {
   assert.equal(inboxSourceBadge(undefined), null);
 });
 
-test("collapsed-table rollup summaries", () => {
-  assert.equal(laneSummary([{ costUsd: 1.5, merged: 2 }, { costUsd: 2, merged: 1 }]), "Lane breakdown · 2 lanes · $3.50 · 3 merged");
-  assert.equal(profileSummary([{ mergedUnits: 4 }]), "Implementer / profile comparison · 1 profile · 4 merged");
-  assert.equal(workflowSummary([{ units: 3, costUsd: 120 }]), "Workflow era · 1 mode · 3 units · $120");
+test("collapsed-section rollup summaries", () => {
+  assert.equal(laneSummary([{ costUsd: 1.5, merged: 2, looped: 1 }, { costUsd: 2, merged: 1 }]), "Lane breakdown · 2 lanes · $3.50 · 3 merged · 1 loop");
+  assert.equal(profileSummary([{}]), "Implementer / Profile comparison · 1 profile");
+  assert.equal(workflowSummary({ routingSavingsUsd: 120, parallelSpeedup: 2.5 }, 3), "Savings & Workflow Era · saved $120 vs Opus · 2.5x speedup · 3 modes");
+  assert.equal(workflowSummary(null, 1), "Savings & Workflow Era · 1 mode");
+  assert.equal(rolesSummary(0.25, 2, 0), "Roles, Loops & Storms · coord 25% / exec 75% · 2 loops · 0 storms");
+  assert.equal(rolesSummary(null, 0, 1), "Roles, Loops & Storms · coord — / exec — · 0 loops · 1 storm");
+  assert.equal(efficiencySummary({ recent: { firstTryPassRate: 0.8 } }, { cleanShare: 0.6, cleanCostPerUnit: 1.5 }), "Efficiency & Clean-Run Floor · 1st-try PASS 80% · clean 60% ($1.50/unit)");
+  assert.equal(efficiencySummary(null, null), "Efficiency & Clean-Run Floor");
+  assert.equal(reviewSummary({ queue: 3, accepted: 2, closed: 1 }, "waiting for new turns"), "Bug & Perfection Triage Inbox · 3 in queue · 2 accepted · 1 rejected · waiting for new turns");
+  assert.equal(reviewSummary({ queue: 0, accepted: 0, closed: 0 }, ""), "Bug & Perfection Triage Inbox · 0 in queue · 0 accepted · 0 rejected");
+  assert.equal(usageOpenKey("roles"), "vs.usage.open.roles");
 });
+
 
 test("buildProfiles fold weights workPct by working+idle ms across 3 orphan rows", () => {
   const base = { provider: "claude", role: "worker", runs: 1, turns: 1, passRate: 1, avgReviewRounds: 0, costPerMergedUnit: null, mergedUnits: 0, fixAfterMergeRate: 0 };
