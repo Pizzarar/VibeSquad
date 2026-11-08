@@ -197,7 +197,7 @@ export type RemoteError = { kind: RemoteErrorKind; message: string };
 const MESSAGES: Record<RemoteErrorKind, string> = {
   "bad-input": "Enter the server address and the 6-digit code from Pair a device on your PC, or scan its QR code.",
   unreachable:
-    "Couldn't reach your PC. Check this phone is on the same Wi-Fi (Home LAN) or on NordVPN Meshnet, that VibeSquad is running there, and and that the CA fingerprint matches the one on your PC.",
+    "Couldn't reach your PC. Check this phone is on the same Wi-Fi (Home LAN) or on NordVPN Meshnet, that VibeSquad is running there, and that the CA fingerprint matches the one on your PC.",
   timeout: "Timed out waiting for your PC. Check the address and your connection, then try again.",
   unknown: "Something went wrong connecting to your PC.",
 };

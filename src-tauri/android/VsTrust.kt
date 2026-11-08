@@ -51,6 +51,13 @@ object VsTrust {
         return "${m.groupValues[1].removePrefix("[").removeSuffix("]")}:$port"
     }
 
+    /** URL authority for a normalized key: IPv6 literals get their brackets back. */
+    private fun urlAuthority(key: String): String {
+        val i = key.lastIndexOf(':')
+        val host = key.substring(0, i)
+        return (if (host.contains(':')) "[$host]" else host) + key.substring(i)
+    }
+
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     private fun parseCert(bytes: ByteArray): X509Certificate =
@@ -63,14 +70,14 @@ object VsTrust {
 
     // ---- pairing: fetch + verify + pin ----
 
-    private fun fetchCa(authority: String): ByteArray {
+    private fun fetchCa(key: String): ByteArray {
         val acceptAny = object : X509TrustManager {
             override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
             override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
             override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
         }
         val ctx = SSLContext.getInstance("TLS").apply { init(null, arrayOf(acceptAny), null) }
-        val conn = URL("https://$authority/ca.crt").openConnection() as HttpsURLConnection
+        val conn = URL("https://${urlAuthority(key)}/ca.crt").openConnection() as HttpsURLConnection
         // Deliberately unauthenticated channel, used for this one GET only: the body is checked against the QR fingerprint.
         conn.sslSocketFactory = ctx.socketFactory
         conn.hostnameVerifier = HostnameVerifier { _, _ -> true }
@@ -100,7 +107,7 @@ object VsTrust {
         val key = key(authority) ?: throw IllegalArgumentException("not a valid server address")
         val want = fpHex.lowercase().replace(Regex("[:\\s-]"), "")
         if (!Regex("^[0-9a-f]{16,64}$").matches(want)) throw IllegalArgumentException("invalid CA fingerprint")
-        val ca = parseCert(fetchCa(authority))
+        val ca = parseCert(fetchCa(key))
         val got = sha256Hex(ca.encoded)
         if (!got.startsWith(want)) throw SecurityException("CA fingerprint mismatch: this is not the PC the QR / fingerprint came from")
         if (ca.basicConstraints < 0) throw SecurityException("CA fingerprint matched but the certificate is not a CA")
@@ -122,7 +129,7 @@ object VsTrust {
         val ks = KeyStore.getInstance(KeyStore.getDefaultType()).apply { load(null, null); setCertificateEntry("vs-ca", ca) }
         val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()).apply { init(ks) }
         val ctx = SSLContext.getInstance("TLS").apply { init(null, tmf.trustManagers, null) }
-        val conn = URL("https://$authority/api/health").openConnection() as HttpsURLConnection
+        val conn = URL("https://${urlAuthority(key)}/api/health").openConnection() as HttpsURLConnection
         conn.sslSocketFactory = ctx.socketFactory
         conn.connectTimeout = 5000
         conn.readTimeout = 5000
@@ -164,7 +171,7 @@ object VsTrust {
     fun allow(c: Context, error: SslError): Boolean = try {
         val uri = Uri.parse(error.url)
         val host = (uri.host ?: "").lowercase().removePrefix("[").removeSuffix("]")
-        val key = key("$host:${if (uri.port > 0) uri.port else 443}")
+        val key = key("${if (host.contains(':')) "[$host]" else host}:${if (uri.port > 0) uri.port else 443}")
         val ca = key?.let { loadCa(c, it) }
         val leaf = leafOf(error.certificate)
         if (uri.scheme != "https" || key == null || ca == null || leaf == null) {
