@@ -189,24 +189,26 @@ export function capBriefForSave(content: string, maxChars = 19_500): string {
   return content.slice(0, headLen) + sep + content.slice(content.length - tailLen);
 }
 
-async function readBrief(laneId: string, doFetch: typeof fetch): Promise<string> {
-  const url = `/__vibesquad/brainstorm-summary?lane=${encodeURIComponent(laneId)}`;
+async function readBrief(laneId: string, doFetch: typeof fetch, teamId?: string): Promise<string> {
+  const url = `/__vibesquad/brainstorm-summary?lane=${encodeURIComponent(laneId)}${teamId ? `&teamId=${encodeURIComponent(teamId)}` : ""}`;
   const cur = (await (await doFetch(url)).json().catch(() => ({}))) as { ok?: boolean; content?: string; revision?: string; error?: string };
   if (!cur.ok) throw new Error(cur.error ?? "Could not read the brief");
   if (typeof cur.revision === "string") lastBriefRevision.set(laneId, cur.revision);
   return String(cur.content ?? "");
 }
 
-async function writeBrief(laneId: string, content: string, doFetch: typeof fetch, revision = lastBriefRevision.get(laneId)): Promise<void> {
+// teamId: the Squad id, so the server finds the project folder before the lane is in teams.json. Returns true when the server fell back to its runtime folder.
+async function writeBrief(laneId: string, content: string, doFetch: typeof fetch, revision = lastBriefRevision.get(laneId), teamId?: string): Promise<boolean> {
   const capped = content.length >= 20_000 || content.length > 19_500 ? capBriefForSave(content) : content;
   const res = await doFetch("/__vibesquad/brainstorm-summary", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ laneId, content: capped, ...(revision ? { revision } : {}) }),
+    body: JSON.stringify({ laneId, content: capped, ...(revision ? { revision } : {}), ...(teamId ? { teamId } : {}) }),
   });
-  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; revision?: string; error?: string };
+  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; revision?: string; error?: string; fallback?: boolean };
   if (!res.ok || !body.ok) throw new Error(body.error ?? `Brief save failed (${res.status})`);
   if (typeof body.revision === "string") lastBriefRevision.set(laneId, body.revision);
+  return body.fallback === true;
 }
 
 async function appendToBrief(laneId: string, line: string, doFetch: typeof fetch): Promise<void> {
@@ -229,7 +231,7 @@ export function markPinComplete(pin: Pin, deps: CompleteDeps = {}): Promise<{ ok
   const doFetch = deps.fetch ?? fetch;
   return runMarkComplete(pin, {
     readBrief: (laneId) => readBrief(laneId, doFetch),
-    writeBrief: (laneId, content) => writeBrief(laneId, content, doFetch),
+    writeBrief: (laneId, content) => writeBrief(laneId, content, doFetch).then(() => {}),
     retire: deps.retire ?? retireAgent,
     archive: deps.archive ?? archiveAgent,
     saveTeams: deps.saveTeams ?? saveTeams,
@@ -271,7 +273,7 @@ export function removePin(pin: Pin, plan: RemovePlan, opts: { deleteWorktrees: b
   return runRemoveTeam(pin, plan, opts, {
     archive: deps.archive ?? archiveAgent,
     saveTeams: deps.saveTeams ?? saveTeams,
-    ...(DEMO ? {} : { readBrief: (laneId: string) => readBrief(laneId, doFetch), writeBrief: (laneId: string, c: string) => writeBrief(laneId, c, doFetch) }),
+    ...(DEMO ? {} : { readBrief: (laneId: string) => readBrief(laneId, doFetch), writeBrief: (laneId: string, c: string) => writeBrief(laneId, c, doFetch).then(() => {}) }),
     removeWorktrees: async (worktrees) => {
       if (DEMO) return worktrees.map((w) => ({ ...w, worktree: "removed" as const, branchResult: "deleted" }));
       const res = await doFetch("/__vibesquad/remove-team-worktrees", {
@@ -333,6 +335,8 @@ export function setLastBrainstormProfile(profile: string): void {
 export type CreatePinDeps = Pick<OpenPinDeps, "fetch" | "getTeams" | "saveTeams" | "agents" | "onSpawned" | "profile"> & {
   lastProfile?: string;
   startBuddies?: boolean;
+  /** Called when the server saved the brief in its runtime folder instead of the project's. */
+  onBriefFallback?: (laneId: string) => void;
 };
 
 /** The pinned team an idea most likely belongs to in this squad, or null ("Sounds like X. Use it?"). */
@@ -392,12 +396,13 @@ export async function createPin(squadId: string, name: string, idea: string, dep
     if (!DEMO) {
       let updated: string | null = null;
       try {
-        const existingBrief = await readBrief(reopenTarget.id, doFetch);
+        const existingBrief = await readBrief(reopenTarget.id, doFetch, squadId);
         updated = appendIdeaToOpenSection(existingBrief, idea);
       } catch {
         updated = null;
       }
-      await writeBrief(reopenTarget.id, updated ?? newPinBrief(reopenTarget.id, clean, idea), doFetch);
+      const fellBack = await writeBrief(reopenTarget.id, updated ?? newPinBrief(reopenTarget.id, clean, idea), doFetch, undefined, squadId);
+      if (fellBack) deps.onBriefFallback?.(reopenTarget.id);
     }
     let next = teams;
     await (deps.saveTeams ?? saveTeams)((cur) =>
@@ -428,7 +433,7 @@ export async function createPin(squadId: string, name: string, idea: string, dep
   const code = laneCodesForTeam({ lanes: [...squad.lanes, { id, name: clean }] })[id];
   const lane: PinLane = { id, name: clean, ...(code ? { code } : {}), state: "pinned", ...(deps.lastProfile ? { lastProfile: deps.lastProfile } : {}) };
   // Brief first: a failed write leaves no half-made pin behind.
-  if (!DEMO) await writeBrief(lane.id, newPinBrief(lane.id, clean, idea), doFetch);
+  if (!DEMO && (await writeBrief(lane.id, newPinBrief(lane.id, clean, idea), doFetch, undefined, squadId))) deps.onBriefFallback?.(lane.id);
   // The brief write is async, so add the lane to whatever the registry holds by then.
   let next = teams;
   await (deps.saveTeams ?? saveTeams)((cur) =>
