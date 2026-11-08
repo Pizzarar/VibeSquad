@@ -27,7 +27,8 @@ import { SubagentList } from "./SubagentList";
 import { Spinner, Stamp, TimelineSkeleton, useDelayedBusy } from "./QuickWinsUi";
 import { MermaidView } from "./MermaidView";
 import { noteTimelineOffers, useLooksDoneId } from "./PinGrid";
-import { SpinOffCard, SendToCard, findPinForAgent, showPinToast } from "./PinIdeas";
+import { refreshDismissedCards } from "./pinActions";
+import { SpinOffCard, SendToCard, findPinForAgent, showPinToast, useSendTo } from "./PinIdeas";
 import { LooksDoneCard } from "./PinDone";
 import { hasLooksDone, isHubPin, parseSendTo, parseSpinOff, sendToCardId, spinOffCardId } from "./pins";
 
@@ -407,6 +408,7 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 export function MarkdownRenderer({ text, agentId, doc = false }: { text: string; agentId?: string; doc?: boolean }) {
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const liveLooksDoneId = useLooksDoneId(agentId ?? null);
+  const newestOffer = useSendTo(agentId ?? null); // only for its pre-D1 ids
   useSyncExternalStore(subscribeBareNames, bareNamesVersion); // re-render when a bare filename resolves
   const tokens = tokenizeMarkdown(text, doc);
 
@@ -472,7 +474,10 @@ export function MarkdownRenderer({ text, agentId, doc = false }: { text: string;
             return (
               <div key={i} className="tl-sendto-block" data-testid="tl-sendto-block">
                 <CodeBlock lang={tok.lang || "vs:send-to"} code={tok.code} />
-                <SendToCard pin={pin} offer={{ ...parsedSendTo, id: sendToCardId(agentId ?? "inline", parsedSendTo) }} variant="bar" />
+                <SendToCard pin={pin} offer={(() => {
+                    const id = sendToCardId(agentId ?? "inline", parsedSendTo);
+                    return { ...parsedSendTo, id, legacyIds: [`${agentId ?? "inline"}:inline:${i}`, ...(newestOffer?.id === id ? (newestOffer.legacyIds ?? []) : [])] };
+                  })()} variant="bar" />
               </div>
             );
           }
@@ -952,6 +957,10 @@ export function useTimeline(agentId: string, status: string, active = true, pred
   }, [agentId, entries]);
 
   useEffect(() => {
+    if (agentId) void refreshDismissedCards(); // a card fired on another tab/device while this tab was open
+  }, [agentId]);
+
+  useEffect(() => {
     if (DEMO) {
       setEntries(demoTimeline(agentId) as Entry[]);
       setHasMore(false);
@@ -1228,6 +1237,7 @@ export function Timeline({
     reasoningText(lastEntry?.item).length || String(lastEntry?.item?.text ?? "").length,
     JSON.stringify(lastEntry?.item?.detail ?? "").length,
     pendingHere.length,
+    queuedAhead,
   ].join("|");
   const stickToBottom = () => {
     const el = timelineRef.current;
@@ -1450,11 +1460,6 @@ export function Timeline({
         </div>
       )}
       {error && <div className="tl tl-error">{error}</div>}
-      {queuedAhead !== undefined && (
-        <div className="tl tl-note info" data-testid="tl-queued">
-          <Spinner label={`Queued, ${queuedAhead} ahead — starts when a slot frees`} />
-        </div>
-      )}
       {loaded && !error && shown.length === 0 && (
         agentStatus === "running" || agentStatus === "initializing" ? (
           <div className="tl tl-note info" data-testid="tl-booting-indicator">
@@ -1483,6 +1488,11 @@ export function Timeline({
         </TimelineErrorBoundary>
         </Fragment>
       ))}
+      {queuedAhead !== undefined && (
+        <div className="tl tl-note info" data-testid="tl-queued">
+          <Spinner label={`Queued, ${queuedAhead} ahead — starts when a slot frees`} />
+        </div>
+      )}
       {pendingHere
         .filter((p) => !covered.includes(p.id))
         .map((p) => (

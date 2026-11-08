@@ -1,9 +1,9 @@
 // H1: handoff_lead MCP tool / `vs lead handoff` over the existing lead-handoff flow. Fake in-memory backend, temp VIBESQUAD_HOME, never the real runner.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { seedDefaultPack } from "../server/profiles.mjs";
 import { performLeadHandoffHttp, resetLeadHandoffState } from "../server/lead-handoff.mjs";
 import { callTool, createContext, VS_TOOLS } from "../server/mcp/tools.mjs";
@@ -79,6 +79,45 @@ test("Buddy on its own lane: successor spawned, old lead relabelled former-lead,
     assert.equal(t.agents.get("rn-succ-1").labels["vs.handoff-trigger"], "buddy");
     assert.equal(t.agents.get("rn-worker").labels["vs.parent"], "rn-succ-1");
     assert.deepEqual(await liveLeads(t.ctx), ["rn-succ-1"]);
+  } finally { t.cleanup(); }
+});
+
+test("stale initializing predecessor: handoff_lead retires it immediately but keeps its written packet", async () => {
+  const t = setup({ callerRole: "brainstorm", callerId: "rn-buddy" });
+  try {
+    const lead = t.agents.get("rn-lead");
+    lead.status = "initializing"; // stuck out of the gate, never ran a turn
+    lead.createdAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    // The predecessor did write a packet (mtime >= createdAt): it must be kept, never overwritten.
+    const packetPath = join(t.vsHome, "teams", "site", "packet-site-polish.md");
+    mkdirSync(dirname(packetPath), { recursive: true });
+    writeFileSync(packetPath, "# predecessor's own judgment\n", "utf8");
+
+    const r = await callTool(t.ctx, "handoff_lead", {});
+    assert.equal(r.id, "rn-succ-1");
+    assert.equal(r.oldLeadId, "rn-lead");
+    assert.equal(t.agents.get("rn-lead").labels.role, "former-lead", "stale predecessor retired immediately");
+    assert.deepEqual(await liveLeads(t.ctx), ["rn-succ-1"]);
+    assert.ok(readFileSync(packetPath, "utf8").includes("predecessor's own judgment"), "a predecessor-written packet is kept, not synthesized over");
+  } finally { t.cleanup(); }
+});
+
+test("healthy idle lead: handoff_lead keeps its packet (silence does not make it stale)", async () => {
+  const t = setup({ callerRole: "brainstorm", callerId: "rn-buddy" });
+  try {
+    const lead = t.agents.get("rn-lead");
+    lead.status = "idle";
+    lead.createdAt = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // alive an hour
+    lead.updatedAt = new Date(Date.now() - 31 * 60 * 1000).toISOString(); // silent 31 min
+    const packetPath = join(t.vsHome, "teams", "site", "packet-site-polish.md");
+    mkdirSync(dirname(packetPath), { recursive: true });
+    writeFileSync(packetPath, "# healthy judgment\n", "utf8");
+
+    const r = await callTool(t.ctx, "handoff_lead", {});
+    assert.equal(r.id, "rn-succ-1");
+    assert.equal(t.agents.get("rn-lead").labels.role, "former-lead");
+    assert.deepEqual(await liveLeads(t.ctx), ["rn-succ-1"]);
+    assert.ok(readFileSync(packetPath, "utf8").includes("healthy judgment"), "healthy idle lead's own packet is trusted");
   } finally { t.cleanup(); }
 });
 

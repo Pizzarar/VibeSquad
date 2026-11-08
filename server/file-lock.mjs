@@ -44,14 +44,14 @@ export function withFileLockSync(targetPath, fn, { timeoutMs = FILE_LOCK_TIMEOUT
   for (;;) {
     if (tryCreateLock(lockFile)) break;
     const info = readLock(lockFile);
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out after ${timeoutMs}ms waiting for lock ${lockFile} (held by pid ${info?.pid ?? "unknown"})`);
+    }
     let age = null;
     try {
       age = Date.now() - statSync(lockFile).mtimeMs;
     } catch {
       continue; // vanished between create and stat: retry at once
-    }
-    if (Date.now() >= deadline) {
-      throw new Error(`Timed out after ${timeoutMs}ms waiting for lock ${lockFile} (held by pid ${info?.pid ?? "unknown"})`);
     }
     if (info?.pid === process.pid) { // our own lock (re-entry): never steal it, just time out
       sleepSync(POLL_MS);

@@ -44,10 +44,11 @@ import {
   normalizeRoleLabel,
   ordStringOf,
   resolveAgentIdentity,
+  resolveLeadWinner,
   whoCandidate,
 } from "../server/identity.mjs";
 import { loadProfiles } from "../server/profiles.mjs";
-import { isCapExpired, pruneExpiredCapsFile } from "../server/provider-failover.mjs";
+import { readLiveCapDoc, setProviderCapped } from "../server/provider-failover.mjs";
 import { staleWarning } from "../server/stale-runtime.mjs";
 import { localTokenPath, requestLocalLoginUrl } from "../server/local-token.mjs";
 import {
@@ -615,6 +616,7 @@ function listAgentsViaRunner() {
     name: a.title,
     title: a.title,
     status: a.status,
+    queued: a.queued ?? null,
     cwd: a.cwd ?? "",
     archivedAt: a.archivedAt ?? null,
     archived: Boolean(a.archivedAt),
@@ -625,6 +627,9 @@ function listAgentsViaRunner() {
     pendingPermissions: [],
     usage: null,
     lastUsage: a.lastUsage ?? null,
+    resumable: a.resumable === true,
+    createdAt: a.createdAt ?? null,
+    updatedAt: a.updatedAt ?? null,
   }));
 }
 
@@ -957,7 +962,8 @@ function extractAgentTokens(a) {
 }
 
 function formatWhoLine(entry) {
-  return `${entry.title} · ${entry.id} · ${entry.status} · ${entry.tokensLabel}`;
+  const status = entry.queued ? `queued(${entry.queued.ahead})` : entry.status;
+  return `${entry.title} · ${entry.id} · ${status} · ${entry.tokensLabel}`;
 }
 
 async function commandWho(flags) {
@@ -996,7 +1002,7 @@ async function commandWho(flags) {
     if (target === "workers" && role !== "worker") continue;
     if (target === "all" && role !== "lead" && role !== "brainstorm" && role !== "worker") continue;
 
-    rawMatched.push({ agent: a, title: title || a.id, role, status, teamId, lane });
+    rawMatched.push({ agent: a, title: title || a.id, role, status, teamId, lane, queued: a.queued ?? null });
   }
 
   if (squadWide) {
@@ -1005,13 +1011,14 @@ async function commandWho(flags) {
     rawMatched.sort((x, y) => rank(x) - rank(y) || x.lane.localeCompare(y.lane));
   }
 
-  const matched = rawMatched.map(({ agent: a, title, role, status, teamId, lane }) => {
+  const matched = rawMatched.map(({ agent: a, title, role, status, teamId, lane, queued }) => {
     const { tokens, tokensLabel } = extractAgentTokens(a);
     const entry = {
       id: a.id,
       title,
       role,
       status,
+      queued,
       team: teamId,
       lane,
       tokens,
@@ -1020,30 +1027,45 @@ async function commandWho(flags) {
     return { ...entry, line: formatWhoLine(entry) };
   });
 
-  // Two live main Buddies for one (lane, topic) is a conflict too (docs/PLAN_BUGS_BATCH2.md block 0).
-  // Topic Buddies are separate seats, so only same-topic pairs count.
-  const bsTopics = rawMatched.map((m) => String(m.agent.labels?.topic ?? m.agent.labels?.["vs.inbox-card-id"] ?? "").trim().toLowerCase());
-  const bsConflict = target === "brainstorm" && bsTopics.some((t, i) => bsTopics.indexOf(t) !== i);
-  if (target === "lead" || bsConflict) {
-    const status = matched.length === 1 ? "ok" : matched.length === 0 ? "none" : "conflict";
-    const exitCode = matched.length === 1 ? 0 : matched.length === 0 ? 1 : 2;
+  // Single-role seats resolve a winner (docs/PLAN_BUGS_BATCH2.md block 0 for Buddies): a closed-but-resumable holder
+  // (a lost lead/Buddy) loses to a live one, and 2+ live holders of the same seat is a conflict. Buddies are one seat per topic.
+  if (target === "lead" || target === "brainstorm") {
+    const topicKey = (m) =>
+      String(m.agent.labels?.topic ?? m.agent.labels?.["vs.inbox-card-id"] ?? "").trim().toLowerCase();
+    const groups = new Map();
+    for (const m of rawMatched) {
+      const k = target === "lead" ? "" : topicKey(m);
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(m);
+    }
+    const winners = [];
+    const conflictRows = [];
+    for (const group of groups.values()) {
+      const { winner, conflict } = resolveLeadWinner(group.map((m) => m.agent));
+      if (conflict) conflictRows.push(...group);
+      else if (winner) winners.push(winner);
+    }
+    const conflictIds = new Set(conflictRows.map((m) => m.agent.id));
+    const entries = conflictIds.size
+      ? matched.filter((m) => conflictIds.has(m.id))
+      : matched.filter((m) => winners.some((w) => w.id === m.id));
+    const status = conflictIds.size ? "conflict" : entries.length ? "ok" : "none";
+    const exitCode = conflictIds.size ? 2 : entries.length ? 0 : 1;
     if (flags.json) {
-      process.stdout.write(JSON.stringify({ status, entries: matched }, null, 2) + "\n");
+      process.stdout.write(JSON.stringify({ status, entries }, null, 2) + "\n");
       return exitCode;
     }
-    if (matched.length === 0) {
+    if (!entries.length) {
       process.stdout.write("NONE\n");
       return 1;
     }
-    if (matched.length === 1) {
-      process.stdout.write(`${matched[0].line}\n`);
-      return 0;
+    if (conflictIds.size) {
+      process.stdout.write("CONFLICT\n");
+      for (const item of entries) process.stdout.write(`${item.line}\n`);
+      return 2;
     }
-    process.stdout.write("CONFLICT\n");
-    for (const item of matched) {
-      process.stdout.write(`${item.line}\n`);
-    }
-    return 2;
+    for (const item of entries) process.stdout.write(`${item.line}\n`);
+    return 0;
   }
 
   const status = matched.length > 0 ? "ok" : "none";
@@ -1121,7 +1143,7 @@ async function commandWhoami(flags) {
     const leadCandidates = [];
     for (const a of agents) {
       const status = String(a.status ?? "unknown").trim();
-      if (a.archivedAt || a.archived || a.internal || status.toLowerCase() === "closed") continue;
+      if (a.archivedAt || a.archived || a.internal || (status.toLowerCase() === "closed" && a.resumable !== true)) continue;
       if (isRetiredAgent(a.labels ?? {})) continue;
       const aResolved = resolveAgentIdentity(a, { teams: TEAM_DEFS, cwd: a.cwd, agentsById });
       if (aResolved.isOrphan) continue;
@@ -1130,7 +1152,8 @@ async function commandWhoami(flags) {
       leadCandidates.push(a);
     }
     if (leadCandidates.length > 0) {
-      const lead = leadCandidates[0];
+      const { winner } = resolveLeadWinner(leadCandidates);
+      const lead = winner;
       const { tokens, tokensLabel } = extractAgentTokens(lead);
       const title = String(lead.title ?? lead.name ?? lead.id).trim();
       const status = String(lead.status ?? "unknown").trim();
@@ -1981,19 +2004,7 @@ function cappedProvidersFile() {
 }
 
 function readCappedProviders() {
-  const { value } = readJsonFileWithBom(cappedProvidersFile(), { fallback: null, label: "capped-providers.json" });
-  if (value && typeof value === "object" && value.capped && typeof value.capped === "object" && !Array.isArray(value.capped)) {
-    // Expired caps (past their reset time, or 5 h after updatedAt) are dropped and pruned, so `vs cap list` never shows them.
-    const live = Object.fromEntries(Object.entries(value.capped).filter(([, v]) => !isCapExpired(v)));
-    if (Object.keys(live).length !== Object.keys(value.capped).length) pruneExpiredCapsFile(cappedProvidersFile());
-    return { ...value, capped: live };
-  }
-  return { capped: {} };
-}
-
-function writeCappedProviders(doc) {
-  fs.mkdirSync(BASE_DIR, { recursive: true });
-  fs.writeFileSync(cappedProvidersFile(), JSON.stringify(doc, null, 2) + "\n", "utf8");
+  return readLiveCapDoc({ cappedProvidersPath: cappedProvidersFile() });
 }
 
 // ---------------------------------------------------------------------------
@@ -2102,12 +2113,14 @@ function commandCap(flags) {
     return 0;
   }
 
-  if (sub === "add") {
+  if (sub === "add" || sub === "set") {
     const provider = String(flags._[1] ?? "").trim().toLowerCase();
     if (!provider) throw new Error("cap add needs a provider: vs cap add <provider>");
-    const doc = readCappedProviders();
-    doc.capped[provider] = { reason: "cli cap", updatedAt: new Date().toISOString() };
-    writeCappedProviders(doc);
+    setProviderCapped(provider, true, {
+      reason: "cli cap",
+      cappedProvidersPath: cappedProvidersFile(),
+      normalizeKey: false,
+    });
     process.stdout.write(`capped ${provider}\n`);
     return 0;
   }
@@ -2115,9 +2128,10 @@ function commandCap(flags) {
   if (sub === "clear") {
     const provider = String(flags._[1] ?? "").trim().toLowerCase();
     if (!provider) throw new Error("cap clear needs a provider: vs cap clear <provider>");
-    const doc = readCappedProviders();
-    delete doc.capped[provider];
-    writeCappedProviders(doc);
+    setProviderCapped(provider, false, {
+      cappedProvidersPath: cappedProvidersFile(),
+      normalizeKey: false,
+    });
     process.stdout.write(`cleared ${provider}\n`);
     return 0;
   }

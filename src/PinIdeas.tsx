@@ -3,7 +3,7 @@
 // and the toast both report to. Side effects live in src/pinActions.ts.
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { bestOverlap, DEFAULT_PIN_PROFILE, hubPinForSquad, looksDoneFor, nameFromIdea, parseSendTo, sendToCardId, spinOffCardId, pinsForSquad, describeSpinOff, isSpinOffRunning, spinOffFrom, spinOffRemaining, spinOffVersion, subscribeSpinOff, type Pin } from "./pins";
+import { bestOverlap, DEFAULT_PIN_PROFILE, hubPinForSquad, looksDoneFor, nameFromIdea, sendToFrom, spinOffCardId, pinsForSquad, describeSpinOff, isSpinOffRunning, spinOffFrom, spinOffRemaining, spinOffVersion, subscribeSpinOff, type Pin } from "./pins";
 import { createPin, dismissedVersion, subscribeDismissed, createSpinOffPins, dismissSendTo, dismissSpinOff, isSpinOffDismissed, getLastBrainstormProfile, isSendToDismissed, sendIdeaToTeam, setLastBrainstormProfile } from "./pinActions";
 import { spinUpPin } from "./pinFocus";
 import { getTeams, type TeamView } from "./teams";
@@ -52,20 +52,8 @@ export function PinToast() {
 }
 
 // ── Misroute offer (vs:send-to marker in the newest Brainstorm message) ───────
-export type SendToOffer = { id: string; laneId: string; text: string };
+export type SendToOffer = { id: string; laneId: string; text: string; legacyIds?: string[] };
 type TimelineEntry = { item: any; seqStart?: number; timestamp?: string };
-
-/** The offer in the newest Brainstorm message, else null. Same message-id scheme as looks-done. */
-export function sendToFrom(agentId: string, entries: TimelineEntry[]): SendToOffer | null {
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const it = entries[i].item;
-    if (it?.type !== "assistant_message" || typeof it.text !== "string") continue;
-    const offer = parseSendTo(it.text);
-    if (!offer) return null;
-    return { ...offer, id: sendToCardId(agentId, offer) };
-  }
-  return null;
-}
 
 // Offer per Brainstorm, fed by PinGrid's usePreview loads (tiles and rail) so nothing fetches twice.
 const offers = new Map<string, SendToOffer | null>();
@@ -168,12 +156,12 @@ const laneName = (laneId: string): string | null => {
  * first, so what gets sent to B's Brainstorm (or parked in B's inbox) is always what you saw.
  */
 export function SendToCard({ pin, offer, variant = "tile" }: { pin: Pin; offer: SendToOffer; variant?: "tile" | "bar" }) {
-  const [hidden, setHidden] = useState(() => isSendToDismissed(offer.id));
+  const [hidden, setHidden] = useState(() => isSendToDismissed(offer.id, offer.legacyIds));
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState(false);
   const dv = useSyncExternalStore(subscribeDismissed, dismissedVersion);
   useEffect(() => {
-    setHidden(isSendToDismissed(offer.id));
+    setHidden(isSendToDismissed(offer.id, offer.legacyIds));
     setPreview(false);
   }, [offer.id, offer.text, dv]);
   if (hidden || !offer.text) return null;

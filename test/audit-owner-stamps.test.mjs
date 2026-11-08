@@ -124,3 +124,59 @@ test('fixerBucket counts only implementers and classes each unit by its worst su
   assert.deepEqual(r.classes['review-fix round'], ['unit-u']);
   assert.equal(r.successorClasses['review-fix round'], 1);
 });
+
+// ---- S6 bucket 5: fix offered as a question. Fixtures are trimmed real @ui-bois (and one @site-polish) agent outputs. ----
+import { offersFix, fixOfferBucket } from '../scripts/audit-owner-stamps.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+const FIX_OFFERS = [
+  'Gemini passed it and @usa is OK with it. **It needs your OK**, then it merges after the sky fix.\n\nThe deadlock is a VibeSquad bug: a Buddy can\'t replace a live lead. Want me to send it to @bug?',
+  'The bug: when needs-you is set or cleared, the time it was set isn\'t recorded. It also skews the oldest-first order in the queue we just shipped.\n\nOne screenshot caught a setup checklist instead of the menu. That\'s only the evidence file; the fix itself isn\'t affected.\n\nShould I send the timestamp fix to the lead?',
+  'I lean toward sending it to UI3 as a tiny M3: a one-line fix plus a test.\n\nAfter that, the only thing left in this lane is Squad floor Phase 2, which is waiting on @art. Send M3?',
+  'For Phase 2 there are two ways to go:\n- **(a)** Wait for @art to unblock the floor frame.\n- **(b)** Build the floor now with plain CSS desks, then swap the art in later.\n\nI lean (b). The layout and markers don\'t depend on what the art looks like.\n\nGo on spawning a lead for B2?',
+  'The time it was set isn\'t recorded, so the queue shows the age from the first flag. I lean toward giving it to the same lead as a tiny M2 once M1 merges. Okay with that?',
+  '**The real fix** is getting those changes off master. Until then, every build skips this step, for you and for every lead.\n\nThe Android App lane has a Buddy but no lead running. Want me to ask that Buddy to put the changes on a branch or commit them?',
+  'It\'s a small fix: `setNeedsYou` and `clearNeedsYou` in `src/paseo.ts:328-340` should also set and clear the timestamp.\n\nIf you want it done now, say so and I\'ll dispatch it. One Implement - Sonnet worker would do it, then a Review - Gemini pass.',
+];
+const NOT_FIX_OFFERS = [
+  // owner approval of an already-built thing / real owner decision, not a fix offer
+  'P4b passed Gemini and the screenshots are in the lane folder.\n\nDo you OK P4b so it can merge and V1 can start?',
+  'Two layouts are possible.\n\nWhich layout?',
+  // option list, no stated lean: a real choice
+  'There are two ways to go:\n- **(a)** keep UI3 parked until @art delivers\n- **(b)** start Phase 2 now with plain CSS desks\n\nWant me to write the plan for whichever you pick?',
+  // question that itself offers alternatives
+  'Both are ready.\n\nWant me to spawn the Lead for **A**, or fold them in for **B**?',
+  // risky step confirmations
+  'If you\'d rather, I can run the build myself. It only rebuilds and copies into the app, but it does replace the app you\'re running, so say the word first.',
+  'The stale worktree is still on disk.\n\nWant me to delete it and force-push the cleaned branch?',
+  // statements and short text
+  'Done. Merged 7a638bf and pushed.',
+  'ok?',
+];
+test('offersFix catches real fix-offer messages', () => {
+  FIX_OFFERS.forEach((t, i) => assert.equal(offersFix(t), true, `fixture ${i}`));
+});
+test('offersFix skips real choices, owner approvals and risky steps', () => {
+  NOT_FIX_OFFERS.forEach((t, i) => assert.equal(offersFix(t), false, `near-miss ${i}`));
+});
+test('fixOfferBucket counts per lane and role', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fo-'));
+  const ev = (o) => JSON.stringify(o);
+  fs.writeFileSync(path.join(dir, 'rn-a.jsonl'), [
+    ev({ type: 'created', ts: 1, meta: { lane: 'ui-bois', role: 'brainstorm' } }),
+    ev({ type: 'output', ts: 2, text: FIX_OFFERS[0] }),
+    ev({ type: 'output', ts: 3, text: NOT_FIX_OFFERS[1] }),
+  ].join('\n'));
+  fs.writeFileSync(path.join(dir, 'rn-b.jsonl'), [
+    ev({ type: 'created', ts: 1, meta: { lane: 'art', role: 'worker' } }),
+    ev({ type: 'output', ts: 2, text: FIX_OFFERS[2] }),
+  ].join('\n'));
+  const r = fixOfferBucket(dir);
+  assert.equal(r.total, 2);
+  assert.equal(r.outputs, 3);
+  assert.deepEqual(r.byLane, { 'ui-bois': 1, art: 1 });
+  assert.deepEqual(r.byRole, { brainstorm: 1, worker: 1 });
+  assert.equal(fixOfferBucket(dir, { since: 3 }).total, 0);
+});
