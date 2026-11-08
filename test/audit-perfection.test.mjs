@@ -53,3 +53,18 @@ test('stale usage-review items older than 3 days become findings', () => {
   assert.match(out[0].key, /^stale-usage-review:idea-/);
   assert.equal(staleUsageReviewFindings({ baseHome, now: Date.now() }).length, 0);
 });
+
+test('daily series: an open card of the same series is updated in place, not duplicated', () => {
+  const baseHome = tmp();
+  const day = (d, n) => ({ key: `rubber-stamps:${d}`, text: `${n} owner rubber-stamp replies.`, evidence: `bucket 1, ${n}` });
+  fileFindings([day('2026-11-07', 17)], { baseHome });
+  const r = fileFindings([day('2026-11-08', 9)], { baseHome });
+  assert.equal(r.filed.length, 0);
+  assert.equal(r.updated.length, 1);
+  const cards = readInboxCards(baseHome);
+  assert.equal(cards.length, 1);
+  assert.match(cards[0].text, /9 owner rubber-stamp/);
+  assert.match(cards[0].text, /audit-key: rubber-stamps:2026-11-08/);
+  assert.equal(fileFindings([day('2026-11-08', 9)], { baseHome }).skipped.length, 1);
+  assert.equal(readInboxCards(baseHome).length, 1);
+});

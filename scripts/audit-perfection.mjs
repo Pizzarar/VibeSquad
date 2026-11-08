@@ -11,10 +11,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { addInboxCards, readInboxCards } from '../server/inbox.mjs';
+import { addInboxCards, readInboxCards, triageInboxCards } from '../server/inbox.mjs';
 import { audit, loadRuns, relayBucket, handoffBucket, fixerBucket, fixOfferBucket, gitMerges } from './audit-owner-stamps.mjs';
 
 export const AUDIT_SOURCE = 'audit:perfection';
+/** Daily-bucket findings are only raised while their count is above these thresholds. */
+export const MIN_STAMPS = 0;
+export const MIN_EARLY_HANDOFFS = 0;
+export const MULTI_IMPL_LISTED = 5;
 export const STALE_USAGE_MS = 3 * 24 * 3600 * 1000;
 const OPEN_STATUSES = new Set(['parked', 'accepted']);
 const KEY_RE = /\(audit-key: ([^)]+)\)/;
@@ -22,6 +26,8 @@ const KEY_RE = /\(audit-key: ([^)]+)\)/;
 /** The one place the audit lane id is chosen. A1's findAuditLane replaces this body. */
 export function auditLaneId() { return 'perfection'; }
 
+// `name:YYYY-MM-DD` keys are a daily series: an open card of the same series is updated in place, not duplicated.
+const seriesOf = (key) => /^(.+):\d{4}-\d{2}-\d{2}$/.exec(String(key))?.[1] ?? null;
 const keyOf = (text) => KEY_RE.exec(String(text ?? ''))?.[1] ?? null;
 const today = (now) => new Date(now).toISOString().slice(0, 10);
 
@@ -35,26 +41,31 @@ export function renderFinding(f) {
  * the same batch). `needsYou(text)` is called for each filed risky finding. `dryRun` returns what would be filed.
  */
 export function fileFindings(findings, { baseHome, dryRun = false, needsYou = () => {} } = {}) {
-  const open = new Set(
-    readInboxCards(baseHome)
-      .filter((c) => c.source === AUDIT_SOURCE && OPEN_STATUSES.has(c.status))
-      .map((c) => keyOf(c.text))
-      .filter(Boolean),
-  );
+  const openCards = readInboxCards(baseHome).filter((c) => c.source === AUDIT_SOURCE && OPEN_STATUSES.has(c.status));
+  const open = new Set(openCards.map((c) => keyOf(c.text)).filter(Boolean));
   const filed = [];
+  const updated = [];
   const skipped = [];
   for (const f of findings) {
     if (!f?.key || !f.text || !f.evidence) throw new Error(`finding needs key, text and evidence: ${JSON.stringify(f)}`);
     if (open.has(f.key)) { skipped.push(f.key); continue; }
+    const series = seriesOf(f.key);
+    const prev = series && openCards.find((c) => seriesOf(keyOf(c.text)) === series);
     open.add(f.key);
+    if (prev) { updated.push({ id: prev.id, from: keyOf(prev.text), finding: f }); continue; }
     filed.push(f);
   }
   const lines = filed.map(renderFinding);
-  if (!dryRun && lines.length) {
-    addInboxCards({ ideas: lines, laneId: auditLaneId(), teamId: 'vibesquad', source: AUDIT_SOURCE, baseHome });
+  if (!dryRun) {
+    if (lines.length) addInboxCards({ ideas: lines, laneId: auditLaneId(), teamId: 'vibesquad', source: AUDIT_SOURCE, baseHome });
+    for (const u of updated) triageInboxCards({ action: 'update', cardId: u.id, patch: { text: renderFinding(u.finding) }, baseHome });
     for (const f of filed) if (f.risky) needsYou(renderFinding(f));
   }
-  return { filed: filed.map((f, i) => ({ key: f.key, risky: !!f.risky, text: lines[i] })), skipped };
+  return {
+    filed: filed.map((f, i) => ({ key: f.key, risky: !!f.risky, text: lines[i] })),
+    updated: updated.map((u) => ({ id: u.id, from: u.from, key: u.finding.key, text: renderFinding(u.finding) })),
+    skipped,
+  };
 }
 
 /** usage-review:* inbox items still open after STALE_USAGE_MS. */
@@ -76,15 +87,23 @@ export function transcriptFindings({ dir, since, until, repo = process.cwd(), no
   const range = { dir, since, until };
   const stamps = audit(range);
   const nStamp = stamps.buckets['rubber stamp'] || 0;
-  if (nStamp) out.push({ key: `rubber-stamps:${day}`, text: `${nStamp} owner rubber-stamp replies ("send it", "ok") in the window: decisions that should have run without asking.`, evidence: `audit-owner-stamps bucket 1, ${nStamp} of ${stamps.ownerInputs} owner inputs, top: ${JSON.stringify((stamps.topPhrases['rubber stamp'] || []).slice(0, 3))}` });
+  if (nStamp > MIN_STAMPS) out.push({ key: `rubber-stamps:${day}`, text: `${nStamp} owner rubber-stamp replies ("send it", "ok") in the window: decisions that should have run without asking.`, evidence: `audit-owner-stamps bucket 1, ${nStamp} of ${stamps.ownerInputs} owner inputs, top: ${JSON.stringify((stamps.topPhrases['rubber stamp'] || []).slice(0, 3))}` });
   const runs = loadRuns(dir);
   const relay = relayBucket(runs, range);
   if (relay.strict) out.push({ key: `owner-relay:${day}`, text: `${relay.strict} agent reports were relayed by the owner by hand instead of sent agent-to-agent.`, evidence: `audit-owner-stamps bucket 2 strict, examples ${JSON.stringify(relay.strictExamples.slice(0, 3))}` });
   const h = handoffBucket(runs);
-  if (h.handoffs.under100k) out.push({ key: `early-handoffs:${day}`, text: `${h.handoffs.under100k} lead handoffs happened below 100k context tokens (unneeded churn).`, evidence: `audit-owner-stamps bucket 3, by trigger ${JSON.stringify(h.byTrigger)}` });
-  const fx = fixerBucket(runs, gitMerges(repo));
+  if (h.handoffs.under100k > MIN_EARLY_HANDOFFS) out.push({ key: `early-handoffs:${day}`, text: `${h.handoffs.under100k} lead handoffs happened below 100k context tokens (unneeded churn).`, evidence: `audit-owner-stamps bucket 3, by trigger ${JSON.stringify(h.byTrigger)}` });
+  const merges = gitMerges(repo);
+  const fx = fixerBucket(runs, merges);
   for (const [unit, branch] of fx.fixAfterMerge.slice(0, 5)) out.push({ key: `fix-after-merge:${unit}`, text: `Unit ${unit} started a fix less than 24h after ${branch} merged: the merge gate let a defect through.`, evidence: `audit-owner-stamps bucket 4 fixAfterMerge ${unit} <- ${branch}` });
-  for (const [unit, n] of fx.multiWorker.slice(0, 5)) out.push({ key: `multi-implementer:${unit}`, text: `Unit ${unit} used ${n} implementers: fixer passed around.`, evidence: `audit-owner-stamps bucket 4 multiWorker ${unit}=${n}` });
+  // Only units merged inside the window count, so old units don't keep coming back.
+  const mergedInWindow = new Set(merges.filter((m) => (since === undefined || m.ts >= since) && (until === undefined || m.ts <= until)).map((m) => m.branch));
+  const multi = fx.multiWorker.filter(([unit]) => mergedInWindow.has(unit));
+  if (multi.length) {
+    const listed = multi.slice(0, MULTI_IMPL_LISTED).map(([u, n]) => `${u} (${n})`).join(', ');
+    const more = multi.length > MULTI_IMPL_LISTED ? ` and ${multi.length - MULTI_IMPL_LISTED} more` : '';
+    out.push({ key: `multi-implementer:${day}`, text: `${multi.length} units merged in the window used 2+ implementers (fixer passed around): ${listed}${more}.`, evidence: `audit-owner-stamps bucket 4 multiWorker, merges on master in window` });
+  }
   const fo = fixOfferBucket(dir, range);
   for (const e of fo.examples.slice(0, 5)) out.push({ key: `fix-offer:${e.run}`, text: `${e.lane}/${e.role} offered a fix as a question instead of doing it (R11).`, evidence: `transcript ${e.run} ts ${e.ts}: ...${e.tail.slice(-120).replace(/\s+/g, ' ')}` });
   return out;
@@ -123,7 +142,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     if (!src) { console.error('usage: audit-perfection.mjs file <findings.json|-> [--dry-run]'); process.exit(2); }
     const data = JSON.parse(fs.readFileSync(src === '-' ? 0 : src, 'utf8'));
     const res = fileFindings(Array.isArray(data) ? data : data.findings, { dryRun: args.dryRun, needsYou: vsNeedsYou });
-    console.log(JSON.stringify({ dryRun: args.dryRun, filed: res.filed, skipped: res.skipped }, null, 2));
+    console.log(JSON.stringify({ dryRun: args.dryRun, filed: res.filed, updated: res.updated, skipped: res.skipped }, null, 2));
   } else {
     console.error('usage: audit-perfection.mjs collect [--dir d] [--since ISO] | file <findings.json|-> [--dry-run]');
     process.exit(2);
