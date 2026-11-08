@@ -55,7 +55,7 @@ export function detectStalledAgyPermission(
   return {
     stalled: true,
     idleSeconds,
-    message: `Running with no update for ${idleSeconds}s and no visible permission request. Antigravity may be waiting on a permission Paseo never shows (check approvalPolicy: skip).`,
+    message: `Running with no update for ${idleSeconds}s and no visible permission request. Antigravity may be waiting on a permission VibeSquad never shows (check approvalPolicy: skip).`,
   };
 }
 

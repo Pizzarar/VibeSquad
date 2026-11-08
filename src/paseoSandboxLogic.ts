@@ -23,7 +23,7 @@ type AgentLike = {
 const FIELDS: Array<{ key: string; label: string; re: RegExp; optional?: boolean }> = [
   { key: "sandbox", label: "Sandbox", re: /^sandbox(mode|policy)?$/i },
   { key: "approval", label: "Approval policy", re: /^approval(policy|mode)?$/i },
-  { key: "shareMcp", label: "Shares Paseo tools", re: /^sharemcp$/i, optional: true },
+  { key: "shareMcp", label: "Shares VibeSquad tools", re: /^sharemcp$/i, optional: true },
   { key: "network", label: "Network access", re: /^network(access)?$/i },
   { key: "allowlist", label: "Network allowlist", re: /^(network)?(allowlist|allowedhosts|alloweddomains)$/i },
   { key: "roots", label: "Writable roots", re: /^(writableroots|writabledirs|allowedpaths)$/i },
