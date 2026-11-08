@@ -4,7 +4,7 @@ A Lead is the agent that runs the work once you have a [plain plan](Plain-Plan.m
 
 A Lead's context fills up over a long job. When it gets heavy, it writes a handoff note and a fresh Lead takes over.
 
-**VibeSquad:** the Lead is a second chat. You start it with **+ NEW AGENT** (click **FULL** on the Squad page first; the default page hides it) (pick a Lead profile in **PROFILE**, then **Spawn agent**), or your Buddy starts it through VibeSquad. The Buddy's **✓ Handed off** button only marks the plan as handed over. The Lead shows as "RUNS THE WORK" in **FULL** view, and shows its workers under it. If it needs a decision from you, it sets the `needs-you` flag and its card moves up.
+**VibeSquad:** the Lead is a second chat. You start it with **+ NEW AGENT** (click **FULL** on the Squad page first; the default page hides it) (pick a Lead profile in **PROFILE**, then **Spawn agent**), or your Buddy starts it through VibeSquad. Handing a plan on does not start a Lead by itself: the Buddy's **⇄ Handoff** button starts a fresh Buddy from its summary, and once a plan has been handed to a Lead the Buddy offers **↻ Restart from summary**. **✓ Hand off plan & close topic** hands one topic's plan on and closes that chat. The Lead shows as "RUNS THE WORK" in **FULL** view, and shows its workers under it. If it needs a decision from you, it sets the `needs-you` flag and its card moves up.
 
 In any other agent, start a new chat, paste your plan, and say "act as the Lead: split this into small jobs and give them to workers". The kit's `Setup/templates/LEAD_RULES.md` has rules you can drop into your project.
 

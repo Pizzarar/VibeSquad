@@ -2,9 +2,9 @@
 
 What each area of VibeSquad's Settings window does, when to touch it, and the safe default. If a setting isn't listed here, you don't need it yet.
 
-Open it from the **⚙ SETTINGS** button in a Squad's header in VibeSquad. It opens a **Settings** page with a list of tabs down the left (App, Chat, Notifications, New Agent defaults, Keybindings, Team, Remote Control, Runner & Providers, Profiles, About) and a search box. Section names below are the labels you will see on screen; if one is not where you expect, click through the tabs or search for it. Where things live: **YOUR NAME** and **ALLOW OTHER DEVICES** are on the **Team** tab (the **Remote Control** tab has the full pairing flow, below), **DISPLAY & 4K UI SCALE** is on **App**, and **UPDATE CHANNEL** is on **About**. (The screenshot below was taken before they were split across tabs, so it shows them stacked on one page.)
+Open it from the **⚙ SETTINGS** button in a Squad's header in VibeSquad. It opens a **Settings** page with a list of tabs down the left (App, Chat, Notifications, New Agent defaults, Keybindings, Team, Remote Control, Runner & Providers, Profiles, About) and a search box. Section names below are the labels you will see on screen; if one is not where you expect, click through the tabs or search for it. Where things live: **YOUR NAME** and **ALLOW OTHER DEVICES** are on the **Team** tab (the **Remote Control** tab has the full pairing flow, below), **DISPLAY & 4K UI SCALE** is on **App**, and **UPDATE CHANNEL** is on **About**. The screenshot below is the **App** tab, which opens first.
 
-![Settings, top: Your name, Allow other devices, Update channel and Display & 4K UI scale](../assets/screenshots/07a-settings-top.png)
+![The Settings window on its App tab: the tab list on the left, then UI density, Theme, Accent color, Open in IDE and Display & 4K UI scale](../assets/screenshots/07a-settings-top.png)
 
 ## Your name
 
@@ -51,7 +51,7 @@ Both are on the **About** tab, on the host PC only (they don't show on a remotel
 
 ## Profiles
 
-![AGENT PROFILES and the squad editor in Settings](../assets/screenshots/07e-settings-profiles.png)
+![The Profiles tab: the AGENT PROFILES list (Lead, Brainstorm and Worker profiles with provider, model, mode and thinking) and the profile editor below it](../assets/screenshots/07e-settings-profiles.png)
 
 **AGENT PROFILES** is the list of ready-made agent setups. Every way of starting an agent (New Agent, Handoff, a Buddy restart, an Inbox topic, Digest) reads from it. Pick one in the **PROFILE** dropdown, edit it, then press **Save profile**. A profile marked "(install …)" needs its provider installed first.
 
@@ -92,6 +92,8 @@ An amber **⚠ CONFIG WARNING** box appears at the top only when a config file c
 - **Safe default:** nothing to set. No box means no problem.
 
 ## Runner & Providers
+
+![The Runner & Providers tab: one card per provider with a status pill, its version, an Enabled checkbox, and the Extra models, Extra modes and Default model fields](../assets/screenshots/07g-settings-runner.png)
 
 The runner is the background program that actually runs your agents. This tab lists the providers it can start (Claude Code, Codex and so on). VibeSquad finds them by probing the command-line tools installed on this PC. Each provider has a status pill, its version when known, and an **Enabled** checkbox. Three fields let you add to what the pickers offer:
 
