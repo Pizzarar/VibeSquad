@@ -6,9 +6,10 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   buildCatalog, clearProbeCache, clearUsageCache, getModels, getProviders, getUsage, handleProvidersApi, intervalMs, LOOP_TURN_THRESHOLD,
-  loadRunnerSettings, normalizeRunnerSettings, oneShotReviewRun, probeProviders, probeStats, readUsageLogSignals, readUsageReviews, runUsageReview, saveRunnerSettings, usageStats,
+  loadRunnerSettings, normalizeRunnerSettings, oneShotReviewRun, probeProviders, probeStats, readMergedUnits, readUsageLedger, readUsageLogSignals, readUsageReviews, runUsageReview, saveRunnerSettings, syncUsageLedger, usageStats,
 } from '../server/providers-catalog.mjs';
 import { saveUserSettings, loadUserSettings, saveRemoteAccess } from '../server/user-settings.mjs';
+import { realVibesquadHome } from '../server/test-guard.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'vs-catalog-'));
 const okExec = (file, args, o, cb) => cb(null, `${path.basename(file)} 1.2.3\n`);
@@ -332,7 +333,7 @@ test('usage: merged units, review rounds, cost per merged unit', () => {
   const calls = gitCalls.length;
   getUsage({ home, git: fakeGit, laneCodes: { usa: 'usage' } });
   assert.equal(gitCalls.length, calls + 1, 'same HEAD: only rev-parse, merged units come from the cache');
-  assert.ok(gitCalls.every((c) => c[0] === 'rev-parse' || c[0] === 'log') && gitCalls.filter((c) => c[0] === 'log').length === 1, 'one log in total, no per-merge spawns');
+  assert.ok(gitCalls.every((c) => c[0] === 'rev-parse' || c[0] === 'log') && gitCalls.filter((c) => c[0] === 'log').length === 2, 'two bounded git logs (commits + numstat), no per-merge spawns');
 });
 
 test('usage: limits from limits.jsonl with burn rate and ETA', () => {
@@ -1047,4 +1048,290 @@ test('usage review context: prompt includes @usa notes, friction, mcp-alias coun
     if (prev === undefined) delete process.env.VS_RUNNER_TURN_CAP_CLAUDE;
     else process.env.VS_RUNNER_TURN_CAP_CLAUDE = prev;
   }
+});
+
+// ---------------------------------------------------------------- usa-10: benchmark ledger, A/B workflow, savings, cohorts, floor
+
+test('usa-10 root cause: Windows-style worktree cwd (backslash + case) attributes merged units', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 3, 12);
+  // backslash worktree path + a case mismatch on the directory name vs the branch name
+  writeAgent(home, 'rn-w1', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', cwd: 'C:\\Users\\Fugma\\AppData\\Local\\VibeSquad\\worktrees\\VibeSquad\\Unit-Foo', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+  ]);
+  writeAgent(home, 'rn-w2', [
+    { ts: T0, type: 'created', provider: 'antigravity-cli', model: 'g', cwd: 'C:/Users/Fugma/AppData/Local/VibeSquad/worktrees/VibeSquad/unit-bar', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Gemini' } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 2 },
+  ]);
+  const git = (args) => {
+    if (args[0] === 'rev-parse') return 'm2\n';
+    if (args[0] === 'log') return [
+      L('m2', 'm1 b2', sec(T0 + 100000), "Merge branch 'unit-bar' (@usa)"),
+      L('b2', 'm1', sec(T0 + 90000), 'feat (@usa)'),
+      L('m1', 'a1 b1', sec(T0 + 50000), "Merge branch 'unit-foo' (@usa)"),
+      L('b1', 'a1', sec(T0 + 40000), 'feat (@usa)'),
+      L('a1', 'root', sec(T0), 'mainline'),
+      L('root', '', '0', 'init'),
+    ].join('\n');
+    return '';
+  };
+  const u = getUsage({ home, git, laneCodes: { usa: 'usage' } });
+  const byUnit = Object.fromEntries(u.merged.units.map((x) => [x.unit, x]));
+  assert.equal(byUnit['unit-foo'].implementerAgentId, 'rn-w1', 'backslash cwd basename, case-insensitive match');
+  assert.equal(byUnit['unit-bar'].implementerAgentId, 'rn-w2', 'forward-slash cwd basename');
+  assert.equal(byProfileOf(u, 'Implement - Sonnet').mergedUnits, 1);
+  assert.equal(byProfileOf(u, 'Implement - Gemini').mergedUnits, 1);
+});
+
+test('usa-10: readMergedUnits parses --first-parent --numstat into locAdded/locDeleted/filesChanged', () => {
+  const M1 = 'a'.repeat(40), A1 = 'b'.repeat(40), B1 = 'c'.repeat(40), ROOT = 'd'.repeat(40);
+  const git = (args) => {
+    if (args[0] === 'rev-parse') return `${M1}\n`;
+    if (args.includes('--numstat')) {
+      return [M1, '10\t2\tsrc/a.ts', '3\t0\tsrc/b.ts', '', A1, '1\t1\tx', ''].join('\n');
+    }
+    return [
+      L(M1, `${A1} ${B1}`, '1793000000', "Merge branch 'unit-x' (@usa)"),
+      L(B1, A1, '1793000050', 'feat (@usa) review r2'),
+      L(A1, ROOT, '1793000010', 'mainline'),
+      L(ROOT, '', '1793000000', 'init'),
+    ].join('\n');
+  };
+  const units = readMergedUnits(git);
+  const u = units.find((x) => x.sha === M1);
+  assert.equal(u.locAdded, 13);
+  assert.equal(u.locDeleted, 2);
+  assert.equal(u.filesChanged, 2);
+});
+
+test('usa-10: usage-ledger write/read/fold, idempotent sync, no double count, forbidden-home guard', () => {
+  const home = tmp();
+  const dir = path.join(home, 'runner', 'agents');
+  fs.mkdirSync(dir, { recursive: true });
+  const d = Date.UTC(2026, 10, 9, 12);
+  fs.writeFileSync(path.join(dir, 'rn-a.jsonl'),
+    ev({ seq: 0, ts: d, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'x', role: 'worker' } }) +
+    ev({ seq: 1, ts: d, type: 'turn_done', costUsd: 1 }));
+  clearUsageCache();
+
+  getUsage({ home, git: noGit });
+  let ledger = readUsageLedger(home);
+  assert.ok(ledger.some((r) => r.kind === 'day' && r.day === '2026-11-09'), 'day record synced');
+  assert.equal(ledger.filter((r) => r.kind === 'day' && r.day === '2026-11-09').length, 1, 'one day record');
+
+  const before = fs.readFileSync(path.join(home, 'runner', 'usage-ledger.jsonl'), 'utf8');
+  getUsage({ home, git: noGit });
+  assert.equal(fs.readFileSync(path.join(home, 'runner', 'usage-ledger.jsonl'), 'utf8'), before, 'idempotent sync');
+  assert.equal(getUsage({ home, git: noGit }).totals.turns, 1, 'raw day not double counted');
+
+  // A ledger day absent from raw agent logs is folded back into totals + byDay.
+  fs.appendFileSync(path.join(home, 'runner', 'usage-ledger.jsonl'),
+    JSON.stringify({ kind: 'day', day: '2026-11-01', costUsd: 2, totalTokens: 200, inputTokens: 100, outputTokens: 100, turns: 2, unitsMerged: 0, locChanged: 0, byProvider: {} }) + '\n');
+  const u = getUsage({ home, git: noGit });
+  assert.equal(u.totals.turns, 3, 'folded day turns added (1 raw + 2 ledger)');
+  assert.ok(u.byDay.some((r) => r.day === '2026-11-01'), 'folded day appears in byDay');
+
+  assert.equal(syncUsageLedger(realVibesquadHome(), [{ kind: 'day', day: '2099-01-01', turns: 1 }]), 0, 'forbidden real home: no write');
+});
+
+test('usa-10: workflowMode from [wf:] tag wins, else derived from provider/profile', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 3, 12);
+  writeAgent(home, 'rn-dsp', [
+    { ts: T0, type: 'created', provider: 'opencode', model: 'deepseek/deepseek-v4-pro', cwd: '/worktrees/unit-a', meta: { lane: 'usage', role: 'worker', profile: 'Work Order - DSP' } },
+    { ts: T0 + 1000, type: 'turn_done' },
+  ]);
+  writeAgent(home, 'rn-sonnet', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/worktrees/unit-b', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+  ]);
+  writeAgent(home, 'rn-gemini', [
+    { ts: T0, type: 'created', provider: 'antigravity-cli', model: 'gemini-4-argon', cwd: '/worktrees/unit-c', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Gemini' } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+  ]);
+  const git = (args) => {
+    if (args[0] === 'rev-parse') return 'm4\n';
+    if (args[0] === 'log') return [
+      L('m4', 'm3 b4', sec(T0 + 400000), "Merge branch 'unit-c' (@usa) [wf:gemini]"),
+      L('b4', 'm3', sec(T0 + 300000), 'feat (@usa)'),
+      L('m3', 'm2 b3', sec(T0 + 300000), "Merge branch 'unit-b' (@usa) [wf:sonnet]"),
+      L('b3', 'm2', sec(T0 + 200000), 'feat (@usa) review r1'),
+      L('m2', 'm1 b2', sec(T0 + 200000), "Merge branch 'unit-a' (@usa)"),
+      L('b2', 'm1', sec(T0 + 100000), 'feat (@usa) review r2'),
+      L('m1', 'a1 b1', sec(T0 + 100000), "Merge branch 'unit-d' (@usa)"),
+      L('b1', 'a1', sec(T0 + 50000), 'feat (@usa)'),
+      L('a1', 'root', sec(T0), 'mainline'),
+      L('root', '', '0', 'init'),
+    ].join('\n');
+    return '';
+  };
+  const u = getUsage({ home, git, laneCodes: { usa: 'usage' } });
+  const mode = Object.fromEntries(u.byWorkflow.map((w) => [w.workflowMode, w]));
+  assert.equal(mode['dsp+gemini-review']?.units, 1, 'DSP implementer derived dsp+gemini-review');
+  assert.equal(mode['sonnet']?.units, 1, '[wf:sonnet] tag kept as the mode');
+  assert.equal(mode['gemini']?.units, 1, '[wf:gemini] tag kept as the mode');
+  assert.equal(mode['unattributed']?.units, 1, 'unit without implementer or tag');
+  assert.equal(mode['dsp+gemini-review'].costPerUnit, 0, 'DSP cost unknown (no turn_done cost)');
+  assert.equal(mode['dsp+gemini-review'].costCoverage, 0, 'non-Claude cost marked unknown');
+  assert.equal(mode['sonnet'].costCoverage, 1, 'Claude cost known');
+});
+
+test('usa-10: savings baseline formulas (all-Opus routing, context isolation, parallel speedup)', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 3, 12);
+  writeAgent(home, 'rn-w', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', cwd: '/worktrees/unit-a', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } },
+    { ts: T0, type: 'status', status: 'running' },
+    { ts: T0 + 1000, type: 'usage', inputTokens: 1000, outputTokens: 100 },
+    { ts: T0 + 2000, type: 'status', status: 'idle' },
+    { ts: T0 + 2000, type: 'turn_done', costUsd: 0.02 },
+  ]);
+  const git = (args) => {
+    if (args[0] === 'rev-parse') return 'm1\n';
+    if (args[0] === 'log') return [
+      L('m1', 'a1 b1', sec(T0 + 50000), "Merge branch 'unit-a' (@usa)"),
+      L('b1', 'a1', sec(T0 + 40000), 'feat (@usa)'),
+      L('a1', 'root', sec(T0), 'mainline'),
+      L('root', '', '0', 'init'),
+    ].join('\n');
+    return '';
+  };
+  const u = getUsage({ home, git, laneCodes: { usa: 'usage' } });
+  const s = u.savings;
+  // all-Opus: 1000 in * $15/MTok + 100 out * $75/MTok = 0.015 + 0.0075 = 0.0225
+  assert.ok(Math.abs(s.soloOpusBaselineUsd - 0.0225) < 1e-9, `baseline ${s.soloOpusBaselineUsd}`);
+  assert.ok(Math.abs(s.actualCostUsd - 0.02) < 1e-9);
+  assert.ok(Math.abs(s.routingSavingsUsd - 0.0025) < 1e-9);
+  assert.equal(s.contextSavingsTokens, 4000, 'monolithic 5000 (1*brief) vs 1000 actual');
+  assert.equal(s.monolithicBaselineTokens, 5000);
+  assert.equal(s.parallelSpeedup, 1, 'working 2000ms over span 2000ms');
+});
+
+test('usa-10: cohorts compare Last 10 vs Prior 10 (delta = recent - prior)', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 3, 12);
+  const chainGit = (units) => (args) => {
+    if (args[0] === 'rev-parse') return `m${units.length}\n`;
+    if (args[0] === 'log') {
+      const lines = [];
+      let prev = 'root';
+      for (let i = 0; i < units.length; i++) {
+        const u = units[i];
+        const mi = `m${i + 1}`, bi = `b${i + 1}`;
+        lines.push(L(mi, `${prev} ${bi}`, String(u.ctSec), `Merge branch '${u.unit}' (@usa)`));
+        lines.push(L(bi, prev, String(u.ctSec - 1), `feat (@usa) review r${u.reviewRounds}`));
+        prev = mi;
+      }
+      lines.push(L('root', '', '0', 'init'));
+      return lines.reverse().join('\n');
+    }
+    return '';
+  };
+  const units = [];
+  for (let i = 0; i < 12; i++) units.push({ unit: `unit-${i}`, reviewRounds: i < 2 ? 2 : 0, ctSec: sec(T0 + i * 1000) });
+  const u = getUsage({ home, git: chainGit(units), laneCodes: { usa: 'usage' } });
+  const c = u.cohorts;
+  assert.equal(c.recent.units, 10);
+  assert.equal(c.prior.units, 2);
+  assert.equal(c.recent.firstTryPassRate, 1, 'recent all clean');
+  assert.equal(c.recent.avgReviewRounds, 0);
+  assert.equal(c.prior.firstTryPassRate, 0, 'prior all rework');
+  assert.equal(c.prior.avgReviewRounds, 2);
+  assert.equal(c.delta.firstTryPassRate, 1);
+  assert.equal(c.delta.avgReviewRounds, -2);
+});
+
+test('usa-10: floor splits spend into clean vs rework/loops/fix/restart buckets', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 3, 12);
+  writeAgent(home, 'rn-clean', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', cwd: '/worktrees/unit-clean', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+  ]);
+  writeAgent(home, 'rn-rework', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', cwd: '/worktrees/unit-rework', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 2 },
+  ]);
+  const loopEvents = [{ ts: T0, type: 'created', provider: 'claude', model: 'm', cwd: '/worktrees/nowhere', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } }];
+  for (let i = 0; i < LOOP_TURN_THRESHOLD + 1; i++) loopEvents.push({ ts: T0 + 1000, type: 'turn_done', costUsd: 3 });
+  writeAgent(home, 'rn-loop', loopEvents);
+  const git = (args) => {
+    if (args[0] === 'rev-parse') return 'm2\n';
+    if (args[0] === 'log') return [
+      L('m2', 'm1 b2', sec(T0 + 200000), "Merge branch 'unit-rework' (@usa)"),
+      L('b2', 'm1', sec(T0 + 190000), 'feat (@usa) review r2'),
+      L('m1', 'a1 b1', sec(T0 + 100000), "Merge branch 'unit-clean' (@usa)"),
+      L('b1', 'a1', sec(T0 + 90000), 'feat (@usa)'),
+      L('a1', 'root', sec(T0), 'mainline'),
+      L('root', '', '0', 'init'),
+    ].join('\n');
+    return '';
+  };
+  const u = getUsage({ home, git, laneCodes: { usa: 'usage' } });
+  const f = u.floor;
+  assert.equal(f.reworkCostUsd, 2, 'unit-rework (r2) cost 2');
+  assert.equal(f.loopAndAbandonedCostUsd, 3, 'loop worker cost 3');
+  assert.equal(f.fixAfterMergeCostUsd, 0);
+  assert.equal(f.restartOverheadCostUsd, 0);
+  assert.equal(f.cleanCostUsd, 1, 'total 6 - 2 - 3');
+  assert.equal(f.cleanShare, 0.17);
+  assert.equal(f.wasteShare, 0.83);
+});
+
+test('usa-10: review records store kpis and the prompt grades prior recommendations against KPI deltas', async () => {
+  const home = tmp();
+  const prompts = [];
+  const runOpus = async ({ prompt }) => { prompts.push(prompt); return { ok: true, text: 'route via gemini', ms: 1 }; };
+  const runGemini = async () => ({ ok: true, text: 'reduce review rounds', ms: 1 });
+  const usage1 = {
+    totals: { turns: 1, costUsd: 1 },
+    merged: { units: [{ reviewRounds: 2, fixAfterMerge: false, costUsd: 1, inputTokens: 0, outputTokens: 0 }] },
+    floor: { cleanShare: 0.5 },
+  };
+  await runUsageReview({ home, trigger: 'manual', usage: usage1, runOpus, runGemini });
+  const rec1 = readUsageReviews(home)[0];
+  assert.ok(rec1.kpis, 'kpis stored on the review record');
+  assert.equal(rec1.kpis.unitsMerged, 1);
+  assert.equal(rec1.kpis.avgReviewRounds, 2);
+
+  const usage2 = {
+    totals: { turns: 2, costUsd: 2 },
+    merged: { units: [{ reviewRounds: 0, fixAfterMerge: false, costUsd: 1, inputTokens: 0, outputTokens: 0 }] },
+    floor: { cleanShare: 1 },
+  };
+  await runUsageReview({ home, trigger: 'manual', usage: usage2, runOpus, runGemini });
+  const prompt2 = prompts[1];
+  assert.match(prompt2, /Previous review Opus said: route via gemini/, 'prior opus bullet included');
+  assert.match(prompt2, /KPI delta since last review/, 'kpi delta section present');
+  assert.match(prompt2, /firstTryPassRate 0->1/, 'firstTryPassRate delta 0->1');
+  assert.match(prompt2, /avgReviewRounds 2->0/, 'avgReviewRounds delta 2->0');
+  assert.match(prompt2, /grade in one line whether the previous review's recommendations improved the KPIs/, 'grading instruction present');
+});
+
+test('usa-10: GET /usage-export returns json or markdown, 400 on bad format', async () => {
+  const home = tmp();
+  const call = async (method, url, opts = {}) => {
+    let out;
+    await handleProvidersApi({ method, url }, {}, { home, ...probeOpts, ...opts, readBody: async () => ({}), sendJson: (_r, code, data) => { out = { code, data }; } });
+    return out;
+  };
+  const json = await call('GET', '/__vibesquad/providers/usage-export?format=json');
+  assert.equal(json.code, 200);
+  assert.equal(json.data.ok, true);
+  assert.ok(Array.isArray(json.data.byWorkflow));
+  assert.ok(json.data.savings && json.data.cohorts && json.data.floor, 'benchmark sections present');
+  const md = await call('GET', '/__vibesquad/providers/usage-export?format=md');
+  assert.equal(md.code, 200);
+  assert.match(md.data.markdown, /# VibeSquad usage benchmark/);
+  const bad = await call('GET', '/__vibesquad/providers/usage-export?format=xml');
+  assert.equal(bad.code, 400);
+  assert.match(bad.data.error, /bad format/);
+  const post = await call('POST', '/__vibesquad/providers/usage-export');
+  assert.equal(post.code, 405);
 });
