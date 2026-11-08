@@ -4899,7 +4899,7 @@ button.project-file-name:hover { text-decoration: underline; }
   font-family: var(--arcade);
   font-size: 16px;
   letter-spacing: 0.1em;
-  color: var(--cyan);
+  color: var(--cyan-t);
   background: var(--bg);
   border: 1px solid var(--line);
 }
@@ -5021,7 +5021,7 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 .sq-floor-tv::after {
   content: "";
   position: absolute;
-  inset: 0;
+  inset: 0 0 12px 0; /* stops above the counter row so no scanline crosses the digits */
   pointer-events: none;
   background: repeating-linear-gradient(to bottom, transparent 0 1px, rgba(0, 0, 0, 0.22) 1px 2px);
 }
@@ -5879,7 +5879,7 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 /* ⇄ Handoff (Aub's R1 "blank yellow button"): ink label on the teal fill whatever the ctx tone */
 :root:root .brainstorm-ctx-bar:not(.tone-red) .btn-brainstorm-restart { background: var(--cyan-fill); color: var(--on-cyan-fill) !important; text-shadow: none; }
 /* teal label chips: tinted panel with body text, like the other quiet chips */
-:root:root .drawer-labels-list .chip { background: color-mix(in srgb, var(--cyan) 18%, var(--panel)); color: var(--text); text-shadow: none; }
+:root:root .drawer-labels-list .chip { background: color-mix(in srgb, var(--cyan) 18%, var(--panel)) !important; background-image: none !important; border-image: none !important; color: var(--text) !important; text-shadow: none; }
 
 /* usa-11: efficiency trend, clean-run floor, savings, workflow era */
 .usage-efficiency, .usage-workflows { margin-top: var(--sp-4, 16px); padding: var(--sp-4, 16px); background: var(--navy); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; gap: var(--sp-3, 12px); }
@@ -5908,5 +5908,3 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 .usage-cohort-prior { font-variant-numeric: tabular-nums; }
 .usage-floor-callout { color: var(--text); }
 
-/* V1b part 2: the Overlord "no one on duty" label and Spin Up button sit above the static scanline on their own solid boxes */
-.sky-static > :is(.sky-static-text, .btn) { position: relative; z-index: 1; background-color: var(--bg); }
