@@ -325,6 +325,7 @@ export function SkyZones({
   onSpinUp,
   onSpinUpOverlord,
   overlordBusy = false,
+  initialOpen = null,
 }: {
   view: TeamView;
   onSuccessor: (id: string) => void;
@@ -333,6 +334,8 @@ export function SkyZones({
   /** Spawn the hub lead (Spin Up / Resume Overlord); the new agent lands in the right zone once the store has it. */
   onSpinUpOverlord?: (view: TeamView) => void;
   overlordBusy?: boolean;
+  /** HP3: the chat that starts open (a mini-face click on the Tower page); later clicks behave as usual. */
+  initialOpen?: SkyOpen;
 }) {
   const zones = skyZonesFor(view);
   const faces = useFacesModel();
@@ -352,7 +355,7 @@ export function SkyZones({
 
   // G8: the TVs never resize. `openRaw` is set by clicks only; the Overlord talking never opens anything.
   const can: SkyCan = { riffbot: !!zones.riffbot.agentId, overlord: !!zones.overlord.member };
-  const [openRaw, setOpen] = useState<SkyOpen>(null);
+  const [openRaw, setOpen] = useState<SkyOpen>(initialOpen);
   const open = skyEffectiveOpen(openRaw, can); // the Overlord closing under an open chat drops back to rest
   const root = useRef<HTMLDivElement>(null);
   const openRef = useRef<SkyOpen>(null);

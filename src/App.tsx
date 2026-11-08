@@ -35,6 +35,7 @@ import {
   leadLadderFor,
   matchesSearch,
   resolve,
+  isHiddenLane,
   shownLanesOf,
   sortMembers,
   useTeams,
@@ -80,6 +81,7 @@ import { AttentionBadge } from "./AttentionList";
 import { SquadQueue } from "./SquadQueue";
 import { SquadFloor } from "./SquadFloor";
 import { SkyZones } from "./SkyZones";
+import { HubPages } from "./HubPages";
 import { overlordProfileName, skyZoneIds, skyZonesFor, spinUpOverlord } from "./skyZonesLogic";
 import { FullToggle, PinGrid, SidebarPins, SquadsHome, setFullView, useFullView, type PinHandler } from "./PinGrid";
 import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
@@ -1035,7 +1037,7 @@ const TeamPage = memo(function TeamPage(props: {
 
   // Default squad page: one tile per pinned Team. FULL brings back the plumbing view below.
   if (!full) {
-    const teamCount = view.lanes.filter((l) => l.lane.id !== "_other" && l.lane.state !== "done" && l.lane.state !== "removed").length;
+    const teamCount = view.lanes.filter((l) => l.lane.id !== "_other" && l.lane.state !== "done" && l.lane.state !== "removed" && !isHiddenLane(view.team, l.lane)).length;
     return (
       <div className="team-body">
         <header className="team-header">
@@ -1059,7 +1061,7 @@ const TeamPage = memo(function TeamPage(props: {
         <PinGrid
           view={view}
           onOpenAgent={(id) => {
-            const pin = pinsForSquad(view).pinned.find((p) => p.brainstorm?.agent.id === id);
+            const pin = pinsForSquad(view, { includeHidden: true }).pinned.find((p) => p.brainstorm?.agent.id === id);
             if (pin) void props.onQuickStart(pin);
             else onPick(id);
           }}
@@ -2015,9 +2017,15 @@ export function App() {
       {hubFocused ? (
         <div className={`hub-body${hubAgentOpen ? " hub-agent-open" : ""}`} data-testid="hub-body">
           {panesNode}
-          {pinFocusView && !hubAgentOpen && <SkyZones view={pinFocusView} onSuccessor={paneSuccessor} onSpinUp={onSpinUpPin} onSpinUpOverlord={onSpinUpOverlord} overlordBusy={overlordBusy} />}
-          {pinFocusView && <SquadQueue view={pinFocusView} variant="strip" />}
-          {pinFocusView && <SquadFloor view={pinFocusView} />}
+          {pinFocusView && (
+            <HubPages
+              view={pinFocusView}
+              agentOpen={hubAgentOpen}
+              sky={(open) => <SkyZones view={pinFocusView} initialOpen={open} onSuccessor={paneSuccessor} onSpinUp={onSpinUpPin} onSpinUpOverlord={onSpinUpOverlord} overlordBusy={overlordBusy} />}
+              strip={<SquadQueue view={pinFocusView} variant="strip" />}
+              tower={<SquadFloor view={pinFocusView} />}
+            />
+          )}
         </div>
       ) : (
         panesNode

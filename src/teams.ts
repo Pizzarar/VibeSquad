@@ -19,21 +19,41 @@ import type { PinFields } from "./pins.ts";
 import { isRemote } from "./remoteSession.ts";
 import { mergeTeams } from "./teamsMerge.ts";
 
+/** A standing background lane: the Squad's Bug Runner or its Perfection audit lane. `bug: true` (B2) still reads as kind "bug". */
+export type LaneKind = "bug" | "audit";
 // A lane is a pinned Team in the UI. Pin fields (state, doneAt, order, lastProfile) live in src/pins.ts
 // and round-trip through saveTeams untouched; lanes without `state` count as pinned.
-export type LaneDef = { id: string; name: string; code?: string; paths?: string[]; aliases?: string[]; hub?: boolean; bug?: boolean } & PinFields;
+export type LaneDef = { id: string; name: string; code?: string; paths?: string[]; aliases?: string[]; hub?: boolean; bug?: boolean; kind?: LaneKind; hidden?: boolean } & PinFields;
 /** The Squad's hub lane (RiffBot's). Explicit `hub: true` wins; with no flagged lane, the lane whose id is the Squad id. */
 export function isHubLane(team: Pick<TeamDef, "id" | "lanes">, lane: Pick<LaneDef, "id" | "hub">): boolean {
   if (lane.hub === true) return true;
   return lane.id != null && !team.lanes.some((l) => l.hub === true) && lane.id === team.id;
 }
 
-/** Lane ids that count as a Squad's bug lane when none is flagged `bug: true` (VibeSquad's existing @bug lane is `bug-chaser`). */
+/** Lane ids that count as a Squad's bug / audit lane when none is flagged (VibeSquad's existing lanes are `bug-chaser` and `perfection`). */
 export const BUG_LANE_FALLBACK_IDS = ["bug-runner", "bug-chaser"];
-/** The Squad's standing bug lane (its Buddy is the Bug Runner): the lane flagged `bug: true`, else a lane with a fallback id; null when none. Never creates one. */
-export function findBugLane<L extends Pick<LaneDef, "id" | "bug">>(team: { lanes: L[] } | null | undefined): L | null {
+export const AUDIT_LANE_FALLBACK_IDS = ["perfection"];
+/** The lane's kind: `kind`, else `bug: true` as "bug" (no migration), else undefined. */
+export function laneKindOf(lane: Pick<LaneDef, "kind" | "bug"> | null | undefined): LaneKind | undefined {
+  return lane?.kind === "bug" || lane?.kind === "audit" ? lane.kind : lane?.bug === true ? "bug" : undefined;
+}
+function findKindLane<L extends Pick<LaneDef, "id" | "kind" | "bug">>(team: { lanes: L[] } | null | undefined, kind: LaneKind, fallback: string[]): L | null {
   const lanes = team?.lanes ?? [];
-  return lanes.find((l) => l.bug === true) ?? lanes.find((l) => BUG_LANE_FALLBACK_IDS.includes(l.id)) ?? null;
+  return lanes.find((l) => laneKindOf(l) === kind) ?? lanes.find((l) => laneKindOf(l) === undefined && fallback.includes(l.id)) ?? null;
+}
+/** The Squad's standing bug lane (its Buddy is the Bug Runner): kind "bug" (or `bug: true`), else a lane with a fallback id; null when none. Never creates one. */
+export const findBugLane = <L extends Pick<LaneDef, "id" | "kind" | "bug">>(team: { lanes: L[] } | null | undefined): L | null => findKindLane(team, "bug", BUG_LANE_FALLBACK_IDS);
+/** The Squad's standing audit lane (Perfection): kind "audit", else the lane `perfection`; null when none. */
+export const findAuditLane = <L extends Pick<LaneDef, "id" | "kind" | "bug">>(team: { lanes: L[] } | null | undefined): L | null => findKindLane(team, "audit", AUDIT_LANE_FALLBACK_IDS);
+/**
+ * True for a lane kept out of the pin grid, focus rail and hub lane lists. Explicit `hidden` wins; otherwise the Squad's
+ * bug and audit lanes (flagged or by fallback id, so VibeSquad's `bug-chaser` / `perfection` count) are hidden. The hub is never hidden.
+ * Hidden lanes still resolve for vs, the inbox, vs who, the bug button and opening a chat from a finding.
+ */
+export function isHiddenLane(team: Pick<TeamDef, "id" | "lanes">, lane: Pick<LaneDef, "id" | "kind" | "bug" | "hub" | "hidden">): boolean {
+  if (typeof lane.hidden === "boolean") return lane.hidden;
+  if (isHubLane(team, lane)) return false;
+  return findBugLane(team)?.id === lane.id || findAuditLane(team)?.id === lane.id;
 }
 
 export type TeamDef = {
