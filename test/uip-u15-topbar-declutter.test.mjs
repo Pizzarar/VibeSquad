@@ -41,11 +41,12 @@ describe("U15: compactIdentity (DrawerHeader.tsx)", () => {
 describe("U15: dockBtns (DrawerHeader.tsx)", () => {
   test("omits the ✕ close button when compact is true", () => {
     const dock = dh.slice(dh.indexOf("const dockBtns"), dh.indexOf("const inspector"));
-    assert.match(dock, /\{!compact && \(/);
+    // G8: the ✕ is also gated on !chatOnly (the sky chat panel has its own ✕), so the gate may read `!compact && !chatOnly`.
+    assert.match(dock, /\{!compact && (!chatOnly && )?\(/);
     assert.match(dock, /onClick=\{onClose\}/);
     assert.match(dock, /✕/);
     // The gate must precede the close button so compact hides it.
-    assert.ok(dock.indexOf("{!compact && (") < dock.indexOf("onClick={onClose}"), "✕ gated behind !compact");
+    assert.ok(dock.search(/\{!compact && (!chatOnly && )?\(/) < dock.indexOf("onClick={onClose}"), "✕ gated behind !compact");
   });
 });
 
