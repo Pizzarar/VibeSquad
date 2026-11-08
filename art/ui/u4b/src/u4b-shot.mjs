@@ -1,10 +1,12 @@
 // U4b real-app shots: 3200x1800 CSS viewport at deviceScaleFactor 1.2 = 3840x2160 px at 120% zoom.
 import { createRequire } from "node:module";
-const { chromium } = createRequire(import.meta.url)("C:/Users/Fugma/projects/VibeSquad/scratch/pw/node_modules/playwright-core");
+import { homedir } from "node:os";
+import { join } from "node:path";
+const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT_CORE || join(homedir(), "projects/VibeSquad/scratch/pw/node_modules/playwright-core"));
 const [,, url, out, theme, click] = process.argv;
 const browser = await chromium.launch({ executablePath: "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe" });
 import { readFileSync } from "node:fs";
-const tok = readFileSync("C:/Users/Fugma/.vibesquad/local-token", "utf8").trim();
+const tok = readFileSync(join(homedir(), ".vibesquad/local-token"), "utf8").trim();
 const ctx = await browser.newContext({ extraHTTPHeaders: { "x-vibesquad-token": tok }, viewport: { width: 3200, height: 1800 }, deviceScaleFactor: 1.2, colorScheme: theme });
 await ctx.addInitScript(() => localStorage.setItem("vs.firstRunDone", "1"));
 const page = await ctx.newPage();

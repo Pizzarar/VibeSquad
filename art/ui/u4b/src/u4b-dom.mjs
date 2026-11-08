@@ -1,9 +1,11 @@
 // Prints the class tree of the chat view (depth-limited) to find selectors.
 import { createRequire } from "node:module";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { readFileSync } from "node:fs";
-const { chromium } = createRequire(import.meta.url)("C:/Users/Fugma/projects/VibeSquad/scratch/pw/node_modules/playwright-core");
+const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT_CORE || join(homedir(), "projects/VibeSquad/scratch/pw/node_modules/playwright-core"));
 const browser = await chromium.launch({ executablePath: "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe" });
-const tok = readFileSync("C:/Users/Fugma/.vibesquad/local-token", "utf8").trim();
+const tok = readFileSync(join(homedir(), ".vibesquad/local-token"), "utf8").trim();
 const ctx = await browser.newContext({ extraHTTPHeaders: { "x-vibesquad-token": tok }, viewport: { width: 3072, height: 1728 }, colorScheme: "dark" });
 await ctx.addInitScript(() => localStorage.setItem("vs.firstRunDone", "1"));
 const page = await ctx.newPage();
