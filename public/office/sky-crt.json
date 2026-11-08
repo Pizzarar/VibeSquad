@@ -1,1 +1,1 @@
-{"slice":{"top":14,"right":20,"bottom":30,"left":20},"scale":3,"repeat":"round"}
+{"slice":{"top":3,"right":3,"bottom":5,"left":3},"scale":3,"repeat":"round","wall":{"width":4,"scale":3,"slice":{"top":3,"bottom":5},"repeat":"round"}}

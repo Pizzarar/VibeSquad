@@ -1,0 +1,74 @@
+<!doctype html>
+<!-- H1e shot harness: the sky-zones strip rebuilt with the same CSS (grid, padding 12/18/22, gap 18, border-image from
+     sky-crt.json, contained integer-scale face over the zone, 58% chat overlay). ?theme=dark|light&v=before|after|wall -->
+<html><head><meta charset="utf-8"><style>
+:root { --bg:#140c26; --panel:#21163d; --line:#54428a; --text:#f7f0ff; --muted:#b5a5d8; --cyan:#4fd6cf; --violet:#9b72e8; --face-bg:#2a1b6b; }
+:root[data-theme=light] { --bg:#e0d1dc; --panel:#ebe0e8; --line:#b092a7; --text:#2b1840; --muted:#574268; --cyan:#1a868a; --violet:#6a4fb0; --face-bg:#95d3f2; }
+html,body { margin:0; height:100%; background:var(--bg); color:var(--text); font:14px/1.4 "JetBrains Mono", monospace; }
+.app { display:grid; grid-template-columns: 300px 1fr; height:100%; }
+.side { background:var(--panel); border-right:1px solid var(--line); padding:14px; color:var(--muted); }
+.hub { display:grid; grid-template-rows: auto auto 1fr; min-width:0; }
+.top { height:44px; border-bottom:1px solid var(--line); background:var(--panel); }
+.sky-zones { display:grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap:18px; min-height:clamp(380px,46vh,560px);
+  padding:12px 18px 22px; background-repeat:repeat-x; background-size:auto 100%; background-position:left bottom; image-rendering:pixelated; }
+.sky-zones.butted { gap:0; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr); }
+.sky-zones.butted .z-riff { border-right-width:0 !important; }
+.sky-zones.butted .z-lord { border-left-width:0 !important; }
+.wall { border-style:solid; border-left-width:0; border-right-width:0; image-rendering:pixelated; }
+.sky-zone { position:relative; display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; border-style:solid; image-rendering:pixelated; }
+.stage { position:absolute; inset:0; overflow:hidden; background:var(--face-bg); }
+.area { position:absolute; left:0; right:0; top:0; bottom:58%; }
+.face { position:absolute; transform-origin:top left; width:48px; height:48px; background-repeat:no-repeat; image-rendering:pixelated; }
+.name { position:absolute; top:8px; left:12px; z-index:2; font-size:13px; letter-spacing:.04em; padding:2px 8px; color:var(--cyan);
+  background:color-mix(in srgb, var(--bg) 70%, transparent); border:1px solid var(--line); }
+.z-lord .name { color:var(--violet); }
+.body { position:absolute; left:0; right:0; bottom:0; height:58%; z-index:1; background:color-mix(in srgb, var(--bg) 78%, transparent);
+  border-top:1px solid var(--line); padding:10px 14px; box-sizing:border-box; display:flex; flex-direction:column; gap:8px; }
+.msg { color:var(--muted); } .msg b { color:var(--text); }
+.comp { margin-top:auto; height:56px; border:1px solid var(--line); background:var(--panel); }
+.floor { border-top:1px solid var(--line); background:var(--panel); }
+.tag { position:fixed; right:10px; bottom:8px; font-size:16px; color:var(--muted); }
+</style></head><body><div class="app"><div class="side">Squad · lanes</div><div class="hub"><div class="top"></div>
+<div class="sky-zones" id="sz"></div><div class="floor"></div></div></div><div class="tag" id="tag"></div>
+<script>
+const q = new URLSearchParams(location.search), theme = q.get("theme") || "dark", v = q.get("v") || "after";
+document.documentElement.dataset.theme = theme;
+const root = "../../public/office/";
+const crt = v === "before" ? { j: { slice:{top:14,right:20,bottom:30,left:20}, scale:3, repeat:"round" }, png: `old/sky-crt-${theme}.png` }
+                           : { j: null, png: `${root}sky-crt-${theme}.png` };
+const sz = document.getElementById("sz");
+sz.style.backgroundImage = `url(${root}sky-${theme}.png)`;
+if (v === "wall") sz.classList.add("butted");
+document.getElementById("tag").textContent = `H1e ${v} · ${theme}`;
+(async () => {
+  const j = crt.j || await (await fetch(`${root}sky-crt.json`)).json();
+  const faces = await (await fetch(`${root}faces.json`)).json();
+  const { top, right, bottom, left } = j.slice, s = j.scale;
+  for (const [bot, cls, label] of [["riffbot","z-riff","RIFFBOT"],["overlord","z-lord","OVERLORD"]]) {
+    const z = document.createElement("section");
+    z.className = `sky-zone ${cls}`;
+    Object.assign(z.style, { borderImageSource:`url(${crt.png})`, borderImageSlice:`${top} ${right} ${bottom} ${left} fill`,
+      borderWidth:`${top*s}px ${right*s}px ${bottom*s}px ${left*s}px`, borderImageRepeat:j.repeat });
+    const f = faces[bot].idle[0];
+    z.innerHTML = `<div class="stage" style="background:${faces[bot].bg?.[theme] ?? "var(--face-bg)"}"><div class="area"><div class="face"></div></div></div>
+      <span class="name">${label}</span><div class="body"><div class="msg"><b>you</b> ship the bezel pass</div>
+      <div class="msg"><b>${label.toLowerCase()}</b> on it. thinner frames, more sky.</div><div class="comp"></div></div>`;
+    sz.appendChild(z);
+    if (bot === "riffbot" && v === "wall" && j.wall) {
+      const w = j.wall, wd = document.createElement("div");
+      wd.className = "wall";
+      Object.assign(wd.style, { width:`${w.width*w.scale}px`, borderImageSource:`url(${root}sky-wall-${theme}.png)`,
+        borderImageSlice:`${w.slice.top} 0 ${w.slice.bottom} 0 fill`, borderTopWidth:`${w.slice.top*w.scale}px`,
+        borderBottomWidth:`${w.slice.bottom*w.scale}px`, borderImageRepeat:w.repeat });
+      sz.appendChild(wd);
+    }
+    requestAnimationFrame(() => {
+      const a = z.querySelector(".area"), el = z.querySelector(".face");
+      const k = Math.max(1, Math.floor(Math.min(a.clientWidth / 48, a.clientHeight / 48)));
+      Object.assign(el.style, { backgroundImage:`url(${root}face-${bot}-${theme}.png)`, backgroundPosition:`-${f.x}px -${f.y}px`,
+        transform:`scale(${k})`, left:`${Math.floor((a.clientWidth - 48*k)/2)}px`, top:`${Math.floor((a.clientHeight - 48*k)/2)}px` });
+      z.dataset.hole = `${z.clientWidth}x${z.clientHeight}`;
+    });
+  }
+})();
+</script></body></html>
