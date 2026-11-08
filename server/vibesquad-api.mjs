@@ -540,6 +540,7 @@ async function handleSettings(req, res) {
     if (body && "userName" in body) patch.userName = body.userName;
     if (body && "lanEnabled" in body) patch.lanEnabled = Boolean(body.lanEnabled);
     if (body && "pushEvents" in body) patch.pushEvents = body.pushEvents;
+    if (body && Array.isArray(body.dismissedCards)) patch.dismissedCards = body.dismissedCards;
     let saved = saveUserSettings(patch);
     if (
       body &&

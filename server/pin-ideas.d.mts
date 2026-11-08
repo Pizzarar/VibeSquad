@@ -15,3 +15,6 @@ export const SPIN_OFF_MAX: number;
 export type SpinOffRow = { name: string; brief: string };
 export function parseSpinOff(text: string): SpinOffRow[] | null;
 export function spinOffFrom(agentId: string, entries: { item: any; seqStart?: number; timestamp?: string }[]): { id: string; teams: SpinOffRow[] } | null;
+export function cardId(kind: string, agentId: string, key: string, text: string): string;
+export function sendToCardId(agentId: string, offer: { laneId: string; text: string }): string;
+export function spinOffCardId(agentId: string, teams: { name: string; brief: string }[]): string;

@@ -300,7 +300,71 @@ function dismissedSet(key = LOOKS_DONE_KEY): Set<string> {
   }
 }
 
-export const isLooksDoneDismissed = (messageId: string): boolean => dismissedSet().has(messageId);
+// Dismissed cards also live on the server (settings.json `dismissedCards`, newest 500) so every device hides a card
+// once any device acted on it. localStorage stays as the offline cache; the two are merged on read.
+const DISMISS_KEYS = [LOOKS_DONE_KEY, "vibesquad.sendToDismissed", "vibesquad.spinOffDismissed"];
+const SETTINGS_URL = "/__vibesquad/settings";
+let serverDismissed = new Set<string>();
+let dismissedLoad: Promise<void> | null = null;
+let dismissedVer = 0;
+const dismissedListeners = new Set<() => void>();
+const bumpDismissed = () => {
+  dismissedVer++;
+  dismissedListeners.forEach((l) => l());
+};
+export const subscribeDismissed = (l: () => void): (() => void) => {
+  dismissedListeners.add(l);
+  return () => dismissedListeners.delete(l);
+};
+export const dismissedVersion = (): number => dismissedVer;
+
+function mergeServerDismissed(body: { dismissedCards?: unknown } | null): void {
+  const ids = Array.isArray(body?.dismissedCards) ? (body!.dismissedCards as unknown[]).filter((x): x is string => typeof x === "string") : [];
+  const before = serverDismissed.size;
+  for (const id of ids) serverDismissed.add(id);
+  if (serverDismissed.size !== before) bumpDismissed();
+}
+
+async function postDismissed(ids: string[]): Promise<void> {
+  if (!ids.length) return;
+  try {
+    const res = await fetch(SETTINGS_URL, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ dismissedCards: ids }) });
+    if (res.ok) mergeServerDismissed((await res.json().catch(() => null)) as { dismissedCards?: unknown } | null);
+  } catch {
+    // offline: the localStorage copy keeps it hidden here, and the next load pushes it up
+  }
+}
+
+/** Fetch the shared list once (and push up any ids only this device knows). Safe to call repeatedly. */
+export function loadDismissedCards(): Promise<void> {
+  if (DEMO) return Promise.resolve();
+  dismissedLoad ??= (async () => {
+    try {
+      const res = await fetch(SETTINGS_URL);
+      if (!res.ok) throw new Error(String(res.status));
+      mergeServerDismissed((await res.json()) as { dismissedCards?: unknown });
+      const local = DISMISS_KEYS.flatMap((k) => [...dismissedSet(k)]);
+      await postDismissed(local.filter((id) => !serverDismissed.has(id)));
+    } catch {
+      dismissedLoad = null; // retry on the next read
+    }
+  })();
+  return dismissedLoad;
+}
+
+/** Test hook: forget the in-memory server list, as a freshly opened client would. */
+export function resetDismissedCards(): void {
+  serverDismissed = new Set();
+  dismissedLoad = null;
+  dismissedVer = 0;
+}
+
+function isDismissed(key: string, id: string): boolean {
+  void loadDismissedCards();
+  return dismissedSet(key).has(id) || serverDismissed.has(id);
+}
+
+export const isLooksDoneDismissed = (messageId: string): boolean => isDismissed(LOOKS_DONE_KEY, messageId);
 
 function dismiss(key: string, messageId: string): void {
   // Keep the newest 200 ids so the key cannot grow without bound.
@@ -308,6 +372,9 @@ function dismiss(key: string, messageId: string): void {
   try {
     localStorage.setItem(key, JSON.stringify(ids));
   } catch {}
+  serverDismissed.add(messageId);
+  bumpDismissed();
+  if (!DEMO) void postDismissed([messageId]);
 }
 
 export const dismissLooksDone = (messageId: string): void => dismiss(LOOKS_DONE_KEY, messageId);
@@ -515,11 +582,11 @@ export async function sendIdeaToTeam(laneId: string, text: string, from?: string
 }
 
 const SEND_TO_KEY = "vibesquad.sendToDismissed";
-export const isSendToDismissed = (messageId: string): boolean => dismissedSet(SEND_TO_KEY).has(messageId);
+export const isSendToDismissed = (messageId: string): boolean => isDismissed(SEND_TO_KEY, messageId);
 export const dismissSendTo = (messageId: string): void => dismiss(SEND_TO_KEY, messageId);
 
 const SPIN_OFF_KEY = "vibesquad.spinOffDismissed";
-export const isSpinOffDismissed = (messageId: string): boolean => dismissedSet(SPIN_OFF_KEY).has(messageId);
+export const isSpinOffDismissed = (messageId: string): boolean => isDismissed(SPIN_OFF_KEY, messageId);
 export const dismissSpinOff = (messageId: string): void => dismiss(SPIN_OFF_KEY, messageId);
 
 /**

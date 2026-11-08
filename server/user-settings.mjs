@@ -127,6 +127,19 @@ export function normalizeUserName(value) {
   return name || DEFAULT_USER_NAME;
 }
 
+// Send-to / spin-off / looks-done cards the owner already acted on, shared by every device. Newest ids win the cap.
+export const MAX_DISMISSED_CARDS = 500;
+export function normalizeDismissedCards(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const out = [];
+  for (let i = value.length - 1; i >= 0; i--) {
+    const id = typeof value[i] === "string" ? value[i].trim().slice(0, 300) : "";
+    if (id && !seen.has(id)) { seen.add(id); out.push(id); }
+  }
+  return out.slice(0, MAX_DISMISSED_CARDS).reverse();
+}
+
 const RETRY_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
 let tmpSeq = 0;
 const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -170,6 +183,8 @@ function viewOf(data) {
   }
   const pushEvents = normalizePushEvents(data.pushEvents);
   if (Object.keys(pushEvents).length) out.pushEvents = pushEvents;
+  const dismissedCards = normalizeDismissedCards(data.dismissedCards);
+  if (dismissedCards.length) out.dismissedCards = dismissedCards;
   // Runner & Providers block: owned by providers-catalog.mjs, carried through here so saves do not drop it.
   if (data.runner && typeof data.runner === "object" && !Array.isArray(data.runner)) out.runner = data.runner;
   // Remote (relay) proxy gate, (the relay proxy is gone; kept so saves do not drop it). Hand-edited only: saveUserSettings
@@ -229,6 +244,11 @@ export function saveUserSettings(patch, baseHome) {
   const pushEvents = normalizePushEvents(patch && "pushEvents" in patch ? patch.pushEvents : current.pushEvents);
   if (Object.keys(pushEvents).length) next.pushEvents = pushEvents;
   else delete next.pushEvents;
+  // dismissedCards is an add-only patch merged into the on-disk list here, so two devices dismissing at once never
+  // overwrite each other (and a patch for other keys never touches it).
+  if (patch && Array.isArray(patch.dismissedCards)) {
+    next.dismissedCards = normalizeDismissedCards([...normalizeDismissedCards(raw.dismissedCards), ...patch.dismissedCards]);
+  }
   writeSettingsAtomic(file, next);
   clearConfigWarning(file);
   return viewOf(next);

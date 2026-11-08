@@ -3,8 +3,8 @@
 // and the toast both report to. Side effects live in src/pinActions.ts.
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { bestOverlap, DEFAULT_PIN_PROFILE, hubPinForSquad, looksDoneFor, nameFromIdea, parseSendTo, pinsForSquad, describeSpinOff, isSpinOffRunning, spinOffFrom, spinOffRemaining, spinOffVersion, subscribeSpinOff, type Pin } from "./pins";
-import { createPin, createSpinOffPins, dismissSendTo, dismissSpinOff, isSpinOffDismissed, getLastBrainstormProfile, isSendToDismissed, sendIdeaToTeam, setLastBrainstormProfile } from "./pinActions";
+import { bestOverlap, DEFAULT_PIN_PROFILE, hubPinForSquad, looksDoneFor, nameFromIdea, parseSendTo, sendToCardId, spinOffCardId, pinsForSquad, describeSpinOff, isSpinOffRunning, spinOffFrom, spinOffRemaining, spinOffVersion, subscribeSpinOff, type Pin } from "./pins";
+import { createPin, dismissedVersion, subscribeDismissed, createSpinOffPins, dismissSendTo, dismissSpinOff, isSpinOffDismissed, getLastBrainstormProfile, isSendToDismissed, sendIdeaToTeam, setLastBrainstormProfile } from "./pinActions";
 import { spinUpPin } from "./pinFocus";
 import { getTeams, type TeamView } from "./teams";
 import { useLooksDoneId, type PinHandler } from "./PinGrid";
@@ -62,7 +62,7 @@ export function sendToFrom(agentId: string, entries: TimelineEntry[]): SendToOff
     if (it?.type !== "assistant_message" || typeof it.text !== "string") continue;
     const offer = parseSendTo(it.text);
     if (!offer) return null;
-    return { ...offer, id: `${agentId}:${it.id ?? it.messageId ?? entries[i].seqStart ?? entries[i].timestamp ?? it.text.length}` };
+    return { ...offer, id: sendToCardId(agentId, offer) };
   }
   return null;
 }
@@ -115,7 +115,8 @@ export function useSpinOff(agentId: string | null): SpinOffOffer | null {
 /** "Spin up 3 Teams: A, B, C · Not yet". One click pins them all in this Squad; no Buddies start. */
 export function SpinOffCard({ pin, offer, variant = "tile" }: { pin: Pin; offer: SpinOffOffer; variant?: "tile" | "bar" }) {
   const [hidden, setHidden] = useState(() => isSpinOffDismissed(offer.id));
-  useEffect(() => setHidden(isSpinOffDismissed(offer.id)), [offer.id]);
+  const dv = useSyncExternalStore(subscribeDismissed, dismissedVersion);
+  useEffect(() => setHidden(isSpinOffDismissed(offer.id)), [offer.id, dv]);
   useSyncExternalStore(subscribeSpinOff, spinOffVersion);
   const busy = isSpinOffRunning(offer.id);
   const teams = spinOffRemaining(offer.id, offer.teams);
@@ -170,10 +171,11 @@ export function SendToCard({ pin, offer, variant = "tile" }: { pin: Pin; offer: 
   const [hidden, setHidden] = useState(() => isSendToDismissed(offer.id));
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState(false);
+  const dv = useSyncExternalStore(subscribeDismissed, dismissedVersion);
   useEffect(() => {
     setHidden(isSendToDismissed(offer.id));
     setPreview(false);
-  }, [offer.id, offer.text]);
+  }, [offer.id, offer.text, dv]);
   if (hidden || !offer.text) return null;
   const target = laneName(offer.laneId);
   const lines = offer.text.split("\n");

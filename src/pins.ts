@@ -377,6 +377,9 @@ export async function runSpinOffOnce<P>(key: string, create: (name: string, brie
 import { takenLaneIds } from "../server/pin-ideas.mjs";
 export {
   bestOverlap,
+  cardId,
+  sendToCardId,
+  spinOffCardId,
   nameFromIdea,
   newPinBrief,
   OVERLAP_THRESHOLD,
