@@ -1189,7 +1189,7 @@ export function DrawerHeader({
     <>
 
       {isBs && (
-        <div className={`brainstorm-ctx-bar tone-${bsTone}`} data-testid="brainstorm-ctx-bar" style={{ padding: "4px 8px", margin: "4px 8px 0" }}>
+        <div className={`brainstorm-ctx-bar tone-${bsTone}`} data-testid="brainstorm-ctx-bar" style={{ margin: "4px 8px 0" }}>
           {isTopicBs && (
             <div className="brainstorm-topic-row">
               <span className="brainstorm-topic-badge" data-testid="brainstorm-topic-badge">

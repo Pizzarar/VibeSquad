@@ -5753,5 +5753,11 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
   padding-block: 0 !important; min-height: calc(var(--u3-px) * 9); line-height: calc(var(--u3-px) * 9); gap: var(--sp-2);
 }
 .exposed-network-banner button, .read-only-banner button, .config-warning-banner button, .update-available-banner button { line-height: 1; padding-block: 0; }
+/* Context bar: the readout and actions start below the painted cap, not across its edge (DrawerHeader.tsx no longer sets inline padding). */
+.brainstorm-ctx-bar { padding: calc(var(--u3-px) * 6 + var(--sp-1)) var(--sp-2) var(--sp-1); }
+/* Worker chips above the composer: the name ellipsizes inside the chip (the chip is a flex row, so bare text could only be cut), and the bar is tall enough for two chip rows before it scrolls. */
+.drawer-subagents-bar { max-height: calc(var(--u3-px) * 28 + var(--sp-2) * 2); }
+.drawer-subagent-chip { min-width: 0; }
+.drawer-subagent-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Banner text stays on one row (ellipsis, full text in the title attr) so narrow screens never grow it past the painted strip. */
 .exposed-network-banner > span, .read-only-banner > span, .config-warning-banner > span, .update-available-banner > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
