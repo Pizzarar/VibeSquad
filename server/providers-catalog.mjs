@@ -604,7 +604,7 @@ function readLaneCodes(home) {
   const map = new Map();
   try {
     const own = home ? join(home, "teams.json") : null;
-    const file = own && !isForbiddenRealHome(home) && existsSync(own) ? own : resolveTeamsFilePath(REPO_ROOT);
+    const file = own && !isForbiddenRealHome(home) && existsSync(own) ? own : resolveTeamsFilePath(gitRepoRoot());
     const t = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
     for (const team of t.teams ?? []) for (const l of team.lanes ?? []) {
       if (!l?.id) continue;
@@ -1060,14 +1060,18 @@ export function readUsageLedger(home) {
 }
 
 /** Idempotently append snapshot records (kind "unit" keyed by sha, "day" keyed by day) missing from the ledger.
- * Never writes the real home under a test runner (isForbiddenRealHome). Returns the number of new lines appended. */
-export function syncUsageLedger(home, snapshot) {
+ * Day records are only written once their day has fully completed (day < today UTC), so the archived day is the
+ * end-of-day total rather than the first partial snapshot of an in-progress day. Never writes the real home under a
+ * test runner (isForbiddenRealHome). Returns the number of new lines appended. */
+export function syncUsageLedger(home, snapshot, now = Date.now) {
   const dir = home || vibesquadHome();
   if (isForbiddenRealHome(dir)) return 0;
+  const todayUtc = new Date(now()).toISOString().slice(0, 10);
   const existing = readUsageLedger(dir);
   const keys = new Set(existing.map((r) => `${r.kind}\u0000${r.sha ?? r.unit ?? r.day ?? ""}`));
   const lines = [];
   for (const rec of snapshot) {
+    if (rec.kind === "day" && typeof rec.day === "string" && rec.day >= todayUtc) continue; // in-progress day: skip until it completes
     const key = `${rec.kind}\u0000${rec.sha ?? rec.unit ?? rec.day ?? ""}`;
     if (keys.has(key)) continue;
     keys.add(key);
@@ -1391,7 +1395,7 @@ function maybeScheduleUsageReview(usage, home, opts = {}) {
   } catch { /* best-effort */ }
 }
 
-export function getUsage({ home, since, until, git, laneCodes, usageReview } = {}) {
+export function getUsage({ home, since, until, git, laneCodes, usageReview, now = Date.now } = {}) {
   const homeDir = home || vibesquadHome();
   const dir = join(homeDir, "runner", "agents");
   const seen = new Set();
@@ -1593,7 +1597,7 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview } = {
 
   // ---- usa-10: durable ledger sync + fold archived entries (units/days absent from raw), then benchmark rollups.
   const agentById = new Map(agents.map((a) => [a.agentId, a]));
-  syncUsageLedger(homeDir, buildLedgerSnapshot(merged, rows));
+  syncUsageLedger(homeDir, buildLedgerSnapshot(merged, rows), now);
   const ledger = readUsageLedger(homeDir);
   const rawShas = new Set(merged.map((u) => u.sha));
   const rawDays = new Set(rows.map((r) => r.day));

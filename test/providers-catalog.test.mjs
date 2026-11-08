@@ -1111,29 +1111,42 @@ test('usa-10: usage-ledger write/read/fold, idempotent sync, no double count, fo
   const dir = path.join(home, 'runner', 'agents');
   fs.mkdirSync(dir, { recursive: true });
   const d = Date.UTC(2026, 10, 9, 12);
+  const now = () => Date.UTC(2026, 10, 10, 12); // today UTC = 2026-11-10, so 2026-11-09 is a completed day
   fs.writeFileSync(path.join(dir, 'rn-a.jsonl'),
     ev({ seq: 0, ts: d, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'x', role: 'worker' } }) +
     ev({ seq: 1, ts: d, type: 'turn_done', costUsd: 1 }));
   clearUsageCache();
 
-  getUsage({ home, git: noGit });
+  getUsage({ home, git: noGit, now });
   let ledger = readUsageLedger(home);
-  assert.ok(ledger.some((r) => r.kind === 'day' && r.day === '2026-11-09'), 'day record synced');
+  assert.ok(ledger.some((r) => r.kind === 'day' && r.day === '2026-11-09'), 'completed day record synced');
   assert.equal(ledger.filter((r) => r.kind === 'day' && r.day === '2026-11-09').length, 1, 'one day record');
 
   const before = fs.readFileSync(path.join(home, 'runner', 'usage-ledger.jsonl'), 'utf8');
-  getUsage({ home, git: noGit });
+  getUsage({ home, git: noGit, now });
   assert.equal(fs.readFileSync(path.join(home, 'runner', 'usage-ledger.jsonl'), 'utf8'), before, 'idempotent sync');
-  assert.equal(getUsage({ home, git: noGit }).totals.turns, 1, 'raw day not double counted');
+  assert.equal(getUsage({ home, git: noGit, now }).totals.turns, 1, 'raw day not double counted');
 
   // A ledger day absent from raw agent logs is folded back into totals + byDay.
   fs.appendFileSync(path.join(home, 'runner', 'usage-ledger.jsonl'),
     JSON.stringify({ kind: 'day', day: '2026-11-01', costUsd: 2, totalTokens: 200, inputTokens: 100, outputTokens: 100, turns: 2, unitsMerged: 0, locChanged: 0, byProvider: {} }) + '\n');
-  const u = getUsage({ home, git: noGit });
+  const u = getUsage({ home, git: noGit, now });
   assert.equal(u.totals.turns, 3, 'folded day turns added (1 raw + 2 ledger)');
   assert.ok(u.byDay.some((r) => r.day === '2026-11-01'), 'folded day appears in byDay');
 
   assert.equal(syncUsageLedger(realVibesquadHome(), [{ kind: 'day', day: '2099-01-01', turns: 1 }]), 0, 'forbidden real home: no write');
+});
+
+test('usa-10: syncUsageLedger only writes completed days (day < today UTC)', () => {
+  const home = tmp();
+  const now = () => Date.UTC(2026, 10, 10, 12); // today UTC = 2026-11-10
+  const written = syncUsageLedger(home, [
+    { kind: 'day', day: '2026-11-09', turns: 1, costUsd: 1, totalTokens: 0, inputTokens: 0, outputTokens: 0, unitsMerged: 0, locChanged: 0, byProvider: {} },
+    { kind: 'day', day: '2026-11-10', turns: 2, costUsd: 2, totalTokens: 0, inputTokens: 0, outputTokens: 0, unitsMerged: 0, locChanged: 0, byProvider: {} },
+    { kind: 'day', day: '2026-11-11', turns: 3, costUsd: 3, totalTokens: 0, inputTokens: 0, outputTokens: 0, unitsMerged: 0, locChanged: 0, byProvider: {} },
+  ], now);
+  assert.equal(written, 1, 'only the completed (past) day is written');
+  assert.deepEqual(readUsageLedger(home).map((r) => r.day), ['2026-11-09']);
 });
 
 test('usa-10: workflowMode from [wf:] tag wins, else derived from provider/profile', () => {
