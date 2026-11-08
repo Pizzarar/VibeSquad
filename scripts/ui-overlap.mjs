@@ -6,7 +6,8 @@
 //                               [--out scratch/ui-overlap] [--shots scratch/shots] [--no-fail] [--rebuild]
 //
 // Kinds: overlap, text-overflow, text-outside-container, truncated, edge-clip, decor-line (geometric line/border/
-// pseudo box through text), contrast = failing. decor-suspect (pixel background step through text) = warn-only.
+// pseudo box through text), compact-scroll (page/panel scrolls > 2x its height and past a viewport) and compact-menu (open menu
+// covers > 40% of the viewport or is taller than it): the owner's compact-by-default rule. contrast = failing. decor-suspect (pixel background step through text) = warn-only.
 // Exit 1 when any failing, non-allow-listed hit remains (use --no-fail to just write the report).
 import fs from "node:fs";
 import path from "node:path";
@@ -25,6 +26,7 @@ export const SIZES = {
   "4k": { w: 3200, h: 1800, dpr: 1.2, label: "3840x2160@1.2 (3200x1800 css)" },
   "1080": { w: 1920, h: 1080, dpr: 1, label: "1920x1080" },
   "800": { w: 1280, h: 800, dpr: 1, label: "1280x800" },
+  "720": { w: 1280, h: 720, dpr: 1, label: "1280x720" },
   mobile: { w: 390, h: 844, dpr: 1, label: "390x844", mobile: true },
 };
 export const WARN_KINDS = new Set(["decor-suspect"]);
@@ -87,6 +89,21 @@ async function mobileOpenRow(page, text) {
 // Opened agents persist across reloads, so clear storage to land on the pin grid again.
 const mobileGrid = async (page) => { await page.evaluate(() => { localStorage.clear(); sessionStorage.clear(); }); await reload(page); };
 
+// Hub pages (Sky / Tower switcher): the hub lane is the RiffBot pin; the page choice persists, so always pick the tab explicitly.
+async function toHubPage(page, tab, query = "") {
+  if (query) await reload(page, query);
+  await toFocus(page);
+  await click(page, tid("pin-rail-riffbot"));
+  await page.locator(tid("hub-pages")).waitFor({ timeout: 8000 });
+  await click(page, tid(`hub-tab-${tab}`));
+  await sleep(900);
+}
+async function toSkyRiff(page, waitMs) {
+  await toHubPage(page, "sky", "&riff=1");
+  await click(page, tid("sky-face-hit-riffbot"));
+  await sleep(waitMs);
+}
+
 const COMPOSER_ROOTS = ['footer.composer', tid("drawer-subagents-bar"), tid("drawer-config-menu-btn")];
 
 // `mobile`: undefined = same setup as desktop, function = alternate route, false = "no mobile route".
@@ -104,6 +121,19 @@ export const SURFACES = [
   { id: "focus-lead", setup: async (p) => { await toFocus(p); await click(p, tid("pin-team-lead")); await sleep(700); }, mobile: (p) => mobileOpenRow(p, "VIBESQUAD ord1") },
   { id: "focus-worker", setup: async (p) => { await toFocus(p); await click(p, tid("pin-team-worker-demo-art-o")); await sleep(700); }, mobile: (p) => mobileOpenRow(p, "Art Painter - Opus") },
   { id: "hub", setup: async (p) => { await toFocus(p); await click(p, tid("pin-rail-riffbot")); await sleep(1500); }, mobile: false },
+  { id: "sky-idle", setup: (p) => toHubPage(p, "sky"), mobile: false }, // no live RiffBot / Overlord: the "Spin Up" TVs
+  { id: "sky-rest", setup: (p) => toHubPage(p, "sky", "&riff=1"), after: async (p) => { await reload(p); }, mobile: false },
+  { id: "sky-riff-open", setup: (p) => toSkyRiff(p, 700), after: async (p) => { await reload(p); }, mobile: false },
+  { id: "sky-riff-landed", setup: (p) => toSkyRiff(p, 4500), after: async (p) => { await reload(p); }, mobile: false },
+  { id: "hub-tower", setup: (p) => toHubPage(p, "tower"), mobile: false },
+  {
+    id: "hub-tower-floor2",
+    setup: async (p) => { await toHubPage(p, "tower"); await click(p, tid("sq-floor-next"), 2500); await sleep(500); },
+    mobile: false,
+  },
+  { id: "hub-tabs", setup: (p) => toHubPage(p, "sky"), roots: [tid("hub-tabs")], mobile: false },
+  { id: "rail-squads-icon", setup: toFocus, roots: [tid("pin-focus-bar")], mobile: false },
+  { id: "pin-grid-teams-toggle", setup: async (p) => { await toPinGrid(p); await click(p, tid("squad-full-toggle")); await sleep(500); }, after: async (p) => { await reload(p); }, mobile: false },
   { id: "settings", setup: async (p) => { await reset(p); await click(p, tid("sidebar-settings-btn")); await p.locator(tid("settings-pane")).waitFor({ timeout: 6000 }); await sleep(600); }, mobile: false },
   { id: "menu-drawer-config", setup: async (p) => { await toFocus(p); await click(p, tid("drawer-config-menu-btn")); await sleep(400); }, mobile: false },
   { id: "menu-drawer-more", setup: async (p) => { await toFocus(p); await click(p, tid("drawer-more-toggle")); await sleep(400); }, mobile: false },

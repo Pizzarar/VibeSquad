@@ -348,6 +348,39 @@
     }
   }
 
+  // 5. Compact by default (owner rule, docs/lanes/ui-bois/SPEC.md: "no overbearing menus, no massive scrolls"). Layout, so "ours".
+  //  (a) compact-scroll: a page / panel that scrolls past MAX_SCROLL x its own height AND past one full viewport of content.
+  //      2x because 1-2 panel-heights is ordinary "see a bit more" scrolling; beyond that the owner is paging, not glancing.
+  //      The viewport floor stops small inner boxes (a 90px list holding 200px) from counting as "massive".
+  //  (b) compact-menu: an open popover / menu / dropdown that covers more than MAX_MENU of the viewport or is taller than it.
+  //      40% leaves room for a real menu on a 1280x720 screen (a ~12-row list) while a half-screen sheet is not a menu any more.
+  const MAX_SCROLL = opts.maxScrollRatio ?? 2, MAX_MENU = opts.maxMenuFraction ?? 0.4;
+  if (!opts.rootSelectors && !openModal) {
+    const se = document.scrollingElement ?? document.documentElement;
+    if (se.clientHeight > 0 && se.scrollHeight > MAX_SCROLL * se.clientHeight) {
+      add("compact-scroll", "ours", document.documentElement, null, `page scrolls ${(se.scrollHeight / se.clientHeight).toFixed(1)}x its height (scrollHeight ${se.scrollHeight} > ${MAX_SCROLL} x clientHeight ${se.clientHeight}) by default`, { x: 0, y: 0, w: vw, h: vh });
+    }
+  }
+  for (const el of els) {
+    const s = style(el);
+    if (!["auto", "scroll"].includes(s.overflowY) || el.clientHeight < 40) continue;
+    if (el.scrollHeight > MAX_SCROLL * el.clientHeight && el.scrollHeight > vh) {
+      add("compact-scroll", "ours", el, null, `panel scrolls ${(el.scrollHeight / el.clientHeight).toFixed(1)}x its height (scrollHeight ${el.scrollHeight} > ${MAX_SCROLL} x clientHeight ${el.clientHeight}, and > viewport ${vh})`);
+    }
+  }
+  const MENU_SEL = '[role=menu],[role=listbox],[popover],[class*="popover"],[class*="dropdown"],[class*="-menu-list"],[class*="-pop"]:not([class*="popover"])';
+  const menus = els.filter((el) => el.matches(MENU_SEL) && ["absolute", "fixed"].includes(style(el).position) && !el.matches(".modal-back,.modal"));
+  for (const el of menus) {
+    if (menus.some((o) => o !== el && o.contains(el))) continue; // judge the outermost floating box once
+    const r = el.getBoundingClientRect();
+    if (!inViewport(r)) continue;
+    const vis = Math.max(0, Math.min(r.right, vw) - Math.max(r.left, 0)) * Math.max(0, Math.min(r.bottom, vh) - Math.max(r.top, 0));
+    const frac = vis / (vw * vh);
+    if (frac > MAX_MENU || r.height > vh) {
+      add("compact-menu", "ours", el, null, `open menu covers ${(frac * 100).toFixed(0)}% of the viewport (limit ${MAX_MENU * 100}%), ${r.width.toFixed(0)}x${r.height.toFixed(0)}px vs ${vw}x${vh}${r.height > vh ? ", taller than the viewport" : ""}`);
+    }
+  }
+
   // Text samples for the node side (pixel contrast + background steps through the text line).
   const texts = [];
   for (const { el, vis: tb } of textLeaves) {

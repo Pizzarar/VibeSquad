@@ -11,6 +11,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { resolvePlaywright, findBrowser } from "../scripts/ui-overlap/env.mjs";
 
 const on = process.env.UI_OVERLAP === "1";
 const skip = on ? false : "set UI_OVERLAP=1 (fails until V1b + @art U4b land)";
@@ -54,4 +55,42 @@ test("allow-list has no entries for the composer chip, chip row or settings head
   const forbidden = /drawer-config|config-summary|composer|subagent|settings|modal-head/i;
   const bad = allow.filter((a) => forbidden.test(`${a.selector ?? ""} ${a.other ?? ""} ${a.text ?? ""} ${a.surface ?? ""}`));
   assert.deepEqual(bad, [], "these hits must be fixed, not allow-listed");
+});
+
+test("no compact-by-default hit: no massive scroll, no overbearing menu (owner rule, allow-list free)", opts, async () => {
+  const r = await getReport();
+  const bad = r.hits.filter((h) => h.kind === "compact-scroll" || h.kind === "compact-menu");
+  assert.equal(bad.length, 0, `${bad.length} compact-by-default hits:
+${describeHits(bad)}`);
+});
+
+// Always-on (needs only a local Edge/Chrome + Playwright, skips without): the two compact geometry checks fire on a
+// synthetic page and stay quiet on a compact one, at the thresholds documented in page-audit.js (scroll 2x + 1 viewport, menu 40%).
+const AUDIT_SRC = fs.readFileSync(new URL("../scripts/ui-overlap/page-audit.js", import.meta.url), "utf8");
+const pw = resolvePlaywright(), exe = findBrowser();
+const fixtureHtml = (body) => `<!doctype html><body style="margin:0;height:100vh;overflow:hidden">${body}</body>`;
+const BIG_LIST = `<div id="p" style="position:absolute;left:0;top:0;width:300px;height:300px;overflow-y:auto"><div style="height:2000px">rows</div></div>`;
+const SMALL_LIST = `<div id="p" style="position:absolute;left:0;top:0;width:300px;height:300px;overflow-y:auto"><div style="height:500px">rows</div></div>`;
+const BIG_MENU = `<div role="menu" id="m" style="position:absolute;left:0;top:0;width:90vw;height:80vh;background:#ccc">menu</div>`;
+const SMALL_MENU = `<div role="menu" id="m" style="position:absolute;left:0;top:0;width:200px;height:240px;background:#ccc">menu</div>`;
+
+test("compact guard: geometry checks fire on massive scrolls / overbearing menus and not on compact ones", { skip: pw && exe ? false : "no Playwright / Edge / Chrome" }, async () => {
+  const browser = await pw.chromium.launch({ executablePath: exe, headless: true });
+  try {
+    const page = await (await browser.newContext({ viewport: { width: 1280, height: 720 } })).newPage();
+    const kinds = async (body) => {
+      await page.setContent(fixtureHtml(body));
+      const res = await page.evaluate(`(${AUDIT_SRC})(${JSON.stringify({ tolerance: 2, rootSelectors: null })})`);
+      return res.hits.filter((h) => h.kind.startsWith("compact-"));
+    };
+    const scroll = await kinds(BIG_LIST);
+    assert.deepEqual(scroll.map((h) => h.kind), ["compact-scroll"], "2000px list in a 300px panel (6.7x, > viewport) is a massive scroll");
+    assert.equal(scroll[0].split, "ours");
+    assert.deepEqual(await kinds(SMALL_LIST), [], "500px in a 300px panel (1.7x, under one viewport) is compact");
+    const menu = await kinds(BIG_MENU);
+    assert.deepEqual(menu.map((h) => h.kind), ["compact-menu"], "a 90vw x 80vh menu covers 72% of the viewport");
+    assert.deepEqual(await kinds(SMALL_MENU), [], "a 200x240 menu is compact");
+  } finally {
+    await browser.close();
+  }
 });

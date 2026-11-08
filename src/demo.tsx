@@ -97,6 +97,15 @@ const CAST: Spec[] = [
   { id: "demo-lead-site", who: "sonnet", title: "★ LEAD · Site polish", labels: { team: "site", lead: "site-polish", role: "lead" }, used: 12_000, cwd: "/path/to/example-site" },
 ];
 
+// ?riff=1: a live RiffBot + Overlord on the VibeSquad hub lane (lane label "riffbot"), so the Sky page can open Riff's chat,
+// slam him into the Overlord and land the takeover. Off by default: the plain demo's hub is idle ("Spin Up RiffBot").
+if (typeof location !== "undefined" && new URLSearchParams(location.search).has("riff")) {
+  CAST.push(
+    { id: "demo-hub-riff", who: "claude", title: "RiffBot · VibeSquad hub", status: "running", labels: vs({ role: "brainstorm", lane: "riffbot" }), used: 40_000, ago: 1 },
+    { id: "demo-hub-overlord", who: "gemini", title: "★ OVERLORD · VibeSquad hub", status: "running", labels: vs({ role: "lead", lane: "riffbot" }), used: 60_000, ago: 1 },
+  );
+}
+
 const ARCHIVED: Spec[] = [
   { id: "demo-arc-1", who: "claude", title: "Implement - step 1 scaffold", status: "closed", labels: vs({ role: "worker" }), used: 90_000, ago: 3000, extra: { archivedAt: new Date(Date.now() - 2 * 86_400_000).toISOString() } },
   { id: "demo-arc-2", who: "gemini", title: "Audit - DSF", status: "closed", labels: vs({ role: "worker" }), used: 120_000, ago: 4000, extra: { archivedAt: new Date(Date.now() - 5 * 3_600_000).toISOString() } },
