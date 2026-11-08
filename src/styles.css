@@ -4700,7 +4700,7 @@ button.project-file-name:hover { text-decoration: underline; }
   grid-row: 4;
   min-height: 0;
   max-height: 38vh;
-  overflow: auto;
+  overflow: hidden;
 }
 
 /* ── Sky zones (src/SkyZones.tsx, docs/PLAN_SKY_GODS_C2B.md G1): two sky-CRT chats above the tower ── */
@@ -4870,17 +4870,64 @@ button.project-file-name:hover { text-decoration: underline; }
 .sky-static-text { font-family: var(--arcade); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; background: var(--bg); padding: 4px 8px; border: 1px solid var(--line); }
 @keyframes sky-static-roll { to { background-position: 0 4px, 7px 0, 0 0; } }
 @media (prefers-reduced-motion: reduce) { .sky-static { animation: none; } }
-.sq-floor-tower {
+/* HP4: one floor per screen. The section fills the box its parent gives it and never scrolls; the stage holds the floor, the lift bar pages it. */
+.sq-floor {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  width: max-content;
-  min-width: 100%;
-  padding: 6px 0;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
   background: var(--navy);
   border-top: 2px solid var(--cyan);
 }
+.sq-floor-stage { flex: 1 1 0; min-height: 0; min-width: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.sq-floor-tower { display: flex; flex-direction: column; align-items: center; justify-content: center; max-width: 100%; max-height: 100%; }
 .sq-floor-band-wrap { position: relative; flex: none; }
+/* CRT blink between floors: collapse to a line, then open again. Two ~100ms halves, CSS only; reduced motion swaps instantly (no class is ever set). */
+.sq-floor-band-wrap.is-blink-out { animation: sq-floor-blink-out 100ms steps(4, end) forwards; }
+.sq-floor-band-wrap.is-blink-in { animation: sq-floor-blink-in 100ms steps(4, end) both; }
+@keyframes sq-floor-blink-out { 0% { transform: scaleY(1); filter: brightness(1); } 60% { transform: scaleY(0.04); filter: brightness(2.2); } 100% { transform: scaleY(0.01) scaleX(0.6); filter: brightness(3); } }
+@keyframes sq-floor-blink-in { 0% { transform: scaleY(0.01) scaleX(0.6); filter: brightness(3); } 40% { transform: scaleY(0.04); filter: brightness(2.2); } 100% { transform: scaleY(1); filter: brightness(1); } }
+@media (prefers-reduced-motion: reduce) { .sq-floor-band-wrap.is-blink-out, .sq-floor-band-wrap.is-blink-in { animation: none; } }
+/* The lift bar: < 07 > under the shaft, so paging reads as the elevator. */
+.sq-floor-lift { flex: none; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 4px 0 6px; }
+.sq-floor-counter {
+  min-width: 3ch;
+  padding: 1px 8px;
+  text-align: center;
+  font-family: var(--arcade);
+  font-size: 16px;
+  letter-spacing: 0.1em;
+  color: var(--cyan);
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+.sq-floor-arrow {
+  position: relative;
+  width: 28px;
+  height: 24px;
+  padding: 0;
+  font-family: var(--arcade);
+  font-size: 18px;
+  line-height: 1;
+  color: var(--text);
+  background: var(--panel-hi);
+  border: 1px solid var(--line);
+  cursor: pointer;
+}
+.sq-floor-arrow:hover:not(:disabled),
+.sq-floor-arrow:focus-visible { background: var(--text); color: var(--bg); }
+.sq-floor-arrow:disabled { opacity: 0.35; cursor: default; }
+.sq-floor-arrow.has-needs::after {
+  content: "";
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 8px;
+  height: 8px;
+  background: var(--pink-fill);
+  border: 1px solid var(--bg);
+}
 .sq-floor-band {
   position: relative;
   overflow: hidden;
@@ -4915,8 +4962,15 @@ button.project-file-name:hover { text-decoration: underline; }
   background-repeat: no-repeat;
 }
 .sq-floor-sprite-fallback { background: var(--coral); border: 1px solid var(--line); box-sizing: border-box; }
+/* FS-a: a 1px silhouette that hugs the sprite's own pixels (4 hard drop-shadows, no blur) + a 1px stepped hop on hover. */
+.sq-floor-char:focus-visible { outline: none; }
 .sq-floor-char:hover .sq-floor-sprite,
-.sq-floor-char:focus-visible .sq-floor-sprite { outline: 1px solid var(--cyan); }
+.sq-floor-char:focus-visible .sq-floor-sprite {
+  filter: drop-shadow(1px 0 0 var(--cyan)) drop-shadow(-1px 0 0 var(--cyan)) drop-shadow(0 1px 0 var(--cyan)) drop-shadow(0 -1px 0 var(--cyan));
+}
+.sq-floor-char:hover .sq-floor-sprite { animation: sq-floor-hop 120ms steps(1, end) forwards; }
+@keyframes sq-floor-hop { from { transform: translateY(0); } to { transform: translateY(-1px); } }
+@media (prefers-reduced-motion: reduce) { .sq-floor-char:hover .sq-floor-sprite { animation: none; } }
 .sq-floor-bubble { position: absolute; display: block; pointer-events: none; image-rendering: pixelated; background-repeat: no-repeat; }
 .sq-floor-plus {
   position: absolute;
