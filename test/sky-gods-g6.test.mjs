@@ -273,3 +273,54 @@ test("G8c wall: absolute, above both TVs and the chat panel, never in the grid -
   assert.equal(st.width, "18px");
   for (const k of Object.keys(st)) assert.ok(!/grid|flex|gap|padding/i.test(k), k); // only its own box
 });
+
+// ── G8 follow-ups: no nested buttons, whole face when RiffBot is not running ──
+test("no interactive element nested in another: .sky-face-hit is an empty sibling button; spin-up / x are siblings; the sidebar badge inside a row button is a span", () => {
+  const sky = src("SkyZones.tsx");
+  const hit = sky.match(/<button[^>]*?className="sky-face-hit"[\s\S]*?\/>/);
+  assert.ok(hit, "the face hit button is self-closing (no children)");
+  assert.ok(!hit[0].slice(1).includes("<button") && !hit[0].includes("</button>"), "no button inside .sky-face-hit");
+  // Spin Up / Resume / x live in the zone body or beside the hit button, never in it.
+  const zone = sky.slice(sky.indexOf("<section"), sky.indexOf("</section>"));
+  assert.ok(zone.indexOf("sky-face-hit") < zone.indexOf("sky-chat-close") && zone.indexOf("sky-chat-close") < zone.indexOf("sky-start-riffbot"));
+  assert.ok(/\.sky-face-hit \{ position: absolute; inset: 0;/.test(src("styles.css"))); // an absolute sibling over the face, not a wrapper
+  const grid = src("PinGrid.tsx");
+  assert.ok(grid.includes("export function NeedsBadgeInline") && /<span\s+role="button"\s+tabIndex=\{0\}/.test(grid));
+  const row = grid.slice(grid.indexOf("const PinRow = memo"), grid.indexOf("export const SidebarRiffBot"));
+  assert.ok(row.includes("<NeedsBadgeInline") && !/<NeedsBadge pin/.test(row)); // pin-row <button> no longer holds a <button>
+  const riff = grid.slice(grid.indexOf("export const SidebarRiffBot"), grid.indexOf("export function SidebarPins"));
+  assert.ok(riff.includes("<NeedsBadgeInline") && !/<NeedsBadge pin/.test(riff));
+});
+
+test("RiffBot not running: the face stays whole (dimmed) and the label/Spin Up strip sits below the face area, never over it", () => {
+  const css = src("styles.css");
+  const sky = src("SkyZones.tsx");
+  assert.ok(sky.includes('idle = !panel && zone.bot === "riffbot" && !zone.agentId') && sky.includes('${idle ? " is-idle" : ""}'));
+  const strip = css.match(/--sky-idle-strip: (\d+)px/);
+  assert.ok(strip);
+  assert.ok(css.includes(".sky-zone.is-idle .sky-face-area { bottom: var(--sky-idle-strip); }")); // face box ends where the strip starts
+  assert.ok(css.includes(".sky-zone.is-idle .sky-crt-body { top: auto; height: var(--sky-idle-strip);"));
+  assert.ok(/\.sky-zone\.is-idle \.sky-face \{ opacity: 0\.5;/.test(css)); // dimmed, not covered
+  // Geometry: a 3200x1800-layout TV (~1300x880) still gets a whole integer-scaled face above a 34px strip.
+  const box = { w: 1300, h: 880 - Number(strip[1]) };
+  const { k, top } = logic.faceContain({ w: 80, h: 48 }, box);
+  assert.ok(k >= 1 && top >= 0 && top + 48 * k === box.h, "face fits whole inside the box above the strip");
+  // The old overlay (a translucent strip over the face's bottom) is gone.
+  assert.ok(!css.includes(".sky-zone-riffbot:not(.sky-chat-panel) .sky-crt-body:has(.sky-static)"));
+});
+
+test("the pin-rail tile button also uses the inline (span) needs badge: no <button> inside <button> anywhere on the squad page", () => {
+  const rail = src("PinRail.tsx");
+  const tile = rail.slice(rail.indexOf('className="pin-rail-open"') - 200, rail.indexOf("<CheckinButton"));
+  assert.ok(tile.includes("<NeedsBadgeInline pin={pin} />") && !/<NeedsBadge pin/.test(tile));
+});
+
+test("SquadTile's portrait button also holds the inline badge; the only plain NeedsBadge <button>s left are in div heads (tile head, rail active head)", () => {
+  const grid = src("PinGrid.tsx");
+  const portrait = grid.slice(grid.indexOf('className="squad-home-portrait"'), grid.indexOf('className="squad-home-lead-line'));
+  assert.ok(portrait.includes("<NeedsBadgeInline pin={pin} />") && !/<NeedsBadge pin/.test(portrait));
+  const plain = [...grid.matchAll(/<NeedsBadge pin=/g)].length + [...src("PinRail.tsx").matchAll(/<NeedsBadge pin=/g)].length;
+  assert.equal(plain, 2); // PinTile head (div.pin-tile-head) + PinRail active head (div.pin-rail-active-head); every other site is Inline
+  assert.ok(/<div className="pin-tile-head">[\s\S]*?<NeedsBadge pin=\{pin\} \/>/.test(grid));
+  assert.ok(/<div className="pin-rail-active-head">[\s\S]*?<NeedsBadge pin=\{active\} \/>/.test(src("PinRail.tsx")));
+});
