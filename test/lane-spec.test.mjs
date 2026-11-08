@@ -12,6 +12,7 @@ import {
   upsertLaneTask,
   writeLaneSpec,
 } from "../server/lane-spec.mjs";
+import { laneArtifactBlock } from "../server/hooks/agent-duties.ts";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
 const CLI_PATH = resolve(REPO_ROOT, "cli", "vs.mjs");
@@ -345,3 +346,65 @@ test("vs cap add / list / clear manage capped-providers.json", () => {
     env.cleanup();
   }
 });
+
+test("renderLaneArtifactBlock lists only non-done units and a done count line", () => {
+  const { root } = setupLib();
+  writeLaneSpec("squad", "lane-b", "# Goal", root);
+  upsertLaneTask("squad", "lane-b", { id: "d1", goal: "old", status: "done" }, root);
+  upsertLaneTask("squad", "lane-b", { id: "d2", goal: "old2", status: "done" }, root);
+  upsertLaneTask("squad", "lane-b", { id: "r1", goal: "live", status: "running" }, root);
+  const out = renderLaneArtifactBlock("squad", "lane-b", root);
+  assert.ok(!out.includes("- d1 ") && !out.includes("- d2 "));
+  assert.ok(out.includes('- r1 [running] goal="live"'));
+  assert.ok(out.includes("2 done units (full list: docs/lanes/lane-b/TASKS.json)"));
+
+  // N = 0 omits the line.
+  writeLaneSpec("squad", "lane-c", "# Goal", root);
+  upsertLaneTask("squad", "lane-c", { id: "t1", goal: "g" }, root);
+  assert.ok(!renderLaneArtifactBlock("squad", "lane-c", root).includes("done units"));
+});
+
+function writeRawTasks(root, lane, text) {
+  const dir = join(root, "docs", "lanes", lane);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "TASKS.json"), text, "utf8");
+}
+
+const MIXED_TASKS = JSON.stringify({
+  laneId: "lane-m",
+  units: [
+    { id: "u-upper", goal: "g", status: "DONE" },
+    { id: "u-title", goal: "g", status: " Done " },
+    { id: "u-live", goal: "g", status: "running" },
+  ],
+});
+
+for (const [name, render] of [
+  ["renderLaneArtifactBlock", (root) => renderLaneArtifactBlock("squad", "lane-m", root)],
+  ["laneArtifactBlock", (root) => laneArtifactBlock(root, "lane-m")],
+]) {
+  test(`${name}: DONE/Done statuses are filtered case-insensitively`, () => {
+    const { root } = setupLib();
+    writeRawTasks(root, "lane-m", MIXED_TASKS);
+    const out = render(root);
+    assert.ok(!out.includes("u-upper") && !out.includes("u-title"));
+    assert.ok(out.includes("u-live"));
+    assert.ok(out.includes("2 done units (full list: docs/lanes/lane-m/TASKS.json)"));
+  });
+
+  test(`${name}: a BOM-prefixed TASKS.json is parsed and filtered`, () => {
+    const { root } = setupLib();
+    writeRawTasks(root, "lane-m", "\ufeff" + MIXED_TASKS);
+    const out = render(root);
+    assert.ok(!out.includes("u-upper") && out.includes("u-live"));
+    assert.ok(!out.includes("unreadable"));
+  });
+
+  test(`${name}: malformed TASKS.json gives the notice line and no raw text`, () => {
+    const { root } = setupLib();
+    writeRawTasks(root, "lane-m", '{"units": [ {"id": "SECRET-RAW-TEXT", oops');
+    const out = render(root);
+    assert.ok(out.includes("TASKS.json unreadable (see docs/lanes/lane-m/TASKS.json)"));
+    assert.ok(!out.includes("SECRET-RAW-TEXT"));
+  });
+}

@@ -31,7 +31,7 @@ const PROFILES = [
 const CWD = "/projects/VibeSquad/.worktrees/failover-test";
 
 const SPEC = "# Artifact Lane Spec\n\n## Done when\n- the durable spec survives restarts & provider switches\n";
-const TASKS = JSON.stringify({ tasks: [{ id: "t1", title: "write the thing", status: "todo" }] });
+const TASKS = JSON.stringify({ units: [{ id: "t1", goal: "write the thing", status: "todo" }] });
 
 function withEnv(fn) {
   return async () => {
@@ -65,6 +65,13 @@ function withEnv(fn) {
     mkdirSync(join(briefRoot, "docs", "lanes", "artifact-lane"), { recursive: true });
     writeFileSync(join(briefRoot, "docs", "lanes", "artifact-lane", "SPEC.md"), SPEC, "utf8");
     writeFileSync(join(briefRoot, "docs", "lanes", "artifact-lane", "TASKS.json"), TASKS, "utf8");
+
+    mkdirSync(join(briefRoot, "docs", "lanes", "units-lane"), { recursive: true });
+    writeFileSync(
+      join(briefRoot, "docs", "lanes", "units-lane", "TASKS.json"),
+      JSON.stringify({ laneId: "units-lane", updatedAt: "x", units: [{ id: "old-unit", status: "done" }, { id: "live-unit", status: "running" }] }),
+      "utf8",
+    );
 
     const keys = ["VIBESQUAD_HOME", "VIBESQUAD_TEAMS_FILE", "VIBESQUAD_PROFILES_PATH", "VIBESQUAD_CAPPED_PROVIDERS_PATH"];
     const prev = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
@@ -232,6 +239,22 @@ test(
       );
       const sys = String(out.config.systemPrompt ?? "");
       assert.ok(!sys.includes("<!-- vibesquad:lane-artifact:begin"), "no artifact block for a lane without SPEC/TASKS");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "lane artifacts: TASKS.json injection omits done units and appends a done count",
+  withEnv(async ({ briefRoot }) => {
+    const h = harness({ briefRoot });
+    try {
+      const out = await h.spawn({ provider: "claude" }, { labels: { role: "worker", team: "vibesquad", lane: "units-lane" } });
+      const sys = String(out.config.systemPrompt ?? "");
+      assert.ok(sys.includes("live-unit"));
+      assert.ok(!sys.includes("old-unit"));
+      assert.ok(sys.includes("1 done units (full list: docs/lanes/units-lane/TASKS.json)"));
     } finally {
       h.stop?.();
     }

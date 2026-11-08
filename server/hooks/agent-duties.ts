@@ -693,10 +693,18 @@ export function laneArtifactBlock(root: string, lane: string): string {
   } catch {
     /* no SPEC.md */
   }
-  try {
-    tasks = fs.readFileSync(path.join(dir, "TASKS.json"), "utf8").trim();
-  } catch {
-    /* no TASKS.json */
+  let doneNote = "";
+  const tasksRes = readJsonFileWithBom(path.join(dir, "TASKS.json"), { label: "TASKS.json", fallback: null, recordWarning: false, rewriteBom: false });
+  if (tasksRes.exists) {
+    const doc = tasksRes.ok ? tasksRes.data : null;
+    if (doc && typeof doc === "object" && Array.isArray(doc.units)) {
+      const open = doc.units.filter((u: { status?: unknown }) => String(u?.status ?? "").trim().toLowerCase() !== "done");
+      const doneCount = doc.units.length - open.length;
+      tasks = JSON.stringify({ ...doc, units: open }, null, 2);
+      if (doneCount > 0) doneNote = `\n${doneCount} done units (full list: docs/lanes/${safeLane}/TASKS.json)`;
+    } else {
+      tasks = `TASKS.json unreadable (see docs/lanes/${safeLane}/TASKS.json)`;
+    }
   }
   if (!spec && !tasks) return "";
   const parts = [
@@ -707,7 +715,7 @@ export function laneArtifactBlock(root: string, lane: string): string {
     parts.push(`\n## SPEC.md (docs/lanes/${safeLane}/SPEC.md)\n${defangPromptFences(spec.slice(0, MAX_BRIEF_CHARS))}`);
   }
   if (tasks) {
-    parts.push(`\n## TASKS.json (docs/lanes/${safeLane}/TASKS.json)\n${defangPromptFences(tasks.slice(0, MAX_BRIEF_CHARS))}`);
+    parts.push(`\n## TASKS.json (docs/lanes/${safeLane}/TASKS.json)\n${defangPromptFences(tasks.slice(0, MAX_BRIEF_CHARS))}${doneNote}`);
   }
   parts.push(`<!-- vibesquad:lane-artifact:end -->`);
   return parts.join("\n");

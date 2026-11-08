@@ -64,14 +64,17 @@ export function readLaneTasks(teamId, laneId, rootDir) {
   const exists = existsSync(fullPath);
   let units = [];
   let updatedAt = "";
+  let unreadable = false;
   if (exists) {
     const res = readJsonFileWithBom(fullPath, { label: "TASKS.json", fallback: null });
-    if (res.ok && res.data && typeof res.data === "object") {
-      units = Array.isArray(res.data.units) ? res.data.units : [];
+    if (res.ok && res.data && typeof res.data === "object" && Array.isArray(res.data.units)) {
+      units = res.data.units;
       updatedAt = typeof res.data.updatedAt === "string" ? res.data.updatedAt : "";
+    } else {
+      unreadable = true;
     }
   }
-  return { laneId: safeLane, path: `docs/lanes/${safeLane}/TASKS.json`, fullPath, exists, units, updatedAt };
+  return { laneId: safeLane, path: `docs/lanes/${safeLane}/TASKS.json`, fullPath, exists, units, updatedAt, unreadable };
 }
 
 /** Merges or appends one unit, writes TASKS.json (2-space indent), and returns the unit + full list. */
@@ -131,14 +134,19 @@ export function renderLaneArtifactBlock(teamId, laneId, rootDir) {
   lines.push(`[SPEC.md]`);
   lines.push(spec.exists ? spec.content : "(none)");
   lines.push(`[TASKS.json]`);
-  if (!tasks.units.length) {
+  const open = tasks.units.filter((u) => String(u?.status ?? "").trim().toLowerCase() !== "done");
+  const doneCount = tasks.units.length - open.length;
+  if (tasks.unreadable) {
+    lines.push(`TASKS.json unreadable (see docs/lanes/${safeLane}/TASKS.json)`);
+  } else if (!open.length) {
     lines.push("(none)");
   } else {
-    for (const u of tasks.units) {
+    for (const u of open) {
       const files = Array.isArray(u.files) ? u.files.map(String).join(", ") : "";
       lines.push(`- ${u.id} [${u.status}] goal="${u.goal ?? ""}" files=[${files}] doneCheck="${u.doneCheck ?? ""}"`);
     }
   }
+  if (doneCount > 0) lines.push(`${doneCount} done units (full list: docs/lanes/${safeLane}/TASKS.json)`);
   lines.push(`<!-- vibesquad:lane-artifact:end -->`);
   return lines.join("\n");
 }
