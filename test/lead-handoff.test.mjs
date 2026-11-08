@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { createPlugin } from "../server/hooks/agent-duties.ts";
+import { isStalePredecessor } from "../server/lead-handoff.mjs";
+import { scanLogProgress } from "../server/backend/runner-backend.mjs";
 import {
   LEAD_AUTO_HANDOFF_DEFAULT,
   LEAD_FLAG_DEFAULT,
@@ -82,6 +84,113 @@ function makeTempEnv() {
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// isStalePredecessor: stale only when the CURRENT turn never got going (status
+// initializing/queued/starting AND no turn-progress since the last prompt). Silence alone
+// never makes a running or idle lead stale, and lifetime usage does not make a lead immune.
+// ---------------------------------------------------------------------------
+const NOW = Date.parse("2026-11-08T00:00:00.000Z");
+const STALE = 30 * 60 * 1000;
+const staleLead = (over = {}) => ({
+  id: "rn-stale",
+  status: "initializing",
+  createdAt: "2026-11-06T00:00:00.000Z",
+  lastPromptAt: "2026-11-07T00:00:00.000Z", // last prompt/created
+  labels: { team: "vibesquad", lane: "vibesquad", role: "lead", ord: "1" },
+  ...over,
+});
+
+test("isStalePredecessor: running lead silent 31 min is not stale", () => {
+  assert.equal(isStalePredecessor(staleLead({ status: "running", updatedAt: "2026-11-07T00:00:00.000Z" }), { now: NOW, staleMs: STALE }), false);
+});
+
+test("isStalePredecessor: idle lead is not stale (with or without usage — ACP may not report usage)", () => {
+  assert.equal(isStalePredecessor(staleLead({ status: "idle", updatedAt: "2026-11-07T00:00:00.000Z" }), { now: NOW, staleMs: STALE }), false);
+  assert.equal(isStalePredecessor(staleLead({ status: "idle", lastUsage: undefined, usage: undefined }), { now: NOW, staleMs: STALE }), false);
+});
+
+test("isStalePredecessor: queued lead under threshold is not stale", () => {
+  const lead = staleLead({ status: "queued", lastPromptAt: "2026-11-07T23:50:00.000Z" }); // queued 10 min before NOW
+  assert.equal(isStalePredecessor(lead, { now: NOW, staleMs: STALE }), false);
+});
+
+test("isStalePredecessor: initializing past threshold is stale, even if a meta/label event just bumped updatedAt", () => {
+  const lead = staleLead({
+    status: "initializing",
+    lastPromptAt: "2026-11-07T00:00:00.000Z", // stuck since the last prompt (24h before NOW)
+    updatedAt: "2026-11-07T23:59:00.000Z", // meta write 1 min before NOW must not reset the clock
+  });
+  assert.equal(isStalePredecessor(lead, { now: NOW, staleMs: STALE }), true);
+});
+
+test("isStalePredecessor: unknown lastPromptAt fails safe (not stale) instead of guessing from createdAt", () => {
+  const lead = {
+    ...staleLead({ status: "initializing" }),
+    lastPromptAt: undefined, // the runner did not expose a prompt history
+    createdAt: "2026-11-06T00:00:00.000Z", // old creation must NOT be used as the clock
+  };
+  assert.equal(isStalePredecessor(lead, { now: NOW, staleMs: STALE }), false);
+});
+
+test("isStalePredecessor: a 250k lead with usage, re-prompted and wedged in initializing past threshold, is stale", () => {
+  const lead = staleLead({
+    status: "initializing",
+    lastUsage: { contextWindowUsedTokens: 250_000 }, // it ran turns to reach budget…
+    lastPromptAt: "2026-11-07T00:00:00.000Z", // …then was re-prompted 24h ago and wedged
+    lastProgressAt: "2026-11-06T23:59:00.000Z", // last output was BEFORE the re-prompt
+  });
+  assert.equal(isStalePredecessor(lead, { now: NOW, staleMs: STALE }), true);
+});
+
+test("isStalePredecessor: a lead whose current turn made progress since its last prompt is not stale", () => {
+  const lead = staleLead({
+    status: "initializing",
+    lastPromptAt: "2026-11-07T00:00:00.000Z",
+    lastProgressAt: "2026-11-07T00:05:00.000Z", // turn-progress AFTER the prompt
+  });
+  assert.equal(isStalePredecessor(lead, { now: NOW, staleMs: STALE }), false);
+});
+
+test("isStalePredecessor: a same-millisecond progress event after the prompt counts as progress (>=)", () => {
+  const lead = staleLead({
+    status: "initializing",
+    lastPromptAt: "2026-11-07T00:00:00.000Z",
+    lastProgressAt: "2026-11-07T00:00:00.000Z", // a running event logged in the same millisecond as the input
+  });
+  assert.equal(isStalePredecessor(lead, { now: NOW, staleMs: STALE }), false);
+});
+
+test("huge prompt line: scan finds the prompt — queued 5s not stale, past threshold stale", () => {
+  const dir = mkdtempSync(join(tmpdir(), "vs-stale-log-"));
+  try {
+    const now = Date.now();
+    const iso = (ts) => (ts == null ? null : new Date(ts).toISOString()); // toAgent() exposes ISO strings
+    const huge = "x".repeat(100 * 1024); // a 100KB prompt line hides its `type` beyond a 64KB tail
+    const writeLog = (file, promptTs) =>
+      writeFileSync(file, [
+        JSON.stringify({ seq: 1, ts: promptTs - 1000, type: "created" }),
+        JSON.stringify({ seq: 2, ts: promptTs, type: "input", text: huge }),
+        JSON.stringify({ seq: 3, ts: promptTs + 100, type: "status", status: "queued" }),
+      ].join("\n") + "\n");
+
+    // Queued 5 s ago -> not stale.
+    const recent = join(dir, "rn-recent.jsonl");
+    writeLog(recent, now - 5000);
+    const r = scanLogProgress(recent);
+    assert.equal(r.lastPromptAt, now - 5000, "the huge prompt is found by growing the window");
+    assert.equal(isStalePredecessor({ status: "queued", lastPromptAt: iso(r.lastPromptAt), lastProgressAt: iso(r.lastProgressAt) }, { now, staleMs: STALE }), false);
+
+    // Same case, past the threshold -> stale.
+    const old = join(dir, "rn-old.jsonl");
+    writeLog(old, now - 40 * 60 * 1000);
+    const o = scanLogProgress(old);
+    assert.equal(o.lastPromptAt, now - 40 * 60 * 1000);
+    assert.equal(isStalePredecessor({ status: "queued", lastPromptAt: iso(o.lastPromptAt), lastProgressAt: iso(o.lastProgressAt) }, { now, staleMs: STALE }), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("Done-when #1: simulated lead stepping 150k -> 250k -> 300k triggers flag, auto-handoff, and forced handoff each at most once", async () => {
   const env = makeTempEnv();
@@ -230,6 +339,79 @@ test("Done-when #1: simulated lead stepping 150k -> 250k -> 300k triggers flag, 
     assert.equal(r300b.triggered, false);
     assert.equal(r350.triggered, false);
     assert.equal(createdAgents.length, 2);
+  } finally {
+    if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
+    else process.env.VIBESQUAD_HOME = prevHome;
+    env.cleanup();
+  }
+});
+
+test("a 250k lead with usage, re-prompted and wedged in initializing, auto-hands off immediately (no steer+wait)", async () => {
+  const env = makeTempEnv();
+  const prevHome = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = env.vsHome;
+  try {
+    const agents = new Map();
+    const messages = [];
+    const createdAgents = [];
+
+    const lead = {
+      id: "lead-ord1",
+      title: "★ VIBESQUAD ord1",
+      provider: "claude",
+      model: "claude-opus-5-5",
+      cwd: env.dir,
+      status: "initializing", // re-prompted, then wedged before this turn started
+      createdAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+      lastPromptAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), // the re-prompt, 2h ago
+      lastProgressAt: new Date(Date.now() - 2 * 60 * 60 * 1000 - 60 * 1000).toISOString(), // last output BEFORE the re-prompt
+      lastUsage: { contextWindowUsedTokens: 250_000 }, // it ran turns to reach budget
+      labels: { team: "vibesquad", lane: "vibesquad", role: "lead", ord: "1", profile: "Lead - Claude" },
+    };
+    agents.set(lead.id, lead);
+
+    const coordinator = createLeadHandoffCoordinator({
+      rootDir: env.dir,
+      baseHome: env.vsHome,
+      profilesPath: env.profilesPath,
+      listAgents: async () => [...agents.values()],
+      getAgent: async (id) => agents.get(id) ?? null,
+      setLabels: async (id, labels, name) => {
+        const cur = agents.get(id);
+        if (cur) {
+          cur.labels = { ...(cur.labels ?? {}), ...labels };
+          if (name) cur.title = name;
+        }
+      },
+      sendMessage: async (id, text) => {
+        messages.push({ id, text });
+      },
+      createAgent: async (payload) => {
+        const created = {
+          id: `spawned-${createdAgents.length + 1}`,
+          title: payload.title,
+          provider: payload.config.provider,
+          model: payload.config.model,
+          cwd: payload.cwd,
+          status: "idle",
+          labels: { ...payload.labels },
+          prompt: payload.prompt,
+        };
+        createdAgents.push(created);
+        agents.set(created.id, created);
+        return created;
+      },
+      deleteHeartbeat: async () => {},
+      appendLog: () => {},
+    });
+
+    const r = await coordinator.evaluateLead(lead);
+    assert.equal(r.stage, "auto-250");
+    assert.equal(r.triggered, true);
+    assert.equal(createdAgents.length, 1, "successor spawned immediately (no steer+wait for a stale lead)");
+    assert.equal(messages.length, 0, "no WRITE_HANDOFF_PROMPT steer for a stale lead");
+    assert.equal(lead.labels.role, "former-lead", "stale predecessor retired immediately (no takeover-confirmation wait)");
+    assert.equal(r.retiredImmediately, true);
   } finally {
     if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
     else process.env.VIBESQUAD_HOME = prevHome;

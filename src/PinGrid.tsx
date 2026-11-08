@@ -195,6 +195,9 @@ export function NeedsBadgeInline({ pin }: { pin: Pin }) {
 
 const memberTitle = (m: Member) => cleanTitle(m.agent.title) || m.agent.id.slice(0, 8);
 const hasTeam = (pin: Pin) => !!pin.lead || pin.workers.length > 0 || pin.topicBrainstorms.length > 0;
+/** Team-row status label: a queued agent shows its queue position instead of the bare running/idle. */
+const memberStatusLabel = (agent: { status: string; queued?: { ahead: number } }): string =>
+  agent.queued ? `queued · ${agent.queued.ahead} ahead` : agent.status === "running" ? "running" : "idle";
 
 function TeamRow({ pin, m, glyph, depth, testId, active }: { pin: Pin; m: Member; glyph: string; depth: number; testId: string; active: boolean }) {
   const shown = useIsShown(m.agent.id);
@@ -213,7 +216,7 @@ function TeamRow({ pin, m, glyph, depth, testId, active }: { pin: Pin; m: Member
       <span className="pin-row-name">
         {glyph} {cleanTitle}
       </span>
-      <span className="muted small">{m.agent.status === "running" ? "running" : "idle"}</span>
+      <span className="muted small">{memberStatusLabel(m.agent)}</span>
     </button>
   );
 }
@@ -303,6 +306,9 @@ const PinRow = memo(function PinRow({ pin, dimmed, onPin }: { pin: Pin; dimmed?:
           <PinDot pin={pin} />
           <span className="pin-row-name">{isHubPin(pin) ? "RiffBot" : pin.lane.name}</span>
           <span className="pin-lane-handle" data-testid={`pin-handle-${pin.lane.id}`}>{laneHandleOf(pin)}</span>
+          {pin.brainstorm?.agent.queued && (
+            <span className="pin-row-status muted small">{`queued · ${pin.brainstorm.agent.queued.ahead} ahead`}</span>
+          )}
           <NeedsBadgeInline pin={pin} />
           <PinCtx pin={pin} />
         </button>
@@ -635,7 +641,7 @@ const PinTile = memo(function PinTile({ pin, onPin, onOpenAgent }: { pin: Pin; o
         )}
         <div className="pin-tile-title">
           <span className="pin-tile-sub muted small">
-            <PinDot pin={pin} /> {bs ? (bs.agent.status === "running" ? "Brainstorm working" : "Brainstorm") : "No session yet"}
+            <PinDot pin={pin} /> {bs ? (bs.agent.queued ? `queued · ${bs.agent.queued.ahead} ahead` : bs.agent.status === "running" ? "Brainstorm working" : "Brainstorm") : "No session yet"}
           </span>
         </div>
         <NeedsBadge pin={pin} />
@@ -832,7 +838,7 @@ export function SquadsHome({
   return (
     <section className="squads-home" data-testid="squads-home">
       <div
-        className={`squads-home-pager-wrap ${paged ? "paged" : ""}`}
+        className={`squads-section squads-home-pager-wrap ${paged ? "paged" : ""}`}
         onKeyDown={(e) => {
           if (!paged || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
           if (e.target instanceof HTMLElement && e.target.closest(".squad-home-tile")) return;
@@ -840,6 +846,7 @@ export function SquadsHome({
           step(e.key === "ArrowUp" ? -1 : 1);
         }}
       >
+        <h2 className="squads-section-title" data-testid="squads-section-title">Squads</h2>
         <div className="squads-home-grid" ref={gridRef} data-testid="squads-home-grid">
           {slice.map((v) => (
             <SquadTile key={v.team.id} v={v} onSelectSquad={onSelectSquad} onOpenPin={onOpenPin} onOpenAgent={onOpenAgent} />

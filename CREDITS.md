@@ -25,3 +25,4 @@ Attribution format used across plans, commits, `CREDITS.md`, and release notes:
 - Implemented runner-agent terminals (PTY shells) — Thanks to **node-pty** by `Microsoft` and **xterm.js** by `the xterm.js authors`
 - Implemented hand-pixelled office art pipeline (indexed palettes, batch scripts) — Thanks to **Aseprite** by `Igara Studio`
 - Implemented Aseprite pixel pipeline — Thanks to **aseprite-mcp** by `diivi`
+- Implemented QR pairing scan — Thanks to **jsQR** by `cozmo`

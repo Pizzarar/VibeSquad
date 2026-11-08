@@ -9,9 +9,9 @@
 --             when talking, spikes sharply up in AMBER on needs and crashes to a PINK down-arrow
 --             (scared). No text or digits in the mouth. No feet, no side arms: only on needs a
 --             hand pops up from the bottom edge to wave.
---   Overlord: the sky-CRT screen IS the jar (no inner TV): murky SKY water, bubbles, glass glare,
---             a floating brain, 2 lopsided googly eyeballs on dangling optic nerves and a
---             floating set of teeth, each organ outlined and bobbing out of sync.
+--   Overlord: the sky-CRT screen IS the jar (no inner TV). H1c-v4 (owner pick B): a GIANT brain
+--             cropped off the top and sides, INK-outlined lumpy lobes bulging over 2 lopsided googly
+--             eyeballs that hang on short nerve tails, floating teeth below; folds pulse PINK on talk.
 -- Gutter contract (UI lane): bg = SKY (13) everywhere, columns 0 and 79 stay flat SKY in every
 -- frame (asserted below), no pink flash background: needs[1] flashes inside the object instead.
 -- Cells/offsets/order = public/office/faces.json (cell 80x48; keys/frame names unchanged; not written here).
@@ -174,21 +174,37 @@ local RIFF_FRAMES = {
     droop = true, scared = true, jit = 1, shake = 1 },                                      -- scared   x720
 }
 
--- ---------- Overlord (80x48: the sky-CRT screen IS the jar, owner H1c-v3) ----------
--- No cabinet, no dome, no drawn glass: the sky-CRT bezel is the jar rim. Murky SKY jar water with
--- rising bubbles, holding a round floating brain, 2 lopsided googly eyeballs dangling on optic-nerve tails
--- and a separate floating set of chunky teeth (one gold tooth). Natural H0 proportions, centred,
--- clean water left and right (no stretch to fill). Every organ is its own layer with its own 1px
--- INK outline and bobs on its own cel offset, so the parts drift out of sync.
-local OVER = { "back", "bubbles", "eyeL", "eyeR", "brain", "teeth", "fx" }
+-- ---------- Overlord (80x48, owner H1c-v4 pick B: a giant brain fills the jar) ----------
+-- The sky-CRT screen is still the jar (no inner TV). A GIANT brain fills the top of the jar, cropped
+-- off the top and both sides; its lumpy rounded lower lobes carry a 1px INK outline and bulge down
+-- over the eyes. Inside, the gyri are a 50% LINE/SKY dither (faded into the SKY water) with VIOLET
+-- fold lines that curl round each lobe; on talk the folds pulse PINK, on needs they burn AMBER.
+-- 2 lopsided googly eyeballs hang from the lobes on short CORAL nerve tails, a floating set of
+-- chunky teeth sits below, bubbles rise only in the clear water. Brain never bobs (it is cropped);
+-- eyes + teeth bob on their own cel offsets.
+local OVER = { "back", "bubbles", "brain", "eyeL", "eyeR", "teeth", "fx" }
 local OEYES = {
-  eyeL = { x = 17, y = 13, r = 6.6, hook = 1, pup = 3,
-           veins = {{-6,-2,-4,-1}, {-5,3,-3,2}, {5,-3,3,-2}} },
-  eyeR = { x = 63, y = 11, r = 5.1, hook = -1, pup = 2,
-           veins = {{-5,-1,-3,0}, {4,-2,2,-1}, {3,3,2,2}} },
+  eyeL = { x = 20, y = 30, r = 7.6, hook = 1, pup = 3, up = 18,
+           veins = {{-7,-2,-5,-1}, {-6,4,-4,3}, {6,-4,4,-3}, {5,4,3,3}} },
+  eyeR = { x = 59, y = 28, r = 6.6, hook = -1, pup = 3, up = 18,
+           veins = {{-6,-1,-4,0}, {5,-3,3,-2}, {4,4,3,3}} },
 }
--- rising bubbles {x, y, size}; y climbs 2px per frame step (s.t)
+-- lower lobes {x, y, r}: union with the top band (rows <= 5) = brain mask; lobes 2 + 5 bulge over the eyes
+local LOBES = { {5,10,11}, {20,9,11}, {32,5,8.5}, {47,5,8.5}, {59,8,11}, {74,10,11} }
 local BUBS = { {26,44,3}, {56,41,2}, {7,30,1}, {72,25,1}, {54,46,1}, {34,47,2}, {70,44,3}, {9,45,2}, {50,28,1} }
+
+local function lobeAt(x, y, g)                     -- nearest lobe index + normalised distance (<=1 inside)
+  local bi, bd = 1, 1e9
+  for i, l in ipairs(LOBES) do
+    local d = math.sqrt((x - l[1])^2 + (y - l[2])^2) / (l[3] + g)
+    if d < bd then bi, bd = i, d end
+  end
+  return bi, bd
+end
+local function inBrain(x, y, g)                   -- off the side edges counts as brain (cropped, no rim)
+  if x < 1 or x > CW - 2 then return y < 22 end
+  local _, d = lobeAt(x, y, g or 0); return y <= 5 or d <= 1
+end
 
 local function nerve(C, pts)                       -- 2px-thick CORAL optic nerve along a polyline
   for i = 1, #pts - 3, 2 do
@@ -201,12 +217,12 @@ local function eyeball(C, e, s, look)
   local r = e.r + (s.wide and 1 or 0)
   local h, sw = e.hook, (s.swing or 0) * e.hook
   local by = math.floor(cy + r)
-  nerve(C, {cx, by - 1, cx - h + sw, by + 5, cx + sw, by + 10, cx - h, by + 15, cx, by + 18,
-            cx + 2*h, by + 18, cx + 3*h, by + 16})
+  local ty = math.ceil(cy - r)
+  nerve(C, {cx, ty + 1, cx + h + sw, ty - 2, cx, ty - 4, cx - h, e.up - 1, cx, e.up - 3})   -- plugs into the lobe
   C.ellipse(cx, cy, r, r, M)
   for _, v in ipairs(e.veins) do C.line(cx + v[1], cy + v[2], cx + v[3], cy + v[4], P) end
   if s.shut then                                   -- blink: PINK lid shut, INK slit + 3 lashes
-    for y = math.ceil(cy - r), by do for x = math.floor(cx - r), math.ceil(cx + r) do
+    for y = ty, by do for x = math.floor(cx - r), math.ceil(cx + r) do
       if C.get(x, y) == M or C.get(x, y) == P then C.px(x, y, P) end
     end end
     local w = math.floor(r) - 2
@@ -218,9 +234,9 @@ local function eyeball(C, e, s, look)
     C.ellipse(ix, iy, ir, ir, T)
     local p = s.wide and 2 or e.pup
     C.rect(ix - p // 2, iy - p // 2, p, p, K); C.px(ix - p // 2, iy - p // 2, M)
-    if s.lid then                                  -- lookDown: heavy PINK upper lid
+    if s.lid then                                  -- lookDown: heavy PINK upper lid (eyeball only, not the nerve)
       local cut = math.floor(cy - r + 2 * r * s.lid + 0.5)
-      for y = math.ceil(cy - r), cut do for x = math.floor(cx - r), math.ceil(cx + r) do
+      for y = ty, cut do for x = math.floor(cx - r), math.ceil(cx + r) do
         local c = C.get(x, y)
         if c ~= 0 and c ~= CO then C.px(x, y, y == cut and K or P) end
       end end
@@ -230,32 +246,42 @@ local function eyeball(C, e, s, look)
 end
 
 local function brain(C, s)
-  local g = s.pulse and 1 or 0
-  C.ellipse(40, 14, 12.6 + g, 10.1 + g, P, {0,0,0,-1,-1,0,0,0,1,1,0,0}, {0,0,1,1,0,0,0,-1,-1,0,0,0})
-  C.hline(39, 4 - g, 3, 0)                         -- dip between the two halves
-  C.rect(41, 24 + g, 3, 2 - g, CO)                   -- stub of a brain stem (2-3px water gap to the teeth)
+  local g = s.pulse and 1 or 0                     -- talk pulse: lobes swell 1px
+  local fold = s.glow and A or (s.pulse and P or V)
+  local function ringOf(x, y)
+    local i, d = lobeAt(x, y, g)
+    local l = LOBES[i]
+    local a = math.atan(y - l[2], x - l[1])
+    return i * 100 + math.floor((d * (l[3] + g) + 1.4 * math.sin(3 * a + i * 1.7)) / 4), a
+  end
+  local function openArc(x, y)                     -- break each ring into C-shaped gyri, not closed loops
+    local rg, a = ringOf(x, y)
+    return math.sin(2 * a + rg * 2.3) > -0.35
+  end
+  for y = 0, CH - 1 do for x = 1, CW - 2 do
+    if inBrain(x, y, g) then
+      local rg = ringOf(x, y)
+      local edge = not inBrain(x, y + 1, g) or not inBrain(x - 1, y, g) or not inBrain(x + 1, y, g)
+      if edge then C.px(x, y, LN)                                                  -- solid inner rim = round lobe
+      elseif (x == 39 or x == 40) and y < 13 then C.px(x, y, x == 39 and K or LN)  -- cleft between halves
+      elseif (rg ~= ringOf(x + 1, y) or rg ~= ringOf(x, y + 1)) and openArc(x, y) then C.px(x, y, fold)
+      elseif (x + y) % 2 == 0 then C.px(x, y, LN) end
+    end
+  end end
   C.outline(K)
-  local f = s.glow and A or CO                     -- wobbly gyri, left half then right half
-  C.line(30, 11, 32, 8, f); C.line(32, 8, 35, 10, f); C.line(35, 10, 37, 8, f)
-  C.line(30, 16, 33, 14, f); C.line(33, 14, 35, 17, f); C.line(35, 17, 38, 15, f)
-  C.line(31, 21, 36, 21, f)
-  C.line(43, 8, 45, 7, f); C.line(45, 7, 48, 9, f); C.line(48, 9, 50, 8, f)
-  C.line(43, 13, 46, 12, f); C.line(46, 12, 48, 15, f); C.line(48, 15, 51, 13, f)
-  C.line(44, 20, 49, 19, f)
-  C.vline(40, 5 - g, 5 + g, K); C.vline(39, 10, 5, K); C.vline(40, 15, 6, K)       -- crooked fissure
-  C.px(31, 6, M); C.px(32, 5, M); C.px(33, 5, M); C.px(30, 7, M)                  -- shine
+  for y = 0, CH - 1 do C.px(0, y, Y); C.px(CW - 1, y, Y) end                -- gutter columns stay SKY
 end
 
 local function teeth(C, s)
-  local gap = s.gap or 0                           -- 0 = closed on one 1px INK bite line (row 35)
-  C.rect(32, 30, 17, 1, P); C.rect(30, 31, 21, 1, P)                              -- upper gum, rounded
-  C.rect(31, 32, 19, 3, M); C.rect(43, 32, 3, 3, A)                               -- upper teeth + gold tooth
-  if gap > 0 then C.rect(35, 35, 3, 1, M) end                                     -- fang shows when open
-  local lt = 36 + gap
+  local gap, oy = s.gap or 0, 3                    -- 0 = closed on one 1px INK bite line
+  C.rect(32, 30+oy, 17, 1, P); C.rect(30, 31+oy, 21, 1, P)                        -- upper gum, rounded
+  C.rect(31, 32+oy, 19, 3, M); C.rect(43, 32+oy, 3, 3, A)                         -- upper teeth + gold tooth
+  if gap > 0 then C.rect(35, 35+oy, 3, 1, M) end                                  -- fang shows when open
+  local lt = 36 + gap + oy
   C.rect(32, lt, 19, 3, M)                                                        -- lower teeth
   C.rect(31, lt + 3, 21, 1, P); C.rect(33, lt + 4, 17, 1, P)                      -- lower gum, rounded
   C.outline(K)
-  for i = 0, 3 do C.vline(34 + i*4, 32, 2, K); C.vline(35 + i*4, lt + 1, 2, K) end  -- short tooth gaps
+  for i = 0, 3 do C.vline(34 + i*4, 32+oy, 2, K); C.vline(35 + i*4, lt + 1, 2, K) end  -- short tooth gaps
 end
 
 local function over(C, s)
@@ -263,45 +289,47 @@ local function over(C, s)
   local bu = C.bubbles
   local bubs = {}
   for _, b in ipairs(BUBS) do bubs[#bubs + 1] = b end
-  if s.chomp then bubs[#bubs + 1] = {54, 35, 2}; bubs[#bubs + 1] = {27, 34, 1}; bubs[#bubs + 1] = {56, 31, 1} end
+  if s.chomp then bubs[#bubs + 1] = {54, 38, 2}; bubs[#bubs + 1] = {27, 40, 1} end
   for _, b in ipairs(bubs) do
     local x, y = b[1], (b[2] - 2 * (s.t or 0) - 3) % 46 + 2
-    if b[3] == 1 then bu.px(x, y, LN)
-    elseif b[3] == 2 then bu.px(x, y-1, LN); bu.px(x-1, y, LN); bu.px(x+1, y, LN); bu.px(x, y+1, LN)
-    else
-      bu.hline(x, y-1, 2, LN); bu.hline(x, y+2, 2, LN); bu.vline(x-1, y, 2, LN); bu.vline(x+2, y, 2, LN)
-      bu.px(x+1, y, M)
+    if not inBrain(x, y - 3, 1) then
+      if b[3] == 1 then bu.px(x, y, LN)
+      elseif b[3] == 2 then bu.px(x, y-1, LN); bu.px(x-1, y, LN); bu.px(x+1, y, LN); bu.px(x, y+1, LN)
+      else
+        bu.hline(x, y-1, 2, LN); bu.hline(x, y+2, 2, LN); bu.vline(x-1, y, 2, LN); bu.vline(x+2, y, 2, LN)
+        bu.px(x+1, y, M)
+      end
     end
   end
+  brain(C.brain, s)
   eyeball(C.eyeL, OEYES.eyeL, s, s.lookL)
   eyeball(C.eyeR, OEYES.eyeR, s, s.lookR)
-  brain(C.brain, s)
   teeth(C.teeth, s)
   local fx = C.fx
-  if s.zap then bang(fx, 70, 28 + (s.zap == 2 and -1 or 0)) end
-  if s.zap == 1 then
-    fx.line(27, 0, 29, 2, A); fx.line(29, 2, 27, 4, A); fx.line(27, 4, 29, 6, A)
-    fx.line(54, 1, 52, 3, A); fx.line(52, 3, 54, 5, A)
+  if s.zap then bang(fx, 70, 31 + (s.zap == 2 and -1 or 0)) end
+  if s.zap == 1 then                               -- AMBER zaps crackle off the lower lobes
+    fx.line(29, 16, 31, 18, A); fx.line(31, 18, 29, 20, A); fx.line(29, 20, 31, 22, A)
+    fx.line(50, 16, 48, 18, A); fx.line(48, 18, 50, 20, A)
   elseif s.zap == 2 then
-    fx.line(29, 0, 27, 2, A); fx.line(27, 2, 29, 4, A); fx.line(29, 4, 27, 6, A)
-    fx.line(52, 0, 54, 2, A); fx.line(54, 2, 52, 4, A); fx.line(52, 4, 54, 6, A)
+    fx.line(31, 16, 29, 18, A); fx.line(29, 18, 31, 20, A); fx.line(31, 20, 29, 22, A)
+    fx.line(48, 16, 50, 18, A); fx.line(50, 18, 48, 20, A); fx.line(48, 20, 50, 22, A)
   end
 end
 
--- off = cel y offsets per organ (out-of-sync bob); t = bubble rise step
+-- off = cel y offsets per organ (out-of-sync bob; brain fixed); t = bubble rise step
 local OVER_FRAMES = {
-  { lid = 0.42, lookL = {1, 3}, lookR = {-1, 2}, t = 0, off = {brain = 1, eyeL = 2, eyeR = 2, teeth = 1} },            -- lookDown x0
-  { lid = 0.42, lookL = {0, 3}, lookR = {0, 2}, t = 1, swing = 1, off = {brain = 1, eyeL = 3, eyeR = 2, teeth = 1} },  -- lookDown x80
-  { lookL = {2, 0}, lookR = {-2, -1}, t = 0, off = {brain = 0, eyeL = 0, eyeR = 1, teeth = 0} },                         -- idle x160
-  { lookL = {2, 1}, lookR = {-1, -1}, t = 1, swing = 1, off = {brain = -1, eyeL = 1, eyeR = 0, teeth = -1} },            -- idle x240
-  { shut = true, t = 0, off = {brain = 0, eyeL = 0, eyeR = 1, teeth = 0} },                                              -- blink x320
-  { lookL = {2, 0}, lookR = {-2, 0}, gap = 4, chomp = true, t = 0, off = {brain = 0, eyeL = 0, eyeR = 1, teeth = 0} },  -- talk x400
-  { lookL = {2, 0}, lookR = {-2, 0}, gap = 0, chomp = true, t = 1, swing = 1, off = {brain = -1, eyeL = 1, eyeR = 0, teeth = 0} }, -- talk x480
-  { lookL = {2, 1}, lookR = {-1, 0}, gap = 2, chomp = true, t = 2, off = {brain = 0, eyeL = 0, eyeR = 1, teeth = 0} },   -- talk x560
+  { lid = 0.42, lookL = {1, 3}, lookR = {-1, 2}, t = 0, off = {eyeL = 1, eyeR = 1, teeth = 1} },                 -- lookDown x0
+  { lid = 0.42, lookL = {0, 3}, lookR = {0, 2}, t = 1, swing = 1, off = {eyeL = 2, eyeR = 1, teeth = 1} },       -- lookDown x80
+  { lookL = {2, 0}, lookR = {-2, -1}, t = 0, off = {eyeL = 0, eyeR = 1, teeth = 0} },                            -- idle x160
+  { lookL = {2, 1}, lookR = {-1, -1}, t = 1, swing = 1, off = {eyeL = 1, eyeR = 0, teeth = -1} },               -- idle x240
+  { shut = true, t = 0, off = {eyeL = 0, eyeR = 1, teeth = 0} },                                                 -- blink x320
+  { lookL = {2, 0}, lookR = {-2, 0}, gap = 4, chomp = true, pulse = true, t = 0, off = {eyeL = 0, eyeR = 1, teeth = -1} },        -- talk x400
+  { lookL = {2, 0}, lookR = {-2, 0}, gap = 0, chomp = true, t = 1, swing = 1, off = {eyeL = 1, eyeR = 0, teeth = 0} },            -- talk x480
+  { lookL = {2, 1}, lookR = {-1, 0}, gap = 2, chomp = true, pulse = true, t = 2, off = {eyeL = 0, eyeR = 1, teeth = -1} },        -- talk x560
   { wide = true, lookL = {0, 0}, lookR = {0, 0}, gap = 3, zap = 1, glow = true, t = 0,
-    off = {brain = 0, eyeL = -1, eyeR = 0, teeth = 0} },                                                                 -- needs x640
+    off = {eyeL = -1, eyeR = 0, teeth = -1} },                                                                   -- needs x640
   { wide = true, lookL = {1, 0}, lookR = {-1, 0}, gap = 4, zap = 2, glow = true, pulse = true, swing = 1, t = 1,
-    off = {brain = 0, eyeL = 0, eyeR = -1, teeth = 0} },                                                                -- needs x720
+    off = {eyeL = 0, eyeR = -1, teeth = -1} },                                                                   -- needs x720
 }
 
 -- ---------- build + export ----------

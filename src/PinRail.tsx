@@ -102,7 +102,7 @@ const RailTile = memo(function RailTile(props: { pin: Pin; onPick: (pin: Pin) =>
               </span>
             )}
           </span>
-          <span className="pin-rail-line muted small">{line}</span>
+          <span className="pin-rail-line muted small">{bs?.agent.queued ? `queued · ${bs.agent.queued.ahead} ahead` : line}</span>
         </span>
         <NeedsBadgeInline pin={pin} />
       </button>

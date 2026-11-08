@@ -55,6 +55,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
       let sessionId = null;
       let promptInFlight = false;
       let imageCapable = false;
+      let stopped = false; // set by kill(): pump() must not start another turn after the child is being torn down
       const queue = [];
       let pendingSystem = systemPrompt || '';
       let replaying = false; // session/load replays the old transcript as session/update; our log already has it
@@ -157,7 +158,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
       });
 
       async function pump() {
-        if (promptInFlight || !queue.length) return;
+        if (promptInFlight || !queue.length || stopped) return;
         promptInFlight = true;
         const next = queue.shift();
         let text = next.text;
@@ -190,7 +191,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
           queue.length = 0;
           if (sessionId) write({ method: 'session/cancel', params: { sessionId } });
         },
-        kill() { killTree(child); },
+        kill() { stopped = true; killTree(child); },
       };
     },
   };
