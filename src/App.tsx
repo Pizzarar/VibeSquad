@@ -81,6 +81,7 @@ import { AttentionBadge } from "./AttentionList";
 import { SquadQueue } from "./SquadQueue";
 import { SquadFloor } from "./SquadFloor";
 import { SkyZones } from "./SkyZones";
+import { HubPages } from "./HubPages";
 import { overlordProfileName, skyZoneIds, skyZonesFor, spinUpOverlord } from "./skyZonesLogic";
 import { FullToggle, PinGrid, SidebarPins, SquadsHome, setFullView, useFullView, type PinHandler } from "./PinGrid";
 import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
@@ -2016,9 +2017,15 @@ export function App() {
       {hubFocused ? (
         <div className={`hub-body${hubAgentOpen ? " hub-agent-open" : ""}`} data-testid="hub-body">
           {panesNode}
-          {pinFocusView && !hubAgentOpen && <SkyZones view={pinFocusView} onSuccessor={paneSuccessor} onSpinUp={onSpinUpPin} onSpinUpOverlord={onSpinUpOverlord} overlordBusy={overlordBusy} />}
-          {pinFocusView && <SquadQueue view={pinFocusView} variant="strip" />}
-          {pinFocusView && <SquadFloor view={pinFocusView} />}
+          {pinFocusView && (
+            <HubPages
+              view={pinFocusView}
+              agentOpen={hubAgentOpen}
+              sky={(open) => <SkyZones view={pinFocusView} initialOpen={open} onSuccessor={paneSuccessor} onSpinUp={onSpinUpPin} onSpinUpOverlord={onSpinUpOverlord} overlordBusy={overlordBusy} />}
+              strip={<SquadQueue view={pinFocusView} variant="strip" />}
+              tower={<SquadFloor view={pinFocusView} />}
+            />
+          )}
         </div>
       ) : (
         panesNode
