@@ -3,8 +3,10 @@
 // (contrast vs the real rendered background, plus background steps/lines crossing the text).
 (function auditPage(opts) {
   const TOL = opts.tolerance ?? 2;
-  const root = opts.rootSelector ? document.querySelector(opts.rootSelector) : document.body;
-  if (!root) return { hits: [], texts: [], missing: true, counts: {} };
+  // opts.rootSelectors: audit only elements inside these roots (decor owners may live anywhere on the page).
+  const roots = opts.rootSelectors ? opts.rootSelectors.flatMap((q) => [...document.querySelectorAll(q)]) : [document.body];
+  if (!roots.length) return { hits: [], texts: [], missing: true, counts: {} };
+  const root = document.body;
   const vw = innerWidth, vh = innerHeight;
   const INTERACTIVE = "button,a[href],input,select,textarea,[role=button],[role=tab],[role=menuitem],summary";
   const style = (el, pseudo) => getComputedStyle(el, pseudo);
@@ -85,7 +87,8 @@
   };
 
   const SKIP = new Set(["script", "style", "path", "option", "br", "canvas", "g", "defs", "use", "rect", "circle", "line", "polygon", "polyline", "text"]);
-  const els = [...root.querySelectorAll("*")].filter((el) => !SKIP.has(el.tagName.toLowerCase()) && visible(el));
+  const allEls = [...root.querySelectorAll("*")].filter((el) => !SKIP.has(el.tagName.toLowerCase()) && visible(el));
+  const els = opts.rootSelectors ? allEls.filter((el) => roots.some((r) => r.contains(el))) : allEls;
 
   const hits = [];
   const add = (kind, split, el, other, detail, box) => hits.push({
@@ -192,7 +195,7 @@
 
   // 4. Decorative lines through text: border edges, pseudo-element boxes, repeating gradients vs text boxes.
   const decor = [];
-  for (const el of els) {
+  for (const el of allEls) {
     const r = el.getBoundingClientRect();
     if (!inViewport(r) || (r.width > vw * 1.2 && r.height > vh * 1.2)) continue;
     const s = style(el);
