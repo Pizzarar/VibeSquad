@@ -5,7 +5,10 @@ import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
-const require = createRequire("C:/Users/Fugma/projects/VibeSquad/scratch/pw/package.json");
+import { execFileSync } from "node:child_process";
+// playwright-core lives in the main checkout's scratch/pw (the repo root that owns this worktree's .git).
+const mainRoot = path.resolve(execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).trim(), "..");
+const require = createRequire(path.join(mainRoot, "scratch", "pw", "package.json"));
 const { chromium } = require("playwright-core");
 const here = path.dirname(fileURLToPath(import.meta.url));
 const out = path.join(here, "..", "shots");
