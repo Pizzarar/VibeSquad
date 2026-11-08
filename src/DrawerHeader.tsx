@@ -528,8 +528,6 @@ export type DrawerHeaderProps = {
   inboxParking: boolean;
   inboxToast: string;
   parkToInbox: (text: string, fromComposer: boolean) => void;
-  handoffMarked: boolean;
-  setHandoffMarked: (v: boolean) => void;
   topicHandingOff: boolean;
   handleTopicHandoff: () => Promise<void>;
   topicParking: boolean;
@@ -680,8 +678,6 @@ export function DrawerHeader({
   inboxParking,
   inboxToast,
   parkToInbox,
-  handoffMarked,
-  setHandoffMarked,
   topicHandingOff,
   handleTopicHandoff,
   topicParking,
