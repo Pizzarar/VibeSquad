@@ -166,6 +166,33 @@ export function NeedsBadge({ pin }: { pin: Pin }) {
 }
 
 // ── Team under a Buddy: its Lead, workers and topic Buddies (rail card) ──
+/** NeedsBadge for use INSIDE another button (the sidebar pin rows): a <button> in a <button> is invalid HTML and a React hydration error, so this is the same badge as a role=button span. */
+export function NeedsBadgeInline({ pin }: { pin: Pin }) {
+  if (!pin.needsYou) return null;
+  const mark = () => void markPinRead(pin);
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      className="badge alert pin-needs"
+      data-testid={`pin-needs-${pin.lane.id}`}
+      title={`${pin.needsYou} need you — click to mark read`}
+      onClick={(e) => {
+        e.stopPropagation();
+        mark();
+      }}
+      onKeyDown={(e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        e.preventDefault();
+        e.stopPropagation();
+        mark();
+      }}
+    >
+      {pin.needsYou}
+    </span>
+  );
+}
+
 const memberTitle = (m: Member) => cleanTitle(m.agent.title) || m.agent.id.slice(0, 8);
 const hasTeam = (pin: Pin) => !!pin.lead || pin.workers.length > 0 || pin.topicBrainstorms.length > 0;
 
@@ -276,7 +303,7 @@ const PinRow = memo(function PinRow({ pin, dimmed, onPin }: { pin: Pin; dimmed?:
           <PinDot pin={pin} />
           <span className="pin-row-name">{isHubPin(pin) ? "RiffBot" : pin.lane.name}</span>
           <span className="pin-lane-handle" data-testid={`pin-handle-${pin.lane.id}`}>{laneHandleOf(pin)}</span>
-          <NeedsBadge pin={pin} />
+          <NeedsBadgeInline pin={pin} />
           <PinCtx pin={pin} />
         </button>
         {!isHubPin(pin) && <PinMenu pin={pin} onShowPlumbing={() => setFullView(true)} />}
@@ -307,7 +334,7 @@ export const SidebarRiffBot = memo(function SidebarRiffBot({ pin, onPin }: { pin
       <span className="sidebar-riffbot-badge">RIFFBOT</span>
       <span className="sidebar-riffbot-title">Squad Hub</span>
       {pin.needsYou > 0 ? (
-        <NeedsBadge pin={pin} />
+        <NeedsBadgeInline pin={pin} />
       ) : bs?.agent.status === "running" ? (
         <span className="sidebar-riffbot-state running">THINKING</span>
       ) : bs && bs.agent.status !== "closed" ? (

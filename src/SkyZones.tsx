@@ -137,9 +137,10 @@ function Zone({
   const label = LABEL[zone.bot];
   openLabel ??= label;
   const off = zone.bot === "overlord" && !zone.agentId; // a closed Overlord keeps its zone (history + Resume)
+  const idle = !panel && zone.bot === "riffbot" && !zone.agentId; // RiffBot not running: dimmed whole face + a bottom Spin Up strip
   return (
     <section
-      className={`sky-zone sky-zone-${zone.bot}${panel ? " sky-chat-panel" : ""}${off ? " is-off" : ""}${frameStyle ? " has-frame" : ""}`}
+      className={`sky-zone sky-zone-${zone.bot}${panel ? " sky-chat-panel" : ""}${off ? " is-off" : ""}${idle ? " is-idle" : ""}${frameStyle ? " has-frame" : ""}`}
       style={frameStyle ?? undefined}
       data-testid={panel ? `sky-chat-${zone.bot}` : `sky-zone-${zone.bot}`}
       data-sky-bot={zone.bot}

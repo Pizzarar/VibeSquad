@@ -4783,8 +4783,14 @@ button.project-file-name:hover { text-decoration: underline; }
 .sky-chat-panel .drawer-subagents-bar { max-height: none; overflow-y: visible; }
 /* TV with no agent: the Overlord's static fills the screen; RiffBot's face stays and its Spin Up sits on a bottom strip. */
 .sky-zone.is-off .sky-crt-body { top: 0; }
-.sky-zone-riffbot:not(.sky-chat-panel) .sky-crt-body:has(.sky-static) { background: color-mix(in srgb, var(--bg) 82%, transparent); border-top: 1px solid var(--line); }
-.sky-zone-riffbot:not(.sky-chat-panel) .sky-static { flex: none; padding: 10px; }
+/* RiffBot not running: the portrait stays whole (dimmed) in the TV minus a one-row strip (label + Spin Up) pinned to the bottom bezel edge. The strip and the face area never overlap. */
+.sky-zone.is-idle .sky-face-area { bottom: var(--sky-idle-strip); }
+.sky-zone.is-idle .sky-face { opacity: 0.5; filter: grayscale(0.5); }
+.sky-zone.is-idle .sky-crt-body { top: auto; height: var(--sky-idle-strip); background: var(--bg); border-top: 1px solid var(--line); }
+.sky-zone.is-idle .sky-static { flex-direction: row; gap: 10px; padding: 0 10px; animation: none; background: var(--bg); }
+.sky-zone.is-idle .sky-static-text { border: 0; padding: 0; background: none; font-size: 11px; color: var(--text); }
+.sky-zone.is-idle .sky-static .btn { min-height: 0; padding: 2px 10px; }
+.sky-zones { --sky-idle-strip: 34px; }
 .sky-zone:not(.sky-chat-panel):not(.is-off) .sky-crt-body:not(:has(.sky-static)) { display: none; }
 .sky-crt-body .pane-slot { flex: 1; grid-row: auto; grid-column: auto; border-left: 0; background: transparent; }
 @media (prefers-reduced-motion: reduce) {
