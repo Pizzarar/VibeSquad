@@ -1,8 +1,7 @@
 export const LEAD_FLAG_DEFAULT: number;
 export const LEAD_AUTO_HANDOFF_DEFAULT: number;
 export const LEAD_HARD_CAP_DEFAULT: number;
-export const STALE_PREDECESSOR_INITIALIZING_MS: number;
-export const STALE_PREDECESSOR_SILENT_MS: number;
+export const STALE_PREDECESSOR_MS: number;
 export const SOFT_FLAG_REASON: string;
 export const SOFT_FLAG_NUDGE: string;
 export const WRITE_HANDOFF_PROMPT: string;
@@ -21,7 +20,7 @@ export function parseLeadOrd(lead: any): number;
 export function leadUsedTokens(lead: any, overrideTokens?: number): number;
 export function isStalePredecessor(
   lead: any,
-  opts?: { now?: number; initializingMs?: number; silentMs?: number },
+  opts?: { now?: number; staleMs?: number },
 ): boolean;
 export function getHandoffPacketPath(teamId: string, laneId: string, baseHome?: string): string;
 export function readLaneLogEntries(opts: {
@@ -45,6 +44,7 @@ export function synthesizeHandoffPacket(opts: {
   openWorkers?: any[];
   rootDir?: string;
   baseHome?: string;
+  reason?: string;
 }): {
   path: string;
   snapshotPath: string;
@@ -67,6 +67,8 @@ export function buildSuccessorPrompt(opts: {
   summaryContent: string;
   latestPlan: string;
   openWorkers?: any[];
+  steer?: string;
+  alreadyRetired?: boolean;
 }): string;
 export function resolveLeadProfile(
   oldLead: any,

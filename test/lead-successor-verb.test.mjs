@@ -82,33 +82,33 @@ test("Buddy on its own lane: successor spawned, old lead relabelled former-lead,
   } finally { t.cleanup(); }
 });
 
-test("stale initializing predecessor: handoff_lead synthesizes the packet and retires it immediately", async () => {
+test("stale initializing predecessor: handoff_lead retires it immediately but keeps its written packet", async () => {
   const t = setup({ callerRole: "brainstorm", callerId: "rn-buddy" });
   try {
     const lead = t.agents.get("rn-lead");
     lead.status = "initializing"; // stuck out of the gate, never ran a turn
     lead.createdAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-    // A leftover packet that looks fresh (mtime >= createdAt) must NOT be trusted for a stale predecessor.
+    // The predecessor did write a packet (mtime >= createdAt): it must be kept, never overwritten.
     const packetPath = join(t.vsHome, "teams", "site", "packet-site-polish.md");
     mkdirSync(dirname(packetPath), { recursive: true });
-    writeFileSync(packetPath, "# leftover judgment from a previous lead\n", "utf8");
+    writeFileSync(packetPath, "# predecessor's own judgment\n", "utf8");
 
     const r = await callTool(t.ctx, "handoff_lead", {});
     assert.equal(r.id, "rn-succ-1");
     assert.equal(r.oldLeadId, "rn-lead");
     assert.equal(t.agents.get("rn-lead").labels.role, "former-lead", "stale predecessor retired immediately");
     assert.deepEqual(await liveLeads(t.ctx), ["rn-succ-1"]);
-    // The leftover packet must not be trusted for a stale predecessor: it is auto-generated.
-    assert.ok(!readFileSync(packetPath, "utf8").includes("leftover judgment"), "stale predecessor's packet is auto-generated, not the leftover");
+    assert.ok(readFileSync(packetPath, "utf8").includes("predecessor's own judgment"), "a predecessor-written packet is kept, not synthesized over");
   } finally { t.cleanup(); }
 });
 
-test("healthy predecessor: handoff_lead still trusts its own packet and retires it", async () => {
+test("healthy idle lead: handoff_lead keeps its packet (silence does not make it stale)", async () => {
   const t = setup({ callerRole: "brainstorm", callerId: "rn-buddy" });
   try {
     const lead = t.agents.get("rn-lead");
     lead.status = "idle";
-    lead.createdAt = new Date(Date.now() - 60 * 1000).toISOString(); // healthy: recent, has a real packet
+    lead.createdAt = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // alive an hour
+    lead.updatedAt = new Date(Date.now() - 31 * 60 * 1000).toISOString(); // silent 31 min
     const packetPath = join(t.vsHome, "teams", "site", "packet-site-polish.md");
     mkdirSync(dirname(packetPath), { recursive: true });
     writeFileSync(packetPath, "# healthy judgment\n", "utf8");
@@ -117,7 +117,7 @@ test("healthy predecessor: handoff_lead still trusts its own packet and retires 
     assert.equal(r.id, "rn-succ-1");
     assert.equal(t.agents.get("rn-lead").labels.role, "former-lead");
     assert.deepEqual(await liveLeads(t.ctx), ["rn-succ-1"]);
-    assert.ok(readFileSync(packetPath, "utf8").includes("healthy judgment"), "healthy predecessor's own packet is trusted");
+    assert.ok(readFileSync(packetPath, "utf8").includes("healthy judgment"), "healthy idle lead's own packet is trusted");
   } finally { t.cleanup(); }
 });
 

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { createPlugin } from "../server/hooks/agent-duties.ts";
+import { isStalePredecessor } from "../server/lead-handoff.mjs";
 import {
   LEAD_AUTO_HANDOFF_DEFAULT,
   LEAD_FLAG_DEFAULT,
@@ -82,6 +83,58 @@ function makeTempEnv() {
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// isStalePredecessor: only a lead that never got a turn going (still starting/queued, no usage)
+// can be stale. Silence alone never makes a running or idle lead stale.
+// ---------------------------------------------------------------------------
+const staleLead = (over = {}) => ({
+  id: "rn-stale",
+  status: "initializing",
+  createdAt: "2026-11-06T00:00:00.000Z",
+  labels: { team: "vibesquad", lane: "vibesquad", role: "lead", ord: "1" },
+  ...over,
+});
+
+test("isStalePredecessor: running lead silent 31 min is not stale", () => {
+  assert.equal(
+    isStalePredecessor(staleLead({ status: "running", updatedAt: "2026-11-07T00:00:00.000Z" }), { now: Date.parse("2026-11-07T00:31:00.000Z"), staleMs: 30 * 60 * 1000 }),
+    false,
+  );
+});
+
+test("isStalePredecessor: idle lead is not stale", () => {
+  assert.equal(
+    isStalePredecessor(staleLead({ status: "idle", updatedAt: "2026-11-07T00:00:00.000Z" }), { now: Date.parse("2026-11-07T00:31:00.000Z"), staleMs: 30 * 60 * 1000 }),
+    false,
+  );
+});
+
+test("isStalePredecessor: queued lead under threshold is not stale", () => {
+  assert.equal(
+    isStalePredecessor(staleLead({ status: "queued", createdAt: "2026-11-07T00:10:00.000Z" }), { now: Date.parse("2026-11-07T00:20:00.000Z"), staleMs: 30 * 60 * 1000 }),
+    false,
+  );
+});
+
+test("isStalePredecessor: initializing past threshold is stale, even if a meta/label event just bumped updatedAt", () => {
+  // createdAt is old (never left the gate); updatedAt is recent only because setLabels appended a meta event.
+  const lead = staleLead({
+    status: "initializing",
+    createdAt: "2026-11-06T00:00:00.000Z",
+    updatedAt: "2026-11-07T00:29:00.000Z", // meta write 1 min before "now"
+  });
+  assert.equal(isStalePredecessor(lead, { now: Date.parse("2026-11-07T00:30:00.000Z"), staleMs: 30 * 60 * 1000 }), true);
+});
+
+test("isStalePredecessor: a lead that has produced usage is never stale (queued behind the family cap)", () => {
+  const lead = staleLead({
+    status: "queued",
+    createdAt: "2026-11-06T00:00:00.000Z", // old creation…
+    lastUsage: { contextWindowUsedTokens: 42_000 }, // …but it has run turns before
+  });
+  assert.equal(isStalePredecessor(lead, { now: Date.parse("2026-11-07T00:30:00.000Z"), staleMs: 30 * 60 * 1000 }), false);
+});
 
 test("Done-when #1: simulated lead stepping 150k -> 250k -> 300k triggers flag, auto-handoff, and forced handoff each at most once", async () => {
   const env = makeTempEnv();
@@ -255,7 +308,8 @@ test("stale initializing lead at 250k auto-hands off immediately (no steer+wait,
       status: "initializing", // stuck out of the gate: never ran a turn, can't be steered
       createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
       labels: { team: "vibesquad", lane: "vibesquad", role: "lead", ord: "1", profile: "Lead - Claude" },
-      lastUsage: { contextWindowUsedTokens: 250_000 },
+      // No lastUsage/usage: this predecessor never got a turn going (the `usedTokens` override below is what
+      // drives the auto-250 stage, not the lead's own recorded usage).
     };
     agents.set(lead.id, lead);
 
