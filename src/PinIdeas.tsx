@@ -18,7 +18,11 @@ let toastTimer: ReturnType<typeof setTimeout> | null = null;
 const toastListeners = new Set<() => void>();
 
 /** The server saved a brief in its runtime folder (lane folder not found); say so instead of silently losing it. */
-export const warnBriefFallback = (laneId: string) => showPinToast(`Brief for ${laneId} was saved in the app folder, not the project. Check the lane path.`);
+export const briefFallbackWarning = (laneIds: string[]) =>
+  laneIds.length ? `Brief for ${laneIds.join(", ")} was saved in the app folder, not the project. Check the lane path.` : "";
+
+/** A plain toast plus the fallback warning, so the later "Pinned ..." toast can't hide it. */
+export const withBriefWarning = (msg: string, laneIds: string[]) => [msg, briefFallbackWarning(laneIds)].filter(Boolean).join(" · ");
 
 export function showPinToast(msg: string) {
   toast = msg;
@@ -118,9 +122,10 @@ export function SpinOffCard({ pin, offer, variant = "tile" }: { pin: Pin; offer:
   if (hidden || !teams.length) return null;
   const n = teams.length;
   const go = async () => {
-    const results = await createSpinOffPins(offer.id, pin.squad.id, offer.teams, { onBriefFallback: warnBriefFallback }); // the full list: runSpinOffOnce skips the rows already created
+    const fellBack: string[] = [];
+    const results = await createSpinOffPins(offer.id, pin.squad.id, offer.teams, { onBriefFallback: (id) => fellBack.push(id) }); // the full list: runSpinOffOnce skips the rows already created
     if (!results) return; // already running (double click, or the other card)
-    showPinToast(describeSpinOff(results));
+    showPinToast(withBriefWarning(describeSpinOff(results), fellBack));
     if (results.every((r) => r.pin)) {
       dismissSpinOff(offer.id);
       setHidden(true);
@@ -386,9 +391,10 @@ export function IdeaBox({
         return;
       }
       setLastBrainstormProfile(selectedProfile);
-      const pin = await createPin(view.team.id, resolveIdeaTeamName(name, rawIdea) || "New team", rawIdea, { lastProfile: selectedProfile, onBriefFallback: warnBriefFallback });
+      const fellBack: string[] = [];
+      const pin = await createPin(view.team.id, resolveIdeaTeamName(name, rawIdea) || "New team", rawIdea, { lastProfile: selectedProfile, onBriefFallback: (id) => fellBack.push(id) });
       onClose();
-      showPinToast(`Pinned ${pin.lane.name}`);
+      showPinToast(withBriefWarning(`Pinned ${pin.lane.name}`, fellBack));
       await onQuickStart(pin);
       await spinUpPin(pin, selectedProfile);
     } catch (e) {

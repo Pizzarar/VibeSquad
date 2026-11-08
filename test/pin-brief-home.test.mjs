@@ -137,3 +137,11 @@ test("no fallback flag when the project folder resolves", async () => {
   });
   assert.equal((await res.json()).fallback, undefined);
 });
+
+test("PinIdeas: the 'Pinned' toast carries the fallback warning instead of overwriting it", () => {
+  const src = fs.readFileSync(join(SRC_DIR, "PinIdeas.tsx"), "utf8");
+  assert.match(src, /showPinToast\(withBriefWarning\(`Pinned \$\{pin\.lane\.name\}`, fellBack\)\)/);
+  assert.match(src, /showPinToast\(withBriefWarning\(describeSpinOff\(results\), fellBack\)\)/);
+  assert.doesNotMatch(src, /onBriefFallback: warnBriefFallback/);
+  assert.match(src, /withBriefWarning = \(msg: string, laneIds: string\[\]\) => \[msg, briefFallbackWarning\(laneIds\)\]\.filter\(Boolean\)\.join\(" · "\)/);
+});
