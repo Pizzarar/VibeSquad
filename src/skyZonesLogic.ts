@@ -399,3 +399,119 @@ export const takeoverLanded = (pos: number, expanded: boolean, n: number, reduce
 export const skyLeftBot = (landed: boolean): FaceBot => (landed ? "overlord" : "riffbot");
 /** Nothing left to animate: expanded and fully in, or collapsed and fully out. */
 export const takeoverSettled = (pos: number, expanded: boolean, n: number): boolean => (expanded ? pos >= n : pos <= 0);
+
+// ── RS-b Riff slam (docs/PLAN_NEON_OFFICE.md RS): Riff's chat window zooms out of his TV and slams into the Overlord ──
+export type SlamDir = "rest" | "open" | "close";
+/** The slam clock: `t` ms since the open/close began. `rest` = nothing animating (t 0). */
+export type SlamState = { dir: SlamDir; t: number };
+export const SLAM_REST: SlamState = { dir: "rest", t: 0 };
+/** Timings (ms). The zoom is a few hard steps (Win95 zoom-rect), then the window lands: 1-frame squash, bezel shake, puff. */
+export const SLAM = { zoomMs: 250, zoomSteps: 4, squashMs: 60, shakeMs: 150, shakeStepMs: 30, dizzyMs: 1000 } as const;
+/** Bezel shake offsets (CSS px at 1080; 2-3px), one per shakeStepMs, ending still. */
+export const SLAM_SHAKE_DX: readonly number[] = [3, -3, 2, -2, 1];
+/** Squash on the landing frame: wider and shorter, anchored on the bottom edge. */
+export const SLAM_SQUASH = { x: 1.03, y: 0.96 } as const;
+
+/** @art slam-puff.json (RS-a): a one-row sheet of `frames` cells, played once at `ms` per frame; `scale` is the 1080 integer scale. */
+export type SlamPuff = { frameW: number; frameH: number; frames: { x: number; y: number }[]; scale: number; ms: number };
+export const SLAM_PUFF_JSON_URL = "/office/slam-puff.json";
+export const SLAM_PUFF_URL = (theme: SkyTheme) => `/office/slam-puff-${theme}.png`;
+export function validateSlamPuff(json: unknown): { ok: true; value: SlamPuff } | { ok: false; error: string } {
+  if (!json || typeof json !== "object") return { ok: false, error: "not an object" };
+  const { frameW, frameH, frames, frameList, scale, ms } = json as Record<string, unknown>;
+  if (!posInt(frameW) || !posInt(frameH)) return { ok: false, error: "frameW/frameH must be positive integers" };
+  const list: { x: number; y: number }[] = [];
+  if (Array.isArray(frameList) && frameList.length > 0) {
+    for (const f of frameList) {
+      if (f && typeof f === "object" && frameNum((f as { x?: unknown }).x) && frameNum((f as { y?: unknown }).y)) list.push({ x: (f as { x: number }).x, y: (f as { y: number }).y });
+      else return { ok: false, error: "bad frame" };
+    }
+  } else if (posInt(frames)) {
+    for (let i = 0; i < frames; i++) list.push({ x: i * frameW, y: 0 });
+  } else return { ok: false, error: "frames missing" };
+  return { ok: true, value: { frameW, frameH, frames: list, scale: posInt(scale) ? scale : 3, ms: posNum(ms) ? ms : 60 } };
+}
+
+/** Whole timeline length. Open: the zoom, then the landing effects (the longer of the shake and the puff). Close: the reverse zoom + the dizzy second run together. */
+export function slamTotalMs(dir: SlamDir, puffMs = 0): number {
+  if (dir === "open") return SLAM.zoomMs + Math.max(SLAM.shakeMs, puffMs);
+  if (dir === "close") return Math.max(SLAM.zoomMs, SLAM.dizzyMs);
+  return 0;
+}
+/** A fresh clock for an open/close flip (reduced motion → rest: the swap is instant). */
+export const slamStart = (open: boolean, reduced: boolean): SlamState => (reduced ? SLAM_REST : { dir: open ? "open" : "close", t: 0 });
+/** One tick: advance `t`, and fall back to rest once the timeline is done. */
+export function slamAdvance(s: SlamState, dtMs: number, puffMs = 0): SlamState {
+  if (s.dir === "rest") return s;
+  const t = s.t + Math.max(0, dtMs);
+  return t >= slamTotalMs(s.dir, puffMs) ? SLAM_REST : { dir: s.dir, t };
+}
+
+export type SlamView = {
+  /** Dotted zoom-rect step (1..zoomSteps) being drawn, or null. Open grows 1→N, close shrinks N→1. */
+  zoomStep: number | null;
+  /** False while the window is still zooming in (the real chat appears when the rect lands). */
+  windowShown: boolean;
+  squash: boolean;
+  /** Bezel shake offset in CSS px at 1080 (0 = still). */
+  shakeDx: number;
+  /** Puff frame index, or null (not landed yet / done). */
+  puffFrame: number | null;
+  /** Face the Overlord's TV is forced to: smacked through the open, dizzy after the close; null = normal. */
+  face: "smacked" | "dizzy" | null;
+};
+export const SLAM_IDLE_VIEW: SlamView = { zoomStep: null, windowShown: true, squash: false, shakeDx: 0, puffFrame: null, face: null };
+
+/** Everything the UI draws at one moment of the slam clock. `puff` = { frames, ms } when the puff art exists. Reduced motion (or rest) = the plain end state. */
+export function slamView(s: SlamState, reduced: boolean, puff?: { frames: number; ms: number } | null): SlamView {
+  if (reduced || s.dir === "rest") return SLAM_IDLE_VIEW;
+  const stepMs = SLAM.zoomMs / SLAM.zoomSteps;
+  if (s.dir === "close") {
+    const zoomStep = s.t < SLAM.zoomMs ? SLAM.zoomSteps - Math.min(SLAM.zoomSteps - 1, Math.floor(s.t / stepMs)) : null;
+    return { ...SLAM_IDLE_VIEW, zoomStep, face: s.t < SLAM.dizzyMs ? "dizzy" : null };
+  }
+  if (s.t < SLAM.zoomMs) return { ...SLAM_IDLE_VIEW, zoomStep: 1 + Math.min(SLAM.zoomSteps - 1, Math.floor(s.t / stepMs)), windowShown: false, face: "smacked" };
+  const lt = s.t - SLAM.zoomMs; // ms since landing
+  const pf = puff && puff.frames > 0 ? Math.floor(lt / puff.ms) : -1;
+  return {
+    ...SLAM_IDLE_VIEW,
+    squash: lt < SLAM.squashMs,
+    shakeDx: lt < SLAM.shakeMs ? (SLAM_SHAKE_DX[Math.floor(lt / SLAM.shakeStepMs)] ?? 0) : 0,
+    puffFrame: pf >= 0 && puff && pf < puff.frames ? pf : null,
+    face: "smacked",
+  };
+}
+/** Stable string of a view; the clock re-renders only when it changes. */
+export const slamKey = (v: SlamView): string => `${v.zoomStep ?? "-"}:${v.windowShown ? 1 : 0}:${v.squash ? 1 : 0}:${v.shakeDx}:${v.puffFrame ?? "-"}:${v.face ?? "-"}`;
+
+/** The mode to force on the Overlord's face: the slam's, skipped when faces.json lacks that key. */
+export const slamFaceForce = (v: SlamView, faces: FacesModel | null): Extract<FaceMode, "smacked" | "dizzy"> | null => (v.face && hasFaceMode(faces, "overlord", v.face) ? v.face : null);
+
+/** The zone transform under the slam: the shake (snapped to device px) and the landing squash (pinned on the bottom edge by the caller); null = none. */
+export function slamTransform(dx: number, squash: boolean, dpr = 1): string | null {
+  const t = [dx ? `translateX(${snapPx(dx, dpr)}px)` : "", squash ? `scale(${SLAM_SQUASH.x}, ${SLAM_SQUASH.y})` : ""].filter(Boolean).join(" ");
+  return t || null;
+}
+
+export type Rect = { left: number; top: number; width: number; height: number };
+/** The dotted outline at `step` of `steps`: Riff's TV rect grown (or shrunk back) toward the chat's rect; left/top/width/height snapped to whole device px. */
+export function slamRect(from: Rect, to: Rect, step: number, steps = SLAM.zoomSteps, dpr = 1): Rect {
+  const p = Math.min(1, Math.max(0, step / steps));
+  const mix = (a: number, b: number) => snapPx(a + (b - a) * p, dpr);
+  return { left: mix(from.left, to.left), top: mix(from.top, to.top), width: mix(from.width, to.width), height: mix(from.height, to.height) };
+}
+/** The face k at 1080 that slam-puff.json's `scale` (3) was drawn against: the puff grows with the face from there (so the burst keeps its size relative to the Overlord at 4K@120%). */
+export const SLAM_FACE_K_1080 = 7;
+/** Puff scale (CSS px per art px): the art's `scale` at the 1080 face k, grown in step with the face k elsewhere, always whole device px. */
+export const slamPuffScale = (puffScale: number, faceK: number, dpr = 1): number => crispScale(faceK > 0 ? (puffScale * faceK) / SLAM_FACE_K_1080 : puffScale, dpr);
+/** A puff cell's box centred on a window-edge point, snapped to whole device px. */
+export function slamPuffBox(at: { x: number; y: number }, cell: { w: number; h: number }, k: number, dpr = 1): Rect {
+  return { left: snapPx(at.x - (cell.w * k) / 2, dpr), top: snapPx(at.y - (cell.h * k) / 2, dpr), width: cell.w * k, height: cell.h * k };
+}
+/** The four window corners where the puffs go off. */
+export const slamPuffPoints = (r: Rect): { x: number; y: number }[] => [
+  { x: r.left, y: r.top },
+  { x: r.left + r.width, y: r.top },
+  { x: r.left, y: r.top + r.height },
+  { x: r.left + r.width, y: r.top + r.height },
+];

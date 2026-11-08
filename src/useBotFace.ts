@@ -22,9 +22,19 @@ import {
   dprMediaQuery,
   safeDpr,
   takeoverSettled,
+  SLAM_PUFF_JSON_URL,
+  SLAM_REST,
+  slamAdvance,
+  slamKey,
+  slamStart,
+  slamView,
   validateSkyCrt,
+  validateSlamPuff,
   validateTakeover,
   type SkyCrtModel,
+  type SlamPuff,
+  type SlamState,
+  type SlamView,
   type TakeoverLabel,
   type TakeoverModel,
   TAKEOVER_LABEL_JSON_URL,
@@ -191,6 +201,56 @@ export function useTakeoverClock(expanded: boolean, fps: number, n: number, redu
     return () => cancelAnimationFrame(raf);
   }, [expanded, fps, n, reduced]);
   return { frame: takeoverFrameAt(pos, Math.max(1, n)), pos };
+}
+
+/** slam-puff.json (RS-a), loaded once; missing/invalid → null (the slam plays without the puff). */
+export const useSlamPuffModel = (): SlamPuff | null => useJsonModel(SLAM_PUFF_JSON_URL, validateSlamPuff);
+
+/**
+ * RS-b slam clock: every open/close flip of Riff's chat starts a fresh timeline (zoom-rect, landing, dizzy) that a rAF loop
+ * advances by the frame timestamps; the first mount is not a flip. Re-renders only when what is drawn changes (slamKey).
+ * Reduced motion = no clock: the plain end state at once.
+ */
+export function useSlamClock(open: boolean, reduced: boolean, puff: SlamPuff | null): SlamView {
+  const stateRef = useRef<SlamState>(SLAM_REST);
+  const prevOpen = useRef(open);
+  const puffRef = useRef(puff);
+  puffRef.current = puff;
+  const reducedRef = useRef(reduced);
+  reducedRef.current = reduced;
+  const [view, setView] = useState<SlamView>(() => slamView(SLAM_REST, reduced));
+  const keyRef = useRef(slamKey(view));
+  useEffect(() => {
+    const flipped = prevOpen.current !== open;
+    prevOpen.current = open;
+    stateRef.current = flipped ? slamStart(open, reduced) : SLAM_REST;
+    const apply = () => {
+      const p = puffRef.current;
+      const v = slamView(stateRef.current, reducedRef.current, p ? { frames: p.frames.length, ms: p.ms } : null);
+      const k = slamKey(v);
+      if (k !== keyRef.current) {
+        keyRef.current = k;
+        setView(v);
+      }
+    };
+    if (stateRef.current.dir === "rest") {
+      apply();
+      return;
+    }
+    let raf = 0;
+    let last: number | null = null;
+    const tick = (now: number) => {
+      const p = puffRef.current;
+      stateRef.current = slamAdvance(stateRef.current, last === null ? 0 : now - last, p ? p.frames.length * p.ms : 0);
+      last = now;
+      apply();
+      if (stateRef.current.dir !== "rest") raf = requestAnimationFrame(tick);
+    };
+    apply();
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [open, reduced]);
+  return view;
 }
 
 export type BotFace = {
