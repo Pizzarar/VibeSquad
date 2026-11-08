@@ -1,12 +1,13 @@
--- H1c-v3 RiffBot + Overlord 80x48 widescreen faces (G8: both sky TVs fixed 50/50; faceContain scales
+-- H1c-v3b RiffBot + Overlord 80x48 widescreen faces (G8: both sky TVs fixed 50/50; faceContain scales
 -- the cell at an integer and bottom-anchors it), in the H0 hand (docs/art/STYLE_BIBLE.md) from the
 -- owner-approved H1a sketches (art/h1/gallery.lua, 60e5144). Owner H1c-v3: no stretch to fill the
 -- cell. Both bots keep natural H0 proportions, centred, with clean SKY left and right. Googly MARBLE
 -- eyes, INK line mouths, 1px INK outlines, flat P0 fills, hand-placed shapes, no dither.
 --   RiffBot : headshot. Boxy ~4:3 cream CRT head with rabbit ears, sitting on violet suit shoulders,
 --             MARBLE collar and PINK tie flush to row 47. Googly eyes on the teal screen; the
---             stock ticker IS the mouth (owner 4a): "+4.20", shouts "YO!!" (needs) and crashes to
---             a PINK "-9.99" with a wobbly lip (scared). No feet, no side arms: only on needs a
+--             mouth is a STOCK ARROW (owner 4a, H1c-v3b): a MARBLE zig-zag up-arrow grin that wiggles
+--             when talking, spikes sharply up in AMBER on needs and crashes to a PINK down-arrow
+--             (scared). No text or digits in the mouth. No feet, no side arms: only on needs a
 --             hand pops up from the bottom edge to wave.
 --   Overlord: the sky-CRT screen IS the jar (no inner TV): murky SKY water, bubbles, glass glare,
 --             a floating brain, 2 lopsided googly eyeballs on dangling optic nerves and a
@@ -39,17 +40,10 @@ local function bang(C, x, y)
   C.outline(K)
   C.vline(x+3, y+2, 3, P); C.px(x+3, y+6, P)
 end
--- text clipped to a box (ticker window)
-local function clipText(C, x, y, s, c, x0, x1)
-  local tmp = { px = function(px, py, cc) if px >= x0 and px <= x1 then C.px(px, py, cc) end end }
-  L.text(tmp, x, y, s, c)
-end
-
 -- ---------- RiffBot (headshot: boxy ~4:3 CRT head x20..60 on suit shoulders flush to row 47) ----------
 local RIFF = { "back", "suit", "tie", "body", "screen", "face", "mouth", "prop", "arm", "fx" }
 local EYE_N = {{31, 15, 3.1, 3.6}, {41, 14, 3.6, 4.6}}
 local EYE_W = {{31, 15, 3.6, 4.1}, {41, 15, 4.1, 4.6}}
-local TICK = "+4.20"
 
 local function riff(C, s)
   C.back.rect(0, 0, CW, CH, Y)
@@ -99,22 +93,22 @@ local function riff(C, s)
     f.rect(31 + j, 15, 1, 2, K); f.rect(42 - j, 15, 1, 2, K)
   end
 
-  -- ticker mouth (owner 4a): INK band across the screen, text rows y0+1..y0+5, optional tongue
+  -- stock-arrow mouth (owner 4a, H1c-v3b): a chunky 2px zig-zag stock-chart line ending in an
+  -- arrowhead, curling up at the corners like a cocky grin; flat fill + 1px INK outline, no text.
   local m = C.mouth
-  local y0, h = s.band[1], s.band[2]
-  local x0, x1 = 26, 47
-  m.rect(x0, y0, x1 - x0 + 1, h, s.flash and P or K)
-  m.px(x0, y0 + h - 1, 0); m.px(x1, y0 + h - 1, 0)                            -- rounded lower lip
-  if s.lip == "smirk" then                                                     -- lopsided corner hooks
-    m.px(x0 - 1, y0, K); m.px(x1 + 1, y0, K); m.px(x1 + 2, y0 - 1, K)
-  elseif s.lip == "wobble" then                                                -- scared: wavy top lip
-    for x = x0, x1 do if ((x // 2) + (s.jit or 0)) % 2 == 0 then m.px(x, y0 - 1, K) end end
+  local ar = s.arrow
+  local dy = ar.dy or 0
+  for i = 1, #ar.pts - 2, 2 do
+    local x0, y0, x1, y1 = ar.pts[i], ar.pts[i+1] + dy, ar.pts[i+2], ar.pts[i+3] + dy
+    m.line(x0, y0, x1, y1, ar.c); m.line(x0, y0 + 1, x1, y1 + 1, ar.c)
   end
-  if s.tongue then
-    local ty = y0 + h - 2
-    m.hline(32, ty, 10, s.tongueC or P); m.hline(34, ty - 1, 6, s.tongueC or P)
+  local hd = {}
+  for i, v in ipairs(ar.head) do hd[i] = (i % 2 == 0) and v + dy or v end
+  m.poly(hd, ar.c)
+  m.outline(K)
+  if s.lip == "wobble" then                                                    -- scared: shaky ticks under the crash
+    for x = 28, 44, 4 do m.px(x + (s.jit or 0), 27, K) end
   end
-  clipText(m, x0 + 1 - (s.scroll or 0), y0 + 1, s.text or TICK, s.textC or A, x0 + 1, x1 - 1)
 
   -- rabbit ears (sag when scared)
   local p = C.prop
@@ -157,21 +151,27 @@ local function riff(C, s)
   end
 end
 
+-- arrow mouths: pts = zig-zag polyline (top pixel row, line is 2px tall), head = arrowhead polygon
+local GRIN   = { pts = {27,23, 30,26, 34,23, 37,25, 41,23}, head = {39,21, 47,19, 44,26}, c = M }
+local GRIN_B = { pts = {27,22, 30,24, 34,26, 37,23, 41,23}, head = {39,21, 47,19, 44,26}, c = M }  -- wiggle
+local GRIN_C = { pts = {27,24, 30,26, 34,23, 37,25, 41,22}, head = {39,20, 47,18, 44,25}, c = M }  -- bounce tip
+local SPIKE  = { pts = {26,24, 30,26, 33,22, 37,26, 46,15}, head = {43,14, 51,5, 50,16}, c = A }   -- needs
+local CRASH  = { pts = {27,21, 31,23, 34,21, 39,23}, head = {42,19, 46,27, 36,26}, c = P }         -- scared
+local function sh(a, d) return { pts = a.pts, head = a.head, c = a.c, dy = d } end
+
 local RIFF_FRAMES = {
-  { eyes = "down", band = {21, 7}, lip = "smirk" },                                         -- lookDown x0
-  { eyes = "look", band = {21, 7}, lip = "smirk" },                                         -- idle     x80
-  { eyes = "shut", band = {21, 7}, lip = "smirk" },                                         -- blink    x160
-  { eyes = "look", band = {20, 8}, text = "RIFF +6.90 SQD", tongue = true },                -- talk     x240
-  { eyes = "look", band = {19, 9}, text = "RIFF +6.90 SQD", scroll = 12, tongue = true, px = 1 }, -- talk x320
-  { eyes = "look", band = {21, 7}, text = "RIFF +6.90 SQD", scroll = 24, lip = "smirk" },  -- talk     x400
-  { eyes = "yo", wide = true, band = {20, 8}, text = "YO!!", textC = P,
-    scroll = -3, tongue = true, tongueC = CO, arm = 1, yo = true },                         -- needs    x480
-  { eyes = "yo", wide = true, band = {20, 8}, text = "YO!!", textC = K,
-    scroll = -3, tongue = true, tongueC = CO, arm = 2, yo = true, flash = true, px = 1 },   -- needs    x560
-  { eyes = "scared", wide = true, band = {21, 6}, text = "-9.99", textC = P,
-    lip = "wobble", droop = true, scared = true, jit = 0, shake = -1 },                     -- scared   x640
-  { eyes = "scared", wide = true, band = {21, 6}, text = "-9.99", textC = P,
-    lip = "wobble", droop = true, scared = true, jit = 1, shake = 1, scroll = -1 },         -- scared   x720
+  { eyes = "down", arrow = GRIN },                                                          -- lookDown x0
+  { eyes = "look", arrow = GRIN },                                                          -- idle     x80
+  { eyes = "shut", arrow = GRIN },                                                          -- blink    x160
+  { eyes = "look", arrow = GRIN_B },                                                        -- talk     x240
+  { eyes = "look", arrow = sh(GRIN_C, -1), px = 1 },                                        -- talk     x320
+  { eyes = "look", arrow = GRIN },                                                          -- talk     x400
+  { eyes = "yo", wide = true, arrow = SPIKE, arm = 1, yo = true },                          -- needs    x480
+  { eyes = "yo", wide = true, arrow = sh(SPIKE, -1), arm = 2, yo = true, flash = true, px = 1 }, -- needs x560
+  { eyes = "scared", wide = true, arrow = CRASH, lip = "wobble",
+    droop = true, scared = true, jit = 0, shake = -1 },                                     -- scared   x640
+  { eyes = "scared", wide = true, arrow = sh(CRASH, 0), lip = "wobble",
+    droop = true, scared = true, jit = 1, shake = 1 },                                      -- scared   x720
 }
 
 -- ---------- Overlord (80x48: the sky-CRT screen IS the jar, owner H1c-v3) ----------
