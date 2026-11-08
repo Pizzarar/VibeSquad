@@ -25,21 +25,21 @@ const fakeStore = (init = {}) => {
 
 describe("parsePairInput", () => {
   test("reads the desktop QR / Copy Pairing Link (LAN, Meshnet host and Meshnet IP)", () => {
-    assert.deepEqual(parsePairInput("https://192.168.1.20:4180/pair?code=123456"), { host: "192.168.1.20:4180", code: "123456" });
-    assert.deepEqual(parsePairInput("https://pc-name.example:4180/pair?code=654321"), { host: "pc-name.example:4180", code: "654321" });
-    assert.deepEqual(parsePairInput("  https://100.64.0.7:4180/pair?code=000111  "), { host: "100.64.0.7:4180", code: "000111" });
+    assert.deepEqual(parsePairInput("https://192.168.1.20:4180/pair?code=123456"), { host: "192.168.1.20:4180", code: "123456", fp: "" });
+    assert.deepEqual(parsePairInput("https://pc-name.example:4180/pair?code=654321"), { host: "pc-name.example:4180", code: "654321", fp: "" });
+    assert.deepEqual(parsePairInput("  https://100.64.0.7:4180/pair?code=000111  "), { host: "100.64.0.7:4180", code: "000111", fp: "" });
   });
 
   test("reads the vibesquad://pair deep link", () => {
-    assert.deepEqual(parsePairInput("vibesquad://pair?host=192.168.1.20%3A4180&code=123456"), { host: "192.168.1.20:4180", code: "123456" });
-    assert.deepEqual(parsePairInput("vibesquad://pair?host=pc.example"), { host: "pc.example:4180", code: "" });
+    assert.deepEqual(parsePairInput("vibesquad://pair?host=192.168.1.20%3A4180&code=123456"), { host: "192.168.1.20:4180", code: "123456", fp: "" });
+    assert.deepEqual(parsePairInput("vibesquad://pair?host=pc.example"), { host: "pc.example:4180", code: "", fp: "" });
   });
 
   test("accepts a typed host (default port 4180) and a bare or dashed 6-digit code", () => {
-    assert.deepEqual(parsePairInput("192.168.1.20"), { host: "192.168.1.20:4180", code: "" });
-    assert.deepEqual(parsePairInput("pc.example:4443"), { host: "pc.example:4443", code: "" });
-    assert.deepEqual(parsePairInput("123456"), { host: "", code: "123456" });
-    assert.deepEqual(parsePairInput("123-456"), { host: "", code: "123456" });
+    assert.deepEqual(parsePairInput("192.168.1.20"), { host: "192.168.1.20:4180", code: "", fp: "" });
+    assert.deepEqual(parsePairInput("pc.example:4443"), { host: "pc.example:4443", code: "", fp: "" });
+    assert.deepEqual(parsePairInput("123456"), { host: "", code: "123456", fp: "" });
+    assert.deepEqual(parsePairInput("123-456"), { host: "", code: "123456", fp: "" });
   });
 
   test("rejects junk, loopback targets and the old relay #offer= links", () => {
@@ -50,7 +50,7 @@ describe("parsePairInput", () => {
   });
 
   test("a link without a usable code still yields the host", () => {
-    assert.deepEqual(parsePairInput("https://pc.example:4180/pair?code=nope"), { host: "pc.example:4180", code: "" });
+    assert.deepEqual(parsePairInput("https://pc.example:4180/pair?code=nope"), { host: "pc.example:4180", code: "", fp: "" });
   });
 });
 

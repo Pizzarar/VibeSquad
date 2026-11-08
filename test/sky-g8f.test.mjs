@@ -33,7 +33,7 @@ test("Riff open never lands the Overlord on the left TV", () => {
 
 test("ZoneFace wires it: the shown bot drives useBotFace + the bg, Overlord's pose when landed, overlay hidden once landed", () => {
   const z = src("SkyZones.tsx");
-  assert.match(z, /const shown = isRiff \? skyLeftBot\(landed\) : zone\.bot;/, "only Riff's TV swaps bots; the Overlord's own TV keeps the Overlord (RS-b root cause: it showed Riff's face)");
+  assert.match(z, /const shown = isRiff \? skyLeftBot\(landed\) : zone\.bot/);
   assert.match(z, /useBotFace\(shown, shownZone\.pose/);
   assert.match(z, /faceBg\(faces, shown, theme\)/);
   assert.match(z, /showSheet && !landed && sheet/);
@@ -108,4 +108,18 @@ test("T1 gate: the label follows takeoverVisible (in while playing/expanded, out
   assert.equal(takeoverVisible(5, false, false), true); // reversing
   assert.equal(takeoverVisible(0, false, false), false);
   assert.equal(takeoverVisible(0, true, true), false); // reduced: the label uses `taken` directly (end state at once)
+});
+
+test("hotfix: the Overlord's own TV always shows the Overlord (landed is Riff-only, so skyLeftBot must not run for it)", () => {
+  const z = src("SkyZones.tsx");
+  assert.match(z, /const landed = isRiff && !!lander/, "landed is false for the Overlord zone, which is why skyLeftBot(false) = riffbot leaked");
+  assert.match(z, /const shown = isRiff \? skyLeftBot\(landed\) : zone\.bot/, "overlord zone: shown = zone.bot, idle and while the Riff chat is open");
+  assert.match(z, /const shownZone = landed && lander \? lander : zone/, "shownZone stays the zone itself unless Riff's TV has landed");
+  assert.match(z, /data-face-bot=\{shown\}/);
+  assert.match(z, /faceBg\(faces, shown, theme\)/);
+});
+
+test("hotfix: the left TV still lands on the Overlord during the takeover", () => {
+  assert.equal(skyLeftBot(takeoverLanded(12, true, 12, false)), "overlord");
+  assert.equal(skyLeftBot(takeoverLanded(0, true, 12, true)), "overlord");
 });

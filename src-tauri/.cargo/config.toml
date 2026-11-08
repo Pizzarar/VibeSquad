@@ -1,0 +1,6 @@
+# Android only, read by wry's build.rs (the generated RustWebViewClient / RustWebView) when it builds the Kotlin files.
+# This lives in cargo config rather than server/build-android.mjs env because `tauri android build` runs cargo with a
+# minimal environment and drops custom variables. See src-tauri/android/VsTrust.kt (host-scoped CA pin, A2).
+[env]
+WRY_RUSTWEBVIEW_CLASS_INIT = "VsTrust.install(this)"
+WRY_RUSTWEBVIEWCLIENT_CLASS_EXTENSION = "override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: android.net.http.SslError) {\n    if (VsTrust.allow(view.context, error)) handler.proceed() else handler.cancel()\n}"

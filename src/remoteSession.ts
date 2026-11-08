@@ -6,8 +6,12 @@
 /** The stored pairing: which server this device paired with. The device cookie itself lives in the WebView. */
 export type StoredRemoteSession = { v: 2; host: string; savedAt: string };
 
-/** What a QR, deep link or typed input resolves to. `code` is empty for a host-only input, `host` for a code-only one. */
-export type PairTarget = { host: string; code: string };
+/**
+ * What a QR, deep link or typed input resolves to. `code` is empty for a host-only input, `host` for a code-only one.
+ * `fp` is the PC's VS CA SHA-256 (lowercase hex, 16-64 chars; a prefix is only accepted from a person reading it off
+ * the PC) or "" when the input carried none.
+ */
+export type PairTarget = { host: string; code: string; fp: string };
 
 type Get = Pick<Storage, "getItem">;
 type GetSet = Pick<Storage, "getItem" | "setItem" | "removeItem">;
@@ -69,6 +73,15 @@ export function normalizeCode(input: string): string | null {
 }
 
 /**
+ * `AB:CD:…` / `abcd…` -> lowercase hex; null unless 16-64 hex digits (8 bytes is the shortest prefix the PC's pairing
+ * dialog shows, and the shortest we accept when a person types it).
+ */
+export function normalizeFp(input: string): string | null {
+  const t = (input ?? "").trim().replace(/[:\s-]/g, "").toLowerCase();
+  return /^[0-9a-f]{16,64}$/.test(t) ? t : null;
+}
+
+/**
  * Reads a pairing target out of whatever the user scanned, pasted or typed:
  *  - the desktop QR / "Copy Pairing Link": `https://<host>:<port>/pair?code=123456`
  *  - the app deep link: `vibesquad://pair?host=<host>:<port>&code=123456`
@@ -79,26 +92,26 @@ export function parsePairInput(input: string): PairTarget | null {
   const t = (input ?? "").trim();
   if (!t) return null;
   const code = normalizeCode(t);
-  if (code) return { host: "", code };
+  if (code) return { host: "", code, fp: "" };
   const u = /^[a-z][a-z0-9+.-]*:\/\//i.test(t) ? safe(() => new URL(t), null) : null;
   if (u && /^https?:$/.test(u.protocol)) {
     const host = normalizeHost(u.host);
-    return host ? { host, code: normalizeCode(u.searchParams.get("code") ?? "") ?? "" } : null;
+    return host ? { host, code: normalizeCode(u.searchParams.get("code") ?? "") ?? "", fp: normalizeFp(u.searchParams.get("fp") ?? "") ?? "" } : null;
   }
   if (u && u.protocol === `${DEEP_LINK_SCHEME}:`) {
     const host = normalizeHost(u.searchParams.get("host") ?? "");
-    return host ? { host, code: normalizeCode(u.searchParams.get("code") ?? "") ?? "" } : null;
+    return host ? { host, code: normalizeCode(u.searchParams.get("code") ?? "") ?? "", fp: normalizeFp(u.searchParams.get("fp") ?? "") ?? "" } : null;
   }
   if (u) return null;
   const host = normalizeHost(t);
-  return host ? { host, code: "" } : null;
+  return host ? { host, code: "", fp: "" } : null;
 }
 
 /** The deep link (`vibesquad://pair?host=…&code=…`) equivalent of a pairing QR / link; null when it has no host. */
 export function toAndroidDeepLink(input: string): string | null {
   const p = parsePairInput(input);
   if (!p?.host) return null;
-  const q = new URLSearchParams({ host: p.host, ...(p.code ? { code: p.code } : {}) });
+  const q = new URLSearchParams({ host: p.host, ...(p.code ? { code: p.code } : {}), ...(p.fp ? { fp: p.fp } : {}) });
   return `${DEEP_LINK_SCHEME}://pair?${q.toString()}`;
 }
 
@@ -184,7 +197,7 @@ export type RemoteError = { kind: RemoteErrorKind; message: string };
 const MESSAGES: Record<RemoteErrorKind, string> = {
   "bad-input": "Enter the server address and the 6-digit code from Pair a device on your PC, or scan its QR code.",
   unreachable:
-    "Couldn't reach your PC. Check this phone is on the same Wi-Fi (Home LAN) or on NordVPN Meshnet, that VibeSquad is running there, and that you installed its CA certificate.",
+    "Couldn't reach your PC. Check this phone is on the same Wi-Fi (Home LAN) or on NordVPN Meshnet, that VibeSquad is running there, and that the CA fingerprint matches the one on your PC.",
   timeout: "Timed out waiting for your PC. Check the address and your connection, then try again.",
   unknown: "Something went wrong connecting to your PC.",
 };

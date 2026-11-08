@@ -713,6 +713,12 @@ export function handleCaCrt(req, res) {
   res.end(req.method === "HEAD" ? undefined : pem);
 }
 
+/** `&fp=<64 hex>` for pairing links (the CA fingerprint without colons), or "" when there is no CA yet. */
+export function pairFpQuery() {
+  const full = caFingerprint().full;
+  return full ? `&fp=${full.replace(/:/g, "").toLowerCase()}` : "";
+}
+
 export async function handlePairStart(req, res) {
   if (req.method !== "POST") {
     res.statusCode = 405;
@@ -729,9 +735,11 @@ export async function handlePairStart(req, res) {
   getTls();
   const code = createPairCode();
   const expiresAt = codes.get(code);
-  const pairUrl = `https://${meshnetHost}:${port}/pair?code=${code}`;
-  const pairIpUrl = `https://${effectiveMeshnetIp}:${port}/pair?code=${code}`;
-  const lanPairUrl = lanIp ? `https://${lanIp}:${port}/pair?code=${code}` : null;
+  // `fp` (CA SHA-256, hex) lets the Android app pin this PC's VS CA at pairing (see src-tauri/android/VsTrust.kt).
+  const fpQuery = pairFpQuery();
+  const pairUrl = `https://${meshnetHost}:${port}/pair?code=${code}${fpQuery}`;
+  const pairIpUrl = `https://${effectiveMeshnetIp}:${port}/pair?code=${code}${fpQuery}`;
+  const lanPairUrl = lanIp ? `https://${lanIp}:${port}/pair?code=${code}${fpQuery}` : null;
   sendJson(res, 200, {
     code,
     pairUrl,

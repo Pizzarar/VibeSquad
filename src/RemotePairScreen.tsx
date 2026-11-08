@@ -7,6 +7,7 @@ import {
   clearSession,
   mapRemoteError,
   normalizeCode,
+  normalizeFp,
   normalizeHost,
   pairRedeemUrl,
   parsePairInput,
@@ -19,14 +20,28 @@ import {
   serverUrl,
   type RemoteError,
 } from "./remoteSession";
+import { createTrustClient, nativeTrust, type TrustClient } from "./vsTrust";
 
 const PROBE_MS = 5000;
 
 // Set before opening the server's UI: coming back (Android Back) shows the form with Forget instead of reopening again.
 const OPENED_KEY = "vs.remote.opened";
 
-/** Reachability only (up vs down). A no-cors fetch succeeds against any HTTPS host, so it proves nothing about the host. */
+// Inside the APK the WebView cannot verify the PC's own VS CA, so pinning and reachability go through the native bridge
+// (src-tauri/android/VsTrust.kt). Null in a plain browser, where the user has installed the CA instead.
+let trustClient: TrustClient | null | undefined;
+function trust(): TrustClient | null {
+  if (trustClient === undefined) {
+    const n = nativeTrust();
+    trustClient = n ? createTrustClient(n) : null;
+  }
+  return trustClient;
+}
+
+/** Reachability only (up vs down). Native: TLS validated against the pinned CA. Browser: a no-cors fetch, which proves nothing about the host. */
 async function probe(host: string): Promise<void> {
+  const t = trust();
+  if (t) return t.probe(host);
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), PROBE_MS);
   try {
@@ -83,6 +98,7 @@ export function RemotePairScreen() {
   const saved = readSession();
   const [host, setHost] = useState(saved?.host ?? "");
   const [code, setCode] = useState("");
+  const [fp, setFp] = useState("");
   const [link, setLink] = useState("");
   const [error, setError] = useState<RemoteError | null>(ret.error);
   const [fromLink, setFromLink] = useState(false);
@@ -100,19 +116,27 @@ export function RemotePairScreen() {
     return Boolean(saved) && !cameBack && !ret.error && !ret.open;
   });
 
-  const pairWith = useCallback(async (h: string, c: string) => {
+  const pairWith = useCallback(async (h: string, c: string, f: string) => {
     const hostN = normalizeHost(h);
     const codeN = normalizeCode(c);
+    const fpN = normalizeFp(f);
     if (!hostN || !codeN) {
       setError(remoteError("bad-input"));
+      return;
+    }
+    const t = trust();
+    if (t && !fpN) {
+      setError(remoteError("bad-input", "Scan the QR code, or also enter the CA fingerprint shown in Pair a device on your PC (at least the first 8 pairs)."));
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      await probe(hostN);
+      // Native: fetching + pinning the CA is also the reachability check. Only the CA matching the fingerprint is trusted, for this host only.
+      if (t) await t.pin(hostN, fpN!);
+      else await probe(hostN);
     } catch (e) {
-      setError(mapRemoteError(e));
+      setError(/fingerprint/i.test(String((e as Error)?.message)) ? remoteError("unknown", (e as Error).message) : mapRemoteError(e));
       setBusy(false);
       return;
     }
@@ -130,6 +154,7 @@ export function RemotePairScreen() {
       }
       if (p.host) setHost(p.host);
       if (p.code) setCode(p.code);
+      if (p.fp) setFp(p.fp);
       setLink("");
       setError(null);
       // Scans, links and deep links only fill the form; the user presses Pair after checking the address.
@@ -187,6 +212,7 @@ export function RemotePairScreen() {
             className="btn ghost remote-pair-forget"
             data-testid="forget-pc"
             onClick={() => {
+              void trust()?.forget(saved.host).catch(() => {});
               clearSession();
               setReopening(false);
             }}
@@ -205,7 +231,7 @@ export function RemotePairScreen() {
         onSubmit={(e) => {
           e.preventDefault();
           if (link.trim()) apply(link);
-          else void pairWith(host, code);
+          else void pairWith(host, code, fp);
         }}
       >
         <h1 className="remote-pair-title">Pair with your PC</h1>
@@ -256,6 +282,20 @@ export function RemotePairScreen() {
         </label>
         <label className="remote-pair-field">
           <span>
+            CA fingerprint <em>(filled by the QR code; otherwise copy it from Pair a device)</em>
+          </span>
+          <input
+            data-testid="pair-fp"
+            value={fp}
+            onChange={(e) => setFp(e.target.value)}
+            placeholder="AB:CD:EF:01:23:45:67:89"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+          />
+        </label>
+        <label className="remote-pair-field">
+          <span>
             or paste the pairing link <em>(optional)</em>
           </span>
           <textarea
@@ -285,6 +325,7 @@ export function RemotePairScreen() {
             type="button"
             className="btn ghost remote-pair-forget"
             onClick={() => {
+              void trust()?.forget(saved.host).catch(() => {});
               clearSession();
               location.reload();
             }}

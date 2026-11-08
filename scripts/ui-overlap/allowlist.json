@@ -1,0 +1,9 @@
+{
+  "_doc": "Intentional overlaps only; every entry needs a reason. Fields (optional regex strings): kind, selector (hit element css path + classes), other, text, surface.",
+  "allow": [
+    { "kind": "overlap", "selector": "sq-floor-(char|blip|mark|plate|front|tv)", "other": "sq-floor-(char|blip|mark|plate|front|tv)", "reason": "Squad Floor: character/blip/mark sprites stand on the floor plate and sit behind the front lip by design (@art floor composition)." },
+    { "kind": "overlap", "selector": "sq-floor-(plate|front)", "reason": "Squad Floor plate/front layers are stacked images by design." },
+    { "kind": "overlap", "selector": "sq-floor-tv", "other": "sq-floor-(plate|front)", "reason": "Floor TV count sits on the floor art by design." },
+    { "kind": "overlap", "selector": "sky-(wall|zone|crt)", "other": "sky-(wall|zone|crt)", "reason": "Sky wall: CRT zones are framed on the wall art by design." }
+  ]
+}
