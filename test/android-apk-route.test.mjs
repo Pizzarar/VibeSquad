@@ -392,3 +392,18 @@ describe("Block A6: release version sync & Android GitHub Release updater", () =
     });
   });
 });
+
+describe("ensureAndroidCameraPermission", () => {
+  test("declares CAMERA once and is idempotent", async () => {
+    const { ensureAndroidCameraPermission } = await import("../server/build-android.mjs");
+    const root = tmpRoot();
+    const manifest = join(root, "AndroidManifest.xml");
+    writeFileSync(manifest, "<manifest>\n    <application>\n    </application>\n</manifest>\n");
+    assert.equal(ensureAndroidCameraPermission(manifest), true);
+    const once = readFileSync(manifest, "utf8");
+    assert.match(once, /<uses-permission android:name="android.permission.CAMERA" \/>[\s\S]*<application>/);
+    assert.equal(ensureAndroidCameraPermission(manifest), false);
+    assert.equal(readFileSync(manifest, "utf8"), once);
+    assert.equal(ensureAndroidCameraPermission(join(root, "missing.xml")), false);
+  });
+});
