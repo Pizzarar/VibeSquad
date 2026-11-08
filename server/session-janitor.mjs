@@ -33,12 +33,12 @@ export const STALL_RUNNING_MS = 30 * 60 * 1000;
 const activityTs = (a) => Date.parse(a.updatedAt || a.lastActivityAt || a.createdAt || "");
 
 /**
- * Returns "initializing" (queued or starting: the runner maps both to this status, so a worker that never ran
+ * Returns `{ status, silentMs }` with status "initializing" (queued or starting: the runner maps both to this status, so a worker that never ran
  * shows up here) / "running" when `agent` is a non-archived `role=worker` that has sat there with no activity for
- * at least the matching threshold; otherwise null. A worker waiting on a permission prompt is not stalled.
+ * at least the matching threshold; otherwise null. (Queued workers also carry `agent.queued`; the status covers them.) A worker waiting on a permission prompt is not stalled.
  * Flag-only: never acts on it.
  */
-export function stalledWorkerKind(
+export function stalledWorker(
   agent,
   { now = Date.now(), queuedMs = STALL_QUEUED_MS, runningMs = STALL_RUNNING_MS } = {},
 ) {
@@ -50,7 +50,8 @@ export function stalledWorkerKind(
   if (agent.requiresAttention) return null;
   const ts = activityTs(agent);
   if (!Number.isFinite(ts)) return null;
-  return now - ts >= (status === "initializing" ? queuedMs : runningMs) ? status : null;
+  const silentMs = now - ts;
+  return silentMs >= (status === "initializing" ? queuedMs : runningMs) ? { status, silentMs } : null;
 }
 
 /**
@@ -58,14 +59,11 @@ export function stalledWorkerKind(
  */
 export function findStalledWorkers(agents, opts = {}) {
   if (!Array.isArray(agents)) return [];
-  const now = opts.now ?? Date.now();
   const out = [];
   for (const raw of agents) {
     const a = raw?.agent ?? raw;
-    const kind = stalledWorkerKind(a, opts);
-    if (!kind) continue;
-    const ts = activityTs(a);
-    out.push({ id: a.id, status: kind, silentMs: now - ts });
+    const s = stalledWorker(a, opts);
+    if (s) out.push({ id: a.id, ...s });
   }
   return out;
 }
@@ -78,7 +76,7 @@ const reportedStalls = new Set(); // ids already logged, so repeated janitor run
 
 export async function runSessionJanitor(
   client,
-  { now = Date.now(), maxAgeMs = JANITOR_MAX_AGE_MS, agents, log = logRunnerMetric } = {},
+  { now = Date.now(), maxAgeMs = JANITOR_MAX_AGE_MS, agents, log = logRunnerMetric, queuedMs, runningMs } = {},
 ) {
   const backend = getBackend(client);
   const rawList = agents ?? (await listDaemonAgents(backend));
@@ -106,7 +104,7 @@ export async function runSessionJanitor(
     }
   }
 
-  const stalled = findStalledWorkers(list, { now });
+  const stalled = findStalledWorkers(list, { now, queuedMs, runningMs });
   for (const st of stalled) {
     if (reportedStalls.has(st.id)) continue;
     reportedStalls.add(st.id);
@@ -202,7 +200,13 @@ export async function handleJanitorRun(
         typeof body?.maxAgeMs === "number" && Number.isFinite(body.maxAgeMs) && body.maxAgeMs >= 0
           ? body.maxAgeMs
           : defaultMaxAgeMs;
-      const result = await runSessionJanitor(client, { now, maxAgeMs, agents });
+      const result = await runSessionJanitor(client, {
+        now,
+        maxAgeMs,
+        agents,
+        ...(Number.isFinite(body?.queuedMs) ? { queuedMs: body.queuedMs } : {}),
+        ...(Number.isFinite(body?.runningMs) ? { runningMs: body.runningMs } : {}),
+      });
       sendJson(res, 200, result);
       return true;
     }
