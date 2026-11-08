@@ -63,9 +63,11 @@ test('U4b tokens exist and the light theme only swaps the edge and on-fill ink',
 });
 
 test('body, sidebar and chat pane use the wash/ramp (no U3 stars, grain or url() art) in both themes', () => {
-  const body = u4rules.find((r) => r.sel === 'body');
+  const body = u4rules.find((r) => r.sel === 'body, :root[data-theme="light"] body');
   assert.ok(body && /var\(--u4-wash\)/.test(body.body), 'body wash');
   assert.ok(!/stars|url\(/.test(body.body), 'no stars/url on body');
+  // M2: the light-theme selector ties (and by source order beats) the U3 stars rule `:root[data-theme="light"] body`
+  assert.ok(cmpSpec(specOfList('body, :root[data-theme="light"] body'), specOfList(':root[data-theme="light"] body')) >= 0, 'body wash outranks the U3 stars rule in light');
   const side = u4rules.find((r) => r.sel === '.sidebar');
   assert.ok(side && /var\(--u4-ramp\)/.test(side.body));
   const pane = u4rules.find((r) => r.sel === '.agent-panes:not(:has(.sky-zones))');
@@ -81,7 +83,7 @@ test('one UI font: everything in the tool surfaces is --mono (brand block, termi
   const r = fam[0];
   assert.match(r.sel, /^:is\(\.sidebar, \.agent-panes:not\(:has\(\.sky-zones\)\), \.sky-crt-body, \.pin-focus-bar\) :not\(/);
   assert.match(r.body, /font-family:\s*var\(--mono\)\s*!important/);
-  for (const ex of ['.brand-text', '.brand-text *', '.xterm', 'svg']) assert.ok(r.sel.includes(ex), `exempts ${ex}`);
+  for (const ex of ['.brand-text', '.brand-text *', '.xterm', 'svg', '.sky-static-text']) assert.ok(r.sel.includes(ex), `exempts ${ex}`);
   assert.doesNotMatch(stripped, /var\(--(arcade|display)\)/);
   // --arcade / --display stay defined for the floor, sky and brand (not aliased globally)
   assert.match(css, /--arcade: "Silkscreen"/);
@@ -147,6 +149,9 @@ test('sky CRT chat drawer rides the U4b tool-surface scope; light provider pills
   // the composer is scoped to the sky drawer too
   const composer = u4rules.find((r) => r.sel === ':is(.agent-panes:not(:has(.sky-zones)), .sky-crt-body) .composer');
   assert.ok(composer && /background: var\(--panel\)/.test(composer.body), 'composer rule scoped to the sky drawer');
+  // M1: the timeline background reset also reaches the sky drawer
+  const timeline = u4rules.find((r) => r.sel === ':is(.agent-panes:not(:has(.sky-zones)), .sky-crt-body) .timeline');
+  assert.ok(timeline && /background: transparent/.test(timeline.body), 'timeline reset scoped to the sky drawer');
   // light-mode provider pills/badges swap the inline neon colours for a P0 surface
   const pill = u4rules.find((r) => r.sel === ':root[data-theme="light"] :is(.prov-pill, .prov-badge)');
   assert.ok(pill, 'light provider pill override exists');

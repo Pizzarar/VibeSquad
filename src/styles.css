@@ -5567,13 +5567,13 @@ button.project-file-name:hover { text-decoration: underline; }
 :root[data-theme="light"] { --u4-edge: var(--muted); --u4-on-fill: var(--marble); }
 
 /* ---- background wash (page, sidebar, chat pane) ---- */
-body { background-color: var(--bg); background-image: var(--u4-wash); background-size: auto; background-repeat: no-repeat; background-attachment: fixed; image-rendering: auto; }
+body, :root[data-theme="light"] body { background-color: var(--bg); background-image: var(--u4-wash); background-size: auto; background-repeat: no-repeat; background-attachment: fixed; image-rendering: auto; }
 .sidebar { background-color: var(--panel); background-image: var(--u4-ramp); background-size: 100% 100%; background-repeat: no-repeat; image-rendering: auto; box-shadow: 1px 0 0 var(--line), 2px 0 0 var(--shadow-hard); }
 .agent-panes:not(:has(.sky-zones)) {
   background-color: var(--bg); background-image: var(--u4-wash); background-size: 100% 100%; background-repeat: no-repeat; image-rendering: auto;
   border: 1px solid var(--line); border-image: none; box-shadow: none;
 }
-.agent-panes:not(:has(.sky-zones)) .timeline { background: transparent; background-image: none; -webkit-mask-image: none; mask-image: none; }
+:is(.agent-panes:not(:has(.sky-zones)), .sky-crt-body) .timeline { background: transparent; background-image: none; -webkit-mask-image: none; mask-image: none; }
 
 /* ---- quiet tool surfaces: flat solid controls (sidebar + chat pane only) ---- */
 :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn, .tchip, .seg button, .sidebar-icon-btn, .sidebar-cog-btn, .tl-jump-bottom, .drawer-working-chip, .drawer-subagent-chip, .drawer-config-summary, .dock-toggle-btn, .pin-focus-home) {
@@ -5678,4 +5678,4 @@ body { background-color: var(--bg); background-image: var(--u4-wash); background
 
 /* one UI font for tool surfaces: the Silkscreen/Pixelify (--arcade/--display) rows, @code chips, breadcrumb and provider names fall back to Courier New and clash with --mono.
    Scoped, not aliased globally (floor/sky keep --arcade); the brand block, terminals and diagrams keep their own fonts. */
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :not(.brand-text, .brand-text *, .xterm, .xterm *, svg, svg *) { font-family: var(--mono) !important; }
+:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :not(.brand-text, .brand-text *, .xterm, .xterm *, svg, svg *, .sky-static-text) { font-family: var(--mono) !important; }
