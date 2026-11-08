@@ -147,7 +147,7 @@ describe("Block A4: PinGrid / .pin-tile mobile wrapping & overflow CSS", () => {
 
   test(".pin-grid uses minmax(min(100%, 300px), 1fr) and a bounded width", () => {
     const src = css();
-    assert.match(src, /\.pin-grid\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(min\(100%,\s*300px\),\s*1fr\)\);/);
+    assert.match(src, /\.pin-grid\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(min\(100%,\s*18rem\),\s*1fr\)\);/);
     assert.match(src, /\.pin-grid\s*\{[^}]*min-width:\s*0;/);
     assert.match(src, /\.pin-grid\s*\{[^}]*max-width:\s*100%;/);
   });

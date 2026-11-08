@@ -3562,6 +3562,7 @@ html, body, #root { overflow-x: hidden; }
 .pin-row.done { cursor: default; opacity: 0.6; }
 .pin-row.done:hover { background: transparent; border-left-color: transparent; color: var(--muted); }
 .pin-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pin-row-status { flex: none; white-space: nowrap; }
 .pin-done-check { color: var(--mint-t); width: 8px; text-align: center; }
 .pin-done-toggle {
   background: transparent; border: 0; color: var(--muted); font-family: var(--arcade); font-size: 10px;
