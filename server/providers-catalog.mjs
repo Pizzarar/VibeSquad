@@ -655,7 +655,7 @@ function agentV2(st, agentId) {
 
 /**
  * The unit name a worker's cwd resolves to: basename() already strips both `\` and `/` (Windows worktree paths such as
- * C:\Users\...\worktrees\VibeSquad\<unit> use backslashes, some logs use forward slashes). Lower-cased so a worktree dir
+ * <sanctuary>\worktrees\VibeSquad\<unit> use backslashes, some logs use forward slashes). Lower-cased so a worktree dir
  * that differs in case from the branch name still matches (git branch names are case-insensitive on Windows).
  */
 const unitNameOfCwd = (cwd) => (typeof cwd === "string" && cwd ? basename(cwd).toLowerCase() : "");

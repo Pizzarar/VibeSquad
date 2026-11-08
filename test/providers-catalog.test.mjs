@@ -1058,11 +1058,11 @@ test('usa-10 root cause: Windows-style worktree cwd (backslash + case) attribute
   const T0 = Date.UTC(2026, 10, 3, 12);
   // backslash worktree path + a case mismatch on the directory name vs the branch name
   writeAgent(home, 'rn-w1', [
-    { ts: T0, type: 'created', provider: 'claude', model: 'm', cwd: 'C:\\Users\\Fugma\\AppData\\Local\\VibeSquad\\worktrees\\VibeSquad\\Unit-Foo', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } },
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', cwd: 'C:\\Users\\dev\\AppData\\Local\\VibeSquad\\worktrees\\VibeSquad\\Unit-Foo', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } },
     { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
   ]);
   writeAgent(home, 'rn-w2', [
-    { ts: T0, type: 'created', provider: 'antigravity-cli', model: 'g', cwd: 'C:/Users/Fugma/AppData/Local/VibeSquad/worktrees/VibeSquad/unit-bar', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Gemini' } },
+    { ts: T0, type: 'created', provider: 'antigravity-cli', model: 'g', cwd: 'C:/Users/dev/AppData/Local/VibeSquad/worktrees/VibeSquad/unit-bar', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Gemini' } },
     { ts: T0 + 1000, type: 'turn_done', costUsd: 2 },
   ]);
   const git = (args) => {
