@@ -1,6 +1,6 @@
 """Takeover overlay preview: each frame composited over RiffBot's scared frame (on the faces.json
 screen bg), plus the bare overlay, at 4x and 7x. Usage (repo root): python -I art/office/faces/takeover-preview.py
-Writes scratch/shots/h1c-v2-takeover-{dark,light}.png"""
+Writes scratch/shots/h1c-v3-takeover-{dark,light}.png"""
 import json
 from PIL import Image, ImageDraw, ImageFont
 BG = {'dark': (20, 12, 38, 255), 'light': (245, 230, 239, 255)}
@@ -35,5 +35,5 @@ for mode in ('dark', 'light'):
     y = 40
     for b in blocks:
         out.paste(b, (0, y)); y += b.height
-    p = f'scratch/shots/h1c-v2-takeover-{mode}.png'
+    p = f'scratch/shots/h1c-v3-takeover-{mode}.png'
     out.save(p); print(p, out.size)

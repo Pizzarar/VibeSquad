@@ -1,6 +1,6 @@
-"""H1c review gallery, one PNG per mode: canon (H0 sheet + H1a approved faces) beside every new
-RiffBot/Overlord frame. Writes scratch/shots/h1c-v2-gallery-{mode}.png (labels, 4x frames),
-scratch/shots/h1c-v2-native-{mode}.png (1x strips) and scratch/shots/h1c-v2-7x-{mode}.png (key frames 7x = 4K@120% TV size).
+"""H1c-v3 review gallery, one PNG per mode: canon (H0 sheet + H1a approved faces) beside every new
+RiffBot/Overlord frame. Writes scratch/shots/h1c-v3-gallery-{mode}.png (labels, 4x frames),
+scratch/shots/h1c-v3-native-{mode}.png (1x strips) and scratch/shots/h1c-v3-7x-{mode}.png (key frames 7x = 4K@120% TV size).
 Usage (repo root): python -I art/office/faces/h1c-gallery.py"""
 import json
 from PIL import Image, ImageDraw, ImageFont
@@ -50,14 +50,14 @@ for mode in ('dark', 'light'):
                 im.alpha_composite(big(c, Z), (x, y + LAB))
                 x += cellW
             y += LAB + ch * Z + PAD
-    im.save(f'scratch/shots/h1c-v2-gallery-{mode}.png'); print(f'scratch/shots/h1c-v2-gallery-{mode}.png', im.size)
+    im.save(f'scratch/shots/h1c-v3-gallery-{mode}.png'); print(f'scratch/shots/h1c-v3-gallery-{mode}.png', im.size)
 
     # native 1x strips beside the H1a canon crop
     n = Image.new('RGBA', (cw * 10 + 16, ch * 3 + 32), BG[mode])
     n.alpha_composite(h1a, (8, 8))
     n.alpha_composite(cells['riffbot'][0][2], (8, 8 + ch + 8))
     n.alpha_composite(cells['overlord'][0][2], (8, 8 + 2 * (ch + 8)))
-    n.save(f'scratch/shots/h1c-v2-native-{mode}.png')
+    n.save(f'scratch/shots/h1c-v3-native-{mode}.png')
 
     # 7x key frames (faceContain scale in the 50/50 TV at 4K@120%): riff idle/needs/scared, overlord idle/needs/talk
     pick = [('riffbot', 'idle[0]'), ('riffbot', 'needs[1]'), ('riffbot', 'scared[0]'),
@@ -69,4 +69,21 @@ for mode in ('dark', 'light'):
         x, yy = PAD + (i % 3) * (TW + PAD), PAD + (i // 3) * (TH + PAD + LAB)
         dt.text((x, yy), f'{bot} {name} {KZ}x', font=FONT, fill=FG[mode])
         t.alpha_composite(big(c, KZ), (x, yy + LAB))
-    t.save(f'scratch/shots/h1c-v2-7x-{mode}.png')
+    t.save(f'scratch/shots/h1c-v3-7x-{mode}.png')
+
+    # same-pixel-scale proportion check (owner H1c-v3): H0 64px TV-head bust (public/cast.png row 3) beside
+    # the new RiffBot + Overlord cells, all at 4x, no resampling differences
+    bust = Image.open('public/cast.png').convert('RGBA').crop((0, 192, 64, 256))
+    picks = [('riffbot', 'idle[0]'), ('riffbot', 'needs[0]'), ('overlord', 'idle[0]'), ('overlord', 'needs[0]')]
+    SZ = 4
+    W2 = PAD + 64 * SZ + PAD + 2 * (cw * SZ + PAD)
+    H2 = PAD + 2 * (LAB + ch * SZ + PAD) + LAB
+    sbs = Image.new('RGBA', (W2, H2), BG[mode]); ds = ImageDraw.Draw(sbs)
+    ds.text((PAD, PAD - 4), 'H0 TV-head bust 64px @4x', font=FONT, fill=FG[mode])
+    sbs.alpha_composite(big(bust, SZ), (PAD, PAD + LAB))
+    for i, (bot, name) in enumerate(picks):
+        c = next(c for nm, c, _ in cells[bot] if nm == name)
+        x = PAD + 64 * SZ + PAD + (i % 2) * (cw * SZ + PAD); yy = PAD + (i // 2) * (LAB + ch * SZ + PAD)
+        ds.text((x, yy - 4), f'v3 {bot} {name} @4x', font=FONT, fill=FG[mode])
+        sbs.alpha_composite(big(c, SZ), (x, yy + LAB))
+    sbs.save(f'scratch/shots/h1c-v3-vs-h0-{mode}.png'); print(f'scratch/shots/h1c-v3-vs-h0-{mode}.png', sbs.size)
