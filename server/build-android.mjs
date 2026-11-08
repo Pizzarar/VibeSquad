@@ -119,6 +119,38 @@ export function ensureAndroidSystemBarFit(mainActivityPath) {
   return true;
 }
 
+/** Source of the host-scoped CA pin (Kotlin) copied into the generated project. */
+const TRUST_KOTLIN_SRC = resolve(import.meta.dirname, "..", "src-tauri", "android", "VsTrust.kt");
+
+/**
+ * Copies VsTrust.kt (host-scoped CA pin, PLAN_ANDROID_MESHNET.md A2) next to the generated MainActivity.kt.
+ * Idempotent: rewrites only when the content differs; returns false when unchanged or the project dir is missing.
+ */
+export function ensureAndroidTrustKotlin(mainActivityDir, src = TRUST_KOTLIN_SRC) {
+  if (!existsSync(mainActivityDir) || !existsSync(src)) return false;
+  const dest = join(mainActivityDir, "VsTrust.kt");
+  const text = readFileSync(src, "utf8");
+  if (existsSync(dest) && readFileSync(dest, "utf8") === text) return false;
+  writeFileSync(dest, text, "utf8");
+  return true;
+}
+
+/**
+ * wry splices these into its generated RustWebViewClient / RustWebView (env read by wry's build.rs): the client cancels
+ * every TLS error unless VsTrust.allow() proves a pinned host + pinned CA, and the WebView gets the app-origin-only
+ * pairing bridge. No blanket onReceivedSslError proceed.
+ */
+export function androidTrustKotlinEnv() {
+  return {
+    WRY_RUSTWEBVIEWCLIENT_CLASS_EXTENSION: [
+      "override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: android.net.http.SslError) {",
+      "    if (VsTrust.allow(view.context, error)) handler.proceed() else handler.cancel()",
+      "}",
+    ].join("\n"),
+    WRY_RUSTWEBVIEW_CLASS_INIT: "VsTrust.install(this)",
+  };
+}
+
 /** Where `scripts/rotate-android-keystore.mjs` creates the release keystore (outside the repo). */
 export const SIGNING_DIR = join(homedir(), ".vibesquad", "signing");
 export const DEFAULT_KEYSTORE_PATH = join(SIGNING_DIR, "vibesquad-android.jks");
@@ -237,7 +269,7 @@ export function buildAndroidApk({
 } = {}) {
   const require = createRequire(import.meta.url);
   const tauriCliJs = require.resolve("@tauri-apps/cli/tauri.js");
-  const androidEnv = resolveAndroidEnv(env);
+  const androidEnv = { ...resolveAndroidEnv(env), ...androidTrustKotlinEnv() };
   const run = (cmd, args, opts = {}) => exec(cmd, args, { cwd: rootDir, env: androidEnv, stdio: "inherit", ...opts });
   const runNode = (args, opts = {}) => exec(process.execPath, args, { cwd: rootDir, env: androidEnv, stdio: "inherit", ...opts });
 
@@ -258,7 +290,9 @@ export function buildAndroidApk({
   const manifest = join(rootDir, "src-tauri", "gen", "android", "app", "src", "main", "AndroidManifest.xml");
   ensureAndroidDeepLinkIntentFilter(manifest);
   ensureAndroidCameraPermission(manifest);
-  ensureAndroidSystemBarFit(join(rootDir, "src-tauri", "gen", "android", "app", "src", "main", "java", "com", "vibesquad", "desktop", "MainActivity.kt"));
+  const activityDir = join(rootDir, "src-tauri", "gen", "android", "app", "src", "main", "java", "com", "vibesquad", "desktop");
+  ensureAndroidSystemBarFit(join(activityDir, "MainActivity.kt"));
+  ensureAndroidTrustKotlin(activityDir);
 
   // Step 4: build the release APK.
   console.log("[build:android] 3/6 Building release APK (tauri android build --apk)...");
