@@ -47,6 +47,17 @@ test("sky panels strip the agent header; the normal view keeps it", () => {
   assert.doesNotMatch(src("AgentPanes.tsx").split("export const AgentPanes")[1], /chatOnly/);
   // the zone still owns name + close
   const z = src("SkyZones.tsx");
-  assert.match(z, /className="sky-crt-name"/);
+  assert.match(z, /className={`sky-crt-name/);
   assert.match(z, /sky-chat-close/);
+});
+
+test("M1: the left TV's name tag follows the shown bot (text + violet class), panels keep their own name", () => {
+  const z = src("SkyZones.tsx");
+  assert.match(z, /onShown\?: \(bot: FaceBot\) => void/);
+  assert.match(z, /useEffect\(\(\) => onShown\?\.\(shown\), \[shown, onShown\]\)/);
+  assert.match(z, /const tag = !panel && landedBot \? landedBot : zone\.bot/);
+  assert.match(z, /sky-crt-name\$\{tag === "overlord" \? " is-overlord" : ""\}[^>]*>\{LABEL\[tag\]\}/);
+  assert.match(z, /expanded=\{taken\} onShown=\{setLandedBot\}/);
+  assert.match(src("styles.css"), /\.sky-crt-name\.is-overlord \{ color: var\(--violet-t\); \}/);
+  assert.equal(skyLeftBot(takeoverLanded(12, true, 12, false)), "overlord"); // the tag's source: landed -> overlord
 });

@@ -20,6 +20,7 @@ function ZoneFace({
   force,
   takeover,
   expanded,
+  onShown,
 }: {
   zone: SkyZone;
   /** Riff's TV only (G8f): the Overlord's zone, whose face this TV ends on once the takeover has landed. */
@@ -29,6 +30,8 @@ function ZoneFace({
   /** Riff only (G7): the overlay sheet when takeover.json + the theme PNG both load; null → the CSS dissolve. */
   takeover?: TakeoverModel | null;
   expanded?: boolean;
+  /** Reports the bot whose face is on screen (the name tag follows it). */
+  onShown?: (bot: FaceBot) => void;
 }) {
   const theme = useTheme();
   const reduced = usePrefersReducedMotion();
@@ -58,6 +61,7 @@ function ZoneFace({
   const landed = isRiff && !!lander && (sheet ? takeoverLanded(clock.pos, !!expanded, sheet.frames.length, reduced) : reduced ? !!expanded : fb.landed);
   const shown = skyLeftBot(landed);
   const shownZone = landed && lander ? lander : zone;
+  useEffect(() => onShown?.(shown), [shown, onShown]);
   const holdScared = !landed && showSheet && !force && hasFaceMode(faces, "riffbot", "scared");
   const face = useBotFace(shown, shownZone.pose ? { pose: shownZone.pose } : null, faces, { theme, reduced, force: landed ? null : (force ?? (holdScared ? "scared" : null)) });
   // Cell size comes from faces.json (never hardcoded); until it loads, a blank stage.
@@ -162,6 +166,9 @@ function Zone({
   busy?: boolean;
 }) {
   const label = LABEL[zone.bot];
+  // The name tag follows the face on the TV: the left TV reads Overlord (violet) once his face has landed there.
+  const [landedBot, setLandedBot] = useState<FaceBot | null>(null);
+  const tag = !panel && landedBot ? landedBot : zone.bot;
   openLabel ??= label;
   const off = zone.bot === "overlord" && !zone.agentId; // a closed Overlord keeps its zone (history + Resume)
   const idle = !panel && zone.bot === "riffbot" && !zone.agentId; // RiffBot not running: dimmed whole face + a bottom Spin Up strip
@@ -175,7 +182,7 @@ function Zone({
       aria-label={`${label} chat`}
       hidden={panel && !isOpen}
     >
-      {!panel && !off && <ZoneFace zone={zone} lander={lander} faces={faces} force={force} takeover={takeover} expanded={taken} />}
+      {!panel && !off && <ZoneFace zone={zone} lander={lander} faces={faces} force={force} takeover={takeover} expanded={taken} onShown={setLandedBot} />}
       {!panel && clickable && (
         <button
           type="button"
@@ -186,7 +193,7 @@ function Zone({
           onClick={onFace}
         />
       )}
-      <span className="sky-crt-name">{label}</span>
+      <span className={`sky-crt-name${tag === "overlord" ? " is-overlord" : ""}`} data-testid={`sky-name-${zone.bot}${panel ? "-panel" : ""}`}>{LABEL[tag]}</span>
       {panel && (
         <button type="button" className="sky-chat-close" data-testid={`sky-chat-close-${zone.bot}`} aria-label={`Close ${label} chat`} onClick={onClose}>
           ✕

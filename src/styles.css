@@ -4783,7 +4783,7 @@ button.project-file-name:hover { text-decoration: underline; }
 .sky-takeover-fallback.is-play { animation: sky-takeover-dissolve 1230ms steps(8, end) both; }
 @keyframes sky-takeover-dissolve { 0% { clip-path: inset(0 0 0 100%); } 50% { clip-path: inset(0 0 0 0); } 100% { clip-path: inset(0 100% 0 0); } }
 .sky-crt-name { position: absolute; top: 8px; left: 12px; z-index: 2; font-family: var(--arcade); font-size: 13px; color: var(--cyan-t); letter-spacing: 0.04em; padding: 2px 8px; background: color-mix(in srgb, var(--bg) 70%, transparent); border: 1px solid var(--line); }
-.sky-zone-overlord .sky-crt-name { color: var(--violet-t); }
+.sky-zone-overlord .sky-crt-name, .sky-crt-name.is-overlord { color: var(--violet-t); }
 .sky-resume { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 10px; background: var(--well); border-bottom: 1px solid var(--line); }
 .sky-crt-body {
   position: absolute;
