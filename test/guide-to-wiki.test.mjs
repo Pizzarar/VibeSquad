@@ -271,6 +271,34 @@ test("guide audit catches broken link targets, bad #anchors and slug collisions"
   }
 });
 
+test("guide-to-wiki succeeds on same-depth same-basename files without wikilink and fails when [[basename]] is used", () => {
+  const src = mkdtempSync(join(tmpdir(), "vs-wiki-base-src-"));
+  const out = mkdtempSync(join(tmpdir(), "vs-wiki-base-out-"));
+  try {
+    mkdirSync(join(src, "Setup"), { recursive: true });
+    mkdirSync(join(src, "Reference"), { recursive: true });
+    writeFileSync(join(src, "README.md"), "# Home\nSee [Setup Foo](Setup/Foo.md) and [Ref Foo](Reference/Foo.md).\n");
+    writeFileSync(join(src, "Setup", "Foo.md"), "# Setup Foo\n");
+    writeFileSync(join(src, "Reference", "Foo.md"), "# Reference Foo\n");
+
+    const okRun = spawnSync(process.execPath, [join(REPO_ROOT, "scripts", "guide-to-wiki.mjs"), "--src", src, "--out", out], {
+      encoding: "utf8",
+    });
+    assert.equal(okRun.status, 0, okRun.stderr);
+    assert.match(okRun.stdout, /unresolved=0/);
+
+    writeFileSync(join(src, "README.md"), "# Home\nAmbiguous [[Foo]] link.\n");
+    const badRun = spawnSync(process.execPath, [join(REPO_ROOT, "scripts", "guide-to-wiki.mjs"), "--src", src, "--out", out], {
+      encoding: "utf8",
+    });
+    assert.equal(badRun.status, 1);
+    assert.match(badRun.stderr, /ambiguous wikilink -> \[\[Foo\]\]/);
+  } finally {
+    rmSync(src, { recursive: true, force: true });
+    rmSync(out, { recursive: true, force: true });
+  }
+});
+
 test("guide-to-wiki refuses an --out that contains the source", () => {
   const r = spawnSync(process.execPath, [join(REPO_ROOT, "scripts", "guide-to-wiki.mjs"), "--src", GUIDE_DIR, "--out", REPO_ROOT], {
     encoding: "utf8",
