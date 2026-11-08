@@ -4699,6 +4699,7 @@ button.project-file-name:hover { text-decoration: underline; }
   grid-column: 1 / -1;
   grid-row: 4;
   min-height: 0;
+  height: 38vh; /* stand-in until the hub-pages shell hands SquadFloor its fixed box */
   max-height: 38vh;
   overflow: hidden;
 }
@@ -4963,7 +4964,8 @@ button.project-file-name:hover { text-decoration: underline; }
 }
 .sq-floor-sprite-fallback { background: var(--coral); border: 1px solid var(--line); box-sizing: border-box; }
 /* FS-a: a 1px silhouette that hugs the sprite's own pixels (4 hard drop-shadows, no blur) + a 1px stepped hop on hover. */
-.sq-floor-char:focus-visible { outline: none; }
+/* the global U2 focus ring is !important; the silhouette below is the focus indicator here */
+button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none !important; }
 .sq-floor-char:hover .sq-floor-sprite,
 .sq-floor-char:focus-visible .sq-floor-sprite {
   filter: drop-shadow(1px 0 0 var(--cyan)) drop-shadow(-1px 0 0 var(--cyan)) drop-shadow(0 1px 0 var(--cyan)) drop-shadow(0 -1px 0 var(--cyan));
@@ -5092,7 +5094,7 @@ button.project-file-name:hover { text-decoration: underline; }
 @media (max-width: 600px) {
   .app.pin-focus.hub-focus { grid-template-columns: minmax(0, 1fr); }
   .hub-body { grid-column: 1; }
-  .hub-body .sq-floor { max-height: 40vh; }
+  .hub-body .sq-floor { height: 40vh; max-height: 40vh; }
 }
 
 :root[data-theme="light"] .feed-type.you { background: var(--pink-fill); }

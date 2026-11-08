@@ -97,7 +97,7 @@ test("HP4 the floor never scrolls: fixed box, fit scale, one floor rendered", ()
 test("FS-a the square outline is gone; silhouette + stepped hop replace it", () => {
   assert.doesNotMatch(css, /\.sq-floor-char:(hover|focus-visible) \.sq-floor-sprite \{ outline/);
   assert.doesNotMatch(css, /\.sq-floor-char[^{]*\{[^}]*outline: 1px solid var\(--cyan\)/);
-  assert.match(css, /\.sq-floor-char:focus-visible \{ outline: none; \}/);
+  assert.match(css, /button\.sq-floor-char:focus-visible \{ outline: none !important; box-shadow: none !important; \}/);
   const drop = css.match(/\.sq-floor-char:hover \.sq-floor-sprite,\n\.sq-floor-char:focus-visible \.sq-floor-sprite \{([^}]*)\}/);
   assert.ok(drop, "hover+focus silhouette rule");
   assert.equal((drop[1].match(/drop-shadow\([^)]*\)/g) || []).length, 4);
