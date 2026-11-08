@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
+const logic = await import("../src/skyZonesLogic.ts");
 import { SKY_COLUMNS, SKY_POPOVER_SELECTOR, faceBg, faceContain, hasFaceMode, skyEffectiveOpen, skyEscCloses, skyExit, skyOutsideCloses, skyFaceClick, skyRiffMode } from "../src/skyZonesLogic.ts";
 import { faceFrame, validateFaces } from "../src/squadFloorLogic.ts";
 
@@ -221,4 +222,46 @@ test("G8b: thinner bezels need no code change - small slice/scale values validat
   const sky = css.slice(css.indexOf(".sky-zones {"), css.indexOf("/* G7 virus takeover"));
   assert.ok(!/(60|90)px/.test(sky), "no old bezel side/chin size in the sky rules");
   assert.ok(!src("SkyZones.tsx").includes("bezelH")); // the screen is whatever is inside the border box
+});
+
+// ── G8c: the wall ──
+test("G8c wall: optional sky-crt.json key, validated; absent or bad -> ignored (CSS seam)", () => {
+  const { validateSkyCrt, parseWall, skyWallStyle, SKY_WALL_URL } = logic;
+  const crt = (wall) => ({ slice: { top: 14, right: 20, bottom: 30, left: 20 }, scale: 3, repeat: "round", ...(wall === undefined ? null : { wall }) });
+  const none = validateSkyCrt(crt());
+  assert.equal(none.ok, true);
+  assert.equal("wall" in none.value, false); // existing files parse exactly as before
+  const ok = validateSkyCrt(crt({ w: 6, slice: { top: 4, bottom: 4 }, src: "sky-wall-{theme}.png" }));
+  assert.deepEqual(ok.value.wall, { w: 6, slice: { top: 4, bottom: 4 }, src: "sky-wall-{theme}.png" });
+  assert.deepEqual(parseWall({ w: 2 }), { w: 2, src: "sky-wall-{theme}.png" }); // slice + src optional
+  assert.equal(SKY_WALL_URL("light", ok.value.wall), "/office/sky-wall-light.png");
+  for (const bad of [{ w: 0 }, { w: -2 }, { w: 1.5 }, { w: "6" }, {}, null, 5, "x", []]) {
+    const v = validateSkyCrt(crt(bad));
+    assert.equal(v.ok, true, "a bad wall never rejects the bezel");
+    assert.equal("wall" in v.value, false, JSON.stringify(bad));
+  }
+  assert.equal(parseWall({ w: 3, slice: { top: -1, bottom: 2.5 } }).slice, undefined); // bad slice dropped, wall kept
+  assert.equal(parseWall({ w: 3, src: "../x/evil.png" }).src, "sky-wall-{theme}.png"); // no path tricks
+  // style: width = w x scale, integer scaled, pixelated; no art -> null (CSS fallback)
+  assert.equal(skyWallStyle(undefined, 3, "/u.png"), null);
+  assert.equal(skyWallStyle(ok.value.wall, 3, null), null);
+  const st = skyWallStyle(ok.value.wall, 3, "/office/sky-wall-dark.png");
+  assert.equal(st.width, "18px");
+  assert.equal(st.imageRendering, "pixelated");
+  assert.equal(st.borderWidth, "12px 0 12px");
+  assert.equal(st.borderImageSlice, "4 0 4 fill");
+  assert.equal(skyWallStyle({ w: 6, src: "s.png" }, 3, "/s.png").backgroundSize, "18px auto");
+});
+
+test("G8c wall: absolute, above both TVs and the chat panel, never in the grid - a wide wall (w 6 x scale 3) cannot change the 50/50", () => {
+  const css = src("styles.css");
+  const sky = src("SkyZones.tsx");
+  assert.ok(/\.sky-wall \{ position: absolute;/.test(css) && /z-index: 4; pointer-events: none;/.test(css));
+  assert.ok(/\.sky-zone\.sky-chat-panel \{ grid-column: 2; grid-row: 1; z-index: 3; \}/.test(css)); // panel under the wall, on exactly the right cell
+  assert.ok(sky.includes('data-testid="sky-wall"') && sky.includes("skyWallStyle(crt?.wall, crt?.scale ?? 1,"));
+  assert.ok(!/\.sky-wall[^{]*\{[^}]*grid-(column|row)/.test(css)); // out of flow
+  assert.equal(logic.SKY_COLUMNS, "minmax(0, 1fr) minmax(0, 1fr)"); // the columns do not depend on the wall
+  const st = logic.skyWallStyle({ w: 6, src: "s.png" }, 3, "/s.png");
+  assert.equal(st.width, "18px");
+  for (const k of Object.keys(st)) assert.ok(!/grid|flex|gap|padding/i.test(k), k); // only its own box
 });

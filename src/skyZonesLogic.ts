@@ -171,7 +171,10 @@ export const SKY_FRAME_URL = (theme: SkyTheme) => `/office/sky-crt-${theme}.png`
 /** sky-crt.json: the 9-slice of the sky-CRT bezel PNG (source px), the integer-or-not px scale, and how the edges tile. */
 export const SKY_CRT_JSON_URL = "/office/sky-crt.json";
 export type SkyCrtRepeat = "stretch" | "round";
-export type SkyCrtModel = { slice: { top: number; right: number; bottom: number; left: number }; scale: number; repeat: SkyCrtRepeat };
+/** G8c optional `wall`: the always-present divider between the two TVs. w = source px wide; slice = vertical 3-slice caps (source px); src = PNG name, `{theme}` is replaced. */
+export type SkyWall = { w: number; slice?: { top: number; bottom: number }; src: string };
+export const SKY_WALL_SRC = "sky-wall-{theme}.png";
+export type SkyCrtModel = { slice: { top: number; right: number; bottom: number; left: number }; scale: number; repeat: SkyCrtRepeat; wall?: SkyWall };
 const posInt = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n > 0;
 /** Validate sky-crt.json. Slice sides must be positive ints, scale > 0, repeat (optional) stretch|round; anything else → not ok (CSS bezel stays). */
 export function validateSkyCrt(json: unknown): { ok: true; value: SkyCrtModel } | { ok: false; error: string } {
@@ -182,7 +185,38 @@ export function validateSkyCrt(json: unknown): { ok: true; value: SkyCrtModel } 
   if (!posInt(top) || !posInt(right) || !posInt(bottom) || !posInt(left)) return { ok: false, error: "slice sides must be positive integers" };
   if (typeof scale !== "number" || !Number.isFinite(scale) || scale <= 0) return { ok: false, error: "scale must be > 0" };
   if (repeat !== undefined && repeat !== "stretch" && repeat !== "round") return { ok: false, error: "repeat must be stretch|round" };
-  return { ok: true, value: { slice: { top, right, bottom, left }, scale, repeat: repeat ?? "stretch" } };
+  const wall = parseWall((json as Record<string, unknown>).wall);
+  return { ok: true, value: { slice: { top, right, bottom, left }, scale, repeat: repeat ?? "stretch", ...(wall ? { wall } : null) } };
+}
+const nonNegInt = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n >= 0;
+/** Optional + additive: a bad `wall` (w not a positive int, not an object) is ignored, never an error - the 2px CSS ink seam stays. A bad slice/src falls back to no-slice / the default name. */
+export function parseWall(raw: unknown): SkyWall | null {
+  if (!raw || typeof raw !== "object") return null;
+  const { w, slice, src } = raw as Record<string, unknown>;
+  if (!posInt(w)) return null;
+  const sl = slice && typeof slice === "object" ? (slice as Record<string, unknown>) : null;
+  return {
+    w,
+    ...(sl && nonNegInt(sl.top) && nonNegInt(sl.bottom) && (sl.top > 0 || sl.bottom > 0) ? { slice: { top: sl.top, bottom: sl.bottom } } : null),
+    src: typeof src === "string" && /^[\w.{}-]+\.png$/.test(src) ? src : SKY_WALL_SRC,
+  };
+}
+export const SKY_WALL_URL = (theme: SkyTheme, wall: SkyWall) => `/office/${wall.src.replace("{theme}", theme)}`;
+/** Inline style for the wall element when its art loaded: width = w x scale, pixelated, vertical 3-slice when `slice` is given. null (no wall / no art) -> the CSS ink seam. */
+export function skyWallStyle(wall: SkyWall | undefined, scale: number, url: string | null): Record<string, string> | null {
+  if (!wall || !url) return null;
+  const width = `${wall.w * scale}px`;
+  const base = { width, marginLeft: `-${Math.floor((wall.w * scale) / 2)}px`, background: "none", imageRendering: "pixelated" };
+  if (!wall.slice) return { ...base, backgroundImage: `url(${url})`, backgroundSize: `${width} auto`, backgroundRepeat: "repeat-y" };
+  const { top, bottom } = wall.slice;
+  return {
+    ...base,
+    borderStyle: "solid",
+    borderWidth: `${top * scale}px 0 ${bottom * scale}px`,
+    borderImageSource: `url(${url})`,
+    borderImageSlice: `${top} 0 ${bottom} fill`,
+    borderImageRepeat: "round",
+  };
 }
 /** json → the zone's border-image style: width = slice × scale per side, slice + `fill`, crisp pixels. */
 export function skyCrtStyle(model: SkyCrtModel, url: string): Record<string, string> {

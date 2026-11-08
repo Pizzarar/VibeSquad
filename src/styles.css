@@ -4707,8 +4707,9 @@ button.project-file-name:hover { text-decoration: underline; }
   --sky-low: #eef8ff;
   --sky-cloud: rgba(255, 255, 255, 0.85);
 }
-/* G8b: one thin shared seam (2px, theme ink) on the centre line, over both TVs and the chat panel; never takes a click. */
-.sky-zones::after { content: ""; position: absolute; top: 8px; bottom: 12px; left: 50%; width: 2px; margin-left: -1px; background: var(--u3-ink, #07040f); z-index: 4; pointer-events: none; }
+/* G8b/G8c: the wall between the TVs: one thin divider (2px theme ink by default; sky-crt.json `wall` art when it loads, inline style) on the centre line, above both TVs and the chat panel. Absolute, so it never takes grid space. */
+.sky-wall { position: absolute; top: 8px; bottom: 12px; left: 50%; width: 2px; margin-left: -1px; background: var(--u3-ink, #07040f); z-index: 4; pointer-events: none; box-sizing: border-box; }
+.sky-wall.has-art { top: 0; bottom: 0; }
 .sky-zones.has-sky-art { background-size: auto 100%; background-position: left bottom; background-repeat: repeat-x; image-rendering: pixelated; } /* @art: horizontally tileable band */
 .sky-zone {
   display: flex;
