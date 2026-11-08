@@ -1,11 +1,12 @@
-# PLAN · Android App (Tauri 2 Mobile + Paseo Relay + Deep-Link QR Pairing + Mobile UI Polish + GitHub Updater) (`@and` / `android-app`)
+# PLAN · Android App (`@and` / `android-app`)
 
-See `docs/PLAN_ANDROID_APP.md` for full details.
+Older Tauri plan: `docs/PLAN_ANDROID_APP.md` (A1-A6, all done). Current plan: `docs/PLAN_ANDROID_MESHNET.md` (Meshnet A1-A3).
+Lead: And1 rn-4cc22ce7f145 (2026-11-08). Meshnet A2/A3 moved off @rel on Aub's OK. Keystore/signing stay with Aub + Release Desk. Never publish; hand to Release Desk.
 
-## Units
-- `unit-and-a1` (done, `6e19c17`): Tauri 2 Mobile Split & Android Project Init
-- `unit-and-a2` (done, `749c12a`): Deep-Link QR Pairing & Clipboard Paste UX
-- `unit-and-a3` (done, `6364ecb`): APK Build Script, LAN `/VibeSquad.apk` Route & Release Upload
-- `unit-and-a4` (done, `42f4d67`): Squad Lane Overview (`PinGrid` / `.pin-tile`) Wrapping & Overflow Fix
-- `unit-and-a5` (done, `684f1f6`): Phone UI Pass — Top Status Bar Fit, Lead Page Wrapping & Right Sidebar Overflow Fix
-- `unit-and-a6` (done, `3e5f581`): Android GitHub Release Updater (`vite.config.ts`, `server/release.mjs`, `src/userName.ts`, `src/DiagnosticsModal.tsx`, `src/App.tsx`, `test/android-apk-route.test.mjs`)
+## Units (older Tauri plan, done)
+- `unit-and-a1` (`6e19c17`), `unit-and-a2` (`749c12a`), `unit-and-a3` (`6364ecb`), `unit-and-a4` (`42f4d67`), `unit-and-a5` (`684f1f6`), `unit-and-a6` (`3e5f581`)
+
+## Units (Meshnet plan)
+- `unit-and-a1-pair` (done, merge `86d8b85`, built by @rel Rele3): APK pairs over VS-native LAN/Meshnet /pair
+- `unit-and-mesh-a2` (running): CA trust (pin VS CA fingerprint per paired host), camera/pair on device, chat list/live/send/Stop/Needs-you over remote proxy
+- `unit-and-mesh-a3` (running): APK debug/unsigned build works end to end, GitHub updater finds APK on stable. No signing changes.

@@ -61,7 +61,7 @@ export const DEMO_AGY_HUNG = "demo-art-g";
 
 const CAST: Spec[] = [
   { id: DEMO_LEAD_ID, who: "gemini", title: "★ VIBESQUAD ord1", status: "running", labels: vs({ role: "lead", "paseo.parent-agent-id": "demo-old-2" }), used: 134_000, ago: 0 },
-  { id: "demo-bs-vs", who: "claude", title: "BRAINSTORM · neon-noir cast", labels: vs({ role: "brainstorm" }), used: 62_000, ago: 12 },
+  { id: "demo-bs-vs", who: "claude", title: "BRAINSTORM · neon-noir cast", labels: vs({ role: "brainstorm" }), used: (typeof location === "undefined" ? 0 : Number(new URLSearchParams(location.search).get("bsUsed"))) || 62_000, ago: 12 },
   { id: "demo-old-1", who: "claude", title: "(old) ★ LEAD · VIBESQUAD v0", status: "closed", labels: vs({ role: "old-lead" }), used: 128_000, ago: 300 },
   { id: "demo-old-2", who: "gemini", title: "(old) ★ LEAD · VIBESQUAD art round A", status: "closed", labels: vs({ role: "old-lead" }), used: 131_000, ago: 140 },
   { id: "demo-art-o", who: "claude", title: "Art Painter - Opus · neon-noir", status: "running", labels: vs({ role: "worker", task: "art", job: "neon-noir", profile: "opus", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 88_000, cwd: WT + "vibesquad-neon-opus", ago: 0 },

@@ -319,7 +319,38 @@ export const hasFaceMode = (faces: FacesModel | null, bot: FaceBot, mode: FaceMo
 // ── G7 virus takeover overlay (docs/PLAN_SKY_GODS_C2B.md): the Overlord's glitch front eats Riff's TV ──
 export const TAKEOVER_URL = (theme: SkyTheme) => `/office/takeover-${theme}.png`;
 export const TAKEOVER_JSON_URL = "/office/takeover.json";
+/** T1: takeover-label.json (@art): the sticker's art-px size, scale, and the art point `at` that sits on the chip point `anchor.chip` (fractions of the chip's width/height). */
+export type TakeoverLabel = { w: number; h: number; scale: number; chip: [number, number]; at: [number, number] };
+export const TAKEOVER_LABEL_JSON_URL = "/office/takeover-label.json";
+const pair = (v: unknown, dflt: [number, number]): [number, number] | null =>
+  v === undefined ? dflt : Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === "number" && Number.isFinite(n)) ? [v[0], v[1]] : null;
+export function validateTakeoverLabel(json: unknown): { ok: true; value: TakeoverLabel } | { ok: false; error: string } {
+  if (!json || typeof json !== "object") return { ok: false, error: "not an object" };
+  const { w, h, scale, anchor } = json as Record<string, unknown>;
+  if (!posNum(w) || !posNum(h)) return { ok: false, error: "w/h must be > 0" };
+  if (scale !== undefined && !posNum(scale)) return { ok: false, error: "scale must be > 0" };
+  if (anchor !== undefined && (!anchor || typeof anchor !== "object")) return { ok: false, error: "bad anchor" };
+  const an = (anchor ?? {}) as Record<string, unknown>;
+  const chip = pair(an.chip, [0, 0.5]);
+  const at = pair(an.at, [0, 0]);
+  if (!chip || !at) return { ok: false, error: "bad anchor" };
+  return { ok: true, value: { w, h, scale: (scale as number | undefined) ?? 1, chip, at } };
+}
 export type TakeoverModel = { cell: { w: number; h: number }; fps: number; frames: { x: number; y: number }[] };
+export const TAKEOVER_LABEL_URL = (theme: SkyTheme) => `/office/takeover-label-${theme}.png`;
+/**
+ * Sticker box, in CSS px relative to the chip's offset parent: k = crispScale(scale, dpr) CSS px per art px; size w*k × h*k;
+ * the art point `at` sits on the chip point (chip.fx × width, chip.fy × height); left/top snapped to whole device px.
+ */
+export function takeoverLabelGeom(label: TakeoverLabel, chip: { left: number; top: number; width: number; height: number }, dpr = 1): { left: number; top: number; width: number; height: number } {
+  const k = crispScale(label.scale, dpr);
+  return {
+    left: snapPx(chip.left + chip.width * label.chip[0] - label.at[0] * k, dpr),
+    top: snapPx(chip.top + chip.height * label.chip[1] - label.at[1] * k, dpr),
+    width: label.w * k,
+    height: label.h * k,
+  };
+}
 const posNum = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n > 0;
 const frameNum = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0;
 /**
@@ -340,7 +371,8 @@ export function validateTakeover(json: unknown): { ok: true; value: TakeoverMode
     else if (f && typeof f === "object" && frameNum((f as { x?: unknown }).x) && frameNum((f as { y?: unknown }).y)) out.push({ x: (f as { x: number }).x, y: (f as { y: number }).y });
     else return { ok: false, error: "bad frame" };
   }
-  return { ok: true, value: { cell: { w, h }, fps, frames: out } };
+  const value: TakeoverModel = { cell: { w, h }, fps, frames: out };
+  return { ok: true, value };
 }
 /** Whole-overlay length in ms. */
 export const takeoverDurationMs = (m: Pick<TakeoverModel, "fps" | "frames">): number => (m.frames.length * 1000) / m.fps;
@@ -361,5 +393,9 @@ export function takeoverAdvance(pos: number, expanded: boolean, dtMs: number, fp
 export const takeoverFrameAt = (pos: number, n: number): number => Math.min(n - 1, Math.max(0, Math.floor(pos)));
 /** Drawn while expanded or still reversing; gone once fully reversed. Reduced motion never draws it. */
 export const takeoverVisible = (pos: number, expanded: boolean, reduced: boolean): boolean => !reduced && (expanded || pos > 0);
+/** G8f: the takeover has landed once expanded and fully in (or at once under reduced motion; the no-sheet dissolve lands on its own timer): the left TV now shows the Overlord's face. */
+export const takeoverLanded = (pos: number, expanded: boolean, n: number, reduced: boolean): boolean => expanded && (reduced || pos >= n);
+/** G8f: which bot's face the left TV shows. Riff at rest and while the takeover plays in/out; the Overlord once it has landed. */
+export const skyLeftBot = (landed: boolean): FaceBot => (landed ? "overlord" : "riffbot");
 /** Nothing left to animate: expanded and fully in, or collapsed and fully out. */
 export const takeoverSettled = (pos: number, expanded: boolean, n: number): boolean => (expanded ? pos >= n : pos <= 0);

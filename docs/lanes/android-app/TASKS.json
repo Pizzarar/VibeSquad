@@ -1,6 +1,6 @@
 {
   "laneId": "android-app",
-  "updatedAt": "2026-11-05T04:14:44.702Z",
+  "updatedAt": "2026-11-08T20:46:19.378Z",
   "units": [
     {
       "id": "unit-and-a1",
@@ -91,6 +91,24 @@
       "status": "done",
       "branch": "unit-and-a6",
       "commit": "3e5f581"
+    },
+    {
+      "id": "unit-and-mesh-a2",
+      "goal": "CA trust + camera/pair + chat over remote proxy",
+      "files": [],
+      "doneCheck": "",
+      "status": "done",
+      "branch": "unit-and-mesh-a2",
+      "commit": "b306836"
+    },
+    {
+      "id": "unit-and-mesh-a3",
+      "goal": "APK debug build + updater on stable, no signing",
+      "files": [],
+      "doneCheck": "",
+      "status": "done",
+      "branch": "unit-and-mesh-a3",
+      "commit": "8647863"
     }
   ]
 }
