@@ -1176,6 +1176,16 @@ code {
   color: var(--pink-t);
 }
 
+.tl-blip {
+  font-size: 11px;
+  color: var(--muted);
+  font-style: italic;
+  letter-spacing: 0.04em;
+  text-shadow: 0 0 6px var(--cyan-t);
+  opacity: 0.8;
+  cursor: help;
+}
+
 .tl-note {
   font-size: 11px;
   color: var(--muted);
