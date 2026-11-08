@@ -1,6 +1,7 @@
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import { updateJsonFileSync } from "./file-lock.mjs";
 
 export const QUOTA_FAILOVER_THRESHOLD = 95;
 
@@ -215,20 +216,20 @@ const parseCapFile = (text) => {
 };
 
 /**
- * Drop expired caps from the file. Re-reads right before writing so a cap added by a concurrent writer is kept, and writes
- * tmp + rename so a reader never sees a half-written file. Best effort: a failure leaves the file as it was.
+ * Drop expired caps from the file. Re-reads right before writing under the file lock so a cap added by a concurrent
+ * writer is kept, and writes atomically so a reader never sees a half-written file. Best effort: a failure leaves the file as it was.
  */
 export function pruneExpiredCapsFile(path, now = Date.now()) {
-  const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
   try {
-    const current = parseCapFile(readFileSync(path, "utf8"));
-    if (!current) return;
-    const live = Object.fromEntries(Object.entries(current).filter(([, v]) => !isCapExpired(v, now)));
-    if (Object.keys(live).length === Object.keys(current).length) return;
-    writeFileSync(tmp, JSON.stringify({ capped: live }, null, 2) + "\n", "utf8");
-    renameSync(tmp, path);
+    updateJsonFileSync(path, (doc) => {
+      if (!doc || typeof doc !== "object" || Array.isArray(doc)) return doc;
+      const hasWrapper = doc.capped && typeof doc.capped === "object" && !Array.isArray(doc.capped);
+      const current = hasWrapper ? doc.capped : doc;
+      const live = Object.fromEntries(Object.entries(current).filter(([, v]) => !isCapExpired(v, now)));
+      return { ...(hasWrapper ? doc : {}), capped: live };
+    }, { fallback: { capped: {} } });
   } catch {
-    try { rmSync(tmp, { force: true }); } catch { /* nothing to clean */ }
+    /* best effort: leave file as it was */
   }
 }
 
@@ -324,21 +325,38 @@ export function readCappedProviders(opts = {}) {
   return result;
 }
 
-export function setProviderCapped(providerId, capped = true, { reason = "manual cap", ...opts } = {}) {
-  const family = normalizeProviderFamily(providerId);
-  if (!family) return readCappedProviders(opts);
-
-  const existing = readDiskCaps(opts);
-  if (capped) {
-    existing[family] = { reason, updatedAt: new Date().toISOString() };
-  } else {
-    delete existing[family];
-  }
+export function setProviderCapped(providerId, capped = true, { reason = "manual cap", normalizeKey = true, ...opts } = {}) {
+  const key = normalizeKey ? normalizeProviderFamily(providerId) : String(providerId ?? "").trim().toLowerCase();
+  if (!key) return readCappedProviders(opts);
 
   const path = resolveCappedProvidersPath(opts);
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify({ capped: existing }, null, 2) + "\n", "utf8");
-  return existing;
+  const now = opts.now ?? Date.now();
+  const next = updateJsonFileSync(
+    path,
+    (doc) => {
+      if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
+        throw new Error(`Invalid capped-providers.json structure at ${path}`);
+      }
+      const hasWrapper = doc.capped && typeof doc.capped === "object" && !Array.isArray(doc.capped);
+      const rawMap = hasWrapper ? doc.capped : doc;
+      const live = {};
+      for (const [k, v] of Object.entries(rawMap)) {
+        if (!isCapExpired(v, now)) live[k] = v;
+      }
+      if (capped) {
+        live[key] = { reason, updatedAt: new Date(now).toISOString() };
+      } else {
+        delete live[key];
+        if (!normalizeKey) {
+          const fam = normalizeProviderFamily(key);
+          if (fam && fam !== key) delete live[fam];
+        }
+      }
+      return { ...(hasWrapper ? doc : {}), capped: live };
+    },
+    { fallback: { capped: {} }, ...opts },
+  );
+  return next.capped;
 }
 
 export function isProviderOverQuota(providerId, usageProviders = [], threshold = QUOTA_FAILOVER_THRESHOLD, opts = {}) {

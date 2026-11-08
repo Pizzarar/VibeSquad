@@ -105,7 +105,7 @@ test("D1: both render spots use the shared helper, no :inline:<i> fallback for s
   assert.match(tl, /sendToCardId\(agentId \?\? "inline", parsedSendTo\)/);
   assert.match(tl, /spinOffCardId\(agentId \?\? "inline", teams\)/);
   assert.doesNotMatch(tl, /liveSendTo|liveSpinOff/);
-  assert.match(read("src/PinIdeas.tsx"), /id: sendToCardId\(agentId, offer\)/);
+  assert.match(read("server/pin-ideas.mjs"), /id: sendToCardId\(agentId, offer\)/);
 });
 
 test("D2: dismiss on client A; a fresh client with empty localStorage hides it, and stays hidden", async () => {
@@ -157,4 +157,58 @@ test("D2: the list is capped at the newest 500 and other saves neither clobber n
   assert.equal(got.length, 500);
   assert.equal(got.at(-1), "late");
   assert.equal(got[0], "c21");
+});
+
+test("D1 regress: a card dismissed under one Buddy agent id stays dismissed when the resumed Buddy has another id", async () => {
+  newClient();
+  await settle();
+  const offer = { laneId: "usage", text: "track token usage per lane" };
+  actions.dismissSendTo(ideas.sendToCardId("rn-before", offer)); // fired while the Buddy was rn-before
+  const spin = ideas.parseSpinOff("```vs:spin-off\nAudio | sounds\nUI | menus\n```");
+  actions.dismissSpinOff(ideas.spinOffCardId("rn-before", spin));
+  await flush();
+  newClient(); // reload / resume: empty localStorage, fresh server list
+  await settle();
+  assert.equal(actions.isSendToDismissed(ideas.sendToCardId("rn-after", offer)), true, "send-to keyed by content, not agent");
+  assert.equal(actions.isSpinOffDismissed(ideas.spinOffCardId("rn-after", spin)), true, "spin-off keyed by content, not agent");
+  assert.equal(actions.isSendToDismissed(ideas.sendToCardId("rn-after", { laneId: "usage", text: "another idea" })), false);
+});
+
+test("D1 regress: ids dismissed in the old agent-prefixed form still hide the card", async () => {
+  newClient();
+  const offer = { laneId: "usage", text: "legacy dismissed idea" };
+  const legacy = ideas.sendToCardId("rn-old", offer).replace("send-to:*:", "send-to:rn-123:");
+  globalThis.localStorage.setItem("vibesquad.sendToDismissed", JSON.stringify([legacy]));
+  await settle();
+  assert.equal(actions.isSendToDismissed(ideas.sendToCardId("rn-new", offer)), true);
+});
+
+test("D1 regress2 [M]: a pre-D1 `${agentId}:${seqStart}` dismissal hides the card rendered at that seqStart", async () => {
+  newClient();
+  settings.saveUserSettings({ dismissedCards: ["rn-x:176", "rn-x:inline:3"] }, home);
+  await settle();
+  const text = "Worth a thought.\n```vs:send-to usage\nshow cache hit rate in the header\n```";
+  const offer = ideas.sendToFrom("rn-x", [msg(176, text)]);
+  assert.ok(offer, "offer parsed");
+  assert.equal(actions.isSendToDismissed(offer.id, offer.legacyIds), true, "bar: legacy id from seqStart");
+  const other = ideas.sendToFrom("rn-x", [msg(177, text)]);
+  assert.equal(actions.isSendToDismissed(other.id, other.legacyIds), false, "a different message is not hidden");
+  assert.equal(actions.isSendToDismissed(offer.id, ["rn-x:inline:3"]), true, "inline legacy index");
+});
+
+test("D1 regress2 [H]: a dismissal made elsewhere after this tab loaded shows up on refresh", async () => {
+  newClient();
+  await settle();
+  const id = ideas.sendToCardId("rn-q", { laneId: "usage", text: "dismissed on a phone later" });
+  assert.equal(actions.isSendToDismissed(id), false);
+  settings.saveUserSettings({ dismissedCards: [id] }, home); // another device / tab
+  await actions.refreshDismissedCards(0);
+  assert.equal(actions.isSendToDismissed(id), true);
+  const v = actions.dismissedVersion();
+  await actions.refreshDismissedCards(5000); // throttled: no second fetch, no churn
+  assert.equal(actions.dismissedVersion(), v);
+});
+
+test("D1 regress2 [L]: send-to lane id is case-insensitive like spin-off", () => {
+  assert.equal(ideas.sendToCardId("a", { laneId: "Usage", text: "x" }), ideas.sendToCardId("a", { laneId: "usage", text: "x" }));
 });

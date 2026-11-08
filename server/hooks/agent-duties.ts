@@ -26,6 +26,7 @@ import {
   findLaneInRegistry,
   isDigestAgent as isDigestIdentity,
   isRetiredAgent,
+  isLiveAgent,
   formatDisplayTitle,
   isRetiredRole,
   laneCodeFor,
@@ -33,6 +34,7 @@ import {
   matchPathInRegistry,
   normalizeRoleLabel,
   resolveAgentIdentity,
+  resolveLeadWinner,
   topicOf,
 } from "../identity.mjs";
 import { refreshWhosHere } from "../whos-here.mjs";
@@ -968,6 +970,7 @@ interface AgentSnap {
   id: string;
   title: string | null;
   status?: string;
+  resumable?: boolean;
   cwd?: string;
   updatedAt?: string;
   archivedAt?: string | null;
@@ -2454,7 +2457,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const wantLane = (lane || "").toLowerCase();
       const leads = (res.entries as any[])
         .map((e) => ({ ...e.agent, labels: e.agent.labels ?? {} }) as AgentSnap)
-        .filter((a) => !a.archivedAt && !a.internal && a.status !== "closed")
+        .filter((a) => isLiveAgent(a))
         .filter((a) => effectiveAgentRole(a) === role)
         .filter((a) => {
           const d = deriveTeamForSpawn(a.labels, a.cwd, currentTeams());
@@ -2462,12 +2465,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           const aLane = (d.lane || a.labels.lane || a.labels.lead || "").toLowerCase();
           return aTeam === team && (!wantLane || aLane === wantLane);
         });
-      leads.sort((a, b) => {
-        const at = Date.parse(a.updatedAt ?? "");
-        const bt = Date.parse(b.updatedAt ?? "");
-        return (Number.isNaN(bt) ? 0 : bt) - (Number.isNaN(at) ? 0 : at);
-      });
-      return leads[0] ?? null;
+      return resolveLeadWinner(leads).winner ?? null;
     }
 
     async function handleSendAgentPrompt(input: any, ctx?: { paseo?: Paseo }) {
@@ -2495,16 +2493,22 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       if (!target) return undefined;
       // A worker closed by the done-report path is not a retired holder: the send revives it (RunnerBackend unarchives it).
       if (target.labels?.[AUTO_ARCHIVED_LABEL] === "1" && String(target.labels?.role ?? "").trim().toLowerCase() === "worker") return undefined;
-      const isRetired = Boolean(target.archivedAt || target.status === "closed" || isRetiredLeadSnap(target));
-      if (!isRetired) return undefined;
+      const isRetired = Boolean(target.archivedAt || isRetiredLeadSnap(target) || (target.status === "closed" && target.resumable !== true));
+      // A closed-but-resumable holder (a lost lead/Buddy) is live: a send to it must not resume a losing predecessor into a
+      // duplicate-lead CONFLICT, so redirect to the live winner when one exists; otherwise the runner resumes it in place.
+      const closedResumable = target.status === "closed" && target.resumable === true;
+      if (!isRetired && !closedResumable) return undefined;
 
       const { team: rawTeam, lane: rawLane } = deriveTeamForSpawn(target.labels, target.cwd, currentTeams());
       const team = teamIdOf(rawTeam || target.labels?.team || "", currentTeams());
       const lane = rawLane || target.labels?.lane || target.labels?.lead || team;
-      const role = retiredHolderRole(target);
+      const rawRole = String(target.labels?.role ?? "").trim().toLowerCase();
+      const role = rawRole === "brainstorm" || rawRole === "buddy" || rawRole === "former-brainstorm" ? "brainstorm" : "lead";
       const current = await findLead(paseo, team, rawLane || target.labels?.lane || target.labels?.lead || "", role);
       // The successor talking to its predecessor (handoff questions) is not a misroute.
       if (current && senderId && current.id === senderId) return undefined;
+      // A lone closed-but-resumable holder is its own winner: resume it in place, no redirect.
+      if (current && current.id === target.id) return undefined;
 
       const dateStr = new Date().toISOString().slice(0, 10);
       const countKey = `${dateStr}:${team}`;
@@ -2630,7 +2634,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           const queue = pendingWake.get(lead.id) ?? [];
           queue.push(...fresh);
           pendingWake.set(lead.id, queue);
-          if (lead.status === "idle") void flushWake(paseo, lead.id);
+          if (lead.status === "idle" || (lead.status === "closed" && lead.resumable === true)) void flushWake(paseo, lead.id);
         } catch (err) {
           log(`wake dispatch failed: ${err}`);
         }
@@ -2676,8 +2680,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         // Vanished agent: keep the queue (never send on a null snapshot).
         if (!liveLead) return;
 
-        // Archived/closed lead: discard its held wakeups (the lead is gone).
-        if (liveLead.archivedAt || liveLead.status === "closed") {
+        // Archived or non-resumable closed lead: discard its held wakeups (the lead is gone). A closed-but-resumable
+        // lead is a lost lead with a saved session: keep its wakeups and resume it via the send below.
+        if (liveLead.archivedAt || (liveLead.status === "closed" && liveLead.resumable !== true)) {
           pendingWake.delete(leadId);
           lastWakeAt.delete(leadId);
           return;
@@ -2700,7 +2705,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
 
         // Mid-turn: hold. At most one re-check per hold — turn_ended handles normal
         // completion, so a lead stuck in "running" is not snap()'d every cooldown forever.
-        if (liveLead.status && liveLead.status !== "idle") {
+        // A closed-but-resumable lead has no live process (it resumes on the send), so it is wakeable now.
+        const resumableClosed = liveLead.status === "closed" && liveLead.resumable === true;
+        if (!resumableClosed && liveLead.status && liveLead.status !== "idle") {
           if (!recheck) scheduleWakeRecheck(paseo, leadId, cooldownMs);
           return;
         }

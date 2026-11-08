@@ -3,7 +3,7 @@
 import { briefRootFor } from "./brief-path.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { effectiveAgentRole, isDigestAgent, isRetiredAgent } from "./identity.mjs";
+import { effectiveAgentRole, isDigestAgent, isLiveAgent } from "./identity.mjs";
 import { writeBriefFile } from "./brief-write.mjs";
 
 export const WHOS_HERE_HEADING = "## Who's here";
@@ -17,8 +17,7 @@ export function whosHereBody(agents, laneId) {
   const want = String(laneId ?? "").trim().toLowerCase();
   const live = (Array.isArray(agents) ? agents : [])
     .map((a) => a?.agent ?? a)
-    .filter((a) => a && !a.archivedAt && !a.internal && a.status !== "closed")
-    .filter((a) => !isRetiredAgent(a) && !isDigestAgent(a))
+    .filter((a) => isLiveAgent(a) && !isDigestAgent(a))
     .filter((a) => laneOf(a) === want);
   const titles = (role) =>
     live

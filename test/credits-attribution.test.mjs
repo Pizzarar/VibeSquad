@@ -55,10 +55,10 @@ test("1) CREDITS.md exists at repo root and includes all 11 community accolades 
   const bullets = credits
     .split(/\r?\n/)
     .filter((l) => l.startsWith("- Implemented ") || l.startsWith("- Built on the Paseo Daemon"));
-  // 11 v0.2.0 accolades + 7 later credits (VS agent runner adapters, VS MCP aliases, ACP adapters, native
-  // schedules, terminals, hand-pixelled office art pipeline, Aseprite pixel pipeline). The two
+  // 11 v0.2.0 accolades + 8 later credits (VS agent runner adapters, VS MCP aliases, ACP adapters, native
+  // schedules, terminals, hand-pixelled office art pipeline, Aseprite pixel pipeline, QR pairing scan). The two
   // "Inspired by the vibe of" lines are vibe-only and not counted.
-  assert.equal(bullets.length, 18, "Expected 11 community accolades + 7 later credits in CREDITS.md");
+  assert.equal(bullets.length, 19, "Expected 11 community accolades + 8 later credits in CREDITS.md");
 });
 
 test("2) server/profiles.mjs and server/hooks/agent-duties.ts require attribution format in plans, commits, CREDITS.md, and release notes", () => {

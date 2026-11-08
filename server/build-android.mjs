@@ -82,6 +82,27 @@ export function ensureAndroidDeepLinkIntentFilter(manifestPath) {
 }
 
 /**
+ * Declares the camera permission the QR scanner (getUserMedia) needs; the WebView's permission prompt is handled by
+ * Tauri's own chrome client once the app holds it. Without it the scanner fails and manual entry is the fallback.
+ * Idempotent: returns false when already declared or the manifest is missing.
+ */
+export function ensureAndroidCameraPermission(manifestPath) {
+  if (!existsSync(manifestPath)) return false;
+  const src = readFileSync(manifestPath, "utf8");
+  if (src.includes("android.permission.CAMERA")) return false;
+  const idx = src.indexOf("<application");
+  if (idx === -1) return false;
+  const decl = [
+    '    <uses-permission android:name="android.permission.CAMERA" />',
+    '    <uses-feature android:name="android.hardware.camera" android:required="false" />',
+    '',
+    '    ',
+  ].join("\n");
+  writeFileSync(manifestPath, src.slice(0, idx) + decl + src.slice(idx), "utf8");
+  return true;
+}
+
+/**
  * Removes edge-to-edge rendering from a generated MainActivity.kt so Android fits the
  * WebView inside the system status/navigation bars natively (no overlap with the clock/battery).
  * Idempotent: returns false when the file already lacks enableEdgeToEdge or is missing.
@@ -236,6 +257,7 @@ export function buildAndroidApk({
   // Step 3: register the vibesquad://pair deep link and fit the WebView inside the system bars.
   const manifest = join(rootDir, "src-tauri", "gen", "android", "app", "src", "main", "AndroidManifest.xml");
   ensureAndroidDeepLinkIntentFilter(manifest);
+  ensureAndroidCameraPermission(manifest);
   ensureAndroidSystemBarFit(join(rootDir, "src-tauri", "gen", "android", "app", "src", "main", "java", "com", "vibesquad", "desktop", "MainActivity.kt"));
 
   // Step 4: build the release APK.

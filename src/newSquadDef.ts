@@ -5,10 +5,19 @@ import {
   LEAD_AUTO_HANDOFF_DEFAULT,
   LEAD_FLAG_DEFAULT,
   LEAD_HARD_CAP_DEFAULT,
+  findBugLane,
   type TeamDef,
 } from "./teams.ts";
 import { allLaneIds, slugLaneId, uniqueLaneId, type PinLane } from "./pins.ts";
 import { freezeLaneCodes } from "./identity.ts";
+
+/** Seeds the Squad's standing Bug Runner lane. Idempotent: a Squad that already has a bug lane (flagged or `bug-chaser`) comes back unchanged. Lane ids are unique across Squads, so a second Squad gets `bug-runner-2`. */
+export function withBugLane(team: TeamDef, existingTeams: TeamDef[] = []): TeamDef {
+  if (findBugLane(team)) return team;
+  const taken = allLaneIds([...existingTeams.filter((t) => t.id !== team.id), team]);
+  const lane: PinLane = { id: uniqueLaneId("bug-runner", taken), name: "Bug Runner", bug: true, standing: true, state: "pinned" };
+  return { ...team, lanes: freezeLaneCodes([...team.lanes, lane]) };
+}
 
 export function buildNewSquadTeamDef(opts: {
   id: string;
@@ -29,7 +38,7 @@ export function buildNewSquadTeamDef(opts: {
     state: "pinned",
     ...(opts.lastProfile ? { lastProfile: opts.lastProfile } : {}),
   };
-  return {
+  return withBugLane({
     id: opts.id,
     name: opts.name.trim() || "New Squad",
     color: "#00f0ff",
@@ -43,5 +52,5 @@ export function buildNewSquadTeamDef(opts: {
       folderSegment || opts.folderPath.trim(),
       ...(/^([a-z]:|[\\/])/i.test(normalized) && normalized !== folderSegment ? [normalized] : []),
     ],
-  };
+  }, opts.existingTeams);
 }

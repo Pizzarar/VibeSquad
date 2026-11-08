@@ -666,20 +666,27 @@ export function setNoFraming(res) {
   res.setHeader("content-security-policy", !prev ? "frame-ancestors 'none'" : /(^|;)\s*frame-ancestors\b/i.test(prev) ? prev : `${prev}; frame-ancestors 'none'`);
 }
 
-function sendHtml(res, code, title, message) {
+/** The APK passes its own WebView origin as `vs_app` so server pages can send the user back; only Tauri origins count. */
+function appOrigin(req) {
+  const o = new URL(req.url ?? "/", "http://x").searchParams.get("vs_app") ?? "";
+  return TAURI_ORIGINS.has(o) ? o : null;
+}
+
+function sendHtml(res, code, title, message, back = null) {
   res.statusCode = code;
   res.setHeader("content-type", "text/html; charset=utf-8");
   setNoFraming(res);
   res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
-  res.end(htmlPage(title, message));
+  res.end(htmlPage(title, message, back));
 }
 
-export function htmlPage(title, message) {
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>
+/** `back` = { href, label, auto }: a link to the APK's pair screen (auto also redirects there at once). */
+export function htmlPage(title, message, back = null) {
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>${back?.auto ? `<meta http-equiv="refresh" content="0;url=${back.href}">` : ""}
 <style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#070710;color:#eef2ff;font-family:"JetBrains Mono",Consolas,monospace}
 .card{max-width:480px;margin:16px;padding:22px;background:#111326;border:1px solid #ff2a85;box-shadow:0 0 24px #ff2a8530}
 h1{margin:0 0 10px;font-size:18px;color:#ff2a85;letter-spacing:1px;text-transform:uppercase}p{margin:0;line-height:1.5;color:#828ba8}</style></head>
-<body><div class="card"><h1>${title}</h1><p>${message}</p></div></body></html>`;
+<body><div class="card"><h1>${title}</h1><p>${message}</p>${back ? `<p><a href="${back.href}" style="color:#ff2a85">${back.label}</a></p>` : ""}</div></body></html>`;
 }
 
 export const UNPAIRED_MESSAGE = "Unpaired device — open VibeSquad on your PC, click Pair a device, install the CA certificate if needed, and scan the QR code.";
@@ -688,7 +695,8 @@ export const UNPAIRED_MESSAGE = "Unpaired device — open VibeSquad on your PC, 
 export function sendUnpaired(req, res) {
   const path = (req.url ?? "").split("?")[0];
   if (path.startsWith("/__vibesquad/") || String(req.headers.accept ?? "").includes("application/json")) return sendJson(res, 401, { error: "unpaired device" });
-  sendHtml(res, 401, "Unpaired device", UNPAIRED_MESSAGE);
+  const app = appOrigin(req);
+  sendHtml(res, 401, "Unpaired device", UNPAIRED_MESSAGE, app && { href: `${app}/#unpaired`, label: "Back to the app to pair again", auto: true });
 }
 
 export function handleCaCrt(req, res) {
@@ -773,7 +781,8 @@ export function handlePairRedeem(req, res) {
   codes.delete(rawCode);
   if (!exp || exp <= Date.now()) {
     recordPairFailure(ip);
-    return sendHtml(res, 401, "Pairing failed", "This pairing code is invalid, already used, or expired. Generate a new QR code on your PC.");
+    const app = appOrigin(req);
+    return sendHtml(res, 401, "Pairing failed", "This pairing code is invalid, already used, or expired. Generate a new QR code on your PC.", app && { href: `${app}/#failed`, label: "Back to the app", auto: true });
   }
   pairFailuresByIp.delete(ip);
   const token = randomBytes(32).toString("base64url");
@@ -783,7 +792,9 @@ export function handlePairRedeem(req, res) {
   saveDevices();
   res.statusCode = 302;
   res.setHeader("set-cookie", `${DEVICE_COOKIE}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=31536000`);
-  res.setHeader("location", "/");
+  // The APK saves its session only on this return trip, i.e. after the code was really redeemed.
+  const app = appOrigin(req);
+  res.setHeader("location", app ? `${app}/#paired` : "/");
   res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
   res.end();
 }

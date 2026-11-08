@@ -3,7 +3,7 @@
 // rn- ids -> RunnerBackend, other ids -> Paseo, creates by lane (every lane runs on the runner unless pinned to Paseo).
 import { isRunnerId } from "../backend/runner-backend.mjs";
 import { coalesceReplies } from "../reply-coalesce.mjs";
-import { effectiveAgentRole, findLaneInRegistry, findTeamInRegistry, isHubLane, isRetiredAgent, loadTeamsRegistry, whoCandidate } from "../identity.mjs";
+import { effectiveAgentRole, findLaneInRegistry, findTeamInRegistry, isHubLane, isRetiredAgent, loadTeamsRegistry, resolveLeadWinner, whoCandidate } from "../identity.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
 export const REPORT_TYPES = ["done", "decision", "blocker"];
@@ -151,7 +151,7 @@ async function spawnWorker(ctx, args = {}) {
       const rec = callerId ? agentOf(await ctx.withBackend({ id: callerId }, (b) => b.fetchAgent(callerId)).catch(() => null)) : null;
       const recLane = rec ? findLaneInRegistry(clean(rec.labels?.lane || rec.labels?.lead), teams) : null;
       const recTeam = rec ? findTeamInRegistry(clean(rec.labels?.team), teams) : null;
-      if (!rec || effectiveAgentRole(rec) !== LEAD_ROLE || isRetiredAgent(rec) || rec.archivedAt || rec.status === "closed" || recLane?.lane.id !== callerLane.lane.id || recTeam?.id !== canonTeam) {
+      if (!rec || effectiveAgentRole(rec) !== LEAD_ROLE || isRetiredAgent(rec) || rec.archivedAt || (rec.status === "closed" && rec.resumable !== true) || recLane?.lane.id !== callerLane.lane.id || recTeam?.id !== canonTeam) {
         throw new Error(`cannot spawn a lead: ${callerId || "caller"} is not a live lead of hub lane "${callerLane.lane.id}" per its agent record`);
       }
     }
@@ -334,8 +334,7 @@ async function handoffLead(ctx, args = {}) {
     if (askedLane && findLaneInRegistry(askedLane, teams)?.lane.id !== callerLane.lane.id) throw new Error(`cannot hand off a lead: target lane "${askedLane}" is not the caller's lane "${callerLane.lane.id}"`);
     const live = await ctx.findLiveLeads({ team: callerTeam.id, lane: callerLane.lane.id });
     if (!live.length) throw new Error(`cannot hand off a lead: lane "${callerLane.lane.id}" has no live lead`);
-    const ord = (a) => Number(a.labels?.ord) || 0;
-    target = [...live].sort((a, b) => ord(b) - ord(a))[0];
+    target = resolveLeadWinner(live).winner;
     if (askedId && askedId !== target.id) throw new Error(`cannot hand off a lead: ${askedId} is not the live lead of lane "${callerLane.lane.id}" (${target.id})`);
     trigger = "buddy";
     // The live lead is already a fresh handoff successor: a repeated call (no explicit target id) returns it instead of
@@ -348,7 +347,7 @@ async function handoffLead(ctx, args = {}) {
     // (c) The Squad's hub lead (Overlord) hands off any lane's live lead in its own Squad. Identity is the runner record's, never args.
     if (!callerId) throw new Error("cannot hand off a lead: caller has no agent id");
     const caller = await fetchAgent(callerId);
-    if (!caller || effectiveAgentRole(caller) !== LEAD_ROLE || isRetiredAgent(caller) || caller.archivedAt || caller.status === "closed") {
+    if (!caller || effectiveAgentRole(caller) !== LEAD_ROLE || isRetiredAgent(caller) || caller.archivedAt || (caller.status === "closed" && caller.resumable !== true)) {
       throw new Error(`cannot hand off a lead: ${callerId} is not a live lead`);
     }
     // Lane and Squad come from the caller's own record, never from env (VS_LANE/VS_TEAM are spoofable).
@@ -362,8 +361,7 @@ async function handoffLead(ctx, args = {}) {
     if (!targetLane || targetLane.team.id !== callerTeam.id) throw new Error(`cannot hand off a lead: target lane "${askedLane}" is not in the caller's Squad "${callerTeam.id}"`);
     const live = await ctx.findLiveLeads({ team: callerTeam.id, lane: targetLane.lane.id });
     if (!live.length) throw new Error(`cannot hand off a lead: lane "${targetLane.lane.id}" has no live lead (spawn one instead)`);
-    const ord = (a) => Number(a.labels?.ord) || 0;
-    target = [...live].sort((a, b) => ord(b) - ord(a))[0];
+    target = resolveLeadWinner(live).winner;
     if (askedId && askedId !== target.id) throw new Error(`cannot hand off a lead: ${askedId} is not the live lead of lane "${targetLane.lane.id}" (${target.id})`);
     if (target.id === callerId || targetLane.lane.id === callerLane.lane.id) throw new Error("cannot hand off a lead: the Overlord hands off other lanes' leads; use a plain handoff_lead for itself");
     trigger = "overlord";
@@ -390,7 +388,7 @@ async function handoffLead(ctx, args = {}) {
       const s = await fetchAgent(successor);
       return handoffView({ successorId: successor, title: s?.title ?? "", oldLeadId: callerId, deduped: true }, { trigger });
     }
-    if (target.archivedAt || target.status === "closed" || (known && (effectiveAgentRole(target) !== "lead" || isRetiredAgent(target)))) {
+    if (target.archivedAt || (target.status === "closed" && target.resumable !== true) || (known && (effectiveAgentRole(target) !== "lead" || isRetiredAgent(target)))) {
       throw new Error(`cannot hand off a lead: ${callerId} is not a live lead`);
     }
   } else {

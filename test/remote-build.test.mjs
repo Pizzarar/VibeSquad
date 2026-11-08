@@ -46,7 +46,9 @@ describe("R2-3 static remote build and Pages workflow", () => {
     assert.ok(jsFiles.length >= 1, "at least one JS bundle in dist-remote/assets/");
 
     const bundle = jsFiles.map((f) => readFileSync(join(assetsDir, f), "utf8")).join("\n");
-    assert.match(bundle, /vs\.remote`,[A-Za-z0-9_$]+=\(\(\)=>\{try\{return!0\}/, "BUILD_REMOTE is baked in as true");
+    assert.match(bundle, /Pair with your PC/, "the native LAN/Meshnet pairing screen is in the bundle");
+    assert.match(bundle, /\/pair\?/, "pairing redeems the server's /pair?code= link");
+    assert.doesNotMatch(bundle, /VITE_VS_REMOTE/, "BUILD_REMOTE is replaced at build time, not read at runtime");
 
     for (const forbidden of ["C:\\Users\\", "/home/", "local-token", "daemon-password", homedir()]) {
       if (!forbidden) continue;

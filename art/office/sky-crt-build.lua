@@ -1,5 +1,5 @@
 -- H1e: the thin sky-CRT bezel, one per theme, built as a 9-slice for CSS border-image:
--- art/office/sky-crt.aseprite, 10x12, INDEXED (P0). Supersedes the C2 phase 2 56x52 chunky case (Aub: "waaaay thinner
+-- art/office/sky-crt.aseprite, 10x12, INDEXED (P0). Supersedes the C2 phase 2 56x52 chunky case (owner: "waaaay thinner
 -- tv/monitor bezels for the gods ... the screen must be the star").
 --   slice top 3 / right 3 / bottom 5 / left 3 (public/office/sky-crt.json), drawn at scale 3 -> 9 CSS px on the top and
 --   sides, a 15 CSS px chin. Corners are fixed; every edge row/column is constant along its run, so round/stretch tile

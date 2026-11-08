@@ -1,0 +1,3 @@
+f249e826538d9f0d8e6fa2efdeff5adaaf9e0960 *public/office/face-riffbot-dark.png
+395a4d71bca3f15a2f2aa2e8d929785cde2ebb59 *public/office/face-riffbot-light.png
+97f55e1cb3fdbbce32e4b93e6c9649ead3e6537f *art/office/faces/riffbot.aseprite
