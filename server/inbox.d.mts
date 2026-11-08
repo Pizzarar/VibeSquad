@@ -1,5 +1,5 @@
 export type InboxScope = "art" | "mechanic" | "plugin" | "UI" | "infra" | "docs" | "other";
-export type InboxStatus = "parked" | "handed-off" | "archived";
+export type InboxStatus = "parked" | "handed-off" | "archived" | "accepted" | "rejected";
 
 export interface InboxCard {
   id: string;
@@ -21,6 +21,8 @@ export interface InboxCard {
 
 export const INBOX_SCOPES: InboxScope[];
 export const INBOX_LANES: string[];
+export const INBOX_STATUSES: InboxStatus[];
+export function significantTokenOverlap(textA: string, textB: string): { shared: number; jaccard: number };
 
 export function getInboxPath(baseHome?: string): string;
 export function loadTeamsForInbox(rootDir?: string): any[];

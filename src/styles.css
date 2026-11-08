@@ -4003,44 +4003,39 @@ html, body, #root { overflow-x: hidden; }
   border: 1px solid var(--pink-t);
   padding: var(--sp-2, 8px);
 }
-.usage-review-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--sp-3, 12px);
-}
-@media (max-width: 800px) { .usage-review-grid { grid-template-columns: 1fr; } }
-.usage-review-card {
-  background: var(--well);
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--cyan-t);
-  padding: var(--sp-3, 12px);
-  min-width: 0;
-}
-.usage-review-card.usage-review-opus { border-left-color: var(--violet-t); }
-.usage-review-card.usage-review-gemini { border-left-color: var(--cyan-t); }
-.usage-review-card-head {
-  font-family: var(--arcade);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  margin-bottom: var(--sp-2, 8px);
-}
-.usage-review-card.usage-review-opus .usage-review-card-head { color: var(--violet-t); }
-.usage-review-card.usage-review-gemini .usage-review-card-head { color: var(--cyan-t); }
-.usage-review-empty { color: var(--violet-t); font-size: 12px; }
-.usage-review-bullets {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-1, 4px);
-  font-size: 12px;
-  line-height: 1.45;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.usage-review-bullets li { padding: 0; }
+.usage-collapse { border: 1px solid var(--line); background: var(--well); padding: var(--sp-2, 8px) var(--sp-3, 12px); }
+.usage-collapse[open] { display: flex; flex-direction: column; gap: var(--sp-2, 8px); }
+.usage-collapse-head { cursor: pointer; font-family: var(--arcade); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.usage-collapse-head:hover, .usage-collapse-head:focus-visible { color: var(--cyan-t); }
+.usage-bug-inbox { display: flex; flex-direction: column; gap: var(--sp-3, 12px); }
+.usage-inbox-tabs { display: flex; flex-wrap: wrap; gap: var(--sp-2, 8px); }
+.usage-inbox-tab { background: var(--well); border: 1px solid var(--line); color: var(--muted); padding: var(--sp-1, 4px) var(--sp-3, 12px); font: inherit; font-size: 12px; cursor: pointer; }
+.usage-inbox-tab:hover, .usage-inbox-tab:focus-visible { border-color: var(--cyan-t); color: var(--cyan-t); }
+.usage-inbox-tab.is-active { border-color: var(--cyan-t); color: var(--cyan-t); background: var(--panel-hi); }
+.usage-inbox-count { font-variant-numeric: tabular-nums; color: var(--text); }
+.usage-inbox-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-2, 8px); }
+.usage-inbox-row { background: var(--well); border: 1px solid var(--line); border-left: 3px solid var(--cyan-t); padding: var(--sp-3, 12px); display: flex; flex-direction: column; gap: var(--sp-2, 8px); min-width: 0; }
+.usage-inbox-row[data-status="accepted"] { border-left-color: var(--mint-t); }
+.usage-inbox-row[data-status="closed"] { border-left-color: var(--muted); opacity: 0.75; }
+.usage-inbox-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2, 8px); }
+.usage-inbox-badge { padding: 0 var(--sp-2, 8px); border: 1px solid var(--line); border-radius: 999px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.usage-inbox-status-queue { color: var(--cyan-t); border-color: var(--cyan-t); }
+.usage-inbox-status-accepted { color: var(--mint-t); border-color: var(--mint-t); }
+.usage-inbox-status-closed { color: var(--muted); }
+.usage-inbox-src-opus { color: var(--violet-t); border-color: var(--violet-t); }
+.usage-inbox-src-gemini { color: var(--cyan-t); border-color: var(--cyan-t); }
+.usage-inbox-src-bug { color: var(--amber-t); border-color: var(--amber-t); }
+.usage-inbox-scope { text-transform: none; }
+.usage-inbox-note { word-break: break-word; }
+.usage-inbox-lane-bug { color: var(--amber-t); border-color: var(--amber-t); }
+.usage-inbox-lane-perfection { color: var(--mint-t); border-color: var(--mint-t); }
+.usage-inbox-lane-other { color: var(--muted); }
+.usage-inbox-text { font-size: 12px; line-height: 1.45; word-break: break-word; }
+.usage-inbox-actions { display: flex; gap: var(--sp-2, 8px); }
+.usage-inbox-btn { background: var(--panel-hi); border: 1px solid var(--line); padding: var(--sp-1, 4px) var(--sp-3, 12px); font: inherit; font-size: 11px; cursor: pointer; }
+.usage-inbox-btn:disabled { opacity: 0.6; cursor: default; }
+.usage-inbox-accept { color: var(--mint-t); border-color: var(--mint-t); }
+.usage-inbox-reject { color: var(--pink-t); border-color: var(--pink-t); }
 .usage-review-err { color: var(--pink-t); }
 .squad-home-tile { display: flex; flex-direction: column; gap: 10px; padding: 14px; text-align: left; color: inherit; background: var(--panel, var(--bg)); border: 1px solid var(--line, #232846); border-radius: 10px; cursor: pointer; min-width: 0; }
 .squad-home-tile:hover, .squad-home-tile:focus-visible { border-color: var(--cyan); }
@@ -5370,7 +5365,7 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 .pin-rail-active-head .pin-menu { display: inline-flex; align-items: center; }
 
 /* ---- U2 item 6: Usage Dashboard (src/UsageDashboard.tsx). Chart fills keep the P0 accents, no glow. ---- */
-.squads-dashboard, .usage-limit, .usage-roles, .usage-loops, .usage-storms, .usage-review, .usage-review-card {
+.squads-dashboard, .usage-limit, .usage-roles, .usage-loops, .usage-storms, .usage-review {
   background-color: var(--panel);
   background-image: var(--cap-imgs);
   background-size: var(--cap-size);
@@ -5565,7 +5560,7 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 }
 .modal, .idea-inbox, .ts-team, .ws-row, .pin-menu-list, .ctx-menu, .cmd-palette, .shortcut-modal, .daemon-disconnect-card,
 .drawer-features-menu, .drawer-sandbox-panel, .drawer-config-popover, .card, .drawer-head, .sidebar-legend, .pin-rail-tile,
-.brainstorm-ctx-bar, .squads-dashboard, .usage-limit, .usage-roles, .usage-loops, .usage-storms, .usage-review, .usage-review-card {
+.brainstorm-ctx-bar, .squads-dashboard, .usage-limit, .usage-roles, .usage-loops, .usage-storms, .usage-review {
   background-color: var(--panel-hi); image-rendering: pixelated;
 }
 .handoff-panel, .pin-tile, .pin-rail-active-buddy {
@@ -5583,7 +5578,7 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 }
 .ts-team, .ws-row, .handoff-panel, .pin-menu-list, .ctx-menu, .drawer-features-menu, .drawer-sandbox-panel,
 .drawer-config-popover, .pin-rail-active-buddy, .pin-rail-tile, .team-head, .card, .squads-dashboard,
-.usage-limit, .usage-roles, .usage-loops, .usage-storms, .usage-review, .usage-review-card {
+.usage-limit, .usage-roles, .usage-loops, .usage-storms, .usage-review {
   border-image: var(--u3-panel-frame) 8 / calc(var(--u3-px) * 8) / 0 repeat; box-shadow: none; image-rendering: pixelated;
 }
 .card.card-lead, .card.card-secondary-lead.card-lead-needs-you { border-image-source: var(--u3-panel-frame-pink); }

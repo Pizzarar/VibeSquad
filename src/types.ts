@@ -18,7 +18,7 @@ export {
 } from "./teams";
 
 export type InboxScope = "art" | "mechanic" | "plugin" | "UI" | "infra" | "docs" | "other";
-export type InboxStatus = "parked" | "handed-off" | "archived";
+export type InboxStatus = "parked" | "handed-off" | "archived" | "accepted" | "rejected";
 
 export interface InboxCard {
   id: string;             // e.g. "idea-1" or short id

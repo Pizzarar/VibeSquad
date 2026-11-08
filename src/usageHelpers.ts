@@ -1,5 +1,7 @@
 // Pure helpers for UsageDashboard (.ts so node tests can import them).
 
+import type { InboxCard } from "./types";
+
 export type LimitRow = {
   provider: string;
   window: string;
@@ -216,12 +218,21 @@ export type ProfileView = {
 
 const IMPLEMENTER_ROLES = new Set(["worker", "implementer"]);
 
+const RAW_PROFILE_ID = /^agent_profile_/i;
+export const ORPHAN_PROFILE_LABEL = "(unlabelled profile)";
+
+/** Raw `agent_profile_*` ids (profile deleted or never named) collapse to one readable label. */
+export function humanizeProfile(profile: string): string {
+  return RAW_PROFILE_ID.test(profile || "") ? ORPHAN_PROFILE_LABEL : profile;
+}
+
 export function buildProfiles(d: UsageData): ProfileView[] {
-  return (d.byProfile ?? []).map((p) => {
+  const out = new Map<string, ProfileView>();
+  for (const p of d.byProfile ?? []) {
     const total = (p.workingMs ?? 0) + (p.idleMs ?? 0);
-    return {
-      key: `${p.provider}|${p.profile}|${p.role}`,
-      profile: p.profile,
+    const view: ProfileView = {
+      key: `${p.provider}|${humanizeProfile(p.profile)}|${p.role}`,
+      profile: humanizeProfile(p.profile),
       provider: p.provider,
       role: p.role,
       runs: p.runs ?? 0,
@@ -234,7 +245,116 @@ export function buildProfiles(d: UsageData): ProfileView[] {
       fixRate: p.fixAfterMergeRate ?? 0,
       workPct: total > 0 ? (p.workingMs ?? 0) / total : null,
     };
-  });
+    const prev = out.get(view.key);
+    if (!prev) {
+      out.set(view.key, view);
+      continue;
+    }
+    // Folded orphan ids: combine with run/unit weights so the merged row stays honest.
+    const runs = prev.runs + view.runs;
+    const units = prev.mergedUnits + view.mergedUnits;
+    const wRun = (a: number, b: number) => (runs > 0 ? (a * prev.runs + b * view.runs) / runs : 0);
+    const wUnit = (a: number, b: number) => (units > 0 ? (a * prev.mergedUnits + b * view.mergedUnits) / units : 0);
+    const cost = prev.costPerMergedUnit === null && view.costPerMergedUnit === null ? null : wUnit(prev.costPerMergedUnit ?? 0, view.costPerMergedUnit ?? 0);
+    const work = prev.workPct === null ? view.workPct : view.workPct === null ? prev.workPct : (prev.workPct + view.workPct) / 2;
+    out.set(view.key, {
+      ...prev,
+      runs,
+      turns: prev.turns + view.turns,
+      avgTurnsPerRun: runs > 0 ? (prev.turns + view.turns) / runs : 0,
+      passRate: wRun(prev.passRate, view.passRate),
+      mergedUnits: units,
+      avgReviewRounds: wUnit(prev.avgReviewRounds, view.avgReviewRounds),
+      costPerMergedUnit: cost,
+      fixRate: wUnit(prev.fixRate, view.fixRate),
+      workPct: work,
+    });
+  }
+  return [...out.values()];
+}
+
+// ---- usa-16: Bug Chaser inbox view (pure; cards come from IdeaInbox's useInboxCards)
+
+export type InboxFilter = "all" | "queue" | "accepted" | "closed";
+export const INBOX_FILTERS: { key: InboxFilter; label: string }[] = [
+  { key: "all", label: "All sent" },
+  { key: "queue", label: "In queue" },
+  { key: "accepted", label: "Accepted / in flight" },
+  { key: "closed", label: "Rejected / closed" },
+];
+export const BUG_CHASER_LANE = "bug-chaser";
+export const PERFECTION_LANE = "perfection";
+
+/** Bucket a card for the filter pills. Closed wins over accepted; accepted wins over queue. */
+export function inboxBucket(c: Pick<InboxCard, "status" | "topicAgentId">): Exclude<InboxFilter, "all"> {
+  if (c.status === "rejected" || c.status === "archived") return "closed";
+  if (c.status === "accepted" || c.status === "handed-off" || c.topicAgentId) return "accepted";
+  return "queue";
+}
+
+/** Triage inbox scope: bug-chaser or perfection lane cards, plus any card a usage review sent. */
+export function isTriageCard(c: Pick<InboxCard, "laneId" | "source">): boolean {
+  const lane = String(c.laneId ?? "").toLowerCase();
+  return lane === BUG_CHASER_LANE || lane === PERFECTION_LANE || Boolean(c.source?.startsWith("usage-review"));
+}
+
+export function bugInboxCards(cards: InboxCard[]): InboxCard[] {
+  return cards.filter(isTriageCard).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+}
+
+export type LaneBadge = { key: string; label: string };
+export function inboxLaneBadge(laneId: string | undefined): LaneBadge {
+  const lane = String(laneId ?? "").toLowerCase();
+  if (lane === BUG_CHASER_LANE) return { key: "bug", label: "Bug" };
+  if (lane === PERFECTION_LANE) return { key: "perfection", label: "Perfection" };
+  return { key: "other", label: lane || "other" };
+}
+
+export function inboxCounts(cards: InboxCard[]): Record<InboxFilter, number> {
+  const n: Record<InboxFilter, number> = { all: cards.length, queue: 0, accepted: 0, closed: 0 };
+  for (const c of cards) n[inboxBucket(c)] += 1;
+  return n;
+}
+
+export function filterInbox(cards: InboxCard[], f: InboxFilter): InboxCard[] {
+  return f === "all" ? cards : cards.filter((c) => inboxBucket(c) === f);
+}
+
+export type SourceBadge = { key: "opus" | "gemini" | "bug"; label: string };
+export function inboxSourceBadge(source: string | undefined): SourceBadge {
+  const s = (source ?? "").toLowerCase();
+  if (s === "usage-review:opus") return { key: "opus", label: "Opus" };
+  if (s === "usage-review:gemini") return { key: "gemini", label: "Gemini" };
+  return { key: "bug", label: "Bug" };
+}
+
+export function inboxStatusLabel(c: Pick<InboxCard, "status" | "topicAgentId">): string {
+  const b = inboxBucket(c);
+  return b === "closed" ? (c.status === "rejected" ? "Rejected" : "Closed") : b === "accepted" ? "In flight" : "Queued";
+}
+
+export function inboxIdLabel(id: string): string {
+  return `#${id}`;
+}
+
+const money = (n: number) => `$${n >= 100 ? n.toFixed(0) : n.toFixed(2)}`;
+
+export function profileSummary(profiles: { mergedUnits: number }[]): string {
+  const merged = profiles.reduce((s, p) => s + p.mergedUnits, 0);
+  return `Implementer / profile comparison · ${profiles.length} profile${profiles.length === 1 ? "" : "s"} · ${merged} merged`;
+}
+
+export function workflowSummary(rows: { units: number; costUsd?: number }[]): string {
+  const units = rows.reduce((s, w) => s + w.units, 0);
+  const cost = rows.reduce((s, w) => s + (w.costUsd ?? 0), 0);
+  return `Workflow era · ${rows.length} mode${rows.length === 1 ? "" : "s"} · ${units} units · ${money(cost)}`;
+}
+
+/** One-line rollups for the collapsed detail tables. */
+export function laneSummary(rows: { costUsd: number; merged: number }[]): string {
+  const cost = rows.reduce((s, r) => s + r.costUsd, 0);
+  const merged = rows.reduce((s, r) => s + r.merged, 0);
+  return `Lane breakdown · ${rows.length} lane${rows.length === 1 ? "" : "s"} · ${money(cost)} · ${merged} merged`;
 }
 
 /** Implementers first, then by merged units desc, then name. */

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { cohortValueText, COHORT_METRICS, deltaText, deltaTrend, floorSegments, lowCostCoverage, sortWorkflows, speedupText, tokText, usdText } from "../src/usageHelpers.ts";
-import { buildProfiles, buildRows, dur, etaText, foldRoles, pctText, relTime, reviewBullets, sortProfiles, sortRows, splitBullets, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workIdlePct } from "../src/usageHelpers.ts";
+import { bugInboxCards, inboxLaneBadge, isTriageCard, buildProfiles, buildRows, filterInbox, humanizeProfile, inboxBucket, inboxCounts, inboxSourceBadge, laneSummary, profileSummary, workflowSummary, dur, etaText, foldRoles, pctText, relTime, reviewBullets, sortProfiles, sortRows, splitBullets, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workIdlePct } from "../src/usageHelpers.ts";
 
 const st = (turns, costUsd, i, o) => ({ turns, costUsd, inputTokens: i, outputTokens: o, avgTokensPerTurn: turns ? Math.round((i + o) / turns) : 0 });
 
@@ -264,4 +264,59 @@ test("lowCostCoverage / sortWorkflows", () => {
   const rows = [{ workflowMode: "b", units: 1 }, { workflowMode: "a", units: 1 }, { workflowMode: "z", units: 5 }];
   assert.deepEqual(sortWorkflows(rows).map((r) => r.workflowMode), ["z", "a", "b"]);
   assert.deepEqual(sortWorkflows(undefined), []);
+});
+
+test("humanizeProfile + buildProfiles fold raw agent_profile_* ids into one row", () => {
+  const base = { provider: "claude", role: "worker", workingMs: 0, idleMs: 0, passRate: 1, avgReviewRounds: 2, costPerMergedUnit: 2, fixAfterMergeRate: 0 };
+  const d = {
+    limits: [], lanes: [], byRole: [],
+    byProfile: [
+      { ...base, profile: "agent_profile_aaa", runs: 1, turns: 10, mergedUnits: 1 },
+      { ...base, profile: "agent_profile_bbb", runs: 3, turns: 20, mergedUnits: 3, costPerMergedUnit: 4 },
+      { ...base, profile: "Implement - Sonnet", runs: 1, turns: 5, mergedUnits: 1 },
+    ],
+  };
+  assert.equal(humanizeProfile("agent_profile_xyz"), "(unlabelled profile)");
+  assert.equal(humanizeProfile("Lead"), "Lead");
+  const rows = buildProfiles(d);
+  assert.equal(rows.length, 2);
+  const orphan = rows.find((r) => r.profile === "(unlabelled profile)");
+  assert.equal(orphan.runs, 4);
+  assert.equal(orphan.turns, 30);
+  assert.equal(orphan.mergedUnits, 4);
+  assert.equal(orphan.costPerMergedUnit, 3.5);
+});
+
+test("bug inbox helpers: lane filter, buckets, counts, source badges", () => {
+  const mk = (id, status, extra = {}) => ({ id, text: id, title: id, teamId: "vibesquad", laneId: "bug-chaser", scope: "infra", status, createdAt: `2026-11-0${id.length}T00:00:00Z`, updatedAt: "", ...extra });
+  const cards = [
+    mk("a", "parked", { source: "usage-review:opus" }),
+    mk("bb", "parked", { topicAgentId: "ag1", source: "usage-review:gemini" }),
+    mk("ccc", "accepted"),
+    mk("dddd", "rejected"),
+    mk("eeeee", "archived"),
+    mk("f", "handed-off"),
+    { ...mk("x", "parked"), laneId: "other-lane" },
+  ];
+  const bug = bugInboxCards(cards);
+  assert.equal(bug.length, 6, "other lanes excluded");
+  assert.equal(isTriageCard({ laneId: "perfection" }), true);
+  assert.equal(isTriageCard({ laneId: "ui-lab", source: "usage-review:opus" }), true, "usage-review source included from any lane");
+  assert.equal(isTriageCard({ laneId: "ui-lab", source: "cli" }), false);
+  assert.deepEqual(inboxLaneBadge("bug-chaser"), { key: "bug", label: "Bug" });
+  assert.deepEqual(inboxLaneBadge("Perfection"), { key: "perfection", label: "Perfection" });
+  assert.deepEqual(inboxCounts(bug), { all: 6, queue: 1, accepted: 3, closed: 2 });
+  assert.equal(inboxBucket(cards[1]), "accepted", "topicAgentId counts as in flight");
+  assert.deepEqual(filterInbox(bug, "closed").map((c) => c.id).sort(), ["dddd", "eeeee"]);
+  assert.equal(filterInbox(bug, "all").length, 6);
+  assert.deepEqual(inboxSourceBadge("usage-review:opus"), { key: "opus", label: "Opus" });
+  assert.equal(inboxSourceBadge("usage-review:gemini").key, "gemini");
+  assert.equal(inboxSourceBadge("cli").key, "bug");
+  assert.equal(inboxSourceBadge(undefined).key, "bug");
+});
+
+test("collapsed-table rollup summaries", () => {
+  assert.equal(laneSummary([{ costUsd: 1.5, merged: 2 }, { costUsd: 2, merged: 1 }]), "Lane breakdown · 2 lanes · $3.50 · 3 merged");
+  assert.equal(profileSummary([{ mergedUnits: 4 }]), "Implementer / profile comparison · 1 profile · 4 merged");
+  assert.equal(workflowSummary([{ units: 3, costUsd: 120 }]), "Workflow era · 1 mode · 3 units · $120");
 });

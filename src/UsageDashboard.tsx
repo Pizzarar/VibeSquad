@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, floorSegments, lowCostCoverage, sortWorkflows, speedupText, tokText, USAGE_EXPORT_MD_URL, usdText, foldRoles, pctText, relTime, reviewBullets, sortProfiles, sortRows, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workIdlePct, type LimitRow, type ReviewResult, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
+import { bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxLaneBadge, inboxSourceBadge, inboxStatusLabel, INBOX_FILTERS, laneSummary, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, USAGE_EXPORT_MD_URL, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
+import { refreshInboxCards, triageInbox, useInboxCards } from "./IdeaInbox";
 
 // Usage dashboard for the Squads screen (docs/PLAN_USAGE_DASHBOARD.md step 4).
 // Data: GET /__vibesquad/providers/usage (server/providers-catalog.mjs getUsage).
@@ -36,19 +37,75 @@ async function postUsageReview(body: { interval?: string; runNow?: boolean }): P
   return j;
 }
 
-function ReviewCard({ label, result, accent }: { label: string; result?: ReviewResult; accent: string }) {
-  const lines = reviewBullets(result);
-  const failed = Boolean(result && !result.ok);
+/** Triage inbox: bug-chaser / perfection cards and usage-review bullets with 1-click Accept / Reject. */
+function BugInbox({ now }: { now: number }) {
+  const all = useInboxCards();
+  const cards = useMemo(() => bugInboxCards(all), [all]);
+  const [filter, setFilter] = useState<InboxFilter>("all");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { void refreshInboxCards(); }, []);
+  const counts = inboxCounts(cards);
+  const shown = filterInbox(cards, filter);
+  const triage = async (cardId: string, status: "accepted" | "rejected") => {
+    setBusy(cardId);
+    setErr(null);
+    try {
+      await triageInbox({ action: "update", cardId, patch: { status } });
+    } catch (e) {
+      setErr(String((e as Error)?.message ?? e));
+    } finally {
+      setBusy(null);
+    }
+  };
   return (
-    <div className={`usage-review-card ${accent}`} data-testid={`usage-review-${label.toLowerCase()}`}>
-      <div className="usage-review-card-head">{label}</div>
-      {lines.length === 0 ? (
-        <div className="usage-review-empty">no review yet</div>
+    <div className="usage-bug-inbox" data-testid="usage-bug-inbox">
+      <div className="usage-inbox-tabs" role="tablist" aria-label="Bug Chaser inbox filter">
+        {INBOX_FILTERS.map((f) => (
+          <button
+            key={f.key}
+            type="button"
+            role="tab"
+            aria-selected={filter === f.key}
+            className={`usage-inbox-tab${filter === f.key ? " is-active" : ""}`}
+            data-filter={f.key}
+            onClick={() => setFilter(f.key)}
+          >
+            {f.label} <span className="usage-inbox-count">{counts[f.key]}</span>
+          </button>
+        ))}
+      </div>
+      {err && <div className="usage-review-error small">{err}</div>}
+      {shown.length === 0 ? (
+        <div className="usage-empty muted small">{cards.length === 0 ? "no bug-chaser cards yet — review suggestions land here" : "nothing in this filter"}</div>
       ) : (
-        <ul className="usage-review-bullets">
-          {lines.map((ln, i) => (
-            <li key={i} className={failed ? "usage-review-err" : undefined}>{ln}</li>
-          ))}
+        <ul className="usage-inbox-list">
+          {shown.map((c) => {
+            const src = inboxSourceBadge(c.source);
+            const bucket = inboxBucket(c);
+            const lane = inboxLaneBadge(c.laneId);
+            const t = Date.parse(c.createdAt);
+            return (
+              <li key={c.id} className="usage-inbox-row" data-testid="usage-bug-inbox-row" data-status={bucket}>
+                <div className="usage-inbox-meta small">
+                  <span className={`usage-inbox-badge usage-inbox-status-${bucket}`}>{inboxStatusLabel(c)}</span>
+                  <span className={`usage-inbox-badge usage-inbox-src-${src.key}`}>{src.label}</span>
+                  <span className={`usage-inbox-badge usage-inbox-lane-${lane.key}`}>{lane.label}</span>
+                  <span className="usage-inbox-badge usage-inbox-scope">{c.scope}</span>
+                  <span className="muted">{inboxIdLabel(c.id)}</span>
+                  {Number.isFinite(t) && <span className="muted">{relTime(t, now)}</span>}
+                </div>
+                <div className="usage-inbox-text">{c.text}</div>
+                {c.summaryNote && <div className="usage-inbox-note small muted">{c.summaryNote}</div>}
+                {bucket === "queue" && (
+                  <div className="usage-inbox-actions">
+                    <button type="button" className="usage-inbox-btn usage-inbox-accept" disabled={busy === c.id} onClick={() => triage(c.id, "accepted")}>Accept</button>
+                    <button type="button" className="usage-inbox-btn usage-inbox-reject" disabled={busy === c.id} onClick={() => triage(c.id, "rejected")}>Reject</button>
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>
@@ -263,6 +320,8 @@ export function UsageDashboard() {
         )}
       </div>
 
+      <details className="usage-collapse" data-testid="usage-lane-collapse">
+      <summary className="usage-collapse-head">{laneSummary(rows)}</summary>
       <div className="usage-table-wrap">
         <table className="usage-table" data-testid="usage-lane-table">
           <thead>
@@ -301,10 +360,11 @@ export function UsageDashboard() {
           </tbody>
         </table>
       </div>
+      </details>
 
       {data.byProfile && (
-        <div className="usage-profiles">
-          <div className="usage-sub">Implementer / Profile comparison</div>
+        <details className="usage-collapse usage-profiles" data-testid="usage-profile-collapse">
+          <summary className="usage-collapse-head">{profileSummary(profiles)}</summary>
           {profiles.length === 0 ? (
             <div className="small muted">no profile data yet</div>
           ) : (
@@ -343,7 +403,7 @@ export function UsageDashboard() {
               </table>
             </div>
           )}
-        </div>
+        </details>
       )}
 
       {(data.cohorts || data.floor) && (
@@ -426,7 +486,8 @@ export function UsageDashboard() {
               </div>
             </div>
           )}
-          <div className="usage-sub">Workflow era</div>
+          <details className="usage-collapse" data-testid="usage-workflow-collapse">
+          <summary className="usage-collapse-head">{workflowSummary(workflows)}</summary>
           {workflows.length === 0 ? (
             <div className="small muted">no merged units tagged yet</div>
           ) : (
@@ -466,6 +527,7 @@ export function UsageDashboard() {
               </table>
             </div>
           )}
+          </details>
         </section>
       )}
 
@@ -491,10 +553,7 @@ export function UsageDashboard() {
           </div>
           <div className="usage-review-status small">{reviewStatus}</div>
           {reviewError && <div className="usage-review-error small">{reviewError}</div>}
-          <div className="usage-review-grid">
-            <ReviewCard label="Opus" accent="usage-review-opus" result={review.last?.opus} />
-            <ReviewCard label="Gemini" accent="usage-review-gemini" result={review.last?.gemini} />
-          </div>
+          <BugInbox now={now} />
         </section>
       )}
     </div>
