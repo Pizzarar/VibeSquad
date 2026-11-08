@@ -319,7 +319,28 @@ export const hasFaceMode = (faces: FacesModel | null, bot: FaceBot, mode: FaceMo
 // ── G7 virus takeover overlay (docs/PLAN_SKY_GODS_C2B.md): the Overlord's glitch front eats Riff's TV ──
 export const TAKEOVER_URL = (theme: SkyTheme) => `/office/takeover-${theme}.png`;
 export const TAKEOVER_JSON_URL = "/office/takeover.json";
+/** T1: takeover-label.json (@art): the sticker's size + anchor relative to the label chip's top-left, in CSS px. `{w,h,x?,y?}` or `{w,h,anchor:{x,y}}`; invalid/absent → no sticker (CSS scrawl). */
+export type TakeoverLabel = { w: number; h: number; x: number; y: number };
+export const TAKEOVER_LABEL_JSON_URL = "/office/takeover-label.json";
+export function validateTakeoverLabel(json: unknown): { ok: true; value: TakeoverLabel } | { ok: false; error: string } {
+  if (!json || typeof json !== "object") return { ok: false, error: "not an object" };
+  const o = json as Record<string, unknown>;
+  const size = o.size && typeof o.size === "object" ? (o.size as Record<string, unknown>) : o;
+  const anchor = o.anchor && typeof o.anchor === "object" ? (o.anchor as Record<string, unknown>) : o;
+  const { w, h } = size;
+  if (!posNum(w) || !posNum(h)) return { ok: false, error: "w/h must be > 0" };
+  const num = (n: unknown) => (n === undefined ? 0 : typeof n === "number" && Number.isFinite(n) ? n : NaN);
+  const x = num(anchor.x), y = num(anchor.y);
+  if (Number.isNaN(x) || Number.isNaN(y)) return { ok: false, error: "bad anchor" };
+  return { ok: true, value: { w, h, x, y } };
+}
 export type TakeoverModel = { cell: { w: number; h: number }; fps: number; frames: { x: number; y: number }[] };
+export const TAKEOVER_LABEL_URL = (theme: SkyTheme) => `/office/takeover-label-${theme}.png`;
+/** Style for the label sticker overlay: the chip box (inset 0) unless takeover.json gives a `label` box. */
+export const takeoverLabelStyle = (label: TakeoverLabel | null | undefined, url: string): Record<string, string | number> =>
+  label
+    ? { backgroundImage: `url(${url})`, left: label.x, top: label.y, width: label.w, height: label.h, right: "auto", bottom: "auto" }
+    : { backgroundImage: `url(${url})` };
 const posNum = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n > 0;
 const frameNum = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0;
 /**
@@ -340,7 +361,8 @@ export function validateTakeover(json: unknown): { ok: true; value: TakeoverMode
     else if (f && typeof f === "object" && frameNum((f as { x?: unknown }).x) && frameNum((f as { y?: unknown }).y)) out.push({ x: (f as { x: number }).x, y: (f as { y: number }).y });
     else return { ok: false, error: "bad frame" };
   }
-  return { ok: true, value: { cell: { w, h }, fps, frames: out } };
+  const value: TakeoverModel = { cell: { w, h }, fps, frames: out };
+  return { ok: true, value };
 }
 /** Whole-overlay length in ms. */
 export const takeoverDurationMs = (m: Pick<TakeoverModel, "fps" | "frames">): number => (m.frames.length * 1000) / m.fps;

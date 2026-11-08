@@ -25,7 +25,10 @@ import {
   validateSkyCrt,
   validateTakeover,
   type SkyCrtModel,
+  type TakeoverLabel,
   type TakeoverModel,
+  TAKEOVER_LABEL_JSON_URL,
+  validateTakeoverLabel,
 } from "./skyZonesLogic";
 
 export type Theme = "dark" | "light";
@@ -151,6 +154,9 @@ export const useSkyCrtModel = (): SkyCrtModel | null => useJsonModel(SKY_CRT_JSO
 
 /** takeover.json (G7), loaded once; missing/invalid → null (the CSS dissolve plays instead). */
 export const useTakeoverModel = (): TakeoverModel | null => useJsonModel(TAKEOVER_JSON_URL, validateTakeover);
+
+/** takeover-label.json (T1, @art), loaded once; missing/invalid → null (no sticker; the CSS scrawl plays). */
+export const useTakeoverLabelModel = (): TakeoverLabel | null => useJsonModel(TAKEOVER_LABEL_JSON_URL, validateTakeoverLabel);
 
 /**
  * G7 overlay clock: steps through `n` frames at `fps` while `expanded`, holds the last, and runs back down on collapse.

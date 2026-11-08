@@ -5,12 +5,22 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { DrawerSlot } from "./AgentPanes";
 import type { Pin } from "./pins";
-import { NO_OVERLORD_TEXT, SKY_COLUMNS, SKY_FRAME_URL, SKY_POPOVER_SELECTOR, SKY_WALL_URL, SKY_URL, TAKEOVER_FALLBACK, TAKEOVER_FALLBACK_MS, TAKEOVER_URL, faceBg, faceContain, hasFaceMode, skyAssets, skyEffectiveOpen, skyEscCloses, skyExit, skyFaceClick, skyLeftBot, skyOutsideCloses, skyRiffMode, skyWallFallbackStyle, skyWallStyle, skyZonesFor, takeoverLanded, takeoverVisible, type SkyCan, type SkyOpen, type SkyZone, type TakeoverModel } from "./skyZonesLogic";
+import { NO_OVERLORD_TEXT, SKY_COLUMNS, SKY_FRAME_URL, SKY_POPOVER_SELECTOR, SKY_WALL_URL, SKY_URL, TAKEOVER_FALLBACK, TAKEOVER_FALLBACK_MS, TAKEOVER_LABEL_URL, TAKEOVER_URL, faceBg, faceContain, hasFaceMode, skyAssets, skyEffectiveOpen, skyEscCloses, skyExit, skyFaceClick, skyLeftBot, skyOutsideCloses, skyRiffMode, skyWallFallbackStyle, skyWallStyle, skyZonesFor, takeoverLabelStyle, takeoverLanded, takeoverVisible, type SkyCan, type SkyOpen, type SkyZone, type TakeoverLabel, type TakeoverModel } from "./skyZonesLogic";
 import type { FaceBot, FaceMode } from "./squadFloorLogic";
 import type { TeamView } from "./teams";
-import { useBotFace, useDpr, useFacesModel, useImageOk, usePrefersReducedMotion, useSkyCrtModel, useTakeoverClock, useTakeoverModel, useTheme } from "./useBotFace";
+import { useBotFace, useDpr, useFacesModel, useImageOk, usePrefersReducedMotion, useSkyCrtModel, useTakeoverClock, useTakeoverLabelModel, useTakeoverModel, useTheme } from "./useBotFace";
 
 const LABEL: Record<FaceBot, string> = { riffbot: "RiffBot", overlord: "Overlord" };
+
+/** G7 overlay state for Riff's TV: the sheet (only when takeover.json AND the theme PNG load) and its clock. Lives in Zone so the label scrawl (T1) shares the same clock as the face overlay. */
+function useTakeoverState(isRiff: boolean, takeover: TakeoverModel | null, expanded: boolean) {
+  const theme = useTheme();
+  const reduced = usePrefersReducedMotion();
+  const sheetOk = useImageOk(isRiff && takeover ? TAKEOVER_URL(theme) : null);
+  const sheet = sheetOk ? takeover : null;
+  const clock = useTakeoverClock(expanded && isRiff, sheet?.fps ?? TAKEOVER_FALLBACK.fps, sheet?.frames.length ?? 0, reduced);
+  return { sheet, clock };
+}
 
 /** G6-fix2: the bot's whole face, as big as an integer scale fits (contain, never cropped), centred on a per-bot gutter colour. */
 function ZoneFace({
@@ -18,28 +28,22 @@ function ZoneFace({
   lander,
   faces,
   force,
-  takeover,
+  tks,
   expanded,
-  onShown,
 }: {
   zone: SkyZone;
   /** Riff's TV only (G8f): the Overlord's zone, whose face this TV ends on once the takeover has landed. */
   lander?: SkyZone;
   faces: ReturnType<typeof useFacesModel>;
   force: FaceMode | null;
-  /** Riff only (G7): the overlay sheet when takeover.json + the theme PNG both load; null → the CSS dissolve. */
-  takeover?: TakeoverModel | null;
+  /** Riff only (G7): the overlay sheet + clock (sheet null → the CSS dissolve). */
+  tks: ReturnType<typeof useTakeoverState>;
   expanded?: boolean;
-  /** Reports the bot whose face is on screen (the name tag follows it). */
-  onShown?: (bot: FaceBot) => void;
 }) {
   const theme = useTheme();
   const reduced = usePrefersReducedMotion();
   const isRiff = zone.bot === "riffbot";
-  // G7: the overlay clock. The sheet is used only when json AND the theme PNG are present (same skip-if-absent as G4).
-  const sheetOk = useImageOk(isRiff && takeover ? TAKEOVER_URL(theme) : null);
-  const sheet = sheetOk ? takeover : null;
-  const clock = useTakeoverClock(!!expanded && isRiff, sheet?.fps ?? TAKEOVER_FALLBACK.fps, sheet?.frames.length ?? 0, reduced);
+  const { sheet, clock } = tks;
   const showSheet = !!sheet && takeoverVisible(clock.pos, !!expanded, reduced);
   // G8f: the takeover is the transition. Landed (fully in) = the Overlord's face, normal talk/idle; Riff keeps playing
   // scared underneath until then, and again from the first reverse frame until the overlay is gone, then goes idle.
@@ -61,7 +65,6 @@ function ZoneFace({
   const landed = isRiff && !!lander && (sheet ? takeoverLanded(clock.pos, !!expanded, sheet.frames.length, reduced) : reduced ? !!expanded : fb.landed);
   const shown = skyLeftBot(landed);
   const shownZone = landed && lander ? lander : zone;
-  useEffect(() => onShown?.(shown), [shown, onShown]);
   const holdScared = !landed && showSheet && !force && hasFaceMode(faces, "riffbot", "scared");
   const face = useBotFace(shown, shownZone.pose ? { pose: shownZone.pose } : null, faces, { theme, reduced, force: landed ? null : (force ?? (holdScared ? "scared" : null)) });
   // Cell size comes from faces.json (never hardcoded); until it loads, a blank stage.
@@ -128,6 +131,7 @@ function Zone({
   panel = false,
   force = null,
   takeover = null,
+  labelModel = null,
   taken = false,
   clickable = false,
   isOpen = false,
@@ -147,6 +151,8 @@ function Zone({
   force?: FaceMode | null;
   /** G7 overlay sheet model (Riff's TV only). */
   takeover?: TakeoverModel | null;
+  /** T1: takeover-label.json (size + anchor of the scrawl sticker); null → no sticker (CSS scrawl). */
+  labelModel?: TakeoverLabel | null;
   /** The Overlord's takeover is on (this is Riff's TV): the overlay plays in, and reverses when it ends. */
   taken?: boolean;
   /** The TV's face is a button (open / close). */
@@ -166,9 +172,14 @@ function Zone({
   busy?: boolean;
 }) {
   const label = LABEL[zone.bot];
-  // The name tag follows the face on the TV: the left TV reads Overlord (violet) once his face has landed there.
-  const [landedBot, setLandedBot] = useState<FaceBot | null>(null);
-  const tag = !panel && landedBot ? landedBot : zone.bot;
+  // T1: Riff's TV label gets struck through with OVERLORD scrawled over it while the takeover is on (in with it, reversed when it ends).
+  const theme = useTheme();
+  const reduced = usePrefersReducedMotion();
+  const scrawl = !panel && zone.bot === "riffbot";
+  const tks = useTakeoverState(scrawl, takeover, taken);
+  const labelArt = useImageOk(scrawl && labelModel ? TAKEOVER_LABEL_URL(theme) : null);
+  // In with the takeover, reversed when it ends (same clock as the face overlay); reduced motion shows the end state at once.
+  const struck = scrawl && (reduced ? taken : takeoverVisible(tks.clock.pos, taken, reduced));
   openLabel ??= label;
   const off = zone.bot === "overlord" && !zone.agentId; // a closed Overlord keeps its zone (history + Resume)
   const idle = !panel && zone.bot === "riffbot" && !zone.agentId; // RiffBot not running: dimmed whole face + a bottom Spin Up strip
@@ -182,7 +193,7 @@ function Zone({
       aria-label={`${label} chat`}
       hidden={panel && !isOpen}
     >
-      {!panel && !off && <ZoneFace zone={zone} lander={lander} faces={faces} force={force} takeover={takeover} expanded={taken} onShown={setLandedBot} />}
+      {!panel && !off && <ZoneFace zone={zone} lander={lander} faces={faces} force={force} tks={tks} expanded={taken} />}
       {!panel && clickable && (
         <button
           type="button"
@@ -193,7 +204,10 @@ function Zone({
           onClick={onFace}
         />
       )}
-      <span className={`sky-crt-name${tag === "overlord" ? " is-overlord" : ""}`} data-testid={`sky-name-${zone.bot}${panel ? "-panel" : ""}`}>{LABEL[tag]}</span>
+      <span className={`sky-crt-name${struck ? " is-struck" : ""}${labelArt ? " has-art" : ""}${reduced ? " is-still" : ""}`} data-testid={`sky-name-${zone.bot}${panel ? "-panel" : ""}`} role={scrawl ? "img" : undefined} aria-label={scrawl ? (struck ? "Overlord (takeover)" : label) : undefined}>
+        <span className="sky-crt-name-text">{label}</span>
+        {scrawl && (labelArt ? <span className={`sky-label-scrawl is-art${struck ? " is-on" : ""}`} data-testid="sky-label-art" style={takeoverLabelStyle(labelModel, TAKEOVER_LABEL_URL(theme))} /> : <span className={`sky-label-scrawl${struck ? " is-on" : ""}`} data-testid="sky-label-scrawl" aria-hidden="true">OVERLORD</span>)}
+      </span>
       {panel && (
         <button type="button" className="sky-chat-close" data-testid={`sky-chat-close-${zone.bot}`} aria-label={`Close ${label} chat`} onClick={onClose}>
           ✕
@@ -261,6 +275,7 @@ export function SkyZones({
   const dpr = useDpr();
   const { skyUrl, frameStyle } = skyAssets(theme, { sky: useImageOk(SKY_URL(theme)), frame: useImageOk(SKY_FRAME_URL(theme)) }, crt, dpr);
   const takeover = useTakeoverModel();
+  const labelModel = useTakeoverLabelModel();
   const { hub } = zones;
   // G8c: the wall between the TVs. Art from sky-crt.json `wall` when its PNG loads, else the CSS ink seam. Absolute: takes no grid space.
   const wallUrl = crt?.wall ? SKY_WALL_URL(theme) : null;
@@ -309,7 +324,7 @@ export function SkyZones({
       data-open={open ?? "none"}
       style={{ ["--sky-cols" as string]: SKY_COLUMNS, ...(skyUrl ? { backgroundImage: `url(${skyUrl})` } : null) }}
     >
-      <Zone zone={zones.riffbot} lander={zones.overlord} faces={faces} frameStyle={frameStyle} force={skyRiffMode(open, hasFaceMode(faces, "riffbot", "scared"))} takeover={takeover} taken={open === "overlord"} clickable={clickable("riffbot")} isOpen={open !== null} openLabel={open ? LABEL[open] : undefined} onFace={() => onFace("riffbot")} onSuccessor={onSuccessor} onSpinUp={spinRiff} />
+      <Zone zone={zones.riffbot} lander={zones.overlord} faces={faces} frameStyle={frameStyle} force={skyRiffMode(open, hasFaceMode(faces, "riffbot", "scared"))} takeover={takeover} labelModel={labelModel} taken={open === "overlord"} clickable={clickable("riffbot")} isOpen={open !== null} openLabel={open ? LABEL[open] : undefined} onFace={() => onFace("riffbot")} onSuccessor={onSuccessor} onSpinUp={spinRiff} />
       <Zone zone={zones.overlord} faces={faces} frameStyle={frameStyle} clickable={clickable("overlord")} isOpen={open === "overlord"} onFace={() => onFace("overlord")} onSuccessor={onSuccessor} onSpinUp={spinOverlord} busy={overlordBusy} />
       <Zone panel zone={zones.riffbot} faces={faces} frameStyle={frameStyle} isOpen={open === "riffbot"} onClose={() => setOpen(skyExit)} onSuccessor={onSuccessor} onSpinUp={spinRiff} />
       <span className={`sky-wall${wallStyle ? " has-art" : ""}`} data-testid="sky-wall" aria-hidden="true" style={wallStyle ?? skyWallFallbackStyle(dpr)} />

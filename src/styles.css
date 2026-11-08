@@ -4783,7 +4783,15 @@ button.project-file-name:hover { text-decoration: underline; }
 .sky-takeover-fallback.is-play { animation: sky-takeover-dissolve 1230ms steps(8, end) both; }
 @keyframes sky-takeover-dissolve { 0% { clip-path: inset(0 0 0 100%); } 50% { clip-path: inset(0 0 0 0); } 100% { clip-path: inset(0 100% 0 0); } }
 .sky-crt-name { position: absolute; top: 8px; left: 12px; z-index: 2; font-family: var(--arcade); font-size: 13px; color: var(--cyan-t); letter-spacing: 0.04em; padding: 2px 8px; background: color-mix(in srgb, var(--bg) 70%, transparent); border: 1px solid var(--line); }
-.sky-zone-overlord .sky-crt-name, .sky-crt-name.is-overlord { color: var(--violet-t); }
+.sky-zone-overlord .sky-crt-name { color: var(--violet-t); }
+/* T1: while the takeover is on, Riff's label is struck through and OVERLORD is scrawled over it. Art sticker when takeover-label-<theme>.png loads, CSS scrawl otherwise. Reduced motion: end state, no transition. */
+.sky-crt-name { overflow: visible; }
+.sky-crt-name-text { position: relative; }
+.sky-crt-name.is-struck:not(.has-art) .sky-crt-name-text { text-decoration: line-through wavy; text-decoration-color: var(--pink); text-decoration-thickness: 3px; }
+.sky-label-scrawl { position: absolute; left: -2px; top: 50%; z-index: 1; font-family: var(--arcade); font-size: 15px; font-weight: 700; letter-spacing: 0.02em; color: var(--violet-t); text-shadow: 2px 2px 0 var(--bg), -1px -1px 0 var(--bg); white-space: nowrap; pointer-events: none; transform: translateY(-50%) rotate(-7deg) skewX(-8deg); clip-path: inset(0 100% 0 0); transition: clip-path 300ms steps(5, end); }
+.sky-label-scrawl.is-on { clip-path: inset(0 0 0 0); }
+.sky-label-scrawl.is-art { inset: 0; left: 0; top: 0; font-size: 0; transform: none; background-size: 100% 100%; background-repeat: no-repeat; image-rendering: pixelated; }
+.sky-crt-name.is-still .sky-label-scrawl { transition: none; }
 .sky-resume { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 10px; background: var(--well); border-bottom: 1px solid var(--line); }
 .sky-crt-body {
   position: absolute;
