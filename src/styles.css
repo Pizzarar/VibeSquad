@@ -5900,7 +5900,7 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 :root:root .btn.on:not(.ghost) { background: var(--cyan-fill); color: var(--on-cyan-fill) !important; text-shadow: none; }
 /* needs-you counts and hot/bad buttons: solid pink fill with on-fill ink (light pink-fill #b4377a + marble = 5.5:1) */
 :root:root :is(.badge.alert, [data-testid^="pin-needs-"], [data-testid^="squad-home-needs-"]) { background: var(--pink-fill); color: var(--on-pink-fill) !important; text-shadow: none; }
-:root:root :is(.btn.hot, .btn.bad):not(:disabled):not(.sky-zones *) { background: var(--pink-fill); color: var(--on-pink-fill); text-shadow: none; }
+:root:root :is(.btn.hot, .btn.bad):not(:disabled) { background: var(--pink-fill); color: var(--on-pink-fill); text-shadow: none; }
 /* plain confirm (Archive) and warn (Cancel & Resume) buttons */
 :root:root .btn.confirm:not(.danger):not(.warn):not(.armed):not(:disabled) { background: var(--cyan-fill); color: var(--on-cyan-fill); text-shadow: none; }
 :root:root :is(.btn.warn, .btn.confirm.warn):not(.armed):not(:disabled) { background: var(--amber); color: var(--on-amber); text-shadow: none; }
