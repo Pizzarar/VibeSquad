@@ -351,7 +351,7 @@ const Sidebar = memo(function Sidebar(props: {
         <img src="/vibesquad-mark-light.png" width={22} height={22} alt="" className="brand-mark brand-mark-light" />
         <div className="brand-text">
           <span>VIBESQUAD</span>
-          <span className="brand-sub">VAPOR OS // 199X</span>
+          <span className="brand-sub">VIBE OS // 199X</span>
         </div>
         <span className={`conn ${props.conn}`} title={props.connTitle} />
         {props.lanExposed && (

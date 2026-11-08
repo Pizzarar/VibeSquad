@@ -32,7 +32,7 @@ import { createAgentClient, readBrainstormSummary, writeBrainstormSummary } from
 import { getBackend, isRunnerId, listRunnerAgentsSync, readRunnerAgentSync, sharedRunnerBackend } from "../server/backend/index.mjs";
 import { callTool, createContext } from "../server/mcp/tools.mjs";
 import { bestOverlap, newPinBrief, slugLaneId, takenLaneIds, uniqueLaneId } from "../server/pin-ideas.mjs";
-import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "../server/teams-file.mjs";
+import { resolveTeamsFilePath as resolveSharedTeamsFilePath, teamsRevision, writeTeamsRegistry } from "../server/teams-file.mjs";
 import {
   UNASSIGNED_TEAM_ID,
   effectiveAgentRole as resolveEffectiveAgentRole,
@@ -44,6 +44,7 @@ import {
   normalizeRoleLabel,
   ordStringOf,
   resolveAgentIdentity,
+  resolveLeadWinner,
   whoCandidate,
 } from "../server/identity.mjs";
 import { loadProfiles } from "../server/profiles.mjs";
@@ -253,6 +254,7 @@ function parseArgs(argv) {
     "title",
     "note",
     "since",
+    "revision",
   ]);
   const booleans = new Set([
     "sinceMe",
@@ -614,6 +616,7 @@ function listAgentsViaRunner() {
     name: a.title,
     title: a.title,
     status: a.status,
+    queued: a.queued ?? null,
     cwd: a.cwd ?? "",
     archivedAt: a.archivedAt ?? null,
     archived: Boolean(a.archivedAt),
@@ -624,6 +627,9 @@ function listAgentsViaRunner() {
     pendingPermissions: [],
     usage: null,
     lastUsage: a.lastUsage ?? null,
+    resumable: a.resumable === true,
+    createdAt: a.createdAt ?? null,
+    updatedAt: a.updatedAt ?? null,
   }));
 }
 
@@ -956,7 +962,8 @@ function extractAgentTokens(a) {
 }
 
 function formatWhoLine(entry) {
-  return `${entry.title} · ${entry.id} · ${entry.status} · ${entry.tokensLabel}`;
+  const status = entry.queued ? `queued(${entry.queued.ahead})` : entry.status;
+  return `${entry.title} · ${entry.id} · ${status} · ${entry.tokensLabel}`;
 }
 
 async function commandWho(flags) {
@@ -995,7 +1002,7 @@ async function commandWho(flags) {
     if (target === "workers" && role !== "worker") continue;
     if (target === "all" && role !== "lead" && role !== "brainstorm" && role !== "worker") continue;
 
-    rawMatched.push({ agent: a, title: title || a.id, role, status, teamId, lane });
+    rawMatched.push({ agent: a, title: title || a.id, role, status, teamId, lane, queued: a.queued ?? null });
   }
 
   if (squadWide) {
@@ -1004,13 +1011,14 @@ async function commandWho(flags) {
     rawMatched.sort((x, y) => rank(x) - rank(y) || x.lane.localeCompare(y.lane));
   }
 
-  const matched = rawMatched.map(({ agent: a, title, role, status, teamId, lane }) => {
+  const matched = rawMatched.map(({ agent: a, title, role, status, teamId, lane, queued }) => {
     const { tokens, tokensLabel } = extractAgentTokens(a);
     const entry = {
       id: a.id,
       title,
       role,
       status,
+      queued,
       team: teamId,
       lane,
       tokens,
@@ -1019,30 +1027,45 @@ async function commandWho(flags) {
     return { ...entry, line: formatWhoLine(entry) };
   });
 
-  // Two live main Buddies for one (lane, topic) is a conflict too (docs/PLAN_BUGS_BATCH2.md block 0).
-  // Topic Buddies are separate seats, so only same-topic pairs count.
-  const bsTopics = rawMatched.map((m) => String(m.agent.labels?.topic ?? m.agent.labels?.["vs.inbox-card-id"] ?? "").trim().toLowerCase());
-  const bsConflict = target === "brainstorm" && bsTopics.some((t, i) => bsTopics.indexOf(t) !== i);
-  if (target === "lead" || bsConflict) {
-    const status = matched.length === 1 ? "ok" : matched.length === 0 ? "none" : "conflict";
-    const exitCode = matched.length === 1 ? 0 : matched.length === 0 ? 1 : 2;
+  // Single-role seats resolve a winner (docs/PLAN_BUGS_BATCH2.md block 0 for Buddies): a closed-but-resumable holder
+  // (a lost lead/Buddy) loses to a live one, and 2+ live holders of the same seat is a conflict. Buddies are one seat per topic.
+  if (target === "lead" || target === "brainstorm") {
+    const topicKey = (m) =>
+      String(m.agent.labels?.topic ?? m.agent.labels?.["vs.inbox-card-id"] ?? "").trim().toLowerCase();
+    const groups = new Map();
+    for (const m of rawMatched) {
+      const k = target === "lead" ? "" : topicKey(m);
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(m);
+    }
+    const winners = [];
+    const conflictRows = [];
+    for (const group of groups.values()) {
+      const { winner, conflict } = resolveLeadWinner(group.map((m) => m.agent));
+      if (conflict) conflictRows.push(...group);
+      else if (winner) winners.push(winner);
+    }
+    const conflictIds = new Set(conflictRows.map((m) => m.agent.id));
+    const entries = conflictIds.size
+      ? matched.filter((m) => conflictIds.has(m.id))
+      : matched.filter((m) => winners.some((w) => w.id === m.id));
+    const status = conflictIds.size ? "conflict" : entries.length ? "ok" : "none";
+    const exitCode = conflictIds.size ? 2 : entries.length ? 0 : 1;
     if (flags.json) {
-      process.stdout.write(JSON.stringify({ status, entries: matched }, null, 2) + "\n");
+      process.stdout.write(JSON.stringify({ status, entries }, null, 2) + "\n");
       return exitCode;
     }
-    if (matched.length === 0) {
+    if (!entries.length) {
       process.stdout.write("NONE\n");
       return 1;
     }
-    if (matched.length === 1) {
-      process.stdout.write(`${matched[0].line}\n`);
-      return 0;
+    if (conflictIds.size) {
+      process.stdout.write("CONFLICT\n");
+      for (const item of entries) process.stdout.write(`${item.line}\n`);
+      return 2;
     }
-    process.stdout.write("CONFLICT\n");
-    for (const item of matched) {
-      process.stdout.write(`${item.line}\n`);
-    }
-    return 2;
+    for (const item of entries) process.stdout.write(`${item.line}\n`);
+    return 0;
   }
 
   const status = matched.length > 0 ? "ok" : "none";
@@ -1120,7 +1143,7 @@ async function commandWhoami(flags) {
     const leadCandidates = [];
     for (const a of agents) {
       const status = String(a.status ?? "unknown").trim();
-      if (a.archivedAt || a.archived || a.internal || status.toLowerCase() === "closed") continue;
+      if (a.archivedAt || a.archived || a.internal || (status.toLowerCase() === "closed" && a.resumable !== true)) continue;
       if (isRetiredAgent(a.labels ?? {})) continue;
       const aResolved = resolveAgentIdentity(a, { teams: TEAM_DEFS, cwd: a.cwd, agentsById });
       if (aResolved.isOrphan) continue;
@@ -1129,7 +1152,8 @@ async function commandWhoami(flags) {
       leadCandidates.push(a);
     }
     if (leadCandidates.length > 0) {
-      const lead = leadCandidates[0];
+      const { winner } = resolveLeadWinner(leadCandidates);
+      const lead = winner;
       const { tokens, tokensLabel } = extractAgentTokens(lead);
       const title = String(lead.title ?? lead.name ?? lead.id).trim();
       const status = String(lead.status ?? "unknown").trim();
@@ -1457,21 +1481,61 @@ function matchLaneRef(lanes, rawRef) {
   );
 }
 
-function commandPinMerge(flags) {
+function loadPinTeamsSnapshot(flags) {
+  const file = resolveTeamsFilePath();
+  const revision = String(flags?.revision ?? flags?.base ?? process.env.VS_TEAMS_REVISION ?? teamsRevision(file));
+  const { value: cur } = readJsonFileWithBom(file, { fallback: null, label: "teams.json" });
+  const prevDoc = Array.isArray(cur?.teams) ? structuredClone(cur) : null;
+  const doc = prevDoc ? structuredClone(prevDoc) : structuredClone(TEAMS_FILE);
+  return { file, revision, prevDoc, doc };
+}
+
+function findSquadInDoc(doc, value) {
+  if (!value) return null;
+  const needle = String(value).toLowerCase();
+  return (
+    (doc.teams ?? []).find((t) => String(t.id).toLowerCase() === needle || String(t.name).toLowerCase() === needle) ??
+    findTeamDef(value)
+  );
+}
+
+function savePinTeams(doc, revision, flags, { prevDoc = null, writeBrief } = {}) {
+  if (typeof flags?.beforeWrite === "function") flags.beforeWrite();
+  const res = writeTeamsRegistry({ ...doc, teams: doc.teams, revision });
+  if (res.status === 409) {
+    process.stderr.write(
+      `Error: teams.json changed (stale revision ${revision}, current ${res.body?.revision ?? "unknown"}); re-read teams.json and retry.\n`,
+    );
+    return { ok: false, status: 409, revision: res.body?.revision };
+  }
+  let written;
+  if (typeof writeBrief === "function") {
+    try {
+      written = writeBrief();
+    } catch (err) {
+      if (prevDoc && Array.isArray(prevDoc.teams)) {
+        try {
+          writeTeamsRegistry({ ...prevDoc, teams: prevDoc.teams, revision: res.body?.revision });
+        } catch {}
+      }
+      throw err;
+    }
+  }
+  return { ok: true, status: res.status, file: res.file, revision: res.body?.revision, written };
+}
+
+export function commandPinMerge(flags) {
   const fromRaw = String(flags._[0] ?? "").trim();
   const intoRaw = String(flags._[1] ?? "").trim();
   if (!fromRaw || !intoRaw) {
     throw new Error('usage: vs pin merge <from-lane> <into-lane> [--note "<shared contract>"] [--team <squad>]');
   }
   const note = String(flags.note ?? flags.brief ?? "").trim();
+  const { file, revision, prevDoc, doc } = loadPinTeamsSnapshot(flags);
   const identity = resolveIdentity({ ...flags, lane: undefined });
-  const squadDef = findTeamDef(flags.team ? String(flags.team) : identity.team.id) ?? findTeamDef(identity.team.name);
+  const squadDef = findSquadInDoc(doc, flags.team ? String(flags.team) : identity.team.id) ?? findSquadInDoc(doc, identity.team.name);
   if (!squadDef) throw new Error(`unknown squad "${flags.team ?? identity.team.name}". Pass --team <squad>.`);
 
-  let file = resolveTeamsFilePath();
-  if (path.basename(file) === "teams.example.json") file = path.join(BASE_DIR, "teams.json");
-  const { value: cur } = readJsonFileWithBom(file, { fallback: null, label: "teams.json" });
-  const doc = Array.isArray(cur?.teams) ? cur : { ...TEAMS_FILE };
   const target = doc.teams.find((t) => t.id === squadDef.id);
   if (!target) throw new Error(`squad "${squadDef.id}" is not in ${file}`);
 
@@ -1482,8 +1546,9 @@ function commandPinMerge(flags) {
   if (!intoLane) throw new Error(`unknown target lane "${intoRaw}" in ${squadDef.name}`);
   if (fromLane.id === intoLane.id) throw new Error("source and target lanes must be different");
 
-  const fromBrief = readBrainstormSummary(fromLane.id, undefined, { teamId: squadDef.id }).content;
-  const intoSummary = readBrainstormSummary(intoLane.id, undefined, { teamId: squadDef.id });
+  const briefRoot = process.env.VIBESQUAD_ROOT ? path.resolve(process.env.VIBESQUAD_ROOT) : undefined;
+  const fromBrief = readBrainstormSummary(fromLane.id, briefRoot, { teamId: squadDef.id }).content;
+  const intoSummary = readBrainstormSummary(intoLane.id, briefRoot, { teamId: squadDef.id });
   let merged = intoSummary.content.includes("## Open")
     ? intoSummary.content
     : newPinBrief(intoLane.id, intoLane.name || intoLane.id, "");
@@ -1499,7 +1564,6 @@ function commandPinMerge(flags) {
 
   merged = appendBulletsToSection(merged, "Decided", decidedBullets);
   merged = appendBulletsToSection(merged, "Open", openBullets);
-  const written = writeBrainstormSummary(intoLane.id, merged, undefined, { teamId: squadDef.id });
 
   const nowIso = new Date().toISOString();
   const existingAliases = Array.isArray(intoLane.aliases) ? intoLane.aliases.map((a) => String(a).trim()).filter(Boolean) : [];
@@ -1531,10 +1595,12 @@ function commandPinMerge(flags) {
     }
     return l;
   });
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
-  fs.writeFileSync(tmp, JSON.stringify(doc, null, 2) + "\n", "utf8");
-  fs.renameSync(tmp, file);
+  const saved = savePinTeams(doc, revision, flags, {
+    prevDoc,
+    writeBrief: () => writeBrainstormSummary(intoLane.id, merged, briefRoot, { teamId: squadDef.id }),
+  });
+  if (!saved.ok) return 1;
+  const written = saved.written;
 
   const logEntry = {
     ts: nowIso,
@@ -1544,11 +1610,12 @@ function commandPinMerge(flags) {
     text: `Merged ${fromLane.name || fromLane.id} (${fromLane.id}) -> ${intoLane.name || intoLane.id} (${intoLane.id})${note ? `: ${note}` : ""}`.slice(0, MAX_TEXT),
     refs: [fromLane.id, intoLane.id, written.path],
   };
-  appendLog({ ...identity, team: squadDef, lane: intoLane.id, teamDir: path.join(BASE_DIR, "teams", squadDef.id) }, logEntry);
+  const homeDir = path.resolve(process.env.VIBESQUAD_HOME || BASE_DIR);
+  appendLog({ ...identity, team: squadDef, lane: intoLane.id, teamDir: path.join(homeDir, "teams", squadDef.id) }, logEntry);
 
   if (flags.json) {
     process.stdout.write(
-      JSON.stringify({ ok: true, squad: squadDef.id, from: fromLane.id, into: intoLane.id, brief: written.path }, null, 2) + "\n",
+      JSON.stringify({ ok: true, squad: squadDef.id, from: fromLane.id, into: intoLane.id, brief: written.path, revision: saved.revision }, null, 2) + "\n",
     );
     return 0;
   }
@@ -1558,7 +1625,7 @@ function commandPinMerge(flags) {
   return 0;
 }
 
-function commandPin(flags) {
+export function commandPin(flags) {
   const sub = String(flags._.shift() ?? "").toLowerCase();
   if (sub === "merge") return commandPinMerge(flags);
   if (sub !== "new") throw new Error('usage: vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force] | vs pin merge <from-lane> <into-lane> [--note "<contract>"]');
@@ -1566,10 +1633,13 @@ function commandPin(flags) {
   if (!name) throw new Error('pin new needs a name: vs pin new "<name>" --brief "<idea>"');
   const brief = String(flags.brief ?? "").trim() || name;
 
+  const { file, revision, prevDoc, doc } = loadPinTeamsSnapshot(flags);
   const identity = resolveIdentity({ ...flags, lane: undefined });
-  const squadDef = findTeamDef(flags.team ? String(flags.team) : identity.team.id) ?? findTeamDef(identity.team.name);
+  const squadDef = findSquadInDoc(doc, flags.team ? String(flags.team) : identity.team.id) ?? findSquadInDoc(doc, identity.team.name);
   if (!squadDef) throw new Error(`unknown squad "${flags.team ?? identity.team.name}". Pass --team <squad>.`);
-  const lanes = squadDef.lanes ?? [];
+  const target = doc.teams.find((t) => t.id === squadDef.id);
+  if (!target) throw new Error(`squad "${squadDef.id}" is not in ${file}`);
+  const lanes = target.lanes ?? [];
 
   // Done and removed teams never count as a match; --force skips the refusal entirely (ids still dedupe below).
   const live = lanes.filter((l) => l.state !== "done" && l.state !== "removed");
@@ -1581,6 +1651,7 @@ ${brief}`, live);
     return 1;
   }
 
+  const briefRoot = process.env.VIBESQUAD_ROOT ? path.resolve(process.env.VIBESQUAD_ROOT) : undefined;
   const slug = slugLaneId(name);
   const reopenTarget = lanes.find(
     (l) =>
@@ -1588,17 +1659,10 @@ ${brief}`, live);
       (String(l.name ?? "").toLowerCase() === name.toLowerCase() || String(l.id).toLowerCase() === slug),
   );
   if (reopenTarget) {
-    const curSummary = readBrainstormSummary(reopenTarget.id, undefined, { teamId: squadDef.id });
+    const curSummary = readBrainstormSummary(reopenTarget.id, briefRoot, { teamId: squadDef.id });
     const updatedBrief = curSummary.content.includes("## Open")
       ? appendBulletsToSection(curSummary.content, "Open", [`- ${brief.replace(/\r?\n/g, "\n  ")}`])
       : newPinBrief(reopenTarget.id, name, brief);
-    const written = writeBrainstormSummary(reopenTarget.id, updatedBrief, undefined, { teamId: squadDef.id });
-    let file = resolveTeamsFilePath();
-    if (path.basename(file) === "teams.example.json") file = path.join(BASE_DIR, "teams.json");
-    const { value: cur } = readJsonFileWithBom(file, { fallback: null, label: "teams.json" });
-    const doc = Array.isArray(cur?.teams) ? cur : { ...TEAMS_FILE };
-    const target = doc.teams.find((t) => t.id === squadDef.id);
-    if (!target) throw new Error(`squad "${squadDef.id}" is not in ${file}`);
     target.lanes = freezeLaneCodes(
       (target.lanes ?? []).map((l) => {
         if (l.id !== reopenTarget.id) return l;
@@ -1606,14 +1670,16 @@ ${brief}`, live);
         return { ...rest, name, state: "pinned" };
       }),
     );
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
-    fs.writeFileSync(tmp, JSON.stringify(doc, null, 2) + "\n", "utf8");
-    fs.renameSync(tmp, file);
+    const saved = savePinTeams(doc, revision, flags, {
+      prevDoc,
+      writeBrief: () => writeBrainstormSummary(reopenTarget.id, updatedBrief, briefRoot, { teamId: squadDef.id }),
+    });
+    if (!saved.ok) return 1;
+    const written = saved.written;
 
     if (flags.json) {
       process.stdout.write(
-        JSON.stringify({ ok: true, squad: squadDef.id, laneId: reopenTarget.id, name, brief: written.path, teamsFile: file }, null, 2) + "\n",
+        JSON.stringify({ ok: true, squad: squadDef.id, laneId: reopenTarget.id, name, brief: written.path, teamsFile: saved.file, revision: saved.revision }, null, 2) + "\n",
       );
       return 0;
     }
@@ -1623,32 +1689,25 @@ ${brief}`, live);
     return 0;
   }
 
-  const taken = new Set(takenLaneIds(TEAM_DEFS.flatMap((t) => t.lanes ?? [])));
+  const taken = new Set(takenLaneIds((doc.teams ?? []).flatMap((t) => t.lanes ?? [])));
   let id = uniqueLaneId(slugLaneId(name), taken);
   // Lane ids and brief files are global: skip ids that still have a brief on disk.
-  while (fs.existsSync(readBrainstormSummary(id, undefined, { teamId: squadDef.id }).fullPath)) {
+  while (fs.existsSync(readBrainstormSummary(id, briefRoot, { teamId: squadDef.id }).fullPath)) {
     taken.add(id);
     id = uniqueLaneId(slugLaneId(name), taken);
   }
 
-  const written = writeBrainstormSummary(id, newPinBrief(id, name, brief), undefined, { teamId: squadDef.id });
-  let file = resolveTeamsFilePath();
-  if (path.basename(file) === "teams.example.json") file = path.join(BASE_DIR, "teams.json");
-  // Re-read the file right before the write (the UI may have saved since TEAM_DEFS loaded) and swap it in with a
-  // rename, so a reader never sees half a file. The UI's revision check then refetches instead of overwriting this lane.
-  const { value: cur } = readJsonFileWithBom(file, { fallback: null, label: "teams.json" });
-  const doc = Array.isArray(cur?.teams) ? cur : { ...TEAMS_FILE };
-  const target = doc.teams.find((t) => t.id === squadDef.id);
-  if (!target) throw new Error(`squad "${squadDef.id}" is not in ${file}`);
   // Freeze: persist generated codes on every lane of the Squad that lacks one, plus the new lane's.
   target.lanes = freezeLaneCodes([...freezeLaneCodes(target.lanes ?? []), { id, name, state: "pinned" }]);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
-  fs.writeFileSync(tmp, JSON.stringify(doc, null, 2) + "\n", "utf8");
-  fs.renameSync(tmp, file);
+  const saved = savePinTeams(doc, revision, flags, {
+    prevDoc,
+    writeBrief: () => writeBrainstormSummary(id, newPinBrief(id, name, brief), briefRoot, { teamId: squadDef.id }),
+  });
+  if (!saved.ok) return 1;
+  const written = saved.written;
 
   if (flags.json) {
-    process.stdout.write(JSON.stringify({ ok: true, squad: squadDef.id, laneId: id, name, brief: written.path, teamsFile: file }, null, 2) + "\n");
+    process.stdout.write(JSON.stringify({ ok: true, squad: squadDef.id, laneId: id, name, brief: written.path, teamsFile: saved.file, revision: saved.revision }, null, 2) + "\n");
     return 0;
   }
   process.stdout.write(`Pinned ${name} (${id}) in ${squadDef.name}. Brief: ${written.path}. No agent started; the first click on the pin starts its Brainstorm.\n`);

@@ -1,51 +1,119 @@
-// Block A2 (PLAN_ANDROID_APP.md): Android deep-link QR pairing + clipboard paste UX.
-// - Pure logic: normalizeOfferInput / toAndroidDeepLink / isAndroidUserAgent (src/remoteSession.ts)
-// - Server: getPaseoPairOffer deepLinkUrl + qrSvg (server/paseo-control.mjs)
-// - UI wiring: PairDeviceModal.tsx (QR / deep-link copy / APK download) + RemotePair.tsx (deep-link + clipboard paste)
+// Block A1 (PLAN_ANDROID_MESHNET.md): the APK pairs over the VS-native LAN/Meshnet path (QR + 6-digit code).
+// - Pure logic: parsePairInput / toAndroidDeepLink / pairRedeemUrl / session storage (src/remoteSession.ts)
+// - UI wiring: src/RemotePairScreen.tsx via src/main.tsx; the relay `#offer=` paths are gone (f9b4095)
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
-import { isAndroidUserAgent, normalizeOfferInput, toAndroidDeepLink } from "../src/remoteSession.ts";
+import {
+  clearSession,
+  isAndroidUserAgent,
+  needsPairing,
+  normalizeHost,
+  pairRedeemUrl,
+  parsePairInput,
+  readSession,
+  saveSession,
+  toAndroidDeepLink,
+} from "../src/remoteSession.ts";
 
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
 
-const TOKEN = "eyJ2IjoyLCJzZXJ2ZXJJZCI6InNydl90ZXN0In0";
+const fakeStore = (init = {}) => {
+  const m = new Map(Object.entries(init));
+  return { getItem: (k) => m.get(k) ?? null, setItem: (k, v) => void m.set(k, String(v)), removeItem: (k) => void m.delete(k) };
+};
 
-describe("normalizeOfferInput + toAndroidDeepLink", () => {
-  test("extracts #offer= from an https app.paseo.sh link", () => {
-    const input = `https://app.paseo.sh/#offer=${TOKEN}`;
-    assert.equal(normalizeOfferInput(input), `#offer=${TOKEN}`);
-    assert.equal(toAndroidDeepLink(input), `vibesquad://pair#offer=${TOKEN}`);
+describe("parsePairInput", () => {
+  test("reads the desktop QR / Copy Pairing Link (LAN, Meshnet host and Meshnet IP)", () => {
+    assert.deepEqual(parsePairInput("https://192.168.1.20:4180/pair?code=123456"), { host: "192.168.1.20:4180", code: "123456" });
+    assert.deepEqual(parsePairInput("https://pc-name.example:4180/pair?code=654321"), { host: "pc-name.example:4180", code: "654321" });
+    assert.deepEqual(parsePairInput("  https://100.64.0.7:4180/pair?code=000111  "), { host: "100.64.0.7:4180", code: "000111" });
   });
 
-  test("handles an existing vibesquad://pair#offer= deep link unchanged", () => {
-    const input = `vibesquad://pair#offer=${TOKEN}`;
-    assert.equal(normalizeOfferInput(input), `#offer=${TOKEN}`);
-    assert.equal(toAndroidDeepLink(input), `vibesquad://pair#offer=${TOKEN}`);
+  test("reads the vibesquad://pair deep link", () => {
+    assert.deepEqual(parsePairInput("vibesquad://pair?host=192.168.1.20%3A4180&code=123456"), { host: "192.168.1.20:4180", code: "123456" });
+    assert.deepEqual(parsePairInput("vibesquad://pair?host=pc.example"), { host: "pc.example:4180", code: "" });
   });
 
-  test("normalizes a vibesquad://pair?offer= query form to the #offer= fragment", () => {
-    const input = `vibesquad://pair?offer=${TOKEN}`;
-    assert.equal(normalizeOfferInput(input), `#offer=${TOKEN}`);
-    assert.equal(toAndroidDeepLink(input), `vibesquad://pair#offer=${TOKEN}`);
+  test("accepts a typed host (default port 4180) and a bare or dashed 6-digit code", () => {
+    assert.deepEqual(parsePairInput("192.168.1.20"), { host: "192.168.1.20:4180", code: "" });
+    assert.deepEqual(parsePairInput("pc.example:4443"), { host: "pc.example:4443", code: "" });
+    assert.deepEqual(parsePairInput("123456"), { host: "", code: "123456" });
+    assert.deepEqual(parsePairInput("123-456"), { host: "", code: "123456" });
   });
 
-  test("accepts a bare offer= token and a bare #offer= fragment", () => {
-    assert.equal(normalizeOfferInput(`offer=${TOKEN}`), `#offer=${TOKEN}`);
-    assert.equal(toAndroidDeepLink(`#offer=${TOKEN}`), `vibesquad://pair#offer=${TOKEN}`);
-  });
-
-  test("returns null for strings without an offer token", () => {
-    for (const bad of ["", "   ", "https://app.paseo.sh/", "vibesquad://pair", "hello world", "offer=", "offer=   "]) {
-      assert.equal(normalizeOfferInput(bad), null, `normalizeOfferInput(${JSON.stringify(bad)})`);
-      assert.equal(toAndroidDeepLink(bad), null, `toAndroidDeepLink(${JSON.stringify(bad)})`);
+  test("rejects junk, loopback targets and the old relay #offer= links", () => {
+    for (const bad of ["", "   ", "hello world", "12345", "https://127.0.0.1:4180/pair?code=123456", "localhost", "ftp://x/y",
+      "vibesquad://pair#offer=abc", "vibesquad://pair", "host:99999"]) {
+      assert.equal(parsePairInput(bad), null, `parsePairInput(${JSON.stringify(bad)})`);
     }
   });
 
-  test("is symmetric with normalizeOfferInput (always yields vibesquad://pair + normalized)", () => {
-    const link = `https://app.paseo.sh/#offer=${TOKEN}&x=1`;
-    const normalized = normalizeOfferInput(link);
-    assert.equal(toAndroidDeepLink(link), `vibesquad://pair${normalized}`);
+  test("a link without a usable code still yields the host", () => {
+    assert.deepEqual(parsePairInput("https://pc.example:4180/pair?code=nope"), { host: "pc.example:4180", code: "" });
+  });
+});
+
+describe("toAndroidDeepLink / pairRedeemUrl", () => {
+  test("the deep link carries the same host and code as the QR and round-trips", () => {
+    const qr = "https://192.168.1.20:4180/pair?code=123456";
+    const dl = toAndroidDeepLink(qr);
+    assert.equal(dl, "vibesquad://pair?host=192.168.1.20%3A4180&code=123456");
+    assert.deepEqual(parsePairInput(dl), parsePairInput(qr));
+    assert.equal(toAndroidDeepLink("123456"), null);
+    assert.equal(toAndroidDeepLink("pc.example"), "vibesquad://pair?host=pc.example%3A4180");
+  });
+
+  test("redeem URL is the https /pair?code= the paired-PC browser hits", () => {
+    const u = new URL(pairRedeemUrl("192.168.1.20:4180", "123456", "My Phone"));
+    assert.equal(u.origin, "https://192.168.1.20:4180");
+    assert.equal(u.pathname, "/pair");
+    assert.equal(u.searchParams.get("code"), "123456");
+    assert.equal(u.searchParams.get("name"), "My Phone");
+  });
+
+  test("normalizeHost defaults the port and refuses loopback / bad ports", () => {
+    assert.equal(normalizeHost("https://pc.example/pair"), "pc.example:4180");
+    assert.equal(normalizeHost("[fd00::1]:4180"), "[fd00::1]:4180");
+    assert.equal(normalizeHost("localhost:4180"), null);
+    assert.equal(normalizeHost("pc:0"), null);
+  });
+});
+
+describe("stored pairing session", () => {
+  test("save / read / clear and needsPairing", () => {
+    const s = fakeStore();
+    assert.equal(readSession(s), null);
+    assert.equal(needsPairing(true, s), true);
+    assert.equal(needsPairing(false, s), false);
+    saveSession("pc.example", s, new Date("2026-11-07T00:00:00Z"));
+    assert.deepEqual(readSession(s), { v: 2, host: "pc.example:4180", savedAt: "2026-11-07T00:00:00.000Z" });
+    assert.equal(needsPairing(true, s), false);
+    clearSession(s);
+    assert.equal(needsPairing(true, s), true);
+  });
+
+  test("an old relay-offer session or junk is not trusted", () => {
+    const old = { v: 1, offer: { v: 2, serverId: "srv", daemonPublicKeyB64: "k", relay: { endpoint: "r" } }, savedAt: "x" };
+    assert.equal(readSession(fakeStore({ "vs.remote.session": JSON.stringify(old) })), null);
+    assert.equal(readSession(fakeStore({ "vs.remote.session": "{" })), null);
+    assert.throws(() => saveSession("localhost", fakeStore()));
+  });
+});
+
+describe("relay pairing is gone", () => {
+  test("no #offer= code paths left in the web sources", () => {
+    for (const f of ["src/remoteSession.ts", "src/main.tsx", "src/RemotePairScreen.tsx", "src/App.tsx", "src/DiagnosticsModal.tsx"]) {
+      assert.doesNotMatch(read(f), /#offer=|offerFromHash|normalizeOfferInput|hasOfferFragment/, f);
+    }
+  });
+
+  test("the remote build boots the pair screen, not the local client, and the deep link is configured", () => {
+    const main = read("src/main.tsx");
+    assert.match(main, /remote \? <RemotePairScreen \/>/);
+    assert.match(main, /!remote\) \{\s*start\(\)/);
+    const conf = JSON.parse(read("src-tauri/tauri.android.conf.json"));
+    assert.deepEqual(conf.plugins["deep-link"].mobile[0].scheme, ["vibesquad"]);
   });
 });
 
@@ -224,5 +292,41 @@ describe("Block A5: Phone UI pass (status bar fit, Lead page wrap, right sidebar
     assert.match(src, /\.right-dock\s*\{[^}]*border-left:\s*0;/);
     assert.match(src, /\.right-dock\s*\{[^}]*border-top:\s*1px solid var\(--cyan\);/);
     assert.match(src, /\.right-dock-resize-handle\s*\{[^}]*display:\s*none;/);
+  });
+});
+
+describe("pairing is proven before it is saved (review fixes)", () => {
+  test("a pending pairing is not a session, and expires", async () => {
+    const { savePending, readPending, clearPending, parsePairReturn, serverUrl } = await import("../src/remoteSession.ts");
+    const s = fakeStore();
+    savePending("pc.example", s, new Date("2026-11-07T00:00:00Z"));
+    assert.equal(readSession(s), null);
+    assert.equal(needsPairing(true, s), true);
+    assert.equal(readPending(s, new Date("2026-11-07T00:05:00Z")), "pc.example:4180");
+    assert.equal(readPending(s, new Date("2026-11-07T00:11:00Z")), null);
+    clearPending(s);
+    assert.equal(readPending(s, new Date("2026-11-07T00:00:01Z")), null);
+    assert.equal(parsePairReturn("#paired"), "paired");
+    assert.equal(parsePairReturn("#unpaired"), "unpaired");
+    assert.equal(parsePairReturn("#paired=evil.example"), null);
+    assert.match(pairRedeemUrl("pc.example:4180", "123456", "x", "http://tauri.localhost"), /vs_app=http%3A%2F%2Ftauri\.localhost/);
+    assert.equal(serverUrl("pc.example:4180"), "https://pc.example:4180/");
+  });
+
+  test("screen saves only a pending record, deep links never auto-pair, reachability is not trust", () => {
+    const src = read("src/RemotePairScreen.tsx");
+    assert.doesNotMatch(src, /saveSession\(hostN\)/);
+    assert.match(src, /savePending\(hostN\)/);
+    assert.doesNotMatch(src, /apply\([^)]*\)[^\n]*\bpairWith\b|autoPair/);
+    assert.match(src, /data-testid="pair-confirm"/);
+    assert.match(src, /data-testid="forget-pc"/);
+  });
+
+  test("the server sends the APK back to its own origin: #paired / #unpaired / #failed", () => {
+    const src = read("server/auth.mjs");
+    assert.match(src, /\$\{app\}\/#unpaired/);
+    assert.match(src, /\$\{app\}\/#failed/);
+    assert.match(src, /app \? `\$\{app\}\/#paired` : "\/"/);
+    assert.match(src, /TAURI_ORIGINS\.has\(o\)/);
   });
 });

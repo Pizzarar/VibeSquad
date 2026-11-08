@@ -1,32 +1,23 @@
-// Remote boot (PLAN_PASEO_PARITY.md block R2-2): pure logic for running VS's web UI away from the PC,
-// talking to the home daemon over Paseo's relay. Mode detection, the stored pairing session, offer-input
-// parsing and error mapping. No imports: the browser wiring is src/paseoRemote.ts + src/RemotePair.tsx,
-// and node tests pass fakes. R2-4 (hide desktop-only UI) and R2-3 (remote build) hook in via isRemote().
+// Remote boot (Android APK, PLAN_ANDROID_MESHNET.md block A1): pure logic for the remote build, which pairs with
+// a PC over VS-native LAN/Meshnet (the 6-digit code / QR that PairDeviceModal shows). The server redeems
+// `https://<host>:<port>/pair?code=…` and sets the vs_device cookie, exactly as for the paired-PC browser; the
+// app then opens the server's own UI. No imports: the screen is src/RemotePairScreen.tsx and node tests use fakes.
 
-/** Relay pairing offer, from a pairing link. */
-export type RemoteOffer = {
-  v: 2;
-  serverId: string;
-  daemonPublicKeyB64: string;
-  relay: { endpoint: string; useTls?: boolean };
-  minimumSecurityMode?: "protected";
-};
+/** The stored pairing: which server this device paired with. The device cookie itself lives in the WebView. */
+export type StoredRemoteSession = { v: 2; host: string; savedAt: string };
 
-export type StoredRemoteSession = { v: 1; offer: RemoteOffer; savedAt: string };
+/** What a QR, deep link or typed input resolves to. `code` is empty for a host-only input, `host` for a code-only one. */
+export type PairTarget = { host: string; code: string };
 
 type Get = Pick<Storage, "getItem">;
 type GetSet = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
 export const REMOTE_SESSION_KEY = "vs.remote.session";
-/** Set only by an explicit "remember on this device" opt-in. */
-export const REMOTE_PASSWORD_KEY = "vs.remote.password";
-/** Without the opt-in the password lives in sessionStorage: gone when the tab closes. */
-export const REMOTE_TAB_PASSWORD_KEY = "vs.remote.password.tab";
-/** sessionStorage note left for the pairing screen when the paired app hits an auth failure. */
-export const REMOTE_AUTH_NOTE_KEY = "vs.remote.authNote";
-const REMOTE_FLAG_KEY = "vs.remote"; // same key as remoteTransport.ts (R2-1's test flag)
+/** Port the server listens on when an address is typed without one (same default as the desktop app). */
+export const DEFAULT_PAIR_PORT = 4180;
+export const DEEP_LINK_SCHEME = "vibesquad";
 
-/** Build-time remote flag. R2-3's vite remote mode sets VITE_VS_REMOTE=1; unset in node and desktop builds. */
+/** Build-time remote flag. The vite remote mode sets VITE_VS_REMOTE=1; unset in node and desktop builds. */
 const BUILD_REMOTE: boolean = (() => {
   try {
     return import.meta.env?.VITE_VS_REMOTE === "1";
@@ -47,256 +38,137 @@ function browserStorage(kind: "localStorage" | "sessionStorage"): Storage | null
   return safe(() => ((globalThis as any)[kind] as Storage | undefined) ?? null, null);
 }
 
-export function hasOfferFragment(hash: string): boolean {
-  return /(^|[#&])offer=/.test(hash);
-}
-
 export function isLocalHost(hostname: string): boolean {
   const h = (hostname ?? "").trim().toLowerCase();
   return h === "127.0.0.1" || h === "localhost" || h === "::1" || h === "[::1]" || h === "tauri.localhost" || h.endsWith(".localhost");
 }
 
-export type RemoteEnv = { search: string; hash: string; storage: Get | null; buildFlag: boolean; hostname?: string; localServerId?: string };
-
-declare const __PASEO_SERVER_ID__: string | undefined;
-/** This build's own daemon serverId (vite define); empty in remote builds and node. */
-const BUILD_SERVER_ID: string = (() => {
-  try {
-    return typeof __PASEO_SERVER_ID__ === "string" ? __PASEO_SERVER_ID__ : "";
-  } catch {
-    return "";
-  }
-})();
-
-/** Decodes the base64url `offer=` payload in a URL hash; null when missing, malformed or not an offer. */
-export function offerFromHash(hash: string): RemoteOffer | null {
-  const m = /(?:^|[#&])offer=([^&]+)/.exec(hash ?? "");
-  if (!m) return null;
-  return safe(() => {
-    let b64 = decodeURIComponent(m[1]).replace(/-/g, "+").replace(/_/g, "/");
-    while (b64.length % 4) b64 += "=";
-    const g = globalThis as any;
-    const json =
-      typeof g.atob === "function"
-        ? new TextDecoder().decode(Uint8Array.from(g.atob(b64), (c: string) => c.charCodeAt(0)))
-        : g.Buffer.from(b64, "base64").toString("utf8");
-    const o = JSON.parse(json);
-    return isOffer(o) ? o : null;
-  }, null);
-}
-
-/** Removes `remote` and `pw` from the query and any `#offer=` from the hash; other params survive. */
-export function stripRemoteFromUrl(loc: { pathname?: string; search: string; hash?: string }): string {
-  const q = new URLSearchParams(loc.search ?? "");
-  q.delete("remote");
-  q.delete("pw");
-  const qs = q.toString();
-  const hash = hasOfferFragment(loc.hash ?? "")
-    ? (loc.hash ?? "")
-        .replace(/^#/, "")
-        .split("&")
-        .filter((x) => !x.startsWith("offer="))
-        .join("&")
-    : (loc.hash ?? "").replace(/^#/, "");
-  return (loc.pathname ?? "/") + (qs ? `?${qs}` : "") + (hash ? `#${hash}` : "");
-}
-
-/** Removes only `pw` from the query, leaving `?remote=1` and any `#offer=` fragment intact for RemotePair. */
-export function stripPwFromUrl(loc: { pathname?: string; search: string; hash?: string }): string {
-  const q = new URLSearchParams(loc.search ?? "");
-  q.delete("pw");
-  const qs = q.toString();
-  const hash = (loc.hash ?? "").replace(/^#/, "");
-  return (loc.pathname ?? "/") + (qs ? `?${qs}` : "") + (hash ? `#${hash}` : "");
-}
-
-/**
- * Consumes a one-shot `?pw=<urlencoded>` password placed in the URL by /__desktop/setup alongside a `#offer=…`
- * pairing link. The password is parked in this tab's password storage (readPassword() pre-fills the field), then
- * `pw` is stripped from the address bar — keeping `?remote=1` and `#offer=…` so RemotePair can still complete
- * pairing. The offer is deliberately NOT saved here: saving it would make readSession() non-null while RemotePair
- * is still probing, so paseo.ts's remoteDaemonClient() would open a second relay client with the same clientId
- * and fight probeRemote over the relay session. RemotePair.doConnect saves the offer after a successful probe.
- */
-export function consumeUrlOfferSession(
-  loc: { pathname?: string; search: string; hash?: string },
-  _local: GetSet | null = browserStorage("localStorage"),
-  tab: GetSet | null = browserStorage("sessionStorage"),
-): void {
-  const pw = new URLSearchParams(loc.search ?? "").get("pw");
-  if (!pw) return;
-  safe(() => tab?.setItem(REMOTE_TAB_PASSWORD_KEY, pw), undefined);
-  safe(() => (globalThis as any).history.replaceState(null, "", stripPwFromUrl(loc)), undefined);
-}
-
-/**
- * Pure core of isRemote(): build flag, `?remote=1`, or (on non-local origins) `#offer=`, a stored session, or R2-1's flag.
- * On a local origin `?remote=1` only counts when it targets another PC: a bare one, or one whose offer is this PC's own daemon, is local.
- */
-export function detectRemote(env: RemoteEnv): boolean {
-  if (env.buildFlag) return true;
-  const flagged = new URLSearchParams(env.search).get("remote") === "1";
-  if (env.hostname && isLocalHost(env.hostname)) {
-    if (!flagged) return false;
-    const target = offerFromHash(env.hash) ?? readSession(env.storage)?.offer ?? null;
-    if (!target) return false;
-    const localId = (env.localServerId ?? BUILD_SERVER_ID).trim();
-    return !(localId && target.serverId === localId);
-  }
-  if (flagged) return true;
-  if (hasOfferFragment(env.hash)) return true;
-  const s = env.storage;
-  if (!s) return false;
-  return safe(() => s.getItem(REMOTE_FLAG_KEY) === "1" || !!s.getItem(REMOTE_SESSION_KEY), false);
-}
-
-let remoteCached: boolean | null = null;
-/** True when this page is the remote (relay) UI. Stable for the page's lifetime. Desktop/local: false. */
+/** True when this page is the remote (APK) build. Stable for the page's lifetime. Desktop/local: false. */
 export function isRemote(): boolean {
-  if (remoteCached === null) {
-    const loc = (globalThis as any).location as Location | undefined;
-    remoteCached = detectRemote({
-      hostname: loc?.hostname ?? "",
-      search: loc?.search ?? "",
-      hash: loc?.hash ?? "",
-      storage: browserStorage("localStorage"),
-      buildFlag: BUILD_REMOTE,
-    });
-    if (remoteCached === true && loc) {
-      const search = loc.search ?? "";
-      if (new URLSearchParams(search).has("pw") || hasOfferFragment(loc.hash ?? "")) {
-        consumeUrlOfferSession(loc, browserStorage("localStorage"), browserStorage("sessionStorage"));
-      }
-    }
-    if (
-      remoteCached === false &&
-      loc &&
-      isLocalHost(loc.hostname ?? "") &&
-      new URLSearchParams(loc.search ?? "").get("remote") === "1"
-    ) {
-      safe(() => (globalThis as any).history.replaceState(null, "", stripRemoteFromUrl(loc)), undefined);
-    }
+  return BUILD_REMOTE;
+}
+
+const HOST_RE = /^(?:\[[0-9a-f:]+\]|[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)(?::\d{1,5})?$/i;
+
+/** `host` or `host:port` -> `host:port` (port defaults to 4180); null when it isn't a plausible remote address. */
+export function normalizeHost(input: string): string | null {
+  const t = (input ?? "").trim().replace(/^https?:\/\//i, "").replace(/\/.*$/, "");
+  if (!t || !HOST_RE.test(t)) return null;
+  const portAt = t.lastIndexOf(":");
+  const hasPort = portAt > 0 && !t.endsWith("]") && /^\d+$/.test(t.slice(portAt + 1));
+  const name = hasPort ? t.slice(0, portAt) : t;
+  const port = hasPort ? Number(t.slice(portAt + 1)) : DEFAULT_PAIR_PORT;
+  if (!(port >= 1 && port <= 65535) || /^\d+$/.test(name) || isLocalHost(name)) return null;
+  return `${name}:${port}`;
+}
+
+/** `123456` / `123-456` / `123 456` -> `123456`; null otherwise. */
+export function normalizeCode(input: string): string | null {
+  const t = (input ?? "").trim();
+  return /^\d{3}[-\s]?\d{3}$/.test(t) ? t.replace(/[-\s]/g, "") : null;
+}
+
+/**
+ * Reads a pairing target out of whatever the user scanned, pasted or typed:
+ *  - the desktop QR / "Copy Pairing Link": `https://<host>:<port>/pair?code=123456`
+ *  - the app deep link: `vibesquad://pair?host=<host>:<port>&code=123456`
+ *  - `<host>[:port]` alone (code empty), or a bare 6-digit code (host empty).
+ * Returns null when nothing usable is in there.
+ */
+export function parsePairInput(input: string): PairTarget | null {
+  const t = (input ?? "").trim();
+  if (!t) return null;
+  const code = normalizeCode(t);
+  if (code) return { host: "", code };
+  const u = /^[a-z][a-z0-9+.-]*:\/\//i.test(t) ? safe(() => new URL(t), null) : null;
+  if (u && /^https?:$/.test(u.protocol)) {
+    const host = normalizeHost(u.host);
+    return host ? { host, code: normalizeCode(u.searchParams.get("code") ?? "") ?? "" } : null;
   }
-  return remoteCached;
+  if (u && u.protocol === `${DEEP_LINK_SCHEME}:`) {
+    const host = normalizeHost(u.searchParams.get("host") ?? "");
+    return host ? { host, code: normalizeCode(u.searchParams.get("code") ?? "") ?? "" } : null;
+  }
+  if (u) return null;
+  const host = normalizeHost(t);
+  return host ? { host, code: "" } : null;
 }
 
-function isOffer(o: any): o is RemoteOffer {
-  return (
-    !!o &&
-    typeof o === "object" &&
-    o.v === 2 &&
-    typeof o.serverId === "string" &&
-    o.serverId.length > 0 &&
-    typeof o.daemonPublicKeyB64 === "string" &&
-    o.daemonPublicKeyB64.length > 0 &&
-    !!o.relay &&
-    typeof o.relay.endpoint === "string" &&
-    o.relay.endpoint.length > 0 &&
-    (o.relay.useTls === undefined || typeof o.relay.useTls === "boolean") &&
-    (o.minimumSecurityMode === undefined || o.minimumSecurityMode === "protected")
-  );
+/** The deep link (`vibesquad://pair?host=…&code=…`) equivalent of a pairing QR / link; null when it has no host. */
+export function toAndroidDeepLink(input: string): string | null {
+  const p = parsePairInput(input);
+  if (!p?.host) return null;
+  const q = new URLSearchParams({ host: p.host, ...(p.code ? { code: p.code } : {}) });
+  return `${DEEP_LINK_SCHEME}://pair?${q.toString()}`;
 }
 
-/** The stored pairing session, or null when missing or malformed (a malformed one is not trusted). */
+/** The server URL that redeems a code: GET sets the vs_device cookie and redirects to `/`. */
+export function pairRedeemUrl(host: string, code: string, deviceName = "VibeSquad Android", appOrigin = ""): string {
+  const q = new URLSearchParams({ code, name: deviceName, ...(appOrigin ? { vs_app: appOrigin } : {}) });
+  return `https://${host}/pair?${q.toString()}`;
+}
+
+/**
+ * The URL of the server's own UI for a stored host. `appOrigin` (the WebView's own origin) lets the server send the
+ * user back to the pair screen (`#unpaired`) when this device is no longer paired, instead of a dead 401 page.
+ */
+export function serverUrl(host: string, appOrigin = ""): string {
+  return `https://${host}/${appOrigin ? `?${new URLSearchParams({ vs_app: appOrigin }).toString()}` : ""}`;
+}
+
+/** What the server's redirect back to the app (`<app origin>/#paired|#unpaired|#failed`) says. */
+export type PairReturn = "paired" | "unpaired" | "failed";
+export function parsePairReturn(hash: string): PairReturn | null {
+  const m = /^#(paired|unpaired|failed)$/.exec(hash ?? "");
+  return m ? (m[1] as PairReturn) : null;
+}
+
+/** A pairing the user confirmed and sent to the server, not yet proven: becomes the session on `#paired` only. */
+export const REMOTE_PENDING_KEY = "vs.remote.pending";
+const PENDING_MAX_AGE_MS = 10 * 60_000;
+
+export function savePending(host: string, local: GetSet | null = browserStorage("localStorage"), now = new Date()): void {
+  const h = normalizeHost(host);
+  if (!local || !h) throw new Error("remote: not a valid server address");
+  local.setItem(REMOTE_PENDING_KEY, JSON.stringify({ host: h, at: now.getTime() }));
+}
+
+/** The host of a fresh pending pairing, or null. */
+export function readPending(local: Get | null = browserStorage("localStorage"), now = new Date()): string | null {
+  const s = safe(() => JSON.parse(local?.getItem(REMOTE_PENDING_KEY) ?? "null"), null);
+  if (!s || typeof s.host !== "string" || typeof s.at !== "number" || now.getTime() - s.at > PENDING_MAX_AGE_MS) return null;
+  return normalizeHost(s.host);
+}
+
+export function clearPending(local: GetSet | null = browserStorage("localStorage")): void {
+  safe(() => local?.removeItem(REMOTE_PENDING_KEY), undefined);
+}
+
+/** The stored pairing, or null when missing or malformed (an old relay-offer session is not trusted). */
 export function readSession(storage: Get | null = browserStorage("localStorage")): StoredRemoteSession | null {
   if (!storage) return null;
   const raw = safe(() => storage.getItem(REMOTE_SESSION_KEY), null);
   if (!raw) return null;
   const s = safe(() => JSON.parse(raw), null);
-  if (!s || s.v !== 1 || !isOffer(s.offer) || typeof s.savedAt !== "string") return null;
-  return { v: 1, offer: s.offer, savedAt: s.savedAt };
+  if (!s || s.v !== 2 || typeof s.host !== "string" || typeof s.savedAt !== "string" || !normalizeHost(s.host)) return null;
+  return { v: 2, host: s.host, savedAt: s.savedAt };
 }
 
-export function sessionFor(offer: RemoteOffer, now = new Date()): StoredRemoteSession {
-  const o: RemoteOffer = {
-    v: 2,
-    serverId: offer.serverId,
-    daemonPublicKeyB64: offer.daemonPublicKeyB64,
-    relay: { endpoint: offer.relay.endpoint, ...(offer.relay.useTls !== undefined ? { useTls: offer.relay.useTls } : {}) },
-    ...(offer.minimumSecurityMode ? { minimumSecurityMode: offer.minimumSecurityMode } : {}),
-  };
-  return { v: 1, offer: o, savedAt: now.toISOString() };
-}
-
-/**
- * Saves the offer (always) and the password: in localStorage only when `remember`, else in sessionStorage
- * for this tab. An empty password clears both. Not remembering also wipes an earlier remembered one.
- */
-export function saveSession(
-  offer: RemoteOffer,
-  password: string,
-  remember: boolean,
-  local: GetSet | null = browserStorage("localStorage"),
-  tab: GetSet | null = browserStorage("sessionStorage"),
-): void {
+export function saveSession(host: string, local: GetSet | null = browserStorage("localStorage"), now = new Date()): void {
   if (!local) throw new Error("remote: this browser has no localStorage");
-  local.setItem(REMOTE_SESSION_KEY, JSON.stringify(sessionFor(offer)));
-  safe(() => local.removeItem(REMOTE_PASSWORD_KEY), undefined);
-  safe(() => tab?.removeItem(REMOTE_TAB_PASSWORD_KEY), undefined);
-  if (!password) return;
-  if (remember) local.setItem(REMOTE_PASSWORD_KEY, password);
-  else tab?.setItem(REMOTE_TAB_PASSWORD_KEY, password);
+  const h = normalizeHost(host);
+  if (!h) throw new Error("remote: not a valid server address");
+  local.setItem(REMOTE_SESSION_KEY, JSON.stringify({ v: 2, host: h, savedAt: now.toISOString() } satisfies StoredRemoteSession));
 }
 
-/** Remembered password first, then this tab's. Empty string when none. */
-export function readPassword(local: Get | null = browserStorage("localStorage"), tab: Get | null = browserStorage("sessionStorage")): string {
-  return safe(() => local?.getItem(REMOTE_PASSWORD_KEY), null) || safe(() => tab?.getItem(REMOTE_TAB_PASSWORD_KEY), null) || "";
+/** Forget this device's pairing (the server still lists the device until it is revoked on the PC). */
+export function clearSession(local: GetSet | null = browserStorage("localStorage")): void {
+  safe(() => local?.removeItem(REMOTE_SESSION_KEY), undefined);
 }
 
-export function isPasswordRemembered(local: Get | null = browserStorage("localStorage")): boolean {
-  return !!safe(() => local?.getItem(REMOTE_PASSWORD_KEY), null);
-}
-
-/** Forget this device: offer + both passwords. */
-export function clearSession(local: GetSet | null = browserStorage("localStorage"), tab: GetSet | null = browserStorage("sessionStorage")): void {
-  for (const k of [REMOTE_SESSION_KEY, REMOTE_PASSWORD_KEY]) safe(() => local?.removeItem(k), undefined);
-  safe(() => tab?.removeItem(REMOTE_TAB_PASSWORD_KEY), undefined);
-}
-
-/** Drops a stale password after an auth failure (the offer stays) and leaves a note for the pairing screen. */
-export function noteAuthFailure(kind: RemoteErrorKind, local: GetSet | null = browserStorage("localStorage"), tab: GetSet | null = browserStorage("sessionStorage")): void {
-  safe(() => local?.removeItem(REMOTE_PASSWORD_KEY), undefined);
-  safe(() => tab?.removeItem(REMOTE_TAB_PASSWORD_KEY), undefined);
-  safe(() => tab?.setItem(REMOTE_AUTH_NOTE_KEY, kind), undefined);
-}
-
-/** The note noteAuthFailure left, without clearing it. */
-export function peekAuthNote(tab: Get | null = browserStorage("sessionStorage")): RemoteErrorKind | null {
-  const v = safe(() => tab?.getItem(REMOTE_AUTH_NOTE_KEY), null);
-  return v === "password-required" || v === "wrong-password" ? v : null;
-}
-
-/** Remote and not ready to boot the app: no stored pairing, a new #offer= link opened, or an auth failure to fix. */
-export function needsPairing(remote: boolean, hash: string, local: Get | null = browserStorage("localStorage"), tab: Get | null = browserStorage("sessionStorage")): boolean {
-  return remote && (!readSession(local) || hasOfferFragment(hash) || peekAuthNote(tab) !== null);
-}
-
-/** Reads and clears the note noteAuthFailure left. */
-export function takeAuthNote(tab: GetSet | null = browserStorage("sessionStorage")): RemoteErrorKind | null {
-  const v = peekAuthNote(tab);
-  safe(() => tab?.removeItem(REMOTE_AUTH_NOTE_KEY), undefined);
-  return v;
-}
-
-/** Picks the offer link out of pasted text: a full link, `#offer=…`, or bare `offer=…`. */
-export function normalizeOfferInput(input: string): string | null {
-  const t = (input ?? "").trim();
-  if (!t) return null;
-  const i = t.indexOf("#offer=");
-  if (i !== -1) return t.slice(i);
-  const m = /(?:^|[?&\s])offer=(\S+)/.exec(t);
-  return m ? `#offer=${m[1]}` : null;
-}
-
-/**
- * Builds the Android deep link (`vibesquad://pair#offer=…`) for a pairing offer.
- * Accepts a full `https://…/#offer=…` or `vibesquad://pair…` link, or bare `#offer=…` / `offer=…` text.
- * Returns null when no offer token is present.
- */
-export function toAndroidDeepLink(offerUrlOrInput: string): string | null {
-  const normalized = normalizeOfferInput(offerUrlOrInput);
-  if (!normalized) return null;
-  return `vibesquad://pair${normalized}`;
+/** Remote and not yet paired: the pairing screen shows instead of the app. */
+export function needsPairing(remote: boolean, local: Get | null = browserStorage("localStorage")): boolean {
+  return remote && !readSession(local);
 }
 
 /** True when `ua` is an Android browser / WebView user-agent string (defaults to `navigator.userAgent`). */
@@ -306,16 +178,14 @@ export function isAndroidUserAgent(
   return /Android/i.test(ua || "");
 }
 
-export type RemoteErrorKind = "bad-link" | "relay-unreachable" | "password-required" | "wrong-password" | "remote-off" | "timeout" | "unknown";
+export type RemoteErrorKind = "bad-input" | "unreachable" | "timeout" | "unknown";
 export type RemoteError = { kind: RemoteErrorKind; message: string };
 
 const MESSAGES: Record<RemoteErrorKind, string> = {
-  "bad-link": "That pairing link isn't valid.",
-  "relay-unreachable": "Couldn't reach your PC through the relay. Check this device's connection and that the Paseo daemon is running at home with relay on.",
-  "password-required": "Your daemon needs a password. Enter it and connect again.",
-  "wrong-password": "Wrong daemon password.",
-  "remote-off": 'Connected, but VibeSquad remote access is off on the PC. Set "remote": { "enabled": true } in ~/.vibesquad/settings.json there.',
-  timeout: "Timed out waiting for your PC. The daemon may be offline or the relay slow; try again.",
+  "bad-input": "Enter the server address and the 6-digit code from Pair a device on your PC, or scan its QR code.",
+  unreachable:
+    "Couldn't reach your PC. Check this phone is on the same Wi-Fi (Home LAN) or on NordVPN Meshnet, that VibeSquad is running there, and that you installed its CA certificate.",
+  timeout: "Timed out waiting for your PC. Check the address and your connection, then try again.",
   unknown: "Something went wrong connecting to your PC.",
 };
 
@@ -323,20 +193,11 @@ export function remoteError(kind: RemoteErrorKind, message = MESSAGES[kind]): Re
   return { kind, message };
 }
 
-/** Maps whatever a relay connect / vs.http probe threw to a user-facing error. */
+/** Maps whatever a reachability probe threw to a user-facing error. */
 export function mapRemoteError(err: unknown): RemoteError {
-  const e = err as { name?: string; reason?: string; message?: string; code?: string } | null;
-  const reason = e && typeof e === "object" ? e.reason : undefined;
+  const e = err as { name?: string; message?: string } | null;
   const msg = String((e && typeof e === "object" ? e.message : err) ?? "");
-  if (reason === "password_required" || /password required/i.test(msg)) return remoteError("password-required");
-  if (reason === "incorrect_password" || /incorrect password/i.test(msg)) return remoteError("wrong-password");
-  if (/remote access is off/i.test(msg)) return remoteError("remote-off");
-  if (e?.name === "TimeoutError" || /timed? ?out/i.test(msg)) return remoteError("timeout");
-  if (/plugin.*(not found|unknown|not installed)|unknown plugin|no such (plugin|rpc)/i.test(msg)) {
-    return remoteError("unknown", "Connected, but the VibeSquad plugin isn't loaded in the daemon on your PC.");
-  }
-  if (/websocket|transport|disconnect|closed|network|ECONN|ENOTFOUND|failed to fetch|security|handshake|relay/i.test(msg)) {
-    return remoteError("relay-unreachable");
-  }
+  if (e?.name === "TimeoutError" || e?.name === "AbortError" || /timed? ?out/i.test(msg)) return remoteError("timeout");
+  if (/failed to fetch|network|load failed|ECONN|ENOTFOUND|certificate|ssl|tls/i.test(msg)) return remoteError("unreachable");
   return remoteError("unknown", msg ? `${MESSAGES.unknown} (${msg})` : MESSAGES.unknown);
 }

@@ -16,7 +16,7 @@ import {
   topicOf as identityTopicOf,
 } from "./identity.ts";
 import type { PinFields } from "./pins.ts";
-import { isRemote, needsPairing } from "./remoteSession.ts";
+import { isRemote } from "./remoteSession.ts";
 import { mergeTeams } from "./teamsMerge.ts";
 
 // A lane is a pinned Team in the UI. Pin fields (state, doneAt, order, lastProfile) live in src/pins.ts
@@ -228,7 +228,7 @@ export function resetTeamsToDisk(): void {
 }
 
 // Agents edit the registry too (`vs pin new`), so re-read it on focus and every 10s while visible.
-if (typeof window !== "undefined" && typeof document !== "undefined" && !(isRemote() && needsPairing(true, location.hash))) {
+if (typeof window !== "undefined" && typeof document !== "undefined" && !isRemote()) {
   void refreshTeams();
   window.addEventListener("focus", () => void refreshTeams());
   setInterval(() => {

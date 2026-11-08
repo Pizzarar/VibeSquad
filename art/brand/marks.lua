@@ -208,9 +208,12 @@ local S64 = {
   {18,14,21},{19,14,21},{20,14,21},{21,14,21},{22,14,21},{23,14,21},
   {24,0,20},{25,0,19},{26,0,18},{27,0,17},
 }
--- title caption "VAPOR OS": 3x5 letters, a 5-wide V so it can't read as U
+-- title caption "VIBE OS": 3x5 letters, a 5-wide V so it can't read as U
 local CAP = {
   V = { "m...m", "m...m", ".m.m.", ".m.m.", "..m.." },
+  I = { "mmm", ".m.", ".m.", ".m.", "mmm" },
+  B = { "mm.", "m.m", "mm.", "m.m", "mm." },
+  E = { "mmm", "m..", "mm.", "m..", "mmm" },
   A = { ".m.", "m.m", "mmm", "m.m", "m.m" },
   P = { "mm.", "m.m", "mm.", "m..", "m.." },
   O = { ".m.", "m.m", "m.m", "m.m", ".m." },
@@ -228,7 +231,7 @@ local function caption(s)
 end
 M.sizes[64] = {
   frame = { rim=1, hi=2, lo=2, title=8 },
-  caption = { 6, 5, caption("VAPOR OS") },
+  caption = { 6, 5, caption("VIBE OS") },
   spans = {
     { 5, 22, vSpans(26, 28, 8, 8), 7 },
     { 34, 22, S64, 9 },
