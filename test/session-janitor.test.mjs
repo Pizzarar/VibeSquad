@@ -107,32 +107,39 @@ describe("session-janitor · stalled workers", () => {
 
   it("flags queued-never-started and silent running workers only", () => {
     const list = [
-      w("q-stalled", "queued", ONE_HOUR_AGO),
-      w("q-fresh", "queued", FIVE_MIN_AGO),
+      w("q-stalled", "initializing", ONE_HOUR_AGO),
+      w("q-fresh", "initializing", FIVE_MIN_AGO),
+      w("r-waiting", "running", THREE_HOURS_AGO, { requiresAttention: true }),
       w("r-stalled", "running", THREE_HOURS_AGO),
-      w("r-active", "running", THREE_HOURS_AGO, { lastActivityAt: FIVE_MIN_AGO }),
+      w("r-active", "running", FIVE_MIN_AGO, { lastActivityAt: FIVE_MIN_AGO }),
       w("closed", "closed", THREE_HOURS_AGO),
       w("idle", "idle", THREE_HOURS_AGO),
       w("archived", "running", THREE_HOURS_AGO, { archivedAt: ONE_HOUR_AGO }),
       { id: "lead", status: "running", labels: { role: "lead" }, updatedAt: THREE_HOURS_AGO },
     ];
     assert.deepEqual(findStalledWorkers(list, { now: BASE_NOW }), [
-      { id: "q-stalled", status: "queued", silentMs: 3600_000 },
+      { id: "q-stalled", status: "initializing", silentMs: 3600_000 },
       { id: "r-stalled", status: "running", silentMs: 3 * 3600_000 },
     ]);
   });
 
   it("surfaces stalled workers in the janitor result without archiving them", async () => {
     const archivedIds = [];
-    const agents = [w("q-stalled", "queued", ONE_HOUR_AGO)];
+    const logged = [];
+    const agents = [w("q-logged", "initializing", ONE_HOUR_AGO)];
     const fakeClient = {
       fetchAgents: async () => ({ entries: agents, pageInfo: { hasMore: false } }),
       detachAgent: async () => {},
       archiveAgent: async (id) => archivedIds.push(id),
     };
-    const res = await runSessionJanitor(fakeClient, { now: BASE_NOW });
-    assert.deepEqual(res.stalled, [{ id: "q-stalled", status: "queued", silentMs: 3600_000 }]);
+    const log = (m) => logged.push(m);
+    const res = await runSessionJanitor(fakeClient, { now: BASE_NOW, log });
+    assert.deepEqual(res.stalled, [{ id: "q-logged", status: "initializing", silentMs: 3600_000 }]);
     assert.deepEqual(archivedIds, []);
+    assert.equal(logged.length, 1);
+    assert.match(logged[0], /q-logged.*initializing.*60m/);
+    await runSessionJanitor(fakeClient, { now: BASE_NOW, log });
+    assert.equal(logged.length, 1, "same stall is logged once");
   });
 });
 
