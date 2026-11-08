@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // Audit owner "rubber stamp" replies in runner transcripts (PLAN_JUST_SEND_IT S2; S3 re-measures with this).
-// Usage: node scripts/audit-owner-stamps.mjs [--dir <path>] [--since <ISO>] [--until <ISO>] [--json]
+// Usage: node scripts/audit-owner-stamps.mjs [--dir <path>] [--since <ISO>] [--until <ISO>] [--json] [--waste [--repo <git dir>]]
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 // ---- Pattern table (single source of truth; S3 reuses this). Matched against the whole
@@ -41,12 +42,14 @@ export const isOwnerInput = (text) =>
 export const wordCount = (text) => text.trim().split(/\s+/).filter(Boolean).length;
 
 function parseArgs(argv) {
-  const a = { dir: path.join(os.homedir(), '.vibesquad', 'runner', 'agents'), json: false };
+  const a = { dir: path.join(os.homedir(), '.vibesquad', 'runner', 'agents'), json: false, waste: false, repo: process.cwd() };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--dir') a.dir = argv[++i];
     else if (argv[i] === '--since') a.since = Date.parse(argv[++i]);
     else if (argv[i] === '--until') a.until = Date.parse(argv[++i]);
     else if (argv[i] === '--json') a.json = true;
+    else if (argv[i] === '--waste') a.waste = true;
+    else if (argv[i] === '--repo') a.repo = argv[++i];
   }
   if ((a.since !== undefined && Number.isNaN(a.since)) || (a.until !== undefined && Number.isNaN(a.until))) {
     console.error('bad --since/--until date'); process.exit(2);
@@ -80,9 +83,142 @@ export function audit({ dir, since, until }) {
   return r;
 }
 
+// ================= S2b waste report (buckets 2-4) =================
+// VS system notices and VS-forwarded reports arrive as plain `input` events (many even carry
+// owner:true), so they are told apart by prefix. Keep this list in one place.
+export const SYSTEM_PREFIXES = [
+  /^New team log event/, /^Idea sent over/, /^Report to ★/, /^Context check:/, /^Your Art Director/,
+  /^Wrap up:/, /^Your reply (was|got) (cut|truncated)/, /^Reply truncated/, /^\(Resend/, /^restart complete/i,
+];
+export const isSystemNotice = (t) => SYSTEM_PREFIXES.some((p) => p.test(t));
+// An agent report: "<Agent> ... report/PASS/merged ..." with evidence (run id, commit hash, verdict).
+export const REPORT_HEAD = /^(@[\w-]+\b|[A-Z][\w★]*( [A-Z][\w★]*)?( \([^)]*\))?( lead| Buddy)?\s*(→[^:]{0,40})?(:|\sreport\b|\shere\b))/;
+export const REPORT_EVIDENCE = /\b(PASS|FAIL|merged|DONE)\b|rn-[0-9a-f]{8,}|\b[0-9a-f]{7,9}\b/;
+export const isAgentReport = (t) => !isSystemNotice(t) && REPORT_HEAD.test(t) && REPORT_EVIDENCE.test(t);
+
+export const LEAD_HANDOFF_MIN_TOKENS = 100000;
+export const FIXTURE_CWD = /handoff-test/;
+export const FIX_UNIT = /(fix|followup|hotfix|regress|redo)/;
+export const FIX_WINDOW_MS = 24 * 3600 * 1000;
+export const isReviewer = (profile, firstInput) => /review/i.test(profile || '') || /ROLE:\s*review|^Review|read-only/i.test((firstInput || '').slice(0, 200));
+export function unitOf(text) { const m = (text || '').match(/\b(unit-[a-z0-9][a-z0-9-]*)/); return m ? m[1] : null; }
+
+export function loadRuns(dir) {
+  const runs = [];
+  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.jsonl'))) {
+    const run = { id: f.replace(/\.jsonl$/, ''), outputs: 0, maxCtx: 0, inputs: [] };
+    for (const line of fs.readFileSync(path.join(dir, f), 'utf8').split('\n')) {
+      if (!line) continue;
+      let e; try { e = JSON.parse(line); } catch { continue; }
+      if (e.type === 'created') { run.ts = e.ts; run.cwd = e.cwd || ''; Object.assign(run, { role: e.meta?.role, lane: e.meta?.lane, team: e.meta?.team, profile: e.meta?.profile, labels: e.meta?.labels || {} }); }
+      else if (e.type === 'output') run.outputs++;
+      else if (e.type === 'usage') run.maxCtx = Math.max(run.maxCtx, e.contextTokens || 0);
+      else if (e.type === 'input') run.inputs.push(e);
+    }
+    if (run.ts) runs.push(run);
+  }
+  return runs;
+}
+
+// (2) owner-as-relay. strict = carries the runner's owner:true marker (human UI path, since 2026-11-07T17:56Z).
+// Older inputs have no marker, so an unmarked report-shaped input could equally be an agent `send`: upper bound only.
+export function relayBucket(runs, { since, until } = {}) {
+  const r = { strict: 0, unmarkedUpperBound: 0, systemOrForwardedExcluded: 0, strictExamples: [] };
+  for (const run of runs) {
+    if (run.role !== 'brainstorm' && run.role !== 'lead') continue;
+    for (const e of run.inputs) {
+      if ((since !== undefined && e.ts < since) || (until !== undefined && e.ts > until)) continue;
+      if (typeof e.text !== 'string' || e.text.startsWith('From ') || e.text.startsWith('You are ')) continue;
+      if (isSystemNotice(e.text)) { r.systemOrForwardedExcluded++; continue; }
+      if (!isAgentReport(e.text)) continue;
+      if (e.owner) { r.strict++; r.strictExamples.push(e.text.slice(0, 40)); } else r.unmarkedUpperBound++;
+    }
+  }
+  return r;
+}
+
+// (3) unneeded handoffs + lead churn per lane.
+export function handoffBucket(runs) {
+  const byId = new Map(runs.map((x) => [x.id, x]));
+  const leads = runs.filter((x) => x.role === 'lead');
+  const fixtures = leads.filter((x) => FIXTURE_CWD.test(x.cwd));
+  const real = leads.filter((x) => !FIXTURE_CWD.test(x.cwd));
+  const r = { leadRuns: leads.length, fixtureRuns: fixtures.length, handoffs: { total: 0, under100k: 0, atOrOver100k: 0, predecessorUnknown: 0 }, byTrigger: {}, churn: {} };
+  for (const x of real) {
+    const from = x.labels['vs.handoff-from'];
+    const lane = `${x.team}/${x.lane}`;
+    const c = (r.churn[lane] ||= { runs: 0, handoffSuccessors: 0, freshSpawns: 0, thinRuns: 0 });
+    c.runs++; from ? c.handoffSuccessors++ : c.freshSpawns++;
+    if (x.outputs < 5) c.thinRuns++;
+    if (!from) continue;
+    r.handoffs.total++;
+    const trig = x.labels['vs.handoff-trigger'] || '?';
+    const p = byId.get(from);
+    const k = !p || !p.maxCtx ? 'predecessorUnknown' : p.maxCtx < LEAD_HANDOFF_MIN_TOKENS ? 'under100k' : 'atOrOver100k';
+    r.handoffs[k]++;
+    (r.byTrigger[trig] ||= { under100k: 0, atOrOver100k: 0, predecessorUnknown: 0 })[k]++;
+  }
+  // Fixture runs per lane, so the hub's 31 are explained rather than hidden.
+  r.fixtureByLane = {};
+  for (const x of fixtures) { const lane = `${x.team}/${x.lane}`; r.fixtureByLane[lane] = (r.fixtureByLane[lane] || 0) + 1; }
+  return r;
+}
+
+// (4) fixers passed around. merges = [{ts, branch}] (git merge commits on master).
+export function fixerBucket(runs, merges = []) {
+  const units = {};
+  for (const x of runs) {
+    if (x.role !== 'worker' || !x.inputs[0]) continue;
+    const first = x.inputs[0].text || '';
+    if (isReviewer(x.profile, first)) continue;
+    const u = unitOf(first); if (!u) continue;
+    const e = (units[u] ||= { workers: new Set(), lanes: new Set(), firstTs: x.ts });
+    e.workers.add(x.id); if (x.lane) e.lanes.add(x.lane); e.firstTs = Math.min(e.firstTs, x.ts);
+  }
+  const r = { unitsSeen: Object.keys(units).length, multiWorker: [], laneBounce: [], fixAfterMerge: [] };
+  for (const [u, e] of Object.entries(units)) {
+    if (e.workers.size >= 2) r.multiWorker.push([u, e.workers.size]);
+    if (e.lanes.size >= 2) r.laneBounce.push([u, [...e.lanes].join(',')]);
+    if (FIX_UNIT.test(u)) {
+      const base = u.replace(/-?(fix|followup|hotfix|regress|redo)\w*/g, '').replace(/-+$/, '');
+      const hit = merges.find((m) => m.branch !== u && e.firstTs - m.ts >= 0 && e.firstTs - m.ts <= FIX_WINDOW_MS && base.length > 8 && (m.branch.startsWith(base) || base.startsWith(m.branch)));
+      if (hit) r.fixAfterMerge.push([u, hit.branch]);
+    }
+  }
+  r.multiWorker.sort((a, b) => b[1] - a[1]);
+  return r;
+}
+
+export function gitMerges(repo) {
+  try {
+    const out = execFileSync('git', ['-C', repo, 'log', 'master', '--merges', "--format=%ct %s"], { encoding: 'utf8', maxBuffer: 1 << 26 });
+    return out.split('\n').map((l) => l.match(/^(\d+) Merge branch '([^']+)'/)).filter(Boolean).map((m) => ({ ts: +m[1] * 1000, branch: m[2] }));
+  } catch { return []; }
+}
+
+function printWaste({ buckets, ownerInputs, waste: { relay, handoffs, fixers } }) {
+  console.log('\n== waste report ==');
+  console.log(`(1) rubber stamps: ${buckets['rubber stamp'] || 0} of ${ownerInputs} owner inputs`);
+  console.log(`(2) owner-as-relay: strict (owner:true, report-shaped, VS notices/forwards excluded) = ${relay.strict}`);
+  console.log(`    unmarked report-shaped (upper bound, may be agent sends) = ${relay.unmarkedUpperBound}; system/forwarded excluded = ${relay.systemOrForwardedExcluded}`);
+  const h = handoffs.handoffs;
+  console.log(`(3) lead runs ${handoffs.leadRuns} (${handoffs.fixtureRuns} are handoff-test fixtures, excluded). Real handoffs ${h.total}: <100k ${h.under100k}, >=100k ${h.atOrOver100k}, predecessor unknown ${h.predecessorUnknown}`);
+  console.log('    by trigger:', JSON.stringify(handoffs.byTrigger));
+  console.log('    fixture runs by lane:', JSON.stringify(handoffs.fixtureByLane));
+  for (const [lane, c] of Object.entries(handoffs.churn)) console.log(`    churn ${lane}: runs ${c.runs} (handoff successors ${c.handoffSuccessors}, fresh ${c.freshSpawns}, thin <5 outputs ${c.thinRuns})`);
+  console.log(`(4) fixers: ${fixers.unitsSeen} units seen; 2+ implementers ${fixers.multiWorker.length}; across lanes ${fixers.laneBounce.length}; fix unit <24h after merge ${fixers.fixAfterMerge.length}`);
+  console.log('    multi-worker:', JSON.stringify(fixers.multiWorker.slice(0, 15)));
+  console.log('    lane bounce:', JSON.stringify(fixers.laneBounce.slice(0, 10)));
+  console.log('    fix after merge:', JSON.stringify(fixers.fixAfterMerge.slice(0, 10)));
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
   const r = audit(args);
+  if (args.waste) {
+    const runs = loadRuns(args.dir);
+    r.waste = { relay: relayBucket(runs, args), handoffs: handoffBucket(runs), fixers: fixerBucket(runs, gitMerges(args.repo)) };
+  }
   if (args.json) console.log(JSON.stringify(r, null, 2));
   else {
     console.log(`transcripts scanned:        ${r.transcripts}`);
@@ -94,5 +230,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       console.log(`  ${b}: ${r.buckets[b] || 0}`);
       for (const [p, n] of r.topPhrases[b] || []) console.log(`      ${n}x ${p}`);
     }
+    if (r.waste) printWaste(r);
   }
 }
