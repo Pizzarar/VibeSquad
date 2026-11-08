@@ -95,7 +95,7 @@ export const SURFACES = [
   { id: "focus-brainstorm", setup: toFocus, mobile: (p) => mobileOpenRow(p, "neon-noir cast") },
   { id: "composer", setup: toFocus, roots: COMPOSER_ROOTS, mobile: (p) => mobileOpenRow(p, "neon-noir cast") },
   {
-    id: "focus-brainstorm-hot", // token bar in warn state (115K/150K like Aub's shot) via demo fixture ?bsUsed=
+    id: "focus-brainstorm-hot", // token bar in warn state (115K/150K, the owner's R1 shot) via demo fixture ?bsUsed=
     setup: async (p) => { await reload(p, "&bsUsed=115000"); await toFocus(p); },
     after: async (p) => { await reload(p); },
     mobile: async (p) => { await reload(p, "&bsUsed=115000"); await mobileOpenRow(p, "neon-noir cast"); },
@@ -211,7 +211,7 @@ export async function run(opts = {}) {
   const uniq = new Map(); // kind|selector|other -> unique hit with occurrences
   const skipped = [];
   const noRoute = new Set();
-  const known = Object.fromEntries(KNOWN.map((k) => [k.id, { id: k.id, what: k.what, hitKeys: new Set(), targetShots: [], crop: null }]));
+  const known = Object.fromEntries(KNOWN.map((k) => [k.id, { id: k.id, what: k.what, hitKeys: new Set(), sizes: new Set(), targetShots: [], crop: null }]));
   let shots = 0, surfaceRuns = 0;
   const t0 = Date.now();
 
@@ -286,6 +286,7 @@ export async function run(opts = {}) {
             for (const kid of matchKnown(h)) {
               u.known.includes(kid) || u.known.push(kid);
               known[kid].hitKeys.add(key);
+              known[kid].sizes.add(sid);
               if (!known[kid].crop) {
                 known[kid].crop = await cropShot(page, h.box, path.join(shotDir, `v1a-known-${kid}-hit-${sid}-${theme}-${h.surface}.png`), size).catch(() => null);
               }
@@ -303,6 +304,8 @@ export async function run(opts = {}) {
     server.close();
   }
 
+  // Known (owner-reported) hits always fail the guard, even when only the pixel check sees them.
+  for (const u of uniq.values()) if (u.known.length && u.warn) { u.warn = false; u.promoted = true; }
   const hits = [...uniq.values()].sort((a, b) => a.kind.localeCompare(b.kind) || a.selector.localeCompare(b.selector));
   const idOf = new Map();
   hits.forEach((h, i) => {
@@ -325,7 +328,7 @@ export async function run(opts = {}) {
   const report = {
     generatedAt: new Date().toISOString(), sizes: sizeIds, themes, surfaceRuns, seconds: Math.round((Date.now() - t0) / 1000),
     totals: { uniqueFailing: failing.length, uniqueWarn: warns.length, allowed: hits.filter((h) => h.allowed).length, failing: counts(failing), warn: counts(warns) },
-    known: Object.values(known).map((k) => ({ id: k.id, what: k.what, status: k.hitKeys.size ? "found" : "not-reproduced", hitIds: [...k.hitKeys].map((x) => idOf.get(x)), crop: k.crop, shots: k.targetShots })),
+    known: Object.values(known).map((k) => ({ id: k.id, what: k.what, status: k.hitKeys.size ? "found (fails guard)" : "not-reproduced", sizes: [...k.sizes], hitIds: [...k.hitKeys].map((x) => idOf.get(x)), crop: k.crop, shots: k.targetShots })),
     noMobileRoute: [...noRoute], skipped, hits,
   };
   fs.writeFileSync(path.join(outDir, "report.json"), JSON.stringify(report, null, 2));
@@ -338,10 +341,10 @@ function renderMd(r) {
   const L = [`# UI overlap guard report`, ``, `Generated ${r.generatedAt} in ${r.seconds}s. Sizes: ${r.sizes.join(", ")}; themes: ${r.themes.join(", ")}; ${r.surfaceRuns} surface runs. Hits are UNIQUE (same selector+kind merged across theme/size/surface).`, ``];
   L.push(`**${r.totals.uniqueFailing} failing unique hits** (ours ${r.totals.failing.bySplit.ours} / @art ${r.totals.failing.bySplit.art}); ${r.totals.uniqueWarn} warn-only decor-suspect (ours ${r.totals.warn.bySplit.ours} / @art ${r.totals.warn.bySplit.art}); ${r.totals.allowed} allow-listed.`, ``);
   L.push(`Failing by kind/split: ${fmt(r.totals.failing)}`, ``, `Warn by kind/split: ${fmt(r.totals.warn)}`, ``);
-  L.push(`## Known hits`, ``, `| id | what | status | hit ids | crop |`, `|---|---|---|---|---|`);
-  for (const k of r.known) L.push(`| ${k.id} | ${k.what} | ${k.status} | ${k.hitIds.slice(0, 8).join(", ") || "-"} | ${k.crop ?? "-"} |`);
+  L.push(`## Known hits`, ``, `| id | what | status | sizes | hit ids | crop |`, `|---|---|---|---|---|---|`);
+  for (const k of r.known) L.push(`| ${k.id} | ${k.what} | ${k.status} | ${k.sizes.join(", ") || "-"} | ${k.hitIds.slice(0, 8).join(", ") || "-"} | ${k.crop ?? "-"} |`);
   L.push(``);
-  for (const k of r.known.filter((x) => x.status !== "found")) L.push(`- ${k.id} NOT REPRODUCED; shots: ${k.shots.join(", ") || "(target not on screen)"}`);
+  for (const k of r.known.filter((x) => x.status === "not-reproduced")) L.push(`- ${k.id} NOT REPRODUCED; shots: ${k.shots.join(", ") || "(target not on screen)"}`);
   if (r.noMobileRoute.length) L.push(``, `## No mobile route (390x844)`, ``, ...r.noMobileRoute.map((s) => `- ${s}: no mobile route`));
   if (r.skipped.length) {
     L.push(``, `## Skipped / failed surface runs`, ``);
@@ -368,7 +371,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       const t = r.totals;
       console.log(`ui-overlap: ${t.uniqueFailing} failing unique hits (ours ${t.failing.bySplit.ours} / art ${t.failing.bySplit.art}), ${t.uniqueWarn} warn (decor-suspect), ${t.allowed} allow-listed, ${r.seconds}s`);
       console.log(JSON.stringify(t.failing.byKindSplit));
-      for (const k of r.known) console.log(`  known ${k.id}: ${k.status}`);
+      for (const k of r.known) console.log(`  known ${k.id}: ${k.status} [${k.sizes.join(",")}]`);
       console.log(`no mobile route: ${r.noMobileRoute.join(", ") || "-"}; skipped runs: ${r.skipped.length}`);
       console.log(`report: scratch/ui-overlap/report.md`);
       process.exit(t.uniqueFailing > 0 && !flag("no-fail") ? 1 : 0);

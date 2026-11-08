@@ -138,7 +138,8 @@
   // 2. Text overflow, text outside its container, short-label truncation.
   for (const { el, tb, vis } of textLeaves) {
     const s = style(el);
-    const ellipsis = s.textOverflow === "ellipsis";
+    // text-overflow only paints "…" on block containers; on flex/grid containers the text is hard-clipped.
+    const ellipsis = s.textOverflow === "ellipsis" && !/flex|grid/.test(s.display);
     const clipsX = s.overflowX !== "visible";
     if (el.clientWidth >= 8 && el.scrollWidth > el.clientWidth + 1 && s.display !== "inline") {
       if (ellipsis && clipsX) {
@@ -170,7 +171,7 @@
   const seenClip = new Set();
   for (const c of cands) {
     const r = c.raw ?? c.box;
-    let ellipsisSeen = style(c.el).textOverflow === "ellipsis";
+    let ellipsisSeen = style(c.el).textOverflow === "ellipsis" && !/flex|grid/.test(style(c.el).display);
     for (let n = cbParent(c.el), d = 0; n && n !== document.documentElement && n !== document.body && d < 14; n = cbParent(n), d++) {
       const s = style(n);
       const xClip = s.overflowX === "hidden" || s.overflowX === "clip";
@@ -192,6 +193,67 @@
       }
     }
   }
+
+  // 3b. Painted title-bar strips: a url() background layer that spans the element (repeat-x / full width) but is shorter than
+  // it (skin title bars, banners). Text or controls that straddle the strip's top/bottom edge, or are taller than it, are
+  // misaligned against the art (SETTINGS above its bar, chip hanging off the bar).
+  const splitTop = (v) => {
+    const out = []; let depth = 0, cur = "";
+    for (const ch of v) {
+      if (ch === "(") depth++; else if (ch === ")") depth--;
+      if (ch === "," && depth === 0) { out.push(cur.trim()); cur = ""; } else cur += ch;
+    }
+    if (cur.trim()) out.push(cur.trim());
+    return out;
+  };
+  const stripCache = new Map();
+  const stripsOf = (n) => {
+    if (stripCache.has(n)) return stripCache.get(n);
+    const out = [];
+    const s = style(n);
+    if (s.backgroundImage && s.backgroundImage.includes("url(")) {
+      const imgs = splitTop(s.backgroundImage), sizes = splitTop(s.backgroundSize), poss = splitTop(s.backgroundPosition), reps = splitTop(s.backgroundRepeat);
+      const r = n.getBoundingClientRect();
+      const bl = parseFloat(s.borderLeftWidth) || 0, bt = parseFloat(s.borderTopWidth) || 0;
+      imgs.forEach((img, i) => {
+        if (!img.startsWith("url(")) return;
+        const sz = (sizes[i % sizes.length] || "").split(/\s+/), ps = (poss[i % poss.length] || "").split(/\s+/);
+        const rep = reps[i % reps.length] || "repeat";
+        const w = parseFloat(sz[0]), h = parseFloat(sz[1]), py = parseFloat(ps[1]);
+        if (!(h > 0) || isNaN(py) || /repeat-y|^repeat$|^repeat repeat/.test(rep)) return;
+        if (!(/repeat-x/.test(rep) || w >= r.width * 0.9)) return;
+        if (h >= r.height - 2) return; // strip fills the element: nothing can poke out
+        out.push({ top: r.top + bt + py, bottom: r.top + bt + py + h, left: r.left + bl, right: r.right, owner: n, h, ownerH: r.height });
+      });
+    }
+    stripCache.set(n, out);
+    return out;
+  };
+  const seenBar = new Set();
+  const barCheck = (el, b, what) => {
+    let n = el, d = 0;
+    for (; n && n !== document.body && d < 5; n = n.parentElement, d++) {
+      for (const st of stripsOf(n)) {
+        const hMid = (b.left + b.right) / 2;
+        if (hMid < st.left || hMid > st.right) continue;
+        const inside = Math.min(b.bottom, st.bottom) - Math.max(b.top, st.top);
+        const tall = b.bottom - b.top;
+        const above = st.top - b.top, below = b.bottom - st.bottom;
+        // straddling an edge, or text/box nearly entirely off the strip while the strip sits inside the owner
+        // only bar-like owners (strip ~ the owner's height) and only boxes that straddle the strip edge
+        if (st.ownerH > st.h * 2.2 || st.h > 120) continue;
+        if ((above > TOL || below > TOL) && inside > 0) {
+          const key = cssPath(el) + "|" + cssPath(st.owner);
+          if (seenBar.has(key)) return;
+          seenBar.add(key);
+          add("bar-misalign", "ours", el, st.owner, `${what} box y ${b.top.toFixed(0)}-${b.bottom.toFixed(0)} vs painted bar strip y ${st.top.toFixed(0)}-${st.bottom.toFixed(0)} of ${cssPath(st.owner)} (${above > TOL ? `${above.toFixed(1)}px above` : ""}${above > TOL && below > TOL ? ", " : ""}${below > TOL ? `${below.toFixed(1)}px below` : ""} the bar)`, { x: b.left, y: Math.min(b.top, st.top), w: Math.max(b.right - b.left, 8), h: Math.max(b.bottom, st.bottom) - Math.min(b.top, st.top) });
+          return;
+        }
+      }
+    }
+  };
+  for (const { el, vis } of textLeaves) barCheck(el, vis, "text");
+  for (const c of cands) if (c.kind === "interactive") barCheck(c.el, c.box, "control");
 
   // 4. Decorative lines through text: border edges, pseudo-element boxes, repeating gradients vs text boxes.
   const decor = [];

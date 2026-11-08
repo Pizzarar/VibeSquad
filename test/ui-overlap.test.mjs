@@ -2,12 +2,12 @@
 //
 // SKIPPED unless UI_OVERLAP=1: it fails until V1b (layout fixes) and @art U4b (colour/line art) land, so it must
 // not block the normal `npm test`. Run it with `UI_OVERLAP=1 node --test test/ui-overlap.test.mjs`
-// (or `npm run ui:overlap` for the report only). Default matrix = 4k@1.2 + 1080, dark + light (~3.5 min);
-// UI_OVERLAP_FULL=1 adds 1280x800 + 390x844 (~8 min). Report: scratch/ui-overlap/report.{json,md}, shots: scratch/shots/v1a-*.
+// (or `npm run ui:overlap` for the report only). Matrix = all four sizes (4k@1.2, 1080, 1280x800, 390x844), dark + light
+// (~6 min); UI_OVERLAP_SIZES=4k,1080 narrows it for quick local runs. Report: scratch/ui-overlap/report.{json,md}, shots: scratch/shots/v1a-*.
 //
-// decor-suspect (pixel background step through text) is warn-only and never fails the run, EXCEPT for the two
-// explicit assertions below (composer MEDIUM chip, settings header): those fail on ANY hit of any kind, allow-listed
-// or not, so V1b has to fix them rather than allow-list them.
+// decor-suspect (pixel background step through text) is warn-only, EXCEPT when it matches one of the owner-reported
+// known hits: those always fail. The known-hit assertions below fail on ANY hit of any kind, allow-listed or not, so
+// V1b has to fix them rather than allow-list them.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -18,7 +18,7 @@ const opts = { timeout: 1200000, skip };
 
 let reportPromise = null;
 async function getReport() {
-  reportPromise ??= import("../scripts/ui-overlap.mjs").then(({ run }) => run({ sizes: process.env.UI_OVERLAP_FULL === "1" ? "4k,1080,800,mobile" : "4k,1080" }));
+  reportPromise ??= import("../scripts/ui-overlap.mjs").then(({ run }) => run({ sizes: process.env.UI_OVERLAP_SIZES || "4k,1080,800,mobile" }));
   return reportPromise;
 }
 const describeHits = (hits) => hits.slice(0, 12).map((h) => `#${h.id} ${h.kind} [${h.split}] ${h.selector} (${h.occurrences.map((o) => `${o.surface}@${o.size}/${o.theme}`).slice(0, 3).join(", ")}): ${h.detail}`).join("\n");
@@ -27,6 +27,12 @@ test("ui overlap guard: no failing overlap / overflow / clipping / line-through-
   const r = await getReport();
   const failing = r.hits.filter((h) => !h.allowed && !h.warn);
   assert.equal(failing.length, 0, `${failing.length} unique failing hits (see scratch/ui-overlap/report.md). First:\n${describeHits(failing)}`);
+});
+
+test("no owner-reported known hit reproduces (any kind, allow-list ignored)", opts, async () => {
+  const r = await getReport();
+  const bad = r.known.filter((k) => k.hitIds.length > 0);
+  assert.equal(bad.length, 0, `known hits still reproducing: ${bad.map((k) => `${k.id} [${k.sizes.join(",")}]`).join("; ")}`);
 });
 
 test("composer MEDIUM chip (drawer-config-menu-btn) is clean on the composer surface, allow-list free", opts, async () => {

@@ -1,10 +1,10 @@
-// The hits Aub reported (docs/PLAN_OVERLAP_AUDIT_V1.md rounds 1-3). The guard must flag each one;
+// The hits reported by the owner (docs/PLAN_OVERLAP_AUDIT_V1.md rounds 1-3). The guard must flag each one;
 // `matchers` classify aggregated hits, `targets` are always screenshotted (so "not reproduced" has a picture).
 const hay = (h) => `${h.selector} ${h.classes.join(" ")} ${h.text} ${h.other?.selector ?? ""} ${(h.other?.classes ?? []).join(" ")} ${h.other?.text ?? ""}`;
 const has = (h, re) => re.test(hay(h));
 
 const CTX_BAR = /brainstorm-ctx-bar|pin-rail-active-ctx/i;
-const GEOM = ["decor-line", "decor-suspect", "overlap", "edge-clip", "text-outside-container", "text-overflow", "truncated", "contrast"];
+const GEOM = ["bar-misalign", "decor-line", "decor-suspect", "overlap", "edge-clip", "text-outside-container", "text-overflow", "truncated", "contrast"];
 
 export const KNOWN = [
   {
@@ -35,17 +35,18 @@ export const KNOWN = [
   },
   {
     id: "r3-exposed-banner-line", what: "R3: EXPOSED ON ... LAN banner has a horizontal line through the text",
-    match: (h) => has(h, /exposed-network-banner/i) && ["decor-line", "decor-suspect"].includes(h.kind),
+    match: (h) => has(h, /exposed-network-banner/i) && ["bar-misalign", "decor-line", "decor-suspect"].includes(h.kind),
     targets: [{ surface: "squads-home", selector: '[data-testid="exposed-network-banner"]' }],
   },
   {
     id: "r3-squads-rail-line", what: "R3: Squads rail button (PinRail.tsx:237) has a horizontal line across icon/label",
-    match: (h) => has(h, /pin-focus-home/i) && ["decor-line", "decor-suspect"].includes(h.kind),
+    match: (h) => has(h, /pin-focus-home/i) && ["bar-misalign", "decor-line", "decor-suspect"].includes(h.kind),
     targets: [{ surface: "focus-brainstorm", selector: '[data-testid="pin-focus-bar"]' }],
   },
   {
     id: "r3-squads-label-truncated", what: "R3: Squads label truncated to 'Squa...'",
-    match: (h) => h.kind === "truncated" && (/^squa/i.test(h.text) || has(h, /pin-focus-home|breadcrumb-squads|pin-rail-squads/i) || /squa/i.test(h.text)),
+    // The Squads rail/breadcrumb button itself (not the VibeSquad team rows): its label is "Squads".
+    match: (h) => h.kind === "truncated" && (has(h, /pin-focus-home|breadcrumb-squads|pin-rail-squads/i) || /^squads?\W*$/i.test(h.text.trim())),
     targets: [{ surface: "focus-brainstorm", selector: '[data-testid="top-breadcrumb"]' }],
   },
   {
