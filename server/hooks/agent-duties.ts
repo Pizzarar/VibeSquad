@@ -1013,6 +1013,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     };
 
     const digested = new Set<string>();
+    const digestedTurn = new Set<string>(); // worker ids whose current turn already dispatched a digest (cleared on turn_started)
+    const inflightDigests = new Set<string>(); // worker ids with a digest spawn or run currently in flight
     const retries = new Map<string, number>();
     const offsets = new Map<string, number>();
     const misrouteCounts = new Map<string, number>();
@@ -2078,11 +2080,15 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
 
     async function spawnDigest(paseo: Paseo, worker: any, turnId: string | null, labels: Labels) {
       if (isDigestAgent(labels, worker.title) || isDigestNoise(labels, worker.title)) return;
-      const key = `${worker.id}:${turnId ?? ""}`;
-      if (digested.has(key)) return;
-      digested.add(key);
+      const workerId = String(worker.id ?? "").trim();
+      if (!workerId) return;
+      const key = `${workerId}:${turnId ?? ""}`;
+      if (digested.has(key) || digestedTurn.has(workerId) || inflightDigests.has(workerId)) return;
       const where = teamOf(labels, worker.cwd);
       if (!where) return;
+      digested.add(key);
+      digestedTurn.add(workerId);
+      inflightDigests.add(workerId);
       const { team, lane } = where;
       const prompt = [
         `You are a digest agent. Inspect the final result of worker agent ${worker.id} ("${worker.title ?? ""}"):`,
@@ -2154,8 +2160,10 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             // The digest ended its turn without logging a verdict (it errored in-turn or skipped the command).
             if (!verdictLogged()) return fallback("logged nothing");
           })
-          .catch(() => fallback("errored"));
+          .catch(() => fallback("errored"))
+          .finally(() => inflightDigests.delete(workerId));
       } catch (err) {
+        inflightDigests.delete(workerId);
         log(`digest spawn failed for ${worker.id}: ${err}`);
         await fallback("spawn failed");
       }
@@ -2537,7 +2545,10 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         server.on("agent.turn_started" as any, async ({ agent }: { agent: any }, { paseo }: { paseo: any }) => {
           paseoApi = paseo;
           markTurnSeen(agent?.id);
-          if (agent?.id) doneReported.delete(agent.id); // a new turn after a report: the worker is working again, do not close it
+          if (agent?.id) {
+            doneReported.delete(agent.id); // a new turn after a report: the worker is working again, do not close it
+            digestedTurn.delete(agent.id);
+          }
           try {
             const me = await snap(paseo, agent.id);
             if (me && effectiveAgentRole(me) === "lead") lastWakeAt.set(agent.id, Date.now());

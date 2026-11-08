@@ -648,3 +648,32 @@ test('catch-up: a worker that finished and was archived while the stream was dow
     assert.equal(b.count('agent.turn_ended', a.id), 1);
   } finally { await b.close(); }
 });
+
+test('turn_ended: rapid or concurrent duplicate turn_ended triggers for the same worker turn dispatch one digest, and a later new turn gets one', async () => {
+  const b = await boot({ agy: true });
+  try {
+    const w = await b.backend.createAgent(req({ lane: 'bug-chaser', role: 'worker', job: 'build thing' }, { initialPrompt: 'PASS: built' }));
+    const first = await until(async () => (await b.backend.listAgents({ filter: { includeArchived: true } })).find((a) => a.labels.digestFor === w.id), 8000, 'first digest agent');
+    const agent = await b.backend.getAgent(w.id);
+
+    // Concurrent / rapid duplicate turn_ended triggers with reassigned, null, or parked turnIds without a new turn_started
+    await Promise.all([
+      b.lifecycle.host.emit('agent.turn_ended', { agent, turnId: null, outcome: { kind: 'completed' } }),
+      b.lifecycle.host.emit('agent.turn_ended', { agent, turnId: '99', outcome: { kind: 'completed' } }),
+      b.lifecycle.host.emit('agent.turn_ended', { agent, turnId: '100', outcome: { kind: 'completed' } }),
+    ]);
+    await settle(400);
+    const afterDups = (await b.backend.listAgents({ filter: { includeArchived: true } })).filter((a) => a.labels.digestFor === w.id);
+    assert.equal(afterDups.length, 1, 'duplicate turn_ended triggers without a new turn do not spawn extra digests');
+    assert.equal(afterDups[0].id, first.id);
+
+    // Wait for the first digest to finish so a genuinely new turn can dispatch its own digest
+    await until(async () => (await b.backend.getAgent(first.id)).archivedAt, 8000, 'first digest finished');
+    await b.backend.sendAgentPrompt(w.id, 'PASS: second turn');
+    const second = await until(async () => (await b.backend.listAgents({ filter: { includeArchived: true } })).find((a) => a.labels.digestFor === w.id && a.id !== first.id), 8000, 'second turn gets its own digest');
+    await until(async () => (await b.backend.getAgent(second.id)).archivedAt, 8000, 'second digest finished');
+  } finally {
+    await b.close();
+  }
+});
+
