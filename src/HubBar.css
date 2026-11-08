@@ -12,3 +12,12 @@
   .hub-bar-long { display: none; }
   .hub-bar-short { display: inline; }
 }
+
+/* Bug Runner button (docs/PLAN_BUG_RUNNER.md B3): plain segment at the right end; red count while unseen items, grey after open, one short pulse on arrival. */
+.hub-bar-bug { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; background: var(--panel-hi); color: var(--muted); border: 1px solid var(--line); padding: 4px 10px; font-family: var(--arcade); font-size: 10px; letter-spacing: 0.8px; cursor: pointer; white-space: nowrap; }
+.hub-bar-bug:hover, .hub-bar-bug:focus-visible { color: var(--text); border-color: var(--text); }
+.hub-bar-bug.has-new .hub-bar-bug-n { color: var(--on-bug-n); background: var(--bug-n-bg); padding: 1px 6px; font-weight: 700; }
+.hub-bar-bug { --bug-n-bg: #c0123f; --on-bug-n: #fff; }
+.hub-bar-bug.pulse { animation: hub-bar-bug-pulse 1.1s ease-out 1; }
+@keyframes hub-bar-bug-pulse { 0% { box-shadow: 0 0 0 0 #c0123fcc; } 100% { box-shadow: 0 0 0 10px #c0123f00; } }
+@media (prefers-reduced-motion: reduce) { .hub-bar-bug.pulse { animation: none; } }
