@@ -4729,7 +4729,7 @@ button.project-file-name:hover { text-decoration: underline; }
 .hub-mini-name { font-family: var(--arcade); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; background: var(--bg); padding: 1px 6px; }
 /* The tower gets a fixed-height, non-scrolling box (HP4 shows one floor per screen); the gutters beside it are the backdrop, so the tower strip is transparent here. */
 .hub-tower-box { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
-.hub-pages .hub-tower-box .sq-floor { flex: 1; height: auto; min-height: 0; max-height: none; overflow: hidden; } /* the page wrapper owns the box height; beats the .hub-body 38vh/40vh stand-ins */
+.hub-pages .hub-tower-box .sq-floor { flex: 1; height: auto; min-height: 0; max-height: none; overflow: hidden; background: transparent; border-top: 0; } /* the page wrapper owns the box height; beats the .hub-body 38vh/40vh stand-ins */
 .hub-tower-box .sq-floor-tower { background: transparent; border-top: 0; }
 
 /* ── Sky zones (src/SkyZones.tsx, docs/PLAN_SKY_GODS_C2B.md G1): two sky-CRT chats above the tower ── */
