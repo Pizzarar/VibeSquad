@@ -310,3 +310,42 @@ test('L: a fresh turn marks itself active (lastEvent/quiet) without waiting for 
   assert.equal(e.quiet, true, 'once genuinely stale, it is flagged');
   runner.shutdown();
 });
+
+// ---- Review-Gemini R2 findings ----
+
+test('H: a normal steer merges into the open turn (one result → idle → parks), on the real claude adapter', async () => {
+  const spawnImpl = fakeClaudeSpawn();
+  const runner = new Runner({ dir: tmp(), adapters: { claude: createClaudeAdapter({ spawnImpl, mcp: false }) }, turnCaps: { claude: 1 }, parkGraceMs: 0 });
+  const a = mk(runner, { prompt: 'one' });
+  await tick();
+  assert.equal(runner.live.get(a).inflight, 1, 'turn 1 running');
+
+  // two normal steers merge into the open turn (the CLI emits ONE result for the merged turn)
+  runner.send(a, 'two');
+  runner.send(a, 'three');
+  assert.equal(runner.live.get(a).inflight, 1, 'merged steers take no extra slot');
+
+  spawnImpl.calls[0].child.result(); // the single result for the merged turn
+  await tick(30);
+  assert.equal(runner.live.get(a)?.inflight ?? 0, 0, 'inflight 0 after the single result');
+  assert.equal(runner.live.has(a), false, 'parked after the merged turn (not stuck running)');
+  assert.equal(runner.status(a).status, 'parked', 'no leaked slot');
+  runner.shutdown();
+});
+
+test('M: a late running emit after park is dropped (log stays parked, no slot re-taken)', () => {
+  const adapter = controlledAdapter();
+  const runner = new Runner({ dir: tmp(), adapters: { claude: adapter }, turnCaps: { claude: 1 }, parkGraceMs: 60_000 });
+  const a = mk(runner, { prompt: 'a' });
+  adapter.started[0].emit('session', { sessionId: 's' });
+  adapter.started[0].emit('status', { status: 'idle' }); // turn ends
+  runner.park(a);
+  assert.equal(runner.live.has(a), false, 'parked');
+
+  adapter.started[0].emit('status', { status: 'running' }); // late child event (killTree is async)
+  assert.equal(runner.live.has(a), false, 'still parked: the late running did not re-take a slot');
+  const statuses = runner.timeline(a).filter((e) => e.type === 'status').map((e) => e.status);
+  assert.equal(statuses.at(-1), 'parked', 'the log still ends parked (no trailing running)');
+  assert.ok(runner._parkedSpec(a), 'still resumable (_parkedSpec not corrupted)');
+  runner.shutdown();
+});

@@ -148,6 +148,9 @@ export class Runner {
     const entry = { status: 'starting', handle: null, provider, family: providerFamily(provider), systemPrompt, sessionId: resume ?? null, parked: false, lastActive: Date.now(), lastEvent: Date.now(), quiet: false, inflight: 0, turns: resume ? 1 : 0, perms: new Set(), parkTimer: null };
     this.live.set(id, entry);
     const emit = (type, data) => {
+      // A late event from a child that was just parked/killed (killTree is async on Windows) must not touch a dead
+      // entry: a stray 'running' after 'parked' would corrupt _parkedSpec (the agent reads 'lost') or re-take inflight.
+      if (entry.parked || entry.status === 'exited' || this.live.get(id) !== entry) return;
       if (!NON_PROGRESS_EVENTS.has(type)) { // only turn-progress events count: stderr/raw/limit are noise
         entry.lastEvent = Date.now();
         if (entry.quiet) entry.quiet = false; // a real event ends a quiet turn's quiet period: it counts again
