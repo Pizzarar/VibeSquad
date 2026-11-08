@@ -4,7 +4,7 @@
 // Probing: `<cli> --version` on the resolved executable, no shell, cached with a TTL. No background timers.
 import { execFile, execFileSync } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ACP_PROVIDERS, PROVIDER_ALIASES } from "../runner/adapters/acp.mjs";
 import { killTree, resolveExecutable, spawnNoShell } from "../runner/spawn.mjs";
@@ -482,7 +482,29 @@ export function readLimits(home) {
 
 // ---- merged units from git. `git` is injectable: (args: string[]) => stdout string.
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const defaultGit = (args) => execFileSync("git", args, { cwd: REPO_ROOT, encoding: "utf8", timeout: 15_000, maxBuffer: 64 * 1024 * 1024, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+
+/**
+ * The git checkout `readMergedUnits` must run against. In the installed app the server runs from
+ * %LOCALAPPDATA%\VibeSquad\runtime (a deployed copy, not a git checkout), so REPO_ROOT alone points at a
+ * non-repo and `git log` returns nothing -> 0 merged units -> empty implementer attribution (usa-10 root cause).
+ * Resolve the real checkout: VIBESQUAD_ROOT override (same convention as brainstorm.mjs / lead-handoff.mjs), else
+ * the repo the runtime was last synced from (build-stamp.json), else REPO_ROOT (the dev checkout).
+ */
+function gitRepoRoot() {
+  if (process.env.VIBESQUAD_ROOT) return resolve(process.env.VIBESQUAD_ROOT);
+  try {
+    const stampPath = join(REPO_ROOT, "build-stamp.json");
+    if (existsSync(stampPath)) {
+      const stamp = JSON.parse(readFileSync(stampPath, "utf8"));
+      const repo = typeof stamp?.repo === "string" ? stamp.repo.trim() : "";
+      const workTree = repo.replace(/[\\/]+\.git[\\/]*$/, "");
+      if (workTree) return resolve(workTree);
+    }
+  } catch { /* not a runtime or no stamp: fall through to REPO_ROOT */ }
+  return REPO_ROOT;
+}
+
+const defaultGit = (args) => execFileSync("git", args, { cwd: gitRepoRoot(), encoding: "utf8", timeout: 15_000, maxBuffer: 64 * 1024 * 1024, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
 const REVIEW_RE = /review r(\d+)/i;
 const CODE_RE = /\(@([A-Za-z0-9_-]+)(?:\s[^)]*)?\)/g;
 const MAX_COMMITS = 4000;
@@ -498,9 +520,33 @@ const codeOf = (subject) => {
 
 let mergedCache = null; // { git, head, units }: recomputed only when HEAD (or the injected git) changes
 
-/** Merge commits -> units {sha, unit, code, reviewRounds, mergedAt, subject}. unit = branch from "Merge branch 'x'".
- * One `git log` over recent history joined in memory (no per-merge spawns), cached by HEAD sha. The merged side of a
- * merge = commits reachable from its 2nd parent until the first-parent (mainline) chain from HEAD is hit.
+/**
+ * Parse one `git log --first-parent --numstat --format=%H` into sha -> {locAdded, locDeleted, filesChanged}.
+ * The `--first-parent` walk keeps the diff of a merge against its first parent (the LOC the branch introduced),
+ * which `git log --numstat` would otherwise omit for merge commits. Bounded by MAX_COMMITS, one spawn.
+ */
+function parseNumstat(raw) {
+  const out = new Map();
+  let cur = null;
+  for (const line of String(raw ?? "").split("\n")) {
+    const sha = /^([0-9a-f]{7,64})$/.exec(line.trim())?.[1];
+    if (sha) { cur = sha; if (!out.has(cur)) out.set(cur, { locAdded: 0, locDeleted: 0, filesChanged: 0 }); continue; }
+    if (!cur) continue;
+    const ns = /^(-|\d+)\t(-|\d+)\t/.exec(line);
+    if (ns) {
+      const st = out.get(cur);
+      st.locAdded += ns[1] === "-" ? 0 : Number(ns[1]);
+      st.locDeleted += ns[2] === "-" ? 0 : Number(ns[2]);
+      st.filesChanged += 1;
+    }
+  }
+  return out;
+}
+
+/** Merge commits -> units {sha, unit, code, reviewRounds, mergedAt, locAdded, locDeleted, filesChanged, subject}.
+ * unit = branch from "Merge branch 'x'". One `git log` over recent history joined in memory (no per-merge spawns),
+ * cached by HEAD sha, plus one bounded `--first-parent --numstat` companion pass for LOC (also cached). The merged side
+ * of a merge = commits reachable from its 2nd parent until the first-parent (mainline) chain from HEAD is hit.
  * reviewRounds = highest N among "review rN" subjects on that side. Lane code = the merge subject's `(@code)` tag,
  * else the first tag found on the merged side. */
 export function readMergedUnits(git = defaultGit) {
@@ -514,6 +560,10 @@ export function readMergedUnits(git = defaultGit) {
     const [sha, parents, ct, subject = ""] = line.split("\x1f");
     if (sha) commits.set(sha, { sha, parents: (parents ?? "").trim().split(/\s+/).filter(Boolean), ct, subject });
   }
+  // Companion LOC pass (usa-10): merge first-parent diffs, keyed by sha. Optional: a git that only answers
+  // `rev-parse`/`log` (older fixtures) yields an empty map and units keep locAdded=0.
+  let numstat = new Map();
+  try { numstat = parseNumstat(git(["log", `-${MAX_COMMITS}`, "--first-parent", "--numstat", "--format=%H"])); } catch { /* LOC is best-effort */ }
   const mainline = new Set();
   for (let c = commits.get(head); c && !mainline.has(c.sha); c = commits.get(c.parents[0])) mainline.add(c.sha);
   const units = [];
@@ -542,7 +592,8 @@ export function readMergedUnits(git = defaultGit) {
       if (Number.isFinite(cts) && (firstCt === null || cts < firstCt)) firstCt = cts;
     }
     const branch = /Merge branch '([^']+)'/i.exec(c.subject)?.[1] ?? null;
-    units.push({ sha: c.sha, unit: branch, code, reviewRounds: rounds, mergedAt: Number.isFinite(Number(c.ct)) ? new Date(Number(c.ct) * 1000).toISOString() : null, firstBranchCtMs: firstCt === null ? null : firstCt * 1000, subject: c.subject });
+    const loc = numstat.get(c.sha) ?? { locAdded: 0, locDeleted: 0, filesChanged: 0 };
+    units.push({ sha: c.sha, unit: branch, code, reviewRounds: rounds, mergedAt: Number.isFinite(Number(c.ct)) ? new Date(Number(c.ct) * 1000).toISOString() : null, firstBranchCtMs: firstCt === null ? null : firstCt * 1000, subject: c.subject, locAdded: loc.locAdded, locDeleted: loc.locDeleted, filesChanged: loc.filesChanged });
   }
   mergedCache = { git, head, units };
   return units;
@@ -553,7 +604,7 @@ function readLaneCodes(home) {
   const map = new Map();
   try {
     const own = home ? join(home, "teams.json") : null;
-    const file = own && !isForbiddenRealHome(home) && existsSync(own) ? own : resolveTeamsFilePath(REPO_ROOT);
+    const file = own && !isForbiddenRealHome(home) && existsSync(own) ? own : resolveTeamsFilePath(gitRepoRoot());
     const t = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
     for (const team of t.teams ?? []) for (const l of team.lanes ?? []) {
       if (!l?.id) continue;
@@ -597,15 +648,24 @@ function agentV2(st, agentId) {
     errors: st.errors ?? 0,
     lastError: st.lastError ?? "",
     lastErrorTs: st.lastErrorTs ?? null,
+    handoff: !!st.handoff,
     loop: st.turns > LOOP_TURN_THRESHOLD && !st.pass,
   };
 }
 
-/** Attribute a merged unit to the implementer worker: basename(cwd) === unit, else the single worker in the lane created before mergedAt. */
+/**
+ * The unit name a worker's cwd resolves to: basename() already strips both `\` and `/` (Windows worktree paths such as
+ * C:\Users\...\worktrees\VibeSquad\<unit> use backslashes, some logs use forward slashes). Lower-cased so a worktree dir
+ * that differs in case from the branch name still matches (git branch names are case-insensitive on Windows).
+ */
+const unitNameOfCwd = (cwd) => (typeof cwd === "string" && cwd ? basename(cwd).toLowerCase() : "");
+
+/** Attribute a merged unit to the implementer worker: basename(cwd) === unit (case-insensitive), else the single worker in the lane created before mergedAt. */
 function attributeImplementer(unit, agents) {
   const mergedAtMs = tsMs(unit.mergedAt);
   if (typeof unit.unit === "string" && unit.unit) {
-    const matches = agents.filter((a) => a.role === "worker" && typeof a.cwd === "string" && a.cwd && basename(a.cwd) === unit.unit);
+    const want = unit.unit.toLowerCase();
+    const matches = agents.filter((a) => a.role === "worker" && unitNameOfCwd(a.cwd) === want);
     if (matches.length === 1) return matches[0];
     if (matches.length > 1) return null; // ambiguous cwd match
   }
@@ -776,6 +836,334 @@ function computeSpawnStorms(agents) {
   return merged;
 }
 
+// ---------------------------------------------------------------- benchmark ledger, A/B workflow, savings, cohorts, floor (usa-10)
+
+const WF_TAG_RE = /\[wf:([^\]]+)\]/i;
+const OPUS_IN_PER_MT = 15; // $ per million input tokens — all-Opus routing baseline
+const OPUS_OUT_PER_MT = 75; // $ per million output tokens
+const BRIEF_TOKENS = 5000; // isolated workers each carry a <5k brief (spec)
+
+/** Implementer provider -> one of the workflow families: gemini | claude | dsp | null. */
+function providerFamily(provider) {
+  const p = String(provider ?? "").toLowerCase();
+  if (p === "antigravity-cli" || p === "agy" || p.includes("antigravity") || p.includes("gemini")) return "gemini";
+  if (p === "claude") return "claude";
+  if (p === "opencode" || p.includes("deepseek") || p.includes("dsp")) return "dsp";
+  return p || null;
+}
+
+/** workflowMode: explicit `[wf:<mode>]` tag wins (pilot uses [wf:sonnet]/[wf:dsp]/[wf:gemini], keep the tag value),
+ * else derived from the implementer's provider/profile (the current default review loop is Review-Gemini, hence
+ * "sonnet+gemini-review" / "dsp+gemini-review"; a Gemini implementer is "gemini-full"; other Claude = "claude-only"). */
+function classifyWorkflowMode(unit, implementer) {
+  const m = WF_TAG_RE.exec(unit?.subject ?? "");
+  if (m) return m[1].trim().toLowerCase() || "unattributed";
+  const fam = providerFamily(implementer?.provider);
+  const profile = String(implementer?.profile ?? "").toLowerCase();
+  if (fam === "gemini") return "gemini-full";
+  if (fam === "claude") return profile.includes("sonnet") ? "sonnet+gemini-review" : "claude-only";
+  if (fam === "dsp") return "dsp+gemini-review";
+  return "unattributed";
+}
+
+/** A/B workflow rollup. Cost/tokens per unit come from the attributed implementer (one worker ≈ one unit). */
+function buildByWorkflow(merged, agentById) {
+  const groups = new Map();
+  for (const u of merged) {
+    const implementer = u.implementerAgentId ? agentById.get(u.implementerAgentId) : null;
+    const workflowMode = u.workflowMode ?? classifyWorkflowMode(u, implementer);
+    const g = getOrSet(groups, workflowMode, () => ({
+      workflowMode, units: 0, firstTryPassCount: 0, reviewRoundsSum: 0, costUsd: 0,
+      inputTokens: 0, outputTokens: 0, locAdded: 0, locDeleted: 0, unitCycleSum: 0, unitCycleCount: 0,
+      fixAfterMergeCount: 0, knownCostUnits: 0,
+    }));
+    g.units += 1;
+    if ((u.reviewRounds ?? 0) <= 1) g.firstTryPassCount += 1;
+    g.reviewRoundsSum += u.reviewRounds ?? 0;
+    const cost = Number.isFinite(u.costUsd) ? u.costUsd : 0;
+    g.costUsd += cost;
+    g.inputTokens += u.inputTokens ?? 0;
+    g.outputTokens += u.outputTokens ?? 0;
+    g.locAdded += u.locAdded ?? 0;
+    g.locDeleted += u.locDeleted ?? 0;
+    if (cost > 0) g.knownCostUnits += 1;
+    if (u.unitCycleMs !== null && u.unitCycleMs !== undefined) { g.unitCycleSum += u.unitCycleMs; g.unitCycleCount += 1; }
+    if (u.fixAfterMerge) g.fixAfterMergeCount += 1;
+  }
+  return [...groups.values()].map((g) => {
+    const totalLoc = g.locAdded + g.locDeleted;
+    return {
+      workflowMode: g.workflowMode,
+      units: g.units,
+      firstTryPassRate: g.units ? Math.round((g.firstTryPassCount / g.units) * 1000) / 1000 : 0,
+      avgReviewRounds: g.units ? Math.round((g.reviewRoundsSum / g.units) * 100) / 100 : 0,
+      costUsd: g.costUsd,
+      costPerUnit: g.units ? g.costUsd / g.units : null,
+      costPer100Loc: totalLoc > 0 ? (g.costUsd / totalLoc) * 100 : null,
+      tokensPerUnit: g.units ? Math.round(((g.inputTokens + g.outputTokens) / g.units) * 100) / 100 : 0,
+      avgUnitCycleMs: g.unitCycleCount ? Math.round(g.unitCycleSum / g.unitCycleCount) : null,
+      fixAfterMergeRate: g.units ? Math.round((g.fixAfterMergeCount / g.units) * 1000) / 1000 : 0,
+      costCoverage: g.units ? Math.round((g.knownCostUnits / g.units) * 1000) / 1000 : 0,
+    };
+  }).sort((a, b) => b.units - a.units || a.workflowMode.localeCompare(b.workflowMode));
+}
+
+/** Counterfactual savings vs a solo monolithic Opus workflow. Baselines are commented inline; divide-by-zero -> null. */
+function buildSavings(merged, totals, lanes, agents) {
+  const inputTokens = totals.inputTokens ?? 0;
+  const outputTokens = totals.outputTokens ?? 0;
+  // (a) Role-tier routing savings: price every token at Opus rates and compare against the actual mixed-tier spend.
+  const soloOpusBaselineUsd = (inputTokens * OPUS_IN_PER_MT + outputTokens * OPUS_OUT_PER_MT) / 1_000_000;
+  const actualCostUsd = totals.costUsd ?? 0;
+  const routingSavingsUsd = Math.max(0, soloOpusBaselineUsd - actualCostUsd);
+  const routingSavingsPct = soloOpusBaselineUsd > 0 ? routingSavingsUsd / soloOpusBaselineUsd : null;
+
+  // (b) Context-isolation savings: a monolithic session re-sends every prior assistant output each turn (+ a brief),
+  // so its input ≈ Σ_turns (brief + prior outputs). Isolated workers only pay the brief once and never re-send peers'
+  // output. Model uniform output per turn: monolithicInput_lane = turns*brief + outputTokens*(turns-1)/2.
+  let monolithicBaselineTokens = 0;
+  for (const l of lanes) {
+    const t = l.turns ?? 0;
+    if (!t) continue;
+    monolithicBaselineTokens += t * BRIEF_TOKENS + ((l.outputTokens ?? 0) * (t - 1)) / 2;
+  }
+  const contextSavingsTokens = Math.max(0, monolithicBaselineTokens - inputTokens);
+
+  // (c) Parallelism speedup: total active-agent working time over the wall-clock active span (first active ts -> last).
+  let activeAgentWorkMs = 0;
+  let minFirst = null;
+  let maxLast = null;
+  for (const a of agents) {
+    activeAgentWorkMs += a.workingMs ?? 0;
+    if (a.firstTs !== null && a.firstTs !== undefined && (minFirst === null || a.firstTs < minFirst)) minFirst = a.firstTs;
+    if (a.lastTs !== null && a.lastTs !== undefined && (maxLast === null || a.lastTs > maxLast)) maxLast = a.lastTs;
+  }
+  const wallClockActiveSpanMs = minFirst !== null && maxLast !== null ? Math.max(0, maxLast - minFirst) : 0;
+  const parallelSpeedup = wallClockActiveSpanMs > 0 ? activeAgentWorkMs / wallClockActiveSpanMs : null;
+
+  const totalLocChanged = merged.reduce((s, u) => s + (u.locAdded ?? 0) + (u.locDeleted ?? 0), 0);
+  const mergedUnits = merged.length;
+  return {
+    routingSavingsUsd,
+    soloOpusBaselineUsd,
+    actualCostUsd,
+    routingSavingsPct: routingSavingsPct === null ? null : Math.round(routingSavingsPct * 1000) / 1000,
+    contextSavingsTokens: Math.round(contextSavingsTokens),
+    monolithicBaselineTokens: Math.round(monolithicBaselineTokens),
+    parallelSpeedup: parallelSpeedup === null ? null : Math.round(parallelSpeedup * 100) / 100,
+    activeAgentWorkMs: Math.round(activeAgentWorkMs),
+    wallClockActiveSpanMs: Math.round(wallClockActiveSpanMs),
+    totalLocChanged,
+    costPer100Loc: totalLocChanged > 0 ? (actualCostUsd / totalLocChanged) * 100 : null,
+    costPerMergedUnit: mergedUnits > 0 ? actualCostUsd / mergedUnits : null,
+  };
+}
+
+function cohortOf(units) {
+  const n = units.length;
+  if (!n) return { units: 0, firstTryPassRate: null, avgReviewRounds: null, costPerUnit: null, tokensPerUnit: null, avgUnitCycleMs: null, fixAfterMergeRate: null };
+  let firstTry = 0, rounds = 0, cost = 0, tokens = 0, cycSum = 0, cycCount = 0, fix = 0;
+  for (const u of units) {
+    if ((u.reviewRounds ?? 0) <= 1) firstTry += 1;
+    rounds += u.reviewRounds ?? 0;
+    cost += Number.isFinite(u.costUsd) ? u.costUsd : 0;
+    tokens += (u.inputTokens ?? 0) + (u.outputTokens ?? 0);
+    if (u.unitCycleMs !== null && u.unitCycleMs !== undefined) { cycSum += u.unitCycleMs; cycCount += 1; }
+    if (u.fixAfterMerge) fix += 1;
+  }
+  return {
+    units: n,
+    firstTryPassRate: round2(firstTry / n),
+    avgReviewRounds: round2(rounds / n),
+    costPerUnit: round2(cost / n),
+    tokensPerUnit: round2(tokens / n),
+    avgUnitCycleMs: cycCount ? Math.round(cycSum / cycCount) : null,
+    fixAfterMergeRate: round2(fix / n),
+  };
+}
+
+/** Last ≤10 merged units (recent) vs the preceding ≤10 (prior); delta = recent - prior per metric. */
+function buildCohorts(merged) {
+  const sorted = [...merged].sort((a, b) => (a.mergedAtMs ?? 0) - (b.mergedAtMs ?? 0));
+  const recent = cohortOf(sorted.slice(-10));
+  const prior = cohortOf(sorted.slice(-20, -10));
+  const delta = {};
+  for (const k of ["firstTryPassRate", "avgReviewRounds", "costPerUnit", "tokensPerUnit", "avgUnitCycleMs", "fixAfterMergeRate"]) {
+    delta[k] = recent[k] === null || prior[k] === null ? null : round2(recent[k] - prior[k]);
+  }
+  return { recent, prior, delta };
+}
+
+/**
+ * Clean-Run Floor: split total spend into "clean shipping" vs four waste buckets.
+ *   reworkCostUsd            = Σ costUsd of merged units with reviewRounds >= 2
+ *   fixAfterMergeCostUsd     = Σ costUsd of merged units flagged fixAfterMerge (non-rework)
+ *   loopAndAbandonedCostUsd  = Σ costUsd of loop-flagged agents + abandoned workers (turns>0, !pass, never merged)
+ *   restartOverheadCostUsd   = Σ costUsd of handoff-carrier agents + extra (non-first) lead/brainstorm per lane
+ * cleanCostUsd = total - Σ buckets (clamped >= 0), so clean + buckets === total by construction.
+ */
+function buildFloor(merged, agents, totals) {
+  let rework = 0, fixCost = 0;
+  for (const u of merged) {
+    const c = Number.isFinite(u.costUsd) ? u.costUsd : 0;
+    if ((u.reviewRounds ?? 0) >= 2) rework += c;
+    else if (u.fixAfterMerge) fixCost += c;
+  }
+  const implementerIds = new Set(merged.map((u) => u.implementerAgentId).filter(Boolean));
+  let loopAbandoned = 0, restart = 0;
+  const firstCoord = new Set();
+  for (const a of agents) {
+    if (a.loop) { loopAbandoned += a.costUsd; continue; }
+    if (a.role === "worker" && a.turns > 0 && !a.pass && !implementerIds.has(a.agentId)) { loopAbandoned += a.costUsd; continue; }
+    if (a.handoff) { restart += a.costUsd; continue; }
+    if (COORDINATION_ROLES.has(a.role) && (a.turns > 0 || a.costUsd > 0)) {
+      const key = `${a.lane}|${a.role}`;
+      if (firstCoord.has(key)) restart += a.costUsd;
+      else firstCoord.add(key);
+    }
+  }
+  const totalCostUsd = totals.costUsd ?? 0;
+  const totalTokens = (totals.inputTokens ?? 0) + (totals.outputTokens ?? 0);
+  const waste = rework + fixCost + loopAbandoned + restart;
+  const cleanCostUsd = Math.max(0, totalCostUsd - waste);
+  const cleanShare = totalCostUsd > 0 ? cleanCostUsd / totalCostUsd : null;
+  const mergedUnits = merged.length;
+  return {
+    cleanCostUsd,
+    cleanShare: cleanShare === null ? null : round2(cleanShare),
+    wasteShare: cleanShare === null ? null : round2(1 - cleanShare),
+    cleanCostPerUnit: mergedUnits > 0 ? cleanCostUsd / mergedUnits : null,
+    cleanTokensPerUnit: mergedUnits > 0 && cleanShare !== null ? (totalTokens * cleanShare) / mergedUnits : null,
+    reworkCostUsd: rework,
+    loopAndAbandonedCostUsd: loopAbandoned,
+    fixAfterMergeCostUsd: fixCost,
+    restartOverheadCostUsd: restart,
+  };
+}
+
+// ---- durable ledger: <home>/runner/usage-ledger.jsonl (one JSON line per record)
+
+const usageLedgerPath = (home) => join(home || vibesquadHome(), "runner", "usage-ledger.jsonl");
+
+/** usage-ledger.jsonl -> records (newest last). Missing file / bad lines tolerated. */
+export function readUsageLedger(home) {
+  const dir = home || vibesquadHome();
+  if (isForbiddenRealHome(dir)) return [];
+  let text = "";
+  try { text = readFileSync(join(dir, "runner", "usage-ledger.jsonl"), "utf8"); } catch { return []; }
+  const out = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try { out.push(JSON.parse(line)); } catch { /* bad line */ }
+  }
+  return out;
+}
+
+/** Idempotently append snapshot records (kind "unit" keyed by sha, "day" keyed by day) missing from the ledger.
+ * Day records are only written once their day has fully completed (day < today UTC), so the archived day is the
+ * end-of-day total rather than the first partial snapshot of an in-progress day. Never writes the real home under a
+ * test runner (isForbiddenRealHome). Returns the number of new lines appended. */
+export function syncUsageLedger(home, snapshot, now = Date.now) {
+  const dir = home || vibesquadHome();
+  if (isForbiddenRealHome(dir)) return 0;
+  const todayUtc = new Date(now()).toISOString().slice(0, 10);
+  const existing = readUsageLedger(dir);
+  const keys = new Set(existing.map((r) => `${r.kind}\u0000${r.sha ?? r.unit ?? r.day ?? ""}`));
+  const lines = [];
+  for (const rec of snapshot) {
+    if (rec.kind === "day" && typeof rec.day === "string" && rec.day >= todayUtc) continue; // in-progress day: skip until it completes
+    const key = `${rec.kind}\u0000${rec.sha ?? rec.unit ?? rec.day ?? ""}`;
+    if (keys.has(key)) continue;
+    keys.add(key);
+    lines.push(JSON.stringify(rec) + "\n");
+  }
+  if (!lines.length) return 0;
+  try {
+    mkdirSync(join(dir, "runner"), { recursive: true });
+    appendFileSync(usageLedgerPath(dir), lines.join(""));
+  } catch { /* best-effort: a failed append must not lose usage */ }
+  return lines.length;
+}
+
+/** Build the ledger snapshot: one "unit" record per merged unit and one "day" record per day (aggregated from rows). */
+function buildLedgerSnapshot(merged, rows) {
+  const units = merged.map((u) => ({
+    kind: "unit",
+    unit: u.unit ?? null,
+    sha: u.sha,
+    ts: u.mergedAt ?? null,
+    lane: u.lane ?? null,
+    implementerProfile: u.implementerProfile ?? null,
+    implementerProvider: u.implementerProvider ?? null,
+    workflowMode: u.workflowMode ?? classifyWorkflowMode(u, null),
+    reviewRounds: u.reviewRounds ?? 0,
+    firstTryPass: (u.reviewRounds ?? 0) <= 1,
+    costUsd: u.costUsd ?? null,
+    totalTokens: (u.inputTokens ?? 0) + (u.outputTokens ?? 0),
+    inputTokens: u.inputTokens ?? 0,
+    outputTokens: u.outputTokens ?? 0,
+    turns: u.turns ?? 0,
+    cycleMs: u.unitCycleMs ?? null,
+    locAdded: u.locAdded ?? 0,
+    locDeleted: u.locDeleted ?? 0,
+    filesChanged: u.filesChanged ?? 0,
+    fixedAfterMerge: !!u.fixAfterMerge,
+  }));
+  const byDay = new Map();
+  for (const r of rows) {
+    if (!r.day) continue;
+    const g = getOrSet(byDay, r.day, () => ({ day: r.day, costUsd: 0, totalTokens: 0, inputTokens: 0, outputTokens: 0, turns: 0, byProvider: {} }));
+    g.costUsd += r.costUsd;
+    g.inputTokens += r.inputTokens;
+    g.outputTokens += r.outputTokens;
+    g.totalTokens += r.inputTokens + r.outputTokens;
+    g.turns += r.turns;
+    const p = g.byProvider[r.provider] ?? (g.byProvider[r.provider] = { turns: 0, costUsd: 0, totalTokens: 0 });
+    p.turns += r.turns;
+    p.costUsd += r.costUsd;
+    p.totalTokens += r.inputTokens + r.outputTokens;
+  }
+  const unitsByDay = new Map();
+  const locByDay = new Map();
+  for (const u of merged) {
+    const day = u.mergedAt ? u.mergedAt.slice(0, 10) : null;
+    if (!day) continue;
+    unitsByDay.set(day, (unitsByDay.get(day) ?? 0) + 1);
+    locByDay.set(day, (locByDay.get(day) ?? 0) + (u.locAdded ?? 0) + (u.locDeleted ?? 0));
+  }
+  const days = [...byDay.values()].map((g) => ({
+    kind: "day",
+    day: g.day,
+    costUsd: g.costUsd,
+    totalTokens: g.totalTokens,
+    inputTokens: g.inputTokens,
+    outputTokens: g.outputTokens,
+    turns: g.turns,
+    unitsMerged: unitsByDay.get(g.day) ?? 0,
+    locChanged: locByDay.get(g.day) ?? 0,
+    byProvider: g.byProvider,
+  }));
+  return [...units, ...days];
+}
+
+/** usage KPI snapshot (used on each review record + for closed-loop deltas). */
+function usageKpis(u) {
+  const merged = u?.merged?.units ?? [];
+  const n = merged.length;
+  const rounds = merged.reduce((s, x) => s + (x.reviewRounds ?? 0), 0);
+  const firstTry = merged.filter((x) => (x.reviewRounds ?? 0) <= 1).length;
+  const cost = merged.reduce((s, x) => s + (Number.isFinite(x.costUsd) ? x.costUsd : 0), 0);
+  const fix = merged.filter((x) => x.fixAfterMerge).length;
+  return {
+    firstTryPassRate: n ? round2(firstTry / n) : null,
+    avgReviewRounds: n ? round2(rounds / n) : null,
+    costPerUnit: n ? round2(cost / n) : null,
+    cleanShare: u?.floor?.cleanShare ?? null,
+    fixAfterMergeRate: n ? round2(fix / n) : null,
+    unitsMerged: n,
+  };
+}
+
 // ---------------------------------------------------------------- periodic Opus + Gemini usage review (usa-7)
 // One-shot `claude -p --model claude-opus-5-5` and `agy -p` run in parallel (no MCP sidecars), 60s timeout each, and
 // append one record to <runner home>/usage-reviews.jsonl. Scheduled runs fire from getUsage() (fire-and-forget) and
@@ -811,7 +1199,7 @@ const clip = (s, n = 200) => { const t = String(s ?? ""); return t.length > n ? 
  * usa-9 context — recent @usa/usage-lane notes, friction signals, mcp-alias counts, recent agent errors, the active
  * profile catalog and runner turn caps — so Opus and Gemini see *why* friction happened. `home` + `sinceMs` scope the
  * log-signal harvest (sinceMs = lastReview.at, so only entries since the prior review are shown). */
-function buildUsageReviewPrompt(usage, { home, sinceMs } = {}) {
+function buildUsageReviewPrompt(usage, { home, sinceMs, previousReview } = {}) {
   const u = usage ?? {};
   const totals = u.totals ?? {};
   const out = [];
@@ -855,7 +1243,38 @@ function buildUsageReviewPrompt(usage, { home, sinceMs } = {}) {
   const caps = turnCapsFromEnv();
   out.push(`Runner turn caps: ${Object.entries(caps).map(([k, v]) => `${k}=${v}`).join(" ")}.`);
 
-  out.push("Give 3-5 concise, actionable bullets covering (1) Profile/Provider routing, (2) Loops/Tool friction, and (3) Handoffs/Review rounds. One line per bullet, no preamble.");
+  // ---- usa-10 closed loop: grade whether the previous review moved the KPIs before proposing next actions.
+  const bw = u.byWorkflow ?? [];
+  if (bw.length) {
+    out.push(`A/B workflows (mode | units | firstTryPassRate | costPerUnit | costPer100Loc | fixAfterMergeRate):`);
+    for (const w of bw.slice(0, 12)) out.push(`- ${w.workflowMode} | ${w.units} | ${w.firstTryPassRate} | ${w.costPerUnit ?? "-"} | ${w.costPer100Loc ?? "-"} | ${w.fixAfterMergeRate}`);
+  }
+  const cohorts = u.cohorts;
+  if (cohorts?.recent?.units) {
+    const d = cohorts.delta ?? {};
+    out.push(`Cohorts (Last ${cohorts.recent.units} vs Prior ${cohorts.prior?.units ?? 0}): firstTryPass ${cohorts.recent.firstTryPassRate} vs ${cohorts.prior?.firstTryPassRate ?? "-"} (Δ${d.firstTryPassRate ?? "-"}), cost/unit $${cohorts.recent.costPerUnit} vs $${cohorts.prior?.costPerUnit ?? "-"} (Δ${d.costPerUnit ?? "-"}), fix rate ${cohorts.recent.fixAfterMergeRate} vs ${cohorts.prior?.fixAfterMergeRate ?? "-"}.`);
+  }
+  const floor = u.floor;
+  if (floor) {
+    out.push(`Clean-Run Floor: cleanShare ${floor.cleanShare ?? "-"}, cleanCostPerUnit $${floor.cleanCostPerUnit ?? "-"}, waste rework=$${floor.reworkCostUsd} loops/abandoned=$${floor.loopAndAbandonedCostUsd} post-merge-fix=$${floor.fixAfterMergeCostUsd} restart/handoff=$${floor.restartOverheadCostUsd}.`);
+  }
+  const prevKpis = previousReview?.kpis;
+  if (previousReview) {
+    const opusText = previousReview.opus?.text ?? previousReview.opus?.error ?? "";
+    const geminiText = previousReview.gemini?.text ?? previousReview.gemini?.error ?? "";
+    if (opusText) out.push(`Previous review Opus said: ${clip(opusText, 400)}`);
+    if (geminiText) out.push(`Previous review Gemini said: ${clip(geminiText, 400)}`);
+    const cur = usageKpis(u);
+    if (prevKpis) {
+      const delta = {};
+      for (const k of ["firstTryPassRate", "avgReviewRounds", "costPerUnit", "cleanShare", "fixAfterMergeRate"]) {
+        delta[k] = prevKpis[k] === null || cur[k] === null ? null : round2(cur[k] - prevKpis[k]);
+      }
+      out.push(`KPI delta since last review: firstTryPassRate ${prevKpis.firstTryPassRate ?? "-"}->${cur.firstTryPassRate ?? "-"} (Δ${delta.firstTryPassRate ?? "-"}), avgReviewRounds ${prevKpis.avgReviewRounds ?? "-"}->${cur.avgReviewRounds ?? "-"} (Δ${delta.avgReviewRounds ?? "-"}), costPerUnit ${prevKpis.costPerUnit ?? "-"}->${cur.costPerUnit ?? "-"} (Δ${delta.costPerUnit ?? "-"}), cleanShare ${prevKpis.cleanShare ?? "-"}->${cur.cleanShare ?? "-"} (Δ${delta.cleanShare ?? "-"}), fixAfterMergeRate ${prevKpis.fixAfterMergeRate ?? "-"}->${cur.fixAfterMergeRate ?? "-"}.`);
+    }
+  }
+
+  out.push("First, grade in one line whether the previous review's recommendations improved the KPIs (or note there is no prior review). Then give 3-5 concise, actionable bullets covering (1) Profile/Provider routing, (2) Loops/Tool friction, and (3) Handoffs/Review rounds. One line per bullet, no preamble.");
   return out.join("\n");
 }
 
@@ -898,7 +1317,7 @@ export function runUsageReview({ home, trigger = "manual", usage, runOpus, runGe
       const interval = loadRunnerSettings(home).usageReview.interval;
       const last = latestUsageReview(home);
       const sinceMs = last ? toMs(last.at) : null;
-      const prompt = buildUsageReviewPrompt(usage, { home, sinceMs });
+      const prompt = buildUsageReviewPrompt(usage, { home, sinceMs, previousReview: last });
       const opusRun = runOpus ?? defaultRunOpus;
       const geminiRun = runGemini ?? defaultRunGemini;
       const results = await Promise.all([
@@ -910,6 +1329,7 @@ export function runUsageReview({ home, trigger = "manual", usage, runOpus, runGe
         trigger,
         interval,
         turnsAtRun: usage?.totals?.turns ?? 0,
+        kpis: usageKpis(usage),
         opus: results[0],
         gemini: results[1],
       };
@@ -975,7 +1395,7 @@ function maybeScheduleUsageReview(usage, home, opts = {}) {
   } catch { /* best-effort */ }
 }
 
-export function getUsage({ home, since, until, git, laneCodes, usageReview } = {}) {
+export function getUsage({ home, since, until, git, laneCodes, usageReview, now = Date.now } = {}) {
   const homeDir = home || vibesquadHome();
   const dir = join(homeDir, "runner", "agents");
   const seen = new Set();
@@ -1060,7 +1480,18 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview } = {
     if (isFixUnit && u.lane && mergedAtMs !== null) {
       fixAfterMerge = mergedRaw.some((p) => p !== u && p.lane === u.lane && p.mergedAt !== null && tsMs(p.mergedAt) !== null && tsMs(p.mergedAt) < mergedAtMs && mergedAtMs - tsMs(p.mergedAt) <= FIX_AFTER_MERGE_WINDOW_MS);
     }
-    return { ...u, mergedAtMs, implementerProfile: implementer ? implementer.profile : null, implementerAgentId: implementer ? implementer.agentId : null, unitCycleMs, fixAfterMerge };
+    return {
+      ...u, mergedAtMs,
+      implementerProfile: implementer ? implementer.profile : null,
+      implementerProvider: implementer ? implementer.provider : null,
+      implementerAgentId: implementer ? implementer.agentId : null,
+      costUsd: implementer ? implementer.costUsd : null,
+      inputTokens: implementer ? implementer.inputTokens : 0,
+      outputTokens: implementer ? implementer.outputTokens : 0,
+      turns: implementer ? implementer.turns : 0,
+      workflowMode: classifyWorkflowMode(u, implementer),
+      unitCycleMs, fixAfterMerge,
+    };
   });
 
   // byProfile: group agents by (provider, profile, role); fold in attributed merged units.
@@ -1164,14 +1595,54 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview } = {
     .slice(0, 10)
     .map((a) => ({ agentId: a.agentId, profile: a.profile, provider: a.provider, role: a.role, lane: a.lane, message: a.lastError ?? "", errors: a.errors }));
 
+  // ---- usa-10: durable ledger sync + fold archived entries (units/days absent from raw), then benchmark rollups.
+  const agentById = new Map(agents.map((a) => [a.agentId, a]));
+  syncUsageLedger(homeDir, buildLedgerSnapshot(merged, rows), now);
+  const ledger = readUsageLedger(homeDir);
+  const rawShas = new Set(merged.map((u) => u.sha));
+  const rawDays = new Set(rows.map((r) => r.day));
+  // Fold only when the raw source is present but partial: units when git returned a (non-empty) bounded log whose older
+  // merges fell off MAX_COMMITS, days when agent logs were pruned (respect the since/until day filter like rows do).
+  const foldedUnits = merged.length > 0 ? ledger.filter((r) => r.kind === "unit" && r.sha && !rawShas.has(r.sha)) : [];
+  const foldedDays = ledger.filter((r) => r.kind === "day" && r.day && !rawDays.has(r.day) && (!since || r.day >= since) && (!until || r.day <= until));
+  for (const r of foldedUnits) {
+    merged.push({
+      sha: r.sha, unit: r.unit ?? null, code: null, reviewRounds: r.reviewRounds ?? 0,
+      mergedAt: r.ts ?? null, mergedAtMs: toMs(r.ts), firstBranchCtMs: null, subject: "",
+      locAdded: r.locAdded ?? 0, locDeleted: r.locDeleted ?? 0, filesChanged: r.filesChanged ?? 0,
+      lane: r.lane ?? null,
+      implementerProfile: r.implementerProfile ?? null, implementerProvider: r.implementerProvider ?? null, implementerAgentId: null,
+      costUsd: r.costUsd ?? null, inputTokens: r.inputTokens ?? 0, outputTokens: r.outputTokens ?? 0, turns: r.turns ?? 0,
+      workflowMode: r.workflowMode ?? "unattributed", unitCycleMs: r.cycleMs ?? null, fixAfterMerge: !!r.fixedAfterMerge,
+      fromLedger: true,
+    });
+  }
+  const foldedDayRows = foldedDays.map((r) => ({ day: r.day, turns: r.turns ?? 0, costUsd: r.costUsd ?? 0, inputTokens: r.inputTokens ?? 0, outputTokens: r.outputTokens ?? 0 }));
+  let totalsFinal = totals;
+  if (foldedDayRows.length) {
+    totalsFinal = { ...totals };
+    for (const d of foldedDayRows) {
+      totalsFinal.turns += d.turns;
+      totalsFinal.costUsd += d.costUsd;
+      totalsFinal.inputTokens += d.inputTokens;
+      totalsFinal.outputTokens += d.outputTokens;
+    }
+  }
+  const byDayFinal = by("day");
+  if (foldedDayRows.length) for (const d of foldedDayRows) byDayFinal.push({ day: d.day, ...zeroStats(), turns: d.turns, costUsd: d.costUsd, inputTokens: d.inputTokens, outputTokens: d.outputTokens });
+  const byWorkflow = buildByWorkflow(merged, agentById);
+  const savings = buildSavings(merged, totalsFinal, lanes, agents);
+  const cohorts = buildCohorts(merged);
+  const floor = buildFloor(merged, agents, totalsFinal);
+
   const result = {
     note: "Cost is summed from turn_done.costUsd; token counts come from adapter usage events and are 0 for logs that have none.",
     files: seen.size,
-    totals,
+    totals: totalsFinal,
     byProvider: by("provider"),
     byModel: by("model"),
     byLane: by("lane"),
-    byDay: by("day"),
+    byDay: byDayFinal,
     rows,
     limits: readLimits(home),
     byRole: [...roleMap.values()].map(withAvg).sort((a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role)),
@@ -1183,9 +1654,72 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview } = {
     byProfile,
     spawnStorms: computeSpawnStorms(agents),
     recentErrors,
+    byWorkflow,
+    savings,
+    cohorts,
+    floor,
   };
   maybeScheduleUsageReview(result, home, usageReview ?? {});
   return { ...result, usageReview: usageReviewState(home, result, usageReview ?? {}) };
+}
+
+/** One-click benchmark export as Markdown (GET /__vibesquad/providers/usage-export?format=md). */
+function usageToMarkdown(u) {
+  const lines = [];
+  const t = u.totals ?? {};
+  lines.push("# VibeSquad usage benchmark");
+  lines.push(`Exported ${new Date().toISOString()}`);
+  lines.push("");
+  lines.push("## Totals");
+  lines.push(`- turns: ${t.turns ?? 0}`);
+  lines.push(`- cost: $${round2(t.costUsd ?? 0)}`);
+  lines.push(`- tokens: ${t.inputTokens ?? 0} in / ${t.outputTokens ?? 0} out`);
+  const s = u.savings;
+  if (s) {
+    lines.push("");
+    lines.push("## Savings vs solo workflow");
+    lines.push(`- routing saved: $${s.routingSavingsUsd} vs all-Opus $${s.soloOpusBaselineUsd}${s.routingSavingsPct === null ? "" : ` (${Math.round(s.routingSavingsPct * 100)}%)`}`);
+    lines.push(`- context tokens saved: ${s.contextSavingsTokens} (monolithic baseline ${s.monolithicBaselineTokens})`);
+    lines.push(`- parallel speedup: ${s.parallelSpeedup === null ? "-" : `${s.parallelSpeedup}x`}`);
+    lines.push(`- $/unit: ${s.costPerMergedUnit === null ? "-" : `$${s.costPerMergedUnit}`} | $/100 LOC: ${s.costPer100Loc === null ? "-" : `$${s.costPer100Loc}`}`);
+  }
+  const f = u.floor;
+  if (f) {
+    lines.push("");
+    lines.push("## Clean-run floor & waste");
+    lines.push(`- clean: $${f.cleanCostUsd}${f.cleanShare === null ? "" : ` (${Math.round(f.cleanShare * 100)}%)`}`);
+    lines.push(`- rework r2+: $${f.reworkCostUsd}`);
+    lines.push(`- loops/abandoned: $${f.loopAndAbandonedCostUsd}`);
+    lines.push(`- post-merge fixes: $${f.fixAfterMergeCostUsd}`);
+    lines.push(`- restart/handoff: $${f.restartOverheadCostUsd}`);
+  }
+  const c = u.cohorts;
+  if (c?.recent?.units) {
+    lines.push("");
+    lines.push("## Cohort trend (last vs prior)");
+    lines.push(`- first-try PASS: ${c.recent.firstTryPassRate} vs ${c.prior?.firstTryPassRate ?? "-"} (Δ${c.delta?.firstTryPassRate ?? "-"})`);
+    lines.push(`- rev rounds/unit: ${c.recent.avgReviewRounds} vs ${c.prior?.avgReviewRounds ?? "-"} (Δ${c.delta?.avgReviewRounds ?? "-"})`);
+    lines.push(`- cost/unit: $${c.recent.costPerUnit} vs $${c.prior?.costPerUnit ?? "-"} (Δ${c.delta?.costPerUnit ?? "-"})`);
+    lines.push(`- tokens/unit: ${c.recent.tokensPerUnit} vs ${c.prior?.tokensPerUnit ?? "-"}`);
+    lines.push(`- fix rate: ${c.recent.fixAfterMergeRate} vs ${c.prior?.fixAfterMergeRate ?? "-"}`);
+  }
+  const bw = u.byWorkflow ?? [];
+  if (bw.length) {
+    lines.push("");
+    lines.push("## A/B workflow comparison");
+    lines.push("| mode | units | 1st-pass | rev/unit | $/unit | $/100LOC | tok/unit | fix rate |");
+    lines.push("|---|---|---|---|---|---|---|---|");
+    for (const w of bw) lines.push(`| ${w.workflowMode} | ${w.units} | ${w.firstTryPassRate} | ${w.avgReviewRounds} | ${w.costPerUnit ?? "-"} | ${w.costPer100Loc ?? "-"} | ${w.tokensPerUnit} | ${w.fixAfterMergeRate} |`);
+  }
+  const pl = u.merged?.perLane ?? [];
+  if (pl.length) {
+    lines.push("");
+    lines.push("## Per lane");
+    lines.push("| lane | merged | cost/unit | fix rate |");
+    lines.push("|---|---|---|---|");
+    for (const l of pl) lines.push(`| ${l.lane} | ${l.mergedUnits} | $${l.costPerMergedUnit} | ${l.fixAfterMergeRate} |`);
+  }
+  return lines.join("\n") + "\n";
 }
 
 // ---------------------------------------------------------------- HTTP
@@ -1222,6 +1756,14 @@ export async function handleProvidersApi(req, res, { sendJson, readBody, home, u
         return sendJson(res, 200, { ok: true, usageReview: usageReviewState(home, usage, usageReview ?? {}) });
       }
       return sendJson(res, 405, { error: "method not allowed" });
+    }
+    if (sub === "usage-export") {
+      if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+      const format = url.searchParams.get("format") ?? "json";
+      if (format !== "md" && format !== "json") return sendJson(res, 400, { error: `bad format "${format}"` });
+      const usage = getUsage({ home, since: url.searchParams.get("since") || undefined, until: url.searchParams.get("until") || undefined, git: probeOpts.git, usageReview });
+      if (format === "json") return sendJson(res, 200, { ok: true, exportedAt: new Date().toISOString(), ...usage });
+      return sendJson(res, 200, { ok: true, markdown: usageToMarkdown(usage) });
     }
     if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
     if (sub === "") return sendJson(res, 200, await getProviders(opts));
