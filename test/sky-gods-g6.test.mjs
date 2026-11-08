@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { SKY_COLUMNS, faceBg, faceContain, hasFaceMode, skyEffectiveOpen, skyExit, skyFaceClick, skyRiffMode } from "../src/skyZonesLogic.ts";
+import { SKY_COLUMNS, SKY_POPOVER_SELECTOR, faceBg, faceContain, hasFaceMode, skyEffectiveOpen, skyEscCloses, skyExit, skyOutsideCloses, skyFaceClick, skyRiffMode } from "../src/skyZonesLogic.ts";
 import { faceFrame, validateFaces } from "../src/squadFloorLogic.ts";
 
 const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
@@ -139,9 +139,9 @@ test("wiring: the face fills the TV, the thumbnail is gone, Riff gets the forced
 
 test("exit paths: Esc, outside click, x on the chat, face re-click are all wired; panels are hidden (not unmounted) at rest", () => {
   const sky = src("SkyZones.tsx");
-  assert.ok(sky.includes('e.key !== "Escape" || openRef.current === null') && sky.includes("setOpen(skyExit)"));
+  assert.ok(sky.includes('e.key !== "Escape" || !skyEscCloses(openRef.current, e.defaultPrevented,') && sky.includes("setOpen(skyExit)"));
   assert.ok(sky.includes("e.preventDefault(); // this Esc closed the chat")); // the app's Esc (to Squads Home) must not also fire
-  assert.ok(sky.includes("!root.current?.contains(e.target)"));
+  assert.ok(sky.includes("skyOutsideCloses(!!t && !!root.current?.contains(t)"));
   assert.ok(sky.includes('document.addEventListener("pointerdown", down, true)'));
   assert.ok(sky.includes("onClick={onClose}") && sky.includes("onClick={onFace}"));
   assert.ok(sky.includes("hidden={panel && !isOpen}"));
@@ -178,4 +178,32 @@ test("faces.json bg: {dark, light} per bot, both valid → used per theme; any o
   assert.ok(/--sky-face-bg-dark: #[0-9a-f]{6}/i.test(css) && /--sky-face-bg-light: #[0-9a-f]{6}/i.test(css));
   assert.ok(css.includes("var(--sky-face-bg-custom, var(--sky-face-bg-dark))"));
   assert.ok(src("SkyZones.tsx").includes("--sky-face-bg-custom") && src("SkyZones.tsx").includes("faceBg(faces, zone.bot, theme)"));
+});
+
+test("Esc yields to a popover/dialog or an already-handled key; outside clicks inside a portalled popover do not close", () => {
+  assert.equal(skyEscCloses("riffbot", false, false), true);
+  assert.equal(skyEscCloses("overlord", false, false), true);
+  assert.equal(skyEscCloses(null, false, false), false); // rest: the app's Esc
+  assert.equal(skyEscCloses("riffbot", true, false), false); // something handled it already
+  assert.equal(skyEscCloses("riffbot", false, true), false); // slash menu / modal up: it dismisses first
+  assert.equal(skyOutsideCloses(false, false), true);
+  assert.equal(skyOutsideCloses(true, false), false);
+  assert.equal(skyOutsideCloses(false, true), false); // portalled popover
+  for (const sel of [".modal-back", "[role='dialog']", "[role='menu']", "[role='listbox']", ".composer-menu"]) assert.ok(SKY_POPOVER_SELECTOR.includes(sel), sel);
+  const sky = src("SkyZones.tsx");
+  assert.ok(sky.includes("t?.closest(SKY_POPOVER_SELECTOR)") && sky.includes("document.querySelector(`${SKY_POPOVER_SELECTOR}:not([hidden])`)"));
+});
+
+test("a11y: while a chat is open the left TV's face button is named for the open bot (Close Overlord chat)", () => {
+  const sky = src("SkyZones.tsx");
+  assert.ok(sky.includes("aria-label={isOpen ? `Close ${openLabel} chat` : `Open ${label} chat`}"));
+  assert.ok(sky.includes("openLabel={open ? LABEL[open] : undefined}"));
+  assert.ok(sky.includes("openLabel ??= label")); // rest / the right TV keep their own name
+});
+
+test("chat-only header drops the no-op Dock button and the duplicate x; wrapped working chips are not clipped", () => {
+  const h = src("DrawerHeader.tsx");
+  assert.ok(h.includes("{!chatOnly && <button") && h.includes("{!compact && !chatOnly && ("));
+  assert.ok(/chatOnly=\{chatOnly\}\s*\/>/.test(src("AgentDrawer.tsx")));
+  assert.ok(src("styles.css").includes(".sky-chat-panel .drawer-subagents-bar { max-height: none; overflow-y: visible; }"));
 });

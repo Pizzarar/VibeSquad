@@ -642,6 +642,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
         att={att}
         dockOpen={dockOpen}
         onToggleDock={() => !chatOnly && setDockOpen((v) => !v)}
+        chatOnly={chatOnly}
       />
 
       {agent.pendingPermissions?.map((p) => (

@@ -243,6 +243,12 @@ export function skyFaceClick(open: SkyOpen, tv: FaceBot, can: SkyCan): SkyOpen {
 export const skyExit = (_open: SkyOpen): SkyOpen => null;
 /** The Overlord going away (closed, killed) while its chat is open drops back to rest; an open RiffBot with no chat agent too. */
 export const skyEffectiveOpen = (open: SkyOpen, can: SkyCan): SkyOpen => (open && can[open] ? open : null);
+/** Anything that owns Esc / outside clicks before the sky does: modals, menus, the composer's slash/mention menus, the needs-you popover. */
+export const SKY_POPOVER_SELECTOR = ".modal-back, [role='dialog'], [role='menu'], [role='listbox'], .composer-menu, .attn-pop, .pin-menu-list";
+/** Esc closes the sky chat only when it is open, nothing already handled the key, and no popover/dialog is up to be dismissed first. */
+export const skyEscCloses = (open: SkyOpen, defaultPrevented: boolean, popoverOpen: boolean): boolean => open !== null && !defaultPrevented && !popoverOpen;
+/** A pointerdown closes the sky chat only when it lands outside the sky AND outside any (portalled) popover/dialog. */
+export const skyOutsideCloses = (insideSky: boolean, insidePopover: boolean): boolean => !insideSky && !insidePopover;
 /** Forced RiffBot face while the Overlord has taken it over: `scared`, or `idle` when faces.json has none; null → normal talk/needs/blink. */
 export const skyRiffMode = (open: SkyOpen, riffHasScared: boolean): Extract<FaceMode, "scared" | "idle"> | null => (open === "overlord" ? (riffHasScared ? "scared" : "idle") : null);
 export const hasFaceMode = (faces: FacesModel | null, bot: FaceBot, mode: FaceMode): boolean => !!faces?.bots[bot]?.[mode]?.length;

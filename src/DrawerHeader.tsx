@@ -540,6 +540,8 @@ export type DrawerHeaderProps = {
   att: { tone: string; reason: string } | null;
   dockOpen: boolean;
   onToggleDock: () => void;
+  /** Sky chat panel: no dock to toggle and the panel has its own ✕, so both header buttons are dropped. */
+  chatOnly?: boolean;
 };
 
 function download(name: string, mime: string, body: string) {
@@ -692,6 +694,7 @@ export function DrawerHeader({
   att,
   dockOpen,
   onToggleDock,
+  chatOnly = false,
 }: DrawerHeaderProps) {
   const [modeBusy, setModeBusy] = useState(false);
   const [modelValue, setModelValue] = useState(agent.model ?? "");
@@ -1172,14 +1175,14 @@ export function DrawerHeader({
   );
   const dockBtns = (
     <>
-          <button
+          {!chatOnly && <button
             className={`btn ghost dock-toggle-btn${dockOpen ? " on" : ""}`}
             title={dockOpen ? "Close side dock" : "Open: Changes / Files / Terminal / Scripts"}
             onClick={onToggleDock}
           >
             Dock {dockOpen ? "▶" : "◀"}
-          </button>
-          {!compact && (
+          </button>}
+          {!compact && !chatOnly && (
             <button className="btn ghost" onClick={onClose}>
               ✕
             </button>

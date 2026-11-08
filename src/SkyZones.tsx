@@ -5,7 +5,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { DrawerSlot } from "./AgentPanes";
 import type { Pin } from "./pins";
-import { NO_OVERLORD_TEXT, SKY_COLUMNS, SKY_FRAME_URL, SKY_URL, TAKEOVER_FALLBACK, TAKEOVER_URL, faceBg, faceContain, hasFaceMode, skyAssets, skyEffectiveOpen, skyExit, skyFaceClick, skyRiffMode, skyZonesFor, takeoverVisible, type SkyCan, type SkyOpen, type SkyZone, type TakeoverModel } from "./skyZonesLogic";
+import { NO_OVERLORD_TEXT, SKY_COLUMNS, SKY_FRAME_URL, SKY_POPOVER_SELECTOR, SKY_URL, TAKEOVER_FALLBACK, TAKEOVER_URL, faceBg, faceContain, hasFaceMode, skyAssets, skyEffectiveOpen, skyEscCloses, skyExit, skyFaceClick, skyOutsideCloses, skyRiffMode, skyZonesFor, takeoverVisible, type SkyCan, type SkyOpen, type SkyZone, type TakeoverModel } from "./skyZonesLogic";
 import type { FaceBot, FaceMode } from "./squadFloorLogic";
 import type { TeamView } from "./teams";
 import { useBotFace, useFacesModel, useImageOk, usePrefersReducedMotion, useSkyCrtModel, useTakeoverClock, useTakeoverModel, useTheme } from "./useBotFace";
@@ -102,6 +102,7 @@ function Zone({
   taken = false,
   clickable = false,
   isOpen = false,
+  openLabel,
   onFace,
   onClose,
   onSuccessor,
@@ -121,6 +122,8 @@ function Zone({
   clickable?: boolean;
   /** Panel: this bot's chat is the one showing. TV: a chat is open (aria-expanded). */
   isOpen?: boolean;
+  /** The bot whose chat is open (the left TV shows its face): names the close button. Defaults to this TV's bot. */
+  openLabel?: string;
   onFace?: () => void;
   onClose?: () => void;
   /** The @art sky-CRT bezel as a border-image style (from sky-crt.json + PNG) when both exist; null → the CSS bezel. */
@@ -132,6 +135,7 @@ function Zone({
   busy?: boolean;
 }) {
   const label = LABEL[zone.bot];
+  openLabel ??= label;
   const off = zone.bot === "overlord" && !zone.agentId; // a closed Overlord keeps its zone (history + Resume)
   return (
     <section
@@ -149,7 +153,7 @@ function Zone({
           type="button"
           className="sky-face-hit"
           data-testid={`sky-face-hit-${zone.bot}`}
-          aria-label={isOpen ? `Close ${label} chat` : `Open ${label} chat`}
+          aria-label={isOpen ? `Close ${openLabel} chat` : `Open ${label} chat`}
           aria-expanded={isOpen}
           onClick={onFace}
         />
@@ -233,10 +237,12 @@ export function SkyZones({
   // Esc, or a click anywhere outside the sky, closes whatever is open. Clicks inside are the faces' / chat's / ✕'s own handlers.
   useEffect(() => {
     const down = (e: PointerEvent) => {
-      if (!(e.target instanceof Node) || !root.current?.contains(e.target)) setOpen(skyExit);
+      const t = e.target instanceof Element ? e.target : null;
+      if (skyOutsideCloses(!!t && !!root.current?.contains(t), !!t?.closest(SKY_POPOVER_SELECTOR)) || !t) setOpen(skyExit);
     };
     const key = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || openRef.current === null) return; // at rest Esc is the app's (up to Squads Home)
+      // At rest Esc is the app's (up to Squads Home); with a popover/dialog up (slash menu, modal) Esc dismisses that first.
+      if (e.key !== "Escape" || !skyEscCloses(openRef.current, e.defaultPrevented, !!document.querySelector(`${SKY_POPOVER_SELECTOR}:not([hidden])`))) return;
       e.preventDefault(); // this Esc closed the chat; the app's own Esc handler honours defaultPrevented
       setOpen(skyExit);
       const a = document.activeElement;
@@ -262,7 +268,7 @@ export function SkyZones({
       data-open={open ?? "none"}
       style={{ ["--sky-cols" as string]: SKY_COLUMNS, ...(skyUrl ? { backgroundImage: `url(${skyUrl})` } : null) }}
     >
-      <Zone zone={zones.riffbot} faces={faces} frameStyle={frameStyle} force={skyRiffMode(open, hasFaceMode(faces, "riffbot", "scared"))} takeover={takeover} taken={open === "overlord"} clickable={clickable("riffbot")} isOpen={open !== null} onFace={() => onFace("riffbot")} onSuccessor={onSuccessor} onSpinUp={spinRiff} />
+      <Zone zone={zones.riffbot} faces={faces} frameStyle={frameStyle} force={skyRiffMode(open, hasFaceMode(faces, "riffbot", "scared"))} takeover={takeover} taken={open === "overlord"} clickable={clickable("riffbot")} isOpen={open !== null} openLabel={open ? LABEL[open] : undefined} onFace={() => onFace("riffbot")} onSuccessor={onSuccessor} onSpinUp={spinRiff} />
       <Zone zone={zones.overlord} faces={faces} frameStyle={frameStyle} clickable={clickable("overlord")} isOpen={open === "overlord"} onFace={() => onFace("overlord")} onSuccessor={onSuccessor} onSpinUp={spinOverlord} busy={overlordBusy} />
       <Zone panel zone={zones.riffbot} faces={faces} frameStyle={frameStyle} isOpen={open === "riffbot"} onClose={() => setOpen(skyExit)} onSuccessor={onSuccessor} onSpinUp={spinRiff} />
       <Zone panel zone={zones.overlord} faces={faces} frameStyle={frameStyle} isOpen={open === "overlord"} onClose={() => setOpen(skyExit)} onSuccessor={onSuccessor} onSpinUp={spinOverlord} busy={overlordBusy} />
