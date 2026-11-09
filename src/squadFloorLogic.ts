@@ -611,20 +611,26 @@ const seat = (m: Member, seatKind: SeatKind, desk?: number): SeatedAgent => ({
   ...(desk !== undefined ? { desk } : {}),
 });
 
-/** Desks per row on the floor plate (desks 0-2 top, 3-5 bottom); side-by-side means the same row. */
+/** Desks per row on the built-in placeholder (desks 0-2 top, 3-5 bottom); side-by-side means the same row. A real floor.json gives rows by desk y (see deskRowMate). */
 export const DESKS_PER_ROW = 3;
+
+/** True when desk `slot` sits in the same row as the desk before it (same y in floor.json), so the plate may stack rows of any length (4/3/4 bench and cubicles). */
+export function deskRowMate(desks: readonly Pick<Rect, "y">[]): (slot: number) => boolean {
+  return (slot) => slot > 0 && slot < desks.length && desks[slot].y === desks[slot - 1].y;
+}
 
 /**
  * Reorder desk assignment (never the agents' looks) so identical sprites don't sit side by side: fill slots in
  * order, taking the earliest remaining item whose key differs from the left neighbour in the same row; when every
  * remaining item matches, take the earliest anyway. Stable: with no clash the order is unchanged.
  */
-export function spreadNeighbours<T>(items: readonly T[], keyOf: (item: T) => string, rowSize = DESKS_PER_ROW): T[] {
+export function spreadNeighbours<T>(items: readonly T[], keyOf: (item: T) => string, rowSize: number | ((slot: number) => boolean) = DESKS_PER_ROW): T[] {
+  const mate = typeof rowSize === "function" ? rowSize : (slot: number) => slot % rowSize !== 0;
   const left = [...items];
   const out: T[] = [];
   while (left.length > 0) {
     const slot = out.length;
-    const leftKey = slot % rowSize === 0 ? null : keyOf(out[slot - 1]);
+    const leftKey = mate(slot) ? keyOf(out[slot - 1]) : null;
     const at = left.findIndex((it) => leftKey === null || keyOf(it) !== leftKey);
     out.push(left.splice(at < 0 ? 0 : at, 1)[0]);
   }
@@ -640,7 +646,7 @@ function placeTeam(t: TowerTeam, slices?: TeamSlices): TeamFloorPlacement {
     .filter((w): w is Member => isLiveMember(w) && !isRetiredLead(w) && isSeatedWorkerPose(poseFor(w)))
     .sort(spawnOrder);
   const deskCount = slices ? slices.desks.length : DESK_COUNT;
-  const desks = spreadNeighbours(workers.slice(0, deskCount).map((w) => seat(w, "desk")), (a) => `${a.role}:${a.variant}`).map((a, i) => ({ ...a, desk: i }));
+  const desks = spreadNeighbours(workers.slice(0, deskCount).map((w) => seat(w, "desk")), (a) => `${a.role}:${a.variant}`, slices ? deskRowMate(slices.desks) : DESKS_PER_ROW).map((a, i) => ({ ...a, desk: i }));
   const overflow = workers.slice(deskCount);
   // F4b: with a statsTv every overflow worker is a blip on the wall TV; without one, the old lobby + "+N".
   if (slices?.statsTv) {
@@ -824,9 +830,12 @@ export function floorFitScale(boxW: number, boxH: number, dpr = 1, nativeW = FLO
   return room(boxW, boxH) / ratio; // last resort: fractional fit rather than clip or vanish
 }
 
-/** The floor plate's art scale against the 640-wide contract (floor.json w / 640): 1.5 for the x1.5 kit. Per-px CSS/TS numbers derive from this. */
+/** The floor plate is drawn on a 480-wide design grid and exported at a whole multiple (FT: 960 = x2, matching the cast's 64 = 2 x 32). */
+export const FLOOR_DESIGN_WIDTH = 480;
+
+/** The floor plate's art scale against the 480-wide design grid (floor.json w / 480): 2 for the 960 plate. Per-px CSS/TS numbers (rider spacing and rise, lift panel) derive from this. */
 export function floorKitScale(size: { w: number }): number {
-  return size.w > 0 ? size.w / FLOOR_NATIVE_WIDTH : 1;
+  return size.w > 0 ? size.w / FLOOR_DESIGN_WIDTH : 1;
 }
 
 /**

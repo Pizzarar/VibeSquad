@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { floorFitScale, floorKitScale, floorNeedCssPx, riderSpot, floorNativeSize, validateFloor } from "../src/squadFloorLogic.ts";
+import { FLOOR_DESIGN_WIDTH, floorFitScale, floorKitScale, floorNeedCssPx, riderSpot, deskRowMate, spreadNeighbours, floorNativeSize, validateFloor } from "../src/squadFloorLogic.ts";
 
 const rd = (p) => readFileSync(new URL(p, import.meta.url), "utf8");
 const floorJson = JSON.parse(rd("../public/office/floor.json"));
@@ -33,9 +33,11 @@ const CASES = [
   { name: "4K@1.2 UI150", vw: 3200, vh: 1800, dpr: 1.2, zoom: 1.5 },
 ];
 
-test("floor kit scale and need come from floor.json (960x498 -> x1.5; 498 device px)", () => {
+test("floor kit scale and need come from floor.json (960x444 -> x2 of the 480 design grid; 444 device px)", () => {
   assert.equal(native.w, floorJson.w);
-  assert.equal(floorKitScale(native), floorJson.w / 640);
+  assert.equal(floorKitScale(native), floorJson.w / FLOOR_DESIGN_WIDTH);
+  assert.equal(floorKitScale(native), 2);
+  assert.equal(JSON.parse(rd("../public/office/cast.json")).cell, 32 * floorKitScale(native)); // cast cell = 32 x kit
   assert.equal(floorNeedCssPx(native.h, 1, 1), native.h);
   assert.equal(floorNeedCssPx(native.h, 1, 1.5), Math.ceil(native.h / 1.5));
   assert.equal(floorNeedCssPx(native.h, 1.2, 1.5), Math.ceil(native.h / 1.8));
@@ -53,7 +55,7 @@ test("floor is >= 1x and a whole device-px multiple at 1080 UI 100/150 and 4K@1.
   }
 });
 
-test("1080 UI 150: without yielding the floor drops under 1x; the yielding band keeps its 498 device px", () => {
+test("1080 UI 150: without yielding the floor drops under 1x; the yielding band keeps its native height in device px", () => {
   const stuck = layout({ vw: 1920, vh: 1080, dpr: 1, zoom: 1.5, yields: false });
   assert.ok(stuck.scale * 1.5 < 1, `unyielding band: ${stuck.scale * 1.5} device px per art px`);
   const l = layout({ vw: 1920, vh: 1080, dpr: 1, zoom: 1.5 });
@@ -61,7 +63,7 @@ test("1080 UI 150: without yielding the floor drops under 1x; the yielding band 
   assert.ok(l.boxH * 1.5 >= native.h);
 });
 
-test("1280x720 (sidebar 265): the column is narrower than the 960 art, so only the last-resort fit applies and the TVs keep what the floor cannot use; with room sideways (1600x720) it is 1x", () => {
+test("1280x720 (sidebar 265): the column is narrower than the native plate, so only the last-resort fit applies and the TVs keep what the floor cannot use; with room sideways (1600x720) it is 1x", () => {
   const l = layout({ vw: 1280, vh: 720, dpr: 1, zoom: 1 });
   assert.ok(l.colW < native.w);
   assert.ok(l.scale > 0 && l.scale < 1 && native.w * l.scale <= l.colW + 1e-6);
@@ -83,9 +85,9 @@ test("CSS + wiring: the band yields (shrinks to a slim strip), the box keeps --f
 test("hit 4: rider centre, lift-open height and ride rise derive from floor.json (kit scale), not constants", () => {
   const car = floor.elevator.car, kit = floorKitScale(native);
   assert.equal(riderSpot(car, 0, kit).left, car.x + car.w / 2);
-  assert.equal(riderSpot(car, 0, kit).left, 480); // was 474
+  assert.equal(riderSpot(car, 0, kit).left, 480);
   assert.equal(riderSpot(car, 0, kit).rise, 12 * kit);
-  assert.equal(riderSpot(car, 0, kit).rise, 18); // was 12
+  assert.equal(riderSpot(car, 0, kit).rise, 24); // was 18 at x1.5
   assert.ok(riderSpot(car, 1, kit).left > riderSpot(car, 0, kit).left && riderSpot(car, 2, kit).left < riderSpot(car, 0, kit).left, "extra riders step either side");
   // the open-lift cover is the whole door rect: no 6px closed-door strip left under it
   assert.doesNotMatch(comp, /doorA\.h - 6|car\.h - 6/);
@@ -98,4 +100,21 @@ test("hit 4: rider centre, lift-open height and ride rise derive from floor.json
 test("hit 5: the cursor shows on hover as well as keyboard focus", () => {
   assert.match(comp, /onMouseEnter/);
   assert.match(comp, /matches\(":focus-visible"\)/);
+});
+
+test("FT: 11 desks per team in rows 4/3/4 by y; spreadNeighbours follows the floor rows, not a fixed 3", () => {
+  for (const t of [floor.teamA, floor.teamB]) {
+    assert.equal(t.desks.length, 11);
+    const rows = [];
+    for (const d of t.desks) (rows.at(-1)?.y === d.y ? rows.at(-1) : rows[rows.push({ y: d.y, n: 0 }) - 1]).n++;
+    assert.deepEqual(rows.map((r) => r.n), [4, 3, 4]);
+    assert.ok(t.desks.every((d) => d.w === 64 && d.h === 64));
+  }
+  const mate = deskRowMate(floor.teamA.desks);
+  assert.deepEqual([0, 1, 3, 4, 6, 7, 10].map(mate), [false, true, true, false, true, false, true]);
+  const key = (x) => x.k;
+  const items = Array.from({ length: 5 }, (_, i) => ({ id: i, k: "a" }));
+  items[4].k = "b";
+  // slot 1 shares slot 0's row, so the lone "b" is pulled up beside the first "a"
+  assert.deepEqual(spreadNeighbours(items, key, mate).map((x) => x.id), [0, 4, 1, 2, 3]);
 });
