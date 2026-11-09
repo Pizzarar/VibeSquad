@@ -6,9 +6,9 @@
   "themes": ["dark", "light"],
   "path": "public/ui/chip-<key>-<theme>.png (16x16), public/ui/chip-<key>-<theme>@2x.png (32x32)",
   "keys": {
-    "bugs": "Bugs chip: goofy beetle",
+    "bugs": "Bugs chip: Hypnospace cockroach = idle frame of the .bug-btn roach (art/ui/bug-roach, public/ui/bug-icon.json)",
     "workflows": "Workflows chip: experiment flask",
     "dot": "Lead-running badge: solid MINT dot in the top-right of the same 16/32 box; stack it over the chip img (position:absolute; inset 0)"
   },
-  "notes": "needs-you count is text (@ui-bois), not art. Bug eyes keep x>=10 (16) / x>=20 (32) clear so the dot never covers them."
+  "notes": "needs-you count is text (@ui-bois), not art. Roach stalk-eyes stay at x<=8 (16) / x<=18 (32), clear of the dot (+ its outline at x>=9 / x>=19) so the dot never covers them."
 }

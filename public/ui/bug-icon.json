@@ -1,0 +1,20 @@
+{
+  "unit": "BC-art Hypnospace cockroach for .bug-btn (docs/PLAN_BUG_CHIP.md)",
+  "source": "art/ui/bug-roach/roach.lua + build.lua (Aseprite batch, P0 palettes)",
+  "native": 16,
+  "master2x": 32,
+  "themes": ["dark", "light"],
+  "sheet": "public/ui/bug-roach-<theme>.png (48x16 strip), public/ui/bug-roach-<theme>@2x.png (96x32 strip)",
+  "frame": { "w": 16, "h": 16, "w2x": 32, "h2x": 32 },
+  "display": "16 kit px box = calc(var(--u3-px) * 16), integer device-px snap like the S2b icons; background-size: 300% 100%, image-rendering: pixelated",
+  "keys": {
+    "idle": { "x": 0, "y": 0 },
+    "twitch": [ { "x": 16, "y": 0 }, { "x": 32, "y": 0 } ]
+  },
+  "css": {
+    "idle": "background-position: 0 0",
+    "twitch": ["background-position: 50% 0", "background-position: 100% 0"]
+  },
+  "animation": "twitch = loop twitch[0], twitch[1] at ~120 ms each (steps) on .has-new / .pulse; prefers-reduced-motion: idle only",
+  "chip": "public/ui/chip-bugs-<theme>{,@2x}.png = the idle frame (A0 bugs chip, same 16/32 box as chip-dot)"
+}
