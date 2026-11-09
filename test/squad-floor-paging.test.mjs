@@ -94,7 +94,7 @@ test("HP4 the floor never scrolls: fixed box, fit scale, one floor rendered", ()
   assert.equal(floorFitScale(0, 800, 1), 0); // unmeasured only
 });
 
-test("hotfix2: a narrow hub pane (Aub's ~1140px window, then x1.2 UI-scale zoom) never blanks the tower", () => {
+test("hotfix2: a narrow hub pane (the owner's ~1140px window, then x1.2 UI-scale zoom) never blanks the tower", () => {
   // 1370 physical px at dpr 1.2 = ~1140 css; after the 120% zoom and the gutters the stage is well under the 640 native width.
   for (const w of [950, 950 / 1.2, 790, 640 / 1.2, 600, 480, 320, 100]) {
     const s = floorFitScale(w, 500, 1.2);
