@@ -4585,6 +4585,23 @@ button.project-file-name:hover { text-decoration: underline; }
   max-width: 100%;
   overflow: hidden;
 }
+.pin-rail-buddy-tools { position: relative; }
+.pin-rail-active-buddy:has(.drawer-sandbox-panel, .drawer-features-menu),
+.pin-rail-active-inspector:has(.drawer-sandbox-panel, .drawer-features-menu),
+.pin-rail-buddy-tools:has(.drawer-sandbox-panel, .drawer-features-menu) {
+  overflow: visible;
+}
+.pin-rail .drawer-sandbox,
+.pin-rail .pin-rail-buddy-tools > span:has(> .drawer-features-btn) {
+  position: static !important;
+}
+.pin-rail :is(.drawer-sandbox-panel, .drawer-features-menu) {
+  left: 0;
+  right: 0;
+  top: calc(100% + 2px);
+  width: auto;
+  max-width: 100%;
+}
 
 /* Issue 3.1: Right Dock tabs scroll/wrap cleanly, bodies wrap and stay bounded. */
 .right-dock-tabs { overflow-x: auto; scrollbar-width: none; min-width: 0; max-width: 100%; }
@@ -4670,6 +4687,7 @@ button.project-file-name:hover { text-decoration: underline; }
   overflow: hidden;
 }
 .hub-body .agent-panes { grid-column: 1; grid-row: 1; min-height: 0; overflow: hidden; height: auto; }
+.hub-body:not(.hub-agent-open) .agent-panes:has(.drawer-config-menu[open]) { overflow: visible; position: relative; z-index: 10; }
 /* Sky-gods hub: the two bots chat in the sky zones, so the panes keep only their header here; any other
    agent opened on the hub lane (.hub-agent-open) takes the normal focus view and the sky steps aside. */
 .hub-body:not(.hub-agent-open) .agent-panes .pin-focus-empty { display: none !important; }
