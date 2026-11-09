@@ -535,7 +535,7 @@ export function SquadFloor({ view }: SquadFloorProps) {
   const bandStyle = (w: number, h: number): CSSProperties => ({
     width: w,
     height: h,
-    ...(scale > 1 ? { transform: `scale(${scale})`, transformOrigin: "top left" } : {}),
+    ...(scale !== 1 ? { transform: `scale(${scale})`, transformOrigin: "top left" } : {}),
   });
 
   const towerScale = (w: number, h: number): CSSProperties => ({ width: w * scale, height: h * scale });
@@ -552,7 +552,7 @@ export function SquadFloor({ view }: SquadFloorProps) {
   return (
     <section className="sq-floor" data-testid="squad-floor" aria-label="Squad floor" >
       <div className="sq-floor-stage" ref={stageRef}>
-        {scale >= 1 && (
+        {scale > 0 && (
         <div className="sq-floor-tower">
           {/* One floor per screen (squad pin order, two teams per floor); < > in the lift bar page it. */}
           {tower.floors.slice(current, current + 1).map((f) => (

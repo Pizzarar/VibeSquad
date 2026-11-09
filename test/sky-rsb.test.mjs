@@ -7,6 +7,7 @@ import {
   SLAM_IDLE_VIEW,
   SLAM_REST,
   SLAM_SHAKE_DX,
+  SLAM_SQUASH,
   slamAdvance,
   slamFaceForce,
   slamKey,
@@ -40,21 +41,34 @@ test("open: 4 zoom steps over 250ms, window held back, Overlord smacked", () => 
   assert.deepEqual(seen, [1, 2, 3, 4]);
 });
 
-test("landing: window shown, 1 frame of squash, 150ms shake of 2-3px that ends still, puff plays once at 60ms/frame", () => {
+test("landing (hotfix2 hit): the dotted box stays on the Overlord while it is smacked, the squash/shake/puff read big, and the chat settles after the hit", () => {
   const land = SLAM.zoomMs;
   const v0 = at("open", land);
-  assert.equal(v0.windowShown, true);
-  assert.equal(v0.zoomStep, null);
+  assert.equal(v0.windowShown, false, "the chat waits for the hit");
+  assert.equal(v0.zoomStep, SLAM.zoomSteps, "the box sits on the Overlord TV through the impact");
+  assert.equal(v0.face, "smacked");
   assert.equal(v0.squash, true);
   assert.equal(at("open", land + SLAM.squashMs - 1).squash, true);
-  assert.equal(at("open", land + SLAM.squashMs).squash, false, "squash is one frame");
+  assert.equal(at("open", land + SLAM.squashMs).squash, false, "squash is one beat");
   const peak = Math.max(...SLAM_SHAKE_DX.map(Math.abs));
-  assert.ok(peak >= 2 && peak <= 3);
+  assert.ok(peak >= 8 && peak <= 12, "a visible shake (was 3px: read as no slam)");
+  assert.ok(SLAM_SQUASH.x >= 1.06 && SLAM_SQUASH.y <= 0.94);
   assert.equal(SLAM_SHAKE_DX.length * SLAM.shakeStepMs, SLAM.shakeMs);
   assert.equal(at("open", land).shakeDx, SLAM_SHAKE_DX[0]);
   assert.equal(at("open", land + SLAM.shakeMs - 1).shakeDx, SLAM_SHAKE_DX.at(-1));
-  assert.equal(at("open", land + SLAM.shakeMs).shakeDx, 0);
+  assert.equal(at("open", land + SLAM.shakeMs - 1).windowShown, false);
+  const settled = at("open", land + SLAM.shakeMs);
+  assert.equal(settled.shakeDx, 0);
+  assert.equal(settled.windowShown, true, "then the Riff chat settles");
+  assert.equal(settled.zoomStep, null);
   assert.deepEqual([0, 59, 60, 119, 120, 180, 239, 240].map((d) => at("open", land + d).puffFrame), [0, 0, 1, 1, 2, 3, 3, null]);
+});
+
+test("travel is a hard hit: whole steps, linear (no ease-out), landing exactly on the Overlord TV rect", () => {
+  const from = { left: 0, top: 0, width: 100, height: 40 };
+  const to = { left: 400, top: 0, width: 100, height: 40 };
+  const lefts = [1, 2, 3, 4].map((n) => slamRect(from, to, n, 4).left);
+  assert.deepEqual(lefts, [100, 200, 300, 400]);
 });
 
 test("no puff art: the slam still plays, just without the burst", () => {
@@ -161,6 +175,16 @@ test("slamTransform: shake + squash share one transform; none is null", () => {
   assert.match(slamTransform(0, true), /^scale\(/);
 });
 
+test("landing squash rides the visible Overlord TV transform, pinned at the bottom (M1)", () => {
+  // During the hit the chat panel is at opacity 0 (is-slam-held), so the squash must be on the Overlord TV's --slam-tv-tf.
+  const z = src("SkyZones.tsx");
+  assert.match(z, /const tvTf = slamTransform\(slam\.shakeDx, slam\.squash, dpr\);/);
+  assert.doesNotMatch(z, /const tvTf = slamTransform\(slam\.shakeDx, false, dpr\);/);
+  // The Overlord TV is the visible is-slam-fx element, anchored on its bottom edge so the squash thuds down.
+  const css = src("styles.css");
+  assert.match(css, /\.sky-zone\.is-slam-fx \{ transform: var\(--slam-tv-tf, none\); transform-origin: 50% 100%; \}/);
+});
+
 test("validateSlamPuff: the shipped json, and bad input is rejected / defaulted", () => {
   const j = JSON.parse(readFileSync(new URL("../public/office/slam-puff.json", import.meta.url), "utf8"));
   const v = validateSlamPuff(j);
@@ -173,7 +197,7 @@ test("validateSlamPuff: the shipped json, and bad input is rejected / defaulted"
 
 test("wiring: clock, Overlord face force, held chat, bezel fx, SlamFx; the old slide is the Overlord's chat only; reduced motion hides the fx", () => {
   const z = src("SkyZones.tsx");
-  assert.match(z, /useSlamClock\(open === "riffbot", reduced, puff\)/);
+  assert.match(z, /useSlamClock\(open === "riffbot", reduced, puff, initialOpen === "riffbot"\)/);
   assert.match(z, /force=\{slamFaceForce\(slam, faces\)\}/);
   assert.match(z, /<SlamFx root=\{root\}/);
   assert.match(z, /is-slam-held/);
