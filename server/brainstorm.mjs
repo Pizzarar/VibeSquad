@@ -2,13 +2,14 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statS
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import os from "node:os";
-import { effectiveAgentRole, findLaneInRegistry, formatDisplayTitle, isHiddenLane, isHubLane, isRetiredAgent, laneCodeFor, resolveWorktreeRootPath, topicOf } from "./identity.mjs";
+import { effectiveAgentRole, findLaneInRegistry, formatDisplayTitle, isHiddenLane, isHubLane, isRetiredAgent, laneCodeFor, loadTeamsRegistry, resolveWorktreeRootPath, topicOf } from "./identity.mjs";
+import { assertBuddyRestartAllowed } from "./buddy-restart-auth.mjs";
 import { findProfileOrFallback, loadProfiles, readCappedProviders, resolveProfileWithFailover, toPaseoSpawnConfig } from "./profiles.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
 import { briefRootFor, laneWorkingDir } from "./brief-path.mjs";
 import { defangPromptFences } from "./write-guards.mjs";
 import { detachLiveChildrenViaClient, listDaemonAgents } from "./detach-children.mjs";
-import { getBackend, sharedRunnerBackend } from "./backend/index.mjs";
+import { getBackend, isRunnerId, readRunnerAgentSync, sharedRunnerBackend } from "./backend/index.mjs";
 import { SPAWN_TIMING } from "./backend/runner-backend.mjs";
 import { BRIEF_HISTORY_KEEP, BRIEF_SHRINK_FROM, BRIEF_SHRINK_TO, backupBrief, writeBriefFile } from "./brief-write.mjs";
 import { liveInFlightBlock } from "./in-flight.mjs";
@@ -498,6 +499,18 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
     // (S4 mass-archive guard), so anything else fails closed.
     if (agentId !== "start-brainstorm" && !(oldAgent && ["brainstorm", "former-brainstorm"].includes(oldLabels.role))) {
       throw new Error(`not a brainstorm agent: ${agentId}`);
+    }
+    // O5: a request that names a callerId (`vs buddy restart` / restart_buddy) is re-checked here from the caller's own runner
+    // record, so a direct HTTP call can't skip the tool layer. No callerId = the owner (local token / UI), unchanged.
+    if (body.callerId != null && body.callerId !== "" && agentId !== "start-brainstorm") {
+      const callerId = String(body.callerId);
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(callerId)) throw Object.assign(new Error("buddy restart: forbidden: bad callerId"), { status: 403 });
+      let caller = Array.isArray(body.agents) ? body.agents.map((a) => a?.agent ?? a).find((a) => a?.id === callerId) ?? null : null;
+      if (!caller && isRunnerId(callerId)) caller = readRunnerAgentSync(callerId);
+      if (!caller && connected && client && typeof backend.fetchAgent === "function") {
+        caller = (await backend.fetchAgent(callerId).catch(() => null))?.agent ?? null;
+      }
+      assertBuddyRestartAllowed(caller, oldAgent, loadTeamsRegistry(rootDir));
     }
     const laneHint = body.laneId || body.lane || oldLabels.lane || oldLabels.lead || "vibesquad";
     const resolved = laneDisplayName(laneHint, rootDir);
