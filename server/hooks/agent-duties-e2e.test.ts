@@ -1408,3 +1408,38 @@ test("B1 R1: gitUnitBranchState keeps (merged:false) on every unknown; merged:tr
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test(
+  "B1 R2: digest verdicts (agent=digest, refs=[worker]) govern grace and FAIL; the newest wins; a lead decision that refs the worker does not count",
+  withEnv(async ({ vsHome, briefRoot }) => {
+    const base = { cwd: CWD, status: "idle", provider: "claude", model: "claude-opus-5-5", resumable: true };
+    const mkW = (id: string) => ({ id, title: id, ...base, labels: { team: "vibesquad", lane: "vibesquad", role: "worker" } });
+    const agents = new Map<string, any>([
+      ...["w-pass", "w-fail", "w-reset", "w-lead-ref", "w-unv-fail", "w-unv-pass"].map((id) => [id, mkW(id)] as [string, any]),
+      ["digest-1", { id: "digest-1", title: "digest-1", ...base, labels: { team: "vibesquad", lane: "vibesquad", role: "digest", digestFor: "x" } }],
+      ["lead-1", { id: "lead-1", title: "lead-1", ...base, labels: { team: "vibesquad", lane: "vibesquad", role: "lead", lead: "vibesquad" } }],
+    ]);
+    const h = harness(agents, { briefRoot, unitBranchState: async () => ({ unit: "u", merged: true }) });
+    try {
+      mkdirSync(join(vsHome, "teams", "vibesquad"), { recursive: true });
+      const now = Date.now();
+      const line = (agent: string, text: string, min: number, refs: string[]) =>
+        JSON.stringify({ ts: new Date(now - min * 60_000).toISOString(), agent, lane: "vibesquad", type: "done", text, refs }) + "\n";
+      await h.onTurnEnded(agents.get("lead-1"));
+      writeFileSync(
+        join(vsHome, "teams", "vibesquad", "log.jsonl"),
+        line("digest-1", "PASS: shipped", 45, ["w-pass"]) +
+          line("digest-1", "FAIL: tests red", 45, ["w-fail"]) +
+          line("digest-1", "PASS: first", 90, ["w-reset"]) +
+          line("digest-1", "PASS: fix round", 5, ["w-reset"]) + // newer digest inside the grace window resets it
+          line("lead-1", "PASS: decision", 60, ["w-lead-ref"]) + // lead decision refs the worker: not its report
+          line("digest-9", "UNVERIFIED (digest failed): FAIL", 60, ["w-unv-fail"]) +
+          line("digest-9", "UNVERIFIED (digest failed): PASS", 60, ["w-unv-pass"]),
+        "utf8",
+      );
+      assert.deepEqual((await h.sweepDoneWorkers(now)).sort(), ["w-pass", "w-unv-pass"]);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);

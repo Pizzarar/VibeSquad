@@ -935,7 +935,7 @@ export interface Deps {
   doneSweepIntervalMs?: number;
   /** A worker is archived this long after its last `done` report (lead may still send a fix round meanwhile). */
   doneArchiveGraceMs?: number;
-  /** The worker's unit branch (its cwd's HEAD) and whether it is merged into master. No unit / not a repo => merged. */
+  /** The worker's unit branch (its cwd's HEAD) and whether it is merged into master. Unknown => merged:false (keep). */
   unitBranchState?(cwd: string | undefined): Promise<{ unit: string; merged: boolean }>;
 }
 
@@ -2859,37 +2859,43 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     const FAIL_RE = /\bFAIL(ED)?\b/;
     /** Only an explicit role=worker label is archivable: a missing/empty/unknown role normalizes to "worker" elsewhere. */
     const isExplicitWorker = (labels: Labels) => String(labels?.role ?? "").trim().toLowerCase() === "worker";
-    type DoneIndex = Map<string, { own: LogEntry | null; failVerdictAt: number }>;
+    /** The newest done entry attributed to a worker. */
+    type DoneIndex = Map<string, LogEntry>;
+    /** A verdict-shaped text: "PASS: …", "FAIL: …", "UNVERIFIED (digest failed): FAIL …". */
+    const VERDICT_RE = /^\s*(?:UNVERIFIED\b.*?:\s*)?(?:PASS|FAIL)\b/;
     /**
-     * One pass over a team log: per agent, its OWN newest `done` entry (author === agent) and the newest FAIL verdict some
-     * other author (the digest) filed against it in refs. A ref alone never counts as the worker's report.
+     * One pass over a team log: per worker, the NEWEST `done` entry that belongs to it. Workers cannot `vs log`, so the report
+     * is normally the digest's `{agent: digest, refs: [worker]}`. An entry belongs to worker W when its author is W, or when it
+     * refs W and the author is a digest agent, or the author is not a lead/Buddy/Overlord and the text is a PASS/FAIL verdict.
+     * A lead's or Buddy's decision that merely refs W never counts. `authorKind` resolves an author id (memoized per sweep).
      */
-    function indexDoneEntries(team: string): DoneIndex {
+    async function indexDoneEntries(team: string, authorKind: (id: string) => Promise<"digest" | "manager" | "other">): Promise<DoneIndex> {
       const idx: DoneIndex = new Map();
-      const slot = (id: string) => {
-        let s = idx.get(id);
-        if (!s) idx.set(id, (s = { own: null, failVerdictAt: 0 }));
-        return s;
-      };
       let text = "";
       try {
         text = fs.readFileSync(logPath(team), "utf8");
       } catch {
         return idx;
       }
+      const credit = (id: string, e: LogEntry) => {
+        const prev = idx.get(id);
+        if (!prev || Date.parse(e.ts) >= Date.parse(prev.ts) || !Number.isFinite(Date.parse(prev.ts))) idx.set(id, e);
+      };
       for (const line of text.split(/\r?\n/)) {
         if (!line.includes('"done"')) continue;
+        let e: LogEntry;
         try {
-          const e = JSON.parse(line) as LogEntry;
-          if (e.type !== "done") continue;
-          if (e.agent) slot(e.agent).own = e;
-          if (FAIL_RE.test(e.text)) {
-            const at = Date.parse(e.ts);
-            for (const ref of e.refs ?? []) if (ref !== e.agent && Number.isFinite(at)) slot(ref).failVerdictAt = Math.max(slot(ref).failVerdictAt, at);
-          }
+          e = JSON.parse(line) as LogEntry;
         } catch {
-          // skip malformed
+          continue; // skip malformed
         }
+        if (e.type !== "done") continue;
+        if (e.agent) credit(e.agent, e);
+        const refs = (e.refs ?? []).filter((r) => r && r !== e.agent);
+        if (!refs.length) continue;
+        const kind = await authorKind(e.agent);
+        if (kind === "manager" || (kind === "other" && !VERDICT_RE.test(String(e.text ?? "")))) continue;
+        for (const ref of refs) credit(ref, e);
       }
       return idx;
     }
@@ -2910,6 +2916,21 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const res = await paseo.agents.list({ includeBackground: true, filter: { includeBackground: true }, page: { limit: 200 } });
         const grace = deps.doneArchiveGraceMs ?? 30 * 60_000;
         const logIndex = new Map<string, DoneIndex>(); // once per team per sweep
+        const kinds = new Map<string, Promise<"digest" | "manager" | "other">>(); // author id -> kind, once per sweep
+        const authorKind = (id: string) => {
+          let k = kinds.get(id);
+          if (!k) {
+            k = (async () => {
+              const fromList = (res.entries as any[]).find((x) => x.agent?.id === id)?.agent;
+              const labels = (fromList ?? (await snap(paseo, id)))?.labels ?? {};
+              if (isDigestAgent(labels)) return "digest" as const;
+              const role = String(labels.role ?? "").trim().toLowerCase();
+              return ["lead", "brainstorm", "overlord"].includes(role) ? ("manager" as const) : ("other" as const);
+            })().catch(() => "other" as const);
+            kinds.set(id, k);
+          }
+          return k;
+        };
         const branchState = new Map<string, Promise<{ unit: string; merged: boolean }>>(); // once per cwd per sweep
         for (const e of res.entries as any[]) {
           const a = { ...e.agent, labels: e.agent?.labels ?? {} } as AgentSnap;
@@ -2920,13 +2941,12 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           const where = teamOf(a.labels, a.cwd);
           if (!where) continue;
           let idx = logIndex.get(where.team);
-          if (!idx) logIndex.set(where.team, (idx = indexDoneEntries(where.team)));
-          const entry = idx.get(a.id);
-          const done = entry?.own;
+          if (!idx) logIndex.set(where.team, (idx = await indexDoneEntries(where.team, authorKind)));
+          const done = idx.get(a.id);
           if (!done) continue;
           const at = Date.parse(done.ts);
           if (!Number.isFinite(at) || now - at < grace) continue;
-          if (FAIL_RE.test(done.text) || (entry?.failVerdictAt ?? 0) >= at) continue; // FAIL (own or digest verdict): the fix round goes here
+          if (FAIL_RE.test(done.text)) continue; // newest verdict is FAIL (incl. "UNVERIFIED (digest failed): FAIL"): the fix round goes here
           const cwdKey = a.cwd ?? "";
           let pending = branchState.get(cwdKey);
           if (!pending) {
